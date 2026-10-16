@@ -7,7 +7,7 @@ image_tag_suffix: "-poly"
 migrator_tag_suffix: "-poly-migrate"
 source_repo: https://github.com/cogni-dao/poly.git
 image_repository: ghcr.io/cogni-dao/poly
-source_sha: 242266ad474aee590e2fbafcad08a0431d350b45
+source_sha: 1de3e508550327a1dd41a07fa11446d018a7373c
 candidate_a_branch: deploy/candidate-a-poly
 preview_branch: deploy/preview-poly
 production_branch: deploy/production-poly
@@ -37,6 +37,16 @@ production_branch: deploy/production-poly
 # XR's own namespace — so these leases can never collide with each other or with production.
 # That is the property that would cost real money.
 envs: [candidate-a, preview, production]
+database:
+  candidate-a: { tier: dedicated, budget_profile: dedicated-high-throughput-v1 }
+  preview: { tier: dedicated, budget_profile: dedicated-high-throughput-v1 }
+  production:
+    tier: dedicated
+    budget_profile: dedicated-high-throughput-v1
+    # One app replica: service + read + leader = 7/8; app = 3/4. Reserve one each.
+    runtimePoolLimits: { replicaCount: 1, app: 3, service: 4, read: 2 }
+reliability_validation:
+  candidate-a: { role: dedicated-neighbor }
 deployment_provider:
   candidate-a: akash
   preview: akash
@@ -83,7 +93,7 @@ lease_generation:
   # 84.48 ACT free at the time of this bump — the per-deployment escrow ran dry while the
   # account was unfunded, and the account has since been topped up. Gen-3 is the reviewed
   # re-mint; production (gen-20, Finland) was serving the expected sha throughout.
-  preview: 3
+  preview: 5
   # 20 -> 21 after gen-20 booted the old eed16dc0 bundle, missed the boot
   # deadline for the promoted 9033a162 bundle, and was closed by policy.
   # The settled xcw:cogni-production:<node-id>:20 key is spent and cannot be
@@ -189,6 +199,13 @@ node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
 # scripts/ci/render-compute-egress-allowlist.sh and applied by
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:
+  - cidr: 65.108.194.156/32
+    ports: [5435, 6379, 4000, 7233]
+    envs: [production]
+    comment: Poly lease egress measured during task.5246; shared Doltgres, Redis, LiteLLM and Temporal remain required after Postgres isolation. Published Postgres 5432 stays excluded (bug.5481).
+  - cidr: 65.108.194.156/32
+    envs: [preview]
+    comment: RHITE preview worker NAT; strict service_poly SCRAM authenticated from this IP on preview 2026-10-15T09:19:58Z (bug.5472); never production trust.
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
   - cidr: 213.146.212.69/32

@@ -156,6 +156,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     workload: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
+    retentionPolicy?: "retain";
   }) {
     if (this.failReads) throw new Error("ledger down");
     const existing = this.rows.get(input.cogniKey);
@@ -185,6 +186,9 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       workload: input.workload,
       environment: input.environment,
       state: "preparing",
+      ...(input.retentionPolicy
+        ? { retentionPolicy: input.retentionPolicy }
+        : {}),
     };
     // A re-claim clears the stale baseline, exactly as the SQL UPDATE does.
     this.rows.set(input.cogniKey, record);
@@ -196,6 +200,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     cogniKey: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
+    retentionPolicy?: "retain";
   }) {
     if (this.failReads) throw new Error("ledger down");
     const row = this.rows.get(input.cogniKey);
@@ -209,6 +214,9 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     }
     const record: AkashTxAllocationRecord = {
       ...row,
+      ...(input.retentionPolicy
+        ? { retentionPolicy: input.retentionPolicy }
+        : {}),
       identity: {
         ...row.identity,
         compositeGeneration: Math.max(
@@ -622,6 +630,152 @@ function build(consoleOptions: FakeConsoleOptions = {}) {
   return { actuator, ledger, api, log, migration, cost: costs.cost };
 }
 
+describe("qualified cell app releases", () => {
+  const qualifiedSha = "a".repeat(40);
+  const otherSha = "b".repeat(40);
+  function withCell() {
+    const context = build();
+    const provider = `akash1${"a".repeat(38)}`;
+    context.ledger.rows.set("cell", {
+      receiptId: "22222222-2222-4222-8222-222222222222",
+      cogniKey: "cell",
+      identity: IDENTITY,
+      workload: "toks9-database-cell",
+      environment: "production",
+      state: "allocated",
+      externalName: "9001",
+      providerAccount: provider,
+      appliedDatabaseCellBinding: [
+        {
+          allocationEnvironment: "production",
+          targetBuildSha: qualifiedSha,
+          initialIncidentId: "original-incident",
+          binding: {
+            version: 1,
+            phase: "applied",
+            receiptId: "22222222-2222-4222-8222-222222222222",
+            cogniKey: "cell",
+            nodeId: IDENTITY.nodeId,
+            nodeSlug: "toks9",
+            environment: "production",
+            provider: "akash",
+            dseq: "9001",
+            providerAccount: provider,
+            endpoint: {
+              host: "cell.example.org",
+              port: 5432,
+              tlsMode: "verify-full",
+              tlsCertificateSha256: "c".repeat(64),
+            },
+            databaseName: "cogni_toks9",
+            appRole: "app_toks9",
+            serviceRole: "service_toks9",
+            migrationRole: "migration_toks9",
+            probeRole: "probe_toks9",
+            systemIdentifier: "123",
+            failureDomainId: `akash:${provider}:9001`,
+            budgetProfile: "bounded",
+            appliedSdlHash: "d".repeat(64),
+            sourceSha: "e".repeat(40),
+            readyAt: "2026-10-15T00:00:00Z",
+            cutover: {
+              packetSha256: "f".repeat(64),
+              actorId: "human:fixture",
+              approvedAt: "2026-10-15T00:00:00Z",
+            },
+          },
+        },
+      ],
+    });
+    return context;
+  }
+  const specAt = (sha: string): ProvisionSpec => ({
+    ...SPEC,
+    services: SPEC.services.map((service) => ({
+      ...service,
+      env: { COGNI_REPO_SHA: sha },
+    })),
+  });
+  it("refuses missing or changed app SHA before creating a receipt or touching the provider", async () => {
+    for (const spec of [SPEC, specAt(otherSha)]) {
+      const { actuator, ledger, api } = withCell();
+      await expect(
+        actuator.create({
+          cogniKey: "app",
+          environment: "production",
+          identity: IDENTITY,
+          spec,
+        })
+      ).rejects.toMatchObject({ code: "identity_conflict" });
+      expect(ledger.rows.has("app")).toBe(false);
+      expect(api.allocateCalls).toBe(0);
+    }
+  });
+  it("allows the exact qualified SHA and refuses a later update before rebinding its receipt", async () => {
+    const { actuator, ledger, api } = withCell();
+    await actuator.create({
+      cogniKey: "app",
+      environment: "production",
+      identity: IDENTITY,
+      spec: specAt(qualifiedSha),
+    });
+    const before = ledger.rows.get("app");
+    await expect(
+      actuator.update({
+        cogniKey: "app",
+        externalName: "7001",
+        environment: "production",
+        identity: { ...IDENTITY, compositeGeneration: 4 },
+        spec: specAt(otherSha),
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(ledger.rows.get("app")).toEqual(before);
+    expect(api.updateCalls).toBe(0);
+    await actuator.update({
+      cogniKey: "app",
+      externalName: "7001",
+      environment: "production",
+      identity: { ...IDENTITY, compositeGeneration: 4 },
+      spec: specAt(qualifiedSha),
+    });
+    expect(ledger.rows.get("app")?.identity.compositeGeneration).toBe(4);
+    expect(api.updateCalls).toBe(0);
+  });
+  it("refuses an unqualified production migration before the release Job runs, including before app allocation", async () => {
+    const { actuator, migration } = withCell();
+    for (const sha of [undefined, otherSha]) {
+      await expect(
+        actuator.observe({
+          cogniKey: "unallocated-app",
+          workload: SPEC.name,
+          environment: "production",
+          migration: STEP,
+          ...(sha ? { expectedSourceSha: sha } : {}),
+        })
+      ).rejects.toMatchObject({ code: "identity_conflict" });
+    }
+    expect(migration.calls).toEqual([]);
+    await actuator.observe({
+      cogniKey: "unallocated-app",
+      workload: SPEC.name,
+      environment: "production",
+      migration: STEP,
+      expectedSourceSha: qualifiedSha,
+    });
+    expect(migration.calls).toHaveLength(1);
+  });
+  it("preserves unrelated node and nonproduction releases", async () => {
+    for (const input of [
+      { environment: "preview", identity: IDENTITY },
+      { environment: "production", identity: OTHER_IDENTITY },
+    ]) {
+      const { actuator, api } = withCell();
+      await actuator.create({ cogniKey: "app", ...input, spec: SPEC });
+      expect(api.allocateCalls).toBe(1);
+    }
+  });
+});
+
 describe("AkashTxActuator.create", () => {
   it("writes the pre-transaction cursor BEFORE the Console transaction", async () => {
     const { actuator, ledger, api } = build();
@@ -652,6 +806,7 @@ describe("AkashTxActuator.create", () => {
       state: "allocated",
       externalName: "7001",
       allocationCursor: "7000",
+      lastAppliedSdlHash: api.sdlHash(SPEC),
     });
   });
 
@@ -1165,7 +1320,13 @@ describe("AkashTxActuator.update / delete", () => {
       externalName: "7001",
       environment: "candidate-a",
       identity: IDENTITY,
-      spec: SPEC,
+      spec: {
+        ...SPEC,
+        services: SPEC.services.map((service) => ({
+          ...service,
+          image: "ghcr.io/cogni-dao/toks9:sha-def",
+        })),
+      },
     });
 
     expect(resource.externalName).toBe("7001");
@@ -1315,7 +1476,7 @@ describe("AkashTxActuator.update / delete", () => {
       spec: SPEC,
     });
 
-    // First update applies the SDL once and records its hash on the receipt.
+    // CREATE already applied and recorded this SDL; the first identical UPDATE also no-ops.
     await actuator.update({
       cogniKey: "k1",
       externalName: "7001",
@@ -1323,7 +1484,7 @@ describe("AkashTxActuator.update / delete", () => {
       identity: IDENTITY,
       spec: SPEC,
     });
-    expect(api.updateCalls).toBe(1);
+    expect(api.updateCalls).toBe(0);
     const recordedHash = ledger.rows.get("k1")?.lastAppliedSdlHash;
     expect(recordedHash).toBe(api.sdlHash(SPEC));
 
@@ -1336,7 +1497,7 @@ describe("AkashTxActuator.update / delete", () => {
       spec: SPEC,
     });
     expect(resource.externalName).toBe("7001");
-    expect(api.updateCalls).toBe(1);
+    expect(api.updateCalls).toBe(0);
     // The receipt hash is unchanged — the no-op wrote nothing.
     expect(ledger.rows.get("k1")?.lastAppliedSdlHash).toBe(recordedHash);
   });
@@ -1357,7 +1518,7 @@ describe("AkashTxActuator.update / delete", () => {
       identity: IDENTITY,
       spec: SPEC,
     });
-    expect(api.updateCalls).toBe(1);
+    expect(api.updateCalls).toBe(0);
     const firstHash = ledger.rows.get("k1")?.lastAppliedSdlHash;
 
     // A real promote: new image sha → different SDL → different hash → the PUT MUST still fire.
@@ -1375,10 +1536,148 @@ describe("AkashTxActuator.update / delete", () => {
       identity: IDENTITY,
       spec: nextSpec,
     });
-    expect(api.updateCalls).toBe(2);
+    expect(api.updateCalls).toBe(1);
     const secondHash = ledger.rows.get("k1")?.lastAppliedSdlHash;
     expect(secondHash).toBe(api.sdlHash(nextSpec));
     expect(secondHash).not.toBe(firstHash);
+  });
+
+  it("retains persistent storage before creation and refuses ordinary delete", async () => {
+    const { actuator, api, ledger } = build();
+    const allocate = api.allocateAndLease.bind(api);
+    api.allocateAndLease = async (input) => {
+      expect(ledger.rows.get("k1")?.retentionPolicy).toBe("retain");
+      return allocate(input);
+    };
+    const spec: ProvisionSpec = {
+      ...SPEC,
+      services: SPEC.services.map((service) => ({
+        ...service,
+        volumes: [
+          { name: "database", sizeMi: 1024, mountPath: "/data", tier: "nvme" },
+        ],
+      })),
+    };
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec,
+    });
+    expect(ledger.rows.get("k1")?.retentionPolicy).toBe("retain");
+    await expect(
+      actuator.delete({ cogniKey: "k1", externalName: "7001" })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(api.releaseCalls).toEqual([]);
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+  });
+
+  it("keeps the recorded retained lease after an uncertain lease POST and replays without another paid create", async () => {
+    const { actuator, api, ledger } = build();
+    api.allocateAndLease = async (input) => {
+      api.allocateCalls += 1;
+      await input.onAllocated?.("7001");
+      throw consoleError("ALLOCATION_OUTCOME_UNKNOWN");
+    };
+    const input = {
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: { ...SPEC, retentionPolicy: "retain" as const },
+    };
+    await expect(actuator.create(input)).rejects.toMatchObject({
+      code: "outcome_unknown",
+    });
+    expect(ledger.rows.get("k1")).toMatchObject({
+      state: "allocated",
+      externalName: "7001",
+      retentionPolicy: "retain",
+    });
+    expect(ledger.failCalls).toEqual([]);
+    expect((await actuator.create(input)).replayed).toBe(true);
+    expect(api.allocateCalls).toBe(1);
+    expect(api.releaseCalls).toEqual([]);
+  });
+
+  it("retains custody when a changed update is refused and cannot downgrade it", async () => {
+    const { actuator, api, ledger } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    await expect(
+      actuator.update({
+        cogniKey: "k1",
+        externalName: "7001",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: { ...SPEC, retentionPolicy: "retain" },
+      })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(ledger.rows.get("k1")?.retentionPolicy).toBe("retain");
+    await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    await expect(
+      actuator.delete({ cogniKey: "k1", externalName: "7001" })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(api.releaseCalls).toEqual([]);
+  });
+
+  it("rejects retained storage removal and image changes while allowing an identical SDL no-op", async () => {
+    const { actuator, api, ledger } = build();
+    const spec: ProvisionSpec = {
+      ...SPEC,
+      services: SPEC.services.map((service) => ({
+        ...service,
+        volumes: [
+          { name: "database", sizeMi: 1024, mountPath: "/data", tier: "nvme" },
+        ],
+      })),
+    };
+    const input = {
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec,
+    };
+    await actuator.create(input);
+    const applied = ledger.rows.get("k1")?.lastAppliedSdlHash;
+    await expect(
+      actuator.update({ ...input, externalName: "7001", spec: SPEC })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(
+      actuator.update({
+        ...input,
+        externalName: "7001",
+        spec: {
+          ...spec,
+          services: spec.services.map((service) => ({
+            ...service,
+            image: "postgres:16",
+          })),
+        },
+      })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(
+      (await actuator.update({ ...input, externalName: "7001" })).externalName
+    ).toBe("7001");
+    expect(api.updateCalls).toBe(0);
+    expect(ledger.rows.get("k1")?.lastAppliedSdlHash).toBe(applied);
+    const retained = ledger.rows.get("k1");
+    if (!retained) throw new Error("fixture allocation absent");
+    const { lastAppliedSdlHash: _hash, ...legacy } = retained;
+    ledger.rows.set("k1", legacy);
+    await expect(
+      actuator.update({ ...input, externalName: "7001" })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(api.updateCalls).toBe(0);
   });
 
   it("releases the provider resource and settles the key", async () => {
@@ -1642,7 +1941,7 @@ describe("AkashTxActuator release migration (task.5135)", () => {
       nodeSlug: "toks9",
       environment: "candidate-a",
       bundleDigest: STEP.bundleDigest,
-      secretName: "toks9-compute-env-secrets",
+      secretName: "toks9-compute-migration-secrets",
     });
   });
 
@@ -1708,7 +2007,7 @@ describe("AkashTxActuator release migration (task.5135)", () => {
     });
   });
 
-  it("leaves delete untouched — a teardown must always work", async () => {
+  it("allows disposable app teardown regardless of migration failure", async () => {
     const { actuator, api, ledger, migration } = build();
     migration.outcome = "failed";
     seedAllocated(ledger);
@@ -1845,7 +2144,13 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
       externalName: "7001",
       environment: "candidate-a",
       identity: { ...IDENTITY, compositeGeneration: 9 },
-      spec: SPEC,
+      spec: {
+        ...SPEC,
+        services: SPEC.services.map((service) => ({
+          ...service,
+          image: "ghcr.io/cogni-dao/toks9:sha-def",
+        })),
+      },
     });
 
     expect(order).toEqual([

@@ -1,4 +1,10 @@
 #cloud-config
+#%{ if control_ssh_public_key != "" }
+users:
+  - default
+  - name: root
+    ssh_authorized_keys: ${jsonencode([control_ssh_public_key])}
+#%{ endif }
 package_update: true
 package_upgrade: true
 packages:

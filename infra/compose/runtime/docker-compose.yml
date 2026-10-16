@@ -307,6 +307,10 @@ services:
       OPENFGA_DB_PASSWORD: ${OPENFGA_DB_PASSWORD}
     volumes:
       - ./postgres-init/provision.sh:/app/provision.sh:ro
+      - ./postgres-init/apply-control.sql:/app/apply-control.sql:ro
+      - ./postgres-init/control-migrations/0000_database_recovery_control.sql:/app/control-migrations/0000_database_recovery_control.sql:ro
+      - ./postgres-init/control-migrations/0001_database_recovery_watchdog.sql:/app/control-migrations/0001_database_recovery_watchdog.sql:ro
+      - ./postgres-init/control-migrations/0003_disable_database_locking.sql:/app/control-migrations/0003_disable_database_locking.sql:ro
     entrypoint: ["/bin/bash", "/app/provision.sh"]
     depends_on:
       postgres:
@@ -411,6 +415,8 @@ services:
       DB_BACKUP_OBSERVABILITY_GRACE_SECONDS: ${DB_BACKUP_OBSERVABILITY_GRACE_SECONDS:-90}
     volumes:
       - ./db-backup/backup.sh:/usr/local/bin/db-backup.sh:ro
+      - ./db-backup/cell-backup.sh:/usr/local/bin/db-cell-backup.sh:ro
+      - ./database-cell-backup:/database-cell-backup:ro
       - db_backups:/backups
     command: ["/usr/local/bin/db-backup.sh", "once"]
     depends_on:

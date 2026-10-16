@@ -32,21 +32,35 @@ touch "$REMOTE_ROOT/opt/cogni-template-runtime/docker-compose.yml"
 
 cat > "$FAKEBIN/ssh" <<'EOF'
 #!/usr/bin/env bash
-while [ "$#" -gt 0 ] && [ "$1" != "bash" ]; do
+while [ "$#" -gt 0 ] && [[ "$1" != root@* ]]; do
   shift
 done
-[ "${1:-}" = "bash" ] || { echo "fake ssh: missing bash command" >&2; exit 2; }
+[ "$#" -gt 0 ] || { echo "fake ssh: missing remote host" >&2; exit 2; }
 shift
-[ "${1:-}" = "-s" ] && shift
-[ "${1:-}" = "--" ] && shift
-remote_args=()
-for arg in "$@"; do
-  if [ "${FAKE_SSH_DROP_EMPTY_ARGS:-}" = "1" ] && [ -z "$arg" ]; then
-    continue
-  fi
-  remote_args+=("$arg")
-done
-PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -s -- "${remote_args[@]}"
+# OpenSSH joins command arguments; the remote login shell reparses that text.
+# Direct argv execution hid the missing empty positional in the real flight.
+if [ "${FAKE_SSH_ASSERT_POSITIONALS:-}" = 1 ]; then
+  remote_header=$(sed '/^namespace=/,$d')
+  {
+    printf '%s\n' "$remote_header"
+    printf '%s\n' 'printf "ARGV\t%s\t%s\t%s\t%s\t%s\t%s\n" "$#" "$remote_root" "$expected_build_sha" "$expected_node_id" "$assert_database_reliability_runtime" "$reliability_controller"'
+    printf '%s\n' 'printf "WIRE\t%s\t%s\t%s\t%s\t%s\n" "${9}" "${10}" "${11}" "${12}" "${13:-}"'
+  } | PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
+elif [ "${FAKE_SSH_ASSERT_RELIABILITY:-}" = 1 ]; then
+  remote_script="$(sed '/^if kubectl -n argocd get applicationset/,$d')"
+  printf '%s\n' "$remote_script" 'exit "$failed"' | PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
+elif [[ -n "${FAKE_EGRESS_TRANSPORT:-}" ]]; then
+  remote_script="$(cat)"
+  case "$FAKE_EGRESS_TRANSPORT" in
+    corrupt) replacement='egress_rules_b64="%%%"' ;;
+    empty) replacement='egress_rules_b64=""' ;;
+    *) exit 2 ;;
+  esac
+  remote_script="${remote_script/'egress_rules_b64="$4"'/$replacement}"
+  printf '%s\n' "$remote_script" | PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
+else
+  PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
+fi
 EOF
 chmod +x "$FAKEBIN/ssh"
 
@@ -61,6 +75,34 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 set -- "${args[@]}"
+if [ "${FAKE_SSH_ASSERT_RELIABILITY:-}" = 1 ]; then
+  case "${1:-}:${2:-}:${3:-}" in
+    get:deployment:operator-database-reliability-actuator)
+      if [[ "$*" == *availableReplicas* ]]; then echo "${FAKE_OBSERVER_AVAILABLE:-1}";
+      else echo "${FAKE_OBSERVER_IMAGE:-fixture-image}"; fi
+      exit 0 ;;
+    get:deployment:operator-node-app) echo fixture-image; exit 0 ;;
+    get:deployment:operator-database-reliability-readmitter|get:deployment:operator-database-reliability-watchdog)
+      echo "${FAKE_RETIRED_REPLICAS:-0}"; exit 0 ;;
+    get:secret:database-reliability-actuator-env-secrets|get:secret:database-reliability-readmitter-env-secrets)
+      [[ "$*" != *jsonpath=* ]] || echo fixture-secret-base64
+      exit 0 ;;
+    exec:deployment/operator-node-app:*)
+      while [ "$1" != -e ]; do shift; done
+      shift; roundtrip="$1"; shift
+      mock_fetch='globalThis.fetch = async (target, options = {}) => {
+        const url = new URL(target);
+        if (url.origin !== "http://observer.test") throw Error("unexpected retired-process request");
+        if (url.pathname === "/version") return Response.json({ buildSha: process.env.FAKE_OBSERVER_BAD_SHA ? "b".repeat(40) : process.argv[1] });
+        if (url.pathname === "/readyz") return new Response(null, { status: process.env.FAKE_OBSERVER_NOT_READY ? 503 : 200 });
+        if (url.pathname !== "/v1/status" || options.headers?.authorization !== "Bearer fixture-status-token") throw Error("missing observer authentication");
+        return Response.json({ nodeId: process.argv[2], environment: process.argv[3], slug: process.argv[4] }, { status: process.env.FAKE_OBSERVER_AUTH_DENIED ? 401 : 200 });
+      };'
+      DATABASE_RELIABILITY_ACTUATOR_URL=http://observer.test DATABASE_RELIABILITY_STATUS_TOKEN=fixture-status-token \
+        node --input-type=module -e "$mock_fetch"$'\n'"$roundtrip" "$@"
+      exit $? ;;
+  esac
+fi
 if [ "${1:-}" = "get" ]; then
   kind="${2:-}"
   name="${3:-}"
@@ -80,10 +122,14 @@ if [ "${1:-}" = "get" ]; then
     "cogni-candidate-a:deployment:node-template-node-app")
       [ "${FAKE_MISSING_DEPLOYMENT:-}" = "1" ] && exit 1
       if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
-        if [ "${FAKE_LEGACY_SECRET_CONSUMER:-}" = "1" ]; then
+        if printf '%s\n' "$*" | grep -Fq 'initContainers'; then
+          echo "node-template-env-secrets node-template-migration-secrets"
+        elif [ "${FAKE_LEGACY_SECRET_CONSUMER:-}" = "1" ]; then
           echo "node-template-node-app-secrets"
         elif [ "${FAKE_WRONG_SECRET_CONSUMER:-}" = "1" ]; then
           echo "other-secret"
+        elif [ "${FAKE_RUNTIME_MIGRATION_SECRET_CONSUMER:-}" = "1" ]; then
+          echo "node-template-env-secrets node-template-migration-secrets"
         else
           echo "node-template-env-secrets"
         fi
@@ -108,11 +154,37 @@ if [ "${1:-}" = "get" ]; then
       fi
       exit 0
       ;;
+    "cogni-candidate-a:secret:node-template-migration-secrets")
+      [ "${FAKE_MISSING_MIGRATION_SECRET:-}" = "1" ] && exit 1
+      if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
+        [ "${FAKE_MISSING_MIGRATION_DSN:-}" = "1" ] || echo "cG9zdGdyZXM6Ly8="
+      fi
+      exit 0
+      ;;
     "cogni-candidate-a:externalsecret:node-template-env-secrets")
       [ "${FAKE_MISSING_EXTERNAL_SECRET:-}" = "1" ] && exit 1
       if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
         [ "${FAKE_EXTERNAL_SECRET_NOT_READY:-}" = "1" ] || echo True
       fi
+      exit 0
+      ;;
+    "cogni-candidate-a:externalsecret:node-template-migration-secrets")
+      [ "${FAKE_MISSING_MIGRATION_EXTERNAL_SECRET:-}" = "1" ] && exit 1
+      exit 0
+      ;;
+  esac
+fi
+if [ "${1:-}" = "wait" ]; then
+  resource="${*: -2:1}"
+  case "${ns}:${resource}" in
+    "cogni-candidate-a:externalsecret/node-template-env-secrets")
+      [ "${FAKE_MISSING_EXTERNAL_SECRET:-}" = "1" ] && exit 1
+      [ "${FAKE_EXTERNAL_SECRET_NOT_READY:-}" = "1" ] && exit 1
+      exit 0
+      ;;
+    "cogni-candidate-a:externalsecret/node-template-migration-secrets")
+      [ "${FAKE_MISSING_MIGRATION_EXTERNAL_SECRET:-}" = "1" ] && exit 1
+      [ "${FAKE_MIGRATION_EXTERNAL_SECRET_NOT_READY:-}" = "1" ] && exit 1
       exit 0
       ;;
   esac
@@ -210,17 +282,47 @@ grep -q "Node substrate ready for node-template" "$TMPROOT/success.out"
 # bug.5299 — the preflight states WHOSE Postgres the lane's database is on, not just that
 # some database exists. node-template/candidate-a is reconciled by its own env, so this is
 # the resident verdict and the asserted name is unchanged (lane_db_suffix is empty).
-grep -q "\[OK\] lane database residency: node-template/candidate-a is reconciled by its own env (candidate-a)" "$TMPROOT/success.out"
+grep -q "\[OK\] lane database residency: node-template/candidate-a uses its own environment" "$TMPROOT/success.out"
 grep -q "runtime env includes DB inventory: cogni_node_template" "$TMPROOT/success.out"
 
+# Run the real generated argument decoder through both shell layers, stopping
+# before any remote probe. Required identities precede the optional root at13.
+expected_sha=$(git rev-parse HEAD)
+expected_id=$(yq -r '.node_id' nodes/operator/.cogni/repo-spec.yaml)
+for probe_root in "" "$REMOTE_ROOT" "$TMPROOT/remote root' ; literal"; do
+  if ! env "${BASE_ENV[@]}" TARGET=operator APP_SOURCE_DIR="$REPO_ROOT" \
+    COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" \
+    ASSERT_TARGET_SUBSTRATE_REMOTE_ROOT="$probe_root" \
+    ASSERT_DATABASE_RELIABILITY_RUNTIME=false FAKE_SSH_ASSERT_POSITIONALS=1 \
+    bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/argv.out"; then
+    cat "$TMPROOT/argv.out" >&2
+    exit 1
+  fi
+  printf 'ARGV\t13\t%s\t%s\t%s\tfalse\ttrue\n' \
+    "$probe_root" "$expected_sha" "$expected_id" >"$TMPROOT/argv.expected"
+  printf 'WIRE\t%s\t%s\tfalse\ttrue\t%s\n' \
+    "$expected_sha" "$expected_id" "$probe_root" >>"$TMPROOT/argv.expected"
+  grep -E '^(ARGV|WIRE)' "$TMPROOT/argv.out" >"$TMPROOT/argv.actual"
+  cmp "$TMPROOT/argv.expected" "$TMPROOT/argv.actual"
+done
+
+# Retired writers must stay at zero while the real observer roundtrip remains strict.
+RELIABILITY_ENV=("${BASE_ENV[@]}" TARGET=operator APP_SOURCE_DIR="$REPO_ROOT"
+  COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" ASSERT_DATABASE_RELIABILITY_RUNTIME=true
+  FAKE_SSH_ASSERT_RELIABILITY=1)
+env "${RELIABILITY_ENV[@]}" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/reliability-observer.out"
+grep -q 'authenticated status and observer readiness roundtrips passed' "$TMPROOT/reliability-observer.out"
+for failure in FAKE_RETIRED_REPLICAS=1 FAKE_OBSERVER_AVAILABLE=0 FAKE_OBSERVER_IMAGE=wrong-image \
+  FAKE_OBSERVER_BAD_SHA=1 FAKE_OBSERVER_NOT_READY=1 FAKE_OBSERVER_AUTH_DENIED=1; do
+  if env "${RELIABILITY_ENV[@]}" "$failure" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/reliability-rejected.out" 2>&1; then
+    echo "expected reliability assertion to reject $failure" >&2; exit 1
+  fi
+done
+
 # bug.5299 — A MISRESIDENT LANE CANNOT BE GREEN ON THE LANELESS HUSK.
-# This call passed no lane, so it named `cogni_<node>` and asserted it against whatever VM it
-# SSH'd into: for a foreign-custodied lane that proved an unused database exists, never that
-# the lane's own database does. Declare candidate-a akash (placement is what relocates the
-# control env) while leaving DEPLOYMENT_PROVIDER unset — the "caller forgot the provider"
-# shape that lands an akash row on this k3s branch — and the residency gate must refuse it
-# instead of passing on the husk. node-template/candidate-a is NOT on the allowlist, and
-# adding it there is not the remedy.
+# Foreign COMPUTE custody is now valid with lane-local Postgres. Inject an explicit
+# historical PG pin into a copied existing reader instead: the residency gate must
+# reject that actual foreign PG placement before claiming a local database exists.
 MISRESIDENT_TREE="$TMPROOT/misresident-src"
 mkdir -p "$MISRESIDENT_TREE"
 cp -R "$HAPPY_TREE/." "$MISRESIDENT_TREE/"
@@ -232,13 +334,19 @@ misresident_appset="$MISRESIDENT_TREE/$(CATALOG_DIR="$MISRESIDENT_TREE/infra/cat
 mkdir -p "$(dirname "$misresident_appset")"
 cp "$HAPPY_TREE/$(CATALOG_DIR="$HAPPY_TREE/infra/catalog" appset_rel_path candidate-a node-template)" \
   "$misresident_appset"
+MISRESIDENT_SCRIPT="$TMPROOT/misresident-reader"
+mkdir -p "$MISRESIDENT_SCRIPT/lib"
+cp scripts/ci/assert-target-substrate.sh "$MISRESIDENT_SCRIPT/"
+cp scripts/ci/lib/*.sh "$MISRESIDENT_SCRIPT/lib/"
+printf '\nLANE_DB_RESIDENCY_PINNED=("node-template/candidate-a")\n' \
+  >> "$MISRESIDENT_SCRIPT/lib/lane-db-residency.sh"
 if env "${BASE_ENV[@]}" APP_SOURCE_DIR="$MISRESIDENT_TREE" \
   COGNI_CATALOG_ROOT="$MISRESIDENT_TREE/infra/catalog" \
-  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/misresident.out" 2>&1; then
-  echo "expected a misresident, non-allowlisted lane to fail the substrate preflight" >&2
+  bash "$MISRESIDENT_SCRIPT/assert-target-substrate.sh" >"$TMPROOT/misresident.out" 2>&1; then
+  echo "expected an explicitly foreign PG lane to fail the substrate preflight" >&2
   exit 1
 fi
-grep -q "node-template/candidate-a is MISRESIDENT and NOT allowlisted" "$TMPROOT/misresident.out"
+grep -q "node-template/candidate-a must use its own environment's Postgres; foreign residency is forbidden" "$TMPROOT/misresident.out"
 grep -q "lane database residency check failed for node-template/candidate-a" "$TMPROOT/misresident.out"
 # It must fail on RESIDENCY, before claiming anything about the husk on this host.
 if grep -q "Postgres database exists: cogni_node_template" "$TMPROOT/misresident.out"; then
@@ -321,13 +429,19 @@ if env "${BASE_ENV[@]}" FAKE_LEGACY_SECRET_CONSUMER=1 bash scripts/ci/assert-tar
   echo "expected legacy Secret consumer to fail" >&2
   exit 1
 fi
-grep -q "Deployment consumes legacy plain Secret node-template-node-app-secrets" "$TMPROOT/legacy-secret-consumer.out"
+grep -q "Deployment app runtime consumes legacy plain Secret node-template-node-app-secrets" "$TMPROOT/legacy-secret-consumer.out"
 
 if env "${BASE_ENV[@]}" FAKE_WRONG_SECRET_CONSUMER=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/wrong-secret-consumer.out" 2>&1; then
   echo "expected wrong Secret consumer to fail" >&2
   exit 1
 fi
-grep -q "Deployment consumes unexpected Secret other-secret" "$TMPROOT/wrong-secret-consumer.out"
+grep -q "Deployment app runtime consumes unexpected Secret other-secret" "$TMPROOT/wrong-secret-consumer.out"
+
+if env "${BASE_ENV[@]}" FAKE_RUNTIME_MIGRATION_SECRET_CONSUMER=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/runtime-migration-secret-consumer.out" 2>&1; then
+  echo "expected app runtime migration Secret consumer to fail" >&2
+  exit 1
+fi
+grep -q "app runtime consumes unexpected Secret node-template-migration-secrets" "$TMPROOT/runtime-migration-secret-consumer.out"
 
 if env "${BASE_ENV[@]}" FAKE_MISSING_SECRET=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-secret.out" 2>&1; then
   echo "expected missing secret to fail" >&2
@@ -341,6 +455,12 @@ if env "${BASE_ENV[@]}" FAKE_MISSING_EXTERNAL_SECRET=1 bash scripts/ci/assert-ta
 fi
 grep -q "ExternalSecret missing" "$TMPROOT/missing-external-secret.out"
 
+if env "${BASE_ENV[@]}" FAKE_MISSING_MIGRATION_EXTERNAL_SECRET=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-migration-external-secret.out" 2>&1; then
+  echo "expected missing migration ExternalSecret to fail" >&2
+  exit 1
+fi
+grep -q "ExternalSecret missing for Deployment-consumed Secret: node-template-migration-secrets" "$TMPROOT/missing-migration-external-secret.out"
+
 if env "${BASE_ENV[@]}" FAKE_EXTERNAL_SECRET_NOT_READY=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/external-secret-not-ready.out" 2>&1; then
   echo "expected not-Ready ExternalSecret to fail" >&2
   exit 1
@@ -352,6 +472,12 @@ if env "${BASE_ENV[@]}" FAKE_MISSING_DSN=1 bash scripts/ci/assert-target-substra
   exit 1
 fi
 grep -q "missing DSN key DATABASE_URL" "$TMPROOT/missing-dsn.out"
+
+if env "${BASE_ENV[@]}" FAKE_MISSING_MIGRATION_DSN=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-migration-dsn.out" 2>&1; then
+  echo "expected missing migration DSN key to fail" >&2
+  exit 1
+fi
+grep -q "migration Secret node-template-migration-secrets missing DATABASE_MIGRATION_URL" "$TMPROOT/missing-migration-dsn.out"
 
 if env "${BASE_ENV[@]}" FAKE_MISSING_DB=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-db.out" 2>&1; then
   echo "expected missing DB to fail" >&2
@@ -423,6 +549,12 @@ deployment:
 YAML
 cat > "$EXTERNAL_BIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
+case "$*" in
+  *"get deployment operator-akash-tx-actuator"*|*"get secret akash-tx-actuator-"*)
+    [[ "$*" == "-n cogni-${FAKE_EXPECT_CONTROL_ENV:-production} "* ]] || exit 1 ;;
+  *"bao write -field=token auth/kubernetes/login"*)
+    [[ "$*" == *"role=${FAKE_EXPECT_CONTROL_ENV:-production}-db-reader "* ]] || exit 1 ;;
+esac
 case "$*" in
   # bug.5394 — the lane/cluster addressing guard runs before every namespaced lookup.
   # FAKE_LANE_NOT_HOSTED=1 makes this cluster deny hosting the lane, i.e. the #2602
@@ -523,7 +655,7 @@ grep -q "all declared workload secret refs are materialized" "$TMPROOT/external-
 # ---------------------------------------------------------------------------
 
 grep -q "compute_api=crossplane" "$TMPROOT/external-success.out"
-grep -q "cogni-candidate-a/operator-akash-tx-actuator is available" "$TMPROOT/external-success.out"
+grep -q "cogni-production/operator-akash-tx-actuator is available" "$TMPROOT/external-success.out"
 grep -q "AKASH_ALLOWED_PROVIDERS is declared" "$TMPROOT/external-success.out"
 if grep -q "compute workload controller" "$TMPROOT/external-success.out"; then
   echo "expected the crossplane path to assert no legacy controller" >&2
@@ -571,6 +703,8 @@ name: toks5
 type: node
 node_id: 4d2a5f3b-9c1e-4a77-bd62-1f0c7e8a4411
 path_prefix: nodes/toks5/
+deployment_provider:
+  candidate-a: akash
 compute_api:
   candidate-a: crossplane
 compute_egress_cidrs:
@@ -588,6 +722,12 @@ deployment:
 YAML
 cat > "$XCW_BIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
+case "$*" in
+  *"get deployment operator-akash-tx-actuator"*|*"get secret akash-tx-actuator-"*)
+    [[ "$*" == "-n cogni-${FAKE_EXPECT_CONTROL_ENV:-candidate-a} "* ]] || exit 1 ;;
+  *"bao write -field=token auth/kubernetes/login"*)
+    [[ "$*" == *"role=${FAKE_EXPECT_CONTROL_ENV:-candidate-a}-db-reader "* ]] || exit 1 ;;
+esac
 case "$*" in
   # bug.5394 — the lane/cluster addressing guard runs before every namespaced lookup.
   # FAKE_LANE_NOT_HOSTED=1 makes this cluster deny hosting the lane, i.e. the #2602
@@ -654,7 +794,7 @@ case "$*" in
     ;;
   "create token db-provisioner -n default") echo test-jwt; exit 0 ;;
   *"bao write -field=token auth/kubernetes/login"*) echo test-token; exit 0 ;;
-  *"bao kv get -format=json cogni/candidate-a/toks5"*)
+  *"bao kv get -format=json cogni/${FAKE_EXPECT_LANE_ENV:-candidate-a}/toks5"*)
     echo '{"data":{"data":{"AUTH_SECRET":"present","DATABASE_URL":"present","LITELLM_VIRTUAL_KEY":"present"}}}'
     exit 0
     ;;
@@ -665,6 +805,7 @@ EOF
 chmod +x "$XCW_BIN/kubectl"
 
 XCW_ENV=(
+  FLEET_CONTROL_ENV=candidate-a
   TARGET=toks5
   DEPLOYMENT_PROVIDER=akash
   DEPLOY_ENVIRONMENT=candidate-a
@@ -686,6 +827,55 @@ grep -q "cogni-candidate-a/operator-akash-tx-actuator is available" "$TMPROOT/xc
 grep -q "Secret cogni-candidate-a/akash-tx-actuator-auth carries key 'token'" "$TMPROOT/xcw-success.out"
 grep -q "Secret cogni-candidate-a/akash-tx-actuator-env-secrets exists" "$TMPROOT/xcw-success.out"
 grep -q "AKASH_ALLOWED_PROVIDERS is declared on cogni-candidate-a/operator-akash-tx-actuator (pinned to 1 provider(s))" "$TMPROOT/xcw-success.out"
+# The same lane keeps its candidate KV path but uses the actual production
+# custodian's actuator and reader. Strict mocks reject lane-namespace/role drift.
+env "${XCW_ENV[@]}" FLEET_CONTROL_ENV=production FAKE_EXPECT_CONTROL_ENV=production \
+  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/xcw-foreign-control.out"
+grep -q "cogni-production/operator-akash-tx-actuator is available" "$TMPROOT/xcw-foreign-control.out"
+grep -q "all declared workload secret refs are materialized" "$TMPROOT/xcw-foreign-control.out"
+# Entry scope follows both lane and actual custodian destination (bug.5472).
+cp "$XCW_SRC/infra/catalog/toks5.yaml" "$TMPROOT/xcw-before-egress-scope.yaml"
+yq -i '.envs = ["candidate-a","preview","production"] | .deployment_provider.preview = "akash" | .deployment_provider.production = "akash" | .compute_api.preview = "crossplane" | .compute_api.production = "crossplane" | .compute_egress_cidrs += [{"cidr":"65.108.194.156/32","envs":["preview"],"comment":"preview worker"}]' "$XCW_SRC/infra/catalog/toks5.yaml"
+for lane in preview production candidate-a; do
+  env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT="$lane" FLEET_CONTROL_ENV=production \
+    FAKE_EXPECT_CONTROL_ENV=production FAKE_EXPECT_LANE_ENV="$lane" \
+    bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-$lane-control.out"
+  grep -q 'catalog compute egress CIDRs are installed' "$TMPROOT/scoped-$lane-control.out"
+done
+if env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=preview \
+  FAKE_EXPECT_CONTROL_ENV=preview FAKE_EXPECT_LANE_ENV=preview \
+  bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-preview-missing.out" 2>&1; then
+  echo 'preview destination must require its scoped provider CIDR' >&2; exit 1
+fi
+grep -q 'missing exact catalog rule: 65.108.194.156/32' "$TMPROOT/scoped-preview-missing.out"
+printf '%s\n' '65.108.194.156/32:5432,5435,6379,4000,7233' >> "$EXTERNAL_ALLOWLIST"
+env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=preview \
+  FAKE_EXPECT_CONTROL_ENV=preview FAKE_EXPECT_LANE_ENV=preview \
+  bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-preview-ready.out"
+grep -q 'catalog compute egress CIDRs are installed' "$TMPROOT/scoped-preview-ready.out"
+printf '%s\n' '65.108.194.156/32:5432,5435,6379,4000,7233' > "$EXTERNAL_ALLOWLIST"
+if env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=production \
+  FAKE_EXPECT_CONTROL_ENV=production FAKE_EXPECT_LANE_ENV=preview \
+  bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-legacy-missing.out" 2>&1; then
+  echo 'scoped entries must not waive legacy provider CIDRs' >&2; exit 1
+fi
+grep -q 'missing exact catalog rule: 80.200.246.35/32' "$TMPROOT/scoped-legacy-missing.out"
+printf '%s\n' '80.200.246.35/32:5432,5435,6379,4000,7233' > "$EXTERNAL_ALLOWLIST"
+yq -i '.compute_egress_cidrs |= .[1:]' "$XCW_SRC/infra/catalog/toks5.yaml"
+env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=production \
+  FAKE_EXPECT_CONTROL_ENV=production FAKE_EXPECT_LANE_ENV=preview FAKE_SSH_DROP_EMPTY_ARGS=1 \
+  bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-none-selected.out"
+grep -q 'catalog compute egress CIDRs are installed' "$TMPROOT/scoped-none-selected.out"
+for invalid_scope in '[]' '"preview"' null '["unknown"]'; do
+  yq -i ".compute_egress_cidrs[0].envs = $invalid_scope" "$XCW_SRC/infra/catalog/toks5.yaml"
+  if env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=production \
+    FAKE_EXPECT_CONTROL_ENV=production FAKE_EXPECT_LANE_ENV=preview \
+    bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-invalid.out" 2>&1; then
+    echo "assertion accepted malformed entry scope $invalid_scope" >&2; exit 1
+  fi
+  grep -q 'invalid entry environment scope' "$TMPROOT/scoped-invalid.out"
+done
+cp "$TMPROOT/xcw-before-egress-scope.yaml" "$XCW_SRC/infra/catalog/toks5.yaml"
 # Authority-independent checks still run on the crossplane path.
 grep -q "all declared workload secret refs are materialized" "$TMPROOT/xcw-success.out"
 grep -q "catalog compute egress CIDRs are installed" "$TMPROOT/xcw-success.out"
@@ -775,6 +965,27 @@ grep -q "External compute preconditions ready for toks5" "$TMPROOT/xcw-unpinned.
   cat "$TMPROOT/xcw-unpinned.out" >&2
   exit 1
 }
+
+# A corrupt/empty SSH transport must never bypass every installed-rule check.
+for transport in corrupt empty; do
+  if env "${XCW_ENV[@]}" FAKE_EGRESS_TRANSPORT="$transport" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/egress-transport-$transport.out" 2>&1; then
+    echo "expected $transport catalog egress transport to fail closed" >&2; exit 1
+  fi
+  grep -q 'catalog egress transport' "$TMPROOT/egress-transport-$transport.out"
+done
+
+# Assert the exact entry's ports, and ignore entries scoped to another env.
+SCOPED_SRC="$TMPROOT/scoped-egress-src"
+mkdir -p "$SCOPED_SRC/infra/catalog" "$SCOPED_SRC/nodes/toks5/.cogni"
+cp "$XCW_SRC/nodes/toks5/.cogni/repo-spec.yaml" "$SCOPED_SRC/nodes/toks5/.cogni/repo-spec.yaml"
+yq '.envs = ["candidate-a","production"] | .compute_egress_cidrs = [{"cidr":"80.200.246.35/32","ports":[7233],"envs":["candidate-a"],"comment":"Temporal only"},{"cidr":"192.0.2.31/32","ports":[5432],"envs":["production"],"comment":"foreign env excluded"}]' "$XCW_SRC/infra/catalog/toks5.yaml" > "$SCOPED_SRC/infra/catalog/toks5.yaml"
+if env "${XCW_ENV[@]}" APP_SOURCE_DIR="$SCOPED_SRC" COGNI_CATALOG_ROOT="$SCOPED_SRC/infra/catalog" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-missing-port.out" 2>&1; then
+  echo "expected exact scoped ports to be required, rather than any rule for the CIDR" >&2; exit 1
+fi
+grep -Fq 'missing exact catalog rule: 80.200.246.35/32:7233' "$TMPROOT/scoped-missing-port.out"
+printf '%s\n' '80.200.246.35/32:7233' >> "$EXTERNAL_ALLOWLIST"
+env "${XCW_ENV[@]}" APP_SOURCE_DIR="$SCOPED_SRC" COGNI_CATALOG_ROOT="$SCOPED_SRC/infra/catalog" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-exact.out" 2>&1 || { cat "$TMPROOT/scoped-exact.out"; exit 1; }
+grep -q 'External compute preconditions ready for toks5' "$TMPROOT/scoped-exact.out"
 
 # An unknown authority is a loud stop, never a silent fall-through to legacy.
 BAD_SRC="$TMPROOT/bad-authority-src"

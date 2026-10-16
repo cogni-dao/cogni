@@ -25,18 +25,98 @@ export function buildComputeSecretResources(input: {
       `[compute-workload-secret-manifests] off-cluster workload secret refs rejected: ${rejected.join(",")}`
     );
   }
-  if (secretKeys.length === 0) return [];
-
   const namespace = `cogni-${input.environment}`;
   const secretName = `${input.slug}-compute-env-secrets`;
   const accessName = `${input.slug}-compute-env-secrets-reader`;
+  const runtimeResources: ComputeSecretResource[] =
+    secretKeys.length === 0
+      ? []
+      : [
+          {
+            file: "compute-env-external-secret.yaml",
+            manifest: {
+              apiVersion: "external-secrets.io/v1",
+              kind: "ExternalSecret",
+              metadata: { name: secretName, namespace },
+              spec: {
+                refreshInterval: "1h",
+                secretStoreRef: {
+                  name: "openbao-backend",
+                  kind: "ClusterSecretStore",
+                },
+                target: {
+                  name: secretName,
+                  creationPolicy: "Owner",
+                  deletionPolicy: "Delete",
+                  // provider-http substitutes these inside serialized JSON strings.
+                  // Migration Jobs consume a separate, unescaped Secret below.
+                  template: {
+                    engineVersion: "v2",
+                    mergePolicy: "Replace",
+                    data: Object.fromEntries(
+                      secretKeys.map((key) => [
+                        key,
+                        String.raw`{{ index . "${key}" | toJson | trimPrefix "\"" | trimSuffix "\"" }}`,
+                      ])
+                    ),
+                  },
+                },
+                data: secretKeys.map((key) => ({
+                  secretKey: key,
+                  remoteRef: {
+                    key: `${input.environment}/${input.slug}`,
+                    property: key,
+                  },
+                })),
+              },
+            },
+          },
+          {
+            file: "compute-env-secret-role.yaml",
+            manifest: {
+              apiVersion: "rbac.authorization.k8s.io/v1",
+              kind: "Role",
+              metadata: { name: accessName, namespace },
+              rules: [
+                {
+                  apiGroups: [""],
+                  resources: ["secrets"],
+                  resourceNames: [secretName],
+                  verbs: ["get"],
+                },
+              ],
+            },
+          },
+          {
+            file: "compute-env-secret-role-binding.yaml",
+            manifest: {
+              apiVersion: "rbac.authorization.k8s.io/v1",
+              kind: "RoleBinding",
+              metadata: { name: accessName, namespace },
+              subjects: [
+                {
+                  kind: "ServiceAccount",
+                  name: "operator-compute-workload-controller",
+                  namespace,
+                },
+              ],
+              roleRef: {
+                apiGroup: "rbac.authorization.k8s.io",
+                kind: "Role",
+                name: accessName,
+              },
+            },
+          },
+        ];
+  const migrationSecretName = `${input.slug}-compute-migration-secrets`;
   return [
+    ...runtimeResources,
     {
-      file: "compute-env-external-secret.yaml",
+      file: "compute-migration-external-secret.yaml",
       manifest: {
         apiVersion: "external-secrets.io/v1",
         kind: "ExternalSecret",
-        metadata: { name: secretName, namespace },
+        metadata: { name: migrationSecretName, namespace },
         spec: {
           refreshInterval: "1h",
           secretStoreRef: {
@@ -44,53 +124,37 @@ export function buildComputeSecretResources(input: {
             kind: "ClusterSecretStore",
           },
           target: {
-            name: secretName,
+            name: migrationSecretName,
             creationPolicy: "Owner",
             deletionPolicy: "Delete",
           },
-          data: secretKeys.map((key) => ({
-            secretKey: key,
-            remoteRef: {
-              key: `${input.environment}/${input.slug}`,
-              property: key,
+          data: [
+            {
+              secretKey: "DATABASE_MIGRATION_URL",
+              remoteRef: {
+                key: `${input.environment}/${input.slug}-database-migration`,
+                property: "DATABASE_MIGRATION_URL",
+              },
             },
-          })),
-        },
-      },
-    },
-    {
-      file: "compute-env-secret-role.yaml",
-      manifest: {
-        apiVersion: "rbac.authorization.k8s.io/v1",
-        kind: "Role",
-        metadata: { name: accessName, namespace },
-        rules: [
-          {
-            apiGroups: [""],
-            resources: ["secrets"],
-            resourceNames: [secretName],
-            verbs: ["get"],
-          },
-        ],
-      },
-    },
-    {
-      file: "compute-env-secret-role-binding.yaml",
-      manifest: {
-        apiVersion: "rbac.authorization.k8s.io/v1",
-        kind: "RoleBinding",
-        metadata: { name: accessName, namespace },
-        subjects: [
-          {
-            kind: "ServiceAccount",
-            name: "operator-compute-workload-controller",
-            namespace,
-          },
-        ],
-        roleRef: {
-          apiGroup: "rbac.authorization.k8s.io",
-          kind: "Role",
-          name: accessName,
+            {
+              secretKey: "DATABASE_SSL_CA_CERT",
+              remoteRef: {
+                key: `${input.environment}/${input.slug}-database-migration`,
+                property: "DATABASE_SSL_CA_CERT",
+              },
+            },
+            ...(secretKeys.includes("DOLTGRES_URL")
+              ? [
+                  {
+                    secretKey: "DOLTGRES_URL",
+                    remoteRef: {
+                      key: `${input.environment}/${input.slug}`,
+                      property: "DOLTGRES_URL",
+                    },
+                  },
+                ]
+              : []),
+          ],
         },
       },
     },

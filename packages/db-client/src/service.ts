@@ -13,13 +13,16 @@
  * @public
  */
 
-import { buildClient } from "./build-client";
+import { buildClient, type DbClientOptions } from "./build-client";
 
 /**
  * Creates a Drizzle database client for the `app_service` role (BYPASSRLS).
  * Use this for scheduler workers, internal services, and auth bootstrap only.
  * Must NOT be used in the Next.js web runtime (enforced by dependency-cruiser).
  */
-export function createServiceDbClient(connectionString: string) {
-  return buildClient(connectionString, "cogni_service");
+export function createServiceDbClient(
+  connectionString: string,
+  options?: DbClientOptions
+) {
+  return buildClient(connectionString, "cogni_service", options);
 }

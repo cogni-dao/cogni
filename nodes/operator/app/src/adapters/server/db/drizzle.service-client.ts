@@ -25,7 +25,10 @@ let _serviceDb: Database | null = null;
 function createServiceDb(): Database {
   if (!_serviceDb) {
     const env = serverEnv();
-    _serviceDb = createServiceDbClient(env.DATABASE_SERVICE_URL);
+    _serviceDb = createServiceDbClient(env.DATABASE_SERVICE_URL, {
+      max: 4,
+      applicationName: "cogni_operator_service",
+    });
   }
   return _serviceDb;
 }

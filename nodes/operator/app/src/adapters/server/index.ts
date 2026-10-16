@@ -116,6 +116,27 @@ export {
   type TokenRefreshFn,
 } from "./connections/drizzle-broker.adapter";
 export { type Database, getAppDb } from "./db/client";
+export {
+  HttpReliabilityRecoveryAdapter,
+  PinoDatabaseContainmentAuditWriter,
+  PostgresAdminSqlAdapter,
+  PostgresDatabaseContainmentControlAdapter,
+  PostgresDatabaseRecoveryBeginAdapter,
+  PostgresDatabaseRecoveryProbeAdapter,
+  PostgresDatabaseRecoveryVerificationAdapter,
+  PostgresDatabaseRecoveryWatchdogAdapter,
+  PostgresReadmitSqlAdapter,
+  RecoveryLedgerDatabaseContainmentAdapter,
+} from "./db/database-containment-production.adapter";
+export {
+  createCellAdminRecoveryControls,
+  createCellReadmitRecoveryControls,
+  observeDatabaseCellNativeControl,
+  PostgresDatabaseCellPressureAdapter,
+  PostgresDatabaseCellRecoveryProbeAdapter,
+  routeCellRecoveryBegin,
+  routeCellRecoveryVerification,
+} from "./db/database-recovery-cell.adapter";
 export { DrizzleCatalogNodeRegistryAdapter } from "./db/drizzle-catalog-node-registry.adapter";
 export {
   ProbeDeployAdapter,
@@ -135,7 +156,9 @@ export {
   GITHUB_ADAPTER_VERSION,
   GitHubWebhookNormalizer,
 } from "./ingestion/github-webhook";
+export { createGrafanaMimirAdapter } from "./metrics/grafana-mimir.adapter";
 export {
+  buildReliabilityReadinessQuery,
   type MimirAdapterConfig,
   MimirMetricsAdapter,
   TemplateQueryError,
@@ -210,5 +233,11 @@ export {
   GitHubVcsAdapter,
   type GitHubVcsAdapterConfig,
 } from "./vcs/github-vcs.adapter";
+
 // NOTE: PrivyOperatorWalletAdapter lives in @cogni/operator-wallet/adapters/privy.
 // @privy-io/node is heavy — lazy-import in container.ts only.
+
+export { observeAppliedCellManaged } from "./compute/database-cell-applied-managed.adapter";
+export { ReadOnlyAppliedDatabaseCellObserver } from "./compute/database-cell-applied-observer.adapter";
+export { DrizzleDatabaseCellBindingStore } from "./compute/database-cell-binding-store.adapter";
+export { PostgresDatabaseCellObserver } from "./compute/database-cell-observer.adapter";

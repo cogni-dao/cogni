@@ -258,7 +258,10 @@ export function createAttributionContainer(
     configuredSources,
   });
 
-  const db = createServiceDbClient(config.DATABASE_URL);
+  const db = createServiceDbClient(config.DATABASE_URL, {
+    max: 2,
+    applicationName: "cogni_operator_ledger_worker",
+  });
   const attributionLogger = logger.child?.({ component: "ledger" }) ?? logger;
 
   const attributionStore = createValidatedAttributionStore(

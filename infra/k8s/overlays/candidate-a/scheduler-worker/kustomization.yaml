@@ -14,6 +14,8 @@ images:
     digest: "sha256:400c2bded1b450af42147ce867893243cbe5cdb2957dc5e2c4e9b70252dd1334"
 
 patches:
+  - path: serial-rollout.patch.yaml
+  - path: replicas.patch.yaml
   # GENERATED sibling (render-scheduler-worker-endpoints.sh): this env's
   # PROVIDER-RESOLVED COGNI_NODE_ENDPOINTS. bug.5094 — a node placed on akash has
   # no in-cluster Service, so its address is env-variant and belongs here, not in

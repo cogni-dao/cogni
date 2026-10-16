@@ -17,7 +17,10 @@
 
 import { metaReadyzOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
-import { getContainer } from "@/bootstrap/container";
+import {
+  getContainer,
+  resolveLocalReliabilityControl,
+} from "@/bootstrap/container";
 import { verifySystemTenant } from "@/bootstrap/healthchecks";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { EnvValidationError, serverEnv } from "@/shared/env";
@@ -87,6 +90,63 @@ function logReadinessFailure(
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "meta.readyz", auth: { mode: "none" } },
   async (ctx, request): Promise<NextResponse> => {
+    const proof = new URL(request.url).searchParams.get("proof");
+    if (proof !== null) {
+      if (proof !== "recovery" && proof !== "recovery-product") {
+        return NextResponse.json(
+          { status: "error", reason: "RECOVERY_PROOF_INVALID" },
+          { status: 400 }
+        );
+      }
+      try {
+        const local = resolveLocalReliabilityControl();
+        const env = serverEnv();
+        if (!local.recoveryReader || !local.buildSha)
+          throw new Error("recovery reader unavailable");
+        const requestedSlug = new URL(request.url).searchParams.get(
+          "node_slug"
+        );
+        if (
+          requestedSlug !== null &&
+          !/^[a-z][a-z0-9-]{0,62}$/.test(requestedSlug)
+        ) {
+          return NextResponse.json(
+            { status: "error", reason: "RECOVERY_TARGET_INVALID" },
+            { status: 400 }
+          );
+        }
+        if (requestedSlug && requestedSlug !== local.slug) {
+          if (!local.recoveryReader.readBoundTarget)
+            throw new Error("bound recovery reader unavailable");
+          const evidence = await local.recoveryReader.readBoundTarget({
+            nodeSlug: requestedSlug,
+            environment: env.DEPLOY_ENVIRONMENT as
+              | "candidate-a"
+              | "preview"
+              | "production",
+            proofClass: proof,
+          });
+          return NextResponse.json(evidence);
+        }
+        const evidence = await local.recoveryReader.read({
+          nodeId: local.nodeId,
+          nodeSlug: local.slug,
+          environment: env.DEPLOY_ENVIRONMENT as
+            | "candidate-a"
+            | "preview"
+            | "production",
+          expectedBuildSha: local.buildSha,
+          proofClass: proof,
+        });
+        return NextResponse.json(evidence);
+      } catch (error) {
+        logReadinessFailure(ctx, error as Error);
+        return NextResponse.json(
+          { status: "error", reason: "RECOVERY_PROOF_UNAVAILABLE" },
+          { status: 503 }
+        );
+      }
+    }
     // The kubelet path is deliberately local-only. `?deep=1` is the explicit
     // deploy/audit gate for remote substrate health.
     const deep = new URL(request.url).searchParams.get("deep") === "1";

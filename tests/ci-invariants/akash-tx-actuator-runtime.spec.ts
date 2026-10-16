@@ -13,8 +13,8 @@
  *   - ADDRESS_IS_THE_CONTRACT: the Service is named exactly `akash-tx-actuator` on port 8080,
  *     and the overlay's `operator-` namePrefix is undone for it.
  *   - PRIVATE_BY_CONSTRUCTION: ClusterIP only — no Ingress, no NodePort, no public route.
- *   - LEAST_PRIVILEGE_CREDENTIALS: an explicit projected key list, never `envFrom` over the
- *     whole operator Secret.
+ *   - LEAST_PRIVILEGE_CREDENTIALS: the complete actuator-owned bank, with only DATABASE_URL
+ *     projected from the foreign operator Secret and no public-app access to the actor bank.
  *   - WALLET_IS_UNREACHABLE_FROM_THE_OPERATOR_APP: the Console credential and the bearer token
  *     live in the actuator's OWN OpenBao bucket + ExternalSecret, so the public operator app —
  *     which consumes ALL of `cogni/<env>/operator` via `dataFrom: extract` + `envFrom` — has no
@@ -47,6 +47,10 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
+import {
+  candidateDeploymentFingerprint,
+  resolveDeploymentTargets,
+} from "@/features/compute/node-deployment-targets";
 import {
   CROSSPLANE_ACTUATOR_WALLET_ENVS,
   CROSSPLANE_CONTROL_PLANE_ENVS,
@@ -185,7 +189,7 @@ const overlay = parse<{
 interface ProjectedSecretSource {
   readonly secret: {
     readonly name: string;
-    readonly items: { readonly key: string }[];
+    readonly items?: { readonly key: string }[];
   };
 }
 
@@ -382,23 +386,24 @@ describe("akash-tx-actuator runtime", () => {
     expect(probes.readinessProbe).not.toHaveProperty("initialDelaySeconds");
   });
 
-  it("receives only the three credentials it needs, as files, from two blast radii", () => {
-    // envFrom over operator-env-secrets would hand a wallet writer the whole operator
-    // bucket; an explicit item list is the blast radius we actually want.
+  it("receives its complete owned bank and only the foreign ledger DSN, as files", () => {
+    // cicd-secrets-expert invariants 1–3: new owned keys need no projection YAML edit.
+    // The foreign operator bank remains narrowed to the one legitimate ledger DSN.
     expect(container()).not.toHaveProperty("envFrom");
     const sources = projectedSources();
 
-    // The wallet + the token that unlocks it come from the actuator's OWN Secret.
-    expect(sources[0]?.secret.name).toBe(ENV_SECRET_NAME);
-    expect(sources[0]?.secret.items.map((item) => item.key)).toEqual([
-      ...ACTUATOR_OWNED_KEYS,
-    ]);
+    // Omitting items mounts all OWN keys, including sole-materializer bootstrap kits.
+    expect(sources[0]?.secret).toEqual({
+      name: ENV_SECRET_NAME,
+      optional: true,
+    });
     // Only the ledger DSN legitimately comes from the operator bucket: the receipts table is
     // operator-local schema in the operator's own Postgres.
-    expect(sources[1]?.secret.name).toBe("operator-env-secrets");
-    expect(sources[1]?.secret.items.map((item) => item.key)).toEqual([
-      "DATABASE_URL",
-    ]);
+    expect(sources[1]?.secret).toEqual({
+      name: "operator-env-secrets",
+      optional: true,
+      items: [{ key: "DATABASE_URL", path: "DATABASE_URL" }],
+    });
     expect(sources).toHaveLength(2);
   });
 
@@ -438,10 +443,24 @@ describe("akash-tx-actuator runtime", () => {
   it("NEVER projects the legacy controller wallet — it must not possess both", () => {
     // task.5095 projected AKASH_CONSOLE_API_KEY purely to byte-compare it, which meant the
     // actuator held the very credential it claimed isolation from (story.5016 amendment 3).
-    const projectedKeys = projectedSources().flatMap((source) =>
-      source.secret.items.map((item) => item.key)
-    );
+    const catalog = yaml.parse(read("infra/secrets-catalog.yaml")) as {
+      secrets: { name: string; service?: string }[];
+    };
+    const ownedKeys = catalog.secrets
+      .filter((secret) => secret.service === OPENBAO_SERVICE)
+      .map((secret) => secret.name);
+    expect(ownedKeys).toEqual(expect.arrayContaining([...ACTUATOR_OWNED_KEYS]));
+    const projectedKeys = projectedSources().flatMap((source) => {
+      if (source.secret.items)
+        return source.secret.items.map((item) => item.key);
+      // A whole foreign bank is forbidden, even when its catalog keys look harmless.
+      expect(source.secret.name).toBe(ENV_SECRET_NAME);
+      return ownedKeys;
+    });
     expect(projectedKeys).not.toContain("AKASH_CONSOLE_API_KEY");
+    expect(catalog.secrets.map((secret) => secret.name)).not.toContain(
+      "AKASH_CONSOLE_API_KEY"
+    );
     // The replacement is a NON-SECRET pin, carried as plain Deployment config.
     const envNames = (container().env as { name: string }[] | undefined)?.map(
       (entry) => entry.name
@@ -527,7 +546,10 @@ describe("akash-tx-actuator runtime", () => {
       .sort();
 
     const sh = read("scripts/setup/lib/reconcile-secrets.sh");
-    const shBlock = /declare -ga PLATFORM_SERVICES=\(([\s\S]*?)\)/.exec(sh);
+    // The array carries inline comments such as `(task.5102)`. Terminate only
+    // at Bash's standalone closing-paren line, never at comment punctuation.
+    const shBlock =
+      /declare -ga PLATFORM_SERVICES=\(([\s\S]*?)^\s*\)\s*$/m.exec(sh);
     expect(
       shBlock,
       "PLATFORM_SERVICES must exist in the bash lib"
@@ -540,6 +562,110 @@ describe("akash-tx-actuator runtime", () => {
 
     expect(shNames).toEqual(tsNames);
     expect(tsNames).toContain(OPENBAO_SERVICE);
+  });
+
+  it("keeps remote artifact resolution broad but candidate deployment environment-scoped", () => {
+    const workflow = read(".github/workflows/candidate-flight.yml");
+    const combineStart = workflow.indexOf("- name: Combine flight targets");
+    const combine = workflow.slice(
+      combineStart,
+      workflow.indexOf("- uses: pnpm/action-setup", combineStart)
+    );
+    expect(combine).toContain(
+      "done < <(jq -r '.[]' <<< \"$REMOTE_SOURCE_ARTIFACT_TARGETS_JSON\")"
+    );
+    expect(combine).toContain('catalog="app-src/infra/catalog/${target}.yaml"');
+    expect(combine).not.toContain('catalog="infra/catalog/${target}.yaml"');
+    expect(combine).toContain("yq -e '.envs | contains([\"candidate-a\"])'");
+    expect(combine).toContain(
+      'git -C app-src show "${BASE_SHA}:infra/catalog/${target}.yaml"'
+    );
+    expect(combine).toContain("candidateDeploymentFingerprint");
+    expect(combine).not.toContain("origin/${BASE_REF}");
+    expect(combine).toContain(
+      'REMOTE_DEPLOYMENT_TARGETS_JSON="$remote_deployment_targets"'
+    );
+    expect(combine).toContain(
+      'if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
+    );
+    expect(combine).not.toContain(
+      'json.loads(os.environ["REMOTE_SOURCE_ARTIFACT_TARGETS_JSON"] or "[]") +'
+    );
+    expect(workflow).toContain(
+      `source_repo="$(yq -N '.source_repo // ""' "$catalog")"`
+    );
+    expect(workflow).toContain(
+      'if [ "$reliability_controller" = true ] && [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then'
+    );
+    expect(workflow).not.toMatch(/matrix\.node.*operator/);
+
+    const remoteArtifactRows = [
+      { name: "alpha", envs: ["candidate-a", "production"] },
+      { name: "bravo", envs: ["production"] },
+    ];
+    expect(
+      remoteArtifactRows
+        .filter((row) => row.envs.includes("candidate-a"))
+        .map((row) => row.name)
+    ).toEqual(["alpha"]);
+
+    const base = {
+      name: "alpha",
+      type: "node",
+      node_id: "921b1d1d-4ded-4a6d-b3f1-f7d6affa406a",
+      port: 3200,
+      node_port: 32000,
+      source_repo: "https://github.com/example/alpha.git",
+      source_sha: "c9e4c685ef78f2437aae8a732b03fe1af1df8b31",
+      image_repository: "ghcr.io/example/alpha",
+      candidate_a_branch: "deploy/candidate-a-alpha",
+      envs: ["candidate-a", "production"],
+      deployment_provider: { "candidate-a": "akash" },
+      compute_api: { "candidate-a": "crossplane" },
+      lease_generation: { "candidate-a": 0 },
+    };
+    const baseFingerprint = candidateDeploymentFingerprint(base);
+    expect(
+      candidateDeploymentFingerprint({
+        ...base,
+        database: {
+          "candidate-a": {
+            tier: "shared",
+            budget_profile: "shared-default-v1",
+          },
+        },
+        reliability_validation: {
+          "candidate-a": { role: "shared-target" },
+        },
+      })
+    ).toBe(baseFingerprint);
+    for (const changed of [
+      { ...base, source_sha: "a".repeat(40) },
+      { ...base, deployment_provider: { "candidate-a": "k3s" } },
+      { ...base, compute_api: { "candidate-a": "legacy" } },
+      { ...base, lease_generation: { "candidate-a": 1 } },
+      {
+        ...base,
+        required_placement_countries: { "candidate-a": ["DE"] },
+      },
+      { ...base, boot_recovery: { "candidate-a": "hold" } },
+    ]) {
+      expect(candidateDeploymentFingerprint(changed)).not.toBe(baseFingerprint);
+    }
+    expect(
+      resolveDeploymentTargets({
+        catalogRows: [base],
+        environment: "candidate-a",
+        flightTargets: ["alpha"],
+      }).deployment
+    ).toEqual(["alpha"]);
+    expect(() =>
+      resolveDeploymentTargets({
+        catalogRows: [{ ...base, name: "bravo", envs: ["production"] }],
+        environment: "candidate-a",
+        flightTargets: ["bravo"],
+      })
+    ).toThrow(/not configured for candidate-a/);
   });
 
   it("projects the bearer token under the name the provider-http placeholder dereferences", () => {
@@ -679,5 +805,45 @@ describe("akash-tx-actuator runtime", () => {
     const tsup = read(`nodes/operator/app/tsup.${SERVICE_NAME}.config.ts`);
     expect(tsup).toContain(`entry: ["src/bootstrap/${SERVICE_NAME}.ts"]`);
     expect(tsup).toContain(`outDir: "dist-${SERVICE_NAME}"`);
+  });
+
+  it("keeps dedicated database replay receipt-selected and node-generic", () => {
+    const replay = read("scripts/ops/replay-dedicated-database-cell.sh");
+    expect(replay).toContain(
+      "${CELL_BINDING_RECEIPT_FILE:?native sealed ready binding required}"
+    );
+    expect(replay).toContain(
+      "${CELL_DIAGNOSTIC_RECEIPT_FILE:?private actor completed clone receipt required}"
+    );
+    expect(replay).toContain(
+      "${REPLAY_SQL_FILE:?reviewed read-only workload artifact required}"
+    );
+    expect(replay).toContain("node=$(jq -er '.nodeSlug' <<< \"$binding\")");
+    expect(replay).toContain('$b.phase=="ready"');
+    expect(replay).toContain('$b.environment=="production"');
+    expect(replay).toContain("$d.nodeId==$b.nodeId");
+    expect(replay).toContain("$d.nodeSlug==$b.nodeSlug");
+    expect(replay).toContain("$d.allocationReceiptId==$b.receiptId");
+    expect(replay).toContain("$d.systemIdentifier==$b.systemIdentifier");
+    expect(replay).toContain(
+      '$d.databaseName==($b.databaseName+"_diagnostic")'
+    );
+    expect(replay).toContain("role=production-db-reader");
+    expect(replay).toContain("public.database_replay_identity()");
+    expect(replay).toContain("/v1/akash/observe-database-cell-diagnostic");
+    expect(replay).toContain("-c 8 -j 8");
+    expect(replay).toContain("-T 600");
+    expect(replay).toContain("$c.parentRolesContained==true");
+    expect(replay).toContain("$c.parentRuntimeSessions==0");
+    expect(replay).not.toMatch(
+      /contain_database_incident|begin_database_recovery|ALTER ROLE/
+    );
+    expect(replay).not.toMatch(/POLY_|NODE_SLUG:-poly|poly-cell|poly_trader/);
+
+    const profiles = parse<Record<string, unknown>>(
+      "infra/database-budget-profiles.yaml"
+    );
+    expect(profiles).toHaveProperty("dedicated-high-throughput-v1");
+    expect(profiles).not.toHaveProperty("poly-dedicated-v1");
   });
 });

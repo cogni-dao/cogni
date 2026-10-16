@@ -230,17 +230,23 @@ describe("candidate-a manifest source", () => {
     expect(combine.run).toContain(
       'if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
     );
-    expect(combine.run).toContain("items = ([node] if node else []) + items");
+    expect(combine.env?.NORMAL_FLIGHT_TARGETS_JSON).toBe(
+      "${{ steps.detect.outputs.flight_targets_json }}"
+    );
     expect(images.run).toContain(
       'if [ -n "$NODE" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
     );
     expect(images.run).toContain("resolve-pr-build-images.sh");
   });
 
-  it("fails a node-ref before mutation when its exact image is absent", () => {
+  it("fails an affected node-ref before mutation when its exact image is absent", () => {
     const guard = namedStep("decide", "Require requested node image");
 
-    expect(guard.if).toBe("steps.meta.outputs.node_slug != ''");
+    // Behavioral scope cases execute the workflow in deployment-workflows.test.sh.
+    // This structural invariant pins the guard to the authoritative affected set.
+    expect(guard.if).toContain(
+      "steps.flight-targets.outputs.flight_targets_json"
+    );
     expect(guard.env?.NODE).toBe("${{ steps.meta.outputs.node_slug }}");
     expect(guard.env?.PAYLOAD_FILE).toBe(
       "${{ runner.temp }}/resolved-pr-images.json"
@@ -363,7 +369,7 @@ describe("candidate-a manifest source", () => {
     );
   });
 
-  it("uses reviewed substrate scripts only for an exact operator self-flight", () => {
+  it("uses reviewed substrate scripts only for an exact in-repository self-flight", () => {
     const substrate = namedStep(
       "node-substrate",
       "Run node substrate (materialize -> reconcile)"
@@ -374,8 +380,15 @@ describe("candidate-a manifest source", () => {
       'substrate_runner="ci-src/scripts/ci/run-node-substrate.sh"'
     );
     expect(substrate).toContain(
-      'if [ "${{ matrix.node }}" = "operator" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then'
+      'catalog="app-src/infra/catalog/${{ matrix.node }}.yaml"'
     );
+    expect(substrate).toContain(
+      'source_repo="$(yq -N \'.source_repo // ""\' "$catalog")"'
+    );
+    expect(substrate).toContain(
+      'if [ "$reliability_controller" = true ] && [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then'
+    );
+    expect(substrate).not.toMatch(/matrix\.node.*operator/);
     expect(substrate).toContain('app_sha="$(git -C app-src rev-parse HEAD)"');
     expect(substrate).toContain('[ "$app_sha" = "$GITHUB_SHA" ]');
     expect(substrate).toContain(

@@ -81,6 +81,8 @@ spec:
               type: object
               required: [nodeId, environment, bundle, workload]
               x-kubernetes-validations:
+                - rule: "!has(self.runtime) || !has(self.runtime.databasePoolLimits) || self.workload.services.filter(s, has(s.runtimeProfile) && s.runtimeProfile == 'cogni-node-app-v1').size() == 1"
+                  message: database pool limits require exactly one app service and one replica
                 - rule: "self.workload.services.all(s, self.bundle.artifacts.exists(a, a.name == s.artifact))"
                   message: every service must reference a declared bundle artifact
                 - rule: "self.bundle.artifacts.all(a, self.workload.services.exists(s, s.artifact == a.name))"
@@ -266,6 +268,18 @@ spec:
                       format: hostname
                       minLength: 1
                       maxLength: 253
+                    databasePoolLimits:
+                      description: >-
+                        Optional app pool caps for exactly one app replica. The service role
+                        also owns a separate read pool and one dedicated job leader; applied
+                        cell custody validates their sum against native caps with reserve.
+                      type: object
+                      required: [replicaCount, app, service, read]
+                      properties:
+                        replicaCount: { type: integer, enum: [1] }
+                        app: { type: integer, minimum: 1, maximum: 1000 }
+                        service: { type: integer, minimum: 1, maximum: 1000 }
+                        read: { type: integer, minimum: 1, maximum: 1000 }
                     logPush:
                       description: >-
                         APPLICATION-LOG IDENTITY (bug.5127). When true the lease receives the

@@ -87,7 +87,7 @@ export function cogniNodeAppMigrationPhases(input: {
         "-c",
         "exec node /app/app/migrate.mjs /app/app/migrations",
       ],
-      databaseUrlSecretKey: "DATABASE_URL",
+      databaseUrlSecretKey: "DATABASE_MIGRATION_URL",
     },
     ...(input.doltgres
       ? [
@@ -110,7 +110,7 @@ export function cogniNodeAppMigrationPhases(input: {
  * derived it. Values never transit this process: the Job references keys by `secretKeyRef`.
  */
 function migrationSecretName(workload: string): string {
-  return `${workload}-compute-env-secrets`;
+  return `${workload}-compute-migration-secrets`;
 }
 
 /**

@@ -58,10 +58,10 @@ jobs:
       !startsWith(github.event.head_commit.message, 'chore(deps): argocd-image-updater')
     outputs:
       # Emitted by scripts/ci/flight-preview.sh into $GITHUB_OUTPUT.
-      # Values: dispatched | (empty when the flight step was gated off,
+      # Values: dispatched | noop (no affected artifacts) | (empty when gated off,
       # e.g. workflow_dispatch with a non-PR SHA).
       # Consumed by the deploy-preview job to confirm a dispatch occurred.
-      status: ${{ steps.flight.outputs.status }}
+      status: ${{ steps.flight.outputs.status || steps.noop.outputs.status }}
       pr_number: ${{ steps.pr.outputs.pr_number }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
       # Clickable URL of the promote-and-deploy run this flight spawned, resolved
@@ -71,9 +71,10 @@ jobs:
       - name: Checkout app source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          # Shallow is enough: the workflow_dispatch path does its own
+          # Include the merge's first parent for affected-package detection.
+          # The workflow_dispatch path does its own
           # `git fetch origin main --depth=100` before the ancestor check.
-          fetch-depth: 1
+          fetch-depth: 2
 
       - name: Resolve target SHA and associated PR
         id: pr
@@ -182,12 +183,29 @@ jobs:
           OUTPUT_FILE: ${{ runner.temp }}/remote-source-artifact-targets.json
         run: bash scripts/ci/detect-remote-source-artifact-targets.sh
 
-      - name: Set up Docker Buildx
+      - name: Detect affected artifact inputs
+        id: scope
         if: steps.pr.outputs.skip != 'true'
+        env:
+          CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
+          TURBO_SCM_BASE: ${{ steps.pr.outputs.head_sha }}^
+          TURBO_SCM_HEAD: ${{ steps.pr.outputs.head_sha }}
+        run: bash scripts/ci/detect-affected.sh
+
+      - name: Record CI-only no-op
+        id: noop
+        if: steps.pr.outputs.skip != 'true' && steps.scope.outputs.has_targets != 'true' && steps.remote-source-artifact-targets.outputs.has_remote_source_artifact_targets != 'true'
+        run: |
+          echo "status=noop" >> "$GITHUB_OUTPUT"
+          echo "Preview flight no-op: no affected deployable artifacts; nothing deployed."
+          echo "## Preview flight: no affected artifacts (nothing deployed)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Docker Buildx
+        if: steps.pr.outputs.skip != 'true' && steps.noop.outputs.status != 'noop'
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
-        if: steps.pr.outputs.skip != 'true'
+        if: steps.pr.outputs.skip != 'true' && steps.noop.outputs.status != 'noop'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -202,7 +220,7 @@ jobs:
       # unaffected. promote-and-deploy resolves the same sha-<mainSha> directly.
       - name: Resolve preview image digests (bounded wait for push:main build)
         id: images
-        if: steps.pr.outputs.skip != 'true'
+        if: steps.pr.outputs.skip != 'true' && steps.noop.outputs.status != 'noop'
         env:
           IMAGE_TAG: ${{ steps.pr.outputs.image_tag }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
@@ -227,7 +245,7 @@ jobs:
           bash scripts/ci/resolve-pr-build-images.sh
 
       - name: Hard-fail when no images found for resolved PR
-        if: steps.pr.outputs.skip != 'true' && steps.images.outputs.has_images != 'true'
+        if: steps.pr.outputs.skip != 'true' && steps.noop.outputs.status != 'noop' && steps.images.outputs.has_images != 'true'
         env:
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
@@ -240,7 +258,7 @@ jobs:
       # workflow. Exit 0 = dispatched, 1 = error.
       - name: Flight to preview
         id: flight
-        if: steps.pr.outputs.skip != 'true'
+        if: steps.pr.outputs.skip != 'true' && steps.noop.outputs.status != 'noop'
         env:
           GH_TOKEN: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}

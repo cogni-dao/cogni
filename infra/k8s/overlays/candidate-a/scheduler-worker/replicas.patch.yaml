@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# CANDIDATE ONLY: one worker, matching production's constrained-VM pattern.
+# The shared control VM has no safe memory headroom for two worker processes.
+# Starvation threatens every workload, including the control plane responsible
+# for recovery. One Temporal poller preserves task semantics at reduced redundancy.
+# Requalify two replicas when the VM can support them with recovery headroom.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler-worker
+spec:
+  replicas: 1

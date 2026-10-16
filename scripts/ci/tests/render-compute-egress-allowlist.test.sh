@@ -110,6 +110,10 @@ type: infra
 EOF
 
 export COGNI_CATALOG_ROOT="$CATALOG"
+# Existing provider-only cases represent an isolated fleet, with no production
+# custodian and no implicit DNS/domain authority.
+export FLEET_CONTROL_ENV=candidate-a
+unset FORK_DOMAIN_ROOT COGNI_DOMAIN_ROOT COGNI_DEPLOYMENT_SLUG
 PORTS="5432,5435,6379,4000,7233"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -210,6 +214,140 @@ fi
 rm "$CATALOG/badplacement.yaml"
 ok "unsupported deployment_provider aborts the render"
 
+# Native migration custody: hermetic DNS, no production/fork network lookups.
+DNSBIN="$TMPROOT/dns-bin"
+mkdir -p "$DNSBIN"
+cat > "$DNSBIN/getent" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$2" >> "$DNS_QUERY_LOG"
+[ "$1" = ahostsv4 ] && [ "$2" = "$FAKE_EXPECTED_ALIAS" ] || exit 1
+printf '%s\n' "${FAKE_MIGRATION_IPS-198.51.100.23}"
+EOF
+for tool in dig python3; do
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$DNSBIN/$tool"
+done
+chmod +x "$DNSBIN/"*
+export DNS_QUERY_LOG="$TMPROOT/dns-queries"
+: > "$DNS_QUERY_LOG"
+MIGRATION_ENV=(
+  PATH="$DNSBIN:$PATH"
+  FLEET_CONTROL_ENV=production
+  FORK_DOMAIN_ROOT=migration.fixture.test
+  FAKE_EXPECTED_ALIAS=cogni.vm.migration.fixture.test
+)
+OUT_MIGRATION="$TMPROOT/candidate-migration.list"
+env "${MIGRATION_ENV[@]}" bash "$RENDERER" candidate-a > "$OUT_MIGRATION"
+grep -Fxq '198.51.100.23/32:5432' "$OUT_MIGRATION" || fail "missing migration control /32:5432"
+[ "$(grep -Fc '198.51.100.23/32:5432' "$OUT_MIGRATION")" = 1 ] || fail "migration rule duplicated across rows"
+grep -v '^#' "$OUT_MIGRATION" | grep -v '^198.51.100.23/32:5432$' > "$TMPROOT/provider-preserved"
+diff -u "$EXPECTED_A" "$TMPROOT/provider-preserved" || fail "provider rules changed"
+ok "foreign nonproduction lanes add exactly one custodian /32:5432; provider rules unchanged"
+
+env "${MIGRATION_ENV[@]}" bash "$RENDERER" preview > "$TMPROOT/preview-migration.list"
+grep -Fxq '198.51.100.23/32:5432' "$TMPROOT/preview-migration.list" || fail "preview migration control missing"
+ok "preview owner Postgres admits only the production migration custodian"
+
+env "${MIGRATION_ENV[@]}" COGNI_DEPLOYMENT_SLUG=forkfleet FORK_DOMAIN_ROOT=fork.fixture.test \
+  FAKE_EXPECTED_ALIAS=forkfleet.vm.fork.fixture.test \
+  bash "$RENDERER" candidate-a > "$TMPROOT/fork-migration.list"
+grep -q '^# migration custodian: forkfleet.vm.fork.fixture.test ' "$TMPROOT/fork-migration.list" \
+  || fail "fork control alias did not use explicit fork identity"
+ok "foreign fork custody resolves only its explicit fork domain and deployment slug"
+
+for target_env in production candidate-b; do
+  : > "$DNS_QUERY_LOG"
+  env "${MIGRATION_ENV[@]}" bash "$RENDERER" "$target_env" > "$TMPROOT/no-migration.list"
+  grep -q '^198.51.100.23/' "$TMPROOT/no-migration.list" && fail "migration admission leaked into $target_env"
+  [ ! -s "$DNS_QUERY_LOG" ] || fail "unrelated/production env performed foreign DNS"
+done
+ok "production and unrelated envs never admit or resolve migration control"
+
+: > "$DNS_QUERY_LOG"
+env "${MIGRATION_ENV[@]}" FLEET_CONTROL_ENV=candidate-a bash "$RENDERER" candidate-a > "$TMPROOT/isolated.list"
+diff -u "$OUT_A" "$TMPROOT/isolated.list" || fail "isolated fleet gained foreign trust"
+[ ! -s "$DNS_QUERY_LOG" ] || fail "isolated fleet resolved a production host"
+env "${MIGRATION_ENV[@]}" FLEET_CONTROL_ENV=preview bash "$RENDERER" candidate-a > "$TMPROOT/uptrust.list"
+grep -q '^198.51.100.23/' "$TMPROOT/uptrust.list" && fail "nonproduction control gained uptrust admission"
+ok "self-control and nonproduction control grant no cross-environment admission"
+
+: > "$DNS_QUERY_LOG"
+env "${MIGRATION_ENV[@]}" FORK_DOMAIN_ROOT= \
+  bash "$RENDERER" candidate-a production > "$TMPROOT/control-twin.list"
+diff -u <(sed '/^# env:/d' "$OUT_A") <(sed '/^# env:/d' "$TMPROOT/control-twin.list") \
+  || fail "control-host twin provider rows changed or gained a migration rule"
+grep -q '^# env: production ' "$TMPROOT/control-twin.list" || fail "allowlist names the caller instead of its destination"
+[ ! -s "$DNS_QUERY_LOG" ] || fail "control-host twin resolved foreign migration trust"
+ok "actual production control-host twin preserves provider rules with NO custodian/self admission"
+
+if env "${MIGRATION_ENV[@]}" FORK_DOMAIN_ROOT= bash "$RENDERER" candidate-a > /dev/null 2> "$TMPROOT/no-root.err"; then
+  fail "foreign custody accepted a defaulted domain root"
+fi
+grep -q 'explicit FORK_DOMAIN_ROOT is required' "$TMPROOT/no-root.err" || fail "missing root failed for wrong reason"
+ok "foreign migration custody fails closed without explicit fleet domain"
+
+for address in '' '198.51.100.23
+198.51.100.24' 127.0.0.1 0.0.0.0 255.255.255.255 224.0.0.1 999.1.1.1 malformed; do
+  if env "${MIGRATION_ENV[@]}" FAKE_MIGRATION_IPS="$address" bash "$RENDERER" candidate-a > /dev/null 2>&1; then
+    fail "unsafe/missing/ambiguous custodian IPv4 accepted: $address"
+  fi
+done
+ok "missing, ambiguous, loopback, unspecified, broadcast, multicast, and malformed IPv4 fail closed"
+
+env "${MIGRATION_ENV[@]}" FAKE_MIGRATION_IPS='80.200.246.35' \
+  bash "$RENDERER" candidate-a > "$TMPROOT/shared-source.list"
+grep -Fxq "80.200.246.35/32:$PORTS" "$TMPROOT/shared-source.list" || fail "provider port declaration changed"
+grep -Fxq '80.200.246.35/32:5432' "$TMPROOT/shared-source.list" || fail "provider CIDR dedupe suppressed migration rule"
+ok "custodian rule dedupe is independent of a matching provider CIDR"
+
+MIGRATION_ONLY_CATALOG="$TMPROOT/migration-only-catalog"
+mkdir -p "$MIGRATION_ONLY_CATALOG"
+cat > "$MIGRATION_ONLY_CATALOG/only.yaml" <<'EOF'
+name: only
+type: node
+envs: [candidate-a]
+deployment_provider:
+  candidate-a: akash
+EOF
+env "${MIGRATION_ENV[@]}" COGNI_CATALOG_ROOT="$MIGRATION_ONLY_CATALOG" \
+  bash "$RENDERER" candidate-a > "$TMPROOT/migration-only.list"
+[ "$(grep -v '^#' "$TMPROOT/migration-only.list")" = '198.51.100.23/32:5432' ] \
+  || fail "native migration admission wrongly depends on provider CIDRs"
+ok "an actual foreign Akash lane needs migration admission even without provider CIDRs"
+yq -i '.deployment_provider."candidate-a" = "k3s"' "$MIGRATION_ONLY_CATALOG/only.yaml"
+: > "$DNS_QUERY_LOG"
+env "${MIGRATION_ENV[@]}" COGNI_CATALOG_ROOT="$MIGRATION_ONLY_CATALOG" \
+  bash "$RENDERER" candidate-a > "$TMPROOT/k3s-only.list"
+grep -qv '^#' "$TMPROOT/k3s-only.list" && fail "k3s-only lane gained migration admission"
+[ ! -s "$DNS_QUERY_LOG" ] || fail "k3s-only lane performed foreign DNS"
+ok "a k3s-only lane resolves and admits no foreign migration control"
+
+ACTION="$REPO_ROOT/.github/actions/reconcile-compute-egress/action.yml"
+[ "$(yq -r '.runs.steps[0].env.FORK_DOMAIN_ROOT' "$ACTION")" = '${{ inputs.fork_domain_root }}' ] \
+  || fail "composite must receive explicit repo-owned root through its supported inputs context"
+if grep -Eq '\$\{\{[^}]*vars' "$ACTION"; then
+  fail "composite manifest must not use unsupported vars expressions"
+fi
+[ "$(yq -r '.inputs.fork_domain_root.default' "$ACTION")" = '' ] \
+  || fail "composite must not invent a domain-root fallback"
+[ "$(yq -r '.runs.steps[0].env.DESTINATION_ENVIRONMENT' "$ACTION")" = '${{ inputs.destination_environment || inputs.environment }}' ] \
+  || fail "composite destination must default to lane"
+for workflow in candidate-flight.yml promote-and-deploy.yml; do
+  caller_roots="$(yq -r '.jobs[].steps[]? | select(.uses == "./app-src/.github/actions/reconcile-compute-egress") | .with.fork_domain_root' "$REPO_ROOT/.github/workflows/$workflow")"
+  [ "$(printf '%s\n' "$caller_roots" | wc -l | tr -d ' ')" = 2 ] \
+    || fail "$workflow must pass explicit root to both existing composite callers"
+  while IFS= read -r caller_root; do
+    [ "$caller_root" = '${{ vars.FORK_DOMAIN_ROOT }}' ] \
+      || fail "$workflow composite caller must pass raw repo-owned root without fallback"
+  done <<< "$caller_roots"
+  actual_destination="$(yq -r '.jobs.reconcile-compute-egress-control.steps[] | select(.uses == "./app-src/.github/actions/reconcile-compute-egress") | .with.destination_environment' "$REPO_ROOT/.github/workflows/$workflow")"
+  [ "$actual_destination" = '${{ vars.FLEET_CONTROL_ENV || '\''production'\'' }}' ] \
+    || fail "$workflow control twin did not declare its actual destination"
+done
+yq -r '.jobs.reconcile-compute-egress.if' "$REPO_ROOT/.github/workflows/promote-and-deploy.yml" \
+  | grep -Fq "needs.decide.outputs.has_external_compute_node_targets == 'true'" \
+  || fail "foreign Akash-only promote must reconcile its lane-owned Postgres firewall"
+ok "canonical composite/control twins preserve explicit trust provenance and actual destination; Akash owner job runs"
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Fake VM toolchain for harden-docker-public-ports.sh
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -280,8 +418,10 @@ run_harden
 RULES_1="$TMPROOT/rules.1"
 PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$RULES_1"
 
-grep -q -- "-s 80.200.246.35/32 -p tcp -m multiport --dports $PORTS .*compute-egress-allow.* ACCEPT" "$RULES_1" \
-  || { cat "$RULES_1" >&2; fail "catalog CIDR did not become a port-scoped ACCEPT"; }
+for port in 5432 5435 6379 4000 7233; do
+  grep -q -- "-s 80.200.246.35/32 -p tcp -m conntrack --ctdir ORIGINAL --ctorigdstport $port .*compute-egress-allow.* ACCEPT" "$RULES_1" \
+    || { cat "$RULES_1" >&2; fail "catalog CIDR did not become a published-port $port ACCEPT"; }
+done
 grep -q -- "-s 198.51.100.0/24 .*compute-egress-allow" "$RULES_1" || fail "second CIDR missing"
 allow_line=$(grep -n 'compute-egress-allow' "$RULES_1" | head -1 | cut -d: -f1)
 drop_line=$(grep -n 'drop-public' "$RULES_1" | cut -d: -f1)
@@ -319,5 +459,166 @@ PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/rules.4"
 grep -q 'compute-egress-allow' "$TMPROOT/rules.4" \
   || fail "without a staged file, the installed allowlist must still apply"
 ok "no staged file: previously installed allowlist still renders (boot path)"
+
+cp "$OUT_MIGRATION" "$STAGED_ALLOWLIST"
+run_harden
+PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/migration.rules"
+grep -q -- '-s 198.51.100.23/32 -p tcp -m conntrack --ctdir ORIGINAL --ctorigdstport 5432 .*compute-egress-allow.* ACCEPT' "$TMPROOT/migration.rules" \
+  || fail "hardener did not install exact custodian TCP5432 ACCEPT"
+if grep '198.51.100.23/32' "$TMPROOT/migration.rules" | grep -qE -- '--ctorigdstport (5435|6379|4000|7233|8080)'; then
+  fail "migration custodian gained unrelated substrate ports"
+fi
+ok "existing hardener installs custodian /32 for TCP5432 only"
+run_harden
+PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/migration.rules.second"
+diff -u "$TMPROOT/migration.rules" "$TMPROOT/migration.rules.second" || fail "custodian rule is not idempotent"
+cp "$OUT_A" "$STAGED_ALLOWLIST"
+run_harden
+PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/migration.removed"
+grep -q '198.51.100.23/32' "$TMPROOT/migration.removed" && fail "custodian rule did not converge away"
+grep -q 'drop-public' "$TMPROOT/migration.removed" || fail "custodian removal lost public DROP"
+ok "custodian admission is idempotent and removed with catalog/control convergence"
+
+# Entry-level scope preserves defaults while admitting a production Temporal NAT
+# without granting database access or leaking into another environment.
+SCOPED_CATALOG="$TMPROOT/scoped-catalog"
+mkdir -p "$SCOPED_CATALOG"
+cat > "$SCOPED_CATALOG/scopea.yaml" <<'EOF'
+name: scopea
+type: node
+envs: [candidate-a, production]
+deployment_provider: {candidate-a: akash, production: akash}
+compute_egress_cidrs:
+  - {cidr: 65.108.194.156/32, ports: [7233], envs: [production], comment: production Temporal only}
+  - {cidr: 65.108.194.156/32, ports: [5432], envs: [candidate-a], comment: distinct candidate database scope}
+  - {cidr: 198.51.100.30/32, ports: [7233, 5432], envs: [production], comment: normalized pair}
+  - {cidr: 198.51.100.30/32, ports: [5432, 7233], envs: [production], comment: equivalent reordered pair}
+EOF
+COGNI_CATALOG_ROOT="$SCOPED_CATALOG" bash "$RENDERER" production > "$TMPROOT/scoped-production.list"
+grep -v '^#' "$TMPROOT/scoped-production.list" > "$TMPROOT/scoped-production.rules"
+printf '%s\n' '65.108.194.156/32:7233' '198.51.100.30/32:5432,7233' > "$TMPROOT/scoped-production.expected"
+diff -u "$TMPROOT/scoped-production.expected" "$TMPROOT/scoped-production.rules" || fail "production scoped rules differ"
+COGNI_CATALOG_ROOT="$SCOPED_CATALOG" bash "$RENDERER" candidate-a > "$TMPROOT/scoped-candidate.list"
+grep -v '^#' "$TMPROOT/scoped-candidate.list" > "$TMPROOT/scoped-candidate.rules"
+printf '%s\n' '65.108.194.156/32:5432' > "$TMPROOT/scoped-candidate.expected"
+diff -u "$TMPROOT/scoped-candidate.expected" "$TMPROOT/scoped-candidate.rules" || fail "entry environment scope leaked"
+ok "entry scopes preserve distinct same-CIDR ports and normalize equivalent sets"
+
+for caller_lane in candidate-a preview; do
+  COGNI_CATALOG_ROOT="$SCOPED_CATALOG" bash "$RENDERER" "$caller_lane" production > "$TMPROOT/control-$caller_lane.list"
+  grep -Fxq '65.108.194.156/32:7233' "$TMPROOT/control-$caller_lane.list" \
+    || fail "$caller_lane reconcile erased the destination's production grant"
+  if grep -q '^65.108.194.156/32:5432' "$TMPROOT/control-$caller_lane.list"; then
+    fail "$caller_lane reconcile admitted the foreign Postgres grant to production"
+  fi
+done
+ok "candidate and preview control reconciles preserve production grants without foreign Postgres trust"
+
+# The hardener must install only the declared Temporal port for this source.
+cp "$TMPROOT/scoped-production.list" "$STAGED_ALLOWLIST"
+run_harden
+PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/scoped-installed.rules"
+grep -q -- '-s 65.108.194.156/32 -p tcp -m conntrack --ctdir ORIGINAL --ctorigdstport 7233 .*compute-egress-allow.* ACCEPT' "$TMPROOT/scoped-installed.rules" || fail "Temporal-only rule missing"
+if grep '65.108.194.156/32' "$TMPROOT/scoped-installed.rules" | grep -qE -- '--ctorigdstport (5432|5435)'; then fail "Temporal NAT gained database access"; fi
+ok "hardener installs new production NAT for Temporal only"
+
+# Both services DNAT to container TCP5432. Each grant must retain its distinct
+# original published port, including the Dolt-only grant required after PG isolation.
+for published_port in 5432 5435; do
+  printf '%s\n' "198.51.100.42/32:$published_port" > "$STAGED_ALLOWLIST"
+  run_harden
+  PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/dnat-$published_port.rules"
+  grants=$(grep 'compute-egress-allow' "$TMPROOT/dnat-$published_port.rules")
+  [ "$(printf '%s\n' "$grants" | wc -l | tr -d ' ')" = 1 ] || fail "published-port grant widened"
+  printf '%s\n' "$grants" | grep -q -- "--ctdir ORIGINAL --ctorigdstport $published_port " \
+    || fail "grant lost original destination port $published_port"
+  if printf '%s\n' "$grants" | grep -q -- '--dport'; then fail "grant matches translated container ports"; fi
+done
+ok "Postgres-only and Doltgres-only grants distinguish their original published ports"
+
+incident_rule='-s 157.180.108.139/32 -p tcp --dport 5432 -m conntrack --ctorigdstport 5432 -m comment --comment incident-bug.5442-poly-prod-shed -j REJECT --reject-with tcp-reset'
+printf '%s\n' "$incident_rule" >> "$IPT_STATE"
+run_harden
+grep -Fxq -- "$incident_rule" "$IPT_STATE" || fail "hardener changed the scoped incident fence"
+ok "routine hardening preserves the corrected Postgres incident fence"
+
+cp "$SCOPED_CATALOG/scopea.yaml" "$TMPROOT/scope-valid.yaml"
+for mutation in '.compute_egress_cidrs[0].ports = []' '.compute_egress_cidrs[0].ports = [8080]' '.compute_egress_cidrs[0].ports = ["7233"]' '.compute_egress_cidrs[0].envs = []' '.compute_egress_cidrs[0].envs = ["preview"]'; do
+  yq "$mutation" "$TMPROOT/scope-valid.yaml" > "$SCOPED_CATALOG/scopea.yaml"
+  if COGNI_CATALOG_ROOT="$SCOPED_CATALOG" bash "$RENDERER" production > /dev/null 2>&1; then fail "invalid entry scope accepted: $mutation"; fi
+done
+ok "renderer rejects empty, unsupported and out-of-row entry scopes"
+
+# Per-entry provider scope constrains BOTH the lane and actual destination.
+SCOPED_CATALOG="$TMPROOT/destination-scoped-catalog"
+mkdir -p "$SCOPED_CATALOG"
+cat > "$SCOPED_CATALOG/scoped.yaml" <<'EOF'
+name: scoped
+type: node
+envs: [candidate-a, preview, production]
+deployment_provider:
+  candidate-a: akash
+  preview: akash
+  production: akash
+compute_egress_cidrs:
+  - cidr: 198.51.100.201/32
+    comment: legacy unscoped provider
+EOF
+scoped_render() {
+  env COGNI_CATALOG_ROOT="$SCOPED_CATALOG" FLEET_CONTROL_ENV=preview bash "$RENDERER" "$@"
+}
+for pair in 'production production' 'preview production' 'candidate-a production' 'production preview' 'production candidate-a' 'candidate-a candidate-a'; do
+  read -r lane destination <<<"$pair"
+  scoped_render "$lane" "$destination" > "$TMPROOT/baseline-$lane-$destination"
+done
+cat >> "$SCOPED_CATALOG/scoped.yaml" <<'EOF'
+  - cidr: 65.108.194.156/32
+    envs: [preview]
+    comment: preview-only worker NAT
+EOF
+scoped_render preview preview > "$TMPROOT/scoped-preview"
+grep -Fxq "65.108.194.156/32:$PORTS" "$TMPROOT/scoped-preview" || fail "preview worker NAT missing from preview destination"
+grep -Fxq "198.51.100.201/32:$PORTS" "$TMPROOT/scoped-preview" || fail "scoped entry removed legacy provider trust"
+ok "preview entry admits exactly its existing five ports only to preview"
+scoped_render production preview > "$TMPROOT/production-to-preview"
+grep -Fxq "65.108.194.156/32:$PORTS" "$TMPROOT/production-to-preview" \
+  || fail "foreign caller erased the destination's preview grant"
+ok "destination-owned preview grants survive a production caller"
+for pair in 'production production' 'preview production' 'candidate-a production' 'production candidate-a' 'candidate-a candidate-a'; do
+  read -r lane destination <<<"$pair"
+  scoped_render "$lane" "$destination" > "$TMPROOT/after-$lane-$destination"
+  cmp "$TMPROOT/baseline-$lane-$destination" "$TMPROOT/after-$lane-$destination" || fail "scoped entry changed $lane -> $destination output"
+done
+ok "all production/control-twin and unrelated lane outputs remain byte-identical"
+
+# Validate the real catalog entry schema, not a reimplemented type checker.
+jq '.properties.compute_egress_cidrs.items' "$REPO_ROOT/infra/catalog/_schema.json" > "$TMPROOT/egress-entry.schema.json"
+printf '{"cidr":"65.108.194.156/32","comment":"fixture","envs":["preview"]}\n' > "$TMPROOT/egress-entry.json"
+check-jsonschema --schemafile "$TMPROOT/egress-entry.schema.json" "$TMPROOT/egress-entry.json" >/dev/null
+for invalid_scope in '[]' '"preview"' null '["unknown"]' '["preview","unknown"]' '["preview","preview"]'; do
+  printf '{"cidr":"65.108.194.156/32","comment":"fixture","envs":%s}\n' "$invalid_scope" > "$TMPROOT/egress-entry.json"
+  if check-jsonschema --schemafile "$TMPROOT/egress-entry.schema.json" "$TMPROOT/egress-entry.json" >/dev/null 2>&1; then
+    fail "entry schema accepted invalid scope $invalid_scope"
+  fi
+done
+ok "entry schema rejects scalar/null/empty/unknown/duplicate scopes"
+for invalid_scope in '[]' '"preview"' null '["unknown"]' '["preview","unknown"]'; do
+  yq -i ".compute_egress_cidrs[1].envs = $invalid_scope" "$SCOPED_CATALOG/scoped.yaml"
+  if scoped_render preview preview > "$TMPROOT/invalid-scope.out" 2> "$TMPROOT/invalid-scope.err"; then
+    fail "renderer accepted malformed scope $invalid_scope"
+  fi
+  grep -q 'invalid entry env' "$TMPROOT/invalid-scope.err" || fail "invalid scope failed for wrong reason"
+done
+ok "renderer fails closed for scalar/null/empty/unknown scopes outside schema CI"
+
+# A long live chain exceeds the pipe buffer. Finding the first managed rule must
+# still drain iptables' output, or pipefail turns SIGPIPE into exit 141.
+printf '%s\n' '-m comment --comment cogni-harden-internal-ports:old -j ACCEPT' > "$IPT_STATE"
+awk 'BEGIN { for (i=1; i<=2000; i++) print "-s 192.0.2.1/32 -p tcp --dport 5432 -m comment --comment unmanaged-fixture-" i " -j REJECT" }' >> "$IPT_STATE"
+run_harden
+[ "$(grep -c unmanaged-fixture "$IPT_STATE")" = 2000 ] || fail "large-chain reconciliation changed unmanaged fences"
+grep -q 'cogni-harden-internal-ports:old' "$IPT_STATE" && fail "large-chain reconciliation retained stale managed rules"
+grep -q 'cogni-harden-internal-ports:drop-public' "$IPT_STATE" || fail "large-chain reconciliation lost public DROP"
+ok "large-chain reconciliation drains iptables output and preserves unmanaged fences"
 
 echo "PASS: all $PASS assertions"

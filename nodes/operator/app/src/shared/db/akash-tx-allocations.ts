@@ -69,6 +69,7 @@ import {
   check,
   index,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -139,6 +140,10 @@ export const akashTxAllocations = pgTable(
     externalName: text("external_name"),
     /** Provider account that won the lease, when known. */
     providerAccount: text("provider_account"),
+    /** Verified cell metadata; ready is private prestage, applied requires explicit cutover approval. */
+    appliedDatabaseCellBinding: jsonb(
+      "applied_database_cell_binding"
+    ).$type<unknown>(),
     /**
      * sha256 hex of the exact Akash SDL bytes last PUT to the provider for this receipt
      * (bug.5238, IDENTICAL_SDL_IS_A_NO_OP). The in-place update path re-PUTs the SDL only when

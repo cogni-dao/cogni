@@ -34,6 +34,7 @@ export {
 export {
   createAppDbClient,
   type Database,
+  type DbClientOptions,
   type LoggerLike,
 } from "./client";
 // Tenant-scope helpers (generic over any Drizzle schema)

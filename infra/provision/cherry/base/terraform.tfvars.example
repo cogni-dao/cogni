@@ -19,6 +19,9 @@ region = "LT-Siauliai"
 # Required: SSH public key path (relative to this directory)
 public_key_path = "keys/cogni_preview_deploy.pub"
 
+# Optional same-fleet custodian PUBLIC key; never installed on production.
+# control_ssh_public_key = ""
+
 # Optional: SSH private key for bootstrap health check
 # ssh_private_key = ""  # Set via TF_VAR_ssh_private_key or terraform.auto.tfvars
 

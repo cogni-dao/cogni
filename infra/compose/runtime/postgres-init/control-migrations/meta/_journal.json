@@ -1,0 +1,34 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1792012089254,
+      "tag": "0000_database_recovery_control",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792018576505,
+      "tag": "0001_database_recovery_watchdog",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792059884756,
+      "tag": "0002_dedicated_cell_admission",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792101993313,
+      "tag": "0003_disable_database_locking",
+      "breakpoints": true
+    }
+  ]
+}

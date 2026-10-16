@@ -179,7 +179,7 @@ describe("runMigrationStep", () => {
       bundleDigest: DIGEST,
       image: IMAGE,
       // Derived, never sent on the wire: a secret NAME the Job references by key.
-      secretName: "toks9-compute-env-secrets",
+      secretName: "toks9-compute-migration-secrets",
       // ...and the namespace that name resolves in. Both derived from the WORKLOAD (task.5132).
       namespace: "cogni-candidate-a",
       phases: cogniNodeAppMigrationPhases({ doltgres: true }),
@@ -198,7 +198,7 @@ describe("runMigrationStep", () => {
     expect(migration.calls[0]).toMatchObject({
       nodeSlug: "toks5",
       environment: "production",
-      secretName: "toks5-compute-env-secrets",
+      secretName: "toks5-compute-migration-secrets",
       namespace: "cogni-production",
     });
   });
@@ -218,7 +218,7 @@ describe("runMigrationStep", () => {
     expect(migration.calls[0]).toMatchObject({
       nodeSlug: "poly",
       environment: "candidate-a",
-      secretName: "poly-compute-env-secrets",
+      secretName: "poly-compute-migration-secrets",
       namespace: "cogni-candidate-a",
     });
   });
@@ -533,7 +533,7 @@ describe("cogniNodeAppMigrationPhases", () => {
           "-c",
           "exec node /app/app/migrate.mjs /app/app/migrations",
         ],
-        databaseUrlSecretKey: "DATABASE_URL",
+        databaseUrlSecretKey: "DATABASE_MIGRATION_URL",
       },
     ]);
   });

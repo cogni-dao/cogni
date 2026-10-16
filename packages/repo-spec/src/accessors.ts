@@ -652,7 +652,7 @@ export function extractNodePath(spec: RepoSpec, nodeId: string): string | null {
  *                `.github/**` ∪ `docs/**` ∪ root configs are all the operator's territory.
  *                `rideAlongApplied: true` flags a bounded carve-out where operator-domain
  *                paths matching the ride-along whitelist (`pnpm-lock.yaml`, `work/**`,
- *                `docs/**`, `.claude/skills/poly-dev-manager/SKILL.md`) tagged
+ *                `docs/**`, `.claude/skills/**`) tagged
  *                along a single non-operator node PR.
  * - `conflict` — two or more domains touched. Refuse to review (post diagnostic).
  * - `miss`     — empty input. The reviewer surfaces a no-op neutral check.
@@ -818,7 +818,7 @@ function topUnderNodes(p: string): string | null {
  *
  * `RIDE_ALONG` exception: when domains is exactly `{operator, X}` and every operator-domain
  * path matches the ride-along whitelist (`pnpm-lock.yaml`, `work/**`, `docs/**`,
- * `.claude/skills/poly-dev-manager/SKILL.md`), drop operator →
+ * `.claude/skills/**`), drop operator →
  * `single { X, rideAlongApplied: true }`.
  *
  * Path safety: paths are consumed verbatim — no `..` rejection. Same boundary as `extractNodePath`.

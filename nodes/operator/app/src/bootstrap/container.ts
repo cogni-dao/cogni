@@ -12,6 +12,8 @@
  * @public
  */
 
+import { readFile } from "node:fs/promises";
+import { resolve as resolvePath } from "node:path";
 import type { ToolSourcePort } from "@cogni/ai-core";
 import type {
   ComputeResourcePort,
@@ -85,6 +87,7 @@ import {
 import { eq, inArray } from "drizzle-orm";
 import Redis from "ioredis";
 import type { Logger } from "pino";
+import { parse as parseYaml } from "yaml";
 import {
   ALCHEMY_ADAPTER_VERSION,
   AlchemyWebhookNormalizer,
@@ -129,6 +132,11 @@ import {
   OpenAiCompatibleModelProvider,
   PlatformModelProvider,
 } from "@/adapters/server/ai/providers";
+import {
+  HttpReliabilityReadmitAdapter,
+  HttpReliabilityRecoveryAdapter,
+  HttpReliabilityStatusAdapter,
+} from "@/adapters/server/db/database-containment-production.adapter";
 import {
   DoltgresNotConfiguredError,
   getDoltgresWorkItemsAdapter,
@@ -195,6 +203,7 @@ import type {
   ComputeCostReport,
   ComputeCostStorePort,
   ConnectionBrokerPort,
+  DatabasePlacementResolverPort,
   DataSourceRegistration,
   EpochsRead,
   GovernanceStatusPort,
@@ -212,6 +221,9 @@ import type {
   PaymentAttemptUserRepository,
   PaymentRailGuardPort,
   ReceiptDelivery,
+  ReliabilityReadmitPort,
+  ReliabilityRecoveryReaderPort,
+  ReliabilityStatusReaderPort,
   RunStreamPort,
   ServiceAccountService,
   ThreadPersistencePort,
@@ -277,6 +289,10 @@ export interface Container {
   /** Fail-closed guard for live payment rail activation before issuing payment intents. */
   paymentRailGuard: PaymentRailGuardPort;
   metricsQuery: MetricsQueryPort;
+  /** Authenticated read-only projection from the private actuator. */
+  reliabilityStatusReader?: ReliabilityStatusReaderPort;
+  /** Human-session-attributed, recovery-gated readmission command. */
+  reliabilityReadmit?: ReliabilityReadmitPort;
   treasuryReadPort: TreasuryReadPort;
   /** AI telemetry DB writer - always wired */
   aiTelemetry: AiTelemetryPort;
@@ -422,6 +438,66 @@ export function getContainer(): Container {
     });
   }
   return _container;
+}
+
+/** Recovery of this node must survive fencing both of its ordinary runtime DB roles. */
+export function resolveLocalReliabilityControl(): {
+  readonly nodeId: string;
+  readonly slug: string;
+  readonly buildSha: string | null;
+  readonly authorization: AuthorizationPort | undefined;
+  readonly statusReader: ReliabilityStatusReaderPort | undefined;
+  readonly recoveryReader: ReliabilityRecoveryReaderPort | undefined;
+  readonly readmit: ReliabilityReadmitPort | undefined;
+} {
+  const env = serverEnv();
+  return {
+    nodeId: getNodeId(),
+    slug: getNodeName(),
+    buildSha:
+      env.APP_BUILD_SHA && /^[0-9a-f]{40}$/.test(env.APP_BUILD_SHA)
+        ? env.APP_BUILD_SHA
+        : null,
+    authorization:
+      env.OPENFGA_API_URL && env.OPENFGA_STORE_ID
+        ? new OpenFgaAuthorizationAdapter({
+            apiUrl: env.OPENFGA_API_URL,
+            storeId: env.OPENFGA_STORE_ID,
+            timeoutMs: env.OPENFGA_TIMEOUT_MS,
+            writeMaxRetries: env.OPENFGA_WRITE_MAX_RETRIES,
+            ...(env.OPENFGA_API_TOKEN !== undefined
+              ? { apiToken: env.OPENFGA_API_TOKEN }
+              : {}),
+            ...(env.OPENFGA_AUTHORIZATION_MODEL_ID !== undefined
+              ? { authorizationModelId: env.OPENFGA_AUTHORIZATION_MODEL_ID }
+              : {}),
+          })
+        : undefined,
+    statusReader:
+      env.DATABASE_RELIABILITY_ACTUATOR_URL &&
+      env.DATABASE_RELIABILITY_STATUS_TOKEN
+        ? new HttpReliabilityStatusAdapter({
+            baseUrl: env.DATABASE_RELIABILITY_ACTUATOR_URL,
+            bearerToken: env.DATABASE_RELIABILITY_STATUS_TOKEN,
+          })
+        : undefined,
+    recoveryReader:
+      env.DATABASE_RELIABILITY_ACTUATOR_URL &&
+      env.DATABASE_RELIABILITY_STATUS_TOKEN
+        ? new HttpReliabilityRecoveryAdapter({
+            baseUrl: env.DATABASE_RELIABILITY_ACTUATOR_URL,
+            bearerToken: env.DATABASE_RELIABILITY_STATUS_TOKEN,
+          })
+        : undefined,
+    readmit:
+      env.DATABASE_RELIABILITY_READMITTER_URL &&
+      env.DATABASE_RELIABILITY_READMIT_TOKEN
+        ? new HttpReliabilityReadmitAdapter({
+            baseUrl: env.DATABASE_RELIABILITY_READMITTER_URL,
+            bearerToken: env.DATABASE_RELIABILITY_READMIT_TOKEN,
+          })
+        : undefined,
+  };
 }
 
 /**
@@ -576,6 +652,9 @@ function createContainer(): Container {
             queryTemplate: async () => {
               throw notConfiguredError;
             },
+            queryReliabilitySnapshot: async () => {
+              throw notConfiguredError;
+            },
           } satisfies MetricsQueryPort;
         }
 
@@ -588,6 +667,22 @@ function createContainer(): Container {
         return new MimirMetricsAdapter(mimirConfig);
       })();
 
+  const reliabilityStatusReader =
+    env.DATABASE_RELIABILITY_ACTUATOR_URL &&
+    env.DATABASE_RELIABILITY_STATUS_TOKEN
+      ? new HttpReliabilityStatusAdapter({
+          baseUrl: env.DATABASE_RELIABILITY_ACTUATOR_URL,
+          bearerToken: env.DATABASE_RELIABILITY_STATUS_TOKEN,
+        })
+      : undefined;
+  const reliabilityReadmit =
+    env.DATABASE_RELIABILITY_READMITTER_URL &&
+    env.DATABASE_RELIABILITY_READMIT_TOKEN
+      ? new HttpReliabilityReadmitAdapter({
+          baseUrl: env.DATABASE_RELIABILITY_READMITTER_URL,
+          bearerToken: env.DATABASE_RELIABILITY_READMIT_TOKEN,
+        })
+      : undefined;
   // FinancialLedger: optional — only when TIGERBEETLE_ADDRESS is configured
   // @cogni/financial-ledger/adapters is in serverExternalPackages (N-API addon, not bundleable)
   const financialLedger: FinancialLedgerPort | undefined = (() => {
@@ -1125,6 +1220,8 @@ function createContainer(): Container {
     paymentRailsActive: !!getPaymentConfig(),
     paymentRailGuard,
     metricsQuery,
+    ...(reliabilityStatusReader ? { reliabilityStatusReader } : {}),
+    ...(reliabilityReadmit ? { reliabilityReadmit } : {}),
     treasuryReadPort,
     aiTelemetry,
     langfuse,
@@ -1382,6 +1479,81 @@ async function listRoutableNodes(): Promise<{ id: string; slug: string }[]> {
  * this environment's authority before each selected node's own repo-spec supplies source_refs.
  */
 let cachedAttributionProfileResolver: AttributionProfileResolver | undefined;
+
+let cachedDatabasePlacementResolver: DatabasePlacementResolverPort | undefined;
+
+/** Catalog-derived state placement; callers never accept tier/profile inputs. */
+export function resolveDatabasePlacementResolver(): DatabasePlacementResolverPort {
+  if (cachedDatabasePlacementResolver) return cachedDatabasePlacementResolver;
+  cachedDatabasePlacementResolver = {
+    resolve: async ({ nodeSlug, environment, sourceRef }) => {
+      const imageBuildSha = serverEnv().APP_BUILD_SHA;
+      if (!/^[0-9a-f]{40}$/.test(sourceRef) || sourceRef !== imageBuildSha) {
+        throw new Error("database_placement_source_ref_invalid");
+      }
+      const row = await readImageCatalogRow(nodeSlug);
+      const placement = row.database?.[environment];
+      if (!placement) throw new Error("database_placement_env_not_declared");
+      if (
+        (placement.tier !== "shared" && placement.tier !== "dedicated") ||
+        typeof placement.budget_profile !== "string" ||
+        placement.budget_profile.length === 0
+      ) {
+        throw new Error("database_placement_invalid");
+      }
+      return {
+        nodeId: row.node_id,
+        desiredTier: placement.tier,
+        budgetProfile: placement.budget_profile,
+      };
+    },
+  };
+  return cachedDatabasePlacementResolver;
+}
+
+interface ImageCatalogRow {
+  readonly node_id: string;
+  readonly database?: Partial<
+    Record<
+      "candidate-a" | "preview" | "production",
+      { readonly tier?: string; readonly budget_profile?: string }
+    >
+  >;
+}
+
+/** Resolve placement from the catalog bundled at APP_BUILD_SHA, never mutable main. */
+async function readImageCatalogRow(nodeSlug: string): Promise<ImageCatalogRow> {
+  if (!/^[a-z][a-z0-9-]{0,62}$/.test(nodeSlug)) {
+    throw new Error("database_placement_invalid_node_slug");
+  }
+  const candidates = [
+    resolvePath(process.cwd(), "infra/catalog", `${nodeSlug}.yaml`),
+    resolvePath(process.cwd(), "../../../infra/catalog", `${nodeSlug}.yaml`),
+    `/app/infra/catalog/${nodeSlug}.yaml`,
+  ];
+  let source: string | undefined;
+  for (const candidate of candidates) {
+    try {
+      source = await readFile(candidate, "utf8");
+      break;
+    } catch (error) {
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        error.code !== "ENOENT"
+      ) {
+        throw error;
+      }
+    }
+  }
+  if (!source) throw new Error("database_placement_node_not_found");
+  const row = parseYaml(source) as Partial<ImageCatalogRow> | null;
+  if (!row || typeof row.node_id !== "string" || row.node_id.length === 0) {
+    throw new Error("database_placement_invalid_catalog_row");
+  }
+  return row as ImageCatalogRow;
+}
 
 export function resolveAttributionProfileResolver(): AttributionProfileResolver {
   if (cachedAttributionProfileResolver) return cachedAttributionProfileResolver;

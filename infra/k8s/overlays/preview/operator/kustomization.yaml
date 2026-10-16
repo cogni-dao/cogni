@@ -15,6 +15,10 @@ resources:
   # ledgers. Preview lands no ComputeWorkload CRs; operator akash e2e is
   # validated on candidate-a. See story.5016 / akash-actuator-wallet-cutover.
   - external-secret.yaml
+  - ../../../base/operator-migration-external-secret
+  # task.5247 — private autonomous database containment/status controller.
+  - ../../../base/database-reliability-actuator
+  - ./database-reliability-actuator-external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
 
@@ -38,6 +42,102 @@ images:
     digest: "sha256:be5e99490e9356f70c6af4b38b62cfbd9775f46047202e8c96ead10de35bd1a0"
 
 patches:
+  - target:
+      kind: Deployment
+      name: database-reliability-watchdog
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: database-reliability-watchdog
+      spec:
+        template:
+          spec:
+            containers:
+              - name: watchdog
+                env:
+                  - name: DEPLOY_ENVIRONMENT
+                    value: preview
+  - target:
+      kind: ExternalSecret
+      name: migration-secrets
+    patch: |
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: preview/operator-database-migration
+  - target:
+      kind: Deployment
+      name: database-reliability-actuator
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: database-reliability-actuator
+      spec:
+        template:
+          spec:
+            containers:
+              - name: actuator
+                env:
+                  - name: DEPLOY_ENVIRONMENT
+                    value: preview
+                  - name: FORK_DOMAIN_ROOT
+                    value: cognidao.org
+  - target:
+      kind: Deployment
+      name: database-reliability-readmitter
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: database-reliability-readmitter
+      spec:
+        template:
+          spec:
+            containers:
+              - name: readmitter
+                env:
+                  - name: DEPLOY_ENVIRONMENT
+                    value: preview
+                  - name: FORK_DOMAIN_ROOT
+                    value: cognidao.org
+                  - name: DATABASE_RELIABILITY_ACTUATOR_URL
+                    value: http://operator-database-reliability-actuator:8080
+  - target:
+      kind: Deployment
+      name: node-app
+    patch: |
+      - op: replace
+        path: /spec/template/spec/initContainers/0/env/0/valueFrom/secretKeyRef/name
+        value: operator-migration-secrets
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DATABASE_RELIABILITY_ACTUATOR_URL
+          value: http://operator-database-reliability-actuator:8080
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DATABASE_RELIABILITY_READMITTER_URL
+          value: http://operator-database-reliability-readmitter:8081
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DATABASE_RELIABILITY_STATUS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: operator-env-secrets
+              key: DATABASE_RELIABILITY_STATUS_TOKEN
+              optional: true
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DATABASE_RELIABILITY_READMIT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: operator-env-secrets
+              key: DATABASE_RELIABILITY_READMIT_TOKEN
+              optional: true
   # No akash-tx-actuator Deployment patch here: preview runs no akash writer
   # (see resources note above — one active writer per shared test wallet).
   # Node-specific ConfigMap values.

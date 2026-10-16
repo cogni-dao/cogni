@@ -29,17 +29,26 @@ export COGNI_CATALOG_ROOT="$CATALOG_DIR"
 . "$REPO_ROOT/scripts/ci/lib/appset-paths.sh"
 # shellcheck source=scripts/ci/lib/image-tags.sh
 . "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
+# shellcheck source=scripts/ci/lib/lane-db-residency.sh
+. "$REPO_ROOT/scripts/ci/lib/lane-db-residency.sh"
+# shellcheck source=scripts/setup/lib/reconcile-secrets.sh
+. "$REPO_ROOT/scripts/setup/lib/reconcile-secrets.sh"
+bao_get_field() { printf 'fixture-password'; }
 
 fail() { echo "❌ $*" >&2; exit 1; }
 
-# READ side, reproduced exactly as reconcile-secrets.sh composes it.
+# READ side uses the actual composer, not a second placement-derived formula.
 read_side_db() {
-  local node="$1" lane="$2" control="$3"
-  printf 'cogni_%s%s' "${node//-/_}" "$(lane_db_suffix "$lane" "$control")"
+  local node="$1" lane="$2" control="$3" dsn path
+  dsn="$(DEPLOY_ENV="$lane" SECRETS_CONTROL_ENV="$control" VM_IP=203.0.113.1 \
+    _compose_node_value "$node" DATABASE_URL)"
+  path="${dsn##*@}"
+  path="${path#*/}"
+  printf '%s' "${path%%\?*}"
 }
 
 # ── The two derivations agree for every (lane, node) the catalog can produce ──
-for node in poly operator beacon toks4 scheduler-worker; do
+for node in "${NODE_TARGETS[@]}"; do
   for lane in candidate-a preview production; do
     control="$(control_env_for "$lane" "$node")"
     want="$(read_side_db "$node" "$lane" "$control")"
@@ -48,11 +57,14 @@ for node in poly operator beacon toks4 scheduler-worker; do
   done
 done
 
-# ── A foreign-custodied lane MUST NOT reuse production's objects ──
+# Equal database names are safe only on different environment instances.
 poly_ca="$(node_database_for_target poly candidate-a)"
 poly_prod="$(node_database_for_target poly production)"
-[ "$poly_ca" != "$poly_prod" ] \
-  || fail "poly's candidate-a lane resolves to production's database '${poly_prod}' — a lane reconcile would rotate the LIVE app_poly password (bug.5207)"
+[ "$poly_ca" = cogni_poly ] || fail "candidate database must be lane-local: $poly_ca"
+[ "$(lane_db_vm_env poly candidate-a)" = candidate-a ] \
+  || fail "candidate poly must not share production's Postgres instance"
+[ "$(lane_db_vm_env poly production)" = production ] \
+  || fail "production poly residency changed"
 
 # ── ZERO MIGRATION: every row that exists today keeps its exact historic name ──
 [ "$poly_prod" = "cogni_poly" ] || fail "production poly database changed: ${poly_prod}"

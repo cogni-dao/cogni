@@ -23,7 +23,10 @@ let _db: Database | null = null;
 
 function createDb(): Database {
   if (!_db) {
-    _db = createAppDbClient(serverEnv().DATABASE_URL);
+    _db = createAppDbClient(serverEnv().DATABASE_URL, {
+      max: 2,
+      applicationName: "cogni_operator_app",
+    });
   }
   return _db;
 }

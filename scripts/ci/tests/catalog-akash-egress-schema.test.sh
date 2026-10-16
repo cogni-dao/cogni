@@ -37,3 +37,15 @@ check-jsonschema \
   "$tmpdir/k3s-without-egress.yaml" >/dev/null
 
 echo "ok 2 - explicit k3s-only catalog needs no compute egress declaration"
+
+# Optional entry scopes are narrow subsets, not new substrate ports/environments.
+yq '.compute_egress_cidrs = [{"cidr":"65.108.194.156/32","comment":"production Temporal fixture","ports":[7233],"envs":["production"]}]' "$REPO_ROOT/infra/catalog/red.yaml" > "$tmpdir/scoped-valid.yaml"
+check-jsonschema --schemafile "$REPO_ROOT/infra/catalog/_schema.json" "$tmpdir/scoped-valid.yaml" >/dev/null
+echo "ok 3 - scoped numeric Temporal port in owning production env is accepted"
+for mutation in '.compute_egress_cidrs[0].ports = []' '.compute_egress_cidrs[0].ports = [8080]' '.compute_egress_cidrs[0].ports = ["7233"]' '.compute_egress_cidrs[0].ports = [7233,7233]' '.compute_egress_cidrs[0].envs = []' '.compute_egress_cidrs[0].envs = ["preview"]'; do
+  yq "$mutation" "$tmpdir/scoped-valid.yaml" > "$tmpdir/scoped-invalid.yaml"
+  if check-jsonschema --schemafile "$REPO_ROOT/infra/catalog/_schema.json" "$tmpdir/scoped-invalid.yaml" >/dev/null 2>&1; then
+    echo "not ok 4 - invalid entry scope accepted: $mutation"; exit 1
+  fi
+done
+echo "ok 4 - entry scopes reject empty/duplicate/unsupported ports and non-member envs"

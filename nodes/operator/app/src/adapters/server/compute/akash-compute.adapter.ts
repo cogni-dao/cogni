@@ -13,7 +13,8 @@
  * Invariants:
  *   - PROVIDER_AGNOSTIC: SDL, dseq, bids, uakt/uusdc escrow never escape; callers see only
  *     ComputeBalance / ProvisionSpec / ProvisionOutput. `leaseId` IS the dseq but is opaque
- *     to callers by contract.
+ *     to callers by contract. The private actuator proof seam may read observed definition
+ *     bytes; these never enter a public route and opaque env values are not secret proof.
  *   - ADAPTER_SWAPPABLE: implements the provider-blind ComputeResourcePort next to
  *     CherryComputeAdapter; the factory composes them.
  *   - FAIL_LOUD: HTTP / network / timeout / no-bids / boot-SLO failures throw AkashComputeError
@@ -49,6 +50,7 @@ import type {
 } from "@cogni/ai-tools";
 import type {
   AkashLeaseLogDescriptor,
+  AkashTxManagedDeploymentDefinition,
   ComputeCostEvidencePort,
   ComputeResourceCostEvidence,
 } from "@/ports";
@@ -248,7 +250,23 @@ interface ConsoleLease {
   price?: { denom?: string; amount?: string };
   status?: {
     uris?: string[];
-    services?: Record<string, { uris?: string[] }>;
+    services?: Record<
+      string,
+      {
+        uris?: string[];
+        observed_generation?: number;
+        replicas?: number;
+        updated_replicas?: number;
+        ready_replicas?: number;
+        available_replicas?: number;
+        total?: number;
+        available?: number;
+      }
+    >;
+    forwarded_ports?: Record<
+      string,
+      { host?: string; externalPort?: number; proto?: string }[]
+    >;
   } | null;
 }
 
@@ -256,8 +274,10 @@ interface ConsoleDeploymentDetail {
   deployment?: {
     id?: { owner?: string; dseq?: string | number };
     state?: string;
+    hash?: string;
     created_at?: string;
   };
+  consoleSettings?: { sdl?: string; manifestVersion?: string };
   leases?: ConsoleLease[];
   escrow_account?: {
     state?: {
@@ -482,7 +502,9 @@ export class AkashComputeAdapter
         p.spec.name,
         undefined,
         screening,
-        tried
+        tried,
+        undefined,
+        retainsStorage(p.spec)
       );
       if (result.kind === "ok") return result.output;
       finalBootFailureStage = result.stage;
@@ -521,7 +543,8 @@ export class AkashComputeAdapter
       p.expectedSourceSha,
       this.withPlacement(await this.loadScreeningContext(), p.spec),
       new Set<string>(),
-      onAllocated
+      onAllocated,
+      retainsStorage(p.spec)
     );
     if (result.kind === "ok") return result.output;
     throw new AkashComputeError(
@@ -629,6 +652,115 @@ export class AkashComputeAdapter
       `/v1/deployments/${encodeURIComponent(p.leaseId)}`
     );
     return provisionOutputFromDetail(p.leaseId, detail);
+  }
+
+  /** Private, read-only observation of the managed definition. Values may be opaque. */
+  async readManagedDefinition(input: {
+    leaseId: string;
+  }): Promise<AkashTxManagedDeploymentDefinition> {
+    if (!/^[0-9]+$/.test(input.leaseId))
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "managed definition requires one paid handle"
+      );
+    const detail = await this.request<ConsoleDeploymentDetail>(
+      "GET",
+      `/v1/deployments/${encodeURIComponent(input.leaseId)}`
+    );
+    const active = (detail?.leases ?? []).filter(
+      (lease) => lease.state === "active"
+    );
+    const lease = active[0];
+    const sdl = detail?.consoleSettings?.sdl;
+    const consoleVersion = detail?.consoleSettings?.manifestVersion;
+    const chainVersion = detail?.deployment?.hash;
+    const digest = (value: unknown): value is string =>
+      typeof value === "string" &&
+      /^[A-Za-z0-9+/]{43}=$/.test(value) &&
+      Buffer.from(value, "base64").length === 32 &&
+      Buffer.from(value, "base64").toString("base64") === value;
+    if (
+      String(detail?.deployment?.id?.dseq) !== input.leaseId ||
+      !this.config.expectedCostConsumerAccountId ||
+      detail?.deployment?.id?.owner !==
+        this.config.expectedCostConsumerAccountId ||
+      detail?.deployment?.state !== "active" ||
+      active.length !== 1 ||
+      String(lease?.id?.dseq) !== input.leaseId ||
+      !lease?.id?.provider ||
+      typeof sdl !== "string" ||
+      !sdl.length ||
+      Buffer.byteLength(sdl, "utf8") > 256 * 1024 ||
+      !digest(consoleVersion) ||
+      !digest(chainVersion) ||
+      consoleVersion !== chainVersion
+    )
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "active paid definition and current manifest identity unavailable"
+      );
+    const services = Object.entries(lease.status?.services ?? {}).map(
+      ([name, service]) => {
+        const value = {
+          name,
+          observedGeneration: service.observed_generation,
+          replicas: service.replicas,
+          updatedReplicas: service.updated_replicas,
+          readyReplicas: service.ready_replicas,
+          availableReplicas: service.available_replicas,
+          total: service.total,
+          available: service.available,
+        };
+        const fields = [
+          value.observedGeneration,
+          value.replicas,
+          value.updatedReplicas,
+          value.readyReplicas,
+          value.availableReplicas,
+          value.total,
+          value.available,
+        ];
+        if (
+          !name ||
+          fields.some(
+            (count) =>
+              typeof count !== "number" ||
+              !Number.isSafeInteger(count) ||
+              count < 0
+          )
+        )
+          throw new AkashComputeError(
+            "UNEXPECTED_SHAPE",
+            "provider rollout observation incomplete"
+          );
+        return {
+          name,
+          observedGeneration: Number(value.observedGeneration),
+          replicas: Number(value.replicas),
+          updatedReplicas: Number(value.updatedReplicas),
+          readyReplicas: Number(value.readyReplicas),
+          availableReplicas: Number(value.availableReplicas),
+          total: Number(value.total),
+          available: Number(value.available),
+        };
+      }
+    );
+    if (services.length === 0 || services.length > 32)
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "provider rollout observation absent"
+      );
+    return {
+      observedAt: this.now().toISOString(),
+      leaseId: input.leaseId,
+      ownerAccount: this.config.expectedCostConsumerAccountId,
+      providerAccount: lease.id.provider,
+      providerSdl: sdl,
+      providerSdlSha256: createHash("sha256").update(sdl).digest("hex"),
+      consoleManifestVersion: consoleVersion,
+      chainManifestVersion: chainVersion,
+      services,
+    };
   }
 
   /** Exact chain-native cost evidence. No fiat conversion or payer inference occurs here. */
@@ -841,7 +973,8 @@ export class AkashComputeAdapter
     expectedSourceSha: string | undefined,
     screening: ScreeningContext,
     tried: Set<string>,
-    onAllocated?: (resource: ProvisionOutput) => Promise<void>
+    onAllocated?: (resource: ProvisionOutput) => Promise<void>,
+    retainStorage = false
   ): Promise<
     | { kind: "ok"; output: ProvisionOutput }
     | { kind: "slo_failed"; stage: BootFailureStage }
@@ -850,7 +983,8 @@ export class AkashComputeAdapter
       sdl,
       screening,
       tried,
-      onAllocated
+      onAllocated,
+      retainStorage
     );
 
     // Boot SLO: the lease is paying from here — the workload must PROVE registry egress by
@@ -876,6 +1010,12 @@ export class AkashComputeAdapter
         error instanceof AkashComputeError &&
         error.code === "BOOT_SLO_TIMEOUT"
       ) {
+        if (retainStorage) {
+          throw new AkashComputeError(
+            "ALLOCATION_OUTCOME_UNKNOWN",
+            `retained deployment ${dseq} did not satisfy boot proof; allocation preserved for audited recovery`
+          );
+        }
         await this.release({ leaseId: String(dseq) }).catch(() => {
           // best-effort close; the SLO strike below is what must land
         });
@@ -930,21 +1070,23 @@ export class AkashComputeAdapter
         ? async (resource) => {
             await p.onAllocated?.(resource.leaseId);
           }
-        : undefined
+        : undefined,
+      retainsStorage(p.spec)
     );
     return { leaseId: String(dseq), providerAccount: provider };
   }
 
   /**
-   * Create → publish handle → screen → lease. Every failure after the dseq exists closes
-   * the deployment (escrow refunds) and names the dseq; a lost response leaves the
-   * deployment findable from the caller's pre-POST cursor (findAllocationSince).
+   * Create → publish handle → screen → lease. Unleased failures close with readback.
+   * Retained storage is never automatically closed once lease submission starts;
+   * an uncertain outcome remains recoverable through the same durable receipt.
    */
   private async createAndLease(
     sdl: string,
     screening: ScreeningContext,
     tried: Set<string>,
-    onAllocated?: (resource: ProvisionOutput) => Promise<void>
+    onAllocated?: (resource: ProvisionOutput) => Promise<void>,
+    retainStorage = false
   ): Promise<{ dseq: string; provider: string }> {
     const created = await this.request<{ dseq?: string; manifest?: unknown }>(
       "POST",
@@ -985,9 +1127,9 @@ export class AkashComputeAdapter
       }
     }
 
-    // A dseq means the deployment (and its escrow) exists on-chain — never strand it: from
-    // here every failure path (missing manifest, no bids, lease error, SLO miss) closes the
-    // deployment (refunding escrow), and every error names the dseq.
+    // Before leasing there can be no provider data. After submission begins, an
+    // error may hide a live stateful lease and cannot authorize its destruction.
+    let leaseAttempted = false;
     let provider: string;
     try {
       if (created?.manifest === undefined) {
@@ -998,6 +1140,7 @@ export class AkashComputeAdapter
       }
       const bid = await this.awaitScreenedBid(dseq, screening, tried);
       provider = String(bid.provider);
+      leaseAttempted = true;
       await this.request(
         "POST",
         "/v1/leases",
@@ -1015,6 +1158,12 @@ export class AkashComputeAdapter
         this.writeTimeoutMs
       );
     } catch (error) {
+      if (retainStorage && leaseAttempted) {
+        throw new AkashComputeError(
+          "ALLOCATION_OUTCOME_UNKNOWN",
+          `retained deployment ${dseq} lease submission failed or was not acknowledged; allocation preserved for observation`
+        );
+      }
       // The close is best-effort, but WHETHER it closed is not: a verified close is the only
       // evidence that lets the caller settle its receipt and release the wallet slot instead
       // of holding it against spend that no longer exists (bug.5192).
@@ -1473,7 +1622,8 @@ export type AkashComputeErrorCode =
   | "NO_BIDS"
   | "NO_ELIGIBLE_BIDS"
   | "BOOT_SLO_TIMEOUT"
-  | "AMBIGUOUS_ADOPTION";
+  | "AMBIGUOUS_ADOPTION"
+  | "ALLOCATION_OUTCOME_UNKNOWN";
 
 /** Stable error codes for the Akash Console path. */
 export class AkashComputeError extends Error {
@@ -1551,7 +1701,24 @@ function provisionOutputFromDetail(
     const perService = Object.values(lease.status?.services ?? {}).flatMap(
       (svc) => svc.uris ?? []
     );
-    return [...direct, ...perService];
+    const forwarded = Object.values(lease.status?.forwarded_ports ?? {})
+      .flat()
+      .flatMap((port) => {
+        if (
+          !port.host ||
+          !/^[a-zA-Z0-9.-]+$/.test(port.host) ||
+          !Number.isInteger(port.externalPort) ||
+          !port.externalPort ||
+          port.externalPort < 1 ||
+          port.externalPort > 65535 ||
+          !["TCP", "UDP"].includes((port.proto ?? "TCP").toUpperCase())
+        )
+          return [];
+        return [
+          `${(port.proto ?? "TCP").toLowerCase()}://${port.host}:${port.externalPort}`,
+        ];
+      });
+    return [...direct, ...perService, ...forwarded];
   });
   return {
     provider: PROVIDER,
@@ -1799,4 +1966,12 @@ function costEvidenceFromDetail(
     },
     observedAt,
   };
+}
+
+/** The volume declaration itself requires retention even if the caller omits policy. */
+function retainsStorage(spec: ProvisionSpec): boolean {
+  return (
+    spec.retentionPolicy === "retain" ||
+    spec.services.some((service) => Boolean(service.volumes?.length))
+  );
 }

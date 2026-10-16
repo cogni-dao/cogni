@@ -49,7 +49,10 @@ trap 'cd / && rm -rf "$work" 2>/dev/null || true' EXIT
 # --depth=50: rebase-retry on push contention needs enough history to find
 # the merge-base of our local commit and origin's advanced tip. depth=1
 # would break the retry loop on any concurrent push.
-git clone --depth=50 --branch "$DEPLOY_BRANCH" "$REPO_URL" "$work/whole" >/dev/null 2>&1
+if ! git clone --depth=50 --branch "$DEPLOY_BRANCH" "$REPO_URL" "$work/whole" >/dev/null 2>&1; then
+  echo "::error::Cannot clone rollup branch ${DEPLOY_BRANCH}"
+  exit 1
+fi
 cd "$work/whole"
 git config user.name "github-actions[bot]"
 git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -66,6 +69,7 @@ if [ "${#rollup_targets[@]}" -eq 0 ]; then
 fi
 
 per_node_shas=()
+per_node_branches=()
 declare -A per_node_maps=()
 for node in "${rollup_targets[@]}"; do
   # Overlay-presence filter (bug.5078): a target with no per-env overlay
@@ -82,7 +86,11 @@ for node in "${rollup_targets[@]}"; do
     exit 1
   fi
   per_node_shas+=("$sha")
-  git fetch --depth=50 origin "${per_branch}" >/dev/null 2>&1
+  per_node_branches+=("$per_branch")
+  if ! git fetch --depth=50 origin "${per_branch}" >/dev/null 2>&1; then
+    echo "::error::Cannot fetch per-node branch ${per_branch}"
+    exit 1
+  fi
   if git cat-file -e "${sha}:.promote-state/source-sha-by-app.json" 2>/dev/null; then
     per_node_maps[$node]=$(git show "${sha}:.promote-state/source-sha-by-app.json")
   fi
@@ -94,7 +102,28 @@ if [ "${#per_node_shas[@]}" -eq 0 ]; then
 elif [ "${#per_node_shas[@]}" -eq 1 ]; then
   current_sha="${per_node_shas[0]}"
 else
-  current_sha=$(git merge-base "${per_node_shas[@]}")
+  # Independent deploy branches can have more than 50 promotion commits since
+  # their common ancestor. A shallow merge-base exit 1 means missing history,
+  # not necessarily unrelated branches. Deepen all selected histories together,
+  # boundedly, while keeping the originally observed tips as the rollup inputs.
+  deepen_attempt=0
+  while true; do
+    if current_sha=$(git merge-base "${per_node_shas[@]}"); then
+      break
+    else
+      merge_status=$?
+    fi
+    if [ "$merge_status" -ne 1 ] || [ "$(git rev-parse --is-shallow-repository)" != true ] || [ "$deepen_attempt" -ge 8 ]; then
+      echo "::error::Cannot establish a common ancestor for ${ENV} deployment tips after ${deepen_attempt} history expansions"
+      exit 1
+    fi
+    deepen_attempt=$((deepen_attempt + 1))
+    echo "Deepening ${ENV} deployment histories by 200 commits (attempt ${deepen_attempt}/8)"
+    if ! git fetch --no-tags --deepen=200 origin "${per_node_branches[@]}" >/dev/null 2>&1; then
+      echo "::error::Cannot deepen ${ENV} deployment histories"
+      exit 1
+    fi
+  done
 fi
 echo "current-sha (merge-base): $current_sha"
 

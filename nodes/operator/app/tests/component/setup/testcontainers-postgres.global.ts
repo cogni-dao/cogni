@@ -39,12 +39,20 @@ const APP_DB_USER = `app_${NODE}`;
 const APP_DB_PASSWORD = "app_user_pass";
 const APP_DB_SERVICE_USER = `service_${NODE}`;
 const APP_DB_SERVICE_PASSWORD = "service_pass";
+const APP_DB_MIGRATION_PASSWORD = "migration_pass";
 
 export async function setup() {
   // Start Postgres with provision.sh copied into the container
   const c = await new PostgreSqlContainer("postgres:15-alpine")
     .withCopyFilesToContainer([
       { source: PROVISION_SH, target: "/tmp/provision.sh" },
+      {
+        source: path.join(
+          path.dirname(PROVISION_SH),
+          "control-migrations/0003_disable_database_locking.sql"
+        ),
+        target: "/app/control-migrations/0003_disable_database_locking.sql",
+      },
     ])
     .start();
 
@@ -72,6 +80,16 @@ export async function setup() {
       `APP_DB_PASSWORD=${APP_DB_PASSWORD}`,
       `APP_DB_SERVICE_USER=${APP_DB_SERVICE_USER}`,
       `APP_DB_SERVICE_PASSWORD=${APP_DB_SERVICE_PASSWORD}`,
+      `APP_DB_MIGRATION_PASSWORD=${APP_DB_MIGRATION_PASSWORD}`,
+      `DB_BUDGET_PROFILE=shared-default-v1`,
+      `DB_APP_CONNECTION_LIMIT=2`,
+      `DB_APP_STATEMENT_TIMEOUT_MS=5000`,
+      `DB_SERVICE_CONNECTION_LIMIT=4`,
+      `DB_SERVICE_STATEMENT_TIMEOUT_MS=2000`,
+      `DB_LOCK_TIMEOUT_MS=2000`,
+      `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS=30000`,
+      `DB_TEMP_FILE_LIMIT_MIB=128`,
+      `DB_WORK_MEM_MIB=16`,
       `bash /tmp/provision.sh`,
     ].join(" "),
   ]);

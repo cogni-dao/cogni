@@ -17,6 +17,7 @@
  * @internal
  */
 
+import { createAppDbClient } from "@cogni/db-client";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { and, eq, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -45,6 +46,63 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
     await db
       .delete(akashTxAllocations)
       .where(eq(akashTxAllocations.walletScope, WALLET));
+  });
+
+  it("serializes concurrent claims through one RLS-enforced actuator connection", async () => {
+    const url = process.env.DATABASE_URL;
+    if (!url) throw new Error("DATABASE_URL is required for component proof");
+    const bounded = createAppDbClient(url, {
+      max: 1,
+      applicationName: "component_bounded_actuator",
+    });
+    try {
+      const [role] = await bounded.$client`
+        select rolbypassrls from pg_roles where rolname = current_user
+      `;
+      expect(role?.rolbypassrls).toBe(false);
+      const boundedLedger = new DrizzleAkashTxAllocationLedger(
+        async () => bounded,
+        WALLET
+      );
+      const claims = await Promise.all(
+        ["bounded-k1", "bounded-k2", "bounded-k3"].map((cogniKey) =>
+          boundedLedger.claim({
+            cogniKey,
+            workload: "fixture",
+            environment: "candidate-a",
+            identity: IDENTITY,
+          })
+        )
+      );
+      expect(claims.map((claim) => claim.state).sort()).toEqual([
+        "blocked",
+        "blocked",
+        "claimed",
+      ]);
+      const winner = claims.find((claim) => claim.state === "claimed");
+      if (!winner || winner.state !== "claimed")
+        throw new Error("No claimant acquired the fixture slot");
+      const cogniKey = winner.record.cogniKey;
+      expect(
+        await boundedLedger.bindIdentity({
+          cogniKey,
+          environment: "candidate-a",
+          identity: IDENTITY,
+        })
+      ).toMatchObject({ state: "bound" });
+      await boundedLedger.prepare({ cogniKey, allocationCursor: "7000" });
+      expect(await boundedLedger.read({ cogniKey })).toMatchObject({
+        state: "preparing",
+        allocationCursor: "7000",
+      });
+      const [sessions] = await bounded.$client`
+        select count(*)::int as count from pg_stat_activity
+        where application_name = 'component_bounded_actuator'
+      `;
+      expect(sessions?.count).toBe(1);
+    } finally {
+      await bounded.$client.end();
+    }
   });
 
   it("claims the wallet slot once and blocks every other key until it settles", async () => {

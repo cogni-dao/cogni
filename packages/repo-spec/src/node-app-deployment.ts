@@ -51,6 +51,7 @@ export const COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS = [
   "AUTH_SECRET",
   "DATABASE_URL",
   "DATABASE_SERVICE_URL",
+  "DATABASE_SSL_CA_CERT",
   // The knowledge store + Doltgres work-items are part of cogni-node-app-v1 (container.ts
   // builds knowledgeStorePort iff env.DOLTGRES_URL is set). It is composed into every node's
   // bank (secret-materialize COMPOSED_DSN_KEYS) and reaches k3s pods via ESO dataFrom:extract,

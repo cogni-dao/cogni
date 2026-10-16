@@ -93,6 +93,45 @@ const statusSchema = (
 ).properties as YamlObject;
 
 describe("XComputeWorkload composite API (task.5096)", () => {
+  it("keeps object schemas compatible with Kubernetes CRD validation", () => {
+    const conflicts: string[] = [];
+    const visit = (value: unknown, location: string): void => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return;
+      const schema = value as YamlObject;
+      if (
+        schema.properties !== undefined &&
+        Object.keys(schema.properties as YamlObject).length > 0 &&
+        schema.additionalProperties !== undefined &&
+        schema.additionalProperties !== null &&
+        schema.additionalProperties !== true
+      ) {
+        conflicts.push(location);
+      }
+      for (const [key, child] of Object.entries(
+        (schema.properties ?? {}) as YamlObject
+      )) {
+        visit(child, `${location}.properties.${key}`);
+      }
+      for (const key of ["items", "additionalProperties", "not"]) {
+        visit(schema[key], `${location}.${key}`);
+      }
+      for (const key of ["allOf", "anyOf", "oneOf"]) {
+        for (const [index, child] of (
+          (schema[key] ?? []) as unknown[]
+        ).entries()) {
+          visit(child, `${location}.${key}[${index}]`);
+        }
+      }
+    };
+    for (const item of xrdSpec.versions as YamlObject[]) {
+      visit((item.schema as YamlObject).openAPIV3Schema, String(item.name));
+    }
+    expect(
+      conflicts,
+      "Kubernetes forbids declared properties with additionalProperties false or a map schema"
+    ).toEqual([]);
+  });
+
   it("publishes a namespaced composite bound to its Composition", () => {
     expect(xrd.apiVersion).toBe("apiextensions.crossplane.io/v2");
     expect(xrdSpec.group).toBe("compute.cogni.io");
@@ -1157,10 +1196,19 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       'get $leaseAnnotations "crossplane.io/external-create-pending"'
     );
     expect(templateCode).toContain(
-      '$leaseReceiptObserved := hasKey $resp "found"'
+      '$leaseReceiptObserved := hasKey $leaseReceiptResp "found"'
     );
     expect(templateCode).toContain(
-      '$leaseReceiptProven := and $leaseReceiptObserved $found $active (ne $externalName "") (eq $responseKey $currentKey)'
+      'if and $leaseObs (not (hasKey $resp "found"))'
+    );
+    expect(templateCode).toContain(
+      '$leaseCacheRaw := dig "status" "cache" "response" "body" "" $leaseObs.resource'
+    );
+    expect(templateCode).toContain(
+      '$leaseCacheStatus := int (dig "status" "cache" "response" "statusCode" 0 $leaseObs.resource)'
+    );
+    expect(templateCode).toContain(
+      '$leaseReceiptProven := and (ge $leaseReceiptStatus 200) (lt $leaseReceiptStatus 300) $leaseReceiptObserved $leaseReceiptFound (eq $leaseReceiptState "active") (ne $leaseReceiptExternalName "") (eq $responseKey $currentKey)'
     );
     expect(templateCode).toContain(
       "$leaseRevisionPending := ne $prevSha $desiredSha"
@@ -1179,7 +1227,12 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     type Proof = {
       ambiguous: boolean;
       pending: string;
-      observed: boolean;
+      currentObserved: boolean;
+      cachedStatus: number;
+      cachedObserved: boolean;
+      cachedFound: boolean;
+      cachedActive: boolean;
+      cachedExternalName: string;
       found: boolean;
       active: boolean;
       externalName: string;
@@ -1188,19 +1241,35 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       previousSha: string;
       desiredSha: string;
     };
-    const safe = (p: Proof) =>
-      p.ambiguous &&
-      p.pending !== "" &&
-      p.observed &&
-      p.found &&
-      p.active &&
-      p.externalName !== "" &&
-      p.responseKey === p.currentKey &&
-      p.previousSha !== p.desiredSha;
+    const safe = (p: Proof) => {
+      const useCache = !p.currentObserved;
+      const receiptStatus = useCache ? p.cachedStatus : 200;
+      const observed = useCache ? p.cachedObserved : p.currentObserved;
+      const found = useCache ? p.cachedFound : p.found;
+      const active = useCache ? p.cachedActive : p.active;
+      const externalName = useCache ? p.cachedExternalName : p.externalName;
+      return (
+        p.ambiguous &&
+        p.pending !== "" &&
+        receiptStatus >= 200 &&
+        receiptStatus < 300 &&
+        observed &&
+        found &&
+        active &&
+        externalName !== "" &&
+        p.responseKey === p.currentKey &&
+        p.previousSha !== p.desiredSha
+      );
+    };
     const valid: Proof = {
       ambiguous: true,
       pending: "2026-10-14T07:05:33Z",
-      observed: true,
+      currentObserved: true,
+      cachedStatus: 200,
+      cachedObserved: true,
+      cachedFound: true,
+      cachedActive: true,
+      cachedExternalName: "1791427850757",
       found: true,
       active: true,
       externalName: "1791427850757",
@@ -1213,7 +1282,6 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     for (const unsafe of [
       { ambiguous: false },
       { pending: "" },
-      { observed: false },
       { found: false },
       { active: false },
       { externalName: "" },
@@ -1221,6 +1289,36 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       { previousSha: "new" },
     ]) {
       expect(safe({ ...valid, ...unsafe })).toBe(false);
+    }
+
+    // Red's exact live failure: a later retryable 503 overwrote status.response, while
+    // provider-http retained the last successful exact-key OBSERVE in status.cache.response.
+    expect(
+      safe({
+        ...valid,
+        currentObserved: false,
+        found: false,
+        active: false,
+        externalName: "",
+      })
+    ).toBe(true);
+    for (const unsafeCache of [
+      { cachedStatus: 503 },
+      { cachedObserved: false },
+      { cachedFound: false },
+      { cachedActive: false },
+      { cachedExternalName: "" },
+    ]) {
+      expect(
+        safe({
+          ...valid,
+          currentObserved: false,
+          found: false,
+          active: false,
+          externalName: "",
+          ...unsafeCache,
+        })
+      ).toBe(false);
     }
   });
 });
@@ -1344,9 +1442,9 @@ describe("catalog lease generation naming", () => {
     // closed lease, so a retry under :4 would replay the dead handle (task.5157 case c). toks5's
     // SDL is identical to healthy toks4, so gen-4's 404 reads as transient; 5 is a fresh key
     // that re-enters createAndLease to retry the manifest delivery.
-    // task.5180: preview gen-1 reached BootDeadlineClosed after a provider-http UPDATE wedge;
-    // its closed lease makes :1 spent, so :2 is the reviewed replacement.
-    expect(toks5.lease_generation?.preview).toBe(2);
+    // task.5256: preview gen-2 was intentionally retired through the actuator;
+    // provider closure and its released receipt permit reviewed replacement :3.
+    expect(toks5.lease_generation?.preview).toBe(3);
     expect(toks5.lease_generation?.production).toBe(5);
   });
 });

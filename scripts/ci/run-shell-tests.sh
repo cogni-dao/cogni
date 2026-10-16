@@ -6,10 +6,9 @@
 # Purpose: Run the hermetic scripts/ci/tests/*.test.sh suite in PARALLEL with
 #          correct exit-code aggregation, replacing the ~22 serial `bash …` steps
 #          that made the `unit` CI job an 8-minute monolith (task.5140). Every
-#          listed test is pure-bash — mktemp + PATH-shim sandboxes, or a read-only
-#          `cd REPO_ROOT` drift compare against committed files — with no network,
-#          docker, or shared writable state, so they are mutually independent and
-#          safe to run concurrently with each other.
+#          listed test uses isolated fixtures or read-only drift comparisons
+#          against committed files, with no external network, docker, or shared
+#          writable state, so they are safe to run concurrently with each other.
 # Usage:   bash scripts/ci/run-shell-tests.sh
 # Exit:    0 iff EVERY test passed; 1 if any failed (a non-zero from any leg is
 #          preserved — a green here means all legs were actually green).
@@ -47,11 +46,14 @@ MUTATORS=(
 PARALLEL=(
   set-secret.test.sh
   catalog-akash-egress-schema.test.sh
+  render-compute-egress-allowlist.test.sh
+  smoke-candidate.test.sh
   openbao-clobber-proof.test.sh
   secrets-fanout.test.sh
   secret-materialize.test.sh
   reconcile-node-substrate.test.sh
   run-node-substrate.test.sh
+  ssh-transport-retry.test.sh
   assert-target-substrate.test.sh
   resolve-remote-source-sha.test.sh
   compute-workload-manifest-file.test.sh
@@ -60,6 +62,8 @@ PARALLEL=(
   reconcile-node-dns.test.sh
   check-deploy-ref-ancestry.test.sh
   aggregate-decide-outcome.test.sh
+  aggregate-rollup.test.sh
+  deployment-workflows.test.sh
   require-node-ref-vm.test.sh
   resolve-substrate-gate.test.sh
   detect-affected.test.sh

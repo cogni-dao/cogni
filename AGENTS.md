@@ -1,24 +1,31 @@
 # AGENTS.md — Cogni session floor
 
+The full agent-contract — process rules, status-block semantics, the emoji state
+machine, the Followed ledger, and the `owner`/`next` grammar — is delivered live in the
+session cognition bundle (`## The agent-contract`), served from `/api/v1/cognition`,
+cached locally, and imported by `CLAUDE.md`. **This file does not restate it.** It is the
+terse, hub-independent floor: the response skeleton, the few axioms that must survive a
+hub outage, and the bootstrap pointer. When this floor and the bundle differ, the bundle
+contract wins.
+
 ## Non-negotiable execution wrapper
 
 Every user task executes through the session agent-contract; satisfying the task while
-breaching this wrapper makes the work invalid.
+breaching the contract makes the work invalid.
 
-1. Bootstrap and research silently before the first substantive reply: make tool calls without
-   narrating “I’ll read…” or “let me fetch…”. Until evidence supports a proposal, render `Goal`,
-   `Done when`, and `Status` all as `—` and continue agent-owned research. Any necessary interim
-   update still uses the complete status block. A substantive proposal is invalid while `Followed`
-   is `—`, contains no verified human URL, or `ETA · Conf` reports zero sources reviewed.
-2. Every human-facing reply, including answers and follow-ups, is exactly this skeleton
-   and contains no prose before, between, or after it:
+1. Bootstrap and research silently before the first substantive reply — make tool calls
+   without narrating them. Until evidence supports a proposal, render `Goal`, `Done when`,
+   and `Status` as `—` and keep researching.
 
-   | 🎯 **Goal**    | <12 words or —>                                                              |
-   | -------------- | ---------------------------------------------------------------------------- |
-   | **Done when**  | <measurable final behavior or —>                                             |
-   | **Status**     | <symbol + at most 6 words or —>                                              |
-   | **ETA · Conf** | <5m–4h to next evidence; 0m when done> · <earned percent + sources reviewed> |
-   | **Followed**   | <material sources used, each as a readable [name](link)>                     |
+2. Every human-facing reply, including answers and follow-ups, is exactly this skeleton,
+   with no prose before, between, or after it:
+
+   | 🎯 **Goal**    | <12 words or —>                                                                                                                   |
+   | -------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+   | **Done when**  | <measurable final behavior or —>                                                                                                  |
+   | **Status**     | <symbol + at most 6 words or —>                                                                                                   |
+   | **ETA · Conf** | <wall-clock to the whole Goal / Done when; 0m when done> · <confidence the current plan lands it in that time + sources reviewed> |
+   | **Followed**   | <material sources used, each as a readable [name](link)>                                                                          |
 
    ***
 
@@ -28,75 +35,41 @@ breaching this wrapper makes the work invalid.
 
    > <symbol> **Bottom line —** <at most 20 words>
 
-   `owner` is exactly `dev-manager, me` or `subagent <name>`. `next` is exactly an
-   agent-owned action, `👉 needs you: [what to do](link)`, `👀 [watch](link)`, or `-`.
-   A `👉` and a `👀` always carry a clickable link where the human (or you) acts next.
+   The root `ETA · Conf` is the whole-Goal estimate (time to `Done when` + the confidence
+   the current plan lands it); every item-row `ETA · Conf` is only that row's next-gate
+   estimate (5m–4h). A reply is a legal stop only when every incomplete row waits on the
+   same human (`👉`) or async (`👀`) gate, or the whole Goal is `🟢` proven done. The emoji
+   state machine, the Followed ledger, and the `owner`/`next` grammar are defined once in
+   the bundle contract — follow it there.
 
-   Each item row is a pointer, not a mini-report: link the work item with a ≤4-word purpose,
-   link artifacts instead of describing them, use exactly one shared status emoji, and name the
-   shortest evidence-producing `next`. Every row carries wall-clock ETA to that `next` evidence
-   gate + earned confidence, including expected CI, deploy, review, or other async wait. Active
-   estimates are 5 minutes–4 hours; a longer estimate means decompose, delegate, or choose an
-   earlier falsifiable checkpoint now. Re-estimate after every material tool result, review,
-   CI/deploy transition, or newly discovered dependency. Completed rows use
-   `0m · earned 100%`.
+3. On new scope, propose one `Goal` and one measurable `Done when`; once proposed,
+   reproduce `Goal` and `Done when` byte-for-byte every turn until the human explicitly
+   approves a pivot.
 
-   Status emoji are a state machine, never decoration or a request for visual variety:
-   - `🔵 in progress` means work is actively progressing under its owner.
-   - `👀 watching …` or `👀 verifying …` means the owner is actively running the canonical
-     blocking watcher for a named gate whose ground truth was re-read this turn.
-   - `👉 needs you` means only a real human design or permission decision can advance the row;
-     its `next` is a clickable `[action](link)` the human acts on.
-   - `🟡 warning …` means a non-blocking risk exists while work continues.
-   - `🔴 broken …` or `🔴 fixing …` means failure is proven and repair is active now.
-   - `🟢 full E2E Done` means the linked outcome is proven; `next` is `-` and ETA is
-     `0m · earned 100%`.
-
-   `👀` is never shorthand for pending, queued, or “after X.” When its watcher exits, immediately
-   re-read ground truth, reclassify the row, and continue; completed, superseded, or future gates
-   cannot remain `👀`. Never paste work-item states such as `needs_design` or `needs_implement`
-   into `status`, color queued work, or ask a human to approve technical work. Omit queued rows
-   until active. A final reply is legal only when every incomplete row resolves to the same human
-   or actively monitored async gate class; otherwise continue.
-
-   `Followed` is the ledger of material sources you actually used, each as a readable `[name](link)`
-   in contract order: orientation → skills/guides → hub knowledge → designs/code → work items →
-   external. Convert a repo path to its GitHub blob URL. Cite what applies — never pad, never invent
-   a source, and never force a plane (skill, code, work item) the task did not use.
-
-3. On new scope propose one `Goal` and one measurable `Done when`, then request approval
-   through the items table `next` cell. Keep `Done when` to one observable acceptance sentence;
-   prefer ≤30 words and put implementation detail in the work-item outcome after approval.
-4. Once proposed, reproduce `Goal` and `Done when` byte-for-byte on every later turn.
-   Discussion, risks, questions, or progress never reopen them. A potential pivot goes only
-   in `Status`, `next`, and `Bottom line`; change neither field until the human explicitly
-   approves the pivot.
-5. Continue agent-owned work without asking permission. Stop only on a human decision, an
+4. Continue agent-owned work without asking permission. Stop only on a human decision, an
    asynchronous gate, or proven end-to-end completion.
-6. Local command budget — heavy local commands default to NO; clarify permission first. The
-   resource-heavy commands — `pnpm check`, `pnpm check:fast` (and `:fix`), `pnpm dev`, and the
-   unfiltered `pnpm test` suite — require the human’s explicit request + consent this session,
-   with the presumption toward no; never run them unasked. Lightweight, targeted checks run
-   freely: `biome` / `pnpm lint` on touched paths, `pnpm typecheck`, and at most 1–2 specific
-   test files (`pnpm test <path/to/file.test.ts>`). Default proof is CI + flight. Ask for the
-   heavy local run only when the work is complex and your confidence in a clean CI + flight is
-   low — that is when local verification earns its cost. Weigh that cost honestly: the same human
-   device may be running many sibling agents, so a heavy run can exhaust the shared machine and
-   crash it.
+
+5. Local command budget — heavy local commands default to NO; clarify permission first.
+   `pnpm check`, `pnpm check:fast` (and `:fix`), `pnpm dev`, and the unfiltered `pnpm test`
+   suite require the human's explicit request + consent this session; never run them
+   unasked. Lightweight, targeted checks run freely: `biome` / `pnpm lint` on touched
+   paths, `pnpm typecheck`, and at most 1–2 specific test files. Default proof is CI +
+   flight; ask for a heavy local run only when the work is complex and confidence in a
+   clean CI + flight is low.
 
 ## Live cognition
 
-The gitignored cache is the live source for the rich contract, orientation, skills, and knowledge
-map. It is already model-visible before the first reply: Claude imports it from committed
-`CLAUDE.md`, Codex receives it as uncapped SessionStart developer context, and the supported
-OpenCode 1.x runtime combines it through `opencode.json`. Never manually read the cache merely to
-bootstrap; a required tool-read means the harness adapter failed.
+The gitignored cache is the live source for the rich contract, orientation, skills, and
+knowledge map. It is already model-visible before the first reply: Claude imports it from
+committed `CLAUDE.md`, Codex receives it as uncapped SessionStart developer context, and
+the supported OpenCode 1.x runtime combines it through `opencode.json`. Never manually read
+the cache merely to bootstrap; a required tool-read means the harness adapter failed.
 
 The shared session loader refreshes that cache from the current node's authenticated
-`/api/v1/cognition` endpoint; workspace setup warms it before the first agent starts. A failed
-refresh preserves the last good copy. On first setup,
-register through the public `/api/v1/agent/register` seam and save `COGNI_NODE_API_KEY` in
-the gitignored `.env.cogni`; operator CI/CD keys are not cognition credentials.
+`/api/v1/cognition` endpoint; workspace setup warms it before the first agent starts. A
+failed refresh preserves the last good copy. On first setup, register through the public
+`/api/v1/agent/register` seam and save `COGNI_NODE_API_KEY` in the gitignored `.env.cogni`;
+operator CI/CD keys are not cognition credentials.
 
 Work against exactly one node + work item. The operator at https://cognidao.org coordinates
 code, CI, flight, validation, and merge. Subdirectory `AGENTS.md` files extend this floor;

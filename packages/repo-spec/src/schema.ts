@@ -533,6 +533,57 @@ export const nodeDeploymentSchema = z
 
 export type NodeDeploymentSpec = z.infer<typeof nodeDeploymentSchema>;
 
+// ---------------------------------------------------------------------------
+// Provider-neutral state substrate (story.5085 / task.5246)
+// ---------------------------------------------------------------------------
+
+/**
+ * Database placement is an operator-managed state concern, not app compute.
+ * A dedicated cell has a separate Postgres process and retained persistent volume.
+ * Its allocation is independent of ordinary app rollout and cleanup.
+ */
+export const databaseTierSchema = z.enum(["shared", "dedicated"]);
+
+export type DatabaseTierSpec = z.infer<typeof databaseTierSchema>;
+
+export const databasePlacementSchema = z
+  .object({
+    tier: databaseTierSchema,
+    /** Named operator-owned budget; values never live in a node repo. */
+    budget_profile: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+    /** Activated only after the allocation's audited binding is applied. */
+    placement: z.literal("akash-cell").optional(),
+  })
+  .strict()
+  .refine((value) => !value.placement || value.tier === "dedicated", {
+    message: "an Akash cell requires a dedicated database tier",
+  });
+
+export type DatabasePlacementSpec = z.infer<typeof databasePlacementSchema>;
+
+/**
+ * A node states its desired database shape for every promotion environment.
+ * Keeping all three keys explicit prevents an omitted environment silently
+ * falling back from dedicated to shared during promotion.
+ */
+export const nodeStateSpecSchema = z
+  .object({
+    database: z
+      .object({
+        environments: z
+          .object({
+            "candidate-a": databasePlacementSchema,
+            preview: databasePlacementSchema,
+            production: databasePlacementSchema,
+          })
+          .strict(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export type NodeStateSpec = z.infer<typeof nodeStateSpecSchema>;
+
 /**
  * Schema for activity_ledger section — epoch and ingestion configuration.
  */
@@ -976,6 +1027,9 @@ export const repoSpecSchema = z
      * author migration.
      */
     deployment: nodeDeploymentSchema.optional(),
+
+    /** Provider-neutral state substrate requested by this sovereign node. */
+    state: nodeStateSpecSchema.optional(),
 
     /** PR review on/off + model selection (optional — defaults to enabled). */
     review: reviewConfigSchema.optional(),

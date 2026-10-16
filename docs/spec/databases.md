@@ -41,22 +41,65 @@ pnpm dev:stack                # Same as above, but hits real LiteLLM/OpenRouter
 
 ## Database Separation
 
-**Database Security Model**: Two-user PostgreSQL architecture separating administrative and application access.
+**Database Security Model**: Node-scoped application/service runtime roles, an isolated rollout migration role, and separately held administration/support credentials.
 
-**Per-Node Databases (DB_PER_NODE):** Each node gets its own database on a shared Postgres server. The database IS the node boundary — no tenancy columns. See [Multi-Node Tenancy](multi-node-tenancy.md).
+**Per-Node Databases (DB_PER_NODE):** Each node gets its own database. Small nodes use the bounded shared Postgres tier within their workload environment; a measured outlier uses an operator-managed dedicated state cell with its own retained allocation, Postgres process, and persistent storage. Placement changes the failure domain, never schema ownership: the database remains the node boundary and no tenancy columns are introduced. See [Multi-Node Tenancy](multi-node-tenancy.md).
+
+Dedicated state-cell capacity comes from the catalog's named database budget profile. The retained-allocation, custody, identity and readiness contract below governs the applied provider resource; a parked provider prototype is not a second production provisioning plane. Receipts distinguish actual provider prices from estimates or missing components. Provider `active` is not database readiness: endpoint reachability and database identity/schema verification are also required before reporting `ready`.
 
 **Postgres vs Doltgres:** This spec covers the Postgres (awareness plane) side. The knowledge plane runs on a separate Doltgres server with per-node `knowledge_<node>` databases and git-like versioning — see [Knowledge Data Plane](knowledge-data-plane.md).
 
-| Environment | Databases                                                         | Configured via                   |
-| ----------- | ----------------------------------------------------------------- | -------------------------------- |
-| Development | `cogni_operator`, `cogni_poly`, `cogni_resy`                      | `COGNI_NODE_DBS` in `.env.local` |
-| Test        | `cogni_template_stack_test`, `cogni_poly_test`, `cogni_resy_test` | `COGNI_NODE_DBS` in `.env.test`  |
-| CI          | `cogni_template_test`                                             | `COGNI_NODE_DBS` in `ci.yaml`    |
-| Production  | `cogni_operator` (single-node for now)                            | `COGNI_NODE_DBS` in deploy env   |
+| Environment    | Databases                                                                              | Configured via                                          |
+| -------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| Development    | `cogni_operator`, `cogni_poly`, `cogni_resy`                                           | `COGNI_NODE_DBS` in `.env.local`                        |
+| Test           | `cogni_template_stack_test`, `cogni_poly_test`, `cogni_resy_test`                      | `COGNI_NODE_DBS` in `.env.test`                         |
+| CI             | `cogni_template_test`                                                                  | `COGNI_NODE_DBS` in `ci.yaml`                           |
+| Deployed lanes | `cogni_<normalized_node>` on the lane-owned shared instance or reviewed dedicated cell | Catalog/repo-spec placement and lane-aware provisioning |
 
 `COGNI_NODE_DBS` is required — `provision.sh` fails fast if not set. No defaults, no fallback chain.
 
 All stack deployment modes use the same migration tooling but connect to appropriate database instances. Test environments always use the test database and reset it between test runs.
+
+### Database placement and budgets
+
+**`POSTGRES_RESIDENCY_FOLLOWS_LANE`:** shared-tier Postgres belongs to the workload environment, independently of app placement or the cluster reconciling it: candidate-a uses candidate-a Postgres, preview uses preview Postgres, and production uses production Postgres. A different database name or role on the production server is not a nonproduction failure domain. `lane_db_vm_env` / `lane_db_host` in `scripts/ci/lib/lane-db-residency.sh` are the shared-tier placement derivation; foreign-residency exceptions are rejected. Database and role names can repeat on separate environment-owned instances.
+
+Secret custody is a separate authority: the production operator may hold and project a nonproduction lane's node-scoped secrets from that lane's OpenBao path without hosting its Postgres. Provisioning and runtime/migration DSNs must agree on the lane-owned endpoint and database; reconciliation checks the stored `DATABASE_URL`, `DATABASE_SERVICE_URL`, and `DATABASE_MIGRATION_URL` with `lane_db_assert_agreement`, failing closed on missing or mismatched values. Approved control-plane migration access to a nonproduction endpoint does not grant that workload access to production. See [Lane vs control env](node-ci-cd-contract.md#lane-vs-control-env).
+
+This Postgres boundary does not assert that Doltgres or Temporal has the same environment isolation. A node's reviewed dedicated-cell placement and cutover remain governed by the cell contract below; lane-owned shared Postgres is not authority to rebind or re-admit a dedicated production cell.
+
+Database state is distinct from app compute. A dedicated cell owns independent persistent storage and a retained allocation. An Akash Postgres cell uses a separate persistent lease from the stateless app; ordinary app rollout never releases that allocation. Retained allocations refuse ordinary deletion and accept only byte-identical SDL updates as no-ops. Image, TLS, capacity, or storage-layout changes require a separately audited stateful update path. The node repo-spec declares `state.database.environments.<env>.{tier,budget_profile}`. The operator catalog projects the same desired placement for every deployed slot under `database.<env>`. The catalog is the environment reconciliation authority; validation must reject an absent deployed environment or a tier/profile drift from the node declaration.
+
+Optional public catalog `database.<env>.runtimePoolLimits` states `{replicaCount: 1, app, service, read}` for the existing app runtime profile. The canonical compute materializer carries it into `spec.runtime.databasePoolLimits`; the composition supplies all three supported pool variables. Missing policy preserves child defaults. Applied manual custody and its audited receipt must match this public policy, and preserved native role caps must leave at least one connection spare after the app pool, separate service/read pools, and one dedicated service-role job leader. Multiple app replicas are refused until their aggregate budget is explicitly supported.
+
+Already applied manual cells register through a separate read-only observer after audited admission; the prestage observer keeps its `NOLOGIN` and zero-session requirements. The private actor rereads its existing projected custody and evidence files on each request. Its DSN hashes describe current mounted configured custody, not an independent fresh OpenBao observation or readable provider environment values. The canonical writer must verify those values against their actual OpenBao consumer banks before publication. Adoption combines the exact owned app/cell receipts, guarded full SDL and current provider manifests/images/replica counts, strict TLS/native cluster identity, named runtime sessions, and fresh regional deep readiness. Public boot egress and PostgreSQL's provider-forwarded peer addresses are distinct observations.
+
+A manually provisioned database retains its actual image/SDL provenance. Subsequently installed native control has a separate reviewed source SHA and migration-manifest digest in `nativeControl`; neither becomes an invented historical database source SHA. Control lives in administrative `postgres` on the same owned cell. Qualification verifies its fixed fifteen function definitions, owners, exact role EXECUTE split and safe search paths, plus the separately installed logical health helper. The existing probe role uses distinct logical-health and control-qualification URLs. Per-cell actuator/readmitter credentials stay in separate canonical component banks and reach only their respective private worker aggregates; the readonly registration observer receives references/digests for mutating capabilities.
+
+Ordinary production app creation and update must preserve the applied cell receipt’s exact `targetBuildSha`. The existing paid-allocation ledger supplies that qualification; the canonical app service’s `COGNI_REPO_SHA` must match before any allocation, provider update, or migration release. Tree-equivalent commits are distinct releases. An audited current-release advancement CAS is not yet implemented (task.5246); until it exists, later app upgrades refuse explicitly rather than disabling exact-build pressure checks or rewriting the initial admission.
+
+Control bootstrap preserves the withheld readmission grant. A temporary independent process may run the existing watchdog mode with only the owned cell's actuator URL in its private admin credential file and no cell-binding aggregate. It must demonstrate continuous native deadline enforcement before granting `begin_database_recovery`. Actual fixed-function qualification and audited same-row registration then permit canonical route publication. The canonical watchdog must take over with a fresh native heartbeat attributed to its actual pod identity before the temporary process stops or catalog placement activates. A one-shot tick does not qualify this handoff.
+
+The sole secret materializer has explicit owner-only probe-custody preparation, component preparation and reference-only manual registration phases. The existing privileged `pnpm secrets:set` accepts only the owned node’s probe PASSWORD and two typed applied-input JSON keys in dynamic component banks, with mandatory expected-version CAS. Creation requires proven absence and atomic CAS0; no other component/derived/control DSN or APPLIED receipt setter is added. Accepted inputs are custody and artifact bytes, never certified admission history. Probe preparation derives the logical URL from its existing canonical password and owned typed target custody, verifies the genuine immutable admission references and fresh strict-TLS native identity through the read-only registration validator, then CAS-patches only that URL at the unchanged bank version. It saves no binding, rotates no password and leaves source aggregates intact; ordinary registration still requires every consumer bank to match. Concurrent password or URL rotation refuses the preparation. Ordinary materialization neither mints control capabilities nor reopens a source. Activated manual placement requires qualified replacement routes; publication retires only the authenticated source cluster's exact node/environment legacy probe binding and preserves siblings. Missing or ambiguous proof refuses activation.
+
+Post-restore application migrations are separate schema evolution evidence. Their actual byte-authenticated canonical migrator receipt, preserved old-column data/definitions and prior journal rows, appended migration SQL identity, and newly observed native journal must agree with the admitted app build. Original restore parity and independent recovery remain historical proofs; a newer migration never relabels those old fingerprints as current schema parity.
+
+Budget profile values live in `infra/database-budget-profiles.yaml`. Reconciliation resolves the catalog-selected profile and applies it to the actual per-node runtime roles. PostgreSQL 15 enforces per-role `CONNECTION LIMIT` and the privileged `temp_file_limit`; provisioning removes direct `SET` privilege drift and proves both runtime credentials cannot raise the latter. `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout`, and `work_mem` are catalog-selected fresh-session defaults, not hard ceilings: PostgreSQL classifies them as `USERSET`, so the authenticated role may override them even when `SET` is revoked from `PUBLIC`. A distinct `migration_<node>` credential has a one-connection limit, a 15-minute statement-timeout default, the same remaining defaults/limit, and membership only in the object-owning app role; migration Jobs receive `DATABASE_MIGRATION_URL`, never the runtime app/service credential. `app_readonly` is an environment-shared support/metrics role with its own environment policy, so it is intentionally absent from per-node profiles. Admission replays twice the measured seven-day p95 rate; without history it uses twice the declared profile design rate. These controls reduce/reject local excess, while exact-role containment and dedicated cells provide the failure boundary; a shared host is not one.
+
+**`PER_NODE_RUNTIME_ROLE_NAMES` (enforced):** database `cogni_<node>` has runtime roles `app_<node>` and `service_<node>`, where `<node>` is the validated node slug with `-` normalized to `_`. Provisioning, secret materialization, containment, and candidate proof MUST use those exact names and fail closed if either role is absent; there is no fallback to legacy `app_user` or `app_service`. `app_readonly` remains environment-shared for support/metrics and MUST NOT be revoked by per-node containment.
+
+Graduation to `dedicated` is sticky. Provisioning is handled through the typed database state-cell port, outside `deploy-infra.sh`; provider credentials stay in the operator boundary. The status contract exposes desired tier/profile, cell lifecycle, login/session state, and source-fence state without exposing an admin DSN.
+
+Cutover order is fixed and fail-closed:
+
+1. Provision the dedicated cell, apply its role budget, and prove an off-host backup restores.
+2. Fence writes to the shared source; take and restore a final dump; compare schema version and table counts/checksums.
+3. Atomically rotate the node's `DATABASE_URL` and `DATABASE_SERVICE_URL` in its OpenBao bucket, force ESO sync, and prove the restarted consumer uses the new endpoint.
+4. Keep the source fenced for the rollback window; never dual-write. After target writes begin, the original source is stale: rollback requires a newly proven current recovery target and audited admission, rather than rotating DSNs back to the old snapshot.
+
+Automated v1 containment is one audited action: record intent, revoke the node roles' login, terminate their sessions, and record success or partial failure. Containment is proven when both per-node roles are `NOLOGIN` and have zero active sessions. A source-specific host-firewall rule is reported state and a manual secondary control, not a prerequisite for the contained phase. Re-admission is human-only, requires the five-by-one-minute regional health gate plus exact build SHA evidence, and restores role login with an audited intent/outcome. No action restarts or mutates the shared control-plane databases.
+
+The actuator connects as `database_reliability_actuator`, a generated per-environment role whose DSN exists only at `cogni/<env>/database-reliability-actuator`. Because the runtime is PostgreSQL 15 (where `CREATEROLE` can alter every non-superuser role), this role MUST be `NOCREATEROLE` and MUST receive no membership or `ADMIN OPTION` on node roles; membership would allow `SET ROLE` into node data privileges. Root-owned SECURITY DEFINER functions split the privilege by direction: the actuator can execute only `contain_database_role(text)` (NOLOGIN plus a same-role session drain), while `database_reliability_readmitter` can execute only `readmit_database_role(text)` (LOGIN). Both reject `postgres`, `app_readonly`, missing roles, and every name outside the exact `app_<slug>` / `service_<slug>` namespace backed by a `cogni_<slug>` database owned by its matching `app_<slug>` role. The actuator receives read-only `pg_monitor` but never `pg_signal_backend`; the readmitter receives neither. Their credentials live in separate OpenBao service buckets. A root DSN in the public app or a manually entered control secret is forbidden.
 
 ## Database Provisioning (Infrastructure-as-Code)
 
@@ -66,9 +109,9 @@ To ensure a repeatable and consistent database state across environments (especi
 
 In `docker-compose.dev.yml`, the `db-provision` service handles:
 
-1. **Per-node database creation**: Iterates over `COGNI_NODE_DBS` (comma-separated), creates each database with `app_user` ownership and RLS role hardening.
+1. **Per-node database creation**: Iterates over `COGNI_NODE_DBS` (comma-separated), creates each database with `app_<node>` ownership and RLS role hardening.
 2. **LiteLLM database creation**: Creates `LITELLM_DB_NAME` (root-owned, shared across nodes).
-3. **Role provisioning**: Creates `app_user` (RLS enforced), `app_service` (BYPASSRLS), and `app_readonly` (SELECT-only, BYPASSRLS for Grafana/agent debugging) roles, shared across all node databases.
+3. **Role provisioning**: Creates per-node `app_<node>` (RLS enforced) and `service_<node>` (BYPASSRLS) roles. `app_readonly` alone is shared across the environment for SELECT-only metrics/support access.
 
 Both `COGNI_NODE_DBS` and `LITELLM_DB_NAME` are required — `provision.sh` fails immediately if either is missing.
 
@@ -77,7 +120,7 @@ This service is gated behind the `bootstrap` profile and runs only when explicit
 ### Development vs. Production Roles
 
 - **Development:** Local dev connects via `app_user` (RLS enforced), `app_service` (BYPASSRLS), and local Grafana can read through `app_readonly`. `provision.sh` applies RLS role hardening to all node databases.
-- **Production:** Same role model. The application user should NOT have `DROP` or `TRUNCATE` permissions on the schema in production. Grafana/agent DB access must use the read-only role, not `app_service`.
+- **Deployed lanes:** Use exact `app_<node>` / `service_<node>` runtime roles and separate `migration_<node>` rollout identity as defined by `PER_NODE_RUNTIME_ROLE_NAMES`. Local `app_user` / `app_service` examples are not deployed-role fallbacks. Normal support reads follow the [node-owned data support plane](https://cognidao.org/knowledge/node-data-support-plane), not the service credential.
 
 ## Current Schema Baseline (Phase 0)
 
@@ -93,8 +136,10 @@ Per [Database RLS Spec](database-rls.md) design decision 7, the runtime app requ
 
 **Required Environment Variables:**
 
-- `DATABASE_URL` — app_user role (RLS enforced), used by Next.js request paths
-- `DATABASE_SERVICE_URL` — app_service role (BYPASSRLS), used by auth, workers, bootstrap
+- `DATABASE_URL` — `app_<node>` role (RLS enforced), used by Next.js request paths
+- `DATABASE_SERVICE_URL` — `service_<node>` role (BYPASSRLS), used by auth, workers, bootstrap
+
+Rollout uses the isolated `DATABASE_MIGRATION_URL` secret for `migration_<node>`; the migrator's `DATABASE_URL` input receives that credential, never the runtime app/service credential. It is not projected into ordinary application containers.
 
 **Startup Invariants (enforced by `assertEnvInvariants`):**
 
@@ -106,28 +151,29 @@ Per [Database RLS Spec](database-rls.md) design decision 7, the runtime app requ
 
 - **Local development:** `postgresql://app_user:password@localhost:55432/cogni_template_dev`
 - **Local testing:** `postgresql://app_user:password@localhost:55432/cogni_template_stack_test`
-- **Production:** `postgresql://app_user:<secret>@postgres:5432/cogni_template_production?sslmode=require`
+- **Deployed node:** `postgresql://app_<node>:<secret>@<lane-owned-or-reviewed-cell-host>:5432/cogni_<node>`; use the actual endpoint, port and TLS policy from the declared target rather than copying placeholder values.
 
 **Tooling-Only:** The `buildDatabaseUrl()` helper in `nodes/<node>/app/src/shared/db/db-url.ts` is used only by CLI test tooling (`drop-test-db.ts`, `reset-db.ts`). It is **not** used by the runtime app and **not** used by drizzle configs — per-node drizzle configs (`nodes/<node>/drizzle.config.ts`) require `DATABASE_URL` from env explicitly (task.0324).
 
 ## Database Security Architecture
 
-**Four-Role Model**: Production deployments use separate PostgreSQL roles:
+**Role separation**: Deployed lanes use distinct runtime, rollout, support and administration identities:
 
 - **Root User** (`POSTGRES_ROOT_USER`): Database server administration, user/database creation
-- **Application User** (`app_user` via `APP_DB_USER`): Runtime web app connections, RLS enforced
-- **Service User** (`app_service` via `APP_DB_SERVICE_PASSWORD`): Privileged system user. Scheduler workers and pre-auth lookups, BYPASSRLS. Connects via `DATABASE_SERVICE_URL`.
+- **Application User** (`app_<node>`): Runtime web app connections, RLS enforced, via `DATABASE_URL`.
+- **Service User** (`service_<node>`): Scheduler workers and pre-auth lookups, BYPASSRLS, via `DATABASE_SERVICE_URL`.
+- **Migration User** (`migration_<node>`): Isolated rollout-only identity, via `DATABASE_MIGRATION_URL`; membership is scoped to the node's object-owning application role.
 - **Read-Only User** (`app_readonly` via `APP_DB_READONLY_USER`): Grafana/agent support queries, BYPASSRLS for v0 cross-tenant reads, no write grants.
 
 See [Database RLS Spec](database-rls.md) for the dual-client architecture and static import enforcement.
 
 **Container Configuration**: The `db-provision` service runs `provision.sh`:
 
-- Creates roles: `app_user` (RLS), `app_service` (BYPASSRLS), `app_readonly` (SELECT-only, BYPASSRLS)
+- Creates per-node `app_<node>` (RLS), `service_<node>` (BYPASSRLS), and isolated `migration_<node>` roles; `app_readonly` remains environment-shared support/metrics custody.
 - Iterates `COGNI_NODE_DBS`: creates each database with ownership + RLS hardening
 - Creates `LITELLM_DB_NAME`: root-owned, shared LiteLLM database
 
-**Provisioning Variables** (used by `provision.sh`, not by runtime app):
+**Local Compose Provisioning Variables** (used by `provision.sh`, not by runtime app; deployed node credentials follow the lane-scoped materializer):
 
 | Variable                   | Purpose                             | Required            |
 | -------------------------- | ----------------------------------- | ------------------- |
@@ -144,16 +190,16 @@ See [Database RLS Spec](database-rls.md) for the dual-client architecture and st
 
 **Runtime Variables** (used by app, never by provisioning):
 
-| Variable               | Purpose                      |
-| ---------------------- | ---------------------------- |
-| `DATABASE_URL`         | app_user role (RLS enforced) |
-| `DATABASE_SERVICE_URL` | app_service role (BYPASSRLS) |
+| Variable               | Purpose                           |
+| ---------------------- | --------------------------------- |
+| `DATABASE_URL`         | `app_<node>` role (RLS enforced)  |
+| `DATABASE_SERVICE_URL` | `service_<node>` role (BYPASSRLS) |
 
 > **Note:** The runtime app never receives `POSTGRES_ROOT_*`, `APP_DB_*`, or `COGNI_NODE_DBS`. These are provisioning-only.
 
 ## 2. Migration Strategy
 
-**Core Principle:** Each node owns its migrations and runs them as a Deployment **initContainer** off the runtime image. task.0324 split the previously-shared drizzle config into per-node configs (`nodes/<node>/drizzle.config.ts`). task.0370 rebased the migrator stage on `runner` and swapped drizzle-kit for `drizzle-orm/postgres-js/migrator`. task.0371 retired the separate `cogni-template-migrate` image and the Argo PreSync hook Jobs entirely — migrations now run inline on pod start, gated by `kubectl rollout status`.
+**Core Principle:** Each node owns its migrations and ships them in its immutable runtime image. Kubernetes expresses rollout-gating migration init containers; Akash uses declared runtime-profile migration steps materialized through Crossplane. Both consume the isolated migration credential and must prove terminal execution plus schema/journal state before serving. The Kubernetes details below describe that delivery path, not a requirement to run Akash applications as Kubernetes Deployments.
 
 **Architecture:**
 
