@@ -2009,6 +2009,17 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         evidence: { ceremony: "human-ai-beneficiary-claim-v1" },
         effectiveFrom: new Date("2026-10-01T00:00:00.000Z"),
       });
+      await expect(
+        adapter.proposeActorBeneficiaryPolicy({
+          earnedByActorId: flockLeaderActorId,
+          beneficiaryActorId: derekActor.id,
+          stewardActorId: derekActor.id,
+          policyVersion: "flock-leader-beneficiary.v1",
+          proposedByActorId: flockLeaderActorId,
+          evidence: { ceremony: "human-ai-beneficiary-claim-v1" },
+          effectiveFrom: new Date("2026-10-01T00:00:00.000Z"),
+        })
+      ).resolves.toMatchObject({ id: proposal.id, status: "pending" });
       await Promise.all([
         adapter.acceptActorBeneficiaryPolicy({
           proposalId: proposal.id,

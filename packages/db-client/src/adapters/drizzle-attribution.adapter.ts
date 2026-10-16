@@ -2446,6 +2446,40 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       ) {
         throw new Error("Only the agent or its steward may propose a beneficiary");
       }
+      const [existing] = await tx
+        .select()
+        .from(actorBeneficiaryPolicyProposals)
+        .where(
+          and(
+            eq(
+              actorBeneficiaryPolicyProposals.earnedByActorId,
+              params.earnedByActorId
+            ),
+            eq(
+              actorBeneficiaryPolicyProposals.policyVersion,
+              params.policyVersion
+            )
+          )
+        )
+        .limit(1);
+      if (existing) {
+        const exactRetry =
+          existing.beneficiaryActorId === params.beneficiaryActorId &&
+          existing.stewardActorId === params.stewardActorId &&
+          existing.proposedByActorId === params.proposedByActorId &&
+          existing.effectiveFrom.getTime() === params.effectiveFrom.getTime() &&
+          canonicalJsonStringify(existing.evidence) ===
+            canonicalJsonStringify(params.evidence);
+        if (!exactRetry) {
+          throw new Error("Beneficiary proposal idempotency conflict");
+        }
+        const acceptances = await tx
+          .select()
+          .from(actorBeneficiaryPolicyAcceptances)
+          .where(eq(actorBeneficiaryPolicyAcceptances.proposalId, existing.id))
+          .orderBy(actorBeneficiaryPolicyAcceptances.role);
+        return toActorBeneficiaryPolicyProposal(existing, acceptances);
+      }
       const [row] = await tx
         .insert(actorBeneficiaryPolicyProposals)
         .values({
@@ -2481,6 +2515,22 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         .limit(1);
       if (!proposal) throw new Error("Beneficiary proposal not found");
       if (proposal.status !== "pending") {
+        const completedAcceptances = await tx
+          .select()
+          .from(actorBeneficiaryPolicyAcceptances)
+          .where(eq(actorBeneficiaryPolicyAcceptances.proposalId, proposal.id))
+          .orderBy(actorBeneficiaryPolicyAcceptances.role);
+        const exactRetry = completedAcceptances.some(
+          (acceptance) =>
+            acceptance.role === params.role &&
+            acceptance.acceptedByActorId === params.acceptedByActorId
+        );
+        if (exactRetry) {
+          return toActorBeneficiaryPolicyProposal(
+            proposal,
+            completedAcceptances
+          );
+        }
         throw new Error("Beneficiary proposal is no longer pending");
       }
 
