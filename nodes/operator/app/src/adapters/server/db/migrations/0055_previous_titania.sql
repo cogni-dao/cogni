@@ -180,3 +180,145 @@ CREATE INDEX "actor_binding_events_source_idx" ON "actor_binding_events" USING b
 CREATE INDEX "actor_binding_events_actor_id_idx" ON "actor_binding_events" USING btree ("actor_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "actor_bindings_active_source_unique" ON "actor_bindings" USING btree ("provider","external_id") WHERE "actor_bindings"."closed_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "actor_bindings_actor_id_idx" ON "actor_bindings" USING btree ("actor_id");
+--> statement-breakpoint
+ALTER TABLE "actor_contribution_allocations" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "actor_distribution_liabilities" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "actor_distribution_settlements" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "actor_beneficiary_policies" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "actor_beneficiary_policy_acceptances" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "actor_beneficiary_policy_proposals" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "actor_binding_events" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "actor_bindings" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+
+-- Lift legacy human bindings into the canonical actor registry. Billing is
+-- tenancy only; it never chooses ownership, stewardship, or beneficiary.
+INSERT INTO "billing_accounts" ("id", "owner_user_id", "balance_credits")
+SELECT gen_random_uuid()::text, ub."user_id", 0
+FROM (SELECT DISTINCT "user_id" FROM "user_bindings") ub
+LEFT JOIN "billing_accounts" ba ON ba."owner_user_id" = ub."user_id"
+WHERE ba."id" IS NULL;
+--> statement-breakpoint
+INSERT INTO "actors" ("id", "kind", "user_id", "billing_account_id")
+SELECT gen_random_uuid()::text, 'user', ub."user_id", ba."id"
+FROM (SELECT DISTINCT "user_id" FROM "user_bindings") ub
+JOIN "billing_accounts" ba ON ba."owner_user_id" = ub."user_id"
+LEFT JOIN "actors" a ON a."user_id" = ub."user_id"
+WHERE a."id" IS NULL;
+--> statement-breakpoint
+INSERT INTO "actor_binding_events" (
+  "id", "actor_id", "provider", "external_id", "provider_login",
+  "event_type", "authorized_by_actor_id", "evidence", "effective_at", "created_at"
+)
+SELECT
+  'legacy-user-binding-event:' || ub."id", a."id", ub."provider", ub."external_id",
+  ub."provider_login", 'bound', a."id",
+  jsonb_build_object('migration', '0055', 'legacyUserBindingId', ub."id"),
+  ub."created_at", ub."created_at"
+FROM "user_bindings" ub
+JOIN "actors" a ON a."user_id" = ub."user_id";
+--> statement-breakpoint
+INSERT INTO "actor_bindings" (
+  "id", "actor_id", "provider", "external_id", "provider_login",
+  "evidence_event_id", "created_at"
+)
+SELECT
+  'legacy-user-binding:' || ub."id", a."id", ub."provider", ub."external_id",
+  ub."provider_login", 'legacy-user-binding-event:' || ub."id", ub."created_at"
+FROM "user_bindings" ub
+JOIN "actors" a ON a."user_id" = ub."user_id";
+--> statement-breakpoint
+
+-- user_bindings remains a guarded compatibility projection. Old writers must
+-- establish the same canonical human ownership atomically; an active AI owner
+-- makes the compatibility write fail instead of silently stealing attribution.
+CREATE OR REPLACE FUNCTION project_user_binding_to_actor_owner()
+RETURNS trigger AS $$
+DECLARE
+  owner_actor_id text;
+  billing_id text;
+  evidence_id text;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('actor-binding:' || NEW.provider || ':' || NEW.external_id));
+
+  SELECT ab.actor_id INTO owner_actor_id
+  FROM actor_bindings ab
+  JOIN actors a ON a.id = ab.actor_id
+  WHERE ab.provider = NEW.provider
+    AND ab.external_id = NEW.external_id
+    AND ab.closed_at IS NULL
+    AND a.kind = 'user'
+    AND a.user_id = NEW.user_id;
+
+  IF owner_actor_id IS NULL THEN
+    SELECT id INTO billing_id FROM billing_accounts WHERE owner_user_id = NEW.user_id;
+    IF billing_id IS NULL THEN
+      billing_id := gen_random_uuid()::text;
+      INSERT INTO billing_accounts (id, owner_user_id, balance_credits)
+      VALUES (billing_id, NEW.user_id, 0)
+      ON CONFLICT (owner_user_id) DO NOTHING;
+      SELECT id INTO billing_id FROM billing_accounts WHERE owner_user_id = NEW.user_id;
+    END IF;
+
+    PERFORM pg_advisory_xact_lock(hashtext('human-actor:' || NEW.user_id));
+    SELECT id INTO owner_actor_id FROM actors WHERE kind = 'user' AND user_id = NEW.user_id;
+    IF owner_actor_id IS NULL THEN
+      owner_actor_id := gen_random_uuid()::text;
+      INSERT INTO actors (id, kind, user_id, billing_account_id)
+      VALUES (owner_actor_id, 'user', NEW.user_id, billing_id);
+    END IF;
+
+    evidence_id := gen_random_uuid()::text;
+    INSERT INTO actor_binding_events (
+      id, actor_id, provider, external_id, provider_login, event_type,
+      authorized_by_actor_id, evidence, effective_at
+    ) VALUES (
+      evidence_id, owner_actor_id, NEW.provider, NEW.external_id,
+      NEW.provider_login, 'bound', owner_actor_id,
+      jsonb_build_object('compatibilityProjection', 'user_bindings'), NEW.created_at
+    );
+    INSERT INTO actor_bindings (
+      id, actor_id, provider, external_id, provider_login, evidence_event_id, created_at
+    ) VALUES (
+      gen_random_uuid()::text, owner_actor_id, NEW.provider, NEW.external_id,
+      NEW.provider_login, evidence_id, NEW.created_at
+    );
+  ELSIF TG_OP = 'UPDATE' AND NEW.provider_login IS DISTINCT FROM OLD.provider_login THEN
+    UPDATE actor_bindings
+    SET provider_login = NEW.provider_login
+    WHERE provider = NEW.provider AND external_id = NEW.external_id AND closed_at IS NULL;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+--> statement-breakpoint
+CREATE TRIGGER user_bindings_canonical_owner
+BEFORE INSERT OR UPDATE ON "user_bindings"
+FOR EACH ROW EXECUTE FUNCTION project_user_binding_to_actor_owner();
+--> statement-breakpoint
+CREATE TRIGGER actor_binding_events_append_only
+  BEFORE UPDATE OR DELETE ON "actor_binding_events"
+  FOR EACH ROW EXECUTE FUNCTION ledger_reject_mutation();
+--> statement-breakpoint
+CREATE TRIGGER actor_beneficiary_policy_acceptances_append_only
+  BEFORE UPDATE OR DELETE ON "actor_beneficiary_policy_acceptances"
+  FOR EACH ROW EXECUTE FUNCTION ledger_reject_mutation();
+--> statement-breakpoint
+CREATE TRIGGER actor_contribution_allocations_append_only
+  BEFORE UPDATE OR DELETE ON "actor_contribution_allocations"
+  FOR EACH ROW EXECUTE FUNCTION ledger_reject_mutation();
+--> statement-breakpoint
+CREATE TRIGGER actor_distribution_liabilities_append_only
+  BEFORE UPDATE OR DELETE ON "actor_distribution_liabilities"
+  FOR EACH ROW EXECUTE FUNCTION ledger_reject_mutation();
+--> statement-breakpoint
+CREATE TRIGGER actor_distribution_settlements_append_only
+  BEFORE UPDATE OR DELETE ON "actor_distribution_settlements"
+  FOR EACH ROW EXECUTE FUNCTION ledger_reject_mutation();
