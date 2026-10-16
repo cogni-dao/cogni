@@ -38,6 +38,7 @@ import { seedTestActor, type TestActor } from "@tests/_fixtures/stack/seed";
 import { and, eq, sql } from "drizzle-orm";
 import { privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DrizzleAgentIdentityAdapter } from "@/adapters/server/identity/agent-identity.adapter";
 import { actors, userBindings } from "@/shared/db/schema";
 
 /** Unwrap DrizzleQueryError → underlying PostgresError message */
@@ -1988,15 +1989,26 @@ describe("DrizzleAttributionAdapter (Component)", () => {
           acceptedAt: input.acceptedAt,
         });
       };
-      await adapter.bindActorExternalIdentity({
+      const identity = new DrizzleAgentIdentityAdapter(
+        db,
+        TEST_NODE_ID,
+        "actor-claim-component-test-secret-minimum-32-chars",
+        () => new Date("2026-10-03T00:00:00.000Z")
+      );
+      const identityClaim = await identity.createExistingAgentClaim({
+        stewardUserId: derek.user.id,
         actorId: flockLeaderActorId,
         provider: "github",
         externalId,
         providerLogin: "flock-leader",
-        expectedCurrentActorId: derekActor.id,
-        authorizedByActorId: derekActor.id,
-        evidence: { ceremony: "github-source-claim-v1" },
-        effectiveAt: new Date("2026-10-01T00:00:00.000Z"),
+        attestationJti: crypto.randomUUID(),
+        attestationEvidence: { ceremony: "github-source-claim-v1" },
+        attestationExpiresAt: new Date("2026-10-04T00:00:00.000Z"),
+        idempotencyKey: crypto.randomUUID(),
+      });
+      await identity.acceptExistingAgentClaim({
+        actorId: flockLeaderActorId,
+        claimId: identityClaim.claimId,
       });
       const proposal = await adapter.proposeActorBeneficiaryPolicy({
         earnedByActorId: flockLeaderActorId,
@@ -2102,6 +2114,10 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         beneficiaryActorId: derekActor.id,
         beneficiaryPolicyVersion: "flock-leader-beneficiary.v1",
         contributionCutoff: "2026-10-02T12:00:00.000Z",
+        sourceEvidence: expect.objectContaining({
+          immutableExternalId: externalId,
+          bindingEvidenceEventId: expect.any(String),
+        }),
       });
       const persisted = await adapter.insertActorContributionAllocation({
         allocation: prepared,

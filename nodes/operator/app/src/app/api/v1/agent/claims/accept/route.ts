@@ -63,10 +63,11 @@ export const POST = wrapRouteHandlerWithLogging(
           { status: 401 }
         );
       }
-      const result = await getContainer().agentIdentity.acceptExistingAgentClaim({
-        actorId: credential.principal.actorId,
-        claimId: parsed.data.claimId,
-      });
+      const result =
+        await getContainer().agentIdentity.acceptExistingAgentClaim({
+          actorId: credential.principal.actorId,
+          claimId: parsed.data.claimId,
+        });
       return agentIdentityResponse(
         ctx,
         startedAt,

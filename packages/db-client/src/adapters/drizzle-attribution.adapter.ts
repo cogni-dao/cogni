@@ -111,7 +111,6 @@ import {
   userBindings,
 } from "@cogni/db-schema/identity";
 import { userProfiles } from "@cogni/db-schema/profile";
-import { users } from "@cogni/db-schema/refs";
 import {
   and,
   asc,
@@ -2893,7 +2892,14 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           )
         )
       )
-      .orderBy(desc(actorBindings.createdAt))
+      // A governed identity transfer inherits the source's effective start so
+      // historical, not-yet-frozen receipts follow the accepted durable AI.
+      // Prefer the active binding over its closed predecessor in that overlap;
+      // already-frozen allocations are never revisited.
+      .orderBy(
+        desc(isNull(actorBindings.closedAt)),
+        desc(actorBindings.createdAt)
+      )
       .limit(1);
     if (!binding) {
       throw new Error(

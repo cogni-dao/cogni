@@ -13,10 +13,10 @@
 
 import { createPublicKey } from "node:crypto";
 import {
+  type IdentityAttestationClaims,
   IdentityAttestationClaimsSchema,
   IdentityAttestationOriginSchema,
   identityAttestationAudience,
-  type IdentityAttestationClaims,
 } from "@cogni/node-contracts";
 import { jwtVerify } from "jose";
 import { AgentIdentityError } from "@/ports";

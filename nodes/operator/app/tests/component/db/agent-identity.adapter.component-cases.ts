@@ -9,7 +9,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DrizzleAgentIdentityAdapter } from "@/adapters/server/identity/agent-identity.adapter";
@@ -433,20 +433,16 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
       balanceCredits: 0n,
       authorizationOwnerBootstrappedAt: now,
     });
-    await identity.createSpawnGrant({
-      issuerUserId: replacementUserId,
-      name: "replacement-steward-bootstrap",
-      idempotencyKey: randomUUID(),
+    const replacementStewardId = randomUUID();
+    await db.insert(actors).values({
+      id: replacementStewardId,
+      kind: "user",
+      userId: replacementUserId,
+      billingAccountId: replacementBillingAccountId,
     });
-    const [replacementSteward] = await db
-      .select({ id: actors.id })
-      .from(actors)
-      .where(eq(actors.userId, replacementUserId))
-      .limit(1);
-    if (!replacementSteward) throw new Error("replacement steward missing");
     await db
       .update(actors)
-      .set({ parentActorId: replacementSteward.id })
+      .set({ parentActorId: replacementStewardId })
       .where(eq(actors.id, current.actorId));
 
     await expect(identity.recover(grant.token)).rejects.toMatchObject<
@@ -455,6 +451,9 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     await expect(identity.authenticate(current.apiKey)).resolves.toMatchObject({
       principal: { actorId: current.actorId },
     });
+    await db
+      .delete(agentRecoveryGrants)
+      .where(eq(agentRecoveryGrants.id, grant.grantId));
   });
 
   it("claims an existing AI only after both human proposal and AI acceptance", async () => {
@@ -503,7 +502,12 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     const [binding] = await db
       .select({ actorId: actorBindings.actorId })
       .from(actorBindings)
-      .where(eq(actorBindings.externalId, externalId));
+      .where(
+        and(
+          eq(actorBindings.externalId, externalId),
+          isNull(actorBindings.closedAt)
+        )
+      );
     expect(binding?.actorId).toBe(actorId);
     const legacyProjection = await db
       .select({ id: userBindings.id })
@@ -570,18 +574,20 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     await expect(
       dedicatedIdentity.authenticate(first.apiKey)
     ).resolves.toBeNull();
-    await expect(
-      dedicatedIdentity.createSpawnGrant({
-        issuerUserId: stewardUserId,
-        name: "allowed-after-suspension",
-        idempotencyKey: randomUUID(),
-      })
-    ).resolves.toMatchObject({ token: expect.any(String) });
+    const afterSuspension = await dedicatedIdentity.createSpawnGrant({
+      issuerUserId: stewardUserId,
+      name: "allowed-after-suspension",
+      idempotencyKey: randomUUID(),
+    });
+    expect(afterSuspension.token).toEqual(expect.any(String));
     await expect(
       dedicatedIdentity.recover(recovery.token)
     ).rejects.toMatchObject<Partial<AgentIdentityError>>({
       code: "invalid_grant",
     });
+    await db
+      .delete(agentSpawnGrants)
+      .where(eq(agentSpawnGrants.id, afterSuspension.grantId));
   });
 
   it("backfills a default virtual key for an existing keyless account", async () => {

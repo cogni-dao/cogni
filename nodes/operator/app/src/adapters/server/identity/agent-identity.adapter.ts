@@ -393,7 +393,11 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         );
       }
       const [sourceOwner] = await tx
-        .select({ id: actorBindings.id, actorId: actorBindings.actorId })
+        .select({
+          id: actorBindings.id,
+          actorId: actorBindings.actorId,
+          createdAt: actorBindings.createdAt,
+        })
         .from(actorBindings)
         .where(
           and(
@@ -473,7 +477,11 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           externalId: claim.externalId,
           providerLogin: claim.providerLogin,
           evidenceEventId: bindingEventId,
-          createdAt: acceptedAt,
+          // The governed transfer changes who owns the immutable source; it
+          // does not erase when that source began producing contributions.
+          // Frozen allocations remain immutable, while still-unfrozen
+          // historical receipts resolve to the newly accepted durable AI.
+          createdAt: sourceOwner?.createdAt ?? acceptedAt,
         });
       }
       if (!agent.parentActorId) {

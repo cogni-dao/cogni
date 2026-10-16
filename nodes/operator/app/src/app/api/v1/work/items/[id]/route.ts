@@ -138,21 +138,19 @@ export const PATCH = wrapRouteHandlerWithLogging<{
 
     try {
       const sessionUser = compatibilitySessionUser(principal);
-      let patched;
-      if (principal.kind === "agent") {
-        patched = await patchWorkItemAsPrincipal(
-          parseResult.data,
-          principal.principalId
-        );
-      } else {
-        if (!sessionUser) {
-          return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-        }
-        patched = await patchWorkItem(parseResult.data, {
-          id: sessionUser.id,
-          displayName: sessionUser.displayName,
-        });
+      if (principal.kind !== "agent" && !sessionUser) {
+        return NextResponse.json({ error: "unauthorized" }, { status: 401 });
       }
+      const patched =
+        principal.kind === "agent"
+          ? await patchWorkItemAsPrincipal(
+              parseResult.data,
+              principal.principalId
+            )
+          : await patchWorkItem(parseResult.data, {
+              id: sessionUser.id,
+              displayName: sessionUser.displayName,
+            });
       ctx.log.info(
         { workItemId: id, actorPrincipalId: principal.principalId },
         "work.items.patch_success"

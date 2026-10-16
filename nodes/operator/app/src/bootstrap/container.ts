@@ -192,14 +192,14 @@ import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
 import {
+  bootstrapNodeBillingAccountOwner,
+  mutateNodeAgentAccountAccess,
+} from "@/features/authorization";
+import {
   type AttributionProfileResolver,
   createAttributionProfileResolver,
   selectLocalAttributionNodes,
 } from "@/features/nodes/attribution-profile-resolver";
-import {
-  bootstrapNodeBillingAccountOwner,
-  mutateNodeAgentAccountAccess,
-} from "@/features/authorization";
 import {
   createNodeDistributionConfigResolver,
   type NodeDistributionConfigResolver,

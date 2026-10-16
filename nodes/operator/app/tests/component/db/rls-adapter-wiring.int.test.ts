@@ -26,13 +26,18 @@ import {
   virtualKeys,
 } from "@cogni/db-schema";
 import { toUserId } from "@cogni/ids";
+import { COGNI_SYSTEM_BILLING_ACCOUNT_ID } from "@cogni/node-shared";
 import { generateTestWallet } from "@tests/_fixtures/auth/db-helpers";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { UserDrizzleAccountService } from "@/adapters/server/accounts/drizzle.adapter";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  ServiceDrizzleAccountService,
+  UserDrizzleAccountService,
+} from "@/adapters/server/accounts/drizzle.adapter";
 import { getAppDb } from "@/adapters/server/db/client";
 import { UserDrizzlePaymentAttemptRepository } from "@/adapters/server/payments/drizzle-payment-attempt.adapter";
+import { verifySystemTenant } from "@/bootstrap/healthchecks";
 import "./agent-identity.adapter.component-cases";
 
 interface TestTenant {
@@ -166,6 +171,37 @@ describe("RLS Adapter Wiring Gate", () => {
         userId: tenantA.userId,
       });
       expect(result.ownerUserId).toBe(tenantA.userId);
+    });
+  });
+
+  describe("ServiceDrizzleAccountService authority reconciliation", () => {
+    it("repairs the preexisting system account before readiness serves it", async () => {
+      const [systemAccount] = await superDb
+        .select({ ownerUserId: billingAccounts.ownerUserId })
+        .from(billingAccounts)
+        .where(eq(billingAccounts.id, COGNI_SYSTEM_BILLING_ACCOUNT_ID));
+      if (!systemAccount) throw new Error("Expected seeded system account");
+      await superDb
+        .update(billingAccounts)
+        .set({ authorizationOwnerBootstrappedAt: null })
+        .where(eq(billingAccounts.id, COGNI_SYSTEM_BILLING_ACCOUNT_ID));
+      const bootstrapOwner = vi.fn().mockResolvedValue(undefined);
+      const service = new ServiceDrizzleAccountService(
+        superDb,
+        undefined,
+        bootstrapOwner
+      );
+
+      await expect(verifySystemTenant(service)).resolves.toBeUndefined();
+      expect(bootstrapOwner).toHaveBeenCalledWith({
+        ownerUserId: systemAccount.ownerUserId,
+        billingAccountId: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+      });
+      const [reconciled] = await superDb
+        .select({ at: billingAccounts.authorizationOwnerBootstrappedAt })
+        .from(billingAccounts)
+        .where(eq(billingAccounts.id, COGNI_SYSTEM_BILLING_ACCOUNT_ID));
+      expect(reconciled?.at).toBeInstanceOf(Date);
     });
   });
 

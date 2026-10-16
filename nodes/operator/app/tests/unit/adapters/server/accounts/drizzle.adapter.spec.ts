@@ -13,8 +13,13 @@
  */
 
 import type { UserId } from "@cogni/ids";
+import { COGNI_SYSTEM_BILLING_ACCOUNT_ID } from "@cogni/node-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { UserDrizzleAccountService } from "@/adapters/server/accounts/drizzle.adapter";
+import {
+  ServiceDrizzleAccountService,
+  UserDrizzleAccountService,
+} from "@/adapters/server/accounts/drizzle.adapter";
+import { verifySystemTenant } from "@/bootstrap/healthchecks";
 
 // Mock the db module
 const mockTx = {
@@ -42,6 +47,7 @@ const mockTx = {
 
 const mockDb = {
   transaction: vi.fn((callback) => callback(mockTx)),
+  update: vi.fn(() => mockTx),
   query: {
     billingAccounts: {
       findFirst: vi.fn(),
@@ -66,6 +72,7 @@ describe("UserDrizzleAccountService", () => {
     vi.clearAllMocks();
     mockDb.query.billingAccounts.findFirst.mockReset();
     mockDb.query.virtualKeys.findFirst.mockReset();
+    mockDb.update.mockReset().mockReturnValue(mockTx);
     mockTx.query.billingAccounts.findFirst.mockReset();
     mockTx.query.virtualKeys.findFirst.mockReset();
     mockTx.query.chargeReceipts.findFirst.mockReset();
@@ -138,11 +145,41 @@ describe("UserDrizzleAccountService", () => {
         balanceCredits: 100000n,
         authorizationOwnerBootstrappedAt: null,
       });
+      mockTx.query.virtualKeys.findFirst.mockResolvedValue({
+        id: "vk-pending",
+      });
 
       await expect(
         service.getBillingAccountById("acc-pending")
-      ).resolves.toBeNull();
-      expect(mockTx.query.virtualKeys.findFirst).not.toHaveBeenCalled();
+      ).rejects.toMatchObject({
+        name: "BillingAccountOwnerBootstrapPortError",
+        reason: "pending_authority",
+      });
+    });
+
+    it("reconciles a preexisting system account before readiness serves it", async () => {
+      const bootstrapOwner = vi.fn().mockResolvedValue(undefined);
+      const serviceAccount = new ServiceDrizzleAccountService(
+        mockDb,
+        undefined,
+        bootstrapOwner
+      );
+      mockDb.query.billingAccounts.findFirst.mockResolvedValue({
+        id: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+        ownerUserId: TEST_USER_ID,
+        balanceCredits: 0n,
+        authorizationOwnerBootstrappedAt: null,
+      });
+      mockDb.query.virtualKeys.findFirst.mockResolvedValue({
+        id: "vk-system",
+      });
+
+      await expect(verifySystemTenant(serviceAccount)).resolves.toBeUndefined();
+      expect(bootstrapOwner).toHaveBeenCalledWith({
+        ownerUserId: TEST_USER_ID,
+        billingAccountId: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+      });
+      expect(mockDb.update).toHaveBeenCalledOnce();
     });
   });
 

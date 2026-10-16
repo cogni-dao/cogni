@@ -254,33 +254,42 @@ export class UserDrizzleAccountService implements AccountService {
   async getBillingAccountById(
     billingAccountId: string
   ): Promise<BillingAccount | null> {
-    return withTenantScope(this.db, this.actorId, async (tx) => {
-      const account = await tx.query.billingAccounts.findFirst({
-        where: eq(billingAccounts.id, billingAccountId),
-      });
+    const resolved = await withTenantScope(
+      this.db,
+      this.actorId,
+      async (tx) => {
+        const account = await tx.query.billingAccounts.findFirst({
+          where: eq(billingAccounts.id, billingAccountId),
+        });
 
-      if (!account || !account.authorizationOwnerBootstrappedAt) {
-        return null;
+        if (!account) {
+          return null;
+        }
+
+        const defaultKey = await tx.query.virtualKeys.findFirst({
+          where: and(
+            eq(virtualKeys.billingAccountId, billingAccountId),
+            eq(virtualKeys.isDefault, true)
+          ),
+        });
+
+        if (!defaultKey) {
+          return null;
+        }
+
+        return {
+          account: {
+            id: account.id,
+            ownerUserId: account.ownerUserId,
+            balanceCredits: toNumber(account.balanceCredits),
+            defaultVirtualKeyId: defaultKey.id,
+          },
+          completedAt: account.authorizationOwnerBootstrappedAt,
+        };
       }
-
-      const defaultKey = await tx.query.virtualKeys.findFirst({
-        where: and(
-          eq(virtualKeys.billingAccountId, billingAccountId),
-          eq(virtualKeys.isDefault, true)
-        ),
-      });
-
-      if (!defaultKey) {
-        return null;
-      }
-
-      return {
-        id: account.id,
-        ownerUserId: account.ownerUserId,
-        balanceCredits: toNumber(account.balanceCredits),
-        defaultVirtualKeyId: defaultKey.id,
-      };
-    });
+    );
+    if (!resolved) return null;
+    return this.ensureOwnerBootstrap(resolved);
   }
 
   async getOrCreateBillingAccountForUser({
@@ -831,7 +840,7 @@ export class ServiceDrizzleAccountService implements ServiceAccountService {
       where: eq(billingAccounts.id, billingAccountId),
     });
 
-    if (!account || !account.authorizationOwnerBootstrappedAt) {
+    if (!account) {
       return null;
     }
 
@@ -846,12 +855,15 @@ export class ServiceDrizzleAccountService implements ServiceAccountService {
       return null;
     }
 
-    return {
-      id: account.id,
-      ownerUserId: account.ownerUserId,
-      balanceCredits: toNumber(account.balanceCredits),
-      defaultVirtualKeyId: defaultKey.id,
-    };
+    return this.ensureOwnerBootstrap({
+      account: {
+        id: account.id,
+        ownerUserId: account.ownerUserId,
+        balanceCredits: toNumber(account.balanceCredits),
+        defaultVirtualKeyId: defaultKey.id,
+      },
+      completedAt: account.authorizationOwnerBootstrappedAt,
+    });
   }
 
   async getOrCreateBillingAccountForUser({

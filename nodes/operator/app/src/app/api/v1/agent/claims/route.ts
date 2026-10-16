@@ -66,24 +66,25 @@ export const POST = wrapRouteHandlerWithLogging(
       const claims = await verifyAgentClaimAttestation(
         parsed.data.identityAttestation
       );
-      const result = await getContainer().agentIdentity.createExistingAgentClaim({
-        stewardUserId: sessionUser.id,
-        actorId: parsed.data.actorId,
-        provider: "github",
-        externalId: claims.github.id,
-        providerLogin: claims.github.login,
-        attestationJti: claims.jti,
-        attestationEvidence: {
-          issuer: claims.iss,
-          audience: claims.aud,
-          nodeId: claims.nodeId,
-          nonce: claims.nonce,
-          targetOrigin: claims.targetOrigin,
-          issuedAt: claims.iat,
-        },
-        attestationExpiresAt: new Date(claims.exp * 1000),
-        idempotencyKey: parsed.data.idempotencyKey,
-      });
+      const result =
+        await getContainer().agentIdentity.createExistingAgentClaim({
+          stewardUserId: sessionUser.id,
+          actorId: parsed.data.actorId,
+          provider: "github",
+          externalId: claims.github.id,
+          providerLogin: claims.github.login,
+          attestationJti: claims.jti,
+          attestationEvidence: {
+            issuer: claims.iss,
+            audience: claims.aud,
+            nodeId: claims.nodeId,
+            nonce: claims.nonce,
+            targetOrigin: claims.targetOrigin,
+            issuedAt: claims.iat,
+          },
+          attestationExpiresAt: new Date(claims.exp * 1000),
+          idempotencyKey: parsed.data.idempotencyKey,
+        });
       return agentIdentityResponse(
         ctx,
         startedAt,
