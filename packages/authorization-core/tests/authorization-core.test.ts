@@ -46,6 +46,7 @@ describe("relationForAuthzAction", () => {
     expect(relationForAuthzAction("node.manage_secrets")).toBe(
       "can_manage_secrets"
     );
+    expect(relationForAuthzAction("node.administer")).toBe("admin");
   });
 
   it("formats resource references", () => {
