@@ -19,7 +19,10 @@
  * @internal — measurement code, not shipped to production
  */
 
+import { Resolver } from "node:dns";
 import { appendFileSync } from "node:fs";
+
+import { Agent, fetch as undiciFetch } from "undici";
 
 export type FailureClass =
   | "connection"
@@ -258,12 +261,47 @@ export async function runProbe(opts: ProbeOptions): Promise<ProbeSample[]> {
 //   --url https://<host> --allow-sha <incumbent> --allow-sha <release> --out <file.jsonl> [--duration-sec N]
 // Without --duration-sec it runs until SIGINT/SIGTERM, then prints the summary.
 // Exit 0 = zero failures, 1 = any failure, 2 = usage.
+// --dns-server <ip> resolves the host via that public resolver instead of the local one (a
+// local/VPN resolver can negatively cache a freshly published record for its whole TTL).
+
+/** fetch whose connections resolve A records through `server`, bypassing the OS resolver. */
+export function fetchViaDnsServer(server: string): typeof fetch {
+  const resolver = new Resolver();
+  resolver.setServers([server]);
+  const dispatcher = new Agent({
+    connect: {
+      lookup: (hostname, options, callback) => {
+        resolver.resolve4(hostname, (err, addrs) => {
+          if (err || addrs.length === 0) {
+            callback(err ?? new Error(`no A record for ${hostname}`), "", 4);
+            return;
+          }
+          if ((options as { all?: boolean }).all) {
+            (callback as unknown as (e: null, a: object[]) => void)(
+              null,
+              addrs.map((address) => ({ address, family: 4 }))
+            );
+            return;
+          }
+          callback(null, addrs[0] ?? "", 4);
+        });
+      },
+    },
+  });
+  return ((input: Parameters<typeof undiciFetch>[0], init?: RequestInit) =>
+    undiciFetch(input, {
+      ...(init as Parameters<typeof undiciFetch>[1]),
+      dispatcher,
+    })) as unknown as typeof fetch;
+}
+
 function parseArgs(argv: readonly string[]) {
   const out: {
     url?: string | undefined;
     allow: string[];
     file?: string | undefined;
     durationSec?: number | undefined;
+    dnsServer?: string | undefined;
   } = {
     allow: [],
   };
@@ -284,6 +322,10 @@ function parseArgs(argv: readonly string[]) {
         break;
       case "--duration-sec":
         out.durationSec = Number(v);
+        i++;
+        break;
+      case "--dns-server":
+        out.dnsServer = v;
         i++;
         break;
       default:
@@ -309,6 +351,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     url: args.url,
     allowedShas: args.allow,
     signal: ctrl.signal,
+    ...(args.dnsServer && { fetchImpl: fetchViaDnsServer(args.dnsServer) }),
     ...(args.durationSec && { durationMs: args.durationSec * 1000 }),
     onSample: (s) => {
       appendFileSync(file, `${JSON.stringify(s)}\n`);
