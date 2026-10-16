@@ -263,7 +263,7 @@ bao_exec() {
 # explicit "No value found" answer (a genuinely unborn path) maps to {}; anything else
 # is retried and then fatal, naming the transport.
 prefetch_path() {
-  local svc="$1" env="${2:-$DEPLOY_ENVIRONMENT}" ns="${3:-$1}" json raw attempt
+  local svc="$1" env="${2:-$DEPLOY_ENVIRONMENT}" ns="${3:-$1}" json raw attempt key val
   raw=""
   for attempt in 1 2 3; do
     if raw="$(bao_exec "" "kv get -format=json 'cogni/${env}/${svc}'" 2>&1)"; then
