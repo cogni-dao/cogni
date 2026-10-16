@@ -15,11 +15,11 @@ matcher = "startup|resume|clear|compact"
 
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = 'bash "$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh"'
+command = 'bash "$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh" --codex'
 statusMessage = "Loading Cogni cognition substrate"
 # Disable Codex's default ~2,500-token head/tail spill so the FULL cognition
 # bundle surfaces as developer context — a spill cuts load-bearing instructions
-# out of the middle of the agent-contract. The loader emits raw stdout under
-# Codex and structured hookSpecificOutput.additionalContext under Claude Code;
-# both are uncapped, so the whole bundle auto-surfaces at any size (no ceiling).
+# out of the middle of the agent-contract. The explicit Codex adapter emits raw
+# stdout even when this runtime omits CODEX_THREAD_ID. Claude's hook remains
+# write-only; its full bundle arrives through CLAUDE.md's native cache import.
 additionalContextLimit = 0

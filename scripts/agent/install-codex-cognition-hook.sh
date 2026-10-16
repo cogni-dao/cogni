@@ -42,8 +42,13 @@ fi
 # A versioned project hook may match the same Codex event. The two presenters
 # share this short-lived lock so only one emits context; it is released for the
 # next resume/clear/compact event.
-if [[ -n "${CODEX_THREAD_ID:-}" ]]; then
-  safe_thread_id="$(printf '%s' "$CODEX_THREAD_ID" | tr -cd '[:alnum:]_-')"
+codex_session_id="${CODEX_THREAD_ID:-}"
+if [[ -z "$codex_session_id" && ! -t 0 ]]; then
+  codex_hook_input="$(cat)"
+  codex_session_id="$(printf '%s' "$codex_hook_input" | jq -r '.session_id // empty' 2>/dev/null || true)"
+fi
+if [[ -n "$codex_session_id" ]]; then
+  safe_thread_id="$(printf '%s' "$codex_session_id" | tr -cd '[:alnum:]_-')"
   COGNI_HOOK_LOCK="${TMPDIR:-/tmp}/cogni-cognition-${safe_thread_id}.lock"
   mkdir "$COGNI_HOOK_LOCK" 2>/dev/null || exit 0
   trap 'rmdir "$COGNI_HOOK_LOCK" 2>/dev/null || true' EXIT
@@ -117,19 +122,97 @@ agent_key="${COGNI_NODE_API_KEY:-$(read_env_file_value COGNI_NODE_API_KEY)}"
 fetch_bundle() {
   if [[ -n "$agent_key" ]]; then
     curl -fsS --max-time "$FETCH_TIMEOUT" -H "Authorization: Bearer ${agent_key}" "$url" 2>/dev/null \
-      | jq -r '.markdown // empty' 2>/dev/null
+      | jq -er '.markdown | select(type == "string")' 2>/dev/null
   else
     curl -fsS --max-time "$FETCH_TIMEOUT" "$url" 2>/dev/null \
-      | jq -r '.markdown // empty' 2>/dev/null
+      | jq -er '.markdown | select(type == "string")' 2>/dev/null
   fi
 }
 
-write_cache_atomic() {
-  mkdir -p "$(dirname "$CACHE_FILE")" 2>/dev/null || return 0
-  local tmp="${CACHE_FILE}.tmp.$$"
-  printf '%s\n' "$1" >"$tmp" 2>/dev/null && mv -f "$tmp" "$CACHE_FILE" 2>/dev/null
-  rm -f "$tmp" 2>/dev/null
+# bundle_is_complete <markdown> — admit a complete operating contract, not merely
+# a map or a nonempty response. Check its existing semantic envelope and generic
+# Markdown template structure; field names and column counts stay hub-owned.
+# Older complete templates remain valid offline fallbacks during hub upgrades.
+bundle_is_complete() {
+  printf '%s\n' "$1" | awk '
+    function table_row(line, cells, count) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (line !~ /^\|.*\|$/) return 0
+      sub(/^\|/, "", line); sub(/\|$/, "", line)
+      count = split(line, cells, "|")
+      if (count < 2 || line !~ /[^|[:space:]]/) return 0
+      return count
+    }
+    function table_separator(line, cells, count, i) {
+      gsub(/[[:space:]]/, "", line)
+      sub(/^\|/, "", line); sub(/\|$/, "", line)
+      count = split(line, cells, "|")
+      if (count < 2) return 0
+      for (i = 1; i <= count; i++) if (cells[i] !~ /^:?---[-]*:?$/) return 0
+      return count
+    }
+    /^## The agent-contract([[:space:]]|$)/ { heading = 1; next }
+    /^[[:space:]]*<agent-contract([[:space:]>])/ {
+      if (!heading || phase != 0) bad = 1
+      phase = 1; next
+    }
+    /^[[:space:]]*<process-contract([[:space:]>])/ {
+      if (phase != 1) bad = 1
+      phase = 2; next
+    }
+    /^[[:space:]]*<\/process-contract>[[:space:]]*$/ {
+      if (phase != 2 || !process_body) bad = 1
+      phase = 3; next
+    }
+    /^[[:space:]]*<status-contract([[:space:]>])/ {
+      if (phase != 3) bad = 1
+      phase = 4; next
+    }
+    /^[[:space:]]*<\/status-contract>[[:space:]]*$/ {
+      if (phase != 4 || !status_body || templates < 2) bad = 1
+      phase = 5; next
+    }
+    /^[[:space:]]*<\/agent-contract>[[:space:]]*$/ {
+      if (phase != 5) bad = 1
+      phase = 6; next
+    }
+    phase == 2 && /[^[:space:]]/ { process_body = 1 }
+    phase == 4 {
+      if ($0 ~ /[^[:space:]]/) status_body = 1
+      row = table_row($0)
+      if (row && table_separator($0)) {
+        awaiting_data = (previous_row == row ? row : 0)
+      } else {
+        if (row && awaiting_data == row) templates++
+        awaiting_data = 0
+      }
+      previous_row = row
+    }
+    END { exit !(phase == 6 && !bad) }
+  '
 }
+
+write_cache_atomic() (
+  # Project and stable user hooks share one mutation guard, independently of
+  # Codex presentation/thread locks. Recovery must revalidate UNDER this guard:
+  # another cold session may have installed a complete bundle during our fetch.
+  mkdir -p "$(dirname "$CACHE_FILE")" 2>/dev/null || return 0
+  cache_guard="${CACHE_FILE}.write-lock"
+  attempts=0
+  until mkdir "$cache_guard" 2>/dev/null; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 50 ] || return 0
+    sleep 0.02
+  done
+  trap 'rmdir "$cache_guard" 2>/dev/null || true' EXIT
+  if [ "${2:-complete}" = recovery ] && ! cache_is_repo_tracked &&
+    bundle_is_complete "$(cat "$CACHE_FILE" 2>/dev/null || true)"; then
+    return 0
+  fi
+  tmp="${CACHE_FILE}.tmp.$$"
+  printf '%s\n' "$1" > "$tmp" 2>/dev/null && mv -f "$tmp" "$CACHE_FILE" 2>/dev/null
+  rm -f "$tmp" 2>/dev/null
+)
 
 cache_is_stale() {
   [[ -f "$CACHE_FILE" ]] || return 0
@@ -147,15 +230,15 @@ refresh_in_background() {
   (
     local fresh
     fresh="$(fetch_bundle)"
-    [[ -n "$fresh" ]] && write_cache_atomic "$fresh"
+    bundle_is_complete "$fresh" && write_cache_atomic "$fresh"
   ) >/dev/null 2>&1 &
 }
 
 # Codex user hook: raw stdout is the developer-context channel, and the managed
 # config block disables Codex's spill (additionalContextLimit = 0), so the full
 # bundle surfaces at any size. No producer-side byte ceiling (story.5070).
-if [[ -s "$CACHE_FILE" ]] && ! cache_is_repo_tracked; then
-  bundle="$(cat "$CACHE_FILE")"
+bundle="$(cat "$CACHE_FILE" 2>/dev/null || true)"
+if ! cache_is_repo_tracked && bundle_is_complete "$bundle"; then
   printf '%s\n' "$bundle"
   refresh_in_background
   exit 0
@@ -163,28 +246,50 @@ fi
 
 bundle="$(fetch_bundle)"
 
-if [[ -n "$bundle" ]]; then
+if bundle_is_complete "$bundle"; then
   write_cache_atomic "$bundle"
   printf '%s\n' "$bundle"
-else
-  cat <<EOF
-COGNI COGNITION BOOTSTRAP BLOCKED
-
-The SessionStart hook ran, but it could not fetch the cognition bundle from:
-  $url
-
-Do not continue silently. Tell the user that session cognition did not load and
-ask them to bootstrap the node credentials, then restart or resume the agent.
-
-Most common fixes:
-- register a NODE agent via /api/v1/agent/register
-- save COGNI_NODE_API_KEY in the clone-root .env.cogni
-- review and trust this user-level SessionStart hook via /hooks
-
-If the agent received no bootstrap message at all, the hook probably did not run
-(for Codex, missing hook trust is the usual cause).
-EOF
+  exit 0
 fi
+
+# No complete contract is available. Keep a recovery notice for native Claude/
+# OpenCode imports and emit it through Codex. It deliberately fails completeness
+# admission, so the next invocation retries the bounded fetch instead of treating
+# this notice as normal cognition. A Claude fetch cannot repair the current import.
+if [ -z "$agent_key" ]; then
+  recovery_reason="No COGNI_NODE_API_KEY was found. Register a NODE agent through /api/v1/agent/register and save its key in the clone-root .env.cogni."
+else
+  recovery_reason="A node credential is present, but the request failed or returned no complete agent-contract. Check this node hub health, key principal, and published contract; do not assume a missing key."
+fi
+recovery="$(cat <<EOF
+COGNI COGNITION — BOOTSTRAP RECOVERY (no complete contract)
+
+$recovery_reason
+
+Node cognition endpoint: $url
+
+This session has no admitted complete contract. Stay in bounded bootstrap recovery;
+limit work to diagnosing delivery, restoring node credentials, and warming the
+complete bundle. AGENTS.md and skills are not a replacement operating contract.
+Do not begin normal task work or invent a response template.
+
+After correcting setup, run scripts/agent/session-cognition.sh once from the
+repository root. If recovery persists, report the missing delivery evidence and
+specific setup action; do not repeatedly fetch. Once the complete cache is warm,
+restart or resume so the native instruction path loads it. Claude imports may
+have resolved before this SessionStart fetch; a successful write alone does not
+mean the current session received the contract. For Codex, also verify trust of
+the SessionStart hook through /hooks.
+EOF
+)"
+write_cache_atomic "$recovery" recovery
+latest_bundle="$(cat "$CACHE_FILE" 2>/dev/null || true)"
+if ! cache_is_repo_tracked && bundle_is_complete "$latest_bundle"; then
+  printf '%s\n' "$latest_bundle"
+else
+  printf '%s\n' "$recovery"
+fi
+
 HOOK
 
 chmod +x "$HOOK_PATH"

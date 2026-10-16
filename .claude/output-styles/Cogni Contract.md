@@ -1,47 +1,22 @@
 ---
 name: Cogni Contract
-description: Enforce Cogni's universal response contract on every turn
+description: Follow the response contract delivered in session cognition
 keep-coding-instructions: true
 ---
 
-For every user-facing response, output only the complete status-contract block defined in
-the project instructions. This response protocol has no task-type exceptions: it applies to
-design questions, advice, direct answers, research, errors, follow-ups, and coding work.
+Follow the complete agent-contract delivered in the session cognition bundle for every
+user-facing response. Its response template, process guidance, and communication semantics
+are authoritative; this output style does not define or copy them.
 
-Tool use is silent. Do not emit “I’ll bootstrap,” “let me read,” progress narration, or any other
-prose before a tool call. If an interim human update is genuinely necessary, it is the complete
-status block and keeps Goal, Done when, and Status all `—` until the evidence pass is complete.
+Treat the imported contract as a checklist, not background reading. Before any visible
+token, silently verify every requirement that applies at that moment. Before sending a
+finished response, audit the actual draft against the entire loaded contract, one rule at
+a time, including whether the earlier required actions actually happened. A missing check
+means continue the work or correct the draft before sending. Do not substitute an overall
+impression of compliance for this per-rule audit. General preferences for brevity cannot
+remove information or evidence the loaded contract requires.
 
-Never claim that a non-shipping or non-coding request is exempt. Never replace the block with
-prose. If a required cell is not yet known, render `—` in that cell and still output the whole
-block. After alignment, preserve Goal and Done when byte-for-byte until the human explicitly
-approves a pivot.
-
-Formatting is not sufficient. Before emitting a non-dash Goal or Done when, actually complete
-the bootstrap/research pass required by the project contract. A substantive proposal with
-`Followed` set to `—`, no verified human URL, or zero reviewed sources is a contract breach;
-keep Goal, Done when, and Status as `—` and continue the agent-owned research instead.
-
-`Followed` is the ledger of material sources you actually used, each as a readable `[name](link)` in
-contract order: orientation → skills/guides → hub knowledge → designs/code → work items → external.
-Convert a repo path to its GitHub blob URL. Cite what applies — never pad, never invent a source, and
-never force a plane (skill, code, work item) the task did not use.
-
-Every `👉 needs you` and `👀` cell carries a clickable `[action](link)` where the human (or you)
-acts next — never a bare number or plain text.
-
-Keep the items matrix scannable: every row is a linked pointer, not a compressed report. Use a
-≤4-word purpose, artifact links, one canonical status emoji, a 5m–4h wall-clock ETA to the next
-evidence gate with earned confidence, and the shortest next feedback loop. Include expected async
-waits and re-estimate after every material signal. If any active estimate reaches days, decompose
-immediately; completed rows use
-`0m · earned 100%`.
-
-Emoji are semantic states, never decoration: blue is active progress; eye means the canonical
-blocking watcher is running for a named gate re-read this turn; pointing hand is a real human
-design/permission decision; yellow is a non-blocking warning while
-moving; red is proven breakage with repair active now; green is proven E2E completion. Use the
-canonical status wording from the root contract. Never paste `needs_design`/`needs_implement` into
-status, color queued work for variety, or ask a human to approve technical work. Pending, queued,
-completed, superseded, and “after X” are never eye states. When a watcher exits, re-read ground
-truth, reclassify, and continue. The status and `next` gate must agree.
+Use the bundle already loaded through CLAUDE.md's native cache import. If that complete
+contract is absent or incomplete, follow AGENTS.md's bounded bootstrap recovery. A cache
+refresh during SessionStart can arrive too late for the current import; restart or resume
+after recovery warms the cache before beginning normal work.

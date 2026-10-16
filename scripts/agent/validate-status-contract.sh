@@ -13,42 +13,99 @@ INPUT="$(cat)"
 MESSAGE="$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""')"
 SCRATCHPAD_DIR="$(printf '%s' "$INPUT" | jq -r '.scratchpad_dir // ""')"
 
-# Emit a non-blocking advisory (systemMessage, no `decision:block`) and allow the stop to proceed.
-block() {
+# The bundle owns the envelope. Observe only an admitted local contract; this
+# read-only loader mode never refreshes, links credentials, or takes a hook lock.
+# The cache may be newer than Claude's already-resolved import, so this remains
+# advisory evidence, not a claim about exactly what the current model received.
+LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session-cognition.sh"
+CONTRACT="$(bash "$LOADER" --cached-contract)"
+[[ -n "$CONTRACT" ]] || exit 0
+
+first_nonempty="$(printf '%s\n' "$MESSAGE" | awk 'NF { print; exit }')"
+last_nonempty="$(printf '%s\n' "$MESSAGE" | awk 'NF { line=$0 } END { print line }')"
+# A cold Claude import can precede a concurrent successful cache warm. Clearly
+# marked recovery is diagnostic, never an alternate normal response template.
+case "$first_nonempty" in
+  *'COGNI COGNITION'*'BOOTSTRAP RECOVERY'*) exit 0 ;;
+esac
+
+# Emit a non-blocking advisory (systemMessage, no decision:block).
+advise() {
   jq -cn --arg reason "contract advisory (non-blocking): $1" '{systemMessage:$reason}'
   exit 0
 }
 
-first_nonempty="$(printf '%s\n' "$MESSAGE" | awk 'NF { print; exit }')"
-last_nonempty="$(printf '%s\n' "$MESSAGE" | awk 'NF { line=$0 } END { print line }')"
+# Extract generic Markdown table groups without assuming production field labels
+# or item-column counts. Separators establish tables; return header + data rows.
+table_rows() {
+  awk -v wanted="$1" '
+    function separator(line, cells, count, i) {
+      gsub(/[[:space:]]/, "", line)
+      sub(/^\|/, "", line); sub(/\|$/, "", line)
+      count = split(line, cells, "|")
+      if (count < 2) return 0
+      for (i = 1; i <= count; i++) if (cells[i] !~ /^:?---[-]*:?$/) return 0
+      return 1
+    }
+    /^[[:space:]]*\|.*\|[[:space:]]*$/ {
+      if (separator($0)) {
+        number++
+        active = 1
+        if (number == wanted) print previous
+      } else {
+        if (active && number == wanted) print
+        previous = $0
+      }
+      next
+    }
+    { active = 0; previous = "" }
+  '
+}
+normalize_row() {
+  awk -F'|' '{
+    for (i = 2; i < NF; i++) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+      printf "%s%s", (i > 2 ? "|" : ""), $i
+    }
+    print ""
+  }'
+}
+summary_labels() {
+  table_rows 1 | awk -F'|' '{
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2
+  }'
+}
+expected_labels="$(printf '%s\n' "$CONTRACT" | summary_labels)"
+actual_labels="$(printf '%s\n' "$MESSAGE" | summary_labels)"
+[[ "$actual_labels" == "$expected_labels" ]] ||
+  advise "Envelope mismatch: use the summary table fields and order in the loaded cognition status-contract."
+expected_header="$(printf '%s\n' "$CONTRACT" | table_rows 2 | awk 'NR == 1' | normalize_row)"
+actual_header="$(printf '%s\n' "$MESSAGE" | table_rows 2 | awk 'NR == 1' | normalize_row)"
+[[ "$actual_header" == "$expected_header" ]] ||
+  advise "Envelope mismatch: use the item-table columns in the loaded cognition status-contract."
+item_columns="$(printf '%s\n' "$expected_header" | awk -F'|' '{ print NF }')"
+printf '%s\n' "$MESSAGE" | table_rows 2 | awk -F'|' -v columns="$item_columns" '
+  NF - 2 != columns { bad = 1 }
+  END { exit (NR < 2 || bad) }
+' || advise "Envelope mismatch: item rows must match the loaded template column count."
+next_field="$(printf '%s\n' "$expected_header" | awk -F'|' '{
+  for (i = 1; i <= NF; i++) if (tolower($i) == "next") print i + 1
+}')"
 
-case "$first_nonempty" in
-  '| 🎯 **Goal**'*) ;;
-  *)
-    block "Contract breach: rewrite the entire response as only the required status block. Start with the Goal table; include Done when, Status, ETA · Conf, Followed; then a divider, items table, and Bottom line. No prose may appear outside that block."
-    ;;
-esac
-
-printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*\*\*Done when\*\*[[:space:]]*\|' ||
-  block "Contract breach: the status block is missing its Done when row. Rewrite the whole response in the required shape."
-printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*\*\*Status\*\*[[:space:]]*\|' ||
-  block "Contract breach: the status block is missing its Status row. Rewrite the whole response in the required shape."
-printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*\*\*ETA · Conf\*\*[[:space:]]*\|' ||
-  block "Contract breach: the status block is missing its ETA · Conf row. Rewrite the whole response in the required shape."
-printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*\*\*Followed\*\*[[:space:]]*\|' ||
-  block "Contract breach: the status block is missing its Followed row. Rewrite the whole response in the required shape."
-printf '%s\n' "$MESSAGE" | grep -Eq '^([*][*][*]|---)$' ||
-  block "Contract breach: the status block is missing the divider before its items table. Rewrite the whole response in the required shape."
-printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*item[[:space:]]*\|[[:space:]]*owner[[:space:]]*\|[[:space:]]*deliverable links[[:space:]]*\|[[:space:]]*status[[:space:]]*\|[[:space:]]*ETA · Conf[[:space:]]*\|[[:space:]]*next[[:space:]]*\|' ||
-  block "Contract breach: the status block is missing its items table. Rewrite the whole response in the required shape."
-
-case "$last_nonempty" in
-  '>'*'**Bottom line —**'*) ;;
-  *)
-    block "Contract breach: Bottom line must be the final line, with no epilogue. Rewrite the whole response in the required shape."
-    ;;
-esac
-
+# The final quote label and divider are template-owned too. Do not introduce a
+# production label when the admitted template does not contain one.
+quote_label="$(printf '%s\n' "$CONTRACT" | awk '
+  /^>/ && match($0, /\*\*[^*]+\*\*/) { label = substr($0, RSTART, RLENGTH) }
+  END { print label }
+')"
+if [[ -n "$quote_label" ]]; then
+  [[ "$last_nonempty" == '>'* && "$last_nonempty" == *"$quote_label"* ]] ||
+    advise "Envelope mismatch: end with the final quote label in the loaded cognition template."
+fi
+if printf '%s\n' "$CONTRACT" | grep -Eq '^([*][*][*]|---)$'; then
+  printf '%s\n' "$MESSAGE" | grep -Eq '^([*][*][*]|---)$' ||
+    advise "Envelope mismatch: include the divider shown in the loaded cognition template."
+fi
 outside_block="$(printf '%s\n' "$MESSAGE" | awk '
   NF == 0 { next }
   /^\|/ { next }
@@ -58,7 +115,7 @@ outside_block="$(printf '%s\n' "$MESSAGE" | awk '
   { print; exit }
 ')"
 [[ -z "$outside_block" ]] ||
-  block "Contract breach: prose appeared outside the tables and Bottom line. Rewrite the entire response as only the required status block."
+  advise "Envelope mismatch: follow the loaded template without extra prose outside its tables and final quote."
 
 extract_cell() {
   local row_pattern="$1"
@@ -78,25 +135,31 @@ DONE_WHEN="$(extract_cell 'Done when')"
 STATUS="$(extract_cell 'Status')"
 ETA_CONF="$(extract_cell 'ETA · Conf')"
 FOLLOWED="$(extract_cell 'Followed')"
+template_has_field() {
+  printf '%s\n' "$expected_labels" | grep -Fq "$1"
+}
+if ! template_has_field Goal || ! template_has_field 'Done when'; then
+  exit 0
+fi
 [[ -n "$GOAL" && -n "$DONE_WHEN" ]] ||
-  block "Contract breach: Goal and Done when must each occupy one complete table cell. Rewrite the whole response in the required shape."
+  advise "Contract breach: the loaded Goal and Done when fields need complete values."
 
 if [[ "$GOAL" == "—" || "$DONE_WHEN" == "—" ]]; then
   [[ "$GOAL" == "—" && "$DONE_WHEN" == "—" ]] ||
-    block "Contract breach: before substantive alignment, Goal and Done when must both remain —. Continue research and rewrite the whole response."
-  [[ "$STATUS" == "—" ]] ||
-    block "Process-contract breach: before the evidence pass supports a proposal, Goal, Done when, and Status must all remain —. Continue research silently and rewrite the complete block."
-  if ! printf '%s\n' "$MESSAGE" | awk -F'|' '
-    $7 ~ /👉 needs you:|👀/ { found=1 }
+    advise "Contract breach: before substantive alignment, Goal and Done when must both remain —. Continue research and rewrite the whole response."
+  ! template_has_field Status || [[ "$STATUS" == "—" ]] ||
+    advise "Process-contract breach: before the evidence pass supports a proposal, Goal, Done when, and Status must all remain —. Continue research silently and rewrite the complete block."
+  if [[ -n "$next_field" ]] && ! printf '%s\n' "$MESSAGE" | table_rows 2 | awk -F'|' -v field="$next_field" '
+    $field ~ /👉 needs you:|👀/ { found=1 }
     END { exit found ? 0 : 1 }
   '; then
-    block "Process-contract breach: Goal and Done when are still —, and no human or asynchronous gate exists. A preliminary status is not a legal stop; continue the agent-owned research now, then return with an evidence-backed proposal."
+    advise "Process-contract breach: Goal and Done when are still —, and no human or asynchronous gate exists. A preliminary status is not a legal stop; continue the agent-owned research now, then return with an evidence-backed proposal."
   fi
 else
-  [[ "$FOLLOWED" != "—" && "$FOLLOWED" == *"https://"* ]] ||
-    block "Process-contract breach: a substantive proposal requires Followed to contain verified human URLs for sources actually consulted. Continue research; do not propose from an empty evidence base."
+  ! template_has_field Followed || [[ "$FOLLOWED" != "—" && "$FOLLOWED" == *"https://"* ]] ||
+    advise "Process-contract breach: a substantive proposal requires Followed to contain verified human URLs for sources actually consulted. Continue research; do not propose from an empty evidence base."
   if printf '%s\n' "$ETA_CONF" | grep -Eqi 'reviewed[[:space:]]+0|(^|[^0-9])0/[1-9][0-9]*|0[[:space:]]+sources'; then
-    block "Process-contract breach: a substantive proposal cannot report zero reviewed sources. Keep Goal, Done when, and Status as —, complete the required research pass, then propose from evidence."
+    advise "Process-contract breach: a substantive proposal cannot report zero reviewed sources. Keep Goal, Done when, and Status as —, complete the required research pass, then propose from evidence."
   fi
 
   # A Stop hook validates STRUCTURE, never ledger-completeness. Whether every
@@ -108,9 +171,9 @@ else
   # looped the agent forever. Keep only what is deterministically checkable: a
   # substantive proposal cites at least one real source.
   REVIEWED_COUNT="$(printf '%s\n' "$ETA_CONF" | grep -Eo '[0-9]+/[0-9]+[[:space:]]+(relevant[[:space:]]+)?sources' | tail -n 1 | cut -d/ -f1 || true)"
-  URL_COUNT="$(printf '%s\n' "$FOLLOWED" | grep -Eo 'https://[^| )]+' | sort -u | wc -l | tr -d ' ')"
-  if [[ -n "$REVIEWED_COUNT" && "$REVIEWED_COUNT" -gt "$URL_COUNT" ]]; then
-    block "Process-contract breach: ETA · Conf claims $REVIEWED_COUNT reviewed sources but Followed contains only $URL_COUNT distinct URLs. Add every material source actually used or correct the count."
+  URL_COUNT="$(printf '%s\n' "$FOLLOWED" | grep -Eo 'https://[^| )]+' | sort -u | wc -l | tr -d ' ' || true)"
+  if [[ -n "$FOLLOWED" && -n "$REVIEWED_COUNT" && "$REVIEWED_COUNT" -gt "$URL_COUNT" ]]; then
+    advise "Process-contract breach: ETA · Conf claims $REVIEWED_COUNT reviewed sources but Followed contains only $URL_COUNT distinct URLs. Add every material source actually used or correct the count."
   fi
 fi
 
@@ -120,7 +183,7 @@ if [[ -n "$SCRATCHPAD_DIR" && -d "$SCRATCHPAD_DIR" ]]; then
     EXPECTED_GOAL="$(jq -r '.goal' "$STATE_FILE")"
     EXPECTED_DONE="$(jq -r '.doneWhen' "$STATE_FILE")"
     if [[ "$GOAL" != "$EXPECTED_GOAL" || "$DONE_WHEN" != "$EXPECTED_DONE" ]]; then
-      block "Contract breach: Goal and Done when are frozen after proposal. Rewrite the response using exactly: Goal = $EXPECTED_GOAL ; Done when = $EXPECTED_DONE"
+      advise "Contract breach: Goal and Done when are frozen after proposal. Rewrite the response using exactly: Goal = $EXPECTED_GOAL ; Done when = $EXPECTED_DONE"
     fi
   elif [[ "$GOAL" != "—" && "$DONE_WHEN" != "—" ]]; then
     jq -cn --arg goal "$GOAL" --arg doneWhen "$DONE_WHEN" \
