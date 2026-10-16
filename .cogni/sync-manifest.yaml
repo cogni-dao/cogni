@@ -221,7 +221,8 @@ divergences:
       # re-derived by the CANONICAL generators against the mirror's own roster, never carried at
       # the mirror's stale bytes. Identity inputs are the mirror's repository variables, the same
       # `vars.*` its ci.yaml exports, so the sync and the mirror's own --check derive identically.
-      inputs_from_artifact_variables: [DOMAIN, FORK_DOMAIN_ROOT, FLEET_CONTROL_ENV]
+      inputs_from_artifact_variables:
+        [DOMAIN, FORK_DOMAIN_ROOT, FLEET_CONTROL_ENV]
       commands:
         - scripts/ci/render-scheduler-worker-endpoints.sh --write
         - scripts/ci/render-node-appset.sh --write
