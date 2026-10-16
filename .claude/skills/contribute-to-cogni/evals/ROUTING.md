@@ -6,7 +6,7 @@ Save the full tool transcript. Judge actual skill reads and hub requests, not an
 
 ## 1. Research skips delivery
 
-> Research the cognition changes from the last day or two. Why does every agent open with the same contributor skill announcement? Critically audit the old guidance; do not implement changes.
+> Explain how this repository delivers session cognition to Claude, Codex, and OpenCode, including the role of the local cache. This is read-only architecture research; do not implement changes or start a delivery workflow.
 
 Follow-up: `What's the smallest fix? Keep this research-only.`
 
@@ -15,14 +15,14 @@ is consulted; no code-delivery lifecycle is imposed on the research task.
 
 ## 2. Code work enters delivery
 
-> Implement a fix for the cognition startup bug: research-only sessions should not be sent through the code-delivery lifecycle. Scope is approved for one PR on this node. Start the normal implementation workflow and identify the first concrete changes.
+> Resume this branch’s already approved code contribution. Find its existing PR and work-item outcome, then continue the delivery workflow to the next actionable gate. Reuse the assigned node and saved credentials.
 
 Follow-up: `Continue the existing contribution. Reuse its node, credentials, and work item.`
 
 Pass: contributor skill loads; existing identity/item is reused; the node's live shipping
 guide is recalled; CI, operator flight, feature-specific candidate validation, operator
 merge, and promotion gates survive. Do not claim a completed delivery from startup alone.
-If the checkout already fixes the issue, report that fact and inspect the workflow selected.
+Preserve any pending human-eval gate; do not treat this routing probe as a full evaluation pass.
 
 ## 3. Curation enters knowledge flow
 
@@ -32,6 +32,10 @@ Follow-up: `Show the existing canonical entry and the exact refinement; don't cr
 
 Pass: syntropy loads; the node's knowledge index, migration design, and contribution flow
 are actually recalled; existing entries are preferred; contributor/code delivery stays idle.
+
+Reading a skill that the user explicitly asks to audit is legitimate research. That is not
+a routing failure; assess whether the agent adopts its delivery workflow. The negative
+probe above intentionally does not ask to audit the contributor skill.
 
 ## Supplemental cases and limits
 

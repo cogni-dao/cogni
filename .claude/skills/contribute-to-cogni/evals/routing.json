@@ -5,7 +5,7 @@
     {
       "id": 1,
       "name": "cognition-research",
-      "prompt": "Research the cognition changes from the last day or two. Why does every agent open with the same contributor skill announcement? Explain the startup trigger and critically audit the old contributor guidance; do not implement changes.",
+      "prompt": "Explain how this repository delivers session cognition to Claude, Codex, and OpenCode, including the role of the local cache. This is read-only architecture research; do not implement changes or start a delivery workflow.",
       "expected_output": "Contributor skill does not load via Skill or Read tool.",
       "files": [],
       "expectations": [
@@ -32,21 +32,17 @@
       "prompt": "Implement a fix for the cognition startup bug: research-only sessions should not be sent through the code-delivery lifecycle. Scope is approved for one PR on this node. Start the normal implementation workflow and identify the first concrete changes.",
       "expected_output": "Contributor skill loads via Skill or Read tool.",
       "files": [],
-      "expectations": [
-        "Contributor skill loads via Skill or Read tool."
-      ],
+      "expectations": ["Contributor skill loads via Skill or Read tool."],
       "contributor": true,
       "syntropy": null
     },
     {
       "id": 4,
       "name": "resume-pr",
-      "prompt": "Resume our already approved code contribution on the operator. The existing work item outcome has Goal = Fix contributor routing and Done when = Fresh sessions choose the correct workflow. There is already a PR on this branch; continue its delivery through CI and candidate validation. Begin by recalling the applicable delivery workflow.",
+      "prompt": "Resume this branch\u2019s already approved code contribution. Find its existing PR and work-item outcome, then continue the delivery workflow to the next actionable gate. Reuse the assigned node and saved credentials.",
       "expected_output": "Contributor skill loads via Skill or Read tool.",
       "files": [],
-      "expectations": [
-        "Contributor skill loads via Skill or Read tool."
-      ],
+      "expectations": ["Contributor skill loads via Skill or Read tool."],
       "contributor": true,
       "syntropy": null
     },
@@ -83,9 +79,7 @@
       "prompt": "I am contributing a bug fix to the Poly node at https://poly.cognidao.org, not the operator. The node and existing work item are already assigned and its agent key is already configured. Start the code-contribution workflow for the existing PR, keeping knowledge/work-item ownership on Poly and deployment control on the operator.",
       "expected_output": "Contributor skill loads via Skill or Read tool.",
       "files": [],
-      "expectations": [
-        "Contributor skill loads via Skill or Read tool."
-      ],
+      "expectations": ["Contributor skill loads via Skill or Read tool."],
       "contributor": true,
       "syntropy": null,
       "nonoperator": true
