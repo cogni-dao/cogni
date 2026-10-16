@@ -354,7 +354,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     // (bug.5416). Ordered ahead of the release step on purpose: this reports the PREVIOUS
     // tick's decision, so it owes nothing to this tick's work and must survive a refusal.
     this.logCompositeVerdict(input);
-    // An applied cell intentionally refuses a different release before its migration Job.
+    // An applied cell validates its admitted runtime boundary before its migration Job.
     // Once that identity guard passes, migration status never vetoes lease creation:
     // releaseMigration reports its result without throwing, including before a lease exists
     // (task.5135). A failed migration gates readiness rather than becoming a paid-lease gate.
@@ -452,6 +452,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           ? []
           : [service.env.COGNI_REPO_SHA]
       ),
+      spec: input.spec,
     });
     // The claim IS the receipt, and it is the FIRST mutation this method does: its INSERT carries
     // {nodeId, environment, compositeUid, compositeGeneration, cogniKey}. Everything below this
@@ -719,6 +720,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           ? []
           : [service.env.COGNI_REPO_SHA]
       ),
+      spec: input.spec,
     });
     // An update mints no handle and opens no escrow, so it needs no wallet slot — but it does
     // put a new revision in front of a resource that is already burning money, so it must be
@@ -969,13 +971,14 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     );
   }
 
-  /** Initial admission is immutable; ordinary releases cannot silently outgrow its protection. */
+  /** Initial admission stays immutable; app releases preserve its consumer/pool boundary. */
   private async requireQualifiedCellRelease(input: {
     cogniKey: string;
     environment: string;
     nodeId?: string;
     workload: string;
     requestedShas: readonly string[];
+    spec?: ProvisionSpec;
   }): Promise<void> {
     if (input.environment !== "production") return;
     let records: readonly AkashTxAllocationRecord[];
@@ -1015,12 +1018,69 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       !cell ||
       cell.binding.nodeSlug !== input.workload ||
       input.requestedShas.length === 0 ||
-      input.requestedShas.some((sha) => sha !== cell.targetBuildSha)
+      input.requestedShas.some((sha) => !/^[0-9a-f]{40}$/.test(sha)) ||
+      new Set(input.requestedShas).size !== 1
     )
       throw new AkashTxError(
         "identity_conflict",
-        "app release differs from qualified cell target; audited release advancement is required (task.5246)"
+        "app release lacks one unambiguous owned applied cell and source SHA"
       );
+    const pools = cell.registration?.runtimePoolLimits;
+    // Older/factory admissions without an explicit audited runtime policy keep
+    // their exact-build restriction. A historical cutover SHA is not a permanent
+    // application freeze once the manual admission supplies enforceable bounds.
+    if (!pools) {
+      if (input.requestedShas.some((sha) => sha !== cell.targetBuildSha))
+        throw new AkashTxError(
+          "identity_conflict",
+          "app release differs from qualified cell target without audited runtime bounds"
+        );
+      return;
+    }
+    if (
+      pools.replicaCount !== 1 ||
+      [pools.app, pools.service, pools.read].some(
+        (limit) => !Number.isSafeInteger(limit) || limit <= 0
+      )
+    )
+      throw new AkashTxError(
+        "identity_conflict",
+        "applied cell runtime bounds invalid"
+      );
+    if (input.spec) {
+      const consumers = input.spec.services.filter(
+        (service) =>
+          service.env?.DATABASE_URL !== undefined ||
+          service.env?.DATABASE_SERVICE_URL !== undefined
+      );
+      const consumer = consumers[0];
+      const env = consumer?.env;
+      const prefix = `{{ ${cell.binding.nodeSlug}-compute-env-secrets:`;
+      const appRef = env?.DATABASE_URL;
+      // The existing resolver owns secret values. Require the canonical owned
+      // references, rather than accepting a release's literal replacement DSNs.
+      const namespace =
+        appRef?.startsWith(prefix) && appRef.endsWith(":DATABASE_URL }}")
+          ? appRef.slice(prefix.length, -":DATABASE_URL }}".length)
+          : "";
+      if (
+        consumers.length !== 1 ||
+        !env ||
+        !/^[a-z0-9][a-z0-9-]*-production$/.test(namespace) ||
+        env.DATABASE_SERVICE_URL !==
+          `${prefix}${namespace}:DATABASE_SERVICE_URL }}` ||
+        env.DATABASE_SSL_CA_CERT !==
+          `${prefix}${namespace}:DATABASE_SSL_CA_CERT }}` ||
+        env.COGNI_REPO_SHA !== input.requestedShas[0] ||
+        env.DB_POOL_MAX !== String(pools.app) ||
+        env.DB_SERVICE_POOL_MAX !== String(pools.service) ||
+        env.DB_READ_POOL_MAX !== String(pools.read)
+      )
+        throw new AkashTxError(
+          "identity_conflict",
+          "app release changes its admitted database consumer or pool bounds"
+        );
+    }
   }
 
   /**
