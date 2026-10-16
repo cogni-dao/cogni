@@ -1124,7 +1124,8 @@ jobs:
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/candidate-flight-infra.yml/dispatches" \
-            -f ref=main -f "inputs[ref]=$SOURCE_SHA")"
+            -f ref=main -F return_run_details=true \
+            -f "inputs[ref]=$SOURCE_SHA")"
           run_id="$(jq -r '.workflow_run_id // empty' <<<"$response")"
           [[ "$run_id" =~ ^[0-9]+$ ]] || {
             echo "::error::candidate infra dispatch returned no auditable run identity"
