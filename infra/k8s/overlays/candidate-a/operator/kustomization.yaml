@@ -140,13 +140,14 @@ patches:
                   - name: DEPLOY_ENVIRONMENT
                     value: candidate-a
                   - name: AKASH_ALLOWED_PROVIDERS
-                    # bug.5356 — candidate's previous single-provider pin was zencloud
-                    # (BE), while toks4's required placement excludes BE. That made the
-                    # intersection empty and every fresh candidate auction unwinnable.
-                    # Keep candidate pinned to the audited, custom-domain-capable
-                    # providers whose permitted countries and egress CIDRs are already
-                    # declared on toks4; do not widen the geo-placement requirement.
-                    value: akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk,akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z,akash1z9nr23cgweu45g2jktfx95v7g2xp8qlsa3ys2x
+                    # task.5270 — BEHAVIOR PARITY: byte-identical to production's list, same
+                    # order. Candidate-a is where production behavior is proven, so a narrower
+                    # candidate pin (previously 3 providers, bug.5356) validated a different
+                    # auction than the one production runs. Geo placement is still enforced
+                    # per node by `required_placement_countries.<env>`, which filters bids
+                    # fail-closed. tests/ci-invariants/overlay-behavior-parity.spec.ts fails
+                    # if this value drifts from production's.
+                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm,akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk,akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z,akash19tp6w64zvdvdh26pv5lyf4f40llnqthgfy0t48,akash1z9nr23cgweu45g2jktfx95v7g2xp8qlsa3ys2x,akash1svfr9xarfkcxwdnx32nvl8cs9rfruu4nd56c4f,akash1s3hq36mpas4nmkqasn7fgwhs9968cgl3u5esnw,akash1cvcfyadrm6gcghzspyhacw924c90lwnjkhcglm,akash1rja3y2ctj3tzmesvh0zfhzzx95rfjw405hwt8d,akash1v0f04wr3tkh9uf43q9eqfd0whpfeu8qevlq99h,akash127x6cuk44ul3azferg8wy9fju686kcf6x2dhz7,akash15pkdkewzarpsx42t98vzf45h42hlq6ra8w96hr
                   # HUMAN GATE (story.5016 secret-boundary amendment 3). The PUBLIC Akash
                   # account/wallet address the actuator is authorized to spend from — pinned
                   # here as plain config because it is not a secret and must be reviewable in
