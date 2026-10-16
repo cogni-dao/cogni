@@ -20,6 +20,7 @@ export {
   agentIdentityApiLimiter,
   extractClientIp,
   publicApiLimiter,
+  type RateLimiterConfig,
   TokenBucketRateLimiter,
 } from "./rateLimiter";
 export { wrapRouteHandlerWithLogging } from "./wrapRouteHandlerWithLogging";
