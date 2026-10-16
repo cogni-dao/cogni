@@ -11,14 +11,10 @@
  * @public
  */
 
-import { withTenantScope } from "@cogni/db-client";
-import { type UserId, userActor } from "@cogni/ids";
-import { and, eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 
-import { resolveAppDb } from "@/bootstrap/container";
+import { readOwnedNode } from "@/app/_lib/owned-node-read";
 import { getServerSessionUser } from "@/lib/auth/server";
-import { nodes } from "@/shared/db/nodes";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -36,19 +32,11 @@ export default async function NodePaymentActivationPage({
   }
 
   const { id } = await params;
-  const db = resolveAppDb();
-  const rows = await withTenantScope(
-    db,
-    userActor(session.id as UserId),
-    async (tx) =>
-      tx
-        .select()
-        .from(nodes)
-        .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
-        .limit(1)
-  );
-
-  const node = rows[0];
+  const node = await readOwnedNode({
+    id,
+    userId: session.id,
+    routeId: "nodes.payments",
+  });
   if (!node) {
     notFound();
   }

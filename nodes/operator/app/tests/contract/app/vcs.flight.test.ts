@@ -17,6 +17,8 @@
 
 import { flightOperation } from "@cogni/node-contracts";
 import { TEST_SESSION_USER_1, TEST_SESSION_USER_2 } from "@tests/_fakes/ids";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -42,6 +44,7 @@ const authzState = vi.hoisted(() => ({
 }));
 
 const dbState = vi.hoisted(() => ({
+  nodeQuery: undefined as { sql: string; params: unknown[] } | undefined,
   current: {
     id: "11111111-1111-4111-8111-111111111111",
     slug: "creative",
@@ -132,14 +135,18 @@ vi.mock("@cogni/db-client", () => ({
 const mockTx = {
   select: (selection?: unknown) => ({
     from: () => ({
-      where: () => ({
-        limit: () => {
-          if (selection) {
-            return billingState.current ? [billingState.current] : [];
-          }
-          return dbState.current ? [dbState.current] : [];
-        },
-      }),
+      where: (condition: SQL) => {
+        if (!selection)
+          dbState.nodeQuery = new PgDialect().sqlToQuery(condition);
+        return {
+          limit: () => {
+            if (selection) {
+              return billingState.current ? [billingState.current] : [];
+            }
+            return dbState.current ? [dbState.current] : [];
+          },
+        };
+      },
     }),
   }),
 };
@@ -212,6 +219,7 @@ function makePreparedNodeRef(
 describe("POST /api/v1/vcs/flight", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    dbState.nodeQuery = undefined;
     authzState.decision = undefined;
     authzState.check.mockImplementation(async () => {
       if (authzState.decision === "authz_allowed") {
@@ -261,7 +269,10 @@ describe("POST /api/v1/vcs/flight", () => {
     });
   });
 
-  it("returns 202 for an already-pinned node-ref candidate flight", async () => {
+  it.each([
+    NODE_ID,
+    "creative",
+  ])("returns 202 for an already-pinned node-ref candidate flight via %s", async (nodeRef) => {
     mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
       makePreparedNodeRef()
     );
@@ -276,13 +287,19 @@ describe("POST /api/v1/vcs/flight", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            nodeRef: { nodeId: nodeRef, sourceSha: SOURCE_SHA },
           }),
         });
         expect(res.status).toBe(202);
         const body = await res.json();
         expect(flightOperation.output.safeParse(body).success).toBe(true);
         expect(body.nodeRef.slug).toBe("creative");
+        expect(body.nodeRef.nodeId).toBe(NODE_ID);
+        expect(dbState.nodeQuery?.params).toContain(nodeRef);
+        if (nodeRef === "creative") {
+          expect(dbState.nodeQuery?.sql).toContain('"nodes"."slug"');
+          expect(dbState.nodeQuery?.sql).not.toContain('"nodes"."id"');
+        }
         expect(
           mockDeployPlane.prepareNodeRefCandidateFlight
         ).toHaveBeenCalledWith({
@@ -304,7 +321,7 @@ describe("POST /api/v1/vcs/flight", () => {
           mode: "node_ref",
           outcome: "success",
           status: 202,
-          nodeId: NODE_ID,
+          targetNodeId: NODE_ID,
           slug: "creative",
           sourceSha8: SOURCE_SHA.slice(0, 8),
           dispatchStatus: "initiated",
@@ -406,7 +423,10 @@ describe("POST /api/v1/vcs/flight", () => {
     });
   });
 
-  it("allows a non-owner caller when OpenFGA grants node flight", async () => {
+  it.each([
+    NODE_ID,
+    "creative",
+  ])("allows a non-owner caller when OpenFGA grants node flight via %s", async (nodeRef) => {
     authzState.decision = "authz_allowed";
     dbState.current = {
       id: NODE_ID,
@@ -428,7 +448,7 @@ describe("POST /api/v1/vcs/flight", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            nodeRef: { nodeId: nodeRef, sourceSha: SOURCE_SHA },
           }),
         });
         expect(res.status).toBe(202);
@@ -448,7 +468,10 @@ describe("POST /api/v1/vcs/flight", () => {
     });
   });
 
-  it("rejects denied node flight before GitHub dispatch", async () => {
+  it.each([
+    NODE_ID,
+    "creative",
+  ])("rejects denied node flight before GitHub dispatch via %s", async (nodeRef) => {
     authzState.decision = "authz_denied";
     dbState.current = {
       id: NODE_ID,
@@ -464,7 +487,7 @@ describe("POST /api/v1/vcs/flight", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            nodeRef: { nodeId: nodeRef, sourceSha: SOURCE_SHA },
           }),
         });
         expect(res.status).toBe(403);
@@ -481,7 +504,7 @@ describe("POST /api/v1/vcs/flight", () => {
           outcome: "error",
           status: 403,
           errorCode: "authz_denied",
-          nodeId: NODE_ID,
+          targetNodeId: NODE_ID,
           slug: "creative",
         });
       },
@@ -517,7 +540,7 @@ describe("POST /api/v1/vcs/flight", () => {
     });
   });
 
-  it("returns classified node-ref preflight failures with request and adapter logs", async () => {
+  it("returns classified node-ref preflight failures with one terminal log", async () => {
     mockDeployPlane.prepareNodeRefCandidateFlight.mockRejectedValue(
       statusError(422, "source_missing", "sourceSha not found")
     );
@@ -538,24 +561,13 @@ describe("POST /api/v1/vcs/flight", () => {
         expect(
           mockDeployPlane.dispatchNodeRefCandidateFlight
         ).not.toHaveBeenCalled();
-        expect(mockLog.error).toHaveBeenCalledWith(
-          expect.objectContaining({
-            event: "adapter.github_repo_write.error",
-            dep: "github",
-            operation: "prepare_node_ref_candidate_flight",
-            reasonCode: "source_missing",
-            status: 422,
-            nodeId: NODE_ID,
-            slug: "creative",
-          }),
-          "adapter.github_repo_write.error"
-        );
+
         expectFlightRequestLog("warn", {
           mode: "node_ref",
           outcome: "error",
           status: 422,
           errorCode: "source_missing",
-          nodeId: NODE_ID,
+          targetNodeId: NODE_ID,
           slug: "creative",
           sourceSha8: SOURCE_SHA.slice(0, 8),
         });
@@ -587,9 +599,44 @@ describe("POST /api/v1/vcs/flight", () => {
           outcome: "error",
           status: 503,
           errorCode: "node_parent_config_missing",
-          nodeId: NODE_ID,
+          targetNodeId: NODE_ID,
           slug: "creative",
           sourceSha8: SOURCE_SHA.slice(0, 8),
+        });
+      },
+    });
+  });
+
+  it("emits only failure when the dispatch response violates the output contract", async () => {
+    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
+      makePreparedNodeRef()
+    );
+    mockDeployPlane.dispatchNodeRefCandidateFlight.mockResolvedValue({
+      dispatched: true,
+    });
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+          }),
+        });
+        expect(res.status).toBe(500);
+        expect(await res.json()).toEqual({ error: "flight_dispatch_failed" });
+        const terminals = [
+          ...mockLog.info.mock.calls,
+          ...mockLog.warn.mock.calls,
+          ...mockLog.error.mock.calls,
+        ].filter(
+          ([fields]) => fields?.event === "feature.vcs_flight.request_complete"
+        );
+        expect(terminals).toHaveLength(1);
+        expect(terminals[0]?.[0]).toMatchObject({
+          outcome: "error",
+          status: 500,
         });
       },
     });
@@ -632,7 +679,7 @@ describe("POST /api/v1/vcs/flight", () => {
           mode: "node_ref",
           outcome: "success",
           status: 202,
-          nodeId: NODE_ID,
+          targetNodeId: NODE_ID,
           slug: "creative",
           dispatchStatus: "initiated",
         });
