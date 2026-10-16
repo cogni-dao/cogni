@@ -368,6 +368,20 @@ export interface ReconcileNodeProtectionResult {
   readonly mismatches: readonly string[];
 }
 
+/**
+ * Outcome of `reconcileNodeActionsPermissions` (bug.5482): re-applies the birth-path
+ * GitHub Actions permissions (`ensureActionsEnabled`) onto an EXISTING node repo whose
+ * Actions config sits at GitHub's restrictive default — the formation step runs only at
+ * mint and has no reconcile path, so a node minted before it never runs its own PR CI
+ * (0 workflow runs → required checks never report → operator merge `not_green`).
+ */
+export interface ReconcileNodeActionsResult {
+  readonly status: "applied";
+  readonly repo: string;
+  readonly allowedActions: "all";
+  readonly defaultWorkflowPermissions: "write";
+}
+
 export interface PackageImageTagExistsInput {
   readonly owner: string;
   readonly repo: string;
@@ -4023,6 +4037,40 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * the operator App alone holds `administration:write`. It deliberately updates only the named
    * merge-queue ruleset; required checks remain owned by the independent protection policy.
    */
+  /**
+   * Re-apply birth-path GitHub Actions permissions to an existing node repo (bug.5482).
+   * Idempotent: `ensureActionsEnabled` is the SAME formation step (PUT actions/permissions
+   * `allowed_actions:"all"` + workflow `default_workflow_permissions:"write"`), so a node
+   * minted before that step — whose PR workflows therefore never start — is healed without
+   * reformation. REMOTE_SOURCE_ONLY: the parent monorepo's Actions config is admin-owned.
+   */
+  async reconcileNodeActionsPermissions(input: {
+    owner: string;
+    repo: string;
+    slug: string;
+    /** `true` when `resolveNodeRepo` collapsed this node to the parent monorepo (no catalog `source_repo`). */
+    isInRepoNode: boolean;
+  }): Promise<ReconcileNodeActionsResult> {
+    const { owner, repo, slug, isInRepoNode } = input;
+    if (isInRepoNode) {
+      throw deployPlaneError(
+        "in_repo_node_unsupported",
+        `node '${slug}' is an in-repo node (no catalog source_repo); ` +
+          "reconcileNodeActionsPermissions only supports remote-source (forked) node repos — " +
+          "the parent monorepo's Actions config is admin-owned, not the node formation default",
+        422
+      );
+    }
+    const octokit = await this.getOctokit(owner, repo);
+    await this.ensureActionsEnabled(octokit, owner, repo);
+    return {
+      status: "applied",
+      repo: `${owner}/${repo}`,
+      allowedActions: "all",
+      defaultWorkflowPermissions: "write",
+    };
+  }
+
   async reconcileMergeQueuePolicy(input: {
     policyOwner: string;
     policyRepo: string;
