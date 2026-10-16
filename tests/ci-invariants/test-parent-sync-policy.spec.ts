@@ -133,11 +133,13 @@ describe("test-parent divergence policy", () => {
       "scripts/ci/render-node-appset.sh --write",
       "scripts/ci/render-node-overlays.sh --write",
     ]);
-    expect(policy.regenerate.inputsFromArtifactVariables).toEqual([
-      "DOMAIN",
-      "FORK_DOMAIN_ROOT",
-      "FLEET_CONTROL_ENV",
-    ]);
+    // task.5270 — identity is DECLARED on the artifact entry; the sync never reads repo
+    // variables, so the writer App keeps 1:1 permission parity with the production operator App.
+    expect(policy.regenerate.identity).toEqual({
+      DOMAIN: "cogni-testing.org",
+      FORK_DOMAIN_ROOT: "cognidao.org",
+      FLEET_CONTROL_ENV: "candidate-a",
+    });
     // A generated file inside a must-match directory stays content-free (re-derived per roster).
     expect(
       policy.isArtifactOnlyDeclared(

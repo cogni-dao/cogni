@@ -24,7 +24,7 @@
  *   - GENERATED_IS_REDERIVED: roster-generated files are never carried forward at the mirror's
  *     stale bytes. The manifest's declared `regenerate.commands` (the CANONICAL render-*.sh
  *     generators, unchanged) re-run against the mirror's OWN roster, with the mirror's identity
- *     inputs read from its repository variables — the same values its CI exports. A generator that
+ *     inputs declared on its manifest artifact entry — the same values its CI exports. A generator that
  *     touches a path the policy does not let the mirror own fails the sync instead of forking it.
  * Side-effects: IO (clones the mirror into a temp dir; pushes one branch and opens or updates one PR as the operator GitHub App)
  * Notes: git does the tree work (read-tree/checkout/commit-tree) — this file only decides WHICH
@@ -84,45 +84,16 @@ const api = async (path, init = {}) => {
 };
 
 /**
- * GENERATED_IS_REDERIVED. Identity inputs come from the mirror's repository variables (its CI's
- * `vars.*`); an unset variable stays unset so each generator applies the same default CI does.
- * Without a token (local --dry-run) the caller's environment supplies them.
+ * GENERATED_IS_REDERIVED. Identity inputs are the artifact entry's declared `identity` in the
+ * manifest (its CI's vars.*), never read from the repository API: the writer App keeps 1:1
+ * permission parity with the production operator App, which has no Variables access (task.5270).
  */
-const artifactVariables = async (repo, names) => {
-  const env = {};
-  for (const name of names) {
-    if (!TOKEN) {
-      if (process.env[name] !== undefined) env[name] = process.env[name];
-      continue;
-    }
-    const res = await fetch(
-      `https://api.github.com/repos/${repo}/actions/variables/${name}`,
-      {
-        headers: {
-          accept: "application/vnd.github+json",
-          authorization: `Bearer ${TOKEN}`,
-        },
-      }
-    );
-    if (res.status === 404) continue;
-    if (!res.ok)
-      throw new Error(
-        `cannot read ${repo} variable ${name}: ${res.status} (the sync needs actions variables: read)`
-      );
-    env[name] = (await res.json()).value;
-  }
-  return env;
-};
-
-const regenerate = async (clone, policy, repo) => {
-  const { commands, inputsFromArtifactVariables } = policy.regenerate;
+const regenerate = (clone, policy, repo) => {
+  const { commands, identity } = policy.regenerate;
   if (commands.length === 0) return;
-  const inputs = await artifactVariables(repo, inputsFromArtifactVariables);
-  const env = { ...process.env, GITHUB_REPOSITORY: repo };
-  for (const name of inputsFromArtifactVariables) delete env[name];
-  Object.assign(env, inputs);
+  const env = { ...process.env, ...identity, GITHUB_REPOSITORY: repo };
   console.log(
-    `  regenerate inputs   ${Object.entries(inputs)
+    `  regenerate inputs   ${Object.entries(identity)
       .map(([k, v]) => `${k}=${v}`)
       .join(" ")}`
   );
@@ -247,7 +218,7 @@ const main = async () => {
       ]);
     }
 
-    await regenerate(clone, policy, target.repo);
+    regenerate(clone, policy, target.repo);
 
     const tree = git(clone, ["write-tree"]).trim();
     if (tree === git(clone, ["rev-parse", `${mirrorSha}^{tree}`]).trim()) {
