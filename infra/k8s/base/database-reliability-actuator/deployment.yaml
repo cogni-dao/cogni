@@ -109,7 +109,7 @@ metadata:
     app.kubernetes.io/name: database-reliability-readmitter
     app.kubernetes.io/part-of: cogni
 spec:
-  replicas: 1
+  replicas: 0
   strategy: { type: Recreate }
   selector:
     matchLabels:
