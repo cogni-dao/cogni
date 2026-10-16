@@ -27,6 +27,13 @@ const envState = vi.hoisted(() => ({
   DOLTHUB_OWNER: "cogni-dao" as string | undefined,
 }));
 
+const mockNodeLog = vi.hoisted(() => ({
+  child: vi.fn().mockReturnThis(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
 const mockGetServerSessionUser = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/auth/server", () => ({
@@ -40,6 +47,10 @@ vi.mock("@/shared/env", () => ({
 
 vi.mock("@/bootstrap/container", () => ({
   resolveAppDb: () => ({}),
+  getContainer: () => ({
+    log: mockNodeLog,
+    clock: { now: () => new Date().toISOString() },
+  }),
 }));
 
 vi.mock("@cogni/db-client", () => ({
@@ -70,20 +81,24 @@ describe("GET /api/v1/nodes/[id]/launch-pack", () => {
     envState.DOLTHUB_OWNER = "cogni-dao";
   });
 
-  it("returns the launch pack with node repo, parent PR, scorecard prompt, and candidate URL", async () => {
+  it.each([
+    "11111111-1111-4111-8111-111111111111",
+    "atlas",
+  ])("returns the canonical launch pack via %s", async (id) => {
     const response = await GET(
       new Request(
         "https://test.cognidao.org/api/v1/nodes/11111111-1111-4111-8111-111111111111/launch-pack"
       ),
       {
         params: Promise.resolve({
-          id: "11111111-1111-4111-8111-111111111111",
+          id,
         }),
       }
     );
     const body = await response.json();
 
     expect(response.status).toBe(200);
+    expect(body.nodeId).toBe("11111111-1111-4111-8111-111111111111");
     expect(body.nodeRepoUrl).toBe("https://github.com/Cogni-DAO/atlas");
     expect(body.knowledgeRepoUrl).toBe(
       "https://www.dolthub.com/repositories/cogni-dao/atlas"

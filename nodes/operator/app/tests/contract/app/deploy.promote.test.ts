@@ -20,6 +20,8 @@
  */
 
 import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -47,6 +49,7 @@ const dbState = vi.hoisted(() => ({
   } | null,
   billing: { id: "billing-1" } as { id: string } | null,
   call: 0,
+  nodeQuery: undefined as { sql: string; params: unknown[] } | undefined,
 }));
 const mockGetSessionUser = vi.hoisted(() => vi.fn());
 const envState = vi.hoisted(() => ({
@@ -64,11 +67,14 @@ const mockLog = vi.hoisted(() => ({
 const mockTx = {
   select: () => ({
     from: () => ({
-      where: () => ({
+      where: (condition: SQL) => ({
         limit: () => {
           const first = dbState.call === 0;
           dbState.call += 1;
-          if (first) return dbState.node ? [dbState.node] : [];
+          if (first) {
+            dbState.nodeQuery = new PgDialect().sqlToQuery(condition);
+            return dbState.node ? [dbState.node] : [];
+          }
           return dbState.billing ? [dbState.billing] : [];
         },
       }),
@@ -146,6 +152,7 @@ describe("POST /api/v1/deploy/promote", () => {
     dbState.node = { id: NODE_ID, slug: "sigh" };
     dbState.billing = { id: "billing-1" };
     dbState.call = 0;
+    dbState.nodeQuery = undefined;
     envState.NODE_SUBMODULE_PARENT_OWNER = "test-owner";
     envState.NODE_SUBMODULE_PARENT_REPO = "test-repo";
     authzState.decision = "authz_allowed";
@@ -178,6 +185,27 @@ describe("POST /api/v1/deploy/promote", () => {
     });
   });
 
+  it("records one bounded terminal failure when authorization throws", async () => {
+    authzState.check.mockRejectedValue(new Error("private authz diagnostic"));
+    const res = await post({ nodeId: NODE_ID, env: "production" });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "promotion_failed" });
+    expect(mockLog.info).toHaveBeenCalledTimes(1);
+    expect(mockLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_promote.complete",
+        targetNodeId: NODE_ID,
+        errorCode: "unhandled",
+        status: 500,
+      }),
+      expect.any(String)
+    );
+    expect(JSON.stringify(mockLog.info.mock.calls)).not.toContain(
+      "private authz diagnostic"
+    );
+    expect(mockDeployPlane.promoteNodeFromPreview).not.toHaveBeenCalled();
+  });
+
   it("returns 401 when unauthenticated", async () => {
     mockGetSessionUser.mockResolvedValue(null);
     const res = await post({ nodeId: NODE_ID, env: "production" });
@@ -191,9 +219,12 @@ describe("POST /api/v1/deploy/promote", () => {
     expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
   });
 
-  it("returns 404 when the node does not exist", async () => {
+  it.each([
+    NODE_ID,
+    "sigh",
+  ])("returns 404 when the node does not exist via %s", async (nodeRef) => {
     dbState.node = null;
-    const res = await post({ nodeId: NODE_ID, env: "production" });
+    const res = await post({ nodeId: nodeRef, env: "production" });
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "node_not_found" });
   });
@@ -206,9 +237,12 @@ describe("POST /api/v1/deploy/promote", () => {
     expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
   });
 
-  it("returns 403 authz_denied and does NOT dispatch (deny-by-default)", async () => {
+  it.each([
+    NODE_ID,
+    "sigh",
+  ])("returns 403 authz_denied and does NOT dispatch (deny-by-default) via %s", async (nodeRef) => {
     authzState.decision = "authz_denied";
-    const res = await post({ nodeId: NODE_ID, env: "production" });
+    const res = await post({ nodeId: nodeRef, env: "production" });
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "authz_denied" });
     expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
@@ -226,9 +260,20 @@ describe("POST /api/v1/deploy/promote", () => {
     expect(mockDeployPlane.promoteNodeFromPreview).not.toHaveBeenCalled();
   });
 
-  it("returns 200 and dispatches the guarded preview-forward path when no sourceSha", async () => {
-    const res = await post({ nodeId: NODE_ID, env: "production" });
+  it.each([
+    NODE_ID,
+    "sigh",
+  ])("returns 200 and dispatches the guarded preview-forward path when no sourceSha via %s", async (nodeRef) => {
+    const res = await post({ nodeId: nodeRef, env: "production" });
     expect(res.status).toBe(200);
+    expect(authzState.check).toHaveBeenCalledWith(
+      expect.objectContaining({ resource: `node:${NODE_ID}` })
+    );
+    expect(dbState.nodeQuery?.params).toContain(nodeRef);
+    if (nodeRef === "sigh") {
+      expect(dbState.nodeQuery?.sql).toContain('"nodes"."slug"');
+      expect(dbState.nodeQuery?.sql).not.toContain('"nodes"."id"');
+    }
     expect(mockDeployPlane.promoteNodeFromPreview).toHaveBeenCalledWith(
       expect.objectContaining({
         parentOwner: "test-owner",
