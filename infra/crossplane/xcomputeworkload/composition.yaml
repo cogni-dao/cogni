@@ -520,6 +520,21 @@ spec:
             {{- $serving := dig "serving" false $resp }}
             {{- $active := and $found (eq $state "active") }}
             {{- $closed := and $found (eq $state "closed") }}
+            {{- /* HOST_ADMITTED_BY_THE_CANDIDATE (story.5038 K2, 2026-10-16). `serving` is a
+              host-routed probe against the candidate's endpoint presenting Host: <publicHost>.
+              When the candidate and the incumbent sit on the SAME provider and run the SAME
+              SHA, the provider's shared ingress answers that probe from the INCUMBENT's host
+              rule, so `serving` is true for a candidate whose own host rule the provider never
+              admitted. Measured: spawny-boi gen-7 serving=true with endpoints
+              [dkb00v1l...ingress.zencloud.eu] only; DNS moved to it, gen-6 closed, and the
+              public host went nginx 404. A provider lists every host it admitted for a lease
+              among that lease's endpoints (every serving lease in the fleet does; gen-6 listed
+              spawny-boi-test.cogni-testing.org). So a lease proves it can take public traffic
+              only when its OWN endpoints carry the public host. */ -}}
+            {{- $hostAdmitted := eq $publicHost "" }}
+            {{- range $endpoints }}
+            {{- if eq (regexReplaceAll "^[A-Za-z][A-Za-z0-9+.-]*://" . "" | splitList "/" | first | splitList ":" | first | lower | trimSuffix ".") $publicHost }}{{ $hostAdmitted = true }}{{ end }}
+            {{- end }}
 
             {{- /*
               BOUNDED RECOVERY (bug.5287). A settled key is deliberately never re-spent by the
@@ -790,7 +805,7 @@ spec:
             {{- $effectiveDnsTarget := $dnsTarget }}
             {{- if eq $dnsTarget "" }}
             {{- $effectiveDnsTarget = $prevDnsTarget }}
-            {{- else if and (ne $prevDnsTarget "") (ne $dnsTarget $prevDnsTarget) (not (and $active $serving)) }}
+            {{- else if and (ne $prevDnsTarget "") (ne $dnsTarget $prevDnsTarget) (not (and $active $serving $hostAdmitted)) }}
             {{- $effectiveDnsTarget = $prevDnsTarget }}
             {{- end }}
             {{- $dnsRecordType := "CNAME" }}
@@ -1260,8 +1275,10 @@ spec:
                 outgoing child stops rendering and closes. A stalled Cloudflare write therefore
                 leaks a retained lease (bounded, visible, costed) instead of dropping traffic.
                 A workload with no spec.dns has no edge to move: its lease endpoint IS its public
-                route, so `active && serving` remains the proof there. */}}
-              {{- if and $active $serving $edgeCutoverObserved }}
+                route, so `active && serving` remains the proof there.
+                $hostAdmitted (story.5038 K2): the candidate's OWN endpoints must carry the public
+                host, or a shared-ingress answer from the incumbent passes as the candidate's. */}}
+              {{- if and $active $serving $hostAdmitted $edgeCutoverObserved }}
               activeLeaseGeneration: {{ $leaseGeneration }}
               {{- else if ge $activeLeaseGeneration 0 }}
               activeLeaseGeneration: {{ $activeLeaseGeneration }}

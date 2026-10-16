@@ -5,8 +5,9 @@
 /**
  * Module: `@scripts/ci/lib/sync-policy`
  * Purpose: The ONE reader of `.cogni/sync-manifest.yaml`'s divergence policy — compiles a repo's
- *   `exclude`/`omit_from_artifact`/`artifact_only`/`content_may_differ` globs into a single
- *   decision function that classifies any path as mirrored, content-free, hub-only or artifact-only.
+ *   `exclude`/`omit_from_artifact`/`artifact_only`/`content_may_differ`/`content_must_match` globs
+ *   into a single decision function that classifies any path as mirrored, content-free, hub-only or
+ *   artifact-only, and exposes the declared `regenerate` step.
  * Scope: Pure policy shared by detect-sync-drift.mjs and sync-test-parent.mjs; does not do IO beyond reading the manifest and owns no network or git behaviour.
  * Invariants:
  *   - DEFAULT_DENY_DIVERGENCE (spec.repo-sync-contract): a path is mirrored 1:1 unless a declared
@@ -15,6 +16,10 @@
  *     it re-requires the control-plane paths nested inside a broad roster omission, and it
  *     suppresses the CONTENT check only. Absence is still drift, which is what keeps a generated
  *     canonical path from going silently missing.
+ *   - CONTENT_MUST_MATCH_BEATS_ROSTER_GLOBS: `content_must_match` re-requires canonical BYTES for
+ *     platform wiring nested inside a broad roster glob (`omit_from_artifact` /`artifact_only`),
+ *     so it is mirrored 1:1 and is never kept at a deployment's stale copy. Only the more specific
+ *     `content_may_differ` outranks it (a generated file inside a must-match directory).
  * Side-effects: IO (reads the manifest file passed in).
  * Links: .cogni/sync-manifest.yaml, .cogni/sync-manifest.schema.json, docs/spec/repo-sync-contract.md
  * @public
@@ -74,6 +79,7 @@ export const readManifest = (manifestPath) =>
  *   - `excluded(path)`      — global junk; invisible to both sides.
  *   - `hubDisposition(path)`— for a hub path: `mirror` | `content_free` | `hub_only`.
  *   - `isArtifactOnlyDeclared(path)` — for an artifact path the hub does not require.
+ *   - `regenerate`          — `{commands, identity}` the sync re-runs, with the artifact's identity.
  *   - `onMissing`           — `report` (drift is data) or `fail` (exit non-zero).
  *   - `role`                — `fork` | `test-parent`.
  */
@@ -88,6 +94,9 @@ export const compileArtifactPolicy = (manifest, repo) => {
   const omitRes = compile(divergence.omit_from_artifact);
   const onlyRes = compile(divergence.artifact_only);
   const contentFreeRes = compile(divergence.content_may_differ);
+  const mustMatchRes = compile(divergence.content_must_match);
+  const mustMatch = (path) =>
+    matches(path, mustMatchRes) && !matches(path, contentFreeRes);
 
   return {
     repo,
@@ -96,12 +105,19 @@ export const compileArtifactPolicy = (manifest, repo) => {
     onMissing: spec.on_missing ?? "report",
     reason: divergence.reason ?? null,
     excluded: (path) => matches(path, excludeRes),
-    /** CONTENT_MAY_DIFFER_WINS is encoded here and nowhere else. */
+    /** CONTENT_MAY_DIFFER_WINS and CONTENT_MUST_MATCH_BEATS_ROSTER_GLOBS are encoded here and nowhere else. */
     hubDisposition: (path) => {
       if (matches(path, contentFreeRes)) return "content_free";
+      if (mustMatch(path)) return "mirror";
       if (matches(path, omitRes)) return "hub_only";
       return "mirror";
     },
-    isArtifactOnlyDeclared: (path) => matches(path, onlyRes),
+    isArtifactOnlyDeclared: (path) =>
+      !mustMatch(path) && matches(path, onlyRes),
+    /** Canonical generators re-run against the artifact's own roster (sync only). */
+    regenerate: {
+      commands: divergence.regenerate?.commands ?? [],
+      identity: spec.identity ?? {},
+    },
   };
 };
