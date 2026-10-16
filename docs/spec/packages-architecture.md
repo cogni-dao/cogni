@@ -9,7 +9,7 @@ summary: Internal @cogni/* packages — pure TypeScript libraries with strict is
 read_when: Creating a new package, debugging package builds, or working with @cogni/* imports.
 owner: derekg1729
 created: 2026-02-06
-verified: 2026-04-28
+verified: 2026-10-15
 tags: [infra, meta]
 ---
 
@@ -29,7 +29,7 @@ Provide a shared-library layer (`@cogni/*` workspace packages) with strict isola
 
 - Deployable services with process lifecycle (those belong in `services/`)
 - Feature-specific UI (feature wrappers, layouts, route components — those belong in `src/features/` or `src/components/kit/`)
-- Published npm packages (all packages are `private: true` workspace-only)
+- Publishing operator-workspace `@cogni/*` packages by default. Fork-facing packages are separately owned and released under the [canonical shared-package contract](https://cognidao.org/knowledge/publish-shared-runtime-core).
 
 **Carve-out for baseline UI primitive packages.** A package MAY contain framework-agnostic vendored UI primitives (e.g. shadcn/Radix wrappers, reui table kit) when **all** of the following hold:
 
