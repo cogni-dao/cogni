@@ -21,6 +21,11 @@
  *     opening a second one.
  *   - NO_SECRET_VALUES: `infra/k8s/secrets/{production,staging}/**` is declared hub-only, so hub
  *     secret material is never written into the mirror's tree by construction, not by convention.
+ *   - GENERATED_IS_REDERIVED: roster-generated files are never carried forward at the mirror's
+ *     stale bytes. The manifest's declared `regenerate.commands` (the CANONICAL render-*.sh
+ *     generators, unchanged) re-run against the mirror's OWN roster, with the mirror's identity
+ *     inputs read from its repository variables — the same values its CI exports. A generator that
+ *     touches a path the policy does not let the mirror own fails the sync instead of forking it.
  * Side-effects: IO (clones the mirror into a temp dir; pushes one branch and opens or updates one PR as the operator GitHub App)
  * Notes: git does the tree work (read-tree/checkout/commit-tree) — this file only decides WHICH
  *   paths, from the manifest. No bespoke tree-building, no merge-strategy plugin.
@@ -76,6 +81,75 @@ const api = async (path, init = {}) => {
       `${init.method ?? "GET"} ${path} → ${res.status}: ${body.slice(0, 400)}`
     );
   return body ? JSON.parse(body) : {};
+};
+
+/**
+ * GENERATED_IS_REDERIVED. Identity inputs come from the mirror's repository variables (its CI's
+ * `vars.*`); an unset variable stays unset so each generator applies the same default CI does.
+ * Without a token (local --dry-run) the caller's environment supplies them.
+ */
+const artifactVariables = async (repo, names) => {
+  const env = {};
+  for (const name of names) {
+    if (!TOKEN) {
+      if (process.env[name] !== undefined) env[name] = process.env[name];
+      continue;
+    }
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/actions/variables/${name}`,
+      {
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${TOKEN}`,
+        },
+      }
+    );
+    if (res.status === 404) continue;
+    if (!res.ok)
+      throw new Error(
+        `cannot read ${repo} variable ${name}: ${res.status} (the sync needs actions variables: read)`
+      );
+    env[name] = (await res.json()).value;
+  }
+  return env;
+};
+
+const regenerate = async (clone, policy, repo) => {
+  const { commands, inputsFromArtifactVariables } = policy.regenerate;
+  if (commands.length === 0) return;
+  const inputs = await artifactVariables(repo, inputsFromArtifactVariables);
+  const env = { ...process.env, GITHUB_REPOSITORY: repo };
+  for (const name of inputsFromArtifactVariables) delete env[name];
+  Object.assign(env, inputs);
+  console.log(
+    `  regenerate inputs   ${Object.entries(inputs)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(" ")}`
+  );
+  for (const command of commands) {
+    const [script, ...args] = command.split(/\s+/);
+    execFileSync("bash", [script, ...args], {
+      cwd: clone,
+      env,
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+  }
+  // Worktree vs the assembled INDEX only — what the generators wrote, not the whole sync diff.
+  const changed = [
+    ...git(clone, ["diff", "--name-only"]).split("\n"),
+    ...git(clone, ["ls-files", "--others", "--exclude-standard"]).split("\n"),
+  ].filter(Boolean);
+  const foreign = changed.filter(
+    (path) =>
+      policy.hubDisposition(path) !== "content_free" &&
+      !policy.isArtifactOnlyDeclared(path)
+  );
+  if (foreign.length)
+    throw new Error(
+      `regenerate wrote ${foreign.length} path(s) the mirror may not own: ${foreign.slice(0, 10).join(", ")}`
+    );
+  git(clone, ["add", "-A", "--", "."]);
+  console.log(`  regenerated          ${changed.length} path(s)`);
 };
 
 const main = async () => {
@@ -156,8 +230,10 @@ const main = async () => {
         git(clone, [...args, "--", ...paths.slice(i, i + 200)]);
       }
     };
+    // Not --cached: the generators below read the WORKTREE, so a hub-only roster row left on
+    // disk would leak the production fleet into the mirror's rendered desired state.
     if (dropFromHub.length)
-      applyPaths(["rm", "-rq", "--cached", "--ignore-unmatch"], dropFromHub);
+      applyPaths(["rm", "-rqf", "--ignore-unmatch"], dropFromHub);
     if (keepFromMirror.length)
       applyPaths(["checkout", mirrorSha], keepFromMirror);
     for (const path of gitlinks) {
@@ -170,6 +246,8 @@ const main = async () => {
         `160000,${sha},${path}`,
       ]);
     }
+
+    await regenerate(clone, policy, target.repo);
 
     const tree = git(clone, ["write-tree"]).trim();
     if (tree === git(clone, ["rev-parse", `${mirrorSha}^{tree}`]).trim()) {
