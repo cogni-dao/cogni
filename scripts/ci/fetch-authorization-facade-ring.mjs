@@ -1,8 +1,16 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Fetch one raw authority ring into a same-process stdout pipe; never persist or log it. */
+/**
+ * Module: `@scripts/ci/fetch-authorization-facade-ring`
+ * Purpose: Fetch one raw authority ring into a same-process stdout pipe without persisting or logging it.
+ * Scope: Exchanges GitHub OIDC at the fleet-control projection route and validates one lane/node ring.
+ * Invariants: RAW_CREDENTIAL_PIPE_ONLY; STRICT_ORIGIN; BOUNDED_RESPONSE; FAIL_CLOSED.
+ * Side-effects: IO (GitHub OIDC and HTTPS projection requests; validated secret ring on stdout)
+ * Links: task.5228, .github/workflows/authorization-facade-credential-project.yml
+ * @internal
+ */
 
 const audience = "cogni-authorization-facade-projection";
 const controlUrl = process.env.AUTHORIZATION_FACADE_CONTROL_URL;
