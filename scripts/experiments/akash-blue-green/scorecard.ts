@@ -115,7 +115,21 @@ export function scoreRelease(
   opts: { requireRollback?: boolean } & Partial<typeof SCORECARD_DEFAULTS> = {}
 ): Scorecard {
   const cfg = { ...SCORECARD_DEFAULTS, ...opts };
-  const samples = [...samplesIn].sort((a, b) => a.at.localeCompare(b.at));
+  // The allowed SHA set is the evidence's {incumbent, release}, not whatever the probe was
+  // started with (the release SHA is often unknown when probing must begin).
+  const allowed = new Set([ev.incumbentSha, ev.releaseSha]);
+  const samples = [...samplesIn]
+    .map((s): ProbeSample => {
+      if (s.failure === "wrong_sha" && s.sha && allowed.has(s.sha)) {
+        const { failure: _f, ...rest } = s;
+        return { ...rest, ok: true };
+      }
+      if (s.ok && s.sha && !allowed.has(s.sha)) {
+        return { ...s, ok: false, failure: "wrong_sha" };
+      }
+      return s;
+    })
+    .sort((a, b) => a.at.localeCompare(b.at));
   const summary = summarize(samples);
   const checks: Check[] = [];
 

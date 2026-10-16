@@ -276,6 +276,19 @@ describe("scoreRelease", () => {
     );
   });
 
+  it("re-derives SHA verdicts from the evidence's incumbent+release set", () => {
+    const samples = goodSamples().map((s) =>
+      s.sha === NEW ? { ...s, ok: false, failure: "wrong_sha" as const } : s
+    );
+    expect(scoreRelease(samples, goodEvidence()).pass).toBe(true);
+    const stray = goodSamples();
+    stray[100] = { ...stray[100], sha: "c".repeat(40) } as ProbeSample;
+    const card = scoreRelease(stray, goodEvidence());
+    expect(card.checks.find((c) => c.id === "P6_zero_wrong_sha")?.ok).toBe(
+      false
+    );
+  });
+
   it("fails when the probe did not cover the window", () => {
     const card = scoreRelease(goodSamples().slice(200), goodEvidence());
     expect(card.checks.find((c) => c.id === "P9_probe_covers_window")?.ok).toBe(
