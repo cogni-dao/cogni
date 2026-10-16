@@ -280,5 +280,5 @@ If you're already signed in (e.g. via wallet), you can link an OAuth provider fr
 ## Related
 
 - [Authentication Spec](../spec/authentication.md) — full auth flow design, invariants, session model
-- [Identity Model](../spec/identity-model.md) — `user_id`, `user_bindings`, identity primitives
+- [Human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard) — local identities and evidenced bindings
 - [Developer Setup](./developer-setup.md) — general env setup

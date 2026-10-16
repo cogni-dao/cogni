@@ -227,5 +227,5 @@ Apply this to the in-flight `activate(nodeId)` PR.
 ## Related
 
 - [design.node-payments-activation](./node-payments-activation.md) — operator self-activation + $2 e2e (this generalizes it)
-- [agent-registry.md](../spec/agent-registry.md) · [tenant-connections.md](../spec/tenant-connections.md) · [operator-wallet.md](../spec/operator-wallet.md) · [node-formation.md](../spec/node-formation.md) · [identity-model.md](../spec/identity-model.md)
+- [agent-registry.md](../spec/agent-registry.md) · [tenant-connections.md](../spec/tenant-connections.md) · [operator-wallet.md](../spec/operator-wallet.md) · [node-formation.md](../spec/node-formation.md) · [human–AI identity](https://cognidao.org/knowledge/human-ai-identity-standard)
 - `packages/operator-wallet/*` · `nodes/operator/app/src/features/payments/*` · `scripts/{provision-operator-wallet,deploy-split}.ts`

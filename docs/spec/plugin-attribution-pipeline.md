@@ -27,7 +27,7 @@ tags: [governance, attribution, plugins, architecture]
 | **Spec**     | [attribution-ledger](./attribution-ledger.md)                                             | Core domain: store port, hashing, statement math |
 | **Spec**     | [packages-architecture](./packages-architecture.md)                                       | Package boundary rules                           |
 | **Research** | [attribution-scoring-design](../research/attribution-scoring-design.md)                   | LLM evaluation design, quarterly review model    |
-| **Spec**     | [identity-model](./identity-model.md)                                                     | actor_id future evolution (orthogonal)           |
+| **Standard** | [human–AI identity](https://cognidao.org/knowledge/human-ai-identity-standard)            | actor_id and beneficiary evolution (orthogonal)  |
 
 ## Design
 
@@ -404,7 +404,7 @@ Provide a plugin architecture for the attribution pipeline that supports three u
 
 ## Non-Goals
 
-- **`actor_id` integration** — The pipeline dispatches plugins and produces `ReceiptUnitWeight[]` (per-receipt, not per-user). Claimant resolution via `epoch_receipt_claimants` already supports identity-keyed claimants. When `actor_id` lands (see [identity-model spec](./identity-model.md)), claimant keys can resolve to actor-backed subjects. Orthogonal concern.
+- **`actor_id` integration** — The pipeline dispatches plugins and produces `ReceiptUnitWeight[]` (per-receipt, not per-user). Claimant resolution via `epoch_receipt_claimants` already supports identity-keyed claimants. Claimant keys can resolve to actor-backed subjects without changing plugin dispatch; see the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard). Orthogonal concern.
 - **Quarterly review evaluation payload design** — The people-centric assessment model (what the LLM evaluates, what governance inputs look like) requires a dedicated research spike. This spec defines how quarterly review _dispatches_ via a different profile, not what the enricher _produces_.
 - **Source adapter plugin interface** — Already defined in [attribution-ledger spec](./attribution-ledger.md#source-adapter-interface). Source adapters are a separate plugin surface.
 - **LLM evaluation prompt engineering** — Implementation detail of the `cogni.ai_scores.v0` enricher adapter, not a pipeline architecture concern.
@@ -492,5 +492,5 @@ Provide a plugin architecture for the attribution pipeline that supports three u
 - [Attribution Ledger Spec](./attribution-ledger.md) — Core domain invariants, evaluation lifecycle, store port
 - [Packages Architecture](./packages-architecture.md) — Package boundary rules (NO_SRC_IMPORTS, PURE_LIBRARY)
 - [Attribution Scoring Design](../research/attribution-scoring-design.md) — LLM evaluation design, quarterly review model, retrospective value
-- [Identity Model](./identity-model.md) — `actor_id` future evolution (orthogonal to plugin dispatch)
+- [Human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard) — `actor_id` and beneficiary evolution (orthogonal to plugin dispatch)
 - [proj.transparent-credit-payouts](../../work/projects/proj.transparent-credit-payouts.md) — Project roadmap

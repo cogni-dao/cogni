@@ -144,7 +144,7 @@ type AuthzDecision =
 ## As-Built Specs
 
 - [RBAC Spec](../../docs/spec/rbac.md) — Core invariants, actor model, OpenFGA schema, design decisions
-- [Identity Model](../../docs/spec/identity-model.md) — Runtime `actorId`/`tenantId` distinction from DB identity keys
+- [Human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard) — runtime actor, subject, tenant, and credential distinctions
 - [Authentication](../../docs/spec/authentication.md) — Browser session and HMAC bearer-token identity resolution
 - [Browser Session Flight Auth](../../docs/guides/browser-session-flight-auth.md) — Creator/admin approval and bearer-token nodeRef flight procedure
 

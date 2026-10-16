@@ -15,7 +15,7 @@ spec_refs:
   - substrate-temporal
   - temporal-patterns
   - multi-node-tenancy
-  - identity-model-spec
+  - https://cognidao.org/knowledge/human-ai-identity-standard
 work_items:
   - story.5023
 ---
