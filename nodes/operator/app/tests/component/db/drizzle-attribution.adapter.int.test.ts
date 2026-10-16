@@ -3,9 +3,9 @@
 
 /**
  * Module: `@tests/component/db/drizzle-attribution.adapter.int`
- * Purpose: Component tests for DrizzleAttributionAdapter against real PostgreSQL via testcontainers.
- * Scope: Verifies adapter + DB triggers (RECEIPT_APPEND_ONLY, SELECTION_FREEZE_ON_FINALIZE, ONE_OPEN_EPOCH, RECEIPT_IDEMPOTENT). Does not test domain logic or routes.
- * Invariants: RECEIPT_APPEND_ONLY, RECEIPT_IDEMPOTENT, SELECTION_FREEZE_ON_FINALIZE, ONE_OPEN_EPOCH, SCOPE_GATED_QUERIES
+ * Purpose: Component tests for attribution persistence and its production fold against real PostgreSQL via testcontainers.
+ * Scope: Verifies adapter, DB triggers, and actor liability/settlement composition; does not test HTTP routes.
+ * Invariants: RECEIPT_APPEND_ONLY, RECEIPT_IDEMPOTENT, SELECTION_FREEZE_ON_FINALIZE, ONE_OPEN_EPOCH, SCOPE_GATED_QUERIES, LATE_BENEFICIARY_SETTLES
  * Side-effects: IO (database operations via testcontainers)
  * Links: packages/db-client/src/adapters/drizzle-attribution.adapter.ts, packages/attribution-ledger/src/store.ts
  * @public
@@ -16,6 +16,7 @@ import {
   EpochNotInReviewError,
   EpochNotOpenError,
 } from "@cogni/attribution-ledger";
+import { buildActorCumulativeFold } from "@cogni/attribution-pipeline-plugins";
 import {
   DrizzleAttributionAdapter,
   DrizzleClaimantWalletResolver,
@@ -2083,37 +2084,39 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         resolvedBeneficiaryActorId: null,
         tokenAmount: null,
       });
-      const unresolvedWalletResolution =
-        await new DrizzleClaimantWalletResolver(db).resolveBeneficiaryWallets([
-          persisted,
-        ]);
-      expect(unresolvedWalletResolution).toEqual([
+      const walletResolver = new DrizzleClaimantWalletResolver(db);
+      const initialFold = await buildActorCumulativeFold({
+        distributionId: `epoch-${epoch.id}`,
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        foldEpochId: epoch.id,
+        statementHash: "0xactor-liability-statement",
+        chainId: 8453,
+        tokenAddress: "0x2222222222222222222222222222222222222222",
+        totalTokenAmount: 17n,
+        receiptWeights: [{ receiptId, units: 17n }],
+        lockedClaimants: [],
+        overrides: [],
+        currentActorAllocations: [persisted],
+        unfoldedActorAllocations: [persisted],
+        pendingLiabilities: [],
+        priorCumulative: [],
+        legacyWalletResolver: walletResolver,
+        actorWalletResolver: walletResolver,
+      });
+      expect(initialFold.distribution).toBeNull();
+      expect(initialFold.liabilities).toEqual([
         expect.objectContaining({
           allocationRef: persisted.allocationRef,
           beneficiaryActorId: null,
-          wallet: null,
-          failureEvidence: expect.objectContaining({
+          tokenAmount: 17n,
+          resolverFailure: expect.objectContaining({
             code: "beneficiary_policy_unresolved",
           }),
         }),
       ]);
-
-      const frozenLiability = {
-        allocationRef: persisted.allocationRef,
-        nodeId: TEST_NODE_ID,
-        scopeId: TEST_SCOPE_ID,
-        sourceEpochId: epoch.id,
-        earnedByActorId: flockLeaderActorId,
-        beneficiaryActorId: null,
-        contributionCutoff: new Date(persisted.contributionCutoff),
-        tokenAmount: 17n,
-        sourceEvidenceHash: persisted.sourceEvidenceHash,
-        resolverFailure: {
-          code: "beneficiary_policy_unresolved" as const,
-          beneficiaryActorId: null,
-          observedBindingIds: [],
-        },
-      };
+      const frozenLiability = initialFold.liabilities[0];
+      if (!frozenLiability) throw new Error("Expected frozen actor liability");
       await expect(
         adapter.insertActorDistributionLiabilities([
           frozenLiability,
@@ -2271,51 +2274,63 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       ]);
       const liability = pending[0];
       if (!liability) throw new Error("Expected pending actor liability");
-      const walletResolution = await new DrizzleClaimantWalletResolver(
-        db
-      ).resolveBeneficiaryWallets([liability.allocation]);
-      expect(walletResolution).toEqual([
+      const settlementFold = await buildActorCumulativeFold({
+        distributionId: `epoch-${settlementEpoch.id}`,
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        foldEpochId: settlementEpoch.id,
+        statementHash: "0xactor-liability-statement",
+        chainId: 8453,
+        tokenAddress: "0x2222222222222222222222222222222222222222",
+        totalTokenAmount: 0n,
+        receiptWeights: [],
+        lockedClaimants: [],
+        overrides: [],
+        currentActorAllocations: [],
+        unfoldedActorAllocations: [],
+        pendingLiabilities: [liability],
+        priorCumulative: [],
+        legacyWalletResolver: walletResolver,
+        actorWalletResolver: walletResolver,
+      });
+      expect(settlementFold.liabilities).toEqual([]);
+      expect(settlementFold.settlements).toEqual([
         expect.objectContaining({
           allocationRef: persisted.allocationRef,
+          liabilityId: liability.id,
           beneficiaryActorId: derekActor.id,
-          wallet: signer.address,
-          bindingEvidence: expect.objectContaining({
+          claimantWallet: signer.address,
+          tokenAmount: 17n,
+          resolverEvidence: expect.objectContaining({
             actorId: derekActor.id,
             provider: "wallet",
           }),
         }),
       ]);
-      const resolverEvidence = walletResolution[0]?.bindingEvidence;
-      if (!resolverEvidence) {
-        throw new Error("Expected pinned Derek wallet binding evidence");
+      const settlementDistribution = settlementFold.distribution;
+      if (!settlementDistribution) {
+        throw new Error("Expected late-beneficiary settlement distribution");
       }
       const manifestWithSettlement = {
-        nodeId: TEST_NODE_ID,
-        scopeId: TEST_SCOPE_ID,
+        nodeId: settlementDistribution.nodeId,
+        scopeId: settlementDistribution.scopeId,
         epochId: settlementEpoch.id,
-        distributionId: `epoch-${settlementEpoch.id}`,
-        statementHash: "0xactor-liability-statement",
-        merkleRoot: "0xactor-liability-root",
-        chainId: 8453,
-        tokenAddress: "0x2222222222222222222222222222222222222222",
-        distributionAmount: 17n,
-        totalAllocated: 17n,
-        leaves: [],
-        actorSettlements: [
-          {
-            allocationRef: persisted.allocationRef,
-            liabilityId: liability.id,
-            nodeId: TEST_NODE_ID,
-            scopeId: TEST_SCOPE_ID,
-            sourceEpochId: epoch.id,
-            foldEpochId: settlementEpoch.id,
-            earnedByActorId: flockLeaderActorId,
-            beneficiaryActorId: derekActor.id,
-            tokenAmount: 17n,
-            claimantWallet: signer.address,
-            resolverEvidence,
-          },
-        ],
+        distributionId: settlementDistribution.distributionId,
+        statementHash: settlementDistribution.statementHash,
+        merkleRoot: settlementDistribution.merkleRoot,
+        chainId: settlementDistribution.chainId,
+        tokenAddress: settlementDistribution.tokenAddress,
+        distributionAmount: settlementDistribution.cumulativeTotal,
+        totalAllocated: settlementDistribution.cumulativeTotal,
+        leaves: settlementDistribution.leaves.map((leaf) => ({
+          index: leaf.index,
+          claimantKey: leaf.claimantKey,
+          account: leaf.account,
+          amount: leaf.cumulativeAmount,
+          leafHash: leaf.leafHash,
+          proof: [...leaf.proof],
+        })),
+        actorSettlements: settlementFold.settlements,
       };
       await adapter.upsertDistributionManifest(manifestWithSettlement);
       expect(

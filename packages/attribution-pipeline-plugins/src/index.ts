@@ -17,6 +17,7 @@
  */
 
 // Finalize-in-process (story.5007) — runtime-agnostic epoch finalization + R3 fold
+export { buildActorCumulativeFold } from "./finalize/actor-cumulative-fold";
 export {
   type FinalizeDistributionConfigResolver,
   FinalizeEpochError,
