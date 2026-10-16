@@ -11,6 +11,7 @@ import {
   TokenBucketRateLimiter,
   wrapRouteHandlerWithLogging,
 } from "@/bootstrap/http";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -163,6 +164,7 @@ export const POST = wrapRouteHandlerWithLogging(
     auth: { mode: "none" },
   },
   async (ctx, request) => {
+    const startedAt = performance.now();
     const capability = createAuthorizationFacadeProjectionCapability();
     return handleAuthorizationFacadeCredentialProjection(request, {
       isControl: capability.isControl,
@@ -170,11 +172,30 @@ export const POST = wrapRouteHandlerWithLogging(
       consumeRateLimit: () =>
         limiter.consume("authorization-facade-projection"),
       readRing: capability.readRing,
-      audit: (event) =>
-        ctx.log.info(
-          { ...event, routeId: "authorization-facade-credentials.internal" },
-          "authorization-facade credential projection"
-        ),
+      audit: (event) => {
+        const status =
+          event.outcome === "allowed"
+            ? 200
+            : event.outcome === "rate_limited"
+              ? 429
+              : 401;
+        logEvent(
+          ctx.log,
+          EVENT_NAMES.AUTHORIZATION_FACADE_PROJECTION_COMPLETE,
+          {
+            reqId: ctx.reqId,
+            routeId: ctx.routeId,
+            status,
+            durationMs: Math.round(performance.now() - startedAt),
+            outcome: event.outcome === "allowed" ? "success" : "error",
+            ...(event.outcome === "allowed"
+              ? {}
+              : { errorCode: event.outcome }),
+            ...(event.lane !== undefined ? { lane: event.lane } : {}),
+            ...(event.nodeId !== undefined ? { nodeId: event.nodeId } : {}),
+          }
+        );
+      },
     });
   }
 );

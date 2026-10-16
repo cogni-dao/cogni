@@ -6,20 +6,42 @@
 import { NextResponse } from "next/server";
 
 import { authenticateAuthorizationFacadeRequest } from "@/app/_lib/authorization-facade-auth";
+import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(request: Request): Promise<Response> {
-  const auth = await authenticateAuthorizationFacadeRequest(request);
-  if (!auth.ok) {
-    return NextResponse.json(
-      { error: auth.errorCode },
-      { status: auth.status, headers: { "Cache-Control": "no-store" } }
+export const POST = wrapRouteHandlerWithLogging(
+  {
+    routeId: "authorization.facade.credential_probe",
+    auth: { mode: "none" },
+  },
+  async (ctx, request) => {
+    const startedAt = performance.now();
+    const auth = await authenticateAuthorizationFacadeRequest(request);
+    const status = auth.ok ? 204 : auth.status;
+    logEvent(
+      ctx.log,
+      EVENT_NAMES.AUTHORIZATION_FACADE_CREDENTIAL_PROBE_COMPLETE,
+      {
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        status,
+        durationMs: Math.round(performance.now() - startedAt),
+        outcome: auth.ok ? "success" : "error",
+        ...(!auth.ok ? { errorCode: auth.errorCode } : {}),
+      }
     );
+    if (!auth.ok) {
+      return NextResponse.json(
+        { error: auth.errorCode },
+        { status: auth.status, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+    return new NextResponse(null, {
+      status: 204,
+      headers: { "Cache-Control": "no-store" },
+    });
   }
-  return new Response(null, {
-    status: 204,
-    headers: { "Cache-Control": "no-store" },
-  });
-}
+);

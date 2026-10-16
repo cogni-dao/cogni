@@ -3,6 +3,21 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/bootstrap/http", () => ({
+  wrapRouteHandlerWithLogging:
+    (_config: unknown, handler: (...args: unknown[]) => Promise<Response>) =>
+    (request: Request) =>
+      handler(
+        {
+          reqId: "req-workload-receipt",
+          routeId: "authorization.facade.workload_receipt",
+          log: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+        },
+        request,
+        null
+      ),
+}));
+
 const TOKEN =
   "cogni_naz_sk_v2_production_11111111-1111-4111-8111-111111111111_" +
   "a".repeat(64);
@@ -14,6 +29,7 @@ describe("authorization facade workload receipt", () => {
     delete process.env.AUTHORIZATION_FACADE_TOKEN;
     delete process.env.APP_BUILD_SHA;
     delete process.env.NEXTAUTH_URL;
+    delete process.env.NODE_NAME;
   });
 
   it("rejects malformed input before semantic transport", async () => {
@@ -63,14 +79,16 @@ describe("authorization facade workload receipt", () => {
     process.env.AUTHORIZATION_FACADE_TOKEN = TOKEN;
     process.env.APP_BUILD_SHA = "c".repeat(40);
     process.env.NEXTAUTH_URL = "https://poly.cognidao.org";
+    process.env.NODE_NAME = "poly";
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json(
+        { decision: "deny", code: "authz_denied", checks: [] },
+        { status: 403 }
+      )
+    );
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        Response.json(
-          { decision: "deny", code: "authz_denied", checks: [] },
-          { status: 403 }
-        )
-      )
+      fetchMock
     );
     const { POST } = await import("./route");
 
@@ -95,5 +113,9 @@ describe("authorization facade workload receipt", () => {
       buildSha: "c".repeat(40),
       semanticCode: "authz_denied",
     });
+    expect(fetchMock).toHaveBeenCalledWith(
+      new URL("https://cognidao.org/api/v1/authorization/check"),
+      expect.objectContaining({ method: "POST", redirect: "error" })
+    );
   });
 });

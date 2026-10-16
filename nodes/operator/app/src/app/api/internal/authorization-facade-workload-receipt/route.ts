@@ -11,6 +11,9 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
+import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -61,93 +64,143 @@ async function boundedJson(response: Response): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks, total).toString("utf8"));
 }
 
-export async function POST(request: Request): Promise<Response> {
-  const challenge = request.headers.get("x-cogni-rotation-challenge");
-  if (!challenge || !CHALLENGE.test(challenge) || request.body !== null) {
-    return NextResponse.json(
-      { error: "invalid_request" },
-      { status: 400, headers: { "Cache-Control": "no-store" } }
-    );
-  }
-
-  // Validate every attacker-controlled field before reading either secret.
-  const presented = bearerToken(request);
-  const loaded = process.env.AUTHORIZATION_FACADE_TOKEN;
-  if (!presented || !loaded || !sameSecret(presented, loaded)) {
-    return NextResponse.json(
-      { error: "invalid_service_credential" },
-      { status: 401, headers: { "Cache-Control": "no-store" } }
-    );
-  }
-
-  const buildSha = process.env.APP_BUILD_SHA;
-  const ownOriginRaw = process.env.NEXTAUTH_URL;
-  if (!buildSha || !BUILD_SHA.test(buildSha) || !ownOriginRaw) {
-    return NextResponse.json(
-      { error: "receipt_unavailable" },
-      { status: 503, headers: { "Cache-Control": "no-store" } }
-    );
-  }
-
-  try {
-    const ownOrigin = new URL(ownOriginRaw);
-    const requestOrigin = new URL(request.url);
-    if (
-      ownOrigin.protocol !== "https:" ||
-      ownOrigin.username ||
-      ownOrigin.password ||
-      ownOrigin.pathname !== "/" ||
-      ownOrigin.search ||
-      ownOrigin.hash ||
-      ownOrigin.origin !== requestOrigin.origin
-    ) {
-      throw new Error("invalid workload origin");
+export const POST = wrapRouteHandlerWithLogging(
+  {
+    routeId: "authorization.facade.workload_receipt",
+    auth: { mode: "none" },
+  },
+  async (ctx, request) => {
+    const startedAt = performance.now();
+    const complete = (
+      status: number,
+      outcome: "success" | "error",
+      errorCode: string | undefined,
+      fields: Record<string, unknown> = {}
+    ) =>
+      logEvent(
+        ctx.log,
+        EVENT_NAMES.AUTHORIZATION_FACADE_WORKLOAD_RECEIPT_COMPLETE,
+        {
+          reqId: ctx.reqId,
+          routeId: ctx.routeId,
+          status,
+          durationMs: Math.round(performance.now() - startedAt),
+          outcome,
+          ...(errorCode !== undefined ? { errorCode } : {}),
+          ...fields,
+        }
+      );
+    const challenge = request.headers.get("x-cogni-rotation-challenge");
+    if (!challenge || !CHALLENGE.test(challenge) || request.body !== null) {
+      complete(400, "error", "invalid_request");
+      return NextResponse.json(
+        { error: "invalid_request" },
+        { status: 400, headers: { "Cache-Control": "no-store" } }
+      );
     }
-    const semanticResponse = await fetch(
-      new URL("/api/v1/authorization/check", ownOrigin),
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${loaded}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          actor: { kind: "user", id: "00000000-0000-4000-8000-000000000001" },
-          billingAccountId: "00000000-0000-4000-8000-000000000002",
-          context: { runId: `authorization-rotation:${challenge}` },
-        }),
-        redirect: "error",
-        signal: AbortSignal.timeout(5_000),
+
+    // Validate every attacker-controlled field before reading either secret.
+    const presented = bearerToken(request);
+    const loaded = process.env.AUTHORIZATION_FACADE_TOKEN;
+    if (!presented || !loaded || !sameSecret(presented, loaded)) {
+      complete(401, "error", "invalid_service_credential");
+      return NextResponse.json(
+        { error: "invalid_service_credential" },
+        { status: 401, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    const buildSha = process.env.APP_BUILD_SHA;
+    const ownOriginRaw = process.env.NEXTAUTH_URL;
+    const nodeName = process.env.NODE_NAME;
+    if (!buildSha || !BUILD_SHA.test(buildSha) || !ownOriginRaw || !nodeName) {
+      complete(503, "error", "receipt_unavailable");
+      return NextResponse.json(
+        { error: "receipt_unavailable" },
+        { status: 503, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    try {
+      const ownOrigin = new URL(ownOriginRaw);
+      const requestOrigin = new URL(request.url);
+      if (
+        ownOrigin.protocol !== "https:" ||
+        ownOrigin.username ||
+        ownOrigin.password ||
+        ownOrigin.pathname !== "/" ||
+        ownOrigin.search ||
+        ownOrigin.hash ||
+        ownOrigin.origin !== requestOrigin.origin
+      ) {
+        throw new Error("invalid workload origin");
       }
-    );
-    if (semanticResponse.status !== 200 && semanticResponse.status !== 403) {
-      throw new Error("semantic check unavailable");
+      const nodePrefix = `${nodeName}-`;
+      const nodeLabel = `${nodeName}.`;
+      const facadeHostname =
+        nodeName === "operator"
+          ? ownOrigin.hostname
+          : ownOrigin.hostname.startsWith(nodePrefix)
+            ? ownOrigin.hostname.slice(nodePrefix.length)
+            : ownOrigin.hostname.startsWith(nodeLabel)
+              ? ownOrigin.hostname.slice(nodeLabel.length)
+              : undefined;
+      if (!facadeHostname || !facadeHostname.includes(".")) {
+        throw new Error("invalid facade origin");
+      }
+      const facadeOrigin = new URL(ownOrigin.origin);
+      facadeOrigin.hostname = facadeHostname;
+      const semanticResponse = await fetch(
+        new URL("/api/v1/authorization/check", facadeOrigin),
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${loaded}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            actor: {
+              kind: "user",
+              id: "00000000-0000-4000-8000-000000000001",
+            },
+            billingAccountId: "00000000-0000-4000-8000-000000000002",
+            context: { runId: `authorization-rotation:${challenge}` },
+          }),
+          redirect: "error",
+          signal: AbortSignal.timeout(5_000),
+        }
+      );
+      if (semanticResponse.status !== 200 && semanticResponse.status !== 403) {
+        throw new Error("semantic check unavailable");
+      }
+      if (
+        !/^application\/json(?:\s*;|$)/i.test(
+          semanticResponse.headers.get("content-type") ?? ""
+        )
+      ) {
+        throw new Error("invalid semantic response type");
+      }
+      const semantic = await boundedJson(semanticResponse);
+      if (
+        !semantic ||
+        typeof semantic !== "object" ||
+        Array.isArray(semantic) ||
+        !("code" in semantic) ||
+        (semantic.code !== "authz_allowed" && semantic.code !== "authz_denied")
+      ) {
+        throw new Error("invalid semantic decision");
+      }
+      complete(200, "success", undefined, { semanticCode: semantic.code });
+      return NextResponse.json(
+        { challenge, bootId, buildSha, semanticCode: semantic.code },
+        { status: 200, headers: { "Cache-Control": "no-store" } }
+      );
+    } catch {
+      complete(503, "error", "receipt_unavailable");
+      return NextResponse.json(
+        { error: "receipt_unavailable" },
+        { status: 503, headers: { "Cache-Control": "no-store" } }
+      );
     }
-    if (
-      !/^application\/json(?:\s*;|$)/i.test(
-        semanticResponse.headers.get("content-type") ?? ""
-      )
-    ) {
-      throw new Error("invalid semantic response type");
-    }
-    const semantic = await boundedJson(semanticResponse);
-    if (
-      !semantic ||
-      typeof semantic !== "object" ||
-      Array.isArray(semantic) ||
-      !("code" in semantic) ||
-      (semantic.code !== "authz_allowed" && semantic.code !== "authz_denied")
-    ) {
-      throw new Error("invalid semantic decision");
-    }
-    return NextResponse.json(
-      { challenge, bootId, buildSha, semanticCode: semantic.code },
-      { status: 200, headers: { "Cache-Control": "no-store" } }
-    );
-  } catch {
-    return NextResponse.json(
-      { error: "receipt_unavailable" },
-      { status: 503, headers: { "Cache-Control": "no-store" } }
-    );
   }
-}
+);
