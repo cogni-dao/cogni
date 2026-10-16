@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
+// biome-ignore-all lint/style/noProcessEnv: tests must control the exact process values the receipt proves
 
 import type { NextRequest } from "next/server";
 import { afterEach, describe, expect, it, vi } from "vitest";

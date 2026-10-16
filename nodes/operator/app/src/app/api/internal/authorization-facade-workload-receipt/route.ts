@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
+// biome-ignore-all lint/style/noProcessEnv: the receipt must prove values loaded by this exact process, not a cached config object
 
 /**
  * Workload-originated proof that a newly booted node process loaded its active
