@@ -2344,7 +2344,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         status: "settled",
         resolvedBeneficiaryActorId: derekActor.id,
         tokenAmount: 17n,
-        claimantWallet: signer.address.toLowerCase(),
+        claimantWallet: signer.address,
       });
       await expect(
         adapter.upsertDistributionManifest(manifestWithSettlement)
