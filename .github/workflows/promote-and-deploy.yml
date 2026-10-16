@@ -873,7 +873,7 @@ jobs:
           DOMAIN: ${{ vars.DOMAIN }}
           APP_SOURCE_DIR: app-src
           COGNI_CATALOG_ROOT: app-src/infra/catalog
-        run: bash ci-src/scripts/ci/run-node-substrate.sh "${{ needs.decide.outputs.environment }}" "${{ matrix.node }}"
+        run: pnpm --dir ci-src exec tsx scripts/lib/run-node-substrate.ts "${{ needs.decide.outputs.environment }}" "${{ matrix.node }}"
 
   deploy-infra:
     if: |
