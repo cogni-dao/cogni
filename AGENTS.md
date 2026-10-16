@@ -1,12 +1,11 @@
 # AGENTS.md — Cogni session floor
 
-The full agent-contract — process rules, status-block semantics, the emoji state
-machine, the Followed ledger, and the `owner`/`next` grammar — is delivered live in the
-session cognition bundle (`## The agent-contract`), served from `/api/v1/cognition`,
-cached locally, and imported by `CLAUDE.md`. **This file does not restate it.** It is the
-terse, hub-independent floor: the response skeleton, the few axioms that must survive a
-hub outage, and the bootstrap pointer. When this floor and the bundle differ, the bundle
-contract wins.
+This file owns the exact response skeleton and the few axioms that must survive a
+hub outage. The session cognition bundle (`## The agent-contract`), served from
+`/api/v1/cognition`, owns the rich process guidance, status semantics, Followed ledger,
+and `owner`/`next` grammar. It is cached locally and imported by `CLAUDE.md`.
+**The bundle elaborates this floor; it must not copy or redefine its response skeleton
+or override its axioms. If they conflict, this floor wins; refine the stale hub guidance.**
 
 ## Non-negotiable execution wrapper
 

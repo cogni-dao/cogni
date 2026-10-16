@@ -9,7 +9,7 @@ description: "Session-bootstrap + cognition-delivery expert for Cogni nodes — 
 
 ## The domain
 
-The cognition bundle is the kickstart a node serves to every agent session: the constitution (how to behave), the mission (why this node exists), and the map (orientation + skills index + domain pointers). Canon lives in `docs/spec/node-baas-architecture.md` §Cognition Substrate; the producer is `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`; the delivery loader shared by all harnesses is `scripts/agent/session-cognition.sh`, wired via `.claude/settings.json` (Claude Code) and `.codex/config.toml` (Codex). This skill is the mental model + the gotchas those files don't state.
+The cognition bundle is the kickstart a node serves to every agent session: rich operating guidance, the mission, and the map (orientation + skills index + domain pointers). Recall the canonical [ownership and delivery contract](https://cognidao.org/knowledge/cognition-substrate-bootstrap) before editing; it supersedes the retired `docs/spec/node-baas-architecture.md` reference. The producer is `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`; the shared delivery loader is `scripts/agent/session-cognition.sh`. This skill supplies the trigger and implementation gotchas.
 
 ## The mental model — two orthogonal axes
 
@@ -17,15 +17,15 @@ Everything here is one of two questions. Keep them separate; conflating them is 
 
 ### Axis A — OWNERSHIP: what is the bundle made of (and who can break it)
 
-`node-baas-architecture.md:300`: **the irreducible invariants are CODE-OWNED because they must render even when the hub is empty or unreachable — a session must always bootstrap.**
+**Exact response shape and cold-boot axioms are code-owned; rich semantics and node guidance are hub-owned.** The floor must work with an empty hub or cold cache. The bundle elaborates it and cannot override it.
 
 | Part                                                                   | Owner                                           | Why                                                                       |
 | ---------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------- |
-| **Constitution** — agent-contract, status-contract, Definition of Done | **code** (`SESSION_BOOTSTRAP_INVARIANTS`)       | must render hub-independent; it is the one thing a session can never lack |
+| **Cold-boot floor** — exact response skeleton and core axioms | **code** (root `AGENTS.md`, tooling axioms in `SESSION_BOOTSTRAP_INVARIANTS`) | remains usable without hub access or a warm cache |
 | Mission (the "why")                                                    | repo-spec `intent.mission`                      | per-node identity                                                         |
-| Orientation map, skills index, domain pointers                         | **hub** (Dolt), index-first, recalled on demand | expandable, refined-in-place, compounds                                   |
+| Rich process/status semantics, node orientation, skills and domain map | **hub** (Dolt), delivered at session start and recalled on demand | refined in place; no second response template |
 
-**The drift to watch for (ONE_VOICE, node-template #130):** moving the constitution _into_ the hub orientation entry ("served orientation IS the constitution") makes the contract hub-dependent. That is backwards. Proof it's dangerous: when the operator agent key expired mid-session (2026-10-08), every fresh agent booted **contract-less** — because the contract was being served from the hub, not rendered from code. A code-owned constitution makes a hub outage / expired key a non-event: only the knowledge index degrades, never the contract.
+**The drift to watch for:** a copied hub template can lag the floor when a git PR lands before its companion Dolt contribution. Removing duplicate prose does not resolve competing templates. Keep the one literal response skeleton in AGENTS.md; a hub entry describes semantics without reproducing it. Never transfer authority to a destination that has not passed parity and fresh-session proof.
 
 ### Axis B — DELIVERY: how does it reach the agent's context
 
@@ -105,12 +105,12 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
 ## When you touch this, in order
 
 1. **Separate the axes.** Is the problem ownership (what's in the bundle) or delivery (how it arrives)? Fix the right one.
-2. **Constitution stays code-owned.** Never move the agent-contract/invariants into a hub entry that only renders on a healthy hub. If you find it there, that's the drift — pull it back to `SESSION_BOOTSTRAP_INVARIANTS`.
+2. **Respect the ownership split.** Exact shape and cold-boot axioms stay in code; rich semantics and node guidance stay in the hub. Remove copied response templates from orientations rather than moving rich guidance back into git. On conflict, the floor wins. Do not merge a source-consolidation change until the destination and fresh-session behavior are verified.
 3. **Deliver through the proven harness path.** Claude = project output style (primary driver) +
    `CLAUDE.md` imports + a warn-only Stop detector (never a hard block); Codex = committed floor + uncapped hook; supported
    OpenCode 1.x = `instructions`. None requires an agent tool-read.
 4. **AGENTS.md carries only the universal floor + bootstrap pointers**
-   (`node-baas-architecture.md:311`) — the terse response/state skeleton, bundle pointer,
+   — the terse response/state skeleton, bundle pointer,
    and self-serve fallback. It must not copy expandable orientation, skills, domains, or
    the full rich contract.
 5. **Prove on the live harness.** The only proof is a fresh spawn (`claude -p` headless, or a
@@ -126,7 +126,7 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
 
 | What                                                                            | Where                                                                                                                                                                                 |
 | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cognition Substrate design (two axes, ownership split, thin-AGENTS.md boundary) | `docs/spec/node-baas-architecture.md` §Cognition Substrate (`:282-311`)                                                                                                               |
+| Cognition Substrate design (ownership, delivery, distribution, acceptance) | [cognition-substrate-bootstrap](https://cognidao.org/knowledge/cognition-substrate-bootstrap) |
 | The delivery loader (fetch → cache → emit per runtime)                          | `scripts/agent/session-cognition.sh`                                                                                                                                                  |
 | The bundle producer + `SESSION_BOOTSTRAP_INVARIANTS`                            | `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`                                                                                                                      |
 | Harness wiring                                                                  | `CLAUDE.md`, `.claude/settings.json`, `.claude/output-styles/Cogni Contract.md`, `scripts/agent/validate-status-contract.sh`, `.codex/config.toml`, `opencode.json`, root `AGENTS.md` |

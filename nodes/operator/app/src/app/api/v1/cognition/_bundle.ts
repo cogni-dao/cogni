@@ -11,13 +11,13 @@
  *   - INVARIANTS_ARE_THE_FLOOR: the code-owned `SESSION_BOOTSTRAP_INVARIANTS` +
  *     watch-gate render UNCONDITIONALLY — they are the always-present contract
  *     spine that survives an empty/unreachable hub and the common fresh-node
- *     case (story.5070). A served orientation renders ALONGSIDE as the node MAP,
+ *     case (story.5070). A served orientation renders ALONGSIDE as rich guidance,
  *     augmenting the floor, never replacing it. This reverses the earlier
  *     ONE_VOICE suppression (task.5155), whose real defect was that a map-only
  *     orientation then dropped the contract entirely.
  *   - ORIENTATION_LOADED_IN_FULL: renders pointers (id + title + recall path)
  *     for skills/domains, but the current-node `<slug>-agent-orientation` entry
- *     is rendered IN FULL — the node MAP that rides alongside the invariant
+ *     is rendered IN FULL — rich guidance that rides alongside the invariant
  *     floor, so the git skeleton stays minimal and the Dolt orientation carries
  *     the node-specific substance.
  * Side-effects: none
@@ -211,7 +211,7 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
           .join("\n")
       : "| _(none)_ | | |";
 
-  // The node MAP that rides alongside the invariant floor: the current-node
+  // The rich guidance alongside the invariant floor: the current-node
   // orientation entry rendered IN FULL (no second recall). Falls back to a seed
   // prompt when unset so the convention surfaces even before the entry exists.
   const orientationLines = orientation
@@ -228,15 +228,13 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
   // case where the hub serves only a map-only orientation. The earlier ONE_VOICE
   // suppression (task.5155) dropped this floor whenever ANY orientation was
   // served — so a map-only orientation silently shipped a session with no
-  // contract at all. The orientation above now renders ALONGSIDE as the node
-  // MAP (augment, never replace), not instead of the floor.
+  // contract at all. The orientation above now renders ALONGSIDE as rich
+  // guidance (augment, never replace), not instead of the floor.
   //
-  // DRY / migration note: orientations are being reduced to map-only (what this
-  // node is, where authority lives, what to recall next) and MUST NOT restate
-  // these terse axioms — the invariants are now the single always-present source
-  // of the contract. Stripping any residual axiom prose still embedded in a hub
-  // orientation entry is the migration's concern, tracked separately (story.5070
-  // step 7, human-merge-gated hub Dolt edit).
+  // Root AGENTS.md owns the exact response skeleton and cold-boot axioms;
+  // SESSION_BOOTSTRAP_INVARIANTS owns the tooling floor. The hub owns rich
+  // process/status semantics and node guidance, without a second response
+  // template. See cognition-substrate-bootstrap for the ownership contract.
   const toolingFloor = [
     "",
     "## Tooling invariants",

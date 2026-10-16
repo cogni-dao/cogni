@@ -49,8 +49,8 @@ grep -Fq 'This response protocol has no task-type exceptions' "$OUTPUT_STYLE" ||
   fail "Claude Code output style permits task-type formatting exceptions"
 grep -Fq 'preserve Goal and Done when byte-for-byte' "$OUTPUT_STYLE" ||
   fail "Claude Code output style omitted immutable session state"
-grep -Fq '5m–4h wall-clock ETA' "$OUTPUT_STYLE" ||
-  fail "Claude Code output style omitted short-horizon row estimates"
+grep -Fq 'AGENTS.md owns the shape' "$OUTPUT_STYLE" ||
+  fail "Claude Code output style does not defer response shape to the code-owned floor"
 STOP_VALIDATOR="$REPO_ROOT/scripts/agent/validate-status-contract.sh"
 [[ -x "$STOP_VALIDATOR" ]] || fail "Claude Code status-contract Stop hook is not executable"
 jq -e '.hooks.Stop[0].hooks[0].command | contains("validate-status-contract.sh")' \
