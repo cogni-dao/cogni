@@ -64,6 +64,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_SOURCE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 rc=0 # assigned by the EXIT traps below ($? at fire time); declared for shellcheck.
 DEPLOY_ENV=""
@@ -461,23 +462,27 @@ git -C "$WORKDIR" add -A "$ENDPOINTS_SUBPATH"
 
 if [ "$DEPLOY_ENV" = candidate-a ]; then
   SERIAL_PATCH="infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml"
-  [ -f "$APP_SOURCE_DIR/$SERIAL_PATCH" ] || {
-    echo "[ERROR] reviewed candidate serial-rollout patch is missing" >&2; exit 1;
+  [ -f "$PLATFORM_SOURCE_DIR/$SERIAL_PATCH" ] || {
+    echo "[ERROR] platform candidate serial-rollout patch is missing" >&2; exit 1;
   }
-  cp "$APP_SOURCE_DIR/$SERIAL_PATCH" "$WORKDIR/$SERIAL_PATCH"
+  cp "$PLATFORM_SOURCE_DIR/$SERIAL_PATCH" "$WORKDIR/$SERIAL_PATCH"
   yq -i '.patches = ((.patches // []) | map(select(.path != "serial-rollout.patch.yaml"))) + [{"path": "serial-rollout.patch.yaml"}]' "$OVERLAY_DST"
   git -C "$WORKDIR" add -A "$SERIAL_PATCH"
 
   REPLICAS_PATCH="infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml"
   yq -i '.patches = ((.patches // []) | map(select(.path != "replicas.patch.yaml")))' "$OVERLAY_DST"
-  if [ -f "$APP_SOURCE_DIR/$REPLICAS_PATCH" ]; then
-    cp "$APP_SOURCE_DIR/$REPLICAS_PATCH" "$WORKDIR/$REPLICAS_PATCH"
+  if [ -f "$PLATFORM_SOURCE_DIR/$REPLICAS_PATCH" ]; then
+    cp "$PLATFORM_SOURCE_DIR/$REPLICAS_PATCH" "$WORKDIR/$REPLICAS_PATCH"
     yq -i '.patches += [{"path": "replicas.patch.yaml"}]' "$OVERLAY_DST"
     git -C "$WORKDIR" add -A "$REPLICAS_PATCH"
   else
     rm -f "$WORKDIR/$REPLICAS_PATCH"
     git -C "$WORKDIR" rm --ignore-unmatch -- "$REPLICAS_PATCH"
   fi
+
+  # shellcheck source=scripts/ci/lib/shared-platform-manifests.sh
+  . "$SCRIPT_DIR/lib/shared-platform-manifests.sh"
+  reconcile_shared_platform_manifests "$PLATFORM_SOURCE_DIR" "$WORKDIR" "$DEPLOY_ENV" scheduler-worker
 
   # Hash the ACTUAL consumed ConfigMap after all authority/bootstrap patches,
   # not the source routing fragment. Promotion updates only GIT_SHA/IMAGE_DIGEST
@@ -530,6 +535,7 @@ fi
 git -C "$WORKDIR" config user.name "github-actions[bot]"
 git -C "$WORKDIR" config user.email "github-actions[bot]@users.noreply.github.com"
 git -C "$WORKDIR" add -A "$SUBPATH"
+git -C "$WORKDIR" add -A "$OVERLAY_SUBPATH"
 if git -C "$WORKDIR" diff --cached --quiet; then
   STATUS="noop"
   write_summary "$STATUS"

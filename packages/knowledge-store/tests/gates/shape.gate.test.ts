@@ -47,9 +47,15 @@ describe("shapeGate", () => {
     }
   });
 
-  it("treats id as optional but validates when present", async () => {
-    const result = await shapeGate.check({ ...base(), id: undefined }, {});
-    expect(result.ok).toBe(true);
+  it("rejects a missing id when the contract is bypassed", async () => {
+    const result = await shapeGate.check(
+      { ...base(), id: undefined } as unknown as KnowledgeWriteCandidate,
+      {}
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors[0]?.code).toBe("slug_required");
+    }
   });
 
   describe("slug rejection (shape)", () => {

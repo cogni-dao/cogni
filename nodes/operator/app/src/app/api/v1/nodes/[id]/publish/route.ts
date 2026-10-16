@@ -19,10 +19,11 @@ import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
-import { resolveAppDb } from "@/bootstrap/container";
+import { getContainer, resolveAppDb } from "@/bootstrap/container";
 import { withRootSpan } from "@/bootstrap/otel";
 import { evaluateNodeCapacity } from "@/features/nodes/capacity";
 import { createDoltHubDatabaseEnsurer } from "@/features/nodes/dolthub-database";
+import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
@@ -34,14 +35,11 @@ import {
   EVENT_NAMES,
   logEvent,
   logRequestEnd,
-  logRequestStart,
-  makeLogger,
 } from "@/shared/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const baseLog = makeLogger();
 const clock = { now: () => new Date().toISOString() };
 
 /**
@@ -170,12 +168,17 @@ export async function POST(request: Request, routeArgs: RouteParams) {
     { route_id: "nodes.publish" },
     async ({ traceId }) => {
       const startTime = performance.now();
-      const ctx = createRequestContext({ baseLog, clock }, request, {
-        routeId: "nodes.publish",
-        traceId,
-        session: undefined,
-      });
+      const ctx = createRequestContext(
+        { baseLog: getContainer().log, clock },
+        request,
+        {
+          routeId: "nodes.publish",
+          traceId,
+          session: undefined,
+        }
+      );
       const { id } = await routeArgs.params;
+      let resolvedNodeId: string | undefined;
       let currentStep: PublishStep = "auth";
 
       const durationMs = () => Math.round(performance.now() - startTime);
@@ -183,12 +186,24 @@ export async function POST(request: Request, routeArgs: RouteParams) {
         level: "info" | "warn" | "error",
         fields: Record<string, unknown>
       ): void => {
+        if (level === "info") {
+          logEvent(ctx.log, EVENT_NAMES.NODE_PUBLISH_COMPLETE, {
+            reqId: ctx.reqId,
+            routeId: ctx.routeId,
+            targetNodeId: resolvedNodeId,
+            step: currentStep,
+            durationMs: durationMs(),
+            ...fields,
+          });
+          return;
+        }
         ctx.log[level](
           {
             event: EVENT_NAMES.NODE_PUBLISH_COMPLETE,
             reqId: ctx.reqId,
             routeId: ctx.routeId,
-            nodeId: id,
+            targetNodeId: resolvedNodeId,
+
             step: currentStep,
             durationMs: durationMs(),
             ...fields,
@@ -196,28 +211,6 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           EVENT_NAMES.NODE_PUBLISH_COMPLETE
         );
       };
-      const logStep = (
-        step: PublishStep,
-        outcome: "started" | "success" | "error",
-        fields: Record<string, unknown> = {}
-      ): void => {
-        ctx.log.info(
-          {
-            event: EVENT_NAMES.NODE_PUBLISH_COMPLETE,
-            reqId: ctx.reqId,
-            routeId: ctx.routeId,
-            nodeId: id,
-            phase: "step",
-            step,
-            outcome,
-            durationMs: durationMs(),
-            ...fields,
-          },
-          EVENT_NAMES.NODE_PUBLISH_COMPLETE
-        );
-      };
-
-      logRequestStart(ctx.log);
 
       try {
         const session = await getServerSessionUser();
@@ -246,17 +239,6 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             { status: 409 }
           );
         }
-
-        ctx.log.info(
-          {
-            event: EVENT_NAMES.NODE_PUBLISH_COMPLETE,
-            reqId: ctx.reqId,
-            routeId: ctx.routeId,
-            nodeId: id,
-            phase: "started",
-          },
-          EVENT_NAMES.NODE_PUBLISH_COMPLETE
-        );
 
         currentStep = "config";
         const env = serverEnv();
@@ -334,7 +316,6 @@ export async function POST(request: Request, routeArgs: RouteParams) {
 
         currentStep = "load_node";
         const db = resolveAppDb();
-        logStep("load_node", "started");
         const existing = await withTenantScope(
           db,
           userActor(session.id as UserId),
@@ -342,12 +323,11 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             tx
               .select()
               .from(nodes)
-              .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
+              .where(and(nodeIdOrSlug(id), eq(nodes.ownerUserId, session.id)))
               .limit(1)
         );
         const node = existing[0];
         if (!node) {
-          logStep("load_node", "error", { errorCode: "node_not_found" });
           logTerminal("warn", {
             outcome: "error",
             errorCode: "node_not_found",
@@ -356,10 +336,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           logRequestEnd(ctx.log, { status: 404, durationMs: durationMs() });
           return NextResponse.json({ error: "not found" }, { status: 404 });
         }
-        logStep("load_node", "success", {
-          slug: node.slug,
-          nodeStatus: node.status,
-        });
+        resolvedNodeId = node.id;
 
         // Idempotent: if already published, return the existing PR.
         if (
@@ -369,7 +346,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           node.publishPrUrl
         ) {
           logTerminal("info", {
-            outcome: "already_published",
+            outcome: "success",
+            alreadyPublished: true,
             status: 200,
             slug: node.slug,
             nodeStatus: node.status,
@@ -436,11 +414,6 @@ export async function POST(request: Request, routeArgs: RouteParams) {
         // is retired); ceiling from config.
         currentStep = "check_capacity";
         const writer = createNodeRepoWriter(env);
-        logStep("check_capacity", "started", {
-          slug: node.slug,
-          owner: parentOwner,
-          repo: parentRepo,
-        });
         // The deployed-node count is a live GitHub `infra/catalog` tree-walk. A read
         // failure is NOT a capacity condition — but it also must NOT silently ALLOW a
         // birth: this is the network's ONLY capacity gate, so fail-open would disable it
@@ -461,18 +434,13 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           });
         } catch (err) {
           const { errorCode, status } = classifyMintError(err);
-          logStep("check_capacity", "error", {
-            slug: node.slug,
-            errorCode: "capacity_check_unavailable",
-            reasonCode: errorCode,
-            githubStatus: status,
-          });
           ctx.log.error(
             {
               event: EVENT_NAMES.ADAPTER_GITHUB_REPO_WRITE_ERROR,
               reqId: ctx.reqId,
               routeId: ctx.routeId,
-              nodeId: id,
+              targetNodeId: resolvedNodeId,
+
               dep: "github",
               step: "check_capacity",
               reasonCode: errorCode,
@@ -504,12 +472,6 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           ceiling: env.NODE_CAPACITY_CEILING,
         });
         if (!capacity.allowed) {
-          logStep("check_capacity", "error", {
-            slug: node.slug,
-            errorCode: "at_capacity",
-            deployedNodeCount: capacity.deployedNodeCount,
-            ceiling: capacity.ceiling,
-          });
           logTerminal("warn", {
             outcome: "error",
             errorCode: "at_capacity",
@@ -530,11 +492,6 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             { status: 409 }
           );
         }
-        logStep("check_capacity", "success", {
-          slug: node.slug,
-          deployedNodeCount: capacity.deployedNodeCount,
-          ceiling: capacity.ceiling,
-        });
 
         const knowledgeRemote = buildNodeKnowledgeRemote(
           node.slug,
@@ -543,11 +500,6 @@ export async function POST(request: Request, routeArgs: RouteParams) {
         let doltHub: { owner: string; repo: string; created: boolean };
         try {
           currentStep = "bootstrap_dolthub";
-          logStep("bootstrap_dolthub", "started", {
-            slug: node.slug,
-            owner: knowledgeRemote.owner,
-            repo: knowledgeRemote.repo,
-          });
           doltHub = await createDoltHubDatabaseEnsurer({
             DOLTHUB_API_TOKEN: env.DOLTHUB_API_TOKEN,
           }).ensureDatabase({
@@ -555,19 +507,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             repo: knowledgeRemote.repo,
             description: `Cogni node ${node.slug} knowledge mirror`,
           });
-          logStep("bootstrap_dolthub", "success", {
-            slug: node.slug,
-            owner: doltHub.owner,
-            repo: doltHub.repo,
-            created: doltHub.created,
-          });
         } catch (err) {
-          logStep("bootstrap_dolthub", "error", {
-            slug: node.slug,
-            owner: knowledgeRemote.owner,
-            repo: knowledgeRemote.repo,
-            errorCode: "dolthub_bootstrap_failed",
-          });
           logTerminal("error", {
             outcome: "error",
             errorCode: "dolthub_bootstrap_failed",
@@ -596,31 +536,20 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           env.DOLTHUB_NONPROD_OWNER !== env.DOLTHUB_OWNER
             ? [env.DOLTHUB_NONPROD_OWNER]
             : [];
+        let mirrorBootstrapFailed = false;
         for (const owner of extraOwners) {
           currentStep = "bootstrap_dolthub_nonprod";
           const extra = buildNodeKnowledgeRemote(node.slug, owner);
           try {
-            const r = await createDoltHubDatabaseEnsurer({
+            await createDoltHubDatabaseEnsurer({
               DOLTHUB_API_TOKEN: env.DOLTHUB_API_TOKEN,
             }).ensureDatabase({
               owner: extra.owner,
               repo: extra.repo,
               description: `Cogni node ${node.slug} knowledge mirror (${owner})`,
             });
-            logStep("bootstrap_dolthub_nonprod", "success", {
-              slug: node.slug,
-              owner: r.owner,
-              repo: r.repo,
-              created: r.created,
-            });
-          } catch (err) {
-            logStep("bootstrap_dolthub_nonprod", "error", {
-              slug: node.slug,
-              owner: extra.owner,
-              repo: extra.repo,
-              errorCode: "dolthub_nonprod_bootstrap_failed",
-              reason: err instanceof Error ? err.message : "unknown",
-            });
+          } catch {
+            mirrorBootstrapFailed = true;
           }
         }
 
@@ -640,11 +569,6 @@ export async function POST(request: Request, routeArgs: RouteParams) {
         let pr: { prNumber: number; prUrl: string };
         try {
           currentStep = "fork_from_template";
-          logStep("fork_from_template", "started", {
-            slug: node.slug,
-            owner: mintOwner,
-            templateOwner,
-          });
           const minted = await writer.forkFromTemplate({
             templateOwner,
             owner: mintOwner,
@@ -655,20 +579,9 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             mergeQueueSourceRepo: parentRepo,
             ...identity,
           });
-          logStep("fork_from_template", "success", {
-            slug: node.slug,
-            owner: mintOwner,
-            headSha: minted.headSha,
-          });
           currentStep = "open_submodule_pr";
           // Submodule-PR target = the configured deployment monorepo. It is never derived
           // from the operator app repo or persisted node rows.
-          logStep("open_submodule_pr", "started", {
-            slug: node.slug,
-            owner: parentOwner,
-            repo: parentRepo,
-            nodeRepoHeadSha: minted.headSha,
-          });
           pr = await writer.openNodeSubmodulePr({
             owner: parentOwner,
             repo: parentRepo,
@@ -678,55 +591,26 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             nodeRepoUrl: minted.cloneUrl,
             nodeRepoHeadSha: minted.headSha,
           });
-          ctx.log.info(
-            {
-              event: EVENT_NAMES.NODE_PUBLISH_SECRET_SHAPE_GENERATED,
-              reqId: ctx.reqId,
-              traceId,
-              routeId: ctx.routeId,
-              nodeId: id,
-              slug: node.slug,
-              childRepoUrl: minted.cloneUrl,
-              childRepoHeadSha: minted.headSha,
-              parentOwner,
-              parentRepo,
-              parentPrNumber: pr.prNumber,
-              parentPrUrl: pr.prUrl,
-              secretTargetName: `${node.slug}-env-secrets`,
-              externalSecretEnvs: [...NODE_FORMATION_ENVS],
-              externalSecretPaths: NODE_FORMATION_ENVS.map(
-                (env) => `k8s/external-secrets/${env}/external-secret.yaml`
-              ),
-              overlayEnvs: [...NODE_FORMATION_ENVS],
-              overlayPaths: NODE_FORMATION_ENVS.map(
-                (env) =>
-                  `infra/k8s/overlays/${env}/${node.slug}/kustomization.yaml`
-              ),
-              durationMs: durationMs(),
-            },
-            EVENT_NAMES.NODE_PUBLISH_SECRET_SHAPE_GENERATED
-          );
-          logStep("open_submodule_pr", "success", {
-            slug: node.slug,
-            owner: parentOwner,
-            repo: parentRepo,
-            prNumber: pr.prNumber,
-            prUrl: pr.prUrl,
+          logEvent(ctx.log, EVENT_NAMES.NODE_PUBLISH_SECRET_SHAPE_GENERATED, {
+            reqId: ctx.reqId,
+            routeId: ctx.routeId,
+            targetNodeId: resolvedNodeId,
+            childRepoHeadSha: minted.headSha,
+            parentPrNumber: pr.prNumber,
+            externalSecretCount: NODE_FORMATION_ENVS.length,
+            overlayCount: NODE_FORMATION_ENVS.length,
+            durationMs: durationMs(),
           });
         } catch (err) {
           const { errorCode, status } = classifyMintError(err);
           const responseStatus = statusForMintError(errorCode);
-          logStep(currentStep, "error", {
-            slug: node.slug,
-            errorCode,
-            githubStatus: status,
-          });
           ctx.log.error(
             {
               event: EVENT_NAMES.ADAPTER_GITHUB_REPO_WRITE_ERROR,
               reqId: ctx.reqId,
               routeId: ctx.routeId,
-              nodeId: id,
+              targetNodeId: resolvedNodeId,
+
               dep: "github",
               step: currentStep,
               reasonCode: errorCode,
@@ -755,7 +639,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
               step: currentStep,
               reqId: ctx.reqId,
               routeId: ctx.routeId,
-              nodeId: id,
+              nodeId: resolvedNodeId,
               githubStatus: status,
             },
             { status: responseStatus }
@@ -763,7 +647,6 @@ export async function POST(request: Request, routeArgs: RouteParams) {
         }
 
         currentStep = "update_node";
-        logStep("update_node", "started", { slug: node.slug });
         const [updated] = await withTenantScope(
           db,
           userActor(session.id as UserId),
@@ -775,24 +658,27 @@ export async function POST(request: Request, routeArgs: RouteParams) {
                 publishPrUrl: pr.prUrl,
                 updatedAt: new Date(),
               })
-              .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
+              .where(
+                and(eq(nodes.id, node.id), eq(nodes.ownerUserId, session.id))
+              )
               .returning()
         );
-        logStep("update_node", "success", {
-          slug: node.slug,
-          nextStatus: t.nextStatus,
-        });
 
         logEvent(ctx.log, EVENT_NAMES.NODE_PUBLISH_COMPLETE, {
           reqId: ctx.reqId,
           routeId: ctx.routeId,
-          nodeId: id,
+          targetNodeId: resolvedNodeId,
+
           outcome: "success",
+          status: 200,
+          mirrorBootstrapFailed,
+          mirrorErrorCode: mirrorBootstrapFailed
+            ? "nonprod_mirror_bootstrap_failed"
+            : undefined,
           slug: node.slug,
           nodeStatus: node.status,
           nextStatus: t.nextStatus,
           prNumber: pr.prNumber,
-          prUrl: pr.prUrl,
           dolthubOwner: doltHub.owner,
           dolthubRepo: doltHub.repo,
           dolthubCreated: doltHub.created,
@@ -815,7 +701,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             step: currentStep,
             reqId: ctx.reqId,
             routeId: ctx.routeId,
-            nodeId: id,
+            nodeId: resolvedNodeId,
           },
           { status: 500 }
         );

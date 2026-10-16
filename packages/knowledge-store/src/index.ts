@@ -41,6 +41,7 @@ export {
   KNOWLEDGE_ENTRY_PATCH_FIELDS,
   type KnowledgeContributionEdit,
   KnowledgeContributionEditSchema,
+  KnowledgeEntryIdSchema,
   type KnowledgeEntryInput,
   KnowledgeEntryInputSchema,
   type KnowledgeEntryPatch,

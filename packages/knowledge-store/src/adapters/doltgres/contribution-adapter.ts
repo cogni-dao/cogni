@@ -643,6 +643,34 @@ async function applyEdit(input: {
     return;
   }
 
+  if (edit.op === "uncite") {
+    const existing = (await conn.unsafe(
+      `SELECT cited_id FROM citations WHERE citing_id = ${escapeValue(edit.citingId)} AND cited_id = ${escapeValue(edit.citedId)} AND citation_type = ${escapeValue(edit.citationType)} LIMIT 1`
+    )) as Array<{ cited_id: string }>;
+    if (existing.length === 0) {
+      throw new ContributionConflictError(
+        `citation edge not found: '${edit.citingId}' -[${edit.citationType}]-> '${edit.citedId}'`
+      );
+    }
+    await conn.unsafe(
+      `DELETE FROM citations WHERE citing_id = ${escapeValue(edit.citingId)} AND cited_id = ${escapeValue(edit.citedId)} AND citation_type = ${escapeValue(edit.citationType)}`
+    );
+
+    // supports/contradicts affect the cited atom's confidence. Recompute only
+    // when that atom exists on the contribution branch; cross-plane work-item
+    // edges and main-only endpoints have no branch knowledge row to update.
+    if (
+      edit.citationType !== "tracks" &&
+      (edit.citationType === "supports" || edit.citationType === "contradicts")
+    ) {
+      const cited = await resolveCitationEndpoint(conn, mainSql, edit.citedId);
+      if (cited?.kind === "knowledge" && cited.onBranch) {
+        await recomputeConfidenceOnConn(conn, edit.citedId);
+      }
+    }
+    return;
+  }
+
   if (edit.op === "cite") {
     const citing = await resolveCitationEndpoint(conn, mainSql, edit.citingId);
     if (citing === null) {
@@ -764,14 +792,7 @@ async function applyEdit(input: {
     return;
   }
 
-  // Server-stamped fallback id uses `-` not `:` so the result satisfies the
-  // v0 shape gate (kebab only). The contribution prefix is still long; this
-  // is a transitional concession — clients SHOULD supply `entry.id`
-  // explicitly per the syntropy expert decision tree (write atomic with a
-  // sharp slug). Auto-stamps will be removed once the UI form enforces
-  // explicit ids (P0.6.v0b).
-  const entryId =
-    edit.entry.id ?? `${contributionId}-${randomBytes(3).toString("hex")}`;
+  const entryId = edit.entry.id;
   const entryType = edit.entry.entryType ?? "finding";
   const useWhenColumn = hasUseWhen ? ", use_when" : "";
   const useWhenValue = hasUseWhen

@@ -149,7 +149,7 @@ export function createContributionService(
     if (!edits || edits.length === 0 || gates.length === 0) return edits;
     const out: KnowledgeContributionEdit[] = [];
     for (const edit of edits) {
-      // delete + cite carry no entry payload — nothing for the write gates
+      // delete + cite + uncite carry no entry payload — nothing for the write gates
       // (shape/provenance) to validate; forward unchanged.
       //
       // `patch` is forwarded unchanged too, and this is NOT a gate bypass:
@@ -162,7 +162,12 @@ export function createContributionService(
       // `op:'update'`, which does run the chain. `useWhen`'s own rules land in
       // task.5204 item 8 — a band is pointless while the only way to apply it
       // is a 64 KiB whole-entry replace.
-      if (edit.op === "delete" || edit.op === "cite" || edit.op === "patch") {
+      if (
+        edit.op === "delete" ||
+        edit.op === "cite" ||
+        edit.op === "uncite" ||
+        edit.op === "patch"
+      ) {
         out.push(edit);
         continue;
       }
