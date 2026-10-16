@@ -43,12 +43,9 @@ if [ "${FAKE_SSH_ASSERT_POSITIONALS:-}" = 1 ]; then
   remote_header=$(sed '/^namespace=/,$d')
   {
     printf '%s\n' "$remote_header"
-    printf '%s\n' 'printf "ARGV\t%s\t%s\t%s\t%s\t%s\t%s\n" "$#" "$remote_root" "$expected_build_sha" "$expected_node_id" "$assert_database_reliability_runtime" "$reliability_controller"'
-    printf '%s\n' 'printf "WIRE\t%s\t%s\t%s\t%s\t%s\n" "${9}" "${10}" "${11}" "${12}" "${13:-}"'
+    printf '%s\n' 'printf "ARGV\t%s\t%s\t%s\n" "$#" "$remote_root" "$reliability_controller"'
+    printf '%s\n' 'printf "WIRE\t%s\t%s\n" "${9}" "${10:-}"'
   } | PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
-elif [ "${FAKE_SSH_ASSERT_RELIABILITY:-}" = 1 ]; then
-  remote_script="$(sed '/^if kubectl -n argocd get applicationset/,$d')"
-  printf '%s\n' "$remote_script" 'exit "$failed"' | PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
 elif [[ -n "${FAKE_EGRESS_TRANSPORT:-}" ]]; then
   remote_script="$(cat)"
   case "$FAKE_EGRESS_TRANSPORT" in
@@ -75,34 +72,6 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 set -- "${args[@]}"
-if [ "${FAKE_SSH_ASSERT_RELIABILITY:-}" = 1 ]; then
-  case "${1:-}:${2:-}:${3:-}" in
-    get:deployment:operator-database-reliability-actuator)
-      if [[ "$*" == *availableReplicas* ]]; then echo "${FAKE_OBSERVER_AVAILABLE:-1}";
-      else echo "${FAKE_OBSERVER_IMAGE:-fixture-image}"; fi
-      exit 0 ;;
-    get:deployment:operator-node-app) echo fixture-image; exit 0 ;;
-    get:deployment:operator-database-reliability-readmitter|get:deployment:operator-database-reliability-watchdog)
-      echo "${FAKE_RETIRED_REPLICAS:-0}"; exit 0 ;;
-    get:secret:database-reliability-actuator-env-secrets|get:secret:database-reliability-readmitter-env-secrets)
-      [[ "$*" != *jsonpath=* ]] || echo fixture-secret-base64
-      exit 0 ;;
-    exec:deployment/operator-node-app:*)
-      while [ "$1" != -e ]; do shift; done
-      shift; roundtrip="$1"; shift
-      mock_fetch='globalThis.fetch = async (target, options = {}) => {
-        const url = new URL(target);
-        if (url.origin !== "http://observer.test") throw Error("unexpected retired-process request");
-        if (url.pathname === "/version") return Response.json({ buildSha: process.env.FAKE_OBSERVER_BAD_SHA ? "b".repeat(40) : process.argv[1] });
-        if (url.pathname === "/readyz") return new Response(null, { status: process.env.FAKE_OBSERVER_NOT_READY ? 503 : 200 });
-        if (url.pathname !== "/v1/status" || options.headers?.authorization !== "Bearer fixture-status-token") throw Error("missing observer authentication");
-        return Response.json({ nodeId: process.argv[2], environment: process.argv[3], slug: process.argv[4] }, { status: process.env.FAKE_OBSERVER_AUTH_DENIED ? 401 : 200 });
-      };'
-      DATABASE_RELIABILITY_ACTUATOR_URL=http://observer.test DATABASE_RELIABILITY_STATUS_TOKEN=fixture-status-token \
-        node --input-type=module -e "$mock_fetch"$'\n'"$roundtrip" "$@"
-      exit $? ;;
-  esac
-fi
 if [ "${1:-}" = "get" ]; then
   kind="${2:-}"
   name="${3:-}"
@@ -286,37 +255,20 @@ grep -q "\[OK\] lane database residency: node-template/candidate-a uses its own 
 grep -q "runtime env includes DB inventory: cogni_node_template" "$TMPROOT/success.out"
 
 # Run the real generated argument decoder through both shell layers, stopping
-# before any remote probe. Required identities precede the optional root at13.
-expected_sha=$(git rev-parse HEAD)
-expected_id=$(yq -r '.node_id' nodes/operator/.cogni/repo-spec.yaml)
+# before any remote probe. The controller flag precedes the optional root at10.
 for probe_root in "" "$REMOTE_ROOT" "$TMPROOT/remote root' ; literal"; do
   if ! env "${BASE_ENV[@]}" TARGET=operator APP_SOURCE_DIR="$REPO_ROOT" \
     COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" \
     ASSERT_TARGET_SUBSTRATE_REMOTE_ROOT="$probe_root" \
-    ASSERT_DATABASE_RELIABILITY_RUNTIME=false FAKE_SSH_ASSERT_POSITIONALS=1 \
+    FAKE_SSH_ASSERT_POSITIONALS=1 \
     bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/argv.out"; then
     cat "$TMPROOT/argv.out" >&2
     exit 1
   fi
-  printf 'ARGV\t13\t%s\t%s\t%s\tfalse\ttrue\n' \
-    "$probe_root" "$expected_sha" "$expected_id" >"$TMPROOT/argv.expected"
-  printf 'WIRE\t%s\t%s\tfalse\ttrue\t%s\n' \
-    "$expected_sha" "$expected_id" "$probe_root" >>"$TMPROOT/argv.expected"
+  printf 'ARGV\t10\t%s\ttrue\n' "$probe_root" >"$TMPROOT/argv.expected"
+  printf 'WIRE\ttrue\t%s\n' "$probe_root" >>"$TMPROOT/argv.expected"
   grep -E '^(ARGV|WIRE)' "$TMPROOT/argv.out" >"$TMPROOT/argv.actual"
   cmp "$TMPROOT/argv.expected" "$TMPROOT/argv.actual"
-done
-
-# Retired writers must stay at zero while the real observer roundtrip remains strict.
-RELIABILITY_ENV=("${BASE_ENV[@]}" TARGET=operator APP_SOURCE_DIR="$REPO_ROOT"
-  COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" ASSERT_DATABASE_RELIABILITY_RUNTIME=true
-  FAKE_SSH_ASSERT_RELIABILITY=1)
-env "${RELIABILITY_ENV[@]}" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/reliability-observer.out"
-grep -q 'authenticated status and observer readiness roundtrips passed' "$TMPROOT/reliability-observer.out"
-for failure in FAKE_RETIRED_REPLICAS=1 FAKE_OBSERVER_AVAILABLE=0 FAKE_OBSERVER_IMAGE=wrong-image \
-  FAKE_OBSERVER_BAD_SHA=1 FAKE_OBSERVER_NOT_READY=1 FAKE_OBSERVER_AUTH_DENIED=1; do
-  if env "${RELIABILITY_ENV[@]}" "$failure" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/reliability-rejected.out" 2>&1; then
-    echo "expected reliability assertion to reject $failure" >&2; exit 1
-  fi
 done
 
 # bug.5299 — A MISRESIDENT LANE CANNOT BE GREEN ON THE LANELESS HUSK.

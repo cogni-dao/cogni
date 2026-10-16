@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
+- **Last reviewed:** 2026-10-16
 
 ## Purpose
 
@@ -123,6 +124,7 @@ docker compose --project-name cogni-runtime logs -f app
 
 - `temporal-postgres`: Dedicated Postgres for Temporal (not shared with app DB)
 - `temporal`: Temporal server with auto-setup (handles schema migrations), pinned to v1.29.1
+- Temporal health failures remain observable but do not trigger autoheal restarts (`bug.5489`). Docker retains `restart: unless-stopped` for process exits; a slow dependency must not cause overlapping Docker restart operations against the shared server.
 - `temporal-ui`: Web UI for debugging schedules (localhost:8233)
 - Namespace auto-created via `DEFAULT_NAMESPACE=cogni-{APP_ENV}`
 - Port forwarding: host port 7233 (gRPC) — public-NIC traffic dropped by `DOCKER-USER` (see `infra/provision/cherry/harden-docker-public-ports.sh`); k3s pods reach via node IP. UI on 127.0.0.1:8233.

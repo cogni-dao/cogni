@@ -22,8 +22,8 @@ REST API routes for VCS operations — artifact-gated candidate-a flight dispatc
 ```json
 {
   "layer": "app",
-  "may_import": ["bootstrap", "contracts", "shared", "ports"],
-  "must_not_import": ["adapters", "core", "features"]
+  "may_import": ["bootstrap", "contracts", "shared", "ports", "features"],
+  "must_not_import": ["adapters", "core"]
 }
 ```
 
@@ -48,6 +48,7 @@ REST API routes for VCS operations — artifact-gated candidate-a flight dispatc
 - All routes auth-protected (Bearer token or SIWE session required)
 - OpenFGA-configured flight routes fail closed before GitHub prepare/dispatch unless `node.flight` allows the caller on the target node
 - Input/output validated via `flightOperation` Zod contract
+- Node references resolve through `features/nodes/node-lookup`; authorization and dispatch use the resolved UUID
 - No direct Octokit — hosted deploy-plane calls go through `DeployPlanePort`
 
 ## Dependencies

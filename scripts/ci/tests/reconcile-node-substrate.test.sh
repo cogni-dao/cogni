@@ -198,7 +198,12 @@ if [ "${1:-}" = "-n" ] && [ "${3:-}" = "get" ] && [ "${4:-}" = "externalsecret" 
   exit 0
 fi
 if [ "${1:-}" = "apply" ]; then
-  cat >/dev/null
+  if [ "${2:-}" = -f ] && [ -f "${3:-}" ]; then
+    cat "$3" >> "${FAKE_REMOTE_ROOT}/applied-manifests.yaml"
+    printf '\n---\n' >> "${FAKE_REMOTE_ROOT}/applied-manifests.yaml"
+  else
+    cat >/dev/null
+  fi
   exit 0
 fi
 if [ "${1:-}" = "-n" ] && [ "${3:-}" = "apply" ]; then
@@ -501,10 +506,21 @@ grep -q -- "-n cogni-candidate-a annotate externalsecret operator-env-secrets fo
 grep -q -- "-n cogni-candidate-a wait --for=condition=Ready externalsecret/operator-env-secrets --timeout=120s" "$REMOTE_ROOT/kubectl.log"
 grep -q -- "-n cogni-candidate-a get secret operator-env-secrets" "$REMOTE_ROOT/kubectl.log"
 grep -q -- "annotate externalsecret operator-database-reliability-actuator-env-secrets force-sync=" "$REMOTE_ROOT/kubectl.log"
-grep -q -- "annotate externalsecret operator-database-reliability-readmitter-env-secrets force-sync=" "$REMOTE_ROOT/kubectl.log"
+if grep -q -- "database-reliability-readmitter-env-secrets" "$REMOTE_ROOT/kubectl.log"; then
+  echo 'retired readmitter secret must not be projected or refreshed' >&2; exit 1
+fi
+if grep -q database-reliability-readmitter-env-secrets "$REMOTE_ROOT/applied-manifests.yaml"; then
+  echo 'stale source readmitter manifest reached kubectl apply' >&2; exit 1
+fi
+yq -e 'select(.kind == "ExternalSecret" and .metadata.name == "operator-database-reliability-actuator-env-secrets")' "$REMOTE_ROOT/applied-manifests.yaml" >/dev/null
 grep -q -- "get secret database-reliability-actuator-env-secrets -o jsonpath={.data.DATABASE_RELIABILITY_ADMIN_URL}" "$REMOTE_ROOT/kubectl.log"
-grep -q -- "get secret database-reliability-readmitter-env-secrets -o jsonpath={.data.DATABASE_RELIABILITY_READMIT_URL}" "$REMOTE_ROOT/kubectl.log"
 grep -q 'metadata.name == "env-secrets"' scripts/ci/reconcile-node-substrate.sh
+for environment in candidate-a preview production; do
+  projection="infra/k8s/overlays/$environment/operator/external-secret.yaml"
+  [ "$(yq -N '.spec.data[].secretKey' "$projection")" = DATABASE_RELIABILITY_STATUS_TOKEN ] || {
+    echo 'operator explicit reliability projection must contain status token only' >&2; exit 1
+  }
+done
 operator_node_id="$(yq -r '.node_id' nodes/operator/.cogni/repo-spec.yaml)"
 grep -q -- "--ns cogni-candidate-a" "$REMOTE_ROOT/docker.log"
 grep -q -- "--ns cogni-candidate-a-${operator_node_id}" "$REMOTE_ROOT/docker.log"

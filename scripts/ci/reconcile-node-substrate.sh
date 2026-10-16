@@ -664,7 +664,7 @@ mark_row migration_externalsecret ready "migration-only DSN projected outside no
 
 # The catalog-declared reliability controller is a stacked deploy surface (task.5247),
 # but its credential substrate is owned here. When that capability is present in
-# the exact app source, install and wait its three control-plane ExternalSecrets
+# the exact app source, install and wait its app and observer ExternalSecrets
 # now—after materialization and before candidate assert can observe the app.
 # Rendering only these leaves avoids applying workloads from a privileged
 # substrate lane; names derive from the controller row and its overlay prefix.
@@ -678,10 +678,10 @@ if [[ "$reliability_controller" == true && -f "$database_reliability_es_file" ]]
       "$controller_es_file" > "$database_reliability_es_tmp"
   printf '\n---\n' >> "$database_reliability_es_tmp"
   RELIABILITY_NAMESPACE="cogni-${DEPLOY_ENVIRONMENT}" RELIABILITY_CONTROLLER="$TARGET_NODE" \
-    yq 'select(.kind == "ExternalSecret" and (.metadata.name == "database-reliability-actuator-env-secrets" or .metadata.name == "database-reliability-readmitter-env-secrets")) | .metadata.name = strenv(RELIABILITY_CONTROLLER) + "-" + .metadata.name | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
+    yq 'select(.kind == "ExternalSecret" and .metadata.name == "database-reliability-actuator-env-secrets") | .metadata.name = strenv(RELIABILITY_CONTROLLER) + "-" + .metadata.name | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
       "$database_reliability_es_file" >> "$database_reliability_es_tmp"
-  [[ "$(yq ea '.kind' "$database_reliability_es_tmp" | grep -cx ExternalSecret)" == 3 ]] \
-    || fail "database reliability substrate must render exactly three ExternalSecrets"
+  [[ "$(yq ea '.kind' "$database_reliability_es_tmp" | grep -cx ExternalSecret)" == 2 ]] \
+    || fail "database reliability substrate must render exactly the app and observer ExternalSecrets"
   stage_exact "$database_reliability_es_tmp" database-reliability-external-secrets
   database_reliability_external_secrets_stage="$STAGED_EXACT_PATH"
   remote "set -euo pipefail
@@ -690,7 +690,7 @@ if [[ "$reliability_controller" == true && -f "$database_reliability_es_file" ]]
     kubectl apply -f \"\$manifest\" >/dev/null
     rm -f \"\$manifest\"
     marker=\$(date +%s)
-    for es in ${TARGET_NODE}-env-secrets ${TARGET_NODE}-database-reliability-actuator-env-secrets ${TARGET_NODE}-database-reliability-readmitter-env-secrets; do
+    for es in ${TARGET_NODE}-env-secrets ${TARGET_NODE}-database-reliability-actuator-env-secrets; do
       before_refresh=\$(kubectl -n \"\$ns\" get externalsecret \"\$es\" -o jsonpath='{.status.refreshTime}' 2>/dev/null || true)
       kubectl -n \"\$ns\" annotate externalsecret \"\$es\" force-sync=\"\$marker\" --overwrite >/dev/null
       kubectl -n \"\$ns\" wait --for=condition=Ready \"externalsecret/\$es\" --timeout=120s >/dev/null
@@ -702,16 +702,13 @@ if [[ "$reliability_controller" == true && -f "$database_reliability_es_file" ]]
       done
       \$refreshed || { echo 'ExternalSecret refresh did not advance:' \"\$es\" >&2; exit 1; }
     done
-    for key in DATABASE_RELIABILITY_STATUS_TOKEN DATABASE_RELIABILITY_READMIT_TOKEN; do
+    for key in DATABASE_RELIABILITY_STATUS_TOKEN; do
       kubectl -n \"\$ns\" get secret ${TARGET_NODE}-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
     done
     for key in DATABASE_RELIABILITY_ADMIN_URL DATABASE_RELIABILITY_STATUS_TOKEN GRAFANA_URL GRAFANA_SERVICE_ACCOUNT_TOKEN; do
       kubectl -n \"\$ns\" get secret database-reliability-actuator-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
-    done
-    for key in DATABASE_RELIABILITY_READMIT_URL DATABASE_RELIABILITY_READMIT_TOKEN DATABASE_RELIABILITY_STATUS_TOKEN; do
-      kubectl -n \"\$ns\" get secret database-reliability-readmitter-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
     done"
-  mark_row database_reliability_externalsecrets ready "freshly reconciled controller, actuator, and readmitter ExternalSecrets"
+  mark_row database_reliability_externalsecrets ready "freshly reconciled app and observer ExternalSecrets"
 elif [[ "$reliability_controller" == true ]]; then
   mark_row database_reliability_externalsecrets skipped "reliability workload is absent from the exact source tree"
 fi

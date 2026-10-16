@@ -33,14 +33,16 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const promoteInput = z.object({
-  nodeId: z.string().min(1),
+  nodeId: z.string().min(1).describe("Node UUID or unique slug"),
   // preview: the activation trigger for a lane's first write (story.5039) — without it, an env
   // activated via the env verb never serves until a node-repo merge manufactures the auto path.
   // production: the RBAC-gated manual dispatch, unchanged.
@@ -53,140 +55,176 @@ const promoteInput = z.object({
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "deploy.promote", auth: { mode: "required", getSessionUser } },
   async (ctx, request, sessionUser) => {
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid request" }, { status: 400 });
-    }
-    const parsed = promoteInput.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json({ error: "Invalid request" }, { status: 400 });
-    }
-    const { nodeId, env, sourceSha, allowRollback } = parsed.data;
+    const startedAt = performance.now();
+    let response: NextResponse | undefined;
+    let targetNodeId: string | undefined;
+    const run = async (): Promise<NextResponse> => {
+      let body: unknown;
+      try {
+        body = await request.json();
+      } catch {
+        return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+      }
+      const parsed = promoteInput.safeParse(body);
+      if (!parsed.success) {
+        return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+      }
+      const { nodeId, env, sourceSha, allowRollback } = parsed.data;
 
-    const db = resolveServiceDb();
-    const nodeRows = await db
-      .select({ id: nodes.id, slug: nodes.slug })
-      .from(nodes)
-      .where(eq(nodes.id, nodeId))
-      .limit(1);
-    const node = nodeRows[0];
-    if (!node) {
-      return NextResponse.json({ error: "node_not_found" }, { status: 404 });
-    }
+      const db = resolveServiceDb();
+      const nodeRows = await db
+        .select({ id: nodes.id, slug: nodes.slug })
+        .from(nodes)
+        .where(nodeIdOrSlug(nodeId))
+        .limit(1);
+      const node = nodeRows[0];
+      targetNodeId = node?.id;
+      if (!node) {
+        return NextResponse.json({ error: "node_not_found" }, { status: 404 });
+      }
 
-    const billingRows = await db
-      .select({ id: billingAccounts.id })
-      .from(billingAccounts)
-      .where(eq(billingAccounts.ownerUserId, sessionUser.id))
-      .limit(1);
-    const billingAccount = billingRows[0];
-    if (!billingAccount) {
-      return NextResponse.json(
-        { error: "billing_account_missing" },
-        { status: 403 }
-      );
-    }
+      const billingRows = await db
+        .select({ id: billingAccounts.id })
+        .from(billingAccounts)
+        .where(eq(billingAccounts.ownerUserId, sessionUser.id))
+        .limit(1);
+      const billingAccount = billingRows[0];
+      if (!billingAccount) {
+        return NextResponse.json(
+          { error: "billing_account_missing" },
+          { status: 403 }
+        );
+      }
 
-    const authorization = getContainer().authorization;
-    if (!authorization) {
-      return NextResponse.json({ error: "authz_unavailable" }, { status: 503 });
-    }
+      const authorization = getContainer().authorization;
+      if (!authorization) {
+        return NextResponse.json(
+          { error: "authz_unavailable" },
+          { status: 503 }
+        );
+      }
 
-    // AUTHZ SPLIT: production keeps `node.promote_production`. Preview gates on `node.manage_envs`
-    // — the SAME authority that activates the env (envs/route.ts); activation + the lane's first
-    // write are one product action. The auto merge-hook path (node-preview-promote.server.ts) is
-    // V0_NO_RBAC — it rides the candidate-a grant — so this manual gate is strictly TIGHTER than
-    // the existing preview write path. A dedicated additive `preview_promoter` → `can_promote_preview`
-    // rung (see shared/db/node-access-requests.ts header) is the vNext refinement.
-    const decision = await authorization.check({
-      actorId: `user:${sessionUser.id}`,
-      action:
-        env === "production" ? "node.promote_production" : "node.manage_envs",
-      resource: `node:${node.id}`,
-      context: { tenantId: billingAccount.id, nodeId: node.id },
-    });
-    if (decision.decision !== "allow") {
-      const code: AuthzDecisionCode = decision.code;
-      return NextResponse.json(
-        { error: code },
-        { status: code === "authz_unavailable" ? 503 : 403 }
-      );
-    }
+      // AUTHZ SPLIT: production keeps `node.promote_production`. Preview gates on `node.manage_envs`
+      // — the SAME authority that activates the env (envs/route.ts); activation + the lane's first
+      // write are one product action. The auto merge-hook path (node-preview-promote.server.ts) is
+      // V0_NO_RBAC — it rides the candidate-a grant — so this manual gate is strictly TIGHTER than
+      // the existing preview write path. A dedicated additive `preview_promoter` → `can_promote_preview`
+      // rung (see shared/db/node-access-requests.ts header) is the vNext refinement.
+      const decision = await authorization.check({
+        actorId: `user:${sessionUser.id}`,
+        action:
+          env === "production" ? "node.promote_production" : "node.manage_envs",
+        resource: `node:${node.id}`,
+        context: { tenantId: billingAccount.id, nodeId: node.id },
+      });
+      if (decision.decision !== "allow") {
+        const code: AuthzDecisionCode = decision.code;
+        return NextResponse.json(
+          { error: code },
+          { status: code === "authz_unavailable" ? 503 : 403 }
+        );
+      }
 
-    const envConfig = serverEnv();
-    const owner = envConfig.NODE_SUBMODULE_PARENT_OWNER;
-    const repo = envConfig.NODE_SUBMODULE_PARENT_REPO;
-    if (!owner || !repo) {
-      return NextResponse.json(
-        { error: "promote_target_not_configured" },
-        { status: 503 }
-      );
-    }
-    try {
-      const deployPlane = createOperatorDeployPlane(envConfig);
-      // ONE_PROMOTION_PRIMITIVE: a caller-supplied sha is SOURCE-ADDRESSED via `promoteNode` — the
-      // SAME method the auto merge-hook uses, here with the requested env. It reads the catalog row
-      // to discriminate remote-source (fork → node_source_sha) from in-repo (operator/poly →
-      // source_sha). Without a sha, production preview-forwards the current `deploy/preview` digest —
-      // the raw dispatch (neither source_sha nor node_source_sha) trips the workflow's
-      // preview-forward branch after the typed plane validates preview's recorded provenance. A
-      // promote that resolves ZERO targets (env not in the node's catalog
-      // envs) still refuses loudly downstream (bug.5203, #2296) — no pre-filtering here.
-      const result =
-        sourceSha !== undefined
-          ? await deployPlane.promoteNode({
-              env,
-              parentOwner: owner,
-              parentRepo: repo,
-              slug: node.slug,
-              sourceSha,
-              allowRollback,
-            })
-          : env === "production"
-            ? await deployPlane.promoteNodeFromPreview({
+      const envConfig = serverEnv();
+      const owner = envConfig.NODE_SUBMODULE_PARENT_OWNER;
+      const repo = envConfig.NODE_SUBMODULE_PARENT_REPO;
+      if (!owner || !repo) {
+        return NextResponse.json(
+          { error: "promote_target_not_configured" },
+          { status: 503 }
+        );
+      }
+      try {
+        const deployPlane = createOperatorDeployPlane(envConfig);
+        // ONE_PROMOTION_PRIMITIVE: a caller-supplied sha is SOURCE-ADDRESSED via `promoteNode` — the
+        // SAME method the auto merge-hook uses, here with the requested env. It reads the catalog row
+        // to discriminate remote-source (fork → node_source_sha) from in-repo (operator/poly →
+        // source_sha). Without a sha, production preview-forwards the current `deploy/preview` digest —
+        // the raw dispatch (neither source_sha nor node_source_sha) trips the workflow's
+        // preview-forward branch after the typed plane validates preview's recorded provenance. A
+        // promote that resolves ZERO targets (env not in the node's catalog
+        // envs) still refuses loudly downstream (bug.5203, #2296) — no pre-filtering here.
+        const result =
+          sourceSha !== undefined
+            ? await deployPlane.promoteNode({
+                env,
                 parentOwner: owner,
                 parentRepo: repo,
                 slug: node.slug,
+                sourceSha,
                 allowRollback,
               })
-            : await deployPlane.dispatchNodePromote({
-                owner,
-                repo,
-                env,
-                slug: node.slug,
-              });
-      return NextResponse.json(result, { status: 200 });
-    } catch (error) {
-      // Authz already passed; a dispatch failure (e.g. operator App not installed
-      // on the target repo, GitHub timeout) is a downstream fault, not a 500.
-      const message =
-        error instanceof Error ? error.message : "dispatch failed";
-      const typed = error as { code?: unknown; status?: unknown };
-      const typedCode =
-        typeof typed.code === "string" ? typed.code : "dispatch_failed";
-      const typedStatus =
-        typeof typed.status === "number" &&
-        typed.status >= 400 &&
-        typed.status < 500
-          ? typed.status
-          : 502;
-      ctx.log.warn(
-        {
-          reqId: ctx.reqId,
-          routeId: ctx.routeId,
-          nodeId: node.id,
-          slug: node.slug,
-          errorCode: typedCode,
-          err: message,
-        },
-        "deploy.promote dispatch failed"
+            : env === "production"
+              ? await deployPlane.promoteNodeFromPreview({
+                  parentOwner: owner,
+                  parentRepo: repo,
+                  slug: node.slug,
+                  allowRollback,
+                })
+              : await deployPlane.dispatchNodePromote({
+                  owner,
+                  repo,
+                  env,
+                  slug: node.slug,
+                });
+        return NextResponse.json(result, { status: 200 });
+      } catch (error) {
+        // Authz already passed; a dispatch failure (e.g. operator App not installed
+        // on the target repo, GitHub timeout) is a downstream fault, not a 500.
+        const message =
+          error instanceof Error ? error.message : "dispatch failed";
+        const typed = error as { code?: unknown; status?: unknown };
+        const typedCode =
+          typeof typed.code === "string" ? typed.code : "dispatch_failed";
+        const typedStatus =
+          typeof typed.status === "number" &&
+          typed.status >= 400 &&
+          typed.status < 500
+            ? typed.status
+            : 502;
+
+        return NextResponse.json(
+          {
+            error: typedStatus === 502 ? "dispatch_failed" : typedCode,
+            message,
+          },
+          { status: typedStatus }
+        );
+      }
+    };
+    try {
+      response = await run();
+      return response;
+    } catch {
+      response = NextResponse.json(
+        { error: "promotion_failed" },
+        { status: 500 }
       );
-      return NextResponse.json(
-        { error: typedStatus === 502 ? "dispatch_failed" : typedCode, message },
-        { status: typedStatus }
-      );
+      return response;
+    } finally {
+      const status = response?.status ?? 500;
+      const errorCodes: Record<number, string> = {
+        400: "invalid_input",
+        403: "authz_denied",
+        404: "node_not_found",
+        409: "promotion_conflict",
+        422: "source_rejected",
+        500: "unhandled",
+        502: "dispatch_failed",
+        503: "control_plane_unavailable",
+      };
+      logEvent(ctx.log, EVENT_NAMES.NODE_PROMOTE_COMPLETE, {
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        targetNodeId,
+        status,
+        outcome: status < 400 ? "success" : "error",
+        errorCode:
+          status >= 400
+            ? (errorCodes[status] ?? "deployment_failed")
+            : undefined,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
     }
   }
 );

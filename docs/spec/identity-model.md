@@ -261,7 +261,8 @@ node_id>` (read from the child repo), never a fresh UUID — so identity cannot 
   _address_ a node in API paths and UIs; the UUID `node_id` is the immutable _authority_
   that reaches OpenFGA tuples and Loki labels. A slug is unique but not guaranteed
   immutable, so it must never be an OpenFGA resource or a ledger key. Resolve `{id}` path
-  segments by `node_id` **or** `slug`, then use the UUID downstream.
+  segments by `node_id` **or** `slug`, then use the UUID downstream. UUID-shaped
+  references are reserved for `node_id`; other references resolve by the unique slug.
 
 ## Scoping Rules
 

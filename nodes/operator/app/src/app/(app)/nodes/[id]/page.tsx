@@ -11,19 +11,16 @@
  */
 
 import type { NodeDeployState } from "@cogni/ai-tools";
-import { withTenantScope } from "@cogni/db-client";
-import { type UserId, userActor } from "@cogni/ids";
 import { getDaoUrl } from "@cogni/node-shared";
-import { and, eq } from "drizzle-orm";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import type { ReactElement } from "react";
 import { listAccessibleNodeOperations } from "@/app/_facades/nodes/operations.server";
+import { readOwnedNode } from "@/app/_lib/owned-node-read";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import {
   getContainer,
-  resolveAppDb,
   resolveNodeDistributionConfigResolver,
   resolveServiceDb,
 } from "@/bootstrap/container";
@@ -39,7 +36,7 @@ import { NodeWizard } from "@/features/nodes/wizard/NodeWizard.client";
 import type { WizardNode } from "@/features/nodes/wizard/types";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { getNodeId, getNodeTokenomicsConfig } from "@/shared/config";
-import { type NodeStatus, nodes } from "@/shared/db/nodes";
+import type { NodeStatus } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
 import {
   buildNodeKnowledgeRemote,
@@ -64,19 +61,11 @@ export default async function NodeDashboardPage({
   }
 
   const { id } = await params;
-  const db = resolveAppDb();
-  const rows = await withTenantScope(
-    db,
-    userActor(session.id as UserId),
-    async (tx) =>
-      tx
-        .select()
-        .from(nodes)
-        .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
-        .limit(1)
-  );
-
-  const node = rows[0];
+  const node = await readOwnedNode({
+    id,
+    userId: session.id,
+    routeId: "nodes.detail",
+  });
   if (!node) {
     notFound();
   }

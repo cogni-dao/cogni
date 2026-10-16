@@ -19,7 +19,8 @@ export type AuthzAction =
   | "node.flight"
   | "node.manage_secrets"
   | "node.promote_production"
-  | "node.manage_envs";
+  | "node.manage_envs"
+  | "node.administer";
 
 export const AUTHZ_ACTIONS = [
   "tool.execute",
@@ -30,6 +31,7 @@ export const AUTHZ_ACTIONS = [
   "node.manage_secrets",
   "node.promote_production",
   "node.manage_envs",
+  "node.administer",
 ] as const satisfies readonly AuthzAction[];
 
 export type AuthzDecisionCode =
@@ -156,6 +158,12 @@ export function relationForAuthzAction(action: AuthzAction): string {
       return "can_promote_production";
     case "node.manage_envs":
       return "can_manage_envs";
+    case "node.administer":
+      // Node-admin (hub-admin) scope — the directly-assignable `admin` relation in the
+      // OpenFGA model, deliberately above env_manager. Gates repo-governance verbs that
+      // flip GitHub Actions permissions (reconcile-actions). No model change: `admin`
+      // already exists on `type node` and is held by the node owner.
+      return "admin";
   }
 }
 

@@ -203,7 +203,8 @@ describe("fleet Serve alert contract (bug.5459)", () => {
           )
         )
         .map((document) => document.toJSON());
-      const [actuator, readmitter] = resources;
+      const [actuator] = resources;
+      expect(resources).toHaveLength(1);
       for (const key of ["GRAFANA_URL", "GRAFANA_SERVICE_ACCOUNT_TOKEN"]) {
         const routing = catalog.routing[key];
         if (!routing) throw new Error("canonical Grafana routing missing");
@@ -217,11 +218,6 @@ describe("fleet Serve alert contract (bug.5459)", () => {
           ).remoteRef
         ).toEqual({ key: expected, property: key });
       }
-      expect(
-        readmitter.spec.data.map(
-          (entry: { secretKey: string }) => entry.secretKey
-        )
-      ).toEqual(["DATABASE_RELIABILITY_STATUS_TOKEN"]);
       for (const resource of resources)
         expect(
           resource.spec.data.map(
@@ -236,66 +232,18 @@ describe("fleet Serve alert contract (bug.5459)", () => {
   });
 
   it("retires admission writers, preserves observation and validates regional identity", () => {
-    const watchdogResources = yaml
-      .parseAllDocuments(
-        readFileSync(
-          path.resolve(
-            __dirname,
-            "../../infra/k8s/base/database-reliability-actuator/watchdog.yaml"
-          ),
-          "utf8"
-        )
-      )
-      .map((document) => document.toJSON());
-    const watchdog = watchdogResources.find(
-      (resource) => resource.kind === "Deployment"
-    );
-    const container = watchdog.spec.template.spec.containers[0];
-    expect(watchdog.spec.replicas).toBe(0);
     const deployments = yaml
-      .parseAllDocuments(
-        readFileSync(
-          path.resolve(
-            __dirname,
-            "../../infra/k8s/base/database-reliability-actuator/deployment.yaml"
-          ),
-          "utf8"
-        )
-      )
+      .parseAllDocuments(readFileSync(RUNTIME_POLICY_FILE, "utf8"))
       .map((document) => document.toJSON());
     expect(
-      deployments.find(
-        (resource) =>
-          resource.kind === "Deployment" &&
-          resource.metadata.name === "database-reliability-readmitter"
-      ).spec.replicas
-    ).toBe(0);
+      deployments
+        .filter((resource) => resource.kind === "Deployment")
+        .map((resource) => resource.metadata.name)
+    ).toEqual(["database-reliability-actuator"]);
     expect(
-      deployments.find(
-        (resource) =>
-          resource.kind === "Deployment" &&
-          resource.metadata.name === "database-reliability-actuator"
-      ).spec.replicas
+      deployments.find((resource) => resource.kind === "Deployment").spec
+        .replicas
     ).toBe(1);
-    expect(container.env).toContainEqual({
-      name: "DATABASE_RELIABILITY_MODE",
-      value: "watchdog",
-    });
-    expect(
-      container.env.map((row: { name: string }) => row.name)
-    ).not.toContain("PROMETHEUS_QUERY_URL");
-    expect(
-      watchdog.spec.template.spec.volumes[0].projected.sources[0].secret.items
-    ).toEqual([
-      {
-        key: "DATABASE_RELIABILITY_ADMIN_URL",
-        path: "DATABASE_RELIABILITY_ADMIN_URL",
-      },
-      {
-        key: "DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON",
-        path: "DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON",
-      },
-    ]);
     const source = readFileSync(RELIABILITY_ACTUATOR_FILE, "utf8");
     expect(source.indexOf('if (mode === "watchdog")')).toBeLessThan(
       source.indexOf("await resolveReliabilityController()")
@@ -448,12 +396,7 @@ describe("fleet Serve alert contract (bug.5459)", () => {
         resource.kind === "NetworkPolicy" &&
         resource.metadata.name === "database-reliability-actuator"
     );
-    const readmitterPolicy = resources.find(
-      (resource) =>
-        resource.kind === "NetworkPolicy" &&
-        resource.metadata.name === "database-reliability-readmitter"
-    );
-    for (const policy of [actuatorPolicy, readmitterPolicy]) {
+    for (const policy of [actuatorPolicy]) {
       expect(policy.spec.egress).toContainEqual({
         to: [
           {
@@ -487,27 +430,8 @@ describe("fleet Serve alert contract (bug.5459)", () => {
               matchLabels: { "app.kubernetes.io/name": "node-app" },
             },
           },
-          {
-            podSelector: {
-              matchLabels: {
-                "app.kubernetes.io/name": "database-reliability-readmitter",
-              },
-            },
-          },
         ],
         ports: [{ protocol: "TCP", port: 8080 }],
-      }),
-    ]);
-    expect(readmitterPolicy.spec.ingress).toEqual([
-      expect.objectContaining({
-        from: [
-          {
-            podSelector: {
-              matchLabels: { "app.kubernetes.io/name": "node-app" },
-            },
-          },
-        ],
-        ports: [{ protocol: "TCP", port: 8081 }],
       }),
     ]);
     const deployment = readFileSync(
@@ -523,13 +447,7 @@ describe("fleet Serve alert contract (bug.5459)", () => {
         resource.kind === "Deployment" &&
         resource.metadata.name === "database-reliability-actuator"
     );
-    const readmitter = resources.find(
-      (resource) =>
-        resource.kind === "Deployment" &&
-        resource.metadata.name === "database-reliability-readmitter"
-    );
     const serializedSweep = JSON.stringify(sweep);
-    const serializedReadmitter = JSON.stringify(readmitter);
     expect(sweep.spec.template.spec.volumes).toEqual([
       {
         name: "credentials",
@@ -545,26 +463,8 @@ describe("fleet Serve alert contract (bug.5459)", () => {
         },
       },
     ]);
-    expect(readmitter.spec.template.spec.volumes).toEqual([
-      {
-        name: "credentials",
-        projected: {
-          sources: [
-            {
-              secret: {
-                name: "database-reliability-readmitter-env-secrets",
-                optional: true,
-              },
-            },
-          ],
-        },
-      },
-    ]);
     expect(serializedSweep).not.toContain(
       "database-reliability-readmitter-env-secrets"
-    );
-    expect(serializedReadmitter).not.toContain(
-      "database-reliability-actuator-env-secrets"
     );
     for (const environment of ["candidate-a", "preview", "production"]) {
       const externalSecret = readFileSync(
@@ -604,40 +504,29 @@ describe("fleet Serve alert contract (bug.5459)", () => {
       );
       expect(
         overlay.match(/name: FORK_DOMAIN_ROOT\s+value: cognidao\.org/g)
-      ).toHaveLength(2);
+      ).toHaveLength(1);
     }
   });
 
-  it("gates reliability runtime only after promotion and exact-SHA proof", () => {
+  it("retains generic preflight and exact-SHA proof without retired controller gates", () => {
     const workflow = readFileSync(CANDIDATE_FLIGHT_FILE, "utf8");
     const preflight = workflow.indexOf("- name: Assert target substrate");
-    const preflightMarker = workflow.indexOf(
-      "- name: Emit per-node assert marker"
-    );
     const exactSha = workflow.indexOf(
       "- name: Verify buildSha on endpoint (per-node)"
-    );
-    const runtime = workflow.indexOf(
-      "- name: Assert promoted database reliability runtime"
     );
     const smoke = workflow.indexOf(
       "- name: Run candidate smoke checks (per-node)"
     );
     expect(preflight).toBeGreaterThan(-1);
-    expect(preflightMarker).toBeGreaterThan(preflight);
-    expect(exactSha).toBeGreaterThan(preflightMarker);
-    expect(runtime).toBeGreaterThan(exactSha);
-    expect(smoke).toBeGreaterThan(runtime);
-    expect(workflow.slice(preflight, preflightMarker)).toContain(
-      'ASSERT_DATABASE_RELIABILITY_RUNTIME: "false"'
+    expect(exactSha).toBeGreaterThan(preflight);
+    expect(smoke).toBeGreaterThan(exactSha);
+    expect(workflow).not.toContain(
+      "Assert promoted database reliability runtime"
     );
-    expect(workflow.slice(runtime, smoke)).toContain(
-      'ASSERT_DATABASE_RELIABILITY_RUNTIME: "true"'
+    expect(workflow).not.toContain("ASSERT_DATABASE_RELIABILITY_RUNTIME");
+    expect(readFileSync(TARGET_SUBSTRATE_ASSERT_FILE, "utf8")).not.toContain(
+      "database-reliability-readmitter-env-secrets"
     );
-    expect(workflow.slice(runtime, smoke)).toContain(
-      ".reliability.controller // false"
-    );
-    expect(workflow).not.toContain("matrix.node == 'operator'");
   });
 
   it("derives reliability controller and replay roles without node-name behavior", () => {

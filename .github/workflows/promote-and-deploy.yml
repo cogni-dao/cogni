@@ -441,6 +441,11 @@ jobs:
     env:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
+      - name: Checkout workflow tooling
+        uses: actions/checkout@v4
+        with:
+          path: ci-src
+
       - name: Checkout app source
         uses: actions/checkout@v4
         with:
@@ -632,6 +637,8 @@ jobs:
           rsync -a --delete --exclude='env-state.yaml' \
             "app-src/infra/k8s/overlays/${OVERLAY_ENV}/${NODE}/" \
             "deploy-branch/infra/k8s/overlays/${OVERLAY_ENV}/${NODE}/"
+          . ci-src/scripts/ci/lib/shared-platform-manifests.sh
+          reconcile_shared_platform_manifests "$GITHUB_WORKSPACE/ci-src" "$GITHUB_WORKSPACE/deploy-branch" "$OVERLAY_ENV" "$NODE"
           mkdir -p deploy-branch/infra/catalog
           cp "app-src/infra/catalog/${NODE}.yaml" "deploy-branch/infra/catalog/${NODE}.yaml"
           if [ "$DEPLOYMENT_PROVIDER" = "k3s" ] && [ -d "app-src/nodes/${NODE}/k8s/external-secrets/${OVERLAY_ENV}" ]; then
@@ -651,11 +658,11 @@ jobs:
           SOURCE_SHA: ${{ steps.digest.outputs.source_sha }}
         run: |
           set -euo pipefail
-          ../app-src/scripts/ci/promote-k8s-image.sh --no-commit \
+          bash ../ci-src/scripts/ci/promote-k8s-image.sh --no-commit \
             --env "$OVERLAY_ENV" --app "$NODE" --digest "$DIGEST" \
             --source-sha "$SOURCE_SHA"
           APP="$NODE" SOURCE_SHA="$SOURCE_SHA" \
-            bash ../app-src/scripts/ci/update-source-sha-map.sh
+            bash ../ci-src/scripts/ci/update-source-sha-map.sh
 
       - name: Record external workload source-sha
         if: steps.digest.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER == 'akash'
@@ -677,7 +684,7 @@ jobs:
             CATALOG_BIRTH_SHA=""
           fi
           export CATALOG_BIRTH_SHA
-          bash ../app-src/scripts/ci/update-source-sha-map.sh
+          bash ../ci-src/scripts/ci/update-source-sha-map.sh
 
       - name: Commit and push
         id: push
@@ -866,7 +873,7 @@ jobs:
           DOMAIN: ${{ vars.DOMAIN }}
           APP_SOURCE_DIR: app-src
           COGNI_CATALOG_ROOT: app-src/infra/catalog
-        run: bash ci-src/scripts/ci/run-node-substrate.sh "${{ needs.decide.outputs.environment }}" "${{ matrix.node }}"
+        run: pnpm --dir ci-src exec tsx scripts/lib/run-node-substrate.ts "${{ needs.decide.outputs.environment }}" "${{ matrix.node }}"
 
   deploy-infra:
     if: |

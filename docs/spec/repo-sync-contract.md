@@ -10,7 +10,7 @@ implements:
   - proj.repo-sync
 owner: derekg1729
 created: 2026-05-26
-verified: 2026-09-29
+verified: 2026-10-15
 tags:
   - ci-cd
   - deployment
@@ -77,7 +77,7 @@ Define the contract that:
 
 12. **SYNC_IS_A_REVIEWED_PR**: the refresh opens ONE pull request as the operator GitHub App, parented on the mirror's own `main` so it is conflict-free by construction. It never pushes or force-pushes `main`, and hub `production`/`staging` secret material is declared hub-only so it cannot enter the mirror's tree by construction rather than by convention.
 
-13. **AUTOMATIC_FORK_SOURCE_SYNC_DOES_NOT_EXIST**: a `node-template` default-branch push MUST NOT create or update branches or PRs in child node repositories. The webhook has no fork-sync dispatcher, the deploy plane exposes no fork source-writing methods, and CI rejects reintroduction of the retired symbols/branches. This removal followed bug.5304, where the old template-authoritative overlay rewrote product paths in every active fork and deleted Poly's rendered copy-trading dashboard. Cross-repo delivery uses versioned packages, pinned reusable workflows, or rare fail-closed codemods; until a lane exists, changes are ordinary reviewed per-node PRs.
+13. **AUTOMATIC_FORK_SOURCE_SYNC_DOES_NOT_EXIST**: a `node-template` default-branch push MUST NOT create or update branches or PRs in child node repositories. The webhook has no fork-sync dispatcher, the deploy plane exposes no fork source-writing methods, and CI rejects reintroduction of the retired symbols/branches. This removal followed bug.5304, where the old template-authoritative overlay rewrote product paths in every active fork and deleted Poly's rendered copy-trading dashboard. Cross-repo delivery MUST follow the canonical [ownership classification](https://cognidao.org/knowledge/fork-sync-product-clobber) and [shared-package release contract](https://cognidao.org/knowledge/publish-shared-runtime-core); this spec does not duplicate them.
 
 14. **OWNER_APP_BOUNDARY_FAILS_CLOSED**: every `role: test-parent` artifact declares the non-secret GitHub App ID + slug allowed to write its owner. The workflow mints with that manifest ID, masks decoded key material before workflow output, and verifies the returned App slug before any repository write. It never selects an App ID from a generic environment secret. A stale cross-environment keypair therefore fails authentication instead of widening authority or writing to the wrong org.
 
@@ -169,8 +169,7 @@ behavior; Toks4 also received product-path changes. This disproved both
 
 - A template push creates **zero** fork source-sync branches and PRs.
 - Retired writer names and their living branch names are forbidden by a structural CI guard.
-- Cross-repo fixes use explicit, ordinary per-node PRs while package/workflow/migration distribution is
-  built. Product ownership is never inferred from absence in an exception list.
+- Cross-repo delivery follows the canonical [ownership classification](https://cognidao.org/knowledge/fork-sync-product-clobber). A targeted manual source port is allowed only after its PR records the required package-candidate analysis. Product ownership is never inferred from absence in an exception list.
 - Compatibility is not source equality: a node's supported platform version and conformance behavior
   determine health. A divergent source tree that satisfies the contract is decoupled, not stale.
 

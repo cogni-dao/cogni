@@ -22,6 +22,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { rootCertificates } from "node:tls";
 
 import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
@@ -695,6 +696,211 @@ describe("qualified cell app releases", () => {
       ...service,
       env: { COGNI_REPO_SHA: sha },
     })),
+  });
+  function withBoundedManualCell() {
+    const context = withCell();
+    const receipt =
+      context.ledger.rows.get("cell")?.appliedDatabaseCellBinding?.[0];
+    if (!receipt) throw new Error("missing cell fixture");
+    receipt.registration = {
+      kind: "audited-manual",
+      executionActor: { kind: "agent", id: "fixture" },
+      approvalAuthority: {
+        kind: "conversation-user",
+        label: "CEO",
+        humanAppUserId: null,
+        source: "direct-user-instruction",
+        decisionRef: "fixture",
+        capturedAt: "2026-10-15T00:00:00Z",
+        delegationDigest: "a".repeat(64),
+      },
+      readmissionReceiptId: "fixture",
+      manualCutoverPacketSha256: "a".repeat(64),
+      sourceSystemIdentifier: "456",
+      scheduledBackupReceiptSha256: "b".repeat(64),
+      independentRecoveryReceiptSha256: "c".repeat(64),
+      appAllocationReceiptId: "fixture",
+      appSdlHash: "d".repeat(64),
+      appDsnSha256: createHash("sha256").update(appDsn).digest("hex"),
+      serviceDsnSha256: createHash("sha256").update(serviceDsn).digest("hex"),
+      migrationDsnSha256: createHash("sha256").update(appDsn).digest("hex"),
+      migrationConsumer: "app-database-url",
+      tlsTrustKind: "system",
+      runtimePoolLimits: { replicaCount: 1, app: 3, service: 4, read: 2 },
+      registeredAt: "2026-10-15T00:00:00Z",
+    };
+    return context;
+  }
+  const appDsn =
+    "postgresql://app:fixture@owned.example/cogni_toks9?sslmode=verify-full";
+  const serviceDsn =
+    "postgresql://service:fixture@owned.example/cogni_toks9?sslmode=verify-full";
+  const boundedSpecAt = (sha: string): ProvisionSpec => ({
+    ...specAt(sha),
+    services: specAt(sha).services.map((service) => ({
+      ...service,
+      env: {
+        ...service.env,
+        // provider-http resolves owned placeholders before sending this wire body.
+        DATABASE_URL: appDsn,
+        DATABASE_SERVICE_URL: serviceDsn,
+        DATABASE_SSL_CA_CERT: rootCertificates[0] ?? "",
+        DB_POOL_MAX: "3",
+        DB_SERVICE_POOL_MAX: "4",
+        DB_READ_POOL_MAX: "2",
+      },
+    })),
+  });
+  it("upgrades a resolved provider-http request without rewriting historical admission", async () => {
+    const { actuator, ledger, api, migration } = withBoundedManualCell();
+    const admission = structuredClone(ledger.rows.get("cell"));
+    await actuator.create({
+      cogniKey: "app",
+      environment: "production",
+      identity: IDENTITY,
+      spec: boundedSpecAt(qualifiedSha),
+    });
+    await actuator.observe({
+      cogniKey: "app",
+      workload: SPEC.name,
+      environment: "production",
+      migration: STEP,
+      expectedSourceSha: otherSha,
+    });
+    await actuator.update({
+      cogniKey: "app",
+      externalName: "7001",
+      environment: "production",
+      identity: { ...IDENTITY, compositeGeneration: 4 },
+      spec: boundedSpecAt(otherSha),
+    });
+    expect(api.allocateCalls).toBe(1);
+    expect(api.updateCalls).toBe(1);
+    expect(migration.calls).toHaveLength(1);
+    expect(ledger.rows.get("cell")).toEqual(admission);
+    expect(ledger.rows.get("app")?.externalName).toBe("7001");
+  });
+  it.each([
+    { DB_POOL_MAX: "30" },
+    { DB_SERVICE_POOL_MAX: "40" },
+    { DB_READ_POOL_MAX: "20" },
+    { DATABASE_URL: "postgresql://other.example.org/wrong" },
+    { DATABASE_SERVICE_URL: "postgresql://other.example.org/wrong" },
+    {
+      DATABASE_URL:
+        "{{ toks9-compute-env-secrets:cogni-production:DATABASE_URL }}",
+    },
+    {
+      DATABASE_SERVICE_URL:
+        "{{ other-compute-env-secrets:cogni-production:DATABASE_SERVICE_URL }}",
+    },
+    {
+      DATABASE_SSL_CA_CERT:
+        "{{ toks9-compute-env-secrets:cogni-preview:DATABASE_SSL_CA_CERT }}",
+    },
+    {
+      DATABASE_SSL_CA_CERT:
+        "-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----",
+    },
+    { COGNI_REPO_SHA: "not-a-sha" },
+  ])("refuses consumer drift before provider mutation: %j", async (change) => {
+    const { actuator, ledger, api } = withBoundedManualCell();
+    const spec = boundedSpecAt(otherSha);
+    await expect(
+      actuator.create({
+        cogniKey: "app",
+        environment: "production",
+        identity: IDENTITY,
+        spec: {
+          ...spec,
+          services: spec.services.map((s) => ({
+            ...s,
+            env: { ...s.env, ...change },
+          })),
+        },
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(ledger.rows.has("app")).toBe(false);
+    expect(api.allocateCalls).toBe(0);
+  });
+  it.each([
+    undefined,
+    rootCertificates[0]?.replaceAll("\n", "\\n"),
+  ])("preserves system trust with a resolved CA representation: %j", async (ca) => {
+    const { actuator, api } = withBoundedManualCell();
+    const spec = boundedSpecAt(otherSha);
+    await actuator.create({
+      cogniKey: "app",
+      environment: "production",
+      identity: IDENTITY,
+      spec: {
+        ...spec,
+        services: spec.services.map((service) => ({
+          ...service,
+          env: Object.fromEntries(
+            Object.entries({ ...service.env, DATABASE_SSL_CA_CERT: ca }).filter(
+              (entry): entry is [string, string] => entry[1] !== undefined
+            )
+          ),
+        })),
+      },
+    });
+    expect(api.allocateCalls).toBe(1);
+  });
+  it("preserves private CA bytes across releases and refuses a replacement before provider mutation", async () => {
+    const { actuator, ledger, api } = withBoundedManualCell();
+    const receipt = ledger.rows.get("cell")?.appliedDatabaseCellBinding?.[0];
+    const ca = rootCertificates[0];
+    if (!receipt?.registration || !ca) throw new Error("missing TLS fixture");
+    receipt.registration = {
+      ...receipt.registration,
+      tlsTrustKind: "private-ca",
+      tlsCaSha256: createHash("sha256").update(ca).digest("hex"),
+    };
+    await actuator.create({
+      cogniKey: "app",
+      environment: "production",
+      identity: IDENTITY,
+      spec: boundedSpecAt(qualifiedSha),
+    });
+    const spec = boundedSpecAt(otherSha);
+    await expect(
+      actuator.update({
+        cogniKey: "app",
+        externalName: "7001",
+        environment: "production",
+        identity: { ...IDENTITY, compositeGeneration: 4 },
+        spec: {
+          ...spec,
+          services: spec.services.map((service) => ({
+            ...service,
+            env: {
+              ...service.env,
+              DATABASE_SSL_CA_CERT: rootCertificates[1] ?? "changed",
+            },
+          })),
+        },
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(api.updateCalls).toBe(0);
+  });
+  it("refuses multiple database consumers even when each repeats the admitted pool policy", async () => {
+    const { actuator, api } = withBoundedManualCell();
+    const spec = boundedSpecAt(otherSha);
+    const service = spec.services[0];
+    if (!service) throw new Error("missing app fixture");
+    await expect(
+      actuator.create({
+        cogniKey: "app",
+        environment: "production",
+        identity: IDENTITY,
+        spec: {
+          ...spec,
+          services: [...spec.services, { ...service, name: "extra" }],
+        },
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(api.allocateCalls).toBe(0);
   });
   it("refuses missing or changed app SHA before creating a receipt or touching the provider", async () => {
     for (const spec of [SPEC, specAt(otherSha)]) {

@@ -369,6 +369,51 @@ describe("candidate-a manifest source", () => {
     );
   });
 
+  it("reapplies shared platform settings at every candidate and promotion copy seam", () => {
+    const prepare = namedStep(
+      "prepare-substrate-deploy-branch",
+      "Prepare deploy branch shape"
+    );
+    const sync = namedStep(
+      "flight",
+      "Sync base + per-node overlay + per-node catalog to deploy branch"
+    );
+    for (const step of [prepare, sync]) {
+      expect(step.run).toContain("reconcile_shared_platform_manifests");
+      expect(step.run).toContain(
+        "ci-src/scripts/ci/lib/shared-platform-manifests.sh"
+      );
+    }
+    expect(prepare.run).toContain(
+      "bash ../ci-src/scripts/ci/promote-k8s-image.sh"
+    );
+    const routing = namedStep(
+      "reconcile-scheduler-worker-routing",
+      "Reconcile scheduler-worker routing (propagate to per-env deploy branch)"
+    );
+    expect(routing.env?.APP_SOURCE_DIR).toBe("${{ github.workspace }}/app-src");
+    expect(routing.run).not.toContain("skipping routing reconcile");
+    const promotion = yaml.parse(
+      readFileSync(
+        path.join(REPO_ROOT, ".github/workflows/promote-and-deploy.yml"),
+        "utf8"
+      )
+    );
+    const promotionSteps = Object.values(promotion.jobs).flatMap(
+      (job) => (job as WorkflowJob).steps ?? []
+    );
+    const promotionSync = promotionSteps.find(
+      (step) => step.name === "Sync infra/k8s + per-node catalog from app-src"
+    );
+    expect(promotionSync?.run).toContain("reconcile_shared_platform_manifests");
+    const promote = promotionSteps.find(
+      (step) => step.name === "Promote digest + record source-sha"
+    );
+    expect(promote?.run).toContain(
+      "bash ../ci-src/scripts/ci/promote-k8s-image.sh"
+    );
+  });
+
   it("uses reviewed substrate scripts only for an exact in-repository self-flight", () => {
     const substrate = namedStep(
       "node-substrate",

@@ -317,18 +317,23 @@ import json, sys
 assert json.load(open(sys.argv[1]))["status"] == "noop"
 PY
 echo "PASS: idempotent (second run is a clean no-op)"
+git -C "$DEPLOY_DIR" diff --exit-code -- "infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml" || fail "final platform policy was not committed"
+[ "$(git -C "$DEPLOY_DIR" show "HEAD:infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml" | yq -N '.replicas[] | select(.name == "scheduler-worker") | .count')" = 1 ] || fail "commit omitted native platform replica transform"
 
 REPLICAS_PATCH=infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml
-mv "$APP_SRC/$REPLICAS_PATCH" "$TMPROOT/replicas-original.yaml"
-run >/dev/null || fail "older reviewed source without replica override refused"
-[ ! -f "$DEPLOY_DIR/$REPLICAS_PATCH" ] || fail "stale replica override survived source rollback"
-[ "$(kubectl kustomize "$(dirname "$OVERLAY")" | yq -N 'select(.kind == "Deployment") | .spec.replicas')" = 2 ] \
-  || fail "source rollback did not restore the base replica policy"
-mv "$TMPROOT/replicas-original.yaml" "$APP_SRC/$REPLICAS_PATCH"
-run >/dev/null || fail "reviewed one-replica policy did not restore"
-[ "$(kubectl kustomize "$(dirname "$OVERLAY")" | yq -N 'select(.kind == "Deployment") | .spec.replicas')" = 1 ] \
-  || fail "restored source replica override is ineffective"
-echo "PASS: replica override follows reviewed source, including older-source rollback"
+SERIAL_PATCH=infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml
+cp "$APP_SRC/$REPLICAS_PATCH" "$TMPROOT/replicas-original.yaml"
+yq -i '.spec.replicas = 2' "$APP_SRC/$REPLICAS_PATCH"
+yq -i '.spec.paused = true | .spec.strategy.rollingUpdate.maxSurge = 1' "$APP_SRC/$SERIAL_PATCH"
+run >/dev/null || fail "older reviewed source policy refused"
+RENDERED="$(kubectl kustomize "$(dirname "$OVERLAY")")"
+[ "$(yq -N 'select(.kind == "Deployment") | .spec.replicas' <<< "$RENDERED")" = 1 ] || fail "stale app restored two workers"
+[ "$(yq -N 'select(.kind == "Deployment") | .spec.paused' <<< "$RENDERED")" = false ] || fail "stale app paused worker"
+rm "$APP_SRC/$REPLICAS_PATCH" "$APP_SRC/$SERIAL_PATCH"
+run >/dev/null || fail "older reviewed source without platform patches refused"
+[ "$(kubectl kustomize "$(dirname "$OVERLAY")" | yq -N 'select(.kind == "Deployment") | .spec.replicas')" = 1 ] || fail "missing app patch replaced platform policy"
+cp "$TMPROOT/replicas-original.yaml" "$APP_SRC/$REPLICAS_PATCH"
+echo "PASS: platform count/startup policy survives stale or absent app patches"
 
 # The digest follows the final composed consumer, not just one routing source.
 cp "$APP_SRC/$SUBPATH/configmap.yaml" "$TMPROOT/config-original.yaml"
