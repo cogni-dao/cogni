@@ -4051,7 +4051,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     isInRepoNode: boolean;
   }): Promise<{
     repo: string;
-    permissions: { enabled: boolean; allowed_actions: string };
+    permissions: { enabled: boolean; allowed_actions: string | null };
     workflow: {
       default_workflow_permissions: string;
       can_approve_pull_request_reviews: boolean;
@@ -4085,7 +4085,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       repo: `${owner}/${repo}`,
       permissions: {
         enabled: permissions.data.enabled,
-        allowed_actions: permissions.data.allowed_actions,
+        allowed_actions: permissions.data.allowed_actions ?? null,
       },
       workflow: {
         default_workflow_permissions:

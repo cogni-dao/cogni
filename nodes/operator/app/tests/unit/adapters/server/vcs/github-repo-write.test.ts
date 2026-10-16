@@ -5071,6 +5071,29 @@ describe("node Actions inspection", () => {
     );
     expect(requests.every(({ route }) => route.startsWith("GET "))).toBe(true);
   });
+  it("preserves unknown policy fields rather than inventing an applied value", async () => {
+    routeHandlers["GET /repos/{owner}/{repo}/actions/permissions"] = () => ({
+      enabled: false,
+    });
+    routeHandlers["GET /repos/{owner}/{repo}/actions/permissions/workflow"] =
+      () => ({
+        default_workflow_permissions: "read",
+        can_approve_pull_request_reviews: false,
+      });
+    routeHandlers[
+      "GET /repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval"
+    ] = () => ({ approval_policy: "first_time_contributors" });
+    const result = await makeWriter().inspectNodeActionsPermissions({
+      owner: "Cogni-DAO",
+      repo: "red",
+      slug: "red",
+      isInRepoNode: false,
+    });
+    expect(result.permissions).toEqual({
+      enabled: false,
+      allowed_actions: null,
+    });
+  });
   it("rejects inspection of the parent repository", async () => {
     await expect(
       makeWriter().inspectNodeActionsPermissions({
