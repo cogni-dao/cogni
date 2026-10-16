@@ -1733,6 +1733,7 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         `Actor liabilities require a finalized target epoch ${targetEpochId}`
       );
     }
+    const targetEpochClosedAt = targetEpoch.closedAt;
     const sourceEpoch = alias(epochs, "actor_liability_source_epoch");
     const rows = await this.db
       .select({
@@ -1799,7 +1800,7 @@ export class DrizzleAttributionAdapter implements AttributionStore {
                 actorBeneficiaryPolicies.effectiveFrom,
                 new Date(allocation.contributionCutoff)
               ),
-              lte(actorBeneficiaryPolicies.effectiveFrom, targetEpoch.closedAt)
+              lte(actorBeneficiaryPolicies.effectiveFrom, targetEpochClosedAt)
             )
           )
           .orderBy(asc(actorBeneficiaryPolicies.effectiveFrom))
