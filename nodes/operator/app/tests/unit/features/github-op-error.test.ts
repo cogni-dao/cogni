@@ -9,6 +9,10 @@ describe("GitHub operation failure classification", () => {
       new Error("Actions has been disabled for this repository."),
       { status: 422 }
     );
+    expect(classifyGithubOpError(error).error).toContain(
+      "fork reactivation prompt"
+    );
+    expect(classifyGithubOpError(error).error).not.toContain("Support");
     expect(classifyGithubOpError(error)).toMatchObject({
       status: 422,
       errorCode: "actions_disabled",

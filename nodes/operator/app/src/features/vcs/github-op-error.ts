@@ -39,7 +39,7 @@ export function classifyGithubOpError(error: unknown): GithubOpErrorResult {
       status: 422,
       errorCode: "actions_disabled",
       error:
-        "GitHub refuses Actions execution for this repository despite its configurable permissions. Request GitHub Support review; changing approval policy does not establish that Actions can execute.",
+        "GitHub is blocking Actions execution for this repository. Check its Actions page for a fork reactivation prompt; enabled permissions do not prove workflows can execute.",
     };
   }
   if (/not installed/i.test(message)) {
