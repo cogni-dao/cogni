@@ -48,7 +48,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 **Contribution schemas** (`@cogni/knowledge-store/contribution-schemas`):
 
-- Five edit ops: `insert`, full `update`, strict `patch`, `delete`, `cite`
+- Six edit ops: `insert`, full `update`, strict `patch`, `delete`, `cite`, `uncite`
 - `patch` may set only `useWhen` and `entryType`; it cannot carry the body or gate-governed fields
 
 **Subpath** (`@cogni/knowledge-store/adapters/doltgres`):

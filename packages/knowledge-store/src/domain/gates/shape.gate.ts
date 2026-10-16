@@ -46,7 +46,15 @@ export const shapeGate: KnowledgeGate = {
   async check(input: KnowledgeWriteCandidate): Promise<GateResult> {
     const errors: GateError[] = [];
 
-    if (input.id !== undefined) {
+    if (input.id === undefined) {
+      errors.push({
+        gate: "shape",
+        field: "id",
+        code: "slug_required",
+        message:
+          "id is required; choose a stable atom address, then put retrieval semantics in domain, title, useWhen, tags, and citations; see knowledge-atom-identity",
+      });
+    } else {
       if (input.id.length < SLUG_MIN_LEN || input.id.length > SLUG_MAX_LEN) {
         errors.push({
           gate: "shape",
