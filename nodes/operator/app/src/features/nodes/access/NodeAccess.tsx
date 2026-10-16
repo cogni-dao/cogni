@@ -40,6 +40,7 @@ const ROLE_LABEL: Record<NodeAccessRole, string> = {
   secrets_manager: "Secrets manager",
   production_promoter: "Production promoter",
   env_manager: "Environment manager",
+  admin: "Administrator",
 };
 
 interface Props {

@@ -66,6 +66,7 @@ export const EVENT_NAMES = {
 
   // Node Formation Domain - Server (wizard)
   NODE_FORMATION_CREATE_COMPLETE: "feature.node_formation.create_complete",
+  NODE_RECONCILE_ACTIONS_COMPLETE: "feature.node_reconcile_actions.complete",
   NODE_FORMATION_UPDATE_COMPLETE: "feature.node_formation.update_complete",
   NODE_REFERENCE_READ_COMPLETE: "feature.node_reference.read_complete",
   NODE_PROMOTE_COMPLETE: "feature.node_promote.complete",
