@@ -31,6 +31,7 @@ vi.mock("@/bootstrap/http", () => ({
       handler(
         {
           reqId: "req-server",
+          routeId: "authorization.facade.grant",
           log: { warn: vi.fn(), info, error: vi.fn() },
         },
         request,
@@ -108,17 +109,19 @@ describe("POST /api/v1/authorization/billing-account-grants", () => {
         authenticatedNodeId: NODE_ID,
         assertedGrantorUserId: GRANTOR_ID,
         billingAccountId: ACCOUNT_ID,
-        semantic: {
-          operation: "grant",
-          role: "obo",
-          targetKind: "agent",
-          targetId: AGENT_ID,
-          subjectUserId: SUBJECT_ID,
-        },
+        event: "authorization.facade.grant.complete",
+        reqId: "req-server",
+        routeId: "authorization.facade.grant",
+        status: 200,
+        outcome: "success",
+        operation: "grant",
+        role: "obo",
+        targetKind: "agent",
+        hasSubject: true,
         decision: "success",
         requestId: "req-node",
       }),
-      "authorization_facade.mutation_decided"
+      "authorization.facade.grant.complete"
     );
   });
 
