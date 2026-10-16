@@ -181,6 +181,7 @@ export {
   type ProdLivenessDeps,
   resolveNodeLiveness,
 } from "./node-registry/prod-liveness";
+export { NETWORK_NODES } from "./node-registry/network-nodes.data";
 export { DrizzleNodeMigrationReportStore } from "./observability/drizzle-node-migration-report.adapter";
 export { HttpLangfuseReader } from "./observability/langfuse-reader.adapter";
 export { HttpLokiPusher } from "./observability/loki-push.adapter";
@@ -205,6 +206,7 @@ export {
 } from "./review/github-review.adapter";
 // Node self-serve secrets — OpenBao writer adapter (design.node-self-serve-secrets).
 export { EnvAuthorizationFacadeCredentialVerifierAdapter } from "./secrets/env-authorization-facade-credential-verifier.adapter";
+export { OpenBaoAuthorizationFacadeProjectionAdapter } from "./secrets/openbao-authorization-facade-projection.adapter";
 export {
   OpenBaoSecretsAdapter,
   type OpenBaoSecretsAdapterDeps,
