@@ -27,7 +27,7 @@ receipt=nodes/operator/app/src/app/api/internal/authorization-facade-workload-re
 ! grep -Eq '(set -x|curl.*\$(ACTIVE|PREVIOUS|WORKLOAD)|jq.*--arg.*\$(ACTIVE|PREVIOUS|WORKLOAD)|echo.*\$(ACTIVE|PREVIOUS|WORKLOAD))' "$authority" "$projector"
 grep -q 'node scripts/ci/fetch-authorization-facade-ring.mjs |' "$workflow"
 grep -q "curl .*--config -" "$projector"
-grep -q 'curl .*--config -' "$authority"
+grep -q -- '--request POST --config -' "$authority"
 
 # The verifier contract is digest-only, exact, and cannot accidentally regress
 # to embedding raw active/previous values in the operator view.
