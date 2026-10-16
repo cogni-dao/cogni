@@ -11,9 +11,9 @@
 #     (.cogni/.cognition-cache.md) and is pure-offline, instant, and
 #     deterministic;
 #   - acquisition is a backgrounded, TTL-gated refresh whose failure is silent,
-#     because a stale-but-present bundle always beats a network stall or a scary
+#     because a last-known complete bundle always beats a network stall or a scary
 #     wall. Once a session has ever oriented, a hub outage is invisible here.
-# Only genuine first-boot with no cache surfaces a short, honest notice, and it
+# Only boot without a complete cache surfaces a short, honest notice, and it
 # never cries wolf: it separates "no credentials yet" (a setup step) from a
 # key-present failure (hub down/slow, or a key without a principal).
 #
@@ -36,6 +36,92 @@ FETCH_TIMEOUT=6           # bound the foreground first-boot fetch
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT" || exit 0
 
+# bundle_is_complete <markdown> — admit a complete operating contract, not merely
+# a map or a nonempty response. Check its existing semantic envelope and generic
+# Markdown template structure; field names and column counts stay hub-owned.
+# Older complete templates remain valid offline fallbacks during hub upgrades.
+bundle_is_complete() {
+  printf '%s\n' "$1" | awk '
+    function table_row(line, cells, count) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (line !~ /^\|.*\|$/) return 0
+      sub(/^\|/, "", line); sub(/\|$/, "", line)
+      count = split(line, cells, "|")
+      if (count < 2 || line !~ /[^|[:space:]]/) return 0
+      return count
+    }
+    function table_separator(line, cells, count, i) {
+      gsub(/[[:space:]]/, "", line)
+      sub(/^\|/, "", line); sub(/\|$/, "", line)
+      count = split(line, cells, "|")
+      if (count < 2) return 0
+      for (i = 1; i <= count; i++) if (cells[i] !~ /^:?---[-]*:?$/) return 0
+      return count
+    }
+    /^## The agent-contract([[:space:]]|$)/ { heading = 1; next }
+    /^[[:space:]]*<agent-contract([[:space:]>])/ {
+      if (!heading || phase != 0) bad = 1
+      phase = 1; next
+    }
+    /^[[:space:]]*<process-contract([[:space:]>])/ {
+      if (phase != 1) bad = 1
+      phase = 2; next
+    }
+    /^[[:space:]]*<\/process-contract>[[:space:]]*$/ {
+      if (phase != 2 || !process_body) bad = 1
+      phase = 3; next
+    }
+    /^[[:space:]]*<status-contract([[:space:]>])/ {
+      if (phase != 3) bad = 1
+      phase = 4; next
+    }
+    /^[[:space:]]*<\/status-contract>[[:space:]]*$/ {
+      if (phase != 4 || !status_body || templates < 2) bad = 1
+      phase = 5; next
+    }
+    /^[[:space:]]*<\/agent-contract>[[:space:]]*$/ {
+      if (phase != 5) bad = 1
+      phase = 6; next
+    }
+    phase == 2 && /[^[:space:]]/ { process_body = 1 }
+    phase == 4 {
+      if ($0 ~ /[^[:space:]]/) status_body = 1
+      row = table_row($0)
+      if (row && table_separator($0)) {
+        awaiting_data = (previous_row == row ? row : 0)
+      } else {
+        if (row && awaiting_data == row) templates++
+        awaiting_data = 0
+      }
+      previous_row = row
+    }
+    END { exit !(phase == 6 && !bad) }
+  '
+}
+
+# A cognition snapshot committed to git is not a cache: every new workspace
+# would inherit whatever contract happened to be current at that commit, then
+# present it before the async refresh. Treat tracked snapshots as absent so a
+# fresh workspace fetches live cognition before its first agent reply.
+cache_is_repo_tracked() {
+  git ls-files --error-unmatch -- "$CACHE_FILE" >/dev/null 2>&1
+}
+
+# Read-only detector boundary: dispatch before credentials, presentation locks,
+# network, background refresh, or writes. It observes only an admitted local
+# status-contract; absence is not permission to invent a normal response shape.
+if [ "${1:-}" = --cached-contract ]; then
+  cached_bundle="$(cat "$CACHE_FILE" 2>/dev/null || true)"
+  if ! cache_is_repo_tracked && bundle_is_complete "$cached_bundle"; then
+    printf '%s\n' "$cached_bundle" | awk '
+      /^[[:space:]]*<status-contract([[:space:]>])/ { inside = 1; next }
+      /^[[:space:]]*<\/status-contract>/ { exit }
+      inside { print }
+    '
+  fi
+  exit 0
+fi
+
 # Older Cogni setups installed a user-level Codex hook. Codex runs matching
 # user + project hooks concurrently. Both presenters take the same short-lived
 # per-thread lock, so exactly one writes this event's developer context; the
@@ -55,8 +141,8 @@ fi
 #     payload lands untruncated.
 #   - Claude Code expands CLAUDE.md @imports before/at SessionStart, so hook output
 #     is too late for that session and duplicates a preview of the same bundle.
-#     Its hook is therefore write-only; the committed AGENTS.md floor covers a
-#     cold first boot and the warmed cache supplies the rich contract thereafter.
+#     Its hook is therefore write-only; AGENTS.md keeps a cold session in bounded
+#     recovery until a restart/resume imports the warmed complete contract.
 emit_agent_context() {
   if [ -n "${CODEX_THREAD_ID:-}" ]; then
     printf '%s\n' "$1"
@@ -104,20 +190,36 @@ AGENT_KEY="${COGNI_NODE_API_KEY:-$(read_env_file_value COGNI_NODE_API_KEY)}"
 fetch_bundle() {
   if [ -n "$AGENT_KEY" ]; then
     curl -fsS --max-time "$FETCH_TIMEOUT" -H "Authorization: Bearer ${AGENT_KEY}" "$URL" 2>/dev/null \
-      | jq -r '.markdown // empty' 2>/dev/null
+      | jq -er '.markdown | select(type == "string")' 2>/dev/null
   else
     curl -fsS --max-time "$FETCH_TIMEOUT" "$URL" 2>/dev/null \
-      | jq -r '.markdown // empty' 2>/dev/null
+      | jq -er '.markdown | select(type == "string")' 2>/dev/null
   fi
 }
 
+
 # write_cache_atomic <content> — replace the cache in one rename, never a torn file.
-write_cache_atomic() {
+write_cache_atomic() (
+  # Project and stable user hooks share one mutation guard, independently of
+  # Codex presentation/thread locks. Recovery must revalidate UNDER this guard:
+  # another cold session may have installed a complete bundle during our fetch.
   mkdir -p "$(dirname "$CACHE_FILE")" 2>/dev/null || return 0
+  cache_guard="${CACHE_FILE}.write-lock"
+  attempts=0
+  until mkdir "$cache_guard" 2>/dev/null; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 50 ] || return 0
+    sleep 0.02
+  done
+  trap 'rmdir "$cache_guard" 2>/dev/null || true' EXIT
+  if [ "${2:-complete}" = recovery ] && ! cache_is_repo_tracked &&
+    bundle_is_complete "$(cat "$CACHE_FILE" 2>/dev/null || true)"; then
+    return 0
+  fi
   tmp="${CACHE_FILE}.tmp.$$"
   printf '%s\n' "$1" > "$tmp" 2>/dev/null && mv -f "$tmp" "$CACHE_FILE" 2>/dev/null
   rm -f "$tmp" 2>/dev/null
-}
+)
 
 # cache_is_stale — true if the cache is missing or older than the refresh TTL.
 cache_is_stale() {
@@ -125,13 +227,6 @@ cache_is_stale() {
   [ -z "$(find "$CACHE_FILE" -mmin "-$((REFRESH_TTL_SECONDS / 60))" 2>/dev/null)" ]
 }
 
-# A cognition snapshot committed to git is not a cache: every new workspace
-# would inherit whatever contract happened to be current at that commit, then
-# present it before the async refresh. Treat tracked snapshots as absent so a
-# fresh workspace fetches live cognition before its first agent reply.
-cache_is_repo_tracked() {
-  git ls-files --error-unmatch -- "$CACHE_FILE" >/dev/null 2>&1
-}
 
 # refresh_in_background — TTL-gated, fully detached, silent on failure. Its result
 # lands in the cache for the NEXT session; it never blocks or writes to stdout.
@@ -139,14 +234,15 @@ refresh_in_background() {
   cache_is_stale || return 0
   (
     fresh="$(fetch_bundle)"
-    [ -n "$fresh" ] && write_cache_atomic "$fresh"
+    bundle_is_complete "$fresh" && write_cache_atomic "$fresh"
   ) >/dev/null 2>&1 &
 }
 
 # PRESENTATION — local-first. If we have ever oriented, boot is offline-safe and
 # a hub outage is invisible; we just refresh in the background for next time.
-if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ] && ! cache_is_repo_tracked; then
-  emit_agent_context "$(cat "$CACHE_FILE")"
+cached_bundle="$(cat "$CACHE_FILE" 2>/dev/null || true)"
+if ! cache_is_repo_tracked && bundle_is_complete "$cached_bundle"; then
+  emit_agent_context "$cached_bundle"
   refresh_in_background
   exit 0
 fi
@@ -155,42 +251,49 @@ fi
 # the network in the foreground, and the only one that can surface a notice.
 # Bounded fetch.
 bundle="$(fetch_bundle)"
-if [ -n "$bundle" ]; then
+if bundle_is_complete "$bundle"; then
   write_cache_atomic "$bundle"
   emit_agent_context "$bundle"
   exit 0
 fi
 
-# First boot AND fetch failed. Be honest, never cry wolf — separate a setup gap
-# (no key) from a key-present failure, without a second network probe.
+# No complete contract is available. Keep a recovery notice for native Claude/
+# OpenCode imports and emit it through Codex. It deliberately fails completeness
+# admission, so the next invocation retries the bounded fetch instead of treating
+# this notice as normal cognition. A Claude fetch cannot repair the current import.
 if [ -z "$AGENT_KEY" ]; then
-  emit_agent_context "$(cat <<EOF
-COGNI COGNITION — no node credentials yet (first boot)
-
-No COGNI_NODE_API_KEY was found, so this session could not load its cognition
-bundle from:
-  $URL
-
-This is a setup step, not an outage. To bootstrap:
-- register a NODE agent via /api/v1/agent/register
-- save COGNI_NODE_API_KEY in the clone-root .env.cogni
-- for Codex, review and trust the repo's SessionStart hook via /hooks
-
-Then restart or resume the agent. (Once it loads once, it is cached locally and
-survives hub outages.)
-EOF
-)"
+  recovery_reason="No COGNI_NODE_API_KEY was found. Register a NODE agent through /api/v1/agent/register and save its key in the clone-root .env.cogni."
 else
-  emit_agent_context "$(cat <<EOF
-COGNI COGNITION — could not load bundle (first boot, no cache)
+  recovery_reason="A node credential is present, but the request failed or returned no complete agent-contract. Check this node hub health, key principal, and published contract; do not assume a missing key."
+fi
+recovery="$(cat <<EOF
+COGNI COGNITION — BOOTSTRAP RECOVERY (no complete contract)
 
-A credential IS present, so this is NOT a missing-key setup problem. Either the
-hub is down/slow, or the key lacks a principal on this hub (or the node has no
-cognition published yet). There's no local cache to fall back on this first time.
+$recovery_reason
 
-Check hub health (cognidao.org/version) and that GET /api/v1/cognition resolves
-with your key. Proceed with the repo's own AGENTS.md + skills meanwhile —
-cognition caches itself once it loads, and then survives hub outages.
+Node cognition endpoint: $URL
+
+This session has no admitted complete contract. Stay in bounded bootstrap recovery;
+limit work to diagnosing delivery, restoring node credentials, and warming the
+complete bundle. AGENTS.md and skills are not a replacement operating contract.
+Do not begin normal task work or invent a response template.
+
+After correcting setup, run scripts/agent/session-cognition.sh once from the
+repository root. If recovery persists, report the missing delivery evidence and
+specific setup action; do not repeatedly fetch. Once the complete cache is warm,
+restart or resume so the native instruction path loads it. Claude imports may
+have resolved before this SessionStart fetch; a successful write alone does not
+mean the current session received the contract. For Codex, also verify trust of
+the SessionStart hook through /hooks.
 EOF
 )"
+write_cache_atomic "$recovery" recovery
+# A concurrent successful bootstrap may have won while our fetch was pending.
+# Native Claude imports still require restart/resume; Codex can receive this
+# now-complete cached contract directly through its selected injection channel.
+latest_bundle="$(cat "$CACHE_FILE" 2>/dev/null || true)"
+if ! cache_is_repo_tracked && bundle_is_complete "$latest_bundle"; then
+  emit_agent_context "$latest_bundle"
+else
+  emit_agent_context "$recovery"
 fi
