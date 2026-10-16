@@ -57,6 +57,8 @@ respond_with ''
 
 grep -Fq 'additionalContextLimit = 0' "$REPO_ROOT/.codex/config.toml" ||
   fail "project hook still uses Codex's truncating default"
+grep -Fq 'session-cognition.sh" --codex' "$REPO_ROOT/.codex/config.toml" ||
+  fail "project hook does not explicitly select the Codex adapter"
 # Normal communication has one owner: the complete cognition bundle. Bootstrap
 # and harness adapters must not grow another response template or state protocol.
 OUTPUT_STYLE="$REPO_ROOT/.claude/output-styles/Cogni Contract.md"
@@ -274,6 +276,8 @@ tracked_output="$({
   fail "project loader did not replace a tracked snapshot with complete live cognition"
 
 mkdir -p "$FIXTURE_ROOT/small/.cogni"
+git -C "$FIXTURE_ROOT/small" init -q
+printf '%s\n' 'intent:' '  name: operator' >"$FIXTURE_ROOT/small/.cogni/repo-spec.yaml"
 printf '%s\n' "$COMPLETE_BUNDLE" >"$FIXTURE_ROOT/small/.cogni/.cognition-cache.md"
 calls_before="$(wc -l < "$FAKE_CALLS")"
 small_output="$({ cd "$FIXTURE_ROOT/small"; CODEX_THREAD_ID="" bash "$LOADER"; })"
@@ -286,6 +290,31 @@ codex_output="$({
   CODEX_THREAD_ID="codex-raw" TMPDIR="$FIXTURE_ROOT/codex-tmp" bash "$LOADER"
 })"
 [[ "$codex_output" == "$COMPLETE_BUNDLE" ]] || fail "Codex did not inject the complete bundle verbatim"
+
+# Native Codex supplies session_id on stdin even when CODEX_THREAD_ID is absent.
+# The same SessionStart payload must not make Claude emit duplicate context.
+native_hook_input='{"hook_event_name":"SessionStart","source":"startup","session_id":"native-codex"}'
+native_codex_output="$(printf '%s\n' "$native_hook_input" | (
+  cd "$FIXTURE_ROOT/small"
+  unset CODEX_THREAD_ID
+  TMPDIR="$FIXTURE_ROOT/codex-tmp" bash "$LOADER" --codex
+))"
+[[ "$native_codex_output" == "$COMPLETE_BUNDLE" ]] ||
+  fail "explicit Codex adapter requires an absent native environment variable"
+native_claude_output="$(printf '%s\n' "$native_hook_input" | (
+  cd "$FIXTURE_ROOT/small"
+  unset CODEX_THREAD_ID
+  bash "$LOADER"
+))"
+[[ -z "$native_claude_output" ]] || fail "generic SessionStart payload selected Codex for Claude"
+mkdir "$FIXTURE_ROOT/codex-tmp/cogni-cognition-native-codex.lock"
+native_locked_output="$(printf '%s\n' "$native_hook_input" | (
+  cd "$FIXTURE_ROOT/small"
+  unset CODEX_THREAD_ID
+  TMPDIR="$FIXTURE_ROOT/codex-tmp" bash "$LOADER" --codex
+))"
+[[ -z "$native_locked_output" ]] || fail "Codex stdin session_id did not share the presentation lock"
+rmdir "$FIXTURE_ROOT/codex-tmp/cogni-cognition-native-codex.lock"
 
 mkdir "$FIXTURE_ROOT/cogni-cognition-lock-test.lock"
 locked_output="$({
@@ -399,6 +428,22 @@ grep -Fq 'cache_is_repo_tracked()' "$LEGACY_HOOK" ||
 grep -Fq 'if ! cache_is_repo_tracked && bundle_is_complete "$bundle"; then' "$LEGACY_HOOK" ||
   fail "installed user hook does not validate cache completeness and provenance"
 bash -n "$LEGACY_HOOK"
+printf '%s\n' "$COMPLETE_BUNDLE" >"$FIXTURE_ROOT/small/.cogni/.cognition-cache.md"
+native_installed_output="$(printf '%s\n' "$native_hook_input" | (
+  cd "$FIXTURE_ROOT/small"
+  unset CODEX_THREAD_ID
+  TMPDIR="$FIXTURE_ROOT/codex-tmp" bash "$LEGACY_HOOK"
+))"
+[[ "$native_installed_output" == "$COMPLETE_BUNDLE" ]] ||
+  fail "installed Codex hook lost native delivery without CODEX_THREAD_ID"
+mkdir "$FIXTURE_ROOT/codex-tmp/cogni-cognition-native-codex.lock"
+native_installed_locked="$(printf '%s\n' "$native_hook_input" | (
+  cd "$FIXTURE_ROOT/small"
+  unset CODEX_THREAD_ID
+  TMPDIR="$FIXTURE_ROOT/codex-tmp" bash "$LEGACY_HOOK"
+))"
+[[ -z "$native_installed_locked" ]] || fail "installed hook did not share the native stdin session lock"
+rmdir "$FIXTURE_ROOT/codex-tmp/cogni-cognition-native-codex.lock"
 
 printf '%s\n' "$COMPLETE_BUNDLE" '# committed snapshot' >"$TRACKED_CACHE"
 installed_output="$({

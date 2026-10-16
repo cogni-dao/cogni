@@ -42,8 +42,13 @@ fi
 # A versioned project hook may match the same Codex event. The two presenters
 # share this short-lived lock so only one emits context; it is released for the
 # next resume/clear/compact event.
-if [[ -n "${CODEX_THREAD_ID:-}" ]]; then
-  safe_thread_id="$(printf '%s' "$CODEX_THREAD_ID" | tr -cd '[:alnum:]_-')"
+codex_session_id="${CODEX_THREAD_ID:-}"
+if [[ -z "$codex_session_id" && ! -t 0 ]]; then
+  codex_hook_input="$(cat)"
+  codex_session_id="$(printf '%s' "$codex_hook_input" | jq -r '.session_id // empty' 2>/dev/null || true)"
+fi
+if [[ -n "$codex_session_id" ]]; then
+  safe_thread_id="$(printf '%s' "$codex_session_id" | tr -cd '[:alnum:]_-')"
   COGNI_HOOK_LOCK="${TMPDIR:-/tmp}/cogni-cognition-${safe_thread_id}.lock"
   mkdir "$COGNI_HOOK_LOCK" 2>/dev/null || exit 0
   trap 'rmdir "$COGNI_HOOK_LOCK" 2>/dev/null || true' EXIT

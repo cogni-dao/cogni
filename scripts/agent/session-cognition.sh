@@ -122,12 +122,27 @@ if [ "${1:-}" = --cached-contract ]; then
   exit 0
 fi
 
+# Select the trusted adapter explicitly. Native Codex versions can provide a
+# session_id in hook stdin without exporting CODEX_THREAD_ID; that variable is
+# retained only for backwards compatibility, never as the sole runtime detector.
+codex_adapter=0
+codex_session_id="${CODEX_THREAD_ID:-}"
+if [ "${1:-}" = --codex ]; then
+  codex_adapter=1
+  if [ -z "$codex_session_id" ] && [ ! -t 0 ]; then
+    codex_hook_input="$(cat)"
+    codex_session_id="$(printf '%s' "$codex_hook_input" | jq -r '.session_id // empty' 2>/dev/null || true)"
+  fi
+elif [ -n "$codex_session_id" ]; then
+  codex_adapter=1
+fi
+
 # Older Cogni setups installed a user-level Codex hook. Codex runs matching
 # user + project hooks concurrently. Both presenters take the same short-lived
 # per-thread lock, so exactly one writes this event's developer context; the
 # winner releases it immediately for later resume/clear/compact events.
-if [ -n "${CODEX_THREAD_ID:-}" ]; then
-  safe_thread_id="$(printf '%s' "$CODEX_THREAD_ID" | tr -cd '[:alnum:]_-')"
+if [ -n "$codex_session_id" ]; then
+  safe_thread_id="$(printf '%s' "$codex_session_id" | tr -cd '[:alnum:]_-')"
   COGNI_HOOK_LOCK="${TMPDIR:-/tmp}/cogni-cognition-${safe_thread_id}.lock"
   mkdir "$COGNI_HOOK_LOCK" 2>/dev/null || exit 0
   trap 'rmdir "$COGNI_HOOK_LOCK" 2>/dev/null || true' EXIT
@@ -144,7 +159,7 @@ fi
 #     Its hook is therefore write-only; AGENTS.md keeps a cold session in bounded
 #     recovery until a restart/resume imports the warmed complete contract.
 emit_agent_context() {
-  if [ -n "${CODEX_THREAD_ID:-}" ]; then
+  if [ "$codex_adapter" = 1 ]; then
     printf '%s\n' "$1"
   fi
 }

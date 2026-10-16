@@ -182,6 +182,14 @@ describe("renderBundleMarkdown", () => {
     // orientation dropped the contract.
     expect(markdown).toContain("## Tooling invariants");
     expect(markdown).toContain("<watch-gate");
+    expect(markdown).toContain(
+      `Source: [operator-agent-orientation](${baseInput.origin}/knowledge/operator-agent-orientation)`
+    );
+    expect(markdown.split(fullOrientation)).toHaveLength(2);
+    expect(markdown.endsWith(`${fullOrientation}\n`)).toBe(true);
+    expect(
+      markdown.indexOf("## Orientation — recall this first")
+    ).toBeGreaterThan(markdown.indexOf("## Recall + contribute"));
   });
 
   // The work-item write seam is the one thing agents could NOT discover from a

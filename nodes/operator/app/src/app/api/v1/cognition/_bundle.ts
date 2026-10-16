@@ -144,9 +144,8 @@ export interface RenderBundleInput {
 }
 
 /**
- * Render the kickstart bundle as GFM markdown. A SessionStart hook echoes this
- * verbatim to stdout; Claude Code and Codex both inject SessionStart stdout
- * into the model's context.
+ * Render the kickstart bundle as GFM markdown. Codex injects hook stdout;
+ * Claude and supported OpenCode load the complete cached projection natively.
  */
 export function renderBundleMarkdown(input: RenderBundleInput): string {
   const {
@@ -206,10 +205,18 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
       : "| _(none)_ | | |";
 
   // The current-node orientation carries the complete operating contract and
-  // renders IN FULL (no second recall). A missing-entry prompt is diagnostic;
+  // renders IN FULL (no second recall). Keep its human source beside the body
+  // and present this authority last, after the routing indexes. The hub content
+  // remains unchanged and appears once. A missing-entry prompt is diagnostic;
   // the loader must not admit it as a complete contract.
   const orientationLines = orientation
-    ? ["## Orientation — recall this first", "", orientation.content]
+    ? [
+        "## Orientation — recall this first",
+        "",
+        `Source: [${orientation.id}](${origin}/knowledge/${encodeURIComponent(orientation.id)})`,
+        "",
+        orientation.content,
+      ]
     : [
         "## Orientation — recall this first",
         "",
@@ -240,7 +247,6 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     ">",
     `> Delivered at session start from ${origin}/api/v1/cognition — replaces git-synced AGENTS.md sprawl. (node \`${node}\` · build \`${buildSha}\`)`,
     "",
-    ...orientationLines,
     ...toolingFloor,
     "",
     "## Skills index (recall full content from the hub before acting)",
@@ -277,6 +283,8 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     `- Discovery doc: \`GET ${origin}/.well-known/agent.json\``,
     "- Contribute durable knowledge: `/contribute-knowledge-to-cogni` (refine in place > write new).",
     `- Cite an existing entry in your edit: \`POST ${origin}/api/v1/knowledge/contributions/{id}/commits\` with \`{op:"cite", citingId, citedId, citationType}\` — cross-plane cites (target on main) resolve and stay valid post-merge.`,
+    "",
+    ...orientationLines,
     "",
   ].join("\n");
 }
