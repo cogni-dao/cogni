@@ -16,7 +16,7 @@ curl -fsS -H "Authorization: Bearer $KEY" \
 ```
 
 That entry is the source of truth for the action hierarchy, the inbox rule, the
-four edit ops, and the constraints that 400/409. Read it before writing. Each
+edit-op contract, and the constraints that 400/409. Read it before writing. Each
 node owns its own copy, so fetch from the node you are contributing to.
 
 Then: `cogni-domain-taxonomy` for which shelf, `knowledge-syntropy-protocol`
@@ -25,6 +25,7 @@ for whether it earns an entry at all.
 ## The axioms (hold even if the hub is unreachable)
 
 - **Atoms.** One entry, one claim. A second claim is a second entry that cites the first.
+- **Stable identity.** Choose an explicit atom address; never accept a generated id. Retrieval semantics belong in domain, title, `useWhen`, tags, and citations.
 - **Focused.** Most contributable-feeling context is ephemeral. Default to writing nothing.
 - **Linked.** A new atom cites a parent or sibling. Zero-edge entries don't compound.
 - **Concise, high-signal.** Bold claim line, then structured evidence. Never a prose blob.

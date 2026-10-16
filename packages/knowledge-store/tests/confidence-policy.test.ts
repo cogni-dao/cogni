@@ -160,6 +160,7 @@ describe("recomputeConfidence — citation-driven adjustment", () => {
 describe("CONFIDENCE_NOT_AUTHOR_SET — confidence is not a caller input", () => {
   it("drops confidencePct from a knowledge entry input (no write surface accepts it)", () => {
     const parsed = KnowledgeEntryInputSchema.parse({
+      id: "confidence-input",
       domain: "meta",
       title: "an entry",
       content: "body",
@@ -170,6 +171,7 @@ describe("CONFIDENCE_NOT_AUTHOR_SET — confidence is not a caller input", () =>
 
   it("accepts the same input without confidencePct (the field is simply gone)", () => {
     const parsed = KnowledgeEntryInputSchema.parse({
+      id: "confidence-input",
       domain: "meta",
       title: "an entry",
       content: "body",

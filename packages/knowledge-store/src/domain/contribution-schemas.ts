@@ -33,8 +33,23 @@ export const PrincipalSchema = z.object({
 });
 export type Principal = z.infer<typeof PrincipalSchema>;
 
+/**
+ * Stable atom address. Retrieval semantics belong in domain/title/useWhen/
+ * tags/citations; the id provides durable exact lookup and edge identity.
+ * Knowledge writes never synthesize one because a generated id hides the
+ * recall/dedup decision that must happen before a new atom is created.
+ */
+const KNOWLEDGE_ENTRY_ID_GUIDANCE =
+  "id is required; choose a stable atom address: 2–40 characters, 1–4 lowercase alphanumeric segments joined by hyphens; see knowledge-atom-identity";
+
+export const KnowledgeEntryIdSchema = z
+  .string({ error: KNOWLEDGE_ENTRY_ID_GUIDANCE })
+  .min(2, KNOWLEDGE_ENTRY_ID_GUIDANCE)
+  .max(40, KNOWLEDGE_ENTRY_ID_GUIDANCE)
+  .regex(/^[a-z0-9]+(-[a-z0-9]+){0,3}$/, KNOWLEDGE_ENTRY_ID_GUIDANCE);
+
 export const KnowledgeEntryInputSchema = z.object({
-  id: z.string().min(1).max(256).optional(),
+  id: KnowledgeEntryIdSchema,
   domain: z.string().min(1).max(64),
   entityId: z.string().max(128).optional(),
   title: z.string().min(1).max(256),
@@ -150,6 +165,13 @@ export const KnowledgeContributionEditSchema = z
       citedId: z.string().min(1).max(256),
       citationType: ContributionCitationTypeSchema,
       context: z.string().max(512).optional(),
+    }),
+    z.object({
+      op: z.literal("uncite"),
+      citingId: z.string().min(1).max(256),
+      citedId: z.string().min(1).max(256),
+      citationType: ContributionCitationTypeSchema,
+      reason: z.string().min(1).max(512),
     }),
   ])
   .superRefine((edit, ctx) => {
