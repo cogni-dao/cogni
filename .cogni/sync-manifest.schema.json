@@ -64,6 +64,16 @@
                 "description": "Expected App slug returned after token mint; runtime owner-to-App fail-closed boundary."
               }
             }
+          },
+          "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "The artifact's CI identity inputs (its repository variables), exported to the canonical generators by the sync. Declared here so the writer App needs no Variables permission.",
+            "properties": {
+              "DOMAIN": { "type": "string", "minLength": 1 },
+              "FORK_DOMAIN_ROOT": { "type": "string", "minLength": 1 },
+              "FLEET_CONTROL_ENV": { "type": "string", "minLength": 1 }
+            }
           }
         },
         "allOf": [
@@ -130,12 +140,6 @@
             "required": ["commands"],
             "description": "Canonical generators the sync re-runs against the artifact's own roster so roster-generated content is re-derived, never carried at stale bytes. A generator writing a path the artifact may not own fails the sync.",
             "properties": {
-              "inputs_from_artifact_variables": {
-                "type": "array",
-                "uniqueItems": true,
-                "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
-                "description": "Repository variables of the artifact exported to the generators (the same vars.* its CI exports)."
-              },
               "commands": {
                 "type": "array",
                 "minItems": 1,

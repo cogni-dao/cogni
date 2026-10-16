@@ -79,7 +79,7 @@ export const readManifest = (manifestPath) =>
  *   - `excluded(path)`      — global junk; invisible to both sides.
  *   - `hubDisposition(path)`— for a hub path: `mirror` | `content_free` | `hub_only`.
  *   - `isArtifactOnlyDeclared(path)` — for an artifact path the hub does not require.
- *   - `regenerate`          — `{commands, inputsFromArtifactVariables}` the sync re-runs.
+ *   - `regenerate`          — `{commands, identity}` the sync re-runs, with the artifact's identity.
  *   - `onMissing`           — `report` (drift is data) or `fail` (exit non-zero).
  *   - `role`                — `fork` | `test-parent`.
  */
@@ -117,8 +117,7 @@ export const compileArtifactPolicy = (manifest, repo) => {
     /** Canonical generators re-run against the artifact's own roster (sync only). */
     regenerate: {
       commands: divergence.regenerate?.commands ?? [],
-      inputsFromArtifactVariables:
-        divergence.regenerate?.inputs_from_artifact_variables ?? [],
+      identity: spec.identity ?? {},
     },
   };
 };

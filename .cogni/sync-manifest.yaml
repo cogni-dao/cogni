@@ -27,6 +27,14 @@ artifacts:
     github_app:
       id: "3956976"
       slug: cogni-operator-test
+    # task.5270 — the test parent's CI identity inputs, declared HERE beside its repo + App
+    # identity. They equal its repository variables (vars.DOMAIN / FORK_DOMAIN_ROOT /
+    # FLEET_CONTROL_ENV). The sync exports them to the canonical generators, so the operator
+    # App needs no Variables permission and keeps 1:1 parity with the production operator App.
+    identity:
+      DOMAIN: cogni-testing.org
+      FORK_DOMAIN_ROOT: cognidao.org
+      FLEET_CONTROL_ENV: candidate-a
 
 # Global excludes — never propagated to or from any artifact. Junk / caches /
 # build outputs / git internals. Default-deny-divergence applies BELOW this set.
@@ -222,10 +230,8 @@ divergences:
     regenerate:
       # GENERATED_IS_REDERIVED (scripts/ci/sync-test-parent.mjs). Roster-generated content is
       # re-derived by the CANONICAL generators against the mirror's own roster, never carried at
-      # the mirror's stale bytes. Identity inputs are the mirror's repository variables, the same
-      # `vars.*` its ci.yaml exports, so the sync and the mirror's own --check derive identically.
-      inputs_from_artifact_variables:
-        [DOMAIN, FORK_DOMAIN_ROOT, FLEET_CONTROL_ENV]
+      # the mirror's stale bytes. Identity inputs are the artifact entry's declared `identity`
+      # (artifacts[] above), so the sync and the mirror's own --check derive identically.
       commands:
         - scripts/ci/render-scheduler-worker-endpoints.sh --write
         - scripts/ci/render-node-appset.sh --write
