@@ -38,7 +38,7 @@ STALE_SECRET
     echo 'FAIL: stale readmitter patch retained' >&2; exit 1
   fi
   yq -e '.resources[] | select(. == "../../../base/database-reliability-actuator")' "$overlay" >/dev/null
-  rendered="$(kustomize build "$(dirname "$overlay")")"
+  rendered="$(kubectl kustomize "$(dirname "$overlay")")"
   [ "$(yq -N 'select(.kind == "Deployment" and .metadata.name == "operator-database-reliability-actuator") | .spec.replicas' <<< "$rendered")" = 1 ]
   [ "$(yq -N 'select(.kind == "Deployment" and .metadata.name == "operator-node-app") | .metadata.annotations.flight-reviewed' <<< "$rendered")" = retained ]
   if yq -e 'select(.metadata.name | test("database-reliability-(readmitter|watchdog)"))' <<< "$rendered" >/dev/null 2>&1; then
@@ -53,7 +53,7 @@ STALE_SECRET
   before_images="$(yq -o=json -I=0 '.images' "$overlay")"
   before_routes="$(shasum -a 256 "$(dirname "$overlay")/node-endpoints.patch.yaml" | cut -d ' ' -f 1)"
   reconcile_shared_platform_manifests "$ROOT" "$TEST_ROOT" "$lane" scheduler-worker
-  count="$(kustomize build "$(dirname "$overlay")" | yq -N 'select(.kind == "Deployment") | .spec.replicas')"
+  count="$(kubectl kustomize "$(dirname "$overlay")" | yq -N 'select(.kind == "Deployment") | .spec.replicas')"
   expected=1; [ "$lane" = preview ] && expected=2
   [ "$count" = "$expected" ]
   [ "$(yq -o=json -I=0 '.images' "$overlay")" = "$before_images" ]
