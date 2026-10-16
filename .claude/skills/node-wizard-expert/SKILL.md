@@ -20,16 +20,6 @@ Before changing node-wizard launch behavior, recall the operator knowledge block
 
 That block is the evolving handoff contract for personal AI assistants launching a newly birthed node. Treat it as the operator-owned playbook; refine it when the launch process changes instead of duplicating long runbooks in the wizard UI.
 
-## Qualify child CI execution
-
-For zero child workflow runs despite enabled Actions policy, recall the operator
-hub entry `node-fork-actions-reactivation`; use `rbac-expert` and its
-`node-admin-boundary` entry to distinguish Cogni grants from GitHub authority.
-If either entry is not published yet, inspect the live App installation, authored
-RBAC model, and child Actions page directly. Require actual child runs and green
-required checks at the intended SHA before reporting birth complete. A maintainer
-browser acknowledgement is incident recovery, not unattended formation proof.
-
 ## North-star birth contract — do not normalize the current gap
 
 `akash-cicd-pareto-scope` is mandatory for any formation design or review. The

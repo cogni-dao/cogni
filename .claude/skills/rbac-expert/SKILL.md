@@ -18,15 +18,6 @@ Navigation for authorization in cogni-template. **This file deliberately does NO
 | [`work/projects/proj.rbac-hardening.md`](../../../work/projects/proj.rbac-hardening.md)         | Live roadmap + as-built status (what's wired vs pending) — **the authority on "is X enforced yet"**                                                                                              |
 | [`docs/spec/access-control-charter.md`](../../../docs/spec/access-control-charter.md)           | Layer-cake framing (Identity → AuthN → AuthZ → Secrets → DAO)                                                                                                                                    |
 
-## Recall node administration boundaries
-
-Before requesting or granting node `admin`, or attributing a GitHub failure to
-RBAC, recall `node-admin-boundary` from the operator hub. It separates Cogni
-role inheritance, GitHub App installation permissions, and human repository
-roles. If the entry is not published yet, use the model and action-map sources
-above; a missing hub entry is not an authorization decision. Verify the deployed
-model before claiming live capability inheritance.
-
 ## The mental model (the durable part)
 
 - **OpenFGA is the SOLE authority** for permission + delegation. ToolPolicy + grant-intersection run _before_ it as capability/safety gates ("does this capability exist?"), never as authz. **Never add a second authority** — no per-service role tables; tracking rows (`node_access_requests`) are display state, never read by a `check()`.
