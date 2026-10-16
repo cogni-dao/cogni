@@ -602,6 +602,39 @@ NODE_APP_TARGETS="${NODE_TARGETS[*]}"
 [ -n "$NODE_APP_TARGETS" ] || log_fatal "deploy-infra: no type:node targets from infra/catalog — refusing to deploy with an empty node list"
 log_info "Node-app targets (catalog-driven): ${NODE_APP_TARGETS}"
 
+# Resolve only this environment's shared Postgres inputs from the reviewed
+# source tree. Dedicated cells have their own provisioner and must never be
+# reconciled against this VM's shared Postgres.
+render_shared_db_provision_config() {
+  local node tier profile budget config='{}'
+  for node in "${NODE_TARGETS[@]}"; do
+    target_in_env "$node" "$DEPLOY_ENVIRONMENT" || continue
+    tier="$(yq -er ".database.\"${DEPLOY_ENVIRONMENT}\".tier" "$REPO_ROOT/infra/catalog/$node.yaml")" || return 1
+    case "$tier" in
+      dedicated) continue ;;
+      shared) ;;
+      *) log_error "Unsupported database tier for ${node}/${DEPLOY_ENVIRONMENT}"; return 1 ;;
+    esac
+    profile="$(yq -er ".database.\"${DEPLOY_ENVIRONMENT}\".budget_profile" "$REPO_ROOT/infra/catalog/$node.yaml")" || return 1
+    [[ "$profile" =~ ^[a-z0-9-]+$ ]] || return 1
+    budget="$(yq -o=json ".\"${profile}\"" "$REPO_ROOT/infra/database-budget-profiles.yaml" | jq -ce --arg profile "$profile" '{
+      DB_BUDGET_PROFILE: $profile,
+      DB_APP_CONNECTION_LIMIT: .roles.app.connection_limit,
+      DB_APP_STATEMENT_TIMEOUT_MS: .roles.app.statement_timeout_ms,
+      DB_SERVICE_CONNECTION_LIMIT: .roles.service.connection_limit,
+      DB_SERVICE_STATEMENT_TIMEOUT_MS: .roles.service.statement_timeout_ms,
+      DB_LOCK_TIMEOUT_MS: .common.lock_timeout_ms,
+      DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: .common.idle_in_transaction_session_timeout_ms,
+      DB_TEMP_FILE_LIMIT_MIB: .common.temp_file_limit_mib,
+      DB_WORK_MEM_MIB: .common.work_mem_mib
+    } | select(all(to_entries[]; .key == "DB_BUDGET_PROFILE" or
+      (.value | type == "number" and . > 0 and floor == .)))')" || return 1
+    config="$(jq -cn --argjson config "$config" --arg node "$node" --argjson budget "$budget" '$config + {($node): $budget}')" || return 1
+  done
+  printf '%s\n' "$config"
+}
+NODE_DB_PROVISION_CONFIG="$(render_shared_db_provision_config)" || log_fatal "Invalid shared database catalog/budget inputs; refusing infra reconcile"
+
 # G-tier derived inventory: database names are a pure function of the catalog
 # node list. Do not trust the GitHub env secret here; it can lag a new node and
 # leave the pod with a DATABASE_URL for a DB that db-provision never created.
@@ -1393,28 +1426,45 @@ read_node_db_secret() {
 }
 DB_READER_TOKEN="$(mint_db_reader_token || true)"
 [ -n "$DB_READER_TOKEN" ] || log_fatal "db-provision: could not mint ${DEPLOY_ENVIRONMENT}-db-reader token (OpenBao sealed / role absent) — per-node DB creds are required (#1584)"
-# bug.5090: iterate the forwarded NODE_APP_TARGETS string, NOT the NODE_TARGETS array —
-# arrays don't cross the SSH env-file boundary into this remote script, so NODE_TARGETS
-# is EMPTY here and the loop silently ran zero times → no app_<node> roles on a fresh
-# env → operator/node 28P01. Matches the other NODE_APP_TARGETS loops in this file.
+# The runner forwards the exact-source shared-node budget map through the same
+# SSH environment file as NODE_APP_TARGETS (bash arrays do not cross that boundary).
+# Keep the full node roster for Doltgres, secrets and routing; only Postgres is
+# narrowed to active shared-tier declarations.
 [[ -n "${NODE_APP_TARGETS// /}" ]] || log_fatal "NODE_APP_TARGETS empty in the remote script — per-node db-provision would create ZERO app_<node> roles and every node app would 28P01 (bug.5090 silent-skip class). Refusing to continue."
-for node in ${NODE_APP_TARGETS}; do
-  node_db="cogni_${node//-/_}"
-  app_pw="$(read_node_db_secret "$node" APP_DB_PASSWORD)"
-  svc_pw="$(read_node_db_secret "$node" APP_DB_SERVICE_PASSWORD)"
-  if [ -z "$app_pw" ] || [ -z "$svc_pw" ]; then
-    # fail-soft per node (parity with bug.5086 *-node-app-secrets): a dead/un-materialized
-    # catalog node must not wedge the whole env. secret-materialize owns these values.
-    log_warn "  Skipped ${node_db}: per-node DB creds absent at cogni/${DEPLOY_ENVIRONMENT}/${node} — run secret-materialize first"
-    continue
-  fi
-  log_info "  Provisioning ${node_db} (per-node OpenBao creds)..."
-  $RUNTIME_COMPOSE --profile bootstrap run --rm \
-    -e "COGNI_NODE_DBS=${node_db}" \
-    -e "APP_DB_PASSWORD=${app_pw}" \
-    -e "APP_DB_SERVICE_PASSWORD=${svc_pw}" \
-    db-provision
-done
+provision_shared_node_databases() {
+  local node node_db app_pw svc_pw migration_pw budget_entry shared_nodes
+  local -a provision_env
+  printf '%s' "${NODE_DB_PROVISION_CONFIG:-}" | jq -e 'type == "object"' >/dev/null \
+    || log_fatal "Shared database budget map missing or invalid after SSH transport"
+  shared_nodes="$(printf '%s' "$NODE_DB_PROVISION_CONFIG" | jq -r 'keys[]')" \
+    || log_fatal "Could not read shared database node inventory"
+  for node in $shared_nodes; do
+    node_db="cogni_${node//-/_}"
+    app_pw="$(read_node_db_secret "$node" APP_DB_PASSWORD)"
+    svc_pw="$(read_node_db_secret "$node" APP_DB_SERVICE_PASSWORD)"
+    migration_pw="$(read_node_db_secret "${node}-database-migration" APP_DB_MIGRATION_PASSWORD)"
+    if [ -z "$app_pw" ] || [ -z "$svc_pw" ] || [ -z "$migration_pw" ]; then
+      # fail-soft per node (parity with bug.5086 *-node-app-secrets): a dead/un-materialized
+      # catalog node must not wedge the whole env. Require the complete credential
+      # set before invoking the provisioner; never invent a migration password.
+      log_warn "  Skipped ${node_db}: incomplete runtime/isolated migration credentials in cogni/${DEPLOY_ENVIRONMENT} — run secret-materialize first"
+      continue
+    fi
+    provision_env=()
+    while IFS= read -r budget_entry; do
+      provision_env+=(-e "$budget_entry")
+    done < <(printf '%s' "$NODE_DB_PROVISION_CONFIG" | jq -r --arg node "$node" '.[$node] | to_entries[] | "\(.key)=\(.value)"')
+    log_info "  Provisioning ${node_db} (per-node OpenBao creds)..."
+    $RUNTIME_COMPOSE --profile bootstrap run --rm \
+      -e "COGNI_NODE_DBS=${node_db}" \
+      -e "APP_DB_PASSWORD=${app_pw}" \
+      -e "APP_DB_SERVICE_PASSWORD=${svc_pw}" \
+      -e "APP_DB_MIGRATION_PASSWORD=${migration_pw}" \
+      "${provision_env[@]}" \
+      db-provision
+  done
+}
+provision_shared_node_databases
 $RUNTIME_COMPOSE --profile bootstrap run --rm openfga-migrate
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2703,7 +2753,7 @@ REMOTE_ENV_VARS=(
   PRIVY_APP_ID PRIVY_APP_SECRET PRIVY_SIGNING_KEY PRIVY_USER_WALLETS_APP_ID
   PRIVY_USER_WALLETS_APP_SECRET PRIVY_USER_WALLETS_SIGNING_KEY
   POLY_WALLET_AEAD_KEY_HEX POLY_WALLET_AEAD_KEY_ID POLY_CLOB_GEO_BLOCK_TOKEN
-  CONNECTIONS_ENCRYPTION_KEY COGNI_NODE_DBS NODE_APP_TARGETS EDGE_ENV_LINES
+  CONNECTIONS_ENCRYPTION_KEY COGNI_NODE_DBS NODE_APP_TARGETS NODE_DB_PROVISION_CONFIG EDGE_ENV_LINES
   LITELLM_NODE_ENDPOINTS COGNI_DEFAULT_NODE_ID ACTIONS_AUTOMATION_BOT_PAT
   LITELLM_IMAGE OPENFGA_IMAGE COMMIT_SHA DEPLOY_ACTOR K8S_SECRETS_ONLY
   OPERATOR_DATABASE_SERVICE_URL REMOTE_HARDEN_SCRIPT REMOTE_COMPUTE_EGRESS_ALLOWLIST
