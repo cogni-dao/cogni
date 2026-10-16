@@ -2444,7 +2444,9 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         params.proposedByActorId !== params.earnedByActorId &&
         params.proposedByActorId !== params.stewardActorId
       ) {
-        throw new Error("Only the agent or its steward may propose a beneficiary");
+        throw new Error(
+          "Only the agent or its steward may propose a beneficiary"
+        );
       }
       const [existing] = await tx
         .select()
@@ -2553,7 +2555,9 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           governanceActor?.kind !== "user" ||
           governanceActor.status !== "active"
         ) {
-          throw new Error("Governance acceptance requires an active human actor");
+          throw new Error(
+            "Governance acceptance requires an active human actor"
+          );
         }
       }
 
@@ -2603,7 +2607,11 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       const [activationEarner, activationBeneficiary, activationSteward] =
         await Promise.all([
           tx
-            .select({ kind: actors.kind, status: actors.status, parentActorId: actors.parentActorId })
+            .select({
+              kind: actors.kind,
+              status: actors.status,
+              parentActorId: actors.parentActorId,
+            })
             .from(actors)
             .where(eq(actors.id, proposal.earnedByActorId))
             .limit(1),
@@ -2637,7 +2645,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           .select({ effectiveFrom: actorBeneficiaryPolicies.effectiveFrom })
           .from(actorBeneficiaryPolicies)
           .where(
-            eq(actorBeneficiaryPolicies.earnedByActorId, proposal.earnedByActorId)
+            eq(
+              actorBeneficiaryPolicies.earnedByActorId,
+              proposal.earnedByActorId
+            )
           )
           .orderBy(desc(actorBeneficiaryPolicies.effectiveFrom))
           .limit(1),
@@ -2667,7 +2678,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       const latestAllocation = latestAllocationRows[0];
       if (
         latestAllocation &&
-        proposal.effectiveFrom.getTime() <= latestAllocation.contributionCutoff.getTime()
+        proposal.effectiveFrom.getTime() <=
+          latestAllocation.contributionCutoff.getTime()
       ) {
         throw new Error(
           "Beneficiary policy cannot backdate across a frozen actor allocation"
@@ -2678,7 +2690,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         .set({ effectiveTo: proposal.effectiveFrom })
         .where(
           and(
-            eq(actorBeneficiaryPolicies.earnedByActorId, proposal.earnedByActorId),
+            eq(
+              actorBeneficiaryPolicies.earnedByActorId,
+              proposal.earnedByActorId
+            ),
             isNull(actorBeneficiaryPolicies.effectiveTo),
             lte(actorBeneficiaryPolicies.effectiveFrom, proposal.effectiveFrom)
           )
@@ -2742,7 +2757,9 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           governanceActor?.kind !== "user" ||
           governanceActor.status !== "active"
         ) {
-          throw new Error("Governance revocation requires an active human actor");
+          throw new Error(
+            "Governance revocation requires an active human actor"
+          );
         }
       }
       if (proposal.status === "revoked") {
@@ -2756,7 +2773,9 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         proposal.activatedPolicyId &&
         params.revokedAt.getTime() <= proposal.effectiveFrom.getTime()
       ) {
-        throw new Error("Activated beneficiary policy revocation must be prospective");
+        throw new Error(
+          "Activated beneficiary policy revocation must be prospective"
+        );
       }
       if (proposal.activatedPolicyId) {
         await tx

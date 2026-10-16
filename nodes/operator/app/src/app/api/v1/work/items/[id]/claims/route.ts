@@ -124,18 +124,14 @@ export const POST = wrapRouteHandlerWithLogging<{
           ? "dev_coordination.claim_conflict"
           : "dev_coordination.claimed"
       );
-      logEvent(
-        ctx.log,
-        EVENT_NAMES.WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE,
-        {
-          reqId: ctx.reqId,
-          operation: "claim",
-          outcome: "success",
-          workItemId: id,
-          actorPrincipalId: principal.principalId,
-          coordinationId: output.session.coordinationId,
-        }
-      );
+      logEvent(ctx.log, EVENT_NAMES.WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE, {
+        reqId: ctx.reqId,
+        operation: "claim",
+        outcome: "success",
+        workItemId: id,
+        actorPrincipalId: principal.principalId,
+        coordinationId: output.session.coordinationId,
+      });
       return NextResponse.json(
         workItemSessionClaimOperation.output.parse(output),
         { status: output.conflict ? 200 : 201 }
@@ -143,17 +139,13 @@ export const POST = wrapRouteHandlerWithLogging<{
     } catch (error) {
       const errorName = (error as Error)?.name;
       if (errorName === "WorkItemSessionConflictError") {
-        logEvent(
-          ctx.log,
-          EVENT_NAMES.WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE,
-          {
-            reqId: ctx.reqId,
-            operation: "claim",
-            outcome: "conflict",
-            workItemId: id,
-            actorPrincipalId: principal.principalId,
-          }
-        );
+        logEvent(ctx.log, EVENT_NAMES.WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE, {
+          reqId: ctx.reqId,
+          operation: "claim",
+          outcome: "conflict",
+          workItemId: id,
+          actorPrincipalId: principal.principalId,
+        });
         return NextResponse.json(
           { error: (error as Error).message },
           { status: 409 }

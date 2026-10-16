@@ -43,7 +43,9 @@ export async function resolveAttributionActor(input: {
 }): Promise<string | null> {
   if (input.kind === "agent") return input.actorId ?? null;
   if (!input.userId) return null;
-  return getContainer().attributionStore.resolveActiveHumanActorId(input.userId);
+  return getContainer().attributionStore.resolveActiveHumanActorId(
+    input.userId
+  );
 }
 
 export async function mutateBeneficiaryPolicy(input: {

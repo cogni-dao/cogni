@@ -769,21 +769,15 @@ function createContainer(): Container {
           code: "authz_write_unavailable" as const,
           reason: "billing account authorization is not configured",
         };
-    logEvent(
-      log,
-      EVENT_NAMES.AUTHORIZATION_FACADE_OWNER_BOOTSTRAP_COMPLETE,
-      {
-        reqId,
-        status: decision.decision === "success" ? 200 : 503,
-        durationMs: Math.round(performance.now() - startedAt),
-        outcome: decision.decision === "success" ? "success" : "error",
-        decision: decision.decision,
-        code: decision.code,
-        ...(decision.decision === "failure"
-          ? { errorCode: decision.code }
-          : {}),
-      }
-    );
+    logEvent(log, EVENT_NAMES.AUTHORIZATION_FACADE_OWNER_BOOTSTRAP_COMPLETE, {
+      reqId,
+      status: decision.decision === "success" ? 200 : 503,
+      durationMs: Math.round(performance.now() - startedAt),
+      outcome: decision.decision === "success" ? "success" : "error",
+      decision: decision.decision,
+      code: decision.code,
+      ...(decision.decision === "failure" ? { errorCode: decision.code } : {}),
+    });
     if (decision.decision !== "success") {
       throw new BillingAccountOwnerBootstrapPortError(decision.reason);
     }

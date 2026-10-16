@@ -53,8 +53,7 @@ describe("GET /.well-known/agent.json", () => {
     });
     expect(body.actions.readBillingAccount).toMatchObject({
       method: "GET",
-      endpoint:
-        "https://operator.example/api/v1/accounts/{billingAccountId}",
+      endpoint: "https://operator.example/api/v1/accounts/{billingAccountId}",
       auth: { type: "bearer", principal: "durable_agent" },
       inputSchema: {
         type: "object",

@@ -113,9 +113,7 @@ describe("GET /api/v1/accounts/[id]", () => {
       code: "authz_denied",
       checks: [],
     });
-    const response = await get(
-      "66666666-6666-4666-8666-666666666666"
-    );
+    const response = await get("66666666-6666-4666-8666-666666666666");
     expect(response.status).toBe(403);
     expect(getBillingAccountById).not.toHaveBeenCalled();
   });

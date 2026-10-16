@@ -228,14 +228,14 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
 
       // Create tool execution function factory
       // Policy allowlist includes both native and MCP tool IDs
+      const actorId =
+        scope.actorId ??
+        (scope.actorUserId !== undefined
+          ? `user:${scope.actorUserId}`
+          : undefined);
       const createToolExecFn = (emit: (e: AiEvent) => void): ToolExecFn => {
         const policy = createToolAllowlistPolicy(allToolIds);
         const source = createStaticToolSourceFromRecord(runtimeTools);
-        const actorId =
-          scope.actorId ??
-          (scope.actorUserId !== undefined
-            ? `user:${scope.actorUserId}`
-            : undefined);
         const tenantId = scope.billing.billingAccountId;
         const toolRunner = createToolRunner(source, emit, {
           policy,
@@ -294,9 +294,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         configurable: {
           model,
           toolIds,
-          ...(actorId !== undefined
-            ? { actorId }
-            : {}),
+          ...(actorId !== undefined ? { actorId } : {}),
           tenantId: scope.billing.billingAccountId,
           graphId,
         },

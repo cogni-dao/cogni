@@ -13,10 +13,12 @@
 
 import { z } from "zod";
 
-const evidenceSchema = z.record(z.string(), z.unknown()).refine(
-  (evidence) => Object.keys(evidence).length > 0,
-  "evidence must not be empty"
-);
+const evidenceSchema = z
+  .record(z.string(), z.unknown())
+  .refine(
+    (evidence) => Object.keys(evidence).length > 0,
+    "evidence must not be empty"
+  );
 
 export const actorBeneficiaryPolicyMutationSchema = z.discriminatedUnion(
   "action",
@@ -81,10 +83,11 @@ export const actorAllocationReadInputSchema = z.object({
   receiptId: z.string().min(1),
 });
 
-export const actorAllocationSignInputSchema = actorAllocationReadInputSchema.extend({
-  signerAddress: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
-  signature: z.string().regex(/^0x[0-9a-fA-F]+$/),
-});
+export const actorAllocationSignInputSchema =
+  actorAllocationReadInputSchema.extend({
+    signerAddress: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+    signature: z.string().regex(/^0x[0-9a-fA-F]+$/),
+  });
 
 export const actorContributionAllocationSchema = z.object({
   allocationRef: z.string(),
@@ -119,13 +122,14 @@ export const actorAllocationTypedDataSchema = z.object({
   }),
 });
 
-export const actorAllocationRecordSchema = actorContributionAllocationSchema.extend({
-  signerActorId: z.string(),
-  signerWallet: z.string(),
-  signature: z.string(),
-  signedAt: z.string().datetime(),
-  createdAt: z.string().datetime(),
-});
+export const actorAllocationRecordSchema =
+  actorContributionAllocationSchema.extend({
+    signerActorId: z.string(),
+    signerWallet: z.string(),
+    signature: z.string(),
+    signedAt: z.string().datetime(),
+    createdAt: z.string().datetime(),
+  });
 
 export const actorAllocationLifecycleSchema = z.object({
   allocation: actorAllocationRecordSchema,

@@ -305,49 +305,53 @@ export class UserDrizzleAccountService implements AccountService {
       );
     }
 
-    const resolved = await withTenantScope(this.db, this.actorId, async (tx) => {
-      const existingAccount = await tx.query.billingAccounts.findFirst({
-        where: eq(billingAccounts.ownerUserId, userId),
-      });
+    const resolved = await withTenantScope(
+      this.db,
+      this.actorId,
+      async (tx) => {
+        const existingAccount = await tx.query.billingAccounts.findFirst({
+          where: eq(billingAccounts.ownerUserId, userId),
+        });
 
-      if (existingAccount) {
-        const defaultKey = await findDefaultKey(tx, existingAccount.id);
-        return {
-          account: {
-            id: existingAccount.id,
-            ownerUserId: existingAccount.ownerUserId,
-            balanceCredits: toNumber(existingAccount.balanceCredits),
-            defaultVirtualKeyId: defaultKey.id,
-          },
-          completedAt: existingAccount.authorizationOwnerBootstrappedAt,
-        };
-      }
+        if (existingAccount) {
+          const defaultKey = await findDefaultKey(tx, existingAccount.id);
+          return {
+            account: {
+              id: existingAccount.id,
+              ownerUserId: existingAccount.ownerUserId,
+              balanceCredits: toNumber(existingAccount.balanceCredits),
+              defaultVirtualKeyId: defaultKey.id,
+            },
+            completedAt: existingAccount.authorizationOwnerBootstrappedAt,
+          };
+        }
 
-      const billingAccountId = randomUUID();
+        const billingAccountId = randomUUID();
 
-      await tx.insert(billingAccounts).values({
-        id: billingAccountId,
-        ownerUserId: userId,
-        balanceCredits: 0n,
-        // Display name intentionally optional; stored later when UX surfaces exist
-      });
-
-      const createdKey = await insertDefaultKey(
-        tx,
-        billingAccountId,
-        displayName ? { label: displayName } : {}
-      );
-
-      return {
-        account: {
+        await tx.insert(billingAccounts).values({
           id: billingAccountId,
           ownerUserId: userId,
-          balanceCredits: 0,
-          defaultVirtualKeyId: createdKey.id,
-        },
-        completedAt: null,
-      };
-    });
+          balanceCredits: 0n,
+          // Display name intentionally optional; stored later when UX surfaces exist
+        });
+
+        const createdKey = await insertDefaultKey(
+          tx,
+          billingAccountId,
+          displayName ? { label: displayName } : {}
+        );
+
+        return {
+          account: {
+            id: billingAccountId,
+            ownerUserId: userId,
+            balanceCredits: 0,
+            defaultVirtualKeyId: createdKey.id,
+          },
+          completedAt: null,
+        };
+      }
+    );
     return this.ensureOwnerBootstrap({
       ...resolved,
       required: requireAuthorizationOwner,

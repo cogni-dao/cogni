@@ -115,8 +115,7 @@ export const POST = wrapRouteHandlerWithLogging(
           requestId: ctx.reqId,
         });
       if (decision.decision !== "success") {
-        const status =
-          decision.code === "authz_write_denied" ? 403 : 503;
+        const status = decision.code === "authz_write_denied" ? 403 : 503;
         complete(status, "error", decision.code, {
           operation: parsed.data.operation,
           mode: parsed.data.mode,

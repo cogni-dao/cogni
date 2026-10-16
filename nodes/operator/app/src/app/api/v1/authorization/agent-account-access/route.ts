@@ -55,9 +55,10 @@ export const POST = wrapRouteHandlerWithLogging(
       complete(status, "error", body.reason);
       return NextResponse.json({ error: "invalid_request" }, { status });
     }
-    const parsed = authorizationFacadeAgentAccountAccessOperation.input.safeParse(
-      body.value
-    );
+    const parsed =
+      authorizationFacadeAgentAccountAccessOperation.input.safeParse(
+        body.value
+      );
     if (!parsed.success) {
       complete(400, "error", "invalid_request");
       return NextResponse.json({ error: "invalid_request" }, { status: 400 });

@@ -39,7 +39,11 @@ export const GET = wrapRouteHandlerWithLogging(
   { routeId: "attribution.actor-allocation.prepare", auth: { mode: "none" } },
   async (_ctx, request) => {
     const caller = await humanActor();
-    if (!caller) return NextResponse.json({ error: "Human session required" }, { status: 401 });
+    if (!caller)
+      return NextResponse.json(
+        { error: "Human session required" },
+        { status: 401 }
+      );
     const url = new URL(request.url);
     const input = actorAllocationOperation.readInput.parse({
       epochId: url.searchParams.get("epochId"),
@@ -55,7 +59,10 @@ export const GET = wrapRouteHandlerWithLogging(
       );
     } catch (error) {
       return NextResponse.json(
-        { error: error instanceof Error ? error.message : "Allocation unavailable" },
+        {
+          error:
+            error instanceof Error ? error.message : "Allocation unavailable",
+        },
         { status: 409 }
       );
     }
@@ -66,8 +73,14 @@ export const POST = wrapRouteHandlerWithLogging(
   { routeId: "attribution.actor-allocation.sign", auth: { mode: "none" } },
   async (ctx, request) => {
     const caller = await humanActor();
-    if (!caller) return NextResponse.json({ error: "Human session required" }, { status: 401 });
-    const input = actorAllocationOperation.signInput.parse(await request.json());
+    if (!caller)
+      return NextResponse.json(
+        { error: "Human session required" },
+        { status: 401 }
+      );
+    const input = actorAllocationOperation.signInput.parse(
+      await request.json()
+    );
     try {
       const record = await persistActorAllocation({
         ...input,
@@ -98,7 +111,9 @@ export const POST = wrapRouteHandlerWithLogging(
         "actor contribution allocation rejected"
       );
       return NextResponse.json(
-        { error: error instanceof Error ? error.message : "Allocation rejected" },
+        {
+          error: error instanceof Error ? error.message : "Allocation rejected",
+        },
         { status: 409 }
       );
     }

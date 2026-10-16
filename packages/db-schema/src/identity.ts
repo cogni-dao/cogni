@@ -278,7 +278,9 @@ export const actorBeneficiaryPolicyProposals = pgTable(
       .references(() => actors.id),
     policyVersion: text("policy_version").notNull(),
     evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull(),
-    effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull(),
+    effectiveFrom: timestamp("effective_from", {
+      withTimezone: true,
+    }).notNull(),
     status: text("status").notNull().default("pending"),
     activatedPolicyId: text("activated_policy_id").references(
       () => actorBeneficiaryPolicies.id

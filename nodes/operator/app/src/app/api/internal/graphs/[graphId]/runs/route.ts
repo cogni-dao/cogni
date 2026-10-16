@@ -420,8 +420,9 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       }
 
       actorUserId = inputUserId;
-      const principalMatch =
-        /^(?:user|agent):([^:/]+)\/([^:/]+)$/.exec(inputActorPrincipalId);
+      const principalMatch = /^(?:user|agent):([^:/]+)\/([^:/]+)$/.exec(
+        inputActorPrincipalId
+      );
       if (
         !principalMatch ||
         principalMatch[1]?.toLowerCase() !== getNodeId().toLowerCase() ||
@@ -459,10 +460,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         const decision = await container.authorization.check({
           actorId: actorPrincipalId,
           action: "billing_account.read",
-          resource: authzBillingAccountResource(
-            getNodeId(),
-            billingAccountId
-          ),
+          resource: authzBillingAccountResource(getNodeId(), billingAccountId),
           context: {
             tenantId: billingAccountId,
             nodeId: getNodeId(),

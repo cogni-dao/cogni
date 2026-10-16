@@ -42,16 +42,21 @@ export const GET = wrapRouteHandlerWithLogging(
   { routeId: "attribution.beneficiary-policy.read", auth: { mode: "none" } },
   async (_ctx, request) => {
     const caller = await exactActor();
-    if (!caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!caller)
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const proposalId = new URL(request.url).searchParams.get("proposalId");
     if (!proposalId) {
-      return NextResponse.json({ error: "proposalId is required" }, { status: 400 });
+      return NextResponse.json(
+        { error: "proposalId is required" },
+        { status: 400 }
+      );
     }
     const proposal =
       await getContainer().attributionStore.getActorBeneficiaryPolicyProposal(
         proposalId
       );
-    if (!proposal) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!proposal)
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
     if (
       caller.actorId !== proposal.earnedByActorId &&
       caller.actorId !== proposal.stewardActorId &&
@@ -71,13 +76,17 @@ export const POST = wrapRouteHandlerWithLogging(
   { routeId: "attribution.beneficiary-policy.write", auth: { mode: "none" } },
   async (ctx, request) => {
     const caller = await exactActor();
-    if (!caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!caller)
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const mutation = actorBeneficiaryPolicyOperation.input.parse(
       await request.json()
     );
     if (mutation.action === "accept" && mutation.role === "governance") {
       if (caller.principal.kind !== "human") {
-        return NextResponse.json({ error: "Governance acceptance requires a human approver" }, { status: 403 });
+        return NextResponse.json(
+          { error: "Governance acceptance requires a human approver" },
+          { status: 403 }
+        );
       }
       const denied = checkApprover(ctx, caller.principal.walletAddress);
       if (denied) return denied;
@@ -134,7 +143,10 @@ export const POST = wrapRouteHandlerWithLogging(
         "governed beneficiary policy rejected"
       );
       return NextResponse.json(
-        { error: error instanceof Error ? error.message : "Policy mutation rejected" },
+        {
+          error:
+            error instanceof Error ? error.message : "Policy mutation rejected",
+        },
         { status: 409 }
       );
     }

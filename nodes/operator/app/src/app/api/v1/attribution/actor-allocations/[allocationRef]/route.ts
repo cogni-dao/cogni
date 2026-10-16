@@ -25,10 +25,13 @@ type RouteContext = { params: Promise<{ allocationRef: string }> };
 
 export const GET = wrapRouteHandlerWithLogging<RouteContext>(
   { routeId: "attribution.actor-allocation.read", auth: { mode: "none" } },
-  async (_ctx, _request, context) => {
+  async (_ctx, _request, _sessionUser, context) => {
     const principal = await resolveRequestPrincipal();
     if (!principal || principal.kind !== "human") {
-      return NextResponse.json({ error: "Human session required" }, { status: 401 });
+      return NextResponse.json(
+        { error: "Human session required" },
+        { status: 401 }
+      );
     }
     const actorId = await resolveAttributionActor({
       kind: "human",

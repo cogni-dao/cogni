@@ -111,9 +111,10 @@ export const GET = wrapRouteHandlerWithLogging<{
       let accessMode: "direct" | "on_behalf_of" = "direct";
       let decision = direct;
       if (direct.code === "authz_denied") {
-        const stewardship = await container.agentIdentity.getAcceptedStewardship(
-          principal.actorId
-        );
+        const stewardship =
+          await container.agentIdentity.getAcceptedStewardship(
+            principal.actorId
+          );
         if (stewardship?.billingAccountId === billingAccountId) {
           accessMode = "on_behalf_of";
           decision = await authorization.check({

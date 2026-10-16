@@ -121,18 +121,14 @@ export const POST = wrapRouteHandlerWithLogging<{
         },
         "dev_coordination.heartbeat"
       );
-      logEvent(
-        ctx.log,
-        EVENT_NAMES.WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE,
-        {
-          reqId: ctx.reqId,
-          operation: "heartbeat",
-          outcome: "success",
-          workItemId: id,
-          actorPrincipalId: principal.principalId,
-          coordinationId: output.session.coordinationId,
-        }
-      );
+      logEvent(ctx.log, EVENT_NAMES.WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE, {
+        reqId: ctx.reqId,
+        operation: "heartbeat",
+        outcome: "success",
+        workItemId: id,
+        actorPrincipalId: principal.principalId,
+        coordinationId: output.session.coordinationId,
+      });
       return NextResponse.json(
         workItemSessionHeartbeatOperation.output.parse(output)
       );

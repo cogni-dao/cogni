@@ -157,17 +157,13 @@ export const PATCH = wrapRouteHandlerWithLogging<{
         { workItemId: id, actorPrincipalId: principal.principalId },
         "work.items.patch_success"
       );
-      logEvent(
-        ctx.log,
-        EVENT_NAMES.WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE,
-        {
-          reqId: ctx.reqId,
-          operation: "patch",
-          outcome: "success",
-          workItemId: id,
-          actorPrincipalId: principal.principalId,
-        }
-      );
+      logEvent(ctx.log, EVENT_NAMES.WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE, {
+        reqId: ctx.reqId,
+        operation: "patch",
+        outcome: "success",
+        workItemId: id,
+        actorPrincipalId: principal.principalId,
+      });
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {
       // Coded responses: 403 authz_denied (permanent), 503 work_items_busy
