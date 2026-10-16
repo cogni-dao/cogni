@@ -117,6 +117,32 @@
             "uniqueItems": true,
             "items": { "type": "string", "minLength": 1 },
             "description": "Globs of paths that MUST EXIST on both sides but whose CONTENT is legitimately per-deployment (identity, roster-generated desired state). Suppresses the content check only — a missing path is still drift, so a generated canonical path can never go silently absent. TAKES PRECEDENCE over omit_from_artifact, so a broad roster omission can re-require the control-plane rows inside it. Replaces the v1 twin-listing workaround (the same glob in omit_from_artifact AND artifact_only), which zeroed the flag in both directions and therefore hid absence too."
+          },
+          "content_must_match": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Globs of platform-wiring paths nested inside a broad roster glob (omit_from_artifact / artifact_only) that MUST mirror the hub byte-for-byte. Outranks the roster globs; only a more specific content_may_differ outranks it (a generated file inside a must-match directory). Exists so platform composition is never kept at a deployment's stale fork."
+          },
+          "regenerate": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["commands"],
+            "description": "Canonical generators the sync re-runs against the artifact's own roster so roster-generated content is re-derived, never carried at stale bytes. A generator writing a path the artifact may not own fails the sync.",
+            "properties": {
+              "inputs_from_artifact_variables": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+                "description": "Repository variables of the artifact exported to the generators (the same vars.* its CI exports)."
+              },
+              "commands": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "pattern": "^scripts/ci/[A-Za-z0-9._/-]+\\.sh( --?[a-z-]+)*$" },
+                "description": "Repo-relative canonical generator invocations, e.g. `scripts/ci/render-node-appset.sh --write`."
+              }
+            }
           }
         }
       }

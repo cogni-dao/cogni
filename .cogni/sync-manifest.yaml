@@ -158,8 +158,7 @@ divergences:
       - "infra/catalog/node-template.yaml"
       # 3 — env desired state rendered FROM the roster. Present on both sides, content per-roster.
       - "infra/k8s/overlays/*/*.yaml" # per-env root kustomization/namespace — enumerates the env's components
-      - "infra/k8s/overlays/*/operator/**" # control-plane node, every env
-      - "infra/k8s/overlays/*/scheduler-worker/**" # incl. the generated node-endpoints.patch.yaml (bug.5094)
+      - "infra/k8s/overlays/*/scheduler-worker/node-endpoints.patch.yaml" # generated per roster (bug.5094); re-derived below
       - "infra/k8s/argocd/appsets/*/kustomization.yaml" # enumerates the env's per-node ApplicationSets
       - "infra/k8s/argocd/kustomization.yaml"
       # The candidate control-plane root and its child app-of-apps must resolve from the
@@ -208,3 +207,22 @@ divergences:
       #     production/staging ciphertext never flows in (omit_from_artifact above), and the
       #     mirror's is never deleted by a refresh. Each repo owns its own SOPS/ESO leaves.
       - "infra/k8s/secrets/**"
+    content_must_match:
+      # NO FORKED PLATFORM WIRING (story.5038 / subtask.5007). The control-plane overlays are
+      # platform composition (actuators, ESO leaves, replacements, VM aliases), not roster output.
+      # Keeping the mirror's copy let them rot ~700 lines behind canonical (no
+      # database-reliability-actuator, and VM aliases on a zone that does not resolve). candidate-a
+      # is the test fleet's shared control plane, so canonical already carries its identity. These
+      # files therefore mirror canonical byte-for-byte; only the generated patch above may differ.
+      - "infra/k8s/overlays/*/operator/**"
+      - "infra/k8s/overlays/*/scheduler-worker/**"
+    regenerate:
+      # GENERATED_IS_REDERIVED (scripts/ci/sync-test-parent.mjs). Roster-generated content is
+      # re-derived by the CANONICAL generators against the mirror's own roster, never carried at
+      # the mirror's stale bytes. Identity inputs are the mirror's repository variables, the same
+      # `vars.*` its ci.yaml exports, so the sync and the mirror's own --check derive identically.
+      inputs_from_artifact_variables: [DOMAIN, FORK_DOMAIN_ROOT, FLEET_CONTROL_ENV]
+      commands:
+        - scripts/ci/render-scheduler-worker-endpoints.sh --write
+        - scripts/ci/render-node-appset.sh --write
+        - scripts/ci/render-node-overlays.sh --write
