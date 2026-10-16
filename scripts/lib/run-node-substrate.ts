@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
-/** Placement-aware day-2 entrypoint. Shared lanes retain their existing runner;
- * admitted dedicated cells verify their actual custody/native bounds without
- * running the shared Postgres provisioner or reopening their fenced source. */
+/**
+ * Module: `@scripts/lib/run-node-substrate`
+ * Purpose: Route day-2 substrate readiness to the workload's database placement.
+ * Scope: Shared lanes delegate to the existing runner; admitted manual cells verify custody and native bounds.
+ * Invariants: No shared Postgres provisioner or native mutation for an admitted dedicated target; initial admission stays immutable.
+ * Side-effects: IO (existing canonical writer, SSH/Kubernetes reads, idempotent ESO refresh, bounded read-only PostgreSQL transactions).
+ * Links: docs/spec/databases.md, scripts/ci/run-node-substrate.sh, scripts/lib/materialize-database-cell-placement.ts
+ * @internal
+ */
 import { spawnSync } from "node:child_process";
 import { createHash, X509Certificate } from "node:crypto";
 import { readFileSync } from "node:fs";
