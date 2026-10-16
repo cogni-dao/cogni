@@ -4,7 +4,7 @@
 /**
  * Module: `@contracts/attribution.actor-identity.v1.contract`
  * Purpose: Wire contracts for governed AI beneficiary policies and automatically frozen allocations.
- * Scope: Zod schemas only; never persists policy state, infers a beneficiary from stewardship, billing, or OBO, or performs settlement.
+ * Scope: Zod schemas only. Does not persist policy state, infer a beneficiary from stewardship, billing, or OBO, or perform settlement.
  * Invariants: HUMAN_AND_AGENT_ARE_DISTINCT; EXPLICIT_BENEFICIARY; CUTOFF_FROZEN.
  * Side-effects: none
  * Links: story.5075, https://cognidao.org/knowledge/human-ai-identity-standard

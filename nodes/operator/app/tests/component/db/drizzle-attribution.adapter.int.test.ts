@@ -39,7 +39,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DrizzleAgentIdentityAdapter } from "@/adapters/server/identity/agent-identity.adapter";
-import { actors, userBindings } from "@/shared/db/schema";
+import { actors, billingAccounts, userBindings } from "@/shared/db/schema";
 
 /** Unwrap DrizzleQueryError → underlying PostgresError message */
 function drizzleCause(err: unknown): string {
@@ -1942,6 +1942,14 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         .where(and(eq(actors.kind, "user"), eq(actors.userId, derek.user.id)))
         .limit(1);
       if (!derekActor) throw new Error("Expected canonical Derek actor");
+      await db
+        .update(billingAccounts)
+        .set({
+          authorizationOwnerBootstrappedAt: new Date(
+            "2026-09-30T00:00:00.000Z"
+          ),
+        })
+        .where(eq(billingAccounts.id, derek.billingAccountId));
 
       const flockLeaderActorId = crypto.randomUUID();
       await db.insert(actors).values({
