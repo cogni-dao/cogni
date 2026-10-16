@@ -1,0 +1,94 @@
+{
+  "skill_name": "contribute-to-cogni",
+  "scope": "Fresh native Claude sessions; contributor and knowledge-router selection, not end-to-end shipping proof.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "cognition-research",
+      "prompt": "Research the cognition changes from the last day or two. Why does every agent open with the same contributor skill announcement? Explain the startup trigger and critically audit the old contributor guidance; do not implement changes.",
+      "expected_output": "Contributor skill does not load via Skill or Read tool.",
+      "files": [],
+      "expectations": [
+        "Contributor skill does not load via Skill or Read tool."
+      ],
+      "contributor": false,
+      "syntropy": null
+    },
+    {
+      "id": 2,
+      "name": "architecture-question",
+      "prompt": "I am onboarding to Cogni. Explain how a graph reaches the production runtime and why changes to graph code might or might not rebuild the worker. I want an architectural answer, no code or deployment changes.",
+      "expected_output": "Contributor skill does not load via Skill or Read tool.",
+      "files": [],
+      "expectations": [
+        "Contributor skill does not load via Skill or Read tool."
+      ],
+      "contributor": false,
+      "syntropy": null
+    },
+    {
+      "id": 3,
+      "name": "implement-bug",
+      "prompt": "Implement a fix for the cognition startup bug: research-only sessions should not be sent through the code-delivery lifecycle. Scope is approved for one PR on this node. Start the normal implementation workflow and identify the first concrete changes.",
+      "expected_output": "Contributor skill loads via Skill or Read tool.",
+      "files": [],
+      "expectations": [
+        "Contributor skill loads via Skill or Read tool."
+      ],
+      "contributor": true,
+      "syntropy": null
+    },
+    {
+      "id": 4,
+      "name": "resume-pr",
+      "prompt": "Resume our already approved code contribution on the operator. The existing work item outcome has Goal = Fix contributor routing and Done when = Fresh sessions choose the correct workflow. There is already a PR on this branch; continue its delivery through CI and candidate validation. Begin by recalling the applicable delivery workflow.",
+      "expected_output": "Contributor skill loads via Skill or Read tool.",
+      "files": [],
+      "expectations": [
+        "Contributor skill loads via Skill or Read tool."
+      ],
+      "contributor": true,
+      "syntropy": null
+    },
+    {
+      "id": 5,
+      "name": "knowledge-only",
+      "prompt": "We have a durable insight about why successful deployment receipts do not prove runtime health. Contribute it to the current node knowledge hub by refining an existing entry if possible. This is knowledge-only work; no code PR or repository changes are needed. Start the normal contribution workflow.",
+      "expected_output": "Contributor skill does not load via Skill or Read tool. Knowledge contribution skill loads via Skill or Read tool.",
+      "files": [],
+      "expectations": [
+        "Contributor skill does not load via Skill or Read tool.",
+        "Knowledge contribution skill loads via Skill or Read tool."
+      ],
+      "contributor": false,
+      "syntropy": null,
+      "knowledge": true
+    },
+    {
+      "id": 6,
+      "name": "hub-curation",
+      "prompt": "Audit our hub for duplicated constitution text and stale .md references. Use the knowledge syntropy steward and md-to-hub migration guidance to decide which existing entry is canonical and propose an in-place cleanup. This is a knowledge curation review, not a code change.",
+      "expected_output": "Contributor skill does not load via Skill or Read tool. Knowledge syntropy steward loads via Skill or Read tool.",
+      "files": [],
+      "expectations": [
+        "Contributor skill does not load via Skill or Read tool.",
+        "Knowledge syntropy steward loads via Skill or Read tool."
+      ],
+      "contributor": false,
+      "syntropy": true
+    },
+    {
+      "id": 7,
+      "name": "nonoperator-delivery",
+      "prompt": "I am contributing a bug fix to the Poly node at https://poly.cognidao.org, not the operator. The node and existing work item are already assigned and its agent key is already configured. Start the code-contribution workflow for the existing PR, keeping knowledge/work-item ownership on Poly and deployment control on the operator.",
+      "expected_output": "Contributor skill loads via Skill or Read tool.",
+      "files": [],
+      "expectations": [
+        "Contributor skill loads via Skill or Read tool."
+      ],
+      "contributor": true,
+      "syntropy": null,
+      "nonoperator": true
+    }
+  ]
+}
