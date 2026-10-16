@@ -20,10 +20,6 @@ export const EVENT_NAMES = {
   NODE_ACCESS_REQUEST_COMPLETE: "feature.node_access_request.complete",
   NODE_SECRET_WRITE_COMPLETE: "feature.node_secret_write.complete",
   NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
-  // Node GitHub-Actions-permissions reconcile verb (bug.5482): one terminal event per
-  // reconcile-actions call, including the authz-deny and in-repo-unsupported outcomes —
-  // so the handler is Loki-attributable at a SHA (validate-candidate hard-rule #3).
-  NODE_RECONCILE_ACTIONS_COMPLETE: "feature.node_reconcile_actions.complete",
   // Env-membership merge → lane reconcile (task.5132). One terminal event per merged
   // `cogni-operator/node-env-<slug>-<env>` PR, including the no-dispatch outcomes. Adding a
   // PRE-PROD lane can dispatch a PRODUCTION promote (the custodian owns the lane's substrate),

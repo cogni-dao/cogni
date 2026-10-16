@@ -37,6 +37,7 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
+import { getCurrentTraceId } from "@/bootstrap/otel";
 import { serverEnv } from "@/shared/env";
 import {
   createRequestContext,
@@ -58,6 +59,7 @@ interface RouteParams {
 export async function POST(request: Request, routeArgs: RouteParams) {
   const ctx = createRequestContext({ baseLog, clock }, request, {
     routeId: "nodes.reconcileActions",
+    traceId: getCurrentTraceId(),
   });
   const startTime = performance.now();
   const complete = (
