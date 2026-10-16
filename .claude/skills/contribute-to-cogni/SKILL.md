@@ -16,7 +16,7 @@ using its saved `COGNI_NODE_API_KEY`:
 | entry                        | use it for                                                   |
 | ---------------------------- | ------------------------------------------------------------ |
 | `cicd-e2e-required-sequence` | access, CI, operator flight, merge, and promotion            |
-| `node-candidate-validation`  | changed-surface exercise, exact SHA, and observability proof |
+| `validate-candidate`         | changed-surface exercise, exact SHA, and observability proof |
 
 Use the session's node identity, candidate URL, approved outcome, and existing
 work item. Reuse credentials; register only when no usable node credential exists.

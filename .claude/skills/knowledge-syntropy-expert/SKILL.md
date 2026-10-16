@@ -1,41 +1,40 @@
 ---
 name: knowledge-syntropy-expert
-description: Use when curating a Cogni knowledge hub, deciding whether to refine an entry, or migrating durable repository knowledge into the hub. Routes knowledge quality, contribution mechanics, and migration decisions to their existing hub contracts.
+description: Use when organizing or curating a Cogni knowledge hub, deciding where durable knowledge belongs, or migrating Markdown docs and skills into the hub. Read the node knowledge axioms first, then the complete guide for the task.
 ---
 
 # Knowledge stewardship
 
-The hub holds the knowledge contracts. This file selects them; session cognition
-already supplies the operating contract.
+This file is the local discovery shell. The hub owns the axioms and procedures;
+session cognition supplies the operating contract.
 
-## Recall by decision
+## Read the axioms first
 
-Read the relevant entries through `GET /api/v1/knowledge/{id}` on the current
-node, using its saved credentials:
+On every invocation, read the full `content` of
+`GET /api/v1/knowledge/md-to-hub-design` before proposing or changing knowledge.
+Use the current node's verified origin and saved `COGNI_NODE_API_KEY`; do not
+default a sovereign node's reads or writes to the operator.
 
-| decision                                                 | entry                         |
-| -------------------------------------------------------- | ----------------------------- |
-| Does this deserve durable knowledge?                     | `knowledge-syntropy-protocol` |
-| How do I recall, refine, link work items, and submit it? | `knowledge-contribution-flow` |
-| Which domain owns it?                                    | `cogni-domain-taxonomy`       |
-| Should this repository document move?                    | `md-to-hub-design`            |
-| Would a visual help a human review it?                   | `knowledge-human-visuals`     |
+Then fetch the complete guide for the task through
+`GET /api/v1/knowledge/{id}`. Index rows and citation links are pointers, not
+the instructions: read the selected bodies and their required dependencies.
 
-Recall merged entries and relevant open contribution diffs before writing.
-Confidence matters: verify draft or stale claims against their evidence and
-owning code. Policy sets confidence; authors do not raise it by assertion.
+| task                                                                           | read                          |
+| ------------------------------------------------------------------------------ | ----------------------------- |
+| Migrate repository Markdown, including specs and skills                        | `migrate-markdown-to-hub`     |
+| Split a mixed document into skills, guides, contracts, rationale, and findings | `segment-markdown-knowledge`  |
+| Thin a skill while preserving harness discovery and local resources            | `migrate-skill-to-hub`        |
+| Repair links, anchors, loaders, and references before thinning or purging      | `retire-markdown-sources`     |
+| Judge whether knowledge deserves an entry or refinement                        | `knowledge-syntropy-protocol` |
+| Recall both planes, contribute, cite, and obtain human review                  | `knowledge-contribution-flow` |
+| Choose a registered domain                                                     | `cogni-domain-taxonomy`       |
+| Choose a useful human visual                                                   | `knowledge-human-visuals`     |
 
-## Preserve these boundaries
+Use the migration guide's full sequence rather than stopping after classification
+or an upload. Preserve the source until its reviewed replacement and consumers
+pass the guide's cutover gates. Progress and current blockers belong in the
+existing work item, not this shell.
 
-- Refine before adding. Keep one claim or executable journey per entry.
-- Preserve provenance, contributor lineage, and citation relationships.
-- Keep plans, owners, blockers, and next actions in work items.
-- Use a focused contribution inbox; a human reviews its merge.
-- Before removing a local source, verify its replacement is merged, retrievable,
-  and preserves the needed contracts and citations. Unmigrated specs still govern.
-- Preserve the complete session contract and outage recovery instructions during
-  migration. Moving knowledge must not remove startup instructions.
-
-Migration progress is linked from `md-to-hub-design`; treat dated scoreboards as
-snapshots and verify current work-item state. If the hub is unavailable, retain
-the loaded context and existing sources until replacements can be verified.
+If an entry is missing or unreachable, retain the source documents and use only
+verified startup/recovery instructions. Record and resolve the failed retrieval
+gate; do not invent missing guidance or claim the migration is complete.
