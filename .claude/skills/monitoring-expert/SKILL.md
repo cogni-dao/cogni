@@ -1,208 +1,24 @@
 ---
 name: monitoring-expert
-description: Configures monitoring systems, implements structured logging pipelines, creates Prometheus/Grafana dashboards, defines alerting rules, and instruments distributed tracing. Implements Prometheus/Grafana stacks, conducts load testing, performs application profiling, and plans infrastructure capacity. Use when setting up application monitoring, adding observability to services, debugging production issues with logs/metrics/traces, running load tests with k6 or Artillery, profiling CPU/memory bottlenecks, or forecasting capacity needs.
+description: Restore and improve fleet reliability with the least compute and complexity that meets service guarantees. Use for outages, red Grafana dashboards, degraded nodes, shared-service stalls, unexplained recoveries, reliability risks, performance bottlenecks, and incident postmortems. Establish causes, mitigate safely, ship minimal fixes, and prove recovery; do not stop at monitoring or diagnosis.
 license: MIT
 metadata:
-  author: https://github.com/Jeffallan
-  version: "1.1.0"
-  domain: devops
-  triggers: monitoring, observability, logging, metrics, tracing, alerting, Prometheus, Grafana, DataDog, APM, performance testing, load testing, profiling, capacity planning, bottleneck
-  role: specialist
-  scope: implementation
-  output-format: code
-  related-skills: devops-engineer, debugging-wizard, architecture-designer
+  original-author: https://github.com/Jeffallan
+  version: "2.0.0"
 ---
 
-# Monitoring Expert
+# Monitoring and reliability postmortem expert
 
-Observability and performance specialist implementing comprehensive monitoring, alerting, tracing, and performance testing systems.
+The operational contract lives in the operator hub; this file selects it.
 
-## Core Workflow
+Fetch and follow [monitoring-expert](https://cognidao.org/knowledge/monitoring-expert) before incident, postmortem, or reliability work:
 
-1. **Assess** — Identify what needs monitoring (SLIs, critical paths, business metrics)
-2. **Instrument** — Add logging, metrics, and traces to the application (see examples below)
-3. **Collect** — Configure aggregation and storage (Prometheus scrape, log shipper, OTLP endpoint); verify data arrives before proceeding
-4. **Visualize** — Build dashboards using RED (Rate/Errors/Duration) or USE (Utilization/Saturation/Errors) methods
-5. **Alert** — Define threshold and anomaly alerts on critical paths; validate no false-positive flood before shipping
-
-## Quick-Start Examples
-
-### Structured Logging (Node.js / Pino)
-
-```js
-import pino from "pino";
-
-const logger = pino({ level: "info" });
-
-// Good — structured fields, includes correlation ID
-logger.info(
-  { requestId: req.id, userId: req.user.id, durationMs: elapsed },
-  "order.created"
-);
-
-// Bad — string interpolation, no correlation
-console.log(`Order created for user ${userId}`);
+```bash
+# Reuse the saved node-agent credential from .env.cogni; never print it.
+curl -fsS --max-time 20 -H "Authorization: Bearer $COGNI_NODE_API_KEY" \
+  https://cognidao.org/api/v1/knowledge/monitoring-expert | jq -er .content
 ```
 
-### Prometheus Metrics (Node.js)
+The hub skill reuses the existing fleet diagnosis queries, health matrix, and native recovery/reconciliation guides. It covers impact, authorized mitigation, causal attribution, minimum-cost durable repair, live verification, and reusable learning.
 
-```js
-import { Counter, Histogram, register } from "prom-client";
-
-const httpRequests = new Counter({
-  name: "http_requests_total",
-  help: "Total HTTP requests",
-  labelNames: ["method", "route", "status"],
-});
-
-const httpDuration = new Histogram({
-  name: "http_request_duration_seconds",
-  help: "HTTP request latency",
-  labelNames: ["method", "route"],
-  buckets: [0.05, 0.1, 0.3, 0.5, 1, 2, 5],
-});
-
-// Instrument a route
-app.use((req, res, next) => {
-  const end = httpDuration.startTimer({ method: req.method, route: req.path });
-  res.on("finish", () => {
-    httpRequests.inc({
-      method: req.method,
-      route: req.path,
-      status: res.statusCode,
-    });
-    end();
-  });
-  next();
-});
-
-// Expose scrape endpoint
-app.get("/metrics", async (req, res) => {
-  res.set("Content-Type", register.contentType);
-  res.end(await register.metrics());
-});
-```
-
-### OpenTelemetry Tracing (Node.js)
-
-```js
-import { NodeSDK } from "@opentelemetry/sdk-node";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { trace } from "@opentelemetry/api";
-
-const sdk = new NodeSDK({
-  traceExporter: new OTLPTraceExporter({ url: "http://jaeger:4318/v1/traces" }),
-});
-sdk.start();
-
-// Manual span around a critical operation
-const tracer = trace.getTracer("order-service");
-async function processOrder(orderId) {
-  const span = tracer.startSpan("order.process");
-  span.setAttribute("order.id", orderId);
-  try {
-    const result = await db.saveOrder(orderId);
-    span.setStatus({ code: SpanStatusCode.OK });
-    return result;
-  } catch (err) {
-    span.recordException(err);
-    span.setStatus({ code: SpanStatusCode.ERROR });
-    throw err;
-  } finally {
-    span.end();
-  }
-}
-```
-
-### Prometheus Alerting Rule
-
-```yaml
-groups:
-  - name: api.rules
-    rules:
-      - alert: HighErrorRate
-        expr: |
-          rate(http_requests_total{status=~"5.."}[5m])
-          / rate(http_requests_total[5m]) > 0.05
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Error rate above 5% on {{ $labels.route }}"
-```
-
-### k6 Load Test
-
-```js
-import http from "k6/http";
-import { check, sleep } from "k6";
-
-export const options = {
-  stages: [
-    { duration: "1m", target: 50 }, // ramp up
-    { duration: "5m", target: 50 }, // sustained load
-    { duration: "1m", target: 0 }, // ramp down
-  ],
-  thresholds: {
-    http_req_duration: ["p(95)<500"], // 95th percentile < 500 ms
-    http_req_failed: ["rate<0.01"], // error rate < 1%
-  },
-};
-
-export default function () {
-  const res = http.get("https://api.example.com/orders");
-  check(res, { "status is 200": (r) => r.status === 200 });
-  sleep(1);
-}
-```
-
-## Reference Guide
-
-Load detailed guidance based on context:
-
-| Topic                 | Reference                                                                | Load When                                                |
-| --------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------- |
-| Logging               | `references/structured-logging.md`                                       | Pino, JSON logging                                       |
-| Metrics               | `references/prometheus-metrics.md`                                       | Counter, Histogram, Gauge                                |
-| Tracing               | `references/opentelemetry.md`                                            | OpenTelemetry, spans                                     |
-| Alerting              | `references/alerting-rules.md`                                           | Prometheus alerts                                        |
-| Dashboards            | `references/dashboards.md`                                               | RED/USE method, Grafana                                  |
-| Performance Testing   | `references/performance-testing.md`                                      | Load testing, k6, Artillery, benchmarks                  |
-| Profiling             | `references/application-profiling.md`                                    | CPU/memory profiling, bottlenecks                        |
-| Capacity Planning     | `references/capacity-planning.md`                                        | Scaling, forecasting, budgets                            |
-| Cogni Fleet Diagnosis | [hub guide](https://cognidao.org/knowledge/fleet-health-diagnosis-guide) | Red fleet status, node 52x, shared-substrate attribution |
-
-## Fleet availability and deployment identity
-
-Continuous Serve probes measure availability: TLS, HTTP 200, a healthy response,
-and the configured deadline. Never pin a release SHA in their body assertions,
-labels, or required inputs: normal flights and promotions must not require a
-separate monitoring apply to remain available.
-
-Check actual build identity through `/version` and `/readyz` diagnostics. Keep
-exact expected-versus-actual SHA verification in flight, promotion, and candidate
-validation gates. A wrong build fails deployment verification; it is not, by
-itself, evidence of an availability outage. Incident-scoped recovery proofs retain
-their exact build, native database, and incident identity assertions.
-
-When HTTP 200 produces `probe_success=0`, inspect `probe_failed_due_to_regex` and
-the configured assertions before attributing an outage to a database or host.
-Follow the existing [fleet diagnosis guide](https://cognidao.org/knowledge/fleet-health-diagnosis-guide).
-
-## Constraints
-
-### MUST DO
-
-- Use structured logging (JSON)
-- Include request IDs for correlation
-- Set up alerts for critical paths
-- Monitor business metrics, not just technical
-- Use appropriate metric types (counter/gauge/histogram)
-- Implement health check endpoints
-
-### MUST NOT DO
-
-- Log sensitive data (passwords, tokens, PII)
-- Alert on every error (alert fatigue)
-- Use string interpolation in logs (use structured fields)
-- Skip correlation IDs in distributed systems
+If recall fails, report the unavailable authority and follow already-loaded incident/recovery contracts within existing authorization. Preserve evidence and safe service restoration; do not treat an unmerged draft as approved guidance or improvise credentials, destructive operations, or a new monitoring system.
