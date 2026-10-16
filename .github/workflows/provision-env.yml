@@ -611,7 +611,9 @@ jobs:
       DEPLOY_ENV: ${{ inputs.env }}
     steps:
       - name: Mask root token
-        run: echo "::add-mask::${{ inputs.openbao_root_token }}"
+        env:
+          OPENBAO_ROOT_TOKEN: ${{ inputs.openbao_root_token }}
+        run: echo "::add-mask::$OPENBAO_ROOT_TOKEN"
 
       - name: Validate substrate-only inputs
         env:

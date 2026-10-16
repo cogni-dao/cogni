@@ -6,7 +6,9 @@
  * Module: `@scripts/ci/workflow-check`
  * Purpose: Validate the local GitHub Actions workflow surface that agents rely on.
  * Scope: Reads `.github/workflows/*.y{a,}ml`; does not call GitHub or dispatch workflows.
- * Invariants: DISPATCHABLE_WORKFLOWS_DECLARED — manual levers must expose `workflow_dispatch`.
+ * Invariants:
+ *   - DISPATCHABLE_WORKFLOWS_DECLARED — manual levers must expose `workflow_dispatch`.
+ *   - SENSITIVE_INPUTS_NOT_IN_RUN — sensitive dispatch inputs cross into shell via env, never expression interpolation.
  * Side-effects: IO (filesystem reads)
  * Links: .github/workflows/ACTION_TRIGGERS.md
  * @internal
@@ -30,6 +32,8 @@ const manualWorkflows = [
   "stack-test.yml",
 ];
 const nonDispatchWorkflows = ["ci.yaml", "pr-lint.yaml"];
+const sensitiveInputName =
+  /(api[_-]?key|credential|passphrase|password|private[_-]?key|secret|token)/i;
 
 let failures = 0;
 
@@ -76,6 +80,55 @@ function triggersFor(file) {
   return new Set();
 }
 
+function sensitiveDispatchInputs(workflow) {
+  const inputs = workflow?.on?.workflow_dispatch?.inputs;
+  if (!inputs || typeof inputs !== "object") {
+    return new Set();
+  }
+  return new Set(
+    Object.keys(inputs).filter((name) => sensitiveInputName.test(name))
+  );
+}
+
+function inputReferences(expression) {
+  const names = new Set();
+  for (const match of expression.matchAll(
+    /(?:github\.event\.)?inputs\.([A-Za-z_][A-Za-z0-9_-]*)/g
+  )) {
+    names.add(match[1]);
+  }
+  for (const match of expression.matchAll(
+    /(?:github\.event\.)?inputs\[['"]([^'"]+)['"]\]/g
+  )) {
+    names.add(match[1]);
+  }
+  return names;
+}
+
+function sensitiveRunReferences(workflow) {
+  const sensitiveInputs = sensitiveDispatchInputs(workflow);
+  if (sensitiveInputs.size === 0) {
+    return [];
+  }
+
+  const references = [];
+  for (const [jobName, job] of Object.entries(workflow?.jobs ?? {})) {
+    for (const [stepIndex, step] of (job?.steps ?? []).entries()) {
+      if (typeof step?.run !== "string") {
+        continue;
+      }
+      for (const expression of step.run.matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
+        for (const inputName of inputReferences(expression[1])) {
+          if (sensitiveInputs.has(inputName)) {
+            references.push({ jobName, stepIndex, inputName });
+          }
+        }
+      }
+    }
+  }
+  return references;
+}
+
 for (const file of requiredFiles) {
   if (existsSync(join(WORKFLOW_DIR, file))) {
     pass(`${file} exists`);
@@ -113,6 +166,19 @@ for (const file of nonDispatchWorkflows) {
 const workflowFiles = readdirSync(WORKFLOW_DIR)
   .filter((file) => /\.ya?ml$/.test(file))
   .sort();
+
+for (const file of workflowFiles) {
+  const references = sensitiveRunReferences(readWorkflow(file));
+  if (references.length === 0) {
+    pass(`${file} keeps sensitive dispatch inputs out of run scripts`);
+    continue;
+  }
+  for (const { jobName, stepIndex, inputName } of references) {
+    fail(
+      `${file} job ${jobName} step ${stepIndex + 1} interpolates sensitive input '${inputName}' in run; pass it through step env and reference the shell variable`
+    );
+  }
+}
 
 const candidateFlightText = readWorkflowText("candidate-flight.yml");
 const promoteAndDeployText = readWorkflowText("promote-and-deploy.yml");
