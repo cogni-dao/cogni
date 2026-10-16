@@ -2,9 +2,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-
 namespace: cogni-preview
-
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
@@ -16,48 +14,27 @@ resources:
   # validated on candidate-a. See story.5016 / akash-actuator-wallet-cutover.
   - external-secret.yaml
   - ../../../base/operator-migration-external-secret
-  # task.5247 — private autonomous database containment/status controller.
-  - ../../../base/database-reliability-actuator
-  - ./database-reliability-actuator-external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
-
+  # task.5247 — private read-only database status observation.
+  - ../../../base/database-reliability-actuator
+  - ./database-reliability-actuator-external-secret.yaml
 namePrefix: operator-
-
 # No akash-tx-actuator-service-name transformer here: with the actuator base
 # removed (see resources note above), there is no actuator Service to un-prefix.
-
 replacements:
   - source:
       kind: Application
       name: compute-workload-platform
       fieldPath: spec.destination.namespace
     targets:
-      - select: { kind: Application, name: compute-workload-platform }
+      - select: {kind: Application, name: compute-workload-platform}
         fieldPaths: [metadata.namespace]
-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:6b13ce8309c44e54f0e1916f4682a1fbe935e64b6d6a3269ea4f163807570511"
-
+    digest: "sha256:8ea21a792376416fff54440d04004f56df13250e023004c801bc14c58fd7f895"
 patches:
-  - target:
-      kind: Deployment
-      name: database-reliability-watchdog
-    patch: |
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: database-reliability-watchdog
-      spec:
-        template:
-          spec:
-            containers:
-              - name: watchdog
-                env:
-                  - name: DEPLOY_ENVIRONMENT
-                    value: preview
   - target:
       kind: ExternalSecret
       name: migration-secrets
@@ -65,44 +42,6 @@ patches:
       - op: replace
         path: /spec/data/0/remoteRef/key
         value: preview/operator-database-migration
-  - target:
-      kind: Deployment
-      name: database-reliability-actuator
-    patch: |
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: database-reliability-actuator
-      spec:
-        template:
-          spec:
-            containers:
-              - name: actuator
-                env:
-                  - name: DEPLOY_ENVIRONMENT
-                    value: preview
-                  - name: FORK_DOMAIN_ROOT
-                    value: cognidao.org
-  - target:
-      kind: Deployment
-      name: database-reliability-readmitter
-    patch: |
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: database-reliability-readmitter
-      spec:
-        template:
-          spec:
-            containers:
-              - name: readmitter
-                env:
-                  - name: DEPLOY_ENVIRONMENT
-                    value: preview
-                  - name: FORK_DOMAIN_ROOT
-                    value: cognidao.org
-                  - name: DATABASE_RELIABILITY_ACTUATOR_URL
-                    value: http://operator-database-reliability-actuator:8080
   - target:
       kind: Deployment
       name: node-app
@@ -118,25 +57,11 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
-          name: DATABASE_RELIABILITY_READMITTER_URL
-          value: http://operator-database-reliability-readmitter:8081
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
           name: DATABASE_RELIABILITY_STATUS_TOKEN
           valueFrom:
             secretKeyRef:
               name: operator-env-secrets
               key: DATABASE_RELIABILITY_STATUS_TOKEN
-              optional: true
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: DATABASE_RELIABILITY_READMIT_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: operator-env-secrets
-              key: DATABASE_RELIABILITY_READMIT_TOKEN
               optional: true
   # No akash-tx-actuator Deployment patch here: preview runs no akash writer
   # (see resources note above — one active writer per shared test wallet).
@@ -255,7 +180,6 @@ patches:
       - op: add
         path: /spec/template/metadata/labels/app.kubernetes.io~1instance
         value: "operator"
-
   # task.0423: Doltgres knowledge-plane migrator runs as a second initContainer
   # on the operator Deployment. DATABASE_URL maps to DOLTGRES_URL.
   - target:
@@ -287,10 +211,9 @@ patches:
             limits:
               memory: "1Gi"
               cpu: "1000m"
-
   # bug.0295: VM discovery via DNS (cogni-preview.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.
-  - target: { kind: Service, name: postgres-external }
+  - target: {kind: Service, name: postgres-external}
     patch: |
       apiVersion: v1
       kind: Service
@@ -300,7 +223,7 @@ patches:
         type: ExternalName
         externalName: cogni-preview.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: temporal-external }
+  - target: {kind: Service, name: temporal-external}
     patch: |
       apiVersion: v1
       kind: Service
@@ -310,7 +233,7 @@ patches:
         type: ExternalName
         externalName: cogni-preview.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: litellm-external }
+  - target: {kind: Service, name: litellm-external}
     patch: |
       apiVersion: v1
       kind: Service
@@ -320,7 +243,7 @@ patches:
         type: ExternalName
         externalName: cogni-preview.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: openfga-external }
+  - target: {kind: Service, name: openfga-external}
     patch: |
       apiVersion: v1
       kind: Service
@@ -330,7 +253,7 @@ patches:
         type: ExternalName
         externalName: cogni-preview.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: redis-external }
+  - target: {kind: Service, name: redis-external}
     patch: |
       apiVersion: v1
       kind: Service
@@ -340,7 +263,7 @@ patches:
         type: ExternalName
         externalName: cogni-preview.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: doltgres-external }
+  - target: {kind: Service, name: doltgres-external}
     patch: |
       apiVersion: v1
       kind: Service
@@ -350,38 +273,56 @@ patches:
         type: ExternalName
         externalName: cogni-preview.vm.cognidao.org
         clusterIP: null
-  - target: { kind: EndpointSlice, name: postgres-external-1 }
+  - target: {kind: EndpointSlice, name: postgres-external-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: postgres-external-1
-  - target: { kind: EndpointSlice, name: temporal-external-1 }
+  - target: {kind: EndpointSlice, name: temporal-external-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: temporal-external-1
-  - target: { kind: EndpointSlice, name: litellm-external-1 }
+  - target: {kind: EndpointSlice, name: litellm-external-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: litellm-external-1
-  - target: { kind: EndpointSlice, name: redis-external-1 }
+  - target: {kind: EndpointSlice, name: redis-external-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: redis-external-1
-  - target: { kind: EndpointSlice, name: doltgres-external-1 }
+  - target: {kind: EndpointSlice, name: doltgres-external-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: doltgres-external-1
+  - target:
+      kind: Deployment
+      name: database-reliability-actuator
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: database-reliability-actuator
+      spec:
+        template:
+          spec:
+            containers:
+              - name: actuator
+                env:
+                  - name: DEPLOY_ENVIRONMENT
+                    value: preview
+                  - name: FORK_DOMAIN_ROOT
+                    value: cognidao.org
