@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
+- **Last reviewed:** 2026-10-16
 
 ## Purpose
 
@@ -84,7 +85,7 @@ docker compose --project-name cogni-runtime logs -f app
 - Init scripts run only on first postgres container startup
 - `NEXTAUTH_URL` env var provided with shell fallback to `APP_BASE_URL`; Auth.js uses `trustHost: true` (safe behind Caddy)
 - Log collection: Alloy scrapes Docker containers (including PostgreSQL stderr and Caddy JSON runtime/access logs on stdout), reads the host kernel journal for OOM/SIGKILL attribution, tails k3s pod logs from `/var/log/pods`, and ships Kubernetes Events through `alloy-k8s-events`; applies strict label cardinality (app, env, service, stream/source plus low-cardinality event reason/type/kind); suppresses successful health-check/metrics-scrape log noise at pipeline level
-- Alloy infra metrics: cAdvisor (container memory/CPU/OOM/network/disk) + node exporter (host memory/CPU/filesystem/network plus bounded conntrack/listen-overflow counters) → Grafana Cloud Mimir via a strict allowlist
+- Alloy infra metrics: cAdvisor (container memory/CPU/OOM/network/disk) + node exporter (host memory/CPU/filesystem/network, paging and memory pressure, plus bounded conntrack/listen-overflow counters) → Grafana Cloud Mimir via a strict allowlist
 - Alloy host mounts: `/proc:/host/proc:ro`, `/sys:/host/sys:ro`, `/:/host/root:ro` (required for node exporter)
 - Alloy UI exposed at 127.0.0.1:12345 (internal only)
 - `DEPLOY_ENVIRONMENT` must be set (local|candidate-a|preview|production) - used for env label, fail-closed validation
