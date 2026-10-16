@@ -45,6 +45,57 @@ describe("authorizationFacadeNodeIdFromToken", () => {
 });
 
 describe("RemoteAuthorizationAdapter", () => {
+  it("sends only semantic local IDs for initial owner bootstrap", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      expect(JSON.parse(String(init?.body))).toEqual({
+        ownerUserId: USER_ID,
+        billingAccountId: ACCOUNT_ID,
+        requestId: "req-owner-1",
+      });
+      return json({ decision: "success", code: "authz_write_success" });
+    });
+    const adapter = new RemoteAuthorizationAdapter({
+      baseUrl: "https://operator.example",
+      serviceToken: TOKEN,
+      testOnlyFetchImpl: fetchImpl,
+    });
+
+    await expect(
+      adapter.bootstrapBillingAccountOwner({
+        ownerUserId: USER_ID,
+        billingAccountId: ACCOUNT_ID,
+        requestId: "req-owner-1",
+      })
+    ).resolves.toMatchObject({
+      decision: "success",
+      code: "authz_write_success",
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://operator.example/api/v1/authorization/billing-account-owner",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("rejects qualified owner-bootstrap IDs before transport", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const adapter = new RemoteAuthorizationAdapter({
+      baseUrl: "https://operator.example",
+      serviceToken: TOKEN,
+      testOnlyFetchImpl: fetchImpl,
+    });
+
+    await expect(
+      adapter.bootstrapBillingAccountOwner({
+        ownerUserId: authzNodeUserPrincipal(OTHER_NODE_ID, USER_ID),
+        billingAccountId: ACCOUNT_ID,
+      })
+    ).resolves.toMatchObject({
+      decision: "failure",
+      code: "authz_write_denied",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("sends local IDs for a direct same-node account read", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
       const body = JSON.parse(String(init?.body));

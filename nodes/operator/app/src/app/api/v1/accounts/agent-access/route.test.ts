@@ -3,6 +3,7 @@
 
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { BillingAccountOwnerBootstrapPortError } from "@/ports";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const AGENT_ID = "22222222-2222-4222-8222-222222222222";
@@ -90,6 +91,9 @@ describe("POST /api/v1/accounts/agent-access", () => {
       billingAccountId: ACCOUNT_ID,
       requestId: "req-1",
     });
+    expect(getOrCreateBillingAccountForUser).toHaveBeenCalledWith(
+      expect.objectContaining({ requireAuthorizationOwner: true })
+    );
   });
 
   it("rejects caller-supplied grantor/account fields before mutation", async () => {
@@ -116,6 +120,23 @@ describe("POST /api/v1/accounts/agent-access", () => {
       mode: "direct",
     });
     expect(response.status).toBe(403);
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the initial owner projection is unavailable", async () => {
+    getOrCreateBillingAccountForUser.mockRejectedValueOnce(
+      new BillingAccountOwnerBootstrapPortError("OpenFGA unavailable")
+    );
+    const response = await post({
+      operation: "grant",
+      agentActorId: AGENT_ID,
+      mode: "direct",
+      expiresAt: "2026-11-01T00:00:00.000Z",
+    });
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "authz_write_unavailable",
+    });
     expect(mutate).not.toHaveBeenCalled();
   });
 });

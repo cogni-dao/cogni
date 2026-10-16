@@ -15,10 +15,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   authorizationFacadeAgentAccountAccessOperation,
+  authorizationFacadeBillingAccountOwnerOperation,
   authorizationFacadeGrantOperation,
 } from "@/contracts/authorization-facade.v1.contract";
 
 import {
+  bootstrapNodeBillingAccountOwner,
   checkNodeBillingAccountAccess,
   mutateNodeAgentAccountAccess,
   mutateNodeBillingAccountAccess,
@@ -64,6 +66,48 @@ function authorizationWith(
 }
 
 describe("authorization facade policy", () => {
+  it("bootstraps only the exact node-qualified owner at higher consistency", async () => {
+    const authorization = authorizationWith(async () => allow());
+
+    await expect(
+      bootstrapNodeBillingAccountOwner({ authorization }, NODE_ID, {
+        ownerUserId: GRANTOR_ID,
+        billingAccountId: ACCOUNT_ID,
+        requestId: "req-1",
+      })
+    ).resolves.toEqual({
+      decision: "success",
+      code: "authz_write_success",
+    });
+    expect(authorization.writeRelations).toHaveBeenCalledWith(
+      [
+        {
+          user: authzNodeUserPrincipal(NODE_ID, GRANTOR_ID),
+          relation: "owner",
+          object: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
+        },
+      ],
+      { confirm: "higher_consistency" }
+    );
+  });
+
+  it("rejects node namespaces and raw tuples in owner bootstrap input", () => {
+    expect(
+      authorizationFacadeBillingAccountOwnerOperation.input.safeParse({
+        ownerUserId: GRANTOR_ID,
+        billingAccountId: ACCOUNT_ID,
+        nodeId: OTHER_NODE_ID,
+      }).success
+    ).toBe(false);
+    expect(
+      authorizationFacadeBillingAccountOwnerOperation.input.safeParse({
+        ownerUserId: authzNodeUserPrincipal(OTHER_NODE_ID, GRANTOR_ID),
+        billingAccountId: ACCOUNT_ID,
+        relation: "owner",
+      }).success
+    ).toBe(false);
+  });
+
   it("maps direct and OBO reads into node-qualified OpenFGA checks", async () => {
     const authorization = authorizationWith(async () => allow());
     await checkNodeBillingAccountAccess({ authorization }, NODE_ID, {

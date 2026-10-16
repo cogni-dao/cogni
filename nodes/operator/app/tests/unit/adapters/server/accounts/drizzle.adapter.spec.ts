@@ -130,6 +130,78 @@ describe("UserDrizzleAccountService", () => {
     });
   });
 
+  describe("billing-account owner bootstrap", () => {
+    it("resumes response loss, then never reprojects after completion", async () => {
+      const bootstrapOwner = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("response lost"))
+        .mockResolvedValue(undefined);
+      service = new UserDrizzleAccountService(
+        mockDb,
+        TEST_USER_ID,
+        undefined,
+        bootstrapOwner
+      );
+      mockTx.query.virtualKeys.findFirst.mockResolvedValue({ id: "vk-owner" });
+      mockTx.query.billingAccounts.findFirst.mockResolvedValue({
+        id: "00000000-0000-4000-a000-000000000002",
+        ownerUserId: TEST_USER_ID,
+        balanceCredits: 0n,
+        authorizationOwnerBootstrappedAt: null,
+      });
+
+      await expect(
+        service.getOrCreateBillingAccountForUser({
+          userId: TEST_USER_ID,
+          requireAuthorizationOwner: true,
+        })
+      ).rejects.toThrow("response lost");
+      await expect(
+        service.getOrCreateBillingAccountForUser({
+          userId: TEST_USER_ID,
+          requireAuthorizationOwner: true,
+        })
+      ).resolves.toMatchObject({ ownerUserId: TEST_USER_ID });
+      expect(bootstrapOwner).toHaveBeenCalledTimes(2);
+      expect(mockTx.update).toHaveBeenCalledTimes(1);
+
+      mockTx.query.billingAccounts.findFirst.mockResolvedValue({
+        id: "00000000-0000-4000-a000-000000000002",
+        ownerUserId: TEST_USER_ID,
+        balanceCredits: 0n,
+        authorizationOwnerBootstrappedAt: new Date(),
+      });
+      await service.getOrCreateBillingAccountForUser({
+        userId: TEST_USER_ID,
+        requireAuthorizationOwner: true,
+      });
+      expect(bootstrapOwner).toHaveBeenCalledTimes(2);
+    });
+
+    it("leaves an unavailable optional projection pending for a later retry", async () => {
+      const bootstrapOwner = vi.fn().mockRejectedValue(new Error("offline"));
+      service = new UserDrizzleAccountService(
+        mockDb,
+        TEST_USER_ID,
+        undefined,
+        bootstrapOwner
+      );
+      mockTx.query.billingAccounts.findFirst.mockResolvedValue({
+        id: "00000000-0000-4000-a000-000000000002",
+        ownerUserId: TEST_USER_ID,
+        balanceCredits: 0n,
+        authorizationOwnerBootstrappedAt: null,
+      });
+      mockTx.query.virtualKeys.findFirst.mockResolvedValue({ id: "vk-owner" });
+
+      await expect(
+        service.getOrCreateBillingAccountForUser({ userId: TEST_USER_ID })
+      ).resolves.toMatchObject({ ownerUserId: TEST_USER_ID });
+      expect(bootstrapOwner).toHaveBeenCalledOnce();
+      expect(mockTx.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe("recordChargeReceipt", () => {
     // Per GRAPH_EXECUTION.md: run-centric charge_receipt fields
     const params = {

@@ -124,6 +124,8 @@ export const EVENT_NAMES = {
   ADAPTER_OPENAI_DEVICE_AUTH_ERROR: "adapter.openai_device_auth.error",
   AUTHORIZATION_FACADE_CHECK_COMPLETE: "authorization.facade.check.complete",
   AUTHORIZATION_FACADE_GRANT_COMPLETE: "authorization.facade.grant.complete",
+  AUTHORIZATION_FACADE_OWNER_BOOTSTRAP_COMPLETE:
+    "authorization.facade.owner_bootstrap.complete",
   AUTHORIZATION_FACADE_PROJECTION_COMPLETE:
     "authorization.facade.projection.complete",
   AUTHORIZATION_FACADE_CREDENTIAL_PROBE_COMPLETE:

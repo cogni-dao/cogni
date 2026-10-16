@@ -38,7 +38,7 @@ Shared authorization port, resource helpers, deterministic test fake, and truste
 ## Public Surface
 
 - `AuthorizationCheckPort`, `AuthorizationRelationAdminPort`, `AuthorizationPort`
-- `BillingAccountGrantAdministrationPort`, `BillingAccountAuthorizationPort`, semantic human→agent billing-account grant types
+- `BillingAccountGrantAdministrationPort`, `BillingAccountOwnerBootstrapPort`, `BillingAccountAuthorizationPort`, semantic human→agent billing-account grant types
 - `AuthzCheckParams`, `AuthzDecision`, `AuthzAction`, `AuthzContext`
 - `AuthzRelationTuple`, `AuthzWriteDecision`
 - `authzToolResource`, `authzConnectionResource`, `authzGraphResource`, `authzUserResource`

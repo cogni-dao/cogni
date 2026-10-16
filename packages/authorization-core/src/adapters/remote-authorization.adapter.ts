@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/authorization-core/adapters/remote-authorization`
  * Purpose: Portable, semantic client for the operator-mediated authorization facade.
- * Scope: Billing-account read checks and grant/revoke only. Does not forward raw tuples.
+ * Scope: Billing-account reads, initial-owner bootstrap, and grant/revoke only. Does not forward raw tuples.
  * Invariants: NODE_FROM_CREDENTIAL; SAME_NODE_ONLY; NO_RAW_TUPLES; FAIL_CLOSED_WITH_DISTINCTION.
  * Side-effects: IO (HTTP fetch)
  * Links: task.5226, docs/spec/rbac.md
@@ -20,6 +20,7 @@ import type {
   BillingAccountGrantAdministrationPort,
   BillingAccountAuthorizationPort,
   BillingAccountGrantInput,
+  BillingAccountOwnerBootstrapInput,
   BillingAccountRevokeInput,
 } from "../index";
 
@@ -359,6 +360,44 @@ export class RemoteAuthorizationAdapter
         parsedWriteDecision(await response.json()) ??
         writeUnavailable(
           "operator authorization facade returned an invalid mutation decision"
+        )
+      );
+    } catch (error) {
+      return writeUnavailable(
+        error instanceof Error
+          ? error.message
+          : "authorization facade unavailable"
+      );
+    }
+  }
+
+  async bootstrapBillingAccountOwner(
+    input: BillingAccountOwnerBootstrapInput
+  ): Promise<AuthzWriteDecision> {
+    if (
+      !LOCAL_ID_PATTERN.test(input.ownerUserId) ||
+      !LOCAL_ID_PATTERN.test(input.billingAccountId)
+    ) {
+      return writeDenied("invalid billing-account owner bootstrap request");
+    }
+
+    try {
+      const response = await this.post(
+        "/api/v1/authorization/billing-account-owner",
+        input
+      );
+      if (response.status === 403) {
+        return writeDenied("operator authorization facade denied bootstrap");
+      }
+      if (!response.ok) {
+        return writeUnavailable(
+          `operator authorization facade rejected bootstrap (status ${response.status})`
+        );
+      }
+      return (
+        parsedWriteDecision(await response.json()) ??
+        writeUnavailable(
+          "operator authorization facade returned an invalid bootstrap decision"
         )
       );
     } catch (error) {

@@ -20,6 +20,7 @@ import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { mutateAgentAccountAccessOperation } from "@/contracts/agent-account-access.v1.contract";
 import { getServerSessionUser } from "@/lib/auth/server";
+import { isBillingAccountOwnerBootstrapPortError } from "@/ports";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
@@ -72,6 +73,7 @@ export const POST = wrapRouteHandlerWithLogging(
         .accountsForUser(sessionUser.id as UserId)
         .getOrCreateBillingAccountForUser({
           userId: sessionUser.id,
+          requireAuthorizationOwner: true,
           ...(sessionUser.displayName
             ? { displayName: sessionUser.displayName }
             : {}),
@@ -134,6 +136,13 @@ export const POST = wrapRouteHandlerWithLogging(
       });
       return NextResponse.json(output);
     } catch (error) {
+      if (isBillingAccountOwnerBootstrapPortError(error)) {
+        complete(503, "error", "authz_write_unavailable");
+        return NextResponse.json(
+          { error: "authz_write_unavailable" },
+          { status: 503 }
+        );
+      }
       if (!completed) complete(500, "error", "internal_error");
       throw error;
     }

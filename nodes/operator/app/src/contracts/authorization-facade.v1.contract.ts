@@ -163,6 +163,16 @@ export const authorizationFacadeAgentAccountAccessOperation = {
   output: AuthzWriteDecisionSchema,
 } as const;
 
+export const authorizationFacadeBillingAccountOwnerOperation = {
+  id: "authorization.facade.billing-account-owner.v1",
+  input: z.strictObject({
+    ownerUserId: LocalIdSchema,
+    billingAccountId: LocalIdSchema,
+    requestId: RequestIdSchema.optional(),
+  }),
+  output: AuthzWriteDecisionSchema,
+} as const;
+
 export type AuthorizationFacadeCheckInput = z.infer<
   typeof authorizationFacadeCheckOperation.input
 >;
@@ -171,4 +181,7 @@ export type AuthorizationFacadeGrantInput = z.infer<
 >;
 export type AuthorizationFacadeAgentAccountAccessInput = z.infer<
   typeof authorizationFacadeAgentAccountAccessOperation.input
+>;
+export type AuthorizationFacadeBillingAccountOwnerInput = z.infer<
+  typeof authorizationFacadeBillingAccountOwnerOperation.input
 >;

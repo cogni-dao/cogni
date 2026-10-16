@@ -83,6 +83,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/accounts/{billingAccountId}` [GET] - durable-agent exact-account read; direct grant first, server-bound steward OBO fallback
   - `/api/v1/authorization/check` [POST] - node-workload-authenticated, same-node billing-account read/OBO check through the mediated OpenFGA facade
   - `/api/v1/authorization/agent-account-access` [POST] - node-workload-authenticated atomic human→agent reader/OBO grant or revoke; no raw tuples
+  - `/api/v1/authorization/billing-account-owner` [POST] - node-workload-authenticated, one-time idempotent initial account-owner projection; no raw tuples
   - `/api/v1/authorization/billing-account-grants` [POST] - node-workload-authenticated semantic reader/OBO grant or revoke; no raw tuples
   - `/api/v1/knowledge/contributions/[id]/commits` [GET, POST] - list/append authenticated contribution branch commits
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
