@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@tests/unit/akash-blue-green-harness`
  * Purpose: Pins the spike.5001 measurement rules: request classification, probe cadence,
  *   chain lease snapshot parsing, and the pre-registered release criteria (missing evidence fails).
- * Scope: Pure functions and injected fetch fakes; no network.
+ * Scope: Pure functions and injected fetch fakes; does not touch the network.
+ * Invariants: MISSING_EVIDENCE_FAILS; classify() is the single success rule.
+ * Side-effects: none
  * Links: scripts/experiments/akash-blue-green/*
  * @internal
  */

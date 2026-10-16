@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@scripts/experiments/akash-blue-green/scorecard`
@@ -7,14 +7,14 @@
  *   public probe log with the release evidence the verifier collected (chain lease snapshots,
  *   actuator Loki timestamps, operator deploy-state) and evaluates the pre-registered pass
  *   criteria. Also aggregates many cycles into p50/p95 timings for the ten-cycle scorecard.
- * Scope: pure functions over recorded evidence plus a thin file-reading CLI. No network, no
- *   mutation, no deployment policy.
+ * Scope: pure functions over recorded evidence plus a thin file-reading CLI; does not touch the
+ *   network, mutate anything, or own deployment policy.
  * Invariants:
  *   - MISSING_EVIDENCE_FAILS: a criterion that cannot be evaluated fails; it never passes.
  *   - ALL_CRITERIA_AND: a release passes only if every criterion passes.
  *   - PROBE_COVERS_WINDOW: probes must start >= 60s before trigger, end >= 120s after the old
  *     lease closes, and never stall longer than `maxProbeGapMs`.
- * Side-effects: none in the library; the CLI reads two files and prints the verdict.
+ * Side-effects: IO (CLI only: reads the probe log and evidence file, prints the verdict)
  * Links: knowledge akash-promotion-north-star (invariants 6, 9, 10), work item spike.5001.
  * @internal — measurement code, not shipped to production
  */

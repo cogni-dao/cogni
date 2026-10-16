@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@scripts/experiments/akash-blue-green/lease-audit`
@@ -7,7 +7,7 @@
  *   each measured release so the scorecard can prove "one new lease, old lease closed, no
  *   orphan" from on-chain state rather than from receipts (ledger `allocated` can outlive a
  *   closed deployment).
- * Scope: read-only public Akash REST reads. No credential, no mutation, no deployment policy.
+ * Scope: read-only public Akash REST reads; does not mutate, hold a credential, or own policy.
  * Invariants: CHAIN_IS_TRUTH — the snapshot lists only what the chain reports as active.
  * Side-effects: IO (network GETs; stdout JSON).
  * Links: knowledge operator-infra-logs-read (money truth lives on chain), work item spike.5001.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@scripts/experiments/akash-blue-green/probe`
@@ -7,8 +7,8 @@
  *   fixed rate (default 2 req/s) across a blue/green release and classifies every request
  *   against ZERO_FAILED_REQUESTS: connection, TLS, timeout, 5xx/52x, other non-2xx, unreadable
  *   body, or a SHA outside the release's allowed set (incumbent + release).
- * Scope: read-only HTTPS GETs. Creates nothing, spends nothing, needs no credential, and owns
- *   no deployment policy. Each sample is appended to a JSONL file as it lands so evidence
+ * Scope: read-only HTTPS GETs; does not create, spend, hold a credential, or own deployment
+ *   policy. Each sample is appended to a JSONL file as it lands so evidence
  *   survives an interrupted run; the scorecard consumes that file.
  * Invariants:
  *   - ONE_DEFINITION: `classify()` is the only success rule; tests and scorecard share it.
