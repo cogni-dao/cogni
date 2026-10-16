@@ -83,7 +83,7 @@ gate that already completed. A second “keep going” prompt means the first tu
 
 FAIL = any prose-paragraph answer, unformatted options list, trailing bare y/n, zero-evidence
 proposal, incomplete/item-only `Followed` ledger, source-count/link-count contradiction, generic
-non-researched synthesis, day-scale or stale estimates, passive/stale `👀`, an agent-owned action
+non-researched synthesis, day-scale or stale item next-gate estimates (the root whole-Goal estimate may exceed 4h), passive/stale `👀`, an agent-owned action
 left for the human, or unapproved mutation of `Goal` / `Done when` between the two probes.
 
 ## Gold standard — PASS sequence (fresh, unprompted)
