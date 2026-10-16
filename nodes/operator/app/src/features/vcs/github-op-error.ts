@@ -31,6 +31,17 @@ export function classifyGithubOpError(error: unknown): GithubOpErrorResult {
       ? Number((error as { status: unknown }).status)
       : undefined;
   const message = error instanceof Error ? error.message : String(error);
+  if (
+    status === 422 &&
+    /actions has been disabled for this repository/i.test(message)
+  ) {
+    return {
+      status: 422,
+      errorCode: "actions_disabled",
+      error:
+        "GitHub refuses Actions execution for this repository despite its configurable permissions. Request GitHub Support review; changing approval policy does not establish that Actions can execute.",
+    };
+  }
   if (/not installed/i.test(message)) {
     return {
       status: 502,
