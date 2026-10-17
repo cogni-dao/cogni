@@ -23,7 +23,7 @@ End state = the distribution loop lives on **operator (prod)** AND **node-templa
 
 - `docs/spec/tokenomics-distribution.md` — canonical mechanism (lifecycle, invariants, idempotency/replay, local-rig-vs-prod, operator↔node-template landing plan).
 - PRs **#2020** (feature) + **#2021** (double-mint fix, stacked) + the validation scorecard on #2021.
-- `test-expert` skill § the walk harness (`pnpm test:walk:dev`).
+- [node-test-contract](https://cognidao.org/knowledge/node-test-contract) (hub; the `test-expert` skill triggers it) § the walk harness (`pnpm test:walk:dev`).
 - bug.5022 (double-mint — fixed by #2021) · bug.5023 (finalize queue-stealing — filed, Phase-1 blocker).
 - Recall `cicd-e2e-required-sequence` before flighting — don't assert the flight payload from memory.
 
