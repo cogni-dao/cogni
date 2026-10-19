@@ -64,6 +64,9 @@ Read `process.env.MY_NEW_KEY`. Add it to the runtime Zod schema
 at service creation; ESO syncs the new key; Stakater Reloader rolling-restarts the pod so the value
 is actually read (`envFrom` is read once, at container start).
 
+> Until Reloader is synced cluster-wide on a given env, bounce the pod manually after the write:
+> `kubectl rollout restart deploy/<service> -n cogni-<env>`.
+
 ## What you do NOT touch (retired surfaces)
 
 `deploy-infra.sh` REQUIRED_SECRETS/heredoc · `provision-env.yml` per-secret `env:` maps ·
