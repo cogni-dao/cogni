@@ -1,0 +1,44 @@
+# ci-invariants/native · AGENTS.md
+
+> Scope: this directory only. Keep ≤150 lines. Extends the parent static-test contract only for the owned native acceptance tests here.
+
+## Metadata
+
+- **Owners:** @derekg1729
+- **Status:** stable
+- **Last reviewed:** 2026-10-19
+
+## Purpose
+
+Native integration acceptance of declared infrastructure failure behavior in isolated CI-owned Docker containers. Existing root Vitest discovery and the operator's reviewed Compose collateral path already include this directory; no workflow, dispatch classifier, or runtime policy is added.
+
+## Boundaries
+
+```json
+{
+  "layer": "tests",
+  "may_import": ["*"],
+  "must_not_import": []
+}
+```
+
+## Responsibilities
+
+- This directory **does:** exercise declared images and configuration against disposable dependencies; prove fault sensitivity with native controls and process-start evidence.
+- This directory **does not:** contact deployed production, candidate, preview, or test-fleet endpoints; consume their credentials; dispatch workflows; or implement recovery lifecycle policy.
+
+## Standards
+
+- Docker faults may target only container IDs created by the current test. Networks and any autoheal selector must be unique to that test.
+- Public image pulls for the declared infrastructure images are permitted. Service and database traffic stays within the owned fixture; credentials are generated solely for it.
+- CI must execute these tests and fail when Docker or required native evidence is unavailable. A local skip must be explicit and never reported as passing runtime proof.
+- Local Docker execution requires explicit heavy-command consent. The current repair is authored locally and exercised in CI.
+- Derive images and health/restart policy from committed declarations; do not substitute parallel policy to manufacture a pass.
+- Always clean up in `finally`: stop the fault actor, restore owned paused dependencies, then remove owned containers and networks. Attempt all cleanup steps even if one fails.
+- Call results native integration evidence, even though the existing root CI test job discovers them. Workflow success alone does not prove a deployed environment.
+
+## Public Surface
+
+- **Exports:** none
+- **Files considered API:** native `*.spec.ts` acceptance tests; no production entry points
+- **CLI:** existing root Vitest discovery; no dedicated workflow or lifecycle script
