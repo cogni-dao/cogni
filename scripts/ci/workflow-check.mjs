@@ -8,7 +8,7 @@
  * Scope: Reads `.github/workflows/*.y{a,}ml`; does not call GitHub or dispatch workflows.
  * Invariants:
  *   - DISPATCHABLE_WORKFLOWS_DECLARED — manual levers must expose `workflow_dispatch`.
- *   - SENSITIVE_INPUTS_NOT_IN_RUN — sensitive dispatch inputs cross into shell via env, never expression interpolation.
+ *   - SENSITIVE_INPUTS_NOT_INTERPOLATED — dispatch secrets are read at runtime from GITHUB_EVENT_PATH, never rendered into step details.
  * Side-effects: IO (filesystem reads)
  * Links: .github/workflows/ACTION_TRIGGERS.md
  * @internal
@@ -93,39 +93,52 @@ function sensitiveDispatchInputs(workflow) {
 function inputReferences(expression) {
   const names = new Set();
   for (const match of expression.matchAll(
-    /(?:github\.event\.)?inputs\.([A-Za-z_][A-Za-z0-9_-]*)/g
+    /\binputs\s*\.\s*([A-Za-z_][A-Za-z0-9_-]*)/gi
   )) {
     names.add(match[1]);
   }
   for (const match of expression.matchAll(
-    /(?:github\.event\.)?inputs\[['"]([^'"]+)['"]\]/g
+    /\binputs\s*\[\s*['"]([^'"]+)['"]\s*\]/gi
   )) {
     names.add(match[1]);
+  }
+  const withoutDirectReferences = expression
+    .replace(/\binputs\s*\.\s*[A-Za-z_][A-Za-z0-9_-]*/gi, "")
+    .replace(/\binputs\s*\[\s*['"][^'"]+['"]\s*\]/gi, "");
+  if (/\binputs\b/i.test(withoutDirectReferences)) {
+    names.add("*");
   }
   return names;
 }
 
-function sensitiveRunReferences(workflow) {
+function sensitiveWorkflowReferences(workflow) {
   const sensitiveInputs = sensitiveDispatchInputs(workflow);
   if (sensitiveInputs.size === 0) {
     return [];
   }
 
   const references = [];
-  for (const [jobName, job] of Object.entries(workflow?.jobs ?? {})) {
-    for (const [stepIndex, step] of (job?.steps ?? []).entries()) {
-      if (typeof step?.run !== "string") {
-        continue;
-      }
-      for (const expression of step.run.matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
+  function visit(value, path) {
+    if (typeof value === "string") {
+      for (const expression of value.matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
         for (const inputName of inputReferences(expression[1])) {
-          if (sensitiveInputs.has(inputName)) {
-            references.push({ jobName, stepIndex, inputName });
+          if (
+            inputName === "*" ||
+            [...sensitiveInputs].some(
+              (name) => name.toLowerCase() === inputName.toLowerCase()
+            )
+          ) {
+            references.push({ path, inputName });
           }
         }
       }
+    } else if (value && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        visit(child, `${path}.${key}`);
+      }
     }
   }
+  visit(workflow, "workflow");
   return references;
 }
 
@@ -168,14 +181,16 @@ const workflowFiles = readdirSync(WORKFLOW_DIR)
   .sort();
 
 for (const file of workflowFiles) {
-  const references = sensitiveRunReferences(readWorkflow(file));
+  const references = sensitiveWorkflowReferences(readWorkflow(file));
   if (references.length === 0) {
-    pass(`${file} keeps sensitive dispatch inputs out of run scripts`);
+    pass(
+      `${file} keeps sensitive dispatch inputs out of rendered step details`
+    );
     continue;
   }
-  for (const { jobName, stepIndex, inputName } of references) {
+  for (const { path, inputName } of references) {
     fail(
-      `${file} job ${jobName} step ${stepIndex + 1} interpolates sensitive input '${inputName}' in run; pass it through step env and reference the shell variable`
+      `${file} ${path} interpolates sensitive input '${inputName}'; read it at runtime from GITHUB_EVENT_PATH before masking, without a run/env/with expression`
     );
   }
 }

@@ -147,6 +147,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate workflow contracts
+        run: |
+          node --test scripts/ci/tests/workflow-check.test.mjs
+          pnpm workflow:check
+
       - name: Build workspace packages
         run: pnpm packages:build
 
