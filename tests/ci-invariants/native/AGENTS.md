@@ -12,6 +12,12 @@
 
 Native integration acceptance of declared infrastructure failure behavior in isolated CI-owned Docker containers. Existing root Vitest discovery and the operator's reviewed Compose collateral path already include this directory; no workflow, dispatch classifier, or runtime policy is added.
 
+## Pointers
+
+- [Root Vitest discovery](../../../vitest.config.mts)
+- [Runtime declarations](../../../infra/compose/runtime/docker-compose.yml)
+- [Parent static guidance](../AGENTS.md)
+
 ## Boundaries
 
 ```json
@@ -21,6 +27,12 @@ Native integration acceptance of declared infrastructure failure behavior in iso
   "must_not_import": []
 }
 ```
+
+## Public Surface
+
+- **Exports:** none
+- **Files considered API:** native `*.spec.ts` acceptance tests; no production entry points
+- **CLI:** existing root Vitest discovery; no dedicated workflow or lifecycle script
 
 ## Responsibilities
 
@@ -37,8 +49,6 @@ Native integration acceptance of declared infrastructure failure behavior in iso
 - Always clean up in `finally`: stop the fault actor, restore owned paused dependencies, then remove owned containers and networks. Attempt all cleanup steps even if one fails.
 - Call results native integration evidence, even though the existing root CI test job discovers them. Workflow success alone does not prove a deployed environment.
 
-## Public Surface
+## Notes
 
-- **Exports:** none
-- **Files considered API:** native `*.spec.ts` acceptance tests; no production entry points
-- **CLI:** existing root Vitest discovery; no dedicated workflow or lifecycle script
+This narrow native-integration exception applies only here; the parent static-test guidance continues to govern sibling directories.
