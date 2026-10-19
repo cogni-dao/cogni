@@ -4,7 +4,7 @@
 /**
  * Module: `@scripts/ci/tests/workflow-check`
  * Purpose: Prove dispatch credentials cannot enter runner-rendered workflow fields.
- * Scope: Runs the workflow checker against isolated workflow fixtures.
+ * Scope: Isolated workflow fixtures; does not dispatch workflows or access credentials.
  * Invariants: Rejects sensitive run/env/with interpolation, including aggregate and dynamic input access.
  * Side-effects: IO (temporary fixture files and child processes)
  * Links: scripts/ci/workflow-check.mjs
