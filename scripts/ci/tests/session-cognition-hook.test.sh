@@ -149,7 +149,8 @@ git -C "$TRACKED_ROOT" init -q
 git -C "$TRACKED_ROOT" add .cogni/.cognition-cache.md
 printf '%s\n' \
   '#!/bin/sh' \
-  "printf '%s\\n' '{\"markdown\":\"live cognition\"}'" >"$FAKE_BIN/curl"
+  "printf '%s\\n' '{\"markdown\":\"live cognition\"}'" \
+  'case " $* " in *--write-out*|*" -w "*) printf "200" ;; esac' >"$FAKE_BIN/curl"
 chmod +x "$FAKE_BIN/curl"
 
 tracked_output="$({
@@ -253,5 +254,130 @@ installed_output="$({
   fail "installed Codex hook did not present refreshed cognition"
 [[ "$(cat "$TRACKED_CACHE")" == "live cognition" ]] ||
   fail "installed user hook did not replace the tracked snapshot with live cognition"
+
+# Execute both real hook adapters against deterministic transport failures. No
+# real credentials, user config, network, or repository files enter these cases.
+RECOVERY_BIN="$FIXTURE_ROOT/recovery-bin"
+mkdir -p "$RECOVERY_BIN"
+cat >"$RECOVERY_BIN/curl" <<'CURL'
+#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+# Record only nonsecret request properties; never record Authorization values.
+url = next((arg for arg in args if arg.startswith("https://")), "")
+method = args[args.index("-X") + 1] if "-X" in args else "GET"
+bound = args[args.index("--max-time") + 1] if "--max-time" in args else "0"
+with open(os.environ["FIXTURE_CURL_LOG"], "a") as log:
+    log.write(f"{method} {url} timeout={bound}\n")
+mode = os.environ["FIXTURE_CURL_MODE"]
+status = {"unauthorized": 401, "forbidden": 403, "server": 503}.get(mode, 200)
+body = json.dumps({"markdown": "recovered live cognition"})
+if mode == "malformed": body = "<html>proxy error</html>"
+if mode == "wrong-type": body = json.dumps({"markdown": {"unexpected": "object"}})
+if mode == "transport": status, body = 0, ""
+if status in (401, 403, 503): body = json.dumps({"error": "fixture rejection"})
+output_flag = "--output" if "--output" in args else "-o" if "-o" in args else None
+if output_flag:
+    with open(args[args.index(output_flag) + 1], "w") as output: output.write(body)
+else: sys.stdout.write(body)
+if "--write-out" in args or "-w" in args:
+    flag = "--write-out" if "--write-out" in args else "-w"
+    sys.stdout.write(args[args.index(flag) + 1].replace("%{http_code}", f"{status:03d}").replace(r"\n", "\n"))
+if mode == "transport": sys.exit(28)
+if status >= 400 and any(arg in ("-f", "-fsS", "--fail", "--fail-with-body") for arg in args): sys.exit(22)
+CURL
+chmod +x "$RECOVERY_BIN/curl"
+
+run_recovery_hook() {
+  local hook="$1" root="$2" mode="$3" key="$4"
+  (
+    cd "$root"
+    env -i PATH="$RECOVERY_BIN:$PATH" HOME="$FIXTURE_ROOT/isolated-home" \
+      CODEX_HOME="$FIXTURE_ROOT/no-user-hooks" TMPDIR="$root/tmp" \
+      CODEX_THREAD_ID="recovery" COGNI_NODE_API_KEY="$key" \
+      FIXTURE_CURL_MODE="$mode" FIXTURE_CURL_LOG="$root/requests.log" \
+      bash "$hook"
+  )
+}
+
+for adapter in project installed; do
+  hook="$LOADER"
+  [[ "$adapter" == project ]] || hook="$LEGACY_HOOK"
+  for mode in missing unauthorized forbidden server transport malformed wrong-type; do
+    root="$FIXTURE_ROOT/recovery-$adapter-$mode"
+    mkdir -p "$root/.cogni" "$root/tmp"
+    git -C "$root" init -q
+    printf '%s\n' 'intent:' '  name: fixture-node' >"$root/.cogni/repo-spec.yaml"
+    key="fixture-existing-key"
+    curl_mode="$mode"
+    if [[ "$mode" == missing ]]; then key=""; curl_mode="unauthorized"; fi
+    output="$(run_recovery_hook "$hook" "$root" "$curl_mode" "$key")"
+    [[ -n "$output" ]] || fail "$adapter/$mode silently omitted recovery guidance"
+    ! printf '%s' "$output" | grep -Eq 'BOOTSTRAP BLOCKED|Then restart|ask them to bootstrap' ||
+      fail "$adapter/$mode handed agent-owned recovery back to the user"
+    printf '%s' "$output" | grep -Eiq 'continu|proceed' ||
+      fail "$adapter/$mode did not preserve authorized work"
+    printf '%s' "$output" | grep -Eiq 'bound|at most|maximum' ||
+      fail "$adapter/$mode gave unbounded recovery instructions"
+    [[ ! -s "$root/.cogni/.cognition-cache.md" ]] ||
+      fail "$adapter/$mode cached a failed or malformed response"
+    [[ ! -e "$root/.env.cogni" ]] ||
+      fail "$adapter/$mode unexpectedly mutated credential custody"
+    [[ "$(wc -l <"$root/requests.log" | tr -d ' ')" -le 3 ]] ||
+      fail "$adapter/$mode exceeded the bounded request budget"
+    ! grep -Eq 'register|timeout=0$' "$root/requests.log" ||
+      fail "$adapter/$mode registered an identity or made an unbounded request"
+    grep -Fq 'https://fixture-node.cognidao.org/api/v1/cognition' "$root/requests.log" ||
+      fail "$adapter/$mode probed the wrong node"
+    ! printf '%s' "$output" | grep -Fq 'fixture-existing-key' ||
+      fail "$adapter/$mode leaked the bearer key"
+    case "$mode" in
+      missing)
+        printf '%s' "$output" | grep -Eiq 'no.*(credential|key)|missing.*(credential|key)' ||
+          fail "$adapter/missing failed to distinguish absent credentials"
+        ;;
+      unauthorized|forbidden)
+        printf '%s' "$output" | grep -Eq '401|403' ||
+          fail "$adapter/$mode lost the HTTP rejection evidence"
+        ;;
+      server)
+        printf '%s' "$output" | grep -Fq '503' || fail "$adapter/server lost HTTP status"
+        ;;
+      transport)
+        printf '%s' "$output" | grep -Eiq 'transport|timeout|network|curl.*28' ||
+          fail "$adapter/transport lost transport evidence"
+        ;;
+      malformed|wrong-type)
+        printf '%s' "$output" | grep -Eiq 'malformed|invalid|markdown|payload' ||
+          fail "$adapter/$mode lost invalid payload evidence"
+        ;;
+    esac
+    # The next event can recover without a human restart or identity replacement.
+    recovered="$(run_recovery_hook "$hook" "$root" success "$key")"
+    [[ "$recovered" == 'recovered live cognition' ]] ||
+      fail "$adapter/$mode failed to recover on the next event"
+    [[ "$(cat "$root/.cogni/.cognition-cache.md")" == "$recovered" ]] ||
+      fail "$adapter/$mode did not persist recovered cognition"
+  done
+
+  # Warm stale cache must be presented immediately and survive failed refresh.
+  root="$FIXTURE_ROOT/recovery-$adapter-warm"
+  mkdir -p "$root/.cogni" "$root/tmp"
+  git -C "$root" init -q
+  printf '%s\n' 'intent:' '  name: fixture-node' >"$root/.cogni/repo-spec.yaml"
+  printf '%s\n' 'last usable cognition' >"$root/.cogni/.cognition-cache.md"
+  touch -t 202001010000 "$root/.cogni/.cognition-cache.md"
+  warm="$(run_recovery_hook "$hook" "$root" server fixture-existing-key)"
+  [[ "$warm" == 'last usable cognition' ]] || fail "$adapter discarded warm offline context"
+  # Observe the finite mocked background refresh before asserting preservation.
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -f "$root/requests.log" ]] && break
+    sleep 0.05
+  done
+  [[ -s "$root/requests.log" ]] || fail "$adapter skipped stale-cache refresh"
+  [[ "$(cat "$root/.cogni/.cognition-cache.md")" == "$warm" ]] ||
+    fail "$adapter overwrote usable context on refresh failure"
+  echo "session-cognition-hook.test: $adapter recovery scenarios PASS"
+done
 
 echo "session-cognition-hook.test: PASS"
