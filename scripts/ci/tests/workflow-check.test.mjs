@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@scripts/ci/tests/workflow-check`
+ * Purpose: Prove dispatch credentials cannot enter runner-rendered workflow fields.
+ * Scope: Runs the workflow checker against isolated workflow fixtures.
+ * Invariants: Rejects sensitive run/env/with interpolation, including aggregate and dynamic input access.
+ * Side-effects: IO (temporary fixture files and child processes)
+ * Links: scripts/ci/workflow-check.mjs
+ * @internal
+ */
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
