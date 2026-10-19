@@ -10,7 +10,7 @@
  *   - FAILURE_CONTROL: the old true label actually restarts under the same datastore fault.
  *   - PROCESS_SURVIVES: repaired FGA retains StartedAt through failure and successful authorization recovery.
  *   - OWNED_FAULT_ONLY: the unique autoheal selector and paused database belong only to this test.
- * Side-effects: CI-only isolated Docker containers/network; pauses and restores its own Postgres.
+ * Side-effects: IO (CI-owned Docker containers/network; pauses and restores owned Postgres).
  * Links: story.5095, task.5281, docs/spec/cicd-platform-boundary.md
  * @internal
  */
