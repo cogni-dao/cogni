@@ -11,9 +11,11 @@
  * @public
  */
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DatabaseCellAllocationMetadataSchema } from "@/shared/secrets/database-cell-placement.data";
 
 const root = path.resolve(__dirname, "../..");
@@ -30,7 +32,7 @@ describe("maintenance drain proof boundary", () => {
       nodeId: "owned-node",
     });
     const scripts = [...command.matchAll(/<<'(PY_[A-Z]+)'\n([\s\S]*?)\n\1/g)];
-    expect(scripts).toHaveLength(2);
+    expect(scripts).toHaveLength(3);
     for (const [, , source] of scripts) {
       execFileSync(
         "python3",
@@ -39,6 +41,170 @@ describe("maintenance drain proof boundary", () => {
       );
     }
     execFileSync("bash", ["-n"], { input: command, timeout: 5000 });
+  });
+
+  it("executes the actual snapshot with owned engine identity and private native failures", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "maintenance-snapshot-"));
+    const images = {
+      postgres: "postgres:15",
+      doltgres: "dolthub/doltgresql:0.57.3",
+    };
+    const command = ops.candidateSnapshotCommand({
+      env: "candidate-a",
+      nodeId: "owned-node",
+      slug: "node-template",
+      expectedEngineImages: images,
+    });
+    const docker = `#!/usr/bin/env python3
+import json,os,sys
+service="postgres" if any("service=postgres" in a for a in sys.argv) or sys.argv[-1].startswith("a") else "doltgres"
+key="a" if service=="postgres" else "b"
+if sys.argv[1]=="ps":
+ print(key*64)
+ if os.environ.get("MOCK_AMBIGUOUS")==service: print("c"*64)
+else:
+ print(json.dumps({"id":key*64,"image":"wrong/image:1" if os.environ.get("MOCK_WRONG_IMAGE")==service else {"postgres":"postgres:15","doltgres":"dolthub/doltgresql:0.57.3"}[service],"imageId":"sha256:"+key*64,"startedAt":"2026-10-20T20:00:00Z","restartCount":0,"running":True,"project":"cogni-runtime","service":service,"workingDir":"/opt/cogni-template-runtime"}))
+`;
+    const kubectl = `#!/usr/bin/env python3
+import json,os,sys
+if "api-resources" in sys.argv:
+ print("computeworkloads.compute.cogni.io"); print("xcomputeworkloads.compute.cogni.io")
+elif "applications.argoproj.io" in sys.argv and os.environ.get("MOCK_FAIL_APPS"):
+ print("PRIVATE_STDERR_SENTINEL",file=sys.stderr);sys.exit(17)
+else:
+ items=[]
+ if "xcomputeworkloads.compute.cogni.io" in sys.argv:
+  items=[{"kind":"XComputeWorkload","metadata":{"name":"owned-node","uid":"xr-id","generation":3,"labels":{"cogni.io/node-id":"owned-node"}},"spec":{"nodeId":"owned-node","bundle":{"source":{"sha":"old-source"}},"workload":{"name":"node-template"}},"status":{"observedGeneration":3}}]
+ elif "applicationsets.argoproj.io" in sys.argv:
+  items=[{"metadata":{"name":"node-apps","uid":"set-id"},"spec":{"template":{"spec":{"source":{"repoURL":"https://github.com/owned/repo","targetRevision":"main","helm":{"values":"PRIVATE_INLINE_SECRET"}}}},"generators":[{"git":{}}]}}]
+ print(json.dumps({"items":items}))
+`;
+    writeFileSync(path.join(dir, "timeout"), '#!/bin/sh\nshift\nexec "$@"\n', {
+      mode: 0o755,
+    });
+    writeFileSync(path.join(dir, "docker"), docker, { mode: 0o755 });
+    writeFileSync(path.join(dir, "kubectl"), kubectl, { mode: 0o755 });
+    const execute = (extra: Record<string, string> = {}) =>
+      execFileSync("bash", ["-s"], {
+        input: command,
+        encoding: "utf8",
+        stdio: "pipe",
+        timeout: 5000,
+        env: {
+          ...process.env,
+          PATH: dir + path.delimiter + process.env.PATH,
+          ...extra,
+        },
+      });
+    try {
+      writeFileSync(
+        path.join(dir, "ssh"),
+        "#!/bin/sh\necho PRIVATE_SSH_STDERR_SENTINEL >&2\nexit 17\n",
+        { mode: 0o755 }
+      );
+      let cliFailure: unknown;
+      try {
+        execFileSync(
+          process.execPath,
+          [
+            path.join(root, "scripts/ops/maintenance-drain.mjs"),
+            "candidate-preflight",
+          ],
+          {
+            encoding: "utf8",
+            stdio: "pipe",
+            timeout: 5000,
+            env: {
+              ...process.env,
+              PATH: dir + path.delimiter + process.env.PATH,
+              GITHUB_REPOSITORY: "cogni-dao/cogni",
+              NODE: "node-template",
+              CONTROL_ENV: "production",
+              APP_SOURCE_ROOT: root,
+              CI_SOURCE_ROOT: root,
+            },
+          }
+        );
+      } catch (error) {
+        cliFailure = error;
+      }
+      expect(cliFailure).toBeDefined();
+      const cliStderr = String((cliFailure as { stderr: string }).stderr);
+      expect(cliStderr).toContain('"phase":"ledger_inventory","native_rc":17');
+      expect(cliStderr).not.toContain("PRIVATE_SSH_STDERR_SENTINEL");
+      const leakLog = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        expect(() =>
+          ops.parseCandidateSnapshotOutput(
+            'MAINTENANCE_ENGINE_IDENTITY {"engines":[{"secret":"PRIVATE_RECEIPT_SENTINEL"},{}]}\n{}',
+            images
+          )
+        ).toThrow(/engine_receipt_unproven/);
+        expect(leakLog).not.toHaveBeenCalled();
+      } finally {
+        leakLog.mockRestore();
+      }
+      const output = execute();
+      expect(output).toContain("MAINTENANCE_ENGINE_IDENTITY");
+      expect(output).not.toContain("PRIVATE_INLINE_SECRET");
+      const lines = output.trim().split("\n");
+      expect(
+        JSON.parse(
+          (lines[0] ?? "").slice("MAINTENANCE_ENGINE_IDENTITY ".length)
+        ).engines
+      ).toHaveLength(2);
+      const receiptLog = vi.spyOn(console, "log").mockImplementation(() => {});
+      let parsedSnapshot: unknown;
+      try {
+        parsedSnapshot = ops.parseCandidateSnapshotOutput(output, images);
+        expect(receiptLog).toHaveBeenCalledOnce();
+      } finally {
+        receiptLog.mockRestore();
+      }
+      const snapshot = JSON.parse(lines[1] ?? "");
+      expect(parsedSnapshot).toEqual(snapshot);
+      expect(snapshot.xrs[0]).toMatchObject({
+        kind: "XComputeWorkload",
+        uid: "xr-id",
+        bundleSource: "old-source",
+      });
+      expect(snapshot.applicationSets[0].templateSource).toEqual({
+        repoURL: "https://github.com/owned/repo",
+        targetRevision: "main",
+      });
+      const failures: Record<string, string>[] = [
+        { MOCK_FAIL_APPS: "1" },
+        { MOCK_AMBIGUOUS: "postgres" },
+        { MOCK_WRONG_IMAGE: "doltgres" },
+      ];
+      for (const extra of failures) {
+        let caught: unknown;
+        try {
+          execute(extra);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeDefined();
+        const failure = caught as {
+          status: number;
+          stdout: string;
+          stderr: string;
+        };
+        expect(failure.stderr).not.toContain("PRIVATE_STDERR_SENTINEL");
+        expect(failure.stderr).not.toContain("Traceback");
+        expect(failure.stderr).toContain(
+          extra.MOCK_FAIL_APPS
+            ? "phase=applications native_rc=17"
+            : "phase=engine_inventory native_rc=1"
+        );
+        if (extra.MOCK_FAIL_APPS)
+          expect(failure.stdout).toContain("MAINTENANCE_ENGINE_IDENTITY");
+        else
+          expect(failure.stdout).not.toContain("MAINTENANCE_ENGINE_IDENTITY");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("fences the historical XR only and preserves its exact secret/RBAC projection", () => {
