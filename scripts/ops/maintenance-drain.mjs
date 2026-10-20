@@ -247,7 +247,7 @@ async function providerDrain(request) {
     const rows =
       await sql`SELECT id, cogni_key, node_id, environment, workload, external_name, provider_account, state, applied_database_cell_binding FROM akash_tx_allocations WHERE wallet_scope = ${walletScope} AND node_id = ${request.nodeId} AND environment = ${request.env} LIMIT 100`;
     requireThat(rows.length < 100, "maintenance_receipt_inventory_unknown");
-    return { rows };
+    return { rows, walletScope };
   } finally {
     await sql.end({ timeout: 5 });
   }
@@ -282,6 +282,8 @@ def read(name):
 def owned(value):
  meta=value.get("metadata",{});labels=meta.get("labels",{});spec=value.get("spec",{})
  return spec.get("nodeId")==node or labels.get("cogni.io/node-id")==node or labels.get("cogni.io/node")==slug or meta.get("name","")==slug or meta.get("name","").startswith(slug+"-")
+def source_identity(value):
+ return {key:value[key] for key in ["repoURL","path","targetRevision","chart"] if key in value} if value else None
 def identity(value):
  meta=value.get("metadata",{});spec=value.get("spec",{});status=value.get("status",{})
  return {"kind":value.get("kind"),"name":meta.get("name"),"uid":meta.get("uid"),"generation":meta.get("generation"),"observedGeneration":status.get("observedGeneration"),"deleting":meta.get("deletionTimestamp") is not None,"instance":spec.get("instance"),"workload":spec.get("workload",{}).get("name"),"bundleSource":spec.get("bundle",{}).get("source",{}).get("sha")}
@@ -293,7 +295,7 @@ for value in read("apps"):
  sources=value.get("spec",{}).get("sources") or [value.get("spec",{}).get("source",{})]
  if any(item.get("targetRevision")=="deploy/candidate-a-"+slug for item in sources):
   apps.append({"name":value["metadata"]["name"],"revision":value.get("status",{}).get("sync",{}).get("revision"),"sync":value.get("status",{}).get("sync",{}).get("status"),"health":value.get("status",{}).get("health",{}).get("status"),"automated":value.get("spec",{}).get("syncPolicy",{}).get("automated"),"owners":value.get("metadata",{}).get("ownerReferences",[])})
-print(json.dumps({"observedAt":datetime.datetime.now(datetime.timezone.utc).isoformat(),"xrs":[identity(v) for v in xrs if owned(v)],"producers":[identity(v) for v in read("producers") if owned(v)],"applications":apps,"applicationSets":[{"name":v["metadata"]["name"],"uid":v["metadata"]["uid"],"generation":v["metadata"].get("generation"),"templateSource":v.get("spec",{}).get("template",{}).get("spec",{}).get("source"),"templateSources":v.get("spec",{}).get("template",{}).get("spec",{}).get("sources"),"destination":v.get("spec",{}).get("template",{}).get("spec",{}).get("destination"),"syncPolicy":v.get("spec",{}).get("template",{}).get("spec",{}).get("syncPolicy"),"generatorKinds":[list(g.keys()) for g in v.get("spec",{}).get("generators",[])]} for v in read("appsets")]}))
+print(json.dumps({"observedAt":datetime.datetime.now(datetime.timezone.utc).isoformat(),"xrs":[identity(v) for v in xrs if owned(v)],"producers":[identity(v) for v in read("producers") if owned(v)],"applications":apps,"applicationSets":[{"name":v["metadata"]["name"],"uid":v["metadata"]["uid"],"generation":v["metadata"].get("generation"),"templateSource":source_identity(v.get("spec",{}).get("template",{}).get("spec",{}).get("source")),"templateSources":[source_identity(item) for item in v.get("spec",{}).get("template",{}).get("spec",{}).get("sources",[])],"destination":v.get("spec",{}).get("template",{}).get("spec",{}).get("destination"),"syncPolicy":v.get("spec",{}).get("template",{}).get("spec",{}).get("syncPolicy"),"generatorKinds":[list(g.keys()) for g in v.get("spec",{}).get("generators",[])]} for v in read("appsets")]}))
 PY_SNAPSHOT
 `;
   return command;
@@ -354,6 +356,7 @@ async function candidateReadOnlyPreflight() {
       environment: request.env,
       sourceSha: request.sourceSha,
       complete: true,
+      walletScope: inventory.walletScope,
       rows: inventory.rows.map((row) => ({
         receiptId: row.id,
         cogniKey: row.cogni_key,
@@ -388,6 +391,7 @@ async function candidateReadOnlyPreflight() {
       nodeId: request.nodeId,
       environment: request.env,
       controlEnvironment: process.env.CONTROL_ENV,
+      walletScope: inventory.walletScope,
       sourceSha: request.sourceSha,
       cluster,
       ledger: inventory.rows.map((row) => ({
