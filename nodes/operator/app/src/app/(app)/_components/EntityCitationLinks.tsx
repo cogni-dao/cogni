@@ -12,11 +12,11 @@
 
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import type { ReactElement } from "react";
 
-import { Badge } from "@/components";
+import { Badge, Button } from "@/components";
 import {
   type CitationLinkDto,
   fetchCitationLinks,
@@ -38,14 +38,21 @@ function chipLabel(link: CitationLinkDto, entityId: string): string {
 export function EntityCitationLinks({
   entityId,
 }: EntityCitationLinksProps): ReactElement | null {
-  const query = useQuery({
-    queryKey: ["citation-links", entityId],
-    queryFn: () => fetchCitationLinks(entityId),
+  const query = useInfiniteQuery({
+    queryKey: ["citation-links", entityId, "pages"],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => fetchCitationLinks(entityId, pageParam),
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     staleTime: 30_000,
   });
 
-  const links = query.data?.links ?? [];
-  if (query.isLoading || query.error || links.length === 0) return null;
+  const links = query.data?.pages.flatMap((page) => page.links) ?? [];
+  if (query.error && links.length === 0) {
+    return (
+      <p className="text-muted-foreground text-xs">Unable to load links.</p>
+    );
+  }
+  if (query.isLoading || links.length === 0) return null;
 
   return (
     <div className="flex flex-col gap-1">
@@ -68,6 +75,23 @@ export function EntityCitationLinks({
           );
         })}
       </div>
+      {query.hasNextPage && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="w-fit"
+          disabled={query.isFetchingNextPage}
+          onClick={() => void query.fetchNextPage()}
+        >
+          {query.isFetchingNextPage ? "Loading links…" : "More links"}
+        </Button>
+      )}
+      {query.error && (
+        <p className="text-muted-foreground text-xs">
+          Unable to load more links.
+        </p>
+      )}
     </div>
   );
 }

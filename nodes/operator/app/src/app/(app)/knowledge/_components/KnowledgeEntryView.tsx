@@ -4,7 +4,7 @@
 /**
  * Module: `@app/(app)/knowledge/_components/KnowledgeEntryView`
  * Purpose: Full-page view of a single knowledge entry — the permalink target.
- *   Fetches the entry by id, renders the shared body + chain walk + a copy-link.
+ *   Fetches the selected body plus paged direct links; never walks its graph.
  * Scope: Presentation. Fetches via React Query (cookie-session).
  * Side-effects: IO (GET /api/v1/knowledge/[id]).
  * @internal
@@ -77,7 +77,7 @@ export function KnowledgeEntryView({ id }: { readonly id: string }) {
           </div>
 
           <div className="mt-2">
-            <KnowledgeEntryFields item={query.data} showChain={true} />
+            <KnowledgeEntryFields item={query.data} />
           </div>
         </>
       )}
