@@ -295,6 +295,10 @@ spec:
             {{- $_ := set $e "AUTH_TRUST_HOST" "true" }}
             {{- $_ := set $e "NEXTAUTH_URL" (printf "https://%s" $publicHost) }}
             {{- $_ := set $e "APP_BASE_URL" (printf "https://%s" $publicHost) }}
+            {{- /* Disposable previews must not register recurring schedules in shared Temporal. */ -}}
+            {{- if $isPreview }}
+            {{- $_ := set $e "GOVERNANCE_SCHEDULES_ENABLED" "false" }}
+            {{- end }}
             {{- end }}
             {{- /* visibility -> expose. Public is the only service that takes the hostname. */ -}}
             {{- $public := eq $svc.visibility "public" }}

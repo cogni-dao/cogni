@@ -13,6 +13,7 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it } from "vitest";
 import { parse, parseAllDocuments } from "yaml";
 
@@ -21,6 +22,30 @@ const read = (file: string) => readFileSync(path.join(root, file), "utf8");
 const app = parse(
   read("infra/k8s/argocd/preview-pilot/candidate-a-previews-application.yaml")
 );
+
+const testParentRepo = "https://github.com/cogni-test-org/cogni-monorepo.git";
+const stagedPreviewFile = "candidate-a-previews-application.yaml";
+const testStagedApp = {
+  ...app,
+  spec: {
+    ...app.spec,
+    source: { ...app.spec.source, repoURL: testParentRepo },
+  },
+};
+
+function permitsTestStagedApplication(
+  rootRepo: string,
+  env: string,
+  file: string,
+  document: unknown
+): boolean {
+  return (
+    rootRepo === testParentRepo &&
+    env === "candidate-a" &&
+    file === stagedPreviewFile &&
+    isDeepStrictEqual(document, testStagedApp)
+  );
+}
 
 describe("independent opt-in preview desired state", () => {
   it("keeps cleanup observation opt-in, namespace-scoped and read-only", () => {
@@ -96,15 +121,25 @@ describe("independent opt-in preview desired state", () => {
     expect(materializer).not.toContain("preview-deployments");
     expect(materializer).not.toContain("candidate-a-previews");
   });
-  it("is dormant until explicitly staged, and ordinary AppSets cannot own its resources", () => {
+  it("keeps canonical defaults dormant and accepts only exact TEST-owned opt-in staging", () => {
+    const rootRepo = parse(
+      read(
+        "infra/k8s/argocd/control-plane/candidate-a/candidate-a-control-plane-application.yaml"
+      )
+    ).spec.source.repoURL;
     for (const env of ["candidate-a", "preview", "production"]) {
       for (const file of readdirSync(
         path.join(root, "infra/k8s/argocd/control-plane", env)
       )) {
         if (!file.endsWith(".yaml")) continue;
-        expect(
-          read(`infra/k8s/argocd/control-plane/${env}/${file}`)
-        ).not.toContain("cogni-candidate-a-previews");
+        const text = read(`infra/k8s/argocd/control-plane/${env}/${file}`);
+        if (env === "candidate-a" && file === stagedPreviewFile) {
+          expect(
+            permitsTestStagedApplication(rootRepo, env, file, parse(text))
+          ).toBe(true);
+        } else {
+          expect(text).not.toContain("cogni-candidate-a-previews");
+        }
       }
       for (const file of readdirSync(
         path.join(root, "infra/k8s/argocd/appsets", env)
@@ -115,6 +150,70 @@ describe("independent opt-in preview desired state", () => {
         );
       }
     }
+  });
+  it("rejects TEST staging with changed namespace, source, branch or prune ownership", () => {
+    const allowed = (document: unknown, rootRepo = testParentRepo) =>
+      permitsTestStagedApplication(
+        rootRepo,
+        "candidate-a",
+        stagedPreviewFile,
+        document
+      );
+    expect(allowed(testStagedApp)).toBe(true);
+    expect(allowed(testStagedApp, app.spec.source.repoURL)).toBe(false);
+    expect(
+      permitsTestStagedApplication(
+        testParentRepo,
+        "preview",
+        stagedPreviewFile,
+        testStagedApp
+      )
+    ).toBe(false);
+    expect(
+      permitsTestStagedApplication(
+        testParentRepo,
+        "candidate-a",
+        "other.yaml",
+        testStagedApp
+      )
+    ).toBe(false);
+    for (const mutate of [
+      (copy: typeof testStagedApp) => {
+        copy.metadata.namespace = "other";
+      },
+      (copy: typeof testStagedApp) => {
+        copy.spec.source.repoURL = app.spec.source.repoURL;
+      },
+      (copy: typeof testStagedApp) => {
+        copy.spec.source.targetRevision = "main";
+      },
+      (copy: typeof testStagedApp) => {
+        copy.spec.source.path = "infra/k8s/overlays/candidate-a";
+      },
+      (copy: typeof testStagedApp) => {
+        copy.spec.syncPolicy.automated.prune = false;
+      },
+      (copy: typeof testStagedApp) => {
+        copy.spec.destination.namespace = "other";
+      },
+    ]) {
+      const copy = structuredClone(testStagedApp);
+      mutate(copy);
+      expect(allowed(copy)).toBe(false);
+    }
+  });
+  it("disables recurring governance schedules after preview app bindings and secret refs", () => {
+    const source = read("infra/crossplane/xcomputeworkload/composition.yaml");
+    // The final app-only identity block wins after both caller-supplied env sources.
+    const appIdentity = source.slice(
+      source.indexOf('set $e "NODE_NAME" $slug')
+    );
+    expect(appIdentity).toMatch(
+      /if \$isPreview[\s\S]*?set \$e "GOVERNANCE_SCHEDULES_ENABLED" "false"[\s\S]*?end/
+    );
+    expect(
+      source.indexOf('set $e "GOVERNANCE_SCHEDULES_ENABLED"')
+    ).toBeGreaterThan(source.indexOf('range (dig "secretRefs"'));
   });
   it("requires admission identity and matching reset generation before preview create", () => {
     const source = read("infra/crossplane/xcomputeworkload/composition.yaml");
