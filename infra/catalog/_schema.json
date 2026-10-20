@@ -350,6 +350,31 @@
       },
       "minProperties": 1
     },
+    "isolated_services": {
+      "type": "object",
+      "description": "story.5093 — PLACEMENT_IS_OPERATOR_POLICY. Declared private repo-spec services the operator places in their OWN Akash lease instead of the node's app lease (ISOLATED_SERVICE_IS_ITS_OWN_LEASE). Each key is a service name; the materializer renders one more XComputeWorkload named `<nodeId>-<service>` with `spec.instance: <service>`, that service as its sole public service, host `<slug>-<service>` under the environment domain, and its own idempotence key family `xcw:<namespace>:<nodeId>-<service>:<generation>`. Spend receipts keep the node's nodeId. `lease_generation` follows the same NOTHING_BUMPS_IMPLICITLY rule as the row-level cell; omitted environments default to 0. A key the node's source does not declare for an environment is skipped and reported, so this cell may merge before the node's own PR. Crossplane compute_api only.",
+      "additionalProperties": false,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]{0,19}$" },
+      "patternProperties": {
+        "^[a-z][a-z0-9-]{0,19}$": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "lease_generation": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "candidate-a": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+                "preview": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+                "production": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+              },
+              "minProperties": 1
+            }
+          }
+        }
+      },
+      "minProperties": 1
+    },
     "boot_recovery": {
       "type": "object",
       "description": "story.5050 — per-environment BOOT-RECOVERY posture. `hold` (the default, and every row's behaviour before this cell existed) keeps a lease that never served as evidence and waits for a human to bump lease_generation. `auto` closes it at the boot deadline, which is the ONLY thing that makes the Composition's bounded `:recover:<1..3>` re-mint reachable — and because the actuator's ledger-derived excluded set skips the provider that just failed (task.5153), each retry lands on a DIFFERENT provider. That is what turns 'a human diagnoses, closes and re-mints for every bad provider' into one auction that walks the allowlist by itself. ONE CELL OPENS BOTH GATES on purpose: `onGiveUp: Replace` with `onDeadline: Hold` would be a workload holding a dead lease forever while claiming it self-heals, which is worse than honest Hold, so the two are never separately settable. Declared here and nowhere else — a per-request flag is the seam through which a production workload would eventually be closed by a bad argument (see bootPolicyForEnvironment). Bounded at 3 attempts per generation by the Composition; exhaustion still parks the workload for a human. Recommended for any node whose placement is constrained to a small provider set, where a single defective provider would otherwise stall the lane indefinitely (bug.5325).",
