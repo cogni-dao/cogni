@@ -1065,12 +1065,12 @@ openbao_reader_address() {
 
 # Response and request material remain in the private per-deploy cache. Only
 # numeric HTTP status reaches stdout; JWT/token values never enter curl argv.
-openbao_reader_request() {
-  local method="$1" path="$2" body_file="$3" token="$4" response_file="$5" limit="$6"
+openbao_http_request() {
+  local method="$1" path="$2" body_file="$3" token="$4" response_file="$5" limit="$6" content_type="$7"
   local address config="${BAO_CACHE_DIR}/http-request.conf" status rc=0 started=$SECONDS remaining discovery_limit
-  case "$method:$path:$limit" in
-    POST:auth/kubernetes/login:20 | GET:cogni/data/"${DEPLOY_ENVIRONMENT}"/*:30 | GET:cogni/data/"${DEPLOY_ENVIRONMENT}"/*:10) : ;;
-    *) printf '[openbao-reader] phase=http_request reason=scope_unproven\n' >&2; return 1 ;;
+  case "$method:$path:$limit:$content_type" in
+    POST:auth/kubernetes/login:10:application/json | POST:auth/kubernetes/login:20:application/json | GET:cogni/data/"${DEPLOY_ENVIRONMENT}"/*:10:application/json | GET:cogni/data/"${DEPLOY_ENVIRONMENT}"/*:30:application/json | PATCH:cogni/data/"${DEPLOY_ENVIRONMENT}"/operator:20:application/merge-patch+json | POST:cogni/data/"${DEPLOY_ENVIRONMENT}"/operator:20:application/json) : ;;
+    *) printf '[openbao-http] phase=http_request reason=scope_unproven\n' >&2; return 1 ;;
   esac
   discovery_limit=15
   [[ "$limit" -ge 15 ]] || discovery_limit="$limit"
@@ -1086,11 +1086,38 @@ openbao_reader_request() {
   local args=(--disable --silent --show-error --noproxy '*' --proto '=http' --max-redirs 0
     --connect-timeout "$remaining" --max-time "$remaining" --request "$method" --config "$config"
     --output "$response_file" --write-out '%{http_code}')
-  [[ -z "$body_file" ]] || args+=(--header 'Content-Type: application/json' --data-binary "@$body_file")
+  [[ -z "$body_file" ]] || args+=(--header "Content-Type: $content_type" --data-binary "@$body_file")
   if status="$(timeout "$remaining" curl "${args[@]}" "${address}/v1/${path}" 2>"${BAO_CACHE_DIR}/http.stderr")"; then :; else rc=$?; fi
   rm -f "$config"
   printf '%s' "$status"
   return "$rc"
+}
+
+openbao_reader_request() {
+  case "$1:$2:$6" in
+    POST:auth/kubernetes/login:20 | GET:cogni/data/"${DEPLOY_ENVIRONMENT}"/*:30 | GET:cogni/data/"${DEPLOY_ENVIRONMENT}"/*:10) : ;;
+    *) printf '[openbao-reader] phase=http_request reason=scope_unproven\n' >&2; return 1 ;;
+  esac
+  openbao_http_request "$@" application/json
+}
+
+openbao_writer_request() {
+  local content_type=application/json
+  case "$1:$2:$6" in
+    POST:auth/kubernetes/login:10)
+      jq -e --arg role "${DEPLOY_ENVIRONMENT}-writer" 'keys == ["jwt","role"] and .role == $role and (.jwt | type == "string" and length > 0)' "$3" >/dev/null 2>&1 || return 1 ;;
+    PATCH:cogni/data/"${DEPLOY_ENVIRONMENT}"/operator:20) content_type=application/merge-patch+json ;;
+    POST:cogni/data/"${DEPLOY_ENVIRONMENT}"/operator:20)
+      jq -e '.options == {cas:0}' "$3" >/dev/null 2>&1 || return 1 ;;
+    *) printf '[openbao-writer] phase=http_request reason=scope_unproven\n' >&2; return 1 ;;
+  esac
+  if [[ "$2" != auth/kubernetes/login ]]; then
+    if [[ "$1" == PATCH ]]; then jq -e 'keys == ["data"]' "$3" >/dev/null 2>&1 || return 1
+    else jq -e 'keys == ["data","options"]' "$3" >/dev/null 2>&1 || return 1; fi
+    jq -e '.data | type == "object" and (keys | sort) == ["OPENFGA_AUTHORIZATION_MODEL_HASH","OPENFGA_AUTHORIZATION_MODEL_ID","OPENFGA_STORE_ID"]
+      and all(.[]; type == "string" and length > 0)' "$3" >/dev/null 2>&1 || return 1
+  fi
+  openbao_http_request "$@" "$content_type"
 }
 
 mint_db_reader_token() {
@@ -1859,142 +1886,100 @@ classify_kubectl_resource_lookup_failure() {
   fi
 }
 
+# A fresh canonical read is mandatory here: earlier runtime-render cache is stale.
+read_operator_openfga_current() {
+  rm -f "${BAO_CACHE_DIR}/path-operator.json"
+  openbao_get_field operator OPENFGA_STORE_ID 30 1 >/dev/null
+}
+
+operator_openfga_current_matches() {
+  [[ -s "${BAO_CACHE_DIR}/path-operator.json" ]] || return 1
+  jq -e --arg store "$OPENFGA_STORE_ID" --arg model "$OPENFGA_AUTHORIZATION_MODEL_ID" --arg hash "$OPENFGA_AUTHORIZATION_MODEL_HASH" \
+    '.data.data | .OPENFGA_STORE_ID == $store and .OPENFGA_AUTHORIZATION_MODEL_ID == $model and .OPENFGA_AUTHORIZATION_MODEL_HASH == $hash' \
+    "${BAO_CACHE_DIR}/path-operator.json" >/dev/null 2>&1
+}
+
 patch_operator_openfga_config() {
-  if ! command -v kubectl >/dev/null 2>&1; then
-    log_warn "kubectl not found — cannot patch OpenBao operator OpenFGA config"
-    return 1
+  local jwt="" tok="" attempt max_attempts=1 rc=0 status=000 reason sleep_seconds phase
+  local error_file="${BAO_CACHE_DIR}/writer.stderr" body="${BAO_CACHE_DIR}/writer-body.json" response="${BAO_CACHE_DIR}/writer-response.json"
+  local absent=false method=PATCH
+  read_operator_openfga_current || { log_warn "OpenBao operator config fresh read unavailable; refusing writer operation"; return 1; }
+  if operator_openfga_current_matches; then
+    log_info "OpenBao operator OpenFGA config unchanged verified; no writer operation"
+    return 0
   fi
-
-  local jwt tok path patch_out patch_rc login_out login_rc login_reason max_attempts attempt sleep_seconds
-  local sa_out sa_rc sa_reason
+  [[ -s "${BAO_CACHE_DIR}/path-operator.json" ]] || absent=true
+  # create-token itself proves the named SA; no redundant get-SA prerequisite.
   for attempt in 1 2 3; do
-    set +e
-    sa_out=$(timeout 10 kubectl get sa openbao-operator -n default -o name 2>&1)
-    sa_rc=$?
-    set -e
-    if [[ $sa_rc -eq 0 ]]; then
-      break
-    fi
-
-    sa_reason="$(classify_kubectl_resource_lookup_failure "$sa_rc" "$sa_out")"
-    case "$sa_reason" in
-      absent)
-        log_warn "openbao-operator SA is absent — cannot patch OpenBao operator OpenFGA config"
-        return 1
-        ;;
-      server_transient)
-        if [[ $attempt -lt 3 ]]; then
-          sleep_seconds=$((attempt * 5))
-          log_warn "OpenBao writer SA lookup hit a control-plane timeout/transient (attempt ${attempt}/3); retrying in ${sleep_seconds}s"
-          sleep "$sleep_seconds"
-          continue
-        fi
-        log_warn "OpenBao writer SA lookup remained unavailable after 3 attempts"
-        return 1
-        ;;
-      *)
-        log_warn "OpenBao writer SA lookup failed permanently; refusing to claim the SA is absent"
-        return 1
-        ;;
-    esac
-  done
-
-  tok=""
-  max_attempts=1
-  for attempt in 1 2 3; do
-    if ! jwt=$(timeout 10 kubectl create token openbao-operator -n default 2>&1); then
-      login_reason="service_account_token_mint"
-      max_attempts=3
-    else
-      set +e
-      login_out=$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-        bao write -field=token auth/kubernetes/login \
-        "role=${DEPLOY_ENVIRONMENT}-writer" "jwt=${jwt}" 2>&1)
-      login_rc=$?
-      set -e
-      if [[ $login_rc -eq 0 ]]; then
-        tok="$login_out"
-        break
+    rc=0 status=000 phase=token_request
+    if jwt="$(timeout 10 kubectl create token openbao-operator -n default 2>"$error_file")"; then
+      if [[ -z "$jwt" ]]; then log_warn "OpenBao writer token_request empty output"; return 1; fi
+      phase=writer_login
+      printf '%s' "$jwt" | jq -Rs --arg role "${DEPLOY_ENVIRONMENT}-writer" '{role:$role,jwt:.}' > "$body"
+      if status="$(openbao_writer_request POST auth/kubernetes/login "$body" '' "$response" 10)"; then
+        if [[ "$status" == 200 ]]; then
+          tok="$(jq -er '.auth.client_token | select(type == "string" and length > 0)' "$response" 2>/dev/null)" || tok=""
+          if [[ -n "$tok" ]]; then break; fi
+          reason=permanent
+        elif [[ "$status" == 403 ]]; then reason=permission_denied_recheck
+        elif [[ "$status" == 429 || "$status" =~ ^5[0-9][0-9]$ ]]; then reason=server_transient
+        else reason=permanent; fi
+      else
+        rc=$?
+        if [[ "$rc" -eq 124 || "$rc" -eq 28 || "$rc" -eq 7 || "$rc" -eq 52 || "$rc" -eq 56 ]]; then reason=server_transient
+        else reason=permanent; fi
       fi
-
-      # Match the bounded policy used by every node-substrate login: server/control-plane
-      # transients get three attempts; a 403 gets exactly one fresh-JWT recheck. Unknown
-      # failures remain permanent. Never print login_out: a successful response is a token.
-      # GNU timeout exits 124 and may emit no text at all. The live candidate
-      # proof for bug.5462 hit exactly that shape: the 10-second kubectl/bao
-      # login deadline was misclassified as a permanent auth failure because
-      # there was no stderr for the regex to inspect. Exit status is the
-      # authoritative timeout signal; retry it like the textual server
-      # transient spellings, still bounded to three fresh-JWT attempts.
-      login_reason="$(classify_openbao_writer_login_failure "$login_rc" "$login_out")"
-      case "$login_reason" in
+    else
+      rc=$?
+      reason="$(classify_kubectl_resource_lookup_failure "$rc" "$(cat "$error_file")")"
+      printf '[openbao-writer] phase=token_request native_rc=%s reason=%s\n' "$rc" "$reason" >&2
+      case "$reason" in
+        absent) log_warn "openbao-operator SA is absent — cannot patch OpenBao operator OpenFGA config"; return 1 ;;
         server_transient) max_attempts=3 ;;
-        permission_denied_recheck) max_attempts=2 ;;
-        *)
-          log_warn "OpenBao writer login failed permanently for ${DEPLOY_ENVIRONMENT}-writer"
-          return 1
-          ;;
+        *) log_warn "OpenBao writer token_request failed permanently; refusing to claim the SA is absent"; return 1 ;;
       esac
     fi
-
-    if [[ $attempt -ge $max_attempts ]]; then
-      log_warn "OpenBao writer login exhausted ${max_attempts} attempt(s) for ${DEPLOY_ENVIRONMENT}-writer (${login_reason})"
+    case "$reason" in
+      server_transient) max_attempts=3 ;;
+      permission_denied_recheck) max_attempts=2 ;;
+      *) log_warn "OpenBao writer login failed permanently; refusing token or write fallback"; return 1 ;;
+    esac
+    rm -f "$body" "$response" "$error_file"
+    printf '[openbao-writer] phase=%s native_rc=%s http_status=%s reason=%s attempt=%s/%s\n' "$phase" "$rc" "$status" "$reason" "$attempt" "$max_attempts" >&2
+    if [[ "$attempt" -ge "$max_attempts" ]]; then
+      if [[ "$max_attempts" -eq 3 ]]; then
+        log_warn "OpenBao writer SA lookup remained unavailable after 3 attempts (token_request/login exhausted)"
+      else log_warn "OpenBao writer login exhausted ${max_attempts} attempt(s)"; fi
       return 1
     fi
-    sleep_seconds=$((attempt * 5 + RANDOM % 5))
-    log_warn "OpenBao writer login ${login_reason} (attempt ${attempt}/${max_attempts}); retrying with a fresh JWT in ${sleep_seconds}s"
-    sleep "$sleep_seconds"
+    sleep_seconds=$((attempt * 5 + RANDOM % 5)); sleep "$sleep_seconds"
   done
-  if [[ -z "$tok" ]]; then
-    log_warn "OpenBao writer login returned an empty token for ${DEPLOY_ENVIRONMENT}-writer"
-    return 1
+  rm -f "$body" "$response" "$error_file"
+  [[ -n "$tok" ]] || return 1
+  jq -n --arg store "$OPENFGA_STORE_ID" --arg model "$OPENFGA_AUTHORIZATION_MODEL_ID" --arg hash "$OPENFGA_AUTHORIZATION_MODEL_HASH" \
+    '{data:{OPENFGA_STORE_ID:$store,OPENFGA_AUTHORIZATION_MODEL_ID:$model,OPENFGA_AUTHORIZATION_MODEL_HASH:$hash}}' > "$body"
+  if "$absent"; then
+    method=POST
+    jq '. + {options:{cas:0}}' "$body" > "${body}.tmp"; mv -f "${body}.tmp" "$body"
   fi
-
-  # bug.5068 (prod outage 2026-07-02): `cogni/<env>/operator` is a SHARED bucket
-  # holding ~35 keys (DATABASE_URL, AUTH_SECRET, LITELLM_MASTER_KEY, …). `bao kv put`
-  # REPLACES the whole bucket, so a `put` here must only ever run when the bucket is
-  # genuinely absent. The old guard (`kv metadata get` fails → put) conflated a
-  # TRANSIENT failure (docker network recreation, exec flake) with "absent" and
-  # clobbered all 35 keys → ESO synced the emptied bucket → operator crashloop →
-  # ~1h prod 502.
-  #
-  # Fix: `patch` FIRST (merges siblings; the writer role has patch on this path).
-  # Only fall back to a destructive `put` on a POSITIVE "does not exist" signal in
-  # patch's OWN output. Any other (transient) failure returns 1 without touching the
-  # bucket — the caller hard-fails and deploy-infra retries next run against an
-  # intact bucket. `put` is now unreachable except on proven absence.
-  path="cogni/${DEPLOY_ENVIRONMENT}/operator"
-  set +e
-  patch_out=$(timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
-    bao kv patch "$path" \
-      "OPENFGA_STORE_ID=${OPENFGA_STORE_ID}" \
-      "OPENFGA_AUTHORIZATION_MODEL_ID=${OPENFGA_AUTHORIZATION_MODEL_ID}" \
-      "OPENFGA_AUTHORIZATION_MODEL_HASH=${OPENFGA_AUTHORIZATION_MODEL_HASH}" 2>&1)
-  patch_rc=$?
-  set -e
-  if [[ $patch_rc -eq 0 ]]; then
+  rc=0 status=000
+  if status="$(openbao_writer_request "$method" "cogni/data/${DEPLOY_ENVIRONMENT}/operator" "$body" "$tok" "$response" 20)"; then :; else rc=$?; fi
+  # A PATCH may race deletion after the initial fresh read. Only a well-formed
+  # positive absence permits create, and CAS0 makes an intervening create safe.
+  if [[ "$method" == PATCH && "$rc" -eq 0 && "$status" == 404 ]] && jq -e 'type == "object" and .errors == []' "$response" >/dev/null 2>&1; then
+    jq '. + {options:{cas:0}}' "$body" > "${body}.tmp"; mv -f "${body}.tmp" "$body"
+    rc=0 status=000
+    if status="$(openbao_writer_request POST "cogni/data/${DEPLOY_ENVIRONMENT}/operator" "$body" "$tok" "$response" 20)"; then :; else rc=$?; fi
+  fi
+  rm -f "$body" "$response" "$error_file"
+  printf '[openbao-writer] phase=publish native_rc=%s http_status=%s\n' "$rc" "$status" >&2
+  # No mutation retry on any response, including a lost ACK. Exactly one fresh
+  # canonical read may establish convergence; unavailable/mismatch stays unknown.
+  if read_operator_openfga_current && operator_openfga_current_matches; then
+    log_info "OpenBao operator OpenFGA config converged verified"
     return 0
   fi
-
-  # Positive "the secret does not exist" is the ONLY case where a `put` (create) is
-  # safe: there are no sibling keys to clobber. Match the phrasings OpenBao/Vault
-  # `kv patch` emits for a missing path. Anything else is treated as transient.
-  # A kv patch on a never-written KV v2 path returns `Code: 404` with an EMPTY raw
-  # message (no "not found" text) — unambiguous absence on a FRESH node/env, so put
-  # cannot clobber siblings (mirrors provision seed_kv fix a54f24809b).
-  if printf '%s' "$patch_out" | grep -qiE 'no value found|does not exist|not found|code: 404'; then
-    log_warn "operator bucket ${path} absent — creating it with a fresh put"
-    timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
-      bao kv put "$path" \
-        "OPENFGA_STORE_ID=${OPENFGA_STORE_ID}" \
-        "OPENFGA_AUTHORIZATION_MODEL_ID=${OPENFGA_AUTHORIZATION_MODEL_ID}" \
-        "OPENFGA_AUTHORIZATION_MODEL_HASH=${OPENFGA_AUTHORIZATION_MODEL_HASH}" >/dev/null || return 1
-    return 0
-  fi
-
-  # Transient/unknown failure — NEVER `put` (would wipe ~35 sibling keys). Fail
-  # closed; deploy-infra retries on the next run against an intact bucket.
-  log_warn "bao kv patch on ${path} failed (rc=${patch_rc}) without a positive 'absent' signal; refusing to put (would clobber siblings): ${patch_out}"
+  log_warn "OpenBao operator OpenFGA publication unconfirmed; no mutation replay or replacement put"
   return 1
 }
 
@@ -2050,7 +2035,7 @@ if patch_operator_openfga_config; then
   # the readyz/promote lane, not by force-refresh convergence here.
   refresh_operator_openfga_secret || log_warn "operator ExternalSecret force-refresh did not converge (absent or not-Ready yet); IDs are in OpenBao and ESO will sync them on its normal cycle — non-fatal"
 else
-  log_error "OpenFGA store/model exist, but operator OpenBao config was not patched"
+  log_error "OpenFGA store/model exist, but operator OpenBao config publication could not be confirmed"
   exit 1
 fi
 
