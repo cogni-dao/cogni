@@ -6,7 +6,7 @@
  * Purpose: Prove ordinary atom reads never walk chains and load more links only on demand.
  * Scope: React Query plus browser fetch boundary. Does not use a live network.
  * Invariants: NO_AUTOMATIC_CHAIN, FIVE_INITIAL_LINKS, EXPLICIT_PAGINATION.
- * Side-effects: mocked fetch only
+ * Side-effects: global (stubbed fetch)
  * Links: https://github.com/cogni-dao/cogni/issues/2832
  * @vitest-environment jsdom
  * @internal
