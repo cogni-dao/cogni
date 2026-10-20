@@ -186,12 +186,14 @@ describe.skipIf(!process.env.CI)(
 
         await provision();
         expect(await head()).toMatch(/^[a-z0-9]{32,64}$/i);
-        expect(
-          await sql("SELECT current_user", "knowledge_reader", readerPassword)
-        ).toBe("knowledge_reader");
-        expect(
-          await sql("SELECT current_user", "knowledge_writer", writerPassword)
-        ).toBe("knowledge_writer");
+        // Pinned Doltgres does not grant these roles EXECUTE on current_user;
+        // authenticate and execute an ordinary query without assuming routine ACLs.
+        expect(await sql("SELECT 1", "knowledge_reader", readerPassword)).toBe(
+          "1"
+        );
+        expect(await sql("SELECT 1", "knowledge_writer", writerPassword)).toBe(
+          "1"
+        );
         // The migrator owns its first schema commit; bootstrap needs no empty commit.
         await sql(
           "CREATE TABLE provision_content_sentinel (id INT PRIMARY KEY, note TEXT)"
