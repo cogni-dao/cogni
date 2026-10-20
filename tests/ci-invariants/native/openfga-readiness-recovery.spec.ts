@@ -3,13 +3,14 @@
 
 /**
  * Module: `@tests/ci-invariants/native/openfga-readiness-recovery`
- * Purpose: Prove datastore readiness failures do not restart the authorization process.
+ * Purpose: Prove authorization recovery and provisioner isolation from application content.
  * Scope: CI-owned Docker dependencies only. Does not access deployed environments or credentials.
  * Invariants:
  *   - DECLARATION_IS_TESTED: images, health probe, label value and restart policy come from Compose.
  *   - FAILURE_CONTROL: the old true label actually restarts under the same datastore fault.
  *   - PROCESS_SURVIVES: repaired FGA retains StartedAt through failure and successful authorization recovery.
  *   - OWNED_FAULT_ONLY: the unique autoheal selector and paused database belong only to this test.
+ *   - PROVISIONING_IS_NOT_CONTENT_WRITE: fresh and repeated provisioning never commit application working sets.
  * Side-effects: IO (CI-owned Docker containers/network; pauses and restores owned Postgres).
  * Links: story.5095, task.5281, docs/spec/cicd-platform-boundary.md
  * @internal
@@ -101,6 +102,132 @@ if (!process.env.CI) {
 describe.skipIf(!process.env.CI)(
   "OpenFGA dependency readiness recovery",
   () => {
+    it("provisions fresh Dolt databases and roles without committing existing application changes", async () => {
+      const docker = new Docker({ timeout: 10_000 });
+      await docker.ping();
+      const network = await new Network().start();
+      const owned: StartedTestContainer[] = [];
+      const cleanup: PromiseSettledResult<unknown>[] = [];
+      try {
+        const password = randomUUID();
+        const readerPassword = randomUUID();
+        const writerPassword = randomUUID();
+        const node = `provision_${randomUUID().replaceAll("-", "")}`;
+        const database = `knowledge_${node}`;
+        const dolt = await new GenericContainer(image(services.doltgres))
+          .withEnvironment({ DOLTGRES_PASSWORD: password })
+          .withNetwork(network)
+          .withNetworkAliases("provision-dolt")
+          .withWaitStrategy(Wait.forLogMessage(/server (started|listening)/i))
+          .withStartupTimeout(120_000)
+          .start();
+        owned.push(dolt);
+        const client = await new GenericContainer(
+          image(services["doltgres-provision"])
+        )
+          .withEntrypoint(["/bin/sh", "-c"])
+          .withCommand(["sleep infinity"])
+          .withWaitStrategy(Wait.forSuccessfulCommand("command -v psql"))
+          .withNetwork(network)
+          .withEnvironment({
+            DOLTGRES_HOST: "provision-dolt",
+            DOLTGRES_PORT: "5432",
+            DOLTGRES_PASSWORD: password,
+            DOLTGRES_READER_PASSWORD: readerPassword,
+            DOLTGRES_WRITER_PASSWORD: writerPassword,
+            COGNI_NODE_DBS: `cogni_${node}`,
+          })
+          .withCopyFilesToContainer([
+            {
+              source: path.resolve(
+                __dirname,
+                "../../../infra/compose/runtime/doltgres-init/provision.sh"
+              ),
+              target: "/app/provision.sh",
+            },
+          ])
+          .start();
+        owned.push(client);
+        const provision = async () => {
+          const result = await client.exec(["bash", "/app/provision.sh"]);
+          expect(result.exitCode, result.output).toBe(0);
+        };
+        const sql = async (
+          query: string,
+          user = "postgres",
+          secret = password
+        ) => {
+          const result = await client.exec([
+            "env",
+            `PGPASSWORD=${secret}`,
+            "PGCONNECT_TIMEOUT=5",
+            "psql",
+            "-XAt",
+            "-h",
+            "provision-dolt",
+            "-p",
+            "5432",
+            "-U",
+            user,
+            "-d",
+            database,
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-c",
+            query,
+          ]);
+          expect(result.exitCode, result.output).toBe(0);
+          return result.stdout.trim();
+        };
+        const head = async () =>
+          (await sql("SELECT dolt_hashof('HEAD')"))
+            .replace(/^\{/, "")
+            .replace(/\}$/, "");
+
+        await provision();
+        expect(await head()).toMatch(/^[a-z0-9]{32,64}$/i);
+        expect(
+          await sql("SELECT current_user", "knowledge_reader", readerPassword)
+        ).toBe("knowledge_reader");
+        expect(
+          await sql("SELECT current_user", "knowledge_writer", writerPassword)
+        ).toBe("knowledge_writer");
+        // The migrator owns its first schema commit; bootstrap needs no empty commit.
+        await sql(
+          "CREATE TABLE provision_content_sentinel (id INT PRIMARY KEY, note TEXT)"
+        );
+        await sql(
+          "SELECT dolt_commit('-Am', 'test: migrator owns schema commit')"
+        );
+        const base = await head();
+        await sql(
+          "INSERT INTO provision_content_sentinel VALUES (1, 'uncommitted-user-intent')"
+        );
+        expect(await sql("SELECT COUNT(*) FROM dolt.status")).not.toBe("0");
+
+        await provision();
+        expect(await head()).toBe(base);
+        expect(
+          await sql("SELECT note FROM provision_content_sentinel WHERE id = 1")
+        ).toBe("uncommitted-user-intent");
+        expect(await sql("SELECT table_name FROM dolt.status")).toContain(
+          "provision_content_sentinel"
+        );
+        // Sensitivity control: the exact retired command commits that same user change.
+        await sql("SELECT dolt_commit('-Am', 'provision: database + roles')");
+        expect(await head()).not.toBe(base);
+        expect(await sql("SELECT COUNT(*) FROM dolt.status")).toBe("0");
+      } finally {
+        const stopped = await Promise.allSettled(
+          owned.reverse().map((container) => container.stop())
+        );
+        const detached = await Promise.allSettled([network.stop()]);
+        cleanup.push(...stopped, ...detached);
+      }
+      if (cleanup.some((result) => result.status === "rejected"))
+        throw new Error("Owned Dolt provisioning fixture cleanup failed");
+    }, 300_000);
+
     it("rejects invalid secret authority before publishing the runtime environment", () => {
       expect(
         execFileSync(
@@ -146,9 +273,8 @@ describe.skipIf(!process.env.CI)(
           /^postgres_bootstrap_identity\(\) \{[\s\S]*?^\}/m
         )?.[0];
         if (!probe) throw new Error("Normal deploy bootstrap probe is missing");
-        const pgInspection = await docker
-          .getContainer(postgres.getId())
-          .inspect();
+        const pgContainerId = postgres.getId();
+        const pgInspection = await docker.getContainer(pgContainerId).inspect();
         const pgAddress =
           pgInspection.NetworkSettings.Networks[network.getName()].IPAddress;
         const pgControl = await postgres.exec([
@@ -168,7 +294,7 @@ describe.skipIf(!process.env.CI)(
               "-c",
               `${probe}\npostgres_bootstrap_identity "$1" "$2" "$3"`,
               "owned-bootstrap-proof",
-              postgres.getId(),
+              pgContainerId,
               pgAddress,
               "fga_test",
             ],
