@@ -9,7 +9,7 @@
  *   - RAW_ACTOR_COVERAGE: both owned actors appear before downstream relabeling.
  *   - REAL_IO: a finite fsync workload increases its own exported write counter.
  *   - ROOT_IS_NOT_AN_ACTOR: root-only metrics cannot satisfy container coverage.
- *   - SINGLE_VARIABLE: host cgroup namespace is the only experimental collector change.
+ *   - MINIMAL_VISIBILITY: experimental namespace and exact Docker metadata mount only.
  *   - BASELINE_CONTROL: declared private namespace must expose root-only metrics.
  * Side-effects: IO (CI-owned Docker containers; reads declared host mounts and writes an owned 16MiB file).
  * Links: story.5095, task.5280, docs/spec/cicd-platform-boundary.md
@@ -197,6 +197,8 @@ describe.skipIf(!process.env.CI)(
             user: alloyService.user,
             cgroupDriver: host.CgroupDriver,
             cgroupVersion: host.CgroupVersion,
+            dockerRootDir: host.DockerRootDir,
+            storageDriver: host.Driver,
             scope: "CI host only; production cgroup topology is not inferred",
           })
         );
@@ -218,6 +220,21 @@ describe.skipIf(!process.env.CI)(
         };
         const writer = await actor(writerService);
         const idle = await actor(idleService);
+        // Previous native host-namespace-only comparison reached Docker discovery
+        // but failed opening this exact mount-id path (run 39364649134). The pinned
+        // cAdvisor handler requires it before registering a Docker container.
+        expect(
+          host.Driver,
+          "Only the observed overlay2 topology is modeled"
+        ).toBe("overlay2");
+        expect(host.DockerRootDir.startsWith("/")).toBe(true);
+        const metadataPath = path.join(
+          host.DockerRootDir,
+          "image",
+          host.Driver,
+          "layerdb",
+          "mounts"
+        );
         const startCollector = async (hostCgroup: boolean) => {
           const collector = hostCgroup
             ? new HostCgroupContainer(alloyService.image)
@@ -225,7 +242,14 @@ describe.skipIf(!process.env.CI)(
           const started = await collector
             .withNetwork(network)
             .withUser(alloyService.user ?? "")
-            .withBindMounts(mounts)
+            .withBindMounts(
+              hostCgroup
+                ? [
+                    ...mounts,
+                    { source: metadataPath, target: metadataPath, mode: "ro" },
+                  ]
+                : mounts
+            )
             .withTmpFs({ "/var/lib/alloy": "rw" })
             .withCopyContentToContainer([
               { content: `${exporter}\n`, target: "/etc/alloy/config.alloy" },
@@ -269,8 +293,22 @@ describe.skipIf(!process.env.CI)(
             .getContainer(started.getId())
             .inspect();
           const actual = Reflect.get(inspected.HostConfig, "CgroupnsMode");
-          console.info("CADVISOR_NATIVE_NAMESPACE", { hostCgroup, actual });
+          console.info("CADVISOR_NATIVE_NAMESPACE", {
+            hostCgroup,
+            actual,
+            readonlyMetadataPath: hostCgroup ? metadataPath : null,
+          });
           expect(actual).toBe(hostCgroup ? "host" : "private");
+          if (hostCgroup)
+            expect(
+              inspected.Mounts.find(
+                (mount) => mount.Destination === metadataPath
+              )
+            ).toMatchObject({
+              Source: metadataPath,
+              Destination: metadataPath,
+              RW: false,
+            });
           return started;
         };
         const alloy = await startCollector(false);
@@ -336,10 +374,12 @@ describe.skipIf(!process.env.CI)(
           65_000
         );
         console.info(
-          "CADVISOR_HOST_CGROUP_RAW",
+          "CADVISOR_HOST_CGROUP_METADATA_RAW",
           JSON.stringify(evidence(visible))
         );
-        console.info("CADVISOR_HOST_CGROUP_ERROR_PATHS", [...collectorErrors]);
+        console.info("CADVISOR_HOST_CGROUP_METADATA_ERROR_PATHS", [
+          ...collectorErrors,
+        ]);
         // Explicit sensitivity control: visible root series are never counted as actors.
         const rootOnly = before.filter((row) => row.labels.id === "/");
         expect(coverage(rootOnly, writer, writerService)).toBe(false);
