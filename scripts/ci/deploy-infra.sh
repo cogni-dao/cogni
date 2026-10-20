@@ -1040,15 +1040,45 @@ rm -rf "$BAO_CACHE_DIR" 2>/dev/null || true
 mkdir -p "$BAO_CACHE_DIR"
 
 mint_db_reader_token() {
-  if [[ -s "$BAO_TOKEN_FILE" ]]; then cat "$BAO_TOKEN_FILE"; return 0; fi
-  local jwt="" tok="" attempt
+  if [[ -s "$BAO_TOKEN_FILE" ]]; then
+    printf '%s\n' '[openbao-reader-token] phase=cache native_rc=0 reason=reused' >&2
+    cat "$BAO_TOKEN_FILE"
+    return 0
+  fi
+  local jwt="" tok="" attempt phase rc reason error_file
+  error_file="${BAO_CACHE_DIR}/reader-mint.stderr"
   for attempt in 1 2 3; do
-    jwt="$(timeout 15 kubectl create token db-provisioner -n default 2>/dev/null)" || jwt=""
-    if [[ -n "$jwt" ]]; then
-      tok="$(timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-        bao write -field=token auth/kubernetes/login \
-        "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null)" || tok=""
-      if [[ -n "$tok" ]]; then printf '%s' "$tok" > "$BAO_TOKEN_FILE"; printf '%s' "$tok"; return 0; fi
+    phase=token_request rc=0
+    if jwt="$(timeout 15 kubectl create token db-provisioner -n default 2>"$error_file")"; then
+      if [[ -n "$jwt" ]]; then
+        phase=reader_login
+        if tok="$(timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+          bao write -field=token auth/kubernetes/login \
+          "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>"$error_file")"; then
+          if [[ -n "$tok" ]]; then
+            rm -f "$error_file"
+            printf '%s' "$tok" > "$BAO_TOKEN_FILE"
+            printf '%s' "$tok"
+            return 0
+          fi
+        else rc=$?; fi
+      fi
+    else rc=$?; fi
+    reason=permanent
+    if [[ "$rc" -eq 124 ]] || grep -qiE 'context deadline exceeded|Internal error occurred: Timeout occurred|i/o timeout|TLS handshake timeout|connection (refused|reset)|unable to connect to the server|the server is currently unable to handle the request|Code: (429|500|502|503|504)' "$error_file"; then
+      reason=server_transient
+    elif grep -qiE 'Code: 403|permission denied|Forbidden' "$error_file"; then
+      reason=permission_denied
+    elif [[ "$rc" -eq 0 ]]; then
+      reason=empty_output
+    fi
+    rm -f "$error_file"
+    # Never print command output: either stream may contain a JWT or reader token.
+    printf '[openbao-reader-token] phase=%s native_rc=%s reason=%s attempt=%s/3\n' \
+      "$phase" "$rc" "$reason" "$attempt" >&2
+    if [[ "$reason" != server_transient ]]; then
+      [[ "$rc" -ne 0 ]] || return 1
+      return "$rc"
     fi
     [[ "$attempt" -lt 3 ]] && sleep 3
   done
@@ -1063,7 +1093,7 @@ openbao_get_field() {
   cache="${BAO_CACHE_DIR}/path-${svc}.json"
   if [[ ! -s "$cache" ]]; then
     for attempt in 1 2 3; do
-      tok="$(mint_db_reader_token)" || { [[ "$attempt" -lt 3 ]] && sleep 3; continue; }
+      tok="$(mint_db_reader_token)" || break
       if timeout 30 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
         BAO_TOKEN="${tok}" bao kv get -format=json "cogni/${DEPLOY_ENVIRONMENT}/${svc}" 2>/dev/null > "${cache}.tmp" \
         && [[ -s "${cache}.tmp" ]]; then
@@ -1499,22 +1529,17 @@ $RUNTIME_COMPOSE --profile bootstrap run --rm \
 # litellm/openfga root-owned DBs are (re)created idempotently each pass; harmless.
 # Per-node OpenBao read uses the same least-privilege ${DEPLOY_ENVIRONMENT}-db-reader
 # k8s-auth role proven above. Values are never echoed; only key names appear in logs.
+# Reuse the earlier file-cached SAME-role reader; do not shadow its login/cache policy.
 DB_READER_TOKEN=""
-mint_db_reader_token() {
-  local jwt
-  jwt=$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null) || return 1
-  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-    bao write -field=token auth/kubernetes/login \
-    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null
-}
 read_node_db_secret() {
   local node="$1" key="$2"
   timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
     BAO_TOKEN="${DB_READER_TOKEN}" \
     bao kv get -field="$key" "cogni/${DEPLOY_ENVIRONMENT}/${node}" 2>/dev/null || true
 }
-DB_READER_TOKEN="$(mint_db_reader_token || true)"
-[ -n "$DB_READER_TOKEN" ] || log_fatal "db-provision: could not mint ${DEPLOY_ENVIRONMENT}-db-reader token (OpenBao sealed / role absent) — per-node DB creds are required (#1584)"
+DB_READER_TOKEN="$(mint_db_reader_token)" \
+  || log_fatal "db-provision: ${DEPLOY_ENVIRONMENT}-db-reader token unavailable; see value-free mint phase diagnostics"
+[ -n "$DB_READER_TOKEN" ] || log_fatal "db-provision: ${DEPLOY_ENVIRONMENT}-db-reader token unavailable; empty reader result"
 # The runner forwards the exact-source shared-node budget map through the same
 # SSH environment file as NODE_APP_TARGETS (bash arrays do not cross that boundary).
 # Keep the full node roster for Doltgres, secrets and routing; only Postgres is
