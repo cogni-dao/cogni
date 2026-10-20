@@ -94,7 +94,7 @@ function samples(text: string): Sample[] {
   });
 }
 
-function actorRows(rows: Sample[], actor: StartedTestContainer): Sample[] {
+function actorRows(rows: Sample[], actor: { getId(): string }): Sample[] {
   return rows.filter((row) => row.labels.id?.includes(actor.getId()));
 }
 
@@ -107,11 +107,7 @@ function writeBytes(rows: Sample[]): number | undefined {
     : undefined;
 }
 
-function coverage(
-  rows: Sample[],
-  actor: StartedTestContainer,
-  service: string
-) {
+function coverage(rows: Sample[], actor: { getId(): string }, service: string) {
   const owned = actorRows(rows, actor);
   return [
     "container_cpu_usage_seconds_total",
@@ -551,5 +547,276 @@ describe.skipIf(!process.env.CI)(
       const failed = cleanup.filter((result) => result.status === "rejected");
       expect(failed, "Owned native fixture cleanup failed").toEqual([]);
     }, 360_000);
+    it("compares the old collector with containerd-aware Alloy on actual Docker29 overlayfs", async () => {
+      // Privilege belongs only to this disposable nested daemon, never Alloy/runtime declarations.
+      const daemonImage =
+        "docker:29.1.5-dind@sha256:3a33fc81fa4d38360f490f5b900e9846f725db45bb1d9b1fe02d849bd42a5cf2";
+      class OwnedSnapshotterDaemon extends GenericContainer {
+        constructor(image: string) {
+          super(image);
+          Object.assign(this.hostConfig, { CgroupnsMode: "host" });
+        }
+      }
+      const nested = await new OwnedSnapshotterDaemon(daemonImage)
+        .withPrivilegedMode()
+        .withEnvironment({ DOCKER_TLS_CERTDIR: "" })
+        .withCopyContentToContainer([
+          {
+            content: JSON.stringify({
+              features: { "containerd-snapshotter": true },
+              "storage-driver": "overlayfs",
+            }),
+            target: "/etc/docker/daemon.json",
+          },
+        ])
+        .withWaitStrategy(Wait.forSuccessfulCommand("docker info >/dev/null"))
+        .withStartupTimeout(180_000)
+        .start();
+      const ids: string[] = [];
+      const cli = async (...args: string[]) => {
+        const result = await nested.exec(["docker", ...args]);
+        expect(result.exitCode, result.output.slice(-3000)).toBe(0);
+        return result.stdout.trim();
+      };
+      try {
+        const info = JSON.parse(
+          await cli("info", "--format", "{{json .}}")
+        ) as {
+          DockerRootDir: string;
+          Driver: string;
+          DriverStatus: string[][];
+          CgroupDriver: string;
+          CgroupVersion: string;
+          ServerVersion: string;
+          Containerd?: {
+            Address?: string;
+            Namespaces?: { Containers?: string; Plugins?: string };
+          };
+        };
+        expect(info.Driver).toBe("overlayfs");
+        expect(info.DriverStatus).toContainEqual([
+          "driver-type",
+          "io.containerd.snapshotter.v1",
+        ]);
+        expect(info.ServerVersion).toBe("29.1.5");
+        const socket = info.Containerd?.Address;
+        expect(socket).toMatch(/^\/(?:run|var\/run)\/.*containerd\.sock$/);
+        expect(info.Containerd?.Namespaces?.Containers).toBe("moby");
+        expect(info.Containerd?.Namespaces?.Plugins).toBe("plugins.moby");
+        if (!socket)
+          throw new Error("Actual Docker-managed containerd socket absent");
+        const socketCheck = await nested.exec(["test", "-S", socket]);
+        expect(socketCheck.exitCode).toBe(0);
+        console.info("CADVISOR_OVERLAYFS_NATIVE_TOPOLOGY", {
+          daemonImage,
+          DockerRootDir: info.DockerRootDir,
+          Driver: info.Driver,
+          DriverStatus: info.DriverStatus,
+          CgroupDriver: info.CgroupDriver,
+          CgroupVersion: info.CgroupVersion,
+          ServerVersion: info.ServerVersion,
+          Containerd: info.Containerd,
+        });
+        const token = randomUUID();
+        const actor = async (service: string) => {
+          const id = await cli(
+            "run",
+            "-d",
+            "--label",
+            `com.docker.compose.service=${service}`,
+            "busybox:1.37",
+            "sh",
+            "-c",
+            "sleep 540"
+          );
+          ids.push(id);
+          return { getId: () => id };
+        };
+        const writerService = `overlayfs-writer-${token}`;
+        const idleService = `overlayfs-idle-${token}`;
+        const writer = await actor(writerService);
+        const idle = await actor(idleService);
+        const component = readFileSync(
+          path.join(runtime, "configs/alloy-config.metrics.alloy"),
+          "utf8"
+        ).match(
+          /^prometheus\.exporter\.cadvisor "default" \{\n[^{}]*^\}/m
+        )?.[0];
+        if (!component) throw new Error("Actual exporter component missing");
+        const oldConfig = component + "\n";
+        const nextConfig =
+          component.replace(/\n\}/, `\n  containerd_host = "${socket}"\n}`) +
+          "\n";
+        await nested.copyContentToContainer([
+          { content: oldConfig, target: "/tmp/cadvisor-old.alloy" },
+          { content: nextConfig, target: "/tmp/cadvisor-next.alloy" },
+        ]);
+        const launch = async (
+          image: string,
+          config: string,
+          withSocket: boolean
+        ) => {
+          const args = [
+            "run",
+            "-d",
+            "--cgroupns=host",
+            "--user=0:0",
+            "--mount",
+            "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock,readonly",
+            "--mount",
+            "type=bind,source=/proc,target=/host/proc,readonly",
+            "--mount",
+            "type=bind,source=/sys,target=/host/sys,readonly",
+            "--mount",
+            "type=bind,source=/,target=/host/root,readonly",
+            "--mount",
+            `type=bind,source=${config},target=/etc/alloy/config.alloy,readonly`,
+            "-p",
+            "127.0.0.1::12345",
+          ];
+          if (withSocket)
+            args.push(
+              "--mount",
+              `type=bind,source=${socket},target=${socket},readonly`
+            );
+          args.push(
+            image,
+            "run",
+            "--server.http.listen-addr=0.0.0.0:12345",
+            "/etc/alloy/config.alloy"
+          );
+          const id = await cli(...args);
+          ids.push(id);
+          const inspected = JSON.parse(await cli("inspect", id))[0] as {
+            HostConfig: { CgroupnsMode: string };
+            Mounts: { Source: string; Destination: string; RW: boolean }[];
+            NetworkSettings: { Ports: Record<string, { HostPort: string }[]> };
+          };
+          expect(inspected.HostConfig.CgroupnsMode).toBe("host");
+          expect(
+            inspected.Mounts.some((m) => m.Source.includes("layerdb"))
+          ).toBe(false);
+          if (withSocket)
+            expect(
+              inspected.Mounts.find((m) => m.Destination === socket)?.RW
+            ).toBe(false);
+          const port =
+            inspected.NetworkSettings.Ports["12345/tcp"]?.[0]?.HostPort;
+          if (!port) throw new Error("Actual collector endpoint missing");
+          return {
+            id,
+            raw: async () => {
+              const result = await nested.exec([
+                "wget",
+                "-qO-",
+                `http://127.0.0.1:${port}/metrics`,
+              ]);
+              return result.exitCode === 0 ? samples(result.stdout) : [];
+            },
+          };
+        };
+        const old = await launch(
+          "grafana/alloy:v1.9.2",
+          "/tmp/cadvisor-old.alloy",
+          false
+        );
+        const baseline = await poll(
+          old.raw,
+          (rows) =>
+            coverage(rows, writer, writerService) &&
+            coverage(rows, idle, idleService),
+          65_000
+        );
+        const oldLogs = await nested.exec(["docker", "logs", old.id]);
+        console.info("CADVISOR_OVERLAYFS_OLD_CONTROL", {
+          actors: [
+            actorRows(baseline, writer).length,
+            actorRows(baseline, idle).length,
+          ],
+          rootPresent: baseline.some((row) => row.labels.id === "/"),
+          errors: oldLogs.output
+            .split("\n")
+            .filter((line) => /error|failed|mount-id/i.test(line))
+            .slice(-6)
+            .map((line) => line.slice(0, 600)),
+        });
+        expect(
+          baseline.some((row) => row.labels.id === "/"),
+          "Old collector never exposed actual root metrics"
+        ).toBe(true);
+        expect(actorRows(baseline, writer)).toEqual([]);
+        expect(actorRows(baseline, idle)).toEqual([]);
+        await cli("stop", old.id);
+        const next = await launch(
+          "grafana/alloy:v1.14.0",
+          "/tmp/cadvisor-next.alloy",
+          true
+        );
+        await cli(
+          "exec",
+          writer.getId(),
+          "sh",
+          "-c",
+          "dd if=/dev/zero of=/tmp/warmup bs=1M count=1 conv=fsync"
+        );
+        const visible = await poll(
+          next.raw,
+          (rows) =>
+            coverage(rows, writer, writerService) &&
+            coverage(rows, idle, idleService) &&
+            (writeBytes(actorRows(rows, writer)) ?? -1) >= 1_048_576,
+          65_000
+        );
+        expect(coverage(visible, writer, writerService)).toBe(true);
+        expect(coverage(visible, idle, idleService)).toBe(true);
+        const before = writeBytes(actorRows(visible, writer));
+        expect(before).toBeGreaterThanOrEqual(1_048_576);
+        for (const owned of [writer, idle])
+          expect(
+            actorRows(visible, owned).some(
+              (row) =>
+                row.name === "container_memory_failures_total" &&
+                row.labels.failure_type === "pgmajfault" &&
+                row.labels.scope === "container"
+            )
+          ).toBe(true);
+        await cli(
+          "exec",
+          writer.getId(),
+          "sh",
+          "-c",
+          "dd if=/dev/zero of=/tmp/proof bs=1M count=16 conv=fsync"
+        );
+        const after = await poll(
+          next.raw,
+          (rows) =>
+            (writeBytes(actorRows(rows, writer)) ?? -1) >=
+            (before ?? 0) + 16_777_216,
+          65_000
+        );
+        const written = writeBytes(actorRows(after, writer));
+        console.info("CADVISOR_OVERLAYFS_NEW_RESULT", {
+          image: "grafana/alloy:v1.14.0",
+          socket,
+          namespace: info.Containerd?.Namespaces,
+          actors: [writer, idle].map((owned) => ({
+            id: owned.getId(),
+            metrics: actorRows(after, owned).map((row) => ({
+              name: row.name,
+              value: row.value,
+              service: row.labels.container_label_com_docker_compose_service,
+              device: row.labels.device,
+            })),
+          })),
+          before,
+          after: written,
+        });
+        expect(written).toBeGreaterThanOrEqual((before ?? 0) + 16_777_216);
+      } finally {
+        for (const id of ids.reverse())
+          await nested.exec(["docker", "rm", "-f", id]).catch(() => undefined);
+        await nested.stop();
+      }
+    }, 600_000);
   }
 );
