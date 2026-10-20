@@ -158,8 +158,10 @@ services:
     # TODO(dev): a pnpm preflight could export LITELLM_IMAGE=$(infra_image_tag litellm).
     image: ${LITELLM_IMAGE:-ghcr.io/cogni-dao/cogni-template:litellm-b6e4e942cb23}
     restart: unless-stopped
+    # Readiness and Docker exec failures are not process-liveness evidence.
+    # Preserve the gateway through dependency recovery; normal Compose applies changes.
     labels:
-      - "autoheal=true"
+      - "autoheal=false"
     networks:
       - internal
       - sandbox-internal
