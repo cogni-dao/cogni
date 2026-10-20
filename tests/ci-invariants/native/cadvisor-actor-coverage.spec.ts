@@ -17,7 +17,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import Docker from "dockerode";
@@ -63,9 +63,18 @@ interface Sample {
 
 // Docker Engine supports CgroupnsMode; the installed dockerode declarations predate it.
 class HostCgroupContainer extends GenericContainer {
-  constructor(image: string) {
+  constructor(image: string, metadataPath: string) {
     super(image);
     Object.assign(this.hostConfig, { CgroupnsMode: "host" });
+    // Docker's long-mount ABI rejects absent sources, matching create_host_path:false.
+    this.hostConfig.Mounts = [
+      {
+        Type: "bind",
+        Source: metadataPath,
+        Target: metadataPath,
+        ReadOnly: true,
+      },
+    ];
   }
 }
 
@@ -274,20 +283,54 @@ describe.skipIf(!process.env.CI)(
         };
         const writer = await actor(writerService);
         const idle = await actor(idleService);
+        // Native Engine rejection and repeated filesystem readback prove the long
+        // bind cannot silently manufacture an empty source directory.
+        const missingSource = `/tmp/cogni-cadvisor-missing-${token}`;
+        expect(existsSync(missingSource)).toBe(false);
+        for (let attempt = 0; attempt < 2; attempt++) {
+          let unexpected: Docker.Container | undefined;
+          try {
+            await expect(
+              docker
+                .createContainer({
+                  Image: services["repo-init"].image,
+                  Labels: { "cogni.native-proof": token },
+                  HostConfig: {
+                    Mounts: [
+                      {
+                        Type: "bind",
+                        Source: missingSource,
+                        Target: "/owned-missing-source",
+                        ReadOnly: true,
+                      },
+                    ],
+                  },
+                })
+                .then((container) => {
+                  unexpected = container;
+                })
+            ).rejects.toThrow(/bind source path does not exist/);
+            expect(existsSync(missingSource)).toBe(false);
+          } finally {
+            if (unexpected) await unexpected.remove({ force: true });
+          }
+        }
+        console.info("CADVISOR_NATIVE_MISSING_SOURCE", {
+          attempts: 2,
+          directoryCreated: existsSync(missingSource),
+        });
         // Model only the supported topology declared by the real deployment preflight.
         expect(host.Driver).toBe("overlay2");
         expect(host.DockerRootDir).toBe("/var/lib/docker");
         const startCollector = async (hostCgroup: boolean) => {
           const collector = hostCgroup
-            ? new HostCgroupContainer(alloyService.image)
+            ? new HostCgroupContainer(alloyService.image, metadataPath)
             : new GenericContainer(alloyService.image);
           const started = await collector
             .withNetwork(network)
             .withUser(alloyService.user ?? "")
             .withBindMounts(
-              hostCgroup
-                ? mounts
-                : mounts.filter((mount) => mount.target !== metadataPath)
+              mounts.filter((mount) => mount.target !== metadataPath)
             )
             .withTmpFs({ "/var/lib/alloy": "rw" })
             .withCopyContentToContainer([
