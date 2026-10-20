@@ -40,6 +40,10 @@ env:
   OVERLAY_ENV: candidate-a
   # Public workload zone for fork-aware generated scheduler routes.
   FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
+  # Capture the repository's workload ROOT before a job selects its GitHub Environment.
+  # candidate-a's DOMAIN may be an operator apex; routing renders every lane from the root.
+  # Environment-level variables do not overwrite this workflow env context (GitHub variables reference).
+  DOMAIN: ${{ vars.DOMAIN }}
   # FLEET_CONTROL_ENV (subtask.5007): the env whose cluster reconciles + pays for akash
   # lanes. Default 'production' (cogni-dao fleet); an isolated fleet (cogni-test-org) sets
   # the repo var to 'candidate-a' so its own control plane owns akash lanes and no test

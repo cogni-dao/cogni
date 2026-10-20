@@ -7,7 +7,7 @@
  * Scope: Static comparison of operator + scheduler-worker overlay sources (fields, JSON6902 ops, strategic-merge patches, local resources); does not render kustomize or reach a cluster.
  * Invariants:
  *   - IDENTITY_ONLY_DELTA: every differing leaf matches the declared identity allowlist.
- *   - NAMED_EXCEPTIONS_ONLY: the one behavior exception is reasoned and must still apply.
+ *   - NAMED_EXCEPTIONS_ONLY: every behavior exception is reasoned, scoped, and must still apply.
  *   - NO_DEAD_ALLOWLIST: every identity pattern matches a current delta.
  * Notes: File parity is not behavior parity: candidate's 3-provider Akash pin validated a
  *   different auction than production's 12 and nothing failed. Identity = namespace/env,
@@ -120,13 +120,18 @@ function overlayLeaves(env: string, component: string): Leaves {
   return out;
 }
 
-function deltas(component: string): string[] {
-  const candidate = overlayLeaves("candidate-a", component);
-  const production = overlayLeaves("production", component);
+function leafDeltas(candidate: Leaves, production: Leaves): string[] {
   const keys = new Set([...candidate.keys(), ...production.keys()]);
   return [...keys]
     .filter((key) => candidate.get(key) !== production.get(key))
     .sort();
+}
+
+function deltas(component: string): string[] {
+  return leafDeltas(
+    overlayLeaves("candidate-a", component),
+    overlayLeaves("production", component)
+  );
 }
 
 const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
@@ -147,6 +152,35 @@ const envValue = (
 interface Rule {
   why: string;
   pattern: RegExp;
+  /** A named pilot rule must match its reviewed value, with no production declaration. */
+  values?: { candidate: string; production: undefined };
+}
+
+function accepts(
+  rule: Rule,
+  key: string,
+  candidate: Leaves,
+  production: Leaves
+): boolean {
+  return (
+    rule.pattern.test(key) &&
+    (!rule.values ||
+      (candidate.get(key) === rule.values.candidate &&
+        production.get(key) === rule.values.production))
+  );
+}
+
+function deadRules(
+  rules: Rule[],
+  found: string[],
+  candidate: Leaves,
+  production: Leaves
+): string[] {
+  return rules
+    .filter(
+      (rule) => !found.some((key) => accepts(rule, key, candidate, production))
+    )
+    .map((rule) => `${rule.why} :: ${rule.pattern.source}`);
 }
 
 const COMMON_IDENTITY: Rule[] = [
@@ -239,12 +273,77 @@ const IDENTITY: Record<string, Rule[]> = {
   ],
 };
 
+interface TestPilotContext {
+  rootRepository: string;
+  operatorNodeId: string;
+  namespace: string | undefined;
+  parentOwner: string | undefined;
+  parentRepo: string | undefined;
+}
+
+const TEST_PILOT_CONTEXT: TestPilotContext = {
+  rootRepository: "https://github.com/cogni-test-org/cogni-monorepo.git",
+  operatorNodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+  namespace: JSON.stringify("cogni-candidate-a"),
+  parentOwner: JSON.stringify("cogni-test-org"),
+  parentRepo: JSON.stringify("cogni-monorepo"),
+};
+const TEST_PILOT_VALUES = {
+  PREVIEW_FLIGHTS_ENABLED: "true",
+  PREVIEW_READY_STATE_GENERATIONS: JSON.stringify({
+    "0": "5616bc5c-5c0f-4cbf-ae01-82c376897448",
+    "1": "894d3a9d-465d-48a8-92fd-47373d8e53fe",
+  }),
+  PREVIEW_DNS_ZONE_ID: "23220356c352c5831c6af57887b11a27",
+  PREVIEW_SUBSTRATE_HOST: "cogni-candidate-a.vm.cognidao.org",
+};
+const pilotKey = (key: string): string =>
+  `patch[ConfigMap/node-app-config] add /data/${key}`;
+
+function testPreviewPilotRules(context: TestPilotContext): Rule[] {
+  if (
+    Object.entries(TEST_PILOT_CONTEXT).some(
+      ([key, value]) => context[key as keyof TestPilotContext] !== value
+    )
+  )
+    return [];
+  // This is explicitly candidate-only behavior, never identity or a production enablement.
+  // Pair resets must update the reviewed configuration AND these prepared-generation proofs.
+  return Object.entries(TEST_PILOT_VALUES).map(([key, value]) => ({
+    why: `TRUSTED THROWAWAY TEST PREVIEW PILOT: ${key}; exact prepared pair configuration`,
+    pattern: new RegExp(`^${esc(pilotKey(key))}$`),
+    values: { candidate: JSON.stringify(value), production: undefined },
+  }));
+}
+
+const operatorCandidate = overlayLeaves("candidate-a", "operator");
+const pilotContext: TestPilotContext = {
+  rootRepository: yaml.parse(
+    readFileSync(
+      path.join(
+        REPO_ROOT,
+        "infra/k8s/argocd/control-plane/candidate-a/candidate-a-control-plane-application.yaml"
+      ),
+      "utf8"
+    )
+  ).spec.source.repoURL,
+  operatorNodeId: yaml.parse(
+    readFileSync(
+      path.join(REPO_ROOT, "nodes/operator/.cogni/repo-spec.yaml"),
+      "utf8"
+    )
+  ).node_id,
+  namespace: operatorCandidate.get("kustomization.namespace"),
+  parentOwner: operatorCandidate.get(pilotKey("NODE_SUBMODULE_PARENT_OWNER")),
+  parentRepo: operatorCandidate.get(pilotKey("NODE_SUBMODULE_PARENT_REPO")),
+};
+
 /**
  * The ONLY behavior deltas candidate-a may carry. Each is a named, reasoned decision — never a
  * pattern widened to make CI pass.
  */
 const BEHAVIOR_EXCEPTIONS: Record<string, Rule[]> = {
-  operator: [],
+  operator: testPreviewPilotRules(pilotContext),
   "scheduler-worker": [
     {
       why:
@@ -262,6 +361,8 @@ const BEHAVIOR_EXCEPTIONS: Record<string, Rule[]> = {
 describe("candidate-a overlays differ from production only in identity (task.5270)", () => {
   for (const component of ["operator", "scheduler-worker"] as const) {
     describe(component, () => {
+      const candidate = overlayLeaves("candidate-a", component);
+      const production = overlayLeaves("production", component);
       const found = deltas(component);
       const rules = [...IDENTITY[component], ...BEHAVIOR_EXCEPTIONS[component]];
 
@@ -272,7 +373,8 @@ describe("candidate-a overlays differ from production only in identity (task.527
 
       it("has no BEHAVIOR delta outside the declared identity allowlist", () => {
         const behavior = found.filter(
-          (key) => !rules.some((rule) => rule.pattern.test(key))
+          (key) =>
+            !rules.some((rule) => accepts(rule, key, candidate, production))
         );
         expect(
           behavior,
@@ -281,13 +383,77 @@ describe("candidate-a overlays differ from production only in identity (task.527
       });
 
       it("declares no dead allowlist entry or stale exception", () => {
-        const dead = rules
-          .filter((rule) => !found.some((key) => rule.pattern.test(key)))
-          .map((rule) => `${rule.why} :: ${rule.pattern.source}`);
+        const dead = deadRules(rules, found, candidate, production);
         expect(dead).toEqual([]);
       });
     });
   }
+
+  it("limits the named TEST pilot to its exact fleet, node, paths, values and production absence", () => {
+    const candidate = new Map(operatorCandidate);
+    const production: Leaves = new Map();
+    for (const [key, value] of Object.entries(TEST_PILOT_VALUES)) {
+      candidate.set(pilotKey(key), JSON.stringify(value));
+    }
+    const rules = testPreviewPilotRules(TEST_PILOT_CONTEXT);
+    expect(rules).toHaveLength(4);
+    expect(
+      deadRules(rules, leafDeltas(candidate, production), candidate, production)
+    ).toEqual([]);
+    for (const key of Object.keys(TEST_PILOT_CONTEXT)) {
+      expect(
+        testPreviewPilotRules({ ...TEST_PILOT_CONTEXT, [key]: "foreign" })
+      ).toEqual([]);
+    }
+    for (const [key, value] of Object.entries(TEST_PILOT_VALUES)) {
+      const leaf = pilotKey(key);
+      const rule = rules.find((item) => item.pattern.test(leaf));
+      expect(rule).toBeDefined();
+      if (!rule) throw new Error("pilot rule missing");
+      const wrong = new Map(candidate).set(
+        leaf,
+        JSON.stringify(key === "PREVIEW_FLIGHTS_ENABLED" ? "false" : "wrong")
+      );
+      expect(accepts(rule, leaf, wrong, production)).toBe(false);
+      const partialProduction = new Map(production).set(
+        leaf,
+        JSON.stringify(value)
+      );
+      expect(
+        deadRules(
+          rules,
+          leafDeltas(candidate, partialProduction),
+          candidate,
+          partialProduction
+        )
+      ).toHaveLength(1);
+      const missing = new Map(candidate);
+      missing.delete(leaf);
+      expect(
+        deadRules(rules, leafDeltas(missing, production), missing, production)
+      ).toHaveLength(1);
+      for (const other of [
+        leaf.replace(" add ", " replace "),
+        leaf.replace("node-app-config", "other"),
+        `${leaf}_UNKNOWN`,
+      ]) {
+        expect(
+          rules.some((item) => accepts(item, other, candidate, production))
+        ).toBe(false);
+      }
+    }
+    const copiedProduction = new Map(production);
+    for (const [key, value] of Object.entries(TEST_PILOT_VALUES))
+      copiedProduction.set(pilotKey(key), JSON.stringify(value));
+    expect(
+      deadRules(
+        rules,
+        leafDeltas(candidate, copiedProduction),
+        candidate,
+        copiedProduction
+      )
+    ).toHaveLength(4);
+  });
 
   it("pins the Akash provider allowlist byte-identical across candidate-a and production", () => {
     const key = envValue(

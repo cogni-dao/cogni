@@ -52,6 +52,7 @@ interface WorkflowStep {
 }
 
 interface WorkflowJob {
+  env?: Record<string, unknown>;
   if?: string;
   needs?: string[];
   outputs?: Record<string, unknown>;
@@ -60,6 +61,7 @@ interface WorkflowJob {
 }
 
 const parsed = yaml.parse(WORKFLOW) as {
+  env?: Record<string, unknown>;
   concurrency?: { group?: unknown; "cancel-in-progress"?: boolean };
   on?: {
     workflow_dispatch?: {
@@ -78,6 +80,20 @@ function namedStep(jobName: string, stepName: string): WorkflowStep {
 }
 
 describe("candidate-a manifest source", () => {
+  it("keeps scheduler routing on the repository workload root across environment selection", () => {
+    expect(parsed.env?.DOMAIN).toBe("${{ vars.DOMAIN }}");
+    expect(parsed.env?.FORK_DOMAIN_ROOT).toBe(
+      "${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}"
+    );
+    const routing = parsed.jobs["reconcile-scheduler-worker-routing"];
+    expect(routing.env?.DOMAIN).toBeUndefined();
+    // Reading vars.DOMAIN in this environment-bound job would select its operator apex
+    // instead of the repository root, prefixing preview/test a second time.
+    for (const step of routing.steps) {
+      expect(step.env?.DOMAIN).toBeUndefined();
+      expect(step.run ?? "").not.toMatch(/(?:export\s+)?DOMAIN=/);
+    }
+  });
   it("queues duplicate same-node flights without cancellation", () => {
     expect(parsed.concurrency?.group).toBe(
       "candidate-flight-${{ inputs.pr_number || inputs.node_slug }}"
