@@ -30,6 +30,12 @@ export const GET = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "work.items.sessions.coordination",
+    getRequestDependencies: async () => {
+      const { getRequestLoggingDependencies } = await import(
+        "@/bootstrap/container"
+      );
+      return getRequestLoggingDependencies();
+    },
     auth: { mode: "required", getSessionUser },
   },
   async (_ctx, request, _sessionUser, context) => {

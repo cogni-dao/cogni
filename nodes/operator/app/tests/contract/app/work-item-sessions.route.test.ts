@@ -5,7 +5,7 @@
  * Module: `@tests/contract/app/work-item-sessions.route`
  * Purpose: Route-level contract tests for operator work-item session endpoints.
  * Scope: Verifies dynamic params, request validation, facade delegation, and
- *   response contract parsing with mocked auth/container/facade.
+ *   real bearer auth, wrapper and PG-backed facades, with provider leaves injected.
  * Invariants: AUTH_REQUIRED, CONTRACTS_ARE_TRUTH, OPERATOR_COORDINATION_LOCAL.
  * Side-effects: none
  * Links: src/app/api/v1/work/items/[id]/claims/route.ts,
@@ -13,43 +13,51 @@
  * @internal
  */
 
+import { createHmac } from "node:crypto";
 import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import * as session from "@/app/_lib/auth/session";
+import { issueAgentApiKey } from "@/app/_lib/auth/request-identity";
 import * as claimsHandler from "@/app/api/v1/work/items/[id]/claims/route";
 import * as coordinationHandler from "@/app/api/v1/work/items/[id]/coordination/route";
+import * as heartbeatHandler from "@/app/api/v1/work/items/[id]/heartbeat/route";
 
 const mocks = vi.hoisted(() => ({
   claimWorkItemSession: vi.fn(),
-  getWorkItemCoordination: vi.fn(),
+  heartbeat: vi.fn(),
+  getCurrent: vi.fn(),
+  getContainer: vi.fn(),
+  getRequestLoggingDependencies: vi.fn(),
+  getWorkItem: vi.fn(),
+  headers: vi.fn(),
+  getServerSessionUser: vi.fn(),
 }));
 
-vi.mock("@/bootstrap/container", () => {
-  const log = {
-    child: vi.fn(() => log),
-    info: vi.fn(),
-    error: vi.fn(),
-    warn: vi.fn(),
-    debug: vi.fn(),
-  };
-  return {
-    getContainer: vi.fn(() => ({
-      log,
-      clock: { now: vi.fn(() => new Date("2026-05-02T12:00:00Z")) },
-      config: { unhandledErrorPolicy: "rethrow" },
-    })),
-  };
-});
-
-vi.mock("@/app/_lib/auth/session", () => ({
-  getSessionUser: vi.fn().mockResolvedValue(TEST_SESSION_USER_1),
+vi.mock("@/shared/env/server", () => ({
+  serverEnv: () => ({ AUTH_SECRET: "coordination-test-secret" }),
 }));
-
-vi.mock("@/app/_facades/work/coordination.server", () => ({
+vi.mock("next/headers", () => ({ headers: () => mocks.headers() }));
+vi.mock("@/lib/auth/server", () => ({
+  getServerSessionUser: () => mocks.getServerSessionUser(),
+}));
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: mocks.getContainer,
+  getRequestLoggingDependencies: mocks.getRequestLoggingDependencies,
+  getWorkItemSessionPort: () => ({
+    heartbeat: mocks.heartbeat,
+    getCurrent: mocks.getCurrent,
+  }),
+}));
+vi.mock("@/app/_facades/work/items.server", () => ({
+  getWorkItem: mocks.getWorkItem,
+  patchWorkItem: vi.fn(),
+}));
+vi.mock("@/app/_facades/work/coordination.server", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/app/_facades/work/coordination.server")
+  >()),
   claimWorkItemSession: mocks.claimWorkItemSession,
-  getWorkItemCoordination: mocks.getWorkItemCoordination,
 }));
 
 const SESSION_DTO = {
@@ -70,7 +78,33 @@ const SESSION_DTO = {
 describe("operator work-item session routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(session.getSessionUser).mockResolvedValue(TEST_SESSION_USER_1);
+    const log = {
+      child: vi.fn(() => log),
+      info: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+    };
+    const deps = {
+      log,
+      clock: { now: () => new Date() },
+      config: { unhandledErrorPolicy: "rethrow" },
+    };
+    mocks.getContainer.mockReturnValue(deps);
+    mocks.getRequestLoggingDependencies.mockReturnValue(deps);
+    mocks.headers.mockResolvedValue(new Headers());
+    mocks.getServerSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
+    mocks.getWorkItem.mockRejectedValue(new Error("Dolt must not be called"));
+    const stored = {
+      ...SESSION_DTO,
+      id: SESSION_DTO.coordinationId,
+      claimedAt: new Date(SESSION_DTO.claimedAt),
+      deadlineAt: new Date(Date.now() + 60_000),
+      lastHeartbeatAt: null,
+      closedAt: null,
+    };
+    mocks.heartbeat.mockResolvedValue(stored);
+    mocks.getCurrent.mockResolvedValue(stored);
   });
 
   it("validates claim request bodies before calling the facade", async () => {
@@ -132,13 +166,9 @@ describe("operator work-item session routes", () => {
   });
 
   it("reads coordination state through the route contract", async () => {
-    mocks.getWorkItemCoordination.mockResolvedValue({
-      workItemId: "task.5007",
-      session: SESSION_DTO,
-      nextAction: "Continue /implement for task.5007.",
-      statusUrl: "/api/v1/work/items/task.5007/coordination",
+    mocks.getContainer.mockImplementation(() => {
+      throw new Error("full container must not be constructed");
     });
-
     await testApiHandler({
       appHandler: coordinationHandler,
       params: { id: "task.5007" },
@@ -153,5 +183,154 @@ describe("operator work-item session routes", () => {
         });
       },
     });
+  });
+  function requireLightweightPath() {
+    mocks.getContainer.mockImplementation(() => {
+      throw new Error("full container must not be constructed");
+    });
+  }
+
+  it("uses the real bearer resolver, wrapper and heartbeat facade without full-container or Dolt access", async () => {
+    requireLightweightPath();
+    const token = issueAgentApiKey({
+      userId: TEST_SESSION_USER_1.id,
+      displayName: null,
+    });
+    mocks.headers.mockResolvedValue(
+      new Headers({ authorization: `Bearer ${token}` })
+    );
+    await testApiHandler({
+      appHandler: heartbeatHandler,
+      params: { id: "task.5007" },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ ttlSeconds: 120 }),
+        });
+        expect(res.status).toBe(200);
+        expect((await res.json()).session.coordinationId).toBe(
+          SESSION_DTO.coordinationId
+        );
+      },
+    });
+    expect(mocks.heartbeat).toHaveBeenCalledWith(
+      expect.objectContaining({ claimedByUserId: TEST_SESSION_USER_1.id })
+    );
+    expect(mocks.getServerSessionUser).not.toHaveBeenCalled();
+    expect(mocks.getContainer).not.toHaveBeenCalled();
+    expect(mocks.getWorkItem).not.toHaveBeenCalled();
+  });
+
+  it("preserves v1 validation before PostgreSQL mutation on the lightweight route", async () => {
+    requireLightweightPath();
+    await testApiHandler({
+      appHandler: heartbeatHandler,
+      params: { id: "task.5007" },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ttlSeconds: 10 }),
+        });
+        expect(res.status).toBe(400);
+      },
+    });
+    expect(mocks.heartbeat).not.toHaveBeenCalled();
+    expect(mocks.getContainer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "missing",
+    "expired",
+    "invalid",
+  ])("retains real %s authentication rejection without constructing providers", async (kind) => {
+    requireLightweightPath();
+    const payload = Buffer.from(
+      JSON.stringify({ sub: TEST_SESSION_USER_1.id, iat: 1, exp: 2 })
+    ).toString("base64url");
+    const signature = createHmac("sha256", "coordination-test-secret")
+      .update(payload)
+      .digest("base64url");
+    const token =
+      kind === "expired"
+        ? `cogni_ag_sk_v1_${payload}.${signature}`
+        : "invalid-token";
+    mocks.headers.mockResolvedValue(
+      new Headers(
+        kind === "missing" ? {} : { authorization: `Bearer ${token}` }
+      )
+    );
+    mocks.getServerSessionUser.mockResolvedValue(null);
+    await testApiHandler({
+      appHandler: heartbeatHandler,
+      params: { id: "task.5007" },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        expect(res.status).toBe(401);
+        expect(res.headers.get("www-authenticate")).toContain("Bearer");
+      },
+    });
+    expect(mocks.heartbeat).not.toHaveBeenCalled();
+    expect(mocks.getContainer).not.toHaveBeenCalled();
+    if (kind !== "missing")
+      expect(mocks.getServerSessionUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    404, 403,
+  ])("preserves heartbeat error status %s using only PostgreSQL", async (status) => {
+    requireLightweightPath();
+    mocks.heartbeat.mockResolvedValue(null);
+    mocks.getCurrent.mockResolvedValue(
+      status === 404 ? null : { claimedByUserId: "another-user" }
+    );
+    await testApiHandler({
+      appHandler: heartbeatHandler,
+      params: { id: "task.5007" },
+      async test({ fetch }) {
+        expect(
+          (
+            await fetch({
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: "{}",
+            })
+          ).status
+        ).toBe(status);
+      },
+    });
+    expect(mocks.getContainer).not.toHaveBeenCalled();
+    expect(mocks.getWorkItem).not.toHaveBeenCalled();
+  });
+  it("preserves production error policy for PostgreSQL failure without constructing providers", async () => {
+    requireLightweightPath();
+    const deps = mocks.getRequestLoggingDependencies();
+    mocks.getRequestLoggingDependencies.mockReturnValue({
+      ...deps,
+      config: { unhandledErrorPolicy: "respond_500" },
+    });
+    mocks.heartbeat.mockRejectedValue(new Error("PostgreSQL unavailable"));
+    await testApiHandler({
+      appHandler: heartbeatHandler,
+      params: { id: "task.5007" },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        expect(res.status).toBe(500);
+      },
+    });
+    expect(mocks.getContainer).not.toHaveBeenCalled();
+    expect(mocks.getWorkItem).not.toHaveBeenCalled();
   });
 });
