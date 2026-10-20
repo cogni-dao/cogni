@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-16
+- **Last reviewed:** 2026-10-19
 
 ## Purpose
 
@@ -115,7 +115,7 @@ docker compose --project-name cogni-runtime logs -f app
 **Doltgres (knowledge plane):**
 
 - `doltgres`: Postgres-wire-compatible Dolt server, host port 5435→5432, volume `doltgres_data`. Public-NIC traffic on 5435 is dropped by `DOCKER-USER` chain (see `infra/provision/cherry/harden-docker-public-ports.sh`); k3s pods on `10.42.0.0/16` reach it via the EndpointSlice node IP. Image pinned to `dolthub/doltgresql:0.57.3` (bug.5076 — `:latest` rolled an auth-file format change; 0.56.3 additionally fresh-inits broken with no connectable default DB, fixed in 0.57.3, verified 2026-08-04). Entrypoint is wrapped by `doltgres-init/install-creds.sh` — when `DOLT_CREDS_JWK` + `DOLT_CREDS_KEYID` are set, installs the keypair at `/root/.dolt/creds/<keyid>.jwk` and merges `user.creds` into `config_global.json` before exec'ing the upstream entrypoint; no-op when unset.
-- `doltgres-provision` (profile: bootstrap): creates roles + per-node `knowledge_<node>` databases via `doltgres-init/provision.sh`. Schema owned by drizzle-kit (k8s PreSync Job), not this script
+- `doltgres-provision` (profile: bootstrap): creates roles + per-node `knowledge_<node>` databases via `doltgres-init/provision.sh`; never commits application working sets. Schema and its first commit belong to drizzle-kit (k8s PreSync Job), not this script
 - Doltgres 0.56 RBAC is non-functional — runtime `DOLTGRES_URL_*` in k8s secrets connects as `postgres` superuser. Writer role is provisioned but vestigial until upstream GRANT works
 - Mirror env vars (operator only): `DOLT_CREDS_JWK`, `DOLT_CREDS_KEYID` (push auth for repo-spec `knowledge.remote`), and explicit env-scoped `DOLTHUB_OWNER`. See [`docs/runbooks/dolthub-remote-bootstrap.md`](../../../docs/runbooks/dolthub-remote-bootstrap.md).
 - See [knowledge data plane spec](../../../docs/spec/knowledge-data-plane.md)
@@ -132,6 +132,7 @@ docker compose --project-name cogni-runtime logs -f app
 **OpenFGA:**
 
 - `openfga`: shared authorization runtime on HTTP port 8080, backed by the shared Postgres `openfga` database. Image pinned to `openfga/openfga:v1.17.1@sha256:ff96f68d2f03a029e051027415c106295c782084daeef0934479f04a3fdc2d57`.
+- OpenFGA datastore readiness remains observable but does not trigger autoheal restarts. `restart: unless-stopped` still handles process exits; PostgreSQL unavailability must not create authorization restart loops.
 - `openfga-migrate`: one-shot upstream schema migration; runs before the server starts.
 - Operator pods reach it through `OPENFGA_API_URL=http://operator-openfga-external:8080`. `OPENFGA_STORE_ID` is runtime config from store bootstrap; `OPENFGA_API_TOKEN` is pod-consumed secret material and belongs in OpenBao/ESO, not checked-in Secret YAML.
 - Host port 8080 is published for k3s pod access; public-NIC traffic is dropped by `infra/provision/cherry/harden-docker-public-ports.sh`. Logs are collected by Alloy, and Prometheus metrics are scraped from `openfga:2112` in preview/production metrics config.

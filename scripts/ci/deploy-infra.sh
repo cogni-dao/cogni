@@ -372,67 +372,11 @@ RECOVER_REMOTE
   log_info "Candidate full reconcile continuing after installed-runtime recovery preflight"
 fi
 
-# Validate required secrets
-REQUIRED_SECRETS=(
-    "DOMAIN"
-    "DATABASE_URL"
-    "DATABASE_SERVICE_URL"
-    "LITELLM_MASTER_KEY"
-    "OPENROUTER_API_KEY"
-    "AUTH_SECRET"
-    "VM_HOST"
-    "POSTGRES_ROOT_USER"
-    "POSTGRES_ROOT_PASSWORD"
-    "APP_DB_USER"
-    "APP_DB_PASSWORD"
-    "APP_DB_SERVICE_USER"
-    "APP_DB_SERVICE_PASSWORD"
-    "APP_DB_NAME"
-    "EVM_RPC_URL"
-    "POLYGON_RPC_URL"
-    "TEMPORAL_DB_USER"
-    "INTERNAL_OPS_TOKEN"
-    "POSTHOG_API_KEY"
-    "POSTHOG_HOST"
-)
-
-REQUIRED_ENV_VARS=(
-    "APP_ENV"
-    "COGNI_REPO_URL"
-    "COGNI_REPO_REF"
-)
-
-MISSING_SECRETS=()
-for secret in "${REQUIRED_SECRETS[@]}"; do
-    if [[ -z "${!secret:-}" ]]; then
-        MISSING_SECRETS+=("$secret")
-    fi
+# Runtime inputs are validated on the VM after the existing custody reader.
+# The runner needs only transport and source/config inputs at this boundary.
+for key in DOMAIN VM_HOST APP_ENV COGNI_REPO_URL COGNI_REPO_REF; do
+    [[ -n "${!key:-}" ]] || log_fatal "Missing required deploy input: $key"
 done
-
-MISSING_ENV_VARS=()
-for env_var in "${REQUIRED_ENV_VARS[@]}"; do
-    if [[ -z "${!env_var:-}" ]]; then
-        MISSING_ENV_VARS+=("$env_var")
-    fi
-done
-
-if [[ ${#MISSING_SECRETS[@]} -gt 0 ]]; then
-    log_error "Missing required secret environment variables:"
-    for secret in "${MISSING_SECRETS[@]}"; do
-        log_error "  - $secret"
-    done
-    exit 1
-fi
-
-if [[ ${#MISSING_ENV_VARS[@]} -gt 0 ]]; then
-    log_error "Missing required environment variables:"
-    for env_var in "${MISSING_ENV_VARS[@]}"; do
-        log_error "  - $env_var"
-    done
-    exit 1
-fi
-
-log_info "All required secrets provided"
 
 # Check optional secrets (warn if missing)
 OPTIONAL_SECRETS=(
@@ -753,6 +697,26 @@ fi
 
 echo -e "\033[0;32m[INFO]\033[0m Docker prerequisites verified"
 
+# Stop the owned watchdog BEFORE datastore/custody preflight. Its old policy can
+# repeatedly restart a dependency while that dependency is recovering. Full
+# Compose convergence below alone resumes it with the reviewed desired policy;
+# a failed preflight intentionally leaves the unsafe watchdog stopped.
+stop_runtime_watchdog() {
+  local container metadata
+  container="$(docker ps --filter label=com.docker.compose.project=cogni-runtime \
+    --filter label=com.docker.compose.service=autoheal --format '{{.ID}}')"
+  [[ -n "$container" ]] || return 0 # Fresh bootstrap has no owned watchdog.
+  [[ "$container" =~ ^[0-9a-f]+$ ]] || { echo 'watchdog_container_identity_ambiguous' >&2; return 1; }
+  metadata="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$container")"
+  [[ "$metadata" == 'cogni-runtime|autoheal|/opt/cogni-template-runtime' ]] \
+    || { echo 'watchdog_container_identity_mismatch' >&2; return 1; }
+  timeout 30 docker stop --time 15 "$container" >/dev/null
+  echo '[deploy-infra] Owned runtime watchdog stopped before dependency preflight'
+}
+if [[ "${K8S_SECRETS_ONLY:-false}" != "true" ]]; then
+  stop_runtime_watchdog
+fi
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Firewall: close Docker-published internal ports to public internet
 # (idempotent; safe to re-run on every deploy). See bug.5167.
@@ -769,6 +733,71 @@ fi
 EDGE_COMPOSE="docker compose --project-name cogni-edge -f /opt/cogni-template-edge/docker-compose.yml"
 RUNTIME_COMPOSE="docker compose --project-name cogni-runtime --env-file /opt/cogni-template-runtime/.env -f /opt/cogni-template-runtime/docker-compose.yml"
 RUNTIME_COMPOSE_FILE="/opt/cogni-template-runtime/docker-compose.yml"
+
+# Resolve only native Docker-owned collector inputs. Core-only deployment and
+# DB provisioning never depend on this observer topology or its override.
+verify_cadvisor_topology() {
+  local native root driver address containers plugins
+  native="$(docker info --format '{{.DockerRootDir}}|{{.Driver}}|{{.Containerd.Address}}|{{.Containerd.Namespaces.Containers}}|{{.Containerd.Namespaces.Plugins}}')" || return 1
+  IFS='|' read -r root driver address containers plugins <<NATIVE_DOCKER
+$native
+NATIVE_DOCKER
+  printf '[deploy-infra] cAdvisor native DockerRootDir|Driver|Containerd.Address|Namespaces=%s\n' "$native"
+  [ "$containers|$plugins" = 'moby|plugins.moby' ] \
+    || { echo 'cadvisor_native_namespace_unsupported' >&2; return 1; }
+  case "$root|$driver" in
+    '/var/lib/docker|overlay2')
+      CADVISOR_BIND_SOURCE=/var/lib/docker/image/overlay2/layerdb/mounts
+      CADVISOR_BIND_TARGET="$CADVISOR_BIND_SOURCE"
+      [ -d "$CADVISOR_BIND_SOURCE" ] \
+        || { echo 'cadvisor_metadata_path_missing' >&2; return 1; }
+      ;;
+    '/var/lib/docker|overlayfs')
+      case "$address" in
+        /run/containerd/containerd.sock|/var/run/docker/containerd/containerd.sock) ;;
+        *) echo 'cadvisor_native_socket_unsupported' >&2; return 1 ;;
+      esac
+      [ -S "$address" ] \
+        || { echo 'cadvisor_native_socket_missing' >&2; return 1; }
+      CADVISOR_BIND_SOURCE="$address"
+      CADVISOR_BIND_TARGET=/run/cogni-docker-containerd.sock
+      ;;
+    *) echo 'cadvisor_topology_unsupported' >&2; return 1 ;;
+  esac
+  export CADVISOR_BIND_SOURCE CADVISOR_BIND_TARGET
+  printf '[deploy-infra] cAdvisor native binding source=%s target=%s\n' "$CADVISOR_BIND_SOURCE" "$CADVISOR_BIND_TARGET"
+}
+install_cadvisor_binding() {
+  verify_cadvisor_topology || return 1
+  local next
+  next="$(mktemp "${CADVISOR_OVERRIDE_FILE}.next.XXXXXX")" || return 1
+  if ! cat > "$next" <<CADVISOR_COMPOSE
+services:
+  alloy:
+    volumes:
+      - type: bind
+        source: ${CADVISOR_BIND_SOURCE}
+        target: ${CADVISOR_BIND_TARGET}
+        read_only: true
+        bind:
+          create_host_path: false
+CADVISOR_COMPOSE
+  then
+    rm -f "$next"
+    return 1
+  fi
+  chmod 644 "$next"
+  mv -f "$next" "$CADVISOR_OVERRIDE_FILE"
+}
+CADVISOR_OVERRIDE_FILE=/opt/cogni-template-runtime/docker-compose.observability.yml
+RUNTIME_OBSERVABILITY_ARGS=""
+if [[ "${K8S_SECRETS_ONLY:-false}" != "true" ]]; then
+  # Stable config path avoids config_files label churn on subsequent full deploys.
+  # A refused native identity leaves the prior override and base Compose intact.
+  install_cadvisor_binding
+  RUNTIME_OBSERVABILITY_ARGS="-f $CADVISOR_OVERRIDE_FILE"
+  RUNTIME_COMPOSE="$RUNTIME_COMPOSE $RUNTIME_OBSERVABILITY_ARGS"
+fi
 # doltgres presence must be read from the STATIC compose file, not `compose config
 # --services` (which fully validates env interpolation → flakes empty on any unset var
 # → doltgres false-reads "absent" → knowledge plane silently skipped). Fail LOUD if the
@@ -939,6 +968,7 @@ LITELLM_IMAGE=${LITELLM_IMAGE:?LITELLM_IMAGE required (resolved on the runner fr
 # Render to a root-only sibling, then atomically rename only after every required
 # and optional field has been written. Recovery never trusts a partial file.
 INSTALLED_RUNTIME_ENV=/opt/cogni-template-runtime/.env
+umask 077
 RUNTIME_ENV_NEXT="${INSTALLED_RUNTIME_ENV}.next.$$"
 rm -f "$RUNTIME_ENV_NEXT"
 RUNTIME_ENV="$RUNTIME_ENV_NEXT"
@@ -949,6 +979,46 @@ previous_runtime_env_value() {
     index($0, key "=") == 1 { value = substr($0, length(key) + 2) }
     END { print value }
   ' "$INSTALLED_RUNTIME_ENV"
+}
+
+postgres_bootstrap_identity() {
+  local container="$1" host="$2" user="$3"
+  timeout 20 docker exec -i "$container" sh -c '
+    IFS= read -r PGPASSWORD; export PGPASSWORD PGCONNECT_TIMEOUT=5
+    exec psql -XwAt -h "$1" -U "$2" -d postgres -v ON_ERROR_STOP=1 -c \
+      "SELECT system_identifier::text || '\''|'\'' || current_user || '\''|'\'' || rolsuper::text FROM pg_control_system(), pg_roles WHERE rolname=current_user"
+  ' sh "$host" "$user"
+}
+
+preserve_postgres_bootstrap_identity() {
+  local container metadata host user password data_identity tcp_identity rejected
+  container="$(docker ps --filter label=com.docker.compose.project=cogni-runtime \
+    --filter label=com.docker.compose.service=postgres --format '{{.ID}}')"
+  [[ "$container" =~ ^[0-9a-f]+$ ]] || log_fatal "bootstrap_root_container_identity_unavailable"
+  metadata="$(docker inspect --format '{{.State.Running}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$container")"
+  [[ "$metadata" == 'true|cogni-runtime|postgres|postgres_data' ]] \
+    || log_fatal "bootstrap_root_container_identity_mismatch"
+  host="$(docker inspect --format '{{with index .NetworkSettings.Networks "cogni-runtime_internal"}}{{.IPAddress}}{{end}}' "$container")"
+  [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || log_fatal "bootstrap_root_tcp_target_unavailable"
+  user="$(previous_runtime_env_value POSTGRES_ROOT_USER)"
+  password="$(previous_runtime_env_value POSTGRES_ROOT_PASSWORD)"
+  [[ -n "$user" && -n "$password" ]] || log_fatal "bootstrap_root_preservation_source_missing"
+  [[ -z "${POSTGRES_ROOT_USER:-}" || "$POSTGRES_ROOT_USER" == "$user" ]] \
+    || log_fatal "bootstrap_root_explicit_user_mismatch"
+  [[ -z "${POSTGRES_ROOT_PASSWORD:-}" || "$POSTGRES_ROOT_PASSWORD" == "$password" ]] \
+    || log_fatal "bootstrap_root_explicit_password_mismatch"
+  data_identity="$(timeout 20 docker exec --user postgres "$container" sh -c \
+    'LC_ALL=C pg_controldata "${PGDATA:-/var/lib/postgresql/data}"' | awk -F: '/^Database system identifier:/ {gsub(/ /,"",$2); print $2}')"
+  [[ "$data_identity" =~ ^[0-9]+$ ]] || log_fatal "bootstrap_root_data_identity_unavailable"
+  if rejected="$(printf '%s\n' 'cogni-deliberately-invalid-bootstrap-proof' | postgres_bootstrap_identity "$container" "$host" "$user" 2>&1)"; then
+    log_fatal "bootstrap_root_tcp_did_not_require_password"
+  fi
+  [[ "$rejected" == *'password authentication failed'* ]] || log_fatal "bootstrap_root_tcp_auth_unproven"
+  tcp_identity="$(printf '%s\n' "$password" | postgres_bootstrap_identity "$container" "$host" "$user" 2>/dev/null)" \
+    || log_fatal "bootstrap_root_tcp_auth_failed"
+  [[ "$tcp_identity" == "${data_identity}|${user}|true" ]] || log_fatal "bootstrap_root_native_identity_mismatch"
+  POSTGRES_ROOT_USER="$user" POSTGRES_ROOT_PASSWORD="$password"
+  log_info "Preserved existing shared PostgreSQL bootstrap identity after native TCP authentication"
 }
 
 PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_ID="$(previous_runtime_env_value OPENFGA_AUTHORIZATION_MODEL_ID)"
@@ -970,15 +1040,45 @@ rm -rf "$BAO_CACHE_DIR" 2>/dev/null || true
 mkdir -p "$BAO_CACHE_DIR"
 
 mint_db_reader_token() {
-  if [[ -s "$BAO_TOKEN_FILE" ]]; then cat "$BAO_TOKEN_FILE"; return 0; fi
-  local jwt="" tok="" attempt
+  if [[ -s "$BAO_TOKEN_FILE" ]]; then
+    printf '%s\n' '[openbao-reader-token] phase=cache native_rc=0 reason=reused' >&2
+    cat "$BAO_TOKEN_FILE"
+    return 0
+  fi
+  local jwt="" tok="" attempt phase rc reason error_file
+  error_file="${BAO_CACHE_DIR}/reader-mint.stderr"
   for attempt in 1 2 3; do
-    jwt="$(timeout 15 kubectl create token db-provisioner -n default 2>/dev/null)" || jwt=""
-    if [[ -n "$jwt" ]]; then
-      tok="$(timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-        bao write -field=token auth/kubernetes/login \
-        "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null)" || tok=""
-      if [[ -n "$tok" ]]; then printf '%s' "$tok" > "$BAO_TOKEN_FILE"; printf '%s' "$tok"; return 0; fi
+    phase=token_request rc=0
+    if jwt="$(timeout 15 kubectl create token db-provisioner -n default 2>"$error_file")"; then
+      if [[ -n "$jwt" ]]; then
+        phase=reader_login
+        if tok="$(timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+          bao write -field=token auth/kubernetes/login \
+          "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>"$error_file")"; then
+          if [[ -n "$tok" ]]; then
+            rm -f "$error_file"
+            printf '%s' "$tok" > "$BAO_TOKEN_FILE"
+            printf '%s' "$tok"
+            return 0
+          fi
+        else rc=$?; fi
+      fi
+    else rc=$?; fi
+    reason=permanent
+    if [[ "$rc" -eq 124 ]] || grep -qiE 'context deadline exceeded|Internal error occurred: Timeout occurred|i/o timeout|TLS handshake timeout|connection (refused|reset)|unable to connect to the server|the server is currently unable to handle the request|Code: (429|500|502|503|504)' "$error_file"; then
+      reason=server_transient
+    elif grep -qiE 'Code: 403|permission denied|Forbidden' "$error_file"; then
+      reason=permission_denied
+    elif [[ "$rc" -eq 0 ]]; then
+      reason=empty_output
+    fi
+    rm -f "$error_file"
+    # Never print command output: either stream may contain a JWT or reader token.
+    printf '[openbao-reader-token] phase=%s native_rc=%s reason=%s attempt=%s/3\n' \
+      "$phase" "$rc" "$reason" "$attempt" >&2
+    if [[ "$reason" != server_transient ]]; then
+      [[ "$rc" -ne 0 ]] || return 1
+      return "$rc"
     fi
     [[ "$attempt" -lt 3 ]] && sleep 3
   done
@@ -993,7 +1093,7 @@ openbao_get_field() {
   cache="${BAO_CACHE_DIR}/path-${svc}.json"
   if [[ ! -s "$cache" ]]; then
     for attempt in 1 2 3; do
-      tok="$(mint_db_reader_token)" || { [[ "$attempt" -lt 3 ]] && sleep 3; continue; }
+      tok="$(mint_db_reader_token)" || break
       if timeout 30 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
         BAO_TOKEN="${tok}" bao kv get -format=json "cogni/${DEPLOY_ENVIRONMENT}/${svc}" 2>/dev/null > "${cache}.tmp" \
         && [[ -s "${cache}.tmp" ]]; then
@@ -1009,12 +1109,9 @@ openbao_get_field() {
 }
 
 OPENBAO_RUNTIME_SSOT=false
-operator_eso_target_exists() {
-  command -v kubectl >/dev/null 2>&1 || return 1
-  kubectl -n "cogni-${DEPLOY_ENVIRONMENT}" get secret operator-env-secrets >/dev/null 2>&1
-}
-
-if operator_eso_target_exists; then
+ESO_TARGET="$(timeout 15 kubectl -n "cogni-${DEPLOY_ENVIRONMENT}" get secret operator-env-secrets --ignore-not-found -o name)" \
+  || log_fatal "Cannot determine existing runtime custody; refusing bootstrap fallback"
+if [[ -n "$ESO_TARGET" ]]; then
   OPENBAO_RUNTIME_SSOT=true
   log_info "operator-env-secrets exists; rendering runtime secrets from OpenBao SSoT"
 else
@@ -1025,6 +1122,7 @@ source_openbao_runtime_key() {
   local mode="$1" key="$2" svc value
   shift 2
   "$OPENBAO_RUNTIME_SSOT" || return 0
+  unset "$key" # An absent Bao value must never retain a legacy workflow value.
   for svc in "$@"; do
     value="$(openbao_get_field "$svc" "$key" || true)"
     if [[ -n "$value" ]]; then
@@ -1040,16 +1138,18 @@ source_openbao_runtime_key() {
 }
 
 source_operator_database_service_url() {
-  "$OPENBAO_RUNTIME_SSOT" || return 0
   OPERATOR_DATABASE_SERVICE_URL="$(openbao_get_field operator DATABASE_SERVICE_URL || true)"
   [[ -n "$OPERATOR_DATABASE_SERVICE_URL" ]] \
-    || log_fatal "OpenBao runtime SSoT is active, but operator DATABASE_SERVICE_URL is absent"
+    || log_fatal "Canonical operator DATABASE_SERVICE_URL is absent from OpenBao"
   export OPERATOR_DATABASE_SERVICE_URL
   log_info "  sourced scheduler-worker ledger DATABASE_URL from operator OpenBao SSoT"
 }
 
 # Established ESO environments render Compose .env, bridge Secrets, and the
 # GitHub App webhook sync from OpenBao, not GitHub Environment secret input.
+for key in DATABASE_URL DATABASE_SERVICE_URL APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD; do
+  source_openbao_runtime_key required "$key" operator
+done
 for key in \
   AUTH_SECRET \
   LITELLM_MASTER_KEY \
@@ -1061,6 +1161,22 @@ for key in \
   source_openbao_runtime_key required "$key" operator node-template _shared
 done
 source_operator_database_service_url
+if "$OPENBAO_RUNTIME_SSOT"; then
+  preserve_postgres_bootstrap_identity
+  [[ "$DATABASE_URL" =~ ^postgres(ql)?://app_operator:[^@]+@[^/]+/cogni_operator(\?|$) &&
+     "$DATABASE_SERVICE_URL" =~ ^postgres(ql)?://service_operator:[^@]+@[^/]+/cogni_operator(\?|$) ]] \
+    || log_fatal "Canonical operator database identity mismatch"
+  APP_DB_USER=app_operator APP_DB_SERVICE_USER=service_operator APP_DB_NAME=cogni_operator
+  TEMPORAL_DB_USER="${TEMPORAL_DB_USER:-temporal}"
+else
+  # Positive ESO absence retains the original fresh-provision input contract.
+  for key in DATABASE_URL DATABASE_SERVICE_URL LITELLM_MASTER_KEY OPENROUTER_API_KEY AUTH_SECRET \
+    POSTGRES_ROOT_USER POSTGRES_ROOT_PASSWORD APP_DB_USER APP_DB_PASSWORD APP_DB_SERVICE_USER \
+    APP_DB_SERVICE_PASSWORD APP_DB_NAME EVM_RPC_URL POLYGON_RPC_URL TEMPORAL_DB_USER \
+    INTERNAL_OPS_TOKEN POSTHOG_API_KEY POSTHOG_HOST; do
+    [[ -n "${!key:-}" ]] || log_fatal "Missing fresh-bootstrap input: $key"
+  done
+fi
 # OPENFGA_DB_PASSWORD is a shared-infra DB-ROLE credential (OpenBao custody, Invariant
 # 15) — read it via the env-wide ${env}-db-reader seam (openbao_get_field), which is
 # available at infra-pass time on EVERY env. It must NOT go through
@@ -1142,16 +1258,16 @@ APP_DB_SERVICE_PASSWORD=${APP_DB_SERVICE_PASSWORD}
 APP_DB_NAME=${APP_DB_NAME}
 OPENFGA_DB_PASSWORD=${OPENFGA_DB_PASSWORD}
 DEPLOY_ENVIRONMENT=${DEPLOY_ENVIRONMENT}
-EVM_RPC_URL=${EVM_RPC_URL}
-POLYGON_RPC_URL=${POLYGON_RPC_URL}
+EVM_RPC_URL=${EVM_RPC_URL:-}
+POLYGON_RPC_URL=${POLYGON_RPC_URL:-}
 TEMPORAL_DB_USER=${TEMPORAL_DB_USER}
 TEMPORAL_DB_PASSWORD=${TEMPORAL_DB_PASSWORD}
 COGNI_REPO_URL=${COGNI_REPO_URL}
 COGNI_REPO_REF=${COGNI_REPO_REF}
 GIT_READ_USERNAME=${GIT_READ_USERNAME}
 GIT_READ_TOKEN=${GIT_READ_TOKEN}
-POSTHOG_API_KEY=${POSTHOG_API_KEY}
-POSTHOG_HOST=${POSTHOG_HOST}
+POSTHOG_API_KEY=${POSTHOG_API_KEY:-}
+POSTHOG_HOST=${POSTHOG_HOST:-}
 # App/worker images — not started by infra deploy, but compose validates all vars.
 # Use placeholder values; k8s/Argo manages the real images.
 APP_IMAGE=${APP_IMAGE:-cogni-template-local}
@@ -1283,6 +1399,7 @@ DOLTGRES_PASSWORD_SSOT="$(
 if [ -n "$DOLTGRES_PASSWORD_SSOT" ]; then
   DOLTGRES_PASSWORD="$DOLTGRES_PASSWORD_SSOT"
 else
+  "$OPENBAO_RUNTIME_SSOT" && log_fatal "Canonical DOLTGRES_PASSWORD absent from OpenBao; refusing genesis fallback on an established environment"
   log_warn "Doltgres superuser SSOT empty at cogni/${DEPLOY_ENVIRONMENT}/operator/DOLTGRES_PASSWORD — using genesis derive (valid only for a fresh volume; reconcile via 'pnpm secrets:set ${DEPLOY_ENVIRONMENT} operator DOLTGRES_PASSWORD' if the volume already exists)"
   DOLTGRES_PASSWORD="${DOLTGRES_PASSWORD:-$(derive_secret doltgres-root)}"
 fi
@@ -1295,6 +1412,8 @@ printf '%s=%s\n' DOLTGRES_WRITER_PASSWORD "$DOLTGRES_WRITER_PASSWORD" >> "$RUNTI
 # Publish the complete projection atomically. A failed render leaves the prior
 # installed generation untouched; the last-good receipt therefore continues to
 # describe either the exact installed bytes or a detectable mismatch.
+docker compose --project-name cogni-runtime --env-file "$RUNTIME_ENV" -f "$RUNTIME_COMPOSE_FILE" ${RUNTIME_OBSERVABILITY_ARGS:-} --profile bootstrap config --quiet 2>/dev/null \
+  || log_fatal "Resolved runtime consumer configuration is invalid; installed environment retained"
 chmod 600 "$RUNTIME_ENV"
 mv -f "$RUNTIME_ENV" "$INSTALLED_RUNTIME_ENV"
 RUNTIME_ENV="$INSTALLED_RUNTIME_ENV"
@@ -1410,22 +1529,17 @@ $RUNTIME_COMPOSE --profile bootstrap run --rm \
 # litellm/openfga root-owned DBs are (re)created idempotently each pass; harmless.
 # Per-node OpenBao read uses the same least-privilege ${DEPLOY_ENVIRONMENT}-db-reader
 # k8s-auth role proven above. Values are never echoed; only key names appear in logs.
+# Reuse the earlier file-cached SAME-role reader; do not shadow its login/cache policy.
 DB_READER_TOKEN=""
-mint_db_reader_token() {
-  local jwt
-  jwt=$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null) || return 1
-  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-    bao write -field=token auth/kubernetes/login \
-    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null
-}
 read_node_db_secret() {
   local node="$1" key="$2"
   timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
     BAO_TOKEN="${DB_READER_TOKEN}" \
     bao kv get -field="$key" "cogni/${DEPLOY_ENVIRONMENT}/${node}" 2>/dev/null || true
 }
-DB_READER_TOKEN="$(mint_db_reader_token || true)"
-[ -n "$DB_READER_TOKEN" ] || log_fatal "db-provision: could not mint ${DEPLOY_ENVIRONMENT}-db-reader token (OpenBao sealed / role absent) — per-node DB creds are required (#1584)"
+DB_READER_TOKEN="$(mint_db_reader_token)" \
+  || log_fatal "db-provision: ${DEPLOY_ENVIRONMENT}-db-reader token unavailable; see value-free mint phase diagnostics"
+[ -n "$DB_READER_TOKEN" ] || log_fatal "db-provision: ${DEPLOY_ENVIRONMENT}-db-reader token unavailable; empty reader result"
 # The runner forwards the exact-source shared-node budget map through the same
 # SSH environment file as NODE_APP_TARGETS (bash arrays do not cross that boundary).
 # Keep the full node roster for Doltgres, secrets and routing; only Postgres is
@@ -1557,10 +1671,6 @@ fi
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 log_info "[$(date -u +%H:%M:%S)] Starting infra services (rolling update)..."
 emit_deployment_event "infra_deployment.stack_up_started" "in_progress" "Starting infrastructure services"
-
-# Autoheal guard: stop autoheal before compose up to prevent race condition
-# (autoheal can restart a container between compose stop and remove)
-$RUNTIME_COMPOSE stop autoheal 2>/dev/null || true
 
 # Infra services only — excludes app, scheduler-worker, db-migrate, and one-shot backup jobs
 INFRA_SERVICES="postgres litellm openfga redis alloy temporal-postgres temporal temporal-ui autoheal repo-init git-sync"
@@ -2094,45 +2204,6 @@ if command -v kubectl &>/dev/null; then
   HOST_IP=$(hostname -I | awk '{print $1}')
   log_info "  k8s namespace: ${K8S_NS}, host IP: ${HOST_IP}"
 
-  # ── Phase-1 read-path proof: OpenBao db-reader (Invariant 15 DB-cred migration) ─
-  # secrets-management.md "DB-credential provisioning" Phase 1. deploy-infra holds
-  # NO root token (Invariant 13); here it proves it can mint a least-privilege,
-  # READ-ONLY OpenBao token via the ${DEPLOY_ENVIRONMENT}-db-reader k8s-auth role
-  # and read the env's DB-cred tree — the same values ESO syncs to pods. Phase 2
-  # will USE this to render .env from OpenBao instead of GH secrets; Phase 1 only
-  # establishes + proves the path. STRICTLY NON-FATAL: any failure (db-reader role
-  # absent on a VM provisioned before this landed, OpenBao sealed, empty tree)
-  # logs a warning and never aborts the deploy. No secret VALUE is ever printed.
-  verify_openbao_db_read_path() {
-    local jwt tok
-    # Every cluster call is `timeout 10`-bounded: a non-zero exit is already
-    # caught (|| return 0), but a true network hang (OpenBao sealed/unreachable)
-    # would stall — not abort — the deploy. The timeout converts a hang into the
-    # same non-fatal skip.
-    if ! timeout 10 kubectl get sa db-provisioner -n default >/dev/null 2>&1; then
-      log_warn "  [openbao-read-path] db-provisioner SA absent — VM predates Phase 1; reprovision to land the db-reader role. Skipping proof (non-fatal)."
-      return 0
-    fi
-    jwt=$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null) || {
-      log_warn "  [openbao-read-path] could not mint db-provisioner token; skipping proof (non-fatal)."
-      return 0
-    }
-    tok=$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-      bao write -field=token auth/kubernetes/login \
-      "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null) || {
-      log_warn "  [openbao-read-path] db-reader login failed (role absent / OpenBao sealed); skipping proof (non-fatal)."
-      return 0
-    }
-    if timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
-        bao kv list "cogni/${DEPLOY_ENVIRONMENT}" >/dev/null 2>&1; then
-      log_info "  [openbao-read-path] OK — db-reader listed cogni/${DEPLOY_ENVIRONMENT}/* (Phase 1 proven; no value echoed)."
-    else
-      log_warn "  [openbao-read-path] db-reader token minted but list returned nothing (empty tree?); path partially proven (non-fatal)."
-    fi
-    return 0
-  }
-  verify_openbao_db_read_path || true
-
   # ── Per-node secrets (catalog-driven: every type:node in NODE_APP_TARGETS) ──
   # bug.5086 — node list comes from infra/catalog (CATALOG_IS_SSOT), threaded in
   # from the local context, so a new node (e.g. canary) auto-provisions its
@@ -2162,16 +2233,22 @@ if command -v kubectl &>/dev/null; then
     else
       DOLTGRES_ENV_LINE="DOLTGRES_URL=${DOLTGRES_URL_NODE}"
     fi
+    NODE_DATABASE_URL="$(openbao_get_field "$node" DATABASE_URL)"
+    NODE_DATABASE_SERVICE_URL="$(openbao_get_field "$node" DATABASE_SERVICE_URL)"
+    if [[ -z "$NODE_DATABASE_URL" || -z "$NODE_DATABASE_SERVICE_URL" ]]; then
+      log_warn "Skipped ${node}-node-app-secrets: canonical OpenBao database URLs are absent"
+      continue
+    fi
     SECRET_FILE=$(mktemp)
     cat > "$SECRET_FILE" <<SECEOF
-DATABASE_URL=postgresql://${APP_DB_USER}:${APP_DB_PASSWORD}@${HOST_IP}:5432/cogni_${db_node}?sslmode=disable
-DATABASE_SERVICE_URL=postgresql://${APP_DB_SERVICE_USER}:${APP_DB_SERVICE_PASSWORD}@${HOST_IP}:5432/cogni_${db_node}?sslmode=disable
+DATABASE_URL=${NODE_DATABASE_URL}
+DATABASE_SERVICE_URL=${NODE_DATABASE_SERVICE_URL}
 ${DOLTGRES_ENV_LINE}
 AUTH_SECRET=${AUTH_SECRET}
 LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
 OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-EVM_RPC_URL=${EVM_RPC_URL}
-POLYGON_RPC_URL=${POLYGON_RPC_URL}
+EVM_RPC_URL=${EVM_RPC_URL:-}
+POLYGON_RPC_URL=${POLYGON_RPC_URL:-}
 POSTHOG_API_KEY=${POSTHOG_API_KEY:-}
 POSTHOG_HOST=${POSTHOG_HOST:-}
 TAVILY_API_KEY=${TAVILY_API_KEY:-}
@@ -2234,7 +2311,7 @@ SECEOF
   # credential. (Parity: SCHEDULER_WORKER_KEYS in scripts/setup/lib/reconcile-secrets.sh.)
   SECRET_FILE=$(mktemp)
   cat > "$SECRET_FILE" <<SECEOF
-DATABASE_URL=${OPERATOR_DATABASE_SERVICE_URL:-postgresql://${APP_DB_SERVICE_USER}:${APP_DB_SERVICE_PASSWORD}@${HOST_IP}:5432/cogni_operator?sslmode=disable}
+DATABASE_URL=${OPERATOR_DATABASE_SERVICE_URL:?operator OpenBao service URL required}
 SCHEDULER_API_TOKEN=${SCHEDULER_API_TOKEN:-}
 INTERNAL_OPS_TOKEN=${INTERNAL_OPS_TOKEN:-}
 COGNI_NODE_DBS=${COGNI_NODE_DBS:-}

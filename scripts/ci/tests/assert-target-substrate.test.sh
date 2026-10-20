@@ -223,13 +223,14 @@ mkdir -p "$HAPPY_TREE/infra/catalog" \
 cp infra/catalog/node-template.yaml "$HAPPY_TREE/infra/catalog/node-template.yaml"
 cp infra/k8s/overlays/candidate-a/node-template/*.yaml \
   "$HAPPY_TREE/infra/k8s/overlays/candidate-a/node-template/"
-# Appset path derived through the lib — this fixture is a k3s pair (no deployment_provider
-# cell for candidate-a), so control env == env; spelling the dir by hand is the env-keyed
-# form the appset-path-consumers invariant forbids (bug.5204).
+# Derive both the AppSet path and its directory from the copied catalog. Candidate
+# compute custody may be production even while this fixture exercises k3s probes;
+# spelling the directory by hand breaks when normal env membership is enabled.
 # shellcheck source=scripts/ci/lib/appset-paths.sh
 CATALOG_DIR="$HAPPY_TREE/infra/catalog" . "$REPO_ROOT/scripts/ci/lib/appset-paths.sh"
-bash scripts/ci/render-node-appset.sh candidate-a node-template \
-  > "$HAPPY_TREE/$(CATALOG_DIR="$HAPPY_TREE/infra/catalog" appset_rel_path candidate-a node-template)"
+happy_appset="$HAPPY_TREE/$(CATALOG_DIR="$HAPPY_TREE/infra/catalog" appset_rel_path candidate-a node-template)"
+mkdir -p "$(dirname "$happy_appset")"
+bash scripts/ci/render-node-appset.sh candidate-a node-template > "$happy_appset"
 
 BASE_ENV=(
   TARGET=node-template
