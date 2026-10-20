@@ -1382,7 +1382,7 @@ printf '%s=%s\n' DOLTGRES_WRITER_PASSWORD "$DOLTGRES_WRITER_PASSWORD" >> "$RUNTI
 # Publish the complete projection atomically. A failed render leaves the prior
 # installed generation untouched; the last-good receipt therefore continues to
 # describe either the exact installed bytes or a detectable mismatch.
-docker compose --project-name cogni-runtime --env-file "$RUNTIME_ENV" -f "$RUNTIME_COMPOSE_FILE" $RUNTIME_OBSERVABILITY_ARGS --profile bootstrap config --quiet 2>/dev/null \
+docker compose --project-name cogni-runtime --env-file "$RUNTIME_ENV" -f "$RUNTIME_COMPOSE_FILE" ${RUNTIME_OBSERVABILITY_ARGS:-} --profile bootstrap config --quiet 2>/dev/null \
   || log_fatal "Resolved runtime consumer configuration is invalid; installed environment retained"
 chmod 600 "$RUNTIME_ENV"
 mv -f "$RUNTIME_ENV" "$INSTALLED_RUNTIME_ENV"

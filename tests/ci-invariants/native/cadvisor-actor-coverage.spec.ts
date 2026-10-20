@@ -724,7 +724,7 @@ describe.skipIf(!process.env.CI)(
             "/tmp/runtime-base.yml",
           ],
           [
-            "PORT=3000\nDATABASE_SERVICE_URL=postgres://owned:owned@postgres/owned\nAPP_IMAGE=busybox:1.37\nSCHEDULER_WORKER_IMAGE=busybox:1.37\n",
+            "PORT=3000\nDATABASE_URL=postgres://owned:owned@postgres/owned\nDATABASE_SERVICE_URL=postgres://owned:owned@postgres/owned\nAPP_IMAGE=busybox:1.37\nSCHEDULER_WORKER_IMAGE=busybox:1.37\n",
             "/tmp/owned.env",
           ],
         ]) {
