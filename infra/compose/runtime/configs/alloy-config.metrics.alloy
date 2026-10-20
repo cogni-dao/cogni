@@ -413,6 +413,7 @@ prometheus.relabel "openfga_metrics" {
 
 prometheus.exporter.cadvisor "default" {
   docker_host                  = "unix:///var/run/docker.sock"
+  containerd_host              = "/run/cogni-docker-containerd.sock"
   store_container_labels       = true
   allowlisted_container_labels = ["com.docker.compose.service"]
   storage_duration             = "2m"

@@ -173,10 +173,26 @@ describe.skipIf(!process.env.CI)(
         }
         expect(alloyService.cgroup).toBe("host");
         const metadataPath = "/var/lib/docker/image/overlay2/layerdb/mounts";
-        const metadata = (alloyService.volumes ?? []).find(
-          (volume) =>
-            typeof volume !== "string" && volume.target === metadataPath
+        // Base Compose must remain independent of observer-native topology.
+        expect(
+          (alloyService.volumes ?? []).every(
+            (volume) => typeof volume === "string"
+          )
+        ).toBe(true);
+        const deploySource = readFileSync(
+          path.resolve(runtime, "../../../scripts/ci/deploy-infra.sh"),
+          "utf8"
         );
+        const bindingTemplate = deploySource.match(
+          /<<CADVISOR_COMPOSE\n([\s\S]*?)^CADVISOR_COMPOSE/m
+        )?.[1];
+        if (!bindingTemplate)
+          throw new Error("Actual observability override absent");
+        const metadata = yaml.parse(
+          bindingTemplate
+            .replace("${CADVISOR_BIND_SOURCE}", metadataPath)
+            .replace("${CADVISOR_BIND_TARGET}", metadataPath)
+        ).services.alloy.volumes[0];
         expect(metadata).toMatchObject({
           type: "bind",
           source: metadataPath,
@@ -188,7 +204,7 @@ describe.skipIf(!process.env.CI)(
           const [source, target, mode] =
             typeof volume === "string"
               ? volume.split(":")
-              : [volume.source, volume.target, volume.read_only ? "ro" : "rw"];
+              : [metadataPath, metadataPath, volume.read_only ? "ro" : "rw"];
           // Log mounts belong to components omitted from this focused exporter fixture.
           // All existing collector-visible host roots/socket retain their exact targets.
           if (!source.startsWith("/") || source.startsWith("/var/log/"))
@@ -214,17 +230,13 @@ describe.skipIf(!process.env.CI)(
           exporter,
           "Could not extract exact committed cAdvisor component"
         ).toBeTruthy();
-        const deploySource = readFileSync(
-          path.resolve(runtime, "../../../scripts/ci/deploy-infra.sh"),
-          "utf8"
-        );
         const preflight = deploySource.match(
           /^verify_cadvisor_topology\(\) \{[\s\S]*?^\}/m
         )?.[0];
         if (!preflight)
           throw new Error("Declared collector topology preflight missing");
         const topologyInvocation = deploySource.indexOf(
-          "  verify_cadvisor_topology\n"
+          "\n  install_cadvisor_binding\n"
         );
         expect(topologyInvocation).toBeGreaterThan(0);
         expect(topologyInvocation).toBeLessThan(
@@ -321,7 +333,7 @@ describe.skipIf(!process.env.CI)(
         const startCollector = async (hostCgroup: boolean) => {
           const collector = hostCgroup
             ? new HostCgroupContainer(alloyService.image, metadataPath)
-            : new GenericContainer(alloyService.image);
+            : new GenericContainer("grafana/alloy:v1.9.2");
           const started = await collector
             .withNetwork(network)
             .withUser(alloyService.user ?? "")
@@ -330,7 +342,10 @@ describe.skipIf(!process.env.CI)(
             )
             .withTmpFs({ "/var/lib/alloy": "rw" })
             .withCopyContentToContainer([
-              { content: `${exporter}\n`, target: "/etc/alloy/config.alloy" },
+              {
+                content: `${hostCgroup ? exporter : exporter?.replace(/^\s+containerd_host\s*=.*\n/m, "")}\n`,
+                target: "/etc/alloy/config.alloy",
+              },
             ])
             .withCommand([
               "run",
@@ -392,7 +407,15 @@ describe.skipIf(!process.env.CI)(
         const alloy = await startCollector(false);
         // Native Docker identity is read above; only its CLI transport is supplied
         // to the owned image. Directory checks execute against actual bind mounts.
-        const topology = `${host.DockerRootDir}|${host.Driver}`;
+        const containerd = (
+          host as unknown as {
+            Containerd?: {
+              Address?: string;
+              Namespaces?: { Containers?: string; Plugins?: string };
+            };
+          }
+        ).Containerd;
+        const topology = `${host.DockerRootDir}|${host.Driver}|${containerd?.Address ?? ""}|${containerd?.Namespaces?.Containers ?? ""}|${containerd?.Namespaces?.Plugins ?? ""}`;
         const missing = await verifyTopology(alloy, topology);
         expect(missing.exitCode).not.toBe(0);
         expect(missing.output).toContain("cadvisor_metadata_path_missing");
@@ -453,7 +476,7 @@ describe.skipIf(!process.env.CI)(
         expect(supported.exitCode, supported.output).toBe(0);
         const unsupported = await verifyTopology(
           variant,
-          "/unsupported|overlay2"
+          "/unsupported|overlay2|/run/containerd/containerd.sock|moby|plugins.moby"
         );
         expect(unsupported.exitCode).not.toBe(0);
         expect(unsupported.output).toContain("cadvisor_topology_unsupported");
@@ -644,16 +667,66 @@ describe.skipIf(!process.env.CI)(
           /^prometheus\.exporter\.cadvisor "default" \{\n[^{}]*^\}/m
         )?.[0];
         if (!component) throw new Error("Actual exporter component missing");
-        const oldConfig = component + "\n";
-        const nextConfig =
-          component.replace(/\n\}/, `\n  containerd_host = "${socket}"\n}`) +
-          "\n";
+        const oldConfig = `${component.replace(/^\s+containerd_host\s*=.*\n/m, "")}\n`;
+        const nextConfig = `${component}\n`;
+        const declaredSocketTarget = "/run/cogni-docker-containerd.sock";
+        expect(component).toContain(
+          `containerd_host              = "${declaredSocketTarget}"`
+        );
+        expect(services.alloy.image).toBe("grafana/alloy:v1.14.0");
+        const deploySource = readFileSync(
+          path.resolve(runtime, "../../../scripts/ci/deploy-infra.sh"),
+          "utf8"
+        );
+        const preflight = deploySource.match(
+          /^verify_cadvisor_topology\(\) \{[\s\S]*?^\}/m
+        )?.[0];
+        const installBinding = deploySource.match(
+          /^install_cadvisor_binding\(\) \{[\s\S]*?^\}/m
+        )?.[0];
+        const fullOnlyGate = deploySource.match(
+          /^if \[\[ "\$\{K8S_SECRETS_ONLY:-false\}" != "true" \]\]; then\n {2}# Stable config path[\s\S]*?^fi/m
+        )?.[0];
+        if (!preflight || !installBinding || !fullOnlyGate)
+          throw new Error("Actual normal native observer gate absent");
+        const nativePreflight = await nested.exec([
+          "/bin/sh",
+          "-c",
+          `${preflight}\nverify_cadvisor_topology`,
+        ]);
+        const foreignNamespace = await nested.exec([
+          "/bin/sh",
+          "-c",
+          `native_identity="$1"; docker() { printf '%s\\n' "$native_identity"; }\n${preflight}\nverify_cadvisor_topology`,
+          "owned-namespace-negative",
+          `${info.DockerRootDir}|${info.Driver}|${socket}|foreign|plugins.moby`,
+        ]);
+        expect(foreignNamespace.exitCode).not.toBe(0);
+        expect(foreignNamespace.output).toContain(
+          "cadvisor_native_namespace_unsupported"
+        );
+        expect(nativePreflight.exitCode, nativePreflight.output).toBe(0);
+        expect(nativePreflight.output).toContain(
+          `source=${socket} target=${declaredSocketTarget}`
+        );
+        console.info(
+          "CADVISOR_OVERLAYFS_NATIVE_PREFLIGHT",
+          nativePreflight.output.trim()
+        );
         // Materialize through the owned daemon's live namespace, then read back
         // exact bytes before asking that daemon to bind the files into children.
         for (const [content, target] of [
           [oldConfig, "/tmp/cadvisor-old.alloy"],
           [nextConfig, "/tmp/cadvisor-next.alloy"],
           [fullConfig, "/tmp/cadvisor-full-declared.alloy"],
+          [
+            readFileSync(path.join(runtime, "docker-compose.yml"), "utf8"),
+            "/tmp/runtime-base.yml",
+          ],
+          [
+            "PORT=3000\nDATABASE_SERVICE_URL=postgres://owned:owned@postgres/owned\nAPP_IMAGE=busybox:1.37\nSCHEDULER_WORKER_IMAGE=busybox:1.37\n",
+            "/tmp/owned.env",
+          ],
         ]) {
           const result = await nested.exec([
             "/bin/sh",
@@ -671,6 +744,53 @@ describe.skipIf(!process.env.CI)(
             sha256: digest,
           });
         }
+        // Execute the real full-only gate and atomic installer in this owned VM.
+        const bindingPath = "/tmp/docker-compose.observability.yml";
+        const install = await nested.exec([
+          "/bin/sh",
+          "-c",
+          `${preflight}\n${installBinding}\nCADVISOR_OVERRIDE_FILE="$1"\ninstall_cadvisor_binding`,
+          "owned-observer-install",
+          bindingPath,
+        ]);
+        expect(install.exitCode, install.output).toBe(0);
+        const bindingBefore = await nested.exec(["sha256sum", bindingPath]);
+        const failedInstall = await nested.exec([
+          "/bin/sh",
+          "-c",
+          `${preflight}\n${installBinding}\ndocker() { printf '%s\\n' '/unsupported|overlayfs|/missing|moby|plugins.moby'; }\nCADVISOR_OVERRIDE_FILE="$1"\ninstall_cadvisor_binding`,
+          "owned-observer-refusal",
+          bindingPath,
+        ]);
+        expect(failedInstall.exitCode).not.toBe(0);
+        expect(failedInstall.output).toContain("cadvisor_topology_unsupported");
+        expect((await nested.exec(["sha256sum", bindingPath])).stdout).toBe(
+          bindingBefore.stdout
+        );
+        const k8sOnly = await nested.exec([
+          "/bin/sh",
+          "-c",
+          `K8S_SECRETS_ONLY=true\nRUNTIME_COMPOSE=unused\ninstall_cadvisor_binding() { echo forbidden_observer_dependency; return 91; }\n${fullOnlyGate}\n[ -z "$RUNTIME_OBSERVABILITY_ARGS" ]`,
+          "owned-k8s-only",
+        ]);
+        expect(k8sOnly.exitCode, k8sOnly.output).toBe(0);
+        expect(k8sOnly.output).not.toContain("forbidden_observer_dependency");
+        await cli(
+          "compose",
+          "--env-file",
+          "/tmp/owned.env",
+          "-f",
+          "/tmp/runtime-base.yml",
+          "--profile",
+          "bootstrap",
+          "config",
+          "--quiet"
+        );
+        console.info("CADVISOR_OBSERVER_FAILURE_ISOLATION", {
+          priorOverrideUnchanged: true,
+          baseParseable: true,
+          k8sOnlyIndependent: true,
+        });
         const dummyEnvironment = [
           ...new Set(
             [...fullConfig.matchAll(/sys\.env\("([A-Z_]+)"\)/g)].map(
@@ -705,6 +825,90 @@ describe.skipIf(!process.env.CI)(
           network: "none",
           sourceSha256: createHash("sha256").update(fullConfig).digest("hex"),
         });
+        // Docker Compose must leave every owned core service untouched when the
+        // stable observability config path is introduced for the first time.
+        const composeProject = `observer-${token}`;
+        const composeBase = "/tmp/owned-core.yml";
+        const coreConfig = yaml.stringify({
+          services: {
+            postgres: {
+              image: services.postgres.image,
+              environment: { POSTGRES_PASSWORD: "owned-native-only" },
+            },
+            doltgres: {
+              image: services.doltgres.image,
+              environment: { DOLTGRES_PASSWORD: "owned-native-only" },
+            },
+            redis: { image: services.redis.image },
+            alloy: {
+              image: services.alloy.image,
+              user: services.alloy.user,
+              cgroup: services.alloy.cgroup,
+              command: [
+                "run",
+                "/etc/alloy/config.alloy",
+                "--server.http.listen-addr=0.0.0.0:12345",
+              ],
+              volumes: [
+                "/tmp/cadvisor-next.alloy:/etc/alloy/config.alloy:ro",
+                "/var/run/docker.sock:/var/run/docker.sock:ro",
+                "/proc:/host/proc:ro",
+                "/sys:/host/sys:ro",
+                "/:/host/root:ro",
+              ],
+            },
+          },
+        });
+        const writeCore = await nested.exec([
+          "/bin/sh",
+          "-c",
+          `printf '%s' "$1" > "$2"`,
+          "owned-compose-proof",
+          coreConfig,
+          composeBase,
+        ]);
+        expect(writeCore.exitCode, writeCore.output).toBe(0);
+        const composeArgs = [
+          "compose",
+          "--project-name",
+          composeProject,
+          "-f",
+          composeBase,
+        ];
+        await cli(...composeArgs, "up", "-d");
+        const coreIdentity = async () => {
+          const identities: Record<string, { id: string; startedAt: string }> =
+            {};
+          for (const service of ["postgres", "doltgres", "redis", "alloy"]) {
+            const id = await cli(...composeArgs, "ps", "-q", service);
+            expect(id).toMatch(/^[a-f0-9]{64}$/);
+            ids.push(id);
+            const state = JSON.parse(await cli("inspect", id))[0] as {
+              Id: string;
+              State: { Running: boolean; StartedAt: string };
+            };
+            expect(state.State.Running, service).toBe(true);
+            identities[service] = {
+              id: state.Id,
+              startedAt: state.State.StartedAt,
+            };
+          }
+          return identities;
+        };
+        const coreBefore = await coreIdentity();
+        await cli(...composeArgs, "-f", bindingPath, "up", "-d");
+        const coreAfter = await coreIdentity();
+        for (const service of ["postgres", "doltgres", "redis"])
+          expect(
+            coreAfter[service],
+            `${service} was recreated by observer-only config`
+          ).toEqual(coreBefore[service]);
+        expect(coreAfter.alloy.id).not.toBe(coreBefore.alloy.id);
+        console.info("CADVISOR_FIRST_OVERRIDE_CORE_IDENTITIES", {
+          before: coreBefore,
+          after: coreAfter,
+        });
+        await cli(...composeArgs, "-f", bindingPath, "down", "--volumes");
         const launch = async (
           image: string,
           config: string,
@@ -731,7 +935,7 @@ describe.skipIf(!process.env.CI)(
           if (withSocket)
             args.push(
               "--mount",
-              `type=bind,source=${socket},target=${socket},readonly`
+              `type=bind,source=${socket},target=${declaredSocketTarget},readonly`
             );
           args.push(
             image,
@@ -752,7 +956,9 @@ describe.skipIf(!process.env.CI)(
           ).toBe(false);
           if (withSocket)
             expect(
-              inspected.Mounts.find((m) => m.Destination === socket)?.RW
+              inspected.Mounts.find(
+                (m) => m.Destination === declaredSocketTarget
+              )?.RW
             ).toBe(false);
           const port =
             inspected.NetworkSettings.Ports["12345/tcp"]?.[0]?.HostPort;
@@ -802,10 +1008,28 @@ describe.skipIf(!process.env.CI)(
         expect(actorRows(baseline, idle)).toEqual([]);
         await cli("stop", old.id);
         const next = await launch(
-          "grafana/alloy:v1.14.0",
+          services.alloy.image,
           "/tmp/cadvisor-next.alloy",
           true
         );
+        const missingSocket = await nested.exec([
+          "docker",
+          "exec",
+          next.id,
+          "/bin/sh",
+          "-c",
+          `native_identity="$1"; docker() { printf '%s\\n' "$native_identity"; }\n${preflight}\nverify_cadvisor_topology`,
+          "owned-socket-negative",
+          `${info.DockerRootDir}|${info.Driver}|${socket}|moby|plugins.moby`,
+        ]);
+        expect(missingSocket.exitCode).not.toBe(0);
+        expect(missingSocket.output).toContain(
+          "cadvisor_native_socket_missing"
+        );
+        console.info("CADVISOR_OVERLAYFS_NEGATIVE_CONTROLS", {
+          foreignNamespace: foreignNamespace.exitCode,
+          sourceSocketMissingInCollector: missingSocket.exitCode,
+        });
         await cli(
           "exec",
           writer.getId(),

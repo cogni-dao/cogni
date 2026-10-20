@@ -578,7 +578,7 @@ services:
       - GITSYNC_PASSWORD=${GIT_READ_TOKEN:-}
 
   alloy:
-    image: grafana/alloy:v1.9.2
+    image: grafana/alloy:v1.14.0
     restart: unless-stopped
     # cAdvisor must see the host cgroup tree before it can discover Docker actors.
     cgroup: host
@@ -597,14 +597,8 @@ services:
       - ./configs/alloy-config.metrics.alloy:/etc/alloy/config.alloy:ro
       - alloy_data:/var/lib/alloy
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # Pinned cAdvisor needs mount-id metadata to register overlay2 actors.
-      # Refuse unsupported/missing host paths; never create an empty directory.
-      - type: bind
-        source: /var/lib/docker/image/overlay2/layerdb/mounts
-        target: /var/lib/docker/image/overlay2/layerdb/mounts
-        read_only: true
-        bind:
-          create_host_path: false
+      # Native Docker metadata/socket binding is installed only by the normal
+      # full-infra observability override; core-only Compose consumers need none.
       # Persistent host journal gives Loki the kernel-side reason for SIGKILL/OOM.
       # Production bootstrap configures persistent journald at this path.
       - /var/log/journal:/var/log/journal:ro
