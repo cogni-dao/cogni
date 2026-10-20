@@ -46,7 +46,8 @@ lease_generation:
 isolated_services:
   sandbox:
     lease_generation:
-      candidate-a: 0
+      # The generation-0 sandbox lease was owner-closed; allocate a fresh receipt family.
+      candidate-a: 1
       production: 0
 # story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
