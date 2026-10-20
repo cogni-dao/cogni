@@ -9,7 +9,8 @@
  *   - RAW_ACTOR_COVERAGE: both owned actors appear before downstream relabeling.
  *   - REAL_IO: a finite fsync workload increases its own exported write counter.
  *   - ROOT_IS_NOT_AN_ACTOR: root-only metrics cannot satisfy container coverage.
- *   - BASELINE_ONLY: this test adds no collector mounts, capabilities or runtime policy.
+ *   - SINGLE_VARIABLE: host cgroup namespace is the only experimental collector change.
+ *   - BASELINE_CONTROL: declared private namespace must expose root-only metrics.
  * Side-effects: IO (CI-owned Docker containers; reads declared host mounts and writes an owned 16MiB file).
  * Links: story.5095, task.5280, docs/spec/cicd-platform-boundary.md
  * @internal
@@ -49,6 +50,14 @@ interface Sample {
   name: string;
   labels: Record<string, string>;
   value: number;
+}
+
+// Docker Engine supports CgroupnsMode; the installed dockerode declarations predate it.
+class HostCgroupContainer extends GenericContainer {
+  constructor(image: string) {
+    super(image);
+    Object.assign(this.hostConfig, { CgroupnsMode: "host" });
+  }
 }
 
 function samples(text: string): Sample[] {
@@ -129,6 +138,7 @@ describe.skipIf(!process.env.CI)(
       const owned: StartedTestContainer[] = [];
       const cleanup: PromiseSettledResult<unknown>[] = [];
       const collectorErrorClasses = new Set<string>();
+      const collectorErrors = new Set<string>();
       const token = randomUUID();
       const writerService = `io-writer-${token}`;
       const idleService = `io-idle-${token}`;
@@ -200,7 +210,7 @@ describe.skipIf(!process.env.CI)(
               "cogni.native-proof": token,
             })
             .withEntrypoint(["/bin/sh", "-c"])
-            .withCommand(["sleep 240"])
+            .withCommand(["sleep 420"])
             .withWaitStrategy(Wait.forSuccessfulCommand("test -d /tmp"))
             .start();
           owned.push(container);
@@ -208,43 +218,64 @@ describe.skipIf(!process.env.CI)(
         };
         const writer = await actor(writerService);
         const idle = await actor(idleService);
-        const alloy = await new GenericContainer(alloyService.image)
-          .withNetwork(network)
-          .withUser(alloyService.user ?? "")
-          .withBindMounts(mounts)
-          .withTmpFs({ "/var/lib/alloy": "rw" })
-          .withCopyContentToContainer([
-            { content: `${exporter}\n`, target: "/etc/alloy/config.alloy" },
-          ])
-          .withCommand([
-            "run",
-            "/etc/alloy/config.alloy",
-            "--server.http.listen-addr=0.0.0.0:12345",
-            "--storage.path=/var/lib/alloy",
-          ])
-          .withExposedPorts(12345)
-          .withLogConsumer((stream) => {
-            // Bound diagnostics and avoid exporting unrelated host-container inventory.
-            stream.on("data", (chunk: Buffer) => {
-              const text = chunk.toString("utf8");
-              for (const signature of [
-                "permission denied",
-                "no such file or directory",
-                "cgroup mountpoint",
-                "Failed to create",
-                "Failed to register",
-                "Failed to get",
-              ])
-                if (text.includes(signature))
-                  collectorErrorClasses.add(signature);
-            });
-          })
-          .withWaitStrategy(Wait.forHttp("/-/ready", 12345))
-          .withStartupTimeout(90_000)
-          .start();
-        owned.push(alloy);
-        const base = `http://${alloy.getHost()}:${alloy.getMappedPort(12345)}`;
-        const raw = async () => {
+        const startCollector = async (hostCgroup: boolean) => {
+          const collector = hostCgroup
+            ? new HostCgroupContainer(alloyService.image)
+            : new GenericContainer(alloyService.image);
+          const started = await collector
+            .withNetwork(network)
+            .withUser(alloyService.user ?? "")
+            .withBindMounts(mounts)
+            .withTmpFs({ "/var/lib/alloy": "rw" })
+            .withCopyContentToContainer([
+              { content: `${exporter}\n`, target: "/etc/alloy/config.alloy" },
+            ])
+            .withCommand([
+              "run",
+              "/etc/alloy/config.alloy",
+              "--server.http.listen-addr=0.0.0.0:12345",
+              "--storage.path=/var/lib/alloy",
+            ])
+            .withExposedPorts(12345)
+            .withLogConsumer((stream) => {
+              // Bound diagnostics and avoid exporting unrelated host-container inventory.
+              stream.on("data", (chunk: Buffer) => {
+                const text = chunk.toString("utf8");
+                for (const signature of [
+                  "permission denied",
+                  "no such file or directory",
+                  "cgroup mountpoint",
+                  "Failed to create",
+                  "Failed to register",
+                  "Failed to get",
+                ])
+                  if (text.includes(signature)) {
+                    collectorErrorClasses.add(signature);
+                    for (const line of text.split("\n"))
+                      if (line.includes(signature) && collectorErrors.size < 6)
+                        collectorErrors.add(
+                          line
+                            .replace(/[a-f0-9]{64}/g, "<container-id>")
+                            .slice(0, 600)
+                        );
+                  }
+              });
+            })
+            .withWaitStrategy(Wait.forHttp("/-/ready", 12345))
+            .withStartupTimeout(90_000)
+            .start();
+          owned.push(started);
+          const inspected = await docker
+            .getContainer(started.getId())
+            .inspect();
+          const actual = Reflect.get(inspected.HostConfig, "CgroupnsMode");
+          console.info("CADVISOR_NATIVE_NAMESPACE", { hostCgroup, actual });
+          expect(actual).toBe(hostCgroup ? "host" : "private");
+          return started;
+        };
+        const alloy = await startCollector(false);
+        const raw = async (collector = alloy) => {
+          const base = `http://${collector.getHost()}:${collector.getMappedPort(12345)}`;
           const response = await fetch(
             `${base}/api/v0/component/prometheus.exporter.cadvisor.default/metrics`,
             {
@@ -255,7 +286,7 @@ describe.skipIf(!process.env.CI)(
           return samples(await response.text());
         };
         const before = await poll(
-          raw,
+          () => raw(),
           (rows) =>
             coverage(rows, writer, writerService) &&
             coverage(rows, idle, idleService) &&
@@ -287,19 +318,41 @@ describe.skipIf(!process.env.CI)(
           actorRows(before, writer).length === 0 &&
           actorRows(before, idle).length === 0;
         console.info("CADVISOR_ACTUAL_ROOT_ONLY_OBSERVATION", actualRootOnly);
+        console.info("CADVISOR_BASELINE_ERROR_PATHS", [...collectorErrors]);
+        expect(
+          actualRootOnly,
+          "Declared baseline no longer reproduces root-only coverage"
+        ).toBe(true);
+        await alloy.stop();
+        owned.splice(owned.indexOf(alloy), 1);
+        collectorErrors.clear();
+        const variant = await startCollector(true);
+        const visible = await poll(
+          () => raw(variant),
+          (rows) =>
+            coverage(rows, writer, writerService) &&
+            coverage(rows, idle, idleService) &&
+            writeBytes(actorRows(rows, writer)) !== undefined,
+          65_000
+        );
+        console.info(
+          "CADVISOR_HOST_CGROUP_RAW",
+          JSON.stringify(evidence(visible))
+        );
+        console.info("CADVISOR_HOST_CGROUP_ERROR_PATHS", [...collectorErrors]);
         // Explicit sensitivity control: visible root series are never counted as actors.
         const rootOnly = before.filter((row) => row.labels.id === "/");
         expect(coverage(rootOnly, writer, writerService)).toBe(false);
         expect(coverage(rootOnly, idle, idleService)).toBe(false);
         expect(
-          coverage(before, writer, writerService),
+          coverage(visible, writer, writerService),
           "Missing raw owned writer identity; inspect collector scope before relabeling"
         ).toBe(true);
         expect(
-          coverage(before, idle, idleService),
+          coverage(visible, idle, idleService),
           "Missing raw owned idle identity; this is not two-actor coverage"
         ).toBe(true);
-        const baseline = writeBytes(actorRows(before, writer));
+        const baseline = writeBytes(actorRows(visible, writer));
         expect(
           baseline,
           "No owned write counter; CPU/memory coverage alone is insufficient"
@@ -311,7 +364,7 @@ describe.skipIf(!process.env.CI)(
         ]);
         expect(write.exitCode, write.output).toBe(0);
         const after = await poll(
-          raw,
+          () => raw(variant),
           (rows) =>
             (writeBytes(actorRows(rows, writer)) ?? -1) > (baseline ?? 0),
           65_000
@@ -333,6 +386,6 @@ describe.skipIf(!process.env.CI)(
       }
       const failed = cleanup.filter((result) => result.status === "rejected");
       expect(failed, "Owned native fixture cleanup failed").toEqual([]);
-    }, 240_000);
+    }, 360_000);
   }
 );
