@@ -324,50 +324,51 @@ describe("ALLOY_CONFIG_PARSES (bug.5293)", () => {
       };
       let echoes: Echo[] = [];
       let lastLogs = "";
-      await expect
-        .poll(
-          () => {
-            const result = spawnSync("docker", ["logs", collector], {
-              encoding: "utf8",
-              timeout: 10_000,
-              maxBuffer: 4 * 1024 * 1024,
-            });
-            if (result.status !== 0)
-              throw new Error(
-                `Native collector logs unavailable: ${result.stderr}`
-              );
-            const logs = result.stdout + result.stderr;
-            lastLogs = logs;
-            echoes = logs.split("\n").flatMap((line) => {
-              try {
-                const value = JSON.parse(line);
-                return typeof value.receiver === "string" &&
-                  value.receiver.startsWith("loki.echo.")
-                  ? [value as Echo]
-                  : [];
-              } catch {
-                return [];
-              }
-            });
-            return variants.every((name) =>
-              [terminal, stderr].every((entry) =>
-                echoes.some(
-                  (line) =>
-                    line.receiver === `loki.echo.${name}` &&
-                    line.entry === entry
+      try {
+        await expect
+          .poll(
+            () => {
+              const result = spawnSync("docker", ["logs", collector], {
+                encoding: "utf8",
+                timeout: 10_000,
+                maxBuffer: 4 * 1024 * 1024,
+              });
+              if (result.status !== 0)
+                throw new Error(
+                  `Native collector logs unavailable: ${result.stderr}`
+                );
+              const logs = result.stdout + result.stderr;
+              lastLogs = logs;
+              echoes = logs.split("\n").flatMap((line) => {
+                try {
+                  const value = JSON.parse(line);
+                  return typeof value.receiver === "string" &&
+                    value.receiver.startsWith("loki.echo.")
+                    ? [value as Echo]
+                    : [];
+                } catch {
+                  return [];
+                }
+              });
+              return variants.every((name) =>
+                [terminal, stderr].every((entry) =>
+                  echoes.some(
+                    (line) =>
+                      line.receiver === `loki.echo.${name}` &&
+                      line.entry === entry
+                  )
                 )
-              )
-            );
-          },
-          { timeout: 20_000, interval: 200 }
-        )
-        .toBe(true)
-        .catch((cause: unknown) => {
-          throw new Error(
-            `Native Docker payload proof did not complete: ${lastLogs.slice(-12000)}`,
-            { cause }
-          );
-        });
+              );
+            },
+            { timeout: 20_000, interval: 200 }
+          )
+          .toBe(true);
+      } catch (cause) {
+        throw new Error(
+          `Native Docker payload proof did not complete: ${lastLogs.slice(-12000)}`,
+          { cause }
+        );
+      }
       for (const name of variants) {
         const rows = echoes.filter(
           (line) => line.receiver === `loki.echo.${name}`
