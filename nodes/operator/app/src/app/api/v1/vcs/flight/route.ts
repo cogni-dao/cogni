@@ -7,7 +7,7 @@
  *   Supports node-ref flights for externally built artifact rows.
  *   The candidate slot controller (GitHub Actions workflow) owns the actual slot lease
  *   on the deploy branch — this endpoint does not replicate that logic.
- * Scope: Auth → artifact gate → dispatch. No lease table. No polling hacks.
+ * Scope: Auth, artifact gating and dispatch; does not poll or maintain a separate lease table.
  * Invariants:
  *   - AUTH_REQUIRED: Bearer token (machine agents) or SIWE session. No open access.
  *   - EXPLICIT_CALLER_AUTHORITY: This direct API is the authenticated, explicitly requested flight
@@ -300,7 +300,7 @@ export const POST = wrapRouteHandlerWithLogging(
             { status: 400 }
           );
         try {
-          const pilot = createPreviewFlight(env);
+          const pilot = createPreviewFlight(env, preview.action !== "start");
           const requestInput = {
             nodeId: node.id,
             slug: node.slug,

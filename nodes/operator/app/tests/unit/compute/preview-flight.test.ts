@@ -292,6 +292,24 @@ describe("trusted TEST preview flight", () => {
     expect(ctx.rows.size).toBe(0);
     expect(ctx.git.publish).not.toHaveBeenCalled();
   });
+  it("persists absent cancellation while expiry registration is unavailable", async () => {
+    const ctx = build();
+    ctx.registerExpiry.mockRejectedValue(new Error("schedule paused"));
+    expect(await ctx.service.cancelRequest(request)).toMatchObject({
+      state: "closed",
+    });
+    expect(ctx.registerExpiry).not.toHaveBeenCalled();
+    const row = ctx.rows.get(previewDeploymentId(NODE, request.requestKey));
+    expect(row?.revokedAt).toBeDefined();
+    expect(row?.closureObservedAt).toBeDefined();
+    expect(ctx.git.publish).not.toHaveBeenCalled();
+    await expect(ctx.service.request(request)).rejects.toThrow(
+      "schedule paused"
+    );
+    expect(ctx.rows.get(previewDeploymentId(NODE, request.requestKey))).toBe(
+      row
+    );
+  });
   it("holds capacity through per-admission cleanup and keeps shared pool projections", async () => {
     const ctx = build();
     const result = await ctx.service.request(request);

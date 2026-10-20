@@ -63,8 +63,6 @@ export function createPreviewFlight(
 ): PreviewFlightPort {
   if (!retirementOnly && env.PREVIEW_FLIGHTS_ENABLED !== "true")
     throw new PreviewFlightError("disabled", "build previews are not enabled");
-  if (retirementOnly && retirementInstance) return retirementInstance;
-  if (!retirementOnly && instance) return instance;
   if (
     env.NODE_SUBMODULE_PARENT_OWNER?.toLowerCase() !== "cogni-test-org" ||
     !env.NODE_SUBMODULE_PARENT_REPO ||
@@ -83,6 +81,10 @@ export function createPreviewFlight(
   const ready = retirementOnly
     ? undefined
     : parsePreviewReadyGenerations(env.PREVIEW_READY_STATE_GENERATIONS);
+  // Admission configuration is validated on every call, even when a service is cached.
+  // Retirement has a separate cache and cannot supply an unprepared admission service.
+  if (retirementOnly && retirementInstance) return retirementInstance;
+  if (!retirementOnly && instance) return instance;
   const ledger = new DrizzleAkashTxAllocationLedger(
     async () => resolveServiceDb(),
     accountWalletScope(env.AKASH_ACTUATOR_ACCOUNT_ID)

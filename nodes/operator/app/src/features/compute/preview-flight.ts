@@ -162,7 +162,7 @@ export class PreviewFlight implements PreviewFlightPort {
       substrateHost: this.deps.substrateHost,
     });
     // A durable, repeating existing Temporal job exists BEFORE any desired state can rent compute.
-    await this.deps.registerExpiry();
+    if (!cancel) await this.deps.registerExpiry();
     let admission = await this.deps.admission[cancel ? "cancel" : "admit"]({
       deploymentId,
       nodeId: input.nodeId,

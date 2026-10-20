@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/contract/app/vcs.flight`
  * Purpose: Contract tests for POST /api/v1/vcs/flight.
- * Scope: Verifies operator-local node-ref artifact gating, dispatch, and auth.
+ * Scope: Verifies artifact gating, dispatch and auth over fakes; does not call remote providers.
  * Invariants:
  *   - ARTIFACT_GATE: prepareNodeRefCandidateFlight owns source/image proof before dispatch.
  *   - PARENT_PIN_IS_REVIEW_METADATA: opened parent pin PRs do not block candidate flight.
@@ -40,8 +40,9 @@ const mockPreview = vi.hoisted(() => ({
   cancelRequest: vi.fn(),
   sweep: vi.fn(),
 }));
+const mockPreviewFactory = vi.hoisted(() => vi.fn());
 vi.mock("@/bootstrap/capabilities/preview-flight", () => ({
-  createPreviewFlight: () => mockPreview,
+  createPreviewFlight: mockPreviewFactory,
   previewDeploymentId: () => "55616668-2668-4be8-a020-11d24fd61561",
 }));
 const authzState = vi.hoisted(() => ({
@@ -229,6 +230,7 @@ function makePreparedNodeRef(
 describe("POST /api/v1/vcs/flight", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPreviewFactory.mockReturnValue(mockPreview);
     dbState.nodeQuery = undefined;
     authzState.decision = undefined;
     authzState.check.mockImplementation(async () => {
@@ -731,6 +733,7 @@ describe("POST /api/v1/vcs/flight", () => {
       requestKey: "before-first-dispatch",
       ttlSeconds: 60,
     });
+    expect(mockPreviewFactory).toHaveBeenCalledWith(envState.current, false);
     expect(
       mockDeployPlane.dispatchNodeRefCandidateFlight
     ).not.toHaveBeenCalled();
@@ -769,9 +772,36 @@ describe("POST /api/v1/vcs/flight", () => {
       requestKey: "before-first-dispatch",
       ttlSeconds: 60,
     });
+    expect(mockPreviewFactory).toHaveBeenCalledWith(envState.current, true);
     expect(
       mockDeployPlane.dispatchNodeRefCandidateFlight
     ).not.toHaveBeenCalled();
+  });
+  it("uses retirement-only control for status without admission flag or ready metadata", async () => {
+    mockPreview.status.mockResolvedValue({
+      deploymentId: "55616668-2668-4be8-a020-11d24fd61561",
+      nodeId: NODE_ID,
+      sourceSha: SOURCE_SHA,
+      url: "https://p-fixture.cogni-testing.org",
+      expiresAt: "2026-10-20T12:00:00.000Z",
+      state: "closed",
+    });
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            preview: { requestKey: "existing-request", action: "status" },
+          }),
+        });
+        expect(response.status).toBe(200);
+      },
+    });
+    expect(mockPreviewFactory).toHaveBeenCalledWith(envState.current, true);
+    expect(mockPreview.request).not.toHaveBeenCalled();
   });
   it("retains node.flight authorization before preview control", async () => {
     authzState.decision = "authz_denied";
