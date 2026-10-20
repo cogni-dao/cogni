@@ -21,7 +21,11 @@ const requireThat = (condition, code) => {
   if (!condition) throw new Error(code);
 };
 const run = (command, args, options = {}) =>
-  execFileSync(command, args, { encoding: "utf8", ...options }).trim();
+  execFileSync(command, args, {
+    encoding: "utf8",
+    stdio: "pipe",
+    ...options,
+  }).trim();
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 
 export function closed(detail) {
@@ -259,6 +263,31 @@ export function candidateSnapshotCommand(request) {
 umask 077
 probe=$(mktemp -d)
 trap 'rm -rf "$probe"' EXIT
+exec 3>&2
+exec 2>"$probe/native.stderr"
+phase=engine_inventory
+trap 'rc=$?; printf "MAINTENANCE_NATIVE_PHASE phase=%s native_rc=%s\\n" "$phase" "$rc" >&3' ERR
+python3 - '${JSON.stringify(request.expectedEngineImages)}' <<'PY_ENGINES'
+import json,subprocess,sys
+expected=json.loads(sys.argv[1]); engines=[]
+def docker(args):
+ result=subprocess.run(["timeout","20","docker",*args],capture_output=True,text=True)
+ if result.returncode:
+  print("MAINTENANCE_NATIVE_PHASE phase=engine_inventory native_rc="+str(result.returncode),file=sys.stderr)
+  sys.exit(result.returncode)
+ return result.stdout
+for service in ("postgres","doltgres"):
+ ids=docker(["ps","-aq","--no-trunc","--filter","label=com.docker.compose.project=cogni-runtime","--filter","label=com.docker.compose.service="+service]).split()
+ assert len(ids)==1, "maintenance_engine_ownership_ambiguous"
+ template='{"id":{{json .Id}},"image":{{json .Config.Image}},"imageId":{{json .Image}},"startedAt":{{json .State.StartedAt}},"restartCount":{{json .RestartCount}},"running":{{json .State.Running}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},"workingDir":{{json (index .Config.Labels "com.docker.compose.project.working_dir")}}}'
+ row=json.loads(docker(["inspect","--format",template,ids[0]]))
+ assert row["id"]==ids[0] and len(row["id"])==64 and all(c in "0123456789abcdef" for c in row["id"])
+ assert row["project"]=="cogni-runtime" and row["service"]==service and row["workingDir"]=="/opt/cogni-template-runtime", "maintenance_engine_custody_mismatch"
+ assert row["image"]==expected[service] and len(row["imageId"])==71 and row["imageId"].startswith("sha256:") and all(c in "0123456789abcdef" for c in row["imageId"][7:]) and row["running"] is True and isinstance(row["restartCount"],int) and row["startedAt"], "maintenance_engine_identity_unproven"
+ engines.append(row)
+print("MAINTENANCE_ENGINE_IDENTITY "+json.dumps({"engines":engines}))
+PY_ENGINES
+phase=compute_api
 timeout 20 kubectl api-resources --api-group=compute.cogni.io -o name > "$probe/compute-resources"
 python3 - "$probe" <<'PY_KINDS'
 import pathlib,sys
@@ -269,11 +298,16 @@ assert selected, "maintenance_compute_api_inventory_unavailable"
 root.joinpath("selected-kinds").write_text("\\n".join(selected)+"\\n")
 PY_KINDS
 while IFS= read -r kind; do
+ phase=compute_objects
  timeout 20 kubectl -n '${namespace}' get "$kind" -o json > "$probe/$kind"
 done < "$probe/selected-kinds"
+phase=producer_objects
 timeout 20 kubectl -n '${namespace}' get deployments,replicasets,statefulsets,pods,jobs,cronjobs -o json > "$probe/producers"
+phase=applications
 timeout 20 kubectl -n argocd get applications.argoproj.io -o json > "$probe/apps"
+phase=application_sets
 timeout 20 kubectl -n argocd get applicationsets.argoproj.io -o json > "$probe/appsets"
+phase=cluster_parse
 python3 - '${request.nodeId}' '${request.slug}' "$probe" <<'PY_SNAPSHOT'
 import json,sys,datetime
 node,slug,root=sys.argv[1:]
@@ -301,10 +335,96 @@ PY_SNAPSHOT
   return command;
 }
 
-function candidateClusterSnapshot(request) {
-  const command = candidateSnapshotCommand(request);
+export function parseCandidateSnapshotOutput(stdout, expectedImages) {
+  const lines = stdout.trim().split("\n");
+  const receipts = lines.filter((line) =>
+    line.startsWith("MAINTENANCE_ENGINE_IDENTITY ")
+  );
+  requireThat(receipts.length === 1, "maintenance_engine_receipt_unavailable");
+  const receipt = JSON.parse(
+    receipts[0].slice("MAINTENANCE_ENGINE_IDENTITY ".length)
+  );
+  requireThat(
+    Array.isArray(receipt.engines) && receipt.engines.length === 2,
+    "maintenance_engine_receipt_unavailable"
+  );
+  const fields = [
+    "id",
+    "image",
+    "imageId",
+    "startedAt",
+    "restartCount",
+    "running",
+    "project",
+    "service",
+    "workingDir",
+  ];
+  requireThat(
+    Object.keys(receipt).length === 1 && Object.hasOwn(receipt, "engines"),
+    "maintenance_engine_receipt_unproven"
+  );
+  const services = new Set();
+  const ids = new Set();
+  for (const row of receipt.engines) {
+    requireThat(
+      row &&
+        typeof row === "object" &&
+        Object.keys(row).length === fields.length &&
+        Object.keys(row).every((field) => fields.includes(field)),
+      "maintenance_engine_receipt_unproven"
+    );
+    requireThat(
+      ["postgres", "doltgres"].includes(row.service) &&
+        !services.has(row.service) &&
+        !ids.has(row.id) &&
+        /^[0-9a-f]{64}$/.test(row.id) &&
+        /^sha256:[0-9a-f]{64}$/.test(row.imageId) &&
+        row.running === true &&
+        row.project === "cogni-runtime" &&
+        row.workingDir === "/opt/cogni-template-runtime" &&
+        Number.isInteger(row.restartCount) &&
+        row.restartCount >= 0 &&
+        typeof row.startedAt === "string" &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+          row.startedAt
+        ) &&
+        Number.isFinite(Date.parse(row.startedAt)) &&
+        typeof expectedImages?.[row.service] === "string" &&
+        row.image === expectedImages[row.service],
+      "maintenance_engine_receipt_unproven"
+    );
+    services.add(row.service);
+    ids.add(row.id);
+  }
+  console.log("MAINTENANCE_ENGINE_IDENTITY", JSON.stringify(receipt));
   return JSON.parse(
-    run(
+    lines
+      .filter((line) => !line.startsWith("MAINTENANCE_ENGINE_IDENTITY "))
+      .join("\n")
+  );
+}
+
+function reportNativePhase(error, fallback) {
+  const allowed =
+    /MAINTENANCE_NATIVE_PHASE phase=(engine_inventory|compute_api|compute_objects|producer_objects|applications|application_sets|cluster_parse) native_rc=([0-9]{1,3})(?:\n|$)/g;
+  const matches = [...String(error?.stderr ?? "").matchAll(allowed)];
+  for (const match of matches)
+    console.error(
+      `MAINTENANCE_NATIVE_PHASE phase=${match[1]} native_rc=${match[2]}`
+    );
+  console.error(
+    "MAINTENANCE_NATIVE_PHASE",
+    JSON.stringify({
+      phase: fallback,
+      native_rc: Number.isInteger(error?.status) ? error.status : null,
+    })
+  );
+}
+
+function candidateClusterSnapshot(request) {
+  let stdout;
+  try {
+    stdout = run(
       "ssh",
       [
         "-i",
@@ -315,9 +435,32 @@ function candidateClusterSnapshot(request) {
         "bash",
         "-s",
       ],
-      { input: command }
-    )
-  );
+      { input: candidateSnapshotCommand(request) }
+    );
+  } catch (error) {
+    // Even a later Kubernetes read failure must retain the earlier native engine receipt.
+    const receipts = String(error?.stdout ?? "")
+      .split("\n")
+      .filter((line) => line.startsWith("MAINTENANCE_ENGINE_IDENTITY "));
+    if (receipts.length === 1) {
+      try {
+        parseCandidateSnapshotOutput(
+          `${receipts[0]}\n{}`,
+          request.expectedEngineImages
+        );
+      } catch {
+        /* Failed identity is never accepted. */
+      }
+    }
+    reportNativePhase(error, "cluster_ssh");
+    throw new Error("maintenance_native_phase_unavailable");
+  }
+  try {
+    return parseCandidateSnapshotOutput(stdout, request.expectedEngineImages);
+  } catch (error) {
+    reportNativePhase(error, "cluster_output");
+    throw new Error("maintenance_native_phase_unavailable");
+  }
 }
 
 /** First owning-runner proof is read-only and precedes all desired-state/credential changes. */
@@ -348,7 +491,30 @@ async function candidateReadOnlyPreflight() {
     sourceSha: catalog.source_sha,
     expected: { receipts: [] },
   };
-  const inventory = remoteProvider({ ...request, phase: "inventory" });
+  const compose = parseYaml(
+    readFileSync(
+      `${process.env.CI_SOURCE_ROOT}/infra/compose/runtime/docker-compose.yml`,
+      "utf8"
+    )
+  );
+  request.expectedEngineImages = Object.fromEntries(
+    ["postgres", "doltgres"].map((service) => {
+      const image = compose?.services?.[service]?.image;
+      requireThat(
+        typeof image === "string" &&
+          /^[a-zA-Z0-9][a-zA-Z0-9./:@_-]{1,255}$/.test(image),
+        "maintenance_engine_declared_image_unproven"
+      );
+      return [service, image];
+    })
+  );
+  let inventory;
+  try {
+    inventory = remoteProvider({ ...request, phase: "inventory" });
+  } catch (error) {
+    reportNativePhase(error, "ledger_inventory");
+    throw new Error("maintenance_native_phase_unavailable");
+  }
   console.log(
     "MAINTENANCE_CANDIDATE_LEDGER",
     JSON.stringify({
@@ -373,16 +539,27 @@ async function candidateReadOnlyPreflight() {
       })),
     })
   );
-  const { DatabaseCellAllocationMetadataSchema } = await import(
-    pathToFileURL(
-      `${process.env.CI_SOURCE_ROOT}/nodes/operator/app/src/shared/secrets/database-cell-placement.data.ts`
-    ).href
-  );
-  request.protectedCells = protectedDatabaseCells(
-    inventory.rows,
-    request,
-    DatabaseCellAllocationMetadataSchema
-  );
+  let DatabaseCellAllocationMetadataSchema;
+  try {
+    ({ DatabaseCellAllocationMetadataSchema } = await import(
+      pathToFileURL(
+        `${process.env.CI_SOURCE_ROOT}/nodes/operator/app/src/shared/secrets/database-cell-placement.data.ts`
+      ).href
+    ));
+  } catch (error) {
+    reportNativePhase(error, "metadata_import");
+    throw new Error("maintenance_native_phase_unavailable");
+  }
+  try {
+    request.protectedCells = protectedDatabaseCells(
+      inventory.rows,
+      request,
+      DatabaseCellAllocationMetadataSchema
+    );
+  } catch (error) {
+    reportNativePhase(error, "protected_metadata");
+    throw error;
+  }
   const cluster = candidateClusterSnapshot(request);
   // Emit only typed, value-free evidence. Failed/closed/preparing history remains visible.
   console.log(
@@ -416,7 +593,12 @@ async function candidateReadOnlyPreflight() {
     cluster.xrs.length === 0 && cluster.producers.length === 0,
     "maintenance_candidate_old_live_producer_requires_close"
   );
-  await deliveryInventory(request);
+  try {
+    await deliveryInventory(request);
+  } catch (error) {
+    reportNativePhase(error, "delivery_inventory");
+    throw error;
+  }
   // Historical watched desired state is still active until the reviewed prospective fence is synced.
   // This first read-only gate cannot authorize materialization from an empty runtime observation alone.
   requireThat(
