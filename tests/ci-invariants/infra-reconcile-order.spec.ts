@@ -3,7 +3,7 @@
 /**
  * Module: `@tests/ci-invariants/infra-reconcile-order`
  * Purpose: Ensure normal shared-runtime repair is reachable before its dependencies.
- * Scope: Workflow DAG and normal deployment phase source, no network or Docker.
+ * Scope: Workflow DAG and normal deployment phase source. Does not access network or Docker.
  * Invariants: Operator/full recovery precedes consumers; legacy bootstrap retains ordering.
  * Side-effects: IO (reads committed workflow and script).
  * Links: story.5095, task.5281, scripts/ci/deploy-infra.sh
