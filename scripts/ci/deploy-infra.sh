@@ -1947,9 +1947,7 @@ patch_operator_openfga_config() {
     rm -f "$body" "$response" "$error_file"
     printf '[openbao-writer] phase=%s native_rc=%s http_status=%s reason=%s attempt=%s/%s\n' "$phase" "$rc" "$status" "$reason" "$attempt" "$max_attempts" >&2
     if [[ "$attempt" -ge "$max_attempts" ]]; then
-      if [[ "$max_attempts" -eq 3 ]]; then
-        log_warn "OpenBao writer SA lookup remained unavailable after 3 attempts (token_request/login exhausted)"
-      else log_warn "OpenBao writer login exhausted ${max_attempts} attempt(s)"; fi
+      log_warn "OpenBao writer ${phase} exhausted ${max_attempts} attempt(s)"
       return 1
     fi
     sleep_seconds=$((attempt * 5 + RANDOM % 5)); sleep "$sleep_seconds"
@@ -2024,9 +2022,9 @@ refresh_operator_openfga_secret() {
 }
 
 if patch_operator_openfga_config; then
-  log_info "OpenBao operator path patched with OpenFGA runtime IDs"
-  # Best-effort acceleration ONLY. patch_operator_openfga_config above already wrote
-  # the runtime IDs to OpenBao (the SSOT, hard-gated). The ESO force-refresh just pulls
+  log_info "OpenBao operator OpenFGA config verified"
+  # Best-effort acceleration ONLY. A fresh read confirmed desired runtime IDs
+  # in OpenBao (the SSOT, hard-gated). The ESO force-refresh just pulls
   # them into the operator Secret sooner; ESO syncs them on its normal cycle regardless.
   # On a fresh/rebuilding env the operator ExternalSecret may be absent OR present-but-
   # not-yet-Ready (ESO/app still converging when deploy-infra runs in Phase 5f) — neither

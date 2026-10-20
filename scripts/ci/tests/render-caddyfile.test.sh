@@ -159,11 +159,15 @@ grep -Fq 'permission_denied_recheck) max_attempts=2' "$DEPLOY_INFRA" \
 grep -Fq 'OpenBao writer login failed permanently' "$DEPLOY_INFRA" \
   || fail "unknown OpenBao login failures do not fail closed"
 grep -Fq 'classify_kubectl_resource_lookup_failure' "$DEPLOY_INFRA" \
-  || fail "OpenBao writer SA lookup does not distinguish timeout from absence"
-grep -Fq 'OpenBao writer SA lookup remained unavailable after 3 attempts' "$DEPLOY_INFRA" \
-  || fail "OpenBao writer SA lookup has no bounded transient retry"
+  || fail "OpenBao writer token request does not distinguish timeout from absence"
+grep -Fq 'OpenBao writer ${phase} exhausted ${max_attempts} attempt(s)' "$DEPLOY_INFRA" \
+  || fail "OpenBao writer does not identify its actual bounded exhausted phase"
+grep -Fq 'timeout 10 kubectl create token openbao-operator -n default' "$DEPLOY_INFRA" \
+  || fail "OpenBao writer native token request lost its bound/identity"
+! grep -Fq 'kubectl get sa openbao-operator' "$DEPLOY_INFRA" \
+  || fail "OpenBao writer retains the redundant SA lookup prerequisite"
 grep -Fq 'refusing to claim the SA is absent' "$DEPLOY_INFRA" \
   || fail "unknown OpenBao writer SA lookup failures invent absence"
-pass "backup execution is candidate-gated + serialized; OpenBao login and SA lookup retries are bounded and fail-closed"
+pass "backup execution is candidate-gated + serialized; OpenBao login and token requests are bounded and fail-closed"
 
 echo "PASS: render-caddyfile.test.sh"
