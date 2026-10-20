@@ -415,6 +415,60 @@ describe("preview cancellation (real PostgreSQL)", () => {
       })
     ).rejects.toMatchObject({ reason: "conflict" });
   });
+  it("a prepared generation cannot be reused by another admission after closure", async () => {
+    const first = await bind();
+    await a.preview.revoke(first.deploymentId);
+    await a.preview.finishRetirement({
+      deploymentId: first.deploymentId,
+      observedClosedReceiptIds: [],
+    });
+    const second = await b.preview.admit(admission(2));
+    await expect(
+      b.preview.withUnallocatedStateReservation(
+        second.deploymentId,
+        second.stateSlot,
+        async () => ({ resetGeneration: GEN })
+      )
+    ).rejects.toBeDefined();
+    expect(
+      (await b.preview.read(second.deploymentId))?.resetGeneration
+    ).toBeUndefined();
+    await expect(
+      b.preview.withUnallocatedStateReservation(
+        second.deploymentId,
+        second.stateSlot,
+        async () => ({
+          resetGeneration: "894d3a9d-465d-48a8-92fd-47373d8e53fe",
+        })
+      )
+    ).resolves.toMatchObject({
+      resetGeneration: "894d3a9d-465d-48a8-92fd-47373d8e53fe",
+    });
+  });
+  it("cancel racing admission tolerates the absolute deadline's benign clock difference", async () => {
+    const input = admission();
+    await a.preview.admit(input);
+    await b.preview.cancel({
+      ...input,
+      expiresAt: new Date(input.expiresAt.getTime() + 1),
+    });
+    await expect(claim()).rejects.toMatchObject({ reason: "terminal" });
+  });
+  it("short-TTL admission races default-TTL cancel without losing terminal intent", async () => {
+    const input = admission(),
+      cancel = {
+        ...input,
+        payloadHash: "9".repeat(64),
+        expiresAt: new Date(input.expiresAt.getTime() + 60_000),
+      };
+    const results = await Promise.allSettled([
+      a.preview.admit(input),
+      b.preview.cancel(cancel),
+    ]);
+    expect(results[1]?.status).toBe("fulfilled");
+    expect((await a.preview.read(input.deploymentId))?.revokedAt).toBeDefined();
+    await expect(claim()).rejects.toMatchObject({ reason: "terminal" });
+  });
   it("preserves ordinary failed/no-handle retry behavior", async () => {
     const input = {
       cogniKey: "ordinary",

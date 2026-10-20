@@ -51,6 +51,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `runGovernanceSchedulesSyncJob()` - Job: advisory lock + governance schedule sync via container
   - `runCatalogNodeRegistryReconcileJob()` - Job: App-read catalog projection into env-local Postgres + OpenFGA
   - `startCatalogRegistryReconcileOnBoot()`, `triggerCatalogRegistryReconcile()` - Immediate/poll registry trigger lifecycle
+  - `createPreviewFlight(env, retirementOnly?)` - Explicit TEST preview wiring; runtime admission disabled by default, existing retirement continues after disabling new requests
   - `getContainer()` - Singleton DI container with logger and config
   - `getWorkItemSessionPort()` - Cached existing PostgreSQL session adapter without other providers
   - `getRequestLoggingDependencies()` - Pure logger, clock, and error policy for explicitly opted-in operational routes

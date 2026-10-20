@@ -740,3 +740,62 @@ describe("readReceipt", () => {
     ).resolves.toBeNull();
   });
 });
+
+describe("preview migration generation retirement", () => {
+  const resetGeneration = "2616bc5c-5c0f-4cbf-ae01-82c376897448";
+  const request = {
+    nodeSlug: "spawny-boi",
+    bundleDigest: DIGEST,
+    resetGeneration,
+    namespace: "cogni-candidate-a",
+  };
+  it("foreground-deletes only the exact disposable generation", async () => {
+    const name = migrationJobName(request.nodeSlug, DIGEST, resetGeneration);
+    const api = batch({
+      metadata: {
+        name,
+        annotations: { "cogni.io/reset-generation": resetGeneration },
+        labels: { "cogni.io/disposable-reset": "true" },
+      },
+    });
+    await adapterOf(api).retireResetGeneration(request);
+    expect(api.readNamespacedJob).toHaveBeenCalledWith(
+      name,
+      "cogni-candidate-a"
+    );
+    expect(api.deleteNamespacedJob).toHaveBeenCalledWith(
+      name,
+      "cogni-candidate-a",
+      undefined,
+      undefined,
+      0,
+      undefined,
+      "Foreground"
+    );
+  });
+  it("refuses another generation or ordinary migration Job", async () => {
+    for (const metadata of [
+      {
+        annotations: { "cogni.io/reset-generation": "other" },
+        labels: { "cogni.io/disposable-reset": "true" },
+      },
+      {
+        annotations: { "cogni.io/reset-generation": resetGeneration },
+        labels: {},
+      },
+    ]) {
+      const api = batch({ metadata });
+      await expect(
+        adapterOf(api).retireResetGeneration(request)
+      ).rejects.toThrow("preview_migration_cleanup_identity_conflict");
+      expect(api.deleteNamespacedJob).not.toHaveBeenCalled();
+    }
+  });
+  it("treats an explicit404 as already removed", async () => {
+    const api = batch();
+    await expect(
+      adapterOf(api).retireResetGeneration(request)
+    ).resolves.toBeUndefined();
+    expect(api.deleteNamespacedJob).not.toHaveBeenCalled();
+  });
+});

@@ -370,6 +370,19 @@ export {
   PaymentRailMisconfiguredPortError,
 } from "./payment-rail-guard.port";
 export type {
+  NodeBundleReaderPort,
+  PreviewCleanupObserverPort,
+  PreviewFlightPort,
+  PreviewFlightRequest,
+  PreviewFlightStatus,
+  PreviewGitPort,
+  PreviewSource,
+  PreviewSourceInput,
+  PreviewSourcePort,
+  PreviewStatePairPort,
+} from "./preview-flight.port";
+export { PreviewFlightError } from "./preview-flight.port";
+export type {
   ReceiptDelivery,
   ReceiptDeliveryTarget,
 } from "./receipt-delivery.port";

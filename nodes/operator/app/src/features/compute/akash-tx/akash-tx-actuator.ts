@@ -505,8 +505,22 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     const admission = await preview.revoke(input.deploymentId);
     if (admission.closureObservedAt)
       return { ...input, closed: true, pendingReceiptIds: [] };
+    if (admission.resetGeneration && this.migration?.retireResetGeneration) {
+      await this.migration
+        .retireResetGeneration({
+          nodeSlug: "spawny-boi",
+          bundleDigest: admission.bundleRef.split("@")[1] as string,
+          resetGeneration: admission.resetGeneration,
+          namespace: "cogni-candidate-a",
+        })
+        .catch(() => {
+          this.log.warn(
+            { deploymentId: input.deploymentId },
+            "preview_migration_cleanup_pending"
+          );
+        });
+    }
     const receipts = await preview.receipts(input.deploymentId);
-    const observedClosedReceiptIds: string[] = [];
     const pendingReceiptIds: string[] = [];
     for (const receipt of receipts) {
       try {
@@ -550,28 +564,18 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           continue;
         }
         await this.ledger.markReleased({ cogniKey: receipt.cogniKey });
-        observedClosedReceiptIds.push(receipt.receiptId);
         await this.observeCost(receipt, handle).catch(() => undefined);
       } catch {
         pendingReceiptIds.push(receipt.receiptId);
       }
     }
-    if (pendingReceiptIds.length === 0) {
-      try {
-        await preview.finishRetirement({
-          deploymentId: input.deploymentId,
-          observedClosedReceiptIds,
-        });
-        return { ...input, closed: true, pendingReceiptIds: [] };
-      } catch (error) {
-        if (
-          !(error instanceof AkashPreviewAdmissionError) ||
-          error.reason !== "unresolved"
-        )
-          throw error;
-      }
-    }
-    return { ...input, closed: false, pendingReceiptIds };
+    // Admission capacity is finalized by the desired-state lifecycle ONLY AFTER Git and
+    // owned XR/DNS/migration Job+Pod absence. Crossplane delete still receives paid closure.
+    return {
+      ...input,
+      closed: pendingReceiptIds.length === 0,
+      pendingReceiptIds,
+    };
   }
 
   private async assertPreviewSpec(
@@ -1715,6 +1719,13 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     let rolledBack = 0;
     let adopted = 0;
     let held = 0;
+    if (this.ledger.preview) {
+      for (const admission of await this.ledger.preview.listDue()) {
+        await this.retirePreview({
+          deploymentId: admission.deploymentId,
+        }).catch(() => undefined);
+      }
+    }
     for (const row of stale) {
       if (row.previewDeploymentId) {
         // Lifetime retirement owns these receipts. Generic empty-scan settlement is unsafe.

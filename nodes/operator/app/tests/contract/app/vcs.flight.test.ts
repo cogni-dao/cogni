@@ -34,6 +34,16 @@ const mockDeployPlane = vi.hoisted(() => ({
   prepareNodeRefCandidateFlight: vi.fn(),
   dispatchNodeRefCandidateFlight: vi.fn(),
 }));
+const mockPreview = vi.hoisted(() => ({
+  request: vi.fn(),
+  status: vi.fn(),
+  cancelRequest: vi.fn(),
+  sweep: vi.fn(),
+}));
+vi.mock("@/bootstrap/capabilities/preview-flight", () => ({
+  createPreviewFlight: () => mockPreview,
+  previewDeploymentId: () => "55616668-2668-4be8-a020-11d24fd61561",
+}));
 const authzState = vi.hoisted(() => ({
   decision: undefined as
     | undefined
@@ -685,5 +695,101 @@ describe("POST /api/v1/vcs/flight", () => {
         });
       },
     });
+  });
+  it("starts an authorized opt-in preview through the existing flight endpoint without Actions dispatch", async () => {
+    const result = {
+      deploymentId: "55616668-2668-4be8-a020-11d24fd61561",
+      nodeId: NODE_ID,
+      sourceSha: SOURCE_SHA,
+      url: "https://p-fixture.cogni-testing.org",
+      expiresAt: "2026-10-20T12:00:00.000Z",
+      state: "pending",
+    };
+    mockPreview.request.mockResolvedValue(result);
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            preview: { requestKey: "before-first-dispatch", ttlSeconds: 60 },
+          }),
+        });
+        expect(response.status).toBe(202);
+        expect(await response.json()).toMatchObject({
+          slot: "build-preview",
+          preview: result,
+        });
+      },
+    });
+    expect(mockPreview.request).toHaveBeenCalledWith({
+      nodeId: NODE_ID,
+      slug: "creative",
+      sourceSha: SOURCE_SHA,
+      requestKey: "before-first-dispatch",
+      ttlSeconds: 60,
+    });
+    expect(
+      mockDeployPlane.dispatchNodeRefCandidateFlight
+    ).not.toHaveBeenCalled();
+  });
+  it("uses original request identity to cancel before create instead of a missing-ID release", async () => {
+    mockPreview.cancelRequest.mockResolvedValue({
+      deploymentId: "55616668-2668-4be8-a020-11d24fd61561",
+      nodeId: NODE_ID,
+      sourceSha: SOURCE_SHA,
+      url: "https://p-fixture.cogni-testing.org",
+      expiresAt: "2026-10-20T12:00:00.000Z",
+      state: "closed",
+    });
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            preview: {
+              requestKey: "before-first-dispatch",
+              action: "release",
+              ttlSeconds: 60,
+            },
+          }),
+        });
+        expect(response.status).toBe(200);
+      },
+    });
+    expect(mockPreview.cancelRequest).toHaveBeenCalledWith({
+      nodeId: NODE_ID,
+      slug: "creative",
+      sourceSha: SOURCE_SHA,
+      requestKey: "before-first-dispatch",
+      ttlSeconds: 60,
+    });
+    expect(
+      mockDeployPlane.dispatchNodeRefCandidateFlight
+    ).not.toHaveBeenCalled();
+  });
+  it("retains node.flight authorization before preview control", async () => {
+    authzState.decision = "authz_denied";
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            preview: { requestKey: "blocked" },
+          }),
+        });
+        expect(response.status).toBe(403);
+      },
+    });
+    expect(mockPreview.request).not.toHaveBeenCalled();
+    expect(mockPreview.cancelRequest).not.toHaveBeenCalled();
   });
 });

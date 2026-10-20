@@ -233,6 +233,21 @@ export interface EnvManagerPrClassificationResult {
 }
 
 export interface DeployPlanePort {
+  readPreviewSource?(
+    input: PrepareNodeRefCandidateFlightInput
+  ): Promise<import("./preview-flight.port").PreviewSource>;
+  writePreviewDesiredState?(input: {
+    parentOwner: string;
+    parentRepo: string;
+    deploymentId: string;
+    files?: readonly { path: string; content: string }[];
+  }): Promise<void>;
+  previewDesiredStateAbsent?(input: {
+    parentOwner: string;
+    parentRepo: string;
+    deploymentId: string;
+  }): Promise<boolean>;
+
   prepareNodeRefCandidateFlight(
     input: PrepareNodeRefCandidateFlightInput
   ): Promise<PreparedNodeRefCandidateFlight>;

@@ -36,6 +36,9 @@ export const akashPreviewAdmissions = pgTable(
       .defaultNow(),
   },
   (t) => [
+    uniqueIndex("akash_preview_admissions_reset_generation_idx").on(
+      t.resetGeneration
+    ),
     uniqueIndex("akash_preview_admissions_request_idx").on(
       t.walletScope,
       t.requestKey

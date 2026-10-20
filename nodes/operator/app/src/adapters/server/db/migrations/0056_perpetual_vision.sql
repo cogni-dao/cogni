@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "akash_preview_admissions_reset_generation_idx" ON "akash_preview_admissions" USING btree ("reset_generation");

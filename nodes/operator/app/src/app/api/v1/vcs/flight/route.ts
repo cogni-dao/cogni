@@ -31,10 +31,15 @@ import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
+import {
+  createPreviewFlight,
+  previewDeploymentId,
+} from "@/bootstrap/capabilities/preview-flight";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import type { DeployPlanePort, PreparedNodeRefCandidateFlight } from "@/ports";
+import { AkashPreviewAdmissionError, PreviewFlightError } from "@/ports";
 import { nodes } from "@/shared/db/nodes";
 import { type ServerEnv, serverEnv } from "@/shared/env";
 import {
@@ -230,7 +235,7 @@ export const POST = wrapRouteHandlerWithLogging(
         return NextResponse.json({ error: "Invalid request" }, { status: 400 });
       }
 
-      const { nodeRef, workflowRef } = parsed.data;
+      const { nodeRef, workflowRef, preview } = parsed.data;
       if (!nodeRef) {
         logTerminal({
           mode: "unknown",
@@ -283,6 +288,102 @@ export const POST = wrapRouteHandlerWithLogging(
           },
           { status: authz.status }
         );
+      }
+
+      if (preview) {
+        if (
+          workflowRef ||
+          (preview.action === "status" && preview.ttlSeconds !== undefined)
+        )
+          return NextResponse.json(
+            { error: "invalid preview request" },
+            { status: 400 }
+          );
+        try {
+          const pilot = createPreviewFlight(env);
+          const requestInput = {
+            nodeId: node.id,
+            slug: node.slug,
+            sourceSha: nodeRef.sourceSha.toLowerCase(),
+            requestKey: preview.requestKey,
+            ...(preview.ttlSeconds !== undefined
+              ? { ttlSeconds: preview.ttlSeconds }
+              : {}),
+          };
+          const result =
+            preview.action === "release"
+              ? await pilot.cancelRequest(requestInput)
+              : preview.action === "status"
+                ? await pilot.status({
+                    nodeId: node.id,
+                    deploymentId: previewDeploymentId(
+                      node.id,
+                      preview.requestKey
+                    ),
+                  })
+                : await pilot.request(requestInput);
+          const status =
+            result.state === "pending" || result.state === "retiring"
+              ? 202
+              : 200;
+          logTerminal({
+            mode,
+            outcome: "success",
+            status,
+            targetNodeId: node.id,
+            slug: node.slug,
+            sourceSha8: result.sourceSha.slice(0, 8),
+          });
+          return NextResponse.json(
+            flightOperation.output.parse({
+              dispatched:
+                preview.action === "start" && result.state !== "closed",
+              slot: "build-preview",
+              preview: result,
+            }),
+            { status }
+          );
+        } catch (error) {
+          const status =
+            error instanceof PreviewFlightError
+              ? (
+                  {
+                    disabled: 503,
+                    invalid_request: 400,
+                    not_found: 404,
+                    conflict: 409,
+                    unavailable: 503,
+                  } as const
+                )[error.code]
+              : error instanceof AkashPreviewAdmissionError
+                ? error.reason === "conflict" || error.reason === "capacity"
+                  ? 409
+                  : error.reason === "missing"
+                    ? 404
+                    : 422
+                : ((error as { status?: number }).status ?? 503);
+          logTerminal({
+            mode,
+            outcome: "error",
+            status,
+            errorCode: "preview_request_failed",
+            targetNodeId: node.id,
+            slug: node.slug,
+            sourceSha8: nodeRef.sourceSha.slice(0, 8),
+          });
+          return NextResponse.json(
+            {
+              error: "preview request failed",
+              errorCode:
+                error instanceof PreviewFlightError
+                  ? error.code
+                  : error instanceof AkashPreviewAdmissionError
+                    ? error.reason
+                    : "preview_unavailable",
+            },
+            { status }
+          );
+        }
       }
 
       let deployPlane: DeployPlanePort;

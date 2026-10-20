@@ -61,6 +61,7 @@ export interface AkashPreviewAdmissionPort {
     artifactRef: string;
     sdlHash: string;
   }): Promise<void>;
+  listDue(): Promise<readonly AkashPreviewAdmission[]>;
   read(deploymentId: string): Promise<AkashPreviewAdmission | null>;
   revoke(deploymentId: string): Promise<AkashPreviewAdmission>;
   assertActive(input: {

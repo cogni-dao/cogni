@@ -3384,6 +3384,10 @@ describe("opt-in preview lifecycle", () => {
         revoked = true;
         return row;
       },
+      listDue: async () =>
+        revoked
+          ? [{ ...row, revokedAt: new Date("2026-10-20T00:00:00Z") }]
+          : [],
       read: async () => row,
       revoke: async () => {
         revoked = true;
@@ -3591,6 +3595,22 @@ describe("opt-in preview lifecycle", () => {
       })
     ).toMatchObject({ migration: { phase: "unavailable" } });
     expect(ctx.migration.calls).toHaveLength(0);
+  });
+  it("existing wallet sweep closes revoked previews but never frees desired-state capacity", async () => {
+    const ctx = previewBuild();
+    await ctx.actuator.create(createInput);
+    ctx.revoke();
+    ctx.api.status = async (input) => ({
+      provider: "akash",
+      leaseId: input.leaseId,
+      state: "closed",
+      endpoints: [],
+    });
+    await ctx.actuator.sweepStaleAllocations({ olderThanMs: 0, limit: 10 });
+    expect(ctx.api.releaseCalls).toContain("7001");
+    expect(ctx.ledger.rows.get("preview")?.state).toBe("released");
+    // create's diagnostic finishDispatch is the sole finish; desired-state finalization owns quota.
+    expect(ctx.finishes()).toBe(1);
   });
   it("generic preview update refuses replacement before provider PUT", async () => {
     const ctx = previewBuild();

@@ -5131,3 +5131,135 @@ describe("GitHubRepoWriter.reconcileMergeQueuePolicy (task.5141)", () => {
     );
   });
 });
+
+describe("GitHubRepoWriter TEST preview desired state", () => {
+  const deploymentId = "55616668-2668-4be8-a020-11d24fd61561";
+  const directory = `infra/k8s/preview-deployments/candidate-a/${deploymentId}`;
+  const parent = {
+    parentOwner: "cogni-test-org",
+    parentRepo: "cogni-monorepo",
+    deploymentId,
+  };
+  function handlers(existing = false) {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: "observed-head" },
+      }),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "observed-tree" },
+      }),
+      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": () => ({
+        tree: existing
+          ? [
+              "infra",
+              "k8s",
+              "preview-deployments",
+              "candidate-a",
+              deploymentId,
+            ].map((path) => ({ path, type: "tree", sha: "subtree" }))
+          : [],
+      }),
+      "POST /repos/{owner}/{repo}/git/trees": () => ({ sha: "next-tree" }),
+      "POST /repos/{owner}/{repo}/git/commits": () => ({ sha: "next-commit" }),
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": () => ({}),
+    };
+  }
+  it("publishes only its owned files atop current tree and preserves siblings", async () => {
+    handlers();
+    await makeWriter().writePreviewDesiredState({
+      ...parent,
+      files: [
+        {
+          path: `${directory}/xcomputeworkload.yaml`,
+          content: "kind: XComputeWorkload",
+        },
+        {
+          path: "infra/k8s/preview-deployments/candidate-a/state-0/compute-env-external-secret.yaml",
+          content: "kind: ExternalSecret",
+        },
+      ],
+    });
+    expect(
+      requests.find((c) =>
+        c.route.includes("POST /repos/{owner}/{repo}/git/trees")
+      )?.params
+    ).toMatchObject({
+      base_tree: "observed-tree",
+      tree: [
+        { path: `${directory}/xcomputeworkload.yaml`, type: "blob" },
+        {
+          path: "infra/k8s/preview-deployments/candidate-a/state-0/compute-env-external-secret.yaml",
+          type: "blob",
+        },
+      ],
+    });
+    expect(
+      requests.find((c) =>
+        c.route.includes("POST /repos/{owner}/{repo}/git/commits")
+      )?.params
+    ).toMatchObject({ parents: ["observed-head"] });
+    expect(requests.at(-1)?.params).toMatchObject({
+      ref: "heads/deploy/candidate-a-previews",
+      sha: "next-commit",
+      force: false,
+    });
+  });
+  it("advances a retirement fence even when deployment path is already absent", async () => {
+    handlers();
+    await makeWriter().writePreviewDesiredState(parent);
+    expect(
+      requests.filter((c) => c.route === "POST /repos/{owner}/{repo}/git/trees")
+    ).toHaveLength(0);
+    expect(
+      requests.find((c) => c.route === "POST /repos/{owner}/{repo}/git/commits")
+        ?.params
+    ).toMatchObject({ tree: "observed-tree", parents: ["observed-head"] });
+    expect(requests.at(-1)?.params).toMatchObject({ force: false });
+  });
+  it("removes only its exact directory and retains reusable pool and sibling resources", async () => {
+    handlers(true);
+    await makeWriter().writePreviewDesiredState(parent);
+    expect(
+      requests.find((c) => c.route === "POST /repos/{owner}/{repo}/git/trees")
+        ?.params
+    ).toMatchObject({
+      base_tree: "observed-tree",
+      tree: [{ path: directory, type: "tree", sha: null }],
+    });
+  });
+  it("returns a retryable conflict without another ref attempt", async () => {
+    handlers();
+    routeHandlers["PATCH /repos/{owner}/{repo}/git/refs/{ref}"] = () => {
+      throw statusError(422, "changed");
+    };
+    await expect(
+      makeWriter().writePreviewDesiredState(parent)
+    ).rejects.toMatchObject({ code: "preview_ref_conflict", status: 409 });
+    expect(
+      requests.filter(
+        (c) => c.route === "PATCH /repos/{owner}/{repo}/git/refs/{ref}"
+      )
+    ).toHaveLength(1);
+  });
+  it("refuses a sibling path or production parent before writing any commit", async () => {
+    handlers();
+    await expect(
+      makeWriter().writePreviewDesiredState({
+        ...parent,
+        files: [
+          {
+            path: "infra/k8s/overlays/production/operator/deployment.yaml",
+            content: "bad",
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ code: "preview_path_refused" });
+    expect(requests.filter((c) => c.route.startsWith("POST"))).toHaveLength(0);
+    await expect(
+      makeWriter().writePreviewDesiredState({
+        ...parent,
+        parentOwner: "Cogni-DAO",
+      })
+    ).rejects.toMatchObject({ code: "preview_parent_refused" });
+  });
+});

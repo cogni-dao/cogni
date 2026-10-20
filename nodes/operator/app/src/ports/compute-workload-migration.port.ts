@@ -51,6 +51,14 @@ export interface ComputeWorkloadMigrationInput {
  * must return `succeeded` without side effects so recover replays pass instantly.
  */
 export interface ComputeWorkloadMigrationPort {
+  /** Preview-only generation cleanup; ordinary durable migration receipts remain untouched. */
+  retireResetGeneration?(input: {
+    nodeSlug: string;
+    bundleDigest: string;
+    resetGeneration: string;
+    namespace: string;
+  }): Promise<void>;
+
   ensure(
     input: ComputeWorkloadMigrationInput
   ): Promise<"succeeded" | "running" | "failed">;

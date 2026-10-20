@@ -253,6 +253,39 @@ export class KubernetesMigrationJobAdapter
     return input.namespace ?? this.namespace;
   }
 
+  async retireResetGeneration(input: {
+    nodeSlug: string;
+    bundleDigest: string;
+    resetGeneration: string;
+    namespace: string;
+  }): Promise<void> {
+    const name = migrationJobName(
+      input.nodeSlug,
+      input.bundleDigest,
+      input.resetGeneration
+    );
+    try {
+      const job = await this.batch.readNamespacedJob(name, input.namespace);
+      if (
+        job.body.metadata?.annotations?.["cogni.io/reset-generation"] !==
+          input.resetGeneration ||
+        job.body.metadata?.labels?.["cogni.io/disposable-reset"] !== "true"
+      )
+        throw new Error("preview_migration_cleanup_identity_conflict");
+      await this.batch.deleteNamespacedJob(
+        name,
+        input.namespace,
+        undefined,
+        undefined,
+        0,
+        undefined,
+        "Foreground"
+      );
+    } catch (error) {
+      if (statusCode(error) !== 404) throw error;
+    }
+  }
+
   async ensure(
     input: ComputeWorkloadMigrationInput
   ): Promise<"succeeded" | "running" | "failed"> {

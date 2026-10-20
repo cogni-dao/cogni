@@ -219,6 +219,23 @@ export class DrizzleAkashTxAllocationLedger
           .where(eq(akashPreviewAdmissions.deploymentId, input.deploymentId));
       });
     },
+    listDue: async () => {
+      const db = await this.getDb();
+      const rows = await db
+        .select()
+        .from(akashPreviewAdmissions)
+        .where(
+          and(
+            eq(akashPreviewAdmissions.walletScope, this.walletScope),
+            isNull(akashPreviewAdmissions.closureObservedAt),
+            or(
+              sql`${akashPreviewAdmissions.revokedAt} is not null`,
+              sql`${akashPreviewAdmissions.expiresAt} <= clock_timestamp()`
+            )
+          )
+        );
+      return rows.map(previewRecord);
+    },
     read: (id) => this.readPreview(id),
     revoke: (id) => this.revokePreview(id),
     assertActive: async (input) => {
@@ -303,11 +320,17 @@ export class DrizzleAkashTxAllocationLedger
           existing.nodeId !== input.nodeId ||
           existing.environment !== input.environment ||
           existing.requestKey !== input.requestKey ||
-          existing.payloadHash !== input.payloadHash ||
-          existing.sourceSha !== input.sourceSha ||
-          existing.artifactRef !== input.artifactRef ||
-          existing.bundleRef !== input.bundleRef ||
-          existing.expiresAt.getTime() !== input.expiresAt.getTime()
+          existing.sourceSha !== input.sourceSha
+        )
+          throw new AkashPreviewAdmissionError("conflict");
+        // Cancellation changes no accepted payload/deadline. An authorized original request
+        // may revoke despite a concurrent catalog or TTL difference; admission stays immutable.
+        if (
+          !cancel &&
+          (existing.payloadHash !== input.payloadHash ||
+            existing.artifactRef !== input.artifactRef ||
+            existing.bundleRef !== input.bundleRef ||
+            existing.expiresAt.getTime() !== input.expiresAt.getTime())
         )
           throw new AkashPreviewAdmissionError("conflict");
         if (cancel && !existing.revokedAt) {
