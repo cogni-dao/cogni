@@ -77,6 +77,11 @@ for pair in "${PAIRS[@]}"; do
     || fail "lane-local database name drift: $pair"
 done
 echo '[current] every committed lane is resident; historical rollback coverage follows'
+# Historical cases explicitly own their catalog and production control identity.
+. "$SCRIPT_DIR/fixtures/catalog.sh"
+write_historical_catalog_fixture "$CATALOG_DIR" "$TMPROOT/historical-catalog"
+export CATALOG_DIR="$TMPROOT/historical-catalog" COGNI_CATALOG_ROOT="$TMPROOT/historical-catalog"
+export FLEET_CONTROL_ENV=production
 LANE_DB_RESIDENCY_PINNED=("poly/candidate-a" "poly/preview" "red/candidate-a" "toks5/preview")
 
 # ── 1. INERT: every lane keeps the host it has today ─────────────────────────────

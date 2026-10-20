@@ -256,6 +256,16 @@ compose_base_ref() {
 echo '[current] all catalog lanes compose lane-local app/service/migration DSNs; Doltgres unchanged'
 
 # Historical pins are an EXPLICIT rollback fixture, not the committed contract.
+. "$SCRIPT_DIR/fixtures/catalog.sh"
+write_historical_catalog_fixture "$CATALOG_DIR" "$TMPROOT/historical-catalog"
+export CATALOG_DIR="$TMPROOT/historical-catalog" COGNI_CATALOG_ROOT="$TMPROOT/historical-catalog"
+export FLEET_CONTROL_ENV=production
+# Include each authored rollback pair even when the current fleet has no such node.
+for fixture_pair in poly/candidate-a poly/preview red/candidate-a toks5/preview; do
+  found=false
+  for pair in "${PAIRS[@]}"; do [ "$pair" != "$fixture_pair" ] || found=true; done
+  if [ "$found" = false ]; then PAIRS+=("$fixture_pair"); fi
+done
 # Old inertness baselines apply only to the historical four or local-custody rows;
 # a future foreign-compute birth is covered above and never inherits these pins.
 HISTORICAL_PAIRS=()

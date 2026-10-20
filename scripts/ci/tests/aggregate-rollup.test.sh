@@ -11,6 +11,17 @@ cd "$REPO_ROOT"
 TMPROOT=$(mktemp -d -t aggregate-rollup.XXXXXX)
 trap 'rm -rf "$TMPROOT"' EXIT
 
+# The rollup reader derives overlay custody from its own script location. Copy that
+# existing reader and its library into a test tree with both authored overlay cells.
+FIXTURE_SOURCE="$TMPROOT/source"
+mkdir -p "$FIXTURE_SOURCE/scripts/ci/lib" "$FIXTURE_SOURCE/infra/k8s/overlays/production/operator" \
+  "$FIXTURE_SOURCE/infra/k8s/overlays/production/poly"
+cp "$REPO_ROOT/scripts/ci/aggregate-rollup.sh" "$FIXTURE_SOURCE/scripts/ci/"
+cp "$REPO_ROOT/scripts/ci/lib/"*.sh "$FIXTURE_SOURCE/scripts/ci/lib/"
+. "$SCRIPT_DIR/fixtures/catalog.sh"
+write_akash_catalog_fixture "$FIXTURE_SOURCE/infra/catalog" operator
+write_akash_catalog_fixture "$FIXTURE_SOURCE/infra/catalog" poly
+
 REMOTE="$TMPROOT/origin.git"
 WORK="$TMPROOT/work"
 git init --bare "$REMOTE" >/dev/null
@@ -47,7 +58,7 @@ ROLLUP_TARGETS_JSON='["operator"]' \
   REPO_URL="file://$REMOTE" \
   GH_TOKEN=dummy \
   GITHUB_REPOSITORY=Cogni-DAO/cogni \
-  bash scripts/ci/aggregate-rollup.sh production > "$TMPROOT/out.log" 2>&1
+  bash "$FIXTURE_SOURCE/scripts/ci/aggregate-rollup.sh" production > "$TMPROOT/out.log" 2>&1
 
 current_sha=$(git --git-dir="$REMOTE" show deploy/production:.promote-state/current-sha)
 if [ "$current_sha" != "$operator_tip" ]; then
@@ -94,7 +105,7 @@ ROLLUP_TARGETS_JSON='["operator","poly"]' \
   REPO_URL="file://$REMOTE" \
   GH_TOKEN=dummy \
   GITHUB_REPOSITORY=Cogni-DAO/cogni \
-  bash scripts/ci/aggregate-rollup.sh production > "$TMPROOT/deep.log" 2>&1 || {
+  bash "$FIXTURE_SOURCE/scripts/ci/aggregate-rollup.sh" production > "$TMPROOT/deep.log" 2>&1 || {
     cat "$TMPROOT/deep.log"
     exit 1
   }

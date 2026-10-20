@@ -293,7 +293,8 @@ cp scripts/ci/assert-target-substrate.sh "$MISRESIDENT_SCRIPT/"
 cp scripts/ci/lib/*.sh "$MISRESIDENT_SCRIPT/lib/"
 printf '\nLANE_DB_RESIDENCY_PINNED=("node-template/candidate-a")\n' \
   >> "$MISRESIDENT_SCRIPT/lib/lane-db-residency.sh"
-if env "${BASE_ENV[@]}" APP_SOURCE_DIR="$MISRESIDENT_TREE" \
+# This historical pin models production custody, independently of the runner fleet.
+if env "${BASE_ENV[@]}" FLEET_CONTROL_ENV=production APP_SOURCE_DIR="$MISRESIDENT_TREE" \
   COGNI_CATALOG_ROOT="$MISRESIDENT_TREE/infra/catalog" \
   bash "$MISRESIDENT_SCRIPT/assert-target-substrate.sh" >"$TMPROOT/misresident.out" 2>&1; then
   echo "expected an explicitly foreign PG lane to fail the substrate preflight" >&2
