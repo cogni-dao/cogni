@@ -16,7 +16,7 @@
 
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-
+import { writerFor } from "../../node-registry/crossplane-control-plane";
 import {
   appsetPath,
   appsetsKustomizationPath,
@@ -33,8 +33,6 @@ import {
   planEnvAddShape,
   schedulerEndpointPatchPath,
 } from "./env-membership-plan";
-
-import { writerFor } from "../../node-registry/crossplane-control-plane";
 
 const SLUG = "blue";
 
