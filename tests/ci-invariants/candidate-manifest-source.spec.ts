@@ -80,15 +80,15 @@ function namedStep(jobName: string, stepName: string): WorkflowStep {
 }
 
 describe("candidate-a manifest source", () => {
-  it("keeps scheduler routing on the repository workload root across environment selection", () => {
+  it("exports the configured workload root and lets scheduler routing inherit it", () => {
     expect(parsed.env?.DOMAIN).toBe("${{ vars.DOMAIN }}");
     expect(parsed.env?.FORK_DOMAIN_ROOT).toBe(
       "${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}"
     );
     const routing = parsed.jobs["reconcile-scheduler-worker-routing"];
     expect(routing.env?.DOMAIN).toBeUndefined();
-    // Reading vars.DOMAIN in this environment-bound job would select its operator apex
-    // instead of the repository root, prefixing preview/test a second time.
+    // Routing inherits configured DOMAIN without another job/step override. This
+    // checks wiring; live configuration must supply a root rather than an operator apex.
     for (const step of routing.steps) {
       expect(step.env?.DOMAIN).toBeUndefined();
       expect(step.run ?? "").not.toMatch(/(?:export\s+)?DOMAIN=/);
