@@ -636,10 +636,11 @@ describe.skipIf(!process.env.CI)(
         const idleService = `overlayfs-idle-${token}`;
         const writer = await actor(writerService);
         const idle = await actor(idleService);
-        const component = readFileSync(
+        const fullConfig = readFileSync(
           path.join(runtime, "configs/alloy-config.metrics.alloy"),
           "utf8"
-        ).match(
+        );
+        const component = fullConfig.match(
           /^prometheus\.exporter\.cadvisor "default" \{\n[^{}]*^\}/m
         )?.[0];
         if (!component) throw new Error("Actual exporter component missing");
@@ -651,6 +652,43 @@ describe.skipIf(!process.env.CI)(
           { content: oldConfig, target: "/tmp/cadvisor-old.alloy" },
           { content: nextConfig, target: "/tmp/cadvisor-next.alloy" },
         ]);
+        await nested.copyContentToContainer([
+          { content: fullConfig, target: "/tmp/cadvisor-full-declared.alloy" },
+        ]);
+        const dummyEnvironment = [
+          ...new Set(
+            [...fullConfig.matchAll(/sys\.env\("([A-Z_]+)"\)/g)].map(
+              (match) => match[1]
+            )
+          ),
+        ].flatMap((name) => [
+          "-e",
+          `${name}=${
+            name.endsWith("_URL")
+              ? "http://127.0.0.1:9/owned-validation"
+              : name === "DEPLOY_ENVIRONMENT"
+                ? "candidate-a"
+                : name === "COGNI_DEFAULT_NODE_ID"
+                  ? token
+                  : "owned-dummy"
+          }`,
+        ]);
+        await cli(
+          "run",
+          "--rm",
+          "--network=none",
+          ...dummyEnvironment,
+          "--mount",
+          "type=bind,source=/tmp/cadvisor-full-declared.alloy,target=/etc/alloy/full.alloy,readonly",
+          "grafana/alloy:v1.14.0",
+          "validate",
+          "/etc/alloy/full.alloy"
+        );
+        console.info("CADVISOR_NEW_FULL_CONFIG_VALIDATED", {
+          image: "grafana/alloy:v1.14.0",
+          network: "none",
+          sourceSha256: createHash("sha256").update(fullConfig).digest("hex"),
+        });
         const launch = async (
           image: string,
           config: string,
