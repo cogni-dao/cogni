@@ -123,12 +123,15 @@ export function insertSchedulerEndpoint(
  * an insert would reject it as a duplicate, and an append would dislodge slug-lexicographic order
  * for no reason. `nodeId` is asserted against the existing alias cell so a caller passing a
  * stale/foreign UUID fails loud instead of silently rewriting under the wrong identity.
+ * An env ADD may explicitly insert a missing pair after canonical rendering removed it.
+ * Placement and remove callers retain the strict existing-pair default.
  */
 export function updateSchedulerEndpointHost(
   currentConfigmap: string,
   slug: string,
   nodeId: string,
-  newUrl: string
+  newUrl: string,
+  options: { readonly insertIfMissing?: boolean } = {}
 ): string {
   const match = LINE_RE.exec(currentConfigmap);
   if (!match) {
@@ -169,6 +172,19 @@ export function updateSchedulerEndpointHost(
     }
   }
   if (!found) {
+    if (options.insertIfMissing) {
+      if (cells.some((cell) => cell.slice(0, cell.indexOf("=")) === nodeId)) {
+        throw new Error(
+          `${ENDPOINTS_KEY} already contains node_id '${nodeId}' under another node`
+        );
+      }
+      return updateSchedulerEndpointHost(
+        insertSchedulerEndpoint(currentConfigmap, slug, nodeId),
+        slug,
+        nodeId,
+        newUrl
+      );
+    }
     throw new Error(`${ENDPOINTS_KEY} does not contain node '${slug}'`);
   }
 

@@ -197,4 +197,26 @@ data:
       )
     ).toThrow(/missing a quoted/);
   });
+  it("keeps UUID mismatch rejection when env-add insertion is enabled", () => {
+    expect(() =>
+      updateSchedulerEndpointHost(
+        EOF_PATCH,
+        "levelup",
+        NODE_ID,
+        "https://new.test",
+        { insertIfMissing: true }
+      )
+    ).toThrow(/node_id/);
+  });
+  it("refuses to insert an existing UUID under a second slug", () => {
+    expect(() =>
+      updateSchedulerEndpointHost(
+        EOF_PATCH,
+        "new-node",
+        LEVELUP_ID,
+        "https://new.test",
+        { insertIfMissing: true }
+      )
+    ).toThrow(/already contains node_id/);
+  });
 });
