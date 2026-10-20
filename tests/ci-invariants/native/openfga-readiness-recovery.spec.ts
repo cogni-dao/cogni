@@ -15,6 +15,7 @@
  * @internal
  */
 
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -100,6 +101,21 @@ if (!process.env.CI) {
 describe.skipIf(!process.env.CI)(
   "OpenFGA dependency readiness recovery",
   () => {
+    it("rejects invalid secret authority before publishing the runtime environment", () => {
+      expect(
+        execFileSync(
+          "bash",
+          [
+            path.resolve(
+              __dirname,
+              "../../../scripts/ci/tests/runtime-secret-authority.test.sh"
+            ),
+          ],
+          { encoding: "utf8", timeout: 10_000 }
+        )
+      ).toContain("runtime-secret-authority:");
+    });
+
     it("survives a PostgreSQL fault while the old autoheal policy demonstrably restarts", async () => {
       // Missing Docker in CI is a failure, never a silent skip.
       const docker = new Docker({ timeout: 10_000 });
@@ -120,6 +136,53 @@ describe.skipIf(!process.env.CI)(
           .withNetworkAliases("fga-pg")
           .start();
         owned.push(postgres);
+        // Exercise the exact deploy credential probe against this owned native DB.
+        // pg_controldata independently binds the authenticated SQL identity to PGDATA.
+        const deploySource = readFileSync(
+          path.resolve(__dirname, "../../../scripts/ci/deploy-infra.sh"),
+          "utf8"
+        );
+        const probe = deploySource.match(
+          /^postgres_bootstrap_identity\(\) \{[\s\S]*?^\}/m
+        )?.[0];
+        if (!probe) throw new Error("Normal deploy bootstrap probe is missing");
+        const pgInspection = await docker
+          .getContainer(postgres.getId())
+          .inspect();
+        const pgAddress =
+          pgInspection.NetworkSettings.Networks[network.getName()].IPAddress;
+        const pgControl = await postgres.exec([
+          "sh",
+          "-c",
+          'LC_ALL=C pg_controldata "$PGDATA"',
+        ]);
+        expect(pgControl.exitCode).toBe(0);
+        const systemId = pgControl.output.match(
+          /^Database system identifier:\s+(\d+)$/m
+        )?.[1];
+        expect(systemId).toMatch(/^\d+$/);
+        const authenticate = (credential: string) =>
+          execFileSync(
+            "bash",
+            [
+              "-c",
+              `${probe}\npostgres_bootstrap_identity "$1" "$2" "$3"`,
+              "owned-bootstrap-proof",
+              postgres.getId(),
+              pgAddress,
+              "fga_test",
+            ],
+            {
+              input: `${credential}\n`,
+              encoding: "utf8",
+              timeout: 25_000,
+              stdio: ["pipe", "pipe", "pipe"],
+            }
+          ).trim();
+        expect(() =>
+          authenticate("deliberately-invalid-owned-fixture")
+        ).toThrow(/password authentication failed/);
+        expect(authenticate(password)).toBe(`${systemId}|fga_test|true`);
         const datastore = {
           OPENFGA_DATASTORE_ENGINE: "postgres",
           OPENFGA_DATASTORE_URI: `postgres://fga_test:${password}@fga-pg:5432/openfga?sslmode=disable`,
