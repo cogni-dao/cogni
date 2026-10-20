@@ -14,7 +14,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parse } from "yaml";
+import { parse, parseAllDocuments } from "yaml";
 
 const root = path.resolve(__dirname, "../..");
 const read = (file: string) => readFileSync(path.join(root, file), "utf8");
@@ -23,6 +23,59 @@ const app = parse(
 );
 
 describe("independent opt-in preview desired state", () => {
+  it("keeps cleanup observation opt-in, namespace-scoped and read-only", () => {
+    const text = read(
+      "infra/k8s/argocd/preview-pilot/preview-cleanup-observer-rbac.yaml"
+    );
+    const [role, binding] = parseAllDocuments(text).map((document) =>
+      document.toJSON()
+    );
+    expect(role.kind).toBe("Role");
+    expect(role.metadata).toEqual({
+      name: "preview-cleanup-observer",
+      namespace: "cogni-candidate-a",
+    });
+    expect(role.rules).toEqual([
+      {
+        apiGroups: ["compute.cogni.io"],
+        resources: ["xcomputeworkloads"],
+        verbs: ["get", "list"],
+      },
+      {
+        apiGroups: ["http.m.crossplane.io"],
+        resources: ["requests"],
+        verbs: ["get", "list"],
+      },
+      { apiGroups: ["batch"], resources: ["jobs"], verbs: ["get", "list"] },
+      { apiGroups: [""], resources: ["pods"], verbs: ["get", "list"] },
+    ]);
+    expect(binding.kind).toBe("RoleBinding");
+    expect(binding.metadata).toEqual(role.metadata);
+    expect(binding.subjects).toEqual([
+      {
+        kind: "ServiceAccount",
+        name: "operator-secrets-writer",
+        namespace: "cogni-candidate-a",
+      },
+    ]);
+    expect(binding.roleRef).toEqual({
+      apiGroup: "rbac.authorization.k8s.io",
+      kind: "Role",
+      name: "preview-cleanup-observer",
+    });
+    expect(text).not.toContain("ClusterRole");
+    expect(read("infra/k8s/argocd/kustomization.yaml")).not.toContain(
+      "preview-cleanup-observer"
+    );
+    for (const file of readdirSync(
+      path.join(root, "infra/k8s/argocd/control-plane/candidate-a")
+    )) {
+      if (file.endsWith(".yaml"))
+        expect(
+          read(`infra/k8s/argocd/control-plane/candidate-a/${file}`)
+        ).not.toContain("preview-cleanup-observer");
+    }
+  });
   it("has a separate branch, source tree and Argo owner outside ordinary node overlays", () => {
     expect(app.metadata.name).toBe("cogni-candidate-a-previews");
     expect(app.spec.source).toMatchObject({

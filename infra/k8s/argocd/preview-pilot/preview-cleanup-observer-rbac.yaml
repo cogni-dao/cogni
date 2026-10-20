@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+# Dormant opt-in fixture. Stage only into the TEST preview tree's shared pool.
+# Existing operator credentials observe closure and migration quiescence; no writes or secrets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: preview-cleanup-observer
+  namespace: cogni-candidate-a
+rules:
+  - apiGroups: [compute.cogni.io]
+    resources: [xcomputeworkloads]
+    verbs: [get, list]
+  - apiGroups: [http.m.crossplane.io]
+    resources: [requests]
+    verbs: [get, list]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: preview-cleanup-observer
+  namespace: cogni-candidate-a
+subjects:
+  - kind: ServiceAccount
+    name: operator-secrets-writer
+    namespace: cogni-candidate-a
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: preview-cleanup-observer
