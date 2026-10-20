@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/ci-invariants/native/cadvisor-actor-coverage`
  * Purpose: Measure native container attribution before changing collector configuration.
- * Scope: Exact declared Alloy image, cAdvisor block and collector-relevant host mounts in isolated CI.
+ * Scope: CI-owned Docker only. Does not access deployed environments or credentials.
  * Invariants:
  *   - RAW_ACTOR_COVERAGE: both owned actors appear before downstream relabeling.
  *   - REAL_IO: a finite fsync workload increases its own exported write counter.
