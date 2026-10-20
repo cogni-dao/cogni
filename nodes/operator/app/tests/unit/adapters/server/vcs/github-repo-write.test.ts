@@ -2934,19 +2934,24 @@ spec:
     changedPaths: readonly string[] = [
       "infra/k8s/argocd/control-plane/candidate-a/candidate-a-control-plane-application.yaml",
       "infra/k8s/argocd/control-plane/roots/candidate-a-control-plane-application.yaml",
-    ]
+    ],
+    parent: { owner: string; repo: string; manifest: string } = {
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      manifest: candidateSelfManifest,
+    }
   ): Record<string, RouteHandler> {
     return {
       "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls": () => [
         {
           number: 42,
-          html_url: "https://github.com/Cogni-DAO/cogni/pull/42",
+          html_url: `https://github.com/${parent.owner}/${parent.repo}/pull/42`,
           state: "open",
           base: { ref: "main" },
           head: {
             ref: "agent/reviewed-infra",
             sha: candidateSourceSha,
-            repo: { full_name: "Cogni-DAO/cogni" },
+            repo: { full_name: `${parent.owner}/${parent.repo}` },
           },
         },
       ],
@@ -2955,7 +2960,7 @@ spec:
       "GET /repos/{owner}/{repo}/contents/{path}": () => ({
         type: "file",
         encoding: "base64",
-        content: Buffer.from(candidateSelfManifest, "utf-8").toString("base64"),
+        content: Buffer.from(parent.manifest, "utf-8").toString("base64"),
       }),
     };
   }
@@ -3275,6 +3280,88 @@ spec:
     expect(
       requests.some(
         (request) => request.route === "POST /repos/{owner}/{repo}/git/commits"
+      )
+    ).toBe(false);
+  });
+
+  it("validates TEST control-plane custody against its configured parent and fixed deploy ref", async () => {
+    const parent = {
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+      manifest: candidateSelfManifest.replace(
+        "https://github.com/cogni-dao/cogni.git",
+        "https://github.com/cogni-test-org/cogni-monorepo.git"
+      ),
+    };
+    routeHandlers = {
+      ...candidateReviewHandlers(undefined, parent),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "same-tree" },
+      }),
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: candidateSourceSha },
+      }),
+    };
+    const result = await makeWriter().reconcileNodeInfra({
+      env: "candidate-a",
+      parentOwner: parent.owner,
+      parentRepo: parent.repo,
+      slug: "operator",
+      sourceSha: candidateSourceSha,
+    });
+    expect(result).toMatchObject({
+      status: "unchanged",
+      lane: "control_plane",
+      deployRef: "deploy/candidate-a-control-plane",
+      prUrl: "https://github.com/cogni-test-org/cogni-monorepo/pull/42",
+    });
+    expect(
+      requests
+        .filter((request) => request.route.includes("contents/{path}"))
+        .map((request) => request.params.path)
+    ).toEqual([
+      "infra/k8s/argocd/control-plane/candidate-a/candidate-a-control-plane-application.yaml",
+      "infra/k8s/argocd/control-plane/roots/candidate-a-control-plane-application.yaml",
+    ]);
+  });
+
+  it.each([
+    "upstream_repository",
+    "unflightable_main_root",
+  ])("rejects TEST root %s before any deploy-ref mutation", async (kind) => {
+    const correct = candidateSelfManifest.replace(
+      "https://github.com/cogni-dao/cogni.git",
+      "https://github.com/cogni-test-org/cogni-monorepo.git"
+    );
+    const manifest =
+      kind === "upstream_repository"
+        ? candidateSelfManifest
+        : correct.replace(
+            "targetRevision: deploy/candidate-a-control-plane",
+            "targetRevision: main"
+          );
+    routeHandlers = candidateReviewHandlers(undefined, {
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+      manifest,
+    });
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "cogni-test-org",
+        parentRepo: "cogni-monorepo",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).rejects.toMatchObject({
+      code: "candidate_control_plane_self_object_invalid",
+      status: 422,
+    });
+    expect(
+      requests.some(
+        (request) =>
+          request.route.startsWith("POST ") ||
+          request.route.startsWith("PATCH ")
       )
     ).toBe(false);
   });

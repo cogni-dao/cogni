@@ -10,8 +10,8 @@
  *     self-managing copy inside control-plane/candidate-a/ parse to the same
  *     identity, source, destination and syncPolicy, so Argo adopts the seeded
  *     Application instead of fighting it.
- *   CONTROL_PLANE_TRACKS_ITS_FLEET_REF: the canonical root tracks the reviewed
- *     deploy ref, while an isolated fleet tracks its own protected main.
+ *   CONTROL_PLANE_TRACKS_ITS_FLEET_REF: every fleet's root tracks its own reviewed
+ *     deploy ref, so unmerged control-plane state can be proven before canonical merge.
  *   CHILD_APPSETS_SHARE_FLEET_AUTHORITY: the child app-of-apps resolves from the
  *     same repository as its owning root, so self-heal cannot restore another fleet.
  *   DECLARATIVE_RECONCILIATION_ONLY: candidate flights never mutate the root with
@@ -29,7 +29,6 @@ import { describe, expect, it } from "vitest";
 import yaml from "yaml";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
-const CANONICAL_REPO_URL = "https://github.com/cogni-dao/cogni.git";
 const CONTROL_PLANE_REF = "deploy/candidate-a-control-plane";
 const CONTROL_PLANE_PATH = "infra/k8s/argocd/control-plane/candidate-a";
 const SELF_PATH = `${CONTROL_PLANE_PATH}/candidate-a-control-plane-application.yaml`;
@@ -93,14 +92,9 @@ describe("candidate-a control-plane self-management", () => {
     expect(seed.spec?.project).toEqual(self.spec?.project);
   });
 
-  it("tracks the canonical deploy ref or an isolated fleet's protected main", () => {
-    const expectedRevision =
-      self.spec?.source?.repoURL === CANONICAL_REPO_URL
-        ? CONTROL_PLANE_REF
-        : "main";
-
-    expect(self.spec?.source?.targetRevision).toBe(expectedRevision);
-    expect(seed.spec?.source?.targetRevision).toBe(expectedRevision);
+  it("keeps every fleet root flightable through its reviewed deploy ref", () => {
+    expect(self.spec?.source?.targetRevision).toBe(CONTROL_PLANE_REF);
+    expect(seed.spec?.source?.targetRevision).toBe(CONTROL_PLANE_REF);
   });
 
   it("keeps the child AppSet reconciler on the owning fleet", () => {

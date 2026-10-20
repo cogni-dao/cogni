@@ -482,6 +482,23 @@ const CandidateControlPlaneApplicationSchema = z.strictObject({
   }),
 });
 
+/** Parent identity is already environment-resolved; TEST custody must never point at upstream. */
+function candidateControlPlaneApplicationSchemaForParent(
+  owner: string,
+  repo: string
+) {
+  return CandidateControlPlaneApplicationSchema.extend({
+    spec: CandidateControlPlaneApplicationSchema.shape.spec.extend({
+      source:
+        CandidateControlPlaneApplicationSchema.shape.spec.shape.source.extend({
+          repoURL: z.literal(
+            `https://github.com/${owner.toLowerCase()}/${repo.toLowerCase()}.git`
+          ),
+        }),
+    }),
+  });
+}
+
 type CandidateInfraLane = "compose" | "control_plane";
 
 // A reviewed authorization-model change necessarily carries the model consumer and its proofs in
@@ -2055,7 +2072,10 @@ export class GitHubRepoWriter implements DeployPlanePort {
             document = null;
           }
           if (
-            !CandidateControlPlaneApplicationSchema.safeParse(document).success
+            !candidateControlPlaneApplicationSchemaForParent(
+              owner,
+              repo
+            ).safeParse(document).success
           ) {
             throw deployPlaneError(
               "candidate_control_plane_self_object_invalid",
