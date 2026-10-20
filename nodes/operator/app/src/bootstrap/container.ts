@@ -900,7 +900,7 @@ function createContainer(): Container {
       });
     const knowledgeWriter = new DoltBranchSessionRunner(
       createKnowledgeBranchClient(),
-      { logger: log, writerProtocol: "bridge" }
+      { logger: log, writerProtocol: "database" }
     );
     const knowledgePort = new DoltgresKnowledgeStoreAdapter({
       sql: doltClient,

@@ -112,7 +112,7 @@ export function getDoltgresWorkItemsAdapter(
   if (!_adapter)
     _adapter = new DoltgresWorkItemAdapter(getDoltgresSql(), {
       idFloor: OPERATOR_ID_FLOOR,
-      writerLockProtocol: "bridge",
+      writerLockProtocol: "database",
       readConnectionBudget: 4,
       readClient: getDoltgresReadSql(),
       recreateReadClient: createReadSql,
