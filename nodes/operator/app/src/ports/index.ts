@@ -58,6 +58,13 @@ export type {
   RecordInvocationParams,
 } from "./ai-telemetry.port";
 export {
+  type AkashPreviewAdmission,
+  AkashPreviewAdmissionError,
+  type AkashPreviewAdmissionInput,
+  type AkashPreviewAdmissionPort,
+  type AkashPreviewRetirement,
+} from "./akash-preview-admission.port";
+export {
   type AkashAllocationProbe,
   type AkashLeaseLogDescriptor,
   type AkashTxActuatorPort,

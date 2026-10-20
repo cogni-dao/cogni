@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@tests/unit/dev-akash-preview`
+ * Purpose: Verify bounded DEV preview lifecycle and durable cleanup metadata.
+ * Scope: Tests injected provider and clock fakes; does not create paid allocations.
+ * Invariants: One create attempt; uncertain submissions retain custody until positive closure.
+ * Side-effects: none
+ * Links: nodes/operator/app/scripts/dev-akash-preview.lifecycle.ts
+ * @internal
+ */
 
 import type { ProvisionOutput } from "@cogni/ai-tools";
 import { describe, expect, it, vi } from "vitest";

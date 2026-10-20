@@ -1060,6 +1060,7 @@ export class AkashComputeAdapter
      * bounded-recovery attempt. The caller derives this from allocation receipts.
      */
     excludedProviders?: ReadonlySet<string>;
+    beforeTransaction?: (phase: "deployment" | "lease") => Promise<void>;
   }): Promise<{ leaseId: string; providerAccount: string }> {
     const sdl = buildAkashSdl(p.spec, this.sdlOptions);
     const { dseq, provider } = await this.createAndLease(
@@ -1071,7 +1072,8 @@ export class AkashComputeAdapter
             await p.onAllocated?.(resource.leaseId);
           }
         : undefined,
-      retainsStorage(p.spec)
+      retainsStorage(p.spec),
+      p.beforeTransaction
     );
     return { leaseId: String(dseq), providerAccount: provider };
   }
@@ -1086,8 +1088,10 @@ export class AkashComputeAdapter
     screening: ScreeningContext,
     tried: Set<string>,
     onAllocated?: (resource: ProvisionOutput) => Promise<void>,
-    retainStorage = false
+    retainStorage = false,
+    beforeTransaction?: (phase: "deployment" | "lease") => Promise<void>
   ): Promise<{ dseq: string; provider: string }> {
+    await beforeTransaction?.("deployment");
     const created = await this.request<{ dseq?: string; manifest?: unknown }>(
       "POST",
       "/v1/deployments",
@@ -1140,6 +1144,7 @@ export class AkashComputeAdapter
       }
       const bid = await this.awaitScreenedBid(dseq, screening, tried);
       provider = String(bid.provider);
+      await beforeTransaction?.("lease");
       leaseAttempted = true;
       await this.request(
         "POST",

@@ -109,6 +109,9 @@ export const AkashTxMigrationStepSchema = z.strictObject({
   image: z.string().min(1).max(512),
   /** True when the app service declares a `DOLTGRES_URL` secret ref. */
   doltgres: z.boolean(),
+  resetGeneration: z.string().uuid().optional(),
+  previewDeploymentId: z.string().uuid().optional(),
+  previewStateSlot: z.union([z.literal(0), z.literal(1)]).optional(),
 });
 
 /** What the release step is doing for this digest right now. Reported, never enforced. */
@@ -244,7 +247,30 @@ export const AkashTxObserveInputSchema = z.strictObject({
   composite: AkashTxCompositeVerdictSchema.optional(),
 });
 
+export const AkashPreviewAdmissionInputSchema = z.strictObject({
+  deploymentId: z.string().uuid(),
+  nodeId: z.string().uuid(),
+  environment: z.string().min(1).max(63),
+  requestKey: z.string().min(1).max(253),
+  payloadHash: z.string().regex(/^[0-9a-f]{64}$/),
+  sourceSha: z.string().regex(/^[0-9a-f]{40}$/),
+  bundleRef: z
+    .string()
+    .max(512)
+    .regex(/@sha256:[0-9a-f]{64}$/),
+  artifactRef: z
+    .string()
+    .max(512)
+    .regex(/@sha256:[0-9a-f]{64}$/),
+  expiresAt: z.iso.datetime().transform((value) => new Date(value)),
+});
+export const AkashPreviewRetireInputSchema = z.strictObject({
+  deploymentId: z.string().uuid(),
+});
+
 export const AkashTxCreateInputSchema = z.strictObject({
+  previewDeploymentId: z.string().uuid().optional(),
+  previewResetGeneration: z.string().uuid().optional(),
   cogniKey: CogniKeySchema,
   environment: EnvironmentSchema,
   identity: AkashTxIdentitySchema,

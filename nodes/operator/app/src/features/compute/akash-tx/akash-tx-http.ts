@@ -38,6 +38,8 @@ import { createServer, type Server } from "node:http";
 import type { ProvisionSpec } from "@cogni/ai-tools";
 
 import {
+  AkashPreviewAdmissionInputSchema,
+  AkashPreviewRetireInputSchema,
   AkashTxCreateDatabaseCellInputSchema,
   type AkashTxCreateInput,
   AkashTxCreateInputSchema,
@@ -201,6 +203,15 @@ function toObserveInput(parsed: AkashTxObserveInput) {
             bundleDigest: parsed.migration.bundleDigest,
             image: parsed.migration.image,
             doltgres: parsed.migration.doltgres,
+            ...(parsed.migration.previewDeploymentId
+              ? { previewDeploymentId: parsed.migration.previewDeploymentId }
+              : {}),
+            ...(parsed.migration.previewStateSlot !== undefined
+              ? { previewStateSlot: parsed.migration.previewStateSlot }
+              : {}),
+            ...(parsed.migration.resetGeneration
+              ? { resetGeneration: parsed.migration.resetGeneration }
+              : {}),
           },
         }
       : {}),
@@ -457,6 +468,45 @@ export function createAkashTxDispatcher(
             body: observation,
           };
         }
+        case "/v1/akash/preview/admit": {
+          if (!deps.actuator.admitPreview)
+            throw new AkashTxError(
+              "invalid_request",
+              "preview admission is not enabled"
+            );
+          return {
+            status: 200,
+            body: await deps.actuator.admitPreview(
+              AkashPreviewAdmissionInputSchema.parse(payload)
+            ),
+          };
+        }
+        case "/v1/akash/preview/cancel": {
+          if (!deps.actuator.cancelPreview)
+            throw new AkashTxError(
+              "invalid_request",
+              "preview admission is not enabled"
+            );
+          return {
+            status: 200,
+            body: await deps.actuator.cancelPreview(
+              AkashPreviewAdmissionInputSchema.parse(payload)
+            ),
+          };
+        }
+        case "/v1/akash/preview/retire": {
+          if (!deps.actuator.retirePreview)
+            throw new AkashTxError(
+              "invalid_request",
+              "preview admission is not enabled"
+            );
+          return {
+            status: 200,
+            body: await deps.actuator.retirePreview(
+              AkashPreviewRetireInputSchema.parse(payload)
+            ),
+          };
+        }
         case "/v1/akash/create": {
           const input = AkashTxCreateInputSchema.parse(payload);
           return {
@@ -469,6 +519,12 @@ export function createAkashTxDispatcher(
               environment: input.environment,
               identity: input.identity,
               spec: toSpec(input.spec),
+              ...(input.previewResetGeneration
+                ? { previewResetGeneration: input.previewResetGeneration }
+                : {}),
+              ...(input.previewDeploymentId
+                ? { previewDeploymentId: input.previewDeploymentId }
+                : {}),
             }),
           };
         }

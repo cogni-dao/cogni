@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** stable
+- **Last reviewed:** 2026-10-20
 
 ## Purpose
 
@@ -41,6 +42,8 @@ Per DATABASE_RLS_SPEC.md design decision 7: runtime app uses explicit DSNs, no U
 ```
 
 ## Public Surface
+
+- Operator-local `akashPreviewAdmissions` and nullable preview custody fields on `akashTxAllocations` are registered explicitly by the operator Drizzle config.
 
 **Exports (barrel `@/shared/db`):**
 

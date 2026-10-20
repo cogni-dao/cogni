@@ -109,7 +109,9 @@ export function cogniNodeAppMigrationPhases(input: {
  * The node-scoped Secret holding the database URLs, derived exactly as the legacy reconciler
  * derived it. Values never transit this process: the Job references keys by `secretKeyRef`.
  */
-function migrationSecretName(workload: string): string {
+function migrationSecretName(workload: string, slot?: 0 | 1): string {
+  if (slot !== undefined)
+    return `${workload}-preview-${slot === 0 ? "a" : "b"}-compute-migration-secrets`;
   return `${workload}-compute-migration-secrets`;
 }
 
@@ -180,6 +182,7 @@ async function recordReceipt(
     readonly nodeId?: string | undefined;
     readonly environment: string;
     readonly bundleDigest: string;
+    readonly resetGeneration?: string;
     readonly namespace: string;
     readonly containerName: string;
     readonly fields: Record<string, unknown>;
@@ -196,6 +199,9 @@ async function recordReceipt(
     const stdout = await migration.readReceipt({
       nodeSlug: input.workload,
       bundleDigest: input.bundleDigest,
+      ...(input.resetGeneration
+        ? { resetGeneration: input.resetGeneration }
+        : {}),
       namespace: input.namespace,
       containerName: input.containerName,
     });
@@ -319,8 +325,14 @@ export async function runMigrationStep(
       nodeSlug: input.workload,
       environment: input.environment,
       bundleDigest,
+      ...(input.step.resetGeneration
+        ? { resetGeneration: input.step.resetGeneration }
+        : {}),
       image,
-      secretName: migrationSecretName(input.workload),
+      secretName: migrationSecretName(
+        input.workload,
+        input.step.previewStateSlot
+      ),
       namespace: workloadNamespace(input.environment),
       phases: cogniNodeAppMigrationPhases({ doltgres }),
     });
@@ -347,6 +359,9 @@ export async function runMigrationStep(
       ...(input.nodeId ? { nodeId: input.nodeId } : {}),
       environment: input.environment,
       bundleDigest,
+      ...(input.step.resetGeneration
+        ? { resetGeneration: input.step.resetGeneration }
+        : {}),
       namespace: workloadNamespace(input.environment),
       // The FIRST phase is the node's Postgres migrate; Doltgres has its own runtime drift check
       // (verifyDoltgresSchema), so Postgres is the plane with no proof today.

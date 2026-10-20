@@ -45,19 +45,26 @@
  */
 
 import type { Database } from "@cogni/db-client";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 
 import type {
+  AkashPreviewAdmission,
+  AkashPreviewAdmissionInput,
+  AkashPreviewAdmissionPort,
   AkashTxAllocationLedgerPort,
   AkashTxAllocationRecord,
   AkashTxAllocationState,
   AkashTxStaleAllocation,
   AkashTxWorkloadIdentity,
 } from "@/ports";
-import { akashTxAllocations } from "@/shared/db/schema";
+import { AkashPreviewAdmissionError } from "@/ports";
+import { akashPreviewAdmissions, akashTxAllocations } from "@/shared/db/schema";
 import { DatabaseCellAllocationMetadataSchema } from "@/shared/secrets/database-cell-placement.data";
 
 interface AllocationRow {
+  previewDeploymentId: string | null;
+  previewSubmittedAt: Date | null;
+  previewDispatchFinishedAt: Date | null;
   id: string;
   cogniKey: string;
   nodeId: string;
@@ -74,6 +81,9 @@ interface AllocationRow {
 }
 
 const SELECTION = {
+  previewDeploymentId: akashTxAllocations.previewDeploymentId,
+  previewSubmittedAt: akashTxAllocations.previewSubmittedAt,
+  previewDispatchFinishedAt: akashTxAllocations.previewDispatchFinishedAt,
   id: akashTxAllocations.id,
   cogniKey: akashTxAllocations.cogniKey,
   nodeId: akashTxAllocations.nodeId,
@@ -94,6 +104,15 @@ function toRecord(row: AllocationRow): AkashTxAllocationRecord {
     row.appliedDatabaseCellBinding ?? []
   );
   return {
+    ...(row.previewDeploymentId
+      ? { previewDeploymentId: row.previewDeploymentId }
+      : {}),
+    ...(row.previewSubmittedAt
+      ? { previewSubmittedAt: row.previewSubmittedAt }
+      : {}),
+    ...(row.previewDispatchFinishedAt
+      ? { previewDispatchFinishedAt: row.previewDispatchFinishedAt }
+      : {}),
     ...(metadata.retentionPolicy
       ? { retentionPolicy: metadata.retentionPolicy }
       : {}),
@@ -115,6 +134,30 @@ function toRecord(row: AllocationRow): AkashTxAllocationRecord {
     ...(row.providerAccount ? { providerAccount: row.providerAccount } : {}),
     ...(row.lastAppliedSdlHash
       ? { lastAppliedSdlHash: row.lastAppliedSdlHash }
+      : {}),
+  };
+}
+
+type LedgerTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+type PreviewRow = typeof akashPreviewAdmissions.$inferSelect;
+
+function previewRecord(row: PreviewRow): AkashPreviewAdmission {
+  return {
+    deploymentId: row.deploymentId,
+    nodeId: row.nodeId,
+    environment: row.environment,
+    requestKey: row.requestKey,
+    payloadHash: row.payloadHash,
+    sourceSha: row.sourceSha,
+    artifactRef: row.artifactRef,
+    bundleRef: row.bundleRef,
+    expiresAt: row.expiresAt,
+    stateSlot: row.stateSlot as 0 | 1,
+    ...(row.resolvedSdlHash ? { resolvedSdlHash: row.resolvedSdlHash } : {}),
+    ...(row.resetGeneration ? { resetGeneration: row.resetGeneration } : {}),
+    ...(row.revokedAt ? { revokedAt: row.revokedAt } : {}),
+    ...(row.closureObservedAt
+      ? { closureObservedAt: row.closureObservedAt }
       : {}),
   };
 }
@@ -142,12 +185,386 @@ export class DrizzleAkashTxAllocationLedger
     private readonly walletScope: string
   ) {}
 
+  readonly preview: AkashPreviewAdmissionPort = {
+    admit: (input) => this.admitPreview(input),
+    cancel: (input) => this.admitPreview(input, true),
+    withUnallocatedStateReservation: (deploymentId, stateSlot, action) =>
+      this.withUnallocatedStateReservation(deploymentId, stateSlot, action),
+    withActiveState: async (input, action) => {
+      const db = await this.getDb();
+      return db.transaction(async (tx) => {
+        const admission = await this.lockPreview(tx, input.deploymentId, true);
+        if (
+          admission.stateSlot !== input.stateSlot ||
+          admission.resetGeneration !== input.resetGeneration
+        )
+          throw new AkashPreviewAdmissionError("conflict");
+        return action();
+      });
+    },
+    bindResolvedSpec: async (input) => {
+      const db = await this.getDb();
+      await db.transaction(async (tx) => {
+        const admission = await this.lockPreview(tx, input.deploymentId, true);
+        if (
+          admission.sourceSha !== input.sourceSha ||
+          admission.artifactRef !== input.artifactRef ||
+          (admission.resolvedSdlHash &&
+            admission.resolvedSdlHash !== input.sdlHash)
+        )
+          throw new AkashPreviewAdmissionError("conflict");
+        await tx
+          .update(akashPreviewAdmissions)
+          .set({ resolvedSdlHash: input.sdlHash })
+          .where(eq(akashPreviewAdmissions.deploymentId, input.deploymentId));
+      });
+    },
+    read: (id) => this.readPreview(id),
+    revoke: (id) => this.revokePreview(id),
+    assertActive: async (input) => {
+      const db = await this.getDb();
+      await db.transaction(async (tx) => {
+        const row = await this.lockPreview(tx, input.deploymentId, true);
+        if (
+          row.nodeId !== input.nodeId ||
+          row.environment !== input.environment
+        )
+          throw new AkashPreviewAdmissionError("conflict");
+      });
+    },
+    beforeProviderTransaction: (input) => this.beforePreviewTransaction(input),
+    finishDispatch: (input) => this.finishPreviewDispatch(input),
+    receipts: (id) => this.previewReceipts(id),
+    finishRetirement: (input) => this.finishPreviewRetirement(input),
+  };
+
+  /** One lock order everywhere: admission first, then its allocation receipts. */
+  private async lockPreview(
+    tx: LedgerTransaction,
+    deploymentId: string,
+    active: boolean
+  ): Promise<PreviewRow> {
+    const [row] = await tx
+      .select()
+      .from(akashPreviewAdmissions)
+      .where(
+        and(
+          eq(akashPreviewAdmissions.walletScope, this.walletScope),
+          eq(akashPreviewAdmissions.deploymentId, deploymentId)
+        )
+      )
+      .for("update");
+    if (!row) throw new AkashPreviewAdmissionError("missing");
+    if (active) {
+      if (row.revokedAt || row.closureObservedAt)
+        throw new AkashPreviewAdmissionError("terminal");
+      // Read AFTER obtaining the row lock; transaction-start now() is stale after a wait.
+      const [clock] = await tx
+        .select({
+          expired: sql<boolean>`${akashPreviewAdmissions.expiresAt} <= clock_timestamp()`,
+        })
+        .from(akashPreviewAdmissions)
+        .where(eq(akashPreviewAdmissions.deploymentId, deploymentId));
+      if (clock?.expired) throw new AkashPreviewAdmissionError("expired");
+    }
+    return row;
+  }
+
+  private async admitPreview(
+    input: AkashPreviewAdmissionInput,
+    cancel = false
+  ): Promise<AkashPreviewAdmission> {
+    const db = await this.getDb();
+    return db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${input.deploymentId}))`
+      );
+      // Admission quota only, not a second paid-wallet lock. Two reusable state pairs bound the pilot.
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${this.walletScope}))`
+      );
+      const [existing] = await tx
+        .select()
+        .from(akashPreviewAdmissions)
+        .where(
+          or(
+            and(
+              eq(akashPreviewAdmissions.walletScope, this.walletScope),
+              eq(akashPreviewAdmissions.requestKey, input.requestKey)
+            ),
+            eq(akashPreviewAdmissions.deploymentId, input.deploymentId)
+          )
+        )
+        .for("update");
+      if (existing) {
+        if (
+          existing.deploymentId !== input.deploymentId ||
+          existing.walletScope !== this.walletScope ||
+          existing.nodeId !== input.nodeId ||
+          existing.environment !== input.environment ||
+          existing.requestKey !== input.requestKey ||
+          existing.payloadHash !== input.payloadHash ||
+          existing.sourceSha !== input.sourceSha ||
+          existing.artifactRef !== input.artifactRef ||
+          existing.bundleRef !== input.bundleRef ||
+          existing.expiresAt.getTime() !== input.expiresAt.getTime()
+        )
+          throw new AkashPreviewAdmissionError("conflict");
+        if (cancel && !existing.revokedAt) {
+          const [revoked] = await tx
+            .update(akashPreviewAdmissions)
+            .set({ revokedAt: sql`clock_timestamp()` })
+            .where(eq(akashPreviewAdmissions.deploymentId, input.deploymentId))
+            .returning();
+          if (!revoked) throw new AkashPreviewAdmissionError("missing");
+          return previewRecord(revoked);
+        }
+        return previewRecord(existing); // Terminal requests stay terminal; they never reacquire a slot.
+      }
+      const occupied = await tx
+        .select({ slot: akashPreviewAdmissions.stateSlot })
+        .from(akashPreviewAdmissions)
+        .where(
+          and(
+            eq(akashPreviewAdmissions.walletScope, this.walletScope),
+            isNull(akashPreviewAdmissions.closureObservedAt)
+          )
+        );
+      const stateSlot = ([0, 1] as const).find(
+        (slot) => !occupied.some((row) => row.slot === slot)
+      );
+      if (!cancel && stateSlot === undefined)
+        throw new AkashPreviewAdmissionError("capacity");
+      const [inserted] = await tx
+        .insert(akashPreviewAdmissions)
+        .values({
+          ...input,
+          walletScope: this.walletScope,
+          stateSlot: stateSlot ?? 0,
+          ...(cancel
+            ? {
+                revokedAt: sql`clock_timestamp()`,
+                closureObservedAt: sql`clock_timestamp()`,
+              }
+            : {}),
+        })
+        .returning();
+      if (!inserted) throw new AkashPreviewAdmissionError("conflict");
+      return previewRecord(inserted);
+    });
+  }
+
+  private async withUnallocatedStateReservation<
+    T extends { resetGeneration: string },
+  >(
+    deploymentId: string,
+    stateSlot: 0 | 1,
+    action: () => Promise<T>
+  ): Promise<T> {
+    const db = await this.getDb();
+    return db.transaction(async (tx) => {
+      const admission = await this.lockPreview(tx, deploymentId, true);
+      if (admission.stateSlot !== stateSlot || admission.resetGeneration)
+        throw new AkashPreviewAdmissionError("conflict");
+      const receipts = await tx
+        .select(SELECTION)
+        .from(akashTxAllocations)
+        .where(
+          and(
+            eq(akashTxAllocations.walletScope, this.walletScope),
+            eq(akashTxAllocations.previewDeploymentId, deploymentId)
+          )
+        )
+        .for("update");
+      if (receipts.some((row) => row.previewSubmittedAt || row.externalName))
+        throw new AkashPreviewAdmissionError("unresolved");
+      // The caller's bounded TEST DB/Kubernetes action must not re-enter this ledger.
+      const result = await action();
+      await tx
+        .update(akashPreviewAdmissions)
+        .set({ resetGeneration: result.resetGeneration })
+        .where(eq(akashPreviewAdmissions.deploymentId, deploymentId));
+      return result;
+    });
+  }
+
+  private async readPreview(
+    deploymentId: string
+  ): Promise<AkashPreviewAdmission | null> {
+    const db = await this.getDb();
+    const [row] = await db
+      .select()
+      .from(akashPreviewAdmissions)
+      .where(
+        and(
+          eq(akashPreviewAdmissions.walletScope, this.walletScope),
+          eq(akashPreviewAdmissions.deploymentId, deploymentId)
+        )
+      );
+    return row ? previewRecord(row) : null;
+  }
+
+  private async revokePreview(
+    deploymentId: string
+  ): Promise<AkashPreviewAdmission> {
+    const db = await this.getDb();
+    return db.transaction(async (tx) => {
+      await this.lockPreview(tx, deploymentId, false);
+      const [row] = await tx
+        .update(akashPreviewAdmissions)
+        .set({
+          revokedAt: sql`coalesce(${akashPreviewAdmissions.revokedAt}, clock_timestamp())`,
+        })
+        .where(eq(akashPreviewAdmissions.deploymentId, deploymentId))
+        .returning();
+      if (!row) throw new AkashPreviewAdmissionError("missing");
+      return previewRecord(row);
+    });
+  }
+
+  private async beforePreviewTransaction(input: {
+    deploymentId: string;
+    cogniKey: string;
+    phase: "deployment" | "lease";
+  }): Promise<void> {
+    const db = await this.getDb();
+    await db.transaction(async (tx) => {
+      const admission = await this.lockPreview(tx, input.deploymentId, true);
+      if (!admission.resetGeneration || !admission.resolvedSdlHash)
+        throw new AkashPreviewAdmissionError("unresolved");
+      const [row] = await tx
+        .select(SELECTION)
+        .from(akashTxAllocations)
+        .where(
+          and(
+            eq(akashTxAllocations.walletScope, this.walletScope),
+            eq(akashTxAllocations.cogniKey, input.cogniKey)
+          )
+        )
+        .for("update");
+      if (!row || row.previewDeploymentId !== input.deploymentId)
+        throw new AkashPreviewAdmissionError("conflict");
+      if (row.state !== "preparing" && row.state !== "allocated")
+        throw new AkashPreviewAdmissionError("terminal");
+      if (input.phase === "deployment") {
+        const family = await tx
+          .select(SELECTION)
+          .from(akashTxAllocations)
+          .where(
+            and(
+              eq(akashTxAllocations.walletScope, this.walletScope),
+              eq(akashTxAllocations.previewDeploymentId, input.deploymentId)
+            )
+          );
+        if (
+          family.some(
+            (other) =>
+              other.id !== row.id &&
+              (other.previewSubmittedAt || other.externalName)
+          )
+        )
+          throw new AkashPreviewAdmissionError("unresolved");
+      }
+      if (input.phase === "deployment" && row.previewSubmittedAt)
+        throw new AkashPreviewAdmissionError("unresolved");
+      if (
+        input.phase === "lease" &&
+        (!row.previewSubmittedAt || !row.externalName)
+      )
+        throw new AkashPreviewAdmissionError("conflict");
+      await tx
+        .update(akashTxAllocations)
+        .set({
+          previewSubmittedAt: sql`coalesce(${akashTxAllocations.previewSubmittedAt}, clock_timestamp())`,
+          updatedAt: sql`clock_timestamp()`,
+        })
+        .where(eq(akashTxAllocations.id, row.id));
+    });
+  }
+
+  private async finishPreviewDispatch(input: {
+    deploymentId: string;
+    cogniKey: string;
+  }): Promise<void> {
+    const db = await this.getDb();
+    await db.transaction(async (tx) => {
+      await this.lockPreview(tx, input.deploymentId, false);
+      await tx
+        .update(akashTxAllocations)
+        .set({ previewDispatchFinishedAt: sql`clock_timestamp()` })
+        .where(
+          and(
+            eq(akashTxAllocations.walletScope, this.walletScope),
+            eq(akashTxAllocations.cogniKey, input.cogniKey),
+            eq(akashTxAllocations.previewDeploymentId, input.deploymentId)
+          )
+        );
+    });
+  }
+
+  private async previewReceipts(
+    deploymentId: string
+  ): Promise<readonly AkashTxAllocationRecord[]> {
+    const db = await this.getDb();
+    // No LIMIT: incomplete enumeration cannot authorize freeing an admission slot.
+    const rows = await db
+      .select(SELECTION)
+      .from(akashTxAllocations)
+      .where(
+        and(
+          eq(akashTxAllocations.walletScope, this.walletScope),
+          eq(akashTxAllocations.previewDeploymentId, deploymentId)
+        )
+      );
+    return rows.map(toRecord);
+  }
+
+  private async finishPreviewRetirement(input: {
+    deploymentId: string;
+    observedClosedReceiptIds: readonly string[];
+  }): Promise<AkashPreviewAdmission> {
+    const db = await this.getDb();
+    return db.transaction(async (tx) => {
+      const admission = await this.lockPreview(tx, input.deploymentId, false);
+      if (!admission.revokedAt)
+        throw new AkashPreviewAdmissionError("unresolved");
+      if (admission.closureObservedAt) return previewRecord(admission);
+      const rows = await tx
+        .select(SELECTION)
+        .from(akashTxAllocations)
+        .where(
+          and(
+            eq(akashTxAllocations.walletScope, this.walletScope),
+            eq(akashTxAllocations.previewDeploymentId, input.deploymentId)
+          )
+        )
+        .for("update");
+      const observed = new Set(input.observedClosedReceiptIds);
+      if (
+        rows.some((row) =>
+          row.externalName
+            ? row.state !== "released" || !observed.has(row.id)
+            : Boolean(row.previewSubmittedAt) || row.state !== "failed"
+        )
+      )
+        throw new AkashPreviewAdmissionError("unresolved");
+      const [closed] = await tx
+        .update(akashPreviewAdmissions)
+        .set({ closureObservedAt: sql`clock_timestamp()` })
+        .where(eq(akashPreviewAdmissions.deploymentId, input.deploymentId))
+        .returning();
+      if (!closed) throw new AkashPreviewAdmissionError("missing");
+      return previewRecord(closed);
+    });
+  }
+
   async claim(input: {
     cogniKey: string;
     workload: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
     retentionPolicy?: "retain";
+    previewDeploymentId?: string;
   }): Promise<
     | { state: "claimed"; record: AkashTxAllocationRecord }
     | { state: "owned"; record: AkashTxAllocationRecord }
@@ -170,6 +587,7 @@ export class DrizzleAkashTxAllocationLedger
     environment: string;
     identity: AkashTxWorkloadIdentity;
     retentionPolicy?: "retain";
+    previewDeploymentId?: string;
   }): Promise<
     | { state: "claimed"; record: AkashTxAllocationRecord }
     | { state: "owned"; record: AkashTxAllocationRecord }
@@ -178,6 +596,45 @@ export class DrizzleAkashTxAllocationLedger
   > {
     const db = await this.getDb();
     return db.transaction(async (tx) => {
+      // Read only a hint before locking. A preview-bound receipt can never downgrade to
+      // ordinary behavior when a retry omits preview identity.
+      const [hint] = await tx
+        .select({ previewDeploymentId: akashTxAllocations.previewDeploymentId })
+        .from(akashTxAllocations)
+        .where(
+          and(
+            eq(akashTxAllocations.walletScope, this.walletScope),
+            eq(akashTxAllocations.cogniKey, input.cogniKey)
+          )
+        );
+      const previewId = input.previewDeploymentId ?? hint?.previewDeploymentId;
+      if (previewId) {
+        if (input.previewDeploymentId !== previewId)
+          throw new AkashPreviewAdmissionError("conflict");
+        const admission = await this.lockPreview(tx, previewId, true);
+        if (
+          admission.nodeId !== input.identity.nodeId ||
+          admission.environment !== input.environment
+        )
+          throw new AkashPreviewAdmissionError("conflict");
+        const family = await tx
+          .select(SELECTION)
+          .from(akashTxAllocations)
+          .where(
+            and(
+              eq(akashTxAllocations.walletScope, this.walletScope),
+              eq(akashTxAllocations.previewDeploymentId, previewId)
+            )
+          );
+        if (
+          family.some(
+            (other) =>
+              other.cogniKey !== input.cogniKey &&
+              (other.previewSubmittedAt || other.externalName)
+          )
+        )
+          throw new AkashPreviewAdmissionError("unresolved");
+      }
       const [existing] = await tx
         .select(SELECTION)
         .from(akashTxAllocations)
@@ -189,6 +646,12 @@ export class DrizzleAkashTxAllocationLedger
         )
         .for("update")
         .limit(1);
+      if (
+        existing &&
+        (existing.previewDeploymentId ?? undefined) !==
+          input.previewDeploymentId
+      )
+        throw new AkashPreviewAdmissionError("conflict");
       if (existing && existing.state === "preparing") {
         if (
           input.retentionPolicy &&
@@ -226,6 +689,7 @@ export class DrizzleAkashTxAllocationLedger
         existing !== undefined &&
         existing.state === "failed" &&
         existing.externalName === null &&
+        existing.previewSubmittedAt === null &&
         existing.nodeId === input.identity.nodeId &&
         existing.environment === input.environment &&
         existing.compositeUid === input.identity.compositeUid;
@@ -268,6 +732,9 @@ export class DrizzleAkashTxAllocationLedger
             // mark and make an unrelated later deployment look adoptable.
             allocationCursor: null,
             failureCode: null,
+            ...(input.previewDeploymentId
+              ? { previewSubmittedAt: null, previewDispatchFinishedAt: null }
+              : {}),
             settledAt: null,
             workload: input.workload,
             compositeGeneration: sql`greatest(${akashTxAllocations.compositeGeneration}, ${input.identity.compositeGeneration}::int)`,
@@ -303,6 +770,9 @@ export class DrizzleAkashTxAllocationLedger
           workload: input.workload,
           environment: input.environment,
           state: "preparing",
+          ...(input.previewDeploymentId
+            ? { previewDeploymentId: input.previewDeploymentId }
+            : {}),
           ...(input.retentionPolicy
             ? {
                 appliedDatabaseCellBinding: {
@@ -340,6 +810,27 @@ export class DrizzleAkashTxAllocationLedger
   > {
     const db = await this.getDb();
     return db.transaction(async (tx) => {
+      const [hint] = await tx
+        .select({ previewDeploymentId: akashTxAllocations.previewDeploymentId })
+        .from(akashTxAllocations)
+        .where(
+          and(
+            eq(akashTxAllocations.walletScope, this.walletScope),
+            eq(akashTxAllocations.cogniKey, input.cogniKey)
+          )
+        );
+      if (hint?.previewDeploymentId) {
+        const admission = await this.lockPreview(
+          tx,
+          hint.previewDeploymentId,
+          true
+        );
+        if (
+          admission.nodeId !== input.identity.nodeId ||
+          admission.environment !== input.environment
+        )
+          throw new AkashPreviewAdmissionError("conflict");
+      }
       const [existing] = await tx
         .select(SELECTION)
         .from(akashTxAllocations)
@@ -351,6 +842,11 @@ export class DrizzleAkashTxAllocationLedger
         )
         .for("update")
         .limit(1);
+      if (
+        existing?.previewDeploymentId &&
+        existing.previewDeploymentId !== hint?.previewDeploymentId
+      )
+        throw new AkashPreviewAdmissionError("conflict");
       if (!existing) return { state: "absent" as const };
       if (
         existing.nodeId !== input.identity.nodeId ||
@@ -394,27 +890,46 @@ export class DrizzleAkashTxAllocationLedger
   async prepare(input: {
     cogniKey: string;
     allocationCursor: string;
+    previewDeploymentId?: string;
   }): Promise<void> {
     const db = await this.getDb();
-    const updated = await db
-      .update(akashTxAllocations)
-      .set({
-        allocationCursor: input.allocationCursor,
-        updatedAt: sql`now()`,
-      })
-      .where(
-        and(
-          eq(akashTxAllocations.walletScope, this.walletScope),
-          eq(akashTxAllocations.cogniKey, input.cogniKey),
-          eq(akashTxAllocations.state, "preparing")
+    const prepare = async (writer: Database | LedgerTransaction) => {
+      const updated = await writer
+        .update(akashTxAllocations)
+        .set({
+          allocationCursor: input.allocationCursor,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(akashTxAllocations.walletScope, this.walletScope),
+            eq(akashTxAllocations.cogniKey, input.cogniKey),
+            eq(akashTxAllocations.state, "preparing"),
+            input.previewDeploymentId
+              ? isNull(akashTxAllocations.previewSubmittedAt)
+              : sql`true`,
+            input.previewDeploymentId
+              ? eq(
+                  akashTxAllocations.previewDeploymentId,
+                  input.previewDeploymentId
+                )
+              : isNull(akashTxAllocations.previewDeploymentId)
+          )
         )
-      )
-      .returning({ cogniKey: akashTxAllocations.cogniKey });
-    if (updated.length === 0) {
-      throw new Error(
-        "cannot record a pre-transaction cursor without owning the wallet slot"
-      );
-    }
+        .returning({ cogniKey: akashTxAllocations.cogniKey });
+      if (updated.length === 0) {
+        throw new Error(
+          "cannot record a pre-transaction cursor without owning the wallet slot"
+        );
+      }
+    };
+    const deploymentId = input.previewDeploymentId;
+    if (deploymentId) {
+      await db.transaction(async (tx) => {
+        await this.lockPreview(tx, deploymentId, true);
+        await prepare(tx);
+      });
+    } else await prepare(db);
   }
 
   async recordAllocation(input: {
@@ -494,6 +1009,7 @@ export class DrizzleAkashTxAllocationLedger
     const db = await this.getDb();
     const rows = await db
       .select({
+        previewDeploymentId: akashTxAllocations.previewDeploymentId,
         cogniKey: akashTxAllocations.cogniKey,
         allocationCursor: akashTxAllocations.allocationCursor,
         // Age is computed BY POSTGRES: the actuator's clock is not the ledger's clock, and a
@@ -512,6 +1028,9 @@ export class DrizzleAkashTxAllocationLedger
       .orderBy(akashTxAllocations.updatedAt)
       .limit(input.limit);
     return rows.map((row) => ({
+      ...(row.previewDeploymentId
+        ? { previewDeploymentId: row.previewDeploymentId }
+        : {}),
       cogniKey: row.cogniKey,
       ...(row.allocationCursor
         ? { allocationCursor: row.allocationCursor }
@@ -544,7 +1063,11 @@ export class DrizzleAkashTxAllocationLedger
           eq(akashTxAllocations.walletScope, this.walletScope),
           eq(akashTxAllocations.cogniKey, input.cogniKey),
           eq(akashTxAllocations.state, "preparing"),
-          sql`${akashTxAllocations.externalName} is null`
+          sql`${akashTxAllocations.externalName} is null`,
+          or(
+            isNull(akashTxAllocations.previewDeploymentId),
+            isNull(akashTxAllocations.previewSubmittedAt)
+          )
         )
       );
   }

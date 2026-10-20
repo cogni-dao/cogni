@@ -80,6 +80,9 @@ import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
 
 import {
   type AkashAllocationProbe,
+  AkashPreviewAdmissionError,
+  type AkashPreviewAdmissionInput,
+  type AkashPreviewRetirement,
   type AkashTxActuatorPort,
   type AkashTxAllocationLedgerPort,
   type AkashTxAllocationRecord,
@@ -466,11 +469,192 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     return withMigration({ found: false });
   }
 
+  async admitPreview(input: AkashPreviewAdmissionInput) {
+    try {
+      return await this.requirePreview().admit(input);
+    } catch (error) {
+      throw this.ledgerUnavailable(error, input.deploymentId, "admitPreview");
+    }
+  }
+
+  async cancelPreview(
+    input: AkashPreviewAdmissionInput
+  ): Promise<AkashPreviewRetirement> {
+    try {
+      await this.requirePreview().cancel(input);
+    } catch (error) {
+      throw this.ledgerUnavailable(error, input.deploymentId, "cancelPreview");
+    }
+    return this.retirePreview({ deploymentId: input.deploymentId });
+  }
+
+  private requirePreview() {
+    if (!this.ledger.preview)
+      throw new AkashTxError(
+        "invalid_request",
+        "preview admission is not enabled"
+      );
+    return this.ledger.preview;
+  }
+
+  /** ONE retirement pass. Unknown outcomes retain both custody and the reusable state slot. */
+  async retirePreview(input: {
+    deploymentId: string;
+  }): Promise<AkashPreviewRetirement> {
+    const preview = this.requirePreview();
+    const admission = await preview.revoke(input.deploymentId);
+    if (admission.closureObservedAt)
+      return { ...input, closed: true, pendingReceiptIds: [] };
+    const receipts = await preview.receipts(input.deploymentId);
+    const observedClosedReceiptIds: string[] = [];
+    const pendingReceiptIds: string[] = [];
+    for (const receipt of receipts) {
+      try {
+        let handle = receipt.externalName;
+        if (!handle && receipt.previewSubmittedAt && receipt.allocationCursor) {
+          const probe = await this.console.findAllocationSince(
+            receipt.allocationCursor
+          );
+          if (probe.outcome === "adopted") {
+            handle = probe.output.leaseId;
+            await this.ledger.recordAllocation({
+              cogniKey: receipt.cogniKey,
+              externalName: handle,
+            });
+          }
+          // A completed/empty scan cannot prove a timed-out POST will never arrive.
+        }
+        if (!handle) {
+          if (receipt.previewSubmittedAt)
+            pendingReceiptIds.push(receipt.receiptId);
+          else
+            await this.ledger.fail({
+              cogniKey: receipt.cogniKey,
+              failureCode: "allocation_rolled_back",
+            });
+          continue;
+        }
+        await this.observeCost(receipt, handle).catch(() => undefined);
+        await this.console
+          .release({ leaseId: handle })
+          .catch((error: unknown) => {
+            if (
+              mapConsoleFailure(error, { mutating: true }).code !== "not_found"
+            )
+              throw error;
+          });
+        // An API ACK or 404 is insufficient. Only positively observed closure releases custody.
+        const status = await this.console.status({ leaseId: handle });
+        if (status.state !== "closed") {
+          pendingReceiptIds.push(receipt.receiptId);
+          continue;
+        }
+        await this.ledger.markReleased({ cogniKey: receipt.cogniKey });
+        observedClosedReceiptIds.push(receipt.receiptId);
+        await this.observeCost(receipt, handle).catch(() => undefined);
+      } catch {
+        pendingReceiptIds.push(receipt.receiptId);
+      }
+    }
+    if (pendingReceiptIds.length === 0) {
+      try {
+        await preview.finishRetirement({
+          deploymentId: input.deploymentId,
+          observedClosedReceiptIds,
+        });
+        return { ...input, closed: true, pendingReceiptIds: [] };
+      } catch (error) {
+        if (
+          !(error instanceof AkashPreviewAdmissionError) ||
+          error.reason !== "unresolved"
+        )
+          throw error;
+      }
+    }
+    return { ...input, closed: false, pendingReceiptIds };
+  }
+
+  private async assertPreviewSpec(
+    deploymentId: string,
+    spec: ProvisionSpec
+  ): Promise<void> {
+    const admission = await this.requirePreview().read(deploymentId);
+    const app = spec.services.find((service) => service.name === "app");
+    if (
+      !admission ||
+      !app ||
+      app.image !== admission.artifactRef ||
+      app.env?.COGNI_REPO_SHA !== admission.sourceSha ||
+      spec.services.some(
+        (service) =>
+          service.env?.COGNI_REPO_SHA &&
+          service.env.COGNI_REPO_SHA !== admission.sourceSha
+      )
+    ) {
+      throw new AkashTxError(
+        "invalid_request",
+        "preview spec does not match its immutable admission"
+      );
+    }
+    try {
+      await this.requirePreview().bindResolvedSpec({
+        deploymentId,
+        sourceSha: admission.sourceSha,
+        artifactRef: admission.artifactRef,
+        sdlHash: this.console.sdlHash(spec),
+      });
+    } catch (error) {
+      throw this.ledgerUnavailable(error, deploymentId, "bindResolvedSpec");
+    }
+  }
+
   async create(input: {
     cogniKey: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
+    previewDeploymentId?: string;
+    previewResetGeneration?: string;
+  }): Promise<AkashTxCreateResult> {
+    if (!input.previewDeploymentId) return this.createAttempt(input);
+    if (
+      retainsStorage(input.spec) ||
+      input.spec.services.some((service) => service.volumes?.length)
+    ) {
+      throw new AkashTxError(
+        "invalid_request",
+        "disposable previews do not support retained storage"
+      );
+    }
+    const preview = this.requirePreview();
+    await this.assertPreviewSpec(input.previewDeploymentId, input.spec);
+    const admission = await preview.read(input.previewDeploymentId);
+    if (
+      !input.previewResetGeneration ||
+      admission?.resetGeneration !== input.previewResetGeneration
+    )
+      throw new AkashTxError(
+        "invalid_request",
+        "preview state generation does not match admission"
+      );
+    try {
+      return await this.createAttempt(input);
+    } finally {
+      // Dispatch completion is diagnostic; it NEVER settles an unknown paid outcome.
+      await preview.finishDispatch({
+        deploymentId: input.previewDeploymentId,
+        cogniKey: input.cogniKey,
+      });
+    }
+  }
+
+  private async createAttempt(input: {
+    cogniKey: string;
+    environment: string;
+    identity: AkashTxWorkloadIdentity;
+    spec: ProvisionSpec;
+    previewDeploymentId?: string;
+    previewResetGeneration?: string;
   }): Promise<AkashTxCreateResult> {
     await this.requireQualifiedCellRelease({
       cogniKey: input.cogniKey,
@@ -561,6 +745,16 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
     }
 
+    if (
+      input.previewDeploymentId &&
+      claim.record.previewSubmittedAt &&
+      !claim.record.externalName
+    ) {
+      throw new AkashTxError(
+        "allocation_unresolved",
+        "preview allocation submission remains under durable custody"
+      );
+    }
     if (claim.record.allocationCursor) {
       const resource = await this.resolveUncertain(
         input.cogniKey,
@@ -642,7 +836,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     }
 
     const cursor = await this.readCursor();
-    await this.prepare(input.cogniKey, cursor);
+    await this.prepare(input.cogniKey, cursor, input.previewDeploymentId);
     this.log.info(
       {
         cogniKey: input.cogniKey,
@@ -657,6 +851,17 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     try {
       allocated = await this.console.allocateAndLease({
         spec: input.spec,
+        ...(input.previewDeploymentId
+          ? {
+              beforeTransaction: async (phase: "deployment" | "lease") => {
+                await this.requirePreview().beforeProviderTransaction({
+                  deploymentId: input.previewDeploymentId as string,
+                  cogniKey: input.cogniKey,
+                  phase,
+                });
+              },
+            }
+          : {}),
         ...(excludedProviders && excludedProviders.size > 0
           ? { excludedProviders }
           : {}),
@@ -667,6 +872,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
             cogniKey: input.cogniKey,
             externalName: leaseId,
           });
+          if (input.previewDeploymentId)
+            await this.requirePreview().assertActive({
+              deploymentId: input.previewDeploymentId,
+              nodeId: input.identity.nodeId,
+              environment: input.environment,
+            });
           this.log.info(
             { cogniKey: input.cogniKey, externalName: leaseId },
             "akash_tx_allocation_recorded"
@@ -740,6 +951,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
   }): Promise<AkashTxResource> {
+    const previewRecord = await this.readLedger(input.cogniKey);
+    if (previewRecord?.previewDeploymentId)
+      throw new AkashTxError(
+        "invalid_request",
+        "preview builds are immutable; request a new preview"
+      );
     await this.requireQualifiedCellRelease({
       cogniKey: input.cogniKey,
       environment: input.environment,
@@ -940,6 +1157,17 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       input.externalName,
       "delete"
     );
+    if (record.previewDeploymentId) {
+      const retirement = await this.retirePreview({
+        deploymentId: record.previewDeploymentId,
+      });
+      if (!retirement.closed)
+        throw new AkashTxError(
+          "outcome_unknown",
+          "preview retirement awaits observed closure"
+        );
+      return;
+    }
     if (
       record.retentionPolicy === "retain" ||
       record.appliedDatabaseCellBinding?.length
@@ -1144,22 +1372,66 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
       return "unavailable";
     }
-    return runMigrationStep(
-      {
-        log: this.log,
-        ...(this.migration ? { migration: this.migration } : {}),
-        ...(this.migrationReports ? { reports: this.migrationReports } : {}),
-      },
-      {
-        step: input.migration,
-        cogniKey: input.cogniKey,
-        environment: input.environment,
-        workload: input.workload,
-        ...(this.migrationReports
-          ? { nodeId: await this.receiptBoundNodeId(input.cogniKey) }
-          : {}),
+    const migrationReceipt = await this.readLedger(input.cogniKey);
+    const previewId =
+      migrationReceipt?.previewDeploymentId ??
+      input.migration.previewDeploymentId;
+    if (previewId) {
+      const admission = await this.requirePreview().read(previewId);
+      if (
+        !admission?.resetGeneration ||
+        admission.resetGeneration !== input.migration.resetGeneration ||
+        admission.stateSlot !== input.migration.previewStateSlot ||
+        admission.environment !== input.environment ||
+        admission.artifactRef !== input.migration.image ||
+        !admission.bundleRef.endsWith(`@${input.migration.bundleDigest}`) ||
+        input.migration.previewDeploymentId !== previewId ||
+        admission.revokedAt ||
+        admission.closureObservedAt
+      )
+        return "unavailable";
+    } else if (
+      input.migration.resetGeneration ||
+      input.migration.previewStateSlot !== undefined
+    )
+      return "unavailable";
+    const step = input.migration,
+      workload = input.workload,
+      environment = input.environment;
+    const run = async () =>
+      runMigrationStep(
+        {
+          log: this.log,
+          ...(this.migration ? { migration: this.migration } : {}),
+          ...(!previewId && this.migrationReports
+            ? { reports: this.migrationReports }
+            : {}),
+        },
+        {
+          step,
+          cogniKey: input.cogniKey,
+          environment,
+          workload,
+          ...(!previewId && this.migrationReports
+            ? { nodeId: await this.receiptBoundNodeId(input.cogniKey) }
+            : {}),
+        }
+      );
+    if (previewId) {
+      try {
+        return await this.requirePreview().withActiveState(
+          {
+            deploymentId: previewId,
+            stateSlot: input.migration.previewStateSlot as 0 | 1,
+            resetGeneration: input.migration.resetGeneration as string,
+          },
+          run
+        );
+      } catch {
+        return "unavailable";
       }
-    );
+    }
+    return run();
   }
 
   /**
@@ -1343,6 +1615,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     }
 
     if (probe.outcome === "settled") {
+      const receipt = await this.readLedger(cogniKey);
+      if (receipt?.previewDeploymentId && receipt.previewSubmittedAt)
+        throw new AkashTxError(
+          "allocation_unresolved",
+          "preview submission remains under custody despite empty scan"
+        );
       // PROVEN not billing. Settling here is what makes recovery automatic and bounded.
       await this.settleRollback(cogniKey, undefined, allocationCursor);
       return null;
@@ -1438,6 +1716,11 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     let adopted = 0;
     let held = 0;
     for (const row of stale) {
+      if (row.previewDeploymentId) {
+        // Lifetime retirement owns these receipts. Generic empty-scan settlement is unsafe.
+        held += 1;
+        continue;
+      }
       this.log.warn(
         {
           cogniKey: row.cogniKey,
@@ -1646,6 +1929,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
+    previewDeploymentId?: string;
   }): Promise<Awaited<ReturnType<AkashTxAllocationLedgerPort["claim"]>>> {
     try {
       return await this.ledger.claim({
@@ -1653,6 +1937,9 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         workload: input.spec.name,
         environment: input.environment,
         identity: input.identity,
+        ...(input.previewDeploymentId
+          ? { previewDeploymentId: input.previewDeploymentId }
+          : {}),
         ...(retainsStorage(input.spec)
           ? { retentionPolicy: "retain" as const }
           : {}),
@@ -1823,9 +2110,17 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     );
   }
 
-  private async prepare(cogniKey: string, cursor: string): Promise<void> {
+  private async prepare(
+    cogniKey: string,
+    cursor: string,
+    previewDeploymentId?: string
+  ): Promise<void> {
     try {
-      await this.ledger.prepare({ cogniKey, allocationCursor: cursor });
+      await this.ledger.prepare({
+        cogniKey,
+        allocationCursor: cursor,
+        ...(previewDeploymentId ? { previewDeploymentId } : {}),
+      });
     } catch (error) {
       throw this.ledgerUnavailable(error, cogniKey, "prepare");
     }
@@ -1846,6 +2141,13 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     operation: string
   ): AkashTxError {
     if (error instanceof AkashTxError) return error;
+    if (error instanceof AkashPreviewAdmissionError)
+      return new AkashTxError(
+        error.reason === "unresolved"
+          ? "allocation_unresolved"
+          : "invalid_request",
+        error.message
+      );
     const code: AkashTxErrorCode = "ledger_unavailable";
     this.log.error(
       {

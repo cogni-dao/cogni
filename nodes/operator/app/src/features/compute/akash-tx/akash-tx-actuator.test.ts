@@ -30,6 +30,8 @@ import { describe, expect, it } from "vitest";
 import type {
   AkashAllocationProbe,
   AkashLeaseLogDescriptor,
+  AkashPreviewAdmission,
+  AkashPreviewAdmissionPort,
   AkashTxAllocationLedgerPort,
   AkashTxAllocationRecord,
   AkashTxConsolePort,
@@ -43,7 +45,7 @@ import type {
   NodeMigrationReportStorePort,
   RecordNodeMigrationReportInput,
 } from "@/ports";
-import { AkashTxError } from "@/ports";
+import { AkashPreviewAdmissionError, AkashTxError } from "@/ports";
 
 import {
   AkashTxActuator,
@@ -145,6 +147,7 @@ function consoleError(code: string, httpStatus?: number): Error {
 
 /** In-memory ledger with the SAME invariants the partial unique index enforces. */
 class FakeLedger implements AkashTxAllocationLedgerPort {
+  preview?: AkashPreviewAdmissionPort;
   readonly rows = new Map<string, AkashTxAllocationRecord>();
   /** How long each receipt has held the slot; the DB computes this, so tests set it. */
   readonly heldForMs = new Map<string, number>();
@@ -158,6 +161,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     retentionPolicy?: "retain";
+    previewDeploymentId?: string;
   }) {
     if (this.failReads) throw new Error("ledger down");
     const existing = this.rows.get(input.cogniKey);
@@ -181,6 +185,9 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       return { state: "blocked", ownerCogniKey: holder.cogniKey } as const;
     }
     const record: AkashTxAllocationRecord = {
+      ...(input.previewDeploymentId
+        ? { previewDeploymentId: input.previewDeploymentId }
+        : {}),
       receiptId: `receipt-${input.cogniKey}`,
       cogniKey: input.cogniKey,
       identity: input.identity,
@@ -528,7 +535,9 @@ class FakeConsole implements AkashTxConsolePort {
   async allocateAndLease(input: {
     spec: ProvisionSpec;
     onAllocated?: (leaseId: string) => Promise<void>;
+    beforeTransaction?: (phase: "deployment" | "lease") => Promise<void>;
   }): Promise<{ leaseId: string; providerAccount: string }> {
+    await input.beforeTransaction?.("deployment");
     this.allocateCalls += 1;
     if (this.options.allocateError) throw this.options.allocateError;
     if (this.loseResponse) {
@@ -537,6 +546,7 @@ class FakeConsole implements AkashTxConsolePort {
       throw consoleError("TIMEOUT");
     }
     await input.onAllocated?.(this.nextLeaseId);
+    await input.beforeTransaction?.("lease");
     return { leaseId: this.nextLeaseId, providerAccount: "akash1provider" };
   }
 
@@ -3334,5 +3344,260 @@ describe("AkashTxActuator observe composite verdict", () => {
       "compositePhase",
       "reported",
     ]);
+  });
+});
+
+describe("opt-in preview lifecycle", () => {
+  const deploymentId = "55616668-2668-4be8-a020-11d24fd61561";
+  const resetGeneration = "2616bc5c-5c0f-4cbf-ae01-82c376897448";
+  const sourceSha = "b".repeat(40);
+  const artifactRef = `ghcr.io/cogni-test-org/fixture@sha256:${"c".repeat(64)}`;
+  const spec: ProvisionSpec = {
+    ...SPEC,
+    services: SPEC.services.map((s) => ({
+      ...s,
+      image: artifactRef,
+      env: { COGNI_REPO_SHA: sourceSha },
+    })),
+  };
+  function previewBuild() {
+    const context = build();
+    let revoked = false;
+    let finishCalls = 0;
+    let before: ((phase: "deployment" | "lease") => Promise<void>) | undefined;
+    const row: AkashPreviewAdmission = {
+      deploymentId,
+      resetGeneration,
+      nodeId: IDENTITY.nodeId,
+      environment: "candidate-a",
+      requestKey: "preview",
+      payloadHash: context.api.sdlHash(spec),
+      sourceSha,
+      artifactRef,
+      bundleRef: `ghcr.io/cogni-test-org/bundle@sha256:${"d".repeat(64)}`,
+      stateSlot: 0,
+      expiresAt: new Date("2027-01-01T00:00:00Z"),
+    };
+    context.ledger.preview = {
+      admit: async () => row,
+      cancel: async () => {
+        revoked = true;
+        return row;
+      },
+      read: async () => row,
+      revoke: async () => {
+        revoked = true;
+        return { ...row, revokedAt: new Date("2026-10-20T00:00:00Z") };
+      },
+      assertActive: async () => {
+        if (revoked) throw new AkashPreviewAdmissionError("terminal");
+      },
+      beforeProviderTransaction: async (input) => {
+        await before?.(input.phase);
+        if (revoked) throw new AkashPreviewAdmissionError("terminal");
+      },
+      finishDispatch: async () => {
+        finishCalls++;
+      },
+      receipts: async () => [...context.ledger.rows.values()],
+      finishRetirement: async () => {
+        finishCalls++;
+        return row;
+      },
+      bindResolvedSpec: async (input) => {
+        if (row.resolvedSdlHash && row.resolvedSdlHash !== input.sdlHash)
+          throw new AkashPreviewAdmissionError("conflict");
+        Object.assign(row, { resolvedSdlHash: input.sdlHash });
+      },
+      withUnallocatedStateReservation: async (_id, _slot, action) => action(),
+      withActiveState: async (_input, action) => {
+        if (revoked) throw new AkashPreviewAdmissionError("terminal");
+        return action();
+      },
+    };
+    return {
+      ...context,
+      row,
+      setBefore: (hook: typeof before) => {
+        before = hook;
+      },
+      revoke: () => {
+        revoked = true;
+      },
+      finishes: () => finishCalls,
+    };
+  }
+  const createInput = {
+    cogniKey: "preview",
+    environment: "candidate-a",
+    identity: IDENTITY,
+    spec,
+    previewDeploymentId: deploymentId,
+    previewResetGeneration: resetGeneration,
+  };
+  it("rejects changed image/source/full SDL and state generation before paying", async () => {
+    for (const changed of [
+      {
+        ...spec,
+        services: spec.services.map((s) => ({ ...s, image: "mutable:latest" })),
+      },
+      {
+        ...spec,
+        services: spec.services.map((s) => ({
+          ...s,
+          env: { COGNI_REPO_SHA: "d".repeat(40) },
+        })),
+      },
+      {
+        ...spec,
+        services: spec.services.map((s) => ({ ...s, cpuUnits: 1.5 })),
+      },
+    ]) {
+      const { actuator, api, ledger } = previewBuild();
+      await ledger.preview?.bindResolvedSpec({
+        deploymentId,
+        sourceSha,
+        artifactRef,
+        sdlHash: api.sdlHash(spec),
+      });
+      await expect(
+        actuator.create({ ...createInput, spec: changed })
+      ).rejects.toMatchObject({ code: "invalid_request" });
+      expect(api.allocateCalls).toBe(0);
+    }
+    const { actuator, api } = previewBuild();
+    await expect(
+      actuator.create({ ...createInput, previewResetGeneration: "other" })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(api.allocateCalls).toBe(0);
+  });
+  it("cancellation at dispatch guard prevents the paid POST", async () => {
+    const ctx = previewBuild();
+    ctx.setBefore(async () => ctx.revoke());
+    await expect(ctx.actuator.create(createInput)).rejects.toBeDefined();
+    expect(ctx.api.allocateCalls).toBe(0);
+  });
+  it("late allocation callback binds handle before refusing canceled intent", async () => {
+    const ctx = previewBuild();
+    const base = ctx.ledger.recordAllocation.bind(ctx.ledger);
+    ctx.ledger.recordAllocation = async (input) => {
+      await base(input);
+      ctx.revoke();
+    };
+    await expect(ctx.actuator.create(createInput)).rejects.toBeDefined();
+    expect(ctx.ledger.rows.get("preview")?.externalName).toBe("7001");
+  });
+  it("observe empty scan cannot settle submitted preview custody", async () => {
+    const ctx = previewBuild();
+    ctx.ledger.rows.set("preview", {
+      receiptId: "r",
+      cogniKey: "preview",
+      identity: IDENTITY,
+      environment: "candidate-a",
+      workload: spec.name,
+      state: "preparing",
+      allocationCursor: "7000",
+      previewDeploymentId: deploymentId,
+      previewSubmittedAt: new Date("2026-10-20T00:00:00Z"),
+    });
+    await expect(
+      ctx.actuator.observe({ cogniKey: "preview" })
+    ).rejects.toMatchObject({ code: "allocation_unresolved" });
+    expect(ctx.ledger.failCalls).toHaveLength(0);
+    expect(ctx.api.allocateCalls).toBe(0);
+  });
+  it("retirement retains capacity after release ACK until positive closure; 404 stays unknown", async () => {
+    const ctx = previewBuild();
+    await ctx.actuator.create(createInput);
+    expect(await ctx.actuator.retirePreview({ deploymentId })).toMatchObject({
+      closed: false,
+    });
+    ctx.api.status = async () => {
+      throw consoleError("HTTP_ERROR", 404);
+    };
+    expect(await ctx.actuator.retirePreview({ deploymentId })).toMatchObject({
+      closed: false,
+    });
+    ctx.api.status = async (input) => ({
+      provider: "akash",
+      leaseId: input.leaseId,
+      state: "closed",
+      endpoints: [],
+    });
+    expect(await ctx.actuator.retirePreview({ deploymentId })).toMatchObject({
+      closed: true,
+    });
+    expect(ctx.ledger.rows.get("preview")?.state).toBe("released");
+  });
+  it("migrates only the admitted pair generation inside its fence, without canonical reports", async () => {
+    const ctx = previewBuild();
+    const reports = new FakeReports();
+    ctx.migration.receiptStdout = RECEIPT_STDOUT;
+    const costs = costDeps();
+    const actuator = new AkashTxActuator({
+      console: ctx.api,
+      ledger: ctx.ledger,
+      log: ctx.log,
+      migration: ctx.migration,
+      migrationReports: reports,
+      costEvidence: costs.costEvidence,
+      costStore: costs.costStore,
+      providerConsumerAccountId: costs.providerConsumerAccountId,
+    });
+    let fenced = false;
+    const preview = ctx.ledger.preview;
+    if (!preview) throw new Error("preview fixture missing");
+    preview.withActiveState = async (_input, action) => {
+      fenced = true;
+      try {
+        return await action();
+      } finally {
+        fenced = false;
+      }
+    };
+    const baseEnsure = ctx.migration.ensure.bind(ctx.migration);
+    ctx.migration.ensure = async (input) => {
+      expect(fenced).toBe(true);
+      return baseEnsure(input);
+    };
+    const migration = {
+      ...STEP,
+      image: artifactRef,
+      bundleDigest: `sha256:${"d".repeat(64)}`,
+      previewDeploymentId: deploymentId,
+      previewStateSlot: 0 as const,
+      resetGeneration,
+    };
+    expect(
+      await actuator.observe({
+        cogniKey: "preview",
+        workload: spec.name,
+        environment: "candidate-a",
+        migration,
+      })
+    ).toMatchObject({ migration: { phase: "succeeded" } });
+    expect(ctx.migration.calls[0]).toMatchObject({
+      secretName: `${spec.name}-preview-a-compute-migration-secrets`,
+      resetGeneration,
+    });
+    expect(reports.recorded).toHaveLength(0);
+    ctx.migration.calls = [];
+    expect(
+      await actuator.observe({
+        cogniKey: "preview",
+        workload: spec.name,
+        environment: "candidate-a",
+        migration: { ...migration, previewStateSlot: 1 },
+      })
+    ).toMatchObject({ migration: { phase: "unavailable" } });
+    expect(ctx.migration.calls).toHaveLength(0);
+  });
+  it("generic preview update refuses replacement before provider PUT", async () => {
+    const ctx = previewBuild();
+    await ctx.actuator.create(createInput);
+    await expect(
+      ctx.actuator.update({ ...createInput, externalName: "7001" })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(ctx.api.updateCalls).toBe(0);
   });
 });
