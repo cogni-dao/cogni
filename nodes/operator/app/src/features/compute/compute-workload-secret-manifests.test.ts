@@ -335,6 +335,9 @@ describe("reusable preview pair projections", () => {
     expect(migration.spec.data[0]?.remoteRef.key).toBe(
       "candidate-a/spawny-boi-database-migration"
     );
+    expect(migration.spec.data[1]?.remoteRef.key).toBe(
+      "candidate-a/spawny-boi"
+    );
     expect(
       migration.spec.target.template.data.DATABASE_MIGRATION_URL
     ).not.toContain("toJson");

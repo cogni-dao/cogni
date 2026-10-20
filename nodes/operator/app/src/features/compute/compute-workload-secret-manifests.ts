@@ -195,7 +195,11 @@ export function buildComputeSecretResources(input: {
             {
               secretKey: "DATABASE_SSL_CA_CERT",
               remoteRef: {
-                key: `${input.environment}/${input.slug}-database-migration`,
+                // The existing TEST migration bank projects only its isolated DSN.
+                // Reuse the proven runtime bank's public CA for the opt-in pair.
+                key: preview
+                  ? `${input.environment}/${input.slug}`
+                  : `${input.environment}/${input.slug}-database-migration`,
                 property: "DATABASE_SSL_CA_CERT",
               },
             },
