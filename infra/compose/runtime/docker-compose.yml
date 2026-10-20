@@ -158,8 +158,10 @@ services:
     # TODO(dev): a pnpm preflight could export LITELLM_IMAGE=$(infra_image_tag litellm).
     image: ${LITELLM_IMAGE:-ghcr.io/cogni-dao/cogni-template:litellm-b6e4e942cb23}
     restart: unless-stopped
+    # Readiness and Docker exec failures are not process-liveness evidence.
+    # Preserve the gateway through dependency recovery; normal Compose applies changes.
     labels:
-      - "autoheal=true"
+      - "autoheal=false"
     networks:
       - internal
       - sandbox-internal
@@ -578,8 +580,10 @@ services:
       - GITSYNC_PASSWORD=${GIT_READ_TOKEN:-}
 
   alloy:
-    image: grafana/alloy:v1.9.2
+    image: grafana/alloy:v1.14.0
     restart: unless-stopped
+    # cAdvisor must see the host cgroup tree before it can discover Docker actors.
+    cgroup: host
     networks:
       - internal
     # Reach the k3s-pod app + scheduler-worker (via their NodePorts on the host)
@@ -595,6 +599,8 @@ services:
       - ./configs/alloy-config.metrics.alloy:/etc/alloy/config.alloy:ro
       - alloy_data:/var/lib/alloy
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Native Docker metadata/socket binding is installed only by the normal
+      # full-infra observability override; core-only Compose consumers need none.
       # Persistent host journal gives Loki the kernel-side reason for SIGKILL/OOM.
       # Production bootstrap configures persistent journald at this path.
       - /var/log/journal:/var/log/journal:ro

@@ -733,6 +733,71 @@ fi
 EDGE_COMPOSE="docker compose --project-name cogni-edge -f /opt/cogni-template-edge/docker-compose.yml"
 RUNTIME_COMPOSE="docker compose --project-name cogni-runtime --env-file /opt/cogni-template-runtime/.env -f /opt/cogni-template-runtime/docker-compose.yml"
 RUNTIME_COMPOSE_FILE="/opt/cogni-template-runtime/docker-compose.yml"
+
+# Resolve only native Docker-owned collector inputs. Core-only deployment and
+# DB provisioning never depend on this observer topology or its override.
+verify_cadvisor_topology() {
+  local native root driver address containers plugins
+  native="$(docker info --format '{{.DockerRootDir}}|{{.Driver}}|{{.Containerd.Address}}|{{.Containerd.Namespaces.Containers}}|{{.Containerd.Namespaces.Plugins}}')" || return 1
+  IFS='|' read -r root driver address containers plugins <<NATIVE_DOCKER
+$native
+NATIVE_DOCKER
+  printf '[deploy-infra] cAdvisor native DockerRootDir|Driver|Containerd.Address|Namespaces=%s\n' "$native"
+  [ "$containers|$plugins" = 'moby|plugins.moby' ] \
+    || { echo 'cadvisor_native_namespace_unsupported' >&2; return 1; }
+  case "$root|$driver" in
+    '/var/lib/docker|overlay2')
+      CADVISOR_BIND_SOURCE=/var/lib/docker/image/overlay2/layerdb/mounts
+      CADVISOR_BIND_TARGET="$CADVISOR_BIND_SOURCE"
+      [ -d "$CADVISOR_BIND_SOURCE" ] \
+        || { echo 'cadvisor_metadata_path_missing' >&2; return 1; }
+      ;;
+    '/var/lib/docker|overlayfs')
+      case "$address" in
+        /run/containerd/containerd.sock|/var/run/docker/containerd/containerd.sock) ;;
+        *) echo 'cadvisor_native_socket_unsupported' >&2; return 1 ;;
+      esac
+      [ -S "$address" ] \
+        || { echo 'cadvisor_native_socket_missing' >&2; return 1; }
+      CADVISOR_BIND_SOURCE="$address"
+      CADVISOR_BIND_TARGET=/run/cogni-docker-containerd.sock
+      ;;
+    *) echo 'cadvisor_topology_unsupported' >&2; return 1 ;;
+  esac
+  export CADVISOR_BIND_SOURCE CADVISOR_BIND_TARGET
+  printf '[deploy-infra] cAdvisor native binding source=%s target=%s\n' "$CADVISOR_BIND_SOURCE" "$CADVISOR_BIND_TARGET"
+}
+install_cadvisor_binding() {
+  verify_cadvisor_topology || return 1
+  local next
+  next="$(mktemp "${CADVISOR_OVERRIDE_FILE}.next.XXXXXX")" || return 1
+  if ! cat > "$next" <<CADVISOR_COMPOSE
+services:
+  alloy:
+    volumes:
+      - type: bind
+        source: ${CADVISOR_BIND_SOURCE}
+        target: ${CADVISOR_BIND_TARGET}
+        read_only: true
+        bind:
+          create_host_path: false
+CADVISOR_COMPOSE
+  then
+    rm -f "$next"
+    return 1
+  fi
+  chmod 644 "$next"
+  mv -f "$next" "$CADVISOR_OVERRIDE_FILE"
+}
+CADVISOR_OVERRIDE_FILE=/opt/cogni-template-runtime/docker-compose.observability.yml
+RUNTIME_OBSERVABILITY_ARGS=""
+if [[ "${K8S_SECRETS_ONLY:-false}" != "true" ]]; then
+  # Stable config path avoids config_files label churn on subsequent full deploys.
+  # A refused native identity leaves the prior override and base Compose intact.
+  install_cadvisor_binding
+  RUNTIME_OBSERVABILITY_ARGS="-f $CADVISOR_OVERRIDE_FILE"
+  RUNTIME_COMPOSE="$RUNTIME_COMPOSE $RUNTIME_OBSERVABILITY_ARGS"
+fi
 # doltgres presence must be read from the STATIC compose file, not `compose config
 # --services` (which fully validates env interpolation → flakes empty on any unset var
 # → doltgres false-reads "absent" → knowledge plane silently skipped). Fail LOUD if the
@@ -1317,7 +1382,7 @@ printf '%s=%s\n' DOLTGRES_WRITER_PASSWORD "$DOLTGRES_WRITER_PASSWORD" >> "$RUNTI
 # Publish the complete projection atomically. A failed render leaves the prior
 # installed generation untouched; the last-good receipt therefore continues to
 # describe either the exact installed bytes or a detectable mismatch.
-docker compose --project-name cogni-runtime --env-file "$RUNTIME_ENV" -f "$RUNTIME_COMPOSE_FILE" --profile bootstrap config --quiet 2>/dev/null \
+docker compose --project-name cogni-runtime --env-file "$RUNTIME_ENV" -f "$RUNTIME_COMPOSE_FILE" ${RUNTIME_OBSERVABILITY_ARGS:-} --profile bootstrap config --quiet 2>/dev/null \
   || log_fatal "Resolved runtime consumer configuration is invalid; installed environment retained"
 chmod 600 "$RUNTIME_ENV"
 mv -f "$RUNTIME_ENV" "$INSTALLED_RUNTIME_ENV"
