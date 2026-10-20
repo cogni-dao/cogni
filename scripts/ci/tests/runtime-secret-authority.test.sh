@@ -125,6 +125,77 @@ for fresh_case in complete missing; do
     eval "$fresh"
   ) > "$TMPROOT/fresh" 2>&1; then [[ "$fresh_case" == complete ]]; else [[ "$fresh_case" == missing ]]; fi
 done
+# The later per-node provision phase must reuse the reader minted for early
+# runtime reads. Execute both actual source blocks, including any redefinition.
+for name in mint_db_reader_token openbao_get_field; do
+  function_source "$name" >> "$TMPROOT/functions.sh"
+done
+late_reader="$(awk '/^DB_READER_TOKEN=""$/ {capture=1} capture && /^# The runner forwards/ {exit} capture {print}' "$SOURCE")"
+[[ -n "$late_reader" ]]
+for reader_case in reuse token_transient login_transient permanent forbidden empty; do
+  (
+    source "$TMPROOT/functions.sh"
+    BAO_CACHE_DIR="$TMPROOT/reader-$reader_case"
+    mkdir -p "$BAO_CACHE_DIR"
+    BAO_TOKEN_FILE="$BAO_CACHE_DIR/token"
+    DEPLOY_ENVIRONMENT=production
+    sleep() { :; }
+    timeout() { shift; "$@"; }
+    kubectl() {
+      local native_phase attempts
+      case "$*" in
+        'create token db-provisioner -n default') native_phase=jwt ;;
+        *'auth/kubernetes/login'*) native_phase=login ;;
+        *'bao kv get -format=json'*) printf '%s' '{"data":{"data":{"APP_DB_PASSWORD":"owned-password"}}}'; return ;;
+        *'bao kv get -field='*) printf '%s' owned-password; return ;;
+        *) echo 'unexpected owned kubectl call' >&2; return 99 ;;
+      esac
+      printf 'call\n' >> "$BAO_CACHE_DIR/$native_phase.calls"
+      attempts="$(wc -l < "$BAO_CACHE_DIR/$native_phase.calls" | tr -d ' ')"
+      if [[ "$reader_case:$native_phase:$attempts" == token_transient:jwt:1 || "$reader_case:$native_phase:$attempts" == login_transient:login:1 ]]; then
+        echo 'context deadline exceeded owned-jwt-secret owned-reader-secret' >&2
+        return 124
+      fi
+      if [[ "$native_phase" == login ]]; then
+        case "$reader_case" in
+          permanent) echo 'malformed role owned-jwt-secret owned-reader-secret' >&2; return 7 ;;
+          forbidden) echo 'Code: 403 permission denied owned-reader-secret' >&2; return 2 ;;
+          empty) return 0 ;;
+        esac
+        printf '%s' owned-reader-secret
+      else printf '%s' owned-jwt-secret; fi
+    }
+    if reader="$(mint_db_reader_token 2>"$BAO_CACHE_DIR/diagnostics")"; then
+      [[ "$reader_case" == reuse || "$reader_case" == token_transient || "$reader_case" == login_transient ]]
+      [[ "$reader" == owned-reader-secret ]]
+      # Early path read uses the same cached reader as the real late block.
+      [[ "$(openbao_get_field operator APP_DB_PASSWORD 2>>"$BAO_CACHE_DIR/diagnostics")" == owned-password ]]
+      eval "$late_reader" 2>>"$BAO_CACHE_DIR/diagnostics"
+      [[ "$DB_READER_TOKEN" == "$reader" ]]
+      for field in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD APP_DB_MIGRATION_PASSWORD; do
+        [[ "$(read_node_db_secret operator "$field")" == owned-password ]]
+      done
+      expected_jwt=1 expected_login=1
+      [[ "$reader_case" != token_transient ]] || expected_jwt=2
+      [[ "$reader_case" != login_transient ]] || { expected_jwt=2; expected_login=2; }
+      [[ "$(wc -l < "$BAO_CACHE_DIR/jwt.calls" | tr -d ' ')" == "$expected_jwt" ]]
+      [[ "$(wc -l < "$BAO_CACHE_DIR/login.calls" | tr -d ' ')" == "$expected_login" ]]
+      grep -q 'phase=cache native_rc=0 reason=reused' "$BAO_CACHE_DIR/diagnostics"
+      [[ "$reader_case" == reuse ]] || grep -q 'reason=server_transient attempt=1/3' "$BAO_CACHE_DIR/diagnostics"
+    else
+      [[ "$reader_case" == permanent || "$reader_case" == forbidden || "$reader_case" == empty ]]
+      [[ -z "$reader" && ! -s "$BAO_TOKEN_FILE" ]]
+      [[ "$(wc -l < "$BAO_CACHE_DIR/jwt.calls" | tr -d ' ')" == 1 ]]
+      [[ "$(wc -l < "$BAO_CACHE_DIR/login.calls" | tr -d ' ')" == 1 ]]
+      case "$reader_case" in
+        permanent) grep -q 'phase=reader_login native_rc=7 reason=permanent' "$BAO_CACHE_DIR/diagnostics" ;;
+        forbidden) grep -q 'native_rc=2 reason=permission_denied' "$BAO_CACHE_DIR/diagnostics" ;;
+        empty) grep -q 'native_rc=0 reason=empty_output' "$BAO_CACHE_DIR/diagnostics" ;;
+      esac
+    fi
+    ! grep -qE 'owned-jwt-secret|owned-reader-secret|owned-password' "$BAO_CACHE_DIR/diagnostics"
+  )
+done
 # Execute the actual staged validation/publish block. Invalid final consumer
 # interpolation must retain the installed generation, despite a complete stage.
 publish="$(awk '/^docker compose --project-name cogni-runtime --env-file/ {capture=1} capture {print} capture && /^RUNTIME_ENV="\$INSTALLED_RUNTIME_ENV"$/ {exit}' "$SOURCE")"

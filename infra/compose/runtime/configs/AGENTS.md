@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-19
+- **Last reviewed:** 2026-10-20
 
 ## Purpose
 
@@ -57,6 +57,7 @@ Mounted as volumes in docker-compose.yml.
 - `alloy-config.alloy` - Logs only (local dev); scrapes Docker containers → Loki; includes log noise suppression stages
 - `alloy-config.metrics.alloy` - Logs + metrics (preview/prod); adds app, scheduler-worker, OpenFGA, cAdvisor, node exporter + prometheus.scrape → Mimir; strict metric allowlists + label cardinality policy
 - docker-compose.dev.yml mounts `alloy-config.alloy`; docker-compose.yml mounts `alloy-config.metrics.alloy`
+- Docker log source already decodes the transport envelope and preserves its native timestamp/stream. Process stages consume the application line directly; do not decode a second Docker envelope (valid JSON without `log` would become empty).
 - Both configs collect PostgreSQL container stderr and share identical log noise suppression: drops successful fast health-check/metrics-scrape logs (fail-safe — only drops when JSON parses AND required fields match). The deployed metrics config also reads the persistent host kernel journal for OOM/SIGKILL attribution.
 - Infra metrics: `prometheus.exporter.cadvisor` (container memory/CPU/OOM/network/disk) + `prometheus.exporter.unix` (host memory/CPU/filesystem/network, conntrack occupancy, socket state, listen overflow/SYN-cookie/abort-on-memory counters); requires host mounts `/proc:/host/proc:ro`, `/sys:/host/sys:ro`, `/:/host/root:ro`
 - cAdvisor Docker actor attribution also requires the declared host cgroup namespace and one read-only native Docker input: overlay2 mount-id metadata or the DockerInfo-reported overlayfs containerd socket. Both bindings are selected by normal full-infra native preflight into an atomically installed, stable observability-only Compose override; unsupported topology preserves that override and refuses full reconciliation. K8s-only and DB provisioning use the independent base Compose without this observer prerequisite. `container_memory_failures_total{failure_type="pgmajfault",scope="container"}` supplies workload paging attribution.
