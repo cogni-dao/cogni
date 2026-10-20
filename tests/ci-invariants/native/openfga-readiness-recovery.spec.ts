@@ -265,6 +265,15 @@ describe.skipIf(!process.env.CI)(
           .withNetworkAliases("fga-pg")
           .start();
         owned.push(postgres);
+        // A separate owned client remains executable while the target is paused;
+        // otherwise Docker rejects exec before the TCP failure is exercised.
+        const probeClient = await new GenericContainer(image(services.postgres))
+          .withNetwork(network)
+          .withEntrypoint(["sh"])
+          .withCommand(["-c", "exec sleep infinity"])
+          .withWaitStrategy(Wait.forSuccessfulCommand("psql --version"))
+          .start();
+        owned.push(probeClient);
         // Exercise the exact deploy credential probe against this owned native DB.
         // pg_controldata independently binds the authenticated SQL identity to PGDATA.
         const deploySource = readFileSync(
@@ -427,6 +436,12 @@ describe.skipIf(!process.env.CI)(
           controlStart
         );
         autoheal = await new GenericContainer(image(services.autoheal))
+          .withLabels({
+            "com.docker.compose.project": "cogni-runtime",
+            "com.docker.compose.service": "autoheal",
+            "com.docker.compose.project.working_dir":
+              "/opt/cogni-template-runtime",
+          })
           .withEnvironment({
             ...Object.fromEntries(
               (services.autoheal.environment ?? []).map((entry) => {
@@ -447,6 +462,7 @@ describe.skipIf(!process.env.CI)(
             },
           ])
           .start();
+        const ownedWatchdogId = autoheal.getId();
         await until(
           async () =>
             (await controlDocker.inspect()).State.StartedAt !== controlStart,
@@ -454,7 +470,7 @@ describe.skipIf(!process.env.CI)(
           120_000 // Includes the unchanged declared autoheal startup grace.
         );
         const autohealLog = await docker
-          .getContainer(autoheal.getId())
+          .getContainer(ownedWatchdogId)
           .logs({ stdout: true, stderr: true });
         const log = autohealLog.toString();
         expect(
@@ -476,8 +492,64 @@ describe.skipIf(!process.env.CI)(
           "unhealthy"
         );
 
+        // Exercise the normal deploy's actual maintenance phase while the old
+        // watchdog is demonstrably active and its datastore is still faulted.
+        // Restrict discovery to our fixture ID; inspect/stop still use native
+        // Docker and the production phase's exact project/working-dir checks.
+        const maintenance = deploySource.match(
+          /^stop_runtime_watchdog\(\) \{[\s\S]*?^fi$/m
+        )?.[0];
+        if (!maintenance)
+          throw new Error("Normal watchdog maintenance phase missing");
+        expect(() =>
+          execFileSync(
+            "bash",
+            [
+              "-c",
+              `owned_watchdog="$1"
+              docker() {
+                if [[ "$1" == ps ]]; then
+                  command docker "$@" --filter "id=$owned_watchdog"
+                else
+                  command docker "$@"
+                fi
+              }
+              set -euo pipefail
+              ${maintenance}
+              ${probe}
+              postgres_bootstrap_identity "$2" "$3" "$4"`,
+              "owned-maintenance-proof",
+              ownedWatchdogId,
+              probeClient.getId(),
+              pgAddress,
+              "fga_test",
+            ],
+            {
+              input: `${password}\n`,
+              encoding: "utf8",
+              timeout: 40_000,
+              stdio: ["pipe", "pipe", "pipe"],
+            }
+          )
+        ).toThrow(/timeout expired|connection.*timed out/); // Native TCP proof fails while PostgreSQL remains paused.
+        expect(
+          (await docker.getContainer(ownedWatchdogId).inspect()).State.Running
+        ).toBe(false);
+        expect(
+          (await docker.getContainer(postgres.getId()).inspect()).State.Paused
+        ).toBe(true);
+        expect((await repairedDocker.inspect()).State.StartedAt).toBe(
+          repairedStart
+        );
+
         await docker.getContainer(postgres.getId()).unpause();
         paused = false;
+        // Normal convergence resumes the watchdog only after applying desired
+        // service policy; prove the repaired declaration remains safe under it.
+        await docker.getContainer(ownedWatchdogId).start();
+        expect(
+          (await docker.getContainer(ownedWatchdogId).inspect()).State.Running
+        ).toBe(true);
         await until(
           async () =>
             (await repairedDocker.inspect()).State.Health?.Status === "healthy",

@@ -697,6 +697,26 @@ fi
 
 echo -e "\033[0;32m[INFO]\033[0m Docker prerequisites verified"
 
+# Stop the owned watchdog BEFORE datastore/custody preflight. Its old policy can
+# repeatedly restart a dependency while that dependency is recovering. Full
+# Compose convergence below alone resumes it with the reviewed desired policy;
+# a failed preflight intentionally leaves the unsafe watchdog stopped.
+stop_runtime_watchdog() {
+  local container metadata
+  container="$(docker ps --filter label=com.docker.compose.project=cogni-runtime \
+    --filter label=com.docker.compose.service=autoheal --format '{{.ID}}')"
+  [[ -n "$container" ]] || return 0 # Fresh bootstrap has no owned watchdog.
+  [[ "$container" =~ ^[0-9a-f]+$ ]] || { echo 'watchdog_container_identity_ambiguous' >&2; return 1; }
+  metadata="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$container")"
+  [[ "$metadata" == 'cogni-runtime|autoheal|/opt/cogni-template-runtime' ]] \
+    || { echo 'watchdog_container_identity_mismatch' >&2; return 1; }
+  timeout 30 docker stop --time 15 "$container" >/dev/null
+  echo '[deploy-infra] Owned runtime watchdog stopped before dependency preflight'
+}
+if [[ "${K8S_SECRETS_ONLY:-false}" != "true" ]]; then
+  stop_runtime_watchdog
+fi
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Firewall: close Docker-published internal ports to public internet
 # (idempotent; safe to re-run on every deploy). See bug.5167.
@@ -1561,10 +1581,6 @@ fi
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 log_info "[$(date -u +%H:%M:%S)] Starting infra services (rolling update)..."
 emit_deployment_event "infra_deployment.stack_up_started" "in_progress" "Starting infrastructure services"
-
-# Autoheal guard: stop autoheal before compose up to prevent race condition
-# (autoheal can restart a container between compose stop and remove)
-$RUNTIME_COMPOSE stop autoheal 2>/dev/null || true
 
 # Infra services only — excludes app, scheduler-worker, db-migrate, and one-shot backup jobs
 INFRA_SERVICES="postgres litellm openfga redis alloy temporal-postgres temporal temporal-ui autoheal repo-init git-sync"
