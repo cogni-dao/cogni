@@ -6,7 +6,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SOURCE="$REPO_ROOT/scripts/ci/deploy-infra.sh"
 TMPROOT="$(mktemp -d -t runtime-authority.XXXXXX)"
-trap 'rm -rf "$TMPROOT"' EXIT
+trap 'rm -rf "$TMPROOT" "${ENTRY_TMP:-}"' EXIT
 mkdir -p "$TMPROOT/bin"
 function_source() {
   awk -v start="$1() {" '$0 == start {capture=1} capture {print} capture && /^}$/ {exit}' "$SOURCE"
@@ -146,4 +146,35 @@ for config_case in invalid valid; do
   fi
   [[ "$(cat "$TMPROOT/publish")" != *leaked-secret-marker* ]]
 done
+# Prove the original failure at the real entry point, not only extracted helpers.
+# No runtime GitHub keys or live credentials enter this child. Fake git stops
+# before creating a worktree; all transport commands are owned no-network shims.
+ENTRY_TMP="$(mktemp -d /tmp/cogni-auth.XXXXXX)"
+mkdir -p "$ENTRY_TMP/bin"
+cat > "$ENTRY_TMP/bin/git" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *' fetch '*) echo 'owned-source-resolution-sentinel' >&2; exit 41 ;;
+  *) exit 42 ;;
+esac
+SH
+cat > "$ENTRY_TMP/bin/ssh" <<'SH'
+#!/usr/bin/env bash
+[[ "$*" == *' -O exit '* ]] || { echo 'forbidden-transport' >&2; exit 99; }
+SH
+cat > "$ENTRY_TMP/bin/curl" <<'SH'
+#!/usr/bin/env bash
+echo 'forbidden-network' >&2
+exit 99
+SH
+chmod +x "$ENTRY_TMP/bin/"*
+if entry_output="$(env -i HOME="$ENTRY_TMP" TMPDIR="$ENTRY_TMP" RUNNER_TEMP="$ENTRY_TMP" \
+  PATH="$ENTRY_TMP/bin:$PATH" DEPLOY_ENVIRONMENT=preview DOMAIN=owned.invalid VM_HOST=owned.invalid \
+  APP_ENV=production COGNI_REPO_URL=https://owned.invalid/repo.git COGNI_REPO_REF=main \
+  bash "$SOURCE" --dry-run 2>&1)"; then
+  echo 'Entrypoint unexpectedly passed the owned source stop' >&2; exit 1
+fi
+[[ "$entry_output" == *owned-source-resolution-sentinel* ]] \
+  || { echo 'Runtime keys incorrectly blocked the runner before custody/source resolution' >&2; exit 1; }
+[[ "$entry_output" != *forbidden-transport* && "$entry_output" != *forbidden-network* ]]
 printf 'runtime-secret-authority: root, ownership, outage, strict bootstrap and publish checks passed\n'

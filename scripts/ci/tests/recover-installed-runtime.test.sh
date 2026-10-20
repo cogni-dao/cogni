@@ -205,7 +205,7 @@ rm -f "$RECEIPT"
 : > "$DOCKER_LOG"
 set +e
 candidate_full_out="$({
-  env \
+  env -u DOMAIN \
     PATH="$FAKEBIN:$PATH" \
     VM_HOST=fake \
     DEPLOY_ENVIRONMENT=candidate-a \
@@ -220,7 +220,7 @@ set -e
 [[ "$candidate_full_rc" -ne 0 ]] || { echo "candidate full reconcile unexpectedly passed without required secrets" >&2; exit 1; }
 grep -q '^recovery_state=custody_required$' <<<"$candidate_full_out"
 grep -q 'Candidate full reconcile continuing after installed-runtime recovery preflight' <<<"$candidate_full_out"
-grep -q 'Missing required secret environment variables' <<<"$candidate_full_out"
+grep -q 'Missing required deploy input: DOMAIN' <<<"$candidate_full_out"
 [[ ! -s "$DOCKER_LOG" ]] || { echo "candidate full preflight mutated Docker without a receipt" >&2; exit 1; }
 
 echo "PASS: recover-installed-runtime.test.sh"
