@@ -854,8 +854,8 @@ printf '%s' doltgres-super-sentinel > "$BAO_ROOT/cogni/production/operator/DOLTG
 FOREIGN_NODE=poly-guard-fixture
 # Explicit synthetic births must also exist in isolated TEST rosters.
 . "$REPO_ROOT/scripts/ci/tests/fixtures/catalog.sh"
-write_akash_catalog_fixture "$FOREIGN_CATALOG" poly
-write_akash_catalog_fixture "$FOREIGN_CATALOG" "$FOREIGN_NODE"
+write_akash_catalog_fixture "$FOREIGN_CATALOG" poly dedicated dedicated-high-throughput-v1
+write_akash_catalog_fixture "$FOREIGN_CATALOG" "$FOREIGN_NODE" dedicated dedicated-high-throughput-v1
 yq -i ".name = \"$FOREIGN_NODE\"" "$FOREIGN_CATALOG/$FOREIGN_NODE.yaml"
 
 for foreign_node in poly "$FOREIGN_NODE"; do

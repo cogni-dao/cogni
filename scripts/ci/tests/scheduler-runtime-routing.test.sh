@@ -282,9 +282,11 @@ check_scheduler_vm_alias() {
   pass "$env scheduler-worker ExternalNames -> $expected"
 }
 
+# Workload URLs follow DOMAIN; VM discovery follows its independent substrate root.
+SUBSTRATE_ROOT="${FORK_DOMAIN_ROOT:-$(cogni_domain_root)}"
 SUBSTRATE_SLUG="$(cogni_deployment_slug)"
 for env in "${DEPLOY_ENVS[@]}"; do
-  check_scheduler_vm_alias "$env" "$(cogni_vm_host_for_env "$env" "$FORK_ROOT" "$SUBSTRATE_SLUG")"
+  check_scheduler_vm_alias "$env" "$(cogni_vm_host_for_env "$env" "$SUBSTRATE_ROOT" "$SUBSTRATE_SLUG")"
 done
 
 echo "[5/5] the Crossplane materializer's substrate host IS that same env VM alias"
@@ -303,7 +305,7 @@ grep -q -- 'cogni_deployment_slug' "$ACTION_YML" \
 for env in "${DEPLOY_ENVS[@]}"; do
   file="infra/k8s/overlays/$env/scheduler-worker/kustomization.yaml"
   [ -f "$file" ] || { echo "  skip - $env scheduler-worker overlay missing"; continue; }
-  expected="$(cogni_vm_host_for_env "$env" "$FORK_ROOT" "$SUBSTRATE_SLUG")"
+  expected="$(cogni_vm_host_for_env "$env" "$SUBSTRATE_ROOT" "$SUBSTRATE_SLUG")"
   apex="$(domain_for_env "$env" "$FORK_ROOT" || true)"
   [ "$expected" != "$apex" ] \
     || fail "$env substrate host resolved to the Cloudflare-proxied public apex '$apex', which drops 7233/6379/4000"

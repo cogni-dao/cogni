@@ -6,7 +6,7 @@
 # Does not read credentials, contact providers, or change the committed fleet.
 
 write_akash_catalog_fixture() {
-  local catalog_dir="$1" slug="$2"
+  local catalog_dir="$1" slug="$2" tier="${3:-shared}" budget_profile="${4:-shared-default-v1}"
   mkdir -p "$catalog_dir"
   cat > "$catalog_dir/$slug.yaml" <<YAML
 name: $slug
@@ -28,9 +28,9 @@ activity_env: production
 owner_wallet: '0x0000000000000000000000000000000000000001'
 path_prefix: nodes/$slug/
 database:
-  candidate-a: {tier: shared, budget_profile: shared-default-v1}
-  preview: {tier: shared, budget_profile: shared-default-v1}
-  production: {tier: shared, budget_profile: shared-default-v1}
+  candidate-a: {tier: $tier, budget_profile: $budget_profile}
+  preview: {tier: $tier, budget_profile: $budget_profile}
+  production: {tier: $tier, budget_profile: $budget_profile}
 deployment_provider: {candidate-a: akash, preview: akash, production: akash}
 compute_api: {candidate-a: crossplane, preview: crossplane, production: crossplane}
 compute_egress_cidrs: [{cidr: 192.0.2.1/32, comment: test-only provider}]

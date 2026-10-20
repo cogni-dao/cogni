@@ -82,6 +82,8 @@ echo '[current] every committed lane is resident; historical rollback coverage f
 write_historical_catalog_fixture "$CATALOG_DIR" "$TMPROOT/historical-catalog"
 export CATALOG_DIR="$TMPROOT/historical-catalog" COGNI_CATALOG_ROOT="$TMPROOT/historical-catalog"
 export FLEET_CONTROL_ENV=production
+# The real reader caches its roster at source time; rebuild it from the selected fixture.
+. "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
 LANE_DB_RESIDENCY_PINNED=("poly/candidate-a" "poly/preview" "red/candidate-a" "toks5/preview")
 
 # ── 1. INERT: every lane keeps the host it has today ─────────────────────────────

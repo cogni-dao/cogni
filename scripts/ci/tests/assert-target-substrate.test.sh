@@ -283,7 +283,7 @@ yq -i '.deployment_provider."candidate-a" = "akash"' "$MISRESIDENT_TREE/infra/ca
 # Placement moves the control env, so it also moves the AppSet directory (bug.5204). Park a
 # copy at the relocated path so the EARLIER appset-existence check cannot absorb this case —
 # the residency gate is what must produce the verdict.
-misresident_appset="$MISRESIDENT_TREE/$(CATALOG_DIR="$MISRESIDENT_TREE/infra/catalog" appset_rel_path candidate-a node-template)"
+misresident_appset="$MISRESIDENT_TREE/$(FLEET_CONTROL_ENV=production CATALOG_DIR="$MISRESIDENT_TREE/infra/catalog" appset_rel_path candidate-a node-template)"
 mkdir -p "$(dirname "$misresident_appset")"
 cp "$HAPPY_TREE/$(CATALOG_DIR="$HAPPY_TREE/infra/catalog" appset_rel_path candidate-a node-template)" \
   "$misresident_appset"
@@ -568,6 +568,8 @@ EXTERNAL_ALLOWLIST="$TMPROOT/compute-egress-allowlist"
 # whole-line `grep -Fx` shipped and failed closed on every real host.
 printf '%s\n' '80.200.246.35/32:5432,5435,6379,4000,7233' > "$EXTERNAL_ALLOWLIST"
 EXTERNAL_ENV=(
+  # This birth scenario explicitly exercises the historical production custodian.
+  FLEET_CONTROL_ENV=production
   TARGET=toks4
   DEPLOYMENT_PROVIDER=akash
   DEPLOY_ENVIRONMENT=candidate-a

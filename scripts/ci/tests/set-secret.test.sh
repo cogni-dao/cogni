@@ -149,7 +149,7 @@ chmod +x "$TMPROOT/fakebin/bao"
 component_case() {
   local name="$1" mode="$2" version="$3" body="$4" expected="$5" env_name="$6" service="$7" key="$8" rc=0 output
   : > "$TMPROOT/component.log"; rm -f "$TMPROOT/component-value"
-  output="$(printf '%s' "$body" | env -u SET_SECRET_BAO PATH="$TMPROOT/fakebin:$PATH" BAO_ADDR=http://fixture.invalid BAO_TOKEN=fixture-only FAKE_MODE="$mode" FAKE_BAO_LOG="$TMPROOT/component.log" FAKE_BAO_VALUE="$TMPROOT/component-value" SET_SECRET_EXPECTED_VERSION="$version" REPO_ROOT="$COMPONENT_ROOT" bash "$TARGET" "$env_name" "$service" "$key" 2>&1)" || rc=$?
+  output="$(printf '%s' "$body" | env -u SET_SECRET_BAO PATH="$TMPROOT/fakebin:$PATH" BAO_ADDR=http://fixture.invalid BAO_TOKEN=fixture-only FAKE_MODE="$mode" FAKE_BAO_LOG="$TMPROOT/component.log" FAKE_BAO_VALUE="$TMPROOT/component-value" TSX_TSCONFIG_PATH="$REPO_ROOT/nodes/operator/app/tsconfig.app.json" SET_SECRET_EXPECTED_VERSION="$version" REPO_ROOT="$COMPONENT_ROOT" bash "$TARGET" "$env_name" "$service" "$key" 2>&1)" || rc=$?
   if { [[ "$expected" == pass && "$rc" == 0 ]] || [[ "$expected" == fail && "$rc" != 0 ]]; } && ! grep -q 'kv put' "$TMPROOT/component.log"; then
     printf 'OK  %s\n' "$name"; pass=$((pass+1))
   elif [[ "$expected" == create && "$rc" == 0 ]] && grep -q '^kv put -cas=0 ' "$TMPROOT/component.log"; then
