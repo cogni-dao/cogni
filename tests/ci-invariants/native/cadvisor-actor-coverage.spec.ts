@@ -192,7 +192,7 @@ describe.skipIf(!process.env.CI)(
         );
         const actor = async (service: string) => {
           const container = await new GenericContainer(
-            services["git-sync-init"].image
+            services["repo-init"].image
           )
             .withNetwork(network)
             .withLabels({
