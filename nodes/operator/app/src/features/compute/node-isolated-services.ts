@@ -74,20 +74,17 @@ export function resolveNodeIsolatedServices(input: {
 }
 
 /**
- * Drop receipts minted for a DIFFERENT workload's key family. Crossplane keys are
- * `xcw:<namespace>:<workloadName>:<generation>[:recover:<n>]`; the primary workload's name is
- * the nodeId and an instance's is `<nodeId>-<instance>`, so the trailing `:` keeps the primary
- * prefix from matching an instance key. Non-`xcw:` keys pass through unchanged, so callers keep
- * their existing refusal of a receipt with no valid generation suffix.
+ * Drop receipts minted for one of this node's ISOLATED-SERVICE leases, so they never count as
+ * the primary workload's generation evidence. Crossplane keys are
+ * `xcw:<namespace>:<workloadName>:<generation>[:recover:<n>]` and an instance's workload name is
+ * `<nodeId>-<instance>`; only that shape is removed. Every other receipt, including legacy key
+ * shapes, passes through unchanged so callers keep their existing evidence and refusals.
  */
-export function receiptsForWorkload<T extends { readonly cogniKey: string }>(
-  receipts: readonly T[],
-  workload: { readonly environment: string; readonly name: string }
-): T[] {
-  const prefix = `xcw:cogni-${workload.environment}:${workload.name}:`;
-  return receipts.filter(
-    (receipt) =>
-      !receipt.cogniKey.startsWith("xcw:") ||
-      receipt.cogniKey.startsWith(prefix)
-  );
+export function receiptsExcludingInstances<
+  T extends { readonly cogniKey: string },
+>(receipts: readonly T[], nodeId: string): T[] {
+  return receipts.filter((receipt) => {
+    const name = /^xcw:[^:]+:([^:]+):/.exec(receipt.cogniKey)?.[1];
+    return !name?.startsWith(`${nodeId}-`);
+  });
 }

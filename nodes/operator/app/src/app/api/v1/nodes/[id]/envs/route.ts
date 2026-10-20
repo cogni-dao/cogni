@@ -59,7 +59,7 @@ import {
   replacementLeaseGeneration,
   requiredLeaseGeneration,
 } from "@/features/compute/lease-reactivation";
-import { receiptsForWorkload } from "@/features/compute/node-isolated-services";
+import { receiptsExcludingInstances } from "@/features/compute/node-isolated-services";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import type { AkashTxAllocationRecord } from "@/ports";
 import { nodes } from "@/shared/db/nodes";
@@ -349,10 +349,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           // of this node never moves the primary workload's generation.
           leaseGeneration: replacementLeaseGeneration({
             catalogGeneration: 0,
-            receipts: receiptsForWorkload(regionReceipts, {
-              environment: targetEnv,
-              name: node.id,
-            }),
+            receipts: receiptsExcludingInstances(regionReceipts, node.id),
           }),
         });
       } catch (err) {
@@ -454,10 +451,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       present === true && envReceipts
         ? requiredLeaseGeneration({
             catalogGeneration: 0,
-            receipts: receiptsForWorkload(envReceipts, {
-              environment: targetEnv,
-              name: node.id,
-            }),
+            receipts: receiptsExcludingInstances(envReceipts, node.id),
           })
         : undefined;
 

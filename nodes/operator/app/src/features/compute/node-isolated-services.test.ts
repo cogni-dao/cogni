@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { buildComputeWorkloadManifest } from "./compute-workload-manifest";
 import { requiredLeaseGeneration } from "./lease-reactivation";
 import {
-  receiptsForWorkload,
+  receiptsExcludingInstances,
   resolveNodeIsolatedServices,
 } from "./node-isolated-services";
 import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "./node-services-workload-spec";
@@ -194,19 +194,13 @@ describe("isolated-service workloads (story.5093)", () => {
         state: "released",
       },
     ] as unknown as Parameters<typeof requiredLeaseGeneration>[0]["receipts"];
-    const primary = receiptsForWorkload(receipts, {
-      environment: "production",
-      name: NODE_ID,
-    });
+    const primary = receiptsExcludingInstances(receipts, NODE_ID);
     expect(primary.map((r) => r.cogniKey)).toEqual([
       `xcw:cogni-production:${NODE_ID}:0`,
     ]);
-    expect(
-      receiptsForWorkload(receipts, {
-        environment: "production",
-        name: `${NODE_ID}-sandbox`,
-      }).map((r) => r.cogniKey)
-    ).toEqual([`xcw:cogni-production:${NODE_ID}-sandbox:7`]);
+    // Legacy key shapes are never dropped: they stay evidence for the existing derivation.
+    const legacy = [{ cogniKey: "xcw:cogni-preview-red:red:3" }];
+    expect(receiptsExcludingInstances(legacy, NODE_ID)).toEqual(legacy);
     // Unscoped, the instance's spent generation 7 would force the app to generation 8.
     expect(requiredLeaseGeneration({ catalogGeneration: 0, receipts })).toBe(8);
     expect(
