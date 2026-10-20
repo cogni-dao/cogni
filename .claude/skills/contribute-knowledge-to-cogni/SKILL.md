@@ -1,55 +1,30 @@
 ---
 name: contribute-knowledge-to-cogni
-description: Umbrella skill for contributing durable knowledge to a Cogni node hub. Triggers when an agent has — or is about to research — context worth compounding for future agents/humans, AND the knowledge is durable enough to survive the syntropy bar. Routes to the right sub-skill by content shape (falsifiable prediction → `edo-loop`; visual for humans → `dolt-human-visuals`; AI-readable text → direct contribution). Use whenever you'd otherwise drop a research finding into a chat log or PR description that should outlive the session. RARE by design — most agent context dies with the session; only what compounds earns an entry.
+description: Use when contributing or refining durable knowledge in a Cogni node hub, including migrating existing documentation. Recall existing knowledge before research or writing; route predictions to EDO and useful human visuals to their authoring guide. Routine progress stays in work items.
 ---
 
-# contribute-knowledge-to-cogni
+# Contribute durable knowledge
 
-> The contract lives in the hub, not in this file. This file is the trigger.
+This file selects the contracts; the hub holds their maintained content.
 
-## Fetch the contract first
+Read `GET /api/v1/knowledge/knowledge-contribution-flow` on the current node,
+using its verified origin and saved `COGNI_NODE_API_KEY`. Read the full response
+`content`, not only its index row. That guide owns recall of merged knowledge
+and open inboxes, edit operations, citations, provenance, and human review.
 
-```bash
-# $BASE is the node you are contributing to; default https://cognidao.org
-curl -fsS -H "Authorization: Bearer $KEY" \
-  "$BASE/api/v1/knowledge/knowledge-contribution-flow" | jq -r .content
-```
+| decision                                                    | read next                                                                            |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| What are we trying to compound?                             | `md-to-hub-design`                                                                   |
+| Does this deserve durable knowledge?                        | `knowledge-syntropy-protocol`                                                        |
+| Which registered domain owns it?                            | `cogni-domain-taxonomy`                                                              |
+| How do repository docs, specs, or skills move into the hub? | `migrate-markdown-to-hub` and its required guides                                    |
+| Is this a prediction that resolves later?                   | [edo-loop](../edo-loop/SKILL.md)                                                     |
+| Does visual structure help human review?                    | `knowledge-human-visuals`, then [dolt-human-visuals](../dolt-human-visuals/SKILL.md) |
 
-That entry is the source of truth for the action hierarchy, the inbox rule, the
-edit-op contract, and the constraints that 400/409. Read it before writing. Each
-node owns its own copy, so fetch from the node you are contributing to.
+Reuse the focused inbox for the existing work item; unrelated work gets its own
+inbox. A human reviews and merges knowledge. Verify the merged replacement,
+retrieval route, and consumers before removing a repository source.
 
-Then: `cogni-domain-taxonomy` for which shelf, `knowledge-syntropy-protocol`
-for whether it earns an entry at all.
-
-## The axioms (hold even if the hub is unreachable)
-
-- **Atoms.** One entry, one claim. A second claim is a second entry that cites the first.
-- **Stable identity.** Choose an explicit atom address; never accept a generated id. Retrieval semantics belong in domain, title, `useWhen`, tags, and citations.
-- **Focused.** Most contributable-feeling context is ephemeral. Default to writing nothing.
-- **Linked.** A new atom cites a parent or sibling. Zero-edge entries don't compound.
-- **Concise, high-signal.** Bold claim line, then structured evidence. Never a prose blob.
-- **Refine over add.** Sharpening an existing entry beats filing a new one.
-
-## One inbox per unit of work
-
-An open contribution is an inbox, and **an inbox maps 1:1 to one work item or
-one PR** — like a branch.
-
-- Related to your open inbox's work item → append via `POST /contributions/{id}/commits`.
-- Unrelated to any open inbox → **open a new one**.
-- Many concurrent open inboxes from one principal is **correct**. Sprawl is an
-  inbox with unrelated contents; focus is the bar, not count.
-- Reuse one saved API key — a fresh agent per write orphans attribution.
-
-## Routing by shape
-
-| shape                                               | go to                                                                         |
-| --------------------------------------------------- | ----------------------------------------------------------------------------- |
-| falsifiable prediction resolving in a later session | [`edo-loop`](../edo-loop/SKILL.md)                                            |
-| genuinely visual artifact (diagram, chart)          | [`dolt-human-visuals`](../dolt-human-visuals/SKILL.md)                        |
-| design narrative / rationale / approach (`/design`) | a hub entry (`finding`/`conclusion`/`rule`) + a human visual — **not** a spec |
-| as-built architecture, contract, invariant          | today `docs/spec/*`; migrating to the hub (`story.5087`)                      |
-| atomic factual claim with provenance                | the contract above                                                            |
-
-**A human reviews and merges.** Never merge your own contribution.
+If the hub is unavailable or an entry is missing, retain existing sources and
+record the failed gate. Do not register a fresh principal, silently change the
+target node, or invent the missing contract.

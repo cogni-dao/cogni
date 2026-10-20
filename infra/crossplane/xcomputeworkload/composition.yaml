@@ -71,8 +71,18 @@ spec:
               object: no managed resource is produced, so NOTHING IS SPENT, and Crossplane
               surfaces the message on the XR.
             */ -}}
-            {{- if ne $name $spec.nodeId }}
-            {{- fail (printf "XComputeWorkload %s/%s: metadata.name must equal spec.nodeId (%s) - one paid workload per node per environment namespace" $ns $name $spec.nodeId) }}
+            {{- /*
+              ISOLATED_SERVICE_IS_ITS_OWN_LEASE (story.5093). A node may own exactly one more
+              workload per isolated service the operator catalog names. Its name is
+              `<nodeId>-<instance>`, so the idempotence key below (`xcw:<ns>:<name>:<gen>`)
+              is a distinct paid lease while the receipt identity stays the node's nodeId.
+              Absent instance keeps the original one-workload-per-node gate byte-for-byte.
+            */ -}}
+            {{- $instance := dig "instance" "" $spec }}
+            {{- $expectedName := $spec.nodeId }}
+            {{- if ne $instance "" }}{{ $expectedName = printf "%s-%s" $spec.nodeId $instance }}{{ end }}
+            {{- if ne $name $expectedName }}
+            {{- fail (printf "XComputeWorkload %s/%s: metadata.name must equal %s (spec.nodeId %s, spec.instance %q) - one paid workload per node per instance per environment namespace" $ns $name $expectedName $spec.nodeId $instance) }}
             {{- end }}
             {{- if ne (printf "cogni-%s" $env) $ns }}
             {{- fail (printf "XComputeWorkload %s/%s: spec.environment %s must be reconciled in namespace cogni-%s" $ns $name $env $env) }}
@@ -214,6 +224,14 @@ spec:
             {{- $_ := set $e "LITELLM_BASE_URL" (printf "http://%s:4000" $substrate) }}
             {{- $_ := set $e "SCHEDULER_WORKER_HEALTH_URL" (printf "http://%s:30900" $substrate) }}
             {{- end }}
+            {{- end }}
+            {{- /*
+              An isolated-service lease has no node-app profile, but its public service must
+              still prove the exact source SHA on /version. It receives the SHA and nothing
+              else: no substrate topology, no profile secrets, no log-push credentials.
+            */ -}}
+            {{- if and (ne $instance "") (eq $svc.visibility "public") }}
+            {{- $_ := set $e "COGNI_REPO_SHA" $desiredSha }}
             {{- end }}
             {{- /* bindings -> sibling service URLs (legacy bindingEnv). */ -}}
             {{- range $k, $target := $svc.bindings }}

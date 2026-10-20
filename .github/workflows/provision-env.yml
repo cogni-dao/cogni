@@ -175,16 +175,13 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       - name: Mask passphrase in logs
         run: |
-          # ::add-mask:: prevents any subsequent echo of the passphrase from
-          # appearing in run logs. Must happen before checkout / any step that
-          # might surface ${{ inputs.* }} into command output.
-          echo "::add-mask::${{ inputs.encryption_passphrase }}"
+          jq -r '"::add-mask::" + (.inputs.encryption_passphrase // "" | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A"))' "$GITHUB_EVENT_PATH"
 
       - name: Pre-flight — passphrase non-empty
-        env:
-          ENCRYPTION_PASSPHRASE: ${{ inputs.encryption_passphrase }}
         run: |
           set -euo pipefail
+          ENCRYPTION_PASSPHRASE="$(jq -r '.inputs.encryption_passphrase // empty' "$GITHUB_EVENT_PATH")"
+          export ENCRYPTION_PASSPHRASE
           if [[ -z "${ENCRYPTION_PASSPHRASE}" ]]; then
             echo "::error::encryption_passphrase input is empty. Aborting BEFORE any provisioning."
             echo "::error::No unencrypted credentials will ever leave this runner — re-trigger with a passphrase."
@@ -373,9 +370,10 @@ jobs:
         # provision-env-vm.sh — restoring the prior keys keeps both no-diff.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ENCRYPTION_PASSPHRASE: ${{ inputs.encryption_passphrase }}
         run: |
           set -euo pipefail
+          ENCRYPTION_PASSPHRASE="$(jq -r '.inputs.encryption_passphrase // empty' "$GITHUB_EVENT_PATH")"
+          export ENCRYPTION_PASSPHRASE
           umask 077
           mkdir -p .local
           artifact_name="${DEPLOY_ENV}-init-artifacts"
@@ -451,10 +449,10 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       - name: Encrypt init artifacts (openssl AES-256-CBC + PBKDF2)
         if: always()
-        env:
-          ENCRYPTION_PASSPHRASE: ${{ inputs.encryption_passphrase }}
         run: |
           set -euo pipefail
+          ENCRYPTION_PASSPHRASE="$(jq -r '.inputs.encryption_passphrase // empty' "$GITHUB_EVENT_PATH")"
+          export ENCRYPTION_PASSPHRASE
           umask 077
           mkdir -p .local/encrypted
           encrypted_count=0
@@ -499,16 +497,16 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       - name: Emit substrate scorecard
         if: always()
-        env:
-          # bootstrap.sh fetches the kubeconfig to .local/<env>-kubeconfig.yaml
-          # in Phase 4a. The encrypt step above shreds the plaintext, so the
-          # scorecard runs BEFORE encrypt in a follow-up — for now, decrypt
-          # locally via the same passphrase and `kubectl` against it. Keeping
-          # this step at the tail-end as a best-effort surface; if encryption
-          # already shredded the kubeconfig the step is a no-op + logs why.
-          ENCRYPTION_PASSPHRASE: ${{ inputs.encryption_passphrase }}
+        # bootstrap.sh fetches the kubeconfig to .local/<env>-kubeconfig.yaml
+        # in Phase 4a. The encrypt step above shreds the plaintext, so the
+        # scorecard runs BEFORE encrypt in a follow-up — for now, decrypt
+        # locally via the same passphrase and `kubectl` against it. Keeping
+        # this step at the tail-end as a best-effort surface; if encryption
+        # already shredded the kubeconfig the step is a no-op + logs why.
         run: |
           set -uo pipefail
+          ENCRYPTION_PASSPHRASE="$(jq -r '.inputs.encryption_passphrase // empty' "$GITHUB_EVENT_PATH")"
+          export ENCRYPTION_PASSPHRASE
           KCFG_ENC=".local/encrypted/${DEPLOY_ENV}-kubeconfig.yaml.enc"
           if [[ ! -r "$KCFG_ENC" ]]; then
             echo "::warning::no encrypted kubeconfig found — skipping scorecard"
@@ -611,14 +609,16 @@ jobs:
       DEPLOY_ENV: ${{ inputs.env }}
     steps:
       - name: Mask root token
-        run: echo "::add-mask::${{ inputs.openbao_root_token }}"
+        run: |
+          jq -r '"::add-mask::" + (.inputs.openbao_root_token // "" | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A"))' "$GITHUB_EVENT_PATH"
 
       - name: Validate substrate-only inputs
         env:
-          OPENBAO_ROOT_TOKEN: ${{ inputs.openbao_root_token }}
           VM_HOST: ${{ secrets.VM_HOST }}
         run: |
           set -euo pipefail
+          OPENBAO_ROOT_TOKEN="$(jq -r '.inputs.openbao_root_token // empty' "$GITHUB_EVENT_PATH")"
+          export OPENBAO_ROOT_TOKEN
           [ -n "$OPENBAO_ROOT_TOKEN" ] || { echo "::error::substrate-only requires the openbao_root_token input"; exit 1; }
           [ -n "$VM_HOST" ] || { echo "::error::VM_HOST secret missing for ${DEPLOY_ENV}"; exit 1; }
 
@@ -640,5 +640,8 @@ jobs:
           VM_IP: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
           GH_REPO: ${{ github.repository }}
-          OPENBAO_ROOT_TOKEN: ${{ inputs.openbao_root_token }}
-        run: bash scripts/setup/reconcile-env-substrate.sh "${DEPLOY_ENV}"
+        run: |
+          set -euo pipefail
+          OPENBAO_ROOT_TOKEN="$(jq -r '.inputs.openbao_root_token // empty' "$GITHUB_EVENT_PATH")"
+          export OPENBAO_ROOT_TOKEN
+          bash scripts/setup/reconcile-env-substrate.sh "${DEPLOY_ENV}"

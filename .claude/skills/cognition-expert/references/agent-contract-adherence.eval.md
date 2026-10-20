@@ -97,7 +97,7 @@ The first visible update may be a compact research receipt with all three alignm
 | **Done when** | One candidate run produces a cited strategy diff and ranked queue; humans approve every strategy or priority mutation. |
 | **Status** | 👉 needs you |
 | **ETA · Conf** | 2–3h · earned 78% + reviewed 4/4 relevant sources |
-| **Followed** | [orientation](https://cognidao.org/knowledge/operator-agent-orientation) · [contributor skill](https://github.com/cogni-dao/cogni/blob/bbb6cc7fbce4e8ff28e8356ad30f3230440006a1/.agents/skills/contribute-to-cogni/SKILL.md) · [root contract](https://github.com/cogni-dao/cogni/blob/bbb6cc7fbce4e8ff28e8356ad30f3230440006a1/AGENTS.md) · [story.5070](https://cognidao.org/work/items/story.5070) |
+| **Followed** | [orientation](https://cognidao.org/knowledge/operator-agent-orientation) · [knowledge stewardship](https://github.com/cogni-dao/cogni/blob/main/.claude/skills/knowledge-syntropy-expert/SKILL.md) · [root contract](https://github.com/cogni-dao/cogni/blob/bbb6cc7fbce4e8ff28e8356ad30f3230440006a1/AGENTS.md) · [story.5070](https://cognidao.org/work/items/story.5070) |
 
 ---
 

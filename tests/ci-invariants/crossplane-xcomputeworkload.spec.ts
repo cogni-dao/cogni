@@ -160,6 +160,9 @@ describe("XComputeWorkload composite API (task.5096)", () => {
       "bundle",
       "dns",
       "environment",
+      // story.5093 — operator-placed isolated-service lease. Optional and immutable; absent on
+      // every existing XR, so the primary one-workload-per-node gate is unchanged.
+      "instance",
       "leaseEpoch",
       "leaseGeneration",
       "migration",
@@ -363,9 +366,41 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // The legacy CRD's top-level `metadata.name == spec.nodeId` rule has no home in an XRD
     // (only spec/status may be described), so the render refuses instead. Failing the render
     // creates NO managed resource, which is why the fallback is safe: nothing is spent.
-    expect(template).toContain("{{- if ne $name $spec.nodeId }}");
+    expect(template).toContain("{{- if ne $name $expectedName }}");
+    expect(template).toContain("{{- $expectedName := $spec.nodeId }}");
     expect(template).toContain("{{- fail (printf");
     expect(template).toContain('{{- if ne (printf "cogni-%s" $env) $ns }}');
+  });
+
+  it("names an isolated-service lease <nodeId>-<instance> and keeps the node identity (story.5093)", () => {
+    // ISOLATED_SERVICE_IS_ITS_OWN_LEASE: the only accepted second name for a node's workload is
+    // derived from the immutable spec.instance, so the idempotence key family is distinct while
+    // the receipt identity below still reads spec.nodeId.
+    expect(template).toContain('{{- $instance := dig "instance" "" $spec }}');
+    expect(template).toContain(
+      '{{- if ne $instance "" }}{{ $expectedName = printf "%s-%s" $spec.nodeId $instance }}{{ end }}'
+    );
+    expect(template).toContain(
+      '{{- $identity := dict "nodeId" $spec.nodeId "compositeUid" $compositeUid "compositeGeneration" $generation }}'
+    );
+    // The instance's public service proves its exact SHA on /version; it gets the SHA only.
+    expect(template).toContain(
+      '{{- if and (ne $instance "") (eq $svc.visibility "public") }}'
+    );
+    const instance = (
+      (xrd.spec as YamlObject).versions as YamlObject[]
+    )[0] as YamlObject;
+    const specSchema = (
+      ((instance.schema as YamlObject).openAPIV3Schema as YamlObject)
+        .properties as YamlObject
+    ).spec as YamlObject;
+    expect((specSchema.properties as YamlObject).instance).toMatchObject({
+      type: "string",
+      pattern: "^[a-z][a-z0-9-]{0,19}$",
+    });
+    expect(JSON.stringify(specSchema["x-kubernetes-validations"])).toContain(
+      "has(self.instance) == has(oldSelf.instance)"
+    );
   });
 
   it("sends the actuator its exact strict-contract wire shape", () => {
