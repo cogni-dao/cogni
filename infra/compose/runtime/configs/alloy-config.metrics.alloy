@@ -91,12 +91,8 @@ loki.source.journal "kernel" {
 // match. Unparseable lines, missing fields, failures, and slow responses pass through.
 
 loki.process "docker_logs" {
-  stage.docker {}
-
-  stage.timestamp {
-    source = "time"
-    format = "RFC3339Nano"
-  }
+  // loki.source.docker already supplies the decoded line, stream and timestamp.
+  // A second Docker-envelope decoder erases valid application JSON without `log`.
 
   // Extract JSON fields from app logs (fail-safe: non-JSON lines get no extracted fields)
   stage.json {
