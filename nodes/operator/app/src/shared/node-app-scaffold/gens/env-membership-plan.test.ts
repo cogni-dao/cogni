@@ -34,6 +34,8 @@ import {
   schedulerEndpointPatchPath,
 } from "./env-membership-plan";
 
+import { writerFor } from "../../node-registry/crossplane-control-plane";
+
 const SLUG = "blue";
 
 const KUST_HEADER = `# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
@@ -1791,5 +1793,161 @@ describe("buildRegionPlan (story.5050)", () => {
         current: akashPlaced("preview"),
       })
     ).toThrow(re);
+  });
+});
+
+describe("removed node-template candidate membership", () => {
+  // Historical removed inputs captured from operator main d6e38096c7; never read live catalog state.
+  const removedPatch = `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-worker-config
+  annotations:
+    reloader.stakater.com/ignore: "true"
+data:
+  COGNI_NODE_ENDPOINTS: "operator=http://operator-node-app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000,poly=https://poly-test.cognidao.org,4b06359a-a859-4399-888e-a8c7a6696f7e=https://poly-test.cognidao.org,red=https://red-test.cognidao.org,921b1d1d-4ded-4a6d-b3f1-f7d6affa406a=https://red-test.cognidao.org"
+  TEMPORAL_CUSTODIED_NODE_ENDPOINTS: "{}"
+`;
+  const actualCatalog = `name: node-template
+type: node
+port: 3200
+node_port: 30200
+dockerfile: nodes/node-template/app/Dockerfile
+image_tag_suffix: "-node-template"
+migrator_tag_suffix: "-node-template-migrate"
+source_repo: https://github.com/Cogni-DAO/node-template.git
+image_repository: ghcr.io/cogni-dao/node-template
+source_sha: 654e5f2132cdc774a329f24c69340170e4721d2a
+candidate_a_branch: deploy/candidate-a-node-template
+preview_branch: deploy/preview-node-template
+production_branch: deploy/production-node-template
+envs: [production]
+database:
+  production: { tier: shared, budget_profile: shared-default-v1 }
+deployment_provider:
+  production: akash
+compute_api:
+  production: crossplane
+lease_generation:
+  production: 2
+activity_env: production
+owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
+path_prefix: nodes/node-template/
+node_id: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
+compute_egress_cidrs:
+  - cidr: 80.200.246.35/32
+    comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
+`;
+  const originalCatalog = parseYaml(actualCatalog);
+  const current: EnvPlanCurrent = {
+    catalog: actualCatalog,
+    port: originalCatalog.port,
+    nodePort: originalCatalog.node_port,
+    publicDomainRoot: "cognidao.org",
+    templateOverlayByEnv: {
+      "candidate-a": TEMPLATE_OVERLAY,
+    },
+    templateExternalSecretByEnv: {
+      "candidate-a": TEMPLATE_EXTERNAL_SECRET,
+    },
+    appsetTemplate: APPSET_TEMPLATE,
+    appsetRepoUrl: "https://github.com/cogni-dao/cogni.git",
+    appsetsKustomizationByEnv: {
+      production: kustWith("production", ["node-template", "operator"]),
+    },
+    schedulerEndpointPatchByEnv: { "candidate-a": removedPatch },
+  };
+  const add = (state: EnvPlanCurrent) =>
+    buildEnvDeltaPlan({
+      slug: "node-template",
+      env: "candidate-a",
+      present: true,
+      current: state,
+      fleetControlEnv: "production",
+      leaseGeneration: 7,
+    });
+  const apply = (
+    state: EnvPlanCurrent,
+    result: EnvDeltaResult
+  ): EnvPlanCurrent => {
+    if (result.kind === "no_changes")
+      throw new Error("Expected membership delta");
+    const content = (path: string, fallback: string) => {
+      const op = result.ops.find((op) => op.path === path);
+      return op?.op === "upsert" ? op.content : fallback;
+    };
+    return {
+      ...state,
+      catalog: content(CATALOG_PATH("node-template"), state.catalog),
+      appsetsKustomizationByEnv: {
+        production: content(
+          appsetsKustomizationPath("production"),
+          state.appsetsKustomizationByEnv.production!
+        ),
+      },
+      schedulerEndpointPatchByEnv: {
+        "candidate-a": content(
+          schedulerEndpointPatchPath("candidate-a"),
+          state.schedulerEndpointPatchByEnv!["candidate-a"]!
+        ),
+      },
+    };
+  };
+
+  it("readds the actual removed pair after remove and canonical rendering without changing the payer", () => {
+    expect(originalCatalog.envs).toEqual(["production"]);
+    const originalCells = parseYaml(
+      removedPatch
+    ).data.COGNI_NODE_ENDPOINTS.split(",") as string[];
+    expect(
+      originalCells.some((cell) => cell.startsWith("node-template="))
+    ).toBe(false);
+    const added = apply(current, add(current));
+    const removal = buildEnvDeltaPlan({
+      slug: "node-template",
+      env: "candidate-a",
+      present: false,
+      current: added,
+      fleetControlEnv: "production",
+    });
+    const removed = apply(added, removal);
+    expect(parseYaml(removed.catalog).envs).toEqual(["production"]);
+    // The canonical renderer omits members outside this env, as the actual committed patch does.
+    const readdedPlan = add({
+      ...removed,
+      schedulerEndpointPatchByEnv: { "candidate-a": removedPatch },
+    });
+    const readded = apply(removed, readdedPlan);
+    const catalog = parseYaml(readded.catalog);
+    const cells = parseYaml(
+      readded.schedulerEndpointPatchByEnv!["candidate-a"]!
+    ).data.COGNI_NODE_ENDPOINTS.split(",") as string[];
+    const url = "https://node-template-test.cognidao.org";
+    expect(cells.filter((cell) => cell.startsWith("node-template="))).toEqual([
+      `node-template=${url}`,
+    ]);
+    expect(
+      cells.filter((cell) => cell.startsWith(`${catalog.node_id}=`))
+    ).toEqual([`${catalog.node_id}=${url}`]);
+    expect(
+      cells.filter(
+        (cell) =>
+          !cell.startsWith("node-template=") &&
+          !cell.startsWith(`${catalog.node_id}=`)
+      )
+    ).toEqual(originalCells);
+    expect(catalog.owner_wallet).toBe(originalCatalog.owner_wallet);
+    expect(catalog.activity_env).toBe("production");
+    expect(catalog.lease_generation.production).toBe(
+      originalCatalog.lease_generation.production
+    );
+    expect(catalog.compute_api["candidate-a"]).toBe("crossplane");
+    expect(
+      planEnvAddShape(readded.catalog, "candidate-a", "production").controlEnv
+    ).toBe("production");
+    expect(writerFor("candidate-a", "cogni-dao")?.id).toBe(
+      "production/akash-tx-actuator"
+    );
+    expect(add(readded)).toEqual({ kind: "no_changes" });
   });
 });

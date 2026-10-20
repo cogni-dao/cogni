@@ -513,9 +513,13 @@ function planAdd(args: {
   if (shape.placement === "akash") {
     // PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) at activation: an akash lane has no
     // `<slug>-node-app` Service, so the env's scheduler-worker route must carry the node's
-    // public host from the very first flight. A k3s add needs no op — every env patch already
+    // public host from the very first flight. A removed env may have no pair at all after
+    // canonical rendering, so ADD may insert it; placement/removal still require an existing pair.
+    // A k3s add needs no op — every env patch already
     // renders the in-cluster default for every catalog row.
-    const schedulerOp = buildSchedulerEndpointOp(slug, env, "akash", current);
+    const schedulerOp = buildSchedulerEndpointOp(slug, env, "akash", current, {
+      insertIfMissing: true,
+    });
     if (schedulerOp) ops.push(schedulerOp);
   }
   return { kind: "add", ops, nextEnvs };
@@ -883,7 +887,8 @@ function buildSchedulerEndpointOp(
   slug: string,
   env: NodeFormationEnv,
   placement: PlacementProvider,
-  current: EnvPlanCurrent
+  current: EnvPlanCurrent,
+  options: { readonly insertIfMissing?: boolean } = {}
 ): EnvPlanOp | null {
   const currentPatch = current.schedulerEndpointPatchByEnv?.[env];
   if (currentPatch === undefined) {
@@ -904,7 +909,8 @@ function buildSchedulerEndpointOp(
     currentPatch,
     slug,
     nodeId,
-    url
+    url,
+    options
   );
   if (nextPatch === currentPatch) return null;
   return {
