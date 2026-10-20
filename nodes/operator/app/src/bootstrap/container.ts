@@ -411,6 +411,34 @@ export type ActivityDeps = {
 
 // Module-level singleton
 let _container: Container | null = null;
+let _workItemSessions: WorkItemSessionPort | null = null;
+let _requestLoggingDependencies: ReturnType<
+  typeof getRequestLoggingDependencies
+> | null = null;
+
+/** Resolve only pure request instrumentation; never construct application providers. */
+export function getRequestLoggingDependencies(): {
+  log: Container["log"];
+  clock: Container["clock"];
+  config: { unhandledErrorPolicy: UnhandledErrorPolicy };
+} {
+  if (!_requestLoggingDependencies) {
+    const env = serverEnv();
+    _requestLoggingDependencies = {
+      log: makeLogger({ service: "cogni-template", nodeId: getNodeId() }),
+      clock: new SystemClock(),
+      config: { unhandledErrorPolicy: env.isProd ? "respond_500" : "rethrow" },
+    };
+  }
+  return _requestLoggingDependencies;
+}
+
+/** Resolve the existing PostgreSQL session authority without Dolt or other providers. */
+export function getWorkItemSessionPort(): WorkItemSessionPort {
+  if (!_workItemSessions)
+    _workItemSessions = new DrizzleWorkItemSessionAdapter(getServiceDb());
+  return _workItemSessions;
+}
 let _temporalConnection: TemporalConnection | null = null;
 let _workflowClient: WorkflowClient | null = null;
 let _workflowClientPromise: Promise<{
@@ -506,6 +534,8 @@ export function resolveLocalReliabilityControl(): {
  */
 export function resetContainer(): void {
   _container = null;
+  _workItemSessions = null;
+  _requestLoggingDependencies = null;
   _webhookRegistrations = null;
   if (_temporalConnection) {
     void _temporalConnection.close();
@@ -581,7 +611,8 @@ function createContainer(): Container {
   const env = serverEnv();
   const nodeId = getNodeId();
   const db = getAppDb();
-  const log = makeLogger({ service: "cogni-template", nodeId });
+  const requestDependencies = getRequestLoggingDependencies();
+  const log = requestDependencies.log;
 
   // Startup log - confirm config in Loki (no URLs/secrets)
   log.info(
@@ -726,7 +757,7 @@ function createContainer(): Container {
         })
       : undefined;
 
-  const clock = new SystemClock();
+  const clock = requestDependencies.clock;
 
   // Scheduling adapters (from @cogni/db-client)
   // Per architecture rule: composition root injects loggers via child()
@@ -753,7 +784,7 @@ function createContainer(): Container {
   const serviceDb = getServiceDb();
   const paymentAttemptServiceRepository =
     new ServiceDrizzlePaymentAttemptRepository(serviceDb);
-  const workItemSessions = new DrizzleWorkItemSessionAdapter(serviceDb);
+  const workItemSessions = getWorkItemSessionPort();
 
   // User-facing scheduling (appDb, RLS enforced)
   const executionGrantPort = new DrizzleExecutionGrantUserAdapter(
@@ -994,7 +1025,7 @@ function createContainer(): Container {
 
   // Config: rethrow in dev/test for diagnosis, respond_500 in production for safety
   const config: ContainerConfig = {
-    unhandledErrorPolicy: env.isProd ? "respond_500" : "rethrow",
+    unhandledErrorPolicy: requestDependencies.config.unhandledErrorPolicy,
     // Rate limit bypass: only enabled in test mode (APP_ENV=test)
     // Security: Production builds will never enable bypass regardless of header
     rateLimitBypass: {

@@ -117,7 +117,20 @@ type AuthOptionalHandler<TContext = unknown> = (
   context?: TContext
 ) => Promise<NextResponse>;
 
-type AuthRequiredOptions = {
+type RequestDependencies = {
+  log: Parameters<typeof createRequestContext>[0]["baseLog"];
+  clock: Parameters<typeof createRequestContext>[0]["clock"];
+  config: { unhandledErrorPolicy: "rethrow" | "respond_500" };
+};
+
+type RequestDependencyOptions = {
+  /** Trusted composition only; operational routes may avoid unrelated providers. */
+  getRequestDependencies?: () =>
+    | RequestDependencies
+    | Promise<RequestDependencies>;
+};
+
+type AuthRequiredOptions = RequestDependencyOptions & {
   routeId: string;
   auth: {
     mode: "required";
@@ -125,7 +138,7 @@ type AuthRequiredOptions = {
   };
 };
 
-type AuthOptionalOptions = {
+type AuthOptionalOptions = RequestDependencyOptions & {
   routeId: string;
   auth: {
     mode: "optional";
@@ -133,7 +146,7 @@ type AuthOptionalOptions = {
   };
 };
 
-type AuthNoneOptions = {
+type AuthNoneOptions = RequestDependencyOptions & {
   routeId: string;
   auth?: { mode: "none" };
 };
@@ -195,8 +208,9 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
   ): Promise<NextResponse> => {
     // Dynamic import: breaks Turbopack's per-route static module graph tracing
     // of the entire DI composition root (spike.0203 — was causing 6GB RSS in dev).
-    const { getContainer } = await import("@/bootstrap/container");
-    const container = getContainer();
+    const container = options.getRequestDependencies
+      ? await options.getRequestDependencies()
+      : (await import("@/bootstrap/container")).getContainer();
 
     // Fetch session based on auth mode
     const sessionUser =
