@@ -724,7 +724,21 @@ describe.skipIf(!process.env.CI)(
             "/tmp/runtime-base.yml",
           ],
           [
-            "PORT=3000\nDATABASE_URL=postgres://owned:owned@postgres/owned\nDATABASE_SERVICE_URL=postgres://owned:owned@postgres/owned\nAPP_IMAGE=busybox:1.37\nSCHEDULER_WORKER_IMAGE=busybox:1.37\n",
+            [
+              "PORT=3000",
+              "APP_ENV=test",
+              "AUTH_SECRET=owned-native-dummy",
+              "DATABASE_URL=postgres://owned:owned@postgres/owned",
+              "DATABASE_SERVICE_URL=postgres://owned:owned@postgres/owned",
+              "APP_IMAGE=busybox:1.37",
+              "SCHEDULER_WORKER_IMAGE=busybox:1.37",
+              "EVM_RPC_URL=http://127.0.0.1:9/owned",
+              "LITELLM_MASTER_KEY=owned-native-dummy",
+              "OPENROUTER_API_KEY=owned-native-dummy",
+              "POSTHOG_API_KEY=owned-native-dummy",
+              "POSTHOG_HOST=http://127.0.0.1:9/owned",
+              "",
+            ].join("\n"),
             "/tmp/owned.env",
           ],
         ]) {
