@@ -648,13 +648,29 @@ describe.skipIf(!process.env.CI)(
         const nextConfig =
           component.replace(/\n\}/, `\n  containerd_host = "${socket}"\n}`) +
           "\n";
-        await nested.copyContentToContainer([
-          { content: oldConfig, target: "/tmp/cadvisor-old.alloy" },
-          { content: nextConfig, target: "/tmp/cadvisor-next.alloy" },
-        ]);
-        await nested.copyContentToContainer([
-          { content: fullConfig, target: "/tmp/cadvisor-full-declared.alloy" },
-        ]);
+        // Materialize through the owned daemon's live namespace, then read back
+        // exact bytes before asking that daemon to bind the files into children.
+        for (const [content, target] of [
+          [oldConfig, "/tmp/cadvisor-old.alloy"],
+          [nextConfig, "/tmp/cadvisor-next.alloy"],
+          [fullConfig, "/tmp/cadvisor-full-declared.alloy"],
+        ]) {
+          const result = await nested.exec([
+            "/bin/sh",
+            "-c",
+            'umask 022; printf \'%s\' "$1" > "$2"; test -f "$2" && sha256sum "$2"',
+            "owned-collector-config",
+            content,
+            target,
+          ]);
+          expect(result.exitCode, result.output).toBe(0);
+          const digest = createHash("sha256").update(content).digest("hex");
+          expect(result.stdout.trim().split(/\s+/)[0]).toBe(digest);
+          console.info("CADVISOR_OVERLAYFS_CONFIG_MATERIALIZED", {
+            target,
+            sha256: digest,
+          });
+        }
         const dummyEnvironment = [
           ...new Set(
             [...fullConfig.matchAll(/sys\.env\("([A-Z_]+)"\)/g)].map(
