@@ -6,7 +6,7 @@
  * Purpose: Prove normal Compose removes LiteLLM's health-restart amplifier.
  * Scope: CI-owned real gateway and databases. Does not access deployed hosts or credentials.
  * Invariants: Real old-policy restart; exact declared probe and exit policy; one normal stateless replacement; database identities survive.
- * Side-effects: IO (owned containers/network/files and bounded process-limit fault), time (readiness deadlines).
+ * Side-effects: IO (owned containers/network/files and owned network-namespace HTTP fault), time (readiness deadlines).
  * Links: task.5281, bug.5462, infra/compose/runtime/docker-compose.yml
  * @internal
  */
@@ -16,6 +16,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -70,6 +71,90 @@ describe.skipIf(!process.env.CI)("LiteLLM normal Compose recovery", () => {
     const network = await new Network().start();
     const owned: StartedTestContainer[] = [];
     let watchdog: StartedTestContainer | undefined;
+    type Fault = {
+      id: string;
+      pid: number;
+      namespace: string;
+      comment: string;
+    };
+    const faults: Fault[] = [];
+    const runnerNamespace = readlinkSync("/proc/self/ns/net");
+    async function ownedNamespace(id: string): Promise<Omit<Fault, "comment">> {
+      expect(id).toMatch(/^[a-f0-9]{64}$/);
+      const state = await docker.getContainer(id).inspect();
+      expect(state.Id).toBe(id);
+      expect(state.State.Running).toBe(true);
+      expect(state.HostConfig.NetworkMode).not.toBe("host");
+      expect(state.HostConfig.NetworkMode).toBe(network.getName());
+      expect(Object.keys(state.NetworkSettings.Networks)).toEqual([
+        network.getName(),
+      ]);
+      const pid = state.State.Pid;
+      expect(Number.isInteger(pid) && pid > 0).toBe(true);
+      const namespace = execFileSync(
+        "sudo",
+        ["readlink", `/proc/${pid}/ns/net`],
+        { encoding: "utf8", timeout: 10_000 }
+      ).trim();
+      expect(namespace).not.toBe(runnerNamespace);
+      expect(namespace).toMatch(/^net:\[\d+\]$/);
+      return { id, pid, namespace };
+    }
+    function rule(fault: Fault, action: "-I" | "-D") {
+      // No host-namespace fallback, broad flush, or unscoped destination exists.
+      execFileSync(
+        "sudo",
+        [
+          "nsenter",
+          "--target",
+          String(fault.pid),
+          "--net",
+          "iptables",
+          "-w",
+          "5",
+          action,
+          "OUTPUT",
+          "-d",
+          "127.0.0.1/32",
+          "-p",
+          "tcp",
+          "--dport",
+          "4000",
+          "-m",
+          "comment",
+          "--comment",
+          fault.comment,
+          "-j",
+          "REJECT",
+        ],
+        { encoding: "utf8", timeout: 15_000 }
+      );
+    }
+    async function faultHttp(id: string): Promise<Fault> {
+      const target = await ownedNamespace(id);
+      const fault = { ...target, comment: `${project}-${randomUUID()}` };
+      expect(await ownedNamespace(id)).toEqual(target); // Reject PID/netns drift before mutation.
+      rule(fault, "-I");
+      faults.push(fault);
+      return fault;
+    }
+    async function restoreHttp(fault: Fault): Promise<void> {
+      const current = await docker
+        .getContainer(fault.id)
+        .inspect()
+        .catch(() => null);
+      // A restart invalidates this PID receipt; owned Compose removal/recreation
+      // disposes the old namespace. Restart alone need not remove its rules.
+      // Never enter a stale PID after restart or PID reuse.
+      if (!current?.State.Running || current.State.Pid !== fault.pid) return;
+      expect(await ownedNamespace(fault.id)).toEqual({
+        id: fault.id,
+        pid: fault.pid,
+        namespace: fault.namespace,
+      });
+      rule(fault, "-D");
+      faults.splice(faults.indexOf(fault), 1);
+    }
     const compose = (...args: string[]) =>
       execFileSync(
         "docker",
@@ -205,18 +290,22 @@ describe.skipIf(!process.env.CI)("LiteLLM normal Compose recovery", () => {
           },
         ])
         .start();
-      // Native exec transport fault on this owned disposable gateway, without
-      // deleting Docker metadata or faulting/restarting either database.
-      await old.update({ PidsLimit: 1 });
+      // Fail only the unchanged probe's loopback HTTP transport in this owned
+      // gateway namespace; PID1, Docker metadata and both databases remain intact.
+      await faultHttp(oldId);
       await until(
         async () => (await old.inspect()).State.Health?.Status === "unhealthy",
-        "Owned exec fault did not fail the declared health probe",
+        "Owned HTTP transport fault did not fail the declared health probe",
         270_000
       );
       const failedHealth = (await old.inspect()).State.Health;
-      expect(failedHealth?.Log.some((entry) => entry.ExitCode !== 0)).toBe(
-        true
-      );
+      expect(
+        failedHealth?.Log.some(
+          (entry) =>
+            entry.ExitCode !== 0 &&
+            /Connection refused|URLError|urlopen|HTTP Error/i.test(entry.Output)
+        )
+      ).toBe(true);
       await until(
         async () => (await old.inspect()).State.StartedAt !== oldStart,
         "Old true policy did not actually restart its unhealthy gateway",
@@ -267,22 +356,22 @@ describe.skipIf(!process.env.CI)("LiteLLM normal Compose recovery", () => {
         { signal: AbortSignal.timeout(5_000) }
       );
       expect(response.status).toBe(200);
-      // Reapply the same native exec fault to the reviewed policy. The process
-      // must survive an unhealthy probe while the real watchdog remains active.
-      await repaired.update({ PidsLimit: 1 });
+      // Reapply the same native HTTP transport fault to the reviewed policy.
+      // PID1 must survive an unhealthy probe while the real watchdog stays active.
+      const repairedFault = await faultHttp(repairedId);
       await until(
         async () =>
           (await repaired.inspect()).State.Health?.Status === "unhealthy",
-        "Repaired control did not observe the same exec fault",
+        "Repaired control did not observe the same HTTP transport fault",
         270_000
       );
       await delay(15_000);
       expect((await repaired.inspect()).State.StartedAt).toBe(repairedStart);
-      await repaired.update({ PidsLimit: after.HostConfig.PidsLimit ?? -1 });
+      await restoreHttp(repairedFault);
       await until(
         async () =>
           (await repaired.inspect()).State.Health?.Status === "healthy",
-        "Same repaired gateway failed readiness after exec transport recovered"
+        "Same repaired gateway failed readiness after HTTP transport recovered"
       );
       const recovered = await fetch(
         `http://127.0.0.1:${port}/health/readiness`,
@@ -290,6 +379,7 @@ describe.skipIf(!process.env.CI)("LiteLLM normal Compose recovery", () => {
       );
       expect(recovered.status).toBe(200);
       expect((await repaired.inspect()).State.StartedAt).toBe(repairedStart);
+      expect((await repaired.inspect()).State.Pid).toBe(after.State.Pid);
       const finalActions = (
         await docker
           .getContainer(watchdog.getId())
@@ -318,7 +408,12 @@ describe.skipIf(!process.env.CI)("LiteLLM normal Compose recovery", () => {
     } finally {
       if (watchdog) await watchdog.stop();
       try {
-        if (existsSync(composeFile)) compose("down", "--remove-orphans");
+        try {
+          for (const fault of [...faults]) await restoreHttp(fault);
+        } finally {
+          // Container removal also disposes an old faulted namespace after restart.
+          if (existsSync(composeFile)) compose("down", "--remove-orphans");
+        }
       } finally {
         await Promise.allSettled(
           owned.reverse().map((container) => container.stop())
