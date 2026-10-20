@@ -98,6 +98,8 @@ spec:
                       (has(oldSelf.leaseGeneration) ? oldSelf.leaseGeneration :
                         (has(oldSelf.leaseEpoch) ? oldSelf.leaseEpoch : 0)))
                   message: placement may change only with a leaseGeneration bump
+                - rule: "has(self.instance) == has(oldSelf.instance)"
+                  message: instance cannot be added to or removed from an existing workload
               properties:
                 nodeId:
                   type: string
@@ -111,6 +113,18 @@ spec:
                     - {
                         rule: "self == oldSelf",
                         message: environment is immutable,
+                      }
+                # ISOLATED_SERVICE_IS_ITS_OWN_LEASE (story.5093). Absent = the node's primary
+                # app workload. Present = the operator-placed isolated lease for that one
+                # declared service; the Composition requires metadata.name == nodeId-instance.
+                instance:
+                  type: string
+                  maxLength: 20
+                  pattern: "^[a-z][a-z0-9-]{0,19}$"
+                  x-kubernetes-validations:
+                    - {
+                        rule: "self == oldSelf",
+                        message: instance is immutable,
                       }
                 bundle:
                   type: object
