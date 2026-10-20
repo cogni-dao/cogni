@@ -25,6 +25,8 @@ export interface ComputeWorkloadMigrationInput {
   readonly environment: string;
   /** Immutable bundle digest (`sha256:<64 hex>`) identifying migration currency. */
   readonly bundleDigest: string;
+  /** Disposable test data reset identity. A previous generation cannot prove fresh data. */
+  readonly resetGeneration?: string;
   /** Digest-pinned app artifact image — the same image the k3s initContainer ran. */
   readonly image: string;
   /** Name of the node-scoped Secret holding database URLs; values never transit the controller. */
@@ -65,6 +67,7 @@ export interface ComputeWorkloadMigrationPort {
   readReceipt?(input: {
     readonly nodeSlug: string;
     readonly bundleDigest: string;
+    readonly resetGeneration?: string;
     readonly namespace?: string | undefined;
     readonly containerName: string;
   }): Promise<string | null>;
