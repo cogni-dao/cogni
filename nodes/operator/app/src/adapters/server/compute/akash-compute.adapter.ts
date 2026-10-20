@@ -54,7 +54,7 @@ import type {
   ComputeCostEvidencePort,
   ComputeResourceCostEvidence,
 } from "@/ports";
-import { makeLogger } from "@/shared/observability";
+import { makeLogger } from "@/shared/observability/server/logger";
 import {
   type AkashProviderInfo,
   countrySourcesDisagree,
