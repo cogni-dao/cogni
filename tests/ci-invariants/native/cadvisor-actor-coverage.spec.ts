@@ -466,12 +466,20 @@ describe.skipIf(!process.env.CI)(
           missing: missing.exitCode,
           unsupported: unsupported.exitCode,
         });
+        // An idle cgroup may omit zero-valued I/O series. Establish a real
+        // counter with an owned finite fsync, then measure a distinct write.
+        const warmup = await writer.exec([
+          "/bin/sh",
+          "-c",
+          "dd if=/dev/zero of=/tmp/cadvisor-warmup bs=1M count=1 conv=fsync",
+        ]);
+        expect(warmup.exitCode, warmup.output).toBe(0);
         const visible = await poll(
           () => raw(variant),
           (rows) =>
             coverage(rows, writer, writerService) &&
             coverage(rows, idle, idleService) &&
-            writeBytes(actorRows(rows, writer)) !== undefined,
+            (writeBytes(actorRows(rows, writer)) ?? -1) >= 1_048_576,
           65_000
         );
         console.info(
@@ -517,7 +525,8 @@ describe.skipIf(!process.env.CI)(
         const after = await poll(
           () => raw(variant),
           (rows) =>
-            (writeBytes(actorRows(rows, writer)) ?? -1) > (baseline ?? 0),
+            (writeBytes(actorRows(rows, writer)) ?? -1) >=
+            (baseline ?? 0) + 16_777_216,
           65_000
         );
         console.info(
@@ -527,7 +536,7 @@ describe.skipIf(!process.env.CI)(
         expect(
           writeBytes(actorRows(after, writer)),
           "Finite fsync write had no actor-attributed exporter delta"
-        ).toBeGreaterThan(baseline ?? 0);
+        ).toBeGreaterThanOrEqual((baseline ?? 0) + 16_777_216);
       } finally {
         // No faults or writes target another container; attempt all owned cleanup.
         for (const container of owned.reverse()) {
