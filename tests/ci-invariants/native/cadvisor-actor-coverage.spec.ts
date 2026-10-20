@@ -516,6 +516,10 @@ describe.skipIf(!process.env.CI)(
           baseline,
           "No owned write counter; CPU/memory coverage alone is insufficient"
         ).toBeDefined();
+        expect(
+          baseline,
+          "Owned fsync warmup was not observed"
+        ).toBeGreaterThanOrEqual(1_048_576);
         const write = await writer.exec([
           "/bin/sh",
           "-c",
