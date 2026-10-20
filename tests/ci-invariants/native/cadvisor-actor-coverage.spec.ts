@@ -17,13 +17,11 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import Docker from "dockerode";
 import {
   GenericContainer,
-  Network,
   type StartedTestContainer,
   Wait,
 } from "testcontainers";
@@ -59,23 +57,6 @@ interface Sample {
   name: string;
   labels: Record<string, string>;
   value: number;
-}
-
-// Docker Engine supports CgroupnsMode; the installed dockerode declarations predate it.
-class HostCgroupContainer extends GenericContainer {
-  constructor(image: string, metadataPath: string) {
-    super(image);
-    Object.assign(this.hostConfig, { CgroupnsMode: "host" });
-    // Docker's long-mount ABI rejects absent sources, matching create_host_path:false.
-    this.hostConfig.Mounts = [
-      {
-        Type: "bind",
-        Source: metadataPath,
-        Target: metadataPath,
-        ReadOnly: true,
-      },
-    ];
-  }
 }
 
 function samples(text: string): Sample[] {
@@ -146,10 +127,53 @@ describe.skipIf(!process.env.CI)(
   "Declared cAdvisor native actor coverage",
   () => {
     it("exports two owned actors and attributes a finite fsync write before relabeling", async () => {
-      const docker = new Docker({ timeout: 10_000 });
-      await docker.ping();
-      const network = await new Network().start();
-      const owned: StartedTestContainer[] = [];
+      // Reuse the independently proven owned Docker29 daemon, with its classic store
+      // selected explicitly. Runner upgrades cannot silently replace this topology.
+      const daemonImage =
+        "docker:29.1.5-dind@sha256:3a33fc81fa4d38360f490f5b900e9846f725db45bb1d9b1fe02d849bd42a5cf2";
+      class OwnedClassicDaemon extends GenericContainer {
+        constructor(image: string) {
+          super(image);
+          Object.assign(this.hostConfig, { CgroupnsMode: "host" });
+        }
+      }
+      const nested = await new OwnedClassicDaemon(daemonImage)
+        .withPrivilegedMode()
+        .withEnvironment({ DOCKER_TLS_CERTDIR: "" })
+        .withCopyContentToContainer([
+          {
+            content: JSON.stringify({
+              features: { "containerd-snapshotter": false },
+              "storage-driver": "overlay2",
+            }),
+            target: "/etc/docker/daemon.json",
+          },
+        ])
+        .withWaitStrategy(Wait.forSuccessfulCommand("docker info >/dev/null"))
+        .withStartupTimeout(180_000)
+        .start();
+      const cli = async (...args: string[]) => {
+        const result = await nested.exec(["docker", ...args]);
+        expect(result.exitCode, result.output.slice(-3000)).toBe(0);
+        return result.stdout.trim();
+      };
+      type OwnedContainer = {
+        getId(): string;
+        exec(args: string[]): ReturnType<StartedTestContainer["exec"]>;
+        stop(): Promise<string>;
+      };
+      const owned: OwnedContainer[] = [];
+      const ports = new Map<string, string>();
+      const remember = (id: string): OwnedContainer => {
+        const container = {
+          getId: () => id,
+          exec: (args: string[]) =>
+            nested.exec(["docker", "exec", id, ...args]),
+          stop: () => cli("rm", "-f", id),
+        };
+        owned.push(container);
+        return container;
+      };
       const cleanup: PromiseSettledResult<unknown>[] = [];
       const collectorErrorClasses = new Set<string>();
       const collectorErrors = new Set<string>();
@@ -242,10 +266,7 @@ describe.skipIf(!process.env.CI)(
         expect(topologyInvocation).toBeLessThan(
           deploySource.indexOf("$RUNTIME_COMPOSE up -d postgres")
         );
-        const verifyTopology = (
-          collector: StartedTestContainer,
-          topology: string
-        ) =>
+        const verifyTopology = (collector: OwnedContainer, topology: string) =>
           collector.exec([
             "/bin/sh",
             "-c",
@@ -256,7 +277,16 @@ describe.skipIf(!process.env.CI)(
             "owned-topology-proof",
             topology,
           ]);
-        const host = await docker.info();
+        const host = JSON.parse(
+          await cli("info", "--format", "{{json .}}")
+        ) as {
+          Driver: string;
+          DockerRootDir: string;
+          CgroupDriver: string;
+          CgroupVersion: string;
+          ServerVersion: string;
+        };
+        expect(host.ServerVersion).toBe("29.1.5");
         console.info(
           "CADVISOR_DECLARED_BASELINE",
           JSON.stringify({
@@ -270,122 +300,117 @@ describe.skipIf(!process.env.CI)(
             cgroupVersion: host.CgroupVersion,
             dockerRootDir: host.DockerRootDir,
             storageDriver: host.Driver,
-            scope: "CI host only; production cgroup topology is not inferred",
+            scope:
+              "CI-owned classic overlay2 daemon; production topology is not inferred",
+            daemonImage,
           })
         );
-        const actor = async (service: string) => {
-          const container = await new GenericContainer(
-            services["repo-init"].image
-          )
-            .withNetwork(network)
-            .withLabels({
-              "com.docker.compose.service": service,
-              "cogni.native-proof": token,
-            })
-            .withEntrypoint(["/bin/sh", "-c"])
-            .withCommand(["sleep 420"])
-            .withWaitStrategy(Wait.forSuccessfulCommand("test -d /tmp"))
-            .start();
-          owned.push(container);
-          return container;
-        };
+        const actor = async (service: string) =>
+          remember(
+            await cli(
+              "run",
+              "-d",
+              "--label",
+              `com.docker.compose.service=${service}`,
+              "--label",
+              `cogni.native-proof=${token}`,
+              "--entrypoint",
+              "/bin/sh",
+              services["repo-init"].image,
+              "-c",
+              "sleep 420"
+            )
+          );
         const writer = await actor(writerService);
         const idle = await actor(idleService);
-        // Native Engine rejection and repeated filesystem readback prove the long
-        // bind cannot silently manufacture an empty source directory.
+        // Both the rejected bind and absent-directory readback use this daemon's
+        // filesystem, never the unrelated CI runner's /tmp.
         const missingSource = `/tmp/cogni-cadvisor-missing-${token}`;
-        expect(existsSync(missingSource)).toBe(false);
+        expect(
+          (await nested.exec(["test", "-e", missingSource])).exitCode
+        ).not.toBe(0);
         for (let attempt = 0; attempt < 2; attempt++) {
-          let unexpected: Docker.Container | undefined;
-          try {
-            await expect(
-              docker
-                .createContainer({
-                  Image: services["repo-init"].image,
-                  Labels: { "cogni.native-proof": token },
-                  HostConfig: {
-                    Mounts: [
-                      {
-                        Type: "bind",
-                        Source: missingSource,
-                        Target: "/owned-missing-source",
-                        ReadOnly: true,
-                      },
-                    ],
-                  },
-                })
-                .then((container) => {
-                  unexpected = container;
-                })
-            ).rejects.toThrow(/bind source path does not exist/);
-            expect(existsSync(missingSource)).toBe(false);
-          } finally {
-            if (unexpected) await unexpected.remove({ force: true });
-          }
+          const rejected = await nested.exec([
+            "docker",
+            "create",
+            "--label",
+            `cogni.native-proof=${token}`,
+            "--mount",
+            `type=bind,source=${missingSource},target=/owned-missing-source,readonly`,
+            services["repo-init"].image,
+          ]);
+          if (rejected.exitCode === 0) remember(rejected.stdout.trim());
+          expect(rejected.exitCode).not.toBe(0);
+          expect(rejected.output).toMatch(/bind source path does not exist/);
+          expect(
+            (await nested.exec(["test", "-e", missingSource])).exitCode
+          ).not.toBe(0);
         }
         console.info("CADVISOR_NATIVE_MISSING_SOURCE", {
           attempts: 2,
-          directoryCreated: existsSync(missingSource),
+          directoryCreated: false,
         });
         // Model only the supported topology declared by the real deployment preflight.
         expect(host.Driver).toBe("overlay2");
         expect(host.DockerRootDir).toBe("/var/lib/docker");
         const startCollector = async (hostCgroup: boolean) => {
-          const collector = hostCgroup
-            ? new HostCgroupContainer(alloyService.image, metadataPath)
-            : new GenericContainer("grafana/alloy:v1.9.2");
-          const started = await collector
-            .withNetwork(network)
-            .withUser(alloyService.user ?? "")
-            .withBindMounts(
-              mounts.filter((mount) => mount.target !== metadataPath)
-            )
-            .withTmpFs({ "/var/lib/alloy": "rw" })
-            .withCopyContentToContainer([
-              {
-                content: `${hostCgroup ? exporter : exporter?.replace(/^\s+containerd_host\s*=.*\n/m, "")}\n`,
-                target: "/etc/alloy/config.alloy",
-              },
-            ])
-            .withCommand([
-              "run",
-              "/etc/alloy/config.alloy",
-              "--server.http.listen-addr=0.0.0.0:12345",
-              "--storage.path=/var/lib/alloy",
-            ])
-            .withExposedPorts(12345)
-            .withLogConsumer((stream) => {
-              // Bound diagnostics and avoid exporting unrelated host-container inventory.
-              stream.on("data", (chunk: Buffer) => {
-                const text = chunk.toString("utf8");
-                for (const signature of [
-                  "permission denied",
-                  "no such file or directory",
-                  "cgroup mountpoint",
-                  "Failed to create",
-                  "Failed to register",
-                  "Failed to get",
-                ])
-                  if (text.includes(signature)) {
-                    collectorErrorClasses.add(signature);
-                    for (const line of text.split("\n"))
-                      if (line.includes(signature) && collectorErrors.size < 6)
-                        collectorErrors.add(
-                          line
-                            .replace(/[a-f0-9]{64}/g, "<container-id>")
-                            .slice(0, 600)
-                        );
-                  }
-              });
-            })
-            .withWaitStrategy(Wait.forHttp("/-/ready", 12345))
-            .withStartupTimeout(90_000)
-            .start();
-          owned.push(started);
-          const inspected = await docker
-            .getContainer(started.getId())
-            .inspect();
-          const actual = Reflect.get(inspected.HostConfig, "CgroupnsMode");
+          const content = `${hostCgroup ? exporter : exporter?.replace(/^\s+containerd_host\s*=.*\n/m, "")}\n`;
+          const configPath = `/tmp/cadvisor-overlay2-${hostCgroup ? "next" : "old"}.alloy`;
+          const copied = await nested.exec([
+            "/bin/sh",
+            "-c",
+            `umask 022; printf '%s' "$1" > "$2"; test -f "$2" && sha256sum "$2"`,
+            "owned-collector-config",
+            content,
+            configPath,
+          ]);
+          expect(copied.exitCode, copied.output).toBe(0);
+          expect(copied.stdout.trim().split(/\s+/)[0]).toBe(
+            createHash("sha256").update(content).digest("hex")
+          );
+          const args = [
+            "run",
+            "-d",
+            `--cgroupns=${hostCgroup ? "host" : "private"}`,
+            "--user",
+            alloyService.user ?? "",
+            "--label",
+            `cogni.native-proof=${token}`,
+          ];
+          for (const mount of mounts.filter(
+            (mount) => mount.target !== metadataPath
+          ))
+            args.push(
+              "--mount",
+              `type=bind,source=${mount.source},target=${mount.target},readonly`
+            );
+          if (hostCgroup)
+            args.push(
+              "--mount",
+              `type=bind,source=${metadataPath},target=${metadataPath},readonly`
+            );
+          args.push(
+            "--tmpfs",
+            "/var/lib/alloy:rw",
+            "--mount",
+            `type=bind,source=${configPath},target=/etc/alloy/config.alloy,readonly`,
+            "-p",
+            "127.0.0.1::12345",
+            hostCgroup ? alloyService.image : "grafana/alloy:v1.9.2",
+            "run",
+            "/etc/alloy/config.alloy",
+            "--server.http.listen-addr=0.0.0.0:12345",
+            "--storage.path=/var/lib/alloy"
+          );
+          const started = remember(await cli(...args));
+          const inspected = JSON.parse(
+            await cli("inspect", started.getId())
+          )[0] as {
+            HostConfig: { CgroupnsMode: string };
+            Mounts: { Source: string; Destination: string; RW: boolean }[];
+            NetworkSettings: { Ports: Record<string, { HostPort: string }[]> };
+          };
+          const actual = inspected.HostConfig.CgroupnsMode;
           console.info("CADVISOR_NATIVE_NAMESPACE", {
             hostCgroup,
             actual,
@@ -402,6 +427,18 @@ describe.skipIf(!process.env.CI)(
               Destination: metadataPath,
               RW: false,
             });
+          const port =
+            inspected.NetworkSettings.Ports["12345/tcp"]?.[0]?.HostPort;
+          if (!port)
+            throw new Error("Owned overlay2 collector endpoint missing");
+          ports.set(started.getId(), port);
+          const ready = await poll(
+            () =>
+              nested.exec(["wget", "-qO-", `http://127.0.0.1:${port}/-/ready`]),
+            (result) => result.exitCode === 0,
+            90_000
+          );
+          expect(ready.exitCode, ready.output).toBe(0);
           return started;
         };
         const alloy = await startCollector(false);
@@ -420,15 +457,15 @@ describe.skipIf(!process.env.CI)(
         expect(missing.exitCode).not.toBe(0);
         expect(missing.output).toContain("cadvisor_metadata_path_missing");
         const raw = async (collector = alloy) => {
-          const base = `http://${collector.getHost()}:${collector.getMappedPort(12345)}`;
-          const response = await fetch(
-            `${base}/api/v0/component/prometheus.exporter.cadvisor.default/metrics`,
-            {
-              signal: AbortSignal.timeout(10_000),
-            }
-          );
-          expect(response.status).toBe(200);
-          return samples(await response.text());
+          const port = ports.get(collector.getId());
+          if (!port) throw new Error("Owned overlay2 collector port missing");
+          const response = await nested.exec([
+            "wget",
+            "-qO-",
+            `http://127.0.0.1:${port}/api/v0/component/prometheus.exporter.cadvisor.default/metrics`,
+          ]);
+          expect(response.exitCode, response.output).toBe(0);
+          return samples(response.stdout);
         };
         const before = await poll(
           () => raw(),
@@ -455,6 +492,24 @@ describe.skipIf(!process.env.CI)(
           ],
         });
         console.info("CADVISOR_BASELINE_RAW", JSON.stringify(evidence(before)));
+        const diagnostic = await nested.exec(["docker", "logs", alloy.getId()]);
+        for (const line of diagnostic.output.split("\n")) {
+          for (const signature of [
+            "permission denied",
+            "no such file or directory",
+            "cgroup mountpoint",
+            "Failed to create",
+            "Failed to register",
+            "Failed to get",
+          ])
+            if (line.includes(signature)) {
+              collectorErrorClasses.add(signature);
+              if (collectorErrors.size < 6)
+                collectorErrors.add(
+                  line.replace(/[a-f0-9]{64}/g, "<container-id>").slice(0, 600)
+                );
+            }
+        }
         console.info("CADVISOR_COLLECTOR_ERROR_CLASSES", [
           ...collectorErrorClasses,
         ]);
@@ -565,7 +620,7 @@ describe.skipIf(!process.env.CI)(
         for (const container of owned.reverse()) {
           cleanup.push(...(await Promise.allSettled([container.stop()])));
         }
-        cleanup.push(...(await Promise.allSettled([network.stop()])));
+        cleanup.push(...(await Promise.allSettled([nested.stop()])));
       }
       const failed = cleanup.filter((result) => result.status === "rejected");
       expect(failed, "Owned native fixture cleanup failed").toEqual([]);
