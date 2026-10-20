@@ -19,7 +19,7 @@ database:
   candidate-a: { tier: shared, budget_profile: shared-default-v1 }
   production: { tier: shared, budget_profile: shared-default-v1 }
 reliability_validation:
-  candidate-a: { role: shared-target }
+  candidate-a: { role: shared-control }
 # story.5025 — BORN_ON_AKASH. Placement is stated at birth, never inherited from the k3s
 # fallback that exists for rows minted before decentralized compute did.
 deployment_provider:
@@ -39,6 +39,15 @@ compute_api:
 lease_generation:
   candidate-a: 0
   production: 0
+# story.5093 — PLACEMENT_IS_OPERATOR_POLICY. Red's declared private `sandbox` service runs in
+# its OWN lease (XR `<node_id>-sandbox`, host red-sandbox[-test].cognidao.org), never inside the
+# app lease: a sandbox resize/re-mint must not touch the production activity_env app lease.
+# Skipped (and reported) until Red's source declares the service.
+isolated_services:
+  sandbox:
+    lease_generation:
+      candidate-a: 0
+      production: 0
 # story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
 # sub-production authority would have to be moved by every later promote, and generation 1

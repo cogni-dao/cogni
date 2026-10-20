@@ -3,6 +3,7 @@ kind: Kustomization
 namespace: cogni-candidate-a
 resources:
   - xcomputeworkload.yaml
+  - xcomputeworkload-sandbox.yaml
   - compute-env-external-secret.yaml
   - compute-env-secret-role.yaml
   - compute-env-secret-role-binding.yaml
