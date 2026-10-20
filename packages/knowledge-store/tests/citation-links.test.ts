@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/knowledge-store/tests/citation-links`
  * Purpose: Prove bounded direct-edge reads and body-free endpoint projection.
- * Scope: Adapter unit contracts; no network or database lifecycle.
+ * Scope: Adapter unit contracts. Does not connect to a database or network.
  * Invariants: FIVE_LINKS_PER_PAGE, DIRECT_EDGES_ONLY, NO_BODY_READS_OR_N_PLUS_ONE.
  * Side-effects: none
  * Links: https://github.com/cogni-dao/cogni/issues/2832
