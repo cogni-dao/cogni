@@ -3,7 +3,8 @@
 
 /**
  * Module: `@features/compute/akash-tx/akash-tx-actuator.test`
- * Purpose: Prove the behaviours that make this actuator irreplaceable by generic OSS —
+ * Purpose: Prove bounded paid transaction behavior and durable custody over injected fakes.
+ *   These include
  *   wallet-global serialization, the pre-transaction receipt, post-response-loss recovery,
  *   observable refusal, the fact that a database can NEVER refuse a paid lease (task.5135), and
  *   the authoritative binding of every paid mutation to the node that consumed it (task.5103) —
@@ -3357,7 +3358,10 @@ describe("opt-in preview lifecycle", () => {
     services: SPEC.services.map((s) => ({
       ...s,
       image: artifactRef,
-      env: { COGNI_REPO_SHA: sourceSha },
+      env: {
+        COGNI_REPO_SHA: sourceSha,
+        GOVERNANCE_SCHEDULES_ENABLED: "false",
+      },
     })),
   };
   function previewBuild() {
@@ -3439,6 +3443,29 @@ describe("opt-in preview lifecycle", () => {
     previewDeploymentId: deploymentId,
     previewResetGeneration: resetGeneration,
   };
+  it.each([
+    undefined,
+    "true",
+  ])("rejects preview governance scheduling %s before binding or paying", async (enabled) => {
+    const ctx = previewBuild();
+    const changed = {
+      ...spec,
+      services: spec.services.map((service) => ({
+        ...service,
+        env: {
+          COGNI_REPO_SHA: sourceSha,
+          ...(enabled === undefined
+            ? {}
+            : { GOVERNANCE_SCHEDULES_ENABLED: enabled }),
+        },
+      })),
+    };
+    await expect(
+      ctx.actuator.create({ ...createInput, spec: changed })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(ctx.row.resolvedSdlHash).toBeUndefined();
+    expect(ctx.api.allocateCalls).toBe(0);
+  });
   it("rejects changed image/source/full SDL and state generation before paying", async () => {
     for (const changed of [
       {

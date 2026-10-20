@@ -3,6 +3,16 @@
 
 /**
  * Module: `@features/compute/akash-tx/akash-tx-actuator`
+ * Purpose: Execute one durable, wallet-serialized Akash transaction attempt.
+ * Scope: Bounded create, observe, update and delete operations; does not own reconciliation.
+ * Invariants: Durable custody precedes paid calls; preview apps disable shared governance scheduling.
+ * Side-effects: IO (injected provider, allocation ledger and migration ports)
+ * Links: @ports/akash-tx.port, ./akash-tx-wallet, ./akash-tx-http
+ * @internal
+ */
+
+/**
+ * Module: `@features/compute/akash-tx/akash-tx-actuator`
  * Purpose: The Akash transaction actuator — the irreducible, Cogni-specific boundary where a
  *   logical workload becomes a PAID Akash lease. Owns wallet-global serialization, the durable
  *   pre-transaction receipt, post-response-loss recovery, and the typed workload contract.
@@ -587,6 +597,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     if (
       !admission ||
       !app ||
+      app.env?.GOVERNANCE_SCHEDULES_ENABLED !== "false" ||
       app.image !== admission.artifactRef ||
       app.env?.COGNI_REPO_SHA !== admission.sourceSha ||
       spec.services.some(

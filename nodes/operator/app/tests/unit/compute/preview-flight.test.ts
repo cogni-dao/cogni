@@ -57,7 +57,7 @@ function deferred() {
   });
   return { promise, resolve };
 }
-function build() {
+function build(overrides: { repoSpecText?: string; payload?: unknown } = {}) {
   const rows = new Map<string, AkashPreviewAdmission>();
   let receipts: AkashTxAllocationRecord[] = [];
   let now = NOW;
@@ -170,13 +170,15 @@ function build() {
     admission,
     sources: {
       read: async () => ({
-        repoSpecText,
+        repoSpecText: overrides.repoSpecText ?? repoSpecText,
         catalogText: "name: spawny-boi\n",
         sourceRepo: "https://github.com/cogni-test-org/spawny-boi",
         imageRepository: "ghcr.io/cogni-test-org/spawny-boi",
       }),
     },
-    bundles: { read: async () => ({ bundleRef, payload }) },
+    bundles: {
+      read: async () => ({ bundleRef, payload: overrides.payload ?? payload }),
+    },
     git,
     state: { prepare },
     cleanup: { absent: async () => cleanup },
@@ -204,6 +206,46 @@ function build() {
   };
 }
 describe("trusted TEST preview flight", () => {
+  it.each([
+    ["cpu_units: 2", "cpu_units: 3"],
+    ["memory_mi: 2048", "memory_mi: 2049"],
+    ["storage_mi: 4096", "storage_mi: 4097"],
+    ["runtime_profile: cogni-node-app-v1", ""],
+  ])("rejects unsupported app profile %s before admission", async (from, to) => {
+    const ctx = build({ repoSpecText: repoSpecText.replace(from, to) });
+    await expect(ctx.service.request(request)).rejects.toMatchObject({
+      code: "invalid_request",
+    });
+    expect(ctx.rows.size).toBe(0);
+    expect(ctx.registerExpiry).not.toHaveBeenCalled();
+    expect(ctx.git.publish).not.toHaveBeenCalled();
+  });
+  it.each([
+    false,
+    true,
+  ])("only admits workers excluded from candidate-a (excluded=%s)", async (excluded) => {
+    const ctx = build({
+      repoSpecText: `${repoSpecText}    - name: worker\n      artifact: { name: worker }\n      port: 3201\n      visibility: private\n${excluded ? "      envs: [production]\n" : ""}      resources: { cpu_units: 1, memory_mi: 256, storage_mi: 512 }\n`,
+      payload: {
+        ...payload,
+        artifacts: [...payload.artifacts, { name: "worker", image }],
+        services: [...payload.services, { name: "worker", artifact: "worker" }],
+      },
+    });
+    if (excluded) {
+      await expect(ctx.service.request(request)).resolves.toMatchObject({
+        sourceSha: SHA,
+      });
+      expect(ctx.git.publish).toHaveBeenCalledTimes(1);
+    } else {
+      await expect(ctx.service.request(request)).rejects.toMatchObject({
+        code: "invalid_request",
+      });
+      expect(ctx.rows.size).toBe(0);
+      expect(ctx.registerExpiry).not.toHaveBeenCalled();
+      expect(ctx.git.publish).not.toHaveBeenCalled();
+    }
+  });
   it("publishes existing typed XR and reusable pair resources with stable identity", async () => {
     const ctx = build();
     const first = await ctx.service.request(request),

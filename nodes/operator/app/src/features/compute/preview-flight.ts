@@ -11,7 +11,11 @@
  * @internal
  */
 import { createHash } from "node:crypto";
-import { parseRepoSpec, resolveNodeArtifactBundle } from "@cogni/repo-spec";
+import {
+  parseRepoSpec,
+  resolveNodeArtifactBundle,
+  resolveNodeArtifactBundleForEnvironment,
+} from "@cogni/repo-spec";
 import { parse as parseYaml, stringify } from "yaml";
 import type {
   AkashPreviewAdmission,
@@ -124,11 +128,23 @@ export class PreviewFlight implements PreviewFlightPort {
         "invalid_request",
         "preview node identity mismatch"
       );
-    const app = bundle.services.find((s) => s.service.name === "app");
-    if (!app)
+    const enabled = resolveNodeArtifactBundleForEnvironment(
+      bundle,
+      "candidate-a"
+    );
+    const app = enabled.services[0];
+    if (
+      enabled.services.length !== 1 ||
+      !app ||
+      app.service.name !== "app" ||
+      app.service.runtimeProfile !== "cogni-node-app-v1" ||
+      app.service.resources.cpuUnits > 2 ||
+      app.service.resources.memoryMi > 2048 ||
+      app.service.resources.storageMi > 4096
+    )
       throw new PreviewFlightError(
         "invalid_request",
-        "preview bundle has no app"
+        "preview requires one app within 2 CPU, 2048Mi memory and 4096Mi storage"
       );
     const publicHost = previewComputePublicHost(input.nodeId, deploymentId);
     const payloadHash = hash({
