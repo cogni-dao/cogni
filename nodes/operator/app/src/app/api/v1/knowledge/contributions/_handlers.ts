@@ -6,7 +6,7 @@
  * Purpose: HTTP handlers for the external-agent knowledge contribution surface.
  *   Pulls the framework-agnostic ContributionService from the container, maps
  *   SessionUser → Principal, and translates typed service errors to HTTP statuses.
- * Scope: Operator-side wiring only. Mirrors poly's identical handler set.
+ * Scope: Operator HTTP wiring only. Does not implement contribution mutations or replay uncertain writes.
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION.
  * Side-effects: IO (HTTP response, Doltgres read/write via container service)
  * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store
@@ -24,6 +24,9 @@ import {
   EmptyKnowledgePatchError,
   KnowledgeBusyError,
   KnowledgeGateError,
+  KnowledgeWriteConflictError,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
   type PrincipalAuthSource,
   sessionUserToPrincipal,
 } from "@cogni/knowledge-store";
@@ -59,9 +62,35 @@ function authSource(request: Request): PrincipalAuthSource {
 }
 
 function mapError(e: unknown): NextResponse {
-  // Admission control refused, reserved, or lock-contended: nothing was
-  // applied, so this is retryable capacity pressure, never a client conflict.
-  // 409 here would tell an agent its write was rejected on the merits.
+  if (e instanceof KnowledgeWriteOutcomeUnknownError)
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: e.code,
+        retryable: false,
+        ...e.receipt.lookup,
+      },
+      { status: 409 }
+    );
+  if (e instanceof KnowledgeWriteConflictError)
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: e.receipt.code,
+        retryable: false,
+        ...e.receipt.lookup,
+      },
+      { status: 409 }
+    );
+  if (e instanceof KnowledgeWriteScopeRequiredError)
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: "knowledge_write_scope_required",
+        retryable: false,
+      },
+      { status: 500 }
+    );
   if (e instanceof KnowledgeBusyError)
     return NextResponse.json(
       { error: e.message, retryable: true },

@@ -261,12 +261,21 @@ export interface BoundToolRuntime {
  * Tool result from implementation (pre-redaction).
  * Structurally identical to ToolExecResult but semantically distinct layer.
  */
+/** Optional domain-owned lookup receipt for a refused automatic retry. */
+export interface ToolFailureReceipt {
+  readonly code: string;
+  readonly retryable: false;
+  readonly lookup: Readonly<Record<string, string | null>>;
+}
+
 export type ToolResult<T> =
   | { readonly ok: true; readonly value: T }
   | {
       readonly ok: false;
       readonly errorCode: ToolErrorCode;
       readonly safeMessage: string;
+      readonly retryable?: false;
+      readonly receipt?: ToolFailureReceipt;
     };
 
 // -----------------------------------------------------------------------------
@@ -290,6 +299,8 @@ export type ToolExecResult<T> =
       readonly ok: false;
       readonly errorCode: ToolErrorCode;
       readonly safeMessage: string;
+      readonly retryable?: false;
+      readonly receipt?: ToolFailureReceipt;
     };
 
 /**

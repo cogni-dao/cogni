@@ -98,6 +98,7 @@ export type {
   ToolErrorCode,
   ToolExecFn,
   ToolExecResult,
+  ToolFailureReceipt,
   ToolInvocationContext,
   ToolInvocationRecord,
   ToolRedactionConfig,

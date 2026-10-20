@@ -159,6 +159,7 @@ export {
   type SourceType,
   SourceTypeSchema,
 } from "./domain/schemas.js";
+export { KnowledgeWriteConflictError } from "./domain/write-replay.js";
 export { createEdoCapability } from "./edo-capability.js";
 export {
   ContributionConflictError,
@@ -195,6 +196,9 @@ export {
   HypothesisMissingEvaluateAtError,
   KnowledgeBusyError,
   type KnowledgeStorePort,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
+  type KnowledgeWriteSession,
   type NewDomain,
 } from "./port/knowledge-store.port.js";
 // KPI reader port (goal-loop — verifier-independent metric read)

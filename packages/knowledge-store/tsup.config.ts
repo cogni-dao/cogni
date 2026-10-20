@@ -26,6 +26,7 @@ export const tsupConfig = defineConfig({
   clean: false,
   sourcemap: true,
   platform: "node",
+  noExternal: ["@cogni-dao/doltgres-admission"],
   external: ["@cogni/ai-tools", "drizzle-orm", "postgres", "zod"],
 });
 

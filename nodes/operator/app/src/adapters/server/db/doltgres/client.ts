@@ -4,8 +4,9 @@
 /**
  * Module: `@adapters/server/db/doltgres/client`
  * Purpose: Lazy operator-Doltgres `Sql` singleton + adapter wiring for the work_items API.
- * Scope: Builds a postgres.js client and a `DoltgresWorkItemAdapter`. Mirrors `drizzle.client.ts` shape.
- * Invariants: One serialized connection per process (`max: 1`); lazy initialization; throws `DoltgresNotConfiguredError` when `DOLTGRES_URL` is unset.
+ * Scope: Builds the injected Dolt content adapter; does not construct PostgreSQL coordination sessions.
+ * Invariants: One writer; reader width two and generation budget four; lazy construction.
+ *   Missing DOLTGRES_URL throws DoltgresNotConfiguredError.
  *   OPERATOR_KEEPS_THE_5000_FLOOR: operator's store holds its imported pre-API
  *   markdown corpus below 5000, so its allocator must clear it. Nodes booting an
  *   empty store take the package default and start at 1.
@@ -79,7 +80,7 @@ function createReadSql(): Sql {
   return buildDoltgresClient({
     connectionString: env.DOLTGRES_URL,
     applicationName: `cogni_work_items_read_${env.SERVICE_NAME ?? "app"}`,
-    max: 4,
+    max: 2,
   });
 }
 
@@ -111,6 +112,8 @@ export function getDoltgresWorkItemsAdapter(
   if (!_adapter)
     _adapter = new DoltgresWorkItemAdapter(getDoltgresSql(), {
       idFloor: OPERATOR_ID_FLOOR,
+      writerLockProtocol: "bridge",
+      readConnectionBudget: 4,
       readClient: getDoltgresReadSql(),
       recreateReadClient: createReadSql,
       // Conditional spread, not `logger?.child(...)`: `exactOptionalPropertyTypes`

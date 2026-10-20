@@ -16,7 +16,7 @@
  * @public
  */
 
-import type { ToolEffect } from "@cogni/ai-core";
+import type { ToolEffect, ToolFailureReceipt } from "@cogni/ai-core";
 import type { z } from "zod";
 
 /**
@@ -35,6 +35,8 @@ export type ToolResult<T> =
       readonly ok: false;
       readonly errorCode: ToolErrorCode;
       readonly safeMessage: string;
+      readonly retryable?: false;
+      readonly receipt?: ToolFailureReceipt;
     };
 
 /**
