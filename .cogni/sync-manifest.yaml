@@ -28,12 +28,11 @@ artifacts:
       id: "3956976"
       slug: cogni-operator-test
     # task.5270 — the test parent's DEPLOY-PATH identity inputs, declared HERE beside its repo +
-    # App identity. They are exactly what candidate-flight.yml exports to the generators it
-    # re-checks (FORK_DOMAIN_ROOT, FLEET_CONTROL_ENV; it exports no DOMAIN), so the sync renders
-    # what the flight's --check expects. The writer App needs no Variables permission, keeping
-    # 1:1 parity with the production operator App. DOMAIN is deliberately absent: rendering with
-    # it made flight 38959495272 refuse the committed scheduler routes.
+    # App identity. Workload URLs follow CI's DOMAIN; substrate VM discovery keeps the separate
+    # FORK_DOMAIN_ROOT. Re-declare both so sync and CI render the same TEST-owned desired state.
+    # The writer App needs no Variables permission, keeping parity with the production App.
     identity:
+      DOMAIN: cogni-testing.org
       FORK_DOMAIN_ROOT: cognidao.org
       FLEET_CONTROL_ENV: candidate-a
 
