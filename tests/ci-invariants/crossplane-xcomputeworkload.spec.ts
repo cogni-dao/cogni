@@ -170,6 +170,9 @@ describe("XComputeWorkload composite API (task.5096)", () => {
       // story.5050 — node-owned HARD placement requirement. Optional and immutable, so no
       // existing XR changes and a new requirement can only bind on a fresh mint.
       "placement",
+      "previewDeploymentId",
+      "previewResetGeneration",
+      "previewStateSlot",
       "runtime",
       "workload",
     ]);

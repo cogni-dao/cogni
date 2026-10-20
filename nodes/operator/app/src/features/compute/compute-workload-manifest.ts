@@ -25,6 +25,7 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
 import type { ResolvedNodeArtifactBundle } from "@cogni/repo-spec";
 import {
   resolveNodeArtifactBundleForEnvironment,
@@ -259,7 +260,10 @@ export interface XComputeWorkloadPlacement {
 }
 
 export interface XComputeWorkloadSpec extends ComputeWorkloadSpec {
-  readonly migration: { readonly policy: typeof MIGRATION_POLICY };
+  readonly migration: {
+    readonly policy: typeof MIGRATION_POLICY;
+    readonly resetGeneration?: string;
+  };
   readonly bootPolicy: XComputeWorkloadBootPolicy;
   readonly leaseGeneration: number;
   readonly dns?: XComputeWorkloadDns;
@@ -267,6 +271,46 @@ export interface XComputeWorkloadSpec extends ComputeWorkloadSpec {
   readonly placement?: XComputeWorkloadPlacement;
   /** story.5093 — present only on an operator-placed isolated-service lease. */
   readonly instance?: string;
+  readonly previewDeploymentId?: string;
+  readonly previewStateSlot?: 0 | 1;
+  readonly previewResetGeneration?: string;
+}
+
+export interface ComputePreviewIdentity {
+  readonly deploymentId: string;
+  readonly stateSlot: 0 | 1;
+  readonly resetGeneration: string;
+}
+
+const uuid = z
+  .string()
+  .uuid()
+  .regex(/^[0-9a-f-]{36}$/);
+
+/** Same immutable deployment has one XR/provider key across retries and reconciliation. */
+export function previewComputeWorkloadName(
+  nodeId: string,
+  deploymentId: string
+): string {
+  uuid.parse(nodeId);
+  uuid.parse(deploymentId);
+  return `${nodeId}-p-${createHash("sha256").update(deploymentId).digest("hex").slice(0, 16)}`;
+}
+
+/** One label under the isolated TEST zone, covered by its ordinary wildcard certificate. */
+export function previewComputePublicHost(
+  nodeId: string,
+  deploymentId: string
+): string {
+  uuid.parse(nodeId);
+  uuid.parse(deploymentId);
+  return `p-${nodeId.slice(0, 8)}-${deploymentId.replaceAll("-", "")}.cogni-testing.org`;
+}
+
+/** Outside every ordinary materializer overlay/rsync boundary and its Argo ownership. */
+export function previewComputeWorkloadDirectory(deploymentId: string): string {
+  uuid.parse(deploymentId);
+  return `infra/k8s/preview-deployments/candidate-a/${deploymentId}`;
 }
 
 export interface ComputeWorkloadManifest {
@@ -341,6 +385,8 @@ export interface BuildComputeWorkloadManifestInput {
    * the instance host. Its idempotence key is distinct; its receipt identity is the node's.
    */
   readonly instance?: string;
+  /** Opt-in trusted TEST pilot; the admission ledger owns slot and reset-generation binding. */
+  readonly preview?: ComputePreviewIdentity;
 }
 
 /** Instance names share the XRD's `spec.instance` pattern. */
@@ -417,6 +463,28 @@ function selectWorkloadServices(
 export function buildComputeWorkloadManifest(
   input: BuildComputeWorkloadManifestInput
 ): ComputeWorkloadManifest {
+  if (input.preview) {
+    uuid.parse(input.preview.deploymentId);
+    uuid.parse(input.preview.resetGeneration);
+    if (
+      input.computeApi !== "crossplane" ||
+      input.environment !== "candidate-a" ||
+      !input.bundle.source.repository.startsWith("cogni-test-org/") ||
+      input.instance !== undefined ||
+      ![0, 1].includes(input.preview.stateSlot) ||
+      input.leaseGeneration !== 0 ||
+      input.publicHost !==
+        previewComputePublicHost(
+          input.bundle.nodeId,
+          input.preview.deploymentId
+        ) ||
+      input.bootRecovery === "auto"
+    ) {
+      throw new Error(
+        "[compute-workload-manifest] preview requires an admitted TEST deployment, unique TEST hostname, and one allocation attempt"
+      );
+    }
+  }
   if (!DIGEST_PINNED_OCI_REF.test(input.bundleRef)) {
     throw new Error(
       "[compute-workload-manifest] bundleRef must be a digest-pinned OCI reference"
@@ -515,6 +583,15 @@ export function buildComputeWorkloadManifest(
       };
     }
   );
+  if (
+    input.preview &&
+    services.filter((service) => service.runtimeProfile === "cogni-node-app-v1")
+      .length !== 1
+  ) {
+    throw new Error(
+      "[compute-workload-manifest] preview pair requires exactly one ordinary app runtime"
+    );
+  }
 
   if (input.computeApi !== "crossplane" && (input.dns || input.runtime)) {
     throw new Error(
@@ -616,8 +693,12 @@ export function buildComputeWorkloadManifest(
     metadata: {
       // Both the CRD and the Composition's first pipeline step make this immutable and equal
       // to spec.nodeId: one paid workload per node in each environment namespace.
-      name:
-        input.instance === undefined
+      name: input.preview
+        ? previewComputeWorkloadName(
+            input.bundle.nodeId,
+            input.preview.deploymentId
+          )
+        : input.instance === undefined
           ? input.bundle.nodeId
           : `${input.bundle.nodeId}-${input.instance}`,
       namespace,
@@ -625,6 +706,9 @@ export function buildComputeWorkloadManifest(
         "cogni.io/node-id": input.bundle.nodeId,
         "cogni.io/environment": input.environment,
         "cogni.io/node": input.slug,
+        ...(input.preview
+          ? { "cogni.io/preview-deployment-id": input.preview.deploymentId }
+          : {}),
         ...(input.instance === undefined
           ? {}
           : { "cogni.io/instance": input.instance }),
@@ -637,7 +721,19 @@ export function buildComputeWorkloadManifest(
             ...(input.instance === undefined
               ? {}
               : { instance: input.instance }),
-            migration: { policy: MIGRATION_POLICY },
+            ...(input.preview
+              ? {
+                  previewDeploymentId: input.preview.deploymentId,
+                  previewStateSlot: input.preview.stateSlot,
+                  previewResetGeneration: input.preview.resetGeneration,
+                }
+              : {}),
+            migration: {
+              policy: MIGRATION_POLICY,
+              ...(input.preview
+                ? { resetGeneration: input.preview.resetGeneration }
+                : {}),
+            },
             bootPolicy: bootPolicyForEnvironment(
               input.environment,
               input.bootRecovery ?? "hold"

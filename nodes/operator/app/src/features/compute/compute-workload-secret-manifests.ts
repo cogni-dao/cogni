@@ -13,7 +13,45 @@ export function buildComputeSecretResources(input: {
   readonly slug: string;
   readonly environment: "candidate-a" | "preview" | "production";
   readonly secretRefs: readonly { readonly key: string }[];
+  /** Two reusable disposable contents; source bank/roles/passwords are unchanged. */
+  readonly previewStateSlot?: 0 | 1;
 }): readonly ComputeSecretResource[] {
+  const preview = input.previewStateSlot !== undefined;
+  if (
+    preview &&
+    (input.environment !== "candidate-a" ||
+      input.slug !== "spawny-boi" ||
+      (input.previewStateSlot !== 0 && input.previewStateSlot !== 1))
+  ) {
+    throw new Error(
+      "[compute-workload-secret-manifests] preview pair is not allowlisted"
+    );
+  }
+  const projectionSlug = preview
+    ? `${input.slug}-preview-${input.previewStateSlot === 0 ? "a" : "b"}`
+    : input.slug;
+  function templateValue(key: string, escaped: boolean): string {
+    let expression = `index . "${key}"`;
+    let guard = "";
+    if (
+      preview &&
+      [
+        "DATABASE_URL",
+        "DATABASE_SERVICE_URL",
+        "DATABASE_MIGRATION_URL",
+        "DOLTGRES_URL",
+      ].includes(key)
+    ) {
+      const base =
+        key === "DOLTGRES_URL" ? "knowledge_spawny_boi" : "cogni_spawny_boi";
+      const pattern = `/${base}([?].*)?$`;
+      // ESO omits Sprig's fail(). An undefined native template aborts this bad-binding
+      // branch without ever projecting a URL that could still reach canonical contents.
+      guard = `{{ if not (regexMatch "${pattern}" (${expression})) }}{{ template "preview_database_binding_mismatch" . }}{{ end }}`;
+      expression = `regexReplaceAll "${pattern}" (${expression}) "/${base}_preview_${input.previewStateSlot === 0 ? "a" : "b"}\${1}"`;
+    }
+    return `${guard}{{ ${expression}${escaped ? String.raw` | toJson | trimPrefix "\"" | trimSuffix "\""` : ""} }}`;
+  }
   const secretKeys = [
     ...new Set(input.secretRefs.map((ref) => ref.key)),
   ].sort();
@@ -26,8 +64,8 @@ export function buildComputeSecretResources(input: {
     );
   }
   const namespace = `cogni-${input.environment}`;
-  const secretName = `${input.slug}-compute-env-secrets`;
-  const accessName = `${input.slug}-compute-env-secrets-reader`;
+  const secretName = `${projectionSlug}-compute-env-secrets`;
+  const accessName = `${projectionSlug}-compute-env-secrets-reader`;
   const runtimeResources: ComputeSecretResource[] =
     secretKeys.length === 0
       ? []
@@ -54,10 +92,7 @@ export function buildComputeSecretResources(input: {
                     engineVersion: "v2",
                     mergePolicy: "Replace",
                     data: Object.fromEntries(
-                      secretKeys.map((key) => [
-                        key,
-                        String.raw`{{ index . "${key}" | toJson | trimPrefix "\"" | trimSuffix "\"" }}`,
-                      ])
+                      secretKeys.map((key) => [key, templateValue(key, true)])
                     ),
                   },
                 },
@@ -108,7 +143,7 @@ export function buildComputeSecretResources(input: {
             },
           },
         ];
-  const migrationSecretName = `${input.slug}-compute-migration-secrets`;
+  const migrationSecretName = `${projectionSlug}-compute-migration-secrets`;
   return [
     ...runtimeResources,
     {
@@ -127,6 +162,27 @@ export function buildComputeSecretResources(input: {
             name: migrationSecretName,
             creationPolicy: "Owner",
             deletionPolicy: "Delete",
+            ...(preview
+              ? {
+                  template: {
+                    engineVersion: "v2",
+                    mergePolicy: "Replace",
+                    data: {
+                      DATABASE_MIGRATION_URL: templateValue(
+                        "DATABASE_MIGRATION_URL",
+                        false
+                      ),
+                      DATABASE_SSL_CA_CERT: templateValue(
+                        "DATABASE_SSL_CA_CERT",
+                        false
+                      ),
+                      ...(secretKeys.includes("DOLTGRES_URL")
+                        ? { DOLTGRES_URL: templateValue("DOLTGRES_URL", false) }
+                        : {}),
+                    },
+                  },
+                }
+              : {}),
           },
           data: [
             {

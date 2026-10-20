@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
+- **Last reviewed:** 2026-10-20
 
 ## Purpose
 
@@ -49,7 +50,9 @@ k8s/
 │   ├── repo-server-patch.yaml # ksops sidecar
 │   ├── argocd-cm-runtime-patch.yaml # Cogni's argocd-cm keys as a MERGE-PATCH body (never a manifest)
 │   ├── appsets/<env>/       # generated one-AppSet-per-(env,node) desired state
+│   ├── preview-pilot/       # dormant opt-in preview Argo fixture; never bootstrap-installed
 │   └── control-plane/<env>/ # env-scoped app-of-apps continuously reconciled by Argo
+├── preview-deployments/     # preview-owned deploy branch tree, outside ordinary overlay pruning
 ├── base/                    # Kustomize bases
 │   ├── akash-tx-actuator/   # Private ClusterIP Akash transaction actuator (Crossplane calls it)
 │   ├── akash-tx-actuator-service-name/ # Post-namePrefix transformer pinning that Service's name

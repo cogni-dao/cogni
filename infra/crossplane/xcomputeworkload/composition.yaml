@@ -81,6 +81,16 @@ spec:
             {{- $instance := dig "instance" "" $spec }}
             {{- $expectedName := $spec.nodeId }}
             {{- if ne $instance "" }}{{ $expectedName = printf "%s-%s" $spec.nodeId $instance }}{{ end }}
+            {{- $previewId := dig "previewDeploymentId" "" $spec }}
+            {{- $isPreview := ne $previewId "" }}
+            {{- if $isPreview }}
+            {{- if or (ne $env "candidate-a") (not (hasPrefix "cogni-test-org/" $spec.bundle.source.repository)) (ne $instance "") }}
+            {{- fail "preview deployments are opt-in TEST node workloads" }}
+            {{- end }}
+            {{- $expectedName = printf "%s-p-%s" $spec.nodeId (trunc 16 (sha256sum $previewId)) }}
+            {{- $expectedHost := printf "p-%s-%s.cogni-testing.org" (trunc 8 $spec.nodeId) (replace "-" "" $previewId) }}
+            {{- if ne $publicHost $expectedHost }}{{ fail "preview hostname must be unique inside the TEST zone" }}{{ end }}
+            {{- end }}
             {{- if ne $name $expectedName }}
             {{- fail (printf "XComputeWorkload %s/%s: metadata.name must equal %s (spec.nodeId %s, spec.instance %q) - one paid workload per node per instance per environment namespace" $ns $name $expectedName $spec.nodeId $instance) }}
             {{- end }}
@@ -183,6 +193,10 @@ spec:
             {{- $substrate := dig "runtime" "substrateHost" "" $spec }}
             {{- $logPush := dig "runtime" "logPush" false $spec }}
             {{- $secretName := printf "%s-compute-env-secrets" $slug }}
+            {{- if $isPreview }}
+            {{- $pair := ternary "a" "b" (eq (int $spec.previewStateSlot) 0) }}
+            {{- $secretName = printf "%s-preview-%s-compute-env-secrets" $slug $pair }}
+            {{- end }}
 
             {{- /*
               MIGRATION FACTS (bug.5116 order, task.5135 decoupling). Accumulated while lowering
@@ -317,6 +331,11 @@ spec:
             {{- end }}
             {{- $migrationStep = dict "profile" "cogni-node-app-v1" "bundleDigest" $bundleDigest "image" $appImage "doltgres" $appDoltgres }}
             {{- end }}
+            {{- if $isPreview }}
+            {{- $_ := set $migrationStep "previewDeploymentId" $previewId }}
+            {{- $_ := set $migrationStep "resetGeneration" $spec.previewResetGeneration }}
+            {{- $_ := set $migrationStep "previewStateSlot" $spec.previewStateSlot }}
+            {{- end }}
             {{- $hasMigrationStep := gt (len $migrationStep) 0 }}
 
             {{- /*
@@ -358,6 +377,10 @@ spec:
             {{- $_ := set $specDict "placement" (dict "requiredCountryCodes" $requiredCountries) }}
             {{- end }}
             {{- $payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" $specDict }}
+            {{- if $isPreview }}
+            {{- $_ := set $payload "previewDeploymentId" $previewId }}
+            {{- $_ := set $payload "previewResetGeneration" $spec.previewResetGeneration }}
+            {{- end }}
             {{- if $hasMigrationStep }}{{ $_ := set $payload "migrationStep" $migrationStep }}{{ end }}
             {{- if $hasLegacyMigration }}{{ $_ := set $payload "migration" $legacyMigration }}{{ end }}
 
@@ -942,6 +965,8 @@ spec:
                     url: (.payload.baseUrl + "/v1/akash/create")
                     body: |
                       {
+                        {{ if $isPreview }}previewDeploymentId: .payload.body.previewDeploymentId,
+                        previewResetGeneration: .payload.body.previewResetGeneration,{{ end }}
                         cogniKey: .payload.body.cogniKey,
                         environment: .payload.body.environment,
                         identity: .payload.body.identity,
@@ -1041,6 +1066,8 @@ spec:
                     url: (.payload.baseUrl + "/v1/akash/create")
                     body: |
                       {
+                        {{ if $isPreview }}previewDeploymentId: .payload.body.previewDeploymentId,
+                        previewResetGeneration: .payload.body.previewResetGeneration,{{ end }}
                         cogniKey: .payload.body.cogniKey,
                         environment: .payload.body.environment,
                         identity: .payload.body.identity,
