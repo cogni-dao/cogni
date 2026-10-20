@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-16
+- **Last reviewed:** 2026-10-19
 
 ## Purpose
 
@@ -132,6 +132,7 @@ docker compose --project-name cogni-runtime logs -f app
 **OpenFGA:**
 
 - `openfga`: shared authorization runtime on HTTP port 8080, backed by the shared Postgres `openfga` database. Image pinned to `openfga/openfga:v1.17.1@sha256:ff96f68d2f03a029e051027415c106295c782084daeef0934479f04a3fdc2d57`.
+- OpenFGA datastore readiness remains observable but does not trigger autoheal restarts. `restart: unless-stopped` still handles process exits; PostgreSQL unavailability must not create authorization restart loops.
 - `openfga-migrate`: one-shot upstream schema migration; runs before the server starts.
 - Operator pods reach it through `OPENFGA_API_URL=http://operator-openfga-external:8080`. `OPENFGA_STORE_ID` is runtime config from store bootstrap; `OPENFGA_API_TOKEN` is pod-consumed secret material and belongs in OpenBao/ESO, not checked-in Secret YAML.
 - Host port 8080 is published for k3s pod access; public-NIC traffic is dropped by `infra/provision/cherry/harden-docker-public-ports.sh`. Logs are collected by Alloy, and Prometheus metrics are scraped from `openfga:2112` in preview/production metrics config.

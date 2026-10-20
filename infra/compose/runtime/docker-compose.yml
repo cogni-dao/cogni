@@ -338,7 +338,9 @@ services:
     image: ${OPENFGA_IMAGE:-openfga/openfga:v1.17.1@sha256:ff96f68d2f03a029e051027415c106295c782084daeef0934479f04a3fdc2d57}
     restart: unless-stopped
     labels:
-      - "autoheal=true"
+      # Datastore readiness failures must not restart the authorization process.
+      # Docker still restarts process exits through restart: unless-stopped.
+      - "autoheal=false"
     networks:
       - internal
     # Expose to all interfaces for k3s pods (ExternalName → VM DNS:8080).
@@ -365,12 +367,9 @@ services:
       - OPENFGA_PLAYGROUND_ENABLED=false
       - OPENFGA_AUTHN_METHOD=${OPENFGA_AUTHN_METHOD:-none}
       - OPENFGA_AUTHN_PRESHARED_KEYS=${OPENFGA_API_TOKEN:-}
-    # Without a healthcheck the `autoheal=true` label above is inert: willfarrell/autoheal
-    # only restarts containers Docker reports `unhealthy`, and a container with no probe stays
-    # `health: none` forever. This left a wedged OpenFGA (process up but datastore path dead)
-    # with no self-heal — a factor in the 2026-08-12 prod RBAC-write outage. grpc_health_probe
-    # ships in the OpenFGA image (distroless — no curl/shell); 8081 is the internal gRPC health
-    # port, and OpenFGA's health service reports NOT_SERVING when its datastore is unreachable.
+    # Keep datastore readiness observable: grpc_health_probe ships in the distroless
+    # image and reports NOT_SERVING when the datastore is unreachable. That dependency
+    # failure is not process liveness evidence and must not trigger autoheal restarts.
     healthcheck:
       test: ["CMD", "grpc_health_probe", "-addr=localhost:8081"]
       interval: 10s
