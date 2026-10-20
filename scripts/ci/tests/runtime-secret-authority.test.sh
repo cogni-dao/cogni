@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
-# Hermetic checks of the exact normal deploy authority functions; no Docker/network.
+# Hermetic authority checks; only an owned loopback HTTP server, no Docker/external network.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SOURCE="$REPO_ROOT/scripts/ci/deploy-infra.sh"
 TMPROOT="$(mktemp -d -t runtime-authority.XXXXXX)"
-trap 'rm -rf "$TMPROOT" "${ENTRY_TMP:-}"' EXIT
+trap 'if [[ -n "${HTTP_PID:-}" ]]; then kill "$HTTP_PID" 2>/dev/null || true; wait "$HTTP_PID" 2>/dev/null || true; fi; rm -rf "$TMPROOT" "${ENTRY_TMP:-}"' EXIT
 mkdir -p "$TMPROOT/bin"
 function_source() {
   awk -v start="$1() {" '$0 == start {capture=1} capture {print} capture && /^}$/ {exit}' "$SOURCE"
@@ -125,75 +125,206 @@ for fresh_case in complete missing; do
     eval "$fresh"
   ) > "$TMPROOT/fresh" 2>&1; then [[ "$fresh_case" == complete ]]; else [[ "$fresh_case" == missing ]]; fi
 done
-# The later per-node provision phase must reuse the reader minted for early
-# runtime reads. Execute both actual source blocks, including any redefinition.
-for name in mint_db_reader_token openbao_get_field; do
+# Real HTTP exercises the actual reader helpers, with private files and an owned
+# ephemeral loopback server. Kubernetes is mocked only at its native JWT/Service seam.
+for name in openbao_reader_address openbao_reader_request mint_db_reader_token openbao_get_field; do
   function_source "$name" >> "$TMPROOT/functions.sh"
 done
 late_reader="$(awk '/^DB_READER_TOKEN=""$/ {capture=1} capture && /^# The runner forwards/ {exit} capture {print}' "$SOURCE")"
 [[ -n "$late_reader" ]]
-for reader_case in reuse token_transient login_transient permanent forbidden empty; do
+cat > "$TMPROOT/server.py" <<'PY_HTTP'
+import http.server,json,pathlib,sys
+root=pathlib.Path(sys.argv[1])
+class Handler(http.server.BaseHTTPRequestHandler):
+ def log_message(self,*args): pass
+ def handle_request(self):
+  state=json.loads((root/'http-state').read_text()); directory=pathlib.Path(state['directory']); mode=state['case']
+  body=self.rfile.read(int(self.headers.get('Content-Length',0)))
+  record={'method':self.command,'path':self.path,'token':self.headers.get('X-Vault-Token'),'body':body.decode()}
+  with (directory/'http.calls').open('a') as f: f.write(json.dumps(record)+'\n')
+  calls=[json.loads(line) for line in (directory/'http.calls').read_text().splitlines()]
+  status=200; response={}
+  if self.command=='POST' and self.path=='/v1/auth/kubernetes/login':
+   login=[c for c in calls if c['method']=='POST']
+   assert json.loads(body)=={'role':'production-db-reader','jwt':'owned-jwt-secret'}
+   if mode=='login_transient' and len(login)==1: status=503; response={'errors':['owned-private-error']}
+   elif mode=='forbidden': status=403; response={'errors':['owned-reader-secret']}
+   elif mode=='permanent': status=400; response={'errors':['owned-jwt-secret']}
+   elif mode=='empty': response={'auth':{}}
+   elif mode=='missing_ttl': response={'auth':{'client_token':'owned-reader-secret'}}
+   elif mode=='zero_ttl': response={'auth':{'client_token':'owned-reader-secret','lease_duration':0}}
+   elif mode=='malformed_ttl': response={'auth':{'client_token':'owned-reader-secret','lease_duration':'900'}}
+   else: response={'auth':{'client_token':'owned-reader-secret','lease_duration':900}}
+  elif self.command=='GET' and self.path.startswith('/v1/cogni/data/production/'):
+   assert self.headers.get('X-Vault-Token')=='owned-reader-secret'
+   service=self.path.rsplit('/',1)[1]
+   if service=='missing': status=404; response={'errors':[]}
+   elif service=='ambiguous404': status=404; response={'errors':['owned-private-error']}
+   elif service=='forbidden': status=403; response={'errors':['owned-reader-secret']}
+   elif service=='malformed': response=None
+   elif service=='missingkey': response={'data':{'data':{}}}
+   elif service in ('transient','latetransient') and len([c for c in calls if c['path']==self.path])==1: status=503; response={'errors':['owned-private-error']}
+   else: response={'data':{'data':{key:'owned-password' for key in ['APP_DB_PASSWORD','APP_DB_SERVICE_PASSWORD','APP_DB_MIGRATION_PASSWORD']}}}
+  else: status=400; response={'errors':['unexpected owned HTTP route']}
+  payload=b'{' if response is None else json.dumps(response).encode()
+  self.send_response(status); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(payload)
+ do_POST=handle_request
+ do_GET=handle_request
+server=http.server.HTTPServer(('127.0.0.1',0),Handler)
+(root/'http-port').write_text(str(server.server_port))
+server.serve_forever()
+PY_HTTP
+python3 "$TMPROOT/server.py" "$TMPROOT" >"$TMPROOT/http-server.log" 2>&1 &
+HTTP_PID=$!
+for attempt in {1..100}; do [[ ! -s "$TMPROOT/http-port" ]] || break; sleep .02; done
+[[ -s "$TMPROOT/http-port" ]]
+HTTP_ORIGIN="http://127.0.0.1:$(cat "$TMPROOT/http-port")"
+for reader_case in reuse token_transient login_transient permanent forbidden empty zero_ttl malformed_ttl missing_ttl; do
   (
     source "$TMPROOT/functions.sh"
+    umask 077 # The actual deploy cache initialization sets this before these helpers.
     BAO_CACHE_DIR="$TMPROOT/reader-$reader_case"
     mkdir -p "$BAO_CACHE_DIR"
     BAO_TOKEN_FILE="$BAO_CACHE_DIR/token"
+    printf '%s' "$HTTP_ORIGIN" > "$BAO_CACHE_DIR/service-address"
+    printf '{"case":"%s","directory":"%s"}' "$reader_case" "$BAO_CACHE_DIR" > "$TMPROOT/http-state"
     DEPLOY_ENVIRONMENT=production
     sleep() { :; }
     timeout() { shift; "$@"; }
+    curl() {
+      [[ "$1" == --disable ]] || return 97
+      local previous="" arg
+      for arg in "$@"; do [[ "$previous" != --max-time ]] || printf '%s\n' "$arg" >> "$BAO_CACHE_DIR/curl.limits"; previous="$arg"; done
+      [[ "$*" != *owned-jwt-secret* && "$*" != *owned-reader-secret* && "$*" != *owned-password* ]] || return 98
+      command curl "$@"
+    }
     kubectl() {
-      local native_phase attempts
-      case "$*" in
-        'create token db-provisioner -n default') native_phase=jwt ;;
-        *'auth/kubernetes/login'*) native_phase=login ;;
-        *'bao kv get -format=json'*) printf '%s' '{"data":{"data":{"APP_DB_PASSWORD":"owned-password"}}}'; return ;;
-        *'bao kv get -field='*) printf '%s' owned-password; return ;;
-        *) echo 'unexpected owned kubectl call' >&2; return 99 ;;
-      esac
-      printf 'call\n' >> "$BAO_CACHE_DIR/$native_phase.calls"
-      attempts="$(wc -l < "$BAO_CACHE_DIR/$native_phase.calls" | tr -d ' ')"
-      if [[ "$reader_case:$native_phase:$attempts" == token_transient:jwt:1 || "$reader_case:$native_phase:$attempts" == login_transient:login:1 ]]; then
-        echo 'context deadline exceeded owned-jwt-secret owned-reader-secret' >&2
-        return 124
+      [[ "$*" == 'create token db-provisioner -n default' ]] || { echo 'forbidden kubectl exec/discovery in cached path' >&2; return 99; }
+      printf 'call\n' >> "$BAO_CACHE_DIR/jwt.calls"
+      if [[ "$reader_case" == token_transient && "$(wc -l < "$BAO_CACHE_DIR/jwt.calls" | tr -d ' ')" == 1 ]]; then
+        echo 'context deadline exceeded owned-jwt-secret' >&2; return 124
       fi
-      if [[ "$native_phase" == login ]]; then
-        case "$reader_case" in
-          permanent) echo 'malformed role owned-jwt-secret owned-reader-secret' >&2; return 7 ;;
-          forbidden) echo 'Code: 403 permission denied owned-reader-secret' >&2; return 2 ;;
-          empty) return 0 ;;
-        esac
-        printf '%s' owned-reader-secret
-      else printf '%s' owned-jwt-secret; fi
+      printf '%s' owned-jwt-secret
     }
     if reader="$(mint_db_reader_token 2>"$BAO_CACHE_DIR/diagnostics")"; then
       [[ "$reader_case" == reuse || "$reader_case" == token_transient || "$reader_case" == login_transient ]]
       [[ "$reader" == owned-reader-secret ]]
-      # Early path read uses the same cached reader as the real late block.
       [[ "$(openbao_get_field operator APP_DB_PASSWORD 2>>"$BAO_CACHE_DIR/diagnostics")" == owned-password ]]
       eval "$late_reader" 2>>"$BAO_CACHE_DIR/diagnostics"
       [[ "$DB_READER_TOKEN" == "$reader" ]]
       for field in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD APP_DB_MIGRATION_PASSWORD; do
-        [[ "$(read_node_db_secret operator "$field")" == owned-password ]]
+        [[ "$(read_node_db_secret operator "$field" 2>>"$BAO_CACHE_DIR/diagnostics")" == owned-password ]]
       done
       expected_jwt=1 expected_login=1
       [[ "$reader_case" != token_transient ]] || expected_jwt=2
       [[ "$reader_case" != login_transient ]] || { expected_jwt=2; expected_login=2; }
       [[ "$(wc -l < "$BAO_CACHE_DIR/jwt.calls" | tr -d ' ')" == "$expected_jwt" ]]
-      [[ "$(wc -l < "$BAO_CACHE_DIR/login.calls" | tr -d ' ')" == "$expected_login" ]]
+      python3 - "$BAO_CACHE_DIR/http.calls" "$expected_login" <<'PY_COUNTS'
+import json,sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+assert len([r for r in rows if r['method']=='POST'])==int(sys.argv[2])
+assert len([r for r in rows if r['method']=='GET'])==1
+assert rows[-1]['path']=='/v1/cogni/data/production/operator'
+PY_COUNTS
       grep -q 'phase=cache native_rc=0 reason=reused' "$BAO_CACHE_DIR/diagnostics"
       [[ "$reader_case" == reuse ]] || grep -q 'reason=server_transient attempt=1/3' "$BAO_CACHE_DIR/diagnostics"
+      if [[ "$reader_case" == reuse ]]; then
+        [[ "$(read_node_db_secret lateoperator APP_DB_PASSWORD 2>>"$BAO_CACHE_DIR/diagnostics")" == owned-password ]]
+        late_limit="$(tail -1 "$BAO_CACHE_DIR/curl.limits")"
+        [[ "$late_limit" -gt 0 && "$late_limit" -le 10 ]]
+        if value="$(read_node_db_secret latetransient APP_DB_PASSWORD 2>>"$BAO_CACHE_DIR/diagnostics")"; then echo 'Late transient widened the original single attempt' >&2; exit 1; fi
+        [[ -z "$value" ]]
+        grep -q 'http_status=503 attempt=1/1' "$BAO_CACHE_DIR/diagnostics"
+        if openbao_get_field operator APP_DB_PASSWORD 31 >>"$BAO_CACHE_DIR/diagnostics" 2>&1; then echo 'Unbounded reader limit accepted' >&2; exit 1; fi
+        for service in missing missingkey; do [[ -z "$(openbao_get_field "$service" ABSENT 2>>"$BAO_CACHE_DIR/diagnostics")" ]]; done
+        for service in ambiguous404 forbidden malformed; do
+          if value="$(openbao_get_field "$service" ABSENT 2>>"$BAO_CACHE_DIR/diagnostics")"; then echo "Unknown path became absence: $service" >&2; exit 1; fi
+          [[ -z "$value" ]]
+        done
+        [[ "$(openbao_get_field transient APP_DB_PASSWORD 2>>"$BAO_CACHE_DIR/diagnostics")" == owned-password ]]
+        python3 - "$BAO_CACHE_DIR/http.calls" <<'PY_READS'
+import json,sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+for service in ['missing','missingkey','ambiguous404','forbidden','malformed']:
+ assert sum(r['path']=='/v1/cogni/data/production/'+service for r in rows)==1
+assert sum(r['path']=='/v1/cogni/data/production/transient' for r in rows)==2
+assert sum(r['path']=='/v1/cogni/data/production/latetransient' for r in rows)==1
+PY_READS
+        # Simulate six seconds of cold discovery without a real wait. DEBUG
+        # changes only the clock immediately before the actual budget calculation.
+        (
+          openbao_reader_address() { [[ "$1" == 10 ]] || return 99; printf '%s' "$HTTP_ORIGIN"; }
+          set -T
+          trap 'if [[ "$BASH_COMMAND" == remaining=* ]]; then SECONDS=$((SECONDS + 6)); fi' DEBUG
+          [[ "$(openbao_reader_request GET cogni/data/production/budget '' owned-reader-secret "$BAO_CACHE_DIR/budget.json" 10)" == 200 ]]
+          trap - DEBUG
+          budget_limit="$(tail -1 "$BAO_CACHE_DIR/curl.limits")"
+          [[ "$budget_limit" -gt 0 && "$budget_limit" -le 4 ]]
+        )
+        for expiry_case in expired unknown malformed; do
+          # An unproven cached value must never become an HTTP request header.
+          printf '%s' expired-reader-secret > "$BAO_TOKEN_FILE"
+          case "$expiry_case" in
+            expired) printf '1' > "${BAO_TOKEN_FILE}.expires-at" ;;
+            unknown) rm -f "${BAO_TOKEN_FILE}.expires-at" ;;
+            malformed) printf 'untrusted-expiry' > "${BAO_TOKEN_FILE}.expires-at" ;;
+          esac
+          [[ "$(read_node_db_secret "expiry-$expiry_case" APP_DB_PASSWORD 2>>"$BAO_CACHE_DIR/diagnostics")" == owned-password ]]
+          python3 - "$BAO_CACHE_DIR/http.calls" "$expiry_case" <<'PY_EXPIRY'
+import json,sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+assert rows[-2]['method']=='POST' and rows[-2]['path']=='/v1/auth/kubernetes/login'
+assert rows[-1]['method']=='GET' and rows[-1]['path']=='/v1/cogni/data/production/expiry-'+sys.argv[2]
+assert rows[-1]['token']=='owned-reader-secret'
+assert all(row['token']!='expired-reader-secret' for row in rows)
+PY_EXPIRY
+          [[ "$(cat "$BAO_TOKEN_FILE")" == owned-reader-secret ]]
+          expiry="$(cat "${BAO_TOKEN_FILE}.expires-at")"
+          [[ "$expiry" =~ ^[0-9]+$ && "$expiry" -gt "$(date +%s)" ]]
+        done
+        for scope in 'POST auth/other 20' 'GET cogni/data/preview/operator 30'; do
+          read -r method route limit <<< "$scope"
+          if openbao_reader_request "$method" "$route" '' '' "$BAO_CACHE_DIR/rejected" "$limit" >>"$BAO_CACHE_DIR/diagnostics" 2>&1; then echo 'Unowned HTTP scope accepted' >&2; exit 1; fi
+        done
+      fi
     else
-      [[ "$reader_case" == permanent || "$reader_case" == forbidden || "$reader_case" == empty ]]
+      [[ "$reader_case" == permanent || "$reader_case" == forbidden || "$reader_case" == empty || "$reader_case" == zero_ttl || "$reader_case" == malformed_ttl || "$reader_case" == missing_ttl ]]
       [[ -z "$reader" && ! -s "$BAO_TOKEN_FILE" ]]
       [[ "$(wc -l < "$BAO_CACHE_DIR/jwt.calls" | tr -d ' ')" == 1 ]]
-      [[ "$(wc -l < "$BAO_CACHE_DIR/login.calls" | tr -d ' ')" == 1 ]]
+      [[ "$(wc -l < "$BAO_CACHE_DIR/http.calls" | tr -d ' ')" == 1 ]]
       case "$reader_case" in
-        permanent) grep -q 'phase=reader_login native_rc=7 reason=permanent' "$BAO_CACHE_DIR/diagnostics" ;;
-        forbidden) grep -q 'native_rc=2 reason=permission_denied' "$BAO_CACHE_DIR/diagnostics" ;;
-        empty) grep -q 'native_rc=0 reason=empty_output' "$BAO_CACHE_DIR/diagnostics" ;;
+        permanent) grep -q 'native_rc=22 http_status=400 reason=permanent' "$BAO_CACHE_DIR/diagnostics" ;;
+        forbidden) grep -q 'http_status=403 reason=permission_denied' "$BAO_CACHE_DIR/diagnostics" ;;
+        empty) grep -q 'native_rc=0 http_status=200 reason=empty_output' "$BAO_CACHE_DIR/diagnostics" ;;
       esac
     fi
-    ! grep -qE 'owned-jwt-secret|owned-reader-secret|owned-password' "$BAO_CACHE_DIR/diagnostics"
+    ! grep -qE 'owned-jwt-secret|owned-reader-secret|owned-password|owned-private-error|expired-reader-secret|untrusted-expiry' "$BAO_CACHE_DIR/diagnostics"
+    [[ ! -e "$BAO_CACHE_DIR/http-request.conf" && ! -e "$BAO_CACHE_DIR/reader-login.json" ]]
+  )
+done
+# Exercise the actual fixed Service discovery separately: the real HTTP test
+# overrides only its private cache origin, never broadening production discovery.
+for service_case in valid namespace selector port external invalid_ip; do
+  (
+    source "$TMPROOT/functions.sh"
+    BAO_CACHE_DIR="$TMPROOT/service-$service_case"; mkdir -p "$BAO_CACHE_DIR"
+    timeout() { shift; "$@"; }
+    kubectl() {
+      [[ "$*" == '-n openbao get service openbao -o json' ]] || return 99
+      python3 - "$service_case" <<'PY_SERVICE'
+import json,sys
+case=sys.argv[1]
+s={'metadata':{'name':'openbao','namespace':'openbao'},'spec':{'type':'ClusterIP','clusterIP':'10.43.0.9','selector':{'app.kubernetes.io/name':'openbao','app.kubernetes.io/instance':'openbao','component':'server'},'ports':[{'port':8200,'targetPort':8200,'protocol':'TCP'}]}}
+if case=='namespace': s['metadata']['namespace']='foreign'
+if case=='selector': s['spec']['selector']['component']='foreign'
+if case=='port': s['spec']['ports'][0]['port']=8201
+if case=='external': s['spec']['type']='ExternalName'
+if case=='invalid_ip': s['spec']['clusterIP']='owned.invalid/path?secret=value'
+print(json.dumps(s))
+PY_SERVICE
+    }
+    if address="$(openbao_reader_address 2>"$BAO_CACHE_DIR/diagnostics")"; then [[ "$service_case" == valid && "$address" == http://10.43.0.9:8200 ]]; else [[ "$service_case" != valid && -z "$address" ]]; fi
+    ! grep -qE 'secret=value|owned.invalid' "$BAO_CACHE_DIR/diagnostics"
   )
 done
 # Execute the actual staged validation/publish block. Invalid final consumer
@@ -248,4 +379,4 @@ fi
 [[ "$entry_output" == *owned-source-resolution-sentinel* ]] \
   || { echo 'Runtime keys incorrectly blocked the runner before custody/source resolution' >&2; exit 1; }
 [[ "$entry_output" != *forbidden-transport* && "$entry_output" != *forbidden-network* ]]
-printf 'runtime-secret-authority: root, ownership, outage, strict bootstrap and publish checks passed\n'
+printf 'runtime-secret-authority: root, ownership, real HTTP reader/cache, outage, strict bootstrap and publish checks passed\n'

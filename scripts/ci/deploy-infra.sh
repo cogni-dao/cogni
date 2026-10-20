@@ -1037,74 +1037,151 @@ PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_HASH="$(previous_runtime_env_value OPENFGA_
 BAO_CACHE_DIR="/tmp/.deploy-infra-bao-cache"
 BAO_TOKEN_FILE="${BAO_CACHE_DIR}/reader-token"
 rm -rf "$BAO_CACHE_DIR" 2>/dev/null || true
-mkdir -p "$BAO_CACHE_DIR"
+(umask 077; mkdir -p "$BAO_CACHE_DIR")
+chmod 700 "$BAO_CACHE_DIR"
+umask 077
+
+# The reader talks to the same in-cluster HTTP API as ESO; kubelet exec is
+# not a prerequisite for repairing shared runtime services under host pressure.
+openbao_reader_address() {
+  local cache="${BAO_CACHE_DIR}/service-address" service_file="${BAO_CACHE_DIR}/service.json" ip rc lookup_limit="${1:-15}"
+  [[ "$lookup_limit" == 10 || "$lookup_limit" == 15 ]] || return 1
+  if [[ -s "$cache" ]]; then cat "$cache"; return 0; fi
+  if timeout "$lookup_limit" kubectl -n openbao get service openbao -o json > "$service_file" 2>"${BAO_CACHE_DIR}/service.stderr"; then :; else
+    rc=$?; printf '[openbao-reader] phase=service_discovery native_rc=%s reason=unavailable\n' "$rc" >&2; return "$rc"
+  fi
+  jq -e '.metadata.name == "openbao" and .metadata.namespace == "openbao" and .spec.type == "ClusterIP"
+    and .spec.selector == {"app.kubernetes.io/name":"openbao","app.kubernetes.io/instance":"openbao","component":"server"}
+    and ([.spec.ports[] | select(.port == 8200 and (.protocol // "TCP") == "TCP" and .targetPort == 8200)] | length) == 1' \
+    "$service_file" >/dev/null 2>&1 \
+    || { printf '[openbao-reader] phase=service_discovery native_rc=1 reason=identity_unproven\n' >&2; return 1; }
+  ip="$(jq -r '.spec.clusterIP // empty' "$service_file")"
+  # Parse an actual IP; no hostname, credential, path or external endpoint input.
+  ip="$(printf '%s' "$ip" | python3 -c 'import ipaddress,sys; a=ipaddress.ip_address(sys.stdin.read()); print("["+str(a)+"]" if a.version==6 else str(a))' 2>/dev/null)" \
+    || { printf '[openbao-reader] phase=service_discovery native_rc=1 reason=address_unproven\n' >&2; return 1; }
+  printf 'http://%s:8200' "$ip" > "$cache"
+  cat "$cache"
+}
+
+# Response and request material remain in the private per-deploy cache. Only
+# numeric HTTP status reaches stdout; JWT/token values never enter curl argv.
+openbao_reader_request() {
+  local method="$1" path="$2" body_file="$3" token="$4" response_file="$5" limit="$6"
+  local address config="${BAO_CACHE_DIR}/http-request.conf" status rc=0 started=$SECONDS remaining discovery_limit
+  case "$method:$path:$limit" in
+    POST:auth/kubernetes/login:20 | GET:cogni/data/"${DEPLOY_ENVIRONMENT}"/*:30 | GET:cogni/data/"${DEPLOY_ENVIRONMENT}"/*:10) : ;;
+    *) printf '[openbao-reader] phase=http_request reason=scope_unproven\n' >&2; return 1 ;;
+  esac
+  discovery_limit=15
+  [[ "$limit" -ge 15 ]] || discovery_limit="$limit"
+  if address="$(openbao_reader_address "$discovery_limit")"; then :; else rc=$?; return "$rc"; fi
+  # Discovery consumes the existing phase budget; it never adds a second timeout.
+  remaining=$((limit - (SECONDS - started)))
+  [[ "$remaining" -gt 0 ]] || return 124
+  : > "$config"
+  if [[ -n "$token" ]]; then
+    [[ "$token" =~ ^[a-zA-Z0-9._-]+$ ]] || return 1
+    printf 'header = "X-Vault-Token: %s"\n' "$token" >> "$config"
+  fi
+  local args=(--disable --silent --show-error --noproxy '*' --proto '=http' --max-redirs 0
+    --connect-timeout "$remaining" --max-time "$remaining" --request "$method" --config "$config"
+    --output "$response_file" --write-out '%{http_code}')
+  [[ -z "$body_file" ]] || args+=(--header 'Content-Type: application/json' --data-binary "@$body_file")
+  if status="$(timeout "$remaining" curl "${args[@]}" "${address}/v1/${path}" 2>"${BAO_CACHE_DIR}/http.stderr")"; then :; else rc=$?; fi
+  rm -f "$config"
+  printf '%s' "$status"
+  return "$rc"
+}
 
 mint_db_reader_token() {
-  if [[ -s "$BAO_TOKEN_FILE" ]]; then
-    printf '%s\n' '[openbao-reader-token] phase=cache native_rc=0 reason=reused' >&2
-    cat "$BAO_TOKEN_FILE"
-    return 0
+  local expires_file="${BAO_TOKEN_FILE}.expires-at" now expires="" ttl="" minted_at
+  now="$(date +%s)" || return 1
+  [[ "$now" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+  if [[ -s "$BAO_TOKEN_FILE" && -s "$expires_file" ]]; then
+    expires="$(cat "$expires_file")"
+    if [[ "$expires" =~ ^[1-9][0-9]{0,9}$ ]] && (( expires > now )); then
+      printf '%s\n' '[openbao-reader-token] phase=cache native_rc=0 reason=reused' >&2
+      cat "$BAO_TOKEN_FILE"
+      return 0
+    fi
   fi
-  local jwt="" tok="" attempt phase rc reason error_file
+  # A token without proven remaining server lease is never reused. Expiry is
+  # measured before native mint/login, with a further 35s conservative margin.
+  rm -f "$BAO_TOKEN_FILE" "$expires_file"
+  local jwt="" tok="" attempt phase rc reason status error_file body response
   error_file="${BAO_CACHE_DIR}/reader-mint.stderr"
+  body="${BAO_CACHE_DIR}/reader-login.json" response="${BAO_CACHE_DIR}/reader-login-response.json"
   for attempt in 1 2 3; do
-    phase=token_request rc=0
+    phase=token_request rc=0 status=000
+    minted_at="$(date +%s)" || return 1
+    [[ "$minted_at" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
     if jwt="$(timeout 15 kubectl create token db-provisioner -n default 2>"$error_file")"; then
       if [[ -n "$jwt" ]]; then
         phase=reader_login
-        if tok="$(timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-          bao write -field=token auth/kubernetes/login \
-          "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>"$error_file")"; then
-          if [[ -n "$tok" ]]; then
-            rm -f "$error_file"
-            printf '%s' "$tok" > "$BAO_TOKEN_FILE"
-            printf '%s' "$tok"
-            return 0
-          fi
+        # jq reads the JWT from stdin; no secret request material in argv.
+        printf '%s' "$jwt" | jq -Rs --arg role "${DEPLOY_ENVIRONMENT}-db-reader" '{role:$role,jwt:.}' > "$body"
+        if status="$(openbao_reader_request POST auth/kubernetes/login "$body" '' "$response" 20)"; then
+          if [[ "$status" == 200 ]]; then
+            tok="$(jq -er '.auth.client_token | select(type == "string" and length > 0)' "$response" 2>/dev/null)" || tok=""
+            ttl="$(jq -er '.auth.lease_duration | select(type == "number" and floor == . and . > 35 and . <= 2147483647)' "$response" 2>/dev/null)" || ttl=""
+            if [[ -n "$tok" && "$ttl" =~ ^[1-9][0-9]{0,9}$ ]]; then
+              expires=$((minted_at + ttl - 35))
+              now="$(date +%s)" || return 1
+              if [[ "$now" =~ ^[1-9][0-9]{0,9}$ ]] && (( expires > now )); then
+                rm -f "$body" "$response" "$error_file"
+                (umask 077; printf '%s' "$expires" > "$expires_file"; printf '%s' "$tok" > "$BAO_TOKEN_FILE")
+                printf '%s' "$tok"
+                return 0
+              fi
+            fi
+          else rc=22; fi
         else rc=$?; fi
+        rm -f "$body" "$response"
       fi
     else rc=$?; fi
     reason=permanent
-    if [[ "$rc" -eq 124 ]] || grep -qiE 'context deadline exceeded|Internal error occurred: Timeout occurred|i/o timeout|TLS handshake timeout|connection (refused|reset)|unable to connect to the server|the server is currently unable to handle the request|Code: (429|500|502|503|504)' "$error_file"; then
+    if [[ "$rc" -eq 124 || "$rc" -eq 28 || "$rc" -eq 7 || "$rc" -eq 52 || "$rc" -eq 56 || "$status" == 429 || "$status" =~ ^5[0-9][0-9]$ ]] \
+      || grep -qiE 'context deadline exceeded|i/o timeout|TLS handshake timeout|connection (refused|reset)|unable to connect to the server|the server is currently unable to handle the request|Code: (429|500|502|503|504)' "$error_file"; then
       reason=server_transient
-    elif grep -qiE 'Code: 403|permission denied|Forbidden' "$error_file"; then
+    elif [[ "$status" == 401 || "$status" == 403 ]] || grep -qiE 'Code: 403|permission denied|Forbidden' "$error_file"; then
       reason=permission_denied
-    elif [[ "$rc" -eq 0 ]]; then
-      reason=empty_output
-    fi
+    elif [[ "$rc" -eq 0 ]]; then reason=empty_output; fi
     rm -f "$error_file"
-    # Never print command output: either stream may contain a JWT or reader token.
-    printf '[openbao-reader-token] phase=%s native_rc=%s reason=%s attempt=%s/3\n' \
-      "$phase" "$rc" "$reason" "$attempt" >&2
-    if [[ "$reason" != server_transient ]]; then
-      [[ "$rc" -ne 0 ]] || return 1
-      return "$rc"
-    fi
+    printf '[openbao-reader-token] phase=%s native_rc=%s http_status=%s reason=%s attempt=%s/3\n' \
+      "$phase" "$rc" "$status" "$reason" "$attempt" >&2
+    [[ "$reason" == server_transient ]] || { [[ "$rc" -ne 0 ]] && return "$rc"; return 1; }
     [[ "$attempt" -lt 3 ]] && sleep 3
   done
   return 1
 }
 
 openbao_get_field() {
-  # set -u safe: every local initialized (a failed-all-attempts path must not leave
-  # a var unset for the final jq — bug.5081 follow-up). Returns value or "" (rc 0) so
-  # the downstream `[[ -n ]] || log_fatal` keeps its clean "absent" message.
-  local svc="$1" key="$2" tok="" attempt cache=""
+  local svc="$1" key="$2" read_limit="${3:-30}" max_attempts="${4:-3}" tok="" attempt cache="" status=000 rc=0
+  [[ "$read_limit" == 10 || "$read_limit" == 30 ]] || return 1
+  [[ "$max_attempts" == 1 || "$max_attempts" == 3 ]] || return 1
+  [[ "$svc" =~ ^[a-zA-Z0-9_-]+$ ]] || return 1
   cache="${BAO_CACHE_DIR}/path-${svc}.json"
   if [[ ! -s "$cache" ]]; then
-    for attempt in 1 2 3; do
-      tok="$(mint_db_reader_token)" || break
-      if timeout 30 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-        BAO_TOKEN="${tok}" bao kv get -format=json "cogni/${DEPLOY_ENVIRONMENT}/${svc}" 2>/dev/null > "${cache}.tmp" \
-        && [[ -s "${cache}.tmp" ]]; then
-        mv -f "${cache}.tmp" "$cache"; break
-      fi
-      # read failed: drop the cached token in case it expired mid-deploy, then retry
-      rm -f "${cache}.tmp" "$BAO_TOKEN_FILE"
-      [[ "$attempt" -lt 3 ]] && sleep 3
+    for ((attempt=1; attempt<=max_attempts; attempt++)); do
+      tok="$(mint_db_reader_token)" || return 1
+      rc=0 status=000
+      if status="$(openbao_reader_request GET "cogni/data/${DEPLOY_ENVIRONMENT}/${svc}" '' "$tok" "${cache}.tmp" "$read_limit")"; then
+        if [[ "$status" == 200 ]] && jq -e '.data.data | type == "object"' "${cache}.tmp" >/dev/null 2>&1; then
+          mv -f "${cache}.tmp" "$cache"; break
+        fi
+        # Positive HTTP404 is a known missing path; no unavailable read becomes absence.
+        if [[ "$status" == 404 ]] && jq -e 'type == "object" and .errors == []' "${cache}.tmp" >/dev/null 2>&1; then rm -f "${cache}.tmp"; return 0; fi
+        rc=22
+      else rc=$?; fi
+      rm -f "${cache}.tmp"
+      printf '[openbao-reader] phase=kv_read native_rc=%s http_status=%s attempt=%s/%s\n' "$rc" "$status" "$attempt" "$max_attempts" >&2
+      if [[ "$rc" -eq 124 || "$rc" -eq 28 || "$rc" -eq 7 || "$rc" -eq 52 || "$rc" -eq 56 || "$status" == 429 || "$status" =~ ^5[0-9][0-9]$ ]]; then
+        rm -f "$BAO_TOKEN_FILE"
+        [[ "$attempt" -lt "$max_attempts" ]] && sleep 3
+      else return 1; fi
     done
   fi
-  [[ -s "$cache" ]] || return 0
+  [[ -s "$cache" ]] || return 1
   jq -r --arg k "$key" '.data.data[$k] // empty' "$cache" 2>/dev/null
 }
 
@@ -1124,7 +1201,8 @@ source_openbao_runtime_key() {
   "$OPENBAO_RUNTIME_SSOT" || return 0
   unset "$key" # An absent Bao value must never retain a legacy workflow value.
   for svc in "$@"; do
-    value="$(openbao_get_field "$svc" "$key" || true)"
+    value="$(openbao_get_field "$svc" "$key")" \
+      || log_fatal "OpenBao runtime SSoT ${key} unavailable from expected owner path; see value-free reader diagnostics"
     if [[ -n "$value" ]]; then
       export "${key}=${value}"
       log_info "  sourced ${key} from OpenBao cogni/${DEPLOY_ENVIRONMENT}/${svc}"
@@ -1138,7 +1216,8 @@ source_openbao_runtime_key() {
 }
 
 source_operator_database_service_url() {
-  OPERATOR_DATABASE_SERVICE_URL="$(openbao_get_field operator DATABASE_SERVICE_URL || true)"
+  OPERATOR_DATABASE_SERVICE_URL="$(openbao_get_field operator DATABASE_SERVICE_URL)" \
+    || log_fatal "Canonical operator DATABASE_SERVICE_URL unavailable from OpenBao; see value-free reader diagnostics"
   [[ -n "$OPERATOR_DATABASE_SERVICE_URL" ]] \
     || log_fatal "Canonical operator DATABASE_SERVICE_URL is absent from OpenBao"
   export OPERATOR_DATABASE_SERVICE_URL
@@ -1393,9 +1472,8 @@ printf '%s=%s\n' APP_DB_READONLY_PASSWORD "$APP_DB_READONLY_PASSWORD" >> "$RUNTI
 # re-derived. derive_secret survives ONLY as the genesis default for a fresh volume
 # OpenBao has not seeded yet (first provision, pre-materialize). The reader/writer
 # roles are CREATEd fresh each provision (ALTERable, not the superuser) — left derived.
-DOLTGRES_PASSWORD_SSOT="$(
-  openbao_get_field operator DOLTGRES_PASSWORD || true
-)"
+DOLTGRES_PASSWORD_SSOT="$(openbao_get_field operator DOLTGRES_PASSWORD)" \
+  || log_fatal "Canonical DOLTGRES_PASSWORD unavailable from OpenBao; refusing genesis fallback after a failed read"
 if [ -n "$DOLTGRES_PASSWORD_SSOT" ]; then
   DOLTGRES_PASSWORD="$DOLTGRES_PASSWORD_SSOT"
 else
@@ -1532,10 +1610,7 @@ $RUNTIME_COMPOSE --profile bootstrap run --rm \
 # Reuse the earlier file-cached SAME-role reader; do not shadow its login/cache policy.
 DB_READER_TOKEN=""
 read_node_db_secret() {
-  local node="$1" key="$2"
-  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-    BAO_TOKEN="${DB_READER_TOKEN}" \
-    bao kv get -field="$key" "cogni/${DEPLOY_ENVIRONMENT}/${node}" 2>/dev/null || true
+  openbao_get_field "$1" "$2" 10 1
 }
 DB_READER_TOKEN="$(mint_db_reader_token)" \
   || log_fatal "db-provision: ${DEPLOY_ENVIRONMENT}-db-reader token unavailable; see value-free mint phase diagnostics"
@@ -2333,7 +2408,8 @@ SECEOF
   # Fresh/plain-Secret bootstrap falls back to the workflow env value. Runs ON
   # THE VM — REPO_ROOT is runner-only and UNBOUND here under `set -u`; invoke
   # the scp'd /tmp copy, never $REPO_ROOT (regression #1482).
-  APP_SYNC_WEBHOOK_SECRET="$(openbao_get_field operator GH_WEBHOOK_SECRET || true)"
+  APP_SYNC_WEBHOOK_SECRET="$(openbao_get_field operator GH_WEBHOOK_SECRET)" \
+    || log_fatal "Canonical GH_WEBHOOK_SECRET unavailable from OpenBao; refusing webhook fallback after a failed read"
   if [[ -z "$APP_SYNC_WEBHOOK_SECRET" && "${OPENBAO_RUNTIME_SSOT:-false}" == "true" ]]; then
     log_error "  GH_WEBHOOK_SECRET absent from OpenBao cogni/${DEPLOY_ENVIRONMENT}/operator — refusing to sync a non-operator copy to the App"
     exit 1
