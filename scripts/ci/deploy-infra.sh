@@ -1094,16 +1094,27 @@ openbao_reader_request() {
 }
 
 mint_db_reader_token() {
-  if [[ -s "$BAO_TOKEN_FILE" ]]; then
-    printf '%s\n' '[openbao-reader-token] phase=cache native_rc=0 reason=reused' >&2
-    cat "$BAO_TOKEN_FILE"
-    return 0
+  local expires_file="${BAO_TOKEN_FILE}.expires-at" now expires="" ttl="" minted_at
+  now="$(date +%s)" || return 1
+  [[ "$now" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+  if [[ -s "$BAO_TOKEN_FILE" && -s "$expires_file" ]]; then
+    expires="$(cat "$expires_file")"
+    if [[ "$expires" =~ ^[1-9][0-9]{0,9}$ ]] && (( expires > now )); then
+      printf '%s\n' '[openbao-reader-token] phase=cache native_rc=0 reason=reused' >&2
+      cat "$BAO_TOKEN_FILE"
+      return 0
+    fi
   fi
+  # A token without proven remaining server lease is never reused. Expiry is
+  # measured before native mint/login, with a further 35s conservative margin.
+  rm -f "$BAO_TOKEN_FILE" "$expires_file"
   local jwt="" tok="" attempt phase rc reason status error_file body response
   error_file="${BAO_CACHE_DIR}/reader-mint.stderr"
   body="${BAO_CACHE_DIR}/reader-login.json" response="${BAO_CACHE_DIR}/reader-login-response.json"
   for attempt in 1 2 3; do
     phase=token_request rc=0 status=000
+    minted_at="$(date +%s)" || return 1
+    [[ "$minted_at" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
     if jwt="$(timeout 15 kubectl create token db-provisioner -n default 2>"$error_file")"; then
       if [[ -n "$jwt" ]]; then
         phase=reader_login
@@ -1112,11 +1123,16 @@ mint_db_reader_token() {
         if status="$(openbao_reader_request POST auth/kubernetes/login "$body" '' "$response" 20)"; then
           if [[ "$status" == 200 ]]; then
             tok="$(jq -er '.auth.client_token | select(type == "string" and length > 0)' "$response" 2>/dev/null)" || tok=""
-            if [[ -n "$tok" ]]; then
-              rm -f "$body" "$response" "$error_file"
-              printf '%s' "$tok" > "$BAO_TOKEN_FILE"
-              printf '%s' "$tok"
-              return 0
+            ttl="$(jq -er '.auth.lease_duration | select(type == "number" and floor == . and . > 35 and . <= 2147483647)' "$response" 2>/dev/null)" || ttl=""
+            if [[ -n "$tok" && "$ttl" =~ ^[1-9][0-9]{0,9}$ ]]; then
+              expires=$((minted_at + ttl - 35))
+              now="$(date +%s)" || return 1
+              if [[ "$now" =~ ^[1-9][0-9]{0,9}$ ]] && (( expires > now )); then
+                rm -f "$body" "$response" "$error_file"
+                (umask 077; printf '%s' "$expires" > "$expires_file"; printf '%s' "$tok" > "$BAO_TOKEN_FILE")
+                printf '%s' "$tok"
+                return 0
+              fi
             fi
           else rc=22; fi
         else rc=$?; fi

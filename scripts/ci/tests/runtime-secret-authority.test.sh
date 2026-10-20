@@ -151,7 +151,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
    elif mode=='forbidden': status=403; response={'errors':['owned-reader-secret']}
    elif mode=='permanent': status=400; response={'errors':['owned-jwt-secret']}
    elif mode=='empty': response={'auth':{}}
-   else: response={'auth':{'client_token':'owned-reader-secret'}}
+   elif mode=='missing_ttl': response={'auth':{'client_token':'owned-reader-secret'}}
+   elif mode=='zero_ttl': response={'auth':{'client_token':'owned-reader-secret','lease_duration':0}}
+   elif mode=='malformed_ttl': response={'auth':{'client_token':'owned-reader-secret','lease_duration':'900'}}
+   else: response={'auth':{'client_token':'owned-reader-secret','lease_duration':900}}
   elif self.command=='GET' and self.path.startswith('/v1/cogni/data/production/'):
    assert self.headers.get('X-Vault-Token')=='owned-reader-secret'
    service=self.path.rsplit('/',1)[1]
@@ -176,7 +179,7 @@ HTTP_PID=$!
 for attempt in {1..100}; do [[ ! -s "$TMPROOT/http-port" ]] || break; sleep .02; done
 [[ -s "$TMPROOT/http-port" ]]
 HTTP_ORIGIN="http://127.0.0.1:$(cat "$TMPROOT/http-port")"
-for reader_case in reuse token_transient login_transient permanent forbidden empty; do
+for reader_case in reuse token_transient login_transient permanent forbidden empty zero_ttl malformed_ttl missing_ttl; do
   (
     source "$TMPROOT/functions.sh"
     umask 077 # The actual deploy cache initialization sets this before these helpers.
@@ -258,13 +261,34 @@ PY_READS
           budget_limit="$(tail -1 "$BAO_CACHE_DIR/curl.limits")"
           [[ "$budget_limit" -gt 0 && "$budget_limit" -le 4 ]]
         )
+        for expiry_case in expired unknown malformed; do
+          # An unproven cached value must never become an HTTP request header.
+          printf '%s' expired-reader-secret > "$BAO_TOKEN_FILE"
+          case "$expiry_case" in
+            expired) printf '1' > "${BAO_TOKEN_FILE}.expires-at" ;;
+            unknown) rm -f "${BAO_TOKEN_FILE}.expires-at" ;;
+            malformed) printf 'untrusted-expiry' > "${BAO_TOKEN_FILE}.expires-at" ;;
+          esac
+          [[ "$(read_node_db_secret "expiry-$expiry_case" APP_DB_PASSWORD 2>>"$BAO_CACHE_DIR/diagnostics")" == owned-password ]]
+          python3 - "$BAO_CACHE_DIR/http.calls" "$expiry_case" <<'PY_EXPIRY'
+import json,sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+assert rows[-2]['method']=='POST' and rows[-2]['path']=='/v1/auth/kubernetes/login'
+assert rows[-1]['method']=='GET' and rows[-1]['path']=='/v1/cogni/data/production/expiry-'+sys.argv[2]
+assert rows[-1]['token']=='owned-reader-secret'
+assert all(row['token']!='expired-reader-secret' for row in rows)
+PY_EXPIRY
+          [[ "$(cat "$BAO_TOKEN_FILE")" == owned-reader-secret ]]
+          expiry="$(cat "${BAO_TOKEN_FILE}.expires-at")"
+          [[ "$expiry" =~ ^[0-9]+$ && "$expiry" -gt "$(date +%s)" ]]
+        done
         for scope in 'POST auth/other 20' 'GET cogni/data/preview/operator 30'; do
           read -r method route limit <<< "$scope"
           if openbao_reader_request "$method" "$route" '' '' "$BAO_CACHE_DIR/rejected" "$limit" >>"$BAO_CACHE_DIR/diagnostics" 2>&1; then echo 'Unowned HTTP scope accepted' >&2; exit 1; fi
         done
       fi
     else
-      [[ "$reader_case" == permanent || "$reader_case" == forbidden || "$reader_case" == empty ]]
+      [[ "$reader_case" == permanent || "$reader_case" == forbidden || "$reader_case" == empty || "$reader_case" == zero_ttl || "$reader_case" == malformed_ttl || "$reader_case" == missing_ttl ]]
       [[ -z "$reader" && ! -s "$BAO_TOKEN_FILE" ]]
       [[ "$(wc -l < "$BAO_CACHE_DIR/jwt.calls" | tr -d ' ')" == 1 ]]
       [[ "$(wc -l < "$BAO_CACHE_DIR/http.calls" | tr -d ' ')" == 1 ]]
@@ -274,7 +298,7 @@ PY_READS
         empty) grep -q 'native_rc=0 http_status=200 reason=empty_output' "$BAO_CACHE_DIR/diagnostics" ;;
       esac
     fi
-    ! grep -qE 'owned-jwt-secret|owned-reader-secret|owned-password|owned-private-error' "$BAO_CACHE_DIR/diagnostics"
+    ! grep -qE 'owned-jwt-secret|owned-reader-secret|owned-password|owned-private-error|expired-reader-secret|untrusted-expiry' "$BAO_CACHE_DIR/diagnostics"
     [[ ! -e "$BAO_CACHE_DIR/http-request.conf" && ! -e "$BAO_CACHE_DIR/reader-login.json" ]]
   )
 done
