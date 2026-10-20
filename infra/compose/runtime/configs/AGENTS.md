@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
+- **Last reviewed:** 2026-10-19
 
 ## Purpose
 
@@ -58,6 +59,7 @@ Mounted as volumes in docker-compose.yml.
 - docker-compose.dev.yml mounts `alloy-config.alloy`; docker-compose.yml mounts `alloy-config.metrics.alloy`
 - Both configs collect PostgreSQL container stderr and share identical log noise suppression: drops successful fast health-check/metrics-scrape logs (fail-safe — only drops when JSON parses AND required fields match). The deployed metrics config also reads the persistent host kernel journal for OOM/SIGKILL attribution.
 - Infra metrics: `prometheus.exporter.cadvisor` (container memory/CPU/OOM/network/disk) + `prometheus.exporter.unix` (host memory/CPU/filesystem/network, conntrack occupancy, socket state, listen overflow/SYN-cookie/abort-on-memory counters); requires host mounts `/proc:/host/proc:ro`, `/sys:/host/sys:ro`, `/:/host/root:ro`
+- cAdvisor Docker actor attribution also requires the declared host cgroup namespace and read-only overlay2 mount-id metadata bind; unsupported Docker topology fails before normal Compose reconciliation. `container_memory_failures_total{failure_type="pgmajfault",scope="container"}` supplies workload paging attribution.
 - Treating "metrics config without creds" as deployment misconfig (not tolerated)
 
 ## Dependencies

@@ -3,14 +3,14 @@
 
 /**
  * Module: `@tests/ci-invariants/native/cadvisor-actor-coverage`
- * Purpose: Measure native container attribution before changing collector configuration.
+ * Purpose: Prove declared collector attribution with a genuine historical negative control.
  * Scope: CI-owned Docker only. Does not access deployed environments or credentials.
  * Invariants:
  *   - RAW_ACTOR_COVERAGE: both owned actors appear before downstream relabeling.
  *   - REAL_IO: a finite fsync workload increases its own exported write counter.
  *   - ROOT_IS_NOT_AN_ACTOR: root-only metrics cannot satisfy container coverage.
- *   - MINIMAL_VISIBILITY: experimental namespace and exact Docker metadata mount only.
- *   - BASELINE_CONTROL: declared private namespace must expose root-only metrics.
+ *   - DECLARED_VISIBILITY: positive actor scope comes from the actual Compose declaration.
+ *   - BASELINE_CONTROL: historical private namespace without metadata exposes root only.
  * Side-effects: IO (CI-owned Docker containers; reads declared host mounts and writes an owned 16MiB file).
  * Links: story.5095, task.5280, docs/spec/cicd-platform-boundary.md
  * @internal
@@ -34,7 +34,16 @@ const runtime = path.resolve(__dirname, "../../../infra/compose/runtime");
 interface Service {
   image: string;
   user?: string;
-  volumes?: string[];
+  volumes?: (
+    | string
+    | {
+        type: string;
+        source: string;
+        target: string;
+        read_only?: boolean;
+        bind?: { create_host_path?: boolean };
+      }
+  )[];
   privileged?: boolean;
   cap_add?: string[];
   cap_drop?: string[];
@@ -150,7 +159,6 @@ describe.skipIf(!process.env.CI)(
           "cap_add",
           "cap_drop",
           "security_opt",
-          "cgroup",
           "pid",
         ] as const) {
           expect(
@@ -158,8 +166,24 @@ describe.skipIf(!process.env.CI)(
             `Unmodelled Compose Alloy setting: ${key}`
           ).toBeUndefined();
         }
+        expect(alloyService.cgroup).toBe("host");
+        const metadataPath = "/var/lib/docker/image/overlay2/layerdb/mounts";
+        const metadata = (alloyService.volumes ?? []).find(
+          (volume) =>
+            typeof volume !== "string" && volume.target === metadataPath
+        );
+        expect(metadata).toMatchObject({
+          type: "bind",
+          source: metadataPath,
+          target: metadataPath,
+          read_only: true,
+          bind: { create_host_path: false },
+        });
         const mounts = (alloyService.volumes ?? []).flatMap((volume) => {
-          const [source, target, mode] = volume.split(":");
+          const [source, target, mode] =
+            typeof volume === "string"
+              ? volume.split(":")
+              : [volume.source, volume.target, volume.read_only ? "ro" : "rw"];
           // Log mounts belong to components omitted from this focused exporter fixture.
           // All existing collector-visible host roots/socket retain their exact targets.
           if (!source.startsWith("/") || source.startsWith("/var/log/"))
@@ -185,6 +209,36 @@ describe.skipIf(!process.env.CI)(
           exporter,
           "Could not extract exact committed cAdvisor component"
         ).toBeTruthy();
+        const deploySource = readFileSync(
+          path.resolve(runtime, "../../../scripts/ci/deploy-infra.sh"),
+          "utf8"
+        );
+        const preflight = deploySource.match(
+          /^verify_cadvisor_topology\(\) \{[\s\S]*?^\}/m
+        )?.[0];
+        if (!preflight)
+          throw new Error("Declared collector topology preflight missing");
+        const topologyInvocation = deploySource.indexOf(
+          "  verify_cadvisor_topology\n"
+        );
+        expect(topologyInvocation).toBeGreaterThan(0);
+        expect(topologyInvocation).toBeLessThan(
+          deploySource.indexOf("$RUNTIME_COMPOSE up -d postgres")
+        );
+        const verifyTopology = (
+          collector: StartedTestContainer,
+          topology: string
+        ) =>
+          collector.exec([
+            "/bin/sh",
+            "-c",
+            `native_topology="$1"
+ docker() { printf '%s\\n' "$native_topology"; }
+ ${preflight}
+ verify_cadvisor_topology`,
+            "owned-topology-proof",
+            topology,
+          ]);
         const host = await docker.info();
         console.info(
           "CADVISOR_DECLARED_BASELINE",
@@ -220,21 +274,9 @@ describe.skipIf(!process.env.CI)(
         };
         const writer = await actor(writerService);
         const idle = await actor(idleService);
-        // Previous native host-namespace-only comparison reached Docker discovery
-        // but failed opening this exact mount-id path (run 39364649134). The pinned
-        // cAdvisor handler requires it before registering a Docker container.
-        expect(
-          host.Driver,
-          "Only the observed overlay2 topology is modeled"
-        ).toBe("overlay2");
-        expect(host.DockerRootDir.startsWith("/")).toBe(true);
-        const metadataPath = path.join(
-          host.DockerRootDir,
-          "image",
-          host.Driver,
-          "layerdb",
-          "mounts"
-        );
+        // Model only the supported topology declared by the real deployment preflight.
+        expect(host.Driver).toBe("overlay2");
+        expect(host.DockerRootDir).toBe("/var/lib/docker");
         const startCollector = async (hostCgroup: boolean) => {
           const collector = hostCgroup
             ? new HostCgroupContainer(alloyService.image)
@@ -244,11 +286,8 @@ describe.skipIf(!process.env.CI)(
             .withUser(alloyService.user ?? "")
             .withBindMounts(
               hostCgroup
-                ? [
-                    ...mounts,
-                    { source: metadataPath, target: metadataPath, mode: "ro" },
-                  ]
-                : mounts
+                ? mounts
+                : mounts.filter((mount) => mount.target !== metadataPath)
             )
             .withTmpFs({ "/var/lib/alloy": "rw" })
             .withCopyContentToContainer([
@@ -312,6 +351,12 @@ describe.skipIf(!process.env.CI)(
           return started;
         };
         const alloy = await startCollector(false);
+        // Native Docker identity is read above; only its CLI transport is supplied
+        // to the owned image. Directory checks execute against actual bind mounts.
+        const topology = `${host.DockerRootDir}|${host.Driver}`;
+        const missing = await verifyTopology(alloy, topology);
+        expect(missing.exitCode).not.toBe(0);
+        expect(missing.output).toContain("cadvisor_metadata_path_missing");
         const raw = async (collector = alloy) => {
           const base = `http://${collector.getHost()}:${collector.getMappedPort(12345)}`;
           const response = await fetch(
@@ -336,7 +381,7 @@ describe.skipIf(!process.env.CI)(
           owned: [writer, idle].map((container) => ({
             id: container.getId(),
             rows: actorRows(rows, container).filter((row) =>
-              /^(container_(cpu_usage_seconds_total|memory_working_set_bytes|fs_(reads|writes)_bytes_total|blkio_device_usage_total))$/.test(
+              /^(container_(cpu_usage_seconds_total|memory_working_set_bytes|memory_failures_total|fs_(reads|writes)_bytes_total|blkio_device_usage_total))$/.test(
                 row.name
               )
             ),
@@ -364,7 +409,20 @@ describe.skipIf(!process.env.CI)(
         await alloy.stop();
         owned.splice(owned.indexOf(alloy), 1);
         collectorErrors.clear();
-        const variant = await startCollector(true);
+        const variant = await startCollector(alloyService.cgroup === "host");
+        const supported = await verifyTopology(variant, topology);
+        expect(supported.exitCode, supported.output).toBe(0);
+        const unsupported = await verifyTopology(
+          variant,
+          "/unsupported|overlay2"
+        );
+        expect(unsupported.exitCode).not.toBe(0);
+        expect(unsupported.output).toContain("cadvisor_topology_unsupported");
+        console.info("CADVISOR_TOPOLOGY_CONTROLS", {
+          supported: supported.output.trim(),
+          missing: missing.exitCode,
+          unsupported: unsupported.exitCode,
+        });
         const visible = await poll(
           () => raw(variant),
           (rows) =>
@@ -392,6 +450,16 @@ describe.skipIf(!process.env.CI)(
           coverage(visible, idle, idleService),
           "Missing raw owned idle identity; this is not two-actor coverage"
         ).toBe(true);
+        for (const actor of [writer, idle])
+          expect(
+            actorRows(visible, actor).some(
+              (row) =>
+                row.name === "container_memory_failures_total" &&
+                row.labels.failure_type === "pgmajfault" &&
+                row.labels.scope === "container"
+            )
+          ).toBe(true);
+        expect(config).toContain("container_memory_failures_total");
         const baseline = writeBytes(actorRows(visible, writer));
         expect(
           baseline,

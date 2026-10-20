@@ -733,6 +733,21 @@ fi
 EDGE_COMPOSE="docker compose --project-name cogni-edge -f /opt/cogni-template-edge/docker-compose.yml"
 RUNTIME_COMPOSE="docker compose --project-name cogni-runtime --env-file /opt/cogni-template-runtime/.env -f /opt/cogni-template-runtime/docker-compose.yml"
 RUNTIME_COMPOSE_FILE="/opt/cogni-template-runtime/docker-compose.yml"
+
+# The collector supports this observed Docker layout only. Emit native identity
+# before any Compose recreation; a different/missing layout must fail closed.
+verify_cadvisor_topology() {
+  local topology metadata_path=/var/lib/docker/image/overlay2/layerdb/mounts
+  topology="$(docker info --format '{{.DockerRootDir}}|{{.Driver}}')" || return 1
+  printf '[deploy-infra] cAdvisor DockerRootDir|Driver=%s metadataPath=%s\n' "$topology" "$metadata_path"
+  [ "$topology" = '/var/lib/docker|overlay2' ] \
+    || { echo 'cadvisor_topology_unsupported' >&2; return 1; }
+  [ -d "$metadata_path" ] \
+    || { echo 'cadvisor_metadata_path_missing' >&2; return 1; }
+}
+if [ "${K8S_SECRETS_ONLY:-false}" != true ]; then
+  verify_cadvisor_topology
+fi
 # doltgres presence must be read from the STATIC compose file, not `compose config
 # --services` (which fully validates env interpolation → flakes empty on any unset var
 # → doltgres false-reads "absent" → knowledge plane silently skipped). Fail LOUD if the
