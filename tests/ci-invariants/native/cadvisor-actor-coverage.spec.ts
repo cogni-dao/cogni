@@ -709,7 +709,7 @@ describe.skipIf(!process.env.CI)(
               const result = await nested.exec([
                 "wget",
                 "-qO-",
-                `http://127.0.0.1:${port}/metrics`,
+                `http://127.0.0.1:${port}/api/v0/component/prometheus.exporter.cadvisor.default/metrics`,
               ]);
               return result.exitCode === 0 ? samples(result.stdout) : [];
             },
