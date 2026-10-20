@@ -563,6 +563,14 @@ prometheus.relabel "infra_metrics" {
     action        = "drop"
   }
 
+  // Anonymous root/system cgroups would collapse after id/image/name removal.
+  // Only named Compose actors belong in the container attribution stream.
+  rule {
+    source_labels = ["__name__", "container_label_com_docker_compose_service"]
+    regex         = "container_.*;"
+    action        = "drop"
+  }
+
   // Drop filesystem capacity metrics for virtual/pseudo filesystems.
   rule {
     source_labels = ["__name__", "fstype"]
