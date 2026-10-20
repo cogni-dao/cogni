@@ -10,9 +10,11 @@
 #          full-line `#` comments + one `CIDR:port,port` allow line per entry.
 #
 # Scoping — PLACEMENT, not membership (bug.5191): an egress CIDR is a property of
-# WHERE a row's workload runs, so a row contributes to <env> only when it BOTH
-# deploys there (`envs:`) AND is placed off-cluster there
-# (`deployment_provider.<env>: akash`). Unioning on `envs:` alone opened a node's
+# WHERE a row's workload runs, so a row contributes only from a declared lane
+# (`envs:`) placed off-cluster (`deployment_provider.<lane>: akash`). A destination
+# retains its own, the explicit caller's, and its custodied foreign-lane grants.
+# Each entry's source/destination env and port restrictions still apply.
+# Unioning on `envs:` alone opened a node's
 # Akash provider NAT to the substrate ports of an env whose placement is k3s —
 # network reach granted to a provider hosting nothing for that env. K3S_IS_DEFAULT:
 # an absent per-env override is k3s, which runs inside the env VM's own cluster and
@@ -68,6 +70,18 @@ source_envs=("$DESTINATION_ENV")
 [[ "$ENV_NAME" == "$DESTINATION_ENV" ]] || source_envs+=("$ENV_NAME")
 # The installed file replaces every managed grant on this VM. Retain the
 # destination's own grants before adding the caller's permitted foreign grants.
+# An ordinary self-lane reconcile must also retain every foreign Akash lane
+# this destination custodies; its provider grants are not owned by the caller.
+for catalog_file in "$CATALOG_ROOT"/*.yaml; do
+  [ -e "$catalog_file" ] || continue
+  row_name="$(yq -N '.name // ""' "$catalog_file")"
+  for lane in $(yq -N '.envs[]?' "$catalog_file"); do
+    case " ${source_envs[*]} " in *" $lane "*) continue ;; esac
+    control_env="$(CATALOG_DIR="$CATALOG_ROOT" control_env_for "$lane" "$row_name")" || exit 1
+    [ "$control_env" = "$DESTINATION_ENV" ] || continue
+    source_envs+=("$lane")
+  done
+done
 for SOURCE_ENV in "${source_envs[@]}"; do
 for catalog_file in "$CATALOG_ROOT"/*.yaml; do
   [ -e "$catalog_file" ] || continue
@@ -84,6 +98,13 @@ for catalog_file in "$CATALOG_ROOT"/*.yaml; do
     exit 1
   }
   [ "$provider" = "akash" ] || continue
+
+  # Discovery of a custodied lane on one row does not authorize another row.
+  # Preserve existing destination/caller behavior; inferred lanes require custody.
+  if [ "$SOURCE_ENV" != "$DESTINATION_ENV" ] && [ "$SOURCE_ENV" != "$ENV_NAME" ]; then
+    control_env="$(CATALOG_DIR="$CATALOG_ROOT" control_env_for "$SOURCE_ENV" "$row_name")" || exit 1
+    [ "$control_env" = "$DESTINATION_ENV" ] || continue
+  fi
 
   # Native migration Jobs run on the custodian, while Postgres is lane-local.
   # This is down-trust only: never admit a nonproduction client to production.
