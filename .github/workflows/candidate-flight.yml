@@ -484,7 +484,7 @@ jobs:
       matrix:
         node: ${{ fromJson(needs.decide.outputs.deployment_node_targets_json) }}
     concurrency:
-      group: prepare-substrate-deploy-branch-candidate-a-${{ matrix.node }}
+      group: flight-candidate-a-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: candidate-a
@@ -612,6 +612,9 @@ jobs:
           DEPLOY_REPOSITORY: ${{ steps.deploy-repo.outputs.repository }}
           NODE: ${{ matrix.node }}
           PER_NODE_BRANCH: deploy/candidate-a-${{ matrix.node }}
+          SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
+          SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha || fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
+          SOURCE_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
           required=(
@@ -639,6 +642,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
 
           PRESERVED_IMAGE_REF=""
           if [ "$DEPLOYMENT_PROVIDER" = "k3s" ]; then
@@ -674,6 +678,7 @@ jobs:
               "nodes/${NODE}/k8s/external-secrets/candidate-a/"
           fi
 
+          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
           git add -A
           if git diff --cached --quiet; then
             echo "Deploy branch ${PER_NODE_BRANCH} already has substrate shape"
@@ -1292,7 +1297,7 @@ jobs:
         env: [candidate-a]
         node: ${{ fromJson(needs.decide.outputs.flight_targets_json) }}
     concurrency:
-      group: candidate-flight-pipeline-${{ matrix.env }}-${{ matrix.node }}
+      group: flight-candidate-a-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: candidate-a
@@ -1390,6 +1395,9 @@ jobs:
           GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
           DEPLOY_REPOSITORY: ${{ steps.deploy-repo.outputs.repository }}
           PER_NODE_BRANCH: deploy/${{ matrix.env }}-${{ matrix.node }}
+          SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
+          SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha || fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
+          SOURCE_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${DEPLOY_REPOSITORY}.git" deploy-branch
@@ -1404,6 +1412,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
 
       - name: Sync base + per-node overlay + per-node catalog to deploy branch
         if: matrix.node != 'scheduler-worker'
@@ -1472,8 +1481,12 @@ jobs:
           PER_NODE_BRANCH: deploy/${{ matrix.env }}-${{ matrix.node }}
           NODE: ${{ matrix.node }}
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+          SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
+          SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha || fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
+          SOURCE_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
+          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
           git add -A
           if git diff --cached --quiet; then
             echo "No deploy-state changes to push"
@@ -1646,8 +1659,14 @@ jobs:
   # base/scheduler-worker onto that branch; Argo + the Reloader annotation (#1609) roll
   # the worker. Env-singleton, mirrors reconcile-dns: single per-env job, not per-node.
   reconcile-scheduler-worker-routing:
-    needs: [decide]
-    if: needs.decide.result == 'success'
+    needs: [decide, external-node-preflight]
+    # Shared routing is a watched-ref mutation too: selected external nodes must
+    # prove their native inventory before this job can publish any worker change.
+    if: |
+      always() && !cancelled() &&
+      needs.decide.result == 'success' &&
+      ((needs.decide.outputs.has_external_compute_node_targets == 'true' && needs.external-node-preflight.result == 'success') ||
+       (needs.decide.outputs.has_external_compute_node_targets == 'false' && needs.external-node-preflight.result == 'skipped'))
     # This is the ONLY writer of deploy/candidate-a-scheduler-worker. Routing and
     # an optional scheduler image promotion are committed locally and pushed
     # together, so concurrent flights cannot interleave two clone→push writers.
@@ -1755,6 +1774,7 @@ jobs:
           SWR_RECONCILE_NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
           SWR_RECONCILE_PR_NUMBER: ${{ needs.decide.outputs.resolved_pr_number }}
           SWR_RECONCILE_NODE_SLUG: ${{ needs.decide.outputs.node_slug }}
+          SWR_RECONCILE_FLIGHT_TARGETS_JSON: ${{ needs.decide.outputs.flight_targets_json }}
           SWR_RECONCILE_STATUS_URL: ${{ needs.decide.outputs.status_url }}
         run: |
           set -euo pipefail

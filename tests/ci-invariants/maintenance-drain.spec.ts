@@ -25,6 +25,46 @@ const modulePath = pathToFileURL(
 const ops = await import(modulePath);
 
 describe("maintenance drain proof boundary", () => {
+  it("denies present malformed/active fences and unmerged floors; stale writers cannot push", () => {
+    const program = `
+import importlib.util,json,pathlib,subprocess,sys,tempfile
+spec=importlib.util.spec_from_file_location("fence",sys.argv[1]);f=importlib.util.module_from_spec(spec);spec.loader.exec_module(f)
+with tempfile.TemporaryDirectory() as d:
+ root=pathlib.Path(d);state=root/".promote-state";state.mkdir()
+ f.check(root)
+ for value in ("null", "[]", "{", '{}', '{"phase":"audited","allowRollback":true}'):
+  (state/"maintenance-drain.json").write_text(value)
+  try:f.check(root);raise AssertionError("present marker allowed")
+  except RuntimeError:pass
+ (state/"maintenance-drain.json").unlink()
+ receipt={"version":1,"phase":"audited","operationId":"a"*64,"request":{"sourceRepository":"owned/repo","sourceSha":"b"*40}}
+ (state/"maintenance-drain-receipt.json").write_text(json.dumps(receipt))
+ for statuses in (("diverged","ahead"),("ahead","behind"),("ahead","diverged"),("ahead","unknown")):
+  values=iter(statuses)
+  try:f.check(root,"owned/repo","c"*40,lambda *args:next(values));raise AssertionError("invalid floor allowed")
+  except RuntimeError:pass
+ f.check(root,"owned/repo","c"*40,lambda *args:"ahead")
+ def git(*args,cwd=None):return subprocess.run(["git",*args],cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True)
+ bare=root/"remote.git";git("init","--bare",str(bare))
+ a=root/"a";b=root/"b";git("clone",str(bare),str(a))
+ for directory in (a,):
+  git("config","user.email","owned@example.test",cwd=directory);git("config","user.name","Owned fixture",cwd=directory)
+ (a/"seed").write_text("seed");git("add",".",cwd=a);git("commit","-m","seed",cwd=a);git("push","origin","HEAD:main",cwd=a)
+ git("clone","--branch","main",str(bare),str(b))
+ git("config","user.email","owned@example.test",cwd=b);git("config","user.name","Owned fixture",cwd=b)
+ (a/".promote-state").mkdir();(a/".promote-state/maintenance-drain.json").write_text('{"phase":"fenced"}')
+ git("add",".",cwd=a);git("commit","-m","fence",cwd=a);git("push","origin","HEAD:main",cwd=a)
+ (b/"old-workload").write_text("old");git("add",".",cwd=b);git("commit","-m","stale writer",cwd=b)
+ result=subprocess.run(["git","push","origin","HEAD:main"],cwd=b,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+ assert result.returncode != 0
+`;
+    execFileSync(
+      "python3",
+      ["-c", program, path.join(root, "scripts/ci/lib/maintenance-fence.py")],
+      { stdio: "pipe", timeout: 10000 }
+    );
+  });
+
   it("compiles the actual read-only runner snapshot programs", () => {
     const command = ops.candidateSnapshotCommand({
       env: "candidate-a",
