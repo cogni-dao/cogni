@@ -3,8 +3,11 @@
 
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { isIP } from "node:net";
+import { pathToFileURL } from "node:url";
 import { parseArgs, promisify } from "node:util";
 
+import { safeVersionProbeResult } from "../src/adapters/server/compute/safe-version-probe.ts";
 import { assessComputeWorkloadReadiness } from "../src/features/compute/compute-workload-readiness.ts";
 
 const execFileAsync = promisify(execFile);
@@ -23,7 +26,7 @@ const options = {
  */
 const MAX_TIMEOUT_SECONDS = 1_800;
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const { values } = parseArgs({ options, strict: true });
   const manifestPath = required(values["manifest-json"], "--manifest-json");
   const host = required(values.host, "--host");
@@ -49,6 +52,7 @@ async function main(): Promise<void> {
   );
   validateResourceName(name);
   validateNamespace(namespace);
+  const versionTarget = publicVersionTarget(expected);
   // ONE_AUTHORITY_PER_WORKLOAD: the manifest's kind names the resource to poll —
   // Crossplane composites are `xcomputeworkload`, the legacy CR `computeworkload`.
   const resource =
@@ -65,6 +69,7 @@ async function main(): Promise<void> {
       namespace,
       name,
       resource,
+      timeoutMs: Math.max(1, Math.min(40_000, deadline - Date.now())),
     });
     if (observation.ok) {
       const assessment = assessComputeWorkloadReadiness({
@@ -72,19 +77,36 @@ async function main(): Promise<void> {
         live: observation.resource,
       });
       if (assessment.ready) {
-        process.stdout.write(
-          `[compute-workload-ready] ${namespace}/${name} Ready at current generation\n`
-        );
-        return;
+        // Controller Ready can precede the provider applying this revision. Keep
+        // convergence inside THIS budget until the canonical public host proves
+        // the requested source; the downstream verifier remains an independent gate.
+        const remainingMs = deadline - Date.now();
+        const version = versionTarget
+          ? remainingMs > 0
+            ? await probePublicVersion(
+                versionTarget,
+                Math.min(5_000, remainingMs)
+              )
+            : "version_unavailable"
+          : "matched";
+        if (version === "matched" && Date.now() <= deadline) {
+          process.stdout.write(
+            `[compute-workload-ready] ${namespace}/${name} Ready at current generation${versionTarget ? `; public buildSha=${versionTarget.sourceSha}` : ""}\n`
+          );
+          return;
+        }
+        lastReason = `public_${version === "matched" ? "version_unavailable" : version}`;
+      } else {
+        lastReason = assessment.reason;
       }
-      lastReason = assessment.reason;
     } else {
       lastReason = observation.reason;
     }
     process.stdout.write(
       `[compute-workload-ready] ${namespace}/${name} ${lastReason}; waiting\n`
     );
-    await delay(5_000);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) await delay(Math.min(5_000, remainingMs));
   }
   const hint = timeoutHint(lastReason);
   throw new Error(
@@ -92,6 +114,55 @@ async function main(): Promise<void> {
       hint ? ` - ${hint}` : ""
     }`
   );
+}
+
+function publicVersionTarget(
+  expected: unknown
+): { readonly endpoint: string; readonly sourceSha: string } | undefined {
+  const spec = record(record(expected)?.spec);
+  const publicHost = record(spec?.workload)?.publicHost;
+  // Workloads without a public surface retain their controller-only gate.
+  if (publicHost === undefined) return undefined;
+  if (
+    typeof publicHost !== "string" ||
+    publicHost.length > 253 ||
+    !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(
+      publicHost
+    ) ||
+    isIP(publicHost) !== 0 ||
+    publicHost.toLowerCase().endsWith(".local")
+  ) {
+    throw new Error(
+      "manifest spec.workload.publicHost must be a public DNS hostname"
+    );
+  }
+  const sourceSha = record(record(spec?.bundle)?.source)?.sha;
+  if (typeof sourceSha !== "string" || !/^[a-f0-9]{40}$/.test(sourceSha)) {
+    throw new Error(
+      "manifest spec.bundle.source.sha must be a full commit SHA for a public workload"
+    );
+  }
+  return { endpoint: `https://${publicHost}`, sourceSha };
+}
+
+async function probePublicVersion(
+  target: { readonly endpoint: string; readonly sourceSha: string },
+  timeoutMs: number
+): Promise<"matched" | "source_mismatch" | "version_unavailable"> {
+  // Also bound DNS resolution, which precedes the helper's socket timeout.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      safeVersionProbeResult(target.endpoint, target.sourceSha, timeoutMs),
+      new Promise<"version_unavailable">((resolve) => {
+        timer = setTimeout(() => resolve("version_unavailable"), timeoutMs);
+      }),
+    ]);
+  } catch {
+    return "version_unavailable";
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -117,6 +188,10 @@ function timeoutHint(reason: string): string {
     read_forbidden: "the gate's credential may not read this resource",
     control_plane_unreachable: "the control-plane host did not answer",
     read_timeout: "the control-plane read timed out",
+    public_source_mismatch:
+      "the controller reports Ready but the canonical public host still serves a different source SHA",
+    public_version_unavailable:
+      "the controller reports Ready but the canonical public host has not provided exact source proof",
   };
   return hints[reason] ?? "";
 }
@@ -127,6 +202,7 @@ async function readLiveWorkload(input: {
   readonly namespace: string;
   readonly name: string;
   readonly resource: string;
+  readonly timeoutMs: number;
 }): Promise<
   | { readonly ok: true; readonly resource: unknown }
   | { readonly ok: false; readonly reason: string }
@@ -152,7 +228,7 @@ async function readLiveWorkload(input: {
         "-o",
         "json",
       ],
-      { timeout: 40_000, maxBuffer: 2 * 1024 * 1024 }
+      { timeout: input.timeoutMs, maxBuffer: 2 * 1024 * 1024 }
     );
     return { ok: true, resource: JSON.parse(stdout) as unknown };
   } catch (error: unknown) {
@@ -223,9 +299,14 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(
-    `${error instanceof Error ? error.message : "unknown error"}\n`
-  );
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  main().catch((error: unknown) => {
+    process.stderr.write(
+      `${error instanceof Error ? error.message : "unknown error"}\n`
+    );
+    process.exitCode = 1;
+  });
+}
