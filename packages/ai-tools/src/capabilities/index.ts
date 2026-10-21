@@ -113,9 +113,11 @@ export type {
   WorkItemAssignee,
   WorkItemCapability,
   WorkItemInfo,
+  WorkItemQueryPage,
   WorkItemQueryParams,
   WorkItemTransitionResult,
 } from "./work-item";
+export { WorkItemPatchConflictError } from "./work-item";
 
 import type { AuthCapability, ClockCapability } from "./types";
 

@@ -77,6 +77,24 @@ valid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_
   '{last_assistant_message:$message,scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
 [[ -z "$valid_output" ]] || fail "status-contract Stop hook rejected a valid response"
 
+# Build large messages inside jq, not a single argv value (Linux caps its size).
+# Early-exit awk/grep readers previously closed printf pipes under pipefail,
+# turning valid responses into SIGPIPE failures instead of warn-only decisions.
+large_valid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" '
+  {last_assistant_message: ($message | sub("\\| \\*\\*Followed\\*\\* \\| ";
+    "| **Followed** | " + ("https://cognidao.org/knowledge/cognition-substrate-bootstrap " * 8192))),
+   scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
+[[ -z "$large_valid_output" ]] || fail "large valid response failed the warn-only detector"
+
+large_invalid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" '
+  {last_assistant_message: ($message | sub("\n---\n";
+    "\n" + ("unexpected prose " * 32768) + "\n---\n")),
+   scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
+[[ -n "$(printf '%s' "$large_invalid_output" | jq -r '.systemMessage // empty')" &&
+   -z "$(printf '%s' "$large_invalid_output" | jq -r '.decision // empty')" ]] ||
+  fail "large invalid response did not warn without blocking"
+echo "session-cognition-hook.test: large-response pipe safety PASS"
+
 invalid_output="$(jq -cn --arg message 'This is a design question, so the contract does not apply.' \
   --arg scratch "$VALIDATOR_SCRATCH" '{last_assistant_message:$message,scratchpad_dir:$scratch}' | \
   bash "$STOP_VALIDATOR")"

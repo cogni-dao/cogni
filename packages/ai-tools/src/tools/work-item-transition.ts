@@ -10,6 +10,9 @@
  *   - EFFECT_TYPED: effect is `state_change`
  *   - NO_ONEOF_IN_SCHEMA: Uses flat z.object per tool-use.md #10
  *   - TRANSITION_TABLE_ENFORCED: Capability validates transitions via development-lifecycle.md
+ *   - PATCH_CAS_OPTIONAL: patch `expectedRevision` is compare-and-set; absent ⇒ unconditioned patch (unchanged)
+ *   - CONFLICT_IS_A_RESULT: a lost compare-and-set returns `{success:false, code:"revision_conflict",
+ *     currentRevision}` instead of throwing, so a graph can skip the row and retry next cycle
  * Side-effects: IO (mutates work items via capability)
  * Links: docs/spec/development-lifecycle.md, docs/spec/tool-use.md
  * @public
@@ -17,7 +20,10 @@
 
 import { z } from "zod";
 
-import type { WorkItemCapability } from "../capabilities/work-item";
+import {
+  type WorkItemCapability,
+  WorkItemPatchConflictError,
+} from "../capabilities/work-item";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -34,7 +40,7 @@ export const WorkItemTransitionInputSchema = z.object({
   action: z
     .enum(["transition", "patch"])
     .describe(
-      "Action: 'transition' changes status, 'patch' updates fields (priority, labels, summary)"
+      "Action: 'transition' changes status, 'patch' updates fields (priority, rank, labels, summary)"
     ),
   id: z
     .string()
@@ -65,6 +71,13 @@ export const WorkItemTransitionInputSchema = z.object({
     .max(99)
     .optional()
     .describe("Priority (0=highest, used for patch action)"),
+  rank: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      "Rank within the backlog (lower = sooner, used for patch action)"
+    ),
   labels: z
     .array(z.string())
     .optional()
@@ -73,6 +86,16 @@ export const WorkItemTransitionInputSchema = z.object({
     .string()
     .optional()
     .describe("Summary to set (used for patch action)"),
+  expectedRevision: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe(
+      "Patch only: the item's revision you read. The patch lands only if the item is " +
+        "still at this revision; otherwise nothing is written and the result is " +
+        "success=false, code='revision_conflict' with currentRevision. Omit for an unconditioned patch."
+    ),
 });
 export type WorkItemTransitionInput = z.infer<
   typeof WorkItemTransitionInputSchema
@@ -85,6 +108,12 @@ export const WorkItemTransitionOutputSchema = z.object({
   message: z.string(),
   previousStatus: z.string().optional(),
   newStatus: z.string().optional(),
+  /** Item revision after a successful patch. */
+  revision: z.number().int().optional(),
+  /** Set when success=false: `revision_conflict` = the CAS lost, nothing written. */
+  code: z.literal("revision_conflict").optional(),
+  /** On `revision_conflict`: the revision the item is actually at. */
+  currentRevision: z.number().int().optional(),
 });
 export type WorkItemTransitionOutput = z.infer<
   typeof WorkItemTransitionOutputSchema
@@ -108,7 +137,7 @@ export const workItemTransitionContract: ToolContract<
   description:
     "Modify a work item. Actions: " +
     "'transition' (requires id + toStatus, optional reason) changes the item's lifecycle status, " +
-    "'patch' (requires id, optional priority/labels/summary) updates metadata fields. " +
+    "'patch' (requires id, optional priority/rank/labels/summary, optional expectedRevision for compare-and-set) updates metadata fields. " +
     "Use core__work_item_query first to find items and check their current status.",
   effect: "state_change",
   inputSchema: WorkItemTransitionInputSchema,
@@ -123,6 +152,9 @@ export const workItemTransitionContract: ToolContract<
     "message",
     "previousStatus",
     "newStatus",
+    "revision",
+    "code",
+    "currentRevision",
   ] as const,
 };
 
@@ -148,6 +180,11 @@ export function createWorkItemTransitionImplementation(
           if (!input.toStatus) {
             throw new Error("toStatus is required for action 'transition'");
           }
+          if (input.expectedRevision !== undefined) {
+            throw new Error(
+              "expectedRevision is only supported for action 'patch'"
+            );
+          }
           const result = await workItemCapability.transitionStatus({
             id: input.id,
             toStatus: input.toStatus,
@@ -165,28 +202,47 @@ export function createWorkItemTransitionImplementation(
         case "patch": {
           const setFields: {
             priority?: number;
+            rank?: number;
             labels?: string[];
             summary?: string;
           } = {};
           if (input.priority !== undefined) setFields.priority = input.priority;
+          if (input.rank !== undefined) setFields.rank = input.rank;
           if (input.labels !== undefined) setFields.labels = input.labels;
           if (input.summary !== undefined) setFields.summary = input.summary;
 
           if (Object.keys(setFields).length === 0) {
             throw new Error(
-              "At least one field (priority, labels, or summary) is required for action 'patch'"
+              "At least one field (priority, rank, labels, or summary) is required for action 'patch'"
             );
           }
 
-          const result = await workItemCapability.patch({
-            id: input.id,
-            set: setFields,
-          });
+          let result: Awaited<ReturnType<WorkItemCapability["patch"]>>;
+          try {
+            result = await workItemCapability.patch({
+              id: input.id,
+              ...(input.expectedRevision !== undefined && {
+                expectedRevision: input.expectedRevision,
+              }),
+              set: setFields,
+            });
+          } catch (e) {
+            if (!(e instanceof WorkItemPatchConflictError)) throw e;
+            return {
+              success: false,
+              action: "patch",
+              id: input.id,
+              code: "revision_conflict",
+              currentRevision: e.currentRevision,
+              message: `Not patched: ${input.id} is at revision ${e.currentRevision}, expected ${e.expectedRevision}. Nothing was written; re-read and retry.`,
+            };
+          }
           return {
             success: true,
             action: "patch",
             id: result.id,
             message: `Patched ${result.id}: updated ${Object.keys(setFields).join(", ")}`,
+            ...(result.revision !== undefined && { revision: result.revision }),
           };
         }
       }

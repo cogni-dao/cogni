@@ -607,6 +607,9 @@ jobs:
           GH_TOKEN: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
           PER_NODE_BRANCH: deploy/${{ needs.decide.outputs.environment }}-${{ matrix.node }}
           UMBRELLA_BRANCH: deploy/${{ needs.decide.outputs.environment }}
+          SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
+          SOURCE_SHA: ${{ steps.digest.outputs.source_sha }}
+          SOURCE_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" deploy-branch
@@ -626,6 +629,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
 
       - name: Sync infra/k8s + per-node catalog from app-src
         if: steps.digest.outputs.promoted == 'true'
@@ -703,10 +707,14 @@ jobs:
           NODE: ${{ matrix.node }}
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
           OVERLAY_ENV: ${{ needs.decide.outputs.environment }}
+          SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
+          SOURCE_SHA: ${{ steps.digest.outputs.source_sha }}
+          SOURCE_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
           git add -A
           if git diff --cached --quiet; then
             DEPLOY_SHA=$(git rev-parse HEAD)

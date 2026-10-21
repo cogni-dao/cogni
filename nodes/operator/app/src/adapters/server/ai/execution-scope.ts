@@ -35,6 +35,10 @@ export interface ExecutionScope {
   readonly llmService: LlmService;
   /** Billing source system for usage attribution (from ModelProviderPort.usageSource). */
   readonly usageSource: SourceSystem;
+  /** Node this run executes on (authz v0 node policy + audit). */
+  readonly nodeId?: string;
+  /** Execution grant backing a scheduled run (audit only; API/chat runs carry none). */
+  readonly grantId?: string;
 }
 
 const executionScopeStorage = new AsyncLocalStorage<ExecutionScope>();

@@ -16,7 +16,10 @@
  *     single shot would leave schedules stale. Retry with backoff until the job
  *     succeeds or attempts are exhausted (next deploy retries). The job's pg advisory
  *     lock makes every attempt — and every replica — idempotent.
- *   - FIRE_ONCE_PER_PROCESS / TEST_INERT: starts once, never in test.
+ *   - FIRE_ONCE_PER_PROCESS / TEST_INERT: starts once per scope, never in test.
+ *   - SELF_FIRST (task.5282): scope "self" (operator's own charters, no registry read) is kicked
+ *     on first container init; scope "all" (+ routable nodes) only after catalog projection
+ *     succeeds. A kick that loses the advisory-lock race is retried, not dropped.
  * Side-effects: IO (Temporal schedule reconcile, DB advisory lock) — async, detached.
  * Links: bootstrap/container.ts (getContainer trigger),
  *   bootstrap/jobs/syncGovernanceSchedules.job.ts, docs/spec/plugin-attribution-pipeline.md
@@ -29,7 +32,10 @@
  * @public
  */
 
-let _started = false;
+/** Mirrors the job's GovernanceSyncScope (kept local: no static edge to the job module). */
+type GovernanceSyncScope = "self" | "all";
+
+const _started = new Set<GovernanceSyncScope>();
 
 /** Attempts before giving up for this process (a redeploy restarts the loop). */
 const MAX_ATTEMPTS = 8;
@@ -41,19 +47,24 @@ const RETRY_DELAY_MS = 15_000;
  * repeat calls and in test. Retries on failure (Temporal not yet reachable) until
  * it succeeds or MAX_ATTEMPTS is hit; never throws into the caller.
  */
-export function startGovernanceSyncOnBoot(): void {
-  if (_started) {
+export function startGovernanceSyncOnBoot(
+  scope: GovernanceSyncScope = "all"
+): void {
+  if (_started.has(scope)) {
     return;
   }
   // biome-ignore lint/style/noProcessEnv: startup gate, before the config framework
   if (process.env.APP_ENV === "test" || process.env.VITEST === "true") {
     return;
   }
-  _started = true;
-  void attemptReconcile(1);
+  _started.add(scope);
+  void attemptReconcile(scope, 1);
 }
 
-async function attemptReconcile(attempt: number): Promise<void> {
+async function attemptReconcile(
+  scope: GovernanceSyncScope,
+  attempt: number
+): Promise<void> {
   try {
     // Dynamic import keeps the job (which statically imports getContainer) off this
     // module's static graph, so there is no container ↔ startup-reconcile cycle.
@@ -62,10 +73,13 @@ async function attemptReconcile(attempt: number): Promise<void> {
     );
     // The job self-logs (start / per-schedule action / failure) and is advisory-lock
     // guarded, so concurrent replicas and repeat attempts are safe no-ops.
-    await runGovernanceSchedulesSyncJob();
+    await runGovernanceSchedulesSyncJob({ scope, throwIfLocked: true });
   } catch {
     if (attempt < MAX_ATTEMPTS) {
-      setTimeout(() => void attemptReconcile(attempt + 1), RETRY_DELAY_MS);
+      setTimeout(
+        () => void attemptReconcile(scope, attempt + 1),
+        RETRY_DELAY_MS
+      );
     }
     // Exhausted: the job logged the failure; the next deploy starts a fresh loop.
   }

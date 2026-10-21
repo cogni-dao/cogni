@@ -84,6 +84,7 @@ export {
   type GovernanceScheduleEntry,
   type GovernanceScheduleSyncDeps,
   type GovernanceScheduleSyncResult,
+  governanceGraphMessage,
   governancePrunePrefix,
   governanceScheduleId,
   isLegacyGovernanceScheduleId,

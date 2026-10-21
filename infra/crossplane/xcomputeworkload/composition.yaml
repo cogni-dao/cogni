@@ -677,11 +677,13 @@ spec:
               kube-apiserver interruption can still strand the generic guard after the actuator
               has returned the existing allocation, which froze Red production on its prior SHA.
 
-              Release that guard only when FIVE independent facts agree: provider-http itself
+              Release that guard only when FOUR independent facts agree: provider-http itself
               reports the ambiguity; the pending timestamp exists; provider-http's current OR
               cached successful response is a real found:true OBSERVE (not a CREATE/UPDATE echo);
               that observation is active with a non-empty external handle under the exact current
-              cogniKey; and the XR has not served the desired SHA. The cache fallback is necessary
+              cogniKey. A previously served desired SHA is history, not allocation identity: using
+              it to refuse this acknowledgement strands an existing lease after a later response
+              loses serving. The cache fallback is necessary
               because provider-http overwrites status.response with a later transient refusal while
               preserving its last successful observation in status.cache.response. It is used only
               when the current response has no `found` key, and the cached response itself must be
@@ -713,8 +715,7 @@ spec:
             {{- $leaseReceiptState := dig "state" "unknown" $leaseReceiptRes }}
             {{- $leaseReceiptExternalName := dig "externalName" "" $leaseReceiptRes }}
             {{- $leaseReceiptProven := and (ge $leaseReceiptStatus 200) (lt $leaseReceiptStatus 300) $leaseReceiptObserved $leaseReceiptFound (eq $leaseReceiptState "active") (ne $leaseReceiptExternalName "") (eq $responseKey $currentKey) }}
-            {{- $leaseRevisionPending := ne $prevSha $desiredSha }}
-            {{- $recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven $leaseRevisionPending }}
+            {{- $recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven }}
             {{- $unsafeLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $recoverLeaseCreateAmbiguity) }}
             {{- /*
               TARGETED REQUEUE AFTER A LOST PROVIDER EVENT (bug.0001). A transient kube-apiserver

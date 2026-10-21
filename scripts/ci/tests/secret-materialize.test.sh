@@ -78,7 +78,12 @@ chmod +x "$FAKEBIN/ssh"
 cat > "$FAKEBIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = "create" ] && [ "${2:-}" = "token" ]; then
-  echo jwt-token
+  [[ "$*" == 'create token openbao-operator -n default' ]] || exit 9
+  echo owned.jwt.signature
+  exit 0
+fi
+if [[ "$*" == '-n openbao get service openbao -o json' ]]; then
+  echo '{"metadata":{"name":"openbao","namespace":"openbao"},"spec":{"type":"ClusterIP","clusterIP":"127.0.0.1","selector":{"app.kubernetes.io/name":"openbao","app.kubernetes.io/instance":"openbao","component":"server"},"ports":[{"port":8200,"targetPort":8200,"protocol":"TCP"}]}}'
   exit 0
 fi
 if [ "${1:-}" = "exec" ]; then
@@ -86,8 +91,8 @@ if [ "${1:-}" = "exec" ]; then
   last_index=$((${#args[@]} - 1))
   path="${args[$last_index]}"
   if printf '%s\n' "$*" | grep -q 'auth/kubernetes/login'; then
-    echo writer-token
-    exit 0
+    echo 'login must not use kubectl exec' >&2
+    exit 9
   fi
   if printf '%s\n' "$*" | grep -q 'bao kv get -format=json'; then
     dir="${FAKE_BAO_ROOT}/${path}"
@@ -129,9 +134,42 @@ exit 1
 EOF
 chmod +x "$FAKEBIN/kubectl"
 
+cat > "$FAKEBIN/timeout" <<'SH_TIMEOUT'
+#!/usr/bin/env bash
+shift
+exec "$@"
+SH_TIMEOUT
+chmod +x "$FAKEBIN/timeout"
+
 cat > "$FAKEBIN/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${!#}" == http://127.0.0.1:8200/v1/auth/kubernetes/login ]]; then
+  out="" body=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in --output) out="$2"; shift 2 ;; --data-binary) body="${2#@}"; shift 2 ;; *) shift ;; esac
+  done
+  jq -e '.role == "candidate-a-writer" and .jwt == "owned.jwt.signature"' "$body" >/dev/null || exit 9
+  printf '{"auth":{"client_token":"writer-token"}}' > "$out"
+  printf '200'; exit 0
+fi
+# GET transport shares this binary with the existing LiteLLM fixture.
+if [[ "${!#}" == http://127.0.0.1:8200/v1/cogni/data/* ]]; then
+  out="" url="${!#}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in --output) out="$2"; shift 2 ;; *) shift ;; esac
+  done
+  path="${url#http://127.0.0.1:8200/v1/cogni/data/}"
+  dir="${FAKE_BAO_ROOT}/cogni/${path}"
+  if [[ ! -d "$dir" ]]; then printf '{"errors":[]}' > "$out"; printf '404'; exit 0; fi
+  data='{}'
+  for f in "$dir"/*; do
+    [[ -f "$f" ]] || continue
+    data="$(printf '%s' "$data" | jq --arg k "$(basename "$f")" --rawfile v "$f" '.[$k]=$v')"
+  done
+  printf '{"data":{"data":%s}}' "$data" > "$out"
+  printf '200'; exit 0
+fi
 config="" body_file="" output_file="" wanted_alias=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -663,5 +701,82 @@ jq '.database="cogni_other"' "$TMPROOT/probe.json" > "$TMPROOT/wrong.json"
 mv "$TMPROOT/wrong.json" "$TMPROOT/probe.json"
 if run_db_ready >/dev/null 2>&1; then echo 'foreign native DB accepted' >&2; exit 1; fi
 [ ! -s "$TMPROOT/db-ready-writes" ]
+
+# Exercise the real binding CLI, including its private stdin/stdout boundary.
+# Rejections expose a finite category, never a DSN, parser error, or input value.
+python3 - "$REPO_ROOT/scripts/lib/materialize-database-recovery-binding.ts" <<'PY'
+import copy
+import json
+import subprocess
+import sys
+
+script = sys.argv[1]
+canary = "PRIVATE_BINDING_VALUE_DO_NOT_LOG"
+dsn = f"postgresql://probe_operator:{canary}@10.0.0.1:5432/cogni_operator?sslmode=disable"
+binding = {
+    "nodeId": "44444444-4444-4444-8444-444444444444",
+    "nodeSlug": "operator", "environment": "production",
+    "databaseName": "cogni_operator", "probeRole": "probe_operator",
+    "systemIdentifier": "123456789", "substrateHost": "a" * 32, "dsn": dsn,
+}
+other = {**binding, "nodeId": "33333333-3333-4333-8333-333333333333", "environment": "preview"}
+valid = {
+    "nodeId": binding["nodeId"], "nodeSlug": "operator", "environment": "production",
+    "databaseName": "cogni_operator", "probeRole": "probe_operator", "dsn": dsn,
+    "expectedHost": "10.0.0.1", "machineId": "a" * 32,
+    "localSystemIdentifier": "123456789",
+    "observation": {
+        "database": "cogni_operator", "role": "probe_operator", "systemTenantExists": True,
+        "serverAddress": "10.0.0.1", "serverPort": 5432, "systemIdentifier": "123456789",
+        "appRolesCanLogin": True, "runtimeRolesPresent": True, "runtimeRolesNoLogin": False,
+        "activeRuntimeSessions": 0, "observedAt": "2026-10-21T07:00:00.000+00:00",
+        "probeRoleIsolated": True,
+    },
+    "existingBindings": [other, binding],
+}
+
+def invoke(raw):
+    return subprocess.run(["pnpm", "exec", "tsx", script], input=raw, text=True, capture_output=True)
+
+for existing in ([other], [other, binding]):
+    value = {**valid, "existingBindings": existing}
+    result = invoke(json.dumps(value))
+    assert result.returncode == 0 and result.stderr == "", "valid binding rejected"
+    assert json.loads(result.stdout) == [other, binding], "binding payload or unrelated scope changed"
+
+def rejected(category, mutate=None, raw=None):
+    value = copy.deepcopy(valid)
+    if mutate:
+        mutate(value)
+    result = invoke(json.dumps(value) if raw is None else raw)
+    assert result.returncode == 1, f"guard accepted: {category}"
+    assert result.stdout == "", f"rejection wrote private stdout: {category}"
+    assert result.stderr == f"recovery binding receipt rejected: {category}\n", f"unexpected diagnostic: {category}"
+    assert canary not in result.stdout + result.stderr, f"private value leaked: {category}"
+
+rejected("input_json", raw='{"private": "' + canary + '", invalid}')
+rejected("input_schema", lambda v: v["observation"].update({canary: canary}))
+rejected("input_schema", lambda v: v.update(nodeId=canary))
+rejected("canonical_identity", lambda v: v.update(databaseName="cogni_other"))
+rejected("canonical_dsn_invalid", lambda v: v.update(dsn=canary + "\ninvalid"))
+rejected("canonical_dsn_mismatch", lambda v: v.update(dsn=v["dsn"].replace("10.0.0.1", "10.0.0.2")))
+rejected("validation_error", lambda v: v.update(dsn=v["dsn"].replace("probe_operator:", canary + "%zz:")))
+rejected("native_identity", lambda v: v["observation"].update(systemIdentifier="987654321"))
+rejected("native_identity", lambda v: v["observation"].update(database="cogni_other"))
+rejected("duplicate_binding", lambda v: v["existingBindings"].append(binding))
+for field, value, category in [
+    ("substrateHost", "b" * 32, "prior_machine_id"),
+    ("systemIdentifier", "987654321", "prior_system_identifier"),
+    ("dsn", dsn.replace("10.0.0.1", "10.0.0.2"), "prior_host"),
+    ("dsn", canary + "\ninvalid", "prior_dsn_invalid"),
+    ("databaseName", "cogni_other", "prior_database"),
+    ("probeRole", "probe_other", "prior_role"),
+    ("nodeSlug", "other", "prior_node_slug"),
+]:
+    rejected(category, lambda v: v["existingBindings"][1].update({field: value}))
+rejected("prior_machine_id", lambda v: v["existingBindings"][1].update(substrateHost="b" * 32, dsn=canary))
+
+print("PASS: binding CLI preserves valid payloads and rejects private inputs without disclosure")
+PY
 
 echo "PASS: secret-materialize.test.sh"

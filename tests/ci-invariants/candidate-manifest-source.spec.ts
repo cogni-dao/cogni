@@ -27,6 +27,7 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
 
@@ -335,6 +336,242 @@ describe("candidate-a manifest source", () => {
     );
     expect(parsed.jobs.flight.if).toContain(
       "needs.reconcile-scheduler-worker-routing.result == 'success'"
+    );
+  });
+
+  it("never publishes shared scheduler routing before selected external preflight succeeds", () => {
+    const routing = parsed.jobs["reconcile-scheduler-worker-routing"];
+    expect(routing.needs).toEqual(["decide", "external-node-preflight"]);
+    const condition = routing.if;
+    if (!condition) throw new Error("routing job condition is required");
+    // Evaluate the actual YAML condition, including the explicit cancellation
+    // function. Hyphenated GitHub job identifiers use bracket syntax in JS.
+    const expression = condition.replaceAll(
+      "needs.external-node-preflight",
+      'needs["external-node-preflight"]'
+    );
+    const cases = [
+      {
+        label: "external success",
+        external: "true",
+        result: "success",
+        allowed: true,
+      },
+      {
+        label: "external failure",
+        external: "true",
+        result: "failure",
+        allowed: false,
+      },
+      {
+        label: "external cancelled",
+        external: "true",
+        result: "cancelled",
+        allowed: false,
+      },
+      {
+        label: "external accidentally skipped",
+        external: "true",
+        result: "skipped",
+        allowed: false,
+      },
+      {
+        label: "external unknown",
+        external: "true",
+        result: "",
+        allowed: false,
+      },
+      {
+        label: "operator-only flight",
+        external: "false",
+        result: "skipped",
+        allowed: true,
+      },
+      {
+        label: "k3s service-only flight",
+        external: "false",
+        result: "skipped",
+        allowed: true,
+      },
+      {
+        label: "no-external failed preflight",
+        external: "false",
+        result: "failure",
+        allowed: false,
+      },
+      {
+        label: "missing selected-set output",
+        external: "",
+        result: "skipped",
+        allowed: false,
+      },
+      {
+        label: "cancelled workflow after successful preflight",
+        external: "true",
+        result: "success",
+        cancelled: true,
+        allowed: false,
+      },
+      {
+        label: "failed decide",
+        external: "false",
+        result: "skipped",
+        decide: "failure",
+        allowed: false,
+      },
+    ];
+    for (const scenario of cases) {
+      const allowed = runInNewContext(
+        expression,
+        {
+          always: () => true,
+          cancelled: () => scenario.cancelled === true,
+          needs: {
+            decide: {
+              result: scenario.decide ?? "success",
+              outputs: { has_external_compute_node_targets: scenario.external },
+            },
+            "external-node-preflight": { result: scenario.result },
+          },
+        },
+        { timeout: 100 }
+      );
+      expect(allowed, scenario.label).toBe(scenario.allowed);
+    }
+    // The new dependency must not create a cycle through flight or substrate.
+    const visiting = new Set<string>();
+    const complete = new Set<string>();
+    const visit = (name: string) => {
+      if (complete.has(name)) return;
+      expect(visiting.has(name), `workflow dependency cycle at ${name}`).toBe(
+        false
+      );
+      const job = parsed.jobs[name];
+      if (!job) throw new Error(`unknown workflow dependency ${name}`);
+      visiting.add(name);
+      const dependencies =
+        typeof job.needs === "string" ? [job.needs] : (job.needs ?? []);
+      for (const dependency of dependencies) visit(dependency);
+      visiting.delete(name);
+      complete.add(name);
+    };
+    for (const name of Object.keys(parsed.jobs)) visit(name);
+    const reconcile = namedStep(
+      "reconcile-scheduler-worker-routing",
+      "Reconcile scheduler-worker routing (propagate to per-env deploy branch)"
+    );
+    expect(reconcile.env?.SWR_RECONCILE_FLIGHT_TARGETS_JSON).toBe(
+      "${{ needs.decide.outputs.flight_targets_json }}"
+    );
+  });
+
+  it("pins serialized node writers to trusted fail-closed maintenance checks", () => {
+    const promote = yaml.parse(
+      readFileSync(
+        path.join(REPO_ROOT, ".github/workflows/promote-and-deploy.yml"),
+        "utf8"
+      )
+    ) as { jobs: Record<string, WorkflowJob> };
+    const helper =
+      "python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .";
+    const candidateGroups = ["prepare-substrate-deploy-branch", "flight"];
+    for (const name of candidateGroups) {
+      const job = parsed.jobs[name];
+      expect(job.concurrency?.group).toBe(
+        "flight-candidate-a-${{ matrix.node }}"
+      );
+      expect(job.concurrency?.["cancel-in-progress"]).toBe(false);
+    }
+    const promoteJob = promote.jobs["promote-k8s"];
+    expect(promoteJob.concurrency?.group).toBe(
+      "flight-${{ needs.decide.outputs.environment }}-${{ matrix.node }}"
+    );
+    expect(promoteJob.concurrency?.["cancel-in-progress"]).toBe(false);
+    const prepare = namedStep(
+      "prepare-substrate-deploy-branch",
+      "Prepare deploy branch shape"
+    );
+    const candidateCheckout = namedStep(
+      "flight",
+      "Prepare per-node deploy branch workspace"
+    );
+    const candidatePush = namedStep(
+      "flight",
+      "Commit and push to per-node deploy branch"
+    );
+    const promotionCheckout = promoteJob.steps.find(
+      (step) =>
+        step.name ===
+        "Prepare per-node deploy branch (bootstrap from umbrella if missing)"
+    );
+    const promotionPush = promoteJob.steps.find(
+      (step) => step.name === "Commit and push"
+    );
+    if (!promotionCheckout || !promotionPush)
+      throw new Error("ordinary promotion writer steps are required");
+    for (const [label, step, checks] of [
+      ["candidate prepare", prepare, 2],
+      ["candidate checkout", candidateCheckout, 1],
+      ["candidate push", candidatePush, 1],
+      ["promotion checkout", promotionCheckout, 1],
+      ["promotion push", promotionPush, 1],
+    ] as const) {
+      const run = step.run ?? "";
+      expect(run, label).toContain("set -euo pipefail");
+      expect(run, label).not.toMatch(
+        /(?:if|test)\s+[^\n]*(?:-e|-f)[^\n]*maintenance-fence/
+      );
+      expect(step.env?.SOURCE_REPOSITORY, label).toBe(
+        "${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}"
+      );
+      expect(step.env?.SOURCE_SHA, label).toMatch(
+        /needs\.decide\.outputs\.(node_source_sha|source_sha_by_target_json)|steps\.digest\.outputs\.source_sha/
+      );
+      expect(step.env?.SOURCE_READ_TOKEN, label).toBe(
+        "${{ secrets.GIT_READ_TOKEN || github.token }}"
+      );
+      const guardLines = run
+        .split("\n")
+        .filter((line) => line.includes(helper));
+      expect(guardLines, label).toHaveLength(checks);
+      for (const line of guardLines) {
+        expect(line, label).not.toMatch(/\|\|\s*(true|:)(?:\s|$)/);
+        // Ordinary delivery cannot supply an operation exception or mutate fence state.
+        expect(line.trim(), label).toMatch(/maintenance-fence\.py check \.$/);
+      }
+      if (run.includes("git checkout -B")) {
+        expect(run.indexOf(helper), label).toBeGreaterThan(
+          run.lastIndexOf("git checkout -B")
+        );
+      }
+      if (run.includes("git push origin")) {
+        expect(run.lastIndexOf(helper), label).toBeLessThan(
+          run.indexOf("git add -A")
+        );
+        expect(run.lastIndexOf(helper), label).toBeLessThan(
+          run.indexOf("git push origin")
+        );
+      }
+    }
+    for (const job of [
+      parsed.jobs["prepare-substrate-deploy-branch"],
+      parsed.jobs.flight,
+      promoteJob,
+    ]) {
+      const checkout = job.steps.find((step) => step.with?.path === "ci-src");
+      expect(checkout?.with?.path).toBe("ci-src");
+      expect(checkout?.with?.repository).toBeUndefined();
+      expect([undefined, "${{ github.sha }}"]).toContain(checkout?.with?.ref);
+      expect(job.steps.map((step) => step.run ?? "").join("\n")).not.toMatch(
+        /maintenance-fence\.py (begin|audited|finish)/
+      );
+    }
+    const inventory = namedStep(
+      "external-node-preflight",
+      "Read owning candidate producer inventory before mutation"
+    );
+    expect(inventory.run?.trim()).toMatch(
+      /maintenance-drain\.mjs candidate-preflight$/
     );
   });
 

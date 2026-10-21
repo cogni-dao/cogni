@@ -4,9 +4,9 @@
 /**
  * Module: `@app/(app)/knowledge/_components/KnowledgeEntryFields`
  * Purpose: The body of a single knowledge entry — confidence, content, source, tags,
- *   created, and (optionally) the EDO chain walk. Shared by the slide-over
+ *   created, and paged direct relation summaries. Shared by the slide-over
  *   `KnowledgeDetail` (list context) and the routable `/knowledge/[id]` page.
- * Scope: Pure presentation; no fetching.
+ * Scope: Entry presentation plus bounded direct relations; no chain traversal.
  * @internal
  */
 
@@ -17,7 +17,6 @@ import type { ReactElement } from "react";
 
 import { Markdown } from "@/components";
 import { EntityCitationLinks } from "../../_components/EntityCitationLinks";
-import { ChainPanel } from "./ChainPanel";
 import { ConfidenceBar } from "./ConfidenceBar";
 import { HtmlRenderer } from "./HtmlRenderer";
 import { RelativeTime } from "./RelativeTime";
@@ -42,11 +41,8 @@ function Field({
 
 export function KnowledgeEntryFields({
   item,
-  showChain = false,
 }: {
   readonly item: KnowledgeRow;
-  /** When true, render the EDO chain walk inline below the entry body. */
-  readonly showChain?: boolean;
 }): ReactElement {
   const isHtml = item.entryType === "html";
   return (
@@ -93,12 +89,6 @@ export function KnowledgeEntryFields({
         <Field label="Created">
           <RelativeTime iso={item.createdAt} />
         </Field>
-      )}
-
-      {showChain && (
-        <div className="mt-2 border-border/60 border-t pt-4">
-          <ChainPanel rootId={item.id} />
-        </div>
       )}
     </div>
   );

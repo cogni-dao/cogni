@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@tests/unit/adapters/server/vcs/github-vcs-workflow-ref`
- * Purpose: Prove candidate workflow refs are reviewed, converted to content-addressed operator refs,
- *   and dispatched with an exact-SHA workflow guard.
- * Scope: Mocked Octokit/fetch only; no real GitHub I/O.
+ * Purpose: Prove reviewed workflow refs include main before exact-SHA dispatch.
+ * Scope: Mocked Octokit/fetch; does not access GitHub.
  * Invariants: DEFAULT_MAIN_UNCHANGED, EXACT_REVIEWED_HEAD, IMMUTABLE_REF_NEVER_MOVES.
  * Side-effects: none
  * Links: bug.5455, src/adapters/server/vcs/reviewed-workflow-ref.ts
@@ -63,6 +62,7 @@ function reviewedHandlers(options?: {
   readonly draft?: boolean;
   readonly state?: string;
   readonly baseRef?: string;
+  readonly mainComparison?: string;
 }): RequestHandler {
   const resolvedSha = options?.resolvedSha ?? SOURCE_SHA;
   const headRepo = options?.headRepo ?? "Cogni-DAO/cogni";
@@ -83,6 +83,10 @@ function reviewedHandlers(options?: {
           head: { sha: resolvedSha, repo: { full_name: headRepo } },
         },
       ];
+    }
+    if (route === "GET /repos/{owner}/{repo}/compare/{basehead}") {
+      expect(params.basehead).toBe(`main...${resolvedSha}`);
+      return { status: options?.mainComparison ?? "ahead" };
     }
     if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") {
       if (dispatchRefSha === null) throw statusError(404, "Not Found");
@@ -155,6 +159,72 @@ describe("GitHubVcsAdapter candidate workflow refs", () => {
         head_sha: SOURCE_SHA,
       },
     });
+  });
+
+  it.each([
+    "behind",
+    "diverged",
+  ])("rejects an old reviewed workflow %s current main before any ref write", async (status) => {
+    onRequest = reviewedHandlers({ mainComparison: status });
+    await expect(
+      adapter().dispatchCandidateFlight({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        nodeSlug: "operator",
+        sourceSha: SOURCE_SHA,
+        workflowRef: WORKFLOW_REF,
+      })
+    ).rejects.toMatchObject({
+      code: "workflow_ref_missing_current_main",
+      status: 422,
+    });
+    expect(requests.some(({ route }) => route.startsWith("POST "))).toBe(false);
+  });
+
+  it("accepts an identical current-main comparison and fails closed on unknown comparison", async () => {
+    onRequest = reviewedHandlers({ mainComparison: "identical" });
+    await adapter().dispatchCandidateFlight({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      nodeSlug: "operator",
+      sourceSha: SOURCE_SHA,
+      workflowRef: WORKFLOW_REF,
+    });
+    requests.length = 0;
+    onRequest = reviewedHandlers({ mainComparison: "unknown" });
+    await expect(
+      adapter().dispatchCandidateFlight({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        nodeSlug: "operator",
+        sourceSha: SOURCE_SHA,
+        workflowRef: WORKFLOW_REF,
+      })
+    ).rejects.toMatchObject({
+      code: "workflow_ref_main_ancestry_unavailable",
+      status: 503,
+    });
+    expect(requests.some(({ route }) => route.startsWith("POST "))).toBe(false);
+  });
+
+  it("propagates an unavailable comparison without creating or dispatching a ref", async () => {
+    const normal = reviewedHandlers();
+    const unavailable = statusError(503, "owned GitHub unavailable");
+    onRequest = (route, params) => {
+      if (route === "GET /repos/{owner}/{repo}/compare/{basehead}")
+        throw unavailable;
+      return normal(route, params);
+    };
+    await expect(
+      adapter().dispatchCandidateFlight({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        nodeSlug: "operator",
+        sourceSha: SOURCE_SHA,
+        workflowRef: WORKFLOW_REF,
+      })
+    ).rejects.toBe(unavailable);
+    expect(requests.some(({ route }) => route.startsWith("POST "))).toBe(false);
   });
 
   it("normalizes a case-insensitive source SHA to GitHub's canonical resolved SHA", async () => {

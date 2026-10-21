@@ -453,16 +453,18 @@ let _workflowClientPromise: Promise<{
 export function getContainer(): Container {
   if (!_container) {
     _container = createContainer();
+    // First container init (e.g. the readyz probe) is the earliest in-bootstrap seam to
+    // self-activate this deploy's governance schedules from repo-spec (SELF_RECONCILE_ON_BOOT) —
+    // instrumentation.ts cannot import bootstrap. Detached, fire-once, retry-until-Temporal-ready.
+    // SELF_FIRST (task.5282): the operator's OWN charters come from its image repo-spec and need
+    // no GitHub/catalog read, so they activate now, independent of the fleet registry.
+    startGovernanceSyncOnBoot("self");
     // Project merged catalog intent into THIS environment's Postgres + OpenFGA.
     // Detached and single-writer guarded; a periodic App-read heals missed push triggers. Only
-    // start governance sync after the first successful projection: its routable-node set is a
+    // start the routable-node ("all") sync after the first successful projection: that set is a
     // consumer of this registry and must never race stale environment/activity authority.
     void startCatalogRegistryReconcileOnBoot().then(() => {
-      // First container init (e.g. the readyz probe) is the earliest in-bootstrap seam
-      // to self-activate this deploy's governance schedules from repo-spec
-      // (SELF_RECONCILE_ON_BOOT) — instrumentation.ts cannot import bootstrap. Detached,
-      // fire-once, retry-until-Temporal-ready; never blocks the caller.
-      startGovernanceSyncOnBoot();
+      startGovernanceSyncOnBoot("all");
     });
   }
   return _container;
@@ -843,14 +845,11 @@ function createContainer(): Container {
   // RepoCapability for AI tools (requires COGNI_REPO_PATH)
   const repoCapability = createRepoCapability(env);
 
-  // WorkItemCapability for AI tools (delegates to markdown adapter ports)
+  // Legacy markdown work-item adapter (container.workItemQuery + the AI tool's
+  // command path). The runtime image carries no `work/` tree, so it reads empty.
   const workItemAdapter = new MarkdownWorkItemAdapter(
     env.COGNI_REPO_ROOT ?? "/nonexistent"
   );
-  const workItemCapability = createWorkItemCapability({
-    workItemQuery: workItemAdapter,
-    workItemCommand: workItemAdapter,
-  });
 
   // ScheduleCapability for AI tools (reads actorUserId from ALS at invocation time)
   const scheduleCapability = createScheduleCapability({
@@ -1008,6 +1007,25 @@ function createContainer(): Container {
       release: notConfigured,
     };
   }
+
+  // WorkItemCapability for AI tools (task.5282). `core__work_item_query` lists
+  // through the Doltgres read path — the same `doltgresWorkItems.list` that
+  // `GET /api/v1/work/items` serves (read pool, never writer admission). The
+  // command path for transition stays on the markdown ports. `patch` (story.5096)
+  // writes through the SAME Doltgres patch `PATCH /api/v1/work/items/{id}` uses —
+  // the runtime image has no markdown `work/` tree, so a markdown patch could never
+  // land — attributed to the system principal scheduled runs execute as, under the
+  // store's unchanged authority (non-creator ⇒ triage fields only) and with the
+  // caller's optional `expectedRevision` as compare-and-set.
+  const workItemCapability = createWorkItemCapability({
+    workItemQuery: workItemAdapter,
+    workItemCommand: workItemAdapter,
+    backlogReader: doltgresWorkItems,
+    backlogWriter: {
+      store: doltgresWorkItems,
+      principalId: `actor:${COGNI_SYSTEM_PRINCIPAL_USER_ID}`,
+    },
+  });
 
   // ToolSource with real implementations (per CAPABILITY_INJECTION)
   const toolBindings = createToolBindings({

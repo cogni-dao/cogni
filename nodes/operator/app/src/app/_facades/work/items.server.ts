@@ -78,6 +78,27 @@ export class WorkItemsBusyError extends Error {
 }
 
 /**
+ * Thrown when a patch's `expectedRevision` no longer matches the row. RETRY
+ * AFTER RE-READ: nothing was written; the route answers 409 `revision_conflict`
+ * with the row's current revision.
+ */
+export class WorkItemRevisionConflictError extends Error {
+  readonly expectedRevision: number;
+  readonly currentRevision: number;
+
+  constructor(
+    message: string,
+    expectedRevision: number,
+    currentRevision: number
+  ) {
+    super(message);
+    this.name = "WorkItemRevisionConflictError";
+    this.expectedRevision = expectedRevision;
+    this.currentRevision = currentRevision;
+  }
+}
+
+/**
  * Normalize a store-layer throw into a facade-owned error (bug.5408).
  *
  * The Doltgres adapter throws structurally identical errors whose `name` is
@@ -97,6 +118,22 @@ function mapStoreError(e: unknown): unknown {
   }
   if (name === "WorkItemsBusyError") {
     return new WorkItemsBusyError(message);
+  }
+  if (name === "WorkItemRevisionConflictError") {
+    const { expectedRevision, currentRevision } = e as {
+      expectedRevision?: unknown;
+      currentRevision?: unknown;
+    };
+    if (
+      typeof expectedRevision === "number" &&
+      typeof currentRevision === "number"
+    ) {
+      return new WorkItemRevisionConflictError(
+        message,
+        expectedRevision,
+        currentRevision
+      );
+    }
   }
   return e;
 }
@@ -280,6 +317,9 @@ export async function patchWorkItem(
     const patched = await container.doltgresWorkItems.patch(
       {
         id: toWorkItemId(input.id),
+        ...(input.expectedRevision !== undefined && {
+          expectedRevision: input.expectedRevision,
+        }),
         set: dropUndefined(input.set),
       },
       authorTagFromSession(sessionUser)

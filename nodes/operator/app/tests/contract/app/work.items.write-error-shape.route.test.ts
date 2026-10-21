@@ -8,12 +8,14 @@
  * Invariants:
  *   - AUTHZ_IS_403: `WorkItemAuthorizationError` → 403 `errorCode:"authz_denied"` (same vocabulary as POST /api/v1/vcs/merge).
  *   - BUSY_IS_503: `WorkItemsBusyError` → 503 `errorCode:"work_items_busy"` + retry hint, on PATCH and on create.
+ *   - CAS_CONFLICT_IS_409: the store's `WorkItemRevisionConflictError` → 409 `errorCode:"revision_conflict"` + `currentRevision` (story.5096).
  *   - UNKNOWN_STAYS_500: any other store error still answers an opaque 500 — the catch was not broadened.
  * Side-effects: none
  * Links: nodes/operator/app/src/app/api/v1/work/items/_errors.ts, bug.5408
  * @internal
  */
 
+import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -162,6 +164,37 @@ describe("work-item write error shape (bug.5408)", () => {
         expect(json.retryable).toBe(true);
       },
     });
+  });
+
+  it("forwards expectedRevision and maps a lost compare-and-set to 409 revision_conflict (story.5096)", async () => {
+    patchMock.mockRejectedValue(
+      new WorkItemRevisionConflictError("task.5282", 4, 6)
+    );
+    await testApiHandler({
+      appHandler: byIdHandler,
+      params: { id: "task.5282" },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedRevision: 4, set: { priority: 1 } }),
+        });
+        expect(res.status).toBe(409);
+        const json = await res.json();
+        expect(json.errorCode).toBe("revision_conflict");
+        expect(json.expectedRevision).toBe(4);
+        expect(json.currentRevision).toBe(6);
+        expect(json.retryable).toBeUndefined();
+      },
+    });
+    expect(patchMock).toHaveBeenCalledWith(
+      { id: "task.5282", expectedRevision: 4, set: { priority: 1 } },
+      expect.any(String)
+    );
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "revision_conflict" }),
+      expect.any(String)
+    );
   });
 
   it("leaves every other store error as an opaque 500 (catch not broadened)", async () => {

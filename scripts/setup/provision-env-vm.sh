@@ -439,12 +439,23 @@ log_step "Phase 3: Provision VM"
 VM_NAME_PREFIX=$(echo "${GH_REPO//\//-}" | tr '[:upper:]' '[:lower:]')
 log_info "VM/SSH-key prefix: ${VM_NAME_PREFIX} (from \$GH_REPO=${GH_REPO})"
 
+# story.5084 — production hosts the fleet control plane plus the shared substrate for
+# every Akash lane in every env; on the 6GB shared VPS it swapped its databases out
+# (Doltgres/Temporal major faults, 10-65% iowait for 60 days). Production gets a 16GB
+# dedicated-core Cloud VDS; other envs keep the 6GB VPS. VM_PLAN overrides for one run.
+case "$DEPLOY_ENV" in
+  production) VM_PLAN_DEFAULT="G1-4-16gb-100nv-ded" ;;
+  *) VM_PLAN_DEFAULT="B1-6-6gb-100s-shared" ;;
+esac
+VM_PLAN="${VM_PLAN:-$VM_PLAN_DEFAULT}"
+log_info "Cherry plan: ${VM_PLAN} (env=${DEPLOY_ENV})"
+
 TFVARS="$PROVISION_DIR/terraform.${WORKSPACE}.tfvars"
 cat > "$TFVARS" << EOF
 environment          = "${DEPLOY_ENV}"
 vm_name_prefix       = "${VM_NAME_PREFIX}"
 project_id           = "${CHERRY_PROJECT_ID}"
-plan                 = "B1-6-6gb-100s-shared"
+plan                 = "${VM_PLAN}"
 region               = "LT-Siauliai"
 public_key_path      = "keys/cogni_${DEPLOY_ENV}_deploy.pub"
 ghcr_deploy_username = "${GHCR_USERNAME}"
@@ -2164,7 +2175,7 @@ echo "════════════════════════�
 echo "  DEPLOYMENT STATUS REPORT"
 echo "═══════════════════════════════════════════════════════════════════"
 echo ""
-echo "  Environment: ${APP_ENV} | VM: ${VM_IP} | Plan: B1-6-6gb-100s-shared"
+echo "  Environment: ${APP_ENV} | VM: ${VM_IP} | Plan: ${VM_PLAN}"
 echo "  Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "  Branch: ${BRANCH}"
 echo ""

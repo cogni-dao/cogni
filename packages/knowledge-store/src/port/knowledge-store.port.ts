@@ -46,6 +46,22 @@ export interface NewDomain {
   description?: string;
 }
 
+/** Direct-edge read model: no knowledge bodies or work-item outcomes. */
+export interface CitationLinkSummary {
+  id: string;
+  citingId: string;
+  citedId: string;
+  citationType: CitationType;
+  context: string | null;
+  sourceTitle: string | null;
+  targetTitle: string | null;
+}
+
+export interface CitationLinkPage {
+  links: CitationLinkSummary[];
+  nextCursor: string | null;
+}
+
 /**
  * The knowledge write plane is saturated or recovering; the caller may retry.
  *
@@ -239,6 +255,11 @@ export interface KnowledgeStorePort {
   listCitationsByCitingId(citingId: string): Promise<Citation[]>;
   /** List edges where cited_id = id (incoming). Used by recomputeConfidence. */
   listCitationsByCitedId(citedId: string): Promise<Citation[]>;
+  /** Five direct edges per page, with joined titles and an exclusive ID cursor. */
+  listCitationLinks(
+    endpointId: string,
+    after?: string
+  ): Promise<CitationLinkPage>;
   /**
    * List every citation edge in a single query. Used to assemble the full
    * knowledge graph without an N+1 over entries — the caller filters to edges

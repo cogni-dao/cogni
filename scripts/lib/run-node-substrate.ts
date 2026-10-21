@@ -33,7 +33,16 @@ const hash = (value: string | undefined) => {
 };
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
+/**
+ * True only for lanes routed to the admitted dedicated-cell path. Admission
+ * (the OpenBao `-database-cell` receipt read below) exists only for production.
+ * A non-production lane keeps the established runner for every tier, as the
+ * sibling loop below and candidate-flight already do. Routing preview here
+ * refused every preview promote of a dedicated-declared node with no admitted
+ * preview cell (bug.5498).
+ */
 export function dedicatedLane(catalog: unknown, lane: string): boolean {
+  if (lane !== "production") return false;
   const row = z
     .object({
       database: z
@@ -157,7 +166,6 @@ async function run(lane: string, node: string, verifyOnly: boolean) {
   }
   // This path is for existing audited state cells, never generation-zero provisioning.
   if (
-    lane !== "production" ||
     catalog.deployment_provider?.[lane] !== "akash" ||
     !catalog.envs?.includes(lane)
   )
