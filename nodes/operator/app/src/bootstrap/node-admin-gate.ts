@@ -64,7 +64,8 @@ export function isGoalRowId(rowId: unknown): boolean {
 
 /**
  * Check that `userId` holds `node.administer` on `nodeId`.
- * `userId` is the bare user id (agents register as users); the actor is `user:<userId>`.
+ * `userId` is a verified human's bare user id; callers must reject agent and
+ * legacy-agent principals before this helper. The actor is `user:<userId>`.
  */
 export async function checkNodeAdmin(
   authorization: AuthorizationPort | undefined,

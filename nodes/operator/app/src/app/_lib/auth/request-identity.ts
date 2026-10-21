@@ -132,6 +132,23 @@ export class RequestIdentityUnavailableError extends Error {
   }
 }
 
+/**
+ * Project a verified request principal into the legacy SessionUser shape only
+ * when the credential belongs to a human. Agent-to-user compatibility links
+ * never confer human governance authority.
+ */
+export function humanSessionUserFromPrincipal(
+  principal: RequestPrincipal | null
+): SessionUser | null {
+  if (principal?.kind !== "human") return null;
+  return {
+    id: principal.userId,
+    walletAddress: principal.walletAddress,
+    displayName: principal.displayName,
+    avatarColor: principal.avatarColor,
+  };
+}
+
 function isSameOrigin(origin: string | null, host: string | null): boolean {
   if (!origin || !host) return true;
   try {
@@ -246,4 +263,16 @@ export async function resolveRequestPrincipal(): Promise<RequestPrincipal | null
         avatarColor: session.avatarColor,
       }
     : null;
+}
+
+/** Resolve a human session without accepting either legacy or durable agents. */
+export async function resolveHumanRequestIdentity(): Promise<SessionUser | null> {
+  try {
+    return humanSessionUserFromPrincipal(await resolveRequestPrincipal());
+  } catch (error) {
+    // Preserve the required-auth resolver contract: credential-store failure is
+    // a rejected bearer and can never fall through to a cookie or governance.
+    if (error instanceof RequestIdentityUnavailableError) return null;
+    throw error;
+  }
 }

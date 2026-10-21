@@ -25,6 +25,7 @@ vi.mock("@/bootstrap/container", () => ({
 }));
 
 import {
+  createWorkItemAsPrincipal,
   getWorkItem,
   listWorkItems,
   patchWorkItemAsPrincipal,
@@ -282,6 +283,41 @@ describe("app/_facades/work/items.server", () => {
       },
       principalId
     );
+  });
+
+  it("creates ordinary work with the exact durable principal", async () => {
+    const principalId = "agent:operator/00000000-0000-4000-8000-000000005264";
+    mockDoltgres.create.mockResolvedValue({
+      ...SAMPLE_WORK_ITEM,
+      priority: 2,
+    });
+
+    await createWorkItemAsPrincipal(
+      { type: "task", title: "Created by agent", priority: 2 },
+      principalId
+    );
+
+    expect(mockDoltgres.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "task",
+        title: "Created by agent",
+        priority: 2,
+      }),
+      principalId
+    );
+  });
+
+  it("denies an agent creating P0/P1 before the store write", async () => {
+    const principalId = "agent:operator/00000000-0000-4000-8000-000000005264";
+
+    await expect(
+      createWorkItemAsPrincipal(
+        { type: "task", title: "Privileged", priority: 0 },
+        principalId
+      )
+    ).rejects.toBeInstanceOf(WorkItemAuthorizationError);
+
+    expect(mockDoltgres.create).not.toHaveBeenCalled();
   });
 
   it("denies an agent setting P0/P1 before the store write", async () => {

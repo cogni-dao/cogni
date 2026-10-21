@@ -11,7 +11,8 @@
  * Scope: Auth + validation + dispatch only. The set-goal I/O lives in
  *   `_facades/goal-loop/start.server`; the per-tick loop runs in the workflow.
  * Invariants:
- *   - AUTH_VIA_GETSESSIONUSER: a bearer cogni key or a session cookie.
+ *   - HUMAN_GOVERNANCE_ONLY: only a verified human principal may enter the
+ *     node-admin gate; agent-to-user compatibility links confer no authority.
  *   - GOAL_CHANGE_IS_NODE_ADMIN (task.5286): the caller must hold `node.administer`
  *     on this node, checked BEFORE body parsing and any write — 403 `authz_denied`,
  *     503 `authz_unavailable` (never conflated).
@@ -29,7 +30,7 @@ import {
 import { NextResponse } from "next/server";
 import { ZodError, z } from "zod";
 import { startGoal } from "@/app/_facades/goal-loop/start.server";
-import { getSessionUser } from "@/app/_lib/auth/session";
+import { resolveHumanRequestIdentity } from "@/app/_lib/auth/request-identity";
 import { getContainer, getTemporalWorkflowClient } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
@@ -73,7 +74,13 @@ const StartGoalRequestSchema = z
   .strict();
 
 export const POST = wrapRouteHandlerWithLogging(
-  { routeId: "goals.start", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "goals.start",
+    auth: {
+      mode: "required",
+      getSessionUser: resolveHumanRequestIdentity,
+    },
+  },
   async (ctx, request, sessionUser) => {
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });

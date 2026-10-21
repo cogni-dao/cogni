@@ -322,6 +322,31 @@ export async function createWorkItem(
   sessionUser: { id: string; displayName: string | null }
 ): Promise<WorkItemDto> {
   await assertPriorityAuthority(input.priority, sessionUser.id);
+  return createWorkItemWithPrincipal(input, authorTagFromSession(sessionUser));
+}
+
+/**
+ * Create as an already-authenticated non-human principal.
+ *
+ * Agents retain exact authorship for ordinary work, while P0/P1 remains a
+ * verified-human governance action and is rejected before any store access.
+ */
+export async function createWorkItemAsPrincipal(
+  input: ContractCreateInput,
+  principalId: string
+): Promise<WorkItemDto> {
+  if (isPrivilegedPriority(input.priority)) {
+    throw new WorkItemAuthorizationError(
+      `priority ${input.priority} requires node admin`
+    );
+  }
+  return createWorkItemWithPrincipal(input, principalId);
+}
+
+async function createWorkItemWithPrincipal(
+  input: ContractCreateInput,
+  principalId: string
+): Promise<WorkItemDto> {
   const container = getContainer();
   try {
     const created = await container.doltgresWorkItems.create(
@@ -346,7 +371,7 @@ export async function createWorkItem(
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
       },
-      authorTagFromSession(sessionUser)
+      principalId
     );
     return toDto(created);
   } catch (e) {

@@ -5,7 +5,9 @@
  * Module: `@app/api/v1/work/items/[id]/route`
  * Purpose: HTTP endpoints for getting, patching, and deleting a single work item by ID.
  * Scope: Auth-protected GET (markdown ∪ Doltgres routed by ID range), PATCH (Doltgres only), and DELETE (Doltgres hard-delete with dolt_log audit).
- * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, HARD_DELETE_RECOVERABLE_VIA_DOLT_REVERT, CODED_WRITE_ERRORS.
+ * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTHENTICATED_PRINCIPAL,
+ *   HUMAN_GOVERNANCE_ONLY, PATCH_ALLOWLIST, HARD_DELETE_RECOVERABLE_VIA_DOLT_REVERT,
+ *   CODED_WRITE_ERRORS.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write/delete)
  * Links: contracts/work.items.{get,patch,delete}.v1.contract
  * @public
@@ -17,7 +19,6 @@ import {
   workItemsGetOperation,
   workItemsPatchOperation,
 } from "@cogni/node-contracts";
-import type { SessionUser } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 
 import {
@@ -37,28 +38,6 @@ import { workItemTerminal } from "../_observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-function compatibilitySessionUser(
-  principal: RequestPrincipal
-): SessionUser | null {
-  if (principal.kind === "human") {
-    return {
-      id: principal.userId,
-      walletAddress: principal.walletAddress,
-      displayName: principal.displayName,
-      avatarColor: principal.avatarColor,
-    };
-  }
-  if (principal.kind === "legacy_agent") {
-    return {
-      id: principal.legacyUserId,
-      walletAddress: null,
-      displayName: principal.displayName,
-      avatarColor: null,
-    };
-  }
-  return null;
-}
 
 /**
  * GET /api/v1/work/items/:id — Get a single work item by ID. IDs ≥ 5000 read
@@ -186,26 +165,16 @@ export const PATCH = wrapRouteHandlerWithLogging<{
     }
 
     try {
-      const sessionUser = compatibilitySessionUser(principal);
       let patched: Awaited<ReturnType<typeof patchWorkItem>>;
-      if (principal.kind === "agent") {
+      if (principal.kind !== "human") {
         patched = await patchWorkItemAsPrincipal(
           parseResult.data,
           principal.principalId
         );
       } else {
-        if (!sessionUser) {
-          terminal.complete({
-            status: 401,
-            outcome: "error",
-            errorCode: "unauthorized",
-            reasonCode: "principal_not_supported",
-          });
-          return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-        }
         patched = await patchWorkItem(parseResult.data, {
-          id: sessionUser.id,
-          displayName: sessionUser.displayName,
+          id: principal.userId,
+          displayName: principal.displayName,
         });
       }
       const output = workItemsPatchOperation.output.parse(patched);

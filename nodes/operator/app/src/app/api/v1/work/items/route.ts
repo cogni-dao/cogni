@@ -5,7 +5,8 @@
  * Module: `@app/api/v1/work/items/route`
  * Purpose: HTTP endpoints for listing and creating work items.
  * Scope: Auth-protected GET (list — markdown ∪ Doltgres) and POST (create — Doltgres only).
- * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, ID_RANGE_RESERVED, CODED_WRITE_ERRORS.
+ * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTHENTICATED_PRINCIPAL,
+ *   HUMAN_GOVERNANCE_ONLY, ID_RANGE_RESERVED, CODED_WRITE_ERRORS.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write)
  * Links: contracts/work.items.{list,create}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @public
@@ -19,9 +20,14 @@ import { NextResponse } from "next/server";
 
 import {
   createWorkItem,
+  createWorkItemAsPrincipal,
   InvalidCursorError,
   listWorkItems,
 } from "@/app/_facades/work/items.server";
+import {
+  RequestIdentityUnavailableError,
+  resolveRequestPrincipal,
+} from "@/app/_lib/auth/request-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
@@ -86,13 +92,29 @@ export const GET = wrapRouteHandlerWithLogging(
  * POST /api/v1/work/items — Create a new work item in Doltgres.
  *
  * Server allocates an ID in the reserved 5000+ range per type
- * (ID_RANGE_RESERVED). Author is derived from `getSessionUser` and embedded in
- * the dolt_log commit message (AUTHOR_ATTRIBUTED).
+ * (ID_RANGE_RESERVED). Author is derived from the verified request principal
+ * and embedded in the dolt_log commit message (AUTHOR_ATTRIBUTED). Only a
+ * verified human may enter the node-admin gate for priority 0/1.
  */
 export const POST = wrapRouteHandlerWithLogging(
-  { routeId: "work.items.create", auth: { mode: "required", getSessionUser } },
-  async (ctx, request, sessionUser) => {
-    if (!sessionUser) {
+  { routeId: "work.items.create", auth: { mode: "none" } },
+  async (ctx, request) => {
+    let principal: Awaited<ReturnType<typeof resolveRequestPrincipal>>;
+    try {
+      principal = await resolveRequestPrincipal();
+    } catch (error) {
+      if (error instanceof RequestIdentityUnavailableError) {
+        return NextResponse.json(
+          {
+            error: "identity service unavailable",
+            errorCode: "identity_unavailable",
+          },
+          { status: 503 }
+        );
+      }
+      throw error;
+    }
+    if (!principal) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
 
@@ -112,10 +134,16 @@ export const POST = wrapRouteHandlerWithLogging(
     }
 
     try {
-      const created = await createWorkItem(parseResult.data, {
-        id: sessionUser.id,
-        displayName: sessionUser.displayName,
-      });
+      const created =
+        principal.kind === "human"
+          ? await createWorkItem(parseResult.data, {
+              id: principal.userId,
+              displayName: principal.displayName,
+            })
+          : await createWorkItemAsPrincipal(
+              parseResult.data,
+              principal.principalId
+            );
       ctx.log.info(
         { workItemId: created.id, node: created.node },
         "work.items.create_success"

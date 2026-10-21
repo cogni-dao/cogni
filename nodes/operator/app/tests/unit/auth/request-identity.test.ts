@@ -38,6 +38,7 @@ vi.mock("@/shared/env/server", () => ({
 }));
 
 import {
+  humanSessionUserFromPrincipal,
   issueAgentApiKey,
   peekAgentKeyExpiry,
   resolveRequestIdentity,
@@ -58,6 +59,50 @@ const FAKE_SESSION_USER = {
   displayName: "Tester",
   avatarColor: null,
 };
+
+describe("humanSessionUserFromPrincipal — governance boundary", () => {
+  it.each([
+    {
+      kind: "legacy_agent" as const,
+      principalId:
+        "user:4ff8eac1-4eba-4ed0-931b-b1fe4f64713d/00000000-0000-4000-a000-000000000003",
+      legacyUserId: "00000000-0000-4000-a000-000000000003",
+      displayName: "Legacy agent",
+      expiresAt: "2026-11-21T00:00:00.000Z",
+    },
+    {
+      kind: "agent" as const,
+      principalId:
+        "agent:4ff8eac1-4eba-4ed0-931b-b1fe4f64713d/00000000-0000-4000-a000-000000000004",
+      actorId: "00000000-0000-4000-a000-000000000004",
+      credentialId: "00000000-0000-4000-a000-000000000005",
+      billingAccountId: "00000000-0000-4000-a000-000000000006",
+      displayName: "Upgraded agent",
+      legacyUserId: FAKE_SESSION_USER.id,
+    },
+  ])("does not project $kind into a human session", (principal) => {
+    expect(humanSessionUserFromPrincipal(principal)).toBeNull();
+  });
+
+  it("projects a verified human principal", () => {
+    expect(
+      humanSessionUserFromPrincipal({
+        kind: "human",
+        principalId:
+          "user:4ff8eac1-4eba-4ed0-931b-b1fe4f64713d/00000000-0000-4000-a000-000000000042",
+        userId: "00000000-0000-4000-a000-000000000042",
+        walletAddress: null,
+        displayName: "Tester",
+        avatarColor: null,
+      })
+    ).toEqual({
+      id: "00000000-0000-4000-a000-000000000042",
+      walletAddress: null,
+      displayName: "Tester",
+      avatarColor: null,
+    });
+  });
+});
 
 describe("resolveRequestIdentity — circular-recursion regression", () => {
   beforeEach(() => {
