@@ -548,7 +548,7 @@ prometheus.relabel "infra_metrics" {
   // Keep only allowlisted metric names (+ up for deadman alerts)
   rule {
     source_labels = ["__name__"]
-    regex         = "(container_last_seen|container_memory_working_set_bytes|container_memory_rss|container_memory_failures_total|container_spec_memory_limit_bytes|container_cpu_usage_seconds_total|container_oom_events_total|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_network_receive_errors_total|container_network_transmit_errors_total|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_filesystem_files_free|node_filesystem_files|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_memory_SwapTotal_bytes|node_memory_SwapFree_bytes|node_vmstat_pswpin|node_vmstat_pswpout|node_vmstat_pgmajfault|node_pressure_memory_waiting_seconds_total|node_pressure_memory_stalled_seconds_total|node_disk_reads_completed_total|node_disk_read_time_seconds_total|node_disk_writes_completed_total|node_disk_write_time_seconds_total|node_disk_read_bytes_total|node_disk_written_bytes_total|node_pressure_io_waiting_seconds_total|node_pressure_io_stalled_seconds_total|node_disk_io_time_seconds_total|node_disk_io_time_weighted_seconds_total|node_cpu_seconds_total|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_nf_conntrack_entries|node_nf_conntrack_entries_limit|node_sockstat_TCP_alloc|node_sockstat_TCP_inuse|node_sockstat_TCP_tw|node_netstat_Tcp_CurrEstab|node_netstat_TcpExt_ListenDrops|node_netstat_TcpExt_ListenOverflows|node_netstat_TcpExt_SyncookiesFailed|node_netstat_TcpExt_TCPAbortOnMemory|node_k3s_kine_state_db_bytes|pg_up|pg_stat_database_numbackends|pg_stat_database_xact_commit|pg_stat_database_xact_rollback|pg_stat_database_blks_hit|pg_stat_database_blks_read|pg_stat_database_temp_files|pg_stat_database_temp_bytes|pg_stat_database_deadlocks|pg_stat_database_conflicts|pg_database_size_bytes|pg_settings_max_connections|pg_locks_count|pg_stat_activity_max_tx_duration|pg_roles_connection_limit|pg_stat_bgwriter_checkpoints_timed_total|pg_stat_bgwriter_checkpoints_req_total|pg_stat_bgwriter_buffers_backend_fsync_total|pg_wal_size_bytes|up)"
+    regex         = "(container_last_seen|container_memory_working_set_bytes|container_memory_rss|container_memory_swap|container_memory_failures_total|container_spec_memory_limit_bytes|container_cpu_usage_seconds_total|container_oom_events_total|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_network_receive_errors_total|container_network_transmit_errors_total|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_filesystem_files_free|node_filesystem_files|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_memory_SwapTotal_bytes|node_memory_SwapFree_bytes|node_vmstat_pswpin|node_vmstat_pswpout|node_vmstat_pgmajfault|node_pressure_memory_waiting_seconds_total|node_pressure_memory_stalled_seconds_total|node_disk_reads_completed_total|node_disk_read_time_seconds_total|node_disk_writes_completed_total|node_disk_write_time_seconds_total|node_disk_read_bytes_total|node_disk_written_bytes_total|node_pressure_io_waiting_seconds_total|node_pressure_io_stalled_seconds_total|node_disk_io_time_seconds_total|node_disk_io_time_weighted_seconds_total|node_cpu_seconds_total|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_nf_conntrack_entries|node_nf_conntrack_entries_limit|node_sockstat_TCP_alloc|node_sockstat_TCP_inuse|node_sockstat_TCP_tw|node_netstat_Tcp_CurrEstab|node_netstat_TcpExt_ListenDrops|node_netstat_TcpExt_ListenOverflows|node_netstat_TcpExt_SyncookiesFailed|node_netstat_TcpExt_TCPAbortOnMemory|node_k3s_kine_state_db_bytes|pg_up|pg_stat_database_numbackends|pg_stat_database_xact_commit|pg_stat_database_xact_rollback|pg_stat_database_blks_hit|pg_stat_database_blks_read|pg_stat_database_temp_files|pg_stat_database_temp_bytes|pg_stat_database_deadlocks|pg_stat_database_conflicts|pg_database_size_bytes|pg_settings_max_connections|pg_locks_count|pg_stat_activity_max_tx_duration|pg_roles_connection_limit|pg_stat_bgwriter_checkpoints_timed_total|pg_stat_bgwriter_checkpoints_req_total|pg_stat_bgwriter_buffers_backend_fsync_total|pg_wal_size_bytes|up)"
     action        = "keep"
   }
 
@@ -560,10 +560,63 @@ prometheus.relabel "infra_metrics" {
     action        = "drop"
   }
 
-  // Anonymous root/system cgroups would collapse after id/image/name removal.
-  // Only named Compose actors belong in the container attribution stream.
+  // VM SERVICE ATTRIBUTION (story.5084). cAdvisor sees the whole host cgroup
+  // tree (`cgroup: host`). Every container_* series is classified into exactly
+  // one `class` from a LEAF-level cgroup, so `sum by (class)` never
+  // double-counts:
+  //   class="compose"   — a Docker Compose actor; service = compose service.
+  //   class="systemd"   — a direct child unit of system.slice
+  //                       (`/system.slice/<unit>.service`); service = <unit>.
+  //                       k3s.service lands here (server + embedded containerd +
+  //                       shims). Nested sub-cgroups are NOT matched ([^/]+), the
+  //                       unit's own cgroup already includes them.
+  //   class="k8s-total" — the raw `/kubepods(.slice)` aggregate; service =
+  //                       "kubepods". This is a FALLBACK/CROSS-CHECK for the
+  //                       named per-pod class="k8s" stream scraped from the
+  //                       kubelet below, so it OVERLAPS class="k8s": every sum
+  //                       across classes MUST exclude class="k8s-total".
+  // Docker scopes (`/system.slice/docker-<id>.scope`) carry the compose label and
+  // are classified compose; anonymous cgroups (root, user.slice, init.scope,
+  // nested pod cgroups, unlabelled containers) get no class and are dropped,
+  // because they would collapse after id/image/name removal. Their memory is
+  // still visible as the dashboard's "Unattributed" remainder.
   rule {
     source_labels = ["__name__", "container_label_com_docker_compose_service"]
+    regex         = "container_[^;]*;.+"
+    target_label  = "class"
+    replacement   = "compose"
+  }
+
+  rule {
+    source_labels = ["__name__", "id"]
+    regex         = "container_[^;]*;/system\\.slice/([^/]+)\\.service"
+    target_label  = "service"
+    replacement   = "$1"
+  }
+
+  rule {
+    source_labels = ["__name__", "id"]
+    regex         = "container_[^;]*;/system\\.slice/([^/]+)\\.service"
+    target_label  = "class"
+    replacement   = "systemd"
+  }
+
+  rule {
+    source_labels = ["__name__", "id"]
+    regex         = "container_[^;]*;/kubepods(\\.slice)?"
+    target_label  = "service"
+    replacement   = "kubepods"
+  }
+
+  rule {
+    source_labels = ["__name__", "id"]
+    regex         = "container_[^;]*;/kubepods(\\.slice)?"
+    target_label  = "class"
+    replacement   = "k8s-total"
+  }
+
+  rule {
+    source_labels = ["__name__", "class"]
     regex         = "container_.*;"
     action        = "drop"
   }
@@ -575,9 +628,12 @@ prometheus.relabel "infra_metrics" {
     action        = "drop"
   }
 
-  // Map compose service label → "service" for consistent querying
+  // Map compose service label → "service" for consistent querying. `(.+)` is
+  // load-bearing: the default `(.*)` matches the empty label on systemd and
+  // kubepods series and would erase the `service` set above.
   rule {
     source_labels = ["container_label_com_docker_compose_service"]
+    regex         = "(.+)"
     target_label  = "service"
   }
 
@@ -605,7 +661,115 @@ prometheus.relabel "infra_metrics" {
 }
 
 // =============================================================================
-// Remote Write (shared by app_metrics + infra_metrics)
+// k3s pods, NAMED — kubelet cAdvisor (story.5084)
+// =============================================================================
+// The host cAdvisor above sees pod cgroups only as anonymous
+// `/kubepods.slice/...` ids (kept solely as the class="k8s-total" aggregate).
+// The kubelet's own cAdvisor endpoint labels the same cgroups with
+// namespace/pod/container, so operator, scheduler-worker, Argo, Crossplane, ESO
+// and OpenBao become individually attributable memory/swap/cpu/io consumers.
+//
+// TARGET: the kubelet listens on every host interface at :10250; this container
+// reaches the host via `extra_hosts: host.docker.internal:host-gateway` (the
+// same path app_metrics/worker_metrics use for NodePorts).
+//
+// AUTH: the kubelet runs `--authorization-mode=Webhook` with the k3s client CA.
+// `client-kube-apiserver.{crt,key}` is the exact client identity k3s hands the
+// apiserver for kubelet calls (`--kubelet-client-certificate`; CN
+// system:apiserver, O system:masters), read from the read-only host mount.
+// Alloy runs as root, so the 0600 key is readable; nothing is copied.
+//
+// SERVER VERIFICATION: the kubelet serving cert
+// (/var/lib/rancher/k3s/agent/serving-kubelet.crt) is signed by k3s server-ca
+// but its SANs are the node hostname/IPs, never `host.docker.internal` or the
+// docker host-gateway IP, so hostname verification cannot pass. The peer is the
+// local host over the docker bridge, so verification is skipped; the client
+// certificate still authenticates us to the kubelet.
+prometheus.scrape "kubelet_cadvisor" {
+  targets         = [{"__address__" = "host.docker.internal:10250"}]
+  forward_to      = [prometheus.relabel.k8s_container_metrics.receiver]
+  scheme          = "https"
+  metrics_path    = "/metrics/cadvisor"
+  scrape_interval = "30s"
+  scrape_timeout  = "10s"
+  job_name        = "kubelet_cadvisor"
+
+  tls_config {
+    cert_file            = "/host/root/var/lib/rancher/k3s/server/tls/client-kube-apiserver.crt"
+    key_file             = "/host/root/var/lib/rancher/k3s/server/tls/client-kube-apiserver.key"
+    insecure_skip_verify = true
+  }
+}
+
+prometheus.relabel "k8s_container_metrics" {
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+  // Same resource families as the host stream; `up` proves the scrape itself.
+  rule {
+    source_labels = ["__name__"]
+    regex         = "(container_memory_working_set_bytes|container_memory_rss|container_memory_swap|container_cpu_usage_seconds_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total|container_memory_failures_total|container_oom_events_total|container_spec_memory_limit_bytes|up)"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__name__", "failure_type", "scope"]
+    regex         = "container_memory_failures_total;(pgfault;.*|pgmajfault;hierarchy)"
+    action        = "drop"
+  }
+
+  // Pod-level cgroups (empty container) aggregate their containers, and POD is
+  // the pause sandbox: both would double-count.
+  rule {
+    source_labels = ["__name__", "container"]
+    regex         = "container_.*;(POD)?"
+    action        = "drop"
+  }
+
+  rule {
+    target_label = "class"
+    replacement  = "k8s"
+  }
+
+  // service = <namespace>/<pod owner>. Default to the full pod name (keeps
+  // StatefulSet ordinals such as openbao-0), then strip the ReplicaSet
+  // pod-template hash and the 5-char pod suffix for Deployment/DaemonSet/Job pods.
+  rule {
+    source_labels = ["namespace", "pod"]
+    separator     = "/"
+    regex         = "([^/]+)/(.+)"
+    target_label  = "service"
+    replacement   = "$1/$2"
+  }
+
+  rule {
+    source_labels = ["namespace", "pod"]
+    separator     = "/"
+    regex         = "([^/]+)/(.+?)(-[a-z0-9]{8,10})?-[a-z0-9]{5}"
+    target_label  = "service"
+    replacement   = "$1/$2"
+  }
+
+  rule {
+    target_label = "env"
+    replacement  = sys.env("DEPLOY_ENVIRONMENT")
+  }
+
+  rule {
+    target_label = "substrate_host"
+    replacement  = string.trim_space(local.file.substrate_host_identity.content)
+  }
+
+  // Pod name and uid churn on every rollout; `service` already names the owner.
+  // Caveat: two live replicas of one owner (rollout surge) share a label set
+  // for that window; Mimir keeps one sample per timestamp.
+  rule {
+    regex  = "(id|image|name|pod|uid)"
+    action = "labeldrop"
+  }
+}
+
+// =============================================================================
+// Remote Write (shared by app_metrics + infra_metrics + k8s_container_metrics)
 // =============================================================================
 
 prometheus.remote_write "grafana_cloud" {

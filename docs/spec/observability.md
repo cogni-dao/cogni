@@ -256,7 +256,18 @@ clientLogger.warn(EVENT_NAMES.CLIENT_CHAT_STREAM_ERROR, { messageId });
 
 **Core app metrics:** `http_requests_total`, `http_request_duration_ms`, `ai_chat_stream_duration_ms`, `ai_llm_call_duration_ms`, `ai_llm_tokens_total`, `ai_llm_cost_usd_total`, `ai_llm_errors_total`
 
-**Infra metrics (via Alloy exporters, strict allowlist):** `container_memory_working_set_bytes`, `container_memory_rss`, `container_spec_memory_limit_bytes`, `container_cpu_usage_seconds_total`, `container_oom_events_total`, `container_network_*`, `container_fs_*`, `node_filesystem_avail_bytes` (excl. tmpfs/overlay), `node_memory_MemAvailable_bytes`, `node_cpu_seconds_total`, `node_network_*`, `node_nf_conntrack_*`, selected `node_sockstat_TCP_*`, edge-failure `node_netstat_Tcp*` counters, `up`
+**Infra metrics (via Alloy exporters, strict allowlist):** the `keep` regex in `prometheus.relabel "infra_metrics"` is the authoritative list. Families: `container_last_seen`, `container_memory_working_set_bytes`, `container_memory_rss`, `container_memory_swap`, `container_memory_failures_total` (container-scope `pgmajfault` only), `container_spec_memory_limit_bytes`, `container_cpu_usage_seconds_total`, `container_oom_events_total`, `container_network_*`, `container_fs_{reads,writes}_bytes_total`; `node_filesystem_*` (excl. tmpfs/overlay/proc/sysfs/devtmpfs/squashfs), `node_memory_{MemAvailable,MemTotal,SwapTotal,SwapFree}_bytes`, `node_vmstat_{pswpin,pswpout,pgmajfault}`, `node_pressure_{memory,io}_*`, `node_disk_*`, `node_cpu_seconds_total`, `node_network_*`, `node_nf_conntrack_*`, selected `node_sockstat_TCP_*`, edge-failure `node_netstat_Tcp*` counters, `node_k3s_kine_state_db_bytes`; selected `pg_*` (bug.5293); `up`
+
+**VM service attribution (story.5084):** every `container_*` series carries `class` + `service`, classified from one leaf cgroup level so `sum by (class)` never double-counts:
+
+| `class`     | source                                                  | `service`                                      |
+| ----------- | ------------------------------------------------------- | ---------------------------------------------- |
+| `compose`   | host cAdvisor, Docker Compose label                     | compose service (`doltgres`, `temporal`)       |
+| `systemd`   | host cAdvisor, `/system.slice/<unit>.service`           | unit name (`k3s`, `docker`, `containerd`)      |
+| `k8s`       | kubelet `/metrics/cadvisor` (scrape `kubelet_cadvisor`) | `<namespace>/<pod owner>`                      |
+| `k8s-total` | host cAdvisor, raw `/kubepods(.slice)` aggregate        | `kubepods` — overlaps `k8s`; exclude from sums |
+
+Anonymous cgroups (root, `user.slice`, nested pod cgroups) are dropped; their memory is the Fleet Status "Unattributed" remainder (`MemTotal - MemAvailable - sum(container_memory_rss{class=~"compose|systemd|k8s"})`). The kubelet scrape keeps only memory/swap/cpu/fs-io/fault/OOM/limit families and drops `id|image|name|pod|uid`.
 
 **Labels:** All low-cardinality—`route` (routeId), `method`, `status` (2xx/4xx/5xx), `provider`, `model_class` (free/standard/premium), `code` (`AiExecutionErrorCode` — pre-normalized, no heuristics)
 
