@@ -14,6 +14,7 @@ resources:
   - candidate-a-node-template-applicationset.yaml
   - candidate-a-poly-applicationset.yaml
   - candidate-a-red-applicationset.yaml
+  - candidate-a-toks5-applicationset.yaml
   - preview-poly-applicationset.yaml
   - preview-toks5-applicationset.yaml
   - production-beacon-applicationset.yaml
