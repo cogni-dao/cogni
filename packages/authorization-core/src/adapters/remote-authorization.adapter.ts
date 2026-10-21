@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/authorization-core/adapters/remote-authorization`
  * Purpose: Portable, semantic client for the operator-mediated authorization facade.
- * Scope: Account reads, exact-account direct tool execution and semantic grants; no raw tuples.
+ * Scope: Account reads, owner projection, direct tool execution and semantic grants. Does not forward raw tuples.
  * Invariants: NODE_FROM_CREDENTIAL; SAME_NODE_ONLY; NO_RAW_TUPLES; FAIL_CLOSED_WITH_DISTINCTION.
  * Side-effects: IO (HTTP fetch)
  * Links: task.5226, docs/spec/rbac.md
