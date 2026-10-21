@@ -1682,10 +1682,13 @@ export class DoltgresKnowledgeContributionAdapter
     const rec = await this.getById(contributionId);
     if (!rec) throw new ContributionNotFoundError(contributionId);
     const toRef = rec.headCommit ?? rec.baseCommit;
+    const entries: ContributionDiffEntry[] = [];
+
+    // --- knowledge entries ---
     const rows = await this.sql.unsafe(
       `SELECT * FROM dolt_diff(${escapeRef(rec.baseCommit)}, ${escapeRef(toRef)}, 'knowledge')`
     );
-    return rows.map((r) => {
+    for (const r of rows) {
       const row = r as Record<string, unknown>;
       const diffType = String(row.diff_type ?? "modified");
       const before: Record<string, unknown> | null = row.from_id
@@ -1708,14 +1711,58 @@ export class DoltgresKnowledgeContributionAdapter
             domain: row.to_domain ?? null,
           }
         : null;
-      const rowId = String(row.to_id ?? row.from_id ?? "");
-      return {
+      // Suppress phantom `modified`: adding a citation recomputes the CITED entry's
+      // confidence (`UPDATE knowledge SET confidence_pct/updated_at WHERE id=<cited>`),
+      // which dolt_diff flags `modified` even though no DISPLAYED field changed —
+      // presenting a pure `cite` as an empty-delta modification of its target (bug.5004).
+      // The citation itself is surfaced below. Author-set confidence is forbidden, so a
+      // display-identical `modified` is always a recompute side-effect, never a real edit.
+      if (
+        diffType === "modified" &&
+        before &&
+        after &&
+        before.title === after.title &&
+        before.content === after.content &&
+        before.useWhen === after.useWhen &&
+        before.entryType === after.entryType &&
+        before.domain === after.domain
+      ) {
+        continue;
+      }
+      entries.push({
         changeType: diffType as ContributionDiffEntry["changeType"],
-        rowId,
+        rowId: String(row.to_id ?? row.from_id ?? ""),
         before,
         after,
-      };
-    });
+      });
+    }
+
+    // --- citations (links live in a SEPARATE table; make them first-class) ---
+    // Diff the citations table so a `cite` edit shows up AS a link
+    // (citation_added / citation_removed) instead of being invisible + mislabeled
+    // as a `modified` on its target (bug.5004).
+    const citeRows = await this.sql.unsafe(
+      `SELECT * FROM dolt_diff(${escapeRef(rec.baseCommit)}, ${escapeRef(toRef)}, 'citations')`
+    );
+    for (const r of citeRows) {
+      const row = r as Record<string, unknown>;
+      const diffType = String(row.diff_type ?? "added");
+      const changeType: ContributionDiffEntry["changeType"] =
+        diffType === "removed" ? "citation_removed" : "citation_added";
+      const side = (p: "from" | "to"): Record<string, unknown> => ({
+        citingId: row[`${p}_citing_id`] ?? null,
+        citedId: row[`${p}_cited_id`] ?? null,
+        citationType: row[`${p}_citation_type`] ?? null,
+      });
+      entries.push({
+        changeType,
+        rowId: String(row.to_id ?? row.from_id ?? ""),
+        before: row.from_id ? side("from") : null,
+        after: row.to_id ? side("to") : null,
+      });
+    }
+
+    return entries;
   }
 
   async merge(input: {

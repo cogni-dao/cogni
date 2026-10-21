@@ -16,7 +16,10 @@ import { describe, expect, it } from "vitest";
 
 import { DoltgresKnowledgeContributionAdapter } from "../src/adapters/doltgres/contribution-adapter.js";
 import type { Principal } from "../src/domain/contribution-schemas.js";
-import { CitationTargetNotFoundError } from "../src/port/knowledge-store.port.js";
+import {
+  CitationTargetNotFoundError,
+  KnowledgeWriteOutcomeUnknownError,
+} from "../src/port/knowledge-store.port.js";
 
 const record = {
   id: "contrib-agent-1-abc123",
@@ -476,7 +479,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     expect(conn.queries.some((q) => q.includes("dolt_branch('-D'"))).toBe(true);
   });
 
-  it("maps a thrown Dolt conflict to a clean human message, never the raw SQL (bug.5120)", async () => {
+  it("keeps a thrown native merge outcome unknown and private without replay (bug.5120)", async () => {
     // Doltgres throws on a conflicted merge with @autocommit on. The raw text
     // ("@@dolt_allow_commit_conflicts", branch refs, dolt_conflicts tables) must
     // NOT reach the admin — only a plain what-happened + how-to-fix message.
@@ -491,7 +494,27 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       .catch((e: unknown) => e as Error);
 
     expect(err).toBeTruthy();
-    expect(err?.message).toMatch(/conflict/i);
+    expect(err).toBeInstanceOf(KnowledgeWriteOutcomeUnknownError);
+    if (!(err instanceof KnowledgeWriteOutcomeUnknownError)) throw err;
+    expect(err.retryable).toBe(false);
+    expect(err.receipt).toMatchObject({
+      code: "knowledge_write_outcome_unknown",
+      retryable: false,
+      lookup: {
+        operationId: err.operationId,
+        branch: "main",
+        commitHash: null,
+      },
+    });
+    expect(err.operationId).not.toBe("");
+    expect(
+      conn.queries.filter(
+        (q) => q === "SELECT dolt_merge('contrib/agent-1-abc123')"
+      )
+    ).toHaveLength(1);
+    expect(conn.queries.some((q) => q.includes("dolt_branch('-D'"))).toBe(
+      false
+    );
     // no raw Dolt/SQL leakage
     expect(err?.message).not.toMatch(
       /dolt_merge|@@dolt|autocommit|dolt_conflicts/i
@@ -548,9 +571,19 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     });
 
     expect(commit.commitHash).toBe("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-    expect(fake.conn.queries).toContain(
-      "SELECT dolt_hashof('contrib/agent-1-abc123') AS dolt_hashof"
+    const checkout = fake.conn.queries.indexOf(
+      "SELECT dolt_checkout('contrib/agent-1-abc123')"
     );
+    const head = fake.conn.queries.indexOf(
+      "SELECT dolt_hashof('HEAD') AS commit_hash",
+      checkout + 1
+    );
+    const edit = fake.conn.queries.findIndex((q) =>
+      q.startsWith("INSERT INTO knowledge (")
+    );
+    expect(checkout).toBeGreaterThanOrEqual(0);
+    expect(head).toBeGreaterThan(checkout);
+    expect(edit).toBeGreaterThan(head);
     expect(
       fake.conn.queries.some((query) =>
         query.includes("head_commit = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'")
