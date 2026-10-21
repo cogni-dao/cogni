@@ -5,7 +5,7 @@
 /**
  * Module: `@scripts/money-plane-snapshot`
  * Purpose: One read of every chain-readable Cogni money plane — Akash Console credit (grant) + escrow + burn → runway days, and Base USDC/ETH wallets — graded against a runway policy.
- * Scope: Read-only public Akash LCD + Base RPC reads. Holds no credential, moves no funds, files nothing.
+ * Scope: Read-only public Akash LCD + Base RPC reads. Does not hold a credential, move funds, or file work items.
  * Invariants: RUNWAY_IS_GRANT_PLUS_ESCROW (Console credit lives on-chain as the DepositAuthorization spend_limit, not the owner bank balance) ; MISSING_IS_UNKNOWN (an unreadable plane is never GREEN)
  * Side-effects: IO
  * Notes: Vendor planes that need a secret (OpenRouter, Cherry, Grafana Cloud, ...) are listed by the finances-expert skill, not read here.
