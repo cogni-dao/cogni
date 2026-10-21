@@ -33,6 +33,7 @@ import {
   isWorkItemEndpointId,
 } from "../../domain/schemas.js";
 import {
+  type CitationLinkPage,
   CitationTargetNotFoundError,
   CitationTypeMismatchError,
   type Domain,
@@ -539,6 +540,52 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       `SELECT * FROM citations WHERE cited_id = ${escapeValue(citedId)} ORDER BY created_at`
     );
     return rows.map((r) => rowToCitation(r as Record<string, unknown>));
+  }
+
+  async listCitationLinks(
+    endpointId: string,
+    after?: string
+  ): Promise<CitationLinkPage> {
+    const endpoint = escapeValue(endpointId);
+    const cursor = after ? `AND id > ${escapeValue(after)}` : "";
+    // Bound each indexed adjacency read before joining endpoint metadata.
+    // One sentinel detects another page without counting the whole graph.
+    const rows = await this.sql.unsafe(`
+      WITH candidates AS (
+        (SELECT id, citing_id, cited_id, citation_type, context
+         FROM citations WHERE citing_id = ${endpoint} ${cursor}
+         ORDER BY id LIMIT 6)
+        UNION ALL
+        (SELECT id, citing_id, cited_id, citation_type, context
+         FROM citations WHERE cited_id = ${endpoint}
+           AND citing_id <> ${endpoint} ${cursor}
+         ORDER BY id LIMIT 6)
+      ), page AS (
+        SELECT id, citing_id, cited_id, citation_type, context
+        FROM candidates ORDER BY id LIMIT 6
+      )
+      SELECT p.id, p.citing_id, p.cited_id, p.citation_type, p.context,
+        COALESCE(sk.title, sw.title) AS source_title,
+        COALESCE(tk.title, tw.title) AS target_title
+      FROM page p
+      LEFT JOIN knowledge sk ON sk.id = p.citing_id
+      LEFT JOIN knowledge tk ON tk.id = p.cited_id
+      LEFT JOIN work_items sw ON sw.id = p.citing_id
+      LEFT JOIN work_items tw ON tw.id = p.cited_id
+      ORDER BY p.id`);
+    const links = rows.slice(0, 5).map((r) => ({
+      id: r.id as string,
+      citingId: r.citing_id as string,
+      citedId: r.cited_id as string,
+      citationType: r.citation_type as CitationType,
+      context: (r.context as string | null) ?? null,
+      sourceTitle: (r.source_title as string | null) ?? null,
+      targetTitle: (r.target_title as string | null) ?? null,
+    }));
+    return {
+      links,
+      nextCursor: rows.length > 5 ? (links.at(-1)?.id ?? null) : null,
+    };
   }
 
   async listAllCitations(): Promise<Citation[]> {

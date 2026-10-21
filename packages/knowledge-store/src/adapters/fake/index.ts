@@ -38,6 +38,7 @@ import type {
   WalkChainOptions,
 } from "../../port/edo-resolver.port.js";
 import {
+  type CitationLinkPage,
   CitationTargetNotFoundError,
   CitationTypeMismatchError,
   type Domain,
@@ -328,6 +329,32 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
 
   async listAllCitations(): Promise<Citation[]> {
     return Array.from(this.edges.values());
+  }
+
+  async listCitationLinks(
+    endpointId: string,
+    after?: string
+  ): Promise<CitationLinkPage> {
+    const candidates = Array.from(this.edges.values())
+      .filter(
+        (c) =>
+          (c.citingId === endpointId || c.citedId === endpointId) &&
+          (!after || c.id > after)
+      )
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const links = candidates.slice(0, 5).map((c) => ({
+      id: c.id,
+      citingId: c.citingId,
+      citedId: c.citedId,
+      citationType: c.citationType,
+      context: c.context ?? null,
+      sourceTitle: this.rows.get(c.citingId)?.title ?? null,
+      targetTitle: this.rows.get(c.citedId)?.title ?? null,
+    }));
+    return {
+      links,
+      nextCursor: candidates.length > 5 ? (links.at(-1)?.id ?? null) : null,
+    };
   }
 
   // --- Doltgres versioning (stubbed) ---

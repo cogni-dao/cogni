@@ -5,14 +5,17 @@
  * Module: `@app/(app)/_components/EntityCitationLinks`
  * Purpose: Render depth-1 citation edges for a knowledge or work-item endpoint
  *   as compact clickable chips.
- * Scope: Protected app presentation plus React Query fetch. No write policy.
+ * Scope: Node routing, transport, and chip presentation. No pagination or write policy.
  * Side-effects: IO (GET /api/v1/citations/:id via fetchCitationLinks)
  * @internal
  */
 
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import {
+  DirectRelationLinks,
+  formatCitationLabel,
+} from "@cogni/knowledge-base-ui";
 import Link from "next/link";
 import type { ReactElement } from "react";
 
@@ -32,42 +35,30 @@ function otherEndpoint(link: CitationLinkDto, entityId: string) {
 
 function chipLabel(link: CitationLinkDto, entityId: string): string {
   const endpoint = otherEndpoint(link, entityId);
-  return `${link.citationType} ${endpoint.title ?? endpoint.id}`;
+  return formatCitationLabel(link.citationType, endpoint);
 }
 
 export function EntityCitationLinks({
   entityId,
 }: EntityCitationLinksProps): ReactElement | null {
-  const query = useQuery({
-    queryKey: ["citation-links", entityId],
-    queryFn: () => fetchCitationLinks(entityId),
-    staleTime: 30_000,
-  });
-
-  const links = query.data?.links ?? [];
-  if (query.isLoading || query.error || links.length === 0) return null;
-
   return (
-    <div className="flex flex-col gap-1">
-      <span className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
-        Links
-      </span>
-      <div className="flex flex-wrap gap-1.5">
-        {links.map((link) => {
-          const endpoint = otherEndpoint(link, entityId);
-          return (
-            <Link
-              key={`${link.direction}-${link.id}`}
-              href={endpoint.href}
-              title={endpoint.title ?? endpoint.id}
-            >
-              <Badge intent="outline" size="sm">
-                <span className="font-mono">{chipLabel(link, entityId)}</span>
-              </Badge>
-            </Link>
-          );
-        })}
-      </div>
-    </div>
+    <DirectRelationLinks
+      entityId={entityId}
+      loadPage={fetchCitationLinks}
+      className="flex flex-col gap-1"
+      headingClassName="font-medium text-muted-foreground text-xs uppercase tracking-wider"
+      linksClassName="flex flex-wrap gap-1.5"
+      moreButtonClassName="w-fit rounded border px-2 py-1 text-xs disabled:opacity-50"
+      renderLink={(link) => {
+        const endpoint = otherEndpoint(link, entityId);
+        return (
+          <Link href={endpoint.href} title={endpoint.title ?? endpoint.id}>
+            <Badge intent="outline" size="sm">
+              <span className="font-mono">{chipLabel(link, entityId)}</span>
+            </Badge>
+          </Link>
+        );
+      }}
+    />
   );
 }

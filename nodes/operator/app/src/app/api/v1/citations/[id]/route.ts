@@ -4,19 +4,18 @@
 /**
  * Module: `@app/api/v1/citations/[id]/route`
  * Purpose: GET /api/v1/citations/:id — depth-1 citation links for one
- *   knowledge or work-item endpoint, resolved into clickable UI metadata.
+ *   knowledge or work-item endpoint, five metadata links per cursor page.
  * Scope: Authenticated session/bearer read endpoint. Delegates reads through
- *   the knowledge store port plus work-item facade; performs no writes.
+ *   the knowledge store port; performs no writes or per-endpoint body reads.
  * Invariants: VALIDATE_IO, CITATION_LINKS_ARE_EDGES, DEPTH_1_INDEXED_READ.
  * Side-effects: IO (HTTP response, Doltgres reads)
  * Links: docs/spec/knowledge-syntropy.md
  * @public
  */
 
+import { isWorkItemEndpointId } from "@cogni/knowledge-store";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-
-import { getWorkItem } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -41,32 +40,23 @@ const CitationLinkSchema = z.object({
 });
 
 const CitationLinksResponseSchema = z.object({
-  links: z.array(CitationLinkSchema),
+  links: z.array(CitationLinkSchema).max(5),
+  nextCursor: z.string().nullable(),
+});
+
+const CitationLinksQuerySchema = z.object({
+  cursor: z.string().min(1).max(2000).optional(),
 });
 
 type CitationEndpoint = z.infer<typeof CitationEndpointSchema>;
 
-function isWorkItemEndpointId(id: string): boolean {
-  return /^(task|bug|spike|story|subtask)\.\d+$/.test(id);
-}
-
-async function resolveEndpoint(id: string): Promise<CitationEndpoint> {
-  if (isWorkItemEndpointId(id)) {
-    const item = await getWorkItem(id);
-    return {
-      id,
-      kind: "work",
-      title: item?.title ?? null,
-      href: `/work?q=${encodeURIComponent(id)}`,
-    };
-  }
-
-  const entry = await getContainer().knowledgeStorePort?.getKnowledge(id);
+function endpoint(id: string, title: string | null): CitationEndpoint {
+  const isWork = isWorkItemEndpointId(id);
   return {
     id,
-    kind: "knowledge",
-    title: entry?.title ?? null,
-    href: `/knowledge/${encodeURIComponent(id)}`,
+    kind: isWork ? "work" : "knowledge",
+    title,
+    href: `${isWork ? "/work/items" : "/knowledge"}/${encodeURIComponent(id)}`,
   };
 }
 
@@ -77,7 +67,7 @@ export const GET = wrapRouteHandlerWithLogging<{
     routeId: "citations.links",
     auth: { mode: "required", getSessionUser },
   },
-  async (ctx, _request, sessionUser, context) => {
+  async (ctx, request, sessionUser, context) => {
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
@@ -92,41 +82,27 @@ export const GET = wrapRouteHandlerWithLogging<{
     }
 
     const { id } = await context.params;
-    const [outgoing, incoming] = await Promise.all([
-      port.listCitationsByCitingId(id),
-      port.listCitationsByCitedId(id),
-    ]);
-
-    const endpointCache = new Map<string, Promise<CitationEndpoint>>();
-    const endpointFor = (endpointId: string): Promise<CitationEndpoint> => {
-      const cached = endpointCache.get(endpointId);
-      if (cached) return cached;
-      const promise = resolveEndpoint(endpointId);
-      endpointCache.set(endpointId, promise);
-      return promise;
-    };
-
-    const links = await Promise.all([
-      ...outgoing.map(async (c) => ({
-        id: c.id,
-        direction: "out" as const,
-        citationType: c.citationType,
-        source: await endpointFor(c.citingId),
-        target: await endpointFor(c.citedId),
-        context: c.context ?? null,
-      })),
-      ...incoming.map(async (c) => ({
-        id: c.id,
-        direction: "in" as const,
-        citationType: c.citationType,
-        source: await endpointFor(c.citingId),
-        target: await endpointFor(c.citedId),
-        context: c.context ?? null,
-      })),
-    ]);
-
-    ctx.log.info({ id, count: links.length }, "citations.links_success");
-
-    return NextResponse.json(CitationLinksResponseSchema.parse({ links }));
+    const parsed = CitationLinksQuerySchema.safeParse({
+      cursor: new URL(request.url).searchParams.get("cursor") ?? undefined,
+    });
+    if (!parsed.success) {
+      return NextResponse.json({ error: "invalid cursor" }, { status: 400 });
+    }
+    const page = await port.listCitationLinks(id, parsed.data.cursor);
+    const links = page.links.map((c) => ({
+      id: c.id,
+      direction: c.citingId === id ? ("out" as const) : ("in" as const),
+      citationType: c.citationType,
+      source: endpoint(c.citingId, c.sourceTitle),
+      target: endpoint(c.citedId, c.targetTitle),
+      context: c.context,
+    }));
+    ctx.log.info(
+      { id, count: links.length, hasMore: page.nextCursor !== null },
+      "citations.links_success"
+    );
+    return NextResponse.json(
+      CitationLinksResponseSchema.parse({ links, nextCursor: page.nextCursor })
+    );
   }
 );
