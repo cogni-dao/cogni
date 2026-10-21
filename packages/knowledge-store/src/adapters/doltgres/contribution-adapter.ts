@@ -56,6 +56,7 @@ import {
 import type { Sql } from "postgres";
 import {
   initializeConfidence,
+  isConfidenceExempt,
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
 import type {
@@ -76,6 +77,7 @@ import type { CitationType } from "../../domain/schemas.js";
 import {
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
+  requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import {
   ContributionConflictError,
@@ -578,13 +580,17 @@ async function recomputeConfidenceOnConn(
   entryId: string
 ): Promise<number> {
   const entryRows = await conn.unsafe(
-    `SELECT source_type FROM knowledge WHERE id = ${escapeValue(entryId)} LIMIT 1`
+    `SELECT source_type, entry_type, confidence_pct FROM knowledge WHERE id = ${escapeValue(entryId)} LIMIT 1`
   );
   if (entryRows.length === 0) {
     throw new Error(`recomputeConfidence: entry '${entryId}' not found`);
   }
-  const sourceType = (entryRows[0] as Record<string, unknown>)
-    .source_type as string;
+  const entryRow = entryRows[0] as Record<string, unknown>;
+  // A DAO goal's confidence is not citation-driven (CONFIDENCE_EXEMPT_ENTRY_TYPES).
+  if (isConfidenceExempt(entryRow.entry_type as string | null)) {
+    return Number(entryRow.confidence_pct ?? 0);
+  }
+  const sourceType = entryRow.source_type as string;
   const incoming = await conn.unsafe(
     `SELECT citation_type FROM citations WHERE cited_id = ${escapeValue(entryId)} AND citation_type <> 'tracks'`
   );
@@ -800,12 +806,21 @@ async function applyEdit(input: {
 
   const entryId = edit.entry.id;
   const entryType = edit.entry.entryType ?? "finding";
+  // HYPOTHESIS_HAS_EVALUATE_AT on the generic insert path too (bug.5504): a
+  // bet or a `goal` proposed through a focused inbox carries its own
+  // evaluateAt (a goal's `By:` deadline); neither may land without one.
+  const evaluateAt = edit.entry.evaluateAt
+    ? new Date(edit.entry.evaluateAt)
+    : null;
+  if (requiresEvaluateAt(entryType) && !evaluateAt) {
+    throw new HypothesisMissingEvaluateAtError(entryId, entryType);
+  }
   const useWhenColumn = hasUseWhen ? ", use_when" : "";
   const useWhenValue = hasUseWhen
     ? `, ${edit.entry.useWhen ? escapeValue(stripDangerousControlChars(edit.entry.useWhen)) : "NULL"}`
     : "";
   await conn.unsafe(
-    `INSERT INTO knowledge (id, domain, entity_id, title, content${useWhenColumn}, entry_type, confidence_pct, source_type, source_ref, source_node, tags) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(stripDangerousControlChars(edit.entry.title))}, ${escapeValue(stripDangerousControlChars(edit.entry.content))}${useWhenValue}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"})`
+    `INSERT INTO knowledge (id, domain, entity_id, title, content${useWhenColumn}, entry_type, confidence_pct, source_type, source_ref, source_node, tags, evaluate_at, resolution_strategy) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(stripDangerousControlChars(edit.entry.title))}, ${escapeValue(stripDangerousControlChars(edit.entry.content))}${useWhenValue}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, ${escapeValue(evaluateAt)}, ${escapeValue(edit.entry.resolutionStrategy ?? null)})`
   );
 }
 

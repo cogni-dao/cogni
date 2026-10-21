@@ -44,7 +44,7 @@ const planSchema = z
     nodeId: z.string().uuid(),
     nodeSlug: z.string(),
     environment: z.enum(["candidate-a", "preview", "production"]),
-    oldHost: z.string().refine(isIPv4),
+    transition: z.literal("existing-same-identity-to-canonical-host"),
     newHost: z.string().refine(isIPv4),
     machineId: z.string().regex(/^[0-9a-f]{32}$/),
     authorization: authorizationSchema,
@@ -62,14 +62,14 @@ export const reviewedHostRebindPlans: readonly HostRebindPlan[] = [
     nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
     nodeSlug: "operator",
     environment: "production",
-    oldHost: "5.199.162.44",
+    transition: "existing-same-identity-to-canonical-host",
     newHost: "84.32.244.43",
     machineId: "9e8bb1a5190947e7b7a29f5d1a0d4f71",
     authorization: {
       state: "armed",
       receipt: {
         reference:
-          "https://github.com/cogni-dao/cogni/pull/2861#issuecomment-6314019935",
+          "https://github.com/cogni-dao/cogni/pull/2861#issuecomment-6324746219",
       },
     },
   },
@@ -93,8 +93,8 @@ export function planRecoveryBinding(
   try {
     return { bindings: sealRecoveryBinding(input), rebind: null };
   } catch (error) {
-    // Preserve every ordinary rejection. Only an otherwise matching old host is
-    // eligible for a source-reviewed plan; never generalize this to an override.
+    // Preserve every ordinary rejection. Only an otherwise matching prior binding is
+    // eligible for a source-reviewed canonical target; never accept a runtime override.
     if (recoveryBindingErrorCategory(error) !== "prior_host") throw error;
   }
   const matches = plans
@@ -113,10 +113,7 @@ export function planRecoveryBinding(
   // Narrow the discriminated union for the safe receipt below.
   if (plan.authorization.state !== "armed")
     throw new HostRebindRejection("rebind_plan_unarmed");
-  requireProof(
-    plan.oldHost !== plan.newHost && input.machineId === plan.machineId,
-    "rebind_plan_identity"
-  );
+  requireProof(input.machineId === plan.machineId, "rebind_plan_identity");
   const observedAt = Date.parse(input.observation.observedAt);
   requireProof(
     observedAt >= now - 120_000 && observedAt <= now + 5_000,
@@ -127,7 +124,9 @@ export function planRecoveryBinding(
   );
   requireProof(prior !== undefined, "rebind_prior_missing");
   const oldUrl = new URL(prior.dsn);
-  requireProof(oldUrl.hostname === plan.oldHost, "rebind_prior_host");
+  // The prior hostname is evidence to refresh, not destination authority. The
+  // reviewed target plus native/recorded physical identity remain mandatory.
+  requireProof(oldUrl.hostname !== plan.newHost, "rebind_prior_host");
   oldUrl.hostname = plan.newHost;
   // Exact normalized URL equality retains password, protocol, port, role, DB,
   // query and fragment. No credentials are accepted from the source plan.

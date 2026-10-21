@@ -22,6 +22,11 @@ import {
 } from "@cogni-dao/doltgres-admission";
 import type { Sql } from "postgres";
 import { initializeConfidence } from "../../domain/confidence-policy.js";
+import {
+  type ActiveGoal,
+  GOAL_ENTRY_TYPE,
+  selectActiveGoals,
+} from "../../domain/dao-goals.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
 import type {
   Citation,
@@ -35,6 +40,7 @@ import type {
 import {
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
+  requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import {
   assertKnowledgeReplay,
@@ -189,8 +195,8 @@ function expectedEntryTypeForEdge(type: CitationType): string | null {
  * DOMAIN_FK_ENFORCED_AT_WRITE pattern from task.5038.
  */
 function assertHypothesisEvaluateAt(entry: NewKnowledge): void {
-  if (entry.entryType === "hypothesis" && !entry.evaluateAt) {
-    throw new HypothesisMissingEvaluateAtError(entry.id);
+  if (requiresEvaluateAt(entry.entryType) && !entry.evaluateAt) {
+    throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
   }
 }
 
@@ -365,6 +371,31 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       }
     }
     return matched;
+  }
+
+  async listActiveGoals(): Promise<ActiveGoal[]> {
+    // Direct read of the main-plane `knowledge` table — contribution branches
+    // are separate Dolt branches and never appear here. The id-prefix and
+    // status checks run in `selectActiveGoals` (app layer) rather than SQL, the
+    // same Doltgres-safe idiom as `searchKnowledge`; the shelf is tiny.
+    const rows = await this.sql.unsafe(
+      `SELECT id, entry_type, status, title, content, evaluate_at FROM knowledge WHERE entry_type = ${escapeValue(GOAL_ENTRY_TYPE)}`
+    );
+    return selectActiveGoals(
+      rows.map((r) => {
+        const row = r as Record<string, unknown>;
+        return {
+          id: row.id as string,
+          entryType: row.entry_type as string,
+          status: (row.status as string | null) ?? null,
+          title: row.title as string,
+          content: row.content as string,
+          evaluateAt: row.evaluate_at
+            ? new Date(row.evaluate_at as string)
+            : null,
+        };
+      })
+    );
   }
 
   async listDomains(): Promise<string[]> {

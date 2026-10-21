@@ -759,7 +759,7 @@ mv "$TMPROOT/right.json" "$TMPROOT/probe.json"
 cp "$BINDING_FILE" "$TMPROOT/binding-good"
 jq -c 'map(if .nodeSlug=="node-template" then .dsn |= sub("10.0.0.1";"10.0.0.9") else . end)' "$BINDING_FILE" > "$TMPROOT/binding-old"
 cp "$TMPROOT/binding-old" "$BINDING_FILE"
-jq '[.[] | select(.nodeSlug=="node-template") | {id:"fixture-rehost",operation:"hostname-only-probe-reattestation",nodeId,nodeSlug,environment,oldHost:"10.0.0.9",newHost:"10.0.0.1",machineId:.substrateHost,authorization:{state:"armed",receipt:{reference:"https://example.invalid/test-only-authorization-receipt"}}}]' "$BINDING_FILE" > "$TMPROOT/armed-plan"
+jq '[.[] | select(.nodeSlug=="node-template") | {id:"fixture-rehost",operation:"hostname-only-probe-reattestation",nodeId,nodeSlug,environment,transition:"existing-same-identity-to-canonical-host",newHost:"10.0.0.1",machineId:.substrateHost,authorization:{state:"armed",receipt:{reference:"https://example.invalid/test-only-authorization-receipt"}}}]' "$BINDING_FILE" > "$TMPROOT/armed-plan"
 FAKE_REBIND_PLAN_FILE="$TMPROOT/armed-plan"
 : > "$TMPROOT/cas-log"
 run_db_ready > "$TMPROOT/rebind-out"
@@ -900,7 +900,7 @@ const v=JSON.parse(fs.readFileSync(0,'utf8'));
 try { process.stdout.write(JSON.stringify(planRecoveryBinding(v.input,v.plans,v.now))); }
 catch(e) { process.stderr.write(recoveryBindingErrorCategory(e)+'\\n'); process.exitCode=1; }
 """
-plan = {"id":"fixture-rehost", "operation":"hostname-only-probe-reattestation", "nodeId":valid["nodeId"], "nodeSlug":"operator", "environment":"production", "oldHost":"10.0.0.9", "newHost":"10.0.0.1", "machineId":"a"*32,
+plan = {"id":"fixture-rehost", "operation":"hostname-only-probe-reattestation", "nodeId":valid["nodeId"], "nodeSlug":"operator", "environment":"production", "transition":"existing-same-identity-to-canonical-host", "newHost":"10.0.0.1", "machineId":"a"*32,
         "authorization":{"state":"armed","receipt":{"reference":"https://example.invalid/test-only-authorization-receipt"}}}
 rehost=copy.deepcopy(valid)
 rehost["existingBindings"][1]["dsn"]=dsn.replace("10.0.0.1","10.0.0.9")
@@ -914,7 +914,17 @@ assert r.returncode==0, r.stderr
 assert json.loads(r.stdout)["bindings"]==[other,binding]
 assert json.loads(r.stdout)["rebind"]["credentialsPreserved"] is True
 assert canary not in json.dumps(json.loads(r.stdout)["rebind"])
-for field,value in [("machineId","b"*32),("nodeId",other["nodeId"]),("oldHost","10.0.0.8"),("newHost","10.0.0.8"),("operation","data-cutover")]:
+# Distinct former addresses converge only to the source-pinned canonical target.
+# Neither a remembered IPv4 nor a DNS alias is authority for the destination.
+for prior_host in ["10.0.0.8", "former-probe.example.invalid"]:
+    value=copy.deepcopy(rehost)
+    value["existingBindings"][1]["dsn"]=dsn.replace("10.0.0.1",prior_host)
+    r=invoke_plan(value,now=fixture_now)
+    assert r.returncode==0 and json.loads(r.stdout)["bindings"]==[other,binding], prior_host
+    assert canary not in json.dumps(json.loads(r.stdout)["rebind"])
+# Removing the exact source plan still preserves the ordinary host rejection.
+assert invoke_plan(plans=[],now=fixture_now).returncode==1
+for field,value in [("machineId","b"*32),("nodeId",other["nodeId"]),("transition","arbitrary-host-override"),("newHost","10.0.0.8"),("operation","data-cutover")]:
     wrong={**plan,field:value}; r=invoke_plan(plans=[wrong],now=fixture_now)
     assert r.returncode==1 and not r.stdout and canary not in r.stderr, field
 unarmed={**plan,"authorization":{"state":"unarmed","receipt":None}}
@@ -932,6 +942,9 @@ for mutate in [
     lambda v:v["existingBindings"][1].update(nodeSlug="other"),
     lambda v:v["existingBindings"][1].update(dsn=v["existingBindings"][1]["dsn"].replace(canary,"changed")),
     lambda v:v["existingBindings"][1].update(dsn=v["existingBindings"][1]["dsn"].replace("disable","require")),
+    lambda v:v["existingBindings"][1].update(dsn=v["existingBindings"][1]["dsn"].replace("postgresql:","postgres:")),
+    lambda v:v["existingBindings"][1].update(dsn=v["existingBindings"][1]["dsn"].replace(":5432/",":5433/")),
+    lambda v:v["existingBindings"][1].update(dsn=v["existingBindings"][1]["dsn"]+"#changed"),
     lambda v:v["existingBindings"].append(v["existingBindings"][1]),
     lambda v:v["observation"].update(systemIdentifier="987654321"),
 ]:

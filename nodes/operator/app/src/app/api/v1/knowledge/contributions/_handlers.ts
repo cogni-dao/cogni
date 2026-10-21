@@ -7,7 +7,10 @@
  *   Pulls the framework-agnostic ContributionService from the container, maps
  *   SessionUser → Principal, and translates typed service errors to HTTP statuses.
  * Scope: Operator HTTP wiring only. Does not implement contribution mutations or replay uncertain writes.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION.
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION,
+ *   GOAL_CHANGE_IS_NODE_ADMIN (task.5286): a merge whose diff touches a `goal-*` row (or a
+ *   citation from one) additionally requires `node.administer` on this node, checked BEFORE
+ *   the merge — 403 `authz_denied`, 503 `authz_unavailable`. Every other merge is unchanged.
  * Side-effects: IO (HTTP response, Doltgres read/write via container service)
  * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store
  * @internal
@@ -22,6 +25,7 @@ import {
   ContributionStateError,
   DomainNotRegisteredError,
   EmptyKnowledgePatchError,
+  HypothesisMissingEvaluateAtError,
   KnowledgeBusyError,
   KnowledgeGateError,
   KnowledgeWriteConflictError,
@@ -41,6 +45,12 @@ import type { SessionUser } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 
 import { getContainer } from "@/bootstrap/container";
+import {
+  checkNodeAdmin,
+  isGoalRowId,
+  nodeAdminFailureBody,
+} from "@/bootstrap/node-admin-gate";
+import { getNodeId } from "@/shared/config/repoSpec.server";
 
 function service() {
   const svc = getContainer().knowledgeContributionService;
@@ -108,6 +118,9 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json({ error: e.message }, { status: 400 });
   // PATCH_IS_NOT_EMPTY — a no-op patch is a client contract error, not a 500.
   if (e instanceof EmptyKnowledgePatchError)
+    return NextResponse.json({ error: e.message }, { status: 400 });
+  // HYPOTHESIS_HAS_EVALUATE_AT — a hypothesis insert without evaluateAt.
+  if (e instanceof HypothesisMissingEvaluateAtError)
     return NextResponse.json({ error: e.message }, { status: 400 });
   // A cite/EDO edit whose target resolves on neither the branch nor main, or
   // whose edge type doesn't match the cited entry_type, is a client error —
@@ -326,6 +339,19 @@ export async function handleDiff(
   });
 }
 
+/** A diff entry that changes a goal row, or a citation edge leaving one. */
+function touchesGoal(entry: {
+  rowId: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+}): boolean {
+  return (
+    isGoalRowId(entry.rowId) ||
+    isGoalRowId(entry.before?.citingId) ||
+    isGoalRowId(entry.after?.citingId)
+  );
+}
+
 export async function handleMerge(
   request: Request,
   contributionId: string,
@@ -356,6 +382,20 @@ export async function handleMerge(
 
   const principal = sessionUserToPrincipal(sessionUser, authSource(request));
   try {
+    // GOAL_CHANGE_IS_NODE_ADMIN — read the diff first so the check precedes the merge.
+    const entries = await svc.diff(contributionId);
+    if (entries.some(touchesGoal)) {
+      const gate = await checkNodeAdmin(getContainer().authorization, {
+        userId: sessionUser.id,
+        nodeId: getNodeId(),
+      });
+      if (!gate.ok) {
+        return NextResponse.json(
+          nodeAdminFailureBody(gate, "knowledge.contributions.merge.goal"),
+          { status: gate.status }
+        );
+      }
+    }
     const result = await svc.merge({
       principal,
       contributionId,

@@ -8,6 +8,7 @@
  * Invariants:
  *   - ERRORCODE_IS_THE_CONTRACT: every mapped response carries a stable `errorCode`; callers branch on it, never on the message text.
  *   - PERMANENT_VS_RETRYABLE: author-scoped refusal → 403 `authz_denied`; store unavailability → 503 `work_items_busy` + retry hint.
+ *   - DENIED_VS_UNAVAILABLE (task.5286): a node-admin priority refusal is 403 `authz_denied`; an authorization outage is 503 `authz_unavailable` — never conflated.
  *   - CAS_CONFLICT_IS_409: a lost `expectedRevision` compare-and-set → 409 `revision_conflict` carrying `currentRevision`; nothing was written.
  *   - UNRECOGNIZED_STAYS_500: an unmapped error returns null so the route rethrows and the wrapper answers 500 — the catch is never broadened.
  * Side-effects: IO (HTTP response construction, structured log entry)
@@ -19,6 +20,7 @@ import { NextResponse } from "next/server";
 
 import {
   WorkItemAuthorizationError,
+  WorkItemAuthzUnavailableError,
   WorkItemDeletionRetiredError,
   WorkItemNotFoundError,
   WorkItemRevisionConflictError,
@@ -80,6 +82,16 @@ function classify(error: unknown): Mapped | null {
       retryable: false,
       lookup: error.receipt.lookup,
     };
+
+  // FAIL CLOSED, DISTINCT FROM DENY. The authorization service could not
+  // decide a privileged write (priority 0/1); nothing was written.
+  if (error instanceof WorkItemAuthzUnavailableError) {
+    return {
+      status: 503,
+      errorCode: "authz_unavailable",
+      error: "authorization unavailable",
+    };
+  }
 
   // RETRYABLE. Query timeout / destroyed connection / contended Dolt operation
   // branch. The next attempt usually succeeds, so this must never look like the

@@ -64,6 +64,7 @@ vi.mock("@/bootstrap/container", () => {
       knowledgeContributionService: {
         create: contributionWrite,
         appendCommit: contributionWrite,
+        diff: vi.fn().mockResolvedValue([]),
         merge: contributionWrite,
         close: contributionWrite,
       },
@@ -262,7 +263,7 @@ describe("work-item write error shape (bug.5408)", () => {
         const res = await fetch({
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ expectedRevision: 4, set: { priority: 1 } }),
+          body: JSON.stringify({ expectedRevision: 4, set: { priority: 2 } }),
         });
         expect(res.status).toBe(409);
         const json = await res.json();
@@ -273,7 +274,7 @@ describe("work-item write error shape (bug.5408)", () => {
       },
     });
     expect(patchMock).toHaveBeenCalledWith(
-      { id: "task.5282", expectedRevision: 4, set: { priority: 1 } },
+      { id: "task.5282", expectedRevision: 4, set: { priority: 2 } },
       expect.any(String)
     );
     expect(logWarn).toHaveBeenCalledWith(
