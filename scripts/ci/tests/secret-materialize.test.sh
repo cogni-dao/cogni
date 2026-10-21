@@ -702,4 +702,81 @@ mv "$TMPROOT/wrong.json" "$TMPROOT/probe.json"
 if run_db_ready >/dev/null 2>&1; then echo 'foreign native DB accepted' >&2; exit 1; fi
 [ ! -s "$TMPROOT/db-ready-writes" ]
 
+# Exercise the real binding CLI, including its private stdin/stdout boundary.
+# Rejections expose a finite category, never a DSN, parser error, or input value.
+python3 - "$REPO_ROOT/scripts/lib/materialize-database-recovery-binding.ts" <<'PY'
+import copy
+import json
+import subprocess
+import sys
+
+script = sys.argv[1]
+canary = "PRIVATE_BINDING_VALUE_DO_NOT_LOG"
+dsn = f"postgresql://probe_operator:{canary}@10.0.0.1:5432/cogni_operator?sslmode=disable"
+binding = {
+    "nodeId": "44444444-4444-4444-8444-444444444444",
+    "nodeSlug": "operator", "environment": "production",
+    "databaseName": "cogni_operator", "probeRole": "probe_operator",
+    "systemIdentifier": "123456789", "substrateHost": "a" * 32, "dsn": dsn,
+}
+other = {**binding, "nodeId": "33333333-3333-4333-8333-333333333333", "environment": "preview"}
+valid = {
+    "nodeId": binding["nodeId"], "nodeSlug": "operator", "environment": "production",
+    "databaseName": "cogni_operator", "probeRole": "probe_operator", "dsn": dsn,
+    "expectedHost": "10.0.0.1", "machineId": "a" * 32,
+    "localSystemIdentifier": "123456789",
+    "observation": {
+        "database": "cogni_operator", "role": "probe_operator", "systemTenantExists": True,
+        "serverAddress": "10.0.0.1", "serverPort": 5432, "systemIdentifier": "123456789",
+        "appRolesCanLogin": True, "runtimeRolesPresent": True, "runtimeRolesNoLogin": False,
+        "activeRuntimeSessions": 0, "observedAt": "2026-10-21T07:00:00.000+00:00",
+        "probeRoleIsolated": True,
+    },
+    "existingBindings": [other, binding],
+}
+
+def invoke(raw):
+    return subprocess.run(["pnpm", "exec", "tsx", script], input=raw, text=True, capture_output=True)
+
+for existing in ([other], [other, binding]):
+    value = {**valid, "existingBindings": existing}
+    result = invoke(json.dumps(value))
+    assert result.returncode == 0 and result.stderr == "", "valid binding rejected"
+    assert json.loads(result.stdout) == [other, binding], "binding payload or unrelated scope changed"
+
+def rejected(category, mutate=None, raw=None):
+    value = copy.deepcopy(valid)
+    if mutate:
+        mutate(value)
+    result = invoke(json.dumps(value) if raw is None else raw)
+    assert result.returncode == 1, f"guard accepted: {category}"
+    assert result.stdout == "", f"rejection wrote private stdout: {category}"
+    assert result.stderr == f"recovery binding receipt rejected: {category}\n", f"unexpected diagnostic: {category}"
+    assert canary not in result.stdout + result.stderr, f"private value leaked: {category}"
+
+rejected("input_json", raw='{"private": "' + canary + '", invalid}')
+rejected("input_schema", lambda v: v["observation"].update({canary: canary}))
+rejected("input_schema", lambda v: v.update(nodeId=canary))
+rejected("canonical_identity", lambda v: v.update(databaseName="cogni_other"))
+rejected("canonical_dsn_invalid", lambda v: v.update(dsn=canary + "\ninvalid"))
+rejected("canonical_dsn_mismatch", lambda v: v.update(dsn=v["dsn"].replace("10.0.0.1", "10.0.0.2")))
+rejected("validation_error", lambda v: v.update(dsn=v["dsn"].replace("probe_operator:", canary + "%zz:")))
+rejected("native_identity", lambda v: v["observation"].update(systemIdentifier="987654321"))
+rejected("native_identity", lambda v: v["observation"].update(database="cogni_other"))
+rejected("duplicate_binding", lambda v: v["existingBindings"].append(binding))
+for field, value, category in [
+    ("substrateHost", "b" * 32, "prior_machine_id"),
+    ("systemIdentifier", "987654321", "prior_system_identifier"),
+    ("dsn", dsn.replace("10.0.0.1", "10.0.0.2"), "prior_host"),
+    ("dsn", canary + "\ninvalid", "prior_dsn_invalid"),
+    ("databaseName", "cogni_other", "prior_database"),
+    ("probeRole", "probe_other", "prior_role"),
+    ("nodeSlug", "other", "prior_node_slug"),
+]:
+    rejected(category, lambda v: v["existingBindings"][1].update({field: value}))
+rejected("prior_machine_id", lambda v: v["existingBindings"][1].update(substrateHost="b" * 32, dsn=canary))
+
+print("PASS: binding CLI preserves valid payloads and rejects private inputs without disclosure")
+PY
+
 echo "PASS: secret-materialize.test.sh"

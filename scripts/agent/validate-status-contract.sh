@@ -19,7 +19,9 @@ block() {
   exit 0
 }
 
-first_nonempty="$(printf '%s\n' "$MESSAGE" | awk 'NF { print; exit }')"
+# Short-circuit readers must not close a producer pipe under pipefail: a valid
+# large response can otherwise fail with SIGPIPE before the advisory is decided.
+first_nonempty="$(awk 'NF { print; exit }' <<<"$MESSAGE")"
 last_nonempty="$(printf '%s\n' "$MESSAGE" | awk 'NF { line=$0 } END { print line }')"
 
 case "$first_nonempty" in
@@ -29,17 +31,17 @@ case "$first_nonempty" in
     ;;
 esac
 
-printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*\*\*Done when\*\*[[:space:]]*\|' ||
+grep -Eq '^\|[[:space:]]*\*\*Done when\*\*[[:space:]]*\|' <<<"$MESSAGE" ||
   block "Contract breach: the status block is missing its Done when row. Rewrite the whole response in the required shape."
-printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*\*\*Status\*\*[[:space:]]*\|' ||
+grep -Eq '^\|[[:space:]]*\*\*Status\*\*[[:space:]]*\|' <<<"$MESSAGE" ||
   block "Contract breach: the status block is missing its Status row. Rewrite the whole response in the required shape."
-printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*\*\*ETA · Conf\*\*[[:space:]]*\|' ||
+grep -Eq '^\|[[:space:]]*\*\*ETA · Conf\*\*[[:space:]]*\|' <<<"$MESSAGE" ||
   block "Contract breach: the status block is missing its ETA · Conf row. Rewrite the whole response in the required shape."
-printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*\*\*Followed\*\*[[:space:]]*\|' ||
+grep -Eq '^\|[[:space:]]*\*\*Followed\*\*[[:space:]]*\|' <<<"$MESSAGE" ||
   block "Contract breach: the status block is missing its Followed row. Rewrite the whole response in the required shape."
-printf '%s\n' "$MESSAGE" | grep -Eq '^([*][*][*]|---)$' ||
+grep -Eq '^([*][*][*]|---)$' <<<"$MESSAGE" ||
   block "Contract breach: the status block is missing the divider before its items table. Rewrite the whole response in the required shape."
-printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*item[[:space:]]*\|[[:space:]]*owner[[:space:]]*\|[[:space:]]*deliverable links[[:space:]]*\|[[:space:]]*status[[:space:]]*\|[[:space:]]*ETA · Conf[[:space:]]*\|[[:space:]]*next[[:space:]]*\|' ||
+grep -Eq '^\|[[:space:]]*item[[:space:]]*\|[[:space:]]*owner[[:space:]]*\|[[:space:]]*deliverable links[[:space:]]*\|[[:space:]]*status[[:space:]]*\|[[:space:]]*ETA · Conf[[:space:]]*\|[[:space:]]*next[[:space:]]*\|' <<<"$MESSAGE" ||
   block "Contract breach: the status block is missing its items table. Rewrite the whole response in the required shape."
 
 case "$last_nonempty" in
@@ -49,20 +51,20 @@ case "$last_nonempty" in
     ;;
 esac
 
-outside_block="$(printf '%s\n' "$MESSAGE" | awk '
+outside_block="$(awk '
   NF == 0 { next }
   /^\|/ { next }
   /^---$/ { next }
   /^\*\*\*$/ { next }
   /^>/ { next }
   { print; exit }
-')"
+' <<<"$MESSAGE")"
 [[ -z "$outside_block" ]] ||
   block "Contract breach: prose appeared outside the tables and Bottom line. Rewrite the entire response as only the required status block."
 
 extract_cell() {
   local row_pattern="$1"
-  printf '%s\n' "$MESSAGE" | awk -F'|' -v pattern="$row_pattern" '
+  awk -F'|' -v pattern="$row_pattern" '
     $2 ~ pattern {
       value=$3
       sub(/^[[:space:]]+/, "", value)
@@ -70,7 +72,7 @@ extract_cell() {
       print value
       exit
     }
-  '
+  ' <<<"$MESSAGE"
 }
 
 GOAL="$(extract_cell 'Goal')"
@@ -95,7 +97,7 @@ if [[ "$GOAL" == "—" || "$DONE_WHEN" == "—" ]]; then
 else
   [[ "$FOLLOWED" != "—" && "$FOLLOWED" == *"https://"* ]] ||
     block "Process-contract breach: a substantive proposal requires Followed to contain verified human URLs for sources actually consulted. Continue research; do not propose from an empty evidence base."
-  if printf '%s\n' "$ETA_CONF" | grep -Eqi 'reviewed[[:space:]]+0|(^|[^0-9])0/[1-9][0-9]*|0[[:space:]]+sources'; then
+  if grep -Eqi 'reviewed[[:space:]]+0|(^|[^0-9])0/[1-9][0-9]*|0[[:space:]]+sources' <<<"$ETA_CONF"; then
     block "Process-contract breach: a substantive proposal cannot report zero reviewed sources. Keep Goal, Done when, and Status as —, complete the required research pass, then propose from evidence."
   fi
 
