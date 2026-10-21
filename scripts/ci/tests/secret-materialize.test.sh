@@ -78,7 +78,8 @@ chmod +x "$FAKEBIN/ssh"
 cat > "$FAKEBIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = "create" ] && [ "${2:-}" = "token" ]; then
-  echo jwt-token
+  [[ "$*" == 'create token openbao-operator -n default' ]] || exit 9
+  echo owned.jwt.signature
   exit 0
 fi
 if [[ "$*" == '-n openbao get service openbao -o json' ]]; then
@@ -90,8 +91,8 @@ if [ "${1:-}" = "exec" ]; then
   last_index=$((${#args[@]} - 1))
   path="${args[$last_index]}"
   if printf '%s\n' "$*" | grep -q 'auth/kubernetes/login'; then
-    echo writer-token
-    exit 0
+    echo 'login must not use kubectl exec' >&2
+    exit 9
   fi
   if printf '%s\n' "$*" | grep -q 'bao kv get -format=json'; then
     dir="${FAKE_BAO_ROOT}/${path}"
@@ -143,6 +144,15 @@ chmod +x "$FAKEBIN/timeout"
 cat > "$FAKEBIN/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${!#}" == http://127.0.0.1:8200/v1/auth/kubernetes/login ]]; then
+  out="" body=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in --output) out="$2"; shift 2 ;; --data-binary) body="${2#@}"; shift 2 ;; *) shift ;; esac
+  done
+  jq -e '.role == "candidate-a-writer" and .jwt == "owned.jwt.signature"' "$body" >/dev/null || exit 9
+  printf '{"auth":{"client_token":"writer-token"}}' > "$out"
+  printf '200'; exit 0
+fi
 # GET transport shares this binary with the existing LiteLLM fixture.
 if [[ "${!#}" == http://127.0.0.1:8200/v1/cogni/data/* ]]; then
   out="" url="${!#}"
