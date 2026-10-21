@@ -70,3 +70,7 @@ node_id: f66b260b-4633-41e2-8711-b7c1b8449cc1
 compute_egress_cidrs:
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
+  - cidr: 65.108.194.156/32
+    envs: [candidate-a]
+    ports: [5432]
+    comment: Toks5 candidate lease 1792623140532 egress measured in the running app at 2026-10-21T23:08Z (spike.5010); service_toks5 targets candidate-a Postgres, whose TCP connection times out without this grant. Candidate Postgres only; production trust is unchanged.
