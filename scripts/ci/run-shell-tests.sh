@@ -65,6 +65,7 @@ PARALLEL=(
   aggregate-decide-outcome.test.sh
   aggregate-rollup.test.sh
   deployment-workflows.test.sh
+  verify-deployment.test.sh
   require-node-ref-vm.test.sh
   resolve-substrate-gate.test.sh
   detect-affected.test.sh
