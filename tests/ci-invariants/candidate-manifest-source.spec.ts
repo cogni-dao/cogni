@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/ci-invariants/candidate-manifest-source`
  * Purpose: Pins pre-merge manifest provenance for candidate-a node-ref flights.
- * Scope: Workflow assertions and owned local Kustomize/Git fixtures; no remote Actions or deployment.
+ * Scope: Workflow assertions and owned local Kustomize/Git fixtures; does not execute remote Actions or deploy.
  * Invariants:
  *   CANDIDATE_MANIFESTS_FOLLOW_IN_REPO_SOURCE: an in-repo node-ref flight uses
  *     source_sha as head_sha, so infra/k8s is materialized from the exact
@@ -20,7 +20,7 @@
  *   EXACT_SELF_FLIGHT_PROVES_SUBSTRATE_SCRIPTS: the operator may execute the
  *     reviewed app-source substrate runner only when workflow and app are the
  *     same commit; all remote or mismatched source flights stay on ci-src.
- * Side-effects: Reads workflow inputs; creates and removes owned temporary render/Git fixtures.
+ * Side-effects: IO (reads workflow inputs; creates and removes owned temporary render/Git fixtures)
  * Links: docs/spec/ci-cd.md axioms 17-20, docs/spec/node-ci-cd-contract.md artifact contract
  * @public
  */
