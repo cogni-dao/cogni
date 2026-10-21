@@ -32,14 +32,16 @@ interface LiteLlmModel {
   model_info?: { is_free?: boolean };
 }
 
-function servedModels(): Map<string, boolean> {
-  const config = yaml.parse(readFileSync(LITELLM_CONFIG, "utf-8")) as {
-    model_list: LiteLlmModel[];
-  };
-  return new Map(
-    config.model_list.map((m) => [m.model_name, m.model_info?.is_free === true])
-  );
+function readYaml<T>(file: string): T {
+  return yaml.parse(readFileSync(file, "utf-8")) as T;
 }
+
+/** LiteLLM `model_name` → whether it is `is_free`. */
+const isFreeByServedModel = new Map(
+  readYaml<{ model_list: LiteLlmModel[] }>(LITELLM_CONFIG).model_list.map(
+    (m) => [m.model_name, m.model_info?.is_free === true]
+  )
+);
 
 function repoSpecPaths(): string[] {
   const nodeSpecs = readdirSync(path.join(ROOT, "nodes"))
@@ -48,29 +50,27 @@ function repoSpecPaths(): string[] {
   return [path.join(ROOT, ".cogni/repo-spec.yaml"), ...nodeSpecs];
 }
 
-const configured = repoSpecPaths().flatMap((file) => {
-  const spec = yaml.parse(readFileSync(file, "utf-8")) as {
-    review?: { model?: string };
-  };
-  const model = spec.review?.model;
+const reviewModelPins = repoSpecPaths().flatMap((file) => {
+  const model = readYaml<{ review?: { model?: string } }>(file).review?.model;
   return model ? [{ file: path.relative(ROOT, file), model }] : [];
 });
 
 describe("PR review model (story.5102)", () => {
   it("the root repo-spec pins a review model", () => {
-    expect(configured.map((c) => c.file)).toContain(".cogni/repo-spec.yaml");
+    expect(reviewModelPins.map((c) => c.file)).toContain(
+      ".cogni/repo-spec.yaml"
+    );
   });
 
-  it.each(configured)("$file review.model $model is served and free", ({
+  it.each(reviewModelPins)("$file review.model $model is served and free", ({
     model,
   }) => {
-    const served = servedModels();
     expect(
-      served.has(model),
-      `not a LiteLLM model_name: ${[...served.keys()].join(", ")}`
+      isFreeByServedModel.has(model),
+      `not a LiteLLM model_name: ${[...isFreeByServedModel.keys()].join(", ")}`
     ).toBe(true);
     expect(
-      served.get(model),
+      isFreeByServedModel.get(model),
       "review runs bill the unfunded system tenant"
     ).toBe(true);
   });

@@ -19,7 +19,8 @@ evaluations:
       spike.N) or a spec link — and states the acceptance criteria it claims to satisfy.
       If no spec is named, score 0.0 and begin the observation with "MISSING INPUT:".
   - spec-fidelity: >
-      Judged against the spec the PR declares: no requirement it claims is missing or
+      Judged against the spec as quoted or summarized in the PR description (the
+      reviewer does not fetch work items): no requirement it claims is missing or
       partial, no behavior was added that the spec did not ask for (scope creep), and no
       claimed requirement looks implemented incorrectly. Quote the PR line behind each
       finding. If no spec is declared, score 0.5 and begin the observation with
