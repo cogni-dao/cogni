@@ -1005,9 +1005,7 @@ export interface ActorAttributionStore {
 
   resolveActiveHumanActorId(userId: string): Promise<string | null>;
 
-  resolveCurrentStewardActorId(
-    earnedByActorId: string
-  ): Promise<string | null>;
+  resolveCurrentStewardActorId(earnedByActorId: string): Promise<string | null>;
 
   proposeActorBeneficiaryPolicy(
     params: ProposeActorBeneficiaryPolicyParams

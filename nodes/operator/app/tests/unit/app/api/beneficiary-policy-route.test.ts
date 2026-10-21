@@ -45,10 +45,7 @@ vi.mock("@/bootstrap/http", () => ({
   wrapRouteHandlerWithLogging:
     (
       _options: unknown,
-      handler: (
-        ctx: { log: typeof log },
-        request: Request
-      ) => Promise<Response>
+      handler: (ctx: { log: typeof log }, request: Request) => Promise<Response>
     ) =>
     (request: Request) =>
       handler({ log }, request),
