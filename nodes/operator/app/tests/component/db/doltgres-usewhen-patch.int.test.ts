@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/component/db/doltgres-usewhen-patch`
  * Purpose: Prove against a real Doltgres that `op:'patch'` refines a retrieval trigger while leaving the body byte-identical, and that `listKnowledge({q})` finds the entry by a `useWhen` substring (task.5204).
- * Scope: Component test — boots `dolthub/doltgresql:latest` via testcontainers and drives `DoltgresKnowledgeContributionAdapter` + `DoltgresKnowledgeStoreAdapter` directly. Does not exercise HTTP routes, auth, or the contribution service's policy gates.
+ * Scope: Component test — boots `dolthub/doltgresql:0.57.3` via testcontainers and drives `DoltgresKnowledgeContributionAdapter` + `DoltgresKnowledgeStoreAdapter` directly. Does not exercise HTTP routes, auth, or the contribution service's policy gates.
  * Invariants:
  *   - RED CONTROL first: the pre-existing `op:'update'` path is shown to clobber
  *     `content` on a resend that drifts, so the green `patch` case cannot be
@@ -14,6 +14,8 @@
  *     gate-governed field (`content`, `title`, `tags`, `id`, `sourceRef`) plus
  *     `domain` — so the op cannot become a route around the write-gate chain.
  *     An empty partial must be rejected rather than acknowledged as a write.
+ *   - EDO_CONFIDENCE_PUBLISHED_ON_MERGE: main-only outcome targets are valid,
+ *     confidence and merged metadata publish together, and failed appends roll back.
  *   - Q_MATCHES_USEWHEN_ONLY: `q` matches the trigger, never the title or body.
  * Side-effects: IO, process.env
  * Links: packages/knowledge-store/src/domain/contribution-schemas.ts, packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
@@ -81,6 +83,7 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
   let branchClient: Sql;
   let adapter: DoltgresKnowledgeContributionAdapter;
   let store: DoltgresKnowledgeStoreAdapter;
+  let failMergeMetadataOnce = false;
 
   /** Open a contribution carrying `edits`, then merge it so `main` sees it. */
   async function contributeAndMerge(
@@ -122,7 +125,7 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
   }
 
   beforeAll(async () => {
-    container = await new GenericContainer("dolthub/doltgresql:latest")
+    container = await new GenericContainer("dolthub/doltgresql:0.57.3")
       .withEnvironment({ DOLTGRES_PASSWORD: DG_PASSWORD })
       .withExposedPorts(5432)
       .withWaitStrategy(
@@ -156,7 +159,35 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     const createBranchClient = () =>
       buildDoltgresClient({ connectionString: dbUrl, max: 1 });
     branchClient = createBranchClient();
-    const writerSession = new DoltBranchSessionRunner(branchClient, {
+    // Owned fault transport: every native query and guard stays real. Only a
+    // single metadata UPDATE can be rejected before it is dispatched.
+    const writerTransport = new Proxy(branchClient, {
+      get(target, key) {
+        if (key !== "reserve") return Reflect.get(target, key, target);
+        return async () => {
+          const conn = await target.reserve();
+          return new Proxy(conn, {
+            get(connection, member) {
+              if (member !== "unsafe")
+                return Reflect.get(connection, member, connection);
+              return (...args: Parameters<typeof conn.unsafe>) => {
+                if (
+                  failMergeMetadataOnce &&
+                  args[0].startsWith(
+                    "UPDATE knowledge_contributions SET state = 'merged'"
+                  )
+                ) {
+                  failMergeMetadataOnce = false;
+                  throw new Error("owned merge metadata fault before dispatch");
+                }
+                return Reflect.apply(connection.unsafe, connection, args);
+              };
+            },
+          });
+        };
+      },
+    });
+    const writerSession = new DoltBranchSessionRunner(writerTransport, {
       writerProtocol: "database",
     });
     adapter = new DoltgresKnowledgeContributionAdapter({
@@ -374,5 +405,223 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     expect(
       (await store.listKnowledge(DOMAIN, { limit: 100 })).length
     ).toBeGreaterThanOrEqual(4);
+  }, 180_000);
+  it("reconciles a main-only EDO outcome without losing confidence or replaying mutations", async () => {
+    const who = principal("edo-main-only");
+    // This contribution predates H: the cited row exists on MAIN only.
+    const old = await adapter.create({
+      principal: who,
+      message: "older branch",
+    });
+    await store.withWrite(
+      {
+        operationId: "fixture:edo:main-only-h",
+        message: "seed later hypothesis",
+      },
+      (write) =>
+        write.addKnowledge({
+          id: "edo-main-only-h",
+          domain: DOMAIN,
+          title: "Later hypothesis",
+          content: "A main-only target remains valid.",
+          entryType: "hypothesis",
+          sourceType: "human",
+          evaluateAt: new Date("2030-01-01T00:00:00Z"),
+        })
+    );
+    expect((await store.getKnowledge("edo-main-only-h"))?.confidencePct).toBe(
+      70
+    );
+    const input = {
+      contributionId: old.contributionId,
+      principal: who,
+      message: "resolve later H",
+      entry: {
+        id: "edo-main-only-o",
+        domain: DOMAIN,
+        title: "Observed outcome",
+        content: "The prediction held.",
+      },
+      hypothesisId: "edo-main-only-h",
+      edge: "validates" as const,
+    };
+    const before = (
+      await readClient.unsafe("SELECT dolt_hashof('HEAD') AS hash")
+    )[0]?.hash;
+    // The outcome INSERT precedes endpoint validation. A failed append must
+    // roll it back on the owned branch and leave MAIN/metadata unchanged.
+    await expect(
+      adapter.appendEdoOutcome({
+        ...input,
+        entry: { ...input.entry, id: "edo-rejected-o" },
+        hypothesisId: "edo-absent-h",
+      })
+    ).rejects.toThrow(/not found/i);
+    expect(
+      (await readClient.unsafe("SELECT dolt_hashof('HEAD') AS hash"))[0]?.hash
+    ).toEqual(before);
+    expect((await adapter.getById(old.contributionId))?.headCommit).toBe(
+      old.headCommit
+    );
+    expect(await store.getKnowledge("edo-rejected-o")).toBeNull();
+
+    const appended = await adapter.appendEdoOutcome(input);
+    const diff = await adapter.diff(appended.contributionId);
+    expect(diff.some((row) => row.rowId === "edo-main-only-o")).toBe(true);
+    const citationDelta = await readClient.unsafe(
+      `SELECT to_citing_id, to_cited_id, to_citation_type FROM dolt_diff('${appended.baseCommit}', '${appended.headCommit}', 'citations') WHERE diff_type = 'added'`
+    );
+    expect(citationDelta).toContainEqual(
+      expect.objectContaining({
+        to_citing_id: input.entry.id,
+        to_cited_id: input.hypothesisId,
+        to_citation_type: "validates",
+      })
+    );
+    expect(diff.some((row) => row.rowId === "edo-rejected-o")).toBe(false);
+    expect((await store.getKnowledge(input.hypothesisId))?.confidencePct).toBe(
+      70
+    );
+    expect(await store.getKnowledge(input.entry.id)).toBeNull();
+
+    // Native merge is already durable before the existing metadata phase.
+    // Fail BEFORE its state UPDATE: do not pretend the outcome was unmerged.
+    failMergeMetadataOnce = true;
+    try {
+      await expect(
+        adapter.merge({ contributionId: old.contributionId, principal: who })
+      ).rejects.toThrow();
+      expect(failMergeMetadataOnce).toBe(false);
+    } finally {
+      failMergeMetadataOnce = false;
+    }
+    expect(await store.getKnowledge(input.entry.id)).not.toBeNull();
+    expect((await adapter.getById(old.contributionId))?.state).toBe("open");
+    expect((await store.getKnowledge(input.hypothesisId))?.confidencePct).toBe(
+      70
+    );
+    // The original contribution ref remains available for the same retry's
+    // immutable base->head target capture; confidence and merged state recover.
+    const merged = await adapter.merge({
+      contributionId: old.contributionId,
+      principal: who,
+    });
+    expect((await adapter.getById(old.contributionId))?.state).toBe("merged");
+    expect((await store.getKnowledge(input.hypothesisId))?.confidencePct).toBe(
+      80
+    );
+    expect(
+      (await store.listCitationsByCitedId(input.hypothesisId)).filter(
+        (edge) =>
+          edge.citingId === input.entry.id && edge.citationType === "validates"
+      )
+    ).toHaveLength(1);
+    expect(await store.getKnowledge("edo-rejected-o")).toBeNull();
+    expect(
+      await adapter.merge({
+        contributionId: old.contributionId,
+        principal: who,
+      })
+    ).toEqual(merged);
+    expect((await store.getKnowledge(input.hypothesisId))?.confidencePct).toBe(
+      80
+    );
+    expect(
+      await readClient.unsafe("SELECT table_name FROM dolt_status")
+    ).toHaveLength(0);
+  }, 180_000);
+
+  it("keeps fresh EDO outcome confidence branch-local until merge", async () => {
+    await store.withWrite(
+      {
+        operationId: "fixture:edo:fresh-h",
+        message: "seed current hypothesis",
+      },
+      (write) =>
+        write.addKnowledge({
+          id: "edo-fresh-h",
+          domain: DOMAIN,
+          title: "Current hypothesis",
+          content: "A fresh branch includes H.",
+          entryType: "hypothesis",
+          sourceType: "human",
+          evaluateAt: new Date("2030-01-01T00:00:00Z"),
+        })
+    );
+    const who = principal("edo-fresh");
+    const rec = await adapter.createEdoOutcome({
+      principal: who,
+      message: "fresh outcome",
+      hypothesisId: "edo-fresh-h",
+      edge: "invalidates",
+      entry: {
+        id: "edo-fresh-o",
+        domain: DOMAIN,
+        title: "Counterexample",
+        content: "The prediction did not hold.",
+      },
+    });
+    expect((await store.getKnowledge("edo-fresh-h"))?.confidencePct).toBe(70);
+    expect(await store.getKnowledge("edo-fresh-o")).toBeNull();
+    const branch = await readClient.unsafe(
+      `SELECT to_id, to_confidence_pct FROM dolt_diff('${rec.baseCommit}', '${rec.headCommit}', 'knowledge')`
+    );
+    expect(
+      Number(
+        branch.find((row) => row.to_id === "edo-fresh-h")?.to_confidence_pct
+      )
+    ).toBe(55);
+    await adapter.merge({ contributionId: rec.contributionId, principal: who });
+    expect((await store.getKnowledge("edo-fresh-h"))?.confidencePct).toBe(55);
+    expect(
+      (await store.listCitationsByCitedId("edo-fresh-h")).filter(
+        (edge) =>
+          edge.citingId === "edo-fresh-o" && edge.citationType === "invalidates"
+      )
+    ).toHaveLength(1);
+  }, 180_000);
+
+  it("preserves a hypothesis and outcome compounded on the same branch", async () => {
+    const who = principal("edo-same-branch");
+    const rec = await adapter.createEdoHypothesis({
+      principal: who,
+      message: "unmerged hypothesis",
+      entry: {
+        id: "edo-local-h",
+        domain: DOMAIN,
+        title: "Branch-local H",
+        content: "The same branch owns H.",
+        evaluateAt: new Date("2030-01-01T00:00:00Z"),
+      },
+    });
+    const appended = await adapter.appendEdoOutcome({
+      contributionId: rec.contributionId,
+      principal: who,
+      message: "branch-local outcome",
+      hypothesisId: "edo-local-h",
+      edge: "validates",
+      entry: {
+        id: "edo-local-o",
+        domain: DOMAIN,
+        title: "Branch-local O",
+        content: "The prediction held.",
+      },
+    });
+    expect(await store.getKnowledge("edo-local-h")).toBeNull();
+    const branch = await readClient.unsafe(
+      `SELECT to_id, to_confidence_pct FROM dolt_diff('${appended.baseCommit}', '${appended.headCommit}', 'knowledge')`
+    );
+    expect(
+      Number(
+        branch.find((row) => row.to_id === "edo-local-h")?.to_confidence_pct
+      )
+    ).toBe(60);
+    await adapter.merge({ contributionId: rec.contributionId, principal: who });
+    expect((await store.getKnowledge("edo-local-h"))?.confidencePct).toBe(60);
+    expect(
+      (await store.listCitationsByCitedId("edo-local-h")).filter(
+        (edge) => edge.citingId === "edo-local-o"
+      )
+    ).toHaveLength(1);
   }, 180_000);
 });

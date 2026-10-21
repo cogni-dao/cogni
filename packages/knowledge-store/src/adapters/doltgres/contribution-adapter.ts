@@ -1243,7 +1243,7 @@ export class DoltgresKnowledgeContributionAdapter
         ...(input.entry.tags !== undefined ? { tags: input.entry.tags } : {}),
         provenance,
       });
-      await insertCitationRow({
+      const { citedEndpoint } = await insertCitationRow({
         conn,
         mainSql: this.sql,
         citingId: input.entry.id,
@@ -1251,7 +1251,11 @@ export class DoltgresKnowledgeContributionAdapter
         citationType: input.edge,
         context: `resolved by external contribution`,
       });
-      await recomputeConfidenceOnConn(conn, input.hypothesisId);
+      // A main-only hypothesis has no row to update on this older branch.
+      // Its confidence is recomputed from merged citations during merge metadata.
+      if (citedEndpoint.kind === "knowledge" && citedEndpoint.onBranch) {
+        await recomputeConfidenceOnConn(conn, input.hypothesisId);
+      }
       return { editCount: 2, message: input.message };
     });
   }
@@ -1531,7 +1535,7 @@ export class DoltgresKnowledgeContributionAdapter
         ...(input.entry.tags !== undefined ? { tags: input.entry.tags } : {}),
         provenance,
       });
-      await insertCitationRow({
+      const { citedEndpoint } = await insertCitationRow({
         conn,
         mainSql: this.sql,
         citingId: input.entry.id,
@@ -1539,7 +1543,11 @@ export class DoltgresKnowledgeContributionAdapter
         citationType: input.edge,
         context: `resolved by external contribution`,
       });
-      await recomputeConfidenceOnConn(conn, input.hypothesisId);
+      // A main-only hypothesis has no row to update on this older branch.
+      // Its confidence is recomputed from merged citations during merge metadata.
+      if (citedEndpoint.kind === "knowledge" && citedEndpoint.onBranch) {
+        await recomputeConfidenceOnConn(conn, input.hypothesisId);
+      }
       return { editCount: 2, message: input.message };
     });
   }
@@ -1807,6 +1815,18 @@ export class DoltgresKnowledgeContributionAdapter
             `contribution ${input.contributionId} is ${rec.state}`
           );
 
+        // Capture only this contribution's added outcome edges before its ref
+        // can be reaped. Recompute against current MAIN after the native merge,
+        // including hypotheses absent from the contribution's older base.
+        const confidenceRows = await conn.unsafe(
+          `SELECT DISTINCT to_cited_id AS hypothesis_id FROM dolt_diff(${escapeRef(rec.baseCommit)}, ${escapeRef(rec.headCommit ?? rec.baseCommit)}, 'citations') WHERE diff_type = 'added' AND to_citation_type IN ('validates', 'invalidates')`
+        );
+        const confidenceTargets = confidenceRows.map((row) => {
+          if (typeof row.hypothesis_id !== "string" || !row.hypothesis_id)
+            throw new Error("Contribution confidence target is unproven");
+          return row.hypothesis_id;
+        });
+
         let mergeCommit: string;
         let conflicts: number;
         try {
@@ -1847,6 +1867,11 @@ export class DoltgresKnowledgeContributionAdapter
         return await owner.metadata(
           `contrib-merge: ${input.contributionId}`,
           async (conn) => {
+            // This existing guarded metadata commit publishes confidence and
+            // merged state together; the earlier native merge is already durable.
+            for (const hypothesisId of confidenceTargets) {
+              await recomputeConfidenceOnConn(conn, hypothesisId);
+            }
             await conn.unsafe(
               `UPDATE knowledge_contributions SET state = 'merged', merged_commit = ${escapeValue(mergeCommit)}, resolved_at = now(), resolved_by = ${escapeValue(input.principal.id)} WHERE id = ${escapeValue(input.contributionId)}`
             );
