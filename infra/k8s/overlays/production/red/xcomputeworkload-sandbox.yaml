@@ -1,0 +1,46 @@
+apiVersion: compute.cogni.io/v1alpha1
+kind: XComputeWorkload
+metadata:
+  name: 921b1d1d-4ded-4a6d-b3f1-f7d6affa406a-sandbox
+  namespace: cogni-production
+  labels:
+    cogni.io/node-id: 921b1d1d-4ded-4a6d-b3f1-f7d6affa406a
+    cogni.io/environment: production
+    cogni.io/node: red
+    cogni.io/instance: sandbox
+spec:
+  nodeId: 921b1d1d-4ded-4a6d-b3f1-f7d6affa406a
+  environment: production
+  bundle:
+    ref: ghcr.io/cogni-dao/red@sha256:88ccdcac7ebeb32cb3ed57dd009dec2bf60e304ea54baebd5c9f8343fdd556ff
+    source:
+      repository: cogni-dao/red
+      sha: f5da66cee4f2f80fe664a48a60504f88e33730b4
+    artifacts:
+      - name: sandbox
+        image: ghcr.io/cogni-dao/red-sandbox@sha256:273e58aff7a02a4b05291184e012ebb132928fb94f9c8c0211903c81f3655e47
+  workload:
+    name: red
+    publicHost: red-sandbox.cognidao.org
+    services:
+      - name: sandbox
+        artifact: sandbox
+        secretRefs:
+          - key: SANDBOX_EXECD_TOKEN
+        port: 8080
+        visibility: public
+        bindings: {}
+        bindHost: 0.0.0.0
+        cpuUnits: 1
+        memoryMi: 1024
+        storageMi: 5120
+  instance: sandbox
+  migration:
+    policy: RequireBeforeServing
+  bootPolicy:
+    onDeadline: Hold
+    onGiveUp: Hold
+  leaseGeneration: 0
+  dns:
+    provider: cloudflare
+    zoneId: 23220356c352c5831c6af57887b11a27

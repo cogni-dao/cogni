@@ -3,6 +3,8 @@ kind: Kustomization
 namespace: cogni-production
 resources:
   - xcomputeworkload.yaml
+  - xcomputeworkload-sandbox.yaml
   - compute-env-external-secret.yaml
   - compute-env-secret-role.yaml
   - compute-env-secret-role-binding.yaml
+  - compute-migration-external-secret.yaml

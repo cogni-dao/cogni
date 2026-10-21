@@ -11,13 +11,13 @@ spec:
   nodeId: 921b1d1d-4ded-4a6d-b3f1-f7d6affa406a
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/red@sha256:6ef8349ef92ad5e080e6f2c16700869a8e899735798afc8980ab078acd837dea
+    ref: ghcr.io/cogni-dao/red@sha256:88ccdcac7ebeb32cb3ed57dd009dec2bf60e304ea54baebd5c9f8343fdd556ff
     source:
       repository: cogni-dao/red
-      sha: cd3bef2625361f361dbce3555dd937e048267ea1
+      sha: f5da66cee4f2f80fe664a48a60504f88e33730b4
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/red@sha256:311a04685e038a288d4274e603a427334cd394d8c17350ff7a136b1c88924b72
+        image: ghcr.io/cogni-dao/red@sha256:9df0b2c506c03451e2a157743e793ad4fd3a7f97fee69f4cd3fe492e9f2876c9
   workload:
     name: red
     publicHost: red.cognidao.org
@@ -29,11 +29,29 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: DATABASE_SSL_CA_CERT
           - key: DOLTGRES_URL
           - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
+        command:
+          - /bin/sh
+          - -ec
+          - |-
+            set -eu
+            if [ -n "${DATABASE_SSL_CA_CERT:-}" ]; then
+              umask 077
+              cogni_db_ca_file=$(mktemp /tmp/cogni-database-ca.XXXXXX)
+              printf "%s\n" "$DATABASE_SSL_CA_CERT" > "$cogni_db_ca_file"
+              export NODE_EXTRA_CA_CERTS="$cogni_db_ca_file"
+              export PGSSLROOTCERT="$cogni_db_ca_file"
+            fi
+            exec "$@"
+          - cogni-database-trust
+        args:
+          - node
+          - app/server.js
         port: 3200
         visibility: public
         bindings: {}
