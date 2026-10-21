@@ -310,6 +310,8 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
 
     // --- 7/8. Resolve execution identity ---
     let actorUserId: string;
+    /** Validated execution grant (scheduled runs only) — threaded into tool authz audit. */
+    let scheduledGrantId: string | undefined;
     let billingAccountId: string;
     let virtualKeyId: string;
     let stateKey: string | undefined;
@@ -373,6 +375,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       }
 
       actorUserId = grant.userId;
+      scheduledGrantId = grant.id;
       billingAccountId = grant.billingAccountId;
       virtualKeyId = billingAccount.defaultVirtualKeyId;
 
@@ -599,6 +602,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       },
       resolver: container.providerResolver,
       actorId: actorUserId,
+      ...(scheduledGrantId !== undefined ? { grantId: scheduledGrantId } : {}),
       ...(container.connectionBroker
         ? { broker: container.connectionBroker }
         : {}),

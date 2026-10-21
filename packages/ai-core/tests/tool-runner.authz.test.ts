@@ -14,7 +14,10 @@
  * @internal
  */
 
-import { FakeAuthorizationAdapter } from "@cogni/authorization-core";
+import {
+  type AuthorizationPort,
+  FakeAuthorizationAdapter,
+} from "@cogni/authorization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -23,6 +26,8 @@ import {
   createStaticToolSource,
   createToolAllowlistPolicy,
   createToolRunner,
+  type ToolAuthzDecisionRecord,
+  type ToolRunnerConfig,
 } from "../src/index";
 
 const toolName = "core__clock";
@@ -200,6 +205,316 @@ describe("createToolRunner authz gate", () => {
     const result = await runner.exec(toolName, {});
 
     expect(result).toMatchObject({
+      ok: false,
+      errorCode: "authz_unavailable",
+    });
+    expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+describe("createToolRunner node policy (authz v0)", () => {
+  const NODE_A = "node-a";
+  const NODE_B = "node-b";
+  let events: AiEvent[];
+  let decisions: ToolAuthzDecisionRecord[];
+
+  beforeEach(() => {
+    events = [];
+    decisions = [];
+  });
+
+  function declaredTool(
+    requires: BoundToolRuntime["requires"],
+    exec = vi.fn(async () => ({ now: "2026-10-20T00:00:00Z" }))
+  ): BoundToolRuntime & { exec: typeof exec } {
+    return { ...makeTool(exec), requires };
+  }
+
+  function runnerFor(
+    tool: BoundToolRuntime,
+    authz: AuthorizationPort,
+    overrides: Partial<ToolRunnerConfig> = {}
+  ) {
+    return createToolRunner(
+      createStaticToolSource([tool]),
+      (event) => events.push(event),
+      {
+        policy: createToolAllowlistPolicy([toolName]),
+        ctx: { runId: "run-1" },
+        authz,
+        actorId: "user:system",
+        tenantId: "tenant:one",
+        nodeId: NODE_A,
+        grantId: "grant-1",
+        graphId: "langgraph:work-prioritizer",
+        onAuthzDecision: (record) => decisions.push(record),
+        ...overrides,
+      }
+    );
+  }
+
+  it("node.collaborate: allowed with actor + node, without any OpenFGA call", async () => {
+    const authz = new FakeAuthorizationAdapter();
+    const check = vi.spyOn(authz, "check");
+    const tool = declaredTool("node.collaborate");
+
+    const result = await runnerFor(tool, authz).exec(toolName, {});
+
+    expect(result.ok).toBe(true);
+    expect(tool.exec).toHaveBeenCalledOnce();
+    expect(check).not.toHaveBeenCalled();
+    expect(decisions).toEqual([
+      expect.objectContaining({
+        decision: "allow",
+        policy: "v0_collaborate",
+        actorId: "user:system",
+        nodeId: NODE_A,
+        graphId: "langgraph:work-prioritizer",
+        grantId: "grant-1",
+      }),
+    ]);
+    // nodeId/grantId reach the tool's invocation context.
+    expect(tool.exec).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ nodeId: NODE_A, grantId: "grant-1" }),
+      {}
+    );
+  });
+
+  it("node.collaborate: missing actor → authz_unavailable", async () => {
+    const tool = declaredTool("node.collaborate");
+    const result = await runnerFor(tool, new FakeAuthorizationAdapter(), {
+      actorId: undefined,
+    }).exec(toolName, {});
+    expect(result).toMatchObject({ ok: false, errorCode: "authz_unavailable" });
+    expect(tool.exec).not.toHaveBeenCalled();
+    expect(decisions[0]).toMatchObject({
+      decision: "unavailable",
+      reason: "missing_actor",
+    });
+  });
+
+  it("node.collaborate: missing node → authz_unavailable", async () => {
+    const tool = declaredTool("node.collaborate");
+    const result = await runnerFor(tool, new FakeAuthorizationAdapter(), {
+      nodeId: undefined,
+    }).exec(toolName, {});
+    expect(result).toMatchObject({ ok: false, errorCode: "authz_unavailable" });
+    expect(tool.exec).not.toHaveBeenCalled();
+    expect(decisions[0]).toMatchObject({ reason: "missing_node" });
+  });
+
+  it("cross-graph: a collaborate tool outside the graph's allowlist is policy_denied", async () => {
+    const tool = declaredTool("node.collaborate");
+    const result = await runnerFor(tool, new FakeAuthorizationAdapter(), {
+      policy: createToolAllowlistPolicy(["core__some_other_tool"]),
+    }).exec(toolName, {});
+    expect(result).toMatchObject({ ok: false, errorCode: "policy_denied" });
+    expect(tool.exec).not.toHaveBeenCalled();
+    expect(decisions).toEqual([]);
+  });
+
+  it("cross-node: a role on node B never authorizes a node-action tool on node A", async () => {
+    const authz = new FakeAuthorizationAdapter();
+    await authz.writeRelation({
+      user: "user:system",
+      relation: "can_flight",
+      object: `node:${NODE_B}`,
+    });
+    const tool = declaredTool("node.flight");
+    const check = vi.spyOn(authz, "check");
+
+    const result = await runnerFor(tool, authz).exec(toolName, {});
+
+    expect(result).toMatchObject({ ok: false, errorCode: "authz_denied" });
+    expect(tool.exec).not.toHaveBeenCalled();
+    expect(check).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "node.flight",
+        resource: `node:${NODE_A}`,
+        context: expect.objectContaining({
+          nodeId: NODE_A,
+          grantId: "grant-1",
+        }),
+      })
+    );
+    expect(decisions[0]).toMatchObject({
+      decision: "deny",
+      policy: "openfga_node",
+    });
+  });
+
+  it("node action: grant role → allowed, revoke → denied", async () => {
+    const authz = new FakeAuthorizationAdapter();
+    const role = {
+      user: "user:system",
+      relation: "can_flight",
+      object: `node:${NODE_A}`,
+    };
+    const tool = declaredTool("node.flight");
+    const runner = runnerFor(tool, authz);
+
+    await authz.writeRelation(role);
+    expect((await runner.exec(toolName, {})).ok).toBe(true);
+
+    await authz.deleteRelation(role);
+    expect(await runner.exec(toolName, {})).toMatchObject({
+      ok: false,
+      errorCode: "authz_denied",
+    });
+    expect(tool.exec).toHaveBeenCalledOnce();
+  });
+
+  it("node action: missing node → authz_unavailable without a check", async () => {
+    const authz = new FakeAuthorizationAdapter();
+    const check = vi.spyOn(authz, "check");
+    const result = await runnerFor(declaredTool("node.flight"), authz, {
+      nodeId: undefined,
+    }).exec(toolName, {});
+    expect(result).toMatchObject({ ok: false, errorCode: "authz_unavailable" });
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it("node action: an OpenFGA throw → authz_unavailable", async () => {
+    const authz = new FakeAuthorizationAdapter();
+    vi.spyOn(authz, "check").mockRejectedValue(new Error("ECONNREFUSED"));
+    const tool = declaredTool("node.flight");
+    const result = await runnerFor(tool, authz).exec(toolName, {});
+    expect(result).toMatchObject({ ok: false, errorCode: "authz_unavailable" });
+    expect(tool.exec).not.toHaveBeenCalled();
+    expect(decisions[0]).toMatchObject({
+      decision: "unavailable",
+      reason: "check_threw",
+    });
+  });
+
+  it("undeclared tool: legacy tool.execute on tool:<id>, unchanged params", async () => {
+    const authz = new FakeAuthorizationAdapter();
+    const check = vi.spyOn(authz, "check");
+    const tool = makeTool();
+
+    const result = await runnerFor(tool, authz).exec(
+      toolName,
+      {},
+      {
+        modelToolCallId: "call_9",
+      }
+    );
+
+    // Default-deny (no tool tuple) exactly as before, with node/grant context
+    // NOT added to the legacy check.
+    expect(result).toMatchObject({ ok: false, errorCode: "authz_denied" });
+    expect(check).toHaveBeenCalledWith({
+      actorId: "user:system",
+      action: "tool.execute",
+      resource: `tool:${toolName}`,
+      context: {
+        tenantId: "tenant:one",
+        runId: "run-1",
+        toolCallId: "call_9",
+        graphId: "langgraph:work-prioritizer",
+      },
+    });
+    expect(events).toEqual([
+      {
+        type: "tool_call_result",
+        toolCallId: "call_9",
+        result: { error: "Tool execution is not authorized" },
+        isError: true,
+      },
+    ]);
+    expect(decisions[0]).toMatchObject({ policy: "legacy_tool" });
+  });
+
+  it("no adapter + declared privileged action → fails closed (authz_unavailable)", async () => {
+    const tool = declaredTool("node.flight");
+    const runner = createToolRunner(
+      createStaticToolSource([tool]),
+      (event) => events.push(event),
+      {
+        policy: createToolAllowlistPolicy([toolName]),
+        ctx: { runId: "r" },
+        actorId: "user:system",
+        tenantId: "tenant:one",
+        nodeId: NODE_A,
+        onAuthzDecision: (record) => decisions.push(record),
+      }
+    );
+    expect(await runner.exec(toolName, {})).toMatchObject({
+      ok: false,
+      errorCode: "authz_unavailable",
+    });
+    expect(tool.exec).not.toHaveBeenCalled();
+    expect(decisions[0]).toMatchObject({
+      policy: "openfga_node",
+      reason: "no_authz_adapter",
+    });
+  });
+
+  it("no adapter + undeclared tool → legacy compatibility path, ungated as before", async () => {
+    const tool = makeTool();
+    const runner = createToolRunner(
+      createStaticToolSource([tool]),
+      (event) => events.push(event),
+      {
+        policy: createToolAllowlistPolicy([toolName]),
+        ctx: { runId: "r" },
+        onAuthzDecision: (record) => decisions.push(record),
+      }
+    );
+    expect((await runner.exec(toolName, {})).ok).toBe(true);
+    expect(decisions).toEqual([]);
+  });
+});
+
+/**
+ * NODE_POLICY_INDEPENDENT_OF_ADAPTER: node.collaborate behaves identically with and
+ * without an OpenFGA adapter — the v0 policy is not optional, the adapter is.
+ */
+describe.each([
+  ["with adapter", () => new FakeAuthorizationAdapter() as AuthorizationPort],
+  ["without adapter", () => undefined],
+] as const)("node.collaborate %s", (_label, makeAuthz) => {
+  function run(overrides: Partial<ToolRunnerConfig>) {
+    const exec = vi.fn(async () => ({ now: "x" }));
+    const tool = { ...makeTool(exec), requires: "node.collaborate" as const };
+    const decisions: ToolAuthzDecisionRecord[] = [];
+    const authz = makeAuthz();
+    const runner = createToolRunner(createStaticToolSource([tool]), () => {}, {
+      policy: createToolAllowlistPolicy([toolName]),
+      ctx: { runId: "run-1" },
+      ...(authz ? { authz } : {}),
+      actorId: "user:system",
+      tenantId: "tenant:one",
+      nodeId: "node-a",
+      onAuthzDecision: (record) => decisions.push(record),
+      ...overrides,
+    });
+    return { runner, exec, decisions };
+  }
+
+  it("valid authenticated context → allowed", async () => {
+    const { runner, exec, decisions } = run({});
+    expect((await runner.exec(toolName, {})).ok).toBe(true);
+    expect(exec).toHaveBeenCalledOnce();
+    expect(decisions[0]).toMatchObject({
+      decision: "allow",
+      policy: "v0_collaborate",
+    });
+  });
+
+  it("missing actor → authz_unavailable", async () => {
+    const { runner, exec } = run({ actorId: undefined });
+    expect(await runner.exec(toolName, {})).toMatchObject({
+      ok: false,
+      errorCode: "authz_unavailable",
+    });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("missing node → authz_unavailable", async () => {
+    const { runner, exec } = run({ nodeId: undefined });
+    expect(await runner.exec(toolName, {})).toMatchObject({
       ok: false,
       errorCode: "authz_unavailable",
     });

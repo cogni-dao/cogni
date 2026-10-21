@@ -45,6 +45,8 @@ export interface AuthzContext {
   readonly graphId?: string;
   readonly runId?: string;
   readonly toolCallId?: string;
+  /** Execution grant backing a scheduled run (audit only; adapters do not read context). */
+  readonly grantId?: string;
 }
 
 export interface AuthzCheckParams {

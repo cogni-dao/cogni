@@ -12,6 +12,8 @@
  *   - NODE_BUNDLE_IS_CANONICAL: Resolves BoundTool from injected node bundle (CORE_TOOL_BUNDLE [+ POLY_TOOL_BUNDLE for poly]); never iterates the global TOOL_CATALOG (which is per-package and can drift behind per-node bundles).
  *   - DENY_BY_DEFAULT: Tool policy explicitly provided per graph
  *   - MCP_VIA_ASYNC_SOURCE: MCP tools resolved via async getMcpToolSource() function (shared cache with reconnect-on-error)
+ *   - TOOL_AUTHZ_CONTEXT_ALWAYS_THREADED (authz v0): actor/tenant/graph/node/grant reach the tool runner with or
+ *     without an authz adapter, plus one `ai.tool_authz.decision` log per evaluated call; `authz` only when installed.
  * Side-effects: IO (executes graphs via package runner, MCP tool resolution via HTTP)
  * Notes: Discovery is in LangGraphInProcAgentCatalogProvider, not here.
  * Links: GRAPH_EXECUTION.md, LANGGRAPH_AI.md
@@ -239,13 +241,40 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         const toolRunner = createToolRunner(source, emit, {
           policy,
           ctx: { runId },
+          // authz v0: trusted identity + audit flow regardless of adapter presence — declared
+          // node policies are evaluated with or without OpenFGA; `authz` only when installed.
+          // Undeclared tools keep the legacy path (authz-checked only when an adapter exists).
+          ...(actorId !== undefined ? { actorId } : {}),
+          tenantId,
+          graphId,
+          ...(scope.nodeId !== undefined ? { nodeId: scope.nodeId } : {}),
+          ...(scope.grantId !== undefined ? { grantId: scope.grantId } : {}),
+          onAuthzDecision: (record) => {
+            const fields = {
+              event: EVENT_NAMES.AI_TOOL_AUTHZ_DECISION,
+              runId,
+              graphName,
+              tool: record.toolName,
+              toolCallId: record.toolCallId,
+              decision: record.decision,
+              code: record.code,
+              policy: record.policy,
+              ...(record.reason !== undefined && {
+                reason: record.reason.slice(0, 200),
+              }),
+              actorId: record.actorId,
+              nodeId: record.nodeId,
+              graphId: record.graphId,
+              grantId: record.grantId,
+            };
+            if (record.decision === "allow") {
+              this.log.info(fields, "tool authz decision");
+            } else {
+              this.log.warn(fields, "tool authz decision");
+            }
+          },
           ...(this.authorization !== undefined
-            ? {
-                authz: this.authorization,
-                ...(actorId !== undefined ? { actorId } : {}),
-                tenantId,
-                graphId,
-              }
+            ? { authz: this.authorization }
             : {}),
         });
 
@@ -298,6 +327,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
             : {}),
           tenantId: scope.billing.billingAccountId,
           graphId,
+          // Scheduled-run signal for graphs (absent for API/chat runs).
+          ...(scope.grantId !== undefined ? { grantId: scope.grantId } : {}),
         },
       };
 
