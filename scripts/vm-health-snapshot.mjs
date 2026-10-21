@@ -1,19 +1,15 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `scripts/vm-health-snapshot`
- * Purpose: One read-only command that snapshots every shared env VM (candidate-a, preview, production)
- *   from Grafana Cloud Prometheus and grades it GREEN / YELLOW / RED with named causes and the next action,
- *   so an agent never has to read a dashboard or SSH to answer "is the VM healthy, and what is eating it?".
- * Scope: Grafana datasource-proxy reads only (no SSH, no writes). Thresholds live in THRESHOLDS below and are
- *   documented in the `vm-health` skill; `evaluate()` is pure and unit-tested.
- * Invariants:
- *   - MISSING_IS_NOT_HEALTHY: absent or stale host telemetry grades RED, never GREEN.
- *   - VERDICT_FIRST: the first output line per env is the verdict; detail follows.
+ * Module: `@scripts/vm-health-snapshot`
+ * Purpose: Snapshots every shared env VM from Grafana Prometheus and grades it GREEN/YELLOW/RED with named causes and the next action.
+ * Scope: Read-only Grafana datasource-proxy queries; does not SSH, write, or mutate any VM or dashboard.
+ * Invariants: MISSING_IS_NOT_HEALTHY (stale telemetry grades RED); VERDICT_FIRST (first line per env is the verdict); evaluate() is pure.
  * Side-effects: IO (HTTPS reads to GRAFANA_URL)
- * Links: story.5084, .claude/skills/vm-health/SKILL.md, hub prod-vm-swap-thrash, infra/grafana/dashboards/operator/fleet-status.json
+ * Notes: Thresholds live in THRESHOLDS and are documented in the vm-health skill.
+ * Links: .claude/skills/vm-health/SKILL.md, infra/grafana/dashboards/operator/fleet-status.json, story.5084
  * @public
  *
  * Usage:
