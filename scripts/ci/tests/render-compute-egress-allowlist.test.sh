@@ -13,6 +13,8 @@
 #   3. idempotency — re-running produces byte-identical rules;
 #   4. fail-closed — an empty render yields NO compute ACCEPTs while the public
 #      DROP remains, and catalog removal converges on the next run.
+#   5. reboot persistence (story.5084) — the hardener installs a current copy of
+#      itself plus an enabled docker-bound boot replay unit, idempotently.
 # Usage: bash scripts/ci/tests/render-compute-egress-allowlist.test.sh
 
 set -euo pipefail
@@ -449,6 +451,24 @@ chmod +x "$FAKEBIN/dpkg-query" "$FAKEBIN/apt-get" "$FAKEBIN/netfilter-persistent
 export ALLOWLIST_FILE="$TMPROOT/etc/compute-egress-allowlist"
 export STAGED_ALLOWLIST="$TMPROOT/staged-allowlist"
 export HARDEN_LOCK_FILE="$TMPROOT/harden.lock"
+export HARDEN_BOOT_SCRIPT="$TMPROOT/usr/local/sbin/cogni-harden-docker-public-ports.sh"
+export HARDEN_BOOT_UNIT="$TMPROOT/etc/systemd/system/cogni-harden-docker-public-ports.service"
+export SYSTEMCTL_CALLS="$TMPROOT/systemctl.calls" SYSTEMCTL_ENABLED="$TMPROOT/systemctl.enabled"
+: > "$SYSTEMCTL_CALLS"
+cat > "$FAKEBIN/systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$SYSTEMCTL_CALLS"
+case "$*" in
+  daemon-reload) ;;
+  'reenable --quiet cogni-harden-docker-public-ports.service'|'enable --quiet cogni-harden-docker-public-ports.service')
+    : > "$SYSTEMCTL_ENABLED" ;;
+  'is-enabled --quiet cogni-harden-docker-public-ports.service')
+    [ -f "$SYSTEMCTL_ENABLED" ] ;;
+  *) exit 9 ;;
+esac
+EOF
+chmod +x "$FAKEBIN/systemctl"
 
 run_harden() {
   PATH="$FAKEBIN:$PATH" bash "$HARDEN" > "$TMPROOT/harden.log" 2>&1 \
@@ -486,6 +506,32 @@ run_harden
 PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/rules.2"
 diff -u "$RULES_1" "$TMPROOT/rules.2" || fail "re-run must produce identical rules"
 ok "harden re-run is idempotent (byte-identical rules)"
+
+# Reboot persistence (story.5084): the hardener installs a current copy of
+# itself plus a docker-bound oneshot unit, enabled but never started inline.
+cmp -s "$HARDEN" "$HARDEN_BOOT_SCRIPT" || fail "boot replay script is not the current hardener"
+for directive in 'Requires=docker.service' 'After=docker.service network-online.target' \
+  'PartOf=docker.service' 'Type=oneshot' 'PrivateTmp=yes' \
+  "ExecStart=/bin/bash $HARDEN_BOOT_SCRIPT" 'WantedBy=multi-user.target docker.service'; do
+  grep -Fxq -- "$directive" "$HARDEN_BOOT_UNIT" || fail "boot replay unit missing: $directive"
+done
+[ "$(grep -c '^daemon-reload$' "$SYSTEMCTL_CALLS")" = 1 ] \
+  || { cat "$SYSTEMCTL_CALLS" >&2; fail "unit must be written and reloaded exactly once across runs"; }
+grep -Fxq 'reenable --quiet cogni-harden-docker-public-ports.service' "$SYSTEMCTL_CALLS" \
+  || fail "boot replay unit was not enabled"
+if grep -Eq '^(start|restart)( |$)|--now' "$SYSTEMCTL_CALLS"; then
+  fail "hardener must never start its own unit (writer-lock re-entry)"
+fi
+ok "hardener installs and enables its docker-bound boot replay unit idempotently"
+
+# The boot replay runs the installed copy with only the installed allowlist.
+PATH="$FAKEBIN:$PATH" STAGED_ALLOWLIST="$TMPROOT/absent-under-private-tmp" \
+  bash "$HARDEN_BOOT_SCRIPT" > "$TMPROOT/harden.boot.log" 2>&1 \
+  || { cat "$TMPROOT/harden.boot.log" >&2; fail "boot replay exited nonzero"; }
+PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/rules.boot"
+diff -u "$RULES_1" "$TMPROOT/rules.boot" || fail "boot replay must restore the same rules"
+[ "$(grep -c '^daemon-reload$' "$SYSTEMCTL_CALLS")" = 1 ] || fail "boot replay rewrote its own unit"
+ok "boot replay restores identical rules without rewriting its unit"
 
 # Catalog removal: stage the (empty) production render over the same VM state.
 cp "$OUT_PROD" "$STAGED_ALLOWLIST"

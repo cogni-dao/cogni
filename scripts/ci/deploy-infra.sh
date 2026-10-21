@@ -719,7 +719,7 @@ fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Firewall: close Docker-published internal ports to public internet
-# (idempotent; safe to re-run on every deploy). See bug.5167.
+# (idempotent; also (re)installs its boot replay unit). bug.5167, story.5084.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 if [ -n "${REMOTE_HARDEN_SCRIPT:-}" ] && [ -f "$REMOTE_HARDEN_SCRIPT" ]; then
   echo -e "\033[0;32m[INFO]\033[0m Hardening Docker-published ports (DOCKER-USER chain)..."
