@@ -547,6 +547,15 @@ spec:
                         type: string,
                         enum: [succeeded, running, failed, unavailable],
                       }
+                # SECRET CONTENT REVISION (bug.5256). Value-free fingerprints of the env Secret
+                # (`<slug>-compute-env-secrets`): `desired` is what the Secret holds now,
+                # `fingerprint` is what the lease has been DELIVERED by a 2xx CREATE/UPDATE. While
+                # they differ the Composition re-sends the SDL through the existing UPDATE action.
+                envSecrets:
+                  type: object
+                  properties:
+                    fingerprint: { type: string, maxLength: 128 }
+                    desired: { type: string, maxLength: 128 }
                 dns:
                   type: object
                   properties:

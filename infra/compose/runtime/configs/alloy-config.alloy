@@ -73,12 +73,8 @@ loki.source.docker "default" {
 // Same drop logic as alloy-config.metrics.alloy for dev parity.
 
 loki.process "docker_logs" {
-  stage.docker {}
-
-  stage.timestamp {
-    source = "time"
-    format = "RFC3339Nano"
-  }
+  // loki.source.docker already supplies the decoded line, stream and timestamp.
+  // A second Docker-envelope decoder erases valid application JSON without `log`.
 
   // Extract JSON fields from app logs (fail-safe: non-JSON lines get no extracted fields)
   stage.json {

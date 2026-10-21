@@ -30,6 +30,12 @@ export const POST = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "work.items.sessions.heartbeat",
+    getRequestDependencies: async () => {
+      const { getRequestLoggingDependencies } = await import(
+        "@/bootstrap/container"
+      );
+      return getRequestLoggingDependencies();
+    },
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, request, sessionUser, context) => {

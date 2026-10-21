@@ -793,6 +793,58 @@ spec:
             {{- $upToDateLogic = "(.response.body.found == true) and (.response.body.resource.state != \"closed\") and (.response.body.serving == true)" }}
             {{- end }}
 
+            {{- /*
+              SECRET_CONTENT_IS_DESIRED_STATE (bug.5256). The secretRefs above reach the wire as
+              provider-http placeholders resolved at REQUEST time, and expectedResponseCheck is
+              the only UPDATE trigger, so a rotated `<slug>-compute-env-secrets` never re-sent the
+              SDL: the lease kept the old value until an unrelated sha change (2026-10-20 VM move:
+              eleven leases still dialled 5.199.162.44 after OpenBao + ESO had the new host).
+
+              The trigger is a VALUE-FREE fingerprint: ESO's `reconcile.external-secrets.io/
+              data-hash` annotation on the target Secret (ESO writes it with every data change and
+              skips no-op refreshes), read as a Crossplane required resource. ONLY that string
+              leaves this template — on XR status, in the drift clause and as a request header.
+              The Secret's data is never rendered. No annotation (not ESO-owned yet) = inert.
+
+              DELIVERED, NOT INTENDED. status.envSecrets.fingerprint is the fingerprint the LEASE
+              has received. It advances only when the lease Request's own last request was a 2xx
+              CREATE or UPDATE under the current key that carried this exact fingerprint in its
+              header — and every CREATE/UPDATE resolves the placeholders at send time, so that
+              request carried the current content. While delivered != desired the check gains a
+              false clause and provider-http issues the existing UPDATE (in-place SDL replacement,
+              no new lease, no new key). A missed latch costs one extra UPDATE, which the actuator
+              answers with IDENTICAL_SDL_IS_A_NO_OP (bug.5238) — no PUT, no restart — so the
+              mechanism is bounded without depending on reconcile timing.
+
+              BOOTSTRAP IS ONE UPDATE PER LEASE. An XR without the latch has no record of what its
+              lease received, so it sends one UPDATE: the actuator PUTs only where the resolved SDL
+              hashes differently from the last one applied (the stale ones) and no-ops elsewhere.
+              An XR with no secretRefs, or whose Secret is not readable yet, renders exactly as
+              before.
+            */ -}}
+            {{- $hasSecretRefs := false }}
+            {{- range $wl.services }}{{ if gt (len (dig "secretRefs" (list) .)) 0 }}{{ $hasSecretRefs = true }}{{ end }}{{ end }}
+            {{- $envSecretsFingerprintHeader := "X-Cogni-Env-Secrets-Fingerprint" }}
+            {{- $envSecretsFingerprint := "" }}
+            {{- if $hasSecretRefs }}
+            {{- $envSecretsRequired := default (dict) (index (default (dict) $.extraResources) "compute-env-secrets") }}
+            {{- $envSecretsObject := default (dict) (dig "resource" (dict) (default (dict) (first (dig "items" (list) $envSecretsRequired)))) }}
+            {{- $envSecretsFingerprint = dig "metadata" "annotations" "reconcile.external-secrets.io/data-hash" "" $envSecretsObject }}
+            {{- end }}
+            {{- $envSecretsApplied := dig "status" "envSecrets" "fingerprint" "" $xr }}
+            {{- if and (ne $envSecretsFingerprint "") $leaseObs }}
+            {{- $lastActionUrl := dig "status" "requestDetails" "url" "" $leaseObs.resource }}
+            {{- $lastActionHeaders := dig "status" "requestDetails" "headers" (dict) $leaseObs.resource }}
+            {{- $lastActionFingerprints := get $lastActionHeaders $envSecretsFingerprintHeader | default (list) }}
+            {{- $lastActionMutated := or (hasSuffix "/v1/akash/update" $lastActionUrl) (hasSuffix "/v1/akash/create" $lastActionUrl) }}
+            {{- if and $lastActionMutated (ge $respStatus 200) (lt $respStatus 300) (eq $responseKey $cogniKey) (has $envSecretsFingerprint $lastActionFingerprints) }}
+            {{- $envSecretsApplied = $envSecretsFingerprint }}
+            {{- end }}
+            {{- end }}
+            {{- if and (ne $envSecretsFingerprint "") (ne $envSecretsApplied $envSecretsFingerprint) }}
+            {{- $upToDateLogic = printf "%s and (%q == %q)" $upToDateLogic $envSecretsApplied $envSecretsFingerprint }}
+            {{- end }}
+
             {{- /* ---------- DNS target (bug.5125: never point a host to itself) ---------- */ -}}
             {{- $dns := dig "dns" (dict) $spec }}
             {{- /* Prefer a provider hostname because it survives ingress-IP rotation. Some
@@ -898,7 +950,8 @@ spec:
             {{- /* ---------- composed: the OUTGOING Akash lease, held open ---------- */ -}}
             {{- /* bug.5322. A DELIBERATE COPY of the lease Request below, differing in exactly
               four places — the composition-resource-name, the absent `ready` annotation, the
-              payload (the incumbent's own key) and expectedResponseCheck (observe-only). The
+              payload (the incumbent's own key) and expectedResponseCheck (observe-only) — plus
+              the absent bug.5256 env-secrets header, so a rotation never UPDATEs the incumbent. The
               mappings and isRemovedCheck are byte-identical on purpose: REMOVE is how this child
               eventually closes its lease, so it must speak the same wire as the child that
               minted it. They are pinned equal by
@@ -1007,6 +1060,12 @@ spec:
                 headers:
                   Content-Type: ["application/json"]
                   Authorization: [{{ $authHeader | quote }}]
+                  {{- if ne $envSecretsFingerprint "" }}
+                  # bug.5256: binds each request this child sends to the Secret content it
+                  # resolved. Value-free; the actuator ignores it; status.requestDetails keeps
+                  # it, which is how the composite proves an UPDATE delivered this revision.
+                  {{ $envSecretsFingerprintHeader }}: [{{ $envSecretsFingerprint | quote }}]
+                  {{- end }}
                 payload:
                   baseUrl: {{ $baseUrl | quote }}
                   body: {{ toJson $payload | quote }}
@@ -1185,6 +1244,21 @@ spec:
                     ({{ $cfAdoptable }} | length) == 0
             {{- end }}
 
+            {{- /* bug.5256: ask Crossplane for the env Secret so the NEXT render can read its
+              value-free fingerprint above. Re-requested on every render, as required resources
+              must be; nothing from this object is rendered except that fingerprint. */ -}}
+            {{- if $hasSecretRefs }}
+            ---
+            apiVersion: meta.gotemplating.fn.crossplane.io/v1alpha1
+            kind: ExtraResources
+            requirements:
+              compute-env-secrets:
+                apiVersion: v1
+                kind: Secret
+                matchName: {{ $secretName | quote }}
+                namespace: {{ $ns | quote }}
+            {{- end }}
+
             {{- /* ---------- composite status ---------- */ -}}
             {{- $phase := "Progressing" }}
             {{- $failReason := "" }}
@@ -1304,6 +1378,17 @@ spec:
               {{- if ne $migrationPhase "" }}
               migration:
                 phase: {{ $migrationPhase | quote }}
+              {{- end }}
+              {{- /* bug.5256: what the lease has RECEIVED vs what the Secret holds now. Carried
+                forward when the Secret is momentarily unreadable; never a value. */}}
+              {{- if or (ne $envSecretsApplied "") (ne $envSecretsFingerprint "") }}
+              envSecrets:
+                {{- if ne $envSecretsApplied "" }}
+                fingerprint: {{ $envSecretsApplied | quote }}
+                {{- end }}
+                {{- if ne $envSecretsFingerprint "" }}
+                desired: {{ $envSecretsFingerprint | quote }}
+                {{- end }}
               {{- end }}
               {{- if $hasServedDesired }}
               observedBundle:

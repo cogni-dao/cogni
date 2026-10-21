@@ -228,6 +228,7 @@ run() {
     SWR_ROUTE_AUTHORITY_DIR="$AUTHORITY_DIR" \
     SWR_SUBSTRATE_AUTHORITY_DIR="$AUTHORITY_DIR" \
     SWR_RECONCILE_SUMMARY_FILE="$TMPROOT/summary.json" \
+    SWR_RECONCILE_FLIGHT_TARGETS_JSON="${SELECTED_TARGETS_JSON:-[]}" \
     bash "$RECONCILE" candidate-a
 }
 
@@ -489,5 +490,85 @@ if run >/dev/null 2>&1; then
   fail "conflicting route authorities must fail closed"
 fi
 echo "PASS: route-authority collision fails closed"
+
+# ── 7. Only the normal selected active candidate pair may change destination ──
+cp "$TMPROOT/original-watched-provider.yaml" "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH"
+cp "$TMPROOT/original-watched-base.yaml" "$AUTHORITY_DIR/$SUBPATH/configmap.yaml"
+# Exercise the REAL renderer, not a fake success flag. The existing fixture owns
+# its tiny catalog/tree; copy only the renderer and the helpers it actually uses.
+mkdir -p "$APP_SRC/scripts/ci/lib" "$APP_SRC/scripts/setup/lib"
+cp "$REPO_ROOT/scripts/ci/render-scheduler-worker-endpoints.sh" "$APP_SRC/scripts/ci/"
+cp "$REPO_ROOT/scripts/ci/lib/image-tags.sh" "$REPO_ROOT/scripts/ci/lib/appset-paths.sh" "$APP_SRC/scripts/ci/lib/"
+cp "$REPO_ROOT/scripts/setup/lib/fork-identity.sh" "$APP_SRC/scripts/setup/lib/"
+cp "$REPO_ROOT/infra/catalog/_schema.json" "$APP_SRC/infra/catalog/"
+python3 - "$APP_SRC/infra/catalog" <<'PYCATALOG'
+import json, pathlib, sys
+for path in pathlib.Path(sys.argv[1]).glob("*.yaml"):
+    row = json.loads(path.read_text())
+    row["deployment_provider"] = {"candidate-a": "akash" if row["name"] in {"node-template", "poly", "red"} else "k3s"}
+    if row["name"] == "node-template":
+        row["envs"] = ["candidate-a", "production"]
+    path.write_text(json.dumps(row))
+PYCATALOG
+yq -i '.spec.template.spec.containers[0].envFrom = [{"secretRef":{"name":"scheduler-worker-secrets"}},{"configMapRef":{"name":"scheduler-worker-config"}}]' "$APP_SRC/$SUBPATH/deployment.yaml"
+# The fixture has one overlay, so only candidate-a is rendered/checked.
+cp "$AUTHORITY_DIR/infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml" "$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml"
+yq -i '.patches += [{"path":"node-endpoints.patch.yaml"}]' "$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml"
+FORK_DOMAIN_ROOT=cognidao.org bash "$APP_SRC/scripts/ci/render-scheduler-worker-endpoints.sh" --write >/dev/null
+before_selected="$(yq -N '.data.COGNI_NODE_ENDPOINTS' "$DEPLOY_DIR/$ENDPOINTS_SUBPATH")"
+for selection in '[]' '["operator"]'; do
+  SELECTED_TARGETS_JSON="$selection"
+  run >/dev/null || fail "valid nonselected candidate pair must preserve watched routing"
+  [ "$(yq -N '.data.COGNI_NODE_ENDPOINTS' "$DEPLOY_DIR/$ENDPOINTS_SUBPATH")" = "$before_selected" ] || fail "nonselected route bytes changed"
+done
+for selection in '["node-template","node-template"]' '{}'; do
+  SELECTED_TARGETS_JSON="$selection"
+  if run >"$TMPROOT/selected-error" 2>&1; then fail "unselected/invalid target must not authorize replacement: $selection"; fi
+done
+SELECTED_TARGETS_JSON='["node-template"]'
+run >/dev/null || fail "normal selected, renderer-validated candidate pair refused"
+after_selected="$(yq -N '.data.COGNI_NODE_ENDPOINTS' "$DEPLOY_DIR/$ENDPOINTS_SUBPATH")"
+BEFORE="$before_selected" AFTER="$after_selected" python3 - <<'PYPAIR'
+import os
+before = dict(entry.split("=", 1) for entry in os.environ["BEFORE"].split(","))
+after = dict(entry.split("=", 1) for entry in os.environ["AFTER"].split(","))
+pair = {"node-template", "b927a9dd-6132-4fc9-a51e-e3cee2568e3c"}
+assert before.keys() == after.keys()
+assert all(after[alias] == "https://node-template-test.cognidao.org" for alias in pair)
+assert all(before[alias] == after[alias] for alias in before.keys() - pair)
+PYPAIR
+[ "$(config_checksum)" != "$INITIAL_CHECKSUM" ] || fail "selected pair change did not update consumed fingerprint"
+# Removing the renderer cannot grant authority, even with the same valid selector.
+mv "$APP_SRC/scripts/ci/render-scheduler-worker-endpoints.sh" "$TMPROOT/selected-renderer.sh"
+if run >"$TMPROOT/selected-error" 2>&1; then fail "selected replacement without renderer must refuse"; fi
+grep -q 'requires the reviewed renderer' "$TMPROOT/selected-error" || fail "wrong missing-renderer refusal"
+mv "$TMPROOT/selected-renderer.sh" "$APP_SRC/scripts/ci/render-scheduler-worker-endpoints.sh"
+cp "$APP_SRC/$ENDPOINTS_SUBPATH" "$TMPROOT/selected-valid-map.yaml"
+sed -i.bak 's#https://node-template-test.cognidao.org#https://unreviewed.example#g' "$APP_SRC/$ENDPOINTS_SUBPATH"
+if run >"$TMPROOT/selected-error" 2>&1; then fail "stale reviewed map must refuse selected replacement"; fi
+grep -q 'stale vs catalog' "$TMPROOT/selected-error" || fail "wrong stale-renderer refusal"
+cp "$TMPROOT/selected-valid-map.yaml" "$APP_SRC/$ENDPOINTS_SUBPATH"
+# Selecting node-template preserves an active nonselected operator destination.
+sed -i.bak 's#http://operator-node-app:3000#https://foreign.example#g' "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH"
+run >/dev/null || fail "valid nonselected sibling preservation refused"
+case "$(yq -N '.data.COGNI_NODE_ENDPOINTS' "$DEPLOY_DIR/$ENDPOINTS_SUBPATH")" in *"operator=https://foreign.example"*) ;; *) fail "nonselected sibling destination overwritten" ;; esac
+cp "$TMPROOT/original-watched-provider.yaml" "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH"
+# The selected override never applies to the env-invariant base map.
+sed -i.bak 's#node-template=http://node-template-node-app:3000#node-template=https://foreign.example#g' "$AUTHORITY_DIR/$SUBPATH/configmap.yaml"
+if run >"$TMPROOT/selected-error" 2>&1; then fail "selected pair must not override a base collision"; fi
+grep -q "collision for 'node-template'" "$TMPROOT/selected-error" || fail "wrong base collision refusal"
+cp "$TMPROOT/original-watched-base.yaml" "$AUTHORITY_DIR/$SUBPATH/configmap.yaml"
+# Selecting a node outside reviewed candidate membership cannot mutate routing.
+yq -i '.envs = ["production"]' "$APP_SRC/infra/catalog/node-template.yaml"
+FORK_DOMAIN_ROOT=cognidao.org bash "$APP_SRC/scripts/ci/render-scheduler-worker-endpoints.sh" --write >/dev/null
+if run >"$TMPROOT/selected-error" 2>&1; then fail "inactive selected candidate must refuse"; fi
+grep -q 'not an active candidate member' "$TMPROOT/selected-error" || fail "wrong inactive-candidate refusal"
+yq -i '.envs = ["candidate-a", "production"]' "$APP_SRC/infra/catalog/node-template.yaml"
+# Even a selected pair cannot rebind UUID identity across authorities.
+yq -i '.node_id = "11111111-2222-4333-8444-555555555555"' "$APP_SRC/infra/catalog/node-template.yaml"
+FORK_DOMAIN_ROOT=cognidao.org bash "$APP_SRC/scripts/ci/render-scheduler-worker-endpoints.sh" --write >/dev/null
+if run >"$TMPROOT/selected-error" 2>&1; then fail "selected slug with a foreign UUID must refuse"; fi
+grep -q 'authorities disagree' "$TMPROOT/selected-error" || fail "wrong selected UUID refusal"
+echo "PASS: normal selected candidate pair replaces only its own rendered route; all other authorities remain strict"
 
 echo "PASS: reconcile-scheduler-worker-routing.test.sh"

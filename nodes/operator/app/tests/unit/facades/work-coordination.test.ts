@@ -18,20 +18,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { WorkItemSessionPort, WorkItemSessionRecord } from "@/ports";
 
-vi.mock("@/bootstrap/container", () => ({ getContainer: vi.fn() }));
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: vi.fn(),
+  getWorkItemSessionPort: vi.fn(),
+}));
 vi.mock("@/app/_facades/work/items.server", () => ({
   getWorkItem: vi.fn(),
   patchWorkItem: vi.fn(),
 }));
 
 import {
+  CoordinationWorkItemNotFoundError,
   claimWorkItemSession,
+  getWorkItemCoordination,
   heartbeatWorkItemSession,
   linkWorkItemSessionPr,
   WorkItemSessionForbiddenError,
+  WorkItemSessionNotFoundError,
 } from "@/app/_facades/work/coordination.server";
 import { getWorkItem, patchWorkItem } from "@/app/_facades/work/items.server";
-import { getContainer } from "@/bootstrap/container";
+import { getContainer, getWorkItemSessionPort } from "@/bootstrap/container";
 
 const NOW = new Date("2026-05-02T12:00:00.000Z");
 const USER: SessionUser = {
@@ -90,6 +96,7 @@ describe("app/_facades/work/coordination.server", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     port = mockPort();
+    vi.mocked(getWorkItemSessionPort).mockReturnValue(port);
     vi.mocked(getContainer).mockReturnValue({
       workItemSessions: port,
     } as never);
@@ -185,5 +192,101 @@ describe("app/_facades/work/coordination.server", () => {
       },
       { id: "user-1", displayName: "agent-one" }
     );
+  });
+  function failUnrelatedProviders() {
+    vi.mocked(getContainer).mockImplementation(() => {
+      throw new Error("full container must not be constructed");
+    });
+    vi.mocked(getWorkItem).mockImplementation(async () => {
+      throw new Error("Dolt must not be called");
+    });
+  }
+
+  it("renews the existing v1 session using only PostgreSQL while Dolt and the full container fail", async () => {
+    failUnrelatedProviders();
+    vi.mocked(port.heartbeat).mockResolvedValue(session());
+    const output = await heartbeatWorkItemSession({
+      workItemId: "task.5007",
+      body: { ttlSeconds: 120 },
+      sessionUser: USER,
+      statusUrl: "/status",
+      now: NOW,
+    });
+    expect(output.session.coordinationId).toBe(session().id);
+    expect(output.nextAction).toContain("GET /api/v1/work/items/task.5007");
+    expect(port.heartbeat).toHaveBeenCalledWith({
+      workItemId: "task.5007",
+      claimedByUserId: USER.id,
+      deadlineAt: new Date("2026-05-02T12:02:00.000Z"),
+    });
+    expect(getContainer).not.toHaveBeenCalled();
+    expect(getWorkItem).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "active",
+    "closed",
+  ] as const)("recovers a persisted %s session without reading content or constructing providers", async (status) => {
+    failUnrelatedProviders();
+    vi.mocked(port.getCurrent).mockResolvedValue(session({ status }));
+    const output = await getWorkItemCoordination({
+      workItemId: "task.5007",
+      statusUrl: "/status",
+      now: NOW,
+    });
+    expect(output.session?.coordinationId).toBe(session().id);
+    expect(output.session?.status).toBe(status);
+    expect(output.nextAction).not.toContain("POST /claims");
+    expect(getContainer).not.toHaveBeenCalled();
+    expect(getWorkItem).not.toHaveBeenCalled();
+  });
+
+  it("retains the content existence check when no PostgreSQL session exists", async () => {
+    vi.mocked(port.getCurrent).mockResolvedValue(null);
+    const output = await getWorkItemCoordination({
+      workItemId: "task.5007",
+      statusUrl: "/status",
+      now: NOW,
+    });
+    expect(output.session).toBeNull();
+    expect(output.nextAction).toContain("Claim task.5007");
+    expect(getWorkItem).toHaveBeenCalledWith("task.5007");
+    vi.mocked(getWorkItem).mockResolvedValue(null);
+    await expect(
+      getWorkItemCoordination({
+        workItemId: "missing",
+        statusUrl: "/status",
+        now: NOW,
+      })
+    ).rejects.toBeInstanceOf(CoordinationWorkItemNotFoundError);
+  });
+
+  it("keeps missing-session and non-owner heartbeat errors in PostgreSQL", async () => {
+    failUnrelatedProviders();
+    vi.mocked(port.heartbeat).mockResolvedValue(null);
+    vi.mocked(port.getCurrent).mockResolvedValue(null);
+    await expect(
+      heartbeatWorkItemSession({
+        workItemId: "missing",
+        body: {},
+        sessionUser: USER,
+        statusUrl: "/status",
+        now: NOW,
+      })
+    ).rejects.toBeInstanceOf(WorkItemSessionNotFoundError);
+    vi.mocked(port.getCurrent).mockResolvedValue(
+      session({ claimedByUserId: "someone-else" })
+    );
+    await expect(
+      heartbeatWorkItemSession({
+        workItemId: "task.5007",
+        body: {},
+        sessionUser: USER,
+        statusUrl: "/status",
+        now: NOW,
+      })
+    ).rejects.toBeInstanceOf(WorkItemSessionForbiddenError);
+    expect(getContainer).not.toHaveBeenCalled();
+    expect(getWorkItem).not.toHaveBeenCalled();
   });
 });

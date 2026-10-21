@@ -132,12 +132,11 @@ SECRETS_CONTROL_ENV="${SECRETS_CONTROL_ENV:-$DEPLOY_ENVIRONMENT}"
 # Mint the <control-env>-writer token via the sanctioned k8s-auth seam. Target: this is
 # the only phase permitted to hold it (Invariant 16 token boundary). Transitional:
 # reconcile-substrate also mints it to seed DSNs until the env-repair lane lands.
-BAO_TOKEN="$(
-  cogni_openbao_kubernetes_login_retry remote "set -euo pipefail
-    jwt=\$(kubectl create token openbao-operator -n default)
-    kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-      bao write -field=token auth/kubernetes/login role='${SECRETS_CONTROL_ENV}-writer' jwt=\"\$jwt\""
-)"
+CACHE_DIR="$(umask 077; mktemp -d -t materialize-cache.XXXXXX)"
+chmod 700 "$CACHE_DIR"
+trap 'rm -rf "$CACHE_DIR"' EXIT
+source "$SCRIPT_DIR/lib/openbao-kv-http-read.sh"
+BAO_TOKEN="$(cogni_openbao_materializer_login)"
 [[ -n "$BAO_TOKEN" ]] || fail "could not mint ${SECRETS_CONTROL_ENV}-writer token (writing the '${DEPLOY_ENVIRONMENT}' lane)"
 if [[ "$SECRETS_CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" ]]; then
   echo "[secret-materialize] writing the '${DEPLOY_ENVIRONMENT}' lane into ${SECRETS_CONTROL_ENV}'s vault as ${SECRETS_CONTROL_ENV}-writer (bug.5206)"
@@ -234,7 +233,7 @@ _cat_field() {
 # Batched, idempotent OpenBao I/O (read-once → diff → write-missing-only).
 #
 # OpenBao is ClusterIP with no Ingress (infra/k8s/argocd/openbao/values.yaml), so
-# the only access from a CI runner is ssh→kubectl exec. The previous shape did
+# CI reaches its validated HTTP Service over SSH. The previous shape did
 # ~6 of those round-trips PER KEY (ancestor scan + existing-read + metadata +
 # write) and re-wrote every key every run. This collapses it to O(1) ssh per
 # node: one prefetch of the node + ancestor paths into an on-disk cache, then a
@@ -242,42 +241,41 @@ _cat_field() {
 # born node reads the cache, finds every key present, writes nothing, and exits.
 # (North star: move this into an in-cluster Job that talks to OpenBao over
 # ClusterIP and drop ssh entirely — docs/design/node-wizard-secret-setting.md.)
-CACHE_DIR="$(mktemp -d -t materialize-cache.XXXXXX)"
 # One batch dir PER OpenBao service path. The node path is the common case; a platform
 # service (see PLATFORM_SERVICES below) accumulates into its own dir so one flush can
 # never patch another service's bucket.
 BATCH_ROOT="${CACHE_DIR}/.batch"
 mkdir -p "${BATCH_ROOT}/${TARGET_NODE}"
-trap 'rm -rf "$CACHE_DIR"' EXIT
 
 bao_exec() {
   remote "kubectl exec ${1} -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao ${2}"
 }
 
+# KV writes retain their existing exec implementation; login and GET share the
+# validated HTTP Service transport above, without changing writer authority.
+
 # Prefetch one path's full key/value map into the cache (one ssh). Runner-side jq
-# extracts; the remote only runs the proven `bao kv get -format=json` shape.
+# extracts; the remote uses the existing OpenBao Service HTTP GET, without kubelet exec.
 #
 # bug.5159 — a TRANSPORT failure (ssh drop, exec hiccup, OpenBao down) must never read
 # as an EMPTY BUCKET: that lie cascades into "key absent" errors downstream, and worse,
 # a false-empty cache would let materialize re-mint values that already exist. Only the
-# explicit "No value found" answer (a genuinely unborn path) maps to {}; anything else
-# is retried and then fatal, naming the transport.
+# validated HTTP404 with empty error array (a genuinely unborn path) maps to {};
+# transient GET failures retry finitely; denied/malformed/unknown results fail closed.
 prefetch_path() {
-  local svc="$1" env="${2:-$DEPLOY_ENVIRONMENT}" ns="${3:-$1}" json raw attempt key val
+  local svc="$1" env="${2:-$DEPLOY_ENVIRONMENT}" ns="${3:-$1}" json raw attempt key val rc
   raw=""
   for attempt in 1 2 3; do
-    if raw="$(bao_exec "" "kv get -format=json 'cogni/${env}/${svc}'" 2>&1)"; then
-      break
+    if raw="$(cogni_openbao_read_path "$env" "$svc")"; then break; else rc=$?; fi
+    # Only classified transient GET failures retry. A bare exec exit2 is never absence.
+    echo "[secret-materialize] OpenBao read cogni/${env}/${svc} attempt ${attempt}/3 failed: native_rc=${rc}" >&2
+    if [[ "$rc" != 75 || "$attempt" == 3 ]]; then
+      fail "unavailable reading cogni/${env}/${svc} — NOT an absent path"
     fi
-    case "$raw" in
-      *"No value found"*) raw='{}'; break ;;
-    esac
-    echo "[secret-materialize] OpenBao read cogni/${env}/${svc} attempt ${attempt}/3 failed: $(printf '%s' "$raw" | tail -1)" >&2
-    [[ "$attempt" == 3 ]] && { echo "::error::secret-materialize: transport failure reading cogni/${env}/${svc} after 3 attempts — NOT an absent path (bug.5159)" >&2; exit 1; }
     sleep $((attempt * 5))
   done
-  json="$(printf '%s' "$raw" | jq -c '.data.data // {}' 2>/dev/null || true)"
-  [[ -z "$json" ]] && json='{}'
+  json="$(printf '%s' "$raw" | jq -ce '.data.data | select(type == "object")')" \
+    || fail "invalid read response for cogni/${env}/${svc} — NOT an absent path"
   mkdir -p "${CACHE_DIR}/${ns}"
   while IFS=$'\t' read -r key val; do
     [[ -z "$key" ]] && continue
