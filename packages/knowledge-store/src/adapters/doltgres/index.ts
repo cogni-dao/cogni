@@ -38,6 +38,7 @@ import type {
   NewKnowledge,
 } from "../../domain/schemas.js";
 import {
+  citedEntryTypesFor,
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
   requiresEvaluateAt,
@@ -185,8 +186,12 @@ function citationId(
  * EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE — strict edges that target hypotheses.
  * Mirrors HYPOTHESIS_TARGETED_EDGES from the domain layer.
  */
-function expectedEntryTypeForEdge(type: CitationType): string | null {
-  return HYPOTHESIS_TARGETED_EDGES.includes(type) ? "hypothesis" : null;
+function expectedEntryTypeForEdge(
+  type: CitationType
+): readonly string[] | null {
+  return HYPOTHESIS_TARGETED_EDGES.includes(type)
+    ? citedEntryTypesFor(type)
+    : null;
 }
 
 /**
@@ -601,12 +606,12 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       }
     }
     const expected = expectedEntryTypeForEdge(edge.citationType);
-    if (expected !== null && citedEntryType !== expected) {
+    if (expected !== null && !expected.includes(citedEntryType ?? "")) {
       throw new CitationTypeMismatchError(
         edge.citationType,
         edge.citedId,
         citedEntryType ?? "(none)",
-        expected
+        expected.join("|")
       );
     }
 
