@@ -47,3 +47,18 @@ export type {
   MessageGraphInput,
   MessageGraphOutput,
 } from "./types";
+// Work prioritizer (operator-only AI workflow, story.5096 design v4)
+export {
+  createWorkPrioritizerGraph,
+  PRIORITIZER_REPORT_CLOSE,
+  PRIORITIZER_REPORT_OPEN,
+  type PrioritizerCycleTelemetry,
+  WORK_PRIORITIZER_GRAPH_NAME,
+} from "./work-prioritizer/graph";
+export {
+  DECISION_SCHEMA_VERSION,
+  DecisionPayloadSchema,
+  PlanRowSchema,
+  RANK_HEURISTIC,
+  RankedRowSchema,
+} from "./work-prioritizer/schema";

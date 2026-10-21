@@ -116,6 +116,8 @@
     "scheduler:dev": "dotenv -e .env.local -- pnpm --filter @cogni/scheduler-worker-service dev",
     "scheduler:docker:build": "docker build -f services/scheduler-worker/Dockerfile -t cogni-scheduler-worker-local .",
     "sandbox:docker:build": "docker build -t cogni-sandbox-runtime:latest services/sandbox-runtime/",
+    "eval:run": "pnpm eval:prioritizer",
+    "eval:prioritizer": "tsx packages/langgraph-graphs/evals/work-prioritizer/run.ts",
     "packages:build": "pnpm -r --filter \"./packages/**\" --filter \"./nodes/operator/packages/**\" --filter \"./nodes/operator/graphs/**\" build && tsc -b packages/*/tsconfig.json packages/langgraph-graphs/tsconfig.build.json nodes/operator/packages/*/tsconfig.json && pnpm packages:validate",
     "packages:build:clean": "rm -rf packages/*/dist packages/*/*.tsbuildinfo nodes/operator/packages/*/dist nodes/operator/packages/*/*.tsbuildinfo nodes/operator/graphs/dist && pnpm packages:build",
     "packages:validate": "tsx --tsconfig tsconfig.scripts.json scripts/validate-package-declarations.ts",

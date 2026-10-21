@@ -60,6 +60,42 @@ governance:
   signal_contract: "0x590FC79B9c925C377fA63F4AaF54cdbF4Ee273A1"
   chain_id: "8453"
   base_url: "https://proposal.cognidao.org"
+  # Governance charters (task.5282). LEDGER_INGEST is NOT declared here on purpose:
+  # extractGovernanceConfig still synthesizes it from activity_ledger (cron 0 0 * * *),
+  # exactly as before this list existed — only a declared LEDGER_INGEST suppresses that.
+  schedules:
+    # Work prioritizer (story.5096), PROPOSE mode: judges + ranks the backlog under the
+    # work_prioritization policy and files an EDO decision only when the plan changes (plus one
+    # daily full review). Zero work-item mutations. Model = LiteLLM default_free (gpt-oss-120b,
+    # is_free: true): the system tenant that bills governance runs holds zero credits, and the
+    # preflight credit gate passes free models — a paid model would fail with insufficient_credits.
+    # */5 is the CANDIDATE-PROOF cadence (>=2 scheduled cycles inside candidate-a's flight window;
+    # unchanged delta cycles cost zero LLM calls). At prod promote time this becomes hourly at most.
+    - charter: WORK_PRIORITIZER
+      cron: "*/5 * * * *"
+      timezone: UTC
+      entrypoint: PRIORITIZE
+      graph: langgraph:work-prioritizer
+      model: gpt-oss-120b
+      policy: work_prioritization
+
+# Work-prioritization policy (story.5096, prioritizer design v4 §1). Node-owned and
+# versioned; changing any value is a reviewed PR. Ceilings are caps, never targets.
+# objectives = hub ids of the approved goals. The graph is propose-only: every env proposes.
+work_prioritization:
+  policy_version: v4.0
+  p0_max: 3
+  p1_budget: 6
+  p2_budget: 12
+  objectives:
+    - dao-goal-substrate-reliability
+    - dao-goal-node-mission
+    - dao-goal-autonomous-selection
+  apply:
+    # Per deploy environment (DEPLOY_ENVIRONMENT). Propose everywhere until a write path exists.
+    mode:
+      default: propose
+  hypotheses_per_day: 3
 
 payments:
   status: active
