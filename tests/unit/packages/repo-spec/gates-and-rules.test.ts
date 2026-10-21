@@ -154,7 +154,7 @@ describe("parseRule", () => {
     const yaml = readRuleFixture("pr-syntropy-coherence.yaml");
     const rule = parseRule(yaml);
     expect(rule.id).toBe("strict-pr-mapping");
-    expect(rule.evaluations).toHaveLength(3);
+    expect(rule.evaluations).toHaveLength(6);
     expect(rule.success_criteria.require).toHaveLength(3);
   });
 
@@ -162,7 +162,7 @@ describe("parseRule", () => {
     const yaml = readRuleFixture("patterns-and-docs.yaml");
     const rule = parseRule(yaml);
     expect(rule.id).toBe("patterns-and-docs");
-    expect(rule.evaluations).toHaveLength(2);
+    expect(rule.evaluations).toHaveLength(3);
     expect(rule.success_criteria.any_of).toHaveLength(2);
   });
 

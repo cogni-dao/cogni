@@ -3,6 +3,10 @@ schema_version: "0.3"
 blocking: true
 workflow_id: goal-evaluations
 
+# Standards axis — does the change follow this repo's conventions?
+# The smell baseline is adapted from the Standards reviewer in mattpocock/skills
+# code-review (https://github.com/mattpocock/skills/blob/5beb35b040e3de97e54fa9e386d7e42d15c295c2/skills/engineering/code-review/SKILL.md),
+# itself Fowler's Refactoring ch.3. Metrics absent from success_criteria are ADVISORY.
 evaluations:
   - follows-patterns: >
       This PR follows established patterns visible in the codebase
@@ -12,6 +16,15 @@ evaluations:
   - documents-new-patterns: >
       If this PR introduces a new pattern or approach not seen before in the codebase,
       it documents the pattern clearly so other contributors can follow it.
+
+  - smell-baseline: >
+      The diff is free of these code smells, each a judgement call rather than a hard
+      violation: Mysterious Name, Duplicated Code, Feature Envy, Data Clumps, Primitive
+      Obsession, Repeated Switches, Shotgun Surgery, Divergent Change, Speculative
+      Generality, Message Chains, Middle Man, Refused Bequest. A convention the
+      surrounding code visibly follows overrides the baseline; skip anything a linter or
+      type checker already enforces. In observations, name each smell found as
+      "possible <smell>" with its file.
 
 success_criteria:
   neutral_on_missing_metrics: true

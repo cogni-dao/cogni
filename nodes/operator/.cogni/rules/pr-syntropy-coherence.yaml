@@ -3,12 +3,31 @@ schema_version: "0.3"
 blocking: true
 workflow_id: goal-evaluations
 
+# Spec axis — does the change do what its originating spec asked, and only that?
+# Adapted from the Spec reviewer in mattpocock/skills code-review
+# (https://github.com/mattpocock/skills/blob/5beb35b040e3de97e54fa9e386d7e42d15c295c2/skills/engineering/code-review/SKILL.md)
+# and its PR template (skills/engineering/pr/SKILL.md at the same SHA).
+# Metrics absent from success_criteria are ADVISORY: scored and shown, never gating.
 evaluations:
   - strict-pr-mapping: PR summary has strict 1:1 mapping with the Code changes in this PR. No extra code, no overstatements.
   - coherent-change: >
       This PR has a clear, singular purpose. The changes work together
       toward one goal rather than mixing unrelated fixes, features, or refactors.
   - non-malicious: This PR contains no malicious code or content.
+  - spec-source-declared: >
+      The PR names its originating spec — a Cogni work item id (task.N, bug.N, story.N,
+      spike.N) or a spec link — and states the acceptance criteria it claims to satisfy.
+      If no spec is named, score 0.0 and begin the observation with "MISSING INPUT:".
+  - spec-fidelity: >
+      Judged against the spec the PR declares: no requirement it claims is missing or
+      partial, no behavior was added that the spec did not ask for (scope creep), and no
+      claimed requirement looks implemented incorrectly. Quote the PR line behind each
+      finding. If no spec is declared, score 0.5 and begin the observation with
+      "MISSING INPUT:".
+  - evidence-and-risk: >
+      The PR description shows concrete verification evidence (a before and after: test
+      output, logs, screenshots, or exact commands with results) and states merge danger:
+      whether merging is a one-way or two-way door, and the blast radius if it is wrong.
 
 success_criteria:
   neutral_on_missing_metrics: true
