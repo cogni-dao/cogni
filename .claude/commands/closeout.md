@@ -1,115 +1,50 @@
-You are a **senior technical writer** performing the pre-PR finish pass for this work item: #$ITEM
+You are closing out a validated work item: #$ITEM
 
-You scan the branch diff once, then update everything: file headers, AGENTS.md, specs, project, and work item. One pass, clean paper trail.
+Closeout is the last stage: the change is reviewed, green and proven on candidate. Your job is to land it, close the item, and keep what was learned. You do not change code here; if anything below fails, return the item to the stage that owns the failure.
 
-Your audience: future developers and reviewers. Every file they open should have an accurate header. Every AGENTS.md should reflect the current public surface. Every spec should match what the code does now. Prefer mermaid diagrams, visual flows, file pointers, and invariants.
-
-Read these before starting:
-
-- [Architecture](docs/spec/architecture.md) and [Style & Lint Rules](docs/spec/style.md)
-- [Content Boundaries](docs/spec/docs-work-system.md#content-boundaries) — ownership rules
-- [Development Lifecycle](docs/spec/development-lifecycle.md) — workflow flows
-- [Work README](work/README.md) — field reference and hard rules
+Read the work item (`GET /api/v1/work/items/{id}`), its PR, and [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence).
 
 ---
 
-## Phase 1 — Scan & Plan
+## Phase 1 — Verify every gate at one SHA
 
-Resolve the base branch from the work item or workspace. Default to `origin/main`
-when no work item-specific base is declared. Run
-`git diff --name-status ${BASE_REF:-origin/main}...HEAD` and read the changed
-files. From this single scan, build a change manifest:
+Let `HEAD_SHA` be the PR head (`gh pr view <PR> --json headRefOid`). All three must hold for that exact SHA:
 
-1. **Coherence check**: Do ALL changes align with the assigned work item? Flag any unrelated changes — they should be split into a separate branch before PR.
+1. **CI**: every required check passes (`gh api repos/{owner}/{repo}/commits/$HEAD_SHA/check-runs`).
+2. **Review**: the latest `/review-implementation` verdict on the PR names `HEAD_SHA` and says APPROVE.
+3. **Validation**: the `/validate-candidate` scorecard on the PR names `HEAD_SHA` and passes, or records flight n/a for an instruction-only change.
 
-2. **Group changes by directory**. For each directory with changes, note:
-   - Did public exports, routes, env keys, ports, or boundaries change? → AGENTS.md update needed
-   - Did file behavior, inputs/outputs, or side-effects change? → file header update needed
-   - Internal-only refactors or formatting? → no doc update needed
-
-3. **Check spec impact**: Read the work item's `spec_refs`. For each linked spec, does the diff change behavior that the spec describes? Note which spec sections need updating.
-
-4. **Name the validation use case**: Identify the concrete user/agent action the work protects or enables. If the branch adds a shared spine rather than the final endpoint gate, say which path is covered now and which protected action remains in the project roadmap.
-
-Output a short TODO list of all actions before executing any of them.
+If any gate fails or names an older SHA, stop: set the item back to `needs_merge` and name the missing gate.
 
 ---
 
-## Phase 2 — File Headers
+## Phase 2 — Land it
 
-For each changed/new source file where behavior changed:
-
-- Update the **top-of-file TSDoc header** to reflect current behavior, inputs/outputs, side-effects.
-- Use templates: `docs/templates/header_source_template.ts` (source), `header_test_template.ts` (tests), `header_e2e_template.ts` (e2e).
-- If only internal refactors or formatting changed, skip.
-
----
-
-## Phase 3 — AGENTS.md
-
-For each directory where public surface changed:
-
-- Update the directory's `AGENTS.md`. Create from `docs/templates/agents_subdir_template.md` if missing.
-- Only update if: public exports, routes, env keys, ports, or boundaries changed.
-- Do **not** add new sections. Keep ≤150 lines. Edit existing sections only.
-- Describe **interfaces and public surface** — not per-file behavior.
+1. Merge through the operator: `POST /api/v1/vcs/merge` with `{nodeId, prNumber}`. Never use `gh pr merge`.
+2. Watch until the PR is `MERGED`; a queued merge is not done.
+3. `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"done"}}`.
+4. Preview follows `main`: confirm preview `/version.buildSha` reaches the merge SHA. Production promotion of a user-facing change waits for a human to look at it.
 
 ---
 
-## Phase 4 — Specs
+## Phase 3 — Keep what was learned
 
-For each spec in the work item's `spec_refs` (skip if none):
+Ask: did this work produce durable knowledge a future agent would need, such as a gotcha, a corrected assumption, or a design that drifted? If yes, refine the owning hub entry through [`contribute-knowledge-to-cogni`](../skills/contribute-knowledge-to-cogni/SKILL.md) in one focused inbox, and link it from the PR. Routine progress is not knowledge; stay silent when nothing qualifies.
 
-- Read the spec and compare against the current code.
-- Update sections where implementation changed (invariants, design, file pointers, acceptance checks).
-- Advance `spec_state` if appropriate (draft→proposed when invariants enumerated; proposed→active when code matches and Open Questions empty).
-- Update `verified:` date.
-- Do NOT add roadmap, phases, or planning content.
-- For CI/CD work, explicitly check whether the change crosses the app-flight vs
-  infra-provisioning boundary. App flight may assert deployable substrate; it
-  must not hide provisioning or Compose reconciliation unless the spec already
-  says that workflow owns the infra lever.
+If the review found a mechanical mistake that a lint rule or regression test could catch next time, file one `task` for that guardrail.
 
 ---
 
-## Phase 5 — Project & Work Item
+## Phase 4 — Report
 
-1. **Update the work item**:
-   - Set `status: needs_merge`
-   - Set `reviewer:` if known
-   - Update `updated:` date
-
-2. **Update the project** (if work item has `project:` set):
-   - Mark the corresponding deliverable as in-review in the roadmap table.
-   - Add/update spec links in `## As-Built Specs`.
+Report the merged SHA, the preview `/version` result, the work item's `done` status, and any knowledge inbox or guardrail task. If you are inside a dev-manager story, the manager reads this report.
 
 ---
-
-## Phase 6 — Finalize
-
-1. Run `pnpm check:docs` and fix any errors until clean.
-   - Validation prose must name the actual route, graph, tool, or deployment lever. Do not settle for generic "chat works" or "API responds" language when the work item is about authorization, deployment, billing, or another specific protected action.
-   - Candidate validation must prove the deployed pod, not just service liveness: cite the flight workflow, deploy branch or Argo app, and `/version.buildSha` match for the node URL being validated.
-2. Commit all changes (doc updates, header updates, spec updates, work item, project) on the work item's branch. `git status` must be clean.
-3. Push to remote.
-4. Create PR to the resolved base branch using `/pull-request` logic
-   (conventional commit title + summary).
-5. Set `pr:` in work item frontmatter with the PR URL. Commit and push this update.
-6. Report: what was updated, what was flagged, any follow-up items discovered. Next command: `/review-implementation`.
-
----
-
-## Writing Rules (apply to ALL phases)
-
-- **Present tense** only. Never write "new," "updated," "final," or "production ready."
-- Simplify and shorten. Remove dead or duplicated lines.
-- Keep behavior details in file headers, not AGENTS.md.
-- Cross-check: `index.ts` exports, routes, env schema vs AGENTS.md.
 
 ## Rules
 
-- **SINGLE_SCAN** — read the diff once in Phase 1. All subsequent phases reference that manifest.
-- **COHERENCE_REQUIRED** — if changes don't align with the work item, flag it before proceeding
-- **SPEC_UPDATES_MATCH_CODE** — spec changes reflect what was built, not aspirations
-- **WORK_ITEM_SOURCE_OF_TRUTH** — work item state changes go through the Cogni API/Dolt source of truth; legacy markdown items are references only
-- **LINK_DONT_DUPLICATE** — don't restate project roadmap content in spec updates
+- **ONE_SHA** — CI, review and validation must all name the same head SHA
+- **OPERATOR_MERGES** — merge only through `POST /api/v1/vcs/merge`
+- **DONE_MEANS_MERGED** — `done` is set only after the PR is merged
+- **NO_CODE_IN_CLOSEOUT** — a needed code or doc change goes back to `needs_implement`
+- **KNOWLEDGE_IS_REFINED** — refine the owning hub entry; never add a duplicate
