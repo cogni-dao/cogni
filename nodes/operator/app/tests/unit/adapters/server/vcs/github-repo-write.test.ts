@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/unit/adapters/server/vcs/github-repo-write`
  * Purpose: Unit tests for node repo minting through the operator GitHub App adapter.
- * Scope: Mocked Octokit/fetch only; no real GitHub I/O.
+ * Scope: Mocked Octokit/fetch; does not access GitHub.
  * Invariants: NODE_TEMPLATE_ANCESTRY — wizard-minted nodes are named forks of node-template.
  * Side-effects: none
  * Links: src/adapters/server/vcs/github-repo-write.ts, docs/spec/node-formation.md
@@ -4082,6 +4082,9 @@ describe("GitHubRepoWriter.dispatchNodeRefCandidateFlight", () => {
           },
         },
       ],
+      "GET /repos/{owner}/{repo}/compare/{basehead}": () => ({
+        status: "ahead",
+      }),
       "GET /repos/{owner}/{repo}/git/ref/{ref}": () =>
         Promise.reject(statusError(404, "Not Found")),
       "POST /repos/{owner}/{repo}/git/refs": () => ({}),
