@@ -18,6 +18,7 @@ import type { ReactElement } from "react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components";
 import { CopyLinkButton } from "./CopyLinkButton";
 import { KnowledgeEntryFields } from "./KnowledgeEntryFields";
+import { KnowledgeUseWhen } from "./KnowledgeUseWhen";
 
 interface KnowledgeDetailProps {
   readonly item: KnowledgeRow | null;
@@ -50,6 +51,7 @@ export function KnowledgeDetail({
               <SheetTitle className="text-lg leading-snug">
                 {item.title}
               </SheetTitle>
+              <KnowledgeUseWhen useWhen={item.useWhen} />
               <div className="flex items-center gap-1.5">
                 <span className="font-mono text-muted-foreground text-xs">
                   {item.id}
