@@ -3,7 +3,7 @@
 
 /**
  * Module: `@tests/unit/app/knowledge-direct-links`
- * Purpose: Prove ordinary atom reads never walk chains and load more links only on demand.
+ * Purpose: Prove atom selections never walk chains and load more links only on demand.
  * Scope: React Query plus browser fetch boundary. Does not use a live network.
  * Invariants: NO_AUTOMATIC_CHAIN, FIVE_INITIAL_LINKS, EXPLICIT_PAGINATION.
  * Side-effects: global (stubbed fetch)
@@ -12,6 +12,7 @@
  * @internal
  */
 
+import type { KnowledgeRow } from "@cogni/node-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
@@ -23,6 +24,85 @@ import {
 import type { ComponentProps, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeEntryView } from "@/app/(app)/knowledge/_components/KnowledgeEntryView";
+import { KnowledgeDashboardView } from "@/app/(app)/knowledge/view";
+
+const navigation = vi.hoisted(() => ({ mode: "browse" }));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn() }),
+  useSearchParams: () => new URLSearchParams({ mode: navigation.mode }),
+}));
+
+// Replace only grid/WebGL/chrome: selection handlers, details, fields, and
+// the shared direct-relation component execute their real production code.
+vi.mock("next/dynamic", () => ({
+  default:
+    () =>
+    ({
+      graphData,
+      onNodeClick,
+    }: {
+      graphData: {
+        nodes: Array<{ id: string; title: string; isHub: boolean }>;
+      };
+      onNodeClick: (node: { id: string; isHub: boolean }) => void;
+    }) => (
+      <div>
+        {graphData.nodes
+          .filter((node) => !node.isHub)
+          .map((node) => (
+            <button
+              key={node.id}
+              type="button"
+              onClick={() => onNodeClick(node)}
+            >
+              Select graph atom {node.title}
+            </button>
+          ))}
+      </div>
+    ),
+}));
+vi.mock("@cogni/node-ui-kit/reui/data-grid/data-grid", () => ({
+  DataGrid: ({
+    table,
+    onRowClick,
+  }: {
+    table: {
+      getRowModel: () => {
+        rows: Array<{ id: string; original: KnowledgeRow }>;
+      };
+    };
+    onRowClick: (row: KnowledgeRow) => void;
+  }) => (
+    <div>
+      {table.getRowModel().rows.map((row) => (
+        <button
+          key={row.id}
+          type="button"
+          onClick={() => onRowClick(row.original)}
+        >
+          Select table atom {row.original.title}
+        </button>
+      ))}
+    </div>
+  ),
+  DataGridContainer: ({ children }: { children: ReactNode }) => (
+    <div>{children}</div>
+  ),
+}));
+vi.mock(
+  "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility",
+  () => ({ DataGridColumnVisibility: () => null })
+);
+vi.mock("@cogni/node-ui-kit/reui/data-grid/data-grid-pagination", () => ({
+  DataGridPagination: () => null,
+}));
+vi.mock("@cogni/node-ui-kit/reui/data-grid/data-grid-table", () => ({
+  DataGridTable: () => null,
+}));
+vi.mock("@/app/(app)/knowledge/_components/AddDomainSheet", () => ({
+  AddDomainSheet: () => null,
+}));
 
 vi.mock("@/components", () => ({
   Badge: ({ children }: { children: ReactNode }) => <span>{children}</span>,
@@ -32,6 +112,14 @@ vi.mock("@/components", () => ({
     </button>
   ),
   Markdown: ({ content }: { content: string }) => <p>{content}</p>,
+  Input: (props: ComponentProps<"input">) => <input {...props} />,
+  Sheet: ({ open, children }: { open: boolean; children: ReactNode }) =>
+    open ? <div role="dialog">{children}</div> : null,
+  SheetContent: ({ children }: { children: ReactNode }) => (
+    <div>{children}</div>
+  ),
+  SheetHeader: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  SheetTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
 }));
 
 vi.mock("next/link", () => ({
@@ -64,16 +152,15 @@ function link(i: number) {
   };
 }
 
-function mount(fetchMock: ReturnType<typeof vi.fn>) {
+function mount(
+  fetchMock: ReturnType<typeof vi.fn>,
+  element: ReactNode = <KnowledgeEntryView id="root" />
+) {
   vi.stubGlobal("fetch", fetchMock);
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  render(
-    <QueryClientProvider client={client}>
-      <KnowledgeEntryView id="root" />
-    </QueryClientProvider>
-  );
+  render(<QueryClientProvider client={client}>{element}</QueryClientProvider>);
 }
 
 function body(useWhen: string | null = null) {
@@ -189,5 +276,67 @@ describe("ordinary knowledge reads", () => {
     );
     await screen.findByText("Only the selected atom body");
     expect(screen.queryByText("Use when:")).toBeNull();
+  });
+});
+
+describe("knowledge selection surfaces", () => {
+  it.each([
+    "browse",
+    "chains",
+    "graph",
+  ])("%s selection renders the selected body and pages direct links without chain reads", async (mode) => {
+    navigation.mode = mode;
+    const selected = { ...body(), entryType: "decision" };
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      }
+    );
+    const fetchMock = vi.fn(async (input: string) => {
+      if (input === "/api/v1/knowledge/contributions?state=open&limit=100") {
+        return Response.json({ contributions: [] });
+      }
+      if (input === "/api/v1/citations/root") {
+        return Response.json({
+          links: [0, 1, 2, 3, 4].map(link),
+          nextCursor: "edge-4",
+        });
+      }
+      if (input === "/api/v1/citations/root?cursor=edge-4") {
+        return Response.json({ links: [link(5)], nextCursor: null });
+      }
+      throw new Error(`Unexpected selection read: ${input}`);
+    });
+    mount(
+      fetchMock,
+      <KnowledgeDashboardView
+        initialList={{ items: [selected], domains: ["meta"] }}
+        initialDomains={{ domains: [] }}
+        initialGraph={{ nodes: [selected], edges: [], domains: ["meta"] }}
+      />
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Only the selected atom body")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Select ${mode === "graph" ? "graph" : "table"} atom Root atom`,
+      })
+    );
+    await screen.findByText("Only the selected atom body");
+    await screen.findByRole("link", { name: "supports Related 4" });
+    expect(screen.queryByText("supports Related 5")).toBeNull();
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/v1/knowledge/contributions?state=open&limit=100",
+      "/api/v1/citations/root",
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "More links" }));
+    await screen.findByRole("link", { name: "supports Related 5" });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/v1/knowledge/contributions?state=open&limit=100",
+      "/api/v1/citations/root",
+      "/api/v1/citations/root?cursor=edge-4",
+    ]);
   });
 });

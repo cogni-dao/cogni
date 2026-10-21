@@ -440,7 +440,6 @@ function BrowsePanel({
       <KnowledgeDetail
         item={selected}
         open={selected !== null}
-        showChain={mode === "chains"}
         onOpenChange={(o) => {
           if (!o) setSelected(null);
         }}
