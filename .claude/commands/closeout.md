@@ -87,7 +87,7 @@ For each spec in the work item's `spec_refs` (skip if none):
    - Candidate validation must prove the deployed pod, not just service liveness: cite the flight workflow, deploy branch or Argo app, and `/version.buildSha` match for the node URL being validated.
 2. Commit all changes (doc updates, header updates, spec updates, project) on the work item's branch; work-item state changes go through the API, not files. `git status` must be clean.
 3. Push to remote.
-4. Create the PR to `main` (`gh pr create --base main`) with a Conventional Commit title and this body. Keep prose brief; use the smallest visual that makes the change clear:
+4. Create the PR to `main` (`gh pr create --base main`), or on a review re-loop update the existing PR (`gh pr edit <PR> --body-file`), with a Conventional Commit title and this body. Keep prose brief; use the smallest visual that makes the change clear:
 
    ```markdown
    Work item: <id link>. Acceptance: <the outcome criteria this PR claims>.
@@ -107,7 +107,7 @@ For each spec in the work item's `spec_refs` (skip if none):
    **Blast radius:** <who or what breaks if it is wrong>
    ```
 
-5. Link the PR (`POST /api/v1/work/items/{id}/pr`) and `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"needs_merge"}}`.
+5. Link the PR if new (`POST /api/v1/work/items/{id}/pr`) and `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"needs_merge"}}`.
 6. Report: what was updated, what was flagged, any follow-up items discovered. Next command: `/review-implementation`, run by an agent that did not write the change.
 
 ---

@@ -1,6 +1,6 @@
 ---
 name: dev-manager
-description: Orchestrate multiple dev agents (spawned subagents OR human-driven worktrees) against ONE story-level outcome — hold the e2e vision, decompose into non-overlapping linked tasks with freeze/secrets guardrails baked in, and drive every task through every lifecycle stage (triage, design, implement, closeout, independent review, flight, validate, operator merge, promote). Use when a problem is bigger than one PR and needs 2+ agents working linked tasks under a shared contract. Triggers: "manage these devs", "coordinate subagents", "split this into tasks for N agents", "hold the story while agents work the tasks", "dev manager".
+description: Orchestrate multiple dev agents (spawned subagents OR human-driven worktrees) against ONE story-level outcome — hold the e2e vision, decompose into non-overlapping linked tasks with freeze/secrets guardrails baked in, and drive every task through every lifecycle stage (triage, design + fresh design review, implement, closeout, fresh implementation review, flight, validate, operator merge, promote). Use when a problem is bigger than one PR and needs 2+ agents working linked tasks under a shared contract. Triggers: "manage these devs", "coordinate subagents", "split this into tasks for N agents", "hold the story while agents work the tasks", "dev manager".
 ---
 
 # dev-manager

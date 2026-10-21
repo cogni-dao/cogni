@@ -91,7 +91,7 @@ If something proposes a design change in a PR comment, that's a bug — capture 
 
 ## Status Machine
 
-9 status values. Every `needs_*` status has exactly one command that resolves it.
+9 status values. Every `needs_*` status has one command that does its work; `needs_design` and `needs_merge` also need a fresh reviewer before the item advances.
 
 ```mermaid
 graph LR
@@ -102,7 +102,7 @@ graph LR
   needs_triage -->|"/triage: task/bug complex"| needs_design
   needs_triage -->|"/triage: task/bug simple"| needs_implement
   needs_research -->|"/research"| done
-  needs_design -->|"/design"| needs_implement
+  needs_design -->|"/design, then fresh /review-design APPROVE"| needs_implement
   needs_implement -->|"/implement"| needs_closeout
   needs_closeout -->|"/closeout"| needs_merge
   needs_merge -->|"fresh review APPROVE → flight → validate → operator merge"| done

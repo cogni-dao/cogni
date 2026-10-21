@@ -113,7 +113,7 @@ Output a structured review:
 ### Verdict: APPROVE / REQUEST CHANGES / NEEDS DISCUSSION
 ```
 
-You must not be the design's author. **APPROVE** → `PATCH /api/v1/work/items/{id}` `{"set":{"status":"needs_implement"}}`. **REQUEST CHANGES** → the item stays `needs_design` for `/design` to revise. **NEEDS DISCUSSION** → `{"set":{"status":"blocked","blockedBy":"<the one human decision>"}}`.
+You must not be the design's author. **APPROVE** → `PATCH /api/v1/work/items/{id}` `{"set":{"status":"needs_implement"}}` (for a story: set it `done` and create the designed tasks at `needs_implement`). **REQUEST CHANGES** → the item stays `needs_design` for `/design` to revise. **NEEDS DISCUSSION** → `{"set":{"status":"blocked","blockedBy":"<the one human decision>"}}`.
 
 ---
 

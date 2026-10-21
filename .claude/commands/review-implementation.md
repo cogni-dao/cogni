@@ -58,7 +58,7 @@ Read the required CI checks for `$HEAD_SHA` (`gh api repos/{owner}/{repo}/commit
 
 Post the verdict as a PR comment.
 
-**APPROVE:** the item stays `needs_merge`. Next come flight (`POST /api/v1/vcs/flight`) and `/validate-candidate`; a posted scorecard sets `{"set":{"deployVerified":true}}`. Then operator merge (`POST /api/v1/vcs/merge`). The item becomes `done` only after the merge lands. Operator `coordination.nextAction` still names validate before review for `needs_merge` (task.5292); review first.
+**APPROVE:** the item stays `needs_merge`. Next come flight (`POST /api/v1/vcs/flight`) and `/validate-candidate`; its PR scorecard comment is the validation signal. Then operator merge (`POST /api/v1/vcs/merge`). The item becomes `done` only after the merge lands. Operator `coordination.nextAction` still names validate before review for `needs_merge` (task.5292); review first.
 
 **REQUEST CHANGES:** `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"needs_implement"}}`. The implementer fixes every blocking issue and applies simplifying suggestions on the same branch. Filing a follow-up bug is not fixing, unless the issue is genuinely out of the outcome's scope; then say why in the PR. Re-review runs at the new head SHA. After five REQUEST CHANGES rounds on one PR, set `{"set":{"status":"blocked","blockedBy":"review loop limit"}}` and escalate to a human. Never flight a SHA that has an open REQUEST CHANGES.
 

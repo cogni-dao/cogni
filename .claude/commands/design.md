@@ -126,7 +126,7 @@ The item keeps only its contract: a **story** = the e2e behavior supported; a **
 3. Commit any repo changes (spec contracts, decomposed items) — the design is in the hub, not this diff.
 4. Push to remote.
 5. Report what was designed and the next command:
-   - **For stories**: story is `done`; created task(s) at `needs_design` → `/review-design` by a fresh agent
+   - **For stories**: story stays `needs_design` → `/review-design` by a fresh agent; its APPROVE marks the story `done` and creates the task(s) at `needs_implement`
    - **For projects**: `/task` (to start decomposition)
    - **For tasks/bugs**: item stays at `needs_design` → `/review-design` by a fresh agent
 

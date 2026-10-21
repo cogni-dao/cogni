@@ -1,6 +1,6 @@
 ---
 name: contribute-to-cogni
-description: Use when implementing a code change, opening a code PR, or resuming its CI, flight, merge, or promotion. Routes delivery to the current node's contracts. Research, explanations, design review, and knowledge-only contributions use their task-specific guidance.
+description: Use when implementing a code change, opening a code PR, or resuming its CI, flight, merge, or promotion. Routes delivery to the current node's contracts. Routes each work-item status to its lifecycle command. Explanations and knowledge-only contributions use their task-specific guidance.
 ---
 
 # Code delivery
