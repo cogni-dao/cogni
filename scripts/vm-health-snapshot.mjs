@@ -60,7 +60,8 @@ export const FAMILIES = {
 const TTL_SEC = POLICY.evidenceTtlMs / 1000;
 const HOST_RE = /^[0-9a-f]{32}$/;
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-const RANK = { GREEN: 0, YELLOW: 1, RED: 2, UNKNOWN: 3 };
+// A proven RED outranks UNKNOWN so the first line never hides a known critical signal.
+const RANK = { GREEN: 0, YELLOW: 1, UNKNOWN: 2, RED: 3 };
 const worst = (a, b) => (RANK[a] >= RANK[b] ? a : b);
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 
@@ -256,6 +257,7 @@ export function summarizeConsumers(rssRows, swapRows, usedBytes, top = 8) {
 
 class UsageError extends Error {}
 class GrafanaError extends Error {}
+class CredentialError extends Error {}
 
 function loadCreds() {
   let url = process.env.GRAFANA_URL;
@@ -303,6 +305,10 @@ async function prom(creds, expr, timeSec) {
   } catch (e) {
     throw new GrafanaError(`grafana unreachable: ${e?.name ?? "error"}`);
   }
+  if (res.status === 401 || res.status === 403)
+    throw new CredentialError(
+      `grafana rejected credentials (HTTP ${res.status})`
+    );
   if (!res.ok) throw new GrafanaError(`prometheus HTTP ${res.status}`);
   const body = await res.json().catch(() => null);
   if (body?.status !== "success" || body.data?.resultType !== "vector")
@@ -536,6 +542,7 @@ async function main() {
     console.log(
       `VM health snapshot ${at} · graded by ${POLICY.version}\n${snaps.map(render).join("\n")}`
     );
+  if (settled.some((r) => r.reason instanceof CredentialError)) process.exit(3);
   if (settled.every((r) => r.status === "rejected")) process.exit(4);
   const rank = Math.max(...snaps.map((s) => RANK[s.verdict]));
   process.exit(rank === 0 ? 0 : rank === 1 ? 1 : 2);

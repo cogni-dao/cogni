@@ -132,6 +132,18 @@ describe("vm-health evaluate", () => {
     expect(evaluate(stale).verdict).toBe("UNKNOWN");
   });
 
+  it("leads with a proven RED even when another signal is UNKNOWN", () => {
+    const mixed = input();
+    mixed.signals.diskHeadroomPercent = [
+      { host: HOST, value: 5, tsSec: NOW - 5 },
+    ];
+    mixed.signals.connectionsPercent = [];
+    const r = evaluate(mixed);
+    expect(r.verdict).toBe("RED");
+    expect(r.next[0]).toMatch(/^Disk:/);
+    expect(r.findings.some((f) => f.level === "UNKNOWN")).toBe(true);
+  });
+
   it("refuses to grade when two substrate hosts report for one env", () => {
     const two = input();
     two.signals.ioPressurePercent?.push({
