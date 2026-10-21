@@ -12,13 +12,13 @@ spec:
   nodeId: 921b1d1d-4ded-4a6d-b3f1-f7d6affa406a
   environment: candidate-a
   bundle:
-    ref: ghcr.io/cogni-dao/red@sha256:d69db5086c9e3bfac0abc15c78caf6e679fff802e08e58d691bb71cb6500f9a1
+    ref: ghcr.io/cogni-dao/red@sha256:65ef139435a6d4fd1657bc7e460895786167f9276b11f79ed5136b5c2e4831d3
     source:
       repository: cogni-dao/red
-      sha: 686f5be3081a1e9d63b2266c93ed0f2c569c6785
+      sha: 5334c5ee2ec30a7d6a87a7387d94d024ac712af3
     artifacts:
       - name: sandbox
-        image: ghcr.io/cogni-dao/red-sandbox@sha256:4ede179769503a1708017abd560ecf82da8c006ab0867459fa3890dfaea871f7
+        image: ghcr.io/cogni-dao/red-sandbox@sha256:070dac6ef75644e36eb06a3d8e54a4af7b5e221305e9a832a1fdc90230cbcb7b
   workload:
     name: red
     publicHost: red-sandbox-test.cognidao.org
@@ -40,7 +40,7 @@ spec:
   bootPolicy:
     onDeadline: Close
     onGiveUp: Hold
-  leaseGeneration: 0
+  leaseGeneration: 1
   actuatorNamespace: cogni-production
   dns:
     provider: cloudflare
