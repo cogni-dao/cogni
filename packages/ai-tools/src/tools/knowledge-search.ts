@@ -80,6 +80,7 @@ export const knowledgeSearchContract: ToolContract<
     "Returns entries with confidence scores and provenance. Search BEFORE using web search — " +
     "the knowledge store contains verified, curated information relevant to this node's domain.",
   effect: "read_only",
+  requires: "node.collaborate",
   inputSchema: KnowledgeSearchInputSchema,
   outputSchema: KnowledgeSearchOutputSchema,
   redact: (output) => output,

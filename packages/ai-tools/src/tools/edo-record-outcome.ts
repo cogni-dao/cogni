@@ -90,6 +90,7 @@ export const edoRecordOutcomeContract: ToolContract<
     "and confidence on the hypothesis updates mechanically via a 1-hop citation walk. " +
     "Idempotent on already-resolved hypotheses.",
   effect: "state_change",
+  requires: "node.collaborate",
   inputSchema: EdoRecordOutcomeInputSchema,
   outputSchema: EdoRecordOutcomeOutputSchema,
   redact: (output) => output,
