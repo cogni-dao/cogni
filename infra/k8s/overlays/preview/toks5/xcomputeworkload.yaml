@@ -11,13 +11,13 @@ spec:
   nodeId: f66b260b-4633-41e2-8711-b7c1b8449cc1
   environment: preview
   bundle:
-    ref: ghcr.io/cogni-dao/toks5@sha256:3e4acb49c5f166b478bbe4f46ae08a1fd631ad375f0d1dd7ac8860d9129539e9
+    ref: ghcr.io/cogni-dao/toks5@sha256:75fa361b84f3eeb79fc24e43063c1ce7cdfb0ea302015228825e884cfcd985fd
     source:
       repository: cogni-dao/toks5
-      sha: b9530627f36b26cb0f01a0cf91b7b2fc7f442a7e
+      sha: dd51752ba3e161bd7f06b854fb65160da5ef4f2b
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/toks5@sha256:d9594a135ab07e2946ec17febb69c6f0442c46af0348ac18592295fc9bc2570f
+        image: ghcr.io/cogni-dao/toks5@sha256:0454e9c5bb5a98eb16f88c71410b7da6336a4e4b9b350e06452e66c9ad73cec6
   workload:
     name: toks5
     publicHost: toks5-preview.cognidao.org
@@ -29,11 +29,29 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: DATABASE_SSL_CA_CERT
           - key: DOLTGRES_URL
           - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
+        command:
+          - /bin/sh
+          - -ec
+          - |-
+            set -eu
+            if [ -n "${DATABASE_SSL_CA_CERT:-}" ]; then
+              umask 077
+              cogni_db_ca_file=$(mktemp /tmp/cogni-database-ca.XXXXXX)
+              printf "%s\n" "$DATABASE_SSL_CA_CERT" > "$cogni_db_ca_file"
+              export NODE_EXTRA_CA_CERTS="$cogni_db_ca_file"
+              export PGSSLROOTCERT="$cogni_db_ca_file"
+            fi
+            exec "$@"
+          - cogni-database-trust
+        args:
+          - node
+          - app/server.js
         port: 3200
         visibility: public
         bindings: {}
