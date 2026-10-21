@@ -28,6 +28,8 @@ export function KnowledgeEntryView({ id }: { readonly id: string }) {
     retry: false,
   });
 
+  const useWhen = query.data?.useWhen?.trim();
+
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-5 md:p-6">
       <Link
@@ -65,6 +67,11 @@ export function KnowledgeEntryView({ id }: { readonly id: string }) {
             <h1 className="font-semibold text-xl leading-snug tracking-tight md:text-2xl">
               {query.data.title}
             </h1>
+            {useWhen && (
+              <p className="text-muted-foreground text-sm leading-relaxed">
+                <span className="font-medium">Use when:</span> {useWhen}
+              </p>
+            )}
             <div className="flex items-center gap-1.5">
               <span className="font-mono text-muted-foreground text-xs">
                 {query.data.id}

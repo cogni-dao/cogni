@@ -76,13 +76,14 @@ function mount(fetchMock: ReturnType<typeof vi.fn>) {
   );
 }
 
-function body() {
+function body(useWhen: string | null = null) {
   return {
     id: "root",
     domain: "meta",
     entityId: null,
     title: "Root atom",
     content: "Only the selected atom body",
+    useWhen,
     entryType: "finding",
     confidencePct: 80,
     sourceType: "human",
@@ -148,5 +149,45 @@ describe("ordinary knowledge reads", () => {
       screen.getByRole("link", { name: "supports Related 0" })
     ).toBeTruthy();
     expect(screen.getByText("Only the selected atom body")).toBeTruthy();
+  });
+
+  it("shows the retrieval trigger directly below the title without another request", async () => {
+    const fetchMock = vi.fn(async (input: string) => {
+      if (input === "/api/v1/knowledge/root") {
+        return Response.json(
+          body("  Choose this atom when reviewing a node repair.  ")
+        );
+      }
+      if (input === "/api/v1/citations/root") {
+        return Response.json({ links: [], nextCursor: null });
+      }
+      throw new Error(`Unexpected read: ${input}`);
+    });
+    mount(fetchMock);
+    const title = await screen.findByRole("heading", { name: "Root atom" });
+    expect(title.nextElementSibling?.textContent).toBe(
+      "Use when: Choose this atom when reviewing a node repair."
+    );
+    await screen.findByText("Only the selected atom body");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it.each([
+    null,
+    "",
+    "   ",
+  ])("omits the retrieval-trigger field for %j", async (useWhen) => {
+    mount(
+      vi.fn(async (input: string) => {
+        if (input === "/api/v1/knowledge/root")
+          return Response.json(body(useWhen));
+        if (input === "/api/v1/citations/root") {
+          return Response.json({ links: [], nextCursor: null });
+        }
+        throw new Error(`Unexpected read: ${input}`);
+      })
+    );
+    await screen.findByText("Only the selected atom body");
+    expect(screen.queryByText("Use when:")).toBeNull();
   });
 });
