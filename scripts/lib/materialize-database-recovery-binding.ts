@@ -76,7 +76,7 @@ const observationSchema = z
     probeRoleIsolated: z.literal(true),
   })
   .strict();
-const inputSchema = z
+export const recoveryBindingInputSchema = z
   .object({
     nodeId: bindingSchema.shape.nodeId,
     nodeSlug: bindingSchema.shape.nodeSlug,
@@ -95,7 +95,7 @@ const inputSchema = z
 export function sealRecoveryBinding(
   raw: unknown
 ): z.infer<typeof bindingSchema>[] {
-  const input = inputSchema.parse(raw);
+  const input = recoveryBindingInputSchema.parse(raw);
   const suffix = input.databaseName.slice("cogni_".length);
   const base = `cogni_${input.nodeSlug.replaceAll("-", "_")}`;
   if (
@@ -190,6 +190,17 @@ export function sealRecoveryBinding(
   );
 }
 
+/** Finite diagnostics only: URL/Zod/JSON errors may contain private values. */
+export function recoveryBindingErrorCategory(error: unknown): string {
+  return error instanceof BindingRejection
+    ? error.category
+    : error instanceof SyntaxError
+      ? "input_json"
+      : error instanceof z.ZodError
+        ? "input_schema"
+        : "validation_error";
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
@@ -200,14 +211,7 @@ if (
     );
   } catch (error) {
     // Private values may appear in URL/Zod/JSON errors. Never serialize them.
-    const category =
-      error instanceof BindingRejection
-        ? error.category
-        : error instanceof z.ZodError
-          ? "input_schema"
-          : error instanceof SyntaxError
-            ? "input_json"
-            : "validation_error";
+    const category = recoveryBindingErrorCategory(error);
     process.stderr.write(`recovery binding receipt rejected: ${category}\n`);
     process.exitCode = 1;
   }

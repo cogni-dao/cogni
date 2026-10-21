@@ -74,6 +74,8 @@ scripts/fetch_github_job_logs.sh  # Fetch job logs from GitHub Actions API (requ
 
 ## Notes
 
+- `db-ready` accepts hostname-only read-only probe reattestation solely through reviewed source plans in `scripts/lib/plan-database-recovery-host-rebind.ts`, fresh native proof and aggregate-bank CAS. Unarmed plans fail closed; no CLI/environment override, credential rotation, data-cutover claim or CAS replay exists.
+
 - `secret-materialize.sh` also owns `database-cell-probe-custody`: exact existing registration references qualify the target probe read-only before an expected-version CAS replaces only its logical URL. The canonical password must already match; no password, binding, or source aggregate is changed.
 
 - `secret-materialize.sh` owns explicit production `database-cell-control-components` preparation, selected by `DATABASE_CELL_CONTROL_NODE_ID`; it creates missing scoped private components only, without native installation or catalog activation. The separate `database-cell-register-applied` phase accepts only `DATABASE_CELL_REGISTER_COGNI_KEY`, `DATABASE_CELL_REGISTER_PACKET_SHA256`, and `DATABASE_CELL_REGISTER_READMISSION_SHA256` references; the existing private actor authenticates evidence before the canonical writer persists an applied receipt and scoped projections.

@@ -35,6 +35,9 @@ export default defineConfig({
     environment: "node",
     setupFiles: ["./tests/setup.ts"],
     globalSetup: ["./tests/component/setup/testcontainers-postgres.global.ts"],
+    // Files share app_apptest's two-connection role budget; each isolated fork
+    // owns a pool, so overlapping files can exceed that native limit.
+    fileParallelism: false,
     sequence: { concurrent: false },
   },
   resolve: {
