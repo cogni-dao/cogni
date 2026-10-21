@@ -30,7 +30,6 @@ cd "$REPO_ROOT"
 # its hermetic transient/permanent matrix from an already-required CI test rather
 # than adding decision logic to the frozen workflow.
 bash scripts/ci/tests/openbao-login-retry.test.sh
-bash scripts/ci/tests/openbao-kv-http-read.test.sh
 
 TMPROOT=$(mktemp -d -t secret-materialize.XXXXXX)
 trap 'rm -rf "$TMPROOT"' EXIT

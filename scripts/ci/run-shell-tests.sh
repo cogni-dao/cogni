@@ -51,6 +51,7 @@ PARALLEL=(
   openbao-clobber-proof.test.sh
   secrets-fanout.test.sh
   secret-materialize.test.sh
+  openbao-kv-http-read.test.sh
   runtime-watchdog-maintenance.test.sh
   reconcile-node-substrate.test.sh
   run-node-substrate.test.sh
