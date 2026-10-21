@@ -37,10 +37,13 @@ cogni_openbao_native_get() (
     --connect-timeout "$limit" --max-time "$limit" --request GET --config "$dir/request.conf" \
     --output "$dir/response" --write-out '%{http_code}' "${address}/v1/${path}" 2>"$dir/http.stderr")"; then :; else rc=$?; fi
   rm -f "$dir/request.conf"
-  if [[ "$rc" == 0 && "$status" == 200 ]] && jq -se 'length == 1 and (.[0].data.data | type == "object")' "$dir/response" >/dev/null 2>&1; then
+  # KVv2 success carries data.data and no errors (absent or an empty array).
+  # Known missing-path404 carries errors:[] and no data (absent/null). A
+  # contradictory envelope is unavailable, never permission to mint a replacement.
+  if [[ "$rc" == 0 && "$status" == 200 ]] && jq -se 'length == 1 and (.[0] | type == "object" and (.data.data | type == "object") and ((has("errors") | not) or .errors == []))' "$dir/response" >/dev/null 2>&1; then
     cat "$dir/response"; return 0
   fi
-  if [[ "$rc" == 0 && "$status" == 404 ]] && jq -se 'length == 1 and (.[0] | type == "object" and .errors == [])' "$dir/response" >/dev/null 2>&1; then
+  if [[ "$rc" == 0 && "$status" == 404 ]] && jq -se 'length == 1 and (.[0] | type == "object" and .errors == [] and .data == null)' "$dir/response" >/dev/null 2>&1; then
     printf '{"data":{"data":{}}}\n'; return 0
   fi
   printf '[openbao-http-read] phase=kv_read native_rc=%s http_status=%s reason=unavailable\n' "$rc" "$status" >&2

@@ -22,6 +22,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
   elif mode=='denied':status=403;body={'errors':['private-error-token']}
   elif mode=='unavailable':status=503;body={'errors':['private-error-token']}
   elif mode=='false_missing':status=404;body={'errors':['private-error-token']}
+  elif mode=='contradictory_missing':status=404;body={'errors':[],'data':{'data':{'KEY':'existing-private-value'}}}
+  elif mode=='error_success':body={'errors':['private-error-token'],'data':{'data':{'KEY':'existing-private-value'}}}
   elif mode=='malformed':body={'data':{'data':None}}
   (root/'http.calls').open('a').write(self.path+'\n')
   self.send_response(status);self.end_headers()
@@ -74,7 +76,7 @@ remote() {
   bash -c "$*"
 }
 export DEPLOY_ENVIRONMENT=candidate-a SECRETS_CONTROL_ENV=production BAO_TOKEN=owned-writer-token
-for PROOF_CASE in present missing denied unavailable false_missing malformed invalid_json multiple_json timeout foreign_service bare_exit2; do
+for PROOF_CASE in present missing denied unavailable false_missing contradictory_missing error_success malformed invalid_json multiple_json timeout foreign_service bare_exit2; do
   export PROOF_CASE
   CACHE_DIR="$TEST_TMP/$PROOF_CASE"; mkdir -m 700 "$CACHE_DIR"
   printf '%s' "$PROOF_CASE" > "$TEST_TMP/mode"
