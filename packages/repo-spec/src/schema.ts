@@ -59,28 +59,89 @@ const evmAddressSchema = z
 
 /**
  * Schema for a single governance schedule entry.
- * Each schedule triggers a sandbox agent run with a 1-word entrypoint.
- * Invariants: Charter must be unique per config; cron must be 5 fields; entrypoint must be 1 token (no spaces).
+ * Each schedule triggers an agent run with a 1-word entrypoint — the sandbox agent
+ * by default, or the catalog graph named by `graph` (task.5282).
+ * Invariants: Charter must be unique per config; cron must be 5 fields; entrypoint must be 1 token (no spaces);
+ *   `graph` requires `model` (a graph run needs an explicit platform model id — there is no safe default).
  */
-export const governanceScheduleSchema = z.object({
-  /** Charter name (e.g., COMMUNITY, ENGINEERING, SUSTAINABILITY, GOVERN) */
-  charter: z.string().min(1, "Charter must be non-empty"),
-  /** 5-field cron expression (minute hour day month weekday) */
-  cron: z
-    .string()
-    .regex(
-      /^(\S+\s+){4}\S+$/,
-      "Cron must be a 5-field expression (minute hour day month weekday)"
-    ),
-  /** IANA timezone (defaults to UTC) */
-  timezone: z.string().default("UTC"),
-  /** Trigger word sent to the sandbox agent (single token, no spaces) */
-  entrypoint: z
-    .string()
-    .regex(/^\S+$/, "Entrypoint must be a single token (no spaces)"),
-});
+export const governanceScheduleSchema = z
+  .object({
+    /** Charter name (e.g., COMMUNITY, ENGINEERING, SUSTAINABILITY, GOVERN) */
+    charter: z.string().min(1, "Charter must be non-empty"),
+    /** 5-field cron expression (minute hour day month weekday) */
+    cron: z
+      .string()
+      .regex(
+        /^(\S+\s+){4}\S+$/,
+        "Cron must be a 5-field expression (minute hour day month weekday)"
+      ),
+    /** IANA timezone (defaults to UTC) */
+    timezone: z.string().default("UTC"),
+    /** Trigger word sent to the agent (single token, no spaces) */
+    entrypoint: z
+      .string()
+      .regex(/^\S+$/, "Entrypoint must be a single token (no spaces)"),
+    /**
+     * Optional namespaced graph id (`<provider>:<name>`, e.g. `langgraph:work-prioritizer`).
+     * Absent → the sandbox agent (`sandbox:openclaw`), byte-for-byte the pre-existing behavior.
+     * Ignored for LEDGER_INGEST (that charter always runs the epoch-collect workflow).
+     */
+    graph: z
+      .string()
+      .regex(
+        /^[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9._-]*$/,
+        "graph must be a namespaced graph id: '<provider>:<name>' (e.g. langgraph:work-prioritizer)"
+      )
+      .optional(),
+    /** Platform (LiteLLM) model id the `graph` run uses. Required when `graph` is set. */
+    model: z.string().min(1).optional(),
+    /**
+     * Names a top-level repo-spec policy block forwarded to the `graph` run as its trusted
+     * payload (story.5096). Requires `graph`.
+     */
+    policy: z.enum(["work_prioritization"]).optional(),
+  })
+  .superRefine((entry, ctx) => {
+    if (entry.graph !== undefined && entry.model === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["model"],
+        message: "`model` is required when `graph` is set",
+      });
+    }
+    if (entry.policy !== undefined && entry.graph === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["policy"],
+        message: "`policy` requires `graph`",
+      });
+    }
+  });
 
 export type GovernanceScheduleSpec = z.infer<typeof governanceScheduleSchema>;
+
+/**
+ * Work-prioritization policy (story.5096, prioritizer design v4 §1): node-owned,
+ * versioned, reviewed. Ceilings are caps, never targets. `objectives` are hub ids of
+ * approved goals. `apply.mode` is per environment (`default` required).
+ */
+export const workPrioritizationSpecSchema = z.object({
+  policy_version: z.string().min(1),
+  p0_max: z.number().int().min(0),
+  p1_budget: z.number().int().min(0),
+  p2_budget: z.number().int().min(0),
+  objectives: z.array(z.string().min(1)).min(1),
+  apply: z.object({
+    mode: z
+      .object({ default: z.enum(["propose", "write"]) })
+      .catchall(z.enum(["propose", "write"])),
+  }),
+  hypotheses_per_day: z.number().int().min(0).default(3),
+});
+
+export type WorkPrioritizationSpec = z.infer<
+  typeof workPrioritizationSpecSchema
+>;
 
 /**
  * Schema for the unified `governance` section of repo-spec — the node/scope's
@@ -1020,6 +1081,9 @@ export const repoSpecSchema = z
      * no operator vocab leak).
      */
     schedules: nodeSchedulesSchema.optional().default([]),
+
+    /** Work-prioritization policy (story.5096). Optional — only nodes running the prioritizer. */
+    work_prioritization: workPrioritizationSpecSchema.optional(),
 
     /**
      * Provider-neutral app-tier services. Omitted by existing nodes; the
