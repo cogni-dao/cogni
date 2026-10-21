@@ -32,6 +32,10 @@ import {
   isWorkItemEndpointId,
   requiresEvaluateAt,
 } from "../../domain/schemas.js";
+import {
+  assertKnowledgeReplay,
+  KnowledgeWriteConflictError,
+} from "../../domain/write-replay.js";
 import type {
   ChainNode,
   EdoResolverPort,
@@ -49,6 +53,8 @@ import {
   DomainNotRegisteredError,
   HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
+  KnowledgeWriteScopeRequiredError,
+  type KnowledgeWriteSession,
   type NewDomain,
 } from "../../port/knowledge-store.port.js";
 
@@ -82,6 +88,63 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
   /** Append-only history of commit messages for assertions. */
   readonly commitLog: Array<{ hash: string; message: string; at: Date }> = [];
   private commitCounter = 0;
+  private scopeOpen = false;
+  private tail: Promise<void> = Promise.resolve();
+
+  private assertWriteScope(): void {
+    if (!this.scopeOpen) throw new KnowledgeWriteScopeRequiredError();
+  }
+
+  async withWrite<T>(
+    input: { operationId: string; message: string },
+    run: (write: KnowledgeWriteSession) => Promise<T>
+  ): Promise<T> {
+    if (this.scopeOpen) throw new KnowledgeWriteScopeRequiredError();
+    const before = this.tail;
+    let leave!: () => void;
+    this.tail = new Promise<void>((resolve) => {
+      leave = resolve;
+    });
+    await before;
+    const scoped = new FakeKnowledgeStoreAdapter();
+    for (const [id, row] of this.rows) scoped.rows.set(id, row);
+    for (const [id, row] of this.edges) scoped.edges.set(id, row);
+    for (const [id, row] of this.domainsMap) scoped.domainsMap.set(id, row);
+    scoped.scopeOpen = true;
+    try {
+      const handle = new Proxy(scoped, {
+        get(target, property) {
+          const value = Reflect.get(target, property);
+          if (typeof value !== "function") return value;
+          return (...args: unknown[]) => {
+            if (!target.scopeOpen)
+              return Promise.reject(new KnowledgeWriteScopeRequiredError());
+            return Reflect.apply(value, target, args);
+          };
+        },
+      });
+      const value = await run(handle);
+      const changed =
+        JSON.stringify([...this.rows, ...this.edges, ...this.domainsMap]) !==
+        JSON.stringify([...scoped.rows, ...scoped.edges, ...scoped.domainsMap]);
+      this.rows.clear();
+      for (const [id, row] of scoped.rows) this.rows.set(id, row);
+      this.edges.clear();
+      for (const [id, row] of scoped.edges) this.edges.set(id, row);
+      this.domainsMap.clear();
+      for (const [id, row] of scoped.domainsMap) this.domainsMap.set(id, row);
+      if (changed)
+        this.commitLog.push({
+          hash: this.nextHash(),
+          message: input.message,
+          at: new Date(),
+        });
+      return value;
+    } finally {
+      scoped.scopeOpen = false;
+      leave();
+    }
+  }
 
   // --- Read ---
 
@@ -161,29 +224,34 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
   }
 
   async registerDomain(input: NewDomain): Promise<Domain> {
-    if (this.domainsMap.has(input.id)) {
-      throw new DomainAlreadyRegisteredError(input.id);
-    }
-    const row: Domain = {
-      id: input.id,
-      name: input.name,
-      description: input.description ?? null,
-      confidencePct: 40,
-      entryCount: 0,
-      createdAt: new Date().toISOString(),
-    };
-    this.domainsMap.set(input.id, row);
-    this.commitLog.push({
-      hash: this.nextHash(),
-      message: `register domain ${input.id}`,
-      at: new Date(),
-    });
-    return row;
+    return this.withWrite(
+      {
+        operationId: `domain.register:${input.id}`,
+        message: `register domain ${input.id}`,
+      },
+      async (write) => {
+        const scoped = write as FakeKnowledgeStoreAdapter;
+        if (scoped.domainsMap.has(input.id)) {
+          throw new DomainAlreadyRegisteredError(input.id);
+        }
+        const row: Domain = {
+          id: input.id,
+          name: input.name,
+          description: input.description ?? null,
+          confidencePct: 40,
+          entryCount: 0,
+          createdAt: new Date().toISOString(),
+        };
+        scoped.domainsMap.set(input.id, row);
+        return row;
+      }
+    );
   }
 
   // --- Write — rows ---
 
   async upsertKnowledge(entry: NewKnowledge): Promise<Knowledge> {
+    this.assertWriteScope();
     if (!this.domainsMap.has(entry.domain)) {
       throw new DomainNotRegisteredError(entry.domain);
     }
@@ -191,6 +259,10 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
     }
     const existing = this.rows.get(entry.id);
+    if (existing) {
+      assertKnowledgeReplay(existing, entry);
+      return existing;
+    }
     const row: Knowledge = {
       id: entry.id,
       domain: entry.domain,
@@ -205,21 +277,19 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       tags: entry.tags ?? null,
       evaluateAt: entry.evaluateAt ?? null,
       resolutionStrategy: entry.resolutionStrategy ?? null,
-      createdAt: existing?.createdAt ?? new Date(),
+      createdAt: new Date(),
     };
     this.rows.set(entry.id, row);
     return row;
   }
 
   async addKnowledge(entry: NewKnowledge): Promise<Knowledge> {
+    this.assertWriteScope();
     if (!this.domainsMap.has(entry.domain)) {
       throw new DomainNotRegisteredError(entry.domain);
     }
     if (requiresEvaluateAt(entry.entryType) && !entry.evaluateAt) {
       throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
-    }
-    if (this.rows.has(entry.id)) {
-      throw new Error(`duplicate key: knowledge.id='${entry.id}'`);
     }
     return this.upsertKnowledge(entry);
   }
@@ -228,6 +298,7 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     id: string,
     update: Partial<NewKnowledge>
   ): Promise<Knowledge> {
+    this.assertWriteScope();
     const existing = this.rows.get(id);
     if (!existing) throw new Error(`Knowledge ${id} not found`);
     if (update.domain && !this.domainsMap.has(update.domain)) {
@@ -266,6 +337,7 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
   }
 
   async deleteKnowledge(id: string): Promise<void> {
+    this.assertWriteScope();
     this.rows.delete(id);
   }
 
@@ -282,6 +354,7 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
   // --- Write — edges ---
 
   async addCitation(edge: NewCitation): Promise<Citation> {
+    this.assertWriteScope();
     const citingIsWork = isWorkItemEndpointId(edge.citingId);
     const citedIsWork = isWorkItemEndpointId(edge.citedId);
     const workEndpointCount = (citingIsWork ? 1 : 0) + (citedIsWork ? 1 : 0);
@@ -320,8 +393,17 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     const id =
       edge.id ?? citationId(edge.citingId, edge.citedId, edge.citationType);
     // Idempotent on the unique tuple.
-    const existing = this.edges.get(id);
-    if (existing) return existing;
+    const existing = [...this.edges.values()].find(
+      (candidate) =>
+        candidate.citingId === edge.citingId &&
+        candidate.citedId === edge.citedId &&
+        candidate.citationType === edge.citationType
+    );
+    if (existing) {
+      if (existing.context !== (edge.context ?? null))
+        throw new KnowledgeWriteConflictError(edge.citingId);
+      return existing;
+    }
     const row: Citation = {
       id,
       citingId: edge.citingId,
@@ -376,10 +458,8 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
 
   // --- Doltgres versioning (stubbed) ---
 
-  async commit(message: string): Promise<string> {
-    const hash = this.nextHash();
-    this.commitLog.push({ hash, message, at: new Date() });
-    return hash;
+  async commit(_message: string): Promise<string> {
+    throw new KnowledgeWriteScopeRequiredError();
   }
 
   async log(limit?: number): Promise<DoltCommit[]> {
@@ -453,72 +533,118 @@ export class FakeEdoResolverAdapter implements EdoResolverPort {
   }
 
   async resolveHypothesis(input: ResolutionInput): Promise<ResolutionResult> {
-    const incoming = await this.store.listCitationsByCitedId(
-      input.hypothesisId
+    return this.store.withWrite(
+      {
+        operationId: `edo.resolve:${input.hypothesisId}`,
+        message: `edo: resolve hypothesis ${input.hypothesisId}`,
+      },
+      async (write) => {
+        const existing = (
+          await write.listCitationsByCitedId(input.hypothesisId)
+        ).find(
+          (edge) =>
+            edge.citationType === "validates" ||
+            edge.citationType === "invalidates"
+        );
+        if (existing) {
+          const canonical = await write.getKnowledge(existing.citingId);
+          if (!canonical || existing.citationType !== input.edge)
+            throw new KnowledgeWriteConflictError(input.outcomeId);
+          assertKnowledgeReplay(canonical, {
+            id: input.outcomeId,
+            domain: input.domain,
+            title: input.outcomeTitle,
+            content: input.outcomeContent,
+            entryType: "outcome",
+            sourceType: input.sourceType,
+            sourceRef: input.sourceRef ?? null,
+          });
+          return {
+            outcomeId: existing.citingId,
+            citationId: existing.id,
+            resolvedConfidence:
+              (await write.getKnowledge(input.hypothesisId))?.confidencePct ??
+              0,
+            alreadyResolved: true,
+          };
+        }
+
+        // 1. Write the outcome row.
+        // `confidencePct` is REQUIRED by the Doltgres schema (NOT NULL). Mirror
+        // hypothesize/decide which seed initial confidence by source. Without
+        // this, recordOutcome 500s on candidate-a (PR #1327 validation, 2026-05-28).
+        const outcome = await write.addKnowledge({
+          id: input.outcomeId,
+          domain: input.domain,
+          title: input.outcomeTitle,
+          content: input.outcomeContent,
+          entryType: "outcome",
+          sourceType: input.sourceType,
+          sourceRef: input.sourceRef ?? null,
+          confidencePct: initializeConfidence({
+            sourceType: input.sourceType,
+          }).confidencePct,
+        });
+
+        // 2. Write the validates/invalidates citation.
+        //    Adapter enforces CITATION_TARGET_EXISTS_AT_WRITE +
+        //    EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE.
+        const citation = await write.addCitation({
+          citingId: outcome.id,
+          citedId: input.hypothesisId,
+          citationType: input.edge,
+          context: `resolved by ${input.sourceType}`,
+        });
+
+        // 3. Recompute confidence on the hypothesis (1-hop, pure).
+        const resolvedConfidence = await this.recomputeWithin(
+          write,
+          input.hypothesisId
+        );
+
+        return {
+          outcomeId: outcome.id,
+          citationId: citation.id,
+          resolvedConfidence,
+          alreadyResolved: false,
+        };
+      }
     );
-    const existing = incoming.find(
-      (c) => c.citationType === "validates" || c.citationType === "invalidates"
-    );
-    if (existing) {
-      const confidence = await this.recomputeConfidence(input.hypothesisId);
-      return {
-        // Return the EXISTING outcome row's id, not the caller's proposed id.
-        // The caller may have passed a different id on retry; idempotency
-        // is keyed on the hypothesis, not the proposed outcome.
-        outcomeId: existing.citingId,
-        citationId: existing.id,
-        resolvedConfidence: confidence,
-        alreadyResolved: true,
-      };
-    }
-
-    const outcome = await this.store.addKnowledge({
-      id: input.outcomeId,
-      domain: input.domain,
-      title: input.outcomeTitle,
-      content: input.outcomeContent,
-      entryType: "outcome",
-      sourceType: input.sourceType,
-      sourceRef: input.sourceRef ?? null,
-      confidencePct: initializeConfidence({
-        sourceType: input.sourceType,
-      }).confidencePct,
-    });
-
-    const citation = await this.store.addCitation({
-      citingId: outcome.id,
-      citedId: input.hypothesisId,
-      citationType: input.edge,
-      context: `resolved by ${input.sourceType}`,
-    });
-
-    const resolvedConfidence = await this.recomputeConfidence(
-      input.hypothesisId
-    );
-
-    await this.store.commit(
-      `edo: resolve hypothesis ${input.hypothesisId} (${input.edge}, conf: ${resolvedConfidence}%)`
-    );
-
-    return {
-      outcomeId: outcome.id,
-      citationId: citation.id,
-      resolvedConfidence,
-      alreadyResolved: false,
-    };
   }
 
   async recomputeConfidence(entryId: string): Promise<number> {
-    const entry = await this.store.getKnowledge(entryId);
+    return this.store.withWrite(
+      {
+        operationId: `knowledge.confidence:${entryId}`,
+        message: `recompute confidence ${entryId}`,
+      },
+      (write) => this.recomputeWithin(write, entryId)
+    );
+  }
+
+  private async recomputeWithin(
+    write: KnowledgeWriteSession,
+    entryId: string
+  ): Promise<number> {
+    // RECOMPUTE_IS_PURE_FROM_CITATIONS — read all incoming edges + the row,
+    // compute from scratch, write. Order-independent under concurrency.
+    const entry = await write.getKnowledge(entryId);
     if (!entry) {
       throw new Error(`recomputeConfidence: entry '${entryId}' not found`);
     }
     if (isConfidenceExempt(entry.entryType)) return entry.confidencePct ?? 0;
-    const incoming = (await this.store.listCitationsByCitedId(entryId)).filter(
-      (c) => c.citationType !== "tracks"
-    );
-    const next = recomputeConfidenceByPolicy(entry, incoming).confidencePct;
-    await this.store.updateKnowledge(entryId, { confidencePct: next });
+
+    const incoming: Citation[] = await write.listCitationsByCitedId(entryId);
+    const confidenceEdges = incoming.filter((c) => c.citationType !== "tracks");
+
+    const next = recomputeConfidenceByPolicy(
+      entry,
+      confidenceEdges
+    ).confidencePct;
+
+    // Persist (idempotent — writing the same value is a no-op semantically).
+    await write.updateKnowledge(entryId, { confidencePct: next });
+
     return next;
   }
 

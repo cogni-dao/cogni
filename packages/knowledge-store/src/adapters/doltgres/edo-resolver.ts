@@ -25,6 +25,10 @@ import type {
   CitationType,
   Knowledge,
 } from "../../domain/schemas.js";
+import {
+  assertKnowledgeReplay,
+  KnowledgeWriteConflictError,
+} from "../../domain/write-replay.js";
 import type {
   ChainNode,
   EdoResolverPort,
@@ -33,7 +37,10 @@ import type {
   ResolutionResult,
   WalkChainOptions,
 } from "../../port/edo-resolver.port.js";
-import type { KnowledgeStorePort } from "../../port/knowledge-store.port.js";
+import type {
+  KnowledgeStorePort,
+  KnowledgeWriteSession,
+} from "../../port/knowledge-store.port.js";
 import { escapeValue } from "./util.js";
 
 // ---------------------------------------------------------------------------
@@ -99,83 +106,109 @@ export class DoltgresEdoResolverAdapter implements EdoResolverPort {
   }
 
   async resolveHypothesis(input: ResolutionInput): Promise<ResolutionResult> {
-    // RESOLVER_IDEMPOTENT: if a validates/invalidates already exists, no-op.
-    const existing = await this.sql.unsafe(
-      `SELECT id, citing_id, citation_type FROM citations
-       WHERE cited_id = ${escapeValue(input.hypothesisId)}
-         AND citation_type IN ('validates', 'invalidates')
-       LIMIT 1`
+    return this.store.withWrite(
+      {
+        operationId: `edo.resolve:${input.hypothesisId}`,
+        message: `edo: resolve hypothesis ${input.hypothesisId}`,
+      },
+      async (write) => {
+        const existing = (
+          await write.listCitationsByCitedId(input.hypothesisId)
+        ).find(
+          (edge) =>
+            edge.citationType === "validates" ||
+            edge.citationType === "invalidates"
+        );
+        if (existing) {
+          const canonical = await write.getKnowledge(existing.citingId);
+          if (!canonical || existing.citationType !== input.edge)
+            throw new KnowledgeWriteConflictError(input.outcomeId);
+          assertKnowledgeReplay(canonical, {
+            id: input.outcomeId,
+            domain: input.domain,
+            title: input.outcomeTitle,
+            content: input.outcomeContent,
+            entryType: "outcome",
+            sourceType: input.sourceType,
+            sourceRef: input.sourceRef ?? null,
+          });
+          return {
+            outcomeId: existing.citingId,
+            citationId: existing.id,
+            resolvedConfidence:
+              (await write.getKnowledge(input.hypothesisId))?.confidencePct ??
+              0,
+            alreadyResolved: true,
+          };
+        }
+
+        // 1. Write the outcome row.
+        // `confidencePct` is REQUIRED by the Doltgres schema (NOT NULL). Mirror
+        // hypothesize/decide which seed initial confidence by source. Without
+        // this, recordOutcome 500s on candidate-a (PR #1327 validation, 2026-05-28).
+        const outcome = await write.addKnowledge({
+          id: input.outcomeId,
+          domain: input.domain,
+          title: input.outcomeTitle,
+          content: input.outcomeContent,
+          entryType: "outcome",
+          sourceType: input.sourceType,
+          sourceRef: input.sourceRef ?? null,
+          confidencePct: initializeConfidence({
+            sourceType: input.sourceType,
+          }).confidencePct,
+        });
+
+        // 2. Write the validates/invalidates citation.
+        //    Adapter enforces CITATION_TARGET_EXISTS_AT_WRITE +
+        //    EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE.
+        const citation = await write.addCitation({
+          citingId: outcome.id,
+          citedId: input.hypothesisId,
+          citationType: input.edge,
+          context: `resolved by ${input.sourceType}`,
+        });
+
+        // 3. Recompute confidence on the hypothesis (1-hop, pure).
+        const resolvedConfidence = await this.recomputeWithin(
+          write,
+          input.hypothesisId
+        );
+
+        return {
+          outcomeId: outcome.id,
+          citationId: citation.id,
+          resolvedConfidence,
+          alreadyResolved: false,
+        };
+      }
     );
-    if (existing.length > 0) {
-      const row = existing[0] as Record<string, unknown>;
-      const confidence = await this.recomputeConfidence(input.hypothesisId);
-      return {
-        // Return the EXISTING outcome row's id (the citing_id of the
-        // resolving citation). Idempotency is keyed on the hypothesis.
-        outcomeId: row.citing_id as string,
-        citationId: row.id as string,
-        resolvedConfidence: confidence,
-        alreadyResolved: true,
-      };
-    }
-
-    // 1. Write the outcome row.
-    // `confidencePct` is REQUIRED by the Doltgres schema (NOT NULL). Mirror
-    // hypothesize/decide which seed initial confidence by source. Without
-    // this, recordOutcome 500s on candidate-a (PR #1327 validation, 2026-05-28).
-    const outcome = await this.store.addKnowledge({
-      id: input.outcomeId,
-      domain: input.domain,
-      title: input.outcomeTitle,
-      content: input.outcomeContent,
-      entryType: "outcome",
-      sourceType: input.sourceType,
-      sourceRef: input.sourceRef ?? null,
-      confidencePct: initializeConfidence({
-        sourceType: input.sourceType,
-      }).confidencePct,
-    });
-
-    // 2. Write the validates/invalidates citation.
-    //    Adapter enforces CITATION_TARGET_EXISTS_AT_WRITE +
-    //    EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE.
-    const citation = await this.store.addCitation({
-      citingId: outcome.id,
-      citedId: input.hypothesisId,
-      citationType: input.edge,
-      context: `resolved by ${input.sourceType}`,
-    });
-
-    // 3. Recompute confidence on the hypothesis (1-hop, pure).
-    const resolvedConfidence = await this.recomputeConfidence(
-      input.hypothesisId
-    );
-
-    // 4. One Dolt commit per resolution.
-    await this.store.commit(
-      `edo: resolve hypothesis ${input.hypothesisId} (${input.edge}, conf: ${resolvedConfidence}%)`
-    );
-
-    return {
-      outcomeId: outcome.id,
-      citationId: citation.id,
-      resolvedConfidence,
-      alreadyResolved: false,
-    };
   }
 
   async recomputeConfidence(entryId: string): Promise<number> {
+    return this.store.withWrite(
+      {
+        operationId: `knowledge.confidence:${entryId}`,
+        message: `recompute confidence ${entryId}`,
+      },
+      (write) => this.recomputeWithin(write, entryId)
+    );
+  }
+
+  private async recomputeWithin(
+    write: KnowledgeWriteSession,
+    entryId: string
+  ): Promise<number> {
     // RECOMPUTE_IS_PURE_FROM_CITATIONS — read all incoming edges + the row,
     // compute from scratch, write. Order-independent under concurrency.
-    const entry = await this.store.getKnowledge(entryId);
+    const entry = await write.getKnowledge(entryId);
     if (!entry) {
       throw new Error(`recomputeConfidence: entry '${entryId}' not found`);
     }
     // A DAO goal's confidence is not citation-driven (CONFIDENCE_EXEMPT_ENTRY_TYPES).
     if (isConfidenceExempt(entry.entryType)) return entry.confidencePct ?? 0;
 
-    const incoming: Citation[] =
-      await this.store.listCitationsByCitedId(entryId);
+    const incoming: Citation[] = await write.listCitationsByCitedId(entryId);
     const confidenceEdges = incoming.filter((c) => c.citationType !== "tracks");
 
     const next = recomputeConfidenceByPolicy(
@@ -184,7 +217,7 @@ export class DoltgresEdoResolverAdapter implements EdoResolverPort {
     ).confidencePct;
 
     // Persist (idempotent — writing the same value is a no-op semantically).
-    await this.store.updateKnowledge(entryId, { confidencePct: next });
+    await write.updateKnowledge(entryId, { confidencePct: next });
 
     return next;
   }
