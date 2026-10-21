@@ -86,7 +86,7 @@ const ForceGraph3D = dynamic(() => import("react-force-graph-3d"), {
   ),
 }) as unknown as ComponentType<ForceGraph3DProps>;
 
-// Mirrors ChainPanel.tsx chipFor() edge semantics.
+// Citation-edge colors for the graph legend.
 const CITE_COLOR: Record<string, string> = {
   supports: "#34d399",
   validates: "#34d399",
@@ -346,7 +346,6 @@ export function GraphView({
       <KnowledgeDetail
         item={selectedItem}
         open={selectedItem !== null}
-        showChain
         onOpenChange={(o) => {
           if (!o) setSelectedId(null);
         }}
