@@ -3,10 +3,8 @@
 
 /**
  * Module: `@cogni/knowledge-store/domain/dao-goals`
- * Purpose: The DAO goal list — the at-most-three approved goals every AI loop
- *   (cognition bundle, prioritizer, brain steward) reads through one reader.
- * Scope: Pure selection + shape. The SQL read lives in the Doltgres adapter's
- *   `listActiveGoals`; this module owns which rows count and the cap.
+ * Purpose: Selects the at-most-three approved DAO goals every AI loop reads.
+ * Scope: Pure selection + shape (which rows count, the cap). Does not perform I/O; the SQL read lives in the Doltgres adapter's `listActiveGoals`.
  * Invariants:
  *   - ONE_GOAL_LIST: a goal is a merged row with `entry_type = 'goal'` whose id
  *     starts `goal-`, not deprecated. A goal is a human commitment, not a
