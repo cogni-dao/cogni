@@ -42,8 +42,8 @@ export interface RankItem {
   readonly title: string;
   readonly status: string;
   readonly revision: number | null;
-  /** Current priority (null = unset). */
-  readonly priority: number | null;
+  /** Current priority (null/absent = unset). */
+  readonly priority?: number | null;
   readonly labels: readonly string[];
   readonly blockedBy?: string;
   readonly summary?: string;
@@ -355,7 +355,7 @@ export function rankItems(input: RankInput): RankResult {
   const rows: RankedRow[] = ordered.map((s, i) => ({
     itemId: s.item.id,
     revision: s.item.revision,
-    from: s.item.priority,
+    from: s.item.priority ?? null,
     fromRank: s.item.rank ?? null,
     to: levelOf.get(s) ?? 3,
     rank: i + 1,

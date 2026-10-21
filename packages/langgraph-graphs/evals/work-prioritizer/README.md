@@ -22,7 +22,6 @@ It then waits, with the SHA guarded, until the governance schedule has run the g
 | rationale                   | hard       | every p0/p1 cites an approved objective and an evidenced why-now; a p0 also needs an evidenced harm ≤ 7 days                                             |
 | gates                       | hard       | no blocked, duplicate, fixture, or injection item at p0/p1                                                                                               |
 | prior reference             | hard       | `priorDecisionId` is set whenever a prior decision existed                                                                                               |
-| hypotheses                  | hard       | every new hypothesis has an observation source and a decidable predicate                                                                                 |
 | unjudged                    | hard       | ≤ 10% of rows are unjudged                                                                                                                               |
 | zero writes (propose)       | hard       | no work-item revision or status changes across the eval cycles                                                                                           |
 | stability (2 cycles)        | behavioral | cycle 2 reuses every judgment (0 model calls), ends `no_change`, and keeps the same p0                                                                   |

@@ -24,7 +24,6 @@ export const WorkPrioritizationPolicySchema = z.object({
   p1Budget: z.number().int().min(0),
   p2Budget: z.number().int().min(0),
   objectives: z.array(z.string().min(1)).min(1),
-  hypothesesPerDay: z.number().int().min(0).default(3),
 });
 export type WorkPrioritizationPolicy = z.infer<
   typeof WorkPrioritizationPolicySchema

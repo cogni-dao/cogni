@@ -3,9 +3,9 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/tests/graphs/work-prioritizer/guards`
- * Purpose: Unit tests for the v4 judge/hypothesis guards, policy parsing, context derivation, and schemas.
+ * Purpose: Unit tests for the v4 run guards, judge parsing, policy parsing, context derivation, and schemas.
  * Scope: Pure-function tests with fixtures; does not invoke an LLM, tools, or the graph.
- * Invariants: CONTEXT_BEFORE_JUDGMENT, JUDGMENT_COVERAGE, HYPOTHESES_DECIDABLE, POLICY_FROM_TRIGGER, ENUMS_NOT_FLOATS.
+ * Invariants: CONTEXT_BEFORE_JUDGMENT, POLICY_FROM_TRIGGER, ENUMS_NOT_FLOATS, TOLERANT_PARSING.
  * Side-effects: none
  * Links: src/graphs/work-prioritizer/{guards,policy,context,schema}.ts
  * @internal
@@ -23,9 +23,7 @@ import {
   findDuplicateTitleGroups,
 } from "../../../src/graphs/work-prioritizer/context";
 import {
-  guardHypothesisProposals,
-  guardJudgments,
-  guardRunContext,
+  hasHubContext,
   selectEdoDomain,
 } from "../../../src/graphs/work-prioritizer/guards";
 import { policyFromTrigger } from "../../../src/graphs/work-prioritizer/policy";
@@ -100,9 +98,9 @@ describe("schemas (ENUMS_NOT_FLOATS)", () => {
     const line = { id: "task.1", svc: "standard", effort: "M", ev: "task.1" };
     const text = `<think>hmm</think>\n\`\`\`json\n${JSON.stringify([line, { ...line, id: "task.2", effort: "XL" }])}\n\`\`\``;
     const out = parseJudgeOutput(text);
-    expect(out.ok && out.judgments.map((j) => j.itemId)).toEqual(["task.1"]);
-    expect(out.ok && out.invalid.length).toBe(1);
-    expect(parseJudgeOutput("nope").ok).toBe(false);
+    expect(out.judgments.map((j) => j.itemId)).toEqual(["task.1"]);
+    expect(out.invalid.length).toBe(1);
+    expect(parseJudgeOutput("nope").judgments).toEqual([]);
   });
 });
 
@@ -114,7 +112,6 @@ describe("policy (POLICY_FROM_TRIGGER)", () => {
     p2Budget: 12,
     objectives: ["dao-goal-a"],
     applyMode: "write",
-    hypothesesPerDay: 3,
   };
   const block = (v: unknown) =>
     `PRIORITIZE\n\n\`\`\`json\n${JSON.stringify(v)}\n\`\`\``;
@@ -183,78 +180,8 @@ describe("guards", () => {
       now: NOW.toISOString(),
       workItems: [item("a")],
       entries: [],
-      toolErrors: [],
     });
-    expect(guardRunContext(ctx.contextConsumed)?.reason).toBe("empty_context");
-  });
-
-  it("JUDGMENT_COVERAGE: unknown, duplicate, and missing are reported", () => {
-    const j = ItemJudgmentSchema.parse(J);
-    const out = guardJudgments(
-      [j, j, { ...j, itemId: "task.ghost" }],
-      ["task.1", "task.2"]
-    );
-    expect([...out.byId.keys()]).toEqual(["task.1"]);
-    expect(out.missing).toEqual(["task.2"]);
-    expect(out.violations.map((v) => v.reason).sort()).toEqual([
-      "judgment_duplicate",
-      "judgment_missing",
-      "judgment_unknown_item",
-    ]);
-  });
-
-  it("HYPOTHESES_DECIDABLE: needs a snapshot item + hub citation; deadline normalized; daily cap", () => {
-    const h = (title: string, o: Record<string, unknown> = {}) => ({
-      title,
-      prediction: "p",
-      observationSource: "anything",
-      predicate: {
-        itemId: "task.1",
-        field: "status" as const,
-        equals: "done" as const,
-        by: "2026-10-27T00:00:00.000Z",
-      },
-      citations: ["dao-goal-a"],
-      ...o,
-    });
-    const out = guardHypothesisProposals(
-      [
-        h("unknown-item", {
-          predicate: {
-            itemId: "task.ghost",
-            field: "status",
-            equals: "done",
-            by: "",
-          },
-        }),
-        h("ungrounded", { citations: ["task.1"] }),
-        h("no-deadline", {
-          predicate: {
-            itemId: "task.1",
-            field: "status",
-            equals: "done",
-            by: "",
-          },
-        }),
-        h("ok"),
-        h("over-cap"),
-      ],
-      {
-        itemIds: new Set(["task.1"]),
-        hubIds: new Set(["dao-goal-a"]),
-        now: NOW,
-        remainingToday: 2,
-      }
-    );
-    expect(out.accepted.map((a) => a.title)).toEqual(["no-deadline", "ok"]);
-    expect(out.accepted[0]?.predicate.by).toBe("2026-11-03T12:00:00.000Z");
-    expect(out.accepted[0]?.observationSource).toBe("work_item:task.1");
-    expect(out.violations.map((v) => v.reason)).toEqual([
-      "hypothesis_unknown_item",
-      "hypothesis_ungrounded",
-      "hypothesis_evaluate_at_normalized",
-      "hypothesis_daily_cap",
-    ]);
+    expect(hasHubContext(ctx.contextConsumed)).toBe(false);
   });
 
   it("EDO domain follows the first approved objective, then knowledge, then strategy", () => {
@@ -274,33 +201,32 @@ describe("guards", () => {
   });
 });
 
-describe("ROBUST_JUDGE_PARSING (replay-observed failure modes)", () => {
+describe("TOLERANT_PARSING (replay-observed failure modes)", () => {
   const compact =
     '{"id":"bug.5001","impact":{"dao-goal-a":3},"svc":"standard","effort":"M","harmDays":3,"whyNow":"IO saturation","harm":"API down","ev":"bug.5001"}';
 
   it("parses the compact JSON-lines format, one judgment per line", () => {
     const out = parseJudgeOutput(
-      `${compact}\n${compact.replace("bug.5001", "bug.5002").replace("bug.5001", "bug.5002")}`
+      `${compact}\n${compact.replaceAll("bug.5001", "bug.5002")}`
     );
     expect(
-      out.ok &&
-        out.judgments.map((j) => [
-          j.itemId,
-          j.serviceClass,
-          j.harmIfWait.withinDays,
-        ])
+      out.judgments.map((j) => [
+        j.itemId,
+        j.serviceClass,
+        j.harmIfWait.withinDays,
+      ])
     ).toEqual([
       ["bug.5001", "standard", 3],
       ["bug.5002", "standard", 3],
     ]);
   });
 
-  it("tolerates a null harm / null harmDays and a {text} whyNow", () => {
+  it("tolerates the null harm / harmDays the model emitted in 27/54 replayed lines", () => {
     const j = normalizeJudgment({
       id: "bug.5000",
       svc: "intangible",
       effort: "S",
-      whyNow: { text: "w" },
+      whyNow: "w",
       harm: null,
       harmDays: null,
     });
@@ -309,52 +235,40 @@ describe("ROBUST_JUDGE_PARSING (replay-observed failure modes)", () => {
       evidenceId: "bug.5000",
       withinDays: null,
     });
-    expect(typeof j === "object" && j.whyNow.text).toBe("w");
   });
 
-  it("normalizes enum case/synonyms, trims ids, coerces numbers, ignores extra fields", () => {
-    const j = normalizeJudgment({
-      id: " task.1 ",
-      svc: "Fixed-Date",
-      date: "2026-11-01",
-      effort: "medium",
-      impact: { "dao-goal-a": "2", "dao-goal-b": 9 },
-      harmDays: "5",
-      ev: ["k1"],
-      extra: true,
-    });
-    expect(j).toMatchObject({
-      itemId: "task.1",
-      serviceClass: "fixed_date",
-      fixedDate: "2026-11-01",
-      effort: "M",
-      impact: { "dao-goal-a": 2, "dao-goal-b": 3 },
-      harmIfWait: { withinDays: 5, evidenceId: "k1" },
-    });
+  it("normalizes enum case; a fixed_date without a date is standard", () => {
     expect(
-      normalizeJudgment({ id: "t", svc: "EXPEDITED", effort: "s" })
+      normalizeJudgment({ id: "t", svc: "EXPEDITE", effort: "s" })
     ).toMatchObject({ serviceClass: "expedite", effort: "S" });
     expect(
       normalizeJudgment({ id: "t", svc: "fixed_date", effort: "S" })
     ).toMatchObject({ serviceClass: "standard", fixedDate: null });
+    expect(
+      normalizeJudgment({
+        id: "t",
+        svc: "fixed_date",
+        date: "2026-11-01",
+        effort: "S",
+      })
+    ).toMatchObject({ serviceClass: "fixed_date", fixedDate: "2026-11-01" });
   });
 
-  it("rejects only unusable lines", () => {
-    expect(typeof normalizeJudgment({ svc: "standard", effort: "M" })).toBe(
-      "string"
+  it("rejects unusable lines (no id, unknown enum, out-of-range impact)", () => {
+    for (const bad of [
+      { svc: "standard", effort: "M" },
+      { id: "t", svc: "whenever", effort: "M" },
+      { id: "t", svc: "standard", effort: "XXL" },
+      { id: "t", svc: "standard", effort: "M", impact: { a: 9 } },
+    ])
+      expect(typeof normalizeJudgment(bad)).toBe("string");
+  });
+
+  it("a stray non-judgment line is reported unusable, never a judgment", () => {
+    const out = parseJudgeOutput(
+      '{"hypothesis":{"title":"t"}}\n{"id":"x","svc":"standard","effort":"M"}'
     );
-    expect(
-      typeof normalizeJudgment({ id: "t", svc: "whenever", effort: "M" })
-    ).toBe("string");
-    expect(
-      typeof normalizeJudgment({ id: "t", svc: "standard", effort: "XXL" })
-    ).toBe("string");
-  });
-
-  it("collects an optional hypothesis line", () => {
-    const h =
-      '{"hypothesis":{"title":"t","prediction":"p","predicate":{"itemId":"bug.1","field":"status","equals":"done","by":"2026-11-01T00:00:00.000Z"},"citations":["k"]}}';
-    const out = parseJudgeOutput(`${compact}\n${h}`);
-    expect(out.ok && out.hypotheses).toHaveLength(1);
+    expect(out.judgments.map((j) => j.itemId)).toEqual(["x"]);
+    expect(out.invalid).toEqual(["missing id"]);
   });
 });

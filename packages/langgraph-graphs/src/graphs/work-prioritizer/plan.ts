@@ -3,18 +3,13 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/plan`
- * Purpose: Pure planning + EDO-evidence helpers (design v4 §2.4–§2.7): plan rows, diff vs the prior decision,
- *   the no-change rule, review scope (daily full review vs delta), memoized judgments, predicate evaluation
- *   for due hypotheses, and the daily hypothesis cap.
+ * Purpose: Pure planning helpers (design v4 §2.4–§2.7): plan rows, diff vs the prior decision, the no-change
+ *   rule, the prior decision memo, and review scope (daily full review vs delta).
  * Scope: Pure functions over ranked rows and parsed hub content; does not call tools, LLMs, or read env.
  * Invariants:
- *   - PLAN_IS_CHANGED_ROWS: a plan row exists iff the proposed priority OR rank differs from the current
- *     one (pinned and unjudged rows are never planned).
- *   - NO_CHANGE_NO_DECISION: nothing to propose, or the same table as the prior decision ⇒ file no decision.
- *   - DAILY_FULL_REVIEW / DELTA_SCOPE (selectJudgeSet): a full review re-judges everything at most daily unless
- *     requested; a delta cycle re-considers only p0/p1, unprioritized, and changed items; the rest carry.
- *   - PREDICATES_ARE_DECIDABLE: a due hypothesis resolves only from observed work-item state; otherwise it stays
- *     open as insufficient_evidence.
+ *   - PLAN_IS_CHANGED_ROWS: a row is planned iff its priority OR rank changes (never pinned or unjudged rows).
+ *   - NO_CHANGE_NO_DECISION: nothing to propose, or the same table as the prior decision ⇒ no decision.
+ *   - DAILY_FULL_REVIEW / DELTA_SCOPE (selectJudgeSet): see below.
  * Side-effects: none
  * Links: .context/prioritizer-design-v4.md, schema.ts
  * @public
@@ -22,35 +17,28 @@
 
 import {
   type DecisionPayload,
-  type HypothesisPredicate,
-  HypothesisPredicateSchema,
   type ItemJudgment,
   MemoJudgmentSchema,
   type PlanRow,
   type RankedRow,
 } from "./schema";
 
-/** PLAN_IS_CHANGED_ROWS. */
+/** PLAN_IS_CHANGED_ROWS — a model failure (unjudged) never moves an item; p0 rows still need rank 1..k. */
 export function buildPlan(rows: readonly RankedRow[]): PlanRow[] {
-  return (
-    rows
-      // Unjudged rows are never written: a model failure must not move an item.
-      // EVERY_PLACED_ITEM_GETS_ITS_RANK: a row is planned when its priority OR its rank changes
-      // (the top tier keeps p0 but still needs rank 1..k).
-      .filter(
-        (r) =>
-          !r.pinned &&
-          !r.reasons.includes("unjudged_p3") &&
-          (r.from !== r.to || (r.fromRank ?? null) !== r.rank)
-      )
-      .map((r) => ({
-        itemId: r.itemId,
-        from: r.from,
-        to: r.to,
-        rank: r.rank,
-        expectedRevision: r.revision,
-      }))
-  );
+  return rows
+    .filter(
+      (r) =>
+        !r.pinned &&
+        !r.reasons.includes("unjudged_p3") &&
+        (r.from !== r.to || (r.fromRank ?? null) !== r.rank)
+    )
+    .map((r) => ({
+      itemId: r.itemId,
+      from: r.from,
+      to: r.to,
+      rank: r.rank,
+      expectedRevision: r.revision,
+    }));
 }
 
 /** Rows whose proposed priority differs from the prior decision's (all rows when there is no prior table). */
@@ -59,7 +47,7 @@ export function diffVsPrior(
   priorTable: ReadonlyMap<string, number> | null
 ): DecisionPayload["diffVsPrior"] {
   return rows
-    .filter((r) => !priorTable || priorTable.get(r.itemId) !== r.to)
+    .filter((r) => priorTable?.get(r.itemId) !== r.to)
     .map((r) => ({
       itemId: r.itemId,
       priorTo: priorTable?.get(r.itemId) ?? null,
@@ -68,88 +56,18 @@ export function diffVsPrior(
 }
 
 /** NO_CHANGE_NO_DECISION. */
-export function isNoChange(
+export const isNoChange = (
   plan: readonly PlanRow[],
-  diff: DecisionPayload["diffVsPrior"],
+  diff: readonly unknown[],
   hasPriorTable: boolean
-): boolean {
-  return plan.length === 0 || (hasPriorTable && diff.length === 0);
-}
+) => plan.length === 0 || (hasPriorTable && diff.length === 0);
 
-function lastJsonBlock(content: string): unknown {
-  const blocks = [...content.matchAll(/```json\s*([\s\S]*?)```/g)];
-  const last = blocks[blocks.length - 1]?.[1];
-  if (!last) return undefined;
-  try {
-    return JSON.parse(last);
-  } catch {
-    return undefined;
-  }
-}
+export const DECISION_ID_RE = /^work-prioritizer-\d{8}t\d{4}-decision$/;
+export type ReviewScope = "full" | "delta";
 
-/** The prior decision's `itemId → to` table, or null when it carries none (e.g. a v0 decision). */
-export function parsePriorTable(content: string): Map<string, number> | null {
-  const raw = lastJsonBlock(content) as { table?: unknown } | undefined;
-  if (!raw || !Array.isArray(raw.table)) return null;
-  const out = new Map<string, number>();
-  for (const row of raw.table as { itemId?: unknown; to?: unknown }[]) {
-    if (typeof row.itemId === "string" && typeof row.to === "number") {
-      out.set(row.itemId, row.to);
-    }
-  }
-  return out;
-}
-
-/** The decidable predicate embedded in a prioritizer hypothesis, if any. */
-export function parseHypothesisPredicate(
-  content: string
-): { observationSource: string; predicate: HypothesisPredicate } | null {
-  const raw = lastJsonBlock(content) as
-    | { observationSource?: unknown; predicate?: unknown }
-    | undefined;
-  if (!raw || typeof raw.observationSource !== "string") return null;
-  const parsed = HypothesisPredicateSchema.safeParse(raw.predicate);
-  return parsed.success
-    ? { observationSource: raw.observationSource, predicate: parsed.data }
-    : null;
-}
-
-export type PredicateResult =
-  | "validates"
-  | "invalidates"
-  | "insufficient_evidence"
-  | "not_due";
-
-/**
- * PREDICATES_ARE_DECIDABLE. `observedStatus` undefined = the item was not observed.
- * Satisfied early ⇒ validates; past the deadline and unsatisfied ⇒ invalidates.
- */
-export function evaluatePredicate(
-  predicate: HypothesisPredicate,
-  observedStatus: string | undefined,
-  now: Date
-): PredicateResult {
-  const by = Date.parse(predicate.by);
-  const due = Number.isNaN(by) || now.getTime() >= by;
-  if (observedStatus === undefined) {
-    return due ? "insufficient_evidence" : "not_due";
-  }
-  if (observedStatus === predicate.equals) return "validates";
-  return due ? "invalidates" : "not_due";
-}
-
-/** Prioritizer hypotheses already filed on `now`'s UTC day (ids carry the cycle stamp). */
-export function hypothesesFiledToday(
-  hubIds: readonly string[],
-  now: Date
-): number {
-  const day = now.toISOString().slice(0, 10).split("-").join("");
-  const re = new RegExp(`^work-prioritizer-${day}t\\d{4}-h\\d+$`);
-  return hubIds.filter((id) => re.test(id)).length;
-}
-
-/** What the prior decision lets this cycle reuse. */
-export interface PriorDecisionMemo {
+/** The newest prior prioritizer decision: what this cycle may reuse (empty fields for v0 decisions). */
+export interface PriorDecision {
+  readonly id: string;
   readonly promptVersion: string | null;
   readonly objectives: readonly string[];
   /** Last full review (null for decisions filed before DAILY_FULL_REVIEW existed). */
@@ -159,29 +77,37 @@ export interface PriorDecisionMemo {
     string,
     { readonly revision: number | null; readonly judgment: ItemJudgment }
   >;
+  /** `itemId → to`, or null when the decision carries no table. */
+  readonly table: ReadonlyMap<string, number> | null;
 }
 
-/** Parse the memoizable parts of a prior decision (empty for v0 decisions). */
-export function parsePriorMemo(content: string): PriorDecisionMemo {
-  const raw = (lastJsonBlock(content) ?? {}) as {
-    promptVersion?: unknown;
-    objectives?: unknown;
-    reviewedAt?: unknown;
-    contextConsumed?: Record<string, unknown>;
-    judgments?: unknown;
-  };
+/** The newest prioritizer decision among `entries` (ids sort by cycle stamp), parsed; or null. */
+export function newestPriorDecision(
+  entries: readonly { readonly id: string; readonly content: string }[]
+): PriorDecision | null {
+  const e = entries
+    .filter((x) => DECISION_ID_RE.test(x.id))
+    .sort((a, b) => (a.id < b.id ? 1 : -1))[0];
+  if (!e) return null;
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = JSON.parse(
+      [...e.content.matchAll(/```json\s*([\s\S]*?)```/g)].at(-1)?.[1] ?? "{}"
+    );
+  } catch {
+    // unreadable payload → nothing to reuse
+  }
   const strings = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-  const judgments = new Map<
-    string,
-    { revision: number | null; judgment: ItemJudgment }
-  >();
-  for (const j of Array.isArray(raw.judgments) ? raw.judgments : []) {
-    const parsed = MemoJudgmentSchema.safeParse(j);
-    if (parsed.success) judgments.set(parsed.data.itemId, parsed.data);
-  }
-  const cc = raw.contextConsumed ?? {};
+  const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  const cc = (raw.contextConsumed ?? {}) as Record<string, unknown>;
+  const judgments = list(raw.judgments).flatMap((j) => {
+    const p = MemoJudgmentSchema.safeParse(j);
+    return p.success ? [[p.data.itemId, p.data] as const] : [];
+  });
+  const rows = list(raw.table) as { itemId?: unknown; to?: unknown }[];
   return {
+    id: e.id,
     promptVersion:
       typeof raw.promptVersion === "string" ? raw.promptVersion : null,
     objectives: strings(raw.objectives),
@@ -189,55 +115,17 @@ export function parsePriorMemo(content: string): PriorDecisionMemo {
     consumedIds: new Set(
       ["workItemIds", "knowledgeIds", "edoIds"].flatMap((k) => strings(cc[k]))
     ),
-    judgments,
+    judgments: new Map(judgments),
+    table: Array.isArray(raw.table)
+      ? new Map(
+          rows.flatMap((r) =>
+            typeof r.itemId === "string" && typeof r.to === "number"
+              ? [[r.itemId, r.to] as const]
+              : []
+          )
+        )
+      : null,
   };
-}
-
-export type ReviewScope = "full" | "delta";
-
-/** The newest prior prioritizer decision, parsed for reuse. */
-export interface PriorDecision {
-  readonly id: string;
-  readonly memo: PriorDecisionMemo;
-  readonly table: ReadonlyMap<string, number> | null;
-}
-
-export const DECISION_ID_RE = /^work-prioritizer-\d{8}t\d{4}-decision$/;
-const HYPOTHESIS_ID_RE = /^work-prioritizer-\d{8}t\d{4}-h\d+$/;
-
-/** The newest prioritizer decision among `entries` (ids sort by cycle stamp), or null. */
-export function newestPriorDecision(
-  entries: readonly { readonly id: string; readonly content: string }[]
-): PriorDecision | null {
-  const e = entries
-    .filter((x) => DECISION_ID_RE.test(x.id))
-    .sort((a, b) => (a.id < b.id ? 1 : -1))[0];
-  return e
-    ? {
-        id: e.id,
-        memo: parsePriorMemo(e.content),
-        table: parsePriorTable(e.content),
-      }
-    : null;
-}
-
-/** The prioritizer's own hypotheses among `entries` that carry a decidable predicate, oldest first. */
-export function openHypotheses<
-  T extends { readonly id: string; readonly content: string },
->(
-  entries: readonly T[]
-): {
-  entry: T;
-  observationSource: string;
-  predicate: HypothesisPredicate;
-}[] {
-  return entries
-    .filter((e) => HYPOTHESIS_ID_RE.test(e.id))
-    .sort((a, b) => (a.id < b.id ? -1 : 1))
-    .flatMap((entry) => {
-      const p = parseHypothesisPredicate(entry.content);
-      return p ? [{ entry, ...p }] : [];
-    });
 }
 
 /**
@@ -276,7 +164,7 @@ export function selectJudgeSet<
   carried: Map<string, ItemJudgment>;
   toJudge: T[];
 } {
-  const memo = prior?.memo;
+  const memo = prior;
   const full =
     ctx.requested ||
     !memo?.reviewedAt ||
@@ -298,7 +186,7 @@ export function selectJudgeSet<
       !unchanged ||
       i.priority === undefined ||
       i.priority <= 1 ||
-      (prior?.table?.get(i.id) ?? 4) <= 1;
+      (memo.table?.get(i.id) ?? 4) <= 1;
     const newEvidence =
       inDelta &&
       ctx.hubEntries.some(

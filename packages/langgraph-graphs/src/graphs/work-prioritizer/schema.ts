@@ -72,37 +72,6 @@ export const ItemJudgmentSchema = z
   });
 export type ItemJudgment = z.infer<typeof ItemJudgmentSchema>;
 
-/** A predicate work-item state can decide (design v4 §2.7). */
-export const HypothesisPredicateSchema = z.object({
-  itemId: z.string().min(1),
-  field: z.literal("status"),
-  equals: z.enum([
-    "needs_triage",
-    "needs_research",
-    "needs_design",
-    "needs_implement",
-    "needs_closeout",
-    "needs_merge",
-    "done",
-    "blocked",
-    "cancelled",
-  ]),
-  /** ISO deadline; the hypothesis is due at this time. */
-  by: z.string().default(""),
-});
-export type HypothesisPredicate = z.infer<typeof HypothesisPredicateSchema>;
-
-export const HypothesisProposalSchema = z.object({
-  title: z.string().min(1).max(300),
-  prediction: z.string().min(1),
-  /** Where the outcome will be observed, e.g. `work_item:bug.5001`. */
-  observationSource: z.string().min(1),
-  predicate: HypothesisPredicateSchema,
-  /** Hub (knowledge/EDO) ids motivating it — written as evidence_for edges. */
-  citations: z.array(z.string().min(1)).default([]),
-});
-export type HypothesisProposal = z.infer<typeof HypothesisProposalSchema>;
-
 /** One row of the ranked table (every actionable item gets exactly one). */
 export const RankedRowSchema = z.object({
   itemId: z.string(),
@@ -136,14 +105,6 @@ export const PlanRowSchema = z.object({
   expectedRevision: z.number().int().nullable(),
 });
 export type PlanRow = z.infer<typeof PlanRowSchema>;
-
-export const DueCheckSchema = z.object({
-  hypothesisId: z.string(),
-  result: z.enum(["validates", "invalidates", "insufficient_evidence"]),
-  evidence: z.string(),
-  recorded: z.boolean(),
-});
-export type DueCheck = z.infer<typeof DueCheckSchema>;
 
 /** One memoized judgment (item revision it was made against + the judgment). */
 export const MemoJudgmentSchema = z.object({
@@ -197,8 +158,6 @@ export const DecisionPayloadSchema = z.object({
       to: z.number(),
     })
   ),
-  dueChecks: z.array(DueCheckSchema),
-  hypothesisIds: z.array(z.string()),
   contextConsumed: ContextConsumedSchema,
   /**
    * MEMOIZED_JUDGMENTS: every item's judgment keyed by itemId@revision. The next cycle reuses a

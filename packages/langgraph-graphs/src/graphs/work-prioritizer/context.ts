@@ -63,7 +63,6 @@ export interface GatheredContext {
   readonly blockerCycles: readonly (readonly string[])[];
   /** DUPLICATE_PREPASS: groups of ≥2 fetched items whose normalized titles are identical. */
   readonly duplicateCandidates: readonly (readonly string[])[];
-  readonly toolErrors: readonly ToolCallError[];
   /** Hash of the sorted `id@revision` set — identifies the backlog state this cycle judged. */
   readonly snapshotId: string;
 }
@@ -271,7 +270,6 @@ export function buildGatheredContext(input: {
   readonly now: string;
   readonly workItems: readonly FetchedWorkItem[];
   readonly entries: readonly FetchedEntry[];
-  readonly toolErrors: readonly ToolCallError[];
 }): GatheredContext {
   const workItems = dedupeWorkItems(input.workItems);
   const entries = dedupeEntries(input.entries);
@@ -288,7 +286,6 @@ export function buildGatheredContext(input: {
     },
     blockerCycles: findBlockerCycles(workItems),
     duplicateCandidates: findDuplicateTitleGroups(workItems),
-    toolErrors: input.toolErrors,
     snapshotId: computeSnapshotId(workItems),
   };
 }

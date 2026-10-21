@@ -95,7 +95,6 @@ work_prioritization:
     # Per deploy environment (DEPLOY_ENVIRONMENT). Propose everywhere until a write path exists.
     mode:
       default: propose
-  hypotheses_per_day: 3
 
 payments:
   status: active

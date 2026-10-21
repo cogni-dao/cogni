@@ -16,13 +16,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildPlan,
   diffVsPrior,
-  evaluatePredicate,
-  hypothesesFiledToday,
   isNoChange,
   newestPriorDecision,
-  parseHypothesisPredicate,
-  parsePriorMemo,
-  parsePriorTable,
   selectJudgeSet,
 } from "../../../src/graphs/work-prioritizer/plan";
 import type { RankedRow } from "../../../src/graphs/work-prioritizer/schema";
@@ -87,68 +82,21 @@ describe("plan", () => {
     ).toEqual([{ itemId: "b", priorTo: null, to: 2 }]);
   });
 
-  it("parses the prior decision table from its fenced json; v0 decisions yield null", () => {
+  it("parses the newest prior decision's table from its fenced json; v0 decisions carry none", () => {
+    const prior = (id: string, content: string) =>
+      newestPriorDecision([{ id: `work-prioritizer-${id}-decision`, content }]);
     const content = 'summary\n```json\n{"table":[{"itemId":"a","to":2}]}\n```';
-    expect(parsePriorTable(content)).toEqual(new Map([["a", 2]]));
-    expect(parsePriorTable('x\n```json\n{"focusOrder":["a"]}\n```')).toBeNull();
-    expect(parsePriorTable("no json")).toBeNull();
-  });
-});
-
-describe("EDO evidence", () => {
-  const pred = {
-    itemId: "bug.1",
-    field: "status" as const,
-    equals: "done" as const,
-    by: "2026-10-19T00:00:00.000Z",
-  };
-
-  it("validates when the observed state already satisfies the predicate", () => {
-    expect(evaluatePredicate(pred, "done", NOW)).toBe("validates");
-  });
-
-  it("invalidates when due and unsatisfied", () => {
-    expect(evaluatePredicate(pred, "needs_implement", NOW)).toBe("invalidates");
-  });
-
-  it("due-but-unobservable → insufficient_evidence (left open)", () => {
-    expect(evaluatePredicate(pred, undefined, NOW)).toBe(
-      "insufficient_evidence"
-    );
-  });
-
-  it("not yet due and unsatisfied → not_due", () => {
+    expect(prior("20261020t1100", content)?.table).toEqual(new Map([["a", 2]]));
     expect(
-      evaluatePredicate(
-        { ...pred, by: "2026-11-01T00:00:00.000Z" },
-        "needs_implement",
-        NOW
-      )
-    ).toBe("not_due");
-  });
-
-  it("round-trips the predicate block a filed hypothesis carries", () => {
-    const content = `prediction\n\n\`\`\`json\n${JSON.stringify({ observationSource: "work_item:bug.1", predicate: pred })}\n\`\`\``;
-    expect(parseHypothesisPredicate(content)).toEqual({
-      observationSource: "work_item:bug.1",
-      predicate: pred,
-    });
-    expect(parseHypothesisPredicate("old free-text hypothesis")).toBeNull();
-  });
-
-  it("counts today's prioritizer hypotheses for the daily cap", () => {
+      prior("20261020t1100", 'x\n```json\n{"focusOrder":["a"]}\n```')?.table
+    ).toBeNull();
+    expect(prior("20261020t1100", "no json")?.table).toBeNull();
     expect(
-      hypothesesFiledToday(
-        [
-          "work-prioritizer-20261020t0100-h1",
-          "work-prioritizer-20261020t0900-h2",
-          "work-prioritizer-20261019t2300-h1",
-          "work-prioritizer-20261020t0900-decision",
-          "dao-goal-x",
-        ],
-        NOW
-      )
-    ).toBe(2);
+      newestPriorDecision([
+        { id: "work-prioritizer-20261020t1100-decision", content },
+        { id: "work-prioritizer-20261020t1200-decision", content: "x" },
+      ])?.id
+    ).toBe("work-prioritizer-20261020t1200-decision");
   });
 });
 
@@ -252,9 +200,13 @@ describe("DAILY_FULL_REVIEW + DELTA_SCOPE + MEMOIZED_JUDGMENTS (selectJudgeSet)"
   });
 
   it("a v0 decision has nothing to reuse", () => {
-    expect(
-      parsePriorMemo('x\n```json\n{"focusOrder":[]}\n```').judgments.size
-    ).toBe(0);
+    const v0 = newestPriorDecision([
+      {
+        id: "work-prioritizer-20261020t1100-decision",
+        content: 'x\n```json\n{"focusOrder":[]}\n```',
+      },
+    ]);
+    expect(v0?.judgments.size).toBe(0);
   });
 });
 

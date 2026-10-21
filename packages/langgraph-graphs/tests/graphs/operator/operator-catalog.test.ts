@@ -70,7 +70,7 @@ describe("operator catalog entries", () => {
     expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
   });
 
-  it("work-prioritizer is operator-only with the exact seven-tool allowlist (propose-only)", () => {
+  it("work-prioritizer is operator-only with the exact five-tool allowlist (propose-only)", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
     expect(entry.graphFactory).toBe(createWorkPrioritizerGraph);
@@ -79,9 +79,7 @@ describe("operator catalog entries", () => {
         WORK_ITEM_QUERY_NAME,
         KNOWLEDGE_SEARCH_NAME,
         KNOWLEDGE_READ_NAME,
-        EDO_HYPOTHESIZE_NAME,
         EDO_DECIDE_NAME,
-        EDO_RECORD_OUTCOME_NAME,
         GET_CURRENT_TIME_NAME,
       ].sort()
     );

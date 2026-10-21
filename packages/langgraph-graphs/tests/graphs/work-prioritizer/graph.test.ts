@@ -11,7 +11,6 @@
  *   - NO_CHANGE_NO_DECISION: a delta cycle with an identical table to the prior decision files nothing
  *   - DAILY_FULL_REVIEW / DELTA_SCOPE: full review re-judges all and always files; delta carries the rest
  *   - TRANSITION_UNREACHABLE: work-item writes are unreachable even when bound + allowed and demanded by injection
- *   - DUE_HYPOTHESES: decidable → outcome recorded; unobservable → left open as insufficient_evidence
  * Side-effects: none
  * Links: src/graphs/work-prioritizer/graph.ts
  * @internal
@@ -19,11 +18,7 @@
 
 import {
   EDO_DECIDE_NAME,
-  EDO_HYPOTHESIZE_NAME,
-  EDO_RECORD_OUTCOME_NAME,
   edoDecideContract,
-  edoHypothesizeContract,
-  edoRecordOutcomeContract,
   GET_CURRENT_TIME_NAME,
   getCurrentTimeContract,
   KNOWLEDGE_READ_NAME,
@@ -61,7 +56,6 @@ const POLICY = {
   p1Budget: 6,
   p2Budget: 12,
   objectives: [R],
-  hypothesesPerDay: 3,
 };
 const triggerOf = (extra: Record<string, unknown> = {}) =>
   `PRIORITIZE\n\n\`\`\`json\n${JSON.stringify({ workPrioritization: POLICY, ...extra })}\n\`\`\``;
@@ -76,7 +70,6 @@ interface World {
   pageSize?: number;
   failPage?: number;
   hub?: Record<string, unknown>[];
-  extraObserved?: Record<string, unknown>[];
 }
 
 function workItem(id: string, o: Record<string, unknown> = {}) {
@@ -109,9 +102,7 @@ function buildTools(world: World, events: string[], calls: Call[]) {
     workItemQueryContract,
     knowledgeSearchContract,
     knowledgeReadContract,
-    edoHypothesizeContract,
     edoDecideContract,
-    edoRecordOutcomeContract,
     workItemTransitionContract,
   ];
   const hub = world.hub ?? [GOAL];
@@ -126,7 +117,7 @@ function buildTools(world: World, events: string[], calls: Call[]) {
         return ok({ currentTime: NOW });
       case WORK_ITEM_QUERY_NAME: {
         if (Array.isArray(a.ids)) {
-          const all = [...world.items, ...(world.extraObserved ?? [])];
+          const all = world.items;
           const items = all.filter((i) =>
             (a.ids as string[]).includes(i.id as string)
           );
@@ -179,9 +170,7 @@ function buildTools(world: World, events: string[], calls: Call[]) {
           totalFound: entries.length,
         });
       }
-      case EDO_HYPOTHESIZE_NAME:
       case EDO_DECIDE_NAME:
-      case EDO_RECORD_OUTCOME_NAME:
         return ok({ entry: { id: a.id }, committed: true, message: "ok" });
       default:
         return ok({ mutated: true });
@@ -215,9 +204,8 @@ function fakeLlm(
   events: string[],
   prompts: string[],
   judge: JudgeFn,
-  o: { hypotheses?: unknown[]; reply?: (ids: string[]) => unknown } = {}
+  o: { reply?: (ids: string[]) => unknown } = {}
 ) {
-  let first = true;
   return {
     invoke: async (messages: { content: unknown }[]) => {
       events.push("llm");
@@ -229,12 +217,7 @@ function fakeLlm(
         )?.[1] ?? "[]";
       const ids = (JSON.parse(block) as { id: string }[]).map((i) => i.id);
       if (o.reply) return o.reply(ids);
-      const judgments = ids.map(judge).filter(Boolean);
-      const hypotheses = first
-        ? (o.hypotheses ?? []).map((hypothesis) => ({ hypothesis }))
-        : [];
-      first = false;
-      return new AIMessage(lines([...judgments, ...hypotheses]));
+      return new AIMessage(lines(ids.map(judge).filter(Boolean)));
     },
   };
 }
@@ -242,7 +225,6 @@ function fakeLlm(
 async function run(opts: {
   world: World;
   judge?: JudgeFn;
-  hypotheses?: unknown[];
   reply?: (ids: string[]) => unknown;
   trigger?: string;
 }) {
@@ -251,7 +233,6 @@ async function run(opts: {
   const prompts: string[] = [];
   const graph = createWorkPrioritizerGraph({
     llm: fakeLlm(events, prompts, opts.judge ?? standardJudge, {
-      ...(opts.hypotheses ? { hypotheses: opts.hypotheses } : {}),
       ...(opts.reply ? { reply: opts.reply } : {}),
     }) as never,
     tools: buildTools(opts.world, events, calls),
@@ -322,23 +303,21 @@ const ITEMS = Array.from({ length: 20 }, (_, i) =>
 );
 
 describe("work-prioritizer tool allowlist", () => {
-  it("is exactly seven tools; the only writes are the three EDO tools (PROPOSE_ONLY)", () => {
+  it("is exactly five tools; the only write is EDO decide (PROPOSE_ONLY)", () => {
     expect([...WORK_PRIORITIZER_TOOL_IDS].sort()).toEqual(
       [
         WORK_ITEM_QUERY_NAME,
         KNOWLEDGE_SEARCH_NAME,
         KNOWLEDGE_READ_NAME,
-        EDO_HYPOTHESIZE_NAME,
         EDO_DECIDE_NAME,
-        EDO_RECORD_OUTCOME_NAME,
         GET_CURRENT_TIME_NAME,
       ].sort()
     );
     expect(WORK_PRIORITIZER_TOOL_IDS).not.toContain(WORK_ITEM_TRANSITION_NAME);
     expect(WORK_PRIORITIZER_TOOL_IDS).not.toContain(KNOWLEDGE_WRITE_NAME);
-    expect([...WORK_PRIORITIZER_WRITE_TOOL_IDS].sort()).toEqual(
-      [EDO_DECIDE_NAME, EDO_HYPOTHESIZE_NAME, EDO_RECORD_OUTCOME_NAME].sort()
-    );
+    expect([...WORK_PRIORITIZER_WRITE_TOOL_IDS].sort()).toEqual([
+      EDO_DECIDE_NAME,
+    ]);
   });
 });
 
@@ -393,10 +372,10 @@ describe("langgraph:work-prioritizer v4 propose mode (mock LLM)", () => {
       scope: "full",
       deltaSize: 20,
       itemsInSnapshot: 20,
-      itemsJudged: 20,
+      judgedByModel: 20,
       planRows: 20,
     });
-    // Decision derives from the approved objective (goals are hypotheses) when no new hypothesis is filed.
+    // The decision derives from the lead approved objective (goals are hypotheses).
     const decide = calls.find((c) => c.name === EDO_DECIDE_NAME);
     expect(decide?.args.derivesFromHypothesisId).toBe(R);
     expect(decide?.args.domain).toBe("operator");
@@ -430,8 +409,8 @@ describe("langgraph:work-prioritizer v4 propose mode (mock LLM)", () => {
       world: { items: ITEMS.slice(0, 5) },
       judge: (id) => (id === "task.03" ? null : standardJudge(id)),
     });
-    // One batch call + two single-item repairs for the item that never comes back.
-    expect(events.filter((e) => e === "llm").length).toBe(3);
+    // One batch call + one single-item repair for the item that never comes back.
+    expect(events.filter((e) => e === "llm").length).toBe(2);
     expect(status).toBe("planned");
     expect(payload?.unjudged).toEqual(["task.03"]);
     expect(payload?.table.find((r) => r.itemId === "task.03")).toMatchObject({
@@ -572,66 +551,6 @@ describe("langgraph:work-prioritizer v4 propose mode (mock LLM)", () => {
       reasons: ["duplicate_p4", "duplicate_of:bug.5001"],
     });
     expect(payload?.table.find((r) => r.itemId === "bug.5001")?.to).toBe(1);
-  });
-
-  it("files a decidable hypothesis (source + predicate) and derives the decision from it", async () => {
-    const { calls } = await run({
-      world: { items: ITEMS.slice(0, 3) },
-      hypotheses: [
-        {
-          title: "task.00 closes this week",
-          prediction: "p",
-          observationSource: "ignored",
-          predicate: {
-            itemId: "task.00",
-            field: "status",
-            equals: "done",
-            by: "2026-10-27T00:00:00.000Z",
-          },
-          citations: [R],
-        },
-      ],
-    });
-    const hyp = calls.find((c) => c.name === EDO_HYPOTHESIZE_NAME);
-    expect(hyp?.args.evidenceForIds).toEqual([R]);
-    expect(String(hyp?.args.content)).toContain(
-      '"observationSource":"work_item:task.00"'
-    );
-    expect(
-      calls.find((c) => c.name === EDO_DECIDE_NAME)?.args
-        .derivesFromHypothesisId
-    ).toBe(hyp?.args.id);
-  });
-
-  it("due hypotheses: decidable → outcome recorded; unobservable → left open as insufficient_evidence", async () => {
-    const h = (id: string, itemId: string) => ({
-      id,
-      domain: "operator",
-      title: id,
-      content: `p\n\`\`\`json\n${JSON.stringify({ observationSource: `work_item:${itemId}`, predicate: { itemId, field: "status", equals: "done", by: "2026-10-19T00:00:00.000Z" } })}\n\`\`\``,
-      confidencePct: 50,
-      sourceType: "agent",
-      tags: ["work-prioritizer"],
-    });
-    const { calls, payload } = await run({
-      world: {
-        items: ITEMS.slice(0, 2),
-        hub: [
-          GOAL,
-          h("work-prioritizer-20261013t1200-h1", "task.done"),
-          h("work-prioritizer-20261013t1200-h2", "task.gone"),
-        ],
-        extraObserved: [workItem("task.done", { status: "done" })],
-      },
-    });
-    const outcomes = calls.filter((c) => c.name === EDO_RECORD_OUTCOME_NAME);
-    expect(outcomes.map((c) => [c.args.hypothesisId, c.args.edge])).toEqual([
-      ["work-prioritizer-20261013t1200-h1", "validates"],
-    ]);
-    expect(payload?.dueChecks.map((d) => [d.hypothesisId, d.result])).toEqual([
-      ["work-prioritizer-20261013t1200-h1", "validates"],
-      ["work-prioritizer-20261013t1200-h2", "insufficient_evidence"],
-    ]);
   });
 
   it("TRANSPORT_RETRY_ONCE: a stream drop on a judge call is retried once", async () => {

@@ -3,10 +3,10 @@
 
 /**
  * Module: `@cogni/ai-tools/tests/tool-requires`
- * Purpose: Lock the authz v0 node-policy declarations: exactly the seven tools the work prioritizer binds declare node.collaborate.
+ * Purpose: Lock the authz v0 node-policy declarations: exactly the five tools the work prioritizer binds declare node.collaborate.
  * Scope: Contract metadata only; does not execute tools or evaluate policy.
  * Invariants:
- *   - PRIORITIZER_TOOLS_DECLARED (story.5096): the prioritizer's reads + EDO writes declare `requires:
+ *   - PRIORITIZER_TOOLS_DECLARED (story.5096): the prioritizer's reads + its EDO decide declare `requires:
  *     "node.collaborate"`, so its grant-backed scheduled run passes without an OpenFGA tuple.
  *   - UNDECLARED_IS_LEGACY: every other tool omits `requires` (legacy `tool.execute` path); the runtime
  *     adapter forwards a declared one.
@@ -23,15 +23,13 @@ import { toBoundToolRuntime } from "../src/runtime-adapter";
 const ALL = [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE];
 
 describe("tool node-policy declarations (authz v0)", () => {
-  it("declares node.collaborate on exactly the seven prioritizer tools", () => {
+  it("declares node.collaborate on exactly the five prioritizer tools", () => {
     const declared = ALL.filter((t) => t.contract.requires !== undefined)
       .map((t) => [t.contract.name, t.contract.requires])
       .sort();
     expect(declared).toEqual(
       [
         ["core__edo_decide", "node.collaborate"],
-        ["core__edo_hypothesize", "node.collaborate"],
-        ["core__edo_record_outcome", "node.collaborate"],
         ["core__get_current_time", "node.collaborate"],
         ["core__knowledge_read", "node.collaborate"],
         ["core__knowledge_search", "node.collaborate"],

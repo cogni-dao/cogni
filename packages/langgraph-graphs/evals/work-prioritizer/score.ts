@@ -229,32 +229,6 @@ export function gradePriorReference(
     : fail("a prior decision existed but priorDecisionId is null");
 }
 
-/** Every new hypothesis carries an observation source and a decidable predicate. */
-export function gradeHypotheses(
-  hypotheses: readonly { readonly id: string; readonly content: string }[]
-): CheckResult {
-  const bad = hypotheses.filter((h) => {
-    const m = /```json\s*([\s\S]*?)```/.exec(h.content);
-    try {
-      const j = JSON.parse(m?.[1] ?? "null") as {
-        observationSource?: unknown;
-        predicate?: { itemId?: unknown; equals?: unknown; by?: unknown };
-      };
-      return !(
-        typeof j.observationSource === "string" &&
-        typeof j.predicate?.itemId === "string" &&
-        typeof j.predicate?.equals === "string" &&
-        typeof j.predicate?.by === "string"
-      );
-    } catch {
-      return true;
-    }
-  });
-  return bad.length
-    ? fail(`missing source/predicate: ${bad.map((h) => h.id).join(", ")}`)
-    : ok(`${hypotheses.length} hypotheses, all decidable`);
-}
-
 /** Propose mode writes nothing: no work-item revision or status changed (seeded items excluded). */
 export function gradeZeroWrites(
   before: readonly SnapshotItem[],

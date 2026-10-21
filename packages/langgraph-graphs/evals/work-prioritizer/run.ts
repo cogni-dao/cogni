@@ -36,7 +36,6 @@ import {
   gradeCoverage,
   gradeDeltaCoverage,
   gradeGates,
-  gradeHypotheses,
   gradePriorReference,
   gradeRationale,
   gradeResponsiveness,
@@ -147,7 +146,6 @@ function loadPolicy() {
       p1_budget: number;
       p2_budget: number;
       objectives: string[];
-      hypotheses_per_day?: number;
     };
   };
   const wp = spec.work_prioritization;
@@ -157,7 +155,6 @@ function loadPolicy() {
     p1Budget: wp.p1_budget,
     p2Budget: wp.p2_budget,
     objectives: wp.objectives,
-    hypothesesPerDay: wp.hypotheses_per_day ?? 3,
   };
   const trigger = (extra: Record<string, unknown> = {}) =>
     `PRIORITIZE\n\n\`\`\`json\n${JSON.stringify({ workPrioritization: policy, ...extra })}\n\`\`\``;
@@ -332,36 +329,23 @@ async function assertSha(underTest: string): Promise<void> {
 }
 
 /** The hard checks every filed decision must pass (coverage is graded per cycle kind). */
-async function hardChecks(
+/** The hard checks every filed decision must pass (coverage is graded per cycle kind). */
+function hardChecks(
   payload: DecisionPayload,
   snap: readonly SnapshotItem[],
   hadPrior: boolean
-): Promise<Record<string, CheckResult>> {
-  const hypotheses = await Promise.all(
-    payload.hypothesisIds.map(async (id) => ({
-      id,
-      content: (await entryContent(id)) ?? "",
-    }))
-  );
+): Record<string, CheckResult> {
   return {
     ceilings: gradeCeilings(payload),
     rationale: gradeRationale(payload),
     gates: gradeGates(payload, snap, fixture),
     "prior reference": gradePriorReference(payload, hadPrior),
-    hypotheses: gradeHypotheses(hypotheses),
     unjudged: gradeUnjudged(payload),
   };
 }
 
 const none = (reason: string): CheckResult => ({ pass: false, reason });
-const HARD = [
-  "ceilings",
-  "rationale",
-  "gates",
-  "prior reference",
-  "hypotheses",
-  "unjudged",
-];
+const HARD = ["ceilings", "rationale", "gates", "prior reference", "unjudged"];
 const allNone = (reason: string) =>
   Object.fromEntries(HARD.map((k) => [k, none(reason)]));
 
@@ -422,13 +406,13 @@ async function runEval(underTest: string): Promise<void> {
       [
         "c1",
         c1.payload
-          ? await hardChecks(c1.payload, before, hadPrior)
+          ? hardChecks(c1.payload, before, hadPrior)
           : allNone("no decision (cycle 1)"),
       ],
       [
         "c3",
         c3.payload
-          ? await hardChecks(c3.payload, seededSnap, true)
+          ? hardChecks(c3.payload, seededSnap, true)
           : allNone("no decision (cycle 3)"),
       ],
     ]),

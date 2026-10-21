@@ -22,7 +22,6 @@ import {
   gradeCoverage,
   gradeDeltaCoverage,
   gradeGates,
-  gradeHypotheses,
   gradeIncidentApplied,
   gradeIncidentDemoted,
   gradeObservedStability,
@@ -94,8 +93,6 @@ function decision(
     plan: [],
     table,
     diffVsPrior: [],
-    dueChecks: [],
-    hypothesisIds: [],
     contextConsumed: {
       workItemIds: table.map((r) => r.itemId),
       knowledgeIds: [R],
@@ -140,7 +137,6 @@ describe("work-prioritizer graders", () => {
     expect(gradeRationale(GOOD).pass).toBe(true);
     expect(gradeGates(GOOD, SNAPSHOT, FIXTURE).pass).toBe(true);
     expect(gradePriorReference(GOOD, true).pass).toBe(true);
-    expect(gradeHypotheses([]).pass).toBe(true);
   });
 
   it("full-review coverage fails on a missing, duplicated, or unjudged row, or a delta scope; ignores non-actionable items", () => {
@@ -265,14 +261,6 @@ describe("work-prioritizer graders", () => {
     const none = decision(GOOD.table, { priorDecisionId: null });
     expect(gradePriorReference(none, true).pass).toBe(false);
     expect(gradePriorReference(none, false).pass).toBe(true);
-  });
-
-  it("hypotheses fail without an observation source + predicate", () => {
-    const good = `p\n\`\`\`json\n${JSON.stringify({ observationSource: "work_item:bug.1", predicate: { itemId: "bug.1", field: "status", equals: "done", by: "2026-11-01T00:00:00.000Z" } })}\n\`\`\``;
-    expect(gradeHypotheses([{ id: "h1", content: good }]).pass).toBe(true);
-    expect(
-      gradeHypotheses([{ id: "h2", content: "free text only" }]).pass
-    ).toBe(false);
   });
 
   it("zero writes fails on any revision/status change", () => {
