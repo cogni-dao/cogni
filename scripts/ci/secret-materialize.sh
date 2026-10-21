@@ -493,16 +493,41 @@ if [[ "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" == "db-ready" ]]; then
   # proves the provisioned role/database boundary before any secret-array write.
   observation="$(remote "docker run --rm --network host -e PGPASSWORD='${probe_password}' -e PGCONNECT_TIMEOUT=5 postgres:15 psql -h '${COGNI_LANE_DB_HOST}' -p 5432 -U '${probe_role}' -d '${probe_database}' -XAtv ON_ERROR_STOP=1 -c 'SELECT public.database_recovery_probe();'")" \
     || fail "DB-ready native probe receipt unavailable"
-  prior_bindings="$(bao_get_field database-reliability-actuator DATABASE_RECOVERY_PROBE_URLS_JSON)"
-  [[ -n "$prior_bindings" ]] || prior_bindings='[]'
-  next_bindings="$(jq -n --arg nodeId "$probe_node_id" --arg nodeSlug "$TARGET_NODE" --arg environment "$DEPLOY_ENVIRONMENT" \
+  # Read aggregate and version from the SAME authoritative response. The cache
+  # deliberately contains values only and cannot authorize a versioned rebind.
+  binding_bank="$(cogni_openbao_read_path "$DEPLOY_ENVIRONMENT" database-reliability-actuator)" \
+    || fail "DB-ready binding bank unavailable"
+  prior_bindings="$(jq -er '.data.data.DATABASE_RECOVERY_PROBE_URLS_JSON // "[]"' <<<"$binding_bank")" \
+    || fail "DB-ready binding aggregate invalid"
+  binding_plan="$(jq -n --arg nodeId "$probe_node_id" --arg nodeSlug "$TARGET_NODE" --arg environment "$DEPLOY_ENVIRONMENT" \
     --arg databaseName "$probe_database" --arg probeRole "$probe_role" --arg dsn "$probe_dsn" \
     --arg expectedHost "$COGNI_LANE_DB_HOST" --arg machineId "$machine_id" --arg localSystemIdentifier "$local_system_id" --argjson observation "$observation" \
     --argjson existingBindings "$prior_bindings" \
     '{nodeId:$nodeId,nodeSlug:$nodeSlug,environment:$environment,databaseName:$databaseName,probeRole:$probeRole,dsn:$dsn,expectedHost:$expectedHost,machineId:$machineId,localSystemIdentifier:$localSystemIdentifier,observation:$observation,existingBindings:$existingBindings}' \
-    | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-recovery-binding.ts")" \
+    | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/plan-database-recovery-host-rebind.ts")" \
     || fail "DB-ready measured binding validation failed"
-  if [[ "$next_bindings" == "$prior_bindings" ]]; then
+  next_bindings="$(jq -c .bindings <<<"$binding_plan")"
+  if [[ "$(jq -r '.rebind != null' <<<"$binding_plan")" == true ]]; then
+    binding_version="$(jq -er '.data.metadata.version | select(type=="number" and .>0 and floor==.)' <<<"$binding_bank")" \
+      || fail "DB-ready host rebind requires an existing KV version"
+    # Native proof must not race a canonical credential rotation. No retries or
+    # repair of component drift: the concurrent owner wins.
+    current_probe="$(cogni_openbao_read_path "$DEPLOY_ENVIRONMENT" "$probe_service")" \
+      || fail "DB-ready canonical probe recheck unavailable"
+    [[ "$(jq -r .data.data.DATABASE_RECOVERY_PROBE_PASSWORD <<<"$current_probe")" == "$probe_password" && "$(jq -r .data.data.DATABASE_RECOVERY_PROBE_URL <<<"$current_probe")" == "$probe_dsn" ]] \
+      || fail "DB-ready canonical probe changed during qualification"
+    printf '%s' "$next_bindings" > "${CACHE_DIR}/host-rebind-bindings"
+    # Patch exactly one field at the observed bank version, never flush_batch's
+    # unversioned patch/put fallback. A CAS conflict aborts without replay.
+    patch_result="$(jq -n --rawfile bindings "${CACHE_DIR}/host-rebind-bindings" '{DATABASE_RECOVERY_PROBE_URLS_JSON:$bindings}' \
+      | bao_exec -i "kv patch -format=json -method=patch -cas=${binding_version} 'cogni/${DEPLOY_ENVIRONMENT}/database-reliability-actuator' -" 2>/dev/null)" \
+      || fail "DB-ready host rebind CAS refused; no replay"
+    applied_version="$(jq -er --argjson before "$binding_version" '.data.version | select(. == $before + 1)' <<<"$patch_result")" \
+      || fail "DB-ready host rebind applied but version receipt unavailable; reconcile before retry"
+    # Only allowlisted credential-free evidence reaches CI/Loki.
+    safe_receipt="$(jq -c --argjson before "$binding_version" --argjson after "$applied_version" '.rebind + {beforeVersion:$before,afterVersion:$after}' <<<"$binding_plan")"
+    log "DB-ready host rebind applied receipt=${safe_receipt}"
+  elif [[ "$next_bindings" == "$prior_bindings" ]]; then
     log 'DB-ready binding converged; created=0'
   else
     rm -f "${CACHE_DIR}/database-reliability-actuator/DATABASE_RECOVERY_PROBE_URLS_JSON"
