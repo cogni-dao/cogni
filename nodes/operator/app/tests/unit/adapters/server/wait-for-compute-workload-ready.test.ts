@@ -170,6 +170,85 @@ describe("compute readiness CLI public revision gate", () => {
     );
   });
 
+  it("public-only waits for the manifest SHA without an SSH host or identity", async () => {
+    mocks.parseArgs.mockReturnValue({
+      values: {
+        "manifest-json": "/expected.json",
+        "timeout-seconds": "12",
+        "public-only": true,
+      },
+    });
+    mocks.version
+      .mockResolvedValueOnce("source_mismatch")
+      .mockResolvedValue("matched");
+    const completed = vi.fn();
+    const wait = main().then(completed);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(completed).not.toHaveBeenCalled();
+    expect(mocks.readLive).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await wait;
+    expect(completed).toHaveBeenCalledOnce();
+    expect(mocks.readLive).not.toHaveBeenCalled();
+    expect(mocks.version).toHaveBeenCalledWith(
+      "https://poly-preview.cognidao.org",
+      sourceSha,
+      5_000
+    );
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      expect.stringContaining("Public revision verified")
+    );
+    expect(process.stdout.write).not.toHaveBeenCalledWith(
+      expect.stringContaining("Ready at current generation")
+    );
+  });
+
+  it("public-only fails closed within its budget when no revision can be read", async () => {
+    mocks.parseArgs.mockReturnValue({
+      values: {
+        "manifest-json": "/expected.json",
+        "timeout-seconds": "12",
+        "public-only": true,
+      },
+    });
+    mocks.version.mockImplementation(() => new Promise(() => {}));
+    const failure = expect(main()).rejects.toThrow(
+      "public_version_unavailable"
+    );
+    await vi.advanceTimersByTimeAsync(12_000);
+    await failure;
+    expect(Date.now()).toBe(12_000);
+    expect(mocks.readLive).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "missing host",
+    "missing source",
+  ])("public-only refuses %s instead of passing a native-only no-op", async (missing) => {
+    mocks.parseArgs.mockReturnValue({
+      values: {
+        "manifest-json": "/expected.json",
+        "timeout-seconds": "12",
+        "public-only": true,
+      },
+    });
+    const manifest = fixture();
+    setManifest({
+      ...manifest,
+      spec: {
+        ...manifest.spec,
+        ...(missing === "missing host"
+          ? { workload: {} }
+          : { bundle: { ref: manifest.spec.bundle.ref } }),
+      },
+    });
+    await expect(main()).rejects.toThrow(
+      missing === "missing host" ? "publicHost" : "full commit SHA"
+    );
+    expect(mocks.readLive).not.toHaveBeenCalled();
+    expect(mocks.version).not.toHaveBeenCalled();
+  });
+
   it.each([
     "https://example.org",
     "127.0.0.1",

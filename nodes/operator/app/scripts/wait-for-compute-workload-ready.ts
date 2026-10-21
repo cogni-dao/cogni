@@ -15,6 +15,7 @@ const options = {
   "manifest-json": { type: "string" },
   host: { type: "string" },
   identity: { type: "string" },
+  "public-only": { type: "boolean", default: false },
   "timeout-seconds": { type: "string", default: "900" },
 } as const;
 
@@ -29,9 +30,14 @@ const MAX_TIMEOUT_SECONDS = 1_800;
 export async function main(): Promise<void> {
   const { values } = parseArgs({ options, strict: true });
   const manifestPath = required(values["manifest-json"], "--manifest-json");
-  const host = required(values.host, "--host");
-  const identity = required(values.identity, "--identity");
-  validateHost(host);
+  const publicOnly = values["public-only"];
+  // Foreign custody cannot grant this candidate job control-plane credentials.
+  // Its existing public revision authority needs neither an SSH host nor a key.
+  const host = publicOnly ? undefined : required(values.host, "--host");
+  const identity = publicOnly
+    ? undefined
+    : required(values.identity, "--identity");
+  if (host) validateHost(host);
   const timeoutSeconds = Number(values["timeout-seconds"]);
   if (
     !Number.isInteger(timeoutSeconds) ||
@@ -53,6 +59,9 @@ export async function main(): Promise<void> {
   validateResourceName(name);
   validateNamespace(namespace);
   const versionTarget = publicVersionTarget(expected);
+  if (publicOnly && !versionTarget) {
+    throw new Error("--public-only requires manifest spec.workload.publicHost");
+  }
   // ONE_AUTHORITY_PER_WORKLOAD: the manifest's kind names the resource to poll —
   // Crossplane composites are `xcomputeworkload`, the legacy CR `computeworkload`.
   const resource =
@@ -63,19 +72,23 @@ export async function main(): Promise<void> {
   let lastReason = "not_yet_polled";
 
   while (Date.now() < deadline) {
-    const observation = await readLiveWorkload({
-      host,
-      identity,
-      namespace,
-      name,
-      resource,
-      timeoutMs: Math.max(1, Math.min(40_000, deadline - Date.now())),
-    });
-    if (observation.ok) {
-      const assessment = assessComputeWorkloadReadiness({
-        expected,
-        live: observation.resource,
-      });
+    const observation = publicOnly
+      ? undefined
+      : await readLiveWorkload({
+          host: required(host, "--host"),
+          identity: required(identity, "--identity"),
+          namespace,
+          name,
+          resource,
+          timeoutMs: Math.max(1, Math.min(40_000, deadline - Date.now())),
+        });
+    if (!observation || observation.ok) {
+      const assessment = observation
+        ? assessComputeWorkloadReadiness({
+            expected,
+            live: observation.resource,
+          })
+        : { ready: true as const };
       if (assessment.ready) {
         // Controller Ready can precede the provider applying this revision. Keep
         // convergence inside THIS budget until the canonical public host proves
@@ -91,7 +104,7 @@ export async function main(): Promise<void> {
           : "matched";
         if (version === "matched" && Date.now() <= deadline) {
           process.stdout.write(
-            `[compute-workload-ready] ${namespace}/${name} Ready at current generation${versionTarget ? `; public buildSha=${versionTarget.sourceSha}` : ""}\n`
+            `[compute-workload-ready] ${namespace}/${name} ${publicOnly ? "Public revision verified" : "Ready at current generation"}${versionTarget ? `; public buildSha=${versionTarget.sourceSha}` : ""}\n`
           );
           return;
         }
@@ -189,9 +202,9 @@ function timeoutHint(reason: string): string {
     control_plane_unreachable: "the control-plane host did not answer",
     read_timeout: "the control-plane read timed out",
     public_source_mismatch:
-      "the controller reports Ready but the canonical public host still serves a different source SHA",
+      "the canonical public host still serves a different source SHA",
     public_version_unavailable:
-      "the controller reports Ready but the canonical public host has not provided exact source proof",
+      "the canonical public host has not provided exact source proof",
   };
   return hints[reason] ?? "";
 }
