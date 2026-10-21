@@ -121,8 +121,10 @@ iptables -A DOCKER-USER -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$INTERN
 # already installed. Package state alone is insufficient: save can succeed with
 # no IPv4 plugin, leaving the installed firewall unpersisted across a reboot.
 persistence_ready() {
-  local plugin
-  [ "$(dpkg-query -W -f='${Status}' iptables-persistent 2>/dev/null)" = 'install ok installed' ] || return 1
+  local plugin package_status
+  package_status="$(dpkg-query -W -f='${Status}' iptables-persistent 2>/dev/null)" || return 1
+  # Selection (install/hold) is separate from the installed state and error flag.
+  case "$package_status" in 'install ok installed'|'hold ok installed') ;; *) return 1 ;; esac
   command -v netfilter-persistent >/dev/null 2>&1 || return 1
   plugin="$(dpkg-query -L iptables-persistent 2>/dev/null | awk '!found && /\/netfilter-persistent\/plugins[.]d\/15-ip4tables$/ {print; found=1}')" || return 1
   [ -n "$plugin" ] && [ -f "$plugin" ] && [ -x "$plugin" ]

@@ -412,8 +412,12 @@ cat > "$FAKEBIN/dpkg-query" <<'EOF'
 set -euo pipefail
 case "$*" in
   '-W -f=${Status} iptables-persistent')
-    [ "$(cat "$PERSISTENCE_STATE")" = installed ] || exit 1
-    printf 'install ok installed' ;;
+    case "$(cat "$PERSISTENCE_STATE")" in
+      installed) printf 'install ok installed' ;;
+      held) printf 'hold ok installed' ;;
+      broken) printf 'install reinstreq installed' ;;
+      *) exit 1 ;;
+    esac ;;
   '-L iptables-persistent') printf '%s\n' "$PERSISTENCE_PLUGIN" ;;
   *) exit 9 ;;
 esac
@@ -668,6 +672,22 @@ ok "large-chain reconciliation drains iptables output and preserves unmanaged fe
 [ -s "$PERSISTENCE_CALLS" ] || fail "healthy path skipped persistence save"
 grep -q 'persistence_dependency=healthy apt=skipped' "$TMPROOT/harden.log" || fail "healthy skip branch not observable"
 ok "healthy package, persistence command and executable package-owned plugin skip apt entirely"
+
+printf 'held\n' > "$PERSISTENCE_STATE"
+run_harden
+[ ! -s "$APT_CALLS" ] || fail "healthy held package invoked apt"
+grep -q 'persistence_dependency=healthy apt=skipped' "$TMPROOT/harden.log" || fail "held healthy path not observed"
+ok "healthy held persistence stays on its installed version without any apt operation"
+
+printf 'broken\n' > "$PERSISTENCE_STATE"
+FAKE_APT_MODE=incomplete; export FAKE_APT_MODE
+: > "$PERSISTENCE_CALLS"
+if PATH="$FAKEBIN:$PATH" bash "$HARDEN" > "$TMPROOT/broken-package.log" 2>&1; then
+  fail "reinstreq package was treated as healthy"
+fi
+[ ! -s "$PERSISTENCE_CALLS" ] || fail "broken package claimed persistence save"
+grep -q 'reason=install_postcheck_failed' "$TMPROOT/broken-package.log" || fail "broken package failed for wrong reason"
+ok "an installed package requiring reinstallation cannot pass the healthy predicate"
 
 printf 'missing\n' > "$PERSISTENCE_STATE"
 rm "$PERSISTENCE_PLUGIN"
