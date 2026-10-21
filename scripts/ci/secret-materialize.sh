@@ -494,7 +494,7 @@ if [[ "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" == "db-ready" ]]; then
   observation="$(remote "docker run --rm --network host -e PGPASSWORD='${probe_password}' -e PGCONNECT_TIMEOUT=5 postgres:15 psql -h '${COGNI_LANE_DB_HOST}' -p 5432 -U '${probe_role}' -d '${probe_database}' -XAtv ON_ERROR_STOP=1 -c 'SELECT public.database_recovery_probe();'")" \
     || fail "DB-ready native probe receipt unavailable"
   # Read aggregate and version from the SAME authoritative response. The cache
-  # deliberately contains values only and cannot authorize a versioned rebind.
+  # deliberately contains values only and cannot authorize a versioned probe reattestation.
   binding_bank="$(cogni_openbao_read_path "$DEPLOY_ENVIRONMENT" database-reliability-actuator)" \
     || fail "DB-ready binding bank unavailable"
   prior_bindings="$(jq -er '.data.data.DATABASE_RECOVERY_PROBE_URLS_JSON // "[]"' <<<"$binding_bank")" \
@@ -509,7 +509,7 @@ if [[ "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" == "db-ready" ]]; then
   next_bindings="$(jq -c .bindings <<<"$binding_plan")"
   if [[ "$(jq -r '.rebind != null' <<<"$binding_plan")" == true ]]; then
     binding_version="$(jq -er '.data.metadata.version | select(type=="number" and .>0 and floor==.)' <<<"$binding_bank")" \
-      || fail "DB-ready host rebind requires an existing KV version"
+      || fail "DB-ready probe reattestation requires an existing KV version"
     # Native proof must not race a canonical credential rotation. No retries or
     # repair of component drift: the concurrent owner wins.
     current_probe="$(cogni_openbao_read_path "$DEPLOY_ENVIRONMENT" "$probe_service")" \
@@ -518,15 +518,24 @@ if [[ "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" == "db-ready" ]]; then
       || fail "DB-ready canonical probe changed during qualification"
     printf '%s' "$next_bindings" > "${CACHE_DIR}/host-rebind-bindings"
     # Patch exactly one field at the observed bank version, never flush_batch's
-    # unversioned patch/put fallback. A CAS conflict aborts without replay.
+    # unversioned patch/put fallback. Use the SAME trusted SSH argv directly:
+    # remote()/bao_exec() retry transport failures and could replay this mutation.
     patch_result="$(jq -n --rawfile bindings "${CACHE_DIR}/host-rebind-bindings" '{DATABASE_RECOVERY_PROBE_URLS_JSON:$bindings}' \
-      | bao_exec -i "kv patch -format=json -method=patch -cas=${binding_version} 'cogni/${DEPLOY_ENVIRONMENT}/database-reliability-actuator' -" 2>/dev/null)" \
-      || fail "DB-ready host rebind CAS refused; no replay"
+      | "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao kv patch -format=json -method=patch -cas=${binding_version} 'cogni/${DEPLOY_ENVIRONMENT}/database-reliability-actuator' -" 2>/dev/null)" \
+      || fail "DB-ready probe reattestation CAS failed or outcome unknown; no replay; reconcile before retry"
     applied_version="$(jq -er --argjson before "$binding_version" '.data.version | select(. == $before + 1)' <<<"$patch_result")" \
-      || fail "DB-ready host rebind applied but version receipt unavailable; reconcile before retry"
+      || fail "DB-ready probe reattestation applied but version receipt unavailable; reconcile before retry"
+    # CAS may already have applied even if this read fails. Reconcile, never
+    # replay: independently read the same bank through its authoritative reader.
+    readback_bank="$(cogni_openbao_read_path "$DEPLOY_ENVIRONMENT" database-reliability-actuator)" \
+      || fail "DB-ready probe reattestation applied; aggregate readback unknown; reconcile before retry"
+    jq -e --argjson applied "$applied_version" --slurpfile expected "${CACHE_DIR}/host-rebind-bindings" \
+      '.data.metadata.version as $version | ($version | type == "number") and ($version >= $applied) and ((.data.data.DATABASE_RECOVERY_PROBE_URLS_JSON | fromjson) == $expected[0])' \
+      <<<"$readback_bank" >/dev/null 2>&1 \
+      || fail "DB-ready probe reattestation applied; aggregate readback mismatch or unknown; reconcile before retry"
     # Only allowlisted credential-free evidence reaches CI/Loki.
-    safe_receipt="$(jq -c --argjson before "$binding_version" --argjson after "$applied_version" '.rebind + {beforeVersion:$before,afterVersion:$after}' <<<"$binding_plan")"
-    log "DB-ready host rebind applied receipt=${safe_receipt}"
+    safe_receipt="$(jq -c --argjson before "$binding_version" --argjson after "$applied_version" '.rebind + {beforeVersion:$before,afterVersion:$after,readbackMatched:true}' <<<"$binding_plan")"
+    log "DB-ready probe reattestation applied receipt=${safe_receipt}"
   elif [[ "$next_bindings" == "$prior_bindings" ]]; then
     log 'DB-ready binding converged; created=0'
   else

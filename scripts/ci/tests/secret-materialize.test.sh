@@ -72,6 +72,12 @@ done
 [ "$#" -gt 0 ] && shift # root@host
 cmd="$*"
 PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$cmd"
+rc=$?
+if [[ "${FAKE_CAS_TRANSPORT_RESET:-0}" == 1 && "$cmd" == *'bao kv patch '* && "$cmd" == *'-cas='* && "$rc" == 0 ]]; then
+  echo 'Connection reset by peer' >&2
+  exit 255 # mutation applied; caller lost the response
+fi
+exit "$rc"
 EOF
 chmod +x "$FAKEBIN/ssh"
 
@@ -118,6 +124,7 @@ if [ "${1:-}" = "exec" ]; then
       patch_body="$(cat)"
       jq -e 'keys == ["DATABASE_RECOVERY_PROBE_URLS_JSON"]' <<<"$patch_body" >/dev/null || exit 9
       printf '%s' "$(jq -r .DATABASE_RECOVERY_PROBE_URLS_JSON <<<"$patch_body")" > "${FAKE_BAO_ROOT}/cogni/candidate-a/database-reliability-actuator/DATABASE_RECOVERY_PROBE_URLS_JSON"
+      touch "$FAKE_CAS_APPLIED_MARKER"
       printf '{"data":{"version":8}}\n'
       exit 0
     fi
@@ -184,7 +191,18 @@ if [[ "${!#}" == http://127.0.0.1:8200/v1/cogni/data/* ]]; then
       touch "$FAKE_PROBE_READ_MARKER"
     fi
   fi
-  printf '{"data":{"metadata":{"version":7},"data":%s}}' "$data" > "$out"
+  version=7
+  if [[ "$path" == 'candidate-a/database-reliability-actuator' && -f "${FAKE_CAS_APPLIED_MARKER:-/nonexistent}" ]]; then
+    version=8
+    case "${FAKE_READBACK_FAIL:-0}" in
+      1)
+        printf '{"errors":["fixture readback unavailable"]}' > "$out"
+        printf '503'; exit 0 ;;
+      stale) version=7 ;;
+      mismatch) data="$(jq '.DATABASE_RECOVERY_PROBE_URLS_JSON="[]"' <<<"$data")" ;;
+    esac
+  fi
+  printf '{"data":{"metadata":{"version":%s},"data":%s}}' "$version" "$data" > "$out"
   printf '200'; exit 0
 fi
 config="" body_file="" output_file="" wanted_alias=""
@@ -693,6 +711,8 @@ run_db_ready() {
   env PATH="$FAKEBIN:$PATH" REAL_PNPM="$REAL_PNPM" \
     FAKE_REBIND_PLAN_FILE="${FAKE_REBIND_PLAN_FILE:-}" FAKE_CAS_FAIL="${FAKE_CAS_FAIL:-0}" FAKE_CAS_LOG="$TMPROOT/cas-log" \
     FAKE_PROBE_DRIFT="${FAKE_PROBE_DRIFT:-0}" FAKE_PROBE_READ_MARKER="$TMPROOT/probe-read-marker" \
+    FAKE_READBACK_FAIL="${FAKE_READBACK_FAIL:-0}" FAKE_CAS_APPLIED_MARKER="$TMPROOT/cas-applied-marker" \
+    FAKE_CAS_TRANSPORT_RESET="${FAKE_CAS_TRANSPORT_RESET:-0}" \
     VM_HOST=fake DOMAIN=test.cognidao.org SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
     SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" FAKE_REMOTE_PATH="$FAKEBIN" FAKE_BAO_ROOT="$BAO_ROOT" \
     COGNI_CATALOG_ROOT="$DB_READY_CATALOG" SECRET_MATERIALIZE_PHASE=db-ready \
@@ -731,7 +751,7 @@ mv "$TMPROOT/wrong.json" "$TMPROOT/probe.json"
 if run_db_ready >/dev/null 2>&1; then echo 'foreign native DB accepted' >&2; exit 1; fi
 [ ! -s "$TMPROOT/db-ready-writes" ]
 
-# Source-reviewed host rebind: test the real pure planner through the real
+# Source-reviewed hostname-only probe reattestation: test the real pure planner through the real
 # db-ready shell, with a test-only pnpm wrapper supplying an armed fixture.
 # No production CLI/env mechanism can replace its source-owned plan.
 jq '.database="cogni_node_template" | .observedAt=(now | todate)' "$TMPROOT/probe.json" > "$TMPROOT/right.json"
@@ -739,18 +759,44 @@ mv "$TMPROOT/right.json" "$TMPROOT/probe.json"
 cp "$BINDING_FILE" "$TMPROOT/binding-good"
 jq -c 'map(if .nodeSlug=="node-template" then .dsn |= sub("10.0.0.1";"10.0.0.9") else . end)' "$BINDING_FILE" > "$TMPROOT/binding-old"
 cp "$TMPROOT/binding-old" "$BINDING_FILE"
-jq '[.[] | select(.nodeSlug=="node-template") | {id:"fixture-rehost",nodeId,nodeSlug,environment,oldHost:"10.0.0.9",newHost:"10.0.0.1",machineId:.substrateHost,authorization:{state:"armed",appliedMigrationReceipt:{reference:"https://example.invalid/test-only-applied-receipt",oldSourceFenced:true}}}]' "$BINDING_FILE" > "$TMPROOT/armed-plan"
+jq '[.[] | select(.nodeSlug=="node-template") | {id:"fixture-rehost",operation:"hostname-only-probe-reattestation",nodeId,nodeSlug,environment,oldHost:"10.0.0.9",newHost:"10.0.0.1",machineId:.substrateHost,authorization:{state:"armed",receipt:{reference:"https://example.invalid/test-only-authorization-receipt"}}}]' "$BINDING_FILE" > "$TMPROOT/armed-plan"
 FAKE_REBIND_PLAN_FILE="$TMPROOT/armed-plan"
 : > "$TMPROOT/cas-log"
 run_db_ready > "$TMPROOT/rebind-out"
 [ "$(cat "$TMPROOT/cas-log")" = attempt ]
 [ "$(jq -S . "$BINDING_FILE")" = "$(jq -S . "$TMPROOT/binding-good")" ]
-grep -q '"beforeVersion":7,"afterVersion":8' "$TMPROOT/rebind-out"
+grep -q '"beforeVersion":7,"afterVersion":8,"readbackMatched":true' "$TMPROOT/rebind-out"
 if grep -qF "$probe_password_before" "$TMPROOT/rebind-out"; then echo 'host rebind leaked probe password' >&2; exit 1; fi
 : > "$TMPROOT/cas-log"
 run_db_ready > /dev/null
 [ ! -s "$TMPROOT/cas-log" ] # no-op, no second CAS
+# Successful CAS with unavailable, stale or mismatched readback is
+# applied/unknown, never replayed or reported as matched (including HTTP200).
+for FAKE_READBACK_FAIL in 1 stale mismatch; do
+  cp "$TMPROOT/binding-old" "$BINDING_FILE"
+  rm -f "$TMPROOT/cas-applied-marker"
+  : > "$TMPROOT/cas-log"
+  if run_db_ready > "$TMPROOT/readback-failure-out" 2>&1; then echo 'invalid reattestation readback accepted' >&2; exit 1; fi
+  [ "$(cat "$TMPROOT/cas-log")" = attempt ]
+  [ "$(jq -S . "$BINDING_FILE")" = "$(jq -S . "$TMPROOT/binding-good")" ]
+  grep -q 'applied; aggregate readback.*reconcile before retry' "$TMPROOT/readback-failure-out"
+  if grep -q 'readbackMatched' "$TMPROOT/readback-failure-out"; then echo 'invalid readback claimed matched' >&2; exit 1; fi
+done
+unset FAKE_READBACK_FAIL
+# A reset AFTER actual application must not enter remote()'s transport retry.
 cp "$TMPROOT/binding-old" "$BINDING_FILE"
+rm -f "$TMPROOT/cas-applied-marker"
+: > "$TMPROOT/cas-log"
+FAKE_CAS_TRANSPORT_RESET=1
+if run_db_ready > "$TMPROOT/cas-unknown-out" 2>&1; then echo 'lost CAS response accepted' >&2; exit 1; fi
+[ "$(cat "$TMPROOT/cas-log")" = attempt ]
+[ "$(jq -S . "$BINDING_FILE")" = "$(jq -S . "$TMPROOT/binding-good")" ]
+grep -q 'CAS failed or outcome unknown; no replay; reconcile before retry' "$TMPROOT/cas-unknown-out"
+if grep -q 'readbackMatched' "$TMPROOT/cas-unknown-out"; then echo 'lost CAS response claimed matched' >&2; exit 1; fi
+unset FAKE_CAS_TRANSPORT_RESET
+cp "$TMPROOT/binding-old" "$BINDING_FILE"
+rm -f "$TMPROOT/cas-applied-marker"
+: > "$TMPROOT/cas-log"
 FAKE_CAS_FAIL=1
 if run_db_ready > /dev/null 2>&1; then echo 'host rebind CAS conflict accepted' >&2; exit 1; fi
 [ "$(cat "$TMPROOT/cas-log")" = attempt ] # no retry
@@ -762,7 +808,7 @@ if run_db_ready > /dev/null 2>&1; then echo 'concurrent canonical probe rotation
 [ ! -s "$TMPROOT/cas-log" ]
 cmp "$BINDING_FILE" "$TMPROOT/binding-old"
 unset FAKE_PROBE_DRIFT
-jq '.[0].authorization={state:"unarmed",appliedMigrationReceipt:null}' "$TMPROOT/armed-plan" > "$TMPROOT/unarmed-plan"
+jq '.[0].authorization={state:"unarmed",receipt:null}' "$TMPROOT/armed-plan" > "$TMPROOT/unarmed-plan"
 FAKE_REBIND_PLAN_FILE="$TMPROOT/unarmed-plan"
 : > "$TMPROOT/cas-log"
 if run_db_ready > /dev/null 2>&1; then echo 'unarmed host rebind accepted' >&2; exit 1; fi
@@ -854,8 +900,8 @@ const v=JSON.parse(fs.readFileSync(0,'utf8'));
 try { process.stdout.write(JSON.stringify(planRecoveryBinding(v.input,v.plans,v.now))); }
 catch(e) { process.stderr.write(recoveryBindingErrorCategory(e)+'\\n'); process.exitCode=1; }
 """
-plan = {"id":"fixture-rehost", "nodeId":valid["nodeId"], "nodeSlug":"operator", "environment":"production", "oldHost":"10.0.0.9", "newHost":"10.0.0.1", "machineId":"a"*32,
-        "authorization":{"state":"armed","appliedMigrationReceipt":{"reference":"https://example.invalid/test-only-applied-receipt","oldSourceFenced":True}}}
+plan = {"id":"fixture-rehost", "operation":"hostname-only-probe-reattestation", "nodeId":valid["nodeId"], "nodeSlug":"operator", "environment":"production", "oldHost":"10.0.0.9", "newHost":"10.0.0.1", "machineId":"a"*32,
+        "authorization":{"state":"armed","receipt":{"reference":"https://example.invalid/test-only-authorization-receipt"}}}
 rehost=copy.deepcopy(valid)
 rehost["existingBindings"][1]["dsn"]=dsn.replace("10.0.0.1","10.0.0.9")
 def invoke_plan(value=rehost, plans=None, now=1792566000000):
@@ -868,11 +914,13 @@ assert r.returncode==0, r.stderr
 assert json.loads(r.stdout)["bindings"]==[other,binding]
 assert json.loads(r.stdout)["rebind"]["credentialsPreserved"] is True
 assert canary not in json.dumps(json.loads(r.stdout)["rebind"])
-for field,value in [("machineId","b"*32),("nodeId",other["nodeId"]),("oldHost","10.0.0.8"),("newHost","10.0.0.8")]:
+for field,value in [("machineId","b"*32),("nodeId",other["nodeId"]),("oldHost","10.0.0.8"),("newHost","10.0.0.8"),("operation","data-cutover")]:
     wrong={**plan,field:value}; r=invoke_plan(plans=[wrong],now=fixture_now)
     assert r.returncode==1 and not r.stdout and canary not in r.stderr, field
-unarmed={**plan,"authorization":{"state":"unarmed","appliedMigrationReceipt":None}}
+unarmed={**plan,"authorization":{"state":"unarmed","receipt":None}}
 assert invoke_plan(plans=[unarmed],now=fixture_now).returncode==1
+legacy_fence_claim={**plan,"authorization":{**plan["authorization"],"oldSourceFenced":True}}
+assert invoke_plan(plans=[legacy_fence_claim],now=fixture_now).returncode==1
 assert invoke_plan(plans=[],now=fixture_now).returncode==1
 assert invoke_plan(plans=[plan,plan],now=fixture_now).returncode==1
 assert invoke_plan(now=fixture_now+120001).returncode==1

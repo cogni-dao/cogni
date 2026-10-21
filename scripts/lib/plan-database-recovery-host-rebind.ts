@@ -3,9 +3,9 @@
 
 /**
  * Module: `@scripts/lib/plan-database-recovery-host-rebind`
- * Purpose: Plan an explicitly reviewed hostname-only recovery-binding repair.
+ * Purpose: Plan reviewed hostname-only probe evidence reattestation.
  * Scope: Pure validation and private stdin/stdout; does not access native hosts or secret stores.
- * Invariants: Ordinary sealing is unchanged; only source-approved plans may rebind;
+ * Invariants: Ordinary sealing is unchanged; only source-approved plans may reattest;
  * native cluster, credentials and sibling bindings survive; caller performs CAS.
  * Side-effects: IO (CLI only)
  * Links: scripts/ci/secret-materialize.sh
@@ -23,18 +23,15 @@ import {
 } from "./materialize-database-recovery-binding";
 
 const authorizationSchema = z.discriminatedUnion("state", [
-  z
-    .object({ state: z.literal("unarmed"), appliedMigrationReceipt: z.null() })
-    .strict(),
+  z.object({ state: z.literal("unarmed"), receipt: z.null() }).strict(),
   z
     .object({
       state: z.literal("armed"),
-      // A reviewed source reference to actual applied migration/fencing evidence.
-      // An arbitrary URL or equality observation is not itself that evidence.
-      appliedMigrationReceipt: z
+      // Reviewed source authorization for this read-only evidence operation.
+      // This is not an attestation of data migration or producer/source fencing.
+      receipt: z
         .object({
           reference: z.string().url(),
-          oldSourceFenced: z.literal(true),
         })
         .strict(),
     })
@@ -43,6 +40,7 @@ const authorizationSchema = z.discriminatedUnion("state", [
 const planSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9-]{1,100}$/),
+    operation: z.literal("hostname-only-probe-reattestation"),
     nodeId: z.string().uuid(),
     nodeSlug: z.string(),
     environment: z.enum(["candidate-a", "preview", "production"]),
@@ -55,18 +53,25 @@ const planSchema = z
 export type HostRebindPlan = z.infer<typeof planSchema>;
 
 // Runtime authority is reviewed source, never an environment flag or CLI plan.
-// UNARMED: owner 08:00 identity equalities do not prove the old source is fenced.
-// Arm only in a separately reviewed source change with actual applied evidence.
+// Reviewed authorization is limited to this probe-only operation.
+// It never asserts data migration, old-VM retirement or source fencing.
 export const reviewedHostRebindPlans: readonly HostRebindPlan[] = [
   {
     id: "operator-production-32gb-rehost-20261021",
+    operation: "hostname-only-probe-reattestation",
     nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
     nodeSlug: "operator",
     environment: "production",
     oldHost: "5.199.162.44",
     newHost: "84.32.244.43",
     machineId: "9e8bb1a5190947e7b7a29f5d1a0d4f71",
-    authorization: { state: "unarmed", appliedMigrationReceipt: null },
+    authorization: {
+      state: "armed",
+      receipt: {
+        reference:
+          "https://github.com/cogni-dao/cogni/pull/2861#issuecomment-6314019935",
+      },
+    },
   },
 ];
 
@@ -145,7 +150,8 @@ export function planRecoveryBinding(
       planSha256: createHash("sha256")
         .update(JSON.stringify(plan))
         .digest("hex"),
-      migrationReceipt: plan.authorization.appliedMigrationReceipt.reference,
+      operation: plan.operation,
+      authorizationReceipt: plan.authorization.receipt.reference,
       nodeId: input.nodeId,
       environment: input.environment,
       identityPreserved: true,
