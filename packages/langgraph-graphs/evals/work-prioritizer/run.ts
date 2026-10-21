@@ -36,6 +36,8 @@ import {
   gradeCoverage,
   gradeDeltaCoverage,
   gradeGates,
+  gradeHarmEvidence,
+  gradeP0Precision,
   gradePriorReference,
   gradeRationale,
   gradeResponsiveness,
@@ -47,12 +49,11 @@ import {
   type Scorecard,
   type SnapshotItem,
   scorecardMarkdown,
-  softP0Precision,
   WRITE_MODE_CHECKS,
 } from "./score";
 
 interface Config {
-  softP0PrecisionTarget: number;
+  p0PrecisionTarget: number;
   runTimeoutMs: number;
   minScheduledCycles: number;
   scheduledWaitMs: number;
@@ -429,6 +430,16 @@ async function runEval(underTest: string): Promise<void> {
           }
         : null
     ),
+    "harm evidence (full review)": c1.payload
+      ? gradeHarmEvidence(c1.payload, fixture.pmLabels.p0)
+      : none("no decision (cycle 1)"),
+    "p0 precision vs PM (full review)": c1.payload
+      ? gradeP0Precision(
+          c1.payload,
+          fixture.pmLabels.p0,
+          config.p0PrecisionTarget
+        )
+      : none("no decision (cycle 1)"),
     responsiveness: gradeResponsiveness(c3.payload, seeded.id),
     [`scheduled cycles at SHA ≥ ${config.minScheduledCycles}`]: {
       pass: scheduled >= config.minScheduledCycles,
@@ -446,15 +457,7 @@ async function runEval(underTest: string): Promise<void> {
     decisionIds: [c1.id, c2.id, c3.id].filter((x): x is string => Boolean(x)),
     checks,
     skipped: [...WRITE_MODE_CHECKS],
-    soft: {
-      p0PrecisionVsPm: c1.payload
-        ? softP0Precision(c1.payload, fixture.pmLabels.p0)
-        : 0,
-      p0PrecisionSource: `full-review:${c1.id ?? "none"}`,
-      target: config.softP0PrecisionTarget,
-      cycleMs,
-      notes,
-    },
+    soft: { cycleMs, notes },
     pass: Object.values(checks).every((c) => c.pass),
   };
   console.log(scorecardMarkdown(card));

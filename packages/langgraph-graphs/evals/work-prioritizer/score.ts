@@ -309,15 +309,39 @@ export function mergeLabelled(
   return out;
 }
 
-/** Soft: share of p0 picks that the PM table also put at p0 (0 when p0 is empty). */
-export function softP0Precision(
+/** Behavioral: share of p0 picks the PM table also put at p0 (an empty p0 scores 0) ≥ target. */
+export function gradeP0Precision(
+  payload: DecisionPayload,
+  pmP0: readonly string[],
+  target: number
+): CheckResult {
+  const p0 = p0Of(payload);
+  const hits = p0.filter((id) => pmP0.includes(id)).length;
+  const precision = p0.length ? hits / p0.length : 0;
+  const reason = `${hits}/${p0.length} p0 picks in the PM p0 set {${pmP0.join(", ")}} = ${precision.toFixed(2)} (target ≥ ${target})`;
+  return precision >= target ? ok(reason) : fail(reason);
+}
+
+/**
+ * Hard (regression guard for the lost-harm parse): when the PM labels any p0, a full review must carry
+ * at least one judgment with real harm evidence — otherwise nothing can ever reach p0.
+ */
+export function gradeHarmEvidence(
   payload: DecisionPayload,
   pmP0: readonly string[]
-): number {
-  const p0 = p0Of(payload);
-  return p0.length
-    ? p0.filter((id) => pmP0.includes(id)).length / p0.length
-    : 0;
+): CheckResult {
+  if (pmP0.length === 0) return ok("no PM p0 labels — not applicable");
+  const harmed = payload.judgments.filter(
+    (j) => j.judgment.harmIfWait.text !== "none"
+  );
+  const timed = harmed.filter((j) => j.judgment.harmIfWait.withinDays !== null);
+  return harmed.length
+    ? ok(
+        `${harmed.length}/${payload.judgments.length} judgments carry harm (${timed.length} with harmDays)`
+      )
+    : fail(
+        `0/${payload.judgments.length} judgments carry harm evidence (every harmIfWait is "none")`
+      );
 }
 
 export interface Scorecard {
@@ -332,10 +356,6 @@ export interface Scorecard {
   /** Checks not run in this mode (the write section). */
   readonly skipped?: readonly string[];
   readonly soft: {
-    readonly p0PrecisionVsPm: number;
-    readonly target: number;
-    /** Which table was graded (eval cycle 1, the full review). */
-    readonly p0PrecisionSource?: string;
     /** Soft observations (e.g. a cycle that crossed 00:00 UTC). */
     readonly notes?: readonly string[];
     /** Wall time of each eval cycle (ms) — a cycle must fit inside the schedule cadence. */
@@ -358,7 +378,6 @@ export function scorecardMarkdown(card: Scorecard): string {
         `| ${name} | ${r.pass ? "pass" : "**FAIL**"} | ${r.reason.split("|").join("/")} |`
     ),
     `| cycle wall time (soft) | ${(card.soft.cycleMs ?? []).every((m) => m <= 300_000) ? "pass" : "over 5 min"} | ${(card.soft.cycleMs ?? []).map((m) => `${Math.round(m / 1000)}s`).join(", ") || "-"} (cron is every 5 min) |`,
-    `| p0 precision vs PM table (soft) | ${card.soft.p0PrecisionVsPm >= card.soft.target ? "pass" : "below target"} | ${card.soft.p0PrecisionVsPm.toFixed(2)} (target ≥ ${card.soft.target}, reported only) |`,
     ...(card.soft.notes ?? []).map((n) => `| note (soft) | - | ${n} |`),
     ...(card.skipped ?? []).map(
       (n) => `| ${n} | skipped | write section — the graph is propose-only |`

@@ -1,6 +1,6 @@
 {
-  "$comment": "Gate = every hard + behavioral check in score.ts passes (no tunable bars). softP0PrecisionTarget is reported only (the PM table was used in design). minScheduledCycles/scheduledWaitMs: the governance schedule (*/5 on candidate-a) must run the graph that many times at the SHA, waited for at most that long after the eval cycles. Change with a reasoned commit (GOLDEN_UPDATE_DISCIPLINE).",
-  "softP0PrecisionTarget": 0.666,
+  "$comment": "Gate = every hard + behavioral check in score.ts passes. p0PrecisionTarget: share of the full review's p0 picks that the PM table (fixture.json pmLabels.p0) also puts at p0 — behavioral since the live v4.2 lost-harm regression (precision 0.67 -> 0.00). minScheduledCycles/scheduledWaitMs: the governance schedule (*/5 on candidate-a) must run the graph that many times at the SHA, waited for at most that long after the eval cycles. Change with a reasoned commit (GOLDEN_UPDATE_DISCIPLINE).",
+  "p0PrecisionTarget": 0.666,
   "runTimeoutMs": 420000,
   "minScheduledCycles": 2,
   "scheduledWaitMs": 660000

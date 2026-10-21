@@ -22,9 +22,11 @@ import {
   gradeCoverage,
   gradeDeltaCoverage,
   gradeGates,
+  gradeHarmEvidence,
   gradeIncidentApplied,
   gradeIncidentDemoted,
   gradeObservedStability,
+  gradeP0Precision,
   gradePriorReference,
   gradeRationale,
   gradeResponsiveness,
@@ -33,7 +35,6 @@ import {
   gradeZeroWrites,
   mergeLabelled,
   scorecardMarkdown,
-  softP0Precision,
 } from "../../evals/work-prioritizer/score";
 import type {
   DecisionPayload,
@@ -321,13 +322,52 @@ describe("work-prioritizer graders", () => {
     expect(gradeResponsiveness(null, "bug.9").pass).toBe(false);
   });
 
-  it("soft precision and the markdown scorecard", () => {
-    expect(
-      softP0Precision(
-        decision([row("bug.1", 0), row("bug.2", 0)]),
-        FIXTURE.pmLabels.p0
-      )
-    ).toBe(0.5);
+  it("p0 precision vs PM is behavioral: ≥ 2/3 passes, an empty or off-label p0 fails", () => {
+    const pm = ["bug.1", "bug.2", "bug.5"];
+    const at = (ids: string[]) =>
+      gradeP0Precision(decision(ids.map((id) => row(id, 0))), pm, 0.666).pass;
+    expect(at(["bug.1", "bug.2", "bug.5"])).toBe(true);
+    expect(at(["bug.1", "bug.2", "bug.9"])).toBe(true);
+    expect(at(["bug.1", "bug.8", "bug.9"])).toBe(false);
+    expect(at([])).toBe(false);
+  });
+
+  it("harm evidence is hard: a full review whose every harm is 'none' fails when the PM labels a p0", () => {
+    const allNone = decision([row("bug.1", 2), row("bug.2", 2)]);
+    const none = {
+      ...allNone,
+      judgments: allNone.judgments.map((j) => ({
+        ...j,
+        judgment: {
+          ...j.judgment,
+          harmIfWait: { text: "none", evidenceId: j.itemId, withinDays: null },
+        },
+      })),
+    };
+    expect(gradeHarmEvidence(none, ["bug.1"]).pass).toBe(false);
+    expect(gradeHarmEvidence(none, []).pass).toBe(true);
+    const one = {
+      ...none,
+      judgments: [
+        {
+          ...(none.judgments[0] as (typeof none.judgments)[number]),
+          judgment: {
+            ...(none.judgments[0]
+              ?.judgment as (typeof none.judgments)[number]["judgment"]),
+            harmIfWait: {
+              text: "503s for users",
+              evidenceId: "bug.1",
+              withinDays: 1,
+            },
+          },
+        },
+        ...none.judgments.slice(1),
+      ],
+    };
+    expect(gradeHarmEvidence(one, ["bug.1"]).pass).toBe(true);
+  });
+
+  it("the markdown scorecard", () => {
     const md = scorecardMarkdown({
       buildSha: "abc",
       baseUrl: "u",
@@ -341,7 +381,7 @@ describe("work-prioritizer graders", () => {
         gates: { pass: false, reason: "x|y" },
       },
       skipped: ["responsiveness (applied)"],
-      soft: { p0PrecisionVsPm: 0.5, target: 0.666 },
+      soft: {},
       pass: false,
     });
     expect(md).toContain("FAIL");

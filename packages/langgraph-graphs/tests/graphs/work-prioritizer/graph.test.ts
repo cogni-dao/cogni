@@ -382,6 +382,46 @@ describe("langgraph:work-prioritizer v4 propose mode (mock LLM)", () => {
     expect(decide?.args.tags).toContain("propose");
   });
 
+  it("REGRESSION: a live harm clause (either spelling) survives into the table and puts ≤7-day harm at p0", async () => {
+    const items = [
+      workItem("bug.5002"),
+      workItem("bug.5005"),
+      workItem("task.00"),
+    ];
+    const { payload } = await run({
+      world: { items },
+      judge: (id) =>
+        id === "bug.5002"
+          ? {
+              ...standardJudge(id),
+              impact: { [R]: 3 },
+              harm: undefined,
+              harmDays: undefined,
+              harmIfWait: {
+                text: "High I/O wait degrades substrate performance.",
+                withinDays: 2,
+              },
+            }
+          : id === "bug.5005"
+            ? {
+                ...standardJudge(id),
+                svc: "expedite",
+                harmDays: 1,
+                harm: "Users experience 503 errors under normal load.",
+              }
+            : standardJudge(id),
+    });
+    const p0 = payload?.table.filter((r) => r.to === 0).map((r) => r.itemId);
+    expect(p0?.sort()).toEqual(["bug.5002", "bug.5005"]);
+    expect(
+      payload?.table.find((r) => r.itemId === "bug.5002")?.harmIfWait
+    ).toMatchObject({
+      text: "High I/O wait degrades substrate performance.",
+      withinDays: 2,
+    });
+    expect(payload?.table.find((r) => r.itemId === "task.00")?.to).toBe(1);
+  });
+
   it("POLICY_REQUIRED: no policy in the trigger ⇒ no_policy, no tool call, no model call", async () => {
     const { events, status } = await run({
       world: { items: ITEMS.slice(0, 2) },

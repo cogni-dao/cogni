@@ -7,8 +7,8 @@
  * Scope: Pure apart from the injected `ask` callback; does not call tools/LLMs or read env.
  * Invariants: PROMPT_VERSIONED; BACKLOG_IS_UNTRUSTED_DATA (item/hub text is JSON in <untrusted_*> blocks);
  *   JUDGE_NOT_RANK + NO_TOOLS_AT_JUDGE (enums + evidence ids only; code ranks); TOLERANT_PARSING (<think>,
- *   fences, array or JSONL, each line validated alone; null harm/harmDays — 27/54 replayed lines — become
- *   "none"/null); JUDGE_PROTOCOL (batches, each dropped item re-asked once alone, else `unjudged`).
+ *   fences, array or JSONL, each line validated alone; harm as `harm`/`harmDays` OR `harmIfWait`; null
+ *   harm/harmDays — 27/54 replayed lines — become "none"/null); JUDGE_PROTOCOL (batches, each dropped item re-asked once alone, else `unjudged`).
  * Side-effects: none
  * Links: schema.ts (ItemJudgment), rank.ts, .context/prioritizer-design-v4.md
  * @public
@@ -119,6 +119,9 @@ export function buildJudgeUserMessage(input: {
 }
 
 const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+/** A sentence given as a string or as `{text}`. */
+const text = (v: unknown) =>
+  str(v) ?? str((v as { text?: unknown } | null)?.text);
 
 /** One compact judge line `{id,impact,svc,effort,harmDays,whyNow,harm,ev,date?,sup?}` → ItemJudgment | error. */
 export function normalizeJudgment(raw: unknown): ItemJudgment | string {
@@ -128,7 +131,10 @@ export function normalizeJudgment(raw: unknown): ItemJudgment | string {
   const svc = String(r.svc).toLowerCase();
   const date = str(r.date) ?? null;
   const evidenceId = str(r.ev) ?? id;
-  const days = r.harmDays;
+  // gpt-oss-120b also answers harm as the full-shape `harmIfWait: {text, withinDays}` (live: every
+  // v4.2 harm was lost when only `harm`/`harmDays` were read) — both spellings carry the p0 signal.
+  const hw = r.harmIfWait as { withinDays?: unknown } | null | undefined;
+  const days = Number(r.harmDays ?? hw?.withinDays ?? Number.NaN);
   const parsed = ItemJudgmentSchema.safeParse({
     itemId: id,
     impact: r.impact ?? {},
@@ -136,12 +142,11 @@ export function normalizeJudgment(raw: unknown): ItemJudgment | string {
     serviceClass: svc === "fixed_date" && !date ? "standard" : svc,
     fixedDate: svc === "fixed_date" ? date : null,
     effort: String(r.effort).toUpperCase(),
-    whyNow: { text: str(r.whyNow)?.slice(0, 400) ?? "-", evidenceId },
+    whyNow: { text: text(r.whyNow)?.slice(0, 400) ?? "-", evidenceId },
     harmIfWait: {
-      text: str(r.harm)?.slice(0, 400) ?? "none",
+      text: (text(r.harm) ?? text(hw))?.slice(0, 400) ?? "none",
       evidenceId,
-      withinDays:
-        typeof days === "number" && days >= 0 ? Math.round(days) : null,
+      withinDays: Number.isFinite(days) && days >= 0 ? Math.round(days) : null,
     },
     supersededBy: str(r.sup) && r.sup !== id ? r.sup : null,
   });

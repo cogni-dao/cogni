@@ -237,6 +237,37 @@ describe("TOLERANT_PARSING (replay-observed failure modes)", () => {
     });
   });
 
+  it("REGRESSION (live 20261021t0804): harm survives in both spellings gpt-oss-120b emits", () => {
+    // Replayed from the live v4.2 decisions: work-prioritizer-20261021t0420-decision (p0 = bug.5002/5003/5005).
+    const compact = parseJudgeOutput(
+      '{"id":"bug.5005","impact":{"dao-goal-substrate-reliability":2},"svc":"standard","effort":"M","harmDays":1,"whyNow":"Session admission timeouts produce 503 errors under normal load.","harm":"Users experience 503 errors under normal load.","ev":"bug.5005"}'
+    ).judgments[0];
+    expect(compact?.harmIfWait).toEqual({
+      text: "Users experience 503 errors under normal load.",
+      evidenceId: "bug.5005",
+      withinDays: 1,
+    });
+    const fullShape = parseJudgeOutput(
+      '{"id":"bug.5002","impact":{"dao-goal-substrate-reliability":3},"svc":"standard","effort":"M","whyNow":{"text":"Current-position write starvation inflates I/O wait."},"harmIfWait":{"text":"High I/O wait degrades substrate performance.","withinDays":2},"ev":"bug.5002"}'
+    ).judgments[0];
+    expect(fullShape?.harmIfWait).toEqual({
+      text: "High I/O wait degrades substrate performance.",
+      evidenceId: "bug.5002",
+      withinDays: 2,
+    });
+    expect(fullShape?.whyNow.text).toBe(
+      "Current-position write starvation inflates I/O wait."
+    );
+    expect(
+      normalizeJudgment({
+        id: "t",
+        svc: "standard",
+        effort: "M",
+        harmDays: "3",
+      })
+    ).toMatchObject({ harmIfWait: { withinDays: 3 } });
+  });
+
   it("normalizes enum case; a fixed_date without a date is standard", () => {
     expect(
       normalizeJudgment({ id: "t", svc: "EXPEDITE", effort: "s" })

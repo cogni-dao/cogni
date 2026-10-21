@@ -14,20 +14,21 @@ It then waits, with the SHA guarded, until the governance schedule has run the g
 
 **The gate.** The eval passes only if every hard check and every behavioral check passes. Exit code: 0 = PASS, 1 = FAIL, 3 = INCONCLUSIVE. INCONCLUSIVE means the candidate's `/version.buildSha` changed mid-run because another flight evicted the SHA under test. The eval checks the SHA before and after every cycle and stops without scoring.
 
-| check                       | kind       | passes when                                                                                                                                              |
-| --------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| coverage (full review)      | hard       | cycle 1 is `scope: full`; every actionable item has exactly one row and a judgment (or is listed unjudged)                                               |
-| coverage (delta)            | hard       | cycle 3 is `scope: delta`; 100% of the independently recomputed delta (p0/p1, unprioritized, changed, new) is re-considered; table still whole           |
-| ceilings                    | hard       | p0/p1/p2 counts ≤ the policy ceilings (unless pin overflow is reported), on cycles 1 and 3                                                               |
-| rationale                   | hard       | every p0/p1 cites an approved objective and an evidenced why-now; a p0 also needs an evidenced harm ≤ 7 days                                             |
-| gates                       | hard       | no blocked, duplicate, fixture, or injection item at p0/p1                                                                                               |
-| prior reference             | hard       | `priorDecisionId` is set whenever a prior decision existed                                                                                               |
-| unjudged                    | hard       | ≤ 10% of rows are unjudged                                                                                                                               |
-| zero writes (propose)       | hard       | no work-item revision or status changes across the eval cycles                                                                                           |
-| stability (2 cycles)        | behavioral | cycle 2 reuses every judgment (0 model calls), ends `no_change`, and keeps the same p0                                                                   |
-| responsiveness              | behavioral | the seeded live incident is judged expedite and reaches p0 in cycle 3's plan                                                                             |
-| scheduled cycles at SHA ≥ 2 | hard       | the governance schedule ran the graph successfully ≥ `minScheduledCycles` times since `--landed-at`                                                      |
-| p0 precision vs PM table    | soft       | reported only; target ≥ 2/3; graded on the full-review table                                                                                             |
-| write section (5 checks)    | skipped    | listed as skipped: the graph is propose-only. Applied rows, live backlog p0, applied responsiveness, observed A→B, and demotion return with a write path |
+| check                            | kind       | passes when                                                                                                                                              |
+| -------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| coverage (full review)           | hard       | cycle 1 is `scope: full`; every actionable item has exactly one row and a judgment (or is listed unjudged)                                               |
+| coverage (delta)                 | hard       | cycle 3 is `scope: delta`; 100% of the independently recomputed delta (p0/p1, unprioritized, changed, new) is re-considered; table still whole           |
+| ceilings                         | hard       | p0/p1/p2 counts ≤ the policy ceilings (unless pin overflow is reported), on cycles 1 and 3                                                               |
+| rationale                        | hard       | every p0/p1 cites an approved objective and an evidenced why-now; a p0 also needs an evidenced harm ≤ 7 days                                             |
+| gates                            | hard       | no blocked, duplicate, fixture, or injection item at p0/p1                                                                                               |
+| prior reference                  | hard       | `priorDecisionId` is set whenever a prior decision existed                                                                                               |
+| unjudged                         | hard       | ≤ 10% of rows are unjudged                                                                                                                               |
+| zero writes (propose)            | hard       | no work-item revision or status changes across the eval cycles                                                                                           |
+| stability (2 cycles)             | behavioral | cycle 2 reuses every judgment (0 model calls), ends `no_change`, and keeps the same p0                                                                   |
+| responsiveness                   | behavioral | the seeded live incident is judged expedite and reaches p0 in cycle 3's plan                                                                             |
+| scheduled cycles at SHA ≥ 2      | hard       | the governance schedule ran the graph successfully ≥ `minScheduledCycles` times since `--landed-at`                                                      |
+| harm evidence (full review)      | hard       | when the PM labels any p0, at least one full-review judgment carries harm (not "none"); guards the lost-harm parse                                       |
+| p0 precision vs PM (full review) | behavioral | ≥ `p0PrecisionTarget` (2/3) of the full review's p0 picks are in the fixture's PM p0 set; an empty p0 fails                                              |
+| write section (5 checks)         | skipped    | listed as skipped: the graph is propose-only. Applied rows, live backlog p0, applied responsiveness, observed A→B, and demotion return with a write path |
 
 `fixture.json` labels the candidate-a seeded backlog: the duplicates, the injection item, the fixtures, and the PM p0 set. Update it with a reasoned commit when that seed changes.
