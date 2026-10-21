@@ -46,6 +46,7 @@ import * as P from "./plan";
 import { policyFromTrigger, type WorkPrioritizationPolicy } from "./policy";
 import {
   buildJudgeUserMessage,
+  type JudgeSample,
   judgeItems,
   WORK_PRIORITIZER_GRAPH_NAME,
   WORK_PRIORITIZER_PROMPT_VERSION,
@@ -74,6 +75,8 @@ export interface PrioritizerRunReport {
   readonly telemetry: PrioritizerCycleTelemetry;
   readonly payload: DecisionPayload | null;
   readonly errors: readonly string[];
+  /** First raw judge lines per batch + parse counts (logged as ai.work_prioritizer.judge_sample). */
+  readonly judgeSamples: readonly JudgeSample[];
 }
 
 const emptyEdo = () => ({
@@ -373,7 +376,12 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
       edo?.errors ?? [],
     ].flat();
     return {
-      structuredResponse: { telemetry, payload: state.payload, errors },
+      structuredResponse: {
+        telemetry,
+        payload: state.payload,
+        errors,
+        judgeSamples: judged?.fresh.samples ?? [],
+      },
       messages: [new AIMessage(JSON.stringify(telemetry))],
     };
   }

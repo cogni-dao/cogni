@@ -367,6 +367,9 @@ describe("langgraph:work-prioritizer v4 propose mode (mock LLM)", () => {
       rank: 1,
       expectedRevision: 2,
     });
+    // ai.work_prioritizer.judge_sample: one bounded sample per judge batch.
+    expect(report.judgeSamples).toHaveLength(2);
+    expect(report.judgeSamples[0]?.counts).toMatchObject({ parsed: 14 });
     expect(report.telemetry).toMatchObject({
       status: "planned",
       scope: "full",

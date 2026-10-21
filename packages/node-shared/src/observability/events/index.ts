@@ -26,6 +26,8 @@ export const EVENT_NAMES = {
   AI_TOOL_AUTHZ_DECISION: "ai.tool_authz.decision",
   /** One structured summary per work-prioritizer cycle (story.5096). */
   AI_WORK_PRIORITIZER_CYCLE: "ai.work_prioritizer.cycle",
+  /** First raw judge lines per batch + parse counts, one per judge batch (story.5096 debugging). */
+  AI_WORK_PRIORITIZER_JUDGE_SAMPLE: "ai.work_prioritizer.judge_sample",
   AI_CHAT_RECEIVED: "ai.chat_received",
   AI_CHAT_RESPONSE_STARTED: "ai.chat_response_started",
   AI_CHAT_STREAM_CLOSED: "ai.chat_stream_closed",

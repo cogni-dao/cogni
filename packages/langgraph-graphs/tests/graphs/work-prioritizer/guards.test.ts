@@ -28,7 +28,9 @@ import {
 } from "../../../src/graphs/work-prioritizer/guards";
 import { policyFromTrigger } from "../../../src/graphs/work-prioritizer/policy";
 import {
+  judgeItems,
   normalizeJudgment,
+  parseHarmDays,
   parseJudgeOutput,
 } from "../../../src/graphs/work-prioritizer/prompts";
 import { ItemJudgmentSchema } from "../../../src/graphs/work-prioritizer/schema";
@@ -266,6 +268,82 @@ describe("TOLERANT_PARSING (replay-observed failure modes)", () => {
         harmDays: "3",
       })
     ).toMatchObject({ harmIfWait: { withinDays: 3 } });
+  });
+
+  it("LENIENT_HARM_DAYS: numbers, the first integer in a string, and now-words", () => {
+    for (const [v, want] of [
+      [2, 2],
+      [1.6, 2],
+      [-1, null],
+      ["1", 1],
+      ["1 day", 1],
+      ["2d", 2],
+      ["≤7", 7],
+      ["<=3 days", 3],
+      ["<1", 0],
+      ["<3", 2],
+      ["48 hours", 2],
+      ["2 weeks", 14],
+      ["now", 0],
+      ["Immediate", 0],
+      ["ongoing", 0],
+      ["today", 0],
+      ["currently degrading", 0],
+      ["none", null],
+      ["unknown", null],
+      [null, null],
+      [undefined, null],
+    ] as const)
+      expect([v, parseHarmDays(v)]).toEqual([v, want]);
+  });
+
+  it("finds harm days under every key the model uses, top level or nested", () => {
+    const days = (extra: Record<string, unknown>) => {
+      const j = normalizeJudgment({
+        id: "t",
+        svc: "standard",
+        effort: "M",
+        ...extra,
+      });
+      return typeof j === "object" ? j.harmIfWait.withinDays : j;
+    };
+    expect(days({ harmDays: "1 day" })).toBe(1);
+    expect(days({ withinDays: 2 })).toBe(2);
+    expect(days({ harm_days: "3" })).toBe(3);
+    expect(days({ days: "≤7" })).toBe(7);
+    expect(
+      days({ harmDays: null, harmIfWait: { text: "x", withinDays: "2d" } })
+    ).toBe(2);
+    expect(days({ harmIfWait: { text: "x", harmDays: "now" } })).toBe(0);
+    expect(days({ harm: { text: "503s", days: "<1" } })).toBe(0);
+    expect(days({ harm: "503s" })).toBeNull();
+  });
+
+  it("judgeItems records one bounded sample per batch with parse counts", async () => {
+    const line = (id: string, harmDays: unknown) =>
+      JSON.stringify({
+        id,
+        svc: "standard",
+        effort: "M",
+        harm: "x".repeat(500),
+        harmDays,
+      });
+    const out = await judgeItems(
+      [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }],
+      3,
+      async (batch) =>
+        `<think>${"t".repeat(900)}</think>\n${batch.map((i, k) => line(i.id, k === 0 ? "1 day" : null)).join("\n")}`
+    );
+    expect(out.samples).toHaveLength(2);
+    expect(out.samples[0]?.counts).toEqual({
+      lines: 3,
+      parsed: 3,
+      withHarm: 3,
+      withHarmDays: 1,
+    });
+    expect(out.samples[0]?.lines).toHaveLength(3);
+    expect(out.samples[0]?.lines.every((l) => l.length <= 400)).toBe(true);
+    expect(out.samples[1]?.counts.parsed).toBe(1);
   });
 
   it("normalizes enum case; a fixed_date without a date is standard", () => {

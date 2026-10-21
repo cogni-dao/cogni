@@ -359,6 +359,12 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
               result.structuredOutput
             );
             if (fields) this.log.info(fields, "work-prioritizer cycle");
+            for (const sample of prioritizerJudgeSampleLogFields(
+              runId,
+              result.structuredOutput
+            )) {
+              this.log.info(sample, "work-prioritizer judge sample");
+            }
           })
           .catch(() => {
             // Run failure is already logged by the inproc error path.
@@ -526,6 +532,24 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       }),
     };
   }
+}
+
+/**
+ * One `ai.work_prioritizer.judge_sample` event per judge batch: the first raw judge lines (≤3 × 400
+ * chars, item text only — no secrets) and the parse counts, so a lost field is visible in Loki.
+ */
+export function prioritizerJudgeSampleLogFields(
+  runId: string,
+  structuredOutput: Record<string, unknown> | undefined
+): Record<string, unknown>[] {
+  const samples = structuredOutput?.judgeSamples;
+  if (!Array.isArray(samples)) return [];
+  return samples.slice(0, 10).map((sample, batch) => ({
+    event: EVENT_NAMES.AI_WORK_PRIORITIZER_JUDGE_SAMPLE,
+    runId,
+    batch,
+    ...(sample as Record<string, unknown>),
+  }));
 }
 
 /**

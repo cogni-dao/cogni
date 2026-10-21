@@ -123,6 +123,29 @@ const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 const text = (v: unknown) =>
   str(v) ?? str((v as { text?: unknown } | null)?.text);
 
+/**
+ * LENIENT_HARM_DAYS: a number, or the first integer in a string ("1 day"→1, "≤7"→7, "2d"→2, "<1"→0,
+ * "<3"→2, "48 hours"→2, "2 weeks"→14); "now/immediate/ongoing/today/current" → 0; anything else → null.
+ */
+export function parseHarmDays(v: unknown): number | null {
+  if (typeof v === "number") return v >= 0 ? Math.round(v) : null;
+  const s = typeof v === "string" ? v.toLowerCase() : "";
+  const n = /\d+/.exec(s);
+  if (!n) return /\b(now|immediate|ongoing|today|current)/.test(s) ? 0 : null;
+  const days = /hour|hr/.test(s)
+    ? Math.ceil(Number(n[0]) / 24)
+    : /week|wk/.test(s)
+      ? Number(n[0]) * 7
+      : Number(n[0]);
+  return /^\s*<(?!=)/.test(s) ? Math.max(0, days - 1) : days;
+}
+
+/** The harm-days value wherever the model put it: harmDays/withinDays/harm_days/days on an object. */
+const daysIn = (o: unknown) => {
+  const x = (o ?? {}) as Record<string, unknown>;
+  return x.harmDays ?? x.withinDays ?? x.harm_days ?? x.days;
+};
+
 /** One compact judge line `{id,impact,svc,effort,harmDays,whyNow,harm,ev,date?,sup?}` → ItemJudgment | error. */
 export function normalizeJudgment(raw: unknown): ItemJudgment | string {
   const r = (raw ?? {}) as Record<string, unknown>;
@@ -132,9 +155,9 @@ export function normalizeJudgment(raw: unknown): ItemJudgment | string {
   const date = str(r.date) ?? null;
   const evidenceId = str(r.ev) ?? id;
   // gpt-oss-120b also answers harm as the full-shape `harmIfWait: {text, withinDays}` (live: every
-  // v4.2 harm was lost when only `harm`/`harmDays` were read) — both spellings carry the p0 signal.
-  const hw = r.harmIfWait as { withinDays?: unknown } | null | undefined;
-  const days = Number(r.harmDays ?? hw?.withinDays ?? Number.NaN);
+  // v4.2 harm was lost when only `harm`/`harmDays` were read) — every spelling carries the p0 signal.
+  const hw = r.harmIfWait;
+  const days = parseHarmDays(daysIn(r) ?? daysIn(hw) ?? daysIn(r.harm));
   const parsed = ItemJudgmentSchema.safeParse({
     itemId: id,
     impact: r.impact ?? {},
@@ -146,7 +169,7 @@ export function normalizeJudgment(raw: unknown): ItemJudgment | string {
     harmIfWait: {
       text: (text(r.harm) ?? text(hw))?.slice(0, 400) ?? "none",
       evidenceId,
-      withinDays: Number.isFinite(days) && days >= 0 ? Math.round(days) : null,
+      withinDays: days,
     },
     supersededBy: str(r.sup) && r.sup !== id ? r.sup : null,
   });
@@ -183,7 +206,18 @@ export function parseJudgeOutput(text: string) {
   return { judgments, invalid };
 }
 
-/** JUDGE_PROTOCOL over `ask(batch) → reply text`. */
+/** The first raw lines of a batch reply (≤3 × 400 chars) and what parsing made of them — for the log. */
+export interface JudgeSample {
+  readonly lines: readonly string[];
+  readonly counts: {
+    lines: number;
+    parsed: number;
+    withHarm: number;
+    withHarmDays: number;
+  };
+}
+
+/** JUDGE_PROTOCOL over `ask(batch) → reply text`; one JudgeSample per batch call (not per repair). */
 export async function judgeItems<T extends { readonly id: string }>(
   items: readonly T[],
   batchSize: number,
@@ -192,14 +226,33 @@ export async function judgeItems<T extends { readonly id: string }>(
   const judgments = new Map<string, ItemJudgment>();
   const unjudged: string[] = [];
   const errors: string[] = [];
-  const once = async (batch: readonly T[]) => {
-    const parsed = parseJudgeOutput(await ask(batch));
+  const samples: JudgeSample[] = [];
+  const once = async (batch: readonly T[], sample = false) => {
+    const reply = await ask(batch);
+    const parsed = parseJudgeOutput(reply);
     errors.push(...parsed.invalid);
+    if (sample) {
+      const raw = reply.replace(
+        /<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi,
+        ""
+      );
+      const lines = raw.split("\n").filter((l) => l.trim());
+      const harm = parsed.judgments.map((j) => j.harmIfWait);
+      samples.push({
+        lines: lines.slice(0, 3).map((l) => l.trim().slice(0, 400)),
+        counts: {
+          lines: lines.length,
+          parsed: parsed.judgments.length,
+          withHarm: harm.filter((h) => h.text !== "none").length,
+          withHarmDays: harm.filter((h) => h.withinDays !== null).length,
+        },
+      });
+    }
     return parsed.judgments.map((j) => [j.itemId, j] as const);
   };
   for (let start = 0; start < items.length; start += batchSize) {
     const batch = items.slice(start, start + batchSize);
-    const got = new Map(await once(batch));
+    const got = new Map(await once(batch, true));
     for (const item of batch) {
       if (!got.has(item.id))
         for (const [k, j] of await once([item])) got.set(k, j);
@@ -208,5 +261,5 @@ export async function judgeItems<T extends { readonly id: string }>(
       else unjudged.push(item.id);
     }
   }
-  return { judgments, unjudged, errors };
+  return { judgments, unjudged, errors, samples };
 }
