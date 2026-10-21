@@ -15,6 +15,7 @@ import {
   initializeConfidence,
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
+import { type ActiveGoal, selectActiveGoals } from "../../domain/dao-goals.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
 import type {
   Citation,
@@ -105,6 +106,21 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       (a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)
     );
     return opts?.limit ? out.slice(0, opts.limit) : out;
+  }
+
+  async listActiveGoals(): Promise<ActiveGoal[]> {
+    // The fake holds only main-plane rows and has no status column, so every
+    // row is a non-deprecated candidate; the cap matches the Doltgres adapter.
+    return selectActiveGoals(
+      Array.from(this.rows.values()).map((r) => ({
+        id: r.id,
+        domain: r.domain,
+        entryType: r.entryType,
+        title: r.title,
+        content: r.content,
+        evaluateAt: r.evaluateAt ?? null,
+      }))
+    );
   }
 
   async searchKnowledge(

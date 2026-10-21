@@ -263,6 +263,7 @@ interface KnowledgeStorePort {
     opts?: { limit?: number }
   ): Promise<Knowledge[]>;
   knowledgeExists(id: string): Promise<boolean>; // shared FK check (knowledge-syntropy)
+  listActiveGoals(): Promise<ActiveGoal[]>; // ONE_GOAL_LIST: merged strategy `goal-*` hypotheses, not deprecated; throws past 3 (MAX_THREE_GOALS)
 
   // Read — domains
   listDomains(): Promise<string[]>; // distinct domain values from knowledge rows

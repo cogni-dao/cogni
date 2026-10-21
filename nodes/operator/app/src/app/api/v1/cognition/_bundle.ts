@@ -20,6 +20,9 @@
  *     is rendered IN FULL — the node MAP that rides alongside the invariant
  *     floor, so the git skeleton stays minimal and the Dolt orientation carries
  *     the node-specific substance.
+ *   - GOALS_AFTER_MISSION: the approved DAO goals (`listActiveGoals`) render as
+ *     `## Goals` right after the orientation, title + content verbatim; zero
+ *     goals renders `no approved goals`, a read failure `goals unavailable: …`.
  * Side-effects: none
  * Links: https://cognidao.org/knowledge/node-baas-substrate-model
  * @internal
@@ -135,6 +138,75 @@ export async function resolveOrientation(
   return null;
 }
 
+/** One approved DAO goal as the bundle renders it (title + content verbatim). */
+export interface GoalView {
+  id: string;
+  title: string;
+  content: string;
+}
+
+/**
+ * The Goals section state. `unavailable` is a visible line, never an omitted
+ * section (NO_GOALS_FAILS_LOUD): a session must be able to tell "no goals" from
+ * "could not read goals".
+ */
+export type GoalsSection =
+  | { status: "ok"; goals: readonly GoalView[] }
+  | { status: "unavailable"; reason: string };
+
+/** Minimal read surface `resolveGoals` needs — `KnowledgeStorePort.listActiveGoals`. */
+export interface GoalsLookupPort {
+  listActiveGoals(): Promise<readonly GoalView[]>;
+}
+
+/**
+ * Read the approved DAO goals by one direct query — not the PER_DOMAIN_LIMIT
+ * domain scan, which silently drops older rows (bug.5280). Any failure,
+ * including `TooManyActiveGoalsError` (MAX_THREE_GOALS) or an unconfigured hub,
+ * becomes a visible `unavailable` state rather than a missing section.
+ */
+export async function resolveGoals(
+  port: GoalsLookupPort | undefined
+): Promise<GoalsSection> {
+  if (!port) {
+    return { status: "unavailable", reason: "knowledge hub not configured" };
+  }
+  try {
+    const goals = await port.listActiveGoals();
+    return {
+      status: "ok",
+      goals: goals.map((g) => ({
+        id: g.id,
+        title: g.title,
+        content: g.content,
+      })),
+    };
+  } catch (e) {
+    return {
+      status: "unavailable",
+      reason: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+/** Render the `## Goals` section lines (title + content verbatim per goal). */
+export function renderGoalsLines(goals: GoalsSection): string[] {
+  const head = ["", "## Goals", ""];
+  if (goals.status === "unavailable") {
+    return [...head, `goals unavailable: ${escapeCell(goals.reason)}`];
+  }
+  if (goals.goals.length === 0) return [...head, "no approved goals"];
+  return [
+    ...head,
+    ...goals.goals.flatMap((g, i) => [
+      ...(i > 0 ? [""] : []),
+      `### ${g.title}`,
+      "",
+      g.content,
+    ]),
+  ];
+}
+
 export interface RenderBundleInput {
   node: string;
   name: string;
@@ -147,6 +219,8 @@ export interface RenderBundleInput {
   domainPointers: readonly CognitionDomainPointer[];
   /** The current node's `<slug>-agent-orientation` entry (full), or null if unseeded. */
   orientation: OrientationEntry | null;
+  /** Approved DAO goals, rendered right after the mission/orientation. */
+  goals: GoalsSection;
 }
 
 /**
@@ -164,6 +238,7 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     buildSha,
     toolingInvariants,
     orientation,
+    goals,
   } = input;
   const { skillsIndex, domainPointers } = input;
   // "2026-06-16 14:20" — human date, not an ISO wall of digits.
@@ -258,6 +333,7 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     `> Delivered at session start from ${origin}/api/v1/cognition — replaces git-synced AGENTS.md sprawl. (node \`${node}\` · build \`${buildSha}\`)`,
     "",
     ...orientationLines,
+    ...renderGoalsLines(goals),
     ...toolingFloor,
     "",
     "## Skills index (recall full content from the hub before acting)",

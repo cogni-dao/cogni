@@ -15,8 +15,14 @@ import type { ReservedSql, Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
 import { DoltgresKnowledgeContributionAdapter } from "../src/adapters/doltgres/contribution-adapter.js";
-import type { Principal } from "../src/domain/contribution-schemas.js";
-import { CitationTargetNotFoundError } from "../src/port/knowledge-store.port.js";
+import {
+  KnowledgeContributionEditSchema,
+  type Principal,
+} from "../src/domain/contribution-schemas.js";
+import {
+  CitationTargetNotFoundError,
+  HypothesisMissingEvaluateAtError,
+} from "../src/port/knowledge-store.port.js";
 
 const record = {
   id: "contrib-agent-1-abc123",
@@ -569,6 +575,65 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     );
     expect(insert).toBeDefined();
     expect(insert).toContain("designing a knowledge domain set");
+  });
+
+  it("inserts a hypothesis edit with evaluateAt + resolutionStrategy (bug.5504)", async () => {
+    // A goal/bet proposed through a focused inbox must carry its own
+    // appointment with truth; before bug.5504 the wire schema had no field for
+    // it, so no hypothesis could be added through /contributions.
+    const fake = new FakeSql();
+    const edit = KnowledgeContributionEditSchema.parse({
+      op: "insert",
+      entry: {
+        id: "goal-cognition-probe",
+        domain: "strategy",
+        title: "Goal: cognition probe renders verbatim",
+        content: "Statement: probe.",
+        entryType: "hypothesis",
+        evaluateAt: "2026-12-31T00:00:00.000Z",
+        resolutionStrategy: "manual",
+      },
+    });
+
+    await adapterFor(fake).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "propose a goal",
+      edits: [edit],
+    });
+
+    const insert = fake.conn.queries.find((q) =>
+      q.startsWith("INSERT INTO knowledge ")
+    );
+    expect(insert).toContain("evaluate_at, resolution_strategy");
+    expect(insert).toContain("'hypothesis'");
+    expect(insert).toContain("'2026-12-31T00:00:00.000Z', 'manual')");
+  });
+
+  it("rejects a hypothesis insert edit without evaluateAt (HYPOTHESIS_HAS_EVALUATE_AT)", async () => {
+    const fake = new FakeSql();
+    await expect(
+      adapterFor(fake).appendCommit({
+        contributionId: "contrib-agent-1-abc123",
+        principal: { id: "agent-1", kind: "agent" },
+        message: "propose a goal without a date",
+        edits: [
+          {
+            op: "insert",
+            entry: {
+              id: "goal-undated",
+              domain: "strategy",
+              title: "Goal: undated",
+              content: "Statement: no date.",
+              entryType: "hypothesis",
+            },
+          },
+        ],
+      })
+    ).rejects.toBeInstanceOf(HypothesisMissingEvaluateAtError);
+    expect(
+      fake.conn.queries.some((q) => q.startsWith("INSERT INTO knowledge "))
+    ).toBe(false);
   });
 
   it("persists use_when on an update edit", async () => {

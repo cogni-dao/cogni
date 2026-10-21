@@ -18,6 +18,11 @@
 
 import type { Sql } from "postgres";
 import { initializeConfidence } from "../../domain/confidence-policy.js";
+import {
+  type ActiveGoal,
+  GOAL_DOMAIN,
+  selectActiveGoals,
+} from "../../domain/dao-goals.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
 import type {
   Citation,
@@ -290,6 +295,32 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       }
     }
     return matched;
+  }
+
+  async listActiveGoals(): Promise<ActiveGoal[]> {
+    // Direct read of the main-plane `knowledge` table — contribution branches
+    // are separate Dolt branches and never appear here. The id-prefix and
+    // status checks run in `selectActiveGoals` (app layer) rather than SQL, the
+    // same Doltgres-safe idiom as `searchKnowledge`; the shelf is tiny.
+    const rows = await this.sql.unsafe(
+      `SELECT id, domain, entry_type, status, title, content, evaluate_at FROM knowledge WHERE entry_type = 'hypothesis' AND domain = ${escapeValue(GOAL_DOMAIN)}`
+    );
+    return selectActiveGoals(
+      rows.map((r) => {
+        const row = r as Record<string, unknown>;
+        return {
+          id: row.id as string,
+          domain: row.domain as string,
+          entryType: row.entry_type as string,
+          status: (row.status as string | null) ?? null,
+          title: row.title as string,
+          content: row.content as string,
+          evaluateAt: row.evaluate_at
+            ? new Date(row.evaluate_at as string)
+            : null,
+        };
+      })
+    );
   }
 
   async listDomains(): Promise<string[]> {

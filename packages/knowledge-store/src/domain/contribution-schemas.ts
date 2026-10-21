@@ -22,6 +22,8 @@
 
 import { z } from "zod";
 
+import { ResolutionStrategySchema } from "./schemas.js";
+
 export const PrincipalKindSchema = z.enum(["agent", "user"]);
 export type PrincipalKind = z.infer<typeof PrincipalKindSchema>;
 
@@ -57,6 +59,15 @@ export const KnowledgeEntryInputSchema = z.object({
   useWhen: z.string().min(1).max(320).optional(),
   entryType: z.string().min(1).max(64).optional(),
   tags: z.array(z.string().max(64)).max(32).optional(),
+  /**
+   * ISO datetime — the hypothesis appointment with truth. Required by the
+   * adapter when `entryType` is `hypothesis` (HYPOTHESIS_HAS_EVALUATE_AT), so a
+   * goal or bet can be proposed through a focused inbox (bug.5504). Kept a
+   * string on the wire; the adapter converts it to a timestamp at write.
+   */
+  evaluateAt: z.string().datetime({ offset: true }).optional(),
+  /** Namespaced resolver id on hypothesis rows (`agent`, `metric:<kpi-id>`, …). */
+  resolutionStrategy: ResolutionStrategySchema.optional(),
 });
 export type KnowledgeEntryInput = z.infer<typeof KnowledgeEntryInputSchema>;
 

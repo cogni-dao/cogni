@@ -794,12 +794,20 @@ async function applyEdit(input: {
 
   const entryId = edit.entry.id;
   const entryType = edit.entry.entryType ?? "finding";
+  // HYPOTHESIS_HAS_EVALUATE_AT on the generic insert path too (bug.5504): a
+  // goal/bet proposed through a focused inbox carries its own evaluateAt.
+  const evaluateAt = edit.entry.evaluateAt
+    ? new Date(edit.entry.evaluateAt)
+    : null;
+  if (entryType === "hypothesis" && !evaluateAt) {
+    throw new HypothesisMissingEvaluateAtError(entryId);
+  }
   const useWhenColumn = hasUseWhen ? ", use_when" : "";
   const useWhenValue = hasUseWhen
     ? `, ${edit.entry.useWhen ? escapeValue(stripDangerousControlChars(edit.entry.useWhen)) : "NULL"}`
     : "";
   await conn.unsafe(
-    `INSERT INTO knowledge (id, domain, entity_id, title, content${useWhenColumn}, entry_type, confidence_pct, source_type, source_ref, source_node, tags) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(stripDangerousControlChars(edit.entry.title))}, ${escapeValue(stripDangerousControlChars(edit.entry.content))}${useWhenValue}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"})`
+    `INSERT INTO knowledge (id, domain, entity_id, title, content${useWhenColumn}, entry_type, confidence_pct, source_type, source_ref, source_node, tags, evaluate_at, resolution_strategy) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(stripDangerousControlChars(edit.entry.title))}, ${escapeValue(stripDangerousControlChars(edit.entry.content))}${useWhenValue}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, ${escapeValue(evaluateAt)}, ${escapeValue(edit.entry.resolutionStrategy ?? null)})`
   );
 }
 
