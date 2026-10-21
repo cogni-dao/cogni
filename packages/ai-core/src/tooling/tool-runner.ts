@@ -15,7 +15,7 @@
  *   - AUTHZ_FAILS_CLOSED_BEFORE_EXEC: when authz is configured, missing identity, deny, or unavailable returns authz_* without executing the tool
  *   - NODE_POLICY_V0 (.context/authz-v0-design.md): a tool's declared `requires` picks the gate, with or without an adapter —
  *     "node.collaborate" = authenticated actor AND this node (code-only, no OpenFGA call); an AuthzAction = OpenFGA check
- *     on `node:<nodeId>` (no adapter → authz_unavailable); undeclared = the legacy `tool.execute` check on `tool:<id>` only when an
+ *     on `node:<nodeId>` (tool.execute instead uses its exact node/account/tool resource) (no adapter → authz_unavailable); undeclared = the legacy `tool.execute` check on `tool:<id>` only when an
  *     adapter is installed, ungated otherwise (documented compatibility path, unchanged). Missing actor/node or an
  *     OpenFGA throw → authz_unavailable. Each evaluated call reports one decision record (onAuthzDecision + span metadata).
  *   - SPAN_PORT_HANDLES_SCRUBBING: ai-core passes raw data to spanPort; adapter handles scrubbing/truncation
@@ -31,6 +31,7 @@ import type {
 } from "@cogni/authorization-core";
 import {
   authzNodeResource,
+  authzNodeToolResource,
   authzToolResource,
 } from "@cogni/authorization-core";
 import type {
@@ -68,7 +69,11 @@ export interface ToolExecOptions {
 }
 
 /** Which gate decided a tool call (authz v0). */
-export type ToolAuthzPolicy = "v0_collaborate" | "openfga_node" | "legacy_tool";
+export type ToolAuthzPolicy =
+  | "v0_collaborate"
+  | "openfga_node"
+  | "openfga_tool"
+  | "legacy_tool";
 
 /** One structured authz decision per evaluated tool call — for audit logs. */
 export interface ToolAuthzDecisionRecord {
@@ -543,6 +548,61 @@ export function createToolRunner(
       };
     }
 
+    if (requires === "tool.execute") {
+      const policy = "openfga_tool" as const;
+      if (!port || !actorId || !tenantId || !nodeId)
+        return {
+          code: "authz_unavailable",
+          policy,
+          reason: "missing_execution_authority",
+          safeMessage: "Execution authorization is unavailable",
+        };
+      if (
+        subjectId !== undefined ||
+        (!actorId.startsWith(`agent:${nodeId}/`) &&
+          !actorId.startsWith(`user:${nodeId}/`))
+      )
+        return {
+          code: "authz_denied",
+          policy,
+          reason: "invalid_execution_principal",
+          safeMessage: "Direct node-qualified authority is required",
+        };
+      try {
+        const decision = await port.check(
+          {
+            actorId,
+            action: "tool.execute",
+            resource: authzNodeToolResource(nodeId, tenantId, toolName),
+            context: {
+              nodeId,
+              tenantId,
+              runId,
+              toolCallId,
+              ...(graphId !== undefined ? { graphId } : {}),
+            },
+          },
+          { consistency: "higher_consistency" }
+        );
+        return decision.decision === "allow"
+          ? { code: "authz_allowed", policy, safeMessage: "" }
+          : {
+              code: decision.code,
+              policy,
+              ...(decision.reason !== undefined
+                ? { reason: decision.reason }
+                : {}),
+              safeMessage: authzSafeMessage(decision),
+            };
+      } catch {
+        return {
+          code: "authz_unavailable",
+          policy,
+          reason: "execution_check_failed",
+          safeMessage: "Execution authorization is unavailable",
+        };
+      }
+    }
     if (requires !== undefined) {
       // A privileged node action needs a real authority; without an adapter, fail closed.
       if (!port) {

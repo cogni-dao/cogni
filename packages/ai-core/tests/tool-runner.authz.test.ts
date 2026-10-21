@@ -521,3 +521,88 @@ describe.each([
     expect(exec).not.toHaveBeenCalled();
   });
 });
+
+describe("declared exact-account execution", () => {
+  const node = "11111111-1111-4111-8111-111111111111";
+  const account = "22222222-2222-4222-8222-222222222222";
+  const actor = `agent:${node}/33333333-3333-4333-8333-333333333333`;
+  const setup = (
+    config: Partial<ToolRunnerConfig> = {},
+    missingAuthority = false
+  ) => {
+    const tool = { ...makeTool(), requires: "tool.execute" as const };
+    const check = vi.fn(async () => ({
+      decision: "allow" as const,
+      code: "authz_allowed" as const,
+      checks: [],
+    }));
+    const configured = {
+      policy: createToolAllowlistPolicy([toolName]),
+      actorId: actor,
+      tenantId: account,
+      nodeId: node,
+      authz: { check },
+      ...config,
+    };
+    const { authz: _authority, ...withoutAuthority } = configured;
+    const runner = createToolRunner(
+      createStaticToolSource([tool]),
+      () => {},
+      missingAuthority ? withoutAuthority : configured
+    );
+    return { tool, check, runner };
+  };
+
+  it("requires authority even when legacy callers omit the adapter", async () => {
+    const { tool, runner } = setup({}, true);
+    expect(await runner.exec(toolName, {})).toMatchObject({
+      ok: false,
+      errorCode: "authz_unavailable",
+    });
+    expect(tool.exec).not.toHaveBeenCalled();
+  });
+
+  it("checks the exact node/account/tool at higher consistency before executing", async () => {
+    const { tool, check, runner } = setup();
+    expect(await runner.exec(toolName, {})).toMatchObject({ ok: true });
+    expect(check).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: actor,
+        action: "tool.execute",
+        resource: `tool:${node}/${account}/${toolName}`,
+        context: expect.objectContaining({ nodeId: node, tenantId: account }),
+      }),
+      { consistency: "higher_consistency" }
+    );
+    expect(tool.exec).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { subjectId: `user:${node}/44444444-4444-4444-8444-444444444444` },
+    { actorId: "agent:55555555-5555-4555-8555-555555555555/local" },
+  ])("refuses unsupported delegation and foreign principals before any side effect", async (config) => {
+    const { tool, check, runner } = setup(config);
+    expect(await runner.exec(toolName, {})).toMatchObject({
+      ok: false,
+      errorCode: "authz_denied",
+    });
+    expect(check).not.toHaveBeenCalled();
+    expect(tool.exec).not.toHaveBeenCalled();
+  });
+
+  it("does not execute after a deny or authority outage", async () => {
+    for (const code of ["authz_denied", "authz_unavailable"] as const) {
+      const check = vi.fn(async () => ({
+        decision: "deny" as const,
+        code,
+        checks: [],
+      }));
+      const { tool, runner } = setup({ authz: { check } });
+      expect(await runner.exec(toolName, {})).toMatchObject({
+        ok: false,
+        errorCode: code,
+      });
+      expect(tool.exec).not.toHaveBeenCalled();
+    }
+  });
+});

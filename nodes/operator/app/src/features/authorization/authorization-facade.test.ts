@@ -10,10 +10,14 @@ import {
   authzGrantExpiresAt,
   authzNodeAgentPrincipal,
   authzNodeUserPrincipal,
+  RemoteAuthorizationAdapter,
 } from "@cogni/authorization-core";
 import { describe, expect, it, vi } from "vitest";
 
-import { authorizationFacadeGrantOperation } from "@/contracts/authorization-facade.v1.contract";
+import {
+  authorizationFacadeCheckOperation,
+  authorizationFacadeGrantOperation,
+} from "@/contracts/authorization-facade.v1.contract";
 
 import {
   checkNodeBillingAccountAccess,
@@ -232,4 +236,168 @@ describe("authorization facade policy", () => {
       }).success
     ).toBe(false);
   });
+});
+
+describe("exact-account tool execution facade", () => {
+  const toolId = "core__sandbox_exec";
+  const execution = {
+    action: "tool.execute" as const,
+    actor: { kind: "agent" as const, id: AGENT_ID },
+    billingAccountId: ACCOUNT_ID,
+    toolId,
+  };
+
+  it("separates tool execution from account reads and checks revocation without a stale cache", async () => {
+    let granted = false;
+    const authorization = authorizationWith(async (params) =>
+      params.action === "tool.execute" && !granted ? deny() : allow()
+    );
+    expect(
+      await checkNodeBillingAccountAccess({ authorization }, NODE_ID, execution)
+    ).toMatchObject({ code: "authz_denied" });
+    granted = true;
+    expect(
+      await checkNodeBillingAccountAccess({ authorization }, NODE_ID, execution)
+    ).toMatchObject({ code: "authz_allowed" });
+    granted = false;
+    expect(
+      await checkNodeBillingAccountAccess({ authorization }, NODE_ID, execution)
+    ).toMatchObject({ code: "authz_denied" });
+    expect(authorization.check).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        action: "tool.execute",
+        resource: `tool:${NODE_ID}/${ACCOUNT_ID}/${toolId}`,
+      }),
+      { consistency: "higher_consistency" }
+    );
+  });
+
+  it("grants and revokes only an expiring executor edge after exact-account authority", async () => {
+    const authorization = authorizationWith(async () => allow());
+    const now = new Date("2026-10-21T00:00:00.000Z");
+    const input = {
+      operation: "grant" as const,
+      grantorUserId: GRANTOR_ID,
+      billingAccountId: ACCOUNT_ID,
+      target: { kind: "agent" as const, id: AGENT_ID },
+      role: "tool_executor" as const,
+      toolId,
+      expiresAt: "2026-10-21T00:30:00.000Z",
+    };
+    expect(
+      await mutateNodeBillingAccountAccess(
+        { authorization, now: () => now },
+        NODE_ID,
+        input
+      )
+    ).toMatchObject({ decision: "success" });
+    const tuple = {
+      user: authzNodeAgentPrincipal(NODE_ID, AGENT_ID),
+      relation: "executor",
+      object: `tool:${NODE_ID}/${ACCOUNT_ID}/${toolId}`,
+      condition: authzGrantExpiresAt(input.expiresAt),
+    };
+    expect(authorization.replaceRelation).toHaveBeenCalledWith(tuple, {
+      confirm: "higher_consistency",
+    });
+    const { expiresAt: _, ...revoke } = input;
+    await mutateNodeBillingAccountAccess({ authorization }, NODE_ID, {
+      ...revoke,
+      operation: "revoke",
+    });
+    expect(authorization.deleteRelations).toHaveBeenCalledWith(
+      [{ user: tuple.user, relation: tuple.relation, object: tuple.object }],
+      { confirm: "higher_consistency" }
+    );
+  });
+
+  it("denies a revoked grantor, excessive lifetime and tool/OBO confusion without writing", async () => {
+    const input = {
+      operation: "grant" as const,
+      grantorUserId: GRANTOR_ID,
+      billingAccountId: ACCOUNT_ID,
+      target: { kind: "agent" as const, id: AGENT_ID },
+      role: "tool_executor" as const,
+      toolId,
+      expiresAt: "2026-10-21T02:00:00.000Z",
+    };
+    for (const allowed of [false, true]) {
+      const authorization = authorizationWith(async () =>
+        allowed ? allow() : deny()
+      );
+      expect(
+        await mutateNodeBillingAccountAccess(
+          { authorization, now: () => new Date("2026-10-21T00:00:00Z") },
+          NODE_ID,
+          input
+        )
+      ).toMatchObject({ code: "authz_write_denied" });
+      expect(authorization.replaceRelation).not.toHaveBeenCalled();
+    }
+    expect(
+      authorizationFacadeGrantOperation.input.safeParse({
+        ...input,
+        subjectUserId: SUBJECT_ID,
+      }).success
+    ).toBe(false);
+    expect(
+      authorizationFacadeGrantOperation.input.safeParse({
+        ...input,
+        role: "reader",
+      }).success
+    ).toBe(false);
+    expect(
+      authorizationFacadeGrantOperation.input.safeParse({
+        ...input,
+        nodeId: OTHER_NODE_ID,
+      }).success
+    ).toBe(false);
+  });
+});
+
+it("remote execution rejects foreign scopes and uses the existing strict semantic facade", async () => {
+  const toolId = "core__sandbox_exec";
+  const authorization = authorizationWith(async (params) =>
+    params.action === "tool.execute" ? allow() : deny()
+  );
+  const transport = vi.fn<typeof fetch>(async (_url, init) => {
+    const parsed = authorizationFacadeCheckOperation.input.parse(
+      JSON.parse(String(init?.body))
+    );
+    expect(parsed).toMatchObject({
+      action: "tool.execute",
+      toolId,
+      actor: { kind: "agent", id: AGENT_ID },
+      billingAccountId: ACCOUNT_ID,
+    });
+    const decision = await checkNodeBillingAccountAccess(
+      { authorization },
+      NODE_ID,
+      parsed
+    );
+    return new Response(JSON.stringify(decision), {
+      status: decision.decision === "allow" ? 200 : 403,
+    });
+  });
+  const client = new RemoteAuthorizationAdapter({
+    baseUrl: "https://operator.example",
+    serviceToken: `cogni_naz_sk_v2_candidate-a_${NODE_ID}_${"a".repeat(64)}`,
+    testOnlyFetchImpl: transport,
+  });
+  const params = {
+    actorId: authzNodeAgentPrincipal(NODE_ID, AGENT_ID),
+    action: "tool.execute" as const,
+    resource: `tool:${NODE_ID}/${ACCOUNT_ID}/${toolId}`,
+    context: { nodeId: NODE_ID, tenantId: ACCOUNT_ID },
+  };
+  for (const invalid of [
+    { ...params, resource: `tool:${OTHER_NODE_ID}/${ACCOUNT_ID}/${toolId}` },
+    { ...params, context: { ...params.context, tenantId: SUBJECT_ID } },
+    { ...params, actorId: authzNodeAgentPrincipal(OTHER_NODE_ID, AGENT_ID) },
+    { ...params, subjectId: authzNodeUserPrincipal(NODE_ID, SUBJECT_ID) },
+  ])
+    expect(await client.check(invalid)).toMatchObject({ code: "authz_denied" });
+  expect(transport).not.toHaveBeenCalled();
+  expect(await client.check(params)).toMatchObject({ decision: "allow" });
+  expect(transport).toHaveBeenCalledOnce();
 });

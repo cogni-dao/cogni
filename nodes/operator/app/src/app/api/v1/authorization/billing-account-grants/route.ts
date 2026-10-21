@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/api/v1/authorization/billing-account-grants`
- * Purpose: Apply a bounded same-node reader or account-scoped OBO grant/revoke.
+ * Purpose: Apply bounded same-node account or exact-tool semantic grants.
  * Scope: Workload auth, strict semantic validation, policy delegation, audit response.
  * Invariants: GRANTOR_CAN_GRANT; NO_RAW_TUPLES; NO_OWNER_OR_NODE_ROLE_WRITES; HIGHER_CONSISTENCY.
  * Side-effects: OpenBao, DB, OpenFGA IO and structured audit logging.
@@ -108,6 +108,9 @@ export const POST = wrapRouteHandlerWithLogging(
         role: parsed.data.role,
         targetKind: parsed.data.target.kind,
         hasSubject: parsed.data.subjectUserId !== undefined,
+        ...(parsed.data.toolId !== undefined
+          ? { toolId: parsed.data.toolId }
+          : {}),
         decision: decision.decision,
         code: decision.code,
         requestId: parsed.data.requestId ?? ctx.reqId,

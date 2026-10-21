@@ -4,7 +4,7 @@
 /**
  * Module: `@contracts/authorization-facade.v1`
  * Purpose: Strict wire contracts for the node-scoped operator authorization facade.
- * Scope: Same-node billing-account read checks and semantic reader/OBO grants only.
+ * Scope: Same-node account reads, exact-account direct tool execution and semantic grants.
  * Invariants: NO_NODE_ID_INPUT; NO_RAW_TUPLES; UUID_LOCAL_IDS; STRICT_INPUT.
  * Side-effects: none
  * Links: task.5226, docs/spec/rbac.md
@@ -14,6 +14,7 @@
 import { z } from "zod";
 
 const LocalIdSchema = z.string().uuid();
+const ToolIdSchema = z.string().regex(/^[a-z][a-z0-9_]{0,127}$/);
 const RequestIdSchema = z.string().min(1).max(160);
 
 const ActorSchema = z.discriminatedUnion("kind", [
@@ -59,11 +60,31 @@ export const authorizationFacadeCheckOperation = {
   input: z
     .strictObject({
       actor: ActorSchema,
+      action: z.enum(["billing_account.read", "tool.execute"]).optional(),
+      toolId: ToolIdSchema.optional(),
       subjectUserId: LocalIdSchema.optional(),
       billingAccountId: LocalIdSchema,
       context: CheckContextSchema.optional(),
     })
     .superRefine((value, ctx) => {
+      if ((value.action === "tool.execute") !== (value.toolId !== undefined)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["toolId"],
+          message:
+            "tool.execute requires an exact toolId; account reads do not accept it",
+        });
+      }
+      if (
+        value.action === "tool.execute" &&
+        value.subjectUserId !== undefined
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["subjectUserId"],
+          message: "Delegated tool execution is not supported",
+        });
+      }
       if (value.subjectUserId !== undefined && value.actor.kind !== "agent") {
         ctx.addIssue({
           code: "custom",
@@ -80,7 +101,8 @@ const GrantInputSchema = z.strictObject({
   grantorUserId: LocalIdSchema,
   billingAccountId: LocalIdSchema,
   target: TargetSchema,
-  role: z.enum(["reader", "obo"]),
+  role: z.enum(["reader", "obo", "tool_executor"]),
+  toolId: ToolIdSchema.optional(),
   subjectUserId: LocalIdSchema.optional(),
   expiresAt: z.string().datetime(),
   requestId: RequestIdSchema.optional(),
@@ -91,7 +113,8 @@ const RevokeInputSchema = z.strictObject({
   grantorUserId: LocalIdSchema,
   billingAccountId: LocalIdSchema,
   target: TargetSchema,
-  role: z.enum(["reader", "obo"]),
+  role: z.enum(["reader", "obo", "tool_executor"]),
+  toolId: ToolIdSchema.optional(),
   subjectUserId: LocalIdSchema.optional(),
   requestId: RequestIdSchema.optional(),
 });
@@ -99,6 +122,13 @@ const RevokeInputSchema = z.strictObject({
 const SemanticGrantInputSchema = z
   .discriminatedUnion("operation", [GrantInputSchema, RevokeInputSchema])
   .superRefine((value, ctx) => {
+    if ((value.role === "tool_executor") !== (value.toolId !== undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["toolId"],
+        message: "Only tool_executor accepts and requires toolId",
+      });
+    }
     if (value.role === "obo") {
       if (value.target.kind !== "agent") {
         ctx.addIssue({
@@ -118,7 +148,7 @@ const SemanticGrantInputSchema = z
       ctx.addIssue({
         code: "custom",
         path: ["subjectUserId"],
-        message: "reader access does not accept subjectUserId",
+        message: "direct access does not accept subjectUserId",
       });
     }
   });

@@ -3,7 +3,7 @@
 
 /**
  * Module: `@features/authorization/authorization-facade`
- * Purpose: Operator policy for node-scoped billing-account authorization checks and grants.
+ * Purpose: Operator policy for exact-account reads, direct tool execution and semantic grants.
  * Scope: Pure orchestration over the trusted AuthorizationPort; no HTTP or credential handling.
  * Invariants: NODE_NAMESPACE_FROM_CALLER; GRANTOR_CAN_GRANT; SEMANTIC_TUPLES_ONLY; HIGHER_CONSISTENCY.
  * Side-effects: OpenFGA IO through the injected port.
@@ -18,6 +18,7 @@ import {
   authzBillingAccountResource,
   authzGrantExpiresAt,
   authzNodeAgentPrincipal,
+  authzNodeToolResource,
   authzNodeUserPrincipal,
 } from "@cogni/authorization-core";
 
@@ -53,6 +54,29 @@ export async function checkNodeBillingAccountAccess(
   nodeId: string,
   input: AuthorizationFacadeCheckInput
 ): Promise<AuthzDecision> {
+  if (input.action === "tool.execute") {
+    if (!input.toolId || input.subjectUserId !== undefined) {
+      return {
+        decision: "deny",
+        code: "authz_denied",
+        checks: [],
+        reason: "Invalid direct tool execution request",
+      };
+    }
+    return deps.authorization.check(
+      {
+        actorId: principal(nodeId, input.actor),
+        action: "tool.execute",
+        resource: authzNodeToolResource(
+          nodeId,
+          input.billingAccountId,
+          input.toolId
+        ),
+        context: { tenantId: input.billingAccountId, nodeId, ...input.context },
+      },
+      { consistency: "higher_consistency" }
+    );
+  }
   return deps.authorization.check({
     actorId:
       input.actor.kind === "agent"
@@ -158,6 +182,36 @@ export async function mutateNodeBillingAccountAccess(
     }
   }
 
+  if (input.role === "tool_executor") {
+    if (!input.toolId || input.subjectUserId !== undefined)
+      return denied("Tool grants require an exact tool and no subject");
+    if (
+      input.operation === "grant" &&
+      Date.parse(input.expiresAt) - (deps.now?.() ?? new Date()).getTime() >
+        60 * 60 * 1000
+    ) {
+      return denied("Tool grants must expire within one hour");
+    }
+    const tuple = {
+      user: principal(nodeId, input.target),
+      relation: "executor",
+      object: authzNodeToolResource(
+        nodeId,
+        input.billingAccountId,
+        input.toolId
+      ),
+      ...(input.operation === "grant"
+        ? { condition: authzGrantExpiresAt(input.expiresAt) }
+        : {}),
+    };
+    return input.operation === "grant"
+      ? deps.authorization.replaceRelation(tuple, {
+          confirm: "higher_consistency",
+        })
+      : deps.authorization.deleteRelations([tuple], {
+          confirm: "higher_consistency",
+        });
+  }
   const relation = input.role === "reader" ? "reader" : "delegate";
   const tuple = {
     user: principal(nodeId, input.target),

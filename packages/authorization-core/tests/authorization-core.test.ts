@@ -1202,3 +1202,36 @@ describe("listRelations", () => {
     });
   });
 });
+
+it("supplies server time for conditioned exact-account tool grants", async () => {
+  const now = new Date("2026-10-21T00:30:00Z");
+  const seen: OpenFgaCheckRequest[] = [];
+  const client: OpenFgaCheckClient = {
+    check: async (request) => {
+      seen.push(request);
+      return { allowed: true };
+    },
+  };
+  const adapter = new OpenFgaAuthorizationAdapter({
+    apiUrl: "http://openfga.test",
+    storeId: "store",
+    client,
+    now: () => now,
+  });
+  const resource =
+    "tool:11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/core__sandbox_exec";
+  await adapter.check({
+    actorId:
+      "agent:11111111-1111-4111-8111-111111111111/33333333-3333-4333-8333-333333333333",
+    action: "tool.execute",
+    resource,
+    context: { tenantId: "22222222-2222-4222-8222-222222222222" },
+  });
+  expect(seen).toEqual([
+    expect.objectContaining({
+      relation: "can_execute",
+      object: resource,
+      context: { current_time: now.toISOString() },
+    }),
+  ]);
+});

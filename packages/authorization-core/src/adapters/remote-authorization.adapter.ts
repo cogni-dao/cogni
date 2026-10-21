@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/authorization-core/adapters/remote-authorization`
  * Purpose: Portable, semantic client for the operator-mediated authorization facade.
- * Scope: Billing-account read checks and grant/revoke only. Does not forward raw tuples.
+ * Scope: Account reads, exact-account direct tool execution and semantic grants; no raw tuples.
  * Invariants: NODE_FROM_CREDENTIAL; SAME_NODE_ONLY; NO_RAW_TUPLES; FAIL_CLOSED_WITH_DISTINCTION.
  * Side-effects: IO (HTTP fetch)
  * Links: task.5226, docs/spec/rbac.md
@@ -231,6 +231,8 @@ export class RemoteAuthorizationAdapter
   }
 
   async check(params: AuthzCheckParams): Promise<AuthzDecision> {
+    if (params.action === "tool.execute")
+      return this.checkToolExecution(params);
     if (params.action !== "billing_account.read") {
       return unavailable("authorization facade capability is not supported");
     }
@@ -310,6 +312,75 @@ export class RemoteAuthorizationAdapter
     }
   }
 
+  private async checkToolExecution(
+    params: AuthzCheckParams
+  ): Promise<AuthzDecision> {
+    const actor = qualifiedReference(params.actorId);
+    const resource = new RegExp(
+      `^tool:(${NODE_ID_PATTERN})/(${NODE_ID_PATTERN})/([a-z][a-z0-9_]{0,127})$`,
+      "i"
+    ).exec(params.resource);
+    const credential = authorizationFacadeCredentialFromToken(
+      this.serviceToken
+    );
+    if (
+      !credential.lane ||
+      !actor ||
+      (actor.kind !== "agent" && actor.kind !== "user") ||
+      !LOCAL_ID_PATTERN.test(actor.localId) ||
+      actor.nodeId !== this.nodeId ||
+      !resource?.[1] ||
+      !resource[2] ||
+      !resource[3] ||
+      resource[1].toLowerCase() !== this.nodeId ||
+      params.context.tenantId.toLowerCase() !== resource[2].toLowerCase() ||
+      (params.context.nodeId !== undefined &&
+        params.context.nodeId.toLowerCase() !== this.nodeId) ||
+      params.subjectId !== undefined
+    ) {
+      return {
+        decision: "deny",
+        code: "authz_denied",
+        checks: [],
+        reason:
+          "Execution requires lane-bound, same-node, exact-account direct authority",
+      };
+    }
+    try {
+      const response = await this.post("/api/v1/authorization/check", {
+        action: "tool.execute",
+        toolId: resource[3],
+        actor: { kind: actor.kind, id: actor.localId },
+        billingAccountId: resource[2],
+        context: {
+          ...(params.context.runId !== undefined
+            ? { runId: params.context.runId }
+            : {}),
+          ...(params.context.toolCallId !== undefined
+            ? { toolCallId: params.context.toolCallId }
+            : {}),
+        },
+      });
+      if (response.status === 403)
+        return {
+          decision: "deny",
+          code: "authz_denied",
+          checks: [],
+          reason: "operator denied tool execution",
+        };
+      if (!response.ok)
+        return unavailable(
+          `operator execution authorization unavailable (status ${response.status})`
+        );
+      return (
+        parsedDecision(await response.json()) ??
+        unavailable("invalid execution authorization decision")
+      );
+    } catch {
+      return unavailable("execution authorization transport unavailable");
+    }
+  }
+
   grantBillingAccountAccess(
     input: BillingAccountGrantInput
   ): Promise<AuthzWriteDecision> {
@@ -330,6 +401,12 @@ export class RemoteAuthorizationAdapter
       !LOCAL_ID_PATTERN.test(input.grantorUserId) ||
       !LOCAL_ID_PATTERN.test(input.billingAccountId) ||
       !LOCAL_ID_PATTERN.test(input.target.id) ||
+      (input.role === "tool_executor" &&
+        !authorizationFacadeCredentialFromToken(this.serviceToken).lane) ||
+      (input.role === "tool_executor") !== (input.toolId !== undefined) ||
+      (input.toolId !== undefined &&
+        !/^[a-z][a-z0-9_]{0,127}$/.test(input.toolId)) ||
+      (input.role === "tool_executor" && input.subjectUserId !== undefined) ||
       (input.subjectUserId !== undefined &&
         !LOCAL_ID_PATTERN.test(input.subjectUserId)) ||
       (input.role === "reader" && input.subjectUserId !== undefined) ||

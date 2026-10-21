@@ -179,13 +179,15 @@ export type AuthzListDecision =
       readonly reason?: string;
     };
 
-export type BillingAccountGrantRole = "reader" | "obo";
+export type BillingAccountGrantRole = "reader" | "obo" | "tool_executor";
 
 export type BillingAccountGrantTarget =
   | { readonly kind: "user"; readonly id: string }
   | { readonly kind: "agent"; readonly id: string };
 
 export interface BillingAccountGrantInput {
+  /** Required only for the exact-account tool_executor role. */
+  readonly toolId?: string;
   /** Same-node human asserted by the node backend; operator verifies can_grant. */
   readonly grantorUserId: string;
   readonly billingAccountId: string;
@@ -199,6 +201,8 @@ export interface BillingAccountGrantInput {
 }
 
 export interface BillingAccountRevokeInput {
+  /** Required only for the exact-account tool_executor role. */
+  readonly toolId?: string;
   /** Same-node human asserted by the node backend; operator verifies can_grant. */
   readonly grantorUserId: string;
   readonly billingAccountId: string;
@@ -224,6 +228,19 @@ export interface BillingAccountGrantAdministrationPort {
 
 export function authzToolResource(toolId: string): string {
   return `tool:${toolId}`;
+}
+
+/** Exact-account tool namespace; never accepts a caller-authored resource path. */
+export function authzNodeToolResource(
+  nodeId: string,
+  billingAccountId: string,
+  toolId: string
+): string {
+  assertReferenceComponent("nodeId", nodeId);
+  assertReferenceComponent("billingAccountId", billingAccountId);
+  if (!/^[a-z][a-z0-9_]{0,127}$/.test(toolId))
+    throw new Error("invalid tool identifier");
+  return `tool:${nodeId}/${billingAccountId}/${toolId}`;
 }
 
 export function authzConnectionResource(connectionId: string): string {

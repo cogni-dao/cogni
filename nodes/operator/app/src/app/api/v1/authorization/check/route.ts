@@ -3,9 +3,9 @@
 
 /**
  * Module: `@app/api/v1/authorization/check`
- * Purpose: Mediate a node workload's same-node billing-account read check.
+ * Purpose: Mediate same-node account reads and exact-account direct tool execution.
  * Scope: Workload auth, strict HTTP validation, policy delegation, audit response.
- * Invariants: NODE_FROM_CREDENTIAL; BILLING_ACCOUNT_READ_ONLY; DENY_UNAVAILABLE_DISTINCT.
+ * Invariants: NODE_FROM_CREDENTIAL; EXACT_ACCOUNT_TOOL_PERMISSION; DENY_UNAVAILABLE_DISTINCT.
  * Side-effects: OpenBao, DB, OpenFGA IO and structured audit logging.
  * Links: task.5226, @features/authorization
  * @public
@@ -101,6 +101,10 @@ export const POST = wrapRouteHandlerWithLogging(
       {
         authenticatedNodeId: workload.node.nodeId,
         actorKind: parsed.data.actor.kind,
+        action: parsed.data.action ?? "billing_account.read",
+        ...(parsed.data.toolId !== undefined
+          ? { toolId: parsed.data.toolId }
+          : {}),
         hasSubject: parsed.data.subjectUserId !== undefined,
         billingAccountId: parsed.data.billingAccountId,
         decision: decision.decision,

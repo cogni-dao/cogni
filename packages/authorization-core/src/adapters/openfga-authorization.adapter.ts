@@ -721,7 +721,10 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
   }
 
   private planChecks(params: AuthzCheckParams): readonly PlannedSubcheck[] {
-    const conditionContext = this.conditionContextForAction(params.action);
+    const conditionContext = this.conditionContextForAction(
+      params.action,
+      params.resource
+    );
     const permission = {
       name: "permission" as const,
       user: params.subjectId ?? params.actorId,
@@ -790,11 +793,18 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
   }
 
   private conditionContextForAction(
-    action: AuthzCheckParams["action"]
+    action: AuthzCheckParams["action"],
+    resource: string
   ): Readonly<Record<string, unknown>> | undefined {
     if (
+      action === "tool.execute" &&
+      !/^tool:[^/]+\/[^/]+\/[^/]+$/.test(resource)
+    )
+      return undefined;
+    if (
       action !== "billing_account.read" &&
-      action !== "billing_account.act_as"
+      action !== "billing_account.act_as" &&
+      action !== "tool.execute"
     ) {
       return undefined;
     }

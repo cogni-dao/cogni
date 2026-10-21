@@ -362,9 +362,17 @@
                     "relation": "can_invoke"
                   }
                 }
+              },
+              {
+                "computedUserset": {
+                  "relation": "executor"
+                }
               }
             ]
           }
+        },
+        "executor": {
+          "this": {}
         }
       },
       "metadata": {
@@ -386,6 +394,18 @@
               },
               {
                 "type": "service"
+              }
+            ]
+          },
+          "executor": {
+            "directly_related_user_types": [
+              {
+                "type": "user",
+                "condition": "grant_not_expired"
+              },
+              {
+                "type": "agent",
+                "condition": "grant_not_expired"
               }
             ]
           }
