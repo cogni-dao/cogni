@@ -106,7 +106,11 @@ write_files:
   # DOCKER-USER iptables chain. Single-source script under
   # infra/provision/cherry/harden-docker-public-ports.sh; injected by
   # Terraform `templatefile()` so existing-VM SSH runs use the same logic.
-  # Links: bug.5167
+  # Its first run below also installs + enables the boot replay unit
+  # cogni-harden-docker-public-ports.service, which re-applies these rules
+  # whenever docker.service starts (Docker recreates DOCKER-USER empty on
+  # reboot). deploy-infra.sh refreshes the same unit on existing VMs.
+  # Links: bug.5167, story.5084
   - path: /usr/local/sbin/cogni-harden-docker-public-ports.sh
     owner: root:root
     permissions: "0755"
@@ -165,6 +169,7 @@ write_files:
       # ── Firewall: close Docker-published internal ports to public internet ──
       # Must run AFTER docker is up (DOCKER-USER chain is created by dockerd),
       # BEFORE compose services start publishing those ports. See bug.5167.
+      # Also installs + enables the reboot replay unit (story.5084).
       echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Hardening Docker-published ports..."
       bash /usr/local/sbin/cogni-harden-docker-public-ports.sh
 

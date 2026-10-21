@@ -88,6 +88,7 @@ export {
   REPO_CITATION_REGEX,
   stubAuthCapability,
   systemClock,
+  WorkItemPatchConflictError,
 } from "./capabilities";
 // Tool catalog
 export {

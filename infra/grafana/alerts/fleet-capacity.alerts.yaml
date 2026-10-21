@@ -20,7 +20,7 @@ groups:
             relativeTimeRange: { from: 300, to: 0 }
             model:
               datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'min by (job) (up{env="__ENVIRONMENT__",job=~"integrations/(unix|cadvisor|postgres)|prometheus.scrape.(app_metrics|worker_metrics)"})'
+              expr: 'min by (job) (up{env="__ENVIRONMENT__",job=~"integrations/(unix|cadvisor|postgres)|kubelet_cadvisor|prometheus.scrape.(app_metrics|worker_metrics)"})'
               instant: true
               refId: SIGNAL
           - refId: THRESHOLD
@@ -313,36 +313,10 @@ groups:
         noDataState: Alerting
         execErrState: Alerting
 
-      # VM capacity early warnings (story.5084). Warning tier above the 15%
-      # critical headroom rules: a co-resident VM that starts swapping pages its
-      # databases from disk long before it runs out of memory.
-      - uid: fleet-vm-memory-25
-        title: __ENVIRONMENT__ VM memory available below 25%
-        condition: THRESHOLD
-        for: 10m
-        data:
-          - refId: RATIO
-            datasourceUid: grafanacloud-prom
-            relativeTimeRange: { from: 900, to: 0 }
-            model:
-              datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'min(node_memory_MemAvailable_bytes{env="__ENVIRONMENT__"} / node_memory_MemTotal_bytes{env="__ENVIRONMENT__"})'
-              instant: true
-              refId: RATIO
-          - refId: THRESHOLD
-            datasourceUid: __expr__
-            model:
-              type: threshold
-              expression: RATIO
-              conditions:
-                - evaluator: { type: lt, params: [0.25] }
-              refId: THRESHOLD
-        labels: { severity: warning, proof_class: run }
-        annotations:
-          summary: "__ENVIRONMENT__ VM has less than 25% available memory; see the Fleet Status VM resources row for the top consumers."
-        noDataState: Alerting
-        execErrState: Alerting
-
+      # VM paging early warning (story.5084). Memory and disk warning tiers are
+      # owned by reliability-memory-warning / reliability-disk-warning
+      # (infra/grafana/synthetic/main.tf); this rule adds only the database
+      # page-fault signal those headroom rules cannot see.
       - uid: fleet-db-major-faults
         title: __ENVIRONMENT__ database paging from disk above 5 faults/s
         condition: THRESHOLD
@@ -370,32 +344,5 @@ groups:
         labels: { severity: warning, proof_class: run }
         annotations:
           summary: "__ENVIRONMENT__ database {{ $labels.service }} is paging from disk above 5 major faults/s."
-        noDataState: Alerting
-        execErrState: Alerting
-
-      - uid: fleet-vm-disk-80
-        title: __ENVIRONMENT__ VM root disk above 80% used
-        condition: THRESHOLD
-        for: 30m
-        data:
-          - refId: RATIO
-            datasourceUid: grafanacloud-prom
-            relativeTimeRange: { from: 2100, to: 0 }
-            model:
-              datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'max(1 - node_filesystem_avail_bytes{env="__ENVIRONMENT__",mountpoint="/"} / node_filesystem_size_bytes{env="__ENVIRONMENT__",mountpoint="/"})'
-              instant: true
-              refId: RATIO
-          - refId: THRESHOLD
-            datasourceUid: __expr__
-            model:
-              type: threshold
-              expression: RATIO
-              conditions:
-                - evaluator: { type: gt, params: [0.8] }
-              refId: THRESHOLD
-        labels: { severity: warning, proof_class: run }
-        annotations:
-          summary: "__ENVIRONMENT__ VM root filesystem is more than 80% used."
         noDataState: Alerting
         execErrState: Alerting

@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/ai-tools/capabilities/work-item`
  * Purpose: Generic work item capability interface for AI tools.
- * Scope: Defines WorkItemCapability — query + transition over work items. Does not contain implementations or app-domain concepts.
+ * Scope: Defines WorkItemCapability — query + transition + patch over work items, and the store-agnostic patch conflict error. Does not contain implementations or app-domain concepts.
  * Invariants:
  *   - CAPABILITY_INJECTION: Implementation injected at bootstrap, not imported
  *   - PORTS_ARE_AUTHORITY: Delegates to WorkItemQueryPort + WorkItemCommandPort
@@ -108,13 +108,42 @@ export interface WorkItemCapability {
     reason?: string;
   }): Promise<WorkItemTransitionResult>;
 
-  /** Patch work item fields (priority, labels, summary). */
+  /**
+   * Patch work item fields (priority, rank, labels, summary).
+   *
+   * `expectedRevision` (optional) is compare-and-set on the row's `revision`: the
+   * write lands only if the row is still at that revision. A moved row throws
+   * `WorkItemPatchConflictError` and nothing is written. Omitted ⇒ unconditioned.
+   */
   patch(input: {
     id: string;
+    expectedRevision?: number;
     set: {
       priority?: number;
+      rank?: number;
       labels?: string[];
       summary?: string;
     };
   }): Promise<WorkItemInfo>;
+}
+
+/**
+ * A `patch` with `expectedRevision` lost the compare-and-set: the row moved since it
+ * was read. Nothing was written; the caller re-reads and retries (e.g. next cycle).
+ * Implementations translate their store's conflict into this so tools stay store-agnostic.
+ */
+export class WorkItemPatchConflictError extends Error {
+  readonly id: string;
+  readonly expectedRevision: number;
+  readonly currentRevision: number;
+
+  constructor(id: string, expectedRevision: number, currentRevision: number) {
+    super(
+      `Work item ${id} is at revision ${currentRevision}, expected ${expectedRevision}; nothing written`
+    );
+    this.name = "WorkItemPatchConflictError";
+    this.id = id;
+    this.expectedRevision = expectedRevision;
+    this.currentRevision = currentRevision;
+  }
 }

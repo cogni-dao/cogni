@@ -267,7 +267,7 @@ clientLogger.warn(EVENT_NAMES.CLIENT_CHAT_STREAM_ERROR, { messageId });
 | `k8s`       | kubelet `/metrics/cadvisor` (scrape `kubelet_cadvisor`) | `<namespace>/<pod owner>`                      |
 | `k8s-total` | host cAdvisor, raw `/kubepods(.slice)` aggregate        | `kubepods` — overlaps `k8s`; exclude from sums |
 
-Anonymous cgroups (root, `user.slice`, nested pod cgroups) are dropped; their memory is the Fleet Status "Unattributed" remainder (`MemTotal - MemAvailable - sum(container_memory_rss{class=~"compose|systemd|k8s"})`). The kubelet scrape keeps only memory/swap/cpu/fs-io/fault/OOM/limit families and drops `id|image|name|pod|uid`.
+Anonymous cgroups (root, `user.slice`, nested pod cgroups) are dropped; their memory is the "Unattributed" remainder in the VM resources row of the private Fleet Reliability dashboard (`cogni-fleet-capacity`; never the public `cogni-fleet-status` share, which must not expose host internals) (`MemTotal - MemAvailable - sum(container_memory_rss{class=~"compose|systemd|k8s"})`). The kubelet scrape keeps only memory/swap/cpu/fs-io/fault/OOM/limit families and drops `id|image|name|pod|uid`.
 
 **Labels:** All low-cardinality—`route` (routeId), `method`, `status` (2xx/4xx/5xx), `provider`, `model_class` (free/standard/premium), `code` (`AiExecutionErrorCode` — pre-normalized, no heuristics)
 

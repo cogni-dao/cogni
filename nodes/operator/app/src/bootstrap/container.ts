@@ -1010,12 +1010,20 @@ function createContainer(): Container {
   // WorkItemCapability for AI tools (task.5282). `core__work_item_query` lists
   // through the Doltgres read path — the same `doltgresWorkItems.list` that
   // `GET /api/v1/work/items` serves (read pool, never writer admission). The
-  // command path (transition/patch) stays on the markdown ports: rebinding reads
-  // does not widen writes.
+  // command path for transition stays on the markdown ports. `patch` (story.5096)
+  // writes through the SAME Doltgres patch `PATCH /api/v1/work/items/{id}` uses —
+  // the runtime image has no markdown `work/` tree, so a markdown patch could never
+  // land — attributed to the system principal scheduled runs execute as, under the
+  // store's unchanged authority (non-creator ⇒ triage fields only) and with the
+  // caller's optional `expectedRevision` as compare-and-set.
   const workItemCapability = createWorkItemCapability({
     workItemQuery: workItemAdapter,
     workItemCommand: workItemAdapter,
     backlogReader: doltgresWorkItems,
+    backlogWriter: {
+      store: doltgresWorkItems,
+      principalId: `actor:${COGNI_SYSTEM_PRINCIPAL_USER_ID}`,
+    },
   });
 
   // ToolSource with real implementations (per CAPABILITY_INJECTION)

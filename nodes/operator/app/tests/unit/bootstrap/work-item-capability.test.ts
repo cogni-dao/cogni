@@ -8,17 +8,22 @@
  * Invariants:
  *   - QUERY_READS_THE_LIVE_BACKLOG: `query` lists via `backlogReader` when wired, never the markdown port
  *   - WRITES_NOT_WIDENED: transition still resolves + commands through the markdown ports only
+ *   - PATCH_ON_THE_LIVE_BACKLOG / PATCH_CAS_PASSTHROUGH (story.5096): `patch` writes through the
+ *     Doltgres `backlogWriter` as its principal, forwards `expectedRevision`, and turns the store's
+ *     `WorkItemRevisionConflictError` into the ai-tools `WorkItemPatchConflictError`
  * Side-effects: none
  * Links: src/bootstrap/capabilities/work-item.ts
  * @internal
  */
 
+import { WorkItemPatchConflictError } from "@cogni/ai-tools";
 import type {
   WorkItem,
   WorkItemCommandPort,
   WorkItemId,
   WorkItemQueryPort,
 } from "@cogni/work-items";
+import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { describe, expect, it, vi } from "vitest";
 
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
@@ -118,5 +123,107 @@ describe("createWorkItemCapability", () => {
     expect(md.query.get).toHaveBeenCalledTimes(1);
     expect(backlogReader.list).not.toHaveBeenCalled();
     expect(md.command.transitionStatus).not.toHaveBeenCalled();
+  });
+
+  it("patches through the Doltgres backlogWriter as its principal, forwarding expectedRevision", async () => {
+    const md = markdownPorts();
+    const store = {
+      patch: vi
+        .fn()
+        .mockResolvedValue(item({ priority: 1, rank: 2, revision: 5 })),
+    };
+    const cap = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+      backlogWriter: { store, principalId: "actor:system" },
+    });
+
+    const result = await cap.patch({
+      id: "task.5282",
+      expectedRevision: 4,
+      set: { priority: 1, rank: 2 },
+    });
+
+    expect(store.patch).toHaveBeenCalledWith(
+      { id: "task.5282", expectedRevision: 4, set: { priority: 1, rank: 2 } },
+      "actor:system"
+    );
+    expect(result).toMatchObject({ priority: 1, rank: 2, revision: 5 });
+    expect(md.query.get).not.toHaveBeenCalled();
+    expect(md.command.patch).not.toHaveBeenCalled();
+  });
+
+  it("sends an unconditioned patch when expectedRevision is absent", async () => {
+    const md = markdownPorts();
+    const store = { patch: vi.fn().mockResolvedValue(item()) };
+    const cap = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+      backlogWriter: { store, principalId: "actor:system" },
+    });
+
+    await cap.patch({ id: "task.5282", set: { labels: ["x"] } });
+
+    expect(store.patch).toHaveBeenCalledWith(
+      { id: "task.5282", set: { labels: ["x"] } },
+      "actor:system"
+    );
+  });
+
+  it("maps the store's revision conflict to WorkItemPatchConflictError", async () => {
+    const md = markdownPorts();
+    const store = {
+      patch: vi
+        .fn()
+        .mockRejectedValue(
+          new WorkItemRevisionConflictError("task.5282", 4, 6)
+        ),
+    };
+    const cap = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+      backlogWriter: { store, principalId: "actor:system" },
+    });
+
+    const err = await cap
+      .patch({ id: "task.5282", expectedRevision: 4, set: { priority: 0 } })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(WorkItemPatchConflictError);
+    expect(err).toMatchObject({
+      id: "task.5282",
+      expectedRevision: 4,
+      currentRevision: 6,
+    });
+  });
+
+  it("rethrows any other store failure unchanged", async () => {
+    const md = markdownPorts();
+    const denied = Object.assign(new Error("not authorized"), {
+      name: "WorkItemAuthorizationError",
+    });
+    const store = { patch: vi.fn().mockRejectedValue(denied) };
+    const cap = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+      backlogWriter: { store, principalId: "actor:system" },
+    });
+
+    await expect(
+      cap.patch({ id: "task.5282", set: { summary: "x" } })
+    ).rejects.toBe(denied);
+  });
+
+  it("refuses expectedRevision without a backlogWriter (markdown has no caller CAS)", async () => {
+    const md = markdownPorts();
+    const cap = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+    });
+
+    await expect(
+      cap.patch({ id: "task.5282", expectedRevision: 4, set: { priority: 1 } })
+    ).rejects.toThrow("requires the Doltgres backlog writer");
+    expect(md.command.patch).not.toHaveBeenCalled();
   });
 });
