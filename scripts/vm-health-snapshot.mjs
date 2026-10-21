@@ -4,172 +4,263 @@
 
 /**
  * Module: `@scripts/vm-health-snapshot`
- * Purpose: Snapshots every shared env VM from Grafana Prometheus and grades it GREEN/YELLOW/RED with named causes and the next action.
- * Scope: Read-only Grafana datasource-proxy queries; does not SSH, write, or mutate any VM or dashboard.
- * Invariants: MISSING_IS_NOT_HEALTHY (stale telemetry grades RED); VERDICT_FIRST (first line per env is the verdict); evaluate() is pure.
- * Side-effects: IO (HTTPS reads to GRAFANA_URL)
- * Notes: Thresholds live in THRESHOLDS and are documented in hub entry vm-health-snapshot.
- * Links: hub vm-health-snapshot, .claude/skills/vm-health/SKILL.md, infra/grafana/dashboards/operator/fleet-status.json, story.5084
+ * Purpose: Grades each shared env VM against the ONE reliability policy (recorded cogni_reliability_v1_* series) and names what is eating it.
+ * Scope: Read-only Grafana datasource-proxy instant queries; does not SSH, write, or own any threshold.
+ * Invariants: ONE_HEALTH_CONTRACT (grade only reliability-policy.v1.json signals) ; MISSING_IS_UNKNOWN (null/stale/multi-host never GREEN) ; ENDPOINTS_ARE_NOT_VM, evaluate() pure
+ * Side-effects: IO
+ * Notes: Consumers, swap-in and major faults are ungraded diagnostic detail. Envs are validated before any PromQL is built; hosts must be 32-hex.
+ * Links: packages/node-contracts/src/reliability-policy.v1.json, infra/grafana/synthetic/main.tf, .claude/skills/vm-health/SKILL.md, story.5084
  * @public
  *
  * Usage:
- *   node scripts/vm-health-snapshot.mjs                 # all envs, human summary
- *   node scripts/vm-health-snapshot.mjs production      # one env
- *   node scripts/vm-health-snapshot.mjs --json          # machine-readable
- * Credentials: GRAFANA_URL + GRAFANA_SERVICE_ACCOUNT_TOKEN from env, else ./.env.cogni (same as scripts/loki-query.sh).
- * Exit code: 0 all GREEN, 1 any YELLOW, 2 any RED, 3 usage/credential error.
+ *   node scripts/vm-health-snapshot.mjs [production|preview|candidate-a ...] [--json]
+ * Credentials: GRAFANA_URL (https) + GRAFANA_SERVICE_ACCOUNT_TOKEN from env, else ./.env.cogni.
+ * Exit code: 0 all GREEN · 1 worst YELLOW · 2 any RED or UNKNOWN · 3 usage/credential error · 4 Grafana unreachable for every env.
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
+const require = createRequire(import.meta.url);
+/** The single threshold contract (ONE_HEALTH_CONTRACT). Imported, never copied. */
+export const POLICY = require("../packages/node-contracts/src/reliability-policy.v1.json");
+
+/** Mirrors reliabilityEnvironmentSchema in packages/node-contracts. */
 export const ENVS = ["production", "preview", "candidate-a"];
-const DB_SERVICES = "doltgres|temporal|temporal-postgres|postgres";
 
-// [yellowAt, redAt]; direction "high" = bigger is worse, "low" = smaller is worse.
-export const THRESHOLDS = {
-  swapInPagesPerSec: {
-    yellow: 10,
-    red: 100,
-    dir: "high",
-    why: "kernel is paging memory back from disk",
+/** Policy signal → recorded series (infra/grafana/synthetic/main.tf reliability_recording). */
+export const SIGNAL_SERIES = {
+  ioPressurePercent: "cogni_reliability_v1_io_pressure_percent",
+  connectionsPercent: "cogni_reliability_v1_connections_percent",
+  memoryHeadroomPercent: "cogni_reliability_v1_memory_headroom_percent",
+  diskHeadroomPercent: "cogni_reliability_v1_disk_headroom_percent",
+};
+
+/** Telemetry families whose freshness is checked per host. `node` feeds the policy series. */
+export const FAMILIES = {
+  node: {
+    required: true,
+    metric: "node_memory_MemAvailable_bytes",
+    job: "integrations/unix",
   },
-  dbMajorFaultsPerSec: {
-    yellow: 5,
-    red: 50,
-    dir: "high",
-    why: "databases are reading their own memory back from swap (slow queries, timeouts)",
+  cadvisor: {
+    required: false,
+    metric: "container_memory_rss",
+    job: "integrations/cadvisor",
   },
-  ioWaitPct: {
-    yellow: 5,
-    red: 20,
-    dir: "high",
-    why: "CPUs are stalled waiting on disk",
-  },
-  memAvailablePct: {
-    yellow: 25,
-    red: 10,
-    dir: "low",
-    why: "little free RAM left before swapping",
-  },
-  diskUsedPct: {
-    yellow: 80,
-    red: 90,
-    dir: "high",
-    why: "root disk filling (backups, images, logs)",
-  },
-  probeFailures30m: {
-    yellow: 1,
-    red: 6,
-    dir: "high",
-    why: "public endpoints on this env failed health probes",
-  },
-  unattributedPct: {
-    yellow: 30,
-    red: 101,
-    dir: "high",
-    why: "a large share of used memory has no named owner (collector gap)",
+  kubelet_cadvisor: {
+    required: false,
+    metric: "container_memory_rss",
+    job: "kubelet_cadvisor",
   },
 };
 
-const queries = (env) => ({
-  memTotalBytes: `max(node_memory_MemTotal_bytes{env="${env}"})`,
-  memAvailablePct: `100 * min(node_memory_MemAvailable_bytes{env="${env}"} / node_memory_MemTotal_bytes{env="${env}"})`,
-  swapUsedBytes: `max(node_memory_SwapTotal_bytes{env="${env}"} - node_memory_SwapFree_bytes{env="${env}"})`,
-  swapInPagesPerSec: `sum(rate(node_vmstat_pswpin{env="${env}"}[5m]))`,
-  ioWaitPct: `100 * avg(rate(node_cpu_seconds_total{env="${env}",mode="iowait"}[5m]))`,
-  diskUsedPct: `100 * max(1 - node_filesystem_avail_bytes{env="${env}",mountpoint="/"} / node_filesystem_size_bytes{env="${env}",mountpoint="/"})`,
-  dbMajorFaultsPerSec: `sum(rate(container_memory_failures_total{env="${env}",failure_type="pgmajfault",service=~"${DB_SERVICES}"}[5m]))`,
-  attributedBytes: `sum(container_memory_rss{env="${env}",class=~"compose|systemd|k8s"})`,
-  usedBytes: `max(node_memory_MemTotal_bytes{env="${env}"} - node_memory_MemAvailable_bytes{env="${env}"})`,
-  probeFailures30m: `sum(count_over_time((probe_success{environment="${env}",proof_class="serve"} == 0)[30m:1m])) or vector(0)`,
-  telemetryAgeSec: `time() - max(timestamp(node_memory_MemAvailable_bytes{env="${env}"}))`,
-});
-const topQuery = (env) =>
-  `topk(6, sum by (class, service) ({__name__=~"container_memory_rss|container_memory_swap",env="${env}",class=~"compose|systemd|k8s"}))`;
-const dbFaultsByService = (env) =>
-  `sum by (service) (rate(container_memory_failures_total{env="${env}",failure_type="pgmajfault",service=~"${DB_SERVICES}"}[5m]))`;
-const failingProbes = (env) =>
-  `min by (node_slug) (min_over_time(probe_success{environment="${env}",proof_class="serve"}[5m])) == 0`;
-
-const RANK = { GREEN: 0, YELLOW: 1, RED: 2 };
+const TTL_SEC = POLICY.evidenceTtlMs / 1000;
+const HOST_RE = /^[0-9a-f]{32}$/;
+const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const RANK = { GREEN: 0, YELLOW: 1, RED: 2, UNKNOWN: 3 };
 const worst = (a, b) => (RANK[a] >= RANK[b] ? a : b);
+const finite = (v) => typeof v === "number" && Number.isFinite(v);
 
-function grade(key, value) {
-  const t = THRESHOLDS[key];
-  if (value === null || value === undefined || Number.isNaN(value))
-    return "GREEN";
-  if (t.dir === "high")
-    return value >= t.red ? "RED" : value >= t.yellow ? "YELLOW" : "GREEN";
-  return value <= t.red ? "RED" : value <= t.yellow ? "YELLOW" : "GREEN";
+const ACTIONS = {
+  diskHeadroomPercent:
+    "Disk: inspect the db_backups volume, docker/k3s images and journals; prune or grow the disk.",
+  memoryHeadroomPercent:
+    "Memory: cut or budget the top consumers below, or move the VM up a size (hub substrate-vm-migration).",
+  ioPressurePercent:
+    "I/O: check swap-in and major faults below (memory pressure is the usual cause), else a heavy DB/backup job.",
+  connectionsPercent:
+    "Connections: find the database/pool holding backends (operator /observability/health databaseShare5m).",
+};
+
+/** Policy grading, identical to the operator evaluator: above → value >= threshold; below → value <= threshold. */
+export function gradeSignal(key, value) {
+  const s = POLICY.signals[key];
+  if (!s || !finite(value)) return "UNKNOWN";
+  const hit = (t) => (s.direction === "above" ? value >= t : value <= t);
+  if (hit(s.critical)) return "RED";
+  if (hit(s.warning)) return "YELLOW";
+  return "GREEN";
 }
 
-/** Pure: metrics snapshot → { verdict, findings[], next }. */
-export function evaluate(m) {
+const isFresh = (tsSec, nowSec) =>
+  finite(tsSec) && nowSec - tsSec <= TTL_SEC && tsSec - nowSec <= 15;
+
+/**
+ * Pure: one env's evidence → verdict.
+ * input = { nowSec, signals: {policyKey: [{host,value,tsSec}]}, families: {name: [{host,tsSec}]}, probes: {tsSec, nodes: [{slug,min}]} }
+ */
+export function evaluate(input) {
+  const nowSec = input?.nowSec;
+  const signals = input?.signals ?? {};
+  const families = input?.families ?? {};
   const findings = [];
-  if (m.telemetryAgeSec === null || m.telemetryAgeSec > 300) {
-    return {
-      verdict: "RED",
-      findings: [
-        {
-          key: "telemetry",
-          level: "RED",
-          text: "no fresh host metrics (>5m) — missing telemetry is not health; check Alloy on this VM",
-        },
-      ],
-      next: "Restore Alloy telemetry before trusting anything else.",
-    };
-  }
-  const derived = { ...m };
-  derived.unattributedPct =
-    m.usedBytes && m.attributedBytes !== null
-      ? Math.max(0, 100 * (1 - m.attributedBytes / m.usedBytes))
+  const actions = [];
+
+  const freshHosts = new Set();
+  for (const key of Object.keys(POLICY.signals))
+    for (const s of signals[key] ?? [])
+      if (HOST_RE.test(s.host ?? "") && isFresh(s.tsSec, nowSec))
+        freshHosts.add(s.host);
+  const host = freshHosts.size === 1 ? [...freshHosts][0] : null;
+  if (freshHosts.size === 0)
+    findings.push({
+      key: "policy-series",
+      level: "UNKNOWN",
+      text: `no fresh cogni_reliability_v1_* series (TTL ${TTL_SEC}s) — check Alloy on this VM and the reliability recording rules`,
+    });
+  if (freshHosts.size > 1)
+    findings.push({
+      key: "substrate-host",
+      level: "UNKNOWN",
+      text: `${freshHosts.size} substrate hosts report for one env (${[...freshHosts].map((h) => h.slice(0, 8)).join(", ")}) — ambiguous VM identity`,
+    });
+
+  let verdict = host ? "GREEN" : "UNKNOWN";
+  const graded = [];
+  for (const [key, s] of Object.entries(POLICY.signals)) {
+    const samples = host
+      ? (signals[key] ?? []).filter(
+          (x) => x.host === host && finite(x.value) && isFresh(x.tsSec, nowSec)
+        )
+      : [];
+    // Several node_slug recordings share one host; take the policy-worst value.
+    const value = samples.length
+      ? (s.direction === "above" ? Math.max : Math.min)(
+          ...samples.map((x) => x.value)
+        )
       : null;
-  let verdict = "GREEN";
-  for (const key of Object.keys(THRESHOLDS)) {
-    const level = grade(key, derived[key]);
-    if (level !== "GREEN") {
+    const level = SIGNAL_SERIES[key] ? gradeSignal(key, value) : "UNKNOWN";
+    graded.push({
+      key,
+      value,
+      level,
+      warning: s.warning,
+      critical: s.critical,
+      direction: s.direction,
+    });
+    verdict = worst(verdict, level);
+    if (level === "UNKNOWN" && host)
       findings.push({
         key,
         level,
-        value: derived[key],
-        text: THRESHOLDS[key].why,
+        text: `${key} missing or stale for host ${host.slice(0, 8)}`,
       });
-      verdict = worst(verdict, level);
+    if (level === "RED" || level === "YELLOW") {
+      findings.push({
+        key,
+        level,
+        value,
+        text: `${key} ${level === "RED" ? "critical" : "warning"} per policy`,
+      });
+      actions.push({
+        level,
+        text: ACTIONS[key] ?? `${key}: see policy owner.`,
+      });
     }
   }
-  const keys = new Set(findings.map((f) => f.key));
-  let next = "Nothing to do.";
-  if (
-    keys.has("probeFailures30m") &&
-    !keys.has("swapInPagesPerSec") &&
-    !keys.has("dbMajorFaultsPerSec")
-  )
-    next =
-      "Endpoints failing without host pressure: check the failing nodes' lease/app (Loki readyz errors), not the VM.";
-  if (
-    keys.has("dbMajorFaultsPerSec") ||
-    keys.has("swapInPagesPerSec") ||
-    keys.has("memAvailablePct")
-  )
-    next =
-      "Memory pressure: name the top consumers below; cut or budget them, or move the VM up a size (hub substrate-vm-migration).";
-  if (
-    keys.has("diskUsedPct") &&
-    verdict !== "GREEN" &&
-    next === "Nothing to do."
-  )
-    next =
-      "Disk: inspect db_backups volume, docker/k3s images and journals; prune or grow disk.";
-  if (keys.has("unattributedPct") && next === "Nothing to do.")
-    next =
-      "Collector gap: Alloy is not naming most memory — check the kubelet_cadvisor scrape and class relabels.";
-  return { verdict, findings, next };
+
+  const familyAges = {};
+  for (const [name, f] of Object.entries(FAMILIES)) {
+    const ts = (families[name] ?? [])
+      .filter((x) => x.host === host && finite(x.tsSec))
+      .map((x) => x.tsSec);
+    const age = ts.length ? nowSec - Math.max(...ts) : null;
+    familyAges[name] = age;
+    if (!host || (age !== null && age <= TTL_SEC)) continue;
+    const level = f.required ? "UNKNOWN" : "YELLOW";
+    findings.push({
+      key: `family:${name}`,
+      level,
+      text: `${name} telemetry ${age === null ? "absent" : `stale ${Math.round(age)}s`}${f.required ? "" : " — consumers cannot be named"}`,
+    });
+    verdict = worst(verdict, level);
+    if (!f.required)
+      actions.push({
+        level: "YELLOW",
+        text: `Collector gap: ${name} absent — roll the current Alloy config (#2849) to this VM and check its scrape \`up\`.`,
+      });
+  }
+
+  if (verdict === "UNKNOWN")
+    actions.unshift({
+      level: "UNKNOWN",
+      text: "Restore evidence before trusting anything: Alloy on this VM, remote_write, and the reliability recording rules.",
+    });
+  actions.sort((a, b) => RANK[b.level] - RANK[a.level]);
+  const next = actions.length ? actions.map((a) => a.text) : ["Nothing to do."];
+
+  return {
+    verdict,
+    host,
+    signals: graded,
+    families: familyAges,
+    findings,
+    next,
+    endpoints: evaluateEndpoints(input?.probes, nowSec),
+  };
 }
+
+/** Pure: probe evidence → separate node-endpoint status (never part of the VM verdict). */
+export function evaluateEndpoints(probes, nowSec) {
+  if (!probes || !isFresh(probes.tsSec, nowSec))
+    return {
+      status: "UNKNOWN",
+      failing: [],
+      total: 0,
+      text: "no fresh probe_success",
+    };
+  const nodes = (probes.nodes ?? []).filter((n) => SLUG_RE.test(n.slug ?? ""));
+  const failing = [
+    ...new Set(
+      nodes.filter((n) => finite(n.min) && n.min < 1).map((n) => n.slug)
+    ),
+  ].sort();
+  return {
+    status: failing.length ? "FAILING" : "OK",
+    failing,
+    total: new Set(nodes.map((n) => n.slug)).size,
+    text: failing.length
+      ? `${failing.length}/${nodes.length} failing in 5m (${failing.join(", ")}) — node app/lease, not the VM: read their readyz in Loki`
+      : `${nodes.length} passing`,
+  };
+}
+
+/** Pure: per-service rss/swap rows → top consumers + memory outside per-service RSS (ungraded). */
+export function summarizeConsumers(rssRows, swapRows, usedBytes, top = 8) {
+  const byService = new Map();
+  const add = (rows, field) => {
+    for (const r of rows ?? []) {
+      const id = `${r.class}/${r.service}`;
+      const cur = byService.get(id) ?? { service: id, rss: 0, swap: 0 };
+      cur[field] += finite(r.bytes) ? r.bytes : 0;
+      byService.set(id, cur);
+    }
+  };
+  add(rssRows, "rss");
+  add(swapRows, "swap");
+  const all = [...byService.values()].sort(
+    (a, b) => b.rss + b.swap - (a.rss + a.swap)
+  );
+  const rssTotal = all.reduce((n, s) => n + s.rss, 0);
+  const outside =
+    finite(usedBytes) && (rssRows ?? []).length
+      ? Math.max(0, usedBytes - rssTotal)
+      : null;
+  return { top: all.slice(0, top), rssTotal, outsideRssBytes: outside };
+}
+
+// ---------------------------------------------------------------- IO ----
+
+class UsageError extends Error {}
+class GrafanaError extends Error {}
 
 function loadCreds() {
   let url = process.env.GRAFANA_URL;
   let token = process.env.GRAFANA_SERVICE_ACCOUNT_TOKEN;
-  for (const f of [process.env.COGNI_ENV_FILE, ".env.cogni", ".env.local"]) {
+  for (const f of [process.env.COGNI_ENV_FILE, ".env.cogni"]) {
     if ((url && token) || !f || !existsSync(f)) continue;
     for (const line of readFileSync(f, "utf8").split("\n")) {
       const mm = line.match(
@@ -181,111 +272,281 @@ function loadCreds() {
       if (mm[1] === "GRAFANA_SERVICE_ACCOUNT_TOKEN" && !token) token = v;
     }
   }
-  if (!url || !token) {
-    console.error(
+  if (!url || !token)
+    throw new UsageError(
       "GRAFANA_URL and GRAFANA_SERVICE_ACCOUNT_TOKEN required (env or .env.cogni)"
     );
-    process.exit(3);
+  let base;
+  try {
+    base = new URL(url);
+  } catch {
+    throw new UsageError("GRAFANA_URL is not a URL");
   }
-  return { base: url.replace(/\/$/, ""), token };
+  if (base.protocol !== "https:")
+    throw new UsageError("GRAFANA_URL must be https");
+  return { base: base.toString().replace(/\/$/, ""), token };
 }
 
-async function prom(creds, expr) {
-  const u = `${creds.base}/api/datasources/proxy/uid/grafanacloud-prom/api/v1/query?query=${encodeURIComponent(expr)}`;
-  const res = await fetch(u, {
-    headers: { Authorization: `Bearer ${creds.token}` },
-  });
-  if (!res.ok)
-    throw new Error(`prometheus ${res.status} for ${expr.slice(0, 80)}`);
-  const body = await res.json();
-  return body.data?.result ?? [];
-}
-const scalar = (r) => (r.length ? Number(r[0].value[1]) : null);
-
-async function snapshot(creds, env) {
-  const q = queries(env);
-  const keys = Object.keys(q);
-  const vals = await Promise.all(
-    keys.map((k) => prom(creds, q[k]).then(scalar))
+async function prom(creds, expr, timeSec) {
+  const u = new URL(
+    `${creds.base}/api/datasources/proxy/uid/grafanacloud-prom/api/v1/query`
   );
-  const m = Object.fromEntries(keys.map((k, i) => [k, vals[i]]));
-  const [top, faults, failing] = await Promise.all([
-    prom(creds, topQuery(env)),
-    prom(creds, dbFaultsByService(env)),
-    prom(creds, failingProbes(env)),
-  ]);
+  u.searchParams.set("query", expr);
+  u.searchParams.set("time", String(timeSec));
+  let res;
+  try {
+    res = await fetch(u, {
+      headers: { Authorization: `Bearer ${creds.token}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (e) {
+    throw new GrafanaError(`grafana unreachable: ${e?.name ?? "error"}`);
+  }
+  if (!res.ok) throw new GrafanaError(`prometheus HTTP ${res.status}`);
+  const body = await res.json().catch(() => null);
+  if (body?.status !== "success" || body.data?.resultType !== "vector")
+    throw new GrafanaError(
+      `prometheus status ${body?.status ?? "malformed"}: ${body?.error ?? ""}`.trim()
+    );
+  return body.data.result;
+}
+
+const num = (r) => Number(r.value[1]);
+const labelKey = (m) =>
+  JSON.stringify(
+    Object.entries(m)
+      .filter(([k]) => k !== "__name__")
+      .sort(([a], [b]) => a.localeCompare(b))
+  );
+
+/** Builds every selector from validated identifiers only. */
+function selectors(env, host) {
+  if (!ENVS.includes(env)) throw new UsageError(`unknown env ${env}`);
+  if (host !== undefined && !HOST_RE.test(host))
+    throw new Error("invalid substrate_host");
   return {
-    env,
-    metrics: m,
-    topConsumers: top
-      .map((r) => ({
-        service: `${r.metric.class}/${r.metric.service}`,
-        mib: Math.round(Number(r.value[1]) / 1048576),
-      }))
-      .sort((a, b) => b.mib - a.mib),
-    dbFaultsPerSec: Object.fromEntries(
-      faults.map((r) => [
-        r.metric.service,
-        Number(Number(r.value[1]).toFixed(2)),
-      ])
-    ),
-    failingNodesNow: failing.map((r) => r.metric.node_slug),
-    ...evaluate(m),
+    policy: `environment="${env}",policy_version="${POLICY.version}"`,
+    host: `env="${env}",substrate_host="${host}"`,
+    family: (f) =>
+      `${f.metric}{env="${env}",job="${f.job}",substrate_host!=""}`,
+    probe: `probe_success{environment="${env}",proof_class="serve"}`,
   };
 }
 
-const fmt = (v, d = 1) =>
-  v === null || v === undefined ? "n/a" : Number(v).toFixed(d);
-const gib = (b) => (b === null ? "n/a" : `${(b / 1073741824).toFixed(1)}GiB`);
+const fresh = (sel) =>
+  `(${sel} and (time() - timestamp(${sel}) <= ${TTL_SEC}))`;
+const byService = (sel) =>
+  `sum by (class, service) (max without (instance) (${sel}))`;
 
-function render(s) {
-  const m = s.metrics;
-  const icon = { GREEN: "🟢", YELLOW: "🟡", RED: "🔴" }[s.verdict];
+async function snapshot(creds, env, nowSec) {
+  const s = selectors(env);
+  const q = (expr) => prom(creds, expr, nowSec);
+  const signalEntries = await Promise.all(
+    Object.keys(POLICY.signals).map(async (key) => {
+      const metric = SIGNAL_SERIES[key];
+      if (!metric) return [key, []];
+      const sel = `${metric}{${s.policy}}`;
+      const [vals, stamps] = await Promise.all([
+        q(sel),
+        q(`timestamp(${sel})`),
+      ]);
+      const ts = new Map(stamps.map((r) => [labelKey(r.metric), num(r)]));
+      return [
+        key,
+        vals.map((r) => ({
+          host: r.metric.substrate_host,
+          value: num(r),
+          tsSec: ts.get(labelKey(r.metric)) ?? null,
+        })),
+      ];
+    })
+  );
+  const familyEntries = await Promise.all(
+    Object.entries(FAMILIES).map(async ([name, f]) => [
+      name,
+      (await q(`max by (substrate_host) (timestamp(${s.family(f)}))`)).map(
+        (r) => ({ host: r.metric.substrate_host, tsSec: num(r) })
+      ),
+    ])
+  );
+  const [probeTs, probeNodes] = await Promise.all([
+    q(`max(timestamp(${s.probe}))`),
+    q(`min by (node_slug) (min_over_time(${s.probe}[5m]))`),
+  ]);
+  const input = {
+    nowSec,
+    signals: Object.fromEntries(signalEntries),
+    families: Object.fromEntries(familyEntries),
+    probes: {
+      tsSec: probeTs.length ? num(probeTs[0]) : null,
+      nodes: probeNodes.map((r) => ({ slug: r.metric.node_slug, min: num(r) })),
+    },
+  };
+  const result = evaluate(input);
+  let detail = null;
+  if (result.host) {
+    const h = selectors(env, result.host).host;
+    const one = async (expr) => {
+      const r = await q(expr);
+      return r.length ? num(r[0]) : null;
+    };
+    const rows = async (metric) =>
+      (
+        await q(
+          byService(fresh(`${metric}{${h},class=~"compose|systemd|k8s"}`))
+        )
+      ).map((r) => ({
+        class: r.metric.class,
+        service: r.metric.service,
+        bytes: num(r),
+      }));
+    const [memTotal, used, swapUsed, swapIn, rss, swap, faults] =
+      await Promise.all([
+        one(`max(node_memory_MemTotal_bytes{${h}})`),
+        one(
+          `max(node_memory_MemTotal_bytes{${h}} - node_memory_MemAvailable_bytes{${h}})`
+        ),
+        one(
+          `max(node_memory_SwapTotal_bytes{${h}} - node_memory_SwapFree_bytes{${h}})`
+        ),
+        one(`max(rate(node_vmstat_pswpin{${h}}[5m]))`),
+        rows("container_memory_rss"),
+        rows("container_memory_swap"),
+        q(
+          `topk(5, ${byService(`rate(container_memory_failures_total{${h},failure_type="pgmajfault",class=~"compose|systemd|k8s"}[5m])`)} > 0)`
+        ),
+      ]);
+    detail = {
+      memTotalBytes: memTotal,
+      usedBytes: used,
+      swapUsedBytes: swapUsed,
+      swapInPagesPerSec: swapIn,
+      consumers: summarizeConsumers(rss, swap, used),
+      majorFaultsPerSec: faults
+        .map((r) => ({
+          service: `${r.metric.class}/${r.metric.service}`,
+          rate: num(r),
+        }))
+        .sort((a, b) => b.rate - a.rate),
+    };
+  }
+  return { env, ...result, detail };
+}
+
+const fmt = (v, d = 1) => (finite(v) ? v.toFixed(d) : "n/a");
+const gib = (b) => (finite(b) ? `${(b / 1073741824).toFixed(1)}GiB` : "n/a");
+const mib = (b) => `${Math.round(b / 1048576)}MiB`;
+const op = (g) => (g.direction === "above" ? "≥" : "≤");
+const ICON = { GREEN: "🟢", YELLOW: "🟡", RED: "🔴", UNKNOWN: "⚪" };
+
+export function render(s) {
+  if (s.error)
+    return `⚪ ${s.env.toUpperCase()} UNKNOWN — Grafana query failed (${s.error}); nothing about this VM is proven.`;
   const lines = [
-    `${icon} ${s.env.toUpperCase()} ${s.verdict} — ${s.next}`,
-    `   RAM ${gib(m.memTotalBytes)} · free ${fmt(m.memAvailablePct, 0)}% · swap used ${gib(m.swapUsedBytes)} · swap-in ${fmt(m.swapInPagesPerSec)}/s · iowait ${fmt(m.ioWaitPct)}% · disk ${fmt(m.diskUsedPct, 0)}% · DB faults ${fmt(m.dbMajorFaultsPerSec)}/s · probe fails 30m ${fmt(m.probeFailures30m, 0)}`,
+    `${ICON[s.verdict]} ${s.env.toUpperCase()} ${s.verdict} — ${s.next[0]}`,
   ];
-  for (const f of s.findings)
+  for (const extra of s.next.slice(1)) lines.push(`   then: ${extra}`);
+  lines.push(
+    `   policy ${POLICY.version}: ${s.signals
+      .map(
+        (g) =>
+          `${g.key} ${fmt(g.value)}${g.level === "GREEN" ? "" : ` ${ICON[g.level]}`} (warn ${op(g)}${g.warning}, crit ${op(g)}${g.critical})`
+      )
+      .join(" · ")}${s.host ? ` · host ${s.host.slice(0, 8)}` : ""}`
+  );
+  lines.push(
+    `   evidence age: ${Object.entries(s.families)
+      .map(([k, v]) => `${k} ${v === null ? "absent" : `${Math.round(v)}s`}`)
+      .join(" · ")} (TTL ${TTL_SEC}s)`
+  );
+  for (const f of s.findings.filter(
+    (x) => !(x.key in POLICY.signals) || x.level === "UNKNOWN"
+  ))
+    lines.push(`   ${ICON[f.level]} ${f.text}`);
+  const d = s.detail;
+  if (d) {
+    const c = d.consumers;
     lines.push(
-      `   ${f.level === "RED" ? "🔴" : "🟡"} ${f.key}=${fmt(f.value)} — ${f.text}`
+      `   detail (ungraded): RAM ${gib(d.memTotalBytes)} · used ${gib(d.usedBytes)} · swap used ${gib(d.swapUsedBytes)} · swap-in ${fmt(d.swapInPagesPerSec)} pages/s · outside per-service RSS ${gib(c.outsideRssBytes)} (shmem/tmpfs, slab, page tables, unnamed processes)`
     );
-  if (s.failingNodesNow.length)
-    lines.push(`   failing now: ${s.failingNodesNow.join(", ")}`);
-  if (s.topConsumers.length)
-    lines.push(
-      `   top: ${s.topConsumers.map((t) => `${t.service} ${t.mib}MiB`).join(" · ")}`
-    );
-  if (Object.keys(s.dbFaultsPerSec).length)
-    lines.push(`   DB faults/s: ${JSON.stringify(s.dbFaultsPerSec)}`);
+    if (c.top.length)
+      lines.push(
+        `   top rss+swap: ${c.top.map((t) => `${t.service} ${mib(t.rss)}${t.swap > 0 ? `+${mib(t.swap)}sw` : ""}`).join(" · ")}`
+      );
+    if (d.majorFaultsPerSec.length)
+      lines.push(
+        `   major faults/s: ${d.majorFaultsPerSec.map((f) => `${f.service} ${Number(f.rate.toPrecision(2))}`).join(" · ")}`
+      );
+  }
+  const e = s.endpoints;
+  lines.push(
+    `   node endpoints (not VM): ${e.status === "UNKNOWN" ? "⚪ UNKNOWN" : e.status === "OK" ? "OK" : "🔴"} ${e.text}`
+  );
   return lines.join("\n");
 }
 
+export function parseArgs(args) {
+  const envs = [];
+  let json = false;
+  for (const a of args) {
+    if (a === "--json") json = true;
+    else if (ENVS.includes(a)) envs.push(a);
+    else
+      throw new UsageError(
+        `unknown argument ${JSON.stringify(a)}; envs: ${ENVS.join(", ")}; flags: --json`
+      );
+  }
+  return { json, envs: envs.length ? [...new Set(envs)] : ENVS };
+}
+
 async function main() {
-  const args = process.argv.slice(2);
-  const json = args.includes("--json");
-  const envs = args.filter((a) => !a.startsWith("--"));
-  const targets = envs.length ? envs : ENVS;
-  const creds = loadCreds();
-  const snaps = await Promise.all(targets.map((e) => snapshot(creds, e)));
-  if (json)
+  let opts;
+  let creds;
+  try {
+    opts = parseArgs(process.argv.slice(2));
+    creds = loadCreds();
+  } catch (e) {
+    console.error(String(e?.message ?? e));
+    process.exit(3);
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const settled = await Promise.allSettled(
+    opts.envs.map((env) => snapshot(creds, env, nowSec))
+  );
+  const snaps = settled.map((r, i) =>
+    r.status === "fulfilled"
+      ? r.value
+      : {
+          env: opts.envs[i],
+          verdict: "UNKNOWN",
+          error: String(r.reason?.message ?? r.reason),
+        }
+  );
+  const at = new Date(nowSec * 1000).toISOString();
+  if (opts.json)
     console.log(
       JSON.stringify(
-        { at: new Date().toISOString(), snapshots: snaps },
+        { at, policyVersion: POLICY.version, snapshots: snaps },
         null,
         2
       )
     );
   else
     console.log(
-      `VM health snapshot ${new Date().toISOString()}\n` +
-        snaps.map(render).join("\n")
+      `VM health snapshot ${at} · graded by ${POLICY.version}\n${snaps.map(render).join("\n")}`
     );
-  process.exit(Math.max(...snaps.map((s) => RANK[s.verdict])));
+  if (settled.every((r) => r.status === "rejected")) process.exit(4);
+  const rank = Math.max(...snaps.map((s) => RANK[s.verdict]));
+  process.exit(rank === 0 ? 0 : rank === 1 ? 1 : 2);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
   main().catch((e) => {
-    console.error(String(e));
-    process.exit(3);
+    console.error(String(e?.message ?? e));
+    process.exit(4);
   });
 }
