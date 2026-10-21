@@ -14,13 +14,13 @@ production_branch: deploy/production-toks5
 # story.5025 — per-env node-set (deploy ⊆ provisioned). A wizard birth renders the transient
 # candidate-a proof slot and canonical production; PREVIEW_IS_ABSENT_AT_BIRTH. Closing the
 # candidate after the proof is the ordinary env verb ({env:candidate-a, present:false}).
-# task.5130 — that close is now DONE. candidate-a's actuator is pinned to the TEST Console
-# account (akash12eh8…), reserved for Cogni's own operator-platform self-test on
-# cogni-test-org throwaway nodes. BILLING_FOLLOWS_OWNER: toks5 is a real cogni-dao fleet
-# node, so every environment it runs in must bill the PRODUCTION sponsor account
-# (akash10auj…). The birth proof is spent; production is this node's only slot.
+# BILLING_FOLLOWS_OWNER: toks5 is a real cogni-dao fleet node. Every declared
+# environment, including its transient candidate proof slot, uses the production
+# sponsor account through its production custodian. The test account remains
+# reserved for operator-platform self-tests on cogni-test-org throwaway nodes.
 envs: [candidate-a, preview, production]
 database:
+  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
   preview: { tier: shared, budget_profile: shared-default-v1 }
   production: { tier: shared, budget_profile: shared-default-v1 }
 # story.5025 — BORN_ON_AKASH. Placement is stated at birth, never inherited from the k3s
