@@ -6,12 +6,14 @@
  * Purpose: Principal-aware governed beneficiary proposal, acceptance, revoke, and read.
  * Scope: Authenticates the exact human/agent caller; business rules live below the route.
  * Invariants: NO_LEGACY_AGENT; DIRECT_ROLE_ACCEPTANCE;
- * PARTICIPANT_ONLY_REVOCATION; NO_IMPLICIT_BENEFICIARY.
+ * PARTICIPANT_ONLY_REVOCATION; NO_IMPLICIT_BENEFICIARY;
+ * TYPED_DOMAIN_CONFLICTS_ONLY; SANITIZED_SERVER_FAILURES.
  * Side-effects: IO (HTTP and attribution store)
  * Links: story.5075, attribution.actor-identity.v1.contract
  * @public
  */
 
+import { isActorBeneficiaryPolicyRejectedError } from "@cogni/attribution-ledger";
 import { actorBeneficiaryPolicyOperation } from "@cogni/node-contracts";
 import { EVENT_NAMES } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
@@ -191,19 +193,21 @@ export const POST = wrapRouteHandlerWithLogging(
         });
         return NextResponse.json(output);
       } catch (error) {
+        if (!isActorBeneficiaryPolicyRejectedError(error)) throw error;
         terminal.complete({
           status: 409,
           outcome: "error",
           errorCode: "policy_mutation_rejected",
           reasonCode: "policy_invariant_rejected",
-          dimensions: { action: mutation.action },
+          dimensions: {
+            action: mutation.action,
+            semanticCode: error.reason,
+          },
         });
         return NextResponse.json(
           {
-            error:
-              error instanceof Error
-                ? error.message
-                : "Policy mutation rejected",
+            error: "Policy mutation rejected",
+            code: error.reason,
           },
           { status: 409 }
         );

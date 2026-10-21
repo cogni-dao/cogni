@@ -79,11 +79,14 @@ export {
 // Errors
 export {
   AllocationNotFoundError,
+  ActorBeneficiaryPolicyRejectedError,
+  type ActorBeneficiaryPolicyRejectionReason,
   EpochAlreadyFinalizedError,
   EpochNotFoundError,
   EpochNotInReviewError,
   EpochNotOpenError,
   isAllocationNotFoundError,
+  isActorBeneficiaryPolicyRejectedError,
   isEpochAlreadyFinalizedError,
   isEpochNotFoundError,
   isEpochNotInReviewError,

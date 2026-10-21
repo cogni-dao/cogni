@@ -75,6 +75,7 @@ import type {
   UpsertSelectionParams,
 } from "@cogni/attribution-ledger";
 import {
+  ActorBeneficiaryPolicyRejectedError,
   canonicalJsonStringify,
   EpochNotFoundError,
   EpochNotInReviewError,
@@ -2526,7 +2527,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     params: ProposeActorBeneficiaryPolicyParams
   ): Promise<ActorBeneficiaryPolicyProposalRecord> {
     if (Object.keys(params.evidence).length === 0) {
-      throw new Error("Beneficiary policy proposal requires evidence");
+      throw new ActorBeneficiaryPolicyRejectedError(
+        "evidence_required",
+        "Beneficiary policy proposal requires evidence"
+      );
     }
     return this.db.transaction(async (tx) => {
       await tx.execute(
@@ -2576,7 +2580,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         !beneficiary ||
         beneficiary.kind === "system"
       ) {
-        throw new Error(
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "actor_ineligible",
           "Beneficiary proposal requires an active agent earner and an explicit active beneficiary"
         );
       }
@@ -2584,7 +2589,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         steward?.kind !== "user" ||
         earner.parentActorId !== params.stewardActorId
       ) {
-        throw new Error(
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "steward_mismatch",
           "Beneficiary proposal steward must be the agent's accepted current steward"
         );
       }
@@ -2592,7 +2598,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         params.proposedByActorId !== params.earnedByActorId &&
         params.proposedByActorId !== params.stewardActorId
       ) {
-        throw new Error(
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "proposer_forbidden",
           "Only the agent or its steward may propose a beneficiary"
         );
       }
@@ -2621,7 +2628,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           canonicalJsonStringify(existing.evidence) ===
             canonicalJsonStringify(params.evidence);
         if (!exactRetry) {
-          throw new Error("Beneficiary proposal idempotency conflict");
+          throw new ActorBeneficiaryPolicyRejectedError(
+            "idempotency_conflict",
+            "Beneficiary proposal idempotency conflict"
+          );
         }
         const acceptances = await tx
           .select()
@@ -2652,7 +2662,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     params: AcceptActorBeneficiaryPolicyParams
   ): Promise<ActorBeneficiaryPolicyProposalRecord> {
     if (Object.keys(params.evidence).length === 0) {
-      throw new Error("Beneficiary acceptance requires evidence");
+      throw new ActorBeneficiaryPolicyRejectedError(
+        "evidence_required",
+        "Beneficiary acceptance requires evidence"
+      );
     }
     return this.db.transaction(async (tx) => {
       await tx.execute(
@@ -2663,7 +2676,12 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         .from(actorBeneficiaryPolicyProposals)
         .where(eq(actorBeneficiaryPolicyProposals.id, params.proposalId))
         .limit(1);
-      if (!proposal) throw new Error("Beneficiary proposal not found");
+      if (!proposal) {
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "proposal_not_found",
+          "Beneficiary proposal not found"
+        );
+      }
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary:${proposal.earnedByActorId}`}))`
       );
@@ -2684,7 +2702,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
             completedAcceptances
           );
         }
-        throw new Error("Beneficiary proposal is no longer pending");
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "proposal_not_pending",
+          "Beneficiary proposal is no longer pending"
+        );
       }
 
       const expectedActorId =
@@ -2694,7 +2715,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
             ? proposal.earnedByActorId
             : proposal.stewardActorId;
       if (params.acceptedByActorId !== expectedActorId) {
-        throw new Error(`Caller cannot accept the ${params.role} role`);
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "acceptor_forbidden",
+          `Caller cannot accept the ${params.role} role`
+        );
       }
       const [inserted] = await tx
         .insert(actorBeneficiaryPolicyAcceptances)
@@ -2718,7 +2742,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           (acceptance) => acceptance.role === params.role
         );
         if (existing?.acceptedByActorId !== params.acceptedByActorId) {
-          throw new Error("Beneficiary acceptance idempotency conflict");
+          throw new ActorBeneficiaryPolicyRejectedError(
+            "idempotency_conflict",
+            "Beneficiary acceptance idempotency conflict"
+          );
         }
       }
 
@@ -2734,7 +2761,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         ...acceptances.map(({ acceptedAt }) => acceptedAt.getTime())
       );
       if (proposal.effectiveFrom.getTime() <= ceremonyCompletedAt) {
-        throw new Error(
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "effective_time_invalid",
           "Beneficiary policy effectiveFrom must follow completed acceptance"
         );
       }
@@ -2771,7 +2799,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         activationSteward[0]?.kind !== "user" ||
         activationSteward[0].status !== "active"
       ) {
-        throw new Error(
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "authority_changed",
           "Beneficiary proposal authority changed before activation; propose again"
         );
       }
@@ -2807,7 +2836,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         latestPolicy &&
         proposal.effectiveFrom.getTime() <= latestPolicy.effectiveFrom.getTime()
       ) {
-        throw new Error(
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "effective_time_invalid",
           "Beneficiary policy effectiveFrom must be strictly after the latest policy"
         );
       }
@@ -2817,7 +2847,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         proposal.effectiveFrom.getTime() <=
           latestAllocation.contributionCutoff.getTime()
       ) {
-        throw new Error(
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "frozen_cutoff_conflict",
           "Beneficiary policy cannot backdate across a frozen actor allocation"
         );
       }
@@ -2873,7 +2904,12 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         .from(actorBeneficiaryPolicyProposals)
         .where(eq(actorBeneficiaryPolicyProposals.id, params.proposalId))
         .limit(1);
-      if (!proposal) throw new Error("Beneficiary proposal not found");
+      if (!proposal) {
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "proposal_not_found",
+          "Beneficiary proposal not found"
+        );
+      }
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary:${proposal.earnedByActorId}`}))`
       );
@@ -2884,7 +2920,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         .limit(1)
         .for("share");
       if (earner?.kind !== "agent") {
-        throw new Error("Beneficiary proposal earner is no longer an AI actor");
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "actor_ineligible",
+          "Beneficiary proposal earner is no longer an AI actor"
+        );
       }
       let currentStewardActorId: string | null = null;
       if (earner.parentActorId) {
@@ -2907,7 +2946,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         params.revokedByActorId !== currentStewardActorId &&
         params.revokedByActorId !== proposal.beneficiaryActorId;
       if (outsideParticipantSet) {
-        throw new Error("Caller cannot revoke this beneficiary proposal");
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "revoker_forbidden",
+          "Caller cannot revoke this beneficiary proposal"
+        );
       }
       if (proposal.status === "revoked") {
         const acceptances = await tx
@@ -2920,7 +2962,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         proposal.activatedPolicyId &&
         params.revokedAt.getTime() <= proposal.effectiveFrom.getTime()
       ) {
-        throw new Error(
+        throw new ActorBeneficiaryPolicyRejectedError(
+          "effective_time_invalid",
           "Activated beneficiary policy revocation must be prospective"
         );
       }

@@ -64,7 +64,7 @@ Pure domain logic for the attribution ledger — shared between the Next.js app 
   - `estimatePoolComponentsV0()` — Pool component estimation from config (V0: base_issuance only)
   - `PoolComponentEstimate`, `PoolComponentId`, `POOL_COMPONENT_ALLOWLIST` — Pool types and validation
   - `validatePoolComponentId()` — V0 allowlist validation
-  - `EpochNotOpenError`, `EpochAlreadyFinalizedError`, `PoolComponentMissingError` — Domain errors with type guards
+  - `EpochNotOpenError`, `EpochAlreadyFinalizedError`, `PoolComponentMissingError`, `ActorBeneficiaryPolicyRejectedError` — Domain errors with type guards
   - `buildEIP712TypedData()` — Canonical EIP-712 typed-data builder for statement signing
   - `parseEIP712DeploymentEnvironment()`, `EIP712_DEPLOYMENT_ENVIRONMENTS`, `EIP712DeploymentEnvironment` — Fail-closed protocol environment validation for deployment-bound EIP-712 v2 signatures
   - `buildCanonicalMessage()` — Deprecated EIP-191 compatibility helper retained for one release cycle
