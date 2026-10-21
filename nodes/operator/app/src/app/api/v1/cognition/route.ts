@@ -18,6 +18,8 @@
  *     entry is the one full body (ORIENTATION_LOADED_IN_FULL).
  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: invariants + markdown render even
  *     when the hub is unconfigured or empty.
+ *   - GOALS_DIRECT_READ: approved DAO goals come from one
+ *     `listActiveGoals()` read, not the PER_DOMAIN_LIMIT scan.
  *   - NO_INTERNAL_BIND_ADDR: origin derived from forwarded headers first.
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
  * Links: https://cognidao.org/knowledge/node-baas-substrate-model, docs/spec/knowledge-syntropy.md
@@ -39,6 +41,7 @@ import {
   isCognitionEntry,
   type OrientationEntry,
   renderBundleMarkdown,
+  resolveGoals,
   resolveOrientation,
   SESSION_BOOTSTRAP_INVARIANTS,
 } from "./_bundle";
@@ -130,6 +133,12 @@ export const GET = wrapRouteHandlerWithLogging(
     const orientation: OrientationEntry | null = port
       ? await resolveOrientation(port, exactOrientationId, orientationId)
       : null;
+    // Approved DAO goals: one direct read, never the domain scan. A failure is
+    // rendered visibly in the bundle and logged, never silently omitted.
+    const goals = await resolveGoals(port);
+    if (goals.status === "unavailable") {
+      ctx.log.warn({ reason: goals.reason }, "cognition.goals_unavailable");
+    }
 
     const toolingInvariants = [...SESSION_BOOTSTRAP_INVARIANTS];
     const recallProtocol =
@@ -148,6 +157,7 @@ export const GET = wrapRouteHandlerWithLogging(
       skillsIndex,
       domainPointers,
       orientation,
+      goals,
     });
 
     ctx.log.info(
@@ -157,6 +167,8 @@ export const GET = wrapRouteHandlerWithLogging(
         skills: skillsIndex.length,
         domains: domainPointers.length,
         orientation: orientation?.id ?? null,
+        goalsStatus: goals.status,
+        goals: goals.status === "ok" ? goals.goals.map((g) => g.id) : [],
         hub: Boolean(port),
       },
       "cognition.bundle_success"
