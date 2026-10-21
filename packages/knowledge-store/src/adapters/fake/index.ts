@@ -13,8 +13,10 @@
 
 import {
   initializeConfidence,
+  isConfidenceExempt,
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
+import { type ActiveGoal, selectActiveGoals } from "../../domain/dao-goals.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
 import type {
   Citation,
@@ -28,6 +30,7 @@ import type {
 import {
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
+  requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import type {
   ChainNode,
@@ -107,6 +110,20 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     return opts?.limit ? out.slice(0, opts.limit) : out;
   }
 
+  async listActiveGoals(): Promise<ActiveGoal[]> {
+    // The fake holds only main-plane rows and has no status column, so every
+    // row is a non-deprecated candidate; the cap matches the Doltgres adapter.
+    return selectActiveGoals(
+      Array.from(this.rows.values()).map((r) => ({
+        id: r.id,
+        entryType: r.entryType,
+        title: r.title,
+        content: r.content,
+        evaluateAt: r.evaluateAt ?? null,
+      }))
+    );
+  }
+
   async searchKnowledge(
     domain: string,
     query: string,
@@ -170,8 +187,8 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     if (!this.domainsMap.has(entry.domain)) {
       throw new DomainNotRegisteredError(entry.domain);
     }
-    if (entry.entryType === "hypothesis" && !entry.evaluateAt) {
-      throw new HypothesisMissingEvaluateAtError(entry.id);
+    if (requiresEvaluateAt(entry.entryType) && !entry.evaluateAt) {
+      throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
     }
     const existing = this.rows.get(entry.id);
     const row: Knowledge = {
@@ -198,8 +215,8 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     if (!this.domainsMap.has(entry.domain)) {
       throw new DomainNotRegisteredError(entry.domain);
     }
-    if (entry.entryType === "hypothesis" && !entry.evaluateAt) {
-      throw new HypothesisMissingEvaluateAtError(entry.id);
+    if (requiresEvaluateAt(entry.entryType) && !entry.evaluateAt) {
+      throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
     }
     if (this.rows.has(entry.id)) {
       throw new Error(`duplicate key: knowledge.id='${entry.id}'`);
@@ -496,6 +513,7 @@ export class FakeEdoResolverAdapter implements EdoResolverPort {
     if (!entry) {
       throw new Error(`recomputeConfidence: entry '${entryId}' not found`);
     }
+    if (isConfidenceExempt(entry.entryType)) return entry.confidencePct ?? 0;
     const incoming = (await this.store.listCitationsByCitedId(entryId)).filter(
       (c) => c.citationType !== "tracks"
     );

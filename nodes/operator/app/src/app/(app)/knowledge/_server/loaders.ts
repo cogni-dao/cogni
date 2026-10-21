@@ -77,6 +77,8 @@ export async function loadKnowledgeList(
         sourceType: r.sourceType,
         sourceRef: r.sourceRef ?? null,
         tags: r.tags ?? null,
+        evaluateAt: r.evaluateAt ? r.evaluateAt.toISOString() : null,
+        resolutionStrategy: r.resolutionStrategy ?? null,
         createdAt: r.createdAt ? r.createdAt.toISOString() : null,
       });
       if (opts.limit != null && items.length >= opts.limit) break;
