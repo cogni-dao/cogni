@@ -195,4 +195,33 @@ describe("VM service resource attribution (story.5084)", () => {
     }
     expect([...missing]).toEqual([]);
   });
+
+  it("ships the VM resources row and capacity alerts", () => {
+    const dashboard = JSON.parse(read(STATUS_DASHBOARD)) as {
+      panels: ReadonlyArray<{ id: number; title: string; type: string }>;
+    };
+    const ids = dashboard.panels.map((panel) => panel.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(
+      dashboard.panels.some(
+        (panel) => panel.type === "row" && panel.title === "VM resources"
+      )
+    ).toBe(true);
+    for (const environment of ["Production", "Preview", "Candidate-a"]) {
+      expect(
+        dashboard.panels.some((panel) =>
+          panel.title.startsWith(`${environment} · top 15 services`)
+        )
+      ).toBe(true);
+    }
+    const uids = alertRules.map((rule) => rule.uid);
+    expect(uids.slice(-3)).toEqual([
+      "fleet-vm-memory-25",
+      "fleet-db-major-faults",
+      "fleet-vm-disk-80",
+    ]);
+    // `${uid}-production` must fit Grafana's 40-character UID bound.
+    for (const uid of uids)
+      expect(`${uid}-production`.length).toBeLessThanOrEqual(40);
+  });
 });

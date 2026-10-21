@@ -135,6 +135,8 @@ export function createScopedGraphExecutor(params: {
   readonly broker?: ConnectionBrokerPort;
   readonly resolver: ModelProviderResolverPort;
   readonly actorId: string;
+  /** Execution grant backing a scheduled run; threaded into tool authz audit. */
+  readonly grantId?: string;
 }): GraphExecutorPort {
   const container = getContainer();
 
@@ -250,6 +252,8 @@ export function createScopedGraphExecutor(params: {
             billing: params.billing,
             llmService,
             usageSource: provider.usageSource,
+            nodeId: container.nodeId,
+            ...(params.grantId ? { grantId: params.grantId } : {}),
             ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
           });
 
@@ -271,6 +275,8 @@ export function createScopedGraphExecutor(params: {
         billing: params.billing,
         llmService,
         usageSource: provider.usageSource,
+        nodeId: container.nodeId,
+        ...(params.grantId ? { grantId: params.grantId } : {}),
         ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
       });
     },
@@ -294,6 +300,8 @@ export function runGraphWithScope(params: {
   readonly llmService: LlmService;
   readonly usageSource: SourceSystem;
   readonly abortSignal?: AbortSignal;
+  readonly nodeId?: string;
+  readonly grantId?: string;
 }): GraphRunResult {
   const { executor, req, ctx, billing, llmService, usageSource } = params;
   return runInScope(
@@ -301,6 +309,8 @@ export function runGraphWithScope(params: {
       billing,
       llmService,
       usageSource,
+      ...(params.nodeId ? { nodeId: params.nodeId } : {}),
+      ...(params.grantId ? { grantId: params.grantId } : {}),
       ...(ctx?.actorUserId ? { actorUserId: ctx.actorUserId } : {}),
       ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     },

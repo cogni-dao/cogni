@@ -77,6 +77,7 @@ export function toBoundToolRuntime(
     effect: contract.effect,
     requiresConnection,
     capabilities,
+    ...(contract.requires !== undefined && { requires: contract.requires }),
 
     // Method-based interface
     validateInput(rawArgs: unknown): unknown {

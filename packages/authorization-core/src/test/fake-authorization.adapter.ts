@@ -33,6 +33,7 @@ function keyFor(params: AuthzCheckParams): string {
     resource: params.resource,
     tenantId: params.context.tenantId,
     graphId: params.context.graphId ?? null,
+    nodeId: params.context.nodeId ?? null,
   });
 }
 
@@ -78,7 +79,20 @@ export class FakeAuthorizationAdapter implements AuthorizationPort {
   }
 
   async check(params: AuthzCheckParams): Promise<AuthzDecision> {
-    const decision = this.decisions.get(keyFor(params)) ?? "authz_denied";
+    // Explicit decisions win; otherwise a directly-held role tuple (written via
+    // writeRelation, removed via deleteRelation) allows — grant/revoke in tests.
+    const decision =
+      this.decisions.get(keyFor(params)) ??
+      (!params.subjectId &&
+      this.relations.has(
+        relationKey({
+          user: params.actorId,
+          relation: relationForAuthzAction(params.action),
+          object: params.resource,
+        })
+      )
+        ? "allow"
+        : "authz_denied");
     const checks = checksFor(params);
 
     if (decision === "allow") {

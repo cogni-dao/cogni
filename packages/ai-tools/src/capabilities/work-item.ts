@@ -33,6 +33,16 @@ export interface WorkItemInfo {
   readonly pr?: string;
   readonly blockedBy?: string;
   readonly updatedAt: string;
+  /** Optimistic-concurrency revision of the row read (store-specific counter). */
+  readonly revision?: number;
+  /** Measurable "done when" text, when the store carries one. */
+  readonly outcome?: string;
+  /** Size estimate, when set. */
+  readonly estimate?: number;
+  /** Parent work item id (e.g. the story a task belongs to). */
+  readonly parentId?: string;
+  /** Spec / knowledge references the item declares. */
+  readonly specRefs?: readonly string[];
 }
 
 export interface WorkItemAssignee {
@@ -50,6 +60,16 @@ export interface WorkItemQueryParams {
   readonly actor?: string;
   readonly projectId?: string;
   readonly limit?: number;
+  /** Exact ids to fetch (bounded). */
+  readonly ids?: readonly string[];
+  /** Opaque pagination cursor from a previous page's `nextCursor`. */
+  readonly cursor?: string;
+}
+
+/** One page of a work-item query. `nextCursor` absent ⇒ last page. */
+export interface WorkItemQueryPage {
+  readonly items: readonly WorkItemInfo[];
+  readonly nextCursor?: string;
 }
 
 /**
@@ -74,6 +94,12 @@ export interface WorkItemTransitionResult {
 export interface WorkItemCapability {
   /** List work items matching filters. */
   query(params: WorkItemQueryParams): Promise<readonly WorkItemInfo[]>;
+
+  /**
+   * Same as `query`, plus the pagination cursor. Optional: implementations without
+   * pagination omit it and the tool reports no `nextCursor`.
+   */
+  queryPage?(params: WorkItemQueryParams): Promise<WorkItemQueryPage>;
 
   /** Transition a work item to a new status. */
   transitionStatus(input: {

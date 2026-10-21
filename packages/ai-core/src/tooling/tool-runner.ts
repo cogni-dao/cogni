@@ -13,6 +13,11 @@
  *   - TOOLRUNNER_PIPELINE_ORDER: tool lookup → policy check → optional authz check → validate args → emit start → execute → validate result → redact → emit result → return
  *   - DENY_BY_DEFAULT: Default to DenyAllPolicy if no policy provided
  *   - AUTHZ_FAILS_CLOSED_BEFORE_EXEC: when authz is configured, missing identity, deny, or unavailable returns authz_* without executing the tool
+ *   - NODE_POLICY_V0 (.context/authz-v0-design.md): a tool's declared `requires` picks the gate, with or without an adapter —
+ *     "node.collaborate" = authenticated actor AND this node (code-only, no OpenFGA call); an AuthzAction = OpenFGA check
+ *     on `node:<nodeId>` (no adapter → authz_unavailable); undeclared = the legacy `tool.execute` check on `tool:<id>` only when an
+ *     adapter is installed, ungated otherwise (documented compatibility path, unchanged). Missing actor/node or an
+ *     OpenFGA throw → authz_unavailable. Each evaluated call reports one decision record (onAuthzDecision + span metadata).
  *   - SPAN_PORT_HANDLES_SCRUBBING: ai-core passes raw data to spanPort; adapter handles scrubbing/truncation
  * Side-effects: none (AiEvent emission via injected callback is caller's responsibility)
  * Links: @cogni/ai-tools, AI_SETUP_SPEC.md, TOOL_USE_SPEC.md
@@ -24,7 +29,10 @@ import type {
   AuthzDecision,
   AuthzDecisionCode,
 } from "@cogni/authorization-core";
-import { authzToolResource } from "@cogni/authorization-core";
+import {
+  authzNodeResource,
+  authzToolResource,
+} from "@cogni/authorization-core";
 import type {
   ToolCallResultEvent,
   ToolCallStartEvent,
@@ -36,7 +44,12 @@ import {
   type ToolPolicy,
   type ToolPolicyContext,
 } from "./runtime/tool-policy";
-import type { EmitAiEvent, ToolFailureReceipt, ToolResult } from "./types";
+import type {
+  BoundToolRuntime,
+  EmitAiEvent,
+  ToolFailureReceipt,
+  ToolResult,
+} from "./types";
 
 /** Preserve only explicitly structured, bounded nonretryable receipts from capabilities. */
 function failureReceipt(error: unknown): ToolFailureReceipt | undefined {
@@ -99,6 +112,23 @@ export interface ToolExecOptions {
   readonly modelToolCallId?: string;
 }
 
+/** Which gate decided a tool call (authz v0). */
+export type ToolAuthzPolicy = "v0_collaborate" | "openfga_node" | "legacy_tool";
+
+/** One structured authz decision per evaluated tool call — for audit logs. */
+export interface ToolAuthzDecisionRecord {
+  readonly toolName: string;
+  readonly toolCallId: string;
+  readonly decision: "allow" | "deny" | "unavailable";
+  readonly code: AuthzDecisionCode;
+  readonly policy: ToolAuthzPolicy;
+  readonly reason?: string;
+  readonly actorId?: string;
+  readonly nodeId?: string;
+  readonly graphId?: string;
+  readonly grantId?: string;
+}
+
 /**
  * Configuration for tool runner creation.
  */
@@ -129,6 +159,15 @@ export interface ToolRunnerConfig {
 
   /** Graph context for authz and audit. */
   readonly graphId?: string;
+
+  /** Node the run executes on. Required by declared node policies (authz v0). */
+  readonly nodeId?: string;
+
+  /** Execution grant backing a scheduled run (audit only). */
+  readonly grantId?: string;
+
+  /** Receives one decision record per authz-evaluated tool call (audit logging seam). */
+  readonly onAuthzDecision?: (record: ToolAuthzDecisionRecord) => void;
 
   /**
    * Optional span port for tool instrumentation.
@@ -190,6 +229,9 @@ export function createToolRunner(
   const tenantId = config?.tenantId;
   const subjectId = config?.subjectId;
   const graphId = config?.graphId;
+  const nodeId = config?.nodeId;
+  const grantId = config?.grantId;
+  const onAuthzDecision = config?.onAuthzDecision;
 
   /**
    * Execute a tool by name with given arguments.
@@ -290,53 +332,61 @@ export function createToolRunner(
       };
     }
 
-    if (authz) {
-      if (!actorId || !tenantId) {
-        const result = authzFailureEvent(
-          toolCallId,
-          toolName,
-          "authz_unavailable",
-          "Tool authorization context is incomplete"
-        );
-        emit(result.event);
-        endSpan(
-          { errorCode: "authz_unavailable", reason: "missing_identity" },
-          "ERROR",
-          {
-            effect: boundTool.effect,
-            authzDecision: "unavailable",
-          }
-        );
-        return result.result;
+    // NODE_POLICY_INDEPENDENT_OF_ADAPTER: a declared `requires` is always evaluated (OpenFGA is
+    // optional for v0; the policy is not). LEGACY_COMPAT: an undeclared tool keeps the pre-v0
+    // behavior exactly — authz-checked only when an adapter is installed, otherwise ungated.
+    if (boundTool.requires !== undefined || authz) {
+      const authzOutcome = await evaluateToolAuthz(
+        authz,
+        boundTool,
+        toolName,
+        toolCallId,
+        ctx.runId
+      );
+      const record: ToolAuthzDecisionRecord = {
+        toolName,
+        toolCallId,
+        decision:
+          authzOutcome.code === "authz_allowed"
+            ? "allow"
+            : authzOutcome.code === "authz_denied"
+              ? "deny"
+              : "unavailable",
+        code: authzOutcome.code,
+        policy: authzOutcome.policy,
+        ...(authzOutcome.reason !== undefined && {
+          reason: authzOutcome.reason,
+        }),
+        ...(actorId !== undefined && { actorId }),
+        ...(nodeId !== undefined && { nodeId }),
+        ...(graphId !== undefined && { graphId }),
+        ...(grantId !== undefined && { grantId }),
+      };
+      try {
+        onAuthzDecision?.(record);
+      } catch {
+        // Audit hook failures must not change the decision.
       }
 
-      const authzDecision = await authz.check({
-        actorId,
-        ...(subjectId !== undefined ? { subjectId } : {}),
-        action: "tool.execute",
-        resource: authzToolResource(toolName),
-        context: {
-          tenantId,
-          runId: ctx.runId,
-          toolCallId,
-          ...(graphId !== undefined ? { graphId } : {}),
-        },
-      });
-
-      if (authzDecision.decision === "deny") {
+      if (authzOutcome.code !== "authz_allowed") {
         const result = authzFailureEvent(
           toolCallId,
           toolName,
-          authzDecision.code,
-          authzSafeMessage(authzDecision)
+          authzOutcome.code,
+          authzOutcome.safeMessage
         );
         emit(result.event);
         endSpan(
-          { errorCode: authzDecision.code, reason: authzDecision.reason },
-          authzDecision.code === "authz_unavailable" ? "ERROR" : "WARNING",
+          { errorCode: authzOutcome.code, reason: authzOutcome.reason },
+          authzOutcome.code === "authz_unavailable" ? "ERROR" : "WARNING",
           {
             effect: boundTool.effect,
-            authzDecision: authzDecision.code,
+            authzDecision:
+              authzOutcome.policy === "legacy_tool" &&
+              authzOutcome.reason === "missing_identity"
+                ? "unavailable"
+                : authzOutcome.code,
+            authzPolicy: authzOutcome.policy,
           }
         );
         return result.result;
@@ -384,6 +434,8 @@ export function createToolRunner(
       tenantId: tenantId ?? "tenant:legacy_toolrunner",
       ...(subjectId !== undefined ? { subjectId } : {}),
       ...(graphId !== undefined ? { graphId } : {}),
+      ...(nodeId !== undefined ? { nodeId } : {}),
+      ...(grantId !== undefined ? { grantId } : {}),
       // connectionId will be added in P1 when connection auth is implemented
     };
     // Per FIX_LAYERING_CAPABILITY_TYPES: capabilities is opaque to ai-core
@@ -509,6 +561,129 @@ export function createToolRunner(
       ok: true,
       value: safeResult,
     };
+  }
+
+  type AuthzOutcome = {
+    readonly code: AuthzDecisionCode;
+    readonly policy: ToolAuthzPolicy;
+    readonly reason?: string;
+    readonly safeMessage: string;
+  };
+
+  /**
+   * NODE_POLICY_V0: pick the gate from the tool's declared `requires`. The undeclared
+   * branch is the pre-v0 legacy check, byte-for-byte (same params, same messages).
+   */
+  async function evaluateToolAuthz(
+    port: AuthorizationPort | undefined,
+    tool: BoundToolRuntime,
+    toolName: string,
+    toolCallId: string,
+    runId: string
+  ): Promise<AuthzOutcome> {
+    const requires = tool.requires;
+
+    if (requires === "node.collaborate") {
+      if (!actorId || !nodeId) {
+        return {
+          code: "authz_unavailable",
+          policy: "v0_collaborate",
+          reason: !actorId ? "missing_actor" : "missing_node",
+          safeMessage: "Tool authorization context is incomplete",
+        };
+      }
+      return {
+        code: "authz_allowed",
+        policy: "v0_collaborate",
+        safeMessage: "",
+      };
+    }
+
+    if (requires !== undefined) {
+      // A privileged node action needs a real authority; without an adapter, fail closed.
+      if (!port) {
+        return {
+          code: "authz_unavailable",
+          policy: "openfga_node",
+          reason: "no_authz_adapter",
+          safeMessage: "Authorization service is unavailable",
+        };
+      }
+      if (!actorId || !tenantId || !nodeId) {
+        return {
+          code: "authz_unavailable",
+          policy: "openfga_node",
+          reason: !nodeId ? "missing_node" : "missing_identity",
+          safeMessage: "Tool authorization context is incomplete",
+        };
+      }
+      let decision: AuthzDecision;
+      try {
+        decision = await port.check({
+          actorId,
+          ...(subjectId !== undefined ? { subjectId } : {}),
+          action: requires,
+          resource: authzNodeResource(nodeId),
+          context: {
+            nodeId,
+            tenantId,
+            runId,
+            toolCallId,
+            ...(graphId !== undefined ? { graphId } : {}),
+            ...(grantId !== undefined ? { grantId } : {}),
+          },
+        });
+      } catch {
+        return {
+          code: "authz_unavailable",
+          policy: "openfga_node",
+          reason: "check_threw",
+          safeMessage: "Authorization service is unavailable",
+        };
+      }
+      return decision.decision === "deny"
+        ? {
+            code: decision.code,
+            policy: "openfga_node",
+            ...(decision.reason !== undefined && { reason: decision.reason }),
+            safeMessage: authzSafeMessage(decision),
+          }
+        : { code: "authz_allowed", policy: "openfga_node", safeMessage: "" };
+    }
+
+    // Undeclared: legacy tool.execute on tool:<id> — unchanged (LEGACY_COMPAT: only reached
+    // when an adapter is installed; the caller skips authz entirely otherwise, as before v0).
+    if (!port) {
+      return { code: "authz_allowed", policy: "legacy_tool", safeMessage: "" };
+    }
+    if (!actorId || !tenantId) {
+      return {
+        code: "authz_unavailable",
+        policy: "legacy_tool",
+        reason: "missing_identity",
+        safeMessage: "Tool authorization context is incomplete",
+      };
+    }
+    const decision = await port.check({
+      actorId,
+      ...(subjectId !== undefined ? { subjectId } : {}),
+      action: "tool.execute",
+      resource: authzToolResource(toolName),
+      context: {
+        tenantId,
+        runId,
+        toolCallId,
+        ...(graphId !== undefined ? { graphId } : {}),
+      },
+    });
+    return decision.decision === "deny"
+      ? {
+          code: decision.code,
+          policy: "legacy_tool",
+          ...(decision.reason !== undefined && { reason: decision.reason }),
+          safeMessage: authzSafeMessage(decision),
+        }
+      : { code: "authz_allowed", policy: "legacy_tool", safeMessage: "" };
   }
 
   return { exec };
