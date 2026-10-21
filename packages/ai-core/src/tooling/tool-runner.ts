@@ -524,7 +524,7 @@ export function createToolRunner(
    * branch is the pre-v0 legacy check, byte-for-byte (same params, same messages).
    */
   async function evaluateToolAuthz(
-    port: AuthorizationPort | undefined,
+    port: AuthorizationCheckPort | undefined,
     tool: BoundToolRuntime,
     toolName: string,
     toolCallId: string,
