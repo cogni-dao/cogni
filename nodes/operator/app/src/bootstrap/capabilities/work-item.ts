@@ -19,6 +19,10 @@
  *     to `backlogWriter.principalId`. The store's own authority applies unchanged (a
  *     non-creator may set only triage fields priority/rank/labels). Without it, `patch`
  *     stays on the markdown ports, which have no compare-and-set for callers.
+ *   - P0P1_IS_NODE_ADMIN (task.5286): a `patch` that sets priority 0 or 1 first runs
+ *     `privilegedPriorityGate` — a `node.administer` check on the INVOKING actor, not the system
+ *     principal the write is attributed to — and throws `WorkItemPriorityAuthzError` (nothing
+ *     written) unless it allows. Unwired ⇒ fail closed. Priority 2+ and other fields are unchanged.
  *   - PATCH_CAS_PASSTHROUGH: a caller `expectedRevision` is forwarded as the store's
  *     compare-and-set; the store's `WorkItemRevisionConflictError` becomes the ai-tools
  *     `WorkItemPatchConflictError` (nothing written). Absent ⇒ unconditioned patch.
@@ -49,6 +53,33 @@ import {
   type WorkItemsDoltgresPort,
 } from "@cogni/work-items/adapters/doltgres";
 
+import {
+  isPrivilegedPriority,
+  type NodeAdminGate,
+  nodeAdminUnavailable,
+} from "@/bootstrap/node-admin-gate";
+
+/**
+ * A priority-0/1 patch refused by the node-admin gate. `errorCode` keeps deny
+ * (`authz_denied`) distinct from an authorization outage (`authz_unavailable`).
+ */
+export class WorkItemPriorityAuthzError extends Error {
+  readonly errorCode: "authz_denied" | "authz_unavailable";
+
+  constructor(
+    errorCode: "authz_denied" | "authz_unavailable",
+    priority: number
+  ) {
+    super(
+      errorCode === "authz_denied"
+        ? `${errorCode}: priority ${priority} requires node admin`
+        : `${errorCode}: priority ${priority} could not be authorized`
+    );
+    this.name = "WorkItemPriorityAuthzError";
+    this.errorCode = errorCode;
+  }
+}
+
 /**
  * Dependencies for creating the work item capability.
  */
@@ -70,6 +101,11 @@ export interface WorkItemCapabilityDeps {
     readonly store: Pick<WorkItemsDoltgresPort, "patch">;
     readonly principalId: string;
   };
+  /**
+   * P0P1_IS_NODE_ADMIN: decides whether the invoking actor may set priority 0/1. Called
+   * only for those priorities, before any write. Absent ⇒ such patches fail closed.
+   */
+  readonly privilegedPriorityGate?: () => Promise<NodeAdminGate>;
 }
 
 function assigneeId(a: SubjectRef): string {
@@ -187,6 +223,16 @@ export function createWorkItemCapability(
     },
 
     async patch(input): Promise<WorkItemInfo> {
+      const priority = input.set.priority;
+      if (priority !== undefined && isPrivilegedPriority(priority)) {
+        const gate = deps.privilegedPriorityGate
+          ? await deps.privilegedPriorityGate()
+          : nodeAdminUnavailable("no_priority_gate");
+        if (!gate.ok) {
+          throw new WorkItemPriorityAuthzError(gate.errorCode, priority);
+        }
+      }
+
       const writer = deps.backlogWriter;
       if (writer) {
         try {
