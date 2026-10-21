@@ -14,7 +14,7 @@
 import {
   applyReceiptWeightOverrides,
   buildEIP712TypedData,
-  computeFinalClaimantAllocationSetHash,
+  computeSignedAllocationSetHash,
   computeReceiptWeights,
   type EIP712DeploymentEnvironment,
   explodeToClaimants,
@@ -105,8 +105,29 @@ export const GET = wrapRouteHandlerWithLogging<{
       overrides
     );
 
+    const [existingActorAllocations, actorReceiptIds] = await Promise.all([
+      store.listActorContributionAllocationsForEpoch(epochId),
+      store.listUnallocatedActorReceiptIdsForEpoch(epochId),
+    ]);
+    const preparedActorAllocations = await Promise.all(
+      actorReceiptIds.map((receiptId) =>
+        store.prepareActorContributionAllocation({
+          nodeId: getNodeId(),
+          epochId,
+          receiptId,
+        })
+      )
+    );
+    const actorAllocations = [
+      ...existingActorAllocations,
+      ...preparedActorAllocations,
+    ];
+
     const finalAllocationSetHash =
-      await computeFinalClaimantAllocationSetHash(claimantAllocations);
+      await computeSignedAllocationSetHash(
+        claimantAllocations,
+        actorAllocations
+      );
 
     let deploymentEnvironment: EIP712DeploymentEnvironment;
     try {

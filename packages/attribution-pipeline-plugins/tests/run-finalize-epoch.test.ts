@@ -494,10 +494,6 @@ describe("finalizeEpoch — per-node distribution config (bug.5020)", () => {
         .fn()
         .mockResolvedValue(["receipt-1"]),
       prepareActorContributionAllocation: vi.fn().mockResolvedValue(allocation),
-      insertActorContributionAllocation: vi.fn().mockResolvedValue({
-        ...allocation,
-        createdAt: new Date("2026-10-01T00:00:01.000Z"),
-      }),
     });
 
     await expect(
@@ -508,10 +504,19 @@ describe("finalizeEpoch — per-node distribution config (bug.5020)", () => {
       epochId: 7n,
       receiptId: "receipt-1",
     });
-    expect(store.insertActorContributionAllocation).toHaveBeenCalledWith({
-      allocation,
-    });
     expect(store.finalizeEpochAtomic).toHaveBeenCalledOnce();
+    expect(store.finalizeEpochAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({ actorAllocations: [allocation] })
+    );
+    const verifiedTypedData = vi.mocked(verifyTypedData).mock.calls.at(-1)?.[0];
+    const finalized = vi.mocked(store.finalizeEpochAtomic).mock.calls[0]?.[0];
+    expect(verifiedTypedData).toEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          finalAllocationSetHash: finalized?.expectedFinalAllocationSetHash,
+        }),
+      })
+    );
   });
 
   it("ACTIVE: folds against the per-node config from the gateway (not baked)", async () => {

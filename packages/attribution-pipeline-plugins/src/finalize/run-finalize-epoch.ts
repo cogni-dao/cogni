@@ -34,7 +34,7 @@ import {
   claimantKey,
   computeApproverSetHash,
   computeAttributionStatementLines,
-  computeFinalClaimantAllocationSetHash,
+  computeSignedAllocationSetHash,
   explodeToClaimants,
   parseEIP712DeploymentEnvironment,
   type ReceiptClaimantsRecord,
@@ -851,17 +851,24 @@ export async function runFinalizeEpoch(
   // contribution cutoff as part of the ONE admin finalize action. Beneficiaries
   // do not sign each receipt. Missing policy remains visible as unresolved
   // identity state and never creates a second approval workflow.
-  const unallocatedActorReceiptIds =
-    await attributionStore.listUnallocatedActorReceiptIdsForEpoch(epochId);
-  for (const receiptId of unallocatedActorReceiptIds) {
-    const allocation =
-      await attributionStore.prepareActorContributionAllocation({
+  const [existingActorAllocations, unallocatedActorReceiptIds] =
+    await Promise.all([
+      attributionStore.listActorContributionAllocationsForEpoch(epochId),
+      attributionStore.listUnallocatedActorReceiptIdsForEpoch(epochId),
+    ]);
+  const preparedActorAllocations = await Promise.all(
+    unallocatedActorReceiptIds.map((receiptId) =>
+      attributionStore.prepareActorContributionAllocation({
         nodeId,
         epochId,
         receiptId,
-      });
-    await attributionStore.insertActorContributionAllocation({ allocation });
-  }
+      })
+    )
+  );
+  const actorAllocations = [
+    ...existingActorAllocations,
+    ...preparedActorAllocations,
+  ];
 
   const finalClaimantAllocations = explodeToClaimants(
     receiptWeights,
@@ -889,8 +896,9 @@ export async function runFinalizeEpoch(
   );
 
   // 7. Compute allocation set hash (deterministic)
-  const finalAllocationSetHash = await computeFinalClaimantAllocationSetHash(
-    finalClaimantAllocations
+  const finalAllocationSetHash = await computeSignedAllocationSetHash(
+    finalClaimantAllocations,
+    actorAllocations
   );
 
   // 8. Build EIP-712 typed data and verify signature
@@ -932,6 +940,7 @@ export async function runFinalizeEpoch(
         finalUnits: allocation.finalUnits,
         receiptIds: [...(allocation.receiptIds ?? [])],
       })),
+      actorAllocations,
       statement: {
         nodeId,
         finalAllocationSetHash,

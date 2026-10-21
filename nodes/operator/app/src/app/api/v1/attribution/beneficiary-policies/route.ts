@@ -5,7 +5,7 @@
  * Module: `@app/api/v1/attribution/beneficiary-policies`
  * Purpose: Principal-aware governed beneficiary proposal, acceptance, revoke, and read.
  * Scope: Authenticates the exact human/agent caller; business rules live below the route.
- * Invariants: NO_LEGACY_AGENT; GOVERNANCE_ACCEPTANCE_APPROVER_GATED; NO_IMPLICIT_BENEFICIARY.
+ * Invariants: NO_LEGACY_AGENT; DIRECT_ROLE_ACCEPTANCE; NO_IMPLICIT_BENEFICIARY.
  * Side-effects: IO (HTTP and attribution store)
  * Links: story.5075, attribution.actor-identity.v1.contract
  * @public
@@ -81,19 +81,6 @@ export const POST = wrapRouteHandlerWithLogging(
     const mutation = actorBeneficiaryPolicyOperation.input.parse(
       await request.json()
     );
-    if (
-      mutation.action === "accept" &&
-      mutation.role.startsWith("governance_for_")
-    ) {
-      if (caller.principal.kind !== "human") {
-        return NextResponse.json(
-          { error: "Governance acceptance requires a human approver" },
-          { status: 403 }
-        );
-      }
-      const denied = checkApprover(ctx, caller.principal.walletAddress);
-      if (denied) return denied;
-    }
     let governanceOverride = false;
     if (mutation.action === "revoke") {
       const proposal =

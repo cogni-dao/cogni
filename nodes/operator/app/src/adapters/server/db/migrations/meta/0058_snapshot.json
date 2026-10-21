@@ -4466,7 +4466,7 @@
       "checkConstraints": {
         "actor_beneficiary_policy_acceptances_role_check": {
           "name": "actor_beneficiary_policy_acceptances_role_check",
-          "value": "\"actor_beneficiary_policy_acceptances\".\"role\" IN ('beneficiary', 'earner', 'steward', 'governance_for_earner', 'governance_for_steward')"
+          "value": "\"actor_beneficiary_policy_acceptances\".\"role\" IN ('beneficiary', 'earner', 'steward')"
         }
       },
       "isRLSEnabled": true

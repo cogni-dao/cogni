@@ -290,13 +290,21 @@ Finalization is claimant-aware. Claimant ownership lives in the `epoch_receipt_c
 1. Load locked `epoch_receipt_claimants` for the epoch (one row per receipt, each with `claimantKeys[]`)
 2. Load selected receipts and compute per-receipt weights via `computeReceiptWeights(algoRef, receipts, weightConfig)`
 3. Join receipt weights × locked claimants via `explodeToClaimants()` — splits units equally among claimant keys per receipt (largest-remainder rounding), groups by claimant key across all receipts
-4. Persist canonical claimant-scoped unit rows in `epoch_final_claimant_allocations`
-5. Compute each claimant's share: `final_units / total_units`
-6. Distribute `pool_total_credits` proportionally using BIGINT arithmetic
-7. Apply largest-remainder rounding to ensure exact sum equals pool total
-8. Output statement lines shaped like `[{ claimant_key, claimant, final_units, pool_share, credit_amount, receipt_ids }]`
+4. Derive actor contribution allocations in memory for actor-owned receipts
+5. Persist canonical claimant-scoped unit rows in `epoch_final_claimant_allocations`
+6. Compute each claimant's share: `final_units / total_units`
+7. Distribute `pool_total_credits` proportionally using BIGINT arithmetic
+8. Apply largest-remainder rounding to ensure exact sum equals pool total
+9. Output statement lines shaped like `[{ claimant_key, claimant, final_units, pool_share, credit_amount, receipt_ids }]`
 
-The final allocation set hash (SHA-256 of canonical claimant allocation data, sorted by claimant key) pins the exact finalized input set. Combined with `pool_total_credits`, locked evaluations, locked claimant records, and `weight_config`, the statement is fully deterministic and reproducible.
+The final allocation set hash pins both canonical claimant allocations and the
+content-addressed actor allocation facts (AI earner, explicit beneficiary policy
+or unresolved state, receipt, and contribution cutoff). Epochs without actor
+allocations retain the legacy claimant-only hash. After signature verification,
+actor allocations, claimant allocations, statement, signature, and epoch status
+are persisted in one transaction. Combined with `pool_total_credits`, locked
+evaluations, locked claimant records, and `weight_config`, the statement is fully
+deterministic and reproducible.
 
 ### Pool Model
 
@@ -759,8 +767,8 @@ Input: `{ epochId, signature }` — `signerAddress` derived from SIWE session (n
 10. Persist `epoch_final_claimant_allocations` (canonical signed claimant units)
 11. Read pool components, compute `pool_total_credits = SUM(amount_credits)`
 12. `computeAttributionStatementLines(final_claimant_allocations, pool_total)` — BIGINT, largest-remainder
-13. Compute claimant-aware `final_allocation_set_hash`
-14. Atomic transaction: set `pool_total_credits` on epoch, update status to `'finalized'`, upsert final claimant allocations, insert epoch statement + statement signature
+13. Compute claimant-aware `final_allocation_set_hash`, including frozen actor allocation facts
+14. Atomic transaction: set `pool_total_credits` on epoch, update status to `'finalized'`, upsert final claimant and actor allocations, insert epoch statement + statement signature
 15. Return statement
 
 Deterministic workflow ID: `ledger-finalize-{scopeId}-{epochId}`
@@ -881,7 +889,9 @@ the agent later produces contribution activity, that activity enters the ledger
 under the external identity that authored it. Resolution may attach that claimant
 to the durable agent's `earned_by_actor_id`; it never rewrites AI authorship to a
 stewarding human. A separately frozen `beneficiary_actor_id` may designate that
-human, and the cumulative distribution later pins the beneficiary wallet. Flight
+human only after the beneficiary, AI earner, and human steward each accept the
+policy directly; governance cannot substitute for a principal. The cumulative
+distribution later pins the beneficiary wallet. Flight
 authority is operational control; credit attribution remains governed by
 `(node_id, scope_id)` epoch rules.
 

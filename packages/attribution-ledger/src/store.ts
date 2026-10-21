@@ -213,9 +213,7 @@ export interface ActorBeneficiaryPolicyRecord {
 export type ActorBeneficiaryAcceptanceRole =
   | "beneficiary"
   | "earner"
-  | "steward"
-  | "governance_for_earner"
-  | "governance_for_steward";
+  | "steward";
 
 export interface ActorBeneficiaryPolicyAcceptanceRecord {
   readonly id: string;
@@ -347,10 +345,6 @@ export interface AcceptActorBeneficiaryPolicyParams {
   readonly acceptedByActorId: string;
   readonly evidence: Record<string, unknown>;
   readonly acceptedAt: Date;
-}
-
-export interface InsertActorContributionAllocationParams {
-  readonly allocation: FrozenActorContributionAllocation;
 }
 
 export interface UpsertSelectionParams {
@@ -767,6 +761,7 @@ export interface EpochWriter {
     epochId: bigint;
     poolTotal: bigint;
     finalClaimantAllocations: readonly InsertFinalClaimantAllocationParams[];
+    actorAllocations?: readonly FrozenActorContributionAllocation[];
     statement: Omit<InsertStatementParams, "epochId">;
     signature: Omit<InsertSignatureParams, "statementId">;
     expectedFinalAllocationSetHash: string;
@@ -1039,10 +1034,6 @@ export interface ActorAttributionStore {
     readonly epochId: bigint;
     readonly receiptId: string;
   }): Promise<FrozenActorContributionAllocation>;
-
-  insertActorContributionAllocation(
-    params: InsertActorContributionAllocationParams
-  ): Promise<ActorContributionAllocationRecord>;
 
   getActorContributionAllocation(
     allocationRef: string

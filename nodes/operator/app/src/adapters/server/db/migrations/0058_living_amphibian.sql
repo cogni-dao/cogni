@@ -18,7 +18,6 @@ CREATE TABLE "existing_agent_claims" (
 );
 --> statement-breakpoint
 ALTER TABLE "existing_agent_claims" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
-ALTER TABLE "actor_beneficiary_policy_acceptances" DROP CONSTRAINT "actor_beneficiary_policy_acceptances_role_check";--> statement-breakpoint
 ALTER TABLE "actor_contribution_allocations" DROP CONSTRAINT "actor_contribution_allocations_signer_actor_id_actors_id_fk";
 --> statement-breakpoint
 ALTER TABLE "actor_distribution_liabilities" DROP CONSTRAINT "actor_distribution_liabilities_signer_actor_id_actors_id_fk";
@@ -36,8 +35,6 @@ ALTER TABLE "actor_contribution_allocations" DROP COLUMN "signer_wallet";--> sta
 ALTER TABLE "actor_contribution_allocations" DROP COLUMN "signature";--> statement-breakpoint
 ALTER TABLE "actor_contribution_allocations" DROP COLUMN "signed_at";--> statement-breakpoint
 ALTER TABLE "actor_distribution_liabilities" DROP COLUMN "signer_actor_id";--> statement-breakpoint
-ALTER TABLE "actor_beneficiary_policy_acceptances" ADD CONSTRAINT "actor_beneficiary_policy_acceptances_role_check" CHECK ("actor_beneficiary_policy_acceptances"."role" IN ('beneficiary', 'earner', 'steward', 'governance_for_earner', 'governance_for_steward'));--> statement-breakpoint
-
 -- 0055 intentionally created billing accounts before the account service
 -- existed. Repair those rows forward so account lookup cannot enter the
 -- existing-account/no-default-key dead end.

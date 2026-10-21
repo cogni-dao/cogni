@@ -98,6 +98,7 @@ export {
   computeAllocationSetHash,
   computeArtifactsHash,
   computeFinalClaimantAllocationSetHash,
+  computeSignedAllocationSetHash,
   computeWeightConfigHash,
   sha256OfCanonicalJson,
 } from "./hashing";
@@ -177,7 +178,6 @@ export type {
   IdentityResolver,
   IngestionCursor,
   IngestionReceipt,
-  InsertActorContributionAllocationParams,
   InsertDistributionManifestParams,
   InsertFinalClaimantAllocationParams,
   InsertPoolComponentParams,

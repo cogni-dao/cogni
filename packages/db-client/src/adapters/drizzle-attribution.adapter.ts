@@ -47,9 +47,9 @@ import type {
   DistributionManifestRecord,
   EpochUserProjection,
   FinalClaimantAllocationRecord,
+  FrozenActorContributionAllocation,
   IngestionCursor,
   IngestionReceipt,
-  InsertActorContributionAllocationParams,
   InsertDistributionManifestParams,
   InsertFinalClaimantAllocationParams,
   InsertPoolComponentParams,
@@ -128,6 +128,10 @@ import {
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Database } from "../client";
+
+type AttributionTransaction = Parameters<
+  Parameters<Database["transaction"]>[0]
+>[0];
 
 // ── Row mappers ─────────────────────────────────────────────────
 
@@ -1889,6 +1893,7 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     epochId: bigint;
     poolTotal: bigint;
     finalClaimantAllocations: readonly InsertFinalClaimantAllocationParams[];
+    actorAllocations?: readonly FrozenActorContributionAllocation[];
     statement: Omit<InsertStatementParams, "epochId">;
     signature: Omit<InsertSignatureParams, "statementId">;
     expectedFinalAllocationSetHash: string;
@@ -1912,6 +1917,91 @@ export class DrizzleAttributionAdapter implements AttributionStore {
 
       if (status === "open") {
         throw new EpochNotOpenError(params.epochId.toString());
+      }
+
+      // Actor payout facts are part of the signed allocation commitment. Lock
+      // each earner, re-derive the facts in this transaction, and persist only
+      // after the caller has verified that commitment's signature.
+      const actorAllocations = [...(params.actorAllocations ?? [])].sort(
+        (a, b) => a.allocationRef.localeCompare(b.allocationRef)
+      );
+      for (const allocation of actorAllocations) {
+        const refrozen = await freezeActorContributionAllocation({
+          nodeId: allocation.nodeId,
+          scopeId: allocation.scopeId,
+          epochId: allocation.epochId,
+          receiptId: allocation.receiptId,
+          earnedByActorId: allocation.earnedByActorId,
+          beneficiaryActorId: allocation.beneficiaryActorId,
+          beneficiaryPolicyId: allocation.beneficiaryPolicyId,
+          beneficiaryPolicyVersion: allocation.beneficiaryPolicyVersion,
+          contributionCutoff: allocation.contributionCutoff,
+          sourceEvidence: allocation.sourceEvidence,
+        });
+        if (
+          refrozen.allocationRef !== allocation.allocationRef ||
+          refrozen.sourceEvidenceHash !== allocation.sourceEvidenceHash
+        ) {
+          throw new Error("Actor allocation commitment is not content-addressed");
+        }
+        const [existingAllocation] = await tx
+          .select()
+          .from(actorContributionAllocations)
+          .where(
+            and(
+              eq(actorContributionAllocations.id, allocation.allocationRef),
+              eq(actorContributionAllocations.scopeId, this.scopeId)
+            )
+          )
+          .limit(1);
+        if (existingAllocation) {
+          const frozen = toActorContributionAllocation(existingAllocation);
+          const refrozenPersisted = await freezeActorContributionAllocation({
+            nodeId: frozen.nodeId,
+            scopeId: frozen.scopeId,
+            epochId: frozen.epochId,
+            receiptId: frozen.receiptId,
+            earnedByActorId: frozen.earnedByActorId,
+            beneficiaryActorId: frozen.beneficiaryActorId,
+            beneficiaryPolicyId: frozen.beneficiaryPolicyId,
+            beneficiaryPolicyVersion: frozen.beneficiaryPolicyVersion,
+            contributionCutoff: frozen.contributionCutoff,
+            sourceEvidence: frozen.sourceEvidence,
+          });
+          if (
+            frozen.epochId !== allocation.epochId ||
+            BigInt(frozen.epochId) !== params.epochId ||
+            refrozenPersisted.allocationRef !== frozen.allocationRef ||
+            refrozenPersisted.sourceEvidenceHash !== frozen.sourceEvidenceHash
+          ) {
+            throw new Error("Persisted actor allocation commitment is invalid");
+          }
+          // Persisted allocations are immutable historical facts. Identity
+          // transfers may change a later re-derivation, so never reinterpret
+          // an allocation that was already frozen; the content-addressed ref
+          // proves the signed facts match the stored row.
+          continue;
+        }
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary:${allocation.earnedByActorId}`}))`
+        );
+        const prepared = await this.prepareActorContributionAllocationInContext(
+          {
+            nodeId: allocation.nodeId,
+            epochId: BigInt(allocation.epochId),
+            receiptId: allocation.receiptId,
+          },
+          tx
+        );
+        if (
+          prepared.allocationRef !== allocation.allocationRef ||
+          BigInt(prepared.epochId) !== params.epochId
+        ) {
+          throw new Error(
+            "Actor allocation facts diverged before atomic finalization"
+          );
+        }
+        await this.insertPreparedActorContributionAllocation(tx, prepared);
       }
 
       let finalEpochRow: typeof epochs.$inferSelect;
@@ -2549,6 +2639,9 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         .where(eq(actorBeneficiaryPolicyProposals.id, params.proposalId))
         .limit(1);
       if (!proposal) throw new Error("Beneficiary proposal not found");
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary:${proposal.earnedByActorId}`}))`
+      );
       if (proposal.status !== "pending") {
         const completedAcceptances = await tx
           .select()
@@ -2574,28 +2667,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           ? proposal.beneficiaryActorId
           : params.role === "earner"
             ? proposal.earnedByActorId
-            : params.role === "steward"
-              ? proposal.stewardActorId
-              : params.acceptedByActorId;
+            : proposal.stewardActorId;
       if (params.acceptedByActorId !== expectedActorId) {
         throw new Error(`Caller cannot accept the ${params.role} role`);
       }
-      if (params.role.startsWith("governance_for_")) {
-        const [governanceActor] = await tx
-          .select({ kind: actors.kind, status: actors.status })
-          .from(actors)
-          .where(eq(actors.id, params.acceptedByActorId))
-          .limit(1);
-        if (
-          governanceActor?.kind !== "user" ||
-          governanceActor.status !== "active"
-        ) {
-          throw new Error(
-            "Governance acceptance requires an active human actor"
-          );
-        }
-      }
-
       const [inserted] = await tx
         .insert(actorBeneficiaryPolicyAcceptances)
         .values({
@@ -2623,16 +2698,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       }
 
       const acceptedRoles = new Set(acceptances.map(({ role }) => role));
-      const earnerAccepted =
-        acceptedRoles.has("earner") ||
-        acceptedRoles.has("governance_for_earner");
-      const stewardAccepted =
-        acceptedRoles.has("steward") ||
-        acceptedRoles.has("governance_for_steward");
       if (
         !acceptedRoles.has("beneficiary") ||
-        !earnerAccepted ||
-        !stewardAccepted
+        !acceptedRoles.has("earner") ||
+        !acceptedRoles.has("steward")
       ) {
         return toActorBeneficiaryPolicyProposal(proposal, acceptances);
       }
@@ -2746,8 +2815,7 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         earnedByActorId: proposal.earnedByActorId,
         beneficiaryActorId: proposal.beneficiaryActorId,
         policyVersion: proposal.policyVersion,
-        // Beneficiary acceptance is mandatory. Governance may substitute only
-        // for an unavailable earner or steward and never becomes beneficiary.
+        // All three principals accepted directly; no governance substitution.
         authorizedByActorId: proposal.beneficiaryActorId,
         evidence: {
           proposalId: proposal.id,
@@ -2848,16 +2916,22 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     });
   }
 
-  async prepareActorContributionAllocation(params: {
-    readonly nodeId: string;
-    readonly epochId: bigint;
-    readonly receiptId: string;
-  }) {
-    const epoch = await this.resolveEpochScoped(params.epochId);
+  private async prepareActorContributionAllocationInContext(
+    params: {
+      readonly nodeId: string;
+      readonly epochId: bigint;
+      readonly receiptId: string;
+    },
+    tx?: AttributionTransaction
+  ): Promise<FrozenActorContributionAllocation> {
+    const queryRunner = tx ?? this.db;
+    const epoch = tx
+      ? await this.resolveEpochScopedForUpdate(params.epochId, tx)
+      : await this.resolveEpochScoped(params.epochId);
     if (epoch.nodeId !== params.nodeId) {
       throw new EpochNotFoundError(params.epochId.toString());
     }
-    const [selected] = await this.db
+    const [selected] = await queryRunner
       .select({ receipt: ingestionReceipts })
       .from(epochSelection)
       .innerJoin(
@@ -2880,7 +2954,7 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       throw new Error("Actor allocation requires an included epoch receipt");
     }
     const receipt = selected.receipt;
-    const [binding] = await this.db
+    const [binding] = await queryRunner
       .select()
       .from(actorBindings)
       .where(
@@ -2902,13 +2976,14 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         desc(isNull(actorBindings.closedAt)),
         desc(actorBindings.createdAt)
       )
-      .limit(1);
+      .limit(1)
+      .for("share");
     if (!binding) {
       throw new Error(
         "Receipt source has no actor owner at contribution cutoff"
       );
     }
-    const [policy] = await this.db
+    const [policy] = await queryRunner
       .select()
       .from(actorBeneficiaryPolicies)
       .where(
@@ -2922,7 +2997,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         )
       )
       .orderBy(desc(actorBeneficiaryPolicies.effectiveFrom))
-      .limit(1);
+      .limit(1)
+      .for("share");
     return freezeActorContributionAllocation({
       nodeId: params.nodeId,
       scopeId: epoch.scopeId,
@@ -2946,61 +3022,52 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     });
   }
 
-  async insertActorContributionAllocation(
-    params: InsertActorContributionAllocationParams
+  async prepareActorContributionAllocation(params: {
+    readonly nodeId: string;
+    readonly epochId: bigint;
+    readonly receiptId: string;
+  }): Promise<FrozenActorContributionAllocation> {
+    return this.prepareActorContributionAllocationInContext(params);
+  }
+
+  private async insertPreparedActorContributionAllocation(
+    tx: AttributionTransaction,
+    prepared: FrozenActorContributionAllocation
   ): Promise<ActorContributionAllocationRecord> {
-    const initial = await this.prepareActorContributionAllocation({
-      nodeId: params.allocation.nodeId,
-      epochId: BigInt(params.allocation.epochId),
-      receiptId: params.allocation.receiptId,
-    });
-    return this.db.transaction(async (tx) => {
-      await tx.execute(
-        sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary:${initial.earnedByActorId}`}))`
-      );
-      const prepared = await this.prepareActorContributionAllocation({
-        nodeId: params.allocation.nodeId,
-        epochId: BigInt(params.allocation.epochId),
-        receiptId: params.allocation.receiptId,
-      });
-      if (prepared.allocationRef !== params.allocation.allocationRef) {
-        throw new Error("Actor allocation facts diverged before persistence");
-      }
-      const [inserted] = await tx
-        .insert(actorContributionAllocations)
-        .values({
-          id: prepared.allocationRef,
-          nodeId: prepared.nodeId,
-          scopeId: prepared.scopeId,
-          epochId: BigInt(prepared.epochId),
-          receiptId: prepared.receiptId,
-          contractVersion: prepared.contractVersion,
-          earnedByActorId: prepared.earnedByActorId,
-          beneficiaryActorId: prepared.beneficiaryActorId,
-          beneficiaryPolicyId: prepared.beneficiaryPolicyId,
-          beneficiaryPolicyVersion: prepared.beneficiaryPolicyVersion,
-          contributionCutoff: new Date(prepared.contributionCutoff),
-          sourceEvidence: { ...prepared.sourceEvidence },
-          sourceEvidenceHash: prepared.sourceEvidenceHash,
-        })
-        .onConflictDoNothing({ target: actorContributionAllocations.id })
-        .returning();
-      if (inserted) return toActorContributionAllocation(inserted);
-      const [existing] = await tx
-        .select()
-        .from(actorContributionAllocations)
-        .where(
-          and(
-            eq(actorContributionAllocations.id, prepared.allocationRef),
-            eq(actorContributionAllocations.scopeId, this.scopeId)
-          )
+    const [inserted] = await tx
+      .insert(actorContributionAllocations)
+      .values({
+        id: prepared.allocationRef,
+        nodeId: prepared.nodeId,
+        scopeId: prepared.scopeId,
+        epochId: BigInt(prepared.epochId),
+        receiptId: prepared.receiptId,
+        contractVersion: prepared.contractVersion,
+        earnedByActorId: prepared.earnedByActorId,
+        beneficiaryActorId: prepared.beneficiaryActorId,
+        beneficiaryPolicyId: prepared.beneficiaryPolicyId,
+        beneficiaryPolicyVersion: prepared.beneficiaryPolicyVersion,
+        contributionCutoff: new Date(prepared.contributionCutoff),
+        sourceEvidence: { ...prepared.sourceEvidence },
+        sourceEvidenceHash: prepared.sourceEvidenceHash,
+      })
+      .onConflictDoNothing({ target: actorContributionAllocations.id })
+      .returning();
+    if (inserted) return toActorContributionAllocation(inserted);
+    const [existing] = await tx
+      .select()
+      .from(actorContributionAllocations)
+      .where(
+        and(
+          eq(actorContributionAllocations.id, prepared.allocationRef),
+          eq(actorContributionAllocations.scopeId, this.scopeId)
         )
-        .limit(1);
-      if (!existing) {
-        throw new Error("Actor allocation idempotency conflict");
-      }
-      return toActorContributionAllocation(existing);
-    });
+      )
+      .limit(1);
+    if (!existing) {
+      throw new Error("Actor allocation idempotency conflict");
+    }
+    return toActorContributionAllocation(existing);
   }
 
   async getActorContributionAllocation(

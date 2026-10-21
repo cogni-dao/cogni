@@ -80,7 +80,7 @@ CREATE TABLE "actor_beneficiary_policy_acceptances" (
 	"accepted_by_actor_id" text NOT NULL,
 	"evidence" jsonb NOT NULL,
 	"accepted_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "actor_beneficiary_policy_acceptances_role_check" CHECK ("actor_beneficiary_policy_acceptances"."role" IN ('earner', 'steward', 'governance'))
+	CONSTRAINT "actor_beneficiary_policy_acceptances_role_check" CHECK ("actor_beneficiary_policy_acceptances"."role" IN ('beneficiary', 'earner', 'steward'))
 );
 --> statement-breakpoint
 ALTER TABLE "actor_beneficiary_policy_acceptances" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint

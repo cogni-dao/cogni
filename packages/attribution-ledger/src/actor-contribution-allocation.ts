@@ -4,7 +4,8 @@
 /**
  * Module: `@cogni/attribution-ledger/actor-contribution-allocation`
  * Purpose: Deterministic v1 actor-allocation envelope frozen by epoch finalization.
- * Scope: Pure functions only. Does not alter existing AttributionStatement v2 bytes.
+ * Scope: Pure functions only. Supplies immutable facts for the signed epoch
+ * allocation commitment.
  * Invariants:
  * - AI_EARNER_PRESERVED: earnedByActorId is retained even when beneficiary resolution is pending.
  * - BENEFICIARY_CUTOFF_FROZEN: an accepted policy present at cutoff is immutable; absence stays explicit.

@@ -14,7 +14,9 @@
 import {
   computeAllocationSetHash,
   computeFinalClaimantAllocationSetHash,
+  computeSignedAllocationSetHash,
   computeWeightConfigHash,
+  freezeActorContributionAllocation,
 } from "@cogni/attribution-ledger";
 import { describe, expect, it } from "vitest";
 
@@ -133,5 +135,59 @@ describe("computeFinalClaimantAllocationSetHash", () => {
     ]);
 
     expect(a).toBe(b);
+  });
+});
+
+describe("computeSignedAllocationSetHash", () => {
+  const claimantAllocations = [
+    {
+      claimant: { kind: "user" as const, userId: "alice" },
+      finalUnits: 1000n,
+    },
+  ];
+
+  it("preserves the legacy commitment when no actor allocations exist", async () => {
+    await expect(
+      computeSignedAllocationSetHash(claimantAllocations, [])
+    ).resolves.toBe(
+      await computeFinalClaimantAllocationSetHash(claimantAllocations)
+    );
+  });
+
+  it("binds actor payout facts independent of input order", async () => {
+    const makeAllocation = (
+      receiptId: string,
+      beneficiaryActorId: string | null
+    ) =>
+      freezeActorContributionAllocation({
+        nodeId: "node-1",
+        scopeId: "scope-1",
+        epochId: "7",
+        receiptId,
+        earnedByActorId: `agent:${receiptId}`,
+        beneficiaryActorId,
+        beneficiaryPolicyId: beneficiaryActorId ? `policy:${receiptId}` : null,
+        beneficiaryPolicyVersion: beneficiaryActorId ? "v1" : null,
+        contributionCutoff: "2026-10-01T00:00:00.000Z",
+        sourceEvidence: { payloadHash: `payload:${receiptId}` },
+      });
+    const first = await makeAllocation("receipt-1", "human:alice");
+    const second = await makeAllocation("receipt-2", null);
+
+    const forward = await computeSignedAllocationSetHash(
+      claimantAllocations,
+      [first, second]
+    );
+    const reversed = await computeSignedAllocationSetHash(
+      claimantAllocations,
+      [second, first]
+    );
+    const changed = await computeSignedAllocationSetHash(
+      claimantAllocations,
+      [await makeAllocation("receipt-1", null), second]
+    );
+
+    expect(forward).toBe(reversed);
+    expect(changed).not.toBe(forward);
   });
 });

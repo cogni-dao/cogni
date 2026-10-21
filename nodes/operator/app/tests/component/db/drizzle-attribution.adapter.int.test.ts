@@ -2066,9 +2066,54 @@ describe("DrizzleAttributionAdapter (Component)", () => {
           bindingEvidenceEventId: expect.any(String),
         }),
       });
-      const persisted = await adapter.insertActorContributionAllocation({
-        allocation: prepared,
+      await adapter.closeIngestion(
+        epoch.id,
+        [],
+        "actor-allocation-atomic",
+        "weight-sum-v0",
+        "actor-allocation-atomic"
+      );
+      const actorAtomicFinalize = {
+        epochId: epoch.id,
+        poolTotal: 0n,
+        finalClaimantAllocations: [],
+        actorAllocations: [prepared],
+        statement: {
+          nodeId: TEST_NODE_ID,
+          finalAllocationSetHash: "actor-signed-allocation-commitment",
+          poolTotalCredits: 0n,
+          statementLines: [],
+        },
+        signature: {
+          nodeId: TEST_NODE_ID,
+          signerWallet: signer.address,
+          signature: "0xactor-signed-allocation",
+          signedAt: new Date("2026-10-09T00:00:00.000Z"),
+        },
+        expectedFinalAllocationSetHash: "actor-signed-allocation-commitment",
+      };
+      await expect(
+        adapter.finalizeEpochAtomic({
+          ...actorAtomicFinalize,
+          actorAllocations: [
+            { ...prepared, beneficiaryPolicyVersion: "tampered" },
+          ],
+        })
+      ).rejects.toThrow("Actor allocation commitment is not content-addressed");
+      await expect(
+        adapter.getActorContributionAllocation(prepared.allocationRef)
+      ).resolves.toBeNull();
+      await expect(adapter.getEpoch(epoch.id)).resolves.toMatchObject({
+        status: "review",
       });
+
+      await adapter.finalizeEpochAtomic(actorAtomicFinalize);
+      const persisted = await adapter.getActorContributionAllocation(
+        prepared.allocationRef
+      );
+      if (!persisted) {
+        throw new Error("Expected atomic finalize to persist actor allocation");
+      }
       expect(persisted).toMatchObject({
         allocationRef: prepared.allocationRef,
         earnedByActorId: flockLeaderActorId,
@@ -2194,14 +2239,6 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         await adapter.getActorContributionAllocation(persisted.allocationRef)
       ).toMatchObject({ beneficiaryActorId: null });
 
-      await adapter.closeIngestion(
-        epoch.id,
-        [],
-        "actor-allocation-cleanup",
-        "weight-sum-v0",
-        "actor-allocation-cleanup"
-      );
-      await adapter.finalizeEpoch(epoch.id, 0n);
       await db
         .update(epochs)
         .set({ closedAt: new Date("2026-10-10T02:00:00.000Z") })

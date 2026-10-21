@@ -304,8 +304,6 @@ export const ACTOR_BENEFICIARY_ACCEPTANCE_ROLES = [
   "beneficiary",
   "earner",
   "steward",
-  "governance_for_earner",
-  "governance_for_steward",
 ] as const;
 
 /**
@@ -380,7 +378,7 @@ export const actorBeneficiaryPolicyAcceptances = pgTable(
   (table) => [
     check(
       "actor_beneficiary_policy_acceptances_role_check",
-      sql`${table.role} IN ('beneficiary', 'earner', 'steward', 'governance_for_earner', 'governance_for_steward')`
+      sql`${table.role} IN ('beneficiary', 'earner', 'steward')`
     ),
     uniqueIndex("actor_beneficiary_policy_acceptances_role_unique").on(
       table.proposalId,
