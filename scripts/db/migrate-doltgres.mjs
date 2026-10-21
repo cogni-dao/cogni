@@ -243,10 +243,18 @@ function owningKnowledgeDatabase() {
   const slug = process.env.NODE_NAME?.trim();
   if (!/^[a-z][a-z0-9-]{0,62}$/.test(slug ?? ""))
     throw new Error("migration_node_identity_unproven");
-  const expected = `knowledge_${slug.replaceAll("-", "_")}`;
-  if (decodeURIComponent(new URL(url).pathname.slice(1)) !== expected)
-    throw new Error("migration_database_identity_mismatch");
-  return expected;
+  const base = `knowledge_${slug.replaceAll("-", "_")}`;
+  const declared = decodeURIComponent(new URL(url).pathname.slice(1));
+  // The owning migration Secret may project a foreign-custodied lane onto
+  // the control engine. Its canonical namespace retains that lane's suffix.
+  // This checks the node namespace, not lane authorization: current Jobs carry
+  // NODE_NAME + the trusted Secret DSN, not DEPLOY_ENVIRONMENT/control custody.
+  const allowed = [base, ...["candidate_a", "preview", "production"].map((lane) => `${base}_${lane}`)];
+  if (!allowed.includes(declared))
+    throw Object.assign(new Error("migration_database_identity_mismatch"), {
+      code: "migration_database_identity_mismatch", retryable: false,
+    });
+  return declared;
 }
 
 async function migrate(folder, before) {
