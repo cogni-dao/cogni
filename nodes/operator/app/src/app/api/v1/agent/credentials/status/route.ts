@@ -7,6 +7,7 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
   agentIdentityRateLimitResponse,
   agentIdentityResponse,
+  logAgentIdentityUnexpectedError,
   requestBearer,
 } from "../../_shared";
 
@@ -33,31 +34,36 @@ export const GET = wrapRouteHandlerWithLogging(
         { status: 401 }
       );
     }
-    const result = await getContainer().agentIdentity.authenticate(
-      token,
-      "renew"
-    );
-    if (!result) {
+    try {
+      const result = await getContainer().agentIdentity.authenticate(
+        token,
+        "renew"
+      );
+      if (!result) {
+        return agentIdentityResponse(
+          ctx,
+          startedAt,
+          "status",
+          { error: "invalid_token" },
+          { status: 401 }
+        );
+      }
       return agentIdentityResponse(
         ctx,
         startedAt,
         "status",
-        { error: "invalid_token" },
-        { status: 401 }
+        agentCredentialStatusOperation.output.parse({
+          actorId: result.principal.actorId,
+          principalId: result.principal.principalId,
+          credentialId: result.principal.credentialId,
+          status: result.access,
+          authenticateUntil: result.authenticateUntil,
+          renewUntil: result.renewUntil,
+        })
       );
+    } catch (error) {
+      logAgentIdentityUnexpectedError(ctx, startedAt, "status");
+      throw error;
     }
-    return agentIdentityResponse(
-      ctx,
-      startedAt,
-      "status",
-      agentCredentialStatusOperation.output.parse({
-        actorId: result.principal.actorId,
-        principalId: result.principal.principalId,
-        credentialId: result.principal.credentialId,
-        status: result.access,
-        authenticateUntil: result.authenticateUntil,
-        renewUntil: result.renewUntil,
-      })
-    );
   }
 );

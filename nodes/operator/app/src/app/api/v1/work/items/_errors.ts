@@ -124,14 +124,18 @@ function classify(error: unknown): Mapped | null {
  */
 export function workItemsWriteErrorResponse(
   ctx: RequestContext,
-  error: unknown
+  error: unknown,
+  onMapped?: (mapped: Readonly<{ status: number; errorCode: string }>) => void
 ): NextResponse | null {
   const mapped = classify(error);
   if (!mapped) return null;
+  onMapped?.(mapped);
 
-  if (mapped.status >= 500) {
+  // Routes with a feature terminal callback own the privacy-safe error event.
+  // Older callers retain their existing request-error marker until normalized.
+  if (!onMapped && mapped.status >= 500) {
     logRequestError(ctx.log, error, mapped.errorCode);
-  } else {
+  } else if (!onMapped) {
     logRequestWarn(ctx.log, error, mapped.errorCode);
   }
 

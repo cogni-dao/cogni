@@ -11,7 +11,8 @@ import {
   TokenBucketRateLimiter,
   wrapRouteHandlerWithLogging,
 } from "@/bootstrap/http";
-import { EVENT_NAMES, logEvent } from "@/shared/observability";
+import { EVENT_NAMES } from "@/shared/observability";
+import { createRouteTerminalLogger } from "@/shared/observability/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -165,37 +166,41 @@ export const POST = wrapRouteHandlerWithLogging(
   },
   async (ctx, request) => {
     const startedAt = performance.now();
-    const capability = createAuthorizationFacadeProjectionCapability();
-    return handleAuthorizationFacadeCredentialProjection(request, {
-      isControl: capability.isControl,
-      isCatalogNode: capability.isCatalogNode,
-      consumeRateLimit: () =>
-        limiter.consume("authorization-facade-projection"),
-      readRing: capability.readRing,
-      audit: (event) => {
-        const status =
-          event.outcome === "allowed"
-            ? 200
-            : event.outcome === "rate_limited"
-              ? 429
-              : 401;
-        logEvent(
-          ctx.log,
-          EVENT_NAMES.AUTHORIZATION_FACADE_PROJECTION_COMPLETE,
-          {
-            reqId: ctx.reqId,
-            routeId: ctx.routeId,
+    const terminal = createRouteTerminalLogger(
+      ctx,
+      EVENT_NAMES.AUTHORIZATION_FACADE_PROJECTION_COMPLETE,
+      startedAt
+    );
+    try {
+      const capability = createAuthorizationFacadeProjectionCapability();
+      return handleAuthorizationFacadeCredentialProjection(request, {
+        isControl: capability.isControl,
+        isCatalogNode: capability.isCatalogNode,
+        consumeRateLimit: () =>
+          limiter.consume("authorization-facade-projection"),
+        readRing: capability.readRing,
+        audit: (event) => {
+          const status =
+            event.outcome === "allowed"
+              ? 200
+              : event.outcome === "rate_limited"
+                ? 429
+                : 401;
+          terminal.complete({
             status,
-            durationMs: Math.round(performance.now() - startedAt),
             outcome: event.outcome === "allowed" ? "success" : "error",
             ...(event.outcome === "allowed"
               ? {}
-              : { errorCode: event.outcome }),
-            ...(event.lane !== undefined ? { lane: event.lane } : {}),
-            ...(event.nodeId !== undefined ? { nodeId: event.nodeId } : {}),
-          }
-        );
-      },
-    });
+              : { errorCode: event.outcome, reasonCode: event.outcome }),
+            ...(event.lane !== undefined
+              ? { dimensions: { lane: event.lane } }
+              : {}),
+          });
+        },
+      });
+    } catch (error) {
+      terminal.internalError();
+      throw error;
+    }
   }
 );

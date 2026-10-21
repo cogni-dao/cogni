@@ -120,6 +120,9 @@ export const EVENT_NAMES = {
   LEDGER_COLLECT_TRIGGERED: "ledger.collect_triggered",
   LEDGER_BENEFICIARY_POLICY_MUTATED: "ledger.beneficiary_policy_mutated",
   LEDGER_BENEFICIARY_POLICY_REJECTED: "ledger.beneficiary_policy_rejected",
+  LEDGER_BENEFICIARY_POLICY_COMPLETE: "ledger.beneficiary_policy.complete",
+  LEDGER_ACTOR_ALLOCATION_READ_COMPLETE:
+    "ledger.actor_allocation.read_complete",
 
   // BYO-AI Auth Domain
   BYO_AUTH_DEVICE_CODE_COMPLETE: "byo_auth.device_code.complete",

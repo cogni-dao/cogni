@@ -25,7 +25,7 @@ import {
 } from "@/app/_lib/auth/request-identity";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { workItemSessionHeartbeatOperation } from "@/contracts/work-item-sessions.v1.contract";
-import { EVENT_NAMES, logEvent } from "@/shared/observability";
+import { workItemTerminal } from "../../_observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -70,20 +70,37 @@ export const POST = wrapRouteHandlerWithLogging<{
     auth: { mode: "none" },
   },
   async (ctx, request, _sessionUser, context) => {
-    if (!context) throw new Error("context required for dynamic routes");
+    const terminal = workItemTerminal(ctx, performance.now(), "heartbeat");
+    if (!context) {
+      terminal.internalError();
+      throw new Error("context required for dynamic routes");
+    }
     let principal: RequestPrincipal | null;
     try {
       principal = await resolveRequestPrincipal();
     } catch (error) {
       if (error instanceof RequestIdentityUnavailableError) {
+        terminal.complete({
+          status: 503,
+          outcome: "error",
+          errorCode: "identity_unavailable",
+          reasonCode: "identity_service_unavailable",
+        });
         return NextResponse.json(
           { error: "identity service unavailable" },
           { status: 503 }
         );
       }
+      terminal.internalError();
       throw error;
     }
     if (!principal) {
+      terminal.complete({
+        status: 401,
+        outcome: "error",
+        errorCode: "unauthorized",
+        reasonCode: "principal_missing",
+      });
       return NextResponse.json(
         { error: "unauthorized" },
         { status: 401, headers: { "WWW-Authenticate": "Bearer" } }
@@ -100,6 +117,12 @@ export const POST = wrapRouteHandlerWithLogging<{
 
     const parsed = workItemSessionHeartbeatOperation.input.safeParse(body);
     if (!parsed.success) {
+      terminal.complete({
+        status: 400,
+        outcome: "error",
+        errorCode: "invalid_input",
+        reasonCode: "contract_validation_failed",
+      });
       return NextResponse.json(
         { error: "invalid input", issues: parsed.error.issues },
         { status: 400 }
@@ -122,44 +145,48 @@ export const POST = wrapRouteHandlerWithLogging<{
               sessionUser,
               statusUrl: coordinationUrl(request, id),
             });
-      ctx.log.info(
-        {
-          workItemId: id,
-          coordinationId: output.session.coordinationId,
-          actorPrincipalId: principal.principalId,
-        },
-        "dev_coordination.heartbeat"
-      );
-      logEvent(ctx.log, EVENT_NAMES.WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE, {
-        reqId: ctx.reqId,
-        operation: "heartbeat",
-        outcome: "success",
-        workItemId: id,
-        actorPrincipalId: principal.principalId,
-        coordinationId: output.session.coordinationId,
-      });
-      return NextResponse.json(
-        workItemSessionHeartbeatOperation.output.parse(output)
-      );
+      const responseBody =
+        workItemSessionHeartbeatOperation.output.parse(output);
+      terminal.complete({ status: 200, outcome: "success" });
+      return NextResponse.json(responseBody);
     } catch (error) {
       if ((error as Error)?.name === "CoordinationWorkItemNotFoundError") {
+        terminal.complete({
+          status: 404,
+          outcome: "error",
+          errorCode: "not_found",
+          reasonCode: "work_item_not_found",
+        });
         return NextResponse.json(
           { error: (error as Error).message },
           { status: 404 }
         );
       }
       if ((error as Error)?.name === "WorkItemSessionForbiddenError") {
+        terminal.complete({
+          status: 403,
+          outcome: "error",
+          errorCode: "forbidden",
+          reasonCode: "session_forbidden",
+        });
         return NextResponse.json(
           { error: (error as Error).message },
           { status: 403 }
         );
       }
       if ((error as Error)?.name === "WorkItemSessionNotFoundError") {
+        terminal.complete({
+          status: 404,
+          outcome: "error",
+          errorCode: "session_not_found",
+          reasonCode: "session_not_found",
+        });
         return NextResponse.json(
           { error: (error as Error).message },
           { status: 404 }
         );
       }
+      terminal.internalError();
       throw error;
     }
   }

@@ -30,6 +30,7 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
   agentIdentityRateLimitResponse,
   agentIdentityResponse,
+  logAgentIdentityUnexpectedError,
   requestBearer,
 } from "../_shared";
 
@@ -113,6 +114,7 @@ export const GET = wrapRouteHandlerWithLogging(
           { status: 503 }
         );
       }
+      logAgentIdentityUnexpectedError(ctx, startedAt, "me");
       throw error;
     }
 
@@ -126,45 +128,50 @@ export const GET = wrapRouteHandlerWithLogging(
       );
     }
 
-    const grants = await readRoles(getContainer().authorization, principal);
-    const result =
-      principal.kind === "agent" && durableStatus
-        ? {
-            kind: "agent" as const,
-            identity: principal,
-            credential: {
-              kind: "durable_v2" as const,
-              expiresAt: durableStatus.authenticateUntil,
-              renewUntil: durableStatus.renewUntil,
-              status: durableStatus.access,
-            },
-            ...grants,
-          }
-        : principal.kind === "legacy_agent"
+    try {
+      const grants = await readRoles(getContainer().authorization, principal);
+      const result =
+        principal.kind === "agent" && durableStatus
           ? {
-              kind: "legacy_agent" as const,
+              kind: "agent" as const,
               identity: principal,
               credential: {
-                kind: "legacy_v1" as const,
-                expiresAt: principal.expiresAt,
-                renewUntil: null,
-                status: "active" as const,
+                kind: "durable_v2" as const,
+                expiresAt: durableStatus.authenticateUntil,
+                renewUntil: durableStatus.renewUntil,
+                status: durableStatus.access,
               },
               ...grants,
             }
-          : {
-              kind: "human" as const,
-              identity: principal,
-              credential: null,
-              ...grants,
-            };
+          : principal.kind === "legacy_agent"
+            ? {
+                kind: "legacy_agent" as const,
+                identity: principal,
+                credential: {
+                  kind: "legacy_v1" as const,
+                  expiresAt: principal.expiresAt,
+                  renewUntil: null,
+                  status: "active" as const,
+                },
+                ...grants,
+              }
+            : {
+                kind: "human" as const,
+                identity: principal,
+                credential: null,
+                ...grants,
+              };
 
-    return agentIdentityResponse(
-      ctx,
-      startedAt,
-      "me",
-      agentMeV2Operation.output.parse(result)
-    );
+      return agentIdentityResponse(
+        ctx,
+        startedAt,
+        "me",
+        agentMeV2Operation.output.parse(result)
+      );
+    } catch (error) {
+      logAgentIdentityUnexpectedError(ctx, startedAt, "me");
+      throw error;
+    }
   }
 );
 

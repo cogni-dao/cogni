@@ -5,11 +5,8 @@ import { type NextRequest, NextResponse } from "next/server";
 import { extractBearerToken } from "@/app/_lib/auth/request-identity";
 import { agentIdentityApiLimiter, extractClientIp } from "@/bootstrap/http";
 import { AgentIdentityError } from "@/ports";
-import {
-  EVENT_NAMES,
-  logEvent,
-  type RequestContext,
-} from "@/shared/observability";
+import { EVENT_NAMES, type RequestContext } from "@/shared/observability";
+import { createRouteTerminalLogger } from "@/shared/observability/server";
 
 export type AgentIdentityOperation =
   | "claim_accept"
@@ -66,30 +63,23 @@ export function agentIdentityResponse(
   init?: ResponseInit
 ): NextResponse {
   const statusCode = init?.status ?? 200;
-  const payload = {
-    reqId: ctx.reqId,
-    routeId: ctx.routeId,
-    operation,
+  const response = NextResponse.json(body, init);
+  createRouteTerminalLogger(
+    ctx,
+    EVENT_NAMES.AGENT_IDENTITY_OPERATION_COMPLETE,
+    startedAt,
+    { operation }
+  ).complete({
+    status: statusCode,
     outcome: statusCode < 400 ? "success" : "error",
-    statusCode,
-    durationMs: Math.round(performance.now() - startedAt),
     ...(statusCode >= 400
       ? {
           errorCode: `http_${statusCode}`,
           reasonCode: reasonCodeFor(body, statusCode),
         }
       : {}),
-  } as const;
-  if (statusCode < 400) {
-    logEvent(ctx.log, EVENT_NAMES.AGENT_IDENTITY_OPERATION_COMPLETE, payload);
-  } else {
-    const level = statusCode >= 500 ? "error" : "warn";
-    ctx.log[level](
-      { event: EVENT_NAMES.AGENT_IDENTITY_OPERATION_COMPLETE, ...payload },
-      EVENT_NAMES.AGENT_IDENTITY_OPERATION_COMPLETE
-    );
-  }
-  return NextResponse.json(body, init);
+  });
+  return response;
 }
 
 /** Bound every lifecycle operation before it reaches identity persistence. */
@@ -152,7 +142,10 @@ export function agentIdentityErrorResponse(
   operation: AgentIdentityOperation,
   error: unknown
 ): NextResponse | null {
-  if (!(error instanceof AgentIdentityError)) return null;
+  if (!(error instanceof AgentIdentityError)) {
+    logAgentIdentityUnexpectedError(ctx, startedAt, operation);
+    return null;
+  }
   const status =
     error.code === "spawn_limit" || error.code === "grant_limit"
       ? 429
@@ -175,4 +168,18 @@ export function agentIdentityErrorResponse(
       ...(status === 429 ? { headers: { "Retry-After": "600" } } : {}),
     }
   );
+}
+
+/** Emit the feature terminal marker before the route wrapper owns the 500. */
+export function logAgentIdentityUnexpectedError(
+  ctx: RequestContext,
+  startedAt: number,
+  operation: AgentIdentityOperation
+): void {
+  createRouteTerminalLogger(
+    ctx,
+    EVENT_NAMES.AGENT_IDENTITY_OPERATION_COMPLETE,
+    startedAt,
+    { operation }
+  ).internalError();
 }

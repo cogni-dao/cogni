@@ -24,7 +24,8 @@ import {
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { readAgentBillingAccountOperation } from "@/contracts/agent-account-access.v1.contract";
-import { EVENT_NAMES, logEvent } from "@/shared/observability";
+import { EVENT_NAMES } from "@/shared/observability";
+import { createRouteTerminalLogger } from "@/shared/observability/server";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -35,22 +36,22 @@ export const GET = wrapRouteHandlerWithLogging<{
   { routeId: "accounts.agent_read", auth: { mode: "none" } },
   async (ctx, _request, _sessionUser, routeContext) => {
     const startedAt = performance.now();
-    let completed = false;
+    const terminal = createRouteTerminalLogger(
+      ctx,
+      EVENT_NAMES.AGENT_ACCOUNT_READ_COMPLETE,
+      startedAt
+    );
     const complete = (
       status: number,
       outcome: "success" | "error",
       errorCode?: string,
       accessMode?: "direct" | "on_behalf_of"
     ) => {
-      completed = true;
-      logEvent(ctx.log, EVENT_NAMES.AGENT_ACCOUNT_READ_COMPLETE, {
-        reqId: ctx.reqId,
-        routeId: ctx.routeId,
+      terminal.complete({
         status,
-        durationMs: Math.round(performance.now() - startedAt),
         outcome,
-        ...(errorCode ? { errorCode } : {}),
-        ...(accessMode ? { accessMode } : {}),
+        ...(errorCode ? { errorCode, reasonCode: errorCode } : {}),
+        ...(accessMode ? { dimensions: { accessMode } } : {}),
       });
     };
 
@@ -151,7 +152,7 @@ export const GET = wrapRouteHandlerWithLogging<{
       complete(200, "success", undefined, accessMode);
       return NextResponse.json(output);
     } catch (error) {
-      if (!completed) complete(500, "error", "internal_error");
+      terminal.internalError();
       throw error;
     }
   }

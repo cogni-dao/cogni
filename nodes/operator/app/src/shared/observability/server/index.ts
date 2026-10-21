@@ -22,3 +22,4 @@ export {
 export * from "./logger";
 export * from "./metrics";
 export { REDACT_PATHS } from "./redact";
+export * from "./route-terminal";

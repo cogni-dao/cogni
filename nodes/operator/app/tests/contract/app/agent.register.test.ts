@@ -216,7 +216,7 @@ describe("POST /api/v1/agent/register", () => {
         expect(mockFeatureWarn.mock.calls[0]?.[0]).toMatchObject({
           operation: "register",
           outcome: "error",
-          statusCode: 400,
+          status: 400,
           reasonCode: "invalid_request",
         });
         expect(JSON.stringify(mockFeatureWarn.mock.calls[0]?.[0])).not.toMatch(
@@ -256,7 +256,7 @@ describe("POST /api/v1/agent/register", () => {
         expect(mockFeatureWarn).toHaveBeenCalledTimes(1);
         expect(mockFeatureWarn.mock.calls[0]?.[0]).toMatchObject({
           operation: "register",
-          statusCode: 409,
+          status: 409,
           errorCode: "http_409",
           reasonCode: "grant_already_redeemed",
         });
@@ -292,7 +292,7 @@ describe("POST /api/v1/agent/register", () => {
         expect(mockFeatureWarn).toHaveBeenCalledTimes(1);
         expect(mockFeatureWarn.mock.calls[0]?.[0]).toMatchObject({
           operation: "register",
-          statusCode: 429,
+          status: 429,
           reasonCode: "rate_limited",
         });
       },
@@ -337,7 +337,7 @@ describe("POST /api/v1/agent/recover", () => {
         expect(mockFeatureWarn).toHaveBeenCalledTimes(1);
         expect(mockFeatureWarn.mock.calls[0]?.[0]).toMatchObject({
           operation: "recover",
-          statusCode: 409,
+          status: 409,
           reasonCode: "grant_already_redeemed",
         });
       },
@@ -395,7 +395,7 @@ describe("POST /api/v1/agent/upgrade", () => {
         expect(mockFeatureError).toHaveBeenCalledTimes(1);
         expect(mockFeatureError.mock.calls[0]?.[0]).toMatchObject({
           operation: "upgrade",
-          statusCode: 503,
+          status: 503,
           reasonCode: "authz_unavailable",
         });
       },

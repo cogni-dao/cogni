@@ -32,9 +32,8 @@ import {
 } from "@/app/_lib/auth/request-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { EVENT_NAMES, logEvent } from "@/shared/observability";
-
 import { workItemsWriteErrorResponse } from "../_errors";
+import { workItemTerminal } from "../_observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -70,21 +69,40 @@ export const GET = wrapRouteHandlerWithLogging<{
 }>(
   { routeId: "work.items.get", auth: { mode: "required", getSessionUser } },
   async (ctx, _request, _sessionUser, context) => {
-    if (!context) throw new Error("context required for dynamic routes");
-    const { id } = await context.params;
-
-    const item = await getWorkItem(id);
-
-    if (!item) {
-      return NextResponse.json(
-        { error: `Work item not found: ${id}` },
-        { status: 404 }
-      );
+    const terminal = workItemTerminal(ctx, performance.now(), "get");
+    if (!context) {
+      terminal.internalError();
+      throw new Error("context required for dynamic routes");
     }
+    try {
+      const { id } = await context.params;
 
-    ctx.log.info({ workItemId: id }, "work.items.get_success");
+      const item = await getWorkItem(id);
 
-    return NextResponse.json(workItemsGetOperation.output.parse(item));
+      if (!item) {
+        terminal.complete({
+          status: 404,
+          outcome: "error",
+          errorCode: "not_found",
+          reasonCode: "work_item_not_found",
+        });
+        return NextResponse.json(
+          { error: `Work item not found: ${id}` },
+          { status: 404 }
+        );
+      }
+
+      const output = workItemsGetOperation.output.parse(item);
+      terminal.complete({
+        status: 200,
+        outcome: "success",
+        dimensions: { itemFound: true },
+      });
+      return NextResponse.json(output);
+    } catch (error) {
+      terminal.internalError();
+      throw error;
+    }
   }
 );
 
@@ -101,20 +119,37 @@ export const PATCH = wrapRouteHandlerWithLogging<{
 }>(
   { routeId: "work.items.patch", auth: { mode: "none" } },
   async (ctx, request, _sessionUser, context) => {
-    if (!context) throw new Error("context required for dynamic routes");
+    const terminal = workItemTerminal(ctx, performance.now(), "patch");
+    if (!context) {
+      terminal.internalError();
+      throw new Error("context required for dynamic routes");
+    }
     let principal: RequestPrincipal | null;
     try {
       principal = await resolveRequestPrincipal();
     } catch (error) {
       if (error instanceof RequestIdentityUnavailableError) {
+        terminal.complete({
+          status: 503,
+          outcome: "error",
+          errorCode: "identity_unavailable",
+          reasonCode: "identity_service_unavailable",
+        });
         return NextResponse.json(
           { error: "identity service unavailable" },
           { status: 503 }
         );
       }
+      terminal.internalError();
       throw error;
     }
     if (!principal) {
+      terminal.complete({
+        status: 401,
+        outcome: "error",
+        errorCode: "unauthorized",
+        reasonCode: "principal_missing",
+      });
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
 
@@ -124,6 +159,12 @@ export const PATCH = wrapRouteHandlerWithLogging<{
     try {
       body = await request.json();
     } catch {
+      terminal.complete({
+        status: 400,
+        outcome: "error",
+        errorCode: "invalid_json",
+        reasonCode: "invalid_json_body",
+      });
       return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
     }
 
@@ -132,6 +173,12 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       ...(typeof body === "object" && body !== null ? body : {}),
     });
     if (!parseResult.success) {
+      terminal.complete({
+        status: 400,
+        outcome: "error",
+        errorCode: "invalid_input",
+        reasonCode: "contract_validation_failed",
+      });
       return NextResponse.json(
         { error: "invalid input", issues: parseResult.error.issues },
         { status: 400 }
@@ -148,6 +195,12 @@ export const PATCH = wrapRouteHandlerWithLogging<{
         );
       } else {
         if (!sessionUser) {
+          terminal.complete({
+            status: 401,
+            outcome: "error",
+            errorCode: "unauthorized",
+            reasonCode: "principal_not_supported",
+          });
           return NextResponse.json({ error: "unauthorized" }, { status: 401 });
         }
         patched = await patchWorkItem(parseResult.data, {
@@ -155,25 +208,24 @@ export const PATCH = wrapRouteHandlerWithLogging<{
           displayName: sessionUser.displayName,
         });
       }
-      ctx.log.info(
-        { workItemId: id, actorPrincipalId: principal.principalId },
-        "work.items.patch_success"
-      );
-      logEvent(ctx.log, EVENT_NAMES.WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE, {
-        reqId: ctx.reqId,
-        operation: "patch",
-        outcome: "success",
-        workItemId: id,
-        actorPrincipalId: principal.principalId,
-      });
-      return NextResponse.json(workItemsPatchOperation.output.parse(patched));
+      const output = workItemsPatchOperation.output.parse(patched);
+      terminal.complete({ status: 200, outcome: "success" });
+      return NextResponse.json(output);
     } catch (e) {
       // Coded responses: 403 authz_denied (permanent), 409 revision_conflict
       // (CAS lost, nothing written), 503 work_items_busy (retryable), 503
       // not-ready, 404 missing. Anything unrecognized rethrows
       // to the wrapper's 500 — the catch is NOT broadened (bug.5408).
-      const coded = workItemsWriteErrorResponse(ctx, e);
+      const coded = workItemsWriteErrorResponse(ctx, e, (mapped) =>
+        terminal.complete({
+          status: mapped.status,
+          outcome: "error",
+          errorCode: mapped.errorCode,
+          reasonCode: mapped.errorCode,
+        })
+      );
       if (coded) return coded;
+      terminal.internalError();
       throw e;
     }
   }
@@ -191,8 +243,22 @@ export const DELETE = wrapRouteHandlerWithLogging<{
 }>(
   { routeId: "work.items.delete", auth: { mode: "required", getSessionUser } },
   async (ctx, _request, sessionUser, context) => {
-    if (!context) throw new Error("context required for dynamic routes");
+    const terminal = workItemTerminal(ctx, performance.now(), "delete");
+    if (!context) {
+      terminal.internalError();
+      throw new Error("context required for dynamic routes");
+    }
     if (!sessionUser) {
+      const output = workItemsDeleteOperation.output.parse({
+        id,
+        deleted: true,
+      });
+      terminal.complete({
+        status: 401,
+        outcome: "error",
+        errorCode: "unauthorized",
+        reasonCode: "session_missing",
+      });
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
 
@@ -200,6 +266,12 @@ export const DELETE = wrapRouteHandlerWithLogging<{
 
     const inputParse = workItemsDeleteOperation.input.safeParse({ id });
     if (!inputParse.success) {
+      terminal.complete({
+        status: 400,
+        outcome: "error",
+        errorCode: "invalid_input",
+        reasonCode: "contract_validation_failed",
+      });
       return NextResponse.json(
         { error: "invalid input", issues: inputParse.error.issues },
         { status: 400 }
@@ -212,20 +284,36 @@ export const DELETE = wrapRouteHandlerWithLogging<{
         displayName: sessionUser.displayName,
       });
       if (!deleted) {
+        terminal.complete({
+          status: 404,
+          outcome: "error",
+          errorCode: "not_found",
+          reasonCode: "work_item_not_found",
+        });
         return NextResponse.json(
           { error: `Work item not found: ${id}` },
           { status: 404 }
         );
       }
-      ctx.log.info({ workItemId: id }, "work.items.delete_success");
-      return NextResponse.json(
-        workItemsDeleteOperation.output.parse({ id, deleted: true })
-      );
+      terminal.complete({
+        status: 200,
+        outcome: "success",
+        dimensions: { deleted: true },
+      });
+      return NextResponse.json(output);
     } catch (e) {
       // Same coded mapping as PATCH; unrecognized errors still reach the
       // wrapper's 500 (bug.5408).
-      const coded = workItemsWriteErrorResponse(ctx, e);
+      const coded = workItemsWriteErrorResponse(ctx, e, (mapped) =>
+        terminal.complete({
+          status: mapped.status,
+          outcome: "error",
+          errorCode: mapped.errorCode,
+          reasonCode: mapped.errorCode,
+        })
+      );
       if (coded) return coded;
+      terminal.internalError();
       throw e;
     }
   }

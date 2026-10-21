@@ -106,9 +106,6 @@ describe("POST /api/v1/authorization/billing-account-grants", () => {
     );
     expect(info).toHaveBeenCalledWith(
       expect.objectContaining({
-        authenticatedNodeId: NODE_ID,
-        assertedGrantorUserId: GRANTOR_ID,
-        billingAccountId: ACCOUNT_ID,
         event: "authorization.facade.grant.complete",
         reqId: "req-server",
         routeId: "authorization.facade.grant",
@@ -119,7 +116,6 @@ describe("POST /api/v1/authorization/billing-account-grants", () => {
         targetKind: "agent",
         hasSubject: true,
         decision: "success",
-        requestId: "req-node",
       }),
       "authorization.facade.grant.complete"
     );

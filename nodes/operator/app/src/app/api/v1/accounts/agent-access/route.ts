@@ -21,7 +21,8 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { mutateAgentAccountAccessOperation } from "@/contracts/agent-account-access.v1.contract";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { isBillingAccountOwnerBootstrapPortError } from "@/ports";
-import { EVENT_NAMES, logEvent } from "@/shared/observability";
+import { EVENT_NAMES } from "@/shared/observability";
+import { createRouteTerminalLogger } from "@/shared/observability/server";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,22 +35,22 @@ export const POST = wrapRouteHandlerWithLogging(
   },
   async (ctx, request, sessionUser) => {
     const startedAt = performance.now();
-    let completed = false;
+    const terminal = createRouteTerminalLogger(
+      ctx,
+      EVENT_NAMES.AGENT_ACCOUNT_ACCESS_MUTATION_COMPLETE,
+      startedAt
+    );
     const complete = (
       status: number,
       outcome: "success" | "error",
       errorCode?: string,
-      fields: Record<string, unknown> = {}
+      fields: { operation?: string; mode?: string } = {}
     ) => {
-      completed = true;
-      logEvent(ctx.log, EVENT_NAMES.AGENT_ACCOUNT_ACCESS_MUTATION_COMPLETE, {
-        reqId: ctx.reqId,
-        routeId: ctx.routeId,
+      terminal.complete({
         status,
-        durationMs: Math.round(performance.now() - startedAt),
         outcome,
-        ...(errorCode ? { errorCode } : {}),
-        ...fields,
+        ...(errorCode ? { errorCode, reasonCode: errorCode } : {}),
+        dimensions: fields,
       });
     };
 
@@ -142,7 +143,7 @@ export const POST = wrapRouteHandlerWithLogging(
           { status: 503 }
         );
       }
-      if (!completed) complete(500, "error", "internal_error");
+      terminal.internalError();
       throw error;
     }
   }

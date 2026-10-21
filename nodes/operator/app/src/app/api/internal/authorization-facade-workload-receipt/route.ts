@@ -13,7 +13,11 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { EVENT_NAMES, logEvent } from "@/shared/observability";
+import { EVENT_NAMES } from "@/shared/observability";
+import {
+  createRouteTerminalLogger,
+  type RouteTerminalDimensions,
+} from "@/shared/observability/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -72,25 +76,23 @@ export const POST = wrapRouteHandlerWithLogging(
   },
   async (ctx, request) => {
     const startedAt = performance.now();
+    const terminal = createRouteTerminalLogger(
+      ctx,
+      EVENT_NAMES.AUTHORIZATION_FACADE_WORKLOAD_RECEIPT_COMPLETE,
+      startedAt
+    );
     const complete = (
       status: number,
       outcome: "success" | "error",
       errorCode: string | undefined,
-      fields: Record<string, unknown> = {}
+      fields: RouteTerminalDimensions = {}
     ) =>
-      logEvent(
-        ctx.log,
-        EVENT_NAMES.AUTHORIZATION_FACADE_WORKLOAD_RECEIPT_COMPLETE,
-        {
-          reqId: ctx.reqId,
-          routeId: ctx.routeId,
-          status,
-          durationMs: Math.round(performance.now() - startedAt),
-          outcome,
-          ...(errorCode !== undefined ? { errorCode } : {}),
-          ...fields,
-        }
-      );
+      terminal.complete({
+        status,
+        outcome,
+        ...(errorCode ? { errorCode, reasonCode: errorCode } : {}),
+        dimensions: fields,
+      });
     const challenge = request.headers.get("x-cogni-rotation-challenge");
     if (!challenge || !CHALLENGE.test(challenge) || request.body !== null) {
       complete(400, "error", "invalid_request");
