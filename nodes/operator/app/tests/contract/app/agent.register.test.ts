@@ -48,8 +48,8 @@ const completedUpgrade = {
   grantTransferRequired: false as const,
 };
 const mockUpgrade = vi.fn().mockResolvedValue(preparedUpgrade);
-const mockCompleteLegacyUpgrade = vi.fn().mockResolvedValue(undefined);
-const mockReleaseLegacyUpgrade = vi.fn().mockResolvedValue(undefined);
+const mockCompleteLegacyGrantTransfer = vi.fn().mockResolvedValue(undefined);
+const mockReleaseLegacyGrantTransfer = vi.fn().mockResolvedValue(undefined);
 const mockRecover = vi.fn().mockResolvedValue(upgraded);
 const mockListRelations = vi.fn().mockResolvedValue({
   decision: "success",
@@ -111,8 +111,8 @@ vi.mock("@/bootstrap/container", () => {
         redeemSpawnGrant: mockRedeem,
         recover: mockRecover,
         upgradeLegacy: mockUpgrade,
-        completeLegacyUpgrade: mockCompleteLegacyUpgrade,
-        releaseLegacyUpgrade: mockReleaseLegacyUpgrade,
+        completeLegacyGrantTransfer: mockCompleteLegacyGrantTransfer,
+        releaseLegacyGrantTransfer: mockReleaseLegacyGrantTransfer,
       },
       authorization,
     })),
@@ -145,8 +145,8 @@ describe("POST /api/v1/agent/register", () => {
     });
     mockWriteRelationsAtomically.mockResolvedValue({ decision: "success" });
     mockUpgrade.mockResolvedValue(preparedUpgrade);
-    mockCompleteLegacyUpgrade.mockResolvedValue(undefined);
-    mockReleaseLegacyUpgrade.mockResolvedValue(undefined);
+    mockCompleteLegacyGrantTransfer.mockResolvedValue(undefined);
+    mockReleaseLegacyGrantTransfer.mockResolvedValue(undefined);
   });
 
   it("returns 201 with actor credentials", async () => {
@@ -460,12 +460,12 @@ describe("POST /api/v1/agent/upgrade", () => {
             object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           },
         ]);
-        expect(mockCompleteLegacyUpgrade).toHaveBeenCalledWith({
+        expect(mockCompleteLegacyGrantTransfer).toHaveBeenCalledWith({
           legacyUserId: "legacy-user",
           credentialId: upgraded.credentialId,
           transferLeaseId: preparedUpgrade.transferLeaseId,
         });
-        expect(mockReleaseLegacyUpgrade).not.toHaveBeenCalled();
+        expect(mockReleaseLegacyGrantTransfer).not.toHaveBeenCalled();
       },
     });
   });
@@ -535,13 +535,13 @@ describe("POST /api/v1/agent/upgrade", () => {
             object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           },
         ]);
-        expect(mockReleaseLegacyUpgrade).toHaveBeenCalledTimes(1);
-        expect(mockCompleteLegacyUpgrade).toHaveBeenCalledTimes(1);
+        expect(mockReleaseLegacyGrantTransfer).toHaveBeenCalledTimes(1);
+        expect(mockCompleteLegacyGrantTransfer).toHaveBeenCalledTimes(1);
       },
     });
   });
 
-  it("never recopies grants after the transition is complete", async () => {
+  it("re-emits a pending response without recopying completed grants", async () => {
     mockUpgrade
       .mockResolvedValueOnce(preparedUpgrade)
       .mockResolvedValueOnce(completedUpgrade);
@@ -561,7 +561,7 @@ describe("POST /api/v1/agent/upgrade", () => {
 
         expect(mockListRelations).not.toHaveBeenCalled();
         expect(mockWriteRelationsAtomically).not.toHaveBeenCalled();
-        expect(mockCompleteLegacyUpgrade).toHaveBeenCalledTimes(1);
+        expect(mockCompleteLegacyGrantTransfer).toHaveBeenCalledTimes(1);
       },
     });
   });

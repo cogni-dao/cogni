@@ -159,7 +159,16 @@ case "$active" in
     request POST /agent/upgrade "$active" "$(jq -cn --arg key "$idempotency" '{idempotencyKey:$key}')" || exit 0
     if [ "$HTTP_STATUS" -ge 200 ] 2>/dev/null && [ "$HTTP_STATUS" -lt 300 ] 2>/dev/null; then
       upgraded="$(jq -r '.apiKey // empty' "$RESPONSE_FILE" 2>/dev/null)"
-      [ -z "$upgraded" ] || replace_keys "$upgraded" ""
+      if [ -n "$upgraded" ]; then
+        # The v1 key remains the active fallback until the v2 key is durably
+        # installed and the node confirms it. A lost upgrade response can be
+        # retried with the deterministic request key while this slot is pending.
+        replace_keys "$active" "$upgraded" || exit 0
+        request POST /agent/credentials/confirm "$upgraded" || exit 0
+        if [ "$HTTP_STATUS" -ge 200 ] 2>/dev/null && [ "$HTTP_STATUS" -lt 300 ] 2>/dev/null; then
+          replace_keys "$upgraded" ""
+        fi
+      fi
     fi
     # A rejected legacy key is never replaced by anonymous re-registration.
     exit 0

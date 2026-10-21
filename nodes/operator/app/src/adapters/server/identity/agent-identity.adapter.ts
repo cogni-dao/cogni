@@ -109,6 +109,10 @@ function legacyUpgradeMarker(fingerprint: string, leaseId: string): string {
   return `legacy:${fingerprint}:${leaseId}`;
 }
 
+function legacyUpgradeReadyMarker(fingerprint: string): string {
+  return `legacy-ready:${fingerprint}`;
+}
+
 function parseLegacyUpgradeMarker(
   value: string | null
 ): { fingerprint: string; leaseId: string } | null {
@@ -116,6 +120,11 @@ function parseLegacyUpgradeMarker(
   const [, fingerprint, leaseId, ...extra] = value.split(":");
   if (!fingerprint || !leaseId || extra.length > 0) return null;
   return { fingerprint, leaseId };
+}
+
+function parseLegacyUpgradeReadyMarker(value: string | null): string | null {
+  const match = /^legacy-ready:([0-9a-f]{64})$/.exec(value ?? "");
+  return match?.[1] ?? null;
 }
 
 function principal(input: {
@@ -1177,6 +1186,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           credentialStatus: agentCredentials.status,
           nodeId: agentCredentials.nodeId,
           predecessorCredentialId: agentCredentials.predecessorCredentialId,
+          rotationIdempotencyKey: agentCredentials.rotationIdempotencyKey,
           pendingExpiresAt: agentCredentials.pendingExpiresAt,
           confirmedAt: agentCredentials.confirmedAt,
           authenticateUntil: agentCredentials.authenticateUntil,
@@ -1214,9 +1224,12 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           row.authenticateUntil < now ? "renew_only" : "active"
         );
       }
+      const legacyReady = parseLegacyUpgradeReadyMarker(
+        row.rotationIdempotencyKey
+      );
       if (
         row.credentialStatus !== "pending" ||
-        !row.predecessorCredentialId ||
+        (!row.predecessorCredentialId && !legacyReady) ||
         !row.pendingExpiresAt ||
         row.pendingExpiresAt <= now
       ) {
@@ -1229,14 +1242,16 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         .update(agentCredentials)
         .set({ status: "active", confirmedAt: now, pendingExpiresAt: null })
         .where(eq(agentCredentials.id, row.credentialId));
-      await tx
-        .update(agentCredentials)
-        .set({
-          status: "revoked",
-          revokedAt: now,
-          replacedByCredentialId: row.credentialId,
-        })
-        .where(eq(agentCredentials.id, row.predecessorCredentialId));
+      if (row.predecessorCredentialId) {
+        await tx
+          .update(agentCredentials)
+          .set({
+            status: "revoked",
+            revokedAt: now,
+            replacedByCredentialId: row.credentialId,
+          })
+          .where(eq(agentCredentials.id, row.predecessorCredentialId));
+      }
       return this.status(row, "active");
     });
   }
@@ -1514,8 +1529,10 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
               eq(agentCredentials.nodeId, this.nodeId)
             )
           );
-        const legacyCredential = credentials.find((credential) =>
-          parseLegacyUpgradeMarker(credential.rotationIdempotencyKey)
+        const legacyCredential = credentials.find(
+          (credential) =>
+            parseLegacyUpgradeMarker(credential.rotationIdempotencyKey) ||
+            parseLegacyUpgradeReadyMarker(credential.rotationIdempotencyKey)
         );
         if (!legacyCredential) {
           // This covers credentials minted by the pre-transition implementation.
@@ -1529,9 +1546,12 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         const marker = parseLegacyUpgradeMarker(
           legacyCredential.rotationIdempotencyKey
         );
+        const readyFingerprint = parseLegacyUpgradeReadyMarker(
+          legacyCredential.rotationIdempotencyKey
+        );
         if (
-          !marker ||
-          marker.fingerprint !== fingerprint ||
+          (!marker && !readyFingerprint) ||
+          (marker?.fingerprint ?? readyFingerprint) !== fingerprint ||
           !hashesEqual(
             legacyCredential.secretHash,
             hashOpaque("credential", secret)
@@ -1545,13 +1565,39 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           );
         }
         if (legacyCredential.status === "active") {
-          // Completion is the disclosure boundary: after the copied grants
-          // are committed, this endpoint may recognize the prior request but
-          // must never reconstruct and return its durable bearer again.
+          // Confirmation is the disclosure boundary: an active credential is
+          // never reconstructed, even for the exact prior upgrade request.
           throw new AgentIdentityError(
             "invalid_credential",
             "Legacy credential was already upgraded"
           );
+        }
+        if (readyFingerprint) {
+          if (
+            !legacyCredential.pendingExpiresAt ||
+            legacyCredential.pendingExpiresAt <= now
+          ) {
+            throw new AgentIdentityError(
+              "invalid_credential",
+              "Legacy credential confirmation window expired"
+            );
+          }
+          // Grant copy is complete, but the client has not yet durably
+          // installed and confirmed the credential. An exact response-loss
+          // retry may recover the same derived secret without copying roles.
+          return {
+            ...this.material(
+              {
+                credentialId: legacyCredential.id,
+                actorId: actor.id,
+                billingAccountId: actor.billingAccountId,
+                authenticateUntil: legacyCredential.authenticateUntil,
+                renewUntil: legacyCredential.renewUntil,
+              },
+              secret
+            ),
+            grantTransferRequired: false,
+          };
         }
         if (
           legacyCredential.pendingExpiresAt &&
@@ -1664,7 +1710,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
     });
   }
 
-  async completeLegacyUpgrade(input: {
+  async completeLegacyGrantTransfer(input: {
     legacyUserId: string;
     credentialId: string;
     transferLeaseId: string;
@@ -1680,6 +1726,8 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           credentialStatus: agentCredentials.status,
           nodeId: agentCredentials.nodeId,
           rotationIdempotencyKey: agentCredentials.rotationIdempotencyKey,
+          pendingExpiresAt: agentCredentials.pendingExpiresAt,
+          renewUntil: agentCredentials.renewUntil,
           legacyUserId: actors.legacyUserId,
         })
         .from(agentCredentials)
@@ -1694,7 +1742,11 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         row.nodeId !== this.nodeId ||
         row.legacyUserId !== input.legacyUserId ||
         row.credentialStatus !== "pending" ||
-        marker?.leaseId !== input.transferLeaseId
+        !marker ||
+        marker.leaseId !== input.transferLeaseId ||
+        !row.pendingExpiresAt ||
+        row.pendingExpiresAt <= now ||
+        row.renewUntil <= now
       ) {
         throw new AgentIdentityError(
           "invalid_credential",
@@ -1703,12 +1755,15 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
       }
       await tx
         .update(agentCredentials)
-        .set({ status: "active", confirmedAt: now, pendingExpiresAt: null })
+        .set({
+          rotationIdempotencyKey: legacyUpgradeReadyMarker(marker.fingerprint),
+          pendingExpiresAt: new Date(now.getTime() + PENDING_TTL_MS),
+        })
         .where(eq(agentCredentials.id, row.credentialId));
     });
   }
 
-  async releaseLegacyUpgrade(input: {
+  async releaseLegacyGrantTransfer(input: {
     legacyUserId: string;
     credentialId: string;
     transferLeaseId: string;

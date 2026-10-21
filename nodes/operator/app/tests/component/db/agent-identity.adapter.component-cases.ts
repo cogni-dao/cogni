@@ -806,7 +806,7 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     now = new Date("2026-10-09T00:00:00.000Z");
   });
 
-  it("never re-emits a completed legacy-upgrade credential", async () => {
+  it("recovers an exact lost upgrade response only until confirmation", async () => {
     const input = {
       legacyToken: "cogni_ag_sk_v1_component-legacy-token",
       legacyUserId: userId,
@@ -817,11 +817,20 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     expect(prepared.grantTransferRequired).toBe(true);
     if (!prepared.grantTransferRequired) throw new Error("expected transfer");
     await expect(identity.authenticate(prepared.apiKey)).resolves.toBeNull();
-    await identity.completeLegacyUpgrade({
+    await identity.completeLegacyGrantTransfer({
       legacyUserId: userId,
       credentialId: prepared.credentialId,
       transferLeaseId: prepared.transferLeaseId,
     });
+    const recovered = await identity.upgradeLegacy(input);
+    expect(recovered).toMatchObject({
+      actorId: prepared.actorId,
+      credentialId: prepared.credentialId,
+      apiKey: prepared.apiKey,
+      grantTransferRequired: false,
+    });
+    await expect(identity.authenticate(recovered.apiKey)).resolves.toBeNull();
+    await identity.confirm(recovered.apiKey);
     await expect(identity.upgradeLegacy(input)).rejects.toMatchObject<
       Partial<AgentIdentityError>
     >({ code: "invalid_credential" });
@@ -855,11 +864,12 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
       code: "invalid_credential",
     });
 
-    await identity.completeLegacyUpgrade({
+    await identity.completeLegacyGrantTransfer({
       legacyUserId,
       credentialId: prepared.credentialId,
       transferLeaseId: prepared.transferLeaseId,
     });
+    await identity.confirm(prepared.apiKey);
     const rotated = await identity.rotate({
       token: prepared.apiKey,
       idempotencyKey: randomUUID(),
@@ -911,7 +921,7 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
       throw new Error("expected one transfer owner");
     }
 
-    await identity.releaseLegacyUpgrade({
+    await identity.releaseLegacyGrantTransfer({
       legacyUserId,
       credentialId: fulfilled.value.credentialId,
       transferLeaseId: fulfilled.value.transferLeaseId,
@@ -921,11 +931,12 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     expect(resumed.grantTransferRequired).toBe(true);
     if (!resumed.grantTransferRequired) throw new Error("expected resume");
     expect(resumed.transferLeaseId).not.toBe(fulfilled.value.transferLeaseId);
-    await identity.completeLegacyUpgrade({
+    await identity.completeLegacyGrantTransfer({
       legacyUserId,
       credentialId: resumed.credentialId,
       transferLeaseId: resumed.transferLeaseId,
     });
+    await identity.confirm(resumed.apiKey);
   });
 
   it("applies the active-agent billing cap to a first legacy upgrade", async () => {

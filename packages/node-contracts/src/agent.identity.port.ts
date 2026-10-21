@@ -32,6 +32,10 @@ export interface AgentCredentialStatus {
   readonly renewUntil: string;
 }
 
+/**
+ * `grantTransferRequired: false` means the role copy is durably complete, but
+ * the returned credential remains pending until the client confirms it.
+ */
 export type LegacyAgentUpgrade = AgentCredentialMaterial &
   (
     | { readonly grantTransferRequired: false }
@@ -120,12 +124,14 @@ export interface AgentIdentityPort {
     readonly displayName: string | null;
     readonly idempotencyKey: string;
   }): Promise<LegacyAgentUpgrade>;
-  completeLegacyUpgrade(input: {
+  /** Marks the one-time role copy complete without activating the bearer. */
+  completeLegacyGrantTransfer(input: {
     readonly legacyUserId: string;
     readonly credentialId: string;
     readonly transferLeaseId: string;
   }): Promise<void>;
-  releaseLegacyUpgrade(input: {
+  /** Releases an unfinished role-copy lease so an exact retry may resume it. */
+  releaseLegacyGrantTransfer(input: {
     readonly legacyUserId: string;
     readonly credentialId: string;
     readonly transferLeaseId: string;

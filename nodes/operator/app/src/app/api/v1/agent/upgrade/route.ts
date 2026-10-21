@@ -132,7 +132,9 @@ export const POST = wrapRouteHandlerWithLogging(
               { status: 503 }
             );
           }
-          await container.agentIdentity.completeLegacyUpgrade({
+          // Copy completion makes the pending bearer recoverable after a lost
+          // HTTP response; only the client's later confirm call activates it.
+          await container.agentIdentity.completeLegacyGrantTransfer({
             legacyUserId: legacy.sub,
             credentialId: result.credentialId,
             transferLeaseId: result.transferLeaseId,
@@ -140,7 +142,7 @@ export const POST = wrapRouteHandlerWithLogging(
           transferComplete = true;
         } finally {
           if (!transferComplete) {
-            await container.agentIdentity.releaseLegacyUpgrade({
+            await container.agentIdentity.releaseLegacyGrantTransfer({
               legacyUserId: legacy.sub,
               credentialId: result.credentialId,
               transferLeaseId: result.transferLeaseId,

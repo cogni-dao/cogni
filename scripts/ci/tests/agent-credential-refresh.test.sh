@@ -51,6 +51,13 @@ case "$url" in
     printf '200'
     ;;
   */agent/credentials/confirm)
+    if [[ "${FAKE_REQUIRE_PENDING_BEFORE_CONFIRM:-0}" == 1 ]]; then
+      grep -Fq "COGNI_NODE_API_KEY_PENDING=$auth" "$FAKE_ENV_TARGET" || {
+        printf '%s' '{"error":"pending_not_persisted"}' >"$output"
+        printf '599'
+        exit 0
+      }
+    fi
     if [[ "${FAKE_CONFIRM_STATUS:-200}" == 401 ]]; then
       printf '%s' '{"error":"invalid_token"}' >"$output"
       printf '401'
@@ -75,6 +82,7 @@ SH
 chmod +x "$FIXTURE/bin/curl"
 export PATH="$FIXTURE/bin:$PATH"
 export FAKE_CALLS="$FIXTURE/calls"
+export FAKE_ENV_TARGET="$FIXTURE/primary/.env.cogni"
 export COGNI_AGENT_ROTATE_BEFORE_SECONDS=315360000
 
 ENV_TARGET="$FIXTURE/primary/.env.cogni"
@@ -119,9 +127,28 @@ if grep -Fq '/agent/register' "$FAKE_CALLS"; then
 fi
 
 printf '%s\n' 'COGNI_NODE_API_KEY=cogni_ag_sk_v1_legacy' >"$ENV_TARGET"
-bash "$REFRESH" "$ENV_LINK" https://node.example/api/v1
+: >"$FAKE_CALLS"
+FAKE_REQUIRE_PENDING_BEFORE_CONFIRM=1 FAKE_CONFIRM_FAIL=1 \
+  bash "$REFRESH" "$ENV_LINK" https://node.example/api/v1
+grep -Fq 'COGNI_NODE_API_KEY=cogni_ag_sk_v1_legacy' "$ENV_TARGET" ||
+  fail "legacy predecessor was not preserved after confirm response loss"
+grep -Fq 'COGNI_NODE_API_KEY_PENDING=cogni_ag_sk_v2_33333333-3333-4333-8333-333333333333.upgraded' "$ENV_TARGET" ||
+  fail "legacy upgrade was not durably staged before confirmation"
+legacy_first_call="$(sed -n '1p' "$FAKE_CALLS")"
+legacy_second_call="$(sed -n '2p' "$FAKE_CALLS")"
+[[ "$legacy_first_call" == *'/agent/upgrade '* ]] ||
+  fail "legacy refresh did not prepare the upgrade first"
+[[ "$legacy_second_call" == *'/agent/credentials/confirm '* ]] ||
+  fail "legacy refresh did not confirm the persisted pending key"
+
+: >"$FAKE_CALLS"
+FAKE_REQUIRE_PENDING_BEFORE_CONFIRM=1 FAKE_CONFIRM_FAIL=0 \
+  bash "$REFRESH" "$ENV_LINK" https://node.example/api/v1
 grep -Fq 'COGNI_NODE_API_KEY=cogni_ag_sk_v2_33333333-3333-4333-8333-333333333333.upgraded' "$ENV_TARGET" ||
   fail "legacy upgrade was not installed"
+if grep -Fq '/agent/upgrade' "$FAKE_CALLS"; then
+  fail "pending legacy recovery requested a second role-copy transition"
+fi
 
 mode="$(stat -f '%Lp' "$ENV_TARGET" 2>/dev/null || stat -c '%a' "$ENV_TARGET")"
 [[ "$mode" == 600 ]] || fail "credential file mode is $mode, expected 600"
