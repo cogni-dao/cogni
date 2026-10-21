@@ -16,7 +16,9 @@
  *     `patch`. A mistaken `{ patch: {...} }` (guessed from the operation name) surfaces as
  *     an explicit `Unrecognized key: "patch"` issue instead of a silent-ignore that only
  *     reported `set: Required` — the confusing 400 that got bug.5242 misfiled as a drift.
- *   - v0 has no expectedRevision optimistic concurrency and no transition state-machine — whoever holds a valid token is trusted.
+ *   - OPTIONAL_CAS: top-level `expectedRevision` (the item's `revision` as read) is compare-and-set —
+ *     the write lands only if the row is still at that revision, else 409 `revision_conflict` and
+ *     nothing is written. Omitted ⇒ unconditioned patch (unchanged). No transition state-machine.
  * Side-effects: none
  * Links: /api/v1/work/items/[id] route, docs/spec/work-items-port.md, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
@@ -45,9 +47,13 @@ export const workItemsPatchOperation = {
     "Updates a subset of fields on a work item. HTTP: PATCH /api/v1/work/items/{id} " +
     "with body { set: { <field>: <value>, ... } } — the SQL-style UPDATE…SET envelope. " +
     "The operation is PATCH but the payload wrapper is `set`, NOT `patch`. Whitelisted " +
-    "fields only; id (path), created_at, updated_at are server-managed. v0 has no expectedRevision.",
+    "fields only; id (path), created_at, updated_at are server-managed. Optional top-level " +
+    "`expectedRevision` (integer, the item's `revision` as read) makes the write " +
+    "compare-and-set: a moved row answers 409 errorCode `revision_conflict` with " +
+    "`currentRevision` and nothing is written.",
   input: z.strictObject({
     id: z.string(),
+    expectedRevision: z.number().int().min(0).optional(),
     set: z
       .strictObject({
         title: z.string().min(1).max(500).optional(),
