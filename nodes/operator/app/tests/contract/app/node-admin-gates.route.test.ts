@@ -181,7 +181,9 @@ beforeEach(async () => {
 
 function as(user: typeof ADMIN) {
   vi.mocked(session.getSessionUser).mockResolvedValue(user);
-  vi.mocked(requestIdentity.resolveHumanRequestIdentity).mockResolvedValue(user);
+  vi.mocked(requestIdentity.resolveHumanRequestIdentity).mockResolvedValue(
+    user
+  );
   vi.mocked(requestIdentity.resolveRequestPrincipal).mockResolvedValue({
     kind: "human",
     principalId: `user:${NODE_ID}/${user.id}`,
@@ -194,32 +196,33 @@ function as(user: typeof ADMIN) {
 
 function asPrincipal(principal: RequestPrincipal) {
   vi.mocked(session.getSessionUser).mockResolvedValue(null);
-  vi.mocked(requestIdentity.resolveHumanRequestIdentity).mockResolvedValue(null);
+  vi.mocked(requestIdentity.resolveHumanRequestIdentity).mockResolvedValue(
+    null
+  );
   vi.mocked(requestIdentity.resolveRequestPrincipal).mockResolvedValue(
     principal
   );
 }
 
 describe("(a) POST /api/v1/goals is node-admin", () => {
-  it.each(NON_HUMAN_PRINCIPALS)(
-    "rejects a %s before authorization or goal writes",
-    async (_label, principal) => {
-      asPrincipal(principal);
-      const authzCheck = vi.spyOn(
-        h.authz.current as FakeAuthorizationAdapter,
-        "check"
-      );
-      await testApiHandler({
-        appHandler: goalsHandler,
-        async test({ fetch }) {
-          const res = await fetch({ method: "POST", body: GOAL_BODY });
-          expect(res.status).toBe(401);
-        },
-      });
-      expect(authzCheck).not.toHaveBeenCalled();
-      expect(h.startGoalMock).not.toHaveBeenCalled();
-    }
-  );
+  it.each(
+    NON_HUMAN_PRINCIPALS
+  )("rejects a %s before authorization or goal writes", async (_label, principal) => {
+    asPrincipal(principal);
+    const authzCheck = vi.spyOn(
+      h.authz.current as FakeAuthorizationAdapter,
+      "check"
+    );
+    await testApiHandler({
+      appHandler: goalsHandler,
+      async test({ fetch }) {
+        const res = await fetch({ method: "POST", body: GOAL_BODY });
+        expect(res.status).toBe(401);
+      },
+    });
+    expect(authzCheck).not.toHaveBeenCalled();
+    expect(h.startGoalMock).not.toHaveBeenCalled();
+  });
 
   it("denies a non-admin with 403 authz_denied before starting anything", async () => {
     as(NON_ADMIN);
@@ -294,21 +297,20 @@ describe("(b) merging a goal-* change is node-admin", () => {
     return out;
   }
 
-  it.each(NON_HUMAN_PRINCIPALS)(
-    "rejects a %s before authorization or contribution reads/writes",
-    async (_label, principal) => {
-      asPrincipal(principal);
-      const authzCheck = vi.spyOn(
-        h.authz.current as FakeAuthorizationAdapter,
-        "check"
-      );
-      const res = await merge();
-      expect(res.status).toBe(401);
-      expect(authzCheck).not.toHaveBeenCalled();
-      expect(h.diffMock).not.toHaveBeenCalled();
-      expect(h.mergeMock).not.toHaveBeenCalled();
-    }
-  );
+  it.each(
+    NON_HUMAN_PRINCIPALS
+  )("rejects a %s before authorization or contribution reads/writes", async (_label, principal) => {
+    asPrincipal(principal);
+    const authzCheck = vi.spyOn(
+      h.authz.current as FakeAuthorizationAdapter,
+      "check"
+    );
+    const res = await merge();
+    expect(res.status).toBe(401);
+    expect(authzCheck).not.toHaveBeenCalled();
+    expect(h.diffMock).not.toHaveBeenCalled();
+    expect(h.mergeMock).not.toHaveBeenCalled();
+  });
 
   it("denies a non-admin session with 403 authz_denied and never merges", async () => {
     as(NON_ADMIN);
@@ -399,25 +401,24 @@ describe("(c) priority 0/1 is node-admin on create and patch", () => {
     return { status, json };
   }
 
-  it.each(NON_HUMAN_PRINCIPALS)(
-    "rejects privileged create/patch by a %s before authorization or writes",
-    async (_label, principal) => {
-      asPrincipal(principal);
-      const authzCheck = vi.spyOn(
-        h.authz.current as FakeAuthorizationAdapter,
-        "check"
-      );
-      const p = await patch(1);
-      const c = await create(1);
-      expect(p.status).toBe(403);
-      expect(p.json).toMatchObject({ errorCode: "authz_denied" });
-      expect(c.status).toBe(403);
-      expect(c.json).toMatchObject({ errorCode: "authz_denied" });
-      expect(authzCheck).not.toHaveBeenCalled();
-      expect(h.patchMock).not.toHaveBeenCalled();
-      expect(h.createMock).not.toHaveBeenCalled();
-    }
-  );
+  it.each(
+    NON_HUMAN_PRINCIPALS
+  )("rejects privileged create/patch by a %s before authorization or writes", async (_label, principal) => {
+    asPrincipal(principal);
+    const authzCheck = vi.spyOn(
+      h.authz.current as FakeAuthorizationAdapter,
+      "check"
+    );
+    const p = await patch(1);
+    const c = await create(1);
+    expect(p.status).toBe(403);
+    expect(p.json).toMatchObject({ errorCode: "authz_denied" });
+    expect(c.status).toBe(403);
+    expect(c.json).toMatchObject({ errorCode: "authz_denied" });
+    expect(authzCheck).not.toHaveBeenCalled();
+    expect(h.patchMock).not.toHaveBeenCalled();
+    expect(h.createMock).not.toHaveBeenCalled();
+  });
 
   it("preserves the exact durable-agent principal on ordinary patches", async () => {
     asPrincipal(UPGRADED_AGENT);
