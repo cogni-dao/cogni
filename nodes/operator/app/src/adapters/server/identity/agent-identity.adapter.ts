@@ -809,6 +809,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
             "Spawn grant was redeemed; use credential recovery"
           );
         }
+        const secret = deriveSecret("spawn-credential", token);
         const [existing] = await tx
           .select({
             credentialId: agentCredentials.id,
@@ -816,12 +817,23 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
             billingAccountId: actors.billingAccountId,
             authenticateUntil: agentCredentials.authenticateUntil,
             renewUntil: agentCredentials.renewUntil,
+            credentialStatus: agentCredentials.status,
+            actorStatus: actors.status,
+            nodeId: agentCredentials.nodeId,
+            secretHash: agentCredentials.secretHash,
+            revokedAt: agentCredentials.revokedAt,
+            replacedByCredentialId: agentCredentials.replacedByCredentialId,
           })
           .from(agentCredentials)
           .innerJoin(actors, eq(agentCredentials.actorId, actors.id))
           .where(
             and(
               eq(agentCredentials.actorId, grant.redeemedActorId),
+              eq(agentCredentials.nodeId, this.nodeId),
+              eq(
+                agentCredentials.secretHash,
+                hashOpaque("credential", secret)
+              ),
               isNull(agentCredentials.predecessorCredentialId)
             )
           )
@@ -832,7 +844,29 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
             "Redeemed grant is incomplete"
           );
         }
-        const secret = deriveSecret("spawn-credential", token);
+        if (
+          existing.nodeId !== this.nodeId ||
+          !hashesEqual(
+            existing.secretHash,
+            hashOpaque("credential", secret)
+          )
+        ) {
+          throw new AgentIdentityError(
+            "invalid_grant",
+            "Redeemed grant is incomplete"
+          );
+        }
+        if (
+          existing.credentialStatus !== "active" ||
+          existing.actorStatus !== "active" ||
+          existing.revokedAt !== null ||
+          existing.replacedByCredentialId !== null
+        ) {
+          throw new AgentIdentityError(
+            "grant_already_redeemed",
+            "Spawn credential is no longer replayable; use credential recovery"
+          );
+        }
         return this.material(existing, secret);
       }
       if (grant.expiresAt <= now) {
@@ -1358,6 +1392,29 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           );
         }
         const secret = deriveSecret("recover-credential", token);
+        if (
+          existing.nodeId !== this.nodeId ||
+          existing.actorId !== grant.actorId ||
+          !hashesEqual(
+            existing.secretHash,
+            hashOpaque("credential", secret)
+          )
+        ) {
+          throw new AgentIdentityError(
+            "invalid_grant",
+            "Recovery is incomplete"
+          );
+        }
+        if (
+          existing.status !== "active" ||
+          existing.revokedAt !== null ||
+          existing.replacedByCredentialId !== null
+        ) {
+          throw new AgentIdentityError(
+            "grant_already_redeemed",
+            "Recovered credential is no longer replayable; request a new recovery grant"
+          );
+        }
         return this.material(
           {
             credentialId: existing.id,

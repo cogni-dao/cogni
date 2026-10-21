@@ -241,6 +241,45 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     now = new Date("2026-10-09T00:00:00.000Z");
   });
 
+  it("never re-emits a retired spawn credential during the replay window", async () => {
+    const grant = await identity.createSpawnGrant({
+      issuerUserId: userId,
+      name: "retired-spawn-credential",
+      idempotencyKey: randomUUID(),
+    });
+    const first = await identity.redeemSpawnGrant(grant.token);
+
+    await expect(identity.redeemSpawnGrant(grant.token)).resolves.toEqual(
+      first
+    );
+
+    const successor = await identity.rotate({
+      token: first.apiKey,
+      idempotencyKey: randomUUID(),
+    });
+    await identity.confirm(successor.apiKey);
+
+    await expect(identity.redeemSpawnGrant(grant.token)).rejects.toMatchObject<
+      Partial<AgentIdentityError>
+    >({ code: "grant_already_redeemed" });
+    const [retired] = await db
+      .select({
+        status: agentCredentials.status,
+        revokedAt: agentCredentials.revokedAt,
+        replacedByCredentialId: agentCredentials.replacedByCredentialId,
+      })
+      .from(agentCredentials)
+      .where(eq(agentCredentials.id, first.credentialId));
+    expect(retired).toMatchObject({
+      status: "revoked",
+      replacedByCredentialId: successor.credentialId,
+    });
+    expect(retired?.revokedAt).not.toBeNull();
+    await expect(
+      identity.authenticate(successor.apiKey)
+    ).resolves.toMatchObject({ principal: { actorId: first.actorId } });
+  });
+
   it("authenticates only on the issuing node and fails closed on a database error", async () => {
     const credential = await spawn("node-local-agent");
     await expect(
@@ -411,6 +450,44 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     await expect(identity.authenticate(first.apiKey)).resolves.toMatchObject({
       principal: { actorId: current.actorId },
     });
+  });
+
+  it("never re-emits a retired recovered credential during the replay window", async () => {
+    const current = await spawn("retired-recovery-credential");
+    const grant = await identity.createRecoveryGrant({
+      issuerUserId: userId,
+      actorId: current.actorId,
+      idempotencyKey: randomUUID(),
+    });
+    const recovered = await identity.recover(grant.token);
+
+    await expect(identity.recover(grant.token)).resolves.toEqual(recovered);
+
+    const successor = await identity.rotate({
+      token: recovered.apiKey,
+      idempotencyKey: randomUUID(),
+    });
+    await identity.confirm(successor.apiKey);
+
+    await expect(identity.recover(grant.token)).rejects.toMatchObject<
+      Partial<AgentIdentityError>
+    >({ code: "grant_already_redeemed" });
+    const [retired] = await db
+      .select({
+        status: agentCredentials.status,
+        revokedAt: agentCredentials.revokedAt,
+        replacedByCredentialId: agentCredentials.replacedByCredentialId,
+      })
+      .from(agentCredentials)
+      .where(eq(agentCredentials.id, recovered.credentialId));
+    expect(retired).toMatchObject({
+      status: "revoked",
+      replacedByCredentialId: successor.credentialId,
+    });
+    expect(retired?.revokedAt).not.toBeNull();
+    await expect(
+      identity.authenticate(successor.apiKey)
+    ).resolves.toMatchObject({ principal: { actorId: current.actorId } });
   });
 
   it("rejects recovery after accepted stewardship changes", async () => {
