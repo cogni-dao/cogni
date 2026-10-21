@@ -143,6 +143,8 @@ export interface GoalView {
   id: string;
   title: string;
   content: string;
+  /** The goal's deadline, read from the `evaluate_at` column — never parsed from content. */
+  evaluateAt: Date | null;
 }
 
 /**
@@ -179,6 +181,7 @@ export async function resolveGoals(
         id: g.id,
         title: g.title,
         content: g.content,
+        evaluateAt: g.evaluateAt,
       })),
     };
   } catch (e) {
@@ -189,7 +192,15 @@ export async function resolveGoals(
   }
 }
 
-/** Render the `## Goals` section lines (title + content verbatim per goal). */
+/** `YYYY-MM-DD` from the `evaluate_at` column, or an explicit gap marker. */
+function goalDeadline(evaluateAt: Date | null): string {
+  return evaluateAt ? evaluateAt.toISOString().slice(0, 10) : "no deadline set";
+}
+
+/**
+ * Render the `## Goals` section lines: per goal its title, the deadline from
+ * the `evaluate_at` column (never parsed from content), then content verbatim.
+ */
 export function renderGoalsLines(goals: GoalsSection): string[] {
   const head = ["", "## Goals", ""];
   if (goals.status === "unavailable") {
@@ -201,6 +212,8 @@ export function renderGoalsLines(goals: GoalsSection): string[] {
     ...goals.goals.flatMap((g, i) => [
       ...(i > 0 ? [""] : []),
       `### ${g.title}`,
+      "",
+      `By: ${goalDeadline(g.evaluateAt)} · \`${g.id}\``,
       "",
       g.content,
     ]),

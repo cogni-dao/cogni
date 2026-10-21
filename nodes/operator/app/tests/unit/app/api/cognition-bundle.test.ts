@@ -371,7 +371,10 @@ describe("Goals section — approved DAO goals right after the mission (task.528
   const goal = (n: number): GoalView => ({
     id: `goal-g${n}`,
     title: `Goal: outcome ${n}`,
-    content: `Statement: s${n}.\nKPI: \`gh pr list\` | count\nTarget: ${n}\nBy: 2026-12-31`,
+    // Content deliberately states a DIFFERENT date: the rendered deadline must
+    // come from the evaluate_at column, never from parsing the body.
+    content: `Statement: s${n}.\nKPI: \`gh pr list\` | count\nTarget: ${n}\nBy: someday`,
+    evaluateAt: new Date(`2026-12-0${n}T00:00:00.000Z`),
   });
   const port = (goals: GoalView[] | Error) => ({
     listActiveGoals: async () => {
@@ -394,7 +397,9 @@ describe("Goals section — approved DAO goals right after the mission (task.528
       goals: await resolveGoals(port(three)),
     });
     for (const g of three) {
-      expect(md).toContain(`### ${g.title}\n\n${g.content}`);
+      expect(md).toContain(
+        `### ${g.title}\n\nBy: 2026-12-0${g.id.slice(-1)} · \`${g.id}\`\n\n${g.content}`
+      );
     }
     expect(md).not.toContain("no approved goals");
     const at = (needle: string) => md.indexOf(needle);
@@ -414,6 +419,14 @@ describe("Goals section — approved DAO goals right after the mission (task.528
       "goals unavailable: 4 active DAO goals exceed the max of 3: goal-a, goal-b"
     );
     expect(md).not.toContain("no approved goals");
+  });
+
+  it("marks a goal with no evaluate_at instead of inventing a deadline", async () => {
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      goals: await resolveGoals(port([{ ...goal(1), evaluateAt: null }])),
+    });
+    expect(md).toContain("By: no deadline set · `goal-g1`");
   });
 
   it("renders `goals unavailable` when the hub is not configured", async () => {

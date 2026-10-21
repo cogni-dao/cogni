@@ -17,6 +17,7 @@ export { createKnowledgeCapability } from "./capability.js";
 export {
   assertWritableConfidence,
   BASELINE_CONFIDENCE_BY_SOURCE,
+  CONFIDENCE_EXEMPT_ENTRY_TYPES,
   CONFIDENCE_POLICY_VERSION,
   type ConfidenceCitationBasis,
   type ConfidenceDecision,
@@ -24,6 +25,7 @@ export {
   clampConfidence,
   explainConfidence,
   initializeConfidence,
+  isConfidenceExempt,
   recomputeConfidence,
 } from "./domain/confidence-policy.js";
 // Contribution domain
@@ -55,7 +57,7 @@ export {
 // DAO goal list (ONE_GOAL_LIST · MAX_THREE_GOALS) — read via KnowledgeStorePort.listActiveGoals
 export {
   type ActiveGoal,
-  GOAL_DOMAIN,
+  GOAL_ENTRY_TYPE,
   GOAL_ID_PREFIX,
   type GoalCandidateRow,
   isActiveGoalRow,
@@ -155,6 +157,7 @@ export {
   DoltDiffEntrySchema,
   type EntryType,
   EntryTypeSchema,
+  EVALUATE_AT_REQUIRED_ENTRY_TYPES,
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
   type Knowledge,
@@ -166,6 +169,7 @@ export {
   RAW_WRITE_REJECTS_TYPES,
   type ResolutionStrategy,
   ResolutionStrategySchema,
+  requiresEvaluateAt,
   type SourceType,
   SourceTypeSchema,
 } from "./domain/schemas.js";

@@ -13,6 +13,7 @@
 
 import {
   initializeConfidence,
+  isConfidenceExempt,
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
 import { type ActiveGoal, selectActiveGoals } from "../../domain/dao-goals.js";
@@ -29,6 +30,7 @@ import type {
 import {
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
+  requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import type {
   ChainNode,
@@ -114,7 +116,6 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     return selectActiveGoals(
       Array.from(this.rows.values()).map((r) => ({
         id: r.id,
-        domain: r.domain,
         entryType: r.entryType,
         title: r.title,
         content: r.content,
@@ -186,8 +187,8 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     if (!this.domainsMap.has(entry.domain)) {
       throw new DomainNotRegisteredError(entry.domain);
     }
-    if (entry.entryType === "hypothesis" && !entry.evaluateAt) {
-      throw new HypothesisMissingEvaluateAtError(entry.id);
+    if (requiresEvaluateAt(entry.entryType) && !entry.evaluateAt) {
+      throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
     }
     const existing = this.rows.get(entry.id);
     const row: Knowledge = {
@@ -214,8 +215,8 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     if (!this.domainsMap.has(entry.domain)) {
       throw new DomainNotRegisteredError(entry.domain);
     }
-    if (entry.entryType === "hypothesis" && !entry.evaluateAt) {
-      throw new HypothesisMissingEvaluateAtError(entry.id);
+    if (requiresEvaluateAt(entry.entryType) && !entry.evaluateAt) {
+      throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
     }
     if (this.rows.has(entry.id)) {
       throw new Error(`duplicate key: knowledge.id='${entry.id}'`);
@@ -512,6 +513,7 @@ export class FakeEdoResolverAdapter implements EdoResolverPort {
     if (!entry) {
       throw new Error(`recomputeConfidence: entry '${entryId}' not found`);
     }
+    if (isConfidenceExempt(entry.entryType)) return entry.confidencePct ?? 0;
     const incoming = (await this.store.listCitationsByCitedId(entryId)).filter(
       (c) => c.citationType !== "tracks"
     );

@@ -103,17 +103,21 @@ export class DomainAlreadyRegisteredError extends Error {
 // ---------------------------------------------------------------------------
 
 /**
- * Thrown by `addKnowledge` / `upsertKnowledge` when a hypothesis row is
- * written without `evaluate_at`. Enforces `HYPOTHESIS_HAS_EVALUATE_AT`.
+ * Thrown when a hypothesis or goal row is written without `evaluate_at`.
+ * Enforces `HYPOTHESIS_HAS_EVALUATE_AT` (goals: their `By:` deadline).
  */
 export class HypothesisMissingEvaluateAtError extends Error {
   readonly entryId: string;
-  constructor(entryId: string) {
+  readonly entryType: string;
+  constructor(entryId: string, entryType = "hypothesis") {
     super(
-      `hypothesis '${entryId}' is missing evaluate_at — hypothesis rows must declare a resolution date`
+      entryType === "goal"
+        ? `goal '${entryId}' is missing evaluate_at — goal rows must declare their By: deadline`
+        : `hypothesis '${entryId}' is missing evaluate_at — hypothesis rows must declare a resolution date`
     );
     this.name = "HypothesisMissingEvaluateAtError";
     this.entryId = entryId;
+    this.entryType = entryType;
   }
 }
 
@@ -220,8 +224,8 @@ export interface KnowledgeStorePort {
     opts?: { limit?: number }
   ): Promise<Knowledge[]>;
   /**
-   * The approved DAO goals (ONE_GOAL_LIST): merged `hypothesis` rows in domain
-   * `strategy` with id prefix `goal-`, not deprecated, sorted by id. Returns []
+   * The approved DAO goals (ONE_GOAL_LIST): merged `entry_type = 'goal'` rows
+   * with id prefix `goal-`, not deprecated, sorted by id. Returns []
    * when none are merged; throws `TooManyActiveGoalsError` past 3
    * (MAX_THREE_GOALS). Contribution-branch rows are never visible here.
    */

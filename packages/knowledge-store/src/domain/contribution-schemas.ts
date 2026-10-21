@@ -60,10 +60,11 @@ export const KnowledgeEntryInputSchema = z.object({
   entryType: z.string().min(1).max(64).optional(),
   tags: z.array(z.string().max(64)).max(32).optional(),
   /**
-   * ISO datetime — the hypothesis appointment with truth. Required by the
-   * adapter when `entryType` is `hypothesis` (HYPOTHESIS_HAS_EVALUATE_AT), so a
-   * goal or bet can be proposed through a focused inbox (bug.5504). Kept a
-   * string on the wire; the adapter converts it to a timestamp at write.
+   * ISO datetime — a hypothesis's appointment with truth or a goal's `By:`
+   * deadline. Required by the adapter when `entryType` is `hypothesis` or
+   * `goal` (HYPOTHESIS_HAS_EVALUATE_AT). Lets a goal or bet be
+   * proposed through a focused inbox (bug.5504). Kept a string on the wire;
+   * the adapter converts it to a timestamp at write.
    */
   evaluateAt: z.string().datetime({ offset: true }).optional(),
   /** Namespaced resolver id on hypothesis rows (`agent`, `metric:<kpi-id>`, …). */

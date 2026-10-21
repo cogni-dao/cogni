@@ -45,6 +45,7 @@ import { randomBytes } from "node:crypto";
 import type { ReservedSql, Sql } from "postgres";
 import {
   initializeConfidence,
+  isConfidenceExempt,
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
 import type {
@@ -65,6 +66,7 @@ import type { CitationType } from "../../domain/schemas.js";
 import {
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
+  requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import {
   ContributionConflictError,
@@ -572,13 +574,17 @@ async function recomputeConfidenceOnConn(
   entryId: string
 ): Promise<number> {
   const entryRows = await conn.unsafe(
-    `SELECT source_type FROM knowledge WHERE id = ${escapeValue(entryId)} LIMIT 1`
+    `SELECT source_type, entry_type, confidence_pct FROM knowledge WHERE id = ${escapeValue(entryId)} LIMIT 1`
   );
   if (entryRows.length === 0) {
     throw new Error(`recomputeConfidence: entry '${entryId}' not found`);
   }
-  const sourceType = (entryRows[0] as Record<string, unknown>)
-    .source_type as string;
+  const entryRow = entryRows[0] as Record<string, unknown>;
+  // A DAO goal's confidence is not citation-driven (CONFIDENCE_EXEMPT_ENTRY_TYPES).
+  if (isConfidenceExempt(entryRow.entry_type as string | null)) {
+    return Number(entryRow.confidence_pct ?? 0);
+  }
+  const sourceType = entryRow.source_type as string;
   const incoming = await conn.unsafe(
     `SELECT citation_type FROM citations WHERE cited_id = ${escapeValue(entryId)} AND citation_type <> 'tracks'`
   );
@@ -795,12 +801,13 @@ async function applyEdit(input: {
   const entryId = edit.entry.id;
   const entryType = edit.entry.entryType ?? "finding";
   // HYPOTHESIS_HAS_EVALUATE_AT on the generic insert path too (bug.5504): a
-  // goal/bet proposed through a focused inbox carries its own evaluateAt.
+  // bet or a `goal` proposed through a focused inbox carries its own
+  // evaluateAt (a goal's `By:` deadline); neither may land without one.
   const evaluateAt = edit.entry.evaluateAt
     ? new Date(edit.entry.evaluateAt)
     : null;
-  if (entryType === "hypothesis" && !evaluateAt) {
-    throw new HypothesisMissingEvaluateAtError(entryId);
+  if (requiresEvaluateAt(entryType) && !evaluateAt) {
+    throw new HypothesisMissingEvaluateAtError(entryId, entryType);
   }
   const useWhenColumn = hasUseWhen ? ", use_when" : "";
   const useWhenValue = hasUseWhen

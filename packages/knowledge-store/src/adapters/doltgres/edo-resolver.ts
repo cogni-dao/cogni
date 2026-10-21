@@ -17,6 +17,7 @@
 import type { Sql } from "postgres";
 import {
   initializeConfidence,
+  isConfidenceExempt,
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
 import type {
@@ -170,6 +171,8 @@ export class DoltgresEdoResolverAdapter implements EdoResolverPort {
     if (!entry) {
       throw new Error(`recomputeConfidence: entry '${entryId}' not found`);
     }
+    // A DAO goal's confidence is not citation-driven (CONFIDENCE_EXEMPT_ENTRY_TYPES).
+    if (isConfidenceExempt(entry.entryType)) return entry.confidencePct ?? 0;
 
     const incoming: Citation[] =
       await this.store.listCitationsByCitedId(entryId);

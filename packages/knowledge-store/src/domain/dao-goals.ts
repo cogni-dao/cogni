@@ -8,23 +8,25 @@
  * Scope: Pure selection + shape. The SQL read lives in the Doltgres adapter's
  *   `listActiveGoals`; this module owns which rows count and the cap.
  * Invariants:
- *   - ONE_GOAL_LIST: a goal is a merged `hypothesis` row in domain `strategy`
- *     whose id starts `goal-`, not deprecated. No new entry type, no new table.
+ *   - ONE_GOAL_LIST: a goal is a merged row with `entry_type = 'goal'` whose id
+ *     starts `goal-`, not deprecated. A goal is a human commitment, not a
+ *     `hypothesis`: it is admin-merged and its confidence is never recomputed
+ *     from citations. No new table — `entry_type` is plain text.
  *   - MAX_THREE_GOALS: more than 3 active goals throws `TooManyActiveGoalsError`;
  *     the list is never silently truncated.
  *   - NO_GOALS_FAILS_LOUD: zero goals is an empty array the caller must render
  *     visibly (the cognition bundle prints `no approved goals`).
  * Side-effects: none
- * Links: https://cognidao.org/knowledge/dao-goals-design, docs/design/knowledge-goal-loop.md
+ * Links: https://cognidao.org/knowledge/dao-goals-design
  * @public
  */
 
 import { TooManyActiveGoalsError } from "../port/knowledge-store.port.js";
 
-/** Id prefix that marks a hypothesis as a DAO goal atom (`goal-<slug>`). */
+/** The entry type of a DAO goal atom. */
+export const GOAL_ENTRY_TYPE = "goal" as const;
+/** Id prefix every DAO goal atom carries (`goal-<slug>`). */
 export const GOAL_ID_PREFIX = "goal-" as const;
-/** The one domain DAO goal atoms live in. */
-export const GOAL_DOMAIN = "strategy" as const;
 /** MAX_THREE_GOALS. */
 export const MAX_ACTIVE_GOALS = 3 as const;
 
@@ -33,14 +35,13 @@ export interface ActiveGoal {
   id: string;
   title: string;
   content: string;
-  /** The goal's `By:` date (the hypothesis `evaluate_at`). */
+  /** The goal's `By:` deadline (`evaluate_at`), when set. */
   evaluateAt: Date | null;
 }
 
 /** The row fields goal selection needs; both adapters project to this. */
 export interface GoalCandidateRow {
   id: string;
-  domain: string;
   entryType: string | null | undefined;
   status?: string | null | undefined;
   title: string;
@@ -51,8 +52,7 @@ export interface GoalCandidateRow {
 /** True iff the row is an active DAO goal atom (ONE_GOAL_LIST). */
 export function isActiveGoalRow(row: GoalCandidateRow): boolean {
   return (
-    row.entryType === "hypothesis" &&
-    row.domain === GOAL_DOMAIN &&
+    row.entryType === GOAL_ENTRY_TYPE &&
     row.id.startsWith(GOAL_ID_PREFIX) &&
     row.status !== "deprecated"
   );

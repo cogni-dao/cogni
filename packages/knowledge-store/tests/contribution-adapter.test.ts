@@ -96,8 +96,12 @@ class FakeReservedSql {
     if (query.includes("entry_type FROM knowledge")) {
       return [{ entry_type: "finding" }];
     }
-    if (query.includes("source_type FROM knowledge")) {
-      return [{ source_type: "external" }];
+    if (
+      query.includes("source_type, entry_type, confidence_pct FROM knowledge")
+    ) {
+      return [
+        { source_type: "external", entry_type: "finding", confidence_pct: 30 },
+      ];
     }
     if (query.includes("citation_type FROM citations")) {
       return [];
@@ -577,10 +581,13 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     expect(insert).toContain("designing a knowledge domain set");
   });
 
-  it("inserts a hypothesis edit with evaluateAt + resolutionStrategy (bug.5504)", async () => {
-    // A goal/bet proposed through a focused inbox must carry its own
-    // appointment with truth; before bug.5504 the wire schema had no field for
-    // it, so no hypothesis could be added through /contributions.
+  it.each([
+    "goal",
+    "hypothesis",
+  ])("inserts a %s edit with evaluateAt + resolutionStrategy (bug.5504)", async (entryType) => {
+    // A goal or bet proposed through a focused inbox carries its own deadline;
+    // before bug.5504 the wire schema had no field for it, so neither could be
+    // added through /contributions.
     const fake = new FakeSql();
     const edit = KnowledgeContributionEditSchema.parse({
       op: "insert",
@@ -589,7 +596,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
         domain: "strategy",
         title: "Goal: cognition probe renders verbatim",
         content: "Statement: probe.",
-        entryType: "hypothesis",
+        entryType,
         evaluateAt: "2026-12-31T00:00:00.000Z",
         resolutionStrategy: "manual",
       },
@@ -606,11 +613,14 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       q.startsWith("INSERT INTO knowledge ")
     );
     expect(insert).toContain("evaluate_at, resolution_strategy");
-    expect(insert).toContain("'hypothesis'");
+    expect(insert).toContain(`'${entryType}'`);
     expect(insert).toContain("'2026-12-31T00:00:00.000Z', 'manual')");
   });
 
-  it("rejects a hypothesis insert edit without evaluateAt (HYPOTHESIS_HAS_EVALUATE_AT)", async () => {
+  it.each([
+    "goal",
+    "hypothesis",
+  ])("rejects a %s insert edit without evaluateAt (HYPOTHESIS_HAS_EVALUATE_AT)", async (entryType) => {
     const fake = new FakeSql();
     await expect(
       adapterFor(fake).appendCommit({
@@ -625,7 +635,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
               domain: "strategy",
               title: "Goal: undated",
               content: "Statement: no date.",
-              entryType: "hypothesis",
+              entryType,
             },
           },
         ],
@@ -633,6 +643,41 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     ).rejects.toBeInstanceOf(HypothesisMissingEvaluateAtError);
     expect(
       fake.conn.queries.some((q) => q.startsWith("INSERT INTO knowledge "))
+    ).toBe(false);
+  });
+
+  it("does not recompute a goal's confidence when a supports edge cites it", async () => {
+    // Goals are human commitments: citations never move their confidence.
+    const fake = new FakeSql();
+    const original = fake.conn.unsafe.bind(fake.conn);
+    fake.conn.unsafe = async (query: string) => {
+      if (
+        query.includes("source_type, entry_type, confidence_pct FROM knowledge")
+      ) {
+        fake.conn.queries.push(query);
+        return [
+          { source_type: "external", entry_type: "goal", confidence_pct: 70 },
+        ];
+      }
+      return original(query);
+    };
+    await adapterFor(fake).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "cite a goal",
+      edits: [
+        {
+          op: "cite",
+          citingId: "evidence-row",
+          citedId: "goal-a",
+          citationType: "supports",
+        },
+      ],
+    });
+    expect(
+      fake.conn.queries.some((q) =>
+        q.startsWith("UPDATE knowledge SET confidence_pct")
+      )
     ).toBe(false);
   });
 
