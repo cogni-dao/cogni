@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-# Render one raw stdin ring into a digest-only lane verifier and, for k3s, one raw workload scalar.
+# Project a raw workload ring, or a bound public operator-verifier view, into its lane.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,6 +11,7 @@ OPERATION="${1:-}"
 LANE="${2:-}"
 TARGET_NODE="${3:-}"
 PROVIDER="${4:-}"
+VIEW_KIND="${5:-workload}"
 CATALOG_ROOT="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR:-$REPO_ROOT}/infra/catalog}"
 SSH_BIN="${AUTHORIZATION_FACADE_SSH_BIN:-ssh}"
 SSH_OPTS_RAW="${SSH_OPTS:--i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6}"
@@ -31,23 +32,36 @@ COGNI_CATALOG_ROOT="$CATALOG_ROOT"
 . "$SCRIPT_DIR/lib/image-tags.sh"
 NODE_ID="$(node_id_for_target "$TARGET_NODE")" || fail "node identity missing"
 [[ "$NODE_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || fail "invalid node UUID"
-credential_re="^cogni_naz_sk_v2_${LANE}_${NODE_ID}_[0-9a-f]{64}$"
-RING="$(cat)"
-[[ ${#RING} -le 600 ]] || fail "ring exceeds bound"
-jq -e --arg re "$credential_re" 'type=="object" and (keys|sort)==["active","previous"] and (.active|test($re)) and (.previous==null or (.previous|test($re))) and (.previous==null or .previous!=.active)' >/dev/null <<<"$RING" || fail "invalid ring"
-ACTIVE="$(jq -r '.active' <<<"$RING")"
-PREVIOUS="$(jq -r '.previous // empty' <<<"$RING")"
+[[ "$VIEW_KIND" =~ ^(workload|operator-verifier)$ ]] || fail "invalid view kind"
+INPUT="$(cat)"
+[[ ${#INPUT} -le 600 ]] || fail "projection input exceeds bound"
+if [[ "$VIEW_KIND" == operator-verifier ]]; then
+  [[ "$TARGET_NODE" == operator && "$OPERATION" == materialize && "$PROVIDER" == k3s ]] \
+    || fail "public verifier bootstrap is operator-server materialization only"
+  jq -e --arg lane "$LANE" --arg node "$NODE_ID" '
+    type=="object" and (keys|sort)==["activeSha256","lane","nodeId","previousSha256"] and
+    .lane==$lane and .nodeId==$node and
+    (.activeSha256|type=="string" and test("^[0-9a-f]{64}$")) and .previousSha256==null
+  ' >/dev/null 2>&1 <<<"$INPUT" || fail "invalid bound public verifier view"
+  VERIFY_RING="$(jq -c '{activeSha256,previousSha256}' <<<"$INPUT")"
+else
+  credential_re="^cogni_naz_sk_v2_${LANE}_${NODE_ID}_[0-9a-f]{64}$"
+  RING="$INPUT"
+  jq -e --arg re "$credential_re" 'type=="object" and (keys|sort)==["active","previous"] and (.active|test($re)) and (.previous==null or (.previous|test($re))) and (.previous==null or .previous!=.active)' >/dev/null <<<"$RING" || fail "invalid ring"
+  ACTIVE="$(jq -r '.active' <<<"$RING")"
+  PREVIOUS="$(jq -r '.previous // empty' <<<"$RING")"
 
-case "$OPERATION" in
-  materialize) VERIFY_ACTIVE="$ACTIVE"; VERIFY_PREVIOUS=""; WORKLOAD="$ACTIVE" ;;
-  prepare) [[ -n "$PREVIOUS" ]] || fail "prepare ring lacks predecessor"; VERIFY_ACTIVE="$ACTIVE"; VERIFY_PREVIOUS="$PREVIOUS"; WORKLOAD="$PREVIOUS" ;;
-  activate) [[ -n "$PREVIOUS" ]] || fail "activate ring lacks predecessor"; VERIFY_ACTIVE="$ACTIVE"; VERIFY_PREVIOUS="$PREVIOUS"; WORKLOAD="$ACTIVE" ;;
-  finish) [[ -n "$PREVIOUS" ]] || fail "finish ring lacks predecessor"; VERIFY_ACTIVE="$ACTIVE"; VERIFY_PREVIOUS=""; WORKLOAD="$ACTIVE" ;;
-  cancel) [[ -n "$PREVIOUS" ]] || fail "cancel ring lacks predecessor"; VERIFY_ACTIVE="$PREVIOUS"; VERIFY_PREVIOUS=""; WORKLOAD="$PREVIOUS" ;;
-esac
-ACTIVE_DIGEST="$(printf '%s' "$VERIFY_ACTIVE" | sha256sum | awk '{print $1}')"
-if [[ -n "$VERIFY_PREVIOUS" ]]; then PREVIOUS_DIGEST="$(printf '%s' "$VERIFY_PREVIOUS" | sha256sum | awk '{print $1}')"; else PREVIOUS_DIGEST=null; fi
-VERIFY_RING="$(jq -cn --arg active "$ACTIVE_DIGEST" --arg previous "$PREVIOUS_DIGEST" '{activeSha256:$active,previousSha256:(if $previous=="null" then null else $previous end)}')"
+  case "$OPERATION" in
+    materialize) VERIFY_ACTIVE="$ACTIVE"; VERIFY_PREVIOUS=""; WORKLOAD="$ACTIVE" ;;
+    prepare) [[ -n "$PREVIOUS" ]] || fail "prepare ring lacks predecessor"; VERIFY_ACTIVE="$ACTIVE"; VERIFY_PREVIOUS="$PREVIOUS"; WORKLOAD="$PREVIOUS" ;;
+    activate) [[ -n "$PREVIOUS" ]] || fail "activate ring lacks predecessor"; VERIFY_ACTIVE="$ACTIVE"; VERIFY_PREVIOUS="$PREVIOUS"; WORKLOAD="$ACTIVE" ;;
+    finish) [[ -n "$PREVIOUS" ]] || fail "finish ring lacks predecessor"; VERIFY_ACTIVE="$ACTIVE"; VERIFY_PREVIOUS=""; WORKLOAD="$ACTIVE" ;;
+    cancel) [[ -n "$PREVIOUS" ]] || fail "cancel ring lacks predecessor"; VERIFY_ACTIVE="$PREVIOUS"; VERIFY_PREVIOUS=""; WORKLOAD="$PREVIOUS" ;;
+  esac
+  ACTIVE_DIGEST="$(printf '%s' "$VERIFY_ACTIVE" | sha256sum | awk '{print $1}')"
+  if [[ -n "$VERIFY_PREVIOUS" ]]; then PREVIOUS_DIGEST="$(printf '%s' "$VERIFY_PREVIOUS" | sha256sum | awk '{print $1}')"; else PREVIOUS_DIGEST=null; fi
+  VERIFY_RING="$(jq -cn --arg active "$ACTIVE_DIGEST" --arg previous "$PREVIOUS_DIGEST" '{activeSha256:$active,previousSha256:(if $previous=="null" then null else $previous end)}')"
+fi
 MAP_KEY="${LANE}/${NODE_ID}"
 
 read -r -a SSH_OPTS_ARR <<< "$SSH_OPTS_RAW"
@@ -90,7 +104,7 @@ write_field() {
 # cancel attempted after activation must leave the active credential accepted;
 # changing the digest map first would strand the live workload on a rejected
 # token even though the operation ultimately failed.
-if [[ "$PROVIDER" == k3s ]]; then
+if [[ "$PROVIDER" == k3s && "$VIEW_KIND" == workload ]]; then
   TARGET_PATH="cogni/${LANE}/${TARGET_NODE}"
   read_path "$TARGET_PATH"
   current="$(jq -r '.AUTHORIZATION_FACADE_TOKEN // empty' <<<"$PATH_DATA")"
@@ -124,7 +138,7 @@ for attempt in 1 2 3 4 5; do
   [[ $attempt -lt 5 ]] || fail "verifier-map CAS did not converge"
 done
 
-if [[ "$PROVIDER" == k3s ]]; then
+if [[ "$PROVIDER" == k3s && "$VIEW_KIND" == workload ]]; then
   write_field "$TARGET_PATH" AUTHORIZATION_FACADE_TOKEN "$WORKLOAD"
 fi
 

@@ -77,4 +77,75 @@ grep -q 'cogni/data/${_lane}/authorization-facade' scripts/setup/provision-env-v
 grep -q 'authorization-facade-credential-project.yml@refs/heads/main' scripts/setup/provision-env-vm.sh
 grep -q 'bound_audiences=cogni-authorization-facade-projection' scripts/setup/provision-env-vm.sh
 
+# First-server deployment must not depend on the new control HTTP export route.
+# Exercise the real producer/projector with a CI-owned fake SSH transport: no
+# production credential, network call, or live vault is used by this test.
+fixture_dir="$(mktemp -d)"
+trap 'rm -rf "$fixture_dir"' EXIT
+export AUTHZ_TEST_CALLS="$fixture_dir/calls"
+export AUTHZ_TEST_PAYLOAD="$fixture_dir/payload"
+source scripts/ci/lib/image-tags.sh
+export AUTHZ_TEST_NODE_ID="$(node_id_for_target operator)"
+fixture_suffix="$(printf 'a%.0s' {1..64})"
+export AUTHZ_TEST_RING="$(jq -cn --arg active "cogni_naz_sk_v2_candidate-a_${AUTHZ_TEST_NODE_ID}_${fixture_suffix}" '{active:$active,previous:null}')"
+cat > "$fixture_dir/ssh" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$AUTHZ_TEST_CALLS"
+case "$*" in
+  *auth/kubernetes/login*) printf 'fixture-writer-token\n' ;;
+  *"kv get -format=json"*)
+    if [[ "${AUTHZ_TEST_MODE:-}" == authority ]]; then
+      jq -cn --arg node "$AUTHZ_TEST_NODE_ID" --arg ring "$AUTHZ_TEST_RING" \
+        '{data:{metadata:{version:7},data:{($node):$ring}}}'
+    else
+      echo 'No value found' >&2
+      exit 2
+    fi ;;
+  *"kv put -cas=0"*)
+    IFS= read -r writer_token
+    [[ "$writer_token" == fixture-writer-token ]]
+    cat > "$AUTHZ_TEST_PAYLOAD" ;;
+  *) : ;;
+esac
+MOCK
+chmod +x "$fixture_dir/ssh"
+export AUTHORIZATION_FACADE_SSH_BIN="$fixture_dir/ssh"
+export VM_HOST=fixture.invalid
+export AUTHORIZATION_FACADE_URL=https://fixture.invalid
+export GITHUB_OUTPUT="$fixture_dir/outputs"
+export AUTHZ_TEST_MODE=authority
+bash "$authority" authority materialize candidate-a operator k3s >/dev/null
+! grep -q 'cogni_naz_sk_' "$GITHUB_OUTPUT"
+view="$(sed -n 's/^verifier_view=//p' "$GITHUB_OUTPUT")"
+expected_digest="$(jq -r '.active' <<<"$AUTHZ_TEST_RING" | tr -d '\n' | sha256sum | awk '{print $1}')"
+jq -e --arg node "$AUTHZ_TEST_NODE_ID" --arg digest "$expected_digest" \
+  '.lane=="candidate-a" and .nodeId==$node and .activeSha256==$digest and .previousSha256==null' \
+  >/dev/null <<<"$view"
+
+export AUTHZ_TEST_MODE=projector
+printf '%s' "$view" | bash "$projector" materialize candidate-a operator k3s operator-verifier >/dev/null
+jq -e --arg key "candidate-a/${AUTHZ_TEST_NODE_ID}" --arg digest "$expected_digest" \
+  'keys==["AUTHORIZATION_FACADE_VERIFIER_RINGS_JSON"] and
+   (.AUTHORIZATION_FACADE_VERIFIER_RINGS_JSON|fromjson|.[$key])=={activeSha256:$digest,previousSha256:null}' \
+  "$AUTHZ_TEST_PAYLOAD" >/dev/null
+! grep -q 'AUTHORIZATION_FACADE_TOKEN\|cogni_naz_sk_' "$AUTHZ_TEST_PAYLOAD"
+grep -q 'Bootstrap operator verifier from public metadata' "$workflow"
+grep -q 'operator-verifier' "$workflow"
+
+# Bad bindings/raw rings/extra fields fail BEFORE acquiring a writer or doing IO.
+for bad in \
+  "$(jq -c '.lane="production"' <<<"$view")" \
+  "$(jq -c '.nodeId="11111111-1111-4111-8111-111111111111"' <<<"$view")" \
+  "$(jq -c '.extra=true' <<<"$view")" \
+  "$AUTHZ_TEST_RING"; do
+  : > "$AUTHZ_TEST_CALLS"
+  if printf '%s' "$bad" | bash "$projector" materialize candidate-a operator k3s operator-verifier >"$fixture_dir/result" 2>&1; then
+    echo 'invalid verifier metadata was accepted' >&2
+    exit 1
+  fi
+  [[ ! -s "$AUTHZ_TEST_CALLS" ]]
+  ! grep -q 'cogni_naz_sk_' "$fixture_dir/result"
+done
+
 echo "authorization-facade-credentials: PASS"

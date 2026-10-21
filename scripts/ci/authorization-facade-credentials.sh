@@ -281,6 +281,16 @@ if [[ "$PHASE" == authority ]]; then
       workload_receipt "$PREVIOUS"
       if [[ "$PROVIDER" == akash ]]; then load_target_scalar; [[ "$TARGET_SCALAR" == "$PREVIOUS" ]] || fail "cancel refused after activation"; fi ;;
   esac
+  # The operator is the verifier server, not its own remote client. Its first
+  # deployment cannot fetch a ring from the HTTP endpoint it is about to add.
+  # Publish only bound public digests; raw authority bytes remain in this job.
+  if [[ "$TARGET_NODE" == operator && "$OPERATION" == materialize && -n "${GITHUB_OUTPUT:-}" ]]; then
+    active_sha256="$(credential_digest "$ACTIVE")"
+    verifier_view="$(jq -cn --arg lane "$LANE" --arg node "$NODE_ID" \
+      --arg digest "$active_sha256" \
+      '{lane:$lane,nodeId:$node,activeSha256:$digest,previousSha256:null}')"
+    printf 'verifier_view=%s\n' "$verifier_view" >> "$GITHUB_OUTPUT"
+  fi
   log "authority phase ${OPERATION} ready for ${LANE}/${TARGET_NODE}; values redacted"
   exit 0
 fi

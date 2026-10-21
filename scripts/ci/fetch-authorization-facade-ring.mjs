@@ -24,8 +24,10 @@ const credential = new RegExp(
   `^cogni_naz_sk_v2_${lane ?? "invalid"}_${nodeId ?? "invalid"}_[0-9a-f]{64}$`
 );
 
-function fail() {
-  process.stderr.write("authorization-facade projection fetch failed\n");
+function fail(reason = "invalid_response") {
+  process.stderr.write(
+    `authorization-facade projection fetch failed (${reason})\n`
+  );
   process.exit(1);
 }
 
@@ -104,7 +106,7 @@ try {
     redirect: "error",
     signal: controller.signal,
   });
-  if (!oidcResponse.ok) fail();
+  if (!oidcResponse.ok) fail(`oidc_http_${oidcResponse.status}`);
   if (
     !/^application\/json(?:\s*;|$)/i.test(
       oidcResponse.headers.get("content-type") ?? ""
@@ -131,8 +133,8 @@ try {
     redirect: "error",
     signal: controller.signal,
   });
-  if (!response.ok || response.headers.get("cache-control") !== "no-store")
-    fail();
+  if (!response.ok) fail(`projection_http_${response.status}`);
+  if (response.headers.get("cache-control") !== "no-store") fail();
   if (
     !/^application\/json(?:\s*;|$)/i.test(
       response.headers.get("content-type") ?? ""
