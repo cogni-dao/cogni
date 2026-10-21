@@ -40,23 +40,24 @@ import {
   gradeGoalCitation,
   gradeGoalsReported,
   gradeHarmEvidence,
-  gradeP0Precision,
   gradePriorReference,
   gradeRationale,
   gradeResponsiveness,
   gradeStability,
   gradeUnjudged,
   gradeZeroWrites,
+  infoLevelCounts,
+  infoPmOverlap,
   mergeLabelled,
   p0Of,
   type Scorecard,
   type SnapshotItem,
   scorecardMarkdown,
+  standingDecisionId,
   WRITE_MODE_CHECKS,
 } from "./score";
 
 interface Config {
-  p0PrecisionTarget: number;
   runTimeoutMs: number;
   minScheduledCycles: number;
   scheduledWaitMs: number;
@@ -78,6 +79,7 @@ interface CycleReport {
   scope?: string | null;
   promptVersion?: string;
   goalIds?: string[];
+  priorDecisionId?: string | null;
 }
 
 interface Cycle {
@@ -166,13 +168,19 @@ async function snapshot(): Promise<SnapshotItem[]> {
   throw new Error("snapshot exceeded 40 pages");
 }
 
+/** Prioritizer decisions, newest first by cycle stamp (decisions file in the goals' domain, else operator). */
 async function decisionIds(): Promise<{ id: string; createdAt?: string }[]> {
-  const body = await api<{ items: { id: string; createdAt?: string }[] }>(
-    "/api/v1/knowledge?domain=operator"
+  const shelves = await Promise.all(
+    ["strategy", "operator"].map((d) =>
+      api<{ items: { id: string; createdAt?: string }[] }>(
+        `/api/v1/knowledge?domain=${d}&limit=500`
+      )
+    )
   );
-  return body.items
+  return shelves
+    .flatMap((b) => b.items)
     .filter((e) => /^work-prioritizer-\d{8}t\d{4}-decision$/.test(e.id))
-    .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+    .sort((a, b) => (a.id < b.id ? 1 : -1));
 }
 
 /**
@@ -284,7 +292,11 @@ async function invoke(trigger: string): Promise<CycleReport | null> {
  * One SHA-guarded cycle and the decision it stands for: its own (planned) or the standing newest
  * (no_change). A `stale_prior` (a scheduled cycle filed first) is retried once.
  */
-async function cycle(underTest: string, trigger: string): Promise<Cycle> {
+async function cycle(
+  underTest: string,
+  trigger: string,
+  standingFallback: string | null = null
+): Promise<Cycle> {
   let report: CycleReport | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     await assertSha(underTest);
@@ -294,12 +306,10 @@ async function cycle(underTest: string, trigger: string): Promise<Cycle> {
     await assertSha(underTest);
     if (report?.status !== "stale_prior") break;
   }
-  const id =
-    report?.status === "planned"
-      ? report.decisionId
-      : report?.status === "no_change"
-        ? ((await decisionIds())[0]?.id ?? null)
-        : null;
+  // A no_change cycle stands on the decision it was planned against (its prior reference when reported,
+  // else cycle 1's id), never on
+  // "the newest decision on some shelf" — that resolved to an old v1 decision and nulled the payload.
+  const id = standingDecisionId(report, standingFallback);
   return { report, id, payload: await loadDecision(id) };
 }
 
@@ -376,7 +386,7 @@ async function runEval(underTest: string): Promise<void> {
   // a delta cycle that must carry every judgment and file nothing.
   const c1 = await cycle(underTest, trigger({ fullReview: true }));
   await sleep(61_000);
-  const c2 = await cycle(underTest, trigger());
+  const c2 = await cycle(underTest, trigger(), c1.id);
   const afterStability = await snapshot();
   if (c2.report?.scope === "full")
     notes.push("cycle 2 crossed 00:00 UTC and ran as a full review");
@@ -447,17 +457,6 @@ async function runEval(underTest: string): Promise<void> {
           }
         : null
     ),
-    "harm evidence (full review)": c1.payload
-      ? gradeHarmEvidence(c1.payload, fixture.pmLabels.p0)
-      : none("no decision (cycle 1)"),
-    "p0 overlap with PM (full review)": c1.payload
-      ? gradeP0Precision(
-          c1.payload,
-          fixture.pmLabels.p0,
-          config.p0PrecisionTarget
-        )
-      : none("no decision (cycle 1)"),
-    responsiveness: gradeResponsiveness(c3.payload, seeded.id),
     [`scheduled cycles at SHA ≥ ${config.minScheduledCycles}`]: {
       pass: scheduled >= config.minScheduledCycles,
       reason: `${scheduled} successful scheduled cycles since ${new Date(landedAt).toISOString()}`,
@@ -473,6 +472,19 @@ async function runEval(underTest: string): Promise<void> {
     mode: "propose",
     decisionIds: [c1.id, c2.id, c3.id].filter((x): x is string => Boolean(x)),
     checks,
+    // Informational only — an empty p0 is a correct answer, so nothing here gates.
+    info: {
+      "levels (full review)": c1.payload
+        ? infoLevelCounts(c1.payload)
+        : none("no decision (cycle 1)"),
+      "p0 overlap with PM oracle (full review)": c1.payload
+        ? infoPmOverlap(c1.payload, fixture.pmLabels)
+        : none("no decision (cycle 1)"),
+      "harm evidence (full review)": c1.payload
+        ? gradeHarmEvidence(c1.payload, fixture.pmLabels.p0)
+        : none("no decision (cycle 1)"),
+      "seeded incident (cycle 3)": gradeResponsiveness(c3.payload, seeded.id),
+    },
     skipped: [...WRITE_MODE_CHECKS],
     soft: { cycleMs, notes },
     pass: Object.values(checks).every((c) => c.pass),

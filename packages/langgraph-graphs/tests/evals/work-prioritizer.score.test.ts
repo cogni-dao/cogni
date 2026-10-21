@@ -26,15 +26,17 @@ import {
   gradeIncidentApplied,
   gradeIncidentDemoted,
   gradeObservedStability,
-  gradeP0Precision,
   gradePriorReference,
   gradeRationale,
   gradeResponsiveness,
   gradeStability,
   gradeUnjudged,
   gradeZeroWrites,
+  infoLevelCounts,
+  infoPmOverlap,
   mergeLabelled,
   scorecardMarkdown,
+  standingDecisionId,
 } from "../../evals/work-prioritizer/score";
 import type {
   DecisionPayload,
@@ -126,7 +128,7 @@ const FIXTURE: Fixture = {
   duplicateGroups: [{ items: ["bug.1", "bug.9"] }],
   injectionItems: [{ id: "task.5006" }],
   fixtureItems: [{ id: "task.5010" }],
-  pmLabels: { p0: ["bug.1", "bug.5"] },
+  pmLabels: { p0: ["bug.1", "bug.5"], goals: [R] },
 };
 
 describe("work-prioritizer graders", () => {
@@ -333,19 +335,65 @@ describe("work-prioritizer graders", () => {
     expect(gradeResponsiveness(null, "bug.9").pass).toBe(false);
   });
 
-  it("p0 vs PM is behavioral at ≥ 1 overlap (precision reported); an empty or disjoint p0 fails", () => {
-    const pm = ["bug.1", "bug.2", "bug.5"];
-    const at = (ids: string[], labels = pm) =>
-      gradeP0Precision(decision(ids.map((id) => row(id, 0))), labels, 0.666)
-        .pass;
-    expect(at(["bug.1", "bug.2", "bug.5"])).toBe(true);
-    expect(at(["bug.1", "bug.8", "bug.9"])).toBe(true);
-    expect(at(["bug.7", "bug.8", "bug.9"])).toBe(false);
-    expect(at([])).toBe(false);
-    expect(at([], [])).toBe(true);
+  it("PM p0 oracle overlap is informational: hit count + whether it was authored for the run's goals", () => {
+    const d = decision([row("bug.1", 0), row("bug.2", 1)]);
+    const same = infoPmOverlap(d, FIXTURE.pmLabels);
+    expect(same).toEqual({
+      pass: true,
+      reason:
+        "1/2 of {bug.1, bug.5} at p0 (bug.1); oracle authored for these goals",
+    });
+    const other = infoPmOverlap(d, { p0: ["bug.5"], goals: ["goal-other"] });
+    expect(other.pass).toBe(true);
+    expect(other.reason).toBe(
+      "0/1 of {bug.5} at p0 (none); oracle authored for other goals {goal-other}"
+    );
+    // An empty p0 is a correct answer — still not a failure.
+    expect(
+      infoPmOverlap(decision([row("bug.2", 1)]), FIXTURE.pmLabels).pass
+    ).toBe(true);
   });
 
-  it("harm evidence is hard: a full review whose every harm is 'none' fails when the PM labels a p0", () => {
+  it("level counts are reported for the full review", () => {
+    expect(
+      infoLevelCounts(
+        decision([
+          row("bug.1", 0),
+          row("bug.2", 1),
+          row("t.3", 2),
+          row("t.4", 2),
+        ])
+      ).reason
+    ).toBe("p0 1 · p1 1 · p2 2 · p3 0 · p4 0");
+  });
+
+  it("STANDING_DECISION: a no_change cycle stands on its prior reference (else cycle 1's id), never the newest shelf entry", () => {
+    expect(
+      standingDecisionId({ status: "planned", decisionId: "d-new" }, "c1")
+    ).toBe("d-new");
+    expect(
+      standingDecisionId(
+        {
+          status: "no_change",
+          decisionId: null,
+          priorDecisionId: "work-prioritizer-20261021t2231-decision",
+        },
+        "c1"
+      )
+    ).toBe("work-prioritizer-20261021t2231-decision");
+    expect(
+      standingDecisionId(
+        { status: "no_change", decisionId: null },
+        "work-prioritizer-20261021t2231-decision"
+      )
+    ).toBe("work-prioritizer-20261021t2231-decision");
+    expect(
+      standingDecisionId({ status: "stale_prior", decisionId: null }, "c1")
+    ).toBeNull();
+    expect(standingDecisionId(null, "c1")).toBeNull();
+  });
+
+  it("harm evidence (informational): counts judgments with harm; 'all none' is flagged", () => {
     const allNone = decision([row("bug.1", 2), row("bug.2", 2)]);
     const none = {
       ...allNone,

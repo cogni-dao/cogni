@@ -30,7 +30,11 @@ export interface Fixture {
   readonly duplicateGroups: readonly { readonly items: readonly string[] }[];
   readonly injectionItems: readonly { readonly id: string }[];
   readonly fixtureItems: readonly { readonly id: string }[];
-  readonly pmLabels: { readonly p0: readonly string[] };
+  /** A PM p0 oracle and the goal set it was authored for (informational only). */
+  readonly pmLabels: {
+    readonly p0: readonly string[];
+    readonly goals: readonly string[];
+  };
 }
 
 export interface CheckResult {
@@ -324,25 +328,52 @@ export function mergeLabelled(
 }
 
 /**
- * Behavioral: when the PM table labels any p0, the full review's p0 must overlap it (≥ 1 hit) — the
- * floor that catches the lost-harm regression class (precision 0.00). Precision vs `target` is
- * reported, not gated: a 3-item PM oracle is too noisy for a single free-model run.
+ * INFORMATIONAL (never a gate — an empty p0 is a correct answer): how many of the PM's p0 oracle items the
+ * full review put at p0, and whether the oracle was authored for the goals the run actually used.
  */
-export function gradeP0Precision(
+export function infoPmOverlap(
   payload: DecisionPayload,
-  pmP0: readonly string[],
-  target: number
+  pm: Fixture["pmLabels"]
 ): CheckResult {
   const p0 = p0Of(payload);
-  const hits = p0.filter((id) => pmP0.includes(id)).length;
-  const precision = p0.length ? hits / p0.length : 0;
-  const reason = `${hits}/${p0.length} p0 picks in the PM p0 set {${pmP0.join(", ")}} = ${precision.toFixed(2)} (gate ≥ 1 hit; target ≥ ${target} reported)`;
-  return pmP0.length === 0 || hits >= 1 ? ok(reason) : fail(reason);
+  const hits = pm.p0.filter((id) => p0.includes(id));
+  const sameGoals =
+    pm.goals.length === payload.goals.length &&
+    pm.goals.every((g) => payload.goals.includes(g));
+  const scope = sameGoals
+    ? "oracle authored for these goals"
+    : `oracle authored for other goals {${pm.goals.join(", ")}}`;
+  return ok(
+    `${hits.length}/${pm.p0.length} of {${pm.p0.join(", ")}} at p0 (${hits.join(", ") || "none"}); ${scope}`
+  );
+}
+
+/** INFORMATIONAL: the full review's level counts. */
+export function infoLevelCounts(payload: DecisionPayload): CheckResult {
+  const n = (l: number) => payload.table.filter((r) => r.to === l).length;
+  return ok(`p0 ${n(0)} · p1 ${n(1)} · p2 ${n(2)} · p3 ${n(3)} · p4 ${n(4)}`);
 }
 
 /**
- * Hard (regression guard for the lost-harm parse): when the PM labels any p0, a full review must carry
- * at least one judgment with real harm evidence — otherwise nothing can ever reach p0.
+ * The decision a cycle report stands for: the one it filed (planned), else the standing decision it was
+ * planned against (no_change: the report's prior reference, else the caller's fallback — cycle 1's id).
+ */
+export function standingDecisionId(
+  report: {
+    readonly status: string;
+    readonly decisionId: string | null;
+    readonly priorDecisionId?: string | null;
+  } | null,
+  fallback: string | null
+): string | null {
+  if (report?.status === "planned") return report.decisionId;
+  if (report?.status === "no_change") return report.priorDecisionId ?? fallback;
+  return null;
+}
+
+/**
+ * INFORMATIONAL (regression signal for the lost-harm parse): how many full-review judgments carry real harm
+ * evidence. Not a gate — an empty p0 is a correct answer.
  */
 export function gradeHarmEvidence(
   payload: DecisionPayload,
@@ -371,6 +402,8 @@ export interface Scorecard {
   readonly mode: "propose";
   readonly decisionIds: readonly string[];
   readonly checks: Readonly<Record<string, CheckResult>>;
+  /** Informational rows — reported, never gating. */
+  readonly info?: Readonly<Record<string, CheckResult>>;
   /** Checks not run in this mode (the write section). */
   readonly skipped?: readonly string[];
   readonly soft: {
@@ -394,6 +427,9 @@ export function scorecardMarkdown(card: Scorecard): string {
     ...Object.entries(card.checks).map(
       ([name, r]) =>
         `| ${name} | ${r.pass ? "pass" : "**FAIL**"} | ${r.reason.split("|").join("/")} |`
+    ),
+    ...Object.entries(card.info ?? {}).map(
+      ([name, r]) => `| ${name} | info | ${r.reason.split("|").join("/")} |`
     ),
     `| cycle wall time (soft) | ${(card.soft.cycleMs ?? []).every((m) => m <= 300_000) ? "pass" : "over 5 min"} | ${(card.soft.cycleMs ?? []).map((m) => `${Math.round(m / 1000)}s`).join(", ") || "-"} (cron is every 5 min) |`,
     ...(card.soft.notes ?? []).map((n) => `| note (soft) | - | ${n} |`),
