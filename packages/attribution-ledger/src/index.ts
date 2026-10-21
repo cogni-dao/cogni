@@ -11,6 +11,26 @@
  * @public
  */
 
+export {
+  ACTOR_CONTRIBUTION_ALLOCATION_VERSION,
+  type ActorContributionAllocationFacts,
+  type FrozenActorContributionAllocation,
+  freezeActorContributionAllocation,
+} from "./actor-contribution-allocation";
+export {
+  type ActorAwareSettlementPlan,
+  type ActorSettlementAmount,
+  computeActorAwareSettlementPlan,
+  type LegacySettlementAmount,
+} from "./actor-distribution-settlement";
+
+export type {
+  ActorBeneficiaryWalletResolution,
+  ActorBeneficiaryWalletResolver,
+  ActorWalletBindingEvidence,
+  ActorWalletResolutionFailureCode,
+  ActorWalletResolutionFailureEvidence,
+} from "./actor-wallet-resolution";
 // Allocation algorithm framework (pure, deterministic)
 export {
   computeProposedAllocations,
@@ -121,6 +141,17 @@ export {
 
 // Store port interface + types
 export type {
+  AcceptActorBeneficiaryPolicyParams,
+  ActorAttributionStore,
+  ActorBeneficiaryAcceptanceRole,
+  ActorBeneficiaryPolicyAcceptanceRecord,
+  ActorBeneficiaryPolicyProposalRecord,
+  ActorBeneficiaryPolicyRecord,
+  ActorBindingRecord,
+  ActorContributionAllocationLifecycleRecord,
+  ActorContributionAllocationRecord,
+  ActorDistributionLiabilityRecord,
+  ActorDistributionSettlementRecord,
   AttributionEpoch,
   AttributionEvaluation,
   AttributionPoolComponent,
@@ -129,6 +160,7 @@ export type {
   AttributionStatementLineRecord,
   AttributionStatementSignature,
   AttributionStore,
+  BindActorExternalIdentityParams,
   ClaimantStore,
   CloseIngestionWithEvaluationsParams,
   CursorStore,
@@ -145,6 +177,7 @@ export type {
   IdentityResolver,
   IngestionCursor,
   IngestionReceipt,
+  InsertActorContributionAllocationParams,
   InsertDistributionManifestParams,
   InsertFinalClaimantAllocationParams,
   InsertPoolComponentParams,
@@ -155,9 +188,11 @@ export type {
   InsertStatementParams,
   InsertUserProjectionParams,
   OverrideStore,
+  PendingActorDistributionLiability,
   PoolComponentInsertResult,
   PoolStore,
   ProjectionStore,
+  ProposeActorBeneficiaryPolicyParams,
   ReceiptClaimantsRecord,
   ReceiptStore,
   ReviewSubjectOverrideRecord,

@@ -13,8 +13,10 @@
  * @public
  */
 
-export * from "./agent.me.v1.contract";
-export * from "./agent.register.v1.contract";
+export * from "./agent.credentials.v1.contract";
+export * from "./agent.identity.port";
+export * from "./agent.me.v2.contract";
+export * from "./agent.register.v2.contract";
 // ── AI contracts ────────────────────────────────────────────────────────────
 export * from "./ai.activity.v1.contract";
 export * from "./ai.agents.v1.contract";
@@ -35,6 +37,7 @@ export * from "./ai.threads.v1.contract";
 // ── Analytics ───────────────────────────────────────────────────────────────
 export * from "./analytics.summary.v1.contract";
 // ── Attribution ─────────────────────────────────────────────────────────────
+export * from "./attribution.actor-identity.v1.contract";
 export * from "./attribution.collect-trigger.v1.contract";
 export * from "./attribution.distribution-config.internal.v1.contract";
 export * from "./attribution.distribution-lifecycle.v1.contract";

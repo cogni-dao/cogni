@@ -27,6 +27,8 @@ import type { BillingContext, LlmService } from "@/ports";
  */
 export interface ExecutionScope {
   readonly billing: BillingContext;
+  /** Exact authenticated runtime principal used for authorization and audit. */
+  readonly actorId?: string;
   /** Actor who initiated this run. Used by tools that need user-scoped operations (e.g., schedule CRUD). */
   readonly actorUserId?: string;
   /** Chat-only temporary tech debt — browser disconnect, not durable cancellation. */

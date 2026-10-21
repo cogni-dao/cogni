@@ -311,6 +311,7 @@ export function runGraphWithScope(params: {
       usageSource,
       ...(params.nodeId ? { nodeId: params.nodeId } : {}),
       ...(params.grantId ? { grantId: params.grantId } : {}),
+      ...(ctx?.actorId ? { actorId: ctx.actorId } : {}),
       ...(ctx?.actorUserId ? { actorUserId: ctx.actorUserId } : {}),
       ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     },

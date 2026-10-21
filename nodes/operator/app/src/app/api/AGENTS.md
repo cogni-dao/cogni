@@ -76,9 +76,18 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/work/items/[id]/heartbeat` [POST] - refresh the authenticated user's active work-item session
   - `/api/v1/work/items/[id]/pr` [POST] - link branch/PR metadata to the active work-item session and durable work item
   - `/api/v1/work/items/[id]/coordination` [GET] - read current operator coordination state for a work item
-  - `/api/v1/agent/register` [POST] - unauthenticated machine actor registration (returns Bearer API key)
+  - `/api/v1/agent/register` [POST] - redeem a one-use human-issued spawn grant for a durable agent credential
+  - `/api/v1/agent/claims` [POST] - human proposes a target-bound claim over an existing AI actor using fresh provider attestation
+  - `/api/v1/agent/claims/accept` [POST] - exact durable AI credential accepts its pending human stewardship/source claim
+  - `/api/v1/agent/suspend` [POST] - current human steward suspends an AI, revokes credentials/recovery grants, and releases its active capacity slot
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
+  - `/api/v1/accounts/agent-access` [POST] - human-session-only grant/revoke of direct or OBO access for an accepted agent steward
+  - `/api/v1/accounts/{billingAccountId}` [GET] - durable-agent exact-account read; direct grant first, server-bound steward OBO fallback
+  - `/api/v1/authorization/check` [POST] - node-workload-authenticated, same-node billing-account read/OBO check through the mediated OpenFGA facade
+  - `/api/v1/authorization/agent-account-access` [POST] - node-workload-authenticated atomic human→agent reader/OBO grant or revoke; no raw tuples
+  - `/api/v1/authorization/billing-account-owner` [POST] - node-workload-authenticated, one-time idempotent initial account-owner projection; no raw tuples
+  - `/api/v1/authorization/billing-account-grants` [POST] - node-workload-authenticated semantic reader/OBO grant or revoke; no raw tuples
   - `/api/v1/knowledge/contributions/[id]/commits` [GET, POST] - list/append authenticated contribution branch commits
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
 

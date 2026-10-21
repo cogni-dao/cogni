@@ -93,7 +93,7 @@ Chosen over adding a new read endpoint: zero new API surface, the loop is still 
 ## Invariants
 
 - WALLET_CUSTODY: operator never holds a node's keys; wizard txs are founder-signed (spec: node-operator-contract).
-- SINGLE_HOME: node wallet/DAO/Split/payments live in `nodes/<x>/.cogni/`, not root (spec: identity-model § Spec File Layering).
+- SINGLE_HOME: node wallet/DAO/Split/payments live in `nodes/<x>/.cogni/`, not root ([node identity projection and lineage](https://cognidao.org/knowledge/node-identity-projection-lineage)).
 - KEY_NEVER_IN_APP / INTENT_ONLY_CALLERS: runtime loop uses typed intents, Privy signs (spec: operator-wallet).
 - PER_NODE_SECRET_NAMESPACE: a node's Privy secret is namespaced (OpenBao), never a shared key — the only thing that would otherwise bind the operator (spec: task.5081).
 - MONEY_TEST_DEPLOYMENT_PORTABLE: live-money assertions go via HTTP, not direct DB/TB, so the $2 test runs against a deployment.
@@ -108,4 +108,4 @@ Chosen over adding a new read endpoint: zero new API surface, the loop is still 
 
 - [proj.node-formation-ui](../../work/projects/proj.node-formation-ui.md) — lifecycle + activation tasks
 - [proj.ai-operator-wallet](../../work/projects/proj.ai-operator-wallet.md) — `task.0165` live-money e2e
-- [operator-wallet.md](../spec/operator-wallet.md) · [dao-enforcement.md](../spec/dao-enforcement.md) · [node-formation.md](../spec/node-formation.md) · [identity-model.md](../spec/identity-model.md)
+- [operator-wallet.md](../spec/operator-wallet.md) · [dao-enforcement.md](../spec/dao-enforcement.md) · [node-formation.md](../spec/node-formation.md) · [node identity projection and lineage](https://cognidao.org/knowledge/node-identity-projection-lineage)

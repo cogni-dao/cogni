@@ -17,7 +17,7 @@ labels: [identity, governance, ci-cd, architecture]
 
 ## Goal
 
-The `.cogni/` spec surface conflates three altitudes in one file and duplicates the operator's identity across the repo root and `nodes/operator/`. This project makes the latent three-tier layering explicit (it is already declared in [identity-model.md](../../docs/spec/identity-model.md) and half-enforced by the per-node Dockerfile), removes the duplication, keeps multi-scope file-optional (YAGNI until a second scope), and lands the one-column merkle-join seam that lets a future governance signature prove connected history across git, Dolt, and the chain.
+The `.cogni/` spec surface conflates three altitudes in one file and duplicates the operator's identity across the repo root and `nodes/operator/`. This project makes the latent three-tier layering explicit (now preserved in [node identity projection and lineage](https://cognidao.org/knowledge/node-identity-projection-lineage) and half-enforced by the per-node Dockerfile), removes the duplication, keeps multi-scope file-optional (YAGNI until a second scope), and lands the one-column merkle-join seam that lets a future governance signature prove connected history across git, Dolt, and the chain.
 
 Anchored to MVP reality: ship the cheap clarity now, defer the scope-overlay machinery until a real second scope exists, and treat the merkle anchor as a single field added when signing goes live — **zero new infrastructure**.
 
@@ -33,7 +33,7 @@ Anchored to MVP reality: ship the cheap clarity now, defer the scope-overlay mac
 | Strip operator-node identity (`node_id`, `scope_id`, `governance`, `operator_wallet`, `payments`) from **root** `.cogni/repo-spec.yaml`; keep only monorepo concerns (`gates`, `fail_on_error`, review config) + node registry | Not Started | Operator identity stays in `nodes/operator/.cogni/repo-spec.yaml` only (`SINGLE_HOME`).                                                                 |
 | Node registry SSOT decision: `nodes:[]` cites `infra/catalog/*.yaml` or is removed in favor of it (`CATALOG_IS_SSOT`)                                                                                                          | Not Started | Three registries today: `nodes:[]`, `infra/catalog`, filesystem. Pick one; the billing-ingest endpoints are the only thing `nodes:[]` uniquely carries. |
 | `# TIER:` field-grouping banners in `@cogni/repo-spec` Zod schema + `repoSpec.server.ts`                                                                                                                                       | Not Started | Documents the layering at the schema, no behavior change.                                                                                               |
-| Refine `identity-model.md` — Spec File Layering + Lineage sections                                                                                                                                                             | **Done**    | Landed in this branch.                                                                                                                                  |
+| Refine node identity projection + lineage                                                                                                                                                                                      | **Done**    | Migrated to the operator hub.                                                                                                                           |
 | Update `.cogni/sync-manifest.yaml` divergences if root field set changes                                                                                                                                                       | Not Started | Root repo-spec is per-artifact divergent; any restructure must reconcile node-template + cogni-poly.                                                    |
 
 ### PR-2 — File-optional scope overlay in `@cogni/repo-spec` (build when a 2nd scope is real)
@@ -72,7 +72,7 @@ Anchored to MVP reality: ship the cheap clarity now, defer the scope-overlay mac
 
 ## As-Built Specs
 
-- [identity-model.md](../../docs/spec/identity-model.md) — Spec File Layering, Lineage & Cross-Layer Proof, identity primitives (canonical home for this design)
+- [Node identity projection and lineage](https://cognidao.org/knowledge/node-identity-projection-lineage) — configuration layering, projections, and cross-store proof
 - [attribution-ledger.md](../../docs/spec/attribution-ledger.md) — `APPROVERS_PINNED_AT_REVIEW`, `SIGNATURE_SCOPE_BOUND`, scope gating that PR-2/PR-3 connect to
 - [repo-sync-contract.md](../../docs/spec/repo-sync-contract.md) — per-artifact repo-spec divergence rules PR-1 must reconcile
 
@@ -80,4 +80,4 @@ Anchored to MVP reality: ship the cheap clarity now, defer the scope-overlay mac
 
 Runtime load model (verified 2026-05-30): `nodes/<node>/app/Dockerfile` copies that node's own `.cogni` to `/app/.cogni`; `COGNI_REPO_PATH=/app` (k8s) / `/repo/current` (compose). So the per-node `repo-spec.yaml` is the live node-spec; the root file is the cogni-git-review manifest for the monorepo. The operator's identity appearing in both is the duplication PR-1 removes.
 
-The three-tier model is not a new invention — `identity-model.md` already declared `node_id` ⊥ `scope_id` and "dao_address is an attribute of a scope, lives in `.cogni/projects/*.yaml`". The code and file layout lagged the spec; this project closes that gap rather than designing anew.
+The three-tier model is not a new invention — [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) declares `node_id` ⊥ `scope_id`, while [node identity projection and lineage](https://cognidao.org/knowledge/node-identity-projection-lineage) preserves the configuration boundary. The code and file layout lagged the standard; this project closes that gap rather than designing anew.

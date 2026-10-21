@@ -116,7 +116,7 @@ recurs on **every** reprovision until ownership is _derived_, not hand-seeded.
 
 ## The load-bearing identity principle (why this is env-agnostic)
 
-`wallet_address` is a **stable, env-independent binding** (identity-model.md: bindings are
+`wallet_address` is a **stable, env-independent binding** ([identity keys](https://cognidao.org/knowledge/identity-keys-no-overload): bindings are
 auth-method-agnostic). `user_id` is an **env-local surrogate** — SIWE mints a fresh UUID per env on
 first login. **Ownership MUST resolve _through_ the wallet, never a hardcoded per-env `user_id`.** Do
 that and one seed/binding is correct on candidate-a, preview, and production simultaneously — SIWE

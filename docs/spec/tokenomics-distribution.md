@@ -99,7 +99,7 @@ Proven on a real Base fork (`pnpm test:walk:dev` STEP 6b): re-finalizing a publi
 
 ## Recipient (claimant) resolution — `actor_id`, not `user_id`
 
-The claimant a manifest leaf pays is an **economic subject** (`actor_id`, kind = user | agent | system | org), resolved to a wallet via `actor_bindings`. Agents are first-class DAO participants — an `agent` actor earns and can hold tokens. When an agent works **on-behalf-of** a user (`subjectId = user:{user_id}`), _who owns the earned tokens_ (the agent's own wallet vs the delegating user's) is an **explicit delegation policy**, never an implicit default. See [identity-model.md § Distribution Authority + Recipient](./identity-model.md#distribution-authority--recipient).
+The claimant a manifest leaf pays is an **economic subject** (`actor_id`, kind = user | agent | system | org), resolved to a wallet via `actor_bindings`. Agents are first-class DAO participants — an `agent` actor earns and can hold tokens. When an agent works **on-behalf-of** a user, _who owns the earned tokens_ is an **explicit beneficiary policy**, never an implicit default. See the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard).
 
 > OPEN: the resolver is user-centric today (`user:{user_id}` / `identity:{provider}:{externalId}`); `agent:{actor_id}` + subjectId-delegated routing is forward work.
 

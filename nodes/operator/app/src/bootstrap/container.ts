@@ -12,6 +12,7 @@
  * @public
  */
 
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import type { ToolSourcePort } from "@cogni/ai-core";
@@ -37,8 +38,10 @@ import {
 } from "@cogni/attribution-pipeline-plugins";
 import {
   type AuthorizationPort,
-  OpenFgaAuthorizationAdapter,
+  type BillingAccountAuthorizationPort,
+  RemoteAuthorizationAdapter,
 } from "@cogni/authorization-core";
+import { OpenFgaAuthorizationAdapter } from "@cogni/authorization-core/operator";
 import {
   DrizzleAttributionAdapter,
   DrizzleClaimantWalletResolver,
@@ -92,6 +95,7 @@ import {
   ALCHEMY_ADAPTER_VERSION,
   AlchemyWebhookNormalizer,
   type Database,
+  DrizzleAgentIdentityAdapter,
   DrizzleAiTelemetryAdapter,
   DrizzleComputeCostStore,
   DrizzleConnectionBrokerAdapter,
@@ -190,6 +194,10 @@ import { checkNodeAdmin } from "@/bootstrap/node-admin-gate";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
 import {
+  bootstrapNodeBillingAccountOwner,
+  mutateNodeAgentAccountAccess,
+} from "@/features/authorization";
+import {
   type AttributionProfileResolver,
   createAttributionProfileResolver,
   selectLocalAttributionNodes,
@@ -200,6 +208,7 @@ import {
 } from "@/features/nodes/node-distribution-config";
 import type {
   AccountService,
+  AgentIdentityPort,
   AiTelemetryPort,
   Clock,
   ComputeCostReport,
@@ -233,7 +242,10 @@ import type {
   TreasurySettlementPort,
   WorkItemSessionPort,
 } from "@/ports";
-import { PaymentRailMisconfiguredPortError } from "@/ports";
+import {
+  BillingAccountOwnerBootstrapPortError,
+  PaymentRailMisconfiguredPortError,
+} from "@/ports";
 import type {
   ExecutionGrantUserPort,
   ExecutionGrantWorkerPort,
@@ -260,7 +272,7 @@ import { serverEnv } from "@/shared/env/server-env";
 import { resolveNodeCatalogSource } from "@/shared/node-registry/catalog-source";
 import { envForApex } from "@/shared/node-registry/deploy-hosts";
 import { baseDomain } from "@/shared/node-registry/resolve";
-import { makeLogger } from "@/shared/observability";
+import { EVENT_NAMES, logEvent, makeLogger } from "@/shared/observability";
 import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
 import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.interface";
 
@@ -281,6 +293,8 @@ export interface Container {
   llmService: LlmService;
   accountsForUser(userId: UserId): AccountService;
   serviceAccountService: ServiceAccountService;
+  /** Durable node-local agent actor and credential lifecycle. */
+  agentIdentity: AgentIdentityPort;
   clock: Clock;
   paymentAttemptsForUser(userId: UserId): PaymentAttemptUserRepository;
   paymentAttemptServiceRepository: PaymentAttemptServiceRepository;
@@ -385,6 +399,8 @@ export interface Container {
   connectionBroker: ConnectionBrokerPort | undefined;
   /** Authorization port — undefined until OpenFGA env is configured */
   authorization: AuthorizationPort | undefined;
+  /** Portable semantic account authorization: local on operator, mediated on nodes. */
+  billingAccountAuthorization: BillingAccountAuthorizationPort | undefined;
   /** Model catalog — aggregates all providers for model listing */
   modelCatalog: ModelCatalogPort;
   /** Provider resolver — resolves providerKey to ModelProviderPort for runtime dispatch */
@@ -738,11 +754,81 @@ function createContainer(): Container {
     }
   })();
 
+  const authorization: AuthorizationPort | undefined =
+    env.OPENFGA_API_URL && env.OPENFGA_STORE_ID
+      ? new OpenFgaAuthorizationAdapter({
+          apiUrl: env.OPENFGA_API_URL,
+          storeId: env.OPENFGA_STORE_ID,
+          timeoutMs: env.OPENFGA_TIMEOUT_MS,
+          writeMaxRetries: env.OPENFGA_WRITE_MAX_RETRIES,
+          ...(env.OPENFGA_API_TOKEN !== undefined
+            ? { apiToken: env.OPENFGA_API_TOKEN }
+            : {}),
+          ...(env.OPENFGA_AUTHORIZATION_MODEL_ID !== undefined
+            ? { authorizationModelId: env.OPENFGA_AUTHORIZATION_MODEL_ID }
+            : {}),
+        })
+      : undefined;
+
+  const billingAccountAuthorization:
+    | BillingAccountAuthorizationPort
+    | undefined = authorization
+    ? {
+        check: (params, options) => authorization.check(params, options),
+        mutateAgentAccountAccess: (input) =>
+          mutateNodeAgentAccountAccess({ authorization }, nodeId, input),
+        bootstrapBillingAccountOwner: (input) =>
+          bootstrapNodeBillingAccountOwner({ authorization }, nodeId, input),
+      }
+    : env.AUTHORIZATION_FACADE_TOKEN && env.DOMAIN
+      ? new RemoteAuthorizationAdapter({
+          baseUrl: `https://${env.DOMAIN}`,
+          serviceToken: env.AUTHORIZATION_FACADE_TOKEN,
+          timeoutMs: env.OPENFGA_TIMEOUT_MS,
+        })
+      : undefined;
+
+  const bootstrapBillingAccountOwner = async (input: {
+    readonly ownerUserId: string;
+    readonly billingAccountId: string;
+  }): Promise<void> => {
+    const reqId = randomUUID();
+    const startedAt = performance.now();
+    const decision = billingAccountAuthorization
+      ? await billingAccountAuthorization.bootstrapBillingAccountOwner({
+          ...input,
+          requestId: reqId,
+        })
+      : {
+          decision: "failure" as const,
+          code: "authz_write_unavailable" as const,
+          reason: "billing account authorization is not configured",
+        };
+    logEvent(log, EVENT_NAMES.AUTHORIZATION_FACADE_OWNER_BOOTSTRAP_COMPLETE, {
+      reqId,
+      status: decision.decision === "success" ? 200 : 503,
+      durationMs: Math.round(performance.now() - startedAt),
+      outcome: decision.decision === "success" ? "success" : "error",
+      decision: decision.decision,
+      code: decision.code,
+      ...(decision.decision === "failure" ? { errorCode: decision.code } : {}),
+    });
+    if (decision.decision !== "success") {
+      throw new BillingAccountOwnerBootstrapPortError(decision.reason);
+    }
+  };
+
   // Always use real database adapters
   // Testing strategy: unit tests mock the port, integration tests use real DB
   const serviceAccountService = new ServiceDrizzleAccountService(
     getServiceDb(),
-    financialLedger
+    financialLedger,
+    bootstrapBillingAccountOwner
+  );
+  const agentIdentity = new DrizzleAgentIdentityAdapter(
+    getServiceDb(),
+    getNodeId(),
+    env.AUTH_SECRET
   );
   // TreasuryReadPort: always uses ViemTreasuryAdapter (no test fake needed - mocked at port level in tests)
   const treasuryReadPort = new ViemTreasuryAdapter(evmOnchainClient);
@@ -860,7 +946,8 @@ function createContainer(): Container {
       const accountService = new UserDrizzleAccountService(
         db,
         userId,
-        financialLedger
+        financialLedger,
+        bootstrapBillingAccountOwner
       );
       const account = await accountService.getOrCreateBillingAccountForUser({
         userId: userId as string,
@@ -1197,22 +1284,6 @@ function createContainer(): Container {
     });
   })();
 
-  const authorization: AuthorizationPort | undefined =
-    env.OPENFGA_API_URL && env.OPENFGA_STORE_ID
-      ? new OpenFgaAuthorizationAdapter({
-          apiUrl: env.OPENFGA_API_URL,
-          storeId: env.OPENFGA_STORE_ID,
-          timeoutMs: env.OPENFGA_TIMEOUT_MS,
-          writeMaxRetries: env.OPENFGA_WRITE_MAX_RETRIES,
-          ...(env.OPENFGA_API_TOKEN !== undefined
-            ? { apiToken: env.OPENFGA_API_TOKEN }
-            : {}),
-          ...(env.OPENFGA_AUTHORIZATION_MODEL_ID !== undefined
-            ? { authorizationModelId: env.OPENFGA_AUTHORIZATION_MODEL_ID }
-            : {}),
-        })
-      : undefined;
-
   // Redis client for run event streaming (ephemeral stream plane)
   // Per REDIS_IS_STREAM_PLANE: only transient data, no durable state
   const redisClient = new Redis(env.REDIS_URL, {
@@ -1272,8 +1343,14 @@ function createContainer(): Container {
     config,
     llmService,
     accountsForUser: (userId: UserId) =>
-      new UserDrizzleAccountService(db, userId, financialLedger),
+      new UserDrizzleAccountService(
+        db,
+        userId,
+        financialLedger,
+        bootstrapBillingAccountOwner
+      ),
     serviceAccountService,
+    agentIdentity,
     clock,
     paymentAttemptsForUser: (userId: UserId) =>
       new UserDrizzlePaymentAttemptRepository(db, userId),
@@ -1332,6 +1409,7 @@ function createContainer(): Container {
       : undefined,
     connectionBroker,
     authorization,
+    billingAccountAuthorization,
     // Multi-provider model ports
     ...(() => {
       const platformProvider = new PlatformModelProvider(llmService);
@@ -1709,6 +1787,9 @@ function buildFinalizeEpochDeps(logger: FinalizeLogger): RunFinalizeEpochDeps {
   const serviceDb = getServiceDb();
   const tokenomics = getNodeTokenomicsConfig();
   const { excludedLogins, sourceRefs } = getLedgerSelectionConfig();
+  const walletResolver = tokenomics.tokenAddress
+    ? new DrizzleClaimantWalletResolver(serviceDb)
+    : null;
   return {
     attributionStore: new DrizzleAttributionAdapter(serviceDb, getScopeId()),
     registries: createDefaultRegistries({ excludedLogins, sourceRefs }),
@@ -1718,9 +1799,8 @@ function buildFinalizeEpochDeps(logger: FinalizeLogger): RunFinalizeEpochDeps {
     tokenAddress: tokenomics.tokenAddress,
     distributorAddress: tokenomics.distributorAddress,
     emissionsHolderAddress: getEmissionsHolderAddress(),
-    walletResolver: tokenomics.tokenAddress
-      ? new DrizzleClaimantWalletResolver(serviceDb)
-      : null,
+    walletResolver,
+    actorWalletResolver: walletResolver,
     distributionConfigClient: resolveNodeDistributionConfigResolver(),
     deploymentEnvironment: serverEnv().DEPLOY_ENVIRONMENT,
     logger,

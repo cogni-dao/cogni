@@ -14,6 +14,7 @@
  * - listLlmChargeDetails fetches LLM telemetry (model/tokens/provider/latency/graphId) for receipt enrichment
  * - UserDrizzleAccountService wraps all queries in withTenantScope (RLS enforced)
  * - ServiceDrizzleAccountService uses serviceDb directly (BYPASSRLS)
+ * - OWNER_BOOTSTRAP_SAGA: nullable DB marker resumes response loss and never replays after completion
  * Side-effects: IO (database operations)
  * Notes: Uses transactions for consistency; recordChargeReceipt is non-blocking (never throws InsufficientCredits per ACTIVITY_METRICS.md)
  * Links: Implements AccountService port, uses shared database schema, docs/spec/activity-metrics.md, docs/spec/graph-execution.md, docs/spec/financial-ledger.md, types/billing.ts
@@ -33,12 +34,13 @@ import {
 import { type ActorId, type UserId, userActor } from "@cogni/ids";
 import type { SourceSystem } from "@cogni/node-core";
 import { EVENT_NAMES, isValidUuid } from "@cogni/node-shared";
-import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { Database } from "@/adapters/server/db/client";
 import {
   type AccountService,
   type BillingAccount,
   BillingAccountNotFoundPortError,
+  BillingAccountOwnerBootstrapPortError,
   type ChargeReceiptParams,
   type CreditLedgerEntry,
   InsufficientCreditsPortError,
@@ -83,6 +85,15 @@ interface VirtualKeyRow {
 
 type CreditLedgerRow = typeof creditLedger.$inferSelect;
 
+export interface BillingAccountOwnerBootstrapInput {
+  readonly ownerUserId: string;
+  readonly billingAccountId: string;
+}
+
+export type BillingAccountOwnerBootstrap = (
+  input: BillingAccountOwnerBootstrapInput
+) => Promise<void>;
+
 // --- Free functions (shared by both service classes) ---
 
 function toNumber(value: number | string | bigint): number {
@@ -124,6 +135,9 @@ async function ensureBillingAccountExists(
 
   if (!account) {
     throw new BillingAccountNotFoundPortError(billingAccountId);
+  }
+  if (!account.authorizationOwnerBootstrappedAt) {
+    throw new BillingAccountOwnerBootstrapPortError("pending_authority");
   }
 }
 
@@ -197,41 +211,85 @@ export class UserDrizzleAccountService implements AccountService {
   constructor(
     private readonly db: Database,
     userId: UserId,
-    private readonly financialLedger?: FinancialLedgerPort
+    private readonly financialLedger?: FinancialLedgerPort,
+    private readonly bootstrapOwner?: BillingAccountOwnerBootstrap
   ) {
     this.actorId = userActor(userId);
+  }
+
+  /**
+   * Complete the one-time DB → OpenFGA owner projection after the account
+   * transaction commits. The nullable marker is a durable saga checkpoint:
+   * response loss retries the idempotent projection, while a completed marker
+   * prevents ordinary lookups from resurrecting a later owner revocation.
+   */
+  private async ensureOwnerBootstrap(input: {
+    readonly account: BillingAccount;
+    readonly completedAt: Date | null;
+  }): Promise<BillingAccount> {
+    if (input.completedAt) return input.account;
+    if (!this.bootstrapOwner) {
+      throw new BillingAccountOwnerBootstrapPortError("pending_authority");
+    }
+
+    await this.bootstrapOwner({
+      ownerUserId: input.account.ownerUserId,
+      billingAccountId: input.account.id,
+    });
+    await withTenantScope(this.db, this.actorId, async (tx) => {
+      await tx
+        .update(billingAccounts)
+        .set({ authorizationOwnerBootstrappedAt: new Date() })
+        .where(
+          and(
+            eq(billingAccounts.id, input.account.id),
+            eq(billingAccounts.ownerUserId, input.account.ownerUserId),
+            isNull(billingAccounts.authorizationOwnerBootstrappedAt)
+          )
+        );
+    });
+    return input.account;
   }
 
   async getBillingAccountById(
     billingAccountId: string
   ): Promise<BillingAccount | null> {
-    return withTenantScope(this.db, this.actorId, async (tx) => {
-      const account = await tx.query.billingAccounts.findFirst({
-        where: eq(billingAccounts.id, billingAccountId),
-      });
+    const resolved = await withTenantScope(
+      this.db,
+      this.actorId,
+      async (tx) => {
+        const account = await tx.query.billingAccounts.findFirst({
+          where: eq(billingAccounts.id, billingAccountId),
+        });
 
-      if (!account) {
-        return null;
+        if (!account) {
+          return null;
+        }
+
+        const defaultKey = await tx.query.virtualKeys.findFirst({
+          where: and(
+            eq(virtualKeys.billingAccountId, billingAccountId),
+            eq(virtualKeys.isDefault, true)
+          ),
+        });
+
+        if (!defaultKey) {
+          return null;
+        }
+
+        return {
+          account: {
+            id: account.id,
+            ownerUserId: account.ownerUserId,
+            balanceCredits: toNumber(account.balanceCredits),
+            defaultVirtualKeyId: defaultKey.id,
+          },
+          completedAt: account.authorizationOwnerBootstrappedAt,
+        };
       }
-
-      const defaultKey = await tx.query.virtualKeys.findFirst({
-        where: and(
-          eq(virtualKeys.billingAccountId, billingAccountId),
-          eq(virtualKeys.isDefault, true)
-        ),
-      });
-
-      if (!defaultKey) {
-        return null;
-      }
-
-      return {
-        id: account.id,
-        ownerUserId: account.ownerUserId,
-        balanceCredits: toNumber(account.balanceCredits),
-        defaultVirtualKeyId: defaultKey.id,
-      };
-    });
+    );
+    if (!resolved) return null;
+    return this.ensureOwnerBootstrap(resolved);
   }
 
   async getOrCreateBillingAccountForUser({
@@ -241,6 +299,7 @@ export class UserDrizzleAccountService implements AccountService {
     userId: string;
     walletAddress?: string;
     displayName?: string;
+    requireAuthorizationOwner?: boolean;
   }): Promise<BillingAccount> {
     if (!isValidUuid(userId)) {
       const dbFingerprint = getDbFingerprint(serverEnv().DATABASE_URL);
@@ -249,42 +308,55 @@ export class UserDrizzleAccountService implements AccountService {
       );
     }
 
-    return withTenantScope(this.db, this.actorId, async (tx) => {
-      const existingAccount = await tx.query.billingAccounts.findFirst({
-        where: eq(billingAccounts.ownerUserId, userId),
-      });
+    const resolved = await withTenantScope(
+      this.db,
+      this.actorId,
+      async (tx) => {
+        const existingAccount = await tx.query.billingAccounts.findFirst({
+          where: eq(billingAccounts.ownerUserId, userId),
+        });
 
-      if (existingAccount) {
-        const defaultKey = await findDefaultKey(tx, existingAccount.id);
+        if (existingAccount) {
+          const defaultKey = await findDefaultKey(tx, existingAccount.id);
+          return {
+            account: {
+              id: existingAccount.id,
+              ownerUserId: existingAccount.ownerUserId,
+              balanceCredits: toNumber(existingAccount.balanceCredits),
+              defaultVirtualKeyId: defaultKey.id,
+            },
+            completedAt: existingAccount.authorizationOwnerBootstrappedAt,
+          };
+        }
+
+        const billingAccountId = randomUUID();
+
+        await tx.insert(billingAccounts).values({
+          id: billingAccountId,
+          ownerUserId: userId,
+          balanceCredits: 0n,
+          // Display name intentionally optional; stored later when UX surfaces exist
+        });
+
+        const createdKey = await insertDefaultKey(
+          tx,
+          billingAccountId,
+          displayName ? { label: displayName } : {}
+        );
+
         return {
-          id: existingAccount.id,
-          ownerUserId: existingAccount.ownerUserId,
-          balanceCredits: toNumber(existingAccount.balanceCredits),
-          defaultVirtualKeyId: defaultKey.id,
+          account: {
+            id: billingAccountId,
+            ownerUserId: userId,
+            balanceCredits: 0,
+            defaultVirtualKeyId: createdKey.id,
+          },
+          completedAt: null,
         };
       }
-
-      const billingAccountId = randomUUID();
-
-      await tx.insert(billingAccounts).values({
-        id: billingAccountId,
-        ownerUserId: userId,
-        balanceCredits: 0n,
-        // Display name intentionally optional; stored later when UX surfaces exist
-      });
-
-      const createdKey = await insertDefaultKey(
-        tx,
-        billingAccountId,
-        displayName ? { label: displayName } : {}
-      );
-
-      return {
-        id: billingAccountId,
-        ownerUserId: userId,
-        balanceCredits: 0,
-        defaultVirtualKeyId: createdKey.id,
-      };
+    );
+    return this.ensureOwnerBootstrap({
+      ...resolved,
     });
   }
 
@@ -296,6 +368,9 @@ export class UserDrizzleAccountService implements AccountService {
 
       if (!account) {
         throw new BillingAccountNotFoundPortError(billingAccountId);
+      }
+      if (!account.authorizationOwnerBootstrappedAt) {
+        throw new BillingAccountOwnerBootstrapPortError("pending_authority");
       }
 
       return toNumber(account.balanceCredits);
@@ -728,8 +803,35 @@ export class UserDrizzleAccountService implements AccountService {
 export class ServiceDrizzleAccountService implements ServiceAccountService {
   constructor(
     private readonly db: Database,
-    private readonly financialLedger?: FinancialLedgerPort
+    private readonly financialLedger?: FinancialLedgerPort,
+    private readonly bootstrapOwner?: BillingAccountOwnerBootstrap
   ) {}
+
+  private async ensureOwnerBootstrap(input: {
+    readonly account: BillingAccount;
+    readonly completedAt: Date | null;
+  }): Promise<BillingAccount> {
+    if (input.completedAt) return input.account;
+    if (!this.bootstrapOwner) {
+      throw new BillingAccountOwnerBootstrapPortError("pending_authority");
+    }
+
+    await this.bootstrapOwner({
+      ownerUserId: input.account.ownerUserId,
+      billingAccountId: input.account.id,
+    });
+    await this.db
+      .update(billingAccounts)
+      .set({ authorizationOwnerBootstrappedAt: new Date() })
+      .where(
+        and(
+          eq(billingAccounts.id, input.account.id),
+          eq(billingAccounts.ownerUserId, input.account.ownerUserId),
+          isNull(billingAccounts.authorizationOwnerBootstrappedAt)
+        )
+      );
+    return input.account;
+  }
 
   async getBillingAccountById(
     billingAccountId: string
@@ -753,12 +855,15 @@ export class ServiceDrizzleAccountService implements ServiceAccountService {
       return null;
     }
 
-    return {
-      id: account.id,
-      ownerUserId: account.ownerUserId,
-      balanceCredits: toNumber(account.balanceCredits),
-      defaultVirtualKeyId: defaultKey.id,
-    };
+    return this.ensureOwnerBootstrap({
+      account: {
+        id: account.id,
+        ownerUserId: account.ownerUserId,
+        balanceCredits: toNumber(account.balanceCredits),
+        defaultVirtualKeyId: defaultKey.id,
+      },
+      completedAt: account.authorizationOwnerBootstrappedAt,
+    });
   }
 
   async getOrCreateBillingAccountForUser({
@@ -768,6 +873,7 @@ export class ServiceDrizzleAccountService implements ServiceAccountService {
     userId: string;
     walletAddress?: string;
     displayName?: string;
+    requireAuthorizationOwner?: boolean;
   }): Promise<BillingAccount> {
     if (!isValidUuid(userId)) {
       const dbFingerprint = getDbFingerprint(serverEnv().DATABASE_SERVICE_URL);
@@ -776,7 +882,7 @@ export class ServiceDrizzleAccountService implements ServiceAccountService {
       );
     }
 
-    return await this.db.transaction(async (tx) => {
+    const resolved = await this.db.transaction(async (tx) => {
       const existingAccount = await tx.query.billingAccounts.findFirst({
         where: eq(billingAccounts.ownerUserId, userId),
       });
@@ -784,10 +890,13 @@ export class ServiceDrizzleAccountService implements ServiceAccountService {
       if (existingAccount) {
         const defaultKey = await findDefaultKey(tx, existingAccount.id);
         return {
-          id: existingAccount.id,
-          ownerUserId: existingAccount.ownerUserId,
-          balanceCredits: toNumber(existingAccount.balanceCredits),
-          defaultVirtualKeyId: defaultKey.id,
+          account: {
+            id: existingAccount.id,
+            ownerUserId: existingAccount.ownerUserId,
+            balanceCredits: toNumber(existingAccount.balanceCredits),
+            defaultVirtualKeyId: defaultKey.id,
+          },
+          completedAt: existingAccount.authorizationOwnerBootstrappedAt,
         };
       }
 
@@ -807,11 +916,17 @@ export class ServiceDrizzleAccountService implements ServiceAccountService {
       );
 
       return {
-        id: billingAccountId,
-        ownerUserId: userId,
-        balanceCredits: 0,
-        defaultVirtualKeyId: createdKey.id,
+        account: {
+          id: billingAccountId,
+          ownerUserId: userId,
+          balanceCredits: 0,
+          defaultVirtualKeyId: createdKey.id,
+        },
+        completedAt: null,
       };
+    });
+    return this.ensureOwnerBootstrap({
+      ...resolved,
     });
   }
 

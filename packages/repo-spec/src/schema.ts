@@ -146,7 +146,7 @@ export type WorkPrioritizationSpec = z.infer<
 /**
  * Schema for the unified `governance` section of repo-spec — the node/scope's
  * on-chain DAO identity (contracts + chain) AND its governance schedules.
- * (identity-model.md `scope_id (1)──(1) dao_address`: each scope has one DAO; this
+ * (https://cognidao.org/knowledge/identity-keys-no-overload: each scope has one DAO; this
  * is its governance binding.) All fields optional — a node without on-chain
  * governance still validates; the DAO accessors return null when identity is incomplete.
  */

@@ -26,6 +26,10 @@ vi.mock("@/shared/env/server", () => ({
   serverEnv: () => ({ AUTH_SECRET: "test-auth-secret-for-unit-tests" }),
 }));
 
+vi.mock("@/shared/config", () => ({
+  getNodeId: () => "test-node-id",
+}));
+
 const mockHeaders = vi.fn();
 vi.mock("next/headers", () => ({
   headers: (...args: unknown[]) => mockHeaders(...args),

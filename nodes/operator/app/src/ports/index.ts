@@ -38,17 +38,20 @@ export {
   type AccountService,
   type BillingAccount,
   BillingAccountNotFoundPortError,
+  BillingAccountOwnerBootstrapPortError,
   type ChargeReceiptParams,
   type ChargeReceiptProvenance,
   type CreditLedgerEntry,
   InsufficientCreditsPortError,
   isBillingAccountNotFoundPortError,
+  isBillingAccountOwnerBootstrapPortError,
   isInsufficientCreditsPortError,
   isVirtualKeyNotFoundPortError,
   type ServiceAccountService,
   VirtualKeyNotFoundPortError,
 } from "./accounts.port";
 export type { AgentCatalogPort, AgentDescriptor } from "./agent-catalog.port";
+export * from "./agent-identity.port";
 export type {
   AiTelemetryPort,
   CreateTraceWithIOParams,
@@ -93,6 +96,10 @@ export type {
   IngestionCursor,
   IngestionReceipt,
 } from "./attribution-store.port";
+export type {
+  AuthorizationFacadeCredentialVerification,
+  AuthorizationFacadeCredentialVerifierPort,
+} from "./authorization-facade-credential-verifier.port";
 export type {
   BillingContext,
   BillingResolver,

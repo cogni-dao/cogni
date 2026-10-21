@@ -359,6 +359,35 @@ export async function patchWorkItem(
   sessionUser: { id: string; displayName: string | null }
 ): Promise<WorkItemDto> {
   await assertPriorityAuthority(input.set.priority, sessionUser.id);
+  return patchWorkItemWithPrincipal(input, authorTagFromSession(sessionUser));
+}
+
+/**
+ * Patch as an already-authenticated durable principal.
+ *
+ * The principal is written verbatim into the Dolt commit proof. In particular,
+ * an agent remains `agent:<node>/<actorId>` and is never projected into a
+ * `users.id` value merely to satisfy the legacy SessionUser facade.
+ */
+export async function patchWorkItemAsPrincipal(
+  input: ContractPatchInput,
+  principalId: string
+): Promise<WorkItemDto> {
+  // `node.administer` is deliberately user-only in the canonical OpenFGA
+  // model. Durable agent principals retain exact authorship for ordinary
+  // patches but cannot use that path to bypass the human-only P0/P1 gate.
+  if (isPrivilegedPriority(input.set.priority)) {
+    throw new WorkItemAuthorizationError(
+      `priority ${input.set.priority} requires node admin`
+    );
+  }
+  return patchWorkItemWithPrincipal(input, principalId);
+}
+
+async function patchWorkItemWithPrincipal(
+  input: ContractPatchInput,
+  principalId: string
+): Promise<WorkItemDto> {
   const container = getContainer();
   try {
     const patched = await container.doltgresWorkItems.patch(
@@ -369,7 +398,7 @@ export async function patchWorkItem(
         }),
         set: dropUndefined(input.set),
       },
-      authorTagFromSession(sessionUser)
+      principalId
     );
     if (!patched) throw new WorkItemNotFoundError(input.id);
     return toDto(patched);

@@ -1554,6 +1554,28 @@ HCL
     token_num_uses=3" >/dev/null
   log_info "  gha-${DEPLOY_ENV}-writer (jwt) role bound — sub=repo:${GH_REPO}:environment:${DEPLOY_ENV} → ${DEPLOY_ENV}-writer policy"
 
+  # Raw authorization-facade rings live only in the fleet-control vault. Each
+  # target lane receives an exact-claim, read-only projection role.
+  if [[ "${DEPLOY_ENV}" == "${FLEET_CONTROL_ENV}" ]]; then
+    for _lane in ${SECRET_LANES}; do
+      ssh $SSH_OPTS root@"$VM_IP" \
+        "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao policy write ${DEPLOY_ENV}-${_lane}-authorization-facade-reader -" <<HCL
+path "cogni/data/${_lane}/authorization-facade" { capabilities = ["read"] }
+HCL
+      bao_exec "write auth/github-actions/role/gha-${_lane}-authorization-facade-reader \
+        role_type=jwt \
+        user_claim=sub \
+        bound_subject=repo:${GH_REPO}:environment:${_lane} \
+        bound_audiences=cogni-authorization-facade-projection \
+        bound_claims='{"repository":"${GH_REPO}","environment":"${_lane}","job_workflow_ref":"${GH_REPO}/.github/workflows/authorization-facade-credential-project.yml@refs/heads/main"}' \
+        policies=${DEPLOY_ENV}-${_lane}-authorization-facade-reader \
+        token_ttl=5m \
+        token_max_ttl=5m \
+        token_num_uses=2" >/dev/null
+    done
+    unset _lane
+  fi
+
   # ── 5b.4d <env>-node-secrets-writer (operator pod's OWN identity; node self-serve) ──
   # Ships the runtime writer role the operator POD self-logins as to fulfil node
   # self-serve secret writes (POST /api/v1/nodes/<id>/secrets → OpenBaoSecretsAdapter,
@@ -1744,6 +1766,20 @@ else
     log_info "Seeding cogni/${DEPLOY_ENV}/openfga/* — minting fresh OPENFGA_DB_PASSWORD"
   fi
   seed_kv openfga OPENFGA_DB_PASSWORD "$OPENFGA_DB_PASSWORD"
+
+  # OpenFGA's public HTTP listener is reachable by node workloads, so it must
+  # authenticate every request. This preshared key is infrastructure custody,
+  # never a node secret: Compose consumes it from the openfga path and only the
+  # trusted operator receives a copy through its own OpenBao/ESO bucket.
+  # SET-ONCE preserves a live key across idempotent reprovisioning.
+  OPENFGA_API_TOKEN="$(bao_get_field openfga OPENFGA_API_TOKEN)"
+  if [[ -n "$OPENFGA_API_TOKEN" ]]; then
+    log_info "Seeding cogni/${DEPLOY_ENV}/openfga/* — OPENFGA_API_TOKEN present, reusing (set-once)"
+  else
+    OPENFGA_API_TOKEN="$(randHex 32)"
+    log_info "Seeding cogni/${DEPLOY_ENV}/openfga/* — minting fresh OPENFGA_API_TOKEN"
+  fi
+  seed_kv openfga OPENFGA_API_TOKEN "$OPENFGA_API_TOKEN"
 
   # TEMPORAL_DB_PASSWORD is the same shared-infra DB-cred class: the dedicated
   # temporal-postgres superuser, baked into the volume at first-init and read by

@@ -23,6 +23,11 @@
  * @public
  */
 
+import type { FrozenActorContributionAllocation } from "./actor-contribution-allocation";
+import type {
+  ActorWalletBindingEvidence,
+  ActorWalletResolutionFailureEvidence,
+} from "./actor-wallet-resolution";
 import type { SelectedReceiptForAllocation } from "./allocation";
 import type {
   AttributionClaimant,
@@ -182,6 +187,118 @@ export interface SelectedReceiptWithMetadata
   readonly payloadHash: string;
 }
 
+export interface ActorBindingRecord {
+  readonly id: string;
+  readonly actorId: string;
+  readonly provider: string;
+  readonly externalId: string;
+  readonly providerLogin: string | null;
+  readonly evidenceEventId: string;
+  readonly createdAt: Date;
+  readonly closedAt: Date | null;
+}
+
+export interface ActorBeneficiaryPolicyRecord {
+  readonly id: string;
+  readonly earnedByActorId: string;
+  readonly beneficiaryActorId: string;
+  readonly policyVersion: string;
+  readonly authorizedByActorId: string;
+  readonly evidence: Record<string, unknown>;
+  readonly effectiveFrom: Date;
+  readonly effectiveTo: Date | null;
+  readonly createdAt: Date;
+}
+
+export type ActorBeneficiaryAcceptanceRole =
+  | "beneficiary"
+  | "earner"
+  | "steward"
+  | "governance_for_earner"
+  | "governance_for_steward";
+
+export interface ActorBeneficiaryPolicyAcceptanceRecord {
+  readonly id: string;
+  readonly proposalId: string;
+  readonly role: ActorBeneficiaryAcceptanceRole;
+  readonly acceptedByActorId: string;
+  readonly evidence: Record<string, unknown>;
+  readonly acceptedAt: Date;
+}
+
+export interface ActorBeneficiaryPolicyProposalRecord {
+  readonly id: string;
+  readonly earnedByActorId: string;
+  readonly beneficiaryActorId: string;
+  readonly stewardActorId: string;
+  readonly proposedByActorId: string;
+  readonly policyVersion: string;
+  readonly evidence: Record<string, unknown>;
+  readonly effectiveFrom: Date;
+  readonly status: "pending" | "activated" | "revoked";
+  readonly activatedPolicyId: string | null;
+  readonly revokedByActorId: string | null;
+  readonly revokedAt: Date | null;
+  readonly createdAt: Date;
+  readonly acceptances: readonly ActorBeneficiaryPolicyAcceptanceRecord[];
+}
+
+export interface ActorContributionAllocationRecord
+  extends FrozenActorContributionAllocation {
+  readonly createdAt: Date;
+}
+
+export interface ActorContributionAllocationLifecycleRecord {
+  readonly allocation: ActorContributionAllocationRecord;
+  /** Effective payout beneficiary without mutating the frozen allocation. */
+  readonly resolvedBeneficiaryActorId: string | null;
+  readonly status:
+    | "frozen"
+    | "pending_beneficiary"
+    | "pending_wallet"
+    | "settled";
+  readonly tokenAmount: bigint | null;
+  readonly claimantWallet: string | null;
+  readonly liabilityId: string | null;
+  readonly settlementId: string | null;
+}
+
+export interface ActorDistributionLiabilityRecord {
+  readonly id: string;
+  readonly allocationRef: string;
+  readonly nodeId: string;
+  readonly scopeId: string;
+  readonly sourceEpochId: bigint;
+  readonly earnedByActorId: string;
+  readonly beneficiaryActorId: string | null;
+  readonly contributionCutoff: Date;
+  readonly tokenAmount: bigint;
+  readonly sourceEvidenceHash: string;
+  readonly resolverFailure: ActorWalletResolutionFailureEvidence;
+  readonly createdAt: Date;
+}
+
+export interface PendingActorDistributionLiability
+  extends ActorDistributionLiabilityRecord {
+  readonly allocation: ActorContributionAllocationRecord;
+}
+
+export interface ActorDistributionSettlementRecord {
+  readonly id: string;
+  readonly allocationRef: string;
+  readonly liabilityId: string | null;
+  readonly nodeId: string;
+  readonly scopeId: string;
+  readonly sourceEpochId: bigint;
+  readonly foldEpochId: bigint;
+  readonly earnedByActorId: string;
+  readonly beneficiaryActorId: string;
+  readonly tokenAmount: bigint;
+  readonly claimantWallet: string;
+  readonly resolverEvidence: ActorWalletBindingEvidence;
+  readonly createdAt: Date;
+}
+
 // ---------------------------------------------------------------------------
 // Write-side parameter types
 // ---------------------------------------------------------------------------
@@ -200,6 +317,40 @@ export interface InsertReceiptParams {
   readonly producerVersion: string;
   readonly eventTime: Date;
   readonly retrievedAt: Date;
+}
+
+export interface BindActorExternalIdentityParams {
+  readonly actorId: string;
+  readonly provider: string;
+  readonly externalId: string;
+  readonly providerLogin?: string | null;
+  /** Required when transferring an existing source to a different actor. */
+  readonly expectedCurrentActorId?: string;
+  readonly authorizedByActorId: string;
+  readonly evidence: Record<string, unknown>;
+  readonly effectiveAt: Date;
+}
+
+export interface ProposeActorBeneficiaryPolicyParams {
+  readonly earnedByActorId: string;
+  readonly beneficiaryActorId: string;
+  readonly stewardActorId: string;
+  readonly proposedByActorId: string;
+  readonly policyVersion: string;
+  readonly evidence: Record<string, unknown>;
+  readonly effectiveFrom: Date;
+}
+
+export interface AcceptActorBeneficiaryPolicyParams {
+  readonly proposalId: string;
+  readonly role: ActorBeneficiaryAcceptanceRole;
+  readonly acceptedByActorId: string;
+  readonly evidence: Record<string, unknown>;
+  readonly acceptedAt: Date;
+}
+
+export interface InsertActorContributionAllocationParams {
+  readonly allocation: FrozenActorContributionAllocation;
 }
 
 export interface UpsertSelectionParams {
@@ -440,6 +591,14 @@ export interface InsertDistributionManifestParams {
   readonly totalAllocated: bigint;
   readonly distributorAddress?: string | null;
   readonly leaves: readonly DistributionLeafRecord[];
+  readonly actorLiabilities?: readonly Omit<
+    ActorDistributionLiabilityRecord,
+    "id" | "createdAt"
+  >[];
+  readonly actorSettlements?: readonly Omit<
+    ActorDistributionSettlementRecord,
+    "id" | "createdAt"
+  >[];
 }
 
 /**
@@ -481,6 +640,42 @@ export interface DistributionManifestStore {
   getDistributionLeavesForEpoch(
     epochId: bigint
   ): Promise<readonly DistributionLeafRecord[]>;
+
+  /** Every frozen actor allocation for this epoch, ordered by allocationRef. */
+  listActorContributionAllocationsForEpoch(
+    epochId: bigint
+  ): Promise<readonly ActorContributionAllocationRecord[]>;
+
+  /**
+   * Frozen actor allocations created for this epoch that have neither a
+   * liability nor a settlement yet, ordered by allocationRef. A same-epoch
+   * retry therefore cannot re-resolve or reprice an already-frozen liability.
+   */
+  listUnfoldedActorContributionAllocationsForEpoch(
+    epochId: bigint
+  ): Promise<readonly ActorContributionAllocationRecord[]>;
+
+  /**
+   * Unresolved actor liabilities from canonically earlier epochs, not merely a
+   * lexically/numerically smaller identifier, and not yet consumed by a
+   * settlement row. The finalized allocation is joined so the resolver consumes
+   * frozen provenance.
+   */
+  listPendingActorDistributionLiabilities(
+    targetEpochId: bigint
+  ): Promise<readonly PendingActorDistributionLiability[]>;
+
+  /**
+   * Idempotently persist liabilities when no cumulative manifest can be built
+   * (for example, the first epoch has only unresolved actor beneficiaries).
+   * An existing allocationRef must match every immutable economic field.
+   */
+  insertActorDistributionLiabilities(
+    liabilities: readonly Omit<
+      ActorDistributionLiabilityRecord,
+      "id" | "createdAt"
+    >[]
+  ): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -807,6 +1002,62 @@ export interface IdentityResolver {
   getUserDisplayNames(userIds: string[]): Promise<Map<string, string>>;
 }
 
+/** Canonical external ownership + explicit beneficiary + signed actor input. */
+export interface ActorAttributionStore {
+  bindActorExternalIdentity(
+    params: BindActorExternalIdentityParams
+  ): Promise<ActorBindingRecord>;
+
+  resolveActiveHumanActorId(userId: string): Promise<string | null>;
+
+  proposeActorBeneficiaryPolicy(
+    params: ProposeActorBeneficiaryPolicyParams
+  ): Promise<ActorBeneficiaryPolicyProposalRecord>;
+
+  acceptActorBeneficiaryPolicy(
+    params: AcceptActorBeneficiaryPolicyParams
+  ): Promise<ActorBeneficiaryPolicyProposalRecord>;
+
+  revokeActorBeneficiaryPolicy(params: {
+    readonly proposalId: string;
+    readonly revokedByActorId: string;
+    readonly revokedAt: Date;
+    readonly governanceOverride?: boolean;
+  }): Promise<ActorBeneficiaryPolicyProposalRecord>;
+
+  getActorBeneficiaryPolicyProposal(
+    proposalId: string
+  ): Promise<ActorBeneficiaryPolicyProposalRecord | null>;
+
+  /**
+   * Resolve source ownership and explicit policy exactly as of receipt event_time.
+   * task.5220 consumes the returned allocationRef; this never reads current parent,
+   * billing owner, OBO subject, or wallet to choose a beneficiary.
+   */
+  prepareActorContributionAllocation(params: {
+    readonly nodeId: string;
+    readonly epochId: bigint;
+    readonly receiptId: string;
+  }): Promise<FrozenActorContributionAllocation>;
+
+  insertActorContributionAllocation(
+    params: InsertActorContributionAllocationParams
+  ): Promise<ActorContributionAllocationRecord>;
+
+  getActorContributionAllocation(
+    allocationRef: string
+  ): Promise<ActorContributionAllocationRecord | null>;
+
+  getActorContributionAllocationLifecycle(
+    allocationRef: string
+  ): Promise<ActorContributionAllocationLifecycleRecord | null>;
+
+  /** Actor-owned included receipts which still lack a frozen allocation. */
+  listUnallocatedActorReceiptIdsForEpoch(
+    epochId: bigint
+  ): Promise<readonly string[]>;
+}
+
 // ---------------------------------------------------------------------------
 // Composed port interface
 // ---------------------------------------------------------------------------
@@ -825,4 +1076,5 @@ export interface AttributionStore
     OverrideStore,
     FinalAllocationStore,
     DistributionManifestStore,
+    ActorAttributionStore,
     IdentityResolver {}

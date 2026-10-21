@@ -98,6 +98,13 @@ function makeMockStore(
     batchUpsertReviewSubjectOverrides: vi.fn().mockResolvedValue([]),
     deleteReviewSubjectOverride: vi.fn(),
     getReviewSubjectOverridesForEpoch: vi.fn().mockResolvedValue([]),
+    listUnallocatedActorReceiptIdsForEpoch: vi.fn().mockResolvedValue([]),
+    listActorContributionAllocationsForEpoch: vi.fn().mockResolvedValue([]),
+    listUnfoldedActorContributionAllocationsForEpoch: vi
+      .fn()
+      .mockResolvedValue([]),
+    listPendingActorDistributionLiabilities: vi.fn().mockResolvedValue([]),
+    insertActorDistributionLiabilities: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } as AttributionStore;
 }
@@ -464,6 +471,47 @@ describe("finalizeEpoch — per-node distribution config (bug.5020)", () => {
       runFinalize({ ...deps, deploymentEnvironment: undefined })
     ).rejects.toThrow(/DEPLOY_ENVIRONMENT/);
     expect(store.getEpoch).not.toHaveBeenCalled();
+  });
+
+  it("automatically freezes an actor-owned receipt during normal finalization", async () => {
+    const allocation = {
+      allocationRef: "actor-allocation-v1:auto",
+      contractVersion: "actor.contribution.allocation.v1" as const,
+      nodeId: NODE_ID,
+      scopeId: SCOPE_ID,
+      epochId: "7",
+      receiptId: "receipt-1",
+      earnedByActorId: "actor:flock-leader",
+      beneficiaryActorId: null,
+      beneficiaryPolicyId: null,
+      beneficiaryPolicyVersion: null,
+      contributionCutoff: "2026-10-01T00:00:00.000Z",
+      sourceEvidence: { beneficiaryPolicyState: "unresolved" },
+      sourceEvidenceHash: "evidence-hash",
+    };
+    const { store } = await makeFinalizeStore({
+      listUnallocatedActorReceiptIdsForEpoch: vi
+        .fn()
+        .mockResolvedValue(["receipt-1"]),
+      prepareActorContributionAllocation: vi.fn().mockResolvedValue(allocation),
+      insertActorContributionAllocation: vi.fn().mockResolvedValue({
+        ...allocation,
+        createdAt: new Date("2026-10-01T00:00:01.000Z"),
+      }),
+    });
+
+    await expect(
+      runFinalize(finalizeDepsWith(store, { deploymentEnvironment: "test" }))
+    ).resolves.toMatchObject({ statementId: "stmt-1" });
+    expect(store.prepareActorContributionAllocation).toHaveBeenCalledWith({
+      nodeId: NODE_ID,
+      epochId: 7n,
+      receiptId: "receipt-1",
+    });
+    expect(store.insertActorContributionAllocation).toHaveBeenCalledWith({
+      allocation,
+    });
+    expect(store.finalizeEpochAtomic).toHaveBeenCalledOnce();
   });
 
   it("ACTIVE: folds against the per-node config from the gateway (not baked)", async () => {

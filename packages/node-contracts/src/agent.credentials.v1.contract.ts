@@ -1,0 +1,287 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@contracts/agent.credentials.v1`
+ * Purpose: Shared principal and lifecycle wire contracts for durable node-local agent credentials.
+ * Scope: Zod schemas only. Does not persist identities, authorize requests, generate secrets, or depend on frameworks.
+ * Invariants: CREDENTIAL_NE_PRINCIPAL; NODE_LOCAL_BEARER; HUMAN_AND_AGENT_ARE_DISTINCT;
+ *   SHARED_STORE_PRINCIPALS_ARE_NODE_QUALIFIED.
+ * Side-effects: none
+ * Links: https://cognidao.org/knowledge/human-ai-identity-standard, task.5252
+ * @public
+ */
+
+import { z } from "zod";
+
+function nodeQualifiedPrincipalSchema(kind: "agent" | "user") {
+  return z.string().superRefine((value, ctx) => {
+    const match = new RegExp(`^${kind}:([^:/]+)/([^:/]+)$`).exec(value);
+    if (
+      !match ||
+      !z.string().uuid().safeParse(match[1]).success ||
+      !z.string().uuid().safeParse(match[2]).success
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: `${kind} principal must be ${kind}:{node_uuid}/{local_uuid}`,
+      });
+    }
+  });
+}
+
+function principalLocalId(principalId: string): string {
+  return principalId.slice(principalId.lastIndexOf("/") + 1).toLowerCase();
+}
+
+function principalNodeId(principalId: string): string {
+  return principalId
+    .slice(principalId.indexOf(":") + 1, principalId.lastIndexOf("/"))
+    .toLowerCase();
+}
+
+export const userPrincipalIdSchema = nodeQualifiedPrincipalSchema("user");
+export const agentPrincipalIdSchema = nodeQualifiedPrincipalSchema("agent");
+
+export const humanRequestPrincipalSchema = z
+  .object({
+    kind: z.literal("human"),
+    principalId: userPrincipalIdSchema,
+    userId: z.string().uuid(),
+    walletAddress: z.string().nullable(),
+    displayName: z.string().nullable(),
+    avatarColor: z.string().nullable(),
+  })
+  .superRefine((value, ctx) => {
+    if (principalLocalId(value.principalId) !== value.userId.toLowerCase()) {
+      ctx.addIssue({
+        code: "custom",
+        message: "user principal suffix must equal userId",
+        path: ["principalId"],
+      });
+    }
+  });
+
+export const agentRequestPrincipalSchema = z
+  .object({
+    kind: z.literal("agent"),
+    principalId: agentPrincipalIdSchema,
+    actorId: z.string().uuid(),
+    credentialId: z.string().uuid(),
+    billingAccountId: z.string().uuid(),
+    displayName: z.string().nullable(),
+    legacyUserId: z.string().uuid().nullable(),
+  })
+  .superRefine((value, ctx) => {
+    if (principalLocalId(value.principalId) !== value.actorId.toLowerCase()) {
+      ctx.addIssue({
+        code: "custom",
+        message: "agent principal suffix must equal actorId",
+        path: ["principalId"],
+      });
+    }
+  });
+
+/**
+ * Compatibility identity for the expiring v1 HMAC bearer. It is intentionally
+ * distinct from both a browser human and a durable agent actor: the old token
+ * is user-linked, but presenting it does not turn the machine into that human.
+ */
+export const legacyAgentRequestPrincipalSchema = z
+  .object({
+    kind: z.literal("legacy_agent"),
+    principalId: userPrincipalIdSchema,
+    legacyUserId: z.string().uuid(),
+    displayName: z.string().nullable(),
+    expiresAt: z.string().datetime(),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      principalLocalId(value.principalId) !== value.legacyUserId.toLowerCase()
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "legacy user principal suffix must equal legacyUserId",
+        path: ["principalId"],
+      });
+    }
+  });
+
+export const requestPrincipalSchema = z.union([
+  humanRequestPrincipalSchema,
+  agentRequestPrincipalSchema,
+  legacyAgentRequestPrincipalSchema,
+]);
+
+export type HumanRequestPrincipal = z.infer<typeof humanRequestPrincipalSchema>;
+export type AgentRequestPrincipal = z.infer<typeof agentRequestPrincipalSchema>;
+export type LegacyAgentRequestPrincipal = z.infer<
+  typeof legacyAgentRequestPrincipalSchema
+>;
+export type RequestPrincipal = z.infer<typeof requestPrincipalSchema>;
+
+export const executionIdentitySchema = z
+  .object({
+    actorPrincipal: agentPrincipalIdSchema,
+    subjectPrincipal: userPrincipalIdSchema.nullable(),
+    billingAccountId: z.string().uuid(),
+    grantId: z.string().min(1).nullable(),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.subjectPrincipal &&
+      principalNodeId(value.actorPrincipal) !==
+        principalNodeId(value.subjectPrincipal)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "actor and subject principals must belong to the same node",
+        path: ["subjectPrincipal"],
+      });
+    }
+  });
+export type ExecutionIdentity = z.infer<typeof executionIdentitySchema>;
+
+export const agentCredentialOutputSchema = z
+  .object({
+    actorId: z.string().uuid(),
+    principalId: agentPrincipalIdSchema,
+    credentialId: z.string().uuid(),
+    apiKey: z.string().min(32),
+    billingAccountId: z.string().uuid(),
+    authenticateUntil: z.string().datetime(),
+    renewUntil: z.string().datetime(),
+  })
+  .superRefine((value, ctx) => {
+    if (principalLocalId(value.principalId) !== value.actorId.toLowerCase()) {
+      ctx.addIssue({
+        code: "custom",
+        message: "agent principal suffix must equal actorId",
+        path: ["principalId"],
+      });
+    }
+  });
+
+export const createAgentSpawnGrantOperation = {
+  id: "agent.spawn-grants.create.v1",
+  input: z.object({
+    name: z.string().min(1).max(80),
+    idempotencyKey: z.string().min(8).max(128),
+  }),
+  output: z.object({
+    grantId: z.string().uuid(),
+    spawnToken: z.string().min(32),
+    expiresAt: z.string().datetime(),
+  }),
+} as const;
+
+export const agentCredentialStatusOperation = {
+  id: "agent.credentials.status.v1",
+  output: z
+    .object({
+      actorId: z.string().uuid(),
+      principalId: agentPrincipalIdSchema,
+      credentialId: z.string().uuid(),
+      status: z.enum(["active", "renew_only"]),
+      authenticateUntil: z.string().datetime(),
+      renewUntil: z.string().datetime(),
+    })
+    .superRefine((value, ctx) => {
+      if (principalLocalId(value.principalId) !== value.actorId.toLowerCase()) {
+        ctx.addIssue({
+          code: "custom",
+          message: "agent principal suffix must equal actorId",
+          path: ["principalId"],
+        });
+      }
+    }),
+} as const;
+
+export const rotateAgentCredentialOperation = {
+  id: "agent.credentials.rotate.v1",
+  input: z.object({
+    idempotencyKey: z.string().min(8).max(128),
+  }),
+  output: z.object({
+    actorId: z.string().uuid(),
+    predecessorCredentialId: z.string().uuid(),
+    credentialId: z.string().uuid(),
+    apiKey: z.string().min(32),
+    pendingExpiresAt: z.string().datetime(),
+    authenticateUntil: z.string().datetime(),
+    renewUntil: z.string().datetime(),
+  }),
+} as const;
+
+export const confirmAgentCredentialOperation = {
+  id: "agent.credentials.confirm.v1",
+  output: agentCredentialStatusOperation.output,
+} as const;
+
+export const createAgentRecoveryGrantOperation = {
+  id: "agent.recovery-grants.create.v1",
+  input: z.object({
+    actorId: z.string().uuid(),
+    idempotencyKey: z.string().min(8).max(128),
+  }),
+  output: z.object({
+    grantId: z.string().uuid(),
+    recoveryToken: z.string().min(32),
+    expiresAt: z.string().datetime(),
+  }),
+} as const;
+
+/**
+ * Two-party ceremony for linking a human steward and an operator-attested
+ * external account to an already-existing durable AI actor. The human proposes
+ * after completing the provider attestation; the exact AI actor accepts with
+ * its node-issued credential. Neither step alone mutates stewardship/bindings.
+ */
+export const createExistingAgentClaimOperation = {
+  id: "agent.existing-claims.create.v1",
+  input: z.object({
+    actorId: z.string().uuid(),
+    identityAttestation: z.string().min(32).max(8192),
+    idempotencyKey: z.string().min(8).max(128),
+  }),
+  output: z.object({
+    claimId: z.string().uuid(),
+    actorId: z.string().uuid(),
+    provider: z.literal("github"),
+    providerLogin: z.string().nullable(),
+    status: z.enum(["pending_ai_acceptance", "accepted"]),
+    expiresAt: z.string().datetime(),
+  }),
+} as const;
+
+export const acceptExistingAgentClaimOperation = {
+  id: "agent.existing-claims.accept.v1",
+  input: z.object({ claimId: z.string().uuid() }),
+  output: createExistingAgentClaimOperation.output,
+} as const;
+
+export const suspendAgentOperation = {
+  id: "agent.actors.suspend.v1",
+  input: z.object({
+    actorId: z.string().uuid(),
+    reason: z.string().min(1).max(280),
+  }),
+  output: z.object({
+    actorId: z.string().uuid(),
+    status: z.literal("suspended"),
+  }),
+} as const;
+
+export const recoverAgentCredentialOperation = {
+  id: "agent.credentials.recover.v1",
+  input: z.object({ recoveryToken: z.string().min(32).max(512) }),
+  output: agentCredentialOutputSchema,
+} as const;
+
+export const upgradeLegacyAgentCredentialOperation = {
+  id: "agent.credentials.legacy-upgrade.v1",
+  input: z.object({
+    idempotencyKey: z.string().min(8).max(128),
+  }),
+  output: agentCredentialOutputSchema,
+} as const;

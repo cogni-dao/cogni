@@ -28,6 +28,8 @@
  *   Temporal uses Context.current().cancellationSignal for activity cancellation
  */
 export interface ExecutionContext {
+  /** Exact runtime principal (for example agent:{node_id}/{actor_id}). */
+  readonly actorId?: string;
   /** Actor who initiated this run (user ID for user-initiated, undefined for system) */
   readonly actorUserId?: string;
   /** Session ID for observability grouping (e.g., Langfuse sessions) */
