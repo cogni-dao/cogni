@@ -18,6 +18,10 @@
  *     CollectEpochWorkflow schedule (`ledger-tasks` queue) — byte-for-byte unchanged, NOT rewired
  *     onto NodeTaskWorkflow(/collect). The dispatch swap is other-nodes-only (step 2), so there is
  *     no dead 404 (before the operator `/collect` route ships) and no latent double-collect (after).
+ *   - SELF_SCOPE_NEEDS_NO_REGISTRY (task.5282): scope "self" runs ONLY step 1 — the operator's own
+ *     charters from its image repo-spec — under the same advisory lock, and never reads the fleet
+ *     registry / routable-node configs. Boot uses it so the operator's own schedules activate even
+ *     while catalog projection is failing. Scope "all" (default; ops route) is today's behavior.
  * Side-effects: IO (database advisory lock, Temporal RPC, grant creation)
  * Links: packages/scheduler-core/src/services/syncGovernanceSchedules.ts,
  *   nodes/operator/app/src/bootstrap/jobs/resolveRoutableNodeGovernanceConfigs.ts,
@@ -55,6 +59,27 @@ function computeNextRun(cron: string, timezone: string): Date {
   return interval.next().toDate();
 }
 
+/** "self" = the operator's own charters only; "all" = own charters + every routable node. */
+export type GovernanceSyncScope = "self" | "all";
+
+export interface GovernanceSyncJobOptions {
+  /** Default "all" (unchanged behavior). */
+  readonly scope?: GovernanceSyncScope;
+  /**
+   * Throw instead of returning a no-op summary when another sync holds the advisory lock.
+   * Boot retry loops set this so a kick that lost the lock race is retried, not dropped.
+   */
+  readonly throwIfLocked?: boolean;
+}
+
+/** Thrown (only with `throwIfLocked`) when another governance sync holds the lock. */
+export class GovernanceSyncLockedError extends Error {
+  constructor() {
+    super("governance sync already running (advisory lock held)");
+    this.name = "GovernanceSyncLockedError";
+  }
+}
+
 export interface GovernanceScheduleSyncSummary {
   created: number;
   updated: number;
@@ -70,7 +95,10 @@ export interface GovernanceScheduleSyncSummary {
  * 2. Resolves deps from the application container
  * 3. Calls syncGovernanceSchedules with repo-spec config
  */
-export async function runGovernanceSchedulesSyncJob(): Promise<GovernanceScheduleSyncSummary> {
+export async function runGovernanceSchedulesSyncJob(
+  options: GovernanceSyncJobOptions = {}
+): Promise<GovernanceScheduleSyncSummary> {
+  const scope: GovernanceSyncScope = options.scope ?? "all";
   const container = getContainer();
   const { log } = container;
 
@@ -80,7 +108,7 @@ export async function runGovernanceSchedulesSyncJob(): Promise<GovernanceSchedul
     return { created: 0, updated: 0, resumed: 0, skipped: 0, paused: 0 };
   }
 
-  log.info({}, "Starting governance schedule sync job");
+  log.info({ scope }, "Starting governance schedule sync job");
 
   // Advisory lock: non-blocking single-writer guard.
   // Pin a single pool connection so lock + unlock use the same session
@@ -92,6 +120,7 @@ export async function runGovernanceSchedulesSyncJob(): Promise<GovernanceSchedul
   const acquired = (lockRow as { acquired: boolean } | undefined)?.acquired;
   if (!acquired) {
     reservedConn.release();
+    if (options.throwIfLocked) throw new GovernanceSyncLockedError();
     log.info({}, "Governance sync already running, skipping");
     return { created: 0, updated: 0, resumed: 0, skipped: 0, paused: 0 };
   }
@@ -148,6 +177,25 @@ export async function runGovernanceSchedulesSyncJob(): Promise<GovernanceSchedul
             scopes: [scope],
           });
           return grant.id;
+        },
+        // GRAPH_CHARTER (task.5282): a charter that declares `graph` runs on its own
+        // `graph:execute:{graphId}` grant, so the sandbox governance grant (and the
+        // LEDGER_INGEST schedule that shares it) is untouched.
+        ensureGraphGrant: async (graphId: string) => {
+          const grant = await container.executionGrantPort.ensureGrant({
+            userId: systemUserId,
+            billingAccountId: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+            scopes: [`graph:execute:${graphId}`],
+          });
+          return grant.id;
+        },
+        // GRAPH_CRON_DRIFT: next fire time of a cron, minute precision, for drift detection.
+        nextCronRun: (cron: string, timezone: string) => {
+          try {
+            return computeNextRun(cron, timezone).toISOString();
+          } catch {
+            return null;
+          }
         },
         upsertGovernanceScheduleRow: async (params) => {
           const nextRunAt = computeNextRun(params.cron, params.timezone);
@@ -251,7 +299,19 @@ export async function runGovernanceSchedulesSyncJob(): Promise<GovernanceSchedul
     //    operator's live epoch is byte-for-byte unchanged: no dead 404 before the sibling
     //    `/api/internal/attribution/collect` route ships, no latent double-collect after.
     const operatorNodeId = getNodeId();
-    add(await syncFor(operatorNodeId, getGovernanceConfig(), true));
+    add(
+      await syncFor(
+        operatorNodeId,
+        withEnvApplyMode(getGovernanceConfig(), serverEnv().DEPLOY_ENVIRONMENT),
+        true
+      )
+    );
+
+    // SELF_SCOPE_NEEDS_NO_REGISTRY: the operator's own charters need no GitHub/catalog read.
+    if (scope === "self") {
+      log.info(totals, "Governance schedule sync complete (self)");
+      return totals;
+    }
 
     // 2) Every OTHER routable node — read its git-authoritative governance config and sync its
     //    epoch-collect NodeTaskWorkflow(/collect) dispatch. THIS is what gives spawned nodes
@@ -307,4 +367,30 @@ export async function runGovernanceSchedulesSyncJob(): Promise<GovernanceSchedul
     await reservedConn`SELECT pg_advisory_unlock(hashtext('governance_sync'))`;
     reservedConn.release();
   }
+}
+
+/**
+ * APPLY_MODE_BY_ENV (story.5096 design v4 §1): resolve the work-prioritization payload's
+ * `applyMode` for THIS deployment (`apply.mode[<DEPLOY_ENVIRONMENT>]`, else `default`). The
+ * env name is read here at the bootstrap seam; the graph never reads env.
+ */
+export function withEnvApplyMode(
+  config: ReturnType<typeof getGovernanceConfig>,
+  deployEnvironment: string | undefined
+): ReturnType<typeof getGovernanceConfig> {
+  return {
+    ...config,
+    schedules: config.schedules.map((s) => {
+      const wp = s.payload?.workPrioritization;
+      if (!wp) return s;
+      const applyMode =
+        (deployEnvironment && wp.applyModes[deployEnvironment]) ||
+        wp.applyModes.default ||
+        "propose";
+      return {
+        ...s,
+        payload: { ...s.payload, workPrioritization: { ...wp, applyMode } },
+      };
+    }),
+  };
 }

@@ -80,12 +80,8 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
   that proposes with `Followed = —`, reports zero sources, or has no retrieval actions in the
   turn trace is still a hard FAIL. Grade delivery → envelope → research trace → substantive
   synthesis → state continuity in that order. Never call a table-only shell a passing agent.
-- **`Followed` is the evidence ledger, not a sample.** The trace can prove excellent research
-  while the visible reply still fails provenance by citing only two convenient work items. Every
-  material orientation, skill/guide, hub entry, design/code source, and work item that shaped the
-  proposal must appear as a human URL in contract order. A local repo path is citable: convert it
-  to `https://github.com/<owner>/<repo>/blob/<HEAD_SHA>/<path>` (plus a line anchor when useful).
-  The source count in `ETA · Conf` must not exceed the distinct URLs in `Followed`.
+- **The loaded contract owns reporting semantics.** Follow its current Roles/Followed and
+  evidence rules; this skill supplies no cumulative bibliography or second response policy.
 - **@import of an ABSENT file renders as literal text**, not empty-expansion. On a true first boot the hook writes the cache _during_ SessionStart — too late for the same session's `@import`, which resolves at context assembly. **Warm the cache in the pre-session step** (`scripts/conductor-worktree-setup.sh`) so first boot is non-empty; otherwise the first session stays in bounded recovery until a restart/resume loads the complete contract.
 - **A failed or incomplete hook fetch must not clobber a complete cache.** Both the project loader and the installed stable Codex hook validate the contract envelope and actual response-template structure before admission. A last-known complete bundle survives an expired key, hub outage, map-only response, or truncated contract. Missing/incomplete caches enter bounded recovery instead of normal work; recovery notices never pass completeness admission.
 - **Codex parity:** `.codex/config.toml` must keep `additionalContextLimit = 0`. Without it Codex head/tail-spills the bundle and cuts the middle of the contract.
@@ -123,7 +119,7 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
    offline cache; absent/incomplete cognition permits only bounded delivery recovery.
 5. **Prove on the live harness.** The only proof is a fresh spawn (`claude -p` headless, or a
    real session) whose trace shows the required research before its first substantive proposal,
-   whose `Followed` exhaustively links the material sources actually consulted, and which sustains frozen state on the
+   whose reporting follows the exact loaded contract, and which sustains frozen state on the
    next turn — AND a hub-down/expired-key boot with a complete cache that preserves the same
    contract, plus a cold/invalid-cache boot that stays in recovery. Byte
    round-trips, `/context`, and table shape are necessary but not sufficient.

@@ -265,6 +265,8 @@ export interface XComputeWorkloadSpec extends ComputeWorkloadSpec {
   readonly dns?: XComputeWorkloadDns;
   readonly runtime?: XComputeWorkloadRuntime;
   readonly placement?: XComputeWorkloadPlacement;
+  /** story.5093 — present only on an operator-placed isolated-service lease. */
+  readonly instance?: string;
 }
 
 export interface ComputeWorkloadManifest {
@@ -326,6 +328,85 @@ export interface BuildComputeWorkloadManifestInput {
    * for why this is an explicit caller input with no fallback.
    */
   readonly runtime?: XComputeWorkloadRuntime;
+  /**
+   * story.5093 — ISOLATED_SERVICE_IS_ITS_OWN_LEASE. Declared private services the operator
+   * catalog places in their OWN lease (`isolated_services`). On the primary workload they are
+   * removed; a surviving binding to one is refused, because a sibling binding cannot cross a
+   * lease. Crossplane-only.
+   */
+  readonly isolatedServices?: readonly string[];
+  /**
+   * When set, this manifest IS the isolated lease for that one declared service: named
+   * `<nodeId>-<instance>`, the service becomes its sole public service, and `publicHost` is
+   * the instance host. Its idempotence key is distinct; its receipt identity is the node's.
+   */
+  readonly instance?: string;
+}
+
+/** Instance names share the XRD's `spec.instance` pattern. */
+const INSTANCE_NAME = /^[a-z][a-z0-9-]{0,19}$/;
+
+/**
+ * Split an environment-resolved bundle for one workload: the primary workload drops every
+ * isolated service; an instance workload keeps exactly its own service, made public. Artifacts
+ * are pruned to the survivors so the XRD's artifact/service cross-reference rules hold.
+ */
+function selectWorkloadServices(
+  envBundle: ResolvedNodeArtifactBundle,
+  input: Pick<
+    BuildComputeWorkloadManifestInput,
+    "isolatedServices" | "instance"
+  >
+): ResolvedNodeArtifactBundle {
+  const isolated = new Set(input.isolatedServices ?? []);
+  let services: ResolvedNodeArtifactBundle["services"];
+  if (input.instance !== undefined) {
+    const own = envBundle.services.find(
+      ({ service }) => service.name === input.instance
+    );
+    if (!own) {
+      throw new Error(
+        `[compute-workload-manifest] isolated service ${input.instance} is not declared for this environment`
+      );
+    }
+    if (own.service.runtimeProfile) {
+      throw new Error(
+        `[compute-workload-manifest] isolated service ${input.instance} cannot carry runtime_profile ${own.service.runtimeProfile}`
+      );
+    }
+    if (Object.keys(own.service.bindings).length > 0) {
+      throw new Error(
+        `[compute-workload-manifest] isolated service ${input.instance} cannot declare sibling bindings; it runs in its own lease`
+      );
+    }
+    services = [
+      { ...own, service: { ...own.service, visibility: "public" as const } },
+    ];
+  } else if (isolated.size > 0) {
+    services = envBundle.services.filter(
+      ({ service }) => !isolated.has(service.name)
+    );
+    for (const { service } of services) {
+      const crossLease = Object.entries(service.bindings).find(([, target]) =>
+        isolated.has(target)
+      );
+      if (crossLease) {
+        throw new Error(
+          `[compute-workload-manifest] ${service.name} binds ${crossLease[0]} to isolated service ${crossLease[1]}; an isolated service runs in its own lease and is reached by its public host`
+        );
+      }
+    }
+  } else {
+    return envBundle;
+  }
+  const referenced = new Set(services.map(({ artifact }) => artifact));
+  return {
+    ...envBundle,
+    artifacts: envBundle.artifacts.filter((artifact) =>
+      referenced.has(artifact.name)
+    ),
+    services,
+  };
 }
 
 /**
@@ -353,9 +434,23 @@ export function buildComputeWorkloadManifest(
   // INVALID XR that Argo's server-side-diff refused to sync (bug.5262). The repo-spec schema
   // forbids `envs` on the public service, so this can never gate out the sole public service —
   // ONE_PUBLIC_SERVICE holds by construction.
-  const envBundle = resolveNodeArtifactBundleForEnvironment(
-    input.bundle,
-    input.environment
+  if (input.instance !== undefined && !INSTANCE_NAME.test(input.instance)) {
+    throw new Error(
+      "[compute-workload-manifest] instance must be a lowercase DNS label of at most 20 characters"
+    );
+  }
+  if (
+    (input.instance !== undefined ||
+      (input.isolatedServices?.length ?? 0) > 0) &&
+    input.computeApi !== "crossplane"
+  ) {
+    throw new Error(
+      "[compute-workload-manifest] isolated services are placed only by the crossplane authority"
+    );
+  }
+  const envBundle = selectWorkloadServices(
+    resolveNodeArtifactBundleForEnvironment(input.bundle, input.environment),
+    input
   );
   if (envBundle.services.length === 0) {
     // Unreachable while the schema keeps the public service ungated (it always survives); a
@@ -507,6 +602,8 @@ export function buildComputeWorkloadManifest(
       // pruned here so "every bundle artifact must be used by at least one service" holds.
       artifacts: envBundle.artifacts,
     },
+    // `workload.name` stays the node slug on an instance lease too: the Composition derives the
+    // node's one projected secret (`<slug>-compute-env-secrets`) from it.
     workload: { name: input.slug, publicHost: input.publicHost, services },
   };
 
@@ -519,18 +616,27 @@ export function buildComputeWorkloadManifest(
     metadata: {
       // Both the CRD and the Composition's first pipeline step make this immutable and equal
       // to spec.nodeId: one paid workload per node in each environment namespace.
-      name: input.bundle.nodeId,
+      name:
+        input.instance === undefined
+          ? input.bundle.nodeId
+          : `${input.bundle.nodeId}-${input.instance}`,
       namespace,
       labels: {
         "cogni.io/node-id": input.bundle.nodeId,
         "cogni.io/environment": input.environment,
         "cogni.io/node": input.slug,
+        ...(input.instance === undefined
+          ? {}
+          : { "cogni.io/instance": input.instance }),
       },
     },
     spec:
       input.computeApi === "crossplane"
         ? {
             ...spec,
+            ...(input.instance === undefined
+              ? {}
+              : { instance: input.instance }),
             migration: { policy: MIGRATION_POLICY },
             bootPolicy: bootPolicyForEnvironment(
               input.environment,

@@ -21,7 +21,9 @@ LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session-cognition.sh"
 CONTRACT="$(bash "$LOADER" --cached-contract)"
 [[ -n "$CONTRACT" ]] || exit 0
 
-first_nonempty="$(printf '%s\n' "$MESSAGE" | awk 'NF { print; exit }')"
+# Short-circuit readers must not close a producer pipe under pipefail: a valid
+# large response can otherwise fail with SIGPIPE before the advisory is decided.
+first_nonempty="$(awk 'NF { print; exit }' <<<"$MESSAGE")"
 last_nonempty="$(printf '%s\n' "$MESSAGE" | awk 'NF { line=$0 } END { print line }')"
 # A cold Claude import can precede a concurrent successful cache warm. Clearly
 # marked recovery is diagnostic, never an alternate normal response template.
@@ -102,24 +104,24 @@ if [[ -n "$quote_label" ]]; then
   [[ "$last_nonempty" == '>'* && "$last_nonempty" == *"$quote_label"* ]] ||
     advise "Envelope mismatch: end with the final quote label in the loaded cognition template."
 fi
-if printf '%s\n' "$CONTRACT" | grep -Eq '^([*][*][*]|---)$'; then
-  printf '%s\n' "$MESSAGE" | grep -Eq '^([*][*][*]|---)$' ||
+if grep -Eq '^([*][*][*]|---)$' <<<"$CONTRACT"; then
+  grep -Eq '^([*][*][*]|---)$' <<<"$MESSAGE" ||
     advise "Envelope mismatch: include the divider shown in the loaded cognition template."
 fi
-outside_block="$(printf '%s\n' "$MESSAGE" | awk '
+outside_block="$(awk '
   NF == 0 { next }
   /^\|/ { next }
   /^---$/ { next }
   /^\*\*\*$/ { next }
   /^>/ { next }
   { print; exit }
-')"
+' <<<"$MESSAGE")"
 [[ -z "$outside_block" ]] ||
   advise "Envelope mismatch: follow the loaded template without extra prose outside its tables and final quote."
 
 extract_cell() {
   local row_pattern="$1"
-  printf '%s\n' "$MESSAGE" | awk -F'|' -v pattern="$row_pattern" '
+  awk -F'|' -v pattern="$row_pattern" '
     $2 ~ pattern {
       value=$3
       sub(/^[[:space:]]+/, "", value)
@@ -127,7 +129,7 @@ extract_cell() {
       print value
       exit
     }
-  '
+  ' <<<"$MESSAGE"
 }
 
 GOAL="$(extract_cell 'Goal')"
@@ -136,7 +138,7 @@ STATUS="$(extract_cell 'Status')"
 ETA_CONF="$(extract_cell 'ETA · Conf')"
 FOLLOWED="$(extract_cell 'Followed')"
 template_has_field() {
-  printf '%s\n' "$expected_labels" | grep -Fq "$1"
+  grep -Fq "$1" <<<"$expected_labels"
 }
 if ! template_has_field Goal || ! template_has_field 'Done when'; then
   exit 0
@@ -158,7 +160,7 @@ if [[ "$GOAL" == "—" || "$DONE_WHEN" == "—" ]]; then
 else
   ! template_has_field Followed || [[ "$FOLLOWED" != "—" && "$FOLLOWED" == *"https://"* ]] ||
     advise "Process-contract breach: a substantive proposal requires Followed to contain verified human URLs for sources actually consulted. Continue research; do not propose from an empty evidence base."
-  if printf '%s\n' "$ETA_CONF" | grep -Eqi 'reviewed[[:space:]]+0|(^|[^0-9])0/[1-9][0-9]*|0[[:space:]]+sources'; then
+  if grep -Eqi 'reviewed[[:space:]]+0|(^|[^0-9])0/[1-9][0-9]*|0[[:space:]]+sources' <<<"$ETA_CONF"; then
     advise "Process-contract breach: a substantive proposal cannot report zero reviewed sources. Keep Goal, Done when, and Status as —, complete the required research pass, then propose from evidence."
   fi
 

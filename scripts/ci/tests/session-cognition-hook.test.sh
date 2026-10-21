@@ -128,6 +128,24 @@ valid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_
   '{last_assistant_message:$message,scratchpad_dir:$scratch}' | run_validator)"
 [[ -z "$valid_output" ]] || fail "status-contract Stop hook rejected a valid response"
 
+# Build large messages inside jq, not a single argv value (Linux caps its size).
+# Early-exit awk/grep readers previously closed printf pipes under pipefail,
+# turning valid responses into SIGPIPE failures instead of warn-only decisions.
+large_valid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" '
+  {last_assistant_message: ($message | sub("\\| \\*\\*Followed\\*\\* \\| ";
+    "| **Followed** | " + ("https://cognidao.org/knowledge/cognition-substrate-bootstrap " * 8192))),
+   scratchpad_dir:$scratch}' | run_validator)"
+[[ -z "$large_valid_output" ]] || fail "large valid response failed the warn-only detector"
+
+large_invalid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" '
+  {last_assistant_message: ($message | sub("\n---\n";
+    "\n" + ("unexpected prose " * 32768) + "\n---\n")),
+   scratchpad_dir:$scratch}' | run_validator)"
+[[ -n "$(printf '%s' "$large_invalid_output" | jq -r '.systemMessage // empty')" &&
+   -z "$(printf '%s' "$large_invalid_output" | jq -r '.decision // empty')" ]] ||
+  fail "large invalid response did not warn without blocking"
+echo "session-cognition-hook.test: large-response pipe safety PASS"
+
 invalid_output="$(jq -cn --arg message 'This is a design question, so the contract does not apply.' \
   --arg scratch "$VALIDATOR_SCRATCH" '{last_assistant_message:$message,scratchpad_dir:$scratch}' | \
   run_validator)"
@@ -411,6 +429,64 @@ printf '%s\n' \
   'statusMessage = "Loading Cogni cognition substrate"' \
   '' \
   '[hooks.state]' >"$LEGACY_HOME/config.toml"
+
+# Legacy migration must not consume other event arrays after a managed handler.
+# Exercise both a sole managed handler and a mixed SessionStart handler list.
+for retained_handler in sole mixed; do
+  boundary_home="$FIXTURE_ROOT/boundary-$retained_handler"
+  boundary_hook="$boundary_home/hooks/cogni-session-cognition.sh"
+  mkdir -p "$boundary_home"
+  cat >"$boundary_home/config.toml" <<EOF
+[[hooks.SessionStart]]
+matcher = "startup|resume"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "bash $boundary_hook"
+EOF
+  if [[ "$retained_handler" == mixed ]]; then
+    cat >>"$boundary_home/config.toml" <<'EOF'
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "echo keep-other-startup"
+EOF
+  fi
+  cat >"$boundary_home/expected-suffix" <<'EOF'
+[[hooks.Stop]]
+matcher = "*"
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "echo preserve-stop"
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo preserve-pretool"
+
+[hooks.state]
+enabled = true
+EOF
+  cat "$boundary_home/expected-suffix" >>"$boundary_home/config.toml"
+  CODEX_HOME="$boundary_home" bash "$INSTALLER" >/dev/null
+  awk '/^\[\[hooks.Stop\]\]$/ { suffix=1 } /^# BEGIN COGNI CODEX COGNITION HOOK$/ { exit } suffix { print }' \
+    "$boundary_home/config.toml" | sed '/./,$!d' >"$boundary_home/actual-suffix"
+  # The installer adds separation before its canonical block; compare the exact
+  # unrelated table bodies without that final separator newline.
+  [[ "$(cat "$boundary_home/actual-suffix")" == "$(cat "$boundary_home/expected-suffix")" ]] ||
+    fail "installer changed unrelated Stop/PreToolUse array tables ($retained_handler)"
+  if [[ "$retained_handler" == mixed ]]; then
+    grep -Fq 'command = "echo keep-other-startup"' "$boundary_home/config.toml" ||
+      fail "installer removed the second SessionStart handler"
+  fi
+  cp "$boundary_home/config.toml" "$boundary_home/after-first-install"
+  CODEX_HOME="$boundary_home" bash "$INSTALLER" >/dev/null
+  cmp -s "$boundary_home/config.toml" "$boundary_home/after-first-install" ||
+    fail "installer changed reconciled hook tables on second run ($retained_handler)"
+done
 
 CODEX_HOME="$LEGACY_HOME" bash "$INSTALLER" >/dev/null
 CODEX_HOME="$LEGACY_HOME" bash "$INSTALLER" >/dev/null

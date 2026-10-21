@@ -317,9 +317,11 @@ for (let i = starts.length - 1; i >= 0; i -= 1) {
   const start = starts[i];
   const tail = text.slice(start);
   const firstLineEnd = tail.indexOf("\n") + 1;
+  // Only nested handlers belong to this event; every other table or array
+  // starts untouched config that must survive removal of a managed handler.
   const next = tail
     .slice(firstLineEnd)
-    .search(/^\[\[hooks\.SessionStart\]\]$|^\[(?!\[)/m);
+    .search(/^[ \t]*\[(?!\[hooks\.SessionStart\.hooks\]\][ \t]*(?:#.*)?$)/m);
   const end =
     next === -1 ? text.length : start + firstLineEnd + next;
   const block = text.slice(start, end);

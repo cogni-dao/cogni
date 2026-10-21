@@ -28,17 +28,25 @@ export interface CitationLinkDto {
 
 export interface CitationLinksResponse {
   readonly links: CitationLinkDto[];
+  readonly nextCursor: string | null;
 }
 
 export async function fetchCitationLinks(
-  id: string
+  id: string,
+  cursor?: string
 ): Promise<CitationLinksResponse> {
-  const response = await fetch(`/api/v1/citations/${encodeURIComponent(id)}`, {
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    cache: "no-store",
-  });
+  const params = new URLSearchParams();
+  if (cursor !== undefined) params.set("cursor", cursor);
+  const suffix = params.size ? `?${params.toString()}` : "";
+  const response = await fetch(
+    `/api/v1/citations/${encodeURIComponent(id)}${suffix}`,
+    {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+    }
+  );
   if (!response.ok) {
     const error = await response.json().catch(() => ({
       error: "Failed to fetch citation links",

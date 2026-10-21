@@ -158,8 +158,10 @@ services:
     # TODO(dev): a pnpm preflight could export LITELLM_IMAGE=$(infra_image_tag litellm).
     image: ${LITELLM_IMAGE:-ghcr.io/cogni-dao/cogni-template:litellm-b6e4e942cb23}
     restart: unless-stopped
+    # Readiness and Docker exec failures are not process-liveness evidence.
+    # Preserve the gateway through dependency recovery; normal Compose applies changes.
     labels:
-      - "autoheal=true"
+      - "autoheal=false"
     networks:
       - internal
       - sandbox-internal
@@ -338,7 +340,9 @@ services:
     image: ${OPENFGA_IMAGE:-openfga/openfga:v1.17.1@sha256:ff96f68d2f03a029e051027415c106295c782084daeef0934479f04a3fdc2d57}
     restart: unless-stopped
     labels:
-      - "autoheal=true"
+      # Datastore readiness failures must not restart the authorization process.
+      # Docker still restarts process exits through restart: unless-stopped.
+      - "autoheal=false"
     networks:
       - internal
     # Expose to all interfaces for k3s pods (ExternalName → VM DNS:8080).
@@ -365,12 +369,9 @@ services:
       - OPENFGA_PLAYGROUND_ENABLED=false
       - OPENFGA_AUTHN_METHOD=${OPENFGA_AUTHN_METHOD:-none}
       - OPENFGA_AUTHN_PRESHARED_KEYS=${OPENFGA_API_TOKEN:-}
-    # Without a healthcheck the `autoheal=true` label above is inert: willfarrell/autoheal
-    # only restarts containers Docker reports `unhealthy`, and a container with no probe stays
-    # `health: none` forever. This left a wedged OpenFGA (process up but datastore path dead)
-    # with no self-heal — a factor in the 2026-08-12 prod RBAC-write outage. grpc_health_probe
-    # ships in the OpenFGA image (distroless — no curl/shell); 8081 is the internal gRPC health
-    # port, and OpenFGA's health service reports NOT_SERVING when its datastore is unreachable.
+    # Keep datastore readiness observable: grpc_health_probe ships in the distroless
+    # image and reports NOT_SERVING when the datastore is unreachable. That dependency
+    # failure is not process liveness evidence and must not trigger autoheal restarts.
     healthcheck:
       test: ["CMD", "grpc_health_probe", "-addr=localhost:8081"]
       interval: 10s
@@ -579,8 +580,10 @@ services:
       - GITSYNC_PASSWORD=${GIT_READ_TOKEN:-}
 
   alloy:
-    image: grafana/alloy:v1.9.2
+    image: grafana/alloy:v1.14.0
     restart: unless-stopped
+    # cAdvisor must see the host cgroup tree before it can discover Docker actors.
+    cgroup: host
     networks:
       - internal
     # Reach the k3s-pod app + scheduler-worker (via their NodePorts on the host)
@@ -596,6 +599,8 @@ services:
       - ./configs/alloy-config.metrics.alloy:/etc/alloy/config.alloy:ro
       - alloy_data:/var/lib/alloy
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Native Docker metadata/socket binding is installed only by the normal
+      # full-infra observability override; core-only Compose consumers need none.
       # Persistent host journal gives Loki the kernel-side reason for SIGKILL/OOM.
       # Production bootstrap configures persistent journald at this path.
       - /var/log/journal:/var/log/journal:ro
@@ -731,7 +736,7 @@ services:
     image: temporalio/auto-setup:1.29.1
     restart: unless-stopped
     labels:
-      - "autoheal=true"
+      - "autoheal=false"
     networks:
       - internal
     # Expose to all interfaces for k3s pods (EndpointSlice → node InternalIP:7233)

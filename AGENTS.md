@@ -49,6 +49,6 @@ Work against exactly one node and work item. The operator at https://cognidao.or
 coordinates code, CI, flight, validation, and merge. Subdirectory AGENTS.md files extend
 this floor; the closest file wins for code-local rules.
 
-Pointers: [contributor contract](.agents/skills/contribute-to-cogni/SKILL.md) ·
+Pointers: [code delivery](.agents/skills/contribute-to-cogni/SKILL.md) ·
 [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) ·
 [discovery](https://cognidao.org/.well-known/agent.json)

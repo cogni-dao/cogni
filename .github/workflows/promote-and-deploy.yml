@@ -229,8 +229,12 @@ jobs:
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
 
   reconcile-appset:
-    needs: decide
-    if: needs.decide.outputs.has_targets == 'true'
+    needs: [decide, deploy-infra]
+    if: |
+      always() &&
+      needs.decide.result == 'success' &&
+      (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped') &&
+      needs.decide.outputs.has_targets == 'true'
     # Per-node lane (axiom 18). Apply ONLY the promoted node's ApplicationSet
     # object so a concurrent promotion of a different node cannot prune this lane.
     # Structural fix for the shared-appset clobber — mirrors candidate-flight.yml.
@@ -344,8 +348,12 @@ jobs:
   # Provision happens inside the promote lane (idempotent), not a full deploy-infra
   # env reprovision. Serialize Cloudflare writes per env (mirrors reconcile-appset).
   reconcile-dns:
-    needs: decide
-    if: needs.decide.outputs.has_k3s_node_targets == 'true'
+    needs: [decide, deploy-infra]
+    if: |
+      always() &&
+      needs.decide.result == 'success' &&
+      (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped') &&
+      needs.decide.outputs.has_k3s_node_targets == 'true'
     concurrency:
       group: reconcile-dns-${{ needs.decide.outputs.environment }}
       cancel-in-progress: false
@@ -599,6 +607,9 @@ jobs:
           GH_TOKEN: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
           PER_NODE_BRANCH: deploy/${{ needs.decide.outputs.environment }}-${{ matrix.node }}
           UMBRELLA_BRANCH: deploy/${{ needs.decide.outputs.environment }}
+          SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
+          SOURCE_SHA: ${{ steps.digest.outputs.source_sha }}
+          SOURCE_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" deploy-branch
@@ -618,6 +629,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
 
       - name: Sync infra/k8s + per-node catalog from app-src
         if: steps.digest.outputs.promoted == 'true'
@@ -695,10 +707,14 @@ jobs:
           NODE: ${{ matrix.node }}
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
           OVERLAY_ENV: ${{ needs.decide.outputs.environment }}
+          SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
+          SOURCE_SHA: ${{ steps.digest.outputs.source_sha }}
+          SOURCE_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
           git add -A
           if git diff --cached --quiet; then
             DEPLOY_SHA=$(git rev-parse HEAD)
@@ -735,9 +751,10 @@ jobs:
   # k3s owns Caddy/NodePort edge mutation; Akash adds read-only controller/credential/
   # secret/egress assertions before promote-k8s writes a ComputeWorkload generation.
   node-substrate:
-    needs: [decide, reconcile-appset, reconcile-dns]
+    needs: [decide, deploy-infra, reconcile-appset, reconcile-dns]
     if: |
       always() &&
+      (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped') &&
       needs.decide.outputs.has_node_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
       (
@@ -875,18 +892,17 @@ jobs:
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: pnpm --dir ci-src exec tsx scripts/lib/run-node-substrate.ts "${{ needs.decide.outputs.environment }}" "${{ matrix.node }}"
 
+  # The normal operator/full infra lever repairs the shared runtime before its
+  # PostgreSQL/OpenBao/k3s consumers. App-only promotion still skips all infra.
   deploy-infra:
     if: |
       always() &&
+      needs.decide.result == 'success' &&
       inputs.skip_infra != 'true' &&
       needs.decide.outputs.has_targets == 'true' &&
-      needs.promote-k8s.result == 'success' &&
-      (
-        (needs.decide.outputs.has_node_targets == 'true' && needs.node-substrate.result == 'success') ||
-        (needs.decide.outputs.has_node_targets != 'true' && needs.node-substrate.result == 'skipped')
-      )
+      inputs.nodes == 'operator' && (inputs.deploy_infra_mode || 'full') == 'full'
     runs-on: ubuntu-latest
-    needs: [decide, promote-k8s, node-substrate]
+    needs: [decide]
     environment: ${{ needs.decide.outputs.environment }}
     # 45m (was 15m, #785-era default): a cold-cache VM provisioning a NEW node
     # pulls the sandbox + LiteLLM images (~13m) BEFORE db-provision runs, so 15m
@@ -897,7 +913,7 @@ jobs:
     concurrency:
       group: deploy-infra-${{ needs.decide.outputs.environment }}
       cancel-in-progress: false
-    env:
+    env: &infra-environment
       VM_HOST: ${{ secrets.VM_HOST }}
       DOMAIN: ${{ vars.DOMAIN }}
       DEPLOY_ENVIRONMENT: ${{ needs.decide.outputs.environment }}
@@ -985,7 +1001,7 @@ jobs:
       POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       COGNI_NODE_DBS: ${{ secrets.COGNI_NODE_DBS }}
-    steps:
+    steps: &infra-steps
       # Deploy tooling (scripts/ci/deploy-infra.sh + scripts/ci/lib/**) runs at the
       # WORKFLOW ref, not the promoted app sha. The app stays pinned via COGNI_REPO_REF
       # (env above) and images by digest; deploy-infra.sh already pulls infra/compose
@@ -1049,10 +1065,41 @@ jobs:
           loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
           job_status: ${{ job.status }}
 
+  # Fresh node bootstrap and bridge-only callers retain substrate-before-infra.
+  # Reuse the same job body; these mutually exclusive calls own the same lock.
+  deploy-infra-legacy:
+    if: |
+      always() &&
+      inputs.skip_infra != 'true' &&
+      !( inputs.nodes == 'operator' && (inputs.deploy_infra_mode || 'full') == 'full' ) &&
+      needs.decide.outputs.has_targets == 'true' &&
+      needs.promote-k8s.result == 'success' &&
+      (
+        (needs.decide.outputs.has_node_targets == 'true' && needs.node-substrate.result == 'success') ||
+        (needs.decide.outputs.has_node_targets != 'true' && needs.node-substrate.result == 'skipped')
+      )
+    needs: [decide, promote-k8s, node-substrate]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.decide.outputs.environment }}
+    timeout-minutes: 45
+    concurrency:
+      group: deploy-infra-${{ needs.decide.outputs.environment }}
+      cancel-in-progress: false
+    env: *infra-environment
+    steps: *infra-steps
+
   verify-deploy:
     # reconcile-dns ordered before the public /version probe so a newly-added node's
     # host resolves; its failure surfaces on reconcile-dns, the probe stays the gate.
-    needs: [decide, promote-k8s, deploy-infra, reconcile-dns, node-substrate]
+    needs:
+      [
+        decide,
+        promote-k8s,
+        deploy-infra,
+        deploy-infra-legacy,
+        reconcile-dns,
+        node-substrate,
+      ]
     if: |
       always() &&
       needs.promote-k8s.result == 'success' &&
@@ -1060,7 +1107,8 @@ jobs:
         (needs.decide.outputs.has_node_targets == 'true' && needs.node-substrate.result == 'success') ||
         (needs.decide.outputs.has_node_targets != 'true' && needs.node-substrate.result == 'skipped')
       ) &&
-      (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped')
+      (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped') &&
+      (needs.deploy-infra-legacy.result == 'success' || needs.deploy-infra-legacy.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -1213,11 +1261,12 @@ jobs:
 
   verify:
     runs-on: ubuntu-latest
-    needs: [decide, promote-k8s, deploy-infra]
+    needs: [decide, promote-k8s, deploy-infra, deploy-infra-legacy]
     if: |
       always() &&
       needs.promote-k8s.result == 'success' &&
-      (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped')
+      (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped') &&
+      (needs.deploy-infra-legacy.result == 'success' || needs.deploy-infra-legacy.result == 'skipped')
     environment: ${{ needs.decide.outputs.environment }}
     env:
       VM_HOST: ${{ secrets.VM_HOST }}
@@ -1342,7 +1391,16 @@ jobs:
           job_status: ${{ job.status }}
 
   aggregate-preview:
-    needs: [decide, promote-k8s, deploy-infra, verify, verify-deploy, e2e]
+    needs:
+      [
+        decide,
+        promote-k8s,
+        deploy-infra,
+        deploy-infra-legacy,
+        verify,
+        verify-deploy,
+        e2e,
+      ]
     # has_targets guard: skip the bug.0443 loud-fail backstop on a legit no-op
     # (no k8s targets). It still fires when has_targets==true but nothing
     # promoted (admin-merge silent-skip) — that's the case it must catch.
@@ -1372,7 +1430,7 @@ jobs:
           ENV: preview
           CELLS_DIR: ${{ runner.temp }}/cells
           PROMOTE_RESULT: ${{ needs.promote-k8s.result }}
-          DEPLOY_INFRA_RESULT: ${{ needs.deploy-infra.result }}
+          DEPLOY_INFRA_RESULT: ${{ needs.deploy-infra.result == 'skipped' && needs.deploy-infra-legacy.result || needs.deploy-infra.result }}
           VERIFY_RESULT: ${{ needs.verify.result }}
           VERIFY_DEPLOY_RESULT: ${{ needs.verify-deploy.result }}
           E2E_RESULT: ${{ needs.e2e.result }}

@@ -52,6 +52,10 @@ export const NODE_ACCESS_ROLES = [
   "secrets_manager",
   "production_promoter",
   "env_manager",
+  // `admin` → the node-administrator relation (node owner scope, above env_manager).
+  // Grantable so an agent can request it and the owner approves the single tuple; gates
+  // repo-governance verbs that flip GitHub Actions permissions (reconcile-actions, bug.5482).
+  "admin",
 ] as const;
 
 export type NodeAccessRole = (typeof NODE_ACCESS_ROLES)[number];
@@ -92,7 +96,7 @@ export const nodeAccessRequests = pgTable(
     ),
     check(
       "node_access_requests_role_check",
-      sql`${t.role} IN ('developer','secrets_manager','production_promoter','env_manager')`
+      sql`${t.role} IN ('developer','secrets_manager','production_promoter','env_manager','admin')`
     ),
     index("node_access_requests_node_id_idx").on(t.nodeId),
     index("node_access_requests_agent_user_id_idx").on(t.agentUserId),

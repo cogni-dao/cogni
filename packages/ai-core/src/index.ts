@@ -82,6 +82,8 @@ export {
 // Tool runner
 export {
   createToolRunner,
+  type ToolAuthzDecisionRecord,
+  type ToolAuthzPolicy,
   type ToolExecOptions,
   type ToolRunner,
   type ToolRunnerConfig,
@@ -93,6 +95,7 @@ export type {
   EmitAiEvent,
   ParseableSchema,
   RedactionMode,
+  ToolAuthzRequirement,
   ToolCapabilities,
   ToolEffect,
   ToolErrorCode,

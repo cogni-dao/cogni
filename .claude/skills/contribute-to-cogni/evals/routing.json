@@ -1,0 +1,116 @@
+{
+  "skill_name": "contribute-to-cogni",
+  "scope": "Fresh native Claude sessions; contributor and knowledge-router selection, not end-to-end shipping proof.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "cognition-research",
+      "prompt": "how does cognition get into a new agent session?",
+      "expected_output": "Contributor skill does not load via Skill or Read tool.",
+      "files": [],
+      "expectations": [
+        "Contributor skill does not load via Skill or Read tool."
+      ],
+      "contributor": false,
+      "syntropy": null
+    },
+    {
+      "id": 2,
+      "name": "architecture-question",
+      "prompt": "how does a graph actually run in prod?",
+      "expected_output": "Contributor skill does not load via Skill or Read tool.",
+      "files": [],
+      "expectations": [
+        "Contributor skill does not load via Skill or Read tool."
+      ],
+      "contributor": false,
+      "syntropy": null
+    },
+    {
+      "id": 3,
+      "name": "implement-bug",
+      "prompt": "fix the bug where every agent loads the contributor skill at startup",
+      "expected_output": "Contributor skill loads via Skill or Read tool.",
+      "files": [],
+      "expectations": ["Contributor skill loads via Skill or Read tool."],
+      "contributor": true,
+      "syntropy": null
+    },
+    {
+      "id": 4,
+      "name": "resume-pr",
+      "prompt": "can you get this PR ready to merge?",
+      "expected_output": "Contributor skill loads via Skill or Read tool.",
+      "files": [],
+      "expectations": ["Contributor skill loads via Skill or Read tool."],
+      "contributor": true,
+      "syntropy": null
+    },
+    {
+      "id": 5,
+      "name": "knowledge-only",
+      "prompt": "add what we learned about deploy receipts vs actual health to the knowledge hub",
+      "expected_output": "Contributor skill does not load via Skill or Read tool. Knowledge contribution skill loads via Skill or Read tool.",
+      "files": [],
+      "expectations": [
+        "Contributor skill does not load via Skill or Read tool.",
+        "Knowledge contribution skill loads via Skill or Read tool."
+      ],
+      "contributor": false,
+      "syntropy": null,
+      "knowledge": true
+    },
+    {
+      "id": 6,
+      "name": "hub-curation",
+      "prompt": "what in our knowledge hub is stale or duplicated?",
+      "expected_output": "Contributor skill does not load via Skill or Read tool. Knowledge syntropy steward loads via Skill or Read tool.",
+      "files": [],
+      "expectations": [
+        "Contributor skill does not load via Skill or Read tool.",
+        "Knowledge syntropy steward loads via Skill or Read tool."
+      ],
+      "contributor": false,
+      "syntropy": true
+    },
+    {
+      "id": 7,
+      "name": "nonoperator-delivery",
+      "prompt": "pick up the Poly PR and get it ready to ship",
+      "expected_output": "Contributor skill loads via Skill or Read tool.",
+      "files": [],
+      "expectations": ["Contributor skill loads via Skill or Read tool."],
+      "contributor": true,
+      "syntropy": null,
+      "nonoperator": true
+    },
+    {
+      "id": 8,
+      "name": "spec-migration",
+      "prompt": "move docs/spec/knowledge-data-plane.md into the hub",
+      "expected_output": "Read the knowledge axioms first, then the full migration and segmentation guides. Map substantive sections and consumers; do not delete until the replacement is reviewed, merged, and retrievable.",
+      "files": [],
+      "expectations": [
+        "Syntropy steward reads md-to-hub-design before proposing migration edits.",
+        "Reads migrate-markdown-to-hub and segment-markdown-knowledge bodies.",
+        "Preserves source and repairs references until merged-replacement and retrieval gates pass."
+      ],
+      "syntropy": true,
+      "contributor": null
+    },
+    {
+      "id": 9,
+      "name": "skill-migration",
+      "prompt": "thin database-expert and move its reference docs into the hub",
+      "expected_output": "Read the knowledge axioms and skill migration guide. Preserve needed frontmatter, harness discovery and executable resources; move substantive guidance to reviewed hub owners and repair references before removing sources.",
+      "files": [],
+      "expectations": [
+        "Reads md-to-hub-design first and migrate-skill-to-hub plus retire-markdown-sources before cutover.",
+        "Distinguishes a retained local discovery shell from hub skill and guide content.",
+        "Verifies replacements on main and fixes references before removing source knowledge."
+      ],
+      "syntropy": true,
+      "contributor": null
+    }
+  ]
+}

@@ -76,6 +76,7 @@ export type {
   WorkItemAssignee,
   WorkItemCapability,
   WorkItemInfo,
+  WorkItemQueryPage,
   WorkItemQueryParams,
   WorkItemTransitionResult,
 } from "./capabilities";
@@ -87,6 +88,7 @@ export {
   REPO_CITATION_REGEX,
   stubAuthCapability,
   systemClock,
+  WorkItemPatchConflictError,
 } from "./capabilities";
 // Tool catalog
 export {

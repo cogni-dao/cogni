@@ -71,8 +71,18 @@ spec:
               object: no managed resource is produced, so NOTHING IS SPENT, and Crossplane
               surfaces the message on the XR.
             */ -}}
-            {{- if ne $name $spec.nodeId }}
-            {{- fail (printf "XComputeWorkload %s/%s: metadata.name must equal spec.nodeId (%s) - one paid workload per node per environment namespace" $ns $name $spec.nodeId) }}
+            {{- /*
+              ISOLATED_SERVICE_IS_ITS_OWN_LEASE (story.5093). A node may own exactly one more
+              workload per isolated service the operator catalog names. Its name is
+              `<nodeId>-<instance>`, so the idempotence key below (`xcw:<ns>:<name>:<gen>`)
+              is a distinct paid lease while the receipt identity stays the node's nodeId.
+              Absent instance keeps the original one-workload-per-node gate byte-for-byte.
+            */ -}}
+            {{- $instance := dig "instance" "" $spec }}
+            {{- $expectedName := $spec.nodeId }}
+            {{- if ne $instance "" }}{{ $expectedName = printf "%s-%s" $spec.nodeId $instance }}{{ end }}
+            {{- if ne $name $expectedName }}
+            {{- fail (printf "XComputeWorkload %s/%s: metadata.name must equal %s (spec.nodeId %s, spec.instance %q) - one paid workload per node per instance per environment namespace" $ns $name $expectedName $spec.nodeId $instance) }}
             {{- end }}
             {{- if ne (printf "cogni-%s" $env) $ns }}
             {{- fail (printf "XComputeWorkload %s/%s: spec.environment %s must be reconciled in namespace cogni-%s" $ns $name $env $env) }}
@@ -214,6 +224,14 @@ spec:
             {{- $_ := set $e "LITELLM_BASE_URL" (printf "http://%s:4000" $substrate) }}
             {{- $_ := set $e "SCHEDULER_WORKER_HEALTH_URL" (printf "http://%s:30900" $substrate) }}
             {{- end }}
+            {{- end }}
+            {{- /*
+              An isolated-service lease has no node-app profile, but its public service must
+              still prove the exact source SHA on /version. It receives the SHA and nothing
+              else: no substrate topology, no profile secrets, no log-push credentials.
+            */ -}}
+            {{- if and (ne $instance "") (eq $svc.visibility "public") }}
+            {{- $_ := set $e "COGNI_REPO_SHA" $desiredSha }}
             {{- end }}
             {{- /* bindings -> sibling service URLs (legacy bindingEnv). */ -}}
             {{- range $k, $target := $svc.bindings }}
@@ -520,6 +538,21 @@ spec:
             {{- $serving := dig "serving" false $resp }}
             {{- $active := and $found (eq $state "active") }}
             {{- $closed := and $found (eq $state "closed") }}
+            {{- /* HOST_ADMITTED_BY_THE_CANDIDATE (story.5038 K2, 2026-10-16). `serving` is a
+              host-routed probe against the candidate's endpoint presenting Host: <publicHost>.
+              When the candidate and the incumbent sit on the SAME provider and run the SAME
+              SHA, the provider's shared ingress answers that probe from the INCUMBENT's host
+              rule, so `serving` is true for a candidate whose own host rule the provider never
+              admitted. Measured: spawny-boi gen-7 serving=true with endpoints
+              [dkb00v1l...ingress.zencloud.eu] only; DNS moved to it, gen-6 closed, and the
+              public host went nginx 404. A provider lists every host it admitted for a lease
+              among that lease's endpoints (every serving lease in the fleet does; gen-6 listed
+              spawny-boi-test.cogni-testing.org). So a lease proves it can take public traffic
+              only when its OWN endpoints carry the public host. */ -}}
+            {{- $hostAdmitted := eq $publicHost "" }}
+            {{- range $endpoints }}
+            {{- if eq (regexReplaceAll "^[A-Za-z][A-Za-z0-9+.-]*://" . "" | splitList "/" | first | splitList ":" | first | lower | trimSuffix ".") $publicHost }}{{ $hostAdmitted = true }}{{ end }}
+            {{- end }}
 
             {{- /*
               BOUNDED RECOVERY (bug.5287). A settled key is deliberately never re-spent by the
@@ -617,11 +650,13 @@ spec:
               kube-apiserver interruption can still strand the generic guard after the actuator
               has returned the existing allocation, which froze Red production on its prior SHA.
 
-              Release that guard only when FIVE independent facts agree: provider-http itself
+              Release that guard only when FOUR independent facts agree: provider-http itself
               reports the ambiguity; the pending timestamp exists; provider-http's current OR
               cached successful response is a real found:true OBSERVE (not a CREATE/UPDATE echo);
               that observation is active with a non-empty external handle under the exact current
-              cogniKey; and the XR has not served the desired SHA. The cache fallback is necessary
+              cogniKey. A previously served desired SHA is history, not allocation identity: using
+              it to refuse this acknowledgement strands an existing lease after a later response
+              loses serving. The cache fallback is necessary
               because provider-http overwrites status.response with a later transient refusal while
               preserving its last successful observation in status.cache.response. It is used only
               when the current response has no `found` key, and the cached response itself must be
@@ -653,8 +688,7 @@ spec:
             {{- $leaseReceiptState := dig "state" "unknown" $leaseReceiptRes }}
             {{- $leaseReceiptExternalName := dig "externalName" "" $leaseReceiptRes }}
             {{- $leaseReceiptProven := and (ge $leaseReceiptStatus 200) (lt $leaseReceiptStatus 300) $leaseReceiptObserved $leaseReceiptFound (eq $leaseReceiptState "active") (ne $leaseReceiptExternalName "") (eq $responseKey $currentKey) }}
-            {{- $leaseRevisionPending := ne $prevSha $desiredSha }}
-            {{- $recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven $leaseRevisionPending }}
+            {{- $recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven }}
             {{- $unsafeLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $recoverLeaseCreateAmbiguity) }}
             {{- /*
               TARGETED REQUEUE AFTER A LOST PROVIDER EVENT (bug.0001). A transient kube-apiserver
@@ -790,7 +824,7 @@ spec:
             {{- $effectiveDnsTarget := $dnsTarget }}
             {{- if eq $dnsTarget "" }}
             {{- $effectiveDnsTarget = $prevDnsTarget }}
-            {{- else if and (ne $prevDnsTarget "") (ne $dnsTarget $prevDnsTarget) (not (and $active $serving)) }}
+            {{- else if and (ne $prevDnsTarget "") (ne $dnsTarget $prevDnsTarget) (not (and $active $serving $hostAdmitted)) }}
             {{- $effectiveDnsTarget = $prevDnsTarget }}
             {{- end }}
             {{- $dnsRecordType := "CNAME" }}
@@ -840,11 +874,27 @@ spec:
             {{- $dnsRecords := list }}
             {{- if kindIs "slice" $dnsResult }}{{ $dnsRecords = $dnsResult }}{{ else if kindIs "map" $dnsResult }}{{ $dnsRecords = list $dnsResult }}{{ end }}
             {{- $dnsPublished := false }}
+            {{- /* CUTOVER_IS_OBSERVED_AT_THE_CANDIDATE (bug.5322, measured twice on 2026-10-08).
+              $dnsPublished answers "does the live record match what we currently INTEND", and
+              during a cutover the intent ($effectiveDnsTarget) is still the INCUMBENT's target
+              while the latch holds -- so it is true immediately and cannot gate the close. Gating
+              on it closed the incumbent anyway and the public host 404'd for ~7 minutes, twice.
+              $dnsCutoverObserved is the signal the close actually needs: the live record carries
+              the CANDIDATE's own target ($dnsTarget, derived from the candidate child's observed
+              endpoints), so it cannot be true until the edge genuinely moved. Empty $dnsTarget --
+              a candidate with no endpoints yet -- can never satisfy it. It cannot pass trivially
+              on a target the incumbent shares, either: provider ingress hostnames are per lease,
+              and an IPv4-only candidate (bug.5340) is never $serving because the host-routed probe
+              rejects IP-literal endpoints (safe-version-probe.ts). */}}
+            {{- $dnsCutoverObserved := false }}
             {{- range $dnsRecords }}
-            {{- if and (eq (dig "type" "" .) $dnsRecordType) (eq (dig "content" "" . | lower | trimSuffix ".") $effectiveDnsTarget) (dig "proxied" false .) }}
-            {{- $dnsPublished = true }}
+            {{- if and (eq (dig "type" "" .) $dnsRecordType) (dig "proxied" false .) }}
+            {{- $recordContent := dig "content" "" . | lower | trimSuffix "." }}
+            {{- if eq $recordContent $effectiveDnsTarget }}{{ $dnsPublished = true }}{{ end }}
+            {{- if and (ne $dnsTarget "") (eq $recordContent $dnsTarget) }}{{ $dnsCutoverObserved = true }}{{ end }}
             {{- end }}
             {{- end }}
+            {{- $edgeCutoverObserved := or (not $dns) $dnsCutoverObserved }}
 
             {{- /* ---------- composed: the OUTGOING Akash lease, held open ---------- */ -}}
             {{- /* bug.5322. A DELIBERATE COPY of the lease Request below, differing in exactly
@@ -1220,15 +1270,34 @@ spec:
               {{- if ge $leaseRequestGeneration 0 }}
               leaseRequestGeneration: {{ $leaseRequestGeneration }}
               {{- end }}
-              {{- /* THE CUTOVER LATCH (bug.5322). The generation PROVEN serving — advanced only
-                on `active && serving` for the CANDIDATE child, which is the same pair
-                status.serving and the Ready phase are written from. Advancing it is what lets
-                the OVERLAP_BEFORE_CLOSE block above stop retaining the outgoing child on the
-                next reconcile, so the close happens AFTER the cutover rather than before it.
-                Carried forward verbatim on every tick that does not prove serving: this must
-                never silently regress to -1 and un-protect a live lease. Omitted entirely while
-                still -1 so a fleet that has never served renders byte-identically. */}}
-              {{- if and $active $serving }}
+              {{- /* THE CUTOVER LATCH (bug.5322). The generation PROVEN serving AT THE EDGE.
+                Advancing it is what lets the OVERLAP_BEFORE_CLOSE block above stop retaining the
+                outgoing child on the next reconcile, which closes the incumbent's lease -- so it
+                must require proof that THE PUBLIC HOST is pointed at the candidate, not merely
+                that the candidate COULD serve it. Carried forward verbatim on every tick that does
+                not prove the cutover: it must never silently regress to -1 and un-protect a live
+                lease. Omitted entirely while still -1 so a fleet that has never served renders
+                byte-identically.
+                EDGE-OBSERVED, NOT LEASE-OBSERVED (measured twice, 2026-10-08). $serving comes from
+                the host-routed probe, which connects to the candidate's OWN lease endpoint
+                presenting Host: <publicHost>; it passes the moment the provider routes that vhost
+                on that lease, while Cloudflare still points at the incumbent. Advancing on
+                `active && serving` closed gen-1 while the edge still used it: spawny-boi
+                candidate-a went nginx 404 for ~7 minutes (441 bad responses, manual re-flight to
+                recover), and the bug.5188 last-known-good latch then pinned DNS to a CLOSED lease.
+                $dnsPublished cannot gate it either: it compares the live record with current
+                INTENT ($effectiveDnsTarget), which is still the incumbent's target while the DNS
+                latch holds, so it is true at once (the second outage). $edgeCutoverObserved
+                requires the LIVE record (read back from Cloudflare, bug.5152) to carry the
+                CANDIDATE's own target. Sequence: tick N candidate serves -> DNS child writes its
+                target -> tick N+1 the record reads back carrying it -> advance -> tick N+2 the
+                outgoing child stops rendering and closes. A stalled Cloudflare write therefore
+                leaks a retained lease (bounded, visible, costed) instead of dropping traffic.
+                A workload with no spec.dns has no edge to move: its lease endpoint IS its public
+                route, so `active && serving` remains the proof there.
+                $hostAdmitted (story.5038 K2): the candidate's OWN endpoints must carry the public
+                host, or a shared-ingress answer from the incumbent passes as the candidate's. */}}
+              {{- if and $active $serving $hostAdmitted $edgeCutoverObserved }}
               activeLeaseGeneration: {{ $leaseGeneration }}
               {{- else if ge $activeLeaseGeneration 0 }}
               activeLeaseGeneration: {{ $activeLeaseGeneration }}

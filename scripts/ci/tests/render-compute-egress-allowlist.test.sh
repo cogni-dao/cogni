@@ -13,6 +13,8 @@
 #   3. idempotency — re-running produces byte-identical rules;
 #   4. fail-closed — an empty render yields NO compute ACCEPTs while the public
 #      DROP remains, and catalog removal converges on the next run.
+#   5. reboot persistence (story.5084) — the hardener installs a current copy of
+#      itself plus an enabled docker-bound boot replay unit, idempotently.
 # Usage: bash scripts/ci/tests/render-compute-egress-allowlist.test.sh
 
 set -euo pipefail
@@ -395,14 +397,78 @@ echo "8.8.8.8 via 192.0.2.1 dev eth0 src 192.0.2.10 uid 0"
 EOF
 chmod +x "$FAKEBIN/ip"
 
-for tool in apt-get netfilter-persistent flock; do
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKEBIN/$tool"
-  chmod +x "$FAKEBIN/$tool"
-done
+printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKEBIN/flock"
+chmod +x "$FAKEBIN/flock"
+
+export PERSISTENCE_STATE="$TMPROOT/persistence.state"
+export PERSISTENCE_PLUGIN="$TMPROOT/usr/share/netfilter-persistent/plugins.d/15-ip4tables"
+export APT_CALLS="$TMPROOT/apt.calls" PERSISTENCE_CALLS="$TMPROOT/persistence.calls"
+mkdir -p "$(dirname "$PERSISTENCE_PLUGIN")"
+printf 'installed\n' > "$PERSISTENCE_STATE"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$PERSISTENCE_PLUGIN"
+chmod +x "$PERSISTENCE_PLUGIN"
+export FAKE_APT_MODE=locked
+: > "$APT_CALLS"; : > "$PERSISTENCE_CALLS"
+cat > "$FAKEBIN/dpkg-query" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  '-W -f=${Status} iptables-persistent')
+    case "$(cat "$PERSISTENCE_STATE")" in
+      installed) printf 'install ok installed' ;;
+      held) printf 'hold ok installed' ;;
+      broken) printf 'install reinstreq installed' ;;
+      *) exit 1 ;;
+    esac ;;
+  '-L iptables-persistent') printf '%s\n' "$PERSISTENCE_PLUGIN" ;;
+  *) exit 9 ;;
+esac
+EOF
+cat > "$FAKEBIN/apt-get" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$APT_CALLS"
+[ "$*" = '-o DPkg::Lock::Timeout=60 install -y iptables-persistent' ] || exit 9
+[ "$DEBIAN_FRONTEND" = noninteractive ] || exit 9
+case "$FAKE_APT_MODE" in
+  locked) echo 'fixture: unattended-upgrades holds frontend lock' >&2; exit 100 ;;
+  incomplete) exit 0 ;;
+  install)
+    printf 'installed\n' > "$PERSISTENCE_STATE"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$PERSISTENCE_PLUGIN"
+    chmod +x "$PERSISTENCE_PLUGIN" ;;
+  *) exit 9 ;;
+esac
+EOF
+cat > "$FAKEBIN/netfilter-persistent" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$*" = save ] || exit 9
+printf 'save\n' >> "$PERSISTENCE_CALLS"
+EOF
+chmod +x "$FAKEBIN/dpkg-query" "$FAKEBIN/apt-get" "$FAKEBIN/netfilter-persistent"
 
 export ALLOWLIST_FILE="$TMPROOT/etc/compute-egress-allowlist"
 export STAGED_ALLOWLIST="$TMPROOT/staged-allowlist"
 export HARDEN_LOCK_FILE="$TMPROOT/harden.lock"
+export HARDEN_BOOT_SCRIPT="$TMPROOT/usr/local/sbin/cogni-harden-docker-public-ports.sh"
+export HARDEN_BOOT_UNIT="$TMPROOT/etc/systemd/system/cogni-harden-docker-public-ports.service"
+export SYSTEMCTL_CALLS="$TMPROOT/systemctl.calls" SYSTEMCTL_ENABLED="$TMPROOT/systemctl.enabled"
+: > "$SYSTEMCTL_CALLS"
+cat > "$FAKEBIN/systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$SYSTEMCTL_CALLS"
+case "$*" in
+  daemon-reload) ;;
+  'reenable --quiet cogni-harden-docker-public-ports.service'|'enable --quiet cogni-harden-docker-public-ports.service')
+    : > "$SYSTEMCTL_ENABLED" ;;
+  'is-enabled --quiet cogni-harden-docker-public-ports.service')
+    [ -f "$SYSTEMCTL_ENABLED" ] ;;
+  *) exit 9 ;;
+esac
+EOF
+chmod +x "$FAKEBIN/systemctl"
 
 run_harden() {
   PATH="$FAKEBIN:$PATH" bash "$HARDEN" > "$TMPROOT/harden.log" 2>&1 \
@@ -440,6 +506,32 @@ run_harden
 PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/rules.2"
 diff -u "$RULES_1" "$TMPROOT/rules.2" || fail "re-run must produce identical rules"
 ok "harden re-run is idempotent (byte-identical rules)"
+
+# Reboot persistence (story.5084): the hardener installs a current copy of
+# itself plus a docker-bound oneshot unit, enabled but never started inline.
+cmp -s "$HARDEN" "$HARDEN_BOOT_SCRIPT" || fail "boot replay script is not the current hardener"
+for directive in 'Requires=docker.service' 'After=docker.service network-online.target' \
+  'PartOf=docker.service' 'Type=oneshot' 'PrivateTmp=yes' \
+  "ExecStart=/bin/bash $HARDEN_BOOT_SCRIPT" 'WantedBy=multi-user.target docker.service'; do
+  grep -Fxq -- "$directive" "$HARDEN_BOOT_UNIT" || fail "boot replay unit missing: $directive"
+done
+[ "$(grep -c '^daemon-reload$' "$SYSTEMCTL_CALLS")" = 1 ] \
+  || { cat "$SYSTEMCTL_CALLS" >&2; fail "unit must be written and reloaded exactly once across runs"; }
+grep -Fxq 'reenable --quiet cogni-harden-docker-public-ports.service' "$SYSTEMCTL_CALLS" \
+  || fail "boot replay unit was not enabled"
+if grep -Eq '^(start|restart)( |$)|--now' "$SYSTEMCTL_CALLS"; then
+  fail "hardener must never start its own unit (writer-lock re-entry)"
+fi
+ok "hardener installs and enables its docker-bound boot replay unit idempotently"
+
+# The boot replay runs the installed copy with only the installed allowlist.
+PATH="$FAKEBIN:$PATH" STAGED_ALLOWLIST="$TMPROOT/absent-under-private-tmp" \
+  bash "$HARDEN_BOOT_SCRIPT" > "$TMPROOT/harden.boot.log" 2>&1 \
+  || { cat "$TMPROOT/harden.boot.log" >&2; fail "boot replay exited nonzero"; }
+PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/rules.boot"
+diff -u "$RULES_1" "$TMPROOT/rules.boot" || fail "boot replay must restore the same rules"
+[ "$(grep -c '^daemon-reload$' "$SYSTEMCTL_CALLS")" = 1 ] || fail "boot replay rewrote its own unit"
+ok "boot replay restores identical rules without rewriting its unit"
 
 # Catalog removal: stage the (empty) production render over the same VM state.
 cp "$OUT_PROD" "$STAGED_ALLOWLIST"
@@ -620,5 +712,76 @@ run_harden
 grep -q 'cogni-harden-internal-ports:old' "$IPT_STATE" && fail "large-chain reconciliation retained stale managed rules"
 grep -q 'cogni-harden-internal-ports:drop-public' "$IPT_STATE" || fail "large-chain reconciliation lost public DROP"
 ok "large-chain reconciliation drains iptables output and preserves unmanaged fences"
+
+# The healthy dependency must never touch apt, even while its frontend is locked.
+[ ! -s "$APT_CALLS" ] || fail "healthy installed persistence invoked apt"
+[ -s "$PERSISTENCE_CALLS" ] || fail "healthy path skipped persistence save"
+grep -q 'persistence_dependency=healthy apt=skipped' "$TMPROOT/harden.log" || fail "healthy skip branch not observable"
+ok "healthy package, persistence command and executable package-owned plugin skip apt entirely"
+
+printf 'held\n' > "$PERSISTENCE_STATE"
+run_harden
+[ ! -s "$APT_CALLS" ] || fail "healthy held package invoked apt"
+grep -q 'persistence_dependency=healthy apt=skipped' "$TMPROOT/harden.log" || fail "held healthy path not observed"
+ok "healthy held persistence stays on its installed version without any apt operation"
+
+printf 'broken\n' > "$PERSISTENCE_STATE"
+FAKE_APT_MODE=incomplete; export FAKE_APT_MODE
+: > "$PERSISTENCE_CALLS"
+if PATH="$FAKEBIN:$PATH" bash "$HARDEN" > "$TMPROOT/broken-package.log" 2>&1; then
+  fail "reinstreq package was treated as healthy"
+fi
+[ ! -s "$PERSISTENCE_CALLS" ] || fail "broken package claimed persistence save"
+grep -q 'reason=install_postcheck_failed' "$TMPROOT/broken-package.log" || fail "broken package failed for wrong reason"
+ok "an installed package requiring reinstallation cannot pass the healthy predicate"
+
+printf 'missing\n' > "$PERSISTENCE_STATE"
+rm "$PERSISTENCE_PLUGIN"
+FAKE_APT_MODE=install; export FAKE_APT_MODE
+: > "$APT_CALLS"; : > "$PERSISTENCE_CALLS"
+run_harden
+[ "$(wc -l < "$APT_CALLS" | tr -d ' ')" = 1 ] || fail "missing persistence must install once"
+[ "$(cat "$PERSISTENCE_CALLS")" = save ] || fail "installed persistence not saved"
+grep -q 'persistence_dependency=healthy apt=installed' "$TMPROOT/harden.log" || fail "verified install branch not observable"
+ok "missing dependency installs with a finite native lock wait, verifies and saves"
+
+# A nominally installed package with a non-executable/missing plugin is unhealthy.
+# A successful apt no-op does not prove that a broken installation was repaired.
+chmod -x "$PERSISTENCE_PLUGIN"
+FAKE_APT_MODE=incomplete; export FAKE_APT_MODE
+: > "$APT_CALLS"; : > "$PERSISTENCE_CALLS"
+if PATH="$FAKEBIN:$PATH" bash "$HARDEN" > "$TMPROOT/broken-persistence.log" 2>&1; then
+  fail "broken persistence accepted a successful apt no-op"
+fi
+[ "$(wc -l < "$APT_CALLS" | tr -d ' ')" = 1 ] || fail "broken plugin bypassed dependency install"
+[ ! -s "$PERSISTENCE_CALLS" ] || fail "broken persistence claimed save"
+grep -q 'reason=install_postcheck_failed' "$TMPROOT/broken-persistence.log" || fail "postcheck failure not observable"
+grep -q 'cogni-harden-internal-ports:drop-public' "$IPT_STATE" || fail "postcheck failure lost public DROP"
+ok "broken installed persistence fails closed after install/postcheck"
+
+rm "$PERSISTENCE_PLUGIN"
+mkdir "$PERSISTENCE_PLUGIN"
+: > "$PERSISTENCE_CALLS"
+if PATH="$FAKEBIN:$PATH" bash "$HARDEN" > "$TMPROOT/directory-plugin.log" 2>&1; then
+  fail "an executable directory was accepted as the persistence plugin"
+fi
+[ ! -s "$PERSISTENCE_CALLS" ] || fail "directory plugin claimed save"
+grep -q 'reason=install_postcheck_failed' "$TMPROOT/directory-plugin.log" || fail "directory plugin failed for wrong reason"
+rmdir "$PERSISTENCE_PLUGIN"
+ok "an executable directory cannot masquerade as the IPv4 persistence plugin"
+
+printf 'missing\n' > "$PERSISTENCE_STATE"
+FAKE_APT_MODE=locked; export FAKE_APT_MODE
+: > "$APT_CALLS"; : > "$PERSISTENCE_CALLS"
+status=0
+PATH="$FAKEBIN:$PATH" bash "$HARDEN" > "$TMPROOT/locked-persistence.log" 2>&1 || status=$?
+[ "$status" = 100 ] || fail "native apt lock failure not propagated"
+[ "$(wc -l < "$APT_CALLS" | tr -d ' ')" = 1 ] || fail "apt lock failure retried"
+grep -Fxq -- '-o DPkg::Lock::Timeout=60 install -y iptables-persistent' "$APT_CALLS" || fail "apt lock wait not bounded"
+[ ! -s "$PERSISTENCE_CALLS" ] || fail "lock failure claimed persistence save"
+grep -q 'reason=install_failed native_rc=100' "$TMPROOT/locked-persistence.log" || fail "native failure not observable"
+if grep -q '\[harden\] done' "$TMPROOT/locked-persistence.log"; then fail "lock failure claimed hardener completion"; fi
+grep -q 'cogni-harden-internal-ports:drop-public' "$IPT_STATE" || fail "lock failure lost public DROP"
+ok "missing dependency propagates apt lock failure without retry or false completion"
 
 echo "PASS: all $PASS assertions"

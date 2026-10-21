@@ -56,7 +56,7 @@ const SKILL_WITH_TRIGGER = {
 describe("bundle growth — large indexes render whole, no serve-side ceiling (story.5070)", () => {
   // The hub is designed to accumulate: every new skill/guide/playbook adds a row.
   // Delivery is now uncapped on both runtimes (Codex raw stdout with spill off;
-  // Claude Code structured additionalContext), so the producer no longer enforces
+  // Claude Code native cache import), so the producer no longer enforces
   // a byte ceiling. The former 16 KB cap (bug.5284) would have rejected this shape
   // at the source and 500'd /api/v1/cognition; growth must now render whole.
   function indexOf(rows: number, triggerLen: number) {
@@ -175,11 +175,8 @@ describe("renderBundleMarkdown", () => {
     expect(markdown).toContain("- Recall before write, refine over extend.");
     // No second-recall footer: the bootstrap IS the orientation.
     expect(markdown).not.toContain("for the full context");
-    // INVARIANT FLOOR (story.5070): the code-owned invariants + watch-gate are
-    // the always-present contract spine. They render ALONGSIDE a served
-    // orientation (the node map), never suppressed by it — reversing the earlier
-    // ONE_VOICE suppression (task.5155) whose defect was that a served
-    // orientation dropped the contract.
+    // Tooling invariants and watch commands remain available alongside the
+    // full hub-owned orientation; they cannot replace a complete contract.
     expect(markdown).toContain("## Tooling invariants");
     expect(markdown).toContain("<watch-gate");
     expect(markdown).toContain(
