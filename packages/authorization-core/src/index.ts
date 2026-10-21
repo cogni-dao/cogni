@@ -226,6 +226,25 @@ export interface BillingAccountGrantAdministrationPort {
   ): Promise<AuthzWriteDecision>;
 }
 
+export interface BillingAccountOwnerBootstrapInput {
+  /** Human owner asserted from the target node's authoritative account row. */
+  readonly ownerUserId: string;
+  /** Exact target-node billing account created for that owner. */
+  readonly billingAccountId: string;
+  readonly requestId?: string;
+}
+
+/**
+ * One-time semantic owner projection. The target node owns the account fact;
+ * OpenFGA owns the resulting permission. No caller can express raw tuples or a
+ * foreign node namespace through this boundary.
+ */
+export interface BillingAccountOwnerBootstrapPort {
+  bootstrapBillingAccountOwner(
+    input: BillingAccountOwnerBootstrapInput
+  ): Promise<AuthzWriteDecision>;
+}
+
 export function authzToolResource(toolId: string): string {
   return `tool:${toolId}`;
 }

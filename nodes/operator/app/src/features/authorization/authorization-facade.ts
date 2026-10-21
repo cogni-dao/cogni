@@ -23,6 +23,7 @@ import {
 } from "@cogni/authorization-core";
 
 import type {
+  AuthorizationFacadeBillingAccountOwnerInput,
   AuthorizationFacadeCheckInput,
   AuthorizationFacadeGrantInput,
 } from "@/contracts/authorization-facade.v1.contract";
@@ -238,4 +239,27 @@ export async function mutateNodeBillingAccountAccess(
     : deps.authorization.deleteRelations([tuple], {
         confirm: "higher_consistency",
       });
+}
+
+/**
+ * Project the initial account owner asserted by the authenticated target node.
+ * This intentionally performs no can_grant check: the owner tuple is the
+ * bootstrap root that creates can_grant. The facade credential supplies the
+ * node namespace, and the semantic contract cannot express any other relation.
+ */
+export async function bootstrapNodeBillingAccountOwner(
+  deps: AuthorizationFacadePolicyDeps,
+  nodeId: string,
+  input: AuthorizationFacadeBillingAccountOwnerInput
+): Promise<AuthzWriteDecision> {
+  return deps.authorization.writeRelations(
+    [
+      {
+        user: authzNodeUserPrincipal(nodeId, input.ownerUserId),
+        relation: "owner",
+        object: authzBillingAccountResource(nodeId, input.billingAccountId),
+      },
+    ],
+    { confirm: "higher_consistency" }
+  );
 }

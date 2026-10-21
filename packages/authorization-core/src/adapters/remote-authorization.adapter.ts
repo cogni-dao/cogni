@@ -18,6 +18,8 @@ import type {
   AuthzWriteDecision,
   BillingAccountGrantAdministrationPort,
   BillingAccountGrantInput,
+  BillingAccountOwnerBootstrapInput,
+  BillingAccountOwnerBootstrapPort,
   BillingAccountRevokeInput,
 } from "../index";
 
@@ -207,7 +209,10 @@ function parsedWriteDecision(value: unknown): AuthzWriteDecision | undefined {
 }
 
 export class RemoteAuthorizationAdapter
-  implements AuthorizationCheckPort, BillingAccountGrantAdministrationPort
+  implements
+    AuthorizationCheckPort,
+    BillingAccountGrantAdministrationPort,
+    BillingAccountOwnerBootstrapPort
 {
   private readonly baseUrl: string;
   private readonly serviceToken: string;
@@ -378,6 +383,44 @@ export class RemoteAuthorizationAdapter
       );
     } catch {
       return unavailable("execution authorization transport unavailable");
+    }
+  }
+
+  async bootstrapBillingAccountOwner(
+    input: BillingAccountOwnerBootstrapInput
+  ): Promise<AuthzWriteDecision> {
+    if (
+      !LOCAL_ID_PATTERN.test(input.ownerUserId) ||
+      !LOCAL_ID_PATTERN.test(input.billingAccountId)
+    ) {
+      return writeDenied("invalid billing-account owner bootstrap request");
+    }
+
+    try {
+      const response = await this.post(
+        "/api/v1/authorization/billing-account-owner",
+        input
+      );
+      if (response.status === 403) {
+        return writeDenied("operator authorization facade denied bootstrap");
+      }
+      if (!response.ok) {
+        return writeUnavailable(
+          `operator authorization facade rejected bootstrap (status ${response.status})`
+        );
+      }
+      return (
+        parsedWriteDecision(await response.json()) ??
+        writeUnavailable(
+          "operator authorization facade returned an invalid bootstrap decision"
+        )
+      );
+    } catch (error) {
+      return writeUnavailable(
+        error instanceof Error
+          ? error.message
+          : "authorization facade unavailable"
+      );
     }
   }
 

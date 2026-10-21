@@ -15,11 +15,13 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  authorizationFacadeBillingAccountOwnerOperation,
   authorizationFacadeCheckOperation,
   authorizationFacadeGrantOperation,
 } from "@/contracts/authorization-facade.v1.contract";
 
 import {
+  bootstrapNodeBillingAccountOwner,
   checkNodeBillingAccountAccess,
   mutateNodeBillingAccountAccess,
 } from "./authorization-facade";
@@ -399,5 +401,65 @@ it("remote execution rejects foreign scopes and uses the existing strict semanti
     expect(await client.check(invalid)).toMatchObject({ code: "authz_denied" });
   expect(transport).not.toHaveBeenCalled();
   expect(await client.check(params)).toMatchObject({ decision: "allow" });
+  expect(transport).toHaveBeenCalledOnce();
+});
+
+it("projects only the authenticated node's authoritative owner before semantic grants", async () => {
+  const authorization = authorizationWith(async () => deny());
+  await bootstrapNodeBillingAccountOwner({ authorization }, NODE_ID, {
+    ownerUserId: GRANTOR_ID,
+    billingAccountId: ACCOUNT_ID,
+  });
+  expect(authorization.check).not.toHaveBeenCalled();
+  expect(authorization.writeRelations).toHaveBeenCalledWith(
+    [
+      {
+        user: authzNodeUserPrincipal(NODE_ID, GRANTOR_ID),
+        relation: "owner",
+        object: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
+      },
+    ],
+    { confirm: "higher_consistency" }
+  );
+  expect(
+    authorizationFacadeBillingAccountOwnerOperation.input.safeParse({
+      ownerUserId: GRANTOR_ID,
+      billingAccountId: ACCOUNT_ID,
+      nodeId: OTHER_NODE_ID,
+    }).success
+  ).toBe(false);
+});
+
+it("owner projection uses the node-authenticated semantic endpoint and refuses namespace injection", async () => {
+  const transport = vi.fn<typeof fetch>(async (_url, init) => {
+    expect(String(_url)).toBe(
+      "https://operator.example/api/v1/authorization/billing-account-owner"
+    );
+    expect(JSON.parse(String(init?.body))).toEqual({
+      ownerUserId: GRANTOR_ID,
+      billingAccountId: ACCOUNT_ID,
+    });
+    return new Response(
+      JSON.stringify({ decision: "success", code: "authz_write_success" })
+    );
+  });
+  const client = new RemoteAuthorizationAdapter({
+    baseUrl: "https://operator.example",
+    serviceToken: `cogni_naz_sk_v2_candidate-a_${NODE_ID}_${"a".repeat(64)}`,
+    testOnlyFetchImpl: transport,
+  });
+  expect(
+    await client.bootstrapBillingAccountOwner({
+      ownerUserId: `${OTHER_NODE_ID}/${GRANTOR_ID}`,
+      billingAccountId: ACCOUNT_ID,
+    })
+  ).toMatchObject({ code: "authz_write_denied" });
+  expect(transport).not.toHaveBeenCalled();
+  expect(
+    await client.bootstrapBillingAccountOwner({
+      ownerUserId: GRANTOR_ID,
+      billingAccountId: ACCOUNT_ID,
+    })
+  ).toMatchObject({ decision: "success" });
   expect(transport).toHaveBeenCalledOnce();
 });
