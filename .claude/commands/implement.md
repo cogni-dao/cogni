@@ -98,9 +98,13 @@ Never force through a blocker with a hack. A clean pause is better than a dirty 
 
 When the full todo list is complete and the checkpoint checks pass, run one docs pass over `git diff --name-status origin/main...HEAD`:
 
+- **Coherence**: every change serves this work item. Split unrelated changes into their own branch before opening the PR.
+- **Validation use case**: name the concrete action the change enables or protects: its exercise (route, graph, tool or deployment lever) and its observability signal (`VALIDATION_REQUIRED`). The PR Evidence and `/validate-candidate` use it.
+
 - **File headers**: update the top-of-file TSDoc header of every changed file whose behavior, inputs/outputs or side-effects changed (templates in `docs/templates/header_*_template.ts`).
 - **AGENTS.md**: update a directory's AGENTS.md only when its public exports, routes, env keys, ports or boundaries changed. Edit existing sections only; keep it ≤150 lines.
-- **Specs**: for each spec in `spec_refs`, make contracts, invariants and acceptance checks match the code. No roadmap content.
+- **Specs**: for each spec in `spec_refs`, make contracts, invariants and acceptance checks match the code. Advance `spec_state` when warranted, and update `verified:`. No roadmap content. For CI/CD work, check whether the change crosses the app-flight vs infra-provisioning boundary.
+- **Writing**: present tense; no "new", "updated" or "final"; delete dead or duplicated lines.
 
 Then:
 
