@@ -72,7 +72,16 @@ export async function checkNodeBillingAccountAccess(
           input.billingAccountId,
           input.toolId
         ),
-        context: { tenantId: input.billingAccountId, nodeId, ...input.context },
+        context: {
+          tenantId: input.billingAccountId,
+          nodeId,
+          ...(input.context?.runId !== undefined
+            ? { runId: input.context.runId }
+            : {}),
+          ...(input.context?.toolCallId !== undefined
+            ? { toolCallId: input.context.toolCallId }
+            : {}),
+        },
       },
       { consistency: "higher_consistency" }
     );
