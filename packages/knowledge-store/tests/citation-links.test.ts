@@ -21,27 +21,48 @@ describe("direct citation pages", () => {
     const store = new FakeKnowledgeStoreAdapter();
     await store.registerDomain({ id: "meta", name: "Meta" });
     for (let i = 0; i < 14; i++) {
-      await store.addKnowledge({
-        id: `atom-${String(i).padStart(2, "0")}`,
-        domain: "meta",
-        title: `Atom ${i}`,
-        content: "Large body ".repeat(1000),
-        sourceType: "human",
-      });
+      await store.withWrite(
+        {
+          operationId: `fixture:citation-links:24:${i}`,
+          message: "addKnowledge fixture",
+        },
+        (write) =>
+          write.addKnowledge({
+            id: `atom-${String(i).padStart(2, "0")}`,
+            domain: "meta",
+            title: `Atom ${i}`,
+            content: "Large body ".repeat(1000),
+            sourceType: "human",
+          })
+      );
     }
     for (let i = 1; i <= 12; i++) {
       const neighbor = `atom-${String(i).padStart(2, "0")}`;
-      await store.addCitation({
-        citingId: i % 2 ? "atom-00" : neighbor,
-        citedId: i % 2 ? neighbor : "atom-00",
-        citationType: "supports",
-      });
+      await store.withWrite(
+        {
+          operationId: `fixture:citation-links:34:${i}`,
+          message: "addCitation fixture",
+        },
+        (write) =>
+          write.addCitation({
+            citingId: i % 2 ? "atom-00" : neighbor,
+            citedId: i % 2 ? neighbor : "atom-00",
+            citationType: "supports",
+          })
+      );
     }
-    await store.addCitation({
-      citingId: "atom-01",
-      citedId: "atom-13",
-      citationType: "supports",
-    });
+    await store.withWrite(
+      {
+        operationId: "fixture:citation-links:40",
+        message: "addCitation fixture",
+      },
+      (write) =>
+        write.addCitation({
+          citingId: "atom-01",
+          citedId: "atom-13",
+          citationType: "supports",
+        })
+    );
     const getBody = vi.spyOn(store, "getKnowledge");
     const ids: string[] = [];
     let cursor: string | undefined;

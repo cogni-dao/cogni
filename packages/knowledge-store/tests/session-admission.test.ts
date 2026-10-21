@@ -110,7 +110,7 @@ const LOCK_RESPONSE = Buffer.concat([
 ]);
 
 /** Wire-only identity fixture; real native identity is proved in shared CI. */
-function textResponse(column: string, value: string): Buffer {
+function textResponse(column: string, value: string, oid = 25): Buffer {
   return Buffer.concat([
     PARSE_COMPLETE,
     BIND_COMPLETE,
@@ -121,7 +121,7 @@ function textResponse(column: string, value: string): Buffer {
         Buffer.from(`${column}\0`),
         int32(0),
         int16(0),
-        int32(25),
+        int32(oid),
         int16(-1),
         int32(-1),
         int16(0),
@@ -139,6 +139,8 @@ function textResponse(column: string, value: string): Buffer {
     READY_IDLE,
   ]);
 }
+
+let mergeStatus: "clean" | "missing" | "malformed" | "merging" = "clean";
 
 function startFakePostgres(): Promise<{
   server: net.Server;
@@ -164,10 +166,23 @@ function startFakePostgres(): Promise<{
         if (buf.includes(0x53) || buf.includes(0x51)) {
           if (buf.includes("dolt_writer_database")) {
             socket.write(textResponse("dolt_writer_database", "knowledge"));
+          } else if (buf.includes("dolt.merge_status")) {
+            socket.write(
+              mergeStatus === "missing"
+                ? QUERY_RESPONSE
+                : textResponse(
+                    "is_merging",
+                    mergeStatus === "clean"
+                      ? "false"
+                      : mergeStatus === "merging"
+                        ? "true"
+                        : "invalid"
+                  )
+            );
           } else if (buf.includes("branch_name")) {
             socket.write(textResponse("branch_name", "main"));
           } else if (buf.includes("pg_advisory_unlock")) {
-            socket.write(textResponse("pg_advisory_unlock", "t"));
+            socket.write(textResponse("pg_advisory_unlock", "t", 16));
           } else {
             socket.write(
               buf.includes("pg_try_advisory_lock")
@@ -318,6 +333,35 @@ describe("Dolt session admission control (bug.5386, bug.5391)", () => {
       expect(peak).toBe(1);
       expect(order).toEqual([0, 1, 2, 3, 4, 5]);
     } finally {
+      void sql.end({ timeout: 0 }).catch(() => undefined);
+    }
+  });
+
+  it.each([
+    "missing",
+    "malformed",
+    "merging",
+  ] as const)("retains %s merge-state capacity without another callback or pool replacement", async (state) => {
+    const sql = client(1);
+    const recreate = vi.fn(() => sql);
+    const runner = new DoltBranchSessionRunner(sql, {
+      recreateClient: recreate,
+    });
+    mergeStatus = state;
+    try {
+      await expect(
+        runner.run("unknown-cleanup", async (conn) => {
+          await conn.unsafe("SELECT 1");
+        })
+      ).resolves.toBeUndefined();
+      const next = vi.fn(async () => "unsafe");
+      await expect(runner.run("after-unknown", next)).rejects.toBeInstanceOf(
+        KnowledgeBusyError
+      );
+      expect(next).not.toHaveBeenCalled();
+      expect(recreate).not.toHaveBeenCalled();
+    } finally {
+      mergeStatus = "clean";
       void sql.end({ timeout: 0 }).catch(() => undefined);
     }
   });
