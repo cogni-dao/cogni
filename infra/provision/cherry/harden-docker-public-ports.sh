@@ -117,7 +117,35 @@ fi
 
 iptables -A DOCKER-USER -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$INTERNAL_PORTS" -m comment --comment "$TAG:drop-public" -j DROP
 
-DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent >/dev/null
+# Day-2 flights must not contend with unattended-upgrades when persistence is
+# already installed. Package state alone is insufficient: save can succeed with
+# no IPv4 plugin, leaving the installed firewall unpersisted across a reboot.
+persistence_ready() {
+  local plugin
+  [ "$(dpkg-query -W -f='${Status}' iptables-persistent 2>/dev/null)" = 'install ok installed' ] || return 1
+  command -v netfilter-persistent >/dev/null 2>&1 || return 1
+  plugin="$(dpkg-query -L iptables-persistent 2>/dev/null | awk '!found && /\/netfilter-persistent\/plugins[.]d\/15-ip4tables$/ {print; found=1}')" || return 1
+  [ -n "$plugin" ] && [ -f "$plugin" ] && [ -x "$plugin" ]
+}
+
+if persistence_ready; then
+  echo '[harden] persistence_dependency=healthy apt=skipped'
+else
+  # Ubuntu 22.04 apt 2.4 supports this native dpkg/frontend lock wait. This
+  # bounds lock acquisition only, not downloads or the entire apt transaction.
+  echo '[harden] persistence_dependency=unavailable apt=install lock_wait_seconds=60'
+  if DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 install -y iptables-persistent >/dev/null; then
+    if ! persistence_ready; then
+      echo '[harden] ERROR: persistence_dependency=unavailable reason=install_postcheck_failed' >&2
+      exit 1
+    fi
+    echo '[harden] persistence_dependency=healthy apt=installed'
+  else
+    status=$?
+    echo "[harden] ERROR: persistence_dependency=unavailable reason=install_failed native_rc=$status" >&2
+    exit "$status"
+  fi
+fi
 netfilter-persistent save >/dev/null
 
 echo "[harden] done. DOCKER-USER rules:"
