@@ -37,3 +37,17 @@ curl -s -H "Authorization: Bearer ${CHERRY_AUTH_TOKEN}" "https://api.cherryserve
 | `B1-2-2gb-40s-shared`  | 2 vCore, 2GB, 40GB SSD  | €0.03  |
 | `B1-4-4gb-80s-shared`  | 4 vCore, 4GB, 80GB SSD  | -      |
 | `B1-6-6gb-100s-shared` | 6 vCore, 6GB, 100GB SSD | -      |
+
+6GB is the largest Cloud VPS. In-place `Upgrade Plan` only works inside the VPS line;
+the API rejects VPS → VDS (`400 Plan is not available to be upgraded to`), so moving
+to a VDS is a migration (story.5084).
+
+## Cloud VDS Plans (dedicated cores, NVMe)
+
+| Slug                  | Specs                         | USD/mo |
+| --------------------- | ----------------------------- | ------ |
+| `G1-4-16gb-100nv-ded` | 4 vCore, 16GB, 100GB NVMe     | $49    |
+| `G1-8-32gb-200nv-ded` | 8 vCore, 32GB, 200GB NVMe     | $89    |
+
+`production` provisions `G1-4-16gb-100nv-ded` (scripts/setup/provision-env-vm.sh); other envs
+stay on `B1-6-6gb-100s-shared`. Override one run with `VM_PLAN=<slug>`.
