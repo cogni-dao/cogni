@@ -11,7 +11,7 @@
  * @public
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -137,6 +137,20 @@ else:
         },
       });
     try {
+      // Own the admitted candidate identity instead of borrowing this checkout's
+      // sovereign roster, which may correctly keep node-template on k3s.
+      const catalogDir = path.join(dir, "infra/catalog");
+      mkdirSync(catalogDir, { recursive: true });
+      writeFileSync(
+        path.join(catalogDir, "node-template.yaml"),
+        JSON.stringify({
+          name: "node-template",
+          node_id: "11111111-2222-4333-8444-555555555555",
+          source_sha: "a".repeat(40),
+          envs: ["candidate-a"],
+          deployment_provider: { "candidate-a": "akash" },
+        })
+      );
       writeFileSync(
         path.join(dir, "ssh"),
         "#!/bin/sh\necho PRIVATE_SSH_STDERR_SENTINEL >&2\nexit 17\n",
@@ -160,7 +174,7 @@ else:
               GITHUB_REPOSITORY: "cogni-dao/cogni",
               NODE: "node-template",
               CONTROL_ENV: "production",
-              APP_SOURCE_ROOT: root,
+              APP_SOURCE_ROOT: dir,
               CI_SOURCE_ROOT: root,
             },
           }
