@@ -88,7 +88,7 @@ If you encounter a blocker — something in the plan that doesn't work, a design
 
 1. **Try to resolve it** — find the solution most aligned with the task, specs, and current architecture. Check AGENTS.md files, related specs, and existing patterns.
 2. **If you find a good solution** — implement it and note what you did and why in the work item.
-3. **If you can't find a highly-aligned solution** — stop. `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"blocked","summary":"<what is blocked, what you tried, remaining options>"}}`, and ask for the one decision you need.
+3. **If you can't find a highly-aligned solution** — stop. `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"blocked","blockedBy":"<what blocks it>","summary":"<what you tried, remaining options>"}}`, and ask for the one decision you need.
 
 Never force through a blocker with a hack. A clean pause is better than a dirty workaround.
 

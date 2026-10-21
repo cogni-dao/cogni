@@ -98,7 +98,7 @@ The design is durable knowledge → it lives in the hub, not the item or a new `
 1. **Agent-facing** — a text entry (`entryType` ∈ `finding`/`conclusion`/`rule`): approach, reuse/OSS, rejected alternatives, code-review invariants, file pointers. Atomic, "use when" framed.
 2. **Human-facing** — a visual (`entryType: html` via [`dolt-human-visuals`](.claude/skills/dolt-human-visuals/SKILL.md)): the same decision as a diagram/card/table for the approver.
 
-Then `PATCH /api/v1/work/items/<id>` → `{"set":{"status":"needs_implement"}}` and `cite` both entries from the item (`citationType: "tracks"`).
+`cite` both entries from the item (`citationType: "tracks"`). The item stays `needs_design`: only an APPROVE from `/review-design`, run by a fresh agent, moves it to `needs_implement`.
 
 The item keeps only its contract: a **story** = the e2e behavior supported; a **task/bug** = a todo + pointers + done-when. A `story` is an intake record — set it `done` and spawn `task.*` that cite the design. A contract change (not design) updates the owning `docs/spec/*.md` (Phase 5).
 
@@ -126,9 +126,9 @@ The item keeps only its contract: a **story** = the e2e behavior supported; a **
 3. Commit any repo changes (spec contracts, decomposed items) — the design is in the hub, not this diff.
 4. Push to remote.
 5. Report what was designed and the next command:
-   - **For stories**: story is `done`; created task(s) at `needs_implement` → `/implement`
+   - **For stories**: story is `done`; created task(s) at `needs_design` → `/review-design` by a fresh agent
    - **For projects**: `/task` (to start decomposition)
-   - **For tasks/bugs**: item is now at `needs_implement` → `/implement`
+   - **For tasks/bugs**: item stays at `needs_design` → `/review-design` by a fresh agent
 
 ---
 

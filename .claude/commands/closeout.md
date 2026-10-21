@@ -85,7 +85,7 @@ For each spec in the work item's `spec_refs` (skip if none):
 1. Run `pnpm check:docs` and fix any errors until clean.
    - Validation prose must name the actual route, graph, tool, or deployment lever. Do not settle for generic "chat works" or "API responds" language when the work item is about authorization, deployment, billing, or another specific protected action.
    - Candidate validation must prove the deployed pod, not just service liveness: cite the flight workflow, deploy branch or Argo app, and `/version.buildSha` match for the node URL being validated.
-2. Commit all changes (doc updates, header updates, spec updates, work item, project) on the work item's branch. `git status` must be clean.
+2. Commit all changes (doc updates, header updates, spec updates, project) on the work item's branch; work-item state changes go through the API, not files. `git status` must be clean.
 3. Push to remote.
 4. Create the PR to `main` (`gh pr create --base main`) with a Conventional Commit title and this body. Keep prose brief; use the smallest visual that makes the change clear:
 

@@ -7,7 +7,7 @@ description: Orchestrate multiple dev agents (spawned subagents OR human-driven 
 
 The contract lives in the hub entry `dev-manager-contract`. This file only triggers it.
 
-Read the full body before acting, using the current node's origin and the `COGNI_NODE_API_KEY` saved in `.env.cogni`:
+Read the full body before acting, using the current node's origin (operator: `https://cognidao.org`) and the `COGNI_NODE_API_KEY` saved in `.env.cogni`:
 
 ```bash
 curl -fsS -H "Authorization: Bearer $COGNI_NODE_API_KEY" \
