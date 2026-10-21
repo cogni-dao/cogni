@@ -5,8 +5,19 @@ inputs:
   app_source_root:
     { required: true, description: "Application source checkout" }
   manifest: { required: true, description: "Expected ComputeWorkload manifest" }
-  vm_host: { required: true, description: "Environment control-plane host" }
-  ssh_identity: { required: true, description: "SSH identity file" }
+  vm_host:
+    {
+      required: false,
+      description: "Environment control-plane host (native mode)",
+    }
+  ssh_identity:
+    { required: false, description: "SSH identity file (native mode)" }
+  public_only:
+    {
+      required: false,
+      default: "false",
+      description: "Prove the manifest's public SHA without control-plane access",
+    }
   # Must exceed the controller's own allocation budget, not the post-boot cutover
   # window: one attempt is bidTimeout (90s) + bootSlo (300s) before the on-chain
   # tx, DNS reconcile and source verify, and the controller retries providers.
@@ -28,6 +39,7 @@ runs:
         VM_HOST: ${{ inputs.vm_host }}
         SSH_IDENTITY: ${{ inputs.ssh_identity }}
         TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+        PUBLIC_ONLY: ${{ inputs.public_only }}
       run: |
         set -euo pipefail
         command -v yq >/dev/null || {
@@ -36,10 +48,13 @@ runs:
         }
         expected_json="${RUNNER_TEMP}/expected-compute-workload.json"
         yq -o=json '.' "$EXPECTED_MANIFEST" > "$expected_json"
+        args=(--manifest-json "$expected_json" --timeout-seconds "$TIMEOUT_SECONDS")
+        case "$PUBLIC_ONLY" in
+          true) args+=(--public-only) ;;
+          false) args+=(--host "$VM_HOST" --identity "$SSH_IDENTITY") ;;
+          *) echo "::error::public_only must be true or false"; exit 1 ;;
+        esac
         node --experimental-strip-types \
           --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
           nodes/operator/app/scripts/wait-for-compute-workload-ready.ts \
-          --manifest-json "$expected_json" \
-          --host "$VM_HOST" \
-          --identity "$SSH_IDENTITY" \
-          --timeout-seconds "$TIMEOUT_SECONDS"
+          "${args[@]}"

@@ -185,6 +185,30 @@ describe.each(CANDIDATE_WORKFLOWS)("%s", (workflowPath) => {
     expect(jobs.length).toBeGreaterThan(0);
   });
 
+  it("keeps foreign compute convergence public-only without control credentials", () => {
+    if (workflowPath !== ".github/workflows/candidate-flight.yml") return;
+    const verify = parsed.jobs?.["verify-candidate"];
+    expect(jobEnvironmentName(verify?.environment)).toBe("candidate-a");
+    const wait = verify?.steps?.find(
+      (step) => step.name === "Wait for external ComputeWorkload readiness"
+    );
+    expect(wait).toBeDefined();
+    expect(wait?.if).toBe(
+      "steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'"
+    );
+    expect(wait?.with?.public_only).toBe(
+      "${{ steps.custody.outputs.control_env != 'candidate-a' }}"
+    );
+    expect(wait?.with?.manifest).toBe(
+      "${{ steps.workload-manifest.outputs.path }}"
+    );
+    const finalVerify = verify?.steps?.find(
+      (step) => step.name === "Verify buildSha on endpoint (per-node)"
+    );
+    expect(finalVerify?.env?.CUTOVER_TIMEOUT).toBe("420");
+    expect(finalVerify?.env?.VERIFY_BUNDLE_MARKER).toBe("1");
+  });
+
   it("LANE_CREDENTIALS_MATCH_LANE: a step holding VM credentials for a named lane runs in that lane's environment", () => {
     const violations: string[] = [];
 
