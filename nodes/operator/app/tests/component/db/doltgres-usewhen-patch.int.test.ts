@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `tests/component/db/doltgres-usewhen-patch.int.test.ts`
+ * Module: `@tests/component/db/doltgres-usewhen-patch`
  * Purpose: Prove against a real Doltgres that `op:'patch'` refines a retrieval trigger while leaving the body byte-identical, and that `listKnowledge({q})` finds the entry by a `useWhen` substring (task.5204).
  * Scope: Component test — boots `dolthub/doltgresql:latest` via testcontainers and drives `DoltgresKnowledgeContributionAdapter` + `DoltgresKnowledgeStoreAdapter` directly. Does not exercise HTTP routes, auth, or the contribution service's policy gates.
  * Invariants:
@@ -15,8 +15,9 @@
  *     `domain` — so the op cannot become a route around the write-gate chain.
  *     An empty partial must be rejected rather than acknowledged as a write.
  *   - Q_MATCHES_USEWHEN_ONLY: `q` matches the trigger, never the title or body.
- * Side-effects: Docker container, sub-process (migrator), database writes.
+ * Side-effects: IO, process.env
  * Links: packages/knowledge-store/src/domain/contribution-schemas.ts, packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
+ * @internal
  */
 
 import { execSync } from "node:child_process";
@@ -28,6 +29,7 @@ import {
 } from "@cogni/knowledge-store";
 import {
   buildDoltgresClient,
+  DoltBranchSessionRunner,
   DoltgresKnowledgeContributionAdapter,
   DoltgresKnowledgeStoreAdapter,
 } from "@cogni/knowledge-store/adapters/doltgres";
@@ -154,16 +156,23 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     const createBranchClient = () =>
       buildDoltgresClient({ connectionString: dbUrl, max: 1 });
     branchClient = createBranchClient();
+    const writerSession = new DoltBranchSessionRunner(branchClient, {
+      writerProtocol: "database",
+    });
     adapter = new DoltgresKnowledgeContributionAdapter({
       sql: readClient,
-      branchSql: branchClient,
-      recreateBranchClient: createBranchClient,
+      writerSession,
     });
-    store = new DoltgresKnowledgeStoreAdapter({ sql: readClient });
+    store = new DoltgresKnowledgeStoreAdapter({
+      sql: readClient,
+      writerSession,
+    });
 
     // DOMAIN_FK_ENFORCED_AT_WRITE — the shelf must exist on `main` before any
     // branch write, because the contribution branch forks from it.
+    // registerDomain owns its logical withWrite scope and commit.
     await store.registerDomain({ id: DOMAIN, name: "Patch proof shelf" });
+    expect(await store.domainExists(DOMAIN)).toBe(true);
   }, 240_000);
 
   afterAll(async () => {
