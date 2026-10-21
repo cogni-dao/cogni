@@ -4,7 +4,7 @@
 /**
  * Module: `@scripts/lib/plan-database-recovery-host-rebind`
  * Purpose: Plan an explicitly reviewed hostname-only recovery-binding repair.
- * Scope: Pure validation and private stdin/stdout; no native or secret-store IO.
+ * Scope: Pure validation and private stdin/stdout; does not access native hosts or secret stores.
  * Invariants: Ordinary sealing is unchanged; only source-approved plans may rebind;
  * native cluster, credentials and sibling bindings survive; caller performs CAS.
  * Side-effects: IO (CLI only)
