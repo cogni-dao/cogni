@@ -1,4 +1,4 @@
-You are a **senior software engineer** implementing a work item: #$ITEM
+You are a **senior software engineer** implementing a work item: #$ITEM, through to an open PR
 
 **Implementation refines.** The work item's `outcome` field — _"success is when {human|AI|system} can {do X}"_ — is the contract. Code is the act of carrying that sentence into reality, in git. The design refined the outcome in Doltgres; you refine it in commits, files, and a PR diff. If your code wouldn't make the success sentence true on candidate-a, you're building the wrong thing.
 
@@ -94,16 +94,40 @@ Never force through a blocker with a hack. A clean pause is better than a dirty 
 
 ---
 
-## Phase 5 — Finalize
+## Phase 5 — Docs pass and open the PR
 
-When the full todo list is complete and the checkpoint checks pass:
+When the full todo list is complete and the checkpoint checks pass, run one docs pass over `git diff --name-status origin/main...HEAD`:
+
+- **File headers**: update the top-of-file TSDoc header of every changed file whose behavior, inputs/outputs or side-effects changed (templates in `docs/templates/header_*_template.ts`).
+- **AGENTS.md**: update a directory's AGENTS.md only when its public exports, routes, env keys, ports or boundaries changed. Edit existing sections only; keep it ≤150 lines.
+- **Specs**: for each spec in `spec_refs`, make contracts, invariants and acceptance checks match the code. No roadmap content.
+
+Then:
 
 1. Run `pnpm check:docs` and fix any errors until clean.
-2. Commit all changes on the work item's branch. `git status` must be clean after commit.
-3. Push to remote.
-4. `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"needs_closeout"}}`.
-5. Report what was implemented, which tests went red then green, and any notes for the reviewer.
-6. Next command: `/closeout` (docs pass + PR creation).
+2. Commit on the work item's branch (`git status` clean), and push.
+3. Open the PR to `main` (`gh pr create --base main`), or on a review re-loop update it (`gh pr edit <PR> --body-file`). Use a Conventional Commit title and this body, keeping prose brief:
+
+   ```markdown
+   Work item: <id link>. Acceptance: <the outcome criteria this PR claims>.
+
+   ## Summary
+
+   <diff-sketch, call tree, file tree or pseudocode of what changed>
+
+   ## Evidence
+
+   - **Before:** <failing test, output, log or screenshot>
+     **After:** <the same, passing>
+
+   ## Merge Danger
+
+   **Door:** <one-way or two-way: can this be reverted cleanly?>
+   **Blast radius:** <who or what breaks if it is wrong>
+   ```
+
+4. Link a new PR (`POST /api/v1/work/items/{id}/pr`) and `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"needs_merge"}}`.
+5. Next: `/review-implementation`, run by a fresh agent **now, while CI runs**. Do not wait for CI.
 
 ---
 

@@ -28,14 +28,14 @@ or draft guidance against the loaded contract and live API discovery before acti
 Run the one command for the status, then advance the status through the
 work-item API. Do not skip a stage.
 
-| status            | run                                                                              |
-| ----------------- | -------------------------------------------------------------------------------- |
-| `needs_triage`    | `/triage`                                                                        |
-| `needs_research`  | `/research`                                                                      |
-| `needs_design`    | `/design`, then `/review-design` by a fresh agent                                |
-| `needs_implement` | `/implement`                                                                     |
-| `needs_closeout`  | `/closeout`                                                                      |
-| `needs_merge`     | `/review-implementation` by a fresh agent, then flight, validate, operator merge |
+| status            | run                                                                                     |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| `needs_triage`    | `/triage`                                                                               |
+| `needs_research`  | `/research`                                                                             |
+| `needs_design`    | `/design`, then `/review-design` by a fresh agent                                       |
+| `needs_implement` | `/implement`: test-first code, docs pass, open the PR                                   |
+| `needs_merge`     | `/review-implementation` by a fresh agent while CI runs; both green → flight, validate  |
+| `needs_closeout`  | `/closeout`: verify all gates at one SHA, operator merge, `done`, keep what was learned |
 
 A story spanning several tasks belongs to `dev-manager`, which drives each task
 through these stages.

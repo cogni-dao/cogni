@@ -103,20 +103,20 @@ graph LR
   needs_triage -->|"/triage: task/bug simple"| needs_implement
   needs_research -->|"/research"| done
   needs_design -->|"/design, then fresh /review-design APPROVE"| needs_implement
-  needs_implement -->|"/implement"| needs_closeout
-  needs_closeout -->|"/closeout"| needs_merge
-  needs_merge -->|"fresh review APPROVE → flight → validate → operator merge"| done
+  needs_implement -->|"/implement opens the PR"| needs_merge
+  needs_merge -->|"fresh review ∥ CI, then flight → validate"| needs_closeout
   needs_merge -->|"REQUEST CHANGES"| needs_implement
+  needs_closeout -->|"/closeout: operator merge"| done
 ```
 
-| Status            | Command                      | What happens                                                                                                                      |
-| ----------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `needs_triage`    | `/triage`                    | Routes item; stories → `done`; tasks/bugs → next status                                                                           |
-| `needs_research`  | `/research`                  | Executes spike; spike → `done`; creates follow-up items                                                                           |
-| `needs_design`    | `/design` → `/review-design` | Rigor pass + hub design; fresh review APPROVE → `needs_implement`                                                                 |
-| `needs_implement` | `/implement`                 | Test-first code on a branch from `origin/main`                                                                                    |
-| `needs_closeout`  | `/closeout`                  | Docs/headers pass + PR with Evidence and Merge Danger                                                                             |
-| `needs_merge`     | `/review-implementation`     | Fresh two-axis review; APPROVE → flight → `/validate-candidate` → `POST /vcs/merge` → `done`; REQUEST CHANGES → `needs_implement` |
+| Status            | Command                      | What happens                                                                                                                                                        |
+| ----------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `needs_triage`    | `/triage`                    | Routes item; stories → `done`; tasks/bugs → next status                                                                                                             |
+| `needs_research`  | `/research`                  | Executes spike; spike → `done`; creates follow-up items                                                                                                             |
+| `needs_design`    | `/design` → `/review-design` | Rigor pass + hub design; fresh review APPROVE → `needs_implement`                                                                                                   |
+| `needs_implement` | `/implement`                 | Test-first code on a branch from `origin/main`, docs pass, opens the PR with Evidence and Merge Danger                                                              |
+| `needs_closeout`  | `/closeout`                  | CI, review and validation verified at one SHA → `POST /vcs/merge` → `done`; durable knowledge refined                                                               |
+| `needs_merge`     | `/review-implementation`     | Fresh two-axis review against outcome and design while CI runs; both green → flight → `/validate-candidate` → `needs_closeout`; REQUEST CHANGES → `needs_implement` |
 
 Terminal: `done` (PR merged; `deploy_verified` tracked separately), `blocked` (`blocked_by:` required), `cancelled`.
 
