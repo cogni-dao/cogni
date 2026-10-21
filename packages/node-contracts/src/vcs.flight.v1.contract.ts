@@ -26,7 +26,7 @@ const workflowRefSchema = z
 export const flightOperation = {
   input: z.object({
     nodeRef: z.object({
-      nodeId: z.string().uuid(),
+      nodeId: z.string().min(1).describe("Node UUID or unique slug"),
       sourceSha: z.string().regex(/^[0-9a-fA-F]{40}$/),
     }),
     workflowRef: workflowRefSchema.optional(),

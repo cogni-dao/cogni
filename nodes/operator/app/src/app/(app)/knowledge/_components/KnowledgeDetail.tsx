@@ -23,15 +23,12 @@ interface KnowledgeDetailProps {
   readonly item: KnowledgeRow | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  /** When true, render the EDO chain walk inline below the entry body. */
-  readonly showChain?: boolean;
 }
 
 export function KnowledgeDetail({
   item,
   open,
   onOpenChange,
-  showChain = false,
 }: KnowledgeDetailProps): ReactElement {
   const isHtml = item?.entryType === "html";
   return (
@@ -65,7 +62,7 @@ export function KnowledgeDetail({
             </SheetHeader>
 
             <div className="mt-6">
-              <KnowledgeEntryFields item={item} showChain={showChain} />
+              <KnowledgeEntryFields item={item} />
             </div>
           </>
         )}

@@ -54,7 +54,8 @@ export const WorkItemQueryInputSchema = z.object({
     .enum(["human", "ai", "either"])
     .optional()
     .describe(
-      "Eligibility filter. Pass 'ai' to see only items safe for autonomous AI handling."
+      "Eligibility filter. Pass 'ai' to see only items safe for autonomous AI handling. " +
+        "Note: the Doltgres-backed store has no actor column — any value other than 'either' returns no items there, so omit it unless you need it."
     ),
   projectId: z
     .string()
@@ -67,6 +68,15 @@ export const WorkItemQueryInputSchema = z.object({
     .max(50)
     .optional()
     .describe("Max results to return (default 20, max 50)"),
+  ids: z
+    .array(z.string().min(1))
+    .max(50)
+    .optional()
+    .describe("Fetch exactly these work item ids"),
+  cursor: z
+    .string()
+    .optional()
+    .describe("Pagination cursor from a previous result's nextCursor"),
 });
 export type WorkItemQueryInput = z.infer<typeof WorkItemQueryInputSchema>;
 
@@ -86,11 +96,28 @@ const WorkItemOutputSchema = z.object({
   pr: z.string().optional(),
   blockedBy: z.string().optional(),
   updatedAt: z.string(),
+  // Additive, optional (backward compatible) — fields a planner needs to cite
+  // an exact item state and reason about scope.
+  revision: z.number().optional(),
+  outcome: z.string().optional(),
+  estimate: z.number().optional(),
+  parentId: z.string().optional(),
+  specRefs: z.array(z.string()).optional(),
 });
+
+/** Max characters of `outcome` returned per item (keeps backlog pages bounded). */
+export const WORK_ITEM_QUERY_OUTCOME_MAX_CHARS = 600;
+
+function truncate(text: string | undefined, max: number): string | undefined {
+  if (text === undefined) return undefined;
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
 
 export const WorkItemQueryOutputSchema = z.object({
   items: z.array(WorkItemOutputSchema),
   count: z.number(),
+  /** Present when more results exist; pass back as `cursor`. */
+  nextCursor: z.string().optional(),
 });
 export type WorkItemQueryOutput = z.infer<typeof WorkItemQueryOutputSchema>;
 
@@ -118,7 +145,7 @@ export const workItemQueryContract: ToolContract<
   outputSchema: WorkItemQueryOutputSchema,
 
   redact: (output: WorkItemQueryOutput): WorkItemQueryRedacted => output,
-  allowlist: ["items", "count"] as const,
+  allowlist: ["items", "count", "nextCursor"] as const,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -136,14 +163,20 @@ export function createWorkItemQueryImplementation(
     execute: async (
       input: WorkItemQueryInput
     ): Promise<WorkItemQueryOutput> => {
-      const items = await deps.workItemCapability.query({
+      const params = {
         statuses: input.statuses,
         types: input.types,
         text: input.text,
         actor: input.actor,
         projectId: input.projectId,
         limit: input.limit ?? 20,
-      });
+        ...(input.ids !== undefined && { ids: input.ids }),
+        ...(input.cursor !== undefined && { cursor: input.cursor }),
+      };
+      const page = deps.workItemCapability.queryPage
+        ? await deps.workItemCapability.queryPage(params)
+        : { items: await deps.workItemCapability.query(params) };
+      const items = page.items;
 
       return {
         items: items.map((item) => ({
@@ -165,8 +198,18 @@ export function createWorkItemQueryImplementation(
           pr: item.pr,
           blockedBy: item.blockedBy,
           updatedAt: item.updatedAt,
+          ...(item.revision !== undefined && { revision: item.revision }),
+          ...(item.outcome !== undefined && {
+            outcome: truncate(item.outcome, WORK_ITEM_QUERY_OUTCOME_MAX_CHARS),
+          }),
+          ...(item.estimate !== undefined && { estimate: item.estimate }),
+          ...(item.parentId !== undefined && { parentId: item.parentId }),
+          ...(item.specRefs !== undefined && {
+            specRefs: [...item.specRefs],
+          }),
         })),
         count: items.length,
+        ...(page.nextCursor !== undefined && { nextCursor: page.nextCursor }),
       };
     },
   };

@@ -82,10 +82,8 @@ for COGNI_DB in $(echo "$COGNI_NODE_DBS" | tr ',' ' '); do
   run_sql_quiet "$DB" "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO knowledge_reader"
   run_sql_quiet "$DB" "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO knowledge_writer"
 
-  # Initial Dolt commit marks the empty DB. Subsequent dolt_commit calls come
-  # from the migrator (after applying each generated SQL file) and from the
-  # seeder. Tolerate "nothing to commit" on re-runs.
-  run_sql_quiet "$DB" "SELECT dolt_commit('-Am', 'provision: database + roles')"
+  # Provisioning does not own application working sets. Schema migrations and
+  # admitted content writers own commits, including the first schema commit.
 
   echo "   -> $DB provisioned."
 done

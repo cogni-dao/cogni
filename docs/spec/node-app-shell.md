@@ -10,7 +10,7 @@ read_when: "Creating a new node, extracting shared code from nodes/operator/app,
 implements: proj.operator-plane
 owner: derekg1729
 created: 2026-04-02
-verified: 2026-04-02
+verified: 2026-10-15
 tags: [architecture, nodes, packages, multi-node]
 ---
 
@@ -242,7 +242,7 @@ Enable nodes as thin app shells that compose a shared layout/provider framework 
 - Centralizing feature UIs, route trees, or product flows in the shared shell
 - Replacing capability libraries — `@cogni/ai-core`, `@cogni/db-client`, etc. keep PURE_LIBRARY pattern
 - Operator aggregation plane (separate concern per multi-node-tenancy spec)
-- Published npm packages (all packages remain `private: true`)
+- Publishing the source-export `@cogni/node-app` shell. Fork-facing pure libraries follow the [canonical shared-package contract](https://cognidao.org/knowledge/publish-shared-runtime-core).
 
 ## Invariants
 

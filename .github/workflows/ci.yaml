@@ -147,6 +147,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate workflow contracts
+        run: |
+          node --test scripts/ci/tests/workflow-check.test.mjs
+          pnpm workflow:check
+
       - name: Build workspace packages
         run: pnpm packages:build
 
@@ -491,6 +496,15 @@ jobs:
       # any PR-time affected miss before merge). Logic + fail-safe live in
       # scripts/ci/run-unit-tests.sh (SCRIPTS_ARE_THE_API): ROOT config always
       # full + operator config affected-scoped on PRs, full on merge_group/push.
+      # Native dependency tests consume the same private catalog image as deploy.
+      # The job already has packages:read; use only its ephemeral repository token.
+      - name: Log in to GHCR for native dependency images
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
       - name: Unit + contract tests
         env:
           CI_EVENT: ${{ github.event_name }}

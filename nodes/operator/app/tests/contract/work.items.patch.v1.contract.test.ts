@@ -85,6 +85,30 @@ describe("workItemsPatchOperation.input", () => {
     }
   });
 
+  it("accepts an optional top-level expectedRevision (compare-and-set, story.5096)", () => {
+    const result = workItemsPatchOperation.input.safeParse({
+      id: "task.5282",
+      expectedRevision: 4,
+      set: { priority: 1, rank: 2 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.expectedRevision).toBe(4);
+    }
+  });
+
+  it("rejects a negative or fractional expectedRevision", () => {
+    for (const expectedRevision of [-1, 1.5, "4"]) {
+      expect(
+        workItemsPatchOperation.input.safeParse({
+          id: "task.5282",
+          expectedRevision,
+          set: { priority: 1 },
+        }).success
+      ).toBe(false);
+    }
+  });
+
   it("rejects an empty set with the empty-set message", () => {
     const result = workItemsPatchOperation.input.safeParse({
       id: "bug.5005",

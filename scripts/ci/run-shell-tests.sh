@@ -52,6 +52,8 @@ PARALLEL=(
   openfga-preshared-authn.test.sh
   secrets-fanout.test.sh
   secret-materialize.test.sh
+  openbao-kv-http-read.test.sh
+  runtime-watchdog-maintenance.test.sh
   authorization-facade-credentials.test.sh
   reconcile-node-substrate.test.sh
   run-node-substrate.test.sh
@@ -66,12 +68,14 @@ PARALLEL=(
   aggregate-decide-outcome.test.sh
   aggregate-rollup.test.sh
   deployment-workflows.test.sh
+  verify-deployment.test.sh
   require-node-ref-vm.test.sh
   resolve-substrate-gate.test.sh
   detect-affected.test.sh
   classify-env-manager-fast-path.test.sh
   resolve-candidate-deploy-repository.test.sh
   reconcile-scheduler-worker-routing.test.sh
+  shared-platform-manifests.test.sh
   promote-k8s-image.test.sh
   wait-for-in-cluster-services.test.sh
   render-node-appset.test.sh

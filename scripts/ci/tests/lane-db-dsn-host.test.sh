@@ -451,4 +451,121 @@ grep -q 'COGNI_NODE_DBS' "$REPO_ROOT/scripts/ci/deploy-infra.sh" \
   || fail "deploy-infra.sh's COGNI_NODE_DBS roster must remain — narrowing it would shrink the Doltgres roster and prune live Grafana datasources"
 echo "  ok  scope guards hold"
 
+# [7] Exercise deploy-infra's actual shared-Postgres caller, including the runner
+# rendering and SSH environment carrier. No Docker/OpenBao/network is invoked.
+(
+  real_repo="$REPO_ROOT"
+  fixture="$TMPROOT/db-provision"
+  mkdir -p "$fixture/infra/catalog"
+  cp "$REPO_ROOT/infra/database-budget-profiles.yaml" "$fixture/infra/"
+  for node in operator red poly; do
+    cp "$REPO_ROOT/infra/catalog/$node.yaml" "$fixture/infra/catalog/"
+  done
+  for function_name in render_shared_db_provision_config read_node_db_secret provision_shared_node_databases; do
+    function_source="$(awk -v name="$function_name" '
+      $0 == name "() {" { capture=1 }
+      capture { print }
+      capture && /^}$/ { exit }
+    ' "$real_repo/scripts/ci/deploy-infra.sh")"
+    [[ -n "$function_source" ]] || fail "missing actual caller function $function_name"
+    eval "$function_source"
+  done
+  log_error() { echo "$*" >&2; }
+  log_fatal() { echo "$*" >&2; exit 1; }
+  log_info() { :; }
+  log_warn() { printf '%s\n' "$*" >> "$fixture/skips"; }
+  REPO_ROOT="$fixture"
+  NODE_TARGETS=(operator red poly)
+  DEPLOY_ENVIRONMENT=candidate-a
+  NODE_DB_PROVISION_CONFIG="$(render_shared_db_provision_config)"
+  [[ "$(jq -r 'keys | join(",")' <<<"$NODE_DB_PROVISION_CONFIG")" == operator,red ]] \
+    || fail "dedicated or inactive node entered shared provisioning"
+  [[ "$(jq -r '.operator.DB_BUDGET_PROFILE' <<<"$NODE_DB_PROVISION_CONFIG")" == operator-control-v1 ]]
+  [[ "$(jq -r '.operator.DB_SERVICE_CONNECTION_LIMIT' <<<"$NODE_DB_PROVISION_CONFIG")" == 15 ]]
+  [[ "$(jq -r '.red.DB_APP_CONNECTION_LIMIT' <<<"$NODE_DB_PROVISION_CONFIG")" == 2 ]]
+  DEPLOY_ENVIRONMENT=preview
+  [[ "$(render_shared_db_provision_config | jq -r 'keys | join(",")')" == operator ]] \
+    || fail "environment-absent red entered preview provisioning"
+  DEPLOY_ENVIRONMENT=candidate-a
+
+  # An absent profile, bad limit or unknown tier fails before the caller runs.
+  yq -i '.database."candidate-a".budget_profile = "absent"' "$fixture/infra/catalog/operator.yaml"
+  if render_shared_db_provision_config >/dev/null 2>&1; then fail "missing profile accepted"; fi
+  cp "$real_repo/infra/catalog/operator.yaml" "$fixture/infra/catalog/"
+  yq -i '."operator-control-v1".roles.app.connection_limit = 0' "$fixture/infra/database-budget-profiles.yaml"
+  if render_shared_db_provision_config >/dev/null 2>&1; then fail "zero budget accepted"; fi
+  cp "$real_repo/infra/database-budget-profiles.yaml" "$fixture/infra/"
+  yq -i '.database."candidate-a".tier = "foreign"' "$fixture/infra/catalog/operator.yaml"
+  if render_shared_db_provision_config >/dev/null 2>&1; then fail "unknown database boundary accepted"; fi
+  cp "$real_repo/infra/catalog/operator.yaml" "$fixture/infra/catalog/"
+
+  # Use the ACTUAL remote read helper with a hermetic cached-reader substitute. A
+  # migration password in the public bank is deliberately wrong: the isolated
+  # bank is the sole permissible source. Fake values contain shell metacharacters
+  # to catch accidental word splitting or evaluation in Docker argument assembly.
+  read_log="$fixture/reads"
+  compose_log="$fixture/compose"
+  : > "$read_log"
+  : > "$compose_log"
+  openbao_get_field() {
+    [[ "$#" == 4 && "$3" == 10 && "$4" == 1 ]] \
+      || fail "late DB reads must retain one bounded ten-second attempt"
+    printf '%s\n' "-field=$2 cogni/${DEPLOY_ENVIRONMENT}/$1" >> "$read_log"
+    case "$1/$2" in
+      operator/APP_DB_PASSWORD) printf '%s' "app fixture ' \$(literal)" ;;
+      operator/APP_DB_SERVICE_PASSWORD) printf '%s' 'service fixture' ;;
+      operator-database-migration/APP_DB_MIGRATION_PASSWORD)
+        if [[ "${missing_migration:-false}" == false ]]; then printf '%s' 'isolated fixture'; fi ;;
+      operator/APP_DB_MIGRATION_PASSWORD) printf '%s' 'WRONG PUBLIC VALUE' ;;
+      red/APP_DB_PASSWORD | red/APP_DB_SERVICE_PASSWORD | red-database-migration/APP_DB_MIGRATION_PASSWORD) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+  fake_compose() {
+    printf '%s\n' "$@" >> "$compose_log"
+    local arg
+    declare -A passed=()
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == -e ]]; then arg="$2"; passed["${arg%%=*}"]="${arg#*=}"; shift; fi
+      shift
+    done
+    [[ "${passed[COGNI_NODE_DBS]}" == cogni_operator ]]
+    [[ "${passed[APP_DB_PASSWORD]}" == "app fixture ' \$(literal)" ]]
+    [[ "${passed[APP_DB_SERVICE_PASSWORD]}" == 'service fixture' ]]
+    [[ "${passed[APP_DB_MIGRATION_PASSWORD]}" == 'isolated fixture' ]]
+    [[ "${passed[DB_BUDGET_PROFILE]}" == operator-control-v1 ]]
+    [[ "${passed[DB_APP_CONNECTION_LIMIT]}" == 7 ]]
+    [[ "${passed[DB_APP_STATEMENT_TIMEOUT_MS]}" == 5000 ]]
+    [[ "${passed[DB_SERVICE_CONNECTION_LIMIT]}" == 15 ]]
+    [[ "${passed[DB_SERVICE_STATEMENT_TIMEOUT_MS]}" == 2000 ]]
+    [[ "${passed[DB_LOCK_TIMEOUT_MS]}" == 2000 ]]
+    [[ "${passed[DB_IDLE_IN_TRANSACTION_TIMEOUT_MS]}" == 30000 ]]
+    [[ "${passed[DB_TEMP_FILE_LIMIT_MIB]}" == 128 ]]
+    [[ "${passed[DB_WORK_MEM_MIB]}" == 16 ]]
+  }
+  DB_READER_TOKEN=test-only
+  RUNTIME_COMPOSE=fake_compose
+  provision_shared_node_databases
+  grep -q '^APP_DB_MIGRATION_PASSWORD=isolated fixture$' "$compose_log" || fail "migration credential not forwarded"
+  ! grep -q 'cogni/candidate-a/poly' "$read_log" || fail "dedicated cell credential read"
+  ! grep -q 'cogni/production/' "$read_log" || fail "foreign environment credential read"
+  # Unknown app/service credentials keep the existing unborn-node skip; red
+  # must never reach Docker. An incomplete migration bank is also skipped,
+  # preserving the existing per-node fail-soft policy without weakening provision.sh.
+  [[ "$(grep -c '^db-provision$' "$compose_log")" == 1 ]]
+  : > "$compose_log"
+  (missing_migration=true; provision_shared_node_databases)
+  grep -q 'Skipped cogni_operator: incomplete runtime/isolated migration credentials' "$fixture/skips" \
+    || fail "incomplete credential bank was not surfaced"
+  [[ ! -s "$compose_log" ]] || fail "missing migration credential reached Docker"
+  if (unset NODE_DB_PROVISION_CONFIG; provision_shared_node_databases) >/dev/null 2>&1; then
+    fail "missing SSH budget carrier silently skipped all nodes"
+  fi
+  [[ ! -s "$compose_log" ]] || fail "missing budget map reached Docker"
+  # Pin the %q SSH carrier: the JSON must not vanish between runner and VM.
+  sed -n '/^REMOTE_ENV_VARS=(/,/^)/p' "$real_repo/scripts/ci/deploy-infra.sh" \
+    | grep -q 'NODE_DB_PROVISION_CONFIG' || fail "budget map not forwarded over SSH"
+  echo "  ok  actual shared DB caller preserves isolated migration custody and catalog budgets"
+)
+
 echo "PASS: lane-db-dsn-host.test.sh (${#PAIRS[@]} catalog pairs, ${checked} DSN values, all inert)"

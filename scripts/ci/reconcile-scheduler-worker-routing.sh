@@ -59,11 +59,15 @@
 #                      the watched repository's deploy/<env> branch.
 #   DEPLOY_BRANCH_DIR  reuse an existing deploy-branch checkout instead of cloning
 #                      (tests / local). When set, no clone and no push.
+#   SWR_RECONCILE_FLIGHT_TARGETS_JSON normal decide-selected slug array; only
+#                      renderer-validated active candidate pairs may replace an
+#                      older watched destination. No selector means strict merge.
 #   DRY_RUN=1          render + diff only; never push (commits locally for the diff).
 #   SWR_RECONCILE_SUMMARY_FILE  optional path to receive one structured JSON summary.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_SOURCE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 rc=0 # assigned by the EXIT traps below ($? at fire time); declared for shellcheck.
 DEPLOY_ENV=""
@@ -180,12 +184,14 @@ fi
 # Self-validate against the catalog before propagating: never ship a stale routing
 # table to the worker. The renderer is the same SSOT the static gate uses; if it is
 # absent at this ref (pre-#1609 head) we warn + skip rather than 127, mirroring DNS.
+REVIEWED_ROUTES_VALIDATED=false
 if [ -f "$APP_SOURCE_DIR/scripts/ci/render-scheduler-worker-endpoints.sh" ]; then
   if ! ( cd "$APP_SOURCE_DIR" && bash scripts/ci/render-scheduler-worker-endpoints.sh --check ); then
     echo "[ERROR] base scheduler-worker configmap is stale vs catalog — refusing to propagate." >&2
     echo "        Run: bash scripts/ci/render-scheduler-worker-endpoints.sh --write" >&2
     exit 1
   fi
+  REVIEWED_ROUTES_VALIDATED=true
 else
   echo "::warning::render-scheduler-worker-endpoints.sh absent at this ref — propagating committed configmap without re-validation"
 fi
@@ -380,14 +386,24 @@ yaml_endpoints() {
 }
 
 merge_endpoint_authorities() {
-  local watched_csv="$1" reviewed_csv="$2"
+  local watched_csv="$1" reviewed_csv="$2" provider_map="${3:-false}"
   WATCHED_ENDPOINTS="$watched_csv" REVIEWED_ENDPOINTS="$reviewed_csv" \
-    WATCHED_CATALOG="$WATCHED_CATALOG" REVIEWED_CATALOG="$REVIEWED_CATALOG" python3 - <<'PY'
-import json, os
+    WATCHED_CATALOG="$WATCHED_CATALOG" REVIEWED_CATALOG="$REVIEWED_CATALOG" \
+    SELECTED_TARGETS="${SWR_RECONCILE_FLIGHT_TARGETS_JSON:-[]}" \
+    PROVIDER_MAP="$provider_map" ROUTE_ENV="$DEPLOY_ENV" \
+    REVIEWED_ROUTES_VALIDATED="$REVIEWED_ROUTES_VALIDATED" python3 - <<'PY'
+import json, os, re
 
+selected = json.loads(os.environ["SELECTED_TARGETS"])
+if (not isinstance(selected, list)
+    or not all(isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9-]*", name) for name in selected)
+    or len(selected) != len(set(selected))):
+    raise SystemExit("invalid normal scheduler flight target selection")
+watched_catalog = json.loads(os.environ["WATCHED_CATALOG"])
+reviewed_catalog = json.loads(os.environ["REVIEWED_CATALOG"])
 node_ids, node_names = {}, {}
-for catalog in (os.environ["WATCHED_CATALOG"], os.environ["REVIEWED_CATALOG"]):
-    for row in json.loads(catalog):
+for catalog in (watched_catalog, reviewed_catalog):
+    for row in catalog:
         name, node_id = row["name"], row["node_id"]
         if name in node_ids and node_ids[name] != node_id:
             raise SystemExit("scheduler authorities disagree on a slug's node identity")
@@ -395,6 +411,20 @@ for catalog in (os.environ["WATCHED_CATALOG"], os.environ["REVIEWED_CATALOG"]):
             raise SystemExit("scheduler authorities disagree on a node identity's slug")
         node_ids[name], node_names[node_id] = node_id, name
 
+# Only the reviewed active candidate's exact slug + UUID pair may supersede
+# the same identity's watched destination. Active non-target candidate pairs
+# preserve watched destinations; base defaults retain collision refusal. Scope validation proved complete,
+# equal pairs; renderer validation proved their catalog-derived destination.
+replace_aliases = set()
+preserve_aliases = set()
+if os.environ["PROVIDER_MAP"] == "true" and os.environ["ROUTE_ENV"] == "candidate-a":
+    for row in reviewed_catalog:
+        if "candidate-a" in row["envs"] and row["name"] not in selected:
+            preserve_aliases.update((row["name"], row["node_id"]))
+        if row["name"] in selected:
+            if "candidate-a" not in row["envs"]:
+                raise SystemExit("selected scheduler node is not an active candidate member")
+            replace_aliases.update((row["name"], row["node_id"]))
 routes = {}
 origins = {}
 for origin, raw in (
@@ -406,10 +436,18 @@ for origin, raw in (
         if not sep or not alias or not endpoint:
             raise SystemExit(f"invalid scheduler endpoint entry from {origin}: {entry!r}")
         if alias in routes and routes[alias] != endpoint:
-            raise SystemExit(
-                f"scheduler endpoint collision for {alias!r}: "
-                f"{origins[alias]}={routes[alias]!r}, {origin}={endpoint!r}"
-            )
+            if alias in preserve_aliases and origin == "reviewed application source":
+                if os.environ["REVIEWED_ROUTES_VALIDATED"] != "true":
+                    raise SystemExit("candidate route preservation requires the reviewed renderer")
+                continue
+            if alias in replace_aliases and origin == "reviewed application source":
+                if os.environ["REVIEWED_ROUTES_VALIDATED"] != "true":
+                    raise SystemExit("selected scheduler route replacement requires the reviewed renderer")
+            else:
+                raise SystemExit(
+                    f"scheduler endpoint collision for {alias!r}: "
+                    f"{origins[alias]}={routes[alias]!r}, {origin}={endpoint!r}"
+                )
         routes[alias] = endpoint
         origins.setdefault(alias, origin)
 
@@ -429,7 +467,7 @@ WATCHED_ENV_CSV="$(scope_authority_endpoints "$WATCHED_ENV_CSV" "$WATCHED_CATALO
 REVIEWED_ENV_CSV="$(scope_authority_endpoints "$REVIEWED_ENV_CSV" "$REVIEWED_CATALOG")"
 
 COMPOSITE_BASE_CSV="$(merge_endpoint_authorities "$WATCHED_BASE_CSV" "$REVIEWED_BASE_CSV")"
-COMPOSITE_ENV_CSV="$(merge_endpoint_authorities "$WATCHED_ENV_CSV" "$REVIEWED_ENV_CSV")"
+COMPOSITE_ENV_CSV="$(merge_endpoint_authorities "$WATCHED_ENV_CSV" "$REVIEWED_ENV_CSV" true)"
 ENDPOINTS_COUNT="$(awk -F',' '{print NF}' <<<"$COMPOSITE_ENV_CSV")"
 NODE_COUNT="$(tr ',' '\n' <<<"$COMPOSITE_ENV_CSV" | grep -cvE '^[0-9a-f]{8}-' || true)"
 
@@ -461,23 +499,27 @@ git -C "$WORKDIR" add -A "$ENDPOINTS_SUBPATH"
 
 if [ "$DEPLOY_ENV" = candidate-a ]; then
   SERIAL_PATCH="infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml"
-  [ -f "$APP_SOURCE_DIR/$SERIAL_PATCH" ] || {
-    echo "[ERROR] reviewed candidate serial-rollout patch is missing" >&2; exit 1;
+  [ -f "$PLATFORM_SOURCE_DIR/$SERIAL_PATCH" ] || {
+    echo "[ERROR] platform candidate serial-rollout patch is missing" >&2; exit 1;
   }
-  cp "$APP_SOURCE_DIR/$SERIAL_PATCH" "$WORKDIR/$SERIAL_PATCH"
+  cp "$PLATFORM_SOURCE_DIR/$SERIAL_PATCH" "$WORKDIR/$SERIAL_PATCH"
   yq -i '.patches = ((.patches // []) | map(select(.path != "serial-rollout.patch.yaml"))) + [{"path": "serial-rollout.patch.yaml"}]' "$OVERLAY_DST"
   git -C "$WORKDIR" add -A "$SERIAL_PATCH"
 
   REPLICAS_PATCH="infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml"
   yq -i '.patches = ((.patches // []) | map(select(.path != "replicas.patch.yaml")))' "$OVERLAY_DST"
-  if [ -f "$APP_SOURCE_DIR/$REPLICAS_PATCH" ]; then
-    cp "$APP_SOURCE_DIR/$REPLICAS_PATCH" "$WORKDIR/$REPLICAS_PATCH"
+  if [ -f "$PLATFORM_SOURCE_DIR/$REPLICAS_PATCH" ]; then
+    cp "$PLATFORM_SOURCE_DIR/$REPLICAS_PATCH" "$WORKDIR/$REPLICAS_PATCH"
     yq -i '.patches += [{"path": "replicas.patch.yaml"}]' "$OVERLAY_DST"
     git -C "$WORKDIR" add -A "$REPLICAS_PATCH"
   else
     rm -f "$WORKDIR/$REPLICAS_PATCH"
     git -C "$WORKDIR" rm --ignore-unmatch -- "$REPLICAS_PATCH"
   fi
+
+  # shellcheck source=scripts/ci/lib/shared-platform-manifests.sh
+  . "$SCRIPT_DIR/lib/shared-platform-manifests.sh"
+  reconcile_shared_platform_manifests "$PLATFORM_SOURCE_DIR" "$WORKDIR" "$DEPLOY_ENV" scheduler-worker
 
   # Hash the ACTUAL consumed ConfigMap after all authority/bootstrap patches,
   # not the source routing fragment. Promotion updates only GIT_SHA/IMAGE_DIGEST
@@ -530,6 +572,7 @@ fi
 git -C "$WORKDIR" config user.name "github-actions[bot]"
 git -C "$WORKDIR" config user.email "github-actions[bot]@users.noreply.github.com"
 git -C "$WORKDIR" add -A "$SUBPATH"
+git -C "$WORKDIR" add -A "$OVERLAY_SUBPATH"
 if git -C "$WORKDIR" diff --cached --quiet; then
   STATUS="noop"
   write_summary "$STATUS"

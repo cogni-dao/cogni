@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@adapters/server/vcs/reviewed-workflow-ref`
- * Purpose: Resolve an optional candidate-flight workflow ref and prove it is the exact reviewed
- *   same-repo PR head named by sourceSha before GitHub Actions loads workflow code from it.
- * Scope: GitHub PR/commit reads plus creation of one content-addressed dispatch ref. Dispatch
- *   remains owned by the calling adapter.
+ * Purpose: Resolve an optional workflow ref to the exact reviewed PR head containing main.
+ * Scope: GitHub reads and a content-addressed ref; does not dispatch workflows.
  * Invariants:
  *   - DEFAULT_MAIN_UNCHANGED: callers invoke this only when workflowRef is explicitly present.
  *   - EXACT_REVIEWED_HEAD: workflowRef must resolve to sourceSha and sourceSha must be the exact
  *     head of an open same-repo PR to main.
+ *   - CURRENT_MAIN_INCLUDED: an old reviewed PR cannot dispatch obsolete workflow writers.
  *   - CROSS_REPO_FAILS_CLOSED: fork PR heads are never accepted as workflow code.
  * Side-effects: IO (GitHub REST API reads)
  * Links: bug.5455, docs/spec/cicd-platform-boundary.md
@@ -213,6 +212,27 @@ export async function resolveReviewedWorkflowRef(input: {
         ? "workflowRef must be the head of a same-repository PR"
         : "workflowRef must be the exact head of an open same-repository PR to main",
       422
+    );
+  }
+
+  // A reviewed open PR can still carry obsolete workflow writers. Require the
+  // currently trusted main before minting a content ref or dispatching it.
+  const { data: comparison } = await octokit.request(
+    "GET /repos/{owner}/{repo}/compare/{basehead}",
+    { owner, repo, basehead: `main...${resolvedSha}` }
+  );
+  if (comparison.status === "behind" || comparison.status === "diverged") {
+    throw new ReviewedWorkflowRefError(
+      "workflow_ref_missing_current_main",
+      "workflowRef must contain current main; update the reviewed PR before flight",
+      422
+    );
+  }
+  if (comparison.status !== "ahead" && comparison.status !== "identical") {
+    throw new ReviewedWorkflowRefError(
+      "workflow_ref_main_ancestry_unavailable",
+      "GitHub did not establish workflowRef ancestry from current main",
+      503
     );
   }
 

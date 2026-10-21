@@ -105,6 +105,7 @@ import {
   GitHubNodeDeploymentTopologyAdapter,
   GitHubWebhookNormalizer,
   getAppDb,
+  getExecutionScope,
   LangfuseAdapter,
   LiteLlmAdapter,
   type MimirAdapterConfig,
@@ -183,6 +184,7 @@ import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { startCatalogRegistryReconcileOnBoot } from "@/bootstrap/catalog-registry-reconcile";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
+import { checkNodeAdmin } from "@/bootstrap/node-admin-gate";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
 import {
@@ -409,6 +411,34 @@ export type ActivityDeps = {
 
 // Module-level singleton
 let _container: Container | null = null;
+let _workItemSessions: WorkItemSessionPort | null = null;
+let _requestLoggingDependencies: ReturnType<
+  typeof getRequestLoggingDependencies
+> | null = null;
+
+/** Resolve only pure request instrumentation; never construct application providers. */
+export function getRequestLoggingDependencies(): {
+  log: Container["log"];
+  clock: Container["clock"];
+  config: { unhandledErrorPolicy: UnhandledErrorPolicy };
+} {
+  if (!_requestLoggingDependencies) {
+    const env = serverEnv();
+    _requestLoggingDependencies = {
+      log: makeLogger({ service: "cogni-template", nodeId: getNodeId() }),
+      clock: new SystemClock(),
+      config: { unhandledErrorPolicy: env.isProd ? "respond_500" : "rethrow" },
+    };
+  }
+  return _requestLoggingDependencies;
+}
+
+/** Resolve the existing PostgreSQL session authority without Dolt or other providers. */
+export function getWorkItemSessionPort(): WorkItemSessionPort {
+  if (!_workItemSessions)
+    _workItemSessions = new DrizzleWorkItemSessionAdapter(getServiceDb());
+  return _workItemSessions;
+}
 let _temporalConnection: TemporalConnection | null = null;
 let _workflowClient: WorkflowClient | null = null;
 let _workflowClientPromise: Promise<{
@@ -423,16 +453,18 @@ let _workflowClientPromise: Promise<{
 export function getContainer(): Container {
   if (!_container) {
     _container = createContainer();
+    // First container init (e.g. the readyz probe) is the earliest in-bootstrap seam to
+    // self-activate this deploy's governance schedules from repo-spec (SELF_RECONCILE_ON_BOOT) —
+    // instrumentation.ts cannot import bootstrap. Detached, fire-once, retry-until-Temporal-ready.
+    // SELF_FIRST (task.5282): the operator's OWN charters come from its image repo-spec and need
+    // no GitHub/catalog read, so they activate now, independent of the fleet registry.
+    startGovernanceSyncOnBoot("self");
     // Project merged catalog intent into THIS environment's Postgres + OpenFGA.
     // Detached and single-writer guarded; a periodic App-read heals missed push triggers. Only
-    // start governance sync after the first successful projection: its routable-node set is a
+    // start the routable-node ("all") sync after the first successful projection: that set is a
     // consumer of this registry and must never race stale environment/activity authority.
     void startCatalogRegistryReconcileOnBoot().then(() => {
-      // First container init (e.g. the readyz probe) is the earliest in-bootstrap seam
-      // to self-activate this deploy's governance schedules from repo-spec
-      // (SELF_RECONCILE_ON_BOOT) — instrumentation.ts cannot import bootstrap. Detached,
-      // fire-once, retry-until-Temporal-ready; never blocks the caller.
-      startGovernanceSyncOnBoot();
+      startGovernanceSyncOnBoot("all");
     });
   }
   return _container;
@@ -504,6 +536,8 @@ export function resolveLocalReliabilityControl(): {
  */
 export function resetContainer(): void {
   _container = null;
+  _workItemSessions = null;
+  _requestLoggingDependencies = null;
   _webhookRegistrations = null;
   if (_temporalConnection) {
     void _temporalConnection.close();
@@ -579,7 +613,8 @@ function createContainer(): Container {
   const env = serverEnv();
   const nodeId = getNodeId();
   const db = getAppDb();
-  const log = makeLogger({ service: "cogni-template", nodeId });
+  const requestDependencies = getRequestLoggingDependencies();
+  const log = requestDependencies.log;
 
   // Startup log - confirm config in Loki (no URLs/secrets)
   log.info(
@@ -724,7 +759,7 @@ function createContainer(): Container {
         })
       : undefined;
 
-  const clock = new SystemClock();
+  const clock = requestDependencies.clock;
 
   // Scheduling adapters (from @cogni/db-client)
   // Per architecture rule: composition root injects loggers via child()
@@ -751,7 +786,7 @@ function createContainer(): Container {
   const serviceDb = getServiceDb();
   const paymentAttemptServiceRepository =
     new ServiceDrizzlePaymentAttemptRepository(serviceDb);
-  const workItemSessions = new DrizzleWorkItemSessionAdapter(serviceDb);
+  const workItemSessions = getWorkItemSessionPort();
 
   // User-facing scheduling (appDb, RLS enforced)
   const executionGrantPort = new DrizzleExecutionGrantUserAdapter(
@@ -810,14 +845,11 @@ function createContainer(): Container {
   // RepoCapability for AI tools (requires COGNI_REPO_PATH)
   const repoCapability = createRepoCapability(env);
 
-  // WorkItemCapability for AI tools (delegates to markdown adapter ports)
+  // Legacy markdown work-item adapter (container.workItemQuery + the AI tool's
+  // command path). The runtime image carries no `work/` tree, so it reads empty.
   const workItemAdapter = new MarkdownWorkItemAdapter(
     env.COGNI_REPO_ROOT ?? "/nonexistent"
   );
-  const workItemCapability = createWorkItemCapability({
-    workItemQuery: workItemAdapter,
-    workItemCommand: workItemAdapter,
-  });
 
   // ScheduleCapability for AI tools (reads actorUserId from ALS at invocation time)
   const scheduleCapability = createScheduleCapability({
@@ -976,6 +1008,37 @@ function createContainer(): Container {
     };
   }
 
+  // WorkItemCapability for AI tools (task.5282). `core__work_item_query` lists
+  // through the Doltgres read path — the same `doltgresWorkItems.list` that
+  // `GET /api/v1/work/items` serves (read pool, never writer admission). The
+  // command path for transition stays on the markdown ports. `patch` (story.5096)
+  // writes through the SAME Doltgres patch `PATCH /api/v1/work/items/{id}` uses —
+  // the runtime image has no markdown `work/` tree, so a markdown patch could never
+  // land — attributed to the system principal scheduled runs execute as, under the
+  // store's unchanged authority (non-creator ⇒ triage fields only) and with the
+  // caller's optional `expectedRevision` as compare-and-set.
+  const workItemCapability = createWorkItemCapability({
+    workItemQuery: workItemAdapter,
+    workItemCommand: workItemAdapter,
+    backlogReader: doltgresWorkItems,
+    backlogWriter: {
+      store: doltgresWorkItems,
+      principalId: `actor:${COGNI_SYSTEM_PRINCIPAL_USER_ID}`,
+    },
+    // P0P1_IS_NODE_ADMIN (task.5286): gate priority 0/1 on the INVOKING actor from the
+    // run's execution scope — never the system principal the write is attributed to.
+    // Outside a graph run (no scope) the actor is missing ⇒ authz_unavailable.
+    privilegedPriorityGate: () => {
+      let actorUserId: string | undefined;
+      try {
+        actorUserId = getExecutionScope().actorUserId;
+      } catch {
+        actorUserId = undefined;
+      }
+      return checkNodeAdmin(authorization, { userId: actorUserId, nodeId });
+    },
+  });
+
   // ToolSource with real implementations (per CAPABILITY_INJECTION)
   const toolBindings = createToolBindings({
     knowledgeCapability,
@@ -992,7 +1055,7 @@ function createContainer(): Container {
 
   // Config: rethrow in dev/test for diagnosis, respond_500 in production for safety
   const config: ContainerConfig = {
-    unhandledErrorPolicy: env.isProd ? "respond_500" : "rethrow",
+    unhandledErrorPolicy: requestDependencies.config.unhandledErrorPolicy,
     // Rate limit bypass: only enabled in test mode (APP_ENV=test)
     // Security: Production builds will never enable bypass regardless of header
     rateLimitBypass: {

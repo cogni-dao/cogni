@@ -59,6 +59,7 @@ import {
   replacementLeaseGeneration,
   requiredLeaseGeneration,
 } from "@/features/compute/lease-reactivation";
+import { receiptsExcludingInstances } from "@/features/compute/node-isolated-services";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import type { AkashTxAllocationRecord } from "@/ports";
 import { nodes } from "@/shared/db/nodes";
@@ -344,9 +345,11 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           // REPLACEMENT, not reactivation — see replacementLeaseGeneration's header. The
           // catalog's own generation is 0 here because the ledger receipts already carry every
           // generation this (node, env) has ever minted, and this must bump past all of them.
+          // APP_GENERATION_EVIDENCE_IS_ITS_OWN_FAMILY (story.5093): an isolated-service lease
+          // of this node never moves the primary workload's generation.
           leaseGeneration: replacementLeaseGeneration({
             catalogGeneration: 0,
-            receipts: regionReceipts,
+            receipts: receiptsExcludingInstances(regionReceipts, node.id),
           }),
         });
       } catch (err) {
@@ -448,7 +451,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       present === true && envReceipts
         ? requiredLeaseGeneration({
             catalogGeneration: 0,
-            receipts: envReceipts,
+            receipts: receiptsExcludingInstances(envReceipts, node.id),
           })
         : undefined;
 

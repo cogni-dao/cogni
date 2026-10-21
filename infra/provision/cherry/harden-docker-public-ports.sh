@@ -17,7 +17,9 @@
 # k3s service CIDR.
 #
 # Idempotent: tagged rules are removed before re-insertion.
-# Links: bug.5167
+# Reboot-safe: installs cogni-harden-docker-public-ports.service, which re-runs
+# this script whenever docker.service starts (story.5084).
+# Links: bug.5167, story.5084
 
 set -euo pipefail
 
@@ -117,8 +119,95 @@ fi
 
 iptables -A DOCKER-USER -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$INTERNAL_PORTS" -m comment --comment "$TAG:drop-public" -j DROP
 
-DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent >/dev/null
+# Day-2 flights must not contend with unattended-upgrades when persistence is
+# already installed. Package state alone is insufficient: save can succeed with
+# no IPv4 plugin, leaving the installed firewall unpersisted across a reboot.
+persistence_ready() {
+  local plugin package_status
+  package_status="$(dpkg-query -W -f='${Status}' iptables-persistent 2>/dev/null)" || return 1
+  # Selection (install/hold) is separate from the installed state and error flag.
+  case "$package_status" in 'install ok installed'|'hold ok installed') ;; *) return 1 ;; esac
+  command -v netfilter-persistent >/dev/null 2>&1 || return 1
+  plugin="$(dpkg-query -L iptables-persistent 2>/dev/null | awk '!found && /\/netfilter-persistent\/plugins[.]d\/15-ip4tables$/ {print; found=1}')" || return 1
+  [ -n "$plugin" ] && [ -f "$plugin" ] && [ -x "$plugin" ]
+}
+
+if persistence_ready; then
+  echo '[harden] persistence_dependency=healthy apt=skipped'
+else
+  # Ubuntu 22.04 apt 2.4 supports this native dpkg/frontend lock wait. This
+  # bounds lock acquisition only, not downloads or the entire apt transaction.
+  echo '[harden] persistence_dependency=unavailable apt=install lock_wait_seconds=60'
+  if DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 install -y iptables-persistent >/dev/null; then
+    if ! persistence_ready; then
+      echo '[harden] ERROR: persistence_dependency=unavailable reason=install_postcheck_failed' >&2
+      exit 1
+    fi
+    echo '[harden] persistence_dependency=healthy apt=installed'
+  else
+    status=$?
+    echo "[harden] ERROR: persistence_dependency=unavailable reason=install_failed native_rc=$status" >&2
+    exit "$status"
+  fi
+fi
 netfilter-persistent save >/dev/null
+
+# Reboot persistence (story.5084). A saved ruleset is not enough: after a reboot
+# Docker comes up with an empty DOCKER-USER chain, so every internal port stays
+# public until the next deploy (production, 2026-10-21). Every invocation path
+# (cloud-init bootstrap, deploy-infra, compute-egress reconcile) runs this one
+# script, so it installs its own boot replay: a current copy of itself plus a
+# oneshot unit that re-runs it whenever docker.service starts. The unit replays
+# only the installed allowlist ($ALLOWLIST_FILE); PrivateTmp hides any staged
+# render, so a boot can never apply an unreviewed or stale allowlist.
+# Content-compared writes keep a boot-time replay from rewriting its own unit,
+# and the unit is enabled, never started, here: starting it would re-enter this
+# script and deadlock on the writer lock held above. Paths are overridable for
+# tests only.
+BOOT_UNIT_NAME="cogni-harden-docker-public-ports.service"
+BOOT_SCRIPT="${HARDEN_BOOT_SCRIPT:-/usr/local/sbin/cogni-harden-docker-public-ports.sh}"
+BOOT_UNIT="${HARDEN_BOOT_UNIT:-/etc/systemd/system/$BOOT_UNIT_NAME}"
+if command -v systemctl >/dev/null 2>&1; then
+  self="$(readlink -f "${BASH_SOURCE[0]}")"
+  if ! cmp -s "$self" "$BOOT_SCRIPT"; then
+    mkdir -p "$(dirname "$BOOT_SCRIPT")"
+    install -m 0755 "$self" "$BOOT_SCRIPT"
+    echo "[harden] boot replay script installed -> $BOOT_SCRIPT"
+  fi
+  mkdir -p "$(dirname "$BOOT_UNIT")"
+  unit_next="$(mktemp "${BOOT_UNIT}.XXXXXX")"
+  cat > "$unit_next" <<UNIT_EOF
+[Unit]
+Description=Re-apply Cogni DOCKER-USER public-port hardening after Docker starts
+Documentation=https://github.com/cogni-dao/cogni/blob/main/infra/provision/cherry/harden-docker-public-ports.sh
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+PrivateTmp=yes
+TimeoutStartSec=5min
+ExecStart=/bin/bash $BOOT_SCRIPT
+
+[Install]
+WantedBy=multi-user.target docker.service
+UNIT_EOF
+  if cmp -s "$unit_next" "$BOOT_UNIT"; then
+    rm -f "$unit_next"
+  else
+    chmod 0644 "$unit_next"
+    mv -f "$unit_next" "$BOOT_UNIT"
+    systemctl daemon-reload
+    systemctl reenable --quiet "$BOOT_UNIT_NAME"
+    echo "[harden] boot replay unit installed and enabled -> $BOOT_UNIT"
+  fi
+  systemctl is-enabled --quiet "$BOOT_UNIT_NAME" || systemctl enable --quiet "$BOOT_UNIT_NAME"
+else
+  echo "[harden] WARN: systemctl unavailable; boot replay unit not installed" >&2
+fi
 
 echo "[harden] done. DOCKER-USER rules:"
 iptables -S DOCKER-USER | grep -- "$TAG" || true

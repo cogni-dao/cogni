@@ -47,6 +47,7 @@ const CANDIDATE_WORKFLOWS = [
 
 interface WorkflowStep {
   name?: string;
+  if?: string;
   run?: string;
   env?: Record<string, unknown>;
   with?: Record<string, unknown>;
@@ -117,6 +118,30 @@ function isCustodianBridgeStep(
   )
     .sort()
     .join(",");
+  // task.5281: one additional recipient may only inventory the owning template lane.
+  // It cannot materialize, close, audit or activate; its entrypoint fails closed afterward.
+  if (
+    step.name === "Read owning candidate producer inventory before mutation"
+  ) {
+    return (
+      step.if ===
+        "matrix.node == 'node-template' && github.repository == 'cogni-dao/cogni'" &&
+      secretReferences === "GIT_READ_TOKEN,VM_HOST" &&
+      Object.keys(step.env ?? {})
+        .sort()
+        .join(",") ===
+        "APP_SOURCE_ROOT,CI_SOURCE_ROOT,CONTROL_ENV,DEPLOY_ENVIRONMENT,GH_TOKEN,NODE,VM_HOST" &&
+      step.env?.VM_HOST === "${{ secrets.VM_HOST }}" &&
+      step.env?.GH_TOKEN === "${{ secrets.GIT_READ_TOKEN }}" &&
+      step.env?.CONTROL_ENV ===
+        "${{ vars.FLEET_CONTROL_ENV || 'production' }}" &&
+      step.env?.NODE === "${{ matrix.node }}" &&
+      step.env?.CI_SOURCE_ROOT === "${{ github.workspace }}/ci-src" &&
+      step.env?.APP_SOURCE_ROOT === "${{ github.workspace }}/app-src" &&
+      step.run?.trim() ===
+        "pnpm --dir ci-src exec tsx --tsconfig nodes/operator/app/tsconfig.app.json scripts/ops/maintenance-drain.mjs candidate-preflight"
+    );
+  }
   if (step.name === "Setup SSH to candidate-a VM") {
     return (
       secretReferences === "SSH_DEPLOY_KEY,VM_HOST" &&
@@ -158,6 +183,30 @@ describe.each(CANDIDATE_WORKFLOWS)("%s", (workflowPath) => {
 
   it("has jobs to check", () => {
     expect(jobs.length).toBeGreaterThan(0);
+  });
+
+  it("keeps foreign compute convergence public-only without control credentials", () => {
+    if (workflowPath !== ".github/workflows/candidate-flight.yml") return;
+    const verify = parsed.jobs?.["verify-candidate"];
+    expect(jobEnvironmentName(verify?.environment)).toBe("candidate-a");
+    const wait = verify?.steps?.find(
+      (step) => step.name === "Wait for external ComputeWorkload readiness"
+    );
+    expect(wait).toBeDefined();
+    expect(wait?.if).toBe(
+      "steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'"
+    );
+    expect(wait?.with?.public_only).toBe(
+      "${{ steps.custody.outputs.control_env != 'candidate-a' }}"
+    );
+    expect(wait?.with?.manifest).toBe(
+      "${{ steps.workload-manifest.outputs.path }}"
+    );
+    const finalVerify = verify?.steps?.find(
+      (step) => step.name === "Verify buildSha on endpoint (per-node)"
+    );
+    expect(finalVerify?.env?.CUTOVER_TIMEOUT).toBe("420");
+    expect(finalVerify?.env?.VERIFY_BUNDLE_MARKER).toBe("1");
   });
 
   it("LANE_CREDENTIALS_MATCH_LANE: a step holding VM credentials for a named lane runs in that lane's environment", () => {
@@ -217,14 +266,14 @@ describe.each(CANDIDATE_WORKFLOWS)("%s", (workflowPath) => {
     expect(violations).toEqual([]);
   });
 
-  it("CUSTODIAN_BRIDGE_IS_EXACT: only the reviewed wrapper and SSH setup receive custody authority", () => {
+  it("CUSTODIAN_BRIDGE_IS_EXACT: only the reviewed wrapper, SSH setup and read-only inventory receive custody authority", () => {
     if (workflowPath !== ".github/workflows/candidate-flight.yml") return;
     const jobId = "external-node-preflight";
     const job = parsed.jobs?.[jobId];
     expect(job).toBeDefined();
     if (!job) throw new Error("external-node-preflight job is required");
     const credentialSteps = job?.steps?.filter(readsVmCredentials) ?? [];
-    expect(credentialSteps).toHaveLength(2);
+    expect(credentialSteps).toHaveLength(3);
     for (const step of credentialSteps) {
       expect(isCustodianBridgeStep(workflowPath, jobId, job, step)).toBe(true);
       expect(
@@ -274,5 +323,64 @@ describe.each(CANDIDATE_WORKFLOWS)("%s", (workflowPath) => {
         })
       ).toBe(false);
     }
+  });
+  it("READ_ONLY_INVENTORY_IS_EXACT: refuses arbitrary commands, targets and authority", () => {
+    if (workflowPath !== ".github/workflows/candidate-flight.yml") return;
+    const jobId = "external-node-preflight";
+    const job = parsed.jobs?.[jobId];
+    if (!job) throw new Error("external-node-preflight job is required");
+    const steps = (job.steps ?? []).filter(
+      (step) =>
+        step.name === "Read owning candidate producer inventory before mutation"
+    );
+    expect(steps).toHaveLength(1);
+    const step = steps[0];
+    if (!step || typeof step.run !== "string")
+      throw new Error("read-only inventory step is required");
+    expect(isCustodianBridgeStep(workflowPath, jobId, job, step)).toBe(true);
+    for (const run of [
+      "ssh root@host true",
+      "psql -c 'SELECT 1'",
+      step.run.replace("candidate-preflight", "close"),
+      `${step.run} --sql 'SELECT 1'`,
+    ]) {
+      expect(
+        isCustodianBridgeStep(workflowPath, jobId, job, { ...step, run })
+      ).toBe(false);
+    }
+    for (const env of [
+      { ...step.env, NODE: "poly" },
+      { ...step.env, CONTROL_ENV: "preview" },
+      { ...step.env, DEPLOY_ENVIRONMENT: "production" },
+      { ...step.env, GH_TOKEN: "${{ secrets.PRODUCTION_KEY }}" },
+      { ...step.env, EXTRA_AUTHORITY: "${{ secrets.PRODUCTION_KEY }}" },
+      { ...step.env, SQL: "SELECT 1" },
+    ])
+      expect(
+        isCustodianBridgeStep(workflowPath, jobId, job, { ...step, env })
+      ).toBe(false);
+    for (const condition of [
+      "matrix.node == 'poly'",
+      "github.repository == 'other/repo'",
+      "",
+    ]) {
+      expect(
+        isCustodianBridgeStep(workflowPath, jobId, job, {
+          ...step,
+          if: condition,
+        })
+      ).toBe(false);
+    }
+    expect(isCustodianBridgeStep(workflowPath, "application", job, step)).toBe(
+      false
+    );
+    expect(
+      isCustodianBridgeStep(
+        workflowPath,
+        jobId,
+        { ...job, environment: "production" },
+        step
+      )
+    ).toBe(false);
   });
 });

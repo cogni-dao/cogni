@@ -379,6 +379,13 @@
       "when": 1792018276353,
       "tag": "0053_productive_shooting_star",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1792179092202,
+      "tag": "0054_solid_paper_doll",
+      "breakpoints": true
     }
   ]
 }

@@ -21,6 +21,11 @@
  *     opening a second one.
  *   - NO_SECRET_VALUES: `infra/k8s/secrets/{production,staging}/**` is declared hub-only, so hub
  *     secret material is never written into the mirror's tree by construction, not by convention.
+ *   - GENERATED_IS_REDERIVED: roster-generated files are never carried forward at the mirror's
+ *     stale bytes. The manifest's declared `regenerate.commands` (the CANONICAL render-*.sh
+ *     generators, unchanged) re-run against the mirror's OWN roster, with the mirror's identity
+ *     inputs declared on its manifest artifact entry — the same values its CI exports. A generator that
+ *     touches a path the policy does not let the mirror own fails the sync instead of forking it.
  * Side-effects: IO (clones the mirror into a temp dir; pushes one branch and opens or updates one PR as the operator GitHub App)
  * Notes: git does the tree work (read-tree/checkout/commit-tree) — this file only decides WHICH
  *   paths, from the manifest. No bespoke tree-building, no merge-strategy plugin.
@@ -76,6 +81,51 @@ const api = async (path, init = {}) => {
       `${init.method ?? "GET"} ${path} → ${res.status}: ${body.slice(0, 400)}`
     );
   return body ? JSON.parse(body) : {};
+};
+
+/**
+ * GENERATED_IS_REDERIVED. Identity inputs are the artifact entry's declared `identity` in the
+ * manifest (its CI's vars.*), never read from the repository API: the writer App keeps 1:1
+ * permission parity with the production operator App, which has no Variables access (task.5270).
+ */
+const regenerate = (clone, policy, repo) => {
+  const { commands, identity } = policy.regenerate;
+  if (commands.length === 0) return;
+  // The declared identity is the COMPLETE input set: an identity key it omits (e.g. DOMAIN, which
+  // candidate-flight.yml does not export) must not leak in from the runner's environment.
+  const env = { ...process.env };
+  for (const key of ["DOMAIN", "FORK_DOMAIN_ROOT", "FLEET_CONTROL_ENV"])
+    delete env[key];
+  Object.assign(env, identity, { GITHUB_REPOSITORY: repo });
+  console.log(
+    `  regenerate inputs   ${Object.entries(identity)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(" ")}`
+  );
+  for (const command of commands) {
+    const [script, ...args] = command.split(/\s+/);
+    execFileSync("bash", [script, ...args], {
+      cwd: clone,
+      env,
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+  }
+  // Worktree vs the assembled INDEX only — what the generators wrote, not the whole sync diff.
+  const changed = [
+    ...git(clone, ["diff", "--name-only"]).split("\n"),
+    ...git(clone, ["ls-files", "--others", "--exclude-standard"]).split("\n"),
+  ].filter(Boolean);
+  const foreign = changed.filter(
+    (path) =>
+      policy.hubDisposition(path) !== "content_free" &&
+      !policy.isArtifactOnlyDeclared(path)
+  );
+  if (foreign.length)
+    throw new Error(
+      `regenerate wrote ${foreign.length} path(s) the mirror may not own: ${foreign.slice(0, 10).join(", ")}`
+    );
+  git(clone, ["add", "-A", "--", "."]);
+  console.log(`  regenerated          ${changed.length} path(s)`);
 };
 
 const main = async () => {
@@ -156,8 +206,10 @@ const main = async () => {
         git(clone, [...args, "--", ...paths.slice(i, i + 200)]);
       }
     };
+    // Not --cached: the generators below read the WORKTREE, so a hub-only roster row left on
+    // disk would leak the production fleet into the mirror's rendered desired state.
     if (dropFromHub.length)
-      applyPaths(["rm", "-rq", "--cached", "--ignore-unmatch"], dropFromHub);
+      applyPaths(["rm", "-rqf", "--ignore-unmatch"], dropFromHub);
     if (keepFromMirror.length)
       applyPaths(["checkout", mirrorSha], keepFromMirror);
     for (const path of gitlinks) {
@@ -170,6 +222,8 @@ const main = async () => {
         `160000,${sha},${path}`,
       ]);
     }
+
+    regenerate(clone, policy, target.repo);
 
     const tree = git(clone, ["write-tree"]).trim();
     if (tree === git(clone, ["rev-parse", `${mirrorSha}^{tree}`]).trim()) {

@@ -22,6 +22,8 @@ export const EVENT_NAMES = {
   AI_LLM_CALL: "ai.llm_call",
   AI_LLM_CALL_COMPLETED: "ai.llm_call_completed",
   AI_TOOL_CALL_ERROR: "ai.tool_call.error",
+  /** One structured authz decision per evaluated tool call (authz v0 audit). */
+  AI_TOOL_AUTHZ_DECISION: "ai.tool_authz.decision",
   AI_CHAT_RECEIVED: "ai.chat_received",
   AI_CHAT_RESPONSE_STARTED: "ai.chat_response_started",
   AI_CHAT_STREAM_CLOSED: "ai.chat_stream_closed",
@@ -66,7 +68,10 @@ export const EVENT_NAMES = {
 
   // Node Formation Domain - Server (wizard)
   NODE_FORMATION_CREATE_COMPLETE: "feature.node_formation.create_complete",
+  NODE_RECONCILE_ACTIONS_COMPLETE: "feature.node_reconcile_actions.complete",
   NODE_FORMATION_UPDATE_COMPLETE: "feature.node_formation.update_complete",
+  NODE_REFERENCE_READ_COMPLETE: "feature.node_reference.read_complete",
+  NODE_PROMOTE_COMPLETE: "feature.node_promote.complete",
   NODE_PUBLISH_COMPLETE: "feature.node_publish.complete",
   NODE_PUBLISH_SECRET_SHAPE_GENERATED:
     "feature.node_publish.secret_shape_generated",

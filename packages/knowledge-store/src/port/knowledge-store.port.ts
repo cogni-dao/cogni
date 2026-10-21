@@ -17,6 +17,7 @@
  * @public
  */
 
+import type { ActiveGoal } from "../domain/dao-goals.js";
 import type {
   Citation,
   CitationType,
@@ -44,6 +45,22 @@ export interface NewDomain {
   id: string;
   name: string;
   description?: string;
+}
+
+/** Direct-edge read model: no knowledge bodies or work-item outcomes. */
+export interface CitationLinkSummary {
+  id: string;
+  citingId: string;
+  citedId: string;
+  citationType: CitationType;
+  context: string | null;
+  sourceTitle: string | null;
+  targetTitle: string | null;
+}
+
+export interface CitationLinkPage {
+  links: CitationLinkSummary[];
+  nextCursor: string | null;
 }
 
 /**
@@ -86,17 +103,21 @@ export class DomainAlreadyRegisteredError extends Error {
 // ---------------------------------------------------------------------------
 
 /**
- * Thrown by `addKnowledge` / `upsertKnowledge` when a hypothesis row is
- * written without `evaluate_at`. Enforces `HYPOTHESIS_HAS_EVALUATE_AT`.
+ * Thrown when a hypothesis or goal row is written without `evaluate_at`.
+ * Enforces `HYPOTHESIS_HAS_EVALUATE_AT` (goals: their `By:` deadline).
  */
 export class HypothesisMissingEvaluateAtError extends Error {
   readonly entryId: string;
-  constructor(entryId: string) {
+  readonly entryType: string;
+  constructor(entryId: string, entryType = "hypothesis") {
     super(
-      `hypothesis '${entryId}' is missing evaluate_at — hypothesis rows must declare a resolution date`
+      entryType === "goal"
+        ? `goal '${entryId}' is missing evaluate_at — goal rows must declare their By: deadline`
+        : `hypothesis '${entryId}' is missing evaluate_at — hypothesis rows must declare a resolution date`
     );
     this.name = "HypothesisMissingEvaluateAtError";
     this.entryId = entryId;
+    this.entryType = entryType;
   }
 }
 
@@ -157,6 +178,25 @@ export class EdoEntryTypeRequiresAtomicToolError extends Error {
   }
 }
 
+/**
+ * Thrown by `listActiveGoals` when more than the allowed number of active DAO
+ * goals are merged. Enforces `MAX_THREE_GOALS`: callers must surface it, never
+ * truncate the list to fit.
+ */
+export class TooManyActiveGoalsError extends Error {
+  readonly code = "TOO_MANY_ACTIVE_GOALS" as const;
+  readonly goalIds: readonly string[];
+  readonly max: number;
+  constructor(goalIds: readonly string[], max: number) {
+    super(
+      `${goalIds.length} active DAO goals exceed the max of ${max}: ${goalIds.join(", ")}`
+    );
+    this.name = "TooManyActiveGoalsError";
+    this.goalIds = goalIds;
+    this.max = max;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Port interface
 // ---------------------------------------------------------------------------
@@ -183,6 +223,13 @@ export interface KnowledgeStorePort {
     query: string,
     opts?: { limit?: number }
   ): Promise<Knowledge[]>;
+  /**
+   * The approved DAO goals (ONE_GOAL_LIST): merged `entry_type = 'goal'` rows
+   * with id prefix `goal-`, not deprecated, sorted by id. Returns []
+   * when none are merged; throws `TooManyActiveGoalsError` past 3
+   * (MAX_THREE_GOALS). Contribution-branch rows are never visible here.
+   */
+  listActiveGoals(): Promise<ActiveGoal[]>;
   /** List distinct domain values present in the `knowledge` table (legacy / back-compat). */
   listDomains(): Promise<string[]>;
 
@@ -239,6 +286,11 @@ export interface KnowledgeStorePort {
   listCitationsByCitingId(citingId: string): Promise<Citation[]>;
   /** List edges where cited_id = id (incoming). Used by recomputeConfidence. */
   listCitationsByCitedId(citedId: string): Promise<Citation[]>;
+  /** Five direct edges per page, with joined titles and an exclusive ID cursor. */
+  listCitationLinks(
+    endpointId: string,
+    after?: string
+  ): Promise<CitationLinkPage>;
   /**
    * List every citation edge in a single query. Used to assemble the full
    * knowledge graph without an N+1 over entries — the caller filters to edges
