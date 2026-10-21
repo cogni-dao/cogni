@@ -12,13 +12,13 @@ spec:
   nodeId: 921b1d1d-4ded-4a6d-b3f1-f7d6affa406a
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/red@sha256:88ccdcac7ebeb32cb3ed57dd009dec2bf60e304ea54baebd5c9f8343fdd556ff
+    ref: ghcr.io/cogni-dao/red@sha256:e25289b9e0413d32ba160efb562f0e4168c759a22d35feadb227e2cfd1a9d119
     source:
       repository: cogni-dao/red
-      sha: f5da66cee4f2f80fe664a48a60504f88e33730b4
+      sha: 3369a55ab1a0db7a6d3e15e4b48de4343b36dcb2
     artifacts:
       - name: sandbox
-        image: ghcr.io/cogni-dao/red-sandbox@sha256:273e58aff7a02a4b05291184e012ebb132928fb94f9c8c0211903c81f3655e47
+        image: ghcr.io/cogni-dao/red-sandbox@sha256:a30aacdf8a10d55e8fe2b6258c04ca1d2aa00847533ed53df105199c2fbc4294
   workload:
     name: red
     publicHost: red-sandbox.cognidao.org
