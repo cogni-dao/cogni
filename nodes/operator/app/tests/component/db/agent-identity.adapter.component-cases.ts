@@ -806,7 +806,7 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     now = new Date("2026-10-09T00:00:00.000Z");
   });
 
-  it("upgrades a legacy user link idempotently without changing billing", async () => {
+  it("never re-emits a completed legacy-upgrade credential", async () => {
     const input = {
       legacyToken: "cogni_ag_sk_v1_component-legacy-token",
       legacyUserId: userId,
@@ -822,21 +822,14 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
       credentialId: prepared.credentialId,
       transferLeaseId: prepared.transferLeaseId,
     });
-    const retry = await identity.upgradeLegacy(input);
-
-    expect(retry).toMatchObject({
-      actorId: prepared.actorId,
-      principalId: prepared.principalId,
-      credentialId: prepared.credentialId,
-      apiKey: prepared.apiKey,
-      billingAccountId: prepared.billingAccountId,
-      grantTransferRequired: false,
-    });
-    expect(retry.billingAccountId).toBe(billingAccountId);
-    expect(retry.principalId).toBe(`agent:${nodeId}/${retry.actorId}`);
-    await expect(identity.authenticate(retry.apiKey)).resolves.toMatchObject({
+    await expect(identity.upgradeLegacy(input)).rejects.toMatchObject<
+      Partial<AgentIdentityError>
+    >({ code: "invalid_credential" });
+    expect(prepared.billingAccountId).toBe(billingAccountId);
+    expect(prepared.principalId).toBe(`agent:${nodeId}/${prepared.actorId}`);
+    await expect(identity.authenticate(prepared.apiKey)).resolves.toMatchObject({
       principal: {
-        actorId: retry.actorId,
+        actorId: prepared.actorId,
         legacyUserId: userId,
         billingAccountId,
       },

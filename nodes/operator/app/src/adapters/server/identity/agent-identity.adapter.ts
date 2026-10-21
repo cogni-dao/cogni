@@ -1554,19 +1554,13 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           );
         }
         if (legacyCredential.status === "active") {
-          return {
-            ...this.material(
-              {
-                credentialId: legacyCredential.id,
-                actorId: actor.id,
-                billingAccountId: actor.billingAccountId,
-                authenticateUntil: legacyCredential.authenticateUntil,
-                renewUntil: legacyCredential.renewUntil,
-              },
-              secret
-            ),
-            grantTransferRequired: false,
-          };
+          // Completion is the disclosure boundary: after the copied grants
+          // are committed, this endpoint may recognize the prior request but
+          // must never reconstruct and return its durable bearer again.
+          throw new AgentIdentityError(
+            "invalid_credential",
+            "Legacy credential was already upgraded"
+          );
         }
         if (
           legacyCredential.pendingExpiresAt &&
