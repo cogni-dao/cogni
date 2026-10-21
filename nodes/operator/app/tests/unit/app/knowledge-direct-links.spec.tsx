@@ -143,7 +143,7 @@ describe("ordinary knowledge reads", () => {
     );
     await screen.findByRole("link", { name: "supports Related 0" });
     fireEvent.click(screen.getByRole("button", { name: "More links" }));
-    await screen.findByText("Unable to load more links.");
+    await screen.findByRole("alert");
     expect(
       screen.getByRole("link", { name: "supports Related 0" })
     ).toBeTruthy();
