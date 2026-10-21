@@ -123,6 +123,7 @@ export const EVENT_NAMES = {
   LEDGER_BENEFICIARY_POLICY_COMPLETE: "ledger.beneficiary_policy.complete",
   LEDGER_ACTOR_ALLOCATION_READ_COMPLETE:
     "ledger.actor_allocation.read_complete",
+  LEDGER_SIGN_DATA_COMPLETE: "ledger.sign_data.complete",
 
   // BYO-AI Auth Domain
   BYO_AUTH_DEVICE_CODE_COMPLETE: "byo_auth.device_code.complete",
