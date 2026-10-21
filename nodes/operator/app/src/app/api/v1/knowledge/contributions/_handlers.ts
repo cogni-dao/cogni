@@ -25,6 +25,7 @@ import {
   ContributionStateError,
   DomainNotRegisteredError,
   EmptyKnowledgePatchError,
+  HypothesisMissingEvaluateAtError,
   KnowledgeBusyError,
   KnowledgeGateError,
   KnowledgeWriteConflictError,
@@ -117,6 +118,9 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json({ error: e.message }, { status: 400 });
   // PATCH_IS_NOT_EMPTY — a no-op patch is a client contract error, not a 500.
   if (e instanceof EmptyKnowledgePatchError)
+    return NextResponse.json({ error: e.message }, { status: 400 });
+  // HYPOTHESIS_HAS_EVALUATE_AT — a hypothesis insert without evaluateAt.
+  if (e instanceof HypothesisMissingEvaluateAtError)
     return NextResponse.json({ error: e.message }, { status: 400 });
   // A cite/EDO edit whose target resolves on neither the branch nor main, or
   // whose edge type doesn't match the cited entry_type, is a client error —
