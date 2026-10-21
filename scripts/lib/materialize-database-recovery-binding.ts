@@ -14,6 +14,40 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 
+type RejectionCategory =
+  | "canonical_identity"
+  | "canonical_dsn_invalid"
+  | "canonical_dsn_mismatch"
+  | "native_identity"
+  | "duplicate_binding"
+  | "prior_machine_id"
+  | "prior_system_identifier"
+  | "prior_dsn_invalid"
+  | "prior_host"
+  | "prior_database"
+  | "prior_role"
+  | "prior_node_slug";
+
+class BindingRejection extends Error {
+  constructor(
+    readonly category: RejectionCategory,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+function bindingUrl(
+  dsn: string,
+  category: "canonical_dsn_invalid" | "prior_dsn_invalid"
+): URL {
+  try {
+    return new URL(dsn);
+  } catch {
+    throw new BindingRejection(category, "Invalid URL");
+  }
+}
+
 const bindingSchema = z
   .object({
     nodeId: z.string().uuid(),
@@ -70,8 +104,11 @@ export function sealRecoveryBinding(
     ) ||
     input.probeRole !== `probe_${suffix}`
   )
-    throw new Error("canonical node database/role mismatch");
-  const dsn = new URL(input.dsn);
+    throw new BindingRejection(
+      "canonical_identity",
+      "canonical node database/role mismatch"
+    );
+  const dsn = bindingUrl(input.dsn, "canonical_dsn_invalid");
   if (
     dsn.protocol !== "postgresql:" ||
     decodeURIComponent(dsn.username) !== input.probeRole ||
@@ -83,7 +120,10 @@ export function sealRecoveryBinding(
       ([key, value]) => key !== "sslmode" || value !== "disable"
     )
   ) {
-    throw new Error("probe DSN does not match canonical local residency");
+    throw new BindingRejection(
+      "canonical_dsn_mismatch",
+      "probe DSN does not match canonical local residency"
+    );
   }
   const observed = input.observation;
   if (
@@ -92,29 +132,43 @@ export function sealRecoveryBinding(
     observed.role !== input.probeRole ||
     observed.serverPort !== 5432
   ) {
-    throw new Error("native probe receipt identity mismatch");
+    throw new BindingRejection(
+      "native_identity",
+      "native probe receipt identity mismatch"
+    );
   }
   const seen = new Set<string>();
   for (const binding of input.existingBindings) {
     const key = `${binding.nodeId}/${binding.environment}`;
-    if (seen.has(key)) throw new Error("duplicate existing probe binding");
+    if (seen.has(key))
+      throw new BindingRejection(
+        "duplicate_binding",
+        "duplicate existing probe binding"
+      );
     seen.add(key);
   }
   const prior = input.existingBindings.find(
     (b) => b.nodeId === input.nodeId && b.environment === input.environment
   );
-  if (
-    prior &&
-    (prior.substrateHost !== input.machineId ||
-      prior.systemIdentifier !== observed.systemIdentifier ||
-      new URL(prior.dsn).hostname !== input.expectedHost ||
-      prior.databaseName !== input.databaseName ||
-      prior.probeRole !== input.probeRole ||
-      prior.nodeSlug !== input.nodeSlug)
-  ) {
-    throw new Error(
-      "existing binding physical identity changed without an applied placement receipt"
-    );
+  if (prior) {
+    // Preserve the guard's comparison order; report only its first failed name.
+    let category: RejectionCategory | undefined;
+    if (prior.substrateHost !== input.machineId) category = "prior_machine_id";
+    else if (prior.systemIdentifier !== observed.systemIdentifier)
+      category = "prior_system_identifier";
+    else if (
+      bindingUrl(prior.dsn, "prior_dsn_invalid").hostname !== input.expectedHost
+    )
+      category = "prior_host";
+    else if (prior.databaseName !== input.databaseName)
+      category = "prior_database";
+    else if (prior.probeRole !== input.probeRole) category = "prior_role";
+    else if (prior.nodeSlug !== input.nodeSlug) category = "prior_node_slug";
+    if (category)
+      throw new BindingRejection(
+        category,
+        "existing binding physical identity changed without an applied placement receipt"
+      );
   }
   const next = bindingSchema.parse({
     nodeId: input.nodeId,
@@ -144,8 +198,17 @@ if (
     process.stdout.write(
       JSON.stringify(sealRecoveryBinding(JSON.parse(readFileSync(0, "utf8"))))
     );
-  } catch {
-    process.stderr.write("recovery binding receipt rejected\n");
+  } catch (error) {
+    // Private values may appear in URL/Zod/JSON errors. Never serialize them.
+    const category =
+      error instanceof BindingRejection
+        ? error.category
+        : error instanceof z.ZodError
+          ? "input_schema"
+          : error instanceof SyntaxError
+            ? "input_json"
+            : "validation_error";
+    process.stderr.write(`recovery binding receipt rejected: ${category}\n`);
     process.exitCode = 1;
   }
 }
