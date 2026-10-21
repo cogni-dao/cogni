@@ -2482,6 +2482,29 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     return row?.id ?? null;
   }
 
+  async resolveCurrentStewardActorId(
+    earnedByActorId: string
+  ): Promise<string | null> {
+    const [earner] = await this.db
+      .select({ parentActorId: actors.parentActorId })
+      .from(actors)
+      .where(and(eq(actors.id, earnedByActorId), eq(actors.kind, "agent")))
+      .limit(1);
+    if (!earner?.parentActorId) return null;
+    const [steward] = await this.db
+      .select({ id: actors.id })
+      .from(actors)
+      .where(
+        and(
+          eq(actors.id, earner.parentActorId),
+          eq(actors.kind, "user"),
+          eq(actors.status, "active")
+        )
+      )
+      .limit(1);
+    return steward?.id ?? null;
+  }
+
   async getActorBeneficiaryPolicyProposal(
     proposalId: string
   ): Promise<ActorBeneficiaryPolicyProposalRecord | null> {
@@ -2840,7 +2863,6 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     readonly proposalId: string;
     readonly revokedByActorId: string;
     readonly revokedAt: Date;
-    readonly governanceOverride?: boolean;
   }): Promise<ActorBeneficiaryPolicyProposalRecord> {
     return this.db.transaction(async (tx) => {
       await tx.execute(
@@ -2852,27 +2874,40 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         .where(eq(actorBeneficiaryPolicyProposals.id, params.proposalId))
         .limit(1);
       if (!proposal) throw new Error("Beneficiary proposal not found");
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary:${proposal.earnedByActorId}`}))`
+      );
+      const [earner] = await tx
+        .select({ kind: actors.kind, parentActorId: actors.parentActorId })
+        .from(actors)
+        .where(eq(actors.id, proposal.earnedByActorId))
+        .limit(1)
+        .for("share");
+      if (earner?.kind !== "agent") {
+        throw new Error("Beneficiary proposal earner is no longer an AI actor");
+      }
+      let currentStewardActorId: string | null = null;
+      if (earner.parentActorId) {
+        const [steward] = await tx
+          .select({ id: actors.id })
+          .from(actors)
+          .where(
+            and(
+              eq(actors.id, earner.parentActorId),
+              eq(actors.kind, "user"),
+              eq(actors.status, "active")
+            )
+          )
+          .limit(1)
+          .for("share");
+        currentStewardActorId = steward?.id ?? null;
+      }
       const outsideParticipantSet =
         params.revokedByActorId !== proposal.earnedByActorId &&
-        params.revokedByActorId !== proposal.stewardActorId &&
+        params.revokedByActorId !== currentStewardActorId &&
         params.revokedByActorId !== proposal.beneficiaryActorId;
-      if (outsideParticipantSet && !params.governanceOverride) {
-        throw new Error("Caller cannot revoke this beneficiary proposal");
-      }
       if (outsideParticipantSet) {
-        const [governanceActor] = await tx
-          .select({ kind: actors.kind, status: actors.status })
-          .from(actors)
-          .where(eq(actors.id, params.revokedByActorId))
-          .limit(1);
-        if (
-          governanceActor?.kind !== "user" ||
-          governanceActor.status !== "active"
-        ) {
-          throw new Error(
-            "Governance revocation requires an active human actor"
-          );
-        }
+        throw new Error("Caller cannot revoke this beneficiary proposal");
       }
       if (proposal.status === "revoked") {
         const acceptances = await tx

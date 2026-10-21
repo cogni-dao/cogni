@@ -5,7 +5,8 @@
  * Module: `@bootstrap/actor-attribution`
  * Purpose: Compose governed beneficiary use cases for HTTP routes.
  * Scope: Server-only composition over AttributionStore and signing services.
- * Invariants: PRINCIPAL_IS_CALLER; BENEFICIARY_EXPLICIT; CUTOFF_FROZEN.
+ * Invariants: PRINCIPAL_IS_CALLER; BENEFICIARY_EXPLICIT;
+ * PARTICIPANT_ONLY_REVOCATION; CUTOFF_FROZEN.
  * Side-effects: IO (database reads/writes)
  * Links: story.5075, https://cognidao.org/knowledge/human-ai-identity-standard
  * @public
@@ -45,7 +46,6 @@ export async function resolveAttributionActor(input: {
 export async function mutateBeneficiaryPolicy(input: {
   readonly actorId: string;
   readonly mutation: ActorBeneficiaryPolicyMutation;
-  readonly governanceOverride?: boolean;
 }) {
   const store = getContainer().attributionStore;
   const now = new Date();
@@ -73,8 +73,5 @@ export async function mutateBeneficiaryPolicy(input: {
     proposalId: input.mutation.proposalId,
     revokedByActorId: input.actorId,
     revokedAt: now,
-    ...(input.governanceOverride !== undefined
-      ? { governanceOverride: input.governanceOverride }
-      : {}),
   });
 }

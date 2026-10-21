@@ -5,7 +5,8 @@
  * Module: `@app/api/v1/attribution/beneficiary-policies`
  * Purpose: Principal-aware governed beneficiary proposal, acceptance, revoke, and read.
  * Scope: Authenticates the exact human/agent caller; business rules live below the route.
- * Invariants: NO_LEGACY_AGENT; DIRECT_ROLE_ACCEPTANCE; NO_IMPLICIT_BENEFICIARY.
+ * Invariants: NO_LEGACY_AGENT; DIRECT_ROLE_ACCEPTANCE;
+ * PARTICIPANT_ONLY_REVOCATION; NO_IMPLICIT_BENEFICIARY.
  * Side-effects: IO (HTTP and attribution store)
  * Links: story.5075, attribution.actor-identity.v1.contract
  * @public
@@ -15,7 +16,6 @@ import { actorBeneficiaryPolicyOperation } from "@cogni/node-contracts";
 import { EVENT_NAMES } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 import { resolveRequestPrincipal } from "@/app/_lib/auth/request-identity";
-import { checkApprover } from "@/app/api/v1/attribution/_lib/approver-guard";
 import {
   mutateBeneficiaryPolicy,
   resolveAttributionActor,
@@ -139,7 +139,6 @@ export const POST = wrapRouteHandlerWithLogging(
       const mutation = actorBeneficiaryPolicyOperation.input.parse(
         await request.json()
       );
-      let governanceOverride = false;
       if (mutation.action === "revoke") {
         const proposal =
           await getContainer().attributionStore.getActorBeneficiaryPolicyProposal(
@@ -155,40 +154,29 @@ export const POST = wrapRouteHandlerWithLogging(
           });
           return NextResponse.json({ error: "Not found" }, { status: 404 });
         }
+        const currentStewardActorId =
+          await getContainer().attributionStore.resolveCurrentStewardActorId(
+            proposal.earnedByActorId
+          );
         const participant =
           caller.actorId === proposal.earnedByActorId ||
-          caller.actorId === proposal.stewardActorId ||
+          caller.actorId === currentStewardActorId ||
           caller.actorId === proposal.beneficiaryActorId;
         if (!participant) {
-          if (caller.principal.kind !== "human") {
-            terminal.complete({
-              status: 403,
-              outcome: "error",
-              errorCode: "forbidden",
-              reasonCode: "not_policy_participant",
-              dimensions: { action: mutation.action },
-            });
-            return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-          }
-          const denied = checkApprover(ctx, caller.principal.walletAddress);
-          if (denied) {
-            terminal.complete({
-              status: denied.status,
-              outcome: "error",
-              errorCode: "approver_denied",
-              reasonCode: "governance_approver_required",
-              dimensions: { action: mutation.action },
-            });
-            return denied;
-          }
-          governanceOverride = true;
+          terminal.complete({
+            status: 403,
+            outcome: "error",
+            errorCode: "forbidden",
+            reasonCode: "not_policy_participant",
+            dimensions: { action: mutation.action },
+          });
+          return NextResponse.json({ error: "Forbidden" }, { status: 403 });
         }
       }
       try {
         const proposal = await mutateBeneficiaryPolicy({
           actorId: caller.actorId,
           mutation,
-          governanceOverride,
         });
         const output = actorBeneficiaryPolicyOperation.output.parse(
           serializeBeneficiaryProposal(proposal)
@@ -199,7 +187,6 @@ export const POST = wrapRouteHandlerWithLogging(
           dimensions: {
             action: mutation.action,
             policyStatus: proposal.status,
-            governanceOverride,
           },
         });
         return NextResponse.json(output);
@@ -209,7 +196,7 @@ export const POST = wrapRouteHandlerWithLogging(
           outcome: "error",
           errorCode: "policy_mutation_rejected",
           reasonCode: "policy_invariant_rejected",
-          dimensions: { action: mutation.action, governanceOverride },
+          dimensions: { action: mutation.action },
         });
         return NextResponse.json(
           {

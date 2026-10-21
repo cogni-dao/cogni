@@ -1005,6 +1005,10 @@ export interface ActorAttributionStore {
 
   resolveActiveHumanActorId(userId: string): Promise<string | null>;
 
+  resolveCurrentStewardActorId(
+    earnedByActorId: string
+  ): Promise<string | null>;
+
   proposeActorBeneficiaryPolicy(
     params: ProposeActorBeneficiaryPolicyParams
   ): Promise<ActorBeneficiaryPolicyProposalRecord>;
@@ -1017,7 +1021,6 @@ export interface ActorAttributionStore {
     readonly proposalId: string;
     readonly revokedByActorId: string;
     readonly revokedAt: Date;
-    readonly governanceOverride?: boolean;
   }): Promise<ActorBeneficiaryPolicyProposalRecord>;
 
   getActorBeneficiaryPolicyProposal(

@@ -21,7 +21,6 @@ export type RouteTerminalDimensions = Readonly<{
   lane?: string;
   semanticCode?: string;
   policyStatus?: string;
-  governanceOverride?: boolean;
   itemFound?: boolean;
   deleted?: boolean;
   grantsAvailable?: boolean;
