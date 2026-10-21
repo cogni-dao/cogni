@@ -11,13 +11,13 @@ spec:
   nodeId: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/node-template@sha256:4867169d82c14e836f319a22661f80ab06a7354d688897a6ee5680968b26d049
+    ref: ghcr.io/cogni-dao/node-template@sha256:c27b507863a515a581e7d493ad86e570c3ac5cea0385e12f52c2f80bad4e4423
     source:
       repository: cogni-dao/node-template
-      sha: 76a87715e4c67477bd53ca048da8e3b7afbb17a9
+      sha: 069acc2e8c96cc0176069c07d65859db7babf1fd
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/node-template@sha256:909ad534598c98de43d739a390b1339835fc2e7cbb1f055f7fb23674864a8f0b
+        image: ghcr.io/cogni-dao/node-template@sha256:713f004052c909e78531043aed97335c0d2fcf610493bc366679dc7660129364
   workload:
     name: node-template
     publicHost: node-template.cognidao.org
@@ -29,11 +29,29 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: DATABASE_SSL_CA_CERT
           - key: DOLTGRES_URL
           - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
+        command:
+          - /bin/sh
+          - -ec
+          - |-
+            set -eu
+            if [ -n "${DATABASE_SSL_CA_CERT:-}" ]; then
+              umask 077
+              cogni_db_ca_file=$(mktemp /tmp/cogni-database-ca.XXXXXX)
+              printf "%s\n" "$DATABASE_SSL_CA_CERT" > "$cogni_db_ca_file"
+              export NODE_EXTRA_CA_CERTS="$cogni_db_ca_file"
+              export PGSSLROOTCERT="$cogni_db_ca_file"
+            fi
+            exec "$@"
+          - cogni-database-trust
+        args:
+          - node
+          - app/server.js
         port: 3200
         visibility: public
         bindings: {}
