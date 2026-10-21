@@ -61,8 +61,10 @@ export const GET = wrapRouteHandlerWithLogging<{
 /**
  * PATCH /api/v1/work/items/:id — Patch a work item (Doltgres only).
  *
- * v0 trusts the bearer of a valid token (no expectedRevision, no transition
- * state-machine — see PATCH_ALLOWLIST). Author embedded in dolt_log.
+ * Trusts the bearer of a valid token under the store's author-scoped authority
+ * (no transition state-machine — see PATCH_ALLOWLIST). Optional top-level
+ * `expectedRevision` is compare-and-set: a moved row answers 409
+ * `revision_conflict` with `currentRevision`. Author embedded in dolt_log.
  */
 export const PATCH = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
@@ -102,8 +104,9 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       ctx.log.info({ workItemId: id }, "work.items.patch_success");
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {
-      // Coded responses: 403 authz_denied (permanent), 503 work_items_busy
-      // (retryable), 503 not-ready, 404 missing. Anything unrecognized rethrows
+      // Coded responses: 403 authz_denied (permanent), 409 revision_conflict
+      // (CAS lost, nothing written), 503 work_items_busy (retryable), 503
+      // not-ready, 404 missing. Anything unrecognized rethrows
       // to the wrapper's 500 — the catch is NOT broadened (bug.5408).
       const coded = workItemsWriteErrorResponse(ctx, e);
       if (coded) return coded;
