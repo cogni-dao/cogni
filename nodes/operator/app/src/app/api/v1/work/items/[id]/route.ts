@@ -249,10 +249,6 @@ export const DELETE = wrapRouteHandlerWithLogging<{
       throw new Error("context required for dynamic routes");
     }
     if (!sessionUser) {
-      const output = workItemsDeleteOperation.output.parse({
-        id,
-        deleted: true,
-      });
       terminal.complete({
         status: 401,
         outcome: "error",
@@ -295,6 +291,10 @@ export const DELETE = wrapRouteHandlerWithLogging<{
           { status: 404 }
         );
       }
+      const output = workItemsDeleteOperation.output.parse({
+        id,
+        deleted: true,
+      });
       terminal.complete({
         status: 200,
         outcome: "success",

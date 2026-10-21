@@ -1942,7 +1942,9 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           refrozen.allocationRef !== allocation.allocationRef ||
           refrozen.sourceEvidenceHash !== allocation.sourceEvidenceHash
         ) {
-          throw new Error("Actor allocation commitment is not content-addressed");
+          throw new Error(
+            "Actor allocation commitment is not content-addressed"
+          );
         }
         const [existingAllocation] = await tx
           .select()

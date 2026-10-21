@@ -21,27 +21,28 @@ describe("actor beneficiary policy acceptance contract", () => {
     evidence: { ceremony: "direct-principal-proof" },
   };
 
-  it.each(["beneficiary", "earner", "steward"] as const)(
-    "accepts the direct %s role",
-    (role) => {
-      expect(
-        actorBeneficiaryPolicyOperation.input.safeParse({
-          ...acceptance,
-          role,
-        }).success
-      ).toBe(true);
-    }
-  );
+  it.each([
+    "beneficiary",
+    "earner",
+    "steward",
+  ] as const)("accepts the direct %s role", (role) => {
+    expect(
+      actorBeneficiaryPolicyOperation.input.safeParse({
+        ...acceptance,
+        role,
+      }).success
+    ).toBe(true);
+  });
 
-  it.each(["governance_for_earner", "governance_for_steward"])(
-    "rejects removed governance substitution role %s",
-    (role) => {
-      expect(
-        actorBeneficiaryPolicyOperation.input.safeParse({
-          ...acceptance,
-          role,
-        }).success
-      ).toBe(false);
-    }
-  );
+  it.each([
+    "governance_for_earner",
+    "governance_for_steward",
+  ])("rejects removed governance substitution role %s", (role) => {
+    expect(
+      actorBeneficiaryPolicyOperation.input.safeParse({
+        ...acceptance,
+        role,
+      }).success
+    ).toBe(false);
+  });
 });

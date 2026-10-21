@@ -830,10 +830,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
             and(
               eq(agentCredentials.actorId, grant.redeemedActorId),
               eq(agentCredentials.nodeId, this.nodeId),
-              eq(
-                agentCredentials.secretHash,
-                hashOpaque("credential", secret)
-              ),
+              eq(agentCredentials.secretHash, hashOpaque("credential", secret)),
               isNull(agentCredentials.predecessorCredentialId)
             )
           )
@@ -846,10 +843,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         }
         if (
           existing.nodeId !== this.nodeId ||
-          !hashesEqual(
-            existing.secretHash,
-            hashOpaque("credential", secret)
-          )
+          !hashesEqual(existing.secretHash, hashOpaque("credential", secret))
         ) {
           throw new AgentIdentityError(
             "invalid_grant",
@@ -1395,10 +1389,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         if (
           existing.nodeId !== this.nodeId ||
           existing.actorId !== grant.actorId ||
-          !hashesEqual(
-            existing.secretHash,
-            hashOpaque("credential", secret)
-          )
+          !hashesEqual(existing.secretHash, hashOpaque("credential", secret))
         ) {
           throw new AgentIdentityError(
             "invalid_grant",

@@ -35,11 +35,7 @@ export const actorBeneficiaryPolicyMutationSchema = z.discriminatedUnion(
     z.object({
       action: z.literal("accept"),
       proposalId: z.string().min(1),
-      role: z.enum([
-        "beneficiary",
-        "earner",
-        "steward",
-      ]),
+      role: z.enum(["beneficiary", "earner", "steward"]),
       evidence: evidenceSchema,
     }),
     z.object({
@@ -52,11 +48,7 @@ export const actorBeneficiaryPolicyMutationSchema = z.discriminatedUnion(
 const acceptanceSchema = z.object({
   id: z.string(),
   proposalId: z.string(),
-  role: z.enum([
-    "beneficiary",
-    "earner",
-    "steward",
-  ]),
+  role: z.enum(["beneficiary", "earner", "steward"]),
   acceptedByActorId: z.string(),
   evidence: evidenceSchema,
   acceptedAt: z.string().datetime(),

@@ -89,7 +89,6 @@ export const POST = wrapRouteHandlerWithLogging<{
       throw error;
     }
     if (!principal) {
-      const responseBody = workItemSessionClaimOperation.output.parse(output);
       terminal.complete({
         status: 401,
         outcome: "error",
@@ -140,6 +139,7 @@ export const POST = wrapRouteHandlerWithLogging<{
               sessionUser,
               statusUrl: coordinationUrl(request, id),
             });
+      const responseBody = workItemSessionClaimOperation.output.parse(output);
       terminal.complete({
         status: output.conflict ? 200 : 201,
         outcome: "success",

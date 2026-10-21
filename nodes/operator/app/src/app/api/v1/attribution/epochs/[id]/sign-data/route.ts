@@ -123,11 +123,10 @@ export const GET = wrapRouteHandlerWithLogging<{
       ...preparedActorAllocations,
     ];
 
-    const finalAllocationSetHash =
-      await computeSignedAllocationSetHash(
-        claimantAllocations,
-        actorAllocations
-      );
+    const finalAllocationSetHash = await computeSignedAllocationSetHash(
+      claimantAllocations,
+      actorAllocations
+    );
 
     let deploymentEnvironment: EIP712DeploymentEnvironment;
     try {

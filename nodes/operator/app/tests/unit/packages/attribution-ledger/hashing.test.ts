@@ -174,18 +174,18 @@ describe("computeSignedAllocationSetHash", () => {
     const first = await makeAllocation("receipt-1", "human:alice");
     const second = await makeAllocation("receipt-2", null);
 
-    const forward = await computeSignedAllocationSetHash(
-      claimantAllocations,
-      [first, second]
-    );
-    const reversed = await computeSignedAllocationSetHash(
-      claimantAllocations,
-      [second, first]
-    );
-    const changed = await computeSignedAllocationSetHash(
-      claimantAllocations,
-      [await makeAllocation("receipt-1", null), second]
-    );
+    const forward = await computeSignedAllocationSetHash(claimantAllocations, [
+      first,
+      second,
+    ]);
+    const reversed = await computeSignedAllocationSetHash(claimantAllocations, [
+      second,
+      first,
+    ]);
+    const changed = await computeSignedAllocationSetHash(claimantAllocations, [
+      await makeAllocation("receipt-1", null),
+      second,
+    ]);
 
     expect(forward).toBe(reversed);
     expect(changed).not.toBe(forward);

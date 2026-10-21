@@ -827,13 +827,15 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     >({ code: "invalid_credential" });
     expect(prepared.billingAccountId).toBe(billingAccountId);
     expect(prepared.principalId).toBe(`agent:${nodeId}/${prepared.actorId}`);
-    await expect(identity.authenticate(prepared.apiKey)).resolves.toMatchObject({
-      principal: {
-        actorId: prepared.actorId,
-        legacyUserId: userId,
-        billingAccountId,
-      },
-    });
+    await expect(identity.authenticate(prepared.apiKey)).resolves.toMatchObject(
+      {
+        principal: {
+          actorId: prepared.actorId,
+          legacyUserId: userId,
+          billingAccountId,
+        },
+      }
+    );
   });
 
   it("rejects a new upgrade key and never revives a rotated predecessor", async () => {
