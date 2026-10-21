@@ -61,10 +61,13 @@ vi.mock("@/bootstrap/http", () => ({
         return response;
       } catch (error) {
         wrapperObservability.error(error);
-        return new Response(JSON.stringify({ error: "Internal server error" }), {
-          status: 500,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ error: "Internal server error" }),
+          {
+            status: 500,
+            headers: { "content-type": "application/json" },
+          }
+        );
       } finally {
         wrapperObservability.requestEnd(status);
       }
