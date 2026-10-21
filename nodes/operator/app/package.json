@@ -42,6 +42,7 @@
     "@cogni/financial-ledger": "workspace:*",
     "@cogni/ids": "workspace:*",
     "@cogni/ingestion-core": "workspace:*",
+    "@cogni/knowledge-base-ui": "https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.2.0/cogni-dao-knowledge-base-ui-0.2.0.tgz",
     "@cogni/knowledge-store": "workspace:*",
     "@cogni/node-contracts": "workspace:*",
     "@cogni/node-core": "workspace:*",
