@@ -69,10 +69,10 @@ governance:
     # daily full review). Zero work-item mutations. Model = LiteLLM default_free (gpt-oss-120b,
     # is_free: true): the system tenant that bills governance runs holds zero credits, and the
     # preflight credit gate passes free models — a paid model would fail with insufficient_credits.
-    # */5 is the CANDIDATE-PROOF cadence (>=2 scheduled cycles inside candidate-a's flight window;
-    # unchanged delta cycles cost zero LLM calls). At prod promote time this becomes hourly at most.
+    # Hourly is the prod-safe cadence (prod: hourly at most). The candidate proof ran at */5 with
+    # identical runtime code (8a9d280); candidate evals now need >=2 hourly scheduled cycles at the SHA.
     - charter: WORK_PRIORITIZER
-      cron: "*/5 * * * *"
+      cron: "0 * * * *"
       timezone: UTC
       entrypoint: PRIORITIZE
       graph: langgraph:work-prioritizer

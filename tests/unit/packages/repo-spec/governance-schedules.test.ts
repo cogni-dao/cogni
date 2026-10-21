@@ -152,12 +152,12 @@ describe("operator runtime repo-spec governance (nodes/operator/.cogni)", () => 
   );
   const config = extractGovernanceConfig(spec);
 
-  it("declares WORK_PRIORITIZER on langgraph:work-prioritizer every 5 minutes (candidate proof), propose-only", () => {
+  it("declares WORK_PRIORITIZER on langgraph:work-prioritizer hourly (prod-safe), propose-only", () => {
     expect(
       config.schedules.find((s) => s.charter === "WORK_PRIORITIZER")
     ).toEqual({
       charter: "WORK_PRIORITIZER",
-      cron: "*/5 * * * *",
+      cron: "0 * * * *",
       timezone: "UTC",
       entrypoint: "PRIORITIZE",
       graph: "langgraph:work-prioritizer",
