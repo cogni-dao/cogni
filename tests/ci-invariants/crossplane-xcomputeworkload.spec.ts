@@ -24,7 +24,8 @@
  *   - NARROWEST_ACTIVATION: exactly one managed type is activated, and it is namespaced.
  *   - DNS_TYPE_FOLLOWS_TARGET: hostnames publish as CNAME; IPv4-only ingress publishes as A.
  *   - CREATE_AMBIGUITY_RECOVERY_REQUIRES_IDEMPOTENCE_PROOF: DNS adopts by name; a paid lease
- *     releases the guard only with exact-key, active-resource, external-handle and revision proof.
+ *     releases the guard only with a pending timestamp and exact-key, active-resource,
+ *     external-handle OBSERVE proof, including revisions that previously served.
  *   - OVERLAP_BEFORE_CLOSE: a lease close is IRREVERSIBLE and its idempotence key is refused
  *     forever once settled, so the outgoing lease is held open until the incoming one is proven
  *     serving and DNS has flipped. Never more than two lease children for one (node, env).
@@ -1245,11 +1246,9 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     expect(templateCode).toContain(
       '$leaseReceiptProven := and (ge $leaseReceiptStatus 200) (lt $leaseReceiptStatus 300) $leaseReceiptObserved $leaseReceiptFound (eq $leaseReceiptState "active") (ne $leaseReceiptExternalName "") (eq $responseKey $currentKey)'
     );
+    expect(templateCode).not.toContain("$leaseRevisionPending");
     expect(templateCode).toContain(
-      "$leaseRevisionPending := ne $prevSha $desiredSha"
-    );
-    expect(templateCode).toContain(
-      '$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven $leaseRevisionPending'
+      '$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven'
     );
     expect(templateCode).toContain(
       "$unsafeLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $recoverLeaseCreateAmbiguity)"
@@ -1262,6 +1261,7 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     type Proof = {
       ambiguous: boolean;
       pending: string;
+      currentStatus: number;
       currentObserved: boolean;
       cachedStatus: number;
       cachedObserved: boolean;
@@ -1273,12 +1273,10 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       externalName: string;
       responseKey: string;
       currentKey: string;
-      previousSha: string;
-      desiredSha: string;
     };
     const safe = (p: Proof) => {
       const useCache = !p.currentObserved;
-      const receiptStatus = useCache ? p.cachedStatus : 200;
+      const receiptStatus = useCache ? p.cachedStatus : p.currentStatus;
       const observed = useCache ? p.cachedObserved : p.currentObserved;
       const found = useCache ? p.cachedFound : p.found;
       const active = useCache ? p.cachedActive : p.active;
@@ -1292,13 +1290,13 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
         found &&
         active &&
         externalName !== "" &&
-        p.responseKey === p.currentKey &&
-        p.previousSha !== p.desiredSha
+        p.responseKey === p.currentKey
       );
     };
     const valid: Proof = {
       ambiguous: true,
       pending: "2026-10-14T07:05:33Z",
+      currentStatus: 200,
       currentObserved: true,
       cachedStatus: 200,
       cachedObserved: true,
@@ -1310,18 +1308,18 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       externalName: "1791427850757",
       responseKey: "xcw:cogni-production:red:0",
       currentKey: "xcw:cogni-production:red:0",
-      previousSha: "old",
-      desiredSha: "new",
     };
     expect(safe(valid)).toBe(true);
     for (const unsafe of [
       { ambiguous: false },
       { pending: "" },
+      { currentStatus: 199 },
+      { currentStatus: 300 },
+      { currentStatus: 503 },
       { found: false },
       { active: false },
       { externalName: "" },
       { responseKey: "different-key" },
-      { previousSha: "new" },
     ]) {
       expect(safe({ ...valid, ...unsafe })).toBe(false);
     }
@@ -1331,6 +1329,7 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     expect(
       safe({
         ...valid,
+        currentStatus: 503,
         currentObserved: false,
         found: false,
         active: false,
@@ -1347,6 +1346,7 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       expect(
         safe({
           ...valid,
+          currentStatus: 503,
           currentObserved: false,
           found: false,
           active: false,
@@ -1355,6 +1355,36 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
         })
       ).toBe(false);
     }
+
+    // A current OBSERVE that says gone/closed is contrary evidence, not permission
+    // to fall back to the otherwise valid cached allocation.
+    expect(safe({ ...valid, found: false })).toBe(false);
+    expect(safe({ ...valid, active: false })).toBe(false);
+    // A CREATE/UPDATE echo may carry a handle, but without found it cannot prove
+    // an allocation on its own. Only an independently valid OBSERVE cache can.
+    expect(
+      safe({ ...valid, currentObserved: false, cachedObserved: false })
+    ).toBe(false);
+  });
+
+  it("does not use served revision history to block an otherwise proven allocation", () => {
+    // Source-level regression: Beacon had already observed its desired SHA when
+    // a later response lost serving. The allocation/key remained the same; that
+    // SHA latch must not prevent provider-http from observing it again.
+    const recoveryDeclaration = templateCode.match(
+      /\$recoverLeaseCreateAmbiguity :=[^\n]+/
+    )?.[0];
+    expect(recoveryDeclaration).toBe(
+      '$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven }}'
+    );
+    expect(leaseBlock).toContain(
+      "crossplane.io/external-create-succeeded: {{ $leaseCreatePending | quote }}"
+    );
+    // Acknowledging the create receipt does not fabricate a successful probe.
+    expect(leaseBlock).toContain("{{- if and $active $serving }}");
+    expect(templateCode).toContain(
+      '{{- $serving := dig "serving" false $resp }}'
+    );
   });
 });
 

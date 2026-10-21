@@ -1046,6 +1046,18 @@ describe("audited already-applied registration", () => {
     expect(dedicatedLane(catalog, "candidate-a")).toBe(false);
     expect(dedicatedLane({}, "production")).toBe(false);
   });
+  it("keeps non-production dedicated declarations on the established runner (bug.5498)", () => {
+    const catalog = {
+      database: {
+        "candidate-a": { tier: "dedicated" },
+        preview: { tier: "dedicated" },
+        production: { tier: "dedicated" },
+      },
+    };
+    expect(dedicatedLane(catalog, "production")).toBe(true);
+    expect(dedicatedLane(catalog, "preview")).toBe(false);
+    expect(dedicatedLane(catalog, "candidate-a")).toBe(false);
+  });
   it("fails closed without a distinct read-only evidence producer", async () => {
     const current = fixture();
     await expect(current.binder.registerApplied(request)).rejects.toMatchObject(
