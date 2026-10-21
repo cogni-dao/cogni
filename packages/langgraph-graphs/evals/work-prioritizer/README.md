@@ -2,7 +2,7 @@
 
 **How to run.** This is a black-box eval of the deployed `langgraph:work-prioritizer` at one build SHA. It is not part of PR CI, because it needs a live node, a node API key, and real model calls. It is excluded from the package build, typecheck, and vitest. Run `set -a; . ./.env.cogni; set +a; EVAL_EXPECTED_SHA=<flighted sha> pnpm eval:prioritizer -- --landed-at <ISO time the flight landed> --out /tmp/prioritizer-eval.json`. The expected SHA is required and is never read from live `/version`. `EVAL_BASE_URL` defaults to `https://test.cognidao.org`.
 
-**What it does.** It first lists the node's `goal-*` atoms on the strategy shelf (dao-goals-design); with none it exits INCONCLUSIVE, because the graph would only report `no_goals`. It then sends `PRIORITIZE` plus the operator repo-spec policy, exactly as the governance schedule does, and runs three cycles:
+**What it does.** It first reads the node's approved goals from the cognition bundle's `## Goals` section — the same `listActiveGoals` reader the graph uses through `core__goal_list`; with none (or an unreadable list) it exits INCONCLUSIVE, because the graph would only report `no_goals`. It then sends `PRIORITIZE` plus the operator repo-spec policy, exactly as the governance schedule does, and runs three cycles:
 
 1. **Full review on demand.** Cycle 1 adds `"fullReview": true`, so the graph re-judges the whole backlog and files a decision.
 2. **Delta, unchanged.** Cycle 2 runs 61 s later on the same backlog. It is a delta cycle that must carry every judgment, call no model, and file nothing.

@@ -19,7 +19,7 @@
 import {
   EDO_DECIDE_NAME,
   GET_CURRENT_TIME_NAME,
-  KNOWLEDGE_SEARCH_NAME,
+  GOAL_LIST_NAME,
   WORK_ITEM_QUERY_NAME,
 } from "@cogni/ai-tools";
 import {
@@ -92,7 +92,7 @@ const replace = <V>(defaultValue: () => V) =>
 const WorkPrioritizerState = Annotation.Root({
   ...MessagesAnnotation.spec,
   policy: replace<WorkPrioritizationPolicy | null>(() => null),
-  /** ONE_GOAL_LIST: listActiveGoals() this cycle (null = not read); a read failure or >3 is goalsError. */
+  /** ONE_GOAL_LIST: core__goal_list this cycle (null = not read); a read failure or >3 is goalsError. */
   goals: replace<readonly C.ActiveGoal[] | null>(() => null),
   goalsError: replace<string | null>(() => null),
   fullReviewRequested: replace<boolean>(() => false),
@@ -230,18 +230,12 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
       return r.ok ? r.value : undefined;
     };
     if (!policy) return {};
-    // ONE_GOAL_LIST: root on listActiveGoals() (task.5287 seam). None ⇒ no_goals; >3 or unreadable ⇒ loud error.
-    const listActiveGoals = C.listActiveGoalsViaSearch(async (args) => {
-      const r = await callTool(KNOWLEDGE_SEARCH_NAME, args, config);
-      if (!r.ok) throw new Error(`${KNOWLEDGE_SEARCH_NAME}: ${r.error}`);
-      return r.value;
-    });
-    const goals = await listActiveGoals().catch((e: unknown) => String(e));
-    if (typeof goals === "string") return { policy, goalsError: goals };
-    if (goals.length > C.MAX_ACTIVE_GOALS) {
-      const goalsError = `${goals.length} active goals > ${C.MAX_ACTIVE_GOALS} (MAX_THREE_GOALS)`;
-      return { policy, goals, goalsError };
-    }
+    // ONE_GOAL_LIST: the goals come only from core__goal_list (the store's listActiveGoals). None ⇒ no_goals;
+    // unreadable or >3 (too_many_active_goals) ⇒ goals_error. Either way nothing is judged or filed.
+    const listed = await callTool(GOAL_LIST_NAME, {}, config);
+    if (!listed.ok)
+      return { policy, goalsError: `${GOAL_LIST_NAME}: ${listed.error}` };
+    const goals = C.parseGoals(listed.value);
     if (goals.length === 0) return { policy, goals };
     const time = await read(GET_CURRENT_TIME_NAME, {});
 
@@ -458,7 +452,7 @@ function telemetryOf(state: S, modelRef: string | null) {
                     : "decision_failed";
   return {
     status,
-    /** The goal ids the cycle ranked against (listActiveGoals); the eval checks they are all `goal-*`. */
+    /** The goal ids the cycle ranked against (core__goal_list); the eval checks they are all `goal-*`. */
     goalIds: (state.goals ?? []).map((g) => g.id),
     goalsError: state.goalsError,
     scope: j?.scope ?? null,

@@ -20,7 +20,9 @@ import {
   EDO_DECIDE_NAME,
   edoDecideContract,
   GET_CURRENT_TIME_NAME,
+  GOAL_LIST_NAME,
   getCurrentTimeContract,
+  goalListContract,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
   KNOWLEDGE_WRITE_NAME,
@@ -64,7 +66,7 @@ interface World {
   pageSize?: number;
   failPage?: number;
   hub?: Record<string, unknown>[];
-  /** What listActiveGoals() finds (default: the hub's "Goal:" entries). */
+  /** What core__goal_list returns (default: the hub's "Goal:" entries); >3 ⇒ the reader's error. */
   goals?: Record<string, unknown>[];
 }
 
@@ -97,6 +99,7 @@ function buildTools(world: World, events: string[], calls: Call[]) {
     getCurrentTimeContract,
     workItemQueryContract,
     knowledgeSearchContract,
+    goalListContract,
     knowledgeReadContract,
     edoDecideContract,
     workItemTransitionContract,
@@ -139,19 +142,31 @@ function buildTools(world: World, events: string[], calls: Call[]) {
           ...(next ? { nextCursor: next } : {}),
         });
       }
-      case KNOWLEDGE_SEARCH_NAME: {
-        const results =
-          a.query === "Goal:" && a.domain === "strategy"
-            ? (world.goals ??
-              hub.filter((h) => String(h.title).startsWith("Goal:")))
-            : [];
+      case GOAL_LIST_NAME: {
+        const goals =
+          world.goals ?? hub.filter((h) => String(h.title).startsWith("Goal:"));
+        if (goals.length > 3)
+          return {
+            ok: false as const,
+            errorCode: "execution",
+            safeMessage: `too_many_active_goals: ${goals.length} active DAO goals exceed the max of 3`,
+          };
+        return ok({
+          goals: goals.map((g) => ({
+            id: g.id,
+            title: g.title,
+            evaluateAt: null,
+            content: g.content,
+          })),
+        });
+      }
+      case KNOWLEDGE_SEARCH_NAME:
         return ok({
           query: a.query,
           domain: a.domain,
-          results,
-          totalFound: results.length,
+          results: [],
+          totalFound: 0,
         });
-      }
       case KNOWLEDGE_READ_NAME: {
         if (typeof a.id === "string") {
           const e = hub.find((h) => h.id === a.id);
@@ -305,9 +320,10 @@ const ITEMS = Array.from({ length: 20 }, (_, i) =>
 );
 
 describe("work-prioritizer tool allowlist", () => {
-  it("is exactly five tools; the only write is EDO decide (PROPOSE_ONLY)", () => {
+  it("is exactly six tools; goals come from core__goal_list; the only write is EDO decide (PROPOSE_ONLY)", () => {
     expect([...WORK_PRIORITIZER_TOOL_IDS].sort()).toEqual(
       [
+        GOAL_LIST_NAME,
         WORK_ITEM_QUERY_NAME,
         KNOWLEDGE_SEARCH_NAME,
         KNOWLEDGE_READ_NAME,
@@ -436,7 +452,7 @@ describe("langgraph:work-prioritizer v4 propose mode (mock LLM)", () => {
     });
     expect(status).toBe("no_goals");
     expect(events).not.toContain("llm");
-    expect(calls.map((c) => c.name)).toEqual([KNOWLEDGE_SEARCH_NAME]);
+    expect(calls.map((c) => c.name)).toEqual([GOAL_LIST_NAME]);
     expect(report.payload).toBeNull();
     expect(report.telemetry).toMatchObject({ goalIds: [], decisionId: null });
   });
@@ -451,7 +467,9 @@ describe("langgraph:work-prioritizer v4 propose mode (mock LLM)", () => {
       world: { items: ITEMS.slice(0, 3), goals },
     });
     expect(status).toBe("goals_error");
-    expect(report.telemetry.goalsError).toContain("4 active goals > 3");
+    expect(report.telemetry.goalsError).toContain(
+      "too_many_active_goals: 4 active DAO goals exceed the max of 3"
+    );
     expect(events).not.toContain("llm");
     expect(calls.some((c) => c.name === EDO_DECIDE_NAME)).toBe(false);
   });

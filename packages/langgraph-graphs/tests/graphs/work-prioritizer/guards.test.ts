@@ -21,7 +21,7 @@ import {
   type FetchedWorkItem,
   findBlockerCycles,
   findDuplicateTitleGroups,
-  listActiveGoalsViaSearch,
+  parseGoals,
 } from "../../../src/graphs/work-prioritizer/context";
 import {
   hasHubContext,
@@ -139,49 +139,22 @@ describe("policy (POLICY_FROM_TRIGGER)", () => {
   });
 });
 
-describe("listActiveGoals stub (task.5287 seam)", () => {
-  it("keeps only goal-* ids from the strategy 'Goal:' search and passes the shape through", async () => {
-    const calls: unknown[] = [];
-    const list = listActiveGoalsViaSearch(async (args) => {
-      calls.push(args);
-      return {
-        results: [
+describe("parseGoals (core__goal_list result)", () => {
+  it("keeps goal-* rows with their id, title and statement", () => {
+    expect(
+      parseGoals({
+        goals: [
           {
-            id: "goal-substrate-reliability",
-            domain: "strategy",
-            title: "Goal: reliable",
+            id: "goal-a",
+            title: "Goal: a",
+            evaluateAt: null,
             content: "KPI x",
           },
-          {
-            id: "dao-goal-legacy",
-            domain: "strategy",
-            title: "Goal: legacy",
-            content: "c",
-          },
-          {
-            id: "work-prioritizer-20261020t1100-decision",
-            domain: "strategy",
-            title: "Goal: no",
-            content: "c",
-          },
+          { id: "dao-goal-legacy", title: "Goal: legacy", content: "c" },
         ],
-      };
-    });
-    expect(await list()).toEqual([
-      {
-        id: "goal-substrate-reliability",
-        title: "Goal: reliable",
-        content: "KPI x",
-      },
-    ]);
-    expect(calls).toEqual([{ domain: "strategy", query: "Goal:", limit: 20 }]);
-  });
-
-  it("propagates a read failure (the graph turns it into goals_error)", async () => {
-    const list = listActiveGoalsViaSearch(async () => {
-      throw new Error("core__knowledge_search: busy");
-    });
-    await expect(list()).rejects.toThrow("busy");
+      })
+    ).toEqual([{ id: "goal-a", title: "Goal: a", content: "KPI x" }]);
+    expect(parseGoals({})).toEqual([]);
   });
 });
 

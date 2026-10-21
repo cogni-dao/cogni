@@ -11,7 +11,8 @@
  *   - OUTCOME_FROM_THE_GRAPH: each cycle's outcome is the `<prioritizer_report>` the graph pushes onto its own
  *     stream; `/api/v1/ai/runs` status is only the fallback. No log queries.
  *   - SCHEDULED_AT_SHA: the governance schedule must also have run the graph ≥ minScheduledCycles times at the SHA.
- *   - GOALS_FIRST: the node must hold active `goal-*` atoms (dao-goals-design); none ⇒ INCONCLUSIVE before any cycle.
+ *   - GOALS_FIRST: the node must have approved goals (listActiveGoals, read via the cognition bundle); none or
+ *     unreadable ⇒ INCONCLUSIVE before any cycle.
  *   - EXIT_CODE_IS_VERDICT: exit 0 only when every hard + behavioral check passes; 1 = FAIL;
  *     3 = INCONCLUSIVE (no goal atoms, or the candidate's buildSha changed mid-eval — another flight evicted it).
  *   - WRITE_SECTION_SKIPPED: write-mode checks are listed as skipped (the graph is propose-only).
@@ -174,12 +175,18 @@ async function decisionIds(): Promise<{ id: string; createdAt?: string }[]> {
     .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
 
-/** The node's active goal atoms: `goal-*` ids on the strategy shelf (dao-goals-design). */
+/**
+ * The node's active goal ids from the same reader the graph uses (`listActiveGoals`), as rendered in the
+ * cognition bundle's `## Goals` section (`By: … · \`goal-…\``). An unreadable list is INCONCLUSIVE.
+ */
 async function nodeGoalIds(): Promise<string[]> {
-  const body = await api<{ items: { id: string }[] }>(
-    "/api/v1/knowledge?domain=strategy&limit=500"
+  const { markdown } = await api<{ markdown: string }>("/api/v1/cognition");
+  const section = markdown.split(/^## Goals\s*$/m)[1]?.split(/^## /m)[0] ?? "";
+  if (/goals unavailable:/.test(section))
+    throw new InconclusiveError(`node goals unreadable: ${section.trim()}`);
+  return [...section.matchAll(/`(goal-[a-z0-9][a-z0-9-]*)`/g)].map(
+    (m) => m[1] as string
   );
-  return body.items.map((e) => e.id).filter((id) => /^goal-/.test(id));
 }
 
 /** A hub entry's content, or null when the entry does not exist (404). */
@@ -359,7 +366,7 @@ async function runEval(underTest: string): Promise<void> {
   const goalIds = await nodeGoalIds();
   if (goalIds.length === 0)
     throw new InconclusiveError(
-      `no goal-* atoms in the strategy domain on ${BASE} — seed the node's goals first`
+      `no approved goals on ${BASE} (cognition: no approved goals) — seed the node's goal-* atoms first`
     );
   const notes: string[] = [];
   const before = await snapshot();

@@ -29,6 +29,7 @@ import {
   createEdoDecideImplementation,
   createEdoHypothesizeImplementation,
   createEdoRecordOutcomeImplementation,
+  createGoalListImplementation,
   createKnowledgeReadImplementation,
   createKnowledgeSearchImplementation,
   createKnowledgeWriteImplementation,
@@ -50,6 +51,7 @@ import {
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
   GET_CURRENT_TIME_NAME,
+  GOAL_LIST_NAME,
   getCurrentTimeImplementation,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
@@ -115,6 +117,9 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
       getCurrentTimeImplementation as AnyToolImplementation,
 
     // Knowledge tools (Doltgres-backed knowledge store)
+    [GOAL_LIST_NAME]: createGoalListImplementation({
+      knowledgeCapability: deps.knowledgeCapability,
+    }) as AnyToolImplementation,
     [KNOWLEDGE_SEARCH_NAME]: createKnowledgeSearchImplementation({
       knowledgeCapability: deps.knowledgeCapability,
     }) as AnyToolImplementation,

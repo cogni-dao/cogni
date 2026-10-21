@@ -6,7 +6,8 @@
  * Purpose: Tool IDs + the fixed context-gathering plan for the work-prioritizer graph.
  * Scope: Constants only. Does NOT execute tools or enforce policy (the wrapper + toolRunner do).
  * Invariants:
- *   - EXACT_ALLOWLIST: exactly these five tools — four reads plus the one EDO write (decide). PROPOSE_ONLY: no work-item
+ *   - EXACT_ALLOWLIST: exactly these six tools — five reads (incl. core__goal_list, the one goal reader) plus
+ *     the one EDO write (decide). PROPOSE_ONLY: no work-item
  *     write of any kind, no knowledge_write.
  *   - BOUNDED_CONTEXT: every read is bounded (limit set) so one cycle's context is finite.
  *   - WRITE_CAP: ≤ 1 EDO decision per cycle; nothing else is written.
@@ -18,6 +19,7 @@
 import {
   EDO_DECIDE_NAME,
   GET_CURRENT_TIME_NAME,
+  GOAL_LIST_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
@@ -32,6 +34,7 @@ export const WORK_PRIORITIZER_TOOL_IDS = [
   KNOWLEDGE_SEARCH_NAME,
   KNOWLEDGE_READ_NAME,
   GET_CURRENT_TIME_NAME,
+  GOAL_LIST_NAME,
   ...WORK_PRIORITIZER_WRITE_TOOL_IDS,
 ] as const;
 
