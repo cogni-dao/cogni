@@ -47,8 +47,6 @@ function row(
   };
 }
 
-const NOW = new Date("2026-10-20T12:00:00.000Z");
-
 describe("plan", () => {
   it("PLAN_IS_CHANGED_ROWS with expectedRevision; pinned rows never planned", () => {
     expect(
