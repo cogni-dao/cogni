@@ -24,6 +24,7 @@ export * from "@cogni/db-schema/profile";
 // Core FK targets (users, billingAccounts)
 export * from "@cogni/db-schema/refs";
 export * from "@cogni/db-schema/scheduling";
+export * from "./akash-preview-admissions";
 export * from "./akash-tx-allocations";
 export * from "./compute-cost-intervals";
 export * from "./node-migration-reports";

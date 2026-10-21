@@ -482,6 +482,23 @@ const CandidateControlPlaneApplicationSchema = z.strictObject({
   }),
 });
 
+/** Parent identity is already environment-resolved; TEST custody must never point at upstream. */
+function candidateControlPlaneApplicationSchemaForParent(
+  owner: string,
+  repo: string
+) {
+  return CandidateControlPlaneApplicationSchema.extend({
+    spec: CandidateControlPlaneApplicationSchema.shape.spec.extend({
+      source:
+        CandidateControlPlaneApplicationSchema.shape.spec.shape.source.extend({
+          repoURL: z.literal(
+            `https://github.com/${owner.toLowerCase()}/${repo.toLowerCase()}.git`
+          ),
+        }),
+    }),
+  });
+}
+
 type CandidateInfraLane = "compose" | "control_plane";
 
 // A reviewed authorization-model change necessarily carries the model consumer and its proofs in
@@ -1075,6 +1092,193 @@ export class GitHubRepoWriter implements DeployPlanePort {
       appId: config.appId,
       privateKey: config.privateKey,
     });
+  }
+
+  async readPreviewSource(input: PrepareNodeRefCandidateFlightInput) {
+    const prepared = await this.prepareNodeRefCandidateFlight(input);
+    if (
+      prepared.sourceRepo.toLowerCase() !==
+      "https://github.com/cogni-test-org/spawny-boi"
+    )
+      throw deployPlaneError(
+        "preview_source_refused",
+        "preview source is not the TEST pilot",
+        422
+      );
+    const repoSpecText = await this.fetchFileText({
+      owner: "cogni-test-org",
+      repo: "spawny-boi",
+      path: ".cogni/repo-spec.yaml",
+      ref: input.sourceSha,
+    });
+    const catalogText = await this.fetchFileText({
+      owner: input.parentOwner,
+      repo: input.parentRepo,
+      path: "infra/catalog/spawny-boi.yaml",
+      ref: "main",
+    });
+    if (!repoSpecText || !catalogText)
+      throw deployPlaneError(
+        "preview_source_missing",
+        "preview source input missing",
+        422
+      );
+    return {
+      repoSpecText,
+      catalogText,
+      sourceRepo: prepared.sourceRepo,
+      imageRepository: "ghcr.io/cogni-test-org/spawny-boi",
+    };
+  }
+
+  private previewPath(deploymentId: string): string {
+    z.string().uuid().parse(deploymentId);
+    return `infra/k8s/preview-deployments/candidate-a/${deploymentId}`;
+  }
+  private async previewHead(parentOwner: string, parentRepo: string) {
+    if (parentOwner.toLowerCase() !== "cogni-test-org")
+      throw deployPlaneError(
+        "preview_parent_refused",
+        "preview writes require the TEST parent",
+        422
+      );
+    const octokit = await this.getOctokit(parentOwner, parentRepo);
+    const { data: ref } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/ref/{ref}",
+      {
+        owner: parentOwner,
+        repo: parentRepo,
+        ref: "heads/deploy/candidate-a-previews",
+      }
+    );
+    const { data: commit } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+      { owner: parentOwner, repo: parentRepo, commit_sha: ref.object.sha }
+    );
+    return { octokit, sha: ref.object.sha, treeSha: commit.tree.sha };
+  }
+  async previewDesiredStateAbsent(input: {
+    parentOwner: string;
+    parentRepo: string;
+    deploymentId: string;
+  }): Promise<boolean> {
+    const directory = this.previewPath(input.deploymentId);
+    const head = await this.previewHead(input.parentOwner, input.parentRepo);
+    return (
+      (await this.findTreeEntrySha(
+        head.octokit,
+        input.parentOwner,
+        input.parentRepo,
+        head.treeSha,
+        directory
+      )) === undefined
+    );
+  }
+  async writePreviewDesiredState(input: {
+    parentOwner: string;
+    parentRepo: string;
+    deploymentId: string;
+    files?: readonly { path: string; content: string }[];
+  }): Promise<void> {
+    const directory = this.previewPath(input.deploymentId);
+    const head = await this.previewHead(input.parentOwner, input.parentRepo);
+    const { parentOwner: owner, parentRepo: repo } = input;
+    const entries: {
+      path: string;
+      mode: "100644" | "040000";
+      type: "blob" | "tree";
+      content?: string;
+      sha?: null;
+    }[] = [];
+    if (input.files) {
+      if (!input.files.length || input.files.length > 5)
+        throw deployPlaneError(
+          "preview_files_refused",
+          "preview desired state is incomplete",
+          422
+        );
+      const allowed = new RegExp(
+        `^(?:${directory.replaceAll("/", "\\/")}/xcomputeworkload\\.yaml|infra/k8s/preview-deployments/candidate-a/state-[01]/compute-(?:env-external-secret|env-secret-role|env-secret-role-binding|migration-external-secret)\\.yaml)$`
+      );
+      for (const file of input.files) {
+        if (!allowed.test(file.path))
+          throw deployPlaneError(
+            "preview_path_refused",
+            "preview path is outside its ownership",
+            422
+          );
+        entries.push({
+          path: file.path,
+          mode: "100644",
+          type: "blob",
+          content: file.content,
+        });
+      }
+      if (
+        !input.files.some(
+          (file) => file.path === `${directory}/xcomputeworkload.yaml`
+        )
+      )
+        throw deployPlaneError(
+          "preview_files_refused",
+          "preview workload is missing",
+          422
+        );
+    } else if (
+      await this.findTreeEntrySha(
+        head.octokit,
+        owner,
+        repo,
+        head.treeSha,
+        directory
+      )
+    ) {
+      entries.push({
+        path: directory,
+        mode: "040000",
+        type: "tree",
+        sha: null,
+      });
+    }
+    // A retirement advances HEAD even if the path is absent. A delayed older publish is then
+    // a sibling of this commit and its non-force update cannot resurrect the deployment.
+    const tree = entries.length
+      ? (
+          await head.octokit.request("POST /repos/{owner}/{repo}/git/trees", {
+            owner,
+            repo,
+            base_tree: head.treeSha,
+            tree: entries,
+          })
+        ).data.sha
+      : head.treeSha;
+    const { data: commit } = await head.octokit.request(
+      "POST /repos/{owner}/{repo}/git/commits",
+      {
+        owner,
+        repo,
+        message: `chore(preview): ${input.files ? "publish" : "retire"} ${input.deploymentId}`,
+        tree,
+        parents: [head.sha],
+      }
+    );
+    try {
+      await head.octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
+        owner,
+        repo,
+        ref: "heads/deploy/candidate-a-previews",
+        sha: commit.sha,
+        force: false,
+      });
+    } catch (error) {
+      if ((error as { status?: number }).status === 422)
+        throw deployPlaneError(
+          "preview_ref_conflict",
+          "preview desired state changed concurrently; retry the same request",
+          409
+        );
+      throw error;
+    }
   }
 
   async prepareNodeRefCandidateFlight(
@@ -2055,7 +2259,10 @@ export class GitHubRepoWriter implements DeployPlanePort {
             document = null;
           }
           if (
-            !CandidateControlPlaneApplicationSchema.safeParse(document).success
+            !candidateControlPlaneApplicationSchemaForParent(
+              owner,
+              repo
+            ).safeParse(document).success
           ) {
             throw deployPlaneError(
               "candidate_control_plane_self_object_invalid",

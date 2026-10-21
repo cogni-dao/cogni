@@ -58,6 +58,13 @@ export type {
   RecordInvocationParams,
 } from "./ai-telemetry.port";
 export {
+  type AkashPreviewAdmission,
+  AkashPreviewAdmissionError,
+  type AkashPreviewAdmissionInput,
+  type AkashPreviewAdmissionPort,
+  type AkashPreviewRetirement,
+} from "./akash-preview-admission.port";
+export {
   type AkashAllocationProbe,
   type AkashLeaseLogDescriptor,
   type AkashTxActuatorPort,
@@ -362,6 +369,19 @@ export {
   type PaymentRailMisconfigurationCode,
   PaymentRailMisconfiguredPortError,
 } from "./payment-rail-guard.port";
+export type {
+  NodeBundleReaderPort,
+  PreviewCleanupObserverPort,
+  PreviewFlightPort,
+  PreviewFlightRequest,
+  PreviewFlightStatus,
+  PreviewGitPort,
+  PreviewSource,
+  PreviewSourceInput,
+  PreviewSourcePort,
+  PreviewStatePairPort,
+} from "./preview-flight.port";
+export { PreviewFlightError } from "./preview-flight.port";
 export type {
   ReceiptDelivery,
   ReceiptDeliveryTarget,

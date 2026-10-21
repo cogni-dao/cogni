@@ -282,3 +282,85 @@ describe("buildComputeSecretResources", () => {
     );
   });
 });
+
+describe("reusable preview pair projections", () => {
+  it("separates A/B projection names while retaining the exact original secret banks", () => {
+    const resources = ([0, 1] as const).map((previewStateSlot) =>
+      buildComputeSecretResources({
+        slug: "spawny-boi",
+        environment: "candidate-a",
+        previewStateSlot,
+        secretRefs: [
+          { key: "DATABASE_URL" },
+          { key: "DATABASE_SERVICE_URL" },
+          { key: "DOLTGRES_URL" },
+        ],
+      })
+    );
+    const [a, b] = resources.map(
+      (items) =>
+        items.find((item) => item.file === "compute-env-external-secret.yaml")
+          ?.manifest as {
+          metadata: { name: string };
+          spec: {
+            data: { remoteRef: { key: string } }[];
+            target: { template: { data: Record<string, string> } };
+          };
+        }
+    );
+    expect(a?.metadata.name).toBe("spawny-boi-preview-a-compute-env-secrets");
+    expect(b?.metadata.name).toBe("spawny-boi-preview-b-compute-env-secrets");
+    expect(a?.spec.data).toEqual(b?.spec.data);
+    expect(
+      a?.spec.data.every((d) => d.remoteRef.key === "candidate-a/spawny-boi")
+    ).toBe(true);
+    expect(a?.spec.target.template.data.DATABASE_URL).toContain(
+      `/cogni_spawny_boi_preview_a\${1}`
+    );
+    expect(b?.spec.target.template.data.DOLTGRES_URL).toContain(
+      `/knowledge_spawny_boi_preview_b\${1}`
+    );
+    expect(a?.spec.target.template.data.DATABASE_URL).toContain(
+      'template "preview_database_binding_mismatch"'
+    );
+    expect(a?.spec.target.template.data.DATABASE_URL).toContain("toJson");
+    const migration = resources[0]?.find(
+      (item) => item.file === "compute-migration-external-secret.yaml"
+    )?.manifest as {
+      spec: {
+        data: { remoteRef: { key: string } }[];
+        target: { template: { data: Record<string, string> } };
+      };
+    };
+    expect(migration.spec.data[0]?.remoteRef.key).toBe(
+      "candidate-a/spawny-boi-database-migration"
+    );
+    expect(migration.spec.data[1]?.remoteRef.key).toBe(
+      "candidate-a/spawny-boi"
+    );
+    expect(
+      migration.spec.target.template.data.DATABASE_MIGRATION_URL
+    ).not.toContain("toJson");
+    expect(
+      migration.spec.target.template.data.DATABASE_MIGRATION_URL
+    ).toContain(`/cogni_spawny_boi_preview_a\${1}`);
+  });
+  it("refuses pair projection outside the existing allowlisted TEST fixture", () => {
+    expect(() =>
+      buildComputeSecretResources({
+        slug: "operator",
+        environment: "candidate-a",
+        secretRefs: [],
+        previewStateSlot: 0,
+      })
+    ).toThrow(/allowlisted/);
+    expect(() =>
+      buildComputeSecretResources({
+        slug: "spawny-boi",
+        environment: "production",
+        secretRefs: [],
+        previewStateSlot: 0,
+      })
+    ).toThrow(/allowlisted/);
+  });
+});

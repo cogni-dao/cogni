@@ -111,6 +111,16 @@ run_case "empty value rejected" "" 2 "" \
 run_case "missing service arg rejected" "x" 2 "" \
   candidate-a node-template
 
+# Give dynamic ownership validation its own catalog identity, even in a TEST fleet.
+# The real typed validator and package tools remain in the checkout; only ownership is synthetic.
+COMPONENT_ROOT="$TMPROOT/component-root"
+mkdir -p "$COMPONENT_ROOT/infra/catalog"
+. "$REPO_ROOT/scripts/ci/tests/fixtures/catalog.sh"
+write_akash_catalog_fixture "$COMPONENT_ROOT/infra/catalog" poly
+ln -s "$REPO_ROOT/scripts" "$COMPONENT_ROOT/scripts"
+ln -s "$REPO_ROOT/node_modules" "$COMPONENT_ROOT/node_modules"
+ln -s "$REPO_ROOT/package.json" "$COMPONENT_ROOT/package.json"
+
 # Dynamic manual-cell components use the real CLI path with a fake bao executable,
 # so -method=patch/CAS and no-fallback behavior are observed rather than bypassed.
 mkdir -p "$TMPROOT/fakebin"
@@ -139,7 +149,7 @@ chmod +x "$TMPROOT/fakebin/bao"
 component_case() {
   local name="$1" mode="$2" version="$3" body="$4" expected="$5" env_name="$6" service="$7" key="$8" rc=0 output
   : > "$TMPROOT/component.log"; rm -f "$TMPROOT/component-value"
-  output="$(printf '%s' "$body" | env -u SET_SECRET_BAO PATH="$TMPROOT/fakebin:$PATH" BAO_ADDR=http://fixture.invalid BAO_TOKEN=fixture-only FAKE_MODE="$mode" FAKE_BAO_LOG="$TMPROOT/component.log" FAKE_BAO_VALUE="$TMPROOT/component-value" SET_SECRET_EXPECTED_VERSION="$version" REPO_ROOT="$REPO_ROOT" bash "$TARGET" "$env_name" "$service" "$key" 2>&1)" || rc=$?
+  output="$(printf '%s' "$body" | env -u SET_SECRET_BAO PATH="$TMPROOT/fakebin:$PATH" BAO_ADDR=http://fixture.invalid BAO_TOKEN=fixture-only FAKE_MODE="$mode" FAKE_BAO_LOG="$TMPROOT/component.log" FAKE_BAO_VALUE="$TMPROOT/component-value" TSX_TSCONFIG_PATH="$REPO_ROOT/nodes/operator/app/tsconfig.app.json" SET_SECRET_EXPECTED_VERSION="$version" REPO_ROOT="$COMPONENT_ROOT" bash "$TARGET" "$env_name" "$service" "$key" 2>&1)" || rc=$?
   if { [[ "$expected" == pass && "$rc" == 0 ]] || [[ "$expected" == fail && "$rc" != 0 ]]; } && ! grep -q 'kv put' "$TMPROOT/component.log"; then
     printf 'OK  %s\n' "$name"; pass=$((pass+1))
   elif [[ "$expected" == create && "$rc" == 0 ]] && grep -q '^kv put -cas=0 ' "$TMPROOT/component.log"; then

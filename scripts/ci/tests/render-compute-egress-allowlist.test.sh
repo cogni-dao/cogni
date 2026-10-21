@@ -50,6 +50,7 @@ compute_egress_cidrs:
     comment: second provider block (fixture)
 EOF
 
+# Explicit entry scope excludes the custodian; lane custody must not widen it.
 cat > "$CATALOG/toksb.yaml" <<'EOF'
 name: toksb
 type: node
@@ -59,6 +60,7 @@ deployment_provider:
 compute_egress_cidrs:
   - cidr: 203.0.113.7/32
     comment: preview-only provider (fixture)
+    envs: [preview]
 EOF
 
 # Duplicate CIDR from a second candidate-a row — must render exactly once.
@@ -86,9 +88,18 @@ compute_egress_cidrs:
     comment: k3s-placed row must open no provider hole (fixture)
 EOF
 
+cat > "$CATALOG/defaultk3s.yaml" <<'EOF'
+name: defaultk3s
+type: node
+envs: [candidate-a]
+compute_egress_cidrs:
+  - cidr: 192.0.2.78/32
+    comment: placement-defaulted k3s must open no provider hole
+EOF
+
 # bug.5191 — the same row in TWO envs with different placement. K3S_IS_DEFAULT:
 # candidate-a has no override, so it is k3s and contributes nothing there; preview
-# is akash and contributes. One row, one CIDR, opposite outcomes per env.
+# is akash and contributes. Explicit entry scope keeps its foreign custodian excluded.
 cat > "$CATALOG/tokssplit.yaml" <<'EOF'
 name: tokssplit
 type: node
@@ -98,6 +109,7 @@ deployment_provider:
 compute_egress_cidrs:
   - cidr: 192.0.2.99/32
     comment: provider NAT for the preview placement only (fixture)
+    envs: [preview]
 EOF
 
 # Rows without the field / without envs must contribute nothing.
@@ -145,6 +157,9 @@ ok "catalog comments carried into rendered file"
 grep -q '192.0.2.77' "$OUT_A" \
   && fail "explicitly k3s-placed row (toksk3s) leaked its CIDR into candidate-a"
 ok "explicitly k3s-placed row contributes no CIDR to the env it deploys to"
+grep -q '192.0.2.78' "$OUT_A" \
+  && fail "unscoped default-k3s row leaked its CIDR into candidate-a"
+ok "absent placement alone excludes an unscoped candidate provider grant"
 
 grep -q '192.0.2.99' "$OUT_A" \
   && fail "placement-defaulted (k3s) row (tokssplit) leaked its CIDR into candidate-a"
@@ -181,6 +196,59 @@ ok "env with no external compute renders an allow-free (fail-closed) file"
 bash "$RENDERER" candidate-a > "$TMPROOT/candidate-a.second"
 diff -u "$OUT_A" "$TMPROOT/candidate-a.second" || fail "renderer is not deterministic"
 ok "renderer is deterministic/idempotent"
+
+# TEST fleet topology: spawny has no persistent candidate app, but candidate-a
+# custodies its preview/production lanes and owns the shared preview substrate.
+CUSTODY_CATALOG="$TMPROOT/test-custody-catalog"
+mkdir -p "$CUSTODY_CATALOG"
+cat > "$CUSTODY_CATALOG/operator.yaml" <<'EOF'
+name: operator
+type: node
+envs: [candidate-a]
+deployment_provider: { candidate-a: k3s }
+EOF
+cat > "$CUSTODY_CATALOG/spawny-boi.yaml" <<'EOF'
+name: spawny-boi
+type: node
+envs: [preview, production]
+deployment_provider: { preview: akash, production: akash }
+compute_egress_cidrs:
+  - cidr: 80.200.246.35/32
+    comment: shared zencloud + digitalfrontier NAT (TEST catalog)
+  - cidr: 198.51.100.61/32
+    comment: explicit preview-only Temporal grant must not reach custodian
+    envs: [preview]
+    ports: [7233]
+  - cidr: 198.51.100.62/32
+    comment: unscoped database-only provider grant retains its ports
+    ports: [5432, 5435]
+EOF
+COGNI_CATALOG_ROOT="$CUSTODY_CATALOG" bash "$RENDERER" candidate-a > "$TMPROOT/custody-self.list"
+grep -v '^#' "$TMPROOT/custody-self.list" > "$TMPROOT/custody-self.rules"
+printf '%s\n' "80.200.246.35/32:$PORTS" '198.51.100.62/32:5432,5435' > "$TMPROOT/custody-self.expected"
+diff -u "$TMPROOT/custody-self.expected" "$TMPROOT/custody-self.rules" \
+  || fail "self-lane reconcile pruned custodied grants or broadened scoped env/ports"
+[ "$(yq -N '.envs | contains(["candidate-a"])' "$CUSTODY_CATALOG/spawny-boi.yaml")" = false ] \
+  || fail "custody regression must not introduce a persistent candidate app"
+COGNI_CATALOG_ROOT="$CUSTODY_CATALOG" bash "$RENDERER" preview candidate-a > "$TMPROOT/custody-foreign.list"
+diff -u "$TMPROOT/custody-self.list" "$TMPROOT/custody-foreign.list" \
+  || fail "ordinary operator reconcile differs from foreign-lane reconcile on the same VM"
+COGNI_CATALOG_ROOT="$CUSTODY_CATALOG" bash "$RENDERER" candidate-a > "$TMPROOT/custody-again.list"
+diff -u "$TMPROOT/custody-self.list" "$TMPROOT/custody-again.list" || fail "custody union is not deterministic"
+FLEET_CONTROL_ENV=production COGNI_CATALOG_ROOT="$CUSTODY_CATALOG" \
+  bash "$RENDERER" candidate-a > "$TMPROOT/not-custodian.list"
+grep -qv '^#' "$TMPROOT/not-custodian.list" && fail "candidate gained grants for a foreign custodian's lanes"
+ok "ordinary TEST operator reconcile retains only its custodied provider grants, without candidate membership or scope widening"
+cp "$CUSTODY_CATALOG/spawny-boi.yaml" "$TMPROOT/custody-valid.yaml"
+for invalid_entry in '.compute_egress_cidrs[0].ports = [8080]' '.compute_egress_cidrs[0].envs = []'; do
+  cp "$TMPROOT/custody-valid.yaml" "$CUSTODY_CATALOG/spawny-boi.yaml"
+  yq -i "$invalid_entry" "$CUSTODY_CATALOG/spawny-boi.yaml"
+  if COGNI_CATALOG_ROOT="$CUSTODY_CATALOG" bash "$RENDERER" candidate-a > /dev/null 2>&1; then
+    fail "inferred custodied lane accepted invalid entry policy: $invalid_entry"
+  fi
+done
+cp "$TMPROOT/custody-valid.yaml" "$CUSTODY_CATALOG/spawny-boi.yaml"
+ok "inferred custody fails closed on invalid entry env and port scopes"
 
 cat > "$CATALOG/broken.yaml" <<'EOF'
 name: broken
@@ -702,6 +770,20 @@ for invalid_scope in '[]' '"preview"' null '["unknown"]' '["preview","unknown"]'
   grep -q 'invalid entry env' "$TMPROOT/invalid-scope.err" || fail "invalid scope failed for wrong reason"
 done
 ok "renderer fails closed for scalar/null/empty/unknown scopes outside schema CI"
+
+cp "$TMPROOT/custody-foreign.list" "$STAGED_ALLOWLIST"
+run_harden
+PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/custody-installed-before"
+cp "$TMPROOT/custody-self.list" "$STAGED_ALLOWLIST"
+run_harden
+PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/custody-installed-after"
+diff -u "$TMPROOT/custody-installed-before" "$TMPROOT/custody-installed-after" \
+  || fail "ordinary operator hardening pruned the foreign preview's existing provider grants"
+for port in 5432 5435; do
+  grep -q -- "-s 80.200.246.35/32 -p tcp -m conntrack --ctdir ORIGINAL --ctorigdstport $port .*compute-egress-allow.* ACCEPT" "$TMPROOT/custody-installed-after" \
+    || fail "ordinary operator hardening lost preview database port $port"
+done
+ok "ordinary operator hardening preserves the installed preview provider database grants"
 
 # A long live chain exceeds the pipe buffer. Finding the first managed rule must
 # still drain iptables' output, or pipefail turns SIGPIPE into exit 141.

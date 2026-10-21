@@ -136,6 +136,7 @@ describe("test-parent divergence policy", () => {
     // task.5270 — identity is DECLARED on the artifact entry; the sync never reads repo
     // variables, so the writer App keeps 1:1 permission parity with the production operator App.
     expect(policy.regenerate.identity).toEqual({
+      DOMAIN: "cogni-testing.org",
       FORK_DOMAIN_ROOT: "cognidao.org",
       FLEET_CONTROL_ENV: "candidate-a",
     });

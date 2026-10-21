@@ -76,6 +76,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { akashPreviewAdmissions } from "./akash-preview-admissions";
 
 /**
  * Lifecycle of one wallet allocation attempt (source of truth for the DB CHECK).
@@ -132,6 +133,16 @@ export const akashTxAllocations = pgTable(
     workload: text("workload").notNull(),
     /** Deployment environment. Authoritative: part of the cost-interval grouping with node_id. */
     environment: text("environment").notNull(),
+    /** Explicit preview identity shared by base/recovery keys. Null preserves ordinary semantics. */
+    previewDeploymentId: uuid("preview_deployment_id").references(
+      () => akashPreviewAdmissions.deploymentId
+    ),
+    previewSubmittedAt: timestamp("preview_submitted_at", {
+      withTimezone: true,
+    }),
+    previewDispatchFinishedAt: timestamp("preview_dispatch_finished_at", {
+      withTimezone: true,
+    }),
     /** See AKASH_TX_ALLOCATION_STATES. */
     state: text("state").notNull(),
     /** Provider-opaque pre-POST high-water mark; the recovery scan's baseline. */

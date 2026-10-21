@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@app/.well-known/agent.json/route.test`
+ * Purpose: Verify discovery advertises authenticated write actions and their wire contracts.
+ * Scope: Local discovery handler and schema projections; does not call remote services.
+ * Invariants: Both ordinary and opt-in preview flight responses remain discoverable.
+ * Side-effects: none
+ * Links: ./route.ts, @cogni/node-contracts/vcs.flight.v1
+ * @internal
+ */
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -44,11 +54,55 @@ describe("GET /.well-known/agent.json", () => {
             type: "object",
             required: ["nodeId", "sourceSha"],
           },
+          preview: {
+            type: "object",
+            required: ["requestKey", "action"],
+            properties: {
+              action: {
+                enum: ["start", "status", "release"],
+                default: "start",
+              },
+              ttlSeconds: { type: "integer", minimum: 30, maximum: 7200 },
+            },
+          },
         },
       },
       outputSchema: {
-        type: "object",
-        required: ["dispatched", "slot", "nodeRef", "workflowUrl", "message"],
+        anyOf: [
+          {
+            type: "object",
+            required: [
+              "dispatched",
+              "slot",
+              "nodeRef",
+              "workflowUrl",
+              "message",
+            ],
+            properties: { slot: { const: "candidate-a" } },
+          },
+          {
+            type: "object",
+            required: ["dispatched", "slot", "preview"],
+            properties: {
+              slot: { const: "build-preview" },
+              preview: {
+                type: "object",
+                required: [
+                  "deploymentId",
+                  "nodeId",
+                  "sourceSha",
+                  "url",
+                  "expiresAt",
+                  "state",
+                ],
+                properties: {
+                  deploymentId: { type: "string", format: "uuid" },
+                  state: { enum: ["pending", "running", "retiring", "closed"] },
+                },
+              },
+            },
+          },
+        ],
       },
     });
   });

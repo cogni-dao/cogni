@@ -100,7 +100,41 @@ spec:
                   message: placement may change only with a leaseGeneration bump
                 - rule: "has(self.instance) == has(oldSelf.instance)"
                   message: instance cannot be added to or removed from an existing workload
+                - rule: "has(self.previewDeploymentId) == has(self.previewStateSlot) && has(self.previewDeploymentId) == has(self.previewResetGeneration)"
+                  message: preview deployment requires slot and reset generation together
+                - rule: "has(self.previewDeploymentId) == has(oldSelf.previewDeploymentId)"
+                  message: preview identity cannot be added or removed
+                - rule: "!has(self.previewDeploymentId) || (self.environment == 'candidate-a' && self.bundle.source.repository.startsWith('cogni-test-org/') && !has(self.instance) && self.leaseGeneration == 0 && self.bootPolicy.onGiveUp == 'Hold' && has(self.migration.resetGeneration) && self.migration.resetGeneration == self.previewResetGeneration)"
+                  message: preview is a bounded TEST deployment with its assigned reset generation
+                - rule: "!has(self.previewDeploymentId) || self.bundle == oldSelf.bundle && self.workload == oldSelf.workload"
+                  message: preview artifact and workload identity are immutable
               properties:
+                previewDeploymentId:
+                  type: string
+                  format: uuid
+                  pattern: "^[0-9a-f-]{36}$"
+                  x-kubernetes-validations:
+                    - {
+                        rule: "self == oldSelf",
+                        message: previewDeploymentId is immutable,
+                      }
+                previewStateSlot:
+                  type: integer
+                  enum: [0, 1]
+                  x-kubernetes-validations:
+                    - {
+                        rule: "self == oldSelf",
+                        message: previewStateSlot is immutable,
+                      }
+                previewResetGeneration:
+                  type: string
+                  format: uuid
+                  pattern: "^[0-9a-f-]{36}$"
+                  x-kubernetes-validations:
+                    - {
+                        rule: "self == oldSelf",
+                        message: previewResetGeneration is immutable,
+                      }
                 nodeId:
                   type: string
                   format: uuid
@@ -327,6 +361,10 @@ spec:
                     caller can run an arbitrary container against the environment's database.
                   type: object
                   properties:
+                    resetGeneration:
+                      type: string
+                      format: uuid
+                      pattern: "^[0-9a-f-]{36}$"
                     policy:
                       description: >-
                         `RequireBeforeTransaction` is a DEPRECATED alias, served only for the

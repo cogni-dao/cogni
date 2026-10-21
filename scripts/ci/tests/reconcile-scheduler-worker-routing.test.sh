@@ -24,6 +24,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 RECONCILE="$REPO_ROOT/scripts/ci/reconcile-scheduler-worker-routing.sh"
 
+# The fixture below owns canonical workload URLs, even when TEST CI exports its
+# fleet's DOMAIN. Pin both roots for the renderer's --write and reconcile's
+# nested --check; DOMAIN takes precedence over FORK_DOMAIN_ROOT.
+export DOMAIN=cognidao.org
+export FORK_DOMAIN_ROOT=cognidao.org
+
 TMPROOT=$(mktemp -d -t reconcile-swr.XXXXXX)
 trap 'rm -rf "$TMPROOT"' EXIT
 

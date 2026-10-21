@@ -47,8 +47,12 @@ for lane in candidate-a preview production; do
 done
 echo '[2] future Akash births remain lane-resident without a ledger edit'
 
-# Legacy pins may model rollback, but no foreign residency gets a warning-only pass.
+# Legacy pins model the historical production custodian using test-owned rows.
+. "$SCRIPT_DIR/fixtures/catalog.sh"
+write_historical_catalog_fixture "$CATALOG_DIR" "$TMPROOT/historical-catalog"
+# No foreign residency gets a warning-only pass.
 (
+  export FLEET_CONTROL_ENV=production CATALOG_DIR="$TMPROOT/historical-catalog"
   LANE_DB_RESIDENCY_PINNED=("poly/candidate-a")
   [ "$(lane_db_vm_env poly candidate-a)" != candidate-a ] || fail 'historical pin fixture did nothing'
   [ "$(lane_db_vm_env poly preview)" = preview ] || fail 'pin matched another lane'

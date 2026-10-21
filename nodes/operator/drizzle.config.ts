@@ -33,6 +33,7 @@ export default defineConfig({
     "./nodes/operator/app/src/shared/db/node-access-requests.ts",
     "./nodes/operator/app/src/shared/db/work-item-sessions.ts",
     "./nodes/operator/app/src/shared/db/akash-tx-allocations.ts",
+    "./nodes/operator/app/src/shared/db/akash-preview-admissions.ts",
     "./nodes/operator/app/src/shared/db/compute-cost-intervals.ts",
   ],
   out: "./nodes/operator/app/src/adapters/server/db/migrations",

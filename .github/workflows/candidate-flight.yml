@@ -40,6 +40,9 @@ env:
   OVERLAY_ENV: candidate-a
   # Public workload zone for fork-aware generated scheduler routes.
   FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
+  # Configured DOMAIN must be the workload ROOT; routing derives every lane from it.
+  # The stable k3s operator endpoint uses CANDIDATE_OPERATOR_DOMAIN separately below.
+  DOMAIN: ${{ vars.DOMAIN }}
   # FLEET_CONTROL_ENV (subtask.5007): the env whose cluster reconciles + pays for akash
   # lanes. Default 'production' (cogni-dao fleet); an isolated fleet (cogni-test-org) sets
   # the repo var to 'candidate-a' so its own control plane owns akash lanes and no test
@@ -655,6 +658,11 @@ jobs:
             fi
           fi
 
+          if [[ "$PRESERVED_IMAGE_REF" == *"@sha256:"* ]]; then
+            snapshot_overlay_init_contract candidate-a "$NODE" "$PRESERVED_IMAGE_REF" \
+              "$RUNNER_TEMP/preserved-init-${NODE}.json"
+          fi
+
           rsync -a --delete ../app-src/infra/k8s/base/ infra/k8s/base/
           mkdir -p "infra/k8s/overlays/candidate-a/${NODE}"
           rsync -a --delete \
@@ -668,6 +676,8 @@ jobs:
             # digest unchanged through this preliminary shape commit.
             bash ../ci-src/scripts/ci/promote-k8s-image.sh --no-commit \
               --env candidate-a --app "$NODE" --digest "$PRESERVED_IMAGE_REF"
+            restore_overlay_init_contract candidate-a "$NODE" "$PRESERVED_IMAGE_REF" \
+              "$RUNNER_TEMP/preserved-init-${NODE}.json"
           fi
           mkdir -p infra/catalog
           cp "../app-src/infra/catalog/${NODE}.yaml" "infra/catalog/${NODE}.yaml"

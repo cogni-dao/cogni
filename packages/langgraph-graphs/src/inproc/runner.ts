@@ -63,8 +63,11 @@ function mcpSpecsToLangChainTools(
           const result = await toolExecFn(spec.name, args, undefined);
           if (!result.ok) {
             return JSON.stringify({
-              error: result.errorCode,
+              error: result.receipt?.code ?? result.errorCode,
               message: result.safeMessage,
+              ...(result.receipt
+                ? { retryable: false, lookup: result.receipt.lookup }
+                : {}),
             });
           }
           return typeof result.value === "string"

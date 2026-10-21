@@ -273,6 +273,12 @@ export const serverSchema = z.object({
   // can enumerate live paid leases without holding any wallet credential. Optional: unset →
   // lease read capability absent (routes degrade to "leases unwired").
   AKASH_ACTUATOR_ACCOUNT_ID: optionalString,
+  // Explicit trusted TEST preview pilot. Ordinary flight/deploy defaults remain unchanged.
+  PREVIEW_FLIGHTS_ENABLED: z.enum(["true", "false"]).optional(),
+  PREVIEW_READY_STATE_GENERATIONS: optionalString,
+  PREVIEW_DNS_ZONE_ID: optionalString,
+  PREVIEW_SUBSTRATE_HOST: optionalString,
+  PREVIEW_KUBECONFIG: optionalString,
   // NOTE: AKASH_ACTUATOR_CONSOLE_API_KEY is deliberately ABSENT from this schema (story.5016
   // secret-boundary amendment 2). It is the operator sponsor wallet's Console credential and it
   // now lives at cogni/<env>/akash-tx-actuator/*, projected ONLY into the private actuator pod

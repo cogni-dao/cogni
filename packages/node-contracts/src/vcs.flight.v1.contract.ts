@@ -30,19 +30,41 @@ export const flightOperation = {
       sourceSha: z.string().regex(/^[0-9a-fA-F]{40}$/),
     }),
     workflowRef: workflowRefSchema.optional(),
+    preview: z
+      .object({
+        requestKey: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/),
+        action: z.enum(["start", "status", "release"]).default("start"),
+        ttlSeconds: z.number().int().min(30).max(7200).optional(),
+      })
+      .strict()
+      .optional(),
   }),
 
-  output: z.object({
-    dispatched: z.boolean(),
-    slot: z.literal("candidate-a"),
-    nodeRef: z.object({
-      nodeId: z.string().uuid(),
-      slug: z.string(),
-      sourceSha: z.string(),
-      sourceRepo: z.string().url(),
-      image: z.string(),
+  output: z.union([
+    z.object({
+      dispatched: z.boolean(),
+      slot: z.literal("candidate-a"),
+      nodeRef: z.object({
+        nodeId: z.string().uuid(),
+        slug: z.string(),
+        sourceSha: z.string(),
+        sourceRepo: z.string().url(),
+        image: z.string(),
+      }),
+      workflowUrl: z.string().url(),
+      message: z.string(),
     }),
-    workflowUrl: z.string().url(),
-    message: z.string(),
-  }),
+    z.object({
+      dispatched: z.boolean(),
+      slot: z.literal("build-preview"),
+      preview: z.object({
+        deploymentId: z.string().uuid(),
+        nodeId: z.string().uuid(),
+        sourceSha: z.string().regex(/^[0-9a-f]{40}$/),
+        url: z.string().url(),
+        expiresAt: z.string().datetime(),
+        state: z.enum(["pending", "running", "retiring", "closed"]),
+      }),
+    }),
+  ]),
 } as const;

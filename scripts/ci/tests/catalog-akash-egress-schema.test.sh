@@ -12,7 +12,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-yq 'del(.compute_egress_cidrs)' "$REPO_ROOT/infra/catalog/red.yaml" >"$tmpdir/akash-without-egress.yaml"
+# Schema examples belong to the test, not a sovereign fleet roster.
+. "$REPO_ROOT/scripts/ci/tests/fixtures/catalog.sh"
+write_akash_catalog_fixture "$tmpdir/catalog" schema-fixture
+
+yq 'del(.compute_egress_cidrs)' "$tmpdir/catalog/schema-fixture.yaml" >"$tmpdir/akash-without-egress.yaml"
 
 if check-jsonschema \
   --schemafile "$REPO_ROOT/infra/catalog/_schema.json" \
@@ -30,7 +34,7 @@ fi
 echo "ok 1 - Akash catalog without compute egress is rejected"
 
 yq '.deployment_provider = {"candidate-a": "k3s", "preview": "k3s", "production": "k3s"} | del(.compute_egress_cidrs)' \
-  "$REPO_ROOT/infra/catalog/red.yaml" >"$tmpdir/k3s-without-egress.yaml"
+  "$tmpdir/catalog/schema-fixture.yaml" >"$tmpdir/k3s-without-egress.yaml"
 
 check-jsonschema \
   --schemafile "$REPO_ROOT/infra/catalog/_schema.json" \
@@ -39,7 +43,7 @@ check-jsonschema \
 echo "ok 2 - explicit k3s-only catalog needs no compute egress declaration"
 
 # Optional entry scopes are narrow subsets, not new substrate ports/environments.
-yq '.compute_egress_cidrs = [{"cidr":"65.108.194.156/32","comment":"production Temporal fixture","ports":[7233],"envs":["production"]}]' "$REPO_ROOT/infra/catalog/red.yaml" > "$tmpdir/scoped-valid.yaml"
+yq '.envs = ["candidate-a", "production"] | .compute_egress_cidrs = [{"cidr":"65.108.194.156/32","comment":"production Temporal fixture","ports":[7233],"envs":["production"]}]' "$tmpdir/catalog/schema-fixture.yaml" > "$tmpdir/scoped-valid.yaml"
 check-jsonschema --schemafile "$REPO_ROOT/infra/catalog/_schema.json" "$tmpdir/scoped-valid.yaml" >/dev/null
 echo "ok 3 - scoped numeric Temporal port in owning production env is accepted"
 for mutation in '.compute_egress_cidrs[0].ports = []' '.compute_egress_cidrs[0].ports = [8080]' '.compute_egress_cidrs[0].ports = ["7233"]' '.compute_egress_cidrs[0].ports = [7233,7233]' '.compute_egress_cidrs[0].envs = []' '.compute_egress_cidrs[0].envs = ["preview"]'; do

@@ -45,7 +45,12 @@ import type {
   ProvisionSpec,
   ProvisionState,
 } from "@cogni/ai-tools";
-
+import type {
+  AkashPreviewAdmission,
+  AkashPreviewAdmissionInput,
+  AkashPreviewAdmissionPort,
+  AkashPreviewRetirement,
+} from "./akash-preview-admission.port";
 import type { ComputeWorkloadMigrationPort } from "./compute-workload-migration.port";
 
 /**
@@ -151,6 +156,9 @@ export interface AkashTxMigrationStep {
   readonly image: string;
   /** True when the app service declares a `DOLTGRES_URL` secret ref. */
   readonly doltgres: boolean;
+  readonly resetGeneration?: string;
+  readonly previewStateSlot?: 0 | 1;
+  readonly previewDeploymentId?: string;
 }
 
 /** Outcome of one bounded, non-throwing migration-step attempt. */
@@ -236,6 +244,15 @@ export interface AkashTxCreateResult extends AkashTxResource {
  * (Crossplane) owns retry, backoff, and give-up policy.
  */
 export interface AkashTxActuatorPort {
+  admitPreview?(
+    input: AkashPreviewAdmissionInput
+  ): Promise<AkashPreviewAdmission>;
+  cancelPreview?(
+    input: AkashPreviewAdmissionInput
+  ): Promise<AkashPreviewRetirement>;
+  retirePreview?(input: {
+    deploymentId: string;
+  }): Promise<AkashPreviewRetirement>;
   observe(input: {
     cogniKey: string;
     externalName?: string;
@@ -258,6 +275,8 @@ export interface AkashTxActuatorPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
+    previewDeploymentId?: string;
+    previewResetGeneration?: string;
   }): Promise<AkashTxCreateResult>;
   update(input: {
     cogniKey: string;
@@ -381,6 +400,8 @@ export interface AkashTxConsolePort {
      * provider forever; the caller derives this from durable allocation receipts instead.
      */
     excludedProviders?: ReadonlySet<string>;
+    /** Preview-only durable dispatch fence; absent leaves ordinary provisioning unchanged. */
+    beforeTransaction?: (phase: "deployment" | "lease") => Promise<void>;
   }): Promise<{ leaseId: string; providerAccount: string }>;
   /**
    * Classify the wallet beyond a pre-transaction baseline into exactly one of three worlds:
@@ -482,6 +503,9 @@ export type AkashTxAllocationState =
   | "failed";
 
 export interface AkashTxAllocationRecord {
+  readonly previewDeploymentId?: string;
+  readonly previewSubmittedAt?: Date;
+  readonly previewDispatchFinishedAt?: Date;
   /** Durable policy; no delete request can override retained storage custody. */
   readonly retentionPolicy?: "retain";
   /** Verified credential-free cell placement stored on this same allocation row. */
@@ -508,6 +532,7 @@ export interface AkashTxAllocationRecord {
 
 /** A receipt that has held the wallet slot longer than any single transaction can take. */
 export interface AkashTxStaleAllocation {
+  readonly previewDeploymentId?: string;
   readonly cogniKey: string;
   /** Absent ⇒ durably PRE-transaction: the cursor is written before the POST, so no spend. */
   readonly allocationCursor?: string;
@@ -521,6 +546,7 @@ export interface AkashTxStaleAllocation {
  * whoever holds the key rather than only by the process that opened it.
  */
 export interface AkashTxAllocationLedgerPort {
+  readonly preview?: AkashPreviewAdmissionPort;
   /**
    * Take the wallet-wide slot for this key, or report the current holder.
    *
@@ -540,6 +566,7 @@ export interface AkashTxAllocationLedgerPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     retentionPolicy?: "retain";
+    previewDeploymentId?: string;
   }): Promise<
     | { state: "claimed"; record: AkashTxAllocationRecord }
     | { state: "owned"; record: AkashTxAllocationRecord }
@@ -569,7 +596,11 @@ export interface AkashTxAllocationLedgerPort {
    * Persist the pre-POST baseline. MUST reject when the key does not own a `preparing` slot —
    * a resumed zombie with no slot must never proceed to spend.
    */
-  prepare(input: { cogniKey: string; allocationCursor: string }): Promise<void>;
+  prepare(input: {
+    cogniKey: string;
+    allocationCursor: string;
+    previewDeploymentId?: string;
+  }): Promise<void>;
   /** Record the paid handle and release the wallet slot. Idempotent. */
   recordAllocation(input: {
     cogniKey: string;

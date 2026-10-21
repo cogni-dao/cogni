@@ -27,6 +27,7 @@ import {
   runGateChain,
   V0_DETERMINISTIC_GATES,
 } from "./domain/gates/index.js";
+import { KnowledgeWriteConflictError } from "./domain/write-replay.js";
 import type { KnowledgeStorePort } from "./port/knowledge-store.port.js";
 
 function toEntry(k: {
@@ -126,33 +127,63 @@ export function createKnowledgeCapability(
       const confidence = initializeConfidence({
         sourceType: params.sourceType,
       });
-      const entry = await port.upsertKnowledge({
-        id: c.id ?? params.id,
-        domain: c.domain,
-        title: c.title,
-        content: c.content,
-        sourceType: params.sourceType,
-        entityId: c.entityId ?? null,
-        confidencePct: confidence.confidencePct,
-        sourceRef: c.sourceRef ?? null,
-        tags: c.tags ?? null,
-      });
+      return port.withWrite(
+        {
+          operationId: `knowledge.write:${c.id ?? params.id}`,
+          message: `knowledge: ${params.sourceType} — ${c.title}`,
+        },
+        async (write) => {
+          const previous = await write.getKnowledge(c.id ?? params.id);
+          if (previous) {
+            const key = (edge: {
+              citedId: string;
+              citationType: string;
+              context?: string | null;
+            }) =>
+              JSON.stringify([
+                edge.citedId,
+                edge.citationType,
+                edge.context ?? null,
+              ]);
+            const expected = [
+              ...new Set((params.citations ?? []).map(key)),
+            ].sort();
+            const actual = [
+              ...new Set(
+                (await write.listCitationsByCitingId(previous.id)).map(key)
+              ),
+            ].sort();
+            if (JSON.stringify(actual) !== JSON.stringify(expected))
+              throw new KnowledgeWriteConflictError(previous.id);
+          }
+          const entry = await write.upsertKnowledge({
+            id: c.id ?? params.id,
+            domain: c.domain,
+            title: c.title,
+            content: c.content,
+            sourceType: params.sourceType,
+            entityId: c.entityId ?? null,
+            confidencePct: confidence.confidencePct,
+            sourceRef: c.sourceRef ?? null,
+            tags: c.tags ?? null,
+          });
 
-      // Outgoing edges land in the SAME auto-commit as the entry. The port
-      // enforces CITATION_TARGET_EXISTS + EDGE_TYPE_MATCHES (a no-op for these
-      // non-hypothesis edges). Confidence recompute on the cited rows is the
-      // resolver's job, not inlined here.
-      for (const cite of params.citations ?? []) {
-        await port.addCitation({
-          citingId: entry.id,
-          citedId: cite.citedId,
-          citationType: cite.citationType,
-          context: cite.context ?? null,
-        });
-      }
+          // Outgoing edges land in the SAME auto-commit as the entry. The port
+          // enforces CITATION_TARGET_EXISTS + EDGE_TYPE_MATCHES (a no-op for these
+          // non-hypothesis edges). Confidence recompute on the cited rows is the
+          // resolver's job, not inlined here.
+          for (const cite of params.citations ?? []) {
+            await write.addCitation({
+              citingId: entry.id,
+              citedId: cite.citedId,
+              citationType: cite.citationType,
+              context: cite.context ?? null,
+            });
+          }
 
-      await port.commit(`knowledge: ${entry.sourceType} — ${entry.title}`);
-      return toEntry(entry);
+          return toEntry(entry);
+        }
+      );
     },
   };
 }

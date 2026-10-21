@@ -40,6 +40,7 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
 import type {
   BatchV1Api,
   CoreV1Api,
@@ -77,11 +78,23 @@ function transient(): ComputeLifecycleError {
 
 export function migrationJobName(
   nodeSlug: string,
-  bundleDigest: string
+  bundleDigest: string,
+  resetGeneration?: string
 ): string {
   const match = DIGEST_PATTERN.exec(bundleDigest);
   if (!match?.[1]) {
     throw new ComputeLifecycleError("terminal", "ProviderRejected", false);
+  }
+  if (resetGeneration !== undefined) {
+    if (!/^[a-zA-Z0-9-]{1,80}$/.test(resetGeneration)) {
+      throw new ComputeLifecycleError("terminal", "ProviderRejected", false);
+    }
+    // Hash the complete node identity too: truncation must not alias long slugs.
+    const scope = createHash("sha256")
+      .update(JSON.stringify([nodeSlug, resetGeneration]))
+      .digest("hex")
+      .slice(0, 16);
+    return `migrate-${nodeSlug.slice(0, 23)}-${match[1].slice(0, 12)}-${scope}`;
   }
   return `migrate-${nodeSlug}-${match[1].slice(0, 12)}`;
 }
@@ -143,7 +156,15 @@ function buildJob(input: ComputeWorkloadMigrationInput, name: string): V1Job {
         "cogni.io/node": input.nodeSlug,
         "cogni.io/environment": input.environment,
         "app.kubernetes.io/managed-by": MANAGED_BY_LABEL_VALUE,
+        ...(input.resetGeneration
+          ? { "cogni.io/disposable-reset": "true" }
+          : {}),
       },
+      ...(input.resetGeneration
+        ? {
+            annotations: { "cogni.io/reset-generation": input.resetGeneration },
+          }
+        : {}),
     },
     spec: {
       // migrate.mjs is idempotent (drizzle journal) and single-writer
@@ -232,10 +253,47 @@ export class KubernetesMigrationJobAdapter
     return input.namespace ?? this.namespace;
   }
 
+  async retireResetGeneration(input: {
+    nodeSlug: string;
+    bundleDigest: string;
+    resetGeneration: string;
+    namespace: string;
+  }): Promise<void> {
+    const name = migrationJobName(
+      input.nodeSlug,
+      input.bundleDigest,
+      input.resetGeneration
+    );
+    try {
+      const job = await this.batch.readNamespacedJob(name, input.namespace);
+      if (
+        job.body.metadata?.annotations?.["cogni.io/reset-generation"] !==
+          input.resetGeneration ||
+        job.body.metadata?.labels?.["cogni.io/disposable-reset"] !== "true"
+      )
+        throw new Error("preview_migration_cleanup_identity_conflict");
+      await this.batch.deleteNamespacedJob(
+        name,
+        input.namespace,
+        undefined,
+        undefined,
+        0,
+        undefined,
+        "Foreground"
+      );
+    } catch (error) {
+      if (statusCode(error) !== 404) throw error;
+    }
+  }
+
   async ensure(
     input: ComputeWorkloadMigrationInput
   ): Promise<"succeeded" | "running" | "failed"> {
-    const name = migrationJobName(input.nodeSlug, input.bundleDigest);
+    const name = migrationJobName(
+      input.nodeSlug,
+      input.bundleDigest,
+      input.resetGeneration
+    );
     const namespace = this.namespaceFor(input);
     let job: V1Job | undefined;
     try {
@@ -350,12 +408,17 @@ export class KubernetesMigrationJobAdapter
   async readReceipt(input: {
     readonly nodeSlug: string;
     readonly bundleDigest: string;
+    readonly resetGeneration?: string;
     readonly namespace?: string | undefined;
     readonly containerName: string;
   }): Promise<string | null> {
     let name: string;
     try {
-      name = migrationJobName(input.nodeSlug, input.bundleDigest);
+      name = migrationJobName(
+        input.nodeSlug,
+        input.bundleDigest,
+        input.resetGeneration
+      );
     } catch {
       return null;
     }
@@ -429,6 +492,9 @@ export class KubernetesMigrationJobAdapter
     input: ComputeWorkloadMigrationInput,
     keep: string
   ): Promise<void> {
+    // Disposable generations/pairs are independent consumers. Their cleanup is explicit;
+    // generic node GC must not erase another deployment's successful receipt.
+    if (input.resetGeneration !== undefined) return;
     const namespace = this.namespaceFor(input);
     try {
       const list = await this.batch.listNamespacedJob(
@@ -446,7 +512,8 @@ export class KubernetesMigrationJobAdapter
           // race must never kill another digest's migration mid-flight.
           .filter(
             (item) =>
-              jobCondition(item, "Complete") || jobCondition(item, "Failed")
+              item.metadata?.labels?.["cogni.io/disposable-reset"] !== "true" &&
+              (jobCondition(item, "Complete") || jobCondition(item, "Failed"))
           )
           .map((item) => item.metadata?.name)
           .filter(

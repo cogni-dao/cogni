@@ -152,6 +152,22 @@ function namedJob(name: string, status: V1Job["status"] = {}): V1Job {
 }
 
 describe("migrationJobName", () => {
+  it("separates reset generations while retaining ordinary names", () => {
+    const a = migrationJobName("spawny-boi", DIGEST, "pair-a-reset-1");
+    expect(a).not.toBe(migrationJobName("spawny-boi", DIGEST));
+    expect(a).not.toBe(
+      migrationJobName("spawny-boi", DIGEST, "pair-a-reset-2")
+    );
+    expect(a).not.toBe(
+      migrationJobName("spawny-boi", DIGEST, "pair-b-reset-1")
+    );
+    expect(
+      migrationJobName("a".repeat(60), DIGEST, "reset-1").length
+    ).toBeLessThanOrEqual(63);
+    expect(() => migrationJobName("spawny-boi", DIGEST, "../bad")).toThrow(
+      ComputeLifecycleError
+    );
+  });
   it("pins the job name to the first 12 digest hex chars per node", () => {
     expect(migrationJobName("toks4", DIGEST)).toBe(
       `migrate-toks4-${"a".repeat(12)}`
@@ -166,6 +182,64 @@ describe("migrationJobName", () => {
 });
 
 describe("KubernetesMigrationJobAdapter", () => {
+  it("reads receipts only from the requested reset generation", async () => {
+    const podApi = pods();
+    await adapterOf(batch(), podApi).readReceipt({
+      nodeSlug: "toks4",
+      bundleDigest: DIGEST,
+      resetGeneration: "pair-a-reset-2",
+      containerName: "migrate",
+    });
+    expect(podApi.listNamespacedPod).toHaveBeenCalledWith(
+      NAMESPACE,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      `job-name=${migrationJobName("toks4", DIGEST, "pair-a-reset-2")}`
+    );
+  });
+  it("ordinary migration GC preserves disposable preview receipts", async () => {
+    const preview = namedJob(
+      migrationJobName("toks4", DIGEST, "pair-a-reset-1"),
+      {
+        conditions: [{ type: "Complete", status: "True" }],
+      }
+    );
+    preview.metadata = {
+      ...preview.metadata,
+      labels: {
+        ...preview.metadata?.labels,
+        "cogni.io/disposable-reset": "true",
+      },
+    };
+    const ordinary = namedJob(migrationJobName("toks4", DIGEST), {
+      conditions: [{ type: "Complete", status: "True" }],
+    });
+    const api = batch(ordinary, [preview]);
+    await expect(adapterOf(api).ensure(input())).resolves.toBe("succeeded");
+    expect(api.deleteNamespacedJob).not.toHaveBeenCalled();
+  });
+  it("does not reuse or collect another disposable generation's receipt", async () => {
+    const previous = namedJob(migrationJobName("toks4", DIGEST), {
+      conditions: [{ type: "Complete", status: "True" }],
+    });
+    const api = batch(undefined, [previous]);
+    await expect(
+      adapterOf(api).ensure(input({ resetGeneration: "pair-a-reset-2" }))
+    ).resolves.toBe("running");
+    expect(api.readNamespacedJob).toHaveBeenCalledWith(
+      migrationJobName("toks4", DIGEST, "pair-a-reset-2"),
+      NAMESPACE
+    );
+    expect(api.createNamespacedJob).toHaveBeenCalledOnce();
+    const complete = batch(previous, [previous]);
+    await expect(
+      adapterOf(complete).ensure(input({ resetGeneration: "pair-a-reset-2" }))
+    ).resolves.toBe("succeeded");
+    expect(complete.listNamespacedJob).not.toHaveBeenCalled();
+    expect(complete.deleteNamespacedJob).not.toHaveBeenCalled();
+  });
   it("creates the per-digest Job with mirrored spec and reports running", async () => {
     const api = batch();
     const adapter = adapterOf(api);
@@ -664,5 +738,64 @@ describe("readReceipt", () => {
         containerName: "migrate",
       })
     ).resolves.toBeNull();
+  });
+});
+
+describe("preview migration generation retirement", () => {
+  const resetGeneration = "2616bc5c-5c0f-4cbf-ae01-82c376897448";
+  const request = {
+    nodeSlug: "spawny-boi",
+    bundleDigest: DIGEST,
+    resetGeneration,
+    namespace: "cogni-candidate-a",
+  };
+  it("foreground-deletes only the exact disposable generation", async () => {
+    const name = migrationJobName(request.nodeSlug, DIGEST, resetGeneration);
+    const api = batch({
+      metadata: {
+        name,
+        annotations: { "cogni.io/reset-generation": resetGeneration },
+        labels: { "cogni.io/disposable-reset": "true" },
+      },
+    });
+    await adapterOf(api).retireResetGeneration(request);
+    expect(api.readNamespacedJob).toHaveBeenCalledWith(
+      name,
+      "cogni-candidate-a"
+    );
+    expect(api.deleteNamespacedJob).toHaveBeenCalledWith(
+      name,
+      "cogni-candidate-a",
+      undefined,
+      undefined,
+      0,
+      undefined,
+      "Foreground"
+    );
+  });
+  it("refuses another generation or ordinary migration Job", async () => {
+    for (const metadata of [
+      {
+        annotations: { "cogni.io/reset-generation": "other" },
+        labels: { "cogni.io/disposable-reset": "true" },
+      },
+      {
+        annotations: { "cogni.io/reset-generation": resetGeneration },
+        labels: {},
+      },
+    ]) {
+      const api = batch({ metadata });
+      await expect(
+        adapterOf(api).retireResetGeneration(request)
+      ).rejects.toThrow("preview_migration_cleanup_identity_conflict");
+      expect(api.deleteNamespacedJob).not.toHaveBeenCalled();
+    }
+  });
+  it("treats an explicit404 as already removed", async () => {
+    const api = batch();
+    await expect(
+      adapterOf(api).retireResetGeneration(request)
+    ).resolves.toBeUndefined();
+    expect(api.deleteNamespacedJob).not.toHaveBeenCalled();
   });
 });

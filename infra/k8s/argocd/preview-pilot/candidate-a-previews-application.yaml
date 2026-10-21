@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+# OPT-IN fixture, deliberately outside control-plane/ and bootstrap kustomizations.
+# Stage into the TEST parent's existing control-plane path after its preview deploy
+# branch exists. TEST staging must bind repoURL to that test parent; shared source
+# retains its canonical repository. Ordinary node AppSets never own this tree.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cogni-candidate-a-previews
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: deploy/candidate-a-previews
+    path: infra/k8s/preview-deployments/candidate-a
+    directory:
+      recurse: true
+      exclude: "**/kustomization.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cogni-candidate-a
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: true
+    syncOptions:
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true

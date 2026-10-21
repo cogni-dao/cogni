@@ -8,6 +8,9 @@ import {
   bootPolicyForEnvironment,
   buildComputeWorkloadManifest,
   computeWorkloadManifestFile,
+  previewComputePublicHost,
+  previewComputeWorkloadDirectory,
+  previewComputeWorkloadName,
   resolveNodeDatabasePoolLimits,
 } from "./compute-workload-manifest";
 import { deploymentEnvironmentSchema } from "./node-deployment-provider";
@@ -1021,5 +1024,86 @@ describe("actuator namespace owner routing (bug.5263)", () => {
         actuatorNamespace: "cogni-production",
       },
     });
+  });
+});
+
+describe("trusted build preview identity", () => {
+  const deploymentId = "22222222-2222-4222-a222-222222222222";
+  const secondId = "33333333-3333-4333-a333-333333333333";
+  const preview = {
+    deploymentId,
+    stateSlot: 0 as const,
+    resetGeneration: "44444444-4444-4444-a444-444444444444",
+  };
+  const testBundle = {
+    ...bundle,
+    source: { ...bundle.source, repository: "cogni-test-org/spawny-boi" },
+  };
+  function input() {
+    return {
+      slug: "spawny-boi",
+      environment: "candidate-a" as const,
+      bundleRef: `ghcr.io/cogni-test-org/spawny-boi@sha256:${BUNDLE_DIGEST}`,
+      bundle: testBundle,
+      publicHost: previewComputePublicHost(NODE_ID, deploymentId),
+      computeApi: "crossplane" as const,
+      leaseGeneration: 0,
+      preview,
+    };
+  }
+  it("two builds have independent stable names, provider-key inputs and single-label TEST URLs", () => {
+    const a = buildComputeWorkloadManifest(input());
+    const b = buildComputeWorkloadManifest({
+      ...input(),
+      bundle: {
+        ...testBundle,
+        source: { ...testBundle.source, sha: "e".repeat(40) },
+      },
+      publicHost: previewComputePublicHost(NODE_ID, secondId),
+      preview: { ...preview, deploymentId: secondId, stateSlot: 1 },
+    });
+    expect(a.metadata.name).not.toBe(b.metadata.name);
+    expect(a.spec.workload.publicHost).not.toBe(b.spec.workload.publicHost);
+    expect(a.metadata.name).toBe(
+      previewComputeWorkloadName(NODE_ID, deploymentId)
+    );
+    expect(a.metadata.name.length).toBeLessThanOrEqual(63);
+    expect(a.spec.workload.publicHost.split(".")).toHaveLength(3);
+    expect(a.spec.bundle.source.sha).toBe(SHA);
+    expect(b.spec.bundle.source.sha).toBe("e".repeat(40));
+    expect(a.spec).toMatchObject({
+      previewDeploymentId: deploymentId,
+      previewStateSlot: 0,
+      previewResetGeneration: preview.resetGeneration,
+      migration: { resetGeneration: preview.resetGeneration },
+      bootPolicy: { onGiveUp: "Hold" },
+    });
+  });
+  it("rejects non-test ownership, mutable/cross-instance deployment and ordinary hostname reuse", () => {
+    expect(() => buildComputeWorkloadManifest({ ...input(), bundle })).toThrow(
+      /preview requires/
+    );
+    expect(() =>
+      buildComputeWorkloadManifest({
+        ...input(),
+        publicHost: "spawny-boi-test.cognidao.org",
+      })
+    ).toThrow(/preview requires/);
+    expect(() =>
+      buildComputeWorkloadManifest({ ...input(), instance: "worker" })
+    ).toThrow(/preview requires/);
+    expect(() =>
+      buildComputeWorkloadManifest({ ...input(), bootRecovery: "auto" })
+    ).toThrow(/preview requires/);
+  });
+  it("lives outside every ordinary overlay/materializer deletion path", () => {
+    const dir = previewComputeWorkloadDirectory(deploymentId);
+    expect(dir).toBe(
+      `infra/k8s/preview-deployments/candidate-a/${deploymentId}`
+    );
+    expect(dir.startsWith("infra/k8s/overlays/")).toBe(false);
+    expect(() =>
+      previewComputeWorkloadDirectory("../candidate-a/operator")
+    ).toThrow();
   });
 });
