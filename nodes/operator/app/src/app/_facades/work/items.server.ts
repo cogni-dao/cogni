@@ -4,7 +4,7 @@
 /**
  * Module: `@app/_facades/work/items.server`
  * Purpose: Server-side facade for work item read/write operations across the markdown + Doltgres surfaces.
- * Scope: Maps port results to contract DTOs. Routes Doltgres-allocated IDs (5000+) to the Doltgres port from `getContainer()`; legacy markdown IDs to the markdown port.
+ * Scope: Maps content results to DTOs; does not own adapters or PostgreSQL coordination. Dolt IDs start at 5000; lower IDs use markdown.
  * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
@@ -64,12 +64,50 @@ export class WorkItemAuthorizationError extends Error {
   }
 }
 
+/** Permanent retirement: cancel the durable item instead of reusing its identity. */
+export class WorkItemDeletionRetiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkItemDeletionRetiredError";
+  }
+}
+
+/** A current mutation may have committed; preserve lookup evidence and forbid automatic replay. */
+export class WorkItemWriteOutcomeUnknownError extends Error {
+  readonly code = "work_item_write_outcome_unknown";
+  readonly retryable = false;
+  constructor(
+    readonly operationId: string,
+    readonly branch: string,
+    readonly commitHash?: string,
+    readonly itemId?: string
+  ) {
+    super(
+      "Work-item write outcome is unknown; inspect the operation branch and main before retrying."
+    );
+    this.name = "WorkItemWriteOutcomeUnknownError";
+  }
+  get receipt() {
+    return {
+      code: this.code,
+      retryable: false as const,
+      lookup: {
+        operationId: this.operationId,
+        branch: this.branch,
+        commitHash: this.commitHash ?? null,
+        itemId: this.itemId ?? null,
+      },
+    };
+  }
+}
+
 /**
  * Thrown when the store was momentarily unavailable (query timeout, destroyed
  * connection, contended Dolt operation branch). RETRYABLE: the identical
  * request typically succeeds on the next attempt — the route answers 503 with
  * a retry hint, never an opaque 500.
  */
+
 export class WorkItemsBusyError extends Error {
   constructor(message: string) {
     super(message);
@@ -112,6 +150,28 @@ function mapStoreError(e: unknown): unknown {
   const message = (e as Error)?.message ?? "";
   if (name === "DoltgresNotConfiguredError") {
     return new WorkItemsBackendNotReadyError(message);
+  }
+  if (name === "WorkItemWriteOutcomeUnknownError") {
+    const receipt = e as {
+      operationId?: unknown;
+      branch?: unknown;
+      commitHash?: unknown;
+      itemId?: unknown;
+    };
+    if (
+      typeof receipt.operationId === "string" &&
+      typeof receipt.branch === "string"
+    )
+      return new WorkItemWriteOutcomeUnknownError(
+        receipt.operationId,
+        receipt.branch,
+        typeof receipt.commitHash === "string" ? receipt.commitHash : undefined,
+        typeof receipt.itemId === "string" ? receipt.itemId : undefined
+      );
+    return e;
+  }
+  if (name === "WorkItemDeletionRetiredError") {
+    return new WorkItemDeletionRetiredError(message);
   }
   if (name === "WorkItemAuthorizationError") {
     return new WorkItemAuthorizationError(message);

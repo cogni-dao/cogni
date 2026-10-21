@@ -99,13 +99,72 @@ describe("operator database connection envelope", () => {
     ).toContain("operator-control-v1");
   });
 
-  it("rejects unmodeled operator app or actuator scale overrides in lane overlays", () => {
-    for (const env of ["candidate-a", "preview", "production"]) {
-      expect(
-        read(`infra/k8s/overlays/${env}/operator/kustomization.yaml`)
-      ).not.toMatch(
-        /\b(?:replicas|maxSurge|maxUnavailable)\s*:|\/spec\/(?:replicas|strategy)/u
+  function assertBoundedOverlay(document: ReturnType<typeof parse>) {
+    const exactAudit = `exec node --input-type=module -e 'import { migrateOperatorAfterNativeDrain } from "/app/nodes/operator/app/migrate-doltgres.mjs"; await migrateOperatorAfterNativeDrain("/app/nodes/operator/app/doltgres-migrations")'`;
+    const copy = structuredClone(document);
+    for (const patch of copy.patches ?? []) {
+      if (typeof patch.patch !== "string") continue;
+      const operations = yaml.parse(patch.patch);
+      if (!Array.isArray(operations)) continue;
+      const strategy = operations.filter((op) =>
+        String(op.path).startsWith("/spec/strategy")
       );
+      if (!strategy.length) continue;
+      expect(patch.target).toEqual({ kind: "Deployment", name: "node-app" });
+      expect(strategy).toEqual([
+        { op: "replace", path: "/spec/strategy", value: { type: "Recreate" } },
+      ]);
+      const audit = operations.filter(
+        (op) =>
+          op.path === "/spec/template/spec/initContainers/-" &&
+          op.value?.name === "migrate-doltgres"
+      );
+      expect(audit).toHaveLength(1);
+      expect(audit[0].value.command).toEqual(["/bin/sh", "-c", exactAudit]);
+      expect(audit[0].value.envFrom).toEqual([
+        { configMapRef: { name: "operator-node-app-config" } },
+      ]);
+      expect(audit[0].value.env).toEqual([
+        {
+          name: "DATABASE_URL",
+          valueFrom: {
+            secretKeyRef: { name: "operator-env-secrets", key: "DOLTGRES_URL" },
+          },
+        },
+      ]);
+      patch.patch = yaml.stringify(
+        operations.filter((op) => !strategy.includes(op))
+      );
+    }
+    expect(yaml.stringify(copy)).not.toMatch(
+      /\b(?:replicas|maxSurge|maxUnavailable)\s*:|\/spec\/(?:replicas|strategy)/u
+    );
+  }
+
+  it("permits only the exact audited operator Recreate while refusing scale overrides", () => {
+    expect(parse("infra/k8s/base/node-app/deployment.yaml").spec.replicas).toBe(
+      1
+    );
+    for (const env of ["candidate-a", "preview", "production"]) {
+      const overlay = parse(
+        `infra/k8s/overlays/${env}/operator/kustomization.yaml`
+      );
+      assertBoundedOverlay(overlay);
+      const extra = structuredClone(overlay);
+      extra.patches.push({
+        target: { kind: "Deployment", name: "node-app" },
+        patch: "- op: replace\n  path: /spec/replicas\n  value: 2",
+      });
+      expect(() => assertBoundedOverlay(extra)).toThrow();
+      const unaudited = structuredClone(overlay);
+      const p = unaudited.patches.find((p: { patch: string }) =>
+        p.patch.includes("/spec/strategy")
+      );
+      p.patch = p.patch.replace(
+        "migrateOperatorAfterNativeDrain",
+        "migrateDoltgres"
+      );
+      expect(() => assertBoundedOverlay(unaudited)).toThrow();
     }
   });
 

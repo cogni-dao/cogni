@@ -19,10 +19,12 @@ import { NextResponse } from "next/server";
 
 import {
   WorkItemAuthorizationError,
+  WorkItemDeletionRetiredError,
   WorkItemNotFoundError,
   WorkItemRevisionConflictError,
   WorkItemsBackendNotReadyError,
   WorkItemsBusyError,
+  WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import {
   logRequestError,
@@ -38,6 +40,7 @@ type Mapped = {
   readonly errorCode: string;
   readonly error: string;
   readonly retryable?: boolean;
+  readonly lookup?: Readonly<Record<string, string | null>>;
   /** Extra machine-readable body fields (e.g. `currentRevision` on a conflict). */
   readonly details?: Readonly<Record<string, unknown>>;
 };
@@ -58,6 +61,25 @@ function classify(error: unknown): Mapped | null {
   if (error instanceof WorkItemAuthorizationError) {
     return { status: 403, errorCode: "authz_denied", error: "not authorized" };
   }
+
+  if (error instanceof WorkItemDeletionRetiredError) {
+    return {
+      status: 410,
+      errorCode: "work_item_deletion_retired",
+      error:
+        message ||
+        "Work-item hard deletion is retired; PATCH status=cancelled to preserve identity and provenance",
+    };
+  }
+
+  if (error instanceof WorkItemWriteOutcomeUnknownError)
+    return {
+      status: 409,
+      errorCode: error.code,
+      error: error.message,
+      retryable: false,
+      lookup: error.receipt.lookup,
+    };
 
   // RETRYABLE. Query timeout / destroyed connection / contended Dolt operation
   // branch. The next attempt usually succeeds, so this must never look like the
@@ -127,6 +149,9 @@ export function workItemsWriteErrorResponse(
     {
       error: mapped.error,
       errorCode: mapped.errorCode,
+      ...(mapped.retryable === false
+        ? { retryable: false, lookup: mapped.lookup }
+        : {}),
       ...(mapped.details ?? {}),
       ...(mapped.retryable === true
         ? { retryable: true, retryAfterSeconds: BUSY_RETRY_AFTER_SECONDS }

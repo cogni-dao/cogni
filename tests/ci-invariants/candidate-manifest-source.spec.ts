@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/ci-invariants/candidate-manifest-source`
  * Purpose: Pins pre-merge manifest provenance for candidate-a node-ref flights.
- * Scope: Static assertions over candidate-flight.yml; does not execute GitHub Actions or deploy.
+ * Scope: Workflow assertions and owned local Kustomize/Git fixtures; does not execute remote Actions or deploy.
  * Invariants:
  *   CANDIDATE_MANIFESTS_FOLLOW_IN_REPO_SOURCE: an in-repo node-ref flight uses
  *     source_sha as head_sha, so infra/k8s is materialized from the exact
@@ -20,12 +20,21 @@
  *   EXACT_SELF_FLIGHT_PROVES_SUBSTRATE_SCRIPTS: the operator may execute the
  *     reviewed app-source substrate runner only when workflow and app are the
  *     same commit; all remote or mismatched source flights stay on ci-src.
- * Side-effects: IO (reads .github/workflows/candidate-flight.yml)
+ * Side-effects: IO (reads workflow inputs; creates and removes owned temporary render/Git fixtures)
  * Links: docs/spec/ci-cd.md axioms 17-20, docs/spec/node-ci-cd-contract.md artifact contract
  * @public
  */
 
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
@@ -93,6 +102,246 @@ describe("candidate-a manifest source", () => {
     for (const step of routing.steps) {
       expect(step.env?.DOMAIN).toBeUndefined();
       expect(step.run ?? "").not.toMatch(/(?:export\s+)?DOMAIN=/);
+    }
+  });
+
+  it("pairs preparatory init entrypoints with the preserved image, then restores the new audited rollout", () => {
+    const fixture = mkdtempSync(
+      path.join(os.tmpdir(), "candidate-init-contract-")
+    );
+    const deploy = path.join(fixture, "deploy");
+    const source = path.join(fixture, "source");
+    const relative = "infra/k8s/overlays/candidate-a/operator";
+    const snapshot = path.join(fixture, "old-init.json");
+    const oldDigest = `sha256:${"1".repeat(64)}`;
+    const newDigest = `sha256:${"2".repeat(64)}`;
+    const image = "ghcr.io/cogni-dao/cogni-template";
+    const oldImage = `${image}@${oldDigest}`;
+    const helper = path.join(REPO_ROOT, "scripts/ci/lib/overlay-digest.sh");
+    const prepare =
+      namedStep(
+        "prepare-substrate-deploy-branch",
+        "Prepare deploy branch shape"
+      ).run ?? "";
+    const finalSync =
+      namedStep(
+        "flight",
+        "Sync base + per-node overlay + per-node catalog to deploy branch"
+      ).run ?? "";
+    const run = (command: string, args: string[], cwd = deploy) =>
+      execFileSync(command, args, { cwd, stdio: "pipe", encoding: "utf8" });
+    const contract = (operation: "snapshot" | "restore") =>
+      run("bash", [
+        "-euo",
+        "pipefail",
+        "-c",
+        'source "$1"; "${2}_overlay_init_contract" candidate-a operator "$3" "$4"',
+        "fixture",
+        helper,
+        operation,
+        oldImage,
+        snapshot,
+      ]);
+    const render = () => {
+      const docs = yaml.parseAllDocuments(
+        run("kubectl", ["kustomize", path.join(deploy, relative)])
+      );
+      const deployments = docs
+        .map((doc) => doc.toJSON())
+        .filter((doc) => doc?.kind === "Deployment");
+      expect(deployments).toHaveLength(1);
+      return deployments[0];
+    };
+    const writeOverlay = (root: string, digest: string, modern: boolean) => {
+      const overlay = path.join(root, relative);
+      mkdirSync(overlay, { recursive: true });
+      writeFileSync(
+        path.join(overlay, "kustomization.yaml"),
+        yaml.stringify({
+          apiVersion: "kustomize.config.k8s.io/v1beta1",
+          kind: "Kustomization",
+          namePrefix: "operator-",
+          resources: ["deployment.yaml"],
+          images: [{ name: image, newName: image, digest }],
+        })
+      );
+      writeFileSync(
+        path.join(overlay, "deployment.yaml"),
+        yaml.stringify({
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { name: "node-app" },
+          spec: {
+            strategy: { type: modern ? "Recreate" : "RollingUpdate" },
+            selector: { matchLabels: { app: "fixture" } },
+            template: {
+              metadata: { labels: { app: "fixture" } },
+              spec: {
+                containers: [{ name: "app", image }],
+                initContainers: modern
+                  ? [
+                      {
+                        name: "migrate",
+                        image,
+                        command: ["new-pg"],
+                        args: ["new-pg-arg"],
+                      },
+                      {
+                        name: "migrate-doltgres",
+                        image,
+                        command: ["migrateOperatorAfterNativeDrain"],
+                        args: ["new-dolt-arg"],
+                      },
+                    ]
+                  : [
+                      { name: "migrate", image, command: ["old-pg"] },
+                      {
+                        name: "migrate-doltgres",
+                        image,
+                        args: ["old-dolt-arg"],
+                      },
+                    ],
+              },
+            },
+          },
+        })
+      );
+    };
+    const syncSource = () =>
+      run("rsync", [
+        "-a",
+        "--delete",
+        `${path.join(source, relative)}/`,
+        `${path.join(deploy, relative)}/`,
+      ]);
+    const promote = (digest: string) =>
+      run("bash", [
+        path.join(REPO_ROOT, "scripts/ci/promote-k8s-image.sh"),
+        "--no-commit",
+        "--env",
+        "candidate-a",
+        "--app",
+        "operator",
+        "--digest",
+        `${image}@${digest}`,
+      ]);
+    try {
+      writeOverlay(deploy, oldDigest, false);
+      writeOverlay(source, newDigest, true);
+      run("git", ["init", "--quiet"]);
+      run("git", [
+        "-c",
+        "user.name=fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "old deploy HEAD",
+      ]);
+      const old = render();
+      contract("snapshot");
+      syncSource();
+      promote(oldDigest);
+      // Historical preparation reproduces the mismatched old image/new export.
+      expect(render().spec.template.spec.initContainers[1].command).toEqual([
+        "migrateOperatorAfterNativeDrain",
+      ]);
+      contract("restore");
+      const prepared = render();
+      expect(prepared.spec.strategy.type).toBe("Recreate");
+      expect(prepared.spec.template.spec.initContainers).toEqual(
+        old.spec.template.spec.initContainers
+      );
+      expect(prepared.spec.template.spec.containers[0].image).toBe(oldImage);
+      expect(prepared.spec.template.spec.initContainers[0]).not.toHaveProperty(
+        "args"
+      );
+      expect(prepared.spec.template.spec.initContainers[1]).not.toHaveProperty(
+        "command"
+      );
+      syncSource();
+      expect(
+        existsSync(
+          path.join(deploy, relative, ".prepare-init-compatibility.json")
+        )
+      ).toBe(false);
+      promote(newDigest);
+      const final = render();
+      expect(final.spec.template.spec.initContainers[1].command).toEqual([
+        "migrateOperatorAfterNativeDrain",
+      ]);
+      expect(
+        final.spec.template.spec.initContainers.every(
+          (container: { image: string }) =>
+            container.image === `${image}@${newDigest}`
+        )
+      ).toBe(true);
+      expect(final.spec.template.spec.containers[0].image).toBe(
+        `${image}@${newDigest}`
+      );
+      expect(
+        readFileSync(path.join(deploy, relative, "kustomization.yaml"), "utf8")
+      ).not.toContain(".prepare-init-compatibility");
+      // Unknown/new init names and changed deploy ownership must fail closed.
+      promote(oldDigest);
+      const deploymentPath = path.join(deploy, relative, "deployment.yaml");
+      const deployment = yaml.parse(readFileSync(deploymentPath, "utf8"));
+      deployment.spec.template.spec.initContainers.push({
+        name: "unmatched",
+        image,
+      });
+      writeFileSync(deploymentPath, yaml.stringify(deployment));
+      expect(() => contract("restore")).toThrow();
+      syncSource();
+      promote(oldDigest);
+      run("git", [
+        "-c",
+        "user.name=fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "changed deploy HEAD",
+      ]);
+      expect(() => contract("restore")).toThrow();
+      // Init-free named services remain an unchanged no-op, not a missing-node failure.
+      syncSource();
+      promote(oldDigest);
+      const service = yaml.parse(readFileSync(deploymentPath, "utf8"));
+      service.metadata.name = "operator";
+      service.spec.template.spec.initContainers = [];
+      writeFileSync(deploymentPath, yaml.stringify(service));
+      const kustomizationPath = path.join(
+        deploy,
+        relative,
+        "kustomization.yaml"
+      );
+      const kustomization = yaml.parse(readFileSync(kustomizationPath, "utf8"));
+      delete kustomization.namePrefix;
+      writeFileSync(kustomizationPath, yaml.stringify(kustomization));
+      contract("snapshot");
+      const serviceBefore = render();
+      contract("restore");
+      expect(render()).toEqual(serviceBefore);
+      expect(
+        existsSync(
+          path.join(deploy, relative, ".prepare-init-compatibility.json")
+        )
+      ).toBe(false);
+      expect(prepare.indexOf("snapshot_overlay_init_contract")).toBeLessThan(
+        prepare.indexOf("rsync -a --delete ../app-src/infra/k8s/base/")
+      );
+      expect(prepare.indexOf("restore_overlay_init_contract")).toBeGreaterThan(
+        prepare.indexOf("bash ../ci-src/scripts/ci/promote-k8s-image.sh")
+      );
+      expect(finalSync).toContain("rsync -a --delete");
+      expect(finalSync).not.toContain("restore_overlay_init_contract");
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
     }
   });
   it("queues duplicate same-node flights without cancellation", () => {

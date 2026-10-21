@@ -14,7 +14,6 @@
  * @internal
  */
 
-import type { ReservedSql, Sql } from "postgres";
 import { DomainNotRegisteredError } from "../../port/knowledge-store.port.js";
 
 export interface SqlColumnValue {
@@ -82,7 +81,9 @@ export function updateSetSql(columns: readonly SqlColumnValue[]): string {
  * same DB state the INSERT will hit.
  */
 export async function assertDomainRegistered(
-  client: Sql | ReservedSql,
+  client: {
+    unsafe(query: string): PromiseLike<readonly Record<string, unknown>[]>;
+  },
   domain: string
 ): Promise<void> {
   const rows = await client.unsafe(
