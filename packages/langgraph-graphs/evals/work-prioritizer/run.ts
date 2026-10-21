@@ -433,7 +433,7 @@ async function runEval(underTest: string): Promise<void> {
     "harm evidence (full review)": c1.payload
       ? gradeHarmEvidence(c1.payload, fixture.pmLabels.p0)
       : none("no decision (cycle 1)"),
-    "p0 precision vs PM (full review)": c1.payload
+    "p0 overlap with PM (full review)": c1.payload
       ? gradeP0Precision(
           c1.payload,
           fixture.pmLabels.p0,

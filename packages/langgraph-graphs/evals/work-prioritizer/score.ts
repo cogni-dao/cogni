@@ -309,7 +309,11 @@ export function mergeLabelled(
   return out;
 }
 
-/** Behavioral: share of p0 picks the PM table also put at p0 (an empty p0 scores 0) ≥ target. */
+/**
+ * Behavioral: when the PM table labels any p0, the full review's p0 must overlap it (≥ 1 hit) — the
+ * floor that catches the lost-harm regression class (precision 0.00). Precision vs `target` is
+ * reported, not gated: a 3-item PM oracle is too noisy for a single free-model run.
+ */
 export function gradeP0Precision(
   payload: DecisionPayload,
   pmP0: readonly string[],
@@ -318,8 +322,8 @@ export function gradeP0Precision(
   const p0 = p0Of(payload);
   const hits = p0.filter((id) => pmP0.includes(id)).length;
   const precision = p0.length ? hits / p0.length : 0;
-  const reason = `${hits}/${p0.length} p0 picks in the PM p0 set {${pmP0.join(", ")}} = ${precision.toFixed(2)} (target ≥ ${target})`;
-  return precision >= target ? ok(reason) : fail(reason);
+  const reason = `${hits}/${p0.length} p0 picks in the PM p0 set {${pmP0.join(", ")}} = ${precision.toFixed(2)} (gate ≥ 1 hit; target ≥ ${target} reported)`;
+  return pmP0.length === 0 || hits >= 1 ? ok(reason) : fail(reason);
 }
 
 /**

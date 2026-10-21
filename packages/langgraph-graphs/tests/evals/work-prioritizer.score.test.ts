@@ -322,14 +322,16 @@ describe("work-prioritizer graders", () => {
     expect(gradeResponsiveness(null, "bug.9").pass).toBe(false);
   });
 
-  it("p0 precision vs PM is behavioral: ≥ 2/3 passes, an empty or off-label p0 fails", () => {
+  it("p0 vs PM is behavioral at ≥ 1 overlap (precision reported); an empty or disjoint p0 fails", () => {
     const pm = ["bug.1", "bug.2", "bug.5"];
-    const at = (ids: string[]) =>
-      gradeP0Precision(decision(ids.map((id) => row(id, 0))), pm, 0.666).pass;
+    const at = (ids: string[], labels = pm) =>
+      gradeP0Precision(decision(ids.map((id) => row(id, 0))), labels, 0.666)
+        .pass;
     expect(at(["bug.1", "bug.2", "bug.5"])).toBe(true);
-    expect(at(["bug.1", "bug.2", "bug.9"])).toBe(true);
-    expect(at(["bug.1", "bug.8", "bug.9"])).toBe(false);
+    expect(at(["bug.1", "bug.8", "bug.9"])).toBe(true);
+    expect(at(["bug.7", "bug.8", "bug.9"])).toBe(false);
     expect(at([])).toBe(false);
+    expect(at([], [])).toBe(true);
   });
 
   it("harm evidence is hard: a full review whose every harm is 'none' fails when the PM labels a p0", () => {

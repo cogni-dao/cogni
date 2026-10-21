@@ -28,7 +28,7 @@ It then waits, with the SHA guarded, until the governance schedule has run the g
 | responsiveness                   | behavioral | the seeded live incident is judged expedite and reaches p0 in cycle 3's plan                                                                             |
 | scheduled cycles at SHA ≥ 2      | hard       | the governance schedule ran the graph successfully ≥ `minScheduledCycles` times since `--landed-at`                                                      |
 | harm evidence (full review)      | hard       | when the PM labels any p0, at least one full-review judgment carries harm (not "none"); guards the lost-harm parse                                       |
-| p0 precision vs PM (full review) | behavioral | ≥ `p0PrecisionTarget` (2/3) of the full review's p0 picks are in the fixture's PM p0 set; an empty p0 fails                                              |
+| p0 overlap with PM (full review) | behavioral | when the fixture's PM p0 set is non-empty, ≥ 1 full-review p0 pick is in it (an empty p0 fails); precision vs `p0PrecisionTarget` (2/3) is reported only |
 | write section (5 checks)         | skipped    | listed as skipped: the graph is propose-only. Applied rows, live backlog p0, applied responsiveness, observed A→B, and demotion return with a write path |
 
 `fixture.json` labels the candidate-a seeded backlog: the duplicates, the injection item, the fixtures, and the PM p0 set. Update it with a reasoned commit when that seed changes.
