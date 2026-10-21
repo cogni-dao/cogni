@@ -14,8 +14,8 @@
 import {
   applyReceiptWeightOverrides,
   buildEIP712TypedData,
-  computeSignedAllocationSetHash,
   computeReceiptWeights,
+  computeSignedAllocationSetHash,
   type EIP712DeploymentEnvironment,
   explodeToClaimants,
   parseEIP712DeploymentEnvironment,
