@@ -13,6 +13,9 @@
  *     `<namespace>/<owner>` and drops pod/uid churn labels.
  *   - QUERIES_USE_RETAINED_FAMILIES: every container_/node_/pg_ family referenced by a fleet dashboard
  *     or alert survives the Alloy allowlists; a dropped family would render a silently empty panel.
+ *   - HOST_INTERNALS_STAY_PRIVATE: the VM resources row lives on the private fleet-capacity dashboard,
+ *     never on the public fleet-status share.
+ *   - KUBELET_SCRAPE_HAS_A_DEADMAN: the telemetry deadman covers the kubelet_cadvisor job.
  * Side-effects: IO (reads committed files)
  * Links: story.5084, docs/spec/observability.md, infra/compose/runtime/configs/alloy-config.metrics.alloy
  * @public
@@ -196,32 +199,71 @@ describe("VM service resource attribution (story.5084)", () => {
     expect([...missing]).toEqual([]);
   });
 
-  it("ships the VM resources row and capacity alerts", () => {
-    const dashboard = JSON.parse(read(STATUS_DASHBOARD)) as {
+  it("ships the VM resources row on the private dashboard only", () => {
+    type Dashboard = {
       panels: ReadonlyArray<{ id: number; title: string; type: string }>;
     };
-    const ids = dashboard.panels.map((panel) => panel.id);
+    const capacity = JSON.parse(read(CAPACITY_DASHBOARD)) as Dashboard;
+    const status = JSON.parse(read(STATUS_DASHBOARD)) as Dashboard;
+    const ids = capacity.panels.map((panel) => panel.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(
-      dashboard.panels.some(
+      capacity.panels.some(
         (panel) => panel.type === "row" && panel.title === "VM resources"
       )
     ).toBe(true);
     for (const environment of ["Production", "Preview", "Candidate-a"]) {
       expect(
-        dashboard.panels.some((panel) =>
+        capacity.panels.some((panel) =>
           panel.title.startsWith(`${environment} · top 15 services`)
         )
       ).toBe(true);
     }
+    // cogni-fleet-status is a PUBLIC share: no host internals (per-service
+    // memory, systemd units, namespaces) may appear on it.
+    expect(status.panels.some((panel) => panel.title === "VM resources")).toBe(
+      false
+    );
+    const publicFamilies = exprsOfDashboard(STATUS_DASHBOARD).flatMap((expr) =>
+      [...expr.replace(GROUPING, "").matchAll(FAMILY)].map(
+        ([, family]) => family
+      )
+    );
+    expect(
+      publicFamilies.filter((family) =>
+        /^(?:container|node)_/.test(family ?? "")
+      )
+    ).toEqual([]);
+  });
+
+  it("keeps VM capacity alerts free of duplicate warning tiers", () => {
     const uids = alertRules.map((rule) => rule.uid);
-    expect(uids.slice(-3)).toEqual([
-      "fleet-vm-memory-25",
+    expect(uids.slice(-2)).toEqual([
+      "fleet-serve-down",
       "fleet-db-major-faults",
-      "fleet-vm-disk-80",
     ]);
+    // reliability-memory-warning / reliability-disk-warning own these tiers.
+    expect(uids).not.toContain("fleet-vm-memory-25");
+    expect(uids).not.toContain("fleet-vm-disk-80");
     // `${uid}-production` must fit Grafana's 40-character UID bound.
     for (const uid of uids)
       expect(`${uid}-production`.length).toBeLessThanOrEqual(40);
+  });
+
+  it("alerts when the kubelet cAdvisor scrape is down instead of reading 0", () => {
+    const deadman = alertRules.find(
+      (rule) => rule.uid === "fleet-telemetry-deadman"
+    );
+    const expr = deadman?.data[0]?.model.expr ?? "";
+    const jobRegex = expr.match(/job=~"([^"]+)"/)?.[1];
+    expect(jobRegex).toBeDefined();
+    const jobs = new RegExp(`^(?:${jobRegex})$`);
+    expect(jobs.test("kubelet_cadvisor")).toBe(true);
+    expect(jobs.test("integrations/cadvisor")).toBe(true);
+    expect(block('prometheus.scrape "kubelet_cadvisor"')).toContain(
+      'job_name        = "kubelet_cadvisor"'
+    );
+    // `up` must survive the kubelet relabel or the deadman would read no data.
+    expect(k8sFamilies.has("up")).toBe(true);
   });
 });
