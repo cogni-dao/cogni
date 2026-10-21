@@ -105,18 +105,18 @@ graph LR
   needs_design -->|"/design"| needs_implement
   needs_implement -->|"/implement"| needs_closeout
   needs_closeout -->|"/closeout"| needs_merge
-  needs_merge -->|"APPROVE"| done
+  needs_merge -->|"fresh review APPROVE → flight → validate → operator merge"| done
   needs_merge -->|"REQUEST CHANGES"| needs_implement
 ```
 
-| Status            | Command                  | What happens                                                        |
-| ----------------- | ------------------------ | ------------------------------------------------------------------- |
-| `needs_triage`    | `/triage`                | Routes item; stories → `done`; tasks/bugs → next status             |
-| `needs_research`  | `/research`              | Executes spike; spike → `done`; creates follow-up items             |
-| `needs_design`    | `/design`                | Writes/updates spec; task/bug → `needs_implement`                   |
-| `needs_implement` | `/implement`             | Writes code on branch                                               |
-| `needs_closeout`  | `/closeout`              | Docs/headers pass + creates PR                                      |
-| `needs_merge`     | `/review-implementation` | Reviews PR; APPROVE → `done` or REQUEST CHANGES → `needs_implement` |
+| Status            | Command                      | What happens                                                                                                                      |
+| ----------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `needs_triage`    | `/triage`                    | Routes item; stories → `done`; tasks/bugs → next status                                                                           |
+| `needs_research`  | `/research`                  | Executes spike; spike → `done`; creates follow-up items                                                                           |
+| `needs_design`    | `/design` → `/review-design` | Rigor pass + hub design; fresh review APPROVE → `needs_implement`                                                                 |
+| `needs_implement` | `/implement`                 | Test-first code on a branch from `origin/main`                                                                                    |
+| `needs_closeout`  | `/closeout`                  | Docs/headers pass + PR with Evidence and Merge Danger                                                                             |
+| `needs_merge`     | `/review-implementation`     | Fresh two-axis review; APPROVE → flight → `/validate-candidate` → `POST /vcs/merge` → `done`; REQUEST CHANGES → `needs_implement` |
 
 Terminal: `done` (PR merged; `deploy_verified` tracked separately), `blocked` (`blocked_by:` required), `cancelled`.
 
@@ -399,18 +399,18 @@ Missing `Work:` → merge blocked. Missing `Spec:` → warning (blocked if behav
 
 ## File Pointers
 
-| File                                                                                                               | Purpose                                         |
-| ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- |
-| `.claude/commands/{idea,bug,triage,research,design,task,implement,closeout,review-implementation,pull-request}.md` | Slash command definitions                       |
-| `.claude/skills/contribute-to-cogni/SKILL.md`                                                                      | Executable contributor wrapper                  |
-| `.claude/skills/validate-candidate/SKILL.md`                                                                       | Post-flight validation procedure                |
-| `nodes/operator/app/src/features/work-item-sessions/session-policy.ts`                                             | `nextActionForWorkItem` + session deadline math |
-| `nodes/operator/app/src/contracts/work-item-sessions.v1.contract.ts`                                               | Sessions API Zod contracts                      |
-| `nodes/operator/app/src/app/api/v1/work/items/[id]/{claims,heartbeat,pr,coordination}/route.ts`                    | Sessions REST endpoints                         |
-| `nodes/operator/app/src/app/api/v1/vcs/flight/route.ts`                                                            | Flight primitive                                |
-| `nodes/operator/app/src/app/.well-known/agent.json/route.ts`                                                       | Agent discovery doc                             |
-| `scripts/validate-docs-metadata.mjs`                                                                               | Frontmatter and heading validation              |
-| `infra/github/`                                                                                                    | Merge queue + branch protection fixtures        |
+| File                                                                                                                | Purpose                                         |
+| ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `.claude/commands/{idea,bug,triage,research,design,task,implement,closeout,review-design,review-implementation}.md` | Slash command definitions                       |
+| `.claude/skills/contribute-to-cogni/SKILL.md`                                                                       | Executable contributor wrapper                  |
+| `.claude/skills/validate-candidate/SKILL.md`                                                                        | Post-flight validation procedure                |
+| `nodes/operator/app/src/features/work-item-sessions/session-policy.ts`                                              | `nextActionForWorkItem` + session deadline math |
+| `nodes/operator/app/src/contracts/work-item-sessions.v1.contract.ts`                                                | Sessions API Zod contracts                      |
+| `nodes/operator/app/src/app/api/v1/work/items/[id]/{claims,heartbeat,pr,coordination}/route.ts`                     | Sessions REST endpoints                         |
+| `nodes/operator/app/src/app/api/v1/vcs/flight/route.ts`                                                             | Flight primitive                                |
+| `nodes/operator/app/src/app/.well-known/agent.json/route.ts`                                                        | Agent discovery doc                             |
+| `scripts/validate-docs-metadata.mjs`                                                                                | Frontmatter and heading validation              |
+| `infra/github/`                                                                                                     | Merge queue + branch protection fixtures        |
 
 ## Open Questions
 

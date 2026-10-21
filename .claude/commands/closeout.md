@@ -74,12 +74,7 @@ For each spec in the work item's `spec_refs` (skip if none):
 
 ## Phase 5 — Project & Work Item
 
-1. **Update the work item**:
-   - Set `status: needs_merge`
-   - Set `reviewer:` if known
-   - Update `updated:` date
-
-2. **Update the project** (if work item has `project:` set):
+1. **Update the project** (if work item has `project:` set):
    - Mark the corresponding deliverable as in-review in the roadmap table.
    - Add/update spec links in `## As-Built Specs`.
 
@@ -92,10 +87,28 @@ For each spec in the work item's `spec_refs` (skip if none):
    - Candidate validation must prove the deployed pod, not just service liveness: cite the flight workflow, deploy branch or Argo app, and `/version.buildSha` match for the node URL being validated.
 2. Commit all changes (doc updates, header updates, spec updates, work item, project) on the work item's branch. `git status` must be clean.
 3. Push to remote.
-4. Create PR to the resolved base branch using `/pull-request` logic
-   (conventional commit title + summary).
-5. Set `pr:` in work item frontmatter with the PR URL. Commit and push this update.
-6. Report: what was updated, what was flagged, any follow-up items discovered. Next command: `/review-implementation`.
+4. Create the PR to `main` (`gh pr create --base main`) with a Conventional Commit title and this body. Keep prose brief; use the smallest visual that makes the change clear:
+
+   ```markdown
+   Work item: <id link>. Acceptance: <the outcome criteria this PR claims>.
+
+   ## Summary
+
+   <diff-sketch, call tree, file tree or pseudocode of what changed>
+
+   ## Evidence
+
+   - **Before:** <failing test, output, log or screenshot>
+     **After:** <the same, passing>
+
+   ## Merge Danger
+
+   **Door:** <one-way or two-way: can this be reverted cleanly?>
+   **Blast radius:** <who or what breaks if it is wrong>
+   ```
+
+5. Link the PR (`POST /api/v1/work/items/{id}/pr`) and `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"needs_merge"}}`.
+6. Report: what was updated, what was flagged, any follow-up items discovered. Next command: `/review-implementation`, run by an agent that did not write the change.
 
 ---
 
