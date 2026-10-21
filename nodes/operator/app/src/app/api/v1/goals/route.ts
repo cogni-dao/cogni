@@ -11,8 +11,10 @@
  * Scope: Auth + validation + dispatch only. The set-goal I/O lives in
  *   `_facades/goal-loop/start.server`; the per-tick loop runs in the workflow.
  * Invariants:
- *   - AUTH_VIA_GETSESSIONUSER: gated like `core__edo_*` — a bearer cogni key or
- *     a session cookie. Internal control plane, trusted-principal v0.
+ *   - AUTH_VIA_GETSESSIONUSER: a bearer cogni key or a session cookie.
+ *   - GOAL_CHANGE_IS_NODE_ADMIN (task.5286): the caller must hold `node.administer`
+ *     on this node, checked BEFORE body parsing and any write — 403 `authz_denied`,
+ *     503 `authz_unavailable` (never conflated).
  *   - GOAL_ON_MAIN: the facade files via `edoCapability` (direct-to-main) so the
  *     workflow can load the row immediately.
  * Side-effects: IO (Doltgres write; starts a Temporal workflow)
@@ -30,6 +32,10 @@ import { startGoal } from "@/app/_facades/goal-loop/start.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer, getTemporalWorkflowClient } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import {
+  checkNodeAdmin,
+  nodeAdminFailureBody,
+} from "@/bootstrap/node-admin-gate";
 import { getNodeId } from "@/shared/config/repoSpec.server";
 
 export const dynamic = "force-dynamic";
@@ -73,6 +79,26 @@ export const POST = wrapRouteHandlerWithLogging(
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
 
+    const container = getContainer();
+    const gate = await checkNodeAdmin(container.authorization, {
+      userId: sessionUser.id,
+      nodeId: getNodeId(),
+    });
+    if (!gate.ok) {
+      ctx.log.warn(
+        {
+          errorCode: gate.errorCode,
+          ...(gate.errorCode === "authz_unavailable"
+            ? { reason: gate.reason }
+            : {}),
+        },
+        "goals.start.node_admin_required"
+      );
+      return NextResponse.json(nodeAdminFailureBody(gate, "goals.start"), {
+        status: gate.status,
+      });
+    }
+
     let body: unknown;
     try {
       body = await request.json();
@@ -87,7 +113,6 @@ export const POST = wrapRouteHandlerWithLogging(
       );
     }
 
-    const container = getContainer();
     const { client: workflowClient, taskQueue } =
       await getTemporalWorkflowClient();
 

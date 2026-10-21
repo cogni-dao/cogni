@@ -74,7 +74,7 @@ scripts/fetch_github_job_logs.sh  # Fetch job logs from GitHub Actions API (requ
 
 ## Notes
 
-- `db-ready` accepts hostname-only read-only probe reattestation solely through reviewed source plans in `scripts/lib/plan-database-recovery-host-rebind.ts`, fresh native proof and aggregate-bank CAS. Unarmed plans fail closed; no CLI/environment override, credential rotation, data-cutover claim or CAS replay exists.
+- `db-ready` accepts hostname-only read-only probe reattestation solely through reviewed canonical-target source plans in `scripts/lib/plan-database-recovery-host-rebind.ts`, matching prior/local/TCP physical identity, unchanged credentials, fresh native proof and aggregate-bank CAS. The former hostname is refreshed evidence, never destination authority. Unarmed plans fail closed; no CLI/environment override, credential rotation, data-cutover claim or CAS replay exists.
 
 - `secret-materialize.sh` also owns `database-cell-probe-custody`: exact existing registration references qualify the target probe read-only before an expected-version CAS replaces only its logical URL. The canonical password must already match; no password, binding, or source aggregate is changed.
 

@@ -11,12 +11,16 @@
  *   - PATCH_ON_THE_LIVE_BACKLOG / PATCH_CAS_PASSTHROUGH (story.5096): `patch` writes through the
  *     Doltgres `backlogWriter` as its principal, forwards `expectedRevision`, and turns the store's
  *     `WorkItemRevisionConflictError` into the ai-tools `WorkItemPatchConflictError`
+ *   - P0P1_IS_NODE_ADMIN (task.5286): a priority-0/1 patch runs `privilegedPriorityGate` (the
+ *     real `checkNodeAdmin` over the deterministic fake authorization adapter) BEFORE any write;
+ *     deny → `authz_denied`, outage/unwired → `authz_unavailable`; priority 2+ never consults it
  * Side-effects: none
  * Links: src/bootstrap/capabilities/work-item.ts
  * @internal
  */
 
 import { WorkItemPatchConflictError } from "@cogni/ai-tools";
+import { FakeAuthorizationAdapter } from "@cogni/authorization-core";
 import type {
   WorkItem,
   WorkItemCommandPort,
@@ -26,7 +30,25 @@ import type {
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { describe, expect, it, vi } from "vitest";
 
-import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
+import {
+  createWorkItemCapability,
+  WorkItemPriorityAuthzError,
+} from "@/bootstrap/capabilities/work-item";
+import { checkNodeAdmin } from "@/bootstrap/node-admin-gate";
+
+const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
+const ADMIN_USER = "11111111-1111-4111-8111-111111111111";
+const OTHER_USER = "22222222-2222-4222-8222-222222222222";
+
+async function adminAuthz(): Promise<FakeAuthorizationAdapter> {
+  const authz = new FakeAuthorizationAdapter();
+  await authz.writeRelation({
+    user: `user:${ADMIN_USER}`,
+    relation: "admin",
+    object: `node:${NODE_ID}`,
+  });
+  return authz;
+}
 
 function item(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
@@ -130,7 +152,7 @@ describe("createWorkItemCapability", () => {
     const store = {
       patch: vi
         .fn()
-        .mockResolvedValue(item({ priority: 1, rank: 2, revision: 5 })),
+        .mockResolvedValue(item({ priority: 2, rank: 2, revision: 5 })),
     };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
@@ -141,14 +163,14 @@ describe("createWorkItemCapability", () => {
     const result = await cap.patch({
       id: "task.5282",
       expectedRevision: 4,
-      set: { priority: 1, rank: 2 },
+      set: { priority: 2, rank: 2 },
     });
 
     expect(store.patch).toHaveBeenCalledWith(
-      { id: "task.5282", expectedRevision: 4, set: { priority: 1, rank: 2 } },
+      { id: "task.5282", expectedRevision: 4, set: { priority: 2, rank: 2 } },
       "actor:system"
     );
-    expect(result).toMatchObject({ priority: 1, rank: 2, revision: 5 });
+    expect(result).toMatchObject({ priority: 2, rank: 2, revision: 5 });
     expect(md.query.get).not.toHaveBeenCalled();
     expect(md.command.patch).not.toHaveBeenCalled();
   });
@@ -186,7 +208,7 @@ describe("createWorkItemCapability", () => {
     });
 
     const err = await cap
-      .patch({ id: "task.5282", expectedRevision: 4, set: { priority: 0 } })
+      .patch({ id: "task.5282", expectedRevision: 4, set: { priority: 2 } })
       .catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(WorkItemPatchConflictError);
@@ -222,8 +244,101 @@ describe("createWorkItemCapability", () => {
     });
 
     await expect(
-      cap.patch({ id: "task.5282", expectedRevision: 4, set: { priority: 1 } })
+      cap.patch({ id: "task.5282", expectedRevision: 4, set: { priority: 2 } })
     ).rejects.toThrow("requires the Doltgres backlog writer");
     expect(md.command.patch).not.toHaveBeenCalled();
+  });
+
+  describe("privileged priority gate (task.5286)", () => {
+    function gatedCap(gate?: () => ReturnType<typeof checkNodeAdmin>) {
+      const md = markdownPorts();
+      const store = { patch: vi.fn().mockResolvedValue(item({ priority: 0 })) };
+      const cap = createWorkItemCapability({
+        workItemQuery: md.query,
+        workItemCommand: md.command,
+        backlogWriter: { store, principalId: "actor:system" },
+        ...(gate ? { privilegedPriorityGate: gate } : {}),
+      });
+      return { cap, store, md };
+    }
+
+    it.each([
+      0, 1,
+    ])("refuses priority %i for a non-admin actor before any write (authz_denied)", async (priority) => {
+      const authz = await adminAuthz();
+      const { cap, store, md } = gatedCap(() =>
+        checkNodeAdmin(authz, { userId: OTHER_USER, nodeId: NODE_ID })
+      );
+
+      const err = await cap
+        .patch({ id: "task.5282", set: { priority } })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(WorkItemPriorityAuthzError);
+      expect(err).toMatchObject({ errorCode: "authz_denied" });
+      expect(store.patch).not.toHaveBeenCalled();
+      expect(md.command.patch).not.toHaveBeenCalled();
+    });
+
+    it("lets the node admin set priority 0 and writes as the system principal", async () => {
+      const authz = await adminAuthz();
+      const { cap, store } = gatedCap(() =>
+        checkNodeAdmin(authz, { userId: ADMIN_USER, nodeId: NODE_ID })
+      );
+
+      await cap.patch({ id: "task.5282", set: { priority: 0 } });
+
+      expect(store.patch).toHaveBeenCalledWith(
+        { id: "task.5282", set: { priority: 0 } },
+        "actor:system"
+      );
+    });
+
+    it("never consults the gate for priority 2+ or a priority-free patch", async () => {
+      const gate = vi.fn();
+      const { cap, store } = gatedCap(gate);
+
+      await cap.patch({ id: "task.5282", set: { priority: 2 } });
+      await cap.patch({ id: "task.5282", set: { rank: 3 } });
+
+      expect(gate).not.toHaveBeenCalled();
+      expect(store.patch).toHaveBeenCalledTimes(2);
+    });
+
+    it("fails closed as authz_unavailable when OpenFGA is unavailable, distinct from deny", async () => {
+      const authz = new FakeAuthorizationAdapter();
+      authz.unavailable({
+        actorId: `user:${ADMIN_USER}`,
+        action: "node.administer",
+        resource: `node:${NODE_ID}`,
+        context: { tenantId: NODE_ID, nodeId: NODE_ID },
+      });
+      const { cap, store } = gatedCap(() =>
+        checkNodeAdmin(authz, { userId: ADMIN_USER, nodeId: NODE_ID })
+      );
+
+      const err = await cap
+        .patch({ id: "task.5282", set: { priority: 1 } })
+        .catch((e: unknown) => e);
+
+      expect(err).toMatchObject({ errorCode: "authz_unavailable" });
+      expect(store.patch).not.toHaveBeenCalled();
+    });
+
+    it("fails closed when no invoking actor is in scope or no gate is wired", async () => {
+      const authz = await adminAuthz();
+      const missingActor = gatedCap(() =>
+        checkNodeAdmin(authz, { userId: undefined, nodeId: NODE_ID })
+      );
+      const unwired = gatedCap();
+
+      for (const { cap, store } of [missingActor, unwired]) {
+        const err = await cap
+          .patch({ id: "task.5282", set: { priority: 0 } })
+          .catch((e: unknown) => e);
+        expect(err).toMatchObject({ errorCode: "authz_unavailable" });
+        expect(store.patch).not.toHaveBeenCalled();
+      }
+    });
   });
 });
