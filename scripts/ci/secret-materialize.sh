@@ -254,30 +254,32 @@ bao_exec() {
   remote "kubectl exec ${1} -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao ${2}"
 }
 
+# GETs reuse the validated ClusterIP transport from the infra reader repair.
+# Keep writer login/patch behavior separate; this helper never mints or writes.
+source "$SCRIPT_DIR/lib/openbao-kv-http-read.sh"
+
 # Prefetch one path's full key/value map into the cache (one ssh). Runner-side jq
-# extracts; the remote only runs the proven `bao kv get -format=json` shape.
+# extracts; the remote uses the existing OpenBao Service HTTP GET, without kubelet exec.
 #
 # bug.5159 — a TRANSPORT failure (ssh drop, exec hiccup, OpenBao down) must never read
 # as an EMPTY BUCKET: that lie cascades into "key absent" errors downstream, and worse,
 # a false-empty cache would let materialize re-mint values that already exist. Only the
-# explicit "No value found" answer (a genuinely unborn path) maps to {}; anything else
-# is retried and then fatal, naming the transport.
+# validated HTTP404 with empty error array (a genuinely unborn path) maps to {};
+# transient GET failures retry finitely; denied/malformed/unknown results fail closed.
 prefetch_path() {
-  local svc="$1" env="${2:-$DEPLOY_ENVIRONMENT}" ns="${3:-$1}" json raw attempt key val
+  local svc="$1" env="${2:-$DEPLOY_ENVIRONMENT}" ns="${3:-$1}" json raw attempt key val rc
   raw=""
   for attempt in 1 2 3; do
-    if raw="$(bao_exec "" "kv get -format=json 'cogni/${env}/${svc}'" 2>&1)"; then
-      break
+    if raw="$(cogni_openbao_read_path "$env" "$svc")"; then break; else rc=$?; fi
+    # Only classified transient GET failures retry. A bare exec exit2 is never absence.
+    echo "[secret-materialize] OpenBao read cogni/${env}/${svc} attempt ${attempt}/3 failed: native_rc=${rc}" >&2
+    if [[ "$rc" != 75 || "$attempt" == 3 ]]; then
+      fail "unavailable reading cogni/${env}/${svc} — NOT an absent path"
     fi
-    case "$raw" in
-      *"No value found"*) raw='{}'; break ;;
-    esac
-    echo "[secret-materialize] OpenBao read cogni/${env}/${svc} attempt ${attempt}/3 failed: $(printf '%s' "$raw" | tail -1)" >&2
-    [[ "$attempt" == 3 ]] && { echo "::error::secret-materialize: transport failure reading cogni/${env}/${svc} after 3 attempts — NOT an absent path (bug.5159)" >&2; exit 1; }
     sleep $((attempt * 5))
   done
-  json="$(printf '%s' "$raw" | jq -c '.data.data // {}' 2>/dev/null || true)"
-  [[ -z "$json" ]] && json='{}'
+  json="$(printf '%s' "$raw" | jq -ce '.data.data | select(type == "object")')" \
+    || fail "invalid read response for cogni/${env}/${svc} — NOT an absent path"
   mkdir -p "${CACHE_DIR}/${ns}"
   while IFS=$'\t' read -r key val; do
     [[ -z "$key" ]] && continue

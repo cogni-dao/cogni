@@ -81,6 +81,10 @@ if [ "${1:-}" = "create" ] && [ "${2:-}" = "token" ]; then
   echo jwt-token
   exit 0
 fi
+if [[ "$*" == '-n openbao get service openbao -o json' ]]; then
+  echo '{"metadata":{"name":"openbao","namespace":"openbao"},"spec":{"type":"ClusterIP","clusterIP":"127.0.0.1","selector":{"app.kubernetes.io/name":"openbao","app.kubernetes.io/instance":"openbao","component":"server"},"ports":[{"port":8200,"targetPort":8200,"protocol":"TCP"}]}}'
+  exit 0
+fi
 if [ "${1:-}" = "exec" ]; then
   args=("$@")
   last_index=$((${#args[@]} - 1))
@@ -129,9 +133,33 @@ exit 1
 EOF
 chmod +x "$FAKEBIN/kubectl"
 
+cat > "$FAKEBIN/timeout" <<'SH_TIMEOUT'
+#!/usr/bin/env bash
+shift
+exec "$@"
+SH_TIMEOUT
+chmod +x "$FAKEBIN/timeout"
+
 cat > "$FAKEBIN/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+# GET transport shares this binary with the existing LiteLLM fixture.
+if [[ "${!#}" == http://127.0.0.1:8200/v1/cogni/data/* ]]; then
+  out="" url="${!#}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in --output) out="$2"; shift 2 ;; *) shift ;; esac
+  done
+  path="${url#http://127.0.0.1:8200/v1/cogni/data/}"
+  dir="${FAKE_BAO_ROOT}/cogni/${path}"
+  if [[ ! -d "$dir" ]]; then printf '{"errors":[]}' > "$out"; printf '404'; exit 0; fi
+  data='{}'
+  for f in "$dir"/*; do
+    [[ -f "$f" ]] || continue
+    data="$(printf '%s' "$data" | jq --arg k "$(basename "$f")" --rawfile v "$f" '.[$k]=$v')"
+  done
+  printf '{"data":{"data":%s}}' "$data" > "$out"
+  printf '200'; exit 0
+fi
 config="" body_file="" output_file="" wanted_alias=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
