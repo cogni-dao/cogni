@@ -29,6 +29,13 @@ Read these before starting:
 2. **Validate requirements** — are they specific, testable, outcome-focused? If vague, clarify.
 3. **Question the premise** — is this the simplest path? Are we building when we should reuse?
 4. **Assess scope** — is this a quick task, a multi-PR project, or needs research first?
+5. **Rigor pass** — before designing, answer and investigate these four, keeping scope focused:
+   - What would an exceptional practitioner investigate that the request overlooks?
+   - What original evidence or unprocessed data would they examine (logs, check runs, live API output, the code path — not summaries)? Go read it.
+   - Which concrete techniques and tools suit this work?
+   - What independent test, benchmark, or external source could validate the answer?
+
+   Then restate the request as a stronger outcome that incorporates the findings. Record the four answers in the agent-facing design entry (Phase 4).
 
 Ask: "If we shipped this perfectly, what specific capability improves?"
 
