@@ -8,8 +8,8 @@
  * Scope: Read-only Grafana datasource-proxy queries; does not SSH, write, or mutate any VM or dashboard.
  * Invariants: MISSING_IS_NOT_HEALTHY (stale telemetry grades RED); VERDICT_FIRST (first line per env is the verdict); evaluate() is pure.
  * Side-effects: IO (HTTPS reads to GRAFANA_URL)
- * Notes: Thresholds live in THRESHOLDS and are documented in the vm-health skill.
- * Links: .claude/skills/vm-health/SKILL.md, infra/grafana/dashboards/operator/fleet-status.json, story.5084
+ * Notes: Thresholds live in THRESHOLDS and are documented in hub entry vm-health-snapshot.
+ * Links: hub vm-health-snapshot, .claude/skills/vm-health/SKILL.md, infra/grafana/dashboards/operator/fleet-status.json, story.5084
  * @public
  *
  * Usage:
