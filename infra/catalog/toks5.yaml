@@ -50,7 +50,8 @@ compute_api:
 # task.5122 renamed this cell from `lease_epoch`; the VALUE is unchanged, so the key this row
 # resolves to is still `…:1` byte-for-byte. "Epoch" is reserved for attribution/distribution.
 lease_generation:
-  candidate-a: 1
+  # Generation 1 closed at its boot deadline; lease/escrow closure verified on-chain.
+  candidate-a: 2
   preview: 3
   production: 5
 # story.5025 — birth authority is PRODUCTION, the only environment that receives Git
