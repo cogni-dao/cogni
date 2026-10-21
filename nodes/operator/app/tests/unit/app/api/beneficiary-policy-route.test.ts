@@ -31,6 +31,10 @@ const log = vi.hoisted(() => ({
   warn: vi.fn(),
   error: vi.fn(),
 }));
+const wrapperObservability = vi.hoisted(() => ({
+  error: vi.fn(),
+  requestEnd: vi.fn(),
+}));
 
 vi.mock("@/app/_lib/auth/request-identity", () => ({
   resolveRequestPrincipal,
@@ -50,15 +54,19 @@ vi.mock("@/bootstrap/http", () => ({
       handler: (ctx: { log: typeof log }, request: Request) => Promise<Response>
     ) =>
     async (request: Request) => {
+      let status = 500;
       try {
-        return await handler({ log }, request);
-      } catch {
-        // Mirror the production wrapper's respond_500 policy so this unit
-        // proves the route rethrows unknown failures without leaking details.
+        const response = await handler({ log }, request);
+        status = response.status;
+        return response;
+      } catch (error) {
+        wrapperObservability.error(error);
         return new Response(JSON.stringify({ error: "Internal server error" }), {
           status: 500,
           headers: { "content-type": "application/json" },
         });
+      } finally {
+        wrapperObservability.requestEnd(status);
       }
     },
 }));
@@ -158,9 +166,8 @@ describe("POST beneficiary policy", () => {
   });
 
   it("sanitizes unknown failures and emits one internal terminal", async () => {
-    mutateBeneficiaryPolicy.mockRejectedValue(
-      new Error("postgres://secret@internal.example exploded")
-    );
+    const secret = "postgres://secret@internal.example exploded";
+    mutateBeneficiaryPolicy.mockRejectedValue(new Error(secret));
 
     const response = await POST(
       new Request(
@@ -179,11 +186,19 @@ describe("POST beneficiary policy", () => {
     );
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
+    const responseBody = await response.text();
+    expect(JSON.parse(responseBody)).toEqual({
       error: "Internal server error",
     });
+    expect(responseBody).not.toContain(secret);
     expect(terminal.complete).not.toHaveBeenCalled();
     expect(terminal.internalError).toHaveBeenCalledOnce();
     expect(terminal.internalError).toHaveBeenCalledWith();
+    expect(JSON.stringify(terminal.internalError.mock.calls)).not.toContain(
+      secret
+    );
+    expect(wrapperObservability.error).not.toHaveBeenCalled();
+    expect(wrapperObservability.requestEnd).toHaveBeenCalledOnce();
+    expect(wrapperObservability.requestEnd).toHaveBeenCalledWith(500);
   });
 });

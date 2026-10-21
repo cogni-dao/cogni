@@ -212,9 +212,12 @@ export const POST = wrapRouteHandlerWithLogging(
           { status: 409 }
         );
       }
-    } catch (error) {
+    } catch {
       terminal.internalError();
-      throw error;
+      return NextResponse.json(
+        { error: "Internal server error" },
+        { status: 500 }
+      );
     }
   }
 );
