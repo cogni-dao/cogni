@@ -2,25 +2,14 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `tests/component/db/doltgres-migrate.int.test.ts`
- * Purpose: Regression test for the Doltgres migrator hardening — exercises
- *   the silent-skip drift gap (drizzle-orm decides "applied?" by `folderMillis`
- *   alone, never by hash) and proves the post-migrate schema verifier closes it.
- *   Three scenarios:
- *     1. Fresh `knowledge_operator` + real migrations dir → migrator succeeds, verifier passes.
- *     2. After a drop-column from the live DB → verifier throws SCHEMA_DRIFT
- *        (this is the bug shape from PR #1343's near-miss: candidate-a stays
- *        on the old shape while the app expects the new one).
- *     3. After a drop-table from the live DB → verifier throws SCHEMA_DRIFT
- *        with the missing-table reason.
- * Scope: Component test — boots `dolthub/doltgresql:latest` via testcontainers.
- *   Runs the actual `migrate-doltgres.mjs` script via `execSync` (not a fake)
- *   so the script's journal walker + verifier wiring is exercised end-to-end.
- * Side-effects: Docker container, sub-process, process.env (DATABASE_URL).
- * Notes: No fixture migration files — uses the real on-disk migrations so the
- *   test stays in sync with whatever the latest snapshot expects. New
- *   migrations land here automatically as soon as they're added to `doltgres-migrations/`.
+ * Module: `@tests/component/db/doltgres-migrate`
+ * Purpose: Prove actual operator migration history, read-only startup and drift verification.
+ * Scope: Owned native component tests. Does not connect to deployed databases.
+ * Invariants: Fresh historical migrations succeed; applied startup preserves HEAD/journal; drift fails closed.
+ * Side-effects: IO, process.env
+ * Notes: Uses real immutable operator migrations, including duplicate 0002/0004 drops.
  * Links: scripts/db/migrate-doltgres.mjs, scripts/db/verify-doltgres-schema.mjs
+ * @internal
  */
 
 import { execSync } from "node:child_process";
@@ -109,8 +98,8 @@ describe("doltgres migrator + schema verification", () => {
       encoding: "utf8",
       stdio: "pipe",
     });
-    expect(result).toMatch(/schema verified/);
-    expect(result).toMatch(/dolt_commit stamped/);
+    expect(result).toMatch(/migration\(s\) applied \+ verified/);
+    expect(result).toMatch(/owned branch committed/);
 
     // Independently confirm via the verifier module against the live DB.
     const sql = postgres(dbUrl, { max: 1 });
@@ -122,6 +111,30 @@ describe("doltgres migrator + schema verification", () => {
       expect(ok).toBe(true);
       expect(tablesChecked).toBeGreaterThan(0);
       expect(latestTag).toMatch(/^\d{4}_/);
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it("already-applied startup is read-only after the historical duplicate drops", async () => {
+    const sql = postgres(dbUrl, { max: 1 });
+    const snapshot = async () => ({
+      head: await sql.unsafe("SELECT dolt_hashof('HEAD') AS hash"),
+      journal: await sql.unsafe(
+        "SELECT hash, created_at FROM drizzle.__drizzle_migrations ORDER BY created_at"
+      ),
+      status: await sql.unsafe("SELECT * FROM dolt.status"),
+    });
+    try {
+      const before = await snapshot();
+      expect(before.status).toHaveLength(0);
+      const result = execSync(`node ${MIGRATE_SCRIPT} ${MIGRATIONS_DIR}`, {
+        env: { ...process.env, DATABASE_URL: dbUrl, NODE_NAME: "operator" },
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      expect(result).toContain("read-only no-op; no journal DDL or commit");
+      expect(await snapshot()).toEqual(before);
     } finally {
       await sql.end({ timeout: 5 });
     }

@@ -14,13 +14,12 @@
 // biome-ignore-all lint/suspicious/noConsole: standalone Node script invoked as initContainer CMD; stdout is the only log surface
 // biome-ignore-all lint/style/noProcessEnv: container entry point reads DATABASE_URL + NODE_NAME directly; no env wrapper to hide behind
 
+import { createHash } from "node:crypto";
 import { writeSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-
-import { createHash } from "node:crypto";
 import {
-  DoltNativeSessionExecutor,
   DoltBranchMutationUncertainError,
+  DoltNativeSessionExecutor,
   runDoltBranchMutation,
 } from "@cogni-dao/doltgres-admission";
 import { readMigrationFiles } from "drizzle-orm/migrator";
@@ -71,6 +70,61 @@ function isHarmlessDropMiss(stmt, err) {
   );
 }
 
+/** Avoid tolerated DDL errors inside the guard: a native error poisons its batch. */
+async function knownDdlAlreadyApplied(sql, statement) {
+  const text = statement.replace(/^(?:\s*--[^\n]*(?:\n|$))+/, "").trim();
+  const identifier = '(?:"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))';
+  const drop = new RegExp(
+    `^ALTER\\s+TABLE\\s+${identifier}\\s+DROP\\s+COLUMN\\s+${identifier}\\s*;?\\s*$`,
+    "i"
+  ).exec(text);
+  const table = new RegExp(
+    `^CREATE\\s+TABLE\\s+${identifier}\\s*\\(`,
+    "i"
+  ).exec(text);
+  const index = new RegExp(
+    `^CREATE\\s+(?:UNIQUE\\s+)?INDEX\\s+${identifier}\\s+ON\\s+${identifier}\\s+`,
+    "i"
+  ).exec(text);
+  if (!drop && !table && !index) return false;
+  const name = (match, offset) =>
+    match[offset] ?? match[offset + 1].toLowerCase();
+  const tableName = drop
+    ? name(drop, 1)
+    : table
+      ? name(table, 1)
+      : name(index, 3);
+  const tables = await sql.unsafe(
+    `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ${sqlEscape(tableName)}`
+  );
+  if (tables.length > 1 || tables.some((row) => row.table_name !== tableName))
+    throw new Error("migration_ddl_table_metadata_unproven");
+  if (table) return tables.length === 1;
+  // A missing parent is a real error, never proof that its child was removed.
+  if (tables.length !== 1) return false;
+  if (drop) {
+    const column = name(drop, 3);
+    const columns = await sql.unsafe(
+      `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ${sqlEscape(tableName)} AND column_name = ${sqlEscape(column)}`
+    );
+    if (columns.length > 1 || columns.some((row) => row.column_name !== column))
+      throw new Error("migration_ddl_column_metadata_unproven");
+    return columns.length === 0;
+  }
+  const indexName = name(index, 1);
+  const indexes = await sql.unsafe(
+    `SELECT tablename, indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = ${sqlEscape(tableName)} AND indexname = ${sqlEscape(indexName)}`
+  );
+  if (
+    indexes.length > 1 ||
+    indexes.some(
+      (row) => row.tablename !== tableName || row.indexname !== indexName
+    )
+  )
+    throw new Error("migration_ddl_index_metadata_unproven");
+  return indexes.length === 1;
+}
+
 /**
  * Apply pending migrations via simple-protocol sql.unsafe — the Doltgres-safe
  * equivalent of `drizzle-orm/postgres-js/migrator`'s `migrate()`. Same journal
@@ -99,6 +153,8 @@ async function applyPending(sql, folder) {
     for (const stmt of migration.sql) {
       const trimmed = stmt.trim();
       if (!trimmed) continue;
+      // Same reserved branch/guard; metadata failure is never an absence proof.
+      if (await knownDdlAlreadyApplied(sql, trimmed)) continue;
       try {
         await sql.unsafe(trimmed);
       } catch (err) {
