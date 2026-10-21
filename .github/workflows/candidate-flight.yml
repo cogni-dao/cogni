@@ -1132,6 +1132,7 @@ jobs:
       lane: candidate-a
       node: ${{ matrix.node }}
       operation: materialize
+      source_ref: ${{ needs.decide.outputs.head_sha }}
     secrets:
       VM_HOST: ${{ secrets.VM_HOST }}
       SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
