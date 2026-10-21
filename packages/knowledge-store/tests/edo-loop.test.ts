@@ -152,6 +152,7 @@ describe("EDO foundation — invariants", () => {
       entryType: "event",
       sourceType: "agent",
     });
+    const before = (await store.getKnowledge("goal-ship-it"))?.confidencePct;
     await expect(
       store.addCitation({
         citingId: "evt-plan",
@@ -159,6 +160,10 @@ describe("EDO foundation — invariants", () => {
         citationType: "derives_from",
       })
     ).resolves.toBeDefined();
+    // GOALS_HAVE_NO_CONFIDENCE: a derives_from edge never moves a goal's confidence.
+    expect((await store.getKnowledge("goal-ship-it"))?.confidencePct).toBe(
+      before
+    );
     await expect(
       store.addCitation({
         citingId: "evt-plan",
