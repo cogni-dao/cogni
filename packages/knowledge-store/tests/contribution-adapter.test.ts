@@ -22,13 +22,14 @@ import {
 import {
   CitationTargetNotFoundError,
   HypothesisMissingEvaluateAtError,
+  KnowledgeWriteOutcomeUnknownError,
 } from "../src/port/knowledge-store.port.js";
 
 const record = {
   id: "contrib-agent-1-abc123",
   branch: "contrib/agent-1-abc123",
   base_commit: "base123",
-  head_commit: "head123",
+  head_commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   commit_count: 3,
   state: "open",
   principal_kind: "agent",
@@ -48,7 +49,44 @@ const reviewer: Principal = {
   role: "admin",
 };
 
+// Stateful native metadata fixture: identity, private branch ownership and clean
+// reconciliation are observed rather than bypassing the released executor.
+class NativeState {
+  active = "main";
+  dirty = false;
+  observe(query: string): Record<string, unknown>[] | undefined {
+    if (query.includes("current_database()"))
+      return [{ dolt_writer_database: "knowledge_test" }];
+    if (query.includes("active_branch()"))
+      return [{ branch_name: this.active }];
+    if (query.includes("dolt_checkout(")) {
+      const args = [...query.matchAll(/'([^']*)'/g)].map((m) => m[1]);
+      this.active = args[0] === "-b" ? (args[1] ?? "") : (args[0] ?? "");
+      return [{ dolt_checkout: 0 }];
+    }
+    if (query.includes("dolt.merge_status")) return [{ is_merging: false }];
+    if (query.includes("AS commit_hash"))
+      return [{ commit_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }];
+    if (query.includes("dolt_merge_base"))
+      return [{ merge_base: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }];
+    if (query.startsWith("SELECT hash, fast_forward"))
+      return [{ hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", conflicts: 0 }];
+    if (query.includes("FROM dolt.status"))
+      return this.dirty ? [{ table_name: "knowledge_contributions" }] : [];
+    if (/^(INSERT|UPDATE|DELETE)/.test(query)) this.dirty = true;
+    if (/^(INSERT INTO|UPDATE) knowledge_contribution/.test(query)) {
+      if (!this.active.startsWith("dolt-op/"))
+        throw new Error("Metadata DML escaped private operation branch");
+      this.dirty = true;
+    }
+    if (query.includes("dolt_commit") || query.includes("dolt_reset"))
+      this.dirty = false;
+    return undefined;
+  }
+}
+
 class FakeReservedSql {
+  private readonly native = new NativeState();
   readonly queries: string[] = [];
 
   constructor(private readonly hasUseWhen = true) {}
@@ -57,6 +95,8 @@ class FakeReservedSql {
     query: string
   ): Promise<Record<string, unknown>[] & { count?: number }> {
     this.queries.push(query);
+    const native = this.native.observe(query);
+    if (native !== undefined) return native;
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.
     if (query.includes("pg_try_advisory_lock"))
@@ -64,10 +104,10 @@ class FakeReservedSql {
     if (query.includes("pg_advisory_unlock"))
       return [{ pg_advisory_unlock: true }];
     if (query.includes("dolt_hashof")) {
-      return [{ dolt_hashof: "head123" }];
+      return [{ dolt_hashof: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }];
     }
     if (query.includes("dolt_commit")) {
-      return [{ dolt_commit: ["{next456}"] }];
+      return [{ dolt_commit: ["{bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"] }];
     }
     if (query.includes("FROM domains")) {
       return [{ "?column?": 1 }];
@@ -79,7 +119,7 @@ class FakeReservedSql {
       return this.hasUseWhen ? [{ "?column?": 1 }] : [];
     }
     if (query.includes("dolt_merge")) {
-      return [{ dolt_merge: ["merge123"] }];
+      return [{ dolt_merge: ["cccccccccccccccccccccccccccccccc"] }];
     }
     if (query.includes("UPDATE knowledge_contributions")) {
       const rows: Record<string, unknown>[] & { count?: number } = [];
@@ -111,7 +151,7 @@ class FakeReservedSql {
         {
           contribution_id: "contrib-agent-1-abc123",
           seq: 4,
-          commit_hash: "next456",
+          commit_hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           principal_kind: "agent",
           principal_id: "agent-1",
           auth_source: "bearer",
@@ -186,6 +226,7 @@ class FakeDiffSql {
 // non-trivial branch produces — parameterized so tests can drive both a clean
 // merge and a conflicted one. Abort returns its own benign record.
 class FakeMergeReservedSql {
+  private readonly native = new NativeState();
   readonly queries: string[] = [];
 
   constructor(
@@ -199,6 +240,8 @@ class FakeMergeReservedSql {
     query: string
   ): Promise<Record<string, unknown>[] & { count?: number }> {
     this.queries.push(query);
+    const native = this.native.observe(query);
+    if (native !== undefined) return native;
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.
     if (query.includes("pg_try_advisory_lock"))
@@ -213,7 +256,7 @@ class FakeMergeReservedSql {
       return [{ dolt_merge: this.mergeRow }];
     }
     if (query.includes("dolt_commit")) {
-      return [{ dolt_commit: ["{next456}"] }];
+      return [{ dolt_commit: ["{bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"] }];
     }
     if (query.includes("UPDATE knowledge_contributions")) {
       const rows: Record<string, unknown>[] & { count?: number } = [];
@@ -247,11 +290,23 @@ class FakeMergeSql {
   }
 }
 
+function independentWriter(fake: {
+  unsafe(query: string): Promise<Record<string, unknown>[]>;
+  reserve(): Promise<ReservedSql>;
+}): Sql {
+  return {
+    unsafe: fake.unsafe.bind(fake),
+    reserve: fake.reserve.bind(fake),
+    end: async () => undefined,
+  } as unknown as Sql;
+}
+
 function adapterFor(
   fake: FakeSql | FakeDiffSql | FakeMergeSql
 ): DoltgresKnowledgeContributionAdapter {
   return new DoltgresKnowledgeContributionAdapter({
     sql: fake as unknown as Sql,
+    branchSql: independentWriter(fake),
   });
 }
 
@@ -263,7 +318,9 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     expect(
       fake.queries.some((q) =>
-        q.includes("dolt_diff('base123', 'head123', 'knowledge')")
+        q.includes(
+          "dolt_diff('base123', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'knowledge')"
+        )
       )
     ).toBe(true);
   });
@@ -325,7 +382,9 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     // and the citations table is actually diffed
     expect(
       fake.queries.some((q) =>
-        q.includes("dolt_diff('base123', 'head123', 'citations')")
+        q.includes(
+          "dolt_diff('base123', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'citations')"
+        )
       )
     ).toBe(true);
   });
@@ -334,14 +393,16 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     const fake = new FakeSql({
       ...record,
       base_commit: "{base123}",
-      head_commit: "{head123}",
+      head_commit: "{aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}",
     });
 
     await adapterFor(fake).diff("contrib-agent-1-abc123");
 
     expect(
       fake.queries.some((q) =>
-        q.includes("dolt_diff('base123', 'head123', 'knowledge')")
+        q.includes(
+          "dolt_diff('base123', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'knowledge')"
+        )
       )
     ).toBe(true);
   });
@@ -426,7 +487,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     expect(conn.queries.some((q) => q.includes("dolt_branch('-D'"))).toBe(true);
   });
 
-  it("maps a thrown Dolt conflict to a clean human message, never the raw SQL (bug.5120)", async () => {
+  it("keeps a thrown native merge outcome unknown and private without replay (bug.5120)", async () => {
     // Doltgres throws on a conflicted merge with @autocommit on. The raw text
     // ("@@dolt_allow_commit_conflicts", branch refs, dolt_conflicts tables) must
     // NOT reach the admin — only a plain what-happened + how-to-fix message.
@@ -441,7 +502,27 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       .catch((e: unknown) => e as Error);
 
     expect(err).toBeTruthy();
-    expect(err?.message).toMatch(/conflict/i);
+    expect(err).toBeInstanceOf(KnowledgeWriteOutcomeUnknownError);
+    if (!(err instanceof KnowledgeWriteOutcomeUnknownError)) throw err;
+    expect(err.retryable).toBe(false);
+    expect(err.receipt).toMatchObject({
+      code: "knowledge_write_outcome_unknown",
+      retryable: false,
+      lookup: {
+        operationId: err.operationId,
+        branch: "main",
+        commitHash: null,
+      },
+    });
+    expect(err.operationId).not.toBe("");
+    expect(
+      conn.queries.filter(
+        (q) => q === "SELECT dolt_merge('contrib/agent-1-abc123')"
+      )
+    ).toHaveLength(1);
+    expect(conn.queries.some((q) => q.includes("dolt_branch('-D'"))).toBe(
+      false
+    );
     // no raw Dolt/SQL leakage
     expect(err?.message).not.toMatch(
       /dolt_merge|@@dolt|autocommit|dolt_conflicts/i
@@ -497,13 +578,23 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       ],
     });
 
-    expect(commit.commitHash).toBe("next456");
-    expect(fake.conn.queries).toContain(
-      "SELECT dolt_hashof('contrib/agent-1-abc123') AS dolt_hashof"
+    expect(commit.commitHash).toBe("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    const checkout = fake.conn.queries.indexOf(
+      "SELECT dolt_checkout('contrib/agent-1-abc123')"
     );
+    const head = fake.conn.queries.indexOf(
+      "SELECT dolt_hashof('HEAD') AS commit_hash",
+      checkout + 1
+    );
+    const edit = fake.conn.queries.findIndex((q) =>
+      q.startsWith("INSERT INTO knowledge (")
+    );
+    expect(checkout).toBeGreaterThanOrEqual(0);
+    expect(head).toBeGreaterThan(checkout);
+    expect(edit).toBeGreaterThan(head);
     expect(
       fake.conn.queries.some((query) =>
-        query.includes("head_commit = 'head123'")
+        query.includes("head_commit = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'")
       )
     ).toBe(true);
   });
@@ -842,6 +933,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     const adapter = new DoltgresKnowledgeContributionAdapter({
       sql: fake as unknown as Sql,
+      branchSql: independentWriter(fake),
     });
     const commit = await adapter.appendCommit({
       contributionId: "contrib-agent-1-abc123",
@@ -857,7 +949,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       ],
     });
 
-    expect(commit.commitHash).toBe("next456");
+    expect(commit.commitHash).toBe("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     // The edge is recorded on the branch even though the target is main-only.
     expect(
       fake.conn.queries.some(
@@ -894,6 +986,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     const adapter = new DoltgresKnowledgeContributionAdapter({
       sql: fake as unknown as Sql,
+      branchSql: independentWriter(fake),
     });
     await adapter.appendCommit({
       contributionId: "contrib-agent-1-abc123",
@@ -939,6 +1032,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     const adapter = new DoltgresKnowledgeContributionAdapter({
       sql: fake as unknown as Sql,
+      branchSql: independentWriter(fake),
     });
     await expect(
       adapter.appendCommit({
@@ -966,6 +1060,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     const adapter = new DoltgresKnowledgeContributionAdapter({
       sql: fake as unknown as Sql,
+      branchSql: independentWriter(fake),
     });
     await expect(
       adapter.appendCommit({
@@ -992,6 +1087,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     const adapter = new DoltgresKnowledgeContributionAdapter({
       sql: fake as unknown as Sql,
+      branchSql: independentWriter(fake),
     });
     await expect(
       adapter.appendCommit({
@@ -1022,6 +1118,7 @@ function idFromQuery(query: string): string | undefined {
 }
 
 class CrossPlaneFakeReservedSql {
+  private readonly native = new NativeState();
   readonly queries: string[] = [];
 
   constructor(private readonly branchEntryTypes: Map<string, string>) {}
@@ -1030,14 +1127,18 @@ class CrossPlaneFakeReservedSql {
     query: string
   ): Promise<Record<string, unknown>[] & { count?: number }> {
     this.queries.push(query);
+    const native = this.native.observe(query);
+    if (native !== undefined) return native;
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.
     if (query.includes("pg_try_advisory_lock"))
       return [{ pg_try_advisory_lock: true }];
     if (query.includes("pg_advisory_unlock"))
       return [{ pg_advisory_unlock: true }];
-    if (query.includes("dolt_hashof")) return [{ dolt_hashof: "head123" }];
-    if (query.includes("dolt_commit")) return [{ dolt_commit: ["{next456}"] }];
+    if (query.includes("dolt_hashof"))
+      return [{ dolt_hashof: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }];
+    if (query.includes("dolt_commit"))
+      return [{ dolt_commit: ["{bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"] }];
     if (query.includes("SELECT 1 FROM knowledge WHERE id"))
       return [{ "?column?": 1 }];
     if (query.includes("entry_type FROM knowledge")) {
@@ -1058,7 +1159,7 @@ class CrossPlaneFakeReservedSql {
         {
           contribution_id: "contrib-agent-1-abc123",
           seq: 4,
-          commit_hash: "next456",
+          commit_hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           principal_kind: "agent",
           principal_id: "agent-1",
           auth_source: "bearer",

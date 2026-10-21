@@ -12,6 +12,9 @@ importers:
 
   .:
     dependencies:
+      '@cogni-dao/doltgres-admission':
+        specifier: https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.0/cogni-dao-doltgres-admission-0.1.0.tgz
+        version: https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.0/cogni-dao-doltgres-admission-0.1.0.tgz
       '@cogni/ai-core':
         specifier: workspace:*
         version: link:packages/ai-core
@@ -79,8 +82,8 @@ importers:
         specifier: workspace:*
         version: link:packages/temporal-workflows
       '@cogni/work-items':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.1.10/cogni-dao-work-items-0.1.10.tgz
-        version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.1.10/cogni-dao-work-items-0.1.10.tgz'
+        specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.1/cogni-dao-work-items-0.2.1.tgz
+        version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.1/cogni-dao-work-items-0.2.1.tgz'
       '@privy-io/node':
         specifier: ^0.10.1
         version: 0.10.1(viem@2.48.1(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.1.12))
@@ -419,8 +422,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/scheduler-core
       '@cogni/work-items':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.1.10/cogni-dao-work-items-0.1.10.tgz
-        version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.1.10/cogni-dao-work-items-0.1.10.tgz'
+        specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.1/cogni-dao-work-items-0.2.1.tgz
+        version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.1/cogni-dao-work-items-0.2.1.tgz'
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
@@ -1005,6 +1008,9 @@ importers:
 
   packages/knowledge-store:
     dependencies:
+      '@cogni-dao/doltgres-admission':
+        specifier: https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.0/cogni-dao-doltgres-admission-0.1.0.tgz
+        version: https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.0/cogni-dao-doltgres-admission-0.1.0.tgz
       '@cogni/ai-tools':
         specifier: workspace:*
         version: link:../ai-tools
@@ -1820,9 +1826,13 @@ packages:
     peerDependencies:
       react: '>=19'
 
-  '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.1.10/cogni-dao-work-items-0.1.10.tgz':
-    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.1.10/cogni-dao-work-items-0.1.10.tgz}
-    version: 0.1.10
+  '@cogni-dao/doltgres-admission@https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.0/cogni-dao-doltgres-admission-0.1.0.tgz':
+    resolution: {integrity: sha512-LhnJYrW2+k70yQXIW2Pa/QAfOmYwzdlXzIRsNBAg6GOP/TYhtO1cWcwMaNkKg8Gr429QsOk2m6ag0xKGOsbz6A==, tarball: https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.0/cogni-dao-doltgres-admission-0.1.0.tgz}
+    version: 0.1.0
+
+  '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.1/cogni-dao-work-items-0.2.1.tgz':
+    resolution: {integrity: sha512-E7H9KwTC4M6Nqg+9bdqPQNHoVc6t66c2NgW2Sh5UOg7kEG3jqiKTOi14L/7Q383QawM2XQDJYt/v+Fz7tuXHSQ==, tarball: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.1/cogni-dao-work-items-0.2.1.tgz}
+    version: 0.2.1
 
   '@coinbase/cdp-sdk@1.38.6':
     resolution: {integrity: sha512-l9gGGZqhCryuD3nfqB4Y+i8kfBtsnPJoKB5jxx5lKgXhVJw7/BPhgscKkVhP81115Srq3bFegD1IBwUkJ0JFMw==}
@@ -13230,7 +13240,9 @@ snapshots:
     dependencies:
       react: 19.0.0
 
-  '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.1.10/cogni-dao-work-items-0.1.10.tgz':
+  '@cogni-dao/doltgres-admission@https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.0/cogni-dao-doltgres-admission-0.1.0.tgz': {}
+
+  '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.1/cogni-dao-work-items-0.2.1.tgz':
     dependencies:
       type-fest: 5.4.1
       yaml: 2.8.3
