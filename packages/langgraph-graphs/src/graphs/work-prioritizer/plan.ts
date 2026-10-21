@@ -69,7 +69,7 @@ export type ReviewScope = "full" | "delta";
 export interface PriorDecision {
   readonly id: string;
   readonly promptVersion: string | null;
-  readonly objectives: readonly string[];
+  readonly goals: readonly string[];
   /** Last full review (null for decisions filed before DAILY_FULL_REVIEW existed). */
   readonly reviewedAt: string | null;
   readonly consumedIds: ReadonlySet<string>;
@@ -110,7 +110,7 @@ export function newestPriorDecision(
     id: e.id,
     promptVersion:
       typeof raw.promptVersion === "string" ? raw.promptVersion : null,
-    objectives: strings(raw.objectives),
+    goals: strings(raw.goals),
     reviewedAt: typeof raw.reviewedAt === "string" ? raw.reviewedAt : null,
     consumedIds: new Set(
       ["workItemIds", "knowledgeIds", "edoIds"].flatMap((k) => strings(cc[k]))
@@ -132,7 +132,7 @@ export function newestPriorDecision(
  * DAILY_FULL_REVIEW + DELTA_SCOPE + MEMOIZED_JUDGMENTS — which items this cycle sends to the model.
  *
  * Full review (every item re-judged): requested, no prior memo or one without `reviewedAt`, a changed
- * prompt or objective set (every memoized judgment is stale), or the first cycle of a new UTC day.
+ * prompt or active goal set (every memoized judgment is stale), or the first cycle of a new UTC day.
  * Delta cycle: the delta is every current p0/p1 (in the store or the prior table), every unprioritized
  * item, and every item whose revision differs from the one the prior decision judged (new items
  * included). A delta item is re-judged unless its revision is unchanged and no NEW hub evidence (not
@@ -151,7 +151,7 @@ export function selectJudgeSet<
   ctx: {
     readonly now: string;
     readonly promptVersion: string;
-    readonly objectives: readonly string[];
+    readonly goals: readonly string[];
     readonly requested: boolean;
     readonly hubEntries: readonly {
       readonly id: string;
@@ -169,8 +169,8 @@ export function selectJudgeSet<
     ctx.requested ||
     !memo?.reviewedAt ||
     memo.promptVersion !== ctx.promptVersion ||
-    memo.objectives.length !== ctx.objectives.length ||
-    !memo.objectives.every((o) => ctx.objectives.includes(o)) ||
+    memo.goals.length !== ctx.goals.length ||
+    !memo.goals.every((g) => ctx.goals.includes(g)) ||
     memo.reviewedAt.slice(0, 10) < ctx.now.slice(0, 10);
   if (full || !memo) {
     const delta = items.map((i) => i.id);

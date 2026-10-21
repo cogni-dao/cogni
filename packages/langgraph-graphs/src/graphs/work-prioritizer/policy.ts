@@ -8,7 +8,8 @@
  * Invariants:
  *   - POLICY_FROM_TRIGGER: the governance schedule appends the repo-spec policy to the trigger message as a
  *     fenced json block `{ "workPrioritization": … }`; the graph never reads env or files.
- *   - POLICY_REQUIRED: no valid policy in the trigger ⇒ the cycle ends `no_policy` (no default caps, no guessing).
+ *   - POLICY_REQUIRED: no valid policy in the trigger ⇒ the cycle ends `no_policy`.
+ *   - GOALS_NOT_POLICY: goals come from the hub (listActiveGoals), never from the policy; there are no caps.
  *   - FULL_REVIEW_ON_REQUEST: `"fullReview": true` beside the policy in that block forces a whole-backlog review.
  *   - PROPOSE_ONLY: the graph writes no work item; an `applyMode` the schedule still sends is ignored.
  * Side-effects: none
@@ -20,10 +21,6 @@ import { z } from "zod";
 
 export const WorkPrioritizationPolicySchema = z.object({
   policyVersion: z.string().min(1),
-  p0Max: z.number().int().min(0),
-  p1Budget: z.number().int().min(0),
-  p2Budget: z.number().int().min(0),
-  objectives: z.array(z.string().min(1)).min(1),
 });
 export type WorkPrioritizationPolicy = z.infer<
   typeof WorkPrioritizationPolicySchema

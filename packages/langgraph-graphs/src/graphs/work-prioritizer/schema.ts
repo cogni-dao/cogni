@@ -3,25 +3,25 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/schema`
- * Purpose: Judgment, plan, and decision schemas for the work prioritizer (design v4, story.5096).
+ * Purpose: Judgment, plan, and decision schemas for the work prioritizer (dao-goals-design, story.5096).
  * Scope: Zod schemas and inferred types only. Does not call tools, LLMs, or read env.
  * Invariants:
  *   - ENUMS_NOT_FLOATS: the model returns only enums (impact 0–3, service class, effort) plus evidence ids;
  *     ranking is code (rank.ts), never a model-produced score.
- *   - NO_AGGREGATE_SCORE / NO_WEIGHTS: impact is per approved objective; nothing sums or weights them.
+ *   - NO_AGGREGATE_SCORE / NO_WEIGHTS: impact is per active goal; nothing sums or weights them.
  *   - DECISION_CARRIES_FULL_TABLE: a filed decision holds every actionable item's row, so a revert is a replay.
  * Side-effects: none
- * Links: .context/prioritizer-design-v4.md, rank.ts, plan.ts
+ * Links: dao-goals-design, rank.ts, plan.ts
  * @public
  */
 
 import { z } from "zod";
 
 /** Schema version stamped into every decision payload. */
-export const DECISION_SCHEMA_VERSION = "work-prioritizer.decision/v1" as const;
+export const DECISION_SCHEMA_VERSION = "work-prioritizer.decision/v2" as const;
 
-/** Name of the deterministic ranking procedure (design v4 §2.3). */
-export const RANK_HEURISTIC = "lexicographic heuristic v1" as const;
+/** Name of the deterministic ranking procedure (rank.ts). */
+export const RANK_HEURISTIC = "lexicographic heuristic v2" as const;
 
 export const SERVICE_CLASSES = [
   "expedite",
@@ -50,7 +50,7 @@ export const HarmIfWaitSchema = EvidencedClaimSchema.extend({
 export const ItemJudgmentSchema = z
   .object({
     itemId: z.string().min(1),
-    /** Impact 0–3 keyed by approved objective id. Missing objective = 0. */
+    /** Impact 0–3 keyed by active goal id (`goal-*`). Missing goal = 0. */
     impact: z.record(z.string(), z.number().int().min(0).max(3)).default({}),
     serviceClass: z.enum(SERVICE_CLASSES),
     /** Required iff serviceClass = fixed_date (ISO date). */
@@ -84,7 +84,8 @@ export const RankedRowSchema = z.object({
   pinned: z.boolean(),
   serviceClass: z.enum(SERVICE_CLASSES).nullable(),
   maxImpact: z.number().int().min(0).max(3),
-  objective: z.string().nullable(),
+  /** P0P1_CITES_GOAL: the active goal (`goal-*`) this row serves; required for p0/p1. */
+  goal: z.string().nullable(),
   effort: z.enum(EFFORTS).nullable(),
   whyNow: EvidencedClaimSchema.nullable(),
   harmIfWait: HarmIfWaitSchema.nullable(),
@@ -144,11 +145,8 @@ export const DecisionPayloadSchema = z.object({
   cycleId: z.string(),
   snapshotId: z.string(),
   priorDecisionId: z.string().nullable(),
-  objectives: z.array(z.string()),
-  ceilings: z.object({ p0: z.number(), p1: z.number(), p2: z.number() }),
-  overflow: z.array(
-    z.object({ level: z.number(), pinned: z.number(), ceiling: z.number() })
-  ),
+  /** The active goal ids (`goal-*`) this cycle ranked against (listActiveGoals). */
+  goals: z.array(z.string()),
   plan: z.array(PlanRowSchema),
   table: z.array(RankedRowSchema),
   diffVsPrior: z.array(
@@ -161,7 +159,7 @@ export const DecisionPayloadSchema = z.object({
   contextConsumed: ContextConsumedSchema,
   /**
    * MEMOIZED_JUDGMENTS: every item's judgment keyed by itemId@revision. The next cycle reuses a
-   * judgment whose item revision, objectives, and prompt version are unchanged.
+   * judgment whose item revision, goals, and prompt version are unchanged.
    */
   judgments: z.array(MemoJudgmentSchema).default([]),
   /**

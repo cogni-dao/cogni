@@ -148,24 +148,7 @@ export function gradeDeltaCoverage(
       );
 }
 
-/** p0/p1/p2 counts ≤ policy ceilings (pin overflow for that level is reported instead). */
-export function gradeCeilings(payload: DecisionPayload): CheckResult {
-  const caps = [payload.ceilings.p0, payload.ceilings.p1, payload.ceilings.p2];
-  const over = caps
-    .map((cap, level) => ({
-      level,
-      cap,
-      n: payload.table.filter((r) => r.to === level).length,
-    }))
-    .filter(
-      (x) => x.n > x.cap && !payload.overflow.some((o) => o.level === x.level)
-    );
-  return over.length
-    ? fail(over.map((x) => `p${x.level} ${x.n} > ${x.cap}`).join("; "))
-    : ok(`p0 ${caps[0]} / p1 ${caps[1]} / p2 ${caps[2]} respected`);
-}
-
-/** Every p0/p1 cites an approved objective and an evidenced why-now; p0 also an evidenced harm ≤ 7 days. */
+/** Every p0/p1 has an evidenced why-now; a p0 also an evidenced harm ≤ 7 days. */
 export function gradeRationale(payload: DecisionPayload): CheckResult {
   const consumed = new Set([
     ...payload.contextConsumed.workItemIds,
@@ -175,9 +158,7 @@ export function gradeRationale(payload: DecisionPayload): CheckResult {
   const bad: string[] = [];
   for (const r of payload.table) {
     if (r.pinned || r.to > 1) continue;
-    if (!r.objective || !payload.objectives.includes(r.objective))
-      bad.push(`${r.itemId}: no approved objective`);
-    else if (!r.whyNow || !consumed.has(r.whyNow.evidenceId))
+    if (!r.whyNow || !consumed.has(r.whyNow.evidenceId))
       bad.push(`${r.itemId}: why-now not evidenced`);
     else if (
       r.to === 0 &&
@@ -191,7 +172,40 @@ export function gradeRationale(payload: DecisionPayload): CheckResult {
   }
   return bad.length
     ? fail(bad.slice(0, 4).join("; "))
-    : ok("every p0/p1 is objective-backed and evidenced");
+    : ok("every p0/p1 is evidenced");
+}
+
+const GOAL_ID = /^goal-[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * NO_GOALS / ONE_GOAL_LIST (live half — the zero-goal path is unit-tested): the cycle reports the goal ids it
+ * ranked against; they are non-empty, all `goal-*`, and all active goal atoms on the node.
+ */
+export function gradeGoalsReported(
+  goalIds: readonly string[],
+  nodeGoalIds: readonly string[]
+): CheckResult {
+  const bad = goalIds.filter(
+    (g) => !GOAL_ID.test(g) || !nodeGoalIds.includes(g)
+  );
+  if (goalIds.length === 0) return fail("the cycle reported no goal ids");
+  return bad.length
+    ? fail(`not active goal-* atoms: ${bad.join(", ")}`)
+    : ok(`ranked against ${goalIds.join(", ")}`);
+}
+
+/** P0P1_CITES_GOAL: every p0/p1 row carries `goal: goal-<slug>` from the cycle's active goal set. */
+export function gradeGoalCitation(payload: DecisionPayload): CheckResult {
+  const bad = payload.table
+    .filter((r) => !r.pinned && r.to <= 1)
+    .filter(
+      (r) => !r.goal || !GOAL_ID.test(r.goal) || !payload.goals.includes(r.goal)
+    )
+    .map((r) => `${r.itemId} at p${r.to} cites ${r.goal ?? "no goal"}`);
+  const p0p1 = payload.table.filter((r) => r.to <= 1).length;
+  return bad.length
+    ? fail(bad.slice(0, 4).join("; "))
+    : ok(`${p0p1} p0/p1 rows, each citing one of ${payload.goals.join(", ")}`);
 }
 
 /** No blocked, non-canonical duplicate, fixture, or injection item at p0/p1. */
@@ -399,7 +413,6 @@ export function scorecardMarkdown(card: Scorecard): string {
 /** Write-mode checks, reported as skipped by the propose eval. */
 export const WRITE_MODE_CHECKS = [
   "applied rows match decision (write)",
-  "backlog p0 ≤ ceiling (write)",
   "responsiveness (applied)",
   "stability (A → B, observed)",
   "incident demoted after delete",
@@ -445,26 +458,6 @@ export function gradeAppliedMatchesTable(
     ? fail(bad.slice(0, 4).join("; "))
     : ok(
         `${record.applied.length} applied rows match ${record.decisionId} (${record.status})`
-      );
-}
-
-/** Write mode: backlog-wide p0 count (actionable items) ≤ the policy's p0 ceiling. */
-export function gradeBacklogP0(
-  now: readonly SnapshotItem[],
-  p0Max: number
-): CheckResult {
-  const p0 = now.filter(
-    (i) =>
-      (ACTIONABLE_STATUSES as readonly string[]).includes(i.status) &&
-      i.priority === 0
-  );
-  return p0.length <= p0Max
-    ? ok(`${p0.length} p0 in the backlog (≤ ${p0Max})`)
-    : fail(
-        `${p0.length} p0 in the backlog (> ${p0Max}): ${p0
-          .slice(0, 6)
-          .map((i) => i.id)
-          .join(", ")}`
       );
 }
 

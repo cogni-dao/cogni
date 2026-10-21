@@ -64,8 +64,8 @@ governance:
   # extractGovernanceConfig still synthesizes it from activity_ledger (cron 0 0 * * *),
   # exactly as before this list existed — only a declared LEDGER_INGEST suppresses that.
   schedules:
-    # Work prioritizer (story.5096), PROPOSE mode: judges + ranks the backlog under the
-    # work_prioritization policy and files an EDO decision only when the plan changes (plus one
+    # Work prioritizer (story.5096), PROPOSE mode: judges + ranks the backlog against the hub's
+    # active goal-* atoms and files an EDO decision only when the plan changes (plus one
     # daily full review). Zero work-item mutations. Model = LiteLLM default_free (gpt-oss-120b,
     # is_free: true): the system tenant that bills governance runs holds zero credits, and the
     # preflight credit gate passes free models — a paid model would fail with insufficient_credits.
@@ -79,18 +79,11 @@ governance:
       model: gpt-oss-120b
       policy: work_prioritization
 
-# Work-prioritization policy (story.5096, prioritizer design v4 §1). Node-owned and
-# versioned; changing any value is a reviewed PR. Ceilings are caps, never targets.
-# objectives = hub ids of the approved goals. The graph is propose-only: every env proposes.
+# Work-prioritization policy (story.5096). Node-owned and versioned; changing it is a reviewed PR.
+# Goals are not listed here: the prioritizer reads the hub's active goal-* atoms (dao-goals-design),
+# and there are no capacity caps. The graph is propose-only: every env proposes.
 work_prioritization:
-  policy_version: v4.0
-  p0_max: 3
-  p1_budget: 6
-  p2_budget: 12
-  objectives:
-    - dao-goal-substrate-reliability
-    - dao-goal-node-mission
-    - dao-goal-autonomous-selection
+  policy_version: v5.0
   apply:
     # Per deploy environment (DEPLOY_ENVIRONMENT). Propose everywhere until a write path exists.
     mode:

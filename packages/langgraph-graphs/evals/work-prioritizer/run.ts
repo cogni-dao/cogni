@@ -11,8 +11,9 @@
  *   - OUTCOME_FROM_THE_GRAPH: each cycle's outcome is the `<prioritizer_report>` the graph pushes onto its own
  *     stream; `/api/v1/ai/runs` status is only the fallback. No log queries.
  *   - SCHEDULED_AT_SHA: the governance schedule must also have run the graph ≥ minScheduledCycles times at the SHA.
+ *   - GOALS_FIRST: the node must hold active `goal-*` atoms (dao-goals-design); none ⇒ INCONCLUSIVE before any cycle.
  *   - EXIT_CODE_IS_VERDICT: exit 0 only when every hard + behavioral check passes; 1 = FAIL;
- *     3 = INCONCLUSIVE (the candidate's buildSha changed mid-eval — another flight evicted the SHA).
+ *     3 = INCONCLUSIVE (no goal atoms, or the candidate's buildSha changed mid-eval — another flight evicted it).
  *   - WRITE_SECTION_SKIPPED: write-mode checks are listed as skipped (the graph is propose-only).
  *   - RESULTS_NOT_COMMITTED: `--out <file>` writes the JSON scorecard wherever the caller chooses.
  * Side-effects: IO (HTTP to the node; seeds + deletes one work item; optional --out file)
@@ -32,10 +33,11 @@ import {
 import {
   type CheckResult,
   type Fixture,
-  gradeCeilings,
   gradeCoverage,
   gradeDeltaCoverage,
   gradeGates,
+  gradeGoalCitation,
+  gradeGoalsReported,
   gradeHarmEvidence,
   gradeP0Precision,
   gradePriorReference,
@@ -74,6 +76,7 @@ interface CycleReport {
   judgedByModel: number;
   scope?: string | null;
   promptVersion?: string;
+  goalIds?: string[];
 }
 
 interface Cycle {
@@ -141,22 +144,9 @@ function loadPolicy() {
       "utf8"
     )
   ) as {
-    work_prioritization: {
-      policy_version: string;
-      p0_max: number;
-      p1_budget: number;
-      p2_budget: number;
-      objectives: string[];
-    };
+    work_prioritization: { policy_version: string };
   };
-  const wp = spec.work_prioritization;
-  const policy = {
-    policyVersion: wp.policy_version,
-    p0Max: wp.p0_max,
-    p1Budget: wp.p1_budget,
-    p2Budget: wp.p2_budget,
-    objectives: wp.objectives,
-  };
+  const policy = { policyVersion: spec.work_prioritization.policy_version };
   const trigger = (extra: Record<string, unknown> = {}) =>
     `PRIORITIZE\n\n\`\`\`json\n${JSON.stringify({ workPrioritization: policy, ...extra })}\n\`\`\``;
   return { policy, trigger };
@@ -182,6 +172,14 @@ async function decisionIds(): Promise<{ id: string; createdAt?: string }[]> {
   return body.items
     .filter((e) => /^work-prioritizer-\d{8}t\d{4}-decision$/.test(e.id))
     .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+}
+
+/** The node's active goal atoms: `goal-*` ids on the strategy shelf (dao-goals-design). */
+async function nodeGoalIds(): Promise<string[]> {
+  const body = await api<{ items: { id: string }[] }>(
+    "/api/v1/knowledge?domain=strategy&limit=500"
+  );
+  return body.items.map((e) => e.id).filter((id) => /^goal-/.test(id));
 }
 
 /** A hub entry's content, or null when the entry does not exist (404). */
@@ -311,14 +309,8 @@ async function scheduledRuns(since: number): Promise<number> {
   ).length;
 }
 
-class EvictedError extends Error {
-  constructor(
-    readonly at: string,
-    readonly sha: string
-  ) {
-    super(`candidate evicted at ${at} by ${sha}`);
-  }
-}
+/** The SHA under test was not what we measured, or the node cannot be measured yet — never a FAIL. */
+class InconclusiveError extends Error {}
 
 /** EVICTION_GUARD: the SHA under test must still be live; otherwise the run is inconclusive. */
 async function assertSha(underTest: string): Promise<void> {
@@ -326,7 +318,10 @@ async function assertSha(underTest: string): Promise<void> {
     .then((r) => r.json())
     .catch(() => ({}))) as { buildSha?: string };
   const sha = v.buildSha ?? "unknown";
-  if (sha !== underTest) throw new EvictedError(new Date().toISOString(), sha);
+  if (sha !== underTest)
+    throw new InconclusiveError(
+      `candidate evicted at ${new Date().toISOString()} by ${sha}`
+    );
 }
 
 /** The hard checks every filed decision must pass (coverage is graded per cycle kind). */
@@ -337,7 +332,7 @@ function hardChecks(
   hadPrior: boolean
 ): Record<string, CheckResult> {
   return {
-    ceilings: gradeCeilings(payload),
+    "goal citation": gradeGoalCitation(payload),
     rationale: gradeRationale(payload),
     gates: gradeGates(payload, snap, fixture),
     "prior reference": gradePriorReference(payload, hadPrior),
@@ -346,7 +341,13 @@ function hardChecks(
 }
 
 const none = (reason: string): CheckResult => ({ pass: false, reason });
-const HARD = ["ceilings", "rationale", "gates", "prior reference", "unjudged"];
+const HARD = [
+  "goal citation",
+  "rationale",
+  "gates",
+  "prior reference",
+  "unjudged",
+];
 const allNone = (reason: string) =>
   Object.fromEntries(HARD.map((k) => [k, none(reason)]));
 
@@ -355,6 +356,11 @@ async function runEval(underTest: string): Promise<void> {
   await assertSha(underTest); // EXPECTED_SHA must be live before anything runs
   const { policy, trigger } = loadPolicy();
   const landedAt = LANDED_AT ? Date.parse(LANDED_AT) : startedAt;
+  const goalIds = await nodeGoalIds();
+  if (goalIds.length === 0)
+    throw new InconclusiveError(
+      `no goal-* atoms in the strategy domain on ${BASE} — seed the node's goals first`
+    );
   const notes: string[] = [];
   const before = await snapshot();
   const hadPrior = (await decisionIds()).length > 0;
@@ -417,6 +423,10 @@ async function runEval(underTest: string): Promise<void> {
           : allNone("no decision (cycle 3)"),
       ],
     ]),
+    no_goals: gradeGoalsReported(
+      c1.report?.goalIds ?? c1.payload?.goals ?? [],
+      goalIds
+    ),
     "zero writes (propose)": gradeZeroWrites(before, afterStability),
     "stability (2 cycles)": gradeStability(
       c1.report && c1.payload
@@ -470,8 +480,8 @@ async function main(): Promise<void> {
   try {
     await runEval(underTest);
   } catch (error) {
-    if (!(error instanceof EvictedError)) throw error;
-    // Never FAIL on eviction — the SHA under test was not what we measured.
+    if (!(error instanceof InconclusiveError)) throw error;
+    // Never FAIL on eviction or missing goals — the SHA under test was not what we measured.
     const line = `INCONCLUSIVE: ${error.message} (SHA under test ${underTest})`;
     console.log(line);
     if (OUT)

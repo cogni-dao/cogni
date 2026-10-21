@@ -80,15 +80,11 @@ describe("work_prioritization policy schema", () => {
     governance: { chain_id: "8453" },
   };
   const wp = {
-    policy_version: "v4.0",
-    p0_max: 3,
-    p1_budget: 6,
-    p2_budget: 12,
-    objectives: ["dao-goal-a"],
+    policy_version: "v5.0",
     apply: { mode: { default: "propose", "candidate-a": "write" } },
   };
 
-  it("parses with per-env modes and defaults hypotheses_per_day to 3", () => {
+  it("parses with per-env modes; goals and caps are not policy (dao-goals-design)", () => {
     const policy = extractWorkPrioritizationPolicy(
       parseSpec({ ...base, work_prioritization: wp })
     );
@@ -96,7 +92,11 @@ describe("work_prioritization policy schema", () => {
       default: "propose",
       "candidate-a": "write",
     });
-    expect(policy?.hypothesesPerDay).toBe(3);
+    expect(policy).toEqual({
+      policyVersion: "v5.0",
+      applyMode: "propose",
+      applyModes: { default: "propose", "candidate-a": "write" },
+    });
   });
 
   it("rejects an unknown mode and a missing default", () => {
@@ -164,24 +164,14 @@ describe("operator runtime repo-spec governance (nodes/operator/.cogni)", () => 
       model: "gpt-oss-120b",
       payload: {
         workPrioritization: {
-          policyVersion: "v4.0",
-          p0Max: 3,
-          p1Budget: 6,
-          p2Budget: 12,
-          objectives: [
-            "dao-goal-substrate-reliability",
-            "dao-goal-node-mission",
-            "dao-goal-autonomous-selection",
-          ],
+          policyVersion: "v5.0",
           applyMode: "propose",
           applyModes: { default: "propose" },
-          hypothesesPerDay: 3,
         },
       },
     });
     expect(extractWorkPrioritizationPolicy(spec)).toMatchObject({
-      policyVersion: "v4.0",
-      p0Max: 3,
+      policyVersion: "v5.0",
       applyMode: "propose",
     });
   });

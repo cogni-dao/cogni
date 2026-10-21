@@ -3,24 +3,21 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/rank`
- * Purpose: "lexicographic heuristic v1" — pure, deterministic priority assignment from judgments (design v4 §1–§2.3).
- * Scope: Eligibility gates, ordering, ceilings, hysteresis, pins, and rank numbers; does not call tools or LLMs.
+ * Purpose: "lexicographic heuristic v2" — pure, deterministic priority assignment from judgments (dao-goals-design).
+ * Scope: Eligibility gates, ordering, pins, and rank numbers; does not call tools or LLMs.
  * Invariants:
- *   - GATES_FIRST: fixture/duplicate/superseded/no-objective-fit ⇒ p4 (a duplicate group keeps its canonical,
+ *   - GATES_FIRST: fixture/duplicate/superseded/no-goal-fit ⇒ p4 (a duplicate group keeps its canonical,
  *     lowest-id member ranked normally); blocked or needs_triage ⇒ never p0/p1, except a needs_triage live
- *     incident (expedite + evidenced ≤7-day harm); instruction-like item text (suspected injection) ⇒ never p0/p1;
- *     p0 needs a 7-day harm with evidence; p0/p1 need an approved objective and an evidenced why-now.
- *   - ORDER: service class → max approved-objective impact → effort (S<M<L) → item id (exact final tiebreak).
- *   - CEILINGS_NOT_TARGETS: p0/p1/p2 are filled only with eligible items up to their ceilings; p1 is
- *     independent of how many p0 exist; an empty p0 is healthy.
- *   - HYSTERESIS: a challenger displaces an incumbent p0/p1 only if strictly higher on service class or impact;
- *     incumbents come from the prior decision's table when there is one.
+ *     incident (expedite + evidenced ≤7-day harm); instruction-like item text (suspected injection) ⇒ never p0/p1.
+ *   - P0P1_CITES_GOAL: p0/p1 need an active goal (impact ≥ 1 on a listed `goal-*` id, carried as `goal`) and an
+ *     evidenced why-now; p0 also needs an evidenced harm within 7 days.
+ *   - NO_CAPS: every eligible item takes its level — no ceilings (privileged p0/p1 removes inflation at its source).
+ *   - ORDER: service class → max goal impact → effort (S<M<L) → item id (exact final tiebreak).
  *   - TRACKERS_BELOW_CHILDREN: an item with an actionable child in the snapshot is never p0/p1 (the child takes it).
- *   - PINS: `priority:pinned` items never move, count against their level's ceiling; overflow is reported and
- *     admits no new items to that level.
+ *   - PINS: `priority:pinned` items never move.
  *   - EXACTLY_ONE_ROW: every snapshot item gets exactly one row with a unique rank 1..N.
  * Side-effects: none
- * Links: .context/prioritizer-design-v4.md, schema.ts (RankedRow)
+ * Links: dao-goals-design, schema.ts (RankedRow)
  * @public
  */
 
@@ -51,39 +48,17 @@ export interface RankItem {
   readonly parentId?: string;
   /** Current rank (null = unset). */
   readonly rank?: number | null;
-  /**
-   * INCUMBENT_FROM_PRIOR_DECISION: the level the prior decision assigned (propose mode never
-   * writes, so item fields are stale). Undefined → the item's current priority is the incumbent.
-   */
-  readonly incumbent?: number | null;
-}
-
-export interface RankPolicy {
-  readonly p0Max: number;
-  readonly p1Budget: number;
-  readonly p2Budget: number;
-  readonly objectives: readonly string[];
 }
 
 export interface RankInput {
   readonly items: readonly RankItem[];
   readonly judgments: ReadonlyMap<string, ItemJudgment>;
-  readonly policy: RankPolicy;
+  /** Active goal ids (`goal-*`) — the only things impact may cite. */
+  readonly goals: readonly string[];
   /** Ids fetched this cycle (work items + hub entries) — the only admissible evidence. */
   readonly knownEvidenceIds: ReadonlySet<string>;
   readonly duplicateGroups: readonly (readonly string[])[];
   readonly blockerCycleMembers: ReadonlySet<string>;
-}
-
-export interface Overflow {
-  readonly level: number;
-  readonly pinned: number;
-  readonly ceiling: number;
-}
-
-export interface RankResult {
-  readonly rows: RankedRow[];
-  readonly overflow: Overflow[];
 }
 
 const FIXTURE_RE =
@@ -136,7 +111,7 @@ interface Scored {
   readonly item: RankItem;
   readonly judgment: ItemJudgment | undefined;
   readonly maxImpact: number;
-  readonly objective: string | null;
+  readonly goal: string | null;
   readonly serviceRank: number;
   readonly effortRank: number;
   readonly pinned: boolean;
@@ -160,24 +135,16 @@ export function compareScored(
   );
 }
 
-/** Hysteresis test: strictly higher on service class OR on objective impact. */
-function strictlyHigher(challenger: Scored, incumbent: Scored): boolean {
-  return (
-    challenger.serviceRank < incumbent.serviceRank ||
-    challenger.maxImpact > incumbent.maxImpact
-  );
-}
-
 function score(input: RankInput, item: RankItem): Scored {
   const j = input.judgments.get(item.id);
   const reasons: string[] = [];
   let maxImpact = 0;
-  let objective: string | null = null;
-  for (const obj of input.policy.objectives) {
-    const v = j?.impact[obj] ?? 0;
+  let goal: string | null = null;
+  for (const g of input.goals) {
+    const v = j?.impact[g] ?? 0;
     if (v > maxImpact) {
       maxImpact = v;
-      objective = obj;
+      goal = g;
     }
   }
   const pinned = item.labels.includes(PINNED_LABEL);
@@ -188,7 +155,7 @@ function score(input: RankInput, item: RankItem): Scored {
     item,
     judgment: j,
     maxImpact,
-    objective,
+    goal,
     serviceRank: j ? SERVICE_ORDER[j.serviceClass] : 9,
     effortRank: j ? EFFORT_ORDER[j.effort] : 9,
     pinned,
@@ -223,7 +190,7 @@ function score(input: RankInput, item: RankItem): Scored {
   if (isFixture(item)) reasons.push("fixture_p4");
   if (isDuplicate) reasons.push("duplicate_p4", `duplicate_of:${canonical}`);
   if (superseded) reasons.push("superseded_p4");
-  if (j && maxImpact === 0) reasons.push("no_objective_fit_p4");
+  if (j && maxImpact === 0) reasons.push("no_goal_fit_p4");
   if (reasons.length > 0) {
     s.p4 = true;
     return s;
@@ -261,112 +228,37 @@ function score(input: RankInput, item: RankItem): Scored {
   return s;
 }
 
-/**
- * Fill one level from `pool` up to `capacity`, with hysteresis protecting incumbents
- * (items currently at `level`). Returns the chosen ids in order.
- */
-function fillLevel(
-  pool: Scored[],
-  capacity: number,
-  level: number,
-  useHysteresis: boolean
-): Scored[] {
-  const sorted = [...pool].sort(compareScored);
-  const selected = sorted.slice(0, Math.max(0, capacity));
-  if (!useHysteresis || capacity <= 0) return selected;
-
-  const incumbentLevel = (s: Scored) =>
-    s.item.incumbent !== undefined ? s.item.incumbent : s.item.priority;
-  const incumbents = sorted.filter(
-    (s) => incumbentLevel(s) === level && !selected.includes(s)
-  );
-  for (const inc of incumbents) {
-    const challengers = selected
-      .filter((s) => incumbentLevel(s) !== level)
-      .sort(compareScored);
-    const weakest = challengers[challengers.length - 1];
-    if (weakest && !strictlyHigher(weakest, inc)) {
-      selected[selected.indexOf(weakest)] = inc;
-      inc.reasons.push(`hysteresis_kept_p${level}`);
-    }
-  }
-  return selected.sort(compareScored);
-}
-
-/** Run the heuristic. Pure: same input → same output. */
-export function rankItems(input: RankInput): RankResult {
+/** Run the heuristic. Pure: same input → same output. NO_CAPS: every eligible item takes its level. */
+export function rankItems(input: RankInput): RankedRow[] {
   const scored = input.items.map((item) => score(input, item));
-  const levelOf = new Map<Scored, number>();
-  const overflow: Overflow[] = [];
-
-  // PINS — never move; count against ceilings.
-  const pinnedAt = [0, 0, 0, 0, 0];
-  for (const s of scored) {
-    if (!s.pinned) continue;
-    const lvl = Math.min(4, Math.max(0, s.item.priority ?? 3));
-    levelOf.set(s, lvl);
-    pinnedAt[lvl] = (pinnedAt[lvl] ?? 0) + 1;
-  }
-  const ceilings = [
-    input.policy.p0Max,
-    input.policy.p1Budget,
-    input.policy.p2Budget,
-  ];
-  const capacity = ceilings.map((c, lvl) => {
-    const pinned = pinnedAt[lvl] ?? 0;
-    if (pinned > c) overflow.push({ level: lvl, pinned, ceiling: c });
-    return Math.max(0, c - pinned);
-  });
-
-  for (const s of scored) if (!s.pinned && s.p4) levelOf.set(s, 4);
-  const open = () => scored.filter((s) => !levelOf.has(s));
-
-  const p0 = fillLevel(
-    open().filter((s) => s.p0Eligible),
-    capacity[0] ?? 0,
-    0,
-    true
-  );
-  for (const s of p0) levelOf.set(s, 0);
-  const p1 = fillLevel(
-    open().filter((s) => s.p1Eligible),
-    capacity[1] ?? 0,
-    1,
-    true
-  );
-  for (const s of p1) levelOf.set(s, 1);
-  const p2 = fillLevel(
-    open().filter((s) => s.p2Eligible),
-    capacity[2] ?? 0,
-    2,
-    false
-  );
-  for (const s of p2) levelOf.set(s, 2);
-  for (const s of open()) {
-    if (s.p0Eligible || s.p1Eligible || s.p2Eligible)
-      s.reasons.push("ceiling_full");
-    levelOf.set(s, 3);
-  }
-
-  const ordered = [...scored].sort(
-    (a, b) =>
-      (levelOf.get(a) ?? 3) - (levelOf.get(b) ?? 3) || compareScored(a, b)
-  );
-  const rows: RankedRow[] = ordered.map((s, i) => ({
-    itemId: s.item.id,
-    revision: s.item.revision,
-    from: s.item.priority ?? null,
-    fromRank: s.item.rank ?? null,
-    to: levelOf.get(s) ?? 3,
-    rank: i + 1,
-    pinned: s.pinned,
-    serviceClass: s.judgment?.serviceClass ?? null,
-    maxImpact: s.maxImpact,
-    objective: s.objective,
-    effort: s.judgment?.effort ?? null,
-    whyNow: s.judgment?.whyNow ?? null,
-    harmIfWait: s.judgment?.harmIfWait ?? null,
-    reasons: s.reasons,
-  }));
-  return { rows, overflow };
+  const levelOf = (s: Scored) =>
+    s.pinned
+      ? Math.min(4, Math.max(0, s.item.priority ?? 3))
+      : s.p4
+        ? 4
+        : s.p0Eligible
+          ? 0
+          : s.p1Eligible
+            ? 1
+            : s.p2Eligible
+              ? 2
+              : 3;
+  return [...scored]
+    .sort((a, b) => levelOf(a) - levelOf(b) || compareScored(a, b))
+    .map((s, i) => ({
+      itemId: s.item.id,
+      revision: s.item.revision,
+      from: s.item.priority ?? null,
+      fromRank: s.item.rank ?? null,
+      to: levelOf(s),
+      rank: i + 1,
+      pinned: s.pinned,
+      serviceClass: s.judgment?.serviceClass ?? null,
+      maxImpact: s.maxImpact,
+      goal: s.goal,
+      effort: s.judgment?.effort ?? null,
+      whyNow: s.judgment?.whyNow ?? null,
+      harmIfWait: s.judgment?.harmIfWait ?? null,
+      reasons: s.reasons,
+    }));
 }

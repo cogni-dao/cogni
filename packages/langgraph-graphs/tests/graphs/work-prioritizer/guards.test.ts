@@ -21,6 +21,7 @@ import {
   type FetchedWorkItem,
   findBlockerCycles,
   findDuplicateTitleGroups,
+  listActiveGoalsViaSearch,
 } from "../../../src/graphs/work-prioritizer/context";
 import {
   hasHubContext,
@@ -108,20 +109,18 @@ describe("schemas (ENUMS_NOT_FLOATS)", () => {
 
 describe("policy (POLICY_FROM_TRIGGER)", () => {
   const policy = {
-    policyVersion: "v4.0",
-    p0Max: 3,
-    p1Budget: 6,
-    p2Budget: 12,
-    objectives: ["dao-goal-a"],
+    policyVersion: "v5.0",
     applyMode: "write",
+    // Pre-v5 fields the schedule may still send: caps and objectives are no longer policy.
+    p0Max: 3,
+    objectives: ["dao-goal-a"],
   };
   const block = (v: unknown) =>
     `PRIORITIZE\n\n\`\`\`json\n${JSON.stringify(v)}\n\`\`\``;
 
   it("reads the schedule-appended policy block; ignores applyMode (PROPOSE_ONLY)", () => {
     const out = policyFromTrigger(block({ workPrioritization: policy }));
-    expect(out.policy?.objectives).toEqual(["dao-goal-a"]);
-    expect(out.policy).not.toHaveProperty("applyMode");
+    expect(out.policy).toEqual({ policyVersion: "v5.0" });
     expect(out.fullReview).toBe(false);
   });
 
@@ -132,16 +131,57 @@ describe("policy (POLICY_FROM_TRIGGER)", () => {
     ).toBe(true);
   });
 
-  it("POLICY_REQUIRED: absent, invalid, or objective-less policy ⇒ null", () => {
+  it("POLICY_REQUIRED: an absent or version-less policy ⇒ null", () => {
     expect(policyFromTrigger("PRIORITIZE").policy).toBeNull();
     expect(
-      policyFromTrigger(block({ workPrioritization: { p0Max: "x" } })).policy
+      policyFromTrigger(block({ workPrioritization: { p0Max: 3 } })).policy
     ).toBeNull();
-    expect(
-      policyFromTrigger(
-        block({ workPrioritization: { ...policy, objectives: [] } })
-      ).policy
-    ).toBeNull();
+  });
+});
+
+describe("listActiveGoals stub (task.5287 seam)", () => {
+  it("keeps only goal-* ids from the strategy 'Goal:' search and passes the shape through", async () => {
+    const calls: unknown[] = [];
+    const list = listActiveGoalsViaSearch(async (args) => {
+      calls.push(args);
+      return {
+        results: [
+          {
+            id: "goal-substrate-reliability",
+            domain: "strategy",
+            title: "Goal: reliable",
+            content: "KPI x",
+          },
+          {
+            id: "dao-goal-legacy",
+            domain: "strategy",
+            title: "Goal: legacy",
+            content: "c",
+          },
+          {
+            id: "work-prioritizer-20261020t1100-decision",
+            domain: "strategy",
+            title: "Goal: no",
+            content: "c",
+          },
+        ],
+      };
+    });
+    expect(await list()).toEqual([
+      {
+        id: "goal-substrate-reliability",
+        title: "Goal: reliable",
+        content: "KPI x",
+      },
+    ]);
+    expect(calls).toEqual([{ domain: "strategy", query: "Goal:", limit: 20 }]);
+  });
+
+  it("propagates a read failure (the graph turns it into goals_error)", async () => {
+    const list = listActiveGoalsViaSearch(async () => {
+      throw new Error("core__knowledge_search: busy");
+    });
+    await expect(list()).rejects.toThrow("busy");
   });
 });
 

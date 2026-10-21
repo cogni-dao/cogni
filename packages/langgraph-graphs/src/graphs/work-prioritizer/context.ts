@@ -184,6 +184,36 @@ export function parseEntries(
   return out;
 }
 
+/** An approved DAO goal (dao-goals-design): a merged `hypothesis` with id `goal-<slug>`, not deprecated. */
+export interface ActiveGoal {
+  readonly id: string;
+  readonly title: string;
+  readonly content: string;
+}
+
+/** Ids of goal atoms. */
+export const GOAL_ID_RE = /^goal-[a-z0-9][a-z0-9-]*$/;
+/** MAX_THREE_GOALS: more active goals than this is a loud error, never a silent truncation. */
+export const MAX_ACTIVE_GOALS = 3;
+
+/**
+ * STUB of knowledge-store `listActiveGoals(): Promise<readonly ActiveGoal[]>` (task.5287 ships the real one
+ * with this exact signature; swap the body). Goal titles start "Goal:" (dao-goals-design), so it searches the
+ * `strategy` shelf for that through the graph's own knowledge_search (`search` throws on a tool error) and
+ * keeps `goal-*` ids. The tool exposes neither entry type nor deprecation, so the id prefix is trusted.
+ */
+export function listActiveGoalsViaSearch(
+  search: (args: Record<string, unknown>) => Promise<unknown>
+): () => Promise<readonly ActiveGoal[]> {
+  return async () =>
+    parseEntries(
+      await search({ domain: "strategy", query: "Goal:", limit: 20 }),
+      "edo"
+    )
+      .filter((e) => GOAL_ID_RE.test(e.id))
+      .map(({ id, title, content }) => ({ id, title, content }));
+}
+
 /** Dedupe items by id; when an id repeats, the higher revision wins. */
 export function dedupeWorkItems(
   items: readonly FetchedWorkItem[]

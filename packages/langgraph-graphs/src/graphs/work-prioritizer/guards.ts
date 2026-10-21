@@ -20,18 +20,16 @@ export const hasHubContext = (c: GatheredContext["contextConsumed"]) =>
 
 /**
  * EDO_DOMAIN_FOLLOWS_CONTEXT: file EDO rows where the node keeps its goals — the domain of the first
- * approved objective fetched this cycle, else the first knowledge entry's, else "strategy".
+ * active goal fetched this cycle, else the first knowledge entry's, else "strategy".
  */
 export function selectEdoDomain(
-  objectives: readonly string[],
+  goals: readonly string[],
   entries: readonly FetchedEntry[]
 ): string {
   const usable = (e: FetchedEntry | undefined) =>
     e && e.domain !== "unknown" ? e.domain : undefined;
   return (
-    objectives
-      .map((id) => usable(entries.find((e) => e.id === id)))
-      .find(Boolean) ??
+    goals.map((id) => usable(entries.find((e) => e.id === id))).find(Boolean) ??
     usable(
       entries.find((e) => e.plane === "knowledge" && e.domain !== "unknown")
     ) ??

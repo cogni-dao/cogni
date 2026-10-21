@@ -20,9 +20,8 @@ import {
 } from "../../../src/graphs/work-prioritizer/rank";
 import type { ItemJudgment } from "../../../src/graphs/work-prioritizer/schema";
 
-const R = "dao-goal-substrate-reliability";
-const M = "dao-goal-node-mission";
-const POLICY = { p0Max: 3, p1Budget: 6, p2Budget: 12, objectives: [R, M] };
+const R = "goal-substrate-reliability";
+const M = "goal-node-mission";
 
 function item(id: string, o: Partial<RankItem> = {}): RankItem {
   return {
@@ -59,21 +58,22 @@ function run(
   judgments: ItemJudgment[],
   o: Partial<RankInput> = {}
 ) {
-  return rankItems({
+  const rows = rankItems({
     items,
     judgments: new Map(judgments.map((j) => [j.itemId, j])),
-    policy: POLICY,
+    goals: [R, M],
     knownEvidenceIds: new Set(items.map((i) => i.id)),
     duplicateGroups: [],
     blockerCycleMembers: new Set(),
     ...o,
   });
+  return { rows };
 }
 
 const to = (result: ReturnType<typeof run>, id: string) =>
   result.rows.find((r) => r.itemId === id)?.to;
 
-describe("lexicographic heuristic v1", () => {
+describe("lexicographic heuristic v2 (goals, no caps)", () => {
   it("EXACTLY_ONE_ROW: every item gets one row and ranks are 1..N", () => {
     const items = ["a", "b", "c", "d"].map((id) => item(`task.${id}`));
     const result = run(
@@ -102,7 +102,7 @@ describe("lexicographic heuristic v1", () => {
     ]);
   });
 
-  it("p0 needs a 7-day evidenced harm; zero p0 still plans p1 (ceilings are not targets)", () => {
+  it("p0 needs a 7-day evidenced harm; zero p0 still plans p1", () => {
     const items = ["a", "b"].map((id) => item(`bug.${id}`));
     const result = run(items, [
       judgment("bug.a", { harmDays: null }),
@@ -173,54 +173,40 @@ describe("lexicographic heuristic v1", () => {
     expect(result.rows.map((r) => r.to)).toEqual([2, 2]);
   });
 
-  it("ceilings: at most 3 p0, 6 p1, 12 p2; the rest p3", () => {
+  it("NO_CAPS: every eligible item takes its level; each p0/p1 carries the goal it serves", () => {
     const items = Array.from({ length: 25 }, (_, i) =>
       item(`task.${String(i).padStart(2, "0")}`)
     );
     const result = run(
       items,
-      items.map((i) => judgment(i.id, { harmDays: 1 }))
+      items.map((i, k) =>
+        judgment(i.id, {
+          harmDays: k < 10 ? 1 : null,
+          impact: k % 2 ? { [M]: 3 } : { [R]: 2 },
+        })
+      )
     );
     const counts = [0, 1, 2, 3, 4].map(
       (l) => result.rows.filter((r) => r.to === l).length
     );
-    expect(counts).toEqual([3, 6, 12, 4, 0]);
+    expect(counts).toEqual([10, 15, 0, 0, 0]);
+    expect(
+      result.rows.every(
+        (r) => r.goal === (Number(r.itemId.slice(5)) % 2 ? M : R)
+      )
+    ).toBe(true);
   });
 
-  it("HYSTERESIS: an equal challenger does not displace an incumbent p0", () => {
-    const items = [
-      item("task.a"),
-      item("task.b"),
-      item("task.c"),
-      item("task.z", { priority: 0 }),
-    ];
+  it("P0P1_CITES_GOAL: impact on a non-goal key is no goal fit (p4)", () => {
     const result = run(
-      items,
-      items.map((i) => judgment(i.id, { harmDays: 1 }))
+      [item("task.a")],
+      [judgment("task.a", { harmDays: 1, impact: { "dao-goal-legacy": 3 } })]
     );
-    expect(to(result, "task.z")).toBe(0);
-    expect(to(result, "task.c")).toBe(1);
-    expect(result.rows.find((r) => r.itemId === "task.z")?.reasons).toContain(
-      "hysteresis_kept_p0"
-    );
-  });
-
-  it("HYSTERESIS: a strictly higher service class displaces an incumbent (responsiveness)", () => {
-    const items = [
-      item("task.a", { priority: 0 }),
-      item("task.b", { priority: 0 }),
-      item("task.c", { priority: 0 }),
-      item("bug.incident"),
-    ];
-    const result = run(items, [
-      judgment("task.a", { harmDays: 1 }),
-      judgment("task.b", { harmDays: 1 }),
-      judgment("task.c", { harmDays: 1 }),
-      judgment("bug.incident", { harmDays: 0, serviceClass: "expedite" }),
-    ]);
-    expect(to(result, "bug.incident")).toBe(0);
-    expect(result.rows.filter((r) => r.to === 0)).toHaveLength(3);
-    expect(to(result, "task.c")).toBe(1);
+    expect(result.rows[0]).toMatchObject({
+      to: 4,
+      goal: null,
+      reasons: ["no_goal_fit_p4"],
+    });
   });
 
   it("a newly blocked incumbent leaves p0", () => {
@@ -231,18 +217,20 @@ describe("lexicographic heuristic v1", () => {
     expect(to(result, "task.a")).toBe(2);
   });
 
-  it("PINS over a ceiling: pinned items never move, overflow is reported, no new items enter", () => {
-    const pinned = ["a", "b", "c", "d"].map((id) =>
-      item(`task.pin-${id}`, { priority: 0, labels: ["priority:pinned"] })
+  it("PINS: pinned items never move", () => {
+    const pinned = item("task.pin", {
+      priority: 3,
+      labels: ["priority:pinned"],
+    });
+    const result = run(
+      [pinned, item("bug.urgent")],
+      [
+        judgment("task.pin", { harmDays: 0, serviceClass: "expedite" }),
+        judgment("bug.urgent", { harmDays: 0, serviceClass: "expedite" }),
+      ]
     );
-    const items = [...pinned, item("bug.urgent")];
-    const result = run(items, [
-      ...pinned.map((p) => judgment(p.id, { impactR: 0 })),
-      judgment("bug.urgent", { harmDays: 0, serviceClass: "expedite" }),
-    ]);
-    for (const p of pinned) expect(to(result, p.id)).toBe(0);
-    expect(result.overflow).toEqual([{ level: 0, pinned: 4, ceiling: 3 }]);
-    expect(to(result, "bug.urgent")).toBe(1);
+    expect(to(result, "task.pin")).toBe(3);
+    expect(to(result, "bug.urgent")).toBe(0);
   });
 
   it("is deterministic: same input, same table", () => {
@@ -266,22 +254,6 @@ describe("lexicographic heuristic v1", () => {
     );
   });
 
-  it("INCUMBENT_FROM_PRIOR_DECISION: hysteresis protects the prior decision's p0, not the stale field", () => {
-    const items = [
-      item("task.a", { incumbent: null }),
-      item("task.b", { incumbent: null }),
-      item("task.c", { incumbent: null }),
-      // Stale item field says nothing; the prior decision made it p0.
-      item("task.z", { priority: null, incumbent: 0 }),
-    ];
-    const result = run(
-      items,
-      items.map((i) => judgment(i.id, { harmDays: 1 }))
-    );
-    expect(to(result, "task.z")).toBe(0);
-    expect(to(result, "task.c")).toBe(1);
-  });
-
   it("DUPLICATES_KEEP_CANONICAL: the canonical member is ranked normally even if the model calls it superseded by its duplicate", () => {
     const items = [
       item("bug.5001", { title: "Autoheal" }),
@@ -302,7 +274,7 @@ describe("lexicographic heuristic v1", () => {
     });
   });
 
-  it("INCIDENT_EXCEPTION: a needs_triage live incident (expedite + evidenced ≤7d harm) reaches p0 and displaces a standard incumbent", () => {
+  it("INCIDENT_EXCEPTION: a needs_triage live incident (expedite + evidenced ≤7d harm) reaches p0", () => {
     const items = [
       item("bug.a", { priority: 0 }),
       item("bug.b", { priority: 0 }),

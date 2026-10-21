@@ -17,11 +17,11 @@ import {
   cycleStampsForRun,
   type Fixture,
   gradeAppliedMatchesTable,
-  gradeBacklogP0,
-  gradeCeilings,
   gradeCoverage,
   gradeDeltaCoverage,
   gradeGates,
+  gradeGoalCitation,
+  gradeGoalsReported,
   gradeHarmEvidence,
   gradeIncidentApplied,
   gradeIncidentDemoted,
@@ -41,7 +41,7 @@ import type {
   RankedRow,
 } from "../../src/graphs/work-prioritizer/schema";
 
-const R = "dao-goal-substrate-reliability";
+const R = "goal-substrate-reliability";
 
 function row(
   itemId: string,
@@ -57,7 +57,7 @@ function row(
     pinned: false,
     serviceClass: "standard",
     maxImpact: 2,
-    objective: R,
+    goal: R,
     effort: "M",
     whyNow: { text: "w", evidenceId: itemId },
     harmIfWait: {
@@ -75,22 +75,20 @@ function decision(
   o: Partial<DecisionPayload> = {}
 ): DecisionPayload {
   return {
-    schemaVersion: "work-prioritizer.decision/v1",
+    schemaVersion: "work-prioritizer.decision/v2",
     status: "planned",
     mode: "propose",
     scope: "full",
     reviewedAt: "2026-10-20T00:01:00.000Z",
     delta: table.map((r) => r.itemId),
-    heuristic: "lexicographic heuristic v1",
+    heuristic: "lexicographic heuristic v2",
     policyVersion: "v4.0",
     promptVersion: "p",
     modelRef: "m",
     cycleId: "c",
     snapshotId: "s",
     priorDecisionId: "work-prioritizer-20261020t1000-decision",
-    objectives: [R],
-    ceilings: { p0: 1, p1: 1, p2: 1 },
-    overflow: [],
+    goals: [R],
     plan: [],
     table,
     diffVsPrior: [],
@@ -134,7 +132,8 @@ const FIXTURE: Fixture = {
 describe("work-prioritizer graders", () => {
   it("a good decision passes every hard check", () => {
     expect(gradeCoverage(GOOD, SNAPSHOT).pass).toBe(true);
-    expect(gradeCeilings(GOOD).pass).toBe(true);
+    expect(gradeGoalCitation(GOOD).pass).toBe(true);
+    expect(gradeGoalsReported(GOOD.goals, [R]).pass).toBe(true);
     expect(gradeRationale(GOOD).pass).toBe(true);
     expect(gradeGates(GOOD, SNAPSHOT, FIXTURE).pass).toBe(true);
     expect(gradePriorReference(GOOD, true).pass).toBe(true);
@@ -206,21 +205,33 @@ describe("work-prioritizer graders", () => {
     expect(gradeDeltaCoverage(good, null, snap).pass).toBe(false);
   });
 
-  it("ceilings fail when a level exceeds its cap, unless pin overflow is reported", () => {
-    const over = decision([row("bug.1", 0), row("bug.2", 0), row("task.3", 2)]);
-    expect(gradeCeilings(over).pass).toBe(false);
+  it("goal citation: every p0/p1 cites a goal-* id from the cycle's active set", () => {
     expect(
-      gradeCeilings({
-        ...over,
-        overflow: [{ level: 0, pinned: 2, ceiling: 1 }],
-      }).pass
+      gradeGoalCitation(decision([row("bug.1", 1, { goal: "goal-other" })]))
+        .reason
+    ).toContain("bug.1 at p1 cites goal-other");
+    expect(
+      gradeGoalCitation(decision([row("bug.1", 0, { goal: null })])).pass
+    ).toBe(false);
+    expect(
+      gradeGoalCitation(
+        decision([row("bug.1", 1, { goal: "dao-goal-x" })], {
+          goals: ["dao-goal-x"],
+        })
+      ).pass
+    ).toBe(false);
+    expect(
+      gradeGoalCitation(decision([row("bug.1", 3, { goal: null })])).pass
     ).toBe(true);
   });
 
-  it("rationale fails for an unapproved objective, unevidenced why-now, or p0 without ≤7-day harm", () => {
-    expect(
-      gradeRationale(decision([row("bug.1", 1, { objective: "other" })])).pass
-    ).toBe(false);
+  it("no_goals (live half): the cycle reports non-empty goal-* ids that are active atoms on the node", () => {
+    expect(gradeGoalsReported([], [R]).pass).toBe(false);
+    expect(gradeGoalsReported(["dao-goal-a"], ["dao-goal-a"]).pass).toBe(false);
+    expect(gradeGoalsReported(["goal-ghost"], [R]).pass).toBe(false);
+  });
+
+  it("rationale fails for an unevidenced why-now, or p0 without ≤7-day harm", () => {
     expect(
       gradeRationale(
         decision([
@@ -238,7 +249,7 @@ describe("work-prioritizer graders", () => {
       ).pass
     ).toBe(false);
     expect(
-      gradeRationale(decision([row("bug.1", 3, { objective: null })])).pass
+      gradeRationale(decision([row("bug.1", 3, { goal: null })])).pass
     ).toBe(true);
   });
 
@@ -424,21 +435,6 @@ describe("work-prioritizer graders", () => {
       ]).pass
     ).toBe(true);
     expect(gradeAppliedMatchesTable(null, GOOD, live).pass).toBe(false);
-  });
-
-  it("write mode: backlog-wide p0 count must not exceed the ceiling", () => {
-    const items = (n: number) =>
-      Array.from({ length: n }, (_, i) => ({
-        id: `b.${i}`,
-        status: "needs_implement",
-        priority: 0,
-      }));
-    expect(gradeBacklogP0(items(3), 3).pass).toBe(true);
-    expect(gradeBacklogP0(items(4), 3).pass).toBe(false);
-    expect(
-      gradeBacklogP0([{ id: "x", status: "done", priority: 0 }, ...items(3)], 3)
-        .pass
-    ).toBe(true);
   });
 
   it("unjudged must stay ≤ 10% of rows", () => {

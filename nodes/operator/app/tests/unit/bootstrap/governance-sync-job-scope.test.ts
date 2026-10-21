@@ -164,17 +164,12 @@ describe("withEnvApplyMode (APPLY_MODE_BY_ENV)", () => {
         model: "gpt-oss-120b",
         payload: {
           workPrioritization: {
-            policyVersion: "v4.0",
-            p0Max: 3,
-            p1Budget: 6,
-            p2Budget: 12,
-            objectives: ["dao-goal-a"],
+            policyVersion: "v5.0",
             applyMode: "propose" as const,
             applyModes: {
               default: "propose" as const,
               "candidate-a": "write" as const,
             },
-            hypothesesPerDay: 3,
           },
         },
       },

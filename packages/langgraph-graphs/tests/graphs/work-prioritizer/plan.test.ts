@@ -38,7 +38,7 @@ function row(
     pinned: false,
     serviceClass: "standard",
     maxImpact: 1,
-    objective: null,
+    goal: null,
     effort: "M",
     whyNow: null,
     harmIfWait: null,
@@ -115,7 +115,7 @@ describe("DAILY_FULL_REVIEW + DELTA_SCOPE + MEMOIZED_JUDGMENTS (selectJudgeSet)"
         id: "work-prioritizer-20261020t1100-decision",
         content: `x\n\`\`\`json\n${JSON.stringify({
           promptVersion: "v",
-          objectives: ["dao-goal-a"],
+          goals: ["dao-goal-a"],
           reviewedAt: "2026-10-20T00:01:00.000Z",
           contextConsumed: {
             workItemIds: ["p0.1", "p3.1", "p3.2"],
@@ -145,7 +145,7 @@ describe("DAILY_FULL_REVIEW + DELTA_SCOPE + MEMOIZED_JUDGMENTS (selectJudgeSet)"
   const ctx = {
     now: "2026-10-20T12:00:00.000Z",
     promptVersion: "v",
-    objectives: ["dao-goal-a"],
+    goals: ["dao-goal-a"],
     requested: false,
     hubEntries: [{ id: "k-old", content: "mentions p3.1" }],
   };
@@ -180,16 +180,14 @@ describe("DAILY_FULL_REVIEW + DELTA_SCOPE + MEMOIZED_JUDGMENTS (selectJudgeSet)"
     expect(out.carried.has("p3.1")).toBe(true);
   });
 
-  it("full review: requested, no prior, no reviewedAt, new prompt/objectives, or a new UTC day", () => {
+  it("full review: requested, no prior, no reviewedAt, new prompt/goals, or a new UTC day", () => {
     const full = (p: ReturnType<typeof prior>, c = ctx) =>
       selectJudgeSet(items, p, c);
     expect(full(prior(), { ...ctx, requested: true }).scope).toBe("full");
     expect(full(null).scope).toBe("full");
     expect(full(prior({ reviewedAt: undefined })).scope).toBe("full");
     expect(full(prior(), { ...ctx, promptVersion: "v2" }).scope).toBe("full");
-    expect(full(prior(), { ...ctx, objectives: ["dao-goal-b"] }).scope).toBe(
-      "full"
-    );
+    expect(full(prior(), { ...ctx, goals: ["dao-goal-b"] }).scope).toBe("full");
     const nextDay = full(prior(), { ...ctx, now: "2026-10-21T00:05:00.000Z" });
     expect(nextDay).toMatchObject({ scope: "full" });
     expect(nextDay.toJudge).toHaveLength(items.length);

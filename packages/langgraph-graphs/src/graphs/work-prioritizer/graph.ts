@@ -19,7 +19,7 @@
 import {
   EDO_DECIDE_NAME,
   GET_CURRENT_TIME_NAME,
-  KNOWLEDGE_READ_NAME,
+  KNOWLEDGE_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
 } from "@cogni/ai-tools";
 import {
@@ -92,6 +92,9 @@ const replace = <V>(defaultValue: () => V) =>
 const WorkPrioritizerState = Annotation.Root({
   ...MessagesAnnotation.spec,
   policy: replace<WorkPrioritizationPolicy | null>(() => null),
+  /** ONE_GOAL_LIST: listActiveGoals() this cycle (null = not read); a read failure or >3 is goalsError. */
+  goals: replace<readonly C.ActiveGoal[] | null>(() => null),
+  goalsError: replace<string | null>(() => null),
   fullReviewRequested: replace<boolean>(() => false),
   /** Null until the snapshot is complete (COMPLETE_SNAPSHOT_OR_ABORT). */
   context: replace<C.GatheredContext | null>(() => null),
@@ -124,7 +127,8 @@ const levelCountsOf = (rows: readonly RankedRow[]) =>
 /** Judge (model, delta-scoped) then rank + plan (code) over the whole snapshot. */
 async function judgeAndRank(
   ctx: C.GatheredContext,
-  policy: WorkPrioritizationPolicy,
+  policyVersion: string,
+  goals: readonly C.ActiveGoal[],
   prior: P.PriorDecision | null,
   trigger: { readonly text: string; readonly fullReview: boolean },
   llm: Llm,
@@ -134,7 +138,7 @@ async function judgeAndRank(
   const select = P.selectJudgeSet(items, prior, {
     now: ctx.now,
     promptVersion: WORK_PRIORITIZER_PROMPT_VERSION,
-    objectives: policy.objectives,
+    goals: goals.map((g) => g.id),
     requested: trigger.fullReview,
     hubEntries: ctx.entries,
   });
@@ -147,7 +151,8 @@ async function judgeAndRank(
         new HumanMessage(
           buildJudgeUserMessage({
             ctx,
-            policy,
+            goals,
+            policyVersion,
             batch,
             triggerMessage: trigger.text,
           })
@@ -162,13 +167,10 @@ async function judgeAndRank(
   );
   const judgments = new Map([...select.carried, ...fresh.judgments]);
   const table = prior?.table ?? null;
-  const { rows, overflow } = rankItems({
-    // INCUMBENT_FROM_PRIOR_DECISION (propose mode never writes item fields).
-    items: table
-      ? ctx.workItems.map((i) => ({ ...i, incumbent: table.get(i.id) ?? null }))
-      : ctx.workItems,
+  const rows = rankItems({
+    items: ctx.workItems,
     judgments,
-    policy,
+    goals: goals.map((g) => g.id),
     // Evidence is admissible if fetched this cycle, or by the cycle whose judgment is carried.
     knownEvidenceIds: new Set([
       ...ctx.workItems.map((i) => i.id),
@@ -186,7 +188,6 @@ async function judgeAndRank(
     reused: select.carried.size,
     fresh,
     rows,
-    overflow,
     plan,
     diff,
     // DECISION_ON_CHANGE: a full review always files (its decision records reviewedAt).
@@ -197,7 +198,8 @@ async function judgeAndRank(
 
 /**
  * Create the work-prioritizer graph: START → snapshot → (judge → emit_edo →) finalize → END; a cycle with no
- * policy, an incomplete or empty snapshot, or no hub context goes straight to finalize. TYPE_TRANSPARENT_RETURN.
+ * policy, no (or >3) active goals, an incomplete or empty snapshot, or no hub context goes straight to finalize
+ * and files nothing. TYPE_TRANSPARENT_RETURN.
  */
 export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   const toolsByName = new Map(opts.tools.map((t) => [t.name, t]));
@@ -228,6 +230,19 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
       return r.ok ? r.value : undefined;
     };
     if (!policy) return {};
+    // ONE_GOAL_LIST: root on listActiveGoals() (task.5287 seam). None ⇒ no_goals; >3 or unreadable ⇒ loud error.
+    const listActiveGoals = C.listActiveGoalsViaSearch(async (args) => {
+      const r = await callTool(KNOWLEDGE_SEARCH_NAME, args, config);
+      if (!r.ok) throw new Error(`${KNOWLEDGE_SEARCH_NAME}: ${r.error}`);
+      return r.value;
+    });
+    const goals = await listActiveGoals().catch((e: unknown) => String(e));
+    if (typeof goals === "string") return { policy, goalsError: goals };
+    if (goals.length > C.MAX_ACTIVE_GOALS) {
+      const goalsError = `${goals.length} active goals > ${C.MAX_ACTIVE_GOALS} (MAX_THREE_GOALS)`;
+      return { policy, goals, goalsError };
+    }
+    if (goals.length === 0) return { policy, goals };
     const time = await read(GET_CURRENT_TIME_NAME, {});
 
     // COMPLETE_SNAPSHOT_OR_ABORT: paginate every actionable item.
@@ -238,22 +253,23 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
         ...T.BACKLOG_QUERY,
         ...(cursor ? { cursor } : {}),
       })) as { nextCursor?: string } | undefined;
-      if (!value) return { policy, toolErrors };
+      if (!value) return { policy, goals, toolErrors };
       workItems.push(...C.parseWorkItems(value));
       cursor = value.nextCursor;
       if (!cursor) break;
     }
-    if (cursor) return { policy, toolErrors };
+    if (cursor) return { policy, goals, toolErrors };
 
-    // Hub context: fixed reads + every approved objective by id.
-    const entries: C.FetchedEntry[] = [];
+    // Hub context: the goals (admissible evidence) + the fixed reads.
+    const entries: C.FetchedEntry[] = goals.map((g) => ({
+      ...g,
+      domain: "strategy",
+      confidencePct: null,
+      tags: [],
+      plane: "edo" as const,
+    }));
     for (const r of T.CONTEXT_READS) {
       entries.push(...C.parseEntries(await read(r.tool, r.args), r.plane));
-    }
-    for (const id of policy.objectives) {
-      if (entries.some((e) => e.id === id)) continue;
-      const value = await read(KNOWLEDGE_READ_NAME, { id });
-      entries.push(...C.parseEntries(value, "edo"));
     }
 
     const t = Date.parse((time as { currentTime?: string })?.currentTime ?? "");
@@ -261,6 +277,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
     const context = C.buildGatheredContext({ now, workItems, entries });
     return {
       policy,
+      goals,
       fullReviewRequested: fullReview,
       context,
       toolErrors,
@@ -272,6 +289,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
     const ctx = state.context as C.GatheredContext;
     const p = state.policy as WorkPrioritizationPolicy;
     const j = state.judged as Awaited<ReturnType<typeof judgeAndRank>>;
+    const goalIds = (state.goals ?? []).map((g) => g.id);
     const stamp = ctx.now.slice(0, 16).replace(/[-:]/g, "").replace("T", "t");
     const cycleId = `${T.PRIORITIZER_EDO_TAG}-${stamp}`;
     const edo = emptyEdo();
@@ -300,7 +318,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
 
     if (j.noChange) return { edo };
 
-    // The decision — the proposed plan, derived from the lead approved objective found in the hub.
+    // The decision — the proposal list for the node admin, derived from the lead active goal.
     const payload: DecisionPayload = {
       schemaVersion: DECISION_SCHEMA_VERSION,
       status: "planned",
@@ -316,9 +334,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
       cycleId,
       snapshotId: ctx.snapshotId,
       priorDecisionId: priorId ?? null,
-      objectives: [...p.objectives],
-      ceilings: { p0: p.p0Max, p1: p.p1Budget, p2: p.p2Budget },
-      overflow: j.overflow,
+      goals: goalIds,
       plan: j.plan,
       table: j.rows,
       diffVsPrior: j.diff,
@@ -331,13 +347,6 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
       }),
       unjudged: j.fresh.unjudged,
     };
-    const derivesFrom = p.objectives.find((id) =>
-      ctx.entries.some((e) => e.id === id)
-    );
-    if (!derivesFrom) {
-      edo.errors.push(`${EDO_DECIDE_NAME}: no approved objective in the hub`);
-      return { edo, payload };
-    }
     const p0 = j.rows.filter((r) => r.to === 0).map((r) => r.itemId);
     const counts = levelCountsOf(j.rows).map((n, l) => `p${l} ${n}`);
     const summary =
@@ -348,13 +357,13 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
     edo.writes += 1;
     const filed = await call(EDO_DECIDE_NAME, {
       id,
-      domain: G.selectEdoDomain(p.objectives, ctx.entries),
+      domain: G.selectEdoDomain(goalIds, ctx.entries),
       sourceType: "agent",
       sourceRef: `langgraph:${WORK_PRIORITIZER_GRAPH_NAME}`,
       tags: [T.PRIORITIZER_EDO_TAG, "prioritization", "propose"],
       title: `Priority plan ${stamp}: p0 ${p0.join(", ") || "none"}`,
       content: `${summary}\n\nPropose mode: nothing below is applied.\n\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``,
-      derivesFromHypothesisId: derivesFrom,
+      derivesFromHypothesisId: goalIds[0],
     });
     if (filed.ok) edo.decisionId = id;
     return { edo, payload };
@@ -392,7 +401,8 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
     .addNode("judge", async (state: S, config: RunnableConfig) => ({
       judged: await judgeAndRank(
         state.context as C.GatheredContext,
-        state.policy as WorkPrioritizationPolicy,
+        (state.policy as WorkPrioritizationPolicy).policyVersion,
+        state.goals ?? [],
         state.prior,
         {
           text: messageText(state.messages.at(-1)),
@@ -429,21 +439,28 @@ function telemetryOf(state: S, modelRef: string | null) {
   const edo = state.edo ?? emptyEdo();
   const status = !state.policy
     ? "no_policy"
-    : !ctx
-      ? "incomplete_snapshot"
-      : ctx.workItems.length === 0
-        ? "no_backlog"
-        : !G.hasHubContext(ctx.contextConsumed)
-          ? "rejected_context"
-          : edo.newerDecisionId
-            ? "stale_prior"
-            : j?.noChange
-              ? "no_change"
-              : edo.decisionId
-                ? "planned"
-                : "decision_failed";
+    : state.goalsError
+      ? "goals_error"
+      : state.goals?.length === 0
+        ? "no_goals"
+        : !ctx
+          ? "incomplete_snapshot"
+          : ctx.workItems.length === 0
+            ? "no_backlog"
+            : !G.hasHubContext(ctx.contextConsumed)
+              ? "rejected_context"
+              : edo.newerDecisionId
+                ? "stale_prior"
+                : j?.noChange
+                  ? "no_change"
+                  : edo.decisionId
+                    ? "planned"
+                    : "decision_failed";
   return {
     status,
+    /** The goal ids the cycle ranked against (listActiveGoals); the eval checks they are all `goal-*`. */
+    goalIds: (state.goals ?? []).map((g) => g.id),
+    goalsError: state.goalsError,
     scope: j?.scope ?? null,
     deltaSize: j?.delta.length ?? 0,
     snapshotId: ctx?.snapshotId ?? null,

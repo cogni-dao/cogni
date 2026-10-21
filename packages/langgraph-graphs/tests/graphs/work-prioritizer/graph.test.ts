@@ -49,14 +49,8 @@ import { runWithCogniExecContext } from "../../../src/runtime/cogni/exec-context
 import { makeLangChainTool } from "../../../src/runtime/core/langchain-tools";
 
 const NOW = "2026-10-20T12:00:00.000Z";
-const R = "dao-goal-substrate-reliability";
-const POLICY = {
-  policyVersion: "v4.0",
-  p0Max: 3,
-  p1Budget: 6,
-  p2Budget: 12,
-  objectives: [R],
-};
+const R = "goal-substrate-reliability";
+const POLICY = { policyVersion: "v5.0" };
 const triggerOf = (extra: Record<string, unknown> = {}) =>
   `PRIORITIZE\n\n\`\`\`json\n${JSON.stringify({ workPrioritization: POLICY, ...extra })}\n\`\`\``;
 const TRIGGER = triggerOf();
@@ -70,6 +64,8 @@ interface World {
   pageSize?: number;
   failPage?: number;
   hub?: Record<string, unknown>[];
+  /** What listActiveGoals() finds (default: the hub's "Goal:" entries). */
+  goals?: Record<string, unknown>[];
 }
 
 function workItem(id: string, o: Record<string, unknown> = {}) {
@@ -143,13 +139,19 @@ function buildTools(world: World, events: string[], calls: Call[]) {
           ...(next ? { nextCursor: next } : {}),
         });
       }
-      case KNOWLEDGE_SEARCH_NAME:
+      case KNOWLEDGE_SEARCH_NAME: {
+        const results =
+          a.query === "Goal:" && a.domain === "strategy"
+            ? (world.goals ??
+              hub.filter((h) => String(h.title).startsWith("Goal:")))
+            : [];
         return ok({
           query: a.query,
           domain: a.domain,
-          results: [],
-          totalFound: 0,
+          results,
+          totalFound: results.length,
         });
+      }
       case KNOWLEDGE_READ_NAME: {
         if (typeof a.id === "string") {
           const e = hub.find((h) => h.id === a.id);
@@ -348,16 +350,18 @@ describe("langgraph:work-prioritizer v4 propose mode (mock LLM)", () => {
       mode: "propose",
       scope: "full",
       reviewedAt: NOW,
-      policyVersion: "v4.0",
+      policyVersion: "v5.0",
       priorDecisionId: null,
+      goals: [R],
     });
     expect(payload?.delta).toHaveLength(ITEMS.length);
     expect(payload?.table).toHaveLength(ITEMS.length);
-    // CEILINGS: standard, no 7-day harm ⇒ zero p0; p1 6; p2 12; rest p3.
+    // NO_CAPS: standard, no 7-day harm ⇒ zero p0; every eligible item takes p1, citing the goal.
     const counts = [0, 1, 2, 3, 4].map(
       (l) => payload?.table.filter((r) => r.to === l).length
     );
-    expect(counts).toEqual([0, 6, 12, 2, 0]);
+    expect(counts).toEqual([0, 20, 0, 0, 0]);
+    expect(payload?.table.every((r) => r.goal === R)).toBe(true);
     // The write seam for a later apply: id, revision, priority, rank per changed row.
     expect(payload?.plan).toHaveLength(ITEMS.length);
     expect(payload?.plan[0]).toMatchObject({
@@ -377,11 +381,12 @@ describe("langgraph:work-prioritizer v4 propose mode (mock LLM)", () => {
       itemsInSnapshot: 20,
       judgedByModel: 20,
       planRows: 20,
+      goalIds: [R],
     });
-    // The decision derives from the lead approved objective (goals are hypotheses).
+    // The decision derives from the lead active goal (goals are hypotheses).
     const decide = calls.find((c) => c.name === EDO_DECIDE_NAME);
     expect(decide?.args.derivesFromHypothesisId).toBe(R);
-    expect(decide?.args.domain).toBe("operator");
+    expect(decide?.args.domain).toBe("strategy");
     expect(decide?.args.tags).toContain("propose");
   });
 
@@ -423,6 +428,59 @@ describe("langgraph:work-prioritizer v4 propose mode (mock LLM)", () => {
       withinDays: 2,
     });
     expect(payload?.table.find((r) => r.itemId === "task.00")?.to).toBe(1);
+  });
+
+  it("NO_GOALS: zero active goal-* atoms ⇒ no_goals — nothing read, judged, ranked, or filed", async () => {
+    const { events, calls, status, report } = await run({
+      world: { items: ITEMS.slice(0, 3), goals: [] },
+    });
+    expect(status).toBe("no_goals");
+    expect(events).not.toContain("llm");
+    expect(calls.map((c) => c.name)).toEqual([KNOWLEDGE_SEARCH_NAME]);
+    expect(report.payload).toBeNull();
+    expect(report.telemetry).toMatchObject({ goalIds: [], decisionId: null });
+  });
+
+  it("MAX_THREE_GOALS: more than 3 active goals is a loud goals_error that files nothing", async () => {
+    const goals = ["a", "b", "c", "d"].map((x) => ({
+      ...GOAL,
+      id: `goal-${x}`,
+      title: `Goal: ${x}`,
+    }));
+    const { events, calls, status, report } = await run({
+      world: { items: ITEMS.slice(0, 3), goals },
+    });
+    expect(status).toBe("goals_error");
+    expect(report.telemetry.goalsError).toContain("4 active goals > 3");
+    expect(events).not.toContain("llm");
+    expect(calls.some((c) => c.name === EDO_DECIDE_NAME)).toBe(false);
+  });
+
+  it("P0P1_CITES_GOAL: only goal-* ids count; impact on anything else can't make p0/p1", async () => {
+    const { payload } = await run({
+      world: {
+        items: [workItem("task.00"), workItem("task.01")],
+        // A stray non-goal "Goal:" entry is not an active goal.
+        goals: [
+          GOAL,
+          { ...GOAL, id: "dao-goal-legacy", title: "Goal: legacy" },
+        ],
+      },
+      judge: (id) =>
+        id === "task.01"
+          ? { ...standardJudge(id), impact: { "dao-goal-legacy": 3 } }
+          : standardJudge(id),
+    });
+    expect(payload?.goals).toEqual([R]);
+    expect(payload?.table.find((r) => r.itemId === "task.00")).toMatchObject({
+      to: 1,
+      goal: R,
+    });
+    expect(payload?.table.find((r) => r.itemId === "task.01")).toMatchObject({
+      to: 4,
+      goal: null,
+      reasons: ["no_goal_fit_p4"],
+    });
   });
 
   it("POLICY_REQUIRED: no policy in the trigger ⇒ no_policy, no tool call, no model call", async () => {
