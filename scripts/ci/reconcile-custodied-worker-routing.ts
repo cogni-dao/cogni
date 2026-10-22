@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
+ * Module: `@scripts/ci/reconcile-custodied-worker-routing`
  * Purpose: Publish approved candidate queues to the worker that custodies them.
- * Scope: Protected-main inventory; one field in an existing worker deploy ref.
+ * Scope: Protected-main inventory; one field in an existing worker deploy ref. Does not access clusters or promote images.
  * Invariants: NO_IMAGE_PROMOTION, NO_FOREIGN_REPOSITORY, PRESERVE_OTHER_ROUTES.
- * Side-effects: GitHub Contents compare-and-set; CI receipts. No cluster access.
+ * Side-effects: IO (GitHub Contents compare-and-set and CI receipts)
  * Links: https://cognidao.org/knowledge/lane-queue-follows-custody, spike.5010
  */
 import { execFileSync } from "node:child_process";

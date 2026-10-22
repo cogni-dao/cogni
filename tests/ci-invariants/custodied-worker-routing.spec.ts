@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
+ * Module: `@tests/ci-invariants/custodied-worker-routing`
  * Purpose: Reproduce a born-healthy lane whose actual custodian queue has no poller.
- * Scope: Pure route transactions, fake GitHub CAS and static workflow boundaries.
+ * Scope: Pure route transactions, fake GitHub CAS and static workflow boundaries. Does not contact GitHub or a cluster.
  * Invariants: PROTECTED_MAIN_CUSTODY, ONE_FIELD_ONLY, NO_IMAGE_PROMOTION.
- * Side-effects: Reads the workflow only; no GitHub, git or cluster operations.
+ * Side-effects: IO (reads workflow YAML)
  * Links: https://cognidao.org/knowledge/lane-queue-follows-custody, spike.5010
  */
 import { readFileSync } from "node:fs";
