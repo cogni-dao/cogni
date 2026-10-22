@@ -40,7 +40,7 @@ export const WorkItemQueryInputSchema = z.object({
     .optional()
     .describe(
       "Filter by status. Omit for all actionable statuses. " +
-        "Priority order: needs_merge > needs_closeout > needs_implement > needs_design > needs_research > needs_triage"
+        "Priority order: needs_closeout > needs_merge > needs_implement > needs_design > needs_research > needs_triage"
     ),
   types: z
     .array(z.enum(["task", "bug", "story", "spike", "subtask"]))

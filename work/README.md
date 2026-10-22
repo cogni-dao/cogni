@@ -105,7 +105,6 @@ pr:
 reviewer:
 revision: 0
 blocked_by:
-deploy_verified: false
 created: 2026-02-09
 updated: 2026-02-09
 labels: [security]
@@ -134,34 +133,33 @@ external_refs:
 
 ### Work Item
 
-| Field             | Req         | Description                                                                                                        |
-| ----------------- | ----------- | ------------------------------------------------------------------------------------------------------------------ |
-| `id`              | Yes         | `<type>.<num>` immutable                                                                                           |
-| `type`            | Yes         | task, bug, spike, story, subtask                                                                                   |
-| `title`           | Yes         | Human readable                                                                                                     |
-| `status`          | Yes         | needs_triage, needs_research, needs_design, needs_implement, needs_closeout, needs_merge, done, blocked, cancelled |
-| `priority`        | Yes\*       | 0-3 (\*optional when `needs_triage`)                                                                               |
-| `rank`            | Yes\*       | Positive integer, 1 = highest within priority band (\*optional when `needs_triage`, default: 99)                   |
-| `estimate`        | Yes\*       | 0-5 (\*optional when `needs_triage`)                                                                               |
-| `summary`         | Yes         | What needs to be done?                                                                                             |
-| `outcome`         | Yes         | What is the deliverable?                                                                                           |
-| `spec_refs`       | No          | Spec IDs (not paths)                                                                                               |
-| `assignees`       | Yes         | CSV of handles                                                                                                     |
-| `credit`          | No          | Attribution for contributors                                                                                       |
-| `project`         | No          | `proj.{slug}` parent (optional)                                                                                    |
-| `branch`          | No          | Git branch name for this work                                                                                      |
-| `pr`              | Before done | PR number/URL                                                                                                      |
-| `reviewer`        | Before done | Review assignee                                                                                                    |
-| `revision`        | Yes         | Integer, incremented on review rejection (default: 0)                                                              |
-| `blocked_by`      | If blocked  | Required when status=blocked                                                                                       |
-| `deploy_verified` | No          | Boolean, set by cleanup agent after prod deploy                                                                    |
-| `claimed_by_run`  | No          | Governance runner lock (automation-only)                                                                           |
-| `claimed_at`      | No          | Timestamp, set with claimed_by_run                                                                                 |
-| `last_command`    | No          | Last `/command` that acted on this item                                                                            |
-| `created`         | Yes         | YYYY-MM-DD                                                                                                         |
-| `updated`         | Yes         | YYYY-MM-DD                                                                                                         |
-| `labels`          | No          | CSV labels                                                                                                         |
-| `external_refs`   | No          | External URLs                                                                                                      |
+| Field            | Req         | Description                                                                                                        |
+| ---------------- | ----------- | ------------------------------------------------------------------------------------------------------------------ |
+| `id`             | Yes         | `<type>.<num>` immutable                                                                                           |
+| `type`           | Yes         | task, bug, spike, story, subtask                                                                                   |
+| `title`          | Yes         | Human readable                                                                                                     |
+| `status`         | Yes         | needs_triage, needs_research, needs_design, needs_implement, needs_closeout, needs_merge, done, blocked, cancelled |
+| `priority`       | Yes\*       | 0-3 (\*optional when `needs_triage`)                                                                               |
+| `rank`           | Yes\*       | Positive integer, 1 = highest within priority band (\*optional when `needs_triage`, default: 99)                   |
+| `estimate`       | Yes\*       | 0-5 (\*optional when `needs_triage`)                                                                               |
+| `summary`        | Yes         | What needs to be done?                                                                                             |
+| `outcome`        | Yes         | What is the deliverable?                                                                                           |
+| `spec_refs`      | No          | Spec IDs (not paths)                                                                                               |
+| `assignees`      | Yes         | CSV of handles                                                                                                     |
+| `credit`         | No          | Attribution for contributors                                                                                       |
+| `project`        | No          | `proj.{slug}` parent (optional)                                                                                    |
+| `branch`         | No          | Git branch name for this work                                                                                      |
+| `pr`             | Before done | PR number/URL                                                                                                      |
+| `reviewer`       | Before done | Review assignee                                                                                                    |
+| `revision`       | Yes         | Integer, incremented on review rejection (default: 0)                                                              |
+| `blocked_by`     | If blocked  | Required when status=blocked                                                                                       |
+| `claimed_by_run` | No          | Governance runner lock (automation-only)                                                                           |
+| `claimed_at`     | No          | Timestamp, set with claimed_by_run                                                                                 |
+| `last_command`   | No          | Last `/command` that acted on this item                                                                            |
+| `created`        | Yes         | YYYY-MM-DD                                                                                                         |
+| `updated`        | Yes         | YYYY-MM-DD                                                                                                         |
+| `labels`         | No          | CSV labels                                                                                                         |
+| `external_refs`  | No          | External URLs                                                                                                      |
 
 ## Handoffs
 
