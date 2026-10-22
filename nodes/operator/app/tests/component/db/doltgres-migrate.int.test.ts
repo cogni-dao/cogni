@@ -512,7 +512,7 @@ describe("doltgres migrator + schema verification", () => {
 
   it("cold first point lookups materialize out-of-band knowledge/work TEXT before iterator cleanup", async () => {
     const coldDatabase = "knowledge_cold_text";
-    const coldUrl = baseUrl.replace(/\/postgres$/, `/${coldDatabase}`);
+    let coldUrl = baseUrl.replace(/\/postgres$/, `/${coldDatabase}`);
     const admin = nativeClient(baseUrl);
     const content = "knowledge-cold-payload-é|".repeat(1024);
     const outcome = "work-outcome-cold-payload-λ|".repeat(4096);
@@ -603,6 +603,37 @@ describe("doltgres migrator + schema verification", () => {
       (code) => code === 0,
       30_000
     );
+    // Docker may allocate a new ephemeral host port on this SAME CID start.
+    // Raw start preserves graceful shutdown but bypasses Testcontainers' cache refresh.
+    const bindings = JSON.parse(
+      execFileSync(
+        "docker",
+        [
+          "inspect",
+          "--format",
+          "{{json .NetworkSettings.Ports}}",
+          container.getId(),
+        ],
+        { encoding: "utf8" }
+      )
+    ) as Record<string, { HostPort: string }[] | null>;
+    const ports = new Set(
+      bindings["5432/tcp"]?.map((binding) => binding.HostPort)
+    );
+    expect(ports.size).toBe(1);
+    const port = [...ports][0];
+    if (
+      typeof port !== "string" ||
+      !/^[1-9][0-9]{0,4}$/.test(port) ||
+      Number(port) > 65535
+    ) {
+      throw new Error("native_restart_mapping_invalid");
+    }
+    const currentUrl = new URL(baseUrl);
+    currentUrl.port = port;
+    baseUrl = currentUrl.toString();
+    dbUrl = baseUrl.replace(/\/postgres$/, `/${DG_DB}`);
+    coldUrl = baseUrl.replace(/\/postgres$/, `/${coldDatabase}`);
     // New native process has no warmed NodeStore chunks. Read neither payload
     // in a multi-row query before these FIRST exact max-one-row point lookups.
     const reader = nativeClient(coldUrl);
