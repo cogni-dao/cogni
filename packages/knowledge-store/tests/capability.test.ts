@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/tests/capability`
  * Purpose: Unit coverage for the createKnowledgeCapability factory — proves the v0 gate chain runs on every write before reaching the port, and that valid writes are upserted + committed.
  * Scope: Pure tests with a hand-rolled stub port; only exercises the write seam plus a sanity check on a read passthrough. Does not call Doltgres, HTTP, or any real adapter.
- * Invariants: GATES_FAIL_CLOSED, AUTO_COMMIT_ON_WRITE
+ * Invariants: GATES_FAIL_CLOSED, AUTO_COMMIT_ON_WRITE, GOAL_WRITE_ONLY_VIA_CONTRIBUTION
  * Side-effects: none
  * Links: packages/knowledge-store/src/capability.ts, work/projects/proj.knowledge-syntropy.md
  * @internal
@@ -13,16 +13,20 @@
 
 import { describe, expect, it } from "vitest";
 
+import { FakeKnowledgeStoreAdapter } from "../src/adapters/fake/index.js";
 import { createKnowledgeCapability } from "../src/capability.js";
+import { GoalRequiresContributionError } from "../src/domain/dao-goals.js";
 import { KnowledgeGateError } from "../src/domain/gates/index.js";
-import type {
-  Knowledge,
-  NewCitation,
-  NewKnowledge,
+import {
+  type Knowledge,
+  type NewCitation,
+  type NewKnowledge,
+  RAW_WRITE_REJECTS_TYPES,
 } from "../src/domain/schemas.js";
-import type {
-  KnowledgeStorePort,
-  KnowledgeWriteSession,
+import {
+  EdoEntryTypeRequiresAtomicToolError,
+  type KnowledgeStorePort,
+  type KnowledgeWriteSession,
 } from "../src/port/knowledge-store.port.js";
 
 function stubKnowledge(entry: NewKnowledge): Knowledge {
@@ -246,5 +250,134 @@ describe("createKnowledgeCapability — write path with v0 gates", () => {
       sourceRef: "https://example.com",
     });
     expect(calls.upsert).toHaveLength(1);
+  });
+});
+
+describe("GOAL_WRITE_ONLY_VIA_CONTRIBUTION — core__knowledge_write never touches a goal (task.5294)", () => {
+  async function seeded(): Promise<FakeKnowledgeStoreAdapter> {
+    const store = new FakeKnowledgeStoreAdapter();
+    await store.registerDomain({ id: "strategy", name: "strategy" });
+    await store.withWrite(
+      { operationId: "fixture:goal-raw-write", message: "seed rows" },
+      async (write) => {
+        await write.addKnowledge({
+          id: "goal-ship",
+          domain: "strategy",
+          title: "Goal: ship",
+          content: "Statement: ship.\nKPI: prs\nTarget: 10\nBy: 2026-12-31",
+          entryType: "goal",
+          evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
+          sourceType: "human",
+        });
+        // A goal-typed row without the prefix (e.g. a historical retype).
+        await write.addKnowledge({
+          id: "legacy-target",
+          domain: "strategy",
+          title: "Legacy target",
+          content: "statement",
+          entryType: "goal",
+          evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
+          sourceType: "human",
+        });
+        await write.addKnowledge({
+          id: "bet-one",
+          domain: "strategy",
+          title: "Bet one",
+          content: "a bet",
+          entryType: "hypothesis",
+          evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
+          sourceType: "agent",
+        });
+      }
+    );
+    return store;
+  }
+
+  const rewrite = (id: string) => ({
+    id,
+    domain: "strategy",
+    title: "Rewritten by a prompt",
+    content: "KPI: anything\nTarget: 0",
+    sourceType: "human" as const,
+  });
+
+  it("lists goal among the raw-write-rejected types", () => {
+    expect(RAW_WRITE_REJECTS_TYPES).toContain("goal");
+  });
+
+  it("refuses a goal-* id outright, so a merged goal cannot be rewritten on main", async () => {
+    const store = await seeded();
+    const cap = createKnowledgeCapability(store);
+    await expect(cap.write(rewrite("goal-ship"))).rejects.toBeInstanceOf(
+      GoalRequiresContributionError
+    );
+    await expect(cap.write(rewrite("goal-new"))).rejects.toBeInstanceOf(
+      GoalRequiresContributionError
+    );
+    expect((await store.getKnowledge("goal-ship"))?.title).toBe("Goal: ship");
+    expect(await store.getKnowledge("goal-new")).toBeNull();
+  });
+
+  it("refuses to overwrite an existing goal-typed row even without the goal- prefix", async () => {
+    const store = await seeded();
+    const cap = createKnowledgeCapability(store);
+    await expect(cap.write(rewrite("legacy-target"))).rejects.toBeInstanceOf(
+      GoalRequiresContributionError
+    );
+    expect((await store.getKnowledge("legacy-target"))?.title).toBe(
+      "Legacy target"
+    );
+  });
+
+  it("refuses to overwrite an EDO row (RAW_WRITE_REJECTS_TYPES is enforced)", async () => {
+    const store = await seeded();
+    const cap = createKnowledgeCapability(store);
+    await expect(cap.write(rewrite("bet-one"))).rejects.toBeInstanceOf(
+      EdoEntryTypeRequiresAtomicToolError
+    );
+  });
+
+  it("refuses a raw store upsert or update that changes a goal row, but allows an identical replay", async () => {
+    const store = await seeded();
+    const goal = await store.getKnowledge("goal-ship");
+    await expect(
+      store.withWrite(
+        { operationId: "goal:upsert-rewrite", message: "rewrite" },
+        (write) =>
+          write.upsertKnowledge({
+            id: "goal-ship",
+            domain: "strategy",
+            title: "Goal: ship",
+            content: "Target: 0",
+            entryType: "goal",
+            evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
+            sourceType: "human",
+          })
+      )
+    ).rejects.toBeInstanceOf(GoalRequiresContributionError);
+    await expect(
+      store.withWrite(
+        { operationId: "goal:update-rewrite", message: "rewrite" },
+        (write) => write.updateKnowledge("goal-ship", { content: "Target: 0" })
+      )
+    ).rejects.toBeInstanceOf(GoalRequiresContributionError);
+    await expect(
+      store.withWrite(
+        { operationId: "goal:replay", message: "replay" },
+        (write) =>
+          write.upsertKnowledge({
+            id: "goal-ship",
+            domain: "strategy",
+            title: "Goal: ship",
+            content: "Statement: ship.\nKPI: prs\nTarget: 10\nBy: 2026-12-31",
+            entryType: "goal",
+            evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
+            sourceType: "human",
+          })
+      )
+    ).resolves.toMatchObject({ id: "goal-ship" });
+    expect((await store.getKnowledge("goal-ship"))?.content).toBe(
+      goal?.content
+    );
   });
 });

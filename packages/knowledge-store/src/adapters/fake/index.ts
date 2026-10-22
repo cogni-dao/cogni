@@ -16,7 +16,12 @@ import {
   isConfidenceExempt,
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
-import { type ActiveGoal, selectActiveGoals } from "../../domain/dao-goals.js";
+import {
+  type ActiveGoal,
+  GOAL_ENTRY_TYPE,
+  GoalRequiresContributionError,
+  selectActiveGoals,
+} from "../../domain/dao-goals.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
 import type {
   Citation,
@@ -34,6 +39,7 @@ import {
   requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import {
+  assertExistingRowReplay,
   assertKnowledgeReplay,
   KnowledgeWriteConflictError,
 } from "../../domain/write-replay.js";
@@ -261,7 +267,7 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     }
     const existing = this.rows.get(entry.id);
     if (existing) {
-      assertKnowledgeReplay(existing, entry);
+      assertExistingRowReplay(existing, entry);
       return existing;
     }
     const row: Knowledge = {
@@ -302,6 +308,9 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     this.assertWriteScope();
     const existing = this.rows.get(id);
     if (!existing) throw new Error(`Knowledge ${id} not found`);
+    // GOAL_WRITE_ONLY_VIA_CONTRIBUTION: no raw update touches a goal row.
+    if (existing.entryType === GOAL_ENTRY_TYPE)
+      throw new GoalRequiresContributionError(id);
     if (update.domain && !this.domainsMap.has(update.domain)) {
       throw new DomainNotRegisteredError(update.domain);
     }

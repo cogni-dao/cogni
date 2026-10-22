@@ -8,6 +8,8 @@
  * Invariants:
  *   - AUTO_COMMIT: Every write() call upserts + commits automatically.
  *   - PACKAGES_NO_ENV: Connection is injected, never from process.env.
+ *   - GOAL_WRITE_ONLY_VIA_CONTRIBUTION: write() refuses a `goal-*` id and never
+ *     overwrites an existing row whose type is in RAW_WRITE_REJECTS_TYPES.
  * Side-effects: none (delegates I/O to port)
  * Links: docs/spec/knowledge-data-plane.md
  * @public
@@ -22,13 +24,22 @@ import type {
 } from "@cogni/ai-tools";
 import { initializeConfidence } from "./domain/confidence-policy.js";
 import {
+  GOAL_ENTRY_TYPE,
+  GoalRequiresContributionError,
+  isGoalRowId,
+} from "./domain/dao-goals.js";
+import {
   type KnowledgeGate,
   KnowledgeGateError,
   runGateChain,
   V0_DETERMINISTIC_GATES,
 } from "./domain/gates/index.js";
+import { RAW_WRITE_REJECTS_TYPES } from "./domain/schemas.js";
 import { KnowledgeWriteConflictError } from "./domain/write-replay.js";
-import type { KnowledgeStorePort } from "./port/knowledge-store.port.js";
+import {
+  EdoEntryTypeRequiresAtomicToolError,
+  type KnowledgeStorePort,
+} from "./port/knowledge-store.port.js";
 
 function toEntry(k: {
   id: string;
@@ -103,6 +114,9 @@ export function createKnowledgeCapability(
     },
 
     async write(params: KnowledgeWriteParams): Promise<KnowledgeEntry> {
+      // GOAL_WRITE_ONLY_VIA_CONTRIBUTION: the goal namespace is contribution-only.
+      if (isGoalRowId(params.id))
+        throw new GoalRequiresContributionError(params.id);
       const gateResult = await runGateChain(
         gates,
         {
@@ -133,7 +147,21 @@ export function createKnowledgeCapability(
           message: `knowledge: ${params.sourceType} — ${c.title}`,
         },
         async (write) => {
-          const previous = await write.getKnowledge(c.id ?? params.id);
+          const targetId = c.id ?? params.id;
+          if (isGoalRowId(targetId))
+            throw new GoalRequiresContributionError(targetId);
+          const previous = await write.getKnowledge(targetId);
+          // RAW_WRITE_REJECTS_TYPES: never overwrite an EDO or goal row in place.
+          if (
+            previous?.entryType &&
+            (RAW_WRITE_REJECTS_TYPES as readonly string[]).includes(
+              previous.entryType
+            )
+          ) {
+            throw previous.entryType === GOAL_ENTRY_TYPE
+              ? new GoalRequiresContributionError(previous.id)
+              : new EdoEntryTypeRequiresAtomicToolError(previous.entryType);
+          }
           if (previous) {
             const key = (edge: {
               citedId: string;

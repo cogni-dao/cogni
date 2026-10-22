@@ -13,9 +13,9 @@
 
 import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
-
 import { DoltgresKnowledgeStoreAdapter } from "../src/adapters/doltgres/index.js";
 import { DoltBranchSessionRunner } from "../src/adapters/doltgres/session-admission.js";
+import { GoalRequiresContributionError } from "../src/domain/dao-goals.js";
 import { CitationTargetNotFoundError } from "../src/port/knowledge-store.port.js";
 
 type Rows = Record<string, unknown>[] & { count?: number };
@@ -248,6 +248,33 @@ describe("DoltgresKnowledgeStoreAdapter — confidence policy on writes", () => 
     );
     const update = fake.queries.find((q) => q.startsWith("UPDATE knowledge"));
     expect(update).toContain("confidence_pct = 55");
+  });
+});
+
+describe("DoltgresKnowledgeStoreAdapter — goal rows are contribution-only (task.5294)", () => {
+  it("refuses a raw updateKnowledge on a goal row before any UPDATE", async () => {
+    const fake = new FakeSql(new Map([["goal-ship", "goal"]]));
+    await expect(
+      adapterFor(fake).withWrite(
+        { operationId: "goal:raw-update", message: "rewrite a goal" },
+        (write) =>
+          write.updateKnowledge("goal-ship", { title: "Rewritten target" })
+      )
+    ).rejects.toBeInstanceOf(GoalRequiresContributionError);
+    expect(fake.queries.some((q) => q.startsWith("UPDATE knowledge"))).toBe(
+      false
+    );
+  });
+
+  it("still updates a non-goal row (the confidence resolver path)", async () => {
+    const fake = new FakeSql();
+    await adapterFor(fake).withWrite(
+      { operationId: "goal:non-goal-update", message: "policy fixture" },
+      (write) => write.updateKnowledge("policy-row", { confidencePct: 55 })
+    );
+    expect(fake.queries.some((q) => q.startsWith("UPDATE knowledge SET"))).toBe(
+      true
+    );
   });
 });
 

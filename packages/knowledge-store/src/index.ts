@@ -60,6 +60,7 @@ export {
   GOAL_ENTRY_TYPE,
   GOAL_ID_PREFIX,
   type GoalCandidateRow,
+  GoalRequiresContributionError,
   type GoalTouchInput,
   isActiveGoalRow,
   isGoalRowId,

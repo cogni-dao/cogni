@@ -73,8 +73,10 @@ export function requiresEvaluateAt(
 }
 
 /**
- * Entry types that MUST go through atomic `core__edo_*` tools.
- * `core__knowledge_write` rejects rows whose `entry_type` is in this set.
+ * Entry types `core__knowledge_write` never writes: the EDO types MUST go through
+ * atomic `core__edo_*` tools, and a `goal` changes only through a contribution
+ * merged by a node admin (GOAL_WRITE_ONLY_VIA_CONTRIBUTION). The capability
+ * refuses to overwrite an existing row of any of these types.
  * `event` is deliberately NOT in the set — events have no required citations
  * and flow through `core__knowledge_write` unchanged.
  */
@@ -82,6 +84,7 @@ export const RAW_WRITE_REJECTS_TYPES: readonly EntryType[] = [
   "hypothesis",
   "decision",
   "outcome",
+  "goal",
 ];
 
 // ---------------------------------------------------------------------------

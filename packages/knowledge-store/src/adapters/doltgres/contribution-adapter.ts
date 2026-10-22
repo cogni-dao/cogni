@@ -324,13 +324,14 @@ function knowledgePatchColumns(
  * `entry_type` / `evaluate_at`, and refuse when the RESULTING row would be a
  * goal or hypothesis with no deadline. `nextEvaluateAt` is the value the edit
  * supplies, if any; an absent value keeps the stored one. Also proves the row
- * exists (replaces `assertKnowledgeRowExists` on these paths).
+ * exists (replaces `assertKnowledgeRowExists` on these paths). Returns the
+ * resulting entry type (the edit's, else the stored one).
  */
 async function assertResultingDeadline(
   conn: ReservedSql,
   targetRowId: string,
   next: { entryType: string | undefined; evaluateAt: string | undefined }
-): Promise<void> {
+): Promise<string | null> {
   const rows = await conn.unsafe(
     `SELECT entry_type, evaluate_at FROM knowledge WHERE id = ${escapeValue(targetRowId)} LIMIT 1`
   );
@@ -351,6 +352,7 @@ async function assertResultingDeadline(
       entryType ?? "hypothesis"
     );
   }
+  return entryType ?? null;
 }
 
 async function assertKnowledgeRowExists(
@@ -840,13 +842,15 @@ async function applyEdit(input: {
     { principalKind: principal.kind }
   ).confidencePct;
   if (edit.op === "update") {
-    const entryType = edit.entry.entryType ?? "finding";
     // HYPOTHESIS_HAS_EVALUATE_AT on the resulting row; a supplied deadline and
     // resolver persist, an absent one keeps the stored value (never nulled).
-    await assertResultingDeadline(conn, edit.targetRowId, {
-      entryType,
-      evaluateAt: edit.entry.evaluateAt,
-    });
+    // An absent entryType keeps the stored type, so an update never silently
+    // retypes a goal out of the goal list.
+    const entryType =
+      (await assertResultingDeadline(conn, edit.targetRowId, {
+        entryType: edit.entry.entryType,
+        evaluateAt: edit.entry.evaluateAt,
+      })) ?? "finding";
     const useWhenAssignment = hasUseWhen
       ? `, use_when = ${edit.entry.useWhen ? escapeValue(stripDangerousControlChars(edit.entry.useWhen)) : "NULL"}`
       : "";

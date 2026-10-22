@@ -15,6 +15,8 @@
  *   - GOAL_CHANGE_IS_NODE_ADMIN: `touchedGoalIds` names every `goal-*` row a
  *     contribution changes, plus any citation leaving one, from the RAW row ids.
  *     A citation INTO a goal is not a goal change.
+ *   - GOAL_WRITE_ONLY_VIA_CONTRIBUTION: a goal row is never created or changed by a
+ *     raw main-plane write; `GoalRequiresContributionError` names the refusal.
  *   - NO_GOALS_FAILS_LOUD: zero goals is an empty array the caller must render
  *     visibly (the cognition bundle prints `no approved goals`).
  * Side-effects: none
@@ -26,6 +28,23 @@
 export const GOAL_ENTRY_TYPE = "goal" as const;
 /** Id prefix every DAO goal atom carries (`goal-<slug>`). */
 export const GOAL_ID_PREFIX = "goal-" as const;
+
+/**
+ * GOAL_WRITE_ONLY_VIA_CONTRIBUTION: a raw main-plane write (core__knowledge_write,
+ * upsert/update) tried to create or change a DAO goal row. Goals change only
+ * through a contribution merged by a node admin (GOAL_CHANGE_IS_NODE_ADMIN).
+ */
+export class GoalRequiresContributionError extends Error {
+  readonly code = "GOAL_REQUIRES_CONTRIBUTION" as const;
+  readonly id: string;
+  constructor(id: string) {
+    super(
+      `'${id}' is a DAO goal row: goals change only through a contribution merged by a node admin, never a raw write`
+    );
+    this.name = "GoalRequiresContributionError";
+    this.id = id;
+  }
+}
 
 /** One approved DAO goal, as every reader sees it. */
 export interface ActiveGoal {

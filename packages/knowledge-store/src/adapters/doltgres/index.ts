@@ -25,6 +25,7 @@ import { initializeConfidence } from "../../domain/confidence-policy.js";
 import {
   type ActiveGoal,
   GOAL_ENTRY_TYPE,
+  GoalRequiresContributionError,
   selectActiveGoals,
 } from "../../domain/dao-goals.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
@@ -44,7 +45,7 @@ import {
   requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import {
-  assertKnowledgeReplay,
+  assertExistingRowReplay,
   KnowledgeWriteConflictError,
 } from "../../domain/write-replay.js";
 import {
@@ -486,7 +487,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
 
     const existing = await this.getKnowledge(entry.id);
     if (existing) {
-      assertKnowledgeReplay(existing, entry);
+      assertExistingRowReplay(existing, entry);
       return existing;
     }
     const rows = await this.sql.unsafe(
@@ -501,7 +502,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     assertHypothesisEvaluateAt(entry);
     const existing = await this.getKnowledge(entry.id);
     if (existing) {
-      assertKnowledgeReplay(existing, entry);
+      assertExistingRowReplay(existing, entry);
       return existing;
     }
     const insert = insertColumnsSql(knowledgeInsertColumns(entry));
@@ -517,6 +518,9 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     update: Partial<NewKnowledge>
   ): Promise<Knowledge> {
     this.assertWriteScope();
+    // GOAL_WRITE_ONLY_VIA_CONTRIBUTION: no raw update touches a goal row.
+    if ((await this.getKnowledgeEntryType(id)) === GOAL_ENTRY_TYPE)
+      throw new GoalRequiresContributionError(id);
     if (update.domain !== undefined) {
       await assertDomainRegistered(this.sql, update.domain);
     }

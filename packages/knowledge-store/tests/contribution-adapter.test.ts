@@ -1247,6 +1247,21 @@ describe("goal deadline on update + patch (HYPOTHESIS_HAS_EVALUATE_AT · task.52
     expect(update).not.toContain("evaluate_at");
   });
 
+  it("keeps the stored entry type when an update omits entryType (no silent retype out of goals)", async () => {
+    const fake = new FakeSql(record, true, goalStored);
+    await append(fake, {
+      op: "update",
+      targetRowId: "goal-ship",
+      entry: {
+        id: "goal-ship",
+        domain: "strategy",
+        title: "Ship faster",
+        content: "statement",
+      },
+    });
+    expect(knowledgeUpdate(fake)).toContain("entry_type = 'goal'");
+  });
+
   it("still answers not-found for an update or patch on a missing row", async () => {
     const fake = new FakeSql(record, true, null);
     await expect(
