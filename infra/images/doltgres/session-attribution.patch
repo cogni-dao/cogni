@@ -1,0 +1,204 @@
+diff --git a/server/tables/pgcatalog/pg_stat_activity.go b/server/tables/pgcatalog/pg_stat_activity.go
+--- a/server/tables/pgcatalog/pg_stat_activity.go
++++ b/server/tables/pgcatalog/pg_stat_activity.go
+@@ -22,0 +23 @@
++	"github.com/dolthub/dolt/go/libraries/doltcore/sqlserver"
+@@ -58,0 +60,6 @@
++	var attribution map[uint32]pgStatSessionAttribution
++	if runningServer := sqlserver.GetRunningServer(); runningServer != nil {
++		if manager := runningServer.SessionManager(); manager != nil {
++			attribution = readPgStatSessionAttribution(manager.Iter)
++		}
++	}
+@@ -60,2 +67,3 @@
+-		processes: processes,
+-		idx:       0,
++		processes:   processes,
++		attribution: attribution,
++		idx:         0,
+@@ -98,0 +107,38 @@
++// pgStatSessionAttribution holds a snapshot from the actual session, not the
++// ProcessList's cached startup identity. Preserve the exact database string:
++// revision-qualified databases must not be silently attributed to another base.
++// This is not an atomic snapshot with ProcessList; unmatched rows remain unknown.
++type pgStatSessionAttribution struct {
++	database string
++	user     string
++}
++
++func readPgStatSessionAttribution(iterate func(func(sql.Session) (bool, error)) error) map[uint32]pgStatSessionAttribution {
++	if iterate == nil {
++		return nil
++	}
++	result := make(map[uint32]pgStatSessionAttribution)
++	ambiguous := make(map[uint32]bool)
++	err := iterate(func(session sql.Session) (bool, error) {
++		if session == nil {
++			return false, nil
++		}
++		connection := session.ID()
++		if _, exists := result[connection]; exists || ambiguous[connection] {
++			delete(result, connection)
++			ambiguous[connection] = true
++			return false, nil
++		}
++		result[connection] = pgStatSessionAttribution{
++			database: session.GetCurrentDatabase(),
++			user:     session.Client().User,
++		}
++		return false, nil
++	})
++	if err != nil {
++		// Do not publish a partial session census as known attribution.
++		return nil
++	}
++	return result
++}
++
+@@ -101,2 +147,3 @@
+-	processes []sql.Process
+-	idx       int
++	processes   []sql.Process
++	attribution map[uint32]pgStatSessionAttribution
++	idx         int
+@@ -114,0 +162 @@
++	identity := iter.attribution[process.Connection]
+@@ -117,3 +165,3 @@
+-	if process.Database != "" {
+-		datid = id.NewDatabase(process.Database).AsId()
+-		datname = process.Database
++	if identity.database != "" {
++		datid = id.NewDatabase(identity.database).AsId()
++		datname = identity.database
+@@ -123,3 +171,3 @@
+-	if process.User != "" {
+-		usesysid = roleOid(process.User)
+-		usename = process.User
++	if identity.user != "" {
++		usesysid = roleOid(identity.user)
++		usename = identity.user
+diff --git a/server/tables/pgcatalog/pg_stat_activity_test.go b/server/tables/pgcatalog/pg_stat_activity_test.go
+new file mode 100644
+--- /dev/null
++++ b/server/tables/pgcatalog/pg_stat_activity_test.go
+@@ -0,0 +1,120 @@
++// Copyright 2026 Dolthub, Inc.
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
++
++package pgcatalog
++
++import (
++	"errors"
++	"io"
++	"reflect"
++	"testing"
++	"time"
++
++	"github.com/dolthub/go-mysql-server/sql"
++)
++
++func pgStatTestSession(connection uint32, database, user string) *sql.BaseSession {
++	session := sql.NewBaseSessionWithClientServer("server", sql.Client{User: user}, connection)
++	session.SetCurrentDatabase(database)
++	return session
++}
++
++func pgStatTestSessions(sessions ...sql.Session) func(func(sql.Session) (bool, error)) error {
++	return func(visit func(sql.Session) (bool, error)) error {
++		for _, session := range sessions {
++			stop, err := visit(session)
++			if stop || err != nil {
++				return err
++			}
++		}
++		return nil
++	}
++}
++
++func TestPgStatSessionAttributionUsesCurrentExactSession(t *testing.T) {
++	session := pgStatTestSession(7, "knowledge_a", "reader")
++	other := pgStatTestSession(8, "knowledge_b/deleted-branch", "writer")
++	read := pgStatTestSessions(session, other)
++	first := readPgStatSessionAttribution(read)
++	if first[7].database != "knowledge_a" || first[8].database != "knowledge_b/deleted-branch" {
++		t.Fatalf("wrong exact session databases: %#v", first)
++	}
++	// A later observation of the same PID must read its current database, not a
++	// cached startup value or a branch-ref list (including detached revisions).
++	session.SetCurrentDatabase("knowledge_b/0123456789abcdef0123456789abcdef")
++	second := readPgStatSessionAttribution(read)
++	if second[7].database != session.GetCurrentDatabase() || second[7].user != "reader" {
++		t.Fatalf("same PID retained stale attribution: %#v", second[7])
++	}
++	if first[7].database != "knowledge_a" {
++		t.Fatal("prior row snapshot changed with session")
++	}
++}
++
++func TestPgStatSessionAttributionFailsClosed(t *testing.T) {
++	session := pgStatTestSession(7, "knowledge_a", "reader")
++	failed := func(visit func(sql.Session) (bool, error)) error {
++		_, _ = visit(session)
++		return errors.New("session enumeration failed")
++	}
++	for name, read := range map[string]func(func(sql.Session) (bool, error)) error{
++		"missing manager":            nil,
++		"failed partial enumeration": failed,
++		"duplicate identity":         pgStatTestSessions(session, pgStatTestSession(7, "knowledge_b", "other")),
++		"missing session":            pgStatTestSessions(nil),
++	} {
++		t.Run(name, func(t *testing.T) {
++			if _, known := readPgStatSessionAttribution(read)[7]; known {
++				t.Fatal("unproven identity became known")
++			}
++		})
++	}
++}
++
++func TestPgStatActivityPreservesProcessRowsAndNeverFallsBack(t *testing.T) {
++	started := time.Unix(100, 0)
++	processes := []sql.Process{
++		{Connection: 7, Database: "stale_db", User: "stale_user", Host: "127.0.0.1:4567", Command: sql.ProcessCommandQuery, Query: "SELECT pg_sleep(45)", StartedAt: started},
++		{Connection: 8, Database: "cached_unknown", User: "cached_user", Host: "10.0.0.1:1234"},
++		{Connection: 9, Database: "cached_empty", User: "cached_user"},
++	}
++	known := readPgStatSessionAttribution(pgStatTestSessions(
++		pgStatTestSession(7, "knowledge_b/deleted-branch", "actual_user"),
++		pgStatTestSession(9, "", ""),
++	))
++	iter := &pgStatActivityRowIter{processes: processes, attribution: known}
++	baseline := &pgStatActivityRowIter{processes: processes}
++	for i, process := range processes {
++		row, err := iter.Next(nil)
++		if err != nil {
++			t.Fatal(err)
++		}
++		original, err := baseline.Next(nil)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if row[2] != int32(process.Connection) {
++			t.Fatal("process PID changed")
++		}
++		for column := range row {
++			if column == 0 || column == 1 || column == 4 || column == 5 {
++				continue
++			}
++			if !reflect.DeepEqual(row[column], original[column]) {
++				t.Fatalf("process %d column %d changed", i, column)
++			}
++		}
++		if i == 0 {
++			if row[1] != "knowledge_b/deleted-branch" || row[5] != "actual_user" || row[0] == nil || row[4] == nil {
++				t.Fatalf("actual attribution missing: %#v", row)
++			}
++		} else if row[0] != nil || row[1] != nil || row[4] != nil || row[5] != nil {
++			t.Fatalf("unmatched/empty session fell back to cached identity: %#v", row)
++		}
++	}
++	if _, err := iter.Next(nil); err != io.EOF {
++		t.Fatalf("unexpected extra or dropped process rows: %v", err)
++	}
++}
