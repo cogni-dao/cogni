@@ -142,7 +142,8 @@ export const workItemQueryContract: ToolContract<
   description:
     "Query the work item backlog. Returns items matching filters sorted by " +
     "priority (status weight, then priority field, then rank). Use this to " +
-    "find actionable items, check item status, or search by text.",
+    "find actionable items, check item status, or search by text." +
+    " summary and outcome are truncated to 600 chars (ending in …); never patch summary from a query result.",
   effect: "read_only",
   requires: "node.collaborate",
   inputSchema: WorkItemQueryInputSchema,
