@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { resolveDeploymentTargets } from "@/features/compute/node-deployment-targets";
 import { DatabaseCellAllocationMetadataSchema } from "@/shared/secrets/database-cell-placement.data";
 
 const root = path.resolve(__dirname, "../..");
@@ -61,6 +62,54 @@ with tempfile.TemporaryDirectory() as d:
     execFileSync(
       "python3",
       ["-c", program, path.join(root, "scripts/ci/lib/maintenance-fence.py")],
+      { stdio: "pipe", timeout: 10000 }
+    );
+  });
+
+  // bug.5510: the candidate-a operator receipt names `cogni-dao/cogni`, but the
+  // in-repo self-flight handed the fence SOURCE_REPOSITORY="" and every operator
+  // flight failed `maintenance_compatibility_floor_invalid`. The producer now
+  // emits the parent repository; the fence itself stays strict.
+  it("compares an in-repo target's floor using the producer's parent repository (bug.5510)", () => {
+    const selection = resolveDeploymentTargets({
+      catalogRows: [{ name: "operator", type: "node", envs: ["candidate-a"] }],
+      environment: "candidate-a",
+      parentRepository: "cogni-dao/cogni",
+      flightTargets: ["operator"],
+    });
+    const repository = selection.sourceRepositories.operator;
+    expect(repository).toBe("cogni-dao/cogni");
+
+    const program = `
+import importlib.util,json,pathlib,sys,tempfile
+spec=importlib.util.spec_from_file_location("fence",sys.argv[1]);f=importlib.util.module_from_spec(spec);spec.loader.exec_module(f)
+repository=sys.argv[2];floor="3e8ebeab9ce76be7bf5429ba23cee01062c2c7a2";head="c"*40
+with tempfile.TemporaryDirectory() as d:
+ root=pathlib.Path(d);state=root/".promote-state";state.mkdir()
+ receipt={"version":1,"phase":"audited","operationId":"a"*64,"request":{"slug":"operator","env":"candidate-a","sourceSha":floor,"sourceRepository":"cogni-dao/cogni"}}
+ (state/"maintenance-drain-receipt.json").write_text(json.dumps(receipt))
+ calls=[]
+ def compare(*args):
+  calls.append(args);return "ahead"
+ # The incident shape: an empty or foreign repository never reaches the floor comparison.
+ for wrong in (None,"","cogni-test-org/cogni-monorepo"):
+  try:f.check(root,wrong,head,compare);raise AssertionError("repository mismatch allowed")
+  except RuntimeError as e:assert str(e)=="maintenance_compatibility_floor_invalid",e
+ assert calls==[]
+ f.check(root,repository,head,compare)
+ assert calls==[(repository,floor,"main"),(repository,floor,head)],calls
+ # The floor is still enforced for the in-repo identity.
+ try:f.check(root,repository,head,lambda *a:"ahead" if a[2]=="main" else "behind");raise AssertionError("floor violation allowed")
+ except RuntimeError as e:assert str(e)=="maintenance_compatibility_floor_violation",e
+`;
+    execFileSync(
+      "python3",
+      [
+        "-c",
+        program,
+        path.join(root, "scripts/ci/lib/maintenance-fence.py"),
+        repository ?? "",
+      ],
       { stdio: "pipe", timeout: 10000 }
     );
   });
