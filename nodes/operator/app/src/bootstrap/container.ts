@@ -35,10 +35,8 @@ import {
   type RunFinalizeEpochDeps,
   runFinalizeEpoch,
 } from "@cogni/attribution-pipeline-plugins";
-import {
-  type AuthorizationPort,
-  OpenFgaAuthorizationAdapter,
-} from "@cogni/authorization-core";
+import type { AuthorizationPort } from "@cogni/authorization-core";
+import { OpenFgaAuthorizationAdapter } from "@cogni/authorization-core/operator";
 import {
   DrizzleAttributionAdapter,
   DrizzleClaimantWalletResolver,

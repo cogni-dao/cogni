@@ -84,6 +84,16 @@ governance:
 # and there are no capacity caps. The graph is propose-only: every env proposes.
 work_prioritization:
   policy_version: v5.0
+  # Transitional input for the pre-v5 production control-plane parser. The v5
+  # runtime strips these fields and reads all active goals from the hub. Remove
+  # after the production control plane accepts the v5 shape (story.5093).
+  p0_max: 0
+  p1_budget: 0
+  p2_budget: 0
+  objectives:
+    - goal-ai-work-converges
+    - goal-fleet-pays-itself
+    - goal-prod-deploys-land
   apply:
     # Per deploy environment (DEPLOY_ENVIRONMENT). Propose everywhere until a write path exists.
     mode:

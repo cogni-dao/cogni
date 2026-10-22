@@ -3,8 +3,8 @@
 
 /**
  * Module: `@cogni/authorization-core`
- * Purpose: Shared AuthorizationPort contract, OpenFGA mapping helpers, OpenFGA adapter, and deterministic fake.
- * Scope: Pure package boundary for node-template-based RBAC. Does not load runtime env or select node adapters.
+ * Purpose: Shared AuthorizationPort contract, OpenFGA mapping helpers, and deterministic fake.
+ * Scope: Portable package boundary for node-template-based RBAC. Does not expose a raw OpenFGA client.
  * Invariants: OpenFGA is the sole permission/delegation source; deny by default; unavailable fails closed with a distinct code.
  * Side-effects: none
  * Links: docs/spec/rbac.md, docs/spec/access-control-charter.md
@@ -16,6 +16,9 @@ export type AuthzAction =
   | "connection.use"
   | "graph.invoke"
   | "user.act_as"
+  | "billing_account.read"
+  | "billing_account.grant"
+  | "billing_account.act_as"
   | "node.flight"
   | "node.manage_secrets"
   | "node.promote_production"
@@ -27,6 +30,9 @@ export const AUTHZ_ACTIONS = [
   "connection.use",
   "graph.invoke",
   "user.act_as",
+  "billing_account.read",
+  "billing_account.grant",
+  "billing_account.act_as",
   "node.flight",
   "node.manage_secrets",
   "node.promote_production",
@@ -57,6 +63,11 @@ export interface AuthzCheckParams {
   readonly context: AuthzContext;
 }
 
+export interface AuthzCheckOptions {
+  /** Read the latest tuple state for authority-bearing mutation preconditions. */
+  readonly consistency?: "higher_consistency";
+}
+
 export interface AuthzSubcheck {
   readonly name: "permission" | "delegation";
   readonly user: string;
@@ -79,10 +90,37 @@ export type AuthzDecision =
       readonly reason?: string;
     };
 
-export interface AuthorizationPort {
-  check(params: AuthzCheckParams): Promise<AuthzDecision>;
-  writeRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision>;
-  deleteRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision>;
+/** Read-only authorization boundary safe for independently governed nodes. */
+export interface AuthorizationCheckPort {
+  check(
+    params: AuthzCheckParams,
+    options?: AuthzCheckOptions
+  ): Promise<AuthzDecision>;
+}
+
+/** Raw relation mutation boundary. Trusted operator code only. */
+export interface AuthorizationRelationAdminPort {
+  writeRelation(
+    tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
+  deleteRelation(
+    tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
+  writeRelations(
+    tuples: readonly AuthzRelationTuple[],
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
+  deleteRelations(
+    tuples: readonly AuthzRelationTuple[],
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
+  /** Atomically replace one tuple key, including its relationship condition. */
+  replaceRelation(
+    tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
   /**
    * Lists the stored relation tuples a subject holds (the directly-assigned
    * ROLE grants, e.g. `developer`/`production_promoter`, not computed
@@ -93,10 +131,29 @@ export interface AuthorizationPort {
   listRelations(user: string): Promise<AuthzListDecision>;
 }
 
+/** Full operator-internal authorization boundary. */
+export interface AuthorizationPort
+  extends AuthorizationCheckPort,
+    AuthorizationRelationAdminPort {}
+
+export interface AuthzRelationCondition {
+  readonly name: string;
+  readonly context?: Readonly<Record<string, unknown>>;
+}
+
 export interface AuthzRelationTuple {
   readonly user: string;
   readonly relation: string;
   readonly object: string;
+  readonly condition?: AuthzRelationCondition;
+}
+
+export interface AuthzMutationOptions {
+  /**
+   * Confirm the post-mutation relation state through OpenFGA's
+   * HIGHER_CONSISTENCY read path before reporting success.
+   */
+  readonly confirm?: "higher_consistency";
 }
 
 export type AuthzWriteDecision =
@@ -106,7 +163,7 @@ export type AuthzWriteDecision =
     }
   | {
       readonly decision: "failure";
-      readonly code: "authz_write_unavailable";
+      readonly code: "authz_write_denied" | "authz_write_unavailable";
       readonly reason?: string;
     };
 
@@ -122,8 +179,87 @@ export type AuthzListDecision =
       readonly reason?: string;
     };
 
+export type BillingAccountGrantRole = "reader" | "obo" | "tool_executor";
+
+export type BillingAccountGrantTarget =
+  | { readonly kind: "user"; readonly id: string }
+  | { readonly kind: "agent"; readonly id: string };
+
+export interface BillingAccountGrantInput {
+  /** Required only for the exact-account tool_executor role. */
+  readonly toolId?: string;
+  /** Same-node human asserted by the node backend; operator verifies can_grant. */
+  readonly grantorUserId: string;
+  readonly billingAccountId: string;
+  readonly target: BillingAccountGrantTarget;
+  readonly role: BillingAccountGrantRole;
+  /** Required for an OBO bundle; omitted for a direct reader grant. */
+  readonly subjectUserId?: string;
+  /** Required for grants; ignored for revocation. */
+  readonly expiresAt: string;
+  readonly requestId?: string;
+}
+
+export interface BillingAccountRevokeInput {
+  /** Required only for the exact-account tool_executor role. */
+  readonly toolId?: string;
+  /** Same-node human asserted by the node backend; operator verifies can_grant. */
+  readonly grantorUserId: string;
+  readonly billingAccountId: string;
+  readonly target: BillingAccountGrantTarget;
+  readonly role: BillingAccountGrantRole;
+  /** Required for an OBO bundle; omitted for a direct reader revoke. */
+  readonly subjectUserId?: string;
+  readonly requestId?: string;
+}
+
+/**
+ * Semantic account-grant boundary. It cannot express owner, node-role, or arbitrary
+ * relation writes; the operator independently verifies the grantor's can_grant edge.
+ */
+export interface BillingAccountGrantAdministrationPort {
+  grantBillingAccountAccess(
+    input: BillingAccountGrantInput
+  ): Promise<AuthzWriteDecision>;
+  revokeBillingAccountAccess(
+    input: BillingAccountRevokeInput
+  ): Promise<AuthzWriteDecision>;
+}
+
+export interface BillingAccountOwnerBootstrapInput {
+  /** Human owner asserted from the target node's authoritative account row. */
+  readonly ownerUserId: string;
+  /** Exact target-node billing account created for that owner. */
+  readonly billingAccountId: string;
+  readonly requestId?: string;
+}
+
+/**
+ * One-time semantic owner projection. The target node owns the account fact;
+ * OpenFGA owns the resulting permission. No caller can express raw tuples or a
+ * foreign node namespace through this boundary.
+ */
+export interface BillingAccountOwnerBootstrapPort {
+  bootstrapBillingAccountOwner(
+    input: BillingAccountOwnerBootstrapInput
+  ): Promise<AuthzWriteDecision>;
+}
+
 export function authzToolResource(toolId: string): string {
   return `tool:${toolId}`;
+}
+
+/** Exact-account tool namespace; never accepts a caller-authored resource path. */
+export function authzNodeToolResource(
+  nodeId: string,
+  billingAccountId: string,
+  toolId: string
+): string {
+  assertReferenceComponent("nodeId", nodeId);
+  assertReferenceComponent("billingAccountId", billingAccountId);
+  if (!/^[a-z][a-z0-9_]{0,127}$/.test(toolId))
+    throw new Error("invalid tool identifier");
+  return `tool:${nodeId}/${billingAccountId}/${toolId}`;
 }
 
 export function authzConnectionResource(connectionId: string): string {
@@ -138,8 +274,68 @@ export function authzUserResource(userId: string): string {
   return userId.startsWith("user:") ? userId : `user:${userId}`;
 }
 
+/**
+ * Qualify node-local identities before they enter the env-shared OpenFGA store.
+ * The node segment is a namespace boundary only; it does not imply ownership.
+ */
+export function authzNodeUserPrincipal(nodeId: string, userId: string): string {
+  return nodeScopedReference("user", nodeId, userId);
+}
+
+export function authzNodeAgentPrincipal(
+  nodeId: string,
+  actorId: string
+): string {
+  return nodeScopedReference("agent", nodeId, actorId);
+}
+
+export function authzBillingAccountResource(
+  nodeId: string,
+  billingAccountId: string
+): string {
+  return nodeScopedReference("billing_account", nodeId, billingAccountId);
+}
+
 export function authzNodeResource(nodeId: string): string {
   return `node:${nodeId}`;
+}
+
+export const AUTHZ_GRANT_NOT_EXPIRED_CONDITION = "grant_not_expired";
+
+export function authzGrantExpiresAt(expiresAt: string): AuthzRelationCondition {
+  return {
+    name: AUTHZ_GRANT_NOT_EXPIRED_CONDITION,
+    context: { expires_at: expiresAt },
+  };
+}
+
+function nodeScopedReference(
+  type: "user" | "agent" | "billing_account",
+  nodeId: string,
+  localId: string
+): string {
+  // OpenFGA permits exactly one ':' in an object/user reference. Keep the
+  // node-local components inside the opaque ID with '/' as their delimiter.
+  assertReferenceComponent("nodeId", nodeId);
+  const prefix = `${type}:${nodeId}/`;
+  if (localId.startsWith(prefix)) {
+    assertReferenceComponent("localId", localId.slice(prefix.length));
+    return localId;
+  }
+
+  const typePrefix = `${type}:`;
+  if (localId.startsWith(typePrefix)) {
+    throw new Error(`${type} reference belongs to a different node namespace`);
+  }
+
+  assertReferenceComponent("localId", localId);
+  return `${prefix}${localId}`;
+}
+
+function assertReferenceComponent(name: string, value: string): void {
+  if (value.length === 0 || value.includes(":") || value.includes("/")) {
+    throw new Error(`${name} must be a non-empty node-local identifier`);
+  }
 }
 
 export function relationForAuthzAction(action: AuthzAction): string {
@@ -152,6 +348,12 @@ export function relationForAuthzAction(action: AuthzAction): string {
       return "can_invoke";
     case "user.act_as":
       return "delegates";
+    case "billing_account.read":
+      return "can_read";
+    case "billing_account.grant":
+      return "can_grant";
+    case "billing_account.act_as":
+      return "can_act_as";
     case "node.flight":
       return "can_flight";
     case "node.manage_secrets":
@@ -170,13 +372,11 @@ export function relationForAuthzAction(action: AuthzAction): string {
 }
 
 export {
-  OpenFgaAuthorizationAdapter,
-  type OpenFgaAuthorizationAdapterConfig,
-  type OpenFgaCheckClient,
-  type OpenFgaReadClient,
-  type OpenFgaReadRequest,
-  type OpenFgaReadResponse,
-  type OpenFgaStoreClient,
-  type OpenFgaWriteClient,
-} from "./adapters/openfga-authorization.adapter";
+  AUTHORIZATION_FACADE_TOKEN_PREFIX,
+  type AuthorizationFacadeCredentialIdentity,
+  authorizationFacadeCredentialFromToken,
+  authorizationFacadeNodeIdFromToken,
+  RemoteAuthorizationAdapter,
+  type RemoteAuthorizationAdapterConfig,
+} from "./adapters/remote-authorization.adapter";
 export { FakeAuthorizationAdapter } from "./test/fake-authorization.adapter";

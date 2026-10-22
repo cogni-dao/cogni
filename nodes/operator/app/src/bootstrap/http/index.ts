@@ -19,6 +19,7 @@ import { makeWrapPublicRoute, type PublicRouteConfig } from "./wrapPublicRoute";
 export {
   extractClientIp,
   publicApiLimiter,
+  type RateLimiterConfig,
   TokenBucketRateLimiter,
 } from "./rateLimiter";
 export { wrapRouteHandlerWithLogging } from "./wrapRouteHandlerWithLogging";

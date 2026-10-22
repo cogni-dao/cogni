@@ -741,6 +741,16 @@ describe("candidate-a manifest source", () => {
     );
     if (!promotionCheckout || !promotionPush)
       throw new Error("ordinary promotion writer steps are required");
+    const selection = namedStep(
+      "decide",
+      "Select deployment targets by provider"
+    ).run;
+    expect(selection).toContain(
+      '--source-repository "${{ github.repository }}"'
+    );
+    expect(selection).toContain(
+      '--source-sha "${{ steps.meta.outputs.head_sha }}"'
+    );
     for (const [label, step, checks] of [
       ["candidate prepare", prepare, 2],
       ["candidate checkout", candidateCheckout, 1],
