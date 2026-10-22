@@ -753,6 +753,9 @@ async function candidateReadOnlyPreflight() {
   const admission = candidateDeliveryAdmission();
   if (admission.marker !== null) {
     verifyCandidateQualification(admission, request, cluster);
+    if (admission.receipt !== null) {
+      verifyCandidateSourceFloor(admission.receipt, request.sourceSha);
+    }
     console.log(
       "MAINTENANCE_CANDIDATE_ADMISSION",
       JSON.stringify({

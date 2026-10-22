@@ -68,6 +68,13 @@ with tempfile.TemporaryDirectory() as directory:
  f.claim_qualification(work,repo,source)
  claimed=git(work,"rev-parse","HEAD");f.check(work,repo,source)
  f.claim_qualification(work,repo,source);assert git(work,"rev-parse","HEAD")==claimed
+ # A temporary grant cannot bypass an already-published compatibility floor.
+ (state/"maintenance-drain-receipt.json").write_text(json.dumps({"version":1,"phase":"audited","operationId":"a"*64,"request":{"sourceRepository":"foreign/repo","sourceSha":"e"*40}}))
+ try:f.check(work,repo,source);raise AssertionError("grant bypassed established floor")
+ except RuntimeError as e:assert str(e)=="maintenance_compatibility_floor_invalid"
+ try:f.claim_qualification(work,repo,source);raise AssertionError("claim bypassed established floor")
+ except RuntimeError as e:assert str(e)=="maintenance_compatibility_floor_invalid"
+ (state/"maintenance-drain-receipt.json").unlink()
  # Ordinary preparation's old overlay is discarded; exact already-active app and custody references survive.
  (path/"xcomputeworkload.yaml").write_text("HISTORICAL_APP_DO_NOT_RESTORE")
  (path/"kustomization.yaml").write_text("resources: []")

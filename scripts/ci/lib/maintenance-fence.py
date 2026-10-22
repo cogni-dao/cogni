@@ -49,6 +49,9 @@ def check(root, repository=None, source_sha=None, compare=None):
     if marker is not None:
         if marker.get("phase") == "qualifying":
             check_qualification(marker, repository, source_sha, root=root)
+            receipt = read_present(root, RECEIPT)
+            if receipt is not None:
+                check_receipt(receipt, repository, source_sha, compare)
             return
         # Other maintenance phases remain closed to ordinary delivery.
         raise RuntimeError("maintenance_drain_active")
@@ -141,6 +144,9 @@ def claim_qualification(root, repository, source_sha):
     if os.environ.get("GITHUB_JOB") != "prepare-substrate-deploy-branch":
         raise RuntimeError("maintenance_qualification_claim_job_refused")
     grant = check_qualification(marker, repository, source_sha, root=root, require_owner=False)
+    receipt = read_present(root, RECEIPT)
+    if receipt is not None:
+        check_receipt(receipt, repository, source_sha)
     if grant.get("owner") is not None:
         return
     def git(*args):
