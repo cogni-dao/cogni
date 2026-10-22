@@ -16,12 +16,11 @@
  * @internal
  */
 
-import { execFile } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
@@ -655,7 +654,6 @@ describe.skipIf(!process.env.CI)(
         .withStartupTimeout(180_000)
         .start();
       const ids: string[] = [];
-      let imageArchiveDirectory: string | undefined;
       let outerOwnedTag: string | undefined;
       const hostDocker = promisify(execFile);
       const cli = async (...args: string[]) => {
@@ -937,29 +935,46 @@ describe.skipIf(!process.env.CI)(
           outerImage.Id,
           ownedDoltgres,
         ]);
-        imageArchiveDirectory = await mkdtemp(
-          path.join(os.tmpdir(), "cadvisor-image-")
+        const save = spawn("docker", ["image", "save", ownedDoltgres], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        const load = spawn(
+          "docker",
+          ["exec", "-i", nested.getId(), "docker", "image", "load"],
+          { stdio: ["pipe", "pipe", "pipe"] }
         );
-        const imageArchive = path.join(imageArchiveDirectory, "doltgres.tar");
-        await hostDocker("docker", [
-          "image",
-          "save",
-          "--output",
-          imageArchive,
-          ownedDoltgres,
-        ]);
-        await hostDocker("docker", [
-          "cp",
-          imageArchive,
-          `${nested.getId()}:/tmp/owned-doltgres.tar`,
-        ]);
-        const copiedArchive = await nested.exec([
-          "test",
-          "-s",
-          "/tmp/owned-doltgres.tar",
-        ]);
-        expect(copiedArchive.exitCode, copiedArchive.output).toBe(0);
-        await cli("image", "load", "--input", "/tmp/owned-doltgres.tar");
+        const transportExit = (child: ChildProcess, stage: string) => {
+          let stderr = "";
+          child.stderr?.on("data", (chunk: Buffer) => {
+            stderr = (stderr + chunk.toString()).slice(-3000);
+          });
+          return new Promise<void>((resolve, reject) => {
+            child.once("error", reject);
+            child.once("close", (code, signal) => {
+              if (code === 0) resolve();
+              else
+                reject(
+                  new Error(`${stage} failed (${code ?? signal}): ${stderr}`)
+                );
+            });
+          });
+        };
+        const saveExit = transportExit(save, "owned image save");
+        const loadExit = transportExit(load, "owned image load");
+        load.stdout.resume();
+        try {
+          await Promise.all([
+            pipeline(save.stdout, load.stdin),
+            saveExit,
+            loadExit,
+          ]);
+        } finally {
+          save.stdout.destroy();
+          load.stdin.destroy();
+          if (save.exitCode === null && save.signalCode === null) save.kill();
+          if (load.exitCode === null && load.signalCode === null) load.kill();
+          await Promise.allSettled([saveExit, loadExit]);
+        }
         const loadedImages = JSON.parse(
           await cli("image", "inspect", ownedDoltgres)
         ) as typeof outerImages;
@@ -1254,13 +1269,8 @@ describe.skipIf(!process.env.CI)(
         try {
           await nested.stop();
         } finally {
-          try {
-            if (outerOwnedTag)
-              await hostDocker("docker", ["image", "rm", outerOwnedTag]);
-          } finally {
-            if (imageArchiveDirectory)
-              await rm(imageArchiveDirectory, { recursive: true, force: true });
-          }
+          if (outerOwnedTag)
+            await hostDocker("docker", ["image", "rm", outerOwnedTag]);
         }
       }
     }, 600_000);
