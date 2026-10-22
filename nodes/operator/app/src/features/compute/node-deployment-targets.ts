@@ -13,6 +13,14 @@ export interface DeploymentTargetSelection {
   readonly providers: Readonly<Record<string, "akash" | "k3s">>;
   readonly k3s: readonly string[];
   readonly k3sNodes: readonly string[];
+  /**
+   * Every selected node target's canonical GitHub `owner/name` (bug.5510). A
+   * remote-source node carries its catalog `source_repo`; an in-repo node
+   * (no `source_repo`, e.g. operator) is built from the repository running the
+   * workflow, so it carries `parentRepository`. The deploy-branch maintenance
+   * fence compares this exact value with an audited receipt's
+   * `request.sourceRepository`; an empty value is never a valid identity.
+   */
   readonly sourceRepositories: Readonly<Record<string, string>>;
   readonly sourceShas: Readonly<Record<string, string>>;
 }
@@ -80,7 +88,10 @@ export function resolveDeploymentTargets(input: {
   readonly catalogRows: readonly Readonly<Record<string, unknown>>[];
   readonly environment: DeploymentEnvironment;
   readonly flightTargets: readonly string[];
+  /** GitHub `owner/name` running this workflow; the source of in-repo nodes. */
+  readonly parentRepository: string;
 }): DeploymentTargetSelection {
+  const parentRepository = parseParentRepository(input.parentRepository);
   const byName = new Map(
     input.catalogRows.map((row) => [row.name, row] as const)
   );
@@ -117,6 +128,11 @@ export function resolveDeploymentTargets(input: {
       sourceShas[target] = parseSourceSha(row, target);
     } else {
       k3sNodes.push(target);
+      sourceRepositories[target] = resolveNodeSourceRepository(
+        row,
+        target,
+        parentRepository
+      );
     }
   }
 
@@ -144,7 +160,10 @@ export function resolvePromoteDeploymentTargets(input: {
   readonly legacyK3sTargets: readonly string[];
   /** Run-wide preview-forward mode, decided by the caller. Off ⇒ the map is all false. */
   readonly previewForwardMode?: boolean;
+  /** GitHub `owner/name` running this workflow; the source of in-repo nodes. */
+  readonly parentRepository: string;
 }): PromoteDeploymentTargetSelection {
+  const parentRepository = parseParentRepository(input.parentRepository);
   const byName = new Map(
     input.catalogRows.map((row) => [row.name, row] as const)
   );
@@ -192,6 +211,13 @@ export function resolvePromoteDeploymentTargets(input: {
     if (isOffCluster || isRemoteSource) {
       sourceRepositories[target] = parseSourceRepository(row, target);
       sourceShas[target] = parseSourceSha(row, target);
+    } else {
+      // In-repo node: its image and deploy source are this parent repository.
+      sourceRepositories[target] = resolveNodeSourceRepository(
+        row,
+        target,
+        parentRepository
+      );
     }
   }
 
@@ -291,13 +317,35 @@ function catalogScalar(value: unknown): string | number | boolean | null {
     : null;
 }
 
+const GITHUB_REPOSITORY = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/;
+
+/** Case-normalized like catalog `source_repo`; fails closed on empty/malformed input. */
+function parseParentRepository(value: string): string {
+  if (!GITHUB_REPOSITORY.test(value)) {
+    throw new Error(
+      "[deployment-targets] parentRepository must be a GitHub owner/name"
+    );
+  }
+  return value.toLowerCase();
+}
+
+function resolveNodeSourceRepository(
+  row: Readonly<Record<string, unknown>>,
+  target: string,
+  parentRepository: string
+): string {
+  return row.source_repo === undefined
+    ? parentRepository
+    : parseSourceRepository(row, target);
+}
+
 function parseSourceRepository(
   row: Readonly<Record<string, unknown>>,
   target: string
 ): string {
   if (typeof row.source_repo !== "string") {
     throw new Error(
-      `[deployment-targets] Off-cluster target ${target} requires source_repo`
+      `[deployment-targets] Target ${target} requires source_repo`
     );
   }
   const match = row.source_repo.match(
@@ -305,7 +353,7 @@ function parseSourceRepository(
   );
   if (!match) {
     throw new Error(
-      `[deployment-targets] Off-cluster target ${target} has invalid source_repo`
+      `[deployment-targets] Target ${target} has invalid source_repo`
     );
   }
   return `${match[1]}/${match[2]}`.toLowerCase();
