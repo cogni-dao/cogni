@@ -50,7 +50,7 @@ Derive `REPO_SLUG` (e.g., `my-cogni-node`) and `REPO_SNAKE` (e.g., `my_cogni_nod
 - `.github/workflows/ci.yaml` → DB names (`REPO_SNAKE_test`)
 - `.env.local.example`, `.env.test.example` → DB names
 
-**Gate:** `pnpm check` passes.
+**Gate:** required CI (`unit`, `component`, `static`, `manifest`) is green on the PR.
 
 ### Phase 2: Local Environment
 
@@ -72,7 +72,7 @@ Derive `REPO_SLUG` (e.g., `my-cogni-node`) and `REPO_SNAKE` (e.g., `my_cogni_nod
 5. Provision database + run migrations: `pnpm dev:setup`
 6. Start dev server: `pnpm dev`
 
-**Gate:** `pnpm check` passes. App boots at http://localhost:3000 without DB errors.
+**Gate:** required CI (`unit`, `component`, `static`, `manifest`) is green on the PR. App boots at http://localhost:3000 without DB errors.
 
 ### Phase 3: Payment Activation (`payments.status: pending_activation`)
 

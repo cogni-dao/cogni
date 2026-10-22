@@ -581,10 +581,17 @@ jobs:
       - name: Build sandbox runtime image
         run: pnpm sandbox:docker:build
 
+      - name: Log in to GHCR for native dependency images
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
       - name: Component tests (testcontainers)
         run: pnpm test:component
 
-      # Doltgres-migrator regression: boots dolthub/doltgresql:latest in its
+      # Doltgres-migrator regression: boots the pinned published catalog image in its
       # own container (separate from the Postgres globalSetup the rest of
       # test:component uses) and exercises migrate-doltgres.mjs + verifier
       # end-to-end. Proves the silent-skip drift gap is caught at runtime,

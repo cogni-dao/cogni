@@ -6,7 +6,7 @@
  * Purpose: HTTP handlers for the external-agent knowledge contribution surface.
  *   Pulls the framework-agnostic ContributionService from the container, maps
  *   SessionUser → Principal, and translates typed service errors to HTTP statuses.
- * Scope: Operator-side wiring only. Mirrors poly's identical handler set.
+ * Scope: Operator HTTP wiring only. Does not implement contribution mutations or replay uncertain writes.
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION,
  *   GOAL_CHANGE_IS_NODE_ADMIN (task.5286): a merge whose diff touches a `goal-*` row (or a
  *   citation from one) additionally requires `node.administer` on this node, checked BEFORE
@@ -25,8 +25,12 @@ import {
   ContributionStateError,
   DomainNotRegisteredError,
   EmptyKnowledgePatchError,
+  HypothesisMissingEvaluateAtError,
   KnowledgeBusyError,
   KnowledgeGateError,
+  KnowledgeWriteConflictError,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
   type PrincipalAuthSource,
   sessionUserToPrincipal,
 } from "@cogni/knowledge-store";
@@ -68,9 +72,35 @@ function authSource(request: Request): PrincipalAuthSource {
 }
 
 function mapError(e: unknown): NextResponse {
-  // Admission control refused, reserved, or lock-contended: nothing was
-  // applied, so this is retryable capacity pressure, never a client conflict.
-  // 409 here would tell an agent its write was rejected on the merits.
+  if (e instanceof KnowledgeWriteOutcomeUnknownError)
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: e.code,
+        retryable: false,
+        ...e.receipt.lookup,
+      },
+      { status: 409 }
+    );
+  if (e instanceof KnowledgeWriteConflictError)
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: e.receipt.code,
+        retryable: false,
+        ...e.receipt.lookup,
+      },
+      { status: 409 }
+    );
+  if (e instanceof KnowledgeWriteScopeRequiredError)
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: "knowledge_write_scope_required",
+        retryable: false,
+      },
+      { status: 500 }
+    );
   if (e instanceof KnowledgeBusyError)
     return NextResponse.json(
       { error: e.message, retryable: true },
@@ -88,6 +118,9 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json({ error: e.message }, { status: 400 });
   // PATCH_IS_NOT_EMPTY — a no-op patch is a client contract error, not a 500.
   if (e instanceof EmptyKnowledgePatchError)
+    return NextResponse.json({ error: e.message }, { status: 400 });
+  // HYPOTHESIS_HAS_EVALUATE_AT — a hypothesis insert without evaluateAt.
+  if (e instanceof HypothesisMissingEvaluateAtError)
     return NextResponse.json({ error: e.message }, { status: 400 });
   // A cite/EDO edit whose target resolves on neither the branch nor main, or
   // whose edge type doesn't match the cited entry_type, is a client error —

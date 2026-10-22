@@ -5,7 +5,7 @@
  * Module: `@bootstrap/container`
  * Purpose: Dependency injection container for application composition root with environment-based adapter selection.
  * Scope: Wire adapters to ports for runtime dependency injection. Provides webhookRegistrations for ingestion route, Temporal WorkflowClient singleton. Does not handle request-scoped lifecycle.
- * Invariants: All ports wired; single container instance per process; config.unhandledErrorPolicy set by env; webhookRegistrations lazy-initialized; Temporal connection singleton with race-safe init.
+ * Invariants: Ports bound once per process; request/session dependencies stay lazy; Temporal connection init is race-safe.
  * Side-effects: IO (initializes logger and emits startup log on first access)
  * Notes: LLM always uses LiteLlmAdapter; stack tests route to mock-openai-api. ContainerConfig controls wrapper behavior.
  * Links: Used by API routes and other entry points; configure adapters here for DI.
@@ -59,6 +59,7 @@ import {
 import {
   buildDoltgresClient,
   createDoltgresPusher,
+  DoltBranchSessionRunner,
   DoltgresEdoResolverAdapter,
   DoltgresKnowledgeContributionAdapter,
   DoltgresKnowledgeStoreAdapter,
@@ -240,7 +241,7 @@ import type {
   ExecutionRequestPort,
   GraphRunRepository,
   ScheduleUserPort,
-  WorkItemsDoltgresPort,
+  WorkItemsContentPort,
 } from "@/ports/server";
 import {
   getDaoTreasuryAddress,
@@ -356,7 +357,7 @@ export interface Container {
   /** Work item queries — reads from markdown files via WorkItemQueryPort */
   workItemQuery: WorkItemQueryPort;
   /** Doltgres-backed work-items API surface — task.0423 v0. Throws if DOLTGRES_URL is unset. */
-  doltgresWorkItems: WorkItemsDoltgresPort;
+  doltgresWorkItems: WorkItemsContentPort;
   /** Operator-local active work-item coordination sessions. */
   workItemSessions: WorkItemSessionPort;
   /** Run event streaming — publish/subscribe via Redis Streams */
@@ -892,11 +893,34 @@ function createContainer(): Container {
       connectionString: env.DOLTGRES_URL,
       applicationName: `cogni_knowledge_${env.SERVICE_NAME ?? "app"}`,
     });
+    const createKnowledgeBranchClient = () =>
+      buildDoltgresClient({
+        connectionString: env.DOLTGRES_URL as string,
+        applicationName: `cogni_knowledge_branch_${env.SERVICE_NAME ?? "app"}`,
+        max: 1,
+      });
+    const knowledgeWriter = new DoltBranchSessionRunner(
+      createKnowledgeBranchClient(),
+      { logger: log, writerProtocol: "database" }
+    );
     const knowledgePort = new DoltgresKnowledgeStoreAdapter({
       sql: doltClient,
+      writerSession: knowledgeWriter,
     });
     knowledgeStorePort = knowledgePort;
-    knowledgeCapability = createKnowledgeCapability(knowledgePort);
+    knowledgeCapability = {
+      ...createKnowledgeCapability(knowledgePort),
+      // ONE_GOAL_LIST (dao-goals-design): the store's goal reader, for core__goal_list. Cap-agnostic: any
+      // reader failure surfaces as a tool error (the graph ends goals_error). story.5101 lifts this into
+      // createKnowledgeCapability.
+      listActiveGoals: async () =>
+        (await knowledgePort.listActiveGoals()).map((g) => ({
+          id: g.id,
+          title: g.title,
+          content: g.content,
+          evaluateAt: g.evaluateAt ? g.evaluateAt.toISOString() : null,
+        })),
+    };
     const edoResolver = new DoltgresEdoResolverAdapter({
       sql: doltClient,
       store: knowledgePort,
@@ -908,12 +932,6 @@ function createContainer(): Container {
     // is what keeps a burst of admin rejects from burning every slot — and
     // keeping them off the read pool is what keeps knowledge reads alive while
     // a write is degraded (bug.5391, bug.5358).
-    const createKnowledgeBranchClient = () =>
-      buildDoltgresClient({
-        connectionString: env.DOLTGRES_URL as string,
-        applicationName: `cogni_knowledge_branch_${env.SERVICE_NAME ?? "app"}`,
-        max: 1,
-      });
     // CONTRIBUTION_READS_FOLLOW_MAIN: Doltgres connections retain the main
     // root they first observed. A shared max:5 pool therefore returned
     // alternating 200/404 responses immediately after a contribution commit.
@@ -927,8 +945,7 @@ function createContainer(): Container {
     });
     const contributionPort = new DoltgresKnowledgeContributionAdapter({
       sql: contributionReadClient,
-      branchSql: createKnowledgeBranchClient(),
-      recreateBranchClient: createKnowledgeBranchClient,
+      writerSession: knowledgeWriter,
       logger: log,
     });
     const remoteUrl = resolveNodeKnowledgeRemoteUrl({
@@ -975,6 +992,7 @@ function createContainer(): Container {
       list: notConfigured,
       get: notConfigured,
       write: notConfigured,
+      listActiveGoals: notConfigured,
     };
     edoCapability = {
       hypothesize: notConfigured,
@@ -987,7 +1005,7 @@ function createContainer(): Container {
     log.warn("Knowledge store not configured (DOLTGRES_URL not set)");
   }
 
-  let doltgresWorkItems: WorkItemsDoltgresPort;
+  let doltgresWorkItems: WorkItemsContentPort;
   try {
     doltgresWorkItems = getDoltgresWorkItemsAdapter(log);
   } catch (e) {
@@ -1001,12 +1019,6 @@ function createContainer(): Container {
       create: notConfigured,
       patch: notConfigured,
       delete: notConfigured,
-      // The shared port carries the creator-bound lease lifecycle. Operator's
-      // own 409-line adapter had no counterpart, so this stub predates them;
-      // they must still fail closed with the same error rather than be absent.
-      claim: notConfigured,
-      heartbeat: notConfigured,
-      release: notConfigured,
     };
   }
 

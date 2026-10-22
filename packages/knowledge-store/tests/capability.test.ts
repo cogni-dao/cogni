@@ -20,7 +20,10 @@ import type {
   NewCitation,
   NewKnowledge,
 } from "../src/domain/schemas.js";
-import type { KnowledgeStorePort } from "../src/port/knowledge-store.port.js";
+import type {
+  KnowledgeStorePort,
+  KnowledgeWriteSession,
+} from "../src/port/knowledge-store.port.js";
 
 function stubKnowledge(entry: NewKnowledge): Knowledge {
   return {
@@ -41,26 +44,65 @@ function stubKnowledge(entry: NewKnowledge): Knowledge {
   };
 }
 
-function makeStubPort() {
+function makeStubPort(rejectCitation = false) {
   const calls: {
     upsert: NewKnowledge[];
     commits: string[];
     citations: NewCitation[];
+    order: string[];
   } = {
     upsert: [],
     commits: [],
     citations: [],
+    order: [],
   };
+  let open = false;
   const port = {
+    withWrite: async <T>(
+      input: { message: string },
+      run: (write: KnowledgeWriteSession) => Promise<T>
+    ): Promise<T> => {
+      expect(open).toBe(false);
+      calls.order.push("scope");
+      open = true;
+      const before = {
+        upsert: calls.upsert.length,
+        citations: calls.citations.length,
+      };
+      try {
+        const value = await run(port as unknown as KnowledgeWriteSession);
+        calls.commits.push(input.message);
+        calls.order.push("commit");
+        return value;
+      } catch (error) {
+        calls.upsert.length = before.upsert;
+        calls.citations.length = before.citations;
+        calls.order.push("rollback");
+        throw error;
+      } finally {
+        open = false;
+        calls.order.push("close");
+      }
+    },
+    getKnowledge: async () => {
+      expect(open).toBe(true);
+      return null;
+    },
     upsertKnowledge: async (entry: NewKnowledge): Promise<Knowledge> => {
+      expect(open).toBe(true);
+      calls.order.push("upsert");
       calls.upsert.push(entry);
       return stubKnowledge(entry);
     },
     addCitation: async (edge: NewCitation) => {
+      expect(open).toBe(true);
+      calls.order.push("citation");
       calls.citations.push(edge);
+      if (rejectCitation) throw new Error("citation rejected");
       return { id: "stub-edge", ...edge };
     },
     commit: async (message: string): Promise<string> => {
+      expect(open).toBe(true);
       calls.commits.push(message);
       return "stub-hash";
     },
@@ -86,6 +128,7 @@ describe("createKnowledgeCapability — write path with v0 gates", () => {
     ).rejects.toBeInstanceOf(KnowledgeGateError);
 
     expect(calls.upsert).toHaveLength(0);
+    expect(calls.order).toEqual([]);
     expect(calls.commits).toHaveLength(0);
   });
 
@@ -104,6 +147,7 @@ describe("createKnowledgeCapability — write path with v0 gates", () => {
     ).rejects.toBeInstanceOf(KnowledgeGateError);
 
     expect(calls.upsert).toHaveLength(0);
+    expect(calls.order).toEqual([]);
   });
 
   it("upserts + commits a valid write through to the port", async () => {
@@ -124,6 +168,7 @@ describe("createKnowledgeCapability — write path with v0 gates", () => {
     expect(calls.upsert[0]?.id).toBe("fed-rate-base-rate");
     expect(calls.commits).toHaveLength(1);
     expect(calls.commits[0]).toContain("Fed rate base rate");
+    expect(calls.order).toEqual(["scope", "upsert", "commit", "close"]);
   });
 
   it("writes outgoing citation edges before the commit (compounding write)", async () => {
@@ -143,6 +188,14 @@ describe("createKnowledgeCapability — write path with v0 gates", () => {
       ],
     });
 
+    expect(calls.order).toEqual([
+      "scope",
+      "upsert",
+      "citation",
+      "citation",
+      "commit",
+      "close",
+    ]);
     expect(calls.citations).toHaveLength(2);
     expect(calls.citations[0]).toMatchObject({
       citingId: "oss-cap-eval-harness",
@@ -150,6 +203,31 @@ describe("createKnowledgeCapability — write path with v0 gates", () => {
       citationType: "supports",
     });
     expect(calls.commits).toHaveLength(1);
+  });
+
+  it("rolls back one logical write when a citation fails, with no commit", async () => {
+    const { port, calls } = makeStubPort(true);
+    const cap = createKnowledgeCapability(port);
+    await expect(
+      cap.write({
+        id: "valid-slug",
+        domain: "meta",
+        title: "Valid write",
+        content: "body",
+        sourceType: "agent",
+        citations: [{ citedId: "missing", citationType: "supports" }],
+      })
+    ).rejects.toThrow("citation rejected");
+    expect(calls.order).toEqual([
+      "scope",
+      "upsert",
+      "citation",
+      "rollback",
+      "close",
+    ]);
+    expect(calls.upsert).toEqual([]);
+    expect(calls.citations).toEqual([]);
+    expect(calls.commits).toEqual([]);
   });
 
   it("honors the opt-out via empty gate set (test-mode escape hatch)", async () => {

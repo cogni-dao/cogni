@@ -13,7 +13,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  type GoalView,
   renderBundleMarkdown,
+  resolveGoals,
   resolveOrientation,
   SESSION_BOOTSTRAP_INVARIANTS,
   SESSION_WATCH_GATE,
@@ -43,6 +45,7 @@ const baseInput = {
     },
   ],
   orientation: null,
+  goals: { status: "ok", goals: [] },
 } as const;
 
 const SKILL_WITH_TRIGGER = {
@@ -366,5 +369,77 @@ describe("resolveOrientation", () => {
       null
     );
     expect(empty).toBeNull();
+  });
+});
+
+describe("Goals section — approved DAO goals right after the mission (task.5287)", () => {
+  const goal = (n: number): GoalView => ({
+    id: `goal-g${n}`,
+    title: `Goal: outcome ${n}`,
+    // Content deliberately states a DIFFERENT date: the rendered deadline must
+    // come from the evaluate_at column, never from parsing the body.
+    content: `Statement: s${n}.\nKPI: \`gh pr list\` | count\nTarget: ${n}\nBy: someday`,
+    evaluateAt: new Date(`2026-12-0${n}T00:00:00.000Z`),
+  });
+  const port = (goals: GoalView[] | Error) => ({
+    listActiveGoals: async () => {
+      if (goals instanceof Error) throw goals;
+      return goals;
+    },
+  });
+
+  it("renders exactly `no approved goals` with zero goals", async () => {
+    const goals = await resolveGoals(port([]));
+    const md = renderBundleMarkdown({ ...baseInput, goals });
+    expect(md).toContain("## Goals\n\nno approved goals\n");
+  });
+
+  it("renders 1–3 goals' title and content verbatim, after mission and before the invariants", async () => {
+    const three = [goal(1), goal(2), goal(3)];
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      orientation: { id: "operator-agent-orientation", content: "the map" },
+      goals: await resolveGoals(port(three)),
+    });
+    for (const g of three) {
+      expect(md).toContain(
+        `### ${g.title}\n\nBy: 2026-12-0${g.id.slice(-1)} · \`${g.id}\`\n\n${g.content}`
+      );
+    }
+    expect(md).not.toContain("no approved goals");
+    const at = (needle: string) => md.indexOf(needle);
+    expect(at(baseInput.mission)).toBeLessThan(at("## Goals"));
+    expect(at("## Goals")).toBeLessThan(at("## Orientation"));
+    expect(md.match(/the map/g)).toHaveLength(1);
+    expect(at("## Goals")).toBeLessThan(at("## Tooling invariants"));
+  });
+
+  it("renders a visible `goals unavailable` line when the read fails (e.g. >3 goals)", async () => {
+    const goals = await resolveGoals(
+      port(new Error("4 active DAO goals exceed the max of 3: goal-a, goal-b"))
+    );
+    expect(goals.status).toBe("unavailable");
+    const md = renderBundleMarkdown({ ...baseInput, goals });
+    expect(md).toContain("## Goals");
+    expect(md).toContain(
+      "goals unavailable: 4 active DAO goals exceed the max of 3: goal-a, goal-b"
+    );
+    expect(md).not.toContain("no approved goals");
+  });
+
+  it("marks a goal with no evaluate_at instead of inventing a deadline", async () => {
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      goals: await resolveGoals(port([{ ...goal(1), evaluateAt: null }])),
+    });
+    expect(md).toContain("By: no deadline set · `goal-g1`");
+  });
+
+  it("renders `goals unavailable` when the hub is not configured", async () => {
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      goals: await resolveGoals(undefined),
+    });
+    expect(md).toContain("goals unavailable: knowledge hub not configured");
   });
 });

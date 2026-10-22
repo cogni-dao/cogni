@@ -4,9 +4,7 @@
 /**
  * Module: `@bootstrap/jobs/syncGovernanceSchedules.job`
  * Purpose: Job module that wires governance schedule sync to the application container.
- * Scope: Acquires advisory lock, resolves dependencies from container, and syncs governance schedules
- *   for the operator's OWN node AND for every OTHER routable node (their epoch-collect NodeTaskWorkflow
- *   dispatch). Does not contain business logic (the pure orchestration lives in scheduler-core).
+ * Scope: Syncs governance schedules for the operator's own node and every other routable node under an advisory lock; does not contain business logic (scheduler-core owns orchestration).
  * Invariants:
  *   - SINGLE_WRITER: pg_advisory_lock on a reserved (pinned) pool connection prevents concurrent sync runs
  *   - GRANT_VIA_PORT: Uses ensureGrant on ExecutionGrantUserPort, no raw SQL
@@ -299,13 +297,7 @@ export async function runGovernanceSchedulesSyncJob(
     //    operator's live epoch is byte-for-byte unchanged: no dead 404 before the sibling
     //    `/api/internal/attribution/collect` route ships, no latent double-collect after.
     const operatorNodeId = getNodeId();
-    add(
-      await syncFor(
-        operatorNodeId,
-        withEnvApplyMode(getGovernanceConfig(), serverEnv().DEPLOY_ENVIRONMENT),
-        true
-      )
-    );
+    add(await syncFor(operatorNodeId, getGovernanceConfig(), true));
 
     // SELF_SCOPE_NEEDS_NO_REGISTRY: the operator's own charters need no GitHub/catalog read.
     if (scope === "self") {
@@ -367,30 +359,4 @@ export async function runGovernanceSchedulesSyncJob(
     await reservedConn`SELECT pg_advisory_unlock(hashtext('governance_sync'))`;
     reservedConn.release();
   }
-}
-
-/**
- * APPLY_MODE_BY_ENV (story.5096 design v4 §1): resolve the work-prioritization payload's
- * `applyMode` for THIS deployment (`apply.mode[<DEPLOY_ENVIRONMENT>]`, else `default`). The
- * env name is read here at the bootstrap seam; the graph never reads env.
- */
-export function withEnvApplyMode(
-  config: ReturnType<typeof getGovernanceConfig>,
-  deployEnvironment: string | undefined
-): ReturnType<typeof getGovernanceConfig> {
-  return {
-    ...config,
-    schedules: config.schedules.map((s) => {
-      const wp = s.payload?.workPrioritization;
-      if (!wp) return s;
-      const applyMode =
-        (deployEnvironment && wp.applyModes[deployEnvironment]) ||
-        wp.applyModes.default ||
-        "propose";
-      return {
-        ...s,
-        payload: { ...s.payload, workPrioritization: { ...wp, applyMode } },
-      };
-    }),
-  };
 }

@@ -77,7 +77,6 @@ vi.mock("@/bootstrap/container", () => ({
 import {
   GovernanceSyncLockedError,
   runGovernanceSchedulesSyncJob,
-  withEnvApplyMode,
 } from "@/bootstrap/jobs/syncGovernanceSchedules.job";
 
 const EMPTY = {
@@ -149,53 +148,5 @@ describe("runGovernanceSchedulesSyncJob scope", () => {
       runGovernanceSchedulesSyncJob({ scope: "self", throwIfLocked: true })
     ).rejects.toBeInstanceOf(GovernanceSyncLockedError);
     expect(mocks.syncGovernanceSchedules).not.toHaveBeenCalled();
-  });
-});
-
-describe("withEnvApplyMode (APPLY_MODE_BY_ENV)", () => {
-  const config = {
-    schedules: [
-      {
-        charter: "WORK_PRIORITIZER",
-        cron: "*/15 * * * *",
-        timezone: "UTC",
-        entrypoint: "PRIORITIZE",
-        graph: "langgraph:work-prioritizer",
-        model: "gpt-oss-120b",
-        payload: {
-          workPrioritization: {
-            policyVersion: "v4.0",
-            p0Max: 3,
-            p1Budget: 6,
-            p2Budget: 12,
-            objectives: ["dao-goal-a"],
-            applyMode: "propose" as const,
-            applyModes: {
-              default: "propose" as const,
-              "candidate-a": "write" as const,
-            },
-            hypothesesPerDay: 3,
-          },
-        },
-      },
-      {
-        charter: "LEDGER_INGEST",
-        cron: "0 0 * * *",
-        timezone: "UTC",
-        entrypoint: "LEDGER_INGEST",
-      },
-    ],
-  };
-  const mode = (env: string | undefined) =>
-    withEnvApplyMode(config, env).schedules[0]?.payload?.workPrioritization
-      .applyMode;
-
-  it("candidate-a writes; every other env (and unset) proposes; other schedules untouched", () => {
-    expect(mode("candidate-a")).toBe("write");
-    expect(mode("production")).toBe("propose");
-    expect(mode(undefined)).toBe("propose");
-    expect(withEnvApplyMode(config, "candidate-a").schedules[1]).toEqual(
-      config.schedules[1]
-    );
   });
 });

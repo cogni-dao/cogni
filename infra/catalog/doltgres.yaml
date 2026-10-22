@@ -1,0 +1,9 @@
+name: doltgres
+# Qualification artifact only: adding a build target does not change any runtime pin.
+type: infra
+port: 5432
+dockerfile: infra/images/doltgres/Dockerfile
+build_context: infra/images/doltgres
+image_tag_suffix: "-doltgres"
+migrator_tag_suffix: ""
+path_prefix: infra/images/doltgres/

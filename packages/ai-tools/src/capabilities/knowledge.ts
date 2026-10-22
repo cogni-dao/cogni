@@ -89,4 +89,20 @@ export interface KnowledgeCapability {
   get(id: string): Promise<KnowledgeEntry | null>;
   /** Write a knowledge entry + auto-commit. Returns the entry with defaults applied. */
   write(params: KnowledgeWriteParams): Promise<KnowledgeEntry>;
+  /**
+   * The approved DAO goals (ONE_GOAL_LIST, dao-goals-design): merged `goal-*` atoms, not deprecated.
+   * Optional: a node whose store has no goal reader omits it and `core__goal_list` reports goals
+   * unavailable.
+   */
+  listActiveGoals?(): Promise<readonly ActiveGoalInfo[]>;
+}
+
+/** One approved DAO goal as tools see it. */
+export interface ActiveGoalInfo {
+  readonly id: string;
+  readonly title: string;
+  /** The goal statement (KPI, baseline, target, by, serves-mission). */
+  readonly content: string;
+  /** ISO `By:` deadline, when set. */
+  readonly evaluateAt: string | null;
 }

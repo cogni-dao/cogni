@@ -116,6 +116,7 @@
     "scheduler:dev": "dotenv -e .env.local -- pnpm --filter @cogni/scheduler-worker-service dev",
     "scheduler:docker:build": "docker build -f services/scheduler-worker/Dockerfile -t cogni-scheduler-worker-local .",
     "sandbox:docker:build": "docker build -t cogni-sandbox-runtime:latest services/sandbox-runtime/",
+    "eval:prioritizer": "tsx packages/langgraph-graphs/evals/work-prioritizer/run.ts",
     "packages:build": "pnpm -r --filter \"./packages/**\" --filter \"./nodes/operator/packages/**\" --filter \"./nodes/operator/graphs/**\" build && tsc -b packages/*/tsconfig.json packages/langgraph-graphs/tsconfig.build.json nodes/operator/packages/*/tsconfig.json && pnpm packages:validate",
     "packages:build:clean": "rm -rf packages/*/dist packages/*/*.tsbuildinfo nodes/operator/packages/*/dist nodes/operator/packages/*/*.tsbuildinfo nodes/operator/graphs/dist && pnpm packages:build",
     "packages:validate": "tsx --tsconfig tsconfig.scripts.json scripts/validate-package-declarations.ts",
@@ -188,6 +189,7 @@
     ]
   },
   "dependencies": {
+    "@cogni-dao/doltgres-admission": "https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.0/cogni-dao-doltgres-admission-0.1.0.tgz",
     "@cogni/ai-core": "workspace:*",
     "@cogni/ai-tools": "workspace:*",
     "@cogni/aragon-osx": "workspace:*",
@@ -210,7 +212,7 @@
     "@cogni/repo-spec": "workspace:*",
     "@cogni/scheduler-core": "workspace:*",
     "@cogni/temporal-workflows": "workspace:*",
-    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.1.10/cogni-dao-work-items-0.1.10.tgz",
+    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.1/cogni-dao-work-items-0.2.1.tgz",
     "@privy-io/node": "^0.10.1",
     "cron-parser": "^4.9.0",
     "drizzle-orm": "^0.44.7",

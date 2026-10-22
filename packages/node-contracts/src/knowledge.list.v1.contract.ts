@@ -37,6 +37,10 @@ export const KnowledgeRowSchema = z.object({
   sourceType: z.string(),
   sourceRef: z.string().nullable(),
   tags: z.array(z.string()).nullable(),
+  /** ISO timestamp — a hypothesis's resolution date or a goal's `By:` deadline. */
+  evaluateAt: z.string().nullable(),
+  /** Namespaced resolver id on hypothesis/goal rows (`manual`, `agent`, `metric:<kpi>`). */
+  resolutionStrategy: z.string().nullable(),
   createdAt: z.string().nullable(),
 });
 export type KnowledgeRow = z.infer<typeof KnowledgeRowSchema>;

@@ -67,6 +67,12 @@ import {
   RESEARCH_GRAPH_NAME,
 } from "./graphs/research/graph";
 import { RESEARCH_TOOL_IDS } from "./graphs/research/tools";
+import {
+  createWorkPrioritizerGraph,
+  WORK_PRIORITIZER_GRAPH_NAME,
+} from "./graphs/work-prioritizer/graph";
+import { WORK_PRIORITIZER_SYSTEM_PROMPT } from "./graphs/work-prioritizer/prompts";
+import { WORK_PRIORITIZER_TOOL_IDS } from "./graphs/work-prioritizer/tools";
 import type { CreateGraphFn } from "./inproc/types";
 
 /**
@@ -85,7 +91,18 @@ export interface CatalogEntry {
   readonly graphFactory: CreateGraphFn;
   /** Optional system prompt for operator graphs (catalog-driven, not hardcoded). */
   readonly systemPrompt?: string;
+  /**
+   * Graph-owned run report (PURE_GRAPH_FACTORY): the graph returns `structuredResponse.telemetry` (flat,
+   * safe to log) and optional `structuredResponse.samples[]`. The provider logs the telemetry as `event`,
+   * each sample as `sampleEvent` (both registered event names), and echoes the telemetry onto the run
+   * stream as one GRAPH_REPORT_OPEN…GRAPH_REPORT_CLOSE text delta.
+   */
+  readonly report?: { readonly event: string; readonly sampleEvent?: string };
 }
+
+/** Delimiters of a catalog-declared run report on the run stream (CatalogEntry.report). */
+export const GRAPH_REPORT_OPEN = "<graph_report>";
+export const GRAPH_REPORT_CLOSE = "</graph_report>";
 
 export type LangGraphCatalog = Readonly<Record<string, CatalogEntry>>;
 
@@ -242,6 +259,24 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     graphFactory: createOperatorGraph,
     systemPrompt: GIT_REVIEWER_PROMPT,
   },
+
+  /**
+   * Work prioritizer (story.5096, propose-only) — explicit StateGraph: reads the DAO goals
+   * (core__goal_list), backlog, and hub EDO context; tool-less judgments (daily full review, delta
+   * cycles otherwise); code ranking with no caps; one EDO decision on change. Zero work-item mutations.
+   */
+  [WORK_PRIORITIZER_GRAPH_NAME]: {
+    displayName: "Work Prioritizer",
+    description:
+      "Proposes backlog priorities rooted in the node's approved DAO goals; files one EDO decision on change",
+    toolIds: WORK_PRIORITIZER_TOOL_IDS as readonly string[],
+    graphFactory: createWorkPrioritizerGraph,
+    systemPrompt: WORK_PRIORITIZER_SYSTEM_PROMPT,
+    report: {
+      event: "ai.work_prioritizer.cycle",
+      sampleEvent: "ai.work_prioritizer.judge_sample",
+    },
+  },
 } as const;
 
 /**
@@ -283,6 +318,7 @@ export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
   "operating-review": `${LANGGRAPH_PROVIDER_ID}:${OPERATING_REVIEW_GRAPH_NAME}`,
   "pr-manager": `${LANGGRAPH_PROVIDER_ID}:${PR_MANAGER_GRAPH_NAME}`,
   "git-reviewer": `${LANGGRAPH_PROVIDER_ID}:${GIT_REVIEWER_GRAPH_NAME}`,
+  "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,
 } as const;
 
 /**

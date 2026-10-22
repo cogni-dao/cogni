@@ -16,9 +16,9 @@ import { describe, expect, it } from "vitest";
 import { FakeKnowledgeStoreAdapter } from "../src/adapters/fake/index.js";
 import { KnowledgeContributionEditSchema } from "../src/domain/contribution-schemas.js";
 
-function newAdapter(): FakeKnowledgeStoreAdapter {
+async function newAdapter(): Promise<FakeKnowledgeStoreAdapter> {
   const a = new FakeKnowledgeStoreAdapter();
-  a.registerDomain({ id: "method", name: "Method" });
+  await a.registerDomain({ id: "method", name: "Method" });
   return a;
 }
 
@@ -32,37 +32,57 @@ const base = {
 
 describe("useWhen column", () => {
   it("round-trips on insert", async () => {
-    const a = newAdapter();
-    await a.addKnowledge({
-      ...base,
-      useWhen: "designing or reviewing a knowledge domain set",
-    });
+    const a = await newAdapter();
+    await a.withWrite(
+      { operationId: "fixture:use-when:36", message: "addKnowledge fixture" },
+      (write) =>
+        write.addKnowledge({
+          ...base,
+          useWhen: "designing or reviewing a knowledge domain set",
+        })
+    );
     const got = await a.getKnowledge(base.id);
     expect(got?.useWhen).toBe("designing or reviewing a knowledge domain set");
   });
 
   it("defaults to null when omitted, so existing rows stay valid", async () => {
-    const a = newAdapter();
-    await a.addKnowledge(base);
+    const a = await newAdapter();
+    await a.withWrite(
+      { operationId: "fixture:use-when:46", message: "addKnowledge fixture" },
+      (write) => write.addKnowledge(base)
+    );
     const got = await a.getKnowledge(base.id);
     expect(got?.useWhen).toBeNull();
   });
 
   it("is independently updatable without touching content", async () => {
-    const a = newAdapter();
-    await a.addKnowledge({ ...base, useWhen: "first" });
-    await a.updateKnowledge(base.id, { useWhen: "second" });
+    const a = await newAdapter();
+    await a.withWrite(
+      { operationId: "fixture:use-when:53", message: "addKnowledge fixture" },
+      (write) => write.addKnowledge({ ...base, useWhen: "first" })
+    );
+    await a.withWrite(
+      {
+        operationId: "fixture:use-when:54",
+        message: "updateKnowledge fixture",
+      },
+      (write) => write.updateKnowledge(base.id, { useWhen: "second" })
+    );
     const got = await a.getKnowledge(base.id);
     expect(got?.useWhen).toBe("second");
     expect(got?.content).toBe("Body.");
   });
 
   it("strips dangerous control chars but preserves ordinary text", async () => {
-    const a = newAdapter();
-    await a.addKnowledge({
-      ...base,
-      useWhen: `diagnosing${String.fromCharCode(7)} a 502`,
-    });
+    const a = await newAdapter();
+    await a.withWrite(
+      { operationId: "fixture:use-when:62", message: "addKnowledge fixture" },
+      (write) =>
+        write.addKnowledge({
+          ...base,
+          useWhen: `diagnosing${String.fromCharCode(7)} a 502`,
+        })
+    );
     const got = await a.getKnowledge(base.id);
     expect(got?.useWhen).toBe("diagnosing a 502");
   });

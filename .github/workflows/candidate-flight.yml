@@ -331,11 +331,13 @@ jobs:
         working-directory: app-src
         env:
           FLIGHT_TARGETS_JSON: ${{ steps.flight-targets.outputs.flight_targets_json }}
+          PARENT_SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
         run: |
           pnpm --filter operator materialize:compute-workload \
             --catalog-root "${GITHUB_WORKSPACE}/app-src/infra/catalog" \
             --environment candidate-a \
             --flight-targets-json "$FLIGHT_TARGETS_JSON" \
+            --source-sha "$PARENT_SOURCE_SHA" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
@@ -655,6 +657,11 @@ jobs:
             fi
           fi
 
+          if [[ "$PRESERVED_IMAGE_REF" == *"@sha256:"* ]]; then
+            snapshot_overlay_init_contract candidate-a "$NODE" "$PRESERVED_IMAGE_REF" \
+              "$RUNNER_TEMP/preserved-init-${NODE}.json"
+          fi
+
           rsync -a --delete ../app-src/infra/k8s/base/ infra/k8s/base/
           mkdir -p "infra/k8s/overlays/candidate-a/${NODE}"
           rsync -a --delete \
@@ -668,6 +675,8 @@ jobs:
             # digest unchanged through this preliminary shape commit.
             bash ../ci-src/scripts/ci/promote-k8s-image.sh --no-commit \
               --env candidate-a --app "$NODE" --digest "$PRESERVED_IMAGE_REF"
+            restore_overlay_init_contract candidate-a "$NODE" "$PRESERVED_IMAGE_REF" \
+              "$RUNNER_TEMP/preserved-init-${NODE}.json"
           fi
           mkdir -p infra/catalog
           cp "../app-src/infra/catalog/${NODE}.yaml" "infra/catalog/${NODE}.yaml"

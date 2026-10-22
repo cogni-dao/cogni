@@ -68,6 +68,8 @@ export const GET = wrapRouteHandlerWithLogging<{
         sourceType: entry.sourceType,
         sourceRef: entry.sourceRef ?? null,
         tags: entry.tags ?? null,
+        evaluateAt: entry.evaluateAt ? entry.evaluateAt.toISOString() : null,
+        resolutionStrategy: entry.resolutionStrategy ?? null,
         createdAt: entry.createdAt ? entry.createdAt.toISOString() : null,
       })
     );

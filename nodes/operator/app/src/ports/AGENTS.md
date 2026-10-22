@@ -73,6 +73,7 @@ Biome `noRestrictedImports` enforces this in `biome/app.json`.
 - ScheduleControlPort, ScheduleUserPort, ScheduleWorkerPort
 - ExecutionGrantUserPort, ExecutionGrantWorkerPort, ExecutionRequestPort
 - ScheduleRunRepository
+- WorkItemsContentPort, WorkItemsCreateInput, WorkItemsPatchInput, WorkItemsPatchSet — versioned content only; PostgreSQL coordination remains a separate port
 - Grant errors (GrantNotFoundError, GrantExpiredError, GrantRevokedError, GrantScopeMismatchError)
 - Schedule errors (ScheduleNotFoundError, ScheduleAccessDeniedError, InvalidCronExpressionError, InvalidTimezoneError)
 

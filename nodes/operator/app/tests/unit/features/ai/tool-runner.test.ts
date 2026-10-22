@@ -123,6 +123,75 @@ describe("features/ai/tool-runner", () => {
       }
     });
 
+    it("preserves a bounded nonretryable receipt to the caller and model event", async () => {
+      const receipt = {
+        code: "mutation_outcome_unknown",
+        retryable: false as const,
+        lookup: { operationId: "op-1", branch: "op/1", commitHash: null },
+      };
+      const boundTool = createTestBoundToolRuntime();
+      const collector = createEventCollector();
+      const source = createTestToolSource({
+        [TEST_TOOL_NAME]: {
+          ...boundTool,
+          exec: async () => {
+            throw Object.assign(new Error("Inspect receipt before retry"), {
+              receipt,
+            });
+          },
+        },
+      });
+      const runner = createToolRunner(source, collector.emit, {
+        policy: TEST_POLICY,
+        ctx: TEST_CTX,
+      });
+      expect(
+        await runner.exec(TEST_TOOL_NAME, { value: "test" })
+      ).toMatchObject({
+        ok: false,
+        errorCode: "execution",
+        retryable: false,
+        receipt,
+      });
+      const event = collector.events.find(
+        (event) => event.type === "tool_call_result"
+      );
+      expect(event).toMatchObject({
+        result: {
+          errorCode: receipt.code,
+          retryable: false,
+          lookup: receipt.lookup,
+        },
+      });
+    });
+
+    it("does not copy arbitrary error fields or malformed receipts", async () => {
+      const boundTool = createTestBoundToolRuntime();
+      const collector = createEventCollector();
+      const source = createTestToolSource({
+        [TEST_TOOL_NAME]: {
+          ...boundTool,
+          exec: async () => {
+            throw Object.assign(new Error("Failed"), {
+              secret: "never-copy",
+              receipt: {
+                code: "bad",
+                retryable: false,
+                lookup: { secret: { raw: "unsafe" } },
+              },
+            });
+          },
+        },
+      });
+      const runner = createToolRunner(source, collector.emit, {
+        policy: TEST_POLICY,
+        ctx: TEST_CTX,
+      });
+      const result = await runner.exec(TEST_TOOL_NAME, { value: "test" });
+      expect(result).not.toHaveProperty("receipt");
+      expect(JSON.stringify(collector.events)).not.toContain("never-copy");
+    });
+
     // NOTE: Empty allowlist check removed from tool-runner.
     // Allowlist enforcement is now in contract.redact() or ToolPolicy.
 
