@@ -140,6 +140,9 @@ PY
 
 cleanup() {
   local rc=$?
+  if declare -F native_preservation_finish >/dev/null; then
+    native_preservation_finish || rc=1
+  fi
   rm -f "${caddy_tmp:-}" "${database_reliability_es_tmp:-}" "${migration_es_tmp:-}"
   if [ -n "$SUMMARY_FILE" ] && [ "$SUMMARY_WRITTEN" != "true" ]; then
     if [ "$rc" -eq 0 ]; then
@@ -149,6 +152,7 @@ cleanup() {
     fi
   fi
   rm -f "${ROWS_FILE:-}"
+  exit "$rc"
 }
 
 usage() {
@@ -321,6 +325,21 @@ stage_exact() {
 init_summary
 trap cleanup EXIT
 
+# Direct callers receive the same nonoptional template-candidate guarantee as
+# run-node-substrate. Reuse its public baseline to detect materialization races.
+. "$SCRIPT_DIR/lib/preserve-shared-native.sh"
+native_preservation_begin || fail "template native preservation preflight refused"
+PRESERVE_SHARED_NATIVE=""
+if native_preservation_scope; then PRESERVE_SHARED_NATIVE=1; fi
+
+native_control_guard_stage=""
+native_control_snapshot_b64=""
+if [[ "$PRESERVE_SHARED_NATIVE" == 1 ]]; then
+  stage_exact "$REPO_ROOT/scripts/ci/preserve-shared-native.remote.py" native-preservation-guard
+  native_control_guard_stage="$STAGED_EXACT_PATH"
+  native_control_snapshot_b64="$(base64 < "$SUBSTRATE_NATIVE_BASELINE_DIR/control.json" | tr -d '\n')"
+fi
+
 # READ-ONLY: mint the <env>-db-reader token (bound to the db-provisioner SA), never
 # the writer. secret-materialize is the sole OpenBao writer; this phase performs
 # zero bao kv put/patch (Invariant 16 token boundary).
@@ -433,6 +452,7 @@ mark_row db_host_agreement ready "stored runtime and migration DSNs agree with l
 postgres_provisioned_remote=false
 if ! "$postgres_provision_here"; then
   CURRENT_ROW=postgres_destination_provision
+  native_preservation_verify || fail "native identity changed before lane Postgres provisioning"
   [[ "$postgres_residency_env" == "$DEPLOY_ENVIRONMENT" && "$DEPLOY_ENVIRONMENT" != production ]] \
     || fail "refusing an upward-trust or non-lane Postgres provisioning target"
   # Custody and residency are independent: retain the custodian's SSH identity,
@@ -447,13 +467,23 @@ if ! "$postgres_provision_here"; then
   stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/control-migrations/0003_disable_database_locking.sql" lane-postgres-locking-retirement
   destination_locking_retirement="$STAGED_EXACT_PATH"
   destination_locking_retirement_sha256="$STAGED_EXACT_SHA256"
+  destination_native_guard=""
+  destination_native_snapshot_b64=""
+  if [[ "$PRESERVE_SHARED_NATIVE" == 1 ]]; then
+    stage_exact "$REPO_ROOT/scripts/ci/preserve-shared-native.remote.py" lane-native-preservation-guard
+    destination_native_guard="$STAGED_EXACT_PATH"
+    destination_native_snapshot_b64="$(base64 < "$SUBSTRATE_NATIVE_BASELINE_DIR/postgres.json" | tr -d '\n')"
+  fi
   VM_HOST="$control_vm_host"
+  native_preservation_verify || fail "native identity changed before lane Postgres DML"
   {
     printf 'set -euo pipefail\nset -a\n. /opt/cogni-template-runtime/.env\nset +a\n'
     printf 'lane_env=%q\nlane_db=%q\nprovisioner=%q\nprovisioner_sha256=%q\n' \
       "$postgres_residency_env" "$node_db" "$destination_provisioner" "$destination_provisioner_sha256"
     printf 'locking_retirement=%q\nlocking_retirement_sha256=%q\n' \
       "$destination_locking_retirement" "$destination_locking_retirement_sha256"
+    printf 'preserve_native=%q\nnative_guard=%q\nnative_snapshot_b64=%q\n' \
+      "$PRESERVE_SHARED_NATIVE" "$destination_native_guard" "$destination_native_snapshot_b64"
     printf 'lane_app_password=%q\nlane_service_password=%q\nlane_migration_password=%q\n' \
       "$app_db_password" "$app_db_service_password" "$app_db_migration_password"
     printf 'export LITELLM_DB_NAME=%q DB_PORT=%q\n' \
@@ -464,7 +494,13 @@ if ! "$postgres_provision_here"; then
       "$db_service_connection_limit" "$db_service_statement_timeout_ms" "$db_lock_timeout_ms" \
       "$db_idle_in_transaction_timeout_ms" "$db_temp_file_limit_mib" "$db_work_mem_mib"
     cat <<'DESTINATION'
-trap 'rm -f "$provisioner" "$locking_retirement"' EXIT
+verify_destination_native() {
+  [[ "$preserve_native" == 1 ]] || return 0
+  printf '%s' "$native_snapshot_b64" | base64 --decode | python3 "$native_guard" verify \
+    --compose /opt/cogni-template-runtime/docker-compose.yml --runtime /opt/cogni-template-runtime --service postgres >/dev/null
+}
+trap 'rc=$?; verify_destination_native || rc=1; rm -f "$provisioner" "$locking_retirement" "$native_guard"; exit "$rc"' EXIT
+verify_destination_native
 [ "$(sha256sum "$provisioner" | awk '{print $1}')" = "$provisioner_sha256" ]
 [ "$(sha256sum "$locking_retirement" | awk '{print $1}')" = "$locking_retirement_sha256" ]
 # Root authority was read on this destination before the lane-only payload.
@@ -488,6 +524,7 @@ DB_HOST=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddre
 }
 [[ "$DB_HOST" != 127.* ]] || exit 1
 export DB_HOST
+verify_destination_native
 docker run --rm --pull=never --cpus=.5 --memory=256m --pids-limit=64 \
   --network "container:$postgres_container" \
   --mount "type=bind,src=$provisioner,dst=/app/provision.sh,readonly" \
@@ -859,6 +896,7 @@ if "$dolt_mirror_purge"; then
   dolt_mirror_reconcile_snippet="    RUNTIME_ENV=\"\$runtime_env\" \\
     RUNTIME_COMPOSE_BIN=\"docker compose --project-name cogni-runtime --env-file \$runtime_env -f /opt/cogni-template-runtime/docker-compose.yml\" \\
     HASH_DIR=/var/lib/cogni \\
+    PRESERVE_SHARED_NATIVE='${PRESERVE_SHARED_NATIVE}' \\
     MODE=purge \\
       bash '${dolt_mirror_helper_stage}'
 "
@@ -877,6 +915,7 @@ elif "$dolt_mirror_enabled"; then
   dolt_mirror_reconcile_snippet="    RUNTIME_ENV=\"\$runtime_env\" \\
     RUNTIME_COMPOSE_BIN=\"docker compose --project-name cogni-runtime --env-file \$runtime_env -f /opt/cogni-template-runtime/docker-compose.yml\" \\
     HASH_DIR=/var/lib/cogni \\
+    PRESERVE_SHARED_NATIVE='${PRESERVE_SHARED_NATIVE}' \\
     DOLT_CREDS_JWK_B64='${dolt_creds_jwk_b64}' \\
     DOLT_CREDS_KEYID_B64='${dolt_creds_keyid_b64}' \\
     DOLTHUB_OWNER_B64='${dolthub_owner_b64}' \\
@@ -954,6 +993,15 @@ remote "set -euo pipefail
   runtime_env=/opt/cogni-template-runtime/.env
   runtime_compose=(docker compose --project-name cogni-runtime --env-file \"\$runtime_env\" -f /opt/cogni-template-runtime/docker-compose.yml)
   echo '[remote] reconcile begin (${DEPLOY_ENVIRONMENT}/${TARGET_NODE})'
+  native_verify_compose='${runtime_compose_stage}'
+  verify_control_native() {
+    [[ '${PRESERVE_SHARED_NATIVE}' == 1 ]] || return 0
+    printf '%s' '${native_control_snapshot_b64}' | base64 --decode | python3 '${native_control_guard_stage}' verify \
+      --compose \"\$native_verify_compose\" --runtime /opt/cogni-template-runtime \
+      --file /opt/cogni-template-runtime/doltgres-init/install-creds.sh=/opt/cogni-template-runtime/doltgres-init/install-creds.sh >/dev/null
+  }
+  trap 'rc=\$?; verify_control_native || rc=1; exit \"\$rc\"' EXIT
+  verify_control_native
 
   install_exact() {
     local source=\"\$1\" destination=\"\$2\" expected_sha=\"\$3\" mode=\"\$4\" label=\"\$5\" staged
@@ -974,17 +1022,21 @@ remote "set -euo pipefail
   }
 
   install_exact '${runtime_compose_stage}' /opt/cogni-template-runtime/docker-compose.yml '${runtime_compose_sha256}' 0444 runtime-compose
+  native_verify_compose=/opt/cogni-template-runtime/docker-compose.yml
   install_exact '${postgres_provisioner_stage}' /opt/cogni-template-runtime/postgres-init/provision.sh '${postgres_provisioner_sha256}' 0444 postgres-provisioner
   install_exact '${postgres_control_apply_stage}' /opt/cogni-template-runtime/postgres-init/apply-control.sql '${postgres_control_apply_sha256}' 0444 postgres-control-apply
   install_exact '${postgres_control_migration_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0000_database_recovery_control.sql '${postgres_control_migration_sha256}' 0444 postgres-control-migration
   install_exact '${postgres_watchdog_migration_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql '${postgres_watchdog_migration_sha256}' 0444 postgres-watchdog-migration
   install_exact '${postgres_locking_retirement_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0003_disable_database_locking.sql '${postgres_locking_retirement_sha256}' 0444 postgres-locking-retirement
+  if [[ '${PRESERVE_SHARED_NATIVE}' != 1 ]]; then
   install_exact '${doltgres_install_creds_stage}' /opt/cogni-template-runtime/doltgres-init/install-creds.sh '${doltgres_install_creds_sha256}' 0555 doltgres-install-creds
+  fi
   install_exact '${doltgres_provisioner_stage}' /opt/cogni-template-runtime/doltgres-init/provision.sh '${doltgres_provisioner_sha256}' 0444 doltgres-provisioner
   echo '[remote] exact runtime compose and provisioners installed ok'
 
 ${edge_reconcile_snippet}
 
+  if [[ '${PRESERVE_SHARED_NATIVE}' != 1 ]]; then
   touch \"\$runtime_env\"
   current=\$(awk -F= '/^COGNI_NODE_DBS=/ {print substr(\$0, length(\"COGNI_NODE_DBS=\") + 1)}' \"\$runtime_env\" | tail -1)
   if [[ -z \"\$current\" ]]; then
@@ -1020,6 +1072,7 @@ ${edge_reconcile_snippet}
   mv -f \"\$env_tmp\" \"\$runtime_env\"
   rm -f \"\$runtime_env.bak\"
   echo '[remote] runtime env published (COGNI_NODE_DBS reconciled) ok'
+  fi
 
   # Alloy node-label reconcile — stage the fresh config (rsync's restart-on-change
   # half) then the SAME hash-gated restart deploy-infra runs. Born-observable on
@@ -1067,15 +1120,20 @@ ${edge_reconcile_snippet}
   }
   echo '[remote] exact runtime compose mounts verified ok'
 
+  native_run_args=()
+  if [[ '${PRESERVE_SHARED_NATIVE}' == 1 ]]; then native_run_args=(--no-deps); fi
   if ${postgres_provision_here}; then
+  verify_control_native
+  if [[ '${PRESERVE_SHARED_NATIVE}' != 1 ]]; then
   \"\${runtime_compose[@]}\" up -d postgres >/dev/null
+  fi
   echo '[remote] postgres up ok'
   # Single-node db-provision: override COGNI_NODE_DBS to THIS node and inject its
   # per-node OpenBao passwords (read above) via -e, so provision.sh reconciles the
   # per-node app/service roles to the OpenBao value. The passwords transit this SSH
   # command + the docker run env (VM-local, not echoed to CI logs); the declarative
   # endgame (vm-secrets-repair.md) removes this bash transport.
-  \"\${runtime_compose[@]}\" --profile bootstrap run --rm \
+  \"\${runtime_compose[@]}\" --profile bootstrap run --rm \"\${native_run_args[@]}\" \
     -e COGNI_NODE_DBS='${node_db}' \
     -e APP_DB_PASSWORD='${app_db_password}' \
     -e APP_DB_SERVICE_PASSWORD='${app_db_service_password}' \
@@ -1100,14 +1158,17 @@ ${edge_reconcile_snippet}
   fi
 
   if \"\${runtime_compose[@]}\" config --services 2>/dev/null | grep -q '^doltgres$'; then
+    verify_control_native
+    if [[ '${PRESERVE_SHARED_NATIVE}' != 1 ]]; then
     \"\${runtime_compose[@]}\" up -d doltgres >/dev/null
+    fi
     echo '[remote] doltgres up ok'
     # bug.5033: node-scope doltgres-provision with its control-resident input,
     # symmetric with db-provision above. Otherwise doltgres-provision relied on the
     # env-file COGNI_NODE_DBS (whole fleet) and the surrounding grep gate silently
     # skips on any compose hiccup → knowledge_<node> uncreated → node-app
     # Init:CrashLoopBackOff. Scoping to THIS node is deterministic + idempotent.
-    \"\${runtime_compose[@]}\" --profile bootstrap run --rm \
+    \"\${runtime_compose[@]}\" --profile bootstrap run --rm \"\${native_run_args[@]}\" \
       -e COGNI_NODE_DBS='${node_doltgres_db}' \
       ${dg_pw_env} doltgres-provision >/dev/null
     echo '[remote] doltgres-provision ok'

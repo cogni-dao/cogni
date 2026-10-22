@@ -18,6 +18,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 RUNNER="$REPO_ROOT/scripts/ci/run-node-substrate.sh"
 
+# Exact template candidate qualification cannot start or recreate shared engines.
+bash "$SCRIPT_DIR/template-native-preservation.test.sh"
+
 TMPROOT=$(mktemp -d -t run-node-substrate.XXXXXX)
 trap 'rm -rf "$TMPROOT"' EXIT
 ORDER="$TMPROOT/order.log"

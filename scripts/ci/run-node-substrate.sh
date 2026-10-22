@@ -30,6 +30,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 DEPLOY_ENVIRONMENT="${1:?usage: run-node-substrate.sh <env> <node>}"
 TARGET_NODE="${2:?usage: run-node-substrate.sh <env> <node>}"
@@ -101,6 +102,13 @@ export CATALOG_DIR
 . "$SCRIPT_DIR/lib/appset-paths.sh"
 CONTROL_ENV="$(control_env_for "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")"
 RELIABILITY_CONTROLLER="$(reliability_controller_for_env "$DEPLOY_ENVIRONMENT")" || exit 1
+
+# Every template candidate run preserves existing native engines, including its
+# normal qualification flight. Refuse before materialization can write anything.
+. "$SCRIPT_DIR/lib/lane-db-residency.sh"
+. "$SCRIPT_DIR/lib/preserve-shared-native.sh"
+trap 'rc=$?; native_preservation_finish || rc=1; exit "$rc"' EXIT
+native_preservation_begin || { echo '::error::template native preservation preflight refused' >&2; exit 1; }
 
 # The bare zone every lane's public host hangs off (`cognidao.org`), used only to build
 # ANOTHER lane's domain when this env custodies it. Derived by stripping this env's own

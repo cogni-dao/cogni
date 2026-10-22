@@ -38,6 +38,8 @@ CI/CD automation scripts and configuration documentation for multiple pipeline s
 
 - `lib/maintenance-fence.py check <deploy-tree>` validates maintenance intent or the real merged-source floor. `claim` CAS-binds only node-template candidate's already-active exact-artifact qualification to its preauthorized workflow/run/attempt; `preserve` retains that admitted XR and custody references during shape preparation. These commands cannot perform first activation, audit native state, clear intent, or invent a MAIN floor; the reviewed finite owning maintainer performs those operations.
 
+- Every `candidate-a/node-template/akash` runner or direct substrate reconcile preserves existing native engines. `lib/preserve-shared-native.sh` transports only public reviewed source to a read-only guard, binding both the custodian's Postgres/Dolt and the lane's own Postgres before materialization, before DML and on success/failure. Missing/drifted native state refuses; there is no opt-out or lifecycle authority. These runs skip native Compose up, use no-deps one-offs, preserve shared runtime env bytes and make Dolt mirror reconciliation read-only. The internal `SUBSTRATE_NATIVE_BASELINE_DIR` carries only public parent-to-child evidence; it cannot relax the exact target gate.
+
 ## Responsibilities
 
 - This directory **does**: Provide CI-agnostic deployment automation with artifact capture and documentation
