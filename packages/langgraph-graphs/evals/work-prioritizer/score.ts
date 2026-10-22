@@ -3,16 +3,14 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/evals/work-prioritizer/score`
- * Purpose: Pure graders for the work-prioritizer eval (design v4 §4): each check returns pass/fail plus a reason.
- * Scope: Pure functions over decision payloads, snapshots, policy, and fixture; does not perform IO.
+ * Purpose: Pure graders for the work-prioritizer eval: each check returns pass/fail plus a reason.
+ * Scope: Pure functions over decision payloads, snapshots, and the fixture; does not perform IO.
  * Invariants:
  *   - GRADERS_ARE_PURE: same input → same verdict; unit-tested in tests/evals/work-prioritizer.score.test.ts.
- *   - GATE = every hard + behavioral check passes; the soft PM-precision metric is reported only.
- *   - PROPOSE_GATE: the graph is propose-only, so the `write` section's graders (apply records, live
- *     priorities, observed scheduled applies) are SKIPPED and listed as such; they gate again once a
- *     write path exists.
+ *   - GATE = every hard + behavioral check passes; informational rows are reported only.
+ *   - PROPOSE_GATE: the graph is propose-only; apply/write graders return with the write path (story.5108).
  * Side-effects: none
- * Links: evals/work-prioritizer/README.md, run.ts, .context/prioritizer-design-v4.md
+ * Links: evals/work-prioritizer/README.md, run.ts
  * @public
  */
 
@@ -161,7 +159,7 @@ export function gradeRationale(payload: DecisionPayload): CheckResult {
   ]);
   const bad: string[] = [];
   for (const r of payload.table) {
-    if (r.pinned || r.to > 1) continue;
+    if (r.to > 1) continue;
     if (!r.whyNow || !consumed.has(r.whyNow.evidenceId))
       bad.push(`${r.itemId}: why-now not evidenced`);
     else if (
@@ -201,7 +199,7 @@ export function gradeGoalsReported(
 /** P0P1_CITES_GOAL: every p0/p1 row carries `goal: goal-<slug>` from the cycle's active goal set. */
 export function gradeGoalCitation(payload: DecisionPayload): CheckResult {
   const bad = payload.table
-    .filter((r) => !r.pinned && r.to <= 1)
+    .filter((r) => r.to <= 1)
     .filter(
       (r) => !r.goal || !GOAL_ID.test(r.goal) || !payload.goals.includes(r.goal)
     )
@@ -229,7 +227,7 @@ export function gradeGates(
     if (i.status === "blocked" || i.blockedBy) forbidden.set(i.id, "blocked");
   }
   const bad = payload.table
-    .filter((r) => !r.pinned && r.to <= 1 && forbidden.has(r.itemId))
+    .filter((r) => r.to <= 1 && forbidden.has(r.itemId))
     .map((r) => `${r.itemId} (${forbidden.get(r.itemId)}) at p${r.to}`);
   return bad.length
     ? fail(bad.join("; "))
@@ -393,19 +391,40 @@ export function gradeHarmEvidence(
       );
 }
 
+/**
+ * READ_AFTER_WRITE: re-run `read` every `intervalMs` until it returns non-null or `timeoutMs` elapses;
+ * returns the last result (null on timeout). `sleep`/`now` are injectable so the bound is unit-tested.
+ */
+export async function pollUntil<T>(
+  read: () => Promise<T | null>,
+  opts: {
+    readonly timeoutMs: number;
+    readonly intervalMs: number;
+    readonly sleep?: (ms: number) => Promise<void>;
+    readonly now?: () => number;
+  }
+): Promise<T | null> {
+  const sleep =
+    opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = opts.now ?? Date.now;
+  const deadline = now() + opts.timeoutMs;
+  for (;;) {
+    const value = await read();
+    if (value !== null || now() >= deadline) return value;
+    await sleep(opts.intervalMs);
+  }
+}
+
 export interface Scorecard {
   readonly buildSha: string;
   readonly baseUrl: string;
   readonly model: string;
-  readonly policyVersion: string;
   readonly promptVersion: string | null;
   readonly mode: "propose";
   readonly decisionIds: readonly string[];
   readonly checks: Readonly<Record<string, CheckResult>>;
   /** Informational rows — reported, never gating. */
   readonly info?: Readonly<Record<string, CheckResult>>;
-  /** Checks not run in this mode (the write section). */
-  readonly skipped?: readonly string[];
   readonly soft: {
     /** Soft observations (e.g. a cycle that crossed 00:00 UTC). */
     readonly notes?: readonly string[];
@@ -419,7 +438,7 @@ export function scorecardMarkdown(card: Scorecard): string {
   const lines = [
     `### work-prioritizer eval — ${card.pass ? "PASS" : "FAIL"}`,
     "",
-    `build \`${card.buildSha}\` · ${card.baseUrl} · model ${card.model} · policy ${card.policyVersion} · prompt ${card.promptVersion ?? "?"} · mode ${card.mode}`,
+    `build \`${card.buildSha}\` · ${card.baseUrl} · model ${card.model} · prompt ${card.promptVersion ?? "?"} · mode ${card.mode}`,
     `decisions: ${card.decisionIds.join(", ") || "none"}`,
     "",
     "| check | verdict | detail |",
@@ -431,181 +450,8 @@ export function scorecardMarkdown(card: Scorecard): string {
     ...Object.entries(card.info ?? {}).map(
       ([name, r]) => `| ${name} | info | ${r.reason.split("|").join("/")} |`
     ),
-    `| cycle wall time (soft) | ${(card.soft.cycleMs ?? []).every((m) => m <= 300_000) ? "pass" : "over 5 min"} | ${(card.soft.cycleMs ?? []).map((m) => `${Math.round(m / 1000)}s`).join(", ") || "-"} (cron is every 5 min) |`,
+    `| cycle wall time (soft) | ${(card.soft.cycleMs ?? []).every((m) => m <= 300_000) ? "pass" : "over 5 min"} | ${(card.soft.cycleMs ?? []).map((m) => `${Math.round(m / 1000)}s`).join(", ") || "-"} (soft budget 5 min per cycle) |`,
     ...(card.soft.notes ?? []).map((n) => `| note (soft) | - | ${n} |`),
-    ...(card.skipped ?? []).map(
-      (n) => `| ${n} | skipped | write section — the graph is propose-only |`
-    ),
   ];
   return lines.join("\n");
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// WRITE SECTION — SKIPPED in propose mode (the graph writes no work item). These graders gate again
-// once the prioritizer applies its plan (via the existing work-item patch path); the propose eval lists
-// WRITE_MODE_CHECKS as skipped instead of running them.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Write-mode checks, reported as skipped by the propose eval. */
-export const WRITE_MODE_CHECKS = [
-  "applied rows match decision (write)",
-  "responsiveness (applied)",
-  "stability (A → B, observed)",
-  "incident demoted after delete",
-] as const;
-
-/** The `<cycle>-apply` record the graph files after applying (write mode). */
-export interface ApplyRecord {
-  readonly decisionId: string;
-  readonly status: string;
-  readonly applied: readonly {
-    readonly itemId: string;
-    readonly to: number;
-    readonly newRevision: number;
-  }[];
-}
-
-/**
- * Write mode: every applied row equals its decision's table row, and is live now unless a
- * later edit (a higher revision) superseded it.
- */
-export function gradeAppliedMatchesTable(
-  record: ApplyRecord | null,
-  decision: DecisionPayload | null,
-  now: readonly SnapshotItem[]
-): CheckResult {
-  if (!record || !decision) return fail("no scheduled apply record observed");
-  const byId = new Map(now.map((i) => [i.id, i]));
-  const bad: string[] = [];
-  for (const a of record.applied) {
-    const row = decision.table.find((r) => r.itemId === a.itemId);
-    if (!row || row.to !== a.to)
-      bad.push(`${a.itemId}: applied p${a.to} ≠ table p${row?.to ?? "?"}`);
-    const cur = byId.get(a.itemId);
-    const superseded =
-      cur?.revision !== undefined && cur.revision > a.newRevision;
-    if (cur && !superseded && (cur.priority ?? null) !== a.to) {
-      bad.push(
-        `${a.itemId}: live p${cur.priority ?? "null"} ≠ applied p${a.to}`
-      );
-    }
-  }
-  return bad.length
-    ? fail(bad.slice(0, 4).join("; "))
-    : ok(
-        `${record.applied.length} applied rows match ${record.decisionId} (${record.status})`
-      );
-}
-
-/** A scheduled prioritizer run (system tenant), as listed by `/api/v1/ai/runs`. */
-export interface ObservedRun {
-  readonly startedAt: string;
-  readonly completedAt: string | null;
-  readonly status: string;
-}
-
-/** `Date.parse`-able ms → the graph's minute-precision cycle stamp (`20261019t1630`, UTC). */
-export function cycleStampOf(ms: number): string {
-  return new Date(ms)
-    .toISOString()
-    .slice(0, 16)
-    .replace(/[-:]/g, "")
-    .replace("T", "t");
-}
-
-/** Every cycle stamp a scheduled run could have filed under: each UTC minute from start to end. */
-export function cycleStampsForRun(run: ObservedRun): string[] {
-  const start = Math.floor(Date.parse(run.startedAt) / 60_000) * 60_000;
-  const end = Date.parse(run.completedAt ?? run.startedAt);
-  const out: string[] = [];
-  for (let t = start; t <= end && out.length < 30; t += 60_000)
-    out.push(cycleStampOf(t));
-  return out;
-}
-
-/** A graded table plus the apply record that landed it (null when not applied). */
-export interface GradedDecision {
-  readonly id: string;
-  readonly payload: DecisionPayload;
-  readonly apply: ApplyRecord | null;
-}
-
-/** Items whose revision moved between A's table (after its own apply) and B's table, plus adds/removes. */
-export function changedBetween(
-  a: GradedDecision,
-  b: DecisionPayload
-): string[] {
-  const expected = new Map(
-    a.payload.table.map((r) => [r.itemId, r.revision] as const)
-  );
-  for (const x of a.apply?.applied ?? []) expected.set(x.itemId, x.newRevision);
-  const changed = b.table
-    .filter(
-      (r) => !expected.has(r.itemId) || expected.get(r.itemId) !== r.revision
-    )
-    .map((r) => r.itemId);
-  const inB = new Set(b.table.map((r) => r.itemId));
-  const removed = a.payload.table
-    .filter((r) => !inB.has(r.itemId))
-    .map((r) => r.itemId);
-  return [...changed, ...removed].sort();
-}
-
-/**
- * Write mode (observe-only): scheduled cycle B is no_change (files no decision), or plans the same
- * p0 set as A's standing table unless an item actually changed between them.
- */
-export function gradeObservedStability(
-  a: GradedDecision | null,
-  b: {
-    readonly status: string;
-    readonly payload: DecisionPayload | null;
-  } | null
-): CheckResult {
-  if (!a) return fail("no standing decision after scheduled cycle A");
-  if (!b) return fail("no scheduled cycle B observed");
-  if (b.status !== "success") return fail(`cycle B run ${b.status}`);
-  if (!b.payload)
-    return ok(`cycle B no_change (no decision); stands on ${a.id}`);
-  const pa = p0Of(a.payload).join(",");
-  const pb = p0Of(b.payload).join(",");
-  if (pa === pb) return ok(`cycle B planned; p0 {${pa}} unchanged`);
-  const changed = changedBetween(a, b.payload);
-  return changed.length
-    ? ok(
-        `p0 {${pa}} → {${pb}} with ${changed.length} changed items (${changed.slice(0, 4).join(", ")})`
-      )
-    : fail(`p0 {${pa}} → {${pb}} with no item changed`);
-}
-
-/** Write mode: the seeded incident is expedite at p0 in cycle C's table, applied, and live at p0. */
-export function gradeIncidentApplied(
-  payload: DecisionPayload | null,
-  apply: ApplyRecord | null,
-  live: readonly SnapshotItem[],
-  seededId: string | null
-): CheckResult {
-  const judged = gradeResponsiveness(payload, seededId);
-  if (!judged.pass) return judged;
-  const a = apply?.applied.find((x) => x.itemId === seededId);
-  if (!a || a.to !== 0)
-    return fail(`${seededId} at p0 in the table but not applied at p0`);
-  const cur = live.find((i) => i.id === seededId);
-  return cur?.priority === 0
-    ? ok(`${seededId} expedite, applied, live at p0`)
-    : fail(`${seededId} applied but live p${cur?.priority ?? "null"}`);
-}
-
-/** Write mode: once the incident is deleted, the next scheduled cycle drops it from the table. */
-export function gradeIncidentDemoted(
-  payload: DecisionPayload | null,
-  seededId: string
-): CheckResult {
-  if (!payload)
-    return fail(
-      `no decision after deleting ${seededId} (table still lists it)`
-    );
-  return payload.table.some((r) => r.itemId === seededId)
-    ? fail(`${seededId} still in the table after delete`)
-    : ok(`${seededId} out of the table after delete`);
 }

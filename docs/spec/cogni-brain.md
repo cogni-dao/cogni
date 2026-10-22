@@ -82,8 +82,8 @@ tags: []
 
 #### Chores
 
-- [ ] Observability instrumentation [observability.md](../.agent/workflows/observability.md)
-- [x] Documentation updates [document.md](../.agent/workflows/document.md)
+- [ ] Observability instrumentation [observability.md](../../.claude/commands/observability.md)
+- [x] Documentation updates (`/implement` docs pass)
 
 ### P1: Production Hardening
 

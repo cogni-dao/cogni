@@ -3,9 +3,9 @@
 
 /**
  * Module: `@cogni/ai-tools/tests/goal-list`
- * Purpose: core__goal_list reads only KnowledgeCapability.listActiveGoals and types the MAX_THREE_GOALS error.
+ * Purpose: core__goal_list reads only KnowledgeCapability.listActiveGoals and never counts or caps goals.
  * Scope: Tool contract + implementation over a fake capability. Does not touch a store or the network.
- * Invariants: ONE_GOAL_LIST, MAX_THREE_GOALS_IS_AN_ERROR.
+ * Invariants: ONE_GOAL_LIST, NO_GOAL_CAP.
  * Side-effects: none
  * Links: src/tools/goal-list.ts
  * @internal
@@ -62,21 +62,23 @@ describe("core__goal_list", () => {
     });
   });
 
-  it("maps the store's TOO_MANY_ACTIVE_GOALS to a typed too_many_active_goals error", async () => {
-    const tooMany = Object.assign(
-      new Error("4 active DAO goals exceed the max of 3"),
-      {
-        code: "TOO_MANY_ACTIVE_GOALS",
-      }
-    );
+  it("NO_GOAL_CAP: returns every goal the reader lists; a reader failure is a plain tool error", async () => {
+    const many = ["a", "b", "c", "d", "e"].map((x) => ({
+      id: `goal-${x}`,
+      title: `Goal: ${x}`,
+      content: "c",
+      evaluateAt: null,
+    }));
     const tool = createGoalListImplementation({
+      knowledgeCapability: capability(async () => many),
+    });
+    expect((await tool.execute({})).goals).toHaveLength(5);
+    const failing = createGoalListImplementation({
       knowledgeCapability: capability(async () => {
-        throw tooMany;
+        throw new Error("doltgres busy");
       }),
     });
-    await expect(tool.execute({})).rejects.toThrow(
-      "too_many_active_goals: 4 active DAO goals exceed the max of 3"
-    );
+    await expect(failing.execute({})).rejects.toThrow("doltgres busy");
   });
 
   it("reports goals unavailable when the node has no goal reader", async () => {

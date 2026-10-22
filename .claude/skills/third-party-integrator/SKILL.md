@@ -536,4 +536,4 @@ Complete before opening a PR:
 - [ ] Env vars added to `server-env.ts` with Zod validation + default/optional correct
 - [ ] Optional adapter wired as `undefined`-safe in container
 - [ ] Structured log emitted at every outbound call (start, ok, error + durationMs)
-- [ ] `pnpm check:fast` green
+- [ ] `pnpm check:fast` green in CI (ask the human before running it locally)

@@ -910,8 +910,9 @@ function createContainer(): Container {
     knowledgeStorePort = knowledgePort;
     knowledgeCapability = {
       ...createKnowledgeCapability(knowledgePort),
-      // ONE_GOAL_LIST (dao-goals-design): the store's goal reader, for core__goal_list.
-      // TooManyActiveGoalsError keeps its `code`; the tool maps it to too_many_active_goals.
+      // ONE_GOAL_LIST (dao-goals-design): the store's goal reader, for core__goal_list. Cap-agnostic: any
+      // reader failure surfaces as a tool error (the graph ends goals_error). story.5101 lifts this into
+      // createKnowledgeCapability.
       listActiveGoals: async () =>
         (await knowledgePort.listActiveGoals()).map((g) => ({
           id: g.id,

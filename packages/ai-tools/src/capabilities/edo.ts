@@ -52,7 +52,7 @@ export interface HypothesizeParams {
 
 /**
  * Inputs to `decide`. Files a `decision` row + 1 `derives_from` citation +
- * commits. The decision MUST derive from a hypothesis
+ * commits. The decision MUST derive from a hypothesis or a DAO goal
  * (DECISION_CITES_HYPOTHESIS + EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE).
  */
 export interface DecideParams {
@@ -60,7 +60,7 @@ export interface DecideParams {
   domain: string;
   title: string;
   content: string;
-  /** ID of the hypothesis being acted on. MUST refer to entry_type='hypothesis'. */
+  /** ID of the hypothesis or DAO goal being acted on. MUST refer to entry_type='hypothesis' or 'goal'. */
   derivesFromHypothesisId: string;
   sourceType: EdoSourceType;
   sourceRef?: string;

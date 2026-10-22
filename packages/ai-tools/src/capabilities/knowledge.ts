@@ -90,9 +90,9 @@ export interface KnowledgeCapability {
   /** Write a knowledge entry + auto-commit. Returns the entry with defaults applied. */
   write(params: KnowledgeWriteParams): Promise<KnowledgeEntry>;
   /**
-   * The approved DAO goals (ONE_GOAL_LIST, dao-goals-design): merged `goal-*` atoms, not deprecated,
-   * at most 3. Rejects with an error whose `code` is `TOO_MANY_ACTIVE_GOALS` past 3. Optional: a node
-   * whose store has no goal reader omits it and `core__goal_list` reports goals unavailable.
+   * The approved DAO goals (ONE_GOAL_LIST, dao-goals-design): merged `goal-*` atoms, not deprecated.
+   * Optional: a node whose store has no goal reader omits it and `core__goal_list` reports goals
+   * unavailable.
    */
   listActiveGoals?(): Promise<readonly ActiveGoalInfo[]>;
 }

@@ -184,7 +184,7 @@ export function parseEntries(
   return out;
 }
 
-/** An approved DAO goal as `core__goal_list` returns it (dao-goals-design; the store enforces ≤3). */
+/** An approved DAO goal as `core__goal_list` returns it (dao-goals-design; NO_GOAL_CAP — the graph never counts). */
 export interface ActiveGoal {
   readonly id: string;
   readonly title: string;
