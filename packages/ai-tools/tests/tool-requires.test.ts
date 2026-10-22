@@ -3,12 +3,13 @@
 
 /**
  * Module: `@cogni/ai-tools/tests/tool-requires`
- * Purpose: Lock the authz v0 node-policy declarations and prove the runtime adapter forwards `requires`.
+ * Purpose: Lock the authz v0 node-policy declarations: exactly the six tools the work prioritizer binds declare node.collaborate.
  * Scope: Contract metadata only; does not execute tools or evaluate policy.
  * Invariants:
- *   - SEAM_INERT (story.5096 split a): no catalog tool declares `requires` yet — every tool stays on the
- *     legacy `tool.execute` path; declarations land with their consumers in later PRs.
- *   - UNDECLARED_IS_LEGACY — an undeclared tool's runtime omits `requires`; a declared one forwards it.
+ *   - PRIORITIZER_TOOLS_DECLARED (story.5096): the prioritizer's reads + its EDO decide declare `requires:
+ *     "node.collaborate"`, so its grant-backed scheduled run passes without an OpenFGA tuple.
+ *   - UNDECLARED_IS_LEGACY: every other tool omits `requires` (legacy `tool.execute` path); the runtime
+ *     adapter forwards a declared one.
  * Side-effects: none
  * Links: src/runtime-adapter.ts, packages/ai-core/src/tooling/tool-runner.ts
  * @internal
@@ -22,31 +23,30 @@ import { toBoundToolRuntime } from "../src/runtime-adapter";
 const ALL = [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE];
 
 describe("tool node-policy declarations (authz v0)", () => {
-  it("no catalog tool declares a node policy yet (legacy path for all)", () => {
-    const declared = ALL.filter((t) => t.contract.requires !== undefined).map(
-      (t) => t.contract.name
+  it("declares node.collaborate on exactly the six prioritizer tools", () => {
+    const declared = ALL.filter((t) => t.contract.requires !== undefined)
+      .map((t) => [t.contract.name, t.contract.requires])
+      .sort();
+    expect(declared).toEqual(
+      [
+        ["core__edo_decide", "node.collaborate"],
+        ["core__get_current_time", "node.collaborate"],
+        ["core__goal_list", "node.collaborate"],
+        ["core__knowledge_read", "node.collaborate"],
+        ["core__knowledge_search", "node.collaborate"],
+        ["core__work_item_query", "node.collaborate"],
+      ].sort()
     );
-    expect(declared).toEqual([]);
   });
 
-  it("omits requires on the runtime for undeclared tools", () => {
+  it("forwards requires to the runtime and omits it for undeclared tools", () => {
     for (const tool of ALL) {
       const runtime = toBoundToolRuntime(tool as never);
-      expect(runtime).not.toHaveProperty("requires");
+      if (tool.contract.requires === undefined) {
+        expect(runtime).not.toHaveProperty("requires");
+      } else {
+        expect(runtime.requires).toBe(tool.contract.requires);
+      }
     }
-  });
-
-  it("forwards a declared requires to the runtime", () => {
-    const [first] = CORE_TOOL_BUNDLE;
-    if (!first) throw new Error("CORE_TOOL_BUNDLE is empty");
-    const declared = {
-      ...first,
-      contract: {
-        ...first.contract,
-        requires: "node.collaborate" as const,
-      },
-    };
-    const runtime = toBoundToolRuntime(declared as never);
-    expect(runtime.requires).toBe("node.collaborate");
   });
 });

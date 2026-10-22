@@ -156,6 +156,17 @@ Next Run
 
 **Current state:** Agent output is ephemeral (not persisted between runs). The structured report format seeds this data. Persistence (via `graph_runs.structured_output` or `GovernanceBriefPort`) is the next infrastructure step.
 
+### 7. Define Evals Before Autonomy
+
+Before an agent's proposals may act without a human, write its eval:
+
+- [ ] Labeled fixture for a known dataset (duplicates, injections, gated/blocked items)
+- [ ] Written `thresholds.json` — schema, grounding, safety invariants, zero unintended mutations, run success, stability across N runs
+- [ ] Black-box runner against the deployed SHA that exits nonzero on any miss
+- [ ] Every miss found becomes a deterministic guard + unit test, then a re-run
+
+Reference: [`packages/langgraph-graphs/evals/work-prioritizer/README.md`](../../packages/langgraph-graphs/evals/work-prioritizer/README.md) · [AI evals spec](../spec/ai-evals.md).
+
 ## Agent Inventory
 
 | Agent            | KPIs                             | Trigger    | Playbook                                | Status   |

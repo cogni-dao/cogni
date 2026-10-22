@@ -28,6 +28,7 @@ import type {
   NewKnowledge,
 } from "../../domain/schemas.js";
 import {
+  citedEntryTypesFor,
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
   requiresEvaluateAt,
@@ -65,8 +66,8 @@ import {
 const WALK_CHAIN_DEFAULT_DEPTH = 5;
 const WALK_CHAIN_MAX_DEPTH = 10;
 
-function expectedEntryTypeForEdge(t: CitationType): string | null {
-  return HYPOTHESIS_TARGETED_EDGES.includes(t) ? "hypothesis" : null;
+function expectedEntryTypeForEdge(t: CitationType): readonly string[] | null {
+  return HYPOTHESIS_TARGETED_EDGES.includes(t) ? citedEntryTypesFor(t) : null;
 }
 
 function citationId(
@@ -382,12 +383,12 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       throw new CitationTargetNotFoundError(edge.citingId);
     }
     const expected = expectedEntryTypeForEdge(edge.citationType);
-    if (expected !== null && citedRow?.entryType !== expected) {
+    if (expected !== null && !expected.includes(citedRow?.entryType ?? "")) {
       throw new CitationTypeMismatchError(
         edge.citationType,
         edge.citedId,
         citedRow?.entryType ?? "(none)",
-        expected
+        expected.join("|")
       );
     }
     const id =
