@@ -23,6 +23,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 DEPLOY_ENVIRONMENT="${1:-${DEPLOY_ENVIRONMENT:-}}"
 TARGET_NODE="${2:-${TARGET:-}}"
+DEPLOYMENT_PROVIDER_REQUESTED="${DEPLOYMENT_PROVIDER:-}"
 DEPLOYMENT_PROVIDER="${DEPLOYMENT_PROVIDER:-k3s}"
 APP_SOURCE_DIR="${APP_SOURCE_DIR:-$REPO_ROOT}"
 COGNI_CATALOG_ROOT="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR}/infra/catalog}"
@@ -141,7 +142,11 @@ PY
 cleanup() {
   local rc=$?
   if declare -F native_preservation_finish >/dev/null; then
-    native_preservation_finish || rc=1
+    if ! native_preservation_finish; then
+      rc=1
+      append_row native_preservation failed "final native identity proof failed" native_preservation_failed
+      SUMMARY_WRITTEN=false
+    fi
   fi
   rm -f "${caddy_tmp:-}" "${database_reliability_es_tmp:-}" "${migration_es_tmp:-}"
   if [ -n "$SUMMARY_FILE" ] && [ "$SUMMARY_WRITTEN" != "true" ]; then
@@ -200,6 +205,8 @@ CATALOG_DIR="$COGNI_CATALOG_ROOT"
 source "$SCRIPT_DIR/lib/appset-paths.sh"
 # shellcheck source=lib/image-tags.sh
 source "$SCRIPT_DIR/lib/image-tags.sh"
+. "$SCRIPT_DIR/lib/preserve-shared-native.sh"
+native_preservation_resolve_provider || fail "template provider disagrees with owning catalog"
 # shellcheck source=lib/lane-db-residency.sh
 source "$SCRIPT_DIR/lib/lane-db-residency.sh"
 

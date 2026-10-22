@@ -114,25 +114,25 @@ class MirrorPreservationTest(unittest.TestCase):
             directory = Path(temp)
             runtime = directory / "runtime.env"
             marker = directory / "dolt-mirror-creds.hash"
-            secret = "private-value-not-for-output"
-            runtime.write_text("UNRELATED=retain\nDOLT_CREDS_JWK=" + secret + "\nDOLT_CREDS_KEYID=id\n")
-            marker.write_text("id:" + hashlib.sha256(secret.encode()).hexdigest())
+            fixture_marker = "fixture-public-marker"
+            runtime.write_text("UNRELATED=retain\nDOLT_CREDS_JWK=" + fixture_marker + "\nDOLT_CREDS_KEYID=id\n")
+            marker.write_text("id:" + hashlib.sha256(fixture_marker.encode()).hexdigest())
             initial = (runtime.read_bytes(), marker.read_bytes())
             env = {**os.environ, "PRESERVE_SHARED_NATIVE": "1", "RUNTIME_ENV": str(runtime),
                    "HASH_DIR": temp, "RUNTIME_COMPOSE_BIN": "/nonexistent/lifecycle-forbidden",
-                   "DOLT_CREDS_JWK_B64": base64.b64encode(secret.encode()).decode(),
+                   "DOLT_CREDS_JWK_B64": base64.b64encode(fixture_marker.encode()).decode(),
                    "DOLT_CREDS_KEYID_B64": base64.b64encode(b"id").decode()}
             script = ROOT / "scripts/ci/reconcile-dolt-mirror-creds.remote.sh"
             result = subprocess.run(["bash", str(script)], env=env, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertNotIn(secret.encode(), result.stdout + result.stderr)
+            self.assertNotIn(fixture_marker.encode(), result.stdout + result.stderr)
             for change in ({"MODE": "purge"}, {"DOLT_CREDS_KEYID_B64": "bmV3"},
                            {"PRESERVE_SHARED_NATIVE": "true"}):
                 result = subprocess.run(["bash", str(script)], env={**env, **change},
                                         capture_output=True, timeout=10)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(initial, (runtime.read_bytes(), marker.read_bytes()))
-                self.assertNotIn(secret.encode(), result.stdout + result.stderr)
+                self.assertNotIn(fixture_marker.encode(), result.stdout + result.stderr)
             runtime.write_text("UNRELATED=retain\n")
             marker.unlink()
             result = subprocess.run(["bash", str(script)], env={**env, "MODE": "purge"},

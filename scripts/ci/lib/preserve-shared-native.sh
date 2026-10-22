@@ -3,6 +3,18 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 # Read-only client for the exact template candidate's existing native engines.
 # Public source bytes use stdin and temporary remote files, never runtime writes.
+native_preservation_resolve_provider() {
+  [[ "$DEPLOY_ENVIRONMENT" == candidate-a && "$TARGET_NODE" == node-template ]] || return 0
+  local actual
+  actual="$(deployment_provider_for_target "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")" || return 1
+  [[ -z "${DEPLOYMENT_PROVIDER_REQUESTED:-}" || "$DEPLOYMENT_PROVIDER_REQUESTED" == "$actual" ]] || {
+    echo '::error::template provider disagrees with owning catalog' >&2
+    return 1
+  }
+  DEPLOYMENT_PROVIDER="$actual"
+  export DEPLOYMENT_PROVIDER
+}
+
 native_preservation_scope() {
   [[ "$DEPLOY_ENVIRONMENT" == candidate-a && "$TARGET_NODE" == node-template && "$DEPLOYMENT_PROVIDER" == akash ]]
 }

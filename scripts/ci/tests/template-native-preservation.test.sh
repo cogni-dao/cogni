@@ -15,6 +15,8 @@ name: node-template
 type: node
 envs: [candidate-a]
 deployment_provider: {candidate-a: akash}
+node_id: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
+database: {candidate-a: {tier: shared, budget_profile: shared-default-v1}}
 YAML
 cat > "$TMPROOT/catalog/operator.yaml" <<'YAML'
 name: operator
@@ -82,5 +84,47 @@ printf '%s' initial > "$NATIVE_FIXTURE_STATE"
 if NATIVE_FIXTURE_MATERIALIZE_RC=7 bash "$REPO_ROOT/scripts/ci/run-node-substrate.sh" candidate-a node-template > "$TMPROOT/materialize-error" 2>&1; then exit 1; fi
 [[ "$(tail -2 "$NATIVE_FIXTURE_LOG" | paste -sd'|' -)" == 'verify both|verify postgres' ]]
 ! grep -q '^reconcile$' "$NATIVE_FIXTURE_LOG"
+# Omission uses the actual Akash declaration; an explicit k3s mismatch refuses.
+: > "$NATIVE_FIXTURE_LOG"
+env -u DEPLOYMENT_PROVIDER bash "$REPO_ROOT/scripts/ci/run-node-substrate.sh" candidate-a node-template >/dev/null
+[[ "$(head -1 "$NATIVE_FIXTURE_LOG")" == 'capture both' ]]
+: > "$NATIVE_FIXTURE_LOG"
+if DEPLOYMENT_PROVIDER=k3s bash "$REPO_ROOT/scripts/ci/run-node-substrate.sh" candidate-a node-template > "$TMPROOT/mismatched-runner" 2>&1; then exit 1; fi
+[[ ! -s "$NATIVE_FIXTURE_LOG" ]]
+: > "$NATIVE_FIXTURE_LOG"
+if env -u DEPLOYMENT_PROVIDER NATIVE_FIXTURE_REFUSE=1 bash "$REPO_ROOT/scripts/ci/reconcile-node-substrate.sh" candidate-a node-template > "$TMPROOT/default-direct" 2>&1; then exit 1; fi
+[[ "$(head -1 "$NATIVE_FIXTURE_LOG")" == 'capture both' ]]
+: > "$NATIVE_FIXTURE_LOG"
+if DEPLOYMENT_PROVIDER=k3s bash "$REPO_ROOT/scripts/ci/reconcile-node-substrate.sh" candidate-a node-template > "$TMPROOT/mismatched-direct" 2>&1; then exit 1; fi
+[[ ! -s "$NATIVE_FIXTURE_LOG" ]]
+
+# A last EXIT-boundary failure must replace an already-written success receipt.
+if (
+  for function in append_row write_summary cleanup; do
+    definition="$(python3 - "$REPO_ROOT/scripts/ci/reconcile-node-substrate.sh" "$function" <<'PY_FUNCTION'
+import pathlib,sys
+source=pathlib.Path(sys.argv[1]).read_text()
+start=source.index(sys.argv[2]+'() {')
+end=source.index('\n}\n\n',start)+2
+print(source[start:end])
+PY_FUNCTION
+)"
+    eval "$definition"
+  done
+  TARGET_NODE=node-template DEPLOY_ENVIRONMENT=candidate-a
+  SUMMARY_FILE="$TMPROOT/summary.json" ROWS_FILE="$TMPROOT/rows.jsonl" SUMMARY_WRITTEN=false
+  : > "$ROWS_FILE"
+  native_preservation_finish() { return 1; }
+  trap cleanup EXIT
+  write_summary success
+); then echo 'final preservation failure returned success' >&2; exit 1; fi
+python3 - "$TMPROOT/summary.json" <<'PY_VERIFY'
+import json,sys
+receipt=json.load(open(sys.argv[1]))
+assert receipt['status']=='failure'
+assert 'native_preservation' in receipt['failed_rows']
+assert receipt['rows'][-1]['error_code']=='native_preservation_failed'
+PY_VERIFY
+
 python3 "$REPO_ROOT/scripts/ci/tests/preserve-shared-native.test.py"
 echo 'template-native-preservation: preflight ordering, inherited baseline and failure/restart refusal pass'

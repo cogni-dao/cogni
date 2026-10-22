@@ -39,6 +39,7 @@ TARGET_NODE="${2:?usage: run-node-substrate.sh <env> <node>}"
 MATERIALIZE_BIN="${RUN_NODE_SUBSTRATE_MATERIALIZE_BIN:-$SCRIPT_DIR/secret-materialize.sh}"
 RECONCILE_BIN="${RUN_NODE_SUBSTRATE_RECONCILE_BIN:-$SCRIPT_DIR/reconcile-node-substrate.sh}"
 ASSERT_BIN="${RUN_NODE_SUBSTRATE_ASSERT_BIN:-$SCRIPT_DIR/assert-target-substrate.sh}"
+DEPLOYMENT_PROVIDER_REQUESTED="${DEPLOYMENT_PROVIDER:-}"
 DEPLOYMENT_PROVIDER="${DEPLOYMENT_PROVIDER:-k3s}"
 
 case "$DEPLOYMENT_PROVIDER" in
@@ -107,6 +108,10 @@ RELIABILITY_CONTROLLER="$(reliability_controller_for_env "$DEPLOY_ENVIRONMENT")"
 # normal qualification flight. Refuse before materialization can write anything.
 . "$SCRIPT_DIR/lib/lane-db-residency.sh"
 . "$SCRIPT_DIR/lib/preserve-shared-native.sh"
+if [[ "$DEPLOY_ENVIRONMENT" == candidate-a && "$TARGET_NODE" == node-template ]]; then
+  . "$SCRIPT_DIR/lib/image-tags.sh"
+  native_preservation_resolve_provider || exit 1
+fi
 trap 'rc=$?; native_preservation_finish || rc=1; exit "$rc"' EXIT
 native_preservation_begin || { echo '::error::template native preservation preflight refused' >&2; exit 1; }
 
