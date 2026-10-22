@@ -5,6 +5,12 @@
 # Preserve upstream v0.57.3 runtime configuration and replace only its binary.
 FROM golang:1.26.2-trixie@sha256:4a7137ea573f79c86ae451ff05817ed762ef5597fcf732259e97abeb3108d873 AS build
 
+# The pinned Go image omits xz; decode the checksum-verified upstream archives.
+# Exact Debian trixie-security version; authenticated APT metadata verifies bytes.
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends xz-utils=5.8.1-1+deb13u2 \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV GOTOOLCHAIN=local \
     CGO_ENABLED=1 \
     CC=x86_64-linux-musl-gcc \
