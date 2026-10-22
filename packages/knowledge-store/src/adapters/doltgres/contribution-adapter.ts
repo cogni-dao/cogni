@@ -1933,16 +1933,28 @@ export class DoltgresKnowledgeContributionAdapter
           throw new ContributionStateError(
             `contribution ${input.contributionId} is ${rec.state}`
           );
-        // MERGE_HEAD_CAS: the head read under this guard must be the head the
-        // caller authorized; an append in between is refused, never merged.
-        if (
-          input.expectedHeadCommit !== undefined &&
-          normalizeDoltCommitRef(rec.headCommit ?? rec.baseCommit) !==
-            normalizeDoltCommitRef(input.expectedHeadCommit)
-        ) {
-          throw new ContributionConflictError(
-            `contribution ${input.contributionId} changed after its merge was authorized; review the new head and merge again`
+        // MERGE_HEAD_CAS: both the recorded head AND the branch tip, read under
+        // this guard (the same cross-replica lock appends take), must be the head
+        // the caller authorized. A commit that reached the branch without
+        // updating head_commit, or an append in between, is refused, never merged.
+        if (input.expectedHeadCommit !== undefined) {
+          const expected = normalizeDoltCommitRef(input.expectedHeadCommit);
+          const tipRows = await conn.unsafe(
+            `SELECT dolt_hashof(${escapeRef(rec.branch)}) AS commit_hash`
           );
+          const tip = String(
+            (tipRows[0] as Record<string, unknown> | undefined)?.commit_hash ??
+              ""
+          );
+          if (
+            normalizeDoltCommitRef(rec.headCommit ?? rec.baseCommit) !==
+              expected ||
+            normalizeDoltCommitRef(tip) !== expected
+          ) {
+            throw new ContributionConflictError(
+              `contribution ${input.contributionId} changed after its merge was authorized; review the new head and merge again`
+            );
+          }
         }
 
         // Capture only this contribution's added outcome edges before its ref

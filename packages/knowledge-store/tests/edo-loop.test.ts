@@ -135,22 +135,16 @@ describe("EDO foundation — invariants", () => {
 
   it("lets derives_from cite a DAO goal, but validates stays hypothesis-only", async () => {
     const { store } = await bootstrap();
-    await store.withWrite(
-      {
-        operationId: "fixture:edo-loop:goal",
-        message: "goal citation fixture",
-      },
-      (write) =>
-        write.addKnowledge({
-          id: "goal-ship-it",
-          domain: DOMAIN,
-          title: "Goal: ship it",
-          content: "...",
-          entryType: "goal",
-          evaluateAt: new Date("2027-01-01T00:00:00Z"),
-          sourceType: "agent",
-        })
-    );
+    // Goals arrive only by an admin-merged contribution (GOAL_WRITE_ONLY_VIA_CONTRIBUTION).
+    store.seedMergedKnowledge({
+      id: "goal-ship-it",
+      domain: DOMAIN,
+      title: "Goal: ship it",
+      content: "...",
+      entryType: "goal",
+      evaluateAt: new Date("2027-01-01T00:00:00Z"),
+      sourceType: "agent",
+    });
     await store.withWrite(
       {
         operationId: "fixture:edo-loop:plan",

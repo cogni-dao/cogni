@@ -24,8 +24,8 @@ import type { Sql } from "postgres";
 import { initializeConfidence } from "../../domain/confidence-policy.js";
 import {
   type ActiveGoal,
+  assertNotGoalWrite,
   GOAL_ENTRY_TYPE,
-  GoalRequiresContributionError,
   selectActiveGoals,
 } from "../../domain/dao-goals.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
@@ -45,7 +45,7 @@ import {
   requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import {
-  assertExistingRowReplay,
+  assertKnowledgeReplay,
   KnowledgeWriteConflictError,
 } from "../../domain/write-replay.js";
 import {
@@ -73,6 +73,9 @@ import {
   type SqlColumnValue,
   updateSetSql,
 } from "./util.js";
+
+/** GOAL_WRITE_ONLY_VIA_CONTRIBUTION folded into raw UPDATE/DELETE WHERE clauses. */
+const NOT_A_GOAL_ROW_SQL = `(entry_type IS NULL OR entry_type <> ${escapeValue(GOAL_ENTRY_TYPE)})`;
 
 // ---------------------------------------------------------------------------
 // Row mapping
@@ -486,8 +489,9 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     const insert = insertColumnsSql(knowledgeInsertColumns(entry));
 
     const existing = await this.getKnowledge(entry.id);
+    assertNotGoalWrite(entry.id, entry.entryType, existing?.entryType);
     if (existing) {
-      assertExistingRowReplay(existing, entry);
+      assertKnowledgeReplay(existing, entry);
       return existing;
     }
     const rows = await this.sql.unsafe(
@@ -501,8 +505,9 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     await assertDomainRegistered(this.sql, entry.domain);
     assertHypothesisEvaluateAt(entry);
     const existing = await this.getKnowledge(entry.id);
+    assertNotGoalWrite(entry.id, entry.entryType, existing?.entryType);
     if (existing) {
-      assertExistingRowReplay(existing, entry);
+      assertKnowledgeReplay(existing, entry);
       return existing;
     }
     const insert = insertColumnsSql(knowledgeInsertColumns(entry));
@@ -518,9 +523,9 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     update: Partial<NewKnowledge>
   ): Promise<Knowledge> {
     this.assertWriteScope();
-    // GOAL_WRITE_ONLY_VIA_CONTRIBUTION: no raw update touches a goal row.
-    if ((await this.getKnowledgeEntryType(id)) === GOAL_ENTRY_TYPE)
-      throw new GoalRequiresContributionError(id);
+    // GOAL_WRITE_ONLY_VIA_CONTRIBUTION: no retype into goal (the stored side is
+    // folded into the UPDATE's WHERE clause below, so there is no read-then-write gap).
+    assertNotGoalWrite(id, update.entryType, undefined);
     if (update.domain !== undefined) {
       await assertDomainRegistered(this.sql, update.domain);
     }
@@ -529,21 +534,28 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     if (setClauses.length === 0) {
       const existing = await this.getKnowledge(id);
       if (!existing) throw new Error(`Knowledge ${id} not found`);
+      assertNotGoalWrite(id, undefined, existing.entryType);
       return existing;
     }
 
     const rows = await this.sql.unsafe(
-      `UPDATE knowledge SET ${setClauses} WHERE id = ${escapeValue(id)} RETURNING *`
+      `UPDATE knowledge SET ${setClauses} WHERE id = ${escapeValue(id)} AND ${NOT_A_GOAL_ROW_SQL} RETURNING *`
     );
-    if (rows.length === 0) throw new Error(`Knowledge ${id} not found`);
+    if (rows.length === 0) {
+      assertNotGoalWrite(id, undefined, await this.getKnowledgeEntryType(id));
+      throw new Error(`Knowledge ${id} not found`);
+    }
     return rowToKnowledge(rows[0] as Record<string, unknown>);
   }
 
   async deleteKnowledge(id: string): Promise<void> {
     this.assertWriteScope();
-    await this.sql.unsafe(
-      `DELETE FROM knowledge WHERE id = ${escapeValue(id)}`
+    // GOAL_WRITE_ONLY_VIA_CONTRIBUTION: a goal row is never deleted by a raw write.
+    const result = await this.sql.unsafe(
+      `DELETE FROM knowledge WHERE id = ${escapeValue(id)} AND ${NOT_A_GOAL_ROW_SQL}`
     );
+    if (!result.count)
+      assertNotGoalWrite(id, undefined, await this.getKnowledgeEntryType(id));
   }
 
   // --- Knowledge identity (collapsed exists + entry_type for CITATION_TARGET_EXISTS_AT_WRITE + EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE) ---

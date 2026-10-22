@@ -4,8 +4,8 @@
 /**
  * Module: `@bootstrap/node-admin-gate`
  * Purpose: The ONE node-admin check for the DAO-goal privileges (task.5286, dao-goals-design):
- *   starting a goal, merging a `goal-*` hub change, and setting work-item priority 1 or higher
- *   (any value <= 1). Each is an OpenFGA `node.administer` check on THIS node, run before the
+ *   starting a goal, merging a `goal-*` hub change, and setting any work-item priority <= 1
+ *   (0 = highest). Each is an OpenFGA `node.administer` check on THIS node, run before the
  *   side effect.
  * Scope: Pure helper over an injected AuthorizationPort. Returns a typed decision; callers own the
  *   HTTP body, logging and error mapping. No second authority, no new role, no model change.
@@ -35,6 +35,8 @@ import {
   ContributionMergeDeniedError,
   touchedGoalIds,
 } from "@cogni/knowledge-store";
+
+import { EVENT_NAMES } from "@/shared/observability";
 
 export type NodeAdminDenied = {
   readonly ok: false;
@@ -150,7 +152,7 @@ export function createGoalMergeAuthorizer(deps: {
       gate.errorCode === "authz_unavailable" ? gate.reason : "not_node_admin";
     deps.log.warn(
       {
-        event: "knowledge.contributions.merge.goal_denied",
+        event: EVENT_NAMES.KNOWLEDGE_CONTRIBUTIONS_MERGE_GOAL_DENIED,
         errorCode: gate.errorCode,
         reason,
         actor: principal.id,
@@ -159,7 +161,7 @@ export function createGoalMergeAuthorizer(deps: {
         goalIds,
         headCommit: changes.headCommit,
       },
-      "knowledge.contributions.merge.goal_denied"
+      EVENT_NAMES.KNOWLEDGE_CONTRIBUTIONS_MERGE_GOAL_DENIED
     );
     throw new ContributionMergeDeniedError(
       gate.errorCode,

@@ -15,8 +15,9 @@
  *   - GOAL_CHANGE_IS_NODE_ADMIN: `touchedGoalIds` names every `goal-*` row a
  *     contribution changes, plus any citation leaving one, from the RAW row ids.
  *     A citation INTO a goal is not a goal change.
- *   - GOAL_WRITE_ONLY_VIA_CONTRIBUTION: a goal row is never created or changed by a
- *     raw main-plane write; `GoalRequiresContributionError` names the refusal.
+ *   - GOAL_WRITE_ONLY_VIA_CONTRIBUTION: `assertNotGoalWrite` is the ONE predicate every
+ *     raw main-plane write (add/upsert/update/delete, both adapters) runs: no new goal
+ *     row, no retype into goal, no change or delete of a goal row.
  *   - NO_GOALS_FAILS_LOUD: zero goals is an empty array the caller must render
  *     visibly (the cognition bundle prints `no approved goals`).
  * Side-effects: none
@@ -44,6 +45,21 @@ export class GoalRequiresContributionError extends Error {
     this.name = "GoalRequiresContributionError";
     this.id = id;
   }
+}
+
+/**
+ * GOAL_WRITE_ONLY_VIA_CONTRIBUTION — the one predicate for raw main-plane writes.
+ * Refuses when the write would produce a goal row (`nextType`) or touch one that
+ * is stored as a goal (`storedType`). Goal rows exist only through a contribution
+ * merged by a node admin, whose path never calls the store's raw writers.
+ */
+export function assertNotGoalWrite(
+  id: string,
+  nextType: string | null | undefined,
+  storedType: string | null | undefined
+): void {
+  if (nextType === GOAL_ENTRY_TYPE || storedType === GOAL_ENTRY_TYPE)
+    throw new GoalRequiresContributionError(id);
 }
 
 /** One approved DAO goal, as every reader sees it. */

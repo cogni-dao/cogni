@@ -122,24 +122,21 @@ describe("DoltgresKnowledgeStoreAdapter.listActiveGoals", () => {
 });
 
 describe("FakeKnowledgeStoreAdapter — goal parity", () => {
+  // Goals arrive only by an admin-merged contribution (GOAL_WRITE_ONLY_VIA_CONTRIBUTION).
   async function seed(
     store: FakeKnowledgeStoreAdapter,
     id: string,
     entryType = "goal"
   ) {
-    return store.withWrite(
-      { operationId: `fixture:dao-goals:${id}`, message: `seed ${id}` },
-      (write) =>
-        write.addKnowledge({
-          id,
-          domain: "strategy",
-          title: `Goal: ${id}`,
-          content: "statement",
-          entryType,
-          evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
-          sourceType: "human",
-        })
-    );
+    return store.seedMergedKnowledge({
+      id,
+      domain: "strategy",
+      title: `Goal: ${id}`,
+      content: "statement",
+      entryType,
+      evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
+      sourceType: "human",
+    });
   }
 
   async function freshStore(): Promise<FakeKnowledgeStoreAdapter> {

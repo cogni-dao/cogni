@@ -257,28 +257,29 @@ describe("GOAL_WRITE_ONLY_VIA_CONTRIBUTION — core__knowledge_write never touch
   async function seeded(): Promise<FakeKnowledgeStoreAdapter> {
     const store = new FakeKnowledgeStoreAdapter();
     await store.registerDomain({ id: "strategy", name: "strategy" });
+    // Goals arrive only by an admin-merged contribution; the fixture seeds them that way.
+    store.seedMergedKnowledge({
+      id: "goal-ship",
+      domain: "strategy",
+      title: "Goal: ship",
+      content: "Statement: ship.\nKPI: prs\nTarget: 10\nBy: 2026-12-31",
+      entryType: "goal",
+      evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
+      sourceType: "human",
+    });
+    // A goal-typed row without the prefix (e.g. a historical retype).
+    store.seedMergedKnowledge({
+      id: "legacy-target",
+      domain: "strategy",
+      title: "Legacy target",
+      content: "statement",
+      entryType: "goal",
+      evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
+      sourceType: "human",
+    });
     await store.withWrite(
       { operationId: "fixture:goal-raw-write", message: "seed rows" },
       async (write) => {
-        await write.addKnowledge({
-          id: "goal-ship",
-          domain: "strategy",
-          title: "Goal: ship",
-          content: "Statement: ship.\nKPI: prs\nTarget: 10\nBy: 2026-12-31",
-          entryType: "goal",
-          evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
-          sourceType: "human",
-        });
-        // A goal-typed row without the prefix (e.g. a historical retype).
-        await write.addKnowledge({
-          id: "legacy-target",
-          domain: "strategy",
-          title: "Legacy target",
-          content: "statement",
-          entryType: "goal",
-          evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
-          sourceType: "human",
-        });
         await write.addKnowledge({
           id: "bet-one",
           domain: "strategy",
@@ -337,47 +338,51 @@ describe("GOAL_WRITE_ONLY_VIA_CONTRIBUTION — core__knowledge_write never touch
     );
   });
 
-  it("refuses a raw store upsert or update that changes a goal row, but allows an identical replay", async () => {
+  it("assertNotGoalWrite: the raw store never creates, retypes into, changes or deletes a goal row", async () => {
     const store = await seeded();
     const goal = await store.getKnowledge("goal-ship");
+    const attempt = (
+      operationId: string,
+      run: Parameters<FakeKnowledgeStoreAdapter["withWrite"]>[1]
+    ) => store.withWrite({ operationId, message: operationId }, run);
+    const goalEntry = {
+      id: "goal-ship",
+      domain: "strategy",
+      title: "Goal: ship",
+      content: "Target: 0",
+      entryType: "goal",
+      evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
+      sourceType: "human" as const,
+    };
+
+    // new goal row
     await expect(
-      store.withWrite(
-        { operationId: "goal:upsert-rewrite", message: "rewrite" },
-        (write) =>
-          write.upsertKnowledge({
-            id: "goal-ship",
-            domain: "strategy",
-            title: "Goal: ship",
-            content: "Target: 0",
-            entryType: "goal",
-            evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
-            sourceType: "human",
-          })
+      attempt("goal:add-new", (w) =>
+        w.addKnowledge({ ...goalEntry, id: "goal-new" })
       )
     ).rejects.toBeInstanceOf(GoalRequiresContributionError);
+    // change an existing goal (even an identical replay is not a raw write)
     await expect(
-      store.withWrite(
-        { operationId: "goal:update-rewrite", message: "rewrite" },
-        (write) => write.updateKnowledge("goal-ship", { content: "Target: 0" })
-      )
+      attempt("goal:upsert", (w) => w.upsertKnowledge(goalEntry))
     ).rejects.toBeInstanceOf(GoalRequiresContributionError);
     await expect(
-      store.withWrite(
-        { operationId: "goal:replay", message: "replay" },
-        (write) =>
-          write.upsertKnowledge({
-            id: "goal-ship",
-            domain: "strategy",
-            title: "Goal: ship",
-            content: "Statement: ship.\nKPI: prs\nTarget: 10\nBy: 2026-12-31",
-            entryType: "goal",
-            evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
-            sourceType: "human",
-          })
+      attempt("goal:update", (w) =>
+        w.updateKnowledge("goal-ship", { content: "Target: 0" })
       )
-    ).resolves.toMatchObject({ id: "goal-ship" });
-    expect((await store.getKnowledge("goal-ship"))?.content).toBe(
-      goal?.content
-    );
+    ).rejects.toBeInstanceOf(GoalRequiresContributionError);
+    // retype a non-goal row into goal
+    await expect(
+      attempt("goal:retype", (w) =>
+        w.updateKnowledge("bet-one", { entryType: "goal" })
+      )
+    ).rejects.toBeInstanceOf(GoalRequiresContributionError);
+    // delete a goal row
+    await expect(
+      attempt("goal:delete", (w) => w.deleteKnowledge("goal-ship"))
+    ).rejects.toBeInstanceOf(GoalRequiresContributionError);
+
+    expect(await store.getKnowledge("goal-ship")).toEqual(goal);
+    expect(await store.getKnowledge("goal-new")).toBeNull();
+    expect((await store.getKnowledge("bet-one"))?.entryType).toBe("hypothesis");
   });
 });

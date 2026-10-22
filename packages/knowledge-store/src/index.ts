@@ -57,6 +57,7 @@ export {
 // DAO goal list (ONE_GOAL_LIST · NO_GOAL_CAP) — read via KnowledgeStorePort.listActiveGoals
 export {
   type ActiveGoal,
+  assertNotGoalWrite,
   GOAL_ENTRY_TYPE,
   GOAL_ID_PREFIX,
   type GoalCandidateRow,

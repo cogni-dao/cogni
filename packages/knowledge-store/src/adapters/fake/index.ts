@@ -18,8 +18,7 @@ import {
 } from "../../domain/confidence-policy.js";
 import {
   type ActiveGoal,
-  GOAL_ENTRY_TYPE,
-  GoalRequiresContributionError,
+  assertNotGoalWrite,
   selectActiveGoals,
 } from "../../domain/dao-goals.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
@@ -39,7 +38,6 @@ import {
   requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import {
-  assertExistingRowReplay,
   assertKnowledgeReplay,
   KnowledgeWriteConflictError,
 } from "../../domain/write-replay.js";
@@ -266,8 +264,9 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
     }
     const existing = this.rows.get(entry.id);
+    assertNotGoalWrite(entry.id, entry.entryType, existing?.entryType);
     if (existing) {
-      assertExistingRowReplay(existing, entry);
+      assertKnowledgeReplay(existing, entry);
       return existing;
     }
     const row: Knowledge = {
@@ -308,9 +307,8 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     this.assertWriteScope();
     const existing = this.rows.get(id);
     if (!existing) throw new Error(`Knowledge ${id} not found`);
-    // GOAL_WRITE_ONLY_VIA_CONTRIBUTION: no raw update touches a goal row.
-    if (existing.entryType === GOAL_ENTRY_TYPE)
-      throw new GoalRequiresContributionError(id);
+    // GOAL_WRITE_ONLY_VIA_CONTRIBUTION: no raw update touches or creates a goal row.
+    assertNotGoalWrite(id, update.entryType, existing.entryType);
     if (update.domain && !this.domainsMap.has(update.domain)) {
       throw new DomainNotRegisteredError(update.domain);
     }
@@ -348,7 +346,35 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
 
   async deleteKnowledge(id: string): Promise<void> {
     this.assertWriteScope();
+    // GOAL_WRITE_ONLY_VIA_CONTRIBUTION: a goal row is never deleted by a raw write.
+    assertNotGoalWrite(id, undefined, this.rows.get(id)?.entryType);
     this.rows.delete(id);
+  }
+
+  /**
+   * TEST FIXTURE ONLY: publish a row as an admin-merged contribution would, without
+   * the raw-write path (which refuses goal rows, GOAL_WRITE_ONLY_VIA_CONTRIBUTION).
+   * The Doltgres adapter has no equivalent: there, goals arrive by `dolt_merge`.
+   */
+  seedMergedKnowledge(entry: NewKnowledge): Knowledge {
+    const row: Knowledge = {
+      id: entry.id,
+      domain: entry.domain,
+      entityId: entry.entityId ?? null,
+      title: entry.title,
+      content: entry.content,
+      useWhen: entry.useWhen ?? null,
+      entryType: entry.entryType ?? "finding",
+      confidencePct: initializeConfidence(entry).confidencePct,
+      sourceType: entry.sourceType,
+      sourceRef: entry.sourceRef ?? null,
+      tags: entry.tags ?? null,
+      evaluateAt: entry.evaluateAt ?? null,
+      resolutionStrategy: entry.resolutionStrategy ?? null,
+      createdAt: new Date(),
+    };
+    this.rows.set(entry.id, row);
+    return row;
   }
 
   // --- Knowledge identity ---

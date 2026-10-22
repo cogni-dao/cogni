@@ -55,7 +55,8 @@ class FakeSql {
 
   constructor(
     private readonly knowledgeEntryTypes = new Map([["policy-row", "finding"]]),
-    private readonly workItemIds = new Set<string>()
+    private readonly workItemIds = new Set<string>(),
+    private readonly opts: { goalGuardMatches?: boolean } = {}
   ) {}
 
   async unsafe(query: string): Promise<Rows> {
@@ -128,7 +129,12 @@ class FakeSql {
         },
       ]);
     }
-    if (query.startsWith("UPDATE knowledge")) return rows([knowledgeRow], 1);
+    if (query.startsWith("UPDATE knowledge"))
+      return this.opts.goalGuardMatches === false
+        ? rows([], 0)
+        : rows([knowledgeRow], 1);
+    if (query.startsWith("DELETE FROM knowledge"))
+      return this.opts.goalGuardMatches === false ? rows([], 0) : rows([], 1);
     if (query.includes("SELECT * FROM knowledge WHERE id")) {
       return rows(this.inserted ? [knowledgeRow] : []);
     }
@@ -252,13 +258,44 @@ describe("DoltgresKnowledgeStoreAdapter — confidence policy on writes", () => 
 });
 
 describe("DoltgresKnowledgeStoreAdapter — goal rows are contribution-only (task.5294)", () => {
-  it("refuses a raw updateKnowledge on a goal row before any UPDATE", async () => {
-    const fake = new FakeSql(new Map([["goal-ship", "goal"]]));
+  it("folds the goal guard into the raw UPDATE's WHERE clause", async () => {
+    const fake = new FakeSql();
+    await adapterFor(fake).withWrite(
+      { operationId: "goal:where", message: "policy fixture" },
+      (write) => write.updateKnowledge("policy-row", { title: "Renamed" })
+    );
+    const update = fake.queries.find((q) => q.startsWith("UPDATE knowledge"));
+    expect(update).toContain(
+      "AND (entry_type IS NULL OR entry_type <> 'goal')"
+    );
+  });
+
+  it("refuses a raw update or delete that matched no row because it is a goal", async () => {
+    const fake = new FakeSql(new Map([["goal-ship", "goal"]]), new Set(), {
+      goalGuardMatches: false,
+    });
+    const adapter = adapterFor(fake);
     await expect(
-      adapterFor(fake).withWrite(
+      adapter.withWrite(
         { operationId: "goal:raw-update", message: "rewrite a goal" },
         (write) =>
           write.updateKnowledge("goal-ship", { title: "Rewritten target" })
+      )
+    ).rejects.toBeInstanceOf(GoalRequiresContributionError);
+    await expect(
+      adapter.withWrite(
+        { operationId: "goal:raw-delete", message: "delete a goal" },
+        (write) => write.deleteKnowledge("goal-ship")
+      )
+    ).rejects.toBeInstanceOf(GoalRequiresContributionError);
+  });
+
+  it("refuses a raw retype into goal before any UPDATE", async () => {
+    const fake = new FakeSql();
+    await expect(
+      adapterFor(fake).withWrite(
+        { operationId: "goal:retype", message: "retype" },
+        (write) => write.updateKnowledge("policy-row", { entryType: "goal" })
       )
     ).rejects.toBeInstanceOf(GoalRequiresContributionError);
     expect(fake.queries.some((q) => q.startsWith("UPDATE knowledge"))).toBe(

@@ -1347,6 +1347,27 @@ describe("raw changed rows + merge head CAS (MERGE_GATES_ON_RAW_ROWS · MERGE_HE
     );
   });
 
+  it("refuses when the branch TIP moved past the recorded head (commit without head_commit update)", async () => {
+    const conn = new FakeMergeReservedSql(["merge999", "0", "0", "ok"]);
+    const original = conn.unsafe.bind(conn);
+    conn.unsafe = async (query: string) =>
+      query.startsWith("SELECT dolt_hashof('contrib/agent-1-abc123')")
+        ? Object.assign([{ commit_hash: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }], {
+            count: 1,
+          })
+        : original(query);
+    const fake = new FakeMergeSql(conn);
+
+    await expect(
+      adapterFor(fake).merge({
+        contributionId: "contrib-agent-1-abc123",
+        principal: reviewer,
+        expectedHeadCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      })
+    ).rejects.toBeInstanceOf(ContributionConflictError);
+    expect(conn.queries.some((q) => q.includes("dolt_merge("))).toBe(false);
+  });
+
   it("merges when the authorized head is still the head (brace-insensitive)", async () => {
     const conn = new FakeMergeReservedSql(["merge999", "0", "0", "ok"]);
     const fake = new FakeMergeSql(conn);

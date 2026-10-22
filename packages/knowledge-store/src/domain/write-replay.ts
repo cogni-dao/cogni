@@ -10,7 +10,6 @@
  * Links: knowledge-store.port.ts
  * @internal
  */
-import { GOAL_ENTRY_TYPE, GoalRequiresContributionError } from "./dao-goals.js";
 import { stripDangerousControlChars } from "./sanitize.js";
 import type { Citation, Knowledge, NewKnowledge } from "./schemas.js";
 
@@ -52,28 +51,6 @@ export function assertKnowledgeReplay(
   });
   if (JSON.stringify(normalize(existing)) !== JSON.stringify(normalize(input)))
     throw new KnowledgeWriteConflictError(input.id);
-}
-
-/**
- * Replay check for an id that already exists. An existing DAO goal row may be
- * replayed byte-identically (not a change) but never rewritten: any difference
- * throws `GoalRequiresContributionError` (GOAL_WRITE_ONLY_VIA_CONTRIBUTION).
- */
-export function assertExistingRowReplay(
-  existing: Knowledge,
-  input: NewKnowledge
-): void {
-  if (existing.entryType !== GOAL_ENTRY_TYPE) {
-    assertKnowledgeReplay(existing, input);
-    return;
-  }
-  try {
-    assertKnowledgeReplay(existing, input);
-  } catch (error) {
-    if (error instanceof KnowledgeWriteConflictError)
-      throw new GoalRequiresContributionError(existing.id);
-    throw error;
-  }
 }
 
 /** Edge identity is part of an EDO request, independently of generated citation IDs. */

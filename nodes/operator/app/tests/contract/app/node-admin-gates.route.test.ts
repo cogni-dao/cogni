@@ -318,13 +318,47 @@ describe("(b) merging a goal-* change is node-admin (inside ContributionService.
     expect(h.mergeMock).toHaveBeenCalledTimes(1);
   });
 
-  it("denies a bearer agent's goal merge with 403 authz_denied before the session check", async () => {
+  it("answers a bearer agent's goal merge 403 from the admin-session check, with no raw read or OpenFGA call", async () => {
     as(NON_ADMIN);
     h.changedRowsMock.mockResolvedValue(goalRows);
     const res = await merge({ authorization: "Bearer cogni_ag_sk_test" });
     expect(res.status).toBe(403);
-    expect(res.json).toMatchObject({ errorCode: "authz_denied" });
+    expect(res.json).toMatchObject({ error: "merge requires admin session" });
+    expect(h.changedRowsMock).not.toHaveBeenCalled();
     expect(h.mergeMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a bearer goal merge a deterministic 403 even during an OpenFGA outage", async () => {
+    as(ADMIN);
+    h.authz.current = {
+      check: async () => {
+        throw new Error("openfga socket hang up");
+      },
+    };
+    h.changedRowsMock.mockResolvedValue(goalRows);
+    const res = await merge({ authorization: "Bearer cogni_ag_sk_test" });
+    expect(res.status).toBe(403);
+    expect(h.mergeMock).not.toHaveBeenCalled();
+  });
+
+  it("answers 503 without leaking the thrown check detail when OpenFGA throws", async () => {
+    as(ADMIN);
+    h.authz.current = {
+      check: async () => {
+        throw new Error("openfga socket hang up");
+      },
+    };
+    h.changedRowsMock.mockResolvedValue(goalRows);
+    const res = await merge();
+    expect(res.status).toBe(503);
+    expect(res.json).toMatchObject({ errorCode: "authz_unavailable" });
+    expect(JSON.stringify(res.json)).not.toMatch(/check_threw|socket hang up/);
+    expect(h.warnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "check_threw: openfga socket hang up",
+      }),
+      "knowledge.contributions.merge.goal_denied"
+    );
   });
 
   it("lets the node admin merge a goal change, bound to the authorized head", async () => {
@@ -362,7 +396,7 @@ describe("(b) merging a goal-* change is node-admin (inside ContributionService.
 });
 
 describe("(c) priority <= 1 is node-admin on create and patch", () => {
-  async function patch(priority: number) {
+  async function patch(priority: unknown) {
     let status = 0;
     let json: unknown;
     await testApiHandler({
@@ -381,7 +415,7 @@ describe("(c) priority <= 1 is node-admin on create and patch", () => {
     return { status, json };
   }
 
-  async function create(priority: number) {
+  async function create(priority: unknown) {
     let status = 0;
     let json: unknown;
     await testApiHandler({
@@ -456,5 +490,31 @@ describe("(c) priority <= 1 is node-admin on create and patch", () => {
     expect((await create(-1)).status).toBe(400);
     expect(h.patchMock).not.toHaveBeenCalled();
     expect(h.createMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the string "0"', "0", 400],
+    ["null", null, 400],
+    ["1.5 (not privileged, not an integer)", 1.5, 400],
+    ["0.5 (privileged)", 0.5, 403],
+  ])("answers a non-admin priority of %s with the right status, writing nothing", async (_label, priority, status) => {
+    as(NON_ADMIN);
+    expect((await patch(priority)).status).toBe(status);
+    expect((await create(priority)).status).toBe(status);
+    expect(h.patchMock).not.toHaveBeenCalled();
+    expect(h.createMock).not.toHaveBeenCalled();
+  });
+
+  it("answers 503 without leaking the thrown check detail when OpenFGA throws", async () => {
+    as(ADMIN);
+    h.authz.current = {
+      check: async () => {
+        throw new Error("openfga socket hang up");
+      },
+    };
+    const p = await patch(0);
+    expect(p.status).toBe(503);
+    expect(JSON.stringify(p.json)).not.toMatch(/check_threw|socket hang up/);
+    expect(h.patchMock).not.toHaveBeenCalled();
   });
 });

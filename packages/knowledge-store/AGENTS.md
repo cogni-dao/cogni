@@ -45,11 +45,14 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 - Types: `KnowledgeWriteSession`, `KnowledgeStorePort`, `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
 - Schemas: `KnowledgeSchema`, `NewKnowledgeSchema`, `DoltCommitSchema`, `DoltDiffEntrySchema`, `SourceTypeSchema`
+- DAO goals (ONE_GOAL_LIST, NO_GOAL_CAP): `KnowledgeStorePort.listActiveGoals`, `ActiveGoal`, `GOAL_ENTRY_TYPE`, `GOAL_ID_PREFIX`, `selectActiveGoals`, `isGoalRowId`, `touchedGoalIds`, `GoalTouchInput`
+- Goal write guard (GOAL_WRITE_ONLY_VIA_CONTRIBUTION): `assertNotGoalWrite`, `GoalRequiresContributionError` — raw add/upsert/update/delete in both adapters and `core__knowledge_write` never create, retype into, change or delete a goal row
+- Merge authority: `ContributionChangedRows`, `ContributionMergeDeniedError`, `AuthorizeMerge`
 
 **Contribution schemas** (`@cogni/knowledge-store/contribution-schemas`):
 
 - Six edit ops: `insert`, full `update`, strict `patch`, `delete`, `cite`, `uncite`
-- `patch` may set only `useWhen` and `entryType`; it cannot carry the body or gate-governed fields
+- `patch` may set only `useWhen`, `entryType`, `evaluateAt` and `resolutionStrategy`; it cannot carry the body or gate-governed fields
 
 **Subpath** (`@cogni/knowledge-store/adapters/doltgres`):
 
@@ -63,6 +66,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 - `createContributionService`, `ContributionService`, `ContributionServiceDeps`
 - `ContributionServiceDeps.pushMainOnMerge?: () => Promise<void>` — optional post-merge mirror hook; caller owns error handling (service does not await + does not catch)
+- `ContributionServiceDeps.authorizeMerge?: AuthorizeMerge` — host-injected merge authority (e.g. GOAL_CHANGE_IS_NODE_ADMIN). Runs after `canMergeKnowledge` over `port.changedRows` (raw `dolt_diff` ids), and binds `port.merge({expectedHeadCommit})` to the authorized head (recorded head AND branch tip)
 
 ## Ports
 

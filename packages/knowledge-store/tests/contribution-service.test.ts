@@ -962,17 +962,16 @@ describe("createContributionService", () => {
       expect(port.lastMerge).toBeNull();
     });
 
-    it("runs the hook before the admin-session check, so a bearer goal merge reports authz_denied", async () => {
+    it("runs the cheap admin-session check first: a bearer merge is 403 with no raw read and no hook call", async () => {
       const port = new FakeContributionPort();
       port.changed = goalTagsOnly;
+      let hookCalls = 0;
       const service = createContributionService({
         port,
         canMergeKnowledge: defaultCanMergeKnowledge,
         authorizeMerge: async () => {
-          throw new ContributionMergeDeniedError(
-            "authz_denied",
-            "knowledge.contributions.merge.goal"
-          );
+          hookCalls++;
+          throw new Error("authorization outage must not be reached");
         },
       });
 
@@ -981,8 +980,21 @@ describe("createContributionService", () => {
           principal: agent,
           contributionId: "contrib-agent-1-abc123",
         })
-      ).rejects.toBeInstanceOf(ContributionMergeDeniedError);
+      ).rejects.toBeInstanceOf(ContributionForbiddenError);
+      expect(hookCalls).toBe(0);
+      expect(port.changedRowsCalls).toBe(0);
       expect(port.lastMerge).toBeNull();
+    });
+
+    it("keeps the raw authorization reason out of the denial message", () => {
+      const err = new ContributionMergeDeniedError(
+        "authz_unavailable",
+        "knowledge.contributions.merge.goal",
+        "check_threw: connect ECONNREFUSED 10.0.0.5:8080"
+      );
+      expect(err.message).not.toContain("check_threw");
+      expect(err.message).not.toContain("ECONNREFUSED");
+      expect(err.reason).toContain("check_threw");
     });
 
     it("leaves merges unchanged when no hook is wired (no raw read, no CAS)", async () => {

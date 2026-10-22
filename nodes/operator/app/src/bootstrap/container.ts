@@ -264,7 +264,7 @@ import { serverEnv } from "@/shared/env/server-env";
 import { resolveNodeCatalogSource } from "@/shared/node-registry/catalog-source";
 import { envForApex } from "@/shared/node-registry/deploy-hosts";
 import { baseDomain } from "@/shared/node-registry/resolve";
-import { makeLogger } from "@/shared/observability";
+import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
 import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.interface";
 
@@ -1067,7 +1067,7 @@ function createContainer(): Container {
       if (!gate.ok) {
         log.warn(
           {
-            event: "work_item.priority.denied",
+            event: EVENT_NAMES.WORK_ITEM_PRIORITY_DENIED,
             path: "core__work_item_transition",
             errorCode: gate.errorCode,
             reason:
@@ -1076,7 +1076,7 @@ function createContainer(): Container {
                 : "not_node_admin",
             actor: actorUserId ?? null,
           },
-          "work_item.priority.denied"
+          EVENT_NAMES.WORK_ITEM_PRIORITY_DENIED
         );
       }
       return gate;

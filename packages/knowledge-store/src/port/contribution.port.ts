@@ -13,8 +13,8 @@
  *   MERGE_GATES_ON_RAW_ROWS: `changedRows` reads every changed row id straight from
  *   `dolt_diff` with no presentation filter, so a merge authorizer sees edits the
  *   display `diff` hides (tags, entity_id, evaluate_at, ...).
- *   MERGE_HEAD_CAS: `merge({expectedHeadCommit})` refuses unless the contribution
- *   head, read under the merge guard, is the head that was authorized.
+ *   MERGE_HEAD_CAS: `merge({expectedHeadCommit})` refuses unless the recorded head AND
+ *   the branch tip, read under the merge guard, are the head that was authorized.
  * Side-effects: none
  * Links: docs/design/knowledge-contribution-api.md, docs/spec/knowledge-syntropy.md
  * @public
@@ -245,10 +245,12 @@ export class ContributionMergeDeniedError extends Error {
     action: string,
     reason?: string
   ) {
+    // The raw `reason` stays OFF the message (it can carry OpenFGA/connection detail);
+    // it is a separate field for server logs only.
     super(
       code === "authz_denied"
         ? `merge not authorized: ${action}`
-        : `merge authorization unavailable: ${action}${reason ? ` (${reason})` : ""}`
+        : `merge authorization unavailable: ${action}`
     );
     this.name = "ContributionMergeDeniedError";
     this.code = code;

@@ -20,7 +20,8 @@
  *   - HYPOTHESIS_HAS_EVALUATE_AT on patch + update (task.5294): a retype to `goal` with no
  *     deadline is refused; a goal's deadline moves by patch and persists on update.
  *   - MERGE_GATES_ON_RAW_ROWS + MERGE_HEAD_CAS (task.5294): a tags-only goal update the display
- *     diff hides is named by `changedRows`, and a merge refuses a head it did not authorize.
+ *     diff hides is named by `changedRows`; a merge refuses a recorded head or a branch tip
+ *     it did not authorize.
  * Side-effects: IO, process.env
  * Links: packages/knowledge-store/src/domain/contribution-schemas.ts, packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
  * @internal
@@ -496,6 +497,49 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     expect(row?.tags).toEqual(["retagged"]);
     // update without evaluateAt keeps the stored deadline
     expect(row?.evaluateAt?.toISOString()).toBe("2027-12-31T00:00:00.000Z");
+  }, 180_000);
+
+  it("MERGE_HEAD_CAS: a branch tip that moved past head_commit is refused, never merged", async () => {
+    const rec = await adapter.create({
+      principal: principal("tip-mover"),
+      message: "authorized head",
+      edits: [
+        {
+          op: "insert",
+          entry: {
+            id: "tip-probe",
+            domain: DOMAIN,
+            title: "Entry tip-probe",
+            content: "authorized body",
+            entryType: "finding",
+          },
+        },
+      ],
+    });
+    const changes = await adapter.changedRows(rec.contributionId);
+
+    // Commit straight onto the branch WITHOUT advancing head_commit — the state a
+    // lost metadata write or an out-of-band writer leaves behind.
+    const conn = await readClient.reserve();
+    try {
+      await conn.unsafe(`SELECT dolt_checkout('${rec.branch}')`);
+      await conn.unsafe(
+        `UPDATE knowledge SET content = 'unauthorized body' WHERE id = 'tip-probe'`
+      );
+      await conn.unsafe(`SELECT dolt_commit('-Am', 'sneak past head_commit')`);
+      await conn.unsafe(`SELECT dolt_checkout('main')`);
+    } finally {
+      conn.release();
+    }
+
+    await expect(
+      adapter.merge({
+        contributionId: rec.contributionId,
+        principal: principal("tip-mover"),
+        expectedHeadCommit: changes.headCommit,
+      })
+    ).rejects.toThrow(ContributionConflictError);
+    expect(await store.getKnowledge("tip-probe")).toBeNull();
   }, 180_000);
 
   it("Q_MATCHES_USEWHEN_ONLY: listKnowledge finds the entry by a useWhen substring", async () => {

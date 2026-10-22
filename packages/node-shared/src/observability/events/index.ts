@@ -125,6 +125,11 @@ export const EVENT_NAMES = {
 
   // Governance Domain
   GOVERNANCE_SYNC_COMPLETE: "governance.sync.complete",
+  /** A contribution merge touching a goal-* row was refused by the node-admin gate (task.5294). */
+  KNOWLEDGE_CONTRIBUTIONS_MERGE_GOAL_DENIED:
+    "knowledge.contributions.merge.goal_denied",
+  /** A core__work_item_transition priority <= 1 patch was refused by the node-admin gate (task.5294). */
+  WORK_ITEM_PRIORITY_DENIED: "work_item.priority.denied",
 
   // Sandbox Execution Events
   SANDBOX_EXECUTION_STARTED: "sandbox.execution.started",

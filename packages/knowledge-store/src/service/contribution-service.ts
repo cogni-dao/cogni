@@ -339,16 +339,18 @@ export function createContributionService(
     },
 
     async merge({ principal, contributionId }) {
-      // MERGE_AUTHORIZED_ON_RAW_ROWS: authorize the raw rows first, then bind the merge to
-      // the head those rows were read at so a later append cannot ride the approval.
+      // The cheap admin-session check runs first, so a bearer merge is a deterministic 403
+      // with no diff read and no authorization call (even during an OpenFGA outage).
+      if (!deps.canMergeKnowledge(principal)) {
+        throw new ContributionForbiddenError("merge requires admin session");
+      }
+      // MERGE_AUTHORIZED_ON_RAW_ROWS: authorize the raw rows, then bind the merge to the
+      // head those rows were read at so a later append cannot ride the approval.
       let expectedHeadCommit: string | undefined;
       if (deps.authorizeMerge) {
         const changes = await deps.port.changedRows(contributionId);
         await deps.authorizeMerge({ principal, contributionId, changes });
         expectedHeadCommit = changes.headCommit;
-      }
-      if (!deps.canMergeKnowledge(principal)) {
-        throw new ContributionForbiddenError("merge requires admin session");
       }
       const result = await deps.port.merge({
         contributionId,
