@@ -9,7 +9,7 @@
  *   - GRAPH_REQUIRES_MODEL: `graph` without `model` is rejected at parse time
  *   - BACK_COMPAT_SHAPE: an entry without graph/model maps to the exact pre-task.5282 object
  *   - LEDGER_PRESERVED: the operator runtime repo-spec still synthesizes exactly one LEDGER_INGEST (cron 0 0 * * *)
- *   - SEAM_INERT (story.5096 split a): no operator schedule declares graph/model/policy yet
+ *   - OPERATOR_PRIORITIZER (story.5096): the operator declares WORK_PRIORITIZER on langgraph:work-prioritizer, propose-only
  * Side-effects: IO (reads the operator repo-spec file from disk)
  * Links: packages/repo-spec/src/schema.ts, packages/repo-spec/src/accessors.ts
  * @public
@@ -80,15 +80,11 @@ describe("work_prioritization policy schema", () => {
     governance: { chain_id: "8453" },
   };
   const wp = {
-    policy_version: "v4.0",
-    p0_max: 3,
-    p1_budget: 6,
-    p2_budget: 12,
-    objectives: ["dao-goal-a"],
+    policy_version: "v5.0",
     apply: { mode: { default: "propose", "candidate-a": "write" } },
   };
 
-  it("parses with per-env modes and defaults hypotheses_per_day to 3", () => {
+  it("parses with per-env modes; goals and caps are not policy (dao-goals-design)", () => {
     const policy = extractWorkPrioritizationPolicy(
       parseSpec({ ...base, work_prioritization: wp })
     );
@@ -96,7 +92,11 @@ describe("work_prioritization policy schema", () => {
       default: "propose",
       "candidate-a": "write",
     });
-    expect(policy?.hypothesesPerDay).toBe(3);
+    expect(policy).toEqual({
+      policyVersion: "v5.0",
+      applyMode: "propose",
+      applyModes: { default: "propose", "candidate-a": "write" },
+    });
   });
 
   it("rejects an unknown mode and a missing default", () => {
@@ -152,13 +152,35 @@ describe("operator runtime repo-spec governance (nodes/operator/.cogni)", () => 
   );
   const config = extractGovernanceConfig(spec);
 
-  it("SEAM_INERT: no operator schedule declares graph/model/payload yet", () => {
-    for (const schedule of config.schedules) {
-      expect(schedule).not.toHaveProperty("graph");
-      expect(schedule).not.toHaveProperty("model");
-      expect(schedule).not.toHaveProperty("payload");
-    }
-    expect(extractWorkPrioritizationPolicy(spec)).toBeNull();
+  it("declares WORK_PRIORITIZER on langgraph:work-prioritizer hourly (prod-safe), propose-only", () => {
+    expect(
+      config.schedules.find((s) => s.charter === "WORK_PRIORITIZER")
+    ).toEqual({
+      charter: "WORK_PRIORITIZER",
+      cron: "0 * * * *",
+      timezone: "UTC",
+      entrypoint: "PRIORITIZE",
+      graph: "langgraph:work-prioritizer",
+      model: "gpt-oss-120b",
+      payload: {
+        workPrioritization: {
+          policyVersion: "v5.0",
+          applyMode: "propose",
+          applyModes: { default: "propose" },
+        },
+      },
+    });
+    expect(extractWorkPrioritizationPolicy(spec)).toMatchObject({
+      policyVersion: "v5.0",
+      applyMode: "propose",
+    });
+  });
+
+  it("declares only the two expected charters", () => {
+    expect(config.schedules.map((s) => s.charter).sort()).toEqual([
+      "LEDGER_INGEST",
+      "WORK_PRIORITIZER",
+    ]);
   });
 
   it("LEDGER_PRESERVED: still synthesizes exactly one LEDGER_INGEST with the pre-existing shape", () => {

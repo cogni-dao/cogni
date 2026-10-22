@@ -67,6 +67,12 @@ import {
   RESEARCH_GRAPH_NAME,
 } from "./graphs/research/graph";
 import { RESEARCH_TOOL_IDS } from "./graphs/research/tools";
+import {
+  createWorkPrioritizerGraph,
+  WORK_PRIORITIZER_GRAPH_NAME,
+} from "./graphs/work-prioritizer/graph";
+import { WORK_PRIORITIZER_SYSTEM_PROMPT } from "./graphs/work-prioritizer/prompts";
+import { WORK_PRIORITIZER_TOOL_IDS } from "./graphs/work-prioritizer/tools";
 import type { CreateGraphFn } from "./inproc/types";
 
 /**
@@ -242,6 +248,20 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     graphFactory: createOperatorGraph,
     systemPrompt: GIT_REVIEWER_PROMPT,
   },
+
+  /**
+   * Work prioritizer (story.5096, propose mode) — explicit StateGraph: reads backlog + hub
+   * knowledge + EDO, tool-less judgments (daily full review, delta cycles otherwise), code ranking
+   * under the policy ceilings, ≤3 EDO hypotheses + 1 decision on change. Zero work-item mutations.
+   */
+  [WORK_PRIORITIZER_GRAPH_NAME]: {
+    displayName: "Work Prioritizer",
+    description:
+      "Proposes backlog priorities under capacity ceilings from approved objectives; files EDO hypotheses + a decision on change",
+    toolIds: WORK_PRIORITIZER_TOOL_IDS as readonly string[],
+    graphFactory: createWorkPrioritizerGraph,
+    systemPrompt: WORK_PRIORITIZER_SYSTEM_PROMPT,
+  },
 } as const;
 
 /**
@@ -283,6 +303,7 @@ export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
   "operating-review": `${LANGGRAPH_PROVIDER_ID}:${OPERATING_REVIEW_GRAPH_NAME}`,
   "pr-manager": `${LANGGRAPH_PROVIDER_ID}:${PR_MANAGER_GRAPH_NAME}`,
   "git-reviewer": `${LANGGRAPH_PROVIDER_ID}:${GIT_REVIEWER_GRAPH_NAME}`,
+  "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,
 } as const;
 
 /**

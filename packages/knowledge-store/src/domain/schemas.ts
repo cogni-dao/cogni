@@ -130,6 +130,16 @@ export const HYPOTHESIS_TARGETED_EDGES: readonly CitationType[] = [
   "invalidates",
 ];
 
+/**
+ * Entry types each hypothesis-targeted edge may cite. A DAO goal (`entry_type
+ * 'goal'`, dao-goals-design) is the root a decision acts on, so `derives_from`
+ * may cite a goal as well as a hypothesis; `validates`/`invalidates` stay
+ * hypothesis-only (goal outcomes resolve through the goal layer).
+ */
+export function citedEntryTypesFor(type: CitationType): readonly string[] {
+  return type === "derives_from" ? ["hypothesis", "goal"] : ["hypothesis"];
+}
+
 // ---------------------------------------------------------------------------
 // Resolution strategy — namespaced text on hypothesis rows
 //

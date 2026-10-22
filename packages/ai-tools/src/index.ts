@@ -12,6 +12,7 @@
  */
 
 export type {
+  ActiveGoalInfo,
   ApproveWorkflowRunsResult,
   AuthCapability,
   ChainDirection,
@@ -162,6 +163,18 @@ export {
   getCurrentTimeContract,
   getCurrentTimeImplementation,
 } from "./tools/get-current-time";
+export {
+  createGoalListImplementation,
+  GOAL_LIST_NAME,
+  type GoalListDeps,
+  type GoalListInput,
+  GoalListInputSchema,
+  type GoalListOutput,
+  GoalListOutputSchema,
+  goalListBoundTool,
+  goalListContract,
+  goalListStubImplementation,
+} from "./tools/goal-list";
 export {
   createKnowledgeReadImplementation,
   KNOWLEDGE_READ_NAME,

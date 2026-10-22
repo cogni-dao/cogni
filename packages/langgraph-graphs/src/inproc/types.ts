@@ -95,8 +95,8 @@ export interface InProcGraphRequest {
     readonly subjectId?: string;
     readonly graphId?: string;
     /**
-     * Execution grant of a scheduled (grant-backed) run. Absent for API/chat runs. Graphs may
-     * use its presence as the "scheduled run" signal (e.g. the prioritizer only writes then).
+     * Execution grant of a scheduled (grant-backed) run. Absent for API/chat runs; threaded into
+     * tool authz audit.
      */
     readonly grantId?: string;
   };

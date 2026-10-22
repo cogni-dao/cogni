@@ -33,7 +33,11 @@ vi.mock("@cogni/ai-core", async (importOriginal) => {
 
 import { runInScope } from "@/adapters/server/ai/execution-scope";
 import type { CompletionUnitAdapter } from "@/adapters/server/ai/langgraph/inproc.provider";
-import { LangGraphInProcProvider } from "@/adapters/server/ai/langgraph/inproc.provider";
+import {
+  LangGraphInProcProvider,
+  prioritizerCycleLogFields,
+  prioritizerJudgeSampleLogFields,
+} from "@/adapters/server/ai/langgraph/inproc.provider";
 import type { GraphRunRequest } from "@/ports";
 
 const TEST_SCOPE = {
@@ -276,6 +280,63 @@ describe("LangGraphInProcProvider", () => {
       });
       expect(typeof config.onAuthzDecision).toBe("function");
       expect(config).not.toHaveProperty("authz");
+    });
+  });
+
+  describe("work-prioritizer cycle event", () => {
+    it("maps the graph's telemetry to one ai.work_prioritizer.cycle event", () => {
+      const fields = prioritizerCycleLogFields("run-9", {
+        status: "assessed_no_edo",
+        telemetry: {
+          status: "assessed_no_edo",
+          itemsAssessed: 7,
+          hypothesesFiled: 0,
+          decisionId: null,
+          edoWrites: 0,
+          guardViolations: [{ code: "hypothesis_ungrounded", count: 3 }],
+          toolErrorCount: 0,
+          promptVersion: "work-prioritizer/2026-10-20.v1",
+          modelRef: "gpt-oss-120b",
+        },
+      });
+      expect(fields).toEqual({
+        event: "ai.work_prioritizer.cycle",
+        runId: "run-9",
+        status: "assessed_no_edo",
+        itemsAssessed: 7,
+        hypothesesFiled: 0,
+        decisionId: null,
+        edoWrites: 0,
+        guardViolations: [{ code: "hypothesis_ungrounded", count: 3 }],
+        toolErrorCount: 0,
+        promptVersion: "work-prioritizer/2026-10-20.v1",
+        modelRef: "gpt-oss-120b",
+      });
+    });
+
+    it("maps each judge sample to one ai.work_prioritizer.judge_sample event", () => {
+      const sample = {
+        lines: ['{"id":"bug.1","harmDays":"1 day"}'],
+        counts: { lines: 14, parsed: 14, withHarm: 3, withHarmDays: 1 },
+      };
+      expect(
+        prioritizerJudgeSampleLogFields("run-9", { judgeSamples: [sample] })
+      ).toEqual([
+        {
+          event: "ai.work_prioritizer.judge_sample",
+          runId: "run-9",
+          batch: 0,
+          ...sample,
+        },
+      ]);
+      expect(prioritizerJudgeSampleLogFields("r", { content: "x" })).toEqual(
+        []
+      );
+    });
+
+    it("returns null when the output carries no telemetry", () => {
+      expect(prioritizerCycleLogFields("r", undefined)).toBeNull();
+      expect(prioritizerCycleLogFields("r", { content: "x" })).toBeNull();
     });
   });
 

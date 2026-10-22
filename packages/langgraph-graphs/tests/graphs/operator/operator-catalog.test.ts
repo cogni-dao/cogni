@@ -18,12 +18,15 @@ import {
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
+  GET_CURRENT_TIME_NAME,
+  GOAL_LIST_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
   KNOWLEDGE_WRITE_NAME,
   REPO_OPEN_NAME,
   REPO_SEARCH_NAME,
   WEB_SEARCH_NAME,
+  WORK_ITEM_QUERY_NAME,
 } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 import {
@@ -34,6 +37,7 @@ import {
 } from "../../../src/catalog";
 import { createAutoresearchGraph } from "../../../src/graphs/autoresearch/graph";
 import { createOperatorGraph } from "../../../src/graphs/operator/graph";
+import { createWorkPrioritizerGraph } from "../../../src/graphs/work-prioritizer/graph";
 
 describe("operator catalog entries", () => {
   it("operating-review entry exists with systemPrompt and graphFactory", () => {
@@ -65,6 +69,27 @@ describe("operator catalog entries", () => {
     expect(entry.systemPrompt).toBeDefined();
     expect(entry.graphFactory).toBe(createOperatorGraph);
     expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
+  });
+
+  it("work-prioritizer is operator-only with the exact six-tool allowlist (propose-only)", () => {
+    const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
+    expect(entry).toBeDefined();
+    expect(entry.graphFactory).toBe(createWorkPrioritizerGraph);
+    expect([...entry.toolIds].sort()).toEqual(
+      [
+        WORK_ITEM_QUERY_NAME,
+        KNOWLEDGE_SEARCH_NAME,
+        KNOWLEDGE_READ_NAME,
+        EDO_DECIDE_NAME,
+        GET_CURRENT_TIME_NAME,
+        GOAL_LIST_NAME,
+      ].sort()
+    );
+    expect(OPERATOR_LANGGRAPH_GRAPH_IDS["work-prioritizer"]).toBe(
+      "langgraph:work-prioritizer"
+    );
+    expect(LANGGRAPH_CATALOG["work-prioritizer"]).toBeUndefined();
+    expect("work-prioritizer" in LANGGRAPH_GRAPH_IDS).toBe(false);
   });
 
   it("graph IDs include operator roles", () => {

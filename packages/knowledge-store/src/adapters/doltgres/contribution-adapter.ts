@@ -75,6 +75,7 @@ import {
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
 import type { CitationType } from "../../domain/schemas.js";
 import {
+  citedEntryTypesFor,
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
   requiresEvaluateAt,
@@ -352,8 +353,12 @@ function citationIdFor(
   return `${citingId}->${citedId}:${type}`;
 }
 
-function expectedCitedEntryTypeFor(type: CitationType): string | null {
-  return HYPOTHESIS_TARGETED_EDGES.includes(type) ? "hypothesis" : null;
+function expectedCitedEntryTypeFor(
+  type: CitationType
+): readonly string[] | null {
+  return HYPOTHESIS_TARGETED_EDGES.includes(type)
+    ? citedEntryTypesFor(type)
+    : null;
 }
 
 /**
@@ -547,13 +552,13 @@ async function insertCitationRow(input: {
   if (
     expected !== null &&
     cited.kind === "knowledge" &&
-    cited.entryType !== expected
+    !expected.includes(cited.entryType)
   ) {
     throw new CitationTypeMismatchError(
       citationType,
       citedId,
       cited.entryType,
-      expected
+      expected.join("|")
     );
   }
   const id = citationIdFor(citingId, citedId, citationType);

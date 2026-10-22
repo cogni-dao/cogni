@@ -121,22 +121,17 @@ export const governanceScheduleSchema = z
 export type GovernanceScheduleSpec = z.infer<typeof governanceScheduleSchema>;
 
 /**
- * Work-prioritization policy (story.5096, prioritizer design v4 §1): node-owned,
- * versioned, reviewed. Ceilings are caps, never targets. `objectives` are hub ids of
- * approved goals. `apply.mode` is per environment (`default` required).
+ * Work-prioritization policy (story.5096): node-owned, versioned, reviewed. Goals are NOT here — the
+ * prioritizer reads the hub's active `goal-*` atoms (dao-goals-design, ONE_GOAL_LIST) — and there are no
+ * capacity caps. `apply.mode` is per environment (`default` required).
  */
 export const workPrioritizationSpecSchema = z.object({
   policy_version: z.string().min(1),
-  p0_max: z.number().int().min(0),
-  p1_budget: z.number().int().min(0),
-  p2_budget: z.number().int().min(0),
-  objectives: z.array(z.string().min(1)).min(1),
   apply: z.object({
     mode: z
       .object({ default: z.enum(["propose", "write"]) })
       .catchall(z.enum(["propose", "write"])),
   }),
-  hypotheses_per_day: z.number().int().min(0).default(3),
 });
 
 export type WorkPrioritizationSpec = z.infer<
