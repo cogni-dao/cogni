@@ -18,7 +18,6 @@ import {
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
-  GET_CURRENT_TIME_NAME,
   GOAL_LIST_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
@@ -27,6 +26,7 @@ import {
   REPO_SEARCH_NAME,
   WEB_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
+  WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 import {
@@ -71,20 +71,19 @@ describe("operator catalog entries", () => {
     expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
   });
 
-  it("work-prioritizer is operator-only with the exact six-tool allowlist (propose-only)", () => {
+  it("work-prioritizer (mission loop) is operator-only with the exact four-tool allowlist", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
     expect(entry.graphFactory).toBe(createWorkPrioritizerGraph);
     expect([...entry.toolIds].sort()).toEqual(
       [
-        WORK_ITEM_QUERY_NAME,
-        KNOWLEDGE_SEARCH_NAME,
-        KNOWLEDGE_READ_NAME,
-        EDO_DECIDE_NAME,
-        GET_CURRENT_TIME_NAME,
         GOAL_LIST_NAME,
+        WORK_ITEM_QUERY_NAME,
+        WORK_ITEM_TRANSITION_NAME,
+        KNOWLEDGE_SEARCH_NAME,
       ].sort()
     );
+    expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });
     expect(OPERATOR_LANGGRAPH_GRAPH_IDS["work-prioritizer"]).toBe(
       "langgraph:work-prioritizer"
     );
