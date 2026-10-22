@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 /**
- * Module: scripts/agent/configured-cognition.mjs
+ * Module: `@scripts/agent/configured-cognition`
  * Purpose: Load explicitly configured canonical knowledge through native cognition.
- * Scope: Optional node-owned context projection shared by project and installed hooks.
+ * Scope: Optional node-owned context projection shared by native hooks; does not grant role adoption or permissions.
  * Invariants: Canonical bodies remain unchanged; loading grants no role or authority.
  *   Admit only complete node/config-bound projections; preserve a last good cache.
  *   Native imports require pre-session warming, never a retrospective hook repair.
- * Side-effects: Bounded same-node reads, atomic cache writes, optional background refresh.
+ * Side-effects: IO (same-node reads and atomic cache writes), time, process.env
  * Links: https://cognidao.org/knowledge/expertise-role-contract
  *   https://cognidao.org/knowledge/cognition-substrate-bootstrap
  */
