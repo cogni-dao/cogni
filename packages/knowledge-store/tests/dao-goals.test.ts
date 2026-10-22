@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/tests/dao-goals`
  * Purpose: Coverage for the DAO goal list reader — `listActiveGoals` on the Doltgres + fake adapters — and the goal confidence exemption.
  * Scope: Fake postgres.js client; does not connect to live Doltgres.
- * Invariants: ONE_GOAL_LIST, MAX_THREE_GOALS, NO_GOALS_FAILS_LOUD (empty list, not an omission), goals excluded from confidence recompute.
+ * Invariants: ONE_GOAL_LIST, NO_GOAL_CAP, NO_GOALS_FAILS_LOUD (empty list, not an omission), goals excluded from confidence recompute.
  * Side-effects: none
  * Links: packages/knowledge-store/src/domain/dao-goals.ts, packages/knowledge-store/src/adapters/doltgres/index.ts
  * @internal
@@ -19,11 +19,7 @@ import {
   FakeEdoResolverAdapter,
   FakeKnowledgeStoreAdapter,
 } from "../src/adapters/fake/index.js";
-import { MAX_ACTIVE_GOALS } from "../src/domain/dao-goals.js";
-import {
-  HypothesisMissingEvaluateAtError,
-  TooManyActiveGoalsError,
-} from "../src/port/knowledge-store.port.js";
+import { HypothesisMissingEvaluateAtError } from "../src/port/knowledge-store.port.js";
 
 type Row = Record<string, unknown>;
 
@@ -95,17 +91,14 @@ describe("DoltgresKnowledgeStoreAdapter.listActiveGoals", () => {
     expect(goals.map((g) => g.id)).toEqual(["goal-live"]);
   });
 
-  it("throws TooManyActiveGoalsError past the max — never truncates (MAX_THREE_GOALS)", async () => {
-    const ids = ["goal-a", "goal-b", "goal-c", "goal-d"];
+  it("returns every active goal sorted by id — no cap, never throws or truncates (NO_GOAL_CAP)", async () => {
+    const ids = ["goal-d", "goal-a", "goal-c", "goal-b"];
     const { adapter } = adapterFor(ids.map((id) => goalRow(id)));
-    const err = await adapter.listActiveGoals().catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(TooManyActiveGoalsError);
-    expect((err as TooManyActiveGoalsError).goalIds).toEqual(ids);
-    expect((err as TooManyActiveGoalsError).max).toBe(MAX_ACTIVE_GOALS);
-    expect((err as Error).message).toContain("4 active DAO goals");
+    const goals = await adapter.listActiveGoals();
+    expect(goals.map((g) => g.id)).toEqual(["goal-a", "goal-b", "goal-c", "goal-d"]);
   });
 
-  it("does not count deprecated rows toward the cap", async () => {
+  it("excludes deprecated rows from the active list", async () => {
     const { adapter } = adapterFor([
       goalRow("goal-a"),
       goalRow("goal-b"),
@@ -153,7 +146,7 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
     return store;
   }
 
-  it("selects goal-* goal rows and enforces the same cap", async () => {
+  it("selects goal-* goal rows with no cap", async () => {
     const store = await freshStore();
     await expect(store.listActiveGoals()).resolves.toEqual([]);
     await seed(store, "goal-a");
@@ -164,9 +157,7 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
     await seed(store, "goal-b");
     await seed(store, "goal-c");
     await seed(store, "goal-d");
-    await expect(store.listActiveGoals()).rejects.toBeInstanceOf(
-      TooManyActiveGoalsError
-    );
+    await expect(store.listActiveGoals()).resolves.toHaveLength(4);
   });
 
   it("rejects a goal without evaluateAt (its By: deadline)", async () => {

@@ -10,8 +10,9 @@
  *     starts `goal-`, not deprecated. A goal is a human commitment, not a
  *     `hypothesis`: it is admin-merged and its confidence is never recomputed
  *     from citations. No new table — `entry_type` is plain text.
- *   - MAX_THREE_GOALS: more than 3 active goals throws `TooManyActiveGoalsError`;
- *     the list is never silently truncated.
+ *   - NO_GOAL_CAP: every active goal is returned, sorted by id. There is no
+ *     count cap (Derek, 2026-10-21: caps are a hack; the admin merge is the
+ *     only gate). The list is never truncated or thrown away.
  *   - NO_GOALS_FAILS_LOUD: zero goals is an empty array the caller must render
  *     visibly (the cognition bundle prints `no approved goals`).
  * Side-effects: none
@@ -19,14 +20,10 @@
  * @public
  */
 
-import { TooManyActiveGoalsError } from "../port/knowledge-store.port.js";
-
 /** The entry type of a DAO goal atom. */
 export const GOAL_ENTRY_TYPE = "goal" as const;
 /** Id prefix every DAO goal atom carries (`goal-<slug>`). */
 export const GOAL_ID_PREFIX = "goal-" as const;
-/** MAX_THREE_GOALS. */
-export const MAX_ACTIVE_GOALS = 3 as const;
 
 /** One approved DAO goal, as every reader sees it. */
 export interface ActiveGoal {
@@ -56,10 +53,7 @@ export function isActiveGoalRow(row: GoalCandidateRow): boolean {
   );
 }
 
-/**
- * Filter candidate rows to the active goal list, sorted by id, and enforce
- * MAX_THREE_GOALS. Throws rather than truncates.
- */
+/** Filter candidate rows to the active goal list, sorted by id (NO_GOAL_CAP). */
 export function selectActiveGoals(
   rows: readonly GoalCandidateRow[]
 ): ActiveGoal[] {
@@ -72,11 +66,5 @@ export function selectActiveGoals(
       evaluateAt: r.evaluateAt,
     }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  if (goals.length > MAX_ACTIVE_GOALS) {
-    throw new TooManyActiveGoalsError(
-      goals.map((g) => g.id),
-      MAX_ACTIVE_GOALS
-    );
-  }
   return goals;
 }

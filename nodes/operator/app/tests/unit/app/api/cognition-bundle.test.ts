@@ -408,15 +408,15 @@ describe("Goals section — approved DAO goals right after the mission (task.528
     expect(at("## Goals")).toBeLessThan(at("## Tooling invariants"));
   });
 
-  it("renders a visible `goals unavailable` line when the read fails (e.g. >3 goals)", async () => {
+  it("renders a visible `goals unavailable` line when the read fails", async () => {
     const goals = await resolveGoals(
-      port(new Error("4 active DAO goals exceed the max of 3: goal-a, goal-b"))
+      port(new Error("knowledge store read timed out"))
     );
     expect(goals.status).toBe("unavailable");
     const md = renderBundleMarkdown({ ...baseInput, goals });
     expect(md).toContain("## Goals");
     expect(md).toContain(
-      "goals unavailable: 4 active DAO goals exceed the max of 3: goal-a, goal-b"
+      "goals unavailable: knowledge store read timed out"
     );
     expect(md).not.toContain("no approved goals");
   });

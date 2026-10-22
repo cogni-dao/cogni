@@ -54,14 +54,13 @@ export {
   PrincipalKindSchema,
   PrincipalSchema,
 } from "./domain/contribution-schemas.js";
-// DAO goal list (ONE_GOAL_LIST · MAX_THREE_GOALS) — read via KnowledgeStorePort.listActiveGoals
+// DAO goal list (ONE_GOAL_LIST · NO_GOAL_CAP) — read via KnowledgeStorePort.listActiveGoals
 export {
   type ActiveGoal,
   GOAL_ENTRY_TYPE,
   GOAL_ID_PREFIX,
   type GoalCandidateRow,
   isActiveGoalRow,
-  MAX_ACTIVE_GOALS,
   selectActiveGoals,
 } from "./domain/dao-goals.js";
 // Write-pipeline gates (proj.knowledge-syntropy — W0 Gates tier)
@@ -214,7 +213,6 @@ export {
   KnowledgeWriteScopeRequiredError,
   type KnowledgeWriteSession,
   type NewDomain,
-  TooManyActiveGoalsError,
 } from "./port/knowledge-store.port.js";
 // KPI reader port (goal-loop — verifier-independent metric read)
 export {
