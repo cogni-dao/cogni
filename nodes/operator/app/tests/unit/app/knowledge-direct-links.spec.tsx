@@ -286,7 +286,10 @@ describe("knowledge selection surfaces", () => {
     "graph",
   ])("%s selection renders the selected body and pages direct links without chain reads", async (mode) => {
     navigation.mode = mode;
-    const selected = { ...body(), entryType: "decision" };
+    const selected = {
+      ...body("  Choose this atom when reviewing a node repair.  "),
+      entryType: "decision",
+    };
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -326,6 +329,10 @@ describe("knowledge selection surfaces", () => {
     );
     await screen.findByText("Only the selected atom body");
     await screen.findByRole("link", { name: "supports Related 4" });
+    const title = screen.getByRole("heading", { name: "Root atom" });
+    expect(title.nextElementSibling?.textContent).toBe(
+      "Use when: Choose this atom when reviewing a node repair."
+    );
     expect(screen.queryByText("supports Related 5")).toBeNull();
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/api/v1/knowledge/contributions?state=open&limit=100",
