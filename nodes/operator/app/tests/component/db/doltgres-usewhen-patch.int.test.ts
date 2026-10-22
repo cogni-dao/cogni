@@ -499,49 +499,6 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     expect(row?.evaluateAt?.toISOString()).toBe("2027-12-31T00:00:00.000Z");
   }, 180_000);
 
-  it("MERGE_HEAD_CAS: a branch tip that moved past head_commit is refused, never merged", async () => {
-    const rec = await adapter.create({
-      principal: principal("tip-mover"),
-      message: "authorized head",
-      edits: [
-        {
-          op: "insert",
-          entry: {
-            id: "tip-probe",
-            domain: DOMAIN,
-            title: "Entry tip-probe",
-            content: "authorized body",
-            entryType: "finding",
-          },
-        },
-      ],
-    });
-    const changes = await adapter.changedRows(rec.contributionId);
-
-    // Commit straight onto the branch WITHOUT advancing head_commit — the state a
-    // lost metadata write or an out-of-band writer leaves behind.
-    const conn = await readClient.reserve();
-    try {
-      await conn.unsafe(`SELECT dolt_checkout('${rec.branch}')`);
-      await conn.unsafe(
-        `UPDATE knowledge SET content = 'unauthorized body' WHERE id = 'tip-probe'`
-      );
-      await conn.unsafe(`SELECT dolt_commit('-Am', 'sneak past head_commit')`);
-      await conn.unsafe(`SELECT dolt_checkout('main')`);
-    } finally {
-      conn.release();
-    }
-
-    await expect(
-      adapter.merge({
-        contributionId: rec.contributionId,
-        principal: principal("tip-mover"),
-        expectedHeadCommit: changes.headCommit,
-      })
-    ).rejects.toThrow(ContributionConflictError);
-    expect(await store.getKnowledge("tip-probe")).toBeNull();
-  }, 180_000);
-
   it("Q_MATCHES_USEWHEN_ONLY: listKnowledge finds the entry by a useWhen substring", async () => {
     await seedEntry(
       "q-match",
@@ -794,5 +751,50 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
         (edge) => edge.citingId === "edo-local-o"
       )
     ).toHaveLength(1);
+  }, 180_000);
+
+  it("MERGE_HEAD_CAS: a branch tip that moved past head_commit is refused, never merged", async () => {
+    const rec = await adapter.create({
+      principal: principal("tip-mover"),
+      message: "authorized head",
+      edits: [
+        {
+          op: "insert",
+          entry: {
+            id: "tip-probe",
+            domain: DOMAIN,
+            title: "Entry tip-probe",
+            content: "authorized body",
+            entryType: "finding",
+          },
+        },
+      ],
+    });
+    const changes = await adapter.changedRows(rec.contributionId);
+
+    // Commit straight onto the branch WITHOUT advancing head_commit — the state a
+    // lost metadata write or an out-of-band writer leaves behind.
+    // A throwaway single-connection client, so no pooled read/write session is
+    // ever left pinned to the contribution branch.
+    const sneak = buildDoltgresClient({ connectionString: dbUrl, max: 1 });
+    try {
+      await sneak.unsafe(`SELECT dolt_checkout('${rec.branch}')`);
+      await sneak.unsafe(
+        `UPDATE knowledge SET content = 'unauthorized body' WHERE id = 'tip-probe'`
+      );
+      await sneak.unsafe(`SELECT dolt_commit('-Am', 'sneak past head_commit')`);
+      await sneak.unsafe(`SELECT dolt_checkout('main')`);
+    } finally {
+      await sneak.end({ timeout: 5 }).catch(() => undefined);
+    }
+
+    await expect(
+      adapter.merge({
+        contributionId: rec.contributionId,
+        principal: principal("tip-mover"),
+        expectedHeadCommit: changes.headCommit,
+      })
+    ).rejects.toThrow(ContributionConflictError);
+    expect(await store.getKnowledge("tip-probe")).toBeNull();
   }, 180_000);
 });
