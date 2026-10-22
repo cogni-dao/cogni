@@ -119,45 +119,53 @@ describe("work-item session policy", () => {
       now: NOW,
     });
 
-  it("orders needs_merge as review, flight, validate, then operator merge", () => {
+  // Legacy field: the PR scorecard for the head SHA is the only validation signal.
+  const LEGACY_VALIDATION_FLAG = /deploy_?verified/i;
+
+  it("orders needs_merge as review, flight, validate, PATCH needs_closeout, then operator merge", () => {
     const text = linked({ status: "needs_merge" });
     const review = text.indexOf("/review-implementation");
     const flight = text.indexOf("/api/v1/vcs/flight");
     const validate = text.indexOf("/validate-candidate");
+    const closeout = text.indexOf("PATCH status needs_closeout");
     const merge = text.indexOf("/api/v1/vcs/merge");
 
     expect(text).toContain("PR #1204");
     expect(review).toBeGreaterThanOrEqual(0);
     expect(review).toBeLessThan(flight);
     expect(flight).toBeLessThan(validate);
-    expect(validate).toBeLessThan(merge);
+    expect(validate).toBeLessThan(closeout);
+    expect(closeout).toBeLessThan(merge);
   });
 
-  it("never gates needs_merge on deployVerified", () => {
-    const unverified = linked({ status: "needs_merge", deployVerified: false });
-    const verified = linked({ status: "needs_merge", deployVerified: true });
-
-    expect(verified).toBe(unverified);
-  });
-
-  it("records deployVerified once, in the needs_closeout transition", () => {
-    const text = linked({ status: "needs_merge" });
-
-    expect(text.split("deployVerified")).toHaveLength(2);
-    expect(text).toContain("set status needs_closeout and deployVerified true");
-  });
-
-  it("asks /closeout to check one head SHA and deployVerified before merging", () => {
+  it("asks /closeout to verify CI, review and scorecard at one head SHA before merging", () => {
     const text = linked({ status: "needs_closeout" });
+    const verify = text.indexOf("one head SHA");
+    const merge = text.indexOf("/api/v1/vcs/merge");
+    const done = text.indexOf("set done");
 
     expect(text).toContain("/closeout");
-    expect(text).toContain("one head SHA");
-    expect(text).toContain("deployVerified");
-    expect(text).toContain("/api/v1/vcs/merge");
+    expect(text).toContain("/validate-candidate scorecard");
+    expect(verify).toBeGreaterThanOrEqual(0);
+    expect(verify).toBeLessThan(merge);
+    expect(merge).toBeLessThan(done);
+  });
+
+  it("never names the legacy validation flag in any linked-PR next action", () => {
+    for (const status of [
+      "needs_implement",
+      "needs_merge",
+      "needs_closeout",
+      "done",
+    ] as const) {
+      expect(linked({ status, pr: "1204" })).not.toMatch(
+        LEGACY_VALIDATION_FLAG
+      );
+    }
   });
 
   it("does not send done items back to /validate-candidate", () => {
-    const text = linked({ status: "done", deployVerified: false, pr: "1204" });
+    const text = linked({ status: "done", pr: "1204" });
 
     expect(text).toContain("is done");
     expect(text).not.toContain("/validate-candidate");

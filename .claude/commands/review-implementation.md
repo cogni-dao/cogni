@@ -60,7 +60,7 @@ If CI is still running, give your verdict without waiting. Then read the require
 
 Post the verdict as a PR comment.
 
-**APPROVE:** once required CI is also green at `HEAD_SHA`, flight that SHA (`POST /api/v1/vcs/flight`) and run `/validate-candidate`; its PR scorecard comment is the validation signal. When it passes, including an instruction-only flight n/a, record it in one `PATCH`: `{"set":{"status":"needs_closeout","deployVerified":true}}`. Then run `/closeout`, which merges and closes.
+**APPROVE:** once required CI is also green at `HEAD_SHA`, flight that SHA (`POST /api/v1/vcs/flight`) and run `/validate-candidate`; its PR scorecard comment is the validation signal. When it passes, including an instruction-only flight n/a, `PATCH` the item `{"set":{"status":"needs_closeout"}}` and run `/closeout`, which merges and closes.
 
 **REQUEST CHANGES:** `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"needs_implement"}}`. The implementer fixes every blocking issue and applies simplifying suggestions on the same branch. Filing a follow-up bug is not fixing, unless the issue is genuinely out of the outcome's scope; then say why in the PR. Re-review runs at the new head SHA. After five REQUEST CHANGES rounds on one PR, set `{"set":{"status":"blocked","blockedBy":"review loop limit"}}` and escalate to a human. Never flight a SHA that has an open REQUEST CHANGES.
 

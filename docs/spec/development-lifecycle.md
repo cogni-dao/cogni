@@ -5,7 +5,7 @@ title: Development Lifecycle
 status: draft
 spec_state: proposed
 trust: draft
-summary: Single source of truth for how work moves from idea → deploy_verified. Status machine + as-built agent loop + contributor↔operator↔GitHub interaction graph.
+summary: Single source of truth for how work moves from idea → validated merge. Status machine + as-built agent loop + contributor↔operator↔GitHub interaction graph.
 read_when: Starting any contribution (agent or human), reviewing PRs, wiring a new agent client.
 implements: proj.development-workflows
 owner: derekg1729
@@ -21,7 +21,7 @@ tags: [workflow, commands, agentic, lifecycle]
 
 ## Goal
 
-A registered agent (or human contributor) can claim a Dolt work item, push code, request a candidate-a flight, and post a `/validate-candidate` scorecard — closing the loop to `deploy_verified: true` — while the operator coordinates intent, deadlines, and notifications, and GitHub Actions + Merge Queue own deploy serialization.
+A registered agent (or human contributor) can claim a Dolt work item, push code, request a candidate-a flight, and post a passing `/validate-candidate` scorecard for the PR head SHA — closing the loop — while the operator coordinates intent, deadlines, and notifications, and GitHub Actions + Merge Queue own deploy serialization.
 
 ## Non-Goals
 
@@ -110,16 +110,16 @@ graph LR
   needs_closeout -->|"/closeout: operator merge"| done
 ```
 
-| Status            | Command                      | What happens                                                                                                                                                                                                             |
-| ----------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `needs_triage`    | `/triage`                    | Routes item; stories → `done`; tasks/bugs → next status                                                                                                                                                                  |
-| `needs_research`  | `/research`                  | Executes spike; spike → `done`; creates follow-up items                                                                                                                                                                  |
-| `needs_design`    | `/design` → `/review-design` | Rigor pass + hub design; fresh review APPROVE → `needs_implement`                                                                                                                                                        |
-| `needs_implement` | `/implement`                 | Test-first code on a branch from `origin/main`, docs pass, opens the PR with Evidence and Merge Danger                                                                                                                   |
-| `needs_merge`     | `/review-implementation`     | Fresh two-axis review against outcome and design while CI runs; both green → flight → `/validate-candidate` → one PATCH `{"set":{"status":"needs_closeout","deployVerified":true}}`; REQUEST CHANGES → `needs_implement` |
-| `needs_closeout`  | `/closeout`                  | CI, review and validation verified at one SHA → `POST /vcs/merge` → `done`; durable knowledge refined                                                                                                                    |
+| Status            | Command                      | What happens                                                                                                                                                                            |
+| ----------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `needs_triage`    | `/triage`                    | Routes item; stories → `done`; tasks/bugs → next status                                                                                                                                 |
+| `needs_research`  | `/research`                  | Executes spike; spike → `done`; creates follow-up items                                                                                                                                 |
+| `needs_design`    | `/design` → `/review-design` | Rigor pass + hub design; fresh review APPROVE → `needs_implement`                                                                                                                       |
+| `needs_implement` | `/implement`                 | Test-first code on a branch from `origin/main`, docs pass, opens the PR with Evidence and Merge Danger                                                                                  |
+| `needs_merge`     | `/review-implementation`     | Fresh two-axis review against outcome and design while CI runs; both green → flight → `/validate-candidate` scorecard on the PR → `needs_closeout`; REQUEST CHANGES → `needs_implement` |
+| `needs_closeout`  | `/closeout`                  | CI, review and validation verified at one SHA → `POST /vcs/merge` → `done`; durable knowledge refined                                                                                   |
 
-Terminal: `done` (PR merged; `deploy_verified` tracked separately), `blocked` (`blocked_by:` required), `cancelled`.
+Terminal: `done` (PR merged; validation is the PR scorecard), `blocked` (`blocked_by:` required), `cancelled`.
 
 ### Triage routing
 
@@ -228,25 +228,25 @@ Axiom 18, `BRANCH_HEAD_IS_LEASE`) — so the endpoint does not replicate it.
 
 After successful flight, hit your feature endpoint on `test.cognidao.org` (the candidate-a URL for operator) and confirm behavior. Run `/validate-candidate` — it owns the impact-matrix-and-Loki-marker scorecard. Post the scorecard as a PR comment.
 
-This is the **real** validation gate (`SELF_VALIDATE` invariant). `status: done` is just the code gate; `deploy_verified: true` is the signal that the feature actually works on the deployed build.
+This is the **real** validation gate (`SELF_VALIDATE` invariant). `status: done` is just the code gate; the passing `/validate-candidate` PR scorecard for the head SHA is the signal that the feature actually works on the deployed build.
 
 ### 8. Request merge — the operator is the merge authority
 
-The contributor does **not** self-merge. Reaching `deploy_verified: true` (the passing `/validate-candidate` scorecard, recorded in the `needs_closeout` transition PATCH) is the contributor's _request_; the **operator** authorizes and enqueues the merge.
+The contributor does **not** self-merge. Posting the passing `/validate-candidate` PR scorecard for the head SHA is the contributor's _request_; the **operator** authorizes and enqueues the merge.
 
 > **North star:** the cogni-operator app — the AI that runs the network's gitops — is the **single, accountable merge authority** for the whole network. Every merge flows through **one** capability (`VcsCapability.mergePr`); a **deterministic policy router** decides _when_ a PR may merge based on its class. The contributing agent/human never self-merges its own work. GitHub re-enforces required checks at merge; GitHub Merge Queue (when enabled) still owns rebase/retest/serialization.
 
-> **As-built today.** The operator-merge path is **live**: once review APPROVE and CI are green at one head SHA and the `/validate-candidate` scorecard passes (recorded with `deployVerified: true` in the `needs_closeout` transition PATCH), `/closeout` requests the merge via `POST /api/v1/vcs/merge { nodeId, prNumber }` — the operator GitHub App enqueues the squash merge (returns `{enqueued:true}`; poll the PR to `MERGED`). Every node, the operator included, is addressed by `nodeId`. You never self-merge with personal `gh`.
+> **As-built today.** The operator-merge path is **live**: once review APPROVE and CI are green at one head SHA and the `/validate-candidate` scorecard for that SHA passes, `/closeout` requests the merge via `POST /api/v1/vcs/merge { nodeId, prNumber }` — the operator GitHub App enqueues the squash merge (returns `{enqueued:true}`; poll the PR to `MERGED`). Every node, the operator included, is addressed by `nodeId`. You never self-merge with personal `gh`.
 
 ### Authorization classes (deterministic policy router, operator-owned)
 
 The merge decision is **policy** (gate booleans), never an LLM judgment, so the merge sequence stays auditable (`DETERMINISTIC_AUTHORIZATION`). Authorization is deterministic; execution is a vendor primitive (`PUT /pulls/{}/merge`, or the queue when enabled).
 
-| Class                                                                    | Authority                            | Gate (all must hold)                                                                                                                        | Execution                      |
-| ------------------------------------------------------------------------ | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| **Routine** (work-item PR)                                               | operator                             | CI `allGreen` ∧ `work_item.deploy_verified == true` (recorded in the `needs_closeout` transition PATCH) ∧ authorizer ≠ claiming contributor | direct `mergePr` (gated)       |
-| **Node-formation** (operator-authored `cogni-operator/node-submodule-*`) | operator                             | `allGreen` ∧ wizard-born node count `< NODE_CAPACITY_CEILING` (else comment + hand back)                                                    | direct `mergePr` (gated)       |
-| **Governance override** (PR that failed automated gates)                 | DAO vote → CogniSignal `CogniAction` | on-chain re-verify (`ON_CHAIN_RE_VERIFY`, `CHAIN_DAO_MATCH`, `TX_HASH_DEDUP` — see [dao-governance-loop](./dao-governance-loop.md))         | direct merge (vote serializes) |
+| Class                                                                    | Authority                            | Gate (all must hold)                                                                                                                | Execution                      |
+| ------------------------------------------------------------------------ | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| **Routine** (work-item PR)                                               | operator                             | CI `allGreen` ∧ passing `/validate-candidate` PR scorecard for the head SHA ∧ authorizer ≠ claiming contributor                     | direct `mergePr` (gated)       |
+| **Node-formation** (operator-authored `cogni-operator/node-submodule-*`) | operator                             | `allGreen` ∧ wizard-born node count `< NODE_CAPACITY_CEILING` (else comment + hand back)                                            | direct `mergePr` (gated)       |
+| **Governance override** (PR that failed automated gates)                 | DAO vote → CogniSignal `CogniAction` | on-chain re-verify (`ON_CHAIN_RE_VERIFY`, `CHAIN_DAO_MATCH`, `TX_HASH_DEDUP` — see [dao-governance-loop](./dao-governance-loop.md)) | direct merge (vote serializes) |
 
 **Execution reality (verified 2026-06-11):** `main` has no enforced merge queue, so the operator **direct-merges** via `mergePr`; GitHub still re-enforces the 4 required status checks on the merge API, so a gate-passing `mergePr` is double-checked. `mergePr` is already queue-tolerant — it detects the base branch's queue state up front and branches: **no queue → direct `PUT .../merge`** (synchronous, `merged` + `sha`); **queue required → `enablePullRequestAutoMerge`** which routes through the queue (`enqueued: true`, async — poll the PR). The merge contract is `merged XOR enqueued`. The queue requirement is config-as-code (`infra/github/merge-queue-ruleset.json`, applied by `setup-main-branch.sh`); until an admin flips it to `active`, the enqueue path is inert and `mergePr` direct-merges everywhere.
 
@@ -258,7 +258,7 @@ Every operator merge is auditable to a work-item session, via the `(repo_full_na
 
 ### Mechanics
 
-- The operator authorizes a routine work-item PR only when CI is `allGreen` **and** `deploy_verified: true`, and the authorizer differs from the claiming contributor (`MERGE_SEPARATION_OF_DUTIES`). The decision is deterministic policy, not LLM judgment.
+- The operator authorizes a routine work-item PR only when CI is `allGreen` **and** the passing `/validate-candidate` PR scorecard for the head SHA is posted, and the authorizer differs from the claiming contributor (`MERGE_SEPARATION_OF_DUTIES`). The decision is deterministic policy, not LLM judgment.
 - When the queue is enabled, the operator enqueues and **GitHub Merge Queue** rebases onto current `main`, re-runs required checks, and merges deterministically. No one rebases by hand (`NO_AGENTIC_REBASE`).
 - Required checks must fire on **both** `pull_request:` and `merge_group:` triggers (`REPORT_OR_DON'T_REQUIRE` — see [merge-queue-config](./merge-queue-config.md)).
 - A PR that fails automated gates merges only through the on-chain governance override (DAO vote → CogniSignal — see [dao-governance-loop](./dao-governance-loop.md)).
@@ -269,13 +269,13 @@ The agentic contribution loop terminates here. Post-merge, `push:main` triggers 
 
 Distinct specialized agents own each lifecycle stage. No single agent runs the full loop.
 
-| Agent             | Owns                                                                                                                                                                    |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pr-manager`      | VCS orchestration + **merge authority**: listPrs, getCiStatus, flightCandidate, monitor Argo, verify SHA, authorize + enqueue merge on `deploy_verified` (see §8 above) |
-| `gov-engineering` | Dispatch loop: reads work queue → invokes `/design`, `/implement`, `/closeout`, `/review-implementation`                                                                |
-| `pr-review`       | Code-quality review on PR open/update (cogni-git-review GitHub App)                                                                                                     |
-| `qa-agent`        | Post-flight feature validation (task.0309) — manual predecessor is `/validate-candidate`                                                                                |
-| `frontend-tester` | Playwright click-through (delegated by qa-agent for UI paths)                                                                                                           |
+| Agent             | Owns                                                                                                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pr-manager`      | VCS orchestration + **merge authority**: listPrs, getCiStatus, flightCandidate, monitor Argo, verify SHA, authorize + enqueue merge on the passing PR scorecard (see §8 above) |
+| `gov-engineering` | Dispatch loop: reads work queue → invokes `/design`, `/implement`, `/closeout`, `/review-implementation`                                                                       |
+| `pr-review`       | Code-quality review on PR open/update (cogni-git-review GitHub App)                                                                                                            |
+| `qa-agent`        | Post-flight feature validation (task.0309) — manual predecessor is `/validate-candidate`                                                                                       |
+| `frontend-tester` | Playwright click-through (delegated by qa-agent for UI paths)                                                                                                                  |
 
 `POST /api/v1/vcs/flight` is the **nodeRef primitive** for externally built node artifacts (deterministic dispatch — agent knows the source SHA and wants to fly now). Direct workflow dispatch remains the in-repo operator app PR lever. `pr-manager` is the **policy** layer (decides when to fly, monitors rollout, verifies SHA, requests merge). Do not add policy logic to the REST endpoint.
 
@@ -317,14 +317,14 @@ curl -sf https://test.cognidao.org/api/v1/health | jq '.status == "ok"'
 
 `status: done` = PR merged (code gate — unchanged).
 
-`deploy_verified: true` = the change is validated post-flight. It is set autonomously, exactly once, by the `/review-implementation` APPROVE path in the transition PATCH `{"set":{"status":"needs_closeout","deployVerified":true}}`, after the `/validate-candidate` scorecard passes (an instruction-only flight n/a included). `/closeout` refuses to merge without it. The scorecard passes when:
+Validated = the passing `/validate-candidate` PR scorecard for the head SHA (an instruction-only change records flight n/a). It is the only validation signal; `/closeout` refuses to merge without it. The scorecard passes when:
 
 1. `candidate-flight` status = success on PR head SHA
 2. Health scorecard returns: restarts=0, memory < 90% of limit, oom_kills=0
 3. Feature exercise from the work item's `## Validation` block passes against the deployed URL
 4. Observability signal confirmed in Loki at the deployed SHA
 
-E2E success: one work item reaches `deploy_verified=true` via fully automated pipeline.
+E2E success: one work item reaches a passing PR scorecard via fully automated pipeline.
 
 ## Auth Model
 
@@ -368,7 +368,7 @@ Missing `Work:` → merge blocked. Missing `Spec:` → warning (blocked if behav
 | `CLAIM_REQUIRED`                   | Governance runner sets `claimed_by_run` before acting. Prevents double-dispatch.                                                                                                                                                                                                                                           |
 | `LOOP_LIMIT`                       | `revision >= 5` → `blocked` with escalation note.                                                                                                                                                                                                                                                                          |
 | `STORIES_ARE_INTAKE`               | Stories go `done` after triage. Never enter implementation lifecycle.                                                                                                                                                                                                                                                      |
-| `DEPLOY_VERIFIED_SEPARATE`         | `done` = merged (code gate). `deploy_verified` = the passing post-flight scorecard, recorded once in the `needs_closeout` transition PATCH. Never conflate.                                                                                                                                                                |
+| `DEPLOY_VERIFIED_SEPARATE`         | `done` = merged (code gate). Validated = the passing `/validate-candidate` PR scorecard for the head SHA. Never conflate.                                                                                                                                                                                                  |
 | `VALIDATION_REQUIRED`              | Every task/bug must have `## Validation` with `exercise:` + `observability:` before `/implement` opens the PR.                                                                                                                                                                                                             |
 | `FEATURE_SMOKE_SCOPED`             | qa-agent validation must exercise the specific feature, not just generic `/readyz`.                                                                                                                                                                                                                                        |
 | `QA_READS_TASK`                    | qa-agent derives its test from the work item `## Validation` block — not from a separate test file.                                                                                                                                                                                                                        |
@@ -384,12 +384,12 @@ Missing `Work:` → merge blocked. Missing `Spec:` → warning (blocked if behav
 | `NO_LEASE_SPLIT_BRAIN`             | Slot lease lives on the deploy branch — the per-`(env, node)` branch head is the lease ([ci-cd.md](./ci-cd.md) Axiom 18, `BRANCH_HEAD_IS_LEASE`); the flight endpoint does not write a competing lease.                                                                                                                    |
 | `PRIMITIVE_OVER_POLICY`            | `/api/v1/vcs/flight` is a primitive action; pr-manager is the policy layer; do not add flight logic to the REST endpoint.                                                                                                                                                                                                  |
 | `OSS_FOR_CODE_WORK`                | Agents use standard git + `gh pr create` for code contribution; the operator provides only the flight gate and the coordination port.                                                                                                                                                                                      |
-| `SELF_VALIDATE`                    | Agents validate their own changes on candidate-a; `deploy_verified: true` is the real gate, not `status: done`.                                                                                                                                                                                                            |
+| `SELF_VALIDATE`                    | Agents validate their own changes on candidate-a; the passing `/validate-candidate` PR scorecard for the head SHA is the real gate, not `status: done`.                                                                                                                                                                    |
 | `FEATURE_LOG_PROOF`                | Post-flight validation must tie Loki evidence to the exercised feature route/tool/graph, not ambient pod traffic.                                                                                                                                                                                                          |
-| `OPERATOR_MERGE_AUTHORITY`         | The operator authorizes + enqueues merges on `deploy_verified`; contributors never self-merge their own PR. Full policy: §8 above.                                                                                                                                                                                         |
+| `OPERATOR_MERGE_AUTHORITY`         | The operator authorizes + enqueues merges on the passing PR scorecard; contributors never self-merge their own PR. Full policy: §8 above.                                                                                                                                                                                  |
 | `SINGLE_MERGE_CHOKEPOINT`          | Every operator merge goes through `VcsCapability.mergePr`. No feature issues `PUT /pulls/{}/merge` directly — governance `mergeChange()` must converge onto the capability.                                                                                                                                                |
 | `MERGE_SEPARATION_OF_DUTIES`       | The PR's requesting party is never its approver. For routine PRs, authorizer ≠ claiming contributor (`work_item_sessions.claimed_by_user_id`). For node-formation the operator both authors and merges, so SoD means the **requesting node owner is excluded** and the gate is fully deterministic (CI = injection proof). |
-| `ROUTINE_REQUIRES_DEPLOY_VERIFIED` | A work-item PR merges only when CI `allGreen` AND `deploy_verified == true`. (`DEPLOY_VERIFIED_SEPARATE` still holds: `done` = merged; `deploy_verified` = validated.)                                                                                                                                                     |
+| `ROUTINE_REQUIRES_DEPLOY_VERIFIED` | A work-item PR merges only when CI `allGreen` AND the passing `/validate-candidate` PR scorecard for the head SHA is posted. (`DEPLOY_VERIFIED_SEPARATE` still holds: `done` = merged; the scorecard = validated.)                                                                                                         |
 | `NODE_FORMATION_CAPACITY_GATE`     | An operator-authored node-formation PR merges only when CI `allGreen` AND wizard-born node count `< NODE_CAPACITY_CEILING`; the ceiling derives from the scaling doc's measured honest density, never an independent literal. At/over ceiling: comment + hand back, do not merge.                                          |
 | `GOVERNANCE_OVERRIDE_ON_CHAIN`     | A PR that failed automated gates merges only via a re-verified on-chain `CogniAction` (`merge:change`).                                                                                                                                                                                                                    |
 | `DETERMINISTIC_AUTHORIZATION`      | Routine + node-formation merge decisions are deterministic policy (gate booleans), not LLM judgment. Preserves `NO_AGENTIC_REBASE`.                                                                                                                                                                                        |

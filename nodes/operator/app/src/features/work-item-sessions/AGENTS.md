@@ -38,7 +38,7 @@ Pure policy for operator work-item execution sessions: deadline math, DTO mappin
   - `deadlineFromNow(now, ttlSeconds)` — pure deadline calculator
   - `effectiveSessionStatus(session, now)` — collapses `active` to `idle` when deadline elapsed
   - `toWorkItemSessionDto(session, now)` — `WorkItemSessionRecord` → `WorkItemSessionDto`
-  - `nextActionForWorkItem({ workItem, session, now, conflict? })` — operator pushback text driving `/coordination` responses. Once a PR is linked it names the hub lifecycle order: `needs_merge` starts a fresh `/review-implementation` while CI runs, then flight, `/validate-candidate`, and one PATCH to `needs_closeout` + `deployVerified: true`; `needs_closeout` runs `/closeout` (operator merge). `deployVerified` never branches the text.
+  - `nextActionForWorkItem({ workItem, session, now, conflict? })` — operator pushback text driving `/coordination` responses. Once a PR is linked it names the hub lifecycle order: `needs_merge` starts a fresh `/review-implementation` while CI runs, then flight, `/validate-candidate` (the PR scorecard for the head SHA is the only validation signal), and a PATCH to `needs_closeout`; `needs_closeout` runs `/closeout` (operator merge).
 - **Routes (if any):** none — this directory is policy only. Routes live under `app/api/v1/work/items/[id]/{claims,heartbeat,pr,coordination}/`.
 - **Env/Config keys:** none
 

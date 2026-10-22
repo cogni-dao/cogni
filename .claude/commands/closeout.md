@@ -12,9 +12,9 @@ Let `HEAD_SHA` be the PR head (`gh pr view <PR> --json headRefOid`). All three m
 
 1. **CI**: every required check passes (`gh api repos/{owner}/{repo}/commits/$HEAD_SHA/check-runs`).
 2. **Review**: the latest `/review-implementation` verdict on the PR names `HEAD_SHA` and says APPROVE.
-3. **Validation**: the `/validate-candidate` scorecard on the PR names `HEAD_SHA` and passes, or records flight n/a for an instruction-only change, and the work item's `deployVerified` is `true` (recorded by the `needs_closeout` transition PATCH).
+3. **Validation**: the `/validate-candidate` scorecard on the PR names `HEAD_SHA` and passes, or records flight n/a for an instruction-only change. That scorecard is the only validation signal.
 
-If any gate fails, names an older SHA, or `deployVerified` is not `true`, stop: set the item back to `needs_merge` and name the missing gate or record.
+If any gate fails or names an older SHA, stop: set the item back to `needs_merge` and name the missing gate.
 
 ---
 

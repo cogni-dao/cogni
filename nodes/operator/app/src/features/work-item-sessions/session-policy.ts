@@ -10,9 +10,9 @@
  *   input; session state only guides active execution.
  *   LIFECYCLE_ORDER_FROM_HUB — next-action text orders fresh review (while CI
  *   runs) → flight → validate → closeout operator merge (hub
- *   dev-manager-contract). NO_DEPLOY_VERIFIED_GATE — deployVerified never
- *   branches the text; it is recorded once in the needs_merge → needs_closeout
- *   PATCH.
+ *   dev-manager-contract). SCORECARD_IS_VALIDATION — the passing
+ *   /validate-candidate scorecard on the PR for the head SHA is the only
+ *   validation signal; no work-item flag gates or branches the text.
  * Side-effects: none
  * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007, task.5292
  * @public
@@ -92,9 +92,9 @@ export function nextActionForWorkItem(input: {
     case "needs_implement":
       return `Continue /implement for ${workItem.id}; when ${prTag} carries Evidence and Merge Danger, set needs_merge so a fresh /review-implementation starts while CI runs.`;
     case "needs_merge":
-      return `Start a fresh /review-implementation of ${prTag} (${workItem.id}) now, while CI runs; the implementer never reviews its own work. When APPROVE and required CI are green at one head SHA, flight that SHA (POST /api/v1/vcs/flight), run /validate-candidate and post the scorecard on the PR, then in one PATCH set status needs_closeout and deployVerified true so /closeout merges through POST /api/v1/vcs/merge. REQUEST CHANGES returns ${workItem.id} to needs_implement.`;
+      return `Start a fresh /review-implementation of ${prTag} (${workItem.id}) now, while CI runs; the implementer never reviews its own work. When APPROVE and required CI are green at one head SHA, flight that SHA (POST /api/v1/vcs/flight) and run /validate-candidate, which posts the scorecard on the PR; when it passes, PATCH status needs_closeout so /closeout merges through POST /api/v1/vcs/merge. REQUEST CHANGES returns ${workItem.id} to needs_implement.`;
     case "needs_closeout":
-      return `Run /closeout for ${workItem.id}: confirm CI, the /review-implementation APPROVE and the /validate-candidate scorecard name one head SHA on ${prTag} and deployVerified is true (else return to needs_merge), then POST /api/v1/vcs/merge and set done after it merges.`;
+      return `Run /closeout for ${workItem.id}: confirm CI, the /review-implementation APPROVE and the passing /validate-candidate scorecard name one head SHA on ${prTag} (else return to needs_merge), then POST /api/v1/vcs/merge and set done after it merges.`;
     case "done":
       return `${workItem.id} is done. Preview follows main; production promote waits for a human to look at user-facing changes.`;
     case "blocked":
