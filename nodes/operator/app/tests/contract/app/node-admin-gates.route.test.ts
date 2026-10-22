@@ -542,4 +542,59 @@ describe("(c) priority <= 1 is node-admin on create and patch", () => {
       expect.anything()
     );
   });
+
+  async function patchWithRevision(priority: number, expectedRevision: number) {
+    let status = 0;
+    let json: unknown;
+    await testApiHandler({
+      appHandler: byIdHandler,
+      params: { id: "task.5286" },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedRevision, set: { priority } }),
+        });
+        status = res.status;
+        json = await res.json();
+      },
+    });
+    return { status, json };
+  }
+
+  it("answers 409 for a stale caller revision against the revision the gate read, writing nothing", async () => {
+    as(ADMIN);
+    h.getMock.mockResolvedValue(storedItem(1)); // revision 2
+    const p = await patchWithRevision(3, 1);
+    expect(p.status).toBe(409);
+    expect(p.json).toMatchObject({
+      errorCode: "revision_conflict",
+      expectedRevision: 1,
+      currentRevision: 2,
+    });
+    expect(h.patchMock).not.toHaveBeenCalled();
+  });
+
+  it("respects a caller revision that matches the revision read", async () => {
+    as(NON_ADMIN);
+    h.getMock.mockResolvedValue(storedItem(3)); // revision 2
+    h.patchMock.mockResolvedValue(storedItem(4));
+    expect((await patchWithRevision(4, 2)).status).toBe(200);
+    expect(h.patchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedRevision: 2, set: { priority: 4 } }),
+      expect.anything()
+    );
+  });
+
+  it("answers 503 authz_unavailable for a demotion during an authorization outage", async () => {
+    as(ADMIN);
+    (h.authz.current as FakeAuthorizationAdapter).unavailable(
+      checkParams(ADMIN.id)
+    );
+    h.getMock.mockResolvedValue(storedItem(0));
+    const p = await patch(3);
+    expect(p.status).toBe(503);
+    expect(p.json).toMatchObject({ errorCode: "authz_unavailable" });
+    expect(h.patchMock).not.toHaveBeenCalled();
+  });
 });

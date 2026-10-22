@@ -373,6 +373,60 @@ describe("createWorkItemCapability", () => {
       );
     });
 
+    it("refuses a stale caller revision against the revision the gate read, writing nothing", async () => {
+      const authz = await adminAuthz();
+      const { cap, store } = gatedCap(() =>
+        checkNodeAdmin(authz, { userId: ADMIN_USER, nodeId: NODE_ID })
+      );
+      store.get.mockResolvedValue(item({ priority: 1, revision: 7 }));
+
+      const err = await cap
+        .patch({ id: "task.5282", expectedRevision: 6, set: { priority: 3 } })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(WorkItemPatchConflictError);
+      expect(err).toMatchObject({ expectedRevision: 6, currentRevision: 7 });
+      expect(store.patch).not.toHaveBeenCalled();
+    });
+
+    it("respects a caller revision that matches the revision read", async () => {
+      const gate = vi.fn();
+      const { cap, store } = gatedCap(gate);
+      store.get.mockResolvedValue(item({ priority: 3, revision: 9 }));
+
+      await cap.patch({
+        id: "task.5282",
+        expectedRevision: 9,
+        set: { priority: 5 },
+      });
+
+      expect(store.patch).toHaveBeenCalledWith(
+        { id: "task.5282", expectedRevision: 9, set: { priority: 5 } },
+        "actor:system"
+      );
+    });
+
+    it("fails closed as authz_unavailable when a demotion cannot be authorized", async () => {
+      const authz = new FakeAuthorizationAdapter();
+      authz.unavailable({
+        actorId: `user:${ADMIN_USER}`,
+        action: "node.administer",
+        resource: `node:${NODE_ID}`,
+        context: { tenantId: NODE_ID, nodeId: NODE_ID },
+      });
+      const { cap, store } = gatedCap(() =>
+        checkNodeAdmin(authz, { userId: ADMIN_USER, nodeId: NODE_ID })
+      );
+      store.get.mockResolvedValue(item({ priority: 0 }));
+
+      const err = await cap
+        .patch({ id: "task.5282", set: { priority: 3 } })
+        .catch((e: unknown) => e);
+
+      expect(err).toMatchObject({ errorCode: "authz_unavailable" });
+      expect(store.patch).not.toHaveBeenCalled();
+    });
+
     it("never gates a move between open priorities, but still binds it to the revision read", async () => {
       const gate = vi.fn();
       const { cap, store } = gatedCap(gate);

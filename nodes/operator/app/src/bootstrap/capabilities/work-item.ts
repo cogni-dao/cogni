@@ -265,7 +265,19 @@ export function createWorkItemCapability(
         if (priority !== undefined && !isPrivilegedPriority(priority)) {
           const current = await writer.store.get(toWorkItemId(input.id));
           await gateDemotion(current);
-          if (current) expectedRevision ??= current.revision;
+          if (current) {
+            // The gate decided on THIS revision; a caller revision that differs is a lost CAS.
+            if (
+              expectedRevision !== undefined &&
+              expectedRevision !== current.revision
+            )
+              throw new WorkItemPatchConflictError(
+                input.id,
+                expectedRevision,
+                current.revision
+              );
+            expectedRevision = current.revision;
+          }
         }
         try {
           const updated = await writer.store.patch(

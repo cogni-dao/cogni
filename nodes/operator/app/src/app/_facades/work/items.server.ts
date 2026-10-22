@@ -450,7 +450,17 @@ export async function patchWorkItem(
     if (current) {
       if (current.priority !== target)
         await assertPriorityAuthority(current.priority, sessionUser.id);
-      expectedRevision ??= current.revision;
+      // The gate decided on THIS revision; a caller revision that differs is a lost CAS.
+      if (
+        expectedRevision !== undefined &&
+        expectedRevision !== current.revision
+      )
+        throw new WorkItemRevisionConflictError(
+          `work item ${input.id} is at revision ${current.revision}, expected ${expectedRevision}`,
+          expectedRevision,
+          current.revision
+        );
+      expectedRevision = current.revision;
     }
   }
   try {
