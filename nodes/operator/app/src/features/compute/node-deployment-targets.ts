@@ -317,16 +317,42 @@ function catalogScalar(value: unknown): string | number | boolean | null {
     : null;
 }
 
-const GITHUB_REPOSITORY = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/;
+/** One GitHub owner or repository name segment (shared by both repository forms). */
+const GITHUB_NAME = "[A-Za-z0-9_.-]+";
+const GITHUB_REPOSITORY = new RegExp(`^(${GITHUB_NAME})/(${GITHUB_NAME})$`);
+const GITHUB_REPOSITORY_URL = new RegExp(
+  `^https://github\\.com/(${GITHUB_NAME})/(${GITHUB_NAME}?)(?:\\.git)?$`
+);
 
-/** Case-normalized like catalog `source_repo`; fails closed on empty/malformed input. */
+/**
+ * Canonical lowercase `owner/name`, or undefined for a `.`/`..` segment (path
+ * traversal, never a repository). Lowercase is the identity the maintenance fence
+ * compares byte-for-byte with an audited receipt's `request.sourceRepository`, so
+ * receipt writers must record the same canonical lowercase form.
+ */
+function canonicalRepository(
+  match: RegExpMatchArray | null
+): string | undefined {
+  const owner = match?.[1];
+  const name = match?.[2];
+  if (!owner || !name) return undefined;
+  if ([owner, name].some((segment) => /^\.\.?$/.test(segment)))
+    return undefined;
+  return `${owner}/${name}`.toLowerCase();
+}
+
+/** Fails closed on an empty, malformed or traversal parent repository. */
 function parseParentRepository(value: string): string {
-  if (!GITHUB_REPOSITORY.test(value)) {
+  const repository =
+    typeof value === "string"
+      ? canonicalRepository(value.match(GITHUB_REPOSITORY))
+      : undefined;
+  if (!repository) {
     throw new Error(
       "[deployment-targets] parentRepository must be a GitHub owner/name"
     );
   }
-  return value.toLowerCase();
+  return repository;
 }
 
 function resolveNodeSourceRepository(
@@ -348,13 +374,13 @@ function parseSourceRepository(
       `[deployment-targets] Target ${target} requires source_repo`
     );
   }
-  const match = row.source_repo.match(
-    /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/
+  const repository = canonicalRepository(
+    row.source_repo.match(GITHUB_REPOSITORY_URL)
   );
-  if (!match) {
+  if (!repository) {
     throw new Error(
       `[deployment-targets] Target ${target} has invalid source_repo`
     );
   }
-  return `${match[1]}/${match[2]}`.toLowerCase();
+  return repository;
 }

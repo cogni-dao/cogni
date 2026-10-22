@@ -136,6 +136,9 @@ describe("resolveDeploymentTargets", () => {
     "cogni",
     "cogni-dao/cogni/extra",
     "https://github.com/cogni-dao/cogni",
+    "../..",
+    "./cogni",
+    "cogni-dao/..",
   ])("fails closed on parent repository %j instead of emitting an empty identity", (parentRepository) => {
     expect(() =>
       resolveDeploymentTargets({
@@ -149,7 +152,11 @@ describe("resolveDeploymentTargets", () => {
     ).toThrow("parentRepository must be a GitHub owner/name");
   });
 
-  it("refuses a malformed catalog source_repo rather than substituting the parent", () => {
+  it.each([
+    "git@github.com:cogni-dao/beacon.git",
+    "https://github.com/cogni-dao/..",
+    "https://github.com/../beacon.git",
+  ])("refuses malformed catalog source_repo %j rather than substituting the parent", (sourceRepo) => {
     expect(() =>
       resolveDeploymentTargets({
         catalogRows: [
@@ -157,7 +164,7 @@ describe("resolveDeploymentTargets", () => {
             name: "beacon",
             type: "node",
             envs: ["candidate-a"],
-            source_repo: "git@github.com:cogni-dao/beacon.git",
+            source_repo: sourceRepo,
           },
         ],
         environment: "candidate-a",
@@ -297,6 +304,18 @@ describe("resolvePromoteDeploymentTargets", () => {
     expect(selection.deployment).toEqual(["operator"]);
     expect(selection.sourceRepositories).toEqual({ operator: PARENT });
     expect(selection.sourceShas).toEqual({});
+  });
+
+  it("fails closed on an empty promote parent repository (bug.5510)", () => {
+    expect(() =>
+      resolvePromoteDeploymentTargets({
+        catalogRows: [{ name: "operator", type: "node", envs: ["preview"] }],
+        environment: "preview",
+        parentRepository: "",
+        requestedTargets: ["operator"],
+        legacyK3sTargets: ["operator"],
+      })
+    ).toThrow("parentRepository must be a GitHub owner/name");
   });
 
   it("projects the reviewed catalog pin for an operator-merge preview", () => {
