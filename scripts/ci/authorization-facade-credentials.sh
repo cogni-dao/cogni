@@ -277,15 +277,17 @@ PY
   facade_probe() {
     local label="$1" path="$2" payload="$3" expected_status="$4" expected_code="${5:-}" anonymous="${6:-false}"
     local result meta body status req_id redirect
+    req_id="$(openssl rand -hex 16)" || return 1
     result="$({
       if [[ "$anonymous" != true ]]; then printf 'header = "Authorization: Bearer %s"\n' "$ACTIVE"; fi
       printf 'header = "Content-Type: application/json"\n'
+      printf 'header = "X-Request-Id: %s"\n' "$req_id"
     } | curl --silent --show-error --proto '=https' --max-time 15 --max-filesize 8192 \
       --request POST --config - --data-binary "$payload" \
-      --write-out $'\n%{http_code}|%header{x-request-id}|%{redirect_url}' "${WORKLOAD_URL}${path}" 2>/dev/null)" \
+      --write-out $'\n%{http_code}|%{redirect_url}' "${WORKLOAD_URL}${path}" 2>/dev/null)" \
       || { log "conformance ${label}: transport failed"; return 1; }
     meta="${result##*$'\n'}"; body="${result%$'\n'*}"
-    IFS='|' read -r status req_id redirect <<<"$meta"
+    IFS='|' read -r status redirect <<<"$meta"
     # Public receipts only; never output a response body or a credential.
     jq -cn --arg probe "$label" --arg status "$status" --arg reqId "$req_id" \
       --arg sha "$AUTHORIZATION_FACADE_EXPECTED_SHA" '{probe:$probe,status:$status,reqId:$reqId,buildSha:$sha}'
