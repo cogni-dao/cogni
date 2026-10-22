@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/tests/evals/work-prioritizer.score`
- * Purpose: Tests for the work-prioritizer eval graders, including the write section the propose eval skips.
+ * Purpose: Tests for the work-prioritizer eval graders (propose mode).
  * Scope: Pure grader tests over hand-made decisions; does not call a node or an LLM.
  * Invariants: GRADERS_ARE_PURE; each check fails for exactly the defect it names.
  * Side-effects: none
@@ -14,18 +14,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  cycleStampsForRun,
   type Fixture,
-  gradeAppliedMatchesTable,
   gradeCoverage,
   gradeDeltaCoverage,
   gradeGates,
   gradeGoalCitation,
   gradeGoalsReported,
   gradeHarmEvidence,
-  gradeIncidentApplied,
-  gradeIncidentDemoted,
-  gradeObservedStability,
   gradePriorReference,
   gradeRationale,
   gradeResponsiveness,
@@ -56,7 +51,6 @@ function row(
     from: null,
     to,
     rank: 1,
-    pinned: false,
     serviceClass: "standard",
     maxImpact: 2,
     goal: R,
@@ -84,7 +78,6 @@ function decision(
     reviewedAt: "2026-10-20T00:01:00.000Z",
     delta: table.map((r) => r.itemId),
     heuristic: "lexicographic heuristic v2",
-    policyVersion: "v4.0",
     promptVersion: "p",
     modelRef: "m",
     cycleId: "c",
@@ -433,7 +426,6 @@ describe("work-prioritizer graders", () => {
       buildSha: "abc",
       baseUrl: "u",
       model: "m",
-      policyVersion: "v4.0",
       promptVersion: "p",
       mode: "propose",
       decisionIds: ["d1"],
@@ -441,48 +433,11 @@ describe("work-prioritizer graders", () => {
         coverage: { pass: true, reason: "ok" },
         gates: { pass: false, reason: "x|y" },
       },
-      skipped: ["responsiveness (applied)"],
       soft: {},
       pass: false,
     });
     expect(md).toContain("FAIL");
     expect(md).toContain("| gates | **FAIL** | x/y |");
-    expect(md).toContain("| responsiveness (applied) | skipped |");
-  });
-
-  // ── WRITE SECTION (skipped by the propose eval; gates again once a write path exists) ──
-
-  it("write mode: applied rows must match the decision table and be live unless superseded", () => {
-    const record = {
-      decisionId: "d",
-      status: "applied",
-      applied: [{ itemId: "bug.1", to: 0, newRevision: 2 }],
-    };
-    const live = [
-      { id: "bug.1", status: "needs_implement", revision: 2, priority: 0 },
-    ];
-    expect(gradeAppliedMatchesTable(record, GOOD, live).pass).toBe(true);
-    // Table says p1 but p0 was applied.
-    expect(
-      gradeAppliedMatchesTable(
-        { ...record, applied: [{ itemId: "bug.2", to: 0, newRevision: 2 }] },
-        GOOD,
-        live
-      ).pass
-    ).toBe(false);
-    // Live value differs and nothing superseded it.
-    expect(
-      gradeAppliedMatchesTable(record, GOOD, [
-        { ...live[0], priority: 2 } as (typeof live)[number],
-      ]).pass
-    ).toBe(false);
-    // A later human edit (higher revision) is allowed to differ.
-    expect(
-      gradeAppliedMatchesTable(record, GOOD, [
-        { ...live[0], priority: 2, revision: 3 } as (typeof live)[number],
-      ]).pass
-    ).toBe(true);
-    expect(gradeAppliedMatchesTable(null, GOOD, live).pass).toBe(false);
   });
 
   it("unjudged must stay ≤ 10% of rows", () => {
@@ -493,77 +448,6 @@ describe("work-prioritizer graders", () => {
     expect(
       gradeUnjudged(decision(table, { unjudged: ["t.1", "t.2", "t.3"] })).pass
     ).toBe(false);
-  });
-
-  it("observe mode: a scheduled run maps to the cycle stamps of its minutes", () => {
-    expect(
-      cycleStampsForRun({
-        startedAt: "2026-10-21T03:00:04.120Z",
-        completedAt: "2026-10-21T03:02:10.000Z",
-        status: "success",
-      })
-    ).toEqual(["20261021t0300", "20261021t0301", "20261021t0302"]);
-  });
-
-  it("observe mode: B is no_change, or keeps A's p0 unless an item changed", () => {
-    const a = {
-      id: "work-prioritizer-20261021t0300-decision",
-      payload: GOOD,
-      apply: {
-        decisionId: "work-prioritizer-20261021t0300-decision",
-        status: "applied",
-        applied: [{ itemId: "bug.1", to: 0, newRevision: 2 }],
-      },
-    };
-    expect(
-      gradeObservedStability(a, { status: "success", payload: null }).pass
-    ).toBe(true);
-    // B saw bug.1 at the revision A's own apply produced → nothing changed → p0 must hold.
-    const moved = decision([
-      row("bug.1", 1, { revision: 2 }),
-      row("bug.2", 0),
-      row("task.3", 2),
-    ]);
-    expect(
-      gradeObservedStability(a, { status: "success", payload: moved }).pass
-    ).toBe(false);
-    // A human edit bumped bug.2 → p0 may move.
-    const edited = decision([
-      row("bug.1", 1, { revision: 2 }),
-      row("bug.2", 0, { revision: 5 }),
-      row("task.3", 2),
-    ]);
-    expect(
-      gradeObservedStability(a, { status: "success", payload: edited }).pass
-    ).toBe(true);
-    expect(gradeObservedStability(a, null).pass).toBe(false);
-    expect(gradeObservedStability(null, null).pass).toBe(false);
-  });
-
-  it("observe mode: the incident must be expedite p0, applied, live; then dropped after delete", () => {
-    const table = decision([
-      row("bug.1", 1),
-      row("bug.77", 0, { serviceClass: "expedite" }),
-    ]);
-    const apply = {
-      decisionId: "d",
-      status: "applied",
-      applied: [{ itemId: "bug.77", to: 0, newRevision: 2 }],
-    };
-    const live = [{ id: "bug.77", status: "needs_triage", priority: 0 }];
-    expect(gradeIncidentApplied(table, apply, live, "bug.77").pass).toBe(true);
-    expect(gradeIncidentApplied(table, null, live, "bug.77").pass).toBe(false);
-    expect(
-      gradeIncidentApplied(
-        table,
-        apply,
-        [{ id: "bug.77", status: "needs_triage", priority: 2 }],
-        "bug.77"
-      ).pass
-    ).toBe(false);
-    expect(gradeIncidentDemoted(table, "bug.77").pass).toBe(false);
-    expect(gradeIncidentDemoted(GOOD, "bug.77").pass).toBe(true);
-    expect(gradeIncidentDemoted(null, "bug.77").pass).toBe(false);
   });
 
   it("mergeLabelled passes a check only when every labelled cycle passes it", () => {
