@@ -135,44 +135,71 @@ describe("EDO foundation — invariants", () => {
 
   it("lets derives_from cite a DAO goal, but validates stays hypothesis-only", async () => {
     const { store } = await bootstrap();
-    await store.addKnowledge({
-      id: "goal-ship-it",
-      domain: DOMAIN,
-      title: "Goal: ship it",
-      content: "...",
-      entryType: "goal",
-      evaluateAt: new Date("2027-01-01T00:00:00Z"),
-      sourceType: "agent",
-    });
-    await store.addKnowledge({
-      id: "evt-plan",
-      domain: DOMAIN,
-      title: "plan",
-      content: "...",
-      entryType: "event",
-      sourceType: "agent",
-    });
+    await store.withWrite(
+      {
+        operationId: "fixture:edo-loop:goal",
+        message: "goal citation fixture",
+      },
+      (write) =>
+        write.addKnowledge({
+          id: "goal-ship-it",
+          domain: DOMAIN,
+          title: "Goal: ship it",
+          content: "...",
+          entryType: "goal",
+          evaluateAt: new Date("2027-01-01T00:00:00Z"),
+          sourceType: "agent",
+        })
+    );
+    await store.withWrite(
+      {
+        operationId: "fixture:edo-loop:plan",
+        message: "goal citation fixture",
+      },
+      (write) =>
+        write.addKnowledge({
+          id: "evt-plan",
+          domain: DOMAIN,
+          title: "plan",
+          content: "...",
+          entryType: "event",
+          sourceType: "agent",
+        })
+    );
     const before = (await store.getKnowledge("goal-ship-it"))?.confidencePct;
     await expect(
-      store.addCitation({
-        citingId: "evt-plan",
-        citedId: "goal-ship-it",
-        citationType: "derives_from",
-      })
+      store.withWrite(
+        {
+          operationId: "fixture:edo-loop:derives",
+          message: "goal citation fixture",
+        },
+        (write) =>
+          write.addCitation({
+            citingId: "evt-plan",
+            citedId: "goal-ship-it",
+            citationType: "derives_from",
+          })
+      )
     ).resolves.toBeDefined();
     // GOALS_HAVE_NO_CONFIDENCE: a derives_from edge never moves a goal's confidence.
     expect((await store.getKnowledge("goal-ship-it"))?.confidencePct).toBe(
       before
     );
     await expect(
-      store.addCitation({
-        citingId: "evt-plan",
-        citedId: "goal-ship-it",
-        citationType: "validates",
-      })
+      store.withWrite(
+        {
+          operationId: "fixture:edo-loop:validates",
+          message: "goal citation fixture",
+        },
+        (write) =>
+          write.addCitation({
+            citingId: "evt-plan",
+            citedId: "goal-ship-it",
+            citationType: "validates",
+          })
+      )
     ).rejects.toBeInstanceOf(CitationTypeMismatchError);
   });
-
   it("allows evidence_for to cite any entry_type (events, findings)", async () => {
     const { store } = await bootstrap();
     await store.withWrite(
