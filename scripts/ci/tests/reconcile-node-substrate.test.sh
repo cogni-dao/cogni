@@ -10,6 +10,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Keep the template target distinct from the same-named production baseline.
+bash scripts/ci/tests/template-target-bank.test.sh
+
 TMPROOT=$(mktemp -d -t reconcile-node-substrate.XXXXXX)
 trap 'rm -rf "$TMPROOT"' EXIT
 

@@ -4,9 +4,9 @@
 /**
  * Module: `@tests/ci-invariants/maintenance-drain`
  * Purpose: Exercise complete candidate inventory and protected-cell identity boundaries.
- * Scope: Local pure functions; does not access Git, network or cluster.
+ * Scope: Local functions and isolated temporary Git fixtures; does not access network or cluster.
  * Invariants: Caller-empty receipts cannot hide old producers or retained app bindings.
- * Side-effects: none
+ * Side-effects: IO (owned temporary repositories only; Git hooks, signing and network disabled)
  * Links: scripts/ops/maintenance-drain.mjs
  * @public
  */
@@ -29,6 +29,9 @@ describe("maintenance drain proof boundary", () => {
   it("binds active qualification to one workflow owner, preserves its artifact and refuses stale claims", () => {
     const program = `
 import copy,datetime,hashlib,importlib.util,json,os,pathlib,subprocess,sys,tempfile
+# Real ancestry and CAS require Git, but never the developer's config, hooks,
+# signing process or authenticated remote. Only local file transport is allowed.
+os.environ.update({"GIT_CONFIG_NOSYSTEM":"1","GIT_CONFIG_SYSTEM":os.devnull,"GIT_CONFIG_GLOBAL":os.devnull,"GIT_TERMINAL_PROMPT":"0","GIT_ALLOW_PROTOCOL":"file","GIT_CONFIG_COUNT":"3","GIT_CONFIG_KEY_0":"core.hooksPath","GIT_CONFIG_VALUE_0":os.devnull,"GIT_CONFIG_KEY_1":"commit.gpgSign","GIT_CONFIG_VALUE_1":"false","GIT_CONFIG_KEY_2":"tag.gpgSign","GIT_CONFIG_VALUE_2":"false"})
 spec=importlib.util.spec_from_file_location("fence",sys.argv[1]);f=importlib.util.module_from_spec(spec);spec.loader.exec_module(f)
 now=datetime.datetime(2026,10,22,20,0,tzinfo=datetime.timezone.utc)
 env={"GITHUB_REPOSITORY":"cogni-dao/cogni","GITHUB_WORKFLOW_SHA":"d"*40,"GITHUB_WORKFLOW_REF":"cogni-dao/cogni/.github/workflows/candidate-flight.yml@refs/heads/reviewed","GITHUB_RUN_ID":"123","GITHUB_RUN_ATTEMPT":"1","GITHUB_JOB":"prepare-substrate-deploy-branch","DEPLOY_ENVIRONMENT":"candidate-a","NODE":"node-template","PER_NODE_BRANCH":"deploy/candidate-a-node-template"}
@@ -49,11 +52,14 @@ for key,value in (("GITHUB_RUN_ID","124"),("GITHUB_RUN_ATTEMPT","2"),("GITHUB_WO
  rejected(owned,{**env,key:value})
 for section,key,value in (("qualification","phase","inert"),("qualification","nativeAuditDigest",None),("qualification","providerClosureDigest",None),("qualification","sourceExclusionDigest",None),("qualification","expiresAt",now.isoformat()),("request","env","production"),("request","sourceSha","c"*40)):
  bad=copy.deepcopy(owned);bad[section][key]=value;rejected(bad)
-def git(root,*args):return subprocess.check_output(["git","-C",str(root),*args],stderr=subprocess.PIPE,text=True).strip()
+def git(root,*args):
+ assert root.resolve().is_relative_to(pathlib.Path(directory).resolve()), "fixture_git_outside_owned_directory"
+ assert args[0] in ("config","add","commit","rev-parse","push","branch"), "fixture_git_command_unreviewed"
+ return subprocess.check_output(["git","-C",str(root),*args],stderr=subprocess.PIPE,text=True,timeout=10).strip()
 with tempfile.TemporaryDirectory() as directory:
  root=pathlib.Path(directory);bare=root/"remote.git";work=root/"work";other=root/"other"
- subprocess.run(["git","init","--bare",str(bare)],check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
- subprocess.run(["git","clone",str(bare),str(work)],check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+ subprocess.run(["git","init","--bare",str(bare)],check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10)
+ subprocess.run(["git","clone",str(bare),str(work)],check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10)
  git(work,"config","user.email","fixture@example.test");git(work,"config","user.name","Owned fixture")
  path=work/"infra/k8s/overlays/candidate-a/node-template";path.mkdir(parents=True)
  (path/"xcomputeworkload.yaml").write_bytes(data);(path/"kustomization.yaml").write_text("resources:\\n- xcomputeworkload.yaml\\n- custody.yaml\\n")
@@ -89,7 +95,7 @@ with tempfile.TemporaryDirectory() as directory:
  local=json.loads((state/"maintenance-drain.json").read_text());local["qualification"]["owner"]=None
  (state/"maintenance-drain.json").write_text(json.dumps(local));git(work,"add",".");git(work,"commit","-m","Fresh grant")
  git(work,"push","origin","HEAD:"+branch)
- subprocess.run(["git","clone","--branch",branch,str(bare),str(other)],check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+ subprocess.run(["git","clone","--branch",branch,str(bare),str(other)],check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10)
  git(other,"config","user.email","fixture@example.test");git(other,"config","user.name","Owned fixture")
  (other/"root-change").write_text("fresh maintainer state");git(other,"add",".");git(other,"commit","-m","Owner changed remote");git(other,"push","origin","HEAD:"+branch)
  try:f.claim_qualification(work,repo,source);raise AssertionError("stale head admitted")
@@ -102,7 +108,7 @@ with tempfile.TemporaryDirectory() as directory:
  def compare(repository,base,head):
   resolved=git(other,"rev-parse",head)
   if base==resolved:return "identical"
-  result=subprocess.run(["git","-C",str(other),"merge-base","--is-ancestor",base,resolved],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+  result=subprocess.run(["git","-C",str(other),"merge-base","--is-ancestor",base,resolved],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10)
   return "ahead" if result.returncode==0 else "behind"
  try:f.check_receipt(floor,repo,pr,compare);raise AssertionError("premerge runtime passed real MAIN floor")
  except RuntimeError as e:assert str(e)=="maintenance_compatibility_floor_violation"

@@ -288,6 +288,11 @@ prefetch_path() {
 bao_get_field() {
   local f="${CACHE_DIR}/$1/$2"
   [[ -f "$f" ]] && { cat "$f"; return 0; }
+  # A missing template target value must be materialized for this lane. The
+  # same-named production baseline is not that target's credential authority.
+  if [[ "$TARGET_NODE" == node-template && "$1" == "$TARGET_NODE" ]]; then
+    return 0
+  fi
   # SHARED-SUBSTRATE OWNERS LIVE WHERE THE SUBSTRATE DOES (bug.5206). A foreign-custodied
   # lane runs on the CONTROL env's substrate, so its LiteLLM master key, Doltgres superuser
   # and _shared values are that cluster's, not the lane's — `cogni/candidate-a/operator`

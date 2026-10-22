@@ -130,7 +130,7 @@ function isCustodianBridgeStep(
       Object.keys(step.env ?? {})
         .sort()
         .join(",") ===
-        "APP_SOURCE_ROOT,CI_SOURCE_ROOT,CONTROL_ENV,DEPLOY_ENVIRONMENT,GH_TOKEN,NODE,VM_HOST" &&
+        "APP_SOURCE_ROOT,CI_SOURCE_ROOT,CONTROL_ENV,DEPLOY_ENVIRONMENT,GH_TOKEN,NODE,NODE_SOURCE_SHA,PER_NODE_BRANCH,VM_HOST" &&
       step.env?.VM_HOST === "${{ secrets.VM_HOST }}" &&
       step.env?.GH_TOKEN === "${{ secrets.GIT_READ_TOKEN }}" &&
       step.env?.CONTROL_ENV ===
@@ -138,6 +138,9 @@ function isCustodianBridgeStep(
       step.env?.NODE === "${{ matrix.node }}" &&
       step.env?.CI_SOURCE_ROOT === "${{ github.workspace }}/ci-src" &&
       step.env?.APP_SOURCE_ROOT === "${{ github.workspace }}/app-src" &&
+      step.env?.PER_NODE_BRANCH === "deploy/candidate-a-${{ matrix.node }}" &&
+      step.env?.NODE_SOURCE_SHA ===
+        "${{ needs.decide.outputs.node_source_sha || fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}" &&
       step.run?.trim() ===
         "pnpm --dir ci-src exec tsx --tsconfig nodes/operator/app/tsconfig.app.json scripts/ops/maintenance-drain.mjs candidate-preflight"
     );
@@ -353,6 +356,10 @@ describe.each(CANDIDATE_WORKFLOWS)("%s", (workflowPath) => {
       { ...step.env, CONTROL_ENV: "preview" },
       { ...step.env, DEPLOY_ENVIRONMENT: "production" },
       { ...step.env, GH_TOKEN: "${{ secrets.PRODUCTION_KEY }}" },
+      { ...step.env, PER_NODE_BRANCH: "${{ secrets.PRODUCTION_KEY }}" },
+      { ...step.env, PER_NODE_BRANCH: "deploy/production-node-template" },
+      { ...step.env, NODE_SOURCE_SHA: "${{ secrets.PRODUCTION_KEY }}" },
+      { ...step.env, NODE_SOURCE_SHA: "" },
       { ...step.env, EXTRA_AUTHORITY: "${{ secrets.PRODUCTION_KEY }}" },
       { ...step.env, SQL: "SELECT 1" },
     ])

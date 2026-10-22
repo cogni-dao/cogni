@@ -704,8 +704,7 @@ describe("candidate-a manifest source", () => {
         "utf8"
       )
     ) as { jobs: Record<string, WorkflowJob> };
-    const helper =
-      "python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .";
+    const helper = "python3 ../ci-src/scripts/ci/lib/maintenance-fence.py ";
     const candidateGroups = ["prepare-substrate-deploy-branch", "flight"];
     for (const name of candidateGroups) {
       const job = parsed.jobs[name];
@@ -741,12 +740,12 @@ describe("candidate-a manifest source", () => {
     );
     if (!promotionCheckout || !promotionPush)
       throw new Error("ordinary promotion writer steps are required");
-    for (const [label, step, checks] of [
-      ["candidate prepare", prepare, 2],
-      ["candidate checkout", candidateCheckout, 1],
-      ["candidate push", candidatePush, 1],
-      ["promotion checkout", promotionCheckout, 1],
-      ["promotion push", promotionPush, 1],
+    for (const [label, step, actions] of [
+      ["candidate prepare", prepare, ["claim", "preserve"]],
+      ["candidate checkout", candidateCheckout, ["check"]],
+      ["candidate push", candidatePush, ["check"]],
+      ["promotion checkout", promotionCheckout, ["check"]],
+      ["promotion push", promotionPush, ["check"]],
     ] as const) {
       const run = step.run ?? "";
       expect(run, label).toContain("set -euo pipefail");
@@ -765,12 +764,12 @@ describe("candidate-a manifest source", () => {
       const guardLines = run
         .split("\n")
         .filter((line) => line.includes(helper));
-      expect(guardLines, label).toHaveLength(checks);
-      for (const line of guardLines) {
-        expect(line, label).not.toMatch(/\|\|\s*(true|:)(?:\s|$)/);
-        // Ordinary delivery cannot supply an operation exception or mutate fence state.
-        expect(line.trim(), label).toMatch(/maintenance-fence\.py check \.$/);
-      }
+      // Only prepare can claim the finite, already-active grant and preserve its
+      // manifest. No ordinary writer can invent activation/audit authority.
+      expect(
+        guardLines.map((line) => line.trim()),
+        label
+      ).toEqual(actions.map((action) => `${helper}${action} .`));
       if (run.includes("git checkout -B")) {
         expect(run.indexOf(helper), label).toBeGreaterThan(
           run.lastIndexOf("git checkout -B")
@@ -785,6 +784,19 @@ describe("candidate-a manifest source", () => {
         );
       }
     }
+    const preparation = prepare.run ?? "";
+    const claim = preparation.indexOf(`${helper}claim .`);
+    const firstSync = preparation.indexOf("rsync -a --delete");
+    const preserve = preparation.indexOf(`${helper}preserve .`);
+    expect(claim).toBeGreaterThan(preparation.lastIndexOf("git checkout -B"));
+    expect(firstSync).toBeGreaterThan(claim);
+    expect(preserve).toBeGreaterThan(
+      preparation.lastIndexOf("rsync -a --delete")
+    );
+    expect(preparation.indexOf("git add -A")).toBeGreaterThan(preserve);
+    expect(preparation.indexOf("git push origin")).toBeGreaterThan(
+      preparation.indexOf("git add -A")
+    );
     for (const job of [
       parsed.jobs["prepare-substrate-deploy-branch"],
       parsed.jobs.flight,

@@ -352,6 +352,12 @@ export REPO_ROOT APP_SOURCE_DIR COGNI_CATALOG_ROOT DOMAIN
 # file is its twin and never got the fix, so the production-side lane reconcile died on
 # "doltgres superuser SSOT absent at cogni/candidate-a/operator/DOLTGRES_PASSWORD".
 _bao_env_for_svc() {
+  # The template is also a sovereign target. Its lane credentials are not the
+  # production baseline bank, even when production custodies this lane.
+  if [[ "$TARGET_NODE" == node-template && "$1" == "$TARGET_NODE" ]]; then
+    printf '%s' "$DEPLOY_ENVIRONMENT"
+    return 0
+  fi
   case "$1" in
     operator|_shared|node-template) printf '%s' "$SUBSTRATE_CONTROL_ENV" ;;
     *)                              printf '%s' "$DEPLOY_ENVIRONMENT" ;;
