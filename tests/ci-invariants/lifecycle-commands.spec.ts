@@ -7,18 +7,22 @@
  * Scope: Static line scan of `.claude/commands/*.md` and `.claude/skills/*\/SKILL.md`. Does not run git or touch the network.
  * Invariants:
  *   - NO_STAGING_BASE: no file names `origin/staging`, `--base staging` or "from `staging`"; branches and diffs use `main`.
- *   - NO_PNPM_CHECK_STEP: no file instructs a bare `pnpm check` as a step; mentioning that it needs the human's explicit request is allowed.
+ *   - NO_PNPM_CHECK_STEP: no file instructs `pnpm check` or `pnpm check:fast` as a step; mentioning that it needs the human's explicit request is allowed.
  *   - MERGE_VIA_OPERATOR: no file instructs `gh pr merge`; merges go through `POST /api/v1/vcs/merge`.
  * Side-effects: IO (reads committed Markdown)
  * Links: task.5293, story.5103, AGENTS.md (local command budget), .claude/commands/closeout.md
  * @public
  *
  * MATCHER (line-based, deliberately simple):
- * - Staging: any occurrence of the three tokens. Staging is retired, so they have no legitimate use.
- * - `pnpm check`: the bare aggregate (not `pnpm check:docs` etc.) in STEP POSITION, meaning the line,
- *   after Markdown prefixes (indent, `>`, bullets, `1.`, `$`) and an optional leading "Run", starts with
- *   it. A mid-sentence mention ("do not run `pnpm check` locally") is not a step.
- * - `gh pr merge`: any occurrence, unless the same line carries a prohibition (never/not/don't/instead of).
+ * - Staging: any of `origin/staging`, `--base staging`, `staging...`, `-b <branch> staging`, "from staging"
+ *   or "to/into/off/against `staging`" (backticked, so prose such as a retired-skill trigger phrase passes).
+ *   Staging is retired, so these have no legitimate use.
+ * - `pnpm check` / `pnpm check:fast[:fix]` (not `pnpm check:docs` etc.) in STEP POSITION: the line, after
+ *   Markdown prefixes (indent, `>`, bullets, `1.`, `[ ]`, `$`) and an optional leading "Run", starts with
+ *   it. A mid-sentence mention ("do not run `pnpm check` locally") is not a step, and a step line that
+ *   names the permission gate ("explicit", "ask the human", "ask for") is allowed.
+ * - `gh pr merge`: any occurrence, unless a prohibition (never/not/don't/do not/instead of) immediately
+ *   precedes it, optionally via "use"/"run". A prohibition elsewhere on the line does not count.
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -37,12 +41,25 @@ interface Violation {
   text: string;
 }
 
-const STAGING =
-  /origin\/staging\b|--base[= ]staging\b|\bfrom `?staging`?(?![\w-])/;
-const STEP_PREFIX = /^[\s>]*(?:[-*+]\s+|\d+\.\s+)?(?:\$\s+)?(?:run\s+)?`?/i;
-const PNPM_CHECK_STEP = /^pnpm check(?![:\w-])/;
+const STAGING = new RegExp(
+  [
+    /origin\/staging\b/,
+    /--base[= ]staging\b/,
+    /\bstaging\.\.\./,
+    /-b \S+ staging\b/,
+    /\bfrom `?staging`?(?![\w-])/,
+    /\b(?:to|into|off|against) `staging`/,
+  ]
+    .map((pattern) => pattern.source)
+    .join("|")
+);
+const STEP_PREFIX =
+  /^[\s>]*(?:[-*+]\s+|\d+\.\s+)?(?:\[[ xX]\]\s+)?(?:\$\s+)?(?:run\s+)?`?/i;
+const PNPM_CHECK_STEP = /^pnpm check(?::fast(?::fix)?)?(?![:\w-])/;
+const PERMISSION = /\bexplicit|\bask (?:the human|for)\b/i;
 const GH_PR_MERGE = /\bgh pr merge\b/;
-const PROHIBITION = /\b(?:never|not|don't|instead of)\b/i;
+const PROHIBITED_MERGE =
+  /\b(?:never|not|don't|do not|instead of)\s+(?:(?:use|run)\s+)?`?gh pr merge\b/i;
 
 function findViolations(markdown: string): Violation[] {
   const violations: Violation[] = [];
@@ -51,10 +68,13 @@ function findViolations(markdown: string): Violation[] {
     if (STAGING.test(text)) {
       violations.push({ rule: "NO_STAGING_BASE", line, text });
     }
-    if (PNPM_CHECK_STEP.test(text.replace(STEP_PREFIX, ""))) {
+    if (
+      PNPM_CHECK_STEP.test(text.replace(STEP_PREFIX, "")) &&
+      !PERMISSION.test(text)
+    ) {
       violations.push({ rule: "NO_PNPM_CHECK_STEP", line, text });
     }
-    if (GH_PR_MERGE.test(text) && !PROHIBITION.test(text)) {
+    if (GH_PR_MERGE.test(text) && !PROHIBITED_MERGE.test(text)) {
       violations.push({ rule: "MERGE_VIA_OPERATOR", line, text });
     }
   });
@@ -80,6 +100,12 @@ describe("lifecycle commands matcher", () => {
       "4. Run `pnpm check` before pushing.",
       "   pnpm check",
       "5. Merge it: `gh pr merge --admin`",
+      "`git diff staging...HEAD`",
+      "`git checkout -b x staging`",
+      "Create the PR to `staging`",
+      "- [ ] `pnpm check:fast` green",
+      "If the operator route is not available, `gh pr merge --squash`",
+      "Use `gh pr merge --admin` instead of waiting",
     ].join("\n");
 
     expect(
@@ -91,6 +117,12 @@ describe("lifecycle commands matcher", () => {
       "4:NO_PNPM_CHECK_STEP",
       "5:NO_PNPM_CHECK_STEP",
       "6:MERGE_VIA_OPERATOR",
+      "7:NO_STAGING_BASE",
+      "8:NO_STAGING_BASE",
+      "9:NO_STAGING_BASE",
+      "10:NO_PNPM_CHECK_STEP",
+      "11:MERGE_VIA_OPERATOR",
+      "12:MERGE_VIA_OPERATOR",
     ]);
   });
 
@@ -98,7 +130,10 @@ describe("lifecycle commands matcher", () => {
     const fixture = [
       "Full suites run in CI. `pnpm check` and the unfiltered `pnpm test` need the human's explicit request.",
       "Read the required CI checks; do not run `pnpm check` locally.",
+      "- `pnpm check` needs the human's explicit request.",
       "1. Run `pnpm check:docs` and fix any errors until clean.",
+      "5. Ask the human before running `pnpm check:fast`.",
+      "Use the operator merge route instead of `gh pr merge`.",
       "1. Merge through the operator: `POST /api/v1/vcs/merge`. Never use `gh pr merge`.",
       "Branch from fresh `origin/main` and diff against `origin/main...HEAD`.",
     ].join("\n");
