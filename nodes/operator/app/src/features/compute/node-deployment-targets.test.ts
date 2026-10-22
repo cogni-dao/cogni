@@ -10,6 +10,82 @@ import {
 } from "./node-deployment-targets";
 
 describe("resolveDeploymentTargets", () => {
+  it("retains exact local provenance and catalog remote provenance for both providers", () => {
+    const localSha = "a".repeat(40);
+    const remoteSha = "b".repeat(40);
+    const result = resolveDeploymentTargets({
+      catalogRows: [
+        { name: "operator", type: "node", envs: ["candidate-a"] },
+        {
+          name: "remote-k3s",
+          type: "node",
+          envs: ["candidate-a"],
+          source_repo: "https://github.com/owned/remote-k3s",
+          source_sha: remoteSha,
+        },
+        {
+          name: "remote-akash",
+          type: "node",
+          envs: ["candidate-a"],
+          source_repo: "https://github.com/owned/remote-akash",
+          source_sha: remoteSha,
+          deployment_provider: { "candidate-a": "akash" },
+        },
+        { name: "scheduler-worker", type: "service" },
+      ],
+      environment: "candidate-a",
+      flightTargets: [
+        "operator",
+        "remote-k3s",
+        "remote-akash",
+        "scheduler-worker",
+      ],
+      localSource: { repository: "owned/control", sha: localSha },
+    });
+    expect(result.sourceRepositories).toEqual({
+      operator: "owned/control",
+      "remote-k3s": "owned/remote-k3s",
+      "remote-akash": "owned/remote-akash",
+    });
+    expect(result.sourceShas).toEqual({
+      operator: localSha,
+      "remote-k3s": remoteSha,
+      "remote-akash": remoteSha,
+    });
+  });
+
+  it("rejects invalid local provenance and never substitutes it for a broken remote pin", () => {
+    const input = {
+      catalogRows: [{ name: "operator", type: "node", envs: ["candidate-a"] }],
+      environment: "candidate-a" as const,
+      flightTargets: ["operator"],
+    };
+    expect(() =>
+      resolveDeploymentTargets({
+        ...input,
+        localSource: { repository: "owned/control", sha: "not-a-sha" },
+      })
+    ).toThrow("40-character source_sha");
+    expect(() =>
+      resolveDeploymentTargets({
+        ...input,
+        localSource: { repository: "owned/control/extra", sha: "a".repeat(40) },
+      })
+    ).toThrow("invalid source_repo");
+    expect(() =>
+      resolveDeploymentTargets({
+        ...input,
+        catalogRows: [
+          {
+            ...input.catalogRows[0],
+            source_repo: "https://github.com/owned/remote",
+          },
+        ],
+        localSource: { repository: "owned/control", sha: "a".repeat(40) },
+      })
+    ).toThrow("40-character source_sha");
+  });
+
   it("keeps omitted placement on k3s and separates explicit off-cluster nodes", () => {
     expect(
       resolveDeploymentTargets({

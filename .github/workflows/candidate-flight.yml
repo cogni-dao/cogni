@@ -336,6 +336,8 @@ jobs:
             --catalog-root "${GITHUB_WORKSPACE}/app-src/infra/catalog" \
             --environment candidate-a \
             --flight-targets-json "$FLIGHT_TARGETS_JSON" \
+            --source-repository "${{ github.repository }}" \
+            --source-sha "${{ steps.meta.outputs.head_sha }}" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx

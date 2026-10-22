@@ -80,6 +80,8 @@ export function resolveDeploymentTargets(input: {
   readonly catalogRows: readonly Readonly<Record<string, unknown>>[];
   readonly environment: DeploymentEnvironment;
   readonly flightTargets: readonly string[];
+  /** Exact checked-out parent source for catalog rows without a remote source. */
+  readonly localSource?: { readonly repository: string; readonly sha: string };
 }): DeploymentTargetSelection {
   const byName = new Map(
     input.catalogRows.map((row) => [row.name, row] as const)
@@ -113,10 +115,19 @@ export function resolveDeploymentTargets(input: {
     substrate.push(target);
     if (provider === "akash") {
       offCluster.push(target);
-      sourceRepositories[target] = parseSourceRepository(row, target);
-      sourceShas[target] = parseSourceSha(row, target);
     } else {
       k3sNodes.push(target);
+    }
+    if (provider === "akash" || row.source_repo !== undefined) {
+      sourceRepositories[target] = parseSourceRepository(row, target);
+      sourceShas[target] = parseSourceSha(row, target);
+    } else if (input.localSource) {
+      const local = {
+        source_repo: `https://github.com/${input.localSource.repository}`,
+        source_sha: input.localSource.sha,
+      };
+      sourceRepositories[target] = parseSourceRepository(local, target);
+      sourceShas[target] = parseSourceSha(local, target);
     }
   }
 

@@ -76,6 +76,7 @@ const options = {
   "bundle-ref": { type: "string" },
   "bundle-repository": { type: "string" },
   "source-sha": { type: "string" },
+  "source-repository": { type: "string" },
   domain: { type: "string" },
   // Public Cloudflare zone identifier (NOT a credential — it appears in the dashboard URL).
   // Optional: the Crossplane composite treats absent DNS intent as "publish the CNAME target
@@ -109,6 +110,16 @@ async function main(): Promise<void> {
       environment,
       flightTargetsJson: values["flight-targets-json"],
       githubOutput: required(values["github-output"], "--github-output"),
+      ...((values["source-repository"] !== undefined ||
+        values["source-sha"] !== undefined) && {
+        localSource: {
+          repository: required(
+            values["source-repository"],
+            "--source-repository"
+          ),
+          sha: required(values["source-sha"], "--source-sha"),
+        },
+      }),
     });
     return;
   }
@@ -391,6 +402,7 @@ async function selectDeploymentTargets(input: {
   readonly environment: "candidate-a" | "preview" | "production";
   readonly flightTargetsJson: string;
   readonly githubOutput: string;
+  readonly localSource?: { readonly repository: string; readonly sha: string };
 }): Promise<void> {
   const parsed = parseStringArray(
     input.flightTargetsJson,
@@ -410,6 +422,7 @@ async function selectDeploymentTargets(input: {
     catalogRows: rows,
     environment: input.environment,
     flightTargets: parsed,
+    ...(input.localSource !== undefined && { localSource: input.localSource }),
   });
   const outputs = {
     deployment_node_targets_json: JSON.stringify(deployment),
