@@ -16,7 +16,7 @@
  *   - Per ACTIVITY_IDEMPOTENCY: GitHub writes use stable business keys (repo/pr/headSha).
  *   - Per PER_NODE_RULE_LOADING: owning-domain resolution + rule fetch happen on
  *     the operator (which holds the GitHub plane). The worker re-emits the
- *     structured `review.routed` log for the deploy_verified loop.
+ *     structured `review.routed` log for the validate-candidate scorecard loop.
  *   - `postRoutingDiagnosticActivity` handles `conflict` + `miss` with a pure
  *     formatter + neutral check run — no AI tokens, no GraphRunWorkflow child.
  *   - Domain logic (criteria evaluation, formatting) in domain/review.ts, not here.

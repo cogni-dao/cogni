@@ -160,7 +160,6 @@ reviewer:
 branch:
 revision: 0 # integer, incremented on review rejection
 blocked_by: # required when status=blocked
-deploy_verified: false # set by cleanup agent after production deploy
 claimed_by_run: # governance runner lock
 claimed_at: # governance runner lock timestamp
 last_command: # last /command that acted on this item
