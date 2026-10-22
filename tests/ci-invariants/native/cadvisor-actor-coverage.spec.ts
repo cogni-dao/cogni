@@ -948,9 +948,17 @@ describe.skipIf(!process.env.CI)(
           imageArchive,
           ownedDoltgres,
         ]);
-        await nested.copyFilesToContainer([
-          { source: imageArchive, target: "/tmp/owned-doltgres.tar" },
+        await hostDocker("docker", [
+          "cp",
+          imageArchive,
+          `${nested.getId()}:/tmp/owned-doltgres.tar`,
         ]);
+        const copiedArchive = await nested.exec([
+          "test",
+          "-s",
+          "/tmp/owned-doltgres.tar",
+        ]);
+        expect(copiedArchive.exitCode, copiedArchive.output).toBe(0);
         await cli("image", "load", "--input", "/tmp/owned-doltgres.tar");
         const loadedImages = JSON.parse(
           await cli("image", "inspect", ownedDoltgres)
