@@ -21,7 +21,8 @@
  *     stays on the markdown ports, which have no compare-and-set for callers.
  *   - PRIORITY_RANGE (task.5294): after the gate, a priority outside 0..99 throws
  *     `WorkItemPriorityRangeError` (nothing written) — the same bound as the HTTP contracts.
- *   - P0P1_IS_NODE_ADMIN (task.5286, task.5294): a `patch` that sets any priority <= 1 first runs
+ *   - P0P1_IS_NODE_ADMIN (task.5286, task.5294, story.5108): a `patch` that sets any priority <= 1,
+ *     or moves an item OUT of p0/p1 (bound to the revision read), first runs
  *     `privilegedPriorityGate` — a `node.administer` check on the INVOKING actor, not the system
  *     principal the write is attributed to — and throws `WorkItemPriorityAuthzError` (nothing
  *     written) unless it allows. Unwired ⇒ fail closed. Priority 2+ and other fields are unchanged.
@@ -109,7 +110,7 @@ export interface WorkItemCapabilityDeps {
    * When set, `patch` writes there as `principalId` instead of the markdown ports.
    */
   readonly backlogWriter?: {
-    readonly store: Pick<WorkItemsDoltgresPort, "patch">;
+    readonly store: Pick<WorkItemsDoltgresPort, "patch" | "get">;
     readonly principalId: string;
   };
   /**
@@ -235,13 +236,24 @@ export function createWorkItemCapability(
 
     async patch(input): Promise<WorkItemInfo> {
       const priority = input.set.priority;
-      if (priority !== undefined && isPrivilegedPriority(priority)) {
+      const gatePriority = async (p: number) => {
         const gate = deps.privilegedPriorityGate
           ? await deps.privilegedPriorityGate()
           : nodeAdminUnavailable("no_priority_gate");
-        if (!gate.ok) {
-          throw new WorkItemPriorityAuthzError(gate.errorCode, priority);
-        }
+        if (!gate.ok) throw new WorkItemPriorityAuthzError(gate.errorCode, p);
+      };
+      // Demoting out of p0/p1 is privileged too (story.5108): gate on the stored priority.
+      const gateDemotion = async (current: WorkItem | null) => {
+        if (
+          priority !== undefined &&
+          current?.priority !== undefined &&
+          current.priority !== priority &&
+          isPrivilegedPriority(current.priority)
+        )
+          await gatePriority(current.priority);
+      };
+      if (priority !== undefined && isPrivilegedPriority(priority)) {
+        await gatePriority(priority);
       }
       if (priority !== undefined && !isPriorityInRange(priority)) {
         throw new WorkItemPriorityRangeError(priority);
@@ -249,13 +261,17 @@ export function createWorkItemCapability(
 
       const writer = deps.backlogWriter;
       if (writer) {
+        let expectedRevision = input.expectedRevision;
+        if (priority !== undefined && !isPrivilegedPriority(priority)) {
+          const current = await writer.store.get(toWorkItemId(input.id));
+          await gateDemotion(current);
+          if (current) expectedRevision ??= current.revision;
+        }
         try {
           const updated = await writer.store.patch(
             {
               id: toWorkItemId(input.id),
-              ...(input.expectedRevision !== undefined && {
-                expectedRevision: input.expectedRevision,
-              }),
+              ...(expectedRevision !== undefined && { expectedRevision }),
               set: input.set,
             },
             writer.principalId
@@ -282,6 +298,7 @@ export function createWorkItemCapability(
       if (!current) {
         throw new Error(`Work item not found: ${input.id}`);
       }
+      await gateDemotion(current);
 
       const updated = await workItemCommand.patch({
         id: toWorkItemId(input.id),

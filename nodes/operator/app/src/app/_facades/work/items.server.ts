@@ -10,7 +10,8 @@
  *   requires `node.administer` on this node, checked BEFORE the store write (deny →
  *   WorkItemAuthorizationError/403, outage → WorkItemAuthzUnavailableError/503). Routes also run
  *   it on the raw body before contract validation (`authorizeRequestedPriority`), so a negative
- *   priority from a non-admin is 403, not 400. Priority 2+ and every other field are unchanged.
+ *   priority from a non-admin is 403, not 400. Moving an item OUT of p0/p1 (from <= 1) needs the
+ *   same check; the patch is then bound to the revision that was read. Every other field is unchanged.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
@@ -435,13 +436,28 @@ export async function patchWorkItem(
 ): Promise<WorkItemDto> {
   await assertPriorityAuthority(input.set.priority, sessionUser.id);
   const container = getContainer();
+  // P0P1_IS_NODE_ADMIN covers the FROM side too: demoting a p0/p1 item needs node admin
+  // (story.5108). The write is bound to the revision read, so a concurrent promote cannot race it.
+  let expectedRevision = input.expectedRevision;
+  const target = input.set.priority;
+  if (target !== undefined && !isPrivilegedPriority(target)) {
+    let current: WorkItem | null;
+    try {
+      current = await container.doltgresWorkItems.get(toWorkItemId(input.id));
+    } catch (e) {
+      throw mapStoreError(e);
+    }
+    if (current) {
+      if (current.priority !== target)
+        await assertPriorityAuthority(current.priority, sessionUser.id);
+      expectedRevision ??= current.revision;
+    }
+  }
   try {
     const patched = await container.doltgresWorkItems.patch(
       {
         id: toWorkItemId(input.id),
-        ...(input.expectedRevision !== undefined && {
-          expectedRevision: input.expectedRevision,
-        }),
+        ...(expectedRevision !== undefined && { expectedRevision }),
         set: dropUndefined(input.set),
       },
       authorTagFromSession(sessionUser)

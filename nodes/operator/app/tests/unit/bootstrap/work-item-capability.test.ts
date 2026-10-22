@@ -154,6 +154,7 @@ describe("createWorkItemCapability", () => {
   it("patches through the Doltgres backlogWriter as its principal, forwarding expectedRevision", async () => {
     const md = markdownPorts();
     const store = {
+      get: vi.fn().mockResolvedValue(item()),
       patch: vi
         .fn()
         .mockResolvedValue(item({ priority: 2, rank: 2, revision: 5 })),
@@ -181,7 +182,10 @@ describe("createWorkItemCapability", () => {
 
   it("sends an unconditioned patch when expectedRevision is absent", async () => {
     const md = markdownPorts();
-    const store = { patch: vi.fn().mockResolvedValue(item()) };
+    const store = {
+      get: vi.fn().mockResolvedValue(item()),
+      patch: vi.fn().mockResolvedValue(item()),
+    };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
       workItemCommand: md.command,
@@ -199,6 +203,7 @@ describe("createWorkItemCapability", () => {
   it("maps the store's revision conflict to WorkItemPatchConflictError", async () => {
     const md = markdownPorts();
     const store = {
+      get: vi.fn().mockResolvedValue(item()),
       patch: vi
         .fn()
         .mockRejectedValue(
@@ -228,7 +233,10 @@ describe("createWorkItemCapability", () => {
     const denied = Object.assign(new Error("not authorized"), {
       name: "WorkItemAuthorizationError",
     });
-    const store = { patch: vi.fn().mockRejectedValue(denied) };
+    const store = {
+      get: vi.fn().mockResolvedValue(item()),
+      patch: vi.fn().mockRejectedValue(denied),
+    };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
       workItemCommand: md.command,
@@ -256,7 +264,10 @@ describe("createWorkItemCapability", () => {
   describe("privileged priority gate (task.5286)", () => {
     function gatedCap(gate?: () => ReturnType<typeof checkNodeAdmin>) {
       const md = markdownPorts();
-      const store = { patch: vi.fn().mockResolvedValue(item({ priority: 0 })) };
+      const store = {
+        get: vi.fn().mockResolvedValue(item()),
+        patch: vi.fn().mockResolvedValue(item({ priority: 0 })),
+      };
       const cap = createWorkItemCapability({
         workItemQuery: md.query,
         workItemCommand: md.command,
@@ -327,6 +338,53 @@ describe("createWorkItemCapability", () => {
 
       expect(err).toMatchObject({ errorCode: "authz_unavailable" });
       expect(store.patch).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      0, 1,
+    ])("refuses a non-admin demoting a p%i item (from <= 1), writing nothing (story.5108)", async (from) => {
+      const authz = await adminAuthz();
+      const { cap, store } = gatedCap(() =>
+        checkNodeAdmin(authz, { userId: OTHER_USER, nodeId: NODE_ID })
+      );
+      store.get.mockResolvedValue(item({ priority: from }));
+
+      const err = await cap
+        .patch({ id: "task.5282", set: { priority: 3 } })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(WorkItemPriorityAuthzError);
+      expect(err).toMatchObject({ errorCode: "authz_denied" });
+      expect(store.patch).not.toHaveBeenCalled();
+    });
+
+    it("lets the node admin demote a p1 item, bound to the revision it read", async () => {
+      const authz = await adminAuthz();
+      const { cap, store } = gatedCap(() =>
+        checkNodeAdmin(authz, { userId: ADMIN_USER, nodeId: NODE_ID })
+      );
+      store.get.mockResolvedValue(item({ priority: 1, revision: 7 }));
+
+      await cap.patch({ id: "task.5282", set: { priority: 3 } });
+
+      expect(store.patch).toHaveBeenCalledWith(
+        { id: "task.5282", expectedRevision: 7, set: { priority: 3 } },
+        "actor:system"
+      );
+    });
+
+    it("never gates a move between open priorities, but still binds it to the revision read", async () => {
+      const gate = vi.fn();
+      const { cap, store } = gatedCap(gate);
+      store.get.mockResolvedValue(item({ priority: 3, revision: 9 }));
+
+      await cap.patch({ id: "task.5282", set: { priority: 5 } });
+
+      expect(gate).not.toHaveBeenCalled();
+      expect(store.patch).toHaveBeenCalledWith(
+        { id: "task.5282", expectedRevision: 9, set: { priority: 5 } },
+        "actor:system"
+      );
     });
 
     it("treats every priority <= 1 as privileged, so a negative value cannot outrank p0", () => {

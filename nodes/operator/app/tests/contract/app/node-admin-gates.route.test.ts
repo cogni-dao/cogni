@@ -50,6 +50,7 @@ const h = vi.hoisted(() => ({
   authz: { current: undefined as unknown },
   createMock: vi.fn(),
   patchMock: vi.fn(),
+  getMock: vi.fn(),
   diffMock: vi.fn(),
   changedRowsMock: vi.fn(),
   mergeMock: vi.fn(),
@@ -76,7 +77,7 @@ vi.mock("@/bootstrap/container", () => {
       workItemQuery: { list: vi.fn(), get: vi.fn() },
       doltgresWorkItems: {
         list: vi.fn(),
-        get: vi.fn(),
+        get: h.getMock,
         create: h.createMock,
         patch: h.patchMock,
         delete: vi.fn(),
@@ -146,6 +147,7 @@ beforeEach(async () => {
   for (const m of [
     h.createMock,
     h.patchMock,
+    h.getMock,
     h.diffMock,
     h.changedRowsMock,
     h.mergeMock,
@@ -180,6 +182,7 @@ beforeEach(async () => {
   }) satisfies ContributionService;
   h.createMock.mockResolvedValue(storedItem(0));
   h.patchMock.mockResolvedValue(storedItem(0));
+  h.getMock.mockResolvedValue(null);
 });
 
 function as(user: typeof ADMIN) {
@@ -516,5 +519,27 @@ describe("(c) priority <= 1 is node-admin on create and patch", () => {
     expect(p.status).toBe(503);
     expect(JSON.stringify(p.json)).not.toMatch(/check_threw|socket hang up/);
     expect(h.patchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    0, 1,
+  ])("denies a non-admin demoting a p%i item to p3 with 403, writing nothing (story.5108)", async (from) => {
+    as(NON_ADMIN);
+    h.getMock.mockResolvedValue(storedItem(from));
+    const p = await patch(3);
+    expect(p.status).toBe(403);
+    expect(p.json).toMatchObject({ errorCode: "authz_denied" });
+    expect(h.patchMock).not.toHaveBeenCalled();
+  });
+
+  it("lets the node admin demote a p1 item, bound to the revision it read", async () => {
+    as(ADMIN);
+    h.getMock.mockResolvedValue(storedItem(1));
+    h.patchMock.mockResolvedValue(storedItem(3));
+    expect((await patch(3)).status).toBe(200);
+    expect(h.patchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedRevision: 2, set: { priority: 3 } }),
+      expect.anything()
+    );
   });
 });
