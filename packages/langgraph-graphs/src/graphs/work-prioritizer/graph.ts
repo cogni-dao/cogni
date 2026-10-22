@@ -8,8 +8,9 @@
  * Invariants:
  *   - LLM and tools are injected, not instantiated (brain-style)
  *   - PURE_GRAPH_FACTORY: the run report is `structuredResponse.telemetry`; the provider logs it (catalog `report`)
- *   - REPORT_ON_ABORT: a turn-limit or model/tool error mid-run still reaches the report node with the partial
- *     transcript and `aborted: true` (a caller abort signal is rethrown)
+ *   - REPORT_ON_TURN_LIMIT: only a GraphRecursionError (turn limit) reaches the report node with the partial
+ *     transcript, `aborted: true` and `abortReason`; every other error (model, transport, cancel) is rethrown so
+ *     the run fails and the provider's error log fires
  *   - TYPE_TRANSPARENT_RETURN: No explicit return type annotation
  * Side-effects: none
  * Links: story.5108, prompts.ts, tools.ts
@@ -21,6 +22,7 @@ import { type BaseMessage, isToolMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import {
   Annotation,
+  GraphRecursionError,
   MessagesAnnotation,
   StateGraph,
 } from "@langchain/langgraph";
@@ -32,6 +34,7 @@ import { WORK_PRIORITIZER_SYSTEM_PROMPT } from "./prompts";
 export const WORK_PRIORITIZER_GRAPH_NAME = "work-prioritizer" as const;
 
 const REPORT_MAX_CHARS = 2048;
+const ABORT_REASON_MAX_CHARS = 300;
 
 const text = (m: BaseMessage | undefined): string => {
   const c = m?.content;
@@ -54,8 +57,9 @@ const parse = (s: string): Record<string, unknown> | null => {
 /** One flat cycle summary from the run's messages (safe to log). */
 export function cycleTelemetry(
   messages: readonly BaseMessage[],
-  aborted = false
+  abortReason?: string
 ) {
+  const aborted = abortReason !== undefined;
   let goalIds: string[] | undefined;
   const changedItemIds: string[] = [];
   let deniedCount = 0;
@@ -80,6 +84,9 @@ export function cycleTelemetry(
     deniedCount,
     toolErrorCount,
     aborted,
+    ...(aborted && {
+      abortReason: abortReason.slice(0, ABORT_REASON_MAX_CHARS),
+    }),
     report: aborted ? "" : text(messages.at(-1)).slice(0, REPORT_MAX_CHARS),
   };
 }
@@ -88,7 +95,7 @@ export type MissionLoopTelemetry = ReturnType<typeof cycleTelemetry>;
 
 const State = Annotation.Root({
   ...MessagesAnnotation.spec,
-  aborted: Annotation<boolean>(),
+  abortReason: Annotation<string | undefined>(),
   structuredResponse: Annotation<{ telemetry: MissionLoopTelemetry }>(),
 });
 
@@ -103,7 +110,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   type S = typeof State.State;
   return new StateGraph(State)
     .addNode("agent", async (s: S, config: RunnableConfig) => {
-      // REPORT_ON_ABORT: keep the latest transcript so a mid-run failure still reports what landed.
+      // REPORT_ON_TURN_LIMIT: keep the latest transcript so a turn-limit abort still reports what landed.
       let last: { messages: BaseMessage[] } = { messages: s.messages };
       try {
         const values = await agent.stream(
@@ -113,13 +120,13 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
         for await (const v of values) last = v;
         return last;
       } catch (error) {
-        if (config.signal?.aborted) throw error;
-        return { ...last, aborted: true };
+        if (!(error instanceof GraphRecursionError)) throw error;
+        return { ...last, abortReason: "recursion_limit" };
       }
     })
     .addNode("report", (s: S) => ({
       structuredResponse: {
-        telemetry: cycleTelemetry(s.messages, s.aborted === true),
+        telemetry: cycleTelemetry(s.messages, s.abortReason),
       },
     }))
     .addEdge("__start__", "agent")

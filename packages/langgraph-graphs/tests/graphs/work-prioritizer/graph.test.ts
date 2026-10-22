@@ -40,11 +40,9 @@ const REPORT =
 
 type Call = { id: string; name: string; args: Record<string, unknown> };
 
-/** Turn 1: read goals + two patches (one lands, one is p0/p1-denied); turn 2: the report (or a model error). */
-function scriptedCompletion(
-  prompts: string[],
-  failTurn2 = false
-): CompletionFn {
+/** After turn 1 (goals + two patches: one lands, one p0/p1-denied): the report, a model error, or a tool loop. */
+type Then = "report" | "throw" | "loop";
+function scriptedCompletion(prompts: string[], then: Then): CompletionFn {
   const turns: Call[][] = [
     [
       { id: "c1", name: GOAL_LIST_NAME, args: {} },
@@ -73,8 +71,11 @@ function scriptedCompletion(
   let n = 0;
   return (req) => {
     prompts.push(JSON.stringify(req.messages[0]));
-    const calls = turns[n++];
-    if (!calls && failTurn2) throw new Error("model down");
+    const loop = then === "loop" && [
+      { id: `l${n}`, name: GOAL_LIST_NAME, args: {} },
+    ];
+    const calls = turns[n++] ?? loop;
+    if (!calls && then === "throw") throw new Error("model down");
     const final: Promise<CompletionResult> = Promise.resolve(
       calls
         ? {
@@ -143,10 +144,10 @@ describe("work-prioritizer mission-loop agent", () => {
     expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });
   });
 
-  async function run(prompts: string[], failTurn2 = false) {
+  async function run(then: Then, prompts: string[] = []) {
     const { stream, final } = createInProcGraphRunner({
       createGraph: createWorkPrioritizerGraph,
-      completionFn: scriptedCompletion(prompts, failTurn2),
+      completionFn: scriptedCompletion(prompts, then),
       createToolExecFn: fakeExec,
       toolContracts: [
         goalListContract,
@@ -171,7 +172,7 @@ describe("work-prioritizer mission-loop agent", () => {
 
   it("runs the tool loop and returns one flat cycle report", async () => {
     const prompts: string[] = [];
-    const result = await run(prompts);
+    const result = await run("report", prompts);
 
     expect(result.ok).toBe(true);
     expect(result.content).toBe(REPORT);
@@ -187,15 +188,24 @@ describe("work-prioritizer mission-loop agent", () => {
     });
   });
 
-  it("REPORT_ON_ABORT: a mid-run model error still reports the changes that landed", async () => {
-    const result = await run([], true);
+  it("REPORT_ON_TURN_LIMIT: a turn-limit abort still reports the changes that landed", async () => {
+    const result = await run("loop");
 
+    expect(result.ok).toBe(true);
     expect(result.structuredOutput?.telemetry).toMatchObject({
       changedItemIds: ["task.1"],
       changeCount: 1,
       deniedCount: 1,
       aborted: true,
+      abortReason: "recursion_limit",
       report: "",
     });
+  });
+
+  it("a model error fails the run (not swallowed as aborted)", async () => {
+    const result = await run("throw");
+
+    expect(result.ok).toBe(false);
+    expect(result.structuredOutput).toBeUndefined();
   });
 });
