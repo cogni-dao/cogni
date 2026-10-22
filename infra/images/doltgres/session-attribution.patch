@@ -31,10 +31,10 @@ index bab0d9c..27b097e 100644
 +	}
 diff --git a/server/doltgres_handler_max1_test.go b/server/doltgres_handler_max1_test.go
 new file mode 100644
-index 0000000..cc91d03
+index 0000000..192dcfd
 --- /dev/null
 +++ b/server/doltgres_handler_max1_test.go
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,166 @@
 +// Copyright 2026 Dolthub, Inc.
 +// Licensed under the Apache License, Version 2.0 (the "License");
 +// you may not use this file except in compliance with the License.
@@ -78,7 +78,8 @@ index 0000000..cc91d03
 +
 +// Exercise rowToBytes' real text SQL conversion boundary without a global
 +// function registry or server. The lazy wrapper sees the original query ctx.
-+type max1TextType struct{ sql.Type }
++type max1BaseType interface{ sql.Type }
++type max1TextType struct{ max1BaseType }
 +
 +func (t max1TextType) SQL(ctx *sql.Context, _ []byte, value interface{}) (sqltypes.Value, error) {
 +	text, ok, err := sql.Unwrap[string](ctx, value)
