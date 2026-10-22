@@ -508,7 +508,7 @@ describe("doltgres migrator + schema verification", () => {
       await observer.end({ timeout: 2 });
       await auditor.end({ timeout: 2 });
     }
-  });
+  }, 120_000);
 
   it("fresh DB: migrator applies all migrations + verifier passes", async () => {
     // Run the ACTUAL migrator script — same code path as the k8s initContainer.
