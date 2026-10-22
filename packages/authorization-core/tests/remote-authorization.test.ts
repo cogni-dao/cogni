@@ -252,6 +252,93 @@ describe("RemoteAuthorizationAdapter", () => {
     });
   });
 
+  it.each([
+    "check",
+    "bootstrap",
+    "grant",
+    "revoke",
+  ] as const)("bounds %s when headers arrive but the body stalls", async (operation) => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const stream = new ReadableStream<Uint8Array>({ cancel });
+      const adapter = new RemoteAuthorizationAdapter({
+        baseUrl: "https://operator.example",
+        serviceToken: TOKEN,
+        timeoutMs: 25,
+        testOnlyFetchImpl: async () => new Response(stream),
+      });
+      const grant = {
+        grantorUserId: USER_ID,
+        billingAccountId: ACCOUNT_ID,
+        target: { kind: "agent" as const, id: AGENT_ID },
+        role: "tool_executor" as const,
+        toolId: "core__sandbox_exec",
+        expiresAt: "2026-11-01T00:00:00.000Z",
+      };
+      const result =
+        operation === "check"
+          ? adapter.check({
+              actorId: authzNodeAgentPrincipal(NODE_ID, AGENT_ID),
+              action: "tool.execute",
+              resource: `tool:${NODE_ID}/${ACCOUNT_ID}/core__sandbox_exec`,
+              context: { tenantId: ACCOUNT_ID, nodeId: NODE_ID },
+            })
+          : operation === "bootstrap"
+            ? adapter.bootstrapBillingAccountOwner({
+                ownerUserId: USER_ID,
+                billingAccountId: ACCOUNT_ID,
+              })
+            : operation === "grant"
+              ? adapter.grantBillingAccountAccess(grant)
+              : adapter.revokeBillingAccountAccess(grant);
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(result).resolves.toMatchObject({
+        code:
+          operation === "check"
+            ? "authz_unavailable"
+            : "authz_write_unavailable",
+      });
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses an otherwise valid allow decision exceeding the body limit", async () => {
+    const adapter = new RemoteAuthorizationAdapter({
+      baseUrl: "https://operator.example",
+      serviceToken: TOKEN,
+      testOnlyFetchImpl: async () =>
+        json({
+          decision: "allow",
+          code: "authz_allowed",
+          checks: [
+            {
+              name: "permission",
+              user: "x".repeat(65_537),
+              relation: "can_read",
+              object: "billing_account:oversized",
+              decision: "allow",
+              code: "authz_allowed",
+            },
+          ],
+        }),
+    });
+    await expect(
+      adapter.check({
+        actorId: authzNodeUserPrincipal(NODE_ID, USER_ID),
+        action: "billing_account.read",
+        resource: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
+        context: { tenantId: ACCOUNT_ID, nodeId: NODE_ID },
+      })
+    ).resolves.toMatchObject({
+      decision: "deny",
+      code: "authz_unavailable",
+      reason: "authorization facade response too large",
+    });
+  });
+
   it("requires HTTPS unless an explicit test transport is injected", () => {
     expect(
       () =>

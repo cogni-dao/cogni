@@ -303,7 +303,7 @@ export class RemoteAuthorizationAdapter
         );
       }
       return (
-        parsedDecision(await response.json()) ??
+        parsedDecision(response.payload) ??
         unavailable(
           "operator authorization facade returned an invalid decision"
         )
@@ -378,7 +378,7 @@ export class RemoteAuthorizationAdapter
           `operator execution authorization unavailable (status ${response.status})`
         );
       return (
-        parsedDecision(await response.json()) ??
+        parsedDecision(response.payload) ??
         unavailable("invalid execution authorization decision")
       );
     } catch {
@@ -410,7 +410,7 @@ export class RemoteAuthorizationAdapter
         );
       }
       return (
-        parsedWriteDecision(await response.json()) ??
+        parsedWriteDecision(response.payload) ??
         writeUnavailable(
           "operator authorization facade returned an invalid bootstrap decision"
         )
@@ -472,7 +472,7 @@ export class RemoteAuthorizationAdapter
         );
       }
       return (
-        parsedWriteDecision(await response.json()) ??
+        parsedWriteDecision(response.payload) ??
         writeUnavailable(
           "operator authorization facade returned an invalid mutation decision"
         )
@@ -486,22 +486,62 @@ export class RemoteAuthorizationAdapter
     }
   }
 
-  private async post(path: string, body: unknown): Promise<Response> {
+  private async post(
+    path: string,
+    body: unknown
+  ): Promise<{ status: number; ok: boolean; payload?: unknown }> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error("authorization facade response timed out"));
+      }, this.timeoutMs);
+    });
     try {
-      return await this.fetchImpl(`${this.baseUrl}${path}`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.serviceToken}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(body),
-        redirect: "error",
-        signal: controller.signal,
-      });
+      return await Promise.race([
+        deadline,
+        (async () => {
+          const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${this.serviceToken}`,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(body),
+            redirect: "error",
+            signal: controller.signal,
+          });
+          if (!response.ok) {
+            void response.body?.cancel().catch(() => undefined);
+            return { status: response.status, ok: false };
+          }
+          reader = response.body?.getReader();
+          if (!reader) throw new Error("authorization facade response absent");
+          const decoder = new TextDecoder();
+          let size = 0;
+          let text = "";
+          for (;;) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            size += chunk.value.byteLength;
+            if (size > 65_536)
+              throw new Error("authorization facade response too large");
+            text += decoder.decode(chunk.value, { stream: true });
+          }
+          text += decoder.decode();
+          return {
+            status: response.status,
+            ok: true,
+            payload: JSON.parse(text),
+          };
+        })(),
+      ]);
     } finally {
       clearTimeout(timer);
+      // Cancel pending reads even when an injected transport ignores AbortSignal.
+      void reader?.cancel().catch(() => undefined);
     }
   }
 }
