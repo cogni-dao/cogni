@@ -3,9 +3,9 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/tests/graphs/work-prioritizer/plan`
- * Purpose: Scenario tests for planning, the no-change rule, and EDO evidence helpers (design v4 §2.4–§2.7, §4).
+ * Purpose: Scenario tests for planning, the no-change rule, the prior-decision memo, and review scope.
  * Scope: Pure functions; does not invoke an LLM, tools, or the graph.
- * Invariants: PLAN_IS_CHANGED_ROWS, NO_CHANGE_NO_DECISION, PREDICATES_ARE_DECIDABLE, daily cap counting.
+ * Invariants: PLAN_IS_CHANGED_ROWS, P0P1_CITES_GOAL, NO_CHANGE_NO_DECISION, DAILY_FULL_REVIEW, DELTA_SCOPE.
  * Side-effects: none
  * Links: src/graphs/work-prioritizer/plan.ts
  * @internal
@@ -20,7 +20,10 @@ import {
   newestPriorDecision,
   selectJudgeSet,
 } from "../../../src/graphs/work-prioritizer/plan";
-import type { RankedRow } from "../../../src/graphs/work-prioritizer/schema";
+import {
+  PlanRowSchema,
+  type RankedRow,
+} from "../../../src/graphs/work-prioritizer/schema";
 
 function row(
   itemId: string,
@@ -35,7 +38,6 @@ function row(
     fromRank: 1,
     to,
     rank: 1,
-    pinned: false,
     serviceClass: "standard",
     maxImpact: 1,
     goal: null,
@@ -48,18 +50,46 @@ function row(
 }
 
 describe("plan", () => {
-  it("PLAN_IS_CHANGED_ROWS with expectedRevision; pinned rows never planned", () => {
+  it("PLAN_IS_CHANGED_ROWS with expectedRevision and the row's goal", () => {
     expect(
       buildPlan([
         row("a", 0, 0),
         row("b", 0, 3),
         row("c", null, 3),
-        row("d", 2, 0, { pinned: true }),
+        row("d", 2, 1, { goal: "goal-x" }),
       ])
     ).toEqual([
-      { itemId: "b", from: 0, to: 3, rank: 1, expectedRevision: 4 },
-      { itemId: "c", from: null, to: 3, rank: 1, expectedRevision: 4 },
+      { itemId: "b", from: 0, to: 3, rank: 1, expectedRevision: 4, goal: null },
+      {
+        itemId: "c",
+        from: null,
+        to: 3,
+        rank: 1,
+        expectedRevision: 4,
+        goal: null,
+      },
+      {
+        itemId: "d",
+        from: 2,
+        to: 1,
+        rank: 1,
+        expectedRevision: 4,
+        goal: "goal-x",
+      },
     ]);
+  });
+
+  it("P0P1_CITES_GOAL: a p0/p1 plan row without a goal is invalid", () => {
+    const base = { itemId: "a", from: null, rank: 1, expectedRevision: 1 };
+    expect(
+      PlanRowSchema.safeParse({ ...base, to: 1, goal: null }).success
+    ).toBe(false);
+    expect(
+      PlanRowSchema.safeParse({ ...base, to: 1, goal: "goal-x" }).success
+    ).toBe(true);
+    expect(
+      PlanRowSchema.safeParse({ ...base, to: 2, goal: null }).success
+    ).toBe(true);
   });
 
   it("NO_CHANGE_NO_DECISION: empty plan, or same table as the prior decision", () => {
@@ -95,6 +125,23 @@ describe("plan", () => {
         { id: "work-prioritizer-20261020t1200-decision", content: "x" },
       ])?.id
     ).toBe("work-prioritizer-20261020t1200-decision");
+  });
+
+  it("second-precision ids are decisions and sort after minute ids of the same or earlier minute", () => {
+    const ids = [
+      "work-prioritizer-20261020t1200-decision",
+      "work-prioritizer-20261020t120030-decision",
+      "work-prioritizer-20261020t1159-decision",
+    ];
+    expect(
+      newestPriorDecision(ids.map((id) => ({ id, content: "x" })))?.id
+    ).toBe("work-prioritizer-20261020t120030-decision");
+    expect(
+      newestPriorDecision([
+        ...ids.map((id) => ({ id, content: "x" })),
+        { id: "work-prioritizer-20261020t1201-decision", content: "x" },
+      ])?.id
+    ).toBe("work-prioritizer-20261020t1201-decision");
   });
 });
 
@@ -208,12 +255,27 @@ describe("DAILY_FULL_REVIEW + DELTA_SCOPE + MEMOIZED_JUDGMENTS (selectJudgeSet)"
 
 describe("EVERY_PLACED_ITEM_GETS_ITS_RANK", () => {
   it("plans a p0 row whose priority is unchanged but whose rank is unset or moved", () => {
-    const unset = row("bug.5005", 0, 0, { fromRank: null, rank: 1 });
-    const moved = row("bug.5003", 0, 0, { fromRank: 7, rank: 2 });
-    const same = row("bug.5002", 0, 0, { fromRank: 3, rank: 3 });
+    const g = { goal: "goal-x" };
+    const unset = row("bug.5005", 0, 0, { ...g, fromRank: null, rank: 1 });
+    const moved = row("bug.5003", 0, 0, { ...g, fromRank: 7, rank: 2 });
+    const same = row("bug.5002", 0, 0, { ...g, fromRank: 3, rank: 3 });
     expect(buildPlan([unset, moved, same])).toEqual([
-      { itemId: "bug.5005", from: 0, to: 0, rank: 1, expectedRevision: 4 },
-      { itemId: "bug.5003", from: 0, to: 0, rank: 2, expectedRevision: 4 },
+      {
+        itemId: "bug.5005",
+        from: 0,
+        to: 0,
+        rank: 1,
+        expectedRevision: 4,
+        ...g,
+      },
+      {
+        itemId: "bug.5003",
+        from: 0,
+        to: 0,
+        rank: 2,
+        expectedRevision: 4,
+        ...g,
+      },
     ]);
   });
 });

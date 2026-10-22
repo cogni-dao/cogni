@@ -81,7 +81,6 @@ export const RankedRowSchema = z.object({
   fromRank: z.number().int().nullable().default(null),
   to: z.number().int().min(0).max(4),
   rank: z.number().int().min(1),
-  pinned: z.boolean(),
   serviceClass: z.enum(SERVICE_CLASSES).nullable(),
   maxImpact: z.number().int().min(0).max(3),
   /** P0P1_CITES_GOAL: the active goal (`goal-*`) this row serves; required for p0/p1. */
@@ -97,14 +96,21 @@ export type RankedRow = z.infer<typeof RankedRowSchema>;
 /**
  * A changed row — the write seam for a later apply (id, priority, rank, and the revision it was planned
  * against for a compare-and-set patch). PROPOSE_ONLY: this graph never writes it.
+ * P0P1_CITES_GOAL: a p0/p1 row names the active goal (`goal-*`) it serves.
  */
-export const PlanRowSchema = z.object({
-  itemId: z.string(),
-  from: z.number().int().nullable(),
-  to: z.number().int().min(0).max(4),
-  rank: z.number().int().min(1),
-  expectedRevision: z.number().int().nullable(),
-});
+export const PlanRowSchema = z
+  .object({
+    itemId: z.string(),
+    from: z.number().int().nullable(),
+    to: z.number().int().min(0).max(4),
+    rank: z.number().int().min(1),
+    expectedRevision: z.number().int().nullable(),
+    goal: z.string().nullable(),
+  })
+  .refine((r) => r.to > 1 || r.goal !== null, {
+    path: ["goal"],
+    message: "a p0/p1 plan row requires its goal",
+  });
 export type PlanRow = z.infer<typeof PlanRowSchema>;
 
 /** One memoized judgment (item revision it was made against + the judgment). */
@@ -123,7 +129,7 @@ export const ContextConsumedSchema = z.object({
 });
 export type ContextConsumed = z.infer<typeof ContextConsumedSchema>;
 
-/** The JSON embedded in every filed EDO decision (design v4 §2.5). */
+/** The JSON embedded in every filed EDO decision. */
 export const DecisionPayloadSchema = z.object({
   schemaVersion: z.literal(DECISION_SCHEMA_VERSION),
   status: z.literal("planned"),
@@ -138,7 +144,6 @@ export const DecisionPayloadSchema = z.object({
   /** The ids this cycle re-considered (every snapshot item on a full review). */
   delta: z.array(z.string()),
   heuristic: z.literal(RANK_HEURISTIC),
-  policyVersion: z.string(),
   promptVersion: z.string(),
   modelRef: z.string().nullable(),
   /** Idempotency key. */

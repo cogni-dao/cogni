@@ -3,14 +3,14 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/prompts`
- * Purpose: Versioned judge contract (design v4 §2.2): prompt, batch renderer, reply parser, and batch protocol.
+ * Purpose: Versioned judge contract: prompt, batch renderer, reply parser, and batch protocol.
  * Scope: Pure apart from the injected `ask` callback; does not call tools/LLMs or read env.
  * Invariants: PROMPT_VERSIONED; BACKLOG_IS_UNTRUSTED_DATA (item/hub text is JSON in <untrusted_*> blocks);
  *   JUDGE_NOT_RANK + NO_TOOLS_AT_JUDGE (enums + evidence ids only; code ranks); TOLERANT_PARSING (<think>,
  *   fences, array or JSONL, each line validated alone; harm as `harm`/`harmDays` OR `harmIfWait`; null
  *   harm/harmDays — 27/54 replayed lines — become "none"/null); JUDGE_PROTOCOL (batches, each dropped item re-asked once alone, else `unjudged`).
  * Side-effects: none
- * Links: schema.ts (ItemJudgment), rank.ts, .context/prioritizer-design-v4.md
+ * Links: schema.ts (ItemJudgment), rank.ts
  * @public
  */
 
@@ -54,7 +54,6 @@ const clip = (text: string | undefined, max = 400) =>
 export function buildJudgeUserMessage(input: {
   readonly ctx: GatheredContext;
   readonly goals: readonly ActiveGoal[];
-  readonly policyVersion: string;
   readonly batch: readonly FetchedWorkItem[];
   readonly triggerMessage: string;
 }): string {
@@ -91,7 +90,6 @@ export function buildJudgeUserMessage(input: {
     }));
   return [
     `Current time: ${ctx.now}`,
-    `Policy: ${input.policyVersion}`,
     "",
     "## Active DAO goals (trusted — statement, KPI, target; score impact against exactly these ids)",
     JSON.stringify(goalList),

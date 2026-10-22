@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/tools`
  * Purpose: Tool IDs + the fixed context-gathering plan for the work-prioritizer graph.
- * Scope: Constants only. Does NOT execute tools or enforce policy (the wrapper + toolRunner do).
+ * Scope: Constants and the pure context-read plan. Does NOT execute tools or enforce authz (the wrapper + toolRunner do).
  * Invariants:
  *   - EXACT_ALLOWLIST: exactly these six tools — five reads (incl. core__goal_list, the one goal reader) plus
  *     the one EDO write (decide). PROPOSE_ONLY: no work-item
@@ -83,25 +83,22 @@ const search = (
   plane,
 });
 
+/** CONTEXT_DOMAINS default: the shelf where a node's goals and EDO chain live. A graph option, never a node name. */
+export const DEFAULT_CONTEXT_DOMAINS: readonly string[] = ["strategy"];
+
 /**
- * Fixed hub reads, in order, before any judgment. Plane is by READ (the tools expose no entry type): the
- * prioritizer's own tagged chain and the hypothesis/decision/goal searches are `edo`, the rest `knowledge`.
- * Domains: strategy/meta/build-agents (prod shelves) plus `operator` (candidate-a keeps goals there).
+ * Fixed hub reads, in order, before any judgment — per domain: a bounded list, the prioritizer's own tagged
+ * chain, and the hypothesis/decision searches. Plane is by READ (the tools expose no entry type). Goals are
+ * never searched here: they come only from core__goal_list (ONE_GOAL_LIST).
  */
-export const CONTEXT_READS: readonly ContextRead[] = [
-  list("strategy", 20),
-  search("meta", "priorit", 5, "knowledge"),
-  search("build-agents", "priorit", 5, "knowledge"),
-  ...["strategy", "operator"].flatMap((d) => [
-    ...(d === "operator" ? [list(d, 20)] : []),
+export const contextReads = (domains: readonly string[]): ContextRead[] =>
+  domains.flatMap((d) => [
+    list(d, 20),
     list(d, 10, true),
     search(d, "hypothes", 10, "edo"),
     search(d, "decision", 10, "edo"),
-    search(d, "goal", 10, "edo"),
-  ]),
-];
+  ]);
 
 /** The list reads that surface this graph's own decision chain — re-read for PRIOR_CAS. */
-export const PRIOR_CHAIN_READS = CONTEXT_READS.filter(
-  (r) => r.tool === KNOWLEDGE_READ_NAME
-);
+export const priorChainReads = (domains: readonly string[]) =>
+  contextReads(domains).filter((r) => r.tool === KNOWLEDGE_READ_NAME);
