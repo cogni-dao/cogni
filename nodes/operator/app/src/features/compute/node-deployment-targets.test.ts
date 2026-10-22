@@ -9,6 +9,11 @@ import {
   resolvePromoteDeploymentTargets,
 } from "./node-deployment-targets";
 
+// GitHub reports the running repository with its owner's display case; the
+// resolver normalizes it exactly like catalog `source_repo`.
+const PARENT_REPOSITORY = "Cogni-DAO/cogni";
+const PARENT = "cogni-dao/cogni";
+
 describe("resolveDeploymentTargets", () => {
   it("keeps omitted placement on k3s and separates explicit off-cluster nodes", () => {
     expect(
@@ -30,6 +35,7 @@ describe("resolveDeploymentTargets", () => {
           { name: "scheduler-worker", type: "service" },
         ],
         environment: "candidate-a",
+        parentRepository: PARENT_REPOSITORY,
         flightTargets: ["node-template", "toks4", "scheduler-worker"],
       })
     ).toEqual({
@@ -43,7 +49,7 @@ describe("resolveDeploymentTargets", () => {
       },
       k3s: ["node-template", "scheduler-worker"],
       k3sNodes: ["node-template"],
-      sourceRepositories: { toks4: "cogni-dao/toks4" },
+      sourceRepositories: { "node-template": PARENT, toks4: "cogni-dao/toks4" },
       sourceShas: { toks4: "0123456789abcdef0123456789abcdef01234567" },
     });
   });
@@ -65,6 +71,7 @@ describe("resolveDeploymentTargets", () => {
       resolveDeploymentTargets({
         catalogRows,
         environment: "candidate-a",
+        parentRepository: PARENT_REPOSITORY,
         flightTargets: ["operator"],
       })
     ).toEqual({
@@ -74,13 +81,14 @@ describe("resolveDeploymentTargets", () => {
       providers: { operator: "k3s" },
       k3s: ["operator"],
       k3sNodes: ["operator"],
-      sourceRepositories: {},
+      sourceRepositories: { operator: PARENT },
       sourceShas: {},
     });
     expect(
       resolveDeploymentTargets({
         catalogRows,
         environment: "candidate-a",
+        parentRepository: PARENT_REPOSITORY,
         flightTargets: ["toks4"],
       })
     ).toEqual({
@@ -95,11 +103,83 @@ describe("resolveDeploymentTargets", () => {
     });
   });
 
+  // bug.5510: an in-repo self-flight used to emit no repository, so the
+  // deploy-branch maintenance fence received SOURCE_REPOSITORY="" and refused
+  // every operator flight once an audited receipt existed.
+  it("gives every in-repo and remote k3s node target a source repository (bug.5510)", () => {
+    const selection = resolveDeploymentTargets({
+      catalogRows: [
+        { name: "operator", type: "node", envs: ["candidate-a"] },
+        {
+          name: "beacon",
+          type: "node",
+          envs: ["candidate-a"],
+          source_repo: "https://github.com/cogni-dao/beacon.git",
+        },
+        { name: "scheduler-worker", type: "service" },
+      ],
+      environment: "candidate-a",
+      parentRepository: PARENT_REPOSITORY,
+      flightTargets: ["operator", "beacon", "scheduler-worker"],
+    });
+
+    expect(selection.sourceRepositories).toEqual({
+      operator: PARENT,
+      beacon: "cogni-dao/beacon",
+    });
+    // No catalog pin exists for an in-repo node; its SHA is the flight's node-ref.
+    expect(selection.sourceShas).toEqual({});
+  });
+
+  it.each([
+    "",
+    "cogni",
+    "cogni-dao/cogni/extra",
+    "https://github.com/cogni-dao/cogni",
+    "../..",
+    "./cogni",
+    "cogni-dao/..",
+  ])("fails closed on parent repository %j instead of emitting an empty identity", (parentRepository) => {
+    expect(() =>
+      resolveDeploymentTargets({
+        catalogRows: [
+          { name: "operator", type: "node", envs: ["candidate-a"] },
+        ],
+        environment: "candidate-a",
+        parentRepository,
+        flightTargets: ["operator"],
+      })
+    ).toThrow("parentRepository must be a GitHub owner/name");
+  });
+
+  it.each([
+    "git@github.com:cogni-dao/beacon.git",
+    "https://github.com/cogni-dao/..",
+    "https://github.com/../beacon.git",
+  ])("refuses malformed catalog source_repo %j rather than substituting the parent", (sourceRepo) => {
+    expect(() =>
+      resolveDeploymentTargets({
+        catalogRows: [
+          {
+            name: "beacon",
+            type: "node",
+            envs: ["candidate-a"],
+            source_repo: sourceRepo,
+          },
+        ],
+        environment: "candidate-a",
+        parentRepository: PARENT_REPOSITORY,
+        flightTargets: ["beacon"],
+      })
+    ).toThrow("Target beacon has invalid source_repo");
+  });
+
   it("fails closed for a target absent from the reviewed catalog", () => {
     expect(() =>
       resolveDeploymentTargets({
         catalogRows: [],
         environment: "candidate-a",
+        parentRepository: PARENT_REPOSITORY,
         flightTargets: ["unreviewed"],
       })
     ).toThrow("Unknown flight target");
@@ -119,6 +199,7 @@ describe("resolveDeploymentTargets", () => {
           },
         ],
         environment: "candidate-a",
+        parentRepository: PARENT_REPOSITORY,
         flightTargets: ["poly"],
       })
     ).toThrow("Flight target poly is not configured for candidate-a");
@@ -148,6 +229,7 @@ describe("resolvePromoteDeploymentTargets", () => {
       resolvePromoteDeploymentTargets({
         catalogRows,
         environment: "preview",
+        parentRepository: PARENT_REPOSITORY,
         requestedTargets: [],
         legacyK3sTargets: ["scheduler-worker", "legacy", "external"],
       })
@@ -162,7 +244,7 @@ describe("resolvePromoteDeploymentTargets", () => {
       },
       k3s: ["scheduler-worker", "legacy"],
       k3sNodes: ["legacy"],
-      sourceRepositories: { external: "cogni-dao/external" },
+      sourceRepositories: { legacy: PARENT, external: "cogni-dao/external" },
       sourceShas: {
         external: "0123456789abcdef0123456789abcdef01234567",
       },
@@ -194,6 +276,7 @@ describe("resolvePromoteDeploymentTargets", () => {
     const selection = resolvePromoteDeploymentTargets({
       catalogRows: mixedPlacementRows,
       environment: "production",
+      parentRepository: PARENT_REPOSITORY,
       requestedTargets: ["node-template"],
       legacyK3sTargets: ["node-template"],
     });
@@ -207,6 +290,32 @@ describe("resolvePromoteDeploymentTargets", () => {
     expect(selection.sourceRepositories).toEqual({
       "node-template": "cogni-dao/node-template",
     });
+  });
+
+  it("gives an in-repo promote target the parent repository (bug.5510)", () => {
+    const selection = resolvePromoteDeploymentTargets({
+      catalogRows: [{ name: "operator", type: "node", envs: ["preview"] }],
+      environment: "preview",
+      parentRepository: PARENT_REPOSITORY,
+      requestedTargets: ["operator"],
+      legacyK3sTargets: ["operator"],
+    });
+
+    expect(selection.deployment).toEqual(["operator"]);
+    expect(selection.sourceRepositories).toEqual({ operator: PARENT });
+    expect(selection.sourceShas).toEqual({});
+  });
+
+  it("fails closed on an empty promote parent repository (bug.5510)", () => {
+    expect(() =>
+      resolvePromoteDeploymentTargets({
+        catalogRows: [{ name: "operator", type: "node", envs: ["preview"] }],
+        environment: "preview",
+        parentRepository: "",
+        requestedTargets: ["operator"],
+        legacyK3sTargets: ["operator"],
+      })
+    ).toThrow("parentRepository must be a GitHub owner/name");
   });
 
   it("projects the reviewed catalog pin for an operator-merge preview", () => {
@@ -223,6 +332,7 @@ describe("resolvePromoteDeploymentTargets", () => {
         },
       ],
       environment: "preview",
+      parentRepository: PARENT_REPOSITORY,
       requestedTargets: ["toks4"],
       legacyK3sTargets: [],
     });
@@ -236,6 +346,7 @@ describe("resolvePromoteDeploymentTargets", () => {
       resolvePromoteDeploymentTargets({
         catalogRows,
         environment: "production",
+        parentRepository: PARENT_REPOSITORY,
         requestedTargets: ["external"],
         legacyK3sTargets: [],
       }).deployment
@@ -249,6 +360,7 @@ describe("resolvePromoteDeploymentTargets", () => {
         { name: "openfga", type: "infra" },
       ],
       environment: "preview",
+      parentRepository: PARENT_REPOSITORY,
       requestedTargets: ["litellm", "openfga"],
       legacyK3sTargets: [],
     });
@@ -268,6 +380,7 @@ describe("resolvePromoteDeploymentTargets", () => {
     const selection = resolvePromoteDeploymentTargets({
       catalogRows,
       environment: "production",
+      parentRepository: PARENT_REPOSITORY,
       requestedTargets,
       legacyK3sTargets: [],
     });
@@ -281,6 +394,7 @@ describe("resolvePromoteDeploymentTargets", () => {
       resolvePromoteDeploymentTargets({
         catalogRows,
         environment: "preview",
+        parentRepository: PARENT_REPOSITORY,
         requestedTargets: ["not-in-catalog"],
         legacyK3sTargets: [],
       })
@@ -292,6 +406,7 @@ describe("resolvePromoteDeploymentTargets", () => {
       resolvePromoteDeploymentTargets({
         catalogRows,
         environment: "preview",
+        parentRepository: PARENT_REPOSITORY,
         requestedTargets: ["legacy"],
         legacyK3sTargets: [],
       }).deployment
@@ -327,6 +442,7 @@ describe("resolvePromoteDeploymentTargets", () => {
       const selection = resolvePromoteDeploymentTargets({
         catalogRows: mixed,
         environment: "production",
+        parentRepository: PARENT_REPOSITORY,
         requestedTargets: ["prodonly"],
         legacyK3sTargets: [],
         previewForwardMode: true,
@@ -339,6 +455,7 @@ describe("resolvePromoteDeploymentTargets", () => {
       const selection = resolvePromoteDeploymentTargets({
         catalogRows: mixed,
         environment: "production",
+        parentRepository: PARENT_REPOSITORY,
         requestedTargets: ["bothenvs"],
         legacyK3sTargets: [],
         previewForwardMode: true,
@@ -350,6 +467,7 @@ describe("resolvePromoteDeploymentTargets", () => {
       const selection = resolvePromoteDeploymentTargets({
         catalogRows: mixed,
         environment: "production",
+        parentRepository: PARENT_REPOSITORY,
         requestedTargets: ["prodonly", "bothenvs"],
         legacyK3sTargets: [],
         previewForwardMode: true,
@@ -364,6 +482,7 @@ describe("resolvePromoteDeploymentTargets", () => {
       const selection = resolvePromoteDeploymentTargets({
         catalogRows: mixed,
         environment: "production",
+        parentRepository: PARENT_REPOSITORY,
         requestedTargets: ["prodonly", "bothenvs"],
         legacyK3sTargets: [],
         previewForwardMode: false,
@@ -378,6 +497,7 @@ describe("resolvePromoteDeploymentTargets", () => {
       const selection = resolvePromoteDeploymentTargets({
         catalogRows: mixed,
         environment: "production",
+        parentRepository: PARENT_REPOSITORY,
         requestedTargets: ["bothenvs"],
         legacyK3sTargets: [],
       });

@@ -352,7 +352,7 @@ CATALOG_JSON="$(yq -o=json -I=0 '.' infra/catalog/scheduler-worker.yaml)" \
   pnpm --dir nodes/operator/app exec tsx -e '
     import assert from "node:assert/strict";
     import { resolveDeploymentTargets } from "./src/features/compute/node-deployment-targets.ts";
-    assert.deepEqual(resolveDeploymentTargets({catalogRows:[JSON.parse(process.env.CATALOG_JSON!)],environment:"candidate-a",flightTargets:["scheduler-worker"]}), {
+    assert.deepEqual(resolveDeploymentTargets({catalogRows:[JSON.parse(process.env.CATALOG_JSON!)],environment:"candidate-a",parentRepository:"cogni-dao/cogni",flightTargets:["scheduler-worker"]}), {
       deployment:[],substrate:[],offCluster:[],providers:{"scheduler-worker":"k3s"},
       k3s:["scheduler-worker"],k3sNodes:[],sourceRepositories:{},sourceShas:{}
     });
