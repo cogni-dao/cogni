@@ -8,6 +8,8 @@
  * Invariants:
  *   - Per ACTIVITY_IDEMPOTENCY: read-only in v0 (no claim/release yet)
  *   - Per EXECUTION_VIA_SERVICE_API: calls app's REST API, never imports app code
+ *   - LIFECYCLE_ORDER_FROM_HUB: fetched items rank closest-to-done first
+ *     (needs_closeout > needs_merge > needs_implement …), then by priority
  * Side-effects: IO (HTTP to app API)
  * Links: docs/spec/agent-roles.md, docs/spec/temporal-patterns.md
  * @internal
@@ -79,10 +81,12 @@ export function createSweepActivities(deps: SweepActivityDeps) {
     const data = (await res.json()) as { items?: SweepWorkItem[] };
     const items = data.items ?? [];
 
-    // Sort by priority (lower = higher priority), then by status weight
+    // Sort by status weight (closest to done first), then by priority
+    // (lower = higher priority). Lifecycle order: needs_merge (review, flight,
+    // validate) → needs_closeout (operator merge) → done.
     const STATUS_WEIGHTS: Record<string, number> = {
-      needs_merge: 6,
-      needs_closeout: 5,
+      needs_closeout: 6,
+      needs_merge: 5,
       needs_implement: 4,
       needs_design: 3,
       needs_research: 2,

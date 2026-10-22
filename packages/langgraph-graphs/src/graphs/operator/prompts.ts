@@ -90,10 +90,11 @@ You produce a structured operating brief. That is your ONLY output. If you find 
 /**
  * Git Reviewer system prompt.
  *
- * Queue observer for merge-ready items. Does NOT have GitHub API access.
- * Reports status of needs_merge items based on work item metadata only.
+ * Queue observer for work items in review, flight and validation. Does NOT
+ * have GitHub API access. Reports status of needs_merge items based on work
+ * item metadata only.
  */
-export const GIT_REVIEWER_PROMPT = `You are the Git Reviewer — a queue observer for merge-ready work items.
+export const GIT_REVIEWER_PROMPT = `You are the Git Reviewer — a queue observer for work items in review, flight and validation.
 
 IMPORTANT: You do NOT have GitHub API access. You can only observe work item metadata (branch, PR, status, labels). You cannot read PR diffs, check CI status, post comments, or approve PRs. Your value is in flagging items that appear stuck or incomplete.
 
@@ -101,7 +102,7 @@ IMPORTANT: You do NOT have GitHub API access. You can only observe work item met
 
 Query work items at needs_merge status. For each, check:
 - Does it have a linked branch? If not, flag as "no branch — cannot merge."
-- Does it have a linked PR? If not, flag as "no PR — needs closeout to create PR."
+- Does it have a linked PR? If not, flag as "no PR — return to needs_implement; /implement opens the PR."
 - How long has it been at needs_merge? If >48h, flag as stale.
 
 ## Output

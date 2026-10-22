@@ -112,39 +112,61 @@ describe("work-item session policy", () => {
     ).toContain("already claimed by agent-one");
   });
 
-  it("demands /validate-candidate for needs_merge items without deployVerified", () => {
-    const text = nextActionForWorkItem({
-      workItem: { ...WORK_ITEM, status: "needs_merge", deployVerified: false },
+  const linked = (overrides: Partial<WorkItemDto>) =>
+    nextActionForWorkItem({
+      workItem: { ...WORK_ITEM, ...overrides },
       session: session({ prNumber: 1204 }),
       now: NOW,
     });
-    expect(text).toContain("/validate-candidate");
+
+  it("orders needs_merge as review, flight, validate, then operator merge", () => {
+    const text = linked({ status: "needs_merge" });
+    const review = text.indexOf("/review-implementation");
+    const flight = text.indexOf("/api/v1/vcs/flight");
+    const validate = text.indexOf("/validate-candidate");
+    const merge = text.indexOf("/api/v1/vcs/merge");
+
     expect(text).toContain("PR #1204");
-    expect(text).toContain("deployVerified");
+    expect(review).toBeGreaterThanOrEqual(0);
+    expect(review).toBeLessThan(flight);
+    expect(flight).toBeLessThan(validate);
+    expect(validate).toBeLessThan(merge);
   });
 
-  it("clears to /review-implementation once deployVerified is true", () => {
-    const text = nextActionForWorkItem({
-      workItem: { ...WORK_ITEM, status: "needs_merge", deployVerified: true },
-      session: session({ prNumber: 1204 }),
-      now: NOW,
-    });
-    expect(text).toContain("/review-implementation");
+  it("never gates needs_merge on deployVerified", () => {
+    const unverified = linked({ status: "needs_merge", deployVerified: false });
+    const verified = linked({ status: "needs_merge", deployVerified: true });
+
+    expect(verified).toBe(unverified);
+  });
+
+  it("records deployVerified once, in the needs_closeout transition", () => {
+    const text = linked({ status: "needs_merge" });
+
+    expect(text.split("deployVerified")).toHaveLength(2);
+    expect(text).toContain("set status needs_closeout and deployVerified true");
+  });
+
+  it("asks /closeout to check one head SHA and deployVerified before merging", () => {
+    const text = linked({ status: "needs_closeout" });
+
+    expect(text).toContain("/closeout");
+    expect(text).toContain("one head SHA");
+    expect(text).toContain("deployVerified");
+    expect(text).toContain("/api/v1/vcs/merge");
+  });
+
+  it("does not send done items back to /validate-candidate", () => {
+    const text = linked({ status: "done", deployVerified: false, pr: "1204" });
+
+    expect(text).toContain("is done");
     expect(text).not.toContain("/validate-candidate");
   });
 
-  it("flags done work items still missing deployVerified", () => {
-    const text = nextActionForWorkItem({
-      workItem: {
-        ...WORK_ITEM,
-        status: "done",
-        deployVerified: false,
-        pr: "1204",
-      },
-      session: session({ prNumber: 1204 }),
-      now: NOW,
-    });
-    expect(text).toContain("deployVerified is false");
-    expect(text).toContain("/validate-candidate");
+  it("hands needs_implement to needs_merge, not closeout", () => {
+    const text = linked({ status: "needs_implement" });
+
+    expect(text).toContain("needs_merge");
+    expect(text).not.toContain("closeout");
   });
 });
