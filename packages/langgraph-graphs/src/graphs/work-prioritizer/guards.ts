@@ -3,12 +3,12 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/guards`
- * Purpose: Deterministic run guards: hub context before judging, and where EDO rows are filed (design v4).
+ * Purpose: Deterministic run guards: hub context before judging, and where EDO rows are filed.
  * Scope: Pure functions over parsed model output + the run context; does not call tools/LLMs or read env.
  * Invariants:
  *   - CONTEXT_BEFORE_JUDGMENT: a run with no knowledge AND no EDO context is rejected outright.
  * Side-effects: none
- * Links: schema.ts, plan.ts, .context/prioritizer-design-v4.md
+ * Links: schema.ts, plan.ts
  * @public
  */
 

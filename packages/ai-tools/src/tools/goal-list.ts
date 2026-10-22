@@ -9,8 +9,7 @@
  *   - TOOL_ID_NAMESPACED: ID is `core__goal_list`
  *   - EFFECT_TYPED: effect is `read_only`; `requires: "node.collaborate"`
  *   - ONE_GOAL_LIST: goals come only from the capability's `listActiveGoals()` (merged `goal-*`, not deprecated)
- *   - MAX_THREE_GOALS_IS_AN_ERROR: a store error coded `TOO_MANY_ACTIVE_GOALS` surfaces as
- *     `too_many_active_goals: …`, never a truncated list
+ *   - NO_GOAL_CAP: the tool never counts or truncates goals; a reader failure is a tool error
  * Side-effects: IO (reads goals via capability)
  * Links: https://cognidao.org/knowledge/dao-goals-design, task.5287, story.5096
  * @public
@@ -46,7 +45,7 @@ export const goalListContract: ToolContract<
 > = {
   name: GOAL_LIST_NAME,
   description:
-    "List the node's approved DAO goals (at most 3): id, title, deadline, and statement with KPI and target.",
+    "List the node's approved DAO goals: id, title, deadline, and statement with KPI and target.",
   effect: "read_only",
   requires: "node.collaborate",
   inputSchema: GoalListInputSchema,
@@ -67,22 +66,15 @@ export function createGoalListImplementation(
       const list = deps.knowledgeCapability.listActiveGoals;
       if (!list)
         throw new Error("goals_unavailable: no goal reader on this node");
-      try {
-        const goals = await list.call(deps.knowledgeCapability);
-        return {
-          goals: goals.map(({ id, title, evaluateAt, content }) => ({
-            id,
-            title,
-            evaluateAt,
-            content,
-          })),
-        };
-      } catch (error) {
-        if ((error as { code?: unknown })?.code === "TOO_MANY_ACTIVE_GOALS") {
-          throw new Error(`too_many_active_goals: ${(error as Error).message}`);
-        }
-        throw error;
-      }
+      const goals = await list.call(deps.knowledgeCapability);
+      return {
+        goals: goals.map(({ id, title, evaluateAt, content }) => ({
+          id,
+          title,
+          evaluateAt,
+          content,
+        })),
+      };
     },
   };
 }

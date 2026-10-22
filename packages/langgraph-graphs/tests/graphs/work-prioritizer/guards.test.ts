@@ -3,11 +3,11 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/tests/graphs/work-prioritizer/guards`
- * Purpose: Unit tests for the v4 run guards, judge parsing, policy parsing, context derivation, and schemas.
+ * Purpose: Unit tests for the v4 run guards, judge parsing, trigger parsing, context derivation, and schemas.
  * Scope: Pure-function tests with fixtures; does not invoke an LLM, tools, or the graph.
- * Invariants: CONTEXT_BEFORE_JUDGMENT, POLICY_FROM_TRIGGER, ENUMS_NOT_FLOATS, TOLERANT_PARSING.
+ * Invariants: CONTEXT_BEFORE_JUDGMENT, FULL_REVIEW_ON_REQUEST, ENUMS_NOT_FLOATS, TOLERANT_PARSING.
  * Side-effects: none
- * Links: src/graphs/work-prioritizer/{guards,policy,context,schema}.ts
+ * Links: src/graphs/work-prioritizer/{guards,trigger,context,schema}.ts
  * @internal
  */
 
@@ -27,7 +27,6 @@ import {
   hasHubContext,
   selectEdoDomain,
 } from "../../../src/graphs/work-prioritizer/guards";
-import { policyFromTrigger } from "../../../src/graphs/work-prioritizer/policy";
 import {
   judgeItems,
   normalizeJudgment,
@@ -35,6 +34,7 @@ import {
   parseJudgeOutput,
 } from "../../../src/graphs/work-prioritizer/prompts";
 import { ItemJudgmentSchema } from "../../../src/graphs/work-prioritizer/schema";
+import { fullReviewFromTrigger } from "../../../src/graphs/work-prioritizer/trigger";
 
 const NOW = new Date("2026-10-20T12:00:00.000Z");
 
@@ -107,35 +107,24 @@ describe("schemas (ENUMS_NOT_FLOATS)", () => {
   });
 });
 
-describe("policy (POLICY_FROM_TRIGGER)", () => {
-  const policy = {
-    policyVersion: "v5.0",
-    applyMode: "write",
-    // Pre-v5 fields the schedule may still send: caps and objectives are no longer policy.
-    p0Max: 3,
-    objectives: ["dao-goal-a"],
-  };
+describe("trigger (FULL_REVIEW_ON_REQUEST)", () => {
   const block = (v: unknown) =>
     `PRIORITIZE\n\n\`\`\`json\n${JSON.stringify(v)}\n\`\`\``;
 
-  it("reads the schedule-appended policy block; ignores applyMode (PROPOSE_ONLY)", () => {
-    const out = policyFromTrigger(block({ workPrioritization: policy }));
-    expect(out.policy).toEqual({ policyVersion: "v5.0" });
-    expect(out.fullReview).toBe(false);
+  it("fullReview: true in the trigger's json block forces a full review", () => {
+    expect(fullReviewFromTrigger(block({ fullReview: true }))).toBe(true);
   });
 
-  it("FULL_REVIEW_ON_REQUEST: fullReview: true beside the policy", () => {
+  it("NO_POLICY: no block, a malformed block, or a legacy policy block is a normal cycle", () => {
+    expect(fullReviewFromTrigger("PRIORITIZE")).toBe(false);
+    expect(fullReviewFromTrigger("PRIORITIZE\n\n```json\n{nope\n```")).toBe(
+      false
+    );
     expect(
-      policyFromTrigger(block({ workPrioritization: policy, fullReview: true }))
-        .fullReview
-    ).toBe(true);
-  });
-
-  it("POLICY_REQUIRED: an absent or version-less policy ⇒ null", () => {
-    expect(policyFromTrigger("PRIORITIZE").policy).toBeNull();
-    expect(
-      policyFromTrigger(block({ workPrioritization: { p0Max: 3 } })).policy
-    ).toBeNull();
+      fullReviewFromTrigger(
+        block({ workPrioritization: { policyVersion: "v5.0" } })
+      )
+    ).toBe(false);
   });
 });
 

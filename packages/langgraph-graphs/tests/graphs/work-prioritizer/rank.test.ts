@@ -5,7 +5,7 @@
  * Module: `@cogni/langgraph-graphs/tests/graphs/work-prioritizer/rank`
  * Purpose: Scenario tests for "lexicographic heuristic v1" (design v4 §1–§2.3, §4).
  * Scope: Pure ranking over fixtures; does not invoke an LLM, tools, or the graph.
- * Invariants: GATES_FIRST, ORDER, CEILINGS_NOT_TARGETS, HYSTERESIS, PINS, EXACTLY_ONE_ROW.
+ * Invariants: GATES_FIRST, ORDER, CEILINGS_NOT_TARGETS, HYSTERESIS, NO_PINS, EXACTLY_ONE_ROW.
  * Side-effects: none
  * Links: src/graphs/work-prioritizer/rank.ts
  * @internal
@@ -217,20 +217,12 @@ describe("lexicographic heuristic v2 (goals, no caps)", () => {
     expect(to(result, "task.a")).toBe(2);
   });
 
-  it("PINS: pinned items never move", () => {
-    const pinned = item("task.pin", {
-      priority: 3,
-      labels: ["priority:pinned"],
-    });
+  it("NO_PINS: a legacy priority:pinned label is ordinary text — the item ranks like any other", () => {
     const result = run(
-      [pinned, item("bug.urgent")],
-      [
-        judgment("task.pin", { harmDays: 0, serviceClass: "expedite" }),
-        judgment("bug.urgent", { harmDays: 0, serviceClass: "expedite" }),
-      ]
+      [item("task.pin", { priority: 3, labels: ["priority:pinned"] })],
+      [judgment("task.pin", { harmDays: 0, serviceClass: "expedite" })]
     );
-    expect(to(result, "task.pin")).toBe(3);
-    expect(to(result, "bug.urgent")).toBe(0);
+    expect(to(result, "task.pin")).toBe(0);
   });
 
   it("is deterministic: same input, same table", () => {

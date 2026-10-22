@@ -70,24 +70,13 @@ governance:
     # is_free: true): the system tenant that bills governance runs holds zero credits, and the
     # preflight credit gate passes free models — a paid model would fail with insufficient_credits.
     # Hourly is the prod-safe cadence (prod: hourly at most). The candidate proof ran at */5 with
-    # identical runtime code (8a9d280); candidate evals now need >=2 hourly scheduled cycles at the SHA.
+    # identical runtime code (8a9d280); a candidate eval now waits for >=1 hourly scheduled cycle at the SHA.
     - charter: WORK_PRIORITIZER
       cron: "0 * * * *"
       timezone: UTC
       entrypoint: PRIORITIZE
       graph: langgraph:work-prioritizer
       model: gpt-oss-120b
-      policy: work_prioritization
-
-# Work-prioritization policy (story.5096). Node-owned and versioned; changing it is a reviewed PR.
-# Goals are not listed here: the prioritizer reads the hub's active goal-* atoms (dao-goals-design),
-# and there are no capacity caps. The graph is propose-only: every env proposes.
-work_prioritization:
-  policy_version: v5.0
-  apply:
-    # Per deploy environment (DEPLOY_ENVIRONMENT). Propose everywhere until a write path exists.
-    mode:
-      default: propose
 
 payments:
   status: active

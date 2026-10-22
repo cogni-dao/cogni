@@ -14,6 +14,8 @@
  *   - MCP_VIA_ASYNC_SOURCE: MCP tools resolved via async getMcpToolSource() function (shared cache with reconnect-on-error)
  *   - TOOL_AUTHZ_CONTEXT_ALWAYS_THREADED (authz v0): actor/tenant/graph/node/grant reach the tool runner with or
  *     without an authz adapter, plus one `ai.tool_authz.decision` log per evaluated call; `authz` only when installed.
+ *   - CATALOG_REPORT_SEAM: a catalog entry's `report` (not a graph name) decides whether the run's structured
+ *     telemetry is logged as registered events and echoed onto the stream; graphs never touch the logger or ALS.
  * Side-effects: IO (executes graphs via package runner, MCP tool resolution via HTTP)
  * Notes: Discovery is in LangGraphInProcAgentCatalogProvider, not here.
  * Links: GRAPH_EXECUTION.md, LANGGRAPH_AI.md
@@ -32,15 +34,13 @@ import {
   type CompletionFn,
   type CreateGraphFn,
   createInProcGraphRunner,
+  GRAPH_REPORT_CLOSE,
+  GRAPH_REPORT_OPEN,
   type GraphResult,
   type InProcGraphRequest,
   type ToolExecFn,
 } from "@cogni/langgraph-graphs";
-import {
-  LANGGRAPH_CATALOG,
-  type PrioritizerCycleTelemetry,
-  WORK_PRIORITIZER_GRAPH_NAME,
-} from "@cogni/operator-graphs";
+import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
 import { trace } from "@opentelemetry/api";
 import type { Logger } from "pino";
 import { getExecutionScope } from "@/adapters/server/ai/execution-scope";
@@ -88,6 +88,14 @@ interface ProviderCatalogEntry {
   readonly mcpServerIds?: readonly string[];
   readonly graphFactory: CreateGraphFn;
   readonly systemPrompt?: string;
+  /** Graph-owned run report to log + echo on the stream (CatalogEntry.report). */
+  readonly report?: GraphReportDecl;
+}
+
+/** CatalogEntry.report: registered event names for the graph's telemetry and per-batch samples. */
+interface GraphReportDecl {
+  readonly event: string;
+  readonly sampleEvent?: string;
 }
 
 /**
@@ -350,20 +358,17 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           systemPrompt: entry.systemPrompt,
         }),
       });
-      // Graph-owned cycle summary → one registry event (graphs have no logger).
-      if (graphName === WORK_PRIORITIZER_GRAPH_NAME) {
+      // CatalogEntry.report: the graph's own report → registry events (graphs have no logger).
+      const report = entry.report;
+      if (report) {
         void runner.final
           .then((result) => {
-            const fields = prioritizerCycleLogFields(
-              runId,
-              result.structuredOutput
-            );
-            if (fields) this.log.info(fields, "work-prioritizer cycle");
-            for (const sample of prioritizerJudgeSampleLogFields(
+            for (const fields of graphReportLogFields(
+              report,
               runId,
               result.structuredOutput
             )) {
-              this.log.info(sample, "work-prioritizer judge sample");
+              this.log.info(fields, "graph report");
             }
           })
           .catch(() => {
@@ -377,6 +382,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     // Returns {stream, final} synchronously per GraphRunResult contract;
     // the inner async generator awaits the promise.
     const innerResult = resolveMcpAndExecute();
+    const report = entry.report;
 
     const stream = (async function* () {
       let inner: Awaited<ReturnType<typeof resolveMcpAndExecute>>;
@@ -390,7 +396,14 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         yield { type: "done" as const };
         return;
       }
-      yield* inner.stream;
+      for await (const event of inner.stream) {
+        // CatalogEntry.report: echo the telemetry as one text delta just before `done`.
+        if (event.type === "done" && report) {
+          const delta = graphReportDelta((await inner.final).structuredOutput);
+          if (delta) yield { type: "text_delta" as const, delta };
+        }
+        yield event;
+      }
     })();
 
     const final = innerResult.then(
@@ -535,38 +548,37 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
 }
 
 /**
- * One `ai.work_prioritizer.judge_sample` event per judge batch: the first raw judge lines (≤3 × 400
- * chars, item text only — no secrets) and the parse counts, so a lost field is visible in Loki.
+ * Log lines for a catalog-declared report: one `report.event` from `structuredOutput.telemetry`, plus one
+ * `report.sampleEvent` per `structuredOutput.samples[]` entry (≤10). Empty when the output carries none.
  */
-export function prioritizerJudgeSampleLogFields(
+export function graphReportLogFields(
+  report: GraphReportDecl,
   runId: string,
   structuredOutput: Record<string, unknown> | undefined
 ): Record<string, unknown>[] {
-  const samples = structuredOutput?.judgeSamples;
-  if (!Array.isArray(samples)) return [];
-  return samples.slice(0, 10).map((sample, batch) => ({
-    event: EVENT_NAMES.AI_WORK_PRIORITIZER_JUDGE_SAMPLE,
-    runId,
-    batch,
-    ...(sample as Record<string, unknown>),
-  }));
+  const telemetry = structuredOutput?.telemetry;
+  const samples = structuredOutput?.samples;
+  return [
+    ...(telemetry && typeof telemetry === "object"
+      ? [{ event: report.event, runId, ...telemetry }]
+      : []),
+    ...(report.sampleEvent && Array.isArray(samples)
+      ? samples.slice(0, 10).map((sample, batch) => ({
+          event: report.sampleEvent,
+          runId,
+          batch,
+          ...(sample as Record<string, unknown>),
+        }))
+      : []),
+  ];
 }
 
-/**
- * Fields for the `ai.work_prioritizer.cycle` event from a work-prioritizer run's
- * structured output, or null when the output carries no telemetry.
- */
-export function prioritizerCycleLogFields(
-  runId: string,
+/** The stream echo of a catalog-declared report (`<graph_report>{telemetry}</graph_report>`), or null. */
+export function graphReportDelta(
   structuredOutput: Record<string, unknown> | undefined
-): Record<string, unknown> | null {
-  const telemetry = structuredOutput?.telemetry as
-    | PrioritizerCycleTelemetry
-    | undefined;
-  if (!telemetry || typeof telemetry.status !== "string") return null;
-  return {
-    event: EVENT_NAMES.AI_WORK_PRIORITIZER_CYCLE,
-    runId,
-    ...telemetry,
-  };
+): string | null {
+  const telemetry = structuredOutput?.telemetry;
+  return telemetry && typeof telemetry === "object"
+    ? `\n${GRAPH_REPORT_OPEN}${JSON.stringify(telemetry)}${GRAPH_REPORT_CLOSE}\n`
+    : null;
 }
