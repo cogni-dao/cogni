@@ -35,20 +35,6 @@ export interface GovernanceSchedule {
   graph?: string;
   /** Platform model id for the `graph` run (set iff `graph` is set). */
   model?: string;
-  /** Trusted payload for the `graph` run, resolved from a named repo-spec policy block. */
-  payload?: GovernanceSchedulePayload;
-}
-
-/** Work-prioritization policy in the graph-facing (camelCase) shape. */
-export interface WorkPrioritizationPolicy {
-  policyVersion: string;
-  /** Effective apply mode for this deployment (`apply.mode.default` in Lane A). */
-  applyMode: "propose" | "write";
-  applyModes: Record<string, "propose" | "write">;
-}
-
-export interface GovernanceSchedulePayload {
-  workPrioritization: WorkPrioritizationPolicy;
 }
 
 export interface LedgerPoolConfig {
@@ -338,25 +324,14 @@ export function extractGovernanceConfig(spec: RepoSpec): GovernanceConfig {
 
   // Declared entries are copied field-by-field: an entry without `graph`/`model`
   // keeps exactly the pre-task.5282 shape (sandbox agent, no new keys).
-  const workPrioritization = extractWorkPrioritizationPolicy(spec);
-  const schedules: GovernanceSchedule[] = declared.map((s) => {
-    if (s.policy === "work_prioritization" && !workPrioritization) {
-      throw new Error(
-        `[repo-spec] governance schedule ${s.charter} references policy work_prioritization, but the block is missing`
-      );
-    }
-    return {
-      charter: s.charter,
-      cron: s.cron,
-      timezone: s.timezone,
-      entrypoint: s.entrypoint,
-      ...(s.graph !== undefined ? { graph: s.graph } : {}),
-      ...(s.model !== undefined ? { model: s.model } : {}),
-      ...(s.policy === "work_prioritization" && workPrioritization
-        ? { payload: { workPrioritization } }
-        : {}),
-    };
-  });
+  const schedules: GovernanceSchedule[] = declared.map((s) => ({
+    charter: s.charter,
+    cron: s.cron,
+    timezone: s.timezone,
+    entrypoint: s.entrypoint,
+    ...(s.graph !== undefined ? { graph: s.graph } : {}),
+    ...(s.model !== undefined ? { model: s.model } : {}),
+  }));
   // LEDGER_PRESERVED: only a declared LEDGER_INGEST suppresses the synthesized one —
   // adding any other charter (e.g. WORK_PRIORITIZER) never drops or alters it.
   const hasLedgerSchedule = declared.some(
@@ -377,22 +352,6 @@ export function extractGovernanceConfig(spec: RepoSpec): GovernanceConfig {
   }
 
   return config;
-}
-
-/**
- * Work-prioritization policy (story.5096) in the graph-facing shape, or null when the
- * node declares none. `applyMode` is the `default` mode (Lane A runs propose-only).
- */
-export function extractWorkPrioritizationPolicy(
-  spec: RepoSpec
-): WorkPrioritizationPolicy | null {
-  const wp = spec.work_prioritization;
-  if (!wp) return null;
-  return {
-    policyVersion: wp.policy_version,
-    applyMode: wp.apply.mode.default,
-    applyModes: { ...wp.apply.mode },
-  };
 }
 
 /**
