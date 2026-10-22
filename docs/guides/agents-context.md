@@ -4,11 +4,11 @@ type: guide
 title: Coding Agents & AGENTS.md
 status: draft
 trust: draft
-summary: How to configure each coding agent (Codex, Gemini CLI, Antigravity, Claude Code, Cursor) to use AGENTS.md as single source of truth.
+summary: How to configure each coding agent (Codex, Gemini CLI, Claude Code, Cursor) to use AGENTS.md as single source of truth.
 read_when: Setting up a new coding agent or IDE to work with this repo's AGENTS.md hierarchy.
 owner: derekg1729
 created: 2026-02-06
-verified: 2026-02-06
+verified: 2026-10-22
 tags: [agents, dev, onboarding]
 ---
 
@@ -21,14 +21,14 @@ You are configuring a coding agent or IDE to work with this repo. The goal is to
 ## Preconditions
 
 - [ ] Repository cloned
-- [ ] At least one coding agent/IDE installed (Codex, Gemini CLI, Antigravity, Claude Code, or Cursor)
+- [ ] At least one coding agent/IDE installed (Codex, Gemini CLI, Claude Code, or Cursor)
 
 ## Steps
 
 ### Agent Compatibility Overview
 
 - **Codex**: native AGENTS.md hierarchy (gold standard), dynamically loading subdirs.
-- **Gemini CLI + Antigravity**: default to `GEMINI.md`, configurable to use `AGENTS.md`, but only bulk loads ALL files at boot.
+- **Gemini CLI**: default to `GEMINI.md`, configurable to use `AGENTS.md`, but only bulk loads ALL files at boot.
 - **Claude Code**: only uses `CLAUDE.md`, dynamically loading subdirs.
 - **Cursor**: reads `AGENTS.md` natively.
 
