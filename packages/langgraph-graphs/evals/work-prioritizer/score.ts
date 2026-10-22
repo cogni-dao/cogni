@@ -391,6 +391,30 @@ export function gradeHarmEvidence(
       );
 }
 
+/**
+ * READ_AFTER_WRITE: re-run `read` every `intervalMs` until it returns non-null or `timeoutMs` elapses;
+ * returns the last result (null on timeout). `sleep`/`now` are injectable so the bound is unit-tested.
+ */
+export async function pollUntil<T>(
+  read: () => Promise<T | null>,
+  opts: {
+    readonly timeoutMs: number;
+    readonly intervalMs: number;
+    readonly sleep?: (ms: number) => Promise<void>;
+    readonly now?: () => number;
+  }
+): Promise<T | null> {
+  const sleep =
+    opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = opts.now ?? Date.now;
+  const deadline = now() + opts.timeoutMs;
+  for (;;) {
+    const value = await read();
+    if (value !== null || now() >= deadline) return value;
+    await sleep(opts.intervalMs);
+  }
+}
+
 export interface Scorecard {
   readonly buildSha: string;
   readonly baseUrl: string;

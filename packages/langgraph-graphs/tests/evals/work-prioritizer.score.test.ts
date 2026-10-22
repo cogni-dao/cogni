@@ -30,6 +30,7 @@ import {
   infoLevelCounts,
   infoPmOverlap,
   mergeLabelled,
+  pollUntil,
   scorecardMarkdown,
   standingDecisionId,
 } from "../../evals/work-prioritizer/score";
@@ -71,7 +72,7 @@ function decision(
   o: Partial<DecisionPayload> = {}
 ): DecisionPayload {
   return {
-    schemaVersion: "work-prioritizer.decision/v2",
+    schemaVersion: "work-prioritizer.decision/v3",
     status: "planned",
     mode: "propose",
     scope: "full",
@@ -448,6 +449,39 @@ describe("work-prioritizer graders", () => {
     expect(
       gradeUnjudged(decision(table, { unjudged: ["t.1", "t.2", "t.3"] })).pass
     ).toBe(false);
+  });
+
+  it("READ_AFTER_WRITE: pollUntil returns the first readable value, or null once the bound elapses", async () => {
+    let t = 0;
+    const clock = {
+      now: () => t,
+      sleep: async (ms: number) => {
+        t += ms;
+      },
+    };
+    let reads = 0;
+    const readableOnThird = async () => (++reads >= 3 ? "d1" : null);
+    expect(
+      await pollUntil(readableOnThird, {
+        timeoutMs: 90_000,
+        intervalMs: 5_000,
+        ...clock,
+      })
+    ).toBe("d1");
+    expect(reads).toBe(3);
+    expect(t).toBe(10_000);
+
+    t = 0;
+    reads = 0;
+    const never = async () => {
+      reads += 1;
+      return null;
+    };
+    expect(
+      await pollUntil(never, { timeoutMs: 90_000, intervalMs: 5_000, ...clock })
+    ).toBeNull();
+    expect(t).toBe(90_000);
+    expect(reads).toBe(19);
   });
 
   it("mergeLabelled passes a check only when every labelled cycle passes it", () => {

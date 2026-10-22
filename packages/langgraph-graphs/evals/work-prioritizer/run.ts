@@ -49,6 +49,7 @@ import {
   infoPmOverlap,
   mergeLabelled,
   p0Of,
+  pollUntil,
   type Scorecard,
   type SnapshotItem,
   scorecardMarkdown,
@@ -369,6 +370,13 @@ async function runEval(underTest: string): Promise<void> {
   // Cycle 1: a requested full review. Cycle 2 (same snapshot): a delta cycle that must carry every
   // judgment and file nothing. Cycle ids are per second, so back-to-back cycles never collide.
   const c1 = await cycle(underTest, trigger({ fullReview: true }));
+  // READ_AFTER_WRITE: cycle 2 must start only once cycle 1's decision is readable (bounded poll, no fixed sleep).
+  c1.payload ??= await pollUntil(() => loadDecision(c1.id).catch(() => null), {
+    timeoutMs: 90_000,
+    intervalMs: 5_000,
+  });
+  if (c1.id && !c1.payload)
+    notes.push(`cycle 1 decision ${c1.id} not readable within 90 s`);
   const c2 = await cycle(underTest, trigger(), c1.id);
   const afterStability = await snapshot();
   if (c2.report?.scope === "full")

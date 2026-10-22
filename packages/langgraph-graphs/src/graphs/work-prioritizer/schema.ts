@@ -18,7 +18,7 @@
 import { z } from "zod";
 
 /** Schema version stamped into every decision payload. */
-export const DECISION_SCHEMA_VERSION = "work-prioritizer.decision/v2" as const;
+export const DECISION_SCHEMA_VERSION = "work-prioritizer.decision/v3" as const;
 
 /** Name of the deterministic ranking procedure (rank.ts). */
 export const RANK_HEURISTIC = "lexicographic heuristic v2" as const;

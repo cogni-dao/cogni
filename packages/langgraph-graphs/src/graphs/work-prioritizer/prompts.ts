@@ -18,7 +18,7 @@ import type { ActiveGoal, FetchedWorkItem, GatheredContext } from "./context";
 import { type ItemJudgment, ItemJudgmentSchema } from "./schema";
 
 export const WORK_PRIORITIZER_PROMPT_VERSION =
-  "work-prioritizer/2026-10-21.v5.0";
+  "work-prioritizer/2026-10-21.v5.1";
 
 export const WORK_PRIORITIZER_GRAPH_NAME = "work-prioritizer" as const;
 
