@@ -8,7 +8,10 @@
  * Invariants:
  *   - GRADERS_ARE_PURE: same input → same verdict; unit-tested in tests/evals/work-prioritizer.score.test.ts.
  *   - GATE = every hard + behavioral check passes; informational rows are reported only.
- *   - PROPOSE_GATE: the graph is propose-only; apply/write graders return with the write path (story.5108).
+ *   - PROPOSE_GATE: the eval's own (API) cycles never write; that gate is unchanged.
+ *   - WRITE_SECTION (story.5108): only when the env applies — a scheduled cycle's plan is read back from the live
+ *     store: p2–p4 rows landed (or lost a compare-and-set to another writer), and no p0/p1 row landed without the
+ *     node-admin grant (story.5075).
  * Side-effects: none
  * Links: evals/work-prioritizer/README.md, run.ts
  * @public
@@ -22,6 +25,7 @@ export interface SnapshotItem {
   readonly revision?: number;
   readonly blockedBy?: string;
   readonly priority?: number | null;
+  readonly rank?: number | null;
 }
 
 export interface Fixture {
@@ -262,6 +266,67 @@ export function gradeZeroWrites(
     : ok("0 work-item writes");
 }
 
+/** How one scheduled-cycle plan row reads back from the live store (WRITE_SECTION). */
+export type ApplyReadBack = "landed" | "conflict" | "missed" | "gone";
+
+/**
+ * `landed`: the live item shows the row's priority + rank at a newer revision. `missed`: still at the snapshot
+ * revision without the row's values (nobody wrote — the apply did not happen). `conflict`: another writer moved
+ * the revision first (a lost compare-and-set, or a later overwrite). `gone`: no longer in the backlog.
+ */
+export function readBackRow(
+  row: DecisionPayload["plan"][number],
+  live: SnapshotItem | undefined
+): ApplyReadBack {
+  if (!live) return "gone";
+  const newer =
+    live.revision !== undefined &&
+    row.expectedRevision !== null &&
+    live.revision > row.expectedRevision;
+  if (newer && live.priority === row.to && live.rank === row.rank)
+    return "landed";
+  return newer ? "conflict" : "missed";
+}
+
+/** WRITE_SECTION: every changed p2–p4 row of the scheduled plan landed or lost its CAS to another writer. */
+export function gradeAppliedRows(
+  payload: DecisionPayload,
+  live: readonly SnapshotItem[]
+): CheckResult {
+  const byId = new Map(live.map((i) => [i.id, i]));
+  const rows = payload.plan.filter((r) => r.to >= 2);
+  if (rows.length === 0)
+    return fail(
+      "the scheduled plan has no p2–p4 rows — write path unexercised"
+    );
+  const n = { landed: 0, conflict: 0, missed: 0, gone: 0 };
+  const missed: string[] = [];
+  for (const r of rows) {
+    const k = readBackRow(r, byId.get(r.itemId));
+    n[k] += 1;
+    if (k === "missed")
+      missed.push(`${r.itemId} (want p${r.to} rank ${r.rank})`);
+  }
+  const counts = `${n.landed} landed · ${n.conflict} conflict · ${n.gone} gone · ${n.missed} missed of ${rows.length}`;
+  if (missed.length) return fail(`${counts}: ${missed.slice(0, 5).join(", ")}`);
+  return n.landed > 0 ? ok(counts) : fail(`${counts} — no p2–p4 write landed`);
+}
+
+/** WRITE_SECTION: without the node-admin grant, no p0/p1 row of the scheduled plan landed. */
+export function gradeNoP0P1Writes(
+  payload: DecisionPayload,
+  live: readonly SnapshotItem[]
+): CheckResult {
+  const byId = new Map(live.map((i) => [i.id, i]));
+  const rows = payload.plan.filter((r) => r.to <= 1);
+  const landed = rows
+    .filter((r) => readBackRow(r, byId.get(r.itemId)) === "landed")
+    .map((r) => `${r.itemId} → p${r.to}`);
+  return landed.length
+    ? fail(`p0/p1 writes landed without the grant: ${landed.join(", ")}`)
+    : ok(`0/${rows.length} p0/p1 plan rows written (denied, stays a proposal)`);
+}
+
 /** At most 10% of rows unjudged (the model never judged them, even after per-item repair). */
 export function gradeUnjudged(payload: DecisionPayload): CheckResult {
   const n = payload.unjudged.length;
@@ -420,7 +485,7 @@ export interface Scorecard {
   readonly baseUrl: string;
   readonly model: string;
   readonly promptVersion: string | null;
-  readonly mode: "propose";
+  readonly mode: "propose" | "apply";
   readonly decisionIds: readonly string[];
   readonly checks: Readonly<Record<string, CheckResult>>;
   /** Informational rows — reported, never gating. */

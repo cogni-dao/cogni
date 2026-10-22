@@ -12,6 +12,9 @@
  *     as one `<graph_report>` delta by the provider (catalog `report`); `/api/v1/ai/runs` status is only the
  *     fallback. No log queries.
  *   - SCHEDULED_AT_SHA: the governance schedule must also have run the graph ≥ minScheduledCycles times at the SHA.
+ *   - WRITE_SECTION (story.5108): only with `--apply` / EVAL_APPLY=1 (the env's schedule applies). Seeds one item
+ *     (a change ⇒ the next scheduled cycle files and applies), waits for that scheduled cycle, reads its plan back
+ *     via GET /api/v1/work/items: p2–p4 + rank landed (or lost a CAS), zero p0/p1 landed; always deletes the seed.
  *   - GOALS_FIRST: the node must have approved goals (listActiveGoals, read via the cognition bundle); none or
  *     unreadable ⇒ INCONCLUSIVE before any cycle.
  *   - EXIT_CODE_IS_VERDICT: exit 0 only when every hard + behavioral check passes; 1 = FAIL;
@@ -33,12 +36,14 @@ import {
 import {
   type CheckResult,
   type Fixture,
+  gradeAppliedRows,
   gradeCoverage,
   gradeDeltaCoverage,
   gradeGates,
   gradeGoalCitation,
   gradeGoalsReported,
   gradeHarmEvidence,
+  gradeNoP0P1Writes,
   gradePriorReference,
   gradeRationale,
   gradeResponsiveness,
@@ -64,6 +69,12 @@ interface Config {
 
 interface FixtureFile extends Fixture {
   incidentSeed: {
+    type: string;
+    title: string;
+    summary: string;
+    outcome: string;
+  };
+  applySeed: {
     type: string;
     title: string;
     summary: string;
@@ -106,6 +117,9 @@ const argOf = (flag: string) => {
   return i > -1 ? process.argv[i + 1] : undefined;
 };
 const OUT = argOf("--out");
+/** WRITE_SECTION: the env's governance schedule applies (repo-spec `apply` true for this environment). */
+const APPLY =
+  process.env.EVAL_APPLY === "1" || process.argv.includes("--apply");
 /** The SHA under test — pinned by the caller, never read from live /version. */
 const EXPECTED_SHA = process.env.EVAL_EXPECTED_SHA ?? argOf("--sha");
 /** When the SHA landed on the candidate (ISO); scheduled cycles are counted from here. */
@@ -327,6 +341,57 @@ async function assertSha(underTest: string): Promise<void> {
     );
 }
 
+/**
+ * WRITE_SECTION (story.5108): seed one item so the next scheduled cycle has a change (it files + applies), wait
+ * for that scheduled cycle, then read its plan back from the live store. Always deletes the seed.
+ */
+async function writeSection(
+  underTest: string
+): Promise<Record<string, CheckResult>> {
+  const APPLIED = "applied rows (scheduled, p2–p4 + rank)";
+  const P0P1 = "zero p0/p1 writes (no grant)";
+  const seededAt = Date.now();
+  const seed = await api<{ id: string }>("/api/v1/work/items", {
+    method: "POST",
+    body: JSON.stringify(fixture.applySeed),
+  });
+  try {
+    const deadline = Date.now() + config.scheduledWaitMs;
+    while ((await scheduledRuns(seededAt)) < 1 && Date.now() < deadline) {
+      await assertSha(underTest);
+      await sleep(20_000);
+    }
+    await assertSha(underTest);
+    if ((await scheduledRuns(seededAt)) < 1) {
+      const why = none("no successful scheduled cycle after the seed");
+      return { [APPLIED]: why, [P0P1]: why };
+    }
+    const id =
+      (await decisionIds()).find(
+        (d) => d.createdAt && Date.parse(d.createdAt) >= seededAt
+      )?.id ?? null;
+    const payload = await pollUntil(() => loadDecision(id).catch(() => null), {
+      timeoutMs: 90_000,
+      intervalMs: 5_000,
+    });
+    if (!payload) {
+      const why = none(
+        `scheduled cycle filed no readable decision (${id ?? "none"})`
+      );
+      return { [APPLIED]: why, [P0P1]: why };
+    }
+    const live = await snapshot();
+    return {
+      [APPLIED]: gradeAppliedRows(payload, live),
+      [P0P1]: gradeNoP0P1Writes(payload, live),
+    };
+  } finally {
+    await api(`/api/v1/work/items/${seed.id}`, { method: "DELETE" }).catch(
+      (e) => console.error(`cleanup ${seed.id}: ${String(e)}`)
+    );
+  }
+}
+
 /** The hard checks every filed decision must pass (coverage is graded per cycle kind). */
 /** The hard checks every filed decision must pass (coverage is graded per cycle kind). */
 function hardChecks(
@@ -408,6 +473,8 @@ async function runEval(underTest: string): Promise<void> {
     scheduled = await scheduledRuns(landedAt);
   }
   await assertSha(underTest);
+  // WRITE_SECTION: only when this env's schedule applies; the propose gate above is unchanged.
+  const write = APPLY ? await writeSection(underTest) : {};
 
   const checks: Record<string, CheckResult> = {
     "coverage (full review, cycle 1)": c1.payload
@@ -451,6 +518,7 @@ async function runEval(underTest: string): Promise<void> {
       pass: scheduled >= config.minScheduledCycles,
       reason: `${scheduled} successful scheduled cycles since ${new Date(landedAt).toISOString()}`,
     },
+    ...write,
   };
   const card: Scorecard = {
     buildSha: underTest,
@@ -458,7 +526,7 @@ async function runEval(underTest: string): Promise<void> {
     model: MODEL,
     promptVersion:
       c1.payload?.promptVersion ?? c1.report?.promptVersion ?? null,
-    mode: "propose",
+    mode: APPLY ? "apply" : "propose",
     decisionIds: [c1.id, c2.id, c3.id].filter((x): x is string => Boolean(x)),
     checks,
     // Informational only — an empty p0 is a correct answer, so nothing here gates.

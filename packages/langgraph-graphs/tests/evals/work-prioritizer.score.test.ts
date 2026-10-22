@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/tests/evals/work-prioritizer.score`
- * Purpose: Tests for the work-prioritizer eval graders (propose mode).
+ * Purpose: Tests for the work-prioritizer eval graders (propose mode + the story.5108 write section).
  * Scope: Pure grader tests over hand-made decisions; does not call a node or an LLM.
  * Invariants: GRADERS_ARE_PURE; each check fails for exactly the defect it names.
  * Side-effects: none
@@ -15,12 +15,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   type Fixture,
+  gradeAppliedRows,
   gradeCoverage,
   gradeDeltaCoverage,
   gradeGates,
   gradeGoalCitation,
   gradeGoalsReported,
   gradeHarmEvidence,
+  gradeNoP0P1Writes,
   gradePriorReference,
   gradeRationale,
   gradeResponsiveness,
@@ -31,6 +33,7 @@ import {
   infoPmOverlap,
   mergeLabelled,
   pollUntil,
+  readBackRow,
   scorecardMarkdown,
   standingDecisionId,
 } from "../../evals/work-prioritizer/score";
@@ -493,5 +496,110 @@ describe("work-prioritizer graders", () => {
       pass: false,
       reason: "A: ok; B: missing x",
     });
+  });
+});
+
+describe("work-prioritizer write section (story.5108)", () => {
+  const plan = (
+    itemId: string,
+    to: number,
+    rank: number,
+    expectedRevision: number | null = 2
+  ) => ({
+    itemId,
+    from: 3,
+    to,
+    rank,
+    expectedRevision,
+    goal: to <= 1 ? R : null,
+  });
+  const scheduled = decision([], {
+    plan: [
+      plan("task.p2", 2, 3),
+      plan("task.p3", 3, 4),
+      plan("task.raced", 2, 5),
+      plan("task.p1", 1, 1),
+    ],
+  });
+  const live = (
+    o: Record<string, { priority: number; rank: number; revision: number }>
+  ) =>
+    Object.entries(o).map(([id, v]) => ({
+      id,
+      status: "needs_implement",
+      ...v,
+    }));
+
+  it("readBackRow: landed / conflict / missed / gone", () => {
+    const r = plan("x", 2, 3);
+    expect(
+      readBackRow(r, {
+        id: "x",
+        status: "s",
+        priority: 2,
+        rank: 3,
+        revision: 3,
+      })
+    ).toBe("landed");
+    expect(
+      readBackRow(r, {
+        id: "x",
+        status: "s",
+        priority: 4,
+        rank: 9,
+        revision: 3,
+      })
+    ).toBe("conflict");
+    expect(
+      readBackRow(r, {
+        id: "x",
+        status: "s",
+        priority: 3,
+        rank: 9,
+        revision: 2,
+      })
+    ).toBe("missed");
+    expect(readBackRow(r, undefined)).toBe("gone");
+  });
+
+  it("passes when p2–p4 rows landed (a raced row counts as a handled conflict) and no p0/p1 landed", () => {
+    const store = live({
+      "task.p2": { priority: 2, rank: 3, revision: 3 },
+      "task.p3": { priority: 3, rank: 4, revision: 3 },
+      "task.raced": { priority: 4, rank: 7, revision: 5 },
+      "task.p1": { priority: 3, rank: 9, revision: 2 },
+    });
+    expect(gradeAppliedRows(scheduled, store)).toEqual({
+      pass: true,
+      reason: "2 landed · 1 conflict · 0 gone · 0 missed of 3",
+    });
+    expect(gradeNoP0P1Writes(scheduled, store).pass).toBe(true);
+  });
+
+  it("fails a p2–p4 row nobody wrote (apply missed) and a p0/p1 row that landed without the grant", () => {
+    const store = live({
+      "task.p2": { priority: 3, rank: 9, revision: 2 },
+      "task.p3": { priority: 3, rank: 4, revision: 3 },
+      "task.raced": { priority: 2, rank: 5, revision: 3 },
+      "task.p1": { priority: 1, rank: 1, revision: 3 },
+    });
+    const applied = gradeAppliedRows(scheduled, store);
+    expect(applied.pass).toBe(false);
+    expect(applied.reason).toContain("task.p2 (want p2 rank 3)");
+    expect(gradeNoP0P1Writes(scheduled, store)).toEqual({
+      pass: false,
+      reason: "p0/p1 writes landed without the grant: task.p1 → p1",
+    });
+  });
+
+  it("an unexercised write path (no p2–p4 rows, or none landed) is not a pass", () => {
+    expect(
+      gradeAppliedRows(decision([], { plan: [plan("task.p1", 1, 1)] }), []).pass
+    ).toBe(false);
+    const raced = live({ "task.p2": { priority: 4, rank: 1, revision: 9 } });
+    expect(
+      gradeAppliedRows(decision([], { plan: [plan("task.p2", 2, 3)] }), raced)
+        .pass
+    ).toBe(false);
   });
 });
