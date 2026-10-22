@@ -25,5 +25,19 @@
       "critical": 15,
       "direction": "below"
     }
+  },
+  "objectives": {
+    "nodeAvailability": {
+      "window": "24h",
+      "targetPercent": 99.9
+    },
+    "throttleController": {
+      "window": "10m",
+      "minSweeps": 1
+    },
+    "backupReceipts": {
+      "window": "26h",
+      "minReceipts": 1
+    }
   }
 }
