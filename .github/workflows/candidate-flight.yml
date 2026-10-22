@@ -644,7 +644,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
+          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py claim .
 
           PRESERVED_IMAGE_REF=""
           if [ "$DEPLOYMENT_PROVIDER" = "k3s" ]; then
@@ -687,7 +687,7 @@ jobs:
               "nodes/${NODE}/k8s/external-secrets/candidate-a/"
           fi
 
-          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
+          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py preserve .
           git add -A
           if git diff --cached --quiet; then
             echo "Deploy branch ${PER_NODE_BRANCH} already has substrate shape"
@@ -1080,6 +1080,7 @@ jobs:
           NODE: ${{ matrix.node }}
           CI_SOURCE_ROOT: ${{ github.workspace }}/ci-src
           APP_SOURCE_ROOT: ${{ github.workspace }}/app-src
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha || fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
         run: pnpm --dir ci-src exec tsx --tsconfig nodes/operator/app/tsconfig.app.json scripts/ops/maintenance-drain.mjs candidate-preflight
 
       - name: Provision node state and assert Akash prerequisites

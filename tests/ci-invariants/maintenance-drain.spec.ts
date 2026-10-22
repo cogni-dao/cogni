@@ -26,6 +26,153 @@ const modulePath = pathToFileURL(
 const ops = await import(modulePath);
 
 describe("maintenance drain proof boundary", () => {
+  it("binds active qualification to one workflow owner, preserves its artifact and refuses stale claims", () => {
+    const program = `
+import copy,datetime,hashlib,importlib.util,json,os,pathlib,subprocess,sys,tempfile
+spec=importlib.util.spec_from_file_location("fence",sys.argv[1]);f=importlib.util.module_from_spec(spec);spec.loader.exec_module(f)
+now=datetime.datetime(2026,10,22,20,0,tzinfo=datetime.timezone.utc)
+env={"GITHUB_REPOSITORY":"cogni-dao/cogni","GITHUB_WORKFLOW_SHA":"d"*40,"GITHUB_RUN_ID":"123","GITHUB_RUN_ATTEMPT":"1"}
+node="b927a9dd-6132-4fc9-a51e-e3cee2568e3c";source="b"*40;repo="cogni-dao/node-template"
+image="ghcr.io/cogni-dao/node-template@sha256:"+"e"*64
+bundle="ghcr.io/cogni-dao/node-template@sha256:"+"f"*64
+xr={"kind":"XComputeWorkload","metadata":{"namespace":"cogni-candidate-a"},"spec":{"nodeId":node,"environment":"candidate-a","bundle":{"ref":bundle,"source":{"repository":repo,"sha":source},"artifacts":[{"name":"app","image":image}]}}}
+data=(json.dumps(xr)+"\\n").encode()
+marker={"version":1,"phase":"qualifying","operationId":"a"*64,"request":{"nodeId":node,"slug":"node-template","env":"candidate-a","sourceRepository":repo,"sourceSha":source},"qualification":{"phase":"active","activationHead":"c"*40,"manifestSha256":hashlib.sha256(data).hexdigest(),"bundleDigest":bundle,"imageDigest":image,"nativeAuditDigest":"1"*64,"providerClosureDigest":"2"*64,"sourceExclusionDigest":"3"*64,"workflowSha":"d"*40,"issuedAt":now.isoformat(),"expiresAt":(now+datetime.timedelta(hours=1)).isoformat(),"owner":None}}
+f.check_qualification(marker,repo,source,environment=env,now=now,require_owner=False)
+def rejected(value,environment=env):
+ try:f.check_qualification(value,repo,source,environment=environment,now=now);raise AssertionError("invalid admission allowed")
+ except RuntimeError:pass
+rejected(marker) # An unclaimed grant cannot mutate the watched ref.
+owned=copy.deepcopy(marker);owned["qualification"]["owner"]={"runId":"123","runAttempt":"1"}
+f.check_qualification(owned,repo,source,environment=env,now=now)
+for key,value in (("GITHUB_RUN_ID","124"),("GITHUB_RUN_ATTEMPT","2"),("GITHUB_WORKFLOW_SHA","e"*40),("GITHUB_REPOSITORY","foreign/repo")):
+ rejected(owned,{**env,key:value})
+for section,key,value in (("qualification","phase","inert"),("qualification","nativeAuditDigest",None),("qualification","providerClosureDigest",None),("qualification","sourceExclusionDigest",None),("qualification","expiresAt",now.isoformat()),("request","env","production"),("request","sourceSha","c"*40)):
+ bad=copy.deepcopy(owned);bad[section][key]=value;rejected(bad)
+def git(root,*args):return subprocess.check_output(["git","-C",str(root),*args],stderr=subprocess.PIPE,text=True).strip()
+with tempfile.TemporaryDirectory() as directory:
+ root=pathlib.Path(directory);bare=root/"remote.git";work=root/"work";other=root/"other"
+ subprocess.run(["git","init","--bare",str(bare)],check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+ subprocess.run(["git","clone",str(bare),str(work)],check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+ git(work,"config","user.email","fixture@example.test");git(work,"config","user.name","Owned fixture")
+ path=work/"infra/k8s/overlays/candidate-a/node-template";path.mkdir(parents=True)
+ (path/"xcomputeworkload.yaml").write_bytes(data);(path/"kustomization.yaml").write_text("resources:\\n- xcomputeworkload.yaml\\n- custody.yaml\\n")
+ git(work,"add",".");git(work,"commit","-m","Root exact activation")
+ marker["qualification"]["activationHead"]=git(work,"rev-parse","HEAD")
+ # Runtime absence/audit happened in the finite maintainer packet, not in these pure grant checks.
+ actual=datetime.datetime.now(datetime.timezone.utc);marker["qualification"]["issuedAt"]=actual.isoformat();marker["qualification"]["expiresAt"]=(actual+datetime.timedelta(hours=1)).isoformat()
+ state=work/".promote-state";state.mkdir();(state/"maintenance-drain.json").write_text(json.dumps(marker))
+ git(work,"add",".");git(work,"commit","-m","Root finite reapplication grant")
+ branch="deploy/candidate-a-node-template";git(work,"push","origin","HEAD:"+branch)
+ os.environ.update(env)
+ f.claim_qualification(work,repo,source)
+ claimed=git(work,"rev-parse","HEAD");f.check(work,repo,source)
+ f.claim_qualification(work,repo,source);assert git(work,"rev-parse","HEAD")==claimed
+ # Ordinary preparation's old overlay is discarded; exact already-active app and custody references survive.
+ (path/"xcomputeworkload.yaml").write_text("HISTORICAL_APP_DO_NOT_RESTORE")
+ (path/"kustomization.yaml").write_text("resources: []")
+ f.preserve_qualification(work,repo,source)
+ assert (path/"xcomputeworkload.yaml").read_bytes()==data
+ assert "custody.yaml" in (path/"kustomization.yaml").read_text()
+ os.environ["GITHUB_RUN_ATTEMPT"]="2"
+ try:f.claim_qualification(work,repo,source);raise AssertionError("new attempt stole owner")
+ except RuntimeError as e:assert str(e)=="maintenance_qualification_owner_mismatch"
+ os.environ.update(env)
+ # A regrant on the remote cannot be overwritten by this stale claimant.
+ local=json.loads((state/"maintenance-drain.json").read_text());local["qualification"]["owner"]=None
+ (state/"maintenance-drain.json").write_text(json.dumps(local));git(work,"add",".");git(work,"commit","-m","Fresh grant")
+ git(work,"push","origin","HEAD:"+branch)
+ subprocess.run(["git","clone","--branch",branch,str(bare),str(other)],check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+ git(other,"config","user.email","fixture@example.test");git(other,"config","user.name","Owned fixture")
+ (other/"root-change").write_text("fresh maintainer state");git(other,"add",".");git(other,"commit","-m","Owner changed remote");git(other,"push","origin","HEAD:"+branch)
+ try:f.claim_qualification(work,repo,source);raise AssertionError("stale head admitted")
+ except RuntimeError as e:assert str(e)=="maintenance_qualification_head_changed"
+`;
+    execFileSync(
+      "python3",
+      ["-c", program, path.join(root, "scripts/ci/lib/maintenance-fence.py")],
+      {
+        stdio: "pipe",
+        timeout: 15000,
+      }
+    );
+  });
+
+  it("keeps later compatible candidate flights out of the empty-bootstrap gate", async () => {
+    const request = {
+      nodeId: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c",
+      slug: "node-template",
+      env: "candidate-a",
+      sourceSha: "c".repeat(40),
+    };
+    const receipt = {
+      version: 1,
+      phase: "audited",
+      operationId: "a".repeat(64),
+      request: {
+        ...request,
+        sourceRepository: "cogni-dao/node-template",
+        sourceSha: "b".repeat(40),
+      },
+    };
+    const cluster = {
+      xrs: [{ uid: "existing-compatible-xr", bundleSource: "b".repeat(40) }],
+      producers: [],
+    };
+    const verify = vi.fn();
+    await ops.verifyAuditedCandidateAdmission(
+      receipt,
+      cluster,
+      request,
+      verify
+    );
+    expect(verify.mock.calls).toEqual([
+      [receipt, request.sourceSha],
+      [receipt, "b".repeat(40)],
+    ]);
+    const rejected = vi.fn(() => {
+      throw new Error("maintenance_compatibility_floor_violation");
+    });
+    await expect(
+      ops.verifyAuditedCandidateAdmission(receipt, cluster, request, rejected)
+    ).rejects.toThrow("maintenance_compatibility_floor_violation");
+    for (const change of [
+      { request: { ...receipt.request, env: "production" } },
+      { request: { ...receipt.request, nodeId: "foreign" } },
+      { request: { ...receipt.request, slug: "toks5" } },
+    ]) {
+      await expect(
+        ops.verifyAuditedCandidateAdmission(
+          { ...receipt, ...change },
+          cluster,
+          request,
+          verify
+        )
+      ).rejects.toThrow("maintenance_candidate_floor_scope_mismatch");
+    }
+    for (const badCluster of [
+      { ...cluster, producers: [{ uid: "legacy-pod" }] },
+      { ...cluster, xrs: [{ uid: "unknown-source" }] },
+      { ...cluster, xrs: [...cluster.xrs, ...cluster.xrs] },
+    ]) {
+      await expect(
+        ops.verifyAuditedCandidateAdmission(
+          receipt,
+          badCluster,
+          request,
+          verify
+        )
+      ).rejects.toThrow("maintenance_candidate_live_source_unproven");
+    }
+    // The auditor/floor remains necessary after an app crash removes the XR.
+    await ops.verifyAuditedCandidateAdmission(
+      receipt,
+      { xrs: [], producers: [] },
+      request,
+      verify
+    );
+  });
+
   it("denies present malformed/active fences and unmerged floors; stale writers cannot push", () => {
     const program = `
 import importlib.util,json,pathlib,subprocess,sys,tempfile
