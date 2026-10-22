@@ -1437,10 +1437,21 @@ printf '%s=%s\n' COGNI_NODE_ENDPOINTS "${LITELLM_NODE_ENDPOINTS:?LITELLM_NODE_EN
 printf '%s=%s\n' COGNI_DEFAULT_NODE_ID "${COGNI_DEFAULT_NODE_ID:?COGNI_DEFAULT_NODE_ID required}" >> "$RUNTIME_ENV"
 # Multi-node DB provisioning
 append_env_if_set "$RUNTIME_ENV" COGNI_NODE_DBS "${COGNI_NODE_DBS-}"
-# Database backup cadence. A systemd timer runs the Compose db-backup profile as
-# a one-shot container; defaults avoid requiring new GitHub Environment secrets.
+# Database backup policy (story.5084). A wall-clock systemd timer runs the Compose
+# db-backup profile as a one-shot container; defaults avoid requiring new GitHub
+# Environment secrets. Daily app+temporal, weekly DB_BACKUP_WEEKLY_DATABASES, dumps
+# bounded to ~8 GB and never written below the 16000 MB hard floor (>15% crit on the
+# 100 GB production root). Previously this wrote RETENTION_DAYS=14, silently
+# overriding the compose/backup.sh 5-day bound from bug.5105.
 printf '%s=%s\n' DB_BACKUP_INTERVAL_SECONDS "${DB_BACKUP_INTERVAL_SECONDS:-86400}" >> "$RUNTIME_ENV"
-printf '%s=%s\n' DB_BACKUP_RETENTION_DAYS "${DB_BACKUP_RETENTION_DAYS:-14}" >> "$RUNTIME_ENV"
+printf '%s=%s\n' DB_BACKUP_RETENTION_DAYS "${DB_BACKUP_RETENTION_DAYS:-7}" >> "$RUNTIME_ENV"
+printf '%s=%s\n' DB_BACKUP_WEEKLY_DATABASES "${DB_BACKUP_WEEKLY_DATABASES-cogni_poly}" >> "$RUNTIME_ENV"
+printf '%s=%s\n' DB_BACKUP_WEEKLY_INTERVAL_DAYS "${DB_BACKUP_WEEKLY_INTERVAL_DAYS:-7}" >> "$RUNTIME_ENV"
+printf '%s=%s\n' DB_BACKUP_WEEKLY_RETENTION_DAYS "${DB_BACKUP_WEEKLY_RETENTION_DAYS:-14}" >> "$RUNTIME_ENV"
+printf '%s=%s\n' DB_BACKUP_MIN_FREE_MB "${DB_BACKUP_MIN_FREE_MB:-21000}" >> "$RUNTIME_ENV"
+printf '%s=%s\n' DB_BACKUP_HARD_FLOOR_MB "${DB_BACKUP_HARD_FLOOR_MB:-16000}" >> "$RUNTIME_ENV"
+printf '%s=%s\n' DB_BACKUP_WRITE_RESERVE_MB "${DB_BACKUP_WRITE_RESERVE_MB:-3000}" >> "$RUNTIME_ENV"
+printf '%s=%s\n' DB_BACKUP_MAX_TOTAL_MB "${DB_BACKUP_MAX_TOTAL_MB:-8192}" >> "$RUNTIME_ENV"
 printf '%s=%s\n' DB_BACKUP_OBSERVABILITY_GRACE_SECONDS "${DB_BACKUP_OBSERVABILITY_GRACE_SECONDS:-90}" >> "$RUNTIME_ENV"
 
 # ── Derived database credentials ─────────────────────────────────────────
@@ -1515,24 +1526,8 @@ HASH_DIR="/var/lib/cogni" \
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 2.5: Disk cleanup gate (before any image pulls)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-AVAIL_GB=$(df -BG / | tail -1 | awk '{print $4}' | tr -d G)
-USED_PCT=$(df / | tail -1 | awk '{print $5}' | tr -d %)
-
-log_info "Disk: ${AVAIL_GB}GB free, ${USED_PCT}% used"
-
-if [ "$AVAIL_GB" -lt 7 ] || [ "$USED_PCT" -gt 70 ]; then
-  log_warn "Low disk space (${AVAIL_GB}GB free, ${USED_PCT}% used). Running cleanup..."
-  docker system prune -af || true
-  journalctl --vacuum-time=3d || true
-
-  AVAIL_GB=$(df -BG / | tail -1 | awk '{print $4}' | tr -d G)
-  log_info "Free space after cleanup: ${AVAIL_GB}GB"
-
-  if [ "$AVAIL_GB" -lt 5 ]; then
-    log_error "Insufficient disk after cleanup (${AVAIL_GB}GB free)."
-    exit 1
-  fi
-fi
+# scripts/ci/lib/reclaim-vm-disk.sh: Docker + k3s containerd image prune (bug.5499).
+bash /tmp/reclaim-vm-disk.sh || { log_error "Disk gate failed"; exit 1; }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 3: Authenticate to GHCR
@@ -2114,45 +2109,14 @@ if systemctl is-active --quiet cogni-db-backup.service; then
 else
   $RUNTIME_COMPOSE --profile backup rm -f db-backup 2>/dev/null || true
 fi
-DOCKER_BIN=$(command -v docker)
-BACKUP_INTERVAL_SECONDS="${DB_BACKUP_INTERVAL_SECONDS:-86400}"
-cat >/etc/systemd/system/cogni-db-backup.service <<SYSTEMD_SERVICE_EOF
-[Unit]
-Description=Cogni runtime Postgres logical backup
-Requires=docker.service
-After=docker.service
-
-[Service]
-Type=oneshot
-WorkingDirectory=/opt/cogni-template-runtime
-ExecStart=${DOCKER_BIN} compose --project-name cogni-runtime --env-file /opt/cogni-template-runtime/.env -f /opt/cogni-template-runtime/docker-compose.yml --profile backup up --force-recreate --no-deps --abort-on-container-exit --exit-code-from db-backup db-backup
-ExecStartPost=-${DOCKER_BIN} compose --project-name cogni-runtime --env-file /opt/cogni-template-runtime/.env -f /opt/cogni-template-runtime/docker-compose.yml --profile backup rm -f db-backup
-TimeoutStartSec=2h
-SYSTEMD_SERVICE_EOF
-
-cat >/etc/systemd/system/cogni-db-backup.timer <<SYSTEMD_TIMER_EOF
-[Unit]
-Description=Run Cogni runtime Postgres logical backup
-
-[Timer]
-# Relative to timer activation/completion, not machine boot. Reinstalling this
-# timer on a long-running VM must not turn an ordinary infra reconcile into an
-# immediate full-database read, and a slow backup must never compress the next
-# interval or overlap itself.
-OnActiveSec=${BACKUP_INTERVAL_SECONDS}s
-OnUnitInactiveSec=${BACKUP_INTERVAL_SECONDS}s
-AccuracySec=5min
-RandomizedDelaySec=5min
-Unit=cogni-db-backup.service
-
-[Install]
-WantedBy=timers.target
-SYSTEMD_TIMER_EOF
+# Git owns both units and removes unmanaged drop-ins (bug.5501); the wall-clock
+# OnCalendar + Persistent cadence survives reboots and reinstalls (story.5084).
+bash /opt/cogni-template-runtime/db-backup/install-timer.sh
 
 systemctl daemon-reload
 systemctl enable cogni-db-backup.timer
 systemctl reset-failed cogni-db-backup.service 2>/dev/null || true
-log_info "db-backup timer installed with interval ${BACKUP_INTERVAL_SECONDS}s"
+log_info "db-backup timer installed (daily wall-clock, Persistent=true)"
 
 # A full dump is behavioral validation, so run it only in candidate. Preview and
 # production reconciles install the exact same unit/config but do not exercise a
@@ -2835,6 +2799,7 @@ scp $SSH_OPTS \
   "$REPO_ROOT/scripts/ci/ensure-temporal-namespace.sh" \
   "$REPO_ROOT/scripts/ci/bootstrap-openfga.sh" \
   "$REPO_ROOT/scripts/ci/reconcile-edge-caddy.remote.sh" \
+  "$REPO_ROOT/scripts/ci/lib/reclaim-vm-disk.sh" \
   "$REPO_ROOT/scripts/secrets/sync-app-webhook-secret.sh" \
   root@"$VM_HOST":/tmp/
 

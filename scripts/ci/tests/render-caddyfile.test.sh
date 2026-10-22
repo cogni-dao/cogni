@@ -136,9 +136,11 @@ grep -Fq 'if [[ "$DEPLOY_ENVIRONMENT" == candidate-* ]]; then' "$DEPLOY_INFRA" \
   || fail "full backup validation is not candidate-gated"
 grep -Fq 'systemctl start cogni-db-backup.service' "$DEPLOY_INFRA" \
   || fail "candidate validation bypasses the singleton systemd service"
-grep -Fq 'OnUnitInactiveSec=${BACKUP_INTERVAL_SECONDS}s' "$DEPLOY_INFRA" \
-  || fail "backup cadence is not completion-relative"
-! grep -Fq 'OnBootSec=' "$DEPLOY_INFRA" \
+# story.5084: the cadence is a git-owned wall-clock timer (db-backup-policy.test.sh
+# proves the rendered units); a reconcile never fires a boot-relative full dump.
+grep -Fq 'bash /opt/cogni-template-runtime/db-backup/install-timer.sh' "$DEPLOY_INFRA" \
+  || fail "backup timer is not rendered by the git-owned installer"
+! grep -Fq 'OnBootSec=' "$DEPLOY_INFRA" infra/compose/runtime/db-backup/install-timer.sh \
   || fail "boot-relative timer can launch a full dump during ordinary reconcile"
 ! grep -Fq '$RUNTIME_COMPOSE --profile backup stop db-backup' "$DEPLOY_INFRA" \
   || fail "reconcile still kills an in-progress backup"

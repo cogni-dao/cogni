@@ -63,6 +63,11 @@ write_files:
       kubelet-arg:
         - "system-reserved=memory=${system_reserved_memory}"
         - "eviction-hard=memory.available<${eviction_hard_memory}"
+        # bug.5499: migrate-Job image pulls grew containerd ~26 GB in 8h on prod while
+        # image GC waited for the 85% default (= the 15% headroom crit line). Collect
+        # unused images from 70% down to 60% instead.
+        - "image-gc-high-threshold=70"
+        - "image-gc-low-threshold=60"
       # KINE_WRITES_ARE_THE_COST: every Event create/update is a row in kine's
       # append-only revision history. A flapping probe can emit tens of thousands
       # of Event updates (2026-09-09: openbao readiness had 20,920) — a major

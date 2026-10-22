@@ -60,6 +60,7 @@ PARALLEL=(
   resolve-remote-source-sha.test.sh
   compute-workload-manifest-file.test.sh
   render-caddyfile.test.sh
+  db-backup-policy.test.sh
   reconcile-edge-caddy.test.sh
   reconcile-node-dns.test.sh
   check-deploy-ref-ancestry.test.sh

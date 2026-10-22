@@ -463,6 +463,8 @@ services:
       # bug.5105 follow-up: 14d x ~1.5GB/night filled / to 82% and stalled the k3s API.
       DB_BACKUP_RETENTION_DAYS: ${DB_BACKUP_RETENTION_DAYS:-5}
       DB_BACKUP_MIN_FREE_MB: ${DB_BACKUP_MIN_FREE_MB:-15000}
+      # Dev laptops: the hard write floor must stay <= MIN_FREE_MB (backup.sh fails closed).
+      DB_BACKUP_HARD_FLOOR_MB: ${DB_BACKUP_HARD_FLOOR_MB:-5000}
       DB_BACKUP_MIN_KEEP: ${DB_BACKUP_MIN_KEEP:-2}
       DB_BACKUP_OBSERVABILITY_GRACE_SECONDS: ${DB_BACKUP_OBSERVABILITY_GRACE_SECONDS:-90}
     volumes:
