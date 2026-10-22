@@ -120,5 +120,7 @@ Bootstrap application runtime dependencies.
 
 ## Notes
 
+- Work-item content uses `WorkItemsContentPort`; existing PostgreSQL coordination remains behind the separate lazy `getWorkItemSessionPort()`. Shared Dolt native admission never becomes the session authority.
+
 - System installers moved to scripts/bootstrap/
 - Focus on runtime composition only

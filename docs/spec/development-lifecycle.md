@@ -46,8 +46,9 @@ The full design is the rest of this spec — Interaction Graph (component map), 
                   ║              ║
 ┌──────────────────────────────────────────────┐
 │            CONTRIBUTOR (agent or human)      │
-│  /idea → /triage → /design → /implement →    │
-│  /closeout → /validate-candidate             │
+│  /idea → /triage → /design → /implement(PR) →│
+│  /review-implementation ∥ CI → flight →      │
+│  /validate-candidate → /closeout (merge)     │
 └──────────────────────────────────────────────┘
    │   ▲           │   ▲                │   ▲
    │   │ nextAction│   │ comment         │   │ comment
@@ -91,7 +92,7 @@ If something proposes a design change in a PR comment, that's a bug — capture 
 
 ## Status Machine
 
-9 status values. Every `needs_*` status has exactly one command that resolves it.
+9 status values. Every `needs_*` status has one command that does its work; `needs_design` and `needs_merge` also need a fresh reviewer before the item advances.
 
 ```mermaid
 graph LR
@@ -102,21 +103,21 @@ graph LR
   needs_triage -->|"/triage: task/bug complex"| needs_design
   needs_triage -->|"/triage: task/bug simple"| needs_implement
   needs_research -->|"/research"| done
-  needs_design -->|"/design"| needs_implement
-  needs_implement -->|"/implement"| needs_closeout
-  needs_closeout -->|"/closeout"| needs_merge
-  needs_merge -->|"APPROVE"| done
+  needs_design -->|"/design, then fresh /review-design APPROVE"| needs_implement
+  needs_implement -->|"/implement opens the PR"| needs_merge
+  needs_merge -->|"fresh review ∥ CI, then flight → validate"| needs_closeout
   needs_merge -->|"REQUEST CHANGES"| needs_implement
+  needs_closeout -->|"/closeout: operator merge"| done
 ```
 
-| Status            | Command                  | What happens                                                        |
-| ----------------- | ------------------------ | ------------------------------------------------------------------- |
-| `needs_triage`    | `/triage`                | Routes item; stories → `done`; tasks/bugs → next status             |
-| `needs_research`  | `/research`              | Executes spike; spike → `done`; creates follow-up items             |
-| `needs_design`    | `/design`                | Writes/updates spec; task/bug → `needs_implement`                   |
-| `needs_implement` | `/implement`             | Writes code on branch                                               |
-| `needs_closeout`  | `/closeout`              | Docs/headers pass + creates PR                                      |
-| `needs_merge`     | `/review-implementation` | Reviews PR; APPROVE → `done` or REQUEST CHANGES → `needs_implement` |
+| Status            | Command                      | What happens                                                                                                                                                        |
+| ----------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `needs_triage`    | `/triage`                    | Routes item; stories → `done`; tasks/bugs → next status                                                                                                             |
+| `needs_research`  | `/research`                  | Executes spike; spike → `done`; creates follow-up items                                                                                                             |
+| `needs_design`    | `/design` → `/review-design` | Rigor pass + hub design; fresh review APPROVE → `needs_implement`                                                                                                   |
+| `needs_implement` | `/implement`                 | Test-first code on a branch from `origin/main`, docs pass, opens the PR with Evidence and Merge Danger                                                              |
+| `needs_merge`     | `/review-implementation`     | Fresh two-axis review against outcome and design while CI runs; both green → flight → `/validate-candidate` → `needs_closeout`; REQUEST CHANGES → `needs_implement` |
+| `needs_closeout`  | `/closeout`                  | CI, review and validation verified at one SHA → `POST /vcs/merge` → `done`; durable knowledge refined                                                               |
 
 Terminal: `done` (PR merged; `deploy_verified` tracked separately), `blocked` (`blocked_by:` required), `cancelled`.
 
@@ -198,9 +199,9 @@ curl -s -X POST $BASE/api/v1/work/items/$ID/pr \
 
 `POST /pr` links the PR to both the operator session **and** the durable Dolt work item. The agent does not run `gh pr ready` here — PRs are not "ready for review" until step 7.
 
-### 5. Wait for CI green
+### 5. Review while CI runs
 
-Watch required checks (`unit`, `component`, `static`, `manifest`) on the PR head SHA. Until they're green, the flight endpoint will reject with 422.
+As soon as the PR opens, a fresh agent runs `/review-implementation` while required checks (`unit`, `component`, `static`, `manifest`) run on the PR head SHA. Flight only when review APPROVE and CI are green at the same SHA; until CI is green the flight endpoint rejects with 422.
 
 ### 6. Request candidate-a flight
 
@@ -291,7 +292,7 @@ Distinct specialized agents own each lifecycle stage. No single agent runs the f
 
 ## Validation Contract
 
-Every task and bug **must** include a `## Validation` section before `/closeout` creates the PR (`VALIDATION_REQUIRED`):
+Every task and bug **must** include a `## Validation` section before `/implement` opens the PR (`VALIDATION_REQUIRED`):
 
 ```markdown
 ## Validation
@@ -368,7 +369,7 @@ Missing `Work:` → merge blocked. Missing `Spec:` → warning (blocked if behav
 | `LOOP_LIMIT`                       | `revision >= 5` → `blocked` with escalation note.                                                                                                                                                                                                                                                                          |
 | `STORIES_ARE_INTAKE`               | Stories go `done` after triage. Never enter implementation lifecycle.                                                                                                                                                                                                                                                      |
 | `DEPLOY_VERIFIED_SEPARATE`         | `done` = merged (code gate). `deploy_verified` = qa-agent confirmed post-flight. Never conflate.                                                                                                                                                                                                                           |
-| `VALIDATION_REQUIRED`              | Every task/bug must have `## Validation` with `exercise:` + `observability:` before `/closeout` creates PR.                                                                                                                                                                                                                |
+| `VALIDATION_REQUIRED`              | Every task/bug must have `## Validation` with `exercise:` + `observability:` before `/implement` opens the PR.                                                                                                                                                                                                             |
 | `FEATURE_SMOKE_SCOPED`             | qa-agent validation must exercise the specific feature, not just generic `/readyz`.                                                                                                                                                                                                                                        |
 | `QA_READS_TASK`                    | qa-agent derives its test from the work item `## Validation` block — not from a separate test file.                                                                                                                                                                                                                        |
 | `PR_LINKS_ITEM`                    | Every code PR references exactly one primary work item (`task.*` or `bug.*`) and at least one spec, or `Spec-Impact: none`.                                                                                                                                                                                                |
@@ -399,18 +400,18 @@ Missing `Work:` → merge blocked. Missing `Spec:` → warning (blocked if behav
 
 ## File Pointers
 
-| File                                                                                                               | Purpose                                         |
-| ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- |
-| `.claude/commands/{idea,bug,triage,research,design,task,implement,closeout,review-implementation,pull-request}.md` | Slash command definitions                       |
-| `.claude/skills/contribute-to-cogni/SKILL.md`                                                                      | Executable contributor wrapper                  |
-| `.claude/skills/validate-candidate/SKILL.md`                                                                       | Post-flight validation procedure                |
-| `nodes/operator/app/src/features/work-item-sessions/session-policy.ts`                                             | `nextActionForWorkItem` + session deadline math |
-| `nodes/operator/app/src/contracts/work-item-sessions.v1.contract.ts`                                               | Sessions API Zod contracts                      |
-| `nodes/operator/app/src/app/api/v1/work/items/[id]/{claims,heartbeat,pr,coordination}/route.ts`                    | Sessions REST endpoints                         |
-| `nodes/operator/app/src/app/api/v1/vcs/flight/route.ts`                                                            | Flight primitive                                |
-| `nodes/operator/app/src/app/.well-known/agent.json/route.ts`                                                       | Agent discovery doc                             |
-| `scripts/validate-docs-metadata.mjs`                                                                               | Frontmatter and heading validation              |
-| `infra/github/`                                                                                                    | Merge queue + branch protection fixtures        |
+| File                                                                                                                | Purpose                                         |
+| ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `.claude/commands/{idea,bug,triage,research,design,task,implement,closeout,review-design,review-implementation}.md` | Slash command definitions                       |
+| `.claude/skills/contribute-to-cogni/SKILL.md`                                                                       | Executable contributor wrapper                  |
+| `.claude/skills/validate-candidate/SKILL.md`                                                                        | Post-flight validation procedure                |
+| `nodes/operator/app/src/features/work-item-sessions/session-policy.ts`                                              | `nextActionForWorkItem` + session deadline math |
+| `nodes/operator/app/src/contracts/work-item-sessions.v1.contract.ts`                                                | Sessions API Zod contracts                      |
+| `nodes/operator/app/src/app/api/v1/work/items/[id]/{claims,heartbeat,pr,coordination}/route.ts`                     | Sessions REST endpoints                         |
+| `nodes/operator/app/src/app/api/v1/vcs/flight/route.ts`                                                             | Flight primitive                                |
+| `nodes/operator/app/src/app/.well-known/agent.json/route.ts`                                                        | Agent discovery doc                             |
+| `scripts/validate-docs-metadata.mjs`                                                                                | Frontmatter and heading validation              |
+| `infra/github/`                                                                                                     | Merge queue + branch protection fixtures        |
 
 ## Open Questions
 

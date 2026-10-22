@@ -42,6 +42,7 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@cogni-dao/doltgres-admission": "https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.0/cogni-dao-doltgres-admission-0.1.0.tgz",
     "@cogni/ai-tools": "workspace:*",
     "zod": "^4.1.12"
   },

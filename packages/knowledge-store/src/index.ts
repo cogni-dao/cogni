@@ -173,6 +173,7 @@ export {
   type SourceType,
   SourceTypeSchema,
 } from "./domain/schemas.js";
+export { KnowledgeWriteConflictError } from "./domain/write-replay.js";
 export { createEdoCapability } from "./edo-capability.js";
 export {
   ContributionConflictError,
@@ -209,6 +210,9 @@ export {
   HypothesisMissingEvaluateAtError,
   KnowledgeBusyError,
   type KnowledgeStorePort,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
+  type KnowledgeWriteSession,
   type NewDomain,
   TooManyActiveGoalsError,
 } from "./port/knowledge-store.port.js";

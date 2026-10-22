@@ -43,7 +43,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 **Root barrel** (`@cogni/knowledge-store`):
 
-- Types: `KnowledgeStorePort`, `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
+- Types: `KnowledgeWriteSession`, `KnowledgeStorePort`, `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
 - Schemas: `KnowledgeSchema`, `NewKnowledgeSchema`, `DoltCommitSchema`, `DoltDiffEntrySchema`, `SourceTypeSchema`
 
 **Contribution schemas** (`@cogni/knowledge-store/contribution-schemas`):
@@ -55,7 +55,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 - `DoltgresKnowledgeStoreAdapter`, `DoltgresAdapterConfig`, `buildDoltgresClient`, `DoltgresClientConfig`
 - `DoltgresKnowledgeContributionAdapter`, `DoltgresKnowledgeContributionAdapterConfig` (contribution-branch lifecycle)
-- `DoltBranchSessionRunner` (FIFO admission + pinned branch session + cross-replica advisory lock; branch client is separate from reads)
+- `DoltBranchSessionRunner` (thin operator error/telemetry/budget wrapper over the shared native executor; branch client is separate from reads)
 - `createDoltgresPusher`, `DoltgresPusher`, `DoltgresPushConfig` (post-merge mirror to a Dolt remote; lazy `dolt_remote add` + `dolt_push`)
 - `wrapPushSafe`, `PushOutcomeListener` (fire-and-forget wrapper with injectable success/failure callbacks — keeps logging out of the adapter)
 
@@ -76,8 +76,12 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 ## Notes
 
+- The shared `@cogni-dao/doltgres-admission` engine owns native session capacity, settlement, guards and branch receipts. All executor and mutation imports use the same helper module instance. The private package retains confidence policy, sanitization, outgoing citations and goal-loop exports.
+
 - **postgres.js parameterized queries don't work on Doltgres** — adapter uses `sql.unsafe()` + `escapeValue()` for all queries.
-- **`ON CONFLICT ... EXCLUDED` unsupported** — `upsertKnowledge` uses try-INSERT / catch-duplicate / fallback-UPDATE.
+- **Required logical scope:** raw mutations and `commit` fail closed; use `withWrite({operationId,message}, write => ...)`. Root reads remain ordinary pooled reads.
+- **Shared mechanism:** the published Dolt admission engine owns common native-database locks and isolated branch recovery; this private package preserves operator confidence, sanitizer, outgoing citations and goal-loop policy.
+- **Successful retry identity:** lookup before INSERT under the guard; same payload returns canonical, changed payload conflicts. Unknown mutation acknowledgment returns nonretryable lookup evidence.
 - **JSONB `@>` and ILIKE not supported** — fallbacks: `CAST(tags AS TEXT) LIKE` and `LOWER(col) LIKE`.
 - **Doltgres 0.56 RBAC is non-functional** — GRANT reports success but roles can't even `SELECT current_user`. Runtime `DOLTGRES_URL_*` must connect as `postgres` superuser until upstream lands working role access.
 - **`fetch_types: false` required** on all postgres.js connections (pg_type grants missing).

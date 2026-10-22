@@ -43,7 +43,7 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
   - `ToolImplementation` - Pure execute function interface
   - `BoundTool` - Contract + implementation bundled together
   - `CatalogBoundTool` - Type alias for TOOL_CATALOG entries (type-erased BoundTool)
-  - `ToolResult`, `ToolErrorCode` - Execution result types
+  - `ToolResult`, `ToolErrorCode` - Execution result types, including bounded nonretryable lookup receipts
   - `getCurrentTimeBoundTool`, `GET_CURRENT_TIME_NAME` - Time tool
   - `metricsQueryBoundTool`, `METRICS_QUERY_NAME`, `createMetricsQueryImplementation` - Metrics query tool
   - `webSearchBoundTool`, `WEB_SEARCH_NAME`, `createWebSearchImplementation` - Web search tool

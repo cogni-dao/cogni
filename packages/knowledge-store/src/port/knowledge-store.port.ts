@@ -201,7 +201,58 @@ export class TooManyActiveGoalsError extends Error {
 // Port interface
 // ---------------------------------------------------------------------------
 
+/** Scoped row/edge API. It expires when withWrite returns; commit belongs to the adapter. */
+export type KnowledgeWriteSession = Omit<
+  KnowledgeStorePort,
+  "withWrite" | "registerDomain" | "commit"
+>;
+
+export class KnowledgeWriteOutcomeUnknownError extends Error {
+  readonly code = "knowledge_write_outcome_unknown" as const;
+  readonly retryable = false;
+  constructor(
+    readonly operationId: string,
+    readonly branch: string,
+    readonly commitHash?: string
+  ) {
+    super(
+      `Knowledge write outcome requires inspection; do not replay ${operationId}. Inspect main and ${branch} using the operation receipt.`
+    );
+    this.name = "KnowledgeWriteOutcomeUnknownError";
+  }
+  get receipt(): {
+    code: string;
+    retryable: false;
+    lookup: Readonly<Record<string, string | null>>;
+  } {
+    return {
+      code: this.code,
+      retryable: false,
+      lookup: {
+        operationId: this.operationId,
+        branch: this.branch,
+        commitHash: this.commitHash ?? null,
+      },
+    };
+  }
+}
+
+export class KnowledgeWriteScopeRequiredError extends Error {
+  constructor() {
+    super(
+      "Knowledge mutations require withWrite; retain one logical write and its commit in the same scope."
+    );
+    this.name = "KnowledgeWriteScopeRequiredError";
+  }
+}
+
 export interface KnowledgeStorePort {
+  /** One admitted, isolated logical write; never hold this scope across requests. */
+  withWrite<T>(
+    input: { operationId: string; message: string },
+    run: (write: KnowledgeWriteSession) => Promise<T>
+  ): Promise<T>;
+
   // --- Read ---
   getKnowledge(id: string): Promise<Knowledge | null>;
   /**
@@ -244,8 +295,8 @@ export interface KnowledgeStorePort {
    */
   registerDomain(input: NewDomain): Promise<Domain>;
 
-  // --- Write — rows ---
-  /** Upsert: inserts new entry or updates existing entry with same ID. */
+  // --- Write — rows (root adapters fail closed; use the withWrite scoped handle) ---
+  /** Insert or return an identical existing request; differing payload requires explicit update. */
   upsertKnowledge(entry: NewKnowledge): Promise<Knowledge>;
   addKnowledge(entry: NewKnowledge): Promise<Knowledge>;
   updateKnowledge(
@@ -299,6 +350,7 @@ export interface KnowledgeStorePort {
   listAllCitations(): Promise<Citation[]>;
 
   // --- Doltgres versioning ---
+  /** Retired primitive: always fails closed. withWrite owns the single commit. */
   commit(message: string): Promise<string>;
   log(limit?: number): Promise<DoltCommit[]>;
   diff(fromRef: string, toRef: string): Promise<DoltDiffEntry[]>;
