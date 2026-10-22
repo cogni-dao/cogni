@@ -13,6 +13,9 @@
  *   - PATCH_CAS_OPTIONAL: patch `expectedRevision` is compare-and-set; absent ⇒ unconditioned patch (unchanged)
  *   - CONFLICT_IS_A_RESULT: a lost compare-and-set returns `{success:false, code:"revision_conflict",
  *     currentRevision}` instead of throwing, so a graph can skip the row and retry next cycle
+ *   - NODE_COLLABORATE (authz v0, story.5108): `requires: "node.collaborate"` — the same tier as the
+ *     `PATCH /api/v1/work/items/{id}` API (any authenticated actor on this node may set triage fields).
+ *     Priority 0/1 stays behind the capability's node-admin gate (P0P1_IS_NODE_ADMIN, #2864), unchanged.
  * Side-effects: IO (mutates work items via capability)
  * Links: docs/spec/development-lifecycle.md, docs/spec/tool-use.md
  * @public
@@ -140,6 +143,7 @@ export const workItemTransitionContract: ToolContract<
     "'patch' (requires id, optional priority/rank/labels/summary, optional expectedRevision for compare-and-set) updates metadata fields. " +
     "Use core__work_item_query first to find items and check their current status.",
   effect: "state_change",
+  requires: "node.collaborate",
   inputSchema: WorkItemTransitionInputSchema,
   outputSchema: WorkItemTransitionOutputSchema,
 

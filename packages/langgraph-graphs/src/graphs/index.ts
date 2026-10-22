@@ -47,7 +47,7 @@ export type {
   MessageGraphInput,
   MessageGraphOutput,
 } from "./types";
-// Work prioritizer (operator-only, propose-only AI workflow, story.5096)
+// Work prioritizer (operator-only AI workflow; proposes, applies only when switched on — story.5096, story.5108)
 export {
   createWorkPrioritizerGraph,
   type PrioritizerCycleTelemetry,

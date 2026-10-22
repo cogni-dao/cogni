@@ -261,14 +261,16 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
   },
 
   /**
-   * Work prioritizer (story.5096, propose-only) — explicit StateGraph: reads the DAO goals
+   * Work prioritizer (story.5096, story.5108) — explicit StateGraph: reads the DAO goals
    * (core__goal_list), backlog, and hub EDO context; tool-less judgments (daily full review, delta
-   * cycles otherwise); code ranking with no caps; one EDO decision on change. Zero work-item mutations.
+   * cycles otherwise); code ranking with no caps; one EDO decision on change. Work items are patched
+   * (priority + rank, compare-and-set) only when the run sets `apply` AND is grant-backed; p0/p1
+   * patches meet the node-admin gate.
    */
   [WORK_PRIORITIZER_GRAPH_NAME]: {
     displayName: "Work Prioritizer",
     description:
-      "Proposes backlog priorities rooted in the node's approved DAO goals; files one EDO decision on change",
+      "Proposes backlog priorities rooted in the node's approved DAO goals; files one EDO decision on change and, when its scheduled run is switched to apply, patches the changed rows",
     toolIds: WORK_PRIORITIZER_TOOL_IDS as readonly string[],
     graphFactory: createWorkPrioritizerGraph,
     systemPrompt: WORK_PRIORITIZER_SYSTEM_PROMPT,

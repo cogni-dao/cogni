@@ -3,14 +3,16 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/tests/graphs/work-prioritizer/graph`
- * Purpose: Mock-LLM scenario tests for the goal-rooted, propose-only prioritizer (snapshot → judge → rank → plan → EDO).
+ * Purpose: Mock-LLM scenario tests for the goal-rooted prioritizer (snapshot → judge → rank → plan → EDO → gated apply).
  * Scope: Runs the compiled graph with real tool contracts wrapped by makeLangChainTool and a fake exec; does not call a real LLM or store.
  * Invariants:
  *   - COMPLETE_SNAPSHOT_OR_ABORT: paginates every page; a failed page aborts with no writes
- *   - FIXED_ORDER + PROPOSE_ONLY: reads → judge batches → one planned decision carrying the full table
+ *   - FIXED_ORDER + PROPOSE_BY_DEFAULT: reads → judge batches → one planned decision carrying the full table
  *   - NO_CHANGE_NO_DECISION: a delta cycle with an identical table to the prior decision files nothing
  *   - DAILY_FULL_REVIEW / DELTA_SCOPE: full review re-judges all and always files; delta carries the rest
- *   - TRANSITION_UNREACHABLE: work-item writes are unreachable even when bound + allowed and demanded by injection
+ *   - TRANSITION_UNREACHABLE: work-item writes are unreachable without the apply gate, even when demanded by injection
+ *   - APPLY_GATED (story.5108): apply=true + grant-backed + a filed decision ⇒ CAS patches, demotions first;
+ *     conflicts skipped, p0/p1 denials counted; apply=false or no grant ⇒ zero patches
  *   - NO_GOAL_CAP + P0P1_CITES_GOAL + PURE_GRAPH_FACTORY: every goal is used; every p0/p1 names its goal; no ALS push
  * Side-effects: none
  * Links: src/graphs/work-prioritizer/graph.ts
@@ -71,6 +73,8 @@ interface World {
   goals?: Record<string, unknown>[];
   /** core__goal_list fails with this message (a store read failure). */
   goalsFail?: string;
+  /** core__work_item_transition result per call (default: success). */
+  patch?: (args: Record<string, unknown>) => unknown;
 }
 
 function workItem(id: string, o: Record<string, unknown> = {}) {
@@ -192,6 +196,10 @@ function buildTools(world: World, events: string[], calls: Call[]) {
       }
       case EDO_DECIDE_NAME:
         return ok({ entry: { id: a.id }, committed: true, message: "ok" });
+      case WORK_ITEM_TRANSITION_NAME:
+        return world.patch
+          ? world.patch(a)
+          : ok({ success: true, action: "patch", id: a.id, message: "ok" });
       default:
         return ok({ mutated: true });
     }
@@ -247,6 +255,8 @@ async function run(opts: {
   judge?: JudgeFn;
   reply?: (ids: string[]) => unknown;
   trigger?: string;
+  /** Extra RunnableConfig.configurable (e.g. `apply`, `grantId`). */
+  configurable?: Record<string, unknown>;
 }) {
   const events: string[] = [];
   const calls: Call[] = [];
@@ -264,6 +274,7 @@ async function run(opts: {
         model: "gpt-oss-120b",
         // Over-permissive on purpose: only the graph's fixed plan stands between it and a mutation.
         toolIds: [...WORK_PRIORITIZER_TOOL_IDS, WORK_ITEM_TRANSITION_NAME],
+        ...opts.configurable,
       },
     }
   );
@@ -323,7 +334,7 @@ const ITEMS = Array.from({ length: 20 }, (_, i) =>
 );
 
 describe("work-prioritizer tool allowlist", () => {
-  it("is exactly six tools; goals come from core__goal_list; the only write is EDO decide (PROPOSE_ONLY)", () => {
+  it("is exactly seven tools; goals come from core__goal_list; writes are EDO decide + the gated patch", () => {
     expect([...WORK_PRIORITIZER_TOOL_IDS].sort()).toEqual(
       [
         GOAL_LIST_NAME,
@@ -332,13 +343,13 @@ describe("work-prioritizer tool allowlist", () => {
         KNOWLEDGE_READ_NAME,
         EDO_DECIDE_NAME,
         GET_CURRENT_TIME_NAME,
+        WORK_ITEM_TRANSITION_NAME,
       ].sort()
     );
-    expect(WORK_PRIORITIZER_TOOL_IDS).not.toContain(WORK_ITEM_TRANSITION_NAME);
     expect(WORK_PRIORITIZER_TOOL_IDS).not.toContain(KNOWLEDGE_WRITE_NAME);
-    expect([...WORK_PRIORITIZER_WRITE_TOOL_IDS].sort()).toEqual([
-      EDO_DECIDE_NAME,
-    ]);
+    expect([...WORK_PRIORITIZER_WRITE_TOOL_IDS].sort()).toEqual(
+      [EDO_DECIDE_NAME, WORK_ITEM_TRANSITION_NAME].sort()
+    );
   });
 });
 
@@ -799,5 +810,182 @@ describe("langgraph:work-prioritizer v4 propose mode (mock LLM)", () => {
       ["task.02"],
       ["task.05"],
     ]);
+  });
+});
+
+describe("langgraph:work-prioritizer apply step (story.5108)", () => {
+  // Plan (table rank order): b 4→1 promo · a 1→2 demo · c 2→2 rank-only · e null→2 promo ·
+  // d 4→4 rank-only · f 3→4 demo. Triage keeps a/c/e out of p1; impact 0 sends d/f to p4.
+  const applyItems = [
+    workItem("task.a", { priority: 1, rank: 2, status: "needs_triage" }),
+    workItem("task.b", { priority: 4, rank: 1 }),
+    workItem("task.c", { priority: 2, rank: 9, status: "needs_triage" }),
+    workItem("task.d", { priority: 4, rank: 9 }),
+    workItem("task.e", { status: "needs_triage" }),
+    workItem("task.f", { priority: 3, rank: 6 }),
+  ];
+  const applyJudge: JudgeFn = (id) => ({
+    ...standardJudge(id),
+    impact: id === "task.d" || id === "task.f" ? {} : { [R]: 2 },
+  });
+  /** The store: p0/p1 refused by the node-admin gate (as the capability throws it), task.c lost its CAS. */
+  const store = (a: Record<string, unknown>) =>
+    (a.priority as number) <= 1
+      ? {
+          ok: false as const,
+          errorCode: "execution",
+          safeMessage: `authz_denied: priority ${a.priority} requires node admin`,
+        }
+      : a.id === "task.c"
+        ? {
+            ok: true as const,
+            value: {
+              success: false,
+              action: "patch",
+              id: a.id,
+              code: "revision_conflict",
+              currentRevision: 3,
+              message: "conflict",
+            },
+          }
+        : {
+            ok: true as const,
+            value: {
+              success: true,
+              action: "patch",
+              id: a.id,
+              message: "ok",
+              revision: 3,
+            },
+          };
+  const patches = (calls: Call[]) =>
+    calls.filter((c) => c.name === WORK_ITEM_TRANSITION_NAME);
+
+  it("APPLY_GATED: patches after the decision, demotions first, CAS on the snapshot revision; conflicts skip, p0/p1 denials count", async () => {
+    const { calls, events, report, status, decide } = await run({
+      world: { items: applyItems, patch: store },
+      judge: applyJudge,
+      configurable: { apply: true, grantId: "grant-1" },
+    });
+    expect(status).toBe("planned");
+    // DEMOTIONS_FIRST: demotions (a, f), then rank-only (c, d), then promotions (b, e).
+    expect(patches(calls).map((c) => c.args)).toEqual([
+      {
+        action: "patch",
+        id: "task.a",
+        priority: 2,
+        rank: 2,
+        expectedRevision: 2,
+      },
+      {
+        action: "patch",
+        id: "task.f",
+        priority: 4,
+        rank: 6,
+        expectedRevision: 2,
+      },
+      {
+        action: "patch",
+        id: "task.c",
+        priority: 2,
+        rank: 3,
+        expectedRevision: 2,
+      },
+      {
+        action: "patch",
+        id: "task.d",
+        priority: 4,
+        rank: 5,
+        expectedRevision: 2,
+      },
+      {
+        action: "patch",
+        id: "task.b",
+        priority: 1,
+        rank: 1,
+        expectedRevision: 2,
+      },
+      {
+        action: "patch",
+        id: "task.e",
+        priority: 2,
+        rank: 4,
+        expectedRevision: 2,
+      },
+    ]);
+    // FIXED_ORDER: every patch comes after the filed decision.
+    const decided = events.indexOf(`tool:${EDO_DECIDE_NAME}`);
+    expect(events.slice(decided + 1)).toEqual(
+      Array(6).fill(`tool:${WORK_ITEM_TRANSITION_NAME}`)
+    );
+    expect(String(decide?.args.content)).toContain("Apply mode");
+    expect(report.telemetry).toMatchObject({
+      applyEnabled: true,
+      applied: 4,
+      conflicts: 1,
+      deniedP0P1: 1,
+      deniedP0P1Ids: ["task.b"],
+      applyFailed: 0,
+      applySkipped: 0,
+    });
+    // p0/p1 stay proposals in the filed decision; a denial is not a cycle failure.
+    expect(report.errors).toEqual([]);
+  });
+
+  it("an unexpected patch failure is counted and reported verbatim, never retried", async () => {
+    const { calls, report } = await run({
+      world: {
+        items: applyItems,
+        patch: (a) =>
+          a.id === "task.a"
+            ? { ok: false, errorCode: "execution", safeMessage: "db down" }
+            : store(a),
+      },
+      judge: applyJudge,
+      configurable: { apply: true, grantId: "grant-1" },
+    });
+    expect(patches(calls)).toHaveLength(6);
+    expect(report.telemetry).toMatchObject({ applied: 3, applyFailed: 1 });
+    expect(report.errors).toEqual(["patch task.a: execution: db down"]);
+  });
+
+  it("apply=false (grant-backed) ⇒ propose only: decision filed, zero patches", async () => {
+    const { calls, report, decide } = await run({
+      world: { items: applyItems, patch: store },
+      judge: applyJudge,
+      configurable: { apply: false, grantId: "grant-1" },
+    });
+    expect(decide).toBeDefined();
+    expect(String(decide?.args.content)).toContain("Propose mode");
+    expect(patches(calls)).toHaveLength(0);
+    expect(report.telemetry).toMatchObject({
+      applyEnabled: false,
+      applied: 0,
+      deniedP0P1: 0,
+    });
+  });
+
+  it("apply=true without a grant (an API/chat run) ⇒ zero patches", async () => {
+    const { calls, report } = await run({
+      world: { items: applyItems, patch: store },
+      judge: applyJudge,
+      configurable: { apply: true },
+    });
+    expect(patches(calls)).toHaveLength(0);
+    expect(report.telemetry).toMatchObject({ applyEnabled: false, applied: 0 });
+  });
+
+  it("no decision filed (NO_CHANGE) ⇒ nothing is applied even when enabled", async () => {
+    const first = await run({
+      world: { items: applyItems },
+      judge: applyJudge,
+    });
+    const { calls, status } = await run({
+      world: { items: applyItems, hub: [GOAL, asPrior(first.decide)] },
+      judge: applyJudge,
+      configurable: { apply: true, grantId: "grant-1" },
+    });
+    expect(status).toBe("no_change");
+    expect(patches(calls)).toHaveLength(0);
   });
 });

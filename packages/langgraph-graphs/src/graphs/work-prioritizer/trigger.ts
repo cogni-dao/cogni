@@ -7,7 +7,8 @@
  * Scope: Parses the last fenced json block of the trigger text; does not read env, repo-spec, or any policy.
  * Invariants:
  *   - NO_POLICY: the graph takes no policy; goals come only from core__goal_list, there are no caps, and
- *     every cycle is propose-only.
+ *     the trigger never switches on apply
+ *     (that is the run's `configurable.apply`, set only for grant-backed scheduled runs — apply.ts).
  *   - FULL_REVIEW_ON_REQUEST: `{ "fullReview": true }` forces a whole-backlog review (eval + admin use);
  *     anything else, or no block, is a normal cycle.
  * Side-effects: none

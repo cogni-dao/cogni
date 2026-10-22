@@ -3,13 +3,17 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/graph`
- * Purpose: Goal-rooted, propose-only work prioritizer: snapshot → judge (LLM enums) → rank (code) → EDO decision.
- * Scope: Pure graph factory; does not read env or ALS, hardcode a model or node domain, write any work item, or touch a database.
- * Invariants: FIXED_ORDER (all reads before the model; only the PRIOR_CAS re-read after; EDO writes last);
+ * Purpose: Goal-rooted work prioritizer: snapshot → judge (LLM enums) → rank (code) → EDO decision → gated apply.
+ * Scope: Pure graph factory; does not read env or ALS, hardcode a model or node domain, or touch a database. Work
+ *   items are written only by the gated apply step (apply.ts), through the existing patch tool.
+ * Invariants: FIXED_ORDER (all reads before the model; only the PRIOR_CAS re-read after; the EDO decision, then
+ *   the apply patches, last);
  *   ONE_GOAL_LIST + NO_GOAL_CAP (goals only from core__goal_list, never counted); COMPLETE_SNAPSHOT_OR_ABORT;
  *   DAILY_FULL_REVIEW + DELTA_SCOPE (plan.selectJudgeSet); DETERMINISTIC_TOOL_CALLS (code names every
- *   allowlisted tool and its args); PROPOSE_ONLY (the plan — id, revision, priority, rank, goal — is filed in an
- *   EDO decision, never applied); DECISION_ON_CHANGE (a delta cycle with an unchanged table files nothing; a
+ *   allowlisted tool and its args); PROPOSE_BY_DEFAULT (the plan — id, revision, priority, rank, goal — is filed in
+ *   an EDO decision); APPLY_GATED (story.5108: the filed plan is patched only when `configurable.apply === true` AND
+ *   the run is grant-backed (`configurable.grantId`) AND this cycle filed its decision; p0/p1 patches meet the
+ *   node-admin gate and are counted as `deniedP0P1` until story.5075); DECISION_ON_CHANGE (a delta cycle with an unchanged table files nothing; a
  *   full review always files, recording `reviewedAt`); PRIOR_CAS (a newer decision than the prior ⇒
  *   `stale_prior`, zero writes); PURE_GRAPH_FACTORY (the report is the structuredResponse + final message;
  *   the provider logs/streams it per the catalog entry's `report`).
@@ -17,7 +21,7 @@
  *   re-judges every item but still files only through the same PRIOR_CAS / stale_prior guard, never a write
  *   beyond the one decision.
  * Side-effects: none
- * Links: rank.ts, plan.ts, prompts.ts, trigger.ts, story.5096
+ * Links: rank.ts, plan.ts, apply.ts, prompts.ts, trigger.ts, story.5096, story.5108
  * @public
  */
 
@@ -26,6 +30,7 @@ import {
   GET_CURRENT_TIME_NAME,
   GOAL_LIST_NAME,
   WORK_ITEM_QUERY_NAME,
+  WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
 import {
   AIMessage,
@@ -41,6 +46,7 @@ import {
 } from "@langchain/langgraph";
 
 import type { CreateReactAgentGraphOptions } from "../types";
+import * as A from "./apply";
 import * as C from "./context";
 import * as G from "./guards";
 import * as P from "./plan";
@@ -99,6 +105,8 @@ const WorkPrioritizerState = Annotation.Root({
   judged: replace<Awaited<ReturnType<typeof judgeAndRank>> | null>(() => null),
   payload: replace<DecisionPayload | null>(() => null),
   edo: replace<ReturnType<typeof emptyEdo> | null>(() => null),
+  /** APPLY_GATED: null when the apply step did not run (disabled, not grant-backed, or nothing filed). */
+  applied: replace<A.ApplyOutcome | null>(() => null),
   structuredResponse: replace<PrioritizerRunReport | undefined>(
     () => undefined
   ),
@@ -356,21 +364,32 @@ export function createWorkPrioritizerGraph(
       sourceRef: `langgraph:${WORK_PRIORITIZER_GRAPH_NAME}`,
       tags: [T.PRIORITIZER_EDO_TAG, "prioritization", "propose"],
       title: `Priority plan ${stamp}: p0 ${p0.join(", ") || "none"}`,
-      content: `${summary}\n\nPropose mode: nothing below is applied.\n\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``,
+      content: `${summary}\n\n${A.applyEnabled(config) ? "Apply mode: the plan rows are patched after filing (compare-and-set); p0/p1 need node admin." : "Propose mode: nothing below is applied."}\n\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``,
       derivesFromHypothesisId: goalIds[0],
     });
     if (filed.ok) edo.decisionId = id;
     return { edo, payload };
   }
 
+  /** APPLY_GATED: patch the filed plan (DEMOTIONS_FIRST, CAS, conflicts + p0/p1 denials counted, never retried). */
+  async function apply(state: S, config: RunnableConfig) {
+    if (!A.applyEnabled(config) || !state.edo?.decisionId || !state.payload)
+      return {};
+    const applied = await A.applyPlan(state.payload.plan, (args) =>
+      callTool(WORK_ITEM_TRANSITION_NAME, args, config)
+    );
+    return { applied };
+  }
+
   function finalize(state: S, config: RunnableConfig) {
     // PURE_GRAPH_FACTORY: the report is returned, never pushed; the provider logs and streams it.
-    const telemetry = telemetryOf(state, modelRefOf(config));
+    const telemetry = telemetryOf(state, modelRefOf(config), config);
     const { toolErrors, judged, edo } = state;
     const errors = [
       toolErrors,
       judged?.fresh.errors ?? [],
       edo?.errors ?? [],
+      state.applied?.errors ?? [],
     ].flat();
     return {
       structuredResponse: {
@@ -400,6 +419,7 @@ export function createWorkPrioritizerGraph(
       ),
     }))
     .addNode("emit_edo", emitEdo)
+    .addNode("apply", apply)
     .addNode("finalize", finalize)
     .addEdge("__start__", "snapshot")
     .addConditionalEdges(
@@ -412,7 +432,8 @@ export function createWorkPrioritizerGraph(
       ["judge", "finalize"]
     )
     .addEdge("judge", "emit_edo")
-    .addEdge("emit_edo", "finalize")
+    .addEdge("emit_edo", "apply")
+    .addEdge("apply", "finalize")
     .addEdge("finalize", "__end__")
     .compile();
 }
@@ -421,7 +442,11 @@ const modelRefOf = (c?: RunnableConfig) =>
   (c?.configurable as { model?: string } | undefined)?.model ?? null;
 
 /** The cycle's flat telemetry (status + counts) from its final state. */
-function telemetryOf(state: S, modelRef: string | null) {
+function telemetryOf(
+  state: S,
+  modelRef: string | null,
+  config?: RunnableConfig
+) {
   const { context: ctx, judged: j } = state;
   const edo = state.edo ?? emptyEdo();
   const status = state.goalsError
@@ -459,6 +484,7 @@ function telemetryOf(state: S, modelRef: string | null) {
     newerDecisionId: edo.newerDecisionId,
     edoWrites: edo.writes,
     toolErrorCount: state.toolErrors.length + edo.errors.length,
+    ...A.applyTelemetry(state.applied, A.applyEnabled(config)),
     promptVersion: WORK_PRIORITIZER_PROMPT_VERSION,
     modelRef,
   };

@@ -99,6 +99,12 @@ export interface InProcGraphRequest {
      * tool authz audit.
      */
     readonly grantId?: string;
+    /**
+     * Per-run write switch for a scheduled graph (story.5108): the provider sets it from the graph's
+     * governance schedule `apply` (resolved by DEPLOY_ENVIRONMENT). A graph writes only when it is
+     * true AND `grantId` is set; absent ⇒ propose only.
+     */
+    readonly apply?: boolean;
   };
 }
 

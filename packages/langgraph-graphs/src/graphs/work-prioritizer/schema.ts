@@ -95,7 +95,7 @@ export type RankedRow = z.infer<typeof RankedRowSchema>;
 
 /**
  * A changed row — the write seam for a later apply (id, priority, rank, and the revision it was planned
- * against for a compare-and-set patch). PROPOSE_ONLY: this graph never writes it.
+ * against for a compare-and-set patch). Applied only by the gated apply step (apply.ts, story.5108).
  * P0P1_CITES_GOAL: a p0/p1 row names the active goal (`goal-*`) it serves.
  */
 export const PlanRowSchema = z

@@ -6,13 +6,13 @@
  * Purpose: Tool IDs + the fixed context-gathering plan for the work-prioritizer graph.
  * Scope: Constants and the pure context-read plan. Does NOT execute tools or enforce authz (the wrapper + toolRunner do).
  * Invariants:
- *   - EXACT_ALLOWLIST: exactly these six tools — five reads (incl. core__goal_list, the one goal reader) plus
- *     the one EDO write (decide). PROPOSE_ONLY: no work-item
- *     write of any kind, no knowledge_write.
+ *   - EXACT_ALLOWLIST: exactly these seven tools — five reads (incl. core__goal_list, the one goal reader), the
+ *     one EDO write (decide), and core__work_item_transition, used ONLY as action=patch {priority, rank,
+ *     expectedRevision} by the gated apply step (apply.ts, story.5108). No status transition, no knowledge_write.
  *   - BOUNDED_CONTEXT: every read is bounded (limit set) so one cycle's context is finite.
- *   - WRITE_CAP: ≤ 1 EDO decision per cycle; nothing else is written.
+ *   - WRITE_CAP: ≤ 1 EDO decision per cycle, plus ≤ 1 compare-and-set patch per plan row when apply is enabled.
  * Side-effects: none
- * Links: story.5096, task.5282, TOOL_USE_SPEC.md
+ * Links: story.5096, story.5108, task.5282, TOOL_USE_SPEC.md
  * @public
  */
 
@@ -23,10 +23,14 @@ import {
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
+  WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
 
-/** The only state-changing tool in the allowlist (one atomic EDO commit). */
-export const WORK_PRIORITIZER_WRITE_TOOL_IDS = [EDO_DECIDE_NAME] as const;
+/** The state-changing tools: one atomic EDO commit, and the gated apply step's work-item patches. */
+export const WORK_PRIORITIZER_WRITE_TOOL_IDS = [
+  EDO_DECIDE_NAME,
+  WORK_ITEM_TRANSITION_NAME,
+] as const;
 
 /** The complete tool allowlist for langgraph:work-prioritizer. */
 export const WORK_PRIORITIZER_TOOL_IDS = [
