@@ -6,7 +6,7 @@
  * Module: `@scripts/vm-health-snapshot`
  * Purpose: Grades each shared env VM against the ONE reliability policy (recorded cogni_reliability_v1_* series) and names what is eating it; also prints the story.5084 soak objectives (24h node availability, throttle-controller liveness, backup receipts) exactly as the private Fleet Reliability dashboard shows them.
  * Scope: Read-only Grafana datasource-proxy instant queries (Prometheus + Loki); does not SSH, write, or own any threshold.
- * Invariants: ONE_HEALTH_CONTRACT (grade only reliability-policy.v1.json signals and objectives) ; MISSING_IS_UNKNOWN (null/stale/multi-host never GREEN) ; ENDPOINTS_ARE_NOT_VM and OBJECTIVES_ARE_NOT_VM (neither changes the VM verdict or exit code) ; evaluate()/evaluateObjectives() pure
+ * Invariants: ONE_HEALTH_CONTRACT (grade only reliability-policy.v1.json signals and objectives) ; MISSING_IS_UNKNOWN (null/stale/multi-host never GREEN) ; ENDPOINTS_ARE_NOT_VM and OBJECTIVES_ARE_NOT_VM (neither changes the VM verdict or exit code), evaluate()/evaluateObjectives() pure
  * Side-effects: IO
  * Notes: Consumers, swap-in and major faults are ungraded diagnostic detail. Envs are validated before any PromQL is built; hosts must be 32-hex.
  * Links: packages/node-contracts/src/reliability-policy.v1.json, infra/grafana/synthetic/main.tf, infra/grafana/dashboards/operator/fleet-capacity.json, .claude/skills/vm-health/SKILL.md, story.5084
