@@ -254,7 +254,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
   [GIT_REVIEWER_GRAPH_NAME]: {
     displayName: "Git Reviewer",
     description:
-      "Queue observer — reports merge-ready item status from metadata",
+      "Queue observer — reports review, flight and validation status from metadata",
     toolIds: GIT_REVIEWER_TOOL_IDS as readonly string[],
     graphFactory: createOperatorGraph,
     systemPrompt: GIT_REVIEWER_PROMPT,
