@@ -148,4 +148,20 @@ for bad in \
   ! grep -q 'cogni_naz_sk_' "$fixture_dir/result"
 done
 
+# Candidate conformance cannot be repurposed into a production probe, another
+# node's authority, or a projection operation. Reject these before vault IO.
+for args in \
+  'authority verify production operator k3s' \
+  'custody verify candidate-a operator k3s' \
+  'authority verify candidate-a node-template k3s'; do
+  : > "$AUTHZ_TEST_CALLS"
+  if AUTHORIZATION_FACADE_EXPECTED_SHA="$(printf 'b%.0s' {1..40})" \
+    bash "$authority" $args >"$fixture_dir/result" 2>&1; then
+    echo 'out-of-scope conformance authority was accepted' >&2
+    exit 1
+  fi
+  [[ ! -s "$AUTHZ_TEST_CALLS" ]]
+  ! grep -q 'cogni_naz_sk_' "$fixture_dir/result"
+done
+
 echo "authorization-facade-credentials: PASS"

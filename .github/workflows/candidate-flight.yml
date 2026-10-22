@@ -2147,6 +2147,22 @@ jobs:
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/smoke-candidate.sh
 
+  verify-authorization-facade:
+    needs: [decide, verify-candidate]
+    if: needs.verify-candidate.result == 'success' && contains(fromJSON(needs.decide.outputs.deployment_node_targets_json || '[]'), 'operator')
+    uses: ./.github/workflows/authorization-facade-credential-project.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      lane: candidate-a
+      node: operator
+      operation: verify
+      source_ref: ${{ needs.decide.outputs.head_sha }}
+    secrets:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+
   report-status:
     needs:
       [
@@ -2157,6 +2173,7 @@ jobs:
         assert-substrate,
         flight,
         verify-candidate,
+        verify-authorization-facade,
       ]
     if: always() && needs.decide.result == 'success'
     runs-on: ubuntu-latest
@@ -2178,6 +2195,8 @@ jobs:
           ASSERT_SUBSTRATE_RESULT: ${{ needs.assert-substrate.result }}
           FLIGHT_RESULT: ${{ needs.flight.result }}
           VERIFY_RESULT: ${{ needs.verify-candidate.result }}
+          AUTHORIZATION_VERIFY_RESULT: ${{ needs.verify-authorization-facade.result }}
+          AUTHORIZATION_VERIFY_REQUIRED: ${{ contains(fromJSON(needs.decide.outputs.deployment_node_targets_json || '[]'), 'operator') }}
           TARGETS_JSON: ${{ needs.decide.outputs.flight_targets_json }}
         run: |
           set -euo pipefail
@@ -2204,6 +2223,9 @@ jobs:
           elif [ "$HAS_SUBSTRATE_NODE_TARGETS" = "true" ] && [ "$ASSERT_SUBSTRATE_RESULT" != "success" ]; then
             STATE=failure
             DESC="Candidate flight failed before promotion (assert-substrate=${ASSERT_SUBSTRATE_RESULT})"
+          elif [ "$FLIGHT_RESULT" = "success" ] && [ "$VERIFY_RESULT" = "success" ] && [ "$AUTHORIZATION_VERIFY_REQUIRED" = "true" ] && [ "$AUTHORIZATION_VERIFY_RESULT" != "success" ]; then
+            STATE=failure
+            DESC="Candidate authorization conformance failed (${AUTHORIZATION_VERIFY_RESULT})"
           elif [ "$FLIGHT_RESULT" = "success" ] && [ "$VERIFY_RESULT" = "success" ]; then
             STATE=success
             DESC="Candidate flight passed (matrix: ${TARGETS_JSON})"

@@ -22,13 +22,19 @@ SSH_OPTS_RAW="${SSH_OPTS:--i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-n
 fail() { echo "::error::authorization-facade-credentials: $*" >&2; exit 1; }
 log() { printf '[authorization-facade-credentials] %s\n' "$*"; }
 [[ "$PHASE" =~ ^(authority|custody|finalize)$ ]] || fail "invalid phase"
-[[ "$OPERATION" =~ ^(materialize|prepare|activate|finish|cancel)$ ]] || fail "invalid operation"
+[[ "$OPERATION" =~ ^(materialize|prepare|activate|finish|cancel|verify)$ ]] || fail "invalid operation"
 [[ "$LANE" =~ ^(candidate-a|preview|production)$ ]] || fail "invalid lane"
 [[ "$CONTROL_ENV" =~ ^(candidate-a|preview|production)$ ]] || fail "invalid control env"
 [[ "$PROVIDER" =~ ^(k3s|akash)$ ]] || fail "invalid provider"
 [[ "$TARGET_NODE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || fail "invalid node slug"
 [[ -n "${VM_HOST:-}" ]] || fail "VM_HOST is required"
 [[ "$VM_HOST" =~ ^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])$ ]] || fail "invalid VM_HOST"
+if [[ "$OPERATION" == verify ]]; then
+  [[ "$PHASE" == authority && "$LANE" == candidate-a && "$TARGET_NODE" == operator ]] \
+    || fail "verification is candidate operator authority-only"
+  [[ "${AUTHORIZATION_FACADE_EXPECTED_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
+    || fail "verification requires an exact source SHA"
+fi
 
 catalog_file="$CATALOG_ROOT/$TARGET_NODE.yaml"
 [[ -f "$catalog_file" ]] || fail "unknown catalog node"
@@ -245,8 +251,82 @@ store_target_scalar() {
   fail "concurrent workload-view CAS writes did not converge"
 }
 
+# Protected API conformance only: no real agent, account or sandbox is asserted.
+# The stable fixture namespace has no executable tool or chargeable resource.
+verify_facade() {
+  [[ "$WORKLOAD_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || fail "invalid verification origin"
+  local version refs owner actor account other_account expires check grant revoke needs_cleanup=false
+  version="$(curl --fail --silent --show-error --proto '=https' --max-time 15 \
+    --max-filesize 8192 "${WORKLOAD_URL}/version")" || fail "verification version unavailable"
+  [[ "$(jq -r '.buildSha' <<<"$version")" == "$AUTHORIZATION_FACADE_EXPECTED_SHA" ]] \
+    || fail "verification build SHA mismatch"
+  refs="$(python3 - "$NODE_ID" <<'PY'
+import sys,uuid
+n=uuid.UUID(sys.argv[1])
+print(' '.join(str(uuid.uuid5(n,'authorization-facade-conformance/'+x)) for x in ['owner','actor','account','other-account']))
+PY
+)"
+  read -r owner actor account other_account <<<"$refs"
+  expires="$(date -u -d '+60 seconds' +%Y-%m-%dT%H:%M:%SZ)"
+  check="$(jq -cn --arg actor "$actor" --arg account "$account" \
+    '{action:"tool.execute",toolId:"authorization_facade_conformance",actor:{kind:"agent",id:$actor},billingAccountId:$account}')"
+  grant="$(jq -cn --arg owner "$owner" --arg actor "$actor" --arg account "$account" --arg expires "$expires" \
+    '{operation:"grant",grantorUserId:$owner,billingAccountId:$account,target:{kind:"agent",id:$actor},role:"tool_executor",toolId:"authorization_facade_conformance",expiresAt:$expires}')"
+  revoke="$(jq -c 'del(.expiresAt)|.operation="revoke"' <<<"$grant")"
+
+  facade_probe() {
+    local label="$1" path="$2" payload="$3" expected_status="$4" expected_code="${5:-}" anonymous="${6:-false}"
+    local result meta body status req_id redirect
+    result="$({
+      if [[ "$anonymous" != true ]]; then printf 'header = "Authorization: Bearer %s"\n' "$ACTIVE"; fi
+      printf 'header = "Content-Type: application/json"\n'
+    } | curl --silent --show-error --proto '=https' --max-time 15 --max-filesize 8192 \
+      --request POST --config - --data-binary "$payload" \
+      --write-out $'\n%{http_code}|%header{x-request-id}|%{redirect_url}' "${WORKLOAD_URL}${path}" 2>/dev/null)" \
+      || { log "conformance ${label}: transport failed"; return 1; }
+    meta="${result##*$'\n'}"; body="${result%$'\n'*}"
+    IFS='|' read -r status req_id redirect <<<"$meta"
+    # Public receipts only; never output a response body or a credential.
+    jq -cn --arg probe "$label" --arg status "$status" --arg reqId "$req_id" \
+      --arg sha "$AUTHORIZATION_FACADE_EXPECTED_SHA" '{probe:$probe,status:$status,reqId:$reqId,buildSha:$sha}'
+    [[ "$status" == "$expected_status" && -z "$redirect" ]] || return 1
+    [[ -z "$expected_code" ]] || jq -e --arg code "$expected_code" '.code==$code' >/dev/null <<<"$body"
+  }
+  # If a grant result is lost, still revoke; expiry is the independent fallback.
+  trap 'rc=$?; trap - EXIT; if [[ "$needs_cleanup" == true ]]; then facade_probe cleanup /api/v1/authorization/billing-account-grants "$revoke" 200 authz_write_success || rc=1; fi; exit "$rc"' EXIT
+  facade_probe anonymous /api/internal/authorization-facade-credential-probe '{}' 401 '' true || fail "anonymous verifier accepted"
+  facade_probe authenticated /api/internal/authorization-facade-credential-probe '{}' 204 || fail "credential verifier unavailable"
+  facade_probe fixture_owner /api/v1/authorization/billing-account-owner \
+    "$(jq -cn --arg owner "$owner" --arg account "$account" '{ownerUserId:$owner,billingAccountId:$account}')" 200 authz_write_success || fail "owner projection failed"
+  facade_probe reset /api/v1/authorization/billing-account-grants "$revoke" 200 authz_write_success || fail "fixture reset failed"
+  needs_cleanup=true
+  facade_probe before_grant /api/v1/authorization/check "$check" 403 authz_denied || fail "ungranted execution accepted"
+  facade_probe foreign_grantor /api/v1/authorization/billing-account-grants \
+    "$(jq -c --arg id "$actor" '.grantorUserId=$id' <<<"$grant")" 403 authz_write_denied || fail "unowned grant accepted"
+  grant="$(jq -c --arg expires "$(date -u -d '+60 seconds' +%Y-%m-%dT%H:%M:%SZ)" '.expiresAt=$expires' <<<"$grant")"
+  facade_probe grant /api/v1/authorization/billing-account-grants "$grant" 200 authz_write_success || fail "tool grant failed"
+  facade_probe allowed /api/v1/authorization/check "$check" 200 authz_allowed || fail "granted execution denied"
+  facade_probe foreign_actor /api/v1/authorization/check \
+    "$(jq -c --arg id "$owner" '.actor.id=$id' <<<"$check")" 403 authz_denied || fail "foreign actor accepted"
+  facade_probe foreign_account /api/v1/authorization/check \
+    "$(jq -c --arg id "$other_account" '.billingAccountId=$id' <<<"$check")" 403 authz_denied || fail "foreign account accepted"
+  facade_probe revoke /api/v1/authorization/billing-account-grants "$revoke" 200 authz_write_success || fail "tool revoke failed"
+  needs_cleanup=false
+  facade_probe after_revoke /api/v1/authorization/check "$check" 403 authz_denied || fail "revoked execution accepted"
+  version="$(curl --fail --silent --show-error --proto '=https' --max-time 15 \
+    --max-filesize 8192 "${WORKLOAD_URL}/version")" || fail "final verification version unavailable"
+  [[ "$(jq -r '.buildSha' <<<"$version")" == "$AUTHORIZATION_FACADE_EXPECTED_SHA" ]] \
+    || fail "candidate changed during authorization verification"
+  trap - EXIT
+  log "candidate API conformance passed at ${AUTHORIZATION_FACADE_EXPECTED_SHA}; native sandbox proof remains separate"
+}
+
 if [[ "$PHASE" == authority ]]; then
   case "$OPERATION" in
+    verify)
+      load_ring || fail "authority ring absent"
+      verify_facade
+      exit 0 ;;
     materialize)
       if load_ring; then
         [[ -z "$PREVIOUS" ]] \
