@@ -163,6 +163,15 @@ describe("workItemsListOperation.input", () => {
   it("rejects non-integer limit", () => {
     expect(parseInput({ limit: 1.5 }).success).toBe(false);
   });
+
+  it("accepts the lean and full list views (bug.5509)", () => {
+    expect(parseInput({ view: "lean" }).success).toBe(true);
+    expect(parseInput({ view: "full" }).success).toBe(true);
+  });
+
+  it("rejects an unknown list view", () => {
+    expect(parseInput({ view: "summary" }).success).toBe(false);
+  });
 });
 
 describe("workItemsListOperation.output", () => {

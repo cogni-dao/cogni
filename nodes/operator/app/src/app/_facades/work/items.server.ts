@@ -355,8 +355,19 @@ export async function listWorkItems(
     merged = merged.slice(0, requestedLimit);
   }
 
+  // LEAN_VIEW_OPT_IN (bug.5509): the store adapter is an external package with
+  // no column projection, so drop the long-form bodies here — they are ~90% of
+  // the wire bytes and the dashboard table never renders them.
+  const project =
+    input.view === "lean"
+      ? (item: WorkItem): WorkItemDto => {
+          const { summary: _summary, outcome: _outcome, ...lean } = toDto(item);
+          return lean;
+        }
+      : toDto;
+
   return {
-    items: merged.map(toDto),
+    items: merged.map(project),
     pageInfo: { endCursor, hasMore },
     ...(endCursor !== null && { nextCursor: endCursor }),
   };

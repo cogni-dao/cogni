@@ -34,8 +34,10 @@ export const runtime = "nodejs";
  * GET /api/v1/work/items — List work items with optional query filters.
  *
  * Query params: types, statuses (comma-separated), text, projectId, node (single
- * or comma-separated), limit. Lists span both legacy markdown items and
- * Doltgres-allocated items (≥5000) — their ID ranges are disjoint.
+ * or comma-separated), limit, cursor, view (`full` default | `lean` — omits
+ * `summary`/`outcome`, bug.5509). Lists span both legacy markdown items and
+ * Doltgres-allocated items (≥5000) — their ID ranges are disjoint. Invalid
+ * query input returns 400.
  */
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "work.items.list", auth: { mode: "required", getSessionUser } },
@@ -50,8 +52,9 @@ export const GET = wrapRouteHandlerWithLogging(
     const nodeParam = url.searchParams.get("node");
     const limitParam = url.searchParams.get("limit");
     const cursorParam = url.searchParams.get("cursor");
+    const viewParam = url.searchParams.get("view");
 
-    const input = workItemsListOperation.input.parse({
+    const parsed = workItemsListOperation.input.safeParse({
       types: typesParam ? typesParam.split(",") : undefined,
       statuses: statusesParam ? statusesParam.split(",") : undefined,
       text: textParam ?? undefined,
@@ -64,7 +67,15 @@ export const GET = wrapRouteHandlerWithLogging(
         : undefined,
       limit: limitParam ? Number(limitParam) : undefined,
       cursor: cursorParam ?? undefined,
+      view: viewParam ?? undefined,
     });
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "invalid query", issues: parsed.error.issues },
+        { status: 400 }
+      );
+    }
+    const input = parsed.data;
 
     let result: Awaited<ReturnType<typeof listWorkItems>>;
     try {
@@ -76,7 +87,10 @@ export const GET = wrapRouteHandlerWithLogging(
       throw e;
     }
 
-    ctx.log.info({ count: result.items.length }, "work.items.list_success");
+    ctx.log.info(
+      { count: result.items.length, view: input.view ?? "full" },
+      "work.items.list_success"
+    );
 
     return NextResponse.json(workItemsListOperation.output.parse(result));
   }
