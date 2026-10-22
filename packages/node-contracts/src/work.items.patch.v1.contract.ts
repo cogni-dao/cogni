@@ -19,6 +19,8 @@
  *   - OPTIONAL_CAS: top-level `expectedRevision` (the item's `revision` as read) is compare-and-set —
  *     the write lands only if the row is still at that revision, else 409 `revision_conflict` and
  *     nothing is written. Omitted ⇒ unconditioned patch (unchanged). No transition state-machine.
+ *   - PRIORITY_RANGE: `priority` is an integer 0..99 (0 = highest), the same bound as the
+ *     core__work_item_transition tool. 0 and 1 additionally require node admin (route gate).
  * Side-effects: none
  * Links: /api/v1/work/items/[id] route, docs/spec/work-items-port.md, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
@@ -60,7 +62,9 @@ export const workItemsPatchOperation = {
         summary: z.string().optional(),
         outcome: z.string().optional(),
         status: WorkItemStatusSchema.optional(),
-        priority: z.number().int().optional(),
+        // PRIORITY_RANGE (task.5294): 0 is highest. Values below 0 would outrank every
+        // p0, so the wire refuses them; same bound as core__work_item_transition.
+        priority: z.number().int().min(0).max(99).optional(),
         rank: z.number().int().optional(),
         estimate: z.number().int().optional(),
         labels: z.array(z.string()).optional(),

@@ -389,7 +389,7 @@ describe("Goals section — approved DAO goals right after the mission (task.528
     expect(md).toContain("## Goals\n\nno approved goals\n");
   });
 
-  it("renders 1–3 goals' title and content verbatim, after orientation and before the invariants", async () => {
+  it("renders every goal's title and content verbatim, after orientation and before the invariants", async () => {
     const three = [goal(1), goal(2), goal(3)];
     const md = renderBundleMarkdown({
       ...baseInput,
@@ -408,16 +408,23 @@ describe("Goals section — approved DAO goals right after the mission (task.528
     expect(at("## Goals")).toBeLessThan(at("## Tooling invariants"));
   });
 
-  it("renders a visible `goals unavailable` line when the read fails (e.g. >3 goals)", async () => {
+  it("renders a 4th and 5th active goal — there is no goal cap (NO_GOAL_CAP)", async () => {
+    const five = [goal(1), goal(2), goal(3), goal(4), goal(5)];
+    const goals = await resolveGoals(port(five));
+    expect(goals.status).toBe("ok");
+    const md = renderBundleMarkdown({ ...baseInput, goals });
+    for (const g of five) expect(md).toContain(`### ${g.title}`);
+    expect(md).not.toContain("goals unavailable");
+  });
+
+  it("renders a visible `goals unavailable` line when the read fails", async () => {
     const goals = await resolveGoals(
-      port(new Error("4 active DAO goals exceed the max of 3: goal-a, goal-b"))
+      port(new Error("knowledge hub read timed out"))
     );
     expect(goals.status).toBe("unavailable");
     const md = renderBundleMarkdown({ ...baseInput, goals });
     expect(md).toContain("## Goals");
-    expect(md).toContain(
-      "goals unavailable: 4 active DAO goals exceed the max of 3: goal-a, goal-b"
-    );
+    expect(md).toContain("goals unavailable: knowledge hub read timed out");
     expect(md).not.toContain("no approved goals");
   });
 

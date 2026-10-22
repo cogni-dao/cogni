@@ -19,6 +19,7 @@ import {
 import { NextResponse } from "next/server";
 
 import {
+  authorizeRequestedPriority,
   deleteWorkItem,
   getWorkItem,
   patchWorkItem,
@@ -83,6 +84,19 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       body = await request.json();
     } catch {
       return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+    }
+
+    // P0P1_IS_NODE_ADMIN on the raw body, before validation: priority <= 1 (incl. negative)
+    // from a non-admin is 403 authz_denied; an out-of-range admin value is then 400.
+    try {
+      await authorizeRequestedPriority(
+        (body as { set?: { priority?: unknown } } | null)?.set?.priority,
+        sessionUser.id
+      );
+    } catch (e) {
+      const coded = workItemsWriteErrorResponse(ctx, e);
+      if (coded) return coded;
+      throw e;
     }
 
     const parseResult = workItemsPatchOperation.input.safeParse({

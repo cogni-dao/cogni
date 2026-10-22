@@ -8,9 +8,10 @@
  *   SessionUser → Principal, and translates typed service errors to HTTP statuses.
  * Scope: Operator HTTP wiring only. Does not implement contribution mutations or replay uncertain writes.
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION,
- *   GOAL_CHANGE_IS_NODE_ADMIN (task.5286): a merge whose diff touches a `goal-*` row (or a
- *   citation from one) additionally requires `node.administer` on this node, checked BEFORE
- *   the merge — 403 `authz_denied`, 503 `authz_unavailable`. Every other merge is unchanged.
+ *   GOAL_CHANGE_IS_NODE_ADMIN (task.5286, task.5294): enforced INSIDE ContributionService.merge
+ *   by the container's `authorizeMerge` hook, on the RAW changed rows and bound to the authorized
+ *   head (MERGE_HEAD_CAS). This handler only maps `ContributionMergeDeniedError` to 403
+ *   `authz_denied` / 503 `authz_unavailable`. Every other merge is unchanged.
  * Side-effects: IO (HTTP response, Doltgres read/write via container service)
  * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store
  * @internal
@@ -21,6 +22,7 @@ import {
   CitationTypeMismatchError,
   ContributionConflictError,
   ContributionForbiddenError,
+  ContributionMergeDeniedError,
   ContributionNotFoundError,
   ContributionStateError,
   DomainNotRegisteredError,
@@ -45,12 +47,6 @@ import type { SessionUser } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 
 import { getContainer } from "@/bootstrap/container";
-import {
-  checkNodeAdmin,
-  isGoalRowId,
-  nodeAdminFailureBody,
-} from "@/bootstrap/node-admin-gate";
-import { getNodeId } from "@/shared/config/repoSpec.server";
 
 function service() {
   const svc = getContainer().knowledgeContributionService;
@@ -105,6 +101,18 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json(
       { error: e.message, retryable: true },
       { status: 503, headers: { "Retry-After": "2" } }
+    );
+  // GOAL_CHANGE_IS_NODE_ADMIN: deny (403) and outage (503) stay distinct. The hook logged it.
+  if (e instanceof ContributionMergeDeniedError)
+    return NextResponse.json(
+      e.code === "authz_denied"
+        ? { error: "not authorized", errorCode: e.code, action: e.action }
+        : {
+            error: "authorization unavailable",
+            errorCode: e.code,
+            action: e.action,
+          },
+      { status: e.code === "authz_denied" ? 403 : 503 }
     );
   if (e instanceof ContributionForbiddenError)
     return NextResponse.json({ error: e.message }, { status: 403 });
@@ -339,19 +347,6 @@ export async function handleDiff(
   });
 }
 
-/** A diff entry that changes a goal row, or a citation edge leaving one. */
-function touchesGoal(entry: {
-  rowId: string;
-  before: Record<string, unknown> | null;
-  after: Record<string, unknown> | null;
-}): boolean {
-  return (
-    isGoalRowId(entry.rowId) ||
-    isGoalRowId(entry.before?.citingId) ||
-    isGoalRowId(entry.after?.citingId)
-  );
-}
-
 export async function handleMerge(
   request: Request,
   contributionId: string,
@@ -382,20 +377,7 @@ export async function handleMerge(
 
   const principal = sessionUserToPrincipal(sessionUser, authSource(request));
   try {
-    // GOAL_CHANGE_IS_NODE_ADMIN — read the diff first so the check precedes the merge.
-    const entries = await svc.diff(contributionId);
-    if (entries.some(touchesGoal)) {
-      const gate = await checkNodeAdmin(getContainer().authorization, {
-        userId: sessionUser.id,
-        nodeId: getNodeId(),
-      });
-      if (!gate.ok) {
-        return NextResponse.json(
-          nodeAdminFailureBody(gate, "knowledge.contributions.merge.goal"),
-          { status: gate.status }
-        );
-      }
-    }
+    // GOAL_CHANGE_IS_NODE_ADMIN runs inside merge (authorizeMerge hook), before any write.
     const result = await svc.merge({
       principal,
       contributionId,

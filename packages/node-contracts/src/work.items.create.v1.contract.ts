@@ -11,6 +11,8 @@
  *   - ID is server-allocated by default; client-supplied `id` is allowed for ID-preserving bulk imports (legacy markdown corpus → Doltgres). Server validates the format and rejects collisions with existing rows.
  *   - status defaults to "needs_triage" if not provided
  *   - node defaults to "shared"
+ *   - PRIORITY_RANGE: `priority` is an integer 0..99 (0 = highest), the same bound as the
+ *     core__work_item_transition tool. 0 and 1 additionally require node admin (route gate).
  * Side-effects: none
  * Links: /api/v1/work/items route, docs/spec/work-items-port.md, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
@@ -58,7 +60,9 @@ export const workItemsCreateOperation = {
     node: z.string().optional(),
     projectId: z.string().optional(),
     parentId: z.string().optional(),
-    priority: z.number().int().optional(),
+    // PRIORITY_RANGE (task.5294): 0 is highest. Values below 0 would outrank every
+    // p0, so the wire refuses them; same bound as core__work_item_transition.
+    priority: z.number().int().min(0).max(99).optional(),
     rank: z.number().int().optional(),
     estimate: z.number().int().optional(),
     labels: z.array(z.string()).optional(),

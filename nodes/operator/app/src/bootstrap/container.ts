@@ -187,7 +187,10 @@ import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { startCatalogRegistryReconcileOnBoot } from "@/bootstrap/catalog-registry-reconcile";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
-import { checkNodeAdmin } from "@/bootstrap/node-admin-gate";
+import {
+  checkNodeAdmin,
+  createGoalMergeAuthorizer,
+} from "@/bootstrap/node-admin-gate";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
 import {
@@ -977,6 +980,13 @@ function createContainer(): Container {
       // reserved for internal `core__knowledge_write` where the caller
       // controls those fields. See work/projects/proj.knowledge-syntropy.md.
       gates: [shapeGate],
+      // GOAL_CHANGE_IS_NODE_ADMIN (task.5294): checked inside merge on the RAW changed rows,
+      // bound to the authorized head. `authorization` is assigned later in this function.
+      authorizeMerge: createGoalMergeAuthorizer({
+        authorization: () => authorization,
+        nodeId,
+        log,
+      }),
       ...(pushMainOnMerge ? { pushMainOnMerge } : {}),
     });
     log.info(
@@ -1039,17 +1049,37 @@ function createContainer(): Container {
       store: doltgresWorkItems,
       principalId: `actor:${COGNI_SYSTEM_PRINCIPAL_USER_ID}`,
     },
-    // P0P1_IS_NODE_ADMIN (task.5286): gate priority 0/1 on the INVOKING actor from the
+    // P0P1_IS_NODE_ADMIN (task.5286): gate priority <= 1 on the INVOKING actor from the
     // run's execution scope — never the system principal the write is attributed to.
     // Outside a graph run (no scope) the actor is missing ⇒ authz_unavailable.
-    privilegedPriorityGate: () => {
+    // Every deny is logged here: the tool path has no request logger of its own.
+    privilegedPriorityGate: async () => {
       let actorUserId: string | undefined;
       try {
         actorUserId = getExecutionScope().actorUserId;
       } catch {
         actorUserId = undefined;
       }
-      return checkNodeAdmin(authorization, { userId: actorUserId, nodeId });
+      const gate = await checkNodeAdmin(authorization, {
+        userId: actorUserId,
+        nodeId,
+      });
+      if (!gate.ok) {
+        log.warn(
+          {
+            event: "work_item.priority.denied",
+            path: "core__work_item_transition",
+            errorCode: gate.errorCode,
+            reason:
+              gate.errorCode === "authz_unavailable"
+                ? gate.reason
+                : "not_node_admin",
+            actor: actorUserId ?? null,
+          },
+          "work_item.priority.denied"
+        );
+      }
+      return gate;
     },
   });
 

@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/tests/dao-goals`
  * Purpose: Coverage for the DAO goal list reader — `listActiveGoals` on the Doltgres + fake adapters — and the goal confidence exemption.
  * Scope: Fake postgres.js client; does not connect to live Doltgres.
- * Invariants: ONE_GOAL_LIST, MAX_THREE_GOALS, NO_GOALS_FAILS_LOUD (empty list, not an omission), goals excluded from confidence recompute.
+ * Invariants: ONE_GOAL_LIST, NO_GOAL_CAP, NO_GOALS_FAILS_LOUD (empty list, not an omission), goals excluded from recompute.
  * Side-effects: none
  * Links: packages/knowledge-store/src/domain/dao-goals.ts, packages/knowledge-store/src/adapters/doltgres/index.ts
  * @internal
@@ -19,11 +19,9 @@ import {
   FakeEdoResolverAdapter,
   FakeKnowledgeStoreAdapter,
 } from "../src/adapters/fake/index.js";
-import { MAX_ACTIVE_GOALS } from "../src/domain/dao-goals.js";
-import {
-  HypothesisMissingEvaluateAtError,
-  TooManyActiveGoalsError,
-} from "../src/port/knowledge-store.port.js";
+import { isGoalRowId, touchedGoalIds } from "../src/domain/dao-goals.js";
+import * as knowledgeStore from "../src/index.js";
+import { HypothesisMissingEvaluateAtError } from "../src/port/knowledge-store.port.js";
 
 type Row = Record<string, unknown>;
 
@@ -66,7 +64,7 @@ describe("DoltgresKnowledgeStoreAdapter.listActiveGoals", () => {
     await expect(adapter.listActiveGoals()).resolves.toEqual([]);
   });
 
-  it("returns 1–3 goals sorted by id with id, title, content, evaluateAt verbatim", async () => {
+  it("returns goals sorted by id with id, title, content, evaluateAt verbatim", async () => {
     const { adapter } = adapterFor([
       goalRow("goal-b"),
       goalRow("goal-a"),
@@ -95,17 +93,14 @@ describe("DoltgresKnowledgeStoreAdapter.listActiveGoals", () => {
     expect(goals.map((g) => g.id)).toEqual(["goal-live"]);
   });
 
-  it("throws TooManyActiveGoalsError past the max — never truncates (MAX_THREE_GOALS)", async () => {
-    const ids = ["goal-a", "goal-b", "goal-c", "goal-d"];
+  it("returns every active goal — a 4th and 5th goal still render (NO_GOAL_CAP)", async () => {
+    const ids = ["goal-a", "goal-b", "goal-c", "goal-d", "goal-e"];
     const { adapter } = adapterFor(ids.map((id) => goalRow(id)));
-    const err = await adapter.listActiveGoals().catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(TooManyActiveGoalsError);
-    expect((err as TooManyActiveGoalsError).goalIds).toEqual(ids);
-    expect((err as TooManyActiveGoalsError).max).toBe(MAX_ACTIVE_GOALS);
-    expect((err as Error).message).toContain("4 active DAO goals");
+    const goals = await adapter.listActiveGoals();
+    expect(goals.map((g) => g.id)).toEqual(ids);
   });
 
-  it("does not count deprecated rows toward the cap", async () => {
+  it("excludes deprecated rows from the list", async () => {
     const { adapter } = adapterFor([
       goalRow("goal-a"),
       goalRow("goal-b"),
@@ -153,7 +148,7 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
     return store;
   }
 
-  it("selects goal-* goal rows and enforces the same cap", async () => {
+  it("selects goal-* goal rows with no cap (NO_GOAL_CAP)", async () => {
     const store = await freshStore();
     await expect(store.listActiveGoals()).resolves.toEqual([]);
     await seed(store, "goal-a");
@@ -164,9 +159,12 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
     await seed(store, "goal-b");
     await seed(store, "goal-c");
     await seed(store, "goal-d");
-    await expect(store.listActiveGoals()).rejects.toBeInstanceOf(
-      TooManyActiveGoalsError
-    );
+    expect((await store.listActiveGoals()).map((g) => g.id)).toEqual([
+      "goal-a",
+      "goal-b",
+      "goal-c",
+      "goal-d",
+    ]);
   });
 
   it("rejects a goal without evaluateAt (its By: deadline)", async () => {
@@ -222,5 +220,37 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
     expect((await store.getKnowledge("goal-a"))?.confidencePct).toBe(
       goal.confidencePct
     );
+  });
+});
+
+describe("goal row identity (ONE_GOAL_LIST · GOAL_CHANGE_IS_NODE_ADMIN)", () => {
+  it("removes the goal cap from the public surface", () => {
+    expect("MAX_ACTIVE_GOALS" in knowledgeStore).toBe(false);
+    expect("TooManyActiveGoalsError" in knowledgeStore).toBe(false);
+  });
+
+  it("isGoalRowId matches only goal-prefixed strings", () => {
+    expect(isGoalRowId("goal-ship")).toBe(true);
+    expect(isGoalRowId("ship-goal")).toBe(false);
+    expect(isGoalRowId(undefined)).toBe(false);
+    expect(isGoalRowId(null)).toBe(false);
+  });
+
+  it("touchedGoalIds names every goal row or citation leaving one, deduped and sorted", () => {
+    expect(
+      touchedGoalIds({
+        knowledgeIds: ["some-guide", "goal-b", "goal-b"],
+        citingIds: ["goal-a", "decision-x"],
+      })
+    ).toEqual(["goal-a", "goal-b"]);
+  });
+
+  it("does not treat a citation INTO a goal as a goal change", () => {
+    expect(
+      touchedGoalIds({
+        knowledgeIds: ["decision-x"],
+        citingIds: ["decision-x"],
+      })
+    ).toEqual([]);
   });
 });

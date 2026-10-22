@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/tests/contribution-service`
  * Purpose: Unit coverage for contribution service ownership gates and edit-batch forwarding.
  * Scope: Pure service tests with a fake contribution port. Does not call Doltgres or HTTP.
- * Invariants: CONTRIBUTION_OWNER_CAN_APPEND, CONTRIBUTION_OWNER_CAN_CLOSE.
+ * Invariants: CONTRIBUTION_OWNER_CAN_APPEND, CONTRIBUTION_OWNER_CAN_CLOSE, MERGE_AUTHORIZED_ON_RAW_ROWS, MERGE_HEAD_CAS.
  * Side-effects: none
  * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store/src/service/contribution-service.ts
  * @internal
@@ -21,7 +21,9 @@ import type {
 } from "../src/domain/contribution-schemas.js";
 import { KnowledgeGateError, shapeGate } from "../src/domain/gates/index.js";
 import {
+  type ContributionChangedRows,
   ContributionForbiddenError,
+  ContributionMergeDeniedError,
   type CreateEdoDecisionInput,
   type CreateEdoHypothesisInput,
   type CreateEdoOutcomeInput,
@@ -332,6 +334,19 @@ class FakeContributionPort implements KnowledgeContributionPort {
 
   async diff() {
     return [];
+  }
+
+  changedRowsCalls = 0;
+  changed: ContributionChangedRows = {
+    headCommit: "abc123",
+    knowledgeIds: [],
+    citingIds: [],
+    citedIds: [],
+  };
+
+  async changedRows(): Promise<ContributionChangedRows> {
+    this.changedRowsCalls++;
+    return this.changed;
   }
 
   async listCommits(): Promise<ContributionCommitRecord[]> {
@@ -887,5 +902,103 @@ describe("createContributionService", () => {
     expect(result.commitHash).toBe("merge123");
     await Promise.resolve();
     expect(pushFailures).toBe(1);
+  });
+
+  describe("authorizeMerge (MERGE_AUTHORIZED_ON_RAW_ROWS · MERGE_HEAD_CAS)", () => {
+    const goalTagsOnly: ContributionChangedRows = {
+      headCommit: "head-authorized",
+      knowledgeIds: ["goal-ship"],
+      citingIds: [],
+      citedIds: [],
+    };
+
+    it("hands the hook the RAW changed rows, then merges only the authorized head", async () => {
+      const port = new FakeContributionPort();
+      port.changed = goalTagsOnly;
+      const seen: ContributionChangedRows[] = [];
+      const service = createContributionService({
+        port,
+        canMergeKnowledge: () => true,
+        authorizeMerge: async ({ changes }) => {
+          seen.push(changes);
+        },
+      });
+
+      await service.merge({
+        principal: adminUser,
+        contributionId: "contrib-agent-1-abc123",
+      });
+
+      expect(seen).toEqual([goalTagsOnly]);
+      expect(port.lastMerge).toMatchObject({
+        contributionId: "contrib-agent-1-abc123",
+        expectedHeadCommit: "head-authorized",
+      });
+    });
+
+    it("refuses before any merge side effect when the hook denies", async () => {
+      const port = new FakeContributionPort();
+      port.changed = goalTagsOnly;
+      const service = createContributionService({
+        port,
+        canMergeKnowledge: () => true,
+        authorizeMerge: async () => {
+          throw new ContributionMergeDeniedError(
+            "authz_denied",
+            "knowledge.contributions.merge.goal"
+          );
+        },
+      });
+
+      const err = await service
+        .merge({
+          principal: adminUser,
+          contributionId: "contrib-agent-1-abc123",
+        })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ContributionMergeDeniedError);
+      expect((err as ContributionMergeDeniedError).code).toBe("authz_denied");
+      expect(port.lastMerge).toBeNull();
+    });
+
+    it("runs the hook before the admin-session check, so a bearer goal merge reports authz_denied", async () => {
+      const port = new FakeContributionPort();
+      port.changed = goalTagsOnly;
+      const service = createContributionService({
+        port,
+        canMergeKnowledge: defaultCanMergeKnowledge,
+        authorizeMerge: async () => {
+          throw new ContributionMergeDeniedError(
+            "authz_denied",
+            "knowledge.contributions.merge.goal"
+          );
+        },
+      });
+
+      await expect(
+        service.merge({
+          principal: agent,
+          contributionId: "contrib-agent-1-abc123",
+        })
+      ).rejects.toBeInstanceOf(ContributionMergeDeniedError);
+      expect(port.lastMerge).toBeNull();
+    });
+
+    it("leaves merges unchanged when no hook is wired (no raw read, no CAS)", async () => {
+      const port = new FakeContributionPort();
+      const service = createContributionService({
+        port,
+        canMergeKnowledge: () => true,
+      });
+
+      await service.merge({
+        principal: adminUser,
+        contributionId: "contrib-agent-1-abc123",
+      });
+
+      expect(port.changedRowsCalls).toBe(0);
+      expect(port.lastMerge).not.toHaveProperty("expectedHeadCommit");
+    });
   });
 });

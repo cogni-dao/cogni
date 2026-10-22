@@ -5,7 +5,8 @@
  * Module: `@cogni/knowledge-store/tests/contribution-adapter`
  * Purpose: Focused unit coverage for Doltgres contribution adapter revision selection and metadata ordering.
  * Scope: Uses fake postgres.js clients; does not connect to Doltgres.
- * Invariants: CONTRIBUTION_DIFF_ANCHORED_TO_BASE, CONTRIBUTION_METADATA_BEFORE_BRANCH_DELETE.
+ * Invariants: CONTRIBUTION_DIFF_ANCHORED_TO_BASE, CONTRIBUTION_METADATA_BEFORE_BRANCH_DELETE,
+ *   HYPOTHESIS_HAS_EVALUATE_AT (update + patch), MERGE_GATES_ON_RAW_ROWS, MERGE_HEAD_CAS.
  * Side-effects: none
  * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
  * @internal
@@ -19,6 +20,7 @@ import {
   KnowledgeContributionEditSchema,
   type Principal,
 } from "../src/domain/contribution-schemas.js";
+import { ContributionConflictError } from "../src/port/contribution.port.js";
 import {
   CitationTargetNotFoundError,
   HypothesisMissingEvaluateAtError,
@@ -85,11 +87,23 @@ class NativeState {
   }
 }
 
+/** The target row's stored deadline state, as `assertResultingDeadline` reads it. */
+type StoredDeadline = {
+  entry_type: string;
+  evaluate_at: Date | null;
+} | null;
+
 class FakeReservedSql {
   private readonly native = new NativeState();
   readonly queries: string[] = [];
 
-  constructor(private readonly hasUseWhen = true) {}
+  constructor(
+    private readonly hasUseWhen = true,
+    private readonly stored: StoredDeadline = {
+      entry_type: "finding",
+      evaluate_at: null,
+    }
+  ) {}
 
   async unsafe(
     query: string
@@ -128,6 +142,9 @@ class FakeReservedSql {
     }
     if (query.includes("FROM knowledge_contributions")) {
       return [record];
+    }
+    if (query.includes("SELECT entry_type, evaluate_at FROM knowledge")) {
+      return this.stored ? [this.stored] : [];
     }
     // cite-path lookups: both endpoints resolve, no incoming edges yet.
     if (query.includes("SELECT 1 FROM knowledge WHERE id")) {
@@ -176,9 +193,10 @@ class FakeSql {
 
   constructor(
     private readonly contributionRecord: Record<string, unknown> = record,
-    hasUseWhen = true
+    hasUseWhen = true,
+    stored?: StoredDeadline
   ) {
-    this.conn = new FakeReservedSql(hasUseWhen);
+    this.conn = new FakeReservedSql(hasUseWhen, stored);
   }
 
   async unsafe(query: string): Promise<Record<string, unknown>[]> {
@@ -1104,6 +1122,226 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
         ],
       })
     ).rejects.toBeInstanceOf(CitationTargetNotFoundError);
+  });
+});
+
+describe("goal deadline on update + patch (HYPOTHESIS_HAS_EVALUATE_AT · task.5294)", () => {
+  const goalStored = {
+    entry_type: "goal",
+    evaluate_at: new Date("2026-12-31T00:00:00.000Z"),
+  };
+  const findingStored = { entry_type: "finding", evaluate_at: null };
+
+  async function append(
+    fake: FakeSql,
+    edit: Parameters<
+      DoltgresKnowledgeContributionAdapter["appendCommit"]
+    >[0]["edits"][number]
+  ) {
+    return adapterFor(fake).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "goal deadline edit",
+      edits: [edit],
+    });
+  }
+
+  const knowledgeUpdate = (fake: FakeSql) =>
+    fake.conn.queries.find((q) => q.startsWith("UPDATE knowledge SET"));
+
+  it("refuses a patch that retypes a row to goal with no deadline, writing nothing", async () => {
+    const fake = new FakeSql(record, true, findingStored);
+    await expect(
+      append(fake, {
+        op: "patch",
+        targetRowId: "ship-faster",
+        entry: { entryType: "goal" },
+      })
+    ).rejects.toBeInstanceOf(HypothesisMissingEvaluateAtError);
+    expect(knowledgeUpdate(fake)).toBeUndefined();
+  });
+
+  it("lets a patch retype to goal when it carries the deadline, and persists it", async () => {
+    const fake = new FakeSql(record, true, findingStored);
+    await append(fake, {
+      op: "patch",
+      targetRowId: "ship-faster",
+      entry: {
+        entryType: "goal",
+        evaluateAt: "2027-03-31T00:00:00.000Z",
+        resolutionStrategy: "metric:prs-merged",
+      },
+    });
+    const update = knowledgeUpdate(fake);
+    expect(update).toContain("entry_type = 'goal'");
+    expect(update).toContain("evaluate_at = '2027-03-31T00:00:00.000Z'");
+    expect(update).toContain("resolution_strategy = 'metric:prs-merged'");
+  });
+
+  it("moves a goal's deadline with a patch that names only evaluateAt", async () => {
+    const fake = new FakeSql(record, true, goalStored);
+    await append(fake, {
+      op: "patch",
+      targetRowId: "goal-ship",
+      entry: { evaluateAt: "2027-06-30T00:00:00.000Z" },
+    });
+    expect(knowledgeUpdate(fake)).toContain(
+      "evaluate_at = '2027-06-30T00:00:00.000Z'"
+    );
+  });
+
+  it("refuses an update that retypes a row to goal with no deadline", async () => {
+    const fake = new FakeSql(record, true, findingStored);
+    await expect(
+      append(fake, {
+        op: "update",
+        targetRowId: "ship-faster",
+        entry: {
+          id: "ship-faster",
+          domain: "strategy",
+          title: "Ship faster",
+          content: "statement",
+          entryType: "goal",
+        },
+      })
+    ).rejects.toBeInstanceOf(HypothesisMissingEvaluateAtError);
+    expect(knowledgeUpdate(fake)).toBeUndefined();
+  });
+
+  it("persists evaluateAt and resolutionStrategy on an update (no longer dropped)", async () => {
+    const fake = new FakeSql(record, true, goalStored);
+    await append(fake, {
+      op: "update",
+      targetRowId: "goal-ship",
+      entry: {
+        id: "goal-ship",
+        domain: "strategy",
+        title: "Ship faster",
+        content: "statement",
+        entryType: "goal",
+        evaluateAt: "2027-01-15T00:00:00.000Z",
+        resolutionStrategy: "metric:prs-merged",
+      },
+    });
+    const update = knowledgeUpdate(fake);
+    expect(update).toContain("evaluate_at = '2027-01-15T00:00:00.000Z'");
+    expect(update).toContain("resolution_strategy = 'metric:prs-merged'");
+  });
+
+  it("keeps a goal's stored deadline when an update omits evaluateAt (never nulls it)", async () => {
+    const fake = new FakeSql(record, true, goalStored);
+    await append(fake, {
+      op: "update",
+      targetRowId: "goal-ship",
+      entry: {
+        id: "goal-ship",
+        domain: "strategy",
+        title: "Ship faster",
+        content: "statement",
+        entryType: "goal",
+        tags: ["retagged"],
+      },
+    });
+    const update = knowledgeUpdate(fake);
+    expect(update).toBeDefined();
+    expect(update).not.toContain("evaluate_at");
+  });
+
+  it("still answers not-found for an update or patch on a missing row", async () => {
+    const fake = new FakeSql(record, true, null);
+    await expect(
+      append(fake, {
+        op: "patch",
+        targetRowId: "nope",
+        entry: { useWhen: "never" },
+      })
+    ).rejects.toThrow(/knowledge row not found/);
+  });
+});
+
+describe("raw changed rows + merge head CAS (MERGE_GATES_ON_RAW_ROWS · MERGE_HEAD_CAS)", () => {
+  it("names a goal row the display diff hides (tags-only update) plus citation endpoints", async () => {
+    const fake = new FakeDiffSql(
+      [
+        {
+          diff_type: "modified",
+          from_id: "goal-ship",
+          to_id: "goal-ship",
+          from_title: "Ship faster",
+          to_title: "Ship faster",
+          from_content: "statement",
+          to_content: "statement",
+          from_entry_type: "goal",
+          to_entry_type: "goal",
+          from_domain: "strategy",
+          to_domain: "strategy",
+        },
+      ],
+      [
+        {
+          diff_type: "added",
+          to_id: "cit-1",
+          to_citing_id: "decision-x",
+          to_cited_id: "goal-ship",
+        },
+        {
+          diff_type: "removed",
+          from_id: "cit-2",
+          from_citing_id: "goal-old",
+          from_cited_id: "finding-y",
+        },
+      ]
+    );
+    const adapter = adapterFor(fake);
+
+    // The display diff drops the tags-only goal change (bug.5004 filter) ...
+    const display = await adapter.diff("contrib-agent-1-abc123");
+    expect(display.some((e) => e.rowId === "goal-ship")).toBe(false);
+
+    // ... the raw read does not.
+    const changes = await adapter.changedRows("contrib-agent-1-abc123");
+    expect(changes).toEqual({
+      headCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      knowledgeIds: ["goal-ship"],
+      citingIds: ["decision-x", "goal-old"],
+      citedIds: ["goal-ship", "finding-y"],
+    });
+    expect(
+      fake.queries.some((q) =>
+        q.includes(
+          "SELECT from_id, to_id FROM dolt_diff('base123', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'knowledge')"
+        )
+      )
+    ).toBe(true);
+  });
+
+  it("refuses a merge whose head moved after authorization, before dolt_merge", async () => {
+    const conn = new FakeMergeReservedSql(["merge999", "0", "0", "ok"]);
+    const fake = new FakeMergeSql(conn);
+
+    await expect(
+      adapterFor(fake).merge({
+        contributionId: "contrib-agent-1-abc123",
+        principal: reviewer,
+        expectedHeadCommit: "dddddddddddddddddddddddddddddddd",
+      })
+    ).rejects.toBeInstanceOf(ContributionConflictError);
+    expect(conn.queries.some((q) => q.includes("dolt_merge("))).toBe(false);
+    expect(conn.queries.some((q) => q.includes("SET state = 'merged'"))).toBe(
+      false
+    );
+  });
+
+  it("merges when the authorized head is still the head (brace-insensitive)", async () => {
+    const conn = new FakeMergeReservedSql(["merge999", "0", "0", "ok"]);
+    const fake = new FakeMergeSql(conn);
+
+    const result = await adapterFor(fake).merge({
+      contributionId: "contrib-agent-1-abc123",
+      principal: reviewer,
+      expectedHeadCommit: "{aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}",
+    });
+    expect(result.commitHash).toBe("merge999");
   });
 });
 

@@ -24,14 +24,13 @@
  *   - APPEND_HEAD_READ_INSIDE_ADMISSION: append metadata is read under the
  *     same lock as the branch write; queued appends observe their predecessor.
  *   - Reads from a branch use reserved-conn checkout (AS OF deferred to v1).
- *   - PATCH_CARRIES_ONLY_UNGATED_FIELDS: the `patch` edit op applies a partial
- *     SET built from `KnowledgeEntryPatch`, which carries ONLY fields no write
- *     gate governs (`useWhen`, `entryType`). `content`, `title`, `tags`, `id`
- *     and `domain` are absent from the type, so a trigger refinement is
- *     structurally incapable of overwriting a body, bypassing the shape gate's
- *     title/tag rules, or moving a shelf (task.5204). The SET runs on the
- *     session-pinned branch connection inside `withBranch`, NEVER on
- *     `this.sql`, so the edit stays on `contrib/*` and reviewable.
+ *   - PATCH_CARRIES_ONLY_UNGATED_FIELDS: `patch` SETs only `KnowledgeEntryPatch`
+ *     fields no write gate governs, on the session-pinned branch connection
+ *     (task.5204). See KnowledgeEntryPatchSchema for the full rule.
+ *   - HYPOTHESIS_HAS_EVALUATE_AT: insert, update and patch check the RESULTING row
+ *     (no undated goal); update/patch persist a supplied evaluateAt/resolver.
+ *   - MERGE_GATES_ON_RAW_ROWS + MERGE_HEAD_CAS: `changedRows` reads raw `dolt_diff`
+ *     ids; `merge({expectedHeadCommit})` refuses a head that moved (task.5294).
  *   - EDO atomic-batch methods (createEdoHypothesis/Decision/Outcome) open a
  *     contrib branch and apply entry + N citations + (for outcomes) confidence
  *     recompute in one Dolt commit on the branch. Mirrors EdoCapability's
@@ -81,6 +80,7 @@ import {
   requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import {
+  type ContributionChangedRows,
   ContributionConflictError,
   ContributionNotFoundError,
   ContributionStateError,
@@ -303,11 +303,54 @@ function knowledgePatchColumns(
   if (patch.entryType !== undefined) {
     columns.push({ column: "entry_type", value: patch.entryType });
   }
+  if (patch.evaluateAt !== undefined) {
+    columns.push({ column: "evaluate_at", value: new Date(patch.evaluateAt) });
+  }
+  if (patch.resolutionStrategy !== undefined) {
+    columns.push({
+      column: "resolution_strategy",
+      value: patch.resolutionStrategy,
+    });
+  }
   // Same provenance stamp as every other contribution write.
   columns.push({ column: "source_type", value: "external" });
   columns.push({ column: "source_ref", value: provenance.sourceRef });
   columns.push({ column: "source_node", value: provenance.sourceNode });
   return columns;
+}
+
+/**
+ * HYPOTHESIS_HAS_EVALUATE_AT on update/patch: read the target row's stored
+ * `entry_type` / `evaluate_at`, and refuse when the RESULTING row would be a
+ * goal or hypothesis with no deadline. `nextEvaluateAt` is the value the edit
+ * supplies, if any; an absent value keeps the stored one. Also proves the row
+ * exists (replaces `assertKnowledgeRowExists` on these paths).
+ */
+async function assertResultingDeadline(
+  conn: ReservedSql,
+  targetRowId: string,
+  next: { entryType: string | undefined; evaluateAt: string | undefined }
+): Promise<void> {
+  const rows = await conn.unsafe(
+    `SELECT entry_type, evaluate_at FROM knowledge WHERE id = ${escapeValue(targetRowId)} LIMIT 1`
+  );
+  if (rows.length === 0) {
+    throw new ContributionNotFoundError(
+      `knowledge row not found: ${targetRowId}`
+    );
+  }
+  const current = rows[0] as Record<string, unknown>;
+  const entryType =
+    next.entryType ?? (current.entry_type as string | null | undefined);
+  const hasDeadline =
+    next.evaluateAt !== undefined ||
+    (current.evaluate_at !== null && current.evaluate_at !== undefined);
+  if (requiresEvaluateAt(entryType) && !hasDeadline) {
+    throw new HypothesisMissingEvaluateAtError(
+      targetRowId,
+      entryType ?? "hypothesis"
+    );
+  }
 }
 
 async function assertKnowledgeRowExists(
@@ -755,13 +798,17 @@ async function applyEdit(input: {
     //
     // No `assertDomainRegistered` here: with no `domain` in the partial the row
     // stays on the shelf it is already on, so there is no new FK to check.
-    await assertKnowledgeRowExists(conn, edit.targetRowId);
     if (knowledgeEntryPatchIsEmpty(edit.entry)) {
       // Defense in depth — the wire schema rejects this first.
       throw new EmptyKnowledgePatchError(edit.targetRowId, [
         ...KNOWLEDGE_ENTRY_PATCH_FIELDS,
       ]);
     }
+    // HYPOTHESIS_HAS_EVALUATE_AT: a retype to goal/hypothesis needs a deadline.
+    await assertResultingDeadline(conn, edit.targetRowId, {
+      entryType: edit.entry.entryType,
+      evaluateAt: edit.entry.evaluateAt,
+    });
     if (
       edit.entry.useWhen !== undefined &&
       !(await knowledgeColumnExists(conn, "use_when"))
@@ -793,13 +840,27 @@ async function applyEdit(input: {
     { principalKind: principal.kind }
   ).confidencePct;
   if (edit.op === "update") {
-    await assertKnowledgeRowExists(conn, edit.targetRowId);
     const entryType = edit.entry.entryType ?? "finding";
+    // HYPOTHESIS_HAS_EVALUATE_AT on the resulting row; a supplied deadline and
+    // resolver persist, an absent one keeps the stored value (never nulled).
+    await assertResultingDeadline(conn, edit.targetRowId, {
+      entryType,
+      evaluateAt: edit.entry.evaluateAt,
+    });
     const useWhenAssignment = hasUseWhen
       ? `, use_when = ${edit.entry.useWhen ? escapeValue(stripDangerousControlChars(edit.entry.useWhen)) : "NULL"}`
       : "";
+    const deadlineAssignment = `${
+      edit.entry.evaluateAt !== undefined
+        ? `, evaluate_at = ${escapeValue(new Date(edit.entry.evaluateAt))}`
+        : ""
+    }${
+      edit.entry.resolutionStrategy !== undefined
+        ? `, resolution_strategy = ${escapeValue(edit.entry.resolutionStrategy)}`
+        : ""
+    }`;
     const result = await conn.unsafe(
-      `UPDATE knowledge SET domain = ${escapeValue(edit.entry.domain)}, entity_id = ${escapeValue(edit.entry.entityId ?? null)}, title = ${escapeValue(stripDangerousControlChars(edit.entry.title))}, content = ${escapeValue(stripDangerousControlChars(edit.entry.content))}${useWhenAssignment}, entry_type = ${escapeValue(entryType)}, confidence_pct = ${escapeValue(confidencePct)}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, tags = ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
+      `UPDATE knowledge SET domain = ${escapeValue(edit.entry.domain)}, entity_id = ${escapeValue(edit.entry.entityId ?? null)}, title = ${escapeValue(stripDangerousControlChars(edit.entry.title))}, content = ${escapeValue(stripDangerousControlChars(edit.entry.content))}${useWhenAssignment}, entry_type = ${escapeValue(entryType)}, confidence_pct = ${escapeValue(confidencePct)}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, tags = ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}${deadlineAssignment}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
     );
     if (result.count === 0) {
       throw new ContributionNotFoundError(
@@ -1793,9 +1854,43 @@ export class DoltgresKnowledgeContributionAdapter
     return entries;
   }
 
+  async changedRows(contributionId: string): Promise<ContributionChangedRows> {
+    const rec = await this.getById(contributionId);
+    if (!rec) throw new ContributionNotFoundError(contributionId);
+    const toRef = rec.headCommit ?? rec.baseCommit;
+    // MERGE_GATES_ON_RAW_ROWS: no phantom-modified filter here. A row whose
+    // displayed fields are unchanged (tags, entity_id, evaluate_at, ...) still
+    // counts, because it is still a change the merge would publish.
+    const knowledgeRows = await this.sql.unsafe(
+      `SELECT from_id, to_id FROM dolt_diff(${escapeRef(rec.baseCommit)}, ${escapeRef(toRef)}, 'knowledge')`
+    );
+    const citationRows = await this.sql.unsafe(
+      `SELECT from_citing_id, to_citing_id, from_cited_id, to_cited_id FROM dolt_diff(${escapeRef(rec.baseCommit)}, ${escapeRef(toRef)}, 'citations')`
+    );
+    const ids = (
+      rows: readonly Record<string, unknown>[],
+      columns: readonly string[]
+    ): string[] => {
+      const out = new Set<string>();
+      for (const row of rows)
+        for (const column of columns) {
+          const value = row[column];
+          if (typeof value === "string" && value) out.add(value);
+        }
+      return [...out];
+    };
+    return {
+      headCommit: normalizeDoltCommitRef(toRef),
+      knowledgeIds: ids(knowledgeRows, ["from_id", "to_id"]),
+      citingIds: ids(citationRows, ["from_citing_id", "to_citing_id"]),
+      citedIds: ids(citationRows, ["from_cited_id", "to_cited_id"]),
+    };
+  }
+
   async merge(input: {
     contributionId: string;
     principal: Principal;
+    expectedHeadCommit?: string;
   }): Promise<{ commitHash: string }> {
     const rec = await this.getById(input.contributionId);
     if (!rec) throw new ContributionNotFoundError(input.contributionId);
@@ -1834,6 +1929,17 @@ export class DoltgresKnowledgeContributionAdapter
           throw new ContributionStateError(
             `contribution ${input.contributionId} is ${rec.state}`
           );
+        // MERGE_HEAD_CAS: the head read under this guard must be the head the
+        // caller authorized; an append in between is refused, never merged.
+        if (
+          input.expectedHeadCommit !== undefined &&
+          normalizeDoltCommitRef(rec.headCommit ?? rec.baseCommit) !==
+            normalizeDoltCommitRef(input.expectedHeadCommit)
+        ) {
+          throw new ContributionConflictError(
+            `contribution ${input.contributionId} changed after its merge was authorized; review the new head and merge again`
+          );
+        }
 
         // Capture only this contribution's added outcome edges before its ref
         // can be reaped. Recompute against current MAIN after the native merge,

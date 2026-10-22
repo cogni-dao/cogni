@@ -17,6 +17,10 @@
  *   - EDO_CONFIDENCE_PUBLISHED_ON_MERGE: main-only outcome targets are valid,
  *     confidence and merged metadata publish together, and failed appends roll back.
  *   - Q_MATCHES_USEWHEN_ONLY: `q` matches the trigger, never the title or body.
+ *   - HYPOTHESIS_HAS_EVALUATE_AT on patch + update (task.5294): a retype to `goal` with no
+ *     deadline is refused; a goal's deadline moves by patch and persists on update.
+ *   - MERGE_GATES_ON_RAW_ROWS + MERGE_HEAD_CAS (task.5294): a tags-only goal update the display
+ *     diff hides is named by `changedRows`, and a merge refuses a head it did not authorize.
  * Side-effects: IO, process.env
  * Links: packages/knowledge-store/src/domain/contribution-schemas.ts, packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
  * @internal
@@ -26,7 +30,9 @@ import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  ContributionConflictError,
   EmptyKnowledgePatchError,
+  HypothesisMissingEvaluateAtError,
   KnowledgeContributionEditSchema,
 } from "@cogni/knowledge-store";
 import {
@@ -369,6 +375,127 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
         ],
       })
     ).rejects.toThrow(EmptyKnowledgePatchError);
+  }, 180_000);
+
+  it("GOAL_REQUIRES_DEADLINE: a patch retyping a row to goal with no deadline is refused", async () => {
+    await seedEntry("goal-undated-retype", "use when proving the retype gate");
+    await expect(
+      adapter.create({
+        principal: principal("retyper-goal"),
+        message: "retype to goal without a deadline",
+        edits: [
+          {
+            op: "patch",
+            targetRowId: "goal-undated-retype",
+            entry: { entryType: "goal" },
+          },
+        ],
+      })
+    ).rejects.toThrow(HypothesisMissingEvaluateAtError);
+    expect((await store.getKnowledge("goal-undated-retype"))?.entryType).toBe(
+      "finding"
+    );
+  }, 180_000);
+
+  it("GOAL deadline: patch retypes with a deadline, then moves it; update persists evaluateAt + resolver", async () => {
+    await seedEntry("goal-dated", "use when proving a goal deadline moves");
+    await contributeAndMerge("goal-retyper", "retype with deadline", [
+      {
+        op: "patch",
+        targetRowId: "goal-dated",
+        entry: { entryType: "goal", evaluateAt: "2027-01-31T00:00:00.000Z" },
+      },
+    ]);
+    let row = await store.getKnowledge("goal-dated");
+    expect(row?.entryType).toBe("goal");
+    expect(row?.evaluateAt?.toISOString()).toBe("2027-01-31T00:00:00.000Z");
+
+    await contributeAndMerge("goal-mover", "move the deadline", [
+      {
+        op: "patch",
+        targetRowId: "goal-dated",
+        entry: { evaluateAt: "2027-06-30T00:00:00.000Z" },
+      },
+    ]);
+    row = await store.getKnowledge("goal-dated");
+    expect(row?.evaluateAt?.toISOString()).toBe("2027-06-30T00:00:00.000Z");
+    expect(row?.content).toBe(LONG_CONTENT);
+
+    await contributeAndMerge("goal-updater", "update with resolver", [
+      {
+        op: "update",
+        targetRowId: "goal-dated",
+        entry: {
+          id: "goal-dated",
+          domain: DOMAIN,
+          title: "Entry goal-dated",
+          content: "a goal statement",
+          entryType: "goal",
+          evaluateAt: "2027-09-30T00:00:00.000Z",
+          resolutionStrategy: "metric:prs-merged",
+        },
+      },
+    ]);
+    row = await store.getKnowledge("goal-dated");
+    expect(row?.evaluateAt?.toISOString()).toBe("2027-09-30T00:00:00.000Z");
+    expect(row?.resolutionStrategy).toBe("metric:prs-merged");
+  }, 180_000);
+
+  it("MERGE_GATES_ON_RAW_ROWS + MERGE_HEAD_CAS: a tags-only goal update is a raw change, and a moved head is refused", async () => {
+    await contributeAndMerge("goal-seeder", "seed a dated goal", [
+      {
+        op: "insert",
+        entry: {
+          id: "goal-tagged",
+          domain: DOMAIN,
+          title: "Entry goal-tagged",
+          content: "a goal statement",
+          entryType: "goal",
+          evaluateAt: "2027-12-31T00:00:00.000Z",
+        },
+      },
+    ]);
+    const rec = await adapter.create({
+      principal: principal("goal-tagger"),
+      message: "retag a goal, display fields unchanged",
+      edits: [
+        {
+          op: "update",
+          targetRowId: "goal-tagged",
+          entry: {
+            id: "goal-tagged",
+            domain: DOMAIN,
+            title: "Entry goal-tagged",
+            content: "a goal statement",
+            entryType: "goal",
+            tags: ["retagged"],
+          },
+        },
+      ],
+    });
+
+    const display = await adapter.diff(rec.contributionId);
+    expect(display.some((e) => e.rowId === "goal-tagged")).toBe(false);
+    const changes = await adapter.changedRows(rec.contributionId);
+    expect(changes.knowledgeIds).toContain("goal-tagged");
+
+    await expect(
+      adapter.merge({
+        contributionId: rec.contributionId,
+        principal: principal("goal-tagger"),
+        expectedHeadCommit: "0000000000000000000000000000000a",
+      })
+    ).rejects.toThrow(ContributionConflictError);
+
+    await adapter.merge({
+      contributionId: rec.contributionId,
+      principal: principal("goal-tagger"),
+      expectedHeadCommit: changes.headCommit,
+    });
+    const row = await store.getKnowledge("goal-tagged");
+    expect(row?.tags).toEqual(["retagged"]);
+    // update without evaluateAt keeps the stored deadline
+    expect(row?.evaluateAt?.toISOString()).toBe("2027-12-31T00:00:00.000Z");
   }, 180_000);
 
   it("Q_MATCHES_USEWHEN_ONLY: listKnowledge finds the entry by a useWhen substring", async () => {

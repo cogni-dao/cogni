@@ -84,7 +84,7 @@ function classify(error: unknown): Mapped | null {
     };
 
   // FAIL CLOSED, DISTINCT FROM DENY. The authorization service could not
-  // decide a privileged write (priority 0/1); nothing was written.
+  // decide a privileged write (priority <= 1); nothing was written.
   if (error instanceof WorkItemAuthzUnavailableError) {
     return {
       status: 503,

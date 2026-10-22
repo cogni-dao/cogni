@@ -13,12 +13,16 @@
  *     silent stripping that triggers the misleading `set must contain at least one
  *     field` error.
  *   - EMPTY_SET_REFINEMENT: `set: {}` still returns the empty-set message.
+ *   - PRIORITY_RANGE (task.5294): priority is an integer 0..99 on patch AND create.
  * Side-effects: none
  * Links: bug.5005, packages/node-contracts/src/work.items.patch.v1.contract.ts
  * @internal
  */
 
-import { workItemsPatchOperation } from "@cogni/node-contracts";
+import {
+  workItemsCreateOperation,
+  workItemsPatchOperation,
+} from "@cogni/node-contracts";
 import { describe, expect, it } from "vitest";
 
 describe("workItemsPatchOperation.input", () => {
@@ -132,5 +136,27 @@ describe("workItemsPatchOperation.input", () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+
+  it("bounds priority to 0..99 on patch and create (PRIORITY_RANGE)", () => {
+    const patch = (priority: unknown) =>
+      workItemsPatchOperation.input.safeParse({
+        id: "task.5294",
+        set: { priority },
+      }).success;
+    const create = (priority: unknown) =>
+      workItemsCreateOperation.input.safeParse({
+        type: "task",
+        title: "bounded",
+        priority,
+      }).success;
+    for (const ok of [0, 1, 2, 99]) {
+      expect(patch(ok), `patch ${ok}`).toBe(true);
+      expect(create(ok), `create ${ok}`).toBe(true);
+    }
+    for (const bad of [-1, -1000, 100, 999, 1.5]) {
+      expect(patch(bad), `patch ${bad}`).toBe(false);
+      expect(create(bad), `create ${bad}`).toBe(false);
+    }
   });
 });

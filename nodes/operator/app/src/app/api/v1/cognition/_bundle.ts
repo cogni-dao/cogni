@@ -163,9 +163,9 @@ export interface GoalsLookupPort {
 
 /**
  * Read the approved DAO goals by one direct query — not the PER_DOMAIN_LIMIT
- * domain scan, which silently drops older rows (bug.5280). Any failure,
- * including `TooManyActiveGoalsError` (MAX_THREE_GOALS) or an unconfigured hub,
- * becomes a visible `unavailable` state rather than a missing section.
+ * domain scan, which silently drops older rows (bug.5280). Every active goal
+ * renders (NO_GOAL_CAP). Any failure, including an unconfigured hub, becomes a
+ * visible `unavailable` state rather than a missing section.
  */
 export async function resolveGoals(
   port: GoalsLookupPort | undefined

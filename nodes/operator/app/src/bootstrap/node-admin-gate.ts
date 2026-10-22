@@ -4,8 +4,9 @@
 /**
  * Module: `@bootstrap/node-admin-gate`
  * Purpose: The ONE node-admin check for the DAO-goal privileges (task.5286, dao-goals-design):
- *   starting a goal, merging a `goal-*` hub change, and setting work-item priority 0/1. Each is an
- *   OpenFGA `node.administer` check on THIS node, run before the side effect.
+ *   starting a goal, merging a `goal-*` hub change, and setting work-item priority 1 or higher
+ *   (any value <= 1). Each is an OpenFGA `node.administer` check on THIS node, run before the
+ *   side effect.
  * Scope: Pure helper over an injected AuthorizationPort. Returns a typed decision; callers own the
  *   HTTP body, logging and error mapping. No second authority, no new role, no model change.
  * Invariants:
@@ -13,7 +14,13 @@
  *     (`relationForAuthzAction("node.administer")`) on `node:<nodeId>`.
  *   - CHECK_BEFORE_SIDE_EFFECT: callers run this before any write.
  *   - FAIL_CLOSED_WITH_DISTINCTION: deny → 403 `authz_denied`; no adapter, a missing actor, an
- *     adapter-reported outage or a thrown check → 503 `authz_unavailable`. Never conflated.
+ *     adapter-reported outage or a thrown check → 503 `authz_unavailable`. Never conflated. A
+ *     thrown check keeps its message in `reason`.
+ *   - P0P1_IS_NODE_ADMIN covers every priority <= 1, so a negative value cannot outrank p0
+ *     without the same check (task.5294). The HTTP contracts also bound priority to 0..99.
+ *   - MERGE_AUTHORIZED_ON_RAW_ROWS: `createGoalMergeAuthorizer` is the ContributionService
+ *     `authorizeMerge` hook; it gates on the RAW changed row ids (`touchedGoalIds`) and logs
+ *     every deny with errorCode, reason and actor.
  * Side-effects: IO (one OpenFGA check via the injected port)
  * Links: docs/spec/rbac.md, src/app/_lib/node-rbac.ts, task.5286
  * @public
@@ -23,6 +30,11 @@ import {
   type AuthorizationPort,
   authzNodeResource,
 } from "@cogni/authorization-core";
+import {
+  type AuthorizeMerge,
+  ContributionMergeDeniedError,
+  touchedGoalIds,
+} from "@cogni/knowledge-store";
 
 export type NodeAdminDenied = {
   readonly ok: false;
@@ -52,14 +64,19 @@ export function nodeAdminUnavailable(reason: string): NodeAdminUnavailable {
   return { ok: false, status: 503, errorCode: "authz_unavailable", reason };
 }
 
-/** Priority 0 and 1 are the node-admin tier (P0P1_IS_NODE_ADMIN); 2+ stays open. */
-export function isPrivilegedPriority(priority: number | null | undefined) {
-  return priority === 0 || priority === 1;
+/**
+ * Any priority <= 1 is the node-admin tier (P0P1_IS_NODE_ADMIN). A value below 0 would sort
+ * above every p0, so it is privileged too; 2+ stays open.
+ */
+export function isPrivilegedPriority(
+  priority: number | null | undefined
+): boolean {
+  return typeof priority === "number" && !(priority > 1);
 }
 
-/** A hub row id in the goal namespace (GOAL_CHANGE_IS_NODE_ADMIN). */
-export function isGoalRowId(rowId: unknown): boolean {
-  return typeof rowId === "string" && rowId.startsWith("goal-");
+/** PRIORITY_RANGE: an integer 0..99 (0 = highest) — the same bound as the HTTP contracts. */
+export function isPriorityInRange(priority: number): boolean {
+  return Number.isInteger(priority) && priority >= 0 && priority <= 99;
 }
 
 /**
@@ -81,8 +98,9 @@ export async function checkNodeAdmin(
       resource: authzNodeResource(input.nodeId),
       context: { tenantId: input.nodeId, nodeId: input.nodeId },
     });
-  } catch {
-    return nodeAdminUnavailable("check_threw");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return nodeAdminUnavailable(`check_threw: ${message}`);
   }
 
   if (decision.decision === "allow") return { ok: true };
@@ -103,4 +121,50 @@ export function nodeAdminFailureBody(
         errorCode: gate.errorCode,
         action,
       };
+}
+
+/** The action name a goal-merge refusal reports. */
+export const GOAL_MERGE_ACTION = "knowledge.contributions.merge.goal";
+
+/**
+ * GOAL_CHANGE_IS_NODE_ADMIN as the ContributionService `authorizeMerge` hook. A merge whose RAW
+ * changed rows touch a `goal-*` row (or a citation leaving one) needs `node.administer` on this
+ * node; every other merge passes without consulting authorization. Denies are logged, then thrown
+ * as `ContributionMergeDeniedError`, so no merge write runs.
+ * `authorization` is a getter because the container builds the knowledge service first.
+ */
+export function createGoalMergeAuthorizer(deps: {
+  readonly authorization: () => AuthorizationPort | undefined;
+  readonly nodeId: string;
+  readonly log: { warn(obj: object, msg: string): void };
+}): AuthorizeMerge {
+  return async ({ principal, contributionId, changes }) => {
+    const goalIds = touchedGoalIds(changes);
+    if (goalIds.length === 0) return;
+    const gate = await checkNodeAdmin(deps.authorization(), {
+      userId: principal.id,
+      nodeId: deps.nodeId,
+    });
+    if (gate.ok) return;
+    const reason =
+      gate.errorCode === "authz_unavailable" ? gate.reason : "not_node_admin";
+    deps.log.warn(
+      {
+        event: "knowledge.contributions.merge.goal_denied",
+        errorCode: gate.errorCode,
+        reason,
+        actor: principal.id,
+        actorKind: principal.kind,
+        contributionId,
+        goalIds,
+        headCommit: changes.headCommit,
+      },
+      "knowledge.contributions.merge.goal_denied"
+    );
+    throw new ContributionMergeDeniedError(
+      gate.errorCode,
+      GOAL_MERGE_ACTION,
+      gate.errorCode === "authz_unavailable" ? gate.reason : undefined
+    );
+  };
 }

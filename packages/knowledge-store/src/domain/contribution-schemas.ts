@@ -8,7 +8,8 @@
  * Invariants:
  *   - EXTERNAL_CONTRIB_VIA_BRANCH (per knowledge-data-plane spec).
  *   - PATCH_CARRIES_ONLY_UNGATED_FIELDS: the `patch` op's partial carries ONLY
- *     fields no write gate governs (`useWhen`, `entryType`). Every gate-governed
+ *     fields no write gate governs (`useWhen`, `entryType`, `evaluateAt`,
+ *     `resolutionStrategy`). Every gate-governed
  *     field — `title`, `tags`, `content`, `id` (shape gate), `sourceType`,
  *     `sourceRef` (provenance gate) — and `domain` are absent from the shape, so
  *     `patch` cannot be a route around the gate chain. Editing any of those is
@@ -84,6 +85,11 @@ export type KnowledgeEntryInput = z.infer<typeof KnowledgeEntryInputSchema>;
  *   - `useWhen` — governed by nothing today. That absence IS the defect
  *     task.5204 exists to fix; checklist item 8 adds its rules.
  *   - `entryType` — governed by nothing in either v0 gate.
+ *   - `evaluateAt` / `resolutionStrategy` — a goal's `By:` deadline or a bet's
+ *     appointment with truth, and its resolver. No gate governs them; the adapter
+ *     enforces HYPOTHESIS_HAS_EVALUATE_AT on the RESULTING row, so a patch that
+ *     retypes a row to `goal` without a deadline is refused, and a goal's deadline
+ *     can move without replaying its body.
  *
  * Everything the gates do govern is ABSENT FROM THE SHAPE, not merely optional:
  *
@@ -114,6 +120,8 @@ export type KnowledgeEntryInput = z.infer<typeof KnowledgeEntryInputSchema>;
 export const KnowledgeEntryPatchSchema = z.strictObject({
   useWhen: z.string().min(1).max(320).optional(),
   entryType: z.string().min(1).max(64).optional(),
+  evaluateAt: z.string().datetime({ offset: true }).optional(),
+  resolutionStrategy: ResolutionStrategySchema.optional(),
 });
 export type KnowledgeEntryPatch = z.infer<typeof KnowledgeEntryPatchSchema>;
 
@@ -121,6 +129,8 @@ export type KnowledgeEntryPatch = z.infer<typeof KnowledgeEntryPatchSchema>;
 export const KNOWLEDGE_ENTRY_PATCH_FIELDS = [
   "useWhen",
   "entryType",
+  "evaluateAt",
+  "resolutionStrategy",
 ] as const satisfies readonly (keyof KnowledgeEntryPatch)[];
 
 /** True when a parsed patch names at least one field to set. */

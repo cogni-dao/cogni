@@ -33,8 +33,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createWorkItemCapability,
   WorkItemPriorityAuthzError,
+  WorkItemPriorityRangeError,
 } from "@/bootstrap/capabilities/work-item";
-import { checkNodeAdmin } from "@/bootstrap/node-admin-gate";
+import {
+  checkNodeAdmin,
+  isPrivilegedPriority,
+} from "@/bootstrap/node-admin-gate";
 
 const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
 const ADMIN_USER = "11111111-1111-4111-8111-111111111111";
@@ -263,7 +267,7 @@ describe("createWorkItemCapability", () => {
     }
 
     it.each([
-      0, 1,
+      -1, 0, 1,
     ])("refuses priority %i for a non-admin actor before any write (authz_denied)", async (priority) => {
       const authz = await adminAuthz();
       const { cap, store, md } = gatedCap(() =>
@@ -323,6 +327,46 @@ describe("createWorkItemCapability", () => {
 
       expect(err).toMatchObject({ errorCode: "authz_unavailable" });
       expect(store.patch).not.toHaveBeenCalled();
+    });
+
+    it("treats every priority <= 1 as privileged, so a negative value cannot outrank p0", () => {
+      for (const p of [-1000, -1, 0, 1, 0.5])
+        expect(isPrivilegedPriority(p)).toBe(true);
+      for (const p of [2, 99, 100]) expect(isPrivilegedPriority(p)).toBe(false);
+      expect(isPrivilegedPriority(undefined)).toBe(false);
+      expect(isPrivilegedPriority(null)).toBe(false);
+    });
+
+    it("refuses an out-of-range priority (PRIORITY_RANGE) without writing, even for the admin", async () => {
+      const authz = await adminAuthz();
+      const { cap, store } = gatedCap(() =>
+        checkNodeAdmin(authz, { userId: ADMIN_USER, nodeId: NODE_ID })
+      );
+
+      for (const priority of [-1, 100]) {
+        const err = await cap
+          .patch({ id: "task.5282", set: { priority } })
+          .catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(WorkItemPriorityRangeError);
+      }
+      expect(store.patch).not.toHaveBeenCalled();
+    });
+
+    it("keeps a thrown check's message in the authz_unavailable reason", async () => {
+      const throwing = {
+        check: async () => {
+          throw new Error("openfga socket hang up");
+        },
+      } as unknown as Parameters<typeof checkNodeAdmin>[0];
+      const gate = await checkNodeAdmin(throwing, {
+        userId: ADMIN_USER,
+        nodeId: NODE_ID,
+      });
+      expect(gate).toMatchObject({
+        ok: false,
+        errorCode: "authz_unavailable",
+        reason: "check_threw: openfga socket hang up",
+      });
     });
 
     it("fails closed when no invoking actor is in scope or no gate is wired", async () => {

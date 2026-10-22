@@ -6,10 +6,11 @@
  * Purpose: Server-side facade for work item read/write operations across the markdown + Doltgres surfaces.
  * Scope: Maps content results to DTOs; does not own adapters or PostgreSQL coordination. Dolt IDs start at 5000; lower IDs use markdown.
  * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED,
- *   P0P1_IS_NODE_ADMIN (task.5286): a create or patch that sets priority 0 or 1 requires
- *   `node.administer` on this node, checked BEFORE the store write (deny →
- *   WorkItemAuthorizationError/403, outage → WorkItemAuthzUnavailableError/503). Priority 2+ and
- *   every other field are unchanged.
+ *   P0P1_IS_NODE_ADMIN (task.5286, task.5294): a create or patch that sets any priority <= 1
+ *   requires `node.administer` on this node, checked BEFORE the store write (deny →
+ *   WorkItemAuthorizationError/403, outage → WorkItemAuthzUnavailableError/503). Routes also run
+ *   it on the raw body before contract validation (`authorizeRequestedPriority`), so a negative
+ *   priority from a non-admin is 403, not 400. Priority 2+ and every other field are unchanged.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
@@ -144,6 +145,20 @@ async function assertPriorityAuthority(
   throw new WorkItemAuthorizationError(
     `priority ${priority} requires node admin`
   );
+}
+
+/**
+ * P0P1_IS_NODE_ADMIN on the RAW request body, before contract validation. Any numeric
+ * priority <= 1 — including a negative one the contract would also reject — needs node
+ * admin, so a non-admin is told 403 rather than learning the value's shape. Non-numeric or
+ * absent values fall through to the contract, which answers 400.
+ */
+export async function authorizeRequestedPriority(
+  priority: unknown,
+  userId: string
+): Promise<void> {
+  if (typeof priority !== "number") return;
+  await assertPriorityAuthority(priority, userId);
 }
 
 /**

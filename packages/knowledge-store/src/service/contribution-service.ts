@@ -5,7 +5,10 @@
  * Module: `@cogni/knowledge-store/service/contribution-service`
  * Purpose: Framework-agnostic typed handlers for the knowledge contribution flow.
  * Scope: Pure business logic — quotas, idempotency lookup, role gating, confidence cap. Does not contain HTTP, env, or lifecycle code; per-node `route.ts` files adapt these to Next.
- * Invariants: KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION; CONTRIBUTION_OWNER_CAN_APPEND; CONTRIBUTION_OWNER_CAN_CLOSE.
+ * Invariants: KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION; CONTRIBUTION_OWNER_CAN_APPEND; CONTRIBUTION_OWNER_CAN_CLOSE;
+ *   MERGE_AUTHORIZED_ON_RAW_ROWS: when `authorizeMerge` is wired, `merge` reads the RAW changed
+ *   row ids, runs the hook BEFORE any merge side effect, and merges only the head it authorized
+ *   (MERGE_HEAD_CAS) — an append between the check and the merge is refused, never merged.
  * Side-effects: none (delegates I/O to KnowledgeContributionPort)
  * Links: docs/design/knowledge-contribution-api.md
  * @public
@@ -26,6 +29,7 @@ import {
   runGateChain,
 } from "../domain/gates/index.js";
 import {
+  type ContributionChangedRows,
   ContributionForbiddenError,
   ContributionNotFoundError,
   ContributionStateError,
@@ -65,9 +69,25 @@ export interface ListQuery {
   limit?: number;
 }
 
+/**
+ * Extra merge authority injected by the host node (e.g. GOAL_CHANGE_IS_NODE_ADMIN).
+ * Receives the RAW changed row ids, never the display diff. Resolve to allow;
+ * throw `ContributionMergeDeniedError` to refuse. Runs before any merge write.
+ */
+export type AuthorizeMerge = (input: {
+  principal: Principal;
+  contributionId: string;
+  changes: ContributionChangedRows;
+}) => Promise<void>;
+
 export interface ContributionServiceDeps {
   port: KnowledgeContributionPort;
   canMergeKnowledge: (p: Principal) => boolean;
+  /**
+   * MERGE_AUTHORIZED_ON_RAW_ROWS. Optional so nodes without extra merge authority are
+   * unchanged; when set, the merge is bound to the authorized head (MERGE_HEAD_CAS).
+   */
+  authorizeMerge?: AuthorizeMerge;
   /**
    * Write-pipeline gates run against every insert/update edit before it is
    * forwarded to the port. Throws `KnowledgeGateError` on failure; the HTTP
@@ -153,9 +173,9 @@ export function createContributionService(
       // (shape/provenance) to validate; forward unchanged.
       //
       // `patch` is forwarded unchanged too, and this is NOT a gate bypass:
-      // PATCH_CARRIES_ONLY_UNGATED_FIELDS. The partial can carry only `useWhen`
-      // and `entryType`, the two entry fields neither v0 gate has an opinion
-      // about — `shapeGate` governs id/title/content/tags, `provenanceGate`
+      // PATCH_CARRIES_ONLY_UNGATED_FIELDS. The partial can carry only `useWhen`,
+      // `entryType`, `evaluateAt` and `resolutionStrategy`, entry fields neither v0
+      // gate has an opinion about — `shapeGate` governs id/title/content/tags, `provenanceGate`
       // governs sourceType/sourceRef. Every gate-governed field is absent from
       // `KnowledgeEntryPatchSchema`, so running the chain here would have
       // nothing to check; and a caller wanting to change one of those must use
@@ -319,12 +339,21 @@ export function createContributionService(
     },
 
     async merge({ principal, contributionId }) {
+      // MERGE_AUTHORIZED_ON_RAW_ROWS: authorize the raw rows first, then bind the merge to
+      // the head those rows were read at so a later append cannot ride the approval.
+      let expectedHeadCommit: string | undefined;
+      if (deps.authorizeMerge) {
+        const changes = await deps.port.changedRows(contributionId);
+        await deps.authorizeMerge({ principal, contributionId, changes });
+        expectedHeadCommit = changes.headCommit;
+      }
       if (!deps.canMergeKnowledge(principal)) {
         throw new ContributionForbiddenError("merge requires admin session");
       }
       const result = await deps.port.merge({
         contributionId,
         principal,
+        ...(expectedHeadCommit !== undefined && { expectedHeadCommit }),
       });
       // Best-effort mirror. Caller wraps with its own .catch — service stays
       // framework-agnostic and never blocks the merge response on the push.

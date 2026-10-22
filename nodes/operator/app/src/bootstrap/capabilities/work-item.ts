@@ -19,7 +19,9 @@
  *     to `backlogWriter.principalId`. The store's own authority applies unchanged (a
  *     non-creator may set only triage fields priority/rank/labels). Without it, `patch`
  *     stays on the markdown ports, which have no compare-and-set for callers.
- *   - P0P1_IS_NODE_ADMIN (task.5286): a `patch` that sets priority 0 or 1 first runs
+ *   - PRIORITY_RANGE (task.5294): after the gate, a priority outside 0..99 throws
+ *     `WorkItemPriorityRangeError` (nothing written) — the same bound as the HTTP contracts.
+ *   - P0P1_IS_NODE_ADMIN (task.5286, task.5294): a `patch` that sets any priority <= 1 first runs
  *     `privilegedPriorityGate` — a `node.administer` check on the INVOKING actor, not the system
  *     principal the write is attributed to — and throws `WorkItemPriorityAuthzError` (nothing
  *     written) unless it allows. Unwired ⇒ fail closed. Priority 2+ and other fields are unchanged.
@@ -54,10 +56,19 @@ import {
 } from "@cogni/work-items/adapters/doltgres";
 
 import {
+  isPriorityInRange,
   isPrivilegedPriority,
   type NodeAdminGate,
   nodeAdminUnavailable,
 } from "@/bootstrap/node-admin-gate";
+
+/** A patch priority outside 0..99 (PRIORITY_RANGE). Nothing is written. */
+export class WorkItemPriorityRangeError extends Error {
+  constructor(priority: number) {
+    super(`priority ${priority} is out of range: use an integer 0..99`);
+    this.name = "WorkItemPriorityRangeError";
+  }
+}
 
 /**
  * A priority-0/1 patch refused by the node-admin gate. `errorCode` keeps deny
@@ -231,6 +242,9 @@ export function createWorkItemCapability(
         if (!gate.ok) {
           throw new WorkItemPriorityAuthzError(gate.errorCode, priority);
         }
+      }
+      if (priority !== undefined && !isPriorityInRange(priority)) {
+        throw new WorkItemPriorityRangeError(priority);
       }
 
       const writer = deps.backlogWriter;

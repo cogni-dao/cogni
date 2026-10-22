@@ -10,6 +10,11 @@
  *   Bearer-authenticated EDO writes (hypothesis/decision/outcome) MUST open a
  *   contrib branch — the dedicated `createEdo*` methods apply the multi-row
  *   atomic batch on that branch with one Dolt commit per batch.
+ *   MERGE_GATES_ON_RAW_ROWS: `changedRows` reads every changed row id straight from
+ *   `dolt_diff` with no presentation filter, so a merge authorizer sees edits the
+ *   display `diff` hides (tags, entity_id, evaluate_at, ...).
+ *   MERGE_HEAD_CAS: `merge({expectedHeadCommit})` refuses unless the contribution
+ *   head, read under the merge guard, is the head that was authorized.
  * Side-effects: none
  * Links: docs/design/knowledge-contribution-api.md, docs/spec/knowledge-syntropy.md
  * @public
@@ -23,6 +28,23 @@ import type {
   KnowledgeContributionEdit,
   Principal,
 } from "../domain/contribution-schemas.js";
+
+/**
+ * The raw row identities a contribution changes between its base and head,
+ * read from `dolt_diff` with no presentation filter (MERGE_GATES_ON_RAW_ROWS).
+ * Each list holds the ids from BOTH sides of the diff, deduped. `headCommit` is
+ * the ref the rows were read at; a merge authorized against these rows passes
+ * it back as `expectedHeadCommit` (MERGE_HEAD_CAS).
+ */
+export interface ContributionChangedRows {
+  readonly headCommit: string;
+  /** `from_id` and `to_id` of every `knowledge` diff row. */
+  readonly knowledgeIds: readonly string[];
+  /** `from_citing_id` and `to_citing_id` of every `citations` diff row. */
+  readonly citingIds: readonly string[];
+  /** `from_cited_id` and `to_cited_id` of every `citations` diff row. */
+  readonly citedIds: readonly string[];
+}
 
 /**
  * Inputs for a hypothesis atomic batch (hypothesis row + N evidence_for
@@ -168,9 +190,17 @@ export interface KnowledgeContributionPort {
 
   diff(contributionId: string): Promise<ContributionDiffEntry[]>;
 
+  /** Raw changed row ids for merge authorization (MERGE_GATES_ON_RAW_ROWS). */
+  changedRows(contributionId: string): Promise<ContributionChangedRows>;
+
   merge(input: {
     contributionId: string;
     principal: Principal;
+    /**
+     * MERGE_HEAD_CAS: when set, refuse with `ContributionConflictError` unless the
+     * contribution's head, read under the merge guard, equals this commit.
+     */
+    expectedHeadCommit?: string;
   }): Promise<{ commitHash: string }>;
 
   close(input: {
@@ -198,6 +228,32 @@ export class ContributionStateError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ContributionStateError";
+  }
+}
+
+/**
+ * A merge refused by the injected `authorizeMerge` hook. `code` keeps a denial
+ * (`authz_denied`, HTTP 403) distinct from an authorization outage
+ * (`authz_unavailable`, HTTP 503). `action` names the privilege that was checked.
+ */
+export class ContributionMergeDeniedError extends Error {
+  readonly code: "authz_denied" | "authz_unavailable";
+  readonly action: string;
+  readonly reason: string | undefined;
+  constructor(
+    code: "authz_denied" | "authz_unavailable",
+    action: string,
+    reason?: string
+  ) {
+    super(
+      code === "authz_denied"
+        ? `merge not authorized: ${action}`
+        : `merge authorization unavailable: ${action}${reason ? ` (${reason})` : ""}`
+    );
+    this.name = "ContributionMergeDeniedError";
+    this.code = code;
+    this.action = action;
+    this.reason = reason;
   }
 }
 
