@@ -90,8 +90,18 @@ export function resolveDeploymentTargets(input: {
   readonly flightTargets: readonly string[];
   /** GitHub `owner/name` running this workflow; the source of in-repo nodes. */
   readonly parentRepository: string;
+  /** Exact reviewed parent checkout; never a substitute for a child catalog pin. */
+  readonly parentSourceSha?: string;
 }): DeploymentTargetSelection {
   const parentRepository = parseParentRepository(input.parentRepository);
+  if (
+    input.parentSourceSha !== undefined &&
+    !/^[a-fA-F0-9]{40}$/.test(input.parentSourceSha)
+  ) {
+    throw new Error(
+      "[deployment-targets] parentSourceSha must be a full commit SHA"
+    );
+  }
   const byName = new Map(
     input.catalogRows.map((row) => [row.name, row] as const)
   );
@@ -133,6 +143,13 @@ export function resolveDeploymentTargets(input: {
         target,
         parentRepository
       );
+      if (
+        row.source_repo === undefined &&
+        sourceRepositories[target] === parentRepository &&
+        input.parentSourceSha !== undefined
+      ) {
+        sourceShas[target] = input.parentSourceSha;
+      }
     }
   }
 
