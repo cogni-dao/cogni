@@ -141,6 +141,7 @@ export const workItemQueryContract: ToolContract<
     "priority (status weight, then priority field, then rank). Use this to " +
     "find actionable items, check item status, or search by text.",
   effect: "read_only",
+  requires: "node.collaborate",
   inputSchema: WorkItemQueryInputSchema,
   outputSchema: WorkItemQueryOutputSchema,
 

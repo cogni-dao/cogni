@@ -42,14 +42,9 @@ export interface GovernanceSchedule {
 /** Work-prioritization policy in the graph-facing (camelCase) shape. */
 export interface WorkPrioritizationPolicy {
   policyVersion: string;
-  p0Max: number;
-  p1Budget: number;
-  p2Budget: number;
-  objectives: string[];
   /** Effective apply mode for this deployment (`apply.mode.default` in Lane A). */
   applyMode: "propose" | "write";
   applyModes: Record<string, "propose" | "write">;
-  hypothesesPerDay: number;
 }
 
 export interface GovernanceSchedulePayload {
@@ -395,13 +390,8 @@ export function extractWorkPrioritizationPolicy(
   if (!wp) return null;
   return {
     policyVersion: wp.policy_version,
-    p0Max: wp.p0_max,
-    p1Budget: wp.p1_budget,
-    p2Budget: wp.p2_budget,
-    objectives: [...wp.objectives],
     applyMode: wp.apply.mode.default,
     applyModes: { ...wp.apply.mode },
-    hypothesesPerDay: wp.hypotheses_per_day,
   };
 }
 

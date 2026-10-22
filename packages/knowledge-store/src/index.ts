@@ -151,6 +151,7 @@ export {
   CitationSchema,
   type CitationType,
   CitationTypeSchema,
+  citedEntryTypesFor,
   type DoltCommit,
   DoltCommitSchema,
   type DoltDiffEntry,

@@ -84,6 +84,7 @@ export const knowledgeReadContract: ToolContract<
     "Use with 'id' to get a specific entry, or 'domain' to list entries (optionally filtered by tags). " +
     "Each entry includes a confidence score (0-100): 30=draft, 80=verified, 95+=hardened.",
   effect: "read_only",
+  requires: "node.collaborate",
   inputSchema: KnowledgeReadInputSchema,
   outputSchema: KnowledgeReadOutputSchema,
   redact: (output) => output,

@@ -712,7 +712,7 @@ describe("GRAPH_CHARTER — governance schedule `graph:` (task.5282)", () => {
       isOperatorNode: true,
       ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
     });
-    const payload = { workPrioritization: { policyVersion: "v4.0", p0Max: 3 } };
+    const payload = { workPrioritization: { policyVersion: "v5.0" } };
     await syncGovernanceSchedules(
       { schedules: [{ ...PRIORITIZER, payload }] },
       deps

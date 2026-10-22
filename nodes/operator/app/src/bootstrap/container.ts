@@ -906,7 +906,18 @@ function createContainer(): Container {
       writerSession: knowledgeWriter,
     });
     knowledgeStorePort = knowledgePort;
-    knowledgeCapability = createKnowledgeCapability(knowledgePort);
+    knowledgeCapability = {
+      ...createKnowledgeCapability(knowledgePort),
+      // ONE_GOAL_LIST (dao-goals-design): the store's goal reader, for core__goal_list.
+      // TooManyActiveGoalsError keeps its `code`; the tool maps it to too_many_active_goals.
+      listActiveGoals: async () =>
+        (await knowledgePort.listActiveGoals()).map((g) => ({
+          id: g.id,
+          title: g.title,
+          content: g.content,
+          evaluateAt: g.evaluateAt ? g.evaluateAt.toISOString() : null,
+        })),
+    };
     const edoResolver = new DoltgresEdoResolverAdapter({
       sql: doltClient,
       store: knowledgePort,
@@ -978,6 +989,7 @@ function createContainer(): Container {
       list: notConfigured,
       get: notConfigured,
       write: notConfigured,
+      listActiveGoals: notConfigured,
     };
     edoCapability = {
       hypothesize: notConfigured,
