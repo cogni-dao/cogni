@@ -234,7 +234,7 @@ describe("doltgres migrator + schema verification", () => {
       binaryVersion: version.stdout.trim(),
       declaredUpstreamCommit: "f4bc507d9764f9b7b2e1a5dca740b03d7e30f0ca",
       declaredPatchSha256:
-        "ee6ab766777b27f283b3eec927eb7ed4db919d27d7cb18eaf90916e32f2f4cad",
+        "6091c572e9fa8bd293b2064978f00d6feb6a920f2d1da4fb1480626327743629",
     });
   });
 
@@ -529,18 +529,14 @@ describe("doltgres migrator + schema verification", () => {
       await seed.unsafe(
         "CREATE TABLE cold_work_items (id text PRIMARY KEY, outcome text)"
       );
+      // Pinned 0.57.3 does not support the driver's parameter-description
+      // Flush message. Seed controlled strings with its existing simple protocol.
+      const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
       await seed.unsafe(
-        "INSERT INTO cold_knowledge VALUES ($1, $2), ($3, $4)",
-        [
-          "database-expert",
-          content,
-          "second-guide",
-          "other-knowledge|".repeat(1024),
-        ]
+        `INSERT INTO cold_knowledge VALUES ('database-expert', ${literal(content)}), ('second-guide', ${literal("other-knowledge|".repeat(1024))})`
       );
       await seed.unsafe(
-        "INSERT INTO cold_work_items VALUES ($1, $2), ($3, $4)",
-        ["story.5095", outcome, "task.5278", "other-outcome|".repeat(4096)]
+        `INSERT INTO cold_work_items VALUES ('story.5095', ${literal(outcome)}), ('task.5278', ${literal("other-outcome|".repeat(4096))})`
       );
       await seed.unsafe("SELECT dolt_add('cold_knowledge')");
       await seed.unsafe("SELECT dolt_add('cold_work_items')");
