@@ -144,7 +144,7 @@ Key design points:
    `packages/ai-tools/src/capabilities/vcs.ts`
 3. Change `ref: "main"` → `ref: params.workflowRef ?? "main"` in the adapter
 4. Update `vcs-flight-candidate.ts` tool description to document the parameter
-5. Ask the human before running `pnpm check:fast` — TypeScript will catch any missed call sites
+5. Run `pnpm typecheck` — TypeScript will catch any missed call sites
 
 Use case: flight PR #1004 using PR #1003's workflow branch so the CI fix in #1003 is tested
 while validating #1004's app build.

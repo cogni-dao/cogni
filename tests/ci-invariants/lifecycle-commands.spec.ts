@@ -14,11 +14,12 @@
  * @public
  *
  * MATCHER (line-based, deliberately simple):
- * - Staging: any of `origin/staging`, `--base staging`, `staging...`, `-b <branch> staging`, "from staging"
+ * - Staging: any of `origin/staging`, `--base staging`, `staging...`, `-b|-B|-c <branch> staging`, "from staging"
  *   or "to/into/off/against `staging`" (backticked, so prose such as a retired-skill trigger phrase passes).
  *   Staging is retired, so these have no legitimate use.
- * - `pnpm check` / `pnpm check:fast[:fix]` (not `pnpm check:docs` etc.) in STEP POSITION: the line, after
- *   Markdown prefixes (indent, `>`, bullets, `1.`, `[ ]`, `$`) and an optional leading "Run", starts with
+ * - `pnpm check` / `check:fix` / `check:fast[:fix]` (not `pnpm check:docs` etc.) in STEP POSITION: the line,
+ *   after Markdown prefixes (indent, `>`, bullets, `1.`, `[ ]`, a bold label like `**Gate:**`, `$`) and an
+ *   optional leading "Run", starts with
  *   it. A mid-sentence mention ("do not run `pnpm check` locally") is not a step, and a step line that
  *   names the permission gate ("explicit", "ask the human", "ask for") is allowed.
  * - `gh pr merge`: any occurrence, unless a prohibition (never/not/don't/do not/instead of) immediately
@@ -46,7 +47,7 @@ const STAGING = new RegExp(
     /origin\/staging\b/,
     /--base[= ]staging\b/,
     /\bstaging\.\.\./,
-    /-b \S+ staging\b/,
+    /(?:-[bBc]|--create) \S+ staging\b/,
     /\bfrom `?staging`?(?![\w-])/,
     /\b(?:to|into|off|against) `staging`/,
   ]
@@ -54,8 +55,8 @@ const STAGING = new RegExp(
     .join("|")
 );
 const STEP_PREFIX =
-  /^[\s>]*(?:[-*+]\s+|\d+\.\s+)?(?:\[[ xX]\]\s+)?(?:\$\s+)?(?:run\s+)?`?/i;
-const PNPM_CHECK_STEP = /^pnpm check(?::fast(?::fix)?)?(?![:\w-])/;
+  /^[\s>]*(?:[-*+]\s+|\d+\.\s+)?(?:\[[ xX]\]\s+)?(?:\*\*[^*]+:\*\*\s*)?(?:\$\s+)?(?:run\s+)?`?/i;
+const PNPM_CHECK_STEP = /^pnpm check(?::fast)?(?::fix)?(?![:\w-])/;
 const PERMISSION = /\bexplicit|\bask (?:the human|for)\b/i;
 const GH_PR_MERGE = /\bgh pr merge\b/;
 const PROHIBITED_MERGE =
@@ -106,6 +107,10 @@ describe("lifecycle commands matcher", () => {
       "- [ ] `pnpm check:fast` green",
       "If the operator route is not available, `gh pr merge --squash`",
       "Use `gh pr merge --admin` instead of waiting",
+      "**Gate:** `pnpm check` passes.",
+      "6. Run `pnpm check:fix` to clean up.",
+      "`git checkout -B x staging`",
+      "`git switch -c x staging`",
     ].join("\n");
 
     expect(
@@ -123,6 +128,10 @@ describe("lifecycle commands matcher", () => {
       "10:NO_PNPM_CHECK_STEP",
       "11:MERGE_VIA_OPERATOR",
       "12:MERGE_VIA_OPERATOR",
+      "13:NO_PNPM_CHECK_STEP",
+      "14:NO_PNPM_CHECK_STEP",
+      "15:NO_STAGING_BASE",
+      "16:NO_STAGING_BASE",
     ]);
   });
 
