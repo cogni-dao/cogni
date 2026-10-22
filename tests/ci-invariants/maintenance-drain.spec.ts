@@ -31,13 +31,13 @@ describe("maintenance drain proof boundary", () => {
 import copy,datetime,hashlib,importlib.util,json,os,pathlib,subprocess,sys,tempfile
 spec=importlib.util.spec_from_file_location("fence",sys.argv[1]);f=importlib.util.module_from_spec(spec);spec.loader.exec_module(f)
 now=datetime.datetime(2026,10,22,20,0,tzinfo=datetime.timezone.utc)
-env={"GITHUB_REPOSITORY":"cogni-dao/cogni","GITHUB_WORKFLOW_SHA":"d"*40,"GITHUB_RUN_ID":"123","GITHUB_RUN_ATTEMPT":"1"}
+env={"GITHUB_REPOSITORY":"cogni-dao/cogni","GITHUB_WORKFLOW_SHA":"d"*40,"GITHUB_WORKFLOW_REF":"cogni-dao/cogni/.github/workflows/candidate-flight.yml@refs/heads/reviewed","GITHUB_RUN_ID":"123","GITHUB_RUN_ATTEMPT":"1","GITHUB_JOB":"prepare-substrate-deploy-branch","DEPLOY_ENVIRONMENT":"candidate-a","NODE":"node-template","PER_NODE_BRANCH":"deploy/candidate-a-node-template"}
 node="b927a9dd-6132-4fc9-a51e-e3cee2568e3c";source="b"*40;repo="cogni-dao/node-template"
 image="ghcr.io/cogni-dao/node-template@sha256:"+"e"*64
 bundle="ghcr.io/cogni-dao/node-template@sha256:"+"f"*64
 xr={"kind":"XComputeWorkload","metadata":{"namespace":"cogni-candidate-a"},"spec":{"nodeId":node,"environment":"candidate-a","bundle":{"ref":bundle,"source":{"repository":repo,"sha":source},"artifacts":[{"name":"app","image":image}]}}}
 data=(json.dumps(xr)+"\\n").encode()
-marker={"version":1,"phase":"qualifying","operationId":"a"*64,"request":{"nodeId":node,"slug":"node-template","env":"candidate-a","sourceRepository":repo,"sourceSha":source},"qualification":{"phase":"active","activationHead":"c"*40,"manifestSha256":hashlib.sha256(data).hexdigest(),"bundleDigest":bundle,"imageDigest":image,"nativeAuditDigest":"1"*64,"providerClosureDigest":"2"*64,"sourceExclusionDigest":"3"*64,"workflowSha":"d"*40,"issuedAt":now.isoformat(),"expiresAt":(now+datetime.timedelta(hours=1)).isoformat(),"owner":None}}
+marker={"version":1,"phase":"qualifying","operationId":"a"*64,"request":{"nodeId":node,"slug":"node-template","env":"candidate-a","sourceRepository":repo,"sourceSha":source},"qualification":{"phase":"active","activationHead":"c"*40,"manifestSha256":hashlib.sha256(data).hexdigest(),"bundleDigest":bundle,"imageDigest":image,"nativeAuditDigest":"1"*64,"providerClosureDigest":"2"*64,"sourceExclusionDigest":"3"*64,"workflowSha":"d"*40,"workflowRef":env["GITHUB_WORKFLOW_REF"],"issuedAt":now.isoformat(),"expiresAt":(now+datetime.timedelta(hours=1)).isoformat(),"owner":None}}
 f.check_qualification(marker,repo,source,environment=env,now=now,require_owner=False)
 def rejected(value,environment=env):
  try:f.check_qualification(value,repo,source,environment=environment,now=now);raise AssertionError("invalid admission allowed")
@@ -45,7 +45,7 @@ def rejected(value,environment=env):
 rejected(marker) # An unclaimed grant cannot mutate the watched ref.
 owned=copy.deepcopy(marker);owned["qualification"]["owner"]={"runId":"123","runAttempt":"1"}
 f.check_qualification(owned,repo,source,environment=env,now=now)
-for key,value in (("GITHUB_RUN_ID","124"),("GITHUB_RUN_ATTEMPT","2"),("GITHUB_WORKFLOW_SHA","e"*40),("GITHUB_REPOSITORY","foreign/repo")):
+for key,value in (("GITHUB_RUN_ID","124"),("GITHUB_RUN_ATTEMPT","2"),("GITHUB_WORKFLOW_SHA","e"*40),("GITHUB_REPOSITORY","foreign/repo"),("GITHUB_WORKFLOW_REF","cogni-dao/cogni/.github/workflows/promote-and-deploy.yml@refs/heads/reviewed"),("GITHUB_JOB","arbitrary-job"),("DEPLOY_ENVIRONMENT","production"),("NODE","poly"),("PER_NODE_BRANCH","deploy/production-node-template")):
  rejected(owned,{**env,key:value})
 for section,key,value in (("qualification","phase","inert"),("qualification","nativeAuditDigest",None),("qualification","providerClosureDigest",None),("qualification","sourceExclusionDigest",None),("qualification","expiresAt",now.isoformat()),("request","env","production"),("request","sourceSha","c"*40)):
  bad=copy.deepcopy(owned);bad[section][key]=value;rejected(bad)
@@ -87,6 +87,20 @@ with tempfile.TemporaryDirectory() as directory:
  (other/"root-change").write_text("fresh maintainer state");git(other,"add",".");git(other,"commit","-m","Owner changed remote");git(other,"push","origin","HEAD:"+branch)
  try:f.claim_qualification(work,repo,source);raise AssertionError("stale head admitted")
  except RuntimeError as e:assert str(e)=="maintenance_qualification_head_changed"
+ # Real merge ancestry: a qualified PR commit still running cannot satisfy a later MAIN floor.
+ pr=git(other,"rev-parse","HEAD");git(other,"commit","--allow-empty","-m","Merged MAIN artifact identity")
+ merged=git(other,"rev-parse","HEAD");git(other,"branch","-f","main",merged)
+ assert git(other,"rev-parse",pr+"^{tree}")==git(other,"rev-parse",merged+"^{tree}")
+ floor={"version":1,"phase":"audited","operationId":"a"*64,"request":{"sourceRepository":repo,"sourceSha":merged}}
+ def compare(repository,base,head):
+  resolved=git(other,"rev-parse",head)
+  if base==resolved:return "identical"
+  result=subprocess.run(["git","-C",str(other),"merge-base","--is-ancestor",base,resolved],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+  return "ahead" if result.returncode==0 else "behind"
+ try:f.check_receipt(floor,repo,pr,compare);raise AssertionError("premerge runtime passed real MAIN floor")
+ except RuntimeError as e:assert str(e)=="maintenance_compatibility_floor_violation"
+ # Root must actually activate merged identity first; identical source trees alone don't rewrite a running SHA.
+ f.check_receipt(floor,repo,merged,compare)
 `;
     execFileSync(
       "python3",

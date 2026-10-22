@@ -653,7 +653,6 @@ async function candidateReadOnlyPreflight() {
     /^[a-f0-9]{40}$/.test(request.sourceSha),
     "maintenance_candidate_source_unproven"
   );
-  const admission = candidateDeliveryAdmission();
   const compose = parseYaml(
     readFileSync(
       `${process.env.CI_SOURCE_ROOT}/infra/compose/runtime/docker-compose.yml`,
@@ -751,6 +750,7 @@ async function candidateReadOnlyPreflight() {
       protectedCells: request.protectedCells,
     })
   );
+  const admission = candidateDeliveryAdmission();
   if (admission.marker !== null) {
     verifyCandidateQualification(admission, request, cluster);
     console.log(

@@ -88,8 +88,15 @@ def check_qualification(marker, repository, source_sha, *, root=None,
             or not isinstance(grant.get("imageDigest"), str)
             or not re.fullmatch(r"ghcr.io/cogni-dao/node-template@sha256:[a-f0-9]{64}", grant["imageDigest"])
             or env.get("GITHUB_REPOSITORY") != "cogni-dao/cogni"
+            or not isinstance(grant.get("workflowRef"), str)
+            or not grant["workflowRef"].startswith("cogni-dao/cogni/.github/workflows/candidate-flight.yml@refs/")
+            or grant["workflowRef"] != env.get("GITHUB_WORKFLOW_REF")
             or grant.get("workflowSha") != env.get("GITHUB_WORKFLOW_SHA")
-            or not valid_sha(grant.get("workflowSha"))):
+            or not valid_sha(grant.get("workflowSha"))
+            or env.get("DEPLOY_ENVIRONMENT") != "candidate-a"
+            or env.get("NODE") != "node-template"
+            or env.get("PER_NODE_BRANCH") != "deploy/candidate-a-node-template"
+            or env.get("GITHUB_JOB") not in ("external-node-preflight", "prepare-substrate-deploy-branch", "flight")):
         raise RuntimeError("maintenance_qualification_identity_unproven")
     try:
         deadline = datetime.fromisoformat(grant["expiresAt"].replace("Z", "+00:00"))
@@ -131,6 +138,8 @@ def claim_qualification(root, repository, source_sha):
     if marker is None or marker.get("phase") != "qualifying":
         check(root, repository, source_sha)
         return
+    if os.environ.get("GITHUB_JOB") != "prepare-substrate-deploy-branch":
+        raise RuntimeError("maintenance_qualification_claim_job_refused")
     grant = check_qualification(marker, repository, source_sha, root=root, require_owner=False)
     if grant.get("owner") is not None:
         return
