@@ -53,7 +53,9 @@ export {
   type NodeServiceConfig,
   type OwningNode,
   type ReviewConfig,
+  resolveGraphScheduleApply,
   resolveRulePath,
+  resolveScheduleApply,
 } from "./accessors.js";
 export {
   type BuiltNodeArtifact,
@@ -144,8 +146,10 @@ export {
   reviewConfigSchema,
   reviewLimitsGateSchema,
   ruleSchema,
+  type ScheduleApplySpec,
   type StewardWalletSpec,
   type SuccessCriteria,
+  scheduleApplySchema,
   scopeIdSchema,
   scopeKeySchema,
   stewardWalletSpecSchema,

@@ -43,6 +43,7 @@ import {
   parseMcpConfigFromEnv,
 } from "@cogni/langgraph-graphs";
 import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
+import { resolveGraphScheduleApply } from "@cogni/repo-spec";
 import { trace } from "@opentelemetry/api";
 import {
   type CompletionStreamFn,
@@ -61,6 +62,7 @@ import type {
   ModelProviderResolverPort,
   PreflightCreditCheckFn,
 } from "@/ports";
+import { getGovernanceConfig } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { makeLogger } from "@/shared/observability";
 import {
@@ -545,7 +547,14 @@ function createInProcProvider(
     container.toolSource,
     () => cache.getSource(),
     [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE],
-    container.authorization
+    container.authorization,
+    // SCHEDULED_APPLY_SWITCH (story.5108): the graph's governance schedule `apply`, by DEPLOY_ENVIRONMENT.
+    (graphId) =>
+      resolveGraphScheduleApply(
+        getGovernanceConfig(),
+        graphId,
+        serverEnv().DEPLOY_ENVIRONMENT
+      )
   );
 }
 

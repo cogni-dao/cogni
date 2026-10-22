@@ -58,11 +58,23 @@ const evmAddressSchema = z
   .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address");
 
 /**
+ * Per-environment write switch for a graph charter (story.5108): `{ default: bool, <DEPLOY_ENVIRONMENT>: bool }`.
+ * Resolved by `resolveScheduleApply` (accessors) against the running process's DEPLOY_ENVIRONMENT; an
+ * environment without its own key falls back to `default`.
+ */
+export const scheduleApplySchema = z
+  .object({ default: z.boolean() })
+  .catchall(z.boolean());
+
+export type ScheduleApplySpec = z.infer<typeof scheduleApplySchema>;
+
+/**
  * Schema for a single governance schedule entry.
  * Each schedule triggers an agent run with a 1-word entrypoint — the sandbox agent
  * by default, or the catalog graph named by `graph` (task.5282).
  * Invariants: Charter must be unique per config; cron must be 5 fields; entrypoint must be 1 token (no spaces);
- *   `graph` requires `model` (a graph run needs an explicit platform model id — there is no safe default).
+ *   `graph` requires `model` (a graph run needs an explicit platform model id — there is no safe default);
+ *   `apply` requires `graph` (it is a graph-run option).
  */
 export const governanceScheduleSchema = z
   .object({
@@ -95,6 +107,11 @@ export const governanceScheduleSchema = z
       .optional(),
     /** Platform (LiteLLM) model id the `graph` run uses. Required when `graph` is set. */
     model: z.string().min(1).optional(),
+    /**
+     * Optional per-environment write switch passed to the `graph` run as its `apply` option (story.5108).
+     * Absent ⇒ false everywhere. The graph still writes only on a grant-backed (scheduled) run.
+     */
+    apply: scheduleApplySchema.optional(),
   })
   .superRefine((entry, ctx) => {
     if (entry.graph !== undefined && entry.model === undefined) {
@@ -102,6 +119,13 @@ export const governanceScheduleSchema = z
         code: z.ZodIssueCode.custom,
         path: ["model"],
         message: "`model` is required when `graph` is set",
+      });
+    }
+    if (entry.apply !== undefined && entry.graph === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["apply"],
+        message: "`apply` requires `graph`",
       });
     }
   });

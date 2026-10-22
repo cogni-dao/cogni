@@ -32,6 +32,22 @@ vi.mock("@cogni/ai-core", async (importOriginal) => {
   };
 });
 
+// Pass-through spy on the package runner so the graph's RunnableConfig.configurable can be asserted.
+const runnerSpy = vi.hoisted(() => ({ calls: [] as unknown[] }));
+vi.mock("@cogni/langgraph-graphs", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@cogni/langgraph-graphs")>();
+  return {
+    ...actual,
+    createInProcGraphRunner: (
+      ...args: Parameters<typeof actual.createInProcGraphRunner>
+    ) => {
+      runnerSpy.calls.push(args[0]);
+      return actual.createInProcGraphRunner(...args);
+    },
+  };
+});
+
 import { runInScope } from "@/adapters/server/ai/execution-scope";
 import type { CompletionUnitAdapter } from "@/adapters/server/ai/langgraph/inproc.provider";
 import {
@@ -282,6 +298,63 @@ describe("LangGraphInProcProvider", () => {
       });
       expect(typeof config.onAuthzDecision).toBe("function");
       expect(config).not.toHaveProperty("authz");
+    });
+  });
+
+  describe("scheduled apply switch (story.5108)", () => {
+    async function configurableOf(
+      scope: Record<string, unknown>,
+      resolve: (graphId: string) => boolean
+    ) {
+      runnerSpy.calls.length = 0;
+      await runInScope({ ...TEST_SCOPE, ...scope }, async () => {
+        const provider = new LangGraphInProcProvider(
+          createMockAdapter(),
+          createMockToolSource(),
+          undefined,
+          [],
+          undefined,
+          resolve
+        );
+        const { stream, final } = provider.runGraph(createTestRequest());
+        for await (const _ of stream) {
+          // drain
+        }
+        await final;
+      });
+      return (
+        runnerSpy.calls[0] as {
+          request: { configurable: Record<string, unknown> };
+        }
+      ).request.configurable;
+    }
+
+    it("a grant-backed run carries apply: true when the graph's schedule allows it", async () => {
+      const resolve = vi.fn(() => true);
+      const configurable = await configurableOf(
+        { actorUserId: "user-1", grantId: "grant-123" },
+        resolve
+      );
+      expect(resolve).toHaveBeenCalledWith("langgraph:poet");
+      expect(configurable).toMatchObject({ grantId: "grant-123", apply: true });
+    });
+
+    it("a grant-backed run whose schedule says no carries no apply", async () => {
+      const configurable = await configurableOf(
+        { actorUserId: "user-1", grantId: "grant-123" },
+        () => false
+      );
+      expect(configurable).not.toHaveProperty("apply");
+    });
+
+    it("an API/chat run (no grant) never carries apply and never asks the resolver", async () => {
+      const resolve = vi.fn(() => true);
+      const configurable = await configurableOf(
+        { actorUserId: "user-1" },
+        resolve
+      );
+      expect(resolve).not.toHaveBeenCalled();
+      expect(configurable).not.toHaveProperty("apply");
     });
   });
 

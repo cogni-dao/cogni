@@ -16,6 +16,9 @@
  *     without an authz adapter, plus one `ai.tool_authz.decision` log per evaluated call; `authz` only when installed.
  *   - CATALOG_REPORT_SEAM: a catalog entry's `report` (not a graph name) decides whether the run's structured
  *     telemetry is logged as registered events and echoed onto the stream; graphs never touch the logger or ALS.
+ *   - SCHEDULED_APPLY_SWITCH (story.5108): only a grant-backed (scheduled) run asks the injected
+ *     `resolveScheduledApply(graphId)` and passes `configurable.apply: true` when it allows; API/chat runs never
+ *     carry `apply`. The provider resolves no env itself — the composition root owns the repo-spec + env read.
  * Side-effects: IO (executes graphs via package runner, MCP tool resolution via HTTP)
  * Notes: Discovery is in LangGraphInProcAgentCatalogProvider, not here.
  * Links: GRAPH_EXECUTION.md, LANGGRAPH_AI.md
@@ -121,7 +124,9 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     private readonly getMcpToolSource: () => Promise<ToolSourcePort | null> = () =>
       Promise.resolve(null),
     nodeBundle: readonly CatalogBoundTool[] = [],
-    private readonly authorization?: AuthorizationPort
+    private readonly authorization?: AuthorizationPort,
+    /** SCHEDULED_APPLY_SWITCH: the graph's governance-schedule `apply` for this deploy environment. */
+    private readonly resolveScheduledApply?: (graphId: string) => boolean
   ) {
     this.log = makeLogger({ component: "LangGraphInProcProvider" });
     this.boundToolMap = new Map(nodeBundle.map((bt) => [bt.contract.name, bt]));
@@ -341,6 +346,11 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           graphId,
           // Scheduled-run signal for graphs (absent for API/chat runs).
           ...(scope.grantId !== undefined ? { grantId: scope.grantId } : {}),
+          // SCHEDULED_APPLY_SWITCH: only a grant-backed run may carry the write switch.
+          ...(scope.grantId !== undefined &&
+          this.resolveScheduledApply?.(graphId) === true
+            ? { apply: true }
+            : {}),
         },
       };
 

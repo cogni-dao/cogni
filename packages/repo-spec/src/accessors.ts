@@ -19,6 +19,7 @@ import type {
   NodeServiceRuntimeProfileSpec,
   OperatorWalletSpec,
   RepoSpec,
+  ScheduleApplySpec,
   StewardWalletSpec,
 } from "./schema.js";
 
@@ -35,6 +36,8 @@ export interface GovernanceSchedule {
   graph?: string;
   /** Platform model id for the `graph` run (set iff `graph` is set). */
   model?: string;
+  /** Per-environment write switch for the `graph` run (story.5108); resolve with {@link resolveScheduleApply}. */
+  apply?: ScheduleApplySpec;
 }
 
 export interface LedgerPoolConfig {
@@ -331,6 +334,7 @@ export function extractGovernanceConfig(spec: RepoSpec): GovernanceConfig {
     entrypoint: s.entrypoint,
     ...(s.graph !== undefined ? { graph: s.graph } : {}),
     ...(s.model !== undefined ? { model: s.model } : {}),
+    ...(s.apply !== undefined ? { apply: s.apply } : {}),
   }));
   // LEDGER_PRESERVED: only a declared LEDGER_INGEST suppresses the synthesized one —
   // adding any other charter (e.g. WORK_PRIORITIZER) never drops or alters it.
@@ -352,6 +356,33 @@ export function extractGovernanceConfig(spec: RepoSpec): GovernanceConfig {
   }
 
   return config;
+}
+
+/**
+ * Resolve a schedule's `apply` switch for one deploy environment (story.5108): the environment's own key
+ * when present, else `default`; no switch ⇒ false. Pure — callers pass their DEPLOY_ENVIRONMENT.
+ */
+export function resolveScheduleApply(
+  apply: ScheduleApplySpec | undefined,
+  deployEnvironment: string | undefined
+): boolean {
+  if (!apply) return false;
+  // Own keys only (no prototype lookups such as `constructor`).
+  const own = Object.entries(apply).find(([env]) => env === deployEnvironment);
+  return own ? own[1] === true : apply.default === true;
+}
+
+/**
+ * The `apply` switch of the governance schedule that runs `graphId` (e.g. `langgraph:work-prioritizer`),
+ * resolved for `deployEnvironment`. No schedule for the graph, or no switch ⇒ false.
+ */
+export function resolveGraphScheduleApply(
+  config: Pick<GovernanceConfig, "schedules">,
+  graphId: string,
+  deployEnvironment: string | undefined
+): boolean {
+  const schedule = config.schedules.find((s) => s.graph === graphId);
+  return resolveScheduleApply(schedule?.apply, deployEnvironment);
 }
 
 /**

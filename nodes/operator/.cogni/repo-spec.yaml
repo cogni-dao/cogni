@@ -77,6 +77,12 @@ governance:
       entrypoint: PRIORITIZE
       graph: langgraph:work-prioritizer
       model: gpt-oss-120b
+      # story.5108 write switch (by DEPLOY_ENVIRONMENT): candidate-a applies p2-p4 + rank through the
+      # work-item patch path; preview + production stay propose-only. p0/p1 are node-admin (#2864) and
+      # stay proposals until story.5075 grants the graph.
+      apply:
+        default: false
+        candidate-a: true
 
 payments:
   status: active
