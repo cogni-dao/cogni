@@ -321,7 +321,7 @@ services:
     # 64 MiB /dev/shm default. Sized to match the app Postgres so the knowledge
     # plane cannot die the way the operational plane did.
     shm_size: 1gb
-    image: dolthub/doltgresql:0.57.3
+    image: ghcr.io/cogni-dao/cogni-template@sha256:f892b365ad6fc6c683da839260f20c4015615c105176a3c21c015ca90d2b70a3
     container_name: doltgres
     restart: unless-stopped
     labels:

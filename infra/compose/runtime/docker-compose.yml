@@ -478,7 +478,7 @@ services:
     # `postgres` DB that survives restart; CREATE DATABASE is durable across
     # connections + restart; ILIKE remains "not yet supported" (adapter assumption
     # unchanged — the sql.unsafe/escapeValue path is wire-protocol-level).
-    image: dolthub/doltgresql:0.57.3
+    image: ghcr.io/cogni-dao/cogni-template@sha256:f892b365ad6fc6c683da839260f20c4015615c105176a3c21c015ca90d2b70a3
     restart: unless-stopped
     labels:
       # bug.5105: stateful stores are never autohealed. autoheal restarting a
