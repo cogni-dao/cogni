@@ -16,7 +16,7 @@
  *   - P0P1_DENIAL_IS_COUNTED: an `authz_denied` patch to p0/p1 (P0P1_IS_NODE_ADMIN, #2864) is counted in
  *     `deniedP0P1`, never retried, and never fails the cycle. p0/p1 remain proposals in the filed decision.
  *   - ONE_PATCH_PER_ROW: each plan row is patched at most once per cycle.
- * Side-effects: IO only through the injected `patch` call
+ * Side-effects: IO (only through the injected `patch` tool call)
  * Links: graph.ts, plan.ts (buildPlan), packages/ai-tools/src/tools/work-item-transition.ts, story.5108, story.5075
  * @public
  */
