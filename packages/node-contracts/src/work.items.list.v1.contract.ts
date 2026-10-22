@@ -8,6 +8,9 @@
  * Invariants:
  *   - Contract remains stable; breaking changes require new version
  *   - All consumers use z.infer types
+ *   - LEAN_VIEW_OPT_IN: `view: "lean"` omits the long-form `summary` and
+ *     `outcome` bodies from every item; omitting `view` (or `view: "full"`)
+ *     keeps the full default response for API and agent callers (bug.5509)
  * Side-effects: none
  * Links: /api/v1/work/items route, docs/spec/work-items-port.md
  * @internal
@@ -60,6 +63,13 @@ export const WorkItemDtoSchema = z.object({
   updatedAt: z.string(),
 });
 
+/**
+ * List projection. `full` (default) returns every DTO field; `lean` omits the
+ * long-form `summary` and `outcome` bodies (~90% of the payload) for table
+ * views that fetch the full item on demand via `work.items.get.v1`.
+ */
+export const WorkItemsListViewSchema = z.enum(["full", "lean"]);
+
 export const workItemsListOperation = {
   id: "work.items.list.v1",
   summary: "List work items with optional filters",
@@ -74,6 +84,7 @@ export const workItemsListOperation = {
     node: z.union([z.string(), z.array(z.string())]).optional(),
     limit: z.number().int().positive().max(500).optional(),
     cursor: z.string().optional(),
+    view: WorkItemsListViewSchema.optional(),
   }),
   output: z.object({
     items: z.array(WorkItemDtoSchema),
@@ -90,5 +101,6 @@ export const workItemsListOperation = {
 
 // Export inferred types
 export type WorkItemDto = z.infer<typeof WorkItemDtoSchema>;
+export type WorkItemsListView = z.infer<typeof WorkItemsListViewSchema>;
 export type WorkItemsListInput = z.infer<typeof workItemsListOperation.input>;
 export type WorkItemsListOutput = z.infer<typeof workItemsListOperation.output>;

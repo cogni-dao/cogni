@@ -3,15 +3,128 @@
 
 /**
  * Module: `@app/(app)/work/_api/fetchWorkItems.test`
- * Purpose: Covers the exact-item cookie-auth fetch used by human permalinks.
+ * Purpose: Covers the lean progressive list-page fetch and the exact-item cookie-auth fetch used by human permalinks.
  * Scope: Browser fetch contract only.
  * Side-effects: mocked fetch
- * Links: bug.5355, ./fetchWorkItems.ts
+ * Links: bug.5355, bug.5509, ./fetchWorkItems.ts
  */
 
+import type { WorkItemDto, WorkItemsListOutput } from "@cogni/node-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchWorkItem, WorkItemFetchError } from "./fetchWorkItems";
+import {
+  fetchWorkItem,
+  fetchWorkItemsPage,
+  flattenWorkItemPages,
+  MAX_WORK_ITEM_PAGES,
+  nextWorkItemsCursor,
+  WorkItemFetchError,
+} from "./fetchWorkItems";
+
+function item(id: string, title = id): WorkItemDto {
+  return {
+    id,
+    type: "task",
+    title,
+    status: "needs_implement",
+    assignees: [],
+    externalRefs: [],
+    labels: [],
+    specRefs: [],
+    revision: 0,
+    deployVerified: false,
+    createdAt: "2026-10-01",
+    updatedAt: "2026-10-01",
+  };
+}
+
+function page(
+  items: WorkItemDto[],
+  endCursor: string | null,
+  hasMore: boolean
+): WorkItemsListOutput {
+  return { items, pageInfo: { endCursor, hasMore } };
+}
+
+describe("fetchWorkItemsPage", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("requests the lean first page without a cursor", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(page([item("task.1")], "c1", true)),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchWorkItemsPage(null)).resolves.toMatchObject({
+      items: [{ id: "task.1" }],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/work/items?limit=500&view=lean",
+      expect.objectContaining({ credentials: "same-origin", cache: "no-store" })
+    );
+  });
+
+  it("passes the cursor for later pages", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(page([], null, false)),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchWorkItemsPage("abc");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/work/items?limit=500&view=lean&cursor=abc",
+      expect.any(Object)
+    );
+  });
+
+  it("throws the server error message on a failed page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ error: "boom" }),
+      })
+    );
+
+    await expect(fetchWorkItemsPage(null)).rejects.toThrow("boom");
+  });
+});
+
+describe("nextWorkItemsCursor", () => {
+  it("returns the end cursor while more pages exist", () => {
+    const first = page([item("task.1")], "c1", true);
+    expect(nextWorkItemsCursor(first, [first])).toBe("c1");
+  });
+
+  it("stops when the server reports no more pages", () => {
+    const last = page([item("task.1")], null, false);
+    expect(nextWorkItemsCursor(last, [last])).toBeUndefined();
+  });
+
+  it("stops at the page cap even if the server says hasMore", () => {
+    const p = page([item("task.1")], "cN", true);
+    const pages = Array.from({ length: MAX_WORK_ITEM_PAGES }, () => p);
+    expect(nextWorkItemsCursor(p, pages)).toBeUndefined();
+  });
+});
+
+describe("flattenWorkItemPages", () => {
+  it("concatenates pages and lets a later row replace an earlier duplicate in place", () => {
+    const pages = [
+      page([item("task.1"), item("bug.0002", "markdown")], "c1", true),
+      page([item("task.3"), item("bug.0002", "doltgres")], null, false),
+    ];
+
+    const flat = flattenWorkItemPages(pages);
+
+    expect(flat.map((i) => i.id)).toEqual(["task.1", "bug.0002", "task.3"]);
+    expect(flat[1]?.title).toBe("doltgres");
+  });
+});
 
 describe("fetchWorkItem", () => {
   afterEach(() => vi.unstubAllGlobals());

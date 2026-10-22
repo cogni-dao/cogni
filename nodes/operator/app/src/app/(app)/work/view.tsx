@@ -14,6 +14,9 @@
  *     (`DataGridColumnVisibility`), not on every column dropdown.
  *   - URL_DRIVEN_STATE — filters / sort / search persist in URL params.
  *   - CONTRACTS_ARE_TRUTH — types derived from `WorkItemDto`.
+ *   - PROGRESSIVE_LIST (bug.5509) — rows render from the first lean page while
+ *     later pages stream in; search covers id/title/labels only, so the lean
+ *     list (no summary/outcome) loses no search coverage.
  * Side-effects: IO (fetches from /api/v1/work/items)
  * Links: [WorkPage](./page.tsx), [fetchWorkItems](./_api/fetchWorkItems.ts)
  * @public
@@ -29,7 +32,7 @@ import {
 import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility";
 import { DataGridPagination } from "@cogni/node-ui-kit/reui/data-grid/data-grid-pagination";
 import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
   getCoreRowModel,
@@ -47,7 +50,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Input } from "@/components";
 
-import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
+import {
+  fetchWorkItem,
+  fetchWorkItemsPage,
+  flattenWorkItemPages,
+  nextWorkItemsCursor,
+} from "./_api/fetchWorkItems";
 import { columns } from "./_components/columns";
 import { WorkItemDetail } from "./_components/WorkItemDetail";
 import {
@@ -74,13 +82,32 @@ export function WorkDashboardView({
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["work-items"],
-    queryFn: fetchWorkItems,
+  const {
+    data,
+    isLoading,
+    error,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useInfiniteQuery({
+    queryKey: ["work-items", "lean"],
+    queryFn: ({ pageParam }) => fetchWorkItemsPage(pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: nextWorkItemsCursor,
     staleTime: 30_000,
   });
 
-  const items = data?.items ?? [];
+  // Keep walking the cursor in the background; rows from loaded pages are
+  // already on screen.
+  useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage && !error) void fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, error, fetchNextPage]);
+
+  const items = useMemo(
+    () => (data ? flattenWorkItemPages(data.pages) : []),
+    [data]
+  );
+  const isLoadingMore = hasNextPage === true && !error;
 
   const selectedItemQuery = useQuery({
     queryKey: ["work-item", selectedItemId],
@@ -287,13 +314,26 @@ export function WorkDashboardView({
         </div>
       </div>
 
-      {error && (
+      {error && items.length === 0 && (
         <p className="py-8 text-center text-destructive">
           Failed to load work items.
         </p>
       )}
 
-      {!error && (
+      {(isLoadingMore || (error && items.length > 0)) && (
+        <p
+          className={
+            error ? "text-destructive text-xs" : "text-muted-foreground text-xs"
+          }
+          aria-live="polite"
+        >
+          {error
+            ? `Showing ${items.length} loaded items; failed to load the rest.`
+            : `Loaded ${items.length} items, loading more…`}
+        </p>
+      )}
+
+      {!(error && items.length === 0) && (
         <DataGrid
           table={table}
           recordCount={items.length}
