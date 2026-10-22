@@ -39,7 +39,8 @@ export function createSweepActivities(deps: SweepActivityDeps) {
   const { config, logger } = deps;
 
   /**
-   * Fetch work items from the app's REST API, filtered and sorted by priority.
+   * Fetch work items from the app's REST API, filtered and sorted closest to
+   * done first (status weight), then by priority.
    */
   async function fetchWorkItemsActivity(input: {
     statuses?: string[];

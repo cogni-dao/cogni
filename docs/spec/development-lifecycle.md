@@ -197,7 +197,7 @@ curl -s -X POST $BASE/api/v1/work/items/$ID/pr \
   -d "{\"branch\":\"feat/my-change\",\"prNumber\":$PR_NUMBER}"
 ```
 
-`POST /pr` links the PR to both the operator session **and** the durable Dolt work item. The agent does not run `gh pr ready` here — PRs are not "ready for review" until step 7.
+`POST /pr` links the PR to both the operator session **and** the durable Dolt work item. A fresh `/review-implementation` starts as soon as the PR opens (step 5).
 
 ### 5. Review while CI runs
 
@@ -236,7 +236,7 @@ The contributor does **not** self-merge. Reaching `deploy_verified: true` (the p
 
 > **North star:** the cogni-operator app — the AI that runs the network's gitops — is the **single, accountable merge authority** for the whole network. Every merge flows through **one** capability (`VcsCapability.mergePr`); a **deterministic policy router** decides _when_ a PR may merge based on its class. The contributing agent/human never self-merges its own work. GitHub re-enforces required checks at merge; GitHub Merge Queue (when enabled) still owns rebase/retest/serialization.
 
-> **As-built today.** The operator-merge path is **live**: once CI is green and the `/validate-candidate` scorecard is posted, request the merge via `POST /api/v1/vcs/merge { nodeId, prNumber }` — the operator GitHub App enqueues the squash merge (returns `{enqueued:true}`; poll the PR to `MERGED`). Every node, the operator included, is addressed by `nodeId`. You never self-merge with personal `gh`.
+> **As-built today.** The operator-merge path is **live**: once review APPROVE and CI are green at one head SHA and the `/validate-candidate` scorecard passes (recorded with `deployVerified: true` in the `needs_closeout` transition PATCH), `/closeout` requests the merge via `POST /api/v1/vcs/merge { nodeId, prNumber }` — the operator GitHub App enqueues the squash merge (returns `{enqueued:true}`; poll the PR to `MERGED`). Every node, the operator included, is addressed by `nodeId`. You never self-merge with personal `gh`.
 
 ### Authorization classes (deterministic policy router, operator-owned)
 
@@ -368,7 +368,7 @@ Missing `Work:` → merge blocked. Missing `Spec:` → warning (blocked if behav
 | `CLAIM_REQUIRED`                   | Governance runner sets `claimed_by_run` before acting. Prevents double-dispatch.                                                                                                                                                                                                                                           |
 | `LOOP_LIMIT`                       | `revision >= 5` → `blocked` with escalation note.                                                                                                                                                                                                                                                                          |
 | `STORIES_ARE_INTAKE`               | Stories go `done` after triage. Never enter implementation lifecycle.                                                                                                                                                                                                                                                      |
-| `DEPLOY_VERIFIED_SEPARATE`         | `done` = merged (code gate). `deploy_verified` = qa-agent confirmed post-flight. Never conflate.                                                                                                                                                                                                                           |
+| `DEPLOY_VERIFIED_SEPARATE`         | `done` = merged (code gate). `deploy_verified` = the passing post-flight scorecard, recorded once in the `needs_closeout` transition PATCH. Never conflate.                                                                                                                                                                |
 | `VALIDATION_REQUIRED`              | Every task/bug must have `## Validation` with `exercise:` + `observability:` before `/implement` opens the PR.                                                                                                                                                                                                             |
 | `FEATURE_SMOKE_SCOPED`             | qa-agent validation must exercise the specific feature, not just generic `/readyz`.                                                                                                                                                                                                                                        |
 | `QA_READS_TASK`                    | qa-agent derives its test from the work item `## Validation` block — not from a separate test file.                                                                                                                                                                                                                        |
