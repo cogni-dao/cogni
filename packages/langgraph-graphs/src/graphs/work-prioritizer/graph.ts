@@ -8,6 +8,8 @@
  * Invariants:
  *   - LLM and tools are injected, not instantiated (brain-style)
  *   - PURE_GRAPH_FACTORY: the run report is `structuredResponse.telemetry`; the provider logs it (catalog `report`)
+ *   - REPORT_ON_ABORT: a turn-limit or model/tool error mid-run still reaches the report node with the partial
+ *     transcript and `aborted: true` (a caller abort signal is rethrown)
  *   - TYPE_TRANSPARENT_RETURN: No explicit return type annotation
  * Side-effects: none
  * Links: story.5108, prompts.ts, tools.ts
@@ -50,7 +52,10 @@ const parse = (s: string): Record<string, unknown> | null => {
 };
 
 /** One flat cycle summary from the run's messages (safe to log). */
-export function cycleTelemetry(messages: readonly BaseMessage[]) {
+export function cycleTelemetry(
+  messages: readonly BaseMessage[],
+  aborted = false
+) {
   let goalIds: string[] | undefined;
   const changedItemIds: string[] = [];
   let deniedCount = 0;
@@ -74,7 +79,8 @@ export function cycleTelemetry(messages: readonly BaseMessage[]) {
     changeCount: changedItemIds.length,
     deniedCount,
     toolErrorCount,
-    report: text(messages.at(-1)).slice(0, REPORT_MAX_CHARS),
+    aborted,
+    report: aborted ? "" : text(messages.at(-1)).slice(0, REPORT_MAX_CHARS),
   };
 }
 
@@ -82,6 +88,7 @@ export type MissionLoopTelemetry = ReturnType<typeof cycleTelemetry>;
 
 const State = Annotation.Root({
   ...MessagesAnnotation.spec,
+  aborted: Annotation<boolean>(),
   structuredResponse: Annotation<{ telemetry: MissionLoopTelemetry }>(),
 });
 
@@ -95,11 +102,25 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   });
   type S = typeof State.State;
   return new StateGraph(State)
-    .addNode("agent", (s: S, config: RunnableConfig) =>
-      agent.invoke({ messages: s.messages }, config)
-    )
+    .addNode("agent", async (s: S, config: RunnableConfig) => {
+      // REPORT_ON_ABORT: keep the latest transcript so a mid-run failure still reports what landed.
+      let last: { messages: BaseMessage[] } = { messages: s.messages };
+      try {
+        const values = await agent.stream(
+          { messages: s.messages },
+          { ...config, streamMode: "values" }
+        );
+        for await (const v of values) last = v;
+        return last;
+      } catch (error) {
+        if (config.signal?.aborted) throw error;
+        return { ...last, aborted: true };
+      }
+    })
     .addNode("report", (s: S) => ({
-      structuredResponse: { telemetry: cycleTelemetry(s.messages) },
+      structuredResponse: {
+        telemetry: cycleTelemetry(s.messages, s.aborted === true),
+      },
     }))
     .addEdge("__start__", "agent")
     .addEdge("agent", "report")

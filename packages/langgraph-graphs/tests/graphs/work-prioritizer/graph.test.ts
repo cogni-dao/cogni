@@ -40,8 +40,11 @@ const REPORT =
 
 type Call = { id: string; name: string; args: Record<string, unknown> };
 
-/** Turn 1: read goals + two transitions (one lands, one is p0/p1-denied); turn 2: the report. */
-function scriptedCompletion(prompts: string[]): CompletionFn {
+/** Turn 1: read goals + two patches (one lands, one is p0/p1-denied); turn 2: the report (or a model error). */
+function scriptedCompletion(
+  prompts: string[],
+  failTurn2 = false
+): CompletionFn {
   const turns: Call[][] = [
     [
       { id: "c1", name: GOAL_LIST_NAME, args: {} },
@@ -71,6 +74,7 @@ function scriptedCompletion(prompts: string[]): CompletionFn {
   return (req) => {
     prompts.push(JSON.stringify(req.messages[0]));
     const calls = turns[n++];
+    if (!calls && failTurn2) throw new Error("model down");
     const final: Promise<CompletionResult> = Promise.resolve(
       calls
         ? {
@@ -139,11 +143,10 @@ describe("work-prioritizer mission-loop agent", () => {
     expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });
   });
 
-  it("runs the tool loop and returns one flat cycle report", async () => {
-    const prompts: string[] = [];
+  async function run(prompts: string[], failTurn2 = false) {
     const { stream, final } = createInProcGraphRunner({
       createGraph: createWorkPrioritizerGraph,
-      completionFn: scriptedCompletion(prompts),
+      completionFn: scriptedCompletion(prompts, failTurn2),
       createToolExecFn: fakeExec,
       toolContracts: [
         goalListContract,
@@ -163,7 +166,12 @@ describe("work-prioritizer mission-loop agent", () => {
     for await (const _ of stream) {
       // drain
     }
-    const result = await final;
+    return final;
+  }
+
+  it("runs the tool loop and returns one flat cycle report", async () => {
+    const prompts: string[] = [];
+    const result = await run(prompts);
 
     expect(result.ok).toBe(true);
     expect(result.content).toBe(REPORT);
@@ -174,7 +182,20 @@ describe("work-prioritizer mission-loop agent", () => {
       changeCount: 1,
       deniedCount: 1,
       toolErrorCount: 0,
+      aborted: false,
       report: REPORT,
+    });
+  });
+
+  it("REPORT_ON_ABORT: a mid-run model error still reports the changes that landed", async () => {
+    const result = await run([], true);
+
+    expect(result.structuredOutput?.telemetry).toMatchObject({
+      changedItemIds: ["task.1"],
+      changeCount: 1,
+      deniedCount: 1,
+      aborted: true,
+      report: "",
     });
   });
 });
