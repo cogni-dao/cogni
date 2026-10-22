@@ -49,13 +49,6 @@ You are configuring a coding agent or IDE to work with this repo. The goal is to
   - Optional: `"context": { "discoveryMaxDirs": N }` to cap scans.
 - Memory hierarchy: `~/.gemini/AGENTS.md` + project root + ancestor + selected subdirs.
 
-## Antigravity IDE
-
-- Project config directory: `.agent/` at repo root.
-  - Context: `.agent/GEMINI.md` (can just say “@read AGENTS.md for rules”).
-  - Workflows: `.agent/workflows/*.md` (YAML front-matter + markdown body).
-  - Rules: `.agent/rules/*.md` for persistent traits that should always apply.
-
 ## Claude Code
 
 - Context: `CLAUDE.md` in `~/.claude`, project root, and subdirs (hierarchical + on-demand).
@@ -74,7 +67,6 @@ You are configuring a coding agent or IDE to work with this repo. The goal is to
 - **Single source of truth**: `AGENTS.md` in each directory; no duplicated rules elsewhere.
 - **Bridges only**:
   - Gemini: `contextFileName = "AGENTS.md"` + tuned `discoveryMaxDirs`.
-  - Antigravity: `.agent/GEMINI.md` + workflows that explicitly reference AGENTS.md.
   - Claude / Cursor: CLAUDE.md and command files that _reference_ AGENTS.md, not copy it.
 
 ## Verification
