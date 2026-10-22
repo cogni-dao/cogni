@@ -14,6 +14,436 @@
         "type": "prometheus",
         "uid": "grafanacloud-prom"
       },
+      "description": "Share of serve probes that succeeded per node over 24h, worst first. Red below the 99.9% soak target. Thresholds and windows: packages/node-contracts/src/reliability-policy.v1.json objectives (story.5084). Same numbers: node scripts/vm-health-snapshot.mjs.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 3,
+          "max": 100,
+          "min": 95,
+          "noValue": "NO PROBE DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 99.9
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 7,
+        "x": 0,
+        "y": 0
+      },
+      "id": 38,
+      "options": {
+        "displayMode": "basic",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "namePlacement": "left",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sort(100 * avg by (node_slug) (avg_over_time(probe_success{environment=\"$environment\",proof_class=\"serve\"}[24h])))",
+          "instant": true,
+          "legendFormat": "{{node_slug}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Node availability · 24h (target 99.9%)",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "description": "The same 24h availability split by independent probe region, worst first. One red region alone points at the network path, both at the node. Thresholds and windows: packages/node-contracts/src/reliability-policy.v1.json objectives (story.5084). Same numbers: node scripts/vm-health-snapshot.mjs.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 3,
+          "max": 100,
+          "min": 95,
+          "noValue": "NO PROBE DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 99.9
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 7,
+        "x": 7,
+        "y": 0
+      },
+      "id": 39,
+      "options": {
+        "displayMode": "basic",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "namePlacement": "left",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sort(100 * avg by (node_slug, probe) (avg_over_time(probe_success{environment=\"$environment\",proof_class=\"serve\"}[24h])))",
+          "instant": true,
+          "legendFormat": "{{node_slug}} · {{probe}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Node availability · 24h by probe location",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "description": "Completed database-reliability-actuator sweeps (one per minute when alive). Red below 1 in 10m: the auto-throttle controller is not running. Thresholds and windows: packages/node-contracts/src/reliability-policy.v1.json objectives (story.5084). Same numbers: node scripts/vm-health-snapshot.mjs.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0 · DEAD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 14,
+        "y": 0
+      },
+      "id": 40,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(count_over_time({env=\"$environment\",service=\"actuator\",pod=~\"operator-database-reliability-actuator-.*\"} | json | event=\"feature.node_reliability.sweep_complete\" [10m]))",
+          "refId": "A",
+          "direction": "backward",
+          "queryType": "instant"
+        }
+      ],
+      "title": "Throttle controller alive · sweeps 10m",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "description": "When the database-reliability-actuator last completed a sweep (7d lookback). Ungraded detail for the alive stat.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "NONE IN 7d",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "unit": "dateTimeFromNow"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 18,
+        "y": 0
+      },
+      "id": 41,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max(max_over_time({env=\"$environment\",service=\"actuator\",pod=~\"operator-database-reliability-actuator-.*\"} | json | event=\"feature.node_reliability.sweep_complete\" | label_format ts=`{{ __timestamp__ | unixEpoch }}` | unwrap ts [7d])) * 1000",
+          "refId": "A",
+          "direction": "backward",
+          "queryType": "instant"
+        }
+      ],
+      "title": "Throttle controller · last sweep",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "description": "Crash/stack lines from the database-reliability-actuator pod in the last hour. Ungraded diagnostic.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 21,
+        "y": 0
+      },
+      "id": 42,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(count_over_time({env=\"$environment\",service=\"actuator\",pod=~\"operator-database-reliability-actuator-.*\"} |= \"Error: \" [1h]))",
+          "refId": "A",
+          "direction": "backward",
+          "queryType": "instant"
+        }
+      ],
+      "title": "Throttle controller \"Error: \" lines · 1h",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "noValue": "0 · NONE",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 14,
+        "y": 4
+      },
+      "id": 10,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "direction": "backward",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({env=\"$environment\",service=\"db-backup\"} | json | event=\"db_backup.completed\" [26h]))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "title": "Successful backup receipts · 26h",
+      "type": "stat",
+      "description": "db_backup.completed receipts (one per cluster per run). Red below 1 in 26h. Thresholds and windows: packages/node-contracts/src/reliability-policy.v1.json objectives (story.5084). Same numbers: node scripts/vm-health-snapshot.mjs."
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "description": "When the newest db_backup.completed receipt arrived (7d lookback). Ungraded detail for the receipts stat.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "NONE IN 7d",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "unit": "dateTimeFromNow"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 19,
+        "y": 4
+      },
+      "id": 43,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max(max_over_time({env=\"$environment\",service=\"db-backup\"} | json | event=\"db_backup.completed\" | label_format ts=`{{ __timestamp__ | unixEpoch }}` | unwrap ts [7d])) * 1000",
+          "refId": "A",
+          "direction": "backward",
+          "queryType": "instant"
+        }
+      ],
+      "title": "Last successful backup",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -55,7 +485,7 @@
         "h": 5,
         "w": 8,
         "x": 0,
-        "y": 0
+        "y": 8
       },
       "id": 11,
       "options": {
@@ -112,7 +542,7 @@
         "h": 5,
         "w": 8,
         "x": 8,
-        "y": 0
+        "y": 8
       },
       "id": 12,
       "options": {
@@ -169,7 +599,7 @@
         "h": 5,
         "w": 8,
         "x": 16,
-        "y": 0
+        "y": 8
       },
       "id": 13,
       "options": {
@@ -237,7 +667,7 @@
         "h": 5,
         "w": 6,
         "x": 0,
-        "y": 5
+        "y": 13
       },
       "id": 1,
       "options": {
@@ -305,7 +735,7 @@
         "h": 5,
         "w": 6,
         "x": 6,
-        "y": 5
+        "y": 13
       },
       "id": 2,
       "options": {
@@ -373,7 +803,7 @@
         "h": 5,
         "w": 6,
         "x": 12,
-        "y": 5
+        "y": 13
       },
       "id": 3,
       "options": {
@@ -441,7 +871,7 @@
         "h": 5,
         "w": 6,
         "x": 18,
-        "y": 5
+        "y": 13
       },
       "id": 4,
       "options": {
@@ -509,7 +939,7 @@
         "h": 5,
         "w": 8,
         "x": 0,
-        "y": 10
+        "y": 18
       },
       "id": 5,
       "options": {
@@ -575,7 +1005,7 @@
         "h": 5,
         "w": 8,
         "x": 8,
-        "y": 10
+        "y": 18
       },
       "id": 6,
       "options": {
@@ -637,7 +1067,7 @@
         "h": 5,
         "w": 8,
         "x": 16,
-        "y": 10
+        "y": 18
       },
       "id": 7,
       "options": {
@@ -716,7 +1146,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 15
+        "y": 23
       },
       "id": 8,
       "options": {
@@ -795,7 +1225,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 15
+        "y": 23
       },
       "id": 9,
       "options": {
@@ -829,72 +1259,11 @@
         "type": "loki",
         "uid": "grafanacloud-logs"
       },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "noValue": "NO DATA",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 24,
-        "x": 0,
-        "y": 24
-      },
-      "id": 10,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "direction": "backward",
-          "editorMode": "code",
-          "expr": "sum(count_over_time({env=\"$environment\",service=\"db-backup\"} | json | event=\"db_backup.completed\" [26h]))",
-          "queryType": "instant",
-          "refId": "A"
-        }
-      ],
-      "title": "Successful backup receipts · 26h",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "grafanacloud-logs"
-      },
       "gridPos": {
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 32
       },
       "id": 14,
       "options": {
@@ -911,7 +1280,7 @@
         {
           "direction": "backward",
           "editorMode": "code",
-          "expr": "{env=\"$environment\",service=\"database-reliability-actuator\"} | json | event=\"feature.node_reliability_status.complete\"",
+          "expr": "{env=\"$environment\",service=\"actuator\",pod=~\"operator-database-reliability-actuator-.*\"} | json | event=\"feature.node_reliability_status.complete\"",
           "queryType": "range",
           "refId": "A"
         }
@@ -937,7 +1306,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 37
+        "y": 40
       },
       "id": 15,
       "options": {
@@ -984,7 +1353,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 46
+        "y": 49
       },
       "id": 16,
       "panels": [],
@@ -1030,7 +1399,7 @@
         "h": 5,
         "w": 4,
         "x": 0,
-        "y": 47
+        "y": 50
       },
       "id": 17,
       "targets": [
@@ -1101,7 +1470,7 @@
         "h": 5,
         "w": 4,
         "x": 4,
-        "y": 47
+        "y": 50
       },
       "id": 18,
       "targets": [
@@ -1154,7 +1523,7 @@
         "h": 5,
         "w": 4,
         "x": 8,
-        "y": 47
+        "y": 50
       },
       "id": 19,
       "targets": [
@@ -1206,7 +1575,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 47
+        "y": 50
       },
       "id": 20,
       "targets": [
@@ -1324,7 +1693,7 @@
         "h": 9,
         "w": 8,
         "x": 0,
-        "y": 52
+        "y": 55
       },
       "id": 21,
       "targets": [
@@ -1400,7 +1769,7 @@
         "h": 9,
         "w": 8,
         "x": 8,
-        "y": 52
+        "y": 55
       },
       "id": 22,
       "targets": [
@@ -1453,7 +1822,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 52
+        "y": 55
       },
       "id": 23,
       "targets": [
@@ -1525,7 +1894,7 @@
         "h": 5,
         "w": 4,
         "x": 0,
-        "y": 61
+        "y": 64
       },
       "id": 24,
       "targets": [
@@ -1596,7 +1965,7 @@
         "h": 5,
         "w": 4,
         "x": 4,
-        "y": 61
+        "y": 64
       },
       "id": 25,
       "targets": [
@@ -1649,7 +2018,7 @@
         "h": 5,
         "w": 4,
         "x": 8,
-        "y": 61
+        "y": 64
       },
       "id": 26,
       "targets": [
@@ -1701,7 +2070,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 61
+        "y": 64
       },
       "id": 27,
       "targets": [
@@ -1819,7 +2188,7 @@
         "h": 9,
         "w": 8,
         "x": 0,
-        "y": 66
+        "y": 69
       },
       "id": 28,
       "targets": [
@@ -1895,7 +2264,7 @@
         "h": 9,
         "w": 8,
         "x": 8,
-        "y": 66
+        "y": 69
       },
       "id": 29,
       "targets": [
@@ -1948,7 +2317,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 66
+        "y": 69
       },
       "id": 30,
       "targets": [
@@ -2020,7 +2389,7 @@
         "h": 5,
         "w": 4,
         "x": 0,
-        "y": 75
+        "y": 78
       },
       "id": 31,
       "targets": [
@@ -2091,7 +2460,7 @@
         "h": 5,
         "w": 4,
         "x": 4,
-        "y": 75
+        "y": 78
       },
       "id": 32,
       "targets": [
@@ -2144,7 +2513,7 @@
         "h": 5,
         "w": 4,
         "x": 8,
-        "y": 75
+        "y": 78
       },
       "id": 33,
       "targets": [
@@ -2196,7 +2565,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 75
+        "y": 78
       },
       "id": 34,
       "targets": [
@@ -2314,7 +2683,7 @@
         "h": 9,
         "w": 8,
         "x": 0,
-        "y": 80
+        "y": 83
       },
       "id": 35,
       "targets": [
@@ -2390,7 +2759,7 @@
         "h": 9,
         "w": 8,
         "x": 8,
-        "y": 80
+        "y": 83
       },
       "id": 36,
       "targets": [
@@ -2443,7 +2812,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 80
+        "y": 83
       },
       "id": 37,
       "targets": [
