@@ -52,20 +52,37 @@ const mod = (await import("../../../scripts/vm-health-snapshot.mjs")) as {
   parseArgs: (args: string[]) => { json: boolean; envs: string[] };
   OBJECTIVES: typeof policy.objectives;
   OBJECTIVE_LOGS: Record<string, string>;
-  evaluateObjectives: (input: unknown, nowSec: number) => Objectives;
-  renderObjectives: (o: Objectives) => string[];
+  evaluateObjectives: (
+    input: unknown,
+    nowSec: number,
+    objectives?: unknown
+  ) => Objectives;
+  renderObjectives: (o: unknown) => string[];
+  guardObjectives: (run: () => unknown) => Promise<{
+    level: Level;
+    error?: string;
+  }>;
+  snapshot: (
+    creds: unknown,
+    env: string,
+    nowSec: number,
+    deps: { run: Run; objectives?: unknown }
+  ) => Promise<{ verdict: Level; objectives: { level: Level } }>;
+  render: (s: unknown) => string;
+  vmExitCode: (snaps: { verdict: Level }[]) => number;
 };
+type Run = (
+  kind: "prometheus" | "loki",
+  expr: string
+) => Promise<{ metric: Record<string, string>; value: [number, string] }[]>;
+type Endpoint = { name: string; percent: number; level: Level };
 type Objectives = {
   level: Level;
   availability: {
     level: Level;
     below: string[];
-    nodes: {
-      slug: string;
-      percent: number;
-      level: Level;
-      probes: { probe: string }[];
-    }[];
+    endpoints: Endpoint[];
+    nodes: { slug: string; percent: number }[];
   };
   controller: {
     level: Level;
@@ -78,6 +95,10 @@ const {
   evaluate,
   evaluateObjectives,
   renderObjectives,
+  guardObjectives,
+  snapshot,
+  render,
+  vmExitCode,
   summarizeConsumers,
   parseArgs,
 } = mod;
@@ -258,6 +279,8 @@ function soak() {
         { slug: "poly", ratio: TARGET },
       ],
       byProbe: [
+        { slug: "operator", probe: "Ohio", ratio: 1 },
+        { slug: "operator", probe: "Frankfurt", ratio: 1 },
         { slug: "poly", probe: "Ohio", ratio: TARGET },
         { slug: "poly", probe: "Frankfurt", ratio: TARGET },
       ],
@@ -271,15 +294,44 @@ function soak() {
   };
 }
 
+/** Fake Grafana: healthy, fresh, single-host VM evidence; Loki empty. */
+const healthyGrafana: Run = async (kind, expr) => {
+  const row = (metric: Record<string, string>, v: number) => ({
+    metric,
+    value: [NOW, String(v)] as [number, string],
+  });
+  if (kind === "loki") return [];
+  const series = Object.entries(mod.SIGNAL_SERIES).find(([, m]) =>
+    expr.startsWith(`${m}{`)
+  );
+  if (series)
+    return [
+      row({ substrate_host: HOST }, healthyValue(series[0] as SignalKey)),
+    ];
+  if (expr.startsWith("timestamp(cogni_reliability_v1_"))
+    return [row({ substrate_host: HOST }, NOW - 30)];
+  if (expr.startsWith("max by (substrate_host) (timestamp("))
+    return [row({ substrate_host: HOST }, NOW - 20)];
+  if (expr.startsWith("max(timestamp(probe_success"))
+    return [row({}, NOW - 40)];
+  if (expr.startsWith("min by (node_slug)"))
+    return [row({ node_slug: "operator" }, 1)];
+  return [];
+};
+
 describe("vm-health soak objectives (story.5084)", () => {
   it("reads every objective from the policy, and so does the dashboard", () => {
     expect(mod.OBJECTIVES).toEqual(policy.objectives);
     type Panel = {
       id: number;
+      title: string;
       gridPos: { y: number };
       targets?: { expr: string }[];
       fieldConfig?: {
-        defaults: { thresholds?: { steps: { value: number | null }[] } };
+        defaults: {
+          color?: { mode: string };
+          thresholds?: { steps: { color: string; value: number | null }[] };
+        };
       };
     };
     const dash = JSON.parse(
@@ -291,62 +343,93 @@ describe("vm-health soak objectives (story.5084)", () => {
         "utf8"
       )
     ) as { panels: Panel[] };
-    const greenAt = (p: Panel) =>
-      p.fieldConfig?.defaults.thresholds?.steps.at(-1)?.value;
+    const steps = (p: Panel) => p.fieldConfig?.defaults.thresholds?.steps ?? [];
+    const greenAt = (p: Panel) => steps(p).at(-1)?.value;
     const byExpr = (needle: string) =>
       dash.panels.filter((p) =>
         p.targets?.some((t) => t.expr.includes(needle))
       );
-    const av = byExpr(
-      `avg_over_time(probe_success{environment="$environment",proof_class="serve"}[${OBJ.nodeAvailability.window}])`
-    );
+    const window = `avg_over_time(probe_success{environment="$environment",proof_class="serve"}[${OBJ.nodeAvailability.window}])`;
+    const endpoint = byExpr(`avg by (node_slug, probe) (${window})`);
+    const average = byExpr(`avg by (node_slug) (${window})`);
     const sweeps = byExpr(
       `event="${mod.OBJECTIVE_LOGS.sweepEvent}" [${OBJ.throttleController.window}]`
     );
     const backups = byExpr(
       `event="${mod.OBJECTIVE_LOGS.backupEvent}" [${OBJ.backupReceipts.window}]`
     );
-    expect(av).toHaveLength(2);
-    expect(sweeps).toHaveLength(1);
-    expect(backups).toHaveLength(1);
-    for (const p of av)
-      expect(greenAt(p)).toBe(OBJ.nodeAvailability.targetPercent);
-    expect(greenAt(sweeps[0] as Panel)).toBe(OBJ.throttleController.minSweeps);
-    expect(greenAt(backups[0] as Panel)).toBe(OBJ.backupReceipts.minReceipts);
-    // The deciding numbers are the dashboard's top row.
-    for (const p of [...av, ...sweeps, ...backups])
-      expect(p.gridPos.y).toBeLessThan(8);
-    for (const p of [...sweeps, ...backups])
-      for (const t of p.targets ?? [])
-        expect(t.expr).toContain(
-          p === sweeps[0]
-            ? mod.OBJECTIVE_LOGS.throttleController
-            : mod.OBJECTIVE_LOGS.backup
-        );
+    for (const group of [endpoint, average, sweeps, backups])
+      expect(group).toHaveLength(1);
+    const [ep, avg, sw, bk] = [endpoint, average, sweeps, backups].map(
+      (g) => g[0] as Panel
+    );
+    // Pass/fail is per endpoint; the per-node average is never colored pass/fail.
+    expect(steps(ep)).toEqual([
+      { color: "red", value: null },
+      { color: "green", value: OBJ.nodeAvailability.targetPercent },
+    ]);
+    expect(avg.fieldConfig?.defaults.color?.mode).toBe("fixed");
+    expect(steps(avg).some((x) => /red|green/.test(x.color))).toBe(false);
+    expect(greenAt(sw)).toBe(OBJ.throttleController.minSweeps);
+    expect(greenAt(bk)).toBe(OBJ.backupReceipts.minReceipts);
+    // The deciding numbers are the dashboard's top row; the graded endpoint panel leads it.
+    for (const p of [ep, avg, sw, bk]) expect(p.gridPos.y).toBeLessThan(8);
+    expect(dash.panels[0]?.id).toBe(ep.id);
+    for (const t of sw.targets ?? [])
+      expect(t.expr).toContain(mod.OBJECTIVE_LOGS.throttleController);
+    for (const t of bk.targets ?? [])
+      expect(t.expr).toContain(mod.OBJECTIVE_LOGS.backup);
   });
 
   it("grades a clean soak GREEN, exactly at the policy target", () => {
     const o = evaluateObjectives(soak(), NOW);
     expect(o.level).toBe("GREEN");
     expect(o.availability.below).toEqual([]);
+    expect(renderObjectives(o)[0]).toMatch(
+      /OK 4\/4 endpoints at target \(4 observed\)/
+    );
   });
 
-  it("flags nodes below target and lists availability worst first", () => {
+  it("grades per endpoint, so a passing node average cannot hide a failing probe", () => {
     const s = soak();
-    s.availability.nodes.push(
-      { slug: "red", ratio: 0.985 },
-      { slug: "beacon", ratio: TARGET - 0.00001 }
+    // Live 2026-10-22: operator averages 99.931 while its Ohio probe is 99.861.
+    s.availability.nodes[0] = { slug: "operator", ratio: 0.99931 };
+    s.availability.byProbe[0] = {
+      slug: "operator",
+      probe: "Ohio",
+      ratio: 0.99861,
+    };
+    s.availability.byProbe[1] = {
+      slug: "operator",
+      probe: "Frankfurt",
+      ratio: 1,
+    };
+    s.availability.byProbe.push(
+      { slug: "red", probe: "Frankfurt", ratio: 0.97222 },
+      { slug: "red", probe: "Ohio", ratio: TARGET - 0.00001 }
     );
     const o = evaluateObjectives(s, NOW);
     expect(o.availability.level).toBe("RED");
-    expect(o.availability.nodes.map((n) => n.slug)).toEqual([
-      "red",
-      "beacon",
-      "poly",
-      "operator",
+    expect(o.availability.endpoints.map((e) => e.name)).toEqual([
+      "red·Frankfurt",
+      "operator·Ohio",
+      "red·Ohio",
+      "poly·Frankfurt",
+      "poly·Ohio",
+      "operator·Frankfurt",
     ]);
-    expect(o.availability.below).toEqual(["red", "beacon"]);
-    expect(o.availability.nodes[2]?.probes).toHaveLength(2);
+    expect(o.availability.below).toEqual([
+      "red·Frankfurt",
+      "operator·Ohio",
+      "red·Ohio",
+    ]);
+    const lines = renderObjectives(o);
+    expect(lines[0]).toMatch(/🔴 3\/6 endpoints below target \(6 observed\)/);
+    expect(lines[0]).toMatch(/🔴 operator·Ohio 99\.861%/);
+    expect(lines[1]).toMatch(
+      /node averages 24h \(context, ungraded\): .*operator 99\.931%/
+    );
+    expect(lines[1]).not.toMatch(/🔴/);
   });
 
   it("grades a dead throttle controller and missing backups RED with their ages", () => {
@@ -393,10 +476,44 @@ describe("vm-health soak objectives (story.5084)", () => {
     expect(evaluateObjectives(undefined, NOW).level).toBe("UNKNOWN");
   });
 
-  it("never changes the VM verdict", () => {
-    expect(evaluate({ ...input(), objectives: { level: "RED" } }).verdict).toBe(
-      "GREEN"
+  it("turns any objectives failure into UNKNOWN instead of rejecting", async () => {
+    const g = await guardObjectives(() =>
+      evaluateObjectives(soak(), NOW, null)
     );
+    expect(g).toMatchObject({
+      level: "UNKNOWN",
+      error: "policy has no usable objectives",
+    });
+    expect(renderObjectives(g)).toEqual([
+      "   objectives: ⚪ UNKNOWN (policy has no usable objectives)",
+    ]);
+  });
+
+  it("keeps the VM verdict and exit code when the policy has no or broken objectives", async () => {
+    const run = (objectives: unknown) =>
+      snapshot({}, "production", NOW, { run: healthyGrafana, objectives });
+    const withObjectives = await run(policy.objectives);
+    expect(withObjectives.verdict).toBe("GREEN");
+    expect(withObjectives.objectives.level).toBe("RED");
+    for (const broken of [
+      undefined,
+      {},
+      {
+        ...policy.objectives,
+        nodeAvailability: {
+          ...policy.objectives.nodeAvailability,
+          window: "1.5h",
+        },
+      },
+    ]) {
+      const snap = await run(broken);
+      expect(snap.verdict).toBe(withObjectives.verdict);
+      expect(vmExitCode([snap])).toBe(vmExitCode([withObjectives]));
+      expect(vmExitCode([snap])).toBe(0);
+      expect(snap.objectives.level).toBe("UNKNOWN");
+      expect(render(snap)).toMatch(/^🟢 PRODUCTION GREEN/);
+      expect(render(snap)).toMatch(/objectives: ⚪ UNKNOWN \(/);
+    }
   });
 });
 

@@ -14,7 +14,7 @@
         "type": "prometheus",
         "uid": "grafanacloud-prom"
       },
-      "description": "Share of serve probes that succeeded per node over 24h, worst first. Red below the 99.9% soak target. Thresholds and windows: packages/node-contracts/src/reliability-policy.v1.json objectives (story.5084). Same numbers: node scripts/vm-health-snapshot.mjs.",
+      "description": "The graded soak objective: share of serve probes that succeeded per endpoint (node_slug × probe region) over 24h, worst first. Red below 99.9%. Every endpoint must pass; one red region alone points at the network path, both at the node. Thresholds and windows: packages/node-contracts/src/reliability-policy.v1.json objectives (story.5084). Same numbers: node scripts/vm-health-snapshot.mjs.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -43,75 +43,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 7,
+        "w": 8,
         "x": 0,
-        "y": 0
-      },
-      "id": 38,
-      "options": {
-        "displayMode": "basic",
-        "minVizHeight": 10,
-        "minVizWidth": 0,
-        "namePlacement": "left",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "showUnfilled": true,
-        "sizing": "auto",
-        "valueMode": "color"
-      },
-      "targets": [
-        {
-          "editorMode": "code",
-          "expr": "sort(100 * avg by (node_slug) (avg_over_time(probe_success{environment=\"$environment\",proof_class=\"serve\"}[24h])))",
-          "instant": true,
-          "legendFormat": "{{node_slug}}",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Node availability · 24h (target 99.9%)",
-      "type": "bargauge"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "grafanacloud-prom"
-      },
-      "description": "The same 24h availability split by independent probe region, worst first. One red region alone points at the network path, both at the node. Thresholds and windows: packages/node-contracts/src/reliability-policy.v1.json objectives (story.5084). Same numbers: node scripts/vm-health-snapshot.mjs.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 3,
-          "max": 100,
-          "min": 95,
-          "noValue": "NO PROBE DATA",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 99.9
-              }
-            ]
-          },
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 7,
-        "x": 7,
         "y": 0
       },
       "id": 39,
@@ -140,7 +73,71 @@
           "refId": "A"
         }
       ],
-      "title": "Node availability · 24h by probe location",
+      "title": "Endpoint availability · 24h · node × probe (target 99.9%)",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "description": "Mean of the two probe regions per node over 24h. Context only: an average can pass while one endpoint fails, so pass/fail is the endpoint panel.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "blue",
+            "mode": "fixed"
+          },
+          "decimals": 3,
+          "max": 100,
+          "min": 95,
+          "noValue": "NO PROBE DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 8,
+        "y": 0
+      },
+      "id": 38,
+      "options": {
+        "displayMode": "basic",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "namePlacement": "left",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sort(100 * avg by (node_slug) (avg_over_time(probe_success{environment=\"$environment\",proof_class=\"serve\"}[24h])))",
+          "instant": true,
+          "legendFormat": "{{node_slug}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Node average · 24h (context, ungraded)",
       "type": "bargauge"
     },
     {
