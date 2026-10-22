@@ -52,7 +52,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:2c434dcf794c6c7a431dbf91676155d7e860a237645a45b887134c71f3de550c"
+    digest: "sha256:f2aacb7d4c7d40bb79a6d9ff164b7f09a3f3618bf7b55d53ebe221c36ecfaef0"
 patches:
   - target:
       kind: ExternalSecret
@@ -364,6 +364,10 @@ patches:
       kind: Deployment
       name: node-app
     patch: |
+      # One-time legacy writer cutover; restore RollingUpdate after all operator lanes prove v2.
+      - op: replace
+        path: /spec/strategy
+        value: {type: Recreate}
       - op: add
         path: /spec/template/spec/initContainers/-
         value:
@@ -372,7 +376,7 @@ patches:
           command:
             - /bin/sh
             - -c
-            - exec node /app/nodes/$(NODE_NAME)/app/migrate-doltgres.mjs /app/nodes/$(NODE_NAME)/app/doltgres-migrations
+            - exec node --input-type=module -e 'import { migrateOperatorAfterNativeDrain } from "/app/nodes/operator/app/migrate-doltgres.mjs"; await migrateOperatorAfterNativeDrain("/app/nodes/operator/app/doltgres-migrations")'
           envFrom:
             - configMapRef:
                 name: operator-node-app-config
