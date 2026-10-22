@@ -50,6 +50,49 @@ MODE="${MODE:-render}"
 
 read -r -a RUNTIME_COMPOSE <<< "$RUNTIME_COMPOSE_BIN"
 
+case "${PRESERVE_SHARED_NATIVE:-}" in
+  ''|1) ;;
+  *) echo native_preservation_mode_unproven >&2; exit 1 ;;
+esac
+
+# Finite maintainer preservation is a read-only branch BEFORE touch/upsert/hash
+# writes. Refusing drift is intentional: this lane cannot rotate mirror custody
+# or recreate a shared engine. Ordinary reconciles keep their existing behavior.
+if [[ "${PRESERVE_SHARED_NATIVE:-}" == 1 ]]; then
+  python3 - <<'PY'
+import base64, hashlib, os, pathlib, sys
+try:
+    runtime = pathlib.Path(os.environ["RUNTIME_ENV"])
+    assert runtime.is_file() and not runtime.is_symlink()
+    keys = ("DOLT_CREDS_JWK", "DOLT_CREDS_KEYID", "DOLTHUB_OWNER", "DOLTHUB_API_TOKEN")
+    values = {}
+    for line in runtime.read_text().splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key in keys:
+            assert key not in values
+            values[key] = value
+    if os.environ.get("MODE", "render") == "purge":
+        assert not values
+    else:
+        assert os.environ.get("MODE", "render") == "render"
+        expected = {}
+        for key in keys:
+            encoded = os.environ.get(key + "_B64", "")
+            if encoded:
+                expected[key] = base64.b64decode(encoded, validate=True).decode()
+                assert values.get(key) == expected[key]
+        assert expected.get("DOLT_CREDS_JWK") and expected.get("DOLT_CREDS_KEYID")
+        marker = pathlib.Path(os.environ["HASH_DIR"]) / "dolt-mirror-creds.hash"
+        assert marker.is_file() and not marker.is_symlink()
+        assert marker.read_text() == expected["DOLT_CREDS_KEYID"] + ":" + hashlib.sha256(expected["DOLT_CREDS_JWK"].encode()).hexdigest()
+except Exception:
+    print("native_preservation_mirror_drift", file=sys.stderr)
+    sys.exit(1)
+print("[dolt-mirror-creds] existing native mirror custody preserved; no writes or lifecycle calls")
+PY
+  exit $?
+fi
+
 # PURGE MODE (bug.5003): non-prod must not hold the prod-capable mirror creds. Strip
 # the four keys from the runtime .env; if any were present, force-recreate doltgres so
 # install-creds.sh re-runs and no-ops (mirror goes dark). No values are ever passed in;
