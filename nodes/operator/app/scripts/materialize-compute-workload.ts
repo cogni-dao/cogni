@@ -114,6 +114,9 @@ async function main(): Promise<void> {
       environment,
       flightTargetsJson: values["flight-targets-json"],
       parentRepository: parentRepository(values["parent-repository"]),
+      ...(values["source-sha"] !== undefined && {
+        parentSourceSha: values["source-sha"],
+      }),
       githubOutput: required(values["github-output"], "--github-output"),
     });
     return;
@@ -398,6 +401,7 @@ async function selectDeploymentTargets(input: {
   readonly environment: "candidate-a" | "preview" | "production";
   readonly flightTargetsJson: string;
   readonly parentRepository: string;
+  readonly parentSourceSha?: string;
   readonly githubOutput: string;
 }): Promise<void> {
   const parsed = parseStringArray(
@@ -419,6 +423,9 @@ async function selectDeploymentTargets(input: {
     environment: input.environment,
     flightTargets: parsed,
     parentRepository: input.parentRepository,
+    ...(input.parentSourceSha !== undefined && {
+      parentSourceSha: input.parentSourceSha,
+    }),
   });
   const outputs = {
     deployment_node_targets_json: JSON.stringify(deployment),
