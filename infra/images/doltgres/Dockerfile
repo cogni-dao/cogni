@@ -40,15 +40,17 @@ RUN test "$(uname -m)" = x86_64 \
     && rm /tmp/upstream.tar.gz /tmp/cross.tar.xz /tmp/icu.tar.xz
 
 COPY session-attribution.patch /tmp/session-attribution.patch
-RUN echo 'ee6ab766777b27f283b3eec927eb7ed4db919d27d7cb18eaf90916e32f2f4cad  /tmp/session-attribution.patch' | sha256sum --check --strict \
+RUN echo '205b21648e9811c17733bfef6bc3e608c246f6c3a18bbd6161f5aa5047a4edde  /tmp/session-attribution.patch' | sha256sum --check --strict \
     && git apply --unidiff-zero --check /tmp/session-attribution.patch \
     && git apply --unidiff-zero /tmp/session-attribution.patch \
     && echo '25144b9786b8de6e556eb79d2981c849c74636dbf9ab85086957e27bee78eb6a  server/tables/pgcatalog/pg_stat_activity.go' | sha256sum --check --strict \
     && echo '74343f5d7688a28665d2fdb82b3ec8a3a594dc906a12b362344536ac06ae4db2  server/tables/pgcatalog/pg_stat_activity_test.go' | sha256sum --check --strict \
+    && echo 'dd09fcddef63e548d6807974a2b229e7e8cd74e04eed144742ac5ac6720cebe1  server/doltgres_handler.go' | sha256sum --check --strict \
+    && echo 'b25ca49ca7306cb45da8e3ed5c5a54d04d91f945ab4c6fc3635d1774b20acd05  server/doltgres_handler_max1_test.go' | sha256sum --check --strict \
     && go mod download \
     && go mod verify \
     && ./postgres/parser/build.sh \
-    && go test -timeout=10m -tags icu_static ./server/tables/pgcatalog -run '^TestPgStat' -count=1 -v \
+    && go test -timeout=10m -tags icu_static ./server ./server/tables/pgcatalog -run '^Test(PgStat|Max1Row)' -count=1 -v \
     && go build -buildvcs=false -trimpath -ldflags='-linkmode external -s -w' -tags icu_static -o /out/doltgres ./cmd/doltgres \
     && sha256sum /out/doltgres
 
