@@ -25,8 +25,8 @@
 
 #### Chores
 
-- [ ] Observability instrumentation [observability.md](../../.agent/workflows/observability.md)
-- [ ] Documentation updates `/closeout`
+- [ ] Observability instrumentation [observability.md](../../.claude/commands/observability.md)
+- [ ] Documentation updates (`/implement` docs pass)
 
 ### P1: [Phase 1 Name]
 
