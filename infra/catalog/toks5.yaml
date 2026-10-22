@@ -51,7 +51,7 @@ compute_api:
 # resolves to is still `…:1` byte-for-byte. "Epoch" is reserved for attribution/distribution.
 lease_generation:
   # Generation 1 closed at its boot deadline; lease/escrow closure verified on-chain.
-  candidate-a: 2
+  candidate-a: 3
   preview: 3
   production: 5
 # story.5025 — birth authority is PRODUCTION, the only environment that receives Git

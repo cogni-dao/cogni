@@ -16,10 +16,14 @@
  * @internal
  */
 
+import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import {
   GenericContainer,
   type StartedTestContainer,
@@ -651,6 +655,9 @@ describe.skipIf(!process.env.CI)(
         .withStartupTimeout(180_000)
         .start();
       const ids: string[] = [];
+      let imageArchiveDirectory: string | undefined;
+      let outerOwnedTag: string | undefined;
+      const hostDocker = promisify(execFile);
       const cli = async (...args: string[]) => {
         const result = await nested.exec(["docker", ...args]);
         expect(result.exitCode, result.output.slice(-3000)).toBe(0);
@@ -898,6 +905,76 @@ describe.skipIf(!process.env.CI)(
         // stable observability config path is introduced for the first time.
         const composeProject = `observer-${token}`;
         const composeBase = "/tmp/owned-core.yml";
+        // The outer CI Docker client owns registry authentication. Transfer only
+        // image bytes via an owned tag: classic and containerd IDs can differ.
+        // Verify config/layers instead, with pulls forbidden inside the daemon.
+        const configuredDoltgres = services.doltgres.image;
+        await hostDocker("docker", ["pull", configuredDoltgres]);
+        const { stdout: outerInspect } = await hostDocker("docker", [
+          "image",
+          "inspect",
+          configuredDoltgres,
+        ]);
+        const outerImages = JSON.parse(outerInspect) as {
+          Id: string;
+          RepoDigests: string[];
+          Config: unknown;
+          RootFS: { Type: string; Layers: string[] };
+          Os: string;
+          Architecture: string;
+          Variant?: string;
+        }[];
+        expect(outerImages).toHaveLength(1);
+        const outerImage = outerImages[0];
+        if (!outerImage || !/^sha256:[a-f0-9]{64}$/.test(outerImage.Id))
+          throw new Error("Declared Doltgres image identity missing");
+        expect(outerImage.RepoDigests).toContain(configuredDoltgres);
+        const ownedDoltgres = `owned-native-doltgres-${token}:verified`;
+        outerOwnedTag = ownedDoltgres;
+        await hostDocker("docker", [
+          "image",
+          "tag",
+          outerImage.Id,
+          ownedDoltgres,
+        ]);
+        imageArchiveDirectory = await mkdtemp(
+          path.join(os.tmpdir(), "cadvisor-image-")
+        );
+        const imageArchive = path.join(imageArchiveDirectory, "doltgres.tar");
+        await hostDocker("docker", [
+          "image",
+          "save",
+          "--output",
+          imageArchive,
+          ownedDoltgres,
+        ]);
+        await nested.copyFilesToContainer([
+          { source: imageArchive, target: "/tmp/owned-doltgres.tar" },
+        ]);
+        await cli("image", "load", "--input", "/tmp/owned-doltgres.tar");
+        const loadedImages = JSON.parse(
+          await cli("image", "inspect", ownedDoltgres)
+        ) as typeof outerImages;
+        expect(loadedImages).toHaveLength(1);
+        const loadedImage = loadedImages[0];
+        if (!loadedImage || !/^sha256:[a-f0-9]{64}$/.test(loadedImage.Id))
+          throw new Error("Loaded Doltgres image identity missing");
+        const contentIdentity = (image: (typeof outerImages)[number]) => ({
+          config: image.Config,
+          rootFS: image.RootFS,
+          os: image.Os,
+          architecture: image.Architecture,
+          variant: image.Variant ?? "",
+        });
+        expect(contentIdentity(loadedImage)).toEqual(
+          contentIdentity(outerImage)
+        );
+        console.info("CADVISOR_DECLARED_IMAGE_BRIDGE", {
+          configuredRef: configuredDoltgres,
+          outerId: outerImage.Id,
+          loadedId: loadedImage.Id,
+          contentIdentityEqual: true,
+        });
         const coreConfig = yaml.stringify({
           services: {
             postgres: {
@@ -905,7 +982,8 @@ describe.skipIf(!process.env.CI)(
               environment: { POSTGRES_PASSWORD: "owned-native-only" },
             },
             doltgres: {
-              image: services.doltgres.image,
+              image: ownedDoltgres,
+              pull_policy: "never",
               environment: { DOLTGRES_PASSWORD: "owned-native-only" },
             },
             redis: { image: services.redis.image },
@@ -954,9 +1032,12 @@ describe.skipIf(!process.env.CI)(
             ids.push(id);
             const state = JSON.parse(await cli("inspect", id))[0] as {
               Id: string;
+              Image: string;
               State: { Running: boolean; StartedAt: string };
             };
             expect(state.State.Running, service).toBe(true);
+            if (service === "doltgres")
+              expect(state.Image).toBe(loadedImage.Id);
             identities[service] = {
               id: state.Id,
               startedAt: state.State.StartedAt,
@@ -1162,7 +1243,17 @@ describe.skipIf(!process.env.CI)(
       } finally {
         for (const id of ids.reverse())
           await nested.exec(["docker", "rm", "-f", id]).catch(() => undefined);
-        await nested.stop();
+        try {
+          await nested.stop();
+        } finally {
+          try {
+            if (outerOwnedTag)
+              await hostDocker("docker", ["image", "rm", outerOwnedTag]);
+          } finally {
+            if (imageArchiveDirectory)
+              await rm(imageArchiveDirectory, { recursive: true, force: true });
+          }
+        }
       }
     }, 600_000);
   }
