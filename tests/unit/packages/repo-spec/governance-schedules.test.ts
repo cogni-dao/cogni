@@ -9,7 +9,7 @@
  *   - GRAPH_REQUIRES_MODEL: `graph` without `model` is rejected at parse time
  *   - BACK_COMPAT_SHAPE: an entry without graph/model maps to the exact pre-task.5282 object
  *   - LEDGER_PRESERVED: the operator runtime repo-spec still synthesizes exactly one LEDGER_INGEST (cron 0 0 * * *)
- *   - OPERATOR_PRIORITIZER (story.5096): the operator declares WORK_PRIORITIZER on langgraph:work-prioritizer hourly; the graph is propose-only by construction
+ *   - OPERATOR_PRIORITIZER_SUSPENDED (bug.5518): the operator leaves automatic graph charters undeclared until bounded readmission is proven
  * Side-effects: IO (reads the operator repo-spec file from disk)
  * Links: packages/repo-spec/src/schema.ts, packages/repo-spec/src/accessors.ts
  * @public
@@ -78,23 +78,18 @@ describe("operator runtime repo-spec governance (nodes/operator/.cogni)", () => 
   );
   const config = extractGovernanceConfig(spec);
 
-  it("declares WORK_PRIORITIZER on langgraph:work-prioritizer hourly (prod-safe), no policy payload", () => {
-    expect(
-      config.schedules.find((s) => s.charter === "WORK_PRIORITIZER")
-    ).toEqual({
-      charter: "WORK_PRIORITIZER",
-      cron: "0 * * * *",
-      timezone: "UTC",
-      entrypoint: "PRIORITIZE",
-      graph: "langgraph:work-prioritizer",
-      model: "gpt-oss-120b",
-    });
+  it("keeps automatic graph charters undeclared until bounded readmission is proven", () => {
+    expect(spec.governance.schedules).toEqual([]);
   });
 
-  it("declares only the two expected charters", () => {
-    expect(config.schedules.map((s) => s.charter).sort()).toEqual([
-      "LEDGER_INGEST",
-      "WORK_PRIORITIZER",
+  it("keeps only the existing synthesized ledger schedule effective", () => {
+    expect(config.schedules).toEqual([
+      {
+        charter: "LEDGER_INGEST",
+        cron: "0 0 * * *",
+        timezone: "UTC",
+        entrypoint: "LEDGER_INGEST",
+      },
     ]);
   });
 
