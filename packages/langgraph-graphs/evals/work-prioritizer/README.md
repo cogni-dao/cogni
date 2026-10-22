@@ -32,10 +32,10 @@ It then waits, with the SHA guarded, until the governance schedule has run the g
 
 **Write section (story.5108).** Run with `--apply` (or `EVAL_APPLY=1`) only against an environment whose governance schedule applies (operator repo-spec `apply`: candidate-a only). The eval's own cycles are API runs with no grant, so they never write and the propose gate above is unchanged. After them it seeds one item (`fixture.json` `applySeed`, a change, so the next scheduled cycle files and applies), waits for that scheduled cycle (bounded by `scheduledWaitMs`), reads the decision it filed, and reads every plan row back through `GET /api/v1/work/items`. Then it always deletes the seed. Both checks are hard:
 
-| check                                  | passes when                                                                                                                                             |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| applied rows (scheduled, p2–p4 + rank) | every p2–p4 plan row either landed (live priority + rank equal the row at a newer revision) or lost its compare-and-set to another writer; ≥1 landed    |
-| zero p0/p1 writes (no grant)           | no p0/p1 plan row landed: without the node-admin grant (story.5075) those patches are denied and counted as `deniedP0P1` in `ai.work_prioritizer.cycle` |
+| check                                  | passes when                                                                                                                                                                           |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| applied rows (scheduled, p2–p4 + rank) | every p2–p4 plan row either landed (live priority + rank equal the row at a newer revision) or lost its compare-and-set to another writer; ≥1 landed                                  |
+| zero p0/p1 writes (no grant)           | no plan row touching p0/p1 (currently p0/p1, or proposed p0/p1) landed: those rows are proposal-only (node-admin territory), counted as `proposedOnly` in `ai.work_prioritizer.cycle` |
 
 **Informational rows** (reported, never gating — an empty p0 is a correct answer): the full review's level counts; the overlap with the PM p0 oracle (`fixture.json` `pmLabels`, with the goal set it was authored for — the row says when the run's goals differ); how many judgments carry harm evidence; and whether the seeded incident (cycle 3) reached p0.
 

@@ -10,8 +10,8 @@
  *   - GATE = every hard + behavioral check passes; informational rows are reported only.
  *   - PROPOSE_GATE: the eval's own (API) cycles never write; that gate is unchanged.
  *   - WRITE_SECTION (story.5108): only when the env applies — a scheduled cycle's plan is read back from the live
- *     store: p2–p4 rows landed (or lost a compare-and-set to another writer), and no p0/p1 row landed without the
- *     node-admin grant (story.5075).
+ *     store: p2–p4 rows landed (or lost a compare-and-set to another writer), and no row touching p0/p1 (from or
+ *     to ≤ 1 — proposal-only, node-admin territory) was written.
  * Side-effects: none
  * Links: evals/work-prioritizer/README.md, run.ts
  * @public
@@ -288,13 +288,17 @@ export function readBackRow(
   return newer ? "conflict" : "missed";
 }
 
+/** A plan row the graph may write: neither from nor to is p0/p1 (P0P1_IS_PROPOSAL_ONLY). */
+const writable = (r: DecisionPayload["plan"][number]) =>
+  r.to >= 2 && (r.from === null || r.from >= 2);
+
 /** WRITE_SECTION: every changed p2–p4 row of the scheduled plan landed or lost its CAS to another writer. */
 export function gradeAppliedRows(
   payload: DecisionPayload,
   live: readonly SnapshotItem[]
 ): CheckResult {
   const byId = new Map(live.map((i) => [i.id, i]));
-  const rows = payload.plan.filter((r) => r.to >= 2);
+  const rows = payload.plan.filter(writable);
   if (rows.length === 0)
     return fail(
       "the scheduled plan has no p2–p4 rows — write path unexercised"
@@ -312,19 +316,24 @@ export function gradeAppliedRows(
   return n.landed > 0 ? ok(counts) : fail(`${counts} — no p2–p4 write landed`);
 }
 
-/** WRITE_SECTION: without the node-admin grant, no p0/p1 row of the scheduled plan landed. */
+/**
+ * WRITE_SECTION: no plan row touching p0/p1 (currently p0/p1, or proposed p0/p1) was written: the item is still
+ * at the snapshot revision, or moved without taking the row's values (another writer).
+ */
 export function gradeNoP0P1Writes(
   payload: DecisionPayload,
   live: readonly SnapshotItem[]
 ): CheckResult {
   const byId = new Map(live.map((i) => [i.id, i]));
-  const rows = payload.plan.filter((r) => r.to <= 1);
+  const rows = payload.plan.filter((r) => !writable(r));
   const landed = rows
     .filter((r) => readBackRow(r, byId.get(r.itemId)) === "landed")
-    .map((r) => `${r.itemId} → p${r.to}`);
+    .map((r) => `${r.itemId} p${r.from ?? "-"} → p${r.to}`);
   return landed.length
-    ? fail(`p0/p1 writes landed without the grant: ${landed.join(", ")}`)
-    : ok(`0/${rows.length} p0/p1 plan rows written (denied, stays a proposal)`);
+    ? fail(`p0/p1 rows written (must stay proposals): ${landed.join(", ")}`)
+    : ok(
+        `0/${rows.length} p0/p1 plan rows written (proposal-only for the node admin)`
+      );
 }
 
 /** At most 10% of rows unjudged (the model never judged them, even after per-item repair). */

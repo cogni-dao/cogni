@@ -12,7 +12,7 @@
  *   - DAILY_FULL_REVIEW / DELTA_SCOPE: full review re-judges all and always files; delta carries the rest
  *   - TRANSITION_UNREACHABLE: work-item writes are unreachable without the apply gate, even when demanded by injection
  *   - APPLY_GATED (story.5108): apply=true + grant-backed + a filed decision ⇒ CAS patches, demotions first;
- *     conflicts skipped, p0/p1 denials counted; apply=false or no grant ⇒ zero patches
+ *     conflicts skipped; rows touching p0/p1 never written (proposedOnly); apply=false or no grant ⇒ zero patches
  *   - NO_GOAL_CAP + P0P1_CITES_GOAL + PURE_GRAPH_FACTORY: every goal is used; every p0/p1 names its goal; no ALS push
  * Side-effects: none
  * Links: src/graphs/work-prioritizer/graph.ts
@@ -39,6 +39,7 @@ import {
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
+import { applyPlan } from "../../../src/graphs/work-prioritizer/apply";
 import {
   createWorkPrioritizerGraph,
   type PrioritizerRunReport,
@@ -814,21 +815,26 @@ describe("langgraph:work-prioritizer v4 propose mode (mock LLM)", () => {
 });
 
 describe("langgraph:work-prioritizer apply step (story.5108)", () => {
-  // Plan (table rank order): b 4→1 promo · a 1→2 demo · c 2→2 rank-only · e null→2 promo ·
-  // d 4→4 rank-only · f 3→4 demo. Triage keeps a/c/e out of p1; impact 0 sends d/f to p4.
+  // Plan (table rank order): b 3→1 promo · c 2→2 rank-only · e null→2 promo · g 3→2 promo ·
+  // a 1→4 demo · d 4→4 rank-only · f 3→4 demo. Triage keeps c/e/g out of p1; impact 0 sends a/d/f to p4.
   const applyItems = [
-    workItem("task.a", { priority: 1, rank: 2, status: "needs_triage" }),
-    workItem("task.b", { priority: 4, rank: 1 }),
+    workItem("task.a", { priority: 1, rank: 2 }),
+    workItem("task.b", { priority: 3, rank: 1 }),
     workItem("task.c", { priority: 2, rank: 9, status: "needs_triage" }),
     workItem("task.d", { priority: 4, rank: 9 }),
     workItem("task.e", { status: "needs_triage" }),
     workItem("task.f", { priority: 3, rank: 6 }),
+    workItem("task.g", { priority: 3, rank: 5, status: "needs_triage" }),
   ];
   const applyJudge: JudgeFn = (id) => ({
     ...standardJudge(id),
-    impact: id === "task.d" || id === "task.f" ? {} : { [R]: 2 },
+    impact: ["task.a", "task.d", "task.f"].includes(id) ? {} : { [R]: 2 },
   });
-  /** The store: p0/p1 refused by the node-admin gate (as the capability throws it), task.c lost its CAS. */
+  const patched = (id: unknown) => ({
+    ok: true as const,
+    value: { success: true, action: "patch", id, message: "ok", revision: 3 },
+  });
+  /** The store: p0/p1 refused by the node-admin gate (safety net — never reached), task.c lost its CAS. */
   const store = (a: Record<string, unknown>) =>
     (a.priority as number) <= 1
       ? {
@@ -848,88 +854,89 @@ describe("langgraph:work-prioritizer apply step (story.5108)", () => {
               message: "conflict",
             },
           }
-        : {
-            ok: true as const,
-            value: {
-              success: true,
-              action: "patch",
-              id: a.id,
-              message: "ok",
-              revision: 3,
-            },
-          };
+        : patched(a.id);
   const patches = (calls: Call[]) =>
     calls.filter((c) => c.name === WORK_ITEM_TRANSITION_NAME);
+  const cas = (id: string, priority: number, rank: number) => ({
+    action: "patch",
+    id,
+    priority,
+    rank,
+    expectedRevision: 2,
+  });
 
-  it("APPLY_GATED: patches after the decision, demotions first, CAS on the snapshot revision; conflicts skip, p0/p1 denials count", async () => {
+  it("APPLY_GATED: p2–p4 patches after the decision, demotions first, CAS; rows touching p0/p1 are never written", async () => {
     const { calls, events, report, status, decide } = await run({
       world: { items: applyItems, patch: store },
       judge: applyJudge,
       configurable: { apply: true, grantId: "grant-1" },
     });
     expect(status).toBe("planned");
-    // DEMOTIONS_FIRST: demotions (a, f), then rank-only (c, d), then promotions (b, e).
+    // DEMOTIONS_FIRST: demotion f, then rank-only c, d, then promotions e (null→2), g (3→2).
+    // P0P1_IS_PROPOSAL_ONLY: a (p1→p4, currently p1) and b (p3→p1) are never sent.
     expect(patches(calls).map((c) => c.args)).toEqual([
-      {
-        action: "patch",
-        id: "task.a",
-        priority: 2,
-        rank: 2,
-        expectedRevision: 2,
-      },
-      {
-        action: "patch",
-        id: "task.f",
-        priority: 4,
-        rank: 6,
-        expectedRevision: 2,
-      },
-      {
-        action: "patch",
-        id: "task.c",
-        priority: 2,
-        rank: 3,
-        expectedRevision: 2,
-      },
-      {
-        action: "patch",
-        id: "task.d",
-        priority: 4,
-        rank: 5,
-        expectedRevision: 2,
-      },
-      {
-        action: "patch",
-        id: "task.b",
-        priority: 1,
-        rank: 1,
-        expectedRevision: 2,
-      },
-      {
-        action: "patch",
-        id: "task.e",
-        priority: 2,
-        rank: 4,
-        expectedRevision: 2,
-      },
+      cas("task.f", 4, 7),
+      cas("task.c", 2, 2),
+      cas("task.d", 4, 6),
+      cas("task.e", 2, 3),
+      cas("task.g", 2, 4),
     ]);
     // FIXED_ORDER: every patch comes after the filed decision.
     const decided = events.indexOf(`tool:${EDO_DECIDE_NAME}`);
     expect(events.slice(decided + 1)).toEqual(
-      Array(6).fill(`tool:${WORK_ITEM_TRANSITION_NAME}`)
+      Array(5).fill(`tool:${WORK_ITEM_TRANSITION_NAME}`)
     );
     expect(String(decide?.args.content)).toContain("Apply mode");
     expect(report.telemetry).toMatchObject({
       applyEnabled: true,
       applied: 4,
+      proposedOnly: 2,
+      proposedOnlyIds: ["task.a", "task.b"],
       conflicts: 1,
-      deniedP0P1: 1,
-      deniedP0P1Ids: ["task.b"],
+      deniedP0P1: 0,
+      deniedP0P1Ids: [],
       applyFailed: 0,
       applySkipped: 0,
     });
-    // p0/p1 stay proposals in the filed decision; a denial is not a cycle failure.
+    // p0/p1 rows stay proposals in the filed decision.
     expect(report.errors).toEqual([]);
+  });
+
+  it("P0P1_IS_PROPOSAL_ONLY (applyPlan): p1→p3 and p3→p1 and p0 rank-only are not written; p3→p2 and p2 rank-only are", async () => {
+    const row = (
+      itemId: string,
+      from: number | null,
+      to: number,
+      rank: number
+    ) => ({
+      itemId,
+      from,
+      to,
+      rank,
+      expectedRevision: 2,
+      goal: to <= 1 ? R : null,
+    });
+    const sent: Record<string, unknown>[] = [];
+    const out = await applyPlan(
+      [
+        row("p1-to-p3", 1, 3, 1),
+        row("p3-to-p1", 3, 1, 2),
+        row("p0-rank", 0, 0, 3),
+        row("p3-to-p2", 3, 2, 4),
+        row("p2-rank", 2, 2, 5),
+      ],
+      async (args) => {
+        sent.push(args);
+        return { ok: true, value: { success: true } };
+      }
+    );
+    expect(sent.map((a) => a.id)).toEqual(["p2-rank", "p3-to-p2"]);
+    expect(out).toMatchObject({
+      applied: 2,
+      proposedOnly: 3,
+      proposedOnlyIds: ["p1-to-p3", "p0-rank", "p3-to-p1"],
+      deniedP0P1: 0,
+    });
   });
 
   it("an unexpected patch failure is counted and reported verbatim, never retried", async () => {
@@ -937,16 +944,16 @@ describe("langgraph:work-prioritizer apply step (story.5108)", () => {
       world: {
         items: applyItems,
         patch: (a) =>
-          a.id === "task.a"
+          a.id === "task.f"
             ? { ok: false, errorCode: "execution", safeMessage: "db down" }
             : store(a),
       },
       judge: applyJudge,
       configurable: { apply: true, grantId: "grant-1" },
     });
-    expect(patches(calls)).toHaveLength(6);
+    expect(patches(calls)).toHaveLength(5);
     expect(report.telemetry).toMatchObject({ applied: 3, applyFailed: 1 });
-    expect(report.errors).toEqual(["patch task.a: execution: db down"]);
+    expect(report.errors).toEqual(["patch task.f: execution: db down"]);
   });
 
   it("apply=false (grant-backed) ⇒ propose only: decision filed, zero patches", async () => {

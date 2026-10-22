@@ -12,8 +12,8 @@
  *   DAILY_FULL_REVIEW + DELTA_SCOPE (plan.selectJudgeSet); DETERMINISTIC_TOOL_CALLS (code names every
  *   allowlisted tool and its args); PROPOSE_BY_DEFAULT (the plan — id, revision, priority, rank, goal — is filed in
  *   an EDO decision); APPLY_GATED (story.5108: the filed plan is patched only when `configurable.apply === true` AND
- *   the run is grant-backed (`configurable.grantId`) AND this cycle filed its decision; p0/p1 patches meet the
- *   node-admin gate and are counted as `deniedP0P1` until story.5075); DECISION_ON_CHANGE (a delta cycle with an unchanged table files nothing; a
+ *   the run is grant-backed (`configurable.grantId`) AND this cycle filed its decision; rows touching p0/p1 (from or
+ *   to ≤ 1) are never written — counted as `proposedOnly`; p0/p1 is node-admin territory); DECISION_ON_CHANGE (a delta cycle with an unchanged table files nothing; a
  *   full review always files, recording `reviewedAt`); PRIOR_CAS (a newer decision than the prior ⇒
  *   `stale_prior`, zero writes); PURE_GRAPH_FACTORY (the report is the structuredResponse + final message;
  *   the provider logs/streams it per the catalog entry's `report`).
@@ -364,7 +364,7 @@ export function createWorkPrioritizerGraph(
       sourceRef: `langgraph:${WORK_PRIORITIZER_GRAPH_NAME}`,
       tags: [T.PRIORITIZER_EDO_TAG, "prioritization", "propose"],
       title: `Priority plan ${stamp}: p0 ${p0.join(", ") || "none"}`,
-      content: `${summary}\n\n${A.applyEnabled(config) ? "Apply mode: the plan rows are patched after filing (compare-and-set); p0/p1 need node admin." : "Propose mode: nothing below is applied."}\n\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``,
+      content: `${summary}\n\n${A.applyEnabled(config) ? "Apply mode: p2–p4 rows are patched after filing (compare-and-set); rows touching p0/p1 stay proposals for the node admin." : "Propose mode: nothing below is applied."}\n\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``,
       derivesFromHypothesisId: goalIds[0],
     });
     if (filed.ok) edo.decisionId = id;

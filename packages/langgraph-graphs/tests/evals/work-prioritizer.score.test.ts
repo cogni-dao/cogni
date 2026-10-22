@@ -588,7 +588,29 @@ describe("work-prioritizer write section (story.5108)", () => {
     expect(applied.reason).toContain("task.p2 (want p2 rank 3)");
     expect(gradeNoP0P1Writes(scheduled, store)).toEqual({
       pass: false,
-      reason: "p0/p1 writes landed without the grant: task.p1 → p1",
+      reason: "p0/p1 rows written (must stay proposals): task.p1 p3 → p1",
+    });
+  });
+
+  it("a demotion out of p1 is proposal-only: not graded as applied, and fails if it was written", () => {
+    const demote = decision([], {
+      plan: [plan("task.p2", 2, 3), { ...plan("task.was1", 3, 4), from: 1 }],
+    });
+    const store = live({
+      "task.p2": { priority: 2, rank: 3, revision: 3 },
+      "task.was1": { priority: 3, rank: 4, revision: 3 },
+    });
+    expect(gradeAppliedRows(demote, store).reason).toBe(
+      "1 landed · 0 conflict · 0 gone · 0 missed of 1"
+    );
+    expect(gradeNoP0P1Writes(demote, store).pass).toBe(false);
+    const untouched = live({
+      "task.p2": { priority: 2, rank: 3, revision: 3 },
+      "task.was1": { priority: 1, rank: 2, revision: 2 },
+    });
+    expect(gradeNoP0P1Writes(demote, untouched)).toEqual({
+      pass: true,
+      reason: "0/1 p0/p1 plan rows written (proposal-only for the node admin)",
     });
   });
 

@@ -10,11 +10,15 @@
  * Invariants:
  *   - APPLY_IS_GATED: graph.ts runs this only when the run sets `configurable.apply === true`, is grant-backed
  *     (`configurable.grantId`), and filed this cycle's decision. Otherwise nothing is patched.
+ *   - P0P1_IS_PROPOSAL_ONLY (dao-goals-design; story.5108 "p2–p4 + rank only"): a row whose item is CURRENTLY
+ *     p0/p1 (`from ≤ 1`) or that would SET p0/p1 (`to ≤ 1`) is never written — it is counted in `proposedOnly`
+ *     (with ids) and stays a proposal in the filed decision. p0/p1 is node-admin territory. Rank-only moves on
+ *     p2–p4 items still apply.
  *   - DEMOTIONS_FIRST: demotions, then rank-only moves, then promotions (unprioritized → a level counts as a promotion).
  *   - CAS_ALWAYS: every patch carries `expectedRevision` = the snapshot revision; a row without one is skipped.
  *   - CONFLICT_SKIPS: `revision_conflict` → counted, never retried; the next cycle re-reads the item.
- *   - P0P1_DENIAL_IS_COUNTED: an `authz_denied` patch to p0/p1 (P0P1_IS_NODE_ADMIN, #2864) is counted in
- *     `deniedP0P1`, never retried, and never fails the cycle. p0/p1 remain proposals in the filed decision.
+ *   - P0P1_DENIAL_IS_COUNTED (safety net; normally 0 because p0/p1 rows are never sent): an `authz_denied`
+ *     patch to p0/p1 (P0P1_IS_NODE_ADMIN, #2864) is counted in `deniedP0P1`, never retried, never fails the cycle.
  *   - ONE_PATCH_PER_ROW: each plan row is patched at most once per cycle.
  * Side-effects: IO (only through the injected `patch` tool call)
  * Links: graph.ts, plan.ts (buildPlan), packages/ai-tools/src/tools/work-item-transition.ts, story.5108, story.5075
@@ -32,7 +36,11 @@ export interface ApplyOutcome {
   readonly applied: number;
   /** Lost compare-and-set (`revision_conflict`): skipped, re-read next cycle. */
   readonly conflicts: number;
-  /** p0/p1 patches refused by the node-admin gate (`authz_denied`). */
+  /** P0P1_IS_PROPOSAL_ONLY: rows touching p0/p1 (from ≤ 1 or to ≤ 1), never written. */
+  readonly proposedOnly: number;
+  /** The item ids behind `proposedOnly`. */
+  readonly proposedOnlyIds: readonly string[];
+  /** Safety net: p0/p1 patches refused by the node-admin gate (`authz_denied`); normally 0. */
   readonly deniedP0P1: number;
   /** The item ids behind `deniedP0P1` (logged with the cycle telemetry). */
   readonly deniedP0P1Ids: readonly string[];
@@ -45,6 +53,8 @@ export interface ApplyOutcome {
 
 export const emptyApply = (): ApplyOutcome => ({
   applied: 0,
+  proposedOnly: 0,
+  proposedOnlyIds: [],
   conflicts: 0,
   deniedP0P1: 0,
   deniedP0P1Ids: [],
@@ -69,6 +79,8 @@ export function applyTelemetry(outcome: ApplyOutcome | null, enabled: boolean) {
   return {
     applyEnabled: enabled,
     applied: o.applied,
+    proposedOnly: o.proposedOnly,
+    proposedOnlyIds: o.proposedOnlyIds,
     conflicts: o.conflicts,
     deniedP0P1: o.deniedP0P1,
     deniedP0P1Ids: o.deniedP0P1Ids,
@@ -76,6 +88,10 @@ export function applyTelemetry(outcome: ApplyOutcome | null, enabled: boolean) {
     applySkipped: o.skipped,
   };
 }
+
+/** P0P1_IS_PROPOSAL_ONLY: the row's item is currently p0/p1, or the row would set p0/p1. */
+export const touchesP0P1 = (r: PlanRow) =>
+  r.to <= 1 || (r.from !== null && r.from <= 1);
 
 /** 0 = demotion, 1 = rank-only, 2 = promotion (incl. unprioritized → a level). */
 const moveClass = (r: PlanRow) =>
@@ -98,18 +114,26 @@ export const patchArgs = (row: PlanRow & { expectedRevision: number }) => ({
   expectedRevision: row.expectedRevision,
 });
 
-/** Patch every changed row in DEMOTIONS_FIRST order; classify each result; never throw, never retry. */
+/**
+ * Patch every changed p2–p4 row in DEMOTIONS_FIRST order (rows touching p0/p1 are proposal-only); classify each
+ * result; never throw, never retry.
+ */
 export async function applyPlan(
   plan: readonly PlanRow[],
   patch: (args: ReturnType<typeof patchArgs>) => Promise<DecodedToolResult>
 ): Promise<ApplyOutcome> {
   let applied = 0;
+  const proposedOnlyIds: string[] = [];
   let conflicts = 0;
   const deniedP0P1Ids: string[] = [];
   let failed = 0;
   let skipped = 0;
   const errors: string[] = [];
   for (const row of applyOrder(plan)) {
+    if (touchesP0P1(row)) {
+      proposedOnlyIds.push(row.itemId);
+      continue;
+    }
     if (row.expectedRevision === null) {
       skipped += 1;
       continue;
@@ -133,6 +157,8 @@ export async function applyPlan(
   }
   return {
     applied,
+    proposedOnly: proposedOnlyIds.length,
+    proposedOnlyIds,
     conflicts,
     deniedP0P1: deniedP0P1Ids.length,
     deniedP0P1Ids,
