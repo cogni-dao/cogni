@@ -18,6 +18,7 @@ import { type ReactElement, useEffect, useRef, useState } from "react";
 
 import { Markdown } from "@/components";
 import { HtmlRenderer } from "./HtmlRenderer";
+import { KnowledgeUseWhen } from "./KnowledgeUseWhen";
 
 /** True when any diff row is an `html` entry (callers widen the layout). */
 export function diffHasHtmlEntry(
@@ -119,6 +120,7 @@ export function ContributionDiff({
         const row = (d.after ?? d.before) as {
           id?: string;
           title?: string;
+          useWhen?: string | null;
           content?: string;
           entryType?: string;
           domain?: string;
@@ -158,6 +160,7 @@ export function ContributionDiff({
                 {String(row.title)}
               </p>
             )}
+            <KnowledgeUseWhen useWhen={row?.useWhen} />
             {isHtml && row?.content && (
               <div className="mt-2">
                 <HtmlRenderer
