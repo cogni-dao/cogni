@@ -36,6 +36,19 @@ FETCH_TIMEOUT=6           # bound the foreground first-boot fetch
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT" || exit 0
 
+# Optional node-owned profile uses the same admission code as the installed hook.
+if [ -e .cogni/cognition-sources.json ] || [ -L .cogni/cognition-sources.json ]; then
+  helper="$REPO_ROOT/scripts/agent/configured-cognition.mjs"
+  if command -v node >/dev/null 2>&1 && [ -f "$helper" ]; then
+    exec node "$helper" "${1:-}"
+  fi
+  [ "${1:-}" = --cached-contract ] && exit 0
+  notice="COGNI COGNITION — BOOTSTRAP RECOVERY (no complete contract): configured context requires Node.js and the shared configured-cognition.mjs helper. Repair setup, warm once, then restart/resume."
+  if [ "${1:-}" = --codex ] || [ -n "${CODEX_THREAD_ID:-}" ]; then printf '%s\n' "$notice"; fi
+  printf '%s\n' "$notice" >&2
+  exit 0
+fi
+
 # bundle_is_complete <markdown> — admit a complete operating contract, not merely
 # a map or a nonempty response. Check its existing semantic envelope and generic
 # Markdown template structure; field names and column counts stay hub-owned.

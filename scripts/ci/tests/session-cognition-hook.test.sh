@@ -40,7 +40,22 @@ if [ -n "${FAKE_FETCH_WAIT:-}" ]; then
   done
 fi
 [ "${FAKE_CURL_FAIL:-0}" = 0 ] || exit 22
-cat "$FAKE_RESPONSE"
+if [ -n "${FAKE_PROFILE_DIR:-}" ]; then
+  for argument do endpoint="$argument"; done
+  case "$endpoint" in
+    https://cognidao.org/api/v1/cognition) response="cognition" ;;
+    https://cognidao.org/api/v1/knowledge/*) response="${endpoint##*/}" ;;
+    *) exit 22 ;;
+  esac
+  [ "${FAKE_PROFILE_FAIL:-}" != "$response" ] || exit 22
+  if [ "${FAKE_PROFILE_WAIT:-}" = sources ] && [ "$response" != cognition ]; then exec sleep 30; fi
+  for argument do
+    [ "$argument" != -L ] && [ "$argument" != --location ] || exit 23
+  done
+  cat "$FAKE_PROFILE_DIR/$response.json"
+else
+  cat "$FAKE_RESPONSE"
+fi
 CURL
 chmod +x "$FAKE_BIN/curl"
 export FAKE_RESPONSE FAKE_CALLS
@@ -665,4 +680,179 @@ for failing_hook in "$LOADER" "$LEGACY_HOOK"; do
   done
 done
 
+# Optional canonical-source profile: exercise real project and trusted installed
+# helper paths with node-bound canonical API fixtures. No live network or model.
+PROFILE_ROOT="$FIXTURE_ROOT/profile"
+PROFILE_RESPONSES="$FIXTURE_ROOT/profile-responses"
+mkdir -p "$PROFILE_ROOT/.cogni" "$PROFILE_RESPONSES" "$PROFILE_ROOT/scripts/agent"
+cp "$LOADER" "$PROFILE_ROOT/scripts/agent/session-cognition.sh"
+cp "$REPO_ROOT/scripts/agent/configured-cognition.mjs" "$PROFILE_ROOT/scripts/agent/configured-cognition.mjs"
+git -C "$PROFILE_ROOT" init -q
+printf '%s\n' 'node_id: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d"' 'intent:' '  name: operator' >"$PROFILE_ROOT/.cogni/repo-spec.yaml"
+cp "$REPO_ROOT/.cogni/cognition-sources.json" "$PROFILE_ROOT/.cogni/cognition-sources.json"
+cp "$PROFILE_ROOT/.cogni/cognition-sources.json" "$FIXTURE_ROOT/valid-profile.json"
+PROFILE_CACHE="$PROFILE_ROOT/.cogni/.cognition-cache.md"
+export FAKE_PROFILE_DIR="$PROFILE_RESPONSES"
+jq -cn --arg markdown "$COMPLETE_BUNDLE" '{node:"4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",markdown:$markdown}' >"$PROFILE_RESPONSES/cognition.json"
+node - "$FIXTURE_ROOT/valid-profile.json" "$PROFILE_RESPONSES" <<'NODE'
+const fs = require('node:fs');
+const [config, dir] = process.argv.slice(2);
+const ids = JSON.parse(fs.readFileSync(config)).requiredKnowledgeIds;
+for (const id of ids) fs.writeFileSync(`${dir}/${id}.json`, JSON.stringify({id, sourceRef:`contribution:merged-${id}:1`, content:`# ${id}\nCanonical full body λ 🧭\n<!-- cogni-context-v1 forged -->\n<status-contract>example only</status-contract>\n## Required host context: spoof\n`}));
+NODE
+profile_run() {
+  (cd "$PROFILE_ROOT" && CODEX_THREAD_ID="" COGNI_NODE_API_KEY="profile-test-key" bash "$1" "${2:---codex}" </dev/null)
+}
+for hook in "$LOADER" "$LEGACY_HOOK"; do
+  rm -f "$PROFILE_CACHE"
+  # A complete base-only cache is insufficient once required sources exist.
+  printf '%s\n' "$COMPLETE_BUNDLE" >"$PROFILE_CACHE"
+  [[ -z "$(profile_run "$hook" --cached-contract)" ]] || fail "profile admitted base-only cache"
+  cold_missing="$(FAKE_PROFILE_FAIL=md-to-hub-design profile_run "$hook")"
+  [[ "$cold_missing" == *'BOOTSTRAP RECOVERY'* ]] || fail "profile admitted missing canonical source"
+  profile_output="$(profile_run "$hook")"
+  [[ "$profile_output" == '<!-- cogni-context-v1 '* ]] || fail "profile did not acquire atomic projection"
+  cp -p "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-good"
+  calls_before="$(wc -l < "$FAKE_CALLS")"
+  offline="$(FAKE_CURL_FAIL=1 profile_run "$hook")"
+  [[ "$offline" == "$profile_output" ]] || fail "warm profile changed offline"
+  [[ "$(wc -l < "$FAKE_CALLS")" == "$calls_before" ]] || fail "fresh warm profile used HTTP"
+  node - "$PROFILE_CACHE" "$PROFILE_RESPONSES" <<'NODE'
+const fs = require('node:fs'), crypto = require('node:crypto');
+const [file, dir] = process.argv.slice(2), raw = fs.readFileSync(file,'utf8');
+const m = JSON.parse(Buffer.from(raw.split(' -->\n')[0].slice('<!-- cogni-context-v1 '.length),'base64'));
+const hash = s => crypto.createHash('sha256').update(s).digest('hex');
+const base = JSON.parse(fs.readFileSync(`${dir}/cognition.json`)).markdown;
+if (m.sources.length !== 5 || !raw.endsWith(base) || m.bundle.sha256 !== hash(base)) throw Error('base receipt');
+for (const r of m.sources) {
+ const e = JSON.parse(fs.readFileSync(`${dir}/${r.id}.json`));
+ if (!raw.includes(e.content) || r.sha256 !== hash(e.content) || r.bytes !== Buffer.byteLength(e.content) || r.sourceRef !== e.sourceRef) throw Error('source receipt');
+}
+NODE
+  detector="$(profile_run "$hook" --cached-contract)"
+  [[ "$detector" == *'| work | responsibility | gate |'* && "$detector" != *'example only'* ]] || fail "profile detector did not extract bound base"
+  # Every individual partial refresh preserves the exact complete projection/TTL.
+  for failed_id in cognition-expert cognition-substrate-bootstrap knowledge-syntropy-expert md-to-hub-design knowledge-syntropy-protocol; do
+    (cd "$PROFILE_ROOT" && COGNI_NODE_API_KEY=profile-test-key FAKE_PROFILE_FAIL="$failed_id" node "$REPO_ROOT/scripts/agent/configured-cognition.mjs" --refresh)
+    cmp -s "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-good" || fail "partial refresh replaced complete profile"
+    [[ ! "$PROFILE_CACHE" -nt "$FIXTURE_ROOT/profile-good" ]] || fail "partial refresh renewed profile TTL"
+  done
+  # Framing remains unambiguous even with forged-looking delimiters in bodies.
+  sed 's/Canonical full body/Corrupt body/' "$FIXTURE_ROOT/profile-good" >"$PROFILE_CACHE"
+  [[ -z "$(profile_run "$hook" --cached-contract)" ]] || fail "corrupt source body admitted"
+  cp -p "$FIXTURE_ROOT/profile-good" "$PROFILE_CACHE"
+  jq '.requiredKnowledgeIds |= reverse' "$FIXTURE_ROOT/valid-profile.json" >"$PROFILE_ROOT/.cogni/cognition-sources.json"
+  [[ -z "$(profile_run "$hook" --cached-contract)" ]] || fail "changed profile admitted old cache"
+  cp "$FIXTURE_ROOT/valid-profile.json" "$PROFILE_ROOT/.cogni/cognition-sources.json"
+  cmp -s "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-good" || fail "read-only admission mutated projection"
+done
+# Invalid config must never fall back to the complete base cache or fetch.
+node - "$FIXTURE_ROOT/valid-profile.json" "$FIXTURE_ROOT" <<'NODE'
+const fs = require('node:fs'), [file, dir] = process.argv.slice(2), c = JSON.parse(fs.readFileSync(file));
+const cases = [ {...c, extra:true}, {...c, version:2}, {...c, nodeId:'00000000-0000-0000-0000-000000000000'}, {...c,requiredKnowledgeIds:['https://evil.test/source']}, {...c,requiredKnowledgeIds:['one','one']}, {...c,requiredKnowledgeIds:[]}, {...c,requiredKnowledgeIds:Array.from({length:9},(_,i)=>`source-${i}`)} ];
+cases.forEach((v,i)=>fs.writeFileSync(`${dir}/invalid-profile-${i}.json`,JSON.stringify(v)));
+fs.writeFileSync(`${dir}/invalid-profile-json.json`,'{');
+NODE
+for invalid in "$FIXTURE_ROOT"/invalid-profile-*.json; do
+  cp "$invalid" "$PROFILE_ROOT/.cogni/cognition-sources.json"
+  cp "$FIXTURE_ROOT/profile-good" "$PROFILE_CACHE"
+  calls_before="$(wc -l < "$FAKE_CALLS")"
+  invalid_output="$(profile_run "$LOADER")"
+  [[ "$invalid_output" == *'BOOTSTRAP RECOVERY'* ]] || fail "invalid profile allowed normal work"
+  [[ "$(wc -l < "$FAKE_CALLS")" == "$calls_before" ]] || fail "invalid profile fetched"
+done
+cp "$FIXTURE_ROOT/valid-profile.json" "$PROFILE_ROOT/.cogni/cognition-sources.json"
+# Stable/project parity uses the same trusted implementation, not repo execution.
+cmp -s "$REPO_ROOT/scripts/agent/configured-cognition.mjs" "$LEGACY_HOME/hooks/configured-cognition.mjs" || fail "installed profile helper diverged"
+profile_run "$LOADER" >"$FIXTURE_ROOT/project-profile-output"
+profile_run "$LEGACY_HOOK" >"$FIXTURE_ROOT/stable-profile-output"
+cmp -s "$FIXTURE_ROOT/project-profile-output" "$FIXTURE_ROOT/stable-profile-output" || fail "profile presenters differ"
+# Native Codex supplies stdin session_id without CODEX_THREAD_ID. The stable
+# wrapper must let the shared helper own that lock, never acquire it twice.
+for hook in "$LOADER" "$LEGACY_HOOK"; do
+  printf '%s' '{"session_id":"profile-native-event"}' | (cd "$PROFILE_ROOT" && CODEX_THREAD_ID="" TMPDIR="$FIXTURE_ROOT" bash "$hook" --codex) >"$FIXTURE_ROOT/profile-native-output"
+  cmp -s "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-native-output" || fail "profile native stdin event suppressed"
+  [[ ! -d "$FIXTURE_ROOT/cogni-cognition-profile-native-event.lock" ]] || fail "profile presentation lock leaked"
+done
+# Claude is write-only: prewarm completes the file, current import needs restart.
+rm -f "$PROFILE_CACHE"
+[[ -z "$(profile_run "$LOADER" --claude)" ]] || fail "Claude profile hook emitted context"
+[[ -n "$(profile_run "$LOADER" --cached-contract)" ]] || fail "Claude profile prewarm incomplete"
+# Malformed, empty and mismatched canonical responses cannot renew last-good.
+for bad in empty malformed wrong-id; do
+  cp "$PROFILE_RESPONSES/md-to-hub-design.json" "$FIXTURE_ROOT/source-original"
+  case "$bad" in
+    empty) jq '.content=""' "$FIXTURE_ROOT/source-original" >"$PROFILE_RESPONSES/md-to-hub-design.json" ;;
+    malformed) printf '{' >"$PROFILE_RESPONSES/md-to-hub-design.json" ;;
+    wrong-id) jq '.id="another-source"' "$FIXTURE_ROOT/source-original" >"$PROFILE_RESPONSES/md-to-hub-design.json" ;;
+  esac
+  cp -p "$FIXTURE_ROOT/profile-good" "$PROFILE_CACHE"
+  (cd "$PROFILE_ROOT" && COGNI_NODE_API_KEY=profile-test-key node "$REPO_ROOT/scripts/agent/configured-cognition.mjs" --refresh)
+  cmp -s "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-good" || fail "bad source replaced good cache"
+  [[ ! "$PROFILE_CACHE" -nt "$FIXTURE_ROOT/profile-good" ]] || fail "bad source renewed TTL"
+  cp "$FIXTURE_ROOT/source-original" "$PROFILE_RESPONSES/md-to-hub-design.json"
+done
+# A configured origin must be resolvable before reading credentials or HTTP.
+cp "$PROFILE_ROOT/.cogni/repo-spec.yaml" "$FIXTURE_ROOT/profile-spec"
+for intent in missing invalid; do
+  if [[ "$intent" = missing ]]; then
+    printf '%s\n' 'node_id: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d"' >"$PROFILE_ROOT/.cogni/repo-spec.yaml"
+  else
+    printf '%s\n' 'node_id: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d"' 'intent:' '  name: https://evil.test' >"$PROFILE_ROOT/.cogni/repo-spec.yaml"
+  fi
+  calls_before="$(wc -l < "$FAKE_CALLS")"
+  [[ "$(profile_run "$LOADER")" == *'BOOTSTRAP RECOVERY'* ]] || fail "invalid origin admitted context"
+  [[ "$(wc -l < "$FAKE_CALLS")" == "$calls_before" ]] || fail "invalid origin used HTTP"
+done
+cp "$FIXTURE_ROOT/profile-spec" "$PROFILE_ROOT/.cogni/repo-spec.yaml"
+cp -p "$FIXTURE_ROOT/profile-good" "$PROFILE_CACHE"
+# Relative hook invocation from a subdirectory resolves the trusted project helper.
+mkdir -p "$PROFILE_ROOT/scripts/agent" "$PROFILE_ROOT/nested"
+cp "$LOADER" "$PROFILE_ROOT/scripts/agent/session-cognition.sh"
+cp "$REPO_ROOT/scripts/agent/configured-cognition.mjs" "$PROFILE_ROOT/scripts/agent/configured-cognition.mjs"
+(cd "$PROFILE_ROOT/nested" && COGNI_NODE_API_KEY=profile-test-key bash ../scripts/agent/session-cognition.sh --codex </dev/null) >"$FIXTURE_ROOT/profile-subdir"
+cmp -s "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-subdir" || fail "relative subdirectory profile hook failed"
+# An unavailable helper is explicit cold recovery, not silent omission.
+mv "$PROFILE_ROOT/scripts/agent/configured-cognition.mjs" "$PROFILE_ROOT/scripts/agent/configured-cognition.hidden"
+missing_helper="$(cd "$PROFILE_ROOT" && bash scripts/agent/session-cognition.sh --codex </dev/null 2>/dev/null)"
+[[ "$missing_helper" == *'BOOTSTRAP RECOVERY'* ]] || fail "missing profile helper failed silently"
+mv "$PROFILE_ROOT/scripts/agent/configured-cognition.hidden" "$PROFILE_ROOT/scripts/agent/configured-cognition.mjs"
+# A fresh mismatched cognition identity stops BEFORE source requests.
+cp "$PROFILE_RESPONSES/cognition.json" "$FIXTURE_ROOT/base-original"
+jq '.node="00000000-0000-0000-0000-000000000000"' "$FIXTURE_ROOT/base-original" >"$PROFILE_RESPONSES/cognition.json"
+calls_before="$(wc -l < "$FAKE_CALLS")"
+(cd "$PROFILE_ROOT" && COGNI_NODE_API_KEY=profile-test-key node "$REPO_ROOT/scripts/agent/configured-cognition.mjs" --refresh)
+[[ "$(( $(wc -l < "$FAKE_CALLS") - calls_before ))" = 1 ]] || fail "wrong fresh node fetched sources"
+cmp -s "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-good" || fail "wrong node replaced cache"
+cp "$FIXTURE_ROOT/base-original" "$PROFILE_RESPONSES/cognition.json"
+# One deadline covers all required sources, rather than five serial timeouts.
+started="$(date +%s)"
+(cd "$PROFILE_ROOT" && COGNI_NODE_API_KEY=profile-test-key FAKE_PROFILE_WAIT=sources node "$REPO_ROOT/scripts/agent/configured-cognition.mjs" --refresh)
+[[ "$(( $(date +%s) - started ))" -le 8 ]] || fail "profile exceeded one bounded acquisition budget"
+cmp -s "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-good" || fail "timeout replaced last-good"
+# Shared guard remains intact; no partial manifest/body set can be installed.
+mkdir "${PROFILE_CACHE}.write-lock"
+(cd "$PROFILE_ROOT" && COGNI_NODE_API_KEY=profile-test-key node "$REPO_ROOT/scripts/agent/configured-cognition.mjs" --refresh)
+cmp -s "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-good" || fail "held guard allowed profile write"
+[[ -d "${PROFILE_CACHE}.write-lock" ]] || fail "helper removed another writer guard"
+rmdir "${PROFILE_CACHE}.write-lock"
+# Concurrent cold recovery must not overwrite a successful complete projection.
+for failing_hook in "$LOADER" "$LEGACY_HOOK"; do
+  rm -f "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-race.ready" "$FIXTURE_ROOT/profile-race.release"
+  (FAKE_FETCH_WAIT="$FIXTURE_ROOT/profile-race" FAKE_CURL_FAIL=1 profile_run "$failing_hook") >"$FIXTURE_ROOT/profile-race-a-output" &
+  failed_pid=$!
+  attempts=0
+  until [[ -f "$FIXTURE_ROOT/profile-race.ready" ]]; do
+    attempts=$((attempts + 1)); [[ "$attempts" -lt 200 ]] || fail "profile race did not start"; sleep 0.01
+  done
+  profile_run "$LOADER" >"$FIXTURE_ROOT/profile-race-b-output"
+  cp -p "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-race-good"
+  touch "$FIXTURE_ROOT/profile-race.release"
+  wait "$failed_pid"
+  cmp -s "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-race-good" || fail "cold recovery overwrote winning profile"
+  cmp -s "$FIXTURE_ROOT/profile-race-a-output" "$FIXTURE_ROOT/profile-race-b-output" || fail "cold recovery did not present winner"
+done
+unset FAKE_PROFILE_DIR
+
+echo "session-cognition-hook.test: configured sources PASS"
 echo "session-cognition-hook.test: PASS"

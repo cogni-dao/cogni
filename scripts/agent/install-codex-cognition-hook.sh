@@ -16,6 +16,10 @@ HOOK_PATH="$HOOK_DIR/cogni-session-cognition.sh"
 CONFIG_PATH="$COGNI_CODEX_HOME/config.toml"
 
 mkdir -p "$HOOK_DIR"
+# Copy the shared implementation into trusted user-owned storage. The generic
+# hook must never execute a helper from the repository it is opening.
+cp "$(dirname "${BASH_SOURCE[0]}")/configured-cognition.mjs" "$HOOK_DIR/.configured-cognition.mjs.tmp.$$"
+mv -f "$HOOK_DIR/.configured-cognition.mjs.tmp.$$" "$HOOK_DIR/configured-cognition.mjs"
 
 cat >"$HOOK_PATH" <<'HOOK'
 #!/usr/bin/env bash
@@ -35,23 +39,13 @@ if [[ -z "$repo_root" ]]; then
 fi
 cd "$repo_root" || exit 0
 
-if [[ ! -f .cogni/repo-spec.yaml ]]; then
-  exit 0
+# Detector reads must stay free of credential-link/setup mutations.
+if [[ "${1:-}" = --cached-contract && ( -e .cogni/cognition-sources.json || -L .cogni/cognition-sources.json ) ]]; then
+  exec node "$(dirname "${BASH_SOURCE[0]}")/configured-cognition.mjs" --cached-contract
 fi
 
-# A versioned project hook may match the same Codex event. The two presenters
-# share this short-lived lock so only one emits context; it is released for the
-# next resume/clear/compact event.
-codex_session_id="${CODEX_THREAD_ID:-}"
-if [[ -z "$codex_session_id" && ! -t 0 ]]; then
-  codex_hook_input="$(cat)"
-  codex_session_id="$(printf '%s' "$codex_hook_input" | jq -r '.session_id // empty' 2>/dev/null || true)"
-fi
-if [[ -n "$codex_session_id" ]]; then
-  safe_thread_id="$(printf '%s' "$codex_session_id" | tr -cd '[:alnum:]_-')"
-  COGNI_HOOK_LOCK="${TMPDIR:-/tmp}/cogni-cognition-${safe_thread_id}.lock"
-  mkdir "$COGNI_HOOK_LOCK" 2>/dev/null || exit 0
-  trap 'rmdir "$COGNI_HOOK_LOCK" 2>/dev/null || true' EXIT
+if [[ ! -f .cogni/repo-spec.yaml ]]; then
+  exit 0
 fi
 
 read_env_file_value() {
@@ -103,6 +97,30 @@ ensure_env_cogni_link() {
 }
 
 ensure_env_cogni_link
+
+if [[ -e .cogni/cognition-sources.json || -L .cogni/cognition-sources.json ]]; then
+  helper="$(dirname "${BASH_SOURCE[0]}")/configured-cognition.mjs"
+  if command -v node >/dev/null 2>&1 && [[ -f "$helper" ]]; then
+    exec node "$helper" "${1:---codex}"
+  fi
+  printf '%s\n' "COGNI COGNITION — BOOTSTRAP RECOVERY (no complete contract): configured context requires Node.js and the installed shared helper. Repair setup, warm once, then restart/resume."
+  exit 0
+fi
+
+# A versioned project hook may match the same Codex event. The two presenters
+# share this short-lived lock so only one emits context; it is released for the
+# next resume/clear/compact event.
+codex_session_id="${CODEX_THREAD_ID:-}"
+if [[ -z "$codex_session_id" && ! -t 0 ]]; then
+  codex_hook_input="$(cat)"
+  codex_session_id="$(printf '%s' "$codex_hook_input" | jq -r '.session_id // empty' 2>/dev/null || true)"
+fi
+if [[ -n "$codex_session_id" ]]; then
+  safe_thread_id="$(printf '%s' "$codex_session_id" | tr -cd '[:alnum:]_-')"
+  COGNI_HOOK_LOCK="${TMPDIR:-/tmp}/cogni-cognition-${safe_thread_id}.lock"
+  mkdir "$COGNI_HOOK_LOCK" 2>/dev/null || exit 0
+  trap 'rmdir "$COGNI_HOOK_LOCK" 2>/dev/null || true' EXIT
+fi
 
 node_slug="$(awk '
   /^intent:/ { in_intent = 1; next }
