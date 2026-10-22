@@ -56,11 +56,11 @@ const DG_USER = "postgres";
 const DG_PASSWORD = "doltgres";
 const DG_DB = "knowledge_operator";
 const OTHER_DB = "knowledge_attribution_other";
-// PR Build39705358149 / manifest artifact12395367031; compile once, test the published bytes.
+// PR Build39724315855 / manifest artifact12403190038; compile once, test the published bytes.
 const DG_IMAGE =
-  "ghcr.io/cogni-dao/cogni-template@sha256:06ac934af1ccc466afd2e5f4ec11c74d6fa5703a2e6f0c10917efc7f0206a0e9";
+  "ghcr.io/cogni-dao/cogni-template@sha256:f892b365ad6fc6c683da839260f20c4015615c105176a3c21c015ca90d2b70a3";
 const EXPECTED_BINARY_SHA256 =
-  "efd39b4eb5cda289d5a8417d24bb71a5b96a20860b7e0253e7fad76049c3a6d1";
+  "8ecc5f8a764fe5a70ca3cac76452dc17377bc446136891478c7ee19a5a9eb2b9";
 const require = createRequire(import.meta.url);
 const { auditDoltProducerDrain } = (await import(
   new URL(`file://${MIGRATE_SCRIPT}`).href
@@ -507,6 +507,153 @@ describe("doltgres migrator + schema verification", () => {
         );
       await observer.end({ timeout: 2 });
       await auditor.end({ timeout: 2 });
+    }
+  }, 120_000);
+
+  it("cold first point lookups materialize out-of-band knowledge/work TEXT before iterator cleanup", async () => {
+    const coldDatabase = "knowledge_cold_text";
+    const coldUrl = baseUrl.replace(/\/postgres$/, `/${coldDatabase}`);
+    const admin = nativeClient(baseUrl);
+    const content = "knowledge-cold-payload-é|".repeat(1024);
+    const outcome = "work-outcome-cold-payload-λ|".repeat(4096);
+    try {
+      await admin.unsafe(`CREATE DATABASE ${coldDatabase}`);
+    } finally {
+      await admin.end({ timeout: 2 });
+    }
+    const seed = nativeClient(coldUrl);
+    try {
+      await seed.unsafe(
+        "CREATE TABLE cold_knowledge (id text PRIMARY KEY, content text)"
+      );
+      await seed.unsafe(
+        "CREATE TABLE cold_work_items (id text PRIMARY KEY, outcome text)"
+      );
+      await seed.unsafe(
+        "INSERT INTO cold_knowledge VALUES ($1, $2), ($3, $4)",
+        [
+          "database-expert",
+          content,
+          "second-guide",
+          "other-knowledge|".repeat(1024),
+        ]
+      );
+      await seed.unsafe(
+        "INSERT INTO cold_work_items VALUES ($1, $2), ($3, $4)",
+        ["story.5095", outcome, "task.5278", "other-outcome|".repeat(4096)]
+      );
+      await seed.unsafe("SELECT dolt_add('cold_knowledge')");
+      await seed.unsafe("SELECT dolt_add('cold_work_items')");
+      await seed.unsafe(
+        "SELECT dolt_commit('-m', 'owned cold TEXT qualification')"
+      );
+    } finally {
+      await seed.end({ timeout: 2 });
+    }
+    // Gracefully stop ONLY this owned disposable engine's native child. A
+    // Docker/PID1 TERM can hit the upstream wrapper's broken wait/trap path.
+    await container.exec([
+      "sh",
+      "-c",
+      `
+      set -eu
+      found=
+      for file in /proc/[0-9]*/comm; do
+        read -r name < "$file" || continue
+        if [ "$name" = doltgres ]; then
+          test -z "$found"
+          found=\${file#/proc/}
+          found=\${found%/comm}
+        fi
+      done
+      test -n "$found"
+      kill -TERM "$found"
+    `,
+    ]);
+    await eventually(
+      async () =>
+        JSON.parse(
+          execFileSync(
+            "docker",
+            ["inspect", "--format", "{{json .State}}", container.getId()],
+            { encoding: "utf8" }
+          )
+        ),
+      (state) => !state.Running,
+      30_000
+    );
+    const stopped = JSON.parse(
+      execFileSync(
+        "docker",
+        ["inspect", "--format", "{{json .State}}", container.getId()],
+        { encoding: "utf8" }
+      )
+    );
+    expect(stopped).toMatchObject({
+      Running: false,
+      ExitCode: 0,
+      OOMKilled: false,
+    });
+    execFileSync("docker", ["start", container.getId()], { stdio: "pipe" });
+    await eventually(
+      async () =>
+        (
+          await container.exec([
+            "sh",
+            "-c",
+            'PGCONNECT_TIMEOUT=3 PGPASSWORD="$DOLTGRES_PASSWORD" psql -X -w -h127.0.0.1 -Upostgres -d postgres -Atc "SELECT 1"',
+          ])
+        ).exitCode,
+      (code) => code === 0,
+      30_000
+    );
+    // New native process has no warmed NodeStore chunks. Read neither payload
+    // in a multi-row query before these FIRST exact max-one-row point lookups.
+    const reader = nativeClient(coldUrl);
+    try {
+      const knowledge = await reader.unsafe(
+        "SELECT content FROM cold_knowledge WHERE id = 'database-expert' LIMIT 1"
+      );
+      expect(knowledge).toEqual([{ content }]);
+      const work = await reader.unsafe(
+        "SELECT outcome FROM cold_work_items WHERE id = 'story.5095' LIMIT 1"
+      );
+      expect(work).toEqual([{ outcome }]);
+      expect(
+        await reader.unsafe(
+          "SELECT content FROM cold_knowledge WHERE id = 'database-expert' LIMIT 1"
+        )
+      ).toEqual([{ content }]);
+      expect(
+        await reader.unsafe(
+          "SELECT outcome FROM cold_work_items WHERE id = 'story.5095' LIMIT 1"
+        )
+      ).toEqual([{ outcome }]);
+      expect(
+        await reader.unsafe(
+          "SELECT content FROM cold_knowledge WHERE id IN ('database-expert','second-guide')"
+        )
+      ).toHaveLength(2);
+      expect(
+        await reader.unsafe(
+          "SELECT outcome FROM cold_work_items WHERE id IN ('story.5095','task.5278')"
+        )
+      ).toHaveLength(2);
+      expect(
+        await reader.unsafe(
+          "SELECT content FROM cold_knowledge WHERE id = 'missing' LIMIT 1"
+        )
+      ).toHaveLength(0);
+      console.info("doltgres_cold_text_point_lookup", {
+        image: DG_IMAGE,
+        knowledgeBytes: Buffer.byteLength(content),
+        outcomeBytes: Buffer.byteLength(outcome),
+        coldPointLookups: 2,
+        sameClientRepeats: 2,
+        nativeCleanRestart: true,
+      });
+    } finally {
+      await reader.end({ timeout: 2 });
     }
   }, 120_000);
 
