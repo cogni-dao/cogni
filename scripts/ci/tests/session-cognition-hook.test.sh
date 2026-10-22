@@ -806,6 +806,28 @@ for intent in missing invalid; do
   [[ "$(wc -l < "$FAKE_CALLS")" == "$calls_before" ]] || fail "invalid origin used HTTP"
 done
 cp "$FIXTURE_ROOT/profile-spec" "$PROFILE_ROOT/.cogni/repo-spec.yaml"
+# CodeQL regression: tab-only intent lines must take linear time and cannot
+# capture a later unrelated root block's name. Detector access stays read-only.
+node - "$PROFILE_ROOT" "$REPO_ROOT/scripts/agent/configured-cognition.mjs" "$LEGACY_HOME/hooks/configured-cognition.mjs" <<'NODE'
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const [root, ...helpers] = process.argv.slice(2);
+const specPath = `${root}/.cogni/repo-spec.yaml`;
+const cachePath = `${root}/.cogni/.cognition-cache.md`;
+const original = fs.readFileSync(specPath);
+const cache = fs.readFileSync(cachePath);
+const calls = fs.readFileSync(process.env.FAKE_CALLS);
+try {
+  fs.writeFileSync(specPath, 'node_id: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d"\nintent:\n' + '\t\t\n'.repeat(20000) + 'unrelated:\n  name: operator\n');
+  for (const helper of helpers) {
+    const result = spawnSync(process.execPath, [helper, '--cached-contract'], { cwd: root, timeout: 2000, encoding: 'utf8' });
+    if (result.error || result.status !== 0 || result.stdout !== '') throw Error('Intent scan exceeded its bound or admitted an unrelated name');
+  }
+  if (!cache.equals(fs.readFileSync(cachePath)) || !calls.equals(fs.readFileSync(process.env.FAKE_CALLS))) throw Error('Invalid intent detector mutated cache or used HTTP');
+} finally {
+  fs.writeFileSync(specPath, original);
+}
+NODE
 # An active profile with absent node metadata is recovery in both presenters,
 # while detector reads remain silent and cannot mutate credentials or cache.
 rm "$PROFILE_ROOT/.cogni/repo-spec.yaml"

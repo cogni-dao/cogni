@@ -64,9 +64,28 @@ function configuration() {
     /^node_id:\s*["']?([a-f0-9-]+)["']?\s*(?:#.*)?$/m
   )?.[1];
   if (node !== c.nodeId) throw Error("node");
-  const slug = spec.match(
-    /^intent:\s*\n(?:(?:[ \t]+.*)?\n)*?[ \t]+name:\s*["']?([a-z0-9-]+)["']?\s*(?:#.*)?$/m
-  )?.[1];
+  // Scan lines once: a multiline repetition of optional whitespace lines can
+  // backtrack exponentially when a malformed intent block has no name.
+  let inIntent = false;
+  let slug;
+  for (const line of spec.split("\n")) {
+    if (/^intent:[ \t]*\r?$/.test(line)) {
+      inIntent = true;
+      continue;
+    }
+    if (!inIntent) continue;
+    if (line && !/^[ \t\r]/.test(line)) {
+      inIntent = false;
+      continue;
+    }
+    const name = line.match(
+      /^[ \t]+name:[ \t]*["']?([a-z0-9-]+)["']?[ \t]*(?:#.*)?\r?$/
+    );
+    if (name) {
+      slug = name[1];
+      break;
+    }
+  }
   if (!slug) throw Error("origin");
   const origin = ["operator", "cogni-template"].includes(slug)
     ? "https://cognidao.org"
