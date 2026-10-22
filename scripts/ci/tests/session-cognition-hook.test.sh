@@ -41,6 +41,7 @@ if [ -n "${FAKE_FETCH_WAIT:-}" ]; then
 fi
 [ "${FAKE_CURL_FAIL:-0}" = 0 ] || exit 22
 if [ -n "${FAKE_PROFILE_DIR:-}" ]; then
+  [ "${1:-}" = --disable ] || exit 24
   for argument do endpoint="$argument"; done
   case "$endpoint" in
     https://cognidao.org/api/v1/cognition) response="cognition" ;;
@@ -803,6 +804,19 @@ for intent in missing invalid; do
   calls_before="$(wc -l < "$FAKE_CALLS")"
   [[ "$(profile_run "$LOADER")" == *'BOOTSTRAP RECOVERY'* ]] || fail "invalid origin admitted context"
   [[ "$(wc -l < "$FAKE_CALLS")" == "$calls_before" ]] || fail "invalid origin used HTTP"
+done
+cp "$FIXTURE_ROOT/profile-spec" "$PROFILE_ROOT/.cogni/repo-spec.yaml"
+# An active profile with absent node metadata is recovery in both presenters,
+# while detector reads remain silent and cannot mutate credentials or cache.
+rm "$PROFILE_ROOT/.cogni/repo-spec.yaml"
+for hook in "$LOADER" "$LEGACY_HOOK"; do
+  calls_before="$(wc -l < "$FAKE_CALLS")"
+  [[ "$(profile_run "$hook")" == *'BOOTSTRAP RECOVERY'* ]] || fail "missing repo-spec silently skipped configured recovery"
+  cp -p "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-before-detector"
+  [[ -z "$(profile_run "$hook" --cached-contract)" ]] || fail "missing repo-spec admitted configured detector context"
+  cmp -s "$PROFILE_CACHE" "$FIXTURE_ROOT/profile-before-detector" || fail "missing repo-spec detector mutated cache"
+  [[ ! -e "$PROFILE_ROOT/.env.cogni" && ! -L "$PROFILE_ROOT/.env.cogni" ]] || fail "missing repo-spec linked credentials"
+  [[ "$(wc -l < "$FAKE_CALLS")" == "$calls_before" ]] || fail "missing repo-spec used HTTP"
 done
 cp "$FIXTURE_ROOT/profile-spec" "$PROFILE_ROOT/.cogni/repo-spec.yaml"
 cp -p "$FIXTURE_ROOT/profile-good" "$PROFILE_CACHE"

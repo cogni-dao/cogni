@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
-// Optional node-owned canonical context. Loading is not role adoption or authority.
-// Native imports require pre-session warming; this cannot repair an earlier import.
+/**
+ * Module: scripts/agent/configured-cognition.mjs
+ * Purpose: Load explicitly configured canonical knowledge through native cognition.
+ * Scope: Optional node-owned context projection shared by project and installed hooks.
+ * Invariants: Canonical bodies remain unchanged; loading grants no role or authority.
+ *   Admit only complete node/config-bound projections; preserve a last good cache.
+ *   Native imports require pre-session warming, never a retrospective hook repair.
+ * Side-effects: Bounded same-node reads, atomic cache writes, optional background refresh.
+ * Links: https://cognidao.org/knowledge/expertise-role-contract
+ *   https://cognidao.org/knowledge/cognition-substrate-bootstrap
+ */
 
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -231,6 +240,7 @@ async function acquire(c) {
       const child = spawn(
         "curl",
         [
+          "--disable",
           "--fail",
           "--silent",
           "--show-error",

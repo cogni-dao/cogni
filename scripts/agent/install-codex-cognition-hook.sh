@@ -44,10 +44,6 @@ if [[ "${1:-}" = --cached-contract && ( -e .cogni/cognition-sources.json || -L .
   exec node "$(dirname "${BASH_SOURCE[0]}")/configured-cognition.mjs" --cached-contract
 fi
 
-if [[ ! -f .cogni/repo-spec.yaml ]]; then
-  exit 0
-fi
-
 read_env_file_value() {
   local var_name="$1"
   local env_file="${2:-.env.cogni}"
@@ -96,9 +92,10 @@ ensure_env_cogni_link() {
   ln -sfn "$auth_root/.env.cogni" ".env.cogni" 2>/dev/null || true
 }
 
-ensure_env_cogni_link
-
 if [[ -e .cogni/cognition-sources.json || -L .cogni/cognition-sources.json ]]; then
+  # Invalid/missing node metadata must produce configured recovery as it does in
+  # the project hook; never silently skip an explicitly configured profile.
+  [[ ! -f .cogni/repo-spec.yaml ]] || ensure_env_cogni_link
   helper="$(dirname "${BASH_SOURCE[0]}")/configured-cognition.mjs"
   if command -v node >/dev/null 2>&1 && [[ -f "$helper" ]]; then
     exec node "$helper" "${1:---codex}"
@@ -106,6 +103,12 @@ if [[ -e .cogni/cognition-sources.json || -L .cogni/cognition-sources.json ]]; t
   printf '%s\n' "COGNI COGNITION — BOOTSTRAP RECOVERY (no complete contract): configured context requires Node.js and the installed shared helper. Repair setup, warm once, then restart/resume."
   exit 0
 fi
+
+if [[ ! -f .cogni/repo-spec.yaml ]]; then
+  exit 0
+fi
+
+ensure_env_cogni_link
 
 # A versioned project hook may match the same Codex event. The two presenters
 # share this short-lived lock so only one emits context; it is released for the
