@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/(app)/work/_api/fetchWorkItems.test`
- * Purpose: Covers the lean progressive list-page fetch and the exact-item cookie-auth fetch used by human permalinks.
+ * Purpose: Covers the lean progressive list-page fetch, the bounded (timeout) fetch, and the exact-item cookie-auth fetch used by human permalinks.
  * Scope: Browser fetch contract only.
  * Side-effects: mocked fetch
  * Links: bug.5355, bug.5509, ./fetchWorkItems.ts
@@ -91,6 +91,70 @@ describe("fetchWorkItemsPage", () => {
     );
 
     await expect(fetchWorkItemsPage(null)).rejects.toThrow("boom");
+  });
+});
+
+describe("bounded fetch (BOUNDED_FETCH)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Settles only when the request signal aborts, like a stalled socket. */
+  function untilAborted(signal: AbortSignal | null | undefined) {
+    return new Promise((_resolve, reject) => {
+      if (signal?.aborted) reject(signal.reason);
+      signal?.addEventListener("abort", () => reject(signal.reason));
+    });
+  }
+
+  /** Resolves headers immediately, then stalls the body until aborted. */
+  function stalledBodyFetch() {
+    return vi.fn((_url: string, init: RequestInit) =>
+      Promise.resolve({ ok: true, json: () => untilAborted(init.signal) })
+    );
+  }
+
+  it("rejects a stalled list body with a retryable timeout error", async () => {
+    vi.stubGlobal("fetch", stalledBodyFetch());
+
+    const error = await fetchWorkItemsPage(null, { timeoutMs: 20 }).catch(
+      (caught: unknown) => caught
+    );
+
+    expect(error).toBeInstanceOf(WorkItemFetchError);
+    expect(error).toMatchObject({ kind: "timeout", retryable: true });
+  });
+
+  it("rejects a stalled exact-item request with a retryable timeout error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => untilAborted(init.signal))
+    );
+
+    const error = await fetchWorkItem("bug.5509", { timeoutMs: 20 }).catch(
+      (caught: unknown) => caught
+    );
+
+    expect(error).toMatchObject({ kind: "timeout", retryable: true });
+  });
+
+  it("passes caller cancellation through instead of reporting a timeout", async () => {
+    vi.stubGlobal("fetch", stalledBodyFetch());
+    const caller = new AbortController();
+
+    const pending = fetchWorkItemsPage(null, {
+      signal: caller.signal,
+      timeoutMs: 10_000,
+    }).catch((caught: unknown) => caught);
+    caller.abort();
+    const error = await pending;
+
+    expect(error).not.toBeInstanceOf(WorkItemFetchError);
+    expect(error).toMatchObject({ name: "AbortError" });
+  });
+
+  it("does not mark not-found as retryable", () => {
+    expect(new WorkItemFetchError("not_found", "gone", 404).retryable).toBe(
+      false
+    );
   });
 });
 

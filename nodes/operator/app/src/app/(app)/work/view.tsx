@@ -55,6 +55,7 @@ import {
   fetchWorkItemsPage,
   flattenWorkItemPages,
   nextWorkItemsCursor,
+  WorkItemFetchError,
 } from "./_api/fetchWorkItems";
 import { columns } from "./_components/columns";
 import { WorkItemDetail } from "./_components/WorkItemDetail";
@@ -88,10 +89,12 @@ export function WorkDashboardView({
     error,
     hasNextPage,
     isFetchingNextPage,
+    isFetchNextPageError,
     fetchNextPage,
   } = useInfiniteQuery({
     queryKey: ["work-items", "lean"],
-    queryFn: ({ pageParam }) => fetchWorkItemsPage(pageParam),
+    queryFn: ({ pageParam, signal }) =>
+      fetchWorkItemsPage(pageParam, { signal }),
     initialPageParam: null as string | null,
     getNextPageParam: nextWorkItemsCursor,
     staleTime: 30_000,
@@ -100,20 +103,28 @@ export function WorkDashboardView({
   // Keep walking the cursor in the background; rows from loaded pages are
   // already on screen.
   useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage && !error) void fetchNextPage();
-  }, [hasNextPage, isFetchingNextPage, error, fetchNextPage]);
+    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
+      void fetchNextPage();
+    }
+  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
 
   const items = useMemo(
     () => (data ? flattenWorkItemPages(data.pages) : []),
     [data]
   );
-  const isLoadingMore = hasNextPage === true && !error;
+  // Only a failed next-page fetch leaves the list incomplete; a failed
+  // background refetch keeps every already-loaded page on screen.
+  const isPartialFailure =
+    isFetchNextPageError && !isFetchingNextPage && items.length > 0;
+  const isLoadingMore = hasNextPage === true && !isPartialFailure;
 
   const selectedItemQuery = useQuery({
     queryKey: ["work-item", selectedItemId],
-    queryFn: () => fetchWorkItem(selectedItemId as string),
+    queryFn: ({ signal }) =>
+      fetchWorkItem(selectedItemId as string, { signal }),
     enabled: selectedItemId !== undefined,
-    retry: false,
+    retry: (failureCount, err) =>
+      err instanceof WorkItemFetchError && err.retryable && failureCount < 2,
     staleTime: 30_000,
   });
 
@@ -194,16 +205,21 @@ export function WorkDashboardView({
     onSortingChange: (updater) => {
       const next = typeof updater === "function" ? updater(sorting) : updater;
       setSorting(next);
+      table.resetPageIndex();
       syncUrl(columnFilters, next, globalFilter);
     },
     onColumnFiltersChange: (updater) => {
       const next =
         typeof updater === "function" ? updater(columnFilters) : updater;
       setColumnFilters(next);
+      table.resetPageIndex();
       syncUrl(next, sorting, globalFilter);
     },
     onGlobalFilterChange: setGlobalFilter,
     onColumnVisibilityChange: setColumnVisibility,
+    // Arriving pages must not bounce the reader back to page 1; user-driven
+    // sort/filter/search changes reset explicitly.
+    autoResetPageIndex: false,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -286,6 +302,7 @@ export function WorkDashboardView({
           value={globalFilter}
           onChange={(e) => {
             setGlobalFilter(e.target.value);
+            table.resetPageIndex();
             syncUrl(columnFilters, sorting, e.target.value);
           }}
         />
@@ -295,6 +312,7 @@ export function WorkDashboardView({
             className="text-muted-foreground text-xs underline hover:text-foreground"
             onClick={() => {
               setColumnFilters([]);
+              table.resetPageIndex();
               syncUrl([], sorting, globalFilter);
             }}
           >
@@ -320,17 +338,23 @@ export function WorkDashboardView({
         </p>
       )}
 
-      {(isLoadingMore || (error && items.length > 0)) && (
-        <p
-          className={
-            error ? "text-destructive text-xs" : "text-muted-foreground text-xs"
-          }
-          aria-live="polite"
-        >
-          {error
-            ? `Showing ${items.length} loaded items; failed to load the rest.`
-            : `Loaded ${items.length} items, loading more…`}
+      {isPartialFailure ? (
+        <p className="text-destructive text-xs" aria-live="polite">
+          Showing {items.length} loaded items; failed to load the rest.{" "}
+          <button
+            type="button"
+            className="underline hover:text-foreground"
+            onClick={() => void fetchNextPage()}
+          >
+            Retry
+          </button>
         </p>
+      ) : (
+        isLoadingMore && (
+          <p className="text-muted-foreground text-xs" aria-live="polite">
+            Loaded {items.length} items, loading more…
+          </p>
+        )
       )}
 
       {!(error && items.length === 0) && (

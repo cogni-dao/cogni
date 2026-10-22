@@ -10,6 +10,9 @@
  *   the detail pane reads those bodies via the exact-item fetch.
  *   PROGRESSIVE_LIST: callers fetch one page at a time so page 1 renders
  *   while later pages stream in; the cursor walk stops at MAX_PAGES.
+ *   BOUNDED_FETCH: every request (headers and body) aborts after
+ *   WORK_ITEM_FETCH_TIMEOUT_MS and rejects with a retryable `timeout` error;
+ *   a caller (React Query) cancellation rethrows the caller's abort as-is.
  * Side-effects: IO
  * Links: [work.items.list.v1.contract](../../../../contracts/work.items.list.v1.contract.ts)
  * @internal
@@ -21,6 +24,13 @@ export const WORK_ITEMS_PAGE_SIZE = 500;
 // Hard cap on cursor-walk to avoid runaway loops in degenerate cases (corpus
 // is ~1k today; raising the ceiling here is cheap relative to a stuck UI).
 export const MAX_WORK_ITEM_PAGES = 20;
+export const WORK_ITEM_FETCH_TIMEOUT_MS = 20_000;
+
+export interface WorkItemFetchOptions {
+  /** Caller cancellation, e.g. React Query's `queryFn` signal. */
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}
 
 export type WorkItemFetchErrorKind =
   | "not_found"
@@ -28,7 +38,15 @@ export type WorkItemFetchErrorKind =
   | "busy"
   | "server"
   | "network"
+  | "timeout"
   | "unexpected";
+
+const RETRYABLE_KINDS: ReadonlySet<WorkItemFetchErrorKind> = new Set([
+  "busy",
+  "server",
+  "network",
+  "timeout",
+]);
 
 export class WorkItemFetchError extends Error {
   readonly kind: WorkItemFetchErrorKind;
@@ -40,6 +58,10 @@ export class WorkItemFetchError extends Error {
     this.kind = kind;
     this.status = status;
   }
+
+  get retryable(): boolean {
+    return RETRYABLE_KINDS.has(this.kind);
+  }
 }
 
 function classifyWorkItemFetchStatus(status: number): WorkItemFetchErrorKind {
@@ -50,27 +72,81 @@ function classifyWorkItemFetchStatus(status: number): WorkItemFetchErrorKind {
   return "unexpected";
 }
 
+function anySignal(signals: readonly AbortSignal[]): AbortSignal {
+  if (typeof AbortSignal.any === "function")
+    return AbortSignal.any([...signals]);
+  const controller = new AbortController();
+  for (const signal of signals) {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      break;
+    }
+    signal.addEventListener("abort", () => controller.abort(signal.reason), {
+      once: true,
+    });
+  }
+  return controller.signal;
+}
+
+async function readWorkItemError(
+  response: Response,
+  fallback: string
+): Promise<WorkItemFetchError> {
+  const body = await response.json().catch(() => ({ error: fallback }));
+  return new WorkItemFetchError(
+    classifyWorkItemFetchStatus(response.status),
+    body.error || `HTTP ${response.status}`,
+    response.status
+  );
+}
+
+/** GET JSON with a hard deadline covering both the headers and the body. */
+async function getJsonBounded<T>(
+  url: string,
+  fallbackError: string,
+  { signal, timeoutMs = WORK_ITEM_FETCH_TIMEOUT_MS }: WorkItemFetchOptions = {}
+): Promise<T> {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: signal ? anySignal([signal, timeout]) : timeout,
+    });
+    if (!response.ok) throw await readWorkItemError(response, fallbackError);
+    return (await response.json()) as T;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (timeout.aborted) {
+      throw new WorkItemFetchError(
+        "timeout",
+        `Work-item request timed out after ${timeoutMs}ms`
+      );
+    }
+    if (error instanceof WorkItemFetchError) throw error;
+    throw new WorkItemFetchError(
+      "network",
+      "Unable to reach the work-item service"
+    );
+  }
+}
+
 /** Fetch one lean list page; `cursor` null means the first page. */
-export async function fetchWorkItemsPage(
-  cursor: string | null
+export function fetchWorkItemsPage(
+  cursor: string | null,
+  options?: WorkItemFetchOptions
 ): Promise<WorkItemsListOutput> {
   const params = new URLSearchParams();
   params.set("limit", String(WORK_ITEMS_PAGE_SIZE));
   params.set("view", "lean");
   if (cursor) params.set("cursor", cursor);
-  const response = await fetch(`/api/v1/work/items?${params.toString()}`, {
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({
-      error: "Failed to fetch work items",
-    }));
-    throw new Error(error.error || `HTTP ${response.status}`);
-  }
-  return response.json() as Promise<WorkItemsListOutput>;
+  return getJsonBounded<WorkItemsListOutput>(
+    `/api/v1/work/items?${params.toString()}`,
+    "Failed to fetch work items",
+    options
+  );
 }
 
 /** React Query `getNextPageParam`: next cursor, or undefined when done/capped. */
@@ -98,30 +174,13 @@ export function flattenWorkItemPages(
   return [...byId.values()];
 }
 
-export async function fetchWorkItem(id: string): Promise<WorkItemDto> {
-  let response: Response;
-  try {
-    response = await fetch(`/api/v1/work/items/${encodeURIComponent(id)}`, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      cache: "no-store",
-    });
-  } catch {
-    throw new WorkItemFetchError(
-      "network",
-      "Unable to reach the work-item service"
-    );
-  }
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({
-      error: "Failed to fetch work item",
-    }));
-    throw new WorkItemFetchError(
-      classifyWorkItemFetchStatus(response.status),
-      error.error || `HTTP ${response.status}`,
-      response.status
-    );
-  }
-  return response.json() as Promise<WorkItemDto>;
+export function fetchWorkItem(
+  id: string,
+  options?: WorkItemFetchOptions
+): Promise<WorkItemDto> {
+  return getJsonBounded<WorkItemDto>(
+    `/api/v1/work/items/${encodeURIComponent(id)}`,
+    "Failed to fetch work item",
+    options
+  );
 }
