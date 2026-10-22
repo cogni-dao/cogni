@@ -1,6 +1,6 @@
 ---
 name: cognition-expert
-description: "Session-bootstrap + cognition-delivery expert for Cogni nodes — how an agent actually receives (or fails to receive) its operating contract at session start, across Claude Code, Codex, and opencode. Points at the canon (docs/spec/node-baas-architecture.md §Cognition Substrate, scripts/agent/session-cognition.sh, nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts) and holds the durable mental model + hard-won gotchas that aren't obvious when you read it: the two-axis design (code-owned constitution vs hub-served knowledge index), why the SessionStart hook is NOT a universal injection surface, and why each harness needs a native full-context path. Use when touching the cognition bundle, the session-start loader, AGENTS.md/CLAUDE.md bootstrap, the .cogni/.cognition-cache.md cache, @imports, .codex/config.toml, opencode.json instructions, SESSION_BOOTSTRAP_INVARIANTS, the served orientation entry, or when debugging why a fresh agent booted without its agent-contract / replied in prose instead of the status-contract / got a truncated bundle. Triggers: 'cognition bundle', 'session-cognition.sh', 'SessionStart hook', 'agent-contract not loading', 'status-contract', 'bundle truncated', 'Output too large / Preview first 2KB', 'additionalContext', 'additionalContextLimit', 'CLAUDE.md @import', 'CLAUDE.local.md', '.cognition-cache.md', 'AGENTS.md bootstrap', 'thin pointer', 'ONE_VOICE', 'orientation IS the constitution', 'SESSION_BOOTSTRAP_INVARIANTS', 'opencode AGENTS.md', 'Codex project_doc_max_bytes', 'why did a fresh agent not follow the contract', 'cross-harness bootstrap', 'hub-empty boot', 'cognition didn't load'."
+description: "Session-bootstrap + cognition-delivery expert for Cogni nodes — how an agent actually receives (or fails to receive) its operating contract at session start, across Claude Code, Codex, and opencode. Points at the canon (docs/spec/node-baas-architecture.md §Cognition Substrate, scripts/agent/session-cognition.sh, nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts) and holds the durable mental model + hard-won gotchas that aren't obvious when you read it: the two-axis design (hub-owned complete contract vs code-owned delivery and recovery), why the SessionStart hook is NOT a universal injection surface, and why each harness needs a native full-context path. Use when touching the cognition bundle, the session-start loader, AGENTS.md/CLAUDE.md bootstrap, the .cogni/.cognition-cache.md cache, @imports, .codex/config.toml, opencode.json instructions, SESSION_BOOTSTRAP_INVARIANTS, the served orientation entry, or when debugging why a fresh agent booted without its agent-contract / replied in prose instead of the status-contract / got a truncated bundle. Triggers: 'cognition bundle', 'session-cognition.sh', 'SessionStart hook', 'agent-contract not loading', 'status-contract', 'bundle truncated', 'Output too large / Preview first 2KB', 'additionalContext', 'additionalContextLimit', 'CLAUDE.md @import', 'CLAUDE.local.md', '.cognition-cache.md', 'AGENTS.md bootstrap', 'thin pointer', 'ONE_VOICE', 'orientation IS the constitution', 'SESSION_BOOTSTRAP_INVARIANTS', 'opencode AGENTS.md', 'Codex project_doc_max_bytes', 'why did a fresh agent not follow the contract', 'cross-harness bootstrap', 'hub-empty boot', 'cognition didn't load'."
 ---
 
 # cognition-expert
@@ -9,7 +9,7 @@ description: "Session-bootstrap + cognition-delivery expert for Cogni nodes — 
 
 ## The domain
 
-The cognition bundle is the kickstart a node serves to every agent session: the constitution (how to behave), the mission (why this node exists), and the map (orientation + skills index + domain pointers). Canon lives in `docs/spec/node-baas-architecture.md` §Cognition Substrate; the producer is `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`; the delivery loader shared by all harnesses is `scripts/agent/session-cognition.sh`, wired via `.claude/settings.json` (Claude Code) and `.codex/config.toml` (Codex). This skill is the mental model + the gotchas those files don't state.
+The cognition bundle is the kickstart a node serves to every agent session: rich operating guidance, the mission, and the map (orientation + skills index + domain pointers). Recall the canonical [ownership and delivery contract](https://cognidao.org/knowledge/cognition-substrate-bootstrap) before editing; it supersedes the retired `docs/spec/node-baas-architecture.md` reference. The producer is `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`; the shared delivery loader is `scripts/agent/session-cognition.sh`. This skill supplies the trigger and implementation gotchas.
 
 ## The mental model — two orthogonal axes
 
@@ -17,21 +17,30 @@ Everything here is one of two questions. Keep them separate; conflating them is 
 
 ### Axis A — OWNERSHIP: what is the bundle made of (and who can break it)
 
-`node-baas-architecture.md:300`: **the irreducible invariants are CODE-OWNED because they must render even when the hub is empty or unreachable — a session must always bootstrap.**
+**The complete normal response contract is hub-owned: shape and semantics travel together.**
+Root `AGENTS.md` owns terse bootstrap, local execution safety, and bounded recovery. It
+must not retain response tables, frozen-state rules, or a competing normal communication
+protocol. The output style points to the loaded bundle without restating its rules.
 
-| Part                                                                   | Owner                                           | Why                                                                       |
-| ---------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------- |
-| **Constitution** — agent-contract, status-contract, Definition of Done | **code** (`SESSION_BOOTSTRAP_INVARIANTS`)       | must render hub-independent; it is the one thing a session can never lack |
-| Mission (the "why")                                                    | repo-spec `intent.mission`                      | per-node identity                                                         |
-| Orientation map, skills index, domain pointers                         | **hub** (Dolt), index-first, recalled on demand | expandable, refined-in-place, compounds                                   |
+| Part                                                                     | Owner                                                         | Why                                                            |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------- | -------------------------------------------------------------- |
+| Bootstrap, execution safety, and missing-contract recovery               | code: root `AGENTS.md` and loader                             | a cold session can recover without inventing a second contract |
+| Complete response format, process and status semantics, node orientation | hub: the node's Dolt orientation, delivered through cognition | one versioned home for the whole normal operating contract     |
+| Mission                                                                  | repo-spec `intent.mission`                                    | per-node identity                                              |
+| Skills and domain map                                                    | hub                                                           | index-first recall                                             |
+| Last-known complete projection                                           | gitignored cognition cache                                    | normal offline sessions retain the complete contract           |
 
-**The drift to watch for (ONE_VOICE, node-template #130):** moving the constitution _into_ the hub orientation entry ("served orientation IS the constitution") makes the contract hub-dependent. That is backwards. Proof it's dangerous: when the operator agent key expired mid-session (2026-10-08), every fresh agent booted **contract-less** — because the contract was being served from the hub, not rendered from code. A code-owned constitution makes a hub outage / expired key a non-event: only the knowledge index degrades, never the contract.
+**The drift to watch for:** deleting a hub template while leaving one in AGENTS reverses
+this split; deleting both leaves no response format. Verify the destination's complete
+template before removing competing copies. Never equate a nonempty map or semantics-only
+contract section with a complete bundle. If no complete contract is loaded, stay in
+bounded bootstrap recovery; AGENTS and skills cannot substitute for normal cognition.
 
 ### Axis B — DELIVERY: how does it reach the agent's context
 
 **The SessionStart hook is NOT a universal injection surface.** Treat it as cache
 acquisition first. Claude Code presents the cache through a `CLAUDE.md` instruction-file
-import and reinforces the universal response rule through a project-scoped output style;
+import and reinforces adherence to that loaded contract through a project-scoped output style;
 Codex injects the cache through uncapped hook stdout. OpenCode does not expand `@`
 references; the supported 1.x runtime combines the cache through
 `opencode.json.instructions`.
@@ -56,8 +65,8 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
   wedge a session). The `validate-status-contract.sh` Stop hook is the secondary, **warn-only**
   check: it surfaces a malformed final response, zero-evidence substantive proposal, or
   frozen-state mutation, and the agent self-corrects on the _next_ turn — it must never
-  re-prompt or hard-block. Both adapters point back to the file floor; neither owns a second
-  copy of the rich contract.
+  re-prompt or hard-block. The output style points to the complete loaded bundle; neither adapter owns a second
+  response template. The warn-only detector is a conformance check, not instruction authority.
 - **A hard Stop-block on every response is an anti-pattern (the lesson of the #2722 loop).**
   Two failure modes make it poor form: (1) **blast radius** — the hook runs on every agent on
   the node, so one over-strict check wedges the whole fleet (the pre-#2722 per-reply
@@ -71,14 +80,10 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
   that proposes with `Followed = —`, reports zero sources, or has no retrieval actions in the
   turn trace is still a hard FAIL. Grade delivery → envelope → research trace → substantive
   synthesis → state continuity in that order. Never call a table-only shell a passing agent.
-- **`Followed` is the evidence ledger, not a sample.** The trace can prove excellent research
-  while the visible reply still fails provenance by citing only two convenient work items. Every
-  material orientation, skill/guide, hub entry, design/code source, and work item that shaped the
-  proposal must appear as a human URL in contract order. A local repo path is citable: convert it
-  to `https://github.com/<owner>/<repo>/blob/<HEAD_SHA>/<path>` (plus a line anchor when useful).
-  The source count in `ETA · Conf` must not exceed the distinct URLs in `Followed`.
-- **@import of an ABSENT file renders as literal text**, not empty-expansion. On a true first boot the hook writes the cache _during_ SessionStart — too late for the same session's `@import`, which resolves at context assembly. **Warm the cache in the pre-session step** (`scripts/conductor-worktree-setup.sh`) so first boot is non-empty; otherwise first boot is truncated and only the second boot is full.
-- **A failed hook fetch must not clobber the cache** — the loader only writes when the fetch returns non-empty, so a warm cache survives an expired key / hub outage. This is load-bearing: it's why warm workspaces keep working through an outage.
+- **The loaded contract owns reporting semantics.** Follow its current Roles/Followed and
+  evidence rules; this skill supplies no cumulative bibliography or second response policy.
+- **@import of an ABSENT file renders as literal text**, not empty-expansion. On a true first boot the hook writes the cache _during_ SessionStart — too late for the same session's `@import`, which resolves at context assembly. **Warm the cache in the pre-session step** (`scripts/conductor-worktree-setup.sh`) so first boot is non-empty; otherwise the first session stays in bounded recovery until a restart/resume loads the complete contract.
+- **A failed or incomplete hook fetch must not clobber a complete cache.** Both the project loader and the installed stable Codex hook validate the contract envelope and actual response-template structure before admission. A last-known complete bundle survives an expired key, hub outage, map-only response, or truncated contract. Missing/incomplete caches enter bounded recovery instead of normal work; recovery notices never pass completeness admission.
 - **Codex parity:** `.codex/config.toml` must keep `additionalContextLimit = 0`. Without it Codex head/tail-spills the bundle and cuts the middle of the contract.
 - **OpenCode version drift is real:** supported 1.x combines
   `opencode.json.instructions` with `AGENTS.md`. V2 parses the field but explicitly does
@@ -105,18 +110,18 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
 ## When you touch this, in order
 
 1. **Separate the axes.** Is the problem ownership (what's in the bundle) or delivery (how it arrives)? Fix the right one.
-2. **Constitution stays code-owned.** Never move the agent-contract/invariants into a hub entry that only renders on a healthy hub. If you find it there, that's the drift — pull it back to `SESSION_BOOTSTRAP_INVARIANTS`.
+2. **Respect the ownership split.** Normal response shape and semantics live together in the hub. Keep only bootstrap/safety/recovery in AGENTS and a bundle pointer in the output style. Do not merge consolidation until the destination contains the full template and fresh-session behavior is verified.
 3. **Deliver through the proven harness path.** Claude = project output style (primary driver) +
    `CLAUDE.md` imports + a warn-only Stop detector (never a hard block); Codex = committed floor + uncapped hook; supported
    OpenCode 1.x = `instructions`. None requires an agent tool-read.
-4. **AGENTS.md carries only the universal floor + bootstrap pointers**
-   (`node-baas-architecture.md:311`) — the terse response/state skeleton, bundle pointer,
-   and self-serve fallback. It must not copy expandable orientation, skills, domains, or
-   the full rich contract.
+4. **AGENTS.md carries bootstrap, safety, and recovery only.** It points to the complete
+   bundle without copying response tables or normal communication rules. Preserve a complete
+   offline cache; absent/incomplete cognition permits only bounded delivery recovery.
 5. **Prove on the live harness.** The only proof is a fresh spawn (`claude -p` headless, or a
    real session) whose trace shows the required research before its first substantive proposal,
-   whose `Followed` exhaustively links the material sources actually consulted, and which sustains frozen state on the
-   next turn — AND a hub-down/expired-key boot that still renders the constitution. Byte
+   whose reporting follows the exact loaded contract, and which sustains frozen state on the
+   next turn — AND a hub-down/expired-key boot with a complete cache that preserves the same
+   contract, plus a cold/invalid-cache boot that stays in recovery. Byte
    round-trips, `/context`, and table shape are necessary but not sufficient.
 6. **Prove distribution separately.** Name the bootstrap cohort/materializer version, show which
    nodes have adopted it, and show that a fresh developer clone receives the harness files without
@@ -124,11 +129,11 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
 
 ## Canonical sources
 
-| What                                                                            | Where                                                                                                                                                                                 |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cognition Substrate design (two axes, ownership split, thin-AGENTS.md boundary) | `docs/spec/node-baas-architecture.md` §Cognition Substrate (`:282-311`)                                                                                                               |
-| The delivery loader (fetch → cache → emit per runtime)                          | `scripts/agent/session-cognition.sh`                                                                                                                                                  |
-| The bundle producer + `SESSION_BOOTSTRAP_INVARIANTS`                            | `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`                                                                                                                      |
-| Harness wiring                                                                  | `CLAUDE.md`, `.claude/settings.json`, `.claude/output-styles/Cogni Contract.md`, `scripts/agent/validate-status-contract.sh`, `.codex/config.toml`, `opencode.json`, root `AGENTS.md` |
-| Harness docs                                                                    | Claude Code memory/hooks (code.claude.com/docs/en/{memory,hooks}), Codex prompting/config (developers.openai.com), OpenCode V2 instructions (dev.opencode.ai/v2/docs/instructions)    |
-| What becomes a skill vs hub entry vs spec                                       | [`knowledge-syntropy-expert`](../knowledge-syntropy-expert/SKILL.md)                                                                                                                  |
+| What                                                                       | Where                                                                                                                                                                                 |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cognition Substrate design (ownership, delivery, distribution, acceptance) | [cognition-substrate-bootstrap](https://cognidao.org/knowledge/cognition-substrate-bootstrap)                                                                                         |
+| The delivery loader (fetch → cache → emit per runtime)                     | `scripts/agent/session-cognition.sh`                                                                                                                                                  |
+| The bundle producer + `SESSION_BOOTSTRAP_INVARIANTS`                       | `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`                                                                                                                      |
+| Harness wiring                                                             | `CLAUDE.md`, `.claude/settings.json`, `.claude/output-styles/Cogni Contract.md`, `scripts/agent/validate-status-contract.sh`, `.codex/config.toml`, `opencode.json`, root `AGENTS.md` |
+| Harness docs                                                               | Claude Code memory/hooks (code.claude.com/docs/en/{memory,hooks}), Codex prompting/config (developers.openai.com), OpenCode V2 instructions (dev.opencode.ai/v2/docs/instructions)    |
+| What becomes a skill vs hub entry vs spec                                  | [`knowledge-syntropy-expert`](../knowledge-syntropy-expert/SKILL.md)                                                                                                                  |

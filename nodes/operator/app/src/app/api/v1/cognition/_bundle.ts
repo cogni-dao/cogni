@@ -8,20 +8,15 @@
  *   that frames hub-delivered skills + domain pointers for a SessionStart hook.
  * Scope: Pure functions + the invariants constant. No I/O, no env, no container.
  * Invariants:
- *   - INVARIANTS_ARE_THE_FLOOR: the code-owned `SESSION_BOOTSTRAP_INVARIANTS` +
- *     watch-gate render UNCONDITIONALLY — they are the always-present contract
- *     spine that survives an empty/unreachable hub and the common fresh-node
- *     case (story.5070). A served orientation renders ALONGSIDE as the node MAP,
- *     augmenting the floor, never replacing it. This reverses the earlier
- *     ONE_VOICE suppression (task.5155), whose real defect was that a map-only
- *     orientation then dropped the contract entirely.
- *   - ORIENTATION_LOADED_IN_FULL: renders pointers (id + title + recall path)
- *     for skills/domains, but the current-node `<slug>-agent-orientation` entry
- *     is rendered IN FULL — the node MAP that rides alongside the invariant
- *     floor, so the git skeleton stays minimal and the Dolt orientation carries
- *     the node-specific substance.
+ *   - TOOLING_INVARIANTS_ARE_UNCONDITIONAL: code-owned tooling axioms and
+ *     watch commands render even when the hub has no orientation. They do not
+ *     supply a normal response template or make an incomplete bundle usable.
+ *   - ORIENTATION_LOADED_IN_FULL: the current-node orientation supplies the
+ *     complete agent-contract, including response format and semantics. Render
+ *     it in full; skills and domains remain recall pointers. Missing/incomplete
+ *     contracts require loader/bootstrap recovery, never a code-owned template.
  *   - GOALS_AFTER_MISSION: the approved DAO goals (`listActiveGoals`) render as
- *     `## Goals` right after the orientation, title + content verbatim; zero
+ *     `## Goals` right after the mission header, title + content verbatim; zero
  *     goals renders `no approved goals`, a read failure `goals unavailable: …`.
  * Side-effects: none
  * Links: https://cognidao.org/knowledge/node-baas-substrate-model
@@ -49,10 +44,9 @@ import type {
  */
 
 /**
- * The irreducible session contract. This is the ONLY cognition that is
- * code-owned rather than hub-delivered: it must survive an empty or unreachable
- * hub so every session still bootstraps. Everything expandable (skills, guides,
- * domain expertise) is delivered live from the knowledge hub on top of this.
+ * Code-owned tooling axioms, rendered independently of hub availability.
+ * They complement the hub-owned complete agent-contract; they are not a
+ * replacement for its normal response format, process, or status semantics.
  */
 export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
   "ONE work item + ONE node per session — it is your plan and your checklist. Claim it, then write the definition of done as an ordered checklist in `outcome` BEFORE you act; heartbeat; link your PR. You are not done until every box is checked and proven; coordination.nextAction is authoritative and may add boxes.",
@@ -232,14 +226,13 @@ export interface RenderBundleInput {
   domainPointers: readonly CognitionDomainPointer[];
   /** The current node's `<slug>-agent-orientation` entry (full), or null if unseeded. */
   orientation: OrientationEntry | null;
-  /** Approved DAO goals, rendered right after the mission/orientation. */
+  /** Approved DAO goals, rendered right after the mission header. */
   goals: GoalsSection;
 }
 
 /**
- * Render the kickstart bundle as GFM markdown. A SessionStart hook echoes this
- * verbatim to stdout; Claude Code and Codex both inject SessionStart stdout
- * into the model's context.
+ * Render the kickstart bundle as GFM markdown. Codex injects hook stdout;
+ * Claude and supported OpenCode load the complete cached projection natively.
  */
 export function renderBundleMarkdown(input: RenderBundleInput): string {
   const {
@@ -299,32 +292,29 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
           .join("\n")
       : "| _(none)_ | | |";
 
-  // The node MAP that rides alongside the invariant floor: the current-node
-  // orientation entry rendered IN FULL (no second recall). Falls back to a seed
-  // prompt when unset so the convention surfaces even before the entry exists.
+  // The current-node orientation carries the complete operating contract and
+  // renders IN FULL (no second recall). Keep its human source beside the body
+  // and present this authority last, after the routing indexes. The hub content
+  // remains unchanged and appears once. A missing-entry prompt is diagnostic;
+  // the loader must not admit it as a complete contract.
   const orientationLines = orientation
-    ? ["## Orientation — recall this first", "", orientation.content]
+    ? [
+        "## Orientation — recall this first",
+        "",
+        `Source: [${orientation.id}](${origin}/knowledge/${encodeURIComponent(orientation.id)})`,
+        "",
+        orientation.content,
+      ]
     : [
         "## Orientation — recall this first",
         "",
         `_No \`${name}-agent-orientation\` entry yet. Recall the hub, then seed one — the current-node operating map for agents (what this node is, where authority lives, what's safe, what to recall next) — and refine it as the repo changes._`,
       ];
 
-  // THE INVARIANT FLOOR — rendered UNCONDITIONALLY (story.5070). The code-owned
-  // `SESSION_BOOTSTRAP_INVARIANTS` + watch-gate are the always-present contract
-  // spine: they must survive an empty/unreachable hub AND the common fresh-node
-  // case where the hub serves only a map-only orientation. The earlier ONE_VOICE
-  // suppression (task.5155) dropped this floor whenever ANY orientation was
-  // served — so a map-only orientation silently shipped a session with no
-  // contract at all. The orientation above now renders ALONGSIDE as the node
-  // MAP (augment, never replace), not instead of the floor.
-  //
-  // DRY / migration note: orientations are being reduced to map-only (what this
-  // node is, where authority lives, what to recall next) and MUST NOT restate
-  // these terse axioms — the invariants are now the single always-present source
-  // of the contract. Stripping any residual axiom prose still embedded in a hub
-  // orientation entry is the migration's concern, tracked separately (story.5070
-  // step 7, human-merge-gated hub Dolt edit).
+  // Tooling axioms and watch commands render unconditionally. The hub owns
+  // normal response format and semantics together in the complete orientation.
+  // These commands cannot turn a missing/map-only orientation into a usable
+  // contract; cache admission and bounded recovery belong to the loader.
   const toolingFloor = [
     "",
     "## Tooling invariants",
@@ -345,7 +335,6 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     ">",
     `> Delivered at session start from ${origin}/api/v1/cognition — replaces git-synced AGENTS.md sprawl. (node \`${node}\` · build \`${buildSha}\`)`,
     "",
-    ...orientationLines,
     ...renderGoalsLines(goals),
     ...toolingFloor,
     "",
@@ -383,6 +372,8 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     `- Discovery doc: \`GET ${origin}/.well-known/agent.json\``,
     "- Contribute durable knowledge: `/contribute-knowledge-to-cogni` (refine in place > write new).",
     `- Cite an existing entry in your edit: \`POST ${origin}/api/v1/knowledge/contributions/{id}/commits\` with \`{op:"cite", citingId, citedId, citationType}\` — cross-plane cites (target on main) resolve and stay valid post-merge.`,
+    "",
+    ...orientationLines,
     "",
   ].join("\n");
 }
