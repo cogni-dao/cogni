@@ -1841,88 +1841,6 @@ jobs:
           job_name: reconcile-scheduler-worker-routing
           labels: workflow=candidate-flight kind=scheduler_worker_routing_reconcile slot=candidate-a
 
-  # Queue custody follows the protected-main fleet inventory, independently of
-  # the app image. A foreign candidate lane needs its custodian's existing
-  # worker; refreshing only the candidate cluster's worker leaves no poller.
-  plan-custodied-worker-routing:
-    needs: [decide]
-    if: needs.decide.result == 'success'
-    runs-on: ubuntu-latest
-    outputs:
-      control_envs: ${{ steps.plan.outputs.custodian_worker_envs }}
-      authority_sha: ${{ steps.plan.outputs.custodian_authority_sha }}
-    steps:
-      - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-      - name: Checkout protected routing authority
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          ref: main
-          path: route-authority
-      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
-        with: { version: 9.12.2 }
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with: { node-version: "22", cache: pnpm }
-      - name: Install typed routing dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Plan approved foreign custody
-        id: plan
-        env:
-          AUTHORITY_ROOT: ${{ github.workspace }}/route-authority
-          FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
-        run: pnpm exec tsx scripts/ci/reconcile-custodied-worker-routing.ts --plan
-
-  reconcile-custodied-worker-routing:
-    needs: [decide, external-node-preflight, plan-custodied-worker-routing]
-    if: |
-      always() && !cancelled() &&
-      needs.decide.result == 'success' &&
-      needs.plan-custodied-worker-routing.result == 'success' &&
-      needs.plan-custodied-worker-routing.outputs.control_envs != '[]' &&
-      (needs.external-node-preflight.result == 'success' || needs.external-node-preflight.result == 'skipped')
-    strategy:
-      fail-fast: false
-      matrix:
-        control_env: ${{ fromJSON(needs.plan-custodied-worker-routing.outputs.control_envs) }}
-    # Share the EXISTING promotion writer lock for this same deploy branch.
-    concurrency:
-      group: flight-${{ matrix.control_env }}-scheduler-worker
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    environment: ${{ matrix.control_env }}
-    steps:
-      - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-      - name: Checkout pinned protected routing authority
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          ref: ${{ needs.plan-custodied-worker-routing.outputs.authority_sha }}
-          path: route-authority
-      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
-        with: { version: 9.12.2 }
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with: { node-version: "22", cache: pnpm }
-      - name: Install typed routing dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Publish only approved custodied queue aliases
-        env:
-          AUTHORITY_ROOT: ${{ github.workspace }}/route-authority
-          FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
-          CONTROL_ENV: ${{ matrix.control_env }}
-          GH_TOKEN: ${{ github.token }}
-          CUSTODY_RECEIPT_FILE: ${{ runner.temp }}/custodied-routing.json
-        run: pnpm exec tsx scripts/ci/reconcile-custodied-worker-routing.ts
-      - name: Push custodied routing receipt to Loki
-        if: always()
-        uses: ./.github/actions/loki-push
-        with:
-          loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
-          loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
-          loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
-          log_file: ${{ runner.temp }}/custodied-routing.json
-          job_name: reconcile-custodied-worker-routing
-          labels: workflow=candidate-flight kind=custodied_worker_routing slot=candidate-a
-
   verify-candidate:
     needs:
       [
@@ -1930,8 +1848,6 @@ jobs:
         flight,
         reconcile-dns,
         reconcile-scheduler-worker-routing,
-        plan-custodied-worker-routing,
-        reconcile-custodied-worker-routing,
         node-substrate,
         assert-substrate,
       ]
@@ -1946,11 +1862,7 @@ jobs:
       needs.decide.outputs.has_flight_targets == 'true' &&
       needs.flight.result != 'skipped' &&
       (needs.reconcile-dns.result == 'success' || (needs.decide.outputs.has_substrate_node_targets != 'true' && needs.reconcile-dns.result == 'skipped')) &&
-      needs.reconcile-scheduler-worker-routing.result == 'success' &&
-      needs.plan-custodied-worker-routing.result == 'success' &&
-      (needs.reconcile-custodied-worker-routing.result == 'success' ||
-       (needs.reconcile-custodied-worker-routing.result == 'skipped' &&
-        needs.plan-custodied-worker-routing.outputs.control_envs == '[]'))
+      needs.reconcile-scheduler-worker-routing.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -2220,8 +2132,6 @@ jobs:
         assert-substrate,
         flight,
         verify-candidate,
-        plan-custodied-worker-routing,
-        reconcile-custodied-worker-routing,
       ]
     if: always() && needs.decide.result == 'success'
     runs-on: ubuntu-latest
@@ -2243,18 +2153,11 @@ jobs:
           ASSERT_SUBSTRATE_RESULT: ${{ needs.assert-substrate.result }}
           FLIGHT_RESULT: ${{ needs.flight.result }}
           VERIFY_RESULT: ${{ needs.verify-candidate.result }}
-          CUSTODY_PLAN_RESULT: ${{ needs.plan-custodied-worker-routing.result }}
-          CUSTODY_ROUTING_RESULT: ${{ needs.reconcile-custodied-worker-routing.result }}
-          CUSTODY_CONTROL_ENVS: ${{ needs.plan-custodied-worker-routing.outputs.control_envs }}
           TARGETS_JSON: ${{ needs.decide.outputs.flight_targets_json }}
         run: |
           set -euo pipefail
           echo "has_targets=${HAS_TARGETS} has_flight_targets=${HAS_FLIGHT_TARGETS} external_compute=${HAS_EXTERNAL_COMPUTE_NODE_TARGETS} compute_egress=${COMPUTE_EGRESS_RESULT} substrate=${HAS_SUBSTRATE_NODE_TARGETS} prepare_substrate_deploy_branch=${PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT} node_substrate=${NODE_SUBSTRATE_RESULT} assert_substrate=${ASSERT_SUBSTRATE_RESULT} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} flight_targets=${TARGETS_JSON}"
-          if [ "$CUSTODY_PLAN_RESULT" != "success" ] ||
-             { [ "$CUSTODY_CONTROL_ENVS" != '[]' ] && [ "$CUSTODY_ROUTING_RESULT" != "success" ]; }; then
-            STATE=failure
-            DESC="Candidate custody routing failed (plan=${CUSTODY_PLAN_RESULT} routing=${CUSTODY_ROUTING_RESULT})"
-          elif [ "$HAS_FLIGHT_TARGETS" != "true" ]; then
+          if [ "$HAS_FLIGHT_TARGETS" != "true" ]; then
             # No k8s app-lever targets. Either nothing affected, or the affected
             # set is type:infra only (e.g. litellm) — which deploys via the
             # explicit Compose infra workflow, not this app lever.
