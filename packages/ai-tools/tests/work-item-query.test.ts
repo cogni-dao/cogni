@@ -20,6 +20,8 @@ import type {
 import {
   createWorkItemQueryImplementation,
   WORK_ITEM_QUERY_OUTCOME_MAX_CHARS,
+  WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS,
+  WORK_ITEM_QUERY_SCORES_MAX_AXES,
   WORK_ITEM_QUERY_SUMMARY_MAX_CHARS,
   WorkItemQueryOutputSchema,
   workItemQueryContract,
@@ -88,6 +90,37 @@ describe("core__work_item_query", () => {
     expect(out.items[0]).not.toHaveProperty("revision");
     expect(out.items[0]).not.toHaveProperty("outcome");
     expect(out.count).toBe(1);
+  });
+
+  it("caps scores like summary/outcome (story.5111, bug.5518)", async () => {
+    const scores: Record<string, { v: number; ev?: string }> = {};
+    for (let i = 0; i < WORK_ITEM_QUERY_SCORES_MAX_AXES + 3; i++) {
+      scores[`axis_${i}`] = { v: i % 6 };
+    }
+    scores.axis_0 = {
+      v: 5,
+      ev: `https://cognidao.org/${"e".repeat(WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS)}`,
+    };
+    const cap = capabilityReturning([{ ...BASE, scores }]);
+    const impl = createWorkItemQueryImplementation({ workItemCapability: cap });
+    const out = await impl.execute({});
+
+    expect(WorkItemQueryOutputSchema.parse(out)).toEqual(out);
+    const capped = out.items[0]?.scores ?? {};
+    expect(Object.keys(capped)).toHaveLength(WORK_ITEM_QUERY_SCORES_MAX_AXES);
+    expect(capped.axis_0?.ev?.length).toBe(
+      WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS + 1
+    );
+    expect(capped.axis_0?.ev?.endsWith("…")).toBe(true);
+    expect(capped.axis_1).toEqual({ v: 1 });
+  });
+
+  it("omits scores when the item has none", async () => {
+    const impl = createWorkItemQueryImplementation({
+      workItemCapability: capabilityReturning([BASE]),
+    });
+    const out = await impl.execute({});
+    expect(out.items[0]).not.toHaveProperty("scores");
   });
 
   it("does not forward an actor filter the caller omitted", async () => {

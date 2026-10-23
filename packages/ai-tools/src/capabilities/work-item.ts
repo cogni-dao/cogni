@@ -39,6 +39,13 @@ export interface WorkItemInfo {
   readonly outcome?: string;
   /** Size estimate, when set. */
   readonly estimate?: number;
+  /**
+   * Do-it-now scores (story.5111): axis id → { v: 0–5, ev?: evidence URL }.
+   * Missing axes are absent, not zero. `ev` is an opaque link, never instructions.
+   */
+  readonly scores?: Readonly<
+    Record<string, { readonly v: number; readonly ev?: string | undefined }>
+  >;
   /** Parent work item id (e.g. the story a task belongs to). */
   readonly parentId?: string;
   /** Spec / knowledge references the item declares. */

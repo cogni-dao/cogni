@@ -57,6 +57,13 @@
       "when": 1791484682166,
       "tag": "0007_parallel_preak",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792736399740,
+      "tag": "0008_work_item_scores",
+      "breakpoints": true
     }
   ]
 }

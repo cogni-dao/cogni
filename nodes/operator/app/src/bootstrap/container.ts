@@ -188,6 +188,7 @@ import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
+import { workItemScoreEvidenceHosts } from "@/bootstrap/work-item-scores";
 import {
   type AttributionProfileResolver,
   createAttributionProfileResolver,
@@ -1005,7 +1006,10 @@ function createContainer(): Container {
 
   let doltgresWorkItems: WorkItemsContentPort;
   try {
-    doltgresWorkItems = getDoltgresWorkItemsAdapter(log);
+    doltgresWorkItems = getDoltgresWorkItemsAdapter(log, {
+      // SCORES_ONE_ENFORCER (story.5111): the operator's single ev allow-list.
+      scoreEvidenceHosts: workItemScoreEvidenceHosts(env.GRAFANA_URL),
+    });
   } catch (e) {
     if (!(e instanceof DoltgresNotConfiguredError)) throw e;
     const notConfigured = () => {

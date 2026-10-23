@@ -104,6 +104,7 @@ function toWorkItemInfo(item: WorkItem): WorkItemInfo {
     ...(typeof item.revision === "number" && { revision: item.revision }),
     ...(item.outcome !== undefined && { outcome: item.outcome }),
     ...(item.estimate !== undefined && { estimate: item.estimate }),
+    ...(item.scores !== undefined && { scores: item.scores }),
     ...(item.parentId !== undefined && { parentId: item.parentId }),
     ...(item.specRefs !== undefined && { specRefs: [...item.specRefs] }),
   };

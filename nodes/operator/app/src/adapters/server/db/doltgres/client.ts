@@ -107,7 +107,15 @@ function getDoltgresReadSql(): Sql {
 // TARGET node and which then leaks an operator line into that node's per-node
 // log view.
 export function getDoltgresWorkItemsAdapter(
-  logger?: Logger
+  logger?: Logger,
+  options?: {
+    /**
+     * SCORES_ONE_ENFORCER (story.5111): the operator's single `scores` evidence
+     * allow-list, built in `@bootstrap/work-item-scores` and passed by the
+     * container. The adapter's `parseWorkItemScores` is the only bounds check.
+     */
+    readonly scoreEvidenceHosts?: readonly string[];
+  }
 ): DoltgresWorkItemAdapter {
   if (!_adapter)
     _adapter = new DoltgresWorkItemAdapter(getDoltgresSql(), {
@@ -126,6 +134,9 @@ export function getDoltgresWorkItemsAdapter(
       // the adapter stays latched on a dead pool — the 2026-10-03 poly incident
       // (bug.5358). The factory is the same one the singleton was built from.
       recreateClient: createSql,
+      ...(options?.scoreEvidenceHosts
+        ? { scoreEvidenceHosts: options.scoreEvidenceHosts }
+        : {}),
     });
   return _adapter;
 }
