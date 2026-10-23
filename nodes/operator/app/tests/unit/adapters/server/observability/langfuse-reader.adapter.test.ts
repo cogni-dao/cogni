@@ -658,3 +658,116 @@ describe("bounded upstream subpages", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("configured operator lane binding", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  function localReader(operatorEnvironment?: string, operatorNodeId = NODE_ID) {
+    return new HttpLangfuseReader({
+      baseUrl: "https://lf.example.com",
+      publicKey: "pk",
+      secretKey: "sk-secret",
+      operatorNodeId,
+      ...(operatorEnvironment ? { operatorEnvironment } : {}),
+      ownership: { verifyObservation: vi.fn(async () => true) },
+    });
+  }
+
+  it("reads a real candidate-partition generation and rejects a returned production record", async () => {
+    const row = {
+      ...observation("candidate-owned"),
+      environment: "candidate-a",
+    };
+    const fetcher = mockFetch({
+      data: [row, observation("wrong-partition")],
+      meta: { cursor: "next" },
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const result = await localReader("candidate-a").listObservations(
+      nativeQuery("&environment=candidate-a")
+    );
+    expect(result.data.map((row) => row.id)).toEqual(["candidate-owned"]);
+    expect(result.data[0]?.environment).toBe("candidate-a");
+    expect(result.meta.cogni).toMatchObject({
+      logicalEnvironment: "candidate-a",
+      attributionUnavailable: 1,
+      partial: true,
+    });
+    const url = (fetcher as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as URL;
+    expect(JSON.parse(url.searchParams.get("filter") ?? "[]")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          column: "metadata",
+          key: "nodeId",
+          value: NODE_ID,
+        }),
+        expect.objectContaining({
+          column: "environment",
+          value: "candidate-a",
+        }),
+      ])
+    );
+  });
+
+  it.each([
+    undefined,
+    "production",
+    "preview",
+  ])("rejects unsupported candidate custody from configured lane %s before IO", async (lane) => {
+    const fetcher = mockFetch({ data: [], meta: { cursor: null } });
+    vi.stubGlobal("fetch", fetcher);
+    await expect(
+      localReader(lane).listObservations(
+        nativeQuery("&environment=candidate-a")
+      )
+    ).rejects.toMatchObject({ code: "attribution_unavailable", status: 503 });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("retains production operator reads and production storage for sovereign candidate aliases", async () => {
+    const fetcher = mockFetch({
+      data: [observation()],
+      meta: { cursor: null },
+    });
+    vi.stubGlobal("fetch", fetcher);
+    expect(
+      (await localReader("production").listObservations(nativeQuery())).data
+    ).toHaveLength(1);
+    const sovereign = await localReader(
+      "candidate-a",
+      "another-operator"
+    ).listObservations(nativeQuery("&environment=candidate-a"));
+    expect(sovereign.data).toHaveLength(1);
+    const url = (fetcher as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[1]?.[0] as URL;
+    expect(JSON.parse(url.searchParams.get("filter") ?? "[]")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "user_api_key_alias",
+          value: `cogni:candidate-a:${NODE_ID}:app:v1`,
+        }),
+        expect.objectContaining({ column: "environment", value: "production" }),
+      ])
+    );
+  });
+
+  it("binds continuation to the configured operator identity and partition", async () => {
+    const fetcher = mockFetch({
+      data: [{ ...observation(), environment: "candidate-a" }],
+      meta: { cursor: "next" },
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const query = nativeQuery("&environment=candidate-a");
+    const first = await localReader("candidate-a").listObservations(query);
+    await expect(
+      localReader("candidate-a", "different-operator").listObservations({
+        ...query,
+        cursor: first.meta.cursor ?? "",
+      })
+    ).rejects.toMatchObject({ code: "invalid_trace_cursor", status: 400 });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});

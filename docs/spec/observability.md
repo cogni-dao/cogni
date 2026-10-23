@@ -403,6 +403,13 @@ native Langfuse read contract, not a replacement Langfuse SDK base URL. The exis
   Metadata uses an explicit allowlist;
   authentication objects, key fingerprints, billing accounts, requester metadata and user identifiers
   are withheld. The shared project key never reaches a developer.
+- The operator's own observations use its explicitly configured `DEPLOY_ENVIRONMENT` as their
+  recorded backend partition, and are readable only for that same logical lane. Missing or
+  cross-lane operator custody returns `attribution_unavailable` (503) before querying; no shared
+  project or hostname implies access to another lane's receipt backend. Sovereign legacy aliases
+  retain their production-custodied backend partition even when the alias names candidate-a or
+  preview. This resolved binding scopes both the upstream AND filter and response checks, and is
+  bound into continuation cursors.
 - Legacy generation ownership requires an independent authenticated LiteLLM spend receipt matching
   the provider response ID, authenticated key hash, canonical UUID/lane alias and time. Failed calls
   without provider IDs require a unique failure receipt plus matching run/trace correlation. Names,

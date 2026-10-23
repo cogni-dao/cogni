@@ -38,6 +38,7 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
   private readonly cursorKey: Buffer;
   private readonly ownership: LangfuseOwnershipPort | undefined;
   private readonly operatorNodeId: string | undefined;
+  private readonly operatorEnvironment: string | undefined;
 
   constructor(opts: {
     baseUrl: string;
@@ -45,12 +46,14 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
     secretKey: string;
     ownership?: LangfuseOwnershipPort;
     operatorNodeId?: string;
+    operatorEnvironment?: string;
   }) {
     this.cursorKey = createHash("sha256")
       .update(`langfuse-reader-cursor-v1:${opts.secretKey}`)
       .digest();
     this.ownership = opts.ownership;
     this.operatorNodeId = opts.operatorNodeId;
+    this.operatorEnvironment = opts.operatorEnvironment;
     this.base = opts.baseUrl.replace(/\/+$/, "");
     // Langfuse public API uses HTTP Basic: publicKey as user, secretKey as password.
     this.authHeader = `Basic ${Buffer.from(
@@ -80,9 +83,27 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
   ): Promise<LangfuseObservationPage> {
     if (!this.ownership)
       throw new LangfuseReadError("attribution_unavailable", 503);
+    const ownsLocalOperator = query.nodeId === this.operatorNodeId;
+    if (ownsLocalOperator && query.environment !== this.operatorEnvironment) {
+      // A shared Langfuse project does not imply access to another lane's receipt service.
+      throw new LangfuseReadError("attribution_unavailable", 503);
+    }
+    const backendEnvironment = ownsLocalOperator
+      ? this.operatorEnvironment
+      : "production";
     const { cursor, ...scopeQuery } = query;
     const scope = createHash("sha256")
-      .update(JSON.stringify({ base: this.base, ...scopeQuery }))
+      .update(
+        JSON.stringify({
+          base: this.base,
+          binding: {
+            operatorNodeId: this.operatorNodeId ?? null,
+            operatorEnvironment: this.operatorEnvironment ?? null,
+            backendEnvironment,
+          },
+          ...scopeQuery,
+        })
+      )
       .digest("hex");
     let from = query.fromStartTime;
     let to = query.toStartTime;
@@ -107,29 +128,28 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
     to = new Date(to).toISOString();
     const signal = AbortSignal.timeout(15_000);
     // Metadata key aliases are only candidate selectors; independently trusted receipts decide reach.
-    const ownershipFilter =
-      query.nodeId === this.operatorNodeId
-        ? {
-            type: "stringObject",
-            column: "metadata",
-            key: "nodeId",
-            operator: "=",
-            value: query.nodeId,
-          }
-        : {
-            type: "stringObject",
-            column: "metadata",
-            key: "user_api_key_alias",
-            operator: "=",
-            value: `cogni:${query.environment}:${query.nodeId}:app:v1`,
-          };
+    const ownershipFilter = ownsLocalOperator
+      ? {
+          type: "stringObject",
+          column: "metadata",
+          key: "nodeId",
+          operator: "=",
+          value: query.nodeId,
+        }
+      : {
+          type: "stringObject",
+          column: "metadata",
+          key: "user_api_key_alias",
+          operator: "=",
+          value: `cogni:${query.environment}:${query.nodeId}:app:v1`,
+        };
     const filters = [
       ownershipFilter,
       {
         type: "string",
         column: "environment",
         operator: "=",
-        value: "production",
+        value: backendEnvironment,
       },
       { type: "datetime", column: "startTime", operator: ">=", value: from },
       { type: "datetime", column: "startTime", operator: "<", value: to },
@@ -226,7 +246,7 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
         !Number.isFinite(time) ||
         time < Date.parse(from) ||
         time >= Date.parse(to) ||
-        row.environment !== "production" ||
+        row.environment !== backendEnvironment ||
         !matchesFilters(row, query.filters) ||
         !(await this.ownership.verifyObservation(
           query.nodeId,

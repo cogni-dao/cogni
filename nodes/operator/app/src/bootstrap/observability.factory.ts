@@ -55,6 +55,9 @@ export function createLangfuseReader(): LangfuseReaderPort | null {
     publicKey: env.LANGFUSE_PUBLIC_KEY,
     secretKey: env.LANGFUSE_SECRET_KEY,
     operatorNodeId: getNodeId(),
+    ...(env.DEPLOY_ENVIRONMENT
+      ? { operatorEnvironment: env.DEPLOY_ENVIRONMENT }
+      : {}),
     ownership: new HttpLangfuseOwnershipVerifier({
       baseUrl: env.LITELLM_BASE_URL,
       apiKey: env.LITELLM_MASTER_KEY,
