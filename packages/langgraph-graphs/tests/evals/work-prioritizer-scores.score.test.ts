@@ -44,8 +44,8 @@ describe("work-prioritizer scores eval grader", () => {
   it("holds the 5 hand-scored items with 6 axes each, and story.5107 is gold top-1", () => {
     expect(gold.items.map((g) => g.id)).toEqual([
       "story.5107",
-      "story.5108",
       "story.5068",
+      "bug.5486",
       "bug.5287",
       "story.5095",
     ]);
@@ -102,13 +102,13 @@ describe("work-prioritizer scores eval grader", () => {
       scores:
         g.id === "story.5107"
           ? [4, 4, 4, 4, 4, 1]
-          : g.id === "story.5108"
-            ? [5, 3, 5, 4, 5, 4]
+          : g.id === "bug.5486"
+            ? [4, 3, 3, 4, 5, 4]
             : g.scores,
     }));
     const s = scoreRun(gold, asPredicted(rows), th);
     expect(s.within).toBe(30);
-    expect(s.predictedTop1).toBe("story.5108");
+    expect(s.predictedTop1).toBe("bug.5486");
     expect(s.pass).toBe(false);
   });
 
@@ -144,7 +144,7 @@ describe("work-prioritizer scores eval grader", () => {
       }),
       "```",
     ].join("\n");
-    const [p, missing] = parsePrediction(reply, ["story.5107", "story.5108"]);
+    const [p, missing] = parsePrediction(reply, ["story.5107", "bug.5486"]);
     expect(p?.vector).toEqual([5, 4, null, null, 3, null]);
     expect(p?.raw.goal).toEqual({
       v: 5,
