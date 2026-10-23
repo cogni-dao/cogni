@@ -232,8 +232,15 @@ test("generated template DNS never clones; real CLI projection is deterministic 
       })
     );
     Object.assign(full, structuredClone(catalog), { node_id: nodeId });
+    delete full.compute_api;
+    full.activity_env = "candidate-a";
     const cat = path.join(dir, "infra/catalog/node-template.yaml");
     writeFileSync(cat, JSON.stringify(full));
+    execFileSync(
+      "check-jsonschema",
+      ["--schemafile", "infra/catalog/_schema.json", cat],
+      { stdio: ["ignore", "pipe", "pipe"] }
+    );
     const clone = {
       ...full,
       name: "clone",

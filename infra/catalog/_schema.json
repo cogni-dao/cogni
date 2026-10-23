@@ -274,32 +274,6 @@
       }
     }
   ],
-  "$defs": {
-    "k3sDnsIntent": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["mode", "zoneId", "target", "workloadDomain"],
-      "properties": {
-        "mode": {
-          "const": "crossplane-http"
-        },
-        "zoneId": {
-          "type": "string",
-          "pattern": "^[a-f0-9]{32}$"
-        },
-        "target": {
-          "type": "string",
-          "maxLength": 253,
-          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
-        },
-        "workloadDomain": {
-          "type": "string",
-          "maxLength": 253,
-          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
-        }
-      }
-    }
-  },
   "properties": {
     "k3s_dns": {
       "type": "object",
@@ -598,6 +572,30 @@
     }
   },
   "$defs": {
+    "k3sDnsIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "zoneId", "target", "workloadDomain"],
+      "properties": {
+        "mode": {
+          "const": "crossplane-http"
+        },
+        "zoneId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{32}$"
+        },
+        "target": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
+        },
+        "workloadDomain": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
+        }
+      }
+    },
     "reliabilityValidationRole": {
       "type": "object",
       "additionalProperties": false,
