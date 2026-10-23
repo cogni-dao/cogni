@@ -80,6 +80,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
   - `/api/v1/knowledge/contributions/[id]/commits` [GET, POST] - list/append authenticated contribution branch commits
+- Fixed service target `scheduler-worker-custodied-routing` on `/api/v1/deploy/infra-reconcile`: own-production custodian only; additive Git publication or receipt rollback; publication is not rollout proof.
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
 
 ## Responsibilities
