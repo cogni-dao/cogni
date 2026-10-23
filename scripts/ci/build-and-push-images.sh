@@ -144,9 +144,16 @@ build_target() {
     --label "org.opencontainers.image.revision=${git_sha}"
     --label "org.opencontainers.image.created=${build_timestamp}"
     --cache-from "type=gha,scope=build-${target}"
-    --cache-to "type=gha,mode=max,scope=build-${target}"
     --tag "$tag"
   )
+  # A trusted dispatch can build unmerged/fork source at workflow ref main.
+  # Its runtime token therefore writes MAIN's cache namespace, unlike ordinary
+  # PR events. Keep imports, but never export unmerged dispatch layers there.
+  if [ "${GITHUB_EVENT_NAME:-}" != workflow_dispatch ]; then
+    args+=(--cache-to "type=gha,mode=max,scope=build-${target}")
+  else
+    log_info "Cache export disabled for workflow_dispatch; trusted-main cache stays read-only"
+  fi
   if [ "$SHOULD_PUSH" = "false" ]; then
     # FORK_FREEDOM build-only: validate the image compiles; do not push.
     args+=("$context")

@@ -18,6 +18,11 @@ import { fileURLToPath } from "node:url";
 const env = process.env;
 const policyPath = "scripts/ci/ci-proof-plan.mjs";
 const configPath = "scripts/vitest/vitest.native.config.mts";
+// This input audit is valid for these exact native sources/configuration. A
+// later native addition or setup import cannot silently inherit app exemptions:
+// review its inputs and refresh these fingerprints, or continue full proof.
+const auditedNativeTree = "7b248606a89b3c84f299a64f4803c788cb03a6f4";
+const auditedNativeConfig = "477e50e5d934b2fc555e847dda909a645bc405e6";
 // Audit: native files import stdlib/testcontainers/dockerode/yaml/Vitest only;
 // committed reads are infra/compose/** and scripts/ci/deploy-infra.sh. The
 // standalone native config imports no app setup/instrumentation. All dependency,
@@ -76,6 +81,12 @@ function plan() {
       "policy-bytes-mismatch"
     );
     const config = git("rev-parse", `${base}:${configPath}`).trim();
+    requireThat(
+      config === auditedNativeConfig &&
+        git("rev-parse", `${base}:tests/ci-invariants/native`).trim() ===
+          auditedNativeTree,
+      "native-input-audit-needs-refresh"
+    );
     requireThat(
       config === git("rev-parse", `${head}:${configPath}`).trim(),
       "native-config-incompatible"

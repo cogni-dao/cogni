@@ -13,6 +13,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -63,7 +64,12 @@ function fixture(run) {
   try {
     git("init", "-q");
     put(policy, readFileSync(cli));
-    put(config);
+    put(config, readFileSync(resolve(config)));
+    cpSync(
+      resolve("tests/ci-invariants/native"),
+      join(cwd, "tests/ci-invariants/native"),
+      { recursive: true }
+    );
     put("docs/old.md");
     const base = commit();
     run({
@@ -150,6 +156,78 @@ test("event policy identity cannot drift to a newer main or a PR policy", () =>
     assert.equal(plan(head, { POLICY_SHA: head }).native_required, "true");
     assert.equal(plan(head, { POLICY_SHA: base }).native_required, "false");
   }));
+
+test("native-source/config changes merged after the audit cannot inherit app exemptions", () => {
+  for (const file of [config, "tests/ci-invariants/native/new.spec.ts"])
+    fixture(({ put, commit, plan }) => {
+      put(file, "changed audit input");
+      const newBase = commit();
+      put("docs/later.md");
+      const head = commit();
+      const result = plan(head, {
+        EVENT_BASE_SHA: newBase,
+        POLICY_SHA: newBase,
+      });
+      assert.equal(result.native_required, "true");
+      assert.equal(result.reason, "native-input-audit-needs-refresh");
+    });
+});
+
+test("raw Buildx dispatch imports but cannot overwrite trusted-main cache", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "ci-build-cache-"));
+  const put = (file, content) => {
+    mkdirSync(dirname(join(cwd, file)), { recursive: true });
+    writeFileSync(join(cwd, file), content, { mode: 0o755 });
+  };
+  try {
+    put(
+      "scripts/build.sh",
+      readFileSync(resolve("scripts/ci/build-and-push-images.sh"))
+    );
+    put(
+      "scripts/lib/image-tags.sh",
+      `IMAGE_NAME_APP=ghcr.io/test/fixture\nis_infra_target() { return 1; }\nimage_name_for_target() { echo "$IMAGE_NAME_APP"; }\nimage_tag_for_target() { echo "$1:$2"; }\n`
+    );
+    put("infra/catalog/operator.yaml", "fixture");
+    put(
+      "bin/yq",
+      `#!/bin/sh\ncase "$*" in *.dockerfile*) echo Dockerfile;; *.type*) echo node;; *) echo .;; esac\n`
+    );
+    put(
+      "bin/docker",
+      `#!/bin/sh\nif [ "$1 $2" = 'buildx build' ]; then printf '%s\\n' "$@" > "$BUILD_ARGUMENTS"; fi\n`
+    );
+    for (const event of ["pull_request", "push", "workflow_dispatch"]) {
+      const argsFile = join(cwd, `${event}.args`);
+      execFileSync("bash", ["scripts/build.sh"], {
+        cwd,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${join(cwd, "bin")}:${process.env.PATH}`,
+          GITHUB_EVENT_NAME: event,
+          GITHUB_REF: "refs/heads/main",
+          TARGETS: "operator",
+          IMAGE_TAG: `sha-${sha}`,
+          BUILD_SHA: sha,
+          SHOULD_PUSH: "false",
+          GHCR_TOKEN: "",
+          GHCR_USERNAME: "",
+          BUILD_ARGUMENTS: argsFile,
+          OUTPUT_FILE: join(cwd, "images.json"),
+          GITHUB_OUTPUT: "",
+          GITHUB_STEP_SUMMARY: "",
+        },
+      });
+      const args = readFileSync(argsFile, "utf8");
+      assert.ok(args.includes("--cache-from"));
+      assert.equal(args.includes("--cache-to"), event !== "workflow_dispatch");
+      assert.ok(args.includes(`BUILD_SHA=${sha}`));
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 const unit = {
   CLASSIFIER_RESULT: "success",
