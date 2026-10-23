@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   localControl: vi.fn(),
   container: vi.fn(),
   placement: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock("@/app/_lib/auth/session", () => ({
@@ -36,6 +37,10 @@ vi.mock("@/bootstrap/container", () => ({
   resolveLocalReliabilityControl: () => mocks.localControl(),
   getContainer: () => mocks.container(),
   resolveDatabasePlacementResolver: () => ({ resolve: mocks.placement }),
+}));
+vi.mock("@/shared/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/shared/observability")>()),
+  makeLogger: () => ({ warn: mocks.warn, info: vi.fn(), error: vi.fn() }),
 }));
 vi.mock("@/features/nodes/reliability-status", () => ({
   readReliabilityStatus: vi.fn(),
@@ -203,6 +208,16 @@ describe("human-session reliability readmission", () => {
     });
     expect(mocks.container).not.toHaveBeenCalled();
     expect(mocks.authorize).not.toHaveBeenCalled();
+    expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
+      {
+        event: "feature.node_reliability.status_fallback",
+        nodeId,
+        env: "candidate-a",
+        source: "actuator",
+        errorCode: "actuator_unavailable",
+      },
+      "feature.node_reliability.status_fallback"
+    );
   });
 });
 
@@ -300,5 +315,49 @@ describe("node-scoped health for nodes outside the actuator sweep (bug.5519)", (
       incidentReason: "required reliability evidence is missing",
       utilization: { evidenceScope: "environment-shared" },
     });
+    expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        event: "feature.node_reliability.status_fallback",
+        source: "actuator",
+        errorCode: "reliability_status_unavailable",
+      }),
+      "feature.node_reliability.status_fallback"
+    );
+  });
+
+  it("logs a registered fallback event without secrets before serving unknown when the metrics read fails", async () => {
+    mocks.container.mockReturnValue({
+      reliabilityStatusReader: { read: mocks.readStatus },
+      reliabilityMetrics: {
+        queryReliabilitySnapshot: async () => {
+          throw new Error("grafana_metrics_source_discovery_unavailable");
+        },
+      },
+    });
+
+    const response = await GET(
+      new Request(
+        `https://cognidao.org/api/v1/nodes/poly/observability/health?env=production`
+      ),
+      { params: Promise.resolve({ id: "poly" }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      state: "unknown",
+      regionalReadiness: [],
+      evidenceQueryRefs: [],
+    });
+    expect(mocks.warn).toHaveBeenLastCalledWith(
+      {
+        event: "feature.node_reliability.status_fallback",
+        nodeId,
+        env: "production",
+        source: "metrics",
+        errorCode: "grafana_metrics_source_discovery_unavailable",
+      },
+      "feature.node_reliability.status_fallback"
+    );
+    expect(mocks.warn).toHaveBeenCalledTimes(2);
   });
 });

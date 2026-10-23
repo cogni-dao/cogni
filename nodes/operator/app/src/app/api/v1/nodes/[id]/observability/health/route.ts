@@ -16,12 +16,45 @@ import {
 import { readReliabilityStatus } from "@/features/nodes/reliability-status";
 import { getServerSessionUser } from "@/lib/auth/server";
 import type { DatabaseContainmentStatus } from "@/ports";
+import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const ENVIRONMENTS = ["candidate-a", "preview", "production"] as const;
 type Environment = (typeof ENVIRONMENTS)[number];
+
+const log = makeLogger({ component: "NodeReliabilityHealthRoute" });
+
+/** Code-authored error messages only; never request data or credentials. */
+function reliabilityErrorCode(error: unknown): string {
+  if (!(error instanceof Error)) return "non_error_thrown";
+  const code = error.message
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64);
+  return code || error.name;
+}
+
+/** bug.5519: a fail-closed fallback must never be silent. */
+function logStatusFallback(input: {
+  nodeId: string;
+  env: Environment;
+  source: "actuator" | "metrics";
+  error: unknown;
+}): void {
+  log.warn(
+    {
+      event: EVENT_NAMES.NODE_RELIABILITY_STATUS_FALLBACK,
+      nodeId: input.nodeId,
+      env: input.env,
+      source: input.source,
+      errorCode: reliabilityErrorCode(input.error),
+    },
+    EVENT_NAMES.NODE_RELIABILITY_STATUS_FALLBACK
+  );
+}
 
 function isEnvironment(value: string | null | undefined): value is Environment {
   return ENVIRONMENTS.some((candidate) => candidate === value);
@@ -109,7 +142,15 @@ export async function GET(
           nodeSlug: gate.node.slug,
           environment,
         })
-        .catch(() => null)
+        .catch((error: unknown) => {
+          logStatusFallback({
+            nodeId: gate.node.nodeId,
+            env: environment,
+            source: "actuator",
+            error,
+          });
+          return null;
+        })
     : null;
   if (actuatorStatus) {
     return NextResponse.json(reliabilityStatusV1Schema.parse(actuatorStatus));
@@ -196,34 +237,42 @@ export async function GET(
     // bug.5519: nodes outside the actuator sweep read the same governed
     // Grafana datasource authority, never the unconfigured Basic-auth port.
     container.reliabilityMetrics
-  ).catch(() => ({
-    version: "reliability-status.v1" as const,
-    nodeId: gate.node.nodeId,
-    slug: gate.node.slug,
-    environment,
-    buildSha,
-    databaseTier: placement?.desiredTier ?? "unknown",
-    budgetProfile: placement?.budgetProfile ?? null,
-    state: "unknown" as const,
-    regionalReadiness: [],
-    utilization: {
-      evidenceScope: "environment-shared" as const,
-      ioPressurePct: null,
-      connectionPct: null,
-      memoryHeadroomPct: null,
-      diskHeadroomPct: null,
-      databaseShare5m: {
-        backendsPct: null,
-        physicalReadsPct: null,
-        tempBytesPct: null,
+  ).catch((error: unknown) => {
+    logStatusFallback({
+      nodeId: gate.node.nodeId,
+      env: environment,
+      source: "metrics",
+      error,
+    });
+    return {
+      version: "reliability-status.v1" as const,
+      nodeId: gate.node.nodeId,
+      slug: gate.node.slug,
+      environment,
+      buildSha,
+      databaseTier: placement?.desiredTier ?? "unknown",
+      budgetProfile: placement?.budgetProfile ?? null,
+      state: "unknown" as const,
+      regionalReadiness: [],
+      utilization: {
+        evidenceScope: "environment-shared" as const,
+        ioPressurePct: null,
+        connectionPct: null,
+        memoryHeadroomPct: null,
+        diskHeadroomPct: null,
+        databaseShare5m: {
+          backendsPct: null,
+          physicalReadsPct: null,
+          tempBytesPct: null,
+        },
       },
-    },
-    incidentId: null,
-    incidentReason: "required reliability evidence is missing",
-    observedAt: new Date().toISOString(),
-    lastTransitionAt: null,
-    evidenceQueryRefs: [],
-  }));
+      incidentId: null,
+      incidentReason: "required reliability evidence is missing",
+      observedAt: new Date().toISOString(),
+      lastTransitionAt: null,
+      evidenceQueryRefs: [],
+    };
+  });
 
   return NextResponse.json(reliabilityStatusV1Schema.parse(status));
 }

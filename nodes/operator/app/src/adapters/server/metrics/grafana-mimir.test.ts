@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createGrafanaMimirAdapter,
   createLazyGrafanaMimirAdapter,
+  DISCOVERY_FAILURE_BACKOFF_MS,
 } from "./grafana-mimir.adapter";
 
 const config = {
@@ -18,7 +19,10 @@ const datasource = {
   url: "https://prometheus-fixture.grafana.net/api/prom",
 };
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("existing Grafana Prometheus authority", () => {
   it("discovers exactly the governed source and queries its same-origin proxy with bearer auth", async () => {
@@ -128,7 +132,7 @@ describe("existing Grafana Prometheus authority", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("defers discovery to first read, reuses it, and retries after a failed discovery (bug.5519)", async () => {
+  it("defers discovery to first read, negative-caches a failure for the backoff window, then retries and reuses it (bug.5519)", async () => {
     const vector = () =>
       new Response(
         JSON.stringify({
@@ -143,11 +147,19 @@ describe("existing Grafana Prometheus authority", () => {
       .mockResolvedValueOnce(vector())
       .mockResolvedValueOnce(vector());
     vi.stubGlobal("fetch", fetch);
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const port = createLazyGrafanaMimirAdapter(config);
     expect(fetch).not.toHaveBeenCalled();
     await expect(port.queryInstant({ query: "up" })).rejects.toThrow(
       "discovery_unavailable"
     );
+    now += DISCOVERY_FAILURE_BACKOFF_MS - 1;
+    await expect(port.queryInstant({ query: "up" })).rejects.toThrow(
+      "discovery_unavailable"
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+    now += 1;
     await port.queryInstant({ query: "up" });
     await port.queryInstant({ query: "up" });
     expect(

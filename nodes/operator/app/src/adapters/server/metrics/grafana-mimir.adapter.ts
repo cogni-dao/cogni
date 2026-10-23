@@ -16,7 +16,10 @@
 
 import { z } from "zod";
 import type { MetricsQueryPort } from "@/ports";
+import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 import { MimirMetricsAdapter } from "./mimir.adapter";
+
+const logger = makeLogger({ component: "GrafanaMimirAdapter" });
 
 interface GrafanaMimirInput {
   grafanaUrl: string;
@@ -24,17 +27,36 @@ interface GrafanaMimirInput {
   timeoutMs: number;
 }
 
+/** A failed discovery is reused for this window instead of re-dialing Grafana per request. */
+export const DISCOVERY_FAILURE_BACKOFF_MS = 30_000;
+
 /**
  * Synchronous wiring for request-path containers (bug.5519): datasource
- * discovery runs on first read and is retried after a failed discovery.
+ * discovery runs on first read; a failure is logged once and negative-cached
+ * for DISCOVERY_FAILURE_BACKOFF_MS before the next attempt.
  */
 export function createLazyGrafanaMimirAdapter(
   input: GrafanaMimirInput
 ): MetricsQueryPort {
   let adapter: Promise<MimirMetricsAdapter> | null = null;
+  let failure: { error: unknown; until: number } | null = null;
   const resolve = () => {
+    if (failure && Date.now() < failure.until)
+      return Promise.reject(failure.error);
     adapter ??= createGrafanaMimirAdapter(input).catch((error: unknown) => {
       adapter = null;
+      failure = { error, until: Date.now() + DISCOVERY_FAILURE_BACKOFF_MS };
+      logger.error(
+        {
+          event: EVENT_NAMES.ADAPTER_MIMIR_ERROR,
+          dep: "mimir",
+          reasonCode: "datasource_discovery_failed",
+          errorCode:
+            error instanceof Error ? error.message.slice(0, 120) : "non_error",
+          backoffMs: DISCOVERY_FAILURE_BACKOFF_MS,
+        },
+        EVENT_NAMES.ADAPTER_MIMIR_ERROR
+      );
       throw error;
     });
     return adapter;

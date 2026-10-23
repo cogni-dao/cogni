@@ -37,6 +37,9 @@ export const EVENT_NAMES = {
   NODE_RELIABILITY_ACTUATOR_STOPPING:
     "feature.node_reliability.actuator_stopping",
   NODE_RELIABILITY_HTTP_FAILED: "feature.node_reliability.http_failed",
+  // bug.5519: health route evidence read failed and the route served its
+  // fail-closed `unknown` fallback. Fields: nodeId, env, source, errorCode.
+  NODE_RELIABILITY_STATUS_FALLBACK: "feature.node_reliability.status_fallback",
   NODE_DISTRIBUTION_ACTIVATION_COMPLETE:
     "feature.node_distribution_activation.complete",
   NODE_DAO_RESET_COMPLETE: "feature.node_dao_reset.complete",

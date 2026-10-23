@@ -294,7 +294,8 @@ export interface Container {
   paymentRailGuard: PaymentRailGuardPort;
   metricsQuery: MetricsQueryPort;
   /**
-   * Closed reliability reads for node-scoped health (bug.5519): the same governed
+   * TEMPORARY until PROMETHEUS_READ_* read-only token is provisioned; then delete and use metricsQuery.
+   * Closed reliability reads for node-scoped health (bug.5519) through the same governed
    * Grafana datasource authority as the actuator; falls back to metricsQuery.
    */
   reliabilityMetrics: MetricsQueryPort;
@@ -709,6 +710,7 @@ function createContainer(): Container {
         return new MimirMetricsAdapter(mimirConfig);
       })();
 
+  // TEMPORARY until PROMETHEUS_READ_* read-only token is provisioned; then delete and use metricsQuery.
   const reliabilityMetrics: MetricsQueryPort =
     !env.isTestMode && env.GRAFANA_URL && env.GRAFANA_SERVICE_ACCOUNT_TOKEN
       ? createLazyGrafanaMimirAdapter({
