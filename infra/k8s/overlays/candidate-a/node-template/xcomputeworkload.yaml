@@ -11,13 +11,13 @@ spec:
   nodeId: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
   environment: candidate-a
   bundle:
-    ref: ghcr.io/cogni-dao/node-template@sha256:f3458bb29a4905716dba22d68fe2a02a59f90f8da3de12591c4143233a457f94
+    ref: ghcr.io/cogni-dao/node-template@sha256:006f64630e040d825c2a2f587e2816a8afada140c0674adbb3149dbb86bb5a4b
     source:
       repository: cogni-dao/node-template
-      sha: 4e2a86ca179f13ee3a413554cbeeb86948af5e83
+      sha: 2cc9980ed9e5970facf5e60772f1c700daa3a47f
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/node-template@sha256:99b5ffff6e5d3e631ac7733d641a64755a15a817316ee1ce31c177ce2226f5c4
+        image: ghcr.io/cogni-dao/node-template@sha256:b992719a1b8dad08666deef08c24154873270e149441a3111c79bfd3c1d28e60
   workload:
     name: node-template
     publicHost: node-template-test.cognidao.org
@@ -29,10 +29,29 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: DATABASE_SSL_CA_CERT
+          - key: DOLTGRES_URL
           - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
+        command:
+          - /bin/sh
+          - -ec
+          - |-
+            set -eu
+            if [ -n "${DATABASE_SSL_CA_CERT:-}" ]; then
+              umask 077
+              cogni_db_ca_file=$(mktemp /tmp/cogni-database-ca.XXXXXX)
+              printf "%s\n" "$DATABASE_SSL_CA_CERT" > "$cogni_db_ca_file"
+              export NODE_EXTRA_CA_CERTS="$cogni_db_ca_file"
+              export PGSSLROOTCERT="$cogni_db_ca_file"
+            fi
+            exec "$@"
+          - cogni-database-trust
+        args:
+          - node
+          - app/server.js
         port: 3200
         visibility: public
         bindings: {}
@@ -41,12 +60,14 @@ spec:
         memoryMi: 2048
         storageMi: 4096
   migration:
-    policy: RequireBeforeTransaction
+    policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Close
-  leaseEpoch: 0
+    onGiveUp: Hold
+  leaseGeneration: 0
+  actuatorNamespace: cogni-production
   dns:
     provider: cloudflare
     zoneId: 23220356c352c5831c6af57887b11a27
   runtime:
-    substrateHost: cogni-candidate-a.vm.cognidao.org
+    substrateHost: cogni.vm.cognidao.org
