@@ -571,7 +571,15 @@ for k in "${NODE_BASELINE_KEYS[@]}"; do
   inherit_from="$(_cat_field "$k" '.inheritFrom')"
   if [[ -n "$inherit_from" && "$inherit_from" != "null" ]]; then
     v="$(bao_get_field "$inherit_from" "$k" owner)"
-    [[ -z "$v" ]] && continue
+    if [[ -z "$v" ]]; then
+      # Optional, wholly unconfigured integrations stay disabled. A required
+      # input or an existing target copy needs affirmative owner authority;
+      # neither a stale target nor a runner env value can replace that read.
+      if [[ "$(_cat_field "$k" '.required')" == true || -n "$(bao_get_field "$TARGET_NODE" "$k")" ]]; then
+        fail "declared owner ${inherit_from}/${k} is absent in ${SECRETS_CONTROL_ENV}; refusing target fallback"
+      fi
+      continue
+    fi
     if [[ "$(bao_get_field "$TARGET_NODE" "$k")" == "$v" ]]; then
       unchanged=$((unchanged + 1))
       continue
