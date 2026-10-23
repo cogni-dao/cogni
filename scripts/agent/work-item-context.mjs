@@ -1,13 +1,13 @@
-#!/usr/bin/env node
-
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
+ * Module: `@scripts/agent/work-item-context`
  * Purpose: Return node-owned workflow guidance alongside existing work-item API results.
- * Scope: External-agent CLI and offline Codex SessionStart projection; no stage engine.
+ * Scope: External-agent CLI and offline Codex SessionStart projection. Does not implement a stage engine or server policy.
  * Invariants: NODE_CREDENTIAL_ONLY, SAME_ORIGIN, READ_NEVER_ADVANCES, NEVER_REPLAY_WRITES.
- * Side-effects: Explicit HTTP mutations; disposable per-native-session context cache.
+ * Side-effects: IO (explicit HTTP mutations and disposable per-native-session context cache).
+ * Links: https://cognidao.org/work/items/task.5300, .codex/config.toml
  * Usage: node scripts/agent/work-item-context.mjs claim|update|link-pr|next ITEM
  *   --node-url https://your-node.example --body '{...}' [--guide entry-id]
  *   session-start reads only this native session's local projection, never the network.
@@ -91,7 +91,7 @@ export function parseEnv(text) {
   const values = {};
   for (const line of text.split(/\r?\n/)) {
     const match = line.match(
-      /^(?:export\s+)?(COGNI_NODE_API_KEY|COGNI_NODE_URL)\s*=\s*(.*?)\s*$/
+      /^(?:export\s+)?(COGNI_NODE_API_KEY|COGNI_OPERATOR_NODE_API_KEY|COGNI_NODE_URL)\s*=\s*(.*?)\s*$/
     );
     if (match) values[match[1]] = match[2].replace(/^(['"])(.*)\1$/, "$2");
   }
@@ -275,10 +275,18 @@ export async function run(
     const guideEnv = parseEnv(
       await readFile(resolve(root, options["guide-env-file"]), "utf8")
     );
-    guideKey = guideEnv.COGNI_NODE_API_KEY;
+    // Nodes already store their separate operator knowledge-reader principal
+    // under this name. A distinct owning hub env file may instead name its own
+    // NODE key. Deployment credentials are deliberately never considered.
+    guideKey =
+      guideEnv.COGNI_OPERATOR_NODE_API_KEY ?? guideEnv.COGNI_NODE_API_KEY;
     if (!guideKey)
       throw new Error(
-        "Selected guidance credential file has no COGNI_NODE_API_KEY"
+        "Selected guidance file has no node or operator knowledge-reader key"
+      );
+    if (guideKey === key)
+      throw new Error(
+        "Cross-hub guidance requires a separate reader key; refusing to forward this node's credential"
       );
   }
   const requestedGuide = options.guide ?? CORE_GUIDE;

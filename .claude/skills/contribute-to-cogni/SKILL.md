@@ -35,8 +35,9 @@ Read that result before taking the next dependent action.
 
 Guides live at their owning hub. For shared shipping guidance on another hub,
 pass `--guide-origin <owning origin> --guide-env-file <its private env file>`.
-That file supplies the owning hub's separate `COGNI_NODE_API_KEY`; credentials
-are never implicitly forwarded across origins. Reuse an existing reader identity.
+That file supplies the existing `COGNI_OPERATOR_NODE_API_KEY`, or the owning
+hub's separate `COGNI_NODE_API_KEY` from its own env file. The client rejects
+forwarding this node's key across origins. Reuse an existing reader identity.
 Use `--env-file <this node's private env file>` when the process environment
 belongs to another node. Missing sources or auth hold dependent work.
 

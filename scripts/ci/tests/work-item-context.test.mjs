@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
-/** Purpose: Exercise the external guidance client's real HTTP/cache boundaries. */
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+/**
+ * Module: `@scripts/ci/tests/work-item-context`
+ * Purpose: Exercise the external guidance client's HTTP and cache boundaries.
+ * Scope: Hermetic HTTP boundary tests. Does not mock a database or prove native model adherence.
+ * Invariants: READ_NEVER_ADVANCES, NEVER_REPLAY_WRITES, SAME_ORIGIN_CREDENTIALS.
+ * Side-effects: IO (loopback HTTP server and disposable temporary Git fixtures).
+ * Links: scripts/agent/work-item-context.mjs, https://cognidao.org/work/items/task.5300
+ * @internal
+ */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
@@ -314,6 +322,34 @@ test("cross-hub reads use explicitly separate credentials and never forward the 
   assert.equal(guide.state.calls.at(-1).key, "Bearer guide-secret");
   assert.ok(!guide.state.calls.some((x) => x.key === "Bearer node-secret"));
   assert.equal(result.context.guideOrigin, guide.origin);
+  await writeFile(
+    join(node.cwd, "guidance.env"),
+    "COGNI_NODE_API_KEY=node-secret\nCOGNI_OPERATOR_NODE_API_KEY=existing-operator-reader\n"
+  );
+  await node.call([
+    "next",
+    "task.1000",
+    "--guide-origin",
+    guide.origin,
+    "--guide-env-file",
+    "guidance.env",
+  ]);
+  assert.equal(guide.state.calls.at(-1).key, "Bearer existing-operator-reader");
+  await writeFile(
+    join(node.cwd, "guidance.env"),
+    "COGNI_NODE_API_KEY=node-secret\n"
+  );
+  await assert.rejects(
+    node.call([
+      "next",
+      "task.1000",
+      "--guide-origin",
+      guide.origin,
+      "--guide-env-file",
+      "guidance.env",
+    ]),
+    /refusing to forward/
+  );
 });
 
 test("stale claim, another native thread and read-only inspection do not create ownership", async (t) => {
