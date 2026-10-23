@@ -481,3 +481,62 @@ describe("bounded regex input", () => {
     });
   });
 });
+
+describe("aggregate pre-scrub work budget", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it("bounds repeated short tokens across status, tags and allowlisted metadata before scrubbing", async () => {
+    const repeated = `${"a".repeat(2048)} `.repeat(24);
+    const rows = ["obs-a", "obs-b"].map((id) => ({
+      ...observation(id),
+      statusMessage: repeated,
+      tags: [repeated],
+      metadata: {
+        nodeId: NODE_ID,
+        graphName: repeated,
+        user_api_key_auth: "private-only".repeat(1000),
+      },
+    }));
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({ data: rows, meta: { cursor: "upstream-next" } })
+    );
+    const result = await nativeReader().listObservations(
+      nativeQuery("&limit=100")
+    );
+    expect(result.data.map((row) => row.id)).toEqual(["obs-a", "obs-b"]);
+    for (const row of result.data) {
+      expect(row).toMatchObject({
+        statusMessage: null,
+        tags: null,
+        metadata: null,
+      });
+      expect(row.output).toContain("tool_calls");
+    }
+    expect(result.meta.cogni).toMatchObject({
+      truncated: true,
+      partial: true,
+      attributionUnavailable: 0,
+    });
+    expect(result.meta.cursor).toBeTruthy();
+    expect(JSON.stringify(result)).not.toContain(repeated);
+  });
+
+  it("returns an explicit bounded failure when required identity alone exceeds a row budget", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        data: [observation("x".repeat(12_000))],
+        meta: { cursor: "next" },
+      })
+    );
+    await expect(
+      nativeReader().listObservations(nativeQuery("&limit=100"))
+    ).rejects.toMatchObject({
+      code: "observability_response_too_large",
+      status: 502,
+    });
+  });
+});

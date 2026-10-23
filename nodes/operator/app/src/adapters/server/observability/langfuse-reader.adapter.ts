@@ -208,18 +208,7 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
         unavailable++;
         continue;
       }
-      const bounded = { ...row };
-      for (const field of ["input", "output", "modelParameters"]) {
-        if (
-          field in bounded &&
-          Buffer.byteLength(JSON.stringify(bounded[field]) ?? "") >
-            rowBudget / 2
-        ) {
-          bounded[field] = null;
-          truncated = true;
-        }
-      }
-      const projected = projectObservation(bounded, query.fields, () => {
+      const projected = projectObservation(row, query.fields, rowBudget, () => {
         truncated = true;
       });
       if (Buffer.byteLength(JSON.stringify(projected)) > rowBudget) {
@@ -521,9 +510,12 @@ function scrubValue(
   }
   return value;
 }
+// Selection and raw byte budgeting happen before any content scrubbing. Every authorized row
+// stays in the native page: oversized optional fields become null; core identity cannot be dropped.
 function projectObservation(
   row: Readonly<Record<string, unknown>>,
   fields: string,
+  rawByteBudget: number,
   onTruncated: () => void
 ): Record<string, unknown> {
   const allowed = new Set(
@@ -534,6 +526,80 @@ function projectObservation(
     row.metadata && typeof row.metadata === "object"
       ? (row.metadata as Record<string, unknown>)
       : {};
+  for (const key of allowed) {
+    if (!(key in row)) continue;
+    if (key === "metadata") {
+      result.metadata =
+        row.metadata &&
+        typeof row.metadata === "object" &&
+        !Array.isArray(row.metadata)
+          ? Object.fromEntries(
+              Object.entries(metadata)
+                .filter(([k]) => METADATA_KEYS.has(k))
+                .map(([k, v]) => [
+                  k,
+                  typeof v === "string" ||
+                  typeof v === "number" ||
+                  typeof v === "boolean"
+                    ? k === "nodeId" || /Id$/.test(k)
+                      ? typeof v === "string" &&
+                        v.length <= 256 &&
+                        /^[a-zA-Z0-9:_.-]+$/.test(v)
+                        ? v
+                        : null
+                      : v
+                    : null,
+                ])
+            )
+          : null;
+    } else if (key === "usageDetails" || key === "costDetails") {
+      const value = row[key];
+      result[key] =
+        value && typeof value === "object" && !Array.isArray(value)
+          ? Object.fromEntries(
+              Object.entries(value).filter(
+                ([, v]) => typeof v === "number" && Number.isFinite(v)
+              )
+            )
+          : null;
+    } else result[key] = row[key];
+  }
+  if (!fields.split(",").includes("model")) {
+    for (const field of ["modelId", "inputPrice", "outputPrice", "totalPrice"])
+      result[field] = null;
+  }
+
+  // rowBudget * requested limit is <=1MiB (less metadata/cursor headroom). Counting the selected
+  // raw fields prevents redaction-shrunk output from multiplying regex work across fields/rows.
+  let selectedBytes = Buffer.byteLength(JSON.stringify(result));
+  if (selectedBytes > rawByteBudget) {
+    const identity = new Set([
+      "id",
+      "traceId",
+      "startTime",
+      "endTime",
+      "projectId",
+      "parentObservationId",
+      "type",
+    ]);
+    const optional = Object.entries(result)
+      .filter(([key]) => !identity.has(key))
+      .map(([key, value]) => ({
+        key,
+        bytes: Buffer.byteLength(JSON.stringify(value) ?? "null"),
+      }))
+      .sort((a, b) => b.bytes - a.bytes);
+    for (const field of optional) {
+      if (selectedBytes <= rawByteBudget) break;
+      if (field.bytes <= 4) continue;
+      result[field.key] = null;
+      selectedBytes -= field.bytes - 4;
+      onTruncated();
+    }
+    if (selectedBytes > rawByteBudget)
+      throw new LangfuseReadError("observability_response_too_large", 502);
+  }
+
   const privateValues = [
     "user_api_key_hash",
     "user_api_key",
@@ -554,56 +620,24 @@ function projectObservation(
       safe = safe.split(JSON.stringify(secret).slice(1, -1)).join("[REDACTED]");
     return JSON.parse(safe) as unknown;
   };
-  for (const key of allowed) {
-    if (!(key in row)) continue;
-    if (key === "metadata") {
-      const m = row.metadata;
-      result.metadata =
-        m && typeof m === "object" && !Array.isArray(m)
-          ? Object.fromEntries(
-              Object.entries(m)
-                .filter(([k]) => METADATA_KEYS.has(k))
-                .map(([k, v]) => [
-                  k,
-                  typeof v === "string" ||
-                  typeof v === "number" ||
-                  typeof v === "boolean"
-                    ? k === "nodeId" || /Id$/.test(k)
-                      ? typeof v === "string" &&
-                        v.length <= 256 &&
-                        /^[a-zA-Z0-9:_.-]+$/.test(v)
-                        ? v
-                        : null
-                      : scrubValue(v, onTruncated)
-                    : null,
-                ])
-            )
-          : null;
-    } else if (key === "usageDetails" || key === "costDetails") {
-      const value = row[key];
-      result[key] =
-        value && typeof value === "object" && !Array.isArray(value)
-          ? Object.fromEntries(
-              Object.entries(value).filter(
-                ([, v]) => typeof v === "number" && Number.isFinite(v)
-              )
-            )
-          : null;
-    } else {
-      result[key] = [
-        "input",
-        "output",
-        "modelParameters",
-        "statusMessage",
-        "tags",
-      ].includes(key)
-        ? scrubContent(row[key])
-        : row[key];
-    }
+  for (const key of [
+    "input",
+    "output",
+    "modelParameters",
+    "statusMessage",
+    "tags",
+  ]) {
+    if (key in result) result[key] = scrubContent(result[key]);
   }
-  if (!fields.split(",").includes("model")) {
-    for (const field of ["modelId", "inputPrice", "outputPrice", "totalPrice"])
-      result[field] = null;
+  if (result.metadata && typeof result.metadata === "object") {
+    result.metadata = Object.fromEntries(
+      Object.entries(result.metadata).map(([key, value]) => [
+        key,
+        key === "nodeId" || /Id$/.test(key)
+          ? value
+          : scrubValue(value, onTruncated),
+      ])
+    );
   }
   return result;
 }

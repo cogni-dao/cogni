@@ -393,6 +393,11 @@ native Langfuse read contract, not a replacement Langfuse SDK base URL. The exis
   a string; recursively scrubbed JSON strings remain strings. Native `sessionId` belongs to `basic`;
   `tags`, `release` and `traceName` belong to `trace_context`. The `basic.userId` field is deliberately
   withheld by privacy policy; model pricing enrichment is null unless `model` is requested.
+  All selected fields, including status messages, tags and allowlisted metadata, share a raw-byte
+  budget per observation before any content scrubbing. The page-wide sum is at most 1 MiB less
+  response overhead: oversized optional fields become native null with truncated/partial flags,
+  every authorized observation stays in its page, and oversized required identity fails explicitly.
+  Private metadata omitted by the allowlist does not consume this budget.
   Before inherited content regexes run, a linear scan withholds unbroken string-leaf tokens longer
   than 2,048 characters and marks `meta.cogni.truncated/partial`; ordinary long prose is preserved.
   Metadata uses an explicit allowlist;
