@@ -68,6 +68,9 @@ patches:
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
         value: "poly-env-secrets"
       - op: replace
+        path: /spec/template/spec/initContainers/0/env/0/valueFrom/secretKeyRef/name
+        value: "poly-migration-secrets"
+      - op: replace
         path: /spec/template/spec/initContainers/0/command/2
         value: exec node /app/app/migrate.mjs /app/app/migrations
       - op: replace
