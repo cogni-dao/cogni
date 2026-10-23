@@ -365,6 +365,19 @@ jobs:
         with:
           cleanup: false # This job owns an ephemeral GitHub-hosted VM.
 
+      - name: Expose ephemeral cache runtime to raw Buildx CLI
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            for (const key of ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_URL', 'ACTIONS_CACHE_SERVICE_V2']) {
+              const value = process.env[key];
+              if (value) {
+                core.setSecret(value);
+                core.exportVariable(key, value);
+              }
+              core.info(`${key}: ${value ? 'present' : 'missing'}`);
+            }
+
       - name: Login to GHCR
         if: needs.resolve.outputs.should_push == 'true'
         uses: docker/login-action@v3

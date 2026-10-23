@@ -123,6 +123,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          fetch-depth: 0 # Migration immutability compares against origin/main.
 
       - name: Enforce env-manager classifier result
         env:
@@ -589,6 +591,9 @@ jobs:
 
       - name: Build workspace packages
         run: pnpm packages:build
+
+      - name: Install catalog schema validator for shell fixtures
+        run: pipx install 'check-jsonschema==0.37.1'
 
       - name: CI shell tests (serial mutators then parallel readers)
         run: bash scripts/ci/run-shell-tests.sh

@@ -54,6 +54,7 @@ test("actual root inventory equals disjoint core/native inventories", () => {
 
 test("CI always aggregates split children while retaining bounded signed skips", () => {
   const jobs = workflow("ci.yaml");
+  assert.equal(jobs.static.steps[0].with["fetch-depth"], 0);
   assert.deepEqual(jobs.unit.needs, [
     "env_manager_fast_path",
     "proof_plan",
@@ -96,6 +97,11 @@ test("CI always aggregates split children while retaining bounded signed skips",
   assert.ok(
     jobs.shell.steps.some((step) =>
       step.run?.includes("bash scripts/ci/run-shell-tests.sh")
+    )
+  );
+  assert.ok(
+    jobs.shell.steps.some((step) =>
+      step.run?.includes("check-jsonschema==0.37.1")
     )
   );
   const plan = jobs.proof_plan.steps.find((step) => step.id === "plan").run;
