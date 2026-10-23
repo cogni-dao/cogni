@@ -17,12 +17,13 @@
  *   - PATCH_ON_THE_LIVE_BACKLOG (story.5096): when `backlogWriter` is wired, `patch` goes
  *     through the SAME Doltgres `patch` that `PATCH /api/v1/work/items/{id}` uses, attributed
  *     to `backlogWriter.principalId`. The store's own authority applies unchanged (a
- *     non-creator may set only triage fields priority/rank/labels). Without it, `patch`
+ *     non-creator may set only triage fields priority/rank/labels/scores). Without it, `patch`
  *     stays on the markdown ports, which have no compare-and-set for callers.
  *     Priority (including 0/1) carries no extra node-admin gate (task.5306).
  *   - PATCH_CAS_PASSTHROUGH: a caller `expectedRevision` is forwarded as the store's
  *     compare-and-set; the store's `WorkItemRevisionConflictError` becomes the ai-tools
  *     `WorkItemPatchConflictError` (nothing written). Absent ⇒ unconditioned patch.
+ * Evaluation: returns package rankScore and forwards whole-score CAS patches without changing priority.
  * Side-effects: none (factory only)
  * Links: docs/spec/development-lifecycle.md
  * @internal
@@ -34,7 +35,7 @@ import {
   WorkItemPatchConflictError,
   type WorkItemQueryParams,
   type WorkItemTransitionResult,
-} from "@cogni/ai-tools";
+} from "@cogni/shared-ai-tools";
 import type {
   ActorKind,
   SubjectRef,
@@ -44,7 +45,7 @@ import type {
   WorkItemStatus,
   WorkItemType,
 } from "@cogni/work-items";
-import { toWorkItemId } from "@cogni/work-items";
+import { rankScore, toWorkItemId } from "@cogni/work-items";
 import {
   WorkItemRevisionConflictError,
   type WorkItemsDoltgresPort,
@@ -85,6 +86,7 @@ function assigneeId(a: SubjectRef): string {
 }
 
 function toWorkItemInfo(item: WorkItem): WorkItemInfo {
+  const evaluationRank = rankScore(item.scores);
   return {
     id: item.id,
     type: item.type,
@@ -96,6 +98,7 @@ function toWorkItemInfo(item: WorkItem): WorkItemInfo {
     ...(item.actor !== "either" && { actor: item.actor }),
     ...(item.priority !== undefined && { priority: item.priority }),
     ...(item.rank !== undefined && { rank: item.rank }),
+    ...(evaluationRank !== undefined && { rankScore: evaluationRank }),
     ...(item.summary !== undefined && { summary: item.summary }),
     ...(item.projectId !== undefined && { projectId: item.projectId }),
     ...(item.branch !== undefined && { branch: item.branch }),

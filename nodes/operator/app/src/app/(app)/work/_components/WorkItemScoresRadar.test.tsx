@@ -52,9 +52,9 @@ describe("WorkItemScoresRadar", () => {
     const shape = screen.getByTestId("score-shape");
     expect(shape.getAttribute("points")?.split(" ")).toHaveLength(4);
 
-    // User-facing copy says "Priority scores", never "do-it-now".
+    // User-facing copy says "Evaluation", never "do-it-now".
     expect(
-      screen.getByRole("img", { name: /^Priority scores radar/ })
+      screen.getByRole("img", { name: /^Evaluation radar/ })
     ).toBeInTheDocument();
     expect(container.innerHTML).not.toMatch(/do-it-now/i);
 
@@ -77,11 +77,11 @@ describe("WorkItemScoresRadar", () => {
       />
     );
 
-    const links = screen.getAllByRole("link", { name: /justification$/ });
+    const links = screen.getAllByRole("link", { name: /Justification$/ });
     expect(links).toHaveLength(1);
     const link = links[0];
-    expect(link).toHaveAccessibleName("Goal value justification");
-    expect(link).toHaveTextContent("justification");
+    expect(link).toHaveAccessibleName("Goal value Justification");
+    expect(link).toHaveTextContent("Justification");
     expect(link).toHaveAttribute(
       "href",
       "https://cognidao.org/work/items/story.5111"

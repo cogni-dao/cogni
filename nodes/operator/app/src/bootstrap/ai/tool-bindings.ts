@@ -7,6 +7,7 @@
  * Scope: Creates bindings record for tool source factory. Does NOT execute tools.
  * Invariants:
  *   - CAPABILITY_INJECTION: Implementations receive capabilities at construction
+ *   - SHARED_EVALUATION: baseline implementations come from the exact tools release; operator gates stay node-owned.
  *   - NO_STUB_AT_RUNTIME: All tools have real implementations with I/O
  *   - IO_VIA_ADAPTERS: Capabilities wrap adapter ports from container
  * Side-effects: none
@@ -26,13 +27,10 @@ import type {
   WorkItemCapability,
 } from "@cogni/ai-tools";
 import {
-  createEdoDecideImplementation,
   createEdoHypothesizeImplementation,
   createEdoRecordOutcomeImplementation,
-  createGoalListImplementation,
   createKnowledgeIndexImplementation,
   createKnowledgeReadImplementation,
-  createKnowledgeSearchImplementation,
   createKnowledgeWriteImplementation,
   createMetricsQueryImplementation,
   createRepoListImplementation,
@@ -46,14 +44,11 @@ import {
   createVcsListPrsImplementation,
   createVcsMergePrImplementation,
   createWebSearchImplementation,
-  createWorkItemQueryImplementation,
-  createWorkItemTransitionImplementation,
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
   GET_CURRENT_TIME_NAME,
   GOAL_LIST_NAME,
-  getCurrentTimeImplementation,
   KNOWLEDGE_INDEX_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
@@ -74,11 +69,21 @@ import {
   WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
 
+import {
+  createEdoDecideImplementation,
+  createGoalListImplementation,
+  createKnowledgeSearchImplementation,
+  createWorkItemQueryImplementation,
+  createWorkItemTransitionImplementation,
+  getCurrentTimeImplementation,
+} from "@cogni/shared-ai-tools";
+
 /**
  * Dependencies required to create tool bindings.
  * These are resolved from the container at bootstrap time.
  */
 export interface ToolBindingDeps {
+  readonly nodePublicOrigin?: string | undefined;
   readonly knowledgeCapability: KnowledgeCapability;
   readonly edoCapability: EdoCapability;
   readonly metricsCapability: MetricsCapability;
@@ -120,12 +125,14 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
 
     // Knowledge tools (Doltgres-backed knowledge store)
     [GOAL_LIST_NAME]: createGoalListImplementation({
+      nodePublicOrigin: deps.nodePublicOrigin,
       knowledgeCapability: deps.knowledgeCapability,
     }) as AnyToolImplementation,
     [KNOWLEDGE_INDEX_NAME]: createKnowledgeIndexImplementation({
       knowledgeCapability: deps.knowledgeCapability,
     }) as AnyToolImplementation,
     [KNOWLEDGE_SEARCH_NAME]: createKnowledgeSearchImplementation({
+      nodePublicOrigin: deps.nodePublicOrigin,
       knowledgeCapability: deps.knowledgeCapability,
     }) as AnyToolImplementation,
     [KNOWLEDGE_READ_NAME]: createKnowledgeReadImplementation({
@@ -197,6 +204,7 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
     }) as AnyToolImplementation,
 
     [WORK_ITEM_QUERY_NAME]: createWorkItemQueryImplementation({
+      nodePublicOrigin: deps.nodePublicOrigin,
       workItemCapability: deps.workItemCapability,
     }) as AnyToolImplementation,
 

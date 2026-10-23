@@ -18,7 +18,7 @@
  * @internal
  */
 
-import { WorkItemPatchConflictError } from "@cogni/ai-tools";
+import { WorkItemPatchConflictError } from "@cogni/shared-ai-tools";
 import type {
   WorkItem,
   WorkItemCommandPort,
@@ -247,5 +247,42 @@ describe("createWorkItemCapability", () => {
       "actor:system"
     );
     expect(result.id).toBe("task.5282");
+  });
+});
+
+describe("shared evaluation capability adoption", () => {
+  it("returns the package rank and forwards a score-only CAS patch unchanged", async () => {
+    const { query, command } = markdownPorts();
+    const scores = {
+      goal: { v: 3 },
+      time: { v: 3 },
+      unblocks: { v: 3 },
+      ease: { v: 2 },
+      confidence: { v: 5, ev: "https://example.com/proof" },
+      agent: { v: 3 },
+    };
+    const scored = item({ scores, priority: 2, estimate: 7, revision: 5 });
+    const store = { patch: vi.fn().mockResolvedValue(scored) };
+    const capability = createWorkItemCapability({
+      workItemQuery: query,
+      workItemCommand: command,
+      backlogWriter: { store, principalId: "actor:test" },
+    });
+    const result = await capability.patch({
+      id: scored.id,
+      expectedRevision: 4,
+      set: { scores },
+    });
+    expect(store.patch).toHaveBeenCalledWith(
+      { id: scored.id, expectedRevision: 4, set: { scores } },
+      "actor:test"
+    );
+    expect(result).toMatchObject({
+      scores,
+      rankScore: 1.8,
+      priority: 2,
+      estimate: 7,
+      revision: 5,
+    });
   });
 });
