@@ -17,6 +17,7 @@ import type { AiEvent } from "@cogni/ai-core";
 import {
   EDO_DECIDE_NAME,
   edoDecideContract,
+  GET_CURRENT_TIME_NAME,
   GOAL_LIST_NAME,
   goalListContract,
   knowledgeSearchContract,
@@ -173,12 +174,13 @@ const fakeExec: (emit: (e: AiEvent) => void) => ToolExecFn =
   };
 
 describe("work-prioritizer mission-loop agent", () => {
-  it("catalog entry wires the factory, the five tools, and the cycle event", () => {
+  it("catalog entry wires the factory, the six tools, and the cycle event", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry.graphFactory).toBe(createWorkPrioritizerGraph);
     expect(entry.toolIds).toEqual(WORK_PRIORITIZER_TOOL_IDS);
-    expect(entry.toolIds).toHaveLength(5);
+    expect(entry.toolIds).toHaveLength(6);
     expect(entry.toolIds).toContain(EDO_DECIDE_NAME);
+    expect(entry.toolIds).toContain(GET_CURRENT_TIME_NAME);
     expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });
   });
 

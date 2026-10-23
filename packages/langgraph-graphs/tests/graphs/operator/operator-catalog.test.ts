@@ -18,6 +18,7 @@ import {
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
+  GET_CURRENT_TIME_NAME,
   GOAL_LIST_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
@@ -71,7 +72,7 @@ describe("operator catalog entries", () => {
     expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
   });
 
-  it("work-prioritizer (mission loop) is operator-only with the exact five-tool allowlist", () => {
+  it("work-prioritizer (mission loop) is operator-only with the exact six-tool allowlist", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
     expect(entry.graphFactory).toBe(createWorkPrioritizerGraph);
@@ -82,6 +83,7 @@ describe("operator catalog entries", () => {
         WORK_ITEM_TRANSITION_NAME,
         KNOWLEDGE_SEARCH_NAME,
         EDO_DECIDE_NAME,
+        GET_CURRENT_TIME_NAME,
       ].sort()
     );
     expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });
