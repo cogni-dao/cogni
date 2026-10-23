@@ -3,8 +3,8 @@
 
 /**
  * Module: `@cogni/knowledge-store/tests/edo-read-filter`
- * Purpose: Prove the default read filter (SCHEMA_REFINED_BY_READ_FILTER, R1 LibrarianReadFilter): searchKnowledge/listKnowledge hide EDO rows unless `includeEdo`, in both adapters, and the Doltgres search never loads the whole shelf's content.
- * Scope: Fake adapter + Doltgres adapter over a scripted postgres.js stand-in. Does not exercise real Doltgres; component tests cover SQL semantics in CI.
+ * Purpose: Prove the default read filter (SCHEMA_REFINED_BY_READ_FILTER, R1 LibrarianReadFilter): searchKnowledge/listKnowledge hide EDO rows unless `includeEdo`, in both adapters and the capability, and the Doltgres search scans ids only (no content) then hydrates content by id in bounded batches, stopping at limit.
+ * Scope: Fake adapter + capability + Doltgres adapter SQL shape over a scripted postgres.js stand-in. Does not exercise real Doltgres; nodes/operator/app/tests/component/db/doltgres-usewhen-patch.int.test.ts covers the SQL against a real engine in CI.
  * Invariants: SCHEMA_REFINED_BY_READ_FILTER, EDO_ENTRY_TYPES fail-closed.
  * Side-effects: none
  * Links: docs/spec/knowledge-syntropy.md, task.5308
@@ -106,6 +106,34 @@ describe("FakeKnowledgeStoreAdapter — default EDO read filter", () => {
       "mission-finding",
       "mission-skill",
     ]);
+  });
+
+  it("capability search/list (core__knowledge_search / core__knowledge_read) return decisions only on includeEdo opt-in", async () => {
+    const store = await seededFake();
+    const capability = createKnowledgeCapability(store);
+    const ids = (rows: { id: string }[]) => rows.map((r) => r.id);
+
+    const searchDefault = await capability.search({
+      domain: "strategy",
+      query: "mission",
+    });
+    const searchOptIn = await capability.search({
+      domain: "strategy",
+      query: "mission",
+      includeEdo: true,
+    });
+    expect(ids(searchDefault)).not.toContain("mission-decision");
+    expect(ids(searchOptIn)).toContain("mission-decision");
+    expect(searchOptIn).toHaveLength(ALL_TYPES.length);
+
+    const listDefault = await capability.list({ domain: "strategy" });
+    const listOptIn = await capability.list({
+      domain: "strategy",
+      includeEdo: true,
+    });
+    expect(ids(listDefault)).not.toContain("mission-decision");
+    expect(ids(listOptIn)).toContain("mission-decision");
+    expect(listOptIn).toHaveLength(ALL_TYPES.length);
   });
 });
 

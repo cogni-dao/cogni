@@ -3,7 +3,7 @@
 
 /**
  * Module: `@tests/component/db/doltgres-usewhen-patch`
- * Purpose: Prove against a real Doltgres that `op:'patch'` refines a retrieval trigger while leaving the body byte-identical, and that `listKnowledge({q})` finds the entry by a `useWhen` substring (task.5204).
+ * Purpose: Prove against a real Doltgres that `op:'patch'` refines a retrieval trigger while leaving the body byte-identical, that `listKnowledge({q})` finds the entry by a `useWhen` substring (task.5204), and that `searchKnowledge`/`listKnowledge` hide EDO rows by default via the SQL `entry_type NOT IN` filter + id-only scan / id-batch hydrate while `includeEdo` opts back in (task.5308).
  * Scope: Component test — boots `dolthub/doltgresql:0.57.3` via testcontainers and drives `DoltgresKnowledgeContributionAdapter` + `DoltgresKnowledgeStoreAdapter` directly. Does not exercise HTTP routes, auth, or the contribution service's policy gates.
  * Invariants:
  *   - RED CONTROL first: the pre-existing `op:'update'` path is shown to clobber
@@ -17,6 +17,8 @@
  *   - EDO_CONFIDENCE_PUBLISHED_ON_MERGE: main-only outcome targets are valid,
  *     confidence and merged metadata publish together, and failed appends roll back.
  *   - Q_MATCHES_USEWHEN_ONLY: `q` matches the trigger, never the title or body.
+ *   - SCHEMA_REFINED_BY_READ_FILTER: default search/list omit
+ *     event/hypothesis/decision/outcome rows; `includeEdo: true` returns them.
  * Side-effects: IO, process.env
  * Links: packages/knowledge-store/src/domain/contribution-schemas.ts, packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
  * @internal
@@ -406,6 +408,76 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
       (await store.listKnowledge(DOMAIN, { limit: 100 })).length
     ).toBeGreaterThanOrEqual(4);
   }, 180_000);
+  it("SCHEMA_REFINED_BY_READ_FILTER: searchKnowledge two-step read hides EDO rows by default (task.5308)", async () => {
+    // Bodies are large (out-of-line TEXT) so the content match exercises the
+    // app-layer fold over real Doltgres storage, never LOWER()/ILIKE in SQL.
+    const needleBody = `${LONG_CONTENT}\n\nMission Zebra 5308 marker`;
+    await store.withWrite(
+      { operationId: "fixture:task5308:seed", message: "seed EDO read filter" },
+      async (write) => {
+        await write.addKnowledge({
+          id: "rf5308-finding",
+          domain: DOMAIN,
+          title: "Read filter finding",
+          content: needleBody,
+          entryType: "finding",
+          sourceType: "agent",
+        });
+        await write.addKnowledge({
+          id: "rf5308-decision",
+          domain: DOMAIN,
+          title: "Read filter decision",
+          content: needleBody,
+          entryType: "decision",
+          sourceType: "agent",
+        });
+        await write.addKnowledge({
+          id: "rf5308-hypothesis",
+          domain: DOMAIN,
+          title: "Mission zebra 5308 hypothesis",
+          content: "Title-only needle.",
+          entryType: "hypothesis",
+          sourceType: "agent",
+          evaluateAt: new Date("2030-01-01T00:00:00Z"),
+        });
+      }
+    );
+
+    const ids = (rows: { id: string }[]) => rows.map((r) => r.id).sort();
+
+    // Default: SQL `entry_type NOT IN (...)` + id-only scan, then id-batch
+    // hydrate. Case-insensitive content match still found on the finding.
+    expect(
+      ids(await store.searchKnowledge(DOMAIN, "MISSION ZEBRA 5308"))
+    ).toEqual(["rf5308-finding"]);
+    // Opt-in returns the EDO rows (content and title matches).
+    expect(
+      ids(
+        await store.searchKnowledge(DOMAIN, "mission zebra 5308", {
+          includeEdo: true,
+        })
+      )
+    ).toEqual(["rf5308-decision", "rf5308-finding", "rf5308-hypothesis"]);
+    // limit honored across the batched hydrate.
+    expect(
+      await store.searchKnowledge(DOMAIN, "mission zebra 5308", {
+        includeEdo: true,
+        limit: 1,
+      })
+    ).toHaveLength(1);
+
+    // listKnowledge applies the same default exclusion.
+    const listed = ids(await store.listKnowledge(DOMAIN, { limit: 500 }));
+    expect(listed).toContain("rf5308-finding");
+    expect(listed).not.toContain("rf5308-decision");
+    expect(listed).not.toContain("rf5308-hypothesis");
+    const listedAll = ids(
+      await store.listKnowledge(DOMAIN, { limit: 500, includeEdo: true })
+    );
+    expect(listedAll).toContain("rf5308-decision");
+    expect(listedAll).toContain("rf5308-hypothesis");
+  }, 180_000);
+
   it("reconciles a main-only EDO outcome without losing confidence or replaying mutations", async () => {
     const who = principal("edo-main-only");
     // This contribution predates H: the cited row exists on MAIN only.

@@ -44,6 +44,12 @@ export const KnowledgeSearchInputSchema = z.object({
     .max(20)
     .optional()
     .describe("Maximum results (1-20, default 10)"),
+  includeEdo: z
+    .boolean()
+    .optional()
+    .describe(
+      "include EDO rows (event/hypothesis/decision/outcome); default false"
+    ),
 });
 export type KnowledgeSearchInput = z.infer<typeof KnowledgeSearchInputSchema>;
 
@@ -111,6 +117,7 @@ export function createKnowledgeSearchImplementation(
         domain: input.domain,
         query: input.query,
         limit: input.limit ?? 10,
+        ...(input.includeEdo ? { includeEdo: true } : {}),
       });
       return {
         query: input.query,
