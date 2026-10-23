@@ -38,6 +38,14 @@ operator explicitly invokes OpenTofu with operator-only bootstrap inputs.
 Tenant URLs, stack identifiers, and credentials belong in private operator
 configuration; never add them to this directory or node-facing guidance.
 
+Serve-check cadence is billed per execution, so it lives in
+`packages/node-contracts/src/reliability-policy.v1.json` `serveProbes`, never
+in HCL. Each environment declares `frequencyMs` plus the `evidenceWindow` that
+every serve consumer (alert, dashboards, operator health API, VM-health CLI)
+reads; the window must cover two probe runs. Executions/day = catalog targets ×
+`expectedRegions` × 86,400,000 / `frequencyMs`; Grafana Cloud includes 100k
+per month. Incident `recovery_receipts` checks stay at 60s while supplied.
+
 The fleet dashboard ownership migration is deterministic: after the owning
 change reaches `main`, import `cogni-fleet-status` into
 `grafana_dashboard.fleet_status`, save a plan, require the plan to show only

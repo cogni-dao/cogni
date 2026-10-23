@@ -212,11 +212,13 @@ resource "grafana_synthetic_monitoring_check" "environment_readyz" {
   provider = grafana.sm
   for_each = local.environment_targets
 
+  # Cadence is policy, not HCL (bug.5527): every execution is billed, and every
+  # serve-evidence consumer reads the same per-environment evidenceWindow.
   job                = "cogni-${each.value.environment}-${each.value.node_slug}-readyz"
   target             = "https://${each.value.host}/readyz"
   enabled            = true
   probes             = local.public_probe_ids
-  frequency          = 60000
+  frequency          = local.reliability_policy.serveProbes[each.value.environment].frequencyMs
   timeout            = 5000
   basic_metrics_only = true
   folder_uid         = data.grafana_folder.reliability.uid
@@ -242,6 +244,9 @@ resource "grafana_synthetic_monitoring_check" "environment_readyz" {
   }
 }
 
+# Incident-scoped (exists only while recovery_receipts names a slot) and
+# deliberately not policy-tuned: the readmission window
+# (hasHealthyReadmissionWindow) requires five samples exactly 60s apart.
 resource "grafana_synthetic_monitoring_check" "database_recovery" {
   provider = grafana.sm
   for_each = local.recovery_targets
@@ -410,9 +415,13 @@ resource "grafana_rule_group" "fleet_capacity" {
           datasource_uid = data.value.datasourceUid
           query_type     = try(data.value.queryType, data.value.model.queryType, "")
           model = replace(
-            jsonencode(data.value.model),
-            "__ENVIRONMENT__",
-            each.key,
+            replace(
+              jsonencode(data.value.model),
+              "__ENVIRONMENT__",
+              each.key,
+            ),
+            "__SERVE_WINDOW__",
+            local.reliability_policy.serveProbes[each.key].evidenceWindow,
           )
 
           relative_time_range {

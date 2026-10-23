@@ -50,7 +50,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "min(min_over_time(probe_success{environment=\"candidate-a\",proof_class=\"serve\"}[5m]))",
+          "expr": "min(min_over_time(probe_success{environment=\"candidate-a\",proof_class=\"serve\"}[20m]))",
           "instant": true,
           "legendFormat": "Candidate-a",
           "range": false,
@@ -103,7 +103,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "min(min_over_time(probe_success{environment=\"preview\",proof_class=\"serve\"}[5m]))",
+          "expr": "min(min_over_time(probe_success{environment=\"preview\",proof_class=\"serve\"}[20m]))",
           "instant": true,
           "legendFormat": "Preview",
           "range": false,
@@ -212,7 +212,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "min by (environment, node_slug) (min_over_time(probe_success{environment=~\"candidate-a|preview|production\",proof_class=\"serve\"}[5m]))",
+          "expr": "min by (environment, node_slug) (min_over_time(probe_success{environment=\"production\",proof_class=\"serve\"}[5m]) or min_over_time(probe_success{environment=~\"candidate-a|preview\",proof_class=\"serve\"}[20m]))",
           "instant": true,
           "legendFormat": "{{environment}} · {{node_slug}}",
           "range": false,
@@ -283,7 +283,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "max by (environment, node_slug) (probe_duration_seconds{environment=~\"candidate-a|preview|production\",proof_class=\"serve\"})",
+          "expr": "max by (environment, node_slug) (last_over_time(probe_duration_seconds{environment=\"production\",proof_class=\"serve\"}[5m]) or last_over_time(probe_duration_seconds{environment=~\"candidate-a|preview\",proof_class=\"serve\"}[20m]))",
           "instant": false,
           "legendFormat": "{{environment}} · {{node_slug}}",
           "range": true,
@@ -327,7 +327,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "100 * avg by (environment, node_slug) (avg_over_time(probe_success{environment=~\"candidate-a|preview|production\",proof_class=\"serve\"}[5m]))",
+          "expr": "100 * avg by (environment, node_slug) (avg_over_time(probe_success{environment=\"production\",proof_class=\"serve\"}[5m]) or avg_over_time(probe_success{environment=~\"candidate-a|preview\",proof_class=\"serve\"}[20m]))",
           "instant": false,
           "legendFormat": "{{environment}} · {{node_slug}}",
           "range": true,

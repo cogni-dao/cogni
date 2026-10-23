@@ -34,12 +34,17 @@ import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
 const logger = makeLogger({ component: "MimirMetricsAdapter" });
 
+/**
+ * Serve readiness over the policy evidence window for the environment. Probe
+ * cadence differs per environment (bug.5527), so the window is never a literal.
+ */
 export function buildReliabilityReadinessQuery(input: {
   readonly environment: ReliabilityQueryParams["environment"];
   readonly nodeSlug: string;
-  readonly window: "1m" | "5m";
 }): string {
-  return `min_over_time(probe_success{environment="${input.environment}",node_slug="${input.nodeSlug}",proof_class="serve"}[${input.window}])`;
+  const window =
+    RELIABILITY_POLICY_V1.serveProbes[input.environment].evidenceWindow;
+  return `min_over_time(probe_success{environment="${input.environment}",node_slug="${input.nodeSlug}",proof_class="serve"}[${window}])`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,7 +199,6 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
       readiness: buildReliabilityReadinessQuery({
         environment: env,
         nodeSlug: node,
-        window: "5m",
       }),
       io: `cogni_reliability_v1_io_pressure_percent{${identity}}`,
       connections: `cogni_reliability_v1_connections_percent{${identity}}`,

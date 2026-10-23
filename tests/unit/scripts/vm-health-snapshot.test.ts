@@ -62,6 +62,7 @@ const mod = (await import("../../../scripts/vm-health-snapshot.mjs")) as {
     level: Level;
     error?: string;
   }>;
+  serveProbeBounds: (env: string) => { window: string; ttlSec: number };
   snapshot: (
     creds: unknown,
     env: string,
@@ -266,6 +267,27 @@ describe("vm-health evaluate", () => {
       failing: ["beacon"],
     });
   });
+
+  it("judges probe freshness by each environment's policy cadence (bug.5527)", () => {
+    const prod = mod.serveProbeBounds("production");
+    const preview = mod.serveProbeBounds("preview");
+    expect(prod).toEqual({
+      window: policy.serveProbes.production.evidenceWindow,
+      ttlSec: TTL,
+    });
+    expect(preview.window).toBe(policy.serveProbes.preview.evidenceWindow);
+    // A sample one full non-prod interval old is fresh there, stale in production.
+    const age = policy.serveProbes.preview.frequencyMs / 1000;
+    const probes = { tsSec: NOW - age, nodes: [{ slug: "operator", min: 1 }] };
+    expect(
+      evaluate({ ...input(), probes: { ...probes, ...preview } }).endpoints
+        .status
+    ).toBe("OK");
+    expect(
+      evaluate({ ...input(), probes: { ...probes, ...prod } }).endpoints.status
+    ).toBe("UNKNOWN");
+    expect(() => mod.serveProbeBounds("staging")).toThrow("serveProbes");
+  });
 });
 
 const OBJ = policy.objectives;
@@ -312,7 +334,7 @@ const healthyGrafana: Run = async (kind, expr) => {
     return [row({ substrate_host: HOST }, NOW - 30)];
   if (expr.startsWith("max by (substrate_host) (timestamp("))
     return [row({ substrate_host: HOST }, NOW - 20)];
-  if (expr.startsWith("max(timestamp(probe_success"))
+  if (expr.startsWith("max(max_over_time(timestamp(probe_success"))
     return [row({}, NOW - 40)];
   if (expr.startsWith("min by (node_slug)"))
     return [row({ node_slug: "operator" }, 1)];

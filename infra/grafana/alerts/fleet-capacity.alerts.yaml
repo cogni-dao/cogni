@@ -295,8 +295,10 @@ groups:
               datasource: { type: prometheus, uid: grafanacloud-prom }
               # One alert instance per node. A regional probe failure alone is
               # not a fleet outage: serving is unavailable only when every
-              # independent probe region reports failure.
-              expr: 'max by (environment, node_slug) (probe_success{environment="__ENVIRONMENT__",proof_class="serve"})'
+              # independent probe region reports failure. Each region's latest
+              # sample is read over the policy evidenceWindow (serveProbes),
+              # because probe cadence differs per environment (bug.5527).
+              expr: 'max by (environment, node_slug) (last_over_time(probe_success{environment="__ENVIRONMENT__",proof_class="serve"}[__SERVE_WINDOW__]))'
               instant: true
               refId: SERVING
           - refId: THRESHOLD

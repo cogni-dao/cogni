@@ -14,7 +14,7 @@
         "type": "prometheus",
         "uid": "grafanacloud-prom"
       },
-      "description": "The graded soak objective: share of serve probes that succeeded per endpoint (node_slug × probe region) over 24h, worst first. Red below 99.9%. Every endpoint must pass; one red region alone points at the network path, both at the node. Thresholds and windows: packages/node-contracts/src/reliability-policy.v1.json objectives (story.5084). Same numbers: node scripts/vm-health-snapshot.mjs.",
+      "description": "The graded soak objective: share of serve probes that succeeded per endpoint (node_slug × probe region) over 24h, worst first. Red below 99.9%. Cadence is policy serveProbes (bug.5527): production samples every 60s (1440/day, so 99.9% is resolvable); candidate-a and preview sample every 10m (144/day), where one failed sample already reads below 99.9%. Every endpoint must pass; one red region alone points at the network path, both at the node. Thresholds and windows: packages/node-contracts/src/reliability-policy.v1.json objectives (story.5084). Same numbers: node scripts/vm-health-snapshot.mjs.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -501,7 +501,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "min(min_over_time(probe_success{environment=\"$environment\",proof_class=\"serve\"}[5m]))",
+          "expr": "min(min_over_time(probe_success{environment=\"$environment\",environment=\"production\",proof_class=\"serve\"}[5m]) or min_over_time(probe_success{environment=\"$environment\",environment=~\"candidate-a|preview\",proof_class=\"serve\"}[20m]))",
           "instant": true,
           "legendFormat": "External readiness",
           "range": false,
@@ -558,7 +558,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(max by (node_slug) (min_over_time(probe_success{environment=\"$environment\",proof_class=\"serve\"}[5m])))",
+          "expr": "sum(max by (node_slug) (min_over_time(probe_success{environment=\"$environment\",environment=\"production\",proof_class=\"serve\"}[5m]) or min_over_time(probe_success{environment=\"$environment\",environment=~\"candidate-a|preview\",proof_class=\"serve\"}[20m])))",
           "instant": true,
           "legendFormat": "Healthy nodes",
           "range": false,
@@ -615,7 +615,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "count(max by (node_slug) (min_over_time(probe_success{environment=\"$environment\",proof_class=\"serve\"}[5m])))",
+          "expr": "count(max by (node_slug) (min_over_time(probe_success{environment=\"$environment\",environment=\"production\",proof_class=\"serve\"}[5m]) or min_over_time(probe_success{environment=\"$environment\",environment=~\"candidate-a|preview\",proof_class=\"serve\"}[20m])))",
           "instant": true,
           "legendFormat": "Observed nodes",
           "range": false,
