@@ -5,7 +5,7 @@
 # Proves the materialize side of the secret-materialize / reconcile split:
 #   - source:agent app keys ARE materialized per-node (AUTH_SECRET);
 #   - genuinely-shared values inherited from the env bank ARE materialized
-#     (POSTHOG_API_KEY from node-template via the blind ancestor scan);
+#     (POSTHOG_API_KEY/HOST from their declared operator owner);
 #   - canonical-custody (inheritFrom: operator) keys are materialized from the
 #     operator path, NOT the blind ancestor scan (OPENROUTER_API_KEY — kills the
 #     per-node split-brain that 429'd freshly-formed prod nodes);
@@ -45,10 +45,12 @@ put_secret() {
   printf '%s' "$value" > "$BAO_ROOT/cogni/candidate-a/${svc}/${key}"
 }
 
-# Blind-ancestor-scan shared values a node legitimately inherits (transitional).
-# POSTHOG_* are source:human shared substrate inherited from an ancestor.
-put_secret node-template POSTHOG_API_KEY phc_existing
-put_secret node-template POSTHOG_HOST https://us.i.posthog.com
+# Explicit shared integration owners differ from the ordinary target.
+put_secret operator POSTHOG_API_KEY phc_existing
+put_secret operator POSTHOG_HOST https://us.i.posthog.com
+put_secret operator TAVILY_API_KEY tvly-owner-fixture
+put_secret operator SCHEDULER_API_TOKEN scheduler-owner-fixture
+put_secret operator GH_WEBHOOK_SECRET webhook-owner-fixture
 # Canonical-custody (inheritFrom: operator) values: seeded at the OPERATOR path
 # only, with a divergent copy at the TARGET node (node-template). That divergent
 # per-node copy must be IGNORED — the node inherits the operator value
@@ -338,12 +340,12 @@ env \
 # source:agent app key generated per-node
 test -f "$BAO_ROOT/cogni/candidate-a/node-template/AUTH_SECRET" \
   || { echo "materialize did not seed AUTH_SECRET" >&2; exit 1; }
-# source:human shared substrate inherited via blind ancestor scan (POSTHOG_*).
-# required:true — a node MUST receive them or the fail-fast guard trips (bug.5087).
+# Source:human shared integrations inherit only their declared owner.
 for k in POSTHOG_API_KEY POSTHOG_HOST; do
-  test -f "$BAO_ROOT/cogni/candidate-a/node-template/$k" \
-    || { echo "materialize did not inherit required shared substrate $k" >&2; exit 1; }
+  cmp "$BAO_ROOT/cogni/candidate-a/operator/$k" "$BAO_ROOT/cogni/candidate-a/node-template/$k" \
+    || { echo "materialize did not inherit declared shared integration $k" >&2; exit 1; }
 done
+cmp "$BAO_ROOT/cogni/candidate-a/operator/TAVILY_API_KEY" "$BAO_ROOT/cogni/candidate-a/node-template/TAVILY_API_KEY"
 # canonical-custody keys (inheritFrom: operator): must be the OPERATOR value, NOT a
 # stale per-node copy — proves inheritFrom overwrites the per-node split-brain.
 # OPENROUTER_API_KEY (bug.5021/429) and EVM_RPC_URL (bug.5087 chain substrate) share
