@@ -26,6 +26,202 @@ const modulePath = pathToFileURL(
 const ops = await import(modulePath);
 
 describe("maintenance drain proof boundary", () => {
+  it("admits only the exact completed migration receipt and its successful Job-owned pod", async () => {
+    const request = {
+      nodeId: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c",
+      slug: "node-template",
+      env: "candidate-a",
+      sourceSha: "c".repeat(40),
+    };
+    const image = `ghcr.io/cogni-dao/node-template@sha256:${"d".repeat(64)}`;
+    const bundle = `ghcr.io/cogni-dao/node-template@sha256:${"e".repeat(64)}`;
+    const labels = {
+      "cogni.io/node": "node-template",
+      "cogni.io/environment": "candidate-a",
+      "app.kubernetes.io/managed-by": "compute-workload-controller",
+    };
+    const job = {
+      kind: "Job",
+      name: "migrate-node-template-eeeeeeeeeeee",
+      namespace: "cogni-candidate-a",
+      uid: "job-current",
+      deleting: false,
+      labels,
+      owners: [],
+      images: [
+        { name: "migrate", image },
+        { name: "migrate-doltgres", image },
+      ],
+      status: {
+        succeeded: 1,
+        conditions: [{ type: "Complete", status: "True" }],
+      },
+    };
+    const pod = {
+      kind: "Pod",
+      name: `${job.name}-pod`,
+      namespace: job.namespace,
+      uid: "pod-current",
+      deleting: false,
+      labels: {
+        "cogni.io/node": "node-template",
+        "app.kubernetes.io/managed-by": "compute-workload-controller",
+      },
+      owners: [
+        {
+          apiVersion: "batch/v1",
+          kind: "Job",
+          name: job.name,
+          uid: job.uid,
+          controller: true,
+        },
+      ],
+      images: job.images,
+      status: {
+        phase: "Succeeded",
+        containers: [
+          { name: "migrate", terminated: true, exitCode: 0 },
+          { name: "migrate-doltgres", terminated: true, exitCode: 0 },
+        ],
+      },
+    };
+    const cluster = {
+      xrs: [
+        {
+          kind: "XComputeWorkload",
+          nodeId: request.nodeId,
+          environment: request.env,
+          namespace: job.namespace,
+          uid: "xr-current",
+          generation: 3,
+          deleting: false,
+          bundleSource: request.sourceSha,
+          bundleDigest: bundle,
+          imageDigest: image,
+        },
+      ],
+      producers: [job, pod],
+    };
+    expect(() =>
+      ops.verifyCandidateProducerExclusion(cluster, request)
+    ).not.toThrow();
+    const verify = vi.fn();
+    await ops.verifyAuditedCandidateAdmission(
+      { request: { ...request, sourceRepository: "cogni-dao/node-template" } },
+      cluster,
+      request,
+      verify
+    );
+    expect(verify).toHaveBeenCalled();
+    // Retained successful history cannot run again and proves no source ancestry.
+    const historyJob = structuredClone(job);
+    historyJob.name = "migrate-node-template-ffffffffffff";
+    historyJob.uid = "job-history";
+    for (const phase of historyJob.images)
+      phase.image = `ghcr.io/cogni-dao/node-template@sha256:${"a".repeat(64)}`;
+    const historyPod = structuredClone(pod);
+    historyPod.name = `${historyJob.name}-pod`;
+    historyPod.uid = "pod-history";
+    historyPod.owners[0].name = historyJob.name;
+    historyPod.owners[0].uid = historyJob.uid;
+    historyPod.images = historyJob.images;
+    expect(() =>
+      ops.verifyCandidateProducerExclusion(
+        {
+          ...cluster,
+          producers: [...cluster.producers, historyJob, historyPod],
+        },
+        request
+      )
+    ).not.toThrow();
+    const activeHistory = {
+      ...historyJob,
+      status: { ...historyJob.status, active: 1 },
+    };
+    const failedHistory = {
+      ...historyJob,
+      status: { ...historyJob.status, failed: 1 },
+    };
+    const wrongPhaseHistory = structuredClone(historyJob);
+    wrongPhaseHistory.images[0].name = "other";
+    for (const history of [
+      activeHistory,
+      failedHistory,
+      wrongPhaseHistory,
+      { ...historyJob, kind: "CronJob" },
+      {
+        ...historyJob,
+        images: [
+          {
+            name: "migrate",
+            image: `ghcr.io/foreign/app@sha256:${"a".repeat(64)}`,
+          },
+        ],
+      },
+    ]) {
+      expect(() =>
+        ops.verifyCandidateProducerExclusion(
+          { ...cluster, producers: [...cluster.producers, history] },
+          request
+        )
+      ).toThrow("maintenance_candidate_live_source_unproven");
+    }
+    expect(() =>
+      ops.verifyCandidateProducerExclusion(
+        { ...cluster, producers: [job, job] },
+        request
+      )
+    ).toThrow();
+    const fixture = { job, pod, xr: cluster.xrs[0] };
+    for (const mutate of [
+      (v: typeof fixture) => {
+        v.job.deleting = true;
+      },
+      (v: typeof fixture) => {
+        v.job.name = "migrate-node-template-oldoldoldold";
+      },
+      (v: typeof fixture) => {
+        v.job.images[0].image = "old-image";
+      },
+      (v: typeof fixture) => {
+        v.job.status.succeeded = 0;
+      },
+      (v: typeof fixture) => {
+        v.job.status.conditions = [];
+      },
+      (v: typeof fixture) => {
+        v.job.labels["cogni.io/environment"] = "production";
+      },
+      (v: typeof fixture) => {
+        v.job.kind = "Deployment";
+      },
+      (v: typeof fixture) => {
+        v.pod.owners[0].uid = "stale-job";
+      },
+      (v: typeof fixture) => {
+        v.pod.status.phase = "Running";
+      },
+      (v: typeof fixture) => {
+        v.pod.status.containers[0].exitCode = 1;
+      },
+      (v: typeof fixture) => {
+        v.xr.deleting = true;
+      },
+      (v: typeof fixture) => {
+        v.xr.bundleDigest = "unproven-bundle";
+      },
+    ]) {
+      const changed = structuredClone(fixture);
+      mutate(changed);
+      expect(() =>
+        ops.verifyCandidateProducerExclusion(
+          { xrs: [changed.xr], producers: [changed.job, changed.pod] },
+          request
+        )
+      ).toThrow("maintenance_candidate_live_source_unproven");
+    }
+  });
+
   it("binds active qualification to one workflow owner, preserves its artifact and refuses stale claims", () => {
     const program = `
 import copy,datetime,hashlib,importlib.util,json,os,pathlib,subprocess,sys,tempfile
@@ -338,6 +534,11 @@ else:
  items=[]
  if "xcomputeworkloads.compute.cogni.io" in sys.argv:
   items=[{"kind":"XComputeWorkload","metadata":{"name":"owned-node","uid":"xr-id","generation":3,"labels":{"cogni.io/node-id":"owned-node"}},"spec":{"nodeId":"owned-node","bundle":{"source":{"sha":"old-source"}},"workload":{"name":"node-template"}},"status":{"observedGeneration":3}}]
+ elif "deployments,replicasets,statefulsets,pods,jobs,cronjobs" in sys.argv:
+  image="ghcr.io/cogni-dao/node-template@sha256:"+"d"*64
+  job={"kind":"Job","metadata":{"name":"migrate-node-template-eeeeeeeeeeee","namespace":"cogni-candidate-a","uid":"job-current","labels":{"cogni.io/node":"node-template","cogni.io/environment":"candidate-a","app.kubernetes.io/managed-by":"compute-workload-controller"}},"spec":{"template":{"spec":{"containers":[{"name":"migrate","image":image,"env":[{"name":"SECRET","value":"PRIVATE_PRODUCER_SECRET"}]}]}}},"status":{"succeeded":1,"conditions":[{"type":"Complete","status":"True"}]}}
+  pod={"kind":"Pod","metadata":{"name":"job-pod","namespace":"cogni-candidate-a","uid":"pod-current","ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":job["metadata"]["name"],"uid":"job-current","controller":True}]},"spec":{"containers":[{"name":"migrate","image":image}]},"status":{"phase":"Succeeded","containerStatuses":[{"name":"migrate","state":{"terminated":{"exitCode":0}}}]}}
+  items=[job,pod]
  elif "applicationsets.argoproj.io" in sys.argv:
   items=[{"metadata":{"name":"node-apps","uid":"set-id"},"spec":{"template":{"spec":{"source":{"repoURL":"https://github.com/owned/repo","targetRevision":"main","helm":{"values":"PRIVATE_INLINE_SECRET"}}}},"generators":[{"git":{}}]}}]
  print(json.dumps({"items":items}))
@@ -410,6 +611,7 @@ else:
       const output = execute();
       expect(output).toContain("MAINTENANCE_ENGINE_IDENTITY");
       expect(output).not.toContain("PRIVATE_INLINE_SECRET");
+      expect(output).not.toContain("PRIVATE_PRODUCER_SECRET");
       const lines = output.trim().split("\n");
       expect(
         JSON.parse(
@@ -430,6 +632,28 @@ else:
         kind: "XComputeWorkload",
         uid: "xr-id",
         bundleSource: "old-source",
+      });
+      expect(snapshot.producers).toHaveLength(2);
+      expect(snapshot.producers[0]).toMatchObject({
+        kind: "Job",
+        images: [
+          {
+            name: "migrate",
+            image: `ghcr.io/cogni-dao/node-template@sha256:${"d".repeat(64)}`,
+          },
+        ],
+        status: {
+          succeeded: 1,
+          conditions: [{ type: "Complete", status: "True" }],
+        },
+      });
+      expect(snapshot.producers[1]).toMatchObject({
+        kind: "Pod",
+        owners: [{ kind: "Job", uid: "job-current" }],
+        status: {
+          phase: "Succeeded",
+          containers: [{ name: "migrate", terminated: true, exitCode: 0 }],
+        },
       });
       expect(snapshot.applicationSets[0].templateSource).toEqual({
         repoURL: "https://github.com/owned/repo",

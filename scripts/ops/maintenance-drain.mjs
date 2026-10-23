@@ -229,6 +229,148 @@ async function deliveryInventory(request) {
   }
 }
 
+/**
+ * Completed canonical migration receipts cannot run again. Keep their public
+ * identity visible without mistaking retained success history for a live writer.
+ * Current receipts bind to the actual XR artifact; historical receipts authorize
+ * no source and never relax the independent requested/live source-floor checks.
+ * @param {{xrs: object[], producers: object[]}} cluster
+ * @param {{slug: string, env: string}} request
+ */
+export function verifyCandidateProducerExclusion(cluster, request) {
+  const refuse = "maintenance_candidate_live_source_unproven";
+  requireThat(
+    Array.isArray(cluster.producers) && cluster.producers.length <= 100,
+    refuse
+  );
+  if (cluster.producers.length === 0) return [];
+  requireThat(
+    request.slug === "node-template" &&
+      request.env === "candidate-a" &&
+      Array.isArray(cluster.xrs) &&
+      cluster.xrs.length === 1,
+    refuse
+  );
+  const xr = cluster.xrs[0];
+  const digest = /^ghcr\.io\/cogni-dao\/node-template@sha256:([a-f0-9]{64})$/;
+  const bundle = digest.exec(xr.bundleDigest ?? "");
+  requireThat(
+    xr.kind === "XComputeWorkload" &&
+      xr.namespace === "cogni-candidate-a" &&
+      xr.nodeId === request.nodeId &&
+      xr.environment === request.env &&
+      typeof xr.uid === "string" &&
+      xr.uid &&
+      Number.isInteger(xr.generation) &&
+      xr.generation > 0 &&
+      xr.deleting === false &&
+      /^[a-f0-9]{40}$/.test(xr.bundleSource ?? "") &&
+      bundle &&
+      digest.test(xr.imageDigest ?? ""),
+    refuse
+  );
+  const currentName = `migrate-node-template-${bundle[1].slice(0, 12)}`;
+  const jobs = new Map();
+  const uids = new Set();
+  const phases = (value) => {
+    requireThat(
+      Array.isArray(value.images) &&
+        value.images.length >= 1 &&
+        value.images.length <= 2 &&
+        new Set(value.images.map((v) => v.name)).size === value.images.length &&
+        value.images.every(
+          (v) =>
+            ["migrate", "migrate-doltgres"].includes(v.name) &&
+            digest.test(v.image ?? "")
+        ) &&
+        new Set(value.images.map((v) => v.image)).size === 1,
+      refuse
+    );
+    return value.images[0].image;
+  };
+  for (const value of cluster.producers) {
+    requireThat(
+      value &&
+        value.namespace === "cogni-candidate-a" &&
+        value.deleting === false &&
+        typeof value.uid === "string" &&
+        value.uid &&
+        !uids.has(value.uid) &&
+        value.labels?.["cogni.io/node"] === "node-template" &&
+        value.labels?.["app.kubernetes.io/managed-by"] ===
+          "compute-workload-controller",
+      refuse
+    );
+    uids.add(value.uid);
+    requireThat(value.kind === "Job" || value.kind === "Pod", refuse);
+    if (value.kind !== "Job") continue;
+    const image = phases(value);
+    requireThat(
+      /^migrate-node-template-[a-f0-9]{12}$/.test(value.name ?? "") &&
+        !jobs.has(value.name) &&
+        value.labels["cogni.io/environment"] === "candidate-a" &&
+        value.status?.succeeded === 1 &&
+        (value.status.active ?? 0) === 0 &&
+        (value.status.failed ?? 0) === 0 &&
+        Array.isArray(value.status.conditions) &&
+        value.status.conditions.some(
+          (v) => v.type === "Complete" && v.status === "True"
+        ) &&
+        !value.status.conditions.some(
+          (v) => v.type === "Failed" && v.status === "True"
+        ) &&
+        (value.name !== currentName || image === xr.imageDigest),
+      refuse
+    );
+    jobs.set(value.name, value);
+  }
+  for (const pod of cluster.producers.filter((v) => v.kind === "Pod")) {
+    const image = phases(pod);
+    requireThat(
+      pod.status?.phase === "Succeeded" &&
+        Array.isArray(pod.owners) &&
+        pod.owners.length === 1,
+      refuse
+    );
+    const owner = pod.owners[0];
+    const job = jobs.get(owner.name);
+    requireThat(
+      owner.apiVersion === "batch/v1" &&
+        owner.kind === "Job" &&
+        owner.controller === true &&
+        job &&
+        owner.uid === job.uid &&
+        image === job.images[0].image &&
+        pod.images.length === job.images.length &&
+        pod.images.every((phase) =>
+          job.images.some((v) => v.name === phase.name)
+        ) &&
+        pod.name?.startsWith(`${job.name}-`) &&
+        Array.isArray(pod.status.containers) &&
+        pod.status.containers.length === pod.images.length &&
+        new Set(pod.status.containers.map((v) => v.name)).size ===
+          pod.images.length &&
+        pod.status.containers.every(
+          (v) =>
+            pod.images.some((phase) => phase.name === v.name) &&
+            v.terminated === true &&
+            v.exitCode === 0
+        ),
+      refuse
+    );
+  }
+  return [...jobs.values()].map((job) => ({
+    classification:
+      job.name === currentName
+        ? "completed-current-migration"
+        : "completed-migration-history",
+    name: job.name,
+    uid: job.uid,
+    imageDigest: job.images[0].image,
+    bundleDigestPrefix: job.name.slice(-12),
+  }));
+}
+
 /** A truthful durable floor replaces the one-time empty-runtime bootstrap gate. */
 export async function verifyAuditedCandidateAdmission(
   receipt,
@@ -249,7 +391,6 @@ export async function verifyAuditedCandidateAdmission(
     Array.isArray(cluster.xrs) &&
       cluster.xrs.length <= 1 &&
       Array.isArray(cluster.producers) &&
-      cluster.producers.length === 0 &&
       cluster.xrs.every(
         (xr) =>
           typeof xr.uid === "string" &&
@@ -257,6 +398,7 @@ export async function verifyAuditedCandidateAdmission(
       ),
     "maintenance_candidate_live_source_unproven"
   );
+  verifyCandidateProducerExclusion(cluster, request);
   // Validate both the proposed source and the already-running compatible source.
   // Absence is not a substitute for the merged-MAIN/native-audit floor.
   for (const source of new Set([
@@ -362,13 +504,13 @@ function verifyCandidateQualification(admission, request, cluster) {
       bundle.artifacts?.length === 1 &&
       bundle.artifacts[0].image ===
         admission.marker.qualification.imageDigest &&
-      cluster.producers.length === 0 &&
       cluster.xrs.length <= 1 &&
       cluster.xrs.every(
         (xr) => xr.bundleSource === request.sourceSha && xr.uid
       ),
     "maintenance_qualification_artifact_mismatch"
   );
+  verifyCandidateProducerExclusion(cluster, request);
 }
 
 function verifyCandidateSourceFloor(receipt, source) {
@@ -478,7 +620,15 @@ def source_identity(value):
  return {key:value[key] for key in ["repoURL","path","targetRevision","chart"] if key in value} if value else None
 def identity(value):
  meta=value.get("metadata",{});spec=value.get("spec",{});status=value.get("status",{})
- return {"kind":value.get("kind"),"name":meta.get("name"),"uid":meta.get("uid"),"generation":meta.get("generation"),"observedGeneration":status.get("observedGeneration"),"deleting":meta.get("deletionTimestamp") is not None,"instance":spec.get("instance"),"workload":spec.get("workload",{}).get("name"),"bundleSource":spec.get("bundle",{}).get("source",{}).get("sha")}
+ bundle=spec.get("bundle",{}); artifacts=bundle.get("artifacts",[])
+ podspec=spec.get("template",{}).get("spec",{}) if value.get("kind")=="Job" else spec
+ images=[{"name":v.get("name"),"image":v.get("image")} for v in podspec.get("initContainers",[])+podspec.get("containers",[])]
+ states=[{"name":v.get("name"),"terminated":isinstance(v.get("state",{}).get("terminated"),dict),"exitCode":v.get("state",{}).get("terminated",{}).get("exitCode")} for v in status.get("initContainerStatuses",[])+status.get("containerStatuses",[])]
+ return {"kind":value.get("kind"),"namespace":meta.get("namespace"),"nodeId":spec.get("nodeId"),"environment":spec.get("environment"),"name":meta.get("name"),"uid":meta.get("uid"),"generation":meta.get("generation"),"observedGeneration":status.get("observedGeneration"),"deleting":meta.get("deletionTimestamp") is not None,"instance":spec.get("instance"),"workload":spec.get("workload",{}).get("name"),"bundleSource":bundle.get("source",{}).get("sha"),"bundleDigest":bundle.get("ref"),"imageDigest":artifacts[0].get("image") if len(artifacts)==1 else None,"labels":{k:meta.get("labels",{}).get(k) for k in ["cogni.io/node","cogni.io/environment","app.kubernetes.io/managed-by"]},"owners":[{k:v.get(k) for k in ["apiVersion","kind","name","uid","controller"]} for v in meta.get("ownerReferences",[])],"images":images,"status":{**{k:status[k] for k in ["phase","active","succeeded","failed"] if k in status},"conditions":[{k:v.get(k) for k in ["type","status"]} for v in status.get("conditions",[])],"containers":states}}
+producers=read("producers")
+job_uids={v.get("metadata",{}).get("uid") for v in producers if v.get("kind")=="Job" and owned(v)}
+def producer_owned(value):
+ return owned(value) or any(v.get("kind")=="Job" and v.get("uid") in job_uids for v in value.get("metadata",{}).get("ownerReferences",[]))
 xrs=[]
 for name in open(root+"/selected-kinds").read().splitlines():
  xrs.extend(read(name))
@@ -487,7 +637,7 @@ for value in read("apps"):
  sources=value.get("spec",{}).get("sources") or [value.get("spec",{}).get("source",{})]
  if any(item.get("targetRevision")=="deploy/candidate-a-"+slug for item in sources):
   apps.append({"name":value["metadata"]["name"],"revision":value.get("status",{}).get("sync",{}).get("revision"),"sync":value.get("status",{}).get("sync",{}).get("status"),"health":value.get("status",{}).get("health",{}).get("status"),"automated":value.get("spec",{}).get("syncPolicy",{}).get("automated"),"owners":value.get("metadata",{}).get("ownerReferences",[])})
-print(json.dumps({"observedAt":datetime.datetime.now(datetime.timezone.utc).isoformat(),"xrs":[identity(v) for v in xrs if owned(v)],"producers":[identity(v) for v in read("producers") if owned(v)],"applications":apps,"applicationSets":[{"name":v["metadata"]["name"],"uid":v["metadata"]["uid"],"generation":v["metadata"].get("generation"),"templateSource":source_identity(v.get("spec",{}).get("template",{}).get("spec",{}).get("source")),"templateSources":[source_identity(item) for item in v.get("spec",{}).get("template",{}).get("spec",{}).get("sources",[])],"destination":v.get("spec",{}).get("template",{}).get("spec",{}).get("destination"),"syncPolicy":v.get("spec",{}).get("template",{}).get("spec",{}).get("syncPolicy"),"generatorKinds":[list(g.keys()) for g in v.get("spec",{}).get("generators",[])]} for v in read("appsets")]}))
+print(json.dumps({"observedAt":datetime.datetime.now(datetime.timezone.utc).isoformat(),"xrs":[identity(v) for v in xrs if owned(v)],"producers":[identity(v) for v in producers if producer_owned(v)],"applications":apps,"applicationSets":[{"name":v["metadata"]["name"],"uid":v["metadata"]["uid"],"generation":v["metadata"].get("generation"),"templateSource":source_identity(v.get("spec",{}).get("template",{}).get("spec",{}).get("source")),"templateSources":[source_identity(item) for item in v.get("spec",{}).get("template",{}).get("spec",{}).get("sources",[])],"destination":v.get("spec",{}).get("template",{}).get("spec",{}).get("destination"),"syncPolicy":v.get("spec",{}).get("template",{}).get("spec",{}).get("syncPolicy"),"generatorKinds":[list(g.keys()) for g in v.get("spec",{}).get("generators",[])]} for v in read("appsets")]}))
 PY_SNAPSHOT
 `;
   return command;
