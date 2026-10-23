@@ -4,22 +4,19 @@
 /**
  * Module: `@app/_facades/work/coordination.server`
  * Purpose: App-layer facade for operator work-item execution sessions.
- * Scope: Binds human sessions through the lightweight Postgres session port
- *   and durable agent principals through the canonical Dolt work-item store.
+ * Scope: Binds human sessions and durable agent principals through the
+ *   lightweight Postgres session port (exactly one claimant per session).
  * Invariants: DOLT_IS_SOURCE_OF_TRUTH, PORT_VIA_CONTAINER.
  * Side-effects: IO through injected ports and work-item facade.
  * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007
  * @internal
  */
 
-import { randomUUID } from "node:crypto";
 import type { RequestPrincipal } from "@cogni/node-contracts";
 import type { SessionUser } from "@cogni/node-shared";
-import { toWorkItemId } from "@cogni/work-items";
 import { getContainer, getWorkItemSessionPort } from "@/bootstrap/container";
 import type {
   WorkItemSessionClaimInput,
-  WorkItemSessionDto,
   WorkItemSessionHeartbeatInput,
   WorkItemSessionPrInput,
 } from "@/contracts/work-item-sessions.v1.contract";
@@ -81,68 +78,13 @@ async function requireWorkItem(id: string) {
   return workItem;
 }
 
-const DURABLE_PRINCIPAL_CLAIM_TTL_SECONDS = 300;
-
 type AgentPrincipal = Extract<RequestPrincipal, { kind: "agent" }>;
-type DurableClaimWorkItem = {
-  readonly id: string;
-  readonly status: string;
-  readonly claimedAt?: string;
-  readonly lastCommand?: string;
-  readonly branch?: string;
-  readonly pr?: string;
-};
-
-function durablePrincipalSessionDto(input: {
-  readonly workItem: DurableClaimWorkItem;
-  readonly principal: AgentPrincipal;
-  readonly runId: string;
-  readonly now: Date;
-  readonly heartbeat: boolean;
-}): WorkItemSessionDto {
-  const claimedAt = input.workItem.claimedAt ?? input.now.toISOString();
-  return {
-    coordinationId: input.runId,
-    workItemId: input.workItem.id,
-    status: "active",
-    // Compatibility field for existing clients. This is the exact principal,
-    // not a users.id projection, and is never persisted to claimed_by_user_id.
-    claimedByUserId: input.principal.principalId,
-    claimedByPrincipalId: input.principal.principalId,
-    claimedByDisplayName: input.principal.displayName,
-    claimedAt,
-    lastHeartbeatAt: input.heartbeat ? input.now.toISOString() : null,
-    deadlineAt: new Date(
-      input.now.getTime() + DURABLE_PRINCIPAL_CLAIM_TTL_SECONDS * 1000
-    ).toISOString(),
-    closedAt: null,
-    lastCommand: input.workItem.lastCommand ?? null,
-    branch: input.workItem.branch ?? null,
-    prNumber:
-      input.workItem.pr && /^\d+$/.test(input.workItem.pr)
-        ? Number(input.workItem.pr)
-        : null,
-  };
-}
-
-function mapDurablePrincipalStoreError(error: unknown, id: string): never {
-  const name = (error as Error)?.name;
-  const message = (error as Error)?.message ?? "";
-  if (name === "WorkItemLeaseConflictError") {
-    throw new WorkItemSessionConflictError(id);
-  }
-  if (name === "WorkItemAuthorizationError") {
-    throw new WorkItemSessionForbiddenError(id);
-  }
-  if (message.includes("Work item not found")) {
-    throw new CoordinationWorkItemNotFoundError(id);
-  }
-  throw error;
-}
 
 /**
- * Claim the canonical Dolt work item directly as a durable agent principal.
- * This deliberately bypasses the legacy Postgres user-FK session table.
+ * Claim through the PostgreSQL session port as the exact durable agent
+ * principal (`claimed_by_principal_id`). The agent is never projected into a
+ * users row; one active claim per item still holds, so another claimant's open
+ * session raises WorkItemSessionConflictError.
  */
 export async function claimWorkItemAsPrincipal(input: {
   readonly workItemId: string;
@@ -152,33 +94,34 @@ export async function claimWorkItemAsPrincipal(input: {
   readonly now?: Date;
 }) {
   const now = input.now ?? new Date();
-  const runId = randomUUID();
-  try {
-    const workItem = await getContainer().doltgresWorkItems.claim({
-      id: toWorkItemId(input.workItemId),
-      runId,
-      command: input.body.lastCommand ?? "claim",
-      principalId: input.principal.principalId,
-    });
-    return {
-      claimed: true,
-      conflict: false,
-      session: durablePrincipalSessionDto({
-        workItem,
-        principal: input.principal,
-        runId,
-        now,
-        heartbeat: false,
-      }),
-      nextAction: `Continue ${workItem.status} for ${workItem.id}; heartbeat the durable principal claim while working.`,
-      statusUrl: input.statusUrl,
-    };
-  } catch (error) {
-    return mapDurablePrincipalStoreError(error, input.workItemId);
+  const workItem = await requireWorkItem(input.workItemId);
+  const result = await getContainer().workItemSessions.claim({
+    workItemId: input.workItemId,
+    claimedByPrincipalId: input.principal.principalId,
+    claimedByDisplayName: input.principal.displayName,
+    deadlineAt: deadlineFromNow(now, ttlSeconds(input.body)),
+    ...(input.body.lastCommand !== undefined && {
+      lastCommand: input.body.lastCommand,
+    }),
+  });
+  if (result.kind === "conflict") {
+    throw new WorkItemSessionConflictError(input.workItemId);
   }
+
+  return {
+    claimed: true,
+    conflict: false,
+    session: toWorkItemSessionDto(result.session, now),
+    nextAction: nextActionForWorkItem({
+      workItem,
+      session: result.session,
+      now,
+    }),
+    statusUrl: input.statusUrl,
+  };
 }
 
-/** Refresh the active Dolt lease only when both run and principal still match. */
+/** Refresh the open session only when it is still held by this exact principal. */
 export async function heartbeatWorkItemAsPrincipal(input: {
   readonly workItemId: string;
   readonly body: WorkItemSessionHeartbeatInput;
@@ -187,42 +130,32 @@ export async function heartbeatWorkItemAsPrincipal(input: {
   readonly now?: Date;
 }) {
   const now = input.now ?? new Date();
-  try {
-    const current = await getContainer().doltgresWorkItems.get(
-      toWorkItemId(input.workItemId)
-    );
-    if (!current) throw new CoordinationWorkItemNotFoundError(input.workItemId);
-    if (!current.claimedByRun) {
-      throw new WorkItemSessionNotFoundError(input.workItemId);
-    }
-    const workItem = await getContainer().doltgresWorkItems.heartbeat({
-      id: toWorkItemId(input.workItemId),
-      runId: current.claimedByRun,
-      ...(input.body.lastCommand !== undefined && {
-        command: input.body.lastCommand,
-      }),
-      principalId: input.principal.principalId,
-    });
-    return {
-      session: durablePrincipalSessionDto({
-        workItem,
-        principal: input.principal,
-        runId: current.claimedByRun,
-        now,
-        heartbeat: true,
-      }),
-      nextAction: `Continue ${workItem.status} for ${workItem.id}; the durable principal claim is active.`,
-      statusUrl: input.statusUrl,
-    };
-  } catch (error) {
+  const sessions = getWorkItemSessionPort();
+  const session = await sessions.heartbeat({
+    workItemId: input.workItemId,
+    claimedByPrincipalId: input.principal.principalId,
+    deadlineAt: deadlineFromNow(now, ttlSeconds(input.body)),
+    ...(input.body.lastCommand !== undefined && {
+      lastCommand: input.body.lastCommand,
+    }),
+  });
+
+  if (!session) {
+    const current = await sessions.getCurrent(input.workItemId);
     if (
-      error instanceof CoordinationWorkItemNotFoundError ||
-      error instanceof WorkItemSessionNotFoundError
+      current &&
+      current.claimedByPrincipalId !== input.principal.principalId
     ) {
-      throw error;
+      throw new WorkItemSessionForbiddenError(input.workItemId);
     }
-    return mapDurablePrincipalStoreError(error, input.workItemId);
+    throw new WorkItemSessionNotFoundError(input.workItemId);
   }
+
+  return {
+    session: toWorkItemSessionDto(session, now),
+    nextAction: sessionNextAction(session.workItemId, input.statusUrl),
+    statusUrl: input.statusUrl,
+  };
 }
 
 export async function claimWorkItemSession(input: {

@@ -70,6 +70,7 @@ function session(overrides: Partial<WorkItemSessionRecord> = {}) {
     id: "00000000-0000-4000-8000-000000005007",
     workItemId: "task.5007",
     claimedByUserId: "user-1",
+    claimedByPrincipalId: null,
     claimedByDisplayName: "agent-one",
     status: "active",
     claimedAt: new Date("2026-05-02T11:55:00.000Z"),
@@ -94,24 +95,13 @@ function mockPort(): WorkItemSessionPort {
 
 describe("app/_facades/work/coordination.server", () => {
   let port: WorkItemSessionPort;
-  let doltgresWorkItems: {
-    get: ReturnType<typeof vi.fn>;
-    claim: ReturnType<typeof vi.fn>;
-    heartbeat: ReturnType<typeof vi.fn>;
-  };
 
   beforeEach(() => {
     vi.resetAllMocks();
     port = mockPort();
-    doltgresWorkItems = {
-      get: vi.fn(),
-      claim: vi.fn(),
-      heartbeat: vi.fn(),
-    };
     vi.mocked(getWorkItemSessionPort).mockReturnValue(port);
     vi.mocked(getContainer).mockReturnValue({
       workItemSessions: port,
-      doltgresWorkItems,
     } as never);
     vi.mocked(getWorkItem).mockResolvedValue(WORK_ITEM);
     vi.mocked(patchWorkItem).mockResolvedValue(WORK_ITEM);
@@ -128,12 +118,14 @@ describe("app/_facades/work/coordination.server", () => {
       legacyUserId: null,
       displayName: "fresh-v2",
     };
-    doltgresWorkItems.claim.mockResolvedValue({
-      ...WORK_ITEM,
-      id: "task.5007",
-      claimedByRun: "00000000-0000-4000-8000-000000005264",
-      claimedAt: NOW.toISOString(),
-      lastCommand: "/implement",
+    const agentSession = session({
+      claimedByUserId: null,
+      claimedByPrincipalId: principal.principalId,
+      claimedByDisplayName: principal.displayName,
+    });
+    vi.mocked(port.claim).mockResolvedValue({
+      kind: "claimed",
+      session: agentSession,
     });
 
     const claimed = await claimWorkItemAsPrincipal({
@@ -144,26 +136,21 @@ describe("app/_facades/work/coordination.server", () => {
       now: NOW,
     });
 
-    expect(doltgresWorkItems.claim).toHaveBeenCalledWith(
+    expect(port.claim).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "task.5007",
-        principalId: principal.principalId,
+        workItemId: "task.5007",
+        claimedByPrincipalId: principal.principalId,
+        claimedByDisplayName: principal.displayName,
+        lastCommand: "/implement",
       })
     );
+    expect(vi.mocked(port.claim).mock.calls[0]?.[0]).not.toHaveProperty(
+      "claimedByUserId"
+    );
     expect(claimed.session.claimedByPrincipalId).toBe(principal.principalId);
+    expect(claimed.session.claimedByUserId).toBe(principal.principalId);
 
-    const runId = claimed.session.coordinationId;
-    doltgresWorkItems.get.mockResolvedValue({
-      ...WORK_ITEM,
-      claimedByRun: runId,
-    });
-    doltgresWorkItems.heartbeat.mockResolvedValue({
-      ...WORK_ITEM,
-      claimedByRun: runId,
-      claimedAt: NOW.toISOString(),
-      lastCommand: "/review-implementation",
-    });
-
+    vi.mocked(port.heartbeat).mockResolvedValue(agentSession);
     await heartbeatWorkItemAsPrincipal({
       workItemId: "task.5007",
       body: { lastCommand: "/review-implementation" },
@@ -172,14 +159,38 @@ describe("app/_facades/work/coordination.server", () => {
       now: NOW,
     });
 
-    expect(doltgresWorkItems.heartbeat).toHaveBeenCalledWith({
-      id: "task.5007",
-      runId,
-      command: "/review-implementation",
-      principalId: principal.principalId,
+    expect(port.heartbeat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workItemId: "task.5007",
+        claimedByPrincipalId: principal.principalId,
+        lastCommand: "/review-implementation",
+      })
+    );
+  });
+
+  it("raises a conflict when another claimant holds the item", async () => {
+    vi.mocked(port.claim).mockResolvedValue({
+      kind: "conflict",
+      session: session(),
     });
-    expect(port.claim).not.toHaveBeenCalled();
-    expect(port.heartbeat).not.toHaveBeenCalled();
+
+    await expect(
+      claimWorkItemAsPrincipal({
+        workItemId: "task.5007",
+        body: {},
+        principal: {
+          kind: "agent",
+          principalId: "agent:operator/00000000-0000-4000-8000-000000005264",
+          actorId: "00000000-0000-4000-8000-000000005264",
+          credentialId: "00000000-0000-4000-8000-000000005265",
+          billingAccountId: "00000000-0000-4000-8000-000000005263",
+          legacyUserId: null,
+          displayName: "fresh-v2",
+        },
+        statusUrl: "/status",
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ name: "WorkItemSessionConflictError" });
   });
 
   it("claims a session for the authenticated user", async () => {

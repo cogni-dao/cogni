@@ -46,6 +46,7 @@ function session(overrides: Partial<WorkItemSessionRecord> = {}) {
     id: "00000000-0000-4000-8000-000000005007",
     workItemId: "task.5007",
     claimedByUserId: "user-1",
+    claimedByPrincipalId: null,
     claimedByDisplayName: "agent-one",
     status: "active",
     claimedAt: new Date("2026-05-02T11:55:00.000Z"),

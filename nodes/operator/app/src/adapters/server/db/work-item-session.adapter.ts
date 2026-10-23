@@ -6,17 +6,19 @@
  * Purpose: Drizzle adapter for operator work-item execution sessions.
  * Scope: Persistence only. Does not validate work-item existence, enforce
  *   route auth, derive next actions, or call GitHub.
- * Invariants: ONE_ACTIVE_CLAIM_DB_ENFORCED, SERVICE_DB_SHARED_COORDINATION.
+ * Invariants: ONE_ACTIVE_CLAIM_DB_ENFORCED, SERVICE_DB_SHARED_COORDINATION,
+ *   EXACTLY_ONE_CLAIMANT (human user id xor durable agent principal id; DB CHECK backs it).
  * Side-effects: IO (Postgres via injected Drizzle database).
  * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007
  * @internal
  */
 
 import type { Database } from "@cogni/db-client";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
 
 import type {
   ClaimWorkItemSessionResult,
+  WorkItemSessionClaimant,
   WorkItemSessionPort,
   WorkItemSessionRecord,
 } from "@/ports";
@@ -31,6 +33,7 @@ function toRecord(
     id: row.id,
     workItemId: row.workItemId,
     claimedByUserId: row.claimedByUserId,
+    claimedByPrincipalId: row.claimedByPrincipalId,
     claimedByDisplayName: row.claimedByDisplayName,
     status: row.status as WorkItemSessionRecord["status"],
     claimedAt: row.claimedAt,
@@ -41,6 +44,35 @@ function toRecord(
     branch: row.branch,
     prNumber: row.prNumber,
   };
+}
+
+function claimantColumns(claimant: WorkItemSessionClaimant): {
+  readonly claimedByUserId: string | null;
+  readonly claimedByPrincipalId: string | null;
+} {
+  return claimant.claimedByUserId !== undefined
+    ? { claimedByUserId: claimant.claimedByUserId, claimedByPrincipalId: null }
+    : {
+        claimedByUserId: null,
+        claimedByPrincipalId: claimant.claimedByPrincipalId,
+      };
+}
+
+function claimantWhere(claimant: WorkItemSessionClaimant): SQL {
+  return claimant.claimedByUserId !== undefined
+    ? eq(workItemSessions.claimedByUserId, claimant.claimedByUserId)
+    : eq(workItemSessions.claimedByPrincipalId, claimant.claimedByPrincipalId);
+}
+
+function isSameClaimant(
+  session: WorkItemSessionRecord,
+  claimant: WorkItemSessionClaimant
+): boolean {
+  const columns = claimantColumns(claimant);
+  return (
+    session.claimedByUserId === columns.claimedByUserId &&
+    session.claimedByPrincipalId === columns.claimedByPrincipalId
+  );
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -55,16 +87,17 @@ function isUniqueViolation(error: unknown): boolean {
 export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
   constructor(private readonly db: Database) {}
 
-  async claim(input: {
-    readonly workItemId: string;
-    readonly claimedByUserId: string;
-    readonly claimedByDisplayName: string | null;
-    readonly deadlineAt: Date;
-    readonly lastCommand?: string;
-  }): Promise<ClaimWorkItemSessionResult> {
+  async claim(
+    input: WorkItemSessionClaimant & {
+      readonly workItemId: string;
+      readonly claimedByDisplayName: string | null;
+      readonly deadlineAt: Date;
+      readonly lastCommand?: string;
+    }
+  ): Promise<ClaimWorkItemSessionResult> {
     const existing = await this.getOpen(input.workItemId);
     if (existing) {
-      if (existing.claimedByUserId !== input.claimedByUserId) {
+      if (!isSameClaimant(existing, input)) {
         return { kind: "conflict", session: existing };
       }
       return {
@@ -78,7 +111,7 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
         .insert(workItemSessions)
         .values({
           workItemId: input.workItemId,
-          claimedByUserId: input.claimedByUserId,
+          ...claimantColumns(input),
           claimedByDisplayName: input.claimedByDisplayName,
           deadlineAt: input.deadlineAt,
           lastCommand: input.lastCommand,
@@ -92,7 +125,7 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
       if (!isUniqueViolation(error)) throw error;
       const conflicted = await this.getOpen(input.workItemId);
       if (!conflicted) throw error;
-      if (conflicted.claimedByUserId === input.claimedByUserId) {
+      if (isSameClaimant(conflicted, input)) {
         return {
           kind: "claimed",
           session: await this.refreshExistingClaim(conflicted.id, input),
@@ -102,12 +135,13 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
     }
   }
 
-  async heartbeat(input: {
-    readonly workItemId: string;
-    readonly claimedByUserId: string;
-    readonly deadlineAt: Date;
-    readonly lastCommand?: string;
-  }): Promise<WorkItemSessionRecord | null> {
+  async heartbeat(
+    input: WorkItemSessionClaimant & {
+      readonly workItemId: string;
+      readonly deadlineAt: Date;
+      readonly lastCommand?: string;
+    }
+  ): Promise<WorkItemSessionRecord | null> {
     const [updated] = await this.db
       .update(workItemSessions)
       .set({
@@ -122,7 +156,7 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
       .where(
         and(
           eq(workItemSessions.workItemId, input.workItemId),
-          eq(workItemSessions.claimedByUserId, input.claimedByUserId),
+          claimantWhere(input),
           inArray(workItemSessions.status, [...OPEN_SESSION_STATUSES])
         )
       )
@@ -131,12 +165,13 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
     return updated ? toRecord(updated) : null;
   }
 
-  async linkPr(input: {
-    readonly workItemId: string;
-    readonly claimedByUserId: string;
-    readonly branch?: string;
-    readonly prNumber?: number;
-  }): Promise<WorkItemSessionRecord | null> {
+  async linkPr(
+    input: WorkItemSessionClaimant & {
+      readonly workItemId: string;
+      readonly branch?: string;
+      readonly prNumber?: number;
+    }
+  ): Promise<WorkItemSessionRecord | null> {
     const [updated] = await this.db
       .update(workItemSessions)
       .set({
@@ -147,7 +182,7 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
       .where(
         and(
           eq(workItemSessions.workItemId, input.workItemId),
-          eq(workItemSessions.claimedByUserId, input.claimedByUserId),
+          claimantWhere(input),
           inArray(workItemSessions.status, [...OPEN_SESSION_STATUSES])
         )
       )

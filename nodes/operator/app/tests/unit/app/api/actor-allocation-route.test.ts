@@ -33,7 +33,7 @@ vi.mock("@/bootstrap/http", () => ({
     (
       _options: unknown,
       handler: (
-        ctx: { log: typeof log },
+        ctx: { log: typeof log; reqId: string; routeId: string },
         request: Request,
         user: undefined,
         context: { params: Promise<{ allocationRef: string }> }
@@ -43,7 +43,12 @@ vi.mock("@/bootstrap/http", () => ({
       request: Request,
       context: { params: Promise<{ allocationRef: string }> }
     ) =>
-      handler({ log }, request, undefined, context),
+      handler(
+        { log, reqId: "req-1", routeId: "attribution.actor-allocation.read" },
+        request,
+        undefined,
+        context
+      ),
 }));
 
 import { GET } from "@/app/api/v1/attribution/actor-allocations/[allocationRef]/route";

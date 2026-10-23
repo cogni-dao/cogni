@@ -414,6 +414,13 @@
       "when": 1792179092206,
       "tag": "0058_living_amphibian",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1792731083517,
+      "tag": "0059_dazzling_lord_hawal",
+      "breakpoints": true
     }
   ]
 }

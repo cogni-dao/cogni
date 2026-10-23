@@ -415,6 +415,7 @@ export type {
 } from "./treasury-settlement.port";
 export type {
   ClaimWorkItemSessionResult,
+  WorkItemSessionClaimant,
   WorkItemSessionPort,
   WorkItemSessionRecord,
   WorkItemSessionStatus,

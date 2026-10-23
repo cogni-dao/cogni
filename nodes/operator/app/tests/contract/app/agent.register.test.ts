@@ -376,8 +376,8 @@ describe("POST /api/v1/agent/upgrade", () => {
     });
     mockWriteRelationsAtomically.mockResolvedValue({ decision: "success" });
     mockUpgrade.mockResolvedValue(preparedUpgrade);
-    mockCompleteLegacyUpgrade.mockResolvedValue(undefined);
-    mockReleaseLegacyUpgrade.mockResolvedValue(undefined);
+    mockCompleteLegacyGrantTransfer.mockResolvedValue(undefined);
+    mockReleaseLegacyGrantTransfer.mockResolvedValue(undefined);
   });
 
   it("fails before creating upgrade material when authorization is absent", async () => {
