@@ -155,36 +155,66 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
       "expandMetadata",
       "user_api_key_auth,requester_metadata"
     );
-    url.searchParams.set("limit", String(query.limit));
     url.searchParams.set("parseIoAsJson", "false");
     if (upstreamCursor) url.searchParams.set("cursor", upstreamCursor);
-    const res = await fetch(url, {
-      headers: { Authorization: this.authHeader },
-      signal,
-      redirect: "error",
-    }).catch((error: unknown) => {
-      throw safeDependencyFailure(error, signal);
-    });
-    if (!res.ok) {
-      // Upstream bodies can contain credential-bearing metadata; never read/echo them in errors.
-      await res.body?.cancel();
-      throw new LangfuseReadError(
-        res.status === 429
-          ? "observability_rate_limited"
-          : "observability_upstream_error",
-        res.status === 429 ? 429 : 502,
-        safeRetryAfter(res.headers.get("retry-after"))
-      );
+    // `limit` is a ceiling, not a requirement to fill a response. Small native subpages keep
+    // verbose generation IO usable; retries always start at the same upstream cursor/window.
+    const pageSizes = [
+      ...new Set([Math.min(query.limit, 10), Math.min(query.limit, 2), 1]),
+    ];
+    const MAX_PAGE_BYTES = 8 * 1024 * 1024;
+    const MAX_TOTAL_BYTES = 3 * MAX_PAGE_BYTES;
+    let consumedBytes = 0;
+    let page: z.infer<typeof NativePageSchema> | undefined;
+    let upstreamPageSize = pageSizes[0] ?? 1;
+    let upstreamByteLimited = false;
+    for (const pageSize of pageSizes) {
+      upstreamPageSize = pageSize;
+      const attemptUrl = new URL(url);
+      attemptUrl.searchParams.set("limit", String(pageSize));
+      const res = await fetch(attemptUrl, {
+        headers: { Authorization: this.authHeader },
+        signal,
+        redirect: "error",
+      }).catch((error: unknown) => {
+        throw safeDependencyFailure(error, signal);
+      });
+      if (!res.ok) {
+        await res.body?.cancel();
+        throw new LangfuseReadError(
+          res.status === 429
+            ? "observability_rate_limited"
+            : "observability_upstream_error",
+          res.status === 429 ? 429 : 502,
+          safeRetryAfter(res.headers.get("retry-after"))
+        );
+      }
+      try {
+        const body = await readBounded(
+          res,
+          Math.min(MAX_PAGE_BYTES, MAX_TOTAL_BYTES - consumedBytes),
+          (bytes) => {
+            consumedBytes += bytes;
+          }
+        );
+        page = NativePageSchema.parse(JSON.parse(body));
+        if (page.data.length > pageSize)
+          throw new LangfuseReadError("observability_invalid_response", 502);
+        break;
+      } catch (error) {
+        const failure = safeDependencyFailure(error, signal);
+        if (
+          failure.code !== "observability_response_too_large" ||
+          pageSize === 1 ||
+          consumedBytes >= MAX_TOTAL_BYTES ||
+          signal.aborted
+        )
+          throw failure;
+        upstreamByteLimited = true;
+      }
     }
-    const page = NativePageSchema.parse(
-      JSON.parse(
-        await readBounded(res, 8 * 1024 * 1024).catch((error: unknown) => {
-          throw safeDependencyFailure(error, signal);
-        })
-      )
-    );
-    if (page.data.length > query.limit)
-      throw new LangfuseReadError("observability_invalid_response", 502);
+    if (!page)
+      throw new LangfuseReadError("observability_response_too_large", 502);
     const data: Record<string, unknown>[] = [];
     let unavailable = 0;
     let truncated = false;
@@ -242,7 +272,12 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
           logicalEnvironment: query.environment,
           fromStartTime: from,
           toStartTime: to,
-          partial: unavailable > 0 || truncated,
+          partial:
+            unavailable > 0 ||
+            truncated ||
+            (upstreamPageSize < query.limit && !!page.meta.cursor),
+          upstreamPageSize,
+          upstreamByteLimited,
           attributionUnavailable: unavailable,
           privacyProjected: true,
           truncated,
@@ -349,9 +384,18 @@ const NativePageSchema = z.object({
     .max(100),
   meta: z.object({ cursor: z.string().max(8192).nullish() }),
 });
-async function readBounded(response: Response, max: number): Promise<string> {
+async function readBounded(
+  response: Response,
+  max: number,
+  consume: (bytes: number) => void
+): Promise<string> {
   if (!response.body)
     throw new LangfuseReadError("observability_invalid_response", 502);
+  const declared = Number(response.headers.get("content-length"));
+  if (max <= 0 || declared > max) {
+    await response.body.cancel();
+    throw new LangfuseReadError("observability_response_too_large", 502);
+  }
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -360,6 +404,7 @@ async function readBounded(response: Response, max: number): Promise<string> {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
+      consume(value.byteLength);
       if (size > max) {
         await reader.cancel();
         throw new LangfuseReadError("observability_response_too_large", 502);

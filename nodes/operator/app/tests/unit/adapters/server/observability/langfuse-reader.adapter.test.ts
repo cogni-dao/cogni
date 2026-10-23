@@ -565,3 +565,96 @@ it("retains private literal redaction context after allowlisting and raw budgeti
     vi.unstubAllGlobals();
   }
 });
+
+describe("bounded upstream subpages", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const oversized = () =>
+    new Response("body must not be parsed", {
+      headers: { "content-length": String(8 * 1024 * 1024 + 1) },
+    });
+
+  it("retries the same cursor on byte overflow and resumes from the successful page without duplicates", async () => {
+    const seen: Array<{
+      limit: string | null;
+      cursor: string | null;
+      signal: AbortSignal | null | undefined;
+    }> = [];
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      const limit = url.searchParams.get("limit");
+      const cursor = url.searchParams.get("cursor");
+      seen.push({ limit, cursor, signal: init.signal });
+      if (limit === "10") return oversized();
+      const ids = cursor === "after-two" ? ["three", "four"] : ["one", "two"];
+      return new Response(
+        JSON.stringify({
+          data: ids.map(observation),
+          meta: { cursor: cursor === "after-two" ? null : "after-two" },
+        })
+      );
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const reader = nativeReader();
+    const query = nativeQuery();
+    const first = await reader.listObservations(query);
+    const second = await reader.listObservations({
+      ...query,
+      cursor: first.meta.cursor ?? "",
+    });
+    expect([...first.data, ...second.data].map((row) => row.id)).toEqual([
+      "one",
+      "two",
+      "three",
+      "four",
+    ]);
+    expect(seen.map(({ limit, cursor }) => ({ limit, cursor }))).toEqual([
+      { limit: "10", cursor: null },
+      { limit: "2", cursor: null },
+      { limit: "10", cursor: "after-two" },
+      { limit: "2", cursor: "after-two" },
+    ]);
+    expect(seen[0]?.signal).toBe(seen[1]?.signal);
+    expect(seen[2]?.signal).toBe(seen[3]?.signal);
+    expect(first.meta.cogni).toMatchObject({
+      upstreamPageSize: 2,
+      upstreamByteLimited: true,
+      partial: true,
+    });
+    expect(second.meta.cursor).toBeNull();
+  });
+
+  it.each([
+    1, 50,
+  ])("fails explicitly for an oversized single observation with requested limit %s", async (limit) => {
+    const fetcher = vi.fn(async () => oversized());
+    vi.stubGlobal("fetch", fetcher);
+    await expect(
+      nativeReader().listObservations(nativeQuery(`&limit=${limit}`))
+    ).rejects.toMatchObject({
+      code: "observability_response_too_large",
+      status: 502,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(limit === 1 ? 1 : 3);
+  });
+
+  it("does not retry a backend429 as a smaller page", async () => {
+    const fetcher = vi.fn(
+      async () =>
+        new Response("private upstream error", {
+          status: 429,
+          headers: { "retry-after": "5" },
+        })
+    );
+    vi.stubGlobal("fetch", fetcher);
+    await expect(
+      nativeReader().listObservations(nativeQuery())
+    ).rejects.toMatchObject({
+      code: "observability_rate_limited",
+      status: 429,
+      retryAfter: "5",
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});

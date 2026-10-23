@@ -412,7 +412,14 @@ native Langfuse read contract, not a replacement Langfuse SDK base URL. The exis
   native root/tool-span records require their own independently trusted ownership evidence.
 - The first query freezes a maximum 24-hour window; continuation must repeat the same query and
   use its signed node/lane/backend/window/fields/filter-bound cursor. Default/max page sizes are
-  50/100; output is bounded to 1 MiB with explicit content-withheld/truncated flags, each upstream
+  50/100 are upper bounds. The gateway starts with at most 10 upstream observations and, only on
+  upstream byte overflow, retries the same cursor/window at 2 then 1 observation. At most three
+  attempts share one 15-second deadline and a 24 MiB cumulative stream-read budget; each attempt
+  is capped at 8 MiB. A single observation exceeding the body cap fails explicitly. The native
+  cursor comes only from the successful page, so retries never advance past discarded rows.
+  `meta.cogni.upstreamPageSize/upstreamByteLimited` explain subpaging; follow the returned cursor
+  rather than treating a short page as exhaustion. Output is bounded to 1 MiB with explicit
+  content-withheld/truncated flags, each upstream
   request has a 15-second deadline, and concurrent reads are bounded to two per node/process.
   The existing token-bucket limiter enforces 10 requests/minute plus five burst per node/process.
   Replicas have independent limits. Upstream 429 preserves numeric Retry-After; private bodies

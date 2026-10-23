@@ -59,6 +59,8 @@ export interface LangfuseObservationPage {
       readonly fromStartTime: string;
       readonly toStartTime: string;
       readonly partial: boolean;
+      readonly upstreamPageSize?: number;
+      readonly upstreamByteLimited?: boolean;
       readonly attributionUnavailable: number;
       readonly privacyProjected: true;
       readonly truncated: boolean;

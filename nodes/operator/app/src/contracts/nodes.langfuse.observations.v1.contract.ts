@@ -112,6 +112,8 @@ export const LangfuseObservationPageSchema = z.object({
       fromStartTime: z.string(),
       toStartTime: z.string(),
       partial: z.boolean(),
+      upstreamPageSize: z.number().int().min(1).max(100).optional(),
+      upstreamByteLimited: z.boolean().optional(),
       attributionUnavailable: z.number().int().nonnegative(),
       privacyProjected: z.literal(true),
       truncated: z.boolean(),
