@@ -256,13 +256,37 @@ export interface RenderBundleInput {
  * bundle fits `WHOLE_BUNDLE_BUDGET_BYTES`; otherwise re-renders with only the
  * `method` shelf inline plus a pointer to pull other shelves (approach T).
  */
-export function renderBundleMarkdown(input: RenderBundleInput): string {
-  const whole = renderWith(input, "whole");
-  if (utf8Bytes(whole) <= WHOLE_BUNDLE_BUDGET_BYTES) return whole;
-  return renderWith(input, "shelf-pointer");
+export function renderBundle(input: RenderBundleInput): RenderedBundle {
+  const whole = renderWith(input, "whole-index");
+  const wholeBytes = utf8Bytes(whole);
+  if (wholeBytes <= WHOLE_BUNDLE_BUDGET_BYTES)
+    return {
+      markdown: whole,
+      governingRender: { mode: "whole-index", wholeBytes },
+    };
+  return {
+    markdown: renderWith(input, "shelf-pointer"),
+    governingRender: { mode: "shelf-pointer", wholeBytes },
+  };
 }
 
-type GoverningMode = "whole" | "shelf-pointer";
+/** `renderBundle(input).markdown`. */
+export function renderBundleMarkdown(input: RenderBundleInput): string {
+  return renderBundle(input).markdown;
+}
+
+/** Which governing section the bundle rendered: the whole index, or the `method` shelf plus a shelf-pull pointer. */
+export type GoverningMode = "whole-index" | "shelf-pointer";
+
+/** The rendered bundle plus how its governing section was rendered (eval row 0 reads this). */
+export interface RenderedBundle {
+  markdown: string;
+  governingRender: {
+    mode: GoverningMode;
+    /** UTF-8 bytes of the whole-index render, whether or not it was served. */
+    wholeBytes: number;
+  };
+}
 
 /** The governing section lines for one render mode. */
 function governingLines(
@@ -271,7 +295,7 @@ function governingLines(
   origin: string
 ): string[] {
   const inline =
-    mode === "whole"
+    mode === "whole-index"
       ? rows
       : rows.filter((r) => r.domain === INLINE_FALLBACK_SHELF);
   const tableRows =
@@ -282,7 +306,7 @@ function governingLines(
         )
       : ["| _(none merged yet)_ | | | |"];
   const lead =
-    mode === "whole"
+    mode === "whole-index"
       ? "Every skill, guide, playbook, rule, design, decision and reference on this hub. " +
         `Pick the rows whose use-when matches your task, then read each chosen entry (\`GET ${origin}/api/v1/knowledge/{id}\`) before acting.`
       : `_The governing index (${rows.length} rows) exceeds the 64 KiB bundle budget, so only the \`${INLINE_FALLBACK_SHELF}\` shelf is inline. ` +

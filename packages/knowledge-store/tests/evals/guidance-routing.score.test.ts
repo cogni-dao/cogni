@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import goldFile from "../../evals/guidance-routing/gold.json";
 import {
+  bm25Rank,
   ceiling,
   chunkMessage,
   decide,
@@ -24,6 +25,7 @@ import {
   recallAt,
   scoreRun,
   type Thresholds,
+  toolOutputFromSse,
 } from "../../evals/guidance-routing/score";
 import thresholdsFile from "../../evals/guidance-routing/thresholds.json";
 
@@ -151,6 +153,55 @@ describe("chunkMessage — split a prompt under a per-message character cap", ()
   });
 });
 
+describe("toolOutputFromSse — the real core__knowledge_index result from an ai/chat stream", () => {
+  const sse = [
+    'data: {"type":"tool-input-start","toolCallId":"k1","toolName":"core__knowledge_search"}',
+    'data: {"type":"tool-output-available","toolCallId":"k1","output":{"results":[]}}',
+    'data: {"type":"tool-input-start","toolCallId":"i1","toolName":"core__knowledge_index"}',
+    'data: {"type":"tool-output-available","toolCallId":"i1","output":{"entries":[{"id":"a","domain":"method","entryType":"rule","useWhen":"w"}],"truncated":false,"omittedDomains":[]}}',
+    'data: {"type":"text-delta","id":"t","delta":"DONE"}',
+    "data: [DONE]",
+  ].join("\n\n");
+
+  it("returns the output of the named tool's call, ignoring other tools", () => {
+    expect(toolOutputFromSse(sse, "core__knowledge_index")).toEqual({
+      entries: [{ id: "a", domain: "method", entryType: "rule", useWhen: "w" }],
+      truncated: false,
+      omittedDomains: [],
+    });
+  });
+
+  it("returns null when the tool was never called", () => {
+    expect(toolOutputFromSse(sse, "core__goal_list")).toBeNull();
+    expect(toolOutputFromSse("not sse", "core__knowledge_index")).toBeNull();
+  });
+});
+
+describe("bm25Rank — the row-7 lexical prefilter", () => {
+  const docs = [
+    { id: "postgres-crash-observability", text: "a shared postgres crashed" },
+    { id: "akash-lease-guide", text: "an akash lease needs recovery" },
+    { id: "generic-guide", text: "any task at all" },
+  ];
+
+  it("ranks documents sharing rarer query terms first and drops zero scores", () => {
+    expect(bm25Rank("postgres crashed in prod", docs, 10)).toEqual([
+      "postgres-crash-observability",
+    ]);
+    expect(bm25Rank("akash lease lost; postgres fine", docs, 10)).toEqual([
+      "akash-lease-guide",
+      "postgres-crash-observability",
+    ]);
+  });
+
+  it("tokenizes ids on hyphens and caps at k", () => {
+    expect(bm25Rank("observability", docs, 10)).toEqual([
+      "postgres-crash-observability",
+    ]);
+    expect(bm25Rank("guide", docs, 1)).toHaveLength(1);
+  });
+});
+
 describe("decide — the design's decision table", () => {
   const A = (recallAt5: number, rulesAt5: number) => ({ recallAt5, rulesAt5 });
   const small = 50_800;
@@ -185,6 +236,46 @@ describe("decide — the design's decision table", () => {
       expect(decide(input, thresholds).row).toBe(row);
     });
   }
+
+  it("row 7 needs BM25; BM25 at the bar ships it", () => {
+    const T = { recallAt10: 0.49 };
+    const Afail = { recallAt5: 0.6, rulesAt5: 0.63 };
+    expect(
+      decide({ bundleBytes: small, A: Afail, T }, thresholds)
+    ).toMatchObject({
+      row: 7,
+      needs: "BM25",
+    });
+    expect(
+      decide(
+        { bundleBytes: small, A: Afail, T, BM25: { recallAt10: 0.9 } },
+        thresholds
+      )
+    ).toMatchObject({ row: 7, ship: true });
+  });
+
+  it("row 8: BM25 below the bar names the best-measured stopgap, excluding A past the budget", () => {
+    const measured = {
+      A: { recallAt5: 0.6, rulesAt5: 0.63, recallAt10: 0.745 },
+      T: { recallAt10: 0.49 },
+      BM25: { recallAt10: 0.6 },
+    };
+    expect(
+      decide({ bundleBytes: small, ...measured }, thresholds)
+    ).toMatchObject({ row: 8, ship: false, stopgap: "A" });
+    expect(
+      decide({ bundleBytes: 70_000, ...measured }, thresholds)
+    ).toMatchObject({ row: 8, stopgap: "BM25" });
+  });
+
+  it("row 4 names the mechanism still to measure; row 1 needs nothing", () => {
+    expect(
+      decide({ bundleBytes: small, A: A(0.5, 0.9) }, thresholds).needs
+    ).toBe("T+method");
+    expect(
+      decide({ bundleBytes: small, A: A(0.88, 0.79) }, thresholds).needs
+    ).toBeUndefined();
+  });
 
   it("ships only on rows 1 and 5", () => {
     expect(

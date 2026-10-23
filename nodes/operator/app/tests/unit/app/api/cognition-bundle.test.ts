@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type GoalView,
+  renderBundle,
   renderBundleMarkdown,
   resolveGoals,
   resolveOrientation,
@@ -91,6 +92,34 @@ describe("governing index — the session index routes skills, guides, rules, de
   it("renders a placeholder row when the hub has no governing entries", () => {
     const md = renderBundleMarkdown({ ...baseInput, governingIndex: [] });
     expect(md).toContain("| _(none merged yet)_ | | | |");
+  });
+});
+
+describe("renderBundle — reports the governing render it used (eval row 0)", () => {
+  it("reports whole-index mode and the whole render's bytes when it fits", () => {
+    const out = renderBundle({
+      ...baseInput,
+      governingIndex: governingRows(118),
+    });
+    expect(out.governingRender.mode).toBe("whole-index");
+    expect(out.governingRender.wholeBytes).toBe(bytesOf(out.markdown));
+    expect(out.markdown).toBe(
+      renderBundleMarkdown({ ...baseInput, governingIndex: governingRows(118) })
+    );
+  });
+
+  it("reports shelf-pointer mode and the over-budget whole bytes past the cap", () => {
+    const out = renderBundle({
+      ...baseInput,
+      governingIndex: governingRows(400),
+    });
+    expect(out.governingRender.mode).toBe("shelf-pointer");
+    expect(out.governingRender.wholeBytes).toBeGreaterThan(
+      WHOLE_BUNDLE_BUDGET_BYTES
+    );
+    expect(bytesOf(out.markdown)).toBeLessThanOrEqual(
+      WHOLE_BUNDLE_BUDGET_BYTES
+    );
   });
 });
 

@@ -32,8 +32,9 @@ export interface NewDomain {
 // seeded from there, never in this shared base — that was cross-node
 // contamination. See knowledge entry `cogni-domain-taxonomy`.
 //
-// `skills` is intentionally absent: it is an entry_type (skill/guide/playbook),
-// not a domain.
+// `skills` is intentionally absent: skill, guide, playbook, rule, design, decision
+// and reference are entry types, and the governing index reads them across
+// every domain (`listGoverningIndex`), so no shelf is needed for them.
 //
 // NOTE (task.5194): these rows ARE applied — but only on the local-dev path.
 // `scripts/db/seed-doltgres.mts` imports this constant and calls

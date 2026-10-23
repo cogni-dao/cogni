@@ -17,6 +17,7 @@ import type { KnowledgeCapability } from "../src/capabilities/knowledge";
 import { CORE_TOOL_BUNDLE } from "../src/catalog";
 import {
   createKnowledgeIndexImplementation,
+  KNOWLEDGE_INDEX_MAX_BYTES,
   KNOWLEDGE_INDEX_NAME,
   knowledgeIndexContract,
 } from "../src/tools/knowledge-index";
@@ -73,12 +74,37 @@ describe("core__knowledge_index", () => {
     const out = await tool.execute({});
     expect(knowledgeIndexContract.outputSchema.parse(out)).toEqual({
       entries: ROWS,
+      truncated: false,
+      omittedDomains: [],
     });
     for (const e of out.entries) {
       expect(Object.keys(e).sort()).toEqual(
         ["domain", "entryType", "id", "useWhen"].sort()
       );
     }
+  });
+
+  it("past the byte cap, returns only the method shelf and names the omitted domains (the bundle's fallback)", async () => {
+    const many = [
+      ...Array.from({ length: 400 }, (_, i) => ({
+        id: `entry-${i}`,
+        domain: i % 2 ? "use-ship" : "build-core",
+        entryType: "guide",
+        useWhen: `a situation ${i} described the way a reader meets it in a real task, long enough to count`,
+      })),
+      ...ROWS,
+    ];
+    expect(JSON.stringify(many).length).toBeGreaterThan(
+      KNOWLEDGE_INDEX_MAX_BYTES
+    );
+    const tool = createKnowledgeIndexImplementation({
+      knowledgeCapability: capability(async () => many),
+    });
+    const out = await tool.execute({});
+    expect(out.truncated).toBe(true);
+    expect(out.entries).toEqual([ROWS[0]]);
+    expect(out.omittedDomains).toEqual(["build-core", "use-ship"]);
+    expect(knowledgeIndexContract.description).toContain("truncated");
   });
 
   it("surfaces a reader failure as a tool error", async () => {

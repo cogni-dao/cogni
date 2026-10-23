@@ -88,6 +88,6 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 - **`fetch_types: false` required** on all postgres.js connections (pg_type grants missing).
 - Generic schema lives in `packages/knowledge-base`; node schema packages re-export it and may add companion tables.
 - `listKnowledge(domain, { q })` matches `useWhen` only. Full-text claim search remains `searchKnowledge`; the HTTP routing projection is `/api/v1/knowledge/index`.
-- `core__knowledge_search` / `core__knowledge_read` / `core__knowledge_write` BoundTools shipped in `@cogni/ai-tools`; brain graph uses them via tool runtime.
+- `core__knowledge_index` / `core__knowledge_search` / `core__knowledge_read` / `core__knowledge_write` BoundTools ship in `@cogni/ai-tools`; the brain and autoresearch graphs use them via the tool runtime.
 - `listGoverningIndex()` reads every governing row across domains in two unpaged queries (governing-type rows, `supersedes` edges); the cognition bundle and `core__knowledge_index` both render it.
 - `evals/guidance-routing/` is the external-lane routing eval (`pnpm eval:guidance-routing`); it is outside the build, typecheck and PR CI. Its scorer is unit-tested in `tests/evals/`.

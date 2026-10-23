@@ -41,7 +41,7 @@ import { getNodeMission, getNodeName } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import {
   type OrientationEntry,
-  renderBundleMarkdown,
+  renderBundle,
   resolveGoals,
   resolveOrientation,
   SESSION_BOOTSTRAP_INVARIANTS,
@@ -142,7 +142,7 @@ export const GET = wrapRouteHandlerWithLogging(
       `and your open contribution branch via GET ${origin}/api/v1/knowledge/contributions/{id}/diff. ` +
       "Refine in place over writing new (REFINE_OVER_EXTEND).";
 
-    const markdown = renderBundleMarkdown({
+    const { markdown, governingRender } = renderBundle({
       node,
       name,
       mission,
@@ -161,6 +161,8 @@ export const GET = wrapRouteHandlerWithLogging(
         node,
         name,
         governing: governingIndex.length,
+        governingMode: governingRender.mode,
+        governingWholeBytes: governingRender.wholeBytes,
         domains: domainPointers.length,
         orientation: orientation?.id ?? null,
         goalsStatus: goals.status,
@@ -180,6 +182,7 @@ export const GET = wrapRouteHandlerWithLogging(
         generatedAt,
         toolingInvariants,
         governingIndex,
+        governingRender,
         domainPointers,
         recallProtocol,
         markdown,

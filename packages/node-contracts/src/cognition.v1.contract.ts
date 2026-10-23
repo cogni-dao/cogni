@@ -62,6 +62,16 @@ export const CognitionBundleResponseSchema = z.object({
   toolingInvariants: z.array(z.string()),
   /** Live from the hub: the governing index (`KnowledgeStorePort.listGoverningIndex`), index only. */
   governingIndex: z.array(CognitionGoverningPointerSchema),
+  /**
+   * How `markdown` rendered the governing index: `whole-index` (every row
+   * inline) or `shelf-pointer` (the `method` shelf inline plus a pull pointer),
+   * and the UTF-8 bytes the whole-index render takes. The routing eval reads
+   * this for its bundle-size row (WHOLE_BUNDLE_BUDGET_64KIB).
+   */
+  governingRender: z.object({
+    mode: z.enum(["whole-index", "shelf-pointer"]),
+    wholeBytes: z.number().int(),
+  }),
   /** Live from the hub: registered domains the agent should RECALL first. */
   domainPointers: z.array(CognitionDomainPointerSchema),
   /** Recall + contribute pointers (paths, not bodies). */

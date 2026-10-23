@@ -178,6 +178,7 @@ export {
 } from "./tools/goal-list";
 export {
   createKnowledgeIndexImplementation,
+  KNOWLEDGE_INDEX_MAX_BYTES,
   KNOWLEDGE_INDEX_NAME,
   type KnowledgeIndexDeps,
   type KnowledgeIndexInput,

@@ -9,7 +9,9 @@
  *   - BLIND_SELECTOR: the selector sees only the task text and the rows the mechanism exposes, never the labels.
  *   - NO_INTERNAL_TEXT_COMMITTED: task titles and summaries are fetched at run time, never stored in gold.json.
  *   - MEAN_OF_RUNS: the verdict uses the mean of `--runs` (default thresholds.minRuns) selector runs.
- *   - EXIT_CODE_IS_VERDICT: 0 = the decision table ships the mechanism (row 1 or 5) or a --ceiling-only report; 1 = any other row; 3 = INCONCLUSIVE (a row needs a mechanism that was not measured, or a read failed).
+ *   - EXIT_CODE_IS_VERDICT: 0 = the decision table ships the mechanism (row 1 or 5) or a --ceiling-only report; 1 = any other row; 3 = INCONCLUSIVE (the row needs a mechanism that was not measured, plain T was run (it is not in the table), or a read failed); 2 = bad arguments, before any model call.
+ *   - ROW_0_FROM_THE_SERVED_BUNDLE: the bundle-size row reads `governingRender.wholeBytes`, and A is scored only when the bundle served the whole index (`governingRender.mode = whole-index`).
+ *   - TOOL_PATH_IS_REAL: `--rows tool` captures a real `core__knowledge_index` result from an `/api/v1/ai/chat` stream of a graph that binds the tool.
  *   - RESULTS_NOT_COMMITTED: `--out <file>` writes the JSON scorecard wherever the caller chooses.
  * Side-effects: IO (HTTP reads to the node, model calls to its chat completions route or another OpenAI-compatible endpoint, optional --out file)
  * Links: evals/guidance-routing/README.md, score.ts
@@ -18,9 +20,11 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { isGoverningEntryType } from "../../src/domain/governing";
 import {
+  bm25Rank,
   ceiling,
   chunkMessage,
   type Decision,
@@ -33,6 +37,7 @@ import {
   type Selection,
   scoreRun,
   type Thresholds,
+  toolOutputFromSse,
 } from "./score";
 
 interface Row {
@@ -49,11 +54,22 @@ interface CognitionBody {
   /** Pre-governing builds served the skill/guide/playbook subset here. */
   skillsIndex?: (Row & { title?: string })[];
   domainPointers: { domain: string; description: string | null }[];
+  /** Absent on pre-governing builds, which always rendered their index whole. */
+  governingRender?: {
+    mode: "whole-index" | "shelf-pointer";
+    wholeBytes: number;
+  };
 }
 
-type Mechanism = "A" | "T" | "T+method";
+type Mechanism = "A" | "T" | "T+method" | "BM25";
 
-const DIR = path.dirname(new URL(import.meta.url).pathname);
+/** The fields of an earlier `--out` card the decision table needs. */
+interface PriorCard {
+  mechanism: Mechanism;
+  mean: RunScore;
+}
+
+const DIR = path.dirname(fileURLToPath(import.meta.url));
 const gold = JSON.parse(
   readFileSync(path.join(DIR, "gold.json"), "utf8")
 ) as Gold;
@@ -95,16 +111,29 @@ const MAX_MESSAGE_CHARS = process.env.EVAL_MAX_MESSAGE_CHARS
 const CEILING_ONLY = process.argv.includes("--ceiling-only");
 const MECHANISM = (argOf("--mechanism") ?? "A") as Mechanism;
 const RUNS = Number(argOf("--runs") ?? th.minRuns);
-/** `bundle` (default) reads the live cognition bundle; any other value is a JSON file of rows (e.g. core__knowledge_index output). */
+/**
+ * `bundle` (default) reads the live cognition bundle; `tool` captures a real
+ * `core__knowledge_index` call through `/api/v1/ai/chat` (graph `EVAL_TOOL_GRAPH`,
+ * default `brain`); any other value is a JSON file of rows.
+ */
 const ROWS = argOf("--rows") ?? "bundle";
+const TOOL_GRAPH = process.env.EVAL_TOOL_GRAPH ?? "brain";
+/** Override the bundle bytes for row 0 (e.g. rows from a file against a pre-governing build). */
+const BUNDLE_BYTES = argOf("--bundle-bytes");
+/** Comma-separated earlier `--out` cards whose means join this run's in the decision table (rows 7–8 compare mechanisms). */
+const PRIOR = argOf("--prior");
 const OUT = argOf("--out");
 
 if (!KEY) {
   console.error("EVAL_API_KEY or COGNI_NODE_API_KEY is required");
   process.exit(2);
 }
-if (!["A", "T", "T+method"].includes(MECHANISM)) {
-  console.error("--mechanism must be A, T or T+method");
+if (!["A", "T", "T+method", "BM25"].includes(MECHANISM)) {
+  console.error("--mechanism must be A, T, T+method or BM25");
+  process.exit(2);
+}
+if (!CEILING_ONLY && (!Number.isInteger(RUNS) || RUNS < th.minRuns)) {
+  console.error(`--runs must be an integer >= ${th.minRuns} (MEAN_OF_RUNS)`);
   process.exit(2);
 }
 if (!CEILING_ONLY && EXTERNAL_LLM && !process.env.EVAL_COMPLETIONS_API_KEY) {
@@ -234,12 +263,54 @@ async function shelfRows(domain: string): Promise<Row[]> {
   );
 }
 
+/** TOOL_PATH_IS_REAL: one graph run that calls core__knowledge_index; its streamed tool result is the rows. */
+async function toolRows(): Promise<{ rows: Row[]; truncated: boolean }> {
+  const res = await fetch(`${BASE}/api/v1/ai/chat`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${KEY}`,
+      "content-type": "application/json",
+      "user-agent": "curl/8.4.0",
+    },
+    body: JSON.stringify({
+      message:
+        "Call the core__knowledge_index tool exactly once with no arguments, then reply DONE.",
+      modelRef: { providerKey: "platform", modelId: MODEL },
+      graphName: TOOL_GRAPH,
+    }),
+  });
+  const sse = await res.text();
+  if (!res.ok)
+    throw new Error(
+      `POST /api/v1/ai/chat → ${res.status}: ${sse.slice(0, 300)}`
+    );
+  const output = toolOutputFromSse(sse, "core__knowledge_index") as {
+    entries?: Row[];
+    truncated?: boolean;
+  } | null;
+  if (!output?.entries)
+    throw new Error(
+      `graph ${TOOL_GRAPH} returned no core__knowledge_index result: ${sse.slice(0, 300)}`
+    );
+  return { rows: output.entries, truncated: output.truncated === true };
+}
+
 async function main(): Promise<void> {
   const cognition = await get<CognitionBody>(BASE, KEY, "/api/v1/cognition");
-  const bundleBytes = new TextEncoder().encode(cognition.markdown).byteLength;
+  // ROW_0_FROM_THE_SERVED_BUNDLE: the whole-index render size, not the served markdown.
+  const bundleBytes = BUNDLE_BYTES
+    ? Number(BUNDLE_BYTES)
+    : (cognition.governingRender?.wholeBytes ??
+      new TextEncoder().encode(cognition.markdown).byteLength);
+  const wholeIndexServed =
+    (cognition.governingRender?.mode ?? "whole-index") === "whole-index";
   let rows: Row[];
   let rowsSource: string;
-  if (ROWS !== "bundle") {
+  if (ROWS === "tool") {
+    const captured = await toolRows();
+    rows = captured.rows;
+    rowsSource = `core__knowledge_index via ${TOOL_GRAPH}${captured.truncated ? " (truncated)" : ""}`;
+  } else if (ROWS !== "bundle") {
     const file = JSON.parse(readFileSync(ROWS, "utf8")) as
       | { entries?: Row[] }
       | Row[];
@@ -292,7 +363,20 @@ async function main(): Promise<void> {
     for (const t of gold.tasks) {
       const task = texts.get(t.id) as string;
       let candidates = rows;
-      if (MECHANISM !== "A") {
+      if (MECHANISM === "BM25") {
+        // Row 7: BM25 top-50 over id + type + domain + useWhen, then select.
+        const top = new Set(
+          bm25Rank(
+            task,
+            rows.map((r) => ({
+              id: r.id,
+              text: `${r.entryType} ${r.domain} ${r.useWhen ?? ""}`,
+            })),
+            50
+          )
+        );
+        candidates = rows.filter((r) => top.has(r.id));
+      } else if (MECHANISM !== "A") {
         const shelves = await pickShelves(task, cognition.domainPointers);
         if (MECHANISM === "T+method" && !shelves.includes("method"))
           shelves.push("method");
@@ -310,14 +394,44 @@ async function main(): Promise<void> {
     runs.map((r) => r.score),
     th.minRuns
   );
-  const input: DecisionInput =
-    MECHANISM === "A"
-      ? {
+  // Plain T is informational: the table's T rows are defined for T plus `method`.
+  // A is scored only when the bundle actually served the whole index.
+  const measured = new Map<Mechanism, RunScore>();
+  for (const file of PRIOR ? PRIOR.split(",") : []) {
+    const prior = JSON.parse(readFileSync(file, "utf8")) as PriorCard;
+    measured.set(prior.mechanism, prior.mean);
+  }
+  measured.set(MECHANISM, mean);
+  const a = measured.get("A");
+  const t = measured.get("T+method");
+  const bm = measured.get("BM25");
+  const input: DecisionInput | null =
+    MECHANISM === "T"
+      ? null
+      : {
           bundleBytes,
-          A: { recallAt5: mean.recallAt5, rulesAt5: mean.rulesAt5 },
-        }
-      : { bundleBytes, T: { recallAt10: mean.recallAt10 } };
-  const decision: Decision = decide(input, th);
+          ...(a && wholeIndexServed
+            ? {
+                A: {
+                  recallAt5: a.recallAt5,
+                  rulesAt5: a.rulesAt5,
+                  recallAt10: a.recallAt10,
+                },
+              }
+            : {}),
+          ...(t ? { T: { recallAt10: t.recallAt10 } } : {}),
+          ...(bm ? { BM25: { recallAt10: bm.recallAt10 } } : {}),
+        };
+  const decision: Decision = input
+    ? decide(input, th)
+    : {
+        row: null,
+        ship: false,
+        action:
+          "Plain T is not in the decision table; its rows apply to T plus method.",
+        needs: "T+method",
+      };
+  const inconclusive = decision.row === null || decision.needs !== undefined;
 
   const card = {
     baseUrl: BASE,
@@ -332,12 +446,13 @@ async function main(): Promise<void> {
     runs: runs.map((r) => r.score),
     mean,
     decision,
+    prior: PRIOR ? PRIOR.split(",") : [],
     selections: runs.map((r) => r.selections),
   };
   const f = (x: number) => x.toFixed(3);
   console.log(
     [
-      `### guidance-routing eval — ${decision.ship ? "SHIP" : decision.row === null ? "INCONCLUSIVE" : "NO SHIP"}`,
+      `### guidance-routing eval — ${decision.ship ? "SHIP" : inconclusive ? "INCONCLUSIVE" : "NO SHIP"}`,
       "",
       `${header} · mechanism ${MECHANISM} · model ${MODEL}${GRAPH ? ` via ${GRAPH}` : ""} · ${RUNS} runs`,
       "",
@@ -350,11 +465,11 @@ async function main(): Promise<void> {
           `| ${m} | ${f(mean[m])} | ${runs.map((r) => f(r.score[m])).join(", ")} |`
       ),
       "",
-      `decision row ${decision.row ?? "-"}: ${decision.action}`,
+      `decision row ${decision.row ?? "-"}: ${decision.action}${decision.needs ? ` (needs ${decision.needs})` : ""}`,
     ].join("\n")
   );
   if (OUT) writeFileSync(OUT, `${JSON.stringify(card, null, 2)}\n`);
-  process.exit(decision.ship ? 0 : decision.row === null ? 3 : 1);
+  process.exit(decision.ship ? 0 : inconclusive ? 3 : 1);
 }
 
 main().catch((e: unknown) => {
