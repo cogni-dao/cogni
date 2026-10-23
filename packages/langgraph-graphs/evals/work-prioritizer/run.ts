@@ -8,14 +8,14 @@
  * Invariants:
  *   - FULL_REVIEW_ON_DEMAND: cycle 1 sends `fullReview: true`, so every run grades one full review (100% coverage)
  *     and then delta cycles (100% of the delta) on top of it.
- *   - OUTCOME_FROM_THE_GRAPH: each cycle's outcome is the `<prioritizer_report>` the graph pushes onto its own
- *     stream; `/api/v1/ai/runs` status is only the fallback. No log queries.
+ *   - OUTCOME_FROM_THE_GRAPH: each cycle's outcome is the graph's returned report, echoed onto the run stream
+ *     as one `<graph_report>` delta by the provider (catalog `report`); `/api/v1/ai/runs` status is only the
+ *     fallback. No log queries.
  *   - SCHEDULED_AT_SHA: the governance schedule must also have run the graph ≥ minScheduledCycles times at the SHA.
  *   - GOALS_FIRST: the node must have approved goals (listActiveGoals, read via the cognition bundle); none or
  *     unreadable ⇒ INCONCLUSIVE before any cycle.
  *   - EXIT_CODE_IS_VERDICT: exit 0 only when every hard + behavioral check passes; 1 = FAIL;
  *     3 = INCONCLUSIVE (no goal atoms, or the candidate's buildSha changed mid-eval — another flight evicted it).
- *   - WRITE_SECTION_SKIPPED: write-mode checks are listed as skipped (the graph is propose-only).
  *   - RESULTS_NOT_COMMITTED: `--out <file>` writes the JSON scorecard wherever the caller chooses.
  * Side-effects: IO (HTTP to the node; seeds + deletes one work item; optional --out file)
  * Links: evals/work-prioritizer/README.md, score.ts
@@ -25,8 +25,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { parse as parseYaml } from "yaml";
-
+import { DECISION_ID_RE } from "../../src/graphs/work-prioritizer/plan";
 import {
   type DecisionPayload,
   DecisionPayloadSchema,
@@ -50,11 +49,11 @@ import {
   infoPmOverlap,
   mergeLabelled,
   p0Of,
+  pollUntil,
   type Scorecard,
   type SnapshotItem,
   scorecardMarkdown,
   standingDecisionId,
-  WRITE_MODE_CHECKS,
 } from "./score";
 
 interface Config {
@@ -89,7 +88,6 @@ interface Cycle {
 }
 
 const DIR = path.dirname(new URL(import.meta.url).pathname);
-const REPO = path.resolve(DIR, "../../../..");
 const config = JSON.parse(
   readFileSync(path.join(DIR, "thresholds.json"), "utf8")
 ) as Config;
@@ -139,21 +137,11 @@ async function api<T>(pathname: string, init?: RequestInit): Promise<T> {
   return (text ? JSON.parse(text) : {}) as T;
 }
 
-/** The operator repo-spec policy, sent exactly as the governance schedule sends it. */
-function loadPolicy() {
-  const spec = parseYaml(
-    readFileSync(
-      path.join(REPO, "nodes/operator/.cogni/repo-spec.yaml"),
-      "utf8"
-    )
-  ) as {
-    work_prioritization: { policy_version: string };
-  };
-  const policy = { policyVersion: spec.work_prioritization.policy_version };
-  const trigger = (extra: Record<string, unknown> = {}) =>
-    `PRIORITIZE\n\n\`\`\`json\n${JSON.stringify({ workPrioritization: policy, ...extra })}\n\`\`\``;
-  return { policy, trigger };
-}
+/** The trigger the governance schedule sends (its entrypoint), plus an optional on-demand json block. */
+const trigger = (extra?: Record<string, unknown>) =>
+  extra
+    ? `PRIORITIZE\n\n\`\`\`json\n${JSON.stringify(extra)}\n\`\`\``
+    : "PRIORITIZE";
 
 async function snapshot(): Promise<SnapshotItem[]> {
   const out: SnapshotItem[] = [];
@@ -179,7 +167,7 @@ async function decisionIds(): Promise<{ id: string; createdAt?: string }[]> {
   );
   return shelves
     .flatMap((b) => b.items)
-    .filter((e) => /^work-prioritizer-\d{8}t\d{4}-decision$/.test(e.id))
+    .filter((e) => DECISION_ID_RE.test(e.id))
     .sort((a, b) => (a.id < b.id ? 1 : -1));
 }
 
@@ -261,9 +249,7 @@ async function invoke(trigger: string): Promise<CycleReport | null> {
       }
     })
     .join("");
-  const m = /<prioritizer_report>([\s\S]*?)<\/prioritizer_report>/.exec(
-    content
-  );
+  const m = /<graph_report>([\s\S]*?)<\/graph_report>/.exec(content);
   if (m?.[1]) return JSON.parse(m[1]) as CycleReport;
 
   const deadline = Date.now() + config.runTimeoutMs;
@@ -371,7 +357,6 @@ const allNone = (reason: string) =>
 async function runEval(underTest: string): Promise<void> {
   const startedAt = Date.now();
   await assertSha(underTest); // EXPECTED_SHA must be live before anything runs
-  const { policy, trigger } = loadPolicy();
   const landedAt = LANDED_AT ? Date.parse(LANDED_AT) : startedAt;
   const goalIds = await nodeGoalIds();
   if (goalIds.length === 0)
@@ -382,17 +367,22 @@ async function runEval(underTest: string): Promise<void> {
   const before = await snapshot();
   const hadPrior = (await decisionIds()).length > 0;
 
-  // Cycle 1: a requested full review. Cycle 2 (same snapshot, 61 s later — cycle ids are per minute):
-  // a delta cycle that must carry every judgment and file nothing.
+  // Cycle 1: a requested full review. Cycle 2 (same snapshot): a delta cycle that must carry every
+  // judgment and file nothing. Cycle ids are per second, so back-to-back cycles never collide.
   const c1 = await cycle(underTest, trigger({ fullReview: true }));
-  await sleep(61_000);
+  // READ_AFTER_WRITE: cycle 2 must start only once cycle 1's decision is readable (bounded poll, no fixed sleep).
+  c1.payload ??= await pollUntil(() => loadDecision(c1.id).catch(() => null), {
+    timeoutMs: 90_000,
+    intervalMs: 5_000,
+  });
+  if (c1.id && !c1.payload)
+    notes.push(`cycle 1 decision ${c1.id} not readable within 90 s`);
   const c2 = await cycle(underTest, trigger(), c1.id);
   const afterStability = await snapshot();
   if (c2.report?.scope === "full")
     notes.push("cycle 2 crossed 00:00 UTC and ran as a full review");
 
   // Cycle 3: seed a live incident (a new item ⇒ in the delta), run one delta cycle, always delete it.
-  await sleep(61_000);
   const seeded = await api<{ id: string }>("/api/v1/work/items", {
     method: "POST",
     body: JSON.stringify(fixture.incidentSeed),
@@ -466,7 +456,6 @@ async function runEval(underTest: string): Promise<void> {
     buildSha: underTest,
     baseUrl: BASE,
     model: MODEL,
-    policyVersion: policy.policyVersion,
     promptVersion:
       c1.payload?.promptVersion ?? c1.report?.promptVersion ?? null,
     mode: "propose",
@@ -485,7 +474,6 @@ async function runEval(underTest: string): Promise<void> {
         : none("no decision (cycle 1)"),
       "seeded incident (cycle 3)": gradeResponsiveness(c3.payload, seeded.id),
     },
-    skipped: [...WRITE_MODE_CHECKS],
     soft: { cycleMs, notes },
     pass: Object.values(checks).every((c) => c.pass),
   };

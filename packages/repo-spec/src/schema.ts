@@ -95,11 +95,6 @@ export const governanceScheduleSchema = z
       .optional(),
     /** Platform (LiteLLM) model id the `graph` run uses. Required when `graph` is set. */
     model: z.string().min(1).optional(),
-    /**
-     * Names a top-level repo-spec policy block forwarded to the `graph` run as its trusted
-     * payload (story.5096). Requires `graph`.
-     */
-    policy: z.enum(["work_prioritization"]).optional(),
   })
   .superRefine((entry, ctx) => {
     if (entry.graph !== undefined && entry.model === undefined) {
@@ -109,34 +104,9 @@ export const governanceScheduleSchema = z
         message: "`model` is required when `graph` is set",
       });
     }
-    if (entry.policy !== undefined && entry.graph === undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["policy"],
-        message: "`policy` requires `graph`",
-      });
-    }
   });
 
 export type GovernanceScheduleSpec = z.infer<typeof governanceScheduleSchema>;
-
-/**
- * Work-prioritization policy (story.5096): node-owned, versioned, reviewed. Goals are NOT here — the
- * prioritizer reads the hub's active `goal-*` atoms (dao-goals-design, ONE_GOAL_LIST) — and there are no
- * capacity caps. `apply.mode` is per environment (`default` required).
- */
-export const workPrioritizationSpecSchema = z.object({
-  policy_version: z.string().min(1),
-  apply: z.object({
-    mode: z
-      .object({ default: z.enum(["propose", "write"]) })
-      .catchall(z.enum(["propose", "write"])),
-  }),
-});
-
-export type WorkPrioritizationSpec = z.infer<
-  typeof workPrioritizationSpecSchema
->;
 
 /**
  * Schema for the unified `governance` section of repo-spec — the node/scope's
@@ -1076,9 +1046,6 @@ export const repoSpecSchema = z
      * no operator vocab leak).
      */
     schedules: nodeSchedulesSchema.optional().default([]),
-
-    /** Work-prioritization policy (story.5096). Optional — only nodes running the prioritizer. */
-    work_prioritization: workPrioritizationSpecSchema.optional(),
 
     /**
      * Provider-neutral app-tier services. Omitted by existing nodes; the

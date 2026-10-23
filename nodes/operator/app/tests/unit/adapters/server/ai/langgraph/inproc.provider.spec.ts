@@ -16,6 +16,7 @@
 import type { AiEvent, ToolSourcePort } from "@cogni/ai-core";
 import { TOOL_CATALOG, toBoundToolRuntime } from "@cogni/ai-tools";
 import { FakeAuthorizationAdapter } from "@cogni/authorization-core";
+import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
 import { describe, expect, it, vi } from "vitest";
 
 // Pass-through spy so the provider's tool-runner config can be asserted (authz v0).
@@ -34,11 +35,12 @@ vi.mock("@cogni/ai-core", async (importOriginal) => {
 import { runInScope } from "@/adapters/server/ai/execution-scope";
 import type { CompletionUnitAdapter } from "@/adapters/server/ai/langgraph/inproc.provider";
 import {
+  graphReportDelta,
+  graphReportLogFields,
   LangGraphInProcProvider,
-  prioritizerCycleLogFields,
-  prioritizerJudgeSampleLogFields,
 } from "@/adapters/server/ai/langgraph/inproc.provider";
 import type { GraphRunRequest } from "@/ports";
+import { EVENT_NAMES } from "@/shared/observability";
 
 const TEST_SCOPE = {
   billing: {
@@ -283,45 +285,41 @@ describe("LangGraphInProcProvider", () => {
     });
   });
 
-  describe("work-prioritizer cycle event", () => {
-    it("maps the graph's telemetry to one ai.work_prioritizer.cycle event", () => {
-      const fields = prioritizerCycleLogFields("run-9", {
-        status: "assessed_no_edo",
-        telemetry: {
-          status: "assessed_no_edo",
-          itemsAssessed: 7,
-          hypothesesFiled: 0,
-          decisionId: null,
-          edoWrites: 0,
-          guardViolations: [{ code: "hypothesis_ungrounded", count: 3 }],
-          toolErrorCount: 0,
-          promptVersion: "work-prioritizer/2026-10-20.v1",
-          modelRef: "gpt-oss-120b",
-        },
+  describe("catalog report seam (CatalogEntry.report)", () => {
+    const report = {
+      event: "ai.work_prioritizer.cycle",
+      sampleEvent: "ai.work_prioritizer.judge_sample",
+    };
+
+    it("every catalog-declared report names registered events", () => {
+      const registered = new Set<string>(Object.values(EVENT_NAMES));
+      const declared = Object.values(LANGGRAPH_CATALOG).flatMap((e) => {
+        const r = (e as { report?: { event: string; sampleEvent?: string } })
+          .report;
+        return r ? [r.event, ...(r.sampleEvent ? [r.sampleEvent] : [])] : [];
       });
-      expect(fields).toEqual({
-        event: "ai.work_prioritizer.cycle",
-        runId: "run-9",
-        status: "assessed_no_edo",
-        itemsAssessed: 7,
-        hypothesesFiled: 0,
-        decisionId: null,
-        edoWrites: 0,
-        guardViolations: [{ code: "hypothesis_ungrounded", count: 3 }],
-        toolErrorCount: 0,
-        promptVersion: "work-prioritizer/2026-10-20.v1",
-        modelRef: "gpt-oss-120b",
-      });
+      expect(declared.length).toBeGreaterThan(0);
+      for (const name of declared) expect(registered.has(name)).toBe(true);
     });
 
-    it("maps each judge sample to one ai.work_prioritizer.judge_sample event", () => {
+    it("logs the telemetry as `event` and each sample as `sampleEvent`", () => {
       const sample = {
         lines: ['{"id":"bug.1","harmDays":"1 day"}'],
         counts: { lines: 14, parsed: 14, withHarm: 3, withHarmDays: 1 },
       };
       expect(
-        prioritizerJudgeSampleLogFields("run-9", { judgeSamples: [sample] })
+        graphReportLogFields(report, "run-9", {
+          telemetry: { status: "planned", decisionId: "d", edoWrites: 1 },
+          samples: [sample],
+        })
       ).toEqual([
+        {
+          event: "ai.work_prioritizer.cycle",
+          runId: "run-9",
+          status: "planned",
+          decisionId: "d",
+          edoWrites: 1,
+        },
         {
           event: "ai.work_prioritizer.judge_sample",
           runId: "run-9",
@@ -329,14 +327,18 @@ describe("LangGraphInProcProvider", () => {
           ...sample,
         },
       ]);
-      expect(prioritizerJudgeSampleLogFields("r", { content: "x" })).toEqual(
-        []
-      );
     });
 
-    it("returns null when the output carries no telemetry", () => {
-      expect(prioritizerCycleLogFields("r", undefined)).toBeNull();
-      expect(prioritizerCycleLogFields("r", { content: "x" })).toBeNull();
+    it("emits nothing when the output carries no report", () => {
+      expect(graphReportLogFields(report, "r", undefined)).toEqual([]);
+      expect(graphReportLogFields(report, "r", { content: "x" })).toEqual([]);
+      expect(graphReportDelta({ content: "x" })).toBeNull();
+    });
+
+    it("echoes the telemetry as one <graph_report> delta", () => {
+      expect(graphReportDelta({ telemetry: { status: "no_change" } })).toBe(
+        '\n<graph_report>{"status":"no_change"}</graph_report>\n'
+      );
     });
   });
 

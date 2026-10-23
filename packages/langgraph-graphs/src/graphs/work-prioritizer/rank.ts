@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/rank`
  * Purpose: "lexicographic heuristic v2" — pure, deterministic priority assignment from judgments (dao-goals-design).
- * Scope: Eligibility gates, ordering, pins, and rank numbers; does not call tools or LLMs.
+ * Scope: Eligibility gates, ordering, and rank numbers; does not call tools or LLMs.
  * Invariants:
  *   - GATES_FIRST: fixture/duplicate/superseded/no-goal-fit ⇒ p4 (a duplicate group keeps its canonical,
  *     lowest-id member ranked normally); blocked or needs_triage ⇒ never p0/p1, except a needs_triage live
@@ -14,7 +14,6 @@
  *   - NO_CAPS: every eligible item takes its level — no ceilings (privileged p0/p1 removes inflation at its source).
  *   - ORDER: service class → max goal impact → effort (S<M<L) → item id (exact final tiebreak).
  *   - TRACKERS_BELOW_CHILDREN: an item with an actionable child in the snapshot is never p0/p1 (the child takes it).
- *   - PINS: `priority:pinned` items never move.
  *   - EXACTLY_ONE_ROW: every snapshot item gets exactly one row with a unique rank 1..N.
  * Side-effects: none
  * Links: dao-goals-design, schema.ts (RankedRow)
@@ -23,7 +22,6 @@
 
 import type { Effort, ItemJudgment, RankedRow, ServiceClass } from "./schema";
 
-export const PINNED_LABEL = "priority:pinned";
 export const P0_HARM_WINDOW_DAYS = 7;
 
 const SERVICE_ORDER: Record<ServiceClass, number> = {
@@ -114,7 +112,6 @@ interface Scored {
   readonly goal: string | null;
   readonly serviceRank: number;
   readonly effortRank: number;
-  readonly pinned: boolean;
   readonly reasons: string[];
   p4: boolean;
   p0Eligible: boolean;
@@ -147,7 +144,6 @@ function score(input: RankInput, item: RankItem): Scored {
       goal = g;
     }
   }
-  const pinned = item.labels.includes(PINNED_LABEL);
   const known = (id: string | undefined) =>
     id !== undefined && input.knownEvidenceIds.has(id);
 
@@ -158,18 +154,12 @@ function score(input: RankInput, item: RankItem): Scored {
     goal,
     serviceRank: j ? SERVICE_ORDER[j.serviceClass] : 9,
     effortRank: j ? EFFORT_ORDER[j.effort] : 9,
-    pinned,
     reasons,
     p4: false,
     p0Eligible: false,
     p1Eligible: false,
     p2Eligible: false,
   };
-  if (pinned) {
-    reasons.push("pinned");
-    return s;
-  }
-
   // GATES_FIRST — p4
   const group = input.duplicateGroups.find((g) => g.includes(item.id));
   const canonical = group ? canonicalOfGroup(group) : undefined;
@@ -232,17 +222,7 @@ function score(input: RankInput, item: RankItem): Scored {
 export function rankItems(input: RankInput): RankedRow[] {
   const scored = input.items.map((item) => score(input, item));
   const levelOf = (s: Scored) =>
-    s.pinned
-      ? Math.min(4, Math.max(0, s.item.priority ?? 3))
-      : s.p4
-        ? 4
-        : s.p0Eligible
-          ? 0
-          : s.p1Eligible
-            ? 1
-            : s.p2Eligible
-              ? 2
-              : 3;
+    s.p4 ? 4 : s.p0Eligible ? 0 : s.p1Eligible ? 1 : s.p2Eligible ? 2 : 3;
   return [...scored]
     .sort((a, b) => levelOf(a) - levelOf(b) || compareScored(a, b))
     .map((s, i) => ({
@@ -252,7 +232,6 @@ export function rankItems(input: RankInput): RankedRow[] {
       fromRank: s.item.rank ?? null,
       to: levelOf(s),
       rank: i + 1,
-      pinned: s.pinned,
       serviceClass: s.judgment?.serviceClass ?? null,
       maxImpact: s.maxImpact,
       goal: s.goal,

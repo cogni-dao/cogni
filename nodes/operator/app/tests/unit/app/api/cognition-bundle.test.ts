@@ -308,6 +308,22 @@ describe("renderBundleMarkdown", () => {
     expect(cicd).toContain("<watch-gate>");
   });
 
+  it("orders the CICD loop as fresh review, flight, validate, then operator merge", () => {
+    const cicd =
+      SESSION_BOOTSTRAP_INVARIANTS.find((line) =>
+        line.startsWith("Follow the CICD checklist")
+      ) ?? "";
+    const review = cicd.indexOf("/review-implementation");
+    const flight = cicd.indexOf("/api/v1/vcs/flight");
+    const validate = cicd.indexOf("/validate-candidate");
+    const merge = cicd.indexOf("/api/v1/vcs/merge");
+
+    expect(review).toBeGreaterThanOrEqual(0);
+    expect(review).toBeLessThan(flight);
+    expect(flight).toBeLessThan(validate);
+    expect(validate).toBeLessThan(merge);
+  });
+
   it("prompts seeding an orientation entry when none exists", () => {
     const markdown = renderBundleMarkdown(baseInput);
 

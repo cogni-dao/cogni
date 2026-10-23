@@ -331,11 +331,13 @@ jobs:
         working-directory: app-src
         env:
           FLIGHT_TARGETS_JSON: ${{ steps.flight-targets.outputs.flight_targets_json }}
+          PARENT_SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
         run: |
           pnpm --filter operator materialize:compute-workload \
             --catalog-root "${GITHUB_WORKSPACE}/app-src/infra/catalog" \
             --environment candidate-a \
             --flight-targets-json "$FLIGHT_TARGETS_JSON" \
+            --source-sha "$PARENT_SOURCE_SHA" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx

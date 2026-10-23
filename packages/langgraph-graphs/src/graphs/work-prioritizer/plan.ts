@@ -3,15 +3,14 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/plan`
- * Purpose: Pure planning helpers (design v4 §2.4–§2.7): plan rows, diff vs the prior decision, the no-change
- *   rule, the prior decision memo, and review scope (daily full review vs delta).
+ * Purpose: Pure planning helpers: plan rows, prior-decision diff and memo, the no-change rule, and review scope.
  * Scope: Pure functions over ranked rows and parsed hub content; does not call tools, LLMs, or read env.
  * Invariants:
- *   - PLAN_IS_CHANGED_ROWS: a row is planned iff its priority OR rank changes (never pinned or unjudged rows).
+ *   - PLAN_IS_CHANGED_ROWS: a row is planned iff its priority OR rank changes (never unjudged rows); p0/p1 rows carry their goal.
  *   - NO_CHANGE_NO_DECISION: nothing to propose, or the same table as the prior decision ⇒ no decision.
  *   - DAILY_FULL_REVIEW / DELTA_SCOPE (selectJudgeSet): see below.
  * Side-effects: none
- * Links: .context/prioritizer-design-v4.md, schema.ts
+ * Links: schema.ts
  * @public
  */
 
@@ -28,7 +27,6 @@ export function buildPlan(rows: readonly RankedRow[]): PlanRow[] {
   return rows
     .filter(
       (r) =>
-        !r.pinned &&
         !r.reasons.includes("unjudged_p3") &&
         (r.from !== r.to || (r.fromRank ?? null) !== r.rank)
     )
@@ -38,6 +36,7 @@ export function buildPlan(rows: readonly RankedRow[]): PlanRow[] {
       to: r.to,
       rank: r.rank,
       expectedRevision: r.revision,
+      goal: r.goal,
     }));
 }
 
@@ -62,7 +61,8 @@ export const isNoChange = (
   hasPriorTable: boolean
 ) => plan.length === 0 || (hasPriorTable && diff.length === 0);
 
-export const DECISION_ID_RE = /^work-prioritizer-\d{8}t\d{4}-decision$/;
+/** Cycle ids stamp to the second (`…t120530`); minute stamps (`…t1205`) from earlier decisions still match. */
+export const DECISION_ID_RE = /^work-prioritizer-\d{8}t\d{4}(\d{2})?-decision$/;
 export type ReviewScope = "full" | "delta";
 
 /** The newest prior prioritizer decision: what this cycle may reuse (empty fields for v0 decisions). */
@@ -137,7 +137,7 @@ export function newestPriorDecision(
  * item, and every item whose revision differs from the one the prior decision judged (new items
  * included). A delta item is re-judged unless its revision is unchanged and no NEW hub evidence (not
  * consumed by the prior cycle, not the prioritizer's own rows) mentions it. Every item outside the delta
- * carries its prior judgment, so the ceilings still rank the whole backlog.
+ * carries its prior judgment, so code still ranks the whole backlog.
  */
 export function selectJudgeSet<
   T extends {

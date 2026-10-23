@@ -17,7 +17,6 @@ pr:
 reviewer:
 revision: 0
 blocked_by:
-deploy_verified: false
 created:
 updated:
 labels: []

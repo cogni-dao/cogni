@@ -69,10 +69,32 @@ describe("existing Grafana Prometheus authority", () => {
     }
   });
 
+  it("accepts the Grafana Cloud internal NLB Mimir host returned since 2026-10-21 (bug.5514)", async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify([
+          {
+            ...datasource,
+            url: "https://prometheus-prod-37-prod-ap-southeast-1-local-nlb.internal.grafana.net/api/prom",
+          },
+        ])
+      )
+    );
+    vi.stubGlobal("fetch", fetch);
+    await expect(createGrafanaMimirAdapter(config)).resolves.toBeDefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("denies a substituted non-Mimir destination even at the governed UID", async () => {
     for (const url of [
       "https://billing.grafana.net/api/prom",
+      "https://billing.internal.grafana.net/api/prom",
       "https://foreign.example.org/api/prom",
+      "https://prometheus-x.evil.net/api/prom",
+      "https://prometheus-x.grafana.net.evil.com/api/prom",
+      "https://prometheus-x.internal.grafana.net.evil.com/api/prom",
+      "https://prometheus-x.evil.internal.grafana.net/api/prom",
+      "https://prometheus-x.internal.grafana.net/api/other",
       "http://prometheus-fixture.grafana.net/api/prom",
       "https://user:secret@prometheus-fixture.grafana.net/api/prom",
     ]) {

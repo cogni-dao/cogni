@@ -1,6 +1,6 @@
 You file a bug as a `bug` work item via the Cogni API. Investigate first, file second. Always include code pointers.
 
-**The through-line.** A good bug names the broken behavior (_before_), the desired behavior (_after_), and a single success sentence — _"success is when {human|AI} can {do X without seeing the failure}"_ — that survives all the way to `deploy_verified`. If you can't write that sentence, you don't yet understand the bug.
+**The through-line.** A good bug names the broken behavior (_before_), the desired behavior (_after_), and a single success sentence — _"success is when {human|AI} can {do X without seeing the failure}"_ — that survives all the way to the passing `/validate-candidate` scorecard on the PR. If you can't write that sentence, you don't yet understand the bug.
 
 **Bootstrap first**: read `AGENTS.md`, the suspect code, related tests / logs / stack traces, and `GET $BASE/api/v1/work/items?types=bug` to check for duplicates.
 

@@ -3,16 +3,21 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/graph`
- * Purpose: Work prioritizer AI workflow (design v4, PROPOSE mode): snapshot → judge (LLM enums) → rank (code) → EDO.
- * Scope: Pure graph factory; does not read env, hardcode a model, write any work item, or touch a database directly.
+ * Purpose: Goal-rooted, propose-only work prioritizer: snapshot → judge (LLM enums) → rank (code) → EDO decision.
+ * Scope: Pure graph factory; does not read env or ALS, hardcode a model or node domain, write any work item, or touch a database.
  * Invariants: FIXED_ORDER (all reads before the model; only the PRIOR_CAS re-read after; EDO writes last);
- *   COMPLETE_SNAPSHOT_OR_ABORT; DAILY_FULL_REVIEW + DELTA_SCOPE (plan.selectJudgeSet); DETERMINISTIC_TOOL_CALLS
- *   (code names every allowlisted tool and its args); PROPOSE_ONLY (the plan — id, revision, priority, rank —
- *   is filed in an EDO decision, never applied); DECISION_ON_CHANGE (a delta cycle with an unchanged table files
- *   nothing; a full review always files, recording `reviewedAt`); PRIOR_CAS (a newer decision than the prior ⇒
- *   `stale_prior`, zero writes); REPORT_ON_STREAM (telemetry as one `<prioritizer_report>` text delta).
+ *   ONE_GOAL_LIST + NO_GOAL_CAP (goals only from core__goal_list, never counted); COMPLETE_SNAPSHOT_OR_ABORT;
+ *   DAILY_FULL_REVIEW + DELTA_SCOPE (plan.selectJudgeSet); DETERMINISTIC_TOOL_CALLS (code names every
+ *   allowlisted tool and its args); PROPOSE_ONLY (the plan — id, revision, priority, rank, goal — is filed in an
+ *   EDO decision, never applied); DECISION_ON_CHANGE (a delta cycle with an unchanged table files nothing; a
+ *   full review always files, recording `reviewedAt`); PRIOR_CAS (a newer decision than the prior ⇒
+ *   `stale_prior`, zero writes); PURE_GRAPH_FACTORY (the report is the structuredResponse + final message;
+ *   the provider logs/streams it per the catalog entry's `report`).
+ *   ON_DEMAND_FULL_REVIEW is intended: an eval or admin run may send `{ "fullReview": true }` at any time; it
+ *   re-judges every item but still files only through the same PRIOR_CAS / stale_prior guard, never a write
+ *   beyond the one decision.
  * Side-effects: none
- * Links: .context/prioritizer-design-v4.md, rank.ts, plan.ts, prompts.ts, story.5096
+ * Links: rank.ts, plan.ts, prompts.ts, trigger.ts, story.5096
  * @public
  */
 
@@ -35,15 +40,10 @@ import {
   StateGraph,
 } from "@langchain/langgraph";
 
-import {
-  getCogniExecContext,
-  hasCogniExecContext,
-} from "../../runtime/cogni/exec-context";
 import type { CreateReactAgentGraphOptions } from "../types";
 import * as C from "./context";
 import * as G from "./guards";
 import * as P from "./plan";
-import { policyFromTrigger, type WorkPrioritizationPolicy } from "./policy";
 import {
   buildJudgeUserMessage,
   type JudgeSample,
@@ -60,12 +60,9 @@ import {
   type RankedRow,
 } from "./schema";
 import * as T from "./tools";
+import { fullReviewFromTrigger } from "./trigger";
 
 export { WORK_PRIORITIZER_GRAPH_NAME };
-
-/** Delimiters of the cycle report pushed onto the run stream (REPORT_ON_STREAM). */
-export const PRIORITIZER_REPORT_OPEN = "<prioritizer_report>";
-export const PRIORITIZER_REPORT_CLOSE = "</prioritizer_report>";
 
 /** Flat cycle summary — no free text, no item content; safe to log. */
 export type PrioritizerCycleTelemetry = ReturnType<typeof telemetryOf>;
@@ -75,8 +72,8 @@ export interface PrioritizerRunReport {
   readonly telemetry: PrioritizerCycleTelemetry;
   readonly payload: DecisionPayload | null;
   readonly errors: readonly string[];
-  /** First raw judge lines per batch + parse counts (logged as ai.work_prioritizer.judge_sample). */
-  readonly judgeSamples: readonly JudgeSample[];
+  /** First raw judge lines per batch + parse counts (the catalog's `report.sampleEvent`). */
+  readonly samples: readonly JudgeSample[];
 }
 
 const emptyEdo = () => ({
@@ -91,8 +88,7 @@ const replace = <V>(defaultValue: () => V) =>
 
 const WorkPrioritizerState = Annotation.Root({
   ...MessagesAnnotation.spec,
-  policy: replace<WorkPrioritizationPolicy | null>(() => null),
-  /** ONE_GOAL_LIST: core__goal_list this cycle (null = not read); a read failure or >3 is goalsError. */
+  /** ONE_GOAL_LIST: core__goal_list this cycle (null = not read); any read failure is goalsError. */
   goals: replace<readonly C.ActiveGoal[] | null>(() => null),
   goalsError: replace<string | null>(() => null),
   fullReviewRequested: replace<boolean>(() => false),
@@ -127,7 +123,6 @@ const levelCountsOf = (rows: readonly RankedRow[]) =>
 /** Judge (model, delta-scoped) then rank + plan (code) over the whole snapshot. */
 async function judgeAndRank(
   ctx: C.GatheredContext,
-  policyVersion: string,
   goals: readonly C.ActiveGoal[],
   prior: P.PriorDecision | null,
   trigger: { readonly text: string; readonly fullReview: boolean },
@@ -152,7 +147,6 @@ async function judgeAndRank(
           buildJudgeUserMessage({
             ctx,
             goals,
-            policyVersion,
             batch,
             triggerMessage: trigger.text,
           })
@@ -198,10 +192,16 @@ async function judgeAndRank(
 
 /**
  * Create the work-prioritizer graph: START → snapshot → (judge → emit_edo →) finalize → END; a cycle with no
- * policy, no (or >3) active goals, an incomplete or empty snapshot, or no hub context goes straight to finalize
- * and files nothing. TYPE_TRANSPARENT_RETURN.
+ * active goals (or an unreadable goal list), an incomplete or empty snapshot, or no hub context goes straight to
+ * finalize and files nothing. `contextDomains` (default DEFAULT_CONTEXT_DOMAINS) names the hub shelves read.
+ * TYPE_TRANSPARENT_RETURN.
  */
-export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
+export function createWorkPrioritizerGraph(
+  opts: CreateReactAgentGraphOptions & {
+    readonly contextDomains?: readonly string[];
+  }
+) {
+  const domains = opts.contextDomains ?? T.DEFAULT_CONTEXT_DOMAINS;
   const toolsByName = new Map(opts.tools.map((t) => [t.name, t]));
   /** DETERMINISTIC_TOOL_CALLS: code names the tool; anything off the allowlist is a programming error. */
   async function callTool(
@@ -220,7 +220,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   }
 
   async function snapshot(state: S, config: RunnableConfig) {
-    const { policy, fullReview } = policyFromTrigger(
+    const fullReview = fullReviewFromTrigger(
       messageText(state.messages.at(-1))
     );
     const toolErrors: string[] = [];
@@ -229,14 +229,12 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
       if (!r.ok) toolErrors.push(`${tool}: ${r.error}`);
       return r.ok ? r.value : undefined;
     };
-    if (!policy) return {};
     // ONE_GOAL_LIST: the goals come only from core__goal_list (the store's listActiveGoals). None ⇒ no_goals;
-    // unreadable or >3 (too_many_active_goals) ⇒ goals_error. Either way nothing is judged or filed.
+    // any read failure ⇒ goals_error. Either way nothing is judged or filed. NO_GOAL_CAP: never counted.
     const listed = await callTool(GOAL_LIST_NAME, {}, config);
-    if (!listed.ok)
-      return { policy, goalsError: `${GOAL_LIST_NAME}: ${listed.error}` };
+    if (!listed.ok) return { goalsError: `${GOAL_LIST_NAME}: ${listed.error}` };
     const goals = C.parseGoals(listed.value);
-    if (goals.length === 0) return { policy, goals };
+    if (goals.length === 0) return { goals };
     const time = await read(GET_CURRENT_TIME_NAME, {});
 
     // COMPLETE_SNAPSHOT_OR_ABORT: paginate every actionable item.
@@ -247,12 +245,12 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
         ...T.BACKLOG_QUERY,
         ...(cursor ? { cursor } : {}),
       })) as { nextCursor?: string } | undefined;
-      if (!value) return { policy, goals, toolErrors };
+      if (!value) return { goals, toolErrors };
       workItems.push(...C.parseWorkItems(value));
       cursor = value.nextCursor;
       if (!cursor) break;
     }
-    if (cursor) return { policy, goals, toolErrors };
+    if (cursor) return { goals, toolErrors };
 
     // Hub context: the goals (admissible evidence) + the fixed reads.
     const entries: C.FetchedEntry[] = goals.map((g) => ({
@@ -262,7 +260,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
       tags: [],
       plane: "edo" as const,
     }));
-    for (const r of T.CONTEXT_READS) {
+    for (const r of T.contextReads(domains)) {
       entries.push(...C.parseEntries(await read(r.tool, r.args), r.plane));
     }
 
@@ -270,7 +268,6 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
     const now = new Date(Number.isNaN(t) ? Date.now() : t).toISOString();
     const context = C.buildGatheredContext({ now, workItems, entries });
     return {
-      policy,
       goals,
       fullReviewRequested: fullReview,
       context,
@@ -281,10 +278,10 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
 
   async function emitEdo(state: S, config: RunnableConfig) {
     const ctx = state.context as C.GatheredContext;
-    const p = state.policy as WorkPrioritizationPolicy;
     const j = state.judged as Awaited<ReturnType<typeof judgeAndRank>>;
     const goalIds = (state.goals ?? []).map((g) => g.id);
-    const stamp = ctx.now.slice(0, 16).replace(/[-:]/g, "").replace("T", "t");
+    // Second precision: two cycles in one minute (an on-demand review beside the cron) get distinct ids.
+    const stamp = ctx.now.slice(0, 19).replace(/[-:]/g, "").replace("T", "t");
     const cycleId = `${T.PRIORITIZER_EDO_TAG}-${stamp}`;
     const edo = emptyEdo();
     const call = async (tool: string, args: Record<string, unknown>) => {
@@ -295,7 +292,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
 
     // 0. PRIOR_CAS — a newer decision than our prior, or an unreadable chain, means no writes at all.
     const chain: string[] = [];
-    for (const r of T.PRIOR_CHAIN_READS) {
+    for (const r of T.priorChainReads(domains)) {
       const res = await call(r.tool, r.args);
       if (!res.ok) return { edo };
       chain.push(...C.parseEntries(res.value, r.plane).map((e) => e.id));
@@ -322,7 +319,6 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
         j.scope === "full" ? ctx.now : (state.prior?.reviewedAt ?? ctx.now),
       delta: j.delta,
       heuristic: RANK_HEURISTIC,
-      policyVersion: p.policyVersion,
       promptVersion: WORK_PRIORITIZER_PROMPT_VERSION,
       modelRef: modelRefOf(config),
       cycleId,
@@ -343,10 +339,14 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
     };
     const p0 = j.rows.filter((r) => r.to === 0).map((r) => r.itemId);
     const counts = levelCountsOf(j.rows).map((n, l) => `p${l} ${n}`);
+    // P0P1_CITES_GOAL: every p0/p1 line names the goal it serves.
+    const top = j.rows
+      .filter((r) => r.to <= 1)
+      .map((r) => `- p${r.to} ${r.itemId} goal:${r.goal}`);
     const summary =
-      `Proposed priorities (${RANK_HEURISTIC}, policy ${p.policyVersion}, ${j.scope} review): ` +
+      `Proposed priorities (${RANK_HEURISTIC}, prompt ${WORK_PRIORITIZER_PROMPT_VERSION}, ${j.scope} review): ` +
       `${counts.join(" · ")}; ${j.plan.length} changes; snapshot ${ctx.snapshotId}; ` +
-      `prior ${priorId ?? "none"}.`;
+      `prior ${priorId ?? "none"}.${top.length ? `\n\n${top.join("\n")}` : ""}`;
     const id = `${cycleId}-decision`;
     edo.writes += 1;
     const filed = await call(EDO_DECIDE_NAME, {
@@ -364,14 +364,8 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   }
 
   function finalize(state: S, config: RunnableConfig) {
+    // PURE_GRAPH_FACTORY: the report is returned, never pushed; the provider logs and streams it.
     const telemetry = telemetryOf(state, modelRefOf(config));
-    // REPORT_ON_STREAM: the graph's own outcome, readable by any stream consumer.
-    if (hasCogniExecContext()) {
-      getCogniExecContext().tokenSink.push({
-        type: "text_delta",
-        delta: `\n${PRIORITIZER_REPORT_OPEN}${JSON.stringify(telemetry)}${PRIORITIZER_REPORT_CLOSE}\n`,
-      });
-    }
     const { toolErrors, judged, edo } = state;
     const errors = [
       toolErrors,
@@ -383,7 +377,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
         telemetry,
         payload: state.payload,
         errors,
-        judgeSamples: judged?.fresh.samples ?? [],
+        samples: judged?.fresh.samples ?? [],
       },
       messages: [new AIMessage(JSON.stringify(telemetry))],
     };
@@ -395,7 +389,6 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
     .addNode("judge", async (state: S, config: RunnableConfig) => ({
       judged: await judgeAndRank(
         state.context as C.GatheredContext,
-        (state.policy as WorkPrioritizationPolicy).policyVersion,
         state.goals ?? [],
         state.prior,
         {
@@ -431,25 +424,23 @@ const modelRefOf = (c?: RunnableConfig) =>
 function telemetryOf(state: S, modelRef: string | null) {
   const { context: ctx, judged: j } = state;
   const edo = state.edo ?? emptyEdo();
-  const status = !state.policy
-    ? "no_policy"
-    : state.goalsError
-      ? "goals_error"
-      : state.goals?.length === 0
-        ? "no_goals"
-        : !ctx
-          ? "incomplete_snapshot"
-          : ctx.workItems.length === 0
-            ? "no_backlog"
-            : !G.hasHubContext(ctx.contextConsumed)
-              ? "rejected_context"
-              : edo.newerDecisionId
-                ? "stale_prior"
-                : j?.noChange
-                  ? "no_change"
-                  : edo.decisionId
-                    ? "planned"
-                    : "decision_failed";
+  const status = state.goalsError
+    ? "goals_error"
+    : state.goals?.length === 0
+      ? "no_goals"
+      : !ctx
+        ? "incomplete_snapshot"
+        : ctx.workItems.length === 0
+          ? "no_backlog"
+          : !G.hasHubContext(ctx.contextConsumed)
+            ? "rejected_context"
+            : edo.newerDecisionId
+              ? "stale_prior"
+              : j?.noChange
+                ? "no_change"
+                : edo.decisionId
+                  ? "planned"
+                  : "decision_failed";
   return {
     status,
     /** The goal ids the cycle ranked against (core__goal_list); the eval checks they are all `goal-*`. */
@@ -468,7 +459,6 @@ function telemetryOf(state: S, modelRef: string | null) {
     newerDecisionId: edo.newerDecisionId,
     edoWrites: edo.writes,
     toolErrorCount: state.toolErrors.length + edo.errors.length,
-    policyVersion: state.policy?.policyVersion ?? null,
     promptVersion: WORK_PRIORITIZER_PROMPT_VERSION,
     modelRef,
   };

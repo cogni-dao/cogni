@@ -1,6 +1,6 @@
 ---
 name: validate-candidate
-description: Validate a PR flighted to candidate-a with exact-SHA, behavior, authentication, UI/API and feature-specific Loki proof. Use for /validate-candidate, "prove this PR on candidate-a", or closing deploy_verified. Fetch the authoritative hub contract first. Not for local tests or pre-flight CI.
+description: Validate a PR flighted to candidate-a with exact-SHA, behavior, authentication, UI/API and feature-specific Loki proof. Use for /validate-candidate, "prove this PR on candidate-a", or posting the PR validation scorecard. Fetch the authoritative hub contract first. Not for local tests or pre-flight CI.
 ---
 
 # validate-candidate

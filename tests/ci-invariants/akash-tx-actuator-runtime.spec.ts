@@ -656,6 +656,7 @@ describe("akash-tx-actuator runtime", () => {
       resolveDeploymentTargets({
         catalogRows: [base],
         environment: "candidate-a",
+        parentRepository: "cogni-dao/cogni",
         flightTargets: ["alpha"],
       }).deployment
     ).toEqual(["alpha"]);
@@ -663,6 +664,7 @@ describe("akash-tx-actuator runtime", () => {
       resolveDeploymentTargets({
         catalogRows: [{ ...base, name: "bravo", envs: ["production"] }],
         environment: "candidate-a",
+        parentRepository: "cogni-dao/cogni",
         flightTargets: ["bravo"],
       })
     ).toThrow(/not configured for candidate-a/);
