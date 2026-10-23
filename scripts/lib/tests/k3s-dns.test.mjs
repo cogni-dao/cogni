@@ -283,6 +283,32 @@ test("generated template DNS never clones; real CLI projection is deterministic 
       );
     cli("--write");
     cli("--check");
+    const requestPath = path.join(
+      dir,
+      "infra/k8s/overlays/candidate-a/node-template/k3s-dns-request.json"
+    );
+    const request = JSON.parse(readFileSync(requestPath, "utf8"));
+    writeFileSync(requestPath, `${JSON.stringify(request)}\n`);
+    cli("--check");
+    execFileSync(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        path.join(dir, "scripts/lib/render-k3s-dns.mjs"),
+        "--preflight",
+        "node-template",
+      ],
+      {
+        env: { ...env, DOMAIN: "cogni-testing.org" },
+        stdio: ["ignore", "pipe", "pipe"],
+      }
+    );
+    writeFileSync(
+      requestPath,
+      JSON.stringify({ ...request, unreviewed: true })
+    );
+    assert.throws(() => cli("--check"));
+    cli("--write");
     const overlay = path.join(
       dir,
       "infra/k8s/overlays/candidate-a/node-template/kustomization.yaml"
@@ -681,47 +707,95 @@ test("runtime domain disagreement fails before publication and zero-zone receipt
       run(positive, { ...known, app: projectApp(pluralApp) }).passed,
       false
     );
-    const rootAuthority = {
-      name: "test-appsets",
-      sourcesPresent: false,
+    const privateApp = {
+      ...expectedApplicationSpec,
       source: {
-        repoURL: "https://github.com/cogni-test-org/cogni-monorepo.git",
-        targetRevision: "main",
-        path: "infra/k8s/argocd/appsets/candidate-a",
-      },
-      destination: {
-        server: "https://kubernetes.default.svc",
-        namespace: "argocd",
+        ...expectedApplicationSpec.source,
+        plugin: {
+          env: [{ name: "TOKEN", value: "PRIVATE-SENTINEL-DO-NOT-LOG" }],
+        },
       },
     };
+    assert.equal(
+      JSON.stringify(projectApp(privateApp)).includes(
+        "PRIVATE-SENTINEL-DO-NOT-LOG"
+      ),
+      false
+    );
+    assert.equal(
+      run(positive, { ...known, app: projectApp(privateApp) }).passed,
+      false
+    );
+    const managingCode =
+      /^appset_authorities=.+?python3 -c '\n([\s\S]*?)\n' "\$node" "\$env_name"\)/m.exec(
+        readFileSync("scripts/ci/assert-k3s-dns-substrate.sh", "utf8")
+      )[1];
+    const rootSource = {
+      repoURL: "https://github.com/cogni-test-org/cogni-monorepo.git",
+      targetRevision: "main",
+      path: "infra/k8s/argocd/appsets/candidate-a",
+    };
+    const rootDestination = {
+      server: "https://kubernetes.default.svc",
+      namespace: "argocd",
+    };
+    const manage = (spec) =>
+      JSON.parse(
+        execFileSync(
+          "python3",
+          ["-c", managingCode, "node-template", "candidate-a"],
+          {
+            input: JSON.stringify({
+              items: [
+                {
+                  metadata: { name: "test-appsets" },
+                  status: {
+                    resources: [
+                      {
+                        kind: "ApplicationSet",
+                        name: "cogni-candidate-a-node-template",
+                      },
+                    ],
+                  },
+                  spec,
+                },
+              ],
+            }),
+            encoding: "utf8",
+          }
+        )
+      );
+    const rootSpec = { source: rootSource, destination: rootDestination };
     assert.equal(
       run(positive, {
         ...known,
         appset: { ...known.appset, argoInstance: "test-appsets" },
-        appsetAuthorities: [rootAuthority],
+        appsetAuthorities: manage(rootSpec),
       }).passed,
       true
     );
-    assert.equal(
-      run(positive, {
-        ...known,
-        appsetAuthorities: [{ ...rootAuthority, sourcesPresent: true }],
-      }).passed,
-      false
-    );
-    assert.equal(
-      run(positive, {
-        ...known,
-        appsetAuthorities: [
-          {
-            ...rootAuthority,
-            source: { ...rootAuthority.source, plugin: { name: "unreviewed" } },
+    for (const spec of [
+      { ...rootSpec, sources: [{ repoURL: "foreign" }] },
+      {
+        ...rootSpec,
+        source: {
+          ...rootSource,
+          plugin: {
+            env: [{ name: "TOKEN", value: "PRIVATE-SENTINEL-DO-NOT-LOG" }],
           },
-        ],
-      }).passed,
-      false
-    );
-
+        },
+      },
+    ]) {
+      const projected = manage(spec);
+      assert.equal(
+        JSON.stringify(projected).includes("PRIVATE-SENTINEL-DO-NOT-LOG"),
+        false
+      );
+      assert.equal(
+        run(positive, { ...known, appsetAuthorities: projected }).passed,
+        false
+      );
+    }
     for (const mutate of [
       (s) => {
         s.generators[0].git.files = [{ path: "infra/catalog/foreign.yaml" }];
@@ -751,11 +825,20 @@ test("runtime domain disagreement fails before publication and zero-zone receipt
         s.generators[0].template = { spec: { source: { path: "foreign" } } };
       },
       (s) => {
-        s.template.spec.source.plugin = { name: "unreviewed" };
+        s.template.spec.source.plugin = {
+          name: "unreviewed",
+          env: [{ name: "TOKEN", value: "PRIVATE-SENTINEL-DO-NOT-LOG" }],
+        };
       },
     ]) {
       const changed = structuredClone(expectedSpec);
       mutate(changed);
+      assert.equal(
+        JSON.stringify(project(changed)).includes(
+          "PRIVATE-SENTINEL-DO-NOT-LOG"
+        ),
+        false
+      );
       assert.equal(
         run(positive, { ...known, appset: project(changed) }).passed,
         false

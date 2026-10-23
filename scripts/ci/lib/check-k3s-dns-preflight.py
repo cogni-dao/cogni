@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 # Purpose: Validate selected nonsecret runtime facts before optional TEST DNS publication.
 # Scope: Owned receipts and read-only public DNS. Does not mutate desired state or read credential values.
+import hashlib
 import json
 import re
 import subprocess
@@ -49,8 +50,10 @@ require(bool(receipt.get("expectedAppSetSpecHash")) and appset.get("specHash") =
 require(bool(appset.get("uid")) and appset.get("name") == "cogni-" + env + "-" + node, "ApplicationSet identity unresolved")
 authorities = facts.get("appsetAuthorities")
 require(isinstance(authorities, list), "AppSet managing authority read unresolved")
+def authority_hash(value):
+    return hashlib.sha256((json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()).hexdigest()
 for authority in authorities or []:
-    require(authority.get("sourcesPresent") is False and authority.get("source") == {"repoURL":repo_url,"targetRevision":"main","path":"infra/k8s/argocd/appsets/" + env} and authority.get("destination") == {"server":"https://kubernetes.default.svc","namespace":"argocd"}, "foreign or overridden Argo Application claims TEST AppSet")
+    require(authority.get("sourcesPresent") is False and authority.get("sourceHash") == authority_hash({"repoURL":repo_url,"targetRevision":"main","path":"infra/k8s/argocd/appsets/" + env}) and authority.get("destinationHash") == authority_hash({"server":"https://kubernetes.default.svc","namespace":"argocd"}), "foreign or overridden Argo Application claims TEST AppSet")
 tracking_owner = (appset.get("tracking") or "").split(":")[0] or appset.get("argoInstance")
 if tracking_owner:
     require(any(a.get("name") == tracking_owner for a in (authorities or [])), "AppSet tracking authority unresolved")

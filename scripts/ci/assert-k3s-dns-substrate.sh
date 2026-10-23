@@ -48,23 +48,34 @@ read_object() {
   printf '%s' "$value"
 }
 # Project each resource immediately; no Secret values or Request headers enter stdout.
-crd=$(read_object get crd requests.http.m.crossplane.io | jq '{readError:.readError,name:.metadata.name,conditions:.status.conditions}')
-provider=$(read_object get provider provider-http | jq '{readError:.readError,name:.metadata.name,package:.spec.package,conditions:.status.conditions}')
+crd=$(read_object get crd requests.http.m.crossplane.io | jq '{readError:.readError,name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason}]}')
+provider=$(read_object get provider provider-http | jq '{readError:.readError,name:.metadata.name,package:.spec.package,conditions:[.status.conditions[]?|{type,status,reason}]}')
 config=$(read_object get clusterproviderconfigs.http.m.crossplane.io cogni-http | jq '{readError:.readError,name:.metadata.name,source:.spec.credentials.source}')
-eso=$(read_object -n "$namespace" get externalsecret operator-env-secrets | jq '{readError:.readError,name:.metadata.name,conditions:.status.conditions}')
+eso=$(read_object -n "$namespace" get externalsecret operator-env-secrets | jq '{readError:.readError,name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason}]}')
 key_present=$(kubectl -n "$namespace" get secret operator-env-secrets -o go-template='{{if index .data "CLOUDFLARE_API_TOKEN"}}true{{else}}false{{end}}' 2>/dev/null) || key_present=false
 appset_raw=$(read_object -n argocd get applicationset "cogni-${env_name}-${node}")
 appset_hash=$(printf '%s' "$appset_raw" | jq -cS '.spec' | sha256sum | awk '{print $1}')
-appset=$(printf '%s' "$appset_raw" | jq --arg specHash "$appset_hash" '{specHash:$specHash,readError:.readError,name:.metadata.name,uid:.metadata.uid,ownerReferences:.metadata.ownerReferences,tracking:.metadata.annotations["argocd.argoproj.io/tracking-id"],argoInstance:.metadata.labels["app.kubernetes.io/instance"],goTemplate:.spec.goTemplate,generators:.spec.generators,templateName:.spec.template.metadata.name,project:.spec.template.spec.project,destination:.spec.template.spec.destination,source:.spec.template.spec.source}')
-appset_authorities=$(read_object -n argocd get applications | jq --arg node "$node" --arg env "$env_name" '[.items[]?|select(.readError == true or any(.status.resources[]?; .kind == "ApplicationSet" and .name == ("cogni-"+$env+"-"+$node)))|{readError:.readError,name:.metadata.name,source:.spec.source,sourcesPresent:((.spec // {})|has("sources")),destination:.spec.destination}]')
+appset=$(printf '%s' "$appset_raw" | jq --arg specHash "$appset_hash" '{specHash:$specHash,readError:.readError,name:.metadata.name,uid:.metadata.uid,ownerReferences:.metadata.ownerReferences,tracking:.metadata.annotations["argocd.argoproj.io/tracking-id"],argoInstance:.metadata.labels["app.kubernetes.io/instance"],catalogPaths:[.spec.generators[]?.git.files[]?.path],source:{repoURL:.spec.template.spec.source.repoURL,targetRevision:.spec.template.spec.source.targetRevision,path:.spec.template.spec.source.path}}')
+appset_authorities=$(read_object -n argocd get applications | python3 -c '
+import hashlib,json,sys
+node,env=sys.argv[1:]
+def digest(value):
+ return hashlib.sha256((json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest()
+result=[]
+for item in json.load(sys.stdin).get("items",[]):
+ if item.get("readError") or any(r.get("kind")=="ApplicationSet" and r.get("name")=="cogni-"+env+"-"+node for r in (item.get("status",{}).get("resources") or [])):
+  spec=item.get("spec") or {}; source=spec.get("source") or {}
+  result.append({"name":item.get("metadata",{}).get("name"),"readError":item.get("readError"),"sourceHash":digest(spec.get("source")),"destinationHash":digest(spec.get("destination")),"sourcesPresent":"sources" in spec,"source":{key:source.get(key) for key in ["repoURL","targetRevision","path"]}})
+print(json.dumps(result))
+' "$node" "$env_name")
 app_raw=$(read_object -n argocd get application "${env_name}-${node}")
 app_hash=$(printf '%s' "$app_raw" | jq -cS '.spec' | sha256sum | awk '{print $1}')
-app=$(printf '%s' "$app_raw" | jq --arg specHash "$app_hash" '{specHash:$specHash,readError:.readError,name:.metadata.name,ownerReferences:.metadata.ownerReferences,resources:.status.resources,source:.spec.source,destination:.spec.destination,sync:.status.sync,health:.status.health}')
-deployment=$(read_object -n "$namespace" get deployment "${node}-node-app" | jq '{readError:.readError,name:.metadata.name,uid:.metadata.uid,tracking:.metadata.annotations["argocd.argoproj.io/tracking-id"],argoInstance:.metadata.labels["app.kubernetes.io/instance"],generation:.metadata.generation,status:.status,replicas:.spec.replicas,images:[.spec.template.spec.containers[]?.image],instance:.spec.template.metadata.labels["app.kubernetes.io/instance"]}')
+app=$(printf '%s' "$app_raw" | jq --arg specHash "$app_hash" '{specHash:$specHash,readError:.readError,name:.metadata.name,ownerReferences:.metadata.ownerReferences,resources:[.status.resources[]?|{kind,name,namespace,status}],source:{repoURL:.spec.source.repoURL,targetRevision:.spec.source.targetRevision,path:.spec.source.path},sync:{status:.status.sync.status,revision:.status.sync.revision},health:{status:.status.health.status}}')
+deployment=$(read_object -n "$namespace" get deployment "${node}-node-app" | jq '{readError:.readError,name:.metadata.name,uid:.metadata.uid,tracking:.metadata.annotations["argocd.argoproj.io/tracking-id"],argoInstance:.metadata.labels["app.kubernetes.io/instance"],generation:.metadata.generation,status:{observedGeneration:.status.observedGeneration,availableReplicas:.status.availableReplicas,readyReplicas:.status.readyReplicas},replicas:.spec.replicas,images:[.spec.template.spec.containers[]?.image],instance:.spec.template.metadata.labels["app.kubernetes.io/instance"]}')
 service=$(read_object -n "$namespace" get service "${node}-node-app" | jq '{readError:.readError,name:.metadata.name,selector:.spec.selector,ports:.spec.ports}')
 replicasets=$(read_object -n "$namespace" get replicasets -l "app.kubernetes.io/instance=${node}" | jq '[.items[]?|{readError:.readError,uid:.metadata.uid,ownerReferences:.metadata.ownerReferences}]')
-pods=$(read_object -n "$namespace" get pods -l "app.kubernetes.io/instance=${node}" | jq '[.items[]?|{readError:.readError,uid:.metadata.uid,name:.metadata.name,ownerReferences:.metadata.ownerReferences,images:[.spec.containers[]?.image],conditions:.status.conditions}]')
-dns_request=$(read_object -n "$namespace" get requests.http.m.crossplane.io "${node}-workload-dns" | jq 'if .readError then {readError:true} elif .metadata.name then {name:.metadata.name,owner:.metadata.annotations["cogni.io/dns-owner"],conditions:.status.conditions} else null end')
+pods=$(read_object -n "$namespace" get pods -l "app.kubernetes.io/instance=${node}" | jq '[.items[]?|{readError:.readError,uid:.metadata.uid,name:.metadata.name,ownerReferences:.metadata.ownerReferences,images:[.spec.containers[]?.image],conditions:[.status.conditions[]?|{type,status,reason}]}]')
+dns_request=$(read_object -n "$namespace" get requests.http.m.crossplane.io "${node}-workload-dns" | jq 'if .readError then {readError:true} elif .metadata.name then {name:.metadata.name,owner:.metadata.annotations["cogni.io/dns-owner"],conditions:[.status.conditions[]?|{type,status,reason}]} else null end')
 endpoints=$(read_object -n "$namespace" get endpointslices -l "kubernetes.io/service-name=${node}-node-app" | jq '[.items[]?|{readError:.readError,name:.metadata.name,endpoints:[.endpoints[]?|{conditions,targetRef}]}]')
 jq -nc --argjson crd "$crd" --argjson provider "$provider" --argjson config "$config" --argjson eso "$eso" --argjson keyPresent "$key_present" --argjson appsetAuthorities "$appset_authorities" --argjson appset "$appset" --argjson app "$app" --argjson deployment "$deployment" --argjson service "$service" --argjson replicasets "$replicasets" --argjson pods "$pods" --argjson dnsRequest "$dns_request" --argjson endpoints "$endpoints" '{crd:$crd,provider:$provider,config:$config,eso:$eso,keyPresent:$keyPresent,appset:$appset,appsetAuthorities:$appsetAuthorities,app:$app,deployment:$deployment,service:$service,replicasets:$replicasets,pods:$pods,dnsRequest:$dnsRequest,endpoints:$endpoints}'
 REMOTE

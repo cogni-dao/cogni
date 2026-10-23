@@ -19,6 +19,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import {
   buildK3sDnsRequest,
   k3sDnsIntent,
@@ -64,7 +65,12 @@ const verifyOrWrite = (p, body) => {
     writeFileSync(p, body);
     return;
   }
-  if (!existsSync(p) || readFileSync(p, "utf8") !== body)
+  const matches =
+    existsSync(p) &&
+    (p.endsWith(".json")
+      ? isDeepStrictEqual(JSON.parse(readFileSync(p, "utf8")), JSON.parse(body))
+      : readFileSync(p, "utf8") === body);
+  if (!matches)
     throw new Error(`DNS generated drift: ${path.relative(root, p)}`);
 };
 for (const name of readdirSync(path.join(root, "infra/catalog")).filter((n) =>
@@ -149,8 +155,7 @@ for (const name of readdirSync(path.join(root, "infra/catalog")).filter((n) =>
     if (preflight) {
       if (
         !existsSync(output) ||
-        readFileSync(output, "utf8") !==
-          `${JSON.stringify(resource, null, 2)}\n`
+        !isDeepStrictEqual(JSON.parse(readFileSync(output, "utf8")), resource)
       )
         throw new Error("DNS runtime/committed projection differs");
       console.log(
