@@ -320,13 +320,14 @@ returns `content`, and its `q` is not full-text search over claims.
 
 ### Tool Catalog
 
-Three tools in `@cogni/ai-tools`, registered in `TOOL_CATALOG`:
+Four tools in `@cogni/ai-tools`, registered in `TOOL_CATALOG`:
 
-| Tool                     | Effect       | Description                        |
-| ------------------------ | ------------ | ---------------------------------- |
-| `core__knowledge_search` | read_only    | Text search by domain + query      |
-| `core__knowledge_read`   | read_only    | Get by ID or list by domain + tags |
-| `core__knowledge_write`  | state_change | Add entry + auto-commit            |
+| Tool                     | Effect       | Description                                                                                                                                        |
+| ------------------------ | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core__knowledge_index`  | read_only    | Governing index: id, domain, type, useWhen of every governing row (`listGoverningIndex`); past 48 KiB only the `method` shelf plus omitted domains |
+| `core__knowledge_search` | read_only    | Text search by domain + query                                                                                                                      |
+| `core__knowledge_read`   | read_only    | Get by ID or list by domain + tags                                                                                                                 |
+| `core__knowledge_write`  | state_change | Add entry + auto-commit                                                                                                                            |
 
 ### Capability Wiring
 

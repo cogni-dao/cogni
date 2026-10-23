@@ -20,6 +20,7 @@ import {
   EDO_RECORD_OUTCOME_NAME,
   GET_CURRENT_TIME_NAME,
   GOAL_LIST_NAME,
+  KNOWLEDGE_INDEX_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
   KNOWLEDGE_WRITE_NAME,
@@ -94,6 +95,13 @@ describe("operator catalog entries", () => {
     expect("work-prioritizer" in LANGGRAPH_GRAPH_IDS).toBe(false);
   });
 
+  it("brain reads the governing guidance index (core__knowledge_index)", () => {
+    expect(LANGGRAPH_CATALOG.brain?.toolIds).toContain(KNOWLEDGE_INDEX_NAME);
+    expect(OPERATOR_LANGGRAPH_CATALOG.brain?.toolIds).toContain(
+      KNOWLEDGE_INDEX_NAME
+    );
+  });
+
   it("graph IDs include operator roles", () => {
     expect(OPERATOR_LANGGRAPH_GRAPH_IDS["operating-review"]).toBe(
       "langgraph:operating-review"
@@ -131,6 +139,7 @@ describe("operator catalog entries", () => {
 
       expect(entry.toolIds).toEqual(
         expect.arrayContaining([
+          KNOWLEDGE_INDEX_NAME,
           KNOWLEDGE_SEARCH_NAME,
           KNOWLEDGE_READ_NAME,
           KNOWLEDGE_WRITE_NAME,

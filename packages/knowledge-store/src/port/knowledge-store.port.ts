@@ -18,6 +18,7 @@
  */
 
 import type { ActiveGoal } from "../domain/dao-goals.js";
+import type { GoverningIndexRow } from "../domain/governing.js";
 import type {
   Citation,
   CitationType,
@@ -295,6 +296,15 @@ export interface KnowledgeStorePort {
    * (MAX_THREE_GOALS). Contribution-branch rows are never visible here.
    */
   listActiveGoals(): Promise<ActiveGoal[]>;
+  /**
+   * The governing index (GOVERNING_SET_DEFINED_ONCE, guidance-routing-design):
+   * every merged row across all domains that `selectGoverningIndex` keeps —
+   * governing entryType, non-blank useWhen, no inbound `supersedes` edge —
+   * sorted by domain then id. Built by its own unpaged query, never from a
+   * sampled domain page (INDEX_BUILT_BY_OWN_QUERY). Rows carry routing
+   * metadata only, never bodies (INDEX_CARRIES_NO_CONTENT).
+   */
+  listGoverningIndex(): Promise<GoverningIndexRow[]>;
   /** List distinct domain values present in the `knowledge` table (legacy / back-compat). */
   listDomains(): Promise<string[]>;
 

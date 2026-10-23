@@ -114,7 +114,7 @@ export async function GET(request: Request) {
       nodeAccessRequest: `${origin}/api/v1/nodes/{id}/access-requests`,
       nodeDevelopers: `${origin}/api/v1/nodes/{id}/developers`,
       // Cognition substrate: the session-start bundle (irreducible invariants +
-      // live skills index + domain pointers). A SessionStart hook fetches this
+      // live governing index + domain pointers). A SessionStart hook fetches this
       // and injects it — replaces git-synced AGENTS.md sprawl.
       cognition: `${origin}/api/v1/cognition`,
     },
