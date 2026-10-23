@@ -6,7 +6,8 @@
 # Purpose: Compute deployable image targets affected by the current SCM scope.
 # Scope: PR image builds. Mirrors the same base/head resolution used by
 #        scripts/run-turbo-checks.sh so image selection follows the recovered
-#        trunk-affected model rather than a separate branch heuristic.
+#        trunk-affected model. Workspace globals affect repository-context
+#        images; independent Docker contexts keep their own input boundary.
 
 set -euo pipefail
 
@@ -65,6 +66,7 @@ elif [ "$use_affected" = true ]; then
 fi
 
 selected_targets=()
+repository_context_targets=()
 deferred_global_input=""
 turbo_affected_packages_loaded=false
 turbo_affected_packages=()
@@ -96,6 +98,26 @@ add_all_targets() {
   for target in "${ALL_TARGETS[@]}"; do
     add_target "$target"
   done
+}
+
+add_repository_context_targets() {
+  local target
+
+  for target in "${repository_context_targets[@]}"; do
+    add_target "$target"
+  done
+}
+
+has_selected_repository_context_target() {
+  local target
+
+  for target in "${repository_context_targets[@]}"; do
+    if has_target "$target" && is_built_by_this_repo "$target"; then
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 add_node_targets() {
@@ -146,7 +168,7 @@ load_turbo_affected_packages() {
   turbo_affected_packages_loaded=true
 
   if ! output=$(TURBO_SCM_BASE="$UPSTREAM_REF" TURBO_SCM_HEAD="$HEAD_REF" run_turbo_affected_json); then
-    echo "::warning::detect-affected: turbo affected failed; falling back to all image targets for shared package change" >&2
+    echo "::warning::detect-affected: turbo affected failed; falling back to repository-context image targets for shared package change" >&2
     return 1
   fi
 
@@ -156,7 +178,7 @@ try:
 except Exception:
     sys.exit(1)
 print("\n".join(data.get("packages", [])))'); then
-    echo "::warning::detect-affected: turbo affected returned invalid JSON; falling back to all image targets for shared package change" >&2
+    echo "::warning::detect-affected: turbo affected returned invalid JSON; falling back to repository-context image targets for shared package change" >&2
     return 1
   fi
 
@@ -230,7 +252,7 @@ is_substrate_machinery_input() {
   return 1
 }
 
-is_global_build_input() {
+is_workspace_build_input() {
   local path="$1"
 
   case "$path" in
@@ -242,7 +264,18 @@ is_global_build_input() {
     tsconfig.base.json | \
     tsconfig.app.json | \
     tsconfig.scripts.json | \
-    config/* | \
+    config/*)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+is_global_build_input() {
+  local path="$1"
+
+  case "$path" in
     scripts/ci/build-and-push-images.sh | \
     scripts/ci/detect-affected.sh | \
     scripts/ci/lib/image-tags.sh | \
@@ -261,6 +294,21 @@ else
   declare -A target_package_name=()
   for target in "${ALL_TARGETS[@]}"; do
     target_prefix["$target"]=$(yq '.path_prefix' "${_image_tags_catalog_root}/${target}.yaml")
+    context=$(yq -N '.build_context // "."' "${_image_tags_catalog_root}/${target}.yaml")
+    relative_context=$(python3 - "$_image_tags_spec_root" "$context" <<'PY'
+import os
+import sys
+
+root = os.path.realpath(sys.argv[1])
+context = os.path.realpath(os.path.join(root, sys.argv[2]))
+print(os.path.relpath(context, root))
+PY
+)
+    # Only strict child contexts are independent of root-workspace inputs.
+    # Normalize aliases/symlinks; outside contexts stay conservative.
+    case "$relative_context" in
+      . | .. | ../*) repository_context_targets+=("$target") ;;
+    esac
     prefix="${target_prefix[$target]%/}"
     target_package_name["$target"]=""
     for manifest in "${_image_tags_spec_root}/${prefix}/package.json" "${_image_tags_spec_root}/${prefix}/app/package.json"; do
@@ -275,9 +323,9 @@ else
     [ -z "$path" ] && continue
 
     # New node workspaces legitimately update the monorepo lockfile. Defer
-    # deciding whether that is global until node-owned paths have had a chance
+    # deciding whether that is workspace-wide until node-owned paths have had a chance
     # to select their target. Lockfile-only/dependency-update PRs still build
-    # all targets below.
+    # all repository-context targets below.
     if [ "$path" = "pnpm-lock.yaml" ]; then
       deferred_global_input="$path"
       continue
@@ -293,6 +341,12 @@ else
       add_all_targets
       selection_reason="global-build-input:${path}"
       break
+    fi
+
+    if is_workspace_build_input "$path"; then
+      add_repository_context_targets
+      selection_reason="workspace-build-input:${path}"
+      continue
     fi
 
     if is_substrate_machinery_input "$path"; then
@@ -318,9 +372,9 @@ else
         ;;
       packages/*)
         if ! load_turbo_affected_packages; then
-          add_all_targets
+          add_repository_context_targets
           selection_reason="shared-package-change:${path}:turbo-fallback"
-          break
+          continue
         fi
 
         declare -A affected_package=()
@@ -356,9 +410,9 @@ else
     esac
   done <<< "$changed_paths"
 
-  if [ -n "$deferred_global_input" ] && [ ${#selected_targets[@]} -eq 0 ]; then
-    add_all_targets
-    selection_reason="global-build-input:${deferred_global_input}"
+  if [ -n "$deferred_global_input" ] && ! has_selected_repository_context_target; then
+    add_repository_context_targets
+    selection_reason="workspace-build-input:${deferred_global_input}"
   fi
 fi
 
