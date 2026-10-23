@@ -67,6 +67,11 @@ import {
   RESEARCH_GRAPH_NAME,
 } from "./graphs/research/graph";
 import { RESEARCH_TOOL_IDS } from "./graphs/research/tools";
+import {
+  createWorkPrioritizerGraph,
+  WORK_PRIORITIZER_GRAPH_NAME,
+} from "./graphs/work-prioritizer/graph";
+import { WORK_PRIORITIZER_TOOL_IDS } from "./graphs/work-prioritizer/tools";
 import type { CreateGraphFn } from "./inproc/types";
 
 /**
@@ -85,7 +90,17 @@ export interface CatalogEntry {
   readonly graphFactory: CreateGraphFn;
   /** Optional system prompt for operator graphs (catalog-driven, not hardcoded). */
   readonly systemPrompt?: string;
+  /**
+   * Graph-owned run report (PURE_GRAPH_FACTORY): the graph returns `structuredResponse.telemetry` (flat,
+   * safe to log). The provider logs it as `event` (a registered event name) and echoes it onto the run
+   * stream as one GRAPH_REPORT_OPEN…GRAPH_REPORT_CLOSE text delta.
+   */
+  readonly report?: { readonly event: string };
 }
+
+/** Delimiters of a catalog-declared run report on the run stream (CatalogEntry.report). */
+export const GRAPH_REPORT_OPEN = "<graph_report>";
+export const GRAPH_REPORT_CLOSE = "</graph_report>";
 
 export type LangGraphCatalog = Readonly<Record<string, CatalogEntry>>;
 
@@ -237,10 +252,24 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
   [GIT_REVIEWER_GRAPH_NAME]: {
     displayName: "Git Reviewer",
     description:
-      "Queue observer — reports merge-ready item status from metadata",
+      "Queue observer — reports review, flight and validation status from metadata",
     toolIds: GIT_REVIEWER_TOOL_IDS as readonly string[],
     graphFactory: createOperatorGraph,
     systemPrompt: GIT_REVIEWER_PROMPT,
+  },
+
+  /**
+   * Mission loop (story.5108) — brain-style ReAct agent on the hourly governance schedule: reads the DAO
+   * goals and makes at most ~5 goal-cited work-item changes; p0/p1 writes are server-denied and reported
+   * as proposals for the node admin.
+   */
+  [WORK_PRIORITIZER_GRAPH_NAME]: {
+    displayName: "Mission Loop",
+    description:
+      "Reads the node's DAO goals and makes a few goal-cited work-item changes; lists p0/p1 as proposals",
+    toolIds: WORK_PRIORITIZER_TOOL_IDS as readonly string[],
+    graphFactory: createWorkPrioritizerGraph,
+    report: { event: "ai.work_prioritizer.cycle" },
   },
 } as const;
 
@@ -283,6 +312,7 @@ export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
   "operating-review": `${LANGGRAPH_PROVIDER_ID}:${OPERATING_REVIEW_GRAPH_NAME}`,
   "pr-manager": `${LANGGRAPH_PROVIDER_ID}:${PR_MANAGER_GRAPH_NAME}`,
   "git-reviewer": `${LANGGRAPH_PROVIDER_ID}:${GIT_REVIEWER_GRAPH_NAME}`,
+  "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,
 } as const;
 
 /**

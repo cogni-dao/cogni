@@ -188,6 +188,7 @@
     ]
   },
   "dependencies": {
+    "@cogni-dao/doltgres-admission": "https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.0/cogni-dao-doltgres-admission-0.1.0.tgz",
     "@cogni/ai-core": "workspace:*",
     "@cogni/ai-tools": "workspace:*",
     "@cogni/aragon-osx": "workspace:*",
@@ -210,7 +211,7 @@
     "@cogni/repo-spec": "workspace:*",
     "@cogni/scheduler-core": "workspace:*",
     "@cogni/temporal-workflows": "workspace:*",
-    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.1.10/cogni-dao-work-items-0.1.10.tgz",
+    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.1/cogni-dao-work-items-0.2.1.tgz",
     "@privy-io/node": "^0.10.1",
     "cron-parser": "^4.9.0",
     "drizzle-orm": "^0.44.7",

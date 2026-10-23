@@ -17,6 +17,7 @@
  * @public
  */
 
+import type { ActiveGoal } from "../domain/dao-goals.js";
 import type {
   Citation,
   CitationType,
@@ -102,17 +103,21 @@ export class DomainAlreadyRegisteredError extends Error {
 // ---------------------------------------------------------------------------
 
 /**
- * Thrown by `addKnowledge` / `upsertKnowledge` when a hypothesis row is
- * written without `evaluate_at`. Enforces `HYPOTHESIS_HAS_EVALUATE_AT`.
+ * Thrown when a hypothesis or goal row is written without `evaluate_at`.
+ * Enforces `HYPOTHESIS_HAS_EVALUATE_AT` (goals: their `By:` deadline).
  */
 export class HypothesisMissingEvaluateAtError extends Error {
   readonly entryId: string;
-  constructor(entryId: string) {
+  readonly entryType: string;
+  constructor(entryId: string, entryType = "hypothesis") {
     super(
-      `hypothesis '${entryId}' is missing evaluate_at — hypothesis rows must declare a resolution date`
+      entryType === "goal"
+        ? `goal '${entryId}' is missing evaluate_at — goal rows must declare their By: deadline`
+        : `hypothesis '${entryId}' is missing evaluate_at — hypothesis rows must declare a resolution date`
     );
     this.name = "HypothesisMissingEvaluateAtError";
     this.entryId = entryId;
+    this.entryType = entryType;
   }
 }
 
@@ -173,11 +178,81 @@ export class EdoEntryTypeRequiresAtomicToolError extends Error {
   }
 }
 
+/**
+ * Thrown by `listActiveGoals` when more than the allowed number of active DAO
+ * goals are merged. Enforces `MAX_THREE_GOALS`: callers must surface it, never
+ * truncate the list to fit.
+ */
+export class TooManyActiveGoalsError extends Error {
+  readonly code = "TOO_MANY_ACTIVE_GOALS" as const;
+  readonly goalIds: readonly string[];
+  readonly max: number;
+  constructor(goalIds: readonly string[], max: number) {
+    super(
+      `${goalIds.length} active DAO goals exceed the max of ${max}: ${goalIds.join(", ")}`
+    );
+    this.name = "TooManyActiveGoalsError";
+    this.goalIds = goalIds;
+    this.max = max;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Port interface
 // ---------------------------------------------------------------------------
 
+/** Scoped row/edge API. It expires when withWrite returns; commit belongs to the adapter. */
+export type KnowledgeWriteSession = Omit<
+  KnowledgeStorePort,
+  "withWrite" | "registerDomain" | "commit"
+>;
+
+export class KnowledgeWriteOutcomeUnknownError extends Error {
+  readonly code = "knowledge_write_outcome_unknown" as const;
+  readonly retryable = false;
+  constructor(
+    readonly operationId: string,
+    readonly branch: string,
+    readonly commitHash?: string
+  ) {
+    super(
+      `Knowledge write outcome requires inspection; do not replay ${operationId}. Inspect main and ${branch} using the operation receipt.`
+    );
+    this.name = "KnowledgeWriteOutcomeUnknownError";
+  }
+  get receipt(): {
+    code: string;
+    retryable: false;
+    lookup: Readonly<Record<string, string | null>>;
+  } {
+    return {
+      code: this.code,
+      retryable: false,
+      lookup: {
+        operationId: this.operationId,
+        branch: this.branch,
+        commitHash: this.commitHash ?? null,
+      },
+    };
+  }
+}
+
+export class KnowledgeWriteScopeRequiredError extends Error {
+  constructor() {
+    super(
+      "Knowledge mutations require withWrite; retain one logical write and its commit in the same scope."
+    );
+    this.name = "KnowledgeWriteScopeRequiredError";
+  }
+}
+
 export interface KnowledgeStorePort {
+  /** One admitted, isolated logical write; never hold this scope across requests. */
+  withWrite<T>(
+    input: { operationId: string; message: string },
+    run: (write: KnowledgeWriteSession) => Promise<T>
+  ): Promise<T>;
+
   // --- Read ---
   getKnowledge(id: string): Promise<Knowledge | null>;
   /**
@@ -189,16 +264,37 @@ export interface KnowledgeStorePort {
    * without downloading bodies (task.5204). Rows whose `useWhen` is null never
    * match. Full-text over title/content stays `searchKnowledge`; these are two
    * questions, not one endpoint with modes.
+   *
+   * SCHEMA_REFINED_BY_READ_FILTER: rows whose `entryType` is in
+   * `EDO_ENTRY_TYPES` are excluded unless `includeEdo: true` (chains/graph/
+   * audit surfaces opt in).
    */
   listKnowledge(
     domain: string,
-    opts?: { tags?: string[]; limit?: number; q?: string }
+    opts?: {
+      tags?: string[];
+      limit?: number;
+      q?: string;
+      includeEdo?: boolean;
+    }
   ): Promise<Knowledge[]>;
+  /**
+   * Case-insensitive substring match over title + content, newest first.
+   * SCHEMA_REFINED_BY_READ_FILTER: `EDO_ENTRY_TYPES` rows are excluded unless
+   * `includeEdo: true`.
+   */
   searchKnowledge(
     domain: string,
     query: string,
-    opts?: { limit?: number }
+    opts?: { limit?: number; includeEdo?: boolean }
   ): Promise<Knowledge[]>;
+  /**
+   * The approved DAO goals (ONE_GOAL_LIST): merged `entry_type = 'goal'` rows
+   * with id prefix `goal-`, not deprecated, sorted by id. Returns []
+   * when none are merged; throws `TooManyActiveGoalsError` past 3
+   * (MAX_THREE_GOALS). Contribution-branch rows are never visible here.
+   */
+  listActiveGoals(): Promise<ActiveGoal[]>;
   /** List distinct domain values present in the `knowledge` table (legacy / back-compat). */
   listDomains(): Promise<string[]>;
 
@@ -213,8 +309,8 @@ export interface KnowledgeStorePort {
    */
   registerDomain(input: NewDomain): Promise<Domain>;
 
-  // --- Write — rows ---
-  /** Upsert: inserts new entry or updates existing entry with same ID. */
+  // --- Write — rows (root adapters fail closed; use the withWrite scoped handle) ---
+  /** Insert or return an identical existing request; differing payload requires explicit update. */
   upsertKnowledge(entry: NewKnowledge): Promise<Knowledge>;
   addKnowledge(entry: NewKnowledge): Promise<Knowledge>;
   updateKnowledge(
@@ -268,6 +364,7 @@ export interface KnowledgeStorePort {
   listAllCitations(): Promise<Citation[]>;
 
   // --- Doltgres versioning ---
+  /** Retired primitive: always fails closed. withWrite owns the single commit. */
   commit(message: string): Promise<string>;
   log(limit?: number): Promise<DoltCommit[]>;
   diff(fromRef: string, toRef: string): Promise<DoltDiffEntry[]>;

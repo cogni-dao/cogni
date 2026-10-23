@@ -8,7 +8,6 @@
  * Invariants:
  *   - ERRORCODE_IS_THE_CONTRACT: every mapped response carries a stable `errorCode`; callers branch on it, never on the message text.
  *   - PERMANENT_VS_RETRYABLE: author-scoped refusal → 403 `authz_denied`; store unavailability → 503 `work_items_busy` + retry hint.
- *   - DENIED_VS_UNAVAILABLE (task.5286): a node-admin priority refusal is 403 `authz_denied`; an authorization outage is 503 `authz_unavailable` — never conflated.
  *   - CAS_CONFLICT_IS_409: a lost `expectedRevision` compare-and-set → 409 `revision_conflict` carrying `currentRevision`; nothing was written.
  *   - UNRECOGNIZED_STAYS_500: an unmapped error returns null so the route rethrows and the wrapper answers 500 — the catch is never broadened.
  * Side-effects: IO (HTTP response construction, structured log entry)
@@ -20,11 +19,12 @@ import { NextResponse } from "next/server";
 
 import {
   WorkItemAuthorizationError,
-  WorkItemAuthzUnavailableError,
+  WorkItemDeletionRetiredError,
   WorkItemNotFoundError,
   WorkItemRevisionConflictError,
   WorkItemsBackendNotReadyError,
   WorkItemsBusyError,
+  WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import {
   logRequestError,
@@ -40,6 +40,7 @@ type Mapped = {
   readonly errorCode: string;
   readonly error: string;
   readonly retryable?: boolean;
+  readonly lookup?: Readonly<Record<string, string | null>>;
   /** Extra machine-readable body fields (e.g. `currentRevision` on a conflict). */
   readonly details?: Readonly<Record<string, unknown>>;
 };
@@ -61,15 +62,24 @@ function classify(error: unknown): Mapped | null {
     return { status: 403, errorCode: "authz_denied", error: "not authorized" };
   }
 
-  // FAIL CLOSED, DISTINCT FROM DENY. The authorization service could not
-  // decide a privileged write (priority 0/1); nothing was written.
-  if (error instanceof WorkItemAuthzUnavailableError) {
+  if (error instanceof WorkItemDeletionRetiredError) {
     return {
-      status: 503,
-      errorCode: "authz_unavailable",
-      error: "authorization unavailable",
+      status: 410,
+      errorCode: "work_item_deletion_retired",
+      error:
+        message ||
+        "Work-item hard deletion is retired; PATCH status=cancelled to preserve identity and provenance",
     };
   }
+
+  if (error instanceof WorkItemWriteOutcomeUnknownError)
+    return {
+      status: 409,
+      errorCode: error.code,
+      error: error.message,
+      retryable: false,
+      lookup: error.receipt.lookup,
+    };
 
   // RETRYABLE. Query timeout / destroyed connection / contended Dolt operation
   // branch. The next attempt usually succeeds, so this must never look like the
@@ -143,6 +153,9 @@ export function workItemsWriteErrorResponse(
     {
       error: mapped.error,
       errorCode: mapped.errorCode,
+      ...(mapped.retryable === false
+        ? { retryable: false, lookup: mapped.lookup }
+        : {}),
       ...(mapped.details ?? {}),
       ...(mapped.retryable === true
         ? { retryable: true, retryAfterSeconds: BUSY_RETRY_AFTER_SECONDS }

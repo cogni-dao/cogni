@@ -49,8 +49,28 @@ export const EntryTypeSchema = z.enum([
   "skill",
   "guide",
   "html",
+  // DAO goal — a human commitment (Statement · KPI · Target · By), not a
+  // prediction: admin-merged via a plain contribution insert, excluded from
+  // confidence recompute, read through `listActiveGoals` (dao-goals-design).
+  "goal",
 ]);
 export type EntryType = z.infer<typeof EntryTypeSchema>;
+
+/**
+ * Entry types that MUST carry `evaluate_at` (HYPOTHESIS_HAS_EVALUATE_AT): a
+ * hypothesis's appointment with truth, a goal's `By:` deadline.
+ */
+export const EVALUATE_AT_REQUIRED_ENTRY_TYPES: readonly string[] = [
+  "hypothesis",
+  "goal",
+];
+
+/** True when a row of this entry type must declare `evaluate_at`. */
+export function requiresEvaluateAt(
+  entryType: string | null | undefined
+): boolean {
+  return EVALUATE_AT_REQUIRED_ENTRY_TYPES.includes(entryType ?? "");
+}
 
 /**
  * Entry types that MUST go through atomic `core__edo_*` tools.
@@ -63,6 +83,26 @@ export const RAW_WRITE_REJECTS_TYPES: readonly EntryType[] = [
   "decision",
   "outcome",
 ];
+
+/**
+ * EDO machinery entry types (SCHEMA_REFINED_BY_READ_FILTER, R1
+ * LibrarianReadFilter). Default "what does this node know" reads —
+ * `searchKnowledge` / `listKnowledge` — exclude these rows unless the caller
+ * passes `includeEdo: true`. Chain/audit surfaces (`EdoCapability.getChain`,
+ * `/api/v1/edo/*`, the resolver) read EDO rows directly and are unaffected.
+ * Fail-closed enumeration: a new EDO beat must be added here explicitly.
+ */
+export const EDO_ENTRY_TYPES: readonly EntryType[] = [
+  "event",
+  "hypothesis",
+  "decision",
+  "outcome",
+];
+
+/** True when `entryType` is EDO machinery hidden from default reads. */
+export function isEdoEntryType(entryType: string | null | undefined): boolean {
+  return EDO_ENTRY_TYPES.includes((entryType ?? "") as EntryType);
+}
 
 // ---------------------------------------------------------------------------
 // Citation type — relationship between two knowledge rows
@@ -109,6 +149,16 @@ export const HYPOTHESIS_TARGETED_EDGES: readonly CitationType[] = [
   "validates",
   "invalidates",
 ];
+
+/**
+ * Entry types each hypothesis-targeted edge may cite. A DAO goal (`entry_type
+ * 'goal'`, dao-goals-design) is the root a decision acts on, so `derives_from`
+ * may cite a goal as well as a hypothesis; `validates`/`invalidates` stay
+ * hypothesis-only (goal outcomes resolve through the goal layer).
+ */
+export function citedEntryTypesFor(type: CitationType): readonly string[] {
+  return type === "derives_from" ? ["hypothesis", "goal"] : ["hypothesis"];
+}
 
 // ---------------------------------------------------------------------------
 // Resolution strategy — namespaced text on hypothesis rows

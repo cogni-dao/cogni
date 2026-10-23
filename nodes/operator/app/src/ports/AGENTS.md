@@ -58,8 +58,8 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - NodeAddressPort + NodeAddressError (PLACEMENT_DECIDES_THE_ADDRESS — the one seam every operator→node client uses to turn a slug into a base URL)
 - IdentityAttestationRepositoryPort, IdentityAttestationSignerPort
 - TreasurySettlementPort, TreasurySettlementOutcome
-- DeployPlanePort, including operator App-backed app promotion and the operator-only production infra reconcile contract
-- OperatorSecretsPlanePort, including node-local write/rotate; facade credential lifecycle and verification remain separately owned
+- DeployPlanePort, including separately bound reviewed workflow/remote-node identities, operator App-backed app promotion, the operator-only production infra reconcile contract, and fixed production-worker routing publication/receipt rollback
+- OperatorSecretsPlanePort, including node-local write/rotate
 - AkashTxActuatorPort + AkashTxConsolePort (optional private readManagedDefinition returns observed SDL/manifest identity, never readable secret proof) + AkashTxManagedDeploymentDefinition + AkashTxAllocationLedgerPort + AkashTxWorkloadIdentity + AkashTxError (private Akash transaction boundary: one bounded attempt per call, durable retained-storage delete refusal, key-idempotent, fail-closed on an unresolved allocation — task.5095; every mutating call states an explicit `AkashTxWorkloadIdentity` that is durable in the receipt before the provider is contacted, and a key bound to another node is an `identity_conflict` — task.5103)
 - AkashTxMigrationStep + AkashTxMigrationPhase + AkashTxMigrationPort (MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION: no mutating call carries a migration and no migration state can refuse one. The per-digest migration is a RELEASE step attached to `observe` — the unpaid tick — whose phase is REPORTED on the observation. bug.5116 ordering, bug.5140 enforcement, **severed by task.5135** after node toks5 sat leaseless and unalarmed because its migration never ran)
 - ComputeCostEvidencePort + ComputeCostStorePort (receipt-linked provider-native cost evidence; `node_id` is the sole infrastructure-cost grouping key and no payer/DAO/user identity is inferred — task.5071)
@@ -74,6 +74,7 @@ Biome `noRestrictedImports` enforces this in `biome/app.json`.
 - ScheduleControlPort, ScheduleUserPort, ScheduleWorkerPort
 - ExecutionGrantUserPort, ExecutionGrantWorkerPort, ExecutionRequestPort
 - ScheduleRunRepository
+- WorkItemsContentPort, WorkItemsCreateInput, WorkItemsPatchInput, WorkItemsPatchSet — versioned content only; PostgreSQL coordination remains a separate port
 - Grant errors (GrantNotFoundError, GrantExpiredError, GrantRevokedError, GrantScopeMismatchError)
 - Schedule errors (ScheduleNotFoundError, ScheduleAccessDeniedError, InvalidCronExpressionError, InvalidTimezoneError)
 

@@ -70,6 +70,11 @@ const options = {
   // `envs:` membership, so a production-only node never reaches deploy/preview-<node>.
   "preview-forward": { type: "string" },
   "catalog-projection-targets-json": { type: "string" },
+  // GitHub owner/name of the repository running this workflow (bug.5510): the
+  // source repository of in-repo nodes such as operator. Defaults to the
+  // Actions-provided GITHUB_REPOSITORY so the existing workflow call sites need
+  // no edit; absent both, target selection fails closed.
+  "parent-repository": { type: "string" },
   "github-output": { type: "string" },
   "repo-spec": { type: "string" },
   bundle: { type: "string" },
@@ -108,6 +113,10 @@ async function main(): Promise<void> {
       catalogRoot: required(values["catalog-root"], "--catalog-root"),
       environment,
       flightTargetsJson: values["flight-targets-json"],
+      parentRepository: parentRepository(values["parent-repository"]),
+      ...(values["source-sha"] !== undefined && {
+        parentSourceSha: values["source-sha"],
+      }),
       githubOutput: required(values["github-output"], "--github-output"),
     });
     return;
@@ -130,6 +139,7 @@ async function main(): Promise<void> {
       promoteTargetsCsv: values["promote-targets-csv"] ?? "",
       legacyK3sTargetsJson: values["legacy-k3s-targets-json"],
       previewForwardMode: values["preview-forward"] === "true",
+      parentRepository: parentRepository(values["parent-repository"]),
       githubOutput: required(values["github-output"], "--github-output"),
     });
     return;
@@ -390,6 +400,8 @@ async function selectDeploymentTargets(input: {
   readonly catalogRoot: string;
   readonly environment: "candidate-a" | "preview" | "production";
   readonly flightTargetsJson: string;
+  readonly parentRepository: string;
+  readonly parentSourceSha?: string;
   readonly githubOutput: string;
 }): Promise<void> {
   const parsed = parseStringArray(
@@ -410,6 +422,10 @@ async function selectDeploymentTargets(input: {
     catalogRows: rows,
     environment: input.environment,
     flightTargets: parsed,
+    parentRepository: input.parentRepository,
+    ...(input.parentSourceSha !== undefined && {
+      parentSourceSha: input.parentSourceSha,
+    }),
   });
   const outputs = {
     deployment_node_targets_json: JSON.stringify(deployment),
@@ -440,6 +456,7 @@ async function selectPromoteTargets(input: {
   readonly promoteTargetsCsv: string;
   readonly legacyK3sTargetsJson: string;
   readonly previewForwardMode: boolean;
+  readonly parentRepository: string;
   readonly githubOutput: string;
 }): Promise<void> {
   const requestedTargets = input.promoteTargetsCsv
@@ -455,6 +472,7 @@ async function selectPromoteTargets(input: {
       "--legacy-k3s-targets-json"
     ),
     previewForwardMode: input.previewForwardMode,
+    parentRepository: input.parentRepository,
   });
   // AN EMPTY APP PROMOTE IS A REFUSAL, NOT A SILENT SUCCESS (bug.5203). Every downstream job
   // gates on `has_targets`, so a promote that resolves nothing otherwise SKIPS its way to a
@@ -639,6 +657,14 @@ async function resolveBundleInput(input: {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+function parentRepository(value: string | undefined): string {
+  return required(
+    // biome-ignore lint/style/noProcessEnv: the Actions runner identity of the parent repository; the reviewed workflow call sites pass no flag
+    value || process.env.GITHUB_REPOSITORY,
+    "--parent-repository (or GITHUB_REPOSITORY)"
+  );
 }
 
 function required(value: string | undefined, flag: string): string {

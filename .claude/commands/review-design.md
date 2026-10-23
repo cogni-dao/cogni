@@ -30,6 +30,11 @@ Then find every AGENTS.md in the file path tree of the files being changed (star
 
 Score each dimension (PASS / CONCERN / FAIL) with a one-line rationale:
 
+### Rigor
+
+- Does the design record its rigor pass: what an expert would investigate, the original evidence examined, the techniques chosen, and an independent validation?
+- Was that evidence actually read (logs, check runs, live output, code), or only assumed? A missing rigor pass is a FAIL.
+
 ### Simplicity
 
 - Does the design solve the problem with minimum moving parts?
@@ -90,6 +95,7 @@ Output a structured review:
 ### Scorecard
 | Dimension              | Score   | Rationale                  |
 | ---------------------- | ------- | -------------------------- |
+| Rigor                  | PASS    | ...                        |
 | Simplicity             | PASS    | ...                        |
 | OSS-First              | CONCERN | ...                        |
 | Architecture Alignment | PASS    | ...                        |
@@ -106,6 +112,8 @@ Output a structured review:
 
 ### Verdict: APPROVE / REQUEST CHANGES / NEEDS DISCUSSION
 ```
+
+You must not be the design's author. **APPROVE** → `PATCH /api/v1/work/items/{id}` `{"set":{"status":"needs_implement"}}` (for a story: set it `done` and create the designed tasks at `needs_implement`). **REQUEST CHANGES** → the item stays `needs_design` for `/design` to revise. **NEEDS DISCUSSION** → `{"set":{"status":"blocked","blockedBy":"<the one human decision>"}}`.
 
 ---
 

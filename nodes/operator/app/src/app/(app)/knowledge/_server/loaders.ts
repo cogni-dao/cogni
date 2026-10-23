@@ -39,6 +39,8 @@ export interface KnowledgeListOpts {
   domain?: string | undefined;
   sourceType?: string | undefined;
   limit?: number | undefined;
+  /** Include EDO rows (chains mode). Default: excluded. */
+  includeEdo?: boolean | undefined;
 }
 
 /**
@@ -57,7 +59,10 @@ export async function loadKnowledgeList(
 
   const perDomain = await Promise.all(
     targetDomains.map((d) =>
-      port.listKnowledge(d, opts.limit != null ? { limit: opts.limit } : {})
+      port.listKnowledge(d, {
+        ...(opts.limit != null ? { limit: opts.limit } : {}),
+        ...(opts.includeEdo ? { includeEdo: true } : {}),
+      })
     )
   );
 
@@ -77,6 +82,8 @@ export async function loadKnowledgeList(
         sourceType: r.sourceType,
         sourceRef: r.sourceRef ?? null,
         tags: r.tags ?? null,
+        evaluateAt: r.evaluateAt ? r.evaluateAt.toISOString() : null,
+        resolutionStrategy: r.resolutionStrategy ?? null,
         createdAt: r.createdAt ? r.createdAt.toISOString() : null,
       });
       if (opts.limit != null && items.length >= opts.limit) break;
@@ -105,7 +112,10 @@ export async function loadKnowledgeGraph(
 ): Promise<KnowledgeGraphModel> {
   const domains = await port.listDomains();
   const perDomain = await Promise.all(
-    domains.map((d) => port.listKnowledge(d, { limit: 10_000 }))
+    // The graph renders EDO chains — opt in to the full shelf.
+    domains.map((d) =>
+      port.listKnowledge(d, { limit: 10_000, includeEdo: true })
+    )
   );
   const entries = perDomain.flat();
   const citations = await port.listAllCitations();

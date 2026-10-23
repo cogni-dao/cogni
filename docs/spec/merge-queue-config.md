@@ -28,7 +28,7 @@ Define the required-status-checks policy that actually works on GitHub today, ca
 
 ## Non-Goals
 
-- Defining the candidate-a `deploy_verified` gate — see [development-lifecycle.md](./development-lifecycle.md).
+- Defining the candidate-a `/validate-candidate` scorecard gate — see [development-lifecycle.md](./development-lifecycle.md).
 - Per-node merge queues — discarded after analysis (see task.0391); revisit if N > 5 nodes or queue depth becomes a real bottleneck.
 - Replacing the merge queue for ordinary code or human-authored PRs. Only the narrow, signed
   `cogni.env-manager.v1` change type may direct-merge after its deterministic-tree proof passes.

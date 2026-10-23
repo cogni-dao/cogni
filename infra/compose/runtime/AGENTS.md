@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-19
+- **Last reviewed:** 2026-10-22
 
 ## Purpose
 
@@ -114,7 +114,7 @@ docker compose --project-name cogni-runtime logs -f app
 
 **Doltgres (knowledge plane):**
 
-- `doltgres`: Postgres-wire-compatible Dolt server, host port 5435→5432, volume `doltgres_data`. Public-NIC traffic on 5435 is dropped by `DOCKER-USER` chain (see `infra/provision/cherry/harden-docker-public-ports.sh`); k3s pods on `10.42.0.0/16` reach it via the EndpointSlice node IP. Image pinned to `dolthub/doltgresql:0.57.3` (bug.5076 — `:latest` rolled an auth-file format change; 0.56.3 additionally fresh-inits broken with no connectable default DB, fixed in 0.57.3, verified 2026-08-04). Entrypoint is wrapped by `doltgres-init/install-creds.sh` — when `DOLT_CREDS_JWK` + `DOLT_CREDS_KEYID` are set, installs the keypair at `/root/.dolt/creds/<keyid>.jwk` and merges `user.creds` into `config_global.json` before exec'ing the upstream entrypoint; no-op when unset.
+- `doltgres`: Postgres-wire-compatible Dolt server, host port 5435→5432, volume `doltgres_data`. Public-NIC traffic on 5435 is dropped by `DOCKER-USER` chain (see `infra/provision/cherry/harden-docker-public-ports.sh`); k3s pods on `10.42.0.0/16` reach it via the EndpointSlice node IP. Image pinned to `ghcr.io/cogni-dao/cogni-template@sha256:f892b365ad6fc6c683da839260f20c4015615c105176a3c21c015ca90d2b70a3` (qualified upstream0.57.3 binary with session attribution and cold-TEXT lifetime fixes, PR2881; existing GHCR pull custody required) (bug.5076 — `:latest` rolled an auth-file format change; 0.56.3 additionally fresh-inits broken with no connectable default DB, fixed in 0.57.3, verified 2026-08-04). Entrypoint is wrapped by `doltgres-init/install-creds.sh` — when `DOLT_CREDS_JWK` + `DOLT_CREDS_KEYID` are set, installs the keypair at `/root/.dolt/creds/<keyid>.jwk` and merges `user.creds` into `config_global.json` before exec'ing the upstream entrypoint; no-op when unset.
 - `doltgres-provision` (profile: bootstrap): creates roles + per-node `knowledge_<node>` databases via `doltgres-init/provision.sh`; never commits application working sets. Schema and its first commit belong to drizzle-kit (k8s PreSync Job), not this script
 - Doltgres 0.56 RBAC is non-functional — runtime `DOLTGRES_URL_*` in k8s secrets connects as `postgres` superuser. Writer role is provisioned but vestigial until upstream GRANT works
 - Mirror env vars (operator only): `DOLT_CREDS_JWK`, `DOLT_CREDS_KEYID` (push auth for repo-spec `knowledge.remote`), and explicit env-scoped `DOLTHUB_OWNER`. See [`docs/runbooks/dolthub-remote-bootstrap.md`](../../../docs/runbooks/dolthub-remote-bootstrap.md).

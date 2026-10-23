@@ -29,7 +29,6 @@ import {
   getWorkItem,
   listWorkItems,
   patchWorkItemAsPrincipal,
-  WorkItemAuthorizationError,
 } from "@/app/_facades/work/items.server";
 import { getContainer } from "@/bootstrap/container";
 
@@ -305,31 +304,5 @@ describe("app/_facades/work/items.server", () => {
       }),
       principalId
     );
-  });
-
-  it("denies an agent creating P0/P1 before the store write", async () => {
-    const principalId = "agent:operator/00000000-0000-4000-8000-000000005264";
-
-    await expect(
-      createWorkItemAsPrincipal(
-        { type: "task", title: "Privileged", priority: 0 },
-        principalId
-      )
-    ).rejects.toBeInstanceOf(WorkItemAuthorizationError);
-
-    expect(mockDoltgres.create).not.toHaveBeenCalled();
-  });
-
-  it("denies an agent setting P0/P1 before the store write", async () => {
-    const principalId = "agent:operator/00000000-0000-4000-8000-000000005264";
-
-    await expect(
-      patchWorkItemAsPrincipal(
-        { id: "task.0001", set: { priority: 1 } },
-        principalId
-      )
-    ).rejects.toBeInstanceOf(WorkItemAuthorizationError);
-
-    expect(mockDoltgres.patch).not.toHaveBeenCalled();
   });
 });

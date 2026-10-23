@@ -17,6 +17,7 @@ Operational procedures and documentation for deployment, rollback, and incident 
 - [grafana-postgres-readonly.md](grafana-postgres-readonly.md): Grafana Cloud Postgres datasource + read-only role procedure
 - [github-org-rename-cutover.md](github-org-rename-cutover.md): GitHub organization rename cutover checklist
 - [production-operator-eso-cutover.md](production-operator-eso-cutover.md): Production operator OpenBao/ESO cutover and custody checks
+- [worker-custodied-routing.md](worker-custodied-routing.md): Fixed service routing publication, receipt rollback and proof gates
 - [CI/CD](../../docs/spec/ci-cd.md): Branch model, workflows, deployment automation
 
 ## Boundaries

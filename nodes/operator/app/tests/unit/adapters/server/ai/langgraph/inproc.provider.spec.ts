@@ -16,6 +16,7 @@
 import type { AiEvent, ToolSourcePort } from "@cogni/ai-core";
 import { TOOL_CATALOG, toBoundToolRuntime } from "@cogni/ai-tools";
 import { FakeAuthorizationAdapter } from "@cogni/authorization-core";
+import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
 import { describe, expect, it, vi } from "vitest";
 
 // Pass-through spy so the provider's tool-runner config can be asserted (authz v0).
@@ -33,8 +34,13 @@ vi.mock("@cogni/ai-core", async (importOriginal) => {
 
 import { runInScope } from "@/adapters/server/ai/execution-scope";
 import type { CompletionUnitAdapter } from "@/adapters/server/ai/langgraph/inproc.provider";
-import { LangGraphInProcProvider } from "@/adapters/server/ai/langgraph/inproc.provider";
+import {
+  graphReportDelta,
+  graphReportLogFields,
+  LangGraphInProcProvider,
+} from "@/adapters/server/ai/langgraph/inproc.provider";
 import type { GraphRunRequest } from "@/ports";
+import { EVENT_NAMES } from "@/shared/observability";
 
 const TEST_SCOPE = {
   billing: {
@@ -276,6 +282,47 @@ describe("LangGraphInProcProvider", () => {
       });
       expect(typeof config.onAuthzDecision).toBe("function");
       expect(config).not.toHaveProperty("authz");
+    });
+  });
+
+  describe("catalog report seam (CatalogEntry.report)", () => {
+    const report = { event: "ai.work_prioritizer.cycle" };
+
+    it("every catalog-declared report names a registered event", () => {
+      const registered = new Set<string>(Object.values(EVENT_NAMES));
+      const declared = Object.values(LANGGRAPH_CATALOG).flatMap((e) => {
+        const r = (e as { report?: { event: string } }).report;
+        return r ? [r.event] : [];
+      });
+      expect(declared.length).toBeGreaterThan(0);
+      for (const name of declared) expect(registered.has(name)).toBe(true);
+    });
+
+    it("logs the telemetry as one `event`", () => {
+      expect(
+        graphReportLogFields(report, "run-9", {
+          telemetry: { changedItemIds: ["task.1"], changeCount: 1 },
+        })
+      ).toEqual([
+        {
+          event: "ai.work_prioritizer.cycle",
+          runId: "run-9",
+          changedItemIds: ["task.1"],
+          changeCount: 1,
+        },
+      ]);
+    });
+
+    it("emits nothing when the output carries no report", () => {
+      expect(graphReportLogFields(report, "r", undefined)).toEqual([]);
+      expect(graphReportLogFields(report, "r", { content: "x" })).toEqual([]);
+      expect(graphReportDelta({ content: "x" })).toBeNull();
+    });
+
+    it("echoes the telemetry as one <graph_report> delta", () => {
+      expect(graphReportDelta({ telemetry: { changeCount: 0 } })).toBe(
+        '\n<graph_report>{"changeCount":0}</graph_report>\n'
+      );
     });
   });
 

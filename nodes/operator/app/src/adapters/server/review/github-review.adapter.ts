@@ -336,7 +336,7 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
 
     // Owning-domain resolution. The structured `review.routed` log is emitted by
     // the worker activity (the orchestrator's observability for the
-    // deploy_verified loop), not here — see services/scheduler-worker review.ts.
+    // validate-candidate scorecard loop), not here — see services/scheduler-worker review.ts.
     //
     // `extractOwningNode` is monorepo-shaped: it routes changed files across the root
     // `nodes:` registry and enforces the meta-test invariant that operator is registered.

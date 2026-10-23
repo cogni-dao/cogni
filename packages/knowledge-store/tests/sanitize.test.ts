@@ -79,13 +79,17 @@ describe("FakeKnowledgeStoreAdapter — sanitises free text on write (parity wit
     const dirtyContent = `intro${chr(0x0a)}body${chr(0x01)}with${chr(0x0c)}junk`;
     const dirtyTitle = `Title${chr(0x07)} with bell`;
 
-    await store.addKnowledge({
-      id: "k-dirty",
-      domain: DOMAIN,
-      title: dirtyTitle,
-      content: dirtyContent,
-      sourceType: "agent",
-    });
+    await store.withWrite(
+      { operationId: "fixture:sanitize:82", message: "addKnowledge fixture" },
+      (write) =>
+        write.addKnowledge({
+          id: "k-dirty",
+          domain: DOMAIN,
+          title: dirtyTitle,
+          content: dirtyContent,
+          sourceType: "agent",
+        })
+    );
 
     const row = await store.getKnowledge("k-dirty");
     expect(row).not.toBeNull();
@@ -98,16 +102,27 @@ describe("FakeKnowledgeStoreAdapter — sanitises free text on write (parity wit
 
   it("strips control chars on updateKnowledge", async () => {
     const store = await bootstrap();
-    await store.addKnowledge({
-      id: "k-upd",
-      domain: DOMAIN,
-      title: "clean",
-      content: "clean",
-      sourceType: "agent",
-    });
-    await store.updateKnowledge("k-upd", {
-      content: `updated${chr(0x00)}content`,
-    });
+    await store.withWrite(
+      { operationId: "fixture:sanitize:101", message: "addKnowledge fixture" },
+      (write) =>
+        write.addKnowledge({
+          id: "k-upd",
+          domain: DOMAIN,
+          title: "clean",
+          content: "clean",
+          sourceType: "agent",
+        })
+    );
+    await store.withWrite(
+      {
+        operationId: "fixture:sanitize:108",
+        message: "updateKnowledge fixture",
+      },
+      (write) =>
+        write.updateKnowledge("k-upd", {
+          content: `updated${chr(0x00)}content`,
+        })
+    );
     const row = await store.getKnowledge("k-upd");
     expect(row?.content).toBe("updatedcontent");
   });

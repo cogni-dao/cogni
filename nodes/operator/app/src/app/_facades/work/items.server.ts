@@ -4,12 +4,10 @@
 /**
  * Module: `@app/_facades/work/items.server`
  * Purpose: Server-side facade for work item read/write operations across the markdown + Doltgres surfaces.
- * Scope: Maps port results to contract DTOs. Routes Doltgres-allocated IDs (5000+) to the Doltgres port from `getContainer()`; legacy markdown IDs to the markdown port.
- * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED,
- *   P0P1_IS_NODE_ADMIN (task.5286): a create or patch that sets priority 0 or 1 requires
- *   `node.administer` on this node, checked BEFORE the store write (deny →
- *   WorkItemAuthorizationError/403, outage → WorkItemAuthzUnavailableError/503). Priority 2+ and
- *   every other field are unchanged.
+ * Scope: Maps content results to DTOs; does not own adapters or PostgreSQL coordination. Dolt IDs start at 5000; lower IDs use markdown.
+ * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED.
+ *   Priority (including 0/1) carries no extra node-admin gate (task.5306); the store's own
+ *   author-scoped write authority applies unchanged.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
@@ -26,11 +24,6 @@ import type { WorkItem, WorkItemId } from "@cogni/work-items";
 import { toWorkItemId } from "@cogni/work-items";
 
 import { getContainer } from "@/bootstrap/container";
-import {
-  checkNodeAdmin,
-  isPrivilegedPriority,
-} from "@/bootstrap/node-admin-gate";
-import { getNodeId } from "@/shared/config/repoSpec.server";
 
 /**
  * Thrown when the opaque pagination cursor cannot be decoded — translated
@@ -73,40 +66,41 @@ export class WorkItemAuthorizationError extends Error {
   }
 }
 
-/**
- * Thrown when the authorization service could not decide (OpenFGA unconfigured,
- * unreachable, or erroring). FAIL CLOSED but DISTINCT from a denial: the route
- * answers 503 `authz_unavailable`, never 403.
- */
-export class WorkItemAuthzUnavailableError extends Error {
+/** Permanent retirement: cancel the durable item instead of reusing its identity. */
+export class WorkItemDeletionRetiredError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "WorkItemAuthzUnavailableError";
+    this.name = "WorkItemDeletionRetiredError";
   }
 }
 
-/**
- * P0P1_IS_NODE_ADMIN: refuse a priority-0/1 write unless the caller holds
- * `node.administer`. A no-op for any other priority (including absent).
- */
-async function assertPriorityAuthority(
-  priority: number | null | undefined,
-  userId: string
-): Promise<void> {
-  if (!isPrivilegedPriority(priority)) return;
-  const gate = await checkNodeAdmin(getContainer().authorization, {
-    userId,
-    nodeId: getNodeId(),
-  });
-  if (gate.ok) return;
-  if (gate.errorCode === "authz_unavailable") {
-    throw new WorkItemAuthzUnavailableError(
-      `priority ${priority} authorization unavailable: ${gate.reason}`
+/** A current mutation may have committed; preserve lookup evidence and forbid automatic replay. */
+export class WorkItemWriteOutcomeUnknownError extends Error {
+  readonly code = "work_item_write_outcome_unknown";
+  readonly retryable = false;
+  constructor(
+    readonly operationId: string,
+    readonly branch: string,
+    readonly commitHash?: string,
+    readonly itemId?: string
+  ) {
+    super(
+      "Work-item write outcome is unknown; inspect the operation branch and main before retrying."
     );
+    this.name = "WorkItemWriteOutcomeUnknownError";
   }
-  throw new WorkItemAuthorizationError(
-    `priority ${priority} requires node admin`
-  );
+  get receipt() {
+    return {
+      code: this.code,
+      retryable: false as const,
+      lookup: {
+        operationId: this.operationId,
+        branch: this.branch,
+        commitHash: this.commitHash ?? null,
+        itemId: this.itemId ?? null,
+      },
+    };
+  }
 }
 
 /**
@@ -115,6 +109,7 @@ async function assertPriorityAuthority(
  * request typically succeeds on the next attempt — the route answers 503 with
  * a retry hint, never an opaque 500.
  */
+
 export class WorkItemsBusyError extends Error {
   constructor(message: string) {
     super(message);
@@ -157,6 +152,28 @@ function mapStoreError(e: unknown): unknown {
   const message = (e as Error)?.message ?? "";
   if (name === "DoltgresNotConfiguredError") {
     return new WorkItemsBackendNotReadyError(message);
+  }
+  if (name === "WorkItemWriteOutcomeUnknownError") {
+    const receipt = e as {
+      operationId?: unknown;
+      branch?: unknown;
+      commitHash?: unknown;
+      itemId?: unknown;
+    };
+    if (
+      typeof receipt.operationId === "string" &&
+      typeof receipt.branch === "string"
+    )
+      return new WorkItemWriteOutcomeUnknownError(
+        receipt.operationId,
+        receipt.branch,
+        typeof receipt.commitHash === "string" ? receipt.commitHash : undefined,
+        typeof receipt.itemId === "string" ? receipt.itemId : undefined
+      );
+    return e;
+  }
+  if (name === "WorkItemDeletionRetiredError") {
+    return new WorkItemDeletionRetiredError(message);
   }
   if (name === "WorkItemAuthorizationError") {
     return new WorkItemAuthorizationError(message);
@@ -321,25 +338,19 @@ export async function createWorkItem(
   input: ContractCreateInput,
   sessionUser: { id: string; displayName: string | null }
 ): Promise<WorkItemDto> {
-  await assertPriorityAuthority(input.priority, sessionUser.id);
   return createWorkItemWithPrincipal(input, authorTagFromSession(sessionUser));
 }
 
 /**
  * Create as an already-authenticated non-human principal.
  *
- * Agents retain exact authorship for ordinary work, while P0/P1 remains a
- * verified-human governance action and is rejected before any store access.
+ * Agents retain exact authorship (`agent:<node>/<actorId>`); priority carries
+ * no extra gate (task.5306).
  */
 export async function createWorkItemAsPrincipal(
   input: ContractCreateInput,
   principalId: string
 ): Promise<WorkItemDto> {
-  if (isPrivilegedPriority(input.priority)) {
-    throw new WorkItemAuthorizationError(
-      `priority ${input.priority} requires node admin`
-    );
-  }
   return createWorkItemWithPrincipal(input, principalId);
 }
 
@@ -383,7 +394,6 @@ export async function patchWorkItem(
   input: ContractPatchInput,
   sessionUser: { id: string; displayName: string | null }
 ): Promise<WorkItemDto> {
-  await assertPriorityAuthority(input.set.priority, sessionUser.id);
   return patchWorkItemWithPrincipal(input, authorTagFromSession(sessionUser));
 }
 
@@ -392,20 +402,12 @@ export async function patchWorkItem(
  *
  * The principal is written verbatim into the Dolt commit proof. In particular,
  * an agent remains `agent:<node>/<actorId>` and is never projected into a
- * `users.id` value merely to satisfy the legacy SessionUser facade.
+ * `users.id` value merely to satisfy the legacy SessionUser shape.
  */
 export async function patchWorkItemAsPrincipal(
   input: ContractPatchInput,
   principalId: string
 ): Promise<WorkItemDto> {
-  // `node.administer` is deliberately user-only in the canonical OpenFGA
-  // model. Durable agent principals retain exact authorship for ordinary
-  // patches but cannot use that path to bypass the human-only P0/P1 gate.
-  if (isPrivilegedPriority(input.set.priority)) {
-    throw new WorkItemAuthorizationError(
-      `priority ${input.set.priority} requires node admin`
-    );
-  }
   return patchWorkItemWithPrincipal(input, principalId);
 }
 

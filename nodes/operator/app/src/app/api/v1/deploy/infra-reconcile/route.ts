@@ -44,7 +44,16 @@ import { EVENT_NAMES } from "@/shared/observability";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const infraReconcileInput = z.discriminatedUnion("env", [
+const infraReconcileInput = z.union([
+  z.strictObject({
+    nodeId: z.string().uuid(),
+    env: z.literal("production"),
+    target: z.literal("scheduler-worker-custodied-routing"),
+    rollbackReceipt: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/)
+      .optional(),
+  }),
   z.strictObject({
     nodeId: z.string().min(1),
     env: z.literal("production"),
@@ -154,25 +163,46 @@ export const POST = wrapRouteHandlerWithLogging(
         { status: 503 }
       );
     }
+    if (
+      "target" in parsed.data &&
+      (envConfig.DEPLOY_ENVIRONMENT !== "production" ||
+        envConfig.FLEET_CONTROL_ENV !== "production")
+    ) {
+      return NextResponse.json(
+        { error: "worker_routing_own_custodian_required" },
+        { status: 403 }
+      );
+    }
     try {
       const deployPlane = createOperatorDeployPlane(envConfig);
       const result =
-        parsed.data.env === "candidate-a"
+        "target" in parsed.data
           ? await deployPlane.reconcileNodeInfra({
-              env: "candidate-a",
-              parentOwner,
-              parentRepo,
+              env: "production",
               slug: "operator",
-              sourceSha: parsed.data.sourceSha,
-            })
-          : await deployPlane.reconcileNodeInfra({
-              // Shared long-lived lane (preview | production): ONE code path, the env is the only
-              // difference. The adapter resolves that lane's own deployed pin.
-              env: parsed.data.env,
               parentOwner,
               parentRepo,
-              slug: node.slug,
-            });
+              target: parsed.data.target,
+              ...(parsed.data.rollbackReceipt
+                ? { rollbackReceipt: parsed.data.rollbackReceipt }
+                : {}),
+            })
+          : parsed.data.env === "candidate-a"
+            ? await deployPlane.reconcileNodeInfra({
+                env: "candidate-a",
+                parentOwner,
+                parentRepo,
+                slug: "operator",
+                sourceSha: parsed.data.sourceSha,
+              })
+            : await deployPlane.reconcileNodeInfra({
+                // Shared long-lived lane (preview | production): ONE code path, the env is the only
+                // difference. The adapter resolves that lane's own deployed pin.
+                env: parsed.data.env,
+                parentOwner,
+                parentRepo,
+                slug: node.slug,
+              });
       // This event is operator-local rather than part of @cogni/node-shared's
       // cross-node registry, so emit it through the plain structured logger.
       ctx.log.info(
@@ -185,6 +215,14 @@ export const POST = wrapRouteHandlerWithLogging(
           env: result.env,
           status: result.status,
           sourceSha: result.sourceSha,
+          ...("target" in result
+            ? {
+                target: result.target,
+                receipt: result.receipt,
+                beforeHash: result.beforeHash,
+                afterHash: result.afterHash,
+              }
+            : {}),
           ...("lane" in result ? { lane: result.lane } : {}),
           ...("runId" in result ? { runId: result.runId } : {}),
           ...("deploySha" in result ? { deploySha: result.deploySha } : {}),

@@ -51,12 +51,12 @@ The Feb-2026 "three separate daemons" plan was superseded: review and governance
 
 ## Current Frontier (actively converging)
 
-| Track                              | Goal                                                                                                                                                                                                                                                | Anchor                                                                              |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| **Operator as merge authority**    | One merge chokepoint (`VcsCapability.mergePr`) + deterministic policy router; operator authorizes routine merges on `deploy_verified`, node-formation merges on a capacity gate, and governance overrides on-chain. Contributors stop self-merging. | [merge-authority](docs/spec/merge-authority.md)                                     |
-| **Zero-touch node formation**      | Founder clicks "Launch Node" → live across envs with no privileged manual bridge. First-class VM-capacity awareness (where to slot a node, when to make a VM) is the gate beyond ~6 nodes.                                                          | [proj.node-formation-ui](work/projects/proj.node-formation-ui.md)                   |
-| **Dev-session capture**            | Capture AI-dev sessions to Postgres (append-only corpus) + additive analytics view — the contributor record that feeds future attribution.                                                                                                          | PR #1440, [proj.development-workflows](work/projects/proj.development-workflows.md) |
-| **Deploy/observability hardening** | Stabilize preview/prod rollouts; ship infra events to Loki so the operator can see its own health.                                                                                                                                                  | [proj.observability-hardening](work/projects/proj.observability-hardening.md)       |
+| Track                              | Goal                                                                                                                                                                                                                                                                   | Anchor                                                                              |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| **Operator as merge authority**    | One merge chokepoint (`VcsCapability.mergePr`) + deterministic policy router; operator merges routine PRs on the passing `/validate-candidate` scorecard, node-formation merges on a capacity gate, and governance overrides on-chain. Contributors stop self-merging. | [merge-authority](docs/spec/merge-authority.md)                                     |
+| **Zero-touch node formation**      | Founder clicks "Launch Node" → live across envs with no privileged manual bridge. First-class VM-capacity awareness (where to slot a node, when to make a VM) is the gate beyond ~6 nodes.                                                                             | [proj.node-formation-ui](work/projects/proj.node-formation-ui.md)                   |
+| **Dev-session capture**            | Capture AI-dev sessions to Postgres (append-only corpus) + additive analytics view — the contributor record that feeds future attribution.                                                                                                                             | PR #1440, [proj.development-workflows](work/projects/proj.development-workflows.md) |
+| **Deploy/observability hardening** | Stabilize preview/prod rollouts; ship infra events to Loki so the operator can see its own health.                                                                                                                                                                     | [proj.observability-hardening](work/projects/proj.observability-hardening.md)       |
 
 ---
 
@@ -102,16 +102,16 @@ The Feb-2026 "three separate daemons" plan was superseded: review and governance
 
 ## Related Docs
 
-| Doc                                                                       | Purpose                                            |
-| ------------------------------------------------------------------------- | -------------------------------------------------- |
-| [Node vs Operator Contract](docs/spec/node-operator-contract.md)          | Boundaries, invariants, boot seams                 |
-| [Development Lifecycle](docs/spec/development-lifecycle.md)               | idea → deploy_verified status machine + agent loop |
-| [Merge Authority](docs/spec/merge-authority.md)                           | Operator as the network's merge authority          |
-| [DAO Governance Loop](docs/spec/dao-governance-loop.md)                   | Review → vote → signal → merge override            |
-| [Node Formation](docs/spec/node-formation.md)                             | DAO formation + node birth                         |
-| [Attribution Ledger](docs/spec/attribution-ledger.md)                     | Epoch attribution + payouts (vNext)                |
-| [CI/CD](docs/spec/ci-cd.md)                                               | Environments, deploy branches, candidate-flight    |
-| [Identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) | All identity primitives                            |
+| Doc                                                                       | Purpose                                                     |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| [Node vs Operator Contract](docs/spec/node-operator-contract.md)          | Boundaries, invariants, boot seams                          |
+| [Development Lifecycle](docs/spec/development-lifecycle.md)               | idea → validated (PR scorecard) status machine + agent loop |
+| [Merge Authority](docs/spec/merge-authority.md)                           | Operator as the network's merge authority                   |
+| [DAO Governance Loop](docs/spec/dao-governance-loop.md)                   | Review → vote → signal → merge override                     |
+| [Node Formation](docs/spec/node-formation.md)                             | DAO formation + node birth                                  |
+| [Attribution Ledger](docs/spec/attribution-ledger.md)                     | Epoch attribution + payouts (vNext)                         |
+| [CI/CD](docs/spec/ci-cd.md)                                               | Environments, deploy branches, candidate-flight             |
+| [Identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) | All identity primitives                                     |
 
 ---
 

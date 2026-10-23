@@ -8,6 +8,7 @@
  * Invariants:
  *   - TOOL_ID_NAMESPACED: ID is `core__work_item_query`
  *   - EFFECT_TYPED: effect is `read_only`
+ *   - BOUNDED_RESULTS: `summary` and `outcome` are each truncated to 600 chars per item (bug.5518)
  * Side-effects: IO (reads work items via capability)
  * Links: docs/spec/development-lifecycle.md
  * @public
@@ -40,7 +41,7 @@ export const WorkItemQueryInputSchema = z.object({
     .optional()
     .describe(
       "Filter by status. Omit for all actionable statuses. " +
-        "Priority order: needs_merge > needs_closeout > needs_implement > needs_design > needs_research > needs_triage"
+        "Priority order: needs_closeout > needs_merge > needs_implement > needs_design > needs_research > needs_triage"
     ),
   types: z
     .array(z.enum(["task", "bug", "story", "spike", "subtask"]))
@@ -107,6 +108,8 @@ const WorkItemOutputSchema = z.object({
 
 /** Max characters of `outcome` returned per item (keeps backlog pages bounded). */
 export const WORK_ITEM_QUERY_OUTCOME_MAX_CHARS = 600;
+/** Max characters of `summary` returned per item (bug.5518: keeps backlog pages bounded). */
+export const WORK_ITEM_QUERY_SUMMARY_MAX_CHARS = 600;
 
 function truncate(text: string | undefined, max: number): string | undefined {
   if (text === undefined) return undefined;
@@ -139,8 +142,10 @@ export const workItemQueryContract: ToolContract<
   description:
     "Query the work item backlog. Returns items matching filters sorted by " +
     "priority (status weight, then priority field, then rank). Use this to " +
-    "find actionable items, check item status, or search by text.",
+    "find actionable items, check item status, or search by text." +
+    " summary and outcome are truncated to 600 chars (ending in …); never patch summary from a query result.",
   effect: "read_only",
+  requires: "node.collaborate",
   inputSchema: WorkItemQueryInputSchema,
   outputSchema: WorkItemQueryOutputSchema,
 
@@ -187,7 +192,7 @@ export function createWorkItemQueryImplementation(
           actor: item.actor,
           priority: item.priority,
           rank: item.rank,
-          summary: item.summary,
+          summary: truncate(item.summary, WORK_ITEM_QUERY_SUMMARY_MAX_CHARS),
           projectId: item.projectId,
           labels: [...item.labels],
           assignees: item.assignees.map((a) => ({

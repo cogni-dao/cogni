@@ -151,10 +151,10 @@ stateDiagram-v2
   needs_triage --> done
   needs_research --> done
   needs_design --> needs_implement
-  needs_implement --> needs_closeout
-  needs_closeout --> needs_merge
-  needs_merge --> done
+  needs_implement --> needs_merge
+  needs_merge --> needs_closeout
   needs_merge --> needs_implement
+  needs_closeout --> done
 
   state blocked {
     [*] --> any_needs_star

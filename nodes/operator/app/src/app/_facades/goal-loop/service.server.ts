@@ -9,7 +9,7 @@
  *   and file the closing outcome. All reads/writes go through the container's
  *   `knowledgeStorePort` + `edoCapability` (the same EDO plane the public
  *   `/api/v1/edo/*` routes use, system-principal direct-to-main).
- * Scope: Operator-node I/O only. The pure loop control + halt predicate live in
+ * Scope: Operator-node I/O; does not decide halt policy. Pure control lives in
  *   `@cogni/knowledge-store/goal-loop` and the `GoalLoopWorkflow`; this module
  *   never decides whether to halt — it executes the activities the workflow asks for.
  * Invariants:
@@ -193,29 +193,35 @@ export async function runGoalStep(
   }
 ): Promise<StepResult> {
   const atomId = input.idempotencyKey;
-  await deps.store.addKnowledge({
-    id: atomId,
-    domain: input.domain,
-    title: `goal step ${input.iteration + 1} — finding for '${input.hypothesisId}'`,
-    content:
-      `Iteration ${input.iteration + 1} of the goal loop for '${input.hypothesisId}'. ` +
-      `Step graph: ${input.stepGraphId}. This atom is one unit of cited evidence ` +
-      `on the goal's chain; the independent judge scores the accumulated chain ` +
-      `against the goal's success criterion.`,
-    entryType: "finding",
-    sourceType: "derived",
-    sourceRef: GOAL_LOOP_SOURCE_REF(input.hypothesisId),
-  });
-  // evidence_for: atom → goal hypothesis. Idempotent on (citing,cited,type).
-  await deps.store.addCitation({
-    citingId: atomId,
-    citedId: input.hypothesisId,
-    citationType: "evidence_for",
-  });
-  await deps.store.commit(
-    `goal-loop: step ${input.iteration + 1} evidence for '${input.hypothesisId}'`
+  return deps.store.withWrite(
+    {
+      operationId: `goal.step:${atomId}`,
+      message: `goal-loop: step ${input.iteration + 1} evidence for '${input.hypothesisId}'`,
+    },
+    async (write) => {
+      await write.addKnowledge({
+        id: atomId,
+        domain: input.domain,
+        title: `goal step ${input.iteration + 1} — finding for '${input.hypothesisId}'`,
+        content:
+          `Iteration ${input.iteration + 1} of the goal loop for '${input.hypothesisId}'. ` +
+          `Step graph: ${input.stepGraphId}. This atom is one unit of cited evidence ` +
+          `on the goal's chain; the independent judge scores the accumulated chain ` +
+          `against the goal's success criterion.`,
+        entryType: "finding",
+        sourceType: "derived",
+        sourceRef: GOAL_LOOP_SOURCE_REF(input.hypothesisId),
+      });
+      // evidence_for: atom → goal hypothesis. Idempotent on (citing,cited,type).
+      await write.addCitation({
+        citingId: atomId,
+        citedId: input.hypothesisId,
+        citationType: "evidence_for",
+      });
+
+      return { ok: true, atomId, tokensSpent: 0 };
+    }
   );
-  return { ok: true, atomId, tokensSpent: 0 };
 }
 
 /**

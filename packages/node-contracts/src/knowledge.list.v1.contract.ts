@@ -22,6 +22,11 @@ export const KnowledgeListQuerySchema = z.object({
     .enum(["human", "analysis_signal", "external", "derived", "agent"])
     .optional(),
   limit: z.number().int().min(1).max(500).optional().default(100),
+  /**
+   * SCHEMA_REFINED_BY_READ_FILTER opt-in: include EDO machinery rows
+   * (event/hypothesis/decision/outcome). Default false — excluded.
+   */
+  includeEdo: z.boolean().optional(),
 });
 export type KnowledgeListQuery = z.infer<typeof KnowledgeListQuerySchema>;
 
@@ -37,6 +42,10 @@ export const KnowledgeRowSchema = z.object({
   sourceType: z.string(),
   sourceRef: z.string().nullable(),
   tags: z.array(z.string()).nullable(),
+  /** ISO timestamp — a hypothesis's resolution date or a goal's `By:` deadline. */
+  evaluateAt: z.string().nullable(),
+  /** Namespaced resolver id on hypothesis/goal rows (`manual`, `agent`, `metric:<kpi>`). */
+  resolutionStrategy: z.string().nullable(),
   createdAt: z.string().nullable(),
 });
 export type KnowledgeRow = z.infer<typeof KnowledgeRowSchema>;

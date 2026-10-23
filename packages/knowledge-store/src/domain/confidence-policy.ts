@@ -86,6 +86,19 @@ export function initializeConfidence(
   );
 }
 
+/**
+ * Entry types whose confidence is NOT moved by citations. A DAO `goal` is a
+ * human commitment, not a claim agents can prove or erode by citing it.
+ */
+export const CONFIDENCE_EXEMPT_ENTRY_TYPES: readonly string[] = ["goal"];
+
+/** True when citation-driven recompute must leave this row's confidence alone. */
+export function isConfidenceExempt(
+  entryType: string | null | undefined
+): boolean {
+  return CONFIDENCE_EXEMPT_ENTRY_TYPES.includes(entryType ?? "");
+}
+
 export function recomputeConfidence(
   entry: Pick<NewKnowledge, "sourceType">,
   citations: readonly ConfidenceCitationBasis[]

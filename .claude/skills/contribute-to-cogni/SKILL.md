@@ -1,6 +1,6 @@
 ---
 name: contribute-to-cogni
-description: Use when implementing a code change, opening a code PR, or resuming its CI, flight, merge, or promotion. Routes delivery to the current node's contracts. Research, explanations, design review, and knowledge-only contributions use their task-specific guidance.
+description: Use when implementing a code change, opening a code PR, or resuming its CI, flight, merge, or promotion. Routes delivery to the current node's contracts. Routes each work-item status to its lifecycle command. Explanations and knowledge-only contributions use their task-specific guidance.
 ---
 
 # Code delivery
@@ -22,6 +22,23 @@ Use the session's node identity, candidate URL, approved outcome, and existing
 work item. Reuse credentials; register only when no usable node credential exists.
 Follow the session's bounded watch gates and local command budget. Verify stale
 or draft guidance against the loaded contract and live API discovery before acting.
+
+## Your stage is your work item's status
+
+Run the one command for the status, then advance the status through the
+work-item API. Do not skip a stage.
+
+| status            | run                                                                                     |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| `needs_triage`    | `/triage`                                                                               |
+| `needs_research`  | `/research`                                                                             |
+| `needs_design`    | `/design`, then `/review-design` by a fresh agent                                       |
+| `needs_implement` | `/implement`: test-first code, docs pass, open the PR                                   |
+| `needs_merge`     | `/review-implementation` by a fresh agent while CI runs; both green → flight, validate  |
+| `needs_closeout`  | `/closeout`: verify all gates at one SHA, operator merge, `done`, keep what was learned |
+
+A story spanning several tasks belongs to `dev-manager`, which drives each task
+through these stages.
 
 Keep delivery authority with the operator. A GitHub developer grant may permit
 branch pushes; it does not replace the operator merge gate. Follow the loaded

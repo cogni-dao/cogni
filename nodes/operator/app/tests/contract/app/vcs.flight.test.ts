@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/contract/app/vcs.flight`
  * Purpose: Contract tests for POST /api/v1/vcs/flight.
- * Scope: Verifies operator-local node-ref artifact gating, dispatch, and auth.
+ * Scope: Verifies node-ref artifact gating, dispatch, target auth and independent workflow authority.
  * Invariants:
  *   - ARTIFACT_GATE: prepareNodeRefCandidateFlight owns source/image proof before dispatch.
  *   - PARENT_PIN_IS_REVIEW_METADATA: opened parent pin PRs do not block candidate flight.
@@ -72,6 +72,14 @@ const envState = vi.hoisted(() => ({
 }));
 
 const mockResolveRequestPrincipal = vi.hoisted(() => vi.fn());
+const OPERATOR_NODE_ID = "44444444-4444-4444-8444-444444444444";
+const operatorState = vi.hoisted(() => ({
+  current: null as { id: string; slug: string; ownerUserId: string } | null,
+  decision: "authz_allowed" as
+    | "authz_allowed"
+    | "authz_denied"
+    | "authz_unavailable",
+}));
 const mockLog = vi.hoisted(() => ({
   child: vi.fn().mockReturnThis(),
   debug: vi.fn(),
@@ -139,12 +147,18 @@ const mockTx = {
   select: (selection?: unknown) => ({
     from: () => ({
       where: (condition: SQL) => {
-        if (!selection)
-          dbState.nodeQuery = new PgDialect().sqlToQuery(condition);
+        const query = selection
+          ? undefined
+          : new PgDialect().sqlToQuery(condition);
+        const isOperatorLookup = query?.params.includes("operator") ?? false;
+        if (query && !isOperatorLookup) dbState.nodeQuery = query;
         return {
           limit: () => {
             if (selection) {
               return billingState.current ? [billingState.current] : [];
+            }
+            if (isOperatorLookup) {
+              return operatorState.current ? [operatorState.current] : [];
             }
             return dbState.current ? [dbState.current] : [];
           },
@@ -222,22 +236,34 @@ function makePreparedNodeRef(
 describe("POST /api/v1/vcs/flight", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    operatorState.current = {
+      id: OPERATOR_NODE_ID,
+      slug: "operator",
+      ownerUserId: "00000000-0000-4000-a000-0000000000ff",
+    };
+    operatorState.decision = "authz_allowed";
     dbState.nodeQuery = undefined;
     authzState.decision = undefined;
-    authzState.check.mockImplementation(async () => {
-      if (authzState.decision === "authz_allowed") {
+    authzState.check.mockImplementation(
+      async (input: { readonly resource: string }) => {
+        const decision =
+          input.resource === `node:${OPERATOR_NODE_ID}`
+            ? operatorState.decision
+            : authzState.decision;
+        if (decision === "authz_allowed") {
         return {
           decision: "allow",
           code: "authz_allowed",
           checks: [],
         };
       }
-      return {
-        decision: "deny",
-        code: authzState.decision ?? "authz_denied",
-        checks: [],
-      };
-    });
+        return {
+          decision: "deny",
+          code: decision ?? "authz_denied",
+          checks: [],
+        };
+      }
+    );
     dbState.current = {
       id: NODE_ID,
       slug: "creative",
@@ -259,6 +285,12 @@ describe("POST /api/v1/vcs/flight", () => {
       displayName: TEST_SESSION_USER_1.displayName,
       avatarColor: TEST_SESSION_USER_1.avatarColor,
     });
+    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
+      makePreparedNodeRef()
+    );
+    mockDeployPlane.dispatchNodeRefCandidateFlight.mockResolvedValue(
+      makeDispatchResult()
+    );
   });
 
   it("returns 401 when unauthenticated", async () => {
@@ -373,6 +405,174 @@ describe("POST /api/v1/vcs/flight", () => {
           sourceSha: SOURCE_SHA,
           workflowRef: "bug.5455-safe-workflow-ref",
         });
+      },
+    });
+  });
+
+  it("keeps an independent reviewed workflow SHA separate from the remote artifact", async () => {
+    authzState.decision = "authz_allowed";
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            workflowRef: "maintainer/workflow",
+            workflowSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+          }),
+        });
+        expect(response.status).toBe(202);
+        expect(authzState.check).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: "node.flight",
+            resource: `node:${OPERATOR_NODE_ID}`,
+          })
+        );
+        expect(
+          mockDeployPlane.dispatchNodeRefCandidateFlight
+        ).toHaveBeenCalledWith(
+          expect.objectContaining({
+            slug: "creative",
+            sourceSha: SOURCE_SHA,
+            workflowRef: "maintainer/workflow",
+            workflowSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+          })
+        );
+      },
+    });
+  });
+
+  it.each([
+    403, 503, 404,
+  ])("refuses independent workflow authority %s before GitHub preparation", async (status) => {
+    authzState.decision = "authz_allowed";
+    if (status === 404) operatorState.current = null;
+    else
+      operatorState.decision =
+        status === 503 ? "authz_unavailable" : "authz_denied";
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            workflowRef: "maintainer/workflow",
+            workflowSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+          }),
+        });
+        expect(response.status).toBe(status);
+        expect(
+          mockDeployPlane.prepareNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+        expect(
+          mockDeployPlane.dispatchNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("refuses a denied target before checking independent operator authority", async () => {
+    authzState.decision = "authz_denied";
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            workflowRef: "maintainer/workflow",
+            workflowSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+          }),
+        });
+        expect(response.status).toBe(403);
+        expect(authzState.check).not.toHaveBeenCalledWith(
+          expect.objectContaining({ resource: `node:${OPERATOR_NODE_ID}` })
+        );
+        expect(
+          mockDeployPlane.prepareNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+        expect(
+          mockDeployPlane.dispatchNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("does not use target ownership as independent workflow authority", async () => {
+    // No authorization adapter: target ownership admits the target, but the
+    // operator workflow authority fails closed instead of inheriting it.
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            workflowRef: "maintainer/workflow",
+            workflowSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+          }),
+        });
+        expect(response.status).toBe(503);
+        expect(
+          mockDeployPlane.dispatchNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("rejects a workflow SHA without its reviewed ref", async () => {
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            workflowSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+          }),
+        });
+        expect(response.status).toBe(400);
+        expect(
+          mockDeployPlane.prepareNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+        expect(
+          mockDeployPlane.dispatchNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("rejects an independent override for an in-repo node", async () => {
+    authzState.decision = "authz_allowed";
+    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
+      makePreparedNodeRef({
+        slug: "operator",
+        sourceRepo: "https://github.com/cogni-test-org/cogni-monorepo",
+      })
+    );
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            workflowRef: "maintainer/workflow",
+            workflowSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+          }),
+        });
+        expect(response.status).toBe(422);
+        expect(
+          mockDeployPlane.dispatchNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
       },
     });
   });

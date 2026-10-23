@@ -6,7 +6,7 @@
  * Purpose: HTTP endpoints for listing and creating work items.
  * Scope: Auth-protected GET (list — markdown ∪ Doltgres) and POST (create — Doltgres only).
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTHENTICATED_PRINCIPAL,
- *   HUMAN_GOVERNANCE_ONLY, ID_RANGE_RESERVED, CODED_WRITE_ERRORS.
+ *   ID_RANGE_RESERVED, CODED_WRITE_ERRORS.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write)
  * Links: contracts/work.items.{list,create}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @public
@@ -93,8 +93,7 @@ export const GET = wrapRouteHandlerWithLogging(
  *
  * Server allocates an ID in the reserved 5000+ range per type
  * (ID_RANGE_RESERVED). Author is derived from the verified request principal
- * and embedded in the dolt_log commit message (AUTHOR_ATTRIBUTED). Only a
- * verified human may enter the node-admin gate for priority 0/1.
+ * and embedded in the dolt_log commit message (AUTHOR_ATTRIBUTED).
  */
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "work.items.create", auth: { mode: "none" } },

@@ -64,6 +64,7 @@ export const getCurrentTimeContract: ToolContract<
   name: GET_CURRENT_TIME_NAME,
   description: "Get the current UTC time. Returns the time in ISO 8601 format.",
   effect: "read_only",
+  requires: "node.collaborate",
   inputSchema: GetCurrentTimeInputSchema,
   outputSchema: GetCurrentTimeOutputSchema,
 

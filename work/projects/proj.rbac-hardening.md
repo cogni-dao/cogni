@@ -164,5 +164,5 @@ The current `user.delegates` relation is global—not scoped to tenant or graph.
 
 **Chores (P0):**
 
-- [ ] Observability [observability.md](../.agent/workflows/observability.md)
-- [ ] Documentation [document.md](../.agent/workflows/document.md)
+- [ ] Observability [observability.md](../../.claude/commands/observability.md)
+- [ ] Documentation `/implement` docs pass

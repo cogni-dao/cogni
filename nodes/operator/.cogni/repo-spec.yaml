@@ -60,6 +60,21 @@ governance:
   signal_contract: "0x590FC79B9c925C377fA63F4AaF54cdbF4Ee273A1"
   chain_id: "8453"
   base_url: "https://proposal.cognidao.org"
+  # Governance charters (task.5282). LEDGER_INGEST is NOT declared here on purpose:
+  # extractGovernanceConfig still synthesizes it from activity_ledger (cron 0 0 * * *),
+  # exactly as before this list existed — only a declared LEDGER_INGEST suppresses that.
+  schedules:
+    # Mission loop (story.5108) on the work-prioritizer slot: a ReAct agent that reads the DAO goals and
+    # makes at most ~5 goal-cited work-item changes per cycle; p0/p1 writes are server-denied and listed
+    # as proposals for the node admin. Model = LiteLLM default_free (gpt-oss-120b, is_free: true): the
+    # system tenant that bills governance runs holds zero credits, and the preflight credit gate passes
+    # free models — a paid model would fail with insufficient_credits. Hourly is the prod-safe cadence.
+    - charter: WORK_PRIORITIZER
+      cron: "0 * * * *"
+      timezone: UTC
+      entrypoint: PRIORITIZE
+      graph: langgraph:work-prioritizer
+      model: gpt-oss-120b
 
 payments:
   status: active

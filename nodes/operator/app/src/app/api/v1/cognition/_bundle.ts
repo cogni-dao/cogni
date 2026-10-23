@@ -20,6 +20,9 @@
  *     is rendered IN FULL — the node MAP that rides alongside the invariant
  *     floor, so the git skeleton stays minimal and the Dolt orientation carries
  *     the node-specific substance.
+ *   - GOALS_AFTER_MISSION: the approved DAO goals (`listActiveGoals`) render as
+ *     `## Goals` right after the orientation, title + content verbatim; zero
+ *     goals renders `no approved goals`, a read failure `goals unavailable: …`.
  * Side-effects: none
  * Links: https://cognidao.org/knowledge/node-baas-substrate-model
  * @internal
@@ -54,7 +57,7 @@ import type {
 export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
   "ONE work item + ONE node per session — it is your plan and your checklist. Claim it, then write the definition of done as an ordered checklist in `outcome` BEFORE you act; heartbeat; link your PR. You are not done until every box is checked and proven; coordination.nextAction is authoritative and may add boxes.",
   "Cite before you act. Recall first — your <slug>-agent-orientation, then skills/guides → this hub (/api/v1/knowledge?domain=) → our code (node-template, operator) → external OSS; merged + your own open branch. Refine in place over adding new. Every checklist step names the skill/guide/entry it follows; an uncited step is the exception you justify.",
-  "Follow the CICD checklist exactly — recall it, never improvise the mechanism: branch → CI green → flight to candidate THROUGH the operator (POST /api/v1/vcs/flight — never a personal `gh` dispatch) → /validate-candidate → operator merge (POST /api/v1/vcs/merge) → promote. NEVER enter the merge queue or enable auto-merge before validate passes. Watch each async gate (CI, flight, deploy) the ONE portable way — see <watch-gate> below.",
+  "Follow the CICD checklist exactly — recall it, never improvise the mechanism: branch → PR → a fresh /review-implementation while CI runs (never the implementer) → APPROVE + CI green at one head SHA → flight that SHA THROUGH the operator (POST /api/v1/vcs/flight — never a personal `gh` dispatch) → /validate-candidate → /closeout: operator merge (POST /api/v1/vcs/merge) → promote. NEVER enter the merge queue or enable auto-merge before review and validate pass. Watch each async gate (CI, flight, deploy) the ONE portable way — see <watch-gate> below.",
   "Done = before→after behavior proven on the live candidate, NOT a SHA deployed. Capture the BROKEN signal, flight, then read the FIXED behavior back from Loki at that SHA. 'Request reached the build' is deploy proof, not function. The /validate-candidate scorecard is the merge gate; reprove prod-facing changes in preview/prod.",
   "Persist what outlives the session in the durable substrate, never a doc that rots: plan + status → the work item; durable strategy/why → operator Dolt, linked to the item (specRefs / cite edge). Specs hold contracts + invariants only — never a rollout plan.",
   "Drive autonomously; interrupt a human only for the irreversible, outward-facing, or out-of-scope — never for approval you already hold, never to merge/promote something unvalidated. When you ask: one scorecard → the single decision → a clickable link.",
@@ -135,6 +138,88 @@ export async function resolveOrientation(
   return null;
 }
 
+/** One approved DAO goal as the bundle renders it (title + content verbatim). */
+export interface GoalView {
+  id: string;
+  title: string;
+  content: string;
+  /** The goal's deadline, read from the `evaluate_at` column — never parsed from content. */
+  evaluateAt: Date | null;
+}
+
+/**
+ * The Goals section state. `unavailable` is a visible line, never an omitted
+ * section (NO_GOALS_FAILS_LOUD): a session must be able to tell "no goals" from
+ * "could not read goals".
+ */
+export type GoalsSection =
+  | { status: "ok"; goals: readonly GoalView[] }
+  | { status: "unavailable"; reason: string };
+
+/** Minimal read surface `resolveGoals` needs — `KnowledgeStorePort.listActiveGoals`. */
+export interface GoalsLookupPort {
+  listActiveGoals(): Promise<readonly GoalView[]>;
+}
+
+/**
+ * Read the approved DAO goals by one direct query — not the PER_DOMAIN_LIMIT
+ * domain scan, which silently drops older rows (bug.5280). Any failure,
+ * including `TooManyActiveGoalsError` (MAX_THREE_GOALS) or an unconfigured hub,
+ * becomes a visible `unavailable` state rather than a missing section.
+ */
+export async function resolveGoals(
+  port: GoalsLookupPort | undefined
+): Promise<GoalsSection> {
+  if (!port) {
+    return { status: "unavailable", reason: "knowledge hub not configured" };
+  }
+  try {
+    const goals = await port.listActiveGoals();
+    return {
+      status: "ok",
+      goals: goals.map((g) => ({
+        id: g.id,
+        title: g.title,
+        content: g.content,
+        evaluateAt: g.evaluateAt,
+      })),
+    };
+  } catch (e) {
+    return {
+      status: "unavailable",
+      reason: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+/** `YYYY-MM-DD` from the `evaluate_at` column, or an explicit gap marker. */
+function goalDeadline(evaluateAt: Date | null): string {
+  return evaluateAt ? evaluateAt.toISOString().slice(0, 10) : "no deadline set";
+}
+
+/**
+ * Render the `## Goals` section lines: per goal its title, the deadline from
+ * the `evaluate_at` column (never parsed from content), then content verbatim.
+ */
+export function renderGoalsLines(goals: GoalsSection): string[] {
+  const head = ["", "## Goals", ""];
+  if (goals.status === "unavailable") {
+    return [...head, `goals unavailable: ${escapeCell(goals.reason)}`];
+  }
+  if (goals.goals.length === 0) return [...head, "no approved goals"];
+  return [
+    ...head,
+    ...goals.goals.flatMap((g, i) => [
+      ...(i > 0 ? [""] : []),
+      `### ${g.title}`,
+      "",
+      `By: ${goalDeadline(g.evaluateAt)} · \`${g.id}\``,
+      "",
+      g.content,
+    ]),
+  ];
+}
+
 export interface RenderBundleInput {
   node: string;
   name: string;
@@ -147,6 +232,8 @@ export interface RenderBundleInput {
   domainPointers: readonly CognitionDomainPointer[];
   /** The current node's `<slug>-agent-orientation` entry (full), or null if unseeded. */
   orientation: OrientationEntry | null;
+  /** Approved DAO goals, rendered right after the mission/orientation. */
+  goals: GoalsSection;
 }
 
 /**
@@ -164,6 +251,7 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     buildSha,
     toolingInvariants,
     orientation,
+    goals,
   } = input;
   const { skillsIndex, domainPointers } = input;
   // "2026-06-16 14:20" — human date, not an ISO wall of digits.
@@ -258,6 +346,7 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     `> Delivered at session start from ${origin}/api/v1/cognition — replaces git-synced AGENTS.md sprawl. (node \`${node}\` · build \`${buildSha}\`)`,
     "",
     ...orientationLines,
+    ...renderGoalsLines(goals),
     ...toolingFloor,
     "",
     "## Skills index (recall full content from the hub before acting)",

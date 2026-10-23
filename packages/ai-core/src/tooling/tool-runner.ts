@@ -44,7 +44,52 @@ import {
   type ToolPolicy,
   type ToolPolicyContext,
 } from "./runtime/tool-policy";
-import type { BoundToolRuntime, EmitAiEvent, ToolResult } from "./types";
+import type {
+  BoundToolRuntime,
+  EmitAiEvent,
+  ToolFailureReceipt,
+  ToolResult,
+} from "./types";
+
+/** Preserve only explicitly structured, bounded nonretryable receipts from capabilities. */
+function failureReceipt(error: unknown): ToolFailureReceipt | undefined {
+  try {
+    if (typeof error !== "object" || error === null || !("receipt" in error))
+      return undefined;
+    const value = error.receipt;
+    if (typeof value !== "object" || value === null) return undefined;
+    const receipt = value as {
+      code?: unknown;
+      retryable?: unknown;
+      lookup?: unknown;
+    };
+    if (
+      typeof receipt.code !== "string" ||
+      !/^[a-z0-9_]{1,100}$/.test(receipt.code) ||
+      receipt.retryable !== false ||
+      typeof receipt.lookup !== "object" ||
+      receipt.lookup === null
+    )
+      return undefined;
+    const entries = Object.entries(receipt.lookup);
+    if (
+      entries.length > 10 ||
+      entries.some(
+        ([key, item]) =>
+          !/^[a-zA-Z0-9_]{1,100}$/.test(key) ||
+          (item !== null && (typeof item !== "string" || item.length > 1024))
+      )
+    )
+      return undefined;
+    return {
+      code: receipt.code,
+      retryable: false,
+      lookup: Object.fromEntries(entries) as Record<string, string | null>,
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 /** Charset for provider-compatible tool call IDs */
 const TOOL_ID_CHARS =
@@ -407,12 +452,22 @@ export function createToolRunner(
         capabilities
       );
     } catch (err) {
+      const receipt = failureReceipt(err);
       const safeMessage =
         err instanceof Error ? err.message : "Tool execution failed";
       const errorEvent: ToolCallResultEvent = {
         type: "tool_call_result",
         toolCallId,
-        result: { error: safeMessage },
+        result: {
+          error: safeMessage,
+          ...(receipt
+            ? {
+                errorCode: receipt.code,
+                retryable: false,
+                lookup: receipt.lookup,
+              }
+            : {}),
+        },
         isError: true,
       };
       emit(errorEvent);
@@ -423,6 +478,7 @@ export function createToolRunner(
         ok: false,
         errorCode: "execution",
         safeMessage,
+        ...(receipt ? { receipt, retryable: false as const } : {}),
       };
     }
 

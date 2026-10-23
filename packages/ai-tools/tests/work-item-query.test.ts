@@ -20,6 +20,7 @@ import type {
 import {
   createWorkItemQueryImplementation,
   WORK_ITEM_QUERY_OUTCOME_MAX_CHARS,
+  WORK_ITEM_QUERY_SUMMARY_MAX_CHARS,
   WorkItemQueryOutputSchema,
   workItemQueryContract,
 } from "../src/tools/work-item-query";
@@ -49,13 +50,14 @@ describe("core__work_item_query", () => {
     expect(workItemQueryContract.effect).toBe("read_only");
   });
 
-  it("passes enrichment fields through and truncates outcome", async () => {
+  it("passes enrichment fields through and truncates outcome + summary", async () => {
     const longOutcome = "x".repeat(WORK_ITEM_QUERY_OUTCOME_MAX_CHARS + 50);
     const cap = capabilityReturning([
       {
         ...BASE,
         revision: 7,
         outcome: longOutcome,
+        summary: "s".repeat(WORK_ITEM_QUERY_SUMMARY_MAX_CHARS + 50),
         estimate: 3,
         parentId: "story.5096",
         specRefs: ["knowledge:work-items-port"],
@@ -72,6 +74,9 @@ describe("core__work_item_query", () => {
     expect(item?.specRefs).toEqual(["knowledge:work-items-port"]);
     expect(item?.outcome?.length).toBe(WORK_ITEM_QUERY_OUTCOME_MAX_CHARS + 1);
     expect(item?.outcome?.endsWith("…")).toBe(true);
+    expect(item?.summary).toBe(
+      `${"s".repeat(WORK_ITEM_QUERY_SUMMARY_MAX_CHARS)}…`
+    );
   });
 
   it("is backward compatible when the store has no enrichment fields", async () => {

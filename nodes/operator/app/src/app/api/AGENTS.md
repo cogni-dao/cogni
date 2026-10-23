@@ -89,6 +89,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/authorization/billing-account-owner` [POST] - node-workload-authenticated, one-time idempotent initial account-owner projection; no raw tuples
   - `/api/v1/authorization/billing-account-grants` [POST] - node-workload-authenticated semantic reader/OBO grant or revoke; no raw tuples
   - `/api/v1/knowledge/contributions/[id]/commits` [GET, POST] - list/append authenticated contribution branch commits
+- Fixed service target `scheduler-worker-custodied-routing` on `/api/v1/deploy/infra-reconcile`: own-production custodian only; additive Git publication or receipt rollback; publication is not rollout proof.
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
 
 ## Responsibilities
