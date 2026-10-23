@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/knowledge-store/tests/edo-read-filter`
  * Purpose: Prove the default read filter (SCHEMA_REFINED_BY_READ_FILTER, R1 LibrarianReadFilter): searchKnowledge/listKnowledge hide EDO rows unless `includeEdo`, in both adapters, and the Doltgres search never loads the whole shelf's content.
- * Scope: Fake adapter + Doltgres adapter over a scripted postgres.js stand-in. Native Doltgres SQL semantics are covered by component tests in CI.
+ * Scope: Fake adapter + Doltgres adapter over a scripted postgres.js stand-in. Does not exercise real Doltgres; component tests cover SQL semantics in CI.
  * Invariants: SCHEMA_REFINED_BY_READ_FILTER, EDO_ENTRY_TYPES fail-closed.
  * Side-effects: none
  * Links: docs/spec/knowledge-syntropy.md, task.5308
