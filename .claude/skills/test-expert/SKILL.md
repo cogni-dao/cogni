@@ -156,7 +156,7 @@ Use this scorecard when someone says the test repo “mirrors production”:
 | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | workflow logic, generators, schemas, required gates, operator verbs, Crossplane/Actuator path, image naming, promotion and verification sequence | GitHub App, org/repositories, DNS zone + token, provider/wallet account, DoltHub org, runtime secrets, databases, and destructive authority |
 
-If a test credential can mutate `cognidao.org`, production GitHub repos, production VMs, or a production wallet, the test topology is not isolated. Do not “seed” production credentials to make it green; fix the missing test substrate or authority boundary.
+If a test credential can mutate `cognidao.org`, production GitHub repos, production VMs, or a production wallet, the test topology is not isolated. The same holds for a VM shared with a canonical lane: the test fleet's candidate-a control VM is also canonical candidate-a's Postgres and egress host, and each fleet's flight fully replaces that VM's allowlist from its own catalog. Read [`test-fleet-parity-boundary`](https://cognidao.org/knowledge/test-fleet-parity-boundary) and [`lane-is-not-control`](https://cognidao.org/knowledge/lane-is-not-control) before enabling test-org flight workflows (bug.5495, task.5270). Do not “seed” production credentials to make it green; fix the missing test substrate or authority boundary.
 
 ### How test code reaches the test parent — deliver it directly, never merge-first
 
