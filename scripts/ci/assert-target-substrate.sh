@@ -335,14 +335,17 @@ else
   edge_key="${edge_key}_DOMAIN"
 fi
 
-if [ "$check_dns" = "true" ]; then
+dns_writer="$(dns_writer_for_target "$node" "$DEPLOY_ENVIRONMENT")" || exit 1
+if [ "$dns_writer" = crossplane-http ]; then
+  echo "[INFO] ${node}: DNS owned by provider-http; legacy apex/A assertion excluded"
+elif [ "$check_dns" = "true" ]; then
   : "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN required for node substrate DNS check}"
   : "${CLOUDFLARE_ZONE_ID:?CLOUDFLARE_ZONE_ID required for node substrate DNS check}"
   : "${FORK_DOMAIN_ROOT:?FORK_DOMAIN_ROOT required for node substrate DNS check}"
   # shellcheck disable=SC1091 source=./scripts/ci/lib/cloudflare-dns.sh
   source "${SCRIPT_DIR}/lib/cloudflare-dns.sh"
-  vm_ip="$(cf_a_record_content "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$domain")"
-  [ -n "$vm_ip" ] || fail "apex A record '$domain' missing; provision the env before node-ref flight"
+  vm_ip="$(cf_a_record_content "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "${CONTROL_DOMAIN:-$domain}")"
+  [ -n "$vm_ip" ] || fail "apex A record '${CONTROL_DOMAIN:-$domain}' missing; provision the env before node-ref flight"
   node_ip="$(cf_a_record_content "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$node_host")"
   [ "$node_ip" = "$vm_ip" ] || fail "node DNS missing or drifted: ${node_host} resolves to '${node_ip:-none}', want ${vm_ip}"
 fi

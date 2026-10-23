@@ -12,6 +12,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -284,7 +285,10 @@ test("generated template DNS never clones; real CLI projection is deterministic 
       { env: { ...env, DOMAIN: "cognidao.org" }, encoding: "utf8" }
     );
     assert.equal(shell, renderOverlay(generated, "clone", 30299, 3299));
-    assert.ok(!shell.includes("cogni-testing.org"));
+    const origin =
+      /path: \/data\/NEXTAUTH_URL\s+value: "?(https:\/\/[^"\s]+)/.exec(shell);
+    assert.ok(origin);
+    assert.equal(new URL(origin[1]).hostname, "clone-test.cognidao.org");
     const built = execFileSync(
       "kubectl",
       ["kustomize", path.dirname(overlay)],
@@ -309,6 +313,45 @@ test("generated template DNS never clones; real CLI projection is deterministic 
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    // Exercise the substrate consumer with nonempty legitimate credential slots:
+    // delegated CNAME intent must never enter the legacy apex/A-only API path.
+    const appsetDir = path.join(dir, "infra/k8s/argocd/appsets/candidate-a");
+    mkdirSync(appsetDir, { recursive: true });
+    writeFileSync(
+      path.join(appsetDir, "candidate-a-node-template-applicationset.yaml"),
+      "{}\n"
+    );
+    const fakeSsh = path.join(dir, "ssh");
+    writeFileSync(fakeSsh, "#!/bin/sh\ncat >/dev/null\nexit 0\n");
+    chmodSync(fakeSsh, 0o700);
+    const cfAttempt = path.join(dir, "cf-attempt");
+    const fakeCf = path.join(dir, "cf");
+    writeFileSync(fakeCf, `#!/bin/sh\ntouch '${cfAttempt}'\nexit 97\n`);
+    chmodSync(fakeCf, 0o700);
+    const substrateOutput = execFileSync(
+      "bash",
+      ["scripts/ci/assert-target-substrate.sh"],
+      {
+        env: {
+          ...env,
+          TARGET: "node-template",
+          DEPLOY_ENVIRONMENT: "candidate-a",
+          DEPLOYMENT_PROVIDER: "k3s",
+          APP_SOURCE_DIR: dir,
+          COGNI_CATALOG_ROOT: path.join(dir, "infra/catalog"),
+          DOMAIN: "cogni-testing.org",
+          VM_HOST: "192.0.2.10",
+          CHECK_DNS: "true",
+          CLOUDFLARE_API_TOKEN: "fixture-present",
+          CLOUDFLARE_ZONE_ID: "a".repeat(32),
+          CF_CURL: fakeCf,
+          ASSERT_TARGET_SUBSTRATE_SSH_BIN: fakeSsh,
+        },
+        encoding: "utf8",
+      }
+    );
+    assert.match(substrateOutput, /DNS owned by provider-http/);
+    assert.equal(existsSync(cfAttempt), false);
     const delegated = JSON.parse(readFileSync(summary, "utf8"));
     assert.equal(delegated.status, "success");
     assert.ok(
@@ -417,21 +460,31 @@ test("runtime domain disagreement fails before publication and zero-zone receipt
       keyPresent: true,
       appset: {
         name: "cogni-candidate-a-node-template",
+        templateName: "candidate-a-{{.name}}",
+        goTemplate: true,
+        project: "default",
+        destination: {
+          server: "https://kubernetes.default.svc",
+          namespace: "cogni-candidate-a",
+        },
         uid: "test-appset-uid",
         generators: [
           {
             git: {
               repoURL: "https://github.com/cogni-test-org/cogni-monorepo.git",
               revision: "deploy/candidate-a-node-template",
+              files: [{ path: "infra/catalog/node-template.yaml" }],
             },
           },
         ],
         source: {
           repoURL: "https://github.com/cogni-test-org/cogni-monorepo.git",
           targetRevision: "deploy/candidate-a-{{.name}}",
+          path: "infra/k8s/overlays/candidate-a/{{.name}}",
         },
       },
       dnsRequest: { owner: "fixture-owner" },
+      appsetAuthorities: [],
     };
     const run = (r, f) => {
       writeFileSync(path.join(dir, "receipt"), JSON.stringify(r));
@@ -455,8 +508,50 @@ test("runtime domain disagreement fails before publication and zero-zone receipt
         receipt: JSON.parse(readFileSync(path.join(dir, "receipt"), "utf8")),
       };
     };
+    assert.equal(
+      run(positive, {
+        ...known,
+        appsetAuthorities: [
+          {
+            name: "foreign-root",
+            source: { repoURL: "https://github.com/cogni-dao/cogni.git" },
+          },
+        ],
+      }).passed,
+      false
+    );
     const bootstrap = run(positive, known);
     assert.equal(bootstrap.passed, true);
+    for (const patch of [
+      {
+        generators: [
+          {
+            git: {
+              ...known.appset.generators[0].git,
+              files: [{ path: "infra/catalog/foreign.yaml" }],
+            },
+          },
+        ],
+      },
+      {
+        source: {
+          ...known.appset.source,
+          path: "infra/k8s/overlays/production/operator",
+        },
+      },
+      {
+        destination: {
+          server: "https://kubernetes.default.svc",
+          namespace: "cogni-production",
+        },
+      },
+      { templateName: "production-operator" },
+    ])
+      assert.equal(
+        run(positive, { ...known, appset: { ...known.appset, ...patch } })
+          .passed,
+        false
+      );
     assert.equal(bootstrap.receipt.workloadReadiness.availableReplicas, 0);
     assert.equal(
       run(positive, { ...known, app: { readError: true } }).passed,
