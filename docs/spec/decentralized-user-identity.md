@@ -23,6 +23,6 @@ This spec moved to the operator knowledge hub (task.5253, story.5075). Read thes
 | Operator-Brokered GitHub OAuth (`identity.attestation.v1`), `ATTESTATION_*` invariants                           | [identity-attestation-v1](https://cognidao.org/knowledge/identity-attestation-v1) |
 
 Until the hub contribution merges, review both entries at
-[inbox contrib-flock-leader-conductor-81425a7f](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-81425a7f).
+[inbox contrib-flock-leader-conductor-c95e5c27](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-c95e5c27).
 The last full text of this spec is
 [`decentralized-user-identity.md@3f5d9140`](https://github.com/cogni-dao/cogni/blob/3f5d91400a11433299aca719f925d1d2203b3896/docs/spec/decentralized-user-identity.md).
