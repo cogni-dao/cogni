@@ -438,3 +438,46 @@ describe("native field-group and failure conformance", () => {
     expect(result.meta.cogni.attributionUnavailable).toBe(1);
   });
 });
+
+describe("bounded regex input", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it("withholds oversized unbroken tokens before scrubbing, preserving ordinary long transcripts", async () => {
+    const token = "a".repeat(8192);
+    const prose = "Ordinary transcript words stay readable. ".repeat(600);
+    const row = {
+      ...observation(),
+      input: JSON.stringify({
+        messages: [
+          {
+            role: "assistant",
+            content: JSON.stringify({
+              before: "useful prefix",
+              token,
+              after: "useful suffix",
+            }),
+          },
+        ],
+      }),
+      output: JSON.stringify({ content: prose }),
+      statusMessage: `before ${token} after`,
+    };
+    vi.stubGlobal("fetch", mockFetch({ data: [row], meta: { cursor: null } }));
+    const result = await nativeReader().listObservations(
+      nativeQuery("&limit=1")
+    );
+    const readable = JSON.stringify(result.data[0]);
+    expect(readable).not.toContain(token);
+    expect(readable).toContain("[WITHHELD: oversized token]");
+    expect(readable).toContain("useful prefix");
+    expect(readable).toContain("useful suffix");
+    expect(result.data[0]?.output).toBe(JSON.stringify({ content: prose }));
+    expect(result.meta.cogni).toMatchObject({
+      truncated: true,
+      partial: true,
+      attributionUnavailable: 0,
+    });
+  });
+});

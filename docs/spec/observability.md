@@ -393,6 +393,8 @@ native Langfuse read contract, not a replacement Langfuse SDK base URL. The exis
   a string; recursively scrubbed JSON strings remain strings. Native `sessionId` belongs to `basic`;
   `tags`, `release` and `traceName` belong to `trace_context`. The `basic.userId` field is deliberately
   withheld by privacy policy; model pricing enrichment is null unless `model` is requested.
+  Before inherited content regexes run, a linear scan withholds unbroken string-leaf tokens longer
+  than 2,048 characters and marks `meta.cogni.truncated/partial`; ordinary long prose is preserved.
   Metadata uses an explicit allowlist;
   authentication objects, key fingerprints, billing accounts, requester metadata and user identifiers
   are withheld. The shared project key never reaches a developer.

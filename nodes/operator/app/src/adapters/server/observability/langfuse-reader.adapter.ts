@@ -219,7 +219,9 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
           truncated = true;
         }
       }
-      const projected = projectObservation(bounded, query.fields);
+      const projected = projectObservation(bounded, query.fields, () => {
+        truncated = true;
+      });
       if (Buffer.byteLength(JSON.stringify(projected)) > rowBudget) {
         // Withhold over-budget content rather than corrupt a JSON/string payload or skip pagination rows.
         for (const field of ["input", "output", "modelParameters"]) {
@@ -448,27 +450,72 @@ const METADATA_KEYS = new Set([
 ]);
 const PRIVATE_KEY =
   /auth|cookie|password|secret|credential|token|^key$|bearer|private.?key|api.?key|billing.?account|requester|hidden.?params|email|user.?id/i;
-function scrubValue(value: unknown, depth = 0): unknown {
-  if (depth > 10) return "[REDACTED]";
+// A linear pre-pass bounds the inherited email/credential regexes' maximum candidate length.
+// It preserves ordinary long prose and JSON structure; only oversized unbroken leaf tokens go.
+const MAX_UNBROKEN_CONTENT_RUN = 2048;
+function boundContentRuns(value: string, onTruncated: () => void): string {
+  let runStart = 0;
+  let copiedThrough = 0;
+  const parts: string[] = [];
+  for (let i = 0; i <= value.length; i++) {
+    const code = value.charCodeAt(i);
+    const whitespace =
+      code <= 32 ||
+      code === 160 ||
+      code === 5760 ||
+      (code >= 8192 && code <= 8202) ||
+      code === 8232 ||
+      code === 8233 ||
+      code === 8239 ||
+      code === 8287 ||
+      code === 12288 ||
+      code === 65279;
+    if (i !== value.length && !whitespace) continue;
+    if (i - runStart > MAX_UNBROKEN_CONTENT_RUN) {
+      parts.push(
+        value.slice(copiedThrough, runStart),
+        "[WITHHELD: oversized token]"
+      );
+      copiedThrough = i;
+      onTruncated();
+    }
+    runStart = i + 1;
+  }
+  if (parts.length === 0) return value;
+  parts.push(value.slice(copiedThrough));
+  return parts.join("");
+}
+function scrubValue(
+  value: unknown,
+  onTruncated: () => void,
+  depth = 0
+): unknown {
+  if (depth > 10) {
+    onTruncated();
+    return "[REDACTED]";
+  }
   if (typeof value === "string") {
     // Native v2 io is a string. Scrub encoded JSON recursively, then retain its string shape.
     if (/^[\s]*[[{]/.test(value)) {
       try {
-        return JSON.stringify(scrubValue(JSON.parse(value), depth + 1));
+        return JSON.stringify(
+          scrubValue(JSON.parse(value), onTruncated, depth + 1)
+        );
       } catch {
         return "[REDACTED]";
       }
     }
-    return scrubStringContent(value);
+    return scrubStringContent(boundContentRuns(value, onTruncated));
   }
-  if (Array.isArray(value)) return value.map((v) => scrubValue(v, depth + 1));
+  if (Array.isArray(value))
+    return value.map((v) => scrubValue(v, onTruncated, depth + 1));
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value).map(([key, v]) => [
         key,
         PRIVATE_KEY.test(key.toLowerCase().replace(/[_-]/g, ""))
           ? "[REDACTED]"
-          : scrubValue(v, depth + 1),
+          : scrubValue(v, onTruncated, depth + 1),
       ])
     );
   }
@@ -476,7 +523,8 @@ function scrubValue(value: unknown, depth = 0): unknown {
 }
 function projectObservation(
   row: Readonly<Record<string, unknown>>,
-  fields: string
+  fields: string,
+  onTruncated: () => void
 ): Record<string, unknown> {
   const allowed = new Set(
     ["core", ...fields.split(",")].flatMap((g) => FIELD_GROUPS[g] ?? [])
@@ -498,7 +546,7 @@ function projectObservation(
       (value): value is string => typeof value === "string" && value.length >= 8
     );
   const scrubContent = (value: unknown): unknown => {
-    const cleaned = scrubValue(value);
+    const cleaned = scrubValue(value, onTruncated);
     const serialized = JSON.stringify(cleaned);
     if (serialized === undefined) return cleaned;
     let safe = serialized;
@@ -526,7 +574,7 @@ function projectObservation(
                         /^[a-zA-Z0-9:_.-]+$/.test(v)
                         ? v
                         : null
-                      : scrubValue(v)
+                      : scrubValue(v, onTruncated)
                     : null,
                 ])
             )
