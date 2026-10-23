@@ -3,19 +3,20 @@
 
 /**
  * Module: `@tests/contract/app/node-admin-gates.route`
- * Purpose: Prove the three DAO-goal privileges (task.5286) are node-admin actions on the HTTP routes:
- *   (a) POST /api/v1/goals, (b) merging a contribution that touches a `goal-*` row, (c) setting
- *   work-item priority 0/1 on create or patch.
+ * Purpose: Prove the two DAO-goal privileges (task.5286) are node-admin actions on the HTTP routes:
+ *   (a) POST /api/v1/goals, (b) merging a contribution that touches a `goal-*` row; and (c) that
+ *   work-item priority 0/1 is NOT gated on create or patch (task.5306).
  * Scope: Drives the real route handlers with the deterministic FakeAuthorizationAdapter behind a
  *   mocked container; no network, OpenFGA or database.
  * Invariants:
- *   - GOAL_CHANGE_IS_NODE_ADMIN / P0P1_IS_NODE_ADMIN: a non-admin gets 403 `authz_denied`, the
- *     `admin` tuple holder succeeds.
+ *   - GOAL_CHANGE_IS_NODE_ADMIN: a non-admin gets 403 `authz_denied`, the `admin` tuple holder
+ *     succeeds.
  *   - CHECK_BEFORE_SIDE_EFFECT: on deny/unavailable the write (startGoal / merge / store) never runs.
  *   - FAIL_CLOSED_WITH_DISTINCTION: OpenFGA unavailable → 503 `authz_unavailable`, never 403.
- *   - UNCHANGED_OUTSIDE_THE_GATE: priority 2 and non-goal merges never consult authorization.
+ *   - UNCHANGED_OUTSIDE_THE_GATE: non-goal merges and every work-item priority never consult
+ *     authorization (task.5306 removed the bespoke p0/p1 guard).
  * Side-effects: none
- * Links: src/bootstrap/node-admin-gate.ts, task.5286
+ * Links: src/bootstrap/node-admin-gate.ts, task.5286, task.5306
  * @internal
  */
 
@@ -278,7 +279,7 @@ describe("(b) merging a goal-* change is node-admin", () => {
   });
 });
 
-describe("(c) priority 0/1 is node-admin on create and patch", () => {
+describe("(c) work-item priority is not node-admin (task.5306)", () => {
   async function patch(priority: number) {
     let status = 0;
     let json: unknown;
@@ -307,7 +308,7 @@ describe("(c) priority 0/1 is node-admin on create and patch", () => {
         const res = await fetch({
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ type: "task", title: "gated", priority }),
+          body: JSON.stringify({ type: "task", title: "ungated", priority }),
         });
         status = res.status;
         json = await res.json();
@@ -318,43 +319,17 @@ describe("(c) priority 0/1 is node-admin on create and patch", () => {
 
   it.each([
     0, 1,
-  ])("denies a non-admin priority %i patch and create with 403 authz_denied, writing nothing", async (priority) => {
-    as(NON_ADMIN);
-    const p = await patch(priority);
-    const c = await create(priority);
-    expect(p.status).toBe(403);
-    expect(p.json).toMatchObject({ errorCode: "authz_denied" });
-    expect(c.status).toBe(403);
-    expect(c.json).toMatchObject({ errorCode: "authz_denied" });
-    expect(h.patchMock).not.toHaveBeenCalled();
-    expect(h.createMock).not.toHaveBeenCalled();
-  });
-
-  it("lets a non-admin set priority 2 without consulting authorization", async () => {
+  ])("lets a non-admin set priority %i on patch and create without consulting authorization", async (priority) => {
     as(NON_ADMIN);
     h.authz.current = undefined;
-    h.patchMock.mockResolvedValue(storedItem(2));
-    h.createMock.mockResolvedValue(storedItem(2));
-    expect((await patch(2)).status).toBe(200);
-    expect((await create(2)).status).toBe(201);
-  });
-
-  it("lets the node admin set priority 0 on patch and create", async () => {
-    as(ADMIN);
-    expect((await patch(0)).status).toBe(200);
-    expect((await create(0)).status).toBe(201);
+    h.patchMock.mockResolvedValue(storedItem(priority));
+    h.createMock.mockResolvedValue(storedItem(priority));
+    const p = await patch(priority);
+    const c = await create(priority);
+    expect(p.status).toBe(200);
+    expect(p.json).toMatchObject({ priority });
+    expect(c.status).toBe(201);
     expect(h.patchMock).toHaveBeenCalledTimes(1);
     expect(h.createMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("answers 503 authz_unavailable (not 403) when OpenFGA is unavailable", async () => {
-    as(ADMIN);
-    (h.authz.current as FakeAuthorizationAdapter).unavailable(
-      checkParams(ADMIN.id)
-    );
-    const p = await patch(1);
-    expect(p.status).toBe(503);
-    expect(p.json).toMatchObject({ errorCode: "authz_unavailable" });
-    expect(h.patchMock).not.toHaveBeenCalled();
   });
 });
