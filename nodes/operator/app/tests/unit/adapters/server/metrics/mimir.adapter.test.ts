@@ -18,8 +18,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type MimirAdapterConfig,
   MimirMetricsAdapter,
+  READINESS_SAMPLE_TIME_STEP,
 } from "@/adapters/server/metrics/mimir.adapter";
-import { reconcileReliabilityContainment } from "@/features/nodes/reliability-status";
+import {
+  reconcileReliabilityContainment,
+  serveEvidenceTtlMs,
+} from "@/features/nodes/reliability-status";
 import type { DatabaseContainmentPort } from "@/ports";
 
 describe("MimirMetricsAdapter", () => {
@@ -369,8 +373,15 @@ describe("MimirMetricsAdapter", () => {
       substrateHost: "a".repeat(32),
     });
     expect(queries).toContain(
-      `max by (probe) (max_over_time(timestamp(probe_success{environment="candidate-a",node_slug="operator",proof_class="serve"})[${window}:1m]))`
+      `max by (probe) (max_over_time(timestamp(probe_success{environment="candidate-a",node_slug="operator",proof_class="serve"})[${window}:10s]))`
     );
+    // The subquery step adds apparent age: a sample one production interval old
+    // plus one step (and 15s jitter) must stay inside the production TTL.
+    expect(
+      RELIABILITY_POLICY_V1.serveProbes.production.frequencyMs +
+        Number.parseInt(READINESS_SAMPLE_TIME_STEP, 10) * 1000 +
+        15_000
+    ).toBeLessThanOrEqual(serveEvidenceTtlMs("production"));
     expect(snapshot.regionalReadiness).toEqual([
       {
         region: "Frankfurt",

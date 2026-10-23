@@ -86,6 +86,9 @@ export function gradeSignal(key, value) {
   return "GREEN";
 }
 
+/** Subquery step for the probe last-sample-time read; adds at most this much age. */
+export const PROBE_SAMPLE_TIME_STEP = "10s";
+
 const isFresh = (tsSec, nowSec, ttlSec = TTL_SEC) =>
   finite(tsSec) && nowSec - tsSec <= ttlSec && tsSec - nowSec <= 15;
 
@@ -622,8 +625,12 @@ export async function snapshot(creds, env, nowSec, deps = {}) {
   const bounds = serveProbeBounds(env);
   // timestamp() inside the subquery keeps each real sample time, so a probe that
   // runs less often than the 5m instant lookback still proves its last sample age.
+  // The step adds up to one step of apparent age; 10s keeps 60s probes inside a
+  // 120s TTL (same query as the operator readiness adapter).
   const [probeTs, probeNodes] = await Promise.all([
-    q(`max(max_over_time(timestamp(${s.probe})[${bounds.window}:1m]))`),
+    q(
+      `max(max_over_time(timestamp(${s.probe})[${bounds.window}:${PROBE_SAMPLE_TIME_STEP}]))`
+    ),
     q(`min by (node_slug) (min_over_time(${s.probe}[${bounds.window}]))`),
   ]);
   const input = {

@@ -63,6 +63,7 @@ const mod = (await import("../../../scripts/vm-health-snapshot.mjs")) as {
     error?: string;
   }>;
   serveProbeBounds: (env: string) => { window: string; ttlSec: number };
+  PROBE_SAMPLE_TIME_STEP: string;
   snapshot: (
     creds: unknown,
     env: string,
@@ -266,6 +267,26 @@ describe("vm-health evaluate", () => {
       status: "FAILING",
       failing: ["beacon"],
     });
+  });
+
+  it("reads probe sample age with a step that fits production's TTL (bug.5527)", async () => {
+    const exprs: string[] = [];
+    await snapshot({}, "production", NOW, {
+      run: async (kind, expr) => {
+        exprs.push(expr);
+        return healthyGrafana(kind, expr);
+      },
+    });
+    const window = policy.serveProbes.production.evidenceWindow;
+    expect(exprs).toContain(
+      `max(max_over_time(timestamp(probe_success{environment="production",proof_class="serve"})[${window}:${mod.PROBE_SAMPLE_TIME_STEP}]))`
+    );
+    // One interval old + one subquery step + 15s jitter stays fresh.
+    expect(
+      policy.serveProbes.production.frequencyMs / 1000 +
+        Number.parseInt(mod.PROBE_SAMPLE_TIME_STEP, 10) +
+        15
+    ).toBeLessThanOrEqual(mod.serveProbeBounds("production").ttlSec);
   });
 
   it("judges probe freshness by each environment's policy cadence (bug.5527)", () => {

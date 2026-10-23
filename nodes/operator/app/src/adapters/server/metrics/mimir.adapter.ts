@@ -60,11 +60,16 @@ export function buildReliabilityReadinessQuery(
  * Real last-sample time per probe region. An instant query stamps results with
  * the evaluation time; timestamp() inside the subquery keeps the sample time,
  * so a stopped or deleted check ages out instead of reading fresh (bug.5527).
+ * The subquery step adds up to one step of apparent age on top of the probe
+ * cadence; 10s keeps 60s production probes inside the 120s TTL (a 1m step
+ * measured p99 115s / max 133s).
  */
+export const READINESS_SAMPLE_TIME_STEP = "10s";
+
 export function buildReliabilityReadinessSampleTimeQuery(
   input: ReadinessQueryInput
 ): string {
-  return `max by (probe) (max_over_time(timestamp(${serveSelector(input)})[${serveWindow(input)}:1m]))`;
+  return `max by (probe) (max_over_time(timestamp(${serveSelector(input)})[${serveWindow(input)}:${READINESS_SAMPLE_TIME_STEP}]))`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
