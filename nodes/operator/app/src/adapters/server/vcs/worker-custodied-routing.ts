@@ -162,10 +162,11 @@ export function readWorkerPatch(text: string) {
     matches.length !== 1 ||
     !line ||
     !scalar ||
-    !/^'(?:[^']|'')*'$/.test(scalar)
+    !(scalar === '"{}"' || /^'(?:[^']|'')*'$/.test(scalar))
   )
-    routingError("expected single quoted generated custody field");
-  const raw = scalar.slice(1, -1).replaceAll("''", "'");
+    routingError("expected generated quoted custody field");
+  const raw =
+    scalar === '"{}"' ? "{}" : scalar.slice(1, -1).replaceAll("''", "'");
   if (data.data[FIELD] !== raw) routingError("ambiguous custody field");
   const map = jsonMap(raw);
   const selected = map.parsed[NS];
@@ -179,6 +180,7 @@ export function selectCandidate(
 ): string {
   const p = readWorkerPatch(text),
     m = p.map.match;
+  if (p.selected === selected) return text;
   let raw = p.raw;
   if (m) {
     const value = m[2] ?? "";

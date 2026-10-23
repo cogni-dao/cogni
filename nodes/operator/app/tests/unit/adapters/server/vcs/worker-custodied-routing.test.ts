@@ -387,6 +387,19 @@ describe("canonical pair validation and promotion selection", () => {
       readWorkerPatch(published).selected
     );
     expect(run(original, canonical, canonical)).toBe(original);
+    const emptyQuoted = canonical.replace(
+      /^ {2}TEMPORAL_CUSTODIED_NODE_ENDPOINTS: .*$/m,
+      '  TEMPORAL_CUSTODIED_NODE_ENDPOINTS: "{}"'
+    );
+    expect(readWorkerPatch(emptyQuoted).selected).toBeUndefined();
+    expect(selectCandidate(emptyQuoted, undefined)).toBe(emptyQuoted);
+    expect(
+      readWorkerPatch(addApprovedCandidate(emptyQuoted, canonical)).selected
+    ).toBe(all);
+    expect(run(emptyQuoted, canonical, emptyQuoted)).toBe(emptyQuoted);
+    expect(
+      readWorkerPatch(run(emptyQuoted, canonical, canonical)).selected
+    ).toBeUndefined();
     const empty = selectCandidate(original, undefined);
     expect(run(empty, canonical, canonical)).toBe(empty);
     expect(() =>

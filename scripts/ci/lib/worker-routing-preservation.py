@@ -38,9 +38,9 @@ def patch(text):
     if doc.get("apiVersion") != "v1" or doc.get("kind") != "ConfigMap" or doc.get("metadata", {}).get("name") != "scheduler-worker-config":
         raise ValueError("unexpected worker config identity")
     lines = list(re.finditer(r"^  TEMPORAL_CUSTODIED_NODE_ENDPOINTS: (.*)$", text, re.M))
-    if len(lines) != 1 or not re.fullmatch(r"'(?:[^']|'')*'", lines[0][1]):
-        raise ValueError("expected generated single quoted custody field")
-    raw = lines[0][1][1:-1].replace("''", "'")
+    if len(lines) != 1 or not (lines[0][1] == '"{}"' or re.fullmatch(r"'(?:[^']|'')*'", lines[0][1])):
+        raise ValueError("expected generated quoted custody field")
+    raw = "{}" if lines[0][1] == '"{}"' else lines[0][1][1:-1].replace("''", "'")
     if doc["data"][FIELD] != raw:
         raise ValueError("ambiguous worker custody field")
     values = json.loads(raw, object_pairs_hook=unique)
@@ -76,6 +76,8 @@ def preserve(current, authority, copied):
     if any(allowed.get(key) != value for key, value in retained.items()):
         raise ValueError("selected candidate alias conflicts with protected main")
     raw, values, line, member = patch(copied)
+    if values.get(NS) == selected:
+        return copied
     if member:
         if selected is None:
             begin, end = member.span()
