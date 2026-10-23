@@ -3,23 +3,23 @@
   "owner": "story.5113/task.5321",
   "files": {
     ".claude/commands/design.md": {
-      "after": "d60ed6a97da0f1464d71a7714399e3d7559776cc663ef0b3d33f7265b34c1ed4"
+      "after": "64fc3d730c598ce3ceabad80ac64cd783e886772ff6e93ddfa1c0439af42aadc"
     },
     ".claude/commands/review-design.md": {
-      "after": "3bff32215600de221d08d57caf6f2166490ee1353ead121f1b92757aa4ec94c1"
+      "after": "1053f2a022eccade6e0ca8f0680c9637b484a10deaaa35bfb20e955ba011aee2"
     },
     ".claude/commands/implement.md": {
-      "after": "d2b334023c9155bd16fc5780ca3bd4ab9762359331b6f27e8c9fac0ce9990653"
+      "after": "8fa3ef85a8a76eaf66b83766a431d1105df04491674af2e2739a21cb2d30dac2"
     },
     ".claude/commands/review-implementation.md": {
-      "after": "c50d99d8e0bd541481221b81334497d0b3569a531153f4a239e74f073c68019a"
+      "after": "29c3de8dd7335f689acd413ef8b4aedf26c7c1698aadb50f93f51b77011bdc5d"
     },
     ".claude/commands/closeout.md": {
-      "after": "80077403739747f3f991665b0f230289b5fd3d7b9b8875b608c4d04c8cdfd8aa"
+      "after": "1fcd52b25d2614493b455e74a80ac150d3496872beb390fe07cb1e79bd38a6de"
     },
     ".claude/commands/contribute-to-cogni.md": {
-      "after": "f49a074af47f2552faa06b44318e46f0f84dd8058d463217a01a6bb4b0c4327a",
-      "content": "---\ndescription: Continue the bound node work item through shared hub lifecycle guidance.\n---\n\nContinue the owned work item: #$ITEM. Read root AGENTS.md and the bound node's\ncurrent item and coordination first. If no item is supplied, reuse the owned\nitem or select and claim one through that node's discovered work API. Work-item\nand node-owned knowledge reads/writes stay on that node with its node credential.\n\nRead the complete shared delivery guide using the saved operator account:\n\n```bash\nset -euo pipefail\nset -a\nsource \"$(git rev-parse --show-toplevel)/.env.cogni\"\nset +a\n: \"${COGNI_OPERATOR_API_KEY:?saved operator credential required}\"\nbody=$(curl -fsS --max-time 20 --retry 1 \\\n  -H \"Authorization: Bearer $COGNI_OPERATOR_API_KEY\" \\\n  \"https://cognidao.org/api/v1/knowledge/cicd-e2e-required-sequence\")\nprintf '%s\\n' \"$body\" | jq -er '.content | select(type == \"string\" and length > 0)'\n```\n\n| status | invoke |\n| --- | --- |\n| needs_triage | /triage |\n| needs_research | /research |\n| needs_design | /design, then /review-design |\n| needs_implement | /implement |\n| needs_merge | /review-implementation |\n| needs_closeout | /closeout |\n\nRead the chosen command's hub procedure and every required dependency in full.\nNever forward the sovereign node bearer to operator guidance. A failed source,\ncredential or body stops the stage: record and repair the retrieval gate before\nacting. Do not reconstruct it from an index or retired repository procedure.\n"
+      "after": "54f56045c586ff56fe1656308fb865cab17b230cfb7f3d261d93bf33e6d43374",
+      "content": "---\ndescription: Route the bound node work item to its lifecycle command.\n---\n\nContinue the current node's owned work item: #$ITEM.\nInvoke the command for its status, preserving all invocation arguments.\n\n| status          | invoke                       |\n| --------------- | ---------------------------- |\n| needs_triage    | /triage                      |\n| needs_research  | /research                    |\n| needs_design    | /design, then /review-design |\n| needs_implement | /implement                   |\n| needs_merge     | /review-implementation       |\n| needs_closeout  | /closeout                    |\n\nEach command loads its owning procedure and any required dependencies.\nA multi-task outcome uses dev-manager. Knowledge-only contributions use\ncontribute-knowledge-to-cogni.\n"
     }
   },
   "repositories": {

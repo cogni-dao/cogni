@@ -174,11 +174,11 @@ describe("lifecycle commands on the committed tree", () => {
 
 describe("hub-owned lifecycle handoffs", () => {
   const stages = [
-    ["design", "lifecycle-design"],
-    ["review-design", "lifecycle-design-review"],
-    ["implement", "lifecycle-implementation"],
-    ["review-implementation", "lifecycle-code-review"],
-    ["closeout", "lifecycle-closeout"],
+    ["design", "design"],
+    ["review-design", "review-design"],
+    ["implement", "implement"],
+    ["review-implementation", "review-implementation"],
+    ["closeout", "closeout"],
   ];
 
   it.each(
@@ -189,8 +189,8 @@ describe("hub-owned lifecycle handoffs", () => {
       "utf8"
     );
     expect(source).toContain("#$ITEM");
-    expect(source).toContain(`cicd-e2e-required-sequence ${entry}`);
-    expect(source).toContain("https://cognidao.org/api/v1/knowledge/$entry");
+    expect(source).not.toContain("cicd-e2e-required-sequence");
+    expect(source).toContain(`https://cognidao.org/api/v1/knowledge/${entry}`);
     expect(source).toContain("set -euo pipefail");
     expect(source).toContain("COGNI_NODE_API_KEY:?");
     expect(source).toContain("curl -fsS --max-time");
@@ -213,7 +213,10 @@ describe("hub-owned lifecycle handoffs", () => {
         "utf8"
       )
     ).toBe(canonical);
-    for (const [, entry] of stages) expect(canonical).toContain(entry);
-    expect(canonical).toContain("COGNI_OPERATOR_API_KEY");
+    for (const [command] of stages) expect(canonical).toContain(`/${command}`);
+    expect(canonical).not.toMatch(
+      /```|cicd-e2e-required-sequence|validate-candidate/
+    );
+    expect(canonical.length).toBeLessThan(1400);
   });
 });

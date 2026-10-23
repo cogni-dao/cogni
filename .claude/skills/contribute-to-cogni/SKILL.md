@@ -5,30 +5,17 @@ description: Use when implementing a code change, opening a code PR, or resuming
 
 # Code delivery discovery
 
-Use the session's bound node, saved credentials and owned work item. Read its
-current outcome and coordination before choosing a stage. Keep node-owned work
-and knowledge on that node; the operator owns shared delivery guidance.
+Use the current node's owned work item and invoke the command for its status.
 
-Read the complete content of the authenticated operator knowledge API entries
-cicd-e2e-required-sequence and validate-candidate before delivery actions. In
-this operator workspace use COGNI_NODE_API_KEY saved in .env.cogni. A sovereign
-workspace uses its saved COGNI_OPERATOR_API_KEY for operator guidance; never
-forward its node bearer. Required dependencies are complete reads, not pointers.
+| status          | invoke                       |
+| --------------- | ---------------------------- |
+| needs_triage    | /triage                      |
+| needs_research  | /research                    |
+| needs_design    | /design, then /review-design |
+| needs_implement | /implement                   |
+| needs_merge     | /review-implementation       |
+| needs_closeout  | /closeout                    |
 
-| status          | invoke                       | owning stage guidance                     |
-| --------------- | ---------------------------- | ----------------------------------------- |
-| needs_triage    | /triage                      | current node intake guidance              |
-| needs_research  | /research                    | current node research guidance            |
-| needs_design    | /design, then /review-design | lifecycle-design; lifecycle-design-review |
-| needs_implement | /implement                   | lifecycle-implementation                  |
-| needs_merge     | /review-implementation       | lifecycle-code-review                     |
-| needs_closeout  | /closeout                    | lifecycle-closeout                        |
-
-The retained command paths perform the authenticated full-body handoff. Follow
-the loaded bodies and their required dependencies; this table grants no gate
-skips or authority. A multi-task outcome uses dev-manager and its hub contract.
-
-Knowledge-only contributions use contribute-knowledge-to-cogni. If a source,
-credential or required dependency is unavailable, record and repair that failed
-retrieval gate before the stage action. Preserve verified startup/recovery
-instructions; do not reconstruct a lifecycle from a summary or stale copy.
+Each command loads its owning procedure and any required dependencies.
+A multi-task outcome uses dev-manager. Knowledge-only contributions use
+contribute-knowledge-to-cogni.
