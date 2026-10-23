@@ -90,16 +90,36 @@ existing non-force image-promotion push to refuse rather than erase it.
 
 ## Release evidence
 
-Before activation, retain exact worker digest/source, fixed Git delta and
-receipt readiness, current useful production graph baseline, desired/live
-replicas and shared-host capacity. Do not increase replicas to pass proof.
-During the native Argo/Reloader rollout, continuously probe useful production
-graph work and record errors/latency/restarts/OOM. Prove actual applied revision,
-configuration identity and native Workflow **and** Activity pollers, then terminal
-candidate graph completion for every added node with trace/request correlation.
-Verify unchanged production app pins and useful production behavior afterward.
-Exercise rollback through the same service owner and measure restoration; 120
-seconds is a target until observed. Production-own publication is a separately
-gated operation after reader delivery, not something candidate no-op validation
-can certify. This manual V0 does not prove automatic future-node convergence,
-tenant budgets, isolation or general substrate recovery.
+Follow the [reviewed service release proof](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-29e7215c),
+row `worker-routing-release-boundary`, seq16. Require the exact one-field,
+signed same-App Git publication and rollback receipts, verified blobs/hashes and
+preserved declared production app and worker image/source pins. Require the
+correct Argo Application's terminal sync **SUCCESS** at each exact publication
+and reversal commit through the maintained controller Loki observation.
+
+For BOTH Toks5 and node-template, require fresh authenticated terminal
+Temporal-backed candidate graphs with a new idempotency key/run and unique
+marker. Verify the expected namespace/queue from actual submission configuration
+and the same worker stream lifecycle. Join actual worker `graph_executing`,
+`graph_completed` and final `run_updated` success events by `workflowId`,
+`temporalRunId` and `runId`, with the exact node app SHA and node-owned
+`traceId`/request logs. A start-phase finalization event does not pass. After
+same-owner reapply, repeat both fresh candidate exercises.
+
+Run bounded useful production graph and HTTP probes before, throughout and after
+publication, rollout and reversal; compare errors/latency and available
+restart/OOM observations with the baseline. Keep production activity authority
+and declared pins unchanged. Exercise rollback through the same service owner
+and measure restoration; 120 seconds remains a target until observed. All
+receipt, immutable authority, provenance, subsection-precondition and CAS gates
+above remain required.
+
+Direct ConfigMap hash, desired/live replicas, Pod imageIDs and native Workflow /
+Activity poller census are supplementary: mark each **UNKNOWN** when sanctioned
+trusted native access is unavailable. Full stored trace retrieval stays
+**UNKNOWN** until retrieved; a traceId join alone does not establish it. Missing
+exact controller revision, terminal graphs, correlated worker finalization or
+production continuity fails the functional gate. Git publication, graph catalog
+or boot records, sync-start, readyz and HTTP 200 alone never pass. This establishes
+bounded functional convergence, not full substrate **GREEN**, automatic future
+node convergence, tenant isolation/budgets or general recovery.
