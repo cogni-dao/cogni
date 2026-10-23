@@ -92,7 +92,7 @@ tags: [identity, architecture, governance]
 │    ┌──────────────────────────────────────────────────────────┐     │
 │    │                    PERSON LAYER                           │     │
 │    │                                                          │     │
-│    │  user_id (UUID)                         cross-node       │     │
+│    │  user_id (UUID)                         per-node          │     │
 │    │  ─ Canonical person identity                             │     │
 │    │  ─ Stable, minted at first contact                       │     │
 │    │  ─ Auth-method-agnostic (wallet, Discord, GitHub)        │     │
