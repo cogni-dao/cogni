@@ -52,8 +52,10 @@ export function toWorkItemSessionDto(
     coordinationId: session.id,
     workItemId: session.workItemId,
     status: effectiveSessionStatus(session, now),
-    // Compatibility field for existing clients: the human user id, or the exact
-    // durable agent principal id. An agent is never projected into users.id.
+    // @deprecated compatibility field for existing clients: the human user id,
+    // or the exact durable agent principal id (never an agent projected into
+    // users.id). New clients read claimedByPrincipalId for agents; remove after
+    // clients migrate.
     claimedByUserId: sessionClaimantId(session),
     ...(session.claimedByPrincipalId !== null && {
       claimedByPrincipalId: session.claimedByPrincipalId,

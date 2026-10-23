@@ -1,0 +1,4 @@
+ALTER TABLE "work_item_sessions" ALTER COLUMN "claimed_by_user_id" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "work_item_sessions" ADD COLUMN "claimed_by_principal_id" text;--> statement-breakpoint
+ALTER TABLE "work_item_sessions" ADD CONSTRAINT "work_item_sessions_exactly_one_claimant_check" CHECK (num_nonnulls("work_item_sessions"."claimed_by_user_id", "work_item_sessions"."claimed_by_principal_id") = 1);--> statement-breakpoint
+ALTER TABLE "work_item_sessions" ADD CONSTRAINT "work_item_sessions_principal_is_agent_check" CHECK ("work_item_sessions"."claimed_by_principal_id" IS NULL OR "work_item_sessions"."claimed_by_principal_id" LIKE 'agent:%');

@@ -27,7 +27,11 @@ import {
   toWorkItemSessionDto,
 } from "@/features/work-item-sessions/session-policy";
 
-import { getWorkItem, patchWorkItem } from "./items.server";
+import {
+  getWorkItem,
+  patchWorkItem,
+  patchWorkItemAsPrincipal,
+} from "./items.server";
 
 export class CoordinationWorkItemNotFoundError extends Error {
   constructor(id: string) {
@@ -265,6 +269,63 @@ export async function linkWorkItemSessionPr(input: {
       },
     },
     { id: sessionUser.id, displayName: sessionUser.displayName }
+  );
+
+  return {
+    session: toWorkItemSessionDto(session, now),
+    nextAction: nextActionForWorkItem({
+      workItem: patchedWorkItem,
+      session,
+      now,
+    }),
+    statusUrl: input.statusUrl,
+  };
+}
+
+/**
+ * Link branch/PR metadata to the open session held by this exact durable agent
+ * principal, then patch the durable work item with the same principal so the
+ * PR link stays AI-attributed (`agent:<node>/<actorId>`).
+ */
+export async function linkWorkItemSessionPrAsPrincipal(input: {
+  readonly workItemId: string;
+  readonly body: WorkItemSessionPrInput;
+  readonly principal: AgentPrincipal;
+  readonly statusUrl: string;
+  readonly now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  await requireWorkItem(input.workItemId);
+  const sessions = getContainer().workItemSessions;
+  const session = await sessions.linkPr({
+    workItemId: input.workItemId,
+    claimedByPrincipalId: input.principal.principalId,
+    ...(input.body.branch !== undefined && { branch: input.body.branch }),
+    ...(input.body.prNumber !== undefined && { prNumber: input.body.prNumber }),
+  });
+
+  if (!session) {
+    const current = await sessions.getCurrent(input.workItemId);
+    if (
+      current &&
+      current.claimedByPrincipalId !== input.principal.principalId
+    ) {
+      throw new WorkItemSessionForbiddenError(input.workItemId);
+    }
+    throw new WorkItemSessionNotFoundError(input.workItemId);
+  }
+
+  const patchedWorkItem = await patchWorkItemAsPrincipal(
+    {
+      id: input.workItemId,
+      set: {
+        ...(input.body.branch !== undefined && { branch: input.body.branch }),
+        ...(input.body.prNumber !== undefined && {
+          pr: String(input.body.prNumber),
+        }),
+      },
+    },
+    input.principal.principalId
   );
 
   return {

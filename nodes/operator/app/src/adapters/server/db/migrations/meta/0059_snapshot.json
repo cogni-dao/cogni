@@ -1,5 +1,5 @@
 {
-  "id": "46d157af-fa08-4af2-a7f6-60452dc072aa",
+  "id": "f3c5c83c-836c-4e85-b068-86bea010bdea",
   "prevId": "49ef97e4-e31a-4ff8-8e5b-7cc44b3eff87",
   "version": "7",
   "dialect": "postgresql",
@@ -7571,6 +7571,10 @@
         "work_item_sessions_exactly_one_claimant_check": {
           "name": "work_item_sessions_exactly_one_claimant_check",
           "value": "num_nonnulls(\"work_item_sessions\".\"claimed_by_user_id\", \"work_item_sessions\".\"claimed_by_principal_id\") = 1"
+        },
+        "work_item_sessions_principal_is_agent_check": {
+          "name": "work_item_sessions_principal_is_agent_check",
+          "value": "\"work_item_sessions\".\"claimed_by_principal_id\" IS NULL OR \"work_item_sessions\".\"claimed_by_principal_id\" LIKE 'agent:%'"
         }
       },
       "isRLSEnabled": true

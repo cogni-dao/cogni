@@ -6,7 +6,7 @@
  * Purpose: Let a human steward grant or revoke one durable agent's account read access.
  * Scope: Human session, owned account, accepted stewardship, semantic authz mutation.
  * Invariants: HUMAN_SESSION_ONLY; ACCOUNT_FROM_SESSION; NO_RAW_TUPLES; SAME_NODE_AGENT.
- * Side-effects: Billing-account initialization, actor lookup, mediated OpenFGA mutation, logging.
+ * Side-effects: Billing-account initialization, actor lookup, operator-local OpenFGA mutation, logging.
  * Links: task.5263, docs/spec/rbac.md
  * @public
  */

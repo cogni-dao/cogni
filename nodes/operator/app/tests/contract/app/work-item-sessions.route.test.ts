@@ -9,7 +9,8 @@
  * Invariants: AUTH_REQUIRED, CONTRACTS_ARE_TRUTH, OPERATOR_COORDINATION_LOCAL.
  * Side-effects: none
  * Links: src/app/api/v1/work/items/[id]/claims/route.ts,
- *   src/app/api/v1/work/items/[id]/coordination/route.ts, task.5007
+ *   src/app/api/v1/work/items/[id]/coordination/route.ts,
+ *   src/app/api/v1/work/items/[id]/pr/route.ts, task.5007
  * @internal
  */
 
@@ -22,6 +23,7 @@ import * as requestIdentity from "@/app/_lib/auth/request-identity";
 import * as claimsHandler from "@/app/api/v1/work/items/[id]/claims/route";
 import * as coordinationHandler from "@/app/api/v1/work/items/[id]/coordination/route";
 import * as heartbeatHandler from "@/app/api/v1/work/items/[id]/heartbeat/route";
+import * as prHandler from "@/app/api/v1/work/items/[id]/pr/route";
 
 const mocks = vi.hoisted(() => ({
   claimWorkItemAsPrincipal: vi.fn(),
@@ -34,6 +36,8 @@ const mocks = vi.hoisted(() => ({
   getWorkItem: vi.fn(),
   headers: vi.fn(),
   getServerSessionUser: vi.fn(),
+  linkPr: vi.fn(),
+  patchWorkItemAsPrincipal: vi.fn(),
 }));
 
 vi.mock("@/shared/env/server", () => ({
@@ -57,6 +61,7 @@ vi.mock("@/bootstrap/container", () => ({
 vi.mock("@/app/_facades/work/items.server", () => ({
   getWorkItem: mocks.getWorkItem,
   patchWorkItem: vi.fn(),
+  patchWorkItemAsPrincipal: mocks.patchWorkItemAsPrincipal,
 }));
 vi.mock("@/app/_facades/work/coordination.server", async (importOriginal) => ({
   ...(await importOriginal<
@@ -265,6 +270,100 @@ describe("operator work-item session routes", () => {
     );
     resolveSpy.mockRestore();
   });
+  function linkPrAs(principal: typeof AGENT_PRINCIPAL) {
+    vi.spyOn(requestIdentity, "resolveRequestPrincipal").mockResolvedValue(
+      principal
+    );
+    mocks.getContainer.mockReturnValue({
+      ...mocks.getRequestLoggingDependencies(),
+      workItemSessions: { linkPr: mocks.linkPr, getCurrent: mocks.getCurrent },
+    });
+    mocks.getWorkItem.mockResolvedValue({
+      id: "task.5007",
+      status: "needs_implement",
+    });
+  }
+
+  function agentStoredSession() {
+    return {
+      ...SESSION_DTO,
+      id: SESSION_DTO.coordinationId,
+      claimedByUserId: null,
+      claimedByPrincipalId: AGENT_PRINCIPAL.principalId,
+      claimedByDisplayName: AGENT_PRINCIPAL.displayName,
+      claimedAt: new Date(SESSION_DTO.claimedAt),
+      deadlineAt: new Date(Date.now() + 60_000),
+      lastHeartbeatAt: null,
+      closedAt: null,
+      branch: "feat/agent",
+      prNumber: 2784,
+    };
+  }
+
+  async function postPr(): Promise<{ status: number; json: unknown }> {
+    let status = 0;
+    let json: unknown;
+    await testApiHandler({
+      appHandler: prHandler,
+      params: { id: "task.5007" },
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          body: JSON.stringify({ branch: "feat/agent", prNumber: 2784 }),
+          headers: { "content-type": "application/json" },
+        });
+        status = response.status;
+        json = await response.json();
+      },
+    });
+    return { status, json };
+  }
+
+  it("links a PR to a fresh-v2 agent's own claim and patches as that principal", async () => {
+    linkPrAs(AGENT_PRINCIPAL);
+    mocks.linkPr.mockResolvedValue(agentStoredSession());
+    mocks.patchWorkItemAsPrincipal.mockResolvedValue({
+      id: "task.5007",
+      status: "needs_implement",
+      pr: "2784",
+    });
+
+    const { status, json } = await postPr();
+
+    expect(status).toBe(200);
+    expect(json).toMatchObject({
+      session: {
+        claimedByPrincipalId: AGENT_PRINCIPAL.principalId,
+        prNumber: 2784,
+      },
+    });
+    expect(mocks.linkPr).toHaveBeenCalledWith({
+      workItemId: "task.5007",
+      claimedByPrincipalId: AGENT_PRINCIPAL.principalId,
+      branch: "feat/agent",
+      prNumber: 2784,
+    });
+    expect(mocks.patchWorkItemAsPrincipal).toHaveBeenCalledWith(
+      { id: "task.5007", set: { branch: "feat/agent", pr: "2784" } },
+      AGENT_PRINCIPAL.principalId
+    );
+  });
+
+  it("refuses a foreign principal linking a PR to another agent's claim", async () => {
+    linkPrAs({
+      ...AGENT_PRINCIPAL,
+      principalId: "agent:operator/00000000-0000-4000-8000-000000009999",
+      actorId: "00000000-0000-4000-8000-000000009999",
+    } as unknown as typeof AGENT_PRINCIPAL);
+    mocks.linkPr.mockResolvedValue(null);
+    mocks.getCurrent.mockResolvedValue(agentStoredSession());
+
+    const { status } = await postPr();
+
+    expect(status).toBe(403);
+    expect(mocks.patchWorkItemAsPrincipal).not.toHaveBeenCalled();
+  });
+
   function requireLightweightPath() {
     mocks.getContainer.mockImplementation(() => {
       throw new Error("full container must not be constructed");

@@ -74,6 +74,10 @@ export const workItemSessions = pgTable(
       "work_item_sessions_exactly_one_claimant_check",
       sql`num_nonnulls(${table.claimedByUserId}, ${table.claimedByPrincipalId}) = 1`
     ),
+    check(
+      "work_item_sessions_principal_is_agent_check",
+      sql`${table.claimedByPrincipalId} IS NULL OR ${table.claimedByPrincipalId} LIKE 'agent:%'`
+    ),
     index("work_item_sessions_work_item_id_idx").on(table.workItemId),
     index("work_item_sessions_claimed_by_user_idx").on(table.claimedByUserId),
     uniqueIndex("work_item_sessions_one_open_claim_idx")
