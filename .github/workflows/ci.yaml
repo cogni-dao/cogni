@@ -149,7 +149,7 @@ jobs:
 
       - name: Validate workflow contracts
         run: |
-          node --test scripts/ci/tests/workflow-check.test.mjs
+          node --test scripts/ci/tests/workflow-check.test.mjs scripts/ci/tests/ci-proof-plan.test.mjs scripts/ci/tests/ci-proof-inventory.test.mjs
           pnpm workflow:check
 
       - name: Build workspace packages
@@ -160,6 +160,80 @@ jobs:
 
       - name: Lint
         run: pnpm lint
+
+      - name: Repository policy check
+        run: pnpm check:root-layout
+
+      - name: REUSE SPDX compliance
+        uses: fsfe/reuse-action@772649cfa03a64a08c458c7cca9a6a473d74e7f9 # v6
+
+      - name: Validate chain configuration
+        run: pnpm validate:chain
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: UI tokens check
+        run: bash scripts/check-ui-tokens.sh
+
+      - name: Documentation check
+        run: pnpm check:docs
+
+      - name: Sync-manifest schema check (CATALOG_IS_SSOT pattern)
+        run: |
+          pipx install 'check-jsonschema==0.37.1'
+          check-jsonschema --schemafile .cogni/sync-manifest.schema.json .cogni/sync-manifest.yaml
+
+      - name: Architecture check
+        run: pnpm arch:check
+
+      # Schema-migration guards (task: doltgres-migration-safety):
+      #   1. immutable .sql / *_snapshot.json on origin/main (drizzle-orm runtime
+      #      migrator skips by `folderMillis`, never by hash — modifying an
+      #      applied migration silently no-ops on deployed DBs)
+      #   2. strict-monotonic `when` in _journal.json (silent-skip variant)
+      #   3. drizzle-kit's own snapshot-chain check
+      - name: Database migration guards
+        run: pnpm db:check
+
+      # bug.0344 — structural guardrail on image-updater scope. Positive
+      # allowlist: only ApplicationSets named in ALLOWLIST inside the
+      # script are permitted to carry argocd-image-updater annotations.
+      # Any new or existing *-applicationset.yaml under infra/k8s/argocd/
+      # that sneaks in annotations without updating the allowlist fails
+      # closed. Current allowlist is preview-only (see script header for
+      # why candidate-a + production are intentionally excluded).
+      - name: Image Updater scope (bug.0344)
+        run: bash scripts/ci/check-image-updater-scope.sh
+
+      # Keep the runtime generator wired to the action input; the
+      # single-node-scope job above is the live behavior proof.
+      - name: single-node-scope runtime wiring
+        run: bash scripts/ci/render-scope-filters.sh --check
+
+      # Catalog-driven drift gates — NOT part of the shell-test suite above: each
+      # asserts a committed artifact still matches the catalog (CATALOG_IS_SSOT),
+      # kept as named steps so a specific drift failure is legible. Fast (--check).
+      # scheduler-worker endpoint map is catalog-derived; fails if a node-add
+      # didn't regenerate it (run `pnpm gen:scheduler-worker-endpoints`).
+      - name: scheduler node routing drift
+        run: bash scripts/ci/render-scheduler-worker-endpoints.sh --check
+
+      # Per-node ApplicationSet drift (CATALOG_IS_SSOT + LANE_ISOLATION, axiom
+      # 18). One AppSet object per (env, node) is derived from the catalog rows
+      # that declare a candidate_a_branch. Fails if a node was added/removed or
+      # an AppSet/kustomization was hand-edited without `pnpm gen:node-appset`.
+      - name: per-node ApplicationSet drift (CATALOG_IS_SSOT)
+        run: bash scripts/ci/render-node-appset.sh --check
+
+      # Per-node overlay drift (CATALOG_IS_SSOT + NODE_AT_ROOT_MIGRATE_PATH,
+      # bug.5008). Wizard-born node overlays are frozen to the operator version
+      # that minted them; a stale operator ships monorepo migrate paths that
+      # kustomize-build fine but crash-loop the migrate initContainer at runtime.
+      # Regenerate from the node-template overlay + catalog and fail on drift
+      # before flight (run `pnpm gen:node-overlays`).
+      - name: per-node overlay drift (NODE_AT_ROOT_MIGRATE_PATH)
+        run: bash scripts/ci/render-node-overlays.sh --check
 
       - name: CI Telemetry
         if: always()
@@ -349,15 +423,62 @@ jobs:
   # painting a permanent unrelated red on every open PR — the exact "trained blindness" it
   # exists to prevent. The hermetic UNIT proof stays here on PR CI (see the shell-tests job).
 
-  unit:
+  proof_plan:
     needs: env_manager_fast_path
     if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
-    # No `needs: static` (task.5140): unit does its own install + packages:build
-    # and consumes NO artifact from static, so gating on it only serialized
-    # static's ~1m38s onto the critical path for a fail-fast the merge queue
-    # re-checks anyway. Running unit in parallel with static drops the ci.yaml
-    # critical path to max(job) instead of static+unit.
+    outputs:
+      native_required: ${{ steps.plan.outputs.native_required }}
+      plan_version: ${{ steps.plan.outputs.plan_version }}
+      policy_sha: ${{ steps.plan.outputs.policy_sha }}
+      base_sha: ${{ steps.plan.outputs.base_sha }}
+      head_sha: ${{ steps.plan.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        name: Plan native proof using exact trusted event base
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          EVENT_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          EVENT_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          POLICY_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          classifier=scripts/ci/ci-proof-plan.mjs
+          trusted="$RUNNER_TEMP/ci-proof-plan.mjs"
+          if [ "$CI_EVENT" = pull_request ]; then
+            [[ "$EVENT_BASE_SHA" =~ ^[a-f0-9]{40}$ && "$EVENT_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
+            [ "$EVENT_BASE_REPO" = "$GITHUB_REPOSITORY" ]
+            [[ "$EVENT_HEAD_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+            git fetch --no-tags origin "$EVENT_BASE_SHA" || echo '::warning::base fetch failed; full native proof'
+            git fetch --no-tags "https://github.com/$EVENT_HEAD_REPO.git" "$EVENT_HEAD_SHA" || echo '::warning::head fetch failed; full native proof'
+          fi
+          if [ "$CI_EVENT" = pull_request ] && [ "$EVENT_BASE_REF" = main ] && git cat-file -e "$EVENT_BASE_SHA:$classifier" 2>/dev/null; then
+            git show "$EVENT_BASE_SHA:$classifier" > "$trusted"
+            node "$trusted" plan
+          else
+            # Never execute PR code to decide its own bootstrap exemption.
+            # Missing trusted policy, non-main targets and non-PR events are full.
+            {
+              echo 'native_required=true'
+              echo 'plan_version=1'
+              echo "policy_sha=$POLICY_SHA"
+              echo "base_sha=$EVENT_BASE_SHA"
+              echo "head_sha=$EVENT_HEAD_SHA"
+            } >> "$GITHUB_OUTPUT"
+            echo "Full native proof: no trusted compatible exemption (policy=$POLICY_SHA base=$EVENT_BASE_SHA head=$EVENT_HEAD_SHA)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # Full filesystem-coupled root proof; only native is owned by another lane.
+  unit_core:
+    needs: env_manager_fast_path
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    runs-on: ubuntu-latest
     env:
       NODE_ENV: test
       LITELLM_MASTER_KEY: build-key
@@ -403,112 +524,11 @@ jobs:
       - name: Build workspace packages
         run: pnpm packages:build
 
-      - name: Repository policy check
-        run: pnpm check:root-layout
-
-      - name: REUSE SPDX compliance
-        uses: fsfe/reuse-action@772649cfa03a64a08c458c7cca9a6a473d74e7f9 # v6
-
-      - name: Validate chain configuration
-        run: pnpm validate:chain
-
-      - name: Format check
-        run: pnpm format:check
-
-      - name: UI tokens check
-        run: bash scripts/check-ui-tokens.sh
-
-      - name: Documentation check
-        run: pnpm check:docs
-
-      - name: Sync-manifest schema check (CATALOG_IS_SSOT pattern)
-        run: |
-          pipx install 'check-jsonschema==0.37.1'
-          check-jsonschema --schemafile .cogni/sync-manifest.schema.json .cogni/sync-manifest.yaml
-
-      - name: Architecture check
-        run: pnpm arch:check
-
-      # Schema-migration guards (task: doltgres-migration-safety):
-      #   1. immutable .sql / *_snapshot.json on origin/main (drizzle-orm runtime
-      #      migrator skips by `folderMillis`, never by hash — modifying an
-      #      applied migration silently no-ops on deployed DBs)
-      #   2. strict-monotonic `when` in _journal.json (silent-skip variant)
-      #   3. drizzle-kit's own snapshot-chain check
-      - name: Database migration guards
-        run: pnpm db:check
-
-      # bug.0344 — structural guardrail on image-updater scope. Positive
-      # allowlist: only ApplicationSets named in ALLOWLIST inside the
-      # script are permitted to carry argocd-image-updater annotations.
-      # Any new or existing *-applicationset.yaml under infra/k8s/argocd/
-      # that sneaks in annotations without updating the allowlist fails
-      # closed. Current allowlist is preview-only (see script header for
-      # why candidate-a + production are intentionally excluded).
-      - name: Image Updater scope (bug.0344)
-        run: bash scripts/ci/check-image-updater-scope.sh
-
-      # task.5140 — the hermetic scripts/ci/tests/*.test.sh suite (25 pure-bash
-      # deploy/secrets/substrate regression tests) runs in ONE parallel primitive
-      # instead of ~22 serial steps (was ~3-4 min serial → ~40-60s). The
-      # authoritative test list, the mutator-vs-parallel concurrency tiers (a few
-      # tests `cd $REPO_ROOT` and mutate tracked files, so they run serially-first,
-      # alone), and exit-code aggregation all live in the script — SCRIPTS_ARE_THE_API.
-      # Add a new tests/*.test.sh there, not as a new workflow step.
-      - name: CI shell tests (parallel)
-        run: bash scripts/ci/run-shell-tests.sh
-
-      # Keep the runtime generator wired to the action input; the
-      # single-node-scope job above is the live behavior proof.
-      - name: single-node-scope runtime wiring
-        run: bash scripts/ci/render-scope-filters.sh --check
-
-      # Catalog-driven drift gates — NOT part of the shell-test suite above: each
-      # asserts a committed artifact still matches the catalog (CATALOG_IS_SSOT),
-      # kept as named steps so a specific drift failure is legible. Fast (--check).
-      # scheduler-worker endpoint map is catalog-derived; fails if a node-add
-      # didn't regenerate it (run `pnpm gen:scheduler-worker-endpoints`).
-      - name: scheduler node routing drift
-        run: bash scripts/ci/render-scheduler-worker-endpoints.sh --check
-
-      # Per-node ApplicationSet drift (CATALOG_IS_SSOT + LANE_ISOLATION, axiom
-      # 18). One AppSet object per (env, node) is derived from the catalog rows
-      # that declare a candidate_a_branch. Fails if a node was added/removed or
-      # an AppSet/kustomization was hand-edited without `pnpm gen:node-appset`.
-      - name: per-node ApplicationSet drift (CATALOG_IS_SSOT)
-        run: bash scripts/ci/render-node-appset.sh --check
-
-      # Per-node overlay drift (CATALOG_IS_SSOT + NODE_AT_ROOT_MIGRATE_PATH,
-      # bug.5008). Wizard-born node overlays are frozen to the operator version
-      # that minted them; a stale operator ships monorepo migrate paths that
-      # kustomize-build fine but crash-loop the migrate initContainer at runtime.
-      # Regenerate from the node-template overlay + catalog and fail on drift
-      # before flight (run `pnpm gen:node-overlays`).
-      - name: per-node overlay drift (NODE_AT_ROOT_MIGRATE_PATH)
-        run: bash scripts/ci/render-node-overlays.sh --check
-
-      # task.5140 Stage B — affected-only unit tests. The suite is two disjoint
-      # vitest universes: the ROOT config (tests/** + packages + services) always
-      # runs full (turbo does not model it — dropping it would be a false green),
-      # while the OPERATOR app config (~60% of CI test time) is skipped on a PR
-      # when neither the operator app nor a package it depends on changed, and
-      # runs FULL on merge_group/push (the required-check backstop that catches
-      # any PR-time affected miss before merge). Logic + fail-safe live in
-      # scripts/ci/run-unit-tests.sh (SCRIPTS_ARE_THE_API): ROOT config always
-      # full + operator config affected-scoped on PRs, full on merge_group/push.
-      # Native dependency tests consume the same private catalog image as deploy.
-      # The job already has packages:read; use only its ephemeral repository token.
-      - name: Log in to GHCR for native dependency images
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
       - name: Unit + contract tests
         env:
           CI_EVENT: ${{ github.event_name }}
           TURBO_SCM_BASE: origin/main
+          CI_NATIVE_SPLIT: "true"
         run: bash scripts/ci/run-unit-tests.sh
 
       - name: CI Telemetry
@@ -520,7 +540,130 @@ jobs:
           loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
           job_status: ${{ job.status }}
 
-  component:
+  # Every shell mutator has a private runner checkout; readers never race core/static.
+  shell:
+    needs: env_manager_fast_path
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      LITELLM_MASTER_KEY: build-key
+      AUTH_SECRET: tNf5lFM9yMhdgwS5yeQB8Y2kmigblBqobkvI2XN2brg=
+      SCHEDULER_API_TOKEN: test-scheduler-api-token-for-ci-min32chars
+      BILLING_INGEST_TOKEN: test-billing-ingest-token-for-ci-min32ch
+      INTERNAL_OPS_TOKEN: test-internal-ops-token-for-ci-min32
+      DISCORD_BOT_TOKEN: test-discord-bot-token-for-ci
+      POSTHOG_API_KEY: phc_test_key_for_ci
+      POSTHOG_HOST: http://localhost:18000
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          # fetch-depth: 0 — scripts/db/check-migrations-immutable.mjs runs
+          # `git merge-base origin/main HEAD`; the default shallow clone (depth=1)
+          # leaves origin/main unreachable and forces a runtime fetch.
+          fetch-depth: 0
+
+      - name: Enforce env-manager classifier result
+        env:
+          CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
+          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
+          FAST_PATH_CLAIMED: ${{ needs.env_manager_fast_path.outputs.claimed }}
+          FAST_PATH_REASON: ${{ needs.env_manager_fast_path.outputs.reason }}
+        run: |
+          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::env-manager classifier failed"; exit 1; }
+          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
+            echo "::error::invalid signed env-manager claim: $FAST_PATH_REASON"; exit 1
+          fi
+          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed env-manager fast path accepted"
+
+      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm packages:build
+
+      - name: CI shell tests (serial mutators then parallel readers)
+        run: bash scripts/ci/run-shell-tests.sh
+
+      - name: CI Telemetry
+        if: always()
+        uses: ./.github/actions/loki-ci-telemetry
+        with:
+          loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+          loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
+          loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
+          job_status: ${{ job.status }}
+
+  native:
+    needs: [env_manager_fast_path, proof_plan]
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true') && (github.event_name != 'pull_request' || github.event.pull_request.base.ref != 'main' || needs.proof_plan.result != 'success' || needs.proof_plan.outputs.native_required != 'false')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Log in to GHCR for native dependency images
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Native fault acceptance (unchanged declared controls)
+        run: pnpm exec vitest run --config scripts/vitest/vitest.native.config.mts
+
+      - name: CI Telemetry
+        if: always()
+        uses: ./.github/actions/loki-ci-telemetry
+        with:
+          loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+          loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
+          loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
+          job_status: ${{ job.status }}
+
+  # Keep the required context; never let failure/cancellation become a skipped green.
+  unit:
+    needs: [env_manager_fast_path, proof_plan, unit_core, shell, native]
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - name: Require every selected unit proof
+        env:
+          FAST_PATH_RESULT: ${{ needs.env_manager_fast_path.result }}
+          CLASSIFIER_RESULT: ${{ needs.proof_plan.result }}
+          CORE_RESULT: ${{ needs.unit_core.result }}
+          SHELL_RESULT: ${{ needs.shell.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+          NATIVE_REQUIRED: ${{ needs.proof_plan.outputs.native_required }}
+          PLAN_VERSION: ${{ needs.proof_plan.outputs.plan_version }}
+          POLICY_SHA: ${{ needs.proof_plan.outputs.policy_sha }}
+          PLAN_BASE_SHA: ${{ needs.proof_plan.outputs.base_sha }}
+          PLAN_HEAD_SHA: ${{ needs.proof_plan.outputs.head_sha }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          [ "$FAST_PATH_RESULT" = success ] || { echo '::error::env-manager classifier failed'; exit 1; }
+          node scripts/ci/ci-proof-plan.mjs verify-unit
+
+  component_core:
     # Skip on merge_group: not in required-status-checks (see infra/github/branch-protection.json),
     # so the queue doesn't gate on it. Re-running on the rebased candidate burns ~3 min for marginal
     # incremental signal vs PR-time. Spec: docs/spec/merge-queue-config.md § Excluded from required.
@@ -591,6 +734,71 @@ jobs:
       - name: Component tests (testcontainers)
         run: pnpm test:component
 
+      - name: CI Telemetry
+        if: always()
+        uses: ./.github/actions/loki-ci-telemetry
+        with:
+          loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+          loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
+          loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
+          job_status: ${{ job.status }}
+  migrator:
+    # Skip on merge_group: not in required-status-checks (see infra/github/branch-protection.json),
+    # so the queue doesn't gate on it. Re-running on the rebased candidate burns ~3 min for marginal
+    # incremental signal vs PR-time. Spec: docs/spec/merge-queue-config.md § Excluded from required.
+    needs: env_manager_fast_path
+    if: always() && github.event_name != 'merge_group' && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    runs-on: ubuntu-latest
+    # No `needs: static` (task.5140) — component does its own install + build and
+    # shares no artifact with static; running in parallel keeps it off the
+    # critical path. See the unit job note.
+    env:
+      NODE_ENV: test
+      LITELLM_MASTER_KEY: build-key
+      AUTH_SECRET: tNf5lFM9yMhdgwS5yeQB8Y2kmigblBqobkvI2XN2brg=
+      SCHEDULER_API_TOKEN: test-scheduler-api-token-for-ci-min32chars
+      BILLING_INGEST_TOKEN: test-billing-ingest-token-for-ci-min32ch
+      INTERNAL_OPS_TOKEN: test-internal-ops-token-for-ci-min32
+      DISCORD_BOT_TOKEN: test-discord-bot-token-for-ci
+      POSTHOG_API_KEY: phc_test_key_for_ci
+      POSTHOG_HOST: http://localhost:18000
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Enforce env-manager classifier result
+        env:
+          CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
+          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
+          FAST_PATH_CLAIMED: ${{ needs.env_manager_fast_path.outputs.claimed }}
+          FAST_PATH_REASON: ${{ needs.env_manager_fast_path.outputs.reason }}
+        run: |
+          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::env-manager classifier failed"; exit 1; }
+          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
+            echo "::error::invalid signed env-manager claim: $FAST_PATH_REASON"; exit 1
+          fi
+          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed env-manager fast path accepted"
+
+      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm packages:build
+
+      - name: Log in to GHCR for native dependency images
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
       # Doltgres-migrator regression: boots the pinned published catalog image in its
       # own container (separate from the Postgres globalSetup the rest of
       # test:component uses) and exercises migrate-doltgres.mjs + verifier
@@ -607,6 +815,18 @@ jobs:
           loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
           loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
           job_status: ${{ job.status }}
+
+  component:
+    needs: [env_manager_fast_path, component_core, migrator]
+    if: always() && github.event_name != 'merge_group' && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - name: Require component and independent migrator proof
+        env:
+          COMPONENT_RESULT: ${{ needs.component_core.result }}
+          MIGRATOR_RESULT: ${{ needs.migrator.result }}
+        run: node scripts/ci/ci-proof-plan.mjs verify-component
 # NOTE: the SonarCloud jobs (`sonar` + `sonar-disabled`) and the coverage-upload
 # step were removed — Sonar is disabled fleet-wide (repo var ENABLE_SONAR unset),
 # neither job is a required check, and `sonar-disabled` only echoed a notice. If

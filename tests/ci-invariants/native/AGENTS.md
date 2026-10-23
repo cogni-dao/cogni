@@ -6,15 +6,16 @@
 
 - **Owners:** @derekg1729
 - **Status:** stable
-- **Last reviewed:** 2026-10-19
+- **Last reviewed:** 2026-10-23
 
 ## Purpose
 
-Native integration acceptance of declared infrastructure failure behavior in isolated CI-owned Docker containers. Existing root Vitest discovery and the operator's reviewed Compose collateral path already include this directory; no workflow, dispatch classifier, or runtime policy is added.
+Native integration acceptance of declared infrastructure failure behavior in isolated CI-owned Docker containers. CI runs this directory in the dedicated native lane, selected by the exact trusted PR event-base policy and required by the terminal unit gate. Missing/incompatible policy and merge-group/main always run native proof. Ordinary local root Vitest discovery still includes this directory.
 
 ## Pointers
 
 - [Root Vitest discovery](../../../vitest.config.mts)
+- [CI native discovery](../../../scripts/vitest/vitest.native.config.mts)
 - [Runtime declarations](../../../infra/compose/runtime/docker-compose.yml)
 - [Parent static guidance](../AGENTS.md)
 
@@ -32,7 +33,7 @@ Native integration acceptance of declared infrastructure failure behavior in iso
 
 - **Exports:** none
 - **Files considered API:** native `*.spec.ts` acceptance tests; no production entry points
-- **CLI:** existing root Vitest discovery; no dedicated workflow or lifecycle script
+- **CLI:** `pnpm exec vitest run --config scripts/vitest/vitest.native.config.mts`; ordinary root discovery remains full
 
 ## Responsibilities
 
@@ -47,7 +48,7 @@ Native integration acceptance of declared infrastructure failure behavior in iso
 - Local Docker execution requires explicit heavy-command consent. The current repair is authored locally and exercised in CI.
 - Derive images and health/restart policy from committed declarations; do not substitute parallel policy to manufacture a pass.
 - Always clean up in `finally`: stop the fault actor, restore owned paused dependencies, then remove owned containers and networks. Attempt all cleanup steps even if one fails.
-- Call results native integration evidence, even though the existing root CI test job discovers them. Workflow success alone does not prove a deployed environment.
+- Call results native integration evidence. Workflow success alone does not prove a deployed environment.
 
 ## Notes
 

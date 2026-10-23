@@ -4,7 +4,8 @@
 
 # Script: scripts/ci/build-and-push-images.sh
 # Purpose: Build and push the selected deployable images to GHCR and emit a
-#          machine-readable JSON payload for downstream workflows.
+#          machine-readable JSON payload and per-target cache/runtime timing evidence.
+#          Cache diagnostics report presence only; never print runtime credentials.
 
 set -euo pipefail
 
@@ -152,7 +153,16 @@ build_target() {
   else
     args+=(--push "$context")
   fi
-  docker buildx build "${args[@]}"
+  # Raw CLI needs GHA runtime variables exposed by its caller. Diagnose the
+  # existing backend before changing cache policy; report presence, never values.
+  local cache_token=missing cache_url=missing cache_results=missing started
+  [ -z "${ACTIONS_RUNTIME_TOKEN:-}" ] || cache_token=present
+  [ -z "${ACTIONS_CACHE_URL:-}" ] || cache_url=present
+  [ -z "${ACTIONS_RESULTS_URL:-}" ] || cache_results=present
+  log_info "Cache runtime target=${target} token=${cache_token} cache_url=${cache_url} results_url=${cache_results} scope=build-${target}"
+  started=$SECONDS
+  docker buildx build --progress plain "${args[@]}"
+  log_info "Build complete target=${target} elapsed_seconds=$((SECONDS - started)) source_sha=${git_sha}"
 }
 
 resolve_digest_ref() {
