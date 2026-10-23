@@ -123,3 +123,68 @@ test("manifest always runs on ordinary events, independent of upstream result", 
       .run.includes("verify-manifest")
   );
 });
+
+test("actual heavy job conditions stop on cancellation and enforce classifier failures", () => {
+  const jobs = workflow("ci.yaml");
+  const heavy = [
+    "static",
+    "proof_plan",
+    "unit_core",
+    "shell",
+    "native",
+    "component_core",
+    "migrator",
+  ];
+  // Evaluate the committed expressions themselves, including the explicit status
+  // function: a default success() would otherwise hide failed dependencies.
+  const evaluate = (expression, cancelled, result, eligible, eventName) =>
+    Function(
+      "cancelled",
+      "always",
+      "needs",
+      "github",
+      `return (${expression.replace(/^\$\{\{\s*|\s*\}\}$/g, "")});`
+    )(
+      () => cancelled,
+      () => true,
+      { env_manager_fast_path: { result, outputs: { eligible } } },
+      { event_name: eventName }
+    );
+  for (const name of heavy) {
+    for (const result of [
+      "success",
+      "failure",
+      "skipped",
+      "cancelled",
+      "unknown",
+    ]) {
+      for (const eligible of ["true", "false", ""]) {
+        for (const cancelled of [false, true]) {
+          for (const eventName of ["pull_request", "push", "merge_group"]) {
+            const excluded =
+              eventName === "merge_group" &&
+              ["component_core", "migrator"].includes(name);
+            const expected =
+              !cancelled &&
+              !excluded &&
+              !(result === "success" && eligible === "true");
+            assert.equal(
+              evaluate(jobs[name].if, cancelled, result, eligible, eventName),
+              expected,
+              `${name}: cancelled=${cancelled}, classifier=${result}/${eligible}, event=${eventName}`
+            );
+          }
+        }
+      }
+    }
+    assert.match(jobs[name].if, /^\$\{\{ !cancelled\(\)/);
+  }
+  // Terminal predicates remain runnable after failed or cancelled children.
+  for (const name of ["unit", "component"]) {
+    assert.equal(
+      evaluate(jobs[name].if, true, "failure", "false", "pull_request"),
+      true
+    );
+    assert.match(jobs[name].if, /^always\(\)/);
+  }
+});

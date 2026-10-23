@@ -108,7 +108,7 @@ jobs:
     # A skipped required job is satisfied by GitHub and by the operator's
     # getCiStatus contract. Invalid/unavailable classifier results still run
     # this job so the enforcement step fails closed.
-    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    if: ${{ !cancelled() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true') }}
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -427,7 +427,7 @@ jobs:
 
   proof_plan:
     needs: env_manager_fast_path
-    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    if: ${{ !cancelled() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true') }}
     runs-on: ubuntu-latest
     outputs:
       native_required: ${{ steps.plan.outputs.native_required }}
@@ -479,7 +479,7 @@ jobs:
   # Full filesystem-coupled root proof; only native is owned by another lane.
   unit_core:
     needs: env_manager_fast_path
-    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    if: ${{ !cancelled() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true') }}
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -545,7 +545,7 @@ jobs:
   # Every shell mutator has a private runner checkout; readers never race core/static.
   shell:
     needs: env_manager_fast_path
-    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    if: ${{ !cancelled() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true') }}
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -611,7 +611,7 @@ jobs:
   # This also overrides an older trusted event-base planner returning false.
   native:
     needs: [env_manager_fast_path, proof_plan]
-    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    if: ${{ !cancelled() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -675,7 +675,7 @@ jobs:
     # so the queue doesn't gate on it. Re-running on the rebased candidate burns ~3 min for marginal
     # incremental signal vs PR-time. Spec: docs/spec/merge-queue-config.md § Excluded from required.
     needs: env_manager_fast_path
-    if: always() && github.event_name != 'merge_group' && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    if: ${{ !cancelled() && github.event_name != 'merge_group' && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true') }}
     runs-on: ubuntu-latest
     # No `needs: static` (task.5140) — component does its own install + build and
     # shares no artifact with static; running in parallel keeps it off the
@@ -754,7 +754,7 @@ jobs:
     # so the queue doesn't gate on it. Re-running on the rebased candidate burns ~3 min for marginal
     # incremental signal vs PR-time. Spec: docs/spec/merge-queue-config.md § Excluded from required.
     needs: env_manager_fast_path
-    if: always() && github.event_name != 'merge_group' && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    if: ${{ !cancelled() && github.event_name != 'merge_group' && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true') }}
     runs-on: ubuntu-latest
     # No `needs: static` (task.5140) — component does its own install + build and
     # shares no artifact with static; running in parallel keeps it off the
