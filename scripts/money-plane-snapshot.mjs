@@ -8,7 +8,7 @@
  * Scope: Read-only public Akash LCD + Base RPC reads; Cherry and OpenRouter balances only when CHERRY_AUTH_TOKEN / OPENROUTER_API_KEY are in env. Does not store a credential, move funds, or file work items.
  * Invariants: RUNWAY_IS_GRANT_PLUS_ESCROW (Console credit lives on-chain as the DepositAuthorization spend_limit, not the owner bank balance) ; MISSING_IS_UNKNOWN (an unreadable plane is never GREEN)
  * Side-effects: IO
- * Notes: Vendor planes that need a secret (OpenRouter, Cherry, Grafana Cloud, ...) are listed by the finances-expert skill, not read here.
+ * Notes: Akash also reports the thinnest deployment escrow; pooled runway holds only while Console refills escrow.
  * Links: https://cognidao.org/knowledge/finances-expert, story.5068, infra/secrets-catalog.yaml (AKASH_ACTUATOR_ACCOUNT_ID pins), .cogni/repo-spec.yaml
  * @public
  *
@@ -56,7 +56,7 @@ async function getJson(url, init) {
     ...init,
     signal: AbortSignal.timeout(20_000),
   });
-  if (!res.ok) throw new Error(`${res.status} ${url}`);
+  if (!res.ok) throw new Error(`${res.status} ${new URL(url).host}`);
   return res.json();
 }
 
@@ -101,6 +101,19 @@ export async function akashPlane(env, owner, bpd) {
     0
   );
   const burnPerDay = (ratePerBlock * bpd) / 1e6;
+  const rateByDseq = new Map(
+    (leases.leases ?? []).map((l) => [
+      l.lease.id.dseq,
+      Number(l.lease.price.amount),
+    ])
+  );
+  const escrowDays = (deps.deployments ?? [])
+    .map((d) => {
+      const rate = rateByDseq.get(d.deployment.id.dseq);
+      return rate ? sum(d.escrow_account?.state?.funds) / (rate * bpd) : null;
+    })
+    .filter((v) => v !== null);
+  const minEscrowDays = escrowDays.length ? Math.min(...escrowDays) : null;
   const credit = creditUact === null ? null : creditUact / 1e6;
   const escrow = escrowUact / 1e6;
   const runwayDays =
@@ -117,7 +130,9 @@ export async function akashPlane(env, owner, bpd) {
     escrowAct: escrow,
     activeLeases: (leases.leases ?? []).length,
     burnActPerDay: burnPerDay,
-    runwayDays,
+    minEscrowDays,
+    runwayDays: Number.isFinite(runwayDays) ? runwayDays : null,
+    noBurn: runwayDays === Infinity,
     grade: grade(runwayDays),
   };
 }
@@ -241,7 +256,7 @@ async function main() {
         console.log(`${r.grade.padEnd(8)} ${r.plane.padEnd(24)} ${r.error}`);
       else if (r.plane.startsWith("akash"))
         console.log(
-          `${r.grade.padEnd(8)} ${r.plane.padEnd(24)} credit ${f(r.consoleCreditAct)} ACT + escrow ${f(r.escrowAct)} ACT / burn ${f(r.burnActPerDay, 3)} ACT/d (${r.activeLeases} leases) = ${f(r.runwayDays, 1)} days`
+          `${r.grade.padEnd(8)} ${r.plane.padEnd(24)} credit ${f(r.consoleCreditAct)} ACT + escrow ${f(r.escrowAct)} ACT / burn ${f(r.burnActPerDay, 3)} ACT/d (${r.activeLeases} leases) = ${r.noBurn ? "∞ (no leases)" : `${f(r.runwayDays, 1)} days`} · thinnest escrow ${f(r.minEscrowDays, 1)} d`
         );
       else if (r.currency)
         console.log(
