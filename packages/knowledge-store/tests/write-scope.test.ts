@@ -167,7 +167,7 @@ describe("required logical knowledge write scopes", () => {
       )
     ).toHaveLength(1);
     expect(
-      (await store.listKnowledge("meta")).filter(
+      (await store.listKnowledge("meta", { includeEdo: true })).filter(
         (entry) => entry.entryType === "outcome"
       )
     ).toHaveLength(1);

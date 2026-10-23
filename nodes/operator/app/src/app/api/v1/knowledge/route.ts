@@ -49,6 +49,8 @@ export const GET = wrapRouteHandlerWithLogging(
       limit: url.searchParams.get("limit")
         ? Number(url.searchParams.get("limit"))
         : undefined,
+      // Opt-in only: EDO rows are hidden unless `includeEdo=true`.
+      includeEdo: url.searchParams.get("includeEdo") === "true",
     });
     if (!parsed.success) {
       return NextResponse.json(
