@@ -43,8 +43,11 @@ const REPORT =
 
 type Call = { id: string; name: string; args: Record<string, unknown> };
 
-/** After turn 1 (goals + two patches: one lands, one p0/p1-denied): edo_decide + the report, a model error, or a tool loop. */
-type Then = "report" | "throw" | "loop";
+/**
+ * After turn 1 (goals + two patches: one lands, one p0/p1-denied): edo_decide + the report, a model error, or a
+ * tool loop. "nochange": turn 1 reads goals only, then edo_decide + the report.
+ */
+type Then = "report" | "nochange" | "throw" | "loop";
 function scriptedCompletion(prompts: string[], then: Then): CompletionFn {
   const turns: Call[][] = [
     [
@@ -71,13 +74,14 @@ function scriptedCompletion(prompts: string[], then: Then): CompletionFn {
       },
     ],
   ];
-  if (then === "report") {
+  if (then === "nochange") turns[0] = [turns[0][0] as Call];
+  if (then === "report" || then === "nochange") {
     turns.push([
       {
         id: "c4",
         name: EDO_DECIDE_NAME,
         args: {
-          id: "mission-loop-20261023T0000",
+          id: "mission-loop-20261023T00",
           domain: "strategy",
           title: "Mission loop 2026-10-23T00:00Z",
           content: REPORT,
@@ -224,9 +228,21 @@ describe("work-prioritizer mission-loop agent", () => {
       changeCount: 1,
       deniedCount: 1,
       toolErrorCount: 0,
-      edoDecisionId: "mission-loop-20261023T0000",
+      edoDecisionId: "mission-loop-20261023T00",
       aborted: false,
       report: REPORT,
+    });
+  });
+
+  it("a no-change run still records exactly one decision", async () => {
+    const result = await run("nochange");
+
+    expect(result.ok).toBe(true);
+    expect(result.structuredOutput?.telemetry).toMatchObject({
+      changedItemIds: [],
+      changeCount: 0,
+      edoDecisionId: "mission-loop-20261023T00",
+      aborted: false,
     });
   });
 
