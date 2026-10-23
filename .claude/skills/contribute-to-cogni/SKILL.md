@@ -3,53 +3,32 @@ name: contribute-to-cogni
 description: Use when implementing a code change, opening a code PR, or resuming its CI, flight, merge, or promotion. Routes delivery to the current node's contracts. Routes each work-item status to its lifecycle command. Explanations and knowledge-only contributions use their task-specific guidance.
 ---
 
-# Code delivery
+# Code delivery discovery
 
-Continue from the session cognition already loaded. This file routes code
-delivery; it does not supply a second startup contract.
+Use the session's bound node, saved credentials and owned work item. Read its
+current outcome and coordination before choosing a stage. Keep node-owned work
+and knowledge on that node; the operator owns shared delivery guidance.
 
-## Recall the current contracts
+Read the complete content of the authenticated operator knowledge API entries
+cicd-e2e-required-sequence and validate-candidate before delivery actions. In
+this operator workspace use COGNI_NODE_API_KEY saved in .env.cogni. A sovereign
+workspace uses its saved COGNI_OPERATOR_API_KEY for operator guidance; never
+forward its node bearer. Required dependencies are complete reads, not pointers.
 
-Read these entries through `GET /api/v1/knowledge/{id}` on the current node,
-using its saved `COGNI_NODE_API_KEY`:
+| status          | invoke                       | owning stage guidance                     |
+| --------------- | ---------------------------- | ----------------------------------------- |
+| needs_triage    | /triage                      | current node intake guidance              |
+| needs_research  | /research                    | current node research guidance            |
+| needs_design    | /design, then /review-design | lifecycle-design; lifecycle-design-review |
+| needs_implement | /implement                   | lifecycle-implementation                  |
+| needs_merge     | /review-implementation       | lifecycle-code-review                     |
+| needs_closeout  | /closeout                    | lifecycle-closeout                        |
 
-| entry                        | use it for                                                   |
-| ---------------------------- | ------------------------------------------------------------ |
-| `cicd-e2e-required-sequence` | access, CI, operator flight, merge, and promotion            |
-| `validate-candidate`         | changed-surface exercise, exact SHA, and observability proof |
+The retained command paths perform the authenticated full-body handoff. Follow
+the loaded bodies and their required dependencies; this table grants no gate
+skips or authority. A multi-task outcome uses dev-manager and its hub contract.
 
-Use the session's node identity, candidate URL, approved outcome, and existing
-work item. Reuse credentials; register only when no usable node credential exists.
-Follow the session's bounded watch gates and local command budget. Verify stale
-or draft guidance against the loaded contract and live API discovery before acting.
-
-## Your stage is your work item's status
-
-Run the one command for the status, then advance the status through the
-work-item API. Do not skip a stage.
-
-| status            | run                                                                                     |
-| ----------------- | --------------------------------------------------------------------------------------- |
-| `needs_triage`    | `/triage`                                                                               |
-| `needs_research`  | `/research`                                                                             |
-| `needs_design`    | `/design`, then `/review-design` by a fresh agent                                       |
-| `needs_implement` | `/implement`: test-first code, docs pass, open the PR                                   |
-| `needs_merge`     | `/review-implementation` by a fresh agent while CI runs; both green → flight, validate  |
-| `needs_closeout`  | `/closeout`: verify all gates at one SHA, operator merge, `done`, keep what was learned |
-
-A story spanning several tasks belongs to `dev-manager`, which drives each task
-through these stages.
-
-Keep delivery authority with the operator. A GitHub developer grant may permit
-branch pushes; it does not replace the operator merge gate. Follow the loaded
-access instructions, including accepting a pending repository invitation.
-
-## Knowledge is a separate reviewed lane
-
-For knowledge-only work, use `contribute-knowledge-to-cogni` directly. During
-code work, use it only when a durable finding earns a contribution; it owns
-recall, refinement, citations, and the focused review inbox.
-
-If the hub is unavailable, preserve the loaded cognition and committed floor.
-Continue local work and targeted checks; verify remote delivery gates when their
-authoritative sources are available. Never invent an endpoint or a passing verdict.
+Knowledge-only contributions use contribute-knowledge-to-cogni. If a source,
+credential or required dependency is unavailable, record and repair that failed
+retrieval gate before the stage action. Preserve verified startup/recovery
+instructions; do not reconstruct a lifecycle from a summary or stale copy.
