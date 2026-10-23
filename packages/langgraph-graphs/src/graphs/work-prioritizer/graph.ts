@@ -17,7 +17,11 @@
  * @public
  */
 
-import { GOAL_LIST_NAME, WORK_ITEM_TRANSITION_NAME } from "@cogni/ai-tools";
+import {
+  EDO_DECIDE_NAME,
+  GOAL_LIST_NAME,
+  WORK_ITEM_TRANSITION_NAME,
+} from "@cogni/ai-tools";
 import { type BaseMessage, isToolMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import {
@@ -61,6 +65,7 @@ export function cycleTelemetry(
 ) {
   const aborted = abortReason !== undefined;
   let goalIds: string[] | undefined;
+  let edoDecisionId: string | undefined;
   const changedItemIds: string[] = [];
   let deniedCount = 0;
   let toolErrorCount = 0;
@@ -75,6 +80,9 @@ export function cycleTelemetry(
       goalIds = v.goals.map((g: { id?: unknown }) => String(g?.id));
     } else if (m.name === WORK_ITEM_TRANSITION_NAME && v.success === true) {
       changedItemIds.push(String(v.id));
+    } else if (m.name === EDO_DECIDE_NAME) {
+      const id = (v.entry as { id?: unknown } | undefined)?.id;
+      if (typeof id === "string") edoDecisionId = id;
     }
   }
   return {
@@ -83,6 +91,7 @@ export function cycleTelemetry(
     changeCount: changedItemIds.length,
     deniedCount,
     toolErrorCount,
+    ...(edoDecisionId && { edoDecisionId }),
     aborted,
     ...(aborted && {
       abortReason: abortReason.slice(0, ABORT_REASON_MAX_CHARS),

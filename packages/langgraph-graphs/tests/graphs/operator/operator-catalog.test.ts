@@ -71,7 +71,7 @@ describe("operator catalog entries", () => {
     expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
   });
 
-  it("work-prioritizer (mission loop) is operator-only with the exact four-tool allowlist", () => {
+  it("work-prioritizer (mission loop) is operator-only with the exact five-tool allowlist", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
     expect(entry.graphFactory).toBe(createWorkPrioritizerGraph);
@@ -81,6 +81,7 @@ describe("operator catalog entries", () => {
         WORK_ITEM_QUERY_NAME,
         WORK_ITEM_TRANSITION_NAME,
         KNOWLEDGE_SEARCH_NAME,
+        EDO_DECIDE_NAME,
       ].sort()
     );
     expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });

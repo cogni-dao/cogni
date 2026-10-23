@@ -290,6 +290,56 @@ describe("LiteLlmAdapter", () => {
       );
     });
 
+    describe("TTFB deadline", () => {
+      /** fetch that settles only when its signal aborts, rejecting with the abort reason (as real fetch does). */
+      const hangingFetch = (_url: string, init: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason)
+          );
+        });
+
+      it("with a caller abortSignal, arms no TTFB timer: the caller's signal owns the deadline", async () => {
+        vi.useFakeTimers();
+        try {
+          const caller = new AbortController();
+          let fetchSignal: AbortSignal | undefined;
+          mockFetch.mockImplementationOnce(
+            (url: string, init: { signal?: AbortSignal }) => {
+              fetchSignal = init.signal;
+              return hangingFetch(url, init);
+            }
+          );
+          const pending = adapter.completionStream({
+            ...basicParams,
+            abortSignal: caller.signal,
+          });
+          await vi.advanceTimersByTimeAsync(120_000);
+          expect(fetchSignal).toBe(caller.signal);
+          expect(fetchSignal?.aborted).toBe(false);
+          caller.abort();
+          await expect(pending).rejects.toMatchObject({ kind: "aborted" });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("without a caller signal, the 60s fallback guard reports kind 'timeout'", async () => {
+        vi.useFakeTimers();
+        try {
+          mockFetch.mockImplementationOnce(hangingFetch);
+          const pending = adapter.completionStream(basicParams);
+          const settled = expect(pending).rejects.toMatchObject({
+            kind: "timeout",
+          });
+          await vi.advanceTimersByTimeAsync(60_000);
+          await settled;
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
     it("throws error when model parameter is missing", async () => {
       const paramsWithoutModel = {
         messages: [{ role: "user" as const, content: "Hello" }],

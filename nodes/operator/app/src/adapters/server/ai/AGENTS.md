@@ -62,7 +62,7 @@ pnpm test tests/component/ai/
 ## Standards
 
 - Never logs prompts or API keys for security
-- Enforces 15s connect timeout for streaming (fetch TTFB only)
+- Streaming: a caller abortSignal owns the deadline; without one, a 60s connect/TTFB fallback guard (kind "timeout")
 - Handles provider-specific response formatting
 - Streaming malformed SSE chunks logged as warnings without failing stream
 - Promise settlement guaranteed exactly once via defer helper
