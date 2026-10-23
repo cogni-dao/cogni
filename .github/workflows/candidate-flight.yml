@@ -629,7 +629,7 @@ jobs:
           # validator and fails instead of falling back to the legacy writer.
           if [ "$(yq -r 'has("k3s_dns")' "app-src/infra/catalog/${TARGET}.yaml")" = true ]; then
             mkdir -p ~/.ssh && chmod 700 ~/.ssh
-            printf '%s' "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+            printf '%s\n' "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
             chmod 600 ~/.ssh/deploy_key
             ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
             bash app-src/scripts/ci/assert-k3s-dns-substrate.sh

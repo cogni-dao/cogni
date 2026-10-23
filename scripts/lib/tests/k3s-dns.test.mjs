@@ -5,7 +5,7 @@
  * Purpose: Verify catalog DNS ownership, the actual generated jq guards and fixture projection.
  * Scope: Pure data, jq and owned temporary files. Does not contact providers or deployed services.
  * Invariants: Absent intent is inert; foreign/ambiguous observations cannot reach update/delete.
- * Side-effects: IO (owned temporary files and child jq, generator and Kustomize processes).
+ * Side-effects: IO (owned temporary files and child jq, key-parser, generator and Kustomize processes).
  * Links: bug.5526, isolated-k3s-workload-dns
  * @internal
  */
@@ -70,6 +70,60 @@ const jq = (filter, context) =>
       stdio: ["pipe", "pipe", "pipe"],
     })
   );
+test("actual prepublication key materialization preserves an OpenSSH key terminal newline", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "dns-key-parser-"));
+  try {
+    const fixture = path.join(dir, "fixture");
+    // Owned parser fixture only: never registered, logged, committed or used for SSH.
+    execFileSync("ssh-keygen", [
+      "-q",
+      "-t",
+      "ed25519",
+      "-N",
+      "",
+      "-f",
+      fixture,
+    ]);
+    const workflow = JSON.parse(
+      execFileSync(
+        "yq",
+        ["-o=json", ".", ".github/workflows/candidate-flight.yml"],
+        { encoding: "utf8" }
+      )
+    );
+    const run = workflow.jobs["prepare-substrate-deploy-branch"].steps.find(
+      (step) => step.name === "Assert isolated DNS before overlay publication"
+    ).run;
+    const sshDirectory = path.join(dir, "materialized-ssh");
+    const quotedDirectory = `'${sshDirectory.replaceAll("'", "'\\''")}'`;
+    const lines = run
+      .split("\n")
+      .filter(
+        (line) => line.includes("~/.ssh") && !line.includes("ssh-keyscan")
+      )
+      .map((line) => line.replaceAll("~/.ssh", quotedDirectory));
+    assert.equal(lines.length, 3);
+    const privateFixture = readFileSync(fixture, "utf8").trimEnd();
+    for (const value of [
+      privateFixture,
+      privateFixture.replaceAll("\n", "\r\n"),
+    ]) {
+      execFileSync("bash", ["-c", lines.join("\n")], {
+        env: { ...process.env, SSH_DEPLOY_KEY: value },
+        stdio: "pipe",
+      });
+      assert.doesNotThrow(() =>
+        execFileSync(
+          "ssh-keygen",
+          ["-y", "-f", path.join(sshDirectory, "deploy_key")],
+          { stdio: "pipe" }
+        )
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 test("split hostname agrees with existing k3s suffix, canonical and primary domains", () => {
   assert.equal(
     k3sWorkloadDomain("test.cognidao.org", "cogni-testing.org", "cognidao.org"),
