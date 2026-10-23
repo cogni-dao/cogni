@@ -14,7 +14,7 @@
  * Invariants: ADDRESS_BY_SLUG_OR_NODE_ID, AUTHORITY_IS_NODE_ID — `slug` addresses; the UUID
  *   (`nodes.id` = repo-spec `node_id`) is the authority that reaches OpenFGA tuples and Loki labels.
  * Side-effects: none (pure)
- * Links: docs/spec/identity-model.md (OPERATOR_NODE_ROW_ID_IS_NODE_ID), src/shared/db/nodes.ts
+ * Links: https://cognidao.org/knowledge/node-identity-projection-lineage, src/shared/db/nodes.ts
  * @public
  */
 

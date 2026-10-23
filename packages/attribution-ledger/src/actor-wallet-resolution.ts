@@ -1,0 +1,68 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@cogni/attribution-ledger/actor-wallet-resolution`
+ * Purpose: Define the read-only actor-beneficiary wallet resolution contract and its frozen evidence.
+ * Scope: Domain types and port only; does not query identity state, infer ownership, or perform I/O.
+ * Invariants: BENEFICIARY_FROM_FROZEN_ALLOCATION, WALLET_EVIDENCE_PINNED, UNRESOLVED_IS_EXPLICIT.
+ * Side-effects: none
+ * Links: https://cognidao.org/knowledge/human-ai-identity-standard, docs/spec/decentralized-user-identity.md
+ * @public
+ */
+
+import type { ActorContributionAllocationRecord } from "./store";
+
+export interface ActorWalletBindingEvidence {
+  readonly bindingId: string;
+  readonly evidenceEventId: string;
+  readonly actorId: string;
+  readonly provider: "wallet";
+  readonly externalId: string;
+  readonly bindingCreatedAt: string;
+  readonly eventType: string;
+  readonly authorizedByActorId: string;
+  readonly effectiveAt: string;
+  readonly bindingEvidence: Readonly<Record<string, unknown>>;
+}
+
+export type ActorWalletResolutionFailureCode =
+  | "beneficiary_policy_unresolved"
+  | "beneficiary_actor_inactive"
+  | "beneficiary_wallet_unbound"
+  | "beneficiary_wallet_ambiguous"
+  | "beneficiary_wallet_invalid";
+
+export interface ActorWalletResolutionFailureEvidence {
+  readonly code: ActorWalletResolutionFailureCode;
+  readonly beneficiaryActorId: string | null;
+  readonly observedBindingIds: readonly string[];
+}
+
+export type ActorBeneficiaryWalletResolution =
+  | {
+      readonly allocationRef: string;
+      readonly beneficiaryActorId: string;
+      readonly wallet: `0x${string}`;
+      readonly bindingEvidence: ActorWalletBindingEvidence;
+      readonly failureEvidence: null;
+    }
+  | {
+      readonly allocationRef: string;
+      readonly beneficiaryActorId: string;
+      readonly wallet: null;
+      readonly bindingEvidence: null;
+      readonly failureEvidence: ActorWalletResolutionFailureEvidence;
+    };
+
+/**
+ * Resolves only the beneficiary frozen into each finalized allocation. The full
+ * allocation record is supplied so adapters can retain provenance in traces,
+ * but implementations must not derive a replacement beneficiary from mutable
+ * parent, billing, OBO, account, or node ownership state.
+ */
+export interface ActorBeneficiaryWalletResolver {
+  resolveBeneficiaryWallets(
+    allocations: readonly ActorContributionAllocationRecord[]
+  ): Promise<readonly ActorBeneficiaryWalletResolution[]>;
+}

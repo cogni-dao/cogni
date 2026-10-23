@@ -23,8 +23,13 @@
 
 import { createHash } from "node:crypto";
 import { AiExecutionError } from "@cogni/ai-core";
+import { authzBillingAccountResource } from "@cogni/authorization-core";
 import { toUserId } from "@cogni/ids";
-import type { ChatCompletionOutput, ChatMessage } from "@cogni/node-contracts";
+import type {
+  ChatCompletionOutput,
+  ChatMessage,
+  RequestPrincipal,
+} from "@cogni/node-contracts";
 import type { SessionUser } from "@cogni/node-shared";
 import { EVENT_NAMES } from "@cogni/node-shared";
 import { WorkflowExecutionAlreadyStartedError } from "@temporalio/client";
@@ -52,6 +57,16 @@ import type { RequestContext } from "@/shared/observability";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_GRAPH_NAME = "langgraph:default";
+
+export class AgentExecutionAuthorizationError extends Error {
+  readonly unavailable: boolean;
+
+  constructor(unavailable = false) {
+    super(unavailable ? "authorization unavailable" : "authorization denied");
+    this.name = "AgentExecutionAuthorizationError";
+    this.unavailable = unavailable;
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Message conversion: OpenAI → internal MessageDto
@@ -101,7 +116,8 @@ export interface CompletionInput {
   messages: MessageDto[];
   /** Fully-resolved model reference (provider + model + optional connection) */
   modelRef: import("@cogni/ai-core").ModelRef;
-  sessionUser: SessionUser;
+  sessionUser?: SessionUser;
+  principal?: RequestPrincipal;
   /** Graph name or fully-qualified graphId to execute */
   graphName: string;
   /** Conversation state key for multi-turn conversations */
@@ -155,7 +171,8 @@ export function toOpenAiFinishReason(
 export interface ChatCompletionInput {
   messages: ChatMessage[];
   modelRef: import("@cogni/ai-core").ModelRef;
-  sessionUser: SessionUser;
+  sessionUser?: SessionUser;
+  principal?: RequestPrincipal;
   /** Graph name or fully-qualified graphId to execute */
   graphName?: string;
   /** Conversation state key for multi-turn conversations */
@@ -181,7 +198,8 @@ export async function chatCompletion(
     {
       messages: messageDtos,
       modelRef: input.modelRef,
-      sessionUser: input.sessionUser,
+      ...(input.sessionUser ? { sessionUser: input.sessionUser } : {}),
+      ...(input.principal ? { principal: input.principal } : {}),
       graphName,
       ...(input.stateKey ? { stateKey: input.stateKey } : {}),
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
@@ -266,7 +284,8 @@ export async function chatCompletion(
 export interface ChatCompletionStreamInput {
   messages: ChatMessage[];
   modelRef: import("@cogni/ai-core").ModelRef;
-  sessionUser: SessionUser;
+  sessionUser?: SessionUser;
+  principal?: RequestPrincipal;
   /** Graph name or fully-qualified graphId to execute */
   graphName?: string;
   /** Conversation state key for multi-turn conversations */
@@ -295,7 +314,8 @@ export async function chatCompletionStream(
     {
       messages: messageDtos,
       modelRef: input.modelRef,
-      sessionUser: input.sessionUser,
+      ...(input.sessionUser ? { sessionUser: input.sessionUser } : {}),
+      ...(input.principal ? { principal: input.principal } : {}),
       graphName,
       ...(input.stateKey ? { stateKey: input.stateKey } : {}),
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
@@ -321,18 +341,66 @@ export async function completionStream(
   stream: AsyncIterable<AiEvent>;
   final: Promise<StreamFinalResult>;
 }> {
-  const userId = toUserId(input.sessionUser.id);
-  const { accountService } = resolveAiAdapterDeps(userId);
-
-  const billingAccount = await getOrCreateBillingAccountForUser(
-    accountService,
-    {
-      userId: input.sessionUser.id,
-      ...(input.sessionUser.walletAddress
-        ? { walletAddress: input.sessionUser.walletAddress }
-        : {}),
+  const principal: RequestPrincipal = input.principal
+    ? input.principal
+    : input.sessionUser
+      ? {
+          kind: "human",
+          principalId: `user:${getNodeId()}/${input.sessionUser.id}`,
+          userId: input.sessionUser.id,
+          walletAddress: input.sessionUser.walletAddress,
+          displayName: input.sessionUser.displayName,
+          avatarColor: input.sessionUser.avatarColor,
+        }
+      : (() => {
+          throw new Error("request principal required");
+        })();
+  const actorLocalId =
+    principal.kind === "agent"
+      ? principal.actorId
+      : principal.kind === "human"
+        ? principal.userId
+        : principal.legacyUserId;
+  let billingAccount: import("@/ports").BillingAccount;
+  if (principal.kind === "agent") {
+    const container = getContainer();
+    const authorization = container.authorization;
+    if (!authorization) {
+      throw new AgentExecutionAuthorizationError(true);
     }
-  );
+    const decision = await authorization.check({
+      actorId: principal.principalId,
+      action: "billing_account.read",
+      resource: authzBillingAccountResource(
+        getNodeId(),
+        principal.billingAccountId
+      ),
+      context: {
+        tenantId: principal.billingAccountId,
+        nodeId: getNodeId(),
+        graphId: input.graphName,
+      },
+    });
+    if (decision.decision !== "allow") {
+      throw new AgentExecutionAuthorizationError(
+        decision.code === "authz_unavailable"
+      );
+    }
+    const account = await container.serviceAccountService.getBillingAccountById(
+      principal.billingAccountId
+    );
+    if (!account) throw new AgentExecutionAuthorizationError();
+    billingAccount = account;
+  } else {
+    const userId = toUserId(actorLocalId);
+    const { accountService } = resolveAiAdapterDeps(userId);
+    billingAccount = await getOrCreateBillingAccountForUser(accountService, {
+      userId: actorLocalId,
+      ...(principal.kind === "human" && principal.walletAddress
+        ? { walletAddress: principal.walletAddress }
+        : {}),
+    });
+  }
 
   const graphId = input.graphName.includes(":")
     ? input.graphName
@@ -356,14 +424,15 @@ export async function completionStream(
             messages: input.messages,
             modelRef: input.modelRef,
             stateKey: input.stateKey,
-            actorUserId: input.sessionUser.id,
+            actorUserId: actorLocalId,
+            actorPrincipalId: principal.principalId,
             billingAccountId: billingAccount.id,
             virtualKeyId: billingAccount.defaultVirtualKeyId,
           },
           runKind: "user_immediate" as const,
           triggerSource: "api",
           triggerRef: idempotencyKey,
-          requestedBy: input.sessionUser.id,
+          requestedBy: actorLocalId,
           runId,
         },
       ],

@@ -64,6 +64,9 @@ const mockGraphRunRepository = {
   markRunCompleted: vi.fn(),
   getRunByRunId: vi.fn(),
 };
+const { mockResolveRequestPrincipal } = vi.hoisted(() => ({
+  mockResolveRequestPrincipal: vi.fn(),
+}));
 
 const mockRunStream: RunStreamPort = {
   publish: vi.fn(),
@@ -97,11 +100,24 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn().mockResolvedValue(TEST_SESSION_USER_1),
 }));
 
+vi.mock("@/app/_lib/auth/request-identity", () => ({
+  RequestIdentityUnavailableError: class RequestIdentityUnavailableError extends Error {},
+  resolveRequestPrincipal: mockResolveRequestPrincipal,
+}));
+
 // --- Tests ---
 
 describe("GET /api/v1/ai/runs/{runId}/stream", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:operator/${TEST_SESSION_USER_1.id}`,
+      userId: TEST_SESSION_USER_1.id,
+      walletAddress: TEST_SESSION_USER_1.walletAddress,
+      displayName: TEST_SESSION_USER_1.displayName,
+      avatarColor: TEST_SESSION_USER_1.avatarColor,
+    });
   });
 
   it("returns 400 for invalid runId (not UUID)", async () => {

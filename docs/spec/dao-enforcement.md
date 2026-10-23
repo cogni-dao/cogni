@@ -234,5 +234,5 @@ _(none — on-chain reconciliation and multi-provider routing tracked in proj.pa
 - [Chain Configuration](./chain-config.md)
 - [Authentication](./authentication.md)
 - [Billing Evolution](./billing-evolution.md)
-- [Identity Model](./identity-model.md) — node_id, scope_id definitions
+- [Identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) — node_id, scope_id definitions
 - [Attribution Ledger](./attribution-ledger.md) — scope_id in ledger invariants

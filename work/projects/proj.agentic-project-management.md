@@ -44,12 +44,12 @@ The end state: users "claim" work items via the app UI, dispatch agents (Cogni, 
 
 ### Identity model alignment
 
-Per `docs/spec/identity-model.md`, assignees must map to the **actor model**:
+Per the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard), assignees must map to the **actor model**:
 
 - `actor_id` (UUID) is the economic subject — earns, spends, gets attributed
 - Actor kinds: `user | agent | system | org`
 - `user` actors have 1:1 FK to `users.id`
-- `agent` actors have optional `parent_actor_id` for hierarchy
+- `agent` actors may have accepted `parent_actor_id` stewardship for recovery; parentage never grants access or redirects rewards
 - `@cogni/ids` exports branded `ActorId` / `UserId` types
 
 The port's `SubjectRef` must align with actor kinds so that when the `actors` table lands (story.0117), assignment is a simple FK.
@@ -115,7 +115,7 @@ The port's `SubjectRef` must align with actor kinds so that when the `actors` ta
 
 ```typescript
 // ── Identity ──────────────────────────────────────────
-// Aligned with docs/spec/identity-model.md actor kinds
+// Aligned with https://cognidao.org/knowledge/human-ai-identity-standard actor kinds
 // and @cogni/ids branded types
 
 type WorkItemId = string; // e.g., "task.0149", "bug.0148"
@@ -184,7 +184,7 @@ type WorkItem = {
   assignees: SubjectRef[];
   externalRefs: ExternalRef[];
   labels: string[];
-  specRefs: string[]; // linked spec IDs (e.g., ["identity-model-spec"])
+  specRefs: string[]; // linked standards (e.g., ["https://cognidao.org/knowledge/human-ai-identity-standard"])
   branch?: string; // git branch name
   pr?: string; // PR URL or number
   reviewer?: string;
@@ -327,7 +327,7 @@ interface WorkItemCommandPort {
 
 ## Dependencies
 
-- [x] Identity model spec (`docs/spec/identity-model.md`)
+- [x] [Human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard)
 - [x] Development lifecycle spec (`docs/spec/development-lifecycle.md`)
 - [x] Existing validator (`scripts/validate-docs-metadata.mjs`)
 - [x] Work scanner (`src/lib/work-scanner.ts`)

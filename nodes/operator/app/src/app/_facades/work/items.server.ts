@@ -338,6 +338,26 @@ export async function createWorkItem(
   input: ContractCreateInput,
   sessionUser: { id: string; displayName: string | null }
 ): Promise<WorkItemDto> {
+  return createWorkItemWithPrincipal(input, authorTagFromSession(sessionUser));
+}
+
+/**
+ * Create as an already-authenticated non-human principal.
+ *
+ * Agents retain exact authorship (`agent:<node>/<actorId>`); priority carries
+ * no extra gate (task.5306).
+ */
+export async function createWorkItemAsPrincipal(
+  input: ContractCreateInput,
+  principalId: string
+): Promise<WorkItemDto> {
+  return createWorkItemWithPrincipal(input, principalId);
+}
+
+async function createWorkItemWithPrincipal(
+  input: ContractCreateInput,
+  principalId: string
+): Promise<WorkItemDto> {
   const container = getContainer();
   try {
     const created = await container.doltgresWorkItems.create(
@@ -362,7 +382,7 @@ export async function createWorkItem(
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
       },
-      authorTagFromSession(sessionUser)
+      principalId
     );
     return toDto(created);
   } catch (e) {
@@ -374,6 +394,27 @@ export async function patchWorkItem(
   input: ContractPatchInput,
   sessionUser: { id: string; displayName: string | null }
 ): Promise<WorkItemDto> {
+  return patchWorkItemWithPrincipal(input, authorTagFromSession(sessionUser));
+}
+
+/**
+ * Patch as an already-authenticated durable principal.
+ *
+ * The principal is written verbatim into the Dolt commit proof. In particular,
+ * an agent remains `agent:<node>/<actorId>` and is never projected into a
+ * `users.id` value merely to satisfy the legacy SessionUser shape.
+ */
+export async function patchWorkItemAsPrincipal(
+  input: ContractPatchInput,
+  principalId: string
+): Promise<WorkItemDto> {
+  return patchWorkItemWithPrincipal(input, principalId);
+}
+
+async function patchWorkItemWithPrincipal(
+  input: ContractPatchInput,
+  principalId: string
+): Promise<WorkItemDto> {
   const container = getContainer();
   try {
     const patched = await container.doltgresWorkItems.patch(
@@ -384,7 +425,7 @@ export async function patchWorkItem(
         }),
         set: dropUndefined(input.set),
       },
-      authorTagFromSession(sessionUser)
+      principalId
     );
     if (!patched) throw new WorkItemNotFoundError(input.id);
     return toDto(patched);

@@ -37,6 +37,13 @@ export function effectiveSessionStatus(
   return session.deadlineAt.getTime() < now.getTime() ? "idle" : "active";
 }
 
+/** The single claimant id of a session (EXACTLY_ONE_CLAIMANT). */
+export function sessionClaimantId(session: WorkItemSessionRecord): string {
+  const id = session.claimedByUserId ?? session.claimedByPrincipalId;
+  if (!id) throw new Error(`work item session ${session.id} has no claimant`);
+  return id;
+}
+
 export function toWorkItemSessionDto(
   session: WorkItemSessionRecord,
   now: Date
@@ -45,7 +52,14 @@ export function toWorkItemSessionDto(
     coordinationId: session.id,
     workItemId: session.workItemId,
     status: effectiveSessionStatus(session, now),
-    claimedByUserId: session.claimedByUserId,
+    // @deprecated compatibility field for existing clients: the human user id,
+    // or the exact durable agent principal id (never an agent projected into
+    // users.id). New clients read claimedByPrincipalId for agents; remove after
+    // clients migrate.
+    claimedByUserId: sessionClaimantId(session),
+    ...(session.claimedByPrincipalId !== null && {
+      claimedByPrincipalId: session.claimedByPrincipalId,
+    }),
     claimedByDisplayName: session.claimedByDisplayName,
     claimedAt: session.claimedAt.toISOString(),
     lastHeartbeatAt: session.lastHeartbeatAt?.toISOString() ?? null,
@@ -74,7 +88,7 @@ export function nextActionForWorkItem(input: {
 
   const status = effectiveSessionStatus(session, now);
   if (conflict) {
-    const owner = session.claimedByDisplayName ?? session.claimedByUserId;
+    const owner = session.claimedByDisplayName ?? sessionClaimantId(session);
     return `${workItem.id} is already claimed by ${owner}. Poll coordination status or wait until the claim is released.`;
   }
   if (status === "idle") {

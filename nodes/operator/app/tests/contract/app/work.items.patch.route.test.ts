@@ -29,6 +29,9 @@ import * as session from "@/app/_lib/auth/session";
 import * as appHandler from "@/app/api/v1/work/items/[id]/route";
 
 const patchMock = vi.fn();
+const { resolveRequestPrincipal } = vi.hoisted(() => ({
+  resolveRequestPrincipal: vi.fn(),
+}));
 
 vi.mock("@/bootstrap/container", () => {
   const log = {
@@ -59,6 +62,11 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn().mockResolvedValue(TEST_SESSION_USER_1),
 }));
 
+vi.mock("@/app/_lib/auth/request-identity", () => ({
+  RequestIdentityUnavailableError: class RequestIdentityUnavailableError extends Error {},
+  resolveRequestPrincipal,
+}));
+
 // Minimal domain WorkItem the adapter would return; `actor: "either"` keeps
 // toDto from spreading an actor key it doesn't need.
 const PATCHED_ITEM = {
@@ -82,6 +90,14 @@ describe("PATCH /api/v1/work/items/:id", () => {
   beforeEach(() => {
     patchMock.mockReset();
     vi.mocked(session.getSessionUser).mockResolvedValue(TEST_SESSION_USER_1);
+    resolveRequestPrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:operator/${TEST_SESSION_USER_1.id}`,
+      userId: TEST_SESSION_USER_1.id,
+      walletAddress: TEST_SESSION_USER_1.walletAddress,
+      displayName: TEST_SESSION_USER_1.displayName,
+      avatarColor: TEST_SESSION_USER_1.avatarColor,
+    });
   });
 
   it("accepts the contract-shaped { set } body and forwards { id, set } to the adapter", async () => {
@@ -127,7 +143,7 @@ describe("PATCH /api/v1/work/items/:id", () => {
   });
 
   it("returns 401 when unauthenticated", async () => {
-    vi.mocked(session.getSessionUser).mockResolvedValue(null);
+    resolveRequestPrincipal.mockResolvedValue(null);
     await testApiHandler({
       appHandler,
       params: { id: "bug.5242" },

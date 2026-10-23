@@ -21,10 +21,12 @@
  */
 
 import { FakeAuthorizationAdapter } from "@cogni/authorization-core";
+import type { RequestPrincipal } from "@cogni/node-contracts";
 import { TEST_SESSION_USER_1, TEST_SESSION_USER_2 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as requestIdentity from "@/app/_lib/auth/request-identity";
 import * as session from "@/app/_lib/auth/session";
 import * as goalsHandler from "@/app/api/v1/goals/route";
 import * as mergeHandler from "@/app/api/v1/knowledge/contributions/[id]/merge/route";
@@ -84,6 +86,12 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn(),
 }));
 
+vi.mock("@/app/_lib/auth/request-identity", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  resolveHumanRequestIdentity: vi.fn(),
+  resolveRequestPrincipal: vi.fn(),
+}));
+
 vi.mock("@/shared/config/repoSpec.server", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getNodeId: () => "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
@@ -91,6 +99,28 @@ vi.mock("@/shared/config/repoSpec.server", async (importOriginal) => ({
 
 const ADMIN = TEST_SESSION_USER_1;
 const NON_ADMIN = TEST_SESSION_USER_2;
+const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
+const LEGACY_AGENT: RequestPrincipal = {
+  kind: "legacy_agent",
+  principalId: `user:${NODE_ID}/00000000-0000-4000-a000-000000000003`,
+  legacyUserId: "00000000-0000-4000-a000-000000000003",
+  displayName: "Legacy agent",
+  expiresAt: "2026-11-21T00:00:00.000Z",
+};
+const UPGRADED_AGENT: RequestPrincipal = {
+  kind: "agent",
+  principalId: `agent:${NODE_ID}/00000000-0000-4000-a000-000000000004`,
+  actorId: "00000000-0000-4000-a000-000000000004",
+  credentialId: "00000000-0000-4000-a000-000000000005",
+  billingAccountId: "00000000-0000-4000-a000-000000000006",
+  displayName: "Upgraded agent",
+  legacyUserId: ADMIN.id,
+};
+
+const NON_HUMAN_PRINCIPALS = [
+  ["legacy v1", LEGACY_AGENT],
+  ["upgraded v2 with legacy link", UPGRADED_AGENT],
+] as const;
 
 function checkParams(userId: string) {
   const nodeId = getNodeId();
@@ -152,9 +182,49 @@ beforeEach(async () => {
 
 function as(user: typeof ADMIN) {
   vi.mocked(session.getSessionUser).mockResolvedValue(user);
+  vi.mocked(requestIdentity.resolveHumanRequestIdentity).mockResolvedValue(
+    user
+  );
+  vi.mocked(requestIdentity.resolveRequestPrincipal).mockResolvedValue({
+    kind: "human",
+    principalId: `user:${NODE_ID}/${user.id}`,
+    userId: user.id,
+    walletAddress: user.walletAddress,
+    displayName: user.displayName,
+    avatarColor: user.avatarColor,
+  });
+}
+
+function asPrincipal(principal: RequestPrincipal) {
+  vi.mocked(session.getSessionUser).mockResolvedValue(null);
+  vi.mocked(requestIdentity.resolveHumanRequestIdentity).mockResolvedValue(
+    null
+  );
+  vi.mocked(requestIdentity.resolveRequestPrincipal).mockResolvedValue(
+    principal
+  );
 }
 
 describe("(a) POST /api/v1/goals is node-admin", () => {
+  it.each(
+    NON_HUMAN_PRINCIPALS
+  )("rejects a %s before authorization or goal writes", async (_label, principal) => {
+    asPrincipal(principal);
+    const authzCheck = vi.spyOn(
+      h.authz.current as FakeAuthorizationAdapter,
+      "check"
+    );
+    await testApiHandler({
+      appHandler: goalsHandler,
+      async test({ fetch }) {
+        const res = await fetch({ method: "POST", body: GOAL_BODY });
+        expect(res.status).toBe(401);
+      },
+    });
+    expect(authzCheck).not.toHaveBeenCalled();
+    expect(h.startGoalMock).not.toHaveBeenCalled();
+  });
+
   it("denies a non-admin with 403 authz_denied before starting anything", async () => {
     as(NON_ADMIN);
     await testApiHandler({
@@ -227,6 +297,21 @@ describe("(b) merging a goal-* change is node-admin", () => {
     });
     return out;
   }
+
+  it.each(
+    NON_HUMAN_PRINCIPALS
+  )("rejects a %s before authorization or contribution reads/writes", async (_label, principal) => {
+    asPrincipal(principal);
+    const authzCheck = vi.spyOn(
+      h.authz.current as FakeAuthorizationAdapter,
+      "check"
+    );
+    const res = await merge();
+    expect(res.status).toBe(401);
+    expect(authzCheck).not.toHaveBeenCalled();
+    expect(h.diffMock).not.toHaveBeenCalled();
+    expect(h.mergeMock).not.toHaveBeenCalled();
+  });
 
   it("denies a non-admin session with 403 authz_denied and never merges", async () => {
     as(NON_ADMIN);
@@ -316,6 +401,44 @@ describe("(c) work-item priority is not node-admin (task.5306)", () => {
     });
     return { status, json };
   }
+
+  it.each(
+    NON_HUMAN_PRINCIPALS
+  )("writes priority 1 as a %s with its exact principal and no authorization check", async (_label, principal) => {
+    asPrincipal(principal);
+    const authzCheck = vi.spyOn(
+      h.authz.current as FakeAuthorizationAdapter,
+      "check"
+    );
+    h.patchMock.mockResolvedValue(storedItem(1));
+    h.createMock.mockResolvedValue(storedItem(1));
+    expect((await patch(1)).status).toBe(200);
+    expect((await create(1)).status).toBe(201);
+    expect(authzCheck).not.toHaveBeenCalled();
+    expect(h.patchMock).toHaveBeenCalledWith(
+      expect.anything(),
+      principal.principalId
+    );
+    expect(h.createMock).toHaveBeenCalledWith(
+      expect.anything(),
+      principal.principalId
+    );
+  });
+
+  it("preserves the exact durable-agent principal on ordinary patches", async () => {
+    asPrincipal(UPGRADED_AGENT);
+    const authzCheck = vi.spyOn(
+      h.authz.current as FakeAuthorizationAdapter,
+      "check"
+    );
+    h.patchMock.mockResolvedValue(storedItem(2));
+    expect((await patch(2)).status).toBe(200);
+    expect(authzCheck).not.toHaveBeenCalled();
+    expect(h.patchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "task.5286" }),
+      UPGRADED_AGENT.principalId
+    );
+  });
 
   it.each([
     0, 1,

@@ -42,7 +42,7 @@ import {
 // (dependency-cruiser layer boundary: bootstrap → bootstrap/ports/adapters/shared/types).
 const AGENT_TOKEN_PREFIX = "cogni_ag_sk_v1_";
 
-type AuthChallenge = {
+export type AuthChallenge = {
   wwwAuthenticate: string;
   body:
     | { error: "invalid_token"; error_description: string }
@@ -85,7 +85,7 @@ function bearerRejectionDescription(token: string): string {
  * challenge, session-required semantics preserved). Lives in the bootstrap layer
  * so the wrapper never imports from `@/app/_lib/auth`.
  */
-async function buildAuthChallenge(): Promise<AuthChallenge> {
+export async function buildAuthChallenge(): Promise<AuthChallenge> {
   let authHeader: string | null = null;
   try {
     authHeader = (await headers()).get("authorization");

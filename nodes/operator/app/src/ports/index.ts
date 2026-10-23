@@ -38,17 +38,20 @@ export {
   type AccountService,
   type BillingAccount,
   BillingAccountNotFoundPortError,
+  BillingAccountOwnerBootstrapPortError,
   type ChargeReceiptParams,
   type ChargeReceiptProvenance,
   type CreditLedgerEntry,
   InsufficientCreditsPortError,
   isBillingAccountNotFoundPortError,
+  isBillingAccountOwnerBootstrapPortError,
   isInsufficientCreditsPortError,
   isVirtualKeyNotFoundPortError,
   type ServiceAccountService,
   VirtualKeyNotFoundPortError,
 } from "./accounts.port";
 export type { AgentCatalogPort, AgentDescriptor } from "./agent-catalog.port";
+export * from "./agent-identity.port";
 export type {
   AiTelemetryPort,
   CreateTraceWithIOParams,
@@ -412,6 +415,7 @@ export type {
 } from "./treasury-settlement.port";
 export type {
   ClaimWorkItemSessionResult,
+  WorkItemSessionClaimant,
   WorkItemSessionPort,
   WorkItemSessionRecord,
   WorkItemSessionStatus,

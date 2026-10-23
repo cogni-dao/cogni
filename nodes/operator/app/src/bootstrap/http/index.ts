@@ -17,11 +17,16 @@ import { publicApiLimiter } from "./rateLimiter";
 import { makeWrapPublicRoute, type PublicRouteConfig } from "./wrapPublicRoute";
 
 export {
+  agentIdentityApiLimiter,
   extractClientIp,
   publicApiLimiter,
+  type RateLimiterConfig,
   TokenBucketRateLimiter,
 } from "./rateLimiter";
-export { wrapRouteHandlerWithLogging } from "./wrapRouteHandlerWithLogging";
+export {
+  buildAuthChallenge,
+  wrapRouteHandlerWithLogging,
+} from "./wrapRouteHandlerWithLogging";
 
 // Lazy singleton - initialized on first REQUEST, not first import
 let _wrapPublicRoute: ReturnType<typeof makeWrapPublicRoute> | null = null;

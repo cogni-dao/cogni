@@ -1,80 +1,177 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2025 Cogni-DAO
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
  * Module: `@app/api/v1/agent/me`
- * Purpose: Agent self-identity + key-liveness endpoint.
- * Scope: Returns the CALLING principal's own identity + role grants; does not
- *   expose any other principal. Carries userId, displayName, agent-key expiry,
- *   and per-node roles. The agent-first counterpart to `/api/v1/users/me`,
- *   which is wired to the session-cookie-only resolver (`getServerSessionUser`)
- *   and therefore 401s for a valid agent key — the ambiguity that makes agents
- *   misdiagnose a live key as "expired".
- * Invariants:
- *   - SELF_ONLY: returns only the authenticated caller's principal + grants.
- *   - UNAMBIGUOUS_LIVENESS: a 200 proves the credential is live; a 401 proves it
- *     is genuinely expired/invalid, because `getSessionUser`
- *     (resolveRequestIdentity) rejects expired tokens before this handler runs.
- *   - GRANTS_NEVER_BLOCK_LIVENESS: grant enumeration is best-effort; an absent or
- *     failing authz plane yields `grantsAvailable:false` + `nodes:[]`, never a 5xx.
- * Side-effects: none (reads the already-verified request identity).
- * Links: agent.me.v1.contract, /api/v1/cognition, request-identity.ts
+ * Purpose: Exact self-identity, credential liveness, and grant introspection.
+ * Scope: Human sessions, expiring v1 agents, and durable v2 agents.
+ * Invariants: SELF_ONLY; CREDENTIAL_NE_PRINCIPAL; HUMAN_AND_AGENT_ARE_DISTINCT;
+ *   GRANTS_NEVER_BLOCK_LIVENESS.
+ * Side-effects: reads the credential store and OpenFGA.
+ * Links: agent.me.v2.contract, story.5075, task.5252
  * @public
  */
 
-import { authzUserResource } from "@cogni/authorization-core";
-import { agentMeOperation } from "@cogni/node-contracts";
-import { NextResponse } from "next/server";
-import { getSessionUser, peekAgentKeyExpiry } from "@/app/_lib/auth/session";
+import {
+  type AuthorizationPort,
+  authzUserResource,
+} from "@cogni/authorization-core";
+import {
+  type AgentRequestPrincipal,
+  agentMeV2Operation,
+  type RequestPrincipal,
+} from "@cogni/node-contracts";
+import {
+  RequestIdentityUnavailableError,
+  resolveRequestPrincipal,
+} from "@/app/_lib/auth/request-identity";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import {
+  agentIdentityRateLimitResponse,
+  agentIdentityResponse,
+  logAgentIdentityUnexpectedError,
+  requestBearer,
+} from "../_shared";
 
 const NODE_PREFIX = "node:";
+const DURABLE_PREFIX = "cogni_ag_sk_v2_";
+
+function authorizationSubjects(principal: RequestPrincipal): string[] {
+  if (principal.kind === "agent") return [principal.principalId];
+  const userId =
+    principal.kind === "human" ? principal.userId : principal.legacyUserId;
+  return [...new Set([principal.principalId, authzUserResource(userId)])];
+}
+
+async function readRoles(
+  authorization: AuthorizationPort | undefined,
+  principal: RequestPrincipal
+): Promise<{
+  grantsAvailable: boolean;
+  nodes: Array<{ nodeId: string; roles: string[] }>;
+}> {
+  if (!authorization) return { grantsAvailable: false, nodes: [] };
+  const rolesByNode = new Map<string, Set<string>>();
+  for (const subject of authorizationSubjects(principal)) {
+    const listed = await authorization.listRelations(subject);
+    if (listed.decision !== "success") {
+      return { grantsAvailable: false, nodes: [] };
+    }
+    for (const tuple of listed.tuples) {
+      if (!tuple.object.startsWith(NODE_PREFIX)) continue;
+      const nodeId = tuple.object.slice(NODE_PREFIX.length);
+      const roles = rolesByNode.get(nodeId) ?? new Set<string>();
+      roles.add(tuple.relation);
+      rolesByNode.set(nodeId, roles);
+    }
+  }
+  return {
+    grantsAvailable: true,
+    nodes: [...rolesByNode.entries()]
+      .map(([nodeId, roles]) => ({ nodeId, roles: [...roles].sort() }))
+      .sort((a, b) => a.nodeId.localeCompare(b.nodeId)),
+  };
+}
 
 export const GET = wrapRouteHandlerWithLogging(
-  { routeId: "agent.me.read", auth: { mode: "required", getSessionUser } },
-  async (_ctx, _request, sessionUser) => {
-    const exp = await peekAgentKeyExpiry();
-    const nowSeconds = Math.floor(Date.now() / 1000);
+  { routeId: "agent.me.read", auth: { mode: "none" } },
+  async (ctx, request) => {
+    const startedAt = performance.now();
+    const rateLimited = agentIdentityRateLimitResponse(
+      ctx,
+      startedAt,
+      "me",
+      request
+    );
+    if (rateLimited) return rateLimited;
+    const bearer = requestBearer(request);
+    let principal: RequestPrincipal | null;
+    let durableStatus: {
+      principal: AgentRequestPrincipal;
+      access: "active" | "renew_only";
+      authenticateUntil: string;
+      renewUntil: string;
+    } | null = null;
 
-    // Grants are best-effort: the authz plane must NEVER break liveness. If the
-    // adapter is absent (no OpenFGA store) or the read fails, we report
-    // grantsAvailable=false and an empty node list rather than erroring.
-    const authorization = getContainer().authorization;
-    let grantsAvailable = false;
-    const rolesByNode = new Map<string, Set<string>>();
-    if (authorization) {
-      const listed = await authorization.listRelations(
-        authzUserResource(sessionUser.id)
-      );
-      if (listed.decision === "success") {
-        grantsAvailable = true;
-        for (const tuple of listed.tuples) {
-          const nodeId = tuple.object.startsWith(NODE_PREFIX)
-            ? tuple.object.slice(NODE_PREFIX.length)
-            : tuple.object;
-          const roles = rolesByNode.get(nodeId) ?? new Set<string>();
-          roles.add(tuple.relation);
-          rolesByNode.set(nodeId, roles);
-        }
+    try {
+      if (bearer?.startsWith(DURABLE_PREFIX)) {
+        durableStatus = await getContainer().agentIdentity.authenticate(
+          bearer,
+          "renew"
+        );
+        principal = durableStatus?.principal ?? null;
+      } else {
+        principal = await resolveRequestPrincipal();
       }
+    } catch (error) {
+      if (error instanceof RequestIdentityUnavailableError || bearer) {
+        return agentIdentityResponse(
+          ctx,
+          startedAt,
+          "me",
+          { error: "authn_unavailable" },
+          { status: 503 }
+        );
+      }
+      logAgentIdentityUnexpectedError(ctx, startedAt, "me");
+      throw error;
     }
 
-    const nodes = [...rolesByNode.entries()]
-      .map(([nodeId, roles]) => ({ nodeId, roles: [...roles].sort() }))
-      .sort((a, b) => a.nodeId.localeCompare(b.nodeId));
+    if (!principal) {
+      return agentIdentityResponse(
+        ctx,
+        startedAt,
+        "me",
+        { error: "invalid_token" },
+        { status: 401 }
+      );
+    }
 
-    const result = agentMeOperation.output.parse({
-      userId: sessionUser.id,
-      displayName: sessionUser.displayName,
-      principal: exp !== null ? "agent" : "session",
-      expiresAt: exp !== null ? new Date(exp * 1000).toISOString() : null,
-      expiresInSeconds: exp !== null ? exp - nowSeconds : null,
-      grantsAvailable,
-      nodes,
-    });
+    try {
+      const grants = await readRoles(getContainer().authorization, principal);
+      const result =
+        principal.kind === "agent" && durableStatus
+          ? {
+              kind: "agent" as const,
+              identity: principal,
+              credential: {
+                kind: "durable_v2" as const,
+                expiresAt: durableStatus.authenticateUntil,
+                renewUntil: durableStatus.renewUntil,
+                status: durableStatus.access,
+              },
+              ...grants,
+            }
+          : principal.kind === "legacy_agent"
+            ? {
+                kind: "legacy_agent" as const,
+                identity: principal,
+                credential: {
+                  kind: "legacy_v1" as const,
+                  expiresAt: principal.expiresAt,
+                  renewUntil: null,
+                  status: "active" as const,
+                },
+                ...grants,
+              }
+            : {
+                kind: "human" as const,
+                identity: principal,
+                credential: null,
+                ...grants,
+              };
 
-    return NextResponse.json(result);
+      return agentIdentityResponse(
+        ctx,
+        startedAt,
+        "me",
+        agentMeV2Operation.output.parse(result)
+      );
+    } catch (error) {
+      logAgentIdentityUnexpectedError(ctx, startedAt, "me");
+      throw error;
+    }
   }
 );
 

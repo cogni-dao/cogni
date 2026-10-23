@@ -3,9 +3,9 @@
 
 /**
  * Module: `@tests/component/db/drizzle-attribution.adapter.int`
- * Purpose: Component tests for DrizzleAttributionAdapter against real PostgreSQL via testcontainers.
- * Scope: Verifies adapter + DB triggers (RECEIPT_APPEND_ONLY, SELECTION_FREEZE_ON_FINALIZE, ONE_OPEN_EPOCH, RECEIPT_IDEMPOTENT). Does not test domain logic or routes.
- * Invariants: RECEIPT_APPEND_ONLY, RECEIPT_IDEMPOTENT, SELECTION_FREEZE_ON_FINALIZE, ONE_OPEN_EPOCH, SCOPE_GATED_QUERIES
+ * Purpose: Component tests for attribution persistence and its production fold against real PostgreSQL via testcontainers.
+ * Scope: Verifies adapter, DB triggers, and actor liability/settlement composition; does not test HTTP routes.
+ * Invariants: RECEIPT_APPEND_ONLY, RECEIPT_IDEMPOTENT, SELECTION_FREEZE_ON_FINALIZE, ONE_OPEN_EPOCH, SCOPE_GATED_QUERIES, LATE_BENEFICIARY_SETTLES
  * Side-effects: IO (database operations via testcontainers)
  * Links: packages/db-client/src/adapters/drizzle-attribution.adapter.ts, packages/attribution-ledger/src/store.ts
  * @public
@@ -16,7 +16,11 @@ import {
   EpochNotInReviewError,
   EpochNotOpenError,
 } from "@cogni/attribution-ledger";
-import { DrizzleAttributionAdapter } from "@cogni/db-client";
+import { buildActorCumulativeFold } from "@cogni/attribution-pipeline-plugins";
+import {
+  DrizzleAttributionAdapter,
+  DrizzleClaimantWalletResolver,
+} from "@cogni/db-client";
 import {
   epochWindow,
   makeEvaluation,
@@ -32,8 +36,16 @@ import {
 } from "@tests/_fixtures/attribution/seed-attribution";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { seedTestActor, type TestActor } from "@tests/_fixtures/stack/seed";
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DrizzleAgentIdentityAdapter } from "@/adapters/server/identity/agent-identity.adapter";
+import {
+  actors,
+  billingAccounts,
+  epochs,
+  userBindings,
+} from "@/shared/db/schema";
 
 /** Unwrap DrizzleQueryError → underlying PostgresError message */
 function drizzleCause(err: unknown): string {
@@ -1903,6 +1915,526 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         expect(row.epochId).toBe(claimantEpochId);
         expect(row.nodeId).toBe(TEST_NODE_ID);
       }
+    });
+  });
+
+  describe("actor contribution allocation v1", () => {
+    const signer = privateKeyToAccount(
+      "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+    );
+
+    it("settles a historical flock-leader receipt after claim and late beneficiary consent", async () => {
+      const derek = await seedTestActor(db, { walletAddress: signer.address });
+      const externalId = `295942454-${derek.user.id}`;
+      await db.insert(userBindings).values({
+        id: crypto.randomUUID(),
+        userId: derek.user.id,
+        provider: "github",
+        externalId,
+        providerLogin: "flock-leader",
+        createdAt: new Date("2026-09-01T00:00:00.000Z"),
+      });
+      await db.insert(userBindings).values({
+        id: crypto.randomUUID(),
+        userId: derek.user.id,
+        provider: "wallet",
+        externalId: signer.address,
+        providerLogin: null,
+        createdAt: new Date("2026-09-01T00:00:00.000Z"),
+      });
+      const [derekActor] = await db
+        .select({ id: actors.id })
+        .from(actors)
+        .where(and(eq(actors.kind, "user"), eq(actors.userId, derek.user.id)))
+        .limit(1);
+      if (!derekActor) throw new Error("Expected canonical Derek actor");
+      await db
+        .update(billingAccounts)
+        .set({
+          authorizationOwnerBootstrappedAt: new Date(
+            "2026-09-30T00:00:00.000Z"
+          ),
+        })
+        .where(eq(billingAccounts.id, derek.billingAccountId));
+
+      const flockLeaderActorId = crypto.randomUUID();
+      await db.insert(actors).values({
+        id: flockLeaderActorId,
+        kind: "agent",
+        displayName: "flock-leader",
+        billingAccountId: derek.billingAccountId,
+        spawnedByActorId: derekActor.id,
+        parentActorId: derekActor.id,
+      });
+      const activateReplacement = async (input: {
+        beneficiaryActorId: string;
+        policyVersion: string;
+        effectiveFrom: Date;
+        acceptedAt: Date;
+      }) => {
+        const replacement = await adapter.proposeActorBeneficiaryPolicy({
+          earnedByActorId: flockLeaderActorId,
+          beneficiaryActorId: input.beneficiaryActorId,
+          stewardActorId: derekActor.id,
+          proposedByActorId: derekActor.id,
+          policyVersion: input.policyVersion,
+          evidence: { ceremony: "governed-beneficiary-replacement" },
+          effectiveFrom: input.effectiveFrom,
+        });
+        await adapter.acceptActorBeneficiaryPolicy({
+          proposalId: replacement.id,
+          role: "earner",
+          acceptedByActorId: flockLeaderActorId,
+          evidence: { credential: "durable-agent-v2" },
+          acceptedAt: input.acceptedAt,
+        });
+        await adapter.acceptActorBeneficiaryPolicy({
+          proposalId: replacement.id,
+          role: "steward",
+          acceptedByActorId: derekActor.id,
+          evidence: { session: "steward-siwe" },
+          acceptedAt: input.acceptedAt,
+        });
+        return adapter.acceptActorBeneficiaryPolicy({
+          proposalId: replacement.id,
+          role: "beneficiary",
+          acceptedByActorId: input.beneficiaryActorId,
+          evidence: { consent: "beneficiary-accepted" },
+          acceptedAt: input.acceptedAt,
+        });
+      };
+      const identity = new DrizzleAgentIdentityAdapter(
+        db,
+        TEST_NODE_ID,
+        "actor-claim-component-test-secret-minimum-32-chars",
+        () => new Date("2026-10-09T00:00:00.000Z")
+      );
+      const identityClaim = await identity.createExistingAgentClaim({
+        stewardUserId: derek.user.id,
+        actorId: flockLeaderActorId,
+        provider: "github",
+        externalId,
+        providerLogin: "flock-leader",
+        attestationJti: crypto.randomUUID(),
+        attestationEvidence: { ceremony: "github-source-claim-v1" },
+        attestationExpiresAt: new Date("2026-10-10T00:00:00.000Z"),
+        idempotencyKey: crypto.randomUUID(),
+      });
+      await identity.acceptExistingAgentClaim({
+        actorId: flockLeaderActorId,
+        claimId: identityClaim.claimId,
+      });
+      const epoch = await adapter.createEpoch({
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        periodStart: new Date("2026-10-01T00:00:00.000Z"),
+        periodEnd: new Date("2026-10-08T00:00:00.000Z"),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      const receiptId = `github:pr:cogni-dao/cogni:${epoch.id}`;
+      await adapter.insertIngestionReceipts([
+        makeIngestionReceipt({
+          receiptId,
+          platformUserId: externalId,
+          platformLogin: "flock-leader",
+          artifactUrl: "https://github.com/cogni-dao/cogni/pull/2662",
+          payloadHash: "new-flock-leader-contribution-payload",
+          eventTime: new Date("2026-10-02T12:00:00.000Z"),
+          retrievedAt: new Date("2026-10-02T12:00:01.000Z"),
+        }),
+      ]);
+      await adapter.insertSelectionDoNothing([
+        makeSelectionAuto({ epochId: epoch.id, receiptId }),
+      ]);
+
+      await expect(
+        adapter.listUnallocatedActorReceiptIdsForEpoch(epoch.id)
+      ).resolves.toEqual([receiptId]);
+
+      const prepared = await adapter.prepareActorContributionAllocation({
+        nodeId: TEST_NODE_ID,
+        epochId: epoch.id,
+        receiptId,
+      });
+      expect(prepared).toMatchObject({
+        earnedByActorId: flockLeaderActorId,
+        beneficiaryActorId: null,
+        beneficiaryPolicyVersion: null,
+        contributionCutoff: "2026-10-02T12:00:00.000Z",
+        sourceEvidence: expect.objectContaining({
+          immutableExternalId: externalId,
+          bindingEvidenceEventId: expect.any(String),
+        }),
+      });
+      await adapter.closeIngestion(
+        epoch.id,
+        [],
+        "actor-allocation-atomic",
+        "weight-sum-v0",
+        "actor-allocation-atomic"
+      );
+      const actorAtomicFinalize = {
+        epochId: epoch.id,
+        poolTotal: 0n,
+        finalClaimantAllocations: [],
+        actorAllocations: [prepared],
+        statement: {
+          nodeId: TEST_NODE_ID,
+          finalAllocationSetHash: "actor-signed-allocation-commitment",
+          poolTotalCredits: 0n,
+          statementLines: [],
+        },
+        signature: {
+          nodeId: TEST_NODE_ID,
+          signerWallet: signer.address,
+          signature: "0xactor-signed-allocation",
+          signedAt: new Date("2026-10-09T00:00:00.000Z"),
+        },
+        expectedFinalAllocationSetHash: "actor-signed-allocation-commitment",
+      };
+      await expect(
+        adapter.finalizeEpochAtomic({
+          ...actorAtomicFinalize,
+          actorAllocations: [
+            { ...prepared, beneficiaryPolicyVersion: "tampered" },
+          ],
+        })
+      ).rejects.toThrow("Actor allocation commitment is not content-addressed");
+      await expect(
+        adapter.getActorContributionAllocation(prepared.allocationRef)
+      ).resolves.toBeNull();
+      await expect(adapter.getEpoch(epoch.id)).resolves.toMatchObject({
+        status: "review",
+      });
+
+      await adapter.finalizeEpochAtomic(actorAtomicFinalize);
+      const persisted = await adapter.getActorContributionAllocation(
+        prepared.allocationRef
+      );
+      if (!persisted) {
+        throw new Error("Expected atomic finalize to persist actor allocation");
+      }
+      expect(persisted).toMatchObject({
+        allocationRef: prepared.allocationRef,
+        earnedByActorId: flockLeaderActorId,
+        beneficiaryActorId: null,
+      });
+      await expect(
+        adapter.listUnallocatedActorReceiptIdsForEpoch(epoch.id)
+      ).resolves.toEqual([]);
+      await expect(
+        adapter.getActorContributionAllocationLifecycle(persisted.allocationRef)
+      ).resolves.toMatchObject({
+        status: "frozen",
+        resolvedBeneficiaryActorId: null,
+        tokenAmount: null,
+      });
+      const walletResolver = new DrizzleClaimantWalletResolver(db);
+      const initialFold = await buildActorCumulativeFold({
+        distributionId: `epoch-${epoch.id}`,
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        foldEpochId: epoch.id,
+        statementHash: "0xactor-liability-statement",
+        chainId: 8453,
+        tokenAddress: "0x2222222222222222222222222222222222222222",
+        totalTokenAmount: 17n,
+        receiptWeights: [{ receiptId, units: 17n }],
+        lockedClaimants: [],
+        overrides: [],
+        currentActorAllocations: [persisted],
+        unfoldedActorAllocations: [persisted],
+        pendingLiabilities: [],
+        priorCumulative: [],
+        legacyWalletResolver: walletResolver,
+        actorWalletResolver: walletResolver,
+      });
+      expect(initialFold.distribution).toBeNull();
+      expect(initialFold.liabilities).toEqual([
+        expect.objectContaining({
+          allocationRef: persisted.allocationRef,
+          beneficiaryActorId: null,
+          tokenAmount: 17n,
+          resolverFailure: expect.objectContaining({
+            code: "beneficiary_policy_unresolved",
+          }),
+        }),
+      ]);
+      const frozenLiability = initialFold.liabilities[0];
+      if (!frozenLiability) throw new Error("Expected frozen actor liability");
+      await expect(
+        adapter.insertActorDistributionLiabilities([
+          frozenLiability,
+          { ...frozenLiability, tokenAmount: 18n },
+        ])
+      ).rejects.toThrow("Actor liability idempotency conflict");
+      expect(
+        await adapter.listUnfoldedActorContributionAllocationsForEpoch(epoch.id)
+      ).toEqual([
+        expect.objectContaining({ allocationRef: persisted.allocationRef }),
+      ]);
+
+      await adapter.insertActorDistributionLiabilities([frozenLiability]);
+      await expect(
+        adapter.insertActorDistributionLiabilities([frozenLiability])
+      ).resolves.toBeUndefined();
+      expect(
+        await adapter.listUnfoldedActorContributionAllocationsForEpoch(epoch.id)
+      ).toEqual([]);
+      await expect(
+        adapter.getActorContributionAllocationLifecycle(persisted.allocationRef)
+      ).resolves.toMatchObject({
+        status: "pending_beneficiary",
+        resolvedBeneficiaryActorId: null,
+        tokenAmount: 17n,
+        claimantWallet: null,
+      });
+
+      const activated = await activateReplacement({
+        beneficiaryActorId: derekActor.id,
+        policyVersion: "flock-leader-beneficiary.v1",
+        effectiveFrom: new Date("2026-10-16T00:00:00.000Z"),
+        acceptedAt: new Date("2026-10-10T00:00:00.000Z"),
+      });
+      expect(activated).toMatchObject({
+        status: "activated",
+        activatedPolicyId: expect.any(String),
+      });
+      expect(activated.acceptances.map(({ role }) => role).sort()).toEqual([
+        "beneficiary",
+        "earner",
+        "steward",
+      ]);
+
+      const future = await seedTestActor(db);
+      await db.insert(userBindings).values({
+        id: crypto.randomUUID(),
+        userId: future.user.id,
+        provider: "github",
+        externalId: `future-${externalId}`,
+      });
+      const [futureActor] = await db
+        .select({ id: actors.id })
+        .from(actors)
+        .where(and(eq(actors.kind, "user"), eq(actors.userId, future.user.id)))
+        .limit(1);
+      if (!futureActor) throw new Error("Expected future beneficiary actor");
+      await activateReplacement({
+        beneficiaryActorId: futureActor.id,
+        policyVersion: "flock-leader-beneficiary.v2",
+        effectiveFrom: new Date("2026-10-25T00:00:00.000Z"),
+        acceptedAt: new Date("2026-10-24T00:00:00.000Z"),
+      });
+      await expect(
+        activateReplacement({
+          beneficiaryActorId: derekActor.id,
+          policyVersion: "flock-leader-beneficiary.out-of-order-rejected",
+          effectiveFrom: new Date("2026-10-24T12:00:00.000Z"),
+          acceptedAt: new Date("2026-10-24T01:00:00.000Z"),
+        })
+      ).rejects.toThrow(
+        "Beneficiary policy effectiveFrom must be strictly after the latest policy"
+      );
+      expect(
+        await adapter.getActorContributionAllocation(persisted.allocationRef)
+      ).toMatchObject({ beneficiaryActorId: null });
+
+      await db
+        .update(epochs)
+        .set({ closedAt: new Date("2026-10-10T02:00:00.000Z") })
+        .where(eq(epochs.id, epoch.id));
+
+      const nextEpoch = await adapter.createEpoch({
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        periodStart: new Date("2026-10-08T00:00:00.000Z"),
+        periodEnd: new Date("2026-10-15T00:00:00.000Z"),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      await adapter.closeIngestion(
+        nextEpoch.id,
+        [],
+        "actor-settlement-cleanup",
+        "weight-sum-v0",
+        "actor-settlement-cleanup"
+      );
+      await adapter.finalizeEpoch(nextEpoch.id, 0n);
+      await db
+        .update(epochs)
+        .set({ closedAt: new Date("2026-10-15T01:00:00.000Z") })
+        .where(eq(epochs.id, nextEpoch.id));
+      const pendingBeforePolicyEffective =
+        await adapter.listPendingActorDistributionLiabilities(nextEpoch.id);
+      expect(pendingBeforePolicyEffective).toEqual([
+        expect.objectContaining({
+          allocationRef: persisted.allocationRef,
+          allocation: expect.objectContaining({
+            beneficiaryActorId: null,
+            beneficiaryPolicyId: null,
+          }),
+        }),
+      ]);
+
+      const settlementEpoch = await adapter.createEpoch({
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        periodStart: new Date("2026-10-15T00:00:00.000Z"),
+        periodEnd: new Date("2026-10-22T00:00:00.000Z"),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      await adapter.closeIngestion(
+        settlementEpoch.id,
+        [],
+        "actor-late-policy-settlement",
+        "weight-sum-v0",
+        "actor-late-policy-settlement"
+      );
+      await adapter.finalizeEpoch(settlementEpoch.id, 0n);
+      await db
+        .update(epochs)
+        .set({ closedAt: new Date("2026-10-23T00:00:00.000Z") })
+        .where(eq(epochs.id, settlementEpoch.id));
+      const pending = await adapter.listPendingActorDistributionLiabilities(
+        settlementEpoch.id
+      );
+      expect(pending).toEqual([
+        expect.objectContaining({
+          allocationRef: persisted.allocationRef,
+          sourceEpochId: epoch.id,
+          tokenAmount: 17n,
+          allocation: expect.objectContaining({
+            earnedByActorId: flockLeaderActorId,
+            beneficiaryActorId: derekActor.id,
+            beneficiaryPolicyVersion: "flock-leader-beneficiary.v1",
+          }),
+        }),
+      ]);
+      const liability = pending[0];
+      if (!liability) throw new Error("Expected pending actor liability");
+      const settlementFold = await buildActorCumulativeFold({
+        distributionId: `epoch-${settlementEpoch.id}`,
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        foldEpochId: settlementEpoch.id,
+        statementHash: "0xactor-liability-statement",
+        chainId: 8453,
+        tokenAddress: "0x2222222222222222222222222222222222222222",
+        totalTokenAmount: 0n,
+        receiptWeights: [],
+        lockedClaimants: [],
+        overrides: [],
+        currentActorAllocations: [],
+        unfoldedActorAllocations: [],
+        pendingLiabilities: [liability],
+        priorCumulative: [],
+        legacyWalletResolver: walletResolver,
+        actorWalletResolver: walletResolver,
+      });
+      expect(settlementFold.liabilities).toEqual([]);
+      expect(settlementFold.settlements).toEqual([
+        expect.objectContaining({
+          allocationRef: persisted.allocationRef,
+          liabilityId: liability.id,
+          beneficiaryActorId: derekActor.id,
+          claimantWallet: signer.address,
+          tokenAmount: 17n,
+          resolverEvidence: expect.objectContaining({
+            actorId: derekActor.id,
+            provider: "wallet",
+          }),
+        }),
+      ]);
+      const settlementDistribution = settlementFold.distribution;
+      if (!settlementDistribution) {
+        throw new Error("Expected late-beneficiary settlement distribution");
+      }
+      const manifestWithSettlement = {
+        nodeId: settlementDistribution.nodeId,
+        scopeId: settlementDistribution.scopeId,
+        epochId: settlementEpoch.id,
+        distributionId: settlementDistribution.distributionId,
+        statementHash: settlementDistribution.statementHash,
+        merkleRoot: settlementDistribution.merkleRoot,
+        chainId: settlementDistribution.chainId,
+        tokenAddress: settlementDistribution.tokenAddress,
+        distributionAmount: settlementDistribution.cumulativeTotal,
+        totalAllocated: settlementDistribution.cumulativeTotal,
+        leaves: settlementDistribution.leaves.map((leaf) => ({
+          index: leaf.index,
+          claimantKey: leaf.claimantKey,
+          account: leaf.account,
+          amount: leaf.cumulativeAmount,
+          leafHash: leaf.leafHash,
+          proof: [...leaf.proof],
+        })),
+        actorSettlements: settlementFold.settlements,
+      };
+      await adapter.upsertDistributionManifest(manifestWithSettlement);
+      expect(
+        await adapter.listPendingActorDistributionLiabilities(
+          settlementEpoch.id
+        )
+      ).toEqual([]);
+      await expect(
+        adapter.getActorContributionAllocationLifecycle(persisted.allocationRef)
+      ).resolves.toMatchObject({
+        status: "settled",
+        resolvedBeneficiaryActorId: derekActor.id,
+        tokenAmount: 17n,
+        claimantWallet: signer.address,
+      });
+      await expect(
+        adapter.upsertDistributionManifest(manifestWithSettlement)
+      ).rejects.toThrow();
+    });
+
+    it("allows exactly one concurrent owner for an external identity", async () => {
+      const steward = actor;
+      await db.insert(userBindings).values({
+        id: crypto.randomUUID(),
+        userId: steward.user.id,
+        provider: "github",
+        externalId: `steward-${steward.user.id}`,
+      });
+      const [stewardActor] = await db
+        .select({ id: actors.id })
+        .from(actors)
+        .where(and(eq(actors.kind, "user"), eq(actors.userId, steward.user.id)))
+        .limit(1);
+      if (!stewardActor) throw new Error("Expected steward actor");
+      const agentIds = [crypto.randomUUID(), crypto.randomUUID()];
+      await db.insert(actors).values(
+        agentIds.map((id) => ({
+          id,
+          kind: "agent" as const,
+          billingAccountId: steward.billingAccountId,
+          spawnedByActorId: stewardActor.id,
+          parentActorId: stewardActor.id,
+        }))
+      );
+      const externalId = `concurrent-${steward.user.id}`;
+      const results = await Promise.allSettled(
+        agentIds.map((actorId) =>
+          adapter.bindActorExternalIdentity({
+            actorId,
+            provider: "github",
+            externalId,
+            authorizedByActorId: stewardActor.id,
+            evidence: { ceremony: "concurrency-proof" },
+            effectiveAt: new Date("2026-10-05T00:00:00.000Z"),
+          })
+        )
+      );
+      expect(
+        results.filter((result) => result.status === "fulfilled")
+      ).toHaveLength(1);
+      expect(
+        results.filter((result) => result.status === "rejected")
+      ).toHaveLength(1);
+      const canonical = await db.execute(
+        sql`select actor_id from actor_bindings where provider = 'github' and external_id = ${externalId} and closed_at is null`
+      );
+      expect(canonical).toHaveLength(1);
     });
   });
 });

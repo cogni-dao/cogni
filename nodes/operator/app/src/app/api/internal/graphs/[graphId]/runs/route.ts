@@ -23,6 +23,7 @@
 
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { AiEvent } from "@cogni/ai-core";
+import { authzBillingAccountResource } from "@cogni/authorization-core";
 import { RUN_STREAM_DEFAULT_TTL_SECONDS } from "@cogni/graph-execution-core";
 import { toUserId } from "@cogni/ids";
 import { SYSTEM_ACTOR } from "@cogni/ids/system";
@@ -56,6 +57,7 @@ import {
 } from "@/ports/server";
 import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -312,6 +314,8 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     let actorUserId: string;
     /** Validated execution grant (scheduled runs only) — threaded into tool authz audit. */
     let scheduledGrantId: string | undefined;
+    let actorPrincipalId: string;
+    let accountOwnerUserId: string;
     let billingAccountId: string;
     let virtualKeyId: string;
     let stateKey: string | undefined;
@@ -376,6 +380,8 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
 
       actorUserId = grant.userId;
       scheduledGrantId = grant.id;
+      actorPrincipalId = `user:${getNodeId()}/${grant.userId}`;
+      accountOwnerUserId = billingAccount.ownerUserId;
       billingAccountId = grant.billingAccountId;
       virtualKeyId = billingAccount.defaultVirtualKeyId;
 
@@ -395,7 +401,18 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           : null;
       const inputVirtualKeyId =
         typeof input.virtualKeyId === "string" ? input.virtualKeyId : null;
-      if (!inputUserId || !inputBillingAccountId || !inputVirtualKeyId) {
+      const inputActorPrincipalId =
+        typeof input.actorPrincipalId === "string"
+          ? input.actorPrincipalId
+          : inputUserId
+            ? `user:${getNodeId()}/${inputUserId}`
+            : null;
+      if (
+        !inputUserId ||
+        !inputActorPrincipalId ||
+        !inputBillingAccountId ||
+        !inputVirtualKeyId
+      ) {
         return NextResponse.json(
           {
             error:
@@ -406,8 +423,72 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       }
 
       actorUserId = inputUserId;
+      const principalMatch = /^(?:user|agent):([^:/]+)\/([^:/]+)$/.exec(
+        inputActorPrincipalId
+      );
+      if (
+        !principalMatch ||
+        principalMatch[1]?.toLowerCase() !== getNodeId().toLowerCase() ||
+        principalMatch[2]?.toLowerCase() !== inputUserId.toLowerCase()
+      ) {
+        return NextResponse.json(
+          { error: "actorPrincipalId does not match this node and actor" },
+          { status: 403 }
+        );
+      }
+      actorPrincipalId = inputActorPrincipalId;
       billingAccountId = inputBillingAccountId;
       virtualKeyId = inputVirtualKeyId;
+      const billingAccount =
+        await container.serviceAccountService.getBillingAccountById(
+          billingAccountId
+        );
+      if (
+        !billingAccount ||
+        billingAccount.defaultVirtualKeyId !== virtualKeyId
+      ) {
+        return NextResponse.json(
+          { error: "Billing account context not found" },
+          { status: 403 }
+        );
+      }
+      accountOwnerUserId = billingAccount.ownerUserId;
+      if (actorPrincipalId.startsWith("agent:")) {
+        if (!container.authorization) {
+          return NextResponse.json(
+            { error: "Authorization service unavailable" },
+            { status: 503 }
+          );
+        }
+        const decision = await container.authorization.check({
+          actorId: actorPrincipalId,
+          action: "billing_account.read",
+          resource: authzBillingAccountResource(getNodeId(), billingAccountId),
+          context: {
+            tenantId: billingAccountId,
+            nodeId: getNodeId(),
+            graphId,
+          },
+        });
+        if (decision.decision !== "allow") {
+          return NextResponse.json(
+            {
+              error:
+                decision.code === "authz_unavailable"
+                  ? "Authorization service unavailable"
+                  : "Forbidden",
+            },
+            {
+              status: decision.code === "authz_unavailable" ? 503 : 403,
+            }
+          );
+        }
+      } else if (accountOwnerUserId !== actorUserId) {
+        return NextResponse.json(
+          { error: "Billing account does not belong to actor" },
+          { status: 403 }
+        );
+      }
       stateKey =
         typeof input.stateKey === "string" && input.stateKey.length > 0
           ? input.stateKey
@@ -451,7 +532,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     capture({
       event: AnalyticsEvents.AGENT_RUN_REQUESTED,
       identity: {
-        userId: actorUserId,
+        userId: actorPrincipalId,
         sessionId: sessionId ?? runId,
         tenantId: billingAccountId,
         traceId,
@@ -563,7 +644,12 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     runId = claimResult.request.runId;
     if (!stateKey) sessionId = `run:${runId}`;
 
-    const accountService = container.accountsForUser(toUserId(actorUserId));
+    // The account owner UUID scopes RLS for billing persistence. Authorization
+    // and execution attribution remain bound to actorPrincipalId; this is not
+    // a SessionUser projection and never changes who performed the run.
+    const accountService = container.accountsForUser(
+      toUserId(accountOwnerUserId)
+    );
 
     // Create preflight credit check closure
     // Per CREDITS_ENFORCED_AT_EXECUTION_PORT: decorator handles all execution paths
@@ -580,7 +666,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       });
 
     // Create graph executor and run
-    const executor = createGraphExecutor(executeStream, toUserId(actorUserId));
+    const executor = createGraphExecutor(
+      executeStream,
+      toUserId(accountOwnerUserId)
+    );
     const scopedExecutor = createScopedGraphExecutor({
       executor,
       preflightCheckFn,
@@ -601,7 +690,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         virtualKeyId,
       },
       resolver: container.providerResolver,
-      actorId: actorUserId,
+      actorId: actorPrincipalId,
       ...(scheduledGrantId !== undefined ? { grantId: scheduledGrantId } : {}),
       ...(container.connectionBroker
         ? { broker: container.connectionBroker }
@@ -633,7 +722,8 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         ...(responseFormat !== undefined && { responseFormat }),
       },
       {
-        actorUserId,
+        actorId: actorPrincipalId,
+        ...(actorPrincipalId.startsWith("user:") ? { actorUserId } : {}),
         requestId: runId,
         ...(sessionId ? { sessionId } : {}),
       }
@@ -721,7 +811,9 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       // Per STATEKEY_NULLABLE: only persist when stateKey + user context present.
       // Per TERMINAL_ONLY_PERSIST: assembler returns null if no assistant_final.
       // Per IDEMPOTENT_THREAD_PERSIST: message ID = assistant-{runId}, skip if already in thread.
-      if (stateKey && actorUserId) {
+      // Thread persistence is still user-FK scoped. Until it gains a native
+      // principal column, fresh agents must not be projected into users.id.
+      if (stateKey && actorPrincipalId.startsWith("user:")) {
         try {
           const assistantMsg = assembleAssistantMessage(
             runId,
@@ -814,7 +906,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       capture({
         event: AnalyticsEvents.AGENT_RUN_FAILED,
         identity: {
-          userId: actorUserId,
+          userId: actorPrincipalId,
           sessionId: sessionId ?? runId,
           tenantId: billingAccountId,
           traceId,
@@ -849,6 +941,15 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         traceId,
         error: errorCode,
       };
+      logEvent(log, EVENT_NAMES.AGENT_EXECUTION_COMPLETE, {
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        runId,
+        actorPrincipalId,
+        billingAccountId,
+        outcome: "error",
+        errorCode,
+      });
       return NextResponse.json(errorResponse, { status: 200 });
     }
 
@@ -875,7 +976,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       capture({
         event: AnalyticsEvents.AGENT_RUN_COMPLETED,
         identity: {
-          userId: actorUserId,
+          userId: actorPrincipalId,
           sessionId: sessionId ?? runId,
           tenantId: billingAccountId,
           traceId,
@@ -894,6 +995,14 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           structuredOutput: final.structuredOutput,
         }),
       };
+      logEvent(log, EVENT_NAMES.AGENT_EXECUTION_COMPLETE, {
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        runId,
+        actorPrincipalId,
+        billingAccountId,
+        outcome: "success",
+      });
       return NextResponse.json(successResponse, { status: 200 });
     } else {
       log.warn(
@@ -903,7 +1012,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       capture({
         event: AnalyticsEvents.AGENT_RUN_FAILED,
         identity: {
-          userId: actorUserId,
+          userId: actorPrincipalId,
           sessionId: sessionId ?? runId,
           tenantId: billingAccountId,
           traceId,
@@ -920,6 +1029,15 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         traceId,
         error: final.error ?? "internal",
       };
+      logEvent(log, EVENT_NAMES.AGENT_EXECUTION_COMPLETE, {
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        runId,
+        actorPrincipalId,
+        billingAccountId,
+        outcome: "error",
+        errorCode: final.error ?? "internal",
+      });
       return NextResponse.json(errorResponse, { status: 200 });
     }
   }

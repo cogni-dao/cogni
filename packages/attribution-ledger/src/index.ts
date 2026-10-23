@@ -11,6 +11,26 @@
  * @public
  */
 
+export {
+  ACTOR_CONTRIBUTION_ALLOCATION_VERSION,
+  type ActorContributionAllocationFacts,
+  type FrozenActorContributionAllocation,
+  freezeActorContributionAllocation,
+} from "./actor-contribution-allocation";
+export {
+  type ActorAwareSettlementPlan,
+  type ActorSettlementAmount,
+  computeActorAwareSettlementPlan,
+  type LegacySettlementAmount,
+} from "./actor-distribution-settlement";
+
+export type {
+  ActorBeneficiaryWalletResolution,
+  ActorBeneficiaryWalletResolver,
+  ActorWalletBindingEvidence,
+  ActorWalletResolutionFailureCode,
+  ActorWalletResolutionFailureEvidence,
+} from "./actor-wallet-resolution";
 // Allocation algorithm framework (pure, deterministic)
 export {
   computeProposedAllocations,
@@ -58,11 +78,14 @@ export {
 
 // Errors
 export {
+  ActorBeneficiaryPolicyRejectedError,
+  type ActorBeneficiaryPolicyRejectionReason,
   AllocationNotFoundError,
   EpochAlreadyFinalizedError,
   EpochNotFoundError,
   EpochNotInReviewError,
   EpochNotOpenError,
+  isActorBeneficiaryPolicyRejectedError,
   isAllocationNotFoundError,
   isEpochAlreadyFinalizedError,
   isEpochNotFoundError,
@@ -78,6 +101,7 @@ export {
   computeAllocationSetHash,
   computeArtifactsHash,
   computeFinalClaimantAllocationSetHash,
+  computeSignedAllocationSetHash,
   computeWeightConfigHash,
   sha256OfCanonicalJson,
 } from "./hashing";
@@ -121,6 +145,17 @@ export {
 
 // Store port interface + types
 export type {
+  AcceptActorBeneficiaryPolicyParams,
+  ActorAttributionStore,
+  ActorBeneficiaryAcceptanceRole,
+  ActorBeneficiaryPolicyAcceptanceRecord,
+  ActorBeneficiaryPolicyProposalRecord,
+  ActorBeneficiaryPolicyRecord,
+  ActorBindingRecord,
+  ActorContributionAllocationLifecycleRecord,
+  ActorContributionAllocationRecord,
+  ActorDistributionLiabilityRecord,
+  ActorDistributionSettlementRecord,
   AttributionEpoch,
   AttributionEvaluation,
   AttributionPoolComponent,
@@ -129,6 +164,7 @@ export type {
   AttributionStatementLineRecord,
   AttributionStatementSignature,
   AttributionStore,
+  BindActorExternalIdentityParams,
   ClaimantStore,
   CloseIngestionWithEvaluationsParams,
   CursorStore,
@@ -155,9 +191,11 @@ export type {
   InsertStatementParams,
   InsertUserProjectionParams,
   OverrideStore,
+  PendingActorDistributionLiability,
   PoolComponentInsertResult,
   PoolStore,
   ProjectionStore,
+  ProposeActorBeneficiaryPolicyParams,
   ReceiptClaimantsRecord,
   ReceiptStore,
   ReviewSubjectOverrideRecord,

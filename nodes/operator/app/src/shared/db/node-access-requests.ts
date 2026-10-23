@@ -14,7 +14,7 @@
  * Invariants: NOT_AUTHORITY, ONE_ROW_PER_AGENT_NODE_ROLE (an agent can request multiple roles on
  *   one node — each is its own row), ROLE_MAPS_TO_OPENFGA_RELATION.
  * Side-effects: none
- * Links: docs/spec/rbac.md §6, docs/spec/identity-model.md
+ * Links: docs/spec/rbac.md §6, https://cognidao.org/knowledge/human-ai-identity-standard
  * @public
  */
 

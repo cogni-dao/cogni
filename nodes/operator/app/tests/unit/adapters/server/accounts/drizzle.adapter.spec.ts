@@ -13,8 +13,13 @@
  */
 
 import type { UserId } from "@cogni/ids";
+import { COGNI_SYSTEM_BILLING_ACCOUNT_ID } from "@cogni/node-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { UserDrizzleAccountService } from "@/adapters/server/accounts/drizzle.adapter";
+import {
+  ServiceDrizzleAccountService,
+  UserDrizzleAccountService,
+} from "@/adapters/server/accounts/drizzle.adapter";
+import { verifySystemTenant } from "@/bootstrap/healthchecks";
 
 // Mock the db module
 const mockTx = {
@@ -42,6 +47,7 @@ const mockTx = {
 
 const mockDb = {
   transaction: vi.fn((callback) => callback(mockTx)),
+  update: vi.fn(() => mockTx),
   query: {
     billingAccounts: {
       findFirst: vi.fn(),
@@ -66,6 +72,7 @@ describe("UserDrizzleAccountService", () => {
     vi.clearAllMocks();
     mockDb.query.billingAccounts.findFirst.mockReset();
     mockDb.query.virtualKeys.findFirst.mockReset();
+    mockDb.update.mockReset().mockReturnValue(mockTx);
     mockTx.query.billingAccounts.findFirst.mockReset();
     mockTx.query.virtualKeys.findFirst.mockReset();
     mockTx.query.chargeReceipts.findFirst.mockReset();
@@ -81,6 +88,7 @@ describe("UserDrizzleAccountService", () => {
         id: "acc-123",
         ownerUserId: "user-456",
         balanceCredits: 100000n,
+        authorizationOwnerBootstrappedAt: new Date(),
       });
 
       // Mock finding default virtual key
@@ -119,6 +127,7 @@ describe("UserDrizzleAccountService", () => {
         id: "acc-123",
         ownerUserId: "user-456",
         balanceCredits: 100000n,
+        authorizationOwnerBootstrappedAt: new Date(),
       });
 
       // Mock no default virtual key found
@@ -127,6 +136,122 @@ describe("UserDrizzleAccountService", () => {
       const result = await service.getBillingAccountById("acc-123");
 
       expect(result).toBeNull();
+    });
+
+    it("does not serve an account whose OpenFGA owner bootstrap is pending", async () => {
+      mockTx.query.billingAccounts.findFirst.mockResolvedValue({
+        id: "acc-pending",
+        ownerUserId: "user-456",
+        balanceCredits: 100000n,
+        authorizationOwnerBootstrappedAt: null,
+      });
+      mockTx.query.virtualKeys.findFirst.mockResolvedValue({
+        id: "vk-pending",
+      });
+
+      await expect(
+        service.getBillingAccountById("acc-pending")
+      ).rejects.toMatchObject({
+        name: "BillingAccountOwnerBootstrapPortError",
+        reason: "pending_authority",
+      });
+    });
+
+    it("reconciles a preexisting system account before readiness serves it", async () => {
+      const bootstrapOwner = vi.fn().mockResolvedValue(undefined);
+      const serviceAccount = new ServiceDrizzleAccountService(
+        mockDb,
+        undefined,
+        bootstrapOwner
+      );
+      mockDb.query.billingAccounts.findFirst.mockResolvedValue({
+        id: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+        ownerUserId: TEST_USER_ID,
+        balanceCredits: 0n,
+        authorizationOwnerBootstrappedAt: null,
+      });
+      mockDb.query.virtualKeys.findFirst.mockResolvedValue({
+        id: "vk-system",
+      });
+
+      await expect(verifySystemTenant(serviceAccount)).resolves.toBeUndefined();
+      expect(bootstrapOwner).toHaveBeenCalledWith({
+        ownerUserId: TEST_USER_ID,
+        billingAccountId: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+      });
+      expect(mockDb.update).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("billing-account owner bootstrap", () => {
+    it("resumes response loss, then never reprojects after completion", async () => {
+      const bootstrapOwner = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("response lost"))
+        .mockResolvedValue(undefined);
+      service = new UserDrizzleAccountService(
+        mockDb,
+        TEST_USER_ID,
+        undefined,
+        bootstrapOwner
+      );
+      mockTx.query.virtualKeys.findFirst.mockResolvedValue({ id: "vk-owner" });
+      mockTx.query.billingAccounts.findFirst.mockResolvedValue({
+        id: "00000000-0000-4000-a000-000000000002",
+        ownerUserId: TEST_USER_ID,
+        balanceCredits: 0n,
+        authorizationOwnerBootstrappedAt: null,
+      });
+
+      await expect(
+        service.getOrCreateBillingAccountForUser({
+          userId: TEST_USER_ID,
+          requireAuthorizationOwner: true,
+        })
+      ).rejects.toThrow("response lost");
+      await expect(
+        service.getOrCreateBillingAccountForUser({
+          userId: TEST_USER_ID,
+          requireAuthorizationOwner: true,
+        })
+      ).resolves.toMatchObject({ ownerUserId: TEST_USER_ID });
+      expect(bootstrapOwner).toHaveBeenCalledTimes(2);
+      expect(mockTx.update).toHaveBeenCalledTimes(1);
+
+      mockTx.query.billingAccounts.findFirst.mockResolvedValue({
+        id: "00000000-0000-4000-a000-000000000002",
+        ownerUserId: TEST_USER_ID,
+        balanceCredits: 0n,
+        authorizationOwnerBootstrappedAt: new Date(),
+      });
+      await service.getOrCreateBillingAccountForUser({
+        userId: TEST_USER_ID,
+        requireAuthorizationOwner: true,
+      });
+      expect(bootstrapOwner).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps an account non-serving while authority bootstrap is unavailable", async () => {
+      const bootstrapOwner = vi.fn().mockRejectedValue(new Error("offline"));
+      service = new UserDrizzleAccountService(
+        mockDb,
+        TEST_USER_ID,
+        undefined,
+        bootstrapOwner
+      );
+      mockTx.query.billingAccounts.findFirst.mockResolvedValue({
+        id: "00000000-0000-4000-a000-000000000002",
+        ownerUserId: TEST_USER_ID,
+        balanceCredits: 0n,
+        authorizationOwnerBootstrappedAt: null,
+      });
+      mockTx.query.virtualKeys.findFirst.mockResolvedValue({ id: "vk-owner" });
+
+      await expect(
+        service.getOrCreateBillingAccountForUser({ userId: TEST_USER_ID })
+      ).rejects.toThrow("offline");
+      expect(bootstrapOwner).toHaveBeenCalledOnce();
+      expect(mockTx.update).not.toHaveBeenCalled();
     });
   });
 
@@ -156,6 +281,7 @@ describe("UserDrizzleAccountService", () => {
       mockTx.query.billingAccounts.findFirst.mockResolvedValue({
         id: "acc-123",
         balanceCredits: 100000n,
+        authorizationOwnerBootstrappedAt: new Date(),
       });
 
       // Mock finding virtual key (required validation)
@@ -220,6 +346,7 @@ describe("UserDrizzleAccountService", () => {
       mockTx.query.billingAccounts.findFirst.mockResolvedValue({
         id: "acc-123",
         balanceCredits: 1000n, // Less than 2000n charged
+        authorizationOwnerBootstrappedAt: new Date(),
       });
 
       // Mock finding virtual key (required validation)

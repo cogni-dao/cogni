@@ -15,9 +15,15 @@ import { toUserId, userActor } from "@cogni/ids";
 import { listRunsOperation } from "@cogni/node-contracts";
 import { COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
-import { getSessionUser } from "@/app/_lib/auth/session";
+import {
+  RequestIdentityUnavailableError,
+  resolveRequestPrincipal,
+} from "@/app/_lib/auth/request-identity";
 import { getContainer } from "@/bootstrap/container";
-import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import {
+  buildAuthChallenge,
+  wrapRouteHandlerWithLogging,
+} from "@/bootstrap/http";
 import { logRequestWarn, type RequestContext } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +32,12 @@ function handleRouteError(
   ctx: RequestContext,
   error: unknown
 ): NextResponse | null {
+  if (error instanceof RequestIdentityUnavailableError) {
+    return NextResponse.json(
+      { error: "identity service unavailable" },
+      { status: 503 }
+    );
+  }
   if (error && typeof error === "object" && "issues" in error) {
     logRequestWarn(ctx.log, error, "VALIDATION_ERROR");
     return NextResponse.json({ error: "Invalid query" }, { status: 400 });
@@ -47,9 +59,17 @@ function handleRouteError(
  * - 401: Not authenticated
  */
 export const GET = wrapRouteHandlerWithLogging(
-  { routeId: "ai.runs.list", auth: { mode: "required", getSessionUser } },
-  async (ctx, request, sessionUser) => {
+  { routeId: "ai.runs.list", auth: { mode: "none" } },
+  async (ctx, request) => {
     try {
+      const principal = await resolveRequestPrincipal();
+      if (!principal) {
+        const challenge = await buildAuthChallenge();
+        return NextResponse.json(challenge.body, {
+          status: 401,
+          headers: { "WWW-Authenticate": challenge.wwwAuthenticate },
+        });
+      }
       const { searchParams } = new URL(request.url);
 
       const input = listRunsOperation.input.parse({
@@ -65,9 +85,16 @@ export const GET = wrapRouteHandlerWithLogging(
 
       // scope=system: query as system tenant (same pattern as governance activity route)
       const isSystemScope = searchParams.get("scope") === "system";
+      if (isSystemScope && principal.kind !== "human") {
+        return NextResponse.json({ error: "forbidden" }, { status: 403 });
+      }
       const queryUserId = isSystemScope
         ? COGNI_SYSTEM_PRINCIPAL_USER_ID
-        : sessionUser.id;
+        : principal.kind === "agent"
+          ? principal.actorId
+          : principal.kind === "human"
+            ? principal.userId
+            : principal.legacyUserId;
       const actorId = userActor(toUserId(queryUserId));
 
       const runs = await container.graphRunRepository.listRunsByUser(

@@ -49,13 +49,27 @@ function checksFor(params: AuthzCheckParams): readonly AuthzSubcheck[] {
 
   if (!params.subjectId) return [permission];
 
+  const subjectDelegation = {
+    name: "delegation" as const,
+    user: params.actorId,
+    relation: relationForAuthzAction("user.act_as"),
+    object: authzUserResource(params.subjectId),
+    decision: "deny" as const,
+    code: "authz_denied" as const,
+  };
+
+  if (params.action !== "billing_account.read") {
+    return [permission, subjectDelegation];
+  }
+
   return [
     permission,
+    subjectDelegation,
     {
       name: "delegation",
       user: params.actorId,
-      relation: relationForAuthzAction("user.act_as"),
-      object: authzUserResource(params.subjectId),
+      relation: relationForAuthzAction("billing_account.act_as"),
+      object: params.resource,
       decision: "deny",
       code: "authz_denied",
     },
@@ -119,12 +133,38 @@ export class FakeAuthorizationAdapter implements AuthorizationPort {
   }
 
   async writeRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision> {
-    this.relations.add(relationKey(tuple));
-    return { decision: "success", code: "authz_write_success" };
+    return this.writeRelations([tuple]);
   }
 
   async deleteRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision> {
+    return this.deleteRelations([tuple]);
+  }
+
+  async writeRelations(
+    tuples: readonly AuthzRelationTuple[]
+  ): Promise<AuthzWriteDecision> {
+    for (const tuple of tuples) this.relations.add(relationKey(tuple));
+    return { decision: "success", code: "authz_write_success" };
+  }
+
+  async writeRelationsAtomically(
+    tuples: readonly AuthzRelationTuple[]
+  ): Promise<AuthzWriteDecision> {
+    return this.writeRelations(tuples);
+  }
+
+  async deleteRelations(
+    tuples: readonly AuthzRelationTuple[]
+  ): Promise<AuthzWriteDecision> {
+    for (const tuple of tuples) this.relations.delete(relationKey(tuple));
+    return { decision: "success", code: "authz_write_success" };
+  }
+
+  async replaceRelation(
+    tuple: AuthzRelationTuple
+  ): Promise<AuthzWriteDecision> {
     this.relations.delete(relationKey(tuple));
+    this.relations.add(relationKey(tuple));
     return { decision: "success", code: "authz_write_success" };
   }
 
@@ -153,5 +193,9 @@ export class FakeAuthorizationAdapter implements AuthorizationPort {
 }
 
 function relationKey(tuple: AuthzRelationTuple): string {
-  return JSON.stringify(tuple);
+  return JSON.stringify({
+    user: tuple.user,
+    relation: tuple.relation,
+    object: tuple.object,
+  });
 }

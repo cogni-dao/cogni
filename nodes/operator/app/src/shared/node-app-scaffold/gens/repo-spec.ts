@@ -95,7 +95,7 @@ export function renderRepoSpec(input: RenderRepoSpecInput): string {
 # regenerate both UUIDs:
 #   node_id:  openssl rand -hex 16 | sed 's/\\(.\\{8\\}\\)\\(.\\{4\\}\\)\\(.\\{4\\}\\)\\(.\\{4\\}\\)\\(.\\{12\\}\\)/\\1-\\2-\\3-\\4-\\5/'
 #   scope_id: uuidv5(node_id, "default")
-# See docs/spec/identity-model.md, docs/spec/multi-node-tenancy.md.
+# See https://cognidao.org/knowledge/node-identity-projection-lineage and docs/spec/multi-node-tenancy.md.
 
 schema_version: "0.1.4"
 

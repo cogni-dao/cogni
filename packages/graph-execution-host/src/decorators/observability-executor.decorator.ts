@@ -150,7 +150,11 @@ export class ObservabilityGraphExecutorDecorator implements GraphExecutorPort {
         langfuseTraceId = this.tracing.createTraceWithIO({
           traceId,
           ...(sessionId && { sessionId }),
-          ...(ctx?.actorUserId && { userId: ctx.actorUserId }),
+          ...(ctx?.actorId
+            ? { userId: ctx.actorId }
+            : ctx?.actorUserId
+              ? { userId: ctx.actorUserId }
+              : {}),
           input: finalInput,
           // Per LANGFUSE_NODE_ATTRIBUTION: nodeId is the per-node read filter (the dev-read proxy
           // AND-s on this tag); also in metadata for correlation. Omitted when unwired (warn-once above).

@@ -41,6 +41,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+import { actorBeneficiaryPolicies, actors } from "./identity";
 import { users } from "./refs";
 
 // ---------------------------------------------------------------------------
@@ -138,6 +139,65 @@ export const ingestionReceipts = pgTable(
     index("ingestion_receipts_platform_user_idx").on(table.platformUserId),
   ]
 );
+
+// ---------------------------------------------------------------------------
+// Actor allocation inputs — additive vNext identity for one contribution
+// ---------------------------------------------------------------------------
+
+/**
+ * Immutable actor allocation input frozen during normal epoch finalization.
+ * task.5220 consumes `id` as allocation_ref and derives value from the existing
+ * finalized receipt-weight path; this table never rewrites legacy claimant rows.
+ */
+export const actorContributionAllocations = pgTable(
+  "actor_contribution_allocations",
+  {
+    id: text("id").primaryKey(),
+    nodeId: uuid("node_id").notNull(),
+    scopeId: uuid("scope_id").notNull(),
+    epochId: bigint("epoch_id", { mode: "bigint" })
+      .notNull()
+      .references(() => epochs.id),
+    receiptId: text("receipt_id").notNull(),
+    contractVersion: text("contract_version").notNull(),
+    earnedByActorId: text("earned_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    beneficiaryActorId: text("beneficiary_actor_id").references(
+      () => actors.id
+    ),
+    beneficiaryPolicyId: text("beneficiary_policy_id").references(
+      () => actorBeneficiaryPolicies.id
+    ),
+    beneficiaryPolicyVersion: text("beneficiary_policy_version"),
+    contributionCutoff: timestamp("contribution_cutoff", {
+      withTimezone: true,
+    }).notNull(),
+    sourceEvidence: jsonb("source_evidence")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    sourceEvidenceHash: text("source_evidence_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "actor_contribution_allocations_contract_check",
+      sql`${table.contractVersion} = 'actor.contribution.allocation.v1'`
+    ),
+    uniqueIndex("actor_contribution_allocations_receipt_version_unique").on(
+      table.nodeId,
+      table.epochId,
+      table.receiptId,
+      table.contractVersion
+    ),
+    index("actor_contribution_allocations_beneficiary_idx").on(
+      table.beneficiaryActorId,
+      table.epochId
+    ),
+  ]
+).enableRLS();
 
 // ---------------------------------------------------------------------------
 // Selection Layer: Epoch membership + admin decisions (mutable until finalize)
@@ -691,3 +751,114 @@ export const epochDistributionLeaves = pgTable(
     index("epoch_distribution_leaves_epoch_idx").on(table.epochId),
   ]
 );
+
+/**
+ * An actor allocation whose explicitly frozen beneficiary had no usable wallet
+ * at its original fold. `token_amount` is the exact base-unit entitlement from
+ * that fold; later epochs carry this value forward without repricing it.
+ */
+export const actorDistributionLiabilities = pgTable(
+  "actor_distribution_liabilities",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    allocationRef: text("allocation_ref")
+      .notNull()
+      .references(() => actorContributionAllocations.id),
+    nodeId: uuid("node_id").notNull(),
+    scopeId: uuid("scope_id").notNull(),
+    sourceEpochId: bigint("source_epoch_id", { mode: "bigint" })
+      .notNull()
+      .references(() => epochs.id),
+    earnedByActorId: text("earned_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    beneficiaryActorId: text("beneficiary_actor_id").references(
+      () => actors.id
+    ),
+    contributionCutoff: timestamp("contribution_cutoff", {
+      withTimezone: true,
+    }).notNull(),
+    tokenAmount: numeric("token_amount", { mode: "bigint" }).notNull(),
+    sourceEvidenceHash: text("source_evidence_hash").notNull(),
+    resolverFailureJson: jsonb("resolver_failure_json")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("actor_distribution_liabilities_allocation_unique").on(
+      table.allocationRef
+    ),
+    check(
+      "actor_distribution_liabilities_amount_positive",
+      sql`${table.tokenAmount} > 0`
+    ),
+    index("actor_distribution_liabilities_beneficiary_idx").on(
+      table.beneficiaryActorId,
+      table.sourceEpochId
+    ),
+  ]
+).enableRLS();
+
+/**
+ * Append-only proof that one actor allocation entered one cumulative fold.
+ * UNIQUE(allocation_ref) is the exact-once guard. `liability_id` is present only
+ * when a previously unresolved entitlement is consumed by a later fold.
+ */
+export const actorDistributionSettlements = pgTable(
+  "actor_distribution_settlements",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    allocationRef: text("allocation_ref")
+      .notNull()
+      .references(() => actorContributionAllocations.id),
+    liabilityId: uuid("liability_id").references(
+      () => actorDistributionLiabilities.id
+    ),
+    nodeId: uuid("node_id").notNull(),
+    scopeId: uuid("scope_id").notNull(),
+    sourceEpochId: bigint("source_epoch_id", { mode: "bigint" })
+      .notNull()
+      .references(() => epochs.id),
+    foldEpochId: bigint("fold_epoch_id", { mode: "bigint" })
+      .notNull()
+      .references(() => epochs.id),
+    earnedByActorId: text("earned_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    beneficiaryActorId: text("beneficiary_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    tokenAmount: numeric("token_amount", { mode: "bigint" }).notNull(),
+    claimantWallet: text("claimant_wallet").notNull(),
+    claimantWalletLower: text("claimant_wallet_lower").notNull(),
+    resolverEvidenceJson: jsonb("resolver_evidence_json")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("actor_distribution_settlements_allocation_unique").on(
+      table.allocationRef
+    ),
+    uniqueIndex("actor_distribution_settlements_liability_unique")
+      .on(table.liabilityId)
+      .where(sql`${table.liabilityId} IS NOT NULL`),
+    check(
+      "actor_distribution_settlements_amount_positive",
+      sql`${table.tokenAmount} > 0`
+    ),
+    check(
+      "actor_distribution_settlements_wallet_lower_check",
+      sql`${table.claimantWalletLower} = lower(${table.claimantWallet})`
+    ),
+    index("actor_distribution_settlements_fold_idx").on(table.foldEpochId),
+    index("actor_distribution_settlements_wallet_idx").on(
+      table.claimantWalletLower
+    ),
+  ]
+).enableRLS();

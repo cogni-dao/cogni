@@ -19,17 +19,25 @@ import { isAiExecutionError } from "@cogni/ai-core";
 import {
   type ChatCompletionChunk,
   chatCompletionsContract,
+  type RequestPrincipal,
 } from "@cogni/node-contracts";
 import { ChatValidationError } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 import {
+  AgentExecutionAuthorizationError,
   chatCompletion,
   chatCompletionStream,
   toOpenAiFinishReason,
 } from "@/app/_facades/ai/completion.server";
 import { executionErrorToOpenAiError } from "@/app/_facades/ai/execution-error-mapper";
-import { getSessionUser } from "@/app/_lib/auth/session";
-import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import {
+  RequestIdentityUnavailableError,
+  resolveRequestPrincipal,
+} from "@/app/_lib/auth/request-identity";
+import {
+  buildAuthChallenge,
+  wrapRouteHandlerWithLogging,
+} from "@/bootstrap/http";
 import { isAccountsFeatureError } from "@/features/accounts/public";
 import type { AiEvent, StreamFinalResult } from "@/features/ai/public";
 import { isLlmError } from "@/ports";
@@ -67,6 +75,20 @@ function handleRouteError(
   ctx: RequestContext,
   error: unknown
 ): NextResponse | null {
+  if (error instanceof AgentExecutionAuthorizationError) {
+    logRequestWarn(
+      ctx.log,
+      error,
+      error.unavailable ? "AUTHZ_UNAVAILABLE" : "AUTHZ_DENIED"
+    );
+    return openAiError(
+      error.unavailable ? "Authorization service unavailable." : "Forbidden.",
+      error.unavailable ? "service_unavailable" : "permission_error",
+      error.unavailable ? 503 : 403,
+      error.unavailable ? "authz_unavailable" : "authz_denied"
+    );
+  }
+
   // Zod validation errors
   if (error && typeof error === "object" && "issues" in error) {
     logRequestWarn(ctx.log, error, "VALIDATION_ERROR");
@@ -386,10 +408,31 @@ function createOpenAiSseStream(
 export const POST = wrapRouteHandlerWithLogging(
   {
     routeId: "chat.completions",
-    auth: { mode: "required", getSessionUser },
+    auth: { mode: "none" },
   },
-  async (ctx, request, sessionUser) => {
+  async (ctx, request) => {
     try {
+      let principal: RequestPrincipal | null;
+      try {
+        principal = await resolveRequestPrincipal();
+      } catch (error) {
+        if (error instanceof RequestIdentityUnavailableError) {
+          return openAiError(
+            "Identity service unavailable.",
+            "service_unavailable",
+            503,
+            "identity_unavailable"
+          );
+        }
+        throw error;
+      }
+      if (!principal) {
+        const challenge = await buildAuthChallenge();
+        return NextResponse.json(challenge.body, {
+          status: 401,
+          headers: { "WWW-Authenticate": challenge.wwwAuthenticate },
+        });
+      }
       // Parse JSON body
       let body: unknown;
       try {
@@ -419,8 +462,6 @@ export const POST = wrapRouteHandlerWithLogging(
       }
       const input = parseResult.data;
 
-      if (!sessionUser) throw new Error("sessionUser required");
-
       const isStreaming = input.stream === true;
       const graphName = input.graph_name;
       const idempotencyKey =
@@ -436,7 +477,7 @@ export const POST = wrapRouteHandlerWithLogging(
           {
             messages: input.messages,
             modelRef,
-            sessionUser,
+            principal,
             ...(graphName ? { graphName } : {}),
             abortSignal: request.signal,
             ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -478,7 +519,7 @@ export const POST = wrapRouteHandlerWithLogging(
         {
           messages: input.messages,
           modelRef,
-          sessionUser,
+          principal,
           ...(graphName ? { graphName } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
         },

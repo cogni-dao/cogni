@@ -7,6 +7,8 @@
  * Scope: Interface and DTO types only. Does not contain policy or I/O.
  * Invariants: PORTS_DEFINE_NEEDS — adapters implement persistence, features
  *   derive next-action policy, routes own HTTP translation.
+ *   EXACTLY_ONE_CLAIMANT — a session is claimed by a human `users.id` or by a
+ *   durable agent principal id, never both; agents are never projected into users.
  * Side-effects: none
  * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007
  * @public
@@ -19,10 +21,22 @@ export type WorkItemSessionStatus =
   | "closed"
   | "superseded";
 
+/** Exactly one claimant: a human user id or a durable agent principal id. */
+export type WorkItemSessionClaimant =
+  | {
+      readonly claimedByUserId: string;
+      readonly claimedByPrincipalId?: never;
+    }
+  | {
+      readonly claimedByPrincipalId: string;
+      readonly claimedByUserId?: never;
+    };
+
 export type WorkItemSessionRecord = {
   readonly id: string;
   readonly workItemId: string;
-  readonly claimedByUserId: string;
+  readonly claimedByUserId: string | null;
+  readonly claimedByPrincipalId: string | null;
   readonly claimedByDisplayName: string | null;
   readonly status: WorkItemSessionStatus;
   readonly claimedAt: Date;
@@ -39,27 +53,30 @@ export type ClaimWorkItemSessionResult =
   | { readonly kind: "conflict"; readonly session: WorkItemSessionRecord };
 
 export interface WorkItemSessionPort {
-  claim(input: {
-    readonly workItemId: string;
-    readonly claimedByUserId: string;
-    readonly claimedByDisplayName: string | null;
-    readonly deadlineAt: Date;
-    readonly lastCommand?: string;
-  }): Promise<ClaimWorkItemSessionResult>;
+  claim(
+    input: WorkItemSessionClaimant & {
+      readonly workItemId: string;
+      readonly claimedByDisplayName: string | null;
+      readonly deadlineAt: Date;
+      readonly lastCommand?: string;
+    }
+  ): Promise<ClaimWorkItemSessionResult>;
 
-  heartbeat(input: {
-    readonly workItemId: string;
-    readonly claimedByUserId: string;
-    readonly deadlineAt: Date;
-    readonly lastCommand?: string;
-  }): Promise<WorkItemSessionRecord | null>;
+  heartbeat(
+    input: WorkItemSessionClaimant & {
+      readonly workItemId: string;
+      readonly deadlineAt: Date;
+      readonly lastCommand?: string;
+    }
+  ): Promise<WorkItemSessionRecord | null>;
 
-  linkPr(input: {
-    readonly workItemId: string;
-    readonly claimedByUserId: string;
-    readonly branch?: string;
-    readonly prNumber?: number;
-  }): Promise<WorkItemSessionRecord | null>;
+  linkPr(
+    input: WorkItemSessionClaimant & {
+      readonly workItemId: string;
+      readonly branch?: string;
+      readonly prNumber?: number;
+    }
+  ): Promise<WorkItemSessionRecord | null>;
 
   getCurrent(workItemId: string): Promise<WorkItemSessionRecord | null>;
 }

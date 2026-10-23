@@ -49,6 +49,7 @@ PARALLEL=(
   render-compute-egress-allowlist.test.sh
   smoke-candidate.test.sh
   openbao-clobber-proof.test.sh
+  openfga-preshared-authn.test.sh
   secrets-fanout.test.sh
   secret-materialize.test.sh
   openbao-kv-http-read.test.sh

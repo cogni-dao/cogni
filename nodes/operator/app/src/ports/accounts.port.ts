@@ -59,6 +59,14 @@ export class VirtualKeyNotFoundPortError extends Error {
   }
 }
 
+/** OpenFGA owner projection could not be verified for a billing account. */
+export class BillingAccountOwnerBootstrapPortError extends Error {
+  constructor(public readonly reason?: string) {
+    super("Billing account owner authorization is unavailable");
+    this.name = "BillingAccountOwnerBootstrapPortError";
+  }
+}
+
 /**
  * Type guard to check if error is InsufficientCreditsPortError
  */
@@ -88,6 +96,15 @@ export function isVirtualKeyNotFoundPortError(
   error: unknown
 ): error is VirtualKeyNotFoundPortError {
   return error instanceof Error && error.name === "VirtualKeyNotFoundPortError";
+}
+
+export function isBillingAccountOwnerBootstrapPortError(
+  error: unknown
+): error is BillingAccountOwnerBootstrapPortError {
+  return (
+    error instanceof Error &&
+    error.name === "BillingAccountOwnerBootstrapPortError"
+  );
 }
 
 export interface BillingAccount {
@@ -179,6 +196,8 @@ export interface ServiceAccountService {
     userId: string;
     walletAddress?: string;
     displayName?: string;
+    /** Fail if the one-time OpenFGA owner projection cannot be verified. */
+    requireAuthorizationOwner?: boolean;
   }): Promise<BillingAccount>;
 
   /**
@@ -222,6 +241,8 @@ export interface AccountService {
     userId: string;
     walletAddress?: string;
     displayName?: string;
+    /** Fail if the one-time OpenFGA owner projection cannot be verified. */
+    requireAuthorizationOwner?: boolean;
   }): Promise<BillingAccount>;
 
   /**

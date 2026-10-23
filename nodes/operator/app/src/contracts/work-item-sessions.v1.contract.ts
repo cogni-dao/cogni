@@ -27,7 +27,9 @@ export const WorkItemSessionDtoSchema = z.object({
   coordinationId: z.string().uuid(),
   workItemId: z.string().min(1),
   status: WorkItemSessionStatusSchema,
+  /** @deprecated Claimant id (user id, or agent principal id); prefer claimedByPrincipalId for agents. */
   claimedByUserId: z.string().min(1),
+  claimedByPrincipalId: z.string().min(1).optional(),
   claimedByDisplayName: z.string().nullable(),
   claimedAt: z.string().datetime(),
   lastHeartbeatAt: z.string().datetime().nullable(),

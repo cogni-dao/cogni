@@ -9,7 +9,8 @@
  * Invariants: AUTH_REQUIRED, CONTRACTS_ARE_TRUTH, OPERATOR_COORDINATION_LOCAL.
  * Side-effects: none
  * Links: src/app/api/v1/work/items/[id]/claims/route.ts,
- *   src/app/api/v1/work/items/[id]/coordination/route.ts, task.5007
+ *   src/app/api/v1/work/items/[id]/coordination/route.ts,
+ *   src/app/api/v1/work/items/[id]/pr/route.ts, task.5007
  * @internal
  */
 
@@ -18,13 +19,16 @@ import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { issueAgentApiKey } from "@/app/_lib/auth/request-identity";
+import * as requestIdentity from "@/app/_lib/auth/request-identity";
 import * as claimsHandler from "@/app/api/v1/work/items/[id]/claims/route";
 import * as coordinationHandler from "@/app/api/v1/work/items/[id]/coordination/route";
 import * as heartbeatHandler from "@/app/api/v1/work/items/[id]/heartbeat/route";
+import * as prHandler from "@/app/api/v1/work/items/[id]/pr/route";
 
 const mocks = vi.hoisted(() => ({
+  claimWorkItemAsPrincipal: vi.fn(),
   claimWorkItemSession: vi.fn(),
+  heartbeatWorkItemAsPrincipal: vi.fn(),
   heartbeat: vi.fn(),
   getCurrent: vi.fn(),
   getContainer: vi.fn(),
@@ -32,10 +36,15 @@ const mocks = vi.hoisted(() => ({
   getWorkItem: vi.fn(),
   headers: vi.fn(),
   getServerSessionUser: vi.fn(),
+  linkPr: vi.fn(),
+  patchWorkItemAsPrincipal: vi.fn(),
 }));
 
 vi.mock("@/shared/env/server", () => ({
   serverEnv: () => ({ AUTH_SECRET: "coordination-test-secret" }),
+}));
+vi.mock("@/shared/config", () => ({
+  getNodeId: () => "00000000-0000-4000-8000-000000000001",
 }));
 vi.mock("next/headers", () => ({ headers: () => mocks.headers() }));
 vi.mock("@/lib/auth/server", () => ({
@@ -52,12 +61,15 @@ vi.mock("@/bootstrap/container", () => ({
 vi.mock("@/app/_facades/work/items.server", () => ({
   getWorkItem: mocks.getWorkItem,
   patchWorkItem: vi.fn(),
+  patchWorkItemAsPrincipal: mocks.patchWorkItemAsPrincipal,
 }));
 vi.mock("@/app/_facades/work/coordination.server", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/app/_facades/work/coordination.server")
   >()),
+  claimWorkItemAsPrincipal: mocks.claimWorkItemAsPrincipal,
   claimWorkItemSession: mocks.claimWorkItemSession,
+  heartbeatWorkItemAsPrincipal: mocks.heartbeatWorkItemAsPrincipal,
 }));
 
 const SESSION_DTO = {
@@ -74,6 +86,16 @@ const SESSION_DTO = {
   branch: null,
   prNumber: null,
 } as const;
+
+const AGENT_PRINCIPAL = {
+  kind: "agent" as const,
+  principalId: "agent:operator/00000000-0000-4000-8000-000000005264" as const,
+  actorId: "00000000-0000-4000-8000-000000005264",
+  credentialId: "00000000-0000-4000-8000-000000005265",
+  billingAccountId: "00000000-0000-4000-8000-000000005263",
+  legacyUserId: null,
+  displayName: "fresh-v2",
+};
 
 describe("operator work-item session routes", () => {
   beforeEach(() => {
@@ -184,6 +206,164 @@ describe("operator work-item session routes", () => {
       },
     });
   });
+
+  it("claims and heartbeats as the exact fresh-v2 principal", async () => {
+    const resolveSpy = vi
+      .spyOn(requestIdentity, "resolveRequestPrincipal")
+      .mockResolvedValue(AGENT_PRINCIPAL);
+    const agentSession = {
+      ...SESSION_DTO,
+      claimedByUserId: AGENT_PRINCIPAL.principalId,
+      claimedByPrincipalId: AGENT_PRINCIPAL.principalId,
+      claimedByDisplayName: AGENT_PRINCIPAL.displayName,
+    };
+    mocks.claimWorkItemAsPrincipal.mockResolvedValue({
+      claimed: true,
+      conflict: false,
+      session: agentSession,
+      nextAction: "Continue work.",
+      statusUrl: "/api/v1/work/items/task.5007/coordination",
+    });
+    mocks.heartbeatWorkItemAsPrincipal.mockResolvedValue({
+      session: { ...agentSession, lastHeartbeatAt: "2026-05-02T12:00:00.000Z" },
+      nextAction: "Continue work.",
+      statusUrl: "/api/v1/work/items/task.5007/coordination",
+    });
+
+    await testApiHandler({
+      appHandler: claimsHandler,
+      params: { id: "task.5007" },
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          body: JSON.stringify({ lastCommand: "/implement" }),
+          headers: { "content-type": "application/json" },
+        });
+        expect(response.status).toBe(201);
+      },
+    });
+    expect(mocks.claimWorkItemAsPrincipal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workItemId: "task.5007",
+        principal: AGENT_PRINCIPAL,
+      })
+    );
+    expect(mocks.claimWorkItemSession).not.toHaveBeenCalled();
+
+    await testApiHandler({
+      appHandler: heartbeatHandler,
+      params: { id: "task.5007" },
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          body: JSON.stringify({ lastCommand: "/review-implementation" }),
+          headers: { "content-type": "application/json" },
+        });
+        expect(response.status).toBe(200);
+      },
+    });
+    expect(mocks.heartbeatWorkItemAsPrincipal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workItemId: "task.5007",
+        principal: AGENT_PRINCIPAL,
+      })
+    );
+    resolveSpy.mockRestore();
+  });
+  function linkPrAs(principal: typeof AGENT_PRINCIPAL) {
+    vi.spyOn(requestIdentity, "resolveRequestPrincipal").mockResolvedValue(
+      principal
+    );
+    mocks.getContainer.mockReturnValue({
+      ...mocks.getRequestLoggingDependencies(),
+      workItemSessions: { linkPr: mocks.linkPr, getCurrent: mocks.getCurrent },
+    });
+    mocks.getWorkItem.mockResolvedValue({
+      id: "task.5007",
+      status: "needs_implement",
+    });
+  }
+
+  function agentStoredSession() {
+    return {
+      ...SESSION_DTO,
+      id: SESSION_DTO.coordinationId,
+      claimedByUserId: null,
+      claimedByPrincipalId: AGENT_PRINCIPAL.principalId,
+      claimedByDisplayName: AGENT_PRINCIPAL.displayName,
+      claimedAt: new Date(SESSION_DTO.claimedAt),
+      deadlineAt: new Date(Date.now() + 60_000),
+      lastHeartbeatAt: null,
+      closedAt: null,
+      branch: "feat/agent",
+      prNumber: 2784,
+    };
+  }
+
+  async function postPr(): Promise<{ status: number; json: unknown }> {
+    let status = 0;
+    let json: unknown;
+    await testApiHandler({
+      appHandler: prHandler,
+      params: { id: "task.5007" },
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          body: JSON.stringify({ branch: "feat/agent", prNumber: 2784 }),
+          headers: { "content-type": "application/json" },
+        });
+        status = response.status;
+        json = await response.json();
+      },
+    });
+    return { status, json };
+  }
+
+  it("links a PR to a fresh-v2 agent's own claim and patches as that principal", async () => {
+    linkPrAs(AGENT_PRINCIPAL);
+    mocks.linkPr.mockResolvedValue(agentStoredSession());
+    mocks.patchWorkItemAsPrincipal.mockResolvedValue({
+      id: "task.5007",
+      status: "needs_implement",
+      pr: "2784",
+    });
+
+    const { status, json } = await postPr();
+
+    expect(status).toBe(200);
+    expect(json).toMatchObject({
+      session: {
+        claimedByPrincipalId: AGENT_PRINCIPAL.principalId,
+        prNumber: 2784,
+      },
+    });
+    expect(mocks.linkPr).toHaveBeenCalledWith({
+      workItemId: "task.5007",
+      claimedByPrincipalId: AGENT_PRINCIPAL.principalId,
+      branch: "feat/agent",
+      prNumber: 2784,
+    });
+    expect(mocks.patchWorkItemAsPrincipal).toHaveBeenCalledWith(
+      { id: "task.5007", set: { branch: "feat/agent", pr: "2784" } },
+      AGENT_PRINCIPAL.principalId
+    );
+  });
+
+  it("refuses a foreign principal linking a PR to another agent's claim", async () => {
+    linkPrAs({
+      ...AGENT_PRINCIPAL,
+      principalId: "agent:operator/00000000-0000-4000-8000-000000009999",
+      actorId: "00000000-0000-4000-8000-000000009999",
+    } as unknown as typeof AGENT_PRINCIPAL);
+    mocks.linkPr.mockResolvedValue(null);
+    mocks.getCurrent.mockResolvedValue(agentStoredSession());
+
+    const { status } = await postPr();
+
+    expect(status).toBe(403);
+    expect(mocks.patchWorkItemAsPrincipal).not.toHaveBeenCalled();
+  });
+
   function requireLightweightPath() {
     mocks.getContainer.mockImplementation(() => {
       throw new Error("full container must not be constructed");
@@ -192,7 +372,7 @@ describe("operator work-item session routes", () => {
 
   it("uses the real bearer resolver, wrapper and heartbeat facade without full-container or Dolt access", async () => {
     requireLightweightPath();
-    const token = issueAgentApiKey({
+    const token = requestIdentity.issueAgentApiKey({
       userId: TEST_SESSION_USER_1.id,
       displayName: null,
     });

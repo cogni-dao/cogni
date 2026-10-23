@@ -29,6 +29,8 @@ import type {
 
 const NODE_ID = "11111111-1111-4111-8111-111111111111";
 const SOURCE_SHA = "0123456789012345678901234567890123456789";
+const ACTOR_ID = "22222222-2222-4222-8222-222222222222";
+const CREDENTIAL_ID = "33333333-3333-4333-8333-333333333333";
 
 const mockDeployPlane = vi.hoisted(() => ({
   prepareNodeRefCandidateFlight: vi.fn(),
@@ -69,12 +71,15 @@ const envState = vi.hoisted(() => ({
   },
 }));
 
-const mockOperatorGate = vi.hoisted(() => vi.fn());
-vi.mock("@/app/_lib/node-rbac", () => ({
-  resolveNodeAndAuthorize: mockOperatorGate,
+const mockResolveRequestPrincipal = vi.hoisted(() => vi.fn());
+const OPERATOR_NODE_ID = "44444444-4444-4444-8444-444444444444";
+const operatorState = vi.hoisted(() => ({
+  current: null as { id: string; slug: string; ownerUserId: string } | null,
+  decision: "authz_allowed" as
+    | "authz_allowed"
+    | "authz_denied"
+    | "authz_unavailable",
 }));
-
-const mockGetSessionUser = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({
   child: vi.fn().mockReturnThis(),
   debug: vi.fn(),
@@ -125,8 +130,9 @@ vi.mock("@/shared/env", () => ({
   serverEnv: () => envState.current,
 }));
 
-vi.mock("@/app/_lib/auth/session", () => ({
-  getSessionUser: () => mockGetSessionUser(),
+vi.mock("@/app/_lib/auth/request-identity", () => ({
+  RequestIdentityUnavailableError: class RequestIdentityUnavailableError extends Error {},
+  resolveRequestPrincipal: () => mockResolveRequestPrincipal(),
 }));
 
 vi.mock("@cogni/db-client", () => ({
@@ -141,12 +147,18 @@ const mockTx = {
   select: (selection?: unknown) => ({
     from: () => ({
       where: (condition: SQL) => {
-        if (!selection)
-          dbState.nodeQuery = new PgDialect().sqlToQuery(condition);
+        const query = selection
+          ? undefined
+          : new PgDialect().sqlToQuery(condition);
+        const isOperatorLookup = query?.params.includes("operator") ?? false;
+        if (query && !isOperatorLookup) dbState.nodeQuery = query;
         return {
           limit: () => {
             if (selection) {
               return billingState.current ? [billingState.current] : [];
+            }
+            if (isOperatorLookup) {
+              return operatorState.current ? [operatorState.current] : [];
             }
             return dbState.current ? [dbState.current] : [];
           },
@@ -224,29 +236,34 @@ function makePreparedNodeRef(
 describe("POST /api/v1/vcs/flight", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockOperatorGate.mockResolvedValue({
-      ok: true,
-      node: {
-        nodeId: "22222222-2222-4222-8222-222222222222",
-        slug: "operator",
-      },
-    });
+    operatorState.current = {
+      id: OPERATOR_NODE_ID,
+      slug: "operator",
+      ownerUserId: "00000000-0000-4000-a000-0000000000ff",
+    };
+    operatorState.decision = "authz_allowed";
     dbState.nodeQuery = undefined;
     authzState.decision = undefined;
-    authzState.check.mockImplementation(async () => {
-      if (authzState.decision === "authz_allowed") {
+    authzState.check.mockImplementation(
+      async (input: { readonly resource: string }) => {
+        const decision =
+          input.resource === `node:${OPERATOR_NODE_ID}`
+            ? operatorState.decision
+            : authzState.decision;
+        if (decision === "authz_allowed") {
+          return {
+            decision: "allow",
+            code: "authz_allowed",
+            checks: [],
+          };
+        }
         return {
-          decision: "allow",
-          code: "authz_allowed",
+          decision: "deny",
+          code: decision ?? "authz_denied",
           checks: [],
         };
       }
-      return {
-        decision: "deny",
-        code: authzState.decision ?? "authz_denied",
-        checks: [],
-      };
-    });
+    );
     dbState.current = {
       id: NODE_ID,
       slug: "creative",
@@ -260,7 +277,14 @@ describe("POST /api/v1/vcs/flight", () => {
       NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
       NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
     };
-    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:${NODE_ID}/${TEST_SESSION_USER_1.id}`,
+      userId: TEST_SESSION_USER_1.id,
+      walletAddress: TEST_SESSION_USER_1.walletAddress,
+      displayName: TEST_SESSION_USER_1.displayName,
+      avatarColor: TEST_SESSION_USER_1.avatarColor,
+    });
     mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
       makePreparedNodeRef()
     );
@@ -270,7 +294,7 @@ describe("POST /api/v1/vcs/flight", () => {
   });
 
   it("returns 401 when unauthenticated", async () => {
-    mockGetSessionUser.mockResolvedValue(null);
+    mockResolveRequestPrincipal.mockResolvedValue(null);
 
     await testApiHandler({
       appHandler,
@@ -400,11 +424,12 @@ describe("POST /api/v1/vcs/flight", () => {
           }),
         });
         expect(response.status).toBe(202);
-        expect(mockOperatorGate).toHaveBeenCalledWith({
-          id: "operator",
-          userId: TEST_SESSION_USER_1.id,
-          action: "node.flight",
-        });
+        expect(authzState.check).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: "node.flight",
+            resource: `node:${OPERATOR_NODE_ID}`,
+          })
+        );
         expect(
           mockDeployPlane.dispatchNodeRefCandidateFlight
         ).toHaveBeenCalledWith(
@@ -423,16 +448,10 @@ describe("POST /api/v1/vcs/flight", () => {
     403, 503, 404,
   ])("refuses independent workflow authority %s before GitHub preparation", async (status) => {
     authzState.decision = "authz_allowed";
-    mockOperatorGate.mockResolvedValue({
-      ok: false,
-      status,
-      errorCode:
-        status === 503
-          ? "authz_unavailable"
-          : status === 404
-            ? "node_not_found"
-            : "authz_denied",
-    });
+    if (status === 404) operatorState.current = null;
+    else
+      operatorState.decision =
+        status === 503 ? "authz_unavailable" : "authz_denied";
     await testApiHandler({
       appHandler,
       async test({ fetch }) {
@@ -471,7 +490,9 @@ describe("POST /api/v1/vcs/flight", () => {
           }),
         });
         expect(response.status).toBe(403);
-        expect(mockOperatorGate).not.toHaveBeenCalled();
+        expect(authzState.check).not.toHaveBeenCalledWith(
+          expect.objectContaining({ resource: `node:${OPERATOR_NODE_ID}` })
+        );
         expect(
           mockDeployPlane.prepareNodeRefCandidateFlight
         ).not.toHaveBeenCalled();
@@ -483,11 +504,8 @@ describe("POST /api/v1/vcs/flight", () => {
   });
 
   it("does not use target ownership as independent workflow authority", async () => {
-    mockOperatorGate.mockResolvedValue({
-      ok: false,
-      status: 503,
-      errorCode: "authz_unavailable",
-    });
+    // No authorization adapter: target ownership admits the target, but the
+    // operator workflow authority fails closed instead of inheriting it.
     await testApiHandler({
       appHandler,
       async test({ fetch }) {
@@ -532,6 +550,7 @@ describe("POST /api/v1/vcs/flight", () => {
   });
 
   it("rejects an independent override for an in-repo node", async () => {
+    authzState.decision = "authz_allowed";
     mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
       makePreparedNodeRef({
         slug: "operator",
@@ -624,7 +643,14 @@ describe("POST /api/v1/vcs/flight", () => {
       slug: "creative",
       ownerUserId: String(TEST_SESSION_USER_1.id),
     };
-    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_2);
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:${NODE_ID}/${TEST_SESSION_USER_2.id}`,
+      userId: TEST_SESSION_USER_2.id,
+      walletAddress: TEST_SESSION_USER_2.walletAddress,
+      displayName: TEST_SESSION_USER_2.displayName,
+      avatarColor: TEST_SESSION_USER_2.avatarColor,
+    });
     mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
       makePreparedNodeRef()
     );
@@ -644,7 +670,7 @@ describe("POST /api/v1/vcs/flight", () => {
         });
         expect(res.status).toBe(202);
         expect(authzState.check).toHaveBeenCalledWith({
-          actorId: `user:${TEST_SESSION_USER_2.id}`,
+          actorId: `user:${NODE_ID}/${TEST_SESSION_USER_2.id}`,
           action: "node.flight",
           resource: `node:${NODE_ID}`,
           context: {
@@ -659,6 +685,48 @@ describe("POST /api/v1/vcs/flight", () => {
     });
   });
 
+  it("authorizes a durable agent as its exact actor principal", async () => {
+    authzState.decision = "authz_allowed";
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "agent",
+      principalId: `agent:${NODE_ID}/${ACTOR_ID}`,
+      actorId: ACTOR_ID,
+      credentialId: CREDENTIAL_ID,
+      billingAccountId: "44444444-4444-4444-8444-444444444444",
+      displayName: "flock-leader",
+      legacyUserId: null,
+    });
+    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
+      makePreparedNodeRef()
+    );
+    mockDeployPlane.dispatchNodeRefCandidateFlight.mockResolvedValue(
+      makeDispatchResult()
+    );
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+          }),
+        });
+        expect(res.status).toBe(202);
+        expect(authzState.check).toHaveBeenCalledWith({
+          actorId: `agent:${NODE_ID}/${ACTOR_ID}`,
+          action: "node.flight",
+          resource: `node:${NODE_ID}`,
+          context: {
+            tenantId: "44444444-4444-4444-8444-444444444444",
+            nodeId: NODE_ID,
+          },
+        });
+      },
+    });
+  });
+
   it.each([
     NODE_ID,
     "creative",
@@ -669,7 +737,14 @@ describe("POST /api/v1/vcs/flight", () => {
       slug: "creative",
       ownerUserId: String(TEST_SESSION_USER_1.id),
     };
-    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_2);
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:${NODE_ID}/${TEST_SESSION_USER_2.id}`,
+      userId: TEST_SESSION_USER_2.id,
+      walletAddress: TEST_SESSION_USER_2.walletAddress,
+      displayName: TEST_SESSION_USER_2.displayName,
+      avatarColor: TEST_SESSION_USER_2.avatarColor,
+    });
 
     await testApiHandler({
       appHandler,
@@ -705,7 +780,14 @@ describe("POST /api/v1/vcs/flight", () => {
   it("rejects OpenFGA flight without creating billing state", async () => {
     authzState.decision = "authz_allowed";
     billingState.current = null;
-    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_2);
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:${NODE_ID}/${TEST_SESSION_USER_2.id}`,
+      userId: TEST_SESSION_USER_2.id,
+      walletAddress: TEST_SESSION_USER_2.walletAddress,
+      displayName: TEST_SESSION_USER_2.displayName,
+      avatarColor: TEST_SESSION_USER_2.avatarColor,
+    });
 
     await testApiHandler({
       appHandler,

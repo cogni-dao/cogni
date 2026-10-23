@@ -152,6 +152,10 @@ preliminary_stop_output="$(jq -cn --arg message "$PRELIMINARY_STOP_MESSAGE" \
 
 grep -Fq "if [[ \"\${CONDUCTOR_IS_LOCAL:-1}\" == \"1\" ]]; then" "$CONDUCTOR_SETUP" ||
   fail "Conductor setup does not guard user-hook installation to local workspaces"
+grep -Fq 'NODE_API_BASE="${COGNI_NODE_API_BASE:-$(resolve_node_api_base)}"' "$CONDUCTOR_SETUP" ||
+  fail "Conductor setup does not derive credential authority from the target node"
+grep -Fq "https://%s.cognidao.org/api/v1" "$CONDUCTOR_SETUP" ||
+  fail "Conductor setup does not route non-operator bootstrap to its node hub"
 installer_line="$(grep -nF 'bash scripts/agent/install-codex-cognition-hook.sh' "$CONDUCTOR_SETUP" | cut -d: -f1)"
 dependency_line="$(grep -nF 'pnpm install --offline --frozen-lockfile || pnpm install --frozen-lockfile' "$CONDUCTOR_SETUP" | cut -d: -f1)"
 [[ -n "$installer_line" && -n "$dependency_line" && "$installer_line" -lt "$dependency_line" ]] ||
@@ -224,6 +228,7 @@ large_output="$({
 
 LEGACY_HOME="$FIXTURE_ROOT/legacy-codex"
 LEGACY_HOOK="$LEGACY_HOME/hooks/cogni-session-cognition.sh"
+LEGACY_REFRESH="$LEGACY_HOME/hooks/cogni-refresh-agent-credential.sh"
 mkdir -p "$LEGACY_HOME"
 printf '%s\n' \
   'model = "gpt-5.5"' \
@@ -255,6 +260,10 @@ grep -Fq 'additionalContextLimit = 0' "$LEGACY_HOME/config.toml" ||
   fail "installer did not disable Codex spilling"
 grep -Fq 'cache_is_repo_tracked()' "$LEGACY_HOOK" ||
   fail "installed user hook omitted the tracked-cache guard"
+[[ -x "$LEGACY_REFRESH" ]] ||
+  fail "installer omitted the user-owned credential refresh helper"
+grep -Fq '"$CREDENTIAL_REFRESH" "$repo_root/.env.cogni" "$api_base"' "$LEGACY_HOOK" ||
+  fail "installed user hook does not refresh credentials before fetching"
 grep -Fq "if [[ -s \"\$CACHE_FILE\" ]] && ! cache_is_repo_tracked; then" "$LEGACY_HOOK" ||
   fail "installed user hook does not reject a tracked cache"
 bash -n "$LEGACY_HOOK"

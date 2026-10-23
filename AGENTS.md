@@ -66,10 +66,11 @@ the supported OpenCode 1.x runtime combines it through `opencode.json`. Never ma
 the cache merely to bootstrap; a required tool-read means the harness adapter failed.
 
 The shared session loader refreshes that cache from the current node's authenticated
-`/api/v1/cognition` endpoint; workspace setup warms it before the first agent starts. A
-failed refresh preserves the last good copy. On first setup, register through the public
-`/api/v1/agent/register` seam and save `COGNI_NODE_API_KEY` in the gitignored `.env.cogni`;
-operator CI/CD keys are not cognition credentials.
+`/api/v1/cognition` endpoint; workspace setup warms it before the first agent starts. A failed
+refresh preserves the last good copy. On first setup,
+redeem a human-issued one-use spawn grant through the public `/api/v1/agent/register` seam and
+save the target node's `COGNI_NODE_API_KEY` in the gitignored `.env.cogni`; operator CI/CD keys
+and operator-minted secret rings are not node identity credentials.
 
 Work against exactly one node + work item. The operator at https://cognidao.org coordinates
 code, CI, flight, validation, and merge. Subdirectory `AGENTS.md` files extend this floor;

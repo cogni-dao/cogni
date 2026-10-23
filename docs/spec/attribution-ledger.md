@@ -29,7 +29,7 @@ tags: [governance, transparency, payments, attribution]
 | **Spec**     | [billing-evolution](./billing-evolution.md)                                               | Existing billing/credit system                             |
 | **Spec**     | [architecture](./architecture.md)                                                         | System architecture                                        |
 | **Spec**     | [decentralized-identity](./decentralized-user-identity.md)                                | Identity bindings (user_bindings)                          |
-| **Spec**     | [identity-model](./identity-model.md)                                                     | All identity primitives (node_id, scope_id, user_id, etc.) |
+| **Standard** | [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload)                 | All identity primitives (node_id, scope_id, user_id, etc.) |
 
 ## Core Invariants
 
@@ -93,7 +93,7 @@ tags: [governance, transparency, payments, attribution]
 
 The attribution ledger uses two orthogonal scoping keys:
 
-- **`node_id`** (UUID) — Deployment identity. Identifies the running instance. One node = one database, one set of infrastructure, one `docker compose up`. Never overloaded for governance semantics. See [identity-model spec](./identity-model.md).
+- **`node_id`** (UUID) — Deployment identity. Identifies the running instance. One node = one database and one infrastructure identity. Never overloaded for governance semantics. See [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload).
 - **`scope_id`** (UUID) — Governance/statement domain. Identifies which **project** an epoch, its activity, and its statements belong to. Derived deterministically as `uuidv5(node_id, scope_key)` where `scope_key` is the human-readable slug (e.g., `'default'`). A project is a human-defined ownership boundary (e.g., "chat service", "shared infrastructure", "code review daemon") with its own DAO, weight policy, and payment rails.
 
 **Terminology:** "Project" is the human concept. `scope_id` is the canonical database key. `scope_id` is not necessarily a filesystem path — path-based routing is one resolver strategy, but scopes can also be assigned by repository, by label, or by explicit declaration.
@@ -290,13 +290,21 @@ Finalization is claimant-aware. Claimant ownership lives in the `epoch_receipt_c
 1. Load locked `epoch_receipt_claimants` for the epoch (one row per receipt, each with `claimantKeys[]`)
 2. Load selected receipts and compute per-receipt weights via `computeReceiptWeights(algoRef, receipts, weightConfig)`
 3. Join receipt weights × locked claimants via `explodeToClaimants()` — splits units equally among claimant keys per receipt (largest-remainder rounding), groups by claimant key across all receipts
-4. Persist canonical claimant-scoped unit rows in `epoch_final_claimant_allocations`
-5. Compute each claimant's share: `final_units / total_units`
-6. Distribute `pool_total_credits` proportionally using BIGINT arithmetic
-7. Apply largest-remainder rounding to ensure exact sum equals pool total
-8. Output statement lines shaped like `[{ claimant_key, claimant, final_units, pool_share, credit_amount, receipt_ids }]`
+4. Derive actor contribution allocations in memory for actor-owned receipts
+5. Persist canonical claimant-scoped unit rows in `epoch_final_claimant_allocations`
+6. Compute each claimant's share: `final_units / total_units`
+7. Distribute `pool_total_credits` proportionally using BIGINT arithmetic
+8. Apply largest-remainder rounding to ensure exact sum equals pool total
+9. Output statement lines shaped like `[{ claimant_key, claimant, final_units, pool_share, credit_amount, receipt_ids }]`
 
-The final allocation set hash (SHA-256 of canonical claimant allocation data, sorted by claimant key) pins the exact finalized input set. Combined with `pool_total_credits`, locked evaluations, locked claimant records, and `weight_config`, the statement is fully deterministic and reproducible.
+The final allocation set hash pins both canonical claimant allocations and the
+content-addressed actor allocation facts (AI earner, explicit beneficiary policy
+or unresolved state, receipt, and contribution cutoff). Epochs without actor
+allocations retain the legacy claimant-only hash. After signature verification,
+actor allocations, claimant allocations, statement, signature, and epoch status
+are persisted in one transaction. Combined with `pool_total_credits`, locked
+evaluations, locked claimant records, and `weight_config`, the statement is fully
+deterministic and reproducible.
 
 ### Pool Model
 
@@ -759,8 +767,8 @@ Input: `{ epochId, signature }` — `signerAddress` derived from SIWE session (n
 10. Persist `epoch_final_claimant_allocations` (canonical signed claimant units)
 11. Read pool components, compute `pool_total_credits = SUM(amount_credits)`
 12. `computeAttributionStatementLines(final_claimant_allocations, pool_total)` — BIGINT, largest-remainder
-13. Compute claimant-aware `final_allocation_set_hash`
-14. Atomic transaction: set `pool_total_credits` on epoch, update status to `'finalized'`, upsert final claimant allocations, insert epoch statement + statement signature
+13. Compute claimant-aware `final_allocation_set_hash`, including frozen actor allocation facts
+14. Atomic transaction: set `pool_total_credits` on epoch, update status to `'finalized'`, upsert final claimant and actor allocations, insert epoch statement + statement signature
 15. Return statement
 
 Deterministic workflow ID: `ledger-finalize-{scopeId}-{epochId}`
@@ -860,7 +868,7 @@ Enable transparent, verifiable credit distribution where contribution activity i
 
 ### Actor Migration Path (Planned)
 
-Finalized statements now preserve claimant identity explicitly (`claimant_key`, `claimant`) and treat `epoch_allocations.user_id` as the resolved-human override surface, not the only economic subject. `actor_id` is still the migration target: when the `actors` table ships ([proj.operator-plane](../../work/projects/proj.operator-plane.md) v1), claimant keys can resolve to actor-backed subjects without changing the deterministic statement model. For human actors (`kind=user`), `actor_id` bridges 1:1 to `user_id` via the actors table. For agent actors, `actor_id` enables new attribution paths (gateway usage → agent → rewards). Every economic event remains scoped by `(node_id, scope_id)` — `actor_id` is locally unique per node, not a global identity. No invariant changes — PAYOUT_DETERMINISTIC and ALL_MATH_BIGINT apply regardless of subject key. See [identity-model.md](./identity-model.md).
+Finalized statements now preserve claimant identity explicitly (`claimant_key`, `claimant`) and treat `epoch_allocations.user_id` as the legacy resolved-human compatibility projection, not an authorship override or the only economic subject. `actor_id` is the durable node-local attribution subject; claimant keys can resolve to actor-backed subjects without changing the deterministic statement model. For human actors (`kind=user`), `actor_id` bridges 1:1 to `user_id`; agent actors preserve AI authorship even when an explicit beneficiary receives value. Every economic event remains scoped by `(node_id, scope_id)`. No invariant changes — PAYOUT_DETERMINISTIC and ALL_MATH_BIGINT apply regardless of subject key. See the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard).
 
 ### AI Agent Developer Actors (V0 Addendum)
 
@@ -868,7 +876,9 @@ External AI agents can request developer flight control for a specific node
 before they are payout actors. The approval fact lives in RBAC, not in the
 attribution ledger:
 
-- Registration mints a `user_id` and bearer token for the AI agent.
+- Legacy v1 registration mints a compatibility `user_id` and bearer token. Durable
+  registration mints an `actor(kind=agent)` and replaceable credential; both remain
+  distinct from a human identity.
 - The node creator/admin approves or rejects the agent for one `node:{node_id}`
   through `POST /api/v1/nodes/{node_id}/developers`.
 - Approval writes the OpenFGA `developer` tuple. `can_flight` is computed by the authorization model.
@@ -876,9 +886,14 @@ attribution ledger:
 
 No attribution statement changes when an agent receives flight permission. If
 the agent later produces contribution activity, that activity enters the ledger
-like any other claimant: unresolved first, then resolved to a human `user_id` or
-future `actor_id` when bindings exist. Flight authority is operational control;
-credit attribution remains governed by `(node_id, scope_id)` epoch rules.
+under the external identity that authored it. Resolution may attach that claimant
+to the durable agent's `earned_by_actor_id`; it never rewrites AI authorship to a
+stewarding human. A separately frozen `beneficiary_actor_id` may designate that
+human only after the beneficiary, AI earner, and human steward each accept the
+policy directly; governance cannot substitute for a principal. The cumulative
+distribution later pins the beneficiary wallet. Flight
+authority is operational control; credit attribution remains governed by
+`(node_id, scope_id)` epoch rules.
 
 ## Non-Goals
 
@@ -905,5 +920,5 @@ Optional accrual at epoch sign (Dr Expense:ContributorRewards / Cr Liability:Unc
 - [billing-ingest](./billing-ingest.md) — Callback-driven billing pipeline
 - [architecture](./architecture.md) — System architecture
 - [decentralized-user-identity](./decentralized-user-identity.md) — User identity bindings (`user_id` is canonical)
-- [identity-model](./identity-model.md) — All identity primitives (`node_id`, `scope_id`, `user_id`, `actor_id`, `billing_account_id`, `dao_address`)
+- [Identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) — All identity primitives (`node_id`, `scope_id`, `user_id`, `actor_id`, `billing_account_id`, `dao_address`)
 - [ai-governance-data](./ai-governance-data.md) — Autonomous governance agents (separate concern)

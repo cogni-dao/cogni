@@ -3,66 +3,74 @@
 
 /**
  * Module: `@app/api/v1/agent/register`
- * Purpose: Machine-actor registration endpoint — mints a user row, a billing
- *   account, and a 30-day HMAC-signed API key for agents that can reach the
- *   node without a browser session.
+ * Purpose: Redeem a one-use spawn grant into one durable agent actor and its first credential.
  * Scope: Instrumented via wrapRouteHandlerWithLogging so every attempt hits
  *   the structured log envelope (request received / request complete) and
  *   the http_requests_total / http_request_duration_ms metrics like every
  *   other /api/v1/* route. auth.mode=none because the endpoint is the
  *   onboarding seam itself — callers can't present credentials they haven't
- *   been issued yet. Security hardening (invitation token) tracked in bug.0297.
- * Links: docs/spec/security-auth.md, bug.0297
+ *   been issued yet. The one-use, expiring spawn grant is the onboarding
+ *   authority; anonymous self-registration is not supported.
+ * Links: docs/spec/security-auth.md, https://cognidao.org/knowledge/human-ai-identity-standard
  * @public
  */
 
-import { randomUUID } from "node:crypto";
-import { users } from "@cogni/db-schema";
-import { registerAgentOperation } from "@cogni/node-contracts";
-import { NextResponse } from "next/server";
-import { issueAgentApiKey } from "@/app/_lib/auth/request-identity";
-import { getContainer, resolveServiceDb } from "@/bootstrap/container";
+import { registerAgentV2Operation } from "@cogni/node-contracts";
+import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import {
+  agentIdentityErrorResponse,
+  agentIdentityRateLimitResponse,
+  agentIdentityResponse,
+  requestJson,
+} from "../_shared";
 
 export const runtime = "nodejs";
 
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "agent.register", auth: { mode: "none" } },
-  async (_ctx, request) => {
-    const parsed = registerAgentOperation.input.safeParse(await request.json());
-    if (!parsed.success) {
-      return NextResponse.json({ error: "Invalid request" }, { status: 400 });
-    }
-    const input = parsed.data;
-
-    const db = resolveServiceDb();
-    const id = randomUUID();
-
-    await db.insert(users).values({
-      id,
-      name: input.name,
-      walletAddress: null,
-    });
-
-    const container = getContainer();
-    const billingAccount =
-      await container.serviceAccountService.getOrCreateBillingAccountForUser({
-        userId: id,
-        displayName: input.name,
-      });
-
-    const apiKey = issueAgentApiKey({
-      userId: id,
-      displayName: input.name,
-    });
-
-    return NextResponse.json(
-      registerAgentOperation.output.parse({
-        userId: id,
-        apiKey,
-        billingAccountId: billingAccount.id,
-      }),
-      { status: 201 }
+  async (ctx, request) => {
+    const startedAt = performance.now();
+    const rateLimited = agentIdentityRateLimitResponse(
+      ctx,
+      startedAt,
+      "register",
+      request
     );
+    if (rateLimited) return rateLimited;
+    const body = await requestJson(request);
+    const parsed = registerAgentV2Operation.input.safeParse(
+      body.ok ? body.value : undefined
+    );
+    if (!parsed.success) {
+      return agentIdentityResponse(
+        ctx,
+        startedAt,
+        "register",
+        { error: "Invalid request" },
+        { status: 400 }
+      );
+    }
+    try {
+      const result = await getContainer().agentIdentity.redeemSpawnGrant(
+        parsed.data.spawnToken
+      );
+      return agentIdentityResponse(
+        ctx,
+        startedAt,
+        "register",
+        registerAgentV2Operation.output.parse(result),
+        { status: 201 }
+      );
+    } catch (error) {
+      const response = agentIdentityErrorResponse(
+        ctx,
+        startedAt,
+        "register",
+        error
+      );
+      if (response) return response;
+      throw error;
+    }
   }
 );

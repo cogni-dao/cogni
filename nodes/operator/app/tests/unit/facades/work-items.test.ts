@@ -24,7 +24,12 @@ vi.mock("@/bootstrap/container", () => ({
   getContainer: vi.fn(),
 }));
 
-import { getWorkItem, listWorkItems } from "@/app/_facades/work/items.server";
+import {
+  createWorkItemAsPrincipal,
+  getWorkItem,
+  listWorkItems,
+  patchWorkItemAsPrincipal,
+} from "@/app/_facades/work/items.server";
 import { getContainer } from "@/bootstrap/container";
 
 const mockGetContainer = vi.mocked(getContainer);
@@ -256,5 +261,48 @@ describe("app/_facades/work/items.server", () => {
 
       expect(mockPort.get).toHaveBeenCalledWith(toWorkItemId("task.0001"));
     });
+  });
+
+  it("patches with the exact durable principal instead of a user projection", async () => {
+    const principalId = "agent:operator/00000000-0000-4000-8000-000000005264";
+    mockDoltgres.patch.mockResolvedValue({
+      ...SAMPLE_WORK_ITEM,
+      title: "Patched by agent",
+    });
+
+    await patchWorkItemAsPrincipal(
+      { id: "task.0001", set: { title: "Patched by agent" } },
+      principalId
+    );
+
+    expect(mockDoltgres.patch).toHaveBeenCalledWith(
+      {
+        id: toWorkItemId("task.0001"),
+        set: { title: "Patched by agent" },
+      },
+      principalId
+    );
+  });
+
+  it("creates ordinary work with the exact durable principal", async () => {
+    const principalId = "agent:operator/00000000-0000-4000-8000-000000005264";
+    mockDoltgres.create.mockResolvedValue({
+      ...SAMPLE_WORK_ITEM,
+      priority: 2,
+    });
+
+    await createWorkItemAsPrincipal(
+      { type: "task", title: "Created by agent", priority: 2 },
+      principalId
+    );
+
+    expect(mockDoltgres.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "task",
+        title: "Created by agent",
+        priority: 2,
+      }),
+      principalId
+    );
   });
 });

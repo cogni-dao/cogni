@@ -14,6 +14,7 @@
  * @public
  */
 
+import type { FrozenActorContributionAllocation } from "./actor-contribution-allocation";
 import { type AttributionClaimant, claimantKey } from "./claimant-shares";
 
 /**
@@ -156,4 +157,46 @@ export async function computeFinalClaimantAllocationSetHash(
     })
     .join("\n");
   return sha256Hex(canonical);
+}
+
+/**
+ * Compute the commitment signed when an epoch contains actor-owned receipts.
+ *
+ * Actor allocation refs are content-addressed, but the signed payload commits
+ * the immutable facts explicitly so an auditor does not have to trust an
+ * indirect lookup. Epochs without actor allocations retain the legacy hash.
+ */
+export async function computeSignedAllocationSetHash(
+  claimantAllocations: ReadonlyArray<{
+    readonly claimant: AttributionClaimant;
+    readonly finalUnits: bigint;
+  }>,
+  actorAllocations: readonly FrozenActorContributionAllocation[]
+): Promise<string> {
+  const claimantAllocationSetHash =
+    await computeFinalClaimantAllocationSetHash(claimantAllocations);
+  if (actorAllocations.length === 0) return claimantAllocationSetHash;
+
+  const actorAllocationFacts = [...actorAllocations]
+    .sort((a, b) => a.allocationRef.localeCompare(b.allocationRef))
+    .map((allocation) => ({
+      allocationRef: allocation.allocationRef,
+      contractVersion: allocation.contractVersion,
+      nodeId: allocation.nodeId,
+      scopeId: allocation.scopeId,
+      epochId: allocation.epochId,
+      receiptId: allocation.receiptId,
+      earnedByActorId: allocation.earnedByActorId,
+      beneficiaryActorId: allocation.beneficiaryActorId,
+      beneficiaryPolicyId: allocation.beneficiaryPolicyId,
+      beneficiaryPolicyVersion: allocation.beneficiaryPolicyVersion,
+      contributionCutoff: allocation.contributionCutoff,
+      sourceEvidenceHash: allocation.sourceEvidenceHash,
+    }));
+
+  return sha256OfCanonicalJson({
+    contractVersion: "attribution.signed-allocation-set.v1",
+    claimantAllocationSetHash,
+    actorAllocationFacts,
+  });
 }

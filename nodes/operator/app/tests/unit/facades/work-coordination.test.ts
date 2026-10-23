@@ -29,8 +29,10 @@ vi.mock("@/app/_facades/work/items.server", () => ({
 
 import {
   CoordinationWorkItemNotFoundError,
+  claimWorkItemAsPrincipal,
   claimWorkItemSession,
   getWorkItemCoordination,
+  heartbeatWorkItemAsPrincipal,
   heartbeatWorkItemSession,
   linkWorkItemSessionPr,
   WorkItemSessionForbiddenError,
@@ -68,6 +70,7 @@ function session(overrides: Partial<WorkItemSessionRecord> = {}) {
     id: "00000000-0000-4000-8000-000000005007",
     workItemId: "task.5007",
     claimedByUserId: "user-1",
+    claimedByPrincipalId: null,
     claimedByDisplayName: "agent-one",
     status: "active",
     claimedAt: new Date("2026-05-02T11:55:00.000Z"),
@@ -102,6 +105,92 @@ describe("app/_facades/work/coordination.server", () => {
     } as never);
     vi.mocked(getWorkItem).mockResolvedValue(WORK_ITEM);
     vi.mocked(patchWorkItem).mockResolvedValue(WORK_ITEM);
+  });
+
+  it("claims and heartbeats using the exact durable agent principal", async () => {
+    const principal = {
+      kind: "agent" as const,
+      principalId:
+        "agent:operator/00000000-0000-4000-8000-000000005264" as const,
+      actorId: "00000000-0000-4000-8000-000000005264",
+      credentialId: "00000000-0000-4000-8000-000000005265",
+      billingAccountId: "00000000-0000-4000-8000-000000005263",
+      legacyUserId: null,
+      displayName: "fresh-v2",
+    };
+    const agentSession = session({
+      claimedByUserId: null,
+      claimedByPrincipalId: principal.principalId,
+      claimedByDisplayName: principal.displayName,
+    });
+    vi.mocked(port.claim).mockResolvedValue({
+      kind: "claimed",
+      session: agentSession,
+    });
+
+    const claimed = await claimWorkItemAsPrincipal({
+      workItemId: "task.5007",
+      body: { lastCommand: "/implement" },
+      principal,
+      statusUrl: "/status",
+      now: NOW,
+    });
+
+    expect(port.claim).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workItemId: "task.5007",
+        claimedByPrincipalId: principal.principalId,
+        claimedByDisplayName: principal.displayName,
+        lastCommand: "/implement",
+      })
+    );
+    expect(vi.mocked(port.claim).mock.calls[0]?.[0]).not.toHaveProperty(
+      "claimedByUserId"
+    );
+    expect(claimed.session.claimedByPrincipalId).toBe(principal.principalId);
+    expect(claimed.session.claimedByUserId).toBe(principal.principalId);
+
+    vi.mocked(port.heartbeat).mockResolvedValue(agentSession);
+    await heartbeatWorkItemAsPrincipal({
+      workItemId: "task.5007",
+      body: { lastCommand: "/review-implementation" },
+      principal,
+      statusUrl: "/status",
+      now: NOW,
+    });
+
+    expect(port.heartbeat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workItemId: "task.5007",
+        claimedByPrincipalId: principal.principalId,
+        lastCommand: "/review-implementation",
+      })
+    );
+  });
+
+  it("raises a conflict when another claimant holds the item", async () => {
+    vi.mocked(port.claim).mockResolvedValue({
+      kind: "conflict",
+      session: session(),
+    });
+
+    await expect(
+      claimWorkItemAsPrincipal({
+        workItemId: "task.5007",
+        body: {},
+        principal: {
+          kind: "agent",
+          principalId: "agent:operator/00000000-0000-4000-8000-000000005264",
+          actorId: "00000000-0000-4000-8000-000000005264",
+          credentialId: "00000000-0000-4000-8000-000000005265",
+          billingAccountId: "00000000-0000-4000-8000-000000005263",
+          legacyUserId: null,
+          displayName: "fresh-v2",
+        },
+        statusUrl: "/status",
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ name: "WorkItemSessionConflictError" });
   });
 
   it("claims a session for the authenticated user", async () => {

@@ -10,7 +10,7 @@
  * - RESOLVER_CONTRIBUTOR_WALLET: it resolves to the contributor's OWN wallet, never an operator/treasury wallet (no-central-custody).
  * - RESOLVER_NULL_IS_UNRESOLVED: null wallet ⇒ the claimant surfaces as the `claimants_unresolved` settlement blocker.
  * Side-effects: none (port + types only)
- * Links: docs/spec/identity-model.md, docs/spec/decentralized-user-identity.md, docs/spec/tokenomics.md
+ * Links: https://cognidao.org/knowledge/human-ai-identity-standard, docs/spec/decentralized-user-identity.md, docs/spec/tokenomics.md
  * @public
  */
 

@@ -70,6 +70,37 @@ export class AllocationNotFoundError extends Error {
   }
 }
 
+const ACTOR_BENEFICIARY_POLICY_REJECTION_REASONS = [
+  "evidence_required",
+  "actor_ineligible",
+  "steward_mismatch",
+  "proposer_forbidden",
+  "proposal_not_found",
+  "proposal_not_pending",
+  "acceptor_forbidden",
+  "idempotency_conflict",
+  "effective_time_invalid",
+  "authority_changed",
+  "frozen_cutoff_conflict",
+  "revoker_forbidden",
+] as const;
+
+export type ActorBeneficiaryPolicyRejectionReason =
+  (typeof ACTOR_BENEFICIARY_POLICY_REJECTION_REASONS)[number];
+
+/** Expected beneficiary-ceremony rejection, safe to map to an HTTP conflict. */
+export class ActorBeneficiaryPolicyRejectedError extends Error {
+  public readonly code = "ACTOR_BENEFICIARY_POLICY_REJECTED" as const;
+
+  constructor(
+    public readonly reason: ActorBeneficiaryPolicyRejectionReason,
+    message: string
+  ) {
+    super(message);
+    this.name = "ActorBeneficiaryPolicyRejectedError";
+  }
+}
+
 // Type guards
 
 export function isEpochNotOpenError(
@@ -106,4 +137,21 @@ export function isAllocationNotFoundError(
   error: unknown
 ): error is AllocationNotFoundError {
   return error instanceof Error && error.name === "AllocationNotFoundError";
+}
+
+export function isActorBeneficiaryPolicyRejectedError(
+  error: unknown
+): error is ActorBeneficiaryPolicyRejectedError {
+  const reason =
+    error instanceof Error && "reason" in error ? error.reason : undefined;
+  return (
+    error instanceof Error &&
+    error.name === "ActorBeneficiaryPolicyRejectedError" &&
+    "code" in error &&
+    error.code === "ACTOR_BENEFICIARY_POLICY_REJECTED" &&
+    typeof reason === "string" &&
+    (ACTOR_BENEFICIARY_POLICY_REJECTION_REASONS as readonly string[]).includes(
+      reason
+    )
+  );
 }

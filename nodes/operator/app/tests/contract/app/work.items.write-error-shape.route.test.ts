@@ -34,6 +34,9 @@ import * as createHandler from "@/app/api/v1/work/items/route";
 const { contributionWrite } = vi.hoisted(() => ({
   contributionWrite: vi.fn(),
 }));
+const { resolveRequestPrincipal } = vi.hoisted(() => ({
+  resolveRequestPrincipal: vi.fn(),
+}));
 
 // Hoisted so the vi.mock factory (which runs before module init) can close over them.
 const { patchMock, createMock, deleteMock, logWarn, logError } = vi.hoisted(
@@ -84,6 +87,11 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn().mockResolvedValue(TEST_SESSION_USER_1),
 }));
 
+vi.mock("@/app/_lib/auth/request-identity", () => ({
+  RequestIdentityUnavailableError: class RequestIdentityUnavailableError extends Error {},
+  resolveRequestPrincipal,
+}));
+
 /** Reproduce an adapter throw by its stable `name` (the facade detects by name). */
 function storeError(name: string, message: string): Error {
   const e = new Error(message);
@@ -101,6 +109,14 @@ describe("work-item write error shape (bug.5408)", () => {
     logWarn.mockReset();
     logError.mockReset();
     vi.mocked(session.getSessionUser).mockResolvedValue(TEST_SESSION_USER_1);
+    resolveRequestPrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:operator/${TEST_SESSION_USER_1.id}`,
+      userId: TEST_SESSION_USER_1.id,
+      walletAddress: TEST_SESSION_USER_1.walletAddress,
+      displayName: TEST_SESSION_USER_1.displayName,
+      avatarColor: TEST_SESSION_USER_1.avatarColor,
+    });
   });
 
   it("maps an author-scoped refusal to 403 authz_denied, not 500", async () => {
