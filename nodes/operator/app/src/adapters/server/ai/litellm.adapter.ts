@@ -7,7 +7,7 @@
  * Scope: Implements LlmService port (completion + stream), extracts cost from headers, validates secrets at adapter boundary. Does not handle auth or rate-limiting.
  * Invariants:
  *   - Never logs prompts/keys/chunks; error response excerpts are redacted + bounded (<=2KB)
- *   - 30s timeout (completion), 15s connect timeout (stream)
+ *   - 30s timeout (completion), 60s connect/TTFB timeout (stream; total stream duration unbounded)
  *   - Settles once; model required
  *   - Stream abort rejects with LlmError(kind='aborted')
  *   - USAGE_UNIT_IS_LITELLM_CALL_ID: litellmCallId sourced ONLY from x-litellm-call-id response header (no response body fallback)
@@ -52,6 +52,9 @@ const logger = makeLogger({ component: "LiteLlmAdapter" });
 
 /** Max chars of provider response body to include in operator logs. */
 const MAX_ERROR_BODY_LOG_CHARS = 2048;
+
+/** Stream connect/TTFB timeout: reasoning models can exceed 15s TTFB on long agent contexts; total stream duration stays unbounded as before. */
+const LITELLM_STREAM_TTFB_TIMEOUT_MS = 60_000;
 
 /**
  * Safely read and redact error response body for operator diagnostics.
@@ -236,7 +239,10 @@ export class LiteLlmAdapter implements LlmService {
     let response: Response;
     // Use short timeout for connection/TTFB only (not entire stream duration)
     const connectCtl = new AbortController();
-    const connectTimer = setTimeout(() => connectCtl.abort(), 15000);
+    const connectTimer = setTimeout(
+      () => connectCtl.abort(),
+      LITELLM_STREAM_TTFB_TIMEOUT_MS
+    );
     const env = serverEnv();
     // Validate runtime secrets at adapter boundary
     assertRuntimeSecrets(env);
