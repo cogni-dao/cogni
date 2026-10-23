@@ -80,6 +80,7 @@ PARALLEL=(
   operator-rollout-strategy.test.sh
   scheduler-runtime-routing.test.sh
   session-cognition-hook.test.sh
+  work-item-context.test.sh
   no-automatic-fork-source-sync.test.sh
   lane-db-residency.test.sh
   lane-db-resolver.test.sh

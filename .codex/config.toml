@@ -23,3 +23,14 @@ statusMessage = "Loading Cogni cognition substrate"
 # Codex and structured hookSpecificOutput.additionalContext under Claude Code;
 # both are uncapped, so the whole bundle auto-surfaces at any size (no ceiling).
 additionalContextLimit = 0
+
+# Recover this native session's disposable work-item context. Offline only;
+# cached progress must be refreshed through the explicit API client before action.
+[[hooks.SessionStart]]
+matcher = "startup|resume|clear|compact"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = 'node "$(git rev-parse --show-toplevel)/scripts/agent/work-item-context.mjs" session-start'
+statusMessage = "Recovering Cogni workflow context"
+additionalContextLimit = 0

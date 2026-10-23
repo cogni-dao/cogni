@@ -17,6 +17,12 @@ Read these before starting:
 
 ## Phase 1 — Confirm Clean State
 
+Follow the work-item context client instructions in
+[contribute-to-cogni](../skills/contribute-to-cogni/SKILL.md). Claim through
+`work-item-context.mjs claim` so the successful API result carries current
+guidance; inspect it before dependent work. Use explicit node/source origins
+and their separate saved credentials. An unsuccessful claim never binds a session.
+
 Before writing any code, verify:
 
 - your work item is at `needs_implement` (`GET /api/v1/work/items/{id}`), and you hold its claim
@@ -130,7 +136,7 @@ Then:
    **Blast radius:** <who or what breaks if it is wrong>
    ```
 
-4. Link a new PR (`POST /api/v1/work/items/{id}/pr`) and `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"needs_merge"}}`.
+4. Link a new PR through `work-item-context.mjs link-pr`, then use its `update` operation to set `{"set":{"status":"needs_merge"}}` (with `expectedRevision` where advertised). The client selects the node's advertised PR-link contract and returns refreshed guidance after each successful write. Read both results; a failed refresh never justifies repeating a committed write.
 5. Next: `/review-implementation`, run by a fresh agent **now, while CI runs**. Do not wait for CI.
 
 ---

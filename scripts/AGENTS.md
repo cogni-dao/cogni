@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
+- **Last reviewed:** 2026-10-23
 
 ## Purpose
 
@@ -82,6 +83,7 @@ pnpm check:agentsmd             # Validate all AGENTS.md files
 ## Notes
 
 - Scripts must be idempotent and safe to re-run
+- `agent/work-item-context.mjs` is the external-agent `claim`/`update`/`link-pr`/read-only `next` client and offline Codex `session-start` projection. It requires the explicit node origin (`--node-url` or `COGNI_NODE_URL`) and node-local `COGNI_NODE_API_KEY` (`--env-file` selects a separate credential compartment). Cross-hub guidance requires explicit `--guide-origin` and `--guide-env-file`; no operator-key fallback. Disposable per-native-session bindings live under gitignored `.cogni/.work-item-context/`. Reads never replay mutations or certify lifecycle advancement.
 - AGENTS.md validator enforces hexagonal import standards for AGENTS.md
 - `conductor-worktree-setup.sh` is the Conductor setup entrypoint. It ensures the primary checkout has `COGNI_NODE_API_KEY`, then symlinks `.env.cogni` and `.local-auth` from the primary checkout so secrets and captured auth do not drift across worktrees. Dependency setup prefers the local pnpm store, fetches newly pinned packages when absent, and retries one transient install failure.
 - `run-scoped-package-build.mjs` scopes local package declaration refreshes against `origin/main` by default, falls back to all declaration refs when global build inputs change, and emits a warning so developers notice the scope expansion. JavaScript package artifacts belong to explicit `pnpm packages:build`, not `check:fast`.

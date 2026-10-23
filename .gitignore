@@ -125,3 +125,4 @@ task5002-import-mapping-*.json
 
 # Session cognition cache (local-first present; refreshed in background)
 .cogni/.cognition-cache.md
+.cogni/.work-item-context/

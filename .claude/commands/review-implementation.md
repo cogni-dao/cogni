@@ -10,6 +10,12 @@ Your job is to find bugs, spec gaps and standards violations before production. 
 
 ## Phase 1 — Pin the inputs
 
+Before the review's dependent actions, run read-only `work-item-context.mjs next`
+with the explicit node/item and owning guidance source, following
+[contribute-to-cogni](../skills/contribute-to-cogni/SKILL.md). Read the returned
+guidance and this full command. Refresh again after CI or flight watchers finish;
+`needs_merge` alone cannot identify the next substage.
+
 1. Read the work item (`GET /api/v1/work/items/{id}`): its `outcome` is the **spec**. Read the hub design entries it cites in full: the **design**. If no work item or outcome exists, report `MISSING INPUT: no spec` and review Standards only.
 2. Pin explicit SHAs: `BASE=$(git merge-base origin/main HEAD)`, `HEAD_SHA=$(git rev-parse HEAD)`. Use `git diff $BASE...$HEAD_SHA` and `git log --oneline $BASE..$HEAD_SHA`. Fail here on an empty diff.
 3. Collect the **standards**: [style.md](docs/spec/style.md), [architecture.md](docs/spec/architecture.md), every AGENTS.md in the changed paths' trees, and the specs in `spec_refs`.
@@ -63,6 +69,13 @@ Post the verdict as a PR comment.
 **APPROVE:** once required CI is also green at `HEAD_SHA`, flight that SHA (`POST /api/v1/vcs/flight`) and run `/validate-candidate`; its PR scorecard comment is the validation signal. When it passes, including an instruction-only flight n/a, `PATCH` the item `{"set":{"status":"needs_closeout"}}` and run `/closeout`, which merges and closes.
 
 **REQUEST CHANGES:** `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"needs_implement"}}`. The implementer fixes every blocking issue and applies simplifying suggestions on the same branch. Filing a follow-up bug is not fixing, unless the issue is genuinely out of the outcome's scope; then say why in the PR. Re-review runs at the new head SHA. After five REQUEST CHANGES rounds on one PR, set `{"set":{"status":"blocked","blockedBy":"review loop limit"}}` and escalate to a human. Never flight a SHA that has an open REQUEST CHANGES.
+
+Perform these prescribed lifecycle writes through `work-item-context.mjs update`
+and inspect the returned guidance. Before invoking candidate validation, the
+outer caller runs `next --guide validate-candidate`; run the validator only after
+its flight prerequisites. The validator itself writes no cache/work-item state.
+Only its outer caller refreshes and updates `needs_closeout` after the passing
+same-head scorecard. Missing mandatory proof remains unproven.
 
 ---
 

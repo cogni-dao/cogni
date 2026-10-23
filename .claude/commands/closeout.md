@@ -8,6 +8,10 @@ Read the work item (`GET /api/v1/work/items/{id}`), its PR, and [cicd-e2e-requir
 
 ## Phase 1 — Verify every gate at one SHA
 
+Enter through read-only `work-item-context.mjs next`, using the explicit node/item
+and owning guidance source per [contribute-to-cogni](../skills/contribute-to-cogni/SKILL.md).
+Read this full command and fresh evidence; cached status never authorizes merge.
+
 Let `HEAD_SHA` be the PR head (`gh pr view <PR> --json headRefOid`). All three must hold for that exact SHA:
 
 1. **CI**: every required check passes (`gh api repos/{owner}/{repo}/commits/$HEAD_SHA/check-runs`).
@@ -22,8 +26,13 @@ If any gate fails or names an older SHA, stop: set the item back to `needs_merge
 
 1. Merge through the operator: `POST /api/v1/vcs/merge` with `{nodeId, prNumber}`. Never use `gh pr merge`.
 2. Watch until the PR is `MERGED`; a queued merge is not done.
-3. `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"done"}}`.
+3. Use `work-item-context.mjs update` to `PATCH /api/v1/work/items/{id}` with `{"set":{"status":"done"}}` (include `expectedRevision` where advertised). Inspect its original result and refreshed guidance. On an unknown merge/update outcome, read back before considering another write.
 4. Preview follows `main`: confirm preview `/version.buildSha` reaches the merge SHA. Production promotion of a user-facing change waits for a human to look at it.
+
+Run read-only `next` after the merge/preview watcher and before any authorized
+production promotion. Use the existing operator API and bounded deploy watch-gate;
+refresh again after it finishes. Work-item `done` does not replace live behavior
+proof required by the approved Goal/Done when.
 
 ---
 
