@@ -14,7 +14,9 @@
 #      red. Without this, the gate could be a no-op.
 #   5. Fail-closed: a node-template overlay missing the node-at-root migrate command
 #      aborts the render instead of emitting a silently-crash-looping overlay.
-#   6. Declarative decommission (story.5020 W3): a renderer-owned overlay dir whose
+#   6. Rendered Postgres migrators use only their own <slug>-migration-secrets;
+#      runtime containers never consume migration credentials (bug.5524).
+#   7. Declarative decommission (story.5020 W3): a renderer-owned overlay dir whose
 #      catalog row has left turns --check red, and --write prunes it — while the
 #      hand-authored (operator/node-template/scheduler-worker) overlays are never
 #      touched. Without this, a decommissioned node leaks orphan overlay config.
@@ -92,6 +94,27 @@ stash() {
   cp "$path" "$bak"
   BACKUPS+=("$path::$bak")
 }
+
+echo "[migration isolation] actual Kustomize consumers across templates and generated children"
+command -v kubectl >/dev/null || fail "kubectl is required for local Kustomize rendering"
+for env in $ALL_ENVS; do
+  for overlay in "infra/k8s/overlays/$env"/*/; do
+    node="$(basename "$overlay")"
+    if [ "$node" != node-template ]; then
+      [ -f "infra/catalog/$node.yaml" ] || continue
+      [ -n "$(yq -r '.source_repo // ""' "infra/catalog/$node.yaml")" ] || continue
+    fi
+    rendered="$(kubectl kustomize "$overlay")"
+    actual="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "migrate") | .env[] | select(.name == "DATABASE_URL") | .valueFrom.secretKeyRef | .name + ":" + .key' <<<"$rendered")"
+    [ "$actual" = "$node-migration-secrets:DATABASE_MIGRATION_URL" ] \
+      || fail "$env/$node migrator consumes $actual; expected $node-migration-secrets:DATABASE_MIGRATION_URL"
+    runtime="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | [.envFrom[]?.secretRef.name, .env[]?.valueFrom.secretKeyRef.name, .env[]?.valueFrom.secretKeyRef.key] | .[]' <<<"$rendered")"
+    if grep -Eq '(^|-)migration-secrets$|^DATABASE_MIGRATION_URL$' <<<"$runtime"; then
+      fail "$env/$node runtime consumes an isolated migration credential"
+    fi
+    pass "$env/$node migrator identity and runtime separation"
+  done
+done
 
 echo "[1/8] committed wizard overlays ↔ node-template + catalog drift gate"
 bash "$RENDER" --check >/dev/null \
