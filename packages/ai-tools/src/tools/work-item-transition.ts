@@ -15,6 +15,9 @@
  *   - PATCH_CAS_OPTIONAL: patch `expectedRevision` is compare-and-set; absent ⇒ unconditioned patch (unchanged)
  *   - CONFLICT_IS_A_RESULT: a lost compare-and-set returns `{success:false, code:"revision_conflict",
  *     currentRevision}` instead of throwing, so a graph can skip the row and retry next cycle
+ *   - SCORES_PASS_THROUGH: patch `scores` (story.5111) is shape-checked only and forwarded unchanged; every bound
+ *     (axis ids, 0–5, SCORE_NEEDS_EVIDENCE, evidence host allow-list, 1 KB) is the store adapter's
+ *     `parseWorkItemScores`. Its rejection propagates, so the agent gets a tool error naming each failed axis.
  * Side-effects: IO (mutates work items via capability)
  * Links: docs/spec/development-lifecycle.md, docs/spec/tool-use.md
  * @public
@@ -25,6 +28,7 @@ import { z } from "zod";
 import {
   type WorkItemCapability,
   WorkItemPatchConflictError,
+  type WorkItemPatchScores,
 } from "../capabilities/work-item";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 
@@ -88,6 +92,23 @@ export const WorkItemTransitionInputSchema = z.object({
     .string()
     .optional()
     .describe("Summary to set (used for patch action)"),
+  scores: z
+    .record(
+      z.string(),
+      z.object({
+        v: z.number().int().describe("Score 0-5; 0 = unknown"),
+        ev: z
+          .string()
+          .optional()
+          .describe("https evidence link; required when v >= 4"),
+      })
+    )
+    .nullable()
+    .optional()
+    .describe(
+      "Patch only: do-it-now scores, axis id → { v, ev }. Replaces the whole object; null clears it. " +
+        "Axes: goal, time, unblocks, ease, confidence, agent."
+    ),
   expectedRevision: z
     .number()
     .int()
@@ -139,7 +160,7 @@ export const workItemTransitionContract: ToolContract<
   description:
     "Modify a work item. Actions: " +
     "'transition' (requires id + toStatus, optional reason) changes the item's lifecycle status, " +
-    "'patch' (requires id, optional priority/rank/labels/summary, optional expectedRevision for compare-and-set) updates metadata fields. " +
+    "'patch' (requires id, optional priority/rank/labels/summary/scores, optional expectedRevision for compare-and-set) updates metadata fields. " +
     "Use core__work_item_query first to find items and check their current status.",
   effect: "state_change",
   requires: "node.collaborate",
@@ -208,15 +229,17 @@ export function createWorkItemTransitionImplementation(
             rank?: number;
             labels?: string[];
             summary?: string;
+            scores?: WorkItemPatchScores | null;
           } = {};
           if (input.priority !== undefined) setFields.priority = input.priority;
           if (input.rank !== undefined) setFields.rank = input.rank;
           if (input.labels !== undefined) setFields.labels = input.labels;
           if (input.summary !== undefined) setFields.summary = input.summary;
+          if (input.scores !== undefined) setFields.scores = input.scores;
 
           if (Object.keys(setFields).length === 0) {
             throw new Error(
-              "At least one field (priority, rank, labels, or summary) is required for action 'patch'"
+              "At least one field (priority, rank, labels, summary, or scores) is required for action 'patch'"
             );
           }
 

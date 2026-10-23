@@ -120,6 +120,7 @@
     "packages:build:clean": "rm -rf packages/*/dist packages/*/*.tsbuildinfo nodes/operator/packages/*/dist nodes/operator/packages/*/*.tsbuildinfo nodes/operator/graphs/dist && pnpm packages:build",
     "packages:validate": "tsx --tsconfig tsconfig.scripts.json scripts/validate-package-declarations.ts",
     "eval:guidance-routing": "tsx packages/knowledge-store/evals/guidance-routing/run.ts",
+    "eval:prioritizer-scores": "tsx packages/langgraph-graphs/evals/work-prioritizer/run.ts",
     "packages:clean": "rm -rf packages/*/dist packages/*/*.tsbuildinfo",
     "prebuild": "pnpm validate:chain",
     "build": "COGNI_REPO_PATH=$(pwd) dotenv -e .env.local -- pnpm --filter operator build",

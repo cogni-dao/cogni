@@ -1,0 +1,9 @@
+{
+  "$comment": "Scores eval bars from the story.5111 design (step 6a): a run passes when at least minCellShare of the 30 cells (5 items x 6 axes) are within +/-tolerance of gold AND (requireTop1) the top-1 item by rankScore matches gold. The verdict passes only when every run passes. gating=false: the verdict is printed and the exit code is 0 for PASS or FAIL (only bad arguments = 2 and failed reads = 3 are nonzero), because no CI lane runs this eval yet. Change with a reasoned commit (GOLDEN_UPDATE_DISCIPLINE).",
+  "tolerance": 1,
+  "minCellShare": 0.8,
+  "requireTop1": true,
+  "gating": false,
+  "summaryChars": 600,
+  "outcomeChars": 600
+}

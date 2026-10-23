@@ -1,0 +1,11 @@
+{
+  "$comment": "Hand-scored gold for the mission-loop scores eval (story.5111 step 6a). Scores are [goal, time, unblocks, ease, confidence, agent] per hub work-item-scores-design, hand-scored by the goals architect on 2026-10-23 against the items as they stood that day (hub work-item-scores-visual). By rankScore, story.5107 is top-1 (15.0). No work-item text is committed: run.ts fetches it at run time. When an item's state moves far enough that the hand score no longer holds (for example it closes), re-score or replace it in a reasoned commit; never edit a cell to make a run pass (GOLDEN_UPDATE_DISCIPLINE, docs/spec/ai-evals.md). Prefer an independent (human) re-score.",
+  "scoredAt": "2026-10-23",
+  "items": [
+    { "id": "story.5107", "scores": [5, 5, 5, 5, 5, 1] },
+    { "id": "story.5108", "scores": [5, 2, 5, 3, 4, 4] },
+    { "id": "story.5068", "scores": [4, 3, 3, 3, 4, 4] },
+    { "id": "bug.5287", "scores": [5, 3, 4, 2, 4, 3] },
+    { "id": "story.5095", "scores": [5, 3, 4, 2, 3, 2] }
+  ]
+}
