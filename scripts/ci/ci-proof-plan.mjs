@@ -17,24 +17,10 @@ import { fileURLToPath } from "node:url";
 
 const env = process.env;
 const policyPath = "scripts/ci/ci-proof-plan.mjs";
-const configPath = "scripts/vitest/vitest.native.config.mts";
-// This input audit is valid for these exact native sources/configuration. A
-// later native addition or setup import cannot silently inherit app exemptions:
-// review its inputs and refresh these fingerprints, or continue full proof.
-const auditedNativeTree = "d6c9af660da2252c008e4c1622ea665139033362";
-const auditedNativeConfig = "477e50e5d934b2fc555e847dda909a645bc405e6";
-// Audit: native files import stdlib/testcontainers/dockerode/yaml/Vitest only;
-// committed reads are infra/compose/** and scripts/ci/deploy-infra.sh. The
-// standalone native config imports no app setup/instrumentation. All dependency,
-// native-source, config, workflow and unknown paths therefore remain full proof.
-const safePrefixes = [
-  "docs/",
-  "work/",
-  ".claude/skills/",
-  ".agents/skills/",
-  "nodes/operator/app/src/",
-  "nodes/operator/app/tests/",
-];
+// Exemptions are disabled until a fresh review certifies the complete native
+// executable/filesystem/install lifecycle closure. The previous native-tree +
+// config audit could go stale after a merged shell helper gained an app input.
+// No environment variable or PR-provided certificate can enable a skip.
 const isSha = (value) => /^[a-f0-9]{40}$/.test(value ?? "");
 const git = (...args) =>
   execFileSync("git", args, {
@@ -80,59 +66,9 @@ function plan() {
         readFileSync(fileURLToPath(import.meta.url), "utf8"),
       "policy-bytes-mismatch"
     );
-    const config = git("rev-parse", `${base}:${configPath}`).trim();
-    requireThat(
-      config === auditedNativeConfig &&
-        git("rev-parse", `${base}:tests/ci-invariants/native`).trim() ===
-          auditedNativeTree,
-      "native-input-audit-needs-refresh"
-    );
-    requireThat(
-      config === git("rev-parse", `${head}:${configPath}`).trim(),
-      "native-config-incompatible"
-    );
-    result.native_config = config;
-    const mergeBase = git("merge-base", base, head).trim();
-    // --no-renames exposes both deletion and addition; NUL framing preserves
-    // unusual paths without turning a newline into a false safe-prefix match.
-    const fields = git(
-      "diff",
-      "--no-renames",
-      "--name-status",
-      "-z",
-      mergeBase,
-      head,
-      "--"
-    ).split("\0");
-    requireThat(
-      fields.pop() === "" && fields.length > 0 && fields.length % 2 === 0,
-      "empty-or-malformed-diff"
-    );
-    for (let index = 0; index < fields.length; index += 2) {
-      const [status, path] = fields.slice(index, index + 2);
-      requireThat(["A", "M", "D"].includes(status), "type-or-unknown-change");
-      requireThat(
-        path &&
-          !path.split("/").some((part) => part === "." || part === "..") &&
-          !path.includes("\n"),
-        "malformed-path"
-      );
-      requireThat(
-        safePrefixes.some((prefix) => path.startsWith(prefix)),
-        "native-or-unknown-input"
-      );
-      for (const ref of [mergeBase, head]) {
-        const mode = git("ls-tree", ref, "--", path).split(" ")[0];
-        requireThat(
-          !mode || ["100644", "100755"].includes(mode),
-          "symlink-or-special-input"
-        );
-      }
-    }
     return {
       ...result,
-      native_required: "false",
-      reason: "audited-app-docs-only",
+      reason: "native-exemptions-disabled-pending-transitive-audit",
     };
   } catch (error) {
     return {
@@ -163,12 +99,10 @@ function verifyUnit() {
       env.POLICY_SHA === env.EVENT_BASE_SHA,
       "policy/event-base mismatch"
     );
-  if (env.NATIVE_REQUIRED === "true") success("NATIVE_RESULT");
-  else
-    requireThat(
-      ["success", "skipped"].includes(env.NATIVE_RESULT),
-      "exempt native failure/cancel is still failure"
-    );
+  // Even an older trusted event-base planner returning false cannot permit a
+  // native skip in the current graph. Missing, failed and cancelled native
+  // proof remains red while exemptions are disabled.
+  success("NATIVE_RESULT");
 }
 
 function verifyManifest() {

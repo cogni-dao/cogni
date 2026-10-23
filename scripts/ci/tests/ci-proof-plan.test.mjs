@@ -13,6 +13,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   mkdirSync,
   mkdtempSync,
@@ -188,11 +189,11 @@ function fixture(run) {
   }
 }
 
-test("only audited app/docs diffs may skip native; non-main and full events cannot", () =>
+test("app/docs, non-main and full events all require native while exemptions are disabled", () =>
   fixture(({ put, commit, plan }) => {
     put("nodes/operator/app/src/example.ts");
     const head = commit();
-    assert.equal(plan(head).native_required, "false");
+    assert.equal(plan(head).native_required, "true");
     for (const env of [
       { CI_EVENT: "merge_group" },
       { CI_EVENT: "push" },
@@ -242,7 +243,7 @@ test("event policy identity cannot drift to a newer main or a PR policy", () =>
     put("docs/new.md");
     const head = commit();
     assert.equal(plan(head, { POLICY_SHA: head }).native_required, "true");
-    assert.equal(plan(head, { POLICY_SHA: base }).native_required, "false");
+    assert.equal(plan(head, { POLICY_SHA: base }).native_required, "true");
   }));
 
 test("native-source/config changes merged after the audit cannot inherit app exemptions", () => {
@@ -257,8 +258,80 @@ test("native-source/config changes merged after the audit cannot inherit app exe
         POLICY_SHA: newBase,
       });
       assert.equal(result.native_required, "true");
-      assert.equal(result.reason, "native-input-audit-needs-refresh");
+      assert.equal(
+        result.reason,
+        "native-exemptions-disabled-pending-transitive-audit"
+      );
     });
+});
+
+test("exemptions stay disabled after merged helper, lifecycle and install-surface drift", () => {
+  for (const [file, content] of [
+    [
+      "scripts/ci/tests/runtime-secret-authority.test.sh",
+      "cat nodes/operator/app/src/native-input.txt\n",
+    ],
+    [
+      "package.json",
+      JSON.stringify({
+        scripts: { prepare: "node nodes/operator/app/src/install.js" },
+      }),
+    ],
+    [
+      "packages/new/package.json",
+      JSON.stringify({
+        scripts: { install: "node ../../nodes/operator/app/src/install.js" },
+      }),
+    ],
+    [
+      ".pnpmfile.cjs",
+      "module.exports = require('./nodes/operator/app/src/install.js')\n",
+    ],
+    [".npmrc", "pnpmfile=./nodes/operator/app/src/install.js\n"],
+    [
+      "scripts/vitest/new-helper.mjs",
+      "import '../../nodes/operator/app/src/install.js';\n",
+    ],
+  ])
+    fixture(({ put, commit, plan }) => {
+      put(file, content);
+      const mergedBase = commit();
+      put("nodes/operator/app/src/native-input.txt", "changed native input\n");
+      const result = plan(commit(), {
+        EVENT_BASE_SHA: mergedBase,
+        POLICY_SHA: mergedBase,
+      });
+      assert.equal(result.native_required, "true", file);
+    });
+  fixture(({ cwd, put, commit, plan }) => {
+    put("scripts/helper.sh", "#!/bin/sh\n");
+    commit();
+    chmodSync(join(cwd, "scripts/helper.sh"), 0o755);
+    const mergedBase = commit();
+    put("nodes/operator/app/src/example.ts");
+    assert.equal(
+      plan(commit(), { EVENT_BASE_SHA: mergedBase, POLICY_SHA: mergedBase })
+        .native_required,
+      "true"
+    );
+  });
+  fixture(({ cwd, put, commit, plan }) => {
+    put("nodes/operator/app/src/install.js", "module.exports = {};\n");
+    symlinkSync(
+      "nodes/operator/app/src/install.js",
+      join(cwd, ".pnpmfile.cjs")
+    );
+    const mergedBase = commit();
+    put(
+      "nodes/operator/app/src/install.js",
+      "module.exports = {changed:true};\n"
+    );
+    assert.equal(
+      plan(commit(), { EVENT_BASE_SHA: mergedBase, POLICY_SHA: mergedBase })
+        .native_required,
+      "true"
+    );
+  });
 });
 
 test("raw Buildx dispatch imports but cannot overwrite trusted-main cache", () => {
@@ -344,7 +417,7 @@ test("unit aggregate refuses failures, cancellations, unexpected skips and malfo
         0,
         `${key}=${result}`
       );
-  assert.equal(
+  assert.notEqual(
     invoke("verify-unit", {
       ...unit,
       NATIVE_REQUIRED: "false",

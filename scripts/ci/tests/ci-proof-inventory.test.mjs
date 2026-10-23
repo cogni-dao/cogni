@@ -104,6 +104,9 @@ test("CI always aggregates split children while retaining bounded signed skips",
       step.run?.includes("check-jsonschema==0.37.1")
     )
   );
+  // A false decision from an older event-base policy cannot skip native now.
+  assert.ok(!jobs.native.if.includes("native_required"));
+  assert.ok(!jobs.native.if.includes("proof_plan.outputs"));
   const plan = jobs.proof_plan.steps.find((step) => step.id === "plan").run;
   assert.ok(plan.includes('git show "$EVENT_BASE_SHA:$classifier"'));
   assert.ok(!plan.includes('git show "origin/main:'));

@@ -607,9 +607,11 @@ jobs:
           loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
           job_status: ${{ job.status }}
 
+  # Full native proof until a renewed transitive input/install audit is reviewed.
+  # This also overrides an older trusted event-base planner returning false.
   native:
     needs: [env_manager_fast_path, proof_plan]
-    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true') && (github.event_name != 'pull_request' || github.event.pull_request.base.ref != 'main' || needs.proof_plan.result != 'success' || needs.proof_plan.outputs.native_required != 'false')
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
