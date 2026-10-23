@@ -193,7 +193,9 @@ export async function GET(
       budgetProfile: placement?.budgetProfile ?? null,
       database,
     },
-    container.metricsQuery
+    // bug.5519: nodes outside the actuator sweep read the same governed
+    // Grafana datasource authority, never the unconfigured Basic-auth port.
+    container.reliabilityMetrics
   ).catch(() => ({
     version: "reliability-status.v1" as const,
     nodeId: gate.node.nodeId,

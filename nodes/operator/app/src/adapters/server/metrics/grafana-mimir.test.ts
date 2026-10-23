@@ -2,7 +2,10 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createGrafanaMimirAdapter } from "./grafana-mimir.adapter";
+import {
+  createGrafanaMimirAdapter,
+  createLazyGrafanaMimirAdapter,
+} from "./grafana-mimir.adapter";
 
 const config = {
   grafanaUrl: "https://fixture.grafana.net",
@@ -123,5 +126,37 @@ describe("existing Grafana Prometheus authority", () => {
         createGrafanaMimirAdapter({ ...config, grafanaUrl })
       ).rejects.toThrow("configuration_invalid");
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("defers discovery to first read, reuses it, and retries after a failed discovery (bug.5519)", async () => {
+    const vector = () =>
+      new Response(
+        JSON.stringify({
+          status: "success",
+          data: { resultType: "vector", result: [] },
+        })
+      );
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([datasource])))
+      .mockResolvedValueOnce(vector())
+      .mockResolvedValueOnce(vector());
+    vi.stubGlobal("fetch", fetch);
+    const port = createLazyGrafanaMimirAdapter(config);
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(port.queryInstant({ query: "up" })).rejects.toThrow(
+      "discovery_unavailable"
+    );
+    await port.queryInstant({ query: "up" });
+    await port.queryInstant({ query: "up" });
+    expect(
+      fetch.mock.calls.map(([url]) => new URL(String(url)).pathname)
+    ).toEqual([
+      "/api/datasources",
+      "/api/datasources",
+      "/api/datasources/proxy/uid/grafanacloud-prom/api/v1/query",
+      "/api/datasources/proxy/uid/grafanacloud-prom/api/v1/query",
+    ]);
   });
 });

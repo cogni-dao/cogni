@@ -92,6 +92,7 @@ import { parse as parseYaml } from "yaml";
 import {
   ALCHEMY_ADAPTER_VERSION,
   AlchemyWebhookNormalizer,
+  createLazyGrafanaMimirAdapter,
   type Database,
   DrizzleAiTelemetryAdapter,
   DrizzleComputeCostStore,
@@ -292,6 +293,11 @@ export interface Container {
   /** Fail-closed guard for live payment rail activation before issuing payment intents. */
   paymentRailGuard: PaymentRailGuardPort;
   metricsQuery: MetricsQueryPort;
+  /**
+   * Closed reliability reads for node-scoped health (bug.5519): the same governed
+   * Grafana datasource authority as the actuator; falls back to metricsQuery.
+   */
+  reliabilityMetrics: MetricsQueryPort;
   /** Authenticated read-only projection from the private actuator. */
   reliabilityStatusReader?: ReliabilityStatusReaderPort;
   /** Human-session-attributed, recovery-gated readmission command. */
@@ -702,6 +708,15 @@ function createContainer(): Container {
         };
         return new MimirMetricsAdapter(mimirConfig);
       })();
+
+  const reliabilityMetrics: MetricsQueryPort =
+    !env.isTestMode && env.GRAFANA_URL && env.GRAFANA_SERVICE_ACCOUNT_TOKEN
+      ? createLazyGrafanaMimirAdapter({
+          grafanaUrl: env.GRAFANA_URL,
+          bearerToken: env.GRAFANA_SERVICE_ACCOUNT_TOKEN,
+          timeoutMs: env.ANALYTICS_QUERY_TIMEOUT_MS,
+        })
+      : metricsQuery;
 
   const reliabilityStatusReader =
     env.DATABASE_RELIABILITY_ACTUATOR_URL &&
@@ -1295,6 +1310,7 @@ function createContainer(): Container {
     paymentRailsActive: !!getPaymentConfig(),
     paymentRailGuard,
     metricsQuery,
+    reliabilityMetrics,
     ...(reliabilityStatusReader ? { reliabilityStatusReader } : {}),
     ...(reliabilityReadmit ? { reliabilityReadmit } : {}),
     treasuryReadPort,

@@ -15,13 +15,42 @@
  */
 
 import { z } from "zod";
+import type { MetricsQueryPort } from "@/ports";
 import { MimirMetricsAdapter } from "./mimir.adapter";
 
-export async function createGrafanaMimirAdapter(input: {
+interface GrafanaMimirInput {
   grafanaUrl: string;
   bearerToken: string;
   timeoutMs: number;
-}): Promise<MimirMetricsAdapter> {
+}
+
+/**
+ * Synchronous wiring for request-path containers (bug.5519): datasource
+ * discovery runs on first read and is retried after a failed discovery.
+ */
+export function createLazyGrafanaMimirAdapter(
+  input: GrafanaMimirInput
+): MetricsQueryPort {
+  let adapter: Promise<MimirMetricsAdapter> | null = null;
+  const resolve = () => {
+    adapter ??= createGrafanaMimirAdapter(input).catch((error: unknown) => {
+      adapter = null;
+      throw error;
+    });
+    return adapter;
+  };
+  return {
+    queryRange: async (params) => (await resolve()).queryRange(params),
+    queryInstant: async (params) => (await resolve()).queryInstant(params),
+    queryTemplate: async (params) => (await resolve()).queryTemplate(params),
+    queryReliabilitySnapshot: async (params) =>
+      (await resolve()).queryReliabilitySnapshot(params),
+  };
+}
+
+export async function createGrafanaMimirAdapter(
+  input: GrafanaMimirInput
+): Promise<MimirMetricsAdapter> {
   const grafana = new URL(input.grafanaUrl);
   if (
     grafana.protocol !== "https:" ||

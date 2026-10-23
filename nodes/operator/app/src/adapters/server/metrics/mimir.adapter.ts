@@ -186,10 +186,15 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
 
     const env = params.environment;
     const node = params.nodeSlug;
-    const substrateHost = /^[0-9a-f]{32}$/.test(params.substrateHost ?? "")
+    const boundSubstrateHost = /^[0-9a-f]{32}$/.test(params.substrateHost ?? "")
       ? params.substrateHost
       : null;
-    const identity = `environment="${env}",node_slug="${node}",database_tier="${params.databaseTier ?? "unknown"}",budget_profile="${params.budgetProfile ?? "unknown"}",policy_version="reliability-status-v1",substrate_host="${substrateHost ?? "unknown"}"`;
+    // Unbound reads (nodes outside the actuator's probe bindings, bug.5519)
+    // select any recorded host, then attribute only if exactly one is observed.
+    const substrateHostMatcher = boundSubstrateHost
+      ? `substrate_host="${boundSubstrateHost}"`
+      : `substrate_host=~"[0-9a-f]{32}"`;
+    const identity = `environment="${env}",node_slug="${node}",database_tier="${params.databaseTier ?? "unknown"}",budget_profile="${params.budgetProfile ?? "unknown"}",policy_version="reliability-status-v1",${substrateHostMatcher}`;
     const queries = {
       readiness: buildReliabilityReadinessQuery({
         environment: env,
@@ -293,13 +298,27 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
     )
       throw new Error("reliability_source_timestamp_result_missing");
 
+    const observedSubstrateHosts = new Set(
+      valueResults
+        .slice(1)
+        .flatMap((result) => result.result)
+        .map((sample) => sample.metric.substrate_host)
+    );
+    const [soleObservedSubstrateHost] = observedSubstrateHosts;
+    const substrateHost =
+      boundSubstrateHost ??
+      (observedSubstrateHosts.size === 1 &&
+      soleObservedSubstrateHost &&
+      /^[0-9a-f]{32}$/.test(soleObservedSubstrateHost)
+        ? soleObservedSubstrateHost
+        : null);
     const expectedLabels = {
       environment: env,
       node_slug: node,
       database_tier: params.databaseTier,
       budget_profile: params.budgetProfile,
       policy_version: "reliability-status-v1",
-      substrate_host: substrateHost ?? null,
+      substrate_host: substrateHost,
     };
     const observedAtSeconds = Date.now() / 1000;
     const attributed = (result: PrometheusInstantResult) =>

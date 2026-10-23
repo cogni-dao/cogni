@@ -374,6 +374,85 @@ describe("MimirMetricsAdapter", () => {
     ).toBe(1);
   });
 
+  describe("route reads without an actuator probe binding (bug.5519)", () => {
+    const sharedHost = "9e8bb1a5190947e7b7a29f5d1a0d4f71";
+    const recorded = (host: string) => ({
+      environment: "production",
+      node_slug: "red",
+      database_tier: "shared",
+      budget_profile: "shared-default-v1",
+      policy_version: "reliability-status-v1",
+      substrate_host: host,
+    });
+    const prodLike = (hosts: readonly string[]) => (url: string) => {
+      const query = new URL(url).searchParams.get("query") ?? "";
+      const now = Date.now() / 1000;
+      const result = query.includes("probe_success")
+        ? [
+            { metric: { probe: "Frankfurt" }, value: [now, "0"] },
+            { metric: { probe: "Ohio" }, value: [now, "1"] },
+          ]
+        : hosts.map((host) => ({
+            metric: recorded(host),
+            value: [now, query.startsWith("timestamp(") ? String(now) : "60"],
+          }));
+      return {
+        ok: true,
+        json: async () => ({
+          status: "success",
+          data: { resultType: "vector", result },
+        }),
+      };
+    };
+
+    it("attributes the environment's single recorded substrate host instead of matching a literal 'unknown'", async () => {
+      mockFetch.mockImplementation(async (url) => prodLike([sharedHost])(url));
+      const snapshot = await adapter.queryReliabilitySnapshot({
+        environment: "production",
+        nodeSlug: "red",
+        databaseTier: "shared",
+        budgetProfile: "shared-default-v1",
+      });
+
+      const queries = mockFetch.mock.calls.map(
+        ([url]) => new URL(url).searchParams.get("query") ?? ""
+      );
+      expect(queries.some((q) => q.includes('substrate_host="unknown"'))).toBe(
+        false
+      );
+      expect(snapshot.regionalReadiness).toEqual([
+        expect.objectContaining({ region: "Frankfurt", healthy: false }),
+        expect.objectContaining({ region: "Ohio", healthy: true }),
+      ]);
+      expect(snapshot).toMatchObject({
+        ioPressurePct: 60,
+        connectionPct: 60,
+        memoryHeadroomPct: 60,
+        diskHeadroomPct: 60,
+      });
+    });
+
+    it("fails closed when the unbound read observes more than one physical host", async () => {
+      mockFetch.mockImplementation(async (url) =>
+        prodLike([sharedHost, "b".repeat(32)])(url)
+      );
+      const snapshot = await adapter.queryReliabilitySnapshot({
+        environment: "production",
+        nodeSlug: "red",
+        databaseTier: "shared",
+        budgetProfile: "shared-default-v1",
+      });
+      expect(snapshot.regionalReadiness).toHaveLength(2);
+      expect(snapshot).toMatchObject({
+        evidenceScope: "environment-shared",
+        ioPressurePct: null,
+        connectionPct: null,
+        memoryHeadroomPct: null,
+        diskHeadroomPct: null,
+      });
+    });
+  });
+
   it("rejects a source timestamp receipt whose physical host differs from its signal", async () => {
     const evaluatedAt = Date.now() / 1000;
     const labels = {
