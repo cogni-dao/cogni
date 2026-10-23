@@ -52,12 +52,18 @@ describe("WorkItemScoresRadar", () => {
     const shape = screen.getByTestId("score-shape");
     expect(shape.getAttribute("points")?.split(" ")).toHaveLength(4);
 
+    // User-facing copy says "Priority scores", never "do-it-now".
+    expect(
+      screen.getByRole("img", { name: /^Priority scores radar/ })
+    ).toBeInTheDocument();
+    expect(container.innerHTML).not.toMatch(/do-it-now/i);
+
     // Missing ease → rank undefined; missing agent → human queue.
     expect(screen.getByTestId("rank-score")).toHaveTextContent("—");
     expect(screen.getByTestId("score-queue")).toHaveTextContent("Human queue");
   });
 
-  it("renders https evidence as a nofollow link and drops non-https ev", () => {
+  it("renders https ev as a nofollow justification link and drops non-https ev", () => {
     const { container } = render(
       <WorkItemScoresRadar
         scores={{
@@ -71,9 +77,11 @@ describe("WorkItemScoresRadar", () => {
       />
     );
 
-    const links = screen.getAllByRole("link", { name: "evidence" });
+    const links = screen.getAllByRole("link", { name: /justification$/ });
     expect(links).toHaveLength(1);
     const link = links[0];
+    expect(link).toHaveAccessibleName("Goal value justification");
+    expect(link).toHaveTextContent("justification");
     expect(link).toHaveAttribute(
       "href",
       "https://cognidao.org/work/items/story.5111"
@@ -81,6 +89,7 @@ describe("WorkItemScoresRadar", () => {
     expect(link).toHaveAttribute("rel", "noopener noreferrer nofollow");
     expect(legendRow(container, "goal")).toContainElement(link ?? null);
     expect(container.querySelector("img")).toBeNull();
+    expect(container).not.toHaveTextContent(/evidence/i);
 
     // (5+4+4) / iterations(5)=1 × 5/5 = 13.0; agent 4 → agent queue.
     expect(screen.getByTestId("rank-score")).toHaveTextContent("13.0");

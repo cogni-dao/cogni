@@ -110,4 +110,13 @@ describe("WorkItemDetail accessibility states", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Details for bug.5355")).toBeInTheDocument();
   });
+
+  it("titles the scores block Priority scores, never do-it-now", () => {
+    renderDetail({
+      item: { ...item, scores: { goal: { v: 3 }, agent: { v: 2 } } },
+    });
+
+    expect(screen.getByText("Priority scores")).toBeInTheDocument();
+    expect(document.body.innerHTML).not.toMatch(/do-it-now/i);
+  });
 });

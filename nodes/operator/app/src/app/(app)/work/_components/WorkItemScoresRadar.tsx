@@ -8,7 +8,7 @@
  * Invariants:
  *   - OUTWARD_IS_SOONER: every axis points outward; a bigger area means do it sooner.
  *   - ABSENT_IS_NOT_ZERO: a missing axis has no vertex and shows "—"; it is never drawn as 0.
- *   - EV_IS_A_LINK_NOT_HTML: `ev` renders only as an https anchor href with rel="noopener noreferrer nofollow"; never as markup.
+ *   - EV_IS_A_LINK_NOT_HTML: `ev` renders (as the user-facing "justification" link) only as an https anchor href with rel="noopener noreferrer nofollow"; never as markup.
  *   - RANK_FROM_PACKAGE: `rankScore` comes from `@cogni/work-items`, never re-derived here.
  *   - HUMAN_QUEUE_DEFAULT: `agent` < 3 or missing → human queue.
  * Side-effects: none
@@ -119,7 +119,7 @@ export function WorkItemScoresRadar({
         viewBox={`-50 0 ${SIZE + 100} ${SIZE}`}
         className="w-full max-w-xs self-center"
         role="img"
-        aria-label="Do-it-now scores radar: a bigger area means do it sooner"
+        aria-label="Priority scores radar: a bigger area means do it sooner"
       >
         {rings.map((pts, ri) => (
           <polygon
@@ -202,8 +202,9 @@ export function WorkItemScoresRadar({
                     rel="noopener noreferrer nofollow"
                     className="text-primary underline underline-offset-2"
                     title={href}
+                    aria-label={`${a.label} justification`}
                   >
-                    evidence
+                    justification
                   </a>
                 )}
                 <span className="w-5 text-right font-medium font-mono">
