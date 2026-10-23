@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-23
+- **Last reviewed:** 2026-10-20
 
 ## Purpose
 
@@ -38,7 +38,6 @@ CI/CD automation scripts and configuration documentation for multiple pipeline s
 - **Files considered API:** `scripts/*.sh`, `workflow-check.mjs`, `infra/openfga/rbac-model.json`
 
 - `lib/maintenance-fence.py check <deploy-tree>`: read-only fail-closed per-node maintenance marker and merged-source floor guard; no begin, audit, finish, or deploy mutation commands.
-- `ci-proof-plan.mjs plan|verify-unit|verify-component|verify-manifest`: stdlib-only event-base identity and terminal result verification. Native exemptions are disabled pending a reviewed transitive executable/filesystem/install audit; ordinary native proof is unconditional, including when an older event-base planner returns false. `CI_NATIVE_SPLIT=true` excludes native specs from `run-unit-tests.sh` only in CI's required split graph; ordinary local discovery stays full. Plan inputs are `CI_EVENT`, `EVENT_BASE_SHA`, `EVENT_HEAD_SHA`, `EVENT_BASE_REF`, `POLICY_SHA`; output records exact identities, config blob and reason. Verification consumes the named child `*_RESULT` and plan outputs from workflow `needs`.
 
 ## Responsibilities
 

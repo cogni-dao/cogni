@@ -3,11 +3,17 @@
 
 /**
  * Module: `@scripts/ci/ci-proof-plan`
- * Purpose: Select declared native CI proof from an event-base policy and verify terminal gates.
+ * Purpose: Require ordinary native CI proof and verify terminal gates with exact event-base identity.
  * Scope: Git objects and workflow result metadata only. Does not access network, deployment or credentials.
  * Invariants: UNKNOWN_MEANS_FULL; TRUSTED_EXEMPTION_POLICY; REQUIRED_PROOF_FAILS_CLOSED.
  * Side-effects: IO (appends audited GitHub output and summary files).
- * Notes: Standalone stdlib module so workflows can execute exact event-base bytes from a temp file.
+ * API: plan|verify-unit|verify-component|verify-manifest; standalone stdlib module for exact event-base loading.
+ * Policy: Native exemptions are disabled pending a reviewed transitive executable/filesystem/install audit.
+ * Ordinary native proof is unconditional, including when an older event-base planner returns false.
+ * CI_NATIVE_SPLIT=true excludes native specs from run-unit-tests.sh only in CI's required split graph;
+ * ordinary local discovery stays full. Plan inputs: CI_EVENT, EVENT_BASE_SHA, EVENT_HEAD_SHA,
+ * EVENT_BASE_REF, POLICY_SHA. Outputs record exact identities, config blob and reason. Terminal verification
+ * consumes named child *_RESULT and plan outputs from workflow needs.
  * Links: task.5314, .github/workflows/ci.yaml, .github/workflows/pr-build.yml
  * @internal
  */
