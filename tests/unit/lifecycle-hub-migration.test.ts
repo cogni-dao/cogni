@@ -12,6 +12,8 @@
  */
 
 import {
+  chmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -126,7 +128,9 @@ describe("one-time lifecycle fleet migration", () => {
 
   it("applies once and treats an exact desired tree as an idempotent no-op", () => {
     const f = fixture();
+    chmodSync(f.first, 0o664);
     applyFleet(f.plan());
+    expect(lstatSync(f.first).mode & 0o777).toBe(0o664);
     const after = readFileSync(f.first, "utf8");
     const repeat = f.plan();
     expect(

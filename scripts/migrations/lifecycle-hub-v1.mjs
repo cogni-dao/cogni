@@ -15,6 +15,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  chmodSync,
   lstatSync,
   readFileSync,
   realpathSync,
@@ -162,6 +163,7 @@ export function applyFleet(plan, options = {}) {
           flag: "wx",
           mode: lstatSync(file.target).mode,
         });
+        chmodSync(temporary, lstatSync(file.target).mode);
         rename(temporary, file.target);
         replaced.push(file);
       }
@@ -175,6 +177,7 @@ export function applyFleet(plan, options = {}) {
             flag: "wx",
             mode: lstatSync(file.target).mode,
           });
+          chmodSync(temporary, lstatSync(file.target).mode);
           rename(temporary, file.target);
         } catch (rollbackError) {
           failures.push(rollbackError);
