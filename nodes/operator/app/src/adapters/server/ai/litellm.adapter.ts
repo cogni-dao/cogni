@@ -7,7 +7,9 @@
  * Scope: Implements LlmService port (completion + stream), extracts cost from headers, validates secrets at adapter boundary. Does not handle auth or rate-limiting.
  * Invariants:
  *   - Never logs prompts/keys/chunks; error response excerpts are redacted + bounded (<=2KB)
- *   - 30s timeout (completion), 15s connect timeout (stream)
+ *   - 30s timeout (completion); stream: a 60s connect/TTFB guard (fetch→headers only, cleared in finally),
+ *     combined with any caller abortSignal; a fired guard reports kind "timeout", a caller abort kind "aborted";
+ *     stream duration stays unbounded. No app-side run budget exists yet for scheduled runs (follow-up).
  *   - Settles once; model required
  *   - Stream abort rejects with LlmError(kind='aborted')
  *   - USAGE_UNIT_IS_LITELLM_CALL_ID: litellmCallId sourced ONLY from x-litellm-call-id response header (no response body fallback)
@@ -52,6 +54,9 @@ const logger = makeLogger({ component: "LiteLlmAdapter" });
 
 /** Max chars of provider response body to include in operator logs. */
 const MAX_ERROR_BODY_LOG_CHARS = 2048;
+
+/** Stream connect/TTFB guard (fetch→headers only): reasoning models can exceed 15s TTFB on long agent contexts. */
+const LITELLM_STREAM_TTFB_TIMEOUT_MS = 60_000;
 
 /**
  * Safely read and redact error response body for operator diagnostics.
@@ -234,9 +239,16 @@ export class LiteLlmAdapter implements LlmService {
     }
 
     let response: Response;
-    // Use short timeout for connection/TTFB only (not entire stream duration)
+    // Connect/TTFB guard only (cleared in finally; not the stream duration), combined with the caller signal.
+    // Aborts with a TimeoutError reason so a fired guard reports kind "timeout", not "aborted".
     const connectCtl = new AbortController();
-    const connectTimer = setTimeout(() => connectCtl.abort(), 15000);
+    const connectTimer = setTimeout(
+      () =>
+        connectCtl.abort(
+          new DOMException("LiteLLM TTFB timeout", "TimeoutError")
+        ),
+      LITELLM_STREAM_TTFB_TIMEOUT_MS
+    );
     const env = serverEnv();
     // Validate runtime secrets at adapter boundary
     assertRuntimeSecrets(env);
