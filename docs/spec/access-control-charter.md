@@ -86,7 +86,7 @@ It is not a new spec. Every load-bearing claim points at an existing canonical s
 │      How a request becomes a user_id. SIWE wallet + OAuth providers │
 │      (GitHub, Discord, Google), NextAuth v4, account linking via    │
 │      user_bindings.                                                 │
-│      Canonical: authentication.md, decentralized-user-identity.md   │
+│      Canonical: authentication.md, hub user-identity-bindings       │
 └─────────────────────────────────────────────────────────────────────┘
                               ▲
                               │  references keys defined in
@@ -195,7 +195,7 @@ We are NOT meaningfully reinventing wheels. Every primitive in the current stack
 
 - [Identity Model](./identity-model.md) — L0 canonical
 - [Authentication](./authentication.md) — L1 canonical
-- [Decentralized User Identity](./decentralized-user-identity.md) — L1 bindings
+- [User identity bindings](https://cognidao.org/knowledge/user-identity-bindings) — L1 bindings
 - [RBAC](./rbac.md) — L2 canonical
 - [Tool Use](./tool-use.md) — L2 enforcement at tool boundary
 - [Tenant Connections](./tenant-connections.md) — L2 enforcement at credential boundary

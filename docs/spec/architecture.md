@@ -497,4 +497,4 @@ Agentic graphs (P1), Loki/Grafana, Akash/IaC planned. See [Graph Execution](grap
 - [CD Pipeline E2E](./cd-pipeline-e2e.md) - Infrastructure and deployment details
 - [Build Architecture](build-architecture.md) - Monorepo build order, Docker strategy, and workspace package handling
 - [Route Runtime Policy](runtime-policy.md) - When to use Node.js vs Edge runtime in API routes
-- [Decentralized Identity](decentralized-user-identity.md) - Subject DID (did:key), linked DIDs (did:pkh), auth-method-agnostic identity
+- [User identity bindings](https://cognidao.org/knowledge/user-identity-bindings) - Node-local user_id, evidenced wallet/OAuth bindings, DID deferred to P2; operator GitHub attestation is [identity-attestation-v1](https://cognidao.org/knowledge/identity-attestation-v1)
