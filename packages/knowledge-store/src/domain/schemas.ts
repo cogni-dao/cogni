@@ -84,6 +84,26 @@ export const RAW_WRITE_REJECTS_TYPES: readonly EntryType[] = [
   "outcome",
 ];
 
+/**
+ * EDO machinery entry types (SCHEMA_REFINED_BY_READ_FILTER, R1
+ * LibrarianReadFilter). Default "what does this node know" reads —
+ * `searchKnowledge` / `listKnowledge` — exclude these rows unless the caller
+ * passes `includeEdo: true`. Chain/audit surfaces (`EdoCapability.getChain`,
+ * `/api/v1/edo/*`, the resolver) read EDO rows directly and are unaffected.
+ * Fail-closed enumeration: a new EDO beat must be added here explicitly.
+ */
+export const EDO_ENTRY_TYPES: readonly EntryType[] = [
+  "event",
+  "hypothesis",
+  "decision",
+  "outcome",
+];
+
+/** True when `entryType` is EDO machinery hidden from default reads. */
+export function isEdoEntryType(entryType: string | null | undefined): boolean {
+  return EDO_ENTRY_TYPES.includes((entryType ?? "") as EntryType);
+}
+
 // ---------------------------------------------------------------------------
 // Citation type — relationship between two knowledge rows
 // ---------------------------------------------------------------------------
