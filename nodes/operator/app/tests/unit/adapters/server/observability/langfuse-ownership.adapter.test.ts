@@ -193,23 +193,68 @@ describe("HttpLangfuseOwnershipVerifier", () => {
       "fetch",
       async () => new Response("x".repeat(256 * 1024 + 1))
     );
-    expect(
-      await verifier.verifyObservation(
-        NODE,
-        "candidate-a",
-        observation(),
-        signal()
-      )
-    ).toBe(false);
+    await expect(
+      verifier.verifyObservation(NODE, "candidate-a", observation(), signal())
+    ).rejects.toMatchObject({
+      code: "observability_response_too_large",
+      status: 502,
+    });
     vi.stubGlobal("fetch", async () => new Response("not json"));
-    expect(
-      await verifier.verifyObservation(
-        NODE,
-        "candidate-a",
-        observation(),
-        signal()
-      )
-    ).toBe(false);
+    await expect(
+      verifier.verifyObservation(NODE, "candidate-a", observation(), signal())
+    ).rejects.toMatchObject({
+      code: "observability_invalid_response",
+      status: 502,
+    });
+  });
+
+  it.each([
+    429, 500, 401,
+  ])("preserves dependency HTTP %s separately from a valid non-match", async (status) => {
+    const { verifier } = setup();
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response("private-upstream-auth-body", {
+          status,
+          headers: { "retry-after": "5" },
+        })
+    );
+    await expect(
+      verifier.verifyObservation(NODE, "candidate-a", observation(), signal())
+    ).rejects.toMatchObject({
+      code:
+        status === 429
+          ? "observability_rate_limited"
+          : "observability_upstream_error",
+      status: status === 429 ? 429 : 502,
+      retryAfter: "5",
+    });
+  });
+
+  it("reports receipt timeout and transport failure without private messages", async () => {
+    const { verifier } = setup();
+    const aborted = AbortSignal.abort(
+      new DOMException("private-url", "TimeoutError")
+    );
+    vi.stubGlobal("fetch", async () => {
+      throw new DOMException("private-upstream-url", "TimeoutError");
+    });
+    await expect(
+      verifier.verifyObservation(NODE, "candidate-a", observation(), aborted)
+    ).rejects.toMatchObject({
+      code: "observability_upstream_timeout",
+      status: 504,
+    });
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("private-upstream-url");
+    });
+    await expect(
+      verifier.verifyObservation(NODE, "candidate-a", observation(), signal())
+    ).rejects.toMatchObject({
+      message: "observability_upstream_error",
+      status: 502,
+    });
   });
 
   it("pins operator master receipts to their configured logical environment", async () => {

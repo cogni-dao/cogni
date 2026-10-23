@@ -104,6 +104,7 @@ describe("HttpLangfuseReader", () => {
   });
 });
 
+import { LangfuseReadError } from "@/adapters/server/observability/langfuse-read-error";
 import { LangfuseObservationPageSchema } from "@/contracts/nodes.langfuse.observations.v1.contract";
 import { parseTraceQuery } from "@/features/nodes/observability-traces";
 
@@ -323,5 +324,117 @@ describe("native Langfuse observation access", () => {
       status: 429,
       retryAfter: "5",
     });
+  });
+});
+
+describe("native field-group and failure conformance", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it("keeps sessionId in basic and tags in trace_context regardless of filter field selection", async () => {
+    const row = {
+      ...observation(),
+      sessionId: "session-1",
+      tags: ["node-tag"],
+      release: "sha-1",
+      traceName: "trace",
+      bookmarked: true,
+      public: false,
+      userId: "withheld-user",
+      modelId: "priced-model",
+      inputPrice: "0.001",
+    };
+    vi.stubGlobal("fetch", mockFetch({ data: [row], meta: { cursor: null } }));
+    const core = await nativeReader().listObservations(
+      nativeQuery("&fields=core&sessionId=session-1")
+    );
+    expect(core.data).toHaveLength(1);
+    expect(core.data[0]).not.toHaveProperty("sessionId");
+    expect(core.data[0]).toMatchObject({ modelId: null, inputPrice: null });
+    const basic = await nativeReader().listObservations(
+      nativeQuery("&fields=basic")
+    );
+    expect(basic.data[0]).toMatchObject({
+      sessionId: "session-1",
+      bookmarked: true,
+      public: false,
+    });
+    expect(basic.data[0]).not.toHaveProperty("tags");
+    expect(basic.data[0]).not.toHaveProperty("userId");
+    const context = await nativeReader().listObservations(
+      nativeQuery("&fields=trace_context")
+    );
+    expect(context.data[0]).toMatchObject({
+      tags: ["node-tag"],
+      release: "sha-1",
+      traceName: "trace",
+    });
+    expect(context.data[0]).not.toHaveProperty("sessionId");
+  });
+
+  it.each([
+    "key",
+    "bearer",
+    "private_key",
+    "private-key",
+    "privateKey",
+    "a_p_i-k_e_y",
+  ])("redacts %s recursively inside native string IO", async (key) => {
+    const row = {
+      ...observation(),
+      input: JSON.stringify({
+        messages: [
+          {
+            content: JSON.stringify({
+              nested: [{ [key]: "opaquecredentialvalue", safe: "useful" }],
+            }),
+          },
+        ],
+      }),
+    };
+    vi.stubGlobal("fetch", mockFetch({ data: [row], meta: { cursor: null } }));
+    const result = await nativeReader().listObservations(nativeQuery());
+    expect(typeof result.data[0]?.input).toBe("string");
+    expect(result.data[0]?.input).not.toContain("opaquecredentialvalue");
+    expect(result.data[0]?.input).toContain("useful");
+  });
+
+  it("propagates a receipt429 and timeout instead of successful attribution gaps", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({ data: [observation()], meta: { cursor: null } })
+    );
+    for (const failure of [
+      new LangfuseReadError("observability_rate_limited", 429, "5"),
+      new LangfuseReadError("observability_upstream_timeout", 504),
+    ]) {
+      const reader = new HttpLangfuseReader({
+        baseUrl: "https://lf.example.com",
+        publicKey: "pk",
+        secretKey: "sk",
+        ownership: {
+          verifyObservation: async () => {
+            throw failure;
+          },
+        },
+      });
+      await expect(reader.listObservations(nativeQuery())).rejects.toBe(
+        failure
+      );
+    }
+  });
+
+  it("enforces the native exclusive toStartTime boundary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        data: [{ ...observation(), startTime: TO }],
+        meta: { cursor: null },
+      })
+    );
+    const result = await nativeReader().listObservations(nativeQuery());
+    expect(result.data).toHaveLength(0);
+    expect(result.meta.cogni.attributionUnavailable).toBe(1);
   });
 });

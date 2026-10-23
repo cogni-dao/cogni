@@ -390,7 +390,10 @@ native Langfuse read contract, not a replacement Langfuse SDK base URL. The exis
 - Native `data`/`meta.cursor` results preserve observation IDs, parent IDs, model, usage, error and
   I/O fields. `meta.cogni` states the verified logical environment, fixed time window, privacy
   projection, truncation and attribution gaps. I/O remains a native string when upstream supplies
-  a string; recursively scrubbed JSON strings remain strings. Metadata uses an explicit allowlist;
+  a string; recursively scrubbed JSON strings remain strings. Native `sessionId` belongs to `basic`;
+  `tags`, `release` and `traceName` belong to `trace_context`. The `basic.userId` field is deliberately
+  withheld by privacy policy; model pricing enrichment is null unless `model` is requested.
+  Metadata uses an explicit allowlist;
   authentication objects, key fingerprints, billing accounts, requester metadata and user identifiers
   are withheld. The shared project key never reaches a developer.
 - Legacy generation ownership requires an independent authenticated LiteLLM spend receipt matching
@@ -406,7 +409,9 @@ native Langfuse read contract, not a replacement Langfuse SDK base URL. The exis
   request has a 15-second deadline, and concurrent reads are bounded to two per node/process.
   The existing token-bucket limiter enforces 10 requests/minute plus five burst per node/process.
   Replicas have independent limits. Upstream 429 preserves numeric Retry-After; private bodies
-  never appear in error responses or logs. Metrics, scores, mutations and arbitrary proxy paths
+  never appear in error responses or logs. Receipt-service failures and timeouts return dependency
+  failures (including safe Retry-After on 429), rather than successful attribution-gap pages.
+  Metrics, scores, mutations and arbitrary proxy paths
   are unavailable through this operation.
 
 The executable request schema and public operation discovery are advertised by `/.well-known/agent.json`.

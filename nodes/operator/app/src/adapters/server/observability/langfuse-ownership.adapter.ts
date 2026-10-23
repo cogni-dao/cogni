@@ -16,6 +16,12 @@ import { z } from "zod";
 
 import type { LangfuseOwnershipPort } from "@/ports";
 
+import {
+  LangfuseReadError,
+  safeDependencyFailure,
+  safeRetryAfter,
+} from "./langfuse-read-error";
+
 const HashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const ReceiptSchema = z.object({
   request_id: z.string(),
@@ -128,16 +134,25 @@ export class HttpLangfuseOwnershipVerifier implements LangfuseOwnershipPort {
       });
       if (!response.ok) {
         await response.body?.cancel();
-        return false;
+        throw new LangfuseReadError(
+          response.status === 429
+            ? "observability_rate_limited"
+            : "observability_upstream_error",
+          response.status === 429 ? 429 : 502,
+          safeRetryAfter(response.headers.get("retry-after"))
+        );
       }
       const body = await readReceiptBody(response);
-      if (body === null) return false;
-      const parsed = ReceiptPageSchema.safeParse(JSON.parse(body));
-      if (
-        !parsed.success ||
-        parsed.data.total !== 1 ||
-        parsed.data.data.length !== 1
-      )
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(body);
+      } catch {
+        throw new LangfuseReadError("observability_invalid_response", 502);
+      }
+      const parsed = ReceiptPageSchema.safeParse(decoded);
+      if (!parsed.success)
+        throw new LangfuseReadError("observability_invalid_response", 502);
+      if (parsed.data.total !== 1 || parsed.data.data.length !== 1)
         return false;
       const receipt = parsed.data.data[0];
       if (!receipt) return false;
@@ -156,9 +171,9 @@ export class HttpLangfuseOwnershipVerifier implements LangfuseOwnershipPort {
           ? receiptMetadata?.user_api_key_alias == null
           : receiptMetadata?.user_api_key_alias === alias)
       );
-    } catch {
-      // Fail closed; upstream bodies and error messages may contain authentication material.
-      return false;
+    } catch (error) {
+      // Fail closed without conflating a failed dependency with valid, unmatched ownership evidence.
+      throw safeDependencyFailure(error, signal);
     }
   }
 }
@@ -198,8 +213,9 @@ function providerResponseId(
   return native ?? responseId;
 }
 
-async function readReceiptBody(response: Response): Promise<string | null> {
-  if (!response.body) return null;
+async function readReceiptBody(response: Response): Promise<string> {
+  if (!response.body)
+    throw new LangfuseReadError("observability_invalid_response", 502);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -210,7 +226,7 @@ async function readReceiptBody(response: Response): Promise<string | null> {
       size += chunk.value.byteLength;
       if (size > 256 * 1024) {
         await reader.cancel();
-        return null;
+        throw new LangfuseReadError("observability_response_too_large", 502);
       }
       chunks.push(chunk.value);
     }

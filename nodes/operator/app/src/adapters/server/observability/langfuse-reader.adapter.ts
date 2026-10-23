@@ -25,6 +25,12 @@ import type {
   LangfuseTraceSummary,
 } from "@/ports";
 
+import {
+  LangfuseReadError,
+  safeDependencyFailure,
+  safeRetryAfter,
+} from "./langfuse-read-error";
+
 export class HttpLangfuseReader implements LangfuseReaderPort {
   private static readonly activeReads = new Map<string, number>();
   private readonly base: string;
@@ -126,7 +132,7 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
         value: "production",
       },
       { type: "datetime", column: "startTime", operator: ">=", value: from },
-      { type: "datetime", column: "startTime", operator: "<=", value: to },
+      { type: "datetime", column: "startTime", operator: "<", value: to },
       ...query.filters,
     ];
     const url = new URL(`${this.base}/api/public/v2/observations`);
@@ -156,6 +162,8 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
       headers: { Authorization: this.authHeader },
       signal,
       redirect: "error",
+    }).catch((error: unknown) => {
+      throw safeDependencyFailure(error, signal);
     });
     if (!res.ok) {
       // Upstream bodies can contain credential-bearing metadata; never read/echo them in errors.
@@ -169,7 +177,11 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
       );
     }
     const page = NativePageSchema.parse(
-      JSON.parse(await readBounded(res, 8 * 1024 * 1024))
+      JSON.parse(
+        await readBounded(res, 8 * 1024 * 1024).catch((error: unknown) => {
+          throw safeDependencyFailure(error, signal);
+        })
+      )
     );
     if (page.data.length > query.limit)
       throw new LangfuseReadError("observability_invalid_response", 502);
@@ -183,7 +195,7 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
       if (
         !Number.isFinite(time) ||
         time < Date.parse(from) ||
-        time > Date.parse(to) ||
+        time >= Date.parse(to) ||
         row.environment !== "production" ||
         !matchesFilters(row, query.filters) ||
         !(await this.ownership.verifyObservation(
@@ -321,16 +333,6 @@ interface LangfuseTracesResponse {
   }>;
 }
 
-/** Typed dependency failures carry only public codes, never upstream bodies. */
-export class LangfuseReadError extends Error {
-  constructor(
-    readonly code: string,
-    readonly status: number,
-    readonly retryAfter?: string
-  ) {
-    super(code);
-  }
-}
 const CursorSchema = z
   .object({
     scope: z.string(),
@@ -356,9 +358,6 @@ const NativePageSchema = z.object({
     .max(100),
   meta: z.object({ cursor: z.string().max(8192).nullish() }),
 });
-function safeRetryAfter(value: string | null): string | undefined {
-  return value && /^\d{1,5}$/.test(value) ? value : undefined;
-}
 async function readBounded(response: Response, max: number): Promise<string> {
   if (!response.body)
     throw new LangfuseReadError("observability_invalid_response", 502);
@@ -387,6 +386,8 @@ function matchesFilters(
 ): boolean {
   return filters.every((f) => row[f.column] === f.value);
 }
+// Native groups: langfuse/langfuse ebffeda716c1fb70d552cbe310729d02c97bd7b9
+// packages/shared/src/domain/observation-field-groups.ts. userId is intentionally withheld.
 const FIELD_GROUPS: Readonly<Record<string, readonly string[]>> = {
   core: [
     "id",
@@ -407,6 +408,9 @@ const FIELD_GROUPS: Readonly<Record<string, readonly string[]>> = {
     "statusMessage",
     "version",
     "environment",
+    "bookmarked",
+    "public",
+    "sessionId",
     "isRootObservation",
   ],
   time: ["completionStartTime", "createdAt", "updatedAt"],
@@ -424,7 +428,7 @@ const FIELD_GROUPS: Readonly<Record<string, readonly string[]>> = {
   usage: ["usageDetails", "costDetails", "totalCost", "usagePricingTierName"],
   prompt: ["promptId", "promptName", "promptVersion"],
   metrics: ["latency", "timeToFirstToken"],
-  trace_context: ["sessionId", "traceName", "release"],
+  trace_context: ["tags", "traceName", "release"],
 };
 const METADATA_KEYS = new Set([
   "nodeId",
@@ -443,7 +447,7 @@ const METADATA_KEYS = new Set([
   "errorCode",
 ]);
 const PRIVATE_KEY =
-  /auth|cookie|password|secret|credential|token|api.?key|billing.?account|requester|hidden.?params|email|user.?id/i;
+  /auth|cookie|password|secret|credential|token|^key$|bearer|private.?key|api.?key|billing.?account|requester|hidden.?params|email|user.?id/i;
 function scrubValue(value: unknown, depth = 0): unknown {
   if (depth > 10) return "[REDACTED]";
   if (typeof value === "string") {
@@ -462,7 +466,9 @@ function scrubValue(value: unknown, depth = 0): unknown {
     return Object.fromEntries(
       Object.entries(value).map(([key, v]) => [
         key,
-        PRIVATE_KEY.test(key) ? "[REDACTED]" : scrubValue(v, depth + 1),
+        PRIVATE_KEY.test(key.toLowerCase().replace(/[_-]/g, ""))
+          ? "[REDACTED]"
+          : scrubValue(v, depth + 1),
       ])
     );
   }
@@ -541,10 +547,15 @@ function projectObservation(
         "output",
         "modelParameters",
         "statusMessage",
+        "tags",
       ].includes(key)
         ? scrubContent(row[key])
         : row[key];
     }
+  }
+  if (!fields.split(",").includes("model")) {
+    for (const field of ["modelId", "inputPrice", "outputPrice", "totalPrice"])
+      result[field] = null;
   }
   return result;
 }

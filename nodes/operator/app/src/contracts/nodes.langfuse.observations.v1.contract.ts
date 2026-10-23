@@ -72,6 +72,8 @@ export const LangfuseObservationSchema = z.object({
   version: nullableString,
   environment: nullableString,
   isRootObservation: z.boolean().nullable().optional(),
+  bookmarked: z.boolean().nullable().optional(),
+  public: z.boolean().nullable().optional(),
   sessionId: nullableString,
   completionStartTime: nullableString,
   createdAt: nullableString,
