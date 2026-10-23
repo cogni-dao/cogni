@@ -28,7 +28,7 @@ tags: [governance, transparency, payments, attribution]
 | **Research** | [epoch-event-ingestion-pipeline](../research/epoch-event-ingestion-pipeline.md)           | Ingestion pipeline research                                |
 | **Spec**     | [billing-evolution](./billing-evolution.md)                                               | Existing billing/credit system                             |
 | **Spec**     | [architecture](./architecture.md)                                                         | System architecture                                        |
-| **Spec**     | [decentralized-identity](./decentralized-user-identity.md)                                | Identity bindings (user_bindings)                          |
+| **Rule**     | [user-identity-bindings](https://cognidao.org/knowledge/user-identity-bindings)           | Identity bindings (user_bindings)                          |
 | **Spec**     | [identity-model](./identity-model.md)                                                     | All identity primitives (node_id, scope_id, user_id, etc.) |
 
 ## Core Invariants
@@ -225,7 +225,7 @@ Source adapters collect contribution activity from external systems and normaliz
 3. **Normalizes** to `IngestionReceipt` with deterministic ID, provenance fields, and platform identity
 4. **Inserts** idempotently (PK conflict = skip)
 
-Identity resolution happens after ingestion: lookup `user_bindings` (from [decentralized-identity spec](./decentralized-user-identity.md)) to map `(source, platform_user_id)` → `user_id`. If no binding exists yet, the receipt still flows into `epoch_receipt_claimants` as an unresolved identity claimant keyed by stable external identity (`identity:provider:externalId`).
+Identity resolution happens after ingestion: lookup `user_bindings` (from [user-identity-bindings](https://cognidao.org/knowledge/user-identity-bindings)) to map `(source, platform_user_id)` → `user_id`. If no binding exists yet, the receipt still flows into `epoch_receipt_claimants` as an unresolved identity claimant keyed by stable external identity (`identity:provider:externalId`).
 
 ### Weight Policy
 
@@ -904,6 +904,6 @@ Optional accrual at epoch sign (Dr Expense:ContributorRewards / Cr Liability:Unc
 - [billing-evolution](./billing-evolution.md) — Existing credit/billing system
 - [billing-ingest](./billing-ingest.md) — Callback-driven billing pipeline
 - [architecture](./architecture.md) — System architecture
-- [decentralized-user-identity](./decentralized-user-identity.md) — User identity bindings (`user_id` is canonical)
+- [user-identity-bindings](https://cognidao.org/knowledge/user-identity-bindings) — User identity bindings (`user_id` is canonical)
 - [identity-model](./identity-model.md) — All identity primitives (`node_id`, `scope_id`, `user_id`, `actor_id`, `billing_account_id`, `dao_address`)
 - [ai-governance-data](./ai-governance-data.md) — Autonomous governance agents (separate concern)

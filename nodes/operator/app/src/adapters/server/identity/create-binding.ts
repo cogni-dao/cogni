@@ -10,7 +10,7 @@
  * - NO_AUTO_MERGE: ON CONFLICT(provider, external_id) DO NOTHING — idempotent, never re-points.
  * - APPEND_ONLY_EVENTS: identity_events is append-only (DB trigger enforced).
  * Side-effects: IO (database writes)
- * Links: docs/spec/decentralized-identity.md
+ * Links: https://cognidao.org/knowledge/user-identity-bindings
  * @public
  */
 
