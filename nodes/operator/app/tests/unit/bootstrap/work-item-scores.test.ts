@@ -3,62 +3,27 @@
 
 /**
  * Module: `@tests/unit/bootstrap/work-item-scores`
- * Purpose: Pin the operator's ONE `scores` evidence-host allow-list (story.5111).
- * Scope: Pure function + the package validator it feeds. Does not touch the adapter or HTTP.
- * Invariants:
- *   - EXACT_HOSTS_ONLY: package default plus the exact `GRAFANA_URL` host; never `*.grafana.net`.
+ * Purpose: Verify operator adoption accepts external Justification links without host configuration.
+ * Scope: Released score parser conformance; no network or database.
+ * Invariants: SOURCES_ARE_UNRESTRICTED; SAFE_HTTPS_BOUNDS_REMAIN.
  * Side-effects: none
- * Links: src/bootstrap/work-item-scores.ts, packages/work-items/src/scores.ts (node-template)
+ * Links: hub adopt-node-package-release, story.5111
  * @internal
  */
-
-import {
-  DEFAULT_SCORE_EVIDENCE_HOSTS,
-  parseWorkItemScores,
-} from "@cogni/work-items";
+import { parseWorkItemScores } from "@cogni/work-items";
 import { describe, expect, it } from "vitest";
 
-import { workItemScoreEvidenceHosts } from "@/bootstrap/work-item-scores";
-
-const ev = (url: string) => ({ goal: { v: 5, ev: url } });
-
-describe("workItemScoreEvidenceHosts (story.5111)", () => {
-  it("is the package default when GRAFANA_URL is unset", () => {
-    expect(workItemScoreEvidenceHosts(undefined)).toEqual([
-      ...DEFAULT_SCORE_EVIDENCE_HOSTS,
-    ]);
+describe("operator shared evaluation adoption", () => {
+  it("accepts a future external HTTPS source without configuration", () => {
+    const scores = { goal: { v: 5, ev: "https://future.example/research" } };
+    expect(parseWorkItemScores(scores)).toEqual({ ok: true, value: scores });
   });
-
-  it("adds the exact GRAFANA_URL host, never a shared-tenant wildcard", () => {
-    const hosts = workItemScoreEvidenceHosts("https://Cogni-Ops.grafana.net/");
-    expect(hosts).toEqual([
-      ...DEFAULT_SCORE_EVIDENCE_HOSTS,
-      "cogni-ops.grafana.net",
-    ]);
-    expect(hosts).not.toContain("*.grafana.net");
-    expect(Object.isFrozen(hosts)).toBe(true);
-  });
-
-  it("lets the validator accept the operator stack and reject another tenant", () => {
-    const evidenceHosts = workItemScoreEvidenceHosts(
-      "https://cogni-ops.grafana.net"
-    );
+  it("retains required justification and credential URL rejection", () => {
+    expect(parseWorkItemScores({ goal: { v: 5 } }).ok).toBe(false);
     expect(
-      parseWorkItemScores(ev("https://cogni-ops.grafana.net/d/abc"), {
-        evidenceHosts,
+      parseWorkItemScores({
+        goal: { v: 5, ev: "https://user:pass@example.com/x" },
       }).ok
-    ).toBe(true);
-    const other = parseWorkItemScores(ev("https://attacker.grafana.net/d/x"), {
-      evidenceHosts,
-    });
-    expect(other.ok).toBe(false);
-    expect(!other.ok && other.issues[0]?.code).toBe(
-      "evidence_host_not_allowed"
-    );
-    expect(
-      parseWorkItemScores(ev("https://cognidao.org/work/items/story.5111"), {
-        evidenceHosts,
-      }).ok
-    ).toBe(true);
+    ).toBe(false);
   });
 });

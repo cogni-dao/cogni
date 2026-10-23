@@ -3,18 +3,17 @@
 
 /**
  * Module: `@tests/contract/app/work.items.scores.route`
- * Purpose: Prove the operator `scores` write path has ONE enforcer and ONE allow-list, and that a valid
+ * Purpose: Prove the operator `scores` write path has one shared bounds enforcer, and that a valid
  *   create → read → patch → clear round trip flows through the real routes and facade (story.5111).
  * Scope: Real route handlers + real facade. Rejections run the real `DoltgresWorkItemAdapter` configured
- *   with the operator's `workItemScoreEvidenceHosts(GRAFANA_URL)` over a SQL stub that must never be
+ *   without source-host configuration over a SQL stub that must never be
  *   called; the round trip runs an in-memory store. Does not touch a database.
  * Invariants:
  *   - SCORES_ONE_ENFORCER: the adapter's `parseWorkItemScores` rejects; the route answers 400
  *     `work_item_scores_invalid` with the package issues, before any SQL, never 500.
- *   - EXACT_HOSTS_ONLY: the configured Grafana stack host is accepted; another Grafana Cloud tenant is not.
  *   - PATCH_NULL_CLEARS: `scores: null` clears the column; the DTO then omits `scores`.
  * Side-effects: none
- * Links: src/bootstrap/work-item-scores.ts, src/app/_facades/work/items.server.ts,
+ * Links: src/app/_facades/work/items.server.ts,
  *   src/app/api/v1/work/items/_errors.ts, cogni-dao/node-template#198 (ported tests), hub work-item-scores-design
  * @internal
  */
@@ -30,9 +29,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as session from "@/app/_lib/auth/session";
 import * as byIdHandler from "@/app/api/v1/work/items/[id]/route";
 import * as createHandler from "@/app/api/v1/work/items/route";
-import { workItemScoreEvidenceHosts } from "@/bootstrap/work-item-scores";
-
-const GRAFANA_URL = "https://cogni-ops.grafana.net/";
 
 const { state, sqlCalls } = vi.hoisted(() => ({
   state: { store: undefined as unknown },
@@ -82,7 +78,6 @@ function stubSql(): Sql {
 function realAdapterOverStubSql(): DoltgresWorkItemAdapter {
   return new DoltgresWorkItemAdapter(stubSql(), {
     readClient: stubSql(),
-    scoreEvidenceHosts: workItemScoreEvidenceHosts(GRAFANA_URL),
   });
 }
 
@@ -153,8 +148,8 @@ describe("work-item scores HTTP boundary (story.5111)", () => {
     ["v ≥ 4 without ev", { goal: { v: 4 } }, "evidence_required"],
     [
       "another Grafana Cloud tenant as ev",
-      { goal: { v: 4, ev: "https://attacker.grafana.net/d/x" } },
-      "evidence_host_not_allowed",
+      { goal: { v: 4, ev: "https://user:pass@example.com/d/x" } },
+      "evidence_invalid_url",
     ],
     [
       "http ev",

@@ -16,6 +16,7 @@ RUN apk add --no-cache g++ make python3
 #    --parents preserves directory structure with wildcards (BuildKit feature)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --parents nodes/operator/app/package.json ./
+COPY --parents nodes/operator/graphs/package.json ./
 COPY --parents packages/*/package.json ./
 COPY --parents nodes/*/app/package.json ./
 COPY --parents nodes/*/packages/*/package.json ./

@@ -25,7 +25,7 @@ import type {
   VcsCapability,
   WebSearchCapability,
 } from "@cogni/ai-tools";
-import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import type { AttributionStore } from "@cogni/attribution-ledger";
 import {
   createDefaultRegistries,
@@ -164,6 +164,7 @@ import {
   getTestOnChainVerifier,
   getTestOperatorWallet,
 } from "@/adapters/test";
+import { OPERATOR_CORE_TOOL_BUNDLE } from "@/bootstrap/ai/evaluation-baseline";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
 import { createComputeCapability } from "@/bootstrap/capabilities/compute";
@@ -188,7 +189,6 @@ import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
-import { workItemScoreEvidenceHosts } from "@/bootstrap/work-item-scores";
 import {
   type AttributionProfileResolver,
   createAttributionProfileResolver,
@@ -1006,10 +1006,7 @@ function createContainer(): Container {
 
   let doltgresWorkItems: WorkItemsContentPort;
   try {
-    doltgresWorkItems = getDoltgresWorkItemsAdapter(log, {
-      // SCORES_ONE_ENFORCER (story.5111): the operator's single ev allow-list.
-      scoreEvidenceHosts: workItemScoreEvidenceHosts(env.GRAFANA_URL),
-    });
+    doltgresWorkItems = getDoltgresWorkItemsAdapter(log);
   } catch (e) {
     if (!(e instanceof DoltgresNotConfiguredError)) throw e;
     const notConfigured = () => {
@@ -1045,6 +1042,7 @@ function createContainer(): Container {
 
   // ToolSource with real implementations (per CAPABILITY_INJECTION)
   const toolBindings = createToolBindings({
+    nodePublicOrigin: env.APP_BASE_URL,
     knowledgeCapability,
     edoCapability,
     metricsCapability,
@@ -1054,7 +1052,7 @@ function createContainer(): Container {
     vcsCapability,
     workItemCapability,
   });
-  const operatorToolBundle = [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE];
+  const operatorToolBundle = [...OPERATOR_CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE];
   const toolSource = createBoundToolSource(operatorToolBundle, toolBindings);
 
   // Config: rethrow in dev/test for diagnosis, respond_500 in production for safety
