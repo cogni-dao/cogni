@@ -81,7 +81,7 @@ describe("WorkItemScoresRadar", () => {
     expect(links).toHaveLength(1);
     const link = links[0];
     expect(link).toHaveAccessibleName("Goal value justification");
-    expect(link).toHaveTextContent("justification");
+    expect(link).toHaveTextContent("Justification");
     expect(link).toHaveAttribute(
       "href",
       "https://cognidao.org/work/items/story.5111"
