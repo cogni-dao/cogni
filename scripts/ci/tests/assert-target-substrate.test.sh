@@ -221,6 +221,9 @@ mkdir -p "$HAPPY_TREE/infra/catalog" \
   "$HAPPY_TREE/infra/k8s/overlays/candidate-a/node-template" \
   "$HAPPY_TREE/infra/k8s/argocd/appsets/candidate-a"
 cp infra/catalog/node-template.yaml "$HAPPY_TREE/infra/catalog/node-template.yaml"
+# This fixture owns the legacy DNS path regardless of live catalog opt-ins.
+# Delegated writer and credential-present isolation are exercised separately.
+yq -i 'del(.k3s_dns)' "$HAPPY_TREE/infra/catalog/node-template.yaml"
 cp infra/k8s/overlays/candidate-a/node-template/*.yaml \
   "$HAPPY_TREE/infra/k8s/overlays/candidate-a/node-template/"
 # Derive both the AppSet path and its directory from the copied catalog. Candidate
