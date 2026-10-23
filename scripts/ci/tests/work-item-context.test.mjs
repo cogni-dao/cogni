@@ -298,7 +298,7 @@ test("cross-hub reads use explicitly separate credentials and never forward the 
   );
   await writeFile(
     join(node.cwd, "node.env"),
-    "COGNI_NODE_API_KEY=explicit-node-secret\n"
+    `COGNI_NODE_API_KEY=explicit-node-secret\nCOGNI_NODE_URL=${node.origin}\n`
   );
   await assert.rejects(
     node.call(["next", "task.1000", "--guide-origin", guide.origin]),
@@ -350,6 +350,83 @@ test("cross-hub reads use explicitly separate credentials and never forward the 
     ]),
     /refusing to forward/
   );
+});
+
+test("explicit node credential file also isolates origin from the parent process", async (t) => {
+  const node = await fixture(t);
+  const parent = await fixture(t, "operator-session");
+  await writeFile(
+    join(node.cwd, "child.env"),
+    `COGNI_NODE_API_KEY=child-key\nCOGNI_NODE_URL=${node.origin}\n`
+  );
+  const env = {
+    ...node.env,
+    COGNI_NODE_URL: parent.origin,
+    COGNI_NODE_API_KEY: "parent-key",
+  };
+  const result = await run(
+    ["next", "task.1000", "--env-file", "child.env"],
+    env,
+    node.cwd
+  );
+  assert.equal(result.context.nodeUrl, node.origin);
+  assert.equal(
+    node.state.calls.find((x) => x.path.endsWith("task.1000")).key,
+    "Bearer child-key"
+  );
+  assert.equal(
+    parent.state.calls.length,
+    0,
+    "the parent origin must not receive the child credential"
+  );
+  await writeFile(
+    join(node.cwd, "child.env"),
+    "COGNI_NODE_API_KEY=child-key\n"
+  );
+  await assert.rejects(
+    run(["next", "task.1000", "--env-file", "child.env"], env, node.cwd),
+    /COGNI_NODE_URL/
+  );
+  assert.equal(parent.state.calls.length, 0);
+});
+
+test("known-success claim with missing guidance resumes through read-only recovery without a repeated claim", async (t) => {
+  const node = await fixture(t);
+  const guide = await fixture(t);
+  await writeFile(
+    join(node.cwd, "child.env"),
+    `COGNI_NODE_API_KEY=child-key\nCOGNI_NODE_URL=${node.origin}\n`
+  );
+  await writeFile(
+    join(node.cwd, "reader.env"),
+    "COGNI_OPERATOR_NODE_API_KEY=reader-key\n"
+  );
+  guide.state.guideFails = true;
+  const result = await node.call([
+    "claim",
+    "task.1000",
+    "--env-file",
+    "child.env",
+    "--guide-origin",
+    guide.origin,
+    "--guide-env-file",
+    "reader.env",
+  ]);
+  assert.equal(result.result, "mutation_succeeded_guidance_unavailable");
+  const calls = node.state.calls.length + guide.state.calls.length;
+  const resumed = await node.call(["session-start"]);
+  assert.match(resumed.hookContext, /known.success|known claim/i);
+  assert.match(resumed.hookContext, /read.only next/i);
+  assert.match(resumed.hookContext, /reader\.env/);
+  assert.match(resumed.hookContext, /child\.env/);
+  assert.ok(resumed.hookContext.includes(guide.origin));
+  assert.doesNotMatch(resumed.hookContext, /then claim|--body/);
+  assert.equal(
+    calls,
+    node.state.calls.length + guide.state.calls.length,
+    "recovery presentation stays offline"
+  );
+  assert.equal(node.state.calls.filter((x) => x.method === "POST").length, 1);
 });
 
 test("stale claim, another native thread and read-only inspection do not create ownership", async (t) => {

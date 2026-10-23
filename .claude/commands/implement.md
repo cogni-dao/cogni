@@ -26,7 +26,7 @@ and their separate saved credentials. An unsuccessful claim never binds a sessio
 Before writing any code, verify:
 
 - your work item is at `needs_implement` (`GET /api/v1/work/items/{id}`), and you hold its claim
-- your branch is created from fresh `origin/main` (`git fetch origin && git checkout -b <type>/<id>-<slug> origin/main`), then linked with `POST /api/v1/work/items/{id}/pr`
+- your branch has the intended `origin/main` ancestry and isolates this item. Keep the existing Conductor branch when instructed; do not rename or replace it automatically. If unrelated work requires isolation, create a separate branch/worktree without rewriting the original. Link the PR through the context client only after it exists, using the node's advertised contract (Phase 5).
 - the worktree is bootstrapped (`bash scripts/conductor-worktree-setup.sh`) and `pnpm typecheck` is clean before you change anything
 
 You do not work until you have a unique work item id and a clean branch that is self-contained for your work.

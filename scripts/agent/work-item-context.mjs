@@ -18,7 +18,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const CORE_GUIDE = "cicd-e2e-required-sequence";
 const hash = (value) => createHash("sha256").update(value).digest("hex");
@@ -223,13 +223,20 @@ export async function run(
   if (binding && binding.sessionId !== sessionId) binding = undefined;
 
   if (options.operation === "session-start") {
-    if (!binding?.context)
+    if (!binding)
       return {
         hookContext:
-          "Cogni workflow: no verified work-item binding for this native session. Identify the explicit item and node, then claim through work-item-context before dependent work. Do not infer ownership from the branch.",
+          "Cogni workflow: no verified work-item binding for this native session. Identify the explicit item and node, inspect current coordination, and claim only if not already held. Do not infer ownership from the branch or replay a mutation to repair missing context.",
+      };
+    const refresh = binding.refreshCommand
+      ? `Refresh command argv (contains no credential): ${JSON.stringify(binding.refreshCommand)}`
+      : "Reuse the original explicit node/item and credential/source options for next; this older projection does not retain those pointers.";
+    if (!binding.context)
+      return {
+        hookContext: `KNOWN CLAIM — the claim for ${binding.itemId} on ${binding.nodeUrl} previously succeeded, but guidance was unavailable. Do not repeat the claim. Run read-only next, revalidate current ownership, and obtain live guidance before dependent work.\n${refresh}`,
       };
     return {
-      hookContext: `CACHED WORKFLOW CONTEXT — not current authority. Before dependent work run read-only next for ${binding.itemId} on ${binding.nodeUrl}; revalidate ownership and live guidance. Do not replay prior mutations.\n${JSON.stringify(binding.context)}`,
+      hookContext: `CACHED WORKFLOW CONTEXT — not current authority. Before dependent work run read-only next for ${binding.itemId} on ${binding.nodeUrl}; revalidate ownership and live guidance. Do not replay prior mutations.\n${refresh}\n${JSON.stringify(binding.context)}`,
     };
   }
 
@@ -248,7 +255,10 @@ export async function run(
     ? fileEnv.COGNI_NODE_API_KEY
     : (env.COGNI_NODE_API_KEY ?? fileEnv.COGNI_NODE_API_KEY);
   const originValue =
-    options["node-url"] ?? env.COGNI_NODE_URL ?? fileEnv.COGNI_NODE_URL;
+    options["node-url"] ??
+    (options["env-file"]
+      ? fileEnv.COGNI_NODE_URL
+      : (env.COGNI_NODE_URL ?? fileEnv.COGNI_NODE_URL));
   if (!originValue || !key)
     throw new Error(
       "Configure this node's COGNI_NODE_URL and COGNI_NODE_API_KEY; operator CI/CD credentials are never a fallback"
@@ -291,6 +301,27 @@ export async function run(
   }
   const requestedGuide = options.guide ?? CORE_GUIDE;
   if (!validGuide(requestedGuide)) throw new Error("Invalid guide id");
+  const refreshCommand = [
+    "node",
+    fileURLToPath(import.meta.url),
+    "next",
+    itemId,
+    "--node-url",
+    origin,
+    ...(options["env-file"]
+      ? ["--env-file", resolve(root, options["env-file"])]
+      : []),
+    ...(guideOrigin !== origin
+      ? [
+          "--guide-origin",
+          guideOrigin,
+          "--guide-env-file",
+          resolve(root, options["guide-env-file"]),
+        ]
+      : []),
+    ...(requestedGuide !== CORE_GUIDE ? ["--guide", requestedGuide] : []),
+    ...(options["session-id"] ? ["--session-id", options["session-id"]] : []),
+  ];
   let body = JSON.parse(options.body ?? "{}");
   if (!body || typeof body !== "object" || Array.isArray(body))
     throw new Error("body must be a JSON object");
@@ -369,6 +400,7 @@ export async function run(
             nodeUrl: origin,
             itemId,
             sessionId,
+            refreshCommand,
             claimIdentity:
               profile.kind === "node-run"
                 ? body.runId
@@ -449,7 +481,7 @@ export async function run(
   // Merely inspecting another item must never create ownership or a recovery binding.
   if (cachePath && context.ownership === "verified_current_claim") {
     try {
-      await saveJson(cachePath, { ...binding, context });
+      await saveJson(cachePath, { ...binding, refreshCommand, context });
     } catch {
       context.cacheWarning =
         "Local recovery projection could not be saved; current context remains usable. Do not replay writes.";
