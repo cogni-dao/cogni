@@ -414,7 +414,13 @@ native Langfuse read contract, not a replacement Langfuse SDK base URL. The exis
   bound into continuation cursors.
 - Legacy generation ownership requires an independent authenticated LiteLLM spend receipt matching
   the provider response ID, authenticated key hash, canonical UUID/lane alias and time. Failed calls
-  without provider IDs require a unique failure receipt plus matching run/trace correlation. Names,
+  without provider IDs require a finite native `endTime >= startTime`; the bounded receipt query
+  and time comparison use `endTime` because the pinned failure writer timestamps receipts at
+  termination. The complete receipt bucket must fit the existing two-row cap, with exactly one
+  failure-status/key/alias/node/run/time match and matching native run/trace correlation. Missing
+  end times, delayed receipts outside the tolerance, over-cap/incomplete buckets and duplicate
+  matching failures remain explicit attribution gaps; exhaustive error coverage is not guaranteed.
+  Provider-ID joins keep their start-time anchor and singularity rule. Names,
   tags and caller metadata alone authorize nothing. Unknown/mixed observations are withheld and
   counted in `meta.cogni.attributionUnavailable`; continuation stays available even on an empty page.
   This legacy verifier currently qualifies generation records, including their tool-call/result I/O;
