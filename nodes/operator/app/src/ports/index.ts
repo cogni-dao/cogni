@@ -234,6 +234,9 @@ export type {
   IdentityAttestationSignerPort,
 } from "./identity-attestation.port";
 export type {
+  LangfuseObservationPage,
+  LangfuseObservationQuery,
+  LangfuseOwnershipPort,
   LangfuseReaderPort,
   LangfuseTraceQuery,
   LangfuseTraceSummary,

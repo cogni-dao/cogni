@@ -38,6 +38,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
 
 - **Exports:** none
 - **Routes (if any):**
+  - `/api/v1/nodes/[id]/observability/langfuse/api/public/v2/observations` [GET] — developer-gated native Langfuse observation reads with independent receipt ownership, bounded native pagination and privacy projection
   - `/api/auth/[...nextauth]` [GET, POST]
   - `/api/setup/verify` [POST] - DAO formation verification
   - `/api/v1/nodes` [GET, POST] - managed-node registry: list owner's nodes + create a new registration

@@ -339,7 +339,7 @@ _compose_node_value() {
       # It is NOT the source of truth: post-init the field is stored + reconciled to the
       # live volume via `pnpm secrets:set <env> operator DOLTGRES_PASSWORD` (immutable
       # superuser, Doltgres 0.56.3 can't ALTER it — databases.md §5.2), never re-derived.
-      local _dg; _dg="$(bao_get_field operator DOLTGRES_PASSWORD)"
+      local _dg; _dg="$(bao_get_field operator DOLTGRES_PASSWORD owner)"
       [[ -n "$_dg" ]] && { printf '%s' "$_dg"; return 0; }
       derive_secret doltgres-root; return 0 ;;
     DOLTGRES_URL)
@@ -349,7 +349,7 @@ _compose_node_value() {
       # volume restore). Same resolution as the DOLTGRES_PASSWORD branch (operator
       # SSOT, else genesis derive) so the URL never embeds an empty password before
       # operator is seeded. Composed, never derived inline, never from .env.
-      local _dgu; _dgu="$(bao_get_field operator DOLTGRES_PASSWORD)"
+      local _dgu; _dgu="$(bao_get_field operator DOLTGRES_PASSWORD owner)"
       [[ -n "$_dgu" ]] || _dgu="$(derive_secret doltgres-root)"
       # ${VM_IP} + ${dg_sfx}, NOT ${pg_host}/${sfx}: Doltgres residency is out of scope
       # for bug.5299 and must not move when a Postgres pin is deleted.

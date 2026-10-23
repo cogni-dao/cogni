@@ -375,6 +375,90 @@ acceptance contract.
 9. **LANGFUSE_NODE_ATTRIBUTION:** Every trace carries `nodeId` (= repo-spec `node_id`) as a tag AND metadata field — the AI-trace twin of `NODE_IDENTITY_IN_OBSERVABILITY` for logs. Without it the shared Langfuse project (one project, all nodes — `LANGFUSE_*` is `shared:true`) cannot be filtered to one node, so a node dev cannot read only their traces. Wired in the shared `ObservabilityGraphExecutorDecorator` (`config.nodeId`, injected app-side — the PURE_LIBRARY package never reads repo-spec) and the operator factory (`container.nodeId`); a warn-once fires if a node leaves it unwired. ⚠️ node-template wires the same one line next (the decorator change is non-breaking — `nodeId` is optional). See [Substrate Access-Grant Plane](./substrate-access-grant.md).
 10. **LANGFUSE_DEV_READ_IS_PROXIED:** A `developer`-grant dev reads their node's traces through `GET /api/v1/nodes/{id}/observability/traces` — the operator runs the trace-list AND-ed with `nodeId=<id>` via the operator-held key. The dev NEVER holds `LANGFUSE_SECRET_KEY` (it reads the whole shared project = every node's traces — same reach correction as the Grafana proxy).
 
+### Native node observation reads
+
+The operator exposes `GET /api/v1/nodes/{slug-or-uuid}/observability/langfuse/api/public/v2/observations`
+with Cogni Bearer identity and the same `node.flight` developer check as logs. This is a bounded
+native Langfuse read contract, not a replacement Langfuse SDK base URL. The existing summary
+`GET /observability/traces` remains compatible.
+
+- Native queries support `environment`, `fromStartTime`, `toStartTime`, `limit`, `cursor`, `fields`,
+  `traceId`, `sessionId`, `name`, `type`, `level`, and a small exact-match `filter` grammar defined in
+  `nodes.langfuse.observations.v1.contract.ts`. Unknown/duplicate parameters, ownership filters and
+  widening operators are rejected. Server-owned node/lane/time filters and caller narrowing are
+  compiled into one AND array; upstream structured filters override standalone parameters.
+- Native `data`/`meta.cursor` results preserve observation IDs, parent IDs, model, usage, error and
+  I/O fields. `meta.cogni` states the verified logical environment, fixed time window, privacy
+  projection, truncation and attribution gaps. I/O remains a native string when upstream supplies
+  a string; recursively scrubbed JSON strings remain strings. Native `sessionId` belongs to `basic`;
+  `tags`, `release` and `traceName` belong to `trace_context`. The `basic.userId` field is deliberately
+  withheld by privacy policy; model pricing enrichment is null unless `model` is requested.
+  All selected fields, including status messages, tags and allowlisted metadata, share a raw-byte
+  budget per observation before any content scrubbing. The page-wide sum is at most 1 MiB less
+  response overhead: oversized optional fields become native null with truncated/partial flags,
+  every authorized observation stays in its page, and oversized required identity fails explicitly.
+  Private metadata omitted by the allowlist does not consume this budget.
+  Before inherited content regexes run, a linear scan withholds unbroken string-leaf tokens longer
+  than 2,048 characters and marks `meta.cogni.truncated/partial`; ordinary long prose is preserved.
+  Metadata uses an explicit allowlist;
+  authentication objects, key fingerprints, billing accounts, requester metadata and user identifiers
+  are withheld. The shared project key never reaches a developer.
+- The operator's own observations use its explicitly configured `DEPLOY_ENVIRONMENT` as their
+  recorded backend partition, and are readable only for that same logical lane. Missing or
+  cross-lane operator custody returns `attribution_unavailable` (503) before querying; no shared
+  project or hostname implies access to another lane's receipt backend. Sovereign legacy aliases
+  retain their production-custodied backend partition even when the alias names candidate-a or
+  preview. Such sovereign reads are served only by the production operator gateway; candidate and
+  preview processes return explicit 503 instead of querying their unrelated local receipt backend.
+  This resolved binding scopes both the upstream AND filter and response checks, and is
+  bound into continuation cursors.
+- Legacy generation ownership requires an independent authenticated LiteLLM spend receipt matching
+  the provider response ID, authenticated key hash, canonical UUID/lane alias and time. Failed calls
+  without provider IDs require a finite native `endTime >= startTime`; the bounded receipt query
+  and time comparison use `endTime` because the pinned failure writer timestamps receipts at
+  termination. The complete receipt bucket must fit the existing two-row cap, with exactly one
+  failure-status/key/alias/node/run/time match and matching native run/trace correlation. Missing
+  end times, delayed receipts outside the tolerance, over-cap/incomplete buckets and duplicate
+  matching failures remain explicit attribution gaps; exhaustive error coverage is not guaranteed.
+  Provider-ID joins keep their start-time anchor and singularity rule. Names,
+  tags and caller metadata alone authorize nothing. Unknown/mixed observations are withheld and
+  counted in `meta.cogni.attributionUnavailable`; continuation stays available even on an empty page.
+  This legacy verifier currently qualifies generation records, including their tool-call/result I/O;
+  native tool-span records require their own independently trusted ownership evidence.
+- Application terminal outcomes are available through the explicit native selector
+  `type=SPAN&traceId=<32-hex-trace-id>` (or equivalent exact AND filters). This reads only the
+  virtual app root `t-<traceId>` in its native `default` partition. SPAN lists, conflicting
+  selectors and arbitrary child IDs are rejected. Default/generation reads use their existing
+  recorded partition; root/generation query plans are bound into signed cursor scope.
+  Root metadata is only a join hint: independent Loki creation/completion receipts must match
+  original collector env/service/node labels, immutable svcNode, exact trace/langfuse/request/run,
+  graph identity, timestamps and terminal outcome. Exactly one pair is required; absent or
+  ambiguous proof is an explicit attribution gap. Missing Loki wiring is 503; the fixed read
+  uses the parent deadline and a 512 KiB body cap. Completion may follow the caller's root-start
+  window, bounded to 24h after root start. This attests only the exact root, with no descendant,
+  aggregate or hostile-writer isolation claim.
+- The first query freezes a maximum 24-hour window; continuation must repeat the same query and
+  use its signed node/lane/backend/window/fields/filter-bound cursor. Default/max page sizes are
+  50/100 are upper bounds. The gateway starts with at most 10 upstream observations and, only on
+  upstream byte overflow, retries the same cursor/window at 2 then 1 observation. At most three
+  attempts share one 15-second deadline and a 24 MiB cumulative stream-read budget; each attempt
+  is capped at 8 MiB. A single observation exceeding the body cap fails explicitly. The native
+  cursor comes only from the successful page, so retries never advance past discarded rows.
+  `meta.cogni.upstreamPageSize/upstreamByteLimited` explain subpaging; follow the returned cursor
+  rather than treating a short page as exhaustion. Output is bounded to 1 MiB with explicit
+  content-withheld/truncated flags, each upstream
+  request has a 15-second deadline, and concurrent reads are bounded to two per node/process.
+  The existing token-bucket limiter enforces 10 requests/minute plus five burst per node/process.
+  Replicas have independent limits. Upstream 429 preserves numeric Retry-After; private bodies
+  never appear in error responses or logs. Receipt-service failures and timeouts return dependency
+  failures (including safe Retry-After on 429), rather than successful attribution-gap pages.
+  Metrics, scores, mutations and arbitrary proxy paths
+  are unavailable through this operation.
+
+The executable request schema and public operation discovery are advertised by `/.well-known/agent.json`.
+Runtime credentials and the configured Langfuse/LiteLLM URLs remain substrate-owned; missing credentials
+or ownership evidence are explicit failures/gaps, never evidence that a node has no AI traffic.
+
 ### Trace Contract
 
 | Field       | Source                                                          | Requirement                                                                                       |

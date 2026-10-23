@@ -146,6 +146,9 @@ export const INHERITED_KEY_OWNER: ReadonlyMap<string, string> = new Map<
   ["OPENROUTER_API_KEY", "operator"],
   ["EVM_RPC_URL", "operator"],
   ["GH_WEBHOOK_SECRET", "operator"],
+  ["POSTHOG_API_KEY", "operator"],
+  ["POSTHOG_HOST", "operator"],
+  ["TAVILY_API_KEY", "operator"],
 ]);
 
 /**

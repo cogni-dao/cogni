@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 set -euo pipefail
+bash scripts/ci/tests/target-owner-bank.test.sh
 export FLEET_CONTROL_ENV=production
 export FORK_DOMAIN_ROOT=cognidao.org COGNI_DOMAIN_ROOT=cognidao.org COGNI_DEPLOYMENT_SLUG=cogni
 
@@ -49,6 +50,10 @@ DOLT_CREDS_KEYID=stale-keyid-sentinel
 DOLTHUB_OWNER=cogni-dao
 DOLTHUB_API_TOKEN=stale-pat-sentinel
 EOF
+cp "$REMOTE_ROOT/opt/cogni-template-runtime/.env" "$TMPROOT/runtime-env.before"
+mkdir -p "$REMOTE_ROOT/opt/cogni-template-runtime/doltgres-init"
+printf '%s\n' existing-infra-owned-executable > "$REMOTE_ROOT/opt/cogni-template-runtime/doltgres-init/install-creds.sh"
+cp "$REMOTE_ROOT/opt/cogni-template-runtime/doltgres-init/install-creds.sh" "$TMPROOT/install-creds.before"
 cat > "$DESTINATION_ROOT/opt/cogni-template-runtime/.env" <<'EOF'
 DEPLOY_ENVIRONMENT=candidate-a
 POSTGRES_ROOT_USER=postgres
@@ -97,11 +102,7 @@ put_secret database-reliability-readmitter DATABASE_RELIABILITY_READMIT_PASSWORD
 # Doltgres superuser SSOT is operator-canonical (cogni/<env>/operator/DOLTGRES_PASSWORD),
 # shared env-wide; reconcile reads it from operator and injects it into doltgres-provision.
 put_secret operator DOLTGRES_PASSWORD doltgres-super-sentinel
-# DoltHub knowledge-mirror creds — env-global, read from the operator-canonical bank
-# (mirrors DOLTGRES_PASSWORD). secret-materialize already materializes these into every
-# node bank. The reconcile lane renders them to the VM runtime .env + recreates doltgres
-# so install-creds.sh re-runs — Option B (substrate lane, not deploy-infra). The JWK value
-# carries JSON metachars ({,",}) on purpose so the base64 no-injection path is exercised.
+# Existing infra-owned mirror credentials must stay untouched by target reconcile.
 put_secret operator DOLT_CREDS_JWK '{"kty":"OKP","d":"jwk-secret-sentinel"}'
 put_secret operator DOLT_CREDS_KEYID dolt-mirror-keyid-sentinel
 
@@ -496,7 +497,7 @@ cmp "$TMPROOT/expected-migration-identity.sql" "$REMOTE_ROOT/migration-identity.
 ! grep -Fq '\047' "$REMOTE_ROOT/migration-identity.sql"
 grep -q 'migration role identity/budget readback failed' "$remote_provisioner"
 cmp infra/compose/runtime/docker-compose.yml "$REMOTE_ROOT/opt/cogni-template-runtime/docker-compose.yml"
-cmp infra/compose/runtime/doltgres-init/install-creds.sh "$REMOTE_ROOT/opt/cogni-template-runtime/doltgres-init/install-creds.sh"
+cmp "$TMPROOT/install-creds.before" "$REMOTE_ROOT/opt/cogni-template-runtime/doltgres-init/install-creds.sh"
 cmp infra/compose/runtime/doltgres-init/provision.sh "$REMOTE_ROOT/opt/cogni-template-runtime/doltgres-init/provision.sh"
 cmp infra/compose/edge/docker-compose.yml "$REMOTE_ROOT/opt/cogni-template-edge/docker-compose.yml"
 grep -q '\[remote\] exact runtime compose mounts verified ok' "$TMPROOT/out.txt"
@@ -677,22 +678,14 @@ fi
 # if absent; never the poisoned VM .env value) AND is node-scoped via -e COGNI_NODE_DBS
 # (bug.5033 — symmetric with db-provision so knowledge_<node> is created deterministically,
 # not silently skipped → no node-app Init:CrashLoopBackOff).
-grep -qE -- '--profile bootstrap run --rm -e COGNI_NODE_DBS=cogni_operator -e DOLTGRES_PASSWORD=.* doltgres-provision' "$REMOTE_ROOT/docker.log"
+grep -qE -- '--profile bootstrap run --rm --no-deps -e COGNI_NODE_DBS=cogni_operator -e DOLTGRES_PASSWORD=.* doltgres-provision' "$REMOTE_ROOT/docker.log"
 
-# DoltHub mirror PROD-ONLY purge (bug.5003): candidate-a is NON-PROD, so the lane must
-# NEVER deliver the prod-capable DoltHub push cred — even one left in the VM .env by a
-# pre-guard flight (seeded above). It actively STRIPS the four keys and force-recreates
-# doltgres so install-creds.sh re-runs and no-ops (mirror dark). It also does NOT read
-# the operator bank creds at all in non-prod (the zero-write bank assertion above still
-# holds: the seeded bank DOLT_CREDS_* remain untouched).
-for k in DOLT_CREDS_JWK DOLT_CREDS_KEYID DOLTHUB_OWNER DOLTHUB_API_TOKEN; do
-  grep -qE "^${k}=" "$REMOTE_ROOT/opt/cogni-template-runtime/.env" \
-    && { echo "non-prod: ${k} was NOT stripped from VM runtime .env (prod-capable cred left on a test VM)" >&2; exit 1; }
-done
-grep -q 'up -d --force-recreate doltgres' "$REMOTE_ROOT/docker.log" \
-  || { echo "doltgres not force-recreated after mirror-cred purge (install-creds.sh would not re-run → mirror not dark)" >&2; exit 1; }
-grep -q 'dolt_mirror_creds' <(python3 -c 'import json,sys; print("\n".join(r["row"] for r in json.load(open(sys.argv[1]))["rows"]))' "$TMPROOT/summary.json") \
-  || { echo "dolt_mirror_creds row missing from reconcile summary" >&2; exit 1; }
+# Only infra owns shared env/executable/engine mutation, even for legacy drift.
+cmp "$TMPROOT/runtime-env.before" "$REMOTE_ROOT/opt/cogni-template-runtime/.env"
+cmp "$TMPROOT/install-creds.before" "$REMOTE_ROOT/opt/cogni-template-runtime/doltgres-init/install-creds.sh"
+if grep -qE ' up -d (postgres|doltgres)|force-recreate' "$REMOTE_ROOT/docker.log"; then
+  echo 'ordinary node reconciliation changed shared engine lifecycle' >&2; exit 1
+fi
 
 # Idempotency: a second reconcile with UNCHANGED creds must NOT recreate doltgres again
 # (hash-gate). Count force-recreates before/after a re-run and assert no new one — never
@@ -726,9 +719,21 @@ docker_log_start="$(wc -l < "$REMOTE_ROOT/docker.log" | tr -d ' ')"
 kubectl_log_start="$(wc -l < "$REMOTE_ROOT/kubectl.log" | tr -d ' ')"
 scp_log_start="$(wc -l < "$REMOTE_ROOT/scp.log" | tr -d ' ')"
 cp "$REMOTE_ROOT/opt/cogni-template-edge/.env" "$TMPROOT/edge-env.before-akash"
+mkdir -p "$TMPROOT/akash-source/infra/catalog"
+mkdir -p "$TMPROOT/akash-source/nodes/operator/.cogni"
+cp nodes/operator/.cogni/repo-spec.yaml "$TMPROOT/akash-source/nodes/operator/.cogni/repo-spec.yaml"
+cp infra/catalog/operator.yaml "$TMPROOT/akash-source/infra/catalog/operator.yaml"
+yq -i '.deployment_provider."candidate-a" = "akash"' "$TMPROOT/akash-source/infra/catalog/operator.yaml"
+if env VM_HOST=fake DOMAIN=test.cognidao.org DEPLOYMENT_PROVIDER=k3s \
+  COGNI_CATALOG_ROOT="$TMPROOT/akash-source/infra/catalog" \
+  bash scripts/ci/reconcile-node-substrate.sh candidate-a operator > "$TMPROOT/provider-mismatch.out" 2>&1; then
+  echo 'direct reconcile accepted a provider override contrary to catalog' >&2; exit 1
+fi
 env \
   VM_HOST=fake \
   DOMAIN=test.cognidao.org \
+  FLEET_CONTROL_ENV=candidate-a \
+  COGNI_CATALOG_ROOT="$TMPROOT/akash-source/infra/catalog" \
   DEPLOYMENT_PROVIDER=akash \
   SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
   RECONCILE_NODE_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" \
@@ -746,7 +751,7 @@ cmp -s "$TMPROOT/edge-env.before-akash" "$REMOTE_ROOT/opt/cogni-template-edge/.e
 grep -q -- "-n cogni-candidate-a annotate externalsecret operator-env-secrets force-sync=" "$TMPROOT/akash-kubectl.log"
 grep -q -- "-e COGNI_NODE_DBS=cogni_operator" "$TMPROOT/akash-docker.log"
 grep -qE -- "--profile bootstrap run --rm .* db-provision" "$TMPROOT/akash-docker.log"
-grep -qE -- "--profile bootstrap run --rm -e COGNI_NODE_DBS=cogni_operator -e DOLTGRES_PASSWORD=.* doltgres-provision" "$TMPROOT/akash-docker.log"
+grep -qE -- "--profile bootstrap run --rm --no-deps -e COGNI_NODE_DBS=cogni_operator -e DOLTGRES_PASSWORD=.* doltgres-provision" "$TMPROOT/akash-docker.log"
 grep -q "cogni-reconcile.alloy-config\." "$TMPROOT/akash-scp.log"
 if grep -qE "Caddyfile|reconcile-edge-caddy" "$TMPROOT/akash-scp.log"; then
   echo "Akash reconcile staged k3s Caddy/NodePort edge inputs" >&2
@@ -882,9 +887,9 @@ for foreign_node in poly "$FOREIGN_NODE"; do
     bash scripts/ci/reconcile-node-substrate.sh candidate-a "$foreign_node" \
     > "$TMPROOT/$foreign_node.out"
   tail -n "+$((docker_log_start + 1))" "$REMOTE_ROOT/docker.log" > "$TMPROOT/$foreign_node-docker.log"
-  grep -qE -- "--profile bootstrap run --rm -e COGNI_NODE_DBS=$control_db .* doltgres-provision" \
+  grep -qE -- "--profile bootstrap run --rm --no-deps -e COGNI_NODE_DBS=$control_db .* doltgres-provision" \
     "$TMPROOT/$foreign_node-docker.log"
-  grep -q "$control_db" "$REMOTE_ROOT/opt/cogni-template-runtime/.env"
+  cmp "$TMPROOT/runtime-env.before" "$REMOTE_ROOT/opt/cogni-template-runtime/.env"
   grep -q 'projected migration DSN digest and live identity verified ok' "$TMPROOT/$foreign_node.out"
   jq -e '.rows[] | select(.row == "migration_dsn_proven") | .state == "ready"' \
     "$TMPROOT/$foreign_node-summary.json" >/dev/null
@@ -1130,6 +1135,52 @@ for probe_case in wrong_password unsafe_acl database_override metadata_failure m
   fi
   if grep -q 'runtime_role_probe_deferred' "$TMPROOT/runtime-$probe_case.out"; then
     echo "failed runtime probe '$probe_case' reported deferral" >&2; exit 1
+  fi
+done
+
+# The real prerequisite guard must consume the producer fully under pipefail.
+# A large successful service listing demonstrates the early-close hazard;
+# missing services and actual Compose failures must still refuse provisioning.
+python3 - "$TMPROOT" <<'PYTEST'
+from pathlib import Path
+import sys
+source = Path('scripts/ci/reconcile-node-substrate.sh').read_text()
+start = source.rfind('\n', 0, source.index(' config --services |')) + 1
+end = source.index('\n  }', start) + len('\n  }')
+Path(sys.argv[1], 'doltgres-prerequisite.sh').write_text(source[start:end].replace('\\$', '$').replace('\\"', '"'))
+PYTEST
+cat > "$TMPROOT/service-list.py" <<'PYTEST'
+import os
+import signal
+import sys
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+mode = sys.argv[1]
+os.write(1, b'postgres\n' if mode == 'missing' else b'doltgres\n')
+if mode == 'large':
+    os.write(1, b'another-service\n' * 262144)
+if mode == 'producer_failure':
+    sys.exit(42)
+PYTEST
+bash -c '
+  set -uo pipefail
+  python3 "$1/service-list.py" large | grep -q "^doltgres$"
+  status=("${PIPESTATUS[@]}")
+  [ "${status[0]}:${status[1]}" = 141:0 ]
+' -- "$TMPROOT"
+for service_case in large missing producer_failure; do
+  if bash -c '
+    set -euo pipefail
+    runtime_compose=(python3 "$1/service-list.py" "$2")
+    source "$1/doltgres-prerequisite.sh"
+  ' -- "$TMPROOT" "$service_case" > "$TMPROOT/services-$service_case.out" 2>&1; then
+    [ "$service_case" = large ] || {
+      echo "Doltgres prerequisite accepted $service_case" >&2; exit 1;
+    }
+  else
+    [ "$service_case" != large ] || {
+      echo "Doltgres prerequisite rejected a complete successful service listing" >&2; exit 1;
+    }
+    grep -q 'shared doltgres prerequisite is missing or unreadable' "$TMPROOT/services-$service_case.out"
   fi
 done
 

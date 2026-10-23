@@ -38,6 +38,7 @@ TARGET_NODE="${2:?usage: run-node-substrate.sh <env> <node>}"
 MATERIALIZE_BIN="${RUN_NODE_SUBSTRATE_MATERIALIZE_BIN:-$SCRIPT_DIR/secret-materialize.sh}"
 RECONCILE_BIN="${RUN_NODE_SUBSTRATE_RECONCILE_BIN:-$SCRIPT_DIR/reconcile-node-substrate.sh}"
 ASSERT_BIN="${RUN_NODE_SUBSTRATE_ASSERT_BIN:-$SCRIPT_DIR/assert-target-substrate.sh}"
+DEPLOYMENT_PROVIDER_REQUESTED="${DEPLOYMENT_PROVIDER:-}"
 DEPLOYMENT_PROVIDER="${DEPLOYMENT_PROVIDER:-k3s}"
 
 case "$DEPLOYMENT_PROVIDER" in
@@ -101,6 +102,15 @@ export CATALOG_DIR
 . "$SCRIPT_DIR/lib/appset-paths.sh"
 CONTROL_ENV="$(control_env_for "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")"
 RELIABILITY_CONTROLLER="$(reliability_controller_for_env "$DEPLOY_ENVIRONMENT")" || exit 1
+# Catalog truth applies to every ordinary target before materialization.
+. "$SCRIPT_DIR/lib/image-tags.sh"
+actual_provider="$(deployment_provider_for_target "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")" || exit 1
+[[ -z "$DEPLOYMENT_PROVIDER_REQUESTED" || "$DEPLOYMENT_PROVIDER_REQUESTED" == "$actual_provider" ]] || {
+  echo '::error::requested provider disagrees with owning catalog' >&2
+  exit 1
+}
+DEPLOYMENT_PROVIDER="$actual_provider"
+export DEPLOYMENT_PROVIDER
 
 # The bare zone every lane's public host hangs off (`cognidao.org`), used only to build
 # ANOTHER lane's domain when this env custodies it. Derived by stripping this env's own
