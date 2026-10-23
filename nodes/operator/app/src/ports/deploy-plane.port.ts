@@ -117,6 +117,15 @@ export type SharedLaneInfraEnv = "preview" | "production";
 
 export type ReconcileNodeInfraInput =
   | {
+      readonly env: "production";
+      readonly slug: "operator";
+      readonly parentOwner: string;
+      readonly parentRepo: string;
+      readonly target: "scheduler-worker-custodied-routing";
+      /** Immutable publication commit receipt, resolved only from the fixed worker ref history. */
+      readonly rollbackReceipt?: string;
+    }
+  | {
       /** Existing shared-lane full-infra replay; the caller cannot select its source. */
       readonly env: SharedLaneInfraEnv;
       readonly parentOwner: string;
@@ -136,6 +145,24 @@ export type ReconcileNodeInfraInput =
     };
 
 export type NodeInfraReconcileResult =
+  | {
+      readonly status: "unchanged" | "git_published";
+      readonly version: 1;
+      readonly rollbackReceipt: string | null;
+      readonly env: "production";
+      readonly target: "scheduler-worker-custodied-routing";
+      readonly sourceSha: string;
+      readonly authoritySha: string;
+      readonly deploySha: string;
+      readonly deployRef: "deploy/production-scheduler-worker";
+      readonly path: string;
+      readonly beforeBlob: string;
+      readonly afterBlob: string;
+      readonly beforeHash: string;
+      readonly afterHash: string;
+      /** Receipt is immutable Git evidence, not rollout evidence. */
+      readonly receipt: string | null;
+    }
   | {
       readonly status: "dispatched";
       readonly env: SharedLaneInfraEnv;

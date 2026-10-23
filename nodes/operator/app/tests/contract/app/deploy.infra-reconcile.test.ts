@@ -46,6 +46,8 @@ const dbState = vi.hoisted(() => ({
 }));
 const mockGetSessionUser = vi.hoisted(() => vi.fn());
 const envState = vi.hoisted(() => ({
+  hostingEnv: "production" as string | undefined,
+  fleetControlEnv: "production" as string | undefined,
   parentOwner: "test-owner" as string | undefined,
   parentRepo: "test-repo" as string | undefined,
 }));
@@ -99,6 +101,8 @@ vi.mock("@/bootstrap/otel", () => ({
 }));
 vi.mock("@/shared/env", () => ({
   serverEnv: () => ({
+    DEPLOY_ENVIRONMENT: envState.hostingEnv,
+    FLEET_CONTROL_ENV: envState.fleetControlEnv,
     NODE_SUBMODULE_PARENT_OWNER: envState.parentOwner,
     NODE_SUBMODULE_PARENT_REPO: envState.parentRepo,
   }),
@@ -145,6 +149,8 @@ describe("POST /api/v1/deploy/infra-reconcile", () => {
     dbState.node = { id: NODE_ID, slug: "operator" };
     dbState.billing = { id: "billing-1" };
     dbState.call = 0;
+    envState.hostingEnv = "production";
+    envState.fleetControlEnv = "production";
     envState.parentOwner = "test-owner";
     envState.parentRepo = "test-repo";
     authzState.decision = "authz_allowed";
@@ -404,5 +410,79 @@ describe("POST /api/v1/deploy/infra-reconcile", () => {
       error: "source_not_open_same_repo_pr_head",
       message: "source must be an open same-repo PR head",
     });
+  });
+  const serviceRequest = {
+    nodeId: NODE_ID,
+    env: "production",
+    target: "scheduler-worker-custodied-routing",
+  };
+  it("passes the fixed service target after production authorization", async () => {
+    mockDeployPlane.reconcileNodeInfra.mockResolvedValue({
+      status: "git_published",
+      env: "production",
+      sourceSha: SOURCE_SHA,
+      target: serviceRequest.target,
+      receipt: SOURCE_SHA,
+    });
+    const res = await post(serviceRequest);
+    expect(res.status).toBe(200);
+    expect(authzState.check).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "node.promote_production",
+        resource: `node:${NODE_ID}`,
+      })
+    );
+    expect(mockDeployPlane.reconcileNodeInfra).toHaveBeenCalledWith({
+      env: "production",
+      target: serviceRequest.target,
+      parentOwner: "test-owner",
+      parentRepo: "test-repo",
+      slug: "operator",
+    });
+    expect(await res.json()).toMatchObject({
+      status: "git_published",
+      receipt: SOURCE_SHA,
+    });
+  });
+  it("passes only an immutable receipt to the same fixed rollback authority", async () => {
+    const res = await post({ ...serviceRequest, rollbackReceipt: SOURCE_SHA });
+    expect(res.status).toBe(200);
+    expect(mockDeployPlane.reconcileNodeInfra).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: serviceRequest.target,
+        rollbackReceipt: SOURCE_SHA,
+      })
+    );
+  });
+  it.each([
+    { ...serviceRequest, env: "candidate-a", sourceSha: SOURCE_SHA },
+    { ...serviceRequest, env: "preview" },
+    { ...serviceRequest, target: "other-service" },
+    { ...serviceRequest, sourceSha: SOURCE_SHA },
+    { ...serviceRequest, ref: "deploy/production-scheduler-worker" },
+    { ...serviceRequest, path: "arbitrary" },
+    { ...serviceRequest, payload: "arbitrary" },
+    { ...serviceRequest, repo: "other" },
+    { ...serviceRequest, namespace: "cogni-preview" },
+    { ...serviceRequest, rollbackReceipt: "main" },
+    { ...serviceRequest, rollbackReceipt: SOURCE_SHA, workflow: "arbitrary" },
+  ])("denies service request escape %#", async (body) => {
+    const res = await post(body);
+    expect(res.status).toBe(400);
+    expect(authzState.check).not.toHaveBeenCalled();
+    expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
+  });
+  it("denies service authz before any service write", async () => {
+    authzState.decision = "authz_denied";
+    expect((await post(serviceRequest)).status).toBe(403);
+    expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
+  });
+  it.each([
+    "hostingEnv",
+    "fleetControlEnv",
+  ] as const)("denies isolated/missing %s after authz without repository IO", async (key) => {
+    envState[key] = "candidate-a";
+    expect((await post(serviceRequest)).status).toBe(403);
+    expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
   });
 });

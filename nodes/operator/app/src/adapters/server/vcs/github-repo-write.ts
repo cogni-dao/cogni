@@ -120,6 +120,7 @@ import {
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 import { classifyEnvManagerCommit } from "@/shared/vcs/env-manager-pr";
 import { resolveReviewedWorkflowRef } from "./reviewed-workflow-ref";
+import { reconcileWorkerRouting } from "./worker-custodied-routing";
 
 const ENV_MANAGER_CHANGE_TYPE = "cogni.env-manager.v1";
 
@@ -139,6 +140,10 @@ export function envManagerCommitMessage(input: {
 
 export interface GitHubRepoWriterConfig {
   readonly appId: string;
+  /** Fixed service-write boundary. Missing values fail closed for worker routing. */
+  readonly hostingEnv?: string | undefined;
+  readonly parentOwner?: string | undefined;
+  readonly parentRepo?: string | undefined;
   readonly privateKey: string;
   /**
    * Flag-gated DNS reverse/forward reconcile (story.5020 W4). v0 ships false — the env-membership verb
@@ -1790,6 +1795,14 @@ export class GitHubRepoWriter implements DeployPlanePort {
   async reconcileNodeInfra(
     input: ReconcileNodeInfraInput
   ): Promise<NodeInfraReconcileResult> {
+    if ("target" in input) {
+      return reconcileWorkerRouting(
+        input,
+        this.config,
+        () => this.getOctokit(input.parentOwner, input.parentRepo),
+        (client) => this.resolveOperatorBotIdentity(client)
+      );
+    }
     if (input.env === "candidate-a") {
       return this.reconcileCandidateInfra(input);
     }
