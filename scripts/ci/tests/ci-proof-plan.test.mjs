@@ -29,6 +29,94 @@ const cli = resolve("scripts/ci/ci-proof-plan.mjs");
 const policy = "scripts/ci/ci-proof-plan.mjs";
 const config = "scripts/vitest/vitest.native.config.mts";
 const sha = "a".repeat(40);
+
+test("Docker image content bridge preserves nondefault config and content across API defaults", async () => {
+  const { imageContentIdentity } = await import(
+    "../../../tests/ci-invariants/native/image-content-identity.mjs"
+  );
+  const current = {
+    Config: {
+      Env: ["OWNED=fixture"],
+      Entrypoint: ["tini", "--", "database"],
+      Labels: { revision: sha },
+      Volumes: { "/data": {} },
+      WorkingDir: "/data",
+    },
+    RootFS: { Type: "layers", Layers: ["sha256:owned"] },
+    Os: "linux",
+    Architecture: "amd64",
+  };
+  const legacy = structuredClone(current);
+  Object.assign(legacy.Config, {
+    Hostname: "",
+    Domainname: "",
+    AttachStdin: false,
+    AttachStdout: false,
+    AttachStderr: false,
+    Tty: false,
+    OpenStdin: false,
+    StdinOnce: false,
+    Image: "",
+    User: "",
+    Cmd: null,
+    OnBuild: null,
+  });
+  assert.deepEqual(imageContentIdentity(current), imageContentIdentity(legacy));
+  for (const [field, value] of Object.entries({
+    Env: ["OWNED=changed"],
+    Entrypoint: ["foreign"],
+    Cmd: ["foreign"],
+    User: "1000",
+    Labels: { revision: "foreign" },
+    Volumes: { "/other": {} },
+    WorkingDir: "/other",
+    Hostname: "foreign",
+    Domainname: "foreign",
+    AttachStdin: true,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: true,
+    OpenStdin: true,
+    StdinOnce: true,
+    Image: "foreign",
+    OnBuild: ["RUN foreign"],
+    UnexpectedRuntimeOption: "foreign",
+  })) {
+    const changed = structuredClone(current);
+    changed.Config[field] = value;
+    assert.notDeepEqual(
+      imageContentIdentity(current),
+      imageContentIdentity(changed),
+      field
+    );
+  }
+  const unknownNull = structuredClone(current);
+  unknownNull.Config.UnexpectedRuntimeOption = null;
+  assert.notDeepEqual(
+    imageContentIdentity(current),
+    imageContentIdentity(unknownNull),
+    "unknown null fields are preserved"
+  );
+  for (const [field, value] of Object.entries({
+    RootFS: { Type: "layers", Layers: ["sha256:foreign"] },
+    Os: "other",
+    Architecture: "arm64",
+    Variant: "v8",
+  })) {
+    assert.notDeepEqual(
+      imageContentIdentity(current),
+      imageContentIdentity({ ...current, [field]: value }),
+      field
+    );
+  }
+  assert.deepEqual(current.Config, {
+    Env: ["OWNED=fixture"],
+    Entrypoint: ["tini", "--", "database"],
+    Labels: { revision: sha },
+    Volumes: { "/data": {} },
+    WorkingDir: "/data",
+  });
+});
 function invoke(mode, env = {}, cwd = process.cwd()) {
   return spawnSync(process.execPath, [cli, mode], {
     cwd,

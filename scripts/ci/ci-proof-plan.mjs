@@ -21,7 +21,7 @@ const configPath = "scripts/vitest/vitest.native.config.mts";
 // This input audit is valid for these exact native sources/configuration. A
 // later native addition or setup import cannot silently inherit app exemptions:
 // review its inputs and refresh these fingerprints, or continue full proof.
-const auditedNativeTree = "7b248606a89b3c84f299a64f4803c788cb03a6f4";
+const auditedNativeTree = "d6c9af660da2252c008e4c1622ea665139033362";
 const auditedNativeConfig = "477e50e5d934b2fc555e847dda909a645bc405e6";
 // Audit: native files import stdlib/testcontainers/dockerode/yaml/Vitest only;
 // committed reads are infra/compose/** and scripts/ci/deploy-infra.sh. The

@@ -30,6 +30,7 @@ import {
 } from "testcontainers";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
+import { imageContentIdentity } from "./image-content-identity.mjs";
 
 const runtime = path.resolve(__dirname, "../../../infra/compose/runtime");
 interface Service {
@@ -982,15 +983,10 @@ describe.skipIf(!process.env.CI)(
         const loadedImage = loadedImages[0];
         if (!loadedImage || !/^sha256:[a-f0-9]{64}$/.test(loadedImage.Id))
           throw new Error("Loaded Doltgres image identity missing");
-        const contentIdentity = (image: (typeof outerImages)[number]) => ({
-          config: image.Config,
-          rootFS: image.RootFS,
-          os: image.Os,
-          architecture: image.Architecture,
-          variant: image.Variant ?? "",
-        });
-        expect(contentIdentity(loadedImage)).toEqual(
-          contentIdentity(outerImage)
+        // Different API versions omit documented zero/default Config values.
+        // Compare those equivalents while retaining every substantive field.
+        expect(imageContentIdentity(loadedImage)).toEqual(
+          imageContentIdentity(outerImage)
         );
         console.info("CADVISOR_DECLARED_IMAGE_BRIDGE", {
           configuredRef: configuredDoltgres,

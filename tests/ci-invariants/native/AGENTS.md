@@ -31,7 +31,7 @@ Native integration acceptance of declared infrastructure failure behavior in iso
 
 ## Public Surface
 
-- **Exports:** none
+- **Exports:** `imageContentIdentity` — pure inspect API default-equivalence helper for the owned image bridge
 - **Files considered API:** native `*.spec.ts` acceptance tests; no production entry points
 - **CLI:** `pnpm exec vitest run --config scripts/vitest/vitest.native.config.mts`; ordinary root discovery remains full
 
