@@ -5,7 +5,7 @@
 /**
  * Module: `@scripts/migrations/lifecycle-hub-v1`
  * Purpose: Convert six inspected node command families to reviewed hub readers once.
- * Scope: Exact manifest paths in six explicitly supplied local repositories; no network or Git writes.
+ * Scope: Exact manifest paths in six explicitly supplied local repositories. Does not access the network or write Git metadata.
  * Invariants: FLEET_PREFLIGHT, EXACT_CONTENT, NODE_CREDENTIAL_ISOLATION, IDEMPOTENT, REPO_ROLLBACK.
  * Side-effects: IO (reads local Git metadata/files; --apply atomically replaces each file with per-repo rollback).
  * Links: story.5113, task.5321, https://cognidao.org/knowledge/migrate-node-trees-safely

@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/unit/lifecycle-hub-migration`
  * Purpose: Prove the one-time lifecycle codemod fails before fleet writes and restores a failed repo.
- * Scope: Temporary filesystem and real Git fixtures; no network operations.
+ * Scope: Temporary filesystem and real Git fixtures. Does not access the network or start an application server.
  * Invariants: FLEET_PREFLIGHT, EXACT_CONTENT, IDEMPOTENT, REPO_ROLLBACK.
  * Side-effects: IO (isolated temporary directories, removed after each case).
  * Links: story.5113, scripts/migrations/lifecycle-hub-v1.mjs

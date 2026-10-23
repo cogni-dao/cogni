@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/ci-invariants/lifecycle-commands`
  * Purpose: Keep agent lifecycle commands and skills from instructing retired or forbidden delivery steps.
- * Scope: Static local command policy and thin lifecycle handoffs. Hub procedure behavior needs separate retrieval/eval proof; no network or Git operations here.
+ * Scope: Static local command policy and thin lifecycle handoffs. Does not perform network or Git operations, or prove hub procedure behavior.
  * Invariants:
  *   - NO_STAGING_BASE: no file names `origin/staging`, `--base staging` or "from `staging`"; branches and diffs use `main`.
  *   - NO_PNPM_CHECK_STEP: no file instructs `pnpm check` or `pnpm check:fast` as a step; mentioning that it needs the human's explicit request is allowed.
