@@ -52,15 +52,23 @@ export const sha256 = (bytes) =>
 function inspectRepository(root) {
   const git = (...args) =>
     execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+  if (
+    git("rev-parse", "--is-inside-work-tree") !== "true" ||
+    realpathSync(git("rev-parse", "--show-toplevel")) !== root
+  )
+    throw new Error(`Expected actual Git worktree root: ${root}`);
   const origin = git("remote", "get-url", "origin");
   const match =
     /^(?:https:\/\/github\.com\/|git@github\.com:)cogni-dao\/([^/]+?)(?:\.git)?$/i.exec(
       origin
     );
   if (!match) throw new Error(`Unsupported repository origin: ${origin}`);
+  const status = git("status", "--porcelain", "--", ...paths);
   return {
     name: match[1],
-    clean: git("status", "--porcelain", "--", ...paths) === "",
+    origin,
+    status,
+    clean: status === "",
     head: git("rev-parse", "HEAD"),
   };
 }
@@ -130,6 +138,8 @@ export function planFleet(roots, manifest, options = {}) {
       name,
       root,
       head: repo.head,
+      origin: repo.origin,
+      status: repo.status,
       sourceSha: expected.sourceSha,
       files,
     };
@@ -139,6 +149,27 @@ export function planFleet(roots, manifest, options = {}) {
 /** Revalidate the whole plan, then replace files with rollback within each repository. */
 export function applyFleet(plan, options = {}) {
   const rename = options.rename ?? renameSync;
+  const verifyRepository = (repo) => {
+    try {
+      if (realpathSync(repo.root) !== repo.root)
+        throw new Error("Repository root changed");
+      const current = inspectRepository(repo.root);
+      if (
+        current.name !== repo.name ||
+        current.origin !== repo.origin ||
+        current.head !== repo.head ||
+        current.status !== repo.status
+      )
+        throw new Error("Repository identity, HEAD or target status changed");
+    } catch (error) {
+      throw new Error(
+        `Repository preflight changed before apply: ${repo.name}`,
+        {
+          cause: error,
+        }
+      );
+    }
+  };
   const verify = (repo, file) => {
     if (
       !lstatSync(file.target).isFile() ||
@@ -149,8 +180,13 @@ export function applyFleet(plan, options = {}) {
         `Preflight changed before apply: ${repo.name}/${file.relative}`
       );
   };
-  for (const repo of plan) for (const file of repo.files) verify(repo, file);
   for (const repo of plan) {
+    verifyRepository(repo);
+    for (const file of repo.files) verify(repo, file);
+  }
+  for (const repo of plan) {
+    verifyRepository(repo);
+    for (const file of repo.files) verify(repo, file);
     const changed = repo.files.filter((file) => file.changed);
     const staged = [];
     const replaced = [];
