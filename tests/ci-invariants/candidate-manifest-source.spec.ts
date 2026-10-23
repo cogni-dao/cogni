@@ -704,7 +704,8 @@ describe("candidate-a manifest source", () => {
         "utf8"
       )
     ) as { jobs: Record<string, WorkflowJob> };
-    const helper = "python3 ../ci-src/scripts/ci/lib/maintenance-fence.py";
+    const helper =
+      "python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .";
     const candidateGroups = ["prepare-substrate-deploy-branch", "flight"];
     for (const name of candidateGroups) {
       const job = parsed.jobs[name];
@@ -767,12 +768,8 @@ describe("candidate-a manifest source", () => {
       expect(guardLines, label).toHaveLength(checks);
       for (const line of guardLines) {
         expect(line, label).not.toMatch(/\|\|\s*(true|:)(?:\s|$)/);
-        // Finite qualification reuses Q's exact owner/artifact checks; other writers remain read-only.
-        expect(line.trim(), label).toMatch(
-          label === "candidate prepare"
-            ? /maintenance-fence\.py (claim|preserve) \.$/
-            : /maintenance-fence\.py check \.$/
-        );
+        // Ordinary delivery cannot supply an operation exception or mutate fence state.
+        expect(line.trim(), label).toMatch(/maintenance-fence\.py check \.$/);
       }
       if (run.includes("git checkout -B")) {
         expect(run.indexOf(helper), label).toBeGreaterThan(
@@ -849,12 +846,9 @@ describe("candidate-a manifest source", () => {
       path.join(REPO_ROOT, "scripts/ci/lib/maintenance-fence.py"),
       "utf8"
     );
-    for (const name of [
-      "check_qualification",
-      "claim_qualification",
-      "preserve_qualification",
-    ])
-      expect(guard).toContain(`def ${name}(`);
+    expect(guard).not.toMatch(
+      /check_qualification|claim_qualification|preserve_qualification/
+    );
     expect(guard).toContain("maintenance_floor_not_on_main");
   });
 

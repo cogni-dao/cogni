@@ -614,7 +614,6 @@ jobs:
           DEPLOY_REPOSITORY: ${{ steps.deploy-repo.outputs.repository }}
           NODE: ${{ matrix.node }}
           PER_NODE_BRANCH: deploy/candidate-a-${{ matrix.node }}
-          DEPLOY_ENVIRONMENT: candidate-a
           SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
           SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha || fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
           SOURCE_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
@@ -645,7 +644,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py claim .
+          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
 
           PRESERVED_IMAGE_REF=""
           if [ "$DEPLOYMENT_PROVIDER" = "k3s" ]; then
@@ -688,7 +687,7 @@ jobs:
               "nodes/${NODE}/k8s/external-secrets/candidate-a/"
           fi
 
-          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py preserve .
+          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
           git add -A
           if git diff --cached --quiet; then
             echo "Deploy branch ${PER_NODE_BRANCH} already has substrate shape"
@@ -1391,8 +1390,6 @@ jobs:
           GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
           DEPLOY_REPOSITORY: ${{ steps.deploy-repo.outputs.repository }}
           PER_NODE_BRANCH: deploy/${{ matrix.env }}-${{ matrix.node }}
-          NODE: ${{ matrix.node }}
-          DEPLOY_ENVIRONMENT: candidate-a
           SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
           SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha || fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
           SOURCE_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
@@ -1478,7 +1475,6 @@ jobs:
         env:
           PER_NODE_BRANCH: deploy/${{ matrix.env }}-${{ matrix.node }}
           NODE: ${{ matrix.node }}
-          DEPLOY_ENVIRONMENT: candidate-a
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
           SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
           SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha || fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
