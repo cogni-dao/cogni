@@ -4,7 +4,8 @@
 /**
  * Module: `@cogni/authorization-core`
  * Purpose: Shared AuthorizationPort contract, OpenFGA mapping helpers, and deterministic fake.
- * Scope: Portable package boundary for node-template-based RBAC. Does not expose a raw OpenFGA client.
+ * Scope: Portable package boundary for node-template-based RBAC. Does not expose a raw OpenFGA client
+ *   (that lives in `@cogni/authorization-core/operator`) and never calls a remote authorizer.
  * Invariants: OpenFGA is the sole permission/delegation source; deny by default; unavailable fails closed with a distinct code.
  * Side-effects: none
  * Links: docs/spec/rbac.md, docs/spec/access-control-charter.md
@@ -188,49 +189,6 @@ export type AuthzListDecision =
       readonly reason?: string;
     };
 
-export type BillingAccountGrantRole = "reader" | "obo";
-
-export type BillingAccountGrantTarget =
-  | { readonly kind: "user"; readonly id: string }
-  | { readonly kind: "agent"; readonly id: string };
-
-export interface BillingAccountGrantInput {
-  /** Same-node human asserted by the node backend; operator verifies can_grant. */
-  readonly grantorUserId: string;
-  readonly billingAccountId: string;
-  readonly target: BillingAccountGrantTarget;
-  readonly role: BillingAccountGrantRole;
-  /** Required for an OBO bundle; omitted for a direct reader grant. */
-  readonly subjectUserId?: string;
-  /** Required for grants; ignored for revocation. */
-  readonly expiresAt: string;
-  readonly requestId?: string;
-}
-
-export interface BillingAccountRevokeInput {
-  /** Same-node human asserted by the node backend; operator verifies can_grant. */
-  readonly grantorUserId: string;
-  readonly billingAccountId: string;
-  readonly target: BillingAccountGrantTarget;
-  readonly role: BillingAccountGrantRole;
-  /** Required for an OBO bundle; omitted for a direct reader revoke. */
-  readonly subjectUserId?: string;
-  readonly requestId?: string;
-}
-
-/**
- * Semantic account-grant boundary. It cannot express owner, node-role, or arbitrary
- * relation writes; the operator independently verifies the grantor's can_grant edge.
- */
-export interface BillingAccountGrantAdministrationPort {
-  grantBillingAccountAccess(
-    input: BillingAccountGrantInput
-  ): Promise<AuthzWriteDecision>;
-  revokeBillingAccountAccess(
-    input: BillingAccountRevokeInput
-  ): Promise<AuthzWriteDecision>;
-}
-
 export type AgentAccountAccessMode = "direct" | "on_behalf_of";
 
 type AgentAccountAccessMutationBase = {
@@ -287,7 +245,7 @@ export interface BillingAccountOwnerBootstrapPort {
   ): Promise<AuthzWriteDecision>;
 }
 
-/** Portable account-authorization surface used by every node application. */
+/** Semantic account-authorization surface, decided against the caller's own authorization store. */
 export interface BillingAccountAuthorizationPort
   extends AuthorizationCheckPort,
     AgentAccountAccessAdministrationPort,
@@ -406,12 +364,4 @@ export function relationForAuthzAction(action: AuthzAction): string {
   }
 }
 
-export {
-  AUTHORIZATION_FACADE_TOKEN_PREFIX,
-  type AuthorizationFacadeCredentialIdentity,
-  authorizationFacadeCredentialFromToken,
-  authorizationFacadeNodeIdFromToken,
-  RemoteAuthorizationAdapter,
-  type RemoteAuthorizationAdapterConfig,
-} from "./adapters/remote-authorization.adapter";
 export { FakeAuthorizationAdapter } from "./test/fake-authorization.adapter";

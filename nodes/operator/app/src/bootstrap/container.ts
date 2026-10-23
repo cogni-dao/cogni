@@ -36,10 +36,9 @@ import {
   type RunFinalizeEpochDeps,
   runFinalizeEpoch,
 } from "@cogni/attribution-pipeline-plugins";
-import {
-  type AuthorizationPort,
-  type BillingAccountAuthorizationPort,
-  RemoteAuthorizationAdapter,
+import type {
+  AuthorizationPort,
+  BillingAccountAuthorizationPort,
 } from "@cogni/authorization-core";
 import { OpenFgaAuthorizationAdapter } from "@cogni/authorization-core/operator";
 import {
@@ -398,7 +397,7 @@ export interface Container {
   connectionBroker: ConnectionBrokerPort | undefined;
   /** Authorization port — undefined until OpenFGA env is configured */
   authorization: AuthorizationPort | undefined;
-  /** Portable semantic account authorization: local on operator, mediated on nodes. */
+  /** Operator-local semantic account authorization over its own OpenFGA; undefined until OpenFGA is configured. */
   billingAccountAuthorization: BillingAccountAuthorizationPort | undefined;
   /** Model catalog — aggregates all providers for model listing */
   modelCatalog: ModelCatalogPort;
@@ -779,13 +778,7 @@ function createContainer(): Container {
         bootstrapBillingAccountOwner: (input) =>
           bootstrapNodeBillingAccountOwner({ authorization }, nodeId, input),
       }
-    : env.AUTHORIZATION_FACADE_TOKEN && env.DOMAIN
-      ? new RemoteAuthorizationAdapter({
-          baseUrl: `https://${env.DOMAIN}`,
-          serviceToken: env.AUTHORIZATION_FACADE_TOKEN,
-          timeoutMs: env.OPENFGA_TIMEOUT_MS,
-        })
-      : undefined;
+    : undefined;
 
   const bootstrapBillingAccountOwner = async (input: {
     readonly ownerUserId: string;
@@ -803,7 +796,7 @@ function createContainer(): Container {
           code: "authz_write_unavailable" as const,
           reason: "billing account authorization is not configured",
         };
-    logEvent(log, EVENT_NAMES.AUTHORIZATION_FACADE_OWNER_BOOTSTRAP_COMPLETE, {
+    logEvent(log, EVENT_NAMES.BILLING_ACCOUNT_OWNER_BOOTSTRAP_COMPLETE, {
       reqId,
       status: decision.decision === "success" ? 200 : 503,
       durationMs: Math.round(performance.now() - startedAt),

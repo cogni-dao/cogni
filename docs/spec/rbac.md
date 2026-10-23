@@ -84,20 +84,6 @@ Deployed environments require OpenFGA preshared authn. The set-once
 `cogni/<env>/operator` through governed infra reconciliation, and never
 projected to node workloads.
 
-Authorization-facade credentials are lane-bound (`v2_<lane>_<node_id>`) and
-rotate only through the fleet-control credential workflow. The control vault owns
-the bounded `{active,previous}` authority ring. It projects the raw sender ring to
-the node workload's custodian and a verifier-only digest ring to the lane-local
-operator through the same GitHub-OIDC/down-trust pattern used by flight-probe
-credentials. The facade rejects a bearer whose embedded lane differs from its own
-`DEPLOY_ENVIRONMENT`, so every check reaches that lane's OpenFGA graph.
-
-Prepare, deploy/verify, activate, and finish/cancel are distinct CAS-guarded phases.
-No deadline can invalidate the running credential before activation. Completion
-requires live proof that the redeployed workload authenticates with the new active
-credential and that the captured prior credential receives `401` after finish;
-an authority or projection write alone is never reported as rotation completion.
-
 OpenFGA authorization models are immutable. The bootstrap hashes the canonical
 JSON model and records that hash with the resolved model ID. Re-running deploys
 reuse the existing model ID when the authored model hash is unchanged; a new
@@ -246,37 +232,12 @@ then retires the compatibility tuple after verified cutover.
 
 **Never from:** Request body, query params, tool args, `RunnableConfig.configurable`.
 
-The mediated node facade is the one bounded P0 exception to the generic request-body
-rule. A per-node/per-environment workload credential authenticates a node backend,
-and that backend may assert a node-local subject ID. The operator derives the node
-namespace from the credential, checks the exact subject's account permission and the
-agent's existing `user.act_as` delegation, and never accepts a caller-supplied node
-namespace or raw tuple. A compromised node backend can therefore impersonate its own
-local users—authority it already has over that node's DB and accounts—but cannot gain
-cross-node authority. Non-repudiable signed human/session proof is P1.
-
-### Mediated node facade
-
-Independently governed nodes never receive the shared OpenFGA store/model credentials.
-They use `RemoteAuthorizationAdapter`, which can express only same-node
-`billing_account.read` checks plus semantic reader/OBO grant and revoke. Every mutation
-first verifies the asserted human currently has `can_grant` on that exact account.
-Reader grants write only conditioned `reader`; OBO grants require an existing subject
-read edge and existing human→agent delegation, then write only the conditioned,
-account-scoped `delegate` edge. Mutation success is confirmed with
-`HIGHER_CONSISTENCY`.
-
-The only owner-seeding operation is the target node's bounded, idempotent initial
-billing-account bootstrap. `bootstrapBillingAccountOwner` accepts semantic user and
-billing-account IDs only; the facade derives the node namespace from the authenticated
-workload credential, writes and verifies the same-node `owner` relation, and lets the
-account service set its durable saga marker only after verification succeeds. Retries
-may repair a pending marker, but a completed marker prevents later reads from
-resurrecting a revoked owner. This operation cannot transfer an owner or submit raw
-tuples. Ordinary reader/OBO grant mutations still cannot seed `owner`/`can_grant`,
-mutate node roles, or write arbitrary relations. Credential custody, digest projection,
-and rotation are owned separately by task.5228; this facade consumes only the projected
-verifier ring.
+Nodes never call the operator to authorize. Each node decides its own
+permissions locally against the shared permission model
+([node capability grants standard](https://cognidao.org/knowledge/node-capability-grants-standard));
+the operator authorization facade (task.5226/task.5228) was rejected and removed.
+Operator deploy roles and the operator's own billing-account grants stay in the
+operator's OpenFGA.
 
 ---
 

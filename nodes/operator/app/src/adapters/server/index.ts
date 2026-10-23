@@ -206,8 +206,6 @@ export {
   type GithubReviewAdapter,
 } from "./review/github-review.adapter";
 // Node self-serve secrets — OpenBao writer adapter (design.node-self-serve-secrets).
-export { EnvAuthorizationFacadeCredentialVerifierAdapter } from "./secrets/env-authorization-facade-credential-verifier.adapter";
-export { OpenBaoAuthorizationFacadeProjectionAdapter } from "./secrets/openbao-authorization-facade-projection.adapter";
 export {
   OpenBaoSecretsAdapter,
   type OpenBaoSecretsAdapterDeps,

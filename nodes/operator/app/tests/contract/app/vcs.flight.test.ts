@@ -251,12 +251,12 @@ describe("POST /api/v1/vcs/flight", () => {
             ? operatorState.decision
             : authzState.decision;
         if (decision === "authz_allowed") {
-        return {
-          decision: "allow",
-          code: "authz_allowed",
-          checks: [],
-        };
-      }
+          return {
+            decision: "allow",
+            code: "authz_allowed",
+            checks: [],
+          };
+        }
         return {
           decision: "deny",
           code: decision ?? "authz_denied",

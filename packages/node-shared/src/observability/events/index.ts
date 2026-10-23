@@ -131,16 +131,8 @@ export const EVENT_NAMES = {
   BYO_AUTH_DEVICE_CODE_COMPLETE: "byo_auth.device_code.complete",
   BYO_AUTH_EXCHANGE_COMPLETE: "byo_auth.exchange.complete",
   ADAPTER_OPENAI_DEVICE_AUTH_ERROR: "adapter.openai_device_auth.error",
-  AUTHORIZATION_FACADE_CHECK_COMPLETE: "authorization.facade.check.complete",
-  AUTHORIZATION_FACADE_GRANT_COMPLETE: "authorization.facade.grant.complete",
-  AUTHORIZATION_FACADE_OWNER_BOOTSTRAP_COMPLETE:
-    "authorization.facade.owner_bootstrap.complete",
-  AUTHORIZATION_FACADE_PROJECTION_COMPLETE:
-    "authorization.facade.projection.complete",
-  AUTHORIZATION_FACADE_CREDENTIAL_PROBE_COMPLETE:
-    "authorization.facade.credential_probe.complete",
-  AUTHORIZATION_FACADE_WORKLOAD_RECEIPT_COMPLETE:
-    "authorization.facade.workload_receipt.complete",
+  BILLING_ACCOUNT_OWNER_BOOTSTRAP_COMPLETE:
+    "authorization.billing_account_owner_bootstrap.complete",
 
   // Scheduling Domain
   SCHEDULE_CREDIT_GATE_REJECTED: "schedules.credit_gate_rejected",

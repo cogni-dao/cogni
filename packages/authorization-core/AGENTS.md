@@ -38,18 +38,17 @@ Shared authorization port, resource helpers, deterministic test fake, and truste
 ## Public Surface
 
 - `AuthorizationCheckPort`, `AuthorizationRelationAdminPort`, `AuthorizationPort`
-- `BillingAccountGrantAdministrationPort`, `BillingAccountOwnerBootstrapPort`, `BillingAccountAuthorizationPort`, semantic human→agent billing-account grant types
+- `BillingAccountOwnerBootstrapPort`, `AgentAccountAccessAdministrationPort`, `BillingAccountAuthorizationPort`, semantic human→agent billing-account grant types
 - `AuthzCheckParams`, `AuthzDecision`, `AuthzAction`, `AuthzContext`
 - `AuthzRelationTuple`, `AuthzWriteDecision`
 - `authzToolResource`, `authzConnectionResource`, `authzGraphResource`, `authzUserResource`
 - `relationForAuthzAction`
 - `FakeAuthorizationAdapter`
-- `RemoteAuthorizationAdapter`, `authorizationFacadeNodeIdFromToken`
 - `@cogni/authorization-core/operator`: `OpenFgaAuthorizationAdapter` (trusted control plane only)
 
 ## Responsibilities
 
-- This directory **does**: define shared authz contracts; provide the portable check-only/semantic remote adapter; map Cogni actions to OpenFGA relations; implement operator-only OpenFGA checks and tuple writes through the official SDK; provide deterministic tests fakes.
+- This directory **does**: define shared authz contracts; map Cogni actions to OpenFGA relations; implement operator-only OpenFGA checks and tuple writes through the official SDK; provide deterministic tests fakes.
 - This directory **does not**: read env vars; own OpenFGA deployment; define local role tables; import node app code.
 
 ## Usage
@@ -62,5 +61,5 @@ vitest run --config packages/authorization-core/vitest.config.ts
 
 ## Notes
 
-- Independently governed nodes must never import `@cogni/authorization-core/operator` or receive raw shared OpenFGA configuration. They consume the mediated `RemoteAuthorizationAdapter` delivered by `task.5226`.
+- Nodes never call the operator to authorize ([node-capability-grants-standard](https://cognidao.org/knowledge/node-capability-grants-standard)); the operator authorization facade (task.5226/task.5228) was rejected. Independently governed nodes must not import `@cogni/authorization-core/operator` or receive the operator's shared OpenFGA configuration.
 - Only the trusted operator composition root may instantiate the raw `OpenFgaAuthorizationAdapter`.

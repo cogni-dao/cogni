@@ -54,7 +54,6 @@ PARALLEL=(
   secret-materialize.test.sh
   openbao-kv-http-read.test.sh
   runtime-watchdog-maintenance.test.sh
-  authorization-facade-credentials.test.sh
   reconcile-node-substrate.test.sh
   run-node-substrate.test.sh
   ssh-transport-retry.test.sh

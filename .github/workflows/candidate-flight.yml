@@ -1161,30 +1161,6 @@ jobs:
           echo "Candidate OpenFGA activation run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
           gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
 
-  authorization-facade-credential-project:
-    needs: [decide, activate-candidate-openfga-model]
-    if: |
-      always() &&
-      needs.decide.result == 'success' &&
-      needs.decide.outputs.has_deployment_node_targets == 'true' &&
-      (needs.activate-candidate-openfga-model.result == 'success' || needs.activate-candidate-openfga-model.result == 'skipped')
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ${{ fromJson(needs.decide.outputs.deployment_node_targets_json) }}
-    uses: ./.github/workflows/authorization-facade-credential-project.yml
-    permissions:
-      contents: read
-      id-token: write
-    with:
-      lane: candidate-a
-      node: ${{ matrix.node }}
-      operation: materialize
-      source_ref: ${{ needs.decide.outputs.head_sha }}
-    secrets:
-      VM_HOST: ${{ secrets.VM_HOST }}
-      SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
-
   node-substrate:
     needs:
       [
@@ -1192,7 +1168,7 @@ jobs:
         reconcile-appset,
         reconcile-dns,
         prepare-substrate-deploy-branch,
-        authorization-facade-credential-project,
+        activate-candidate-openfga-model,
       ]
     if: |
       always() &&
@@ -1200,7 +1176,7 @@ jobs:
       needs.reconcile-appset.result == 'success' &&
       needs.reconcile-dns.result == 'success' &&
       needs.prepare-substrate-deploy-branch.result == 'success' &&
-      needs.authorization-facade-credential-project.result == 'success'
+      (needs.activate-candidate-openfga-model.result == 'success' || needs.activate-candidate-openfga-model.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:

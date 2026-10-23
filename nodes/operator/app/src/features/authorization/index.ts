@@ -1,7 +1,5 @@
 export {
-  type AuthorizationFacadePolicyDeps,
+  type BillingAccountPolicyDeps,
   bootstrapNodeBillingAccountOwner,
-  checkNodeBillingAccountAccess,
   mutateNodeAgentAccountAccess,
-  mutateNodeBillingAccountAccess,
-} from "./authorization-facade";
+} from "./billing-account-policy";
