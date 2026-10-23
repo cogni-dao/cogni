@@ -16,7 +16,11 @@
 
 import { z } from "zod";
 import type { MetricsQueryPort } from "@/ports";
-import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+import {
+  EVENT_NAMES,
+  makeLogger,
+  toLogErrorCode,
+} from "@/shared/observability";
 import { MimirMetricsAdapter } from "./mimir.adapter";
 
 const logger = makeLogger({ component: "GrafanaMimirAdapter" });
@@ -51,8 +55,7 @@ export function createLazyGrafanaMimirAdapter(
           event: EVENT_NAMES.ADAPTER_MIMIR_ERROR,
           dep: "mimir",
           reasonCode: "datasource_discovery_failed",
-          errorCode:
-            error instanceof Error ? error.message.slice(0, 120) : "non_error",
+          errorCode: toLogErrorCode(error),
           backoffMs: DISCOVERY_FAILURE_BACKOFF_MS,
         },
         EVENT_NAMES.ADAPTER_MIMIR_ERROR

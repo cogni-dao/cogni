@@ -21,4 +21,4 @@ export {
 // App-local (pino runtime, prom-client runtime)
 export * from "./logger";
 export * from "./metrics";
-export { REDACT_PATHS } from "./redact";
+export { REDACT_PATHS, toLogErrorCode } from "./redact";

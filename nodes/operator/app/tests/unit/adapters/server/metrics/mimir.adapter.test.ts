@@ -385,8 +385,10 @@ describe("MimirMetricsAdapter", () => {
       substrate_host: host,
     });
     const prodLike = (hosts: readonly string[]) => (url: string) => {
-      const query = new URL(url).searchParams.get("query") ?? "";
-      const now = Date.now() / 1000;
+      const params = new URL(url).searchParams;
+      const query = params.get("query") ?? "";
+      // Stamp with the adapter's fixed evaluation instant, never wall clock.
+      const now = Number(params.get("time"));
       const result = query.includes("probe_success")
         ? [
             { metric: { probe: "Frankfurt" }, value: [now, "0"] },

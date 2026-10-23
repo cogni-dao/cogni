@@ -16,7 +16,11 @@ import {
 import { readReliabilityStatus } from "@/features/nodes/reliability-status";
 import { getServerSessionUser } from "@/lib/auth/server";
 import type { DatabaseContainmentStatus } from "@/ports";
-import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+import {
+  EVENT_NAMES,
+  makeLogger,
+  toLogErrorCode,
+} from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -25,17 +29,6 @@ const ENVIRONMENTS = ["candidate-a", "preview", "production"] as const;
 type Environment = (typeof ENVIRONMENTS)[number];
 
 const log = makeLogger({ component: "NodeReliabilityHealthRoute" });
-
-/** Code-authored error messages only; never request data or credentials. */
-function reliabilityErrorCode(error: unknown): string {
-  if (!(error instanceof Error)) return "non_error_thrown";
-  const code = error.message
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 64);
-  return code || error.name;
-}
 
 /** bug.5519: a fail-closed fallback must never be silent. */
 function logStatusFallback(input: {
@@ -50,7 +43,7 @@ function logStatusFallback(input: {
       nodeId: input.nodeId,
       env: input.env,
       source: input.source,
-      errorCode: reliabilityErrorCode(input.error),
+      errorCode: toLogErrorCode(input.error),
     },
     EVENT_NAMES.NODE_RELIABILITY_STATUS_FALLBACK
   );
