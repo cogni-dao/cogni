@@ -4,18 +4,18 @@
 /**
  * Module: `@bootstrap/node-admin-gate`
  * Purpose: The ONE node-admin check for the DAO-goal privileges (task.5286, dao-goals-design):
- *   starting a goal, merging a `goal-*` hub change, and setting work-item priority 0/1. Each is an
- *   OpenFGA `node.administer` check on THIS node, run before the side effect.
+ *   starting a goal and merging a `goal-*` hub change. Each is an OpenFGA `node.administer` check
+ *   on THIS node, run before the side effect. Work-item priority is not gated here (task.5306).
  * Scope: Pure helper over an injected AuthorizationPort. Returns a typed decision; callers own the
  *   HTTP body, logging and error mapping. No second authority, no new role, no model change.
  * Invariants:
- *   - GOAL_CHANGE_IS_NODE_ADMIN / P0P1_IS_NODE_ADMIN: the relation is the existing `admin`
+ *   - GOAL_CHANGE_IS_NODE_ADMIN: the relation is the existing `admin`
  *     (`relationForAuthzAction("node.administer")`) on `node:<nodeId>`.
  *   - CHECK_BEFORE_SIDE_EFFECT: callers run this before any write.
  *   - FAIL_CLOSED_WITH_DISTINCTION: deny → 403 `authz_denied`; no adapter, a missing actor, an
  *     adapter-reported outage or a thrown check → 503 `authz_unavailable`. Never conflated.
  * Side-effects: IO (one OpenFGA check via the injected port)
- * Links: docs/spec/rbac.md, src/app/_lib/node-rbac.ts, task.5286
+ * Links: docs/spec/rbac.md, src/app/_lib/node-rbac.ts, task.5286, task.5306
  * @public
  */
 
@@ -50,11 +50,6 @@ const DENIED: NodeAdminDenied = {
 
 export function nodeAdminUnavailable(reason: string): NodeAdminUnavailable {
   return { ok: false, status: 503, errorCode: "authz_unavailable", reason };
-}
-
-/** Priority 0 and 1 are the node-admin tier (P0P1_IS_NODE_ADMIN); 2+ stays open. */
-export function isPrivilegedPriority(priority: number | null | undefined) {
-  return priority === 0 || priority === 1;
 }
 
 /** A hub row id in the goal namespace (GOAL_CHANGE_IS_NODE_ADMIN). */

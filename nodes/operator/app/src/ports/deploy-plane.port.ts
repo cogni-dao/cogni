@@ -7,6 +7,8 @@
  * Scope: Interface only. Keeps hosted deploy operations out of shared AI-tool capabilities.
  * Invariants:
  *   - OPERATOR_OWNS_DEPLOY: deploy mutations target the operator parent repo/workflows.
+ *   - INDEPENDENT_WORKFLOW_IDENTITY: maintainer-authorized remote node requests may bind
+ *     reviewed parent workflow code separately from the child artifact source.
  *   - NODE_REF_ARTIFACT_GATE: node-ref flight dispatch requires a resolvable source artifact.
  *   - ONE_PROMOTION_PRIMITIVE: every promotion rung (candidate-a, preview, production)
  *     dispatches `promote-and-deploy.yml` directly via the operator App — no rung routes
@@ -115,6 +117,15 @@ export type SharedLaneInfraEnv = "preview" | "production";
 
 export type ReconcileNodeInfraInput =
   | {
+      readonly env: "production";
+      readonly slug: "operator";
+      readonly parentOwner: string;
+      readonly parentRepo: string;
+      readonly target: "scheduler-worker-custodied-routing";
+      /** Immutable publication commit receipt, resolved only from the fixed worker ref history. */
+      readonly rollbackReceipt?: string;
+    }
+  | {
       /** Existing shared-lane full-infra replay; the caller cannot select its source. */
       readonly env: SharedLaneInfraEnv;
       readonly parentOwner: string;
@@ -134,6 +145,24 @@ export type ReconcileNodeInfraInput =
     };
 
 export type NodeInfraReconcileResult =
+  | {
+      readonly status: "unchanged" | "git_published";
+      readonly version: 1;
+      readonly rollbackReceipt: string | null;
+      readonly env: "production";
+      readonly target: "scheduler-worker-custodied-routing";
+      readonly sourceSha: string;
+      readonly authoritySha: string;
+      readonly deploySha: string;
+      readonly deployRef: "deploy/production-scheduler-worker";
+      readonly path: string;
+      readonly beforeBlob: string;
+      readonly afterBlob: string;
+      readonly beforeHash: string;
+      readonly afterHash: string;
+      /** Receipt is immutable Git evidence, not rollout evidence. */
+      readonly receipt: string | null;
+    }
   | {
       readonly status: "dispatched";
       readonly env: SharedLaneInfraEnv;
@@ -319,9 +348,13 @@ export interface DeployPlanePort {
     sourceSha: string;
     /**
      * Optional same-repository branch or tag containing candidate-flight.yml. The adapter resolves
-     * and accepts it only when it is the exact open same-repo PR head named by sourceSha.
+     * and accepts it only when it is the exact open same-repo PR head named by workflowSha
+     * (or sourceSha for the legacy same-source parent-PR mode).
      */
     workflowRef?: string;
+    /** Independently reviewed parent workflow SHA for a maintainer-authorized remote node flight.
+     * Keeps sourceSha as the child artifact identity; requires workflowRef. */
+    workflowSha?: string;
   }): Promise<CandidateFlightDispatchResult>;
 
   /**

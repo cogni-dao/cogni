@@ -64,13 +64,11 @@ governance:
   # extractGovernanceConfig still synthesizes it from activity_ledger (cron 0 0 * * *),
   # exactly as before this list existed — only a declared LEDGER_INGEST suppresses that.
   schedules:
-    # Work prioritizer (story.5096), PROPOSE mode: judges + ranks the backlog against the hub's
-    # active goal-* atoms and files an EDO decision only when the plan changes (plus one
-    # daily full review). Zero work-item mutations. Model = LiteLLM default_free (gpt-oss-120b,
-    # is_free: true): the system tenant that bills governance runs holds zero credits, and the
-    # preflight credit gate passes free models — a paid model would fail with insufficient_credits.
-    # Hourly is the prod-safe cadence (prod: hourly at most). The candidate proof ran at */5 with
-    # identical runtime code (8a9d280); a candidate eval now waits for >=1 hourly scheduled cycle at the SHA.
+    # Mission loop (story.5108) on the work-prioritizer slot: a ReAct agent that reads the DAO goals and
+    # makes at most ~5 goal-cited work-item changes per cycle; p0/p1 writes are server-denied and listed
+    # as proposals for the node admin. Model = LiteLLM default_free (gpt-oss-120b, is_free: true): the
+    # system tenant that bills governance runs holds zero credits, and the preflight credit gate passes
+    # free models — a paid model would fail with insufficient_credits. Hourly is the prod-safe cadence.
     - charter: WORK_PRIORITIZER
       cron: "0 * * * *"
       timezone: UTC

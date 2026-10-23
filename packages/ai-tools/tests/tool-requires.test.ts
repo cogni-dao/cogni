@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/ai-tools/tests/tool-requires`
- * Purpose: Lock the authz v0 node-policy declarations: exactly the six tools the work prioritizer binds declare node.collaborate.
+ * Purpose: Lock the authz v0 node-policy declarations: exactly seven tools declare node.collaborate (incl. the work prioritizer's four).
  * Scope: Contract metadata only; does not execute tools or evaluate policy.
  * Invariants:
  *   - PRIORITIZER_TOOLS_DECLARED (story.5096): the prioritizer's reads + its EDO decide declare `requires:
@@ -23,7 +23,7 @@ import { toBoundToolRuntime } from "../src/runtime-adapter";
 const ALL = [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE];
 
 describe("tool node-policy declarations (authz v0)", () => {
-  it("declares node.collaborate on exactly the six prioritizer tools", () => {
+  it("declares node.collaborate on exactly seven tools", () => {
     const declared = ALL.filter((t) => t.contract.requires !== undefined)
       .map((t) => [t.contract.name, t.contract.requires])
       .sort();
@@ -35,6 +35,7 @@ describe("tool node-policy declarations (authz v0)", () => {
         ["core__knowledge_read", "node.collaborate"],
         ["core__knowledge_search", "node.collaborate"],
         ["core__work_item_query", "node.collaborate"],
+        ["core__work_item_transition", "node.collaborate"],
       ].sort()
     );
   });

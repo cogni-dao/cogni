@@ -30,6 +30,116 @@ printf '%s\n' '{"packages":[]}'
 SH
 chmod +x "$tmpdir/turbo-empty-stub"
 
+# bug.5521: worked catalog examples distinguish repository-wide inputs from
+# independent Docker contexts. A root-context infra image must still rebuild;
+# a remote-source image must never become this repository's build obligation.
+fixture="$tmpdir/contexts"
+mkdir -p "$fixture/infra/catalog" "$fixture/infra/images/isolated"
+cat > "$fixture/infra/catalog/app.yaml" <<'YAML'
+name: app
+type: node
+path_prefix: nodes/app/
+YAML
+cat > "$fixture/infra/catalog/foreign.yaml" <<'YAML'
+name: foreign
+type: node
+path_prefix: nodes/foreign/
+source_repo: other-owner/unrelated
+YAML
+cat > "$fixture/infra/catalog/isolated.yaml" <<'YAML'
+name: isolated
+type: infra
+path_prefix: infra/images/isolated/
+build_context: infra/images/isolated
+YAML
+cat > "$fixture/infra/catalog/root-infra.yaml" <<'YAML'
+name: root-infra
+type: infra
+path_prefix: infra/images/root-infra/
+build_context: ./
+YAML
+cat > "$fixture/infra/catalog/worker.yaml" <<'YAML'
+name: worker
+type: service
+path_prefix: services/worker/
+YAML
+
+assert_context_targets() {
+  local expected="$1" output
+  shift
+  printf '%s\n' "$@" > "$tmpdir/context-paths.txt"
+  : > "$tmpdir/context-output.txt"
+  output=$(
+    COGNI_CATALOG_ROOT="$fixture/infra/catalog" \
+    GITHUB_REPOSITORY=cogni-dao/cogni \
+    TURBO_BIN="$tmpdir/turbo-invalid-json-stub" \
+    GITHUB_OUTPUT="$tmpdir/context-output.txt" \
+    CHANGED_PATHS_FILE="$tmpdir/context-paths.txt" \
+    bash scripts/ci/detect-affected.sh
+  )
+  if ! grep -qx "Targets: $expected" <<< "$output"; then
+    printf '[FAIL] paths %s: expected %s\n%s\n' "$*" "$expected" "$output" >&2
+    exit 1
+  fi
+  python3 - "$tmpdir/context-output.txt" "$expected" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as output:
+    fields = dict(line.rstrip("\n").split("=", 1) for line in output)
+assert fields["targets"] == sys.argv[2], fields
+assert json.loads(fields["targets_json"]) == sys.argv[2].split(","), fields
+PY
+}
+
+for workspace_path in package.json pnpm-workspace.yaml turbo.json tsconfig.json \
+  tsconfig.base.json tsconfig.app.json tsconfig.scripts.json config/build.ts \
+  .dockerignore pnpm-lock.yaml packages/shared/src/example.ts; do
+  assert_context_targets 'app,root-infra,worker' "$workspace_path"
+done
+
+# Scoped expansion must union, rather than stop scanning a mixed PR. Lockfile
+# deferral is consumed only by a locally built repository-context owner.
+for workspace_path in package.json pnpm-lock.yaml packages/shared/src/example.ts; do
+  assert_context_targets 'app,isolated,root-infra,worker' \
+    "$workspace_path" infra/images/isolated/Dockerfile
+  assert_context_targets 'app,isolated,root-infra,worker' \
+    infra/images/isolated/Dockerfile "$workspace_path"
+done
+assert_context_targets 'app,isolated,root-infra,worker' \
+  infra/catalog/isolated.yaml pnpm-lock.yaml
+assert_context_targets 'app,root-infra,worker' nodes/foreign/src/example.ts pnpm-lock.yaml
+assert_context_targets 'app' nodes/app/src/example.ts pnpm-lock.yaml
+assert_context_targets 'isolated' infra/images/isolated/Dockerfile
+assert_context_targets 'isolated' infra/catalog/isolated.yaml
+
+# Equivalent root spellings and a symlink alias cannot create false negatives.
+ln -s "$fixture" "$fixture/root-alias"
+for context in './' 'infra/..' 'root-alias' '..'; do
+  BUILD_CONTEXT="$context" yq -i '.build_context = strenv(BUILD_CONTEXT)' \
+    "$fixture/infra/catalog/root-infra.yaml"
+  assert_context_targets 'app,root-infra,worker' package.json
+done
+
+# Actual shared build machinery remains conservative across every context.
+for machinery_path in scripts/ci/build-and-push-images.sh scripts/ci/detect-affected.sh \
+  scripts/ci/lib/image-tags.sh scripts/ci/write-build-manifest.sh \
+  .github/workflows/pr-build.yml; do
+  assert_context_targets 'app,isolated,root-infra,worker' "$machinery_path"
+done
+
+# Explicit full scope still includes independent contexts. Use a disposable
+# main checkout so the caller's branch/upstream cannot influence this control.
+git -c init.defaultBranch=main init --quiet "$fixture"
+full_output=$(
+  cd "$fixture"
+  COGNI_CATALOG_ROOT="$fixture/infra/catalog" GITHUB_REPOSITORY=cogni-dao/cogni \
+    env -u CHANGED_PATHS_FILE -u TURBO_SCM_BASE -u TURBO_SCM_HEAD \
+    bash "$ROOT/scripts/ci/detect-affected.sh"
+)
+grep -qx 'Image build scope: full' <<< "$full_output"
+grep -qx 'Targets: app,isolated,root-infra,worker' <<< "$full_output"
+
 printf '%s\n' 'packages/node-contracts/src/foo.ts' > "$tmpdir/changed-paths.txt"
 
 output=$(
@@ -67,6 +177,7 @@ expected_fallback_targets=$(
     if ! is_built_by_this_repo "$target"; then
       continue
     fi
+    [ "$(yq -N '.build_context // "."' "${_image_tags_catalog_root}/${target}.yaml")" = '.' ] || continue
     ordered_targets+=("$target")
   done
   IFS=,

@@ -8,6 +8,8 @@
  * Invariants:
  *   - TOOL_ID_NAMESPACED: ID is `core__work_item_transition`
  *   - EFFECT_TYPED: effect is `state_change`
+ *   - NODE_COLLABORATE: `requires: "node.collaborate"`, the same tier as PATCH /api/v1/work/items/{id}; p0/p1 stays
+ *     behind the capability's existing node-admin gate
  *   - NO_ONEOF_IN_SCHEMA: Uses flat z.object per tool-use.md #10
  *   - TRANSITION_TABLE_ENFORCED: Capability validates transitions via development-lifecycle.md
  *   - PATCH_CAS_OPTIONAL: patch `expectedRevision` is compare-and-set; absent ⇒ unconditioned patch (unchanged)
@@ -140,6 +142,7 @@ export const workItemTransitionContract: ToolContract<
     "'patch' (requires id, optional priority/rank/labels/summary, optional expectedRevision for compare-and-set) updates metadata fields. " +
     "Use core__work_item_query first to find items and check their current status.",
   effect: "state_change",
+  requires: "node.collaborate",
   inputSchema: WorkItemTransitionInputSchema,
   outputSchema: WorkItemTransitionOutputSchema,
 
