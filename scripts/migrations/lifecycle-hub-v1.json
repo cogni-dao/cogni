@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "owner": "story.5113/task.5321",
+  "files": {
+    ".claude/commands/design.md": {
+      "after": "64fc3d730c598ce3ceabad80ac64cd783e886772ff6e93ddfa1c0439af42aadc"
+    },
+    ".claude/commands/review-design.md": {
+      "after": "1053f2a022eccade6e0ca8f0680c9637b484a10deaaa35bfb20e955ba011aee2"
+    },
+    ".claude/commands/implement.md": {
+      "after": "8fa3ef85a8a76eaf66b83766a431d1105df04491674af2e2739a21cb2d30dac2"
+    },
+    ".claude/commands/review-implementation.md": {
+      "after": "29c3de8dd7335f689acd413ef8b4aedf26c7c1698aadb50f93f51b77011bdc5d"
+    },
+    ".claude/commands/closeout.md": {
+      "after": "1fcd52b25d2614493b455e74a80ac150d3496872beb390fe07cb1e79bd38a6de"
+    },
+    ".claude/commands/contribute-to-cogni.md": {
+      "after": "54f56045c586ff56fe1656308fb865cab17b230cfb7f3d261d93bf33e6d43374",
+      "content": "---\ndescription: Route the bound node work item to its lifecycle command.\n---\n\nContinue the current node's owned work item: #$ITEM.\nInvoke the command for its status, preserving all invocation arguments.\n\n| status          | invoke                       |\n| --------------- | ---------------------------- |\n| needs_triage    | /triage                      |\n| needs_research  | /research                    |\n| needs_design    | /design, then /review-design |\n| needs_implement | /implement                   |\n| needs_merge     | /review-implementation       |\n| needs_closeout  | /closeout                    |\n\nEach command loads its owning procedure and any required dependencies.\nA multi-task outcome uses dev-manager. Knowledge-only contributions use\ncontribute-knowledge-to-cogni.\n"
+    }
+  },
+  "repositories": {
+    "node-template": {
+      "sourceSha": "821dc1955a5808f383116b07d33f41a694e193e5",
+      "before": {
+        ".claude/commands/design.md": "98d419b9962cb8a858c92d480d4ca34046ef8310509b3e2c0b8f3edfde707943",
+        ".claude/commands/review-design.md": "e564796c836ac6411ffb9ba9c07de9bfe1813f9a41a6c7e99e32650397bd545e",
+        ".claude/commands/implement.md": "29f9b16cec836cbdd8c13ddd716cabd07e6edbf71bfa8e0e9dd248ec08064651",
+        ".claude/commands/review-implementation.md": "478e439730f68b9acf4f0d00976e2be7bbf419e5f17bbfb178b6878e13575422",
+        ".claude/commands/closeout.md": "6b98bc4d54e7c2406d1855788f03f51b5a87c69b3e2e0614ecaa2a113e1ba71e",
+        ".claude/commands/contribute-to-cogni.md": "7a77ab7ea5792c0573eb3f002dc829442dca7dbcc0a21b3ba634df352714b50b"
+      }
+    },
+    "poly": {
+      "sourceSha": "950e15518316f62caf36e6586c0893b456e63dba",
+      "before": {
+        ".claude/commands/design.md": "98d419b9962cb8a858c92d480d4ca34046ef8310509b3e2c0b8f3edfde707943",
+        ".claude/commands/review-design.md": "e564796c836ac6411ffb9ba9c07de9bfe1813f9a41a6c7e99e32650397bd545e",
+        ".claude/commands/implement.md": "29f9b16cec836cbdd8c13ddd716cabd07e6edbf71bfa8e0e9dd248ec08064651",
+        ".claude/commands/review-implementation.md": "478e439730f68b9acf4f0d00976e2be7bbf419e5f17bbfb178b6878e13575422",
+        ".claude/commands/closeout.md": "6b98bc4d54e7c2406d1855788f03f51b5a87c69b3e2e0614ecaa2a113e1ba71e",
+        ".claude/commands/contribute-to-cogni.md": "7a77ab7ea5792c0573eb3f002dc829442dca7dbcc0a21b3ba634df352714b50b"
+      }
+    },
+    "beacon": {
+      "sourceSha": "961cc1b8a11a52bde12dd58d1984bde1708f75c6",
+      "before": {
+        ".claude/commands/design.md": "98d419b9962cb8a858c92d480d4ca34046ef8310509b3e2c0b8f3edfde707943",
+        ".claude/commands/review-design.md": "e564796c836ac6411ffb9ba9c07de9bfe1813f9a41a6c7e99e32650397bd545e",
+        ".claude/commands/implement.md": "29f9b16cec836cbdd8c13ddd716cabd07e6edbf71bfa8e0e9dd248ec08064651",
+        ".claude/commands/review-implementation.md": "478e439730f68b9acf4f0d00976e2be7bbf419e5f17bbfb178b6878e13575422",
+        ".claude/commands/closeout.md": "6b98bc4d54e7c2406d1855788f03f51b5a87c69b3e2e0614ecaa2a113e1ba71e",
+        ".claude/commands/contribute-to-cogni.md": "7a77ab7ea5792c0573eb3f002dc829442dca7dbcc0a21b3ba634df352714b50b"
+      }
+    },
+    "levelup": {
+      "sourceSha": "0fb22bca35630963b1bea1bac14af5f62f3505cd",
+      "before": {
+        ".claude/commands/design.md": "4579fbca5173a51c536b905089bdde0f9f5d47b851160832d109bb6f951bd0b1",
+        ".claude/commands/review-design.md": "26ed98359d65bc3bdeb1d3b63e786a6d45fddaacd3c362b4aa2f7284760c1ebf",
+        ".claude/commands/implement.md": "29f9b16cec836cbdd8c13ddd716cabd07e6edbf71bfa8e0e9dd248ec08064651",
+        ".claude/commands/review-implementation.md": "478e439730f68b9acf4f0d00976e2be7bbf419e5f17bbfb178b6878e13575422",
+        ".claude/commands/closeout.md": "6b98bc4d54e7c2406d1855788f03f51b5a87c69b3e2e0614ecaa2a113e1ba71e",
+        ".claude/commands/contribute-to-cogni.md": "7a77ab7ea5792c0573eb3f002dc829442dca7dbcc0a21b3ba634df352714b50b"
+      }
+    },
+    "red": {
+      "sourceSha": "c4e48394f0654fa62d10b9747453581d8ef75e1e",
+      "before": {
+        ".claude/commands/design.md": "5603c82bc883a2d7c6fa0be7491f8bf82fb19434a8e1e9fa689a076ed65ea154",
+        ".claude/commands/review-design.md": "e564796c836ac6411ffb9ba9c07de9bfe1813f9a41a6c7e99e32650397bd545e",
+        ".claude/commands/implement.md": "29f9b16cec836cbdd8c13ddd716cabd07e6edbf71bfa8e0e9dd248ec08064651",
+        ".claude/commands/review-implementation.md": "478e439730f68b9acf4f0d00976e2be7bbf419e5f17bbfb178b6878e13575422",
+        ".claude/commands/closeout.md": "6b98bc4d54e7c2406d1855788f03f51b5a87c69b3e2e0614ecaa2a113e1ba71e",
+        ".claude/commands/contribute-to-cogni.md": "7a77ab7ea5792c0573eb3f002dc829442dca7dbcc0a21b3ba634df352714b50b"
+      }
+    },
+    "toks5": {
+      "sourceSha": "7c3fdbf757a1c1adee9a817fa2fb5c8f84607ecd",
+      "before": {
+        ".claude/commands/design.md": "4579fbca5173a51c536b905089bdde0f9f5d47b851160832d109bb6f951bd0b1",
+        ".claude/commands/review-design.md": "26ed98359d65bc3bdeb1d3b63e786a6d45fddaacd3c362b4aa2f7284760c1ebf",
+        ".claude/commands/implement.md": "29f9b16cec836cbdd8c13ddd716cabd07e6edbf71bfa8e0e9dd248ec08064651",
+        ".claude/commands/review-implementation.md": "478e439730f68b9acf4f0d00976e2be7bbf419e5f17bbfb178b6878e13575422",
+        ".claude/commands/closeout.md": "6b98bc4d54e7c2406d1855788f03f51b5a87c69b3e2e0614ecaa2a113e1ba71e",
+        ".claude/commands/contribute-to-cogni.md": "7a77ab7ea5792c0573eb3f002dc829442dca7dbcc0a21b3ba634df352714b50b"
+      }
+    }
+  }
+}
