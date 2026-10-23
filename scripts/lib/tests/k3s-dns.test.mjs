@@ -241,6 +241,19 @@ test("generated template DNS never clones; real CLI projection is deterministic 
       ["--schemafile", "infra/catalog/_schema.json", cat],
       { stdio: ["ignore", "pipe", "pipe"] }
     );
+    for (const patch of [{ mode: "unknown" }, { extra: "unreviewed" }]) {
+      const invalid = structuredClone(full);
+      Object.assign(invalid.k3s_dns["candidate-a"], patch);
+      const invalidPath = path.join(dir, "invalid-catalog.json");
+      writeFileSync(invalidPath, JSON.stringify(invalid));
+      assert.throws(() =>
+        execFileSync(
+          "check-jsonschema",
+          ["--schemafile", "infra/catalog/_schema.json", invalidPath],
+          { stdio: ["ignore", "pipe", "pipe"] }
+        )
+      );
+    }
     const clone = {
       ...full,
       name: "clone",
