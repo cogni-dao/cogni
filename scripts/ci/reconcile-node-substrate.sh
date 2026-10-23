@@ -965,7 +965,7 @@ ${edge_reconcile_snippet}
     echo '[remote] Postgres already provisioned on lane-local ${postgres_residency_env}; no Postgres mutation on ${SUBSTRATE_CONTROL_ENV}'
   fi
 
-  \"\${runtime_compose[@]}\" config --services | grep -q '^doltgres$' || {
+  \"\${runtime_compose[@]}\" config --services | grep -x 'doltgres' >/dev/null || {
     echo 'shared doltgres prerequisite is missing or unreadable' >&2
     exit 1
   }

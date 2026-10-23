@@ -1138,4 +1138,50 @@ for probe_case in wrong_password unsafe_acl database_override metadata_failure m
   fi
 done
 
+# The real prerequisite guard must consume the producer fully under pipefail.
+# A large successful service listing demonstrates the early-close hazard;
+# missing services and actual Compose failures must still refuse provisioning.
+python3 - "$TMPROOT" <<'PYTEST'
+from pathlib import Path
+import sys
+source = Path('scripts/ci/reconcile-node-substrate.sh').read_text()
+start = source.rfind('\n', 0, source.index(' config --services |')) + 1
+end = source.index('\n  }', start) + len('\n  }')
+Path(sys.argv[1], 'doltgres-prerequisite.sh').write_text(source[start:end].replace('\\$', '$').replace('\\"', '"'))
+PYTEST
+cat > "$TMPROOT/service-list.py" <<'PYTEST'
+import os
+import signal
+import sys
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+mode = sys.argv[1]
+os.write(1, b'postgres\n' if mode == 'missing' else b'doltgres\n')
+if mode == 'large':
+    os.write(1, b'another-service\n' * 262144)
+if mode == 'producer_failure':
+    sys.exit(42)
+PYTEST
+bash -c '
+  set -uo pipefail
+  python3 "$1/service-list.py" large | grep -q "^doltgres$"
+  status=("${PIPESTATUS[@]}")
+  [ "${status[0]}:${status[1]}" = 141:0 ]
+' -- "$TMPROOT"
+for service_case in large missing producer_failure; do
+  if bash -c '
+    set -euo pipefail
+    runtime_compose=(python3 "$1/service-list.py" "$2")
+    source "$1/doltgres-prerequisite.sh"
+  ' -- "$TMPROOT" "$service_case" > "$TMPROOT/services-$service_case.out" 2>&1; then
+    [ "$service_case" = large ] || {
+      echo "Doltgres prerequisite accepted $service_case" >&2; exit 1;
+    }
+  else
+    [ "$service_case" != large ] || {
+      echo "Doltgres prerequisite rejected a complete successful service listing" >&2; exit 1;
+    }
+    grep -q 'shared doltgres prerequisite is missing or unreadable' "$TMPROOT/services-$service_case.out"
+  fi
+done
+
 echo "PASS: reconcile-node-substrate.test.sh"
