@@ -610,7 +610,7 @@ jobs:
   # Full native proof until a renewed transitive input/install audit is reviewed.
   # This also overrides an older trusted event-base planner returning false.
   native:
-    needs: [env_manager_fast_path, proof_plan]
+    needs: [env_manager_fast_path]
     if: ${{ !cancelled() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true') }}
     runs-on: ubuntu-latest
     steps:

@@ -62,6 +62,23 @@ test("CI always aggregates split children while retaining bounded signed skips",
     "shell",
     "native",
   ]);
+  // Full native execution no longer consumes a selection decision. Its only
+  // scheduling dependency is the signed exception classifier; the terminal
+  // still waits for and verifies the plan alongside every ordinary proof.
+  assert.deepEqual(jobs.native.needs, ["env_manager_fast_path"]);
+  for (const dependency of ["proof_plan", "unit_core", "shell", "native"])
+    assert.ok(jobs.unit.needs.includes(dependency));
+  const terminal = jobs.unit.steps.find((step) =>
+    step.run?.includes("verify-unit")
+  );
+  assert.match(
+    terminal.env.CLASSIFIER_RESULT,
+    /^\$\{\{ needs\.proof_plan\.result \}\}$/
+  );
+  assert.match(
+    terminal.env.NATIVE_RESULT,
+    /^\$\{\{ needs\.native\.result \}\}$/
+  );
   for (const gate of ["unit", "component"])
     assert.match(jobs[gate].if, /always\(\)/);
   for (const name of [
