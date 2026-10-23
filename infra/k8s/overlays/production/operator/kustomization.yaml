@@ -52,7 +52,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:dbc12609ab80d4df5e65e086acbf2e1b33af8f3796aa1a2ba062a730529ddee0"
+    digest: "sha256:256cef952f2e2acefbf59414f0f1ec4f3f78e733cb420eb6dad2a9b54086c3a7"
 patches:
   - target:
       kind: ExternalSecret
@@ -241,6 +241,10 @@ patches:
       # (cogni/<env>/<node>/<KEY>). Distinct from APP_ENV (a build flag).
       - op: add
         path: /data/DEPLOY_ENVIRONMENT
+        value: "production"
+      # Explicit own-custodian identity for the fixed worker routing service operation.
+      - op: add
+        path: /data/FLEET_CONTROL_ENV
         value: "production"
       - op: replace
         path: /data/TEMPORAL_NAMESPACE
