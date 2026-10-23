@@ -704,7 +704,8 @@ describe("candidate-a manifest source", () => {
         "utf8"
       )
     ) as { jobs: Record<string, WorkflowJob> };
-    const helper = "python3 ../ci-src/scripts/ci/lib/maintenance-fence.py ";
+    const helper =
+      "python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .";
     const candidateGroups = ["prepare-substrate-deploy-branch", "flight"];
     for (const name of candidateGroups) {
       const job = parsed.jobs[name];
@@ -740,12 +741,12 @@ describe("candidate-a manifest source", () => {
     );
     if (!promotionCheckout || !promotionPush)
       throw new Error("ordinary promotion writer steps are required");
-    for (const [label, step, actions] of [
-      ["candidate prepare", prepare, ["claim", "preserve"]],
-      ["candidate checkout", candidateCheckout, ["check"]],
-      ["candidate push", candidatePush, ["check"]],
-      ["promotion checkout", promotionCheckout, ["check"]],
-      ["promotion push", promotionPush, ["check"]],
+    for (const [label, step, checks] of [
+      ["candidate prepare", prepare, 2],
+      ["candidate checkout", candidateCheckout, 1],
+      ["candidate push", candidatePush, 1],
+      ["promotion checkout", promotionCheckout, 1],
+      ["promotion push", promotionPush, 1],
     ] as const) {
       const run = step.run ?? "";
       expect(run, label).toContain("set -euo pipefail");
@@ -764,12 +765,12 @@ describe("candidate-a manifest source", () => {
       const guardLines = run
         .split("\n")
         .filter((line) => line.includes(helper));
-      // Only prepare can claim the finite, already-active grant and preserve its
-      // manifest. No ordinary writer can invent activation/audit authority.
-      expect(
-        guardLines.map((line) => line.trim()),
-        label
-      ).toEqual(actions.map((action) => `${helper}${action} .`));
+      expect(guardLines, label).toHaveLength(checks);
+      for (const line of guardLines) {
+        expect(line, label).not.toMatch(/\|\|\s*(true|:)(?:\s|$)/);
+        // Ordinary delivery cannot supply an operation exception or mutate fence state.
+        expect(line.trim(), label).toMatch(/maintenance-fence\.py check \.$/);
+      }
       if (run.includes("git checkout -B")) {
         expect(run.indexOf(helper), label).toBeGreaterThan(
           run.lastIndexOf("git checkout -B")
@@ -784,19 +785,6 @@ describe("candidate-a manifest source", () => {
         );
       }
     }
-    const preparation = prepare.run ?? "";
-    const claim = preparation.indexOf(`${helper}claim .`);
-    const firstSync = preparation.indexOf("rsync -a --delete");
-    const preserve = preparation.indexOf(`${helper}preserve .`);
-    expect(claim).toBeGreaterThan(preparation.lastIndexOf("git checkout -B"));
-    expect(firstSync).toBeGreaterThan(claim);
-    expect(preserve).toBeGreaterThan(
-      preparation.lastIndexOf("rsync -a --delete")
-    );
-    expect(preparation.indexOf("git add -A")).toBeGreaterThan(preserve);
-    expect(preparation.indexOf("git push origin")).toBeGreaterThan(
-      preparation.indexOf("git add -A")
-    );
     for (const job of [
       parsed.jobs["prepare-substrate-deploy-branch"],
       parsed.jobs.flight,
@@ -810,13 +798,58 @@ describe("candidate-a manifest source", () => {
         /maintenance-fence\.py (begin|audited|finish)/
       );
     }
-    const inventory = namedStep(
-      "external-node-preflight",
-      "Read owning candidate producer inventory before mutation"
+    expect(
+      parsed.jobs["external-node-preflight"].steps.some((step) =>
+        (step.run ?? "").includes("maintenance-drain.mjs")
+      )
+    ).toBe(false);
+  });
+
+  it("keeps every ordinary node outside shared native lifecycle and custody", () => {
+    const reconcile = readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/reconcile-node-substrate.sh"),
+      "utf8"
     );
-    expect(inventory.run?.trim()).toMatch(
-      /maintenance-drain\.mjs candidate-preflight$/
+    const runner = readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/run-node-substrate.sh"),
+      "utf8"
     );
+    const materialize = readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/secret-materialize.sh"),
+      "utf8"
+    );
+    expect(reconcile).not.toMatch(
+      /up -d (?:postgres|doltgres)|force-recreate|dolt_mirror_reconcile|DOLT_CREDS_|DOLTHUB_/
+    );
+    expect(reconcile).not.toMatch(
+      /touch .*runtime_env|mv -f .*runtime_env|install_exact .*doltgres_install_creds/
+    );
+    expect(
+      reconcile.match(/--profile bootstrap run --rm --no-deps/g)
+    ).toHaveLength(2);
+    expect(reconcile).toContain(
+      "bao_get_field operator DOLTGRES_PASSWORD owner"
+    );
+    for (const source of [runner, reconcile]) {
+      expect(source).toContain(
+        'deployment_provider_for_target "$TARGET_NODE" "$DEPLOY_ENVIRONMENT"'
+      );
+      expect(source).toContain(
+        "requested provider disagrees with owning catalog"
+      );
+      expect(source).not.toContain("native_preservation");
+      expect(source).not.toContain("node-template");
+    }
+    expect(materialize).not.toContain("node-template");
+    expect(materialize).toContain('bao_get_field "$inherit_from" "$k" owner');
+    const guard = readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/lib/maintenance-fence.py"),
+      "utf8"
+    );
+    expect(guard).not.toMatch(
+      /check_qualification|claim_qualification|preserve_qualification/
+    );
+    expect(guard).toContain("maintenance_floor_not_on_main");
   });
 
   it("fails candidate verification unless worker /version matches SHA and digest", () => {

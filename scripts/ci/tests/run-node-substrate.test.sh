@@ -18,9 +18,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 RUNNER="$REPO_ROOT/scripts/ci/run-node-substrate.sh"
 
-# Exact template candidate qualification cannot start or recreate shared engines.
-bash "$SCRIPT_DIR/template-native-preservation.test.sh"
-
 TMPROOT=$(mktemp -d -t run-node-substrate.XXXXXX)
 trap 'rm -rf "$TMPROOT"' EXIT
 ORDER="$TMPROOT/order.log"
@@ -153,6 +150,14 @@ case "$seen_root" in
   /*) [ -d "$seen_root" ] || { echo "normalized COGNI_CATALOG_ROOT not a real dir: $seen_root" >&2; exit 1; } ;;
   *) echo "COGNI_CATALOG_ROOT must be exported ABSOLUTE to callees; got: $seen_root" >&2; exit 1 ;;
 esac
+
+# Explicit provider input cannot override the target catalog before any writer.
+: > "$ORDER"
+if DEPLOYMENT_PROVIDER=k3s RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+  bash "$RUNNER" candidate-a polyfix > "$TMPROOT/provider-mismatch.out" 2>&1; then
+  echo 'runner accepted a provider override contrary to catalog' >&2; exit 1
+fi
+[ ! -s "$ORDER" ] || { echo 'provider mismatch reached materialization' >&2; exit 1; }
 
 # ── Case 5: external compute gets the SAME placement-neutral reconcile/DB
 #    provisioning before its provider assert. Provider is supplied by the typed map. ─

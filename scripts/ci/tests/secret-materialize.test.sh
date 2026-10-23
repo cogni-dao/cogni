@@ -26,9 +26,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
 
-# Keep the template target distinct from the same-named production baseline.
-bash scripts/ci/tests/template-target-bank.test.sh
-
 # The materializer and read-only reconciler share this exact auth helper. Invoke
 # its hermetic transient/permanent matrix from an already-required CI test rather
 # than adding decision logic to the frozen workflow.

@@ -6,7 +6,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-TMPROOT=$(mktemp -d -t template-target-bank.XXXXXX)
+TMPROOT=$(mktemp -d -t target-owner-bank.XXXXXX)
 trap 'rm -rf "$TMPROOT"' EXIT
 
 load_function() {
@@ -23,10 +23,10 @@ sleep() { :; } # Error-path retries are finite; do not spend wall time in a fixt
   load_function scripts/ci/reconcile-node-substrate.sh bao_get_field
   BAO_TOKEN=fixture-only
   SUBSTRATE_CONTROL_ENV=production
-  TARGET_NODE=node-template
-  mkdir -p "$TMPROOT/banks/cogni/production/node-template" "$TMPROOT/banks/cogni/production/operator"
+  TARGET_NODE=operator
+  mkdir -p "$TMPROOT/banks/cogni/production/operator"
   for key in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD DATABASE_URL DATABASE_SERVICE_URL; do
-    printf '%s' "production-$key" > "$TMPROOT/banks/cogni/production/node-template/$key"
+    printf '%s' "production-$key" > "$TMPROOT/banks/cogni/production/operator/$key"
   done
   printf '%s' shared-engine > "$TMPROOT/banks/cogni/production/operator/DOLTGRES_PASSWORD"
   remote() {
@@ -47,67 +47,74 @@ sleep() { :; } # Error-path retries are finite; do not spend wall time in a fixt
     jq -n --argjson bank "$json" '{data:{data:$bank}}'
   }
   for DEPLOY_ENVIRONMENT in candidate-a preview production; do
-    [[ "$(_bao_env_for_svc node-template)" == "$DEPLOY_ENVIRONMENT" ]]
-    mkdir -p "$TMPROOT/banks/cogni/$DEPLOY_ENVIRONMENT/node-template"
+    [[ "$(_bao_env_for_svc operator)" == "$DEPLOY_ENVIRONMENT" ]]
+    mkdir -p "$TMPROOT/banks/cogni/$DEPLOY_ENVIRONMENT/operator"
     for key in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD DATABASE_URL DATABASE_SERVICE_URL; do
-      printf '%s' "$DEPLOY_ENVIRONMENT-$key" > "$TMPROOT/banks/cogni/$DEPLOY_ENVIRONMENT/node-template/$key"
+      printf '%s' "$DEPLOY_ENVIRONMENT-$key" > "$TMPROOT/banks/cogni/$DEPLOY_ENVIRONMENT/operator/$key"
       : > "$TMPROOT/reads"
-      [[ "$(bao_get_field node-template "$key")" == "$DEPLOY_ENVIRONMENT-$key" ]]
-      [[ "$(cat "$TMPROOT/reads")" == "cogni/$DEPLOY_ENVIRONMENT/node-template" ]]
+      [[ "$(bao_get_field operator "$key")" == "$DEPLOY_ENVIRONMENT-$key" ]]
+      [[ "$(cat "$TMPROOT/reads")" == "cogni/$DEPLOY_ENVIRONMENT/operator" ]]
     done
-    [[ "$(bao_get_field operator DOLTGRES_PASSWORD)" == shared-engine ]]
-    [[ "$(_bao_env_for_svc _shared)" == production ]]
-    [[ "$(_bao_env_for_svc node-template-database-migration)" == "$DEPLOY_ENVIRONMENT" ]]
+    [[ "$(bao_get_field operator DOLTGRES_PASSWORD owner)" == shared-engine ]]
+    [[ "$(_bao_env_for_svc _shared owner)" == production ]]
+    [[ "$(_bao_env_for_svc operator-database-migration)" == "$DEPLOY_ENVIRONMENT" ]]
   done
   DEPLOY_ENVIRONMENT=candidate-a
-  rm -rf "$TMPROOT/banks/cogni/candidate-a/node-template"
+  rm -rf "$TMPROOT/banks/cogni/candidate-a/operator"
   : > "$TMPROOT/reads"
-  [[ -z "$(bao_get_field node-template APP_DB_PASSWORD)" ]]
-  [[ "$(cat "$TMPROOT/reads")" == cogni/candidate-a/node-template ]]
+  [[ -z "$(bao_get_field operator APP_DB_PASSWORD)" ]]
+  [[ "$(cat "$TMPROOT/reads")" == cogni/candidate-a/operator ]]
   # A denied target bank remains an error, never absence or a production fallback.
-  READ_FAILURE_PATH=cogni/candidate-a/node-template
-  if (bao_get_field node-template APP_DB_PASSWORD) > "$TMPROOT/denied.out" 2>&1; then
+  READ_FAILURE_PATH=cogni/candidate-a/operator
+  if (bao_get_field operator APP_DB_PASSWORD) > "$TMPROOT/denied.out" 2>&1; then
     echo 'denied candidate target bank was accepted' >&2; exit 1
   fi
   unset READ_FAILURE_PATH
   TARGET_NODE=poly
-  [[ "$(_bao_env_for_svc node-template)" == production ]]
+  [[ "$(_bao_env_for_svc operator owner)" == production ]]
   [[ "$(_bao_env_for_svc poly)" == candidate-a ]]
   # Do not redirect explicit shared operator authority for foreign-custodied lanes.
   TARGET_NODE=operator
-  [[ "$(_bao_env_for_svc operator)" == production ]]
+  [[ "$(_bao_env_for_svc operator owner)" == production ]]
 )
 
 (
   load_function scripts/ci/secret-materialize.sh bao_get_field
   load_function scripts/ci/secret-materialize.sh prefetch_path
   CACHE_DIR="$TMPROOT/cache"
-  TARGET_NODE=node-template
+  TARGET_NODE=operator
   DEPLOY_ENVIRONMENT=candidate-a
-  mkdir -p "$CACHE_DIR/node-template" "$CACHE_DIR/__owner__/node-template" "$CACHE_DIR/__owner__/operator"
+  SECRETS_CONTROL_ENV=production
+  mkdir -p "$CACHE_DIR/operator" "$CACHE_DIR/__owner__/operator"
   for key in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD DATABASE_URL DATABASE_SERVICE_URL; do
-    printf '%s' "production-$key" > "$CACHE_DIR/__owner__/node-template/$key"
+    printf '%s' "production-$key" > "$CACHE_DIR/__owner__/operator/$key"
   done
   printf '%s' shared-engine > "$CACHE_DIR/__owner__/operator/DOLTGRES_PASSWORD"
   printf '%s' shared-master > "$CACHE_DIR/__owner__/operator/LITELLM_MASTER_KEY"
   for key in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD DATABASE_URL DATABASE_SERVICE_URL; do
-    [[ -z "$(bao_get_field node-template "$key")" ]]
-    printf '%s' "candidate-$key" > "$CACHE_DIR/node-template/$key"
-    [[ "$(bao_get_field node-template "$key")" == "candidate-$key" ]]
+    [[ -z "$(bao_get_field operator "$key")" ]]
+    printf '%s' "candidate-$key" > "$CACHE_DIR/operator/$key"
+    [[ "$(bao_get_field operator "$key")" == "candidate-$key" ]]
   done
-  [[ "$(bao_get_field operator DOLTGRES_PASSWORD)" == shared-engine ]]
-  [[ "$(bao_get_field operator LITELLM_MASTER_KEY)" == shared-master ]]
+  [[ "$(bao_get_field operator DOLTGRES_PASSWORD owner)" == shared-engine ]]
+  [[ "$(bao_get_field operator LITELLM_MASTER_KEY owner)" == shared-master ]]
   TARGET_NODE=poly
-  [[ "$(bao_get_field node-template APP_DB_PASSWORD)" == candidate-APP_DB_PASSWORD ]]
-  rm "$CACHE_DIR/node-template/APP_DB_PASSWORD"
-  [[ "$(bao_get_field node-template APP_DB_PASSWORD)" == production-APP_DB_PASSWORD ]]
-  TARGET_NODE=node-template
+  [[ "$(bao_get_field operator APP_DB_PASSWORD)" == candidate-APP_DB_PASSWORD ]]
+  rm "$CACHE_DIR/operator/APP_DB_PASSWORD"
+  [[ -z "$(bao_get_field operator APP_DB_PASSWORD)" ]]
+  [[ "$(bao_get_field operator APP_DB_PASSWORD owner)" == production-APP_DB_PASSWORD ]]
+  TARGET_NODE=operator
+  load_function scripts/ci/secret-materialize.sh inherit_shared_value
+  _cat_field() { printf '%s' operator; }
+  unset LITELLM_MASTER_KEY
+  inherit_shared_value LITELLM_MASTER_KEY
+  [[ "$LITELLM_MASTER_KEY" == shared-master ]]
   cogni_openbao_read_path() { echo 'transient' >&2; return 75; }
-  if (prefetch_path node-template) > "$TMPROOT/transport.out" 2>&1; then
+  if (prefetch_path operator) > "$TMPROOT/transport.out" 2>&1; then
     echo 'unknown target bank transport was accepted' >&2; exit 1
   fi
   cogni_openbao_read_path() { printf '%s' '{"data":{"data":{}}}'; }
-  prefetch_path node-template
-  [[ -z "$(bao_get_field node-template APP_DB_PASSWORD)" ]]
+  prefetch_path operator
+  [[ -z "$(bao_get_field operator APP_DB_PASSWORD)" ]]
 )
-echo 'template-target-bank: lane precedence, missing/denied/unknown refusal and shared custody pass'
+echo 'target-owner-bank: lane precedence, missing/denied/unknown refusal and shared custody pass'
