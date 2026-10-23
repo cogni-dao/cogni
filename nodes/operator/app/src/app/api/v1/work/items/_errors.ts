@@ -8,6 +8,7 @@
  * Invariants:
  *   - ERRORCODE_IS_THE_CONTRACT: every mapped response carries a stable `errorCode`; callers branch on it, never on the message text.
  *   - PERMANENT_VS_RETRYABLE: author-scoped refusal → 403 `authz_denied`; store unavailability → 503 `work_items_busy` + retry hint.
+ *   - SCORES_INVALID_IS_400: a `scores` write the package validator (`parseWorkItemScores`, run once by the adapter) rejected → 400 `work_item_scores_invalid` carrying its `issues`; nothing was written (story.5111).
  *   - CAS_CONFLICT_IS_409: a lost `expectedRevision` compare-and-set → 409 `revision_conflict` carrying `currentRevision`; nothing was written.
  *   - UNRECOGNIZED_STAYS_500: an unmapped error returns null so the route rethrows and the wrapper answers 500 — the catch is never broadened.
  * Side-effects: IO (HTTP response construction, structured log entry)
@@ -22,6 +23,7 @@ import {
   WorkItemDeletionRetiredError,
   WorkItemNotFoundError,
   WorkItemRevisionConflictError,
+  WorkItemScoresInvalidError,
   WorkItemsBackendNotReadyError,
   WorkItemsBusyError,
   WorkItemWriteOutcomeUnknownError,
@@ -60,6 +62,18 @@ function classify(error: unknown): Mapped | null {
   // echoed — a denial never narrates the row it protected.
   if (error instanceof WorkItemAuthorizationError) {
     return { status: 403, errorCode: "authz_denied", error: "not authorized" };
+  }
+
+  // PERMANENT, CALLER'S ERROR (story.5111). SCORES_ONE_ENFORCER: the adapter's
+  // `parseWorkItemScores` is the only bounds check and refused before any SQL;
+  // the issues name each failed axis path. Never a 500.
+  if (error instanceof WorkItemScoresInvalidError) {
+    return {
+      status: 400,
+      errorCode: error.code,
+      error: "invalid input",
+      details: { issues: error.issues },
+    };
   }
 
   if (error instanceof WorkItemDeletionRetiredError) {
