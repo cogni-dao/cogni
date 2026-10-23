@@ -11,6 +11,8 @@
  *   Does not belong in `VcsCapability` because that capability is shared with poly/resy/node-template stubs
  *   and these write ops are operator-only.
  * Invariants:
+ *   - INDEPENDENT_WORKFLOW_SOURCE: a separately authorized remote-node workflow override
+ *     pins parent workflow code independently while retaining child-only artifact inputs.
  *   - GH_APP_INSTALL_REQUIRED: caller must verify the app is installed on the target repo; we surface a
  *     clear error if not. Installation must cover the node repo (private-safe).
  *   - NODE_FORMATION_TREE: a publish creates one reviewable tree — catalog row (with source_sha pin),
@@ -2272,7 +2274,15 @@ export class GitHubRepoWriter implements DeployPlanePort {
     slug: string;
     sourceSha: string;
     workflowRef?: string;
+    workflowSha?: string;
   }): Promise<CandidateFlightDispatchResult> {
+    if (input.workflowSha !== undefined && input.workflowRef === undefined) {
+      throw deployPlaneError(
+        "workflow_ref_required",
+        "workflowSha requires workflowRef",
+        400
+      );
+    }
     const octokit = await this.getOctokit(input.owner, input.repo);
     const reviewedWorkflow = input.workflowRef
       ? await resolveReviewedWorkflowRef({
@@ -2280,7 +2290,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
           owner: input.owner,
           repo: input.repo,
           workflowRef: input.workflowRef,
-          sourceSha: input.sourceSha,
+          sourceSha: input.workflowSha ?? input.sourceSha,
         })
       : null;
     const workflowRef = reviewedWorkflow?.dispatchRef ?? "main";
@@ -2293,17 +2303,18 @@ export class GitHubRepoWriter implements DeployPlanePort {
         // GitHub accepts a branch/tag, not a raw commit SHA. Explicit refs dispatch through an
         // operator-created content-addressed branch whose target was verified above.
         ref: workflowRef,
-        inputs: reviewedWorkflow
-          ? {
-              // Reviewed workflow code is necessarily a same-repository parent PR. Dispatch the
-              // existing PR mode so candidate-flight resolves every affected parent target.
-              pr_number: String(reviewedWorkflow.prNumber),
-              head_sha: reviewedWorkflow.resolvedSha,
-            }
-          : {
-              node_slug: input.slug,
-              source_sha: input.sourceSha,
-            },
+        inputs:
+          reviewedWorkflow && input.workflowSha === undefined
+            ? {
+                // Reviewed workflow code is necessarily a same-repository parent PR. Dispatch the
+                // existing PR mode so candidate-flight resolves every affected parent target.
+                pr_number: String(reviewedWorkflow.prNumber),
+                head_sha: reviewedWorkflow.resolvedSha,
+              }
+            : {
+                node_slug: input.slug,
+                source_sha: input.sourceSha,
+              },
         request: { signal: AbortSignal.timeout(15_000) },
       }
     );

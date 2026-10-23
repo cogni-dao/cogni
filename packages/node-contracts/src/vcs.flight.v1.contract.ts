@@ -5,6 +5,7 @@
  * Module: `@cogni/node-contracts/vcs.flight.v1`
  * Purpose: Zod contract for POST /api/v1/vcs/flight — nodeRef candidate-a flight request.
  * Scope: Input/output shapes only. Does not make network calls or import GitHub API.
+ *   Includes optional independent maintainer workflow identity.
  * Invariants:
  *   - CONTRACTS_ARE_TRUTH: wire shape is owned by vcs.flight.v1.contract
  * Side-effects: none
@@ -24,13 +25,26 @@ const workflowRefSchema = z
   );
 
 export const flightOperation = {
-  input: z.object({
-    nodeRef: z.object({
-      nodeId: z.string().min(1).describe("Node UUID or unique slug"),
-      sourceSha: z.string().regex(/^[0-9a-fA-F]{40}$/),
-    }),
-    workflowRef: workflowRefSchema.optional(),
-  }),
+  input: z
+    .object({
+      nodeRef: z.object({
+        nodeId: z.string().min(1).describe("Node UUID or unique slug"),
+        sourceSha: z.string().regex(/^[0-9a-fA-F]{40}$/),
+      }),
+      workflowRef: workflowRefSchema.optional(),
+      workflowSha: z
+        .string()
+        .regex(/^[0-9a-fA-F]{40}$/)
+        .optional(),
+    })
+    .refine(
+      (value) =>
+        value.workflowSha === undefined || value.workflowRef !== undefined,
+      {
+        message: "workflowSha requires workflowRef",
+        path: ["workflowRef"],
+      }
+    ),
 
   output: z.object({
     dispatched: z.boolean(),

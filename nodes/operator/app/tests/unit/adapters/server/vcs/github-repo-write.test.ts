@@ -4,7 +4,8 @@
 /**
  * Module: `@tests/unit/adapters/server/vcs/github-repo-write`
  * Purpose: Unit tests for node repo minting through the operator GitHub App adapter.
- * Scope: Mocked Octokit/fetch; does not access GitHub.
+ * Scope: Mocked Octokit/fetch, including independent reviewed workflow and child artifact identities;
+ *   does not access GitHub.
  * Invariants: NODE_TEMPLATE_ANCESTRY — wizard-minted nodes are named forks of node-template.
  * Side-effects: none
  * Links: src/adapters/server/vcs/github-repo-write.ts, docs/spec/node-formation.md
@@ -4116,6 +4117,70 @@ describe("GitHubRepoWriter.dispatchNodeRefCandidateFlight", () => {
         head_sha: sourceSha,
       },
     });
+  });
+  it("dispatches an independent parent workflow with only the requested child inputs", async () => {
+    const workflowSha = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/commits/{ref}": () => ({ sha: workflowSha }),
+      "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls": () => [
+        {
+          number: 2691,
+          html_url: "https://github.com/Cogni-DAO/cogni/pull/2691",
+          state: "open",
+          base: { ref: "main" },
+          head: { sha: workflowSha, repo: { full_name: "Cogni-DAO/cogni" } },
+        },
+      ],
+      "GET /repos/{owner}/{repo}/compare/{basehead}": () => ({
+        status: "ahead",
+      }),
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () =>
+        Promise.reject(statusError(404, "Not Found")),
+      "POST /repos/{owner}/{repo}/git/refs": () => ({}),
+      [DISPATCH_ROUTE]: () => ({}),
+    };
+    await makeWriter().dispatchNodeRefCandidateFlight({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      slug: "creative",
+      sourceSha,
+      workflowRef: "maintainer/workflow",
+      workflowSha,
+    });
+    expect(
+      requests.find(
+        ({ route }) => route === "POST /repos/{owner}/{repo}/git/refs"
+      )?.params
+    ).toMatchObject({
+      ref: `refs/heads/cogni-flight/${workflowSha}`,
+      sha: workflowSha,
+    });
+    expect(
+      requests.find(({ route }) => route === DISPATCH_ROUTE)?.params
+    ).toMatchObject({
+      ref: `cogni-flight/${workflowSha}`,
+      inputs: { node_slug: "creative", source_sha: sourceSha },
+    });
+    expect(
+      requests.find(({ route }) => route === DISPATCH_ROUTE)?.params.inputs
+    ).not.toHaveProperty("pr_number");
+  });
+
+  it("refuses a moved independent parent ref before creating refs or dispatching", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/commits/{ref}": () => ({ sha: sourceSha }),
+    };
+    await expect(
+      makeWriter().dispatchNodeRefCandidateFlight({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        slug: "creative",
+        sourceSha,
+        workflowRef: "maintainer/workflow",
+        workflowSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      })
+    ).rejects.toMatchObject({ code: "workflow_ref_source_mismatch" });
+    expect(requests.some(({ route }) => route.startsWith("POST "))).toBe(false);
   });
 });
 

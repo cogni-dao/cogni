@@ -7,6 +7,8 @@
  * Scope: Interface only. Keeps hosted deploy operations out of shared AI-tool capabilities.
  * Invariants:
  *   - OPERATOR_OWNS_DEPLOY: deploy mutations target the operator parent repo/workflows.
+ *   - INDEPENDENT_WORKFLOW_IDENTITY: maintainer-authorized remote node requests may bind
+ *     reviewed parent workflow code separately from the child artifact source.
  *   - NODE_REF_ARTIFACT_GATE: node-ref flight dispatch requires a resolvable source artifact.
  *   - ONE_PROMOTION_PRIMITIVE: every promotion rung (candidate-a, preview, production)
  *     dispatches `promote-and-deploy.yml` directly via the operator App — no rung routes
@@ -346,9 +348,13 @@ export interface DeployPlanePort {
     sourceSha: string;
     /**
      * Optional same-repository branch or tag containing candidate-flight.yml. The adapter resolves
-     * and accepts it only when it is the exact open same-repo PR head named by sourceSha.
+     * and accepts it only when it is the exact open same-repo PR head named by workflowSha
+     * (or sourceSha for the legacy same-source parent-PR mode).
      */
     workflowRef?: string;
+    /** Independently reviewed parent workflow SHA for a maintainer-authorized remote node flight.
+     * Keeps sourceSha as the child artifact identity; requires workflowRef. */
+    workflowSha?: string;
   }): Promise<CandidateFlightDispatchResult>;
 
   /**
