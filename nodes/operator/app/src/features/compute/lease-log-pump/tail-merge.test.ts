@@ -35,6 +35,27 @@ describe("mergeTail", () => {
     expect(merged.newLines).toEqual(["tick"]);
   });
 
+  it("ships a restarted container's whole window, including a novel first line", () => {
+    const merged = mergeTail(
+      ["boot", "ready", "crash"],
+      ["OOM: heap limit", "boot", "ready", "crash"],
+      500
+    );
+    expect(merged.newLines).toEqual([
+      "OOM: heap limit",
+      "boot",
+      "ready",
+      "crash",
+    ]);
+  });
+
+  it("ships only the unseen remainder when the tail covers the window head", () => {
+    const window = Array.from({ length: 250 }, (_, i) => `line ${i}`);
+    expect(mergeTail(window.slice(0, 200), window, 500).newLines).toEqual(
+      window.slice(200)
+    );
+  });
+
   it("bounds the retained tail", () => {
     const merged = mergeTail(["a", "b", "c"], ["c", "d", "e"], 3);
     expect(merged.nextTail).toEqual(["c", "d", "e"]);
