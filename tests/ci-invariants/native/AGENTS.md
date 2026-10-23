@@ -10,7 +10,7 @@
 
 ## Purpose
 
-Native integration acceptance of declared infrastructure failure behavior in isolated CI-owned Docker containers. CI runs this directory unconditionally for ordinary changes in the dedicated native lane and requires success in the terminal unit gate. Native exemptions are disabled pending a renewed complete transitive executable/filesystem/install audit; an older event-base policy cannot skip this lane. The existing signed env-manager exception remains unchanged. Ordinary local root Vitest discovery still includes this directory.
+Native integration acceptance of declared infrastructure failure behavior in isolated CI-owned Docker containers. CI runs this directory unconditionally for ordinary changes in the dedicated native lane and requires success in the terminal unit gate. Native exemptions are disabled pending a renewed transitive executable/filesystem/install audit; an older event-base policy cannot skip this lane. The existing signed env-manager exception remains unchanged. Ordinary local root Vitest discovery still includes this directory.
 
 ## Pointers
 
