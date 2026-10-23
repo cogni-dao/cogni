@@ -44,7 +44,7 @@ App-local building blocks that cannot be extracted to `@cogni/node-shared` (env,
   - Config server (`repoSpec.server.ts`) — file I/O + env
   - AI model catalog (`model-catalog.server.ts`) — LiteLLM fetch + env
   - Node app scaffold generators (`node-app-scaffold/gens/`) — pure catalog,
-    overlay, AppSet, gitmodule, and ExternalSecret renderers for operator
+    overlay, opt-in k3s DNS Request, AppSet, gitmodule, and ExternalSecret renderers for operator
     GitHub App writes
   - Wagmi chain adapter (`evm-wagmi.ts`, `wagmi.config.ts`) — wagmi/chains runtime dep
   - Onchain client interface (`onchain/`) — viem types

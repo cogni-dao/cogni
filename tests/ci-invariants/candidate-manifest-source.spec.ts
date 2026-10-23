@@ -70,6 +70,7 @@ interface WorkflowJob {
 }
 
 const parsed = yaml.parse(WORKFLOW) as {
+  env?: Record<string, unknown>;
   concurrency?: { group?: unknown; "cancel-in-progress"?: boolean };
   on?: {
     workflow_dispatch?: {
@@ -334,9 +335,12 @@ describe("candidate-a manifest source", () => {
     expect(parsed.concurrency?.["cancel-in-progress"]).toBe(false);
   });
 
-  it("keeps the k3s control domain separate from an isolated Akash workload zone", () => {
+  it("passes separate control and workload domains to the shared target resolver", () => {
     const targetDomain =
-      "${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}";
+      "${{ vars.DOMAIN || vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') }}";
+    expect(parsed.env?.CONTROL_DOMAIN).toBe(
+      "${{ vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') }}"
+    );
 
     expect(
       namedStep(

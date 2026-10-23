@@ -221,9 +221,75 @@
         "required": ["compute_api"],
         "properties": { "compute_api": { "required": ["candidate-a"] } }
       }
+    },
+    {
+      "if": {
+        "required": ["k3s_dns"],
+        "properties": { "k3s_dns": { "required": ["candidate-a"] } }
+      },
+      "then": {
+        "properties": {
+          "type": { "const": "node" },
+          "name": { "not": { "enum": ["www", "operator"] } },
+          "is_primary_host": { "not": { "const": true } },
+          "envs": { "contains": { "const": "candidate-a" } },
+          "deployment_provider": {
+            "properties": { "candidate-a": { "const": "k3s" } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["k3s_dns"],
+        "properties": { "k3s_dns": { "required": ["preview"] } }
+      },
+      "then": {
+        "properties": {
+          "type": { "const": "node" },
+          "name": { "not": { "enum": ["www", "operator"] } },
+          "is_primary_host": { "not": { "const": true } },
+          "envs": { "contains": { "const": "preview" } },
+          "deployment_provider": {
+            "properties": { "preview": { "const": "k3s" } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["k3s_dns"],
+        "properties": { "k3s_dns": { "required": ["production"] } }
+      },
+      "then": {
+        "properties": {
+          "type": { "const": "node" },
+          "name": { "not": { "enum": ["www", "operator"] } },
+          "is_primary_host": { "not": { "const": true } },
+          "envs": { "contains": { "const": "production" } },
+          "deployment_provider": {
+            "properties": { "production": { "const": "k3s" } }
+          }
+        }
+      }
     }
   ],
   "properties": {
+    "k3s_dns": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "candidate-a": {
+          "$ref": "#/$defs/k3sDnsIntent"
+        },
+        "preview": {
+          "$ref": "#/$defs/k3sDnsIntent"
+        },
+        "production": {
+          "$ref": "#/$defs/k3sDnsIntent"
+        }
+      }
+    },
     "name": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]*$",
@@ -364,9 +430,21 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "candidate-a": { "type": "integer", "minimum": 0, "maximum": 1000000 },
-                "preview": { "type": "integer", "minimum": 0, "maximum": 1000000 },
-                "production": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+                "candidate-a": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000
+                },
+                "preview": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000
+                },
+                "production": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000
+                }
               },
               "minProperties": 1
             }
@@ -494,6 +572,30 @@
     }
   },
   "$defs": {
+    "k3sDnsIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "zoneId", "target", "workloadDomain"],
+      "properties": {
+        "mode": {
+          "const": "crossplane-http"
+        },
+        "zoneId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{32}$"
+        },
+        "target": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
+        },
+        "workloadDomain": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
+        }
+      }
+    },
     "reliabilityValidationRole": {
       "type": "object",
       "additionalProperties": false,

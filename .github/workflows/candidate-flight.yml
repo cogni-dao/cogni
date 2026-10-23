@@ -40,6 +40,7 @@ env:
   OVERLAY_ENV: candidate-a
   # Public workload zone for fork-aware generated scheduler routes.
   FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
+  CONTROL_DOMAIN: ${{ vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') }}
   # FLEET_CONTROL_ENV (subtask.5007): the env whose cluster reconciles + pays for akash
   # lanes. Default 'production' (cogni-dao fleet); an isolated fleet (cogni-test-org) sets
   # the repo var to 'candidate-a' so its own control plane owns akash lanes and no test
@@ -608,6 +609,40 @@ jobs:
           dns_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           domain_root: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
 
+      # Optional TEST DNS desired state must be fenced BEFORE this job's first
+      # overlay copy/commit. Later assert-substrate cannot protect this boundary.
+      - name: Assert isolated DNS before overlay publication
+        if: env.DEPLOYMENT_PROVIDER == 'k3s'
+        env:
+          TARGET: ${{ matrix.node }}
+          APP_SOURCE_DIR: app-src
+          DEPLOY_ENVIRONMENT: candidate-a
+          DOMAIN: ${{ vars.DOMAIN || vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          K3S_DNS_PREFLIGHT_RECEIPT: ${{ runner.temp }}/k3s-dns-preflight-${{ matrix.node }}.json
+        run: |
+          set -euo pipefail
+          # Absent intent is inert; malformed/unknown intent still reaches the
+          # validator and fails instead of falling back to the legacy writer.
+          if [ "$(yq -r 'has("k3s_dns")' "app-src/infra/catalog/${TARGET}.yaml")" = true ]; then
+            mkdir -p ~/.ssh && chmod 700 ~/.ssh
+            printf '%s\n' "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+            chmod 600 ~/.ssh/deploy_key
+            ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+            bash app-src/scripts/ci/assert-k3s-dns-substrate.sh
+          fi
+
+      - name: Preserve public DNS preflight receipt
+        if: always() && env.DEPLOYMENT_PROVIDER == 'k3s'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: k3s-dns-preflight-${{ matrix.node }}
+          path: ${{ runner.temp }}/k3s-dns-preflight-${{ matrix.node }}.json
+          if-no-files-found: ignore
+
       - name: Prepare deploy branch shape
         env:
           GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
@@ -952,7 +987,7 @@ jobs:
           # CANDIDATE_OPERATOR_DOMAIN allows an isolated test parent to keep its
           # Akash workload zone separate while reusing the shared k3s operator.
           # Forks without the override retain the conventional test.<root> host.
-          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}
+          DOMAIN: ${{ vars.DOMAIN || vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') }}
           FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
@@ -1216,7 +1251,7 @@ jobs:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
           DEPLOY_ENVIRONMENT: candidate-a
-          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}
+          DOMAIN: ${{ vars.DOMAIN || vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') }}
           # bug.5240 — secret-materialize's CI-derived bootstrap for the lease-log pump's
           # push credential (LOKI_LEASE_PUSH_* fallback; promote-and-deploy already exposes
           # these at job level). Create-if-absent: a later dedicated token wins.
@@ -1641,7 +1676,14 @@ jobs:
             write_skip_summary "script_absent"
             exit 0
           fi
-          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ZONE_ID:-}" ]; then
+          . scripts/ci/lib/image-tags.sh
+          legacy_selected=false
+          for dns_node in "${NODE_TARGETS[@]}"; do
+            is_primary_host "$dns_node" && continue
+            writer="$(dns_writer_for_target "$dns_node" candidate-a)"
+            if [ "$writer" = legacy ] && is_k3s_placed "$dns_node" candidate-a; then legacy_selected=true; fi
+          done
+          if $legacy_selected && { [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ZONE_ID:-}" ]; }; then
             echo "::warning::Cloudflare secrets unset on candidate-a — skipping node DNS reconcile (newly-created nodes won't resolve)"
             write_skip_summary "cloudflare_secrets_missing"
             exit 0
@@ -2055,7 +2097,7 @@ jobs:
       - name: Wait for candidate readiness
         if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s'
         env:
-          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}
+          DOMAIN: ${{ vars.DOMAIN || vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') }}
           PROMOTED_APPS: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/wait-for-candidate-ready.sh
@@ -2100,7 +2142,7 @@ jobs:
       - name: Verify buildSha on endpoint (per-node)
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
-          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}
+          DOMAIN: ${{ vars.DOMAIN || vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') }}
           SOURCE_SHA_MAP: deploy-branch/.promote-state/source-sha-by-app.json
           EXPECTED_BUILDSHA: ${{ needs.decide.outputs.node_source_sha || needs.decide.outputs.head_sha }}
           NODES: ${{ matrix.node }}
@@ -2117,7 +2159,7 @@ jobs:
       - name: Run candidate smoke checks (per-node)
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
-          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}
+          DOMAIN: ${{ vars.DOMAIN || vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') }}
           PROMOTED_APPS: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/smoke-candidate.sh

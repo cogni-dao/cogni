@@ -716,7 +716,10 @@ fi
 edge_reconcile_snippet=""
 if [[ "$DEPLOYMENT_PROVIDER" == "k3s" ]]; then
   CURRENT_ROW="caddyfile"
-  node_host="$(host_for_node "$TARGET_NODE" "$DOMAIN")"
+  control_domain="${CONTROL_DOMAIN:-$DOMAIN}"
+  workload_domain="$(k3s_workload_domain "$control_domain" "$DOMAIN" "${FORK_DOMAIN_ROOT:-cognidao.org}")" || fail "invalid control/workload domain boundary"
+  target_domain="$(public_domain_for_target "$TARGET_NODE" "$DOMAIN")" || fail "invalid target domain"
+  node_host="$(host_for_node "$TARGET_NODE" "$target_domain")"
   node_port="$(node_port_for_target "$TARGET_NODE")"
   edge_slug="$(printf '%s' "$TARGET_NODE" | tr '[:lower:]-' '[:upper:]_')"
   if is_primary_host "$TARGET_NODE"; then
@@ -728,7 +731,7 @@ if [[ "$DEPLOYMENT_PROVIDER" == "k3s" ]]; then
   fi
 
   caddy_tmp="$(mktemp)"
-  COGNI_CATALOG_ROOT="$COGNI_CATALOG_ROOT" bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" --domain "$DOMAIN" > "$caddy_tmp"
+  COGNI_CATALOG_ROOT="$COGNI_CATALOG_ROOT" bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" --domain "$control_domain" --workload-domain "$workload_domain" > "$caddy_tmp"
   caddy_route_ok=true
   grep -Fq "${node_host} {" "$caddy_tmp" || caddy_route_ok=false
   grep -Fq "reverse_proxy host.docker.internal:${node_port}" "$caddy_tmp" || caddy_route_ok=false
@@ -764,9 +767,9 @@ if [[ "$DEPLOYMENT_PROVIDER" == "k3s" ]]; then
 
   touch \"\$edge_env\"
   if grep -qE '^DOMAIN=' \"\$edge_env\"; then
-    sed -i.bak 's|^DOMAIN=.*$|DOMAIN=${DOMAIN}|' \"\$edge_env\"
+    sed -i.bak 's|^DOMAIN=.*$|DOMAIN=${control_domain}|' \"\$edge_env\"
   else
-    printf '%s=%s\\n' 'DOMAIN' '${DOMAIN}' >> \"\$edge_env\"
+    printf '%s=%s\\n' 'DOMAIN' '${control_domain}' >> \"\$edge_env\"
   fi
   if grep -qE '^${edge_key}=' \"\$edge_env\"; then
     sed -i.bak 's|^${edge_key}=.*$|${edge_key}=${edge_value}|' \"\$edge_env\"

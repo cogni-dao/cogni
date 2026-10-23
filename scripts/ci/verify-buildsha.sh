@@ -294,7 +294,7 @@ FAILED=0
 
 for node in "${NODE_ARR[@]}"; do
   expected="${EXPECTED_BY_NODE[$node]}"
-  host="$(host_for_node "$node" "$DOMAIN")"
+  host="$(public_host_for_target "$node" "$DOMAIN")"
   url="https://${host}/version"
 
   if ! check_node "$node" "$expected" "$url"; then

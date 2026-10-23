@@ -169,6 +169,31 @@ if [ -n "${DNS_RECONCILE_SUMMARY_FILE:-}" ]; then
   trap 'status=$?; if [ "$status" -ne 0 ] && [ "${SUMMARY_WRITTEN:-false}" != "true" ]; then write_dns_summary "failure"; fi; rm -f "${records_tmp:-}"' EXIT
 fi
 
+# Decide every selected writer before any global credential/apex requirement.
+legacy_targets=()
+for node in "${NODE_TARGETS[@]}"; do
+  is_primary_host "$node" && continue
+  writer="$(dns_writer_for_target "$node" "$DEPLOY_ENV")" || exit 1
+  if [ "$writer" = crossplane-http ]; then
+    host="$(host_for_node "$node" "$(public_domain_for_target "$node" "${DOMAIN:-${FORK_DOMAIN_ROOT:-cognidao.org}}")")"
+    state="delegated"; content=""; expected=""
+    echo "  delegated ${host} (DNS owned by provider-http catalog intent)"
+    append_dns_record
+  elif is_k3s_placed "$node" "$DEPLOY_ENV"; then
+    legacy_targets+=("$node")
+  else
+    host="$(host_for_node "$node" "${DOMAIN:-${FORK_DOMAIN_ROOT:-cognidao.org}}")"
+    state="external"; content=""; expected=""
+    echo "  external ${host} (DNS owned by the compute workload controller)"
+    append_dns_record
+  fi
+done
+if [ "${#legacy_targets[@]}" = 0 ]; then
+  write_dns_summary "success"
+  echo "No legacy k3s DNS writers selected; credentials and apex are not read."
+  exit 0
+fi
+
 : "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN required (GH env secret)}"
 : "${CLOUDFLARE_ZONE_ID:?CLOUDFLARE_ZONE_ID required (GH env secret)}"
 FORK_ROOT="${FORK_DOMAIN_ROOT:?FORK_DOMAIN_ROOT required (Cloudflare zone name)}"
@@ -199,7 +224,7 @@ fi
 
 echo "Reconciling node DNS for env '${DEPLOY_ENV}' (domain ${DOMAIN} → ${VM_IP}, proxied=${PROXIED})"
 missing=()
-for node in "${NODE_TARGETS[@]}"; do
+for node in "${legacy_targets[@]}"; do
   # Apex (is_primary_host) is an env-level record provisioned with the VM, not
   # a per-node concern — skip it here.
   is_primary_host "$node" && continue
