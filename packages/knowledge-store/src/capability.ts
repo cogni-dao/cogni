@@ -85,6 +85,7 @@ export function createKnowledgeCapability(
     async search(params: KnowledgeSearchParams): Promise<KnowledgeEntry[]> {
       const results = await port.searchKnowledge(params.domain, params.query, {
         limit: params.limit,
+        ...(params.includeEdo ? { includeEdo: true } : {}),
       });
       return results.map(toEntry);
     },
@@ -93,6 +94,7 @@ export function createKnowledgeCapability(
       const results = await port.listKnowledge(params.domain, {
         tags: params.tags,
         limit: params.limit,
+        ...(params.includeEdo ? { includeEdo: true } : {}),
       });
       return results.map(toEntry);
     },

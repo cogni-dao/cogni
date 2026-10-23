@@ -13,7 +13,7 @@
 import type { KnowledgeListResponse } from "@cogni/node-contracts";
 
 export async function fetchKnowledge(): Promise<KnowledgeListResponse> {
-  const response = await fetch("/api/v1/knowledge?limit=500", {
+  const response = await fetch("/api/v1/knowledge?limit=500&includeEdo=true", {
     method: "GET",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",

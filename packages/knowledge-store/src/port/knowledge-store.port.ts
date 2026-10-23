@@ -264,15 +264,29 @@ export interface KnowledgeStorePort {
    * without downloading bodies (task.5204). Rows whose `useWhen` is null never
    * match. Full-text over title/content stays `searchKnowledge`; these are two
    * questions, not one endpoint with modes.
+   *
+   * SCHEMA_REFINED_BY_READ_FILTER: rows whose `entryType` is in
+   * `EDO_ENTRY_TYPES` are excluded unless `includeEdo: true` (chains/graph/
+   * audit surfaces opt in).
    */
   listKnowledge(
     domain: string,
-    opts?: { tags?: string[]; limit?: number; q?: string }
+    opts?: {
+      tags?: string[];
+      limit?: number;
+      q?: string;
+      includeEdo?: boolean;
+    }
   ): Promise<Knowledge[]>;
+  /**
+   * Case-insensitive substring match over title + content, newest first.
+   * SCHEMA_REFINED_BY_READ_FILTER: `EDO_ENTRY_TYPES` rows are excluded unless
+   * `includeEdo: true`.
+   */
   searchKnowledge(
     domain: string,
     query: string,
-    opts?: { limit?: number }
+    opts?: { limit?: number; includeEdo?: boolean }
   ): Promise<Knowledge[]>;
   /**
    * The approved DAO goals (ONE_GOAL_LIST): merged `entry_type = 'goal'` rows

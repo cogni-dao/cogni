@@ -39,6 +39,7 @@ import type {
 } from "../../domain/schemas.js";
 import {
   citedEntryTypesFor,
+  EDO_ENTRY_TYPES,
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
   requiresEvaluateAt,
@@ -72,6 +73,22 @@ import {
   type SqlColumnValue,
   updateSetSql,
 } from "./util.js";
+
+// ---------------------------------------------------------------------------
+// Read filters
+// ---------------------------------------------------------------------------
+
+/**
+ * SCHEMA_REFINED_BY_READ_FILTER: default reads hide EDO machinery. Plain
+ * equality comparison on the short `entry_type` column — no LOWER()/ILIKE, so
+ * it is safe on Doltgres (same idiom as `listActiveGoals`' `entry_type =`).
+ */
+const EXCLUDE_EDO_SQL = `entry_type NOT IN (${EDO_ENTRY_TYPES.map((t) =>
+  escapeValue(t)
+).join(", ")})`;
+
+/** Ids hydrated per round-trip by `searchKnowledge` (bounds memory per batch). */
+const SEARCH_HYDRATE_BATCH = 25;
 
 // ---------------------------------------------------------------------------
 // Row mapping
@@ -301,9 +318,15 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
 
   async listKnowledge(
     domain: string,
-    opts?: { tags?: string[]; limit?: number; q?: string }
+    opts?: {
+      tags?: string[];
+      limit?: number;
+      q?: string;
+      includeEdo?: boolean;
+    }
   ): Promise<Knowledge[]> {
     const conditions = [`domain = ${escapeValue(domain)}`];
+    if (!opts?.includeEdo) conditions.push(EXCLUDE_EDO_SQL);
 
     if (opts?.tags && opts.tags.length > 0) {
       // Doltgres doesn't support JSONB @> operator yet.
@@ -352,27 +375,51 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
   async searchKnowledge(
     domain: string,
     query: string,
-    opts?: { limit?: number }
+    opts?: { limit?: number; includeEdo?: boolean }
   ): Promise<Knowledge[]> {
     const limit = opts?.limit ?? 20;
     // Case-insensitive match runs in the app layer, NOT via Doltgres SQL:
     // Doltgres has no ILIKE, and LOWER() panics on out-of-line TEXT storage
-    // (*val.TextStorage) — fatal on the large `content` column. Fetch the
-    // domain's rows (domain is indexed) and filter here. Replaced by the
-    // derived pgvector search index (DOLT_IS_SOURCE_OF_TRUTH) when it lands.
+    // (*val.TextStorage) — fatal on the large `content` column. What SQL CAN
+    // safely do is narrow the candidate set: domain (indexed) + the EDO
+    // exclusion (plain equality on `entry_type`). Phase 1 reads only `id`
+    // for those candidates, newest first — no `content`. Phase 2
+    // hydrates full rows in bounded id batches in that order and stops as soon
+    // as `limit` matches are found, so memory is one batch, never the whole
+    // shelf (bug.5518: the strategy shelf held ~680KB of decision rows).
+    // Replaced by the derived pgvector search index (DOLT_IS_SOURCE_OF_TRUTH)
+    // when it lands.
     const needle = query.toLowerCase();
-    const rows = await this.sql.unsafe(
-      `SELECT * FROM knowledge WHERE domain = ${escapeValue(domain)} ORDER BY created_at DESC`
+    const conditions = [`domain = ${escapeValue(domain)}`];
+    if (!opts?.includeEdo) conditions.push(EXCLUDE_EDO_SQL);
+    const heads = await this.sql.unsafe(
+      `SELECT id FROM knowledge WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC`
     );
+    const ids = heads.map((r) => (r as Record<string, unknown>).id as string);
     const matched: Knowledge[] = [];
-    for (const r of rows) {
-      const entry = rowToKnowledge(r as Record<string, unknown>);
-      if (
-        entry.title.toLowerCase().includes(needle) ||
-        entry.content.toLowerCase().includes(needle)
-      ) {
-        matched.push(entry);
-        if (matched.length >= limit) break;
+    for (
+      let i = 0;
+      i < ids.length && matched.length < limit;
+      i += SEARCH_HYDRATE_BATCH
+    ) {
+      const batch = ids.slice(i, i + SEARCH_HYDRATE_BATCH);
+      const rows = await this.sql.unsafe(
+        `SELECT * FROM knowledge WHERE id IN (${batch.map((id) => escapeValue(id)).join(", ")})`
+      );
+      const byId = new Map(
+        rows.map((r) => [(r as Record<string, unknown>).id as string, r])
+      );
+      for (const id of batch) {
+        const row = byId.get(id);
+        if (!row) continue; // deleted between phases
+        const entry = rowToKnowledge(row as Record<string, unknown>);
+        if (
+          entry.title.toLowerCase().includes(needle) ||
+          entry.content.toLowerCase().includes(needle)
+        ) {
+          matched.push(entry);
+          if (matched.length >= limit) break;
+        }
       }
     }
     return matched;

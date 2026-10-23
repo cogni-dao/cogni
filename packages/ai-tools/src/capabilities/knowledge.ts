@@ -42,12 +42,16 @@ export interface KnowledgeSearchParams {
   domain: string;
   query: string;
   limit?: number;
+  /** Include EDO rows (event/hypothesis/decision/outcome). Default false. */
+  includeEdo?: boolean;
 }
 
 export interface KnowledgeListParams {
   domain: string;
   tags?: string[];
   limit?: number;
+  /** Include EDO rows (event/hypothesis/decision/outcome). Default false. */
+  includeEdo?: boolean;
 }
 
 /**

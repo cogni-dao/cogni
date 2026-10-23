@@ -42,6 +42,12 @@ export const KnowledgeReadInputSchema = z
       .max(50)
       .optional()
       .describe("Max results for list mode (1-50, default 20)"),
+    includeEdo: z
+      .boolean()
+      .optional()
+      .describe(
+        "List mode only: include EDO rows (event/hypothesis/decision/outcome); default false"
+      ),
   })
   .refine((d) => d.id || d.domain, {
     message: "Either 'id' or 'domain' is required",
@@ -131,6 +137,7 @@ export function createKnowledgeReadImplementation(
         domain,
         tags: input.tags,
         limit: input.limit ?? 20,
+        ...(input.includeEdo ? { includeEdo: true } : {}),
       });
       return {
         mode: "list" as const,

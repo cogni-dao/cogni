@@ -717,11 +717,11 @@ Auth mirrors the rest of the EDO surface — bearer (agent) and session (human) 
 
 The Crawl tier ships the **write side** (schema + capability + tools). Two read-side gaps land in Walk:
 
-| v0 (Crawl) state                                           | Walk-tier deliverable                                                                                  |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Default search returns all `entry_type` values             | `LibrarianReadFilter` — applies the WHERE clause above unless the caller opts into `mode=chains/audit` |
-| Hypotheses past `evaluate_at` linger forever if unresolved | `staleHypothesisSweep` — auto-`status: deprecated` past `evaluate_at + grace` (v0 grace: 30d)          |
-| EHDO calibration view (validates/invalidates by source)    | SQL view aggregating hit-rate per `source_node × resolution_strategy` over 30d rolling                 |
+| v0 (Crawl) state                                                                                                                                                                                                                         | Walk-tier deliverable                                                                                  |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| ~~Default search returns all `entry_type` values~~ shipped (task.5308): `searchKnowledge`/`listKnowledge` exclude `EDO_ENTRY_TYPES` unless `includeEdo: true` (`GET /api/v1/knowledge?includeEdo=true`); `status` filter not yet applied | `LibrarianReadFilter` — applies the WHERE clause above unless the caller opts into `mode=chains/audit` |
+| Hypotheses past `evaluate_at` linger forever if unresolved                                                                                                                                                                               | `staleHypothesisSweep` — auto-`status: deprecated` past `evaluate_at + grace` (v0 grace: 30d)          |
+| EHDO calibration view (validates/invalidates by source)                                                                                                                                                                                  | SQL view aggregating hit-rate per `source_node × resolution_strategy` over 30d rolling                 |
 
 Without these, the spec's intent (refined read surface, bounded transient growth, measurable calibration) is satisfied in principle but not in observable behavior. They are not optional polish — they're the bridge between "the design is correct" and "a human looking at `knowledge` row counts next month doesn't see noise."
 

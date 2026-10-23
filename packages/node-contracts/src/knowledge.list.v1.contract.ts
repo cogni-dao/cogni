@@ -22,6 +22,11 @@ export const KnowledgeListQuerySchema = z.object({
     .enum(["human", "analysis_signal", "external", "derived", "agent"])
     .optional(),
   limit: z.number().int().min(1).max(500).optional().default(100),
+  /**
+   * SCHEMA_REFINED_BY_READ_FILTER opt-in: include EDO machinery rows
+   * (event/hypothesis/decision/outcome). Default false — excluded.
+   */
+  includeEdo: z.boolean().optional(),
 });
 export type KnowledgeListQuery = z.infer<typeof KnowledgeListQuerySchema>;
 
