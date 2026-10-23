@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { parse as parseYaml } from "yaml";
 
 const mock = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("@octokit/auth-app", () => ({
@@ -159,6 +160,52 @@ beforeEach(() => {
 });
 
 describe("fixed worker service adapter", () => {
+  it("declares own production custody in the delivered operator config while isolating other lanes", async () => {
+    const declaredCustody = (lane: string): string | undefined => {
+      const overlay = parseYaml(
+        readFileSync(
+          path.join(
+            ROOT,
+            "infra/k8s/overlays",
+            lane,
+            "operator/kustomization.yaml"
+          ),
+          "utf8"
+        )
+      ) as {
+        patches: Array<{
+          target?: { kind?: string; name?: string };
+          patch?: string;
+        }>;
+      };
+      const operations = overlay.patches
+        .filter(
+          (patch) =>
+            patch.target?.kind === "ConfigMap" &&
+            patch.target.name === "node-app-config"
+        )
+        .flatMap(
+          (patch) =>
+            parseYaml(patch.patch ?? "[]") as Array<{
+              path: string;
+              value: string;
+            }>
+        );
+      const declarations = operations.filter(
+        (op) => op.path === "/data/FLEET_CONTROL_ENV"
+      );
+      expect(declarations.length).toBeLessThanOrEqual(1);
+      return declarations[0]?.value;
+    };
+    expect(declaredCustody("production")).toBe("production");
+    expect(declaredCustody("candidate-a")).toBe("candidate-a");
+    expect(declaredCustody("preview")).toBeUndefined();
+    await expect(
+      writer({
+        fleetControlEnv: declaredCustody("production") ?? "",
+      }).reconcileNodeInfra(input)
+    ).resolves.toMatchObject({ status: "git_published" });
+  });
   it("publishes both actual added nodes, retains all other bytes, and returns Git evidence", async () => {
     const result = await writer().reconcileNodeInfra(input);
     expect(result).toMatchObject({
