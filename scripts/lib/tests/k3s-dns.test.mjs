@@ -11,6 +11,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   cpSync,
@@ -441,12 +442,80 @@ test("runtime domain disagreement fails before publication and zero-zone receipt
     assert.ok(result.errors.includes("configured TEST zone disagreement"));
     const conditions = (...types) =>
       types.map((type) => ({ type, status: "True" }));
+    const sharedTemplate = readFileSync(
+      "scripts/ci/node-applicationset.yaml.tmpl",
+      "utf8"
+    )
+      .replaceAll("__ENV__", "candidate-a")
+      .replaceAll("__NODE__", "node-template")
+      .replaceAll(
+        "__REPO_URL__",
+        "https://github.com/cogni-test-org/cogni-monorepo.git"
+      );
+    const expectedSpec = JSON.parse(
+      execFileSync("yq", ["-o=json", ".", "-"], {
+        input: sharedTemplate,
+        encoding: "utf8",
+      })
+    ).spec;
+    const hashSpec = (spec) =>
+      createHash("sha256")
+        .update(
+          execFileSync("jq", ["-cS", ".spec"], {
+            input: JSON.stringify({ spec }),
+          })
+        )
+        .digest("hex");
+    const expectedApplicationSpec = JSON.parse(
+      JSON.stringify(expectedSpec.template.spec).replaceAll(
+        "{{.name}}",
+        "node-template"
+      )
+    );
     const positive = {
       ...receipt,
       zoneId: "a".repeat(32),
       host: "node-template-test.cogni-testing.org",
       owner: "fixture-owner",
+      expectedAppSetSpecHash: hashSpec(expectedSpec),
+      expectedApplicationSpecHash: hashSpec(expectedApplicationSpec),
     };
+    const fixtureSource = path.join(dir, "expected-source");
+    mkdirSync(path.join(fixtureSource, "scripts/ci"), { recursive: true });
+    mkdirSync(
+      path.join(fixtureSource, "infra/k8s/argocd/appsets/candidate-a"),
+      { recursive: true }
+    );
+    writeFileSync(
+      path.join(fixtureSource, "scripts/ci/node-applicationset.yaml.tmpl"),
+      readFileSync("scripts/ci/node-applicationset.yaml.tmpl")
+    );
+    writeFileSync(
+      path.join(
+        fixtureSource,
+        "infra/k8s/argocd/appsets/candidate-a/candidate-a-node-template-applicationset.yaml"
+      ),
+      JSON.stringify({ spec: expectedSpec })
+    );
+    const actualExpectedStage = /DNS_PLAN=.*?<<'PY'\n([\s\S]*?)\nPY/.exec(
+      readFileSync("scripts/ci/assert-k3s-dns-substrate.sh", "utf8")
+    )[1];
+    execFileSync(
+      "python3",
+      ["-c", actualExpectedStage, path.join(dir, "expected-receipt")],
+      {
+        env: {
+          ...process.env,
+          APP_SOURCE_DIR: fixtureSource,
+          DNS_PLAN: JSON.stringify(positive),
+        },
+      }
+    );
+    assert.equal(
+      JSON.parse(readFileSync(path.join(dir, "expected-receipt"), "utf8"))
+        .expectedAppSetSpecHash,
+      positive.expectedAppSetSpecHash
+    );
     const known = {
       ...facts,
       crd: { conditions: conditions("Established") },
@@ -468,6 +537,7 @@ test("runtime domain disagreement fails before publication and zero-zone receipt
           namespace: "cogni-candidate-a",
         },
         uid: "test-appset-uid",
+        specHash: hashSpec(expectedSpec),
         generators: [
           {
             git: {
@@ -522,36 +592,155 @@ test("runtime domain disagreement fails before publication and zero-zone receipt
     );
     const bootstrap = run(positive, known);
     assert.equal(bootstrap.passed, true);
-    for (const patch of [
-      {
-        generators: [
+    // Run the ACTUAL production projection, including its whole-spec hash. An
+    // unprojected override must still change admission, even when singular source is correct.
+    const actualProjection =
+      /^appset=.+?jq --arg specHash "\$appset_hash" '([^']+)'\)/m.exec(
+        readFileSync("scripts/ci/assert-k3s-dns-substrate.sh", "utf8")
+      )[1];
+    const project = (spec) =>
+      JSON.parse(
+        execFileSync(
+          "jq",
+          ["-c", "--arg", "specHash", hashSpec(spec), actualProjection],
           {
-            git: {
-              ...known.appset.generators[0].git,
-              files: [{ path: "infra/catalog/foreign.yaml" }],
-            },
+            input: JSON.stringify({
+              metadata: {
+                name: "cogni-candidate-a-node-template",
+                uid: "test-appset-uid",
+              },
+              spec,
+            }),
+            encoding: "utf8",
+          }
+        )
+      );
+    assert.equal(
+      run(positive, { ...known, appset: project(expectedSpec) }).passed,
+      true
+    );
+    const actualAppProjection =
+      /^app=.+?jq --arg specHash "\$app_hash" '([^']+)'\)/m.exec(
+        readFileSync("scripts/ci/assert-k3s-dns-substrate.sh", "utf8")
+      )[1];
+    const projectApp = (spec) =>
+      JSON.parse(
+        execFileSync(
+          "jq",
+          ["-c", "--arg", "specHash", hashSpec(spec), actualAppProjection],
+          {
+            input: JSON.stringify({
+              metadata: {
+                name: "candidate-a-node-template",
+                ownerReferences: [
+                  {
+                    kind: "ApplicationSet",
+                    name: "cogni-candidate-a-node-template",
+                    uid: "test-appset-uid",
+                  },
+                ],
+              },
+              spec,
+            }),
+            encoding: "utf8",
+          }
+        )
+      );
+    assert.equal(
+      run(positive, { ...known, app: projectApp(expectedApplicationSpec) })
+        .passed,
+      true
+    );
+    const pluralApp = {
+      ...expectedApplicationSpec,
+      sources: [
+        { repoURL: "https://github.com/cogni-dao/cogni.git", path: "foreign" },
+      ],
+    };
+    assert.equal(
+      run(positive, { ...known, app: projectApp(pluralApp) }).passed,
+      false
+    );
+    const rootAuthority = {
+      name: "test-appsets",
+      sourcesPresent: false,
+      source: {
+        repoURL: "https://github.com/cogni-test-org/cogni-monorepo.git",
+        targetRevision: "main",
+        path: "infra/k8s/argocd/appsets/candidate-a",
+      },
+      destination: {
+        server: "https://kubernetes.default.svc",
+        namespace: "argocd",
+      },
+    };
+    assert.equal(
+      run(positive, {
+        ...known,
+        appset: { ...known.appset, argoInstance: "test-appsets" },
+        appsetAuthorities: [rootAuthority],
+      }).passed,
+      true
+    );
+    assert.equal(
+      run(positive, {
+        ...known,
+        appsetAuthorities: [{ ...rootAuthority, sourcesPresent: true }],
+      }).passed,
+      false
+    );
+    assert.equal(
+      run(positive, {
+        ...known,
+        appsetAuthorities: [
+          {
+            ...rootAuthority,
+            source: { ...rootAuthority.source, plugin: { name: "unreviewed" } },
           },
         ],
+      }).passed,
+      false
+    );
+
+    for (const mutate of [
+      (s) => {
+        s.generators[0].git.files = [{ path: "infra/catalog/foreign.yaml" }];
       },
-      {
-        source: {
-          ...known.appset.source,
-          path: "infra/k8s/overlays/production/operator",
-        },
+      (s) => {
+        s.template.spec.source.path = "infra/k8s/overlays/production/operator";
       },
-      {
-        destination: {
-          server: "https://kubernetes.default.svc",
-          namespace: "cogni-production",
-        },
+      (s) => {
+        s.template.spec.destination.namespace = "cogni-production";
       },
-      { templateName: "production-operator" },
-    ])
+      (s) => {
+        s.template.metadata.name = "production-operator";
+      },
+      (s) => {
+        s.template.spec.sources = [
+          {
+            repoURL: "https://github.com/cogni-dao/cogni.git",
+            targetRevision: "main",
+            path: "infra/k8s/overlays/production/operator",
+          },
+        ];
+      },
+      (s) => {
+        s.templatePatch = "spec: {sources: [{repoURL: foreign}]}";
+      },
+      (s) => {
+        s.generators[0].template = { spec: { source: { path: "foreign" } } };
+      },
+      (s) => {
+        s.template.spec.source.plugin = { name: "unreviewed" };
+      },
+    ]) {
+      const changed = structuredClone(expectedSpec);
+      mutate(changed);
       assert.equal(
-        run(positive, { ...known, appset: { ...known.appset, ...patch } })
-          .passed,
+        run(positive, { ...known, appset: project(changed) }).passed,
         false
       );
+    }
     assert.equal(bootstrap.receipt.workloadReadiness.availableReplicas, 0);
     assert.equal(
       run(positive, { ...known, app: { readError: true } }).passed,
@@ -563,23 +752,6 @@ test("runtime domain disagreement fails before publication and zero-zone receipt
         app: {
           name: "candidate-a-node-template",
           source: { repoURL: "https://github.com/cogni-dao/cogni.git" },
-        },
-      }).passed,
-      false
-    );
-    assert.equal(
-      run(positive, {
-        ...known,
-        appset: {
-          ...known.appset,
-          generators: [
-            {
-              git: {
-                repoURL: "https://github.com/cogni-dao/cogni.git",
-                revision: "main",
-              },
-            },
-          ],
         },
       }).passed,
       false

@@ -14,11 +14,22 @@ plan="$(node --experimental-strip-types "$APP_SOURCE_DIR/scripts/lib/render-k3s-
 [ "$plan" != null ] || { echo 'No explicit k3s DNS intent; existing substrate path unchanged.'; exit 0; }
 # This receipt contains public routing metadata and selected resource conditions only.
 receipt="${K3S_DNS_PREFLIGHT_RECEIPT:?K3S_DNS_PREFLIGHT_RECEIPT required}"
-DNS_PLAN="$plan" python3 - "$receipt" <<'PY'
-import json,os,sys
+DNS_PLAN="$plan" APP_SOURCE_DIR="$APP_SOURCE_DIR" python3 - "$receipt" <<'PY'
+import hashlib,json,os,pathlib,subprocess,sys
 p=json.loads(os.environ['DNS_PLAN'])
 p.update(schemaVersion=1,phase='before-overlay-publication',status='pending',configuredZoneId=os.environ.get('CLOUDFLARE_ZONE_ID',''),runId=os.environ.get('GITHUB_RUN_ID'),attempt=os.environ.get('GITHUB_RUN_ATTEMPT'),parentSha=os.environ.get('GITHUB_SHA'),childSha=os.environ.get('NODE_SOURCE_SHA'))
 assert p['repository']=='cogni-test-org/cogni-monorepo' and p['environment']=='candidate-a', 'isolated DNS intent is TEST candidate only'
+root=pathlib.Path(os.environ['APP_SOURCE_DIR'])
+template=(root/'scripts/ci/node-applicationset.yaml.tmpl').read_text()
+template=template.replace('__ENV__',p['environment']).replace('__NODE__',p['node']).replace('__REPO_URL__','https://github.com/'+p['repository']+'.git')
+expected=json.loads(subprocess.check_output(['yq','-o=json','.', '-'],input=template.encode()))
+committed=json.loads(subprocess.check_output(['yq','-o=json','.',str(root/'infra/k8s/argocd/appsets'/p['environment']/(p['environment']+'-'+p['node']+'-applicationset.yaml'))]))
+assert committed['spec']==expected['spec'], 'committed TEST AppSet differs from the shared declaration'
+def spec_hash(value):
+ return hashlib.sha256((json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n').encode()).hexdigest()
+p['expectedAppSetSpecHash']=spec_hash(expected['spec'])
+p['expectedApplicationSpecHash']=spec_hash(json.loads(json.dumps(expected['spec']['template']['spec']).replace('{{.name}}',p['node'])))
+
 with open(sys.argv[1],'w') as f:json.dump(p,f,indent=2)
 PY
 : "${VM_HOST:?VM_HOST required for current substrate read}"
@@ -42,9 +53,13 @@ provider=$(read_object get provider provider-http | jq '{readError:.readError,na
 config=$(read_object get clusterproviderconfigs.http.m.crossplane.io cogni-http | jq '{readError:.readError,name:.metadata.name,source:.spec.credentials.source}')
 eso=$(read_object -n "$namespace" get externalsecret operator-env-secrets | jq '{readError:.readError,name:.metadata.name,conditions:.status.conditions}')
 key_present=$(kubectl -n "$namespace" get secret operator-env-secrets -o go-template='{{if index .data "CLOUDFLARE_API_TOKEN"}}true{{else}}false{{end}}' 2>/dev/null) || key_present=false
-appset=$(read_object -n argocd get applicationset "cogni-${env_name}-${node}" | jq '{readError:.readError,name:.metadata.name,uid:.metadata.uid,ownerReferences:.metadata.ownerReferences,tracking:.metadata.annotations["argocd.argoproj.io/tracking-id"],argoInstance:.metadata.labels["app.kubernetes.io/instance"],goTemplate:.spec.goTemplate,generators:.spec.generators,templateName:.spec.template.metadata.name,project:.spec.template.spec.project,destination:.spec.template.spec.destination,source:.spec.template.spec.source}')
-appset_authorities=$(read_object -n argocd get applications | jq --arg node "$node" --arg env "$env_name" '[.items[]?|select(.readError == true or any(.status.resources[]?; .kind == "ApplicationSet" and .name == ("cogni-"+$env+"-"+$node)))|{readError:.readError,name:.metadata.name,source:.spec.source}]')
-app=$(read_object -n argocd get application "${env_name}-${node}" | jq '{readError:.readError,name:.metadata.name,ownerReferences:.metadata.ownerReferences,resources:.status.resources,source:.spec.source,destination:.spec.destination,sync:.status.sync,health:.status.health}')
+appset_raw=$(read_object -n argocd get applicationset "cogni-${env_name}-${node}")
+appset_hash=$(printf '%s' "$appset_raw" | jq -cS '.spec' | sha256sum | awk '{print $1}')
+appset=$(printf '%s' "$appset_raw" | jq --arg specHash "$appset_hash" '{specHash:$specHash,readError:.readError,name:.metadata.name,uid:.metadata.uid,ownerReferences:.metadata.ownerReferences,tracking:.metadata.annotations["argocd.argoproj.io/tracking-id"],argoInstance:.metadata.labels["app.kubernetes.io/instance"],goTemplate:.spec.goTemplate,generators:.spec.generators,templateName:.spec.template.metadata.name,project:.spec.template.spec.project,destination:.spec.template.spec.destination,source:.spec.template.spec.source}')
+appset_authorities=$(read_object -n argocd get applications | jq --arg node "$node" --arg env "$env_name" '[.items[]?|select(.readError == true or any(.status.resources[]?; .kind == "ApplicationSet" and .name == ("cogni-"+$env+"-"+$node)))|{readError:.readError,name:.metadata.name,source:.spec.source,sourcesPresent:((.spec // {})|has("sources")),destination:.spec.destination}]')
+app_raw=$(read_object -n argocd get application "${env_name}-${node}")
+app_hash=$(printf '%s' "$app_raw" | jq -cS '.spec' | sha256sum | awk '{print $1}')
+app=$(printf '%s' "$app_raw" | jq --arg specHash "$app_hash" '{specHash:$specHash,readError:.readError,name:.metadata.name,ownerReferences:.metadata.ownerReferences,resources:.status.resources,source:.spec.source,destination:.spec.destination,sync:.status.sync,health:.status.health}')
 deployment=$(read_object -n "$namespace" get deployment "${node}-node-app" | jq '{readError:.readError,name:.metadata.name,uid:.metadata.uid,tracking:.metadata.annotations["argocd.argoproj.io/tracking-id"],argoInstance:.metadata.labels["app.kubernetes.io/instance"],generation:.metadata.generation,status:.status,replicas:.spec.replicas,images:[.spec.template.spec.containers[]?.image],instance:.spec.template.metadata.labels["app.kubernetes.io/instance"]}')
 service=$(read_object -n "$namespace" get service "${node}-node-app" | jq '{readError:.readError,name:.metadata.name,selector:.spec.selector,ports:.spec.ports}')
 replicasets=$(read_object -n "$namespace" get replicasets -l "app.kubernetes.io/instance=${node}" | jq '[.items[]?|{readError:.readError,uid:.metadata.uid,ownerReferences:.metadata.ownerReferences}]')

@@ -43,25 +43,20 @@ require(facts["provider"].get("package", "").endswith("@sha256:53ff679013f4787fc
 require(facts["config"].get("source") == "None", "unexpected provider credentials source")
 require(ready(facts["eso"], "Ready") and facts["keyPresent"] is True, "operator ESO/token key not ready")
 appset, app = facts["appset"], facts["app"]
-generators = appset.get("generators") or []
-require(len(generators) == 1 and generators[0].get("git", {}).get("repoURL") == repo_url and generators[0].get("git", {}).get("revision") == branch, "ApplicationSet TEST repository/ref mismatch")
-require((appset.get("source") or {}).get("repoURL") == repo_url and (appset.get("source") or {}).get("targetRevision") == "deploy/" + env + "-{{.name}}", "ApplicationSet template writer mismatch")
-require(generators == [{"git": {"repoURL": repo_url, "revision": branch, "files": [{"path": "infra/catalog/" + node + ".yaml"}]}}], "ApplicationSet catalog generator membership mismatch")
-require(appset.get("goTemplate") is True and appset.get("templateName") == env + "-{{.name}}" and appset.get("project") == "default", "ApplicationSet template identity mismatch")
-require(appset.get("source") == {"repoURL": repo_url, "targetRevision": "deploy/" + env + "-{{.name}}", "path": "infra/k8s/overlays/" + env + "/{{.name}}"}, "ApplicationSet template overlay mismatch")
-require(appset.get("destination") == {"server": "https://kubernetes.default.svc", "namespace": "cogni-" + env}, "ApplicationSet template destination mismatch")
+# Compare the ENTIRE admitted spec, including unknown override fields. No API
+# defaults are normalized: an observed default needs explicit source review.
+require(bool(receipt.get("expectedAppSetSpecHash")) and appset.get("specHash") == receipt.get("expectedAppSetSpecHash"), "ApplicationSet whole spec differs from shared TEST declaration")
 require(bool(appset.get("uid")) and appset.get("name") == "cogni-" + env + "-" + node, "ApplicationSet identity unresolved")
 authorities = facts.get("appsetAuthorities")
 require(isinstance(authorities, list), "AppSet managing authority read unresolved")
 for authority in authorities or []:
-    require((authority.get("source") or {}).get("repoURL") == repo_url, "foreign Argo Application claims TEST AppSet")
+    require(authority.get("sourcesPresent") is False and authority.get("source") == {"repoURL":repo_url,"targetRevision":"main","path":"infra/k8s/argocd/appsets/" + env} and authority.get("destination") == {"server":"https://kubernetes.default.svc","namespace":"argocd"}, "foreign or overridden Argo Application claims TEST AppSet")
 tracking_owner = (appset.get("tracking") or "").split(":")[0] or appset.get("argoInstance")
 if tracking_owner:
     require(any(a.get("name") == tracking_owner for a in (authorities or [])), "AppSet tracking authority unresolved")
 if app.get("name"):
     require(any(o.get("kind") == "ApplicationSet" and o.get("uid") == appset.get("uid") and o.get("name") == appset.get("name") for o in (app.get("ownerReferences") or [])), "Application not owned by expected ApplicationSet")
-    require((app.get("source") or {}).get("repoURL") == repo_url and (app.get("source") or {}).get("targetRevision") == branch and (app.get("source") or {}).get("path") == "infra/k8s/overlays/" + env + "/" + node, "Application TEST repository/ref/path mismatch")
-    require(app.get("destination") == {"server":"https://kubernetes.default.svc","namespace":"cogni-" + env}, "Application namespace mismatch")
+    require(app.get("name") == env + "-" + node and bool(receipt.get("expectedApplicationSpecHash")) and app.get("specHash") == receipt.get("expectedApplicationSpecHash"), "Application whole spec differs from shared TEST declaration")
 dep = facts["deployment"]
 if dep.get("name"):
     require(app.get("name") == env + "-" + node and any(r.get("kind") == "Deployment" and r.get("name") == node + "-node-app" and r.get("namespace") == "cogni-" + env for r in (app.get("resources") or [])), "existing Deployment writer unresolved")
