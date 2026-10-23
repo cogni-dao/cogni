@@ -88,6 +88,11 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
       // A shared Langfuse project does not imply access to another lane's receipt service.
       throw new LangfuseReadError("attribution_unavailable", 503);
     }
+    if (!ownsLocalOperator && this.operatorEnvironment !== "production") {
+      // Sovereign aliases use the production-custodied gateway's independent spend receipts.
+      // A candidate/preview process cannot infer those receipts from its local LiteLLM instance.
+      throw new LangfuseReadError("attribution_unavailable", 503);
+    }
     const backendEnvironment = ownsLocalOperator
       ? this.operatorEnvironment
       : "production";

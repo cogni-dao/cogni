@@ -408,7 +408,9 @@ native Langfuse read contract, not a replacement Langfuse SDK base URL. The exis
   cross-lane operator custody returns `attribution_unavailable` (503) before querying; no shared
   project or hostname implies access to another lane's receipt backend. Sovereign legacy aliases
   retain their production-custodied backend partition even when the alias names candidate-a or
-  preview. This resolved binding scopes both the upstream AND filter and response checks, and is
+  preview. Such sovereign reads are served only by the production operator gateway; candidate and
+  preview processes return explicit 503 instead of querying their unrelated local receipt backend.
+  This resolved binding scopes both the upstream AND filter and response checks, and is
   bound into continuation cursors.
 - Legacy generation ownership requires an independent authenticated LiteLLM spend receipt matching
   the provider response ID, authenticated key hash, canonical UUID/lane alias and time. Failed calls

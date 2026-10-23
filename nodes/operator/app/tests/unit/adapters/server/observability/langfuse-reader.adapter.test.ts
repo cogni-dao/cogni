@@ -38,6 +38,7 @@ describe("HttpLangfuseReader", () => {
       baseUrl: "https://lf.example.com/",
       publicKey: "pk-test",
       secretKey: "sk-secret",
+      operatorEnvironment: "production",
     });
     await reader.listTraces({ nodeId: NODE_ID, limit: 10 });
 
@@ -79,6 +80,7 @@ describe("HttpLangfuseReader", () => {
       baseUrl: "https://lf.example.com",
       publicKey: "pk",
       secretKey: "sk",
+      operatorEnvironment: "production",
     });
     const traces = await reader.listTraces({ nodeId: NODE_ID, limit: 5 });
 
@@ -96,6 +98,7 @@ describe("HttpLangfuseReader", () => {
       baseUrl: "https://lf.example.com",
       publicKey: "pk",
       secretKey: "sk-secret",
+      operatorEnvironment: "production",
     });
 
     await expect(
@@ -170,6 +173,7 @@ const nativeReader = () =>
     baseUrl: "https://lf.example.com",
     publicKey: "pk",
     secretKey: "sk-secret",
+    operatorEnvironment: "production",
     ownership: { verifyObservation: vi.fn(async () => true) },
   });
 
@@ -231,6 +235,7 @@ describe("native Langfuse observation access", () => {
       baseUrl: "https://lf.example.com",
       publicKey: "pk",
       secretKey: "sk",
+      operatorEnvironment: "production",
       ownership: { verifyObservation: verify },
     });
     const page = await reader.listObservations(
@@ -413,6 +418,7 @@ describe("native field-group and failure conformance", () => {
         baseUrl: "https://lf.example.com",
         publicKey: "pk",
         secretKey: "sk",
+        operatorEnvironment: "production",
         ownership: {
           verifyObservation: async () => {
             throw failure;
@@ -737,7 +743,7 @@ describe("configured operator lane binding", () => {
       (await localReader("production").listObservations(nativeQuery())).data
     ).toHaveLength(1);
     const sovereign = await localReader(
-      "candidate-a",
+      "production",
       "another-operator"
     ).listObservations(nativeQuery("&environment=candidate-a"));
     expect(sovereign.data).toHaveLength(1);
@@ -763,11 +769,36 @@ describe("configured operator lane binding", () => {
     const query = nativeQuery("&environment=candidate-a");
     const first = await localReader("candidate-a").listObservations(query);
     await expect(
-      localReader("candidate-a", "different-operator").listObservations({
+      localReader("production", "different-operator").listObservations({
         ...query,
         cursor: first.meta.cursor ?? "",
       })
     ).rejects.toMatchObject({ code: "invalid_trace_cursor", status: 400 });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
+});
+
+it.each([
+  undefined,
+  "candidate-a",
+  "preview",
+])("rejects sovereign reads without production receipt custody: %s", async (operatorEnvironment) => {
+  const fetcher = mockFetch({ data: [observation()], meta: { cursor: null } });
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    const reader = new HttpLangfuseReader({
+      baseUrl: "https://lf.example.com",
+      publicKey: "pk",
+      secretKey: "sk-secret",
+      operatorNodeId: "serving-operator",
+      ...(operatorEnvironment ? { operatorEnvironment } : {}),
+      ownership: { verifyObservation: vi.fn(async () => true) },
+    });
+    await expect(
+      reader.listObservations(nativeQuery("&environment=candidate-a"))
+    ).rejects.toMatchObject({ code: "attribution_unavailable", status: 503 });
+    expect(fetcher).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
