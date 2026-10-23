@@ -299,32 +299,47 @@ describe("LiteLlmAdapter", () => {
           );
         });
 
-      it("with a caller abortSignal, arms no TTFB timer: the caller's signal owns the deadline", async () => {
+      it("with a caller signal that never aborts, the 60s guard still fires as kind 'timeout'", async () => {
         vi.useFakeTimers();
         try {
           const caller = new AbortController();
-          let fetchSignal: AbortSignal | undefined;
-          mockFetch.mockImplementationOnce(
-            (url: string, init: { signal?: AbortSignal }) => {
-              fetchSignal = init.signal;
-              return hangingFetch(url, init);
-            }
-          );
+          mockFetch.mockImplementationOnce(hangingFetch);
           const pending = adapter.completionStream({
             ...basicParams,
             abortSignal: caller.signal,
           });
-          await vi.advanceTimersByTimeAsync(120_000);
-          expect(fetchSignal).toBe(caller.signal);
-          expect(fetchSignal?.aborted).toBe(false);
-          caller.abort();
-          await expect(pending).rejects.toMatchObject({ kind: "aborted" });
+          const settled = expect(pending).rejects.toMatchObject({
+            kind: "timeout",
+          });
+          await vi.advanceTimersByTimeAsync(60_000);
+          await settled;
+          expect(caller.signal.aborted).toBe(false);
         } finally {
           vi.useRealTimers();
         }
       });
 
-      it("without a caller signal, the 60s fallback guard reports kind 'timeout'", async () => {
+      it("a caller abort before 60s reports kind 'aborted'", async () => {
+        vi.useFakeTimers();
+        try {
+          const caller = new AbortController();
+          mockFetch.mockImplementationOnce(hangingFetch);
+          const pending = adapter.completionStream({
+            ...basicParams,
+            abortSignal: caller.signal,
+          });
+          const settled = expect(pending).rejects.toMatchObject({
+            kind: "aborted",
+          });
+          await vi.advanceTimersByTimeAsync(10_000);
+          caller.abort();
+          await settled;
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("without a caller signal, the 60s guard reports kind 'timeout'", async () => {
         vi.useFakeTimers();
         try {
           mockFetch.mockImplementationOnce(hangingFetch);

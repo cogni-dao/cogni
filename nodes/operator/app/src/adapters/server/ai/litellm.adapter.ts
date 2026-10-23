@@ -7,8 +7,9 @@
  * Scope: Implements LlmService port (completion + stream), extracts cost from headers, validates secrets at adapter boundary. Does not handle auth or rate-limiting.
  * Invariants:
  *   - Never logs prompts/keys/chunks; error response excerpts are redacted + bounded (<=2KB)
- *   - 30s timeout (completion); stream: a caller abortSignal owns the deadline (no TTFB timer), else a 60s
- *     connect/TTFB fallback guard that reports kind "timeout"; total stream duration unbounded
+ *   - 30s timeout (completion); stream: a 60s connect/TTFB guard (fetch→headers only, cleared in finally),
+ *     combined with any caller abortSignal; a fired guard reports kind "timeout", a caller abort kind "aborted";
+ *     stream duration stays unbounded. No app-side run budget exists yet for scheduled runs (follow-up).
  *   - Settles once; model required
  *   - Stream abort rejects with LlmError(kind='aborted')
  *   - USAGE_UNIT_IS_LITELLM_CALL_ID: litellmCallId sourced ONLY from x-litellm-call-id response header (no response body fallback)
@@ -54,7 +55,7 @@ const logger = makeLogger({ component: "LiteLlmAdapter" });
 /** Max chars of provider response body to include in operator logs. */
 const MAX_ERROR_BODY_LOG_CHARS = 2048;
 
-/** Fallback stream connect/TTFB guard, armed only when the caller supplies no abortSignal (the caller's run budget/cancel owns the deadline otherwise). */
+/** Stream connect/TTFB guard (fetch→headers only): reasoning models can exceed 15s TTFB on long agent contexts. */
 const LITELLM_STREAM_TTFB_TIMEOUT_MS = 60_000;
 
 /**
@@ -238,24 +239,24 @@ export class LiteLlmAdapter implements LlmService {
     }
 
     let response: Response;
-    // A caller signal (run budget/cancel, chat disconnect) owns the deadline; only without one, arm a
-    // connect/TTFB fallback guard (not the entire stream duration) that aborts as a TimeoutError.
-    const connectCtl = params.abortSignal ? undefined : new AbortController();
-    const connectTimer =
-      connectCtl &&
-      setTimeout(
-        () =>
-          connectCtl.abort(
-            new DOMException("LiteLLM TTFB timeout", "TimeoutError")
-          ),
-        LITELLM_STREAM_TTFB_TIMEOUT_MS
-      );
+    // Connect/TTFB guard only (cleared in finally; not the stream duration), combined with the caller signal.
+    // Aborts with a TimeoutError reason so a fired guard reports kind "timeout", not "aborted".
+    const connectCtl = new AbortController();
+    const connectTimer = setTimeout(
+      () =>
+        connectCtl.abort(
+          new DOMException("LiteLLM TTFB timeout", "TimeoutError")
+        ),
+      LITELLM_STREAM_TTFB_TIMEOUT_MS
+    );
     const env = serverEnv();
     // Validate runtime secrets at adapter boundary
     assertRuntimeSecrets(env);
 
     try {
-      const signal = params.abortSignal ?? connectCtl?.signal;
+      const signal = params.abortSignal
+        ? AbortSignal.any([connectCtl.signal, params.abortSignal])
+        : connectCtl.signal;
 
       // Uses LITELLM_MASTER_KEY (server-only secret) - never expose per-user virtual keys
       response = await fetch(`${env.LITELLM_BASE_URL}/v1/chat/completions`, {
