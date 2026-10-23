@@ -911,3 +911,94 @@ describe("exact application root query plan", () => {
     ).rejects.toMatchObject({ code: "invalid_trace_cursor", status: 400 });
   });
 });
+
+it("selects a sovereign SDK root by nodeId without requiring a generation key alias or granting authority from the hint", async () => {
+  const sovereignId = "b927a9dd-6132-4fc9-a51e-e3cee2568e3c";
+  const traceId = "9e7e282c9b1408162caad4538f544871";
+  const root = {
+    ...observation(`t-${traceId}`),
+    traceId,
+    type: "SPAN",
+    environment: "default",
+    name: "graph-execution",
+    parentObservationId: null,
+    isRootObservation: true,
+    metadata: {
+      nodeId: sovereignId,
+      runId: "f05e32d0-ef33-4592-a36f-b47cc8fd795c",
+      reqId: "f05e32d0-ef33-4592-a36f-b47cc8fd795c",
+      graphId: "langgraph:poet",
+      providerId: "langgraph",
+    },
+    output: JSON.stringify({
+      status: "success",
+      assistantResponse: "Sovereign application result",
+    }),
+  };
+  // Honor upstream metadata equality: SDK root metadata has no user_api_key_alias.
+  const fetcher = vi.fn(async (url: URL) => {
+    const filters = JSON.parse(
+      url.searchParams.get("filter") ?? "[]"
+    ) as Array<{ type: string; key?: string; value: string }>;
+    const matchesMetadata = filters
+      .filter((f) => f.type === "stringObject")
+      .every(
+        (f) =>
+          f.key !== undefined &&
+          (root.metadata as Record<string, unknown>)[f.key] === f.value
+      );
+    return new Response(
+      JSON.stringify({ data: matchesMetadata ? [root] : [], meta: {} })
+    );
+  });
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    const rootVerifier = vi.fn(async () => true),
+      generationVerifier = vi.fn(async () => true);
+    const reader = new HttpLangfuseReader({
+      baseUrl: "https://lf.example.com",
+      publicKey: "pk",
+      secretKey: "sk-secret",
+      operatorNodeId: NODE_ID,
+      operatorEnvironment: "production",
+      ownership: { verifyObservation: generationVerifier },
+      rootOwnership: { verifyObservation: rootVerifier },
+    });
+    const query = parseTraceQuery(
+      new URLSearchParams(
+        `fromStartTime=${FROM}&toStartTime=${TO}&environment=production&type=SPAN&traceId=${traceId}`
+      ),
+      sovereignId
+    );
+    const result = await reader.listObservations(query);
+    expect(result.data.map((row) => row.id)).toEqual([`t-${traceId}`]);
+    expect(rootVerifier).toHaveBeenCalledWith(
+      sovereignId,
+      "production",
+      expect.objectContaining({ metadata: root.metadata }),
+      expect.any(AbortSignal)
+    );
+    expect(generationVerifier).not.toHaveBeenCalled();
+    const url = fetcher.mock.calls[0]?.[0];
+    const compiled = JSON.parse(url?.searchParams.get("filter") ?? "[]");
+    expect(compiled).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          column: "metadata",
+          key: "nodeId",
+          value: sovereignId,
+        }),
+      ])
+    );
+    expect(JSON.stringify(compiled)).not.toContain("user_api_key_alias");
+    rootVerifier.mockResolvedValueOnce(false);
+    const denied = await reader.listObservations(query);
+    expect(denied.data).toHaveLength(0);
+    expect(denied.meta.cogni).toMatchObject({
+      partial: true,
+      attributionUnavailable: 1,
+    });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

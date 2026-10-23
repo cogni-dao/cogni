@@ -141,22 +141,23 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
     from = new Date(from).toISOString();
     to = new Date(to).toISOString();
     const signal = AbortSignal.timeout(15_000);
-    // Metadata key aliases are only candidate selectors; independently trusted receipts decide reach.
-    const ownershipFilter = ownsLocalOperator
-      ? {
-          type: "stringObject",
-          column: "metadata",
-          key: "nodeId",
-          operator: "=",
-          value: query.nodeId,
-        }
-      : {
-          type: "stringObject",
-          column: "metadata",
-          key: "user_api_key_alias",
-          operator: "=",
-          value: `cogni:${query.environment}:${query.nodeId}:app:v1`,
-        };
+    // Node metadata and key aliases are candidate selectors; independent receipts decide reach.
+    const ownershipFilter =
+      rootTraceId || ownsLocalOperator
+        ? {
+            type: "stringObject",
+            column: "metadata",
+            key: "nodeId",
+            operator: "=",
+            value: query.nodeId,
+          }
+        : {
+            type: "stringObject",
+            column: "metadata",
+            key: "user_api_key_alias",
+            operator: "=",
+            value: `cogni:${query.environment}:${query.nodeId}:app:v1`,
+          };
     const filters = [
       ownershipFilter,
       ...(rootTraceId
