@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import goldFile from "../../evals/guidance-routing/gold.json";
 import {
   ceiling,
+  chunkMessage,
   decide,
   type Gold,
   meanOfRuns,
@@ -126,6 +127,27 @@ describe("parsePicks — the selector's ranked ids", () => {
   it("returns [] when the reply carries no parseable array", () => {
     expect(parsePicks("no idea", known, 10)).toEqual([]);
     expect(parsePicks("[not json", known, 10)).toEqual([]);
+  });
+});
+
+describe("chunkMessage — split a prompt under a per-message character cap", () => {
+  it("returns the prompt whole when no cap is set or it fits", () => {
+    expect(chunkMessage("a\nb", undefined)).toEqual(["a\nb"]);
+    expect(chunkMessage("a\nb", 10)).toEqual(["a\nb"]);
+  });
+
+  it("splits on line boundaries, keeps order, and loses no characters", () => {
+    const prompt = ["intro", "row-1 aaaa", "row-2 bbbb", "ask"].join("\n");
+    const chunks = chunkMessage(prompt, 12);
+    expect(chunks).toEqual(["intro", "row-1 aaaa", "row-2 bbbb", "ask"]);
+    expect(chunks.join("\n")).toBe(prompt);
+  });
+
+  it("hard-splits a single line longer than the cap", () => {
+    const chunks = chunkMessage("x".repeat(25), 10);
+    expect(chunks).toEqual(["x".repeat(10), "x".repeat(10), "x".repeat(5)]);
+    for (const c of chunkMessage(`${"y".repeat(9)}\n${"z".repeat(30)}`, 10))
+      expect(c.length).toBeLessThanOrEqual(10);
   });
 });
 

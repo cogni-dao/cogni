@@ -9,13 +9,11 @@
 EVAL_API_KEY=<node key> pnpm eval:guidance-routing -- --mechanism A --ceiling-only
 
 # Selector run: mean of 2 blind selector runs, then the decision-table verdict.
-EVAL_API_KEY=<node key> \
-EVAL_COMPLETIONS_URL=https://openrouter.ai/api/v1/chat/completions \
-EVAL_COMPLETIONS_API_KEY=<key> EVAL_MODEL=openai/gpt-oss-120b \
-pnpm eval:guidance-routing -- --mechanism A --out /tmp/guidance-routing.json
+# Default selector: the node's own chat route, free gpt-oss-120b via the pr-review graph (0 credits).
+EVAL_API_KEY=<node key> pnpm eval:guidance-routing -- --mechanism A --out /tmp/guidance-routing.json
 ```
 
-`EVAL_BASE_URL` defaults to `https://cognidao.org` (use `https://test.cognidao.org` for a flighted candidate). Work-item text comes from `EVAL_WORK_BASE_URL` (default `https://cognidao.org`), so no internal text is committed. The node's own chat route caps each message at 4,000 characters, so the selector needs an external OpenAI-compatible endpoint.
+`EVAL_BASE_URL` defaults to `https://cognidao.org` (use `https://test.cognidao.org` for a flighted candidate). Work-item text comes from `EVAL_WORK_BASE_URL` (default `https://cognidao.org`), so no internal text is committed. The node's chat route caps each message, not each request, at 4,000 characters, so the runner splits the prompt across consecutive user messages of at most `EVAL_MAX_MESSAGE_CHARS` (default 3,900). `EVAL_MODEL` and `EVAL_GRAPH` override the model and graph. `EVAL_COMPLETIONS_URL` plus `EVAL_COMPLETIONS_API_KEY` point the selector at any other OpenAI-compatible endpoint, sent as one message unless `EVAL_MAX_MESSAGE_CHARS` is set.
 
 **Mechanisms.**
 

@@ -11,7 +11,7 @@
  *   - MEAN_OF_RUNS: the verdict uses the mean of `--runs` (default thresholds.minRuns) selector runs.
  *   - EXIT_CODE_IS_VERDICT: 0 = the decision table ships the mechanism (row 1 or 5) or a --ceiling-only report; 1 = any other row; 3 = INCONCLUSIVE (a row needs a mechanism that was not measured, or a read failed).
  *   - RESULTS_NOT_COMMITTED: `--out <file>` writes the JSON scorecard wherever the caller chooses.
- * Side-effects: IO (HTTP reads to the node, model calls to an OpenAI-compatible endpoint, optional --out file)
+ * Side-effects: IO (HTTP reads to the node, model calls to its chat completions route or another OpenAI-compatible endpoint, optional --out file)
  * Links: evals/guidance-routing/README.md, score.ts
  * @public
  */
@@ -22,6 +22,7 @@ import path from "node:path";
 import { isGoverningEntryType } from "../../src/domain/governing";
 import {
   ceiling,
+  chunkMessage,
   type Decision,
   type DecisionInput,
   decide,
@@ -72,13 +73,24 @@ const WORK_BASE = strip(
 );
 const WORK_KEY = process.env.EVAL_WORK_API_KEY ?? KEY;
 /**
- * Any OpenAI-compatible chat completions URL. The node's own route caps each
- * message at 4,000 characters, which cannot hold a 118-row index, so A needs an
- * external endpoint (e.g. https://openrouter.ai/api/v1/chat/completions).
+ * The selector endpoint: any OpenAI-compatible chat completions URL. Default is
+ * the node's own route with the free `gpt-oss-120b`, routed through a graph
+ * (`EVAL_GRAPH`, default `pr-review`). That route caps each MESSAGE at 4,000
+ * characters (not each request), so the prompt is split across consecutive
+ * user messages of at most `EVAL_MAX_MESSAGE_CHARS` (default 3,900 on the node
+ * route; unset = one message for an external endpoint).
  */
-const LLM_URL = process.env.EVAL_COMPLETIONS_URL;
-const LLM_KEY = process.env.EVAL_COMPLETIONS_API_KEY;
-const MODEL = process.env.EVAL_MODEL ?? "openai/gpt-oss-120b";
+const EXTERNAL_LLM = process.env.EVAL_COMPLETIONS_URL;
+const LLM_URL = EXTERNAL_LLM ?? `${BASE}/api/v1/chat/completions`;
+const LLM_KEY = process.env.EVAL_COMPLETIONS_API_KEY ?? KEY;
+const MODEL = process.env.EVAL_MODEL ?? "gpt-oss-120b";
+const GRAPH =
+  process.env.EVAL_GRAPH ?? (EXTERNAL_LLM ? undefined : "pr-review");
+const MAX_MESSAGE_CHARS = process.env.EVAL_MAX_MESSAGE_CHARS
+  ? Number(process.env.EVAL_MAX_MESSAGE_CHARS)
+  : EXTERNAL_LLM
+    ? undefined
+    : 3900;
 /** Only `--ceiling-only` runs without a selector endpoint: it reports the reachable recall ceiling and exits. */
 const CEILING_ONLY = process.argv.includes("--ceiling-only");
 const MECHANISM = (argOf("--mechanism") ?? "A") as Mechanism;
@@ -95,10 +107,8 @@ if (!["A", "T", "T+method"].includes(MECHANISM)) {
   console.error("--mechanism must be A, T or T+method");
   process.exit(2);
 }
-if (!CEILING_ONLY && (!LLM_URL || !LLM_KEY)) {
-  console.error(
-    "EVAL_COMPLETIONS_URL and EVAL_COMPLETIONS_API_KEY are required for a selector run (or pass --ceiling-only)"
-  );
+if (!CEILING_ONLY && EXTERNAL_LLM && !process.env.EVAL_COMPLETIONS_API_KEY) {
+  console.error("EVAL_COMPLETIONS_URL needs EVAL_COMPLETIONS_API_KEY");
   process.exit(2);
 }
 
@@ -118,15 +128,21 @@ async function get<T>(
 
 async function complete(prompt: string): Promise<string> {
   for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch(LLM_URL as string, {
+    const res = await fetch(LLM_URL, {
       method: "POST",
       headers: {
         authorization: `Bearer ${LLM_KEY}`,
         "content-type": "application/json",
+        "user-agent": "curl/8.4.0",
       },
       body: JSON.stringify({
         model: MODEL,
-        messages: [{ role: "user", content: prompt }],
+        stream: false,
+        ...(GRAPH ? { graph_name: GRAPH } : {}),
+        messages: chunkMessage(prompt, MAX_MESSAGE_CHARS).map((content) => ({
+          role: "user",
+          content,
+        })),
       }),
     });
     const text = await res.text();
@@ -323,7 +339,7 @@ async function main(): Promise<void> {
     [
       `### guidance-routing eval — ${decision.ship ? "SHIP" : decision.row === null ? "INCONCLUSIVE" : "NO SHIP"}`,
       "",
-      `${header} · mechanism ${MECHANISM} · model ${MODEL} · ${RUNS} runs`,
+      `${header} · mechanism ${MECHANISM} · model ${MODEL}${GRAPH ? ` via ${GRAPH}` : ""} · ${RUNS} runs`,
       "",
       reachLine,
       "",

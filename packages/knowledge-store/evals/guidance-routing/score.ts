@@ -161,6 +161,38 @@ export function parsePicks(
   return out;
 }
 
+/**
+ * Split a prompt into consecutive messages of at most `max` characters, packing
+ * whole lines (a line longer than `max` is hard-split). Joining line-packed
+ * chunks with "\n" restores the prompt. No cap, or a prompt that fits → [prompt].
+ */
+export function chunkMessage(
+  prompt: string,
+  max: number | undefined
+): string[] {
+  if (!max || prompt.length <= max) return [prompt];
+  const out: string[] = [];
+  let current: string | null = null;
+  for (const line of prompt.split("\n")) {
+    const pieces: string[] = [];
+    if (line.length <= max) pieces.push(line);
+    else
+      for (let i = 0; i < line.length; i += max)
+        pieces.push(line.slice(i, i + max));
+    for (const piece of pieces) {
+      if (current === null) current = piece;
+      else if (current.length + 1 + piece.length <= max)
+        current = `${current}\n${piece}`;
+      else {
+        out.push(current);
+        current = piece;
+      }
+    }
+  }
+  if (current !== null) out.push(current);
+  return out;
+}
+
 export interface DecisionInput {
   /** The whole rendered bundle, UTF-8 bytes. */
   readonly bundleBytes: number;
