@@ -138,6 +138,36 @@ export class WorkItemRevisionConflictError extends Error {
   }
 }
 
+/** One `scores` bound violation, as reported by `parseWorkItemScores`. */
+export type WorkItemScoresIssue = {
+  readonly code: string;
+  readonly path: readonly string[];
+  readonly message: string;
+};
+
+/**
+ * Thrown when a `scores` write broke the package bounds (story.5111).
+ * PERMANENT, CALLER'S ERROR: the adapter's `parseWorkItemScores` (the ONLY
+ * bounds check — SCORES_ONE_ENFORCER) rejected it before any SQL, so nothing
+ * was written; the route answers 400 with the package issues, never 500.
+ */
+export class WorkItemScoresInvalidError extends Error {
+  readonly code = "work_item_scores_invalid" as const;
+  constructor(readonly issues: readonly WorkItemScoresIssue[]) {
+    super("Invalid work-item scores");
+    this.name = "WorkItemScoresInvalidError";
+  }
+}
+
+function isScoresIssue(value: unknown): value is WorkItemScoresIssue {
+  const issue = value as Partial<WorkItemScoresIssue> | null;
+  return (
+    typeof issue?.code === "string" &&
+    typeof issue.message === "string" &&
+    Array.isArray(issue.path)
+  );
+}
+
 /**
  * Normalize a store-layer throw into a facade-owned error (bug.5408).
  *
@@ -178,6 +208,12 @@ function mapStoreError(e: unknown): unknown {
   if (name === "WorkItemAuthorizationError") {
     return new WorkItemAuthorizationError(message);
   }
+  if (name === "WorkItemScoresInvalidError") {
+    const issues = (e as { issues?: unknown }).issues;
+    return new WorkItemScoresInvalidError(
+      Array.isArray(issues) ? issues.filter(isScoresIssue) : []
+    );
+  }
   if (name === "WorkItemsBusyError") {
     return new WorkItemsBusyError(message);
   }
@@ -210,6 +246,7 @@ function toDto(item: WorkItem): WorkItemDto {
     priority: item.priority,
     rank: item.rank,
     estimate: item.estimate,
+    ...(item.scores !== undefined && { scores: item.scores }),
     summary: item.summary,
     outcome: item.outcome,
     projectId: item.projectId as string | undefined,
@@ -361,6 +398,7 @@ export async function createWorkItem(
         ...(input.priority !== undefined && { priority: input.priority }),
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
+        ...(input.scores !== undefined && { scores: input.scores }),
       },
       authorTagFromSession(sessionUser)
     );

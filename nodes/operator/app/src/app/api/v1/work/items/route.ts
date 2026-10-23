@@ -124,8 +124,9 @@ export const POST = wrapRouteHandlerWithLogging(
         status: 201,
       });
     } catch (e) {
-      // Coded responses: 403 authz_denied (permanent), 503 work_items_busy
-      // (retryable), 503 not-ready, 409 exists. Anything unrecognized rethrows
+      // Coded responses: 400 work_item_scores_invalid (story.5111), 403
+      // authz_denied (permanent), 503 work_items_busy (retryable), 503
+      // not-ready, 409 exists. Anything unrecognized rethrows
       // to the wrapper's 500 — the catch is NOT broadened (bug.5408).
       const coded = workItemsWriteErrorResponse(ctx, e);
       if (coded) return coded;
