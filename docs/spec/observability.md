@@ -418,7 +418,19 @@ native Langfuse read contract, not a replacement Langfuse SDK base URL. The exis
   tags and caller metadata alone authorize nothing. Unknown/mixed observations are withheld and
   counted in `meta.cogni.attributionUnavailable`; continuation stays available even on an empty page.
   This legacy verifier currently qualifies generation records, including their tool-call/result I/O;
-  native root/tool-span records require their own independently trusted ownership evidence.
+  native tool-span records require their own independently trusted ownership evidence.
+- Application terminal outcomes are available through the explicit native selector
+  `type=SPAN&traceId=<32-hex-trace-id>` (or equivalent exact AND filters). This reads only the
+  virtual app root `t-<traceId>` in its native `default` partition. SPAN lists, conflicting
+  selectors and arbitrary child IDs are rejected. Default/generation reads use their existing
+  recorded partition; root/generation query plans are bound into signed cursor scope.
+  Root metadata is only a join hint: independent Loki creation/completion receipts must match
+  original collector env/service/node labels, immutable svcNode, exact trace/langfuse/request/run,
+  graph identity, timestamps and terminal outcome. Exactly one pair is required; absent or
+  ambiguous proof is an explicit attribution gap. Missing Loki wiring is 503; the fixed read
+  uses the parent deadline and a 512 KiB body cap. Completion may follow the caller's root-start
+  window, bounded to 24h after root start. This attests only the exact root, with no descendant,
+  aggregate or hostile-writer isolation claim.
 - The first query freezes a maximum 24-hour window; continuation must repeat the same query and
   use its signed node/lane/backend/window/fields/filter-bound cursor. Default/max page sizes are
   50/100 are upper bounds. The gateway starts with at most 10 upstream observations and, only on

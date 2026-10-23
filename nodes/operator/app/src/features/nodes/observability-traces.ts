@@ -72,6 +72,27 @@ export function parseTraceQuery(
     if (value)
       conditions.push({ type: "string", column: key, operator: "=", value });
   }
+  const types = new Set(
+    conditions.filter((f) => f.column === "type").map((f) => f.value)
+  );
+  const traces = new Set(
+    conditions
+      .filter((f) => f.column === "traceId")
+      .map((f) => f.value.toLowerCase())
+  );
+  if (types.size > 1 || traces.size > 1)
+    throw new TraceQueryError("Conflicting selectors");
+  let rootTraceId: string | undefined;
+  if (types.has("SPAN")) {
+    rootTraceId = [...traces][0];
+    if (!rootTraceId || !/^[0-9a-f]{32}$/.test(rootTraceId))
+      throw new TraceQueryError("SPAN requires one exact 32-hex traceId");
+    for (const f of conditions) {
+      if (f.column === "traceId") f.value = rootTraceId;
+      if (f.column === "id" && f.value !== `t-${rootTraceId}`)
+        throw new TraceQueryError("Conflicting root ID");
+    }
+  }
   if (q.fromStartTime && q.toStartTime) {
     const width = Date.parse(q.toStartTime) - Date.parse(q.fromStartTime);
     if (width <= 0 || width > 86_400_000)
@@ -83,6 +104,7 @@ export function parseTraceQuery(
     limit: q.limit,
     fields: groups.join(","),
     filters: conditions,
+    ...(rootTraceId ? { rootTraceId } : {}),
     ...(q.fromStartTime ? { fromStartTime: q.fromStartTime } : {}),
     ...(q.toStartTime ? { toStartTime: q.toStartTime } : {}),
     ...(cursor ? { cursor } : {}),

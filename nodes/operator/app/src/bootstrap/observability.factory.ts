@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import {
   HttpLangfuseOwnershipVerifier,
   HttpLangfuseReader,
+  HttpLangfuseRootOwnershipVerifier,
   HttpLokiReader,
 } from "@/adapters/server";
 import type { LangfuseReaderPort, LokiReaderPort } from "@/ports";
@@ -57,6 +58,14 @@ export function createLangfuseReader(): LangfuseReaderPort | null {
     operatorNodeId: getNodeId(),
     ...(env.DEPLOY_ENVIRONMENT
       ? { operatorEnvironment: env.DEPLOY_ENVIRONMENT }
+      : {}),
+    ...(env.GRAFANA_URL && env.GRAFANA_SERVICE_ACCOUNT_TOKEN
+      ? {
+          rootOwnership: new HttpLangfuseRootOwnershipVerifier({
+            grafanaUrl: env.GRAFANA_URL,
+            token: env.GRAFANA_SERVICE_ACCOUNT_TOKEN,
+          }),
+        }
       : {}),
     ownership: new HttpLangfuseOwnershipVerifier({
       baseUrl: env.LITELLM_BASE_URL,

@@ -38,6 +38,8 @@ export interface LangfuseObservationQuery {
   readonly environment: "candidate-a" | "preview" | "production";
   readonly limit: number;
   readonly fields: string;
+  /** Exact virtual app root; set only by canonical SPAN + traceId query parsing. */
+  readonly rootTraceId?: string;
   readonly filters: readonly {
     readonly type: "string";
     readonly column: string;

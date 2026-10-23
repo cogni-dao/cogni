@@ -86,6 +86,8 @@ export async function GET(request: Request) {
       auth: "Cogni Bearer; node.flight developer permission",
       nodeReference: "node UUID or slug",
       operations: ["GET /api/public/v2/observations"],
+      applicationRootSelector:
+        "type=SPAN&traceId=<32-hex-trace-id>; exact app root only, independently verified from Loki creation/terminal receipts",
       defaults: {
         environment: "production",
         limit: 50,

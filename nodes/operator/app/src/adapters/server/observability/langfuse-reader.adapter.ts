@@ -37,6 +37,7 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
   private readonly authHeader: string;
   private readonly cursorKey: Buffer;
   private readonly ownership: LangfuseOwnershipPort | undefined;
+  private readonly rootOwnership: LangfuseOwnershipPort | undefined;
   private readonly operatorNodeId: string | undefined;
   private readonly operatorEnvironment: string | undefined;
 
@@ -45,6 +46,7 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
     publicKey: string;
     secretKey: string;
     ownership?: LangfuseOwnershipPort;
+    rootOwnership?: LangfuseOwnershipPort;
     operatorNodeId?: string;
     operatorEnvironment?: string;
   }) {
@@ -52,6 +54,7 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
       .update(`langfuse-reader-cursor-v1:${opts.secretKey}`)
       .digest();
     this.ownership = opts.ownership;
+    this.rootOwnership = opts.rootOwnership;
     this.operatorNodeId = opts.operatorNodeId;
     this.operatorEnvironment = opts.operatorEnvironment;
     this.base = opts.baseUrl.replace(/\/+$/, "");
@@ -81,8 +84,9 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
   private async readObservations(
     query: LangfuseObservationQuery
   ): Promise<LangfuseObservationPage> {
-    if (!this.ownership)
-      throw new LangfuseReadError("attribution_unavailable", 503);
+    const rootTraceId = query.rootTraceId;
+    const verifier = rootTraceId ? this.rootOwnership : this.ownership;
+    if (!verifier) throw new LangfuseReadError("attribution_unavailable", 503);
     const ownsLocalOperator = query.nodeId === this.operatorNodeId;
     if (ownsLocalOperator && query.environment !== this.operatorEnvironment) {
       // A shared Langfuse project does not imply access to another lane's receipt service.
@@ -93,14 +97,19 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
       // A candidate/preview process cannot infer those receipts from its local LiteLLM instance.
       throw new LangfuseReadError("attribution_unavailable", 503);
     }
-    const backendEnvironment = ownsLocalOperator
-      ? this.operatorEnvironment
-      : "production";
+    const backendEnvironment = rootTraceId
+      ? "default"
+      : ownsLocalOperator
+        ? this.operatorEnvironment
+        : "production";
     const { cursor, ...scopeQuery } = query;
     const scope = createHash("sha256")
       .update(
         JSON.stringify({
           base: this.base,
+          plan: rootTraceId
+            ? { kind: "exact-root", id: `t-${rootTraceId}` }
+            : { kind: "generations" },
           binding: {
             operatorNodeId: this.operatorNodeId ?? null,
             operatorEnvironment: this.operatorEnvironment ?? null,
@@ -150,6 +159,17 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
         };
     const filters = [
       ownershipFilter,
+      ...(rootTraceId
+        ? [
+            {
+              type: "string",
+              column: "id",
+              operator: "=",
+              value: `t-${rootTraceId}`,
+            },
+            { type: "string", column: "type", operator: "=", value: "SPAN" },
+          ]
+        : []),
       {
         type: "string",
         column: "environment",
@@ -184,9 +204,9 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
     if (upstreamCursor) url.searchParams.set("cursor", upstreamCursor);
     // `limit` is a ceiling, not a requirement to fill a response. Small native subpages keep
     // verbose generation IO usable; retries always start at the same upstream cursor/window.
-    const pageSizes = [
-      ...new Set([Math.min(query.limit, 10), Math.min(query.limit, 2), 1]),
-    ];
+    const pageSizes = rootTraceId
+      ? [2]
+      : [...new Set([Math.min(query.limit, 10), Math.min(query.limit, 2), 1])];
     const MAX_PAGE_BYTES = 8 * 1024 * 1024;
     const MAX_TOTAL_BYTES = 3 * MAX_PAGE_BYTES;
     let consumedBytes = 0;
@@ -241,11 +261,13 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
     if (!page)
       throw new LangfuseReadError("observability_response_too_large", 502);
     const data: Record<string, unknown>[] = [];
-    let unavailable = 0;
+    const ambiguousRoot =
+      !!rootTraceId && (page.data.length > 1 || !!page.meta.cursor);
+    let unavailable = ambiguousRoot ? Math.max(1, page.data.length) : 0;
     let truncated = false;
     // Allocate each row a fair share of the response budget, leaving meta/cursor headroom.
     const rowBudget = Math.floor((1024 * 1024 - 32768) / query.limit);
-    for (const row of page.data) {
+    for (const row of ambiguousRoot ? [] : page.data) {
       const time = Date.parse(String(row.startTime));
       if (
         !Number.isFinite(time) ||
@@ -253,7 +275,14 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
         time >= Date.parse(to) ||
         row.environment !== backendEnvironment ||
         !matchesFilters(row, query.filters) ||
-        !(await this.ownership.verifyObservation(
+        (rootTraceId &&
+          (row.id !== `t-${rootTraceId}` ||
+            row.traceId !== rootTraceId ||
+            row.type !== "SPAN" ||
+            row.parentObservationId !== null ||
+            row.isRootObservation !== true ||
+            row.name !== "graph-execution")) ||
+        !(await verifier.verifyObservation(
           query.nodeId,
           query.environment,
           row,
@@ -278,15 +307,16 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
       }
       data.push(projected);
     }
-    const next = page.meta.cursor
-      ? this.sealCursor({
-          scope,
-          from,
-          to,
-          upstream: page.meta.cursor,
-          expires: Date.now() + 3_600_000,
-        })
-      : null;
+    const next =
+      !rootTraceId && page.meta.cursor
+        ? this.sealCursor({
+            scope,
+            from,
+            to,
+            upstream: page.meta.cursor,
+            expires: Date.now() + 3_600_000,
+          })
+        : null;
     return {
       data,
       meta: {

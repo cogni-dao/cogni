@@ -802,3 +802,112 @@ it.each([
     vi.unstubAllGlobals();
   }
 });
+
+describe("exact application root query plan", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const trace = "9e7e282c9b1408162caad4538f544871";
+  const root = () => ({
+    ...observation(`t-${trace}`),
+    traceId: trace,
+    type: "SPAN",
+    environment: "default",
+    name: "graph-execution",
+    parentObservationId: null,
+    isRootObservation: true,
+    output: JSON.stringify({
+      status: "success",
+      assistantResponse: "Application result",
+    }),
+  });
+  const query = () =>
+    nativeQuery(`&environment=candidate-a&type=SPAN&traceId=${trace}`);
+  function reader(rootAllowed = true) {
+    return new HttpLangfuseReader({
+      baseUrl: "https://lf.example.com",
+      publicKey: "pk",
+      secretKey: "sk-secret",
+      operatorNodeId: NODE_ID,
+      operatorEnvironment: "candidate-a",
+      ownership: { verifyObservation: async () => false },
+      rootOwnership: { verifyObservation: vi.fn(async () => rootAllowed) },
+    });
+  }
+  it("returns only the independently attested exact virtual root and application terminal status", async () => {
+    const fetcher = mockFetch({ data: [root()], meta: {} });
+    vi.stubGlobal("fetch", fetcher);
+    const result = await reader().listObservations(query());
+    expect(result.data.map((row) => row.id)).toEqual([`t-${trace}`]);
+    expect(result.data[0]?.output).toContain('"status":"success"');
+    expect(result.meta.cursor).toBeNull();
+    const url = (fetcher as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as URL;
+    expect(JSON.parse(url.searchParams.get("filter") ?? "[]")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ column: "id", value: `t-${trace}` }),
+        expect.objectContaining({ column: "environment", value: "default" }),
+        expect.objectContaining({ column: "type", value: "SPAN" }),
+      ])
+    );
+  });
+  it("canonicalizes equivalent AND selectors and rejects broad/conflicting root selectors before IO", () => {
+    const filter = JSON.stringify([
+      { type: "string", column: "type", operator: "=", value: "SPAN" },
+      { type: "string", column: "traceId", operator: "=", value: trace },
+    ]);
+    expect(
+      nativeQuery(`&filter=${encodeURIComponent(filter)}`).rootTraceId
+    ).toBe(trace);
+    for (const extra of [
+      "&type=SPAN",
+      "&type=SPAN&traceId=invalid",
+      `&type=GENERATION&filter=${encodeURIComponent(filter)}`,
+      `&type=SPAN&traceId=${"a".repeat(32)}&filter=${encodeURIComponent(filter)}`,
+      `&type=SPAN&traceId=${trace}&filter=${encodeURIComponent(JSON.stringify([{ type: "string", column: "id", operator: "=", value: "child" }]))}`,
+    ])
+      expect(() => nativeQuery(extra)).toThrow();
+  });
+  it("does not inherit root authority to foreign children, duplicates, or unproven roots", async () => {
+    for (const rows of [[{ ...root(), id: "child" }], [root(), root()]]) {
+      vi.stubGlobal("fetch", mockFetch({ data: rows, meta: {} }));
+      const result = await reader().listObservations(query());
+      expect(result.data).toHaveLength(0);
+      expect(result.meta.cogni.partial).toBe(true);
+    }
+    vi.stubGlobal("fetch", mockFetch({ data: [root()], meta: {} }));
+    const result = await reader(false).listObservations(query());
+    expect(result.meta.cogni).toMatchObject({
+      partial: true,
+      attributionUnavailable: 1,
+    });
+  });
+  it("fails explicitly without root wiring and binds generation cursors to their own plan", async () => {
+    const missing = new HttpLangfuseReader({
+      baseUrl: "https://lf.example.com",
+      publicKey: "pk",
+      secretKey: "sk-secret",
+      operatorNodeId: NODE_ID,
+      operatorEnvironment: "candidate-a",
+      ownership: { verifyObservation: async () => true },
+    });
+    await expect(missing.listObservations(query())).rejects.toMatchObject({
+      code: "attribution_unavailable",
+      status: 503,
+    });
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        data: [{ ...observation(), environment: "candidate-a" }],
+        meta: { cursor: "next" },
+      })
+    );
+    const gen = await missing.listObservations(
+      nativeQuery("&environment=candidate-a")
+    );
+    await expect(
+      reader().listObservations({ ...query(), cursor: gen.meta.cursor ?? "" })
+    ).rejects.toMatchObject({ code: "invalid_trace_cursor", status: 400 });
+  });
+});
