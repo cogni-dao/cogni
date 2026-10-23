@@ -103,7 +103,7 @@ export class HttpLangfuseOwnershipVerifier implements LangfuseOwnershipPort {
         ? requester.request_id
         : undefined;
     // Failure callbacks often have no provider response. Correlate their independently stored
-    // gateway receipt by authenticated key, exact time bucket and the run/trace correlation.
+    // gateway receipt by authenticated key, terminal time and the run/trace correlation.
     const failureCorrelation =
       !requestId &&
       observation.level === "ERROR" &&
@@ -114,6 +114,17 @@ export class HttpLangfuseOwnershipVerifier implements LangfuseOwnershipPort {
       requester?.existing_trace_id === observation.traceId;
     if ((!requestId && !failureCorrelation) || !Number.isFinite(started))
       return false;
+    let receiptAnchor = started;
+    if (!requestId) {
+      const ended =
+        typeof observation.endTime === "string"
+          ? Date.parse(observation.endTime)
+          : Number.NaN;
+      if (!Number.isFinite(ended) || ended < started) return false;
+      // The pinned failure hook records receipt startTime at terminal datetime.now(),
+      // whereas Langfuse retains the original call start/end. Never infer an ID from its UUID.
+      receiptAnchor = ended;
+    }
     const url = new URL(`${this.baseUrl}/spend/logs/v2`);
     if (requestId) url.searchParams.set("request_id", requestId);
     else {
@@ -121,8 +132,8 @@ export class HttpLangfuseOwnershipVerifier implements LangfuseOwnershipPort {
       url.searchParams.set("status_filter", "failure");
     }
     // LiteLLM 1.80.8 only accepts UTC 'YYYY-MM-DD HH:MM:SS', not ISO timestamps.
-    url.searchParams.set("start_date", spendDate(started - 2000));
-    url.searchParams.set("end_date", spendDate(started + 3000));
+    url.searchParams.set("start_date", spendDate(receiptAnchor - 2000));
+    url.searchParams.set("end_date", spendDate(receiptAnchor + 3000));
     url.searchParams.set("page", "1");
     url.searchParams.set("page_size", "2");
 
@@ -152,25 +163,33 @@ export class HttpLangfuseOwnershipVerifier implements LangfuseOwnershipPort {
       const parsed = ReceiptPageSchema.safeParse(decoded);
       if (!parsed.success)
         throw new LangfuseReadError("observability_invalid_response", 502);
-      if (parsed.data.total !== 1 || parsed.data.data.length !== 1)
+      if (
+        requestId
+          ? parsed.data.total !== 1 || parsed.data.data.length !== 1
+          : parsed.data.total !== parsed.data.data.length
+      )
         return false;
-      const receipt = parsed.data.data[0];
-      if (!receipt) return false;
-      const receiptMetadata = objectValue(receipt.metadata);
-      const receiptSpend = objectValue(receiptMetadata?.spend_logs_metadata);
-      const receiptStart = Date.parse(receipt.startTime);
-      return (
-        (requestId
-          ? receipt.request_id === requestId
-          : receiptSpend?.run_id === runId &&
-            receiptSpend?.node_id === nodeId) &&
-        receipt.api_key === hash.data &&
-        Number.isFinite(receiptStart) &&
-        Math.abs(receiptStart - started) < 2000 &&
-        (operator
-          ? receiptMetadata?.user_api_key_alias == null
-          : receiptMetadata?.user_api_key_alias === alias)
-      );
+      // Fallback requires the complete cap-two bucket before choosing a uniquely qualified run.
+      // Another run does not grant authority or make one exact match ambiguous.
+      const matches = parsed.data.data.filter((receipt) => {
+        const receiptMetadata = objectValue(receipt.metadata);
+        const receiptSpend = objectValue(receiptMetadata?.spend_logs_metadata);
+        const receiptStart = Date.parse(receipt.startTime);
+        return (
+          (requestId
+            ? receipt.request_id === requestId
+            : receiptMetadata?.status === "failure" &&
+              receiptSpend?.run_id === runId &&
+              receiptSpend?.node_id === nodeId) &&
+          receipt.api_key === hash.data &&
+          Number.isFinite(receiptStart) &&
+          Math.abs(receiptStart - receiptAnchor) < 2000 &&
+          (operator
+            ? receiptMetadata?.user_api_key_alias == null
+            : receiptMetadata?.user_api_key_alias === alias)
+        );
+      });
+      return matches.length === 1;
     } catch (error) {
       // Fail closed without conflating a failed dependency with valid, unmatched ownership evidence.
       throw safeDependencyFailure(error, signal);
