@@ -114,6 +114,16 @@ export {
   type MetricResolutionStrategy,
   MetricResolutionStrategySchema,
 } from "./domain/goal-loop.js";
+// Governing guidance index (GOVERNING_SET_DEFINED_ONCE) — read via KnowledgeStorePort.listGoverningIndex
+export {
+  GOVERNING_ENTRY_TYPES,
+  type GoverningCandidateEdge,
+  type GoverningCandidateRow,
+  type GoverningEntryType,
+  type GoverningIndexRow,
+  isGoverningEntryType,
+  selectGoverningIndex,
+} from "./domain/governing.js";
 // Knowledge-graph view model (shared assembly, no N+1)
 export {
   buildKnowledgeGraph,

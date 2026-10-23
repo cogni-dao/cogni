@@ -1,0 +1,315 @@
+{
+  "$comment": "Gold set for the guidance-routing eval (guidance-routing-design): work-item ids and the governing hub entries that govern each, with each label entry type as merged on the operator hub at build 545c4a45 (2026-10-22). 18 tasks, 55 labels: rule 19, skill 15, guide 12, reference 6, design 2, decision 1. Includes the design reviewer additions (publish-shared-runtime-core and adopt-node-package-release on task.5240, retire-markdown-sources on task.5236). No work-item text is committed: run.ts fetches each title and the first 300 summary characters at run time. Change only with a reasoned commit, and prefer an independent (non-Claude or human) relabel.",
+  "tasks": [
+    {
+      "id": "bug.5287",
+      "labels": [
+        {
+          "id": "akash-adopt-live-lease",
+          "entryType": "rule"
+        },
+        {
+          "id": "receipt-is-not-liveness",
+          "entryType": "rule"
+        },
+        {
+          "id": "promote-green-not-proof",
+          "entryType": "rule"
+        },
+        {
+          "id": "akash-fleet-deploy-deltas",
+          "entryType": "guide"
+        }
+      ]
+    },
+    {
+      "id": "bug.5394",
+      "labels": [
+        {
+          "id": "database-expert",
+          "entryType": "skill"
+        },
+        {
+          "id": "postgres-crash-observability",
+          "entryType": "guide"
+        },
+        {
+          "id": "monitoring-expert",
+          "entryType": "skill"
+        },
+        {
+          "id": "noisy-neighbor-database-architecture",
+          "entryType": "design"
+        }
+      ]
+    },
+    {
+      "id": "story.5107",
+      "labels": [
+        {
+          "id": "finances-expert",
+          "entryType": "skill"
+        },
+        {
+          "id": "fund-cogni-vendors",
+          "entryType": "guide"
+        },
+        {
+          "id": "money-plane-registry",
+          "entryType": "reference"
+        }
+      ]
+    },
+    {
+      "id": "bug.5482",
+      "labels": [
+        {
+          "id": "node-fork-actions-reactivation",
+          "entryType": "guide"
+        }
+      ]
+    },
+    {
+      "id": "bug.5478",
+      "labels": [
+        {
+          "id": "node-reference-resolution",
+          "entryType": "rule"
+        }
+      ]
+    },
+    {
+      "id": "bug.5413",
+      "labels": [
+        {
+          "id": "database-expert",
+          "entryType": "skill"
+        },
+        {
+          "id": "check-reads-not-record",
+          "entryType": "rule"
+        }
+      ]
+    },
+    {
+      "id": "task.5240",
+      "labels": [
+        {
+          "id": "node-temporal-substrate",
+          "entryType": "skill"
+        },
+        {
+          "id": "node-sync-prs",
+          "entryType": "skill"
+        },
+        {
+          "id": "fleet-reliability-substrate-matrix",
+          "entryType": "rule"
+        },
+        {
+          "id": "publish-shared-runtime-core",
+          "entryType": "reference"
+        },
+        {
+          "id": "adopt-node-package-release",
+          "entryType": "guide"
+        }
+      ]
+    },
+    {
+      "id": "bug.5422",
+      "labels": [
+        {
+          "id": "share-node-ci-workflow",
+          "entryType": "guide"
+        },
+        {
+          "id": "node-test-contract",
+          "entryType": "skill"
+        }
+      ]
+    },
+    {
+      "id": "task.5236",
+      "labels": [
+        {
+          "id": "migrate-skill-to-hub",
+          "entryType": "guide"
+        },
+        {
+          "id": "migrate-markdown-to-hub",
+          "entryType": "guide"
+        },
+        {
+          "id": "md-to-hub-design",
+          "entryType": "rule"
+        },
+        {
+          "id": "node-temporal-substrate",
+          "entryType": "skill"
+        },
+        {
+          "id": "retire-markdown-sources",
+          "entryType": "guide"
+        }
+      ]
+    },
+    {
+      "id": "story.5099",
+      "labels": [
+        {
+          "id": "dao-goals-design",
+          "entryType": "rule"
+        },
+        {
+          "id": "mission-loop-expert",
+          "entryType": "skill"
+        },
+        {
+          "id": "node-admin-boundary",
+          "entryType": "reference"
+        }
+      ]
+    },
+    {
+      "id": "task.5299",
+      "labels": [
+        {
+          "id": "mission-loop-expert",
+          "entryType": "skill"
+        },
+        {
+          "id": "mission-loop-roadmap",
+          "entryType": "rule"
+        },
+        {
+          "id": "dao-goals-design",
+          "entryType": "rule"
+        }
+      ]
+    },
+    {
+      "id": "bug.5397",
+      "labels": [
+        {
+          "id": "cicd-e2e-required-sequence",
+          "entryType": "guide"
+        },
+        {
+          "id": "validate-candidate",
+          "entryType": "skill"
+        },
+        {
+          "id": "node-lane-substrate-ready",
+          "entryType": "rule"
+        }
+      ]
+    },
+    {
+      "id": "task.5164",
+      "labels": [
+        {
+          "id": "node-data-support-plane",
+          "entryType": "rule"
+        },
+        {
+          "id": "identity-broker-subject-provenance",
+          "entryType": "rule"
+        },
+        {
+          "id": "node-admin-boundary",
+          "entryType": "reference"
+        }
+      ]
+    },
+    {
+      "id": "bug.5117",
+      "labels": [
+        {
+          "id": "database-expert",
+          "entryType": "skill"
+        },
+        {
+          "id": "node-database-contract",
+          "entryType": "rule"
+        },
+        {
+          "id": "secrets-management",
+          "entryType": "reference"
+        }
+      ]
+    },
+    {
+      "id": "story.5110",
+      "labels": [
+        {
+          "id": "md-to-hub-design",
+          "entryType": "rule"
+        },
+        {
+          "id": "cogni-domain-taxonomy",
+          "entryType": "decision"
+        },
+        {
+          "id": "recall-owning-shelf-first",
+          "entryType": "rule"
+        },
+        {
+          "id": "cognition-expert",
+          "entryType": "skill"
+        }
+      ]
+    },
+    {
+      "id": "bug.5350",
+      "labels": [
+        {
+          "id": "cognition-expert",
+          "entryType": "skill"
+        },
+        {
+          "id": "check-reads-not-record",
+          "entryType": "rule"
+        },
+        {
+          "id": "node-test-contract",
+          "entryType": "skill"
+        }
+      ]
+    },
+    {
+      "id": "bug.5445",
+      "labels": [
+        {
+          "id": "run-outlives-socket",
+          "entryType": "rule"
+        },
+        {
+          "id": "operator-topology-direct-reads",
+          "entryType": "guide"
+        },
+        {
+          "id": "fleet-reliability-control-loop",
+          "entryType": "design"
+        }
+      ]
+    },
+    {
+      "id": "task.5143",
+      "labels": [
+        {
+          "id": "ghcr-anonymous-pull",
+          "entryType": "guide"
+        },
+        {
+          "id": "akash-actuator-first-rollout",
+          "entryType": "rule"
+        },
+        {
+          "id": "secrets-management",
+          "entryType": "reference"
+        }
+      ]
+    }
+  ]
+}

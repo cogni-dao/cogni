@@ -8,8 +8,8 @@
  *   git-synced AGENTS.md sprawl.
  * Scope: Zod schemas + types for the wire format only. Does not contain business logic, I/O, or auth.
  * Invariants:
- *   - INDEX_NOT_CONTENT: bundle carries skill/domain POINTERS (id + title +
- *     recall path) — discovery metadata only, never entry bodies or excerpts.
+ *   - INDEX_NOT_CONTENT: bundle carries governing/domain POINTERS (id + type +
+ *     domain + useWhen) — discovery metadata only, never entry bodies or excerpts.
  *     Full content stays behind the authed read routes
  *     (KNOWLEDGE_READ_REQUIRES_PRINCIPAL).
  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: `toolingInvariants` + `markdown`
@@ -22,21 +22,22 @@
 
 import { z } from "zod";
 
-export const CognitionSkillPointerSchema = z.object({
+/**
+ * One governing index row (guidance-routing-design): an entry an agent designs,
+ * builds and reviews against — skill, guide, playbook, rule, design, decision
+ * or reference — with a useWhen and no inbound `supersedes` edge. Routing
+ * metadata only, never title or body (INDEX_CARRIES_NO_CONTENT).
+ */
+export const CognitionGoverningPointerSchema = z.object({
   id: z.string(),
-  /** The entry's claim, in one line. Discovery metadata, not body. */
-  title: z.string(),
-  /**
-   * The entry's retrieval trigger — the reader's situation, from the
-   * `use_when` column. Null on entries written before the column existed, or
-   * on types that legitimately have none (hypothesis/decision/html). Renderers
-   * fall back to `title` so an un-backfilled node still shows something.
-   */
-  useWhen: z.string().nullable().optional(),
   entryType: z.string(),
   domain: z.string(),
+  /** The entry's retrieval trigger — the reader's situation (`use_when`). */
+  useWhen: z.string(),
 });
-export type CognitionSkillPointer = z.infer<typeof CognitionSkillPointerSchema>;
+export type CognitionGoverningPointer = z.infer<
+  typeof CognitionGoverningPointerSchema
+>;
 
 export const CognitionDomainPointerSchema = z.object({
   domain: z.string(),
@@ -59,8 +60,8 @@ export const CognitionBundleResponseSchema = z.object({
   generatedAt: z.string(),
   /** Irreducible session contract — code-owned, survives an empty/down hub. */
   toolingInvariants: z.array(z.string()),
-  /** Live from the hub: cognition entries (skill/guide/playbook), index only. */
-  skillsIndex: z.array(CognitionSkillPointerSchema),
+  /** Live from the hub: the governing index (`KnowledgeStorePort.listGoverningIndex`), index only. */
+  governingIndex: z.array(CognitionGoverningPointerSchema),
   /** Live from the hub: registered domains the agent should RECALL first. */
   domainPointers: z.array(CognitionDomainPointerSchema),
   /** Recall + contribute pointers (paths, not bodies). */

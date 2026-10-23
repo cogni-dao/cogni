@@ -1,0 +1,8 @@
+{
+  "$comment": "The guidance-routing-design decision table. Every score is the mean of at least minRuns selector runs. Row 0 (whole bundle > bundleBudgetBytes) takes precedence: A is then not evaluated and only the T rows apply. A rows: recall@5 >= A.recallAt5 and rules@5 >= A.rulesAt5 ships A (row 1); recall@5 >= A.recallAt5 with rules@5 below ships A plus a rules patch pass (row 2); recall@5 in [A.patchFloorAt5, A.recallAt5) ships A plus a patch pass (row 3); below A.patchFloorAt5 falls to T (row 4). T rows use T plus the method shelf at recall@10: >= T.recallAt10 ships T (row 5); in [T.patchFloorAt10, T.recallAt10) ships T plus a patch pass (row 6); below falls to BM25 top-50 (row 7). Change with a reasoned commit (GOLDEN_UPDATE_DISCIPLINE).",
+  "minRuns": 2,
+  "maxPicks": 10,
+  "bundleBudgetBytes": 65536,
+  "A": { "recallAt5": 0.8, "rulesAt5": 0.75, "patchFloorAt5": 0.7 },
+  "T": { "recallAt10": 0.85, "patchFloorAt10": 0.8 }
+}

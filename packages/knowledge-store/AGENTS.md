@@ -44,6 +44,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 **Root barrel** (`@cogni/knowledge-store`):
 
 - Types: `KnowledgeWriteSession`, `KnowledgeStorePort`, `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
+- Governing index: `GOVERNING_ENTRY_TYPES`, `isGoverningEntryType`, `selectGoverningIndex`, `GoverningIndexRow` — the one definition of governing guidance, read through `KnowledgeStorePort.listGoverningIndex` (guidance-routing-design)
 - Schemas: `KnowledgeSchema`, `NewKnowledgeSchema`, `DoltCommitSchema`, `DoltDiffEntrySchema`, `SourceTypeSchema`
 
 **Contribution schemas** (`@cogni/knowledge-store/contribution-schemas`):
@@ -88,3 +89,5 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 - Generic schema lives in `packages/knowledge-base`; node schema packages re-export it and may add companion tables.
 - `listKnowledge(domain, { q })` matches `useWhen` only. Full-text claim search remains `searchKnowledge`; the HTTP routing projection is `/api/v1/knowledge/index`.
 - `core__knowledge_search` / `core__knowledge_read` / `core__knowledge_write` BoundTools shipped in `@cogni/ai-tools`; brain graph uses them via tool runtime.
+- `listGoverningIndex()` reads every governing row across domains in two unpaged queries (governing-type rows, `supersedes` edges); the cognition bundle and `core__knowledge_index` both render it.
+- `evals/guidance-routing/` is the external-lane routing eval (`pnpm eval:guidance-routing`); it is outside the build, typecheck and PR CI. Its scorer is unit-tested in `tests/evals/`.

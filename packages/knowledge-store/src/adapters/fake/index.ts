@@ -17,6 +17,10 @@ import {
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
 import { type ActiveGoal, selectActiveGoals } from "../../domain/dao-goals.js";
+import {
+  type GoverningIndexRow,
+  selectGoverningIndex,
+} from "../../domain/governing.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
 import type {
   Citation,
@@ -184,6 +188,14 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       (a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)
     );
     return opts?.limit ? out.slice(0, opts.limit) : out;
+  }
+
+  async listGoverningIndex(): Promise<GoverningIndexRow[]> {
+    // Same selector as the Doltgres adapter (GOVERNING_SET_DEFINED_ONCE).
+    return selectGoverningIndex(
+      Array.from(this.rows.values()),
+      Array.from(this.edges.values())
+    );
   }
 
   async listActiveGoals(): Promise<ActiveGoal[]> {

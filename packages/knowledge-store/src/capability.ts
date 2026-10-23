@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/knowledge-store/capability`
- * Purpose: Factory that wraps KnowledgeStorePort as a KnowledgeCapability with auto-commit on writes.
+ * Purpose: Factory that wraps KnowledgeStorePort as a KnowledgeCapability with auto-commit on writes and the governing index read.
  * Scope: Pure mapping logic. Does not load env vars or manage lifecycle.
  * Invariants:
  *   - AUTO_COMMIT: Every write() call upserts + commits automatically.
@@ -14,6 +14,7 @@
  */
 
 import type {
+  GoverningIndexEntry,
   KnowledgeCapability,
   KnowledgeEntry,
   KnowledgeListParams,
@@ -102,6 +103,12 @@ export function createKnowledgeCapability(
     async get(id: string): Promise<KnowledgeEntry | null> {
       const result = await port.getKnowledge(id);
       return result ? toEntry(result) : null;
+    },
+
+    // ONE_SOURCE_SEPARATE_ADAPTERS: the same governing rows the session bundle
+    // renders, for core__knowledge_index. No filtering or re-ranking here.
+    async listGoverningIndex(): Promise<GoverningIndexEntry[]> {
+      return port.listGoverningIndex();
     },
 
     async write(params: KnowledgeWriteParams): Promise<KnowledgeEntry> {

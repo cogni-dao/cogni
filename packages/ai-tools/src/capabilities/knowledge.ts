@@ -99,6 +99,20 @@ export interface KnowledgeCapability {
    * unavailable.
    */
   listActiveGoals?(): Promise<readonly ActiveGoalInfo[]>;
+  /**
+   * The hub's governing guidance index (guidance-routing-design): every governing row across all
+   * domains with its use-when trigger, sorted by domain then id. Optional: a node whose store has no
+   * index reader omits it and `core__knowledge_index` reports the index unavailable.
+   */
+  listGoverningIndex?(): Promise<readonly GoverningIndexEntry[]>;
+}
+
+/** One governing index row as tools see it: routing metadata, never a body. */
+export interface GoverningIndexEntry {
+  readonly id: string;
+  readonly domain: string;
+  readonly entryType: string;
+  readonly useWhen: string;
 }
 
 /** One approved DAO goal as tools see it. */
