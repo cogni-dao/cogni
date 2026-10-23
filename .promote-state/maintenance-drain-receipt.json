@@ -1,0 +1,17 @@
+{
+  "auditedAt": "2026-10-23T19:16:45.389736+00:00",
+  "evidence": {
+    "mergedOnMain": "cogni-dao/node-template main == 821dc1955a5808f383116b07d33f41a694e193e5",
+    "task": "https://cognidao.org/work/items/task.5301"
+  },
+  "operationId": "b229066219f0883e0c32f419b96bac9bc1011ea7ef615b23d9604d56940334b0",
+  "phase": "audited",
+  "request": {
+    "env": "candidate-a",
+    "nodeId": "b927a9dd-6132-4fc9-a51e-e3cee2568e3c",
+    "sourceRepository": "cogni-dao/node-template",
+    "sourceSha": "821dc1955a5808f383116b07d33f41a694e193e5"
+  },
+  "retiredMarkerCommit": "11206621a9",
+  "version": 1
+}
