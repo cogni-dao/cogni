@@ -224,7 +224,11 @@ export function evaluate(input) {
 
 /** Pure: probe evidence → separate node-endpoint status (never part of the VM verdict). */
 export function evaluateEndpoints(probes, nowSec) {
-  if (!probes || !isFresh(probes.tsSec, nowSec, probes.ttlSec ?? TTL_SEC))
+  // Evidence without env bounds is held to production's (strictest) policy bounds.
+  const { window, ttlSec } = probes?.window
+    ? probes
+    : serveProbeBounds("production");
+  if (!probes || !isFresh(probes.tsSec, nowSec, ttlSec))
     return {
       status: "UNKNOWN",
       failing: [],
@@ -242,7 +246,7 @@ export function evaluateEndpoints(probes, nowSec) {
     failing,
     total: new Set(nodes.map((n) => n.slug)).size,
     text: failing.length
-      ? `${failing.length}/${nodes.length} failing in ${probes.window ?? "5m"} (${failing.join(", ")}) — node app/lease, not the VM: read their readyz in Loki`
+      ? `${failing.length}/${nodes.length} failing in ${window} (${failing.join(", ")}) — node app/lease, not the VM: read their readyz in Loki`
       : `${nodes.length} passing`,
   };
 }

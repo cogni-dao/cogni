@@ -338,7 +338,17 @@ describe("fleet Serve alert contract (bug.5459)", () => {
       string,
       { frequencyMs: number; evidenceWindow: string }
     >;
-    const environments = ["candidate-a", "preview", "production"];
+    // The monitored environments are the tofu environment_configs keys.
+    const configBlock =
+      /environment_configs = \{\n([\s\S]*?)\n {2}\}\n/.exec(
+        syntheticMain
+      )?.[1] ?? "";
+    const environments = [
+      ...configBlock.matchAll(/^ {4}([a-z][a-z0-9-]*) = \{/gm),
+    ]
+      .map(([, environment]) => environment as string)
+      .sort();
+    expect(environments.length).toBeGreaterThanOrEqual(3);
     expect(Object.keys(serveProbes).sort()).toEqual(environments);
     for (const environment of environments) {
       const probe = serveProbes[environment];

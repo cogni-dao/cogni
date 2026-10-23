@@ -12,6 +12,7 @@
  * @public
  */
 
+import { RELIABILITY_POLICY_V1 } from "@cogni/node-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -132,8 +133,15 @@ describe("MimirMetricsAdapter", () => {
       .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "41"] }]))
       .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "42"] }]))
       .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "43"] }]));
-    mockFetch.mockImplementation(async () =>
-      vector([{ metric: labels, value: [now, String(now)] }])
+    mockFetch.mockImplementation(async (url) =>
+      new URL(url).searchParams.get("query")?.includes("probe_success")
+        ? vector(
+            ["Frankfurt", "Ohio"].map((probe) => ({
+              metric: { probe },
+              value: [now, String(now - 30)],
+            }))
+          )
+        : vector([{ metric: labels, value: [now, String(now)] }])
     );
 
     const actions: Parameters<DatabaseContainmentPort["contain"]>[0][] = [];
@@ -316,6 +324,60 @@ describe("MimirMetricsAdapter", () => {
         tempBytesPct: null,
       },
     });
+  });
+
+  it("stamps regional readiness with the real probe sample time, never query time (bug.5527)", async () => {
+    const evaluatedAt = Date.now() / 1000;
+    const window =
+      RELIABILITY_POLICY_V1.serveProbes["candidate-a"].evidenceWindow;
+    const staleSampleAt = evaluatedAt - 1500;
+    const queries: string[] = [];
+    mockFetch.mockImplementation(async (url) => {
+      const query = new URL(url).searchParams.get("query") ?? "";
+      queries.push(query);
+      const result = query.startsWith(
+        "min by (probe) (min_over_time(probe_success"
+      )
+        ? ["Frankfurt", "Ohio"].map((probe) => ({
+            metric: { probe },
+            value: [evaluatedAt, "1"],
+          }))
+        : query.startsWith(
+              "max by (probe) (max_over_time(timestamp(probe_success"
+            )
+          ? // Ohio has no sample in the window at all: a deleted/stalled check.
+            [
+              {
+                metric: { probe: "Frankfurt" },
+                value: [evaluatedAt, String(staleSampleAt)],
+              },
+            ]
+          : [];
+      return {
+        ok: true,
+        json: async () => ({
+          status: "success",
+          data: { resultType: "vector", result },
+        }),
+      };
+    });
+    const snapshot = await adapter.queryReliabilitySnapshot({
+      environment: "candidate-a",
+      nodeSlug: "operator",
+      databaseTier: "shared",
+      budgetProfile: "shared-default-v1",
+      substrateHost: "a".repeat(32),
+    });
+    expect(queries).toContain(
+      `max by (probe) (max_over_time(timestamp(probe_success{environment="candidate-a",node_slug="operator",proof_class="serve"})[${window}:1m]))`
+    );
+    expect(snapshot.regionalReadiness).toEqual([
+      {
+        region: "Frankfurt",
+        healthy: true,
+        observedAt: new Date(staleSampleAt * 1000).toISOString(),
+      },
+    ]);
   });
 
   it("rejects fresh query evaluation timestamps over stale recording samples", async () => {
