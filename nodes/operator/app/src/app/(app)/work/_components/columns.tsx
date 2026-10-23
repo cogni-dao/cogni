@@ -21,8 +21,8 @@
 
 import type { WorkItemDto } from "@cogni/node-contracts";
 import { HeaderFilter } from "@cogni/node-ui-kit/header-filter";
-
 import { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header";
+import { rankScore } from "@cogni/work-items";
 import { createColumnHelper } from "@tanstack/react-table";
 import { StatusPill, TypeIcon } from "./work-item-icons";
 
@@ -55,6 +55,24 @@ export const columns = [
       return pa - pb;
     },
     meta: { headerTitle: "Pri" },
+  }),
+
+  // story.5111: WSJF rank from the package; unscored items always sort last.
+  col.accessor((row) => rankScore(row.scores), {
+    id: "rankScore",
+    header: ({ column }) => (
+      <DataGridColumnHeader column={column} title="Rank" />
+    ),
+    size: 65,
+    cell: (info) => {
+      const v = info.getValue();
+      if (v === undefined)
+        return <span className="text-muted-foreground">&mdash;</span>;
+      return <span className="font-mono text-xs">{v.toFixed(1)}</span>;
+    },
+    sortDescFirst: true,
+    sortUndefined: "last",
+    meta: { headerTitle: "Rank" },
   }),
 
   col.accessor("type", {
