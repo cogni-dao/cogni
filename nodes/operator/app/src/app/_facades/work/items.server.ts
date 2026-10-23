@@ -5,11 +5,9 @@
  * Module: `@app/_facades/work/items.server`
  * Purpose: Server-side facade for work item read/write operations across the markdown + Doltgres surfaces.
  * Scope: Maps content results to DTOs; does not own adapters or PostgreSQL coordination. Dolt IDs start at 5000; lower IDs use markdown.
- * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED,
- *   P0P1_IS_NODE_ADMIN (task.5286): a create or patch that sets priority 0 or 1 requires
- *   `node.administer` on this node, checked BEFORE the store write (deny →
- *   WorkItemAuthorizationError/403, outage → WorkItemAuthzUnavailableError/503). Priority 2+ and
- *   every other field are unchanged.
+ * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED.
+ *   Priority (including 0/1) carries no extra node-admin gate (task.5306); the store's own
+ *   author-scoped write authority applies unchanged.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
@@ -26,11 +24,6 @@ import type { WorkItem, WorkItemId } from "@cogni/work-items";
 import { toWorkItemId } from "@cogni/work-items";
 
 import { getContainer } from "@/bootstrap/container";
-import {
-  checkNodeAdmin,
-  isPrivilegedPriority,
-} from "@/bootstrap/node-admin-gate";
-import { getNodeId } from "@/shared/config/repoSpec.server";
 
 /**
  * Thrown when the opaque pagination cursor cannot be decoded — translated
@@ -108,42 +101,6 @@ export class WorkItemWriteOutcomeUnknownError extends Error {
       },
     };
   }
-}
-
-/**
- * Thrown when the authorization service could not decide (OpenFGA unconfigured,
- * unreachable, or erroring). FAIL CLOSED but DISTINCT from a denial: the route
- * answers 503 `authz_unavailable`, never 403.
- */
-export class WorkItemAuthzUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "WorkItemAuthzUnavailableError";
-  }
-}
-
-/**
- * P0P1_IS_NODE_ADMIN: refuse a priority-0/1 write unless the caller holds
- * `node.administer`. A no-op for any other priority (including absent).
- */
-async function assertPriorityAuthority(
-  priority: number | null | undefined,
-  userId: string
-): Promise<void> {
-  if (!isPrivilegedPriority(priority)) return;
-  const gate = await checkNodeAdmin(getContainer().authorization, {
-    userId,
-    nodeId: getNodeId(),
-  });
-  if (gate.ok) return;
-  if (gate.errorCode === "authz_unavailable") {
-    throw new WorkItemAuthzUnavailableError(
-      `priority ${priority} authorization unavailable: ${gate.reason}`
-    );
-  }
-  throw new WorkItemAuthorizationError(
-    `priority ${priority} requires node admin`
-  );
 }
 
 /**
@@ -381,7 +338,6 @@ export async function createWorkItem(
   input: ContractCreateInput,
   sessionUser: { id: string; displayName: string | null }
 ): Promise<WorkItemDto> {
-  await assertPriorityAuthority(input.priority, sessionUser.id);
   const container = getContainer();
   try {
     const created = await container.doltgresWorkItems.create(
@@ -418,7 +374,6 @@ export async function patchWorkItem(
   input: ContractPatchInput,
   sessionUser: { id: string; displayName: string | null }
 ): Promise<WorkItemDto> {
-  await assertPriorityAuthority(input.set.priority, sessionUser.id);
   const container = getContainer();
   try {
     const patched = await container.doltgresWorkItems.patch(

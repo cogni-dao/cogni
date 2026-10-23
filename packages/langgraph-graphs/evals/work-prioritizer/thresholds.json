@@ -1,6 +1,0 @@
-{
-  "$comment": "Gate = every hard + behavioral check in score.ts passes. Informational rows (level counts, PM p0 oracle overlap, harm evidence, seeded incident) are reported and never gate — an empty p0 is a correct answer. minScheduledCycles/scheduledWaitMs: the operator governance schedule is hourly (cron 0 * * * *), so after the eval cycles the runner waits at most 65 min (the next top of the hour plus run time) for >=1 successful scheduled cycle at the SHA. Multi-cycle scheduled evidence at */5 was captured at 8a9d280 (README). Change with a reasoned commit (GOLDEN_UPDATE_DISCIPLINE).",
-  "runTimeoutMs": 420000,
-  "minScheduledCycles": 1,
-  "scheduledWaitMs": 3900000
-}
