@@ -540,3 +540,28 @@ describe("aggregate pre-scrub work budget", () => {
     });
   });
 });
+
+it("retains private literal redaction context after allowlisting and raw budgeting", async () => {
+  const fingerprint = "fingerprint-literal-from-original-private-metadata";
+  const row = {
+    ...observation(),
+    input: JSON.stringify({
+      content: `Useful text ${fingerprint} remains useful`,
+    }),
+    metadata: {
+      nodeId: NODE_ID,
+      user_api_key_hash: fingerprint,
+      user_api_key_auth: "private-context-only".repeat(1000),
+    },
+  };
+  vi.stubGlobal("fetch", mockFetch({ data: [row], meta: { cursor: null } }));
+  try {
+    const result = await nativeReader().listObservations(nativeQuery());
+    expect(JSON.stringify(result)).not.toContain(fingerprint);
+    expect(JSON.stringify(result)).not.toContain("user_api_key");
+    expect(result.data[0]?.input).toContain("Useful text");
+    expect(result.meta.cogni.truncated).toBe(false);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
