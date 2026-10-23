@@ -77,11 +77,11 @@ describe("WorkItemScoresRadar", () => {
       />
     );
 
-    const links = screen.getAllByRole("link", { name: /Justification$/ });
+    const links = screen.getAllByRole("link", { name: /justification$/ });
     expect(links).toHaveLength(1);
     const link = links[0];
-    expect(link).toHaveAccessibleName("Goal value Justification");
-    expect(link).toHaveTextContent("Justification");
+    expect(link).toHaveAccessibleName("Goal value justification");
+    expect(link).toHaveTextContent("justification");
     expect(link).toHaveAttribute(
       "href",
       "https://cognidao.org/work/items/story.5111"

@@ -158,9 +158,9 @@ export function WorkItemDetail({
                 )}
               </div>
 
-              {/* Priority scores (story.5111) */}
+              {/* Evaluation (story.5111) */}
               {hasScores(item.scores) && (
-                <Field label="Priority scores">
+                <Field label="Evaluation">
                   <WorkItemScoresRadar scores={item.scores} />
                 </Field>
               )}

@@ -24,7 +24,6 @@ import type {
   ToolImplementation,
   VcsCapability,
   WebSearchCapability,
-  WorkItemCapability,
 } from "@cogni/ai-tools";
 import {
   createEdoHypothesizeImplementation,
@@ -76,6 +75,7 @@ import {
   createWorkItemQueryImplementation,
   createWorkItemTransitionImplementation,
   getCurrentTimeImplementation,
+  type WorkItemCapability,
 } from "@cogni/shared-ai-tools";
 
 /**
