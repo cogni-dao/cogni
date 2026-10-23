@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@tests/unit/lifecycle-hub-migration`
+ * Module: `@tests/scripts/lifecycle-hub-migration`
  * Purpose: Prove the one-time lifecycle codemod fails before fleet writes and restores a failed repo.
  * Scope: Temporary filesystem and real Git fixtures. Does not access the network or start an application server.
  * Invariants: FLEET_PREFLIGHT, EXACT_CONTENT, IDEMPOTENT, REPO_ROLLBACK.
