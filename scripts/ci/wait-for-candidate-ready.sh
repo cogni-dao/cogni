@@ -70,7 +70,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 for node in "${NODE_TARGETS[@]}"; do
   if should_check "$node"; then
-    poll_ready "$node" "https://$(host_for_node "$node" "$DOMAIN")"
+    node_host="$(public_host_for_target "$node" "$DOMAIN")" || exit 1
+    poll_ready "$node" "https://${node_host}"
   else
     echo "[skip] ${node} readyz — not in PROMOTED_APPS=${PROMOTED_APPS}"
   fi

@@ -62,6 +62,7 @@ PARALLEL=(
   render-caddyfile.test.sh
   reconcile-edge-caddy.test.sh
   reconcile-node-dns.test.sh
+  workload-domain.test.sh
   check-deploy-ref-ancestry.test.sh
   aggregate-decide-outcome.test.sh
   aggregate-rollup.test.sh

@@ -326,7 +326,7 @@ node_db="$(CATALOG_DIR="$catalog_dir" node_database_for_target "$node" "$DEPLOY_
 . "${SCRIPT_DIR}/lib/lane-db-residency.sh"
 CATALOG_DIR="$catalog_dir" lane_db_residency_check "$node" "$DEPLOY_ENVIRONMENT" \
   || fail "lane database residency check failed for ${node}/${DEPLOY_ENVIRONMENT}"
-node_host="$(host_for_node "$node" "$domain")"
+node_host="$(public_host_for_target "$node" "$domain")"
 node_port="$(node_port_for_target "$node")" || exit 1
 edge_key="$(printf '%s' "$node" | tr '[:lower:]-' '[:upper:]_')"
 if is_primary_host "$node"; then

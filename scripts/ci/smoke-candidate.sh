@@ -56,7 +56,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 for app in "${NODE_TARGETS[@]}"; do
   if should_check "$app"; then
-    check_livez "$app" "https://$(host_for_node "$app" "$DOMAIN")"
+    node_host="$(public_host_for_target "$app" "$DOMAIN")" || exit 1
+    check_livez "$app" "https://${node_host}"
   else
     echo "[skip] ${app} livez — not in PROMOTED_APPS=${PROMOTED_APPS}"
   fi
@@ -77,8 +78,8 @@ elif ! should_check poly || ! should_check operator; then
   echo "[skip] bug.0322 regression check — needs poly+operator promoted (PROMOTED_APPS=${PROMOTED_APPS})"
 else
   echo "[bug.0322] cross-node isolation check"
-  POLY_BASE="https://poly-${DOMAIN}"
-  OP_BASE="https://${DOMAIN}"
+  POLY_BASE="https://$(public_host_for_target poly "$DOMAIN")"
+  OP_BASE="https://$(public_host_for_target operator "$DOMAIN")"
 
   creds=$(curl -sk --max-time "$CURL_TIMEOUT" -X POST "${POLY_BASE}/api/v1/agent/register" \
     -H 'Content-Type: application/json' \

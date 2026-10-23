@@ -159,6 +159,8 @@ render_file() {
   # Precedence: DOMAIN → FORK_DOMAIN_ROOT (legacy fork fallback) → cognidao.org.
   public_domain_root="${DOMAIN:-${FORK_DOMAIN_ROOT:-cognidao.org}}"
   SLUG="$node" NODEPORT="$np" PORT="$port" PUBLIC_DOMAIN_ROOT="$public_domain_root" perl -0777 -pe '
+    s/^  - k3s-dns-request\.json\n//mg;
+    s/^  # BEGIN generated k3s DNS origin\n.*?^  # END generated k3s DNS origin\n//msg;
     s/node-template/$ENV{SLUG}/g;
     s/\b30200\b/$ENV{NODEPORT}/g;
     s/\b3200\b/$ENV{PORT}/g;
@@ -228,6 +230,12 @@ write() {
   echo "Wrote $count wizard-born node overlays (pruned $pruned stale)."
 }
 
+# Catalog-only DNS additions are checked by their own pure projection below;
+# compare the ordinary cloned template independently of this opt-in resource.
+without_dns_projection() {
+  perl -0777 -pe 's/^  - k3s-dns-request\.json\n//mg; s/^  # BEGIN generated k3s DNS origin\n.*?^  # END generated k3s DNS origin\n//msg;' "$1"
+}
+
 check() {
   local env node path stale=0 expected protected envdir d base odir f existing bf
   protected="$(protected_overlay_dirs)"
@@ -244,9 +252,9 @@ check() {
           stale=1
           continue
         fi
-        if ! diff -u "$path" <(render_file "$env" "$node" "$f") >/dev/null; then
+        if ! diff -u <(without_dns_projection "$path") <(render_file "$env" "$node" "$f") >/dev/null; then
           echo "[ERROR] $path is out of sync with the node-template overlay + catalog:" >&2
-          diff -u "$path" <(render_file "$env" "$node" "$f") >&2 || true
+          diff -u <(without_dns_projection "$path") <(render_file "$env" "$node" "$f") >&2 || true
           stale=1
         fi
       done
@@ -284,8 +292,8 @@ check() {
 }
 
 case "${1:-}" in
-  --check) check ;;
-  --write) write ;;
+  --check) check; node --experimental-strip-types "$SCRIPT_DIR/../lib/render-k3s-dns.mjs" --check ;;
+  --write) write; node --experimental-strip-types "$SCRIPT_DIR/../lib/render-k3s-dns.mjs" --write ;;
   "")
     echo "Usage: $0 [--check|--write] | $0 <env> <node> [file]" >&2
     exit 2

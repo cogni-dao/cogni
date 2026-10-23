@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-20
+- **Last reviewed:** 2026-10-23
 
 ## Purpose
 
@@ -38,6 +38,8 @@ CI/CD automation scripts and configuration documentation for multiple pipeline s
 - **Files considered API:** `scripts/*.sh`, `workflow-check.mjs`, `infra/openfga/rbac-model.json`
 
 - `lib/maintenance-fence.py check <deploy-tree>`: read-only fail-closed per-node maintenance marker and merged-source floor guard; no begin, audit, finish, or deploy mutation commands.
+
+- `assert-k3s-dns-substrate.sh` fences optional TEST DNS before deploy-branch publication using direct writer/provider/zone facts; `CONTROL_DOMAIN` preserves the operator host, and `K3S_DNS_PREFLIGHT_RECEIPT` stores public routing metadata only. Existing workload absence/unready is reported; foreign/unresolved writer fails.
 
 ## Responsibilities
 

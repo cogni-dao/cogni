@@ -337,6 +337,50 @@ infra_image_tag() {
 # `resy + test.cognidao.org` → `resy-test.cognidao.org`; for shorter domains
 # (TLD-style forks) join with `.` so `resy + example.org` → `resy.example.org`.
 # Returns the bare host (no scheme).
+# Preserve the control host's environment prefix when its workload zone is isolated.
+# Equal domains are the existing contract. A split must match the exact substrate suffix.
+k3s_workload_domain() {
+  local control="$1" workload="$2" root="$3" candidate label
+  for candidate in "$control" "$workload" "$root"; do
+    [[ -n "$candidate" && ${#candidate} -le 253 && "$candidate" != .* && "$candidate" != *. && "$candidate" != *..* && "$candidate" =~ ^[a-z0-9.-]+$ ]] || return 1
+    local -a labels=()
+    IFS='.' read -r -a labels <<< "$candidate"
+    for label in "${labels[@]}"; do
+      [[ ${#label} -le 63 && "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+    done
+  done
+  if [ "$workload" = "$control" ]; then printf '%s' "$control"; return; fi
+  if [ "$control" = "$root" ]; then printf '%s' "$workload"; return; fi
+  [[ "$control" == *."$root" ]] || { echo '[ERROR] workload domain does not match the control-root boundary' >&2; return 1; }
+  [[ "$workload" != *."$root" ]] || { echo '[ERROR] mismatched environment-qualified workload domain' >&2; return 1; }
+  # A fully env-qualified workload base already carries the same prefix.
+  local prefix="${control%.$root}"
+  if [[ "$workload" == "$prefix".* ]]; then
+    printf '%s' "$workload"
+  else
+    printf '%s.%s' "$prefix" "$workload"
+  fi
+}
+
+# Domain for one target; legacy callers without a control override remain byte-identical.
+public_domain_for_target() {
+  local node="$1" domain="$2" control="${3:-${CONTROL_DOMAIN:-}}" root="${4:-${FORK_DOMAIN_ROOT:-cognidao.org}}"
+  if [ -z "$control" ]; then printf '%s' "$domain"; return; fi
+  local projected
+  projected="$(k3s_workload_domain "$control" "$domain" "$root")" || return 1
+  if is_primary_host "$node"; then printf '%s' "$control"; return; fi
+  local lane="${DEPLOY_ENVIRONMENT:-${OVERLAY_ENV:-candidate-a}}"
+  if ! is_k3s_placed "$node" "$lane"; then printf '%s' "$domain"; return; fi
+  printf '%s' "$projected"
+}
+
+# Resolve both stages without losing a domain validation failure in nested substitution.
+public_host_for_target() {
+  local base
+  base="$(public_domain_for_target "$1" "$2")" || return 1
+  host_for_node "$1" "$base"
+}
+
 host_for_node() {
   local node="$1" domain="$2" primary
   primary="${_image_tags_primary_cache[$node]:-false}"
@@ -618,4 +662,28 @@ missing_image_action() {
     "") printf 'skip\n' ;;
     *) printf 'fail\n' ;;
   esac
+}
+
+# DNS writer selection precedes legacy credentials and apex lookup. Unknown intent fails.
+dns_writer_for_target() {
+  local node="$1" env="$2" value
+  value="$(yq -o=json '.k3s_dns // {}' "${_image_tags_catalog_root}/${node}.yaml")" || return 1
+  DNS_ENV="$env" DNS_NODE="$node" DNS_PRIMARY="${_image_tags_primary_cache[$node]:-false}" \
+    DNS_PROVIDER="$(deployment_provider_for_target "$node" "$env")" python3 -c '
+import json,os,sys,re
+intents=json.load(sys.stdin); env=os.environ["DNS_ENV"]
+assert isinstance(intents,dict) and set(intents)<=set(["candidate-a","preview","production"]), "invalid DNS environments"
+if env not in intents: print("legacy"); sys.exit(0)
+x=intents[env]
+assert isinstance(x,dict) and set(x)==set(["mode","zoneId","target","workloadDomain"]), "invalid DNS fields"
+assert x["mode"]=="crossplane-http", "unknown DNS writer"
+assert isinstance(x["zoneId"],str) and re.fullmatch("[a-f0-9]{32}",x["zoneId"]), "invalid DNS zone"
+for key in ["target","workloadDomain"]:
+ value=x[key]
+ assert isinstance(value,str) and 0<len(value)<=253 and all(0<len(label)<=63 and re.fullmatch("[a-z0-9](?:[a-z0-9-]*[a-z0-9])?",label) for label in value.split(".")), "invalid DNS domain"
+
+assert os.environ["DNS_PRIMARY"]!="true" and os.environ["DNS_NODE"] not in ["www","operator"], "protected DNS target"
+assert os.environ["DNS_PROVIDER"]=="k3s", "DNS placement conflict"
+print("crossplane-http")
+' <<<"$value"
 }
