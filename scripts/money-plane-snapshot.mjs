@@ -5,7 +5,7 @@
 /**
  * Module: `@scripts/money-plane-snapshot`
  * Purpose: One read of every chain-readable Cogni money plane — Akash Console credit (grant) + escrow + burn → runway days, and Base USDC/ETH wallets — graded against a runway policy.
- * Scope: Read-only public Akash LCD + Base RPC reads. Does not hold a credential, move funds, or file work items.
+ * Scope: Read-only public Akash LCD + Base RPC reads; Cherry and OpenRouter balances only when CHERRY_AUTH_TOKEN / OPENROUTER_API_KEY are in env. Does not store a credential, move funds, or file work items.
  * Invariants: RUNWAY_IS_GRANT_PLUS_ESCROW (Console credit lives on-chain as the DepositAuthorization spend_limit, not the owner bank balance) ; MISSING_IS_UNKNOWN (an unreadable plane is never GREEN)
  * Side-effects: IO
  * Notes: Vendor planes that need a secret (OpenRouter, Cherry, Grafana Cloud, ...) are listed by the finances-expert skill, not read here.
@@ -154,6 +154,40 @@ export function grade(runwayDays) {
   return "GREEN";
 }
 
+/** Cherry team credit; the vendor serves its own €/h burn and runway hours. */
+export async function cherryPlane(token) {
+  const teams = await getJson("https://api.cherryservers.com/v1/teams", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const c = teams[0].credit;
+  const perHour = c.resources.pricing.price;
+  const runwayDays = c.resources.remaining.time / 24;
+  return {
+    plane: "cherry:team",
+    account: String(teams[0].id),
+    balance: c.account.remaining,
+    currency: c.account.currency,
+    burnPerDay: perHour * 24,
+    runwayDays,
+    grade: grade(runwayDays),
+  };
+}
+
+/** OpenRouter account-wide credit; burn needs a management key, so runway stays UNKNOWN. */
+export async function openRouterPlane(key) {
+  const { data } = await getJson("https://openrouter.ai/api/v1/credits", {
+    headers: { Authorization: `Bearer ${key}` },
+  });
+  return {
+    plane: "openrouter:account",
+    balance: data.total_credits - data.total_usage,
+    currency: "USD",
+    burnPerDay: null,
+    runwayDays: null,
+    grade: "UNKNOWN",
+  };
+}
+
 async function settle(plane, fn) {
   try {
     return await fn();
@@ -168,6 +202,16 @@ async function main() {
   const rows = await Promise.all([
     ...Object.entries(AKASH_ACCOUNTS).map(([env, owner]) =>
       settle(`akash:${env}`, () => akashPlane(env, owner, bpd))
+    ),
+    settle("cherry:team", () =>
+      process.env.CHERRY_AUTH_TOKEN
+        ? cherryPlane(process.env.CHERRY_AUTH_TOKEN)
+        : Promise.reject(new Error("set CHERRY_AUTH_TOKEN to read"))
+    ),
+    settle("openrouter:account", () =>
+      process.env.OPENROUTER_API_KEY
+        ? openRouterPlane(process.env.OPENROUTER_API_KEY)
+        : Promise.reject(new Error("set OPENROUTER_API_KEY to read"))
     ),
     ...Object.entries(baseWallets()).map(([name, addr]) =>
       settle(`base:${name}`, () =>
@@ -198,6 +242,10 @@ async function main() {
       else if (r.plane.startsWith("akash"))
         console.log(
           `${r.grade.padEnd(8)} ${r.plane.padEnd(24)} credit ${f(r.consoleCreditAct)} ACT + escrow ${f(r.escrowAct)} ACT / burn ${f(r.burnActPerDay, 3)} ACT/d (${r.activeLeases} leases) = ${f(r.runwayDays, 1)} days`
+        );
+      else if (r.currency)
+        console.log(
+          `${r.grade.padEnd(8)} ${r.plane.padEnd(24)} ${f(r.balance)} ${r.currency} / burn ${f(r.burnPerDay, 3)} ${r.currency}/d = ${f(r.runwayDays, 1)} days`
         );
       else
         console.log(
