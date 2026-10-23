@@ -35,27 +35,25 @@ describe("mergeTail", () => {
     expect(merged.newLines).toEqual(["tick"]);
   });
 
-  it("finds the shipped tail inside a window longer than the retained tail (bug.5516)", () => {
-    const lines = (from: number, to: number): string[] =>
-      Array.from({ length: to - from }, (_, i) => `line ${from + i}`);
-    // Poll 1: a 6-line window, but only 3 lines are retained (maxTail < window size).
-    const first = mergeTail([], lines(0, 6), 3);
-    expect(first.nextTail).toEqual(lines(3, 6));
-    // Poll 2: one line was written; the provider window slid by one. The retained tail
-    // ends mid-window, never at its head — only `line 6` is new.
-    const second = mergeTail(first.nextTail, lines(1, 7), 3);
-    expect(second.newLines).toEqual(["line 6"]);
-    expect(second.nextTail).toEqual(lines(4, 7));
-    // Poll 3: nothing new written — nothing re-shipped.
-    const third = mergeTail(second.nextTail, lines(1, 7), 3);
-    expect(third.newLines).toEqual([]);
+  it("ships a restarted container's whole window, including a novel first line", () => {
+    const merged = mergeTail(
+      ["boot", "ready", "crash"],
+      ["OOM: heap limit", "boot", "ready", "crash"],
+      500
+    );
+    expect(merged.newLines).toEqual([
+      "OOM: heap limit",
+      "boot",
+      "ready",
+      "crash",
+    ]);
   });
 
-  it("prefers a full-tail match over a spurious short head overlap", () => {
-    // `x` at the window head equals the tail's last line, but the whole tail [a,b,x]
-    // appears later in the window — that alignment is the shipped position.
-    const merged = mergeTail(["a", "b", "x"], ["x", "a", "b", "x", "n"], 10);
-    expect(merged.newLines).toEqual(["n"]);
+  it("ships only the unseen remainder when the tail covers the window head", () => {
+    const window = Array.from({ length: 250 }, (_, i) => `line ${i}`);
+    expect(mergeTail(window.slice(0, 200), window, 500).newLines).toEqual(
+      window.slice(200)
+    );
   });
 
   it("bounds the retained tail", () => {

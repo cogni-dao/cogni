@@ -183,7 +183,10 @@ export class LeaseLogPump {
   constructor(private readonly deps: LeaseLogPumpDeps) {
     this.now = deps.now ?? (() => new Date());
     this.tailLines = deps.tailLines ?? 500;
-    this.maxTail = deps.maxTail ?? 200;
+    // The retained tail must cover a full polled window: prefix-anchored tail-merge only
+    // finds the shipped overlap when the tail is at least as long as the window, otherwise
+    // every poll past maxTail lines re-ships the whole window (bug.5516).
+    this.maxTail = Math.max(deps.maxTail ?? this.tailLines, this.tailLines);
     this.maxPushLines = Math.max(1, deps.maxPushLines ?? 1000);
     this.maxPushBytes = Math.max(1, deps.maxPushBytes ?? 1_000_000);
     this.pushConcurrency = Math.max(1, deps.pushConcurrency ?? 4);
