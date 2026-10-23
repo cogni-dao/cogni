@@ -3,14 +3,10 @@
 
 /**
  * Module: `@ports/langfuse-reader`
- * Purpose: Port for listing a single node's Langfuse AI traces on a dev's behalf. The operator pod
- *   holds the Langfuse key (it creates the traces); the dev never does. Used only by the observability
- *   trace-read proxy route after the per-node RBAC check, pinned server-side to `tags=<nodeId>`.
- * Scope: Interface + row type only. The HTTP adapter lives in adapters/server; wiring in bootstrap.
- * Invariants:
- *   - READ_ONLY (Langfuse public GET /traces only)
- *   - KEY_NEVER_LOGGED (the adapter must not log the secret key)
- *   - NODE_PIN_IS_FORCED (the `tags=<nodeId>` filter is set by the route, not the caller)
+ * Purpose: Node-scoped native Langfuse observation reads and compatibility summaries.
+ * Scope: Interfaces only; backend ownership verification is an independent read port.
+ * Invariants: Native rows need trusted per-observation evidence, never names/tags alone;
+ *   shared backend credentials remain server-side and paging is bound to node/lane/query.
  * Side-effects: none (interface)
  * Links: src/adapters/server/observability/langfuse-reader.adapter.ts, src/bootstrap/observability.factory.ts, docs/spec/substrate-access-grant.md
  * @public
@@ -36,7 +32,53 @@ export interface LangfuseTraceQuery {
   readonly environment?: string;
 }
 
+/** Native read boundary. Records are validated against the HTTP contract before delivery. */
+export interface LangfuseObservationQuery {
+  readonly nodeId: string;
+  readonly environment: "candidate-a" | "preview" | "production";
+  readonly limit: number;
+  readonly fields: string;
+  readonly filters: readonly {
+    readonly type: "string";
+    readonly column: string;
+    readonly operator: "=";
+    readonly value: string;
+  }[];
+  readonly fromStartTime?: string;
+  readonly toStartTime?: string;
+  readonly cursor?: string;
+}
+export interface LangfuseObservationPage {
+  readonly data: readonly Record<string, unknown>[];
+  readonly meta: {
+    readonly cursor: string | null;
+    readonly cogni: {
+      readonly contractVersion: "langfuse-observations-v2.1";
+      readonly nodeId: string;
+      readonly logicalEnvironment: "candidate-a" | "preview" | "production";
+      readonly fromStartTime: string;
+      readonly toStartTime: string;
+      readonly partial: boolean;
+      readonly attributionUnavailable: number;
+      readonly privacyProjected: true;
+      readonly truncated: boolean;
+    };
+  };
+}
+/** Independently trusted routing/call evidence, never caller metadata or names alone. */
+export interface LangfuseOwnershipPort {
+  verifyObservation(
+    nodeId: string,
+    environment: string,
+    observation: Readonly<Record<string, unknown>>,
+    signal: AbortSignal
+  ): Promise<boolean>;
+}
 export interface LangfuseReaderPort {
+  listObservations(
+    query: LangfuseObservationQuery
+  ): Promise<LangfuseObservationPage>;
+
   /**
    * List this node's traces (newest-first), pinned to `tags=<nodeId>`.
    * Throws on transport/HTTP error.

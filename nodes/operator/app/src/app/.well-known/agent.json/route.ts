@@ -27,6 +27,7 @@ import {
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { LangfuseObservationQuerySchema } from "@/contracts/nodes.langfuse.observations.v1.contract";
 import {
   getNodeBrandColor,
   getNodeBrandIcon,
@@ -79,6 +80,22 @@ export async function GET(request: Request) {
     },
     registrationUrl: `${origin}/api/v1/agent/register`,
     auth: { type: "bearer", keyPrefix: "cogni_ag_sk_v1_" },
+    traceObservability: {
+      contractVersion: "langfuse-observations-v2.1",
+      querySchema: z.toJSONSchema(LangfuseObservationQuerySchema),
+      auth: "Cogni Bearer; node.flight developer permission",
+      nodeReference: "node UUID or slug",
+      operations: ["GET /api/public/v2/observations"],
+      defaults: {
+        environment: "production",
+        limit: 50,
+        maxLimit: 100,
+        maxWindowHours: 24,
+      },
+      result: "Native Langfuse data/meta; scope and partiality in meta.cogni",
+      privacy:
+        "Allowlisted metadata; scrubbed bounded IO. Shared backend credentials stay server-side.",
+    },
     // Fleet identity (task.5024): public keys nodes use to verify operator-signed
     // identity attestations. Nodes start the round trip at `/identity/attest`, which
     // authenticates a GitHub account through this environment's OAuth client — no
@@ -94,6 +111,7 @@ export async function GET(request: Request) {
       workItemPr: `${origin}/api/v1/work/items/{id}/pr`,
       workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
       runs: `${origin}/api/v1/agent/runs`,
+      nodeTraceObservations: `${origin}/api/v1/nodes/{id}/observability/langfuse/api/public/v2/observations`,
       runStream: `${origin}/api/v1/agent/runs/{runId}/stream`,
       // Agent self-identity: one authed read for "am I live, who am I, when does
       // my key expire, what can I do". A 200 proves the key is live; a 401 proves

@@ -375,6 +375,44 @@ acceptance contract.
 9. **LANGFUSE_NODE_ATTRIBUTION:** Every trace carries `nodeId` (= repo-spec `node_id`) as a tag AND metadata field — the AI-trace twin of `NODE_IDENTITY_IN_OBSERVABILITY` for logs. Without it the shared Langfuse project (one project, all nodes — `LANGFUSE_*` is `shared:true`) cannot be filtered to one node, so a node dev cannot read only their traces. Wired in the shared `ObservabilityGraphExecutorDecorator` (`config.nodeId`, injected app-side — the PURE_LIBRARY package never reads repo-spec) and the operator factory (`container.nodeId`); a warn-once fires if a node leaves it unwired. ⚠️ node-template wires the same one line next (the decorator change is non-breaking — `nodeId` is optional). See [Substrate Access-Grant Plane](./substrate-access-grant.md).
 10. **LANGFUSE_DEV_READ_IS_PROXIED:** A `developer`-grant dev reads their node's traces through `GET /api/v1/nodes/{id}/observability/traces` — the operator runs the trace-list AND-ed with `nodeId=<id>` via the operator-held key. The dev NEVER holds `LANGFUSE_SECRET_KEY` (it reads the whole shared project = every node's traces — same reach correction as the Grafana proxy).
 
+### Native node observation reads
+
+The operator exposes `GET /api/v1/nodes/{slug-or-uuid}/observability/langfuse/api/public/v2/observations`
+with Cogni Bearer identity and the same `node.flight` developer check as logs. This is a bounded
+native Langfuse read contract, not a replacement Langfuse SDK base URL. The existing summary
+`GET /observability/traces` remains compatible.
+
+- Native queries support `environment`, `fromStartTime`, `toStartTime`, `limit`, `cursor`, `fields`,
+  `traceId`, `sessionId`, `name`, `type`, `level`, and a small exact-match `filter` grammar defined in
+  `nodes.langfuse.observations.v1.contract.ts`. Unknown/duplicate parameters, ownership filters and
+  widening operators are rejected. Server-owned node/lane/time filters and caller narrowing are
+  compiled into one AND array; upstream structured filters override standalone parameters.
+- Native `data`/`meta.cursor` results preserve observation IDs, parent IDs, model, usage, error and
+  I/O fields. `meta.cogni` states the verified logical environment, fixed time window, privacy
+  projection, truncation and attribution gaps. I/O remains a native string when upstream supplies
+  a string; recursively scrubbed JSON strings remain strings. Metadata uses an explicit allowlist;
+  authentication objects, key fingerprints, billing accounts, requester metadata and user identifiers
+  are withheld. The shared project key never reaches a developer.
+- Legacy generation ownership requires an independent authenticated LiteLLM spend receipt matching
+  the provider response ID, authenticated key hash, canonical UUID/lane alias and time. Failed calls
+  without provider IDs require a unique failure receipt plus matching run/trace correlation. Names,
+  tags and caller metadata alone authorize nothing. Unknown/mixed observations are withheld and
+  counted in `meta.cogni.attributionUnavailable`; continuation stays available even on an empty page.
+  This legacy verifier currently qualifies generation records, including their tool-call/result I/O;
+  native root/tool-span records require their own independently trusted ownership evidence.
+- The first query freezes a maximum 24-hour window; continuation must repeat the same query and
+  use its signed node/lane/backend/window/fields/filter-bound cursor. Default/max page sizes are
+  50/100; output is bounded to 1 MiB with explicit content-withheld/truncated flags, each upstream
+  request has a 15-second deadline, and concurrent reads are bounded to two per node/process.
+  The existing token-bucket limiter enforces 10 requests/minute plus five burst per node/process.
+  Replicas have independent limits. Upstream 429 preserves numeric Retry-After; private bodies
+  never appear in error responses or logs. Metrics, scores, mutations and arbitrary proxy paths
+  are unavailable through this operation.
+
+The executable request schema and public operation discovery are advertised by `/.well-known/agent.json`.
+Runtime credentials and the configured Langfuse/LiteLLM URLs remain substrate-owned; missing credentials
+or ownership evidence are explicit failures/gaps, never evidence that a node has no AI traffic.
+
 ### Trace Contract
 
 | Field       | Source                                                          | Requirement                                                                                       |
