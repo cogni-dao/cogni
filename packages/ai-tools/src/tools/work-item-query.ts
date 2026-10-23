@@ -61,7 +61,7 @@ export const WorkItemQueryInputSchema = z.object({
   projectId: z
     .string()
     .optional()
-    .describe("Filter by project ID (e.g., 'proj.agentic-interop')"),
+    .describe("Filter by project ID; omit unless the user names a project"),
   limit: z
     .number()
     .int()
