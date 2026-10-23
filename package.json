@@ -119,6 +119,7 @@
     "packages:build": "pnpm -r --filter \"./packages/**\" --filter \"./nodes/operator/packages/**\" --filter \"./nodes/operator/graphs/**\" build && tsc -b packages/*/tsconfig.json packages/langgraph-graphs/tsconfig.build.json nodes/operator/packages/*/tsconfig.json && pnpm packages:validate",
     "packages:build:clean": "rm -rf packages/*/dist packages/*/*.tsbuildinfo nodes/operator/packages/*/dist nodes/operator/packages/*/*.tsbuildinfo nodes/operator/graphs/dist && pnpm packages:build",
     "packages:validate": "tsx --tsconfig tsconfig.scripts.json scripts/validate-package-declarations.ts",
+    "eval:guidance-routing": "tsx packages/knowledge-store/evals/guidance-routing/run.ts",
     "packages:clean": "rm -rf packages/*/dist packages/*/*.tsbuildinfo",
     "prebuild": "pnpm validate:chain",
     "build": "COGNI_REPO_PATH=$(pwd) dotenv -e .env.local -- pnpm --filter operator build",

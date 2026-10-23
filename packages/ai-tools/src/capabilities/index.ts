@@ -48,6 +48,7 @@ export type {
 // Knowledge capability (per knowledge-data-plane spec)
 export type {
   ActiveGoalInfo,
+  GoverningIndexEntry,
   KnowledgeCapability,
   KnowledgeEntry,
   KnowledgeListParams,
