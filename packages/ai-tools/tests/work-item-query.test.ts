@@ -22,6 +22,7 @@ import {
   WORK_ITEM_QUERY_OUTCOME_MAX_CHARS,
   WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS,
   WORK_ITEM_QUERY_SCORES_MAX_AXES,
+  WORK_ITEM_QUERY_SCORES_MAX_CHARS,
   WORK_ITEM_QUERY_SUMMARY_MAX_CHARS,
   WorkItemQueryOutputSchema,
   workItemQueryContract,
@@ -113,6 +114,27 @@ describe("core__work_item_query", () => {
     );
     expect(capped.axis_0?.ev?.endsWith("…")).toBe(true);
     expect(capped.axis_1).toEqual({ v: 1 });
+  });
+
+  it("keeps one item's scores within the 1 KB blob bound by dropping later ev", async () => {
+    const scores: Record<string, { v: number; ev?: string }> = {};
+    for (let i = 0; i < WORK_ITEM_QUERY_SCORES_MAX_AXES; i++) {
+      scores[`axis_${i}`] = {
+        v: 4,
+        ev: `https://cognidao.org/${"e".repeat(WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS)}`,
+      };
+    }
+    const impl = createWorkItemQueryImplementation({
+      workItemCapability: capabilityReturning([{ ...BASE, scores }]),
+    });
+    const capped = (await impl.execute({})).items[0]?.scores ?? {};
+
+    expect(Object.keys(capped)).toHaveLength(WORK_ITEM_QUERY_SCORES_MAX_AXES);
+    expect(JSON.stringify(capped).length).toBeLessThanOrEqual(
+      WORK_ITEM_QUERY_SCORES_MAX_CHARS
+    );
+    expect(capped.axis_0?.ev).toBeDefined();
+    expect(capped.axis_11).toEqual({ v: 4 });
   });
 
   it("omits scores when the item has none", async () => {

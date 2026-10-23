@@ -129,22 +129,36 @@ function truncate(text: string | undefined, max: number): string | undefined {
 export const WORK_ITEM_QUERY_SCORES_MAX_AXES = 12;
 /** Max characters of each score `ev` returned (mirrors the package's 300-char write limit). */
 export const WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS = 300;
+/** Max serialized characters of one item's `scores` (mirrors the package's 1 KB blob limit). */
+export const WORK_ITEM_QUERY_SCORES_MAX_CHARS = 1024;
 
 type QueryScores = Record<string, { v: number; ev?: string }>;
 
 /**
  * Cap `scores` like summary/outcome (bug.5518): at most 12 axes, each `ev`
- * truncated. Writes are already bounded by the store's validator; this keeps a
- * backlog page bounded even for a row written before that validator existed.
+ * truncated, and the whole object within the package's 1 KB blob bound — once
+ * the next `ev` would cross it, later axes keep only `v`. Writes are already
+ * bounded by the store's validator; this keeps a backlog page bounded even for
+ * a row written before that validator existed.
  */
 function capScores(scores: NonNullable<WorkItemInfo["scores"]>): QueryScores {
   const out: QueryScores = {};
-  for (const [axis, score] of Object.entries(scores).slice(
-    0,
-    WORK_ITEM_QUERY_SCORES_MAX_AXES
-  )) {
+  const cost = (axis: string, entry: QueryScores[string]) =>
+    JSON.stringify(axis).length + JSON.stringify(entry).length + 1;
+  const kept = Object.entries(scores).slice(0, WORK_ITEM_QUERY_SCORES_MAX_AXES);
+  // Reserve room for every axis's bare `{v}` first; `ev` spends what is left, in order.
+  let used =
+    2 +
+    kept.reduce((sum, [axis, score]) => sum + cost(axis, { v: score.v }), 0);
+  for (const [axis, score] of kept) {
+    const bare = { v: score.v };
     const ev = truncate(score.ev, WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS);
-    out[axis] = { v: score.v, ...(ev !== undefined && { ev }) };
+    const extra =
+      ev === undefined ? 0 : cost(axis, { v: score.v, ev }) - cost(axis, bare);
+    if (ev !== undefined && used + extra <= WORK_ITEM_QUERY_SCORES_MAX_CHARS) {
+      out[axis] = { v: score.v, ev };
+      used += extra;
+    } else out[axis] = bare;
   }
   return out;
 }

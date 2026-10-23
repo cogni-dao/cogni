@@ -50,6 +50,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.3/cogni-dao-work-items-0.2.3.tgz",
     "@langchain/langgraph-cli": "^1.1.11",
     "tsup": "^8.5.1",
     "typescript": "^5"

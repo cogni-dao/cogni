@@ -2,6 +2,10 @@
 
 **What it measures.** Whether the free model, given the mission-loop agent's own scoring lines (`WORK_ITEM_SCORES_PROMPT_LINES` in `src/graphs/work-prioritizer/prompts.ts`, the same constant the system prompt embeds), scores five work items close to a hand-scored gold on the six do-it-now axes: goal, time, unblocks, ease, confidence, agent. The design is the hub entry [`work-item-scores-design`](https://cognidao.org/knowledge/work-item-scores-design) (story.5111 step 6a). It grades the prompt + model, not a black-box graph cycle: it never patches a work item.
 
+**Informational.** The verdict never fails a build or a PR: PASS and FAIL both exit 0 (`gating: false`). Post the candidate scorecard in /validate-candidate as the 6a evidence.
+
+**How it differs from the agent.** On the candidate route the model runs under the PR-review graph's system prompt (`PR_REVIEW_SYSTEM_PROMPT`, "You are a code review evaluator"), not the mission-loop system prompt, and with no tools. So the eval grades the two scoring lines plus the model on fetched goal and item text, not the agent's full context, and the store-valid row mostly measures whether the model invents allow-listed URLs.
+
 **How to run.** It is not part of PR CI: it needs a live node, API keys, and real model calls. It is excluded from the package build and typecheck; only the grader's unit test (`tests/evals/work-prioritizer-scores.score.test.ts`) runs in vitest.
 
 ```bash

@@ -189,6 +189,24 @@ describe("core__work_item_transition patch", () => {
     expect(out.message).toContain("scores");
   });
 
+  it("sends no priority field on a scores-only patch (p0/p1 priority stays a proposal)", async () => {
+    const cap = capability(async () => PATCHED);
+    const tool = createWorkItemTransitionImplementation({
+      workItemCapability: cap,
+    });
+
+    await tool.execute({
+      action: "patch",
+      id: "task.5001",
+      scores: { goal: { v: 3 }, agent: { v: 2 } },
+      expectedRevision: 8,
+    });
+
+    const call = vi.mocked(cap.patch).mock.calls[0]?.[0];
+    expect(call?.set).not.toHaveProperty("priority");
+    expect(Object.keys(call?.set ?? {})).toEqual(["scores"]);
+  });
+
   it("forwards scores: null so the store clears them", async () => {
     const cap = capability(async () => PATCHED);
     const tool = createWorkItemTransitionImplementation({

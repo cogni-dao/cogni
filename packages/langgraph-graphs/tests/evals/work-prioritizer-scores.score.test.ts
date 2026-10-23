@@ -174,5 +174,13 @@ describe("work-prioritizer scores eval grader", () => {
     for (const axis of AXES)
       expect(WORK_ITEM_SCORES_PROMPT_LINES).toContain(axis);
     expect(WORK_ITEM_SCORES_PROMPT_LINES.split("\n")).toHaveLength(2);
+    // Evidence must be read this run, never the scored item itself; scores-only patches carry no priority.
+    expect(WORK_ITEM_SCORES_PROMPT_LINES).toContain("you read this run");
+    expect(WORK_ITEM_SCORES_PROMPT_LINES).toContain(
+      "never the scored item's own page"
+    );
+    expect(WORK_ITEM_SCORES_PROMPT_LINES).toContain(
+      "a scores-only patch sends no priority"
+    );
   });
 });

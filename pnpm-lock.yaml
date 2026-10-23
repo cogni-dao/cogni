@@ -1052,6 +1052,9 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@cogni/work-items':
+        specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.3/cogni-dao-work-items-0.2.3.tgz
+        version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.3/cogni-dao-work-items-0.2.3.tgz'
       '@langchain/langgraph-cli':
         specifier: ^1.1.11
         version: 1.1.11(syjaod45o76bmzpqdogr73tcam)
