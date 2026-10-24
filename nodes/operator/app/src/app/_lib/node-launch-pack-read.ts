@@ -4,8 +4,9 @@
 /**
  * Module: `@app/_lib/node-launch-pack-read`
  * Purpose: Share authenticated owner-scoped input assembly across launch-pack versions.
- * Scope: Delivery composition only; versioned output remains in each route.
+ * Scope: Delivery composition and configured public-origin resolution; versioned output stays in each route.
  * Invariants: Session auth precedes input validation; owner/RLS read and JSON errors are shared.
+ *   Absolute packet URLs use configured APP_BASE_URL, never internal request or forwarded headers.
  * Side-effects: IO (session, node read and correlated logs)
  * Links: owned-node-read.ts, nodes.launch-pack.v1.contract.ts, bug.5388
  * @internal
@@ -69,6 +70,15 @@ export async function readNodeLaunchPackInput(
     };
   }
   const env = serverEnv();
+  if (!env.APP_BASE_URL) {
+    return {
+      status: "error",
+      response: NextResponse.json(
+        { error: "launch pack unavailable" },
+        { status: 503 }
+      ),
+    };
+  }
   const knowledgeRemote = env.DOLTHUB_OWNER
     ? buildNodeKnowledgeRemote(node.slug, env.DOLTHUB_OWNER)
     : null;
@@ -87,7 +97,7 @@ export async function readNodeLaunchPackInput(
         ? knowledgeRemoteWebUrl(knowledgeRemote)
         : null,
       publishPrUrl: node.publishPrUrl,
-      operatorOrigin: new URL(request.url).origin,
+      operatorOrigin: new URL(env.APP_BASE_URL).origin,
     },
   };
 }

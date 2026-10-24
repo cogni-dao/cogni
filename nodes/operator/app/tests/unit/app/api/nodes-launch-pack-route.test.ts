@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/unit/app/api/nodes-launch-pack-route`
  * Purpose: Unit coverage for both versioned owner-gated launch transports.
- * Scope: Legacy/successor wire compatibility, JSON auth/input/owner parity; mocks DB IO.
+ * Scope: Versioned wire compatibility, public-origin config and JSON auth/owner parity; mocks DB IO.
  * Side-effects: none
  * Links: src/app/api/v1/nodes/[id]/launch-pack/route.ts
  * @internal
@@ -27,6 +27,7 @@ const dbState = vi.hoisted(() => ({
 }));
 
 const envState = vi.hoisted(() => ({
+  APP_BASE_URL: "https://test.cognidao.org/" as string | undefined,
   NODE_MINT_OWNER: "Cogni-DAO" as string | undefined,
   DOLTHUB_OWNER: "cogni-dao" as string | undefined,
 }));
@@ -129,6 +130,7 @@ describe.each(transports)("launch pack $version", ({
     dbState.reads = [];
     mockGetServerSessionUser.mockReset();
     mockGetServerSessionUser.mockResolvedValue({ id: "user-1" });
+    envState.APP_BASE_URL = "https://test.cognidao.org/";
     envState.NODE_MINT_OWNER = "Cogni-DAO";
     envState.DOLTHUB_OWNER = "cogni-dao";
   });
@@ -136,7 +138,14 @@ describe.each(transports)("launch pack $version", ({
   async function read(id = NODE_ID) {
     return get(
       new Request(
-        `https://test.cognidao.org/api/v1/nodes/${id}/launch-pack${suffix}`
+        `https://0.0.0.0:3000/api/v1/nodes/${id}/launch-pack${suffix}`,
+        {
+          headers: {
+            host: "untrusted.example",
+            "x-forwarded-host": "untrusted.example",
+            "x-forwarded-proto": "http",
+          },
+        }
       ),
       { params: Promise.resolve({ id }) }
     );
@@ -159,6 +168,7 @@ describe.each(transports)("launch pack $version", ({
       "https://github.com/Cogni-DAO/cogni/pull/42"
     );
     expect(body.candidateUrl).toBe("https://atlas-test.cognidao.org");
+    expect(body.operatorBaseUrl).toBe("https://test.cognidao.org");
     expect(body.launchPackUrl).toBe(
       `https://test.cognidao.org/api/v1/nodes/${NODE_ID}/launch-pack${suffix}`
     );
@@ -197,6 +207,7 @@ describe.each(transports)("launch pack $version", ({
 
   it("returns JSON401 before input or database access when unauthenticated", async () => {
     mockGetServerSessionUser.mockResolvedValue(null);
+    envState.APP_BASE_URL = undefined;
     const response = await read("");
     expect(response.status).toBe(401);
     expect(response.headers.get("content-type")).toContain("application/json");
@@ -217,6 +228,7 @@ describe.each(transports)("launch pack $version", ({
 
   it("returns JSON404 for a different owner", async () => {
     mockGetServerSessionUser.mockResolvedValue({ id: "user-2" });
+    envState.APP_BASE_URL = undefined;
     const response = await read();
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("application/json");
@@ -230,6 +242,16 @@ describe.each(transports)("launch pack $version", ({
     const response = await read();
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "not found" });
+  });
+
+  it("returns a generic JSON503 after the owner read when public origin is unconfigured", async () => {
+    envState.APP_BASE_URL = undefined;
+    const response = await read();
+    expect(response.status).toBe(503);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.json()).toEqual({ error: "launch pack unavailable" });
+    expect(dbState.reads).toHaveLength(1);
+    expect(dbState.reads[0]?.params).toContain("user-1");
   });
 
   it("retains repository-owner fallback", async () => {
