@@ -544,6 +544,8 @@ emit_deployment_event "infra_deployment.started" "in_progress" "Deploying infras
 source "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
 # shellcheck source=scripts/ci/lib/appset-paths.sh
 source "$REPO_ROOT/scripts/ci/lib/appset-paths.sh"
+# shellcheck source=scripts/setup/lib/cogni-deployment-identity.sh
+source "$REPO_ROOT/scripts/setup/lib/cogni-deployment-identity.sh"
 NODE_APP_TARGETS="${NODE_TARGETS[*]}"
 [ -n "$NODE_APP_TARGETS" ] || log_fatal "deploy-infra: no type:node targets from infra/catalog — refusing to deploy with an empty node list"
 log_info "Node-app targets (catalog-driven): ${NODE_APP_TARGETS}"
@@ -623,7 +625,7 @@ log_info "Edge routing (catalog-driven): ${EDGE_ENV_LINES}"
 # any other: a node whose catalog row places it on akash for THIS env has no
 # NodePort on this VM, and is reached at its public URL instead. Placement comes
 # from the row (deployment_provider.<env>), never a second list of nodes.
-LITELLM_NODE_HOST="${DEPLOY_ENVIRONMENT}.vm.cognidao.org"
+LITELLM_NODE_HOST="$(cogni_vm_host_for_env "$DEPLOY_ENVIRONMENT" "${FORK_DOMAIN_ROOT:-$(cogni_domain_root)}" "$(cogni_deployment_slug)")"
 LITELLM_NODE_ENDPOINTS="$(node_billing_endpoint_csv "$LITELLM_NODE_HOST" "$DEPLOY_ENVIRONMENT" "$DOMAIN")"
 log_info "LiteLLM callback routing (catalog-driven): ${LITELLM_NODE_ENDPOINTS}"
 # LiteLLM image is a type:infra catalog target — content-hash tagged + built in
