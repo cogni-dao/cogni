@@ -625,6 +625,9 @@ log_info "Edge routing (catalog-driven): ${EDGE_ENV_LINES}"
 # any other: a node whose catalog row places it on akash for THIS env has no
 # NodePort on this VM, and is reached at its public URL instead. Placement comes
 # from the row (deployment_provider.<env>), never a second list of nodes.
+# This host addresses the k3s app in the workload lane, not a dependency owned
+# by its control env. Resolving the control env here would misroute callbacks
+# from a non-production lane; Akash destinations remain public URLs below.
 LITELLM_NODE_HOST="$(cogni_vm_host_for_env "$DEPLOY_ENVIRONMENT" "${FORK_DOMAIN_ROOT:-$(cogni_domain_root)}" "$(cogni_deployment_slug)")"
 LITELLM_NODE_ENDPOINTS="$(node_billing_endpoint_csv "$LITELLM_NODE_HOST" "$DEPLOY_ENVIRONMENT" "$DOMAIN")"
 log_info "LiteLLM callback routing (catalog-driven): ${LITELLM_NODE_ENDPOINTS}"
