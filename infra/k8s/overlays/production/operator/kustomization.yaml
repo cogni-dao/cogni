@@ -149,6 +149,10 @@ patches:
                       fieldRef: { fieldPath: metadata.namespace }
                   - name: DEPLOY_ENVIRONMENT
                     value: production
+                  # Prefer the healthy RHITE placement during bug.5532/task.5352 recovery.
+                  # Soft auction preference only; keep the existing provider and country gates.
+                  - name: AKASH_PREFERRED_PROVIDERS
+                    value: "akash127x6cuk44ul3azferg8wy9fju686kcf6x2dhz7"
                   # OPTIONAL PIN — NOT THE AUTHORIZATION BOUNDARY (story.5050). While
                   # NON-EMPTY this is still a hard narrowing, and it still governs EVERY
                   # cogni-dao node in EVERY environment (NS3 routes all real nodes to this
