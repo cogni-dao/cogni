@@ -29,9 +29,10 @@
  *     failed `fetch failed` on 52/53 ticks and silenced lease logs fleet-wide).
  *   - SILENCE_IS_DETECTABLE: every newly seen stream gets one synthetic attach marker, so
  *     "no app output" and "pump never attached" are distinguishable in Loki.
- *   - DROP_ONLY_READYZ_OK: successful fast readyz access lines (./readyz-filter, the same
- *     predicate as Alloy's `drop_readyz_ok`) never ship; every other line does. Dropped lines
- *     still advance the tail, so a readyz-only window commits its cursor without a push.
+ *   - DROP_ONLY_READYZ_NOISE: readyz request-received lines and successful fast readyz
+ *     completions (./readyz-filter, the same predicates as Alloy's `drop_probe_start` readyz
+ *     arm and `drop_readyz_ok`) never ship; every other line does. Dropped lines still
+ *     advance the tail, so a readyz-only window commits its cursor without a push.
  * Side-effects: none directly (IO via injected seams)
  * Links: @ports/akash-tx.port (AkashTxLeaseLogSources), ./tail-merge, ./readyz-filter,
  *   adapters/server/observability/loki-push.adapter, bootstrap/lease-log-pump, bug.5240,
@@ -48,7 +49,7 @@ import type {
   ProviderLeaseLogReaderPort,
 } from "@/ports";
 
-import { isReadyzOkLine } from "./readyz-filter";
+import { isReadyzNoiseLine } from "./readyz-filter";
 import { mergeTail, serviceForLogName } from "./tail-merge";
 
 /** Structural pino subset (mirrors AkashTxLogger; features never import pino). */
@@ -107,7 +108,7 @@ export interface LeaseLogPumpTickReport {
   /** Lines of the committed streams only. */
   readonly pushedLines: number;
   readonly skippedSources: number;
-  /** New lines withheld as successful readyz probes (DROP_ONLY_READYZ_OK). */
+  /** New lines withheld as readyz probe noise (DROP_ONLY_READYZ_NOISE). */
   readonly droppedLines: number;
   /** True when at least one stream shipped this cycle. */
   readonly pushed: boolean;
@@ -273,7 +274,7 @@ export class LeaseLogPump {
     return report;
   }
 
-  /** Queue each emitter's unshipped lines; returns the count dropped as readyz-ok. */
+  /** Queue each emitter's unshipped lines; returns the count dropped as readyz noise. */
   private collect(
     source: AkashTxLeaseLogSource,
     lines: readonly ProviderLeaseLogLine[],
@@ -301,7 +302,9 @@ export class LeaseLogPump {
       this.cursors.set(key, cursor);
       // Merge on the FULL window so tail overlap still anchors on dropped lines; filter after.
       const merged = mergeTail(cursor.tail, window, this.maxTail);
-      const shipLines = merged.newLines.filter((line) => !isReadyzOkLine(line));
+      const shipLines = merged.newLines.filter(
+        (line) => !isReadyzNoiseLine(line)
+      );
       dropped += merged.newLines.length - shipLines.length;
       const attachLine = cursor.attached
         ? undefined

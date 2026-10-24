@@ -355,6 +355,57 @@ describe("LeaseLogPump.tick", () => {
     expect(report).toMatchObject({ pushedLines: 7, droppedLines: 2 });
   });
 
+  it("drops readyz request-received lines like Alloy drop_probe_start, nothing wider (task.5344)", async () => {
+    const line = (fields: Record<string, unknown>): string =>
+      JSON.stringify({ level: 30, ...fields });
+    const readyzReceived = line({
+      route: "meta.readyz",
+      msg: "request received",
+    });
+    const readyzOk = line({
+      route: "meta.readyz",
+      msg: "request complete",
+      status: 200,
+      durationMs: 2,
+    });
+    const metricsReceived = line({
+      route: "meta.metrics",
+      msg: "request received",
+    });
+    const appReceived = line({
+      route: "work.items.list",
+      msg: "request received",
+    });
+    const readyzOtherMsg = line({
+      route: "meta.readyz",
+      msg: "readiness check failed: internal error",
+    });
+    const readyzNoMsg = line({ route: "meta.readyz" });
+    const { pump, pushes } = harness({
+      sources: async () => snapshot([POLY_SOURCE]),
+      windows: async () =>
+        [
+          readyzReceived,
+          readyzOk,
+          metricsReceived,
+          appReceived,
+          readyzReceived,
+          readyzOtherMsg,
+          readyzNoMsg,
+        ].map((message) => ({ name: "app-abc12-x", message })),
+    });
+
+    const report = await pump.tick();
+    expect(shippedLines(pushes).slice(1)).toEqual([
+      metricsReceived,
+      appReceived,
+      readyzOtherMsg,
+      readyzNoMsg,
+    ]);
+    // droppedLines counts both kinds: 2 request-received + 1 request-complete.
+    expect(report).toMatchObject({ pushedLines: 5, droppedLines: 3 });
+  });
+
   it("advances a readyz-only stream's cursor so dropped lines never re-ship (task.5344)", async () => {
     const readyzOk = (n: number): ProviderLeaseLogLine => ({
       name: "app-abc12-x",
