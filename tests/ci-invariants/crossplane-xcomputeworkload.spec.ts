@@ -1509,8 +1509,9 @@ describe("catalog lease generation naming", () => {
     // that re-enters createAndLease to retry the manifest delivery.
     // task.5256: preview gen-2 was intentionally retired through the actuator;
     // provider closure and its released receipt permit reviewed replacement :3.
+    // bug.5532: explicitly reviewed replacement of the unhealthy ACTIVE production placement.
     expect(toks5.lease_generation?.preview).toBe(3);
-    expect(toks5.lease_generation?.production).toBe(5);
+    expect(toks5.lease_generation?.production).toBe(6);
   });
 });
 
