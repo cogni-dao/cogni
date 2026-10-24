@@ -5,6 +5,7 @@ import {
   RELIABILITY_POLICY_V1,
   reliabilityStatusV1Schema,
 } from "@cogni/node-contracts";
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   evaluateReliabilityPolicy,
@@ -61,6 +62,22 @@ vi.mock("@/bootstrap/container", () => ({
   resolveDatabasePlacementResolver: () => ({
     resolve: routeMocks.resolvePlacement,
   }),
+  getRequestLoggingDependencies: () => {
+    const log = {
+      child: () => log,
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+    };
+    return {
+      log,
+      clock: { now: () => new Date().toISOString() },
+      config: { unhandledErrorPolicy: "rethrow" },
+    };
+  },
 }));
 
 import {
@@ -864,7 +881,7 @@ describe("reliability HTTP boundaries", () => {
 
   it("returns 200 unknown and resolves catalog at parent SHA on metrics failure", async () => {
     const response = await GET_HEALTH(
-      new Request(
+      new NextRequest(
         "https://operator.example/api/v1/nodes/poly/observability/health?env=candidate-a"
       ),
       { params: Promise.resolve({ id: ROUTE_NODE_ID }) }
@@ -891,7 +908,7 @@ describe("reliability HTTP boundaries", () => {
 
   it("binds readmission actor to session and rejects cross-environment reads", async () => {
     const rejected = await GET_HEALTH(
-      new Request(
+      new NextRequest(
         "https://operator.example/api/v1/nodes/poly/observability/health?env=production"
       ),
       { params: Promise.resolve({ id: ROUTE_NODE_ID }) }
@@ -908,7 +925,7 @@ describe("reliability HTTP boundaries", () => {
     });
 
     const response = await POST_READMIT(
-      new Request(
+      new NextRequest(
         "https://operator.example/api/v1/nodes/poly/observability/health",
         {
           method: "POST",
