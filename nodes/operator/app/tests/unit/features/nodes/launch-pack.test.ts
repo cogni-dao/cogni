@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/unit/features/nodes/launch-pack`
  * Purpose: Unit tests for the AI-assistant launch handoff packet.
- * Scope: Pure builder only.
+ * Scope: Pure builder, canonical reference fixtures, and credential-realm instructions.
  * Side-effects: none
  * Links: src/features/nodes/launch-pack.ts
  * @public
@@ -116,7 +116,7 @@ describe("buildNodeLaunchPack", () => {
       "Cogni operator endpoint root: https://cognidao.org"
     );
     expect(pack.prompt).toContain(
-      "Cogni knowledge block: https://cognidao.org/knowledge/node-launch-handoff"
+      "Cogni knowledge block: https://cognidao.org/knowledge/cicd-e2e-required-sequence"
     );
     expect(pack.prompt).toContain(
       "DoltHub knowledge repo: https://www.dolthub.com/repositories/cogni-dao/atlas"
@@ -131,15 +131,15 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("ZERO privileged GitHub access");
     expect(pack.prompt).toContain("branch-push on the node repo");
     expect(pack.prompt).toContain("style-kit customization");
-    expect(pack.prompt).toContain(
+    expect(pack.prompt).not.toContain(
       ".claude/skills/node-wizard-scorecard/SKILL.md"
     );
     expect(pack.prompt).not.toContain("@node-wizard-scorecard");
     expect(pack.prompt).not.toContain("Its first response");
 
     expect(pack.prompt).toContain(".env.cogni");
-    expect(pack.prompt).toContain("/contribute-to-cogni");
-    expect(pack.prompt).toContain("recall the Cogni knowledge block above");
+    expect(pack.prompt).toContain("<node-base-url>/api/v1/agent/register");
+    expect(pack.prompt).toContain("node-local cognition");
     expect(pack.prompt).toContain("Local Conductor workspace:");
     expect(pack.prompt).toContain(
       "auto-registers this node's `COGNI_NODE_API_KEY` when absent"
@@ -149,14 +149,15 @@ describe("buildNodeLaunchPack", () => {
     );
     expect(pack.prompt).toContain("symlinks that file into this workspace");
     expect(pack.prompt).toContain("Non-Conductor or manual clone:");
-    // Manual clones must self-register before recalling the auth-gated block;
-    // local Conductor setup owns registration and must not receive that advice.
-    expect(pack.prompt.indexOf("Non-Conductor or manual clone:")).toBeLessThan(
-      pack.prompt.indexOf("/contribute-to-cogni")
-    );
-    expect(pack.prompt.indexOf("/contribute-to-cogni")).toBeLessThan(
-      pack.prompt.indexOf("recall the Cogni knowledge block above")
-    );
+    expect(pack.prompt).toContain("COGNI_OPERATOR_NODE_API_KEY");
+    expect(pack.prompt).toContain("COGNI_OPERATOR_API_KEY");
+    expect(pack.prompt).toContain("canonical variable wins");
+    expect(pack.prompt).toContain("owning operator host");
+    expect(pack.prompt).toContain("/api/v1/agent/me");
+    expect(pack.prompt).toContain("grantsAvailable:false");
+    expect(pack.prompt).toContain("unknown");
+    expect(pack.prompt).toContain("never try another key or host on 401/403");
+    expect(pack.prompt).toContain("no Langfuse or Grafana keys");
     expect(pack.prompt).toContain("stable user-level Codex cognition hook");
     expect(pack.prompt).toContain("Open `/hooks` once");
     expect(pack.prompt).toContain(
@@ -168,7 +169,9 @@ describe("buildNodeLaunchPack", () => {
     // that is exactly what drifted (run-checks → run-ci). Locking the absence of
     // those paths keeps the kickstart from re-growing a parallel runbook.
     expect(pack.prompt).toContain("cicd-e2e-required-sequence");
-    expect(pack.prompt).toContain("node-launch-handoff");
+    expect(pack.prompt).not.toContain("node-launch-handoff");
+    expect(pack.prompt).not.toContain("developer-rbac-request");
+    expect(pack.prompt).not.toContain("node-access-request-guide");
     expect(pack.prompt).not.toContain("/api/v1/vcs/run-ci");
     expect(pack.prompt).not.toContain("/api/v1/vcs/run-checks");
     expect(pack.prompt).not.toContain("/api/v1/vcs/flight");
@@ -219,6 +222,9 @@ describe("buildNodeLaunchPack", () => {
     }
     expect(pack.prompt).toContain("APPEND-ONLY");
     expect(pack.prompt).toContain("cogni-domain-taxonomy");
+    expect(pack.prompt).toContain(
+      "`.cogni/repo-spec.yaml` does not declare knowledge shelves"
+    );
     // Shelves are hub-relative: a node must not inherit the operator's internals.
     expect(pack.prompt).toContain("not the operator's");
     expect(pack.prompt).toContain("`knowledge_<slug>` database");
@@ -229,5 +235,50 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("scorecard");
     expect(pack.prompt).toContain("blocked scorecard row");
     expect(pack.prompt).toContain("/version");
+  });
+
+  it("cites the reviewed reference set and rejects a stale primary reference", () => {
+    const pack = buildNodeLaunchPack({
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      slug: "atlas",
+      status: "published",
+      operatorOrigin: "https://cognidao.org",
+      nodeRepoUrl: null,
+      knowledgeRepoUrl: null,
+      publishPrUrl: null,
+    });
+    const references = [
+      ...new Set(
+        [
+          ...pack.prompt.matchAll(
+            /https:\/\/cognidao\.org\/knowledge\/([a-z0-9-]+)/g
+          ),
+        ].map((match) => match[1])
+      ),
+    ].sort();
+    expect(references).toEqual([
+      "agent-check-own-access",
+      "agent-evaluation-loop",
+      "cicd-e2e-required-sequence",
+      "cogni-domain-taxonomy",
+      "langfuse-eval-expert",
+      "node-ai-traces-read",
+    ]);
+    expect(pack.knowledgeBlock).toEqual({
+      id: "cicd-e2e-required-sequence",
+      title: "Ship a node change through the operator",
+      url: "https://cognidao.org/knowledge/cicd-e2e-required-sequence",
+    });
+    expect(nodeLaunchPackOperation.output.safeParse(pack).success).toBe(true);
+    expect(
+      nodeLaunchPackOperation.output.safeParse({
+        ...pack,
+        knowledgeBlock: {
+          id: "node-launch-handoff",
+          title: "AI assistant launch pack for node formation",
+          url: "https://cognidao.org/knowledge/node-launch-handoff",
+        },
+      }).success
+    ).toBe(false);
   });
 });

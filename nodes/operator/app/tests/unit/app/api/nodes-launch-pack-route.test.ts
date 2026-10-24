@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/unit/app/api/nodes-launch-pack-route`
  * Purpose: Unit coverage for GET /api/v1/nodes/[id]/launch-pack.
- * Scope: Mocks auth, env, DB; no real Postgres IO.
+ * Scope: Owner-gated route and maintained launch references; mocks auth, env, DB.
  * Side-effects: none
  * Links: src/app/api/v1/nodes/[id]/launch-pack/route.ts
  * @internal
@@ -107,14 +107,22 @@ describe("GET /api/v1/nodes/[id]/launch-pack", () => {
       "https://github.com/Cogni-DAO/cogni/pull/42"
     );
     expect(body.candidateUrl).toBe("https://atlas-test.cognidao.org");
+    expect(body.knowledgeBlock).toEqual({
+      id: "cicd-e2e-required-sequence",
+      title: "Ship a node change through the operator",
+      url: "https://cognidao.org/knowledge/cicd-e2e-required-sequence",
+    });
     expect(body.prompt).toContain(
       "Cogni operator endpoint root: https://cognidao.org"
     );
     expect(body.prompt).toContain(
       "DoltHub knowledge repo: https://www.dolthub.com/repositories/cogni-dao/atlas"
     );
-    expect(body.prompt).toContain(
+    expect(body.prompt).not.toContain(
       ".claude/skills/node-wizard-scorecard/SKILL.md"
+    );
+    expect(body.prompt).toContain(
+      "https://cognidao.org/knowledge/node-ai-traces-read"
     );
     expect(body.prompt).not.toContain("node-app-secrets");
     expect(body.prompt).toContain("blocked scorecard row");

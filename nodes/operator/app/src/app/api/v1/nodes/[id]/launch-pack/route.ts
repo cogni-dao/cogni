@@ -7,7 +7,7 @@
  *   assistants. The response is intentionally derived from the node row and
  *   live URLs, not from saved orchestration state.
  * Scope: Owner-gated read route. No CI polling, no flight dispatch.
- * Links: src/features/nodes/launch-pack.ts, node-launch-handoff
+ * Links: src/features/nodes/launch-pack.ts, cicd-e2e-required-sequence
  * @public
  */
 
