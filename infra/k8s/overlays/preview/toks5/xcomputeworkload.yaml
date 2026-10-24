@@ -11,13 +11,13 @@ spec:
   nodeId: f66b260b-4633-41e2-8711-b7c1b8449cc1
   environment: preview
   bundle:
-    ref: ghcr.io/cogni-dao/toks5@sha256:199988ab9cea715f357799fa0ce9182b44b1b8e2585686787283bee5142c2244
+    ref: ghcr.io/cogni-dao/toks5@sha256:3b574c29b789bb54ad97fc9c26a48af34cedc7bd3bfc6340a5ec65ad1949adcd
     source:
       repository: cogni-dao/toks5
-      sha: 7c3fdbf757a1c1adee9a817fa2fb5c8f84607ecd
+      sha: 3ec2923c6f0198ab58295c1bd7e2303fbcfec690
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/toks5@sha256:c4f9e99644360b61ecaa58310ac74bd1d38bdb177f0046af02a1c988ba99007d
+        image: ghcr.io/cogni-dao/toks5@sha256:1ca5d5ab431e8f14c853e46b74fcc5109ebe29b1453324942ec560470872567f
   workload:
     name: toks5
     publicHost: toks5-preview.cognidao.org
