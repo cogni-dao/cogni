@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
+- **Last reviewed:** 2026-10-24
 
 ## Purpose
 
@@ -29,7 +30,7 @@ Private app-layer helpers for route handlers. Provides server-side utilities lik
 
 ## Public Surface
 
-- **Exports:** models-cache (getCachedModels, isModelAllowed, getDefaultModelId), auth/session helpers, request-identity resolver + agent key issuer, owned-node-read (owner/RLS read with a correlated terminal event)
+- **Exports:** models-cache (getCachedModels, isModelAllowed, getDefaultModelId), auth/session helpers, request-identity resolver + agent key issuer, owned-node-read (owner/RLS read with a correlated terminal event), node-launch-pack-read (shared authenticated owner-read input for legacy and successor packets)
 - **Files considered API:** models-cache.ts, auth/session.ts, auth/request-identity.ts
 
 ## Responsibilities
