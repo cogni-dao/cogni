@@ -32,6 +32,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
+import reliabilityPolicy from "../../packages/node-contracts/src/reliability-policy.v1.json";
 import {
   loadSecretsCatalog,
   openBaoPathFor,
@@ -318,13 +319,106 @@ describe("fleet Serve alert contract (bug.5459)", () => {
   it("alerts per node only when every independent probe reports failure", () => {
     expect(serveRule).toBeDefined();
     expect(serveRule?.data[0]?.model.expr).toBe(
-      'max by (environment, node_slug) (probe_success{environment="__ENVIRONMENT__",proof_class="serve"})'
+      'max by (environment, node_slug) (last_over_time(probe_success{environment="__ENVIRONMENT__",proof_class="serve"}[__SERVE_WINDOW__]))'
     );
     expect(serveRule?.data[1]?.model.conditions?.[0]?.evaluator).toEqual({
       type: "lt",
       params: [1],
     });
     expect(serveRule?.for).toBe("2m");
+  });
+
+  it("derives serve probe cadence and every serve evidence window from policy (bug.5527)", () => {
+    const seconds = (duration: string) => {
+      const match = /^([1-9][0-9]*)([smh])$/.exec(duration);
+      if (!match) throw new Error(`invalid duration ${duration}`);
+      return Number(match[1]) * { s: 1, m: 60, h: 3600 }[match[2] as "s"];
+    };
+    const serveProbes = reliabilityPolicy.serveProbes as Record<
+      string,
+      { frequencyMs: number; evidenceWindow: string }
+    >;
+    // The monitored environments are the tofu environment_configs keys.
+    const configBlock =
+      /environment_configs = \{\n([\s\S]*?)\n {2}\}\n/.exec(
+        syntheticMain
+      )?.[1] ?? "";
+    const environments = [
+      ...configBlock.matchAll(/^ {4}([a-z][a-z0-9-]*) = \{/gm),
+    ]
+      .map(([, environment]) => environment as string)
+      .sort();
+    expect(environments.length).toBeGreaterThanOrEqual(3);
+    expect(Object.keys(serveProbes).sort()).toEqual(environments);
+    for (const environment of environments) {
+      const probe = serveProbes[environment];
+      if (!probe) throw new Error(`serveProbes.${environment} missing`);
+      // One missed probe run must still leave a sample inside the window.
+      expect(seconds(probe.evidenceWindow) * 1000).toBeGreaterThanOrEqual(
+        2 * probe.frequencyMs
+      );
+    }
+    // story.5084 grades production endpoints at 99.9% over 24h: the sample
+    // count must resolve the error budget, or one failure fails the objective.
+    const availability = reliabilityPolicy.objectives.nodeAvailability;
+    expect(
+      (seconds(availability.window) * 1000) /
+        (serveProbes.production?.frequencyMs ?? Number.POSITIVE_INFINITY)
+    ).toBeGreaterThanOrEqual(100 / (100 - availability.targetPercent));
+
+    const serveCheck = syntheticMain.slice(
+      syntheticMain.indexOf(
+        'resource "grafana_synthetic_monitoring_check" "environment_readyz"'
+      ),
+      syntheticMain.indexOf(
+        'resource "grafana_synthetic_monitoring_check" "database_recovery"'
+      )
+    );
+    expect(serveCheck).toMatch(
+      /frequency\s+=\s+local\.reliability_policy\.serveProbes\[each\.value\.environment\]\.frequencyMs/
+    );
+    expect(syntheticMain).toMatch(
+      /"__SERVE_WINDOW__",\s+local\.reliability_policy\.serveProbes\[each\.key\]\.evidenceWindow/
+    );
+
+    // Every serve-evidence selector in the dashboards reads its environment's
+    // policy window; a bare instant selector would rely on the 5m lookback.
+    const dashboards = [
+      CAPACITY_DASHBOARD_FILE,
+      path.resolve(
+        __dirname,
+        "../../infra/grafana/dashboards/operator/fleet-status.json"
+      ),
+    ];
+    let checked = 0;
+    for (const file of dashboards) {
+      const exprs = [
+        ...readFileSync(file, "utf8").matchAll(/"expr": "((?:\\.|[^"\\])*)"/g),
+      ]
+        .map(([, literal]) => JSON.parse(`"${literal}"`) as string)
+        .filter((expr) => expr.includes('proof_class="serve"'));
+      for (const expr of exprs) {
+        for (const [, matchers, window] of expr.matchAll(
+          /probe_(?:success|duration_seconds)\{([^}]*)\}(?:\[([^\]]+)\])?/g
+        )) {
+          const selected = [
+            ...(matchers ?? "").matchAll(/environment(=~?)"([^"]+)"/g),
+          ]
+            .filter(([, , value]) => value !== "$environment")
+            .flatMap(([, , value]) => (value ?? "").split("|"));
+          expect(window, expr).toBeDefined();
+          // Environment-agnostic selectors are only the 24h soak objective.
+          if (selected.length === 0) {
+            expect(window, expr).toBe(availability.window);
+            continue;
+          }
+          for (const environment of selected)
+            expect(window, expr).toBe(serveProbes[environment]?.evidenceWindow);
+          checked += 1;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(10);
   });
 
   it("fails closed without enabling notification delivery", () => {
@@ -701,6 +795,9 @@ describe("fleet Serve alert contract (bug.5459)", () => {
           ),
           JSON.stringify({
             expectedRegions: ["Frankfurt", "Ohio"],
+            serveProbes: {
+              "candidate-a": { frequencyMs: 600000, evidenceWindow: "20m" },
+            },
             noisyNeighborSharePercent: 40,
           })
         );
@@ -821,6 +918,9 @@ esac
           ),
           JSON.stringify({
             expectedRegions: ["mutable"],
+            serveProbes: {
+              "candidate-a": { frequencyMs: 60000, evidenceWindow: "99m" },
+            },
             noisyNeighborSharePercent: 99,
           })
         );
@@ -993,6 +1093,8 @@ esac
     );
     expect(first.openbaoPath).toBe("cogni/candidate-a/ember");
     expect(first.readinessQuery).toContain('node_slug="ember"');
+    // The serve window comes from the policy at PLATFORM_BUILD_SHA (bug.5527).
+    expect(first.readinessQuery).toMatch(/\[20m\]\)$/);
     expect(first.containmentTarget).toBe(first.validation.sharedTarget.nodeId);
     expect(first.readmissionTarget).toBe(first.validation.sharedTarget.nodeId);
 

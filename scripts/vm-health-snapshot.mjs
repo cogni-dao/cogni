@@ -86,8 +86,29 @@ export function gradeSignal(key, value) {
   return "GREEN";
 }
 
-const isFresh = (tsSec, nowSec) =>
-  finite(tsSec) && nowSec - tsSec <= TTL_SEC && tsSec - nowSec <= 15;
+/** Subquery step for the probe last-sample-time read; adds at most this much age. */
+export const PROBE_SAMPLE_TIME_STEP = "10s";
+
+const isFresh = (tsSec, nowSec, ttlSec = TTL_SEC) =>
+  finite(tsSec) && nowSec - tsSec <= ttlSec && tsSec - nowSec <= 15;
+
+/**
+ * Serve-probe evidence bounds for one env, owned by policy serveProbes (bug.5527):
+ * the readiness window, and a freshness TTL that tolerates one missed probe run
+ * (never tighter than the policy evidence TTL).
+ */
+export function serveProbeBounds(env) {
+  const p = POLICY.serveProbes?.[env];
+  if (
+    !finite(p?.frequencyMs) ||
+    !/^[1-9][0-9]*[smh]$/.test(p?.evidenceWindow ?? "")
+  )
+    throw new Error(`policy has no usable serveProbes for ${env}`);
+  return {
+    window: p.evidenceWindow,
+    ttlSec: Math.max(TTL_SEC, (2 * p.frequencyMs) / 1000),
+  };
+}
 
 /**
  * Pure: one env's evidence → verdict.
@@ -206,7 +227,11 @@ export function evaluate(input) {
 
 /** Pure: probe evidence → separate node-endpoint status (never part of the VM verdict). */
 export function evaluateEndpoints(probes, nowSec) {
-  if (!probes || !isFresh(probes.tsSec, nowSec))
+  // Evidence without env bounds is held to production's (strictest) policy bounds.
+  const { window, ttlSec } = probes?.window
+    ? probes
+    : serveProbeBounds("production");
+  if (!probes || !isFresh(probes.tsSec, nowSec, ttlSec))
     return {
       status: "UNKNOWN",
       failing: [],
@@ -224,7 +249,7 @@ export function evaluateEndpoints(probes, nowSec) {
     failing,
     total: new Set(nodes.map((n) => n.slug)).size,
     text: failing.length
-      ? `${failing.length}/${nodes.length} failing in 5m (${failing.join(", ")}) — node app/lease, not the VM: read their readyz in Loki`
+      ? `${failing.length}/${nodes.length} failing in ${window} (${failing.join(", ")}) — node app/lease, not the VM: read their readyz in Loki`
       : `${nodes.length} passing`,
   };
 }
@@ -597,15 +622,23 @@ export async function snapshot(creds, env, nowSec, deps = {}) {
       ),
     ])
   );
+  const bounds = serveProbeBounds(env);
+  // timestamp() inside the subquery keeps each real sample time, so a probe that
+  // runs less often than the 5m instant lookback still proves its last sample age.
+  // The step adds up to one step of apparent age; 10s keeps 60s probes inside a
+  // 120s TTL (same query as the operator readiness adapter).
   const [probeTs, probeNodes] = await Promise.all([
-    q(`max(timestamp(${s.probe}))`),
-    q(`min by (node_slug) (min_over_time(${s.probe}[5m]))`),
+    q(
+      `max(max_over_time(timestamp(${s.probe})[${bounds.window}:${PROBE_SAMPLE_TIME_STEP}]))`
+    ),
+    q(`min by (node_slug) (min_over_time(${s.probe}[${bounds.window}]))`),
   ]);
   const input = {
     nowSec,
     signals: Object.fromEntries(signalEntries),
     families: Object.fromEntries(familyEntries),
     probes: {
+      ...bounds,
       tsSec: probeTs.length ? num(probeTs[0]) : null,
       nodes: probeNodes.map((r) => ({ slug: r.metric.node_slug, min: num(r) })),
     },

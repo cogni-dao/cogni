@@ -3,6 +3,11 @@
   "evidenceTtlMs": 120000,
   "maxSignalAttributionSkewMs": 75000,
   "expectedRegions": ["Frankfurt", "Ohio"],
+  "serveProbes": {
+    "candidate-a": { "frequencyMs": 600000, "evidenceWindow": "20m" },
+    "preview": { "frequencyMs": 600000, "evidenceWindow": "20m" },
+    "production": { "frequencyMs": 60000, "evidenceWindow": "5m" }
+  },
   "noisyNeighborSharePercent": 40,
   "signals": {
     "ioPressurePercent": {

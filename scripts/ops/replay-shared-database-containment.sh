@@ -175,6 +175,7 @@ clients=${REPLAY_CLIENTS:-$replay_client_limit}
 control_tier=$(yq -er '.database."candidate-a".tier' "$control_catalog")
 mapfile -t expected_regions < <(jq -er '.expectedRegions[]' "$policy_file")
 noisy_neighbor_share=$(jq -er '.noisyNeighborSharePercent' "$policy_file")
+serve_window=$(jq -er --arg env "$DEPLOY_ENVIRONMENT" '.serveProbes[$env].evidenceWindow' "$policy_file")
 [[ "$target_tier" == shared && "$control_tier" == shared ]] || {
   echo "catalog validation roles differ from the required shared/shared topology" >&2; exit 2;
 }
@@ -215,7 +216,7 @@ actuator_version_url="${actuator_origin}/version"
 reliability_status_url="${controller_base}/api/v1/nodes/${TARGET_NODE_ID}/observability/health?env=${DEPLOY_ENVIRONMENT}"
 reliability_readmit_url="${controller_base}/api/v1/nodes/${TARGET_NODE_ID}/observability/health"
 openbao_target_path="cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE_SLUG}"
-readiness_query=$(printf 'min_over_time(probe_success{environment="%s",node_slug="%s",proof_class="serve"}[1m])' "$DEPLOY_ENVIRONMENT" "$TARGET_NODE_SLUG")
+readiness_query=$(printf 'min_over_time(probe_success{environment="%s",node_slug="%s",proof_class="serve"}[%s])' "$DEPLOY_ENVIRONMENT" "$TARGET_NODE_SLUG" "$serve_window")
 neighbor_names=("$CONTROL_NODE_SLUG")
 neighbor_bases=("$control_base")
 neighbor_shas=("$CONTROL_NODE_BUILD_SHA")
