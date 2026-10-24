@@ -69,3 +69,7 @@ node_id: 921b1d1d-4ded-4a6d-b3f1-f7d6affa406a
 compute_egress_cidrs:
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
+  - cidr: 65.108.194.156/32
+    envs: [production]
+    ports: [5432]
+    comment: Historical RHITE egress measured inside Toks5 lease 1792623140532 on 2026-10-21T23:08Z (spike.5010); production shared-Postgres relocation intent (bug.5532), not a fresh Red or Beacon NAT measurement.
