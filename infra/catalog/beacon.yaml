@@ -19,6 +19,7 @@ production_branch: deploy/production-beacon
 # account and gets no actuator; its lease on the shared account was closed).
 envs: [candidate-a, production]
 database:
+  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
   production: { tier: shared, budget_profile: shared-default-v1 }
 deployment_provider:
   candidate-a: akash
