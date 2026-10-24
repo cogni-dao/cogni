@@ -50,6 +50,7 @@ put_secret operator POSTHOG_API_KEY phc_existing
 put_secret operator POSTHOG_HOST https://us.i.posthog.com
 put_secret operator TAVILY_API_KEY tvly-owner-fixture
 put_secret operator SCHEDULER_API_TOKEN scheduler-owner-fixture
+put_secret operator BILLING_INGEST_TOKEN billing-owner-fixture
 put_secret operator GH_WEBHOOK_SECRET webhook-owner-fixture
 # Canonical-custody (inheritFrom: operator) values: seeded at the OPERATOR path
 # only, with a divergent copy at the TARGET node (node-template). That divergent
@@ -354,6 +355,8 @@ test "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/OPENROUTER_API_KEY")" = s
   || { echo "OPENROUTER_API_KEY must inherit the operator-canonical value, not the stale per-node copy" >&2; exit 1; }
 test "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/EVM_RPC_URL")" = https://base-mainnet.example/v2/operator-key \
   || { echo "EVM_RPC_URL must inherit the operator value (inheritFrom: operator), not the stale per-node copy" >&2; exit 1; }
+cmp "$BAO_ROOT/cogni/candidate-a/operator/BILLING_INGEST_TOKEN" "$BAO_ROOT/cogni/candidate-a/node-template/BILLING_INGEST_TOKEN" \
+  || { echo "BILLING_INGEST_TOKEN must inherit the operator-canonical value" >&2; exit 1; }
 # per-node DB creds generated (source:agent), not inherited from any shared bank
 for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD; do
   test -f "$BAO_ROOT/cogni/candidate-a/node-template/$k" \
