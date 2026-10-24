@@ -11,9 +11,11 @@
  *   - OBSERVABLE: both verbs run inside `wrapRouteHandlerWithLogging` (routeId
  *     `nodes.observability.health`) with request-logging-only dependencies, so a cold
  *     request with fenced DB roles still logs and never constructs the container (bug.5528).
- *   - TERMINAL_EVENT: GET emits exactly one `feature.node_observability_health.complete`
- *     per request — outcome, errorCode, target nodeId/environment, state, regionCount and
- *     source only. Never the status body, tokens or incident reasons.
+ *   - TERMINAL_EVENT: each handled request emits exactly one terminal event — GET
+ *     `feature.node_observability_health.complete` (state, regionCount, source), POST
+ *     `feature.node_observability_health.readmit_complete` (phase) — with outcome,
+ *     errorCode, targetNodeId and environment. `nodeId` stays the serving node's binding.
+ *     Never the status body, tokens, actors or incident reasons.
  *   - AUTH_UNCHANGED: GET accepts session or bearer (`getSessionUser`); POST accepts only a
  *     human session (`getServerSessionUser`). Both answer a missing identity with 401
  *     `{error:"unauthorized"}`.
@@ -57,26 +59,48 @@ interface RouteParams {
 
 type HealthSource = "actuator" | "local_fallback" | "metrics";
 
+type GateErrorCode = "node_not_found" | "authz_unavailable" | "authz_denied";
+type HealthErrorCode =
+  | "unauthorized"
+  | GateErrorCode
+  | "reliability_environment_unavailable"
+  | "invalid_env";
+type ReadmitErrorCode =
+  | "unauthorized"
+  | GateErrorCode
+  | "invalid_env"
+  | "reliability_readmit_unavailable"
+  | "reliability_incident_unavailable"
+  | "database_recovery_new_incident_required"
+  | "reliability_recovery_unavailable";
+
 /**
- * The single GET terminal event. App-local registry name, so it logs via ctx.log directly.
- * Privacy: enums, ids and counts only — never the status body or incident reason.
+ * One terminal event per handled request (start + terminal + request-complete = 3 lines).
+ * Unhandled throws skip it: the wrapper's `request failed` line is the terminal there.
+ * App-local registry names, so this logs via ctx.log directly. The target node is
+ * `targetNodeId`: the logger already binds `nodeId` to the serving node.
+ * Privacy: enums, ids and counts only — never bodies, incident reasons or actors.
  */
-function logHealthComplete(
+function logTerminal(
   ctx: RequestContext,
+  event:
+    | typeof EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_COMPLETE
+    | typeof EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_READMIT_COMPLETE,
   startedAt: number,
   fields: {
     outcome: "success" | "error";
     status: number;
-    errorCode?: string;
-    nodeId?: string;
-    environment?: string;
+    errorCode?: HealthErrorCode | ReadmitErrorCode;
+    targetNodeId?: string | undefined;
+    environment?: string | undefined;
     state?: string;
     regionCount?: number;
     source?: HealthSource;
+    phase?: string;
   }
 ): void {
   const payload = {
-    event: EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_COMPLETE,
+    event,
     reqId: ctx.reqId,
     routeId: ctx.routeId,
     durationMs: Math.round(performance.now() - startedAt),
@@ -88,7 +112,7 @@ function logHealthComplete(
       : fields.status >= 500
         ? "error"
         : "warn";
-  ctx.log[level](payload, EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_COMPLETE);
+  ctx.log[level](payload, event);
 }
 
 function isEnvironment(value: string | null | undefined): value is Environment {
@@ -109,7 +133,7 @@ async function resolveReliabilityGate(input: {
     return {
       ok: false as const,
       status: 503,
-      errorCode: "authz_unavailable",
+      errorCode: "authz_unavailable" as const,
       local,
     };
   const decision = await local.authorization.check({
@@ -124,8 +148,8 @@ async function resolveReliabilityGate(input: {
       status: decision.code === "authz_unavailable" ? 503 : 403,
       errorCode:
         decision.code === "authz_unavailable"
-          ? "authz_unavailable"
-          : "authz_denied",
+          ? ("authz_unavailable" as const)
+          : ("authz_denied" as const),
       local,
     };
   return { ok: true as const, node, local };
@@ -140,12 +164,13 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
   async (ctx, request, user, context) => {
     if (!context) throw new Error("context required for dynamic routes");
     const startedAt = performance.now();
-    const fail = (status: number, errorCode: string, body: object) => {
-      logHealthComplete(ctx, startedAt, {
-        outcome: "error",
-        status,
-        errorCode,
-      });
+    const fail = (status: number, errorCode: HealthErrorCode, body: object) => {
+      logTerminal(
+        ctx,
+        EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_COMPLETE,
+        startedAt,
+        { outcome: "error", status, errorCode }
+      );
       return NextResponse.json(body, { status });
     };
 
@@ -175,29 +200,22 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
       });
     }
 
-    let status: Awaited<ReturnType<typeof readHealthStatus>>;
-    try {
-      status = await readHealthStatus(gate, environment);
-    } catch (error) {
-      // Terminal event first; the wrapper keeps its unhandled-error policy.
-      logHealthComplete(ctx, startedAt, {
-        outcome: "error",
-        status: 500,
-        errorCode: "reliability_status_unavailable",
-        nodeId: gate.node.nodeId,
-        environment,
-      });
-      throw error;
-    }
-    logHealthComplete(ctx, startedAt, {
-      outcome: "success",
-      status: 200,
-      nodeId: status.body.nodeId,
-      environment: status.body.environment,
-      state: status.body.state,
-      regionCount: status.body.regionalReadiness.length,
-      source: status.source,
-    });
+    // A throw here is the wrapper's `request failed` terminal (3-line budget).
+    const status = await readHealthStatus(gate, environment);
+    logTerminal(
+      ctx,
+      EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_COMPLETE,
+      startedAt,
+      {
+        outcome: "success",
+        status: 200,
+        targetNodeId: status.body.nodeId,
+        environment: status.body.environment,
+        state: status.body.state,
+        regionCount: status.body.regionalReadiness.length,
+        source: status.source,
+      }
+    );
     return NextResponse.json(status.body);
   }
 );
@@ -349,10 +367,32 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     getRequestDependencies: getRequestLoggingDependencies,
     auth: { mode: "optional", getSessionUser: getServerSessionUser },
   },
-  async (_ctx, request, user, context) => {
+  async (ctx, request, user, context) => {
     if (!context) throw new Error("context required for dynamic routes");
-    if (!user)
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    const startedAt = performance.now();
+    let targetNodeId: string | undefined;
+    let targetEnvironment: Environment | undefined;
+    const fail = (
+      status: number,
+      errorCode: ReadmitErrorCode,
+      body: object
+    ) => {
+      logTerminal(
+        ctx,
+        EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_READMIT_COMPLETE,
+        startedAt,
+        {
+          outcome: "error",
+          status,
+          errorCode,
+          targetNodeId,
+          environment: targetEnvironment,
+        }
+      );
+      return NextResponse.json(body, { status });
+    };
+
+    if (!user) return fail(401, "unauthorized", { error: "unauthorized" });
 
     const { id } = await context.params;
     const gate = await resolveReliabilityGate({
@@ -360,12 +400,9 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       userId: user.id,
       action: "node.manage_envs",
     });
-    if (!gate.ok) {
-      return NextResponse.json(
-        { error: gate.errorCode },
-        { status: gate.status }
-      );
-    }
+    if (!gate.ok)
+      return fail(gate.status, gate.errorCode, { error: gate.errorCode });
+    targetNodeId = gate.node.nodeId;
 
     const body = (await request.json().catch(() => null)) as {
       env?: unknown;
@@ -378,8 +415,9 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       !ENVIRONMENTS.includes(environment as Environment) ||
       environment !== localEnvironment
     ) {
-      return NextResponse.json({ error: "invalid_env" }, { status: 400 });
+      return fail(400, "invalid_env", { error: "invalid_env" });
     }
+    targetEnvironment = environment as Environment;
 
     const command =
       gate.local?.readmit ??
@@ -388,16 +426,15 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       gate.local?.statusReader ??
       (gate.local ? undefined : getContainer().reliabilityStatusReader);
     if (!command || !statusReader) {
-      return NextResponse.json(
-        { error: "reliability_readmit_unavailable" },
-        { status: 503 }
-      );
+      return fail(503, "reliability_readmit_unavailable", {
+        error: "reliability_readmit_unavailable",
+      });
     }
     const currentStatus = await statusReader
       .read({
         nodeId: gate.node.nodeId,
         nodeSlug: gate.node.slug,
-        environment: environment as Environment,
+        environment: targetEnvironment,
       })
       .catch(() => null);
     if (
@@ -405,42 +442,48 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       !currentStatus.incidentId ||
       !/^reliability\.v1:[a-zA-Z0-9._:-]{1,180}$/.test(currentStatus.incidentId)
     ) {
-      return NextResponse.json(
-        { error: "reliability_incident_unavailable" },
-        { status: 409 }
-      );
+      return fail(409, "reliability_incident_unavailable", {
+        error: "reliability_incident_unavailable",
+      });
     }
     const incidentId = currentStatus.incidentId;
     try {
       const result = await command.readmit({
         nodeId: gate.node.nodeId,
         nodeSlug: gate.node.slug,
-        environment: environment as Environment,
+        environment: targetEnvironment,
         actorId: user.id,
         incidentId,
       });
-      return NextResponse.json(
-        { ...result, incidentId },
-        { status: result.phase === "recovering" ? 202 : 200 }
+      const status = result.phase === "recovering" ? 202 : 200;
+      logTerminal(
+        ctx,
+        EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_READMIT_COMPLETE,
+        startedAt,
+        {
+          outcome: "success",
+          status,
+          targetNodeId,
+          environment: targetEnvironment,
+          phase: result.phase,
+        }
       );
+      return NextResponse.json({ ...result, incidentId }, { status });
     } catch (error) {
       if (
         error instanceof Error &&
         error.message === "database_recovery_new_incident_required"
       ) {
-        return NextResponse.json(
-          { error: error.message, incidentId },
-          { status: 409 }
-        );
-      }
-      return NextResponse.json(
-        {
-          error: "reliability_recovery_unavailable",
-          state: "unknown",
+        return fail(409, "database_recovery_new_incident_required", {
+          error: error.message,
           incidentId,
-        },
-        { status: 503 }
-      );
+        });
+      }
+      return fail(503, "reliability_recovery_unavailable", {
+        error: "reliability_recovery_unavailable",
+        state: "unknown",
+        incidentId,
+      });
     }
   }
 );

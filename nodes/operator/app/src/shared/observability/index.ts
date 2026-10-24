@@ -32,6 +32,9 @@ export const EVENT_NAMES = {
   // actuator sweep's per-target NODE_RELIABILITY_STATUS_COMPLETE so route reads never inflate it.
   NODE_OBSERVABILITY_HEALTH_COMPLETE:
     "feature.node_observability_health.complete",
+  // POST readmission terminal event on the same route (bug.5528).
+  NODE_OBSERVABILITY_HEALTH_READMIT_COMPLETE:
+    "feature.node_observability_health.readmit_complete",
   NODE_RELIABILITY_TRANSITION: "feature.node_reliability.transition",
   NODE_RELIABILITY_SWEEP_STARTED: "feature.node_reliability.sweep_started",
   NODE_RELIABILITY_SWEEP_COMPLETE: "feature.node_reliability.sweep_complete",

@@ -25,16 +25,38 @@ const mocks = vi.hoisted(() => ({
   placement: vi.fn(),
   logLines: [] as Array<{
     level: string;
+    /** Call-site fields only, never merged with bindings. */
     fields: Record<string, unknown>;
+    /** What Loki `| json` sees: pino output (bindings then fields, duplicates kept), last key wins. */
+    loki: Record<string, unknown>;
     msg?: string | undefined;
   }>,
 }));
 
-/** Minimal pino-shaped logger that records merged bindings + fields per line. */
+/**
+ * Minimal pino-shaped logger. Pino writes child bindings, then call fields, as one JSON
+ * object and keeps duplicate keys; JSON.parse (like Loki's `| json`) keeps the last. The
+ * `loki` view reproduces that, so a call field that shadows a binding is visible.
+ */
 function captureLogger(bindings: Record<string, unknown> = {}): unknown {
   const write =
-    (level: string) => (fields: Record<string, unknown>, msg?: string) => {
-      mocks.logLines.push({ level, fields: { ...bindings, ...fields }, msg });
+    (level: string) =>
+    (fieldsOrMsg: Record<string, unknown> | string, msg?: string) => {
+      const fields = typeof fieldsOrMsg === "string" ? {} : fieldsOrMsg;
+      const head = JSON.stringify(bindings).slice(0, -1);
+      const tail = JSON.stringify(fields).slice(1);
+      const raw =
+        Object.keys(fields).length === 0
+          ? JSON.stringify(bindings)
+          : head === "{"
+            ? `{${tail}`
+            : `${head},${tail}`;
+      mocks.logLines.push({
+        level,
+        fields,
+        loki: JSON.parse(raw) as Record<string, unknown>,
+        msg: typeof fieldsOrMsg === "string" ? fieldsOrMsg : msg,
+      });
     };
   return {
     child: (more: Record<string, unknown>) =>
@@ -81,6 +103,14 @@ function healthEvents() {
   return mocks.logLines.filter(
     (line) =>
       line.fields.event === EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_COMPLETE
+  );
+}
+
+function readmitEvents() {
+  return mocks.logLines.filter(
+    (line) =>
+      line.fields.event ===
+      EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_READMIT_COMPLETE
   );
 }
 
@@ -162,6 +192,21 @@ describe("human-session reliability readmission", () => {
       incidentId,
     });
     expect(await response.json()).toEqual({ phase: "open", incidentId });
+    expect(readmitEvents()).toEqual([
+      expect.objectContaining({
+        level: "info",
+        fields: expect.objectContaining({
+          routeId: "nodes.observability.health",
+          outcome: "success",
+          status: 200,
+          targetNodeId: nodeId,
+          environment: "candidate-a",
+          phase: "open",
+        }),
+      }),
+    ]);
+    expect(readmitEvents()[0]?.fields).not.toHaveProperty("actorId");
+    expect(readmitEvents()[0]?.loki.nodeId).toBe("operator-self");
   });
 
   it("rejects stale or absent incidents without calling the private readmitter", async () => {
@@ -173,6 +218,17 @@ describe("human-session reliability readmission", () => {
 
     expect(response.status).toBe(409);
     expect(mocks.readmit).not.toHaveBeenCalled();
+    expect(readmitEvents()).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        fields: expect.objectContaining({
+          outcome: "error",
+          status: 409,
+          errorCode: "reliability_incident_unavailable",
+          targetNodeId: nodeId,
+        }),
+      }),
+    ]);
   });
 
   it("authorizes and readmits the local controller after both ordinary DB roles are fenced", async () => {
@@ -244,7 +300,7 @@ describe("human-session reliability readmission", () => {
         fields: expect.objectContaining({
           routeId: "nodes.observability.health",
           outcome: "success",
-          nodeId,
+          targetNodeId: nodeId,
           environment: "candidate-a",
           state: "unknown",
           regionCount: 0,
@@ -335,7 +391,7 @@ describe("reliability status read observability (bug.5528)", () => {
         routeId: "nodes.observability.health",
         outcome: "success",
         status: 200,
-        nodeId,
+        targetNodeId: nodeId,
         environment: "candidate-a",
         state: "warning",
         regionCount: 2,
@@ -343,11 +399,20 @@ describe("reliability status read observability (bug.5528)", () => {
       },
     });
     expect(events[0]?.fields).not.toHaveProperty("incidentReason");
+    // The serving node's bound nodeId survives Loki's last-key-wins parse; the target is separate.
+    expect(events[0]?.fields).not.toHaveProperty("nodeId");
+    expect(events[0]?.loki).toMatchObject({
+      nodeId: "operator-self",
+      targetNodeId: nodeId,
+      state: "warning",
+    });
+    // Budget: received + terminal + request complete.
+    expect(mocks.logLines).toHaveLength(3);
     // The wrapper's standard envelope carries the same routeId on the request-complete line.
     expect(mocks.logLines).toContainEqual(
       expect.objectContaining({
         msg: "request complete",
-        fields: expect.objectContaining({
+        loki: expect.objectContaining({
           route: "nodes.observability.health",
           status: 200,
         }),
