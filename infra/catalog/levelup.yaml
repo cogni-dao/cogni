@@ -18,6 +18,7 @@ production_branch: deploy/production-levelup
 # are dropped with it. Production is this node's only slot.
 envs: [candidate-a, production]
 database:
+  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
   production: { tier: shared, budget_profile: shared-default-v1 }
 deployment_provider:
   candidate-a: akash
