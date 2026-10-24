@@ -3,13 +3,15 @@
 
 /**
  * Module: `@tests/unit/app/api/nodes-reliability-health-route`
- * Purpose: Prove readmission accepts a real human session and rejects an otherwise privileged agent.
- * Scope: Route authorization boundary with injected identity/control-plane fakes; no IO.
+ * Purpose: Prove readmission accepts a real human session and rejects an otherwise privileged agent,
+ *   and that every status read emits one terminal health event through the logging wrapper.
+ * Scope: Route authorization boundary and log seam with injected identity/control-plane/logger fakes; no IO.
  * Side-effects: none
- * Links: task.5247, src/app/api/v1/nodes/[id]/observability/health/route.ts
+ * Links: task.5247, bug.5528, src/app/api/v1/nodes/[id]/observability/health/route.ts
  * @internal
  */
 
+import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -21,7 +23,30 @@ const mocks = vi.hoisted(() => ({
   localControl: vi.fn(),
   container: vi.fn(),
   placement: vi.fn(),
+  logLines: [] as Array<{
+    level: string;
+    fields: Record<string, unknown>;
+    msg?: string | undefined;
+  }>,
 }));
+
+/** Minimal pino-shaped logger that records merged bindings + fields per line. */
+function captureLogger(bindings: Record<string, unknown> = {}): unknown {
+  const write =
+    (level: string) => (fields: Record<string, unknown>, msg?: string) => {
+      mocks.logLines.push({ level, fields: { ...bindings, ...fields }, msg });
+    };
+  return {
+    child: (more: Record<string, unknown>) =>
+      captureLogger({ ...bindings, ...more }),
+    trace: write("trace"),
+    debug: write("debug"),
+    info: write("info"),
+    warn: write("warn"),
+    error: write("error"),
+    fatal: write("fatal"),
+  };
+}
 
 vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: mocks.agentIdentity,
@@ -36,18 +61,31 @@ vi.mock("@/bootstrap/container", () => ({
   resolveLocalReliabilityControl: () => mocks.localControl(),
   getContainer: () => mocks.container(),
   resolveDatabasePlacementResolver: () => ({ resolve: mocks.placement }),
+  getRequestLoggingDependencies: () => ({
+    log: captureLogger({ nodeId: "operator-self" }),
+    clock: { now: () => "2026-10-24T00:00:00.000Z" },
+    config: { unhandledErrorPolicy: "rethrow" },
+  }),
 }));
 vi.mock("@/features/nodes/reliability-status", () => ({
   readReliabilityStatus: vi.fn(),
 }));
 
 import { GET, POST } from "@/app/api/v1/nodes/[id]/observability/health/route";
+import { EVENT_NAMES } from "@/shared/observability";
 
 const nodeId = "11111111-1111-4111-8111-111111111111";
 const incidentId = `reliability.v1:candidate-a:${nodeId}:1234`;
 
+function healthEvents() {
+  return mocks.logLines.filter(
+    (line) =>
+      line.fields.event === EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_COMPLETE
+  );
+}
+
 function request(headers: Record<string, string>, extra: object = {}) {
-  return new Request(
+  return new NextRequest(
     `https://test.cognidao.org/api/v1/nodes/${nodeId}/observability/health`,
     {
       method: "POST",
@@ -60,6 +98,7 @@ function request(headers: Record<string, string>, extra: object = {}) {
 describe("human-session reliability readmission", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.logLines.length = 0;
     vi.stubEnv("DEPLOY_ENVIRONMENT", "candidate-a");
     // This agent would pass the same node.manage_envs gate as a human.
     mocks.agentIdentity.mockResolvedValue({ id: "privileged-agent" });
@@ -188,12 +227,9 @@ describe("human-session reliability readmission", () => {
       statusReader: { read: mocks.readStatus },
     });
     mocks.readStatus.mockRejectedValue(new Error("actuator unavailable"));
-    const response = await GET(
-      new Request(
-        `https://test.cognidao.org/api/v1/nodes/${nodeId}/observability/health?env=candidate-a`
-      ),
-      { params: Promise.resolve({ id: nodeId }) }
-    );
+    const response = await GET(healthRequest(), {
+      params: Promise.resolve({ id: nodeId }),
+    });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       state: "unknown",
@@ -202,5 +238,141 @@ describe("human-session reliability readmission", () => {
     });
     expect(mocks.container).not.toHaveBeenCalled();
     expect(mocks.authorize).not.toHaveBeenCalled();
+    expect(healthEvents()).toEqual([
+      expect.objectContaining({
+        level: "info",
+        fields: expect.objectContaining({
+          routeId: "nodes.observability.health",
+          outcome: "success",
+          nodeId,
+          environment: "candidate-a",
+          state: "unknown",
+          regionCount: 0,
+          source: "local_fallback",
+        }),
+      }),
+    ]);
+  });
+});
+
+function healthRequest(headers: Record<string, string> = {}) {
+  return new NextRequest(
+    `https://test.cognidao.org/api/v1/nodes/${nodeId}/observability/health?env=candidate-a`,
+    { headers }
+  );
+}
+
+describe("reliability status read observability (bug.5528)", () => {
+  const actuatorStatus = {
+    version: "reliability-status.v1",
+    nodeId,
+    slug: "atlas",
+    environment: "candidate-a",
+    buildSha: "b".repeat(40),
+    databaseTier: "shared",
+    budgetProfile: "shared-default-v1",
+    state: "warning",
+    regionalReadiness: [
+      {
+        region: "us-east",
+        healthy: true,
+        observedAt: "2026-10-24T00:00:00.000Z",
+      },
+      {
+        region: "eu-west",
+        healthy: false,
+        observedAt: "2026-10-24T00:00:00.000Z",
+      },
+    ],
+    utilization: {
+      evidenceScope: "node",
+      ioPressurePct: 12,
+      connectionPct: 30,
+      memoryHeadroomPct: 60,
+      diskHeadroomPct: 70,
+      databaseShare5m: { backendsPct: 5, physicalReadsPct: 4, tempBytesPct: 0 },
+    },
+    incidentId: null,
+    incidentReason: "secret-free reason never logged",
+    observedAt: "2026-10-24T00:00:00.000Z",
+    lastTransitionAt: null,
+    evidenceQueryRefs: [],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.logLines.length = 0;
+    vi.stubEnv("DEPLOY_ENVIRONMENT", "candidate-a");
+    mocks.agentIdentity.mockResolvedValue({ id: "agent-user" });
+    mocks.localControl.mockReturnValue({
+      nodeId: "00000000-0000-4000-8000-000000000001",
+      slug: "controller",
+    });
+    mocks.authorize.mockResolvedValue({
+      ok: true,
+      node: { nodeId, slug: "atlas" },
+    });
+    mocks.readStatus.mockResolvedValue(actuatorStatus);
+    mocks.container.mockReturnValue({
+      reliabilityStatusReader: { read: mocks.readStatus },
+    });
+  });
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("logs one terminal event with the routeId, target, state and region count", async () => {
+    const response = await GET(healthRequest(), {
+      params: Promise.resolve({ id: nodeId }),
+    });
+
+    expect(response.status).toBe(200);
+    const events = healthEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      level: "info",
+      msg: EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_COMPLETE,
+      fields: {
+        routeId: "nodes.observability.health",
+        outcome: "success",
+        status: 200,
+        nodeId,
+        environment: "candidate-a",
+        state: "warning",
+        regionCount: 2,
+        source: "actuator",
+      },
+    });
+    expect(events[0]?.fields).not.toHaveProperty("incidentReason");
+    // The wrapper's standard envelope carries the same routeId on the request-complete line.
+    expect(mocks.logLines).toContainEqual(
+      expect.objectContaining({
+        msg: "request complete",
+        fields: expect.objectContaining({
+          route: "nodes.observability.health",
+          status: 200,
+        }),
+      })
+    );
+  });
+
+  it("keeps the 401 body and logs an unauthorized terminal event", async () => {
+    mocks.agentIdentity.mockResolvedValue(null);
+    const response = await GET(healthRequest(), {
+      params: Promise.resolve({ id: nodeId }),
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "unauthorized" });
+    expect(mocks.authorize).not.toHaveBeenCalled();
+    expect(healthEvents()).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        fields: expect.objectContaining({
+          outcome: "error",
+          status: 401,
+          errorCode: "unauthorized",
+        }),
+      }),
+    ]);
   });
 });

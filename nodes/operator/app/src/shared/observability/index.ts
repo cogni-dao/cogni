@@ -28,6 +28,10 @@ export const EVENT_NAMES = {
   DEPLOY_INFRA_RECONCILE_COMPLETE: "deploy.infra_reconcile.complete",
   NODE_SCHEDULES_SYNC_COMPLETE: "feature.node_schedules_sync.complete",
   NODE_RELIABILITY_STATUS_COMPLETE: "feature.node_reliability_status.complete",
+  // GET /api/v1/nodes/{id}/observability/health terminal event (bug.5528) — distinct from the
+  // actuator sweep's per-target NODE_RELIABILITY_STATUS_COMPLETE so route reads never inflate it.
+  NODE_OBSERVABILITY_HEALTH_COMPLETE:
+    "feature.node_observability_health.complete",
   NODE_RELIABILITY_TRANSITION: "feature.node_reliability.transition",
   NODE_RELIABILITY_SWEEP_STARTED: "feature.node_reliability.sweep_started",
   NODE_RELIABILITY_SWEEP_COMPLETE: "feature.node_reliability.sweep_complete",
