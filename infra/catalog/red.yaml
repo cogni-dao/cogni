@@ -38,7 +38,7 @@ compute_api:
 # first idempotence key; later retries must advance it from durable receipt evidence.
 lease_generation:
   candidate-a: 0
-  production: 0
+  production: 1
 # story.5093 — PLACEMENT_IS_OPERATOR_POLICY. Red's declared private `sandbox` service runs in
 # its OWN lease (XR `<node_id>-sandbox`, host red-sandbox[-test].cognidao.org), never inside the
 # app lease: a sandbox resize/re-mint must not touch the production activity_env app lease.
