@@ -121,6 +121,8 @@ bug.5127 app-push lane (`spec.runtime.logPush` stays dormant; no push credential
 environment). Collection-at-the-platform-boundary is the canonical PaaS pattern — Heroku Logplex,
 Vercel/Netlify log drains, Fly's platform log shipper, and the Kubernetes node-agent (promtail/Alloy
 DaemonSet) all capture tenant stdout where the PLATFORM holds custody, never inside the tenant app.
+The pump withholds successful fast readyz access lines (`route=meta.readyz`, `status=200`,
+`durationMs<1000`), the same predicate as Alloy's `drop_readyz_ok`; every other line ships (task.5344).
 
 **STABLE_LEASE_STREAM_LABELS (the write-side context envelope — invariant):** every pump-shipped
 stream carries EXACTLY
