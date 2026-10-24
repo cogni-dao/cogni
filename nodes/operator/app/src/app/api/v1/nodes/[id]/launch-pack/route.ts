@@ -3,84 +3,32 @@
 
 /**
  * Module: `@app/api/v1/nodes/[id]/launch-pack`
- * Purpose: Authenticated node-launch handoff JSON for external personal AI
- *   assistants. The response is intentionally derived from the node row and
- *   live URLs, not from saved orchestration state.
- * Scope: Owner-gated read route. No CI polling, no flight dispatch.
- * Links: src/features/nodes/launch-pack.ts, cicd-e2e-required-sequence
+ * Purpose: Preserve the published legacy launch packet for existing callers.
+ * Scope: Owner-gated read; shared input assembly, legacy output validation.
+ * Side-effects: IO (session, owner-scoped node read and correlated logs)
+ * Links: src/app/_lib/node-launch-pack-read.ts, nodes.launch-pack.v1.contract.ts
  * @public
  */
 
 import { NextResponse } from "next/server";
 
-import { readOwnedNode } from "@/app/_lib/owned-node-read";
+import {
+  type NodeLaunchPackReadContext,
+  readNodeLaunchPackInput,
+} from "@/app/_lib/node-launch-pack-read";
 import { nodeLaunchPackOperation } from "@/contracts/nodes.launch-pack.v1.contract";
-import {
-  buildNodeLaunchPack,
-  nodeRepoUrlForSlug,
-} from "@/features/nodes/launch-pack";
-import { getServerSessionUser } from "@/lib/auth/server";
-import type { NodeStatus } from "@/shared/db/nodes";
-import { serverEnv } from "@/shared/env";
-import {
-  buildNodeKnowledgeRemote,
-  knowledgeRemoteWebUrl,
-} from "@/shared/node-app-scaffold/knowledge-remote";
+import { buildNodeLaunchPack } from "@/features/nodes/launch-pack";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-interface RouteParams {
-  params: Promise<{ id: string }>;
-}
-
-export async function GET(request: Request, ctx: RouteParams) {
-  const session = await getServerSessionUser();
-  if (!session) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-
-  const { id } = await ctx.params;
-  const parsed = nodeLaunchPackOperation.input.safeParse({ nodeId: id });
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: "invalid input", issues: parsed.error.issues },
-      { status: 400 }
-    );
-  }
-
-  const node = await readOwnedNode({
-    id: parsed.data.nodeId,
-    userId: session.id,
-    routeId: "nodes.launch_pack",
-    request,
-  });
-  if (!node) {
-    return NextResponse.json({ error: "not found" }, { status: 404 });
-  }
-
-  const env = serverEnv();
-  const knowledgeRemote = env.DOLTHUB_OWNER
-    ? buildNodeKnowledgeRemote(node.slug, env.DOLTHUB_OWNER)
-    : null;
-
+export async function GET(
+  request: Request,
+  context: NodeLaunchPackReadContext
+) {
+  const result = await readNodeLaunchPackInput(request, context);
+  if (result.status === "error") return result.response;
   return NextResponse.json(
-    nodeLaunchPackOperation.output.parse(
-      buildNodeLaunchPack({
-        nodeId: node.id,
-        slug: node.slug,
-        status: node.status as NodeStatus,
-        nodeRepoUrl: nodeRepoUrlForSlug({
-          slug: node.slug,
-          mintOwner: env.NODE_MINT_OWNER,
-          publishPrUrl: node.publishPrUrl,
-        }),
-        knowledgeRepoUrl: knowledgeRemote
-          ? knowledgeRemoteWebUrl(knowledgeRemote)
-          : null,
-        publishPrUrl: node.publishPrUrl,
-        operatorOrigin: new URL(request.url).origin,
-      })
-    )
+    nodeLaunchPackOperation.output.parse(buildNodeLaunchPack(result.input))
   );
 }

@@ -13,8 +13,10 @@
 import { describe, expect, it } from "vitest";
 
 import { nodeLaunchPackOperation } from "@/contracts/nodes.launch-pack.v1.contract";
+import { nodeLaunchPackV2Operation } from "@/contracts/nodes.launch-pack.v2.contract";
 import {
   buildNodeLaunchPack,
+  buildNodeLaunchPackV2,
   candidateUrlForSlug,
   NODE_LAUNCH_PACK_KNOWLEDGE_ID,
   NODE_STARTER_SHELF_IDS,
@@ -237,8 +239,8 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("/version");
   });
 
-  it("cites the reviewed reference set and rejects a stale primary reference", () => {
-    const pack = buildNodeLaunchPack({
+  it("cites the reviewed successor references and rejects legacy primary metadata", () => {
+    const pack = buildNodeLaunchPackV2({
       nodeId: "11111111-1111-4111-8111-111111111111",
       slug: "atlas",
       status: "published",
@@ -269,9 +271,10 @@ describe("buildNodeLaunchPack", () => {
       title: "Ship a node change through the operator",
       url: "https://cognidao.org/knowledge/cicd-e2e-required-sequence",
     });
-    expect(nodeLaunchPackOperation.output.safeParse(pack).success).toBe(true);
+    expect(nodeLaunchPackV2Operation.output.safeParse(pack).success).toBe(true);
+    expect(nodeLaunchPackOperation.output.safeParse(pack).success).toBe(false);
     expect(
-      nodeLaunchPackOperation.output.safeParse({
+      nodeLaunchPackV2Operation.output.safeParse({
         ...pack,
         knowledgeBlock: {
           id: "node-launch-handoff",

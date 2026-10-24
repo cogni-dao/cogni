@@ -5,7 +5,7 @@
  * Module: `@tests/unit/app/node-handoff-step`
  * Purpose: Unit coverage for the wizard handoff step — the AI-agent launch-pack payoff.
  * Scope: Client component behavior with fetch/clipboard mocked; asserts preserved handoff copy,
- *   the four created-artifact links (incl. Aragon DAO), and copy-button ordering.
+ *   artifact links, copy-button ordering, and successor fetch/clipboard contract.
  * Side-effects: none
  * Links: src/features/nodes/wizard/steps/HandoffStep.client.tsx
  * @public
@@ -58,6 +58,26 @@ vi.mock("@/features/nodes/wizard/steps/PaymentActivationStep.client", () => ({
 import { HandoffStep } from "@/features/nodes/wizard/steps/HandoffStep.client";
 import type { WizardNode } from "@/features/nodes/wizard/types";
 
+const launchPack = {
+  kind: "cogni.node.launch_pack.v1",
+  nodeId: "11111111-1111-4111-8111-111111111111",
+  slug: "atlas",
+  status: "published",
+  operatorBaseUrl: "https://cognidao.org",
+  launchPackUrl:
+    "https://cognidao.org/api/v1/nodes/11111111-1111-4111-8111-111111111111/launch-pack/v2",
+  nodeRepoUrl: null,
+  knowledgeRepoUrl: null,
+  parentDeploymentPrUrl: null,
+  candidateUrl: "https://atlas-test.cognidao.org",
+  knowledgeBlock: {
+    id: "cicd-e2e-required-sequence",
+    title: "Ship a node change through the operator",
+    url: "https://cognidao.org/knowledge/cicd-e2e-required-sequence",
+  },
+  prompt: "launch prompt",
+};
+
 function makeNode(overrides: Partial<WizardNode> = {}): WizardNode {
   return {
     id: "11111111-1111-4111-8111-111111111111",
@@ -89,7 +109,7 @@ describe("HandoffStep", () => {
     });
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ prompt: "launch prompt" }),
+      json: async () => launchPack,
     }) as typeof fetch;
   });
 
@@ -149,19 +169,55 @@ describe("HandoffStep", () => {
     expect(screen.queryByRole("link", { name: /Aragon DAO/ })).toBeNull();
   });
 
-  it("copies the launch prompt from the owner-gated API", async () => {
+  it("copies the successor prompt from the owner-gated API", async () => {
     render(<HandoffStep node={makeNode({ id: "node-1" })} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy launch prompt" }));
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        "/api/v1/nodes/node-1/launch-pack"
+        "/api/v1/nodes/node-1/launch-pack/v2"
       );
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
         "launch prompt"
       );
     });
+  });
+
+  it("does not copy a legacy response from the successor endpoint", async () => {
+    vi.mocked(global.fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ...launchPack,
+        kind: "cogni.node.launch_pack.v0",
+        launchPackUrl: "https://cognidao.org/api/v1/nodes/node-1/launch-pack",
+        knowledgeBlock: {
+          id: "node-launch-handoff",
+          title: "AI assistant launch pack for node formation",
+          url: "https://cognidao.org/knowledge/node-launch-handoff",
+        },
+      }),
+    } as Response);
+    render(<HandoffStep node={makeNode({ id: "node-1" })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy launch prompt" }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Copy launch prompt" })
+      ).not.toBeDisabled();
+    });
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+  });
+
+  it("does not copy when the owner-gated endpoint refuses access", async () => {
+    vi.mocked(global.fetch).mockResolvedValue({ ok: false } as Response);
+    render(<HandoffStep node={makeNode()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy launch prompt" }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Copy launch prompt" })
+      ).not.toBeDisabled();
+    });
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
   });
 
   it("opens the payments panel from the handoff CTA", () => {

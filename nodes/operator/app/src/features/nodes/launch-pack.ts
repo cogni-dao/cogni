@@ -14,7 +14,8 @@
  *   action (run-ci, merge, flight) runs through the operator API gated by the same
  *   owner-granted RBAC tuple — the lone human step.
  * Scope: Pure string/object construction with maintained knowledge pointers and separate
- *   node-local cognition and owning-operator credential instructions. No IO or key reads.
+ *   node-local cognition and owning-operator credential instructions; explicit legacy and
+ *   successor projections share the canonical prompt. No IO or key reads.
  * Invariants: STARTER_SHELVES_MIRROR_BASE_DOMAIN_SEEDS — `NODE_STARTER_SHELF_IDS`
  *   must equal the ids in `packages/knowledge-base/src/seeds/domains.ts`
  *   (`BASE_DOMAIN_SEEDS`), which is the source of truth. The operator app does not
@@ -26,11 +27,14 @@
  */
 
 import type { NodeLaunchPackOutput } from "@/contracts/nodes.launch-pack.v1.contract";
+import type { NodeLaunchPackV2Output } from "@/contracts/nodes.launch-pack.v2.contract";
 import type { NodeStatus } from "@/shared/db/nodes";
 
-export const NODE_LAUNCH_PACK_KNOWLEDGE_ID = "cicd-e2e-required-sequence";
+export const NODE_LAUNCH_PACK_KNOWLEDGE_ID = "node-launch-handoff";
+export const NODE_LAUNCH_PACK_V2_KNOWLEDGE_ID = "cicd-e2e-required-sequence";
 
-const KNOWLEDGE_TITLE = "Ship a node change through the operator";
+const KNOWLEDGE_TITLE = "AI assistant launch pack for node formation";
+const KNOWLEDGE_V2_TITLE = "Ship a node change through the operator";
 const KNOWLEDGE_BASE_URL = "https://cognidao.org";
 const OPERATOR_API_ROOT = "https://cognidao.org";
 
@@ -92,12 +96,11 @@ export function candidateUrlForSlug(slug: string): string {
   return `https://${slug}-test.cognidao.org`;
 }
 
-export function buildNodeLaunchPack(
+function buildNodeLaunchPackBody(
   input: NodeLaunchPackInput
-): NodeLaunchPackOutput {
+): Omit<NodeLaunchPackOutput, "kind" | "knowledgeBlock" | "launchPackUrl"> {
   const operatorBaseUrl = trimTrailingSlash(input.operatorOrigin);
-  const launchPackUrl = `${operatorBaseUrl}/api/v1/nodes/${input.nodeId}/launch-pack`;
-  const knowledgeUrl = `${KNOWLEDGE_BASE_URL}/knowledge/${NODE_LAUNCH_PACK_KNOWLEDGE_ID}`;
+  const knowledgeUrl = `${KNOWLEDGE_BASE_URL}/knowledge/${NODE_LAUNCH_PACK_V2_KNOWLEDGE_ID}`;
   const candidateUrl = candidateUrlForSlug(input.slug);
   const nodeRepoLine = input.nodeRepoUrl
     ? `Node repo URL: ${input.nodeRepoUrl}`
@@ -143,21 +146,46 @@ export function buildNodeLaunchPack(
   ].join("\n");
 
   return {
-    kind: "cogni.node.launch_pack.v0",
     nodeId: input.nodeId,
     slug: input.slug,
     status: input.status,
     operatorBaseUrl,
-    launchPackUrl,
     nodeRepoUrl: input.nodeRepoUrl,
     knowledgeRepoUrl: input.knowledgeRepoUrl,
     parentDeploymentPrUrl: input.publishPrUrl,
     candidateUrl,
+    prompt,
+  };
+}
+
+export function buildNodeLaunchPack(
+  input: NodeLaunchPackInput
+): NodeLaunchPackOutput {
+  const body = buildNodeLaunchPackBody(input);
+  return {
+    ...body,
+    kind: "cogni.node.launch_pack.v0",
+    launchPackUrl: `${body.operatorBaseUrl}/api/v1/nodes/${input.nodeId}/launch-pack`,
     knowledgeBlock: {
       id: NODE_LAUNCH_PACK_KNOWLEDGE_ID,
       title: KNOWLEDGE_TITLE,
-      url: knowledgeUrl,
+      url: `${KNOWLEDGE_BASE_URL}/knowledge/${NODE_LAUNCH_PACK_KNOWLEDGE_ID}`,
     },
-    prompt,
+  };
+}
+
+export function buildNodeLaunchPackV2(
+  input: NodeLaunchPackInput
+): NodeLaunchPackV2Output {
+  const body = buildNodeLaunchPackBody(input);
+  return {
+    ...body,
+    kind: "cogni.node.launch_pack.v1",
+    launchPackUrl: `${body.operatorBaseUrl}/api/v1/nodes/${input.nodeId}/launch-pack/v2`,
+    knowledgeBlock: {
+      id: NODE_LAUNCH_PACK_V2_KNOWLEDGE_ID,
+      title: KNOWLEDGE_V2_TITLE,
+      url: `${KNOWLEDGE_BASE_URL}/knowledge/${NODE_LAUNCH_PACK_V2_KNOWLEDGE_ID}`,
+    },
   };
 }

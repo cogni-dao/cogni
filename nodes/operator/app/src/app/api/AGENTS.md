@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-10-09
+- **Last reviewed:** 2026-10-24
 - **Status:** draft
 
 ## Purpose
@@ -47,6 +47,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/nodes/[id]/developers` [POST] - owner-gated approve/reject for registered agent developer flight authority
   - `/api/v1/nodes/[id]/reconcile-merge-queue` [POST] - env-manager-gated convergence of a node repo's live merge queue to the git-owned operator policy
   - `/api/v1/nodes/[id]/launch-pack` [GET] - owner-gated AI-assistant handoff for post-publish node launch
+  - `/api/v1/nodes/[id]/launch-pack/v2` [GET] - owner-gated successor handoff with maintained canonical guidance; the legacy route retains its published metadata
   - `/api/v1/nodes/[id]/publish` [POST] - mints the node repo, opens the submodule deployment PR, advances dao_formed → published
   - `/api/v1/nodes/[id]/activate-distributions` [POST] - terminal owner/developer-gated repo-spec PR; verifies distributor ownership/token and paired CAS publishing authority before recording active
   - `/api/v1/nodes/[id]/distributions-status` [GET] - owner/developer-gated read of the git-plane activation record (repo-spec main + open/merged activation PR + distributor addresses)

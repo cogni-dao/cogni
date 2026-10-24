@@ -4,7 +4,7 @@
 /**
  * Module: `@contracts/nodes.launch-pack.v1`
  * Purpose: Owner-gated AI-assistant handoff contract for the node wizard.
- * Scope: Stable wire keys with the maintained CI/CD guide as the primary knowledge pointer.
+ * Scope: Published legacy shape retained for existing callers; successor is nodes.launch-pack.v2.
  * Side-effects: none
  * Links: src/features/nodes/launch-pack.ts, cicd-e2e-required-sequence, bug.5388
  * @public
@@ -39,8 +39,8 @@ export const nodeLaunchPackOperation = {
     parentDeploymentPrUrl: z.string().url().nullable(),
     candidateUrl: z.string().url(),
     knowledgeBlock: z.object({
-      id: z.literal("cicd-e2e-required-sequence"),
-      title: z.literal("Ship a node change through the operator"),
+      id: z.literal("node-launch-handoff"),
+      title: z.literal("AI assistant launch pack for node formation"),
       url: z.string().url(),
     }),
     prompt: z.string().min(1),
