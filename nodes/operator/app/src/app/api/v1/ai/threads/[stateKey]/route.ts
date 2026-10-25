@@ -22,7 +22,12 @@ import {
 } from "@/app/_facades/ai/threads.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { logRequestWarn, type RequestContext } from "@/shared/observability";
+import {
+  EVENT_NAMES,
+  logEvent,
+  logRequestWarn,
+  type RequestContext,
+} from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +50,7 @@ export const GET = wrapRouteHandlerWithLogging<{
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, _request, sessionUser, context) => {
+    const startedAt = performance.now();
     try {
       if (!context) throw new Error("context required for dynamic routes");
       const { stateKey } = await context.params;
@@ -57,11 +63,29 @@ export const GET = wrapRouteHandlerWithLogging<{
         stateKey: input.stateKey,
       });
 
-      return NextResponse.json(loadThreadOperation.output.parse(result), {
+      const output = loadThreadOperation.output.parse(result);
+      logEvent(ctx.log, EVENT_NAMES.AI_THREAD_READ, {
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        stateKey: input.stateKey,
+        count: output.messages.length,
+        status: 200,
+        outcome: output.messages.length ? "success" : "empty",
+        durationMs: performance.now() - startedAt,
+      });
+      return NextResponse.json(output, {
         headers: { "Cache-Control": "no-store" },
       });
     } catch (error) {
       const errorResponse = handleRouteError(ctx, error);
+      logEvent(ctx.log, EVENT_NAMES.AI_THREAD_READ, {
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        status: errorResponse?.status ?? 500,
+        outcome: "error",
+        errorCode: errorResponse ? "THREAD_READ_INVALID" : "THREAD_READ_FAILED",
+        durationMs: performance.now() - startedAt,
+      });
       if (errorResponse) return errorResponse;
       throw error;
     }
