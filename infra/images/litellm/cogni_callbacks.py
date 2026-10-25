@@ -3,25 +3,26 @@
 
 """
 Module: infra/images/litellm/cogni_callbacks.py
-Purpose: Custom LiteLLM callback that routes billing callbacks to the correct
-  node's /api/internal/billing/ingest endpoint based on node_id metadata.
+Purpose: Route unchanged billing callbacks to the authenticated node/workload lane.
 Scope: Adapter glue only — runs inside LiteLLM process. No pricing logic,
   no policy logic, no reconciliation logic (CALLBACK_IS_ADAPTER_GLUE).
 Invariants:
   REPO_SPEC_IS_IDENTITY_SSOT: no hardcoded node_id. The default node is injected
     via COGNI_DEFAULT_NODE_ID, sourced from the primary-host node's
     .cogni/repo-spec.yaml by deploy-infra.sh (image-tags.sh:default_node_id).
-  NO_SILENT_MISATTRIBUTION: missing/unknown node_id falls back to the configured
-    default only if one is set; otherwise the event is logged + skipped — never
-    silently billed to a fabricated identity.
+  NO_SILENT_MISATTRIBUTION: virtual keys require an exact registered alias route;
+    only a proven master key may use local legacy routes or the missing-node default.
   CALLBACK_AUTHENTICATED: forwards BILLING_INGEST_TOKEN as Bearer header
   NODE_LOCAL_METERING_PRIMARY: routes to node-local endpoint
 Side-effects: IO (HTTP POST to node ingest endpoints)
 """
 
+import hashlib
+import hmac
 import json
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
@@ -29,16 +30,20 @@ from litellm.integrations.custom_logger import CustomLogger
 
 logger = logging.getLogger("cogni.callbacks")
 
-# Default node for unattributed spend. Injected from the primary-host node's
+# Default node for missing attribution on authenticated master-key traffic only.
+# Injected from the primary-host node's
 # .cogni/repo-spec.yaml (REPO_SPEC_IS_IDENTITY_SSOT) — no hardcoded identity.
 # When unset, missing/unknown node_id is logged + skipped (NO_SILENT_MISATTRIBUTION).
 DEFAULT_NODE = os.environ.get("COGNI_DEFAULT_NODE_ID")
+_UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_WORKLOAD_ALIAS = re.compile(rf"cogni:([a-z0-9]+(?:-[a-z0-9]+)*):({_UUID}):app:v1")
+_KEY_HASH = re.compile(r"[0-9a-f]{64}")
 
 
 def _parse_node_endpoints() -> dict[str, str]:
-    """Parse COGNI_NODE_ENDPOINTS env var into {node_id: url} map.
+    """Parse exact authenticated aliases and local legacy node IDs into URLs.
 
-    Format: "operator=http://app:3000/api/internal/billing/ingest,poly=http://poly:3100/api/internal/billing/ingest"
+    Values are base URLs; keys are exact workload aliases or local legacy node IDs.
     Required — fails loudly if not set.
     """
     raw = os.environ.get("COGNI_NODE_ENDPOINTS", "")
@@ -52,9 +57,15 @@ def _parse_node_endpoints() -> dict[str, str]:
     for pair in raw.split(","):
         pair = pair.strip()
         if "=" not in pair:
-            continue
-        node_id, url = pair.split("=", 1)
-        endpoints[node_id.strip()] = url.strip()
+            raise RuntimeError("Malformed COGNI_NODE_ENDPOINTS entry")
+        route_key, url = (part.strip() for part in pair.split("=", 1))
+        if not route_key or not url:
+            raise RuntimeError("Empty COGNI_NODE_ENDPOINTS key or URL")
+        if route_key.startswith("cogni:") and not _WORKLOAD_ALIAS.fullmatch(route_key):
+            raise RuntimeError("Malformed workload alias in COGNI_NODE_ENDPOINTS")
+        if route_key in endpoints and endpoints[route_key] != url:
+            raise RuntimeError("Conflicting COGNI_NODE_ENDPOINTS entries")
+        endpoints[route_key] = url
 
     if not endpoints:
         raise RuntimeError(
@@ -72,73 +83,67 @@ def _get_billing_token() -> str:
 class CogniNodeRouter(CustomLogger):
     """Routes LiteLLM success callbacks to per-node billing ingest endpoints.
 
-    Reads node_id (UUID) from spend_logs_metadata (set by each node's LLM adapter
-    via x-litellm-spend-logs-metadata header). Routes to the matching node's
-    /api/internal/billing/ingest endpoint. On missing/unknown node_id, falls back
-    to COGNI_DEFAULT_NODE_ID if set (the primary-host node_id, repo-spec-derived),
-    else logs + skips — never a hardcoded identity (NO_SILENT_MISATTRIBUTION).
+    LiteLLM overwrites user_api_key_alias/hash from authenticated UserAPIKeyAuth
+    after request/header metadata. Never read requester_metadata for authority.
+    Virtual keys use exact lane-qualified aliases; the existing master key alone
+    may use the gateway's local legacy map. Unknown identities never fall back.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self.node_endpoints = _parse_node_endpoints()
         self.billing_token = _get_billing_token()
+        master = os.environ.get("LITELLM_MASTER_KEY", "")
+        self._master_hash = hashlib.sha256(master.encode()).hexdigest() if master else None
         self._client = httpx.AsyncClient(timeout=10.0)
         logger.info(
             "CogniNodeRouter initialized — endpoints: %s", self.node_endpoints
         )
+
+    def _resolve_route(self, metadata: dict[str, Any]) -> tuple[str, str] | None:
+        """Resolve server-authenticated identity without changing receipt contents."""
+        key_hash = metadata.get("user_api_key_hash")
+        if not isinstance(key_hash, str) or not _KEY_HASH.fullmatch(key_hash):
+            return None
+        spend_logs = metadata.get("spend_logs_metadata", {})
+        if not isinstance(spend_logs, dict):
+            return None
+        node_id = spend_logs.get("node_id")
+        if "node_id" in spend_logs and (not isinstance(node_id, str) or not node_id):
+            return None
+        alias = metadata.get("user_api_key_alias")
+        if alias is not None and alias != "":
+            match = _WORKLOAD_ALIAS.fullmatch(alias) if isinstance(alias, str) else None
+            if not match or (node_id is not None and node_id != match.group(2)):
+                return None
+            route_key = alias
+        else:
+            if not self._master_hash or not hmac.compare_digest(key_hash, self._master_hash):
+                return None
+            route_key = node_id if node_id is not None else DEFAULT_NODE
+            # A caller must not smuggle a foreign-lane alias through legacy node_id.
+            if not route_key or route_key.startswith("cogni:"):
+                return None
+        endpoint = self.node_endpoints.get(route_key)
+        return (route_key, endpoint) if endpoint else None
 
     async def async_log_success_event(
         self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
     ) -> None:
         """Called by LiteLLM after each successful completion. Routes to correct node."""
         try:
-            # Extract node_id from metadata
+            # These fields are stamped by the pinned LiteLLM authentication path.
             litellm_params = kwargs.get("litellm_params", {})
             metadata = litellm_params.get("metadata", {})
-            spend_logs = metadata.get("spend_logs_metadata", {})
-
-            node_id = spend_logs.get("node_id") if isinstance(spend_logs, dict) else None
-
-            if not node_id:
-                if not DEFAULT_NODE:
-                    logger.error(
-                        "No node_id in spend_logs_metadata and COGNI_DEFAULT_NODE_ID "
-                        "unset — skipping callback (NO_SILENT_MISATTRIBUTION). "
-                        "call_id=%s model=%s",
-                        kwargs.get("litellm_call_id", "unknown"),
-                        kwargs.get("model", "unknown"),
-                    )
-                    return
-                node_id = DEFAULT_NODE
+            route = self._resolve_route(metadata) if isinstance(metadata, dict) else None
+            if route is None:
                 logger.warning(
-                    "No node_id in spend_logs_metadata — defaulting to '%s'. "
-                    "call_id=%s model=%s",
-                    DEFAULT_NODE,
+                    "Billing callback rejected — unconfigured or conflicting authenticated "
+                    "workload identity. call_id=%s",
                     kwargs.get("litellm_call_id", "unknown"),
-                    kwargs.get("model", "unknown"),
                 )
-
-            # Resolve endpoint
-            endpoint = self.node_endpoints.get(node_id)
-            if not endpoint:
-                if DEFAULT_NODE:
-                    logger.warning(
-                        "Unknown node_id '%s' — falling back to '%s'. call_id=%s",
-                        node_id,
-                        DEFAULT_NODE,
-                        kwargs.get("litellm_call_id", "unknown"),
-                    )
-                    endpoint = self.node_endpoints.get(DEFAULT_NODE)
-                if not endpoint:
-                    logger.error(
-                        "No endpoint for node_id '%s' (default '%s') — skipping "
-                        "callback (NO_SILENT_MISATTRIBUTION). call_id=%s",
-                        node_id,
-                        DEFAULT_NODE,
-                        kwargs.get("litellm_call_id", "unknown"),
-                    )
-                    return
+                return
+            route_key, endpoint = route
 
             # Build the StandardLoggingPayload-shaped object
             # LiteLLM provides standard_logging_object in kwargs
@@ -165,7 +170,7 @@ class CogniNodeRouter(CustomLogger):
             if response.status_code != 200:
                 logger.error(
                     "Billing ingest failed — node=%s status=%d body=%s call_id=%s",
-                    node_id,
+                    route_key,
                     response.status_code,
                     response.text[:200],
                     kwargs.get("litellm_call_id", "unknown"),
@@ -173,7 +178,7 @@ class CogniNodeRouter(CustomLogger):
             else:
                 logger.debug(
                     "Billing callback routed — node=%s call_id=%s",
-                    node_id,
+                    route_key,
                     kwargs.get("litellm_call_id", "unknown"),
                 )
 

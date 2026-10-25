@@ -16,7 +16,7 @@ tags: [billing, litellm, sandbox]
 
 # Billing Ingest: Callback-Driven, Port-Level Billing
 
-> Billing is canonicalized at GraphExecutorPort. Adapters never implement billing — they only emit `usage_unit_created{call_id}`. Cost data comes from a single source (LiteLLM custom callback). In multi-node deployments, the callback routes each completion to the correct node's ingest endpoint based on `node_id` metadata. The decorator logs call_ids for observability; a periodic reconciliation job catches missing receipts. **No synchronous receipt barrier blocks the user response.**
+> Billing is canonicalized at GraphExecutorPort. Adapters never implement billing — they only emit `usage_unit_created{call_id}`. Cost data comes from a single source (LiteLLM custom callback). In multi-node deployments, the callback routes each completion to the correct node's ingest endpoint using the authenticated virtual-key workload alias; verified master-key traffic retains local node routing. The decorator logs call_ids for observability; a periodic reconciliation job catches missing receipts. **No synchronous receipt barrier blocks the user response.**
 
 ### Key References
 
@@ -82,11 +82,11 @@ tags: [billing, litellm, sandbox]
 │                                                                     │
 │  On every successful LLM call:                                      │
 │  1. Computes response_cost                                          │
-│  2. CogniNodeRouter reads node_id from spend_logs_metadata          │
-│  3. Routes POST to correct node's /api/internal/billing/ingest      │
-│     (COGNI_NODE_ENDPOINTS env: node_id=endpoint_url,...)            │
-│  4. Missing node_id → defaults to operator + warning                │
-│     (MISSING_NODE_ID_DEFAULTS_OPERATOR)                             │
+│  2. Read server-stamped user_api_key_alias + user_api_key_hash        │
+│  3. Route exact cogni:<lane>:<node UUID>:app:v1 via endpoint map       │
+│     Reject conflicting node_id or unknown authenticated identity     │
+│  4. Verified master key alone may use local legacy node/default       │
+│     Forward provider payload unchanged (AUTHENTICATED_WORKLOAD_ROUTING)│
 └──────────────────────┬──────────────────────────────────────────────┘
                        │ (per-completion, not batched)
                        ▼
@@ -178,7 +178,7 @@ litellm_settings:
   # CogniNodeRouter replaces generic_api — routes per-completion to correct node
   success_callback: ["langfuse", "cogni_callbacks.CogniNodeRouter"]
 # Environment variables (on LiteLLM container):
-# COGNI_NODE_ENDPOINTS=operator=http://app:3000/api/internal/billing/ingest,poly=http://poly:3100/api/internal/billing/ingest
+# COGNI_NODE_ENDPOINTS=<local-node-uuid>=http://app:3000,cogni:<lane>:<node-uuid>:app:v1=https://node.example.org
 # BILLING_INGEST_TOKEN=<shared-secret>
 ```
 
@@ -205,7 +205,7 @@ const StandardLoggingPayloadBilling = z.object({
         .object({
           // From x-litellm-spend-logs-metadata header
           run_id: z.string(),
-          node_id: z.string().optional(), // Used by CogniNodeRouter for per-node routing
+          node_id: z.string().optional(), // Must agree with the authenticated virtual-key node; local master routing
           graph_id: z.string().optional(),
           attempt: z.number().int().optional(),
         })
@@ -258,8 +258,8 @@ Canonicalize billing at GraphExecutorPort so adapters never implement billing. S
 Callback and log-scraping paths coexisted briefly during cutover:
 
 1. **Add ingest endpoint** — ~~Done (task.0029).~~ `POST /api/internal/billing/ingest` accepting `List[StandardLoggingPayload]`, Zod validation, `commitUsageFact()`, shared-secret auth.
-2. **Configure LiteLLM callback** — ~~Done (task.0029, upgraded task.0256).~~ Originally `generic_api` with `GENERIC_LOGGER_ENDPOINT`. Replaced by custom callback class `CogniNodeRouter` (`infra/litellm/cogni_callbacks.py`) for per-node routing via `COGNI_NODE_ENDPOINTS` env var.
-3. **Per-node callback routing** — ~~Done (task.0256).~~ Each node stamps `node_id` in `spendLogsMetadata`. Custom callback reads it and routes to correct node's ingest endpoint. Missing `node_id` defaults to operator with warning.
+2. **Configure LiteLLM callback** — ~~Done (task.0029, upgraded task.0256).~~ Originally `generic_api` with `GENERIC_LOGGER_ENDPOINT`. Replaced by custom callback class `CogniNodeRouter` (`infra/images/litellm/cogni_callbacks.py`) for per-node routing via `COGNI_NODE_ENDPOINTS` env var.
+3. **Per-node callback routing** — ~~Done (task.0256).~~ Each node stamps `node_id` in `spendLogsMetadata`. Custom callback checks it against the authenticated `cogni:<lane>:<node UUID>:app:v1` key alias, then routes by that exact alias. Only a hash-verified master key may use local legacy routes or the missing-node default. The catalog emits aliases only for declared lanes controlled by this gateway.
 4. **Fix gateway `run_id` gap** — Not started. Add `x-litellm-spend-logs-metadata` to OpenClaw `outboundHeaders` per session.
 5. **Strip billing from adapters** — ~~Done (task.0029).~~ `ProxyBillingReader` deleted, gateway billing removed from `SandboxGraphProvider`, `OPENCLAW_BILLING_DIR` removed. Gateway nginx audit log removed.
 6. **Delete old paths** — ~~Done (task.0029).~~ `ProxyBillingReader`, billing volumes, `OPENCLAW_BILLING_DIR`, gateway audit log all removed. `commitUsageFact()` refactored to strict cost-known/unknown branching (COST_AUTHORITY_IS_LITELLM).
