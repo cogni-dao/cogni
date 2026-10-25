@@ -39,6 +39,8 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
 
 ## Public Surface
 
+- `/dev/finance-preview`: fixture-only preview of the finance component; development runtime only, otherwise 404. `/admin/payments` remains repo-spec-admin gated and shows a read-only finance report.
+
 - **Exports:** none
 - **Route Groups:**
   - `(public)`: Unauthenticated pages (landing, marketing, docs)

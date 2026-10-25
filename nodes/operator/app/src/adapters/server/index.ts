@@ -243,3 +243,9 @@ export { observeAppliedCellManaged } from "./compute/database-cell-applied-manag
 export { ReadOnlyAppliedDatabaseCellObserver } from "./compute/database-cell-applied-observer.adapter";
 export { DrizzleDatabaseCellBindingStore } from "./compute/database-cell-binding-store.adapter";
 export { PostgresDatabaseCellObserver } from "./compute/database-cell-observer.adapter";
+
+export {
+  computeBalanceReader,
+  computeCostReaders,
+  unavailableFinanceReader,
+} from "./finance/operator-finance.adapter";
