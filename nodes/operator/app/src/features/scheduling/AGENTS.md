@@ -1,5 +1,45 @@
-# Red scheduling bindings
+# features/scheduling · AGENTS.md
 
-This feature validates Red caller identities and injects node-owned schedule lookup and the shared metadata reader into `@cogni/scheduling`. It does not duplicate SQL, manage execution or read transcripts.
+> Scope: this directory only. Keep ≤150 lines. Do not restate root policies.
 
-Shared contracts/readback/presentation are consumed from the immutable package artifact. Routes, authentication, composition, React components and styling stay in Red. Existing GraphExecutor and Temporal wiring are unchanged.
+## Metadata
+
+- **Owners:** @derek @core-dev
+- **Last reviewed:** 2026-10-25
+- **Status:** stable
+
+## Purpose
+
+Bind authenticated operator identities and node-owned schedule lookup to the published scheduling metadata reader.
+
+## Pointers
+
+- [Ports](../../ports/AGENTS.md)
+- [Container](../../bootstrap/AGENTS.md)
+- [Delivery work item](https://cognidao.org/work/items/task.5356)
+
+## Boundaries
+
+```json
+{
+  "layer": "features",
+  "may_import": ["ports", "shared", "types"],
+  "must_not_import": ["app", "adapters"]
+}
+```
+
+## Public Surface
+
+- `services/history.ts`: `createOwnedScheduleHistory` injects the schedule manager and `ScheduleRunReader` into `@cogni/scheduling`.
+- Dependencies: `@cogni/ids`, `@cogni/scheduling`, and `@/ports/server`.
+
+## Responsibilities
+
+- Validate caller identities before node-owned schedule lookup.
+- Delegate ownership checks, metadata mapping and cursor behavior to the published package.
+- Leave route authentication, database composition, React components and styling in the operator app.
+
+## Notes
+
+- No SQL duplication, database pools, transcript reads or execution ownership here.
+- Existing GraphExecutor and Temporal wiring remain unchanged.
