@@ -338,6 +338,15 @@ case ",$isolated_billing," in
   *",cogni:production:$ZA_ID:app:v1=https://za.isolated-workload.test,"*) pass "isolated fleet derives foreign workload domain" ;;
   *) fail "isolated fleet used the gateway domain for a foreign lane: $isolated_billing" ;;
 esac
+# A foreign preview on Akash is owned by the production gateway too. Keep the
+# earlier preview-k3s exclusion, then prove the placed preview via actual callback.
+yq -i '.deployment_provider.preview = "akash"' "$PLACEMENT_CATALOG/za.yaml"
+shared_billing="$(COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" FLEET_CONTROL_ENV=production \
+  bash -c 'source scripts/ci/lib/image-tags.sh; node_billing_endpoint_csv cogni.vm.substrate.test production isolated-workload.test')"
+case ",$shared_billing," in
+  *",cogni:preview:$ZA_ID:app:v1=https://za-preview.isolated-workload.test,"*) pass "foreign preview Akash uses its own workload host" ;;
+  *) fail "missing foreign preview Akash route: $shared_billing" ;;
+esac
 RENDERED_BILLING_ENDPOINTS="$shared_billing" python3 "$SCRIPT_DIR/litellm-callback-routing.test.py" \
   || fail "actual callback rejected the catalog-derived workload map"
 

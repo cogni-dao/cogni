@@ -199,13 +199,14 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         for alias, target in [
             (CANDIDATE, "https://za-test.isolated-workload.test"),
             (PRODUCTION, "https://za.isolated-workload.test"),
+            (CANDIDATE.replace("candidate-a", "preview"), "https://za-preview.isolated-workload.test"),
         ]:
             self.router._client.calls.clear()
             self.assertEqual(await self.route(await self.metadata(alias=alias)),
                              [target + "/api/internal/billing/ingest"])
         self.router._client.calls.clear()
         self.assertEqual(await self.route(await self.metadata(
-            alias=CANDIDATE.replace("candidate-a", "preview"))), [])
+            alias=CANDIDATE.replace("candidate-a", "candidate-other"))), [])
 
     def test_conflicting_routes_and_bad_alias_fail_at_startup(self):
         for suffix in [f",{CANDIDATE}=https://other.invalid", ",cogni:bad=url"]:
