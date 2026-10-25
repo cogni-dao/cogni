@@ -100,7 +100,7 @@ class CogniNodeRouter(CustomLogger):
             "CogniNodeRouter initialized — endpoints: %s", self.node_endpoints
         )
 
-    def _resolve_route(self, metadata: dict[str, Any]) -> tuple[str, str] | None:
+    def _resolve_route(self, metadata: dict[str, Any]) -> str | None:
         """Resolve server-authenticated identity without changing receipt contents."""
         key_hash = metadata.get("user_api_key_hash")
         if not isinstance(key_hash, str) or not _KEY_HASH.fullmatch(key_hash):
@@ -124,8 +124,7 @@ class CogniNodeRouter(CustomLogger):
             # A caller must not smuggle a foreign-lane alias through legacy node_id.
             if not route_key or route_key.startswith("cogni:"):
                 return None
-        endpoint = self.node_endpoints.get(route_key)
-        return (route_key, endpoint) if endpoint else None
+        return self.node_endpoints.get(route_key)
 
     async def async_log_success_event(
         self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
@@ -135,15 +134,14 @@ class CogniNodeRouter(CustomLogger):
             # These fields are stamped by the pinned LiteLLM authentication path.
             litellm_params = kwargs.get("litellm_params", {})
             metadata = litellm_params.get("metadata", {})
-            route = self._resolve_route(metadata) if isinstance(metadata, dict) else None
-            if route is None:
+            endpoint = self._resolve_route(metadata) if isinstance(metadata, dict) else None
+            if endpoint is None:
                 logger.warning(
                     "Billing callback rejected — unconfigured or conflicting authenticated "
                     "workload identity. call_id=%s",
                     kwargs.get("litellm_call_id", "unknown"),
                 )
                 return
-            route_key, endpoint = route
 
             # Build the StandardLoggingPayload-shaped object
             # LiteLLM provides standard_logging_object in kwargs
@@ -169,16 +167,14 @@ class CogniNodeRouter(CustomLogger):
 
             if response.status_code != 200:
                 logger.error(
-                    "Billing ingest failed — node=%s status=%d body=%s call_id=%s",
-                    route_key,
+                    "Billing ingest failed — status=%d body=%s call_id=%s",
                     response.status_code,
                     response.text[:200],
                     kwargs.get("litellm_call_id", "unknown"),
                 )
             else:
                 logger.debug(
-                    "Billing callback routed — node=%s call_id=%s",
-                    route_key,
+                    "Billing callback routed — call_id=%s",
                     kwargs.get("litellm_call_id", "unknown"),
                 )
 
