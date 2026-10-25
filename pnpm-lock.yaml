@@ -421,6 +421,9 @@ importers:
       '@cogni/scheduler-core':
         specifier: workspace:*
         version: link:../../../packages/scheduler-core
+      '@cogni/scheduling':
+        specifier: https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz
+        version: '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz(postgres@3.4.7)'
       '@cogni/shared-ai-tools':
         specifier: https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.1.1/cogni-dao-ai-tools-0.1.1.tgz
         version: '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.1.1/cogni-dao-ai-tools-0.1.1.tgz(@cogni/ai-core@packages+ai-core)'
@@ -1855,6 +1858,15 @@ packages:
     peerDependencies:
       '@cogni/ai-core': '*'
       '@cogni/ai-tools': '>=0.1.1'
+
+  '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz':
+    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz}
+    version: 0.1.0
+    peerDependencies:
+      postgres: ^3.4.5
+    peerDependenciesMeta:
+      postgres:
+        optional: true
 
   '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.4/cogni-dao-work-items-0.2.4.tgz':
     resolution: {integrity: sha512-UClM1Gt2YHRPJ3auWZgwug7YE7Y7da/aO5fbHpxLeFXcOsKzOjrsVr+wgMN6kqFTXE4FKWAZhmnvAgCo5VRFuA==, tarball: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.4/cogni-dao-work-items-0.2.4.tgz}
@@ -13297,6 +13309,12 @@ snapshots:
       - supports-color
       - ws
       - zod-to-json-schema
+
+  '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz(postgres@3.4.7)':
+    dependencies:
+      zod: 4.3.6
+    optionalDependencies:
+      postgres: 3.4.7
 
   '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.4/cogni-dao-work-items-0.2.4.tgz':
     dependencies:

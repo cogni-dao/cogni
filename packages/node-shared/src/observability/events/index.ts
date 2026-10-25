@@ -120,6 +120,9 @@ export const EVENT_NAMES = {
 
   // Scheduling Domain
   SCHEDULE_CREDIT_GATE_REJECTED: "schedules.credit_gate_rejected",
+  SCHEDULE_DETAIL_READ: "schedules.detail_read",
+  SCHEDULE_HISTORY_READ: "schedules.history_read",
+  AI_THREAD_READ: "ai.thread_read",
 
   // Governance Domain
   GOVERNANCE_SYNC_COMPLETE: "governance.sync.complete",
