@@ -31,7 +31,6 @@ import { useRouter } from "next/navigation";
 import { type ReactElement, useMemo, useState, useTransition } from "react";
 
 import {
-  Badge,
   Button,
   DataGrid,
   DataGridColumnHeader,
@@ -175,17 +174,24 @@ export function FinanceReport({
       {
         id: "service",
         accessorKey: "label",
+        size: 240,
+        minSize: 200,
         header: ({ column }) => (
           <DataGridColumnHeader column={column} title="Service" />
         ),
         cell: ({ row }) => (
-          <div className="flex items-center gap-2">
-            <span className="font-medium">{row.original.label}</span>
+          <div className="min-w-0 space-y-0.5">
+            <span
+              className="block truncate font-medium"
+              title={row.original.label}
+            >
+              {row.original.label}
+            </span>
             {row.original.kind !== "wallet" &&
               row.original.coverage === "operator-covered" && (
-                <Badge intent="outline" size="sm">
+                <span className="block text-muted-foreground text-xs">
                   Sponsored
-                </Badge>
+                </span>
               )}
           </div>
         ),
@@ -200,6 +206,7 @@ export function FinanceReport({
       moneyColumn("burn", "Burn", nativeBurn),
       {
         id: "runway",
+        size: 100,
         accessorFn: (row) =>
           row.runwayDays !== null && Number.isFinite(row.runwayDays)
             ? row.runwayDays
@@ -225,6 +232,7 @@ export function FinanceReport({
       ),
       {
         id: "status",
+        size: 110,
         accessorFn: (row) => statuses[row.grade].rank,
         sortingFn: (a, b) =>
           statuses[a.original.grade].rank - statuses[b.original.grade].rank ||
