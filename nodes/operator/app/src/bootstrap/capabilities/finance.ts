@@ -30,6 +30,7 @@ import {
 import { serverEnv } from "@/shared/env";
 
 import { getContainer } from "../container";
+import { uniqueWalletBindings } from "./finance-wallets";
 
 const safeFetch: FetchLike = async (url, init) => {
   try {
@@ -100,26 +101,36 @@ export async function createFinanceReaders(): Promise<PlaneReader[]> {
     fetch: safeFetch,
   });
   return [
-    wallet(
-      "dao-treasury",
-      "DAO treasury",
-      getDaoTreasuryAddress(),
-      "DAO treasury",
-      "DAO"
-    ),
-    wallet(
-      "operator-wallet",
-      "Operator working capital",
-      getOperatorWalletConfig()?.address,
-      "Operator",
-      "Operator DAO"
-    ),
-    wallet(
-      "steward-wallet",
-      "Steward custody",
-      getStewardWalletConfig()?.address,
-      "Human-custodied wallet",
-      "Not established"
+    ...uniqueWalletBindings([
+      {
+        name: "dao-treasury",
+        label: "DAO treasury",
+        address: getDaoTreasuryAddress(),
+        beneficiary: "DAO treasury",
+        payer: "DAO",
+      },
+      {
+        name: "operator-wallet",
+        label: "Operator working capital",
+        address: getOperatorWalletConfig()?.address,
+        beneficiary: "Operator",
+        payer: "Operator DAO",
+      },
+      {
+        name: "steward-wallet",
+        label: "Steward custody",
+        address: getStewardWalletConfig()?.address,
+        beneficiary: "Human-custodied wallet",
+        payer: "Not established",
+      },
+    ]).map((binding) =>
+      wallet(
+        binding.name,
+        binding.label,
+        binding.address,
+        binding.beneficiary,
+        binding.payer
+      )
     ),
     {
       ...openRouter,

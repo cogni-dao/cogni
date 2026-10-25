@@ -18,9 +18,52 @@ import {
   computeReportRows,
 } from "@/adapters/server/finance/operator-finance.adapter";
 
+import { uniqueWalletBindings } from "@/bootstrap/capabilities/finance-wallets";
+
 const at = "2026-10-25T00:00:00.000Z";
 
 describe("operator finance evidence", () => {
+  it("deduplicates one Base account across roles before reads, retaining missing roles", () => {
+    const account = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    const input = [
+      {
+        name: "treasury",
+        label: "Treasury",
+        address: account,
+        beneficiary: "DAO",
+        payer: "DAO",
+      },
+      {
+        name: "steward",
+        label: "Steward",
+        address: `0x${account.slice(2).toUpperCase()}`,
+        beneficiary: "Human custody",
+        payer: "Unknown",
+      },
+      {
+        name: "missing-a",
+        label: "Missing A",
+        address: undefined,
+        beneficiary: "Unknown",
+        payer: "Unknown",
+      },
+      {
+        name: "missing-b",
+        label: "Missing B",
+        address: undefined,
+        beneficiary: "Unknown",
+        payer: "Unknown",
+      },
+    ];
+    const result = uniqueWalletBindings(input);
+    expect(result).toHaveLength(3);
+    expect(result[0]?.beneficiary).toBe("DAO · Steward: Human custody");
+    expect(result.slice(1).map((row) => row.name)).toEqual([
+      "missing-a",
+      "missing-b",
+    ]);
+    expect(input[0]?.beneficiary).toBe("DAO");
+  });
   it("preserves all native rates and transfers without repeating a denomination total", () => {
     const rows = computeReportRows(
       [

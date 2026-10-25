@@ -3,16 +3,30 @@
 
 /**
  * Module: `reporting-page.test`
- * Purpose: Prove read-only evidence rendering and fixture-preview production denial.
- * Scope: SSR component rendering and page guard with no live adapters.
- * Invariants: Unknown is not zero, cumulative evidence is not payment history, no write controls.
+ * Purpose: Prove real grid sorting, compact totals, evidence disclosure and access guards.
+ * Scope: Actual ReUI/TanStack rendering with no live providers or app shell IO.
+ * Invariants: Missing-last both ways, native economic buckets, no money-moving controls.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/task.5347
- * @internal
+ * @vitest-environment jsdom
  */
-import { renderToStaticMarkup } from "react-dom/server";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const access = vi.hoisted(() => ({
+  allowed: false,
+  readers: vi.fn(async () => []),
+  log: vi.fn(),
+  refresh: vi.fn(),
+}));
 vi.mock("next/navigation", () => ({
   redirect: () => {
     throw new Error("NEXT_REDIRECT");
@@ -20,11 +34,7 @@ vi.mock("next/navigation", () => ({
   notFound: () => {
     throw new Error("NEXT_NOT_FOUND");
   },
-}));
-const access = vi.hoisted(() => ({
-  allowed: false,
-  readers: vi.fn(async () => []),
-  log: vi.fn(),
+  useRouter: () => ({ refresh: access.refresh }),
 }));
 vi.mock("@/bootstrap/capabilities/finance", () => ({
   createFinanceReaders: access.readers,
@@ -40,49 +50,64 @@ vi.mock("@/shared/observability", () => ({
   EVENT_NAMES: { FINANCE_REPORT_READ: "finance.report.read" },
   makeLogger: () => ({ info: access.log }),
 }));
-
-vi.mock("@/components", () => ({
-  Badge: ({ children }: { children: React.ReactNode }) => (
-    <span>{children}</span>
-  ),
-  Table: ({ children }: { children: React.ReactNode }) => (
-    <table>{children}</table>
-  ),
-  TableBody: ({ children }: { children: React.ReactNode }) => (
-    <tbody>{children}</tbody>
-  ),
-  TableCell: ({ children }: { children: React.ReactNode }) => (
-    <td>{children}</td>
-  ),
-  TableHead: ({ children }: { children: React.ReactNode }) => (
-    <th>{children}</th>
-  ),
-  TableHeader: ({ children }: { children: React.ReactNode }) => (
-    <thead>{children}</thead>
-  ),
-  TableRow: ({ children }: { children: React.ReactNode }) => (
-    <tr>{children}</tr>
-  ),
-  PageContainer: ({ children }: { children: React.ReactNode }) => (
+vi.mock("@/app/(admin)/AdminShell", () => ({
+  AdminShell: ({ children }: { children: ReactNode }) => (
     <main>{children}</main>
   ),
 }));
+vi.mock("@/components", async () => {
+  const grid = await import("@cogni/node-ui-kit/reui/data-grid/data-grid");
+  const header = await import(
+    "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header"
+  );
+  const table = await import(
+    "@cogni/node-ui-kit/reui/data-grid/data-grid-table"
+  );
+  return {
+    ...grid,
+    ...header,
+    ...table,
+    Badge: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+    Button: ({
+      variant: _variant,
+      size: _size,
+      ...props
+    }: ButtonHTMLAttributes<HTMLButtonElement> & {
+      variant?: string;
+      size?: string;
+    }) => <button {...props} />,
+    PageContainer: ({ children }: { children: ReactNode }) => (
+      <div>{children}</div>
+    ),
+  };
+});
 
 import { getFinanceReport } from "@/app/(admin)/admin/payments/finance.server";
 import { financePreview } from "@/app/dev/finance-preview/fixture";
 import FinancePreviewPage from "@/app/dev/finance-preview/page";
 import { FinanceReport } from "@/features/finance/components/FinanceReport";
+import { amountLabel } from "@/features/finance/components/format";
 
-afterEach(() => vi.unstubAllEnvs());
+function services(): string[] {
+  const body = screen.getByRole("table").querySelector("tbody");
+  return Array.from(body?.querySelectorAll("tr") ?? []).map(
+    (row) =>
+      row.querySelector("td")?.textContent?.replace("Sponsored", "") ?? ""
+  );
+}
+afterEach(() => {
+  cleanup();
+  vi.unstubAllEnvs();
+});
 
-describe("finance report", () => {
-  it("denies unauthorized finance reads before constructing provider readers", async () => {
+describe("Payments reporting", () => {
+  it("denies unauthorized reads before constructing readers", async () => {
     access.allowed = false;
     access.readers.mockClear();
     await expect(getFinanceReport()).rejects.toThrow("NEXT_REDIRECT");
     expect(access.readers).not.toHaveBeenCalled();
   });
-  it("emits only coverage evidence after an authorized read", async () => {
+  it("emits only coverage after an authorized read", async () => {
     access.allowed = true;
     await expect(getFinanceReport()).resolves.toMatchObject({ rows: [] });
     expect(access.log).toHaveBeenCalledWith(
@@ -95,27 +120,133 @@ describe("finance report", () => {
       "Finance report read"
     );
   });
-  it("renders native evidence with custody and coverage rather than a misleading total", () => {
-    const html = renderToStaticMarkup(
-      <FinanceReport report={financePreview} />
+  it("starts with urgent rows and displays meaningful, currency-separated totals", () => {
+    render(<FinanceReport report={financePreview} />);
+    expect(services().slice(0, 3)).toEqual([
+      "Akash hosting",
+      "Cherry compute",
+      "Grafana",
+    ]);
+    expect(screen.getAllByText("95 USDC")).toHaveLength(2);
+    expect(screen.getAllByText("6 ACT · 36 EUR · 120 USD")).toHaveLength(2);
+    expect(
+      screen.getByRole("button", { name: "Paid (cumulative)", exact: true })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /fund|pay bill/i })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Source")).not.toBeInTheDocument();
+  });
+  it("sorts numeric balances both ways and leaves missing balances last", () => {
+    render(<FinanceReport report={financePreview} />);
+    const sort = screen.getByRole("button", { name: "Balance", exact: true });
+    fireEvent.click(sort);
+    expect(
+      services().filter((name) =>
+        [
+          "Steward custody",
+          "Operator working capital",
+          "DAO treasury",
+        ].includes(name)
+      )
+    ).toEqual(["Steward custody", "Operator working capital", "DAO treasury"]);
+    expect(services().slice(-2)).toEqual(["Grafana", "GitHub"]);
+    fireEvent.click(sort);
+    expect(
+      services().filter((name) =>
+        [
+          "Steward custody",
+          "Operator working capital",
+          "DAO treasury",
+        ].includes(name)
+      )
+    ).toEqual(["DAO treasury", "Operator working capital", "Steward custody"]);
+    expect(services().slice(-2)).toEqual(["Grafana", "GitHub"]);
+  });
+  it("sorts runway both ways and keeps unknown runway below measured days", () => {
+    render(<FinanceReport report={financePreview} />);
+    const sort = screen.getByRole("button", { name: "Runway", exact: true });
+    fireEvent.click(sort);
+    expect(services().slice(0, 3)).toEqual([
+      "Akash hosting",
+      "Cherry compute",
+      "OpenRouter",
+    ]);
+    fireEvent.click(sort);
+    expect(services().slice(0, 3)).toEqual([
+      "OpenRouter",
+      "Cherry compute",
+      "Akash hosting",
+    ]);
+  });
+  it("sorts burn and cumulative paid numerically within one native currency", () => {
+    const source = financePreview.rows.find(
+      (row) => row.label === "OpenRouter"
     );
-    expect(html).toContain("12.5 uact / block");
-    expect(html).toContain("1250000");
-    expect(html).toContain("Source age unknown");
-    expect(html).toContain("Operator covered");
-    expect(html).toContain("Human-custodied wallet");
-    expect(html).toContain("Individual payment history is not available");
-    expect(html).toContain("Not measured");
-    expect(html).not.toContain("<button");
+    if (!source) throw new Error("Missing fixture");
+    render(
+      <FinanceReport
+        report={{
+          ...financePreview,
+          rows: [
+            ...financePreview.rows,
+            {
+              ...source,
+              plane: "demo:other-ai",
+              label: "Other AI",
+              burnPerDay: 12,
+              cumulativeVendorTransfer: { amount: "20", currency: "USD" },
+            },
+          ],
+        }}
+      />
+    );
+    const selected = () =>
+      services().filter((name) => ["OpenRouter", "Other AI"].includes(name));
+    fireEvent.click(screen.getByRole("button", { name: "Burn", exact: true }));
+    expect(selected()).toEqual(["OpenRouter", "Other AI"]);
+    fireEvent.click(screen.getByRole("button", { name: "Burn", exact: true }));
+    expect(selected()).toEqual(["Other AI", "OpenRouter"]);
+    expect(services().slice(-2)).toEqual(["Grafana", "GitHub"]);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Paid (cumulative)", exact: true })
+    );
+    expect(selected()).toEqual(["Other AI", "OpenRouter"]);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Paid (cumulative)", exact: true })
+    );
+    expect(selected()).toEqual(["OpenRouter", "Other AI"]);
+    expect(services().slice(-2)).toEqual(["Grafana", "GitHub"]);
+  });
+  it("opens exact evidence by keyboard and refreshes without payment actions", async () => {
+    render(<FinanceReport report={financePreview} />);
+    const details = screen.getByRole("button", {
+      name: "Show Akash hosting details",
+    });
+    details.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(
+      screen.getByText("Paid · cumulative provider transfer")
+    ).toBeVisible();
+    expect(screen.getByText("1250000 uact")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(access.refresh).toHaveBeenCalled();
+  });
+  it("shows tiny positive native values as nonzero", () => {
+    expect(amountLabel({ amount: "0.00001", currency: "uact" })).toBe(
+      "<0.000001 ACT"
+    );
   });
   it.each(["production", "test"])("preview returns 404 in %s", (env) => {
     vi.stubEnv("NODE_ENV", env);
     expect(() => FinancePreviewPage()).toThrow("NEXT_NOT_FOUND");
   });
-  it("explicitly labels local data synthetic", () => {
+  it("labels the same component preview as demo data", () => {
     vi.stubEnv("NODE_ENV", "development");
-    const html = renderToStaticMarkup(FinancePreviewPage());
-    expect(html).toContain("Demo data — layout preview");
-    expect(html).toContain("synthetic balances and costs");
+    render(FinancePreviewPage());
+    expect(screen.getByText("Demo data")).toBeVisible();
+    expect(
+      within(screen.getByRole("table")).getByText("Known totals")
+    ).toBeVisible();
   });
 });

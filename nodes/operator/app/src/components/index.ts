@@ -12,6 +12,12 @@
  * @public
  */
 
+export {
+  DataGrid,
+  DataGridContainer,
+} from "@cogni/node-ui-kit/reui/data-grid/data-grid";
+export { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header";
+export { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
 export { Checkbox } from "@cogni/node-ui-kit/shadcn/checkbox";
 export {
   Dialog,
