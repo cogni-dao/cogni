@@ -193,6 +193,7 @@ describe("hub-owned lifecycle handoffs", () => {
     expect(source).toContain(`https://cognidao.org/api/v1/knowledge/${entry}`);
     expect(source).toContain("set -euo pipefail");
     expect(source).toContain("COGNI_NODE_API_KEY:?");
+    expect(source).not.toMatch(/COGNI_OPERATOR_(?:NODE_)?API_KEY/);
     expect(source).toContain("curl -fsS --max-time");
     expect(source).toContain(
       "jq -er '.content | select(type == \"string\" and length > 0)'"

@@ -11,7 +11,7 @@
  * @public
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   lstatSync,
@@ -126,6 +126,134 @@ function snapshot(roots: Record<string, string>) {
 }
 
 describe("one-time lifecycle fleet migration", () => {
+  it("generates readers that preserve canonical operator credential precedence", () => {
+    const f = fixture();
+    const manifest = {
+      ...f.manifest,
+      files: JSON.parse(
+        readFileSync(
+          path.resolve(
+            __dirname,
+            "../../scripts/migrations/lifecycle-hub-v1.json"
+          ),
+          "utf8"
+        )
+      ).files,
+    };
+    const plan = planFleet(f.roots, manifest);
+    const scenarios = [
+      {
+        name: "canonical only",
+        saved: "COGNI_OPERATOR_NODE_API_KEY=canonical",
+        key: "canonical",
+      },
+      {
+        name: "legacy only",
+        saved: "COGNI_OPERATOR_API_KEY=legacy",
+        key: "legacy",
+      },
+      {
+        name: "both",
+        saved:
+          "COGNI_OPERATOR_NODE_API_KEY=canonical\nCOGNI_OPERATOR_API_KEY=legacy",
+        key: "canonical",
+      },
+      { name: "neither", saved: "", key: undefined },
+      {
+        name: "canonical blank",
+        saved: "COGNI_OPERATOR_NODE_API_KEY=\nCOGNI_OPERATOR_API_KEY=legacy",
+        key: undefined,
+      },
+      {
+        name: "legacy blank",
+        saved: "COGNI_OPERATOR_API_KEY=",
+        key: undefined,
+      },
+    ];
+    const root = f.roots[repositories[0]];
+    const requests = path.join(root, "requests");
+    for (const file of plan[0].files.filter(
+      (file: { relative: string }) =>
+        !file.relative.endsWith("/contribute-to-cogni.md")
+    )) {
+      const block = /```bash\n([\s\S]*?)```/.exec(file.after)?.[1];
+      expect(block).toBeDefined();
+      for (const scenario of scenarios) {
+        writeFileSync(
+          path.join(root, ".env.cogni"),
+          `COGNI_NODE_API_KEY=sovereign-local\n${scenario.saved}\n`
+        );
+        writeFileSync(requests, "");
+        const run = spawnSync(
+          "bash",
+          [
+            "-c",
+            [
+              "unset COGNI_OPERATOR_NODE_API_KEY COGNI_OPERATOR_API_KEY COGNI_NODE_API_KEY",
+              'git() { printf "%s\\n" "$FIXTURE_ROOT"; }',
+              'curl() { printf "%s\\n" "$*" >> "$FIXTURE_REQUESTS"; printf \'{"content":"complete procedure"}\'; return "$FIXTURE_CURL_EXIT"; }',
+              block,
+            ].join("\n"),
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              FIXTURE_ROOT: root,
+              FIXTURE_REQUESTS: requests,
+              FIXTURE_CURL_EXIT: "0",
+            },
+          }
+        );
+        const calls = readFileSync(requests, "utf8");
+        if (scenario.key) {
+          expect(run.status, `${file.relative}: ${scenario.name}`).toBe(0);
+          expect(run.stdout.trim()).toBe("complete procedure");
+          expect(calls).toContain(`Authorization: Bearer ${scenario.key}`);
+          expect(calls.trim().split("\n")).toHaveLength(1);
+        } else {
+          expect(run.status, `${file.relative}: ${scenario.name}`).not.toBe(0);
+          expect(calls).toBe("");
+        }
+        expect(calls).not.toContain("sovereign-local");
+      }
+      for (const status of [401, 403]) {
+        writeFileSync(
+          path.join(root, ".env.cogni"),
+          "COGNI_NODE_API_KEY=sovereign-local\nCOGNI_OPERATOR_NODE_API_KEY=canonical\nCOGNI_OPERATOR_API_KEY=legacy\n"
+        );
+        writeFileSync(requests, "");
+        const run = spawnSync(
+          "bash",
+          [
+            "-c",
+            [
+              "unset COGNI_OPERATOR_NODE_API_KEY COGNI_OPERATOR_API_KEY COGNI_NODE_API_KEY",
+              'git() { printf "%s\\n" "$FIXTURE_ROOT"; }',
+              'curl() { printf "%s\\n" "$*" >> "$FIXTURE_REQUESTS"; printf "HTTP %s\\n" "$FIXTURE_HTTP_STATUS" >&2; return 22; }',
+              block,
+            ].join("\n"),
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              FIXTURE_ROOT: root,
+              FIXTURE_REQUESTS: requests,
+              FIXTURE_HTTP_STATUS: String(status),
+            },
+          }
+        );
+        expect(run.status).not.toBe(0);
+        const calls = readFileSync(requests, "utf8").trim().split("\n");
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toContain("Authorization: Bearer canonical");
+        expect(calls[0]).not.toMatch(/legacy|sovereign-local/);
+        expect(run.stdout).toBe("");
+      }
+    }
+  });
+
   it("dry-runs the complete fleet without changing a byte", () => {
     const f = fixture();
     const before = readFileSync(f.first, "utf8");

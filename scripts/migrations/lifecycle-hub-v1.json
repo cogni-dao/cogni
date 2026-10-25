@@ -3,19 +3,19 @@
   "owner": "story.5113/task.5321",
   "files": {
     ".claude/commands/design.md": {
-      "after": "64fc3d730c598ce3ceabad80ac64cd783e886772ff6e93ddfa1c0439af42aadc"
+      "after": "a05de72c50b5fca38c9423796ab98f5dc56513b09f957def340de547cb99cc7b"
     },
     ".claude/commands/review-design.md": {
-      "after": "1053f2a022eccade6e0ca8f0680c9637b484a10deaaa35bfb20e955ba011aee2"
+      "after": "7b42ce068680a6d79436a803ababf80878c149da0932fb00c0e4ef0591fb06e8"
     },
     ".claude/commands/implement.md": {
-      "after": "8fa3ef85a8a76eaf66b83766a431d1105df04491674af2e2739a21cb2d30dac2"
+      "after": "ad0b55ac103008fca2ba1d405ed91e34c007a5105e5faac8a7e87d4ad8d0c161"
     },
     ".claude/commands/review-implementation.md": {
-      "after": "29c3de8dd7335f689acd413ef8b4aedf26c7c1698aadb50f93f51b77011bdc5d"
+      "after": "5a77831009e0b922c30c58faf87c7cba358f1f30e0d85f5eddd0b3954316f060"
     },
     ".claude/commands/closeout.md": {
-      "after": "1fcd52b25d2614493b455e74a80ac150d3496872beb390fe07cb1e79bd38a6de"
+      "after": "6577458f9461eade2b5663dd5a604d2509c71ed9b819c7c7f327947f7bba7d45"
     },
     ".claude/commands/contribute-to-cogni.md": {
       "after": "54f56045c586ff56fe1656308fb865cab17b230cfb7f3d261d93bf33e6d43374",

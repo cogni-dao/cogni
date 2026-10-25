@@ -112,10 +112,16 @@ export function planFleet(roots, manifest, options = {}) {
       const rule = manifest.files[relative];
       const after =
         rule.content ??
-        readFileSync(path.join(templates, relative), "utf8").replaceAll(
-          "COGNI_NODE_API_KEY",
-          "COGNI_OPERATOR_API_KEY"
-        );
+        readFileSync(path.join(templates, relative), "utf8")
+          .replace(
+            `: "\${COGNI_NODE_API_KEY:?saved operator credential required}"`,
+            `operator_key="\${COGNI_OPERATOR_NODE_API_KEY-\${COGNI_OPERATOR_API_KEY-}}"\n: "\${operator_key:?saved operator credential required}"`
+          )
+          .replaceAll("$COGNI_NODE_API_KEY", "$operator_key")
+          .replace(
+            "Use the saved operator credential above; never forward a sovereign node bearer.",
+            "Use the saved canonical operator credential; the legacy alias applies only when\nthe canonical variable is absent. Never forward a sovereign node bearer or retry\nanother key or host after a 401/403."
+          );
       if (sha256(after) !== rule.after)
         throw new Error(`Output template drift: ${relative}`);
       const before = readFileSync(target);
