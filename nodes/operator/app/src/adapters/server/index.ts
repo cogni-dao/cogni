@@ -245,7 +245,6 @@ export { DrizzleDatabaseCellBindingStore } from "./compute/database-cell-binding
 export { PostgresDatabaseCellObserver } from "./compute/database-cell-observer.adapter";
 
 export {
-  computeBalanceReader,
   computeCostReaders,
   unavailableFinanceReader,
 } from "./finance/operator-finance.adapter";

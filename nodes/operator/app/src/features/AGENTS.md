@@ -45,7 +45,7 @@ Vertical slices containing use cases like accounts/, ai/, and home/. Orchestrate
 
 ## Public Surface
 
-- Finance: `finance/components/FinanceReport` renders the shared read-only money-plane report; no provider reads or payment actions.
+- Finance: `finance/types` defines the node-local treasury/cost context; `finance/components/FinanceReport` renders the shared read-only money-plane report; no provider reads or payment actions.
 
 - **Exports:** accounts/services (admin ops), ai/services (completion), identity/services (attestation issuance policy), home/components (landing page), ingestion/services (webhook receiver), site-meta/services (route manifest), nodes/launch-pack (legacy and successor packet projections sharing maintained prompt guidance)
 - **Routes (if any):** Feature-specific routes via app/

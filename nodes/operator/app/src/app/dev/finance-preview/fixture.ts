@@ -10,7 +10,9 @@
  * Links: https://cognidao.org/work/items/task.5347
  * @internal
  */
-import type { MoneyPlaneRow, MoneyPlaneSnapshot } from "@cogni/money-plane";
+import type { CostRateEvidence, MoneyPlaneRow } from "@cogni/money-plane";
+
+import type { FinanceReportModel } from "@/features/finance/types";
 
 const now = "2026-10-25T01:40:00.000Z";
 const base: MoneyPlaneRow = {
@@ -29,8 +31,39 @@ const base: MoneyPlaneRow = {
   beneficiary: "Fleet",
   coverage: "operator-covered",
 };
-export const financePreview: MoneyPlaneSnapshot = {
+export const financePreview: FinanceReportModel = {
   takenAt: now,
+  treasuryPlane: "demo:treasury",
+  costRateEvidence: [
+    ...[2, 3].map(
+      (amount, index): CostRateEvidence => ({
+        sourceId: `demo:akash:${index}`,
+        ownerId: "operator",
+        scopeId: "operator-fleet",
+        instrumentId: "akash:uact",
+        basis: { kind: "contract", active: true },
+        rate: { amount: String(amount), currency: "uact", per: "block" },
+        sourceObservedAt: null,
+        partial: true,
+      })
+    ),
+    ...[2, 3].map(
+      (amount, index): CostRateEvidence => ({
+        sourceId: `demo:measured:${index}`,
+        ownerId: "example",
+        scopeId: "synthetic example",
+        instrumentId: "example:usd",
+        basis: {
+          kind: "measured",
+          start: "2026-10-24T00:00:00Z",
+          end: "2026-10-25T00:00:00Z",
+        },
+        rate: { amount: String(amount), currency: "USD", per: "day" },
+        sourceObservedAt: now,
+        partial: false,
+      })
+    ),
+  ],
   worst: "RED",
   rows: [
     {
@@ -38,7 +71,7 @@ export const financePreview: MoneyPlaneSnapshot = {
       plane: "demo:treasury",
       label: "DAO treasury",
       kind: "wallet",
-      balance: 75,
+      balance: 10,
       currency: "USDC",
       grade: "INFO",
       source: "Demo · Base wallet read",
@@ -52,7 +85,7 @@ export const financePreview: MoneyPlaneSnapshot = {
       plane: "demo:float",
       label: "Operator working capital",
       kind: "wallet",
-      balance: 12,
+      balance: 20,
       currency: "USDC",
       grade: "INFO",
       source: "Demo · Base wallet read",
@@ -66,7 +99,7 @@ export const financePreview: MoneyPlaneSnapshot = {
       plane: "demo:steward",
       label: "Steward custody",
       kind: "wallet",
-      balance: 8,
+      balance: 30,
       currency: "USDC",
       grade: "INFO",
       source: "Demo · Base wallet read",
@@ -76,51 +109,51 @@ export const financePreview: MoneyPlaneSnapshot = {
       beneficiary: "Human-custodied wallet",
       coverage: "unknown",
     },
+    ...[2, 3].map(
+      (amount, index): MoneyPlaneRow => ({
+        ...base,
+        plane: `demo:measured:${index}`,
+        label: index === 0 ? "Example service A" : "Example service B",
+        balance: index === 0 ? 10 : 90,
+        currency: "USD",
+        burnPerDay: amount,
+        runwayDays: index === 0 ? 5 : 30,
+        grade: index === 0 ? "RED" : "GREEN",
+        source: "Demo · Synthetic measured interval",
+        sourceObservedAt: now,
+        freshness: "current",
+        beneficiary: "Synthetic example",
+        detail: "Synthetic test case; not live provider coverage",
+      })
+    ),
+    ...[2, 3].map(
+      (amount, index): MoneyPlaneRow => ({
+        ...base,
+        plane: `demo:akash:${index}`,
+        label: "Akash hosting",
+        kind: "usage",
+        source: "Demo · Stored active contract aggregate",
+        beneficiary: index === 0 ? "node-template" : "cherry-node",
+        nativeRate: { amount: String(amount), currency: "uact", per: "block" },
+        ...(index === 0
+          ? {
+              cumulativeVendorTransfer: { amount: "1250000", currency: "uact" },
+            }
+          : {}),
+        detail: "Source observation time unavailable",
+      })
+    ),
     {
       ...base,
       plane: "demo:openrouter",
       label: "OpenRouter",
-      balance: 120,
-      currency: "USD",
-      burnPerDay: 4,
-      runwayDays: 30,
-      grade: "GREEN",
-      cumulativeVendorTransfer: { amount: "240", currency: "USD" },
-      source: "Demo · Provider credits",
-      sourceObservedAt: now,
-      freshness: "current",
-    },
-    {
-      ...base,
-      plane: "demo:akash",
-      label: "Akash hosting",
-      kind: "prepaid",
-      balance: 6,
-      currency: "ACT",
-      burnPerDay: 3,
-      runwayDays: 2,
-      grade: "RED",
-      source: "Demo · Compute cost ledger",
-      sourceObservedAt: now,
-      freshness: "current",
-      beneficiary: "node-template",
-      nativeRate: { amount: "3000000", currency: "uact", per: "day" },
-      cumulativeVendorTransfer: { amount: "1250000", currency: "uact" },
-      detail: "Synthetic measured balance and burn",
+      detail: "Balance unavailable; scoped read-only provider access pending",
     },
     {
       ...base,
       plane: "demo:cherry",
       label: "Cherry compute",
-      balance: 36,
-      currency: "EUR",
-      burnPerDay: 4,
-      runwayDays: 9,
-      grade: "YELLOW",
-      cumulativeVendorTransfer: { amount: "99", currency: "EUR" },
-      source: "Demo · Compute balance",
-      sourceObservedAt: now,
-      freshness: "current",
+      detail: "Balance unavailable; scoped read-only provider access pending",
     },
     {
       ...base,

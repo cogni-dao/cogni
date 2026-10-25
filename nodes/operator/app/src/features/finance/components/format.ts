@@ -3,7 +3,7 @@
 
 /**
  * Module: `@features/finance/components/format`
- * Purpose: Human-scale labels and native-unit sorting for the Payments grid.
+ * Purpose: Human-scale labels and native-unit sorting for the Financials grid.
  * Scope: Presentation only. Aggregate arithmetic lives in the shared money-plane package.
  * Invariants: No FX conversion; tiny positive values never display as zero.
  * Side-effects: none
@@ -16,7 +16,10 @@ import type {
   NativeRate,
 } from "@cogni/money-plane";
 
-export type SortAmount = NativeAmount & { per?: NativeRate["per"] };
+export type SortAmount = NativeAmount & {
+  per?: NativeRate["per"];
+  instrument?: string;
+};
 export function rowAmount(
   amount: number | null,
   currency: string | null
@@ -33,7 +36,7 @@ export function nativeBurn(row: MoneyPlaneRow): SortAmount | undefined {
 export function amountLabel(value: SortAmount | undefined): string {
   if (!value) return "—";
   const units: Record<string, string> = {
-    uact: "ACT",
+    uact: value.per ? "USD credit" : "USD compute credit",
     uusdc: "USDC",
     uakt: "AKT",
   };
@@ -50,9 +53,10 @@ export function compareAmounts(
   b: SortAmount | undefined
 ): number {
   if (!a || !b) return 0; // TanStack sortUndefined keeps missing cells last in both directions.
-  const unit = `${a.currency}/${a.per ?? ""}`.localeCompare(
-    `${b.currency}/${b.per ?? ""}`
-  );
+  const unit =
+    `${a.instrument ?? ""}/${a.currency}/${a.per ?? ""}`.localeCompare(
+      `${b.instrument ?? ""}/${b.currency}/${b.per ?? ""}`
+    );
   return unit || Number(a.amount) - Number(b.amount);
 }
 export function observedLabel(value: string | null | undefined): string {

@@ -3,7 +3,7 @@
 
 /**
  * Module: `@features/finance/components/FinanceReport`
- * Purpose: Compact, sortable Payments report using the existing app grid.
+ * Purpose: Compact, sortable Financials report using the existing app grid.
  * Scope: Presentation and shared read-only summaries; evidence expands on demand.
  * Invariants: Native units and wallet custody stay distinct; no payment controls.
  * Side-effects: Refreshes the current server page on request.
@@ -12,11 +12,7 @@
  */
 "use client";
 
-import {
-  type MoneyPlaneRow,
-  type MoneyPlaneSnapshot,
-  summarizeRows,
-} from "@cogni/money-plane";
+import { type MoneyPlaneRow, summarizeCostRates } from "@cogni/money-plane";
 import {
   type ColumnDef,
   type ExpandedState,
@@ -37,6 +33,8 @@ import {
   DataGridContainer,
   DataGridTable,
 } from "@/components";
+
+import type { FinanceReportModel } from "../types";
 
 import {
   amountLabel,
@@ -105,17 +103,28 @@ function Details({ row }: { row: MoneyPlaneRow }): ReactElement {
           <dd>
             {row.nativeRate.amount} {row.nativeRate.currency} /{" "}
             {row.nativeRate.per}
+            {row.nativeRate.currency === "uact" && (
+              <span className="ml-2 text-muted-foreground">
+                ({Number(row.nativeRate.amount) / 1e6} ACT /{" "}
+                {row.nativeRate.per})
+              </span>
+            )}
           </dd>
         </div>
       )}
       {row.cumulativeVendorTransfer && (
         <div>
           <dt className="text-muted-foreground">
-            Paid · cumulative provider transfer
+            Provider transfers · cumulative
           </dt>
           <dd>
             {row.cumulativeVendorTransfer.amount}{" "}
             {row.cumulativeVendorTransfer.currency}
+            {row.cumulativeVendorTransfer.currency === "uact" && (
+              <span className="ml-2 text-muted-foreground">
+                ({Number(row.cumulativeVendorTransfer.amount) / 1e6} ACT)
+              </span>
+            )}
           </dd>
         </div>
       )}
@@ -158,32 +167,10 @@ function moneyColumn(
   };
 }
 
-function Amounts({
-  values,
-  partial = false,
-}: {
-  values: readonly SortAmount[];
-  partial?: boolean;
-}): ReactElement {
-  return (
-    <span className="tabular-nums">
-      {values.length ? values.map(amountLabel).join(" · ") : "—"}
-      {partial && (
-        <span
-          className="ml-1 text-muted-foreground"
-          title="Known subtotal; some evidence is missing or stale"
-        >
-          *
-        </span>
-      )}
-    </span>
-  );
-}
-
 export function FinanceReport({
   report,
 }: {
-  report: MoneyPlaneSnapshot;
+  report: FinanceReportModel;
 }): ReactElement {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -191,7 +178,24 @@ export function FinanceReport({
     { id: "status", desc: false },
   ]);
   const [expanded, setExpanded] = useState<ExpandedState>({});
-  const summary = useMemo(() => summarizeRows(report.rows), [report.rows]);
+  const summary = useMemo(
+    () => summarizeCostRates(report.costRateEvidence),
+    [report.costRateEvidence]
+  );
+  const costs = useMemo(
+    () => report.rows.filter((row) => row.kind !== "wallet"),
+    [report.rows]
+  );
+  const treasury = report.rows.find(
+    (row) => row.kind === "wallet" && row.plane === report.treasuryPlane
+  );
+  const custody = report.rows.filter(
+    (row) => row.kind === "wallet" && row.plane !== report.treasuryPlane
+  );
+  const evidence = useMemo(
+    () => new Map(report.costRateEvidence.map((item) => [item.sourceId, item])),
+    [report.costRateEvidence]
+  );
   const columns = useMemo<ColumnDef<MoneyPlaneRow>[]>(
     () => [
       {
@@ -210,12 +214,12 @@ export function FinanceReport({
             >
               {row.original.label}
             </span>
-            {row.original.kind !== "wallet" &&
-              row.original.coverage === "operator-covered" && (
-                <span className="block text-muted-foreground text-xs">
-                  Sponsored
-                </span>
-              )}
+            <span
+              className="block truncate text-muted-foreground text-xs"
+              title={row.original.beneficiary}
+            >
+              {row.original.beneficiary ?? "Scope unknown"}
+            </span>
           </div>
         ),
         meta: {
@@ -223,10 +227,41 @@ export function FinanceReport({
           expandedContent: (row) => <Details row={row} />,
         },
       },
-      moneyColumn("balance", "Balance", (row) =>
-        rowAmount(row.balance, row.currency)
-      ),
-      moneyColumn("burn", "Burn", nativeBurn),
+      moneyColumn("balance", "Balance / credit", (row) => {
+        const amount = rowAmount(row.balance, row.currency);
+        return amount
+          ? {
+              ...amount,
+              instrument: evidence.get(row.plane)?.instrumentId ?? row.plane,
+            }
+          : undefined;
+      }),
+      {
+        ...moneyColumn("rate", "Rate", (row) => {
+          const rate = nativeBurn(row);
+          return rate
+            ? {
+                ...rate,
+                instrument: evidence.get(row.plane)?.instrumentId ?? row.plane,
+              }
+            : undefined;
+        }),
+        size: 210,
+        cell: ({ row }) => (
+          <div className="whitespace-nowrap tabular-nums">
+            {amountLabel(nativeBurn(row.original))}
+            {nativeBurn(row.original) && (
+              <span className="block text-muted-foreground text-xs">
+                {evidence.get(row.original.plane)?.basis.kind === "contract"
+                  ? "Contract rate"
+                  : evidence.get(row.original.plane)?.basis.kind === "measured"
+                    ? "Measured burn"
+                    : "Basis unavailable"}
+              </span>
+            )}
+          </div>
+        ),
+      },
       {
         id: "runway",
         size: 100,
@@ -248,11 +283,25 @@ export function FinanceReport({
         ),
         meta: { headerTitle: "Runway" },
       },
-      moneyColumn(
-        "paid",
-        "Paid (cumulative)",
-        (row) => row.cumulativeVendorTransfer
-      ),
+      {
+        id: "payer",
+        accessorKey: "payer",
+        size: 145,
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="Funded by" />
+        ),
+        cell: ({ row }) => (
+          <div className="text-sm">
+            {row.original.payer ?? "Unknown"}
+            {row.original.coverage === "operator-covered" && (
+              <span className="block text-muted-foreground text-xs">
+                Sponsored
+              </span>
+            )}
+          </div>
+        ),
+        meta: { headerTitle: "Funded by" },
+      },
       {
         id: "status",
         size: 110,
@@ -292,10 +341,10 @@ export function FinanceReport({
         ),
       },
     ],
-    []
+    [evidence]
   );
   const table = useReactTable({
-    data: report.rows,
+    data: costs,
     columns,
     state: { sorting, expanded },
     onSortingChange: setSorting,
@@ -306,16 +355,11 @@ export function FinanceReport({
     getRowCanExpand: () => true,
     getRowId: (row) => row.plane,
   });
-  const partial =
-    summary.wallets.partial ||
-    summary.prepaid.partial ||
-    summary.burn.partial ||
-    summary.paid.partial;
 
   return (
     <div className="min-w-0 space-y-5">
       <header className="flex items-center justify-between gap-4">
-        <h1 className="font-semibold text-2xl">Payments</h1>
+        <h1 className="font-semibold text-2xl">Financials</h1>
         <Button
           variant="outline"
           size="sm"
@@ -329,78 +373,110 @@ export function FinanceReport({
           Refresh
         </Button>
       </header>
-      <dl className="flex flex-wrap gap-x-10 gap-y-3">
-        <div>
-          <dt className="text-muted-foreground text-xs">
-            Wallets · all custody
-          </dt>
-          <dd className="font-semibold text-xl">
-            <Amounts
-              values={summary.wallets.amounts}
-              partial={summary.wallets.partial}
-            />
+      <dl>
+        <dt className="text-muted-foreground text-xs">DAO treasury</dt>
+        <dd className="font-semibold text-2xl tabular-nums">
+          {amountLabel(
+            treasury
+              ? rowAmount(treasury.balance, treasury.currency)
+              : undefined
+          )}
+        </dd>
+        {treasury && (
+          <dd>
+            <details className="mt-1 text-xs">
+              <summary className="cursor-pointer text-muted-foreground">
+                Treasury details
+              </summary>
+              <Details row={treasury} />
+            </details>
           </dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground text-xs">Prepaid</dt>
-          <dd className="font-semibold text-xl">
-            <Amounts
-              values={summary.prepaid.amounts}
-              partial={summary.prepaid.partial}
-            />
-          </dd>
-        </div>
+        )}
       </dl>
-      <DataGrid
-        table={table}
-        recordCount={report.rows.length}
-        tableLayout={{ dense: true, rowBorder: true, headerBackground: true }}
-        emptyMessage="No reported sources."
-      >
-        <DataGridContainer className="max-w-full overflow-x-auto">
-          <DataGridTable
-            footerContent={
-              <tr>
-                <td className="px-2 py-3 font-medium">Known totals</td>
-                <td className="px-2 py-3">
-                  <div>
-                    Wallets{" "}
-                    <Amounts
-                      values={summary.wallets.amounts}
-                      partial={summary.wallets.partial}
-                    />
-                  </div>
-                  <div>
-                    Prepaid{" "}
-                    <Amounts
-                      values={summary.prepaid.amounts}
-                      partial={summary.prepaid.partial}
-                    />
-                  </div>
-                </td>
-                <td className="px-2 py-3">
-                  <Amounts
-                    values={summary.burn.rates}
-                    partial={summary.burn.partial}
-                  />
-                </td>
-                <td className="px-2 py-3">—</td>
-                <td className="px-2 py-3">
-                  <Amounts
-                    values={summary.paid.amounts}
-                    partial={summary.paid.partial}
-                  />
-                </td>
-                <td />
-                <td />
-              </tr>
-            }
-          />
-        </DataGridContainer>
-      </DataGrid>
-      {partial && (
-        <p className="text-muted-foreground text-xs">* Partial evidence</p>
-      )}
+      <section className="space-y-3" aria-label="Costs">
+        <h2 className="font-medium">Costs</h2>
+        <DataGrid
+          table={table}
+          recordCount={costs.length}
+          tableLayout={{ dense: true, rowBorder: true, headerBackground: true }}
+          emptyMessage="No reported costs."
+        >
+          <DataGridContainer className="max-w-full overflow-x-auto">
+            <DataGridTable />
+          </DataGridContainer>
+        </DataGrid>
+        {summary.cohorts.map((cohort, index) => (
+          <div
+            key={`${cohort.ownerId}:${cohort.scopeId}:${cohort.instrumentId}:${index}`}
+            className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-md bg-muted/30 px-3 py-2 text-sm"
+          >
+            <div>
+              <span>
+                {cohort.basis.kind === "contract"
+                  ? cohort.instrumentId.startsWith("akash:")
+                    ? "Known Akash contract rate"
+                    : "Known contract rate"
+                  : "Measured burn"}{" "}
+                ·{" "}
+                {cohort.scopeId === "operator-fleet"
+                  ? "operator fleet"
+                  : cohort.scopeId}
+              </span>
+
+              <span className="block text-muted-foreground text-xs">
+                {cohort.ageUnknown
+                  ? "Last known · age unknown"
+                  : `Observed ${observedLabel(cohort.oldestObservedAt)}`}
+                {cohort.basis.kind === "measured" &&
+                  ` · ${observedLabel(cohort.basis.start)} – ${observedLabel(cohort.basis.end)}`}
+              </span>
+            </div>
+            <span className="font-medium tabular-nums">
+              {amountLabel(
+                cohort.rate.amount === null
+                  ? undefined
+                  : { ...cohort.rate, amount: cohort.rate.amount }
+              )}
+              {cohort.partial && (
+                <span className="ml-2 text-muted-foreground text-xs">
+                  Partial
+                </span>
+              )}
+            </span>
+          </div>
+        ))}
+        {summary.unattributedCount > 0 && (
+          <p className="text-muted-foreground text-xs">
+            {summary.unattributedCount} cost sources lack attribution
+          </p>
+        )}
+        <p className="text-muted-foreground text-xs">
+          Partial cost coverage · Payment history unavailable
+        </p>
+      </section>
+      <details className="rounded-md border">
+        <summary className="cursor-pointer px-3 py-2 text-sm">
+          Funding accounts
+        </summary>
+        <div className="divide-y px-3">
+          {custody.map((row) => (
+            <details key={row.plane} className="py-2">
+              <summary className="flex cursor-pointer flex-wrap justify-between gap-2 text-sm">
+                <span>
+                  {row.label}
+                  <span className="ml-2 text-muted-foreground text-xs">
+                    {row.beneficiary}
+                  </span>
+                </span>
+                <span className="tabular-nums">
+                  {amountLabel(rowAmount(row.balance, row.currency))}
+                </span>
+              </summary>
+              <Details row={row} />
+            </details>
+          ))}
+        </div>
+      </details>
     </div>
   );
 }

@@ -29,7 +29,7 @@ Infrastructure implementations of ports including server/, worker/, cli/, and te
 
 ## Public Surface
 
-- Finance: `computeBalanceReader`, `computeCostReaders` and `unavailableFinanceReader` project existing read-only compute evidence into the shared money-plane contract.
+- Finance: `computeCostReaders` and `unavailableFinanceReader` project stored compute aggregates and missing evidence into shared readers and explicitly attributed cost-rate evidence.
 
 - **Exports:** Port implementations for bootstrap injection (including identity-attestation live-catalog/Drizzle/Jose adapters and receipt-linked `DrizzleComputeCostStore`), database client (db, Database), MimirMetricsAdapter, ViemEvmOnchainClient, EvmRpcOnChainVerifierAdapter, EvmOnchainClient (type), GitHubWebhookNormalizer (ingestion), GitHubRepoWriter (operator App-backed deploy plane, including production infra reconcile and fixed worker-routing receipt rollback), scheduling adapters (re-exported from @cogni/db-client)
 - **CLI (if any):** cli/ adapter implementations

@@ -13,12 +13,10 @@
 import {
   baseWalletReader,
   type FetchLike,
-  openRouterReader,
   type PlaneReader,
 } from "@cogni/money-plane";
 
 import {
-  computeBalanceReader,
   computeCostReaders,
   unavailableFinanceReader,
 } from "@/adapters/server";
@@ -51,7 +49,7 @@ const safeFetch: FetchLike = async (url, init) => {
   }
 };
 
-export async function createFinanceReaders(): Promise<PlaneReader[]> {
+export async function createFinanceReaders() {
   const env = serverEnv();
   let container: ReturnType<typeof getContainer> | undefined;
   try {
@@ -96,85 +94,81 @@ export async function createFinanceReaders(): Promise<PlaneReader[]> {
       },
     };
   };
-  const openRouter = openRouterReader({
-    apiKey: env.OPENROUTER_API_KEY,
-    fetch: safeFetch,
-  });
-  return [
-    ...uniqueWalletBindings([
-      {
-        name: "dao-treasury",
-        label: "DAO treasury",
-        address: getDaoTreasuryAddress(),
-        beneficiary: "DAO treasury",
-        payer: "DAO",
-      },
-      {
-        name: "operator-wallet",
-        label: "Operator working capital",
-        address: getOperatorWalletConfig()?.address,
-        beneficiary: "Operator",
-        payer: "Operator DAO",
-      },
-      {
-        name: "steward-wallet",
-        label: "Steward custody",
-        address: getStewardWalletConfig()?.address,
-        beneficiary: "Human-custodied wallet",
-        payer: "Not established",
-      },
-    ]).map((binding) =>
-      wallet(
-        binding.name,
-        binding.label,
-        binding.address,
-        binding.beneficiary,
-        binding.payer
-      )
-    ),
+  const bindings = uniqueWalletBindings([
     {
-      ...openRouter,
-      async read(signal) {
-        return {
-          ...(await openRouter.read(signal)),
-          payer: "Operator DAO",
-          beneficiary: "Fleet",
-          coverage: "operator-covered",
-        };
-      },
+      name: "dao-treasury",
+      isTreasury: true,
+      label: "DAO treasury",
+      address: getDaoTreasuryAddress(),
+      beneficiary: "DAO treasury",
+      payer: "DAO",
     },
-    container
-      ? computeBalanceReader(container.computeCapability)
-      : unavailableFinanceReader(
-          "cherry:account",
-          "Cherry compute",
-          "prepaid",
-          "Compute reader unavailable"
-        ),
-    ...compute,
-    unavailableFinanceReader(
-      "ai:provider-usage",
-      "AI provider usage",
-      "usage",
-      "Provider burn not yet available; user charges excluded"
-    ),
-    unavailableFinanceReader(
-      "grafana:usage",
-      "Grafana",
-      "usage",
-      "Usage cost not connected"
-    ),
-    unavailableFinanceReader(
-      "github:subscription",
-      "GitHub",
-      "fixed",
-      "Subscription amount not connected"
-    ),
-    unavailableFinanceReader(
-      "domain:renewal",
-      "Domain renewal",
-      "fixed",
-      "Renewal cost not connected"
-    ),
-  ];
+    {
+      name: "operator-wallet",
+      label: "Operator working capital",
+      address: getOperatorWalletConfig()?.address,
+      beneficiary: "Operator",
+      payer: "Operator DAO",
+    },
+    {
+      name: "steward-wallet",
+      label: "Steward custody",
+      address: getStewardWalletConfig()?.address,
+      beneficiary: "Human-custodied wallet",
+      payer: "Not established",
+    },
+  ]);
+  const treasury = bindings.find((binding) => binding.isTreasury);
+  return {
+    treasuryPlane: treasury ? `base:${treasury.name}` : null,
+    costRateEvidence: compute.costRateEvidence,
+    readers: [
+      ...bindings.map((binding) =>
+        wallet(
+          binding.name,
+          binding.label,
+          binding.address,
+          binding.beneficiary,
+          binding.payer
+        )
+      ),
+      unavailableFinanceReader(
+        "openrouter",
+        "OpenRouter",
+        "prepaid",
+        "Balance unavailable; provider account scope and read-only access pending task.5361"
+      ),
+      unavailableFinanceReader(
+        "cherry:account",
+        "Cherry compute",
+        "prepaid",
+        "Balance unavailable; provider read-only access pending task.5361"
+      ),
+      ...compute.readers,
+      unavailableFinanceReader(
+        "ai:provider-usage",
+        "AI provider usage",
+        "usage",
+        "Provider burn not yet available; user charges excluded"
+      ),
+      unavailableFinanceReader(
+        "grafana:usage",
+        "Grafana",
+        "usage",
+        "Usage cost not connected"
+      ),
+      unavailableFinanceReader(
+        "github:subscription",
+        "GitHub",
+        "fixed",
+        "Subscription amount not connected"
+      ),
+      unavailableFinanceReader(
+        "domain:renewal",
+        "Domain renewal",
+        "fixed",
+        "Renewal cost not connected"
+      ),
+    ],
+  };
 }

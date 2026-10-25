@@ -10,16 +10,49 @@
  * Links: https://cognidao.org/work/items/task.5347
  * @internal
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  computeBalanceReader,
   computeCostReaders,
+  computeRateEvidence,
   computeReportRows,
 } from "@/adapters/server/finance/operator-finance.adapter";
 
 import { uniqueWalletBindings } from "@/bootstrap/capabilities/finance-wallets";
 
+const runtime = vi.hoisted(() => ({
+  dao: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd" as string | undefined,
+  account: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+  balances: vi.fn(),
+  report: vi.fn(async () => []),
+}));
+vi.mock(
+  "@/adapters/server",
+  async () => import("@/adapters/server/finance/operator-finance.adapter")
+);
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: () => ({
+    akashSpendReader: { reportByNode: runtime.report },
+    computeCapability: { balances: runtime.balances },
+  }),
+}));
+vi.mock("@/shared/env", () => ({
+  serverEnv: () => ({ EVM_RPC_URL: "https://rpc.example" }),
+}));
+vi.mock("@/shared/config", () => ({
+  getDaoTreasuryAddress: () => runtime.dao,
+  getOperatorWalletConfig: () => ({ address: runtime.account }),
+  getStewardWalletConfig: () => ({ address: runtime.account }),
+}));
+
+import { takeSnapshot } from "@cogni/money-plane";
+import { createFinanceReaders } from "@/bootstrap/capabilities/finance";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  runtime.dao = runtime.account;
+  vi.clearAllMocks();
+});
 const at = "2026-10-25T00:00:00.000Z";
 
 describe("operator finance evidence", () => {
@@ -28,6 +61,7 @@ describe("operator finance evidence", () => {
     const input = [
       {
         name: "treasury",
+        isTreasury: true,
         label: "Treasury",
         address: account,
         beneficiary: "DAO",
@@ -57,6 +91,10 @@ describe("operator finance evidence", () => {
     ];
     const result = uniqueWalletBindings(input);
     expect(result).toHaveLength(3);
+    expect(
+      uniqueWalletBindings([...input].reverse()).find((row) => row.isTreasury)
+        ?.name
+    ).toBe("steward");
     expect(result[0]?.beneficiary).toBe("DAO · Steward: Human custody");
     expect(result.slice(1).map((row) => row.name)).toEqual([
       "missing-a",
@@ -108,62 +146,88 @@ describe("operator finance evidence", () => {
     ).toBe(true);
   });
 
-  it("does not report a funded account as healthy without burn", async () => {
-    const reader = computeBalanceReader({
-      balances: async () => [
-        {
-          provider: "cherry",
-          accountId: "account",
-          currency: "EUR",
-          remaining: 36,
-          asOf: at,
-          estimatedDaysRemaining: null,
-        },
+  it("projects explicit operator contract cohorts without assigning node economic ownership", () => {
+    const report = {
+      nodeId: "node-a",
+      allocatedIntervals: 0,
+      activeIntervals: 2,
+      closedIntervals: 1,
+      activeRates: [
+        { amount: "2", denom: "uact", unit: "block" },
+        { amount: "3", denom: "uact", unit: "unknown" },
       ],
-    });
-    const row = await reader.read(new AbortController().signal);
-    expect(row).toMatchObject({
-      balance: 36,
-      currency: "EUR",
-      grade: "UNKNOWN",
-      burnPerDay: null,
-      runwayDays: null,
-      sourceObservedAt: at,
-    });
+      transferred: [],
+    };
+    expect(computeRateEvidence([report])).toEqual([
+      {
+        sourceId: "akash-contract:node-a:uact:block",
+        ownerId: "operator",
+        scopeId: "operator-fleet",
+        instrumentId: "akash:uact",
+        basis: { kind: "contract", active: true },
+        rate: { amount: "2", currency: "uact", per: "block" },
+        sourceObservedAt: null,
+        partial: true,
+      },
+    ]);
   });
-
-  it("preserves exhausted balance risk without burn", async () => {
-    const reader = computeBalanceReader({
-      balances: async () => [
-        {
-          provider: "cherry",
-          accountId: "account",
-          currency: "EUR",
-          remaining: 0,
-          asOf: at,
-          estimatedDaysRemaining: null,
-        },
-      ],
-    });
-    expect(await reader.read(new AbortController().signal)).toMatchObject({
-      grade: "RED",
-      runwayDays: 0,
-    });
-  });
-
-  it("sanitizes provider failures and treats absent cost evidence as unknown", async () => {
-    const reader = computeBalanceReader({
-      balances: async () => {
+  it("treats absent or failed cost evidence as unknown without exposing provider errors", async () => {
+    for (const read of [
+      async () => [],
+      async () => {
         throw new Error("sensitive-token-value");
       },
-    });
-    const row = await reader.read(new AbortController().signal);
-    expect(row.grade).toBe("UNKNOWN");
-    expect(JSON.stringify(row)).not.toContain("sensitive-token-value");
-    const [missing] = await computeCostReaders(async () => []);
-    expect(await missing?.read(new AbortController().signal)).toMatchObject({
-      grade: "UNKNOWN",
-      balance: null,
-    });
+    ]) {
+      const { readers, costRateEvidence } = await computeCostReaders(read);
+      const row = await readers[0]?.read(new AbortController().signal);
+      expect(row).toMatchObject({ grade: "UNKNOWN", balance: null });
+      expect(JSON.stringify(row)).not.toContain("sensitive-token-value");
+      expect(costRateEvidence).toEqual([]);
+    }
+  });
+  it("deduplicates triple aliases before RPC and calls neither Cherry nor OpenRouter", async () => {
+    const fetch = vi.fn(async (_url: string | URL | Request) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ result: "0x989680" }),
+    }));
+    vi.stubGlobal("fetch", fetch);
+    const { readers, treasuryPlane } = await createFinanceReaders();
+    const snapshot = await takeSnapshot(readers, { timeoutMs: 500 });
+    expect(snapshot.rows.filter((row) => row.kind === "wallet")).toHaveLength(
+      1
+    );
+    expect(
+      snapshot.rows.find((row) => row.plane === treasuryPlane)?.balance
+    ).toBe(10);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(
+      fetch.mock.calls.every(
+        (call) => String(call[0]) === "https://rpc.example"
+      )
+    ).toBe(true);
+    expect(runtime.balances).not.toHaveBeenCalled();
+    expect(
+      snapshot.rows.find((row) => row.label === "OpenRouter")
+    ).toMatchObject({ balance: null, grade: "UNKNOWN" });
+  });
+  it("preserves an unknown DAO role when only other custody has a configured address", async () => {
+    runtime.dao = undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ result: "0x989680" }),
+      }))
+    );
+    const { readers, treasuryPlane } = await createFinanceReaders();
+    const snapshot = await takeSnapshot(readers, { timeoutMs: 500 });
+    expect(
+      snapshot.rows.find((row) => row.plane === treasuryPlane)
+    ).toMatchObject({ balance: null, grade: "UNKNOWN" });
+    expect(snapshot.rows.filter((row) => row.kind === "wallet")).toHaveLength(
+      2
+    );
   });
 });

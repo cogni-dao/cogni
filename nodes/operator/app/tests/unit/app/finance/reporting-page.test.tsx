@@ -10,20 +10,18 @@
  * Links: https://cognidao.org/work/items/task.5347
  * @vitest-environment jsdom
  */
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const access = vi.hoisted(() => ({
   allowed: false,
-  readers: vi.fn(async () => []),
+  readers: vi.fn(async () => ({
+    readers: [],
+    treasuryPlane: null,
+    costRateEvidence: [],
+  })),
   log: vi.fn(),
   refresh: vi.fn(),
 }));
@@ -91,8 +89,7 @@ import { amountLabel } from "@/features/finance/components/format";
 function services(): string[] {
   const body = screen.getByRole("table").querySelector("tbody");
   return Array.from(body?.querySelectorAll("tr") ?? []).map(
-    (row) =>
-      row.querySelector("td")?.textContent?.replace("Sponsored", "") ?? ""
+    (row) => row.querySelector("td span")?.textContent ?? ""
   );
 }
 afterEach(() => {
@@ -120,115 +117,68 @@ describe("Payments reporting", () => {
       "Finance report read"
     );
   });
-  it("starts with urgent rows and displays meaningful, currency-separated totals", () => {
+  it("shows only DAO treasury above a Costs grid, with other custody collapsed", () => {
     render(<FinanceReport report={financePreview} />);
-    expect(services().slice(0, 3)).toEqual([
-      "Akash hosting",
-      "Cherry compute",
-      "Grafana",
-    ]);
-    expect(screen.getAllByText("95 USDC")).toHaveLength(2);
-    expect(screen.getAllByText("6 ACT · 36 EUR · 120 USD")).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "Financials" })).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "Paid (cumulative)", exact: true })
-    ).toBeInTheDocument();
+      screen.getByText("DAO treasury", { selector: "dt" }).nextElementSibling
+    ).toHaveTextContent("10 USDC");
+    expect(services()).not.toContain("DAO treasury");
+    expect(services()).not.toContain("Operator working capital");
     expect(
-      screen.queryByRole("button", { name: /fund|pay bill/i })
+      screen.getByText("Funding accounts").parentElement
+    ).not.toHaveAttribute("open");
+    expect(
+      screen.queryByRole("button", { name: /Paid/ })
     ).not.toBeInTheDocument();
-    expect(screen.queryByText("Source")).not.toBeInTheDocument();
-  });
-  it("sorts numeric balances both ways and leaves missing balances last", () => {
-    render(<FinanceReport report={financePreview} />);
-    const sort = screen.getByRole("button", { name: "Balance", exact: true });
-    fireEvent.click(sort);
     expect(
-      services().filter((name) =>
-        [
-          "Steward custody",
-          "Operator working capital",
-          "DAO treasury",
-        ].includes(name)
-      )
-    ).toEqual(["Steward custody", "Operator working capital", "DAO treasury"]);
-    expect(services().slice(-2)).toEqual(["Grafana", "GitHub"]);
-    fireEvent.click(sort);
+      screen.getByText("Known Akash contract rate · operator fleet")
+    ).toBeVisible();
+    expect(screen.getByText("0.000005 USD credit / block")).toBeVisible();
     expect(
-      services().filter((name) =>
-        [
-          "Steward custody",
-          "Operator working capital",
-          "DAO treasury",
-        ].includes(name)
-      )
-    ).toEqual(["DAO treasury", "Operator working capital", "Steward custody"]);
-    expect(services().slice(-2)).toEqual(["Grafana", "GitHub"]);
+      screen.getAllByText("Last known · age unknown").length
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("button", { name: /^(fund|pay bill|top up)$/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Provider transfers · cumulative")
+    ).not.toBeInTheDocument();
   });
-  it("sorts runway both ways and keeps unknown runway below measured days", () => {
+  it.each([
+    "Balance / credit",
+    "Runway",
+    "Rate",
+  ])("sorts %s numerically both ways with missing last", (title) => {
     render(<FinanceReport report={financePreview} />);
-    const sort = screen.getByRole("button", { name: "Runway", exact: true });
-    fireEvent.click(sort);
-    expect(services().slice(0, 3)).toEqual([
-      "Akash hosting",
-      "Cherry compute",
-      "OpenRouter",
-    ]);
-    fireEvent.click(sort);
-    expect(services().slice(0, 3)).toEqual([
-      "OpenRouter",
-      "Cherry compute",
-      "Akash hosting",
-    ]);
-  });
-  it("sorts burn and cumulative paid numerically within one native currency", () => {
-    const source = financePreview.rows.find(
-      (row) => row.label === "OpenRouter"
-    );
-    if (!source) throw new Error("Missing fixture");
-    render(
-      <FinanceReport
-        report={{
-          ...financePreview,
-          rows: [
-            ...financePreview.rows,
-            {
-              ...source,
-              plane: "demo:other-ai",
-              label: "Other AI",
-              burnPerDay: 12,
-              cumulativeVendorTransfer: { amount: "20", currency: "USD" },
-            },
-          ],
-        }}
-      />
-    );
     const selected = () =>
-      services().filter((name) => ["OpenRouter", "Other AI"].includes(name));
-    fireEvent.click(screen.getByRole("button", { name: "Burn", exact: true }));
-    expect(selected()).toEqual(["OpenRouter", "Other AI"]);
-    fireEvent.click(screen.getByRole("button", { name: "Burn", exact: true }));
-    expect(selected()).toEqual(["Other AI", "OpenRouter"]);
+      services().filter((name) => name.startsWith("Example service"));
+    const sort = screen.getByRole("button", { name: title, exact: true });
+    fireEvent.click(sort);
+    expect(selected()).toEqual(["Example service A", "Example service B"]);
     expect(services().slice(-2)).toEqual(["Grafana", "GitHub"]);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Paid (cumulative)", exact: true })
-    );
-    expect(selected()).toEqual(["Other AI", "OpenRouter"]);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Paid (cumulative)", exact: true })
-    );
-    expect(selected()).toEqual(["OpenRouter", "Other AI"]);
+    fireEvent.click(sort);
+    expect(selected()).toEqual(["Example service B", "Example service A"]);
     expect(services().slice(-2)).toEqual(["Grafana", "GitHub"]);
+  });
+  it("never replaces missing DAO treasury with another custody account", () => {
+    render(
+      <FinanceReport report={{ ...financePreview, treasuryPlane: null }} />
+    );
+    expect(
+      screen.getByText("DAO treasury", { selector: "dt" }).nextElementSibling
+    ).toHaveTextContent("—");
   });
   it("opens exact evidence by keyboard and refreshes without payment actions", async () => {
     render(<FinanceReport report={financePreview} />);
-    const details = screen.getByRole("button", {
+    const details = screen.getAllByRole("button", {
       name: "Show Akash hosting details",
-    });
+    })[0];
+    if (!details) throw new Error("Missing details");
     details.focus();
     await userEvent.keyboard("{Enter}");
-    expect(
-      screen.getByText("Paid · cumulative provider transfer")
-    ).toBeVisible();
-    expect(screen.getByText("1250000 uact")).toBeVisible();
+    expect(screen.getByText("Provider transfers · cumulative")).toBeVisible();
+    expect(screen.getByText(/1250000 uact/)).toBeVisible();
     expect(screen.getByText("Exact native rate")).toBeVisible();
     expect(screen.queryByText("Supplied daily burn")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
@@ -236,7 +186,7 @@ describe("Payments reporting", () => {
   });
   it("shows tiny positive native values as nonzero", () => {
     expect(amountLabel({ amount: "0.00001", currency: "uact" })).toBe(
-      "<0.000001 ACT"
+      "<0.000001 USD compute credit"
     );
   });
   it("discloses supplied precision and distinct observation timestamps only in Details", () => {
@@ -252,6 +202,7 @@ describe("Payments reporting", () => {
             {
               ...source,
               balance: 1.23456789,
+              currency: "USD",
               burnPerDay: 0.00000001,
               nativeRate: undefined,
               sourceObservedAt: "2026-10-24T12:00:00.000Z",
@@ -283,8 +234,6 @@ describe("Payments reporting", () => {
     vi.stubEnv("NODE_ENV", "development");
     render(FinancePreviewPage());
     expect(screen.getByText("Demo data")).toBeVisible();
-    expect(
-      within(screen.getByRole("table")).getByText("Known totals")
-    ).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Costs" })).toBeVisible();
   });
 });

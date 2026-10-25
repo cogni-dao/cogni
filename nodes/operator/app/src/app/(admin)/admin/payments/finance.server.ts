@@ -12,18 +12,21 @@
  */
 import "server-only";
 
-import { type MoneyPlaneSnapshot, takeSnapshot } from "@cogni/money-plane";
+import { takeSnapshot } from "@cogni/money-plane";
 
 import { redirect } from "next/navigation";
 import { createFinanceReaders } from "@/bootstrap/capabilities/finance";
+import type { FinanceReportModel } from "@/features/finance/types";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { getNodeId, isDaoAdmin } from "@/shared/config";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
-export async function getFinanceReport(): Promise<MoneyPlaneSnapshot> {
+export async function getFinanceReport(): Promise<FinanceReportModel> {
   const user = await getServerSessionUser();
   if (!isDaoAdmin(user?.walletAddress ?? null)) redirect("/dashboard");
-  const report = await takeSnapshot(await createFinanceReaders(), {
+  const { readers, treasuryPlane, costRateEvidence } =
+    await createFinanceReaders();
+  const report = await takeSnapshot(readers, {
     timeoutMs: 5000,
   });
   makeLogger({ route: "admin.payments", nodeId: getNodeId() }).info(
@@ -36,5 +39,5 @@ export async function getFinanceReport(): Promise<MoneyPlaneSnapshot> {
     },
     "Finance report read"
   );
-  return report;
+  return { ...report, treasuryPlane, costRateEvidence };
 }

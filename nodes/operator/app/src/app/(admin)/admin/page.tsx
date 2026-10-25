@@ -58,9 +58,8 @@ const GOVERNANCE_VIEWS = [
 const TREASURY_SERVICES = [
   {
     href: "/admin/payments",
-    title: "Provider Top-Ups",
-    description:
-      "Fund the steward wallet from the operator wallet, then settle vendor invoices (OpenRouter, Cherry) in USDC.",
+    title: "Financials",
+    description: "View DAO treasury, service costs, and funding sources.",
     icon: Wallet,
   },
 ] as const;
