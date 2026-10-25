@@ -515,6 +515,7 @@ function candidateInfraPathLane(
   }
   if (
     path === "infra/openfga/rbac-model.json" ||
+    path === "infra/images/litellm/cogni_callbacks.py" ||
     path.startsWith("infra/compose/edge/") ||
     path.startsWith("infra/compose/runtime/") ||
     path.startsWith("infra/k8s/argocd/image-updater/") ||
