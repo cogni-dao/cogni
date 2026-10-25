@@ -14,3 +14,9 @@ Consumed by `../../replay-2301.spec.ts`, which drives `buildEnvDeltaPlan` (prese
 candidate-a over `pre/`, then preview over the composed output — and asserts the 9 rendered files
 are byte-equal to `expected/` and the catalog is structurally equal (its hand-written comments are
 out of byte scope).
+
+The production scheduler pre-fixture preserves the same pre-commit endpoints,
+with the current renderer's empty `TEMPORAL_CUSTODIED_NODE_ENDPOINTS` seed added.
+Bug.5536 adds the current custody-map invariant: both new namespaces are written
+to this control patch, while its existing production COGNI_NODE_ENDPOINTS stays
+byte-for-byte unchanged. The nine historical artifact assertions remain intact.
