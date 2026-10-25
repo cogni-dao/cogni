@@ -229,12 +229,50 @@ describe("Payments reporting", () => {
       screen.getByText("Paid · cumulative provider transfer")
     ).toBeVisible();
     expect(screen.getByText("1250000 uact")).toBeVisible();
+    expect(screen.getByText("Exact native rate")).toBeVisible();
+    expect(screen.queryByText("Supplied daily burn")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     expect(access.refresh).toHaveBeenCalled();
   });
   it("shows tiny positive native values as nonzero", () => {
     expect(amountLabel({ amount: "0.00001", currency: "uact" })).toBe(
       "<0.000001 ACT"
+    );
+  });
+  it("discloses supplied precision and distinct observation timestamps only in Details", () => {
+    const source = financePreview.rows.find(
+      (row) => row.label === "OpenRouter"
+    );
+    if (!source) throw new Error("Missing fixture");
+    render(
+      <FinanceReport
+        report={{
+          ...financePreview,
+          rows: [
+            {
+              ...source,
+              balance: 1.23456789,
+              burnPerDay: 0.00000001,
+              nativeRate: undefined,
+              sourceObservedAt: "2026-10-24T12:00:00.000Z",
+              observedAt: "2026-10-24T12:05:00.000Z",
+            },
+          ],
+        }}
+      />
+    );
+    expect(screen.queryByText("1.23456789 USD")).not.toBeInTheDocument();
+    expect(screen.queryByText("1e-8 USD / day")).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show OpenRouter details" })
+    );
+    expect(screen.getByText("1.23456789 USD")).toBeVisible();
+    expect(screen.getByText("1e-8 USD / day")).toBeVisible();
+    expect(
+      screen.getByText("Source observed").nextElementSibling
+    ).toHaveTextContent("2026-10-24 12:00 UTC");
+    expect(screen.getByText("Read at").nextElementSibling).toHaveTextContent(
+      "2026-10-24 12:05 UTC"
     );
   });
   it.each(["production", "test"])("preview returns 404 in %s", (env) => {

@@ -65,8 +65,12 @@ function Details({ row }: { row: MoneyPlaneRow }): ReactElement {
         </dd>
       </div>
       <div>
-        <dt className="text-muted-foreground">Observed</dt>
+        <dt className="text-muted-foreground">Source observed</dt>
         <dd>{observedLabel(row.sourceObservedAt)}</dd>
+      </div>
+      <div>
+        <dt className="text-muted-foreground">Read at</dt>
+        <dd>{observedLabel(row.observedAt)}</dd>
       </div>
       <div>
         <dt className="text-muted-foreground">Payer</dt>
@@ -76,6 +80,25 @@ function Details({ row }: { row: MoneyPlaneRow }): ReactElement {
         <dt className="text-muted-foreground">Beneficiary / custody</dt>
         <dd className="break-words">{row.beneficiary ?? "Unknown"}</dd>
       </div>
+      {row.balance !== null && Number.isFinite(row.balance) && row.currency && (
+        <div>
+          <dt className="text-muted-foreground">Supplied balance</dt>
+          <dd>
+            {String(row.balance)} {row.currency}
+          </dd>
+        </div>
+      )}
+      {!row.nativeRate &&
+        row.burnPerDay !== null &&
+        Number.isFinite(row.burnPerDay) &&
+        row.currency && (
+          <div>
+            <dt className="text-muted-foreground">Supplied daily burn</dt>
+            <dd>
+              {String(row.burnPerDay)} {row.currency} / day
+            </dd>
+          </div>
+        )}
       {row.nativeRate && (
         <div>
           <dt className="text-muted-foreground">Exact native rate</dt>
