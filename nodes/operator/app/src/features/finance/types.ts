@@ -5,14 +5,14 @@
  * Module: `@features/finance/types`
  * Purpose: Operator-owned reporting context beside the shared reader snapshot.
  * Scope: View model only; no financial eligibility logic.
- * Invariants: Explicit treasury identity and cost attribution are never inferred by the UI.
+ * Invariants: The treasury is identified only from configuration, never inferred by the UI.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/task.5347
  * @public
  */
-import type { CostRateEvidence, MoneyPlaneSnapshot } from "@cogni/money-plane";
+import type { MoneyPlaneSnapshot } from "@cogni/money-plane";
+
 export interface FinanceReportModel extends MoneyPlaneSnapshot {
+  /** Plane id of the configured DAO treasury wallet, or null when none is declared. */
   treasuryPlane: string | null;
-  configuredWalletPlanes: string[];
-  costRateEvidence: CostRateEvidence[];
 }

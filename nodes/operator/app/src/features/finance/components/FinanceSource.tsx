@@ -3,16 +3,17 @@
 
 /**
  * Module: `@features/finance/components/FinanceSource`
- * Purpose: Explain relevant financial evidence in one accessible source dialog.
+ * Purpose: Explain one row's evidence in the existing accessible Dialog: source, exact native amounts, basis and cadence, observed time, and the reason when unavailable.
  * Scope: Presentation only; source values stay unrounded and credentials stay server-side.
- * Invariants: No technical identifier dump, inferred payments or nested disclosures.
+ * Invariants: No raw reason codes, identifiers, URLs or inferred payments.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/task.5347
  * @internal
  */
 "use client";
 
-import type { CostRateEvidence, MoneyPlaneRow } from "@cogni/money-plane";
+import type { MoneyPlaneRow } from "@cogni/money-plane";
+import type { ReactNode } from "react";
 import {
   Button,
   Dialog,
@@ -23,153 +24,99 @@ import {
   DialogTrigger,
   ReportText,
 } from "@/components";
-import { nativeBurn, observedLabel, rowAmount } from "./format";
+import {
+  attributionLabel,
+  balance,
+  basisLabel,
+  burn,
+  observedLabel,
+  unavailableReason,
+} from "./format";
 
-export function sourceExplanation(row: MoneyPlaneRow): string {
-  if (row.plane.includes("openrouter") || row.plane.includes("cherry:account"))
-    return "Operator-funded · provider balance access not connected.";
-  if (row.kind === "wallet")
-    return rowAmount(row.balance, row.currency)
-      ? "Observed holding · custody does not establish spending authority."
-      : "Configured account · balance unavailable.";
-  if (row.nativeRate) return "Contract quote · not measured spend.";
-  if (row.burnPerDay !== null)
-    return "Reported rate · see the stated measurement interval where available.";
-  if (row.cumulativeVendorTransfer)
-    return "Provider transfers · period and completeness unknown.";
-  return "Operator-funded · cost not yet reported.";
-}
-
-export function hasSourceEvidence(row: MoneyPlaneRow): boolean {
-  return Boolean(
-    row.kind === "wallet" ||
-      rowAmount(row.balance, row.currency) ||
-      nativeBurn(row) ||
-      row.cumulativeVendorTransfer ||
-      row.plane.includes("openrouter") ||
-      row.plane.includes("cherry:account")
+function Fact({ term, children }: { term: string; children: ReactNode }) {
+  return (
+    <div>
+      <ReportText as="dt" variant="caption" tone="muted">
+        {term}
+      </ReportText>
+      <ReportText as="dd" variant="amount">
+        {children}
+      </ReportText>
+    </div>
   );
 }
 
 export function FinanceSource({
   row,
-  evidence,
+  timeZone,
 }: {
   row: MoneyPlaneRow;
-  evidence?: CostRateEvidence | undefined;
+  /** IANA zone for readable times; undefined uses the viewer's zone. */
+  timeZone?: string | undefined;
 }) {
-  if (!hasSourceEvidence(row)) return null;
-  const balance = rowAmount(row.balance, row.currency);
-  const rate = nativeBurn(row);
-  const observed = observedLabel(row.sourceObservedAt, true);
+  const reason = unavailableReason(row);
+  const basis = basisLabel(row);
+  const observed = observedLabel(row.sourceObservedAt, timeZone);
+  const read = observedLabel(row.observedAt, timeZone);
+  const who = attributionLabel(row);
   return (
     <Dialog>
       <DialogTrigger asChild>
         <Button
           variant="ghost"
           size="sm"
-          className="min-h-11 shrink-0"
-          aria-label={`${row.label} source${row.kind !== "wallet" && row.beneficiary ? ` — ${row.beneficiary}` : ""}`}
+          className="min-h-11 shrink-0 text-xs"
+          aria-label={`${row.label} source`}
         >
           Source
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-dvh w-11/12 min-w-0 max-w-lg overflow-y-auto break-words [&>button]:top-1 [&>button]:right-1 [&>button]:grid [&>button]:size-11 [&>button]:place-items-center">
         <DialogHeader className="pr-8">
-          <DialogTitle>{row.label} source</DialogTitle>
-          <DialogDescription>{sourceExplanation(row)}</DialogDescription>
+          <DialogTitle>{row.label}</DialogTitle>
+          <DialogDescription>
+            {row.source ?? "Not connected"}
+            {basis ? ` · ${basis}` : ""}
+          </DialogDescription>
         </DialogHeader>
         <dl className="grid min-w-0 gap-4">
-          {balance && (
-            <div>
-              <ReportText as="dt" tone="muted">
-                Account balance
-              </ReportText>
-              <ReportText as="dd" variant="amount">
-                {balance.amount} {balance.currency}
-              </ReportText>
-            </div>
-          )}
-          {rate && (
-            <div>
-              <ReportText as="dt" tone="muted">
-                {evidence?.basis.kind === "contract"
-                  ? "Contract rate"
-                  : evidence?.basis.kind === "measured"
-                    ? "Measured burn"
-                    : "Reported rate"}
-              </ReportText>
-              <ReportText as="dd" variant="amount">
-                {rate.amount} {rate.currency} / {rate.per}
-              </ReportText>
-              {rate.currency === "uact" && (
-                <ReportText as="dd" tone="muted">
-                  1,000,000 uact = 1 ACT of USD compute credit; not transferable
-                  cash.
+          {reason && (
+            <Fact term="Unavailable">
+              {reason}
+              {row.detail ? (
+                <ReportText as="span" variant="caption" tone="muted">
+                  {" "}
+                  · {row.detail}
                 </ReportText>
-              )}
-            </div>
+              ) : null}
+            </Fact>
           )}
-          {(balance || rate) && (
-            <div>
-              <ReportText as="dt" tone="muted">
-                {balance ? "Balance observed" : "Rate observed"}
-              </ReportText>
-              <ReportText as="dd">
-                {observed === "Unknown"
-                  ? "Source age unknown"
-                  : `${observed}${row.freshness === "stale" ? " · Stale" : ""}`}
-              </ReportText>
-            </div>
+          {balance(row) !== undefined && (
+            <Fact term="Balance · exact">
+              {row.balance} {row.currency}
+            </Fact>
           )}
-          {evidence?.basis.kind === "measured" && (
-            <div>
-              <ReportText as="dt" tone="muted">
-                Measurement interval
-              </ReportText>
-              <ReportText as="dd">
-                {observedLabel(evidence.basis.start, true)} –{" "}
-                {observedLabel(evidence.basis.end, true)}
-              </ReportText>
-            </div>
+          {row.nativeRate && (
+            <Fact term="Native rate · exact">
+              {row.nativeRate.amount} {row.nativeRate.currency} /{" "}
+              {row.nativeRate.per}
+            </Fact>
           )}
-          {row.payer && row.payer !== "Not established" && (
-            <div>
-              <ReportText as="dt" tone="muted">
-                Funded by
-              </ReportText>
-              <ReportText as="dd">{row.payer}</ReportText>
-            </div>
+          {burn(row) !== undefined && (
+            <Fact term="Burn per day">
+              {row.burnPerDay} {row.currency}
+            </Fact>
           )}
-          {row.beneficiary && (
-            <div>
-              <ReportText as="dt" tone="muted">
-                {row.kind === "wallet" ? "Configured roles" : "Service scope"}
-              </ReportText>
-              <ReportText as="dd">{row.beneficiary}</ReportText>
-            </div>
-          )}
-          {row.source && row.source !== "Not connected" && (
-            <div>
-              <ReportText as="dt" tone="muted">
-                Source
-              </ReportText>
-              <ReportText as="dd">{row.source}</ReportText>
-            </div>
-          )}
+          {!reason && row.detail && <Fact term="Note">{row.detail}</Fact>}
+          <Fact term="Observed">
+            {observed ?? `Source time unknown · read ${read ?? "—"}`}
+          </Fact>
+          {who && <Fact term="Who pays">{who}</Fact>}
           {row.cumulativeVendorTransfer && (
-            <div>
-              <ReportText as="dt" tone="muted">
-                Provider transfers · cumulative
-              </ReportText>
-              <ReportText as="dd" variant="amount">
-                {row.cumulativeVendorTransfer.amount}{" "}
-                {row.cumulativeVendorTransfer.currency}
-              </ReportText>
-              <ReportText as="dd" tone="muted">
-                Period/completeness unknown · not expense or payment history.
-              </ReportText>
-            </div>
+            <Fact term="Provider transfers · cumulative">
+              {row.cumulativeVendorTransfer.amount}{" "}
+              {row.cumulativeVendorTransfer.currency}
+            </Fact>
           )}
         </dl>
       </DialogContent>

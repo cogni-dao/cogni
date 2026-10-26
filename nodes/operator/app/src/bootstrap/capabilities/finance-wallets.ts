@@ -5,7 +5,8 @@
  * Module: `@bootstrap/capabilities/finance-wallets`
  * Purpose: Deduplicate Base USDC reader bindings before runtime IO.
  * Scope: Composition only; no addresses are added to the public finance row.
- * Invariants: A valid account counts once; absent/invalid roles remain separate unknown sources.
+ * Invariants: One configured account reads once; its merged label names every role it serves.
+ *   Absent or invalid addresses stay separate so each missing role is visible.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/task.5347
  * @internal
@@ -13,11 +14,8 @@
 export interface FinanceWalletBinding {
   name: string;
   isTreasury?: boolean;
-  configured?: boolean;
   label: string;
   address: string | undefined;
-  beneficiary: string;
-  payer: string;
 }
 
 export function uniqueWalletBindings(
@@ -26,22 +24,19 @@ export function uniqueWalletBindings(
   const result: FinanceWalletBinding[] = [];
   const accounts = new Map<string, FinanceWalletBinding>();
   for (const binding of bindings) {
-    const address = binding.address;
     const key =
-      address && /^0x[0-9a-fA-F]{40}$/.test(address)
-        ? address.toLowerCase()
+      binding.address && /^0x[0-9a-fA-F]{40}$/.test(binding.address)
+        ? binding.address.toLowerCase()
         : undefined;
     const existing = key ? accounts.get(key) : undefined;
     if (existing) {
       if (binding.isTreasury) existing.isTreasury = true;
-      existing.beneficiary += ` · ${binding.label}: ${binding.beneficiary}`;
-      if (existing.payer !== binding.payer)
-        existing.payer += ` / ${binding.payer}`;
-    } else {
-      const copy = { ...binding, configured: Boolean(binding.address) };
-      result.push(copy);
-      if (key) accounts.set(key, copy);
+      existing.label += ` · ${binding.label}`;
+      continue;
     }
+    const copy = { ...binding };
+    result.push(copy);
+    if (key) accounts.set(key, copy);
   }
   return result;
 }

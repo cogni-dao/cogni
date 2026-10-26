@@ -3,21 +3,24 @@
 
 /**
  * Module: `@bootstrap/capabilities/finance`
- * Purpose: Compose shared finance readers with existing operator compute and funding sources.
+ * Purpose: Compose this node's money-plane readers: repo-spec wallets, vendor credit it holds keys for, and the Akash fleet it pays for.
  * Scope: Runtime credentials and dependency wiring; no new financial authority.
- * Invariants: Read-only; provider errors never enter UI; no fabricated burn or FX totals.
+ * Invariants: Read-only; credentials stay server-side; provider errors never reach the UI; a missing key is an UNKNOWN row, never a guess.
  * Side-effects: Existing compute cost read; readers perform bounded provider IO when run.
- * Links: https://cognidao.org/work/items/task.5347
+ * Links: https://cognidao.org/work/items/task.5347, https://cognidao.org/knowledge/money-plane-registry
  * @internal
  */
 import {
   baseWalletReader,
   type FetchLike,
+  openRouterReader,
   type PlaneReader,
 } from "@cogni/money-plane";
 
 import {
-  computeCostReaders,
+  akashHostingReaders,
+  cherryCreditReader,
+  readAkashReports,
   unavailableFinanceReader,
 } from "@/adapters/server";
 import {
@@ -29,6 +32,9 @@ import { serverEnv } from "@/shared/env";
 
 import { getContainer } from "../container";
 import { uniqueWalletBindings } from "./finance-wallets";
+
+/** Post-snapshot operator policy, re-exported so the app layer never imports adapters directly. */
+export { restoreCostLineGrades } from "@/adapters/server";
 
 const safeFetch: FetchLike = async (url, init) => {
   try {
@@ -49,7 +55,12 @@ const safeFetch: FetchLike = async (url, init) => {
   }
 };
 
-export async function createFinanceReaders() {
+export interface FinanceReaders {
+  treasuryPlane: string | null;
+  readers: PlaneReader[];
+}
+
+export async function createFinanceReaders(): Promise<FinanceReaders> {
   const env = serverEnv();
   let container: ReturnType<typeof getContainer> | undefined;
   try {
@@ -57,121 +68,61 @@ export async function createFinanceReaders() {
   } catch {
     /* Other providers must not hide readable wallet evidence. */
   }
-  const spend = container?.akashSpendReader;
-  const compute = await computeCostReaders(
-    spend ? () => spend.reportByNode() : undefined
-  );
-  const wallet = (
-    name: string,
-    label: string,
-    address: string | undefined,
-    beneficiary: string,
-    payer: string
-  ): PlaneReader => {
-    if (!env.EVM_RPC_URL)
-      return unavailableFinanceReader(
-        `base:${name}`,
-        label,
-        "wallet",
-        "Wallet RPC unavailable"
-      );
-    const reader = baseWalletReader({
-      name,
-      label,
-      address,
-      rpcUrl: env.EVM_RPC_URL,
-      fetch: safeFetch,
-    });
-    return {
-      ...reader,
-      async read(signal) {
-        return {
-          ...(await reader.read(signal)),
-          payer,
-          beneficiary,
-          coverage: "unknown",
-        };
-      },
-    };
-  };
+
   const bindings = uniqueWalletBindings([
     {
       name: "dao-treasury",
       isTreasury: true,
       label: "DAO treasury",
       address: getDaoTreasuryAddress(),
-      beneficiary: "DAO treasury",
-      payer: "DAO",
     },
     {
       name: "operator-wallet",
-      label: "Operator working capital",
+      label: "Operator wallet · working capital",
       address: getOperatorWalletConfig()?.address,
-      beneficiary: "Operator",
-      payer: "Operator DAO",
     },
     {
       name: "steward-wallet",
-      label: "Steward custody",
+      label: "Steward wallet · human custody",
       address: getStewardWalletConfig()?.address,
-      beneficiary: "Human-custodied wallet",
-      payer: "Not established",
     },
   ]);
   const treasury = bindings.find((binding) => binding.isTreasury);
+  const wallets = bindings.map((binding) =>
+    env.EVM_RPC_URL
+      ? baseWalletReader({
+          name: binding.name,
+          label: binding.label,
+          address: binding.address,
+          rpcUrl: env.EVM_RPC_URL,
+          fetch: safeFetch,
+        })
+      : unavailableFinanceReader(
+          `base:${binding.name}`,
+          binding.label,
+          "wallet",
+          "RPC unavailable",
+          "unreadable"
+        )
+  );
+
+  const openRouter = openRouterReader({
+    apiKey: env.OPENROUTER_API_KEY,
+    fetch: safeFetch,
+    label: "OpenRouter credit",
+  });
+  const compute = container?.computeCapability;
+  const cherry = cherryCreditReader(
+    compute ? () => compute.balances() : undefined
+  );
+  const spend = container?.akashSpendReader;
+  const akash = akashHostingReaders(
+    await readAkashReports(spend ? () => spend.reportByNode() : undefined),
+    new Date().toISOString()
+  );
+
   return {
     treasuryPlane: treasury ? `base:${treasury.name}` : null,
-    configuredWalletPlanes: bindings
-      .filter((binding) => binding.configured)
-      .map((binding) => `base:${binding.name}`),
-    costRateEvidence: compute.costRateEvidence,
-    readers: [
-      ...bindings.map((binding) =>
-        wallet(
-          binding.name,
-          binding.label,
-          binding.address,
-          binding.beneficiary,
-          binding.payer
-        )
-      ),
-      unavailableFinanceReader(
-        "openrouter",
-        "OpenRouter",
-        "prepaid",
-        "Balance unavailable; provider account scope and read-only access pending task.5361"
-      ),
-      unavailableFinanceReader(
-        "cherry:account",
-        "Cherry compute",
-        "prepaid",
-        "Balance unavailable; provider read-only access pending task.5361"
-      ),
-      ...compute.readers,
-      unavailableFinanceReader(
-        "ai:provider-usage",
-        "AI provider usage",
-        "usage",
-        "Provider burn not yet available; user charges excluded"
-      ),
-      unavailableFinanceReader(
-        "grafana:usage",
-        "Grafana",
-        "usage",
-        "Usage cost not connected"
-      ),
-      unavailableFinanceReader(
-        "github:subscription",
-        "GitHub",
-        "fixed",
-        "Subscription amount not connected"
-      ),
-      unavailableFinanceReader(
-        "domain:renewal",
-        "Domain renewal",
-        "fixed",
-        "Renewal cost not connected"
-      ),
-    ],
+    readers: [...wallets, openRouter, cherry, ...akash],
   };
 }

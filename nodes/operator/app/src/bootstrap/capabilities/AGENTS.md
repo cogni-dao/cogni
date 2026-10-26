@@ -28,7 +28,7 @@ Capability factories bridging ai-tools interfaces to adapters. Creates environme
 
 ## Public Surface
 
-- `createFinanceReaders()` returns public-wallet readers, stored compute rate evidence and explicit treasury/configured-account identity for admin reporting; provider account credentials are not read by the report.
+- `createFinanceReaders()` composes this node's money planes in order: repo-spec Base wallets (treasury, operator, steward; deduplicated by address), OpenRouter credit when `OPENROUTER_API_KEY` is set, Cherry credit through the compute capability, and one Akash hosting row per node; returns the readers plus the configured treasury plane id. Credentials stay server-side.
 
 - **Exports:** `createMetricsCapability()`, `stubMetricsCapability`, `createRepoCapability()`, `stubRepoCapability`, `createWebSearchCapability()`
 - **Env/Config keys:** PROMETHEUS_REMOTE_WRITE_URL, PROMETHEUS_QUERY_URL, PROMETHEUS_READ_USERNAME, PROMETHEUS_READ_PASSWORD, COGNI_REPO_PATH, COGNI_REPO_ROOT, TAVILY_API_KEY via ServerEnv

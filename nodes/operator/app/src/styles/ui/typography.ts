@@ -219,7 +219,13 @@ const reportTextVariantVariants = {
 const reportTextToneVariants = {
   default: "text-foreground",
   muted: "text-muted-foreground",
-} satisfies Record<"default" | "muted", string>;
+  destructive: "text-destructive",
+  warning: "text-warning",
+  success: "text-success",
+} satisfies Record<
+  "default" | "muted" | "destructive" | "warning" | "success",
+  string
+>;
 export const reportText = cva("wrap-anywhere", {
   variants: {
     variant: reportTextVariantVariants,

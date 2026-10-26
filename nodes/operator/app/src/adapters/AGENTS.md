@@ -29,7 +29,7 @@ Infrastructure implementations of ports including server/, worker/, cli/, and te
 
 ## Public Surface
 
-- Finance: `computeCostReaders` and `unavailableFinanceReader` project stored compute aggregates and missing evidence into shared readers and explicitly attributed cost-rate evidence.
+- Finance: `akashHostingReaders` (one operator-covered USD/day row per node from the exact on-chain lease price at 5.884 s/block), `cherryCreditReader`, `readAkashReports`, `restoreCostLineGrades` and `unavailableFinanceReader` project operator-only money planes into shared `PlaneReader`s.
 
 - **Exports:** Port implementations for bootstrap injection (including identity-attestation live-catalog/Drizzle/Jose adapters and receipt-linked `DrizzleComputeCostStore`), database client (db, Database), MimirMetricsAdapter, ViemEvmOnchainClient, EvmRpcOnChainVerifierAdapter, EvmOnchainClient (type), GitHubWebhookNormalizer (ingestion), GitHubRepoWriter (operator App-backed deploy plane, including production infra reconcile and fixed worker-routing receipt rollback), scheduling adapters (re-exported from @cogni/db-client)
 - **CLI (if any):** cli/ adapter implementations

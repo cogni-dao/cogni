@@ -59,7 +59,8 @@ const TREASURY_SERVICES = [
   {
     href: "/admin/payments",
     title: "Financials",
-    description: "View DAO treasury, service costs, and funding sources.",
+    description:
+      "Balances, burn per day and runway for every money plane, plus provider funding actions.",
     icon: Wallet,
   },
 ] as const;

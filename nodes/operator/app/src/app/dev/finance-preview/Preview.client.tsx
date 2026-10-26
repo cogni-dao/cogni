@@ -28,11 +28,9 @@ import { FinanceReport } from "@/features/finance/components/FinanceReport";
 import type { FinanceReportModel } from "@/features/finance/types";
 import { CHAINS } from "@/shared/web3";
 import {
-  financePreview,
-  longFinancePreview,
-  missingFinancePreview,
+  liveShapedFinancePreview,
   previewTreasuryAddress,
-  richFinancePreview,
+  sparseFinancePreview,
 } from "./fixture";
 
 export function FixtureQueryBoundary({
@@ -46,9 +44,7 @@ export function FixtureQueryBoundary({
     const value = new QueryClient();
     value.setQueryDefaults(["treasury", "snapshot"], { enabled: false });
     const treasury = report.rows.find(
-      (row) =>
-        row.plane === report.treasuryPlane &&
-        report.configuredWalletPlanes.includes(row.plane)
+      (row) => row.plane === report.treasuryPlane
     );
     if (
       treasury?.currency === "USDC" &&
@@ -77,32 +73,28 @@ export function FixtureQueryBoundary({
   });
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
+
 const scenarios = {
-  current: financePreview,
-  sparse: missingFinancePreview,
-  rich: richFinancePreview,
-  long: longFinancePreview,
+  "live-shaped": liveShapedFinancePreview,
+  sparse: sparseFinancePreview,
 };
+type Scenario = keyof typeof scenarios;
+
 export function FinancePreview() {
-  const [scenario, setScenario] = useState<keyof typeof scenarios>("current");
+  const [scenario, setScenario] = useState<Scenario>("live-shaped");
   const report = scenarios[scenario];
   return (
     <FixtureQueryBoundary key={scenario} report={report}>
       <AdminShell>
         <PageContainer maxWidth="full">
-          <div className="mx-auto w-full min-w-0 max-w-6xl space-y-4">
+          <div className="w-full min-w-0 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <ReportText variant="caption" tone="muted">
-                Demo data ·{" "}
-                {scenario === "rich" || scenario === "long"
-                  ? "synthetic measured examples"
-                  : "source-shaped reporting example"}
+                Demo data · {scenario}
               </ReportText>
               <Select
                 value={scenario}
-                onValueChange={(value) =>
-                  setScenario(value as keyof typeof scenarios)
-                }
+                onValueChange={(value) => setScenario(value as Scenario)}
               >
                 <SelectTrigger
                   aria-label="Preview scenario"
@@ -111,16 +103,10 @@ export function FinancePreview() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="current">
-                    Current source coverage
-                  </SelectItem>
+                  <SelectItem value="live-shaped">Live-shaped</SelectItem>
                   <SelectItem value="sparse">
-                    Missing treasury and costs
+                    Sparse · RPC down, no keys
                   </SelectItem>
-                  <SelectItem value="rich">
-                    Synthetic measured examples
-                  </SelectItem>
-                  <SelectItem value="long">Synthetic edge cases</SelectItem>
                 </SelectContent>
               </Select>
             </div>
