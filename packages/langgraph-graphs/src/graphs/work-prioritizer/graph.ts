@@ -98,19 +98,22 @@ function toolCallArgs(
 }
 
 /**
- * Code-graded scores for one run (0..1 each). EVERY_TICK_IMPROVES: the grader is deterministic over the transcript,
- * so the same scores land in the cycle log and can be replayed from a stored trace.
- *   knowledge_read  — at least one successful knowledge search (the hub was consulted)
+ * Code-graded guardrails for one run (0..1 each). EVERY_TICK_IMPROVES: deterministic over the transcript, so the
+ * same scores land in the cycle log and can be replayed from a stored trace. These grade grounding and waste,
+ * not usefulness: a run can score 1 everywhere and still be a poor judgment. Usefulness is a human rating.
+ *   knowledge_read  — at least one knowledge search returned a non-empty result (titles only; not proof of reading)
+ *   evidence_read   — at least one work-item query returned items
  *   goal_cited      — the decision derives from a listed goal and each Top-5 line cites a listed goal
  *   novel_change    — share of landed patches whose values differ from what the run read (1 when no patches)
- *   focus           — Top-5 lines present, each naming an item id (count / 5)
- *   action          — share of Top-5 lines that carry a `next:` action
+ *   grounded        — distinct Top-5 item ids that were actually read this run (count / 5)
+ *   action          — share of Top-5 lines whose `next:` carries real text
  */
 export function cycleScores(messages: readonly BaseMessage[]) {
   const calls = toolCallArgs(messages);
   const seen = new Map<string, Snapshot>();
   let goalIds: string[] = [];
   let knowledgeReads = 0;
+  let itemsRead = 0;
   let patches = 0;
   let identicalPatches = 0;
   let decision: { content: string; derivesFromHypothesisId: string } | null =
@@ -123,8 +126,10 @@ export function cycleScores(messages: readonly BaseMessage[]) {
     if (m.name === GOAL_LIST_NAME && Array.isArray(v.goals)) {
       goalIds = v.goals.map((g: { id?: unknown }) => String(g?.id));
     } else if (m.name === KNOWLEDGE_SEARCH_NAME) {
-      knowledgeReads++;
+      const hits = [v.results, v.entries, v.items].find(Array.isArray);
+      if (hits && hits.length > 0) knowledgeReads++;
     } else if (m.name === WORK_ITEM_QUERY_NAME && Array.isArray(v.items)) {
+      itemsRead += v.items.length;
       for (const it of v.items as Array<Record<string, unknown>>) {
         if (typeof it.id !== "string") continue;
         const snap: Snapshot = {};
@@ -167,21 +172,24 @@ export function cycleScores(messages: readonly BaseMessage[]) {
     .filter((l) => TOP_LINE.test(l) && ITEM_ID.test(l))
     .slice(0, 5);
   const topIds = topLines.map((l) => l.match(ITEM_ID)?.[0] ?? "");
+  const grounded = new Set(topIds.filter((id) => seen.has(id))).size;
   const citesGoal = (l: string) => goalIds.some((g) => g && l.includes(g));
   const cited = topLines.filter(citesGoal).length;
-  const withNext = topLines.filter((l) => /\bnext:/i.test(l)).length;
+  const withNext = topLines.filter((l) => /\bnext:\s*\S{3,}/i.test(l)).length;
   const derivesOk =
     decision !== null && goalIds.includes(decision.derivesFromHypothesisId);
   return {
     knowledgeReads,
+    itemsRead,
     identicalPatches,
     topIds,
     scores: {
       knowledge_read: knowledgeReads > 0 ? 1 : 0,
+      evidence_read: itemsRead > 0 ? 1 : 0,
       goal_cited:
         derivesOk && topLines.length > 0 ? cited / topLines.length : 0,
       novel_change: patches === 0 ? 1 : 1 - identicalPatches / patches,
-      focus: Math.min(1, topLines.length / 5),
+      grounded: grounded / 5,
       action: topLines.length > 0 ? withNext / topLines.length : 0,
     },
   };

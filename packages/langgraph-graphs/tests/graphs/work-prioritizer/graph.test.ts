@@ -234,13 +234,15 @@ describe("work-prioritizer mission-loop agent", () => {
       toolErrorCount: 0,
       edoDecisionId: "mission-loop-20261023T00",
       knowledgeReads: 0,
+      itemsRead: 0,
       identicalPatches: 0,
       topIds: [],
       scores: {
         knowledge_read: 0,
+        evidence_read: 0,
         goal_cited: 0,
         novel_change: 1,
-        focus: 0,
+        grounded: 0,
         action: 0,
       },
       aborted: false,
@@ -320,7 +322,9 @@ describe("work-prioritizer mission-loop agent", () => {
           args: { query: "mission loop" },
         },
       ]),
-      tool("k", "core__knowledge_search", { results: [] }),
+      tool("k", "core__knowledge_search", {
+        results: [{ id: "mission-loop-expert" }],
+      }),
       ai([{ id: "q", name: "core__work_item_query", args: {} }]),
       tool("q", "core__work_item_query", items),
       ai([
@@ -415,11 +419,13 @@ describe("work-prioritizer mission-loop agent", () => {
       "task.4",
       "task.5",
     ]);
+    expect(s.itemsRead).toBe(2);
     expect(s.scores).toEqual({
       knowledge_read: 1,
+      evidence_read: 1,
       goal_cited: 0.8,
       novel_change: 0.5,
-      focus: 1,
+      grounded: 0.4, // only story.1 and bug.2 were read this run; task.3-5 are invented
       action: 0.8,
     });
     // derivesFromHypothesisId outside the listed goals → goal_cited 0; a failed knowledge search is not a read.
@@ -439,12 +445,44 @@ describe("work-prioritizer mission-loop agent", () => {
     ]);
     expect(off.scores.goal_cited).toBe(0);
     expect(off.scores.knowledge_read).toBe(0);
-    expect(off.scores.focus).toBe(1);
+    expect(off.scores.grounded).toBe(0);
     expect(cycleScores([]).scores).toEqual({
       knowledge_read: 0,
+      evidence_read: 0,
       goal_cited: 0,
       novel_change: 1,
-      focus: 0,
+      grounded: 0,
+      action: 0,
+    });
+    // Reviewer counterexample: empty search, no backlog read, one id repeated five times, blank next → fails closed.
+    const fake = cycleScores([
+      ai([{ id: "g", name: GOAL_LIST_NAME, args: {} }]),
+      tool("g", GOAL_LIST_NAME, goals),
+      ai([{ id: "k", name: "core__knowledge_search", args: {} }]),
+      tool("k", "core__knowledge_search", { results: [] }),
+      ai([
+        {
+          id: "d",
+          name: EDO_DECIDE_NAME,
+          args: {
+            content: [
+              "Top 5:",
+              ...[1, 2, 3, 4, 5].map(
+                (n) => `${n}. task.1 goal:goal-ai-work-converges — why — next:`
+              ),
+            ].join("\n"),
+            derivesFromHypothesisId: "goal-ai-work-converges",
+          },
+        },
+      ]),
+      tool("d", EDO_DECIDE_NAME, { entry: { id: "x" }, committed: true }),
+    ]);
+    expect(fake.scores).toEqual({
+      knowledge_read: 0,
+      evidence_read: 0,
+      goal_cited: 1,
+      novel_change: 1,
+      grounded: 0,
       action: 0,
     });
   });
