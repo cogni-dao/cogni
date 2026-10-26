@@ -3,6 +3,9 @@
 @import "tw-animate-css";
 @import "@cogni/node-ui-kit/tailwind-source.css";
 @import "@cogni/knowledge-base-ui/tailwind-source.css";
+@import "@cogni/money-plane/tailwind-source.css";
+/* The shared FinanceReport ships as built JS; scan it so its utilities are emitted (Turbopack inlines the import above). */
+@source "../../node_modules/@cogni/money-plane/dist/react";
 
 @theme inline {
   /* Colors - map CSS vars to Tailwind color namespace */

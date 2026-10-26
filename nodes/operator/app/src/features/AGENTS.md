@@ -45,7 +45,7 @@ Vertical slices containing use cases like accounts/, ai/, and home/. Orchestrate
 
 ## Public Surface
 
-- Finance: `finance/types` adds the configured treasury plane to the shared snapshot; `finance/components/FinanceReport` renders one table (Line · Balance · Burn/day · Runway · Action) in risk order with stacked rows below 42rem container width; the Line label opens `FinanceSource` (evidence dialog); `RowAction` renders each row's package `payAction` (inline fund-steward POST, or a Top up link). No provider reads.
+- Finance: `finance/types` is the page model (snapshot projected to USD + treasury id + summary); `finance/components/FinanceReportClient` binds the package `@cogni/money-plane/react` FinanceReport (ONE_UI) to this node's kit and routes (fund-steward POST, router.refresh). No table logic, no provider reads here.
 
 - **Exports:** accounts/services (admin ops), ai/services (completion), identity/services (attestation issuance policy), home/components (landing page), ingestion/services (webhook receiver), site-meta/services (route manifest), nodes/launch-pack (legacy and successor packet projections sharing maintained prompt guidance)
 - **Routes (if any):** Feature-specific routes via app/

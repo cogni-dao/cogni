@@ -14,11 +14,10 @@
  */
 import {
   type FetchLike,
+  type MoneyPlaneRow,
   type PlaneReader,
   unknownRow,
 } from "@cogni/money-plane";
-
-import type { FinanceRow, FinanceRowPart } from "@/ports/finance-report.port";
 
 export const GRAFANA_OVERAGE_PLANE = "grafana:overage";
 export const GRAFANA_USAGE_DATASOURCE_UID = "grafanacloud-usage";
@@ -57,10 +56,16 @@ export function grafanaOverageReader(
   const plane = GRAFANA_OVERAGE_PLANE;
   const label = "Grafana overage";
   const now = options.now ?? (() => new Date());
+  /** Auto-billed to a card; nothing to top up from the steward wallet. */
+  const rail = {
+    kind: "card-manual" as const,
+    status: "planned" as const,
+    guide: "auto-bill",
+  };
   const unknown = (
     reasonCode: "unconfigured" | "unreadable",
     detail: string
-  ): FinanceRow => ({
+  ): MoneyPlaneRow => ({
     ...unknownRow({
       plane,
       label,
@@ -70,12 +75,13 @@ export function grafanaOverageReader(
       detail,
     }),
     payer: "Operator",
+    rail,
   });
   return {
     plane,
     label,
     kind: "usage",
-    async read(signal): Promise<FinanceRow> {
+    async read(signal): Promise<MoneyPlaneRow> {
       if (!options.url || !options.token)
         return unknown("unconfigured", "no Grafana credential");
       const base = `${options.url.replace(/\/+$/, "")}/api/datasources/proxy/uid/${GRAFANA_USAGE_DATASOURCE_UID}/api/v1/query?query=`;
@@ -92,31 +98,43 @@ export function grafanaOverageReader(
           results(await query(GRAFANA_TOTAL_OVERAGE_METRIC))[0]
         );
         if (total === null) return unknown("unreadable", "no overage sample");
-        let parts: FinanceRowPart[] = [];
+        const at = now();
+        const observedAt = at.toISOString();
+        let children: MoneyPlaneRow[] = [];
         try {
-          parts = results(await query(GRAFANA_OVERAGE_BREAKDOWN_QUERY)).flatMap(
-            (r) => {
-              const name = String(r.metric?.__name__ ?? "");
-              const value = sample(r);
-              return name === GRAFANA_TOTAL_OVERAGE_METRIC || value === null
-                ? []
-                : [
-                    {
-                      label: name
-                        .replace(/^grafanacloud_org_/, "")
-                        .replace(/_overage$/, "")
-                        .replace(/_/g, " "),
-                      amount: String(value),
-                      currency: "USD",
-                    },
-                  ];
-            }
-          );
+          children = results(
+            await query(GRAFANA_OVERAGE_BREAKDOWN_QUERY)
+          ).flatMap((r) => {
+            const name = String(r.metric?.__name__ ?? "");
+            const value = sample(r);
+            if (name === GRAFANA_TOTAL_OVERAGE_METRIC || value === null)
+              return [];
+            const product = name
+              .replace(/^grafanacloud_org_/, "")
+              .replace(/_overage$/, "")
+              .replace(/_/g, " ");
+            return [
+              {
+                plane: `${plane}:${product.replace(/\s+/g, "-")}`,
+                label: `Grafana · ${product}`,
+                kind: "usage" as const,
+                balance: null,
+                currency: "USD",
+                burnPerDay: overagePerDay(value, at),
+                runwayDays: null,
+                grade: "INFO" as const,
+                observedAt,
+                source: "Grafana Cloud usage metrics · verify against invoice",
+                sourceObservedAt: observedAt,
+                freshness: "current" as const,
+                payer: "Operator",
+                detail: `${value.toFixed(2)} USD month to date`,
+              },
+            ];
+          });
         } catch {
           /* The breakdown is evidence only; the total still stands. */
         }
-        const at = now();
-        const observedAt = at.toISOString();
         return {
           plane,
           label,
@@ -131,8 +149,9 @@ export function grafanaOverageReader(
           sourceObservedAt: observedAt,
           freshness: "current",
           payer: "Operator",
+          rail,
           detail: `${total.toFixed(2)} USD month to date · day ${at.getUTCDate()}`,
-          parts,
+          ...(children.length ? { children } : {}),
         };
       } catch {
         return unknown("unreadable", "Grafana usage read failed");

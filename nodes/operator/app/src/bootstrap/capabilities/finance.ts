@@ -4,7 +4,8 @@
 /**
  * Module: `@bootstrap/capabilities/finance`
  * Purpose: Compose every plane in the hub money-plane-registry for this node: repo-spec wallets, OpenRouter, Cherry, Akash credit
- *   and per-node hosting, Grafana overage, domain renewal, and the planes with no billing read (Alchemy, system tenant, other SaaS).
+ *   and per-node hosting (collapsed under one Akash row), Grafana overage, domain renewal, the planes with no billing read
+ *   (Alchemy, system tenant, other SaaS), and income (credited purchases; node services planned). Every row carries its rail.
  * Scope: Runtime credentials and dependency wiring; no new financial authority.
  * Invariants: Read-only; credentials stay server-side; provider errors never reach the UI; a missing key is an UNKNOWN row, never a guess.
  * Side-effects: Existing compute cost read; readers perform bounded provider IO when run.
@@ -13,10 +14,13 @@
  */
 import {
   baseWalletReader,
+  creditPurchaseIncomeReader,
   type FetchLike,
+  type MoneyPlaneRow,
   openRouterReader,
   type PayAction,
   type PlaneReader,
+  type Rail,
 } from "@cogni/money-plane";
 
 import {
@@ -24,12 +28,14 @@ import {
   akashCreditReader,
   akashHostingReaders,
   cherryFinanceReader,
+  creditedPurchasesQuery,
   domainExpiryReader,
   grafanaOverageReader,
   readAkashBlocksPerDay,
   readAkashReports,
   unavailableFinanceReader,
 } from "@/adapters/server";
+import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import {
   getDaoTreasuryAddress,
   getOperatorWalletConfig,
@@ -40,8 +46,8 @@ import { serverEnv } from "@/shared/env";
 import { getContainer } from "../container";
 import { uniqueWalletBindings } from "./finance-wallets";
 
-/** Post-snapshot operator policy, re-exported so the app layer never imports adapters directly. */
-export { restoreCostLineGrades } from "@/adapters/server";
+/** Post-snapshot operator composition, re-exported so the app layer never imports adapters directly. */
+export { collapseAkash } from "@/adapters/server";
 
 const safeFetch: FetchLike = async (url, init) => {
   try {
@@ -84,6 +90,17 @@ const AKASH_CONSOLE_TOP_UP: PayAction = {
 const FUND_STEWARD: PayAction = { kind: "fund-steward" };
 const MONEY_CHAIN =
   "User payments → operator wallet → steward wallet → vendors";
+const STEWARD_RAIL: Rail = { kind: "steward-manual", status: "supported" };
+const NO_RAIL: Rail = { kind: "none", status: "unsupported" };
+const OTHER_SAAS_VENDORS = [
+  "PostHog",
+  "Langfuse",
+  "Tavily",
+  "GitHub",
+  "DoltHub",
+  "SonarCloud",
+  "Privy",
+] as const;
 
 export interface FinanceReaders {
   treasuryPlane: string | null;
@@ -106,13 +123,16 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
       isTreasury: true,
       label: "DAO treasury",
       address: getDaoTreasuryAddress(),
+      rail: { kind: "dao-vote", status: "planned", guide: "governance" },
     },
     {
       name: "operator-wallet",
       label: "Operator wallet",
       address: getOperatorWalletConfig()?.address,
       // The only write on the page; needs a configured steward destination (AMOUNT_ONLY).
-      ...(stewardConfigured ? { payAction: FUND_STEWARD } : {}),
+      ...(stewardConfigured
+        ? { payAction: FUND_STEWARD, rail: STEWARD_RAIL }
+        : { rail: { kind: "steward-manual", status: "unsupported" } }),
       note: MONEY_CHAIN,
     },
     {
@@ -120,6 +140,7 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
       label: "Steward wallet",
       address: getStewardWalletConfig()?.address,
       note: "Human-custodied; pays both vendors in USDC",
+      rail: NO_RAIL,
     },
   ]);
   const treasury = bindings.find((binding) => binding.isTreasury);
@@ -142,20 +163,30 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
           undefined,
           binding.payAction
         );
-    if (!binding.note) return reader;
-    const note = binding.note;
+    const extras = {
+      ...(binding.note ? { note: binding.note } : {}),
+      ...(binding.rail ? { rail: binding.rail } : {}),
+    };
+    if (Object.keys(extras).length === 0) return reader;
     return {
       ...reader,
-      read: async (signal) => ({ ...(await reader.read(signal)), note }),
+      read: async (signal) => ({ ...(await reader.read(signal)), ...extras }),
     };
   });
 
-  const openRouter = openRouterReader({
+  const openRouterBase = openRouterReader({
     apiKey: env.OPENROUTER_API_KEY,
     fetch: safeFetch,
     label: "OpenRouter credit",
     payAction: OPENROUTER_CHECKOUT,
   });
+  const openRouter: PlaneReader = {
+    ...openRouterBase,
+    read: async (signal) => ({
+      ...(await openRouterBase.read(signal)),
+      rail: STEWARD_RAIL,
+    }),
+  };
   const cherry = cherryFinanceReader({
     token: env.CHERRY_AUTH_TOKEN,
     fetch: safeFetch,
@@ -186,6 +217,24 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
     domain: OPERATOR_PUBLIC_DOMAIN,
     fetch: safeFetch,
   });
+  const at = new Date().toISOString();
+  const saasChild = (vendor: string): MoneyPlaneRow => ({
+    plane: `saas:${vendor.toLowerCase()}`,
+    label: vendor,
+    kind: "fixed",
+    balance: null,
+    currency: null,
+    burnPerDay: null,
+    runwayDays: null,
+    grade: "UNKNOWN",
+    reasonCode: "unconfigured",
+    observedAt: at,
+    sourceObservedAt: null,
+    freshness: "unknown",
+    detail: "no billing read",
+    payer: "Operator",
+    rail: NO_RAIL,
+  });
   const unread = [
     unavailableFinanceReader(
       "rpc:alchemy",
@@ -193,7 +242,10 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
       "usage",
       "no billing-scoped credential",
       "unconfigured",
-      "Operator"
+      "Operator",
+      undefined,
+      undefined,
+      { rail: NO_RAIL }
     ),
     unavailableFinanceReader(
       "tenant:system",
@@ -201,7 +253,10 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
       "prepaid",
       "no read wired; balance lives in the operator DB",
       "unconfigured",
-      "Operator"
+      "Operator",
+      undefined,
+      undefined,
+      { rail: NO_RAIL }
     ),
     unavailableFinanceReader(
       "saas:other",
@@ -211,13 +266,53 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
       "unconfigured",
       "Operator",
       undefined,
-      "PostHog, Langfuse, Tavily, GitHub, DoltHub, SonarCloud, Privy"
+      OTHER_SAAS_VENDORS.join(", "),
+      { rail: NO_RAIL, children: OTHER_SAAS_VENDORS.map(saasChild) }
     ),
   ];
+
+  // Income: credited purchases from this node's own ledger; node services stay planned (x402).
+  let purchases: PlaneReader;
+  try {
+    purchases = creditPurchaseIncomeReader({
+      query: creditedPurchasesQuery(getServiceDb()),
+    });
+  } catch {
+    purchases = unavailableFinanceReader(
+      "income:credit-purchases",
+      "Credit purchases",
+      "income",
+      "ledger unavailable",
+      "unreadable",
+      undefined,
+      undefined,
+      undefined,
+      { rail: { kind: "split-inflow", status: "supported" } }
+    );
+  }
+  const nodeServices = unavailableFinanceReader(
+    "income:node-services",
+    "Node services",
+    "income",
+    "no USDC service income yet",
+    "unconfigured",
+    undefined,
+    undefined,
+    undefined,
+    {
+      rail: {
+        kind: "x402-auto",
+        status: "planned",
+        guide: "node-service-usdc-northstar",
+      },
+    }
+  );
 
   return {
     treasuryPlane: treasury ? `base:${treasury.name}` : null,
     readers: [
+      purchases,
+      nodeServices,
       ...wallets,
       openRouter,
       cherry,

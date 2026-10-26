@@ -24,13 +24,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components";
-import { FinanceReport } from "@/features/finance/components/FinanceReport";
+import { FinanceReportClient } from "@/features/finance/components/FinanceReportClient";
 import type { FinanceReportModel } from "@/features/finance/types";
 import { CHAINS } from "@/shared/web3";
 import {
   liveShapedFinancePreview,
   previewTreasuryAddress,
   sparseFinancePreview,
+  withIncomeFinancePreview,
 } from "./fixture";
 
 export function FixtureQueryBoundary({
@@ -76,6 +77,7 @@ export function FixtureQueryBoundary({
 
 const scenarios = {
   "live-shaped": liveShapedFinancePreview,
+  "with-income": withIncomeFinancePreview,
   sparse: sparseFinancePreview,
 };
 type Scenario = keyof typeof scenarios;
@@ -104,13 +106,14 @@ export function FinancePreview() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="live-shaped">Live-shaped</SelectItem>
+                  <SelectItem value="with-income">With income</SelectItem>
                   <SelectItem value="sparse">
                     Sparse · RPC down, no keys
                   </SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <FinanceReport report={report} />
+            <FinanceReportClient report={report} />
           </div>
         </PageContainer>
       </AdminShell>

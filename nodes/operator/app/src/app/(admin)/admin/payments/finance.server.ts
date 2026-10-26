@@ -3,33 +3,60 @@
 
 /**
  * Module: `@app/(admin)/admin/payments/finance.server`
- * Purpose: Read-only page composition of the shared finance reporting service.
+ * Purpose: The page's only read path: auth → every reader → one snapshot → Akash collapse → USD projection (ECB) → summary.
  * Scope: Called only behind the existing admin layout; no money-moving authority.
- * Invariants: Auth before any read. Telemetry records coverage counts, never balances or credentials.
- * Side-effects: Bounded reader IO and one finance.report.read event.
+ * Invariants: Auth before any read. The ECB rate is fetched once per snapshot and only when a non-dollar row exists.
+ *   Telemetry records coverage counts, never balances or credentials.
+ * Side-effects: Bounded reader IO, at most one FX read, and one finance.report.read event.
  * Links: https://cognidao.org/work/items/task.5347
  * @internal
  */
 import "server-only";
 
-import { takeSnapshot } from "@cogni/money-plane";
+import {
+  fetchEcbRate,
+  summarize,
+  takeSnapshot,
+  toUsd,
+  type UsdRate,
+} from "@cogni/money-plane";
 
 import { redirect } from "next/navigation";
 import {
+  collapseAkash,
   createFinanceReaders,
-  restoreCostLineGrades,
 } from "@/bootstrap/capabilities/finance";
 import type { FinanceReportModel } from "@/features/finance/types";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { getNodeId, isDaoAdmin } from "@/shared/config";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
+const DOLLAR = new Set(["USD", "USDC"]);
+
 export async function getFinanceReport(): Promise<FinanceReportModel> {
   const user = await getServerSessionUser();
   if (!isDaoAdmin(user?.walletAddress ?? null)) redirect("/dashboard");
   const { readers, treasuryPlane } = await createFinanceReaders();
   const snapshot = await takeSnapshot(readers, { timeoutMs: 5000 });
-  const rows = restoreCostLineGrades(snapshot.rows);
+  const collapsed = collapseAkash(snapshot.rows);
+  const foreign = new Set(
+    collapsed
+      .flatMap((row) => [row, ...(row.children ?? [])])
+      .map((row) => row.currency)
+      .filter((c): c is string => Boolean(c) && !DOLLAR.has(c as string))
+  );
+  const rates = (
+    await Promise.all(
+      [...foreign].map((currency) =>
+        fetchEcbRate(
+          (url, init) => fetch(url, { ...init, cache: "no-store" }),
+          `${currency}USD`
+        )
+      )
+    )
+  ).filter((rate): rate is UsdRate => rate !== null);
+  const rows = collapsed.map((row) => toUsd(row, rates));
+  const summary = summarize({ rows }, { treasuryPlane });
   makeLogger({ route: "admin.payments", nodeId: getNodeId() }).info(
     {
       event: EVENT_NAMES.FINANCE_REPORT_READ,
@@ -37,8 +64,9 @@ export async function getFinanceReport(): Promise<FinanceReportModel> {
       unknownCount: rows.filter((row) => row.grade === "UNKNOWN").length,
       transferredRows: rows.filter((row) => row.cumulativeVendorTransfer)
         .length,
+      ratesUsed: summary.ratesUsed.map((rate) => rate.pair),
     },
     "Finance report read"
   );
-  return { ...snapshot, rows, treasuryPlane };
+  return { ...snapshot, rows, treasuryPlane, summary };
 }

@@ -42,6 +42,8 @@ export default defineConfig({
     hookTimeout: 30_000,
   },
   resolve: {
+    // @cogni/money-plane is a symlinked workspace checkout during local dev; its React must be ours.
+    dedupe: ["react", "react-dom"],
     alias: [
       ...workspaceSourceAliases(path.resolve(__dirname, "../../..")),
       { find: "@tests", replacement: path.resolve(__dirname, "./tests") },

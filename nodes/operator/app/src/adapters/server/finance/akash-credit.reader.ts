@@ -15,12 +15,11 @@
 import {
   type FetchLike,
   gradeRunway,
+  type MoneyPlaneRow,
   type PayAction,
   type PlaneReader,
   unknownRow,
 } from "@cogni/money-plane";
-
-import type { FinanceRow } from "@/ports/finance-report.port";
 
 /** Akash mainnet block cadence; the same parameter the operator's goal KPI script uses. */
 export const AKASH_SECONDS_PER_BLOCK = 5.884;
@@ -119,12 +118,18 @@ export function akashCreditReader(
   options: AkashCreditReaderOptions
 ): PlaneReader {
   const plane = AKASH_CREDIT_PLANE;
-  const label = "Akash credit";
+  const label = "Akash";
+  /** Console billing is card-only and sign-in gated; not from the steward wallet. */
+  const rail = {
+    kind: "card-manual" as const,
+    status: "planned" as const,
+    guide: "Console",
+  };
   const lcd = options.lcdUrl ?? AKASH_LCD_URL;
   const now = options.now ?? (() => new Date());
   const withAction =
     options.payAction === undefined ? {} : { payAction: options.payAction };
-  const unknown = (detail: string): FinanceRow => ({
+  const unknown = (detail: string): MoneyPlaneRow => ({
     ...unknownRow({
       plane,
       label,
@@ -134,6 +139,7 @@ export function akashCreditReader(
       detail,
     }),
     payer: "Operator",
+    rail,
     ...withAction,
   });
   return {
@@ -141,7 +147,7 @@ export function akashCreditReader(
     label,
     kind: "prepaid",
     ...withAction,
-    async read(signal): Promise<FinanceRow> {
+    async read(signal): Promise<MoneyPlaneRow> {
       try {
         const owner = encodeURIComponent(options.owner);
         const q = `filters.owner=${owner}&filters.state=active&pagination.limit=500`;
@@ -208,7 +214,7 @@ export function akashCreditReader(
           : null;
         const balance = (creditUact + escrowUact) / UACT_PER_USD;
         const observedAt = now().toISOString();
-        const base: FinanceRow = {
+        const base: MoneyPlaneRow = {
           plane,
           label,
           kind: "prepaid",
@@ -222,7 +228,7 @@ export function akashCreditReader(
           sourceObservedAt: observedAt,
           freshness: "current",
           payer: "Operator",
-          rollup: true,
+          rail,
           ...withAction,
           nativeRate: {
             amount: String(ratePerBlock),

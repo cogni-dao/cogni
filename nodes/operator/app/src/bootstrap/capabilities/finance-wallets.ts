@@ -11,7 +11,7 @@
  * Links: https://cognidao.org/work/items/task.5347
  * @internal
  */
-import type { PayAction } from "@cogni/money-plane";
+import type { PayAction, Rail } from "@cogni/money-plane";
 
 export interface FinanceWalletBinding {
   name: string;
@@ -20,6 +20,7 @@ export interface FinanceWalletBinding {
   address: string | undefined;
   payAction?: PayAction;
   note?: string;
+  rail?: Rail;
 }
 
 export function uniqueWalletBindings(
@@ -39,6 +40,7 @@ export function uniqueWalletBindings(
       if (!existing.payAction && binding.payAction)
         existing.payAction = binding.payAction;
       if (!existing.note && binding.note) existing.note = binding.note;
+      if (binding.payAction && binding.rail) existing.rail = binding.rail;
       continue;
     }
     const copy = { ...binding };

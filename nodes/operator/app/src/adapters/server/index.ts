@@ -250,11 +250,15 @@ export {
   readAkashBlocksPerDay,
 } from "./finance/akash-credit.reader";
 export { cherryFinanceReader } from "./finance/cherry-finance.reader";
+export {
+  CREDITED_STATUS,
+  creditedPurchasesQuery,
+} from "./finance/credit-purchase-income.query";
 export { domainExpiryReader } from "./finance/domain-expiry.reader";
 export { grafanaOverageReader } from "./finance/grafana-overage.reader";
 export {
   akashHostingReaders,
+  collapseAkash,
   readAkashReports,
-  restoreCostLineGrades,
   unavailableFinanceReader,
 } from "./finance/operator-finance.adapter";

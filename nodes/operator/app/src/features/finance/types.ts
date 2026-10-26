@@ -3,21 +3,17 @@
 
 /**
  * Module: `@features/finance/types`
- * Purpose: Operator-owned reporting context beside the shared reader snapshot.
- * Scope: View model only; no financial eligibility logic.
+ * Purpose: The operator's Financials page model: the shared snapshot projected to USD, plus the treasury id and the one summary.
+ * Scope: View model only; no financial logic. The UI is the package component.
  * Invariants: The treasury is identified only from configuration, never inferred by the UI.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/task.5347
  * @public
  */
-import type { MoneyPlaneSnapshot } from "@cogni/money-plane";
+import type { MoneyPlaneSnapshot, ReportSummary } from "@cogni/money-plane";
 
-import type { FinanceRow } from "@/ports/finance-report.port";
-
-export type { FinanceRow, FinanceRowPart } from "@/ports/finance-report.port";
-
-export interface FinanceReportModel extends Omit<MoneyPlaneSnapshot, "rows"> {
-  rows: FinanceRow[];
+export interface FinanceReportModel extends MoneyPlaneSnapshot {
   /** Plane id of the configured DAO treasury wallet, or null when none is declared. */
   treasuryPlane: string | null;
+  summary: ReportSummary;
 }

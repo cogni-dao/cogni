@@ -3,9 +3,10 @@
 
 /**
  * Module: `reporting-page.test`
- * Purpose: Prove the five-column Financials table (Line · Balance · Burn/day · Runway · Action), risk ordering, the Line dialog, row actions incl. the fund-steward POST, and access guards.
- * Scope: Actual ReUI/TanStack rendering with no live providers or app shell IO.
- * Invariants: Unknown is a dash with a reason behind the Line dialog; no status pills; the table is the page.
+ * Purpose: Prove the operator renders the package FinanceReport (ONE_UI): grouped five-column table in USD, expandable
+ *   children, rail-driven actions incl. the fund-steward POST, the Line dialog, the one summary line, and access guards.
+ * Scope: Real kit + package component in jsdom; no live providers or app shell IO.
+ * Invariants: Unknown is a dash with a reason behind the Line dialog; a non-supported rail is never clickable.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/task.5347
  * @vitest-environment jsdom
@@ -37,10 +38,15 @@ vi.mock("next/navigation", () => ({
   },
   useRouter: () => ({ refresh: access.refresh }),
 }));
-vi.mock("@/bootstrap/capabilities/finance", () => ({
-  createFinanceReaders: access.readers,
-  restoreCostLineGrades: (rows: unknown[]) => rows,
-}));
+vi.mock("@/bootstrap/capabilities/finance", async () => {
+  const adapter = await import(
+    "@/adapters/server/finance/operator-finance.adapter"
+  );
+  return {
+    createFinanceReaders: access.readers,
+    collapseAkash: adapter.collapseAkash,
+  };
+});
 vi.mock("@/lib/auth/server", () => ({
   getServerSessionUser: async () => ({ walletAddress: "0xexample" }),
 }));
@@ -58,26 +64,14 @@ vi.mock("@/app/(admin)/AdminShell", () => ({
   ),
 }));
 vi.mock("@/components", async () => {
-  const grid = await import("@cogni/node-ui-kit/reui/data-grid/data-grid");
-  const header = await import(
-    "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header"
-  );
-  const table = await import(
-    "@cogni/node-ui-kit/reui/data-grid/data-grid-table"
-  );
   const dialog = await import("@cogni/node-ui-kit/shadcn/dialog");
   const select = await import("@cogni/node-ui-kit/shadcn/select");
-  const card = await import("@cogni/node-ui-kit/shadcn/card");
   const text = await import("@/components/kit/typography/ReportText");
   const button = await import("@/components/kit/inputs/Button");
   const input = await import("@/components/kit/inputs/Input");
   return {
-    ...grid,
-    ...header,
-    ...table,
     ...dialog,
     ...select,
-    ...card,
     ...text,
     ...button,
     ...input,
@@ -100,16 +94,12 @@ import FinancePage from "@/app/(admin)/admin/payments/page";
 import {
   liveShapedFinancePreview,
   sparseFinancePreview,
+  withIncomeFinancePreview,
 } from "@/app/dev/finance-preview/fixture";
 import { FixtureQueryBoundary } from "@/app/dev/finance-preview/Preview.client";
 import FinancePreviewPage from "@/app/dev/finance-preview/page";
-import { FinanceReport } from "@/features/finance/components/FinanceReport";
-import {
-  burnLabel,
-  fleetBurnPerDay,
-  refreshedLabel,
-  runwayLabel,
-} from "@/features/finance/components/format";
+import { FinanceReportClient } from "@/features/finance/components/FinanceReportClient";
+import type { FinanceReportModel } from "@/features/finance/types";
 import { useTreasurySnapshot } from "@/features/treasury/hooks/useTreasurySnapshot";
 
 function grid() {
@@ -117,17 +107,25 @@ function grid() {
 }
 function headers(): string[] {
   return Array.from(screen.getByRole("table").querySelectorAll("thead th")).map(
-    (th) => th.textContent?.trim() ?? ""
+    (th) => th.textContent?.replace(/[▲▼⇅]/g, "").trim() ?? ""
   );
 }
 function bodyRows(): HTMLElement[] {
   return Array.from(
-    screen.getByRole("table").querySelectorAll<HTMLElement>("tbody tr")
+    screen
+      .getByRole("table")
+      .querySelectorAll<HTMLElement>("tbody tr[data-finance-row]")
   );
 }
 function lines(): string[] {
+  return bodyRows().map((row) => row.getAttribute("data-finance-row") ?? "");
+}
+function labels(): string[] {
   return bodyRows().map(
-    (row) => row.querySelector("td button")?.getAttribute("aria-label") ?? ""
+    (row) =>
+      Array.from(row.querySelectorAll<HTMLElement>("td button[aria-label]"))
+        .map((b) => b.getAttribute("aria-label") ?? "")
+        .find((name) => !/^(Expand|Collapse) /.test(name)) ?? ""
   );
 }
 function cells(column: number): string[] {
@@ -135,31 +133,18 @@ function cells(column: number): string[] {
     (row) => row.querySelectorAll("td")[column]?.textContent?.trim() ?? ""
   );
 }
-function rowOf(label: string): HTMLElement {
+function rowOf(plane: string): HTMLElement {
   const row = bodyRows().find(
-    (r) => r.querySelector("td button")?.getAttribute("aria-label") === label
+    (r) => r.getAttribute("data-finance-row") === plane
   );
-  if (!row) throw new Error(`Missing row ${label}`);
+  if (!row) throw new Error(`Missing row ${plane}`);
   return row;
 }
-const graded = (
-  grade: MoneyPlaneRow["grade"],
-  label: string,
-  runwayDays: number
-): MoneyPlaneRow => ({
-  plane: `demo:${label}`,
-  label,
-  kind: "prepaid",
-  balance: 10,
-  currency: "USD",
-  burnPerDay: 10 / runwayDays,
-  runwayDays,
-  grade,
-  observedAt: liveShapedFinancePreview.takenAt,
-  sourceObservedAt: liveShapedFinancePreview.takenAt,
-  freshness: "current",
-  source: "Demo",
-});
+function groupsInOrder(): string[] {
+  return Array.from(
+    screen.getByRole("table").querySelectorAll("tbody tr[data-finance-group]")
+  ).map((tr) => tr.getAttribute("data-finance-group") ?? "");
+}
 
 afterEach(() => {
   cleanup();
@@ -176,11 +161,12 @@ describe("Financials reporting", () => {
     await expect(getFinanceReport()).rejects.toThrow("NEXT_REDIRECT");
     expect(access.readers).not.toHaveBeenCalled();
   });
-  it("emits only coverage after an authorized read", async () => {
+  it("emits only coverage after an authorized read and summarizes an empty snapshot", async () => {
     access.allowed = true;
     await expect(getFinanceReport()).resolves.toMatchObject({
       rows: [],
       treasuryPlane: null,
+      summary: { treasuryUsd: null, burnPerDay: null, incomePerDay: null },
     });
     expect(access.log).toHaveBeenCalledWith(
       {
@@ -188,12 +174,13 @@ describe("Financials reporting", () => {
         rowCount: 0,
         unknownCount: 0,
         transferredRows: 0,
+        ratesUsed: [],
       },
       "Finance report read"
     );
   });
-  it("renders one five-column table; the table is the page", () => {
-    render(<FinanceReport report={liveShapedFinancePreview} />);
+  it("renders the package table in USD: five columns, Income · Costs · Reserves, one summary, one FX line", () => {
+    render(<FinanceReportClient report={liveShapedFinancePreview} />);
     expect(screen.getByRole("heading", { name: "Financials" })).toBeVisible();
     expect(screen.getByText(/^Refreshed /)).toBeVisible();
     expect(headers()).toEqual([
@@ -203,155 +190,118 @@ describe("Financials reporting", () => {
       "Runway",
       "Action",
     ]);
+    expect(groupsInOrder()).toEqual(["Income", "Costs", "Reserves"]);
     expect(
-      screen.getByText("Treasury 74.52 USDC · Burn $12.85/day · €0.34/day")
+      screen.getByText(
+        "Treasury $74.52 · Income $0.00/day · Burn $13.23/day · Runway 2d (Akash)"
+      )
     ).toBeVisible();
-    expect(fleetBurnPerDay(liveShapedFinancePreview.rows)).toBeCloseTo(
-      3.13 + 252.65 / 26,
-      9
-    );
-    expect(lines()).toHaveLength(17);
-    expect(cells(1)).toContain("74.52 USDC");
-    expect(cells(1)).toContain("€12.40");
-    expect(cells(1)).toContain("$7.89");
-    expect(cells(2)).toContain("$1.57/day");
-    expect(cells(2)).toContain("€0.34/day");
-    expect(cells(3)[0]).toBe("2d");
-    expect(document.querySelector("[data-slot=badge]")).toBeNull();
-    expect(screen.queryByText("Source")).not.toBeInTheDocument();
+    expect(screen.getByText("EUR→USD 1.1188 · ECB 2026-10-26")).toBeVisible();
+    expect(cells(1)).toContain("$13.87");
+    expect(cells(2)).toContain("$0.38/day");
+    expect(cells(2)).toContain("$9.72/day");
+    expect(screen.queryByText(/€/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Paid by Operator/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Payment history/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/not yet reported/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Provider funding/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/\/ block/)).not.toBeInTheDocument();
+    expect(lines()).not.toContain("akash:poly");
   });
-  it("shows a payer subline only when the payer is not this node", () => {
-    render(
-      <FinanceReport
-        report={{
-          ...liveShapedFinancePreview,
-          rows: [
-            ...liveShapedFinancePreview.rows,
-            { ...graded("GREEN", "Guest line", 50), payer: "Poly DAO" },
-          ],
-        }}
-      />
-    );
-    expect(grid().getByText("Paid by Poly DAO")).toBeVisible();
-    expect(grid().queryByText(/Paid by Operator/)).not.toBeInTheDocument();
-  });
-  it("orders rows RED, YELLOW, then measured GREEN/INFO, then unmeasured, placeholders last, and colors runway", () => {
-    render(
-      <FinanceReport
-        report={{
-          ...liveShapedFinancePreview,
-          rows: [
-            ...liveShapedFinancePreview.rows,
-            graded("GREEN", "Fine credit", 90),
-            graded("RED", "Dying credit", 3),
-            graded("YELLOW", "Watch credit", 14),
-          ],
-        }}
-      />
-    );
-    expect(lines()).toEqual([
-      "Akash credit",
-      "Dying credit",
-      "Watch credit",
+  it("orders each group by risk and lists income first", () => {
+    render(<FinanceReportClient report={withIncomeFinancePreview} />);
+    expect(labels()).toEqual([
+      "Credit purchases",
+      "Node services",
+      "Akash",
       "Cherry credit",
       "Domain cognidao.org",
-      "Fine credit",
-      "Akash · beacon",
-      "Akash · levelup",
-      "Akash · node-template",
-      "Akash · poly",
-      "Akash · red",
-      "Akash · toks5",
-      "DAO treasury",
       "Grafana overage",
-      "Operator wallet",
-      "Steward wallet",
       "OpenRouter credit",
       "Alchemy RPC",
       "Other SaaS",
       "System tenant",
+      "DAO treasury",
+      "Operator wallet",
+      "Steward wallet",
     ]);
-    expect(cells(3).slice(0, 6)).toEqual([
-      "2d",
-      "3d",
-      "14d",
-      "36d",
-      "161d",
-      "90d",
-    ]);
-    expect(cells(3)[6]).toBe("—");
-    const red = grid().getByText("3d");
-    expect(red.className).toContain("text-destructive");
-    expect(red.className).not.toContain("text-foreground");
-    expect(grid().getByText("14d").className).toContain("text-warning");
-    expect(grid().getByText("90d").className).toContain("text-success");
-  });
-  it("sorts a numeric column both ways and keeps unmeasured last", () => {
-    render(<FinanceReport report={liveShapedFinancePreview} />);
-    const sort = grid().getByRole("button", { name: "Burn/day", exact: true });
-    fireEvent.click(sort);
-    expect(cells(2)[0]).toBe("$0.19/day");
-    expect(cells(2).slice(-1)).toEqual(["—"]);
-    fireEvent.click(sort);
-    expect(cells(2)[0]).toBe("$9.72/day");
-    expect(cells(2).slice(-1)).toEqual(["—"]);
-  });
-  it("drops all-dash numeric columns in the sparse scenario and explains rows behind the Line dialog", async () => {
-    render(<FinanceReport report={sparseFinancePreview} />);
-    expect(screen.queryByText(/Treasury/)).not.toBeInTheDocument();
-    expect(headers()).toEqual(["Line", "Balance", "Action"]);
-    expect(new Set(cells(1))).toEqual(new Set(["—"]));
-    expect(screen.queryByText(/not yet reported/)).not.toBeInTheDocument();
-    expect(lines().slice(-1)).toEqual(["System tenant"]);
-    expect(lines()).toHaveLength(12);
-    await userEvent.click(grid().getByRole("button", { name: "DAO treasury" }));
-    let dialog = screen.getByRole("dialog", { name: "DAO treasury" });
-    expect(within(dialog).getByText(/RPC unavailable/)).toBeVisible();
-    expect(within(dialog).queryByText("unreadable")).not.toBeInTheDocument();
-    await userEvent.keyboard("{Escape}");
-    await userEvent.click(
-      grid().getByRole("button", { name: "OpenRouter credit" })
-    );
-    dialog = screen.getByRole("dialog", { name: "OpenRouter credit" });
-    expect(within(dialog).getByText(/no OpenRouter key/)).toBeVisible();
-    await userEvent.keyboard("{Escape}");
-    await userEvent.click(grid().getByRole("button", { name: "Akash credit" }));
     expect(
-      within(screen.getByRole("dialog")).getByText(/Akash chain read failed/)
+      screen.getByText(/Treasury \$74\.52 · Income \$1\.50\/day · Burn/)
     ).toBeVisible();
+    const red = within(rowOf("akash:credit")).getByText("2d");
+    expect(red.className).toContain("text-destructive");
+    expect(within(rowOf("cherry:team")).getByText("36d").className).toContain(
+      "text-success"
+    );
   });
-  it("opens exact native evidence from the Line label, closes with Escape and restores focus", async () => {
-    render(<FinanceReport report={liveShapedFinancePreview} />);
-    const trigger = grid().getByRole("button", { name: "Akash · poly" });
-    trigger.focus();
-    await userEvent.keyboard("{Enter}");
-    const dialog = screen.getByRole("dialog", { name: "Akash · poly" });
+  it("expands a parent's children on the chevron and never shows them as top-level rows", async () => {
+    render(<FinanceReportClient report={liveShapedFinancePreview} />);
+    expect(
+      screen.getByRole("table").querySelectorAll("tr[data-finance-child]")
+    ).toHaveLength(0);
+    await userEvent.click(
+      grid().getByRole("button", { name: "Expand Akash", exact: true })
+    );
+    const children = Array.from(
+      screen.getByRole("table").querySelectorAll("tr[data-finance-child]")
+    ).map((tr) => tr.getAttribute("data-finance-child"));
+    expect(children).toEqual([
+      "akash:poly",
+      "akash:red",
+      "akash:toks5",
+      "akash:levelup",
+      "akash:beacon",
+      "akash:node-template",
+    ]);
+    const poly = screen
+      .getByRole("table")
+      .querySelector("tr[data-finance-child='akash:poly']");
+    expect(poly?.textContent).toContain("$1.57/day");
+    expect(
+      grid().getByRole("button", { name: "Collapse Akash", exact: true })
+    ).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(
+      grid().getByRole("button", { name: "Expand Other SaaS", exact: true })
+    );
+    expect(
+      screen
+        .getByRole("table")
+        .querySelector("tr[data-finance-child='saas:posthog']")
+    ).not.toBeNull();
+  });
+  it("renders rails: live controls only when supported, greyed labels otherwise, with the gap in the dialog", async () => {
+    render(<FinanceReportClient report={liveShapedFinancePreview} />);
+    expect(
+      within(rowOf("base:operator-wallet")).getByRole("button", {
+        name: "Fund steward",
+      })
+    ).toBeVisible();
+    expect(
+      within(rowOf("openrouter:account")).getByRole("link", { name: /Top up/ })
+    ).toHaveAttribute("href", "https://openrouter.ai/settings/credits");
+    expect(
+      within(rowOf("cherry:team")).getByRole("link", { name: /Top up/ })
+    ).toHaveAttribute("href", "https://portal.cherryservers.com/");
+    const akash = rowOf("akash:credit");
+    expect(within(akash).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(akash).getByText("Card · Console")).toBeVisible();
+    expect(
+      within(rowOf("grafana:overage")).getByText("Card · auto-bill")
+    ).toBeVisible();
+    expect(
+      within(rowOf("base:dao-treasury")).getByText("DAO vote")
+    ).toBeVisible();
+    expect(within(rowOf("rpc:alchemy")).getByText("No rail")).toBeVisible();
+    expect(
+      within(rowOf("income:credit-purchases")).getByText("Split · auto")
+    ).toBeVisible();
+    await userEvent.click(
+      grid().getByRole("button", { name: "Akash", exact: true })
+    );
+    const dialog = screen.getByRole("dialog", { name: "Akash" });
     expect(
       within(dialog).getByText(
-        "On-chain lease price · 5.884 s/block · contract rate / block"
+        /paid by card, not from the steward wallet · planned/
       )
     ).toBeVisible();
-    expect(within(dialog).getByText("106.92 uact / block")).toBeVisible();
-    expect(
-      within(dialog).getByText("4.21 USD credit (4,210,000 uact)")
-    ).toBeVisible();
-    expect(within(dialog).getByText(/Source time unknown/)).toBeVisible();
-    expect(within(dialog).getByText("Operator · for poly")).toBeVisible();
-    await userEvent.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(trigger).toHaveFocus();
-  });
-  it("shows Console credit and escrow separately with the block cadence for the Akash credit row", async () => {
-    render(<FinanceReport report={liveShapedFinancePreview} />);
-    await userEvent.click(grid().getByRole("button", { name: "Akash credit" }));
-    const dialog = screen.getByRole("dialog", { name: "Akash credit" });
-    expect(within(dialog).getByText(/5\.884 s\/block/)).toBeVisible();
-    expect(within(dialog).getByText(/balance ÷ burn/)).toBeVisible();
     expect(
       within(dialog).getByText("5.79 USD credit (5,790,000 uact)")
     ).toBeVisible();
@@ -359,44 +309,31 @@ describe("Financials reporting", () => {
       within(dialog).getByText("2.10 USD credit (2,100,000 uact)")
     ).toBeVisible();
   });
-  it("moves the money-chain explanation into the Operator wallet dialog and lists Other SaaS vendors only there", async () => {
-    render(<FinanceReport report={liveShapedFinancePreview} />);
-    expect(screen.queryByText(/PostHog/)).not.toBeInTheDocument();
+  it("shows native exact amounts and the conversion in the Line dialog, closes with Escape and restores focus", async () => {
+    render(<FinanceReportClient report={liveShapedFinancePreview} />);
+    const trigger = grid().getByRole("button", {
+      name: "Cherry credit",
+      exact: true,
+    });
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    const dialog = screen.getByRole("dialog", { name: "Cherry credit" });
+    expect(within(dialog).getByText("12.4 EUR")).toBeVisible();
+    expect(
+      within(dialog).getByText("EUR→USD 1.1188 · ECB 2026-10-26")
+    ).toBeVisible();
+    expect(within(dialog).getByText(/balance ÷ burn/)).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
     await userEvent.click(
-      grid().getByRole("button", { name: "Operator wallet" })
+      grid().getByRole("button", { name: "Operator wallet", exact: true })
     );
     expect(
       within(screen.getByRole("dialog")).getByText(
         "User payments → operator wallet → steward wallet → vendors"
       )
     ).toBeVisible();
-    await userEvent.keyboard("{Escape}");
-    await userEvent.click(grid().getByRole("button", { name: "Other SaaS" }));
-    expect(
-      within(screen.getByRole("dialog")).getByText(/PostHog, Langfuse/)
-    ).toBeVisible();
-  });
-  it("renders row actions from payAction: fund-steward control, Top up links, empty cell otherwise", () => {
-    render(<FinanceReport report={liveShapedFinancePreview} />);
-    const operator = rowOf("Operator wallet");
-    expect(
-      within(operator).getByRole("button", { name: "Fund steward" })
-    ).toBeVisible();
-    expect(
-      within(operator).getByRole("spinbutton", { name: "Fund steward (USD)" })
-    ).toHaveValue(1);
-    expect(
-      within(rowOf("OpenRouter credit")).getByRole("link", { name: /Top up/ })
-    ).toHaveAttribute("href", "https://openrouter.ai/settings/credits");
-    expect(
-      within(rowOf("Cherry credit")).getByRole("link", { name: /Top up/ })
-    ).toHaveAttribute("href", "https://portal.cherryservers.com/");
-    expect(
-      within(rowOf("Akash credit")).getByRole("link", { name: /Top up/ })
-    ).toHaveAttribute("href", "https://console.akash.network/");
-    const treasury = rowOf("DAO treasury");
-    expect(treasury.querySelectorAll("td")[4]?.textContent).toBe("");
-    expect(within(treasury).queryByRole("link")).not.toBeInTheDocument();
   });
   it("fund-steward POSTs the amount only and shows the tx link or the server error", async () => {
     const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
@@ -414,8 +351,8 @@ describe("Financials reporting", () => {
           };
     });
     vi.stubGlobal("fetch", fetch);
-    render(<FinanceReport report={liveShapedFinancePreview} />);
-    const operator = rowOf("Operator wallet");
+    render(<FinanceReportClient report={liveShapedFinancePreview} />);
+    const operator = rowOf("base:operator-wallet");
     const amount = within(operator).getByRole("spinbutton", {
       name: "Fund steward (USD)",
     });
@@ -443,52 +380,64 @@ describe("Financials reporting", () => {
       "amount too large"
     );
   });
-  it("keeps a known-zero column but omits a column no row can fill", () => {
-    const rows = liveShapedFinancePreview.rows.map((row) => ({
-      ...row,
-      runwayDays: null,
-      grade:
-        row.grade === "RED" || row.grade === "GREEN"
-          ? ("UNKNOWN" as const)
-          : row.grade,
-    }));
-    const { rerender } = render(
-      <FinanceReport report={{ ...liveShapedFinancePreview, rows }} />
+  it("drops all-dash numeric columns in the sparse scenario and explains rows behind the Line dialog", async () => {
+    render(<FinanceReportClient report={sparseFinancePreview} />);
+    expect(headers()).toEqual(["Line", "Balance", "Action"]);
+    expect(new Set(cells(1))).toEqual(new Set(["—"]));
+    expect(screen.queryByText(/Treasury/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ECB/)).not.toBeInTheDocument();
+    await userEvent.click(
+      grid().getByRole("button", { name: "DAO treasury", exact: true })
     );
-    expect(headers()).toEqual(["Line", "Balance", "Burn/day", "Action"]);
-    rerender(
-      <FinanceReport
-        report={{
-          ...liveShapedFinancePreview,
-          rows: rows.map((row) => ({ ...row, burnPerDay: 0 })),
-        }}
-      />
+    expect(
+      within(screen.getByRole("dialog")).getByText(/RPC unavailable/)
+    ).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(
+      grid().getByRole("button", { name: "Akash", exact: true })
     );
-    expect(headers()).toEqual(["Line", "Balance", "Burn/day", "Action"]);
-    expect(cells(2).every((cell) => /0\.00 ?[A-Z]*\/day$/.test(cell))).toBe(
-      true
-    );
-    expect(cells(2)).toContain("$0.00/day");
+    expect(
+      within(screen.getByRole("dialog")).getByText(/Akash chain read failed/)
+    ).toBeVisible();
   });
-  it("announces refresh failure without losing current evidence", () => {
+  it("sorts a numeric column both ways within groups and keeps unmeasured last", () => {
+    render(<FinanceReportClient report={liveShapedFinancePreview} />);
+    const sort = grid().getByRole("button", { name: "Burn/day", exact: true });
+    fireEvent.click(sort);
+    const costs = () =>
+      bodyRows()
+        .filter(
+          (r) =>
+            r.getAttribute("data-finance-row") !== "income:credit-purchases" &&
+            r.getAttribute("data-finance-row") !== "income:node-services"
+        )
+        .map((r) => r.querySelectorAll("td")[2]?.textContent?.trim());
+    expect(costs()[0]).toBe("$0.38/day");
+    expect(costs().slice(-1)).toEqual(["—"]);
+    fireEvent.click(sort);
+    expect(costs()[0]).toBe("$9.72/day");
+    expect(costs().slice(-1)).toEqual(["—"]);
+  });
+  it("announces refresh failure without losing current evidence", async () => {
     access.refresh.mockImplementationOnce(() => {
       throw new Error("offline");
     });
-    render(<FinanceReport report={liveShapedFinancePreview} />);
-    fireEvent.click(
+    render(<FinanceReportClient report={liveShapedFinancePreview} />);
+    await userEvent.click(
       screen.getByRole("button", { name: "Refresh", exact: true })
     );
-    expect(screen.getByText(/Refresh failed. Try again./)).toBeInTheDocument();
-    expect(cells(1)).toContain("74.52 USDC");
+    expect(
+      await screen.findByText(/Refresh failed. Try again./)
+    ).toBeInTheDocument();
+    expect(cells(1)).toContain("$74.52");
   });
-  it("renders only the report on the page: no funding panel, finance.server is the single read path", async () => {
+  it("renders only the package report on the page; finance.server is the single read path", async () => {
     access.allowed = true;
     access.readers.mockResolvedValueOnce({ readers: [], treasuryPlane: null });
     render(await FinancePage());
     expect(
       screen.getByRole("heading", { level: 1, name: "Financials" })
     ).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
     expect(screen.queryByText(/Provider funding/i)).not.toBeInTheDocument();
   });
   it("isolates fixture treasury from the outer cache and never requests live finance after staleness or invalidation", async () => {
@@ -544,25 +493,21 @@ describe("Financials reporting", () => {
     expect(
       screen.getAllByRole("button", { name: "Fund steward" }).length
     ).toBeGreaterThan(0);
-    expect(screen.queryByText(/Provider funding/i)).not.toBeInTheDocument();
   });
-  it("formats burn, runway and the refreshed time compactly", () => {
-    const row = liveShapedFinancePreview.rows.find(
-      (candidate) => candidate.plane === "akash:poly"
-    );
-    if (!row) throw new Error("Missing fixture");
-    expect(burnLabel({ ...row, burnPerDay: 0.001 })).toBe("<$0.01/day");
-    expect(runwayLabel({ ...row, runwayDays: 12 })).toBe("—");
-    expect(runwayLabel({ ...row, grade: "GREEN", runwayDays: 12.9 })).toBe(
-      "12d"
-    );
-    expect(runwayLabel({ ...row, grade: "RED", runwayDays: 0.4 })).toBe("<1d");
-    const at = "2026-10-26T13:40:00.000Z";
-    expect(refreshedLabel(at, "UTC", new Date("2026-10-26T20:00:00Z"))).toBe(
-      "1:40 PM"
-    );
-    expect(refreshedLabel(at, "UTC", new Date("2026-10-27T01:00:00Z"))).toBe(
-      "Oct 26, 1:40 PM"
-    );
+  it("a row with a payer other than this node shows a payer subline", () => {
+    const first = liveShapedFinancePreview.rows[0];
+    if (!first) throw new Error("Missing fixture");
+    const guest: MoneyPlaneRow = {
+      ...first,
+      plane: "guest",
+      label: "Guest line",
+      payer: "Poly DAO",
+    };
+    const report: FinanceReportModel = {
+      ...liveShapedFinancePreview,
+      rows: [...liveShapedFinancePreview.rows, guest],
+    };
+    render(<FinanceReportClient report={report} />);
+    expect(grid().getByText("Paid by Poly DAO")).toBeVisible();
   });
 });

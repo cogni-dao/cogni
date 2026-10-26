@@ -8,7 +8,7 @@
  *   Vendor readers live beside this file (akash-credit, cherry-finance, grafana-overage, domain-expiry).
  * Invariants: READERS_NEVER_THROW. Akash burn is converted from the exact on-chain lease price with the measured chain cadence
  *   when supplied, else 5.884 s/block (the parameter `goal-fleet-pays-itself` uses); uact is read as USD micro, never FX.
- *   A node is one row. Cost lines with a measured burn and no balance are INFO (no runway to grade).
+ *   Hosting rows are children of the one Akash row (`collapseAkash`); cost lines with a measured burn and no balance are INFO.
  * Side-effects: IO through injected compute ports only.
  * Links: scripts/money-plane-snapshot.mjs, https://cognidao.org/knowledge/money-plane-registry, https://cognidao.org/work/items/task.5347
  * @public
@@ -17,6 +17,7 @@ import {
   type MoneyPlaneRow,
   type PayAction,
   type PlaneReader,
+  type Rail,
   unknownRow,
 } from "@cogni/money-plane";
 
@@ -24,7 +25,10 @@ import type {
   ComputeCostRate,
   ComputeCostReport,
 } from "@/ports/compute-cost.port";
-import { FALLBACK_BLOCKS_PER_DAY } from "./akash-credit.reader";
+import {
+  AKASH_CREDIT_PLANE,
+  FALLBACK_BLOCKS_PER_DAY,
+} from "./akash-credit.reader";
 
 export { AKASH_SECONDS_PER_BLOCK } from "./akash-credit.reader";
 export const AKASH_RATE_SOURCE = "On-chain lease price · 5.884 s/block";
@@ -32,6 +36,15 @@ export const AKASH_HOSTING_PLANE = "akash:fleet";
 const DAYS_PER_MONTH = 30.4;
 const UACT_PER_USD = 1e6;
 
+export interface UnavailableRowExtras {
+  payer?: string;
+  payAction?: PayAction;
+  beneficiary?: string;
+  rail?: Rail;
+  children?: MoneyPlaneRow[];
+}
+
+/** A plane with no read today: UNKNOWN with a human reason; rail and children still describe it. */
 export function unavailableFinanceReader(
   plane: string,
   label: string,
@@ -40,7 +53,8 @@ export function unavailableFinanceReader(
   reasonCode: MoneyPlaneRow["reasonCode"] = "unconfigured",
   payer?: string,
   payAction?: PayAction,
-  beneficiary?: string
+  beneficiary?: string,
+  extras: Pick<UnavailableRowExtras, "rail" | "children"> = {}
 ): PlaneReader {
   const withAction = payAction === undefined ? {} : { payAction };
   return {
@@ -60,6 +74,8 @@ export function unavailableFinanceReader(
         }),
         ...(payer ? { payer } : {}),
         ...(beneficiary ? { beneficiary } : {}),
+        ...(extras.rail ? { rail: extras.rail } : {}),
+        ...(extras.children?.length ? { children: extras.children } : {}),
         ...withAction,
       };
     },
@@ -223,19 +239,57 @@ export function akashHostingReaders(
 }
 
 /**
- * The shared grading floor reserves INFO for wallets. An operator cost line that has a measured
- * burn and no balance has nothing to divide, so it is INFO (no runway) rather than UNKNOWN.
+ * One Akash row: the credit pool is the parent (balance = credit + escrow, burn = Σ lease burn, runway);
+ * the per-node hosting rows become its children. Never N top-level node rows.
  */
-export function restoreCostLineGrades<Row extends MoneyPlaneRow>(
-  rows: readonly Row[]
-): Row[] {
-  return rows.map((row) =>
-    row.kind === "usage" &&
-    row.grade === "UNKNOWN" &&
-    row.reasonCode === undefined &&
-    row.burnPerDay !== null &&
-    row.balance === null
-      ? { ...row, grade: "INFO" }
-      : row
+export function collapseAkash(rows: readonly MoneyPlaneRow[]): MoneyPlaneRow[] {
+  const nodes = rows.filter(
+    (row) => row.plane.startsWith("akash:") && row.plane !== AKASH_CREDIT_PLANE
+  );
+  if (nodes.length === 0) return [...rows];
+  const parent = rows.find((row) => row.plane === AKASH_CREDIT_PLANE);
+  const out = rows.filter((row) => !nodes.includes(row));
+  const children = nodes.map((node) => ({
+    ...node,
+    label: node.label.replace(/^Akash hosting$/, "Akash · fleet"),
+  }));
+  if (!parent) {
+    return [
+      ...out,
+      {
+        plane: AKASH_CREDIT_PLANE,
+        label: "Akash",
+        kind: "prepaid",
+        balance: null,
+        currency: "USD",
+        burnPerDay: null,
+        runwayDays: null,
+        grade: "UNKNOWN",
+        reasonCode: "unreadable",
+        observedAt: children[0]?.observedAt ?? new Date().toISOString(),
+        sourceObservedAt: null,
+        freshness: "unknown",
+        detail: "Akash chain read failed",
+        payer: "Operator",
+        rail: { kind: "card-manual", status: "planned", guide: "Console" },
+        children,
+      },
+    ];
+  }
+  const nodeBurn = children.reduce(
+    (sum, child) => sum + (child.burnPerDay ?? 0),
+    0
+  );
+  return out.map((row) =>
+    row.plane !== AKASH_CREDIT_PLANE
+      ? row
+      : {
+          ...row,
+          children,
+          // The chain read is authoritative; the ledger fills in when the chain was unreadable.
+          ...(row.burnPerDay === null && nodeBurn > 0
+            ? { burnPerDay: nodeBurn }
+            : {}),
+        }
   );
 }

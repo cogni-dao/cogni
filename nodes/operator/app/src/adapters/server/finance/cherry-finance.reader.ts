@@ -51,6 +51,10 @@ export function cherryFinanceReader(
 ): PlaneReader {
   const plane = CHERRY_PLANE;
   const label = "Cherry credit";
+  const rail = {
+    kind: "steward-manual" as const,
+    status: "supported" as const,
+  };
   const now = options.now ?? (() => new Date());
   const withAction =
     options.payAction === undefined ? {} : { payAction: options.payAction };
@@ -66,6 +70,7 @@ export function cherryFinanceReader(
       observedAt: now().toISOString(),
       detail,
     }),
+    rail,
     ...withAction,
   });
   return {
@@ -112,6 +117,7 @@ export function cherryFinanceReader(
             "Cherry team API · price per hour × 24 · vendor remaining time",
           sourceObservedAt: observedAt,
           freshness: "current",
+          rail,
           ...withAction,
         };
         if (balance <= 0)

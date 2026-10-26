@@ -20,6 +20,10 @@ import {
 } from "@/adapters/server/finance/akash-credit.reader";
 import { cherryFinanceReader } from "@/adapters/server/finance/cherry-finance.reader";
 import {
+  CREDITED_STATUS,
+  creditedPurchasesQuery,
+} from "@/adapters/server/finance/credit-purchase-income.query";
+import {
   domainExpiryReader,
   expiryDays,
 } from "@/adapters/server/finance/domain-expiry.reader";
@@ -32,8 +36,8 @@ import {
   akashHostingReaders,
   akashHostingRow,
   akashUsdPerDay,
+  collapseAkash,
   readAkashReports,
-  restoreCostLineGrades,
 } from "@/adapters/server/finance/operator-finance.adapter";
 
 import { uniqueWalletBindings } from "@/bootstrap/capabilities/finance-wallets";
@@ -47,9 +51,20 @@ const runtime = vi.hoisted(() => ({
   >,
   balances: vi.fn(async () => [] as unknown[]),
   report: vi.fn(async () => [] as unknown[]),
+  purchases: [] as { amountUsdCents: number; createdAt: Date }[],
+  serviceDb: {} as unknown,
+}));
+runtime.serviceDb = {
+  select: () => ({
+    from: () => ({ where: async () => runtime.purchases }),
+  }),
+};
+vi.mock("@/adapters/server/db/drizzle.service-client", () => ({
+  getServiceDb: () => runtime.serviceDb,
 }));
 vi.mock("@/adapters/server", async () => ({
   ...(await import("@/adapters/server/finance/operator-finance.adapter")),
+  ...(await import("@/adapters/server/finance/credit-purchase-income.query")),
   ...(await import("@/adapters/server/finance/akash-credit.reader")),
   ...(await import("@/adapters/server/finance/cherry-finance.reader")),
   ...(await import("@/adapters/server/finance/grafana-overage.reader")),
@@ -68,7 +83,7 @@ vi.mock("@/shared/config", () => ({
   getStewardWalletConfig: () => ({ address: runtime.account }),
 }));
 
-import { takeSnapshot } from "@cogni/money-plane";
+import { type MoneyPlaneRow, takeSnapshot } from "@cogni/money-plane";
 import { createFinanceReaders } from "@/bootstrap/capabilities/finance";
 
 afterEach(() => {
@@ -193,23 +208,95 @@ describe("operator finance evidence", () => {
       expect(JSON.stringify(row)).not.toContain("sensitive-token-value");
     }
   });
-  it("keeps INFO on cost lines that the shared floor demoted for carrying no balance", async () => {
+  it("keeps INFO on a cost line with a measured burn and no balance (package floor, v6)", async () => {
     const readers = akashHostingReaders(
       [node("poly", [{ amount: "2", denom: "uact", unit: "block" }])],
       at
     );
     const snapshot = await takeSnapshot(readers, { timeoutMs: 500 });
-    expect(snapshot.rows[0]?.grade).toBe("UNKNOWN");
-    const rows = restoreCostLineGrades(snapshot.rows);
-    expect(rows[0]).toMatchObject({ grade: "INFO", runwayDays: null });
-    expect(rows[0]?.burnPerDay).toBeCloseTo((2 * (86_400 / 5.884)) / 1e6, 9);
-    const first = snapshot.rows[0];
-    if (!first) throw new Error("Missing row");
-    expect(
-      restoreCostLineGrades([
-        { ...first, reasonCode: "no_leases", burnPerDay: null },
-      ])[0]?.grade
-    ).toBe("UNKNOWN");
+    expect(snapshot.rows[0]).toMatchObject({ grade: "INFO", runwayDays: null });
+  });
+  it("collapses hosting rows into children of the one Akash row and fills burn from the ledger when the chain is unread", () => {
+    const parent: MoneyPlaneRow = {
+      plane: "akash:credit",
+      label: "Akash",
+      kind: "prepaid",
+      balance: 7.89,
+      currency: "USD",
+      burnPerDay: 3.13,
+      runwayDays: 2.52,
+      grade: "RED",
+      observedAt: at,
+      sourceObservedAt: at,
+      freshness: "current",
+    };
+    const poly = akashHostingRow(
+      node("poly", [{ amount: "1", denom: "uact", unit: "day" }]),
+      at
+    );
+    const red = akashHostingRow(
+      node("red", [{ amount: "2", denom: "uact", unit: "day" }]),
+      at
+    );
+    const other: MoneyPlaneRow = {
+      ...parent,
+      plane: "cherry:team",
+      label: "Cherry credit",
+    };
+    const rows = collapseAkash([other, parent, poly, red]);
+    expect(rows.map((r) => r.plane)).toEqual(["cherry:team", "akash:credit"]);
+    expect(rows[1]?.children?.map((c) => c.plane)).toEqual([
+      "akash:poly",
+      "akash:red",
+    ]);
+    expect(rows[1]?.burnPerDay).toBe(3.13);
+    const unread = collapseAkash([
+      {
+        ...parent,
+        balance: null,
+        burnPerDay: null,
+        runwayDays: null,
+        grade: "UNKNOWN",
+        reasonCode: "unreadable",
+      },
+      poly,
+      red,
+    ]);
+    expect(unread[0]?.burnPerDay).toBeCloseTo(3e-6, 12);
+    expect(unread[0]?.children).toHaveLength(2);
+    const noParent = collapseAkash([poly]);
+    expect(noParent[0]).toMatchObject({
+      plane: "akash:credit",
+      label: "Akash",
+      grade: "UNKNOWN",
+      rail: { kind: "card-manual", status: "planned", guide: "Console" },
+    });
+    expect(noParent[0]?.children?.[0]?.plane).toBe("akash:poly");
+    expect(collapseAkash([other])).toEqual([other]);
+  });
+  it("queries only CREDITED payment attempts since the window start", async () => {
+    const calls: unknown[] = [];
+    const db = {
+      select: (shape: unknown) => ({
+        from: (table: unknown) => ({
+          where: async (predicate: unknown) => {
+            calls.push({ shape, table, predicate });
+            return [{ amountUsdCents: 2000, createdAt: new Date(at) }];
+          },
+        }),
+      }),
+    };
+    const query = creditedPurchasesQuery(db as never);
+    const since = new Date("2026-09-26T00:00:00Z");
+    expect(await query(since)).toEqual([
+      { amountUsdCents: 2000, createdAt: new Date(at) },
+    ]);
+    expect(CREDITED_STATUS).toBe("CREDITED");
+    expect(calls).toHaveLength(1);
+    expect(Object.keys((calls[0] as { shape: object }).shape)).toEqual([
+      "amountUsdCents",
+      "createdAt",
+    ]);
   });
   it("ports akashPlane: grant credit + escrow, lease burn at the chain cadence, thinnest escrow, graded runway", async () => {
     const signal = new AbortController().signal;
@@ -293,12 +380,12 @@ describe("operator finance evidence", () => {
     const burn = (213.15 * bpd) / 1e6;
     expect(row).toMatchObject({
       plane: "akash:credit",
-      label: "Akash credit",
+      label: "Akash",
       kind: "prepaid",
       currency: "USD",
       grade: "RED",
       payer: "Operator",
-      rollup: true,
+      rail: { kind: "card-manual", status: "planned", guide: "Console" },
       nativeRate: { amount: "213.15", currency: "uact", per: "block" },
       parts: [
         { label: "Console credit", amount: "5790000", currency: "uact" },
@@ -476,6 +563,7 @@ describe("operator finance evidence", () => {
       currency: "EUR",
       runwayDays: 36,
       grade: "GREEN",
+      rail: { kind: "steward-manual", status: "supported" },
     });
     expect(row.burnPerDay).toBeCloseTo(0.3432, 9);
     expect(
@@ -575,13 +663,15 @@ describe("operator finance evidence", () => {
       balance: null,
       currency: "USD",
       grade: "INFO",
+      label: "Grafana overage",
       source: "Grafana Cloud usage metrics · verify against invoice",
       detail: "252.65 USD month to date · day 26",
-      parts: [
-        { label: "logs", amount: "180.1", currency: "USD" },
-        { label: "metrics", amount: "60.55", currency: "USD" },
-      ],
+      rail: { kind: "card-manual", status: "planned", guide: "auto-bill" },
     });
+    expect(row.children?.map((c) => [c.label, c.burnPerDay])).toEqual([
+      ["Grafana · logs", 180.1 / 26],
+      ["Grafana · metrics", 60.55 / 26],
+    ]);
     expect(row.burnPerDay).toBeCloseTo(252.65 / 26, 9);
     expect(
       await grafanaOverageReader({ url: undefined, token: "x", fetch }).read(
@@ -717,6 +807,8 @@ describe("operator finance evidence", () => {
     const { readers, treasuryPlane } = await createFinanceReaders();
     expect(treasuryPlane).toBe("base:dao-treasury");
     expect(readers.map((reader) => reader.plane)).toEqual([
+      "income:credit-purchases",
+      "income:node-services",
       "base:dao-treasury",
       "openrouter:account",
       "cherry:team",
@@ -729,39 +821,60 @@ describe("operator finance evidence", () => {
       "saas:other",
     ]);
     const snapshot = await takeSnapshot(readers, { timeoutMs: 500 });
-    expect(snapshot.rows[0]).toMatchObject({
+    const byPlane = new Map(snapshot.rows.map((row) => [row.plane, row]));
+    expect(byPlane.get("income:credit-purchases")).toMatchObject({
+      kind: "income",
+      grade: "INFO",
+      burnPerDay: 0,
+      rail: { kind: "split-inflow", status: "supported" },
+    });
+    expect(byPlane.get("income:node-services")).toMatchObject({
+      kind: "income",
+      grade: "UNKNOWN",
+      rail: { kind: "x402-auto", status: "planned" },
+    });
+    expect(byPlane.get("base:dao-treasury")).toMatchObject({
       label: "DAO treasury · Operator wallet · Steward wallet",
       balance: 10,
       currency: "USDC",
       grade: "INFO",
       payAction: { kind: "fund-steward" },
+      rail: { kind: "steward-manual", status: "supported" },
       note: "User payments → operator wallet → steward wallet → vendors",
     });
-    expect(snapshot.rows[1]?.payAction).toEqual({
-      kind: "steward-checkout",
-      vendor: "openrouter",
-      checkoutUrl: "https://openrouter.ai/settings/credits",
+    expect(byPlane.get("openrouter:account")).toMatchObject({
+      rail: { kind: "steward-manual", status: "supported" },
+      payAction: { kind: "steward-checkout", vendor: "openrouter" },
     });
-    expect(snapshot.rows[2]?.payAction).toEqual({
-      kind: "steward-checkout",
-      vendor: "cherry",
-      checkoutUrl: "https://portal.cherryservers.com/",
+    expect(byPlane.get("cherry:team")).toMatchObject({
+      rail: { kind: "steward-manual", status: "supported" },
+      payAction: { kind: "steward-checkout", vendor: "cherry" },
     });
-    expect(snapshot.rows[3]?.payAction).toEqual({
-      kind: "external",
-      url: "https://console.akash.network/",
-      label: "Top up",
+    expect(byPlane.get("akash:credit")).toMatchObject({
+      label: "Akash",
+      rail: { kind: "card-manual", status: "planned", guide: "Console" },
+      payAction: { kind: "external", url: "https://console.akash.network/" },
     });
-    expect(snapshot.rows.map((row) => row.label).slice(5)).toEqual([
-      "Grafana overage",
-      "Domain cognidao.org",
-      "Alchemy RPC",
-      "System tenant",
-      "Other SaaS",
+    expect(byPlane.get("grafana:overage")?.rail).toEqual({
+      kind: "card-manual",
+      status: "planned",
+      guide: "auto-bill",
+    });
+    expect(byPlane.get("domain:cognidao.org")?.rail?.kind).toBe("card-manual");
+    for (const plane of ["rpc:alchemy", "tenant:system", "saas:other"])
+      expect(byPlane.get(plane)?.rail).toEqual({
+        kind: "none",
+        status: "unsupported",
+      });
+    expect(byPlane.get("saas:other")?.children?.map((c) => c.label)).toEqual([
+      "PostHog",
+      "Langfuse",
+      "Tavily",
+      "GitHub",
+      "DoltHub",
+      "SonarCloud",
+      "Privy",
     ]);
-    expect(snapshot.rows[9]?.beneficiary).toBe(
-      "PostHog, Langfuse, Tavily, GitHub, DoltHub, SonarCloud, Privy"
-    );
     expect(
       fetch.mock.calls.filter(
         (call) => String(call[0]) === "https://rpc.example"
@@ -774,23 +887,18 @@ describe("operator finance evidence", () => {
         )
       )
     ).toHaveLength(1);
-    expect(snapshot.rows[3]).toMatchObject({
+    expect(snapshot.rows[5]).toMatchObject({
       plane: "akash:credit",
       grade: "UNKNOWN",
       reasonCode: "unreadable",
     });
-    expect(snapshot.rows[1]).toMatchObject({
+    expect(snapshot.rows[3]).toMatchObject({
       label: "OpenRouter credit",
       grade: "UNKNOWN",
       reasonCode: "unconfigured",
     });
     expect(runtime.report).toHaveBeenCalledTimes(1);
     expect(snapshot.rows.map((row) => row.grade)).not.toContain("GREEN");
-    expect(
-      snapshot.rows
-        .slice(5)
-        .every((row) => row.grade === "UNKNOWN" && row.balance === null)
-    ).toBe(true);
     expect(
       fetch.mock.calls.filter((call) => String(call[0]).includes("rdap.org"))
     ).toHaveLength(1);
@@ -811,7 +919,7 @@ describe("operator finance evidence", () => {
     vi.stubGlobal("fetch", fetch);
     const { readers } = await createFinanceReaders();
     const snapshot = await takeSnapshot(readers, { timeoutMs: 500 });
-    expect(snapshot.rows[0]).toMatchObject({
+    expect(snapshot.rows[2]).toMatchObject({
       kind: "wallet",
       grade: "UNKNOWN",
       reasonCode: "unreadable",
@@ -822,13 +930,13 @@ describe("operator finance evidence", () => {
         String(call[0]).includes("/grants/grantee/akash1custom")
       )
     ).toBe(true);
-    expect(snapshot.rows[1]).toMatchObject({
+    expect(snapshot.rows[3]).toMatchObject({
       label: "OpenRouter credit",
       currency: "USD",
       grade: "UNKNOWN",
       reasonCode: "burn_unmeasured",
     });
-    expect(snapshot.rows[1]?.balance).toBeCloseTo(3.1, 6);
+    expect(snapshot.rows[3]?.balance).toBeCloseTo(3.1, 6);
     const openRouterCalls = fetch.mock.calls.filter((call) =>
       String(call[0]).includes("openrouter")
     );

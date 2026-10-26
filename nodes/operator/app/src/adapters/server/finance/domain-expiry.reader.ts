@@ -49,15 +49,22 @@ export function domainExpiryReader(
   const plane = `domain:${options.domain}`;
   const label = `Domain ${options.domain}`;
   const now = options.now ?? (() => new Date());
-  const unknown = (detail: string): MoneyPlaneRow =>
-    unknownRow({
+  const rail = {
+    kind: "card-manual" as const,
+    status: "planned" as const,
+    guide: "registrar",
+  };
+  const unknown = (detail: string): MoneyPlaneRow => ({
+    ...unknownRow({
       plane,
       label,
       kind: "expiry",
       reasonCode: "unreadable",
       observedAt: now().toISOString(),
       detail,
-    });
+    }),
+    rail,
+  });
   return {
     plane,
     label,
@@ -91,6 +98,7 @@ export function domainExpiryReader(
           sourceObservedAt: observedAt,
           freshness: "current",
           payer: "Operator",
+          rail,
           detail: `expires ${expiresOn}`,
         };
       } catch {
