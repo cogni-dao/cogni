@@ -5,6 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
+- **Last reviewed:** 2026-10-26
 - **Status:** stable
 
 ## Purpose
@@ -12,6 +13,8 @@
 One-shot operator scripts that mutate remote state (git refs, paid external resources) outside the regular CI/CD pipeline. Distinct from `scripts/ci/` (workflow-invoked) and `scripts/setup/` (provisioning). Intended for occasional human-driven runs.
 
 ## Pointers
+
+- `prove-maintenance-cancellation.mjs`: source-captured ≤5min candidate integration fixture using the existing test App in process; fixed test-parent node-template ref, public HTTP exercise and exact-owned CAS cleanup. No canonical writes or credential output.
 
 - [`bootstrap-per-node-deploy-branches.sh`](bootstrap-per-node-deploy-branches.sh): create + fast-forward `deploy/<env>-<node>` branches from each whole-slot `deploy/<env>` tip (task.0372 / `BOOTSTRAP_FAST_FORWARDS_BEFORE_MERGE`).
 - [`recover-orphaned-akash-lease.sh`](recover-orphaned-akash-lease.sh): close an Akash lease no live controller still owns, prove it closed against Console, then clear the legacy `compute.cogni.io/external-resource` finalizer (bug.5189 / `CLOSE_BEFORE_CLEAR`). Handles both orphan shapes — a stuck `ComputeWorkload` (`--workload`) and a lease whose tracking object is already gone (`--dseq`).

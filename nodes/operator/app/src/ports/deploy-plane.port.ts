@@ -24,6 +24,25 @@
  * @public
  */
 
+/** Exact preconditions for cancelling one unexecuted candidate intent. Custody is server-owned. */
+export interface CancelCandidateMaintenanceInput {
+  readonly nodeId: string;
+  readonly slug: string;
+  readonly env: "candidate-a";
+  readonly operationId: string;
+  readonly expectedDeployHead: string;
+  readonly expectedMarkerSha256: string;
+  readonly actorId: string;
+  readonly reason: string;
+}
+export interface CancelCandidateMaintenanceResult {
+  readonly commitSha: string;
+  readonly previousHead: string;
+  readonly treeSha: string;
+  readonly branch: string;
+  readonly operationId: string;
+}
+
 export interface CandidateFlightDispatchResult {
   readonly dispatched: boolean;
   readonly workflowUrl: string;
@@ -262,6 +281,11 @@ export interface EnvManagerPrClassificationResult {
 }
 
 export interface DeployPlanePort {
+  /** Delete only an unchanged fenced marker through configured App custody; fail on drift or active delivery. */
+  cancelCandidateMaintenance(
+    input: CancelCandidateMaintenanceInput
+  ): Promise<CancelCandidateMaintenanceResult>;
+
   prepareNodeRefCandidateFlight(
     input: PrepareNodeRefCandidateFlightInput
   ): Promise<PreparedNodeRefCandidateFlight>;

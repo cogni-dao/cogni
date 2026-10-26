@@ -201,6 +201,8 @@ export type {
 } from "./database-containment.port";
 export { DATABASE_CELL_METRIC_LABEL_KEYS } from "./database-containment.port";
 export type {
+  CancelCandidateMaintenanceInput,
+  CancelCandidateMaintenanceResult,
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
   ClassifyEnvManagerPrInput,
