@@ -273,6 +273,10 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
     .filter((key) => !visible[key])
     .map((key) => keys[key].toLowerCase());
   function refresh() {
+    if (!navigator.onLine) {
+      setRefreshMessage("You're offline. Reconnect to refresh this report.");
+      return;
+    }
     setRefreshMessage("");
     startTransition(() => {
       try {

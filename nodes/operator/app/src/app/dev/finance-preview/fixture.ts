@@ -219,27 +219,28 @@ export const longFinancePreview: FinanceReportModel = {
   rows: [
     ...richFinancePreview.rows
       .filter((row) => row.kind !== "wallet" || row.plane === "demo:treasury")
-      .map((row) =>
-        row.plane === "demo:treasury"
-          ? {
-              ...row,
-              balance: 0,
-              beneficiary: "DAO treasury · Operator wallet · Steward custody",
-            }
-          : row.plane === "demo:akash:0"
+      .map(
+        (row): MoneyPlaneRow =>
+          row.plane === "demo:treasury"
             ? {
                 ...row,
-                label:
-                  "Akash hosting for the international research and development node",
-                beneficiary:
-                  "node-with-an-extremely-long-unbroken-resource-identifier-for-reflow-testing-012345678901234567890123456789",
-                nativeRate: {
-                  amount: "123456789012345678901234567890.123456789",
-                  currency: "uact",
-                  per: "block",
-                },
+                balance: 0,
+                beneficiary: "DAO treasury · Operator wallet · Steward custody",
               }
-            : row
+            : row.plane === "demo:akash:0"
+              ? {
+                  ...row,
+                  label:
+                    "Akash hosting for the international research and development node",
+                  beneficiary:
+                    "node-with-an-extremely-long-unbroken-resource-identifier-for-reflow-testing-012345678901234567890123456789",
+                  nativeRate: {
+                    amount: "123456789012345678901234567890.123456789",
+                    currency: "uact",
+                    per: "block",
+                  },
+                }
+              : row
       ),
     {
       ...base,
