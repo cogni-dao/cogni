@@ -72,6 +72,10 @@ spec:
             # collided. Set BY NAME in every overlay (story.5016 Gate 0b).
             - name: DEPLOY_ENVIRONMENT
               value: replace-in-overlay
+            # Shared soft proximity preference for bug.5532/task.5352 recovery.
+            # Candidate and production keep the same provider and country gates.
+            - name: AKASH_PREFERRED_PROVIDERS
+              value: "akash127x6cuk44ul3azferg8wy9fju686kcf6x2dhz7"
             # OPTIONAL PROVIDER PIN, NOT AN AUTHORIZATION GATE (story.5050).
             # Empty here — and empty is now a VALID, MEANINGFUL default: "no pin, screen on
             # policy alone". A comma-separated list narrows leasing to exactly those accounts.
