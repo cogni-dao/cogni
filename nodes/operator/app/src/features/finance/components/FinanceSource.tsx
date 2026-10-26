@@ -12,7 +12,6 @@
  */
 "use client";
 
-import type { MoneyPlaneRow } from "@cogni/money-plane";
 import type { ReactNode } from "react";
 import {
   Button,
@@ -24,11 +23,13 @@ import {
   DialogTrigger,
   ReportText,
 } from "@/components";
+import type { FinanceRow } from "../types";
 import {
   attributionLabel,
   balance,
   basisLabel,
   burn,
+  nativeLabel,
   observedLabel,
   unavailableReason,
 } from "./format";
@@ -50,7 +51,7 @@ export function FinanceSource({
   row,
   timeZone,
 }: {
-  row: MoneyPlaneRow;
+  row: FinanceRow;
   /** IANA zone for readable times; undefined uses the viewer's zone. */
   timeZone?: string | undefined;
 }) {
@@ -83,7 +84,7 @@ export function FinanceSource({
           {reason && (
             <Fact term="Unavailable">
               {reason}
-              {row.detail ? (
+              {row.detail && row.detail !== reason ? (
                 <ReportText as="span" variant="caption" tone="muted">
                   {" "}
                   · {row.detail}
@@ -96,6 +97,11 @@ export function FinanceSource({
               {row.balance} {row.currency}
             </Fact>
           )}
+          {row.parts?.map((part) => (
+            <Fact key={part.label} term={`${part.label} · exact`}>
+              {nativeLabel(part.amount, part.currency)}
+            </Fact>
+          ))}
           {row.nativeRate && (
             <Fact term="Native rate · exact">
               {row.nativeRate.amount} {row.nativeRate.currency} /{" "}
@@ -114,8 +120,10 @@ export function FinanceSource({
           {who && <Fact term="Who pays">{who}</Fact>}
           {row.cumulativeVendorTransfer && (
             <Fact term="Provider transfers · cumulative">
-              {row.cumulativeVendorTransfer.amount}{" "}
-              {row.cumulativeVendorTransfer.currency}
+              {nativeLabel(
+                row.cumulativeVendorTransfer.amount,
+                row.cumulativeVendorTransfer.currency
+              )}
             </Fact>
           )}
         </dl>

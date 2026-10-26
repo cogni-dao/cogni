@@ -119,7 +119,11 @@ import {
 import { FixtureQueryBoundary } from "@/app/dev/finance-preview/Preview.client";
 import FinancePreviewPage from "@/app/dev/finance-preview/page";
 import { FinanceReport } from "@/features/finance/components/FinanceReport";
-import { burnLabel, runwayLabel } from "@/features/finance/components/format";
+import {
+  burnLabel,
+  fleetBurnPerDay,
+  runwayLabel,
+} from "@/features/finance/components/format";
 import { useTreasurySnapshot } from "@/features/treasury/hooks/useTreasurySnapshot";
 
 function grid() {
@@ -202,14 +206,22 @@ describe("Financials reporting", () => {
     ]);
     expect(
       screen.getByText(
-        "Treasury 74.52 USDC · Fleet burn $3.13 / day ($21.91 / week)"
+        "Treasury 74.52 USDC · Fleet burn $12.85 / day ($89.93 / week) + €0.34 / day"
       )
     ).toBeVisible();
     expect(cells(1)).toContain("74.52 USDC");
     expect(cells(1)).toContain("€12.40");
     expect(cells(1)).toContain("$3.10");
+    expect(cells(1)).toContain("$7.89");
     expect(cells(2)).toContain("$1.57 / day");
     expect(cells(2)).toContain("$0.19 / day");
+    expect(cells(3)[0]).toBe("2 d");
+    expect(fleetBurnPerDay(liveShapedFinancePreview.rows)).toBeCloseTo(
+      3.13 + 252.65 / 26,
+      9
+    );
+    expect(lines()).toHaveLength(17);
+    expect(screen.queryByText(/not yet reported/)).not.toBeInTheDocument();
     expect(document.querySelector("[data-slot=badge]")).toBeNull();
     expect(screen.queryByText(/Other accounts/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Known contract rate/)).not.toBeInTheDocument();
@@ -218,7 +230,7 @@ describe("Financials reporting", () => {
       screen.getByText("Payment history is not included in this report.")
     ).toBeVisible();
   });
-  it("orders rows RED, YELLOW, UNKNOWN, GREEN, INFO then by label and colors runway", () => {
+  it("orders rows RED, YELLOW, then measured GREEN/INFO, then unmeasured, placeholders last, and colors runway", () => {
     render(
       <FinanceReport
         report={{
@@ -233,10 +245,11 @@ describe("Financials reporting", () => {
       />
     );
     expect(lines()).toEqual([
+      "Akash credit · fleet",
       "Dying credit",
       "Watch credit",
       "Cherry compute credit",
-      "OpenRouter credit",
+      "Domain renewal · cognidao.org",
       "Fine credit",
       "Akash hosting · beacon",
       "Akash hosting · levelup",
@@ -245,12 +258,23 @@ describe("Financials reporting", () => {
       "Akash hosting · red",
       "Akash hosting · toks5",
       "DAO treasury",
+      "Grafana Cloud · overage this month",
       "Operator wallet · working capital",
       "Steward wallet · human custody",
+      "OpenRouter credit",
+      "Base RPC (Alchemy)",
+      "Other SaaS · PostHog, Langfuse, Tavily, GitHub, DoltHub, SonarCloud, Privy",
+      "System tenant · internal credits",
     ]);
-    expect(cells(3).slice(0, 2)).toEqual(["3 d", "14 d"]);
-    expect(cells(3)[4]).toBe("90 d");
-    expect(cells(3)[2]).toBe("—");
+    expect(cells(3).slice(0, 6)).toEqual([
+      "2 d",
+      "3 d",
+      "14 d",
+      "36 d",
+      "161 d",
+      "90 d",
+    ]);
+    expect(cells(3)[6]).toBe("—");
     const red = grid().getByText("3 d");
     expect(red.className).toContain("text-destructive");
     expect(red.className).not.toContain("text-foreground");
@@ -265,15 +289,26 @@ describe("Financials reporting", () => {
     expect(cells(2)[0]).toBe("$0.19 / day");
     expect(cells(2).slice(-1)).toEqual(["—"]);
     fireEvent.click(sort);
-    expect(cells(2)[0]).toBe("$1.57 / day");
+    expect(cells(2)[0]).toBe("$9.72 / day");
     expect(cells(2).slice(-1)).toEqual(["—"]);
   });
-  it("renders every sparse cell as a dash and explains why behind Source", async () => {
+  it("drops all-dash numeric columns in the sparse scenario, names them once, and explains rows behind Source", async () => {
     render(<FinanceReport report={sparseFinancePreview} />);
     expect(screen.queryByText(/Treasury/)).not.toBeInTheDocument();
+    expect(headers()).toEqual(["Line", "Balance", "Source"]);
     expect(new Set(cells(1))).toEqual(new Set(["—"]));
-    expect(new Set(cells(2))).toEqual(new Set(["—"]));
-    expect(new Set(cells(3))).toEqual(new Set(["—"]));
+    expect(
+      screen.getByText("Burn and runway are not yet reported.")
+    ).toBeVisible();
+    expect(lines().slice(-1)).toEqual(["System tenant · internal credits"]);
+    expect(lines()).toHaveLength(12);
+    await userEvent.click(
+      grid().getByRole("button", { name: "Akash credit · fleet source" })
+    );
+    expect(
+      within(screen.getByRole("dialog")).getByText(/Akash chain read failed/)
+    ).toBeVisible();
+    await userEvent.keyboard("{Escape}");
     await userEvent.click(
       grid().getByRole("button", { name: "DAO treasury source" })
     );
@@ -285,7 +320,7 @@ describe("Financials reporting", () => {
       grid().getByRole("button", { name: "OpenRouter credit source" })
     );
     dialog = screen.getByRole("dialog", { name: "OpenRouter credit" });
-    expect(within(dialog).getByText(/no key configured/)).toBeVisible();
+    expect(within(dialog).getByText(/no OpenRouter key/)).toBeVisible();
   });
   it("opens exact native evidence, basis and cadence in one dialog, closes with Escape and restores focus", async () => {
     render(<FinanceReport report={liveShapedFinancePreview} />);
@@ -304,7 +339,9 @@ describe("Financials reporting", () => {
     ).toBeVisible();
     expect(within(dialog).getByText("106.92 uact / block")).toBeVisible();
     expect(within(dialog).getByText("1.57 USD")).toBeVisible();
-    expect(within(dialog).getByText("4210000 uact")).toBeVisible();
+    expect(
+      within(dialog).getByText("4.21 USD credit (4,210,000 uact)")
+    ).toBeVisible();
     expect(within(dialog).getByText(/Source time unknown/)).toBeVisible();
     expect(
       within(dialog).getByText("Paid by Operator · for poly")
@@ -312,6 +349,48 @@ describe("Financials reporting", () => {
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(source).toHaveFocus();
+  });
+  it("shows Console credit and escrow separately with the block cadence for the Akash credit row", async () => {
+    render(<FinanceReport report={liveShapedFinancePreview} />);
+    await userEvent.click(
+      grid().getByRole("button", { name: "Akash credit · fleet source" })
+    );
+    const dialog = screen.getByRole("dialog", { name: "Akash credit · fleet" });
+    expect(within(dialog).getByText(/5\.884 s\/block/)).toBeVisible();
+    expect(within(dialog).getByText(/balance ÷ burn per day/)).toBeVisible();
+    expect(
+      within(dialog).getByText("5.79 USD credit (5,790,000 uact)")
+    ).toBeVisible();
+    expect(
+      within(dialog).getByText("2.10 USD credit (2,100,000 uact)")
+    ).toBeVisible();
+    expect(within(dialog).getByText("Paid by Operator")).toBeVisible();
+  });
+  it("keeps a known-zero column but omits a column no row can fill", () => {
+    const rows = liveShapedFinancePreview.rows.map((row) => ({
+      ...row,
+      runwayDays: null,
+      grade:
+        row.grade === "RED" || row.grade === "GREEN"
+          ? ("UNKNOWN" as const)
+          : row.grade,
+    }));
+    const { rerender } = render(
+      <FinanceReport report={{ ...liveShapedFinancePreview, rows }} />
+    );
+    expect(headers()).toEqual(["Line", "Balance", "Burn/day", "Source"]);
+    expect(screen.getByText("Runway is not yet reported.")).toBeVisible();
+    rerender(
+      <FinanceReport
+        report={{
+          ...liveShapedFinancePreview,
+          rows: rows.map((row) => ({ ...row, burnPerDay: 0 })),
+        }}
+      />
+    );
+    expect(headers()).toEqual(["Line", "Balance", "Burn/day", "Source"]);
+    expect(cells(2).every((cell) => /0\.00 .*\/ day$/.test(cell))).toBe(true);
+    expect(cells(2)).toContain("$0.00 / day");
   });
   it("explains an unmeasured runway on a known credit balance", async () => {
     render(<FinanceReport report={liveShapedFinancePreview} />);
@@ -344,7 +423,7 @@ describe("Financials reporting", () => {
     const h1 = screen.getByRole("heading", { level: 1, name: "Financials" });
     const h2 = screen.getByRole("heading", {
       level: 2,
-      name: "Provider Funding",
+      name: "Provider funding",
     });
     expect(
       h1.compareDocumentPosition(h2) & Node.DOCUMENT_POSITION_FOLLOWING
@@ -405,13 +484,24 @@ describe("Financials reporting", () => {
     vi.stubEnv("NODE_ENV", env);
     expect(() => FinancePreviewPage()).toThrow("NEXT_NOT_FOUND");
   });
-  it("labels the preview as demo data", () => {
+  it("previews the whole page: demo report plus the Provider funding rail", () => {
     vi.stubEnv("NODE_ENV", "development");
     render(FinancePreviewPage());
     expect(screen.getByText(/Demo data · live-shaped/)).toBeVisible();
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Provider funding" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Fund steward/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /Top up Cherry/ })
+    ).toBeInTheDocument();
   });
   it("never rounds a tiny positive burn to zero and never grades an INFO runway", () => {
-    const row = liveShapedFinancePreview.rows[5];
+    const row = liveShapedFinancePreview.rows.find(
+      (candidate) => candidate.plane === "akash:poly"
+    );
     if (!row) throw new Error("Missing fixture");
     expect(burnLabel({ ...row, burnPerDay: 0.001 })).toBe("<$0.01 / day");
     expect(runwayLabel({ ...row, runwayDays: 12 })).toBe("—");

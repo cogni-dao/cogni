@@ -4,9 +4,9 @@
 /**
  * Module: `@features/finance/components/FinanceReport`
  * Purpose: Financials — one read-only table (Line · Balance · Burn/day · Runway · Source) over the node's money planes, in risk order.
- * Scope: Presentation of one shared snapshot with the existing kit; stacked rows below 48rem container width.
+ * Scope: Presentation of one shared snapshot with the existing kit; stacked rows below 42rem (@2xl) container width so a 1024px viewport beside the admin sidebar still shows the table.
  * Invariants: No pooled custody totals, no FX, no per-row status pills, no horizontal scroll, no payment actions.
- *   Unknown is a muted dash; the reason lives in the Source dialog.
+ *   Unknown is a muted dash; the reason lives in the Source dialog. A numeric column no row can fill is omitted and named once below the table.
  * Side-effects: Refreshes the server report on request.
  * Links: https://cognidao.org/work/items/task.5347
  * @public
@@ -43,12 +43,11 @@ import {
   burn,
   burnLabel,
   byRisk,
-  fleetBurnPerDay,
+  fleetBurnLabel,
   observedLabel,
   runway,
   runwayLabel,
   runwayTone,
-  usdLabel,
 } from "./format";
 
 const noop = () => () => {};
@@ -119,17 +118,24 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
   const [refreshMessage, setRefreshMessage] = useState("");
   const [sorting, setSorting] = useState<SortingState>([]);
   const rows = useMemo(() => [...report.rows].sort(byRisk), [report.rows]);
+  const hasBurn = rows.some((row) => row.burnPerDay !== null);
+  const hasRunway = rows.some((row) => row.runwayDays !== null);
+  const missing =
+    !hasBurn && !hasRunway
+      ? "Burn and runway are not yet reported."
+      : !hasBurn
+        ? "Burn is not yet reported."
+        : !hasRunway
+          ? "Runway is not yet reported."
+          : "";
   const treasury = report.rows.find(
     (row) => row.plane === report.treasuryPlane
   );
-  const fleetBurn = fleetBurnPerDay(report.rows);
   const summary = [
     treasury && balance(treasury) !== undefined
       ? `Treasury ${balanceLabel(treasury)}`
       : "",
-    fleetBurn !== undefined
-      ? `Fleet burn ${usdLabel(fleetBurn)} / day (${usdLabel(fleetBurn * 7)} / week)`
-      : "",
+    fleetBurnLabel(report.rows),
   ]
     .filter(Boolean)
     .join(" · ");
@@ -148,18 +154,25 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
         meta: { headerTitle: "Line" },
       },
       numeric("balance", "Balance", balance, balanceLabel),
-      numeric("burn", "Burn/day", burn, burnLabel),
-      {
-        id: "runway",
-        accessorFn: runway,
-        sortUndefined: "last",
-        sortingFn: "basic",
-        header: ({ column }) => (
-          <DataGridColumnHeader column={column} title="Runway" />
-        ),
-        cell: ({ row }) => <Runway row={row.original} />,
-        meta: { headerTitle: "Runway", cellClassName: "whitespace-nowrap" },
-      },
+      ...(hasBurn ? [numeric("burn", "Burn/day", burn, burnLabel)] : []),
+      ...(hasRunway
+        ? [
+            {
+              id: "runway",
+              accessorFn: runway,
+              sortUndefined: "last",
+              sortingFn: "basic",
+              header: ({ column }) => (
+                <DataGridColumnHeader column={column} title="Runway" />
+              ),
+              cell: ({ row }) => <Runway row={row.original} />,
+              meta: {
+                headerTitle: "Runway",
+                cellClassName: "whitespace-nowrap",
+              },
+            } satisfies ColumnDef<MoneyPlaneRow>,
+          ]
+        : []),
       {
         id: "source",
         enableSorting: false,
@@ -170,7 +183,7 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
         meta: { headerTitle: "Source", cellClassName: "text-right" },
       },
     ],
-    [timeZone]
+    [timeZone, hasBurn, hasRunway]
   );
   const table = useReactTable({
     data: rows,
@@ -232,7 +245,7 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
         </ReportText>
       )}
       <section
-        className="@3xl:block hidden min-w-0"
+        className="@2xl:block hidden min-w-0"
         aria-label="Financials table"
       >
         <DataGrid
@@ -252,7 +265,7 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
         </DataGrid>
       </section>
       <ul
-        className="@3xl:hidden min-w-0 space-y-3"
+        className="@2xl:hidden min-w-0 space-y-3"
         aria-label="Financials list"
       >
         {table.getRowModel().rows.map(({ original: row }) => (
@@ -272,28 +285,37 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
                       <Amount>{balanceLabel(row)}</Amount>
                     </dd>
                   </div>
-                  <div>
-                    <ReportText as="dt" variant="caption" tone="muted">
-                      Burn/day
-                    </ReportText>
-                    <dd>
-                      <Amount>{burnLabel(row)}</Amount>
-                    </dd>
-                  </div>
-                  <div>
-                    <ReportText as="dt" variant="caption" tone="muted">
-                      Runway
-                    </ReportText>
-                    <dd>
-                      <Runway row={row} />
-                    </dd>
-                  </div>
+                  {hasBurn && (
+                    <div>
+                      <ReportText as="dt" variant="caption" tone="muted">
+                        Burn/day
+                      </ReportText>
+                      <dd>
+                        <Amount>{burnLabel(row)}</Amount>
+                      </dd>
+                    </div>
+                  )}
+                  {hasRunway && (
+                    <div>
+                      <ReportText as="dt" variant="caption" tone="muted">
+                        Runway
+                      </ReportText>
+                      <dd>
+                        <Runway row={row} />
+                      </dd>
+                    </div>
+                  )}
                 </dl>
               </CardContent>
             </Card>
           </li>
         ))}
       </ul>
+      {missing && (
+        <ReportText variant="caption" tone="muted" data-finance-missing>
+          {missing}
+        </ReportText>
+      )}
       <ReportText variant="caption" tone="muted">
         Payment history is not included in this report.
       </ReportText>

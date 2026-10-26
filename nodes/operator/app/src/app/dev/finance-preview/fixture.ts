@@ -12,7 +12,8 @@
  */
 import type { MoneyPlaneRow } from "@cogni/money-plane";
 
-import type { FinanceReportModel } from "@/features/finance/types";
+import type { AiFunding } from "@/app/(admin)/admin/payments/funding.server";
+import type { FinanceReportModel, FinanceRow } from "@/features/finance/types";
 
 const now = "2026-10-26T13:40:00.000Z";
 export const previewTreasuryAddress =
@@ -94,9 +95,83 @@ function akash(
   };
 }
 
+function placeholder(
+  plane: string,
+  label: string,
+  kind: MoneyPlaneRow["kind"],
+  detail: string,
+  reasonCode: MoneyPlaneRow["reasonCode"] = "unconfigured"
+): FinanceRow {
+  return {
+    plane,
+    label,
+    kind,
+    balance: null,
+    currency: null,
+    burnPerDay: null,
+    runwayDays: null,
+    grade: "UNKNOWN",
+    reasonCode,
+    observedAt: now,
+    sourceObservedAt: null,
+    freshness: "unknown",
+    detail,
+    payer: "Operator",
+  };
+}
+
+/** Console credit + escrow ÷ fleet burn; the one row with a real runway on the operator today. */
+function akashCredit(
+  creditUsd: number,
+  escrowUsd: number,
+  burnPerDay: number
+): FinanceRow {
+  const balance = creditUsd + escrowUsd;
+  const runwayDays = balance / burnPerDay;
+  return {
+    plane: "akash:credit",
+    label: "Akash credit · fleet",
+    kind: "prepaid",
+    balance,
+    currency: "USD",
+    burnPerDay,
+    runwayDays,
+    grade: runwayDays < 7 ? "RED" : runwayDays < 21 ? "YELLOW" : "GREEN",
+    observedAt: now,
+    source:
+      "Akash chain · Console grant + escrow · burn from lease prices at 5.884 s/block",
+    sourceObservedAt: now,
+    freshness: "current",
+    payer: "Operator",
+    rollup: true,
+    parts: [
+      {
+        label: "Console credit",
+        amount: String(Math.round(creditUsd * 1e6)),
+        currency: "uact",
+      },
+      {
+        label: "Escrow",
+        amount: String(Math.round(escrowUsd * 1e6)),
+        currency: "uact",
+      },
+    ],
+  };
+}
+
+export const previewFunding: AiFunding = {
+  openRouterRemainingUsd: 3.1,
+  cherryRemaining: 12.4,
+  cherryCurrency: "EUR",
+  operatorWalletUsdc: 10.77,
+  stewardWalletUsdc: 7.07,
+  operatorWalletAddress: "0x2222222222222222222222222222222222222222",
+  stewardWalletAddress: "0x3333333333333333333333333333333333333333",
+};
+
 export const liveShapedFinancePreview: FinanceReportModel = {
   takenAt: now,
-  worst: "UNKNOWN",
+  worst: "RED",
   treasuryPlane: "base:dao-treasury",
   rows: [
     wallet("dao-treasury", "DAO treasury", 74.52, "0.0031"),
@@ -124,21 +199,76 @@ export const liveShapedFinancePreview: FinanceReportModel = {
       usageTotal: 96.9,
     },
     {
-      plane: "cherry:account",
+      plane: "cherry:team",
       label: "Cherry compute credit",
       kind: "prepaid",
       balance: 12.4,
       currency: "EUR",
-      burnPerDay: null,
-      runwayDays: null,
-      grade: "UNKNOWN",
-      reasonCode: "burn_unmeasured",
+      burnPerDay: 0.0143 * 24,
+      runwayDays: 36,
+      grade: "GREEN",
       observedAt: now,
-      source: "Cherry team balance",
+      source: "Cherry team API · price per hour × 24 · vendor remaining time",
       sourceObservedAt: now,
       freshness: "current",
     },
+    akashCredit(5.79, 2.1, 3.13),
     akash("poly", 1.57, "4210000"),
+    {
+      plane: "grafana:overage",
+      label: "Grafana Cloud · overage this month",
+      kind: "usage",
+      balance: null,
+      currency: "USD",
+      burnPerDay: 252.65 / 26,
+      runwayDays: null,
+      grade: "INFO",
+      observedAt: now,
+      source: "Grafana Cloud usage metrics · verify against invoice",
+      sourceObservedAt: now,
+      freshness: "current",
+      payer: "Operator",
+      detail: "252.65 USD month to date · day 26",
+      parts: [
+        { label: "logs", amount: "180.1", currency: "USD" },
+        { label: "metrics", amount: "60.55", currency: "USD" },
+        { label: "traces", amount: "12", currency: "USD" },
+      ],
+    },
+    {
+      plane: "domain:cognidao.org",
+      label: "Domain renewal · cognidao.org",
+      kind: "expiry",
+      balance: null,
+      currency: null,
+      burnPerDay: null,
+      runwayDays: 161,
+      grade: "GREEN",
+      observedAt: now,
+      source: "RDAP registry record",
+      sourceObservedAt: now,
+      freshness: "current",
+      payer: "Operator",
+      detail: "expires 2027-04-05",
+    },
+    placeholder(
+      "rpc:alchemy",
+      "Base RPC (Alchemy)",
+      "usage",
+      "no billing-scoped credential"
+    ),
+    placeholder(
+      "tenant:system",
+      "System tenant · internal credits",
+      "prepaid",
+      "no read wired; balance lives in the operator DB"
+    ),
+    placeholder(
+      "saas:other",
+      "Other SaaS · PostHog, Langfuse, Tavily, GitHub, DoltHub, SonarCloud, Privy",
+      "fixed",
+      "no billing read; declared costs not yet in repo-spec"
+    ),
     akash("red", 0.64),
     akash("toks5", 0.35),
     akash("levelup", 0.19),
@@ -170,20 +300,27 @@ export const sparseFinancePreview: FinanceReportModel = {
       freshness: "unknown",
       detail: "no OpenRouter key in this environment",
     },
+    placeholder(
+      "cherry:team",
+      "Cherry compute credit",
+      "prepaid",
+      "no Cherry credential in this runtime"
+    ),
     {
-      plane: "cherry:account",
-      label: "Cherry compute credit",
+      plane: "akash:credit",
+      label: "Akash credit · fleet",
       kind: "prepaid",
       balance: null,
       currency: null,
       burnPerDay: null,
       runwayDays: null,
       grade: "UNKNOWN",
-      reasonCode: "unconfigured",
+      reasonCode: "unreadable",
       observedAt: now,
       sourceObservedAt: null,
       freshness: "unknown",
-      detail: "no Cherry balance reported",
+      detail: "Akash chain read failed",
+      payer: "Operator",
     },
     {
       plane: "akash:fleet",
@@ -200,5 +337,36 @@ export const sparseFinancePreview: FinanceReportModel = {
       freshness: "unknown",
       detail: "cost ledger unavailable",
     },
+    placeholder(
+      "grafana:overage",
+      "Grafana Cloud · overage this month",
+      "usage",
+      "no Grafana credential"
+    ),
+    placeholder(
+      "domain:cognidao.org",
+      "Domain renewal · cognidao.org",
+      "expiry",
+      "registry read failed",
+      "unreadable"
+    ),
+    placeholder(
+      "rpc:alchemy",
+      "Base RPC (Alchemy)",
+      "usage",
+      "no billing-scoped credential"
+    ),
+    placeholder(
+      "tenant:system",
+      "System tenant · internal credits",
+      "prepaid",
+      "no read wired; balance lives in the operator DB"
+    ),
+    placeholder(
+      "saas:other",
+      "Other SaaS · PostHog, Langfuse, Tavily, GitHub, DoltHub, SonarCloud, Privy",
+      "fixed",
+      "no billing read; declared costs not yet in repo-spec"
+    ),
   ],
 };

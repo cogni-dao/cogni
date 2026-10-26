@@ -13,11 +13,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  AKASH_PRODUCTION_OWNER,
+  akashCreditReader,
+  readAkashBlocksPerDay,
+  sumUact,
+} from "@/adapters/server/finance/akash-credit.reader";
+import { cherryFinanceReader } from "@/adapters/server/finance/cherry-finance.reader";
+import {
+  domainExpiryReader,
+  expiryDays,
+} from "@/adapters/server/finance/domain-expiry.reader";
+import {
+  grafanaOverageReader,
+  overagePerDay,
+} from "@/adapters/server/finance/grafana-overage.reader";
+import {
   AKASH_RATE_SOURCE,
   akashHostingReaders,
   akashHostingRow,
   akashUsdPerDay,
-  cherryCreditReader,
   readAkashReports,
   restoreCostLineGrades,
 } from "@/adapters/server/finance/operator-finance.adapter";
@@ -34,10 +48,13 @@ const runtime = vi.hoisted(() => ({
   balances: vi.fn(async () => [] as unknown[]),
   report: vi.fn(async () => [] as unknown[]),
 }));
-vi.mock(
-  "@/adapters/server",
-  async () => import("@/adapters/server/finance/operator-finance.adapter")
-);
+vi.mock("@/adapters/server", async () => ({
+  ...(await import("@/adapters/server/finance/operator-finance.adapter")),
+  ...(await import("@/adapters/server/finance/akash-credit.reader")),
+  ...(await import("@/adapters/server/finance/cherry-finance.reader")),
+  ...(await import("@/adapters/server/finance/grafana-overage.reader")),
+  ...(await import("@/adapters/server/finance/domain-expiry.reader")),
+}));
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({
     akashSpendReader: { reportByNode: runtime.report },
@@ -194,53 +211,453 @@ describe("operator finance evidence", () => {
       ])[0]?.grade
     ).toBe("UNKNOWN");
   });
-  it("maps the Cherry team balance in its native currency with burn unmeasured", async () => {
+  it("ports akashPlane: grant credit + escrow, lease burn at the chain cadence, thinnest escrow, graded runway", async () => {
     const signal = new AbortController().signal;
-    const present = cherryCreditReader(async () => [
-      {
-        provider: "akash",
-        accountId: "x",
-        currency: "USD",
-        remaining: 1,
-        asOf: at,
-        estimatedDaysRemaining: null,
-      },
-      {
-        provider: "cherry",
-        accountId: "team",
-        currency: "EUR",
-        remaining: 12.4,
-        asOf: at,
-        estimatedDaysRemaining: null,
-      },
+    const urls: string[] = [];
+    const fetch = async (url: string) => {
+      urls.push(url);
+      const body = url.includes("/authz/")
+        ? {
+            grants: [
+              {
+                authorization: {
+                  "@type": "/cosmos.bank.v1beta1.SendAuthorization",
+                },
+              },
+              {
+                granter: "akash1console",
+                authorization: {
+                  "@type": "/akash.deployment.v1beta3.DepositAuthorization",
+                  spend_limits: [
+                    { denom: "uact", amount: "5790000" },
+                    { denom: "uakt", amount: "0" },
+                  ],
+                },
+              },
+            ],
+          }
+        : url.includes("/deployments/")
+          ? {
+              deployments: [
+                {
+                  deployment: { id: { dseq: "1" } },
+                  escrow_account: {
+                    state: { funds: [{ denom: "uact", amount: "1500000" }] },
+                  },
+                },
+                {
+                  deployment: { id: { dseq: "2" } },
+                  escrow_account: {
+                    state: { funds: [{ denom: "uact", amount: "600000" }] },
+                  },
+                },
+                { deployment: { id: { dseq: "3" } }, escrow_account: null },
+              ],
+            }
+          : {
+              leases: [
+                {
+                  lease: {
+                    id: { dseq: "1" },
+                    price: { denom: "uact", amount: "100" },
+                  },
+                },
+                {
+                  lease: {
+                    id: { dseq: "2" },
+                    price: { denom: "uact", amount: "113.15" },
+                  },
+                },
+                {
+                  lease: {
+                    id: { dseq: "9" },
+                    price: { denom: "uakt", amount: "5" },
+                  },
+                },
+              ],
+            };
+      return { ok: true, status: 200, json: async () => body };
+    };
+    const bpd = 14_683;
+    const row = await akashCreditReader({
+      owner: AKASH_PRODUCTION_OWNER,
+      fetch,
+      blocksPerDay: bpd,
+    }).read(signal);
+    const q = `filters.owner=${AKASH_PRODUCTION_OWNER}&filters.state=active&pagination.limit=500`;
+    expect(urls).toEqual([
+      `https://api.akashnet.net/cosmos/authz/v1beta1/grants/grantee/${AKASH_PRODUCTION_OWNER}`,
+      `https://api.akashnet.net/akash/deployment/v1beta4/deployments/list?${q}`,
+      `https://api.akashnet.net/akash/market/v1beta5/leases/list?${q}`,
     ]);
-    expect(await present.read(signal)).toMatchObject({
-      plane: "cherry:account",
+    const burn = (213.15 * bpd) / 1e6;
+    expect(row).toMatchObject({
+      plane: "akash:credit",
+      label: "Akash credit · fleet",
+      kind: "prepaid",
+      currency: "USD",
+      grade: "RED",
+      payer: "Operator",
+      rollup: true,
+      nativeRate: { amount: "213.15", currency: "uact", per: "block" },
+      parts: [
+        { label: "Console credit", amount: "5790000", currency: "uact" },
+        { label: "Escrow", amount: "2100000", currency: "uact" },
+      ],
+    });
+    expect(row.balance).toBeCloseTo(7.89, 9);
+    expect(row.burnPerDay).toBeCloseTo(burn, 9);
+    expect(row.runwayDays).toBeCloseTo(7.89 / burn, 9);
+    expect(row.source).toBe(
+      "Akash chain · Console grant + escrow · 3 leases at 14,683 blocks/day (measured)"
+    );
+    expect(row.detail).toBe(
+      `thinnest escrow ${(600000 / (113.15 * bpd)).toFixed(1)} d`
+    );
+    const fallback = await akashCreditReader({
+      owner: "x",
+      fetch,
+      blocksPerDay: null,
+    }).read(signal);
+    expect(fallback.source).toContain("5.884 s/block fallback");
+    expect(fallback.burnPerDay).toBeCloseTo(
+      (213.15 * (86_400 / 5.884)) / 1e6,
+      9
+    );
+  });
+  it("grades an exhausted uakt-only grant as escrow-only balance and never throws from the chain read", async () => {
+    const signal = new AbortController().signal;
+    const exhausted = async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        url.includes("/authz/")
+          ? {
+              grants: [
+                {
+                  authorization: {
+                    "@type": "/akash.deployment.v1beta3.DepositAuthorization",
+                    spend_limits: [{ denom: "uakt", amount: "0" }],
+                  },
+                },
+              ],
+            }
+          : url.includes("/deployments/")
+            ? {
+                deployments: [
+                  {
+                    deployment: { id: { dseq: "1" } },
+                    escrow_account: {
+                      state: { funds: [{ denom: "uact", amount: "2100000" }] },
+                    },
+                  },
+                ],
+              }
+            : { leases: [] },
+    });
+    const escrowOnly = await akashCreditReader({
+      owner: "x",
+      fetch: exhausted,
+      blocksPerDay: null,
+    }).read(signal);
+    expect(escrowOnly).toMatchObject({
+      grade: "GREEN",
+      detail: "no priced lease",
+      parts: [
+        { label: "Console credit", amount: "0", currency: "uact" },
+        { label: "Escrow", amount: "2100000", currency: "uact" },
+      ],
+    });
+    expect(escrowOnly.balance).toBeCloseTo(2.1, 9);
+    const row = await akashCreditReader({
+      owner: "x",
+      blocksPerDay: null,
+      fetch: async () => {
+        throw new Error("sensitive-token-value");
+      },
+    }).read(signal);
+    expect(row).toMatchObject({
+      grade: "UNKNOWN",
+      reasonCode: "unreadable",
+      detail: "Akash chain read failed",
+      balance: null,
+      payer: "Operator",
+    });
+    expect(JSON.stringify(row)).not.toContain("sensitive-token-value");
+    expect(
+      await akashCreditReader({
+        owner: "x",
+        blocksPerDay: null,
+        fetch: async () => ({ ok: false, status: 503, json: async () => ({}) }),
+      }).read(signal)
+    ).toMatchObject({
+      reasonCode: "unreadable",
+      detail: "Akash chain read failed",
+    });
+    expect(
+      await akashCreditReader({
+        owner: "x",
+        blocksPerDay: null,
+        fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+      }).read(signal)
+    ).toMatchObject({
+      reasonCode: "unreadable",
+      detail: "no Console credit grant",
+    });
+    expect(
+      sumUact([
+        { denom: "uact", amount: "1" },
+        { denom: "uakt", amount: "9" },
+        { denom: "uact", amount: "x" },
+      ])
+    ).toBe(1);
+  });
+  it("measures blocks per day from the chain tip and falls back to null", async () => {
+    const tip = "2026-10-26T12:00:00Z";
+    const fetch = async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        url.endsWith("/blocks/latest")
+          ? { block: { header: { height: "20000", time: tip } } }
+          : { block: { header: { time: "2026-10-25T19:39:20Z" } } },
+    });
+    expect(await readAkashBlocksPerDay(fetch)).toBeCloseTo(
+      (86_400 * 10_000) / 58_840,
+      6
+    );
+    expect(
+      await readAkashBlocksPerDay(async () => {
+        throw new Error("down");
+      })
+    ).toBeNull();
+  });
+  it("ports cherryPlane: team credit, €/h × 24 burn and vendor remaining time → runway", async () => {
+    const signal = new AbortController().signal;
+    const calls: { url: string; headers?: Record<string, string> }[] = [];
+    const fetch = async (
+      url: string,
+      init?: { headers?: Record<string, string> }
+    ) => {
+      calls.push({ url, ...(init?.headers ? { headers: init.headers } : {}) });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => [
+          {
+            id: 183728,
+            credit: {
+              account: { remaining: 12.4, currency: "EUR" },
+              resources: {
+                pricing: { price: 0.0143 },
+                remaining: { time: 864 },
+              },
+            },
+          },
+        ],
+      };
+    };
+    const row = await cherryFinanceReader({ token: "tok", fetch }).read(signal);
+    expect(calls[0]).toMatchObject({
+      url: "https://api.cherryservers.com/v1/teams",
+      headers: { Authorization: "Bearer tok", Accept: "application/json" },
+    });
+    expect(row).toMatchObject({
+      plane: "cherry:team",
       label: "Cherry compute credit",
       kind: "prepaid",
       balance: 12.4,
       currency: "EUR",
-      burnPerDay: null,
-      runwayDays: null,
-      grade: "UNKNOWN",
-      reasonCode: "burn_unmeasured",
-      sourceObservedAt: at,
+      runwayDays: 36,
+      grade: "GREEN",
     });
-    expect(await cherryCreditReader(async () => []).read(signal)).toMatchObject(
-      { grade: "UNKNOWN", reasonCode: "unconfigured", balance: null }
-    );
-    expect(await cherryCreditReader(undefined).read(signal)).toMatchObject({
+    expect(row.burnPerDay).toBeCloseTo(0.3432, 9);
+    expect(
+      await cherryFinanceReader({ token: undefined, fetch }).read(signal)
+    ).toMatchObject({
       grade: "UNKNOWN",
       reasonCode: "unconfigured",
+      detail: "no Cherry credential in this runtime",
     });
-    const thrown = await cherryCreditReader(async () => {
-      throw new Error("sensitive-token-value");
+    const thrown = await cherryFinanceReader({
+      token: "tok",
+      fetch: async () => {
+        throw new Error("sensitive-token-value");
+      },
     }).read(signal);
     expect(thrown).toMatchObject({
       grade: "UNKNOWN",
       reasonCode: "unreadable",
     });
     expect(JSON.stringify(thrown)).not.toContain("sensitive-token-value");
+    expect(
+      await cherryFinanceReader({
+        token: "tok",
+        fetch: async () => ({
+          ok: true,
+          status: 200,
+          json: async () => [
+            { id: 1, credit: { account: { remaining: 3, currency: "EUR" } } },
+          ],
+        }),
+      }).read(signal)
+    ).toMatchObject({
+      balance: 3,
+      grade: "UNKNOWN",
+      reasonCode: "burn_unmeasured",
+    });
+  });
+  it("reads Grafana month-to-date overage and averages it over UTC days elapsed", async () => {
+    const signal = new AbortController().signal;
+    expect(overagePerDay(252.65, new Date("2026-10-26T13:40:00Z"))).toBeCloseTo(
+      252.65 / 26,
+      9
+    );
+    expect(overagePerDay(10, new Date("2026-11-01T00:30:00Z"))).toBe(10);
+    const urls: string[] = [];
+    const fetch = async (
+      url: string,
+      init?: { headers?: Record<string, string> }
+    ) => {
+      urls.push(url);
+      expect(init?.headers?.Authorization).toBe("Bearer sa-token");
+      const total =
+        decodeURIComponent(url.split("query=")[1] ?? "") ===
+        "grafanacloud_org_total_overage";
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            result: total
+              ? [
+                  {
+                    metric: { __name__: "grafanacloud_org_total_overage" },
+                    value: [1, "252.65"],
+                  },
+                ]
+              : [
+                  {
+                    metric: { __name__: "grafanacloud_org_logs_overage" },
+                    value: [1, "180.1"],
+                  },
+                  {
+                    metric: { __name__: "grafanacloud_org_total_overage" },
+                    value: [1, "252.65"],
+                  },
+                  {
+                    metric: { __name__: "grafanacloud_org_metrics_overage" },
+                    value: [1, "60.55"],
+                  },
+                ],
+          },
+        }),
+      };
+    };
+    const row = await grafanaOverageReader({
+      url: "https://g.example/",
+      token: "sa-token",
+      fetch,
+      now: () => new Date("2026-10-26T13:40:00Z"),
+    }).read(signal);
+    expect(urls[0]).toBe(
+      "https://g.example/api/datasources/proxy/uid/grafanacloud-usage/api/v1/query?query=grafanacloud_org_total_overage"
+    );
+    expect(row).toMatchObject({
+      plane: "grafana:overage",
+      kind: "usage",
+      balance: null,
+      currency: "USD",
+      grade: "INFO",
+      source: "Grafana Cloud usage metrics · verify against invoice",
+      detail: "252.65 USD month to date · day 26",
+      parts: [
+        { label: "logs", amount: "180.1", currency: "USD" },
+        { label: "metrics", amount: "60.55", currency: "USD" },
+      ],
+    });
+    expect(row.burnPerDay).toBeCloseTo(252.65 / 26, 9);
+    expect(
+      await grafanaOverageReader({ url: undefined, token: "x", fetch }).read(
+        signal
+      )
+    ).toMatchObject({
+      grade: "UNKNOWN",
+      reasonCode: "unconfigured",
+      detail: "no Grafana credential",
+    });
+    expect(
+      await grafanaOverageReader({
+        url: "https://g.example",
+        token: "x",
+        fetch: async () => {
+          throw new Error("sensitive-token-value");
+        },
+      }).read(signal)
+    ).toMatchObject({
+      grade: "UNKNOWN",
+      reasonCode: "unreadable",
+      detail: "Grafana usage read failed",
+    });
+  });
+  it("parses the RDAP expiration event into graded days left", async () => {
+    const signal = new AbortController().signal;
+    const now = new Date("2026-10-26T13:40:00Z");
+    const events = [
+      { eventAction: "registration", eventDate: "2024-04-05T13:40:00Z" },
+      { eventAction: "expiration", eventDate: "2027-04-05T13:40:00Z" },
+    ];
+    expect(expiryDays(events, now)).toBeCloseTo(161, 9);
+    expect(
+      expiryDays([{ eventAction: "expiration", eventDate: "soon" }], now)
+    ).toBeNull();
+    expect(expiryDays(undefined, now)).toBeNull();
+    const urls: string[] = [];
+    const row = await domainExpiryReader({
+      domain: "cognidao.org",
+      now: () => now,
+      fetch: async (url: string) => {
+        urls.push(url);
+        return { ok: true, status: 200, json: async () => ({ events }) };
+      },
+    }).read(signal);
+    expect(urls).toEqual(["https://rdap.org/domain/cognidao.org"]);
+    expect(row).toMatchObject({
+      plane: "domain:cognidao.org",
+      label: "Domain renewal · cognidao.org",
+      kind: "expiry",
+      balance: null,
+      burnPerDay: null,
+      grade: "GREEN",
+      source: "RDAP registry record",
+      detail: "expires 2027-04-05",
+    });
+    expect(row.runwayDays).toBeCloseTo(161, 9);
+    expect(
+      await domainExpiryReader({
+        domain: "cognidao.org",
+        now: () => now,
+        fetch: async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            events: [
+              { eventAction: "expiration", eventDate: "2026-11-05T00:00:00Z" },
+            ],
+          }),
+        }),
+      }).read(signal)
+    ).toMatchObject({ grade: "RED" });
+    expect(
+      await domainExpiryReader({
+        domain: "cognidao.org",
+        fetch: async () => ({ ok: false, status: 404, json: async () => ({}) }),
+      }).read(signal)
+    ).toMatchObject({
+      grade: "UNKNOWN",
+      reasonCode: "unreadable",
+      detail: "registry read failed",
+    });
   });
   it("deduplicates one Base account across roles before reads, retaining missing roles", () => {
     const account = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
@@ -284,8 +701,14 @@ describe("operator finance evidence", () => {
     expect(readers.map((reader) => reader.plane)).toEqual([
       "base:dao-treasury",
       "openrouter:account",
-      "cherry:account",
+      "cherry:team",
+      "akash:credit",
       "akash:fleet",
+      "grafana:overage",
+      "domain:cognidao.org",
+      "rpc:alchemy",
+      "tenant:system",
+      "saas:other",
     ]);
     const snapshot = await takeSnapshot(readers, { timeoutMs: 500 });
     expect(snapshot.rows[0]).toMatchObject({
@@ -295,22 +718,44 @@ describe("operator finance evidence", () => {
       currency: "USDC",
       grade: "INFO",
     });
-    expect(fetch).toHaveBeenCalledTimes(2);
     expect(
-      fetch.mock.calls.every(
+      fetch.mock.calls.filter(
         (call) => String(call[0]) === "https://rpc.example"
       )
-    ).toBe(true);
+    ).toHaveLength(2);
+    expect(
+      fetch.mock.calls.filter((call) =>
+        String(call[0]).startsWith(
+          `https://api.akashnet.net/cosmos/authz/v1beta1/grants/grantee/${AKASH_PRODUCTION_OWNER}`
+        )
+      )
+    ).toHaveLength(1);
+    expect(snapshot.rows[3]).toMatchObject({
+      plane: "akash:credit",
+      grade: "UNKNOWN",
+      reasonCode: "unreadable",
+    });
     expect(snapshot.rows[1]).toMatchObject({
       label: "OpenRouter credit",
       grade: "UNKNOWN",
       reasonCode: "unconfigured",
     });
-    expect(runtime.balances).toHaveBeenCalledTimes(1);
     expect(runtime.report).toHaveBeenCalledTimes(1);
+    expect(snapshot.rows.map((row) => row.grade)).not.toContain("GREEN");
+    expect(
+      snapshot.rows
+        .slice(5)
+        .every((row) => row.grade === "UNKNOWN" && row.balance === null)
+    ).toBe(true);
+    expect(
+      fetch.mock.calls.filter((call) => String(call[0]).includes("rdap.org"))
+    ).toHaveLength(1);
   });
-  it("reads OpenRouter credit only when the key is present and leaves wallets unreadable without an RPC", async () => {
-    runtime.env = { OPENROUTER_API_KEY: "sk-test" };
+  it("reads OpenRouter credit only when the key is present, scopes the Akash read to the configured account, and leaves wallets unreadable without an RPC", async () => {
+    runtime.env = {
+      OPENROUTER_API_KEY: "sk-test",
+      AKASH_ACTUATOR_ACCOUNT_ID: "akash1custom",
+    };
     const fetch = vi.fn(async (url: string | URL | Request) => ({
       ok: true,
       status: 200,
@@ -328,6 +773,11 @@ describe("operator finance evidence", () => {
       reasonCode: "unreadable",
       detail: "RPC unavailable",
     });
+    expect(
+      fetch.mock.calls.some((call) =>
+        String(call[0]).includes("/grants/grantee/akash1custom")
+      )
+    ).toBe(true);
     expect(snapshot.rows[1]).toMatchObject({
       label: "OpenRouter credit",
       currency: "USD",
@@ -335,8 +785,11 @@ describe("operator finance evidence", () => {
       reasonCode: "burn_unmeasured",
     });
     expect(snapshot.rows[1]?.balance).toBeCloseTo(3.1, 6);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0]?.[1]).toMatchObject({
+    const openRouterCalls = fetch.mock.calls.filter((call) =>
+      String(call[0]).includes("openrouter")
+    );
+    expect(openRouterCalls).toHaveLength(1);
+    expect(openRouterCalls[0]?.[1]).toMatchObject({
       headers: { Authorization: "Bearer sk-test" },
     });
   });

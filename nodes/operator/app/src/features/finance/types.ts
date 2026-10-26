@@ -12,7 +12,12 @@
  */
 import type { MoneyPlaneSnapshot } from "@cogni/money-plane";
 
-export interface FinanceReportModel extends MoneyPlaneSnapshot {
+import type { FinanceRow } from "@/ports/finance-report.port";
+
+export type { FinanceRow, FinanceRowPart } from "@/ports/finance-report.port";
+
+export interface FinanceReportModel extends Omit<MoneyPlaneSnapshot, "rows"> {
+  rows: FinanceRow[];
   /** Plane id of the configured DAO treasury wallet, or null when none is declared. */
   treasuryPlane: string | null;
 }

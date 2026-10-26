@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/dev/finance-preview/Preview.client`
- * Purpose: Isolate the complete real admin shell from live treasury queries in fixture previews.
+ * Purpose: Render the whole /admin/payments composition (report + Provider funding rail) inside the real admin shell on fixture data, isolated from live treasury queries.
  * Scope: Development route only; static same-fixture treasury seed and independent query cache.
  * Invariants: Treasury query stays disabled across staleness, focus and invalidation.
  * Side-effects: No live financial IO.
@@ -15,6 +15,7 @@ import type { TreasurySnapshotResponseV1 } from "@cogni/node-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { AdminShell } from "@/app/(admin)/AdminShell";
+import { ProviderFundingSection } from "@/app/(admin)/admin/payments/ProviderFundingSection";
 import {
   PageContainer,
   ReportText,
@@ -29,6 +30,7 @@ import type { FinanceReportModel } from "@/features/finance/types";
 import { CHAINS } from "@/shared/web3";
 import {
   liveShapedFinancePreview,
+  previewFunding,
   previewTreasuryAddress,
   sparseFinancePreview,
 } from "./fixture";
@@ -111,6 +113,7 @@ export function FinancePreview() {
               </Select>
             </div>
             <FinanceReport report={report} />
+            <ProviderFundingSection funding={previewFunding} />
           </div>
         </PageContainer>
       </AdminShell>
