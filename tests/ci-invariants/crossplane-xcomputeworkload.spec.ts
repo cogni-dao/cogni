@@ -1510,7 +1510,9 @@ describe("catalog lease generation naming", () => {
     // task.5256: preview gen-2 was intentionally retired through the actuator;
     // provider closure and its released receipt permit reviewed replacement :3.
     // bug.5532: explicitly reviewed replacement of the unhealthy ACTIVE production placement.
-    expect(toks5.lease_generation?.preview).toBe(3);
+    // bug.5538: preview gen-3 closed at its boot deadline; native allocation
+    // history confirms :4 is the next unspent replacement key.
+    expect(toks5.lease_generation?.preview).toBe(4);
     expect(toks5.lease_generation?.production).toBe(6);
   });
 });

@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-22
+- **Last reviewed:** 2026-10-26
 
 ## Purpose
 
@@ -36,6 +36,7 @@ CI/CD automation scripts and configuration documentation for multiple pipeline s
 - **Scheduler routing env:** `SWR_RECONCILE_FLIGHT_TARGETS_JSON` is the normal decide-selected slug array; only renderer-validated active candidate slug/UUID pairs may replace watched destinations.
 - **Fast-path classifier env:** `EVENT_NAME`, `REPOSITORY`, `PR_NUMBER_PR`, `PR_HEAD_SHA_PR`, `MQ_HEAD_REF`, `MQ_BASE_SHA`, `MQ_HEAD_SHA`; `FAST_PATH_{PR,COMMIT,FILES}_JSON`, `FAST_PATH_{BASE,HEAD}_CATALOG`, and `FAST_PATH_APPSET_PATHS_LIB` are hermetic test seams only
 - **Files considered API:** `scripts/*.sh`, `workflow-check.mjs`, `infra/openfga/rbac-model.json`
+- `prove-compute-egress-native.sh prepare BASE HEAD BUNDLE` captures committed policy inputs; `run BUNDLE` is a bounded candidate-only isolated Pod experiment. It does not reconcile host firewall rules or prove live preview recovery.
 
 - `lib/maintenance-fence.py check <deploy-tree>` is the read-only node-generic marker/audited-source-floor guard; no grant, claim, preserve or maintenance write command.
 - Normal node reconcile never starts/recreates shared PG/Dolt, rewrites shared runtime env/install-creds or rotates mirror custody. Existing engines are infra prerequisites; target provisioners always use `--no-deps`.
