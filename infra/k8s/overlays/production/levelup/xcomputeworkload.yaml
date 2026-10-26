@@ -11,13 +11,13 @@ spec:
   nodeId: 557d8b59-8e3b-42f0-9aeb-a5c171296556
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/levelup@sha256:d522040e5599496e91d43657d9727a69a54d84c2fcfdfbf5295821f5b37925d8
+    ref: ghcr.io/cogni-dao/levelup@sha256:b74f1fcbfeb954df1e17f2cf84d9d46b5f207693aa46d4768efdc13893499334
     source:
       repository: cogni-dao/levelup
-      sha: 62571464d9ab3ff3a418fb085259470de9b7abb1
+      sha: c81fcc9e2f487446088c78a4d7715e3b9e35bd1c
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/levelup@sha256:acebca6ce487ba11f350076c38de137451339f9ceacc926ae23d717bbe134028
+        image: ghcr.io/cogni-dao/levelup@sha256:9913d415d8c06c539ea8071ab2044f2fc287c95a92de4684584b564f2f3aae0f
   workload:
     name: levelup
     publicHost: levelup.cognidao.org
