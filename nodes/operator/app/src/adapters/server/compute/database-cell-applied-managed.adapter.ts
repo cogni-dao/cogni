@@ -70,13 +70,6 @@ export async function observeAppliedCellManaged(input: {
   const physical = input.physicalArtifact;
   if (Boolean(packet.physicalRecovery) !== Boolean(physical))
     throw new Error("physical_managed_evidence_missing");
-  if (physical)
-    qualifyPhysicalPostimages({
-      artifact: physical,
-      custody,
-      primaryServiceName: packet.primaryServiceName,
-      appServiceName: packet.appServiceName,
-    });
   const [primary, app] = await Promise.all([
     input.ledger.read({ cogniKey: input.reference.cogniKey }),
     input.ledger.read({ cogniKey: packet.appCogniKey }),
@@ -162,6 +155,46 @@ export async function observeAppliedCellManaged(input: {
       source.externalName === app.externalName
     )
       throw new Error("physical_managed_source_receipt_mismatch");
+    const history = primary.appliedDatabaseCellBinding?.find(
+      (receipt) => receipt.binding.environment === "production"
+    );
+    let ledgerHashes = {
+      source: source.lastAppliedSdlHash,
+      target: primary.lastAppliedSdlHash,
+      app: app.lastAppliedSdlHash,
+    };
+    if (history) {
+      const old = history.registration?.physicalRecovery;
+      if (
+        history.binding.phase !== "applied" ||
+        !old ||
+        JSON.stringify(old) !== JSON.stringify(packet.physicalRecovery) ||
+        history.registration?.manualCutoverPacketSha256 !==
+          packet.packetSha256 ||
+        primary.lastAppliedSdlHash !== physical.evidence.target.normalSdlHash ||
+        app.lastAppliedSdlHash !== physical.evidence.app.heldSdlHash ||
+        source.lastAppliedSdlHash !== old.originalAppliedSdlHashes.source
+      )
+        throw new Error("physical_managed_original_anchor_history_mismatch");
+      ledgerHashes = old.originalAppliedSdlHashes;
+    }
+    if (
+      !ledgerHashes.source ||
+      JSON.stringify(ledgerHashes) !==
+        JSON.stringify(packet.physicalRecovery?.originalAppliedSdlHashes)
+    )
+      throw new Error("physical_managed_independent_original_anchors_missing");
+    qualifyPhysicalPostimages({
+      artifact: physical,
+      custody,
+      primaryServiceName: packet.primaryServiceName,
+      appServiceName: packet.appServiceName,
+      ledgerHashes: {
+        source: ledgerHashes.source,
+        target: ledgerHashes.target,
+        app: ledgerHashes.app,
+      },
+    });
     const sourceDefinition = await input.console.readManagedDefinition({
       leaseId: source.externalName,
     });

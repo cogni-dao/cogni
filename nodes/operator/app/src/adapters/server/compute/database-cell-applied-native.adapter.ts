@@ -61,6 +61,17 @@ const NativeSchema = z.object({
 });
 const address = (value: string) => value.replace(/^::ffff:/, "");
 
+/** PG15 exposes session identities to all roles; backend details may be hidden.
+ * Count every other authenticated session, including spoofed observer names.
+ */
+export async function countOtherAuthenticatedSessions(
+  tx: postgres.TransactionSql
+): Promise<number> {
+  const rows = await tx`SELECT count(*)::int AS count FROM pg_stat_activity
+    WHERE usesysid IS NOT NULL AND pid<>pg_backend_pid()`;
+  return z.coerce.number().int().nonnegative().parse(rows[0]?.count);
+}
+
 /** Credentials are provided by the bootstrap-owned custody reader, never the route caller. */
 export async function observeAppliedDatabaseCellNative(input: {
   custody: DatabaseCellAppliedCustody;
@@ -205,14 +216,8 @@ export async function observeAppliedDatabaseCellNative(input: {
       )
         throw new Error("applied_cell_native_scope_mismatch");
       if (input.requireAbsentBusinessWriters) {
-        const writers =
-          await tx`SELECT count(*)::int AS count FROM pg_stat_activity
-          WHERE backend_type='client backend' AND pid<>pg_backend_pid()
-            AND application_name<>'cogni_applied_cell_readonly_observer'`;
-        if (
-          identity.activeRuntimeSessions !== 0 ||
-          Number(writers[0]?.count) !== 0
-        )
+        const writers = await countOtherAuthenticatedSessions(tx);
+        if (identity.activeRuntimeSessions !== 0 || writers !== 0)
           throw new Error("physical_import_business_sessions_present");
         const relations =
           await tx`SELECT schemaname || '.' || tablename AS name FROM pg_tables

@@ -298,6 +298,16 @@ export class DrizzleDatabaseCellBindingStore {
             throw new Error(
               "physical recovery requires exactly one original authority"
             );
+          if (
+            lineage.originalAppliedSdlHashes.source !==
+              sourceRow.lastAppliedSdlHash ||
+            lineage.originalAppliedSdlHashes.target !==
+              targetRow.lastAppliedSdlHash ||
+            lineage.originalAppliedSdlHashes.app !== appRow.lastAppliedSdlHash
+          )
+            throw new Error(
+              "physical original anchors differ from independent canonical preimages"
+            );
           const superseded = AppliedDatabaseCellReceiptsSchema.parse(
             source.bindings.map((receipt) => ({
               ...receipt,

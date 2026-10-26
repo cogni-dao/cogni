@@ -16,6 +16,7 @@ import type {
   AkashTxActuatorPort,
   AkashTxAllocationLedgerPort,
   AkashTxAllocationRecord,
+  AkashTxConsolePort,
   DatabaseCellAppliedProbeQualificationPort,
   DatabaseCellAppliedRegistrationEvidencePort,
   DatabaseCellAppliedRegistrationPort,
@@ -78,6 +79,7 @@ export class DatabaseCellBinder
       ): Promise<DatabaseCellBootstrapKit>;
       buildSha: string;
       recoveryProfile?(): Promise<unknown>;
+      recoverySdlHash?: AkashTxConsolePort["sdlHash"];
     }
   ) {}
 
@@ -1097,6 +1099,19 @@ export class DatabaseCellBinder
     );
     if (record.cogniKey !== intent.key)
       refuse("physical target differs from canonical source recovery intent");
+    if (
+      !this.deps.recoverySdlHash ||
+      this.deps.recoverySdlHash(intent.spec, intent.policy) !==
+        e.target.originalAppliedSdlHash ||
+      lineage.originalAppliedSdlHashes.source !==
+        e.source.originalAppliedSdlHash ||
+      lineage.originalAppliedSdlHashes.target !==
+        e.target.originalAppliedSdlHash ||
+      lineage.originalAppliedSdlHashes.app !== e.app.originalAppliedSdlHash
+    )
+      refuse(
+        "physical target cold preimage differs from canonical G1 recipe or original ledger anchors"
+      );
     if (
       packet.packetSha256 !== input.manualCutoverPacketSha256 ||
       packet.nodeId !== custody.nodeId ||

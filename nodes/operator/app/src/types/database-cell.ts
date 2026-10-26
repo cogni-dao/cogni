@@ -196,6 +196,11 @@ export interface DatabaseCellPhysicalRecoveryProvenance {
   readonly sourceDseq: string;
   readonly evidenceSha256: string;
   readonly copyManifestSha256: string;
+  readonly originalAppliedSdlHashes: {
+    readonly source: string;
+    readonly target: string;
+    readonly app: string;
+  };
 }
 export interface AppliedDatabaseCellReceipt {
   allocationEnvironment: CellEnvironment;

@@ -4,7 +4,7 @@
  * Module: `@adapters/server/compute/database-cell-physical-postimage`
  * Purpose: Qualify fixed physical-recovery postimages from owned private preimage bytes.
  * Scope: Parse and compare only; no config-edit API or provider mutation.
- * Invariants: Source/app sleep holds; only target capacity and owned consumer values move.
+ * Invariants: Original bytes match independent ledger anchors; source/app sleep holds and fixed target delta.
  * Side-effects: none
  * Links: database-cell-applied-managed.adapter.ts, subtask.5023
  * @internal
@@ -20,6 +20,11 @@ const sdl = z.string().min(1).max(100000);
 export const PhysicalRecoveryArtifactSchema = z
   .object({
     evidence: DatabaseCellPhysicalRecoveryEvidenceSchema,
+    // Exact bytes in the independently recorded ledger hash domain. They may
+    // format differently from Console SDL; hashes of those objects are never equated.
+    ledgerPreimages: z
+      .object({ sourceOriginal: sdl, targetCold: sdl, appOriginal: sdl })
+      .strict(),
     // These private bytes stay inside bootstrap-owned custody. Facts/HTTP contain hashes only.
     definitions: z
       .object({
@@ -41,7 +46,9 @@ const Service = z
     image: z.string(),
     command: z.array(z.string()).optional(),
     args: z.array(z.string()).optional(),
-    env: z.array(z.string()).optional(),
+    env: z
+      .array(z.string().refine((value) => value.indexOf("=") > 0))
+      .optional(),
     params: z
       .object({
         storage: z.record(
@@ -72,8 +79,27 @@ export function qualifyPhysicalPostimages(input: {
   custody: DatabaseCellAppliedCustody;
   primaryServiceName: string;
   appServiceName: string;
+  ledgerHashes: {
+    readonly source: string;
+    readonly target: string;
+    readonly app: string;
+  };
 }) {
-  const { evidence: e, definitions: d } = input.artifact;
+  const { evidence: e, definitions: d, ledgerPreimages: l } = input.artifact;
+  if (
+    evidenceSha256(l.sourceOriginal) !== input.ledgerHashes.source ||
+    evidenceSha256(l.targetCold) !== input.ledgerHashes.target ||
+    evidenceSha256(l.appOriginal) !== input.ledgerHashes.app ||
+    e.source.originalAppliedSdlHash !== input.ledgerHashes.source ||
+    e.target.originalAppliedSdlHash !== input.ledgerHashes.target ||
+    e.app.originalAppliedSdlHash !== input.ledgerHashes.app
+  )
+    throw new Error("physical_postimage_independent_ledger_anchor_mismatch");
+  // Alias expansion and object key order are semantic; all values must still be
+  // identical. Opaque/encrypted Console values fail closed rather than replacing proof.
+  same(decode(d.sourceOriginal), decode(l.sourceOriginal));
+  same(decode(d.targetCold), decode(l.targetCold));
+  same(decode(d.appOriginal), decode(l.appOriginal));
   if (
     evidenceSha256(d.sourceHeld) !== e.source.heldSdlHash ||
     evidenceSha256(d.targetCold) !== e.target.preimageSdlHash ||

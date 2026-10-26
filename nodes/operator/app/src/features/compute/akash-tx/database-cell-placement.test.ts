@@ -2235,6 +2235,11 @@ describe("physical recovery receipt compatibility", () => {
           sourceDseq: "10001",
           evidenceSha256: "a".repeat(64),
           copyManifestSha256: "b".repeat(64),
+          originalAppliedSdlHashes: {
+            source: "d".repeat(64),
+            target: "e".repeat(64),
+            app: "c".repeat(64),
+          },
         },
       },
     };
@@ -2383,6 +2388,11 @@ async function physicalImportFixture() {
         sourceDseq: "321",
         evidenceSha256: "9".repeat(64),
         copyManifestSha256: "6".repeat(64),
+        originalAppliedSdlHashes: {
+          source: "d".repeat(64),
+          target: "e".repeat(64),
+          app: "c".repeat(64),
+        },
       },
     },
     readmission: { ...base.readmission, allocationReceiptId: target.receiptId },
@@ -2472,6 +2482,7 @@ async function physicalImportFixture() {
   let writes = 0;
   const binder = new DatabaseCellBinder({
     recoveryProfile: async () => recoveryProfile,
+    recoverySdlHash: () => "e".repeat(64),
     ledger: {
       read: async ({ cogniKey }) =>
         [source, target, app].find((record) => record.cogniKey === cogniKey) ??
@@ -2534,6 +2545,9 @@ async function physicalImportFixture() {
     },
     source: () => sourceBindings,
     target: () => targetBindings,
+    changeTargetCanonicalHash: (hash: string) => {
+      target = { ...target, lastAppliedSdlHash: hash };
+    },
     writes: () => writes,
   };
 }
@@ -2582,6 +2596,13 @@ describe("audited held physical recovery import", () => {
       },
       (f) => {
         f.facts.physicalRecovery.target.volume.availableBytes = 1024;
+      },
+      (f) => {
+        f.changeTargetCanonicalHash("0".repeat(64));
+        f.facts.physicalRecovery.target.originalAppliedSdlHash = "0".repeat(64);
+        const lineage = f.facts.manualCutover.physicalRecovery;
+        if (!lineage) throw new Error("physical fixture lineage absent");
+        lineage.originalAppliedSdlHashes.target = "0".repeat(64);
       },
       (f) => {
         f.facts.physicalRecovery.target.volume.availableInodes = 1;

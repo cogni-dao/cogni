@@ -699,6 +699,7 @@ const appliedCellObserver = new ReadOnlyAppliedDatabaseCellObserver({
 });
 
 const databaseCellBindings = new DatabaseCellBinder({
+  recoverySdlHash: consoleClient.sdlHash.bind(consoleClient),
   recoveryProfile: loadDatabaseCellRecoveryProfile,
   ledger: allocationLedger,
   actuator,

@@ -89,6 +89,16 @@ function postimageFixture() {
   };
   const digest = (value: string) =>
     createHash("sha256").update(value).digest("hex");
+  const ledgerPreimages = {
+    sourceOriginal: JSON.stringify(original, null, 2),
+    targetCold: JSON.stringify(cold, null, 2),
+    appOriginal: JSON.stringify(appOriginal, null, 2),
+  };
+  const ledgerHashes = {
+    source: digest(ledgerPreimages.sourceOriginal),
+    target: digest(ledgerPreimages.targetCold),
+    app: digest(ledgerPreimages.appOriginal),
+  };
   const startup = digest(
     JSON.stringify([
       original.services.postgres.command,
@@ -104,7 +114,7 @@ function postimageFixture() {
       dseq: "10001",
       providerAccount: sourceRecord.providerAccount,
       systemIdentifier: "1234567890",
-      originalAppliedSdlHash: sha("a"),
+      originalAppliedSdlHash: ledgerHashes.source,
       heldSdlHash: digest(definitions.sourceHeld),
       manifestVersion: Buffer.alloc(32, 1).toString("base64"),
       serviceName: "postgres",
@@ -138,7 +148,7 @@ function postimageFixture() {
       observedAt: now,
       dseq: "10002",
       providerAccount: targetRecord.providerAccount,
-      originalAppliedSdlHash: sha("b"),
+      originalAppliedSdlHash: ledgerHashes.target,
       preimageSdlHash: digest(definitions.targetCold),
       normalSdlHash: digest(definitions.targetNormal),
       manifestVersion: Buffer.alloc(32, 2).toString("base64"),
@@ -154,7 +164,7 @@ function postimageFixture() {
       },
     },
     app: {
-      originalAppliedSdlHash: sha("c"),
+      originalAppliedSdlHash: ledgerHashes.app,
       preimageSdlHash: digest(definitions.appOriginal),
       heldSdlHash: digest(definitions.appHeld),
       manifestVersion: Buffer.alloc(32, 3).toString("base64"),
@@ -209,7 +219,12 @@ function postimageFixture() {
     migration: { kind: "app-database-url" },
   };
   return {
-    artifact: PhysicalRecoveryArtifactSchema.parse({ evidence, definitions }),
+    artifact: PhysicalRecoveryArtifactSchema.parse({
+      evidence,
+      definitions,
+      ledgerPreimages,
+    }),
+    ledgerHashes,
     custody,
     primaryServiceName: "postgres",
     appServiceName: "app",
@@ -237,5 +252,104 @@ describe("private known physical postimages", () => {
         "unreviewed_delta"
       );
     }
+  });
+});
+
+function shaBytes(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+function rehashPrivatePostimages(input: ReturnType<typeof postimageFixture>) {
+  const { definitions: d, evidence: e } = input.artifact;
+  e.source.heldSdlHash = shaBytes(d.sourceHeld);
+  e.target.preimageSdlHash = shaBytes(d.targetCold);
+  e.target.normalSdlHash = shaBytes(d.targetNormal);
+  e.app.preimageSdlHash = shaBytes(d.appOriginal);
+  e.app.heldSdlHash = shaBytes(d.appHeld);
+  const script = (value: string) => {
+    const service = JSON.parse(value).services.postgres;
+    return JSON.stringify([service.command ?? [], service.args ?? []]);
+  };
+  e.copy.originalStartupSha256 = shaBytes(script(d.sourceOriginal));
+  e.copy.targetStartupSha256 = shaBytes(script(d.targetNormal));
+}
+describe("independent preimage anchors", () => {
+  it("compares actual recorded-domain bytes without equating canonical and Console raw hashes", () => {
+    const input = postimageFixture();
+    expect(shaBytes(input.artifact.definitions.sourceOriginal)).not.toBe(
+      input.ledgerHashes.source
+    );
+    expect(shaBytes(input.artifact.definitions.targetCold)).not.toBe(
+      input.ledgerHashes.target
+    );
+    expect(shaBytes(input.artifact.definitions.appOriginal)).not.toBe(
+      input.ledgerHashes.app
+    );
+    expect(() => qualifyPhysicalPostimages(input)).not.toThrow();
+  });
+  it("rejects the coherent source-original plus target-startup fsync=off substitution", () => {
+    const input = postimageFixture();
+    for (const field of ["sourceOriginal", "targetNormal"] as const) {
+      const value = JSON.parse(input.artifact.definitions[field]);
+      value.services.postgres.command = ["postgres"];
+      value.services.postgres.args = ["-c", "fsync=off"];
+      input.artifact.definitions[field] = JSON.stringify(value);
+    }
+    rehashPrivatePostimages(input);
+    // Source hold is unchanged and all artifact-local startup/native hashes match.
+    // The separately recorded source bytes still forbid changing the original.
+    expect(() => qualifyPhysicalPostimages(input)).toThrow("unreviewed_delta");
+    input.artifact.ledgerPreimages.sourceOriginal =
+      input.artifact.definitions.sourceOriginal;
+    expect(() => qualifyPhysicalPostimages(input)).toThrow(
+      "independent_ledger_anchor"
+    );
+  });
+  it("rejects paired app-original and held non-database env changes with coherently rehashed receipts", () => {
+    const input = postimageFixture();
+    for (const field of ["appOriginal", "appHeld"] as const) {
+      const value = JSON.parse(input.artifact.definitions[field]);
+      value.services.app.env = value.services.app.env.map((v: string) =>
+        v === "KEEP=original" ? "KEEP=changed" : v
+      );
+      input.artifact.definitions[field] = JSON.stringify(value);
+    }
+    rehashPrivatePostimages(input);
+    expect(() => qualifyPhysicalPostimages(input)).toThrow("unreviewed_delta");
+    input.artifact.ledgerPreimages.appOriginal =
+      input.artifact.definitions.appOriginal;
+    expect(() => qualifyPhysicalPostimages(input)).toThrow(
+      "independent_ledger_anchor"
+    );
+  });
+  it("rejects malformed env entries even in independently anchored originals", () => {
+    const input = postimageFixture();
+    for (const field of ["appOriginal", "appHeld"] as const) {
+      const value = JSON.parse(input.artifact.definitions[field]);
+      value.services.app.env.push("MALFORMED_ENV");
+      input.artifact.definitions[field] = JSON.stringify(value);
+    }
+    input.artifact.ledgerPreimages.appOriginal =
+      input.artifact.definitions.appOriginal;
+    input.ledgerHashes.app = shaBytes(
+      input.artifact.ledgerPreimages.appOriginal
+    );
+    input.artifact.evidence.app.originalAppliedSdlHash = input.ledgerHashes.app;
+    rehashPrivatePostimages(input);
+    expect(() => qualifyPhysicalPostimages(input)).toThrow();
+  });
+  it("rejects a paired cold-recipe and normal capacity change even with new self-consistent preimage bytes", () => {
+    const input = postimageFixture();
+    for (const field of ["targetCold", "targetNormal"] as const) {
+      const value = JSON.parse(input.artifact.definitions[field]);
+      value.profiles.resources.storage = 50;
+      input.artifact.definitions[field] = JSON.stringify(value);
+    }
+    rehashPrivatePostimages(input);
+    expect(() => qualifyPhysicalPostimages(input)).toThrow("unreviewed_delta");
+    input.artifact.ledgerPreimages.targetCold =
+      input.artifact.definitions.targetCold;
+    expect(() => qualifyPhysicalPostimages(input)).toThrow(
+      "independent_ledger_anchor"
+    );
   });
 });

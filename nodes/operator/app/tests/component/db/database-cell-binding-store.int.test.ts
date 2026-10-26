@@ -5,15 +5,17 @@
  * Purpose: Prove atomic physical lineage and ordinary admission exclusion on real PostgreSQL.
  * Scope: Synthetic testcontainer allocations, independent bounded clients, controlled locks.
  * Invariants: One authority, deferred-failure rollback, exact replay; no provider or real node data.
- * Side-effects: Isolated test DB rows and temporary commit-failure trigger, cleaned after each test.
+ * Side-effects: Isolated test DB rows, temporary triggers, and disposable role fixtures; all cleaned.
  * Links: database-cell-binding-store.adapter.ts, subtask.5023
  * @internal
  */
 
 import { createAppDbClient } from "@cogni/db-client";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import postgres from "postgres";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DrizzleAkashTxAllocationLedger } from "@/adapters/server/compute/akash-tx-allocation-ledger.adapter";
+import { countOtherAuthenticatedSessions } from "@/adapters/server/compute/database-cell-applied-native.adapter";
 import { DrizzleDatabaseCellBindingStore } from "@/adapters/server/compute/database-cell-binding-store.adapter";
 import type { AkashTxAllocationRecord } from "@/ports";
 import type { DatabaseCellPhysicalRecoveryWrite } from "@/ports/database-cell-binding.port";
@@ -126,6 +128,11 @@ const targetBindings = AppliedDatabaseCellReceiptsSchema.parse([
         sourceDseq: "10001",
         evidenceSha256: sha("3"),
         copyManifestSha256: sha("4"),
+        originalAppliedSdlHashes: {
+          source: sha("a"),
+          target: sha("b"),
+          app: sha("c"),
+        },
       },
       executionActor: { kind: "agent", id: id(5) },
       approvalAuthority: {
@@ -309,7 +316,7 @@ describe("physical recovery canonical transaction (real PostgreSQL)", () => {
       );
     }
   });
-  it("excludes ordinary registration racing import with two genuinely separate clients and controlled interleaving", async () => {
+  it("retains ordinary admission refusal during a physical import with separate clients", async () => {
     const [one] = await first.$client`select pg_backend_pid()::int as pid`;
     const [two] = await second.$client`select pg_backend_pid()::int as pid`;
     expect(one?.pid).not.toBe(two?.pid);
@@ -374,4 +381,227 @@ describe("physical recovery canonical transaction (real PostgreSQL)", () => {
       id(2),
     ]);
   });
+  it("counts a third-role session despite hidden PG15 details and a spoofed observer name", async () => {
+    const adminUrl = process.env.COMPONENT_POSTGRES_ADMIN_URL;
+    if (!adminUrl) throw new Error("isolated testcontainer admin URL required");
+    const admin = postgres(adminUrl, { max: 1 });
+    const observerUrl = new URL(adminUrl);
+    observerUrl.username = "physical_fixture_observer";
+    observerUrl.password = "synthetic_observer_password";
+    const writerUrl = new URL(adminUrl);
+    writerUrl.username = "physical_fixture_third_role";
+    writerUrl.password = "synthetic_third_role_password";
+    const observer = postgres(observerUrl.toString(), { max: 1 });
+    const spoofedPeer = postgres(observerUrl.toString(), {
+      max: 1,
+      connection: { application_name: "cogni_applied_cell_readonly_observer" },
+    });
+    const thirdRole = postgres(writerUrl.toString(), {
+      max: 1,
+      connection: { application_name: "cogni_applied_cell_readonly_observer" },
+    });
+    try {
+      // All credentials and roles are disposable fixture data in the CI container.
+      await admin`CREATE ROLE physical_fixture_observer LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION PASSWORD 'synthetic_observer_password'`;
+      await admin`CREATE ROLE physical_fixture_third_role LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION PASSWORD 'synthetic_third_role_password'`;
+      const [writer] =
+        await thirdRole`SELECT pg_backend_pid()::int AS pid, current_setting('application_name') AS name`;
+      expect(writer?.name).toBe("cogni_applied_cell_readonly_observer");
+      const [peer] = await spoofedPeer`SELECT pg_backend_pid()::int AS pid`;
+      await observer.begin("read only", async (tx) => {
+        const [role] = await tx`SELECT rolinherit,rolsuper,rolbypassrls,
+          pg_has_role(current_user,'pg_read_all_stats','USAGE') AS stats
+          FROM pg_roles WHERE rolname=current_user`;
+        expect(role).toMatchObject({
+          rolinherit: false,
+          rolsuper: false,
+          rolbypassrls: false,
+          stats: false,
+        });
+        const [visible] =
+          await tx`SELECT pid,usesysid,backend_type,application_name
+          FROM pg_stat_activity WHERE pid=${writer?.pid}`;
+        expect(visible?.pid).toBe(writer?.pid);
+        expect(visible?.usesysid).toBeTypeOf("number");
+        expect(visible?.backend_type).toBeNull();
+        expect(visible?.application_name).toBe(
+          "cogni_applied_cell_readonly_observer"
+        );
+        // Same-role details ARE visible, so this independently falsifies trusting
+        // the caller-controlled observer name even without permission redaction.
+        const [sameRole] = await tx`SELECT backend_type,application_name
+          FROM pg_stat_activity WHERE pid=${peer?.pid}`;
+        expect(sameRole?.backend_type).toBe("client backend");
+        expect(sameRole?.application_name).toBe(
+          "cogni_applied_cell_readonly_observer"
+        );
+        // Red control reproduces the rejected query as the real unprivileged probe.
+        const [old] =
+          await tx`SELECT count(*)::int AS count FROM pg_stat_activity
+          WHERE backend_type='client backend' AND pid<>pg_backend_pid()
+          AND application_name<>'cogni_applied_cell_readonly_observer'`;
+        expect(old?.count).toBe(0);
+        expect(await countOtherAuthenticatedSessions(tx)).toBeGreaterThan(0);
+      });
+    } finally {
+      await Promise.all([observer.end(), thirdRole.end(), spoofedPeer.end()]);
+      try {
+        await admin`DROP ROLE IF EXISTS physical_fixture_observer`;
+        await admin`DROP ROLE IF EXISTS physical_fixture_third_role`;
+      } finally {
+        await admin.end();
+      }
+    }
+  });
+  for (const protectedPath of [false, true]) {
+    it(
+      protectedPath
+        ? "serializes two reachable first admissions after both native backends block"
+        : "red control exposes two authorities without scope locks and serializable isolation",
+      async () => {
+        const ready = AppliedDatabaseCellReceiptsSchema.parse(
+          sourceBindings.map((receipt) => ({
+            ...receipt,
+            binding: { ...receipt.binding, phase: "ready", cutover: undefined },
+          }))
+        );
+        await seed
+          .update(akashTxAllocations)
+          .set({
+            appliedDatabaseCellBinding: {
+              version: 1,
+              retentionPolicy: "retain",
+              bindings: ready,
+            },
+          })
+          .where(eq(akashTxAllocations.id, id(1)));
+        const other = AppliedDatabaseCellReceiptsSchema.parse(
+          sourceBindings.map((receipt) => ({
+            ...receipt,
+            binding: {
+              ...receipt.binding,
+              receiptId: id(4),
+              cogniKey: thirdRecord.cogniKey,
+              dseq: "10004",
+              failureDomainId: `akash:${thirdRecord.providerAccount}:10004`,
+              systemIdentifier: "9876543210",
+            },
+          }))
+        );
+        const [one] = await first.$client`select pg_backend_pid()::int as pid`,
+          [two] = await second.$client`select pg_backend_pid()::int as pid`;
+        if (!one?.pid || !two?.pid)
+          throw new Error("missing real backend identity");
+        expect(one.pid).not.toBe(two.pid);
+        await first.execute(
+          sql.raw(
+            `CREATE OR REPLACE FUNCTION pg_temp.gate_first_admission() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.wallet_scope='${WALLET}' AND NEW.id IN ('${id(1)}'::uuid,'${id(4)}'::uuid) THEN PERFORM pg_advisory_xact_lock(55405023); END IF; RETURN NEW; END $$`
+          )
+        );
+        await first.execute(
+          sql.raw(
+            "CREATE TRIGGER physical_first_admission_gate BEFORE UPDATE ON akash_tx_allocations FOR EACH ROW EXECUTE FUNCTION pg_temp.gate_first_admission()"
+          )
+        );
+        const unsafe = (
+          db: typeof first,
+          record: AkashTxAllocationRecord,
+          bindings: typeof sourceBindings
+        ) =>
+          db.transaction(async (tx) => {
+            // Real READ COMMITTED control: both predicates can be true before either
+            // distinct allocation update. The trigger exposes that vulnerable interval.
+            const rows = await tx
+              .select()
+              .from(akashTxAllocations)
+              .where(
+                and(
+                  eq(akashTxAllocations.walletScope, WALLET),
+                  eq(akashTxAllocations.nodeId, NODE),
+                  eq(akashTxAllocations.environment, "production"),
+                  eq(akashTxAllocations.state, "allocated")
+                )
+              );
+            if (
+              rows.some((row) =>
+                DatabaseCellAllocationMetadataSchema.parse(
+                  row.appliedDatabaseCellBinding ?? []
+                ).bindings.some(
+                  (receipt) => receipt.binding.phase === "applied"
+                )
+              )
+            )
+              throw new Error("authority already applied");
+            await tx
+              .update(akashTxAllocations)
+              .set({
+                appliedDatabaseCellBinding: {
+                  version: 1,
+                  retentionPolicy: "retain",
+                  bindings,
+                },
+              })
+              .where(eq(akashTxAllocations.id, record.receiptId));
+          });
+        let pending: Promise<PromiseSettledResult<void>[]> | undefined;
+        try {
+          // The transaction itself owns the gate. Returning or throwing ALWAYS
+          // releases it; no failed assertion can strand an advisory lock.
+          await seed.transaction(async (gate) => {
+            await gate.execute(sql`select pg_advisory_xact_lock(55405023)`);
+            pending = Promise.allSettled(
+              protectedPath
+                ? [
+                    store.save(sourceRecord, sourceBindings, ready),
+                    otherStore.save(thirdRecord, other, []),
+                  ]
+                : [
+                    unsafe(first, sourceRecord, sourceBindings),
+                    unsafe(second, thirdRecord, other),
+                  ]
+            );
+            let blocked = 0;
+            const deadline = Date.now() + 1200;
+            do {
+              const rows = await seed.execute(
+                sql`select count(*)::int AS count FROM pg_stat_activity WHERE pid IN (${one.pid},${two.pid}) AND cardinality(pg_blocking_pids(pid))>0`
+              );
+              blocked = Number(rows[0]?.count ?? 0);
+              if (blocked === 2) break;
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            } while (Date.now() < deadline);
+            expect(blocked).toBe(2);
+          });
+          if (!pending)
+            throw new Error("first admission writers never started");
+          const outcomes = await pending;
+          expect(
+            outcomes.filter((result) => result.status === "fulfilled")
+          ).toHaveLength(protectedPath ? 1 : 2);
+          if (protectedPath) {
+            const rejected = outcomes.find(
+              (result) => result.status === "rejected"
+            );
+            expect(rejected).toMatchObject({
+              status: "rejected",
+              reason: { code: "identity_conflict" },
+            });
+          }
+          const applied = (await state()).flatMap((row) =>
+            row.metadata.bindings.filter(
+              (receipt) => receipt.binding.phase === "applied"
+            )
+          );
+          expect(applied).toHaveLength(protectedPath ? 1 : 2);
+        } finally {
+          await pending;
+          await first.execute(
+            sql.raw(
+              "DROP TRIGGER physical_first_admission_gate ON akash_tx_allocations"
+            )
+          );
+        }
+      }
+    );
+  }
 });

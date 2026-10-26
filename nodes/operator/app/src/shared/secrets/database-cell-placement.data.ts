@@ -49,6 +49,13 @@ export const DatabaseCellPhysicalRecoveryProvenanceSchema = z
     sourceDseq: z.string().regex(/^[0-9]+$/),
     evidenceSha256: z.string().regex(/^[0-9a-f]{64}$/),
     copyManifestSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    originalAppliedSdlHashes: z
+      .object({
+        source: z.string().regex(/^[0-9a-f]{64}$/),
+        target: z.string().regex(/^[0-9a-f]{64}$/),
+        app: z.string().regex(/^[0-9a-f]{64}$/),
+      })
+      .strict(),
   })
   .strict();
 export const AppliedDatabaseCellReceiptSchema = z
