@@ -260,9 +260,20 @@ export const AkashTxCreateDatabaseCellInputSchema = z.strictObject({
   identity: AkashTxIdentitySchema,
   nodeSlug: ServiceNameSchema,
   budgetProfile: z.literal("dedicated-high-throughput-v1"),
+  recovery: z
+    .strictObject({
+      profileId: z.literal("pg15-cold-capacity-v1"),
+      sourceCogniKey: CogniKeySchema,
+      sourceExternalName: ExternalNameSchema,
+      sourceSystemIdentifier: z
+        .string()
+        .regex(/^[0-9]+$/)
+        .max(32),
+    })
+    .optional(),
 });
 export const AkashTxUpdateDatabaseCellInputSchema =
-  AkashTxCreateDatabaseCellInputSchema.extend({
+  AkashTxCreateDatabaseCellInputSchema.omit({ recovery: true }).extend({
     externalName: ExternalNameSchema,
   });
 export const AkashTxPrepareDatabaseCellDiagnosticInputSchema =

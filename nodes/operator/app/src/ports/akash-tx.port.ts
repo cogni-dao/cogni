@@ -235,7 +235,32 @@ export interface AkashTxCreateResult extends AkashTxResource {
  * The private, typed logical contract. Each method is ONE bounded attempt; the caller
  * (Crossplane) owns retry, backoff, and give-up policy.
  */
+/** Recovery references, never caller-supplied workload or money policy. */
+export interface AkashTxDatabaseCellRecoveryInput {
+  readonly cogniKey: string;
+  readonly environment: string;
+  readonly identity: AkashTxWorkloadIdentity;
+  readonly nodeSlug: string;
+  readonly recovery: {
+    readonly profileId: "pg15-cold-capacity-v1";
+    readonly sourceCogniKey: string;
+    readonly sourceExternalName: string;
+    readonly sourceSystemIdentifier: string;
+  };
+}
+
+/** Explicit operation-owned native policy; independent of legacy generic pricing. */
+export interface AkashTxAllocationPolicy {
+  readonly pricingDenom: "uact";
+  readonly pricingAmount: 100;
+  /** Requested legacy field only: Console ignores deposit and may auto-top-up. Not a spend limit. */
+  readonly initialEscrowUsd: 0.5;
+}
+
 export interface AkashTxActuatorPort {
+  createDatabaseCellRecovery?(
+    input: AkashTxDatabaseCellRecoveryInput
+  ): Promise<AkashTxCreateResult>;
   observe(input: {
     cogniKey: string;
     externalName?: string;
@@ -373,6 +398,7 @@ export interface AkashTxConsolePort {
   /** Create + screen + lease in one paid transaction. Returns when the lease exists. */
   allocateAndLease(input: {
     spec: ProvisionSpec;
+    allocationPolicy?: AkashTxAllocationPolicy;
     onAllocated?: (leaseId: string) => Promise<void>;
     /**
      * Providers to exclude from bid screening — the LEDGER-DERIVED tried set for this
@@ -414,7 +440,10 @@ export interface AkashTxConsolePort {
    * options it needs stay inside the adapter and never cross the seam. The actuator compares it
    * to the receipt's `lastAppliedSdlHash` to no-op a byte-identical re-PUT (bug.5238).
    */
-  sdlHash(spec: ProvisionSpec): string;
+  sdlHash(
+    spec: ProvisionSpec,
+    allocationPolicy?: AkashTxAllocationPolicy
+  ): string;
   /** In-place SDL replacement on a known handle. Returns once the provider accepted it. */
   updateAllocated(input: {
     resourceId: string;
@@ -500,7 +529,7 @@ export interface AkashTxAllocationRecord {
   readonly providerAccount?: string;
   /**
    * sha256 hex of the SDL bytes last PUT to the provider for this receipt (bug.5238). Undefined
-   * until the first in-place update; the create path never sets it. The update path no-ops a
+   * until a successful create/update records it. The update path no-ops a
    * re-PUT when the desired SDL hashes to this value.
    */
   readonly lastAppliedSdlHash?: string;

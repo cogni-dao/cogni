@@ -306,6 +306,20 @@ export function createAkashTxDispatcher(
         }
         case "/v1/akash/create-database-cell": {
           const input = AkashTxCreateDatabaseCellInputSchema.parse(payload);
+          if (input.recovery) {
+            if (!deps.actuator.createDatabaseCellRecovery)
+              throw new AkashTxError(
+                "ledger_unavailable",
+                "retained recovery allocation unavailable"
+              );
+            return {
+              status: 200,
+              body: await deps.actuator.createDatabaseCellRecovery({
+                ...input,
+                recovery: input.recovery,
+              }),
+            };
+          }
           if (!deps.databaseCellSpec) {
             throw new AkashTxError(
               "ledger_unavailable",

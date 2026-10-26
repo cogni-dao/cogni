@@ -1867,3 +1867,71 @@ describe("Console list pagination contract (task.5132)", () => {
     for (const l of requested) expect(l).toBeLessThanOrEqual(100);
   });
 });
+
+describe("recovery allocation money policy", () => {
+  const policy = {
+    pricingDenom: "uact" as const,
+    pricingAmount: 100 as const,
+    initialEscrowUsd: 0.5 as const,
+  };
+  it("submits native rate policy and proposed deposit field with matching SDL hash; ordinary defaults remain", async () => {
+    const h = harness({
+      providers: [providerEntry("p1")],
+      bids: (dseq) => [
+        {
+          bid: {
+            id: { dseq, gseq: 1, oseq: 1, provider: "p1" },
+            state: "open",
+            price: { denom: "uact", amount: "67.19422" },
+          },
+        },
+      ],
+    });
+    const a = makeAdapter(h.fetchImpl, { deployDepositUsd: 4 });
+    await a.allocateAndLease({ spec: SPEC, allocationPolicy: policy });
+    const submitted = h.createBodies[0]?.data;
+    if (!submitted) throw new Error("missing submitted deployment");
+    expect(submitted.deposit).toBe(0.5);
+    expect(submitted.sdl).toContain("denom: uact");
+    expect(submitted.sdl).toContain("amount: 100");
+    expect(a.sdlHash(SPEC, policy)).toBe(
+      createHash("sha256").update(submitted.sdl).digest("hex")
+    );
+    expect(a.sdlHash(SPEC)).toBe(
+      createHash("sha256")
+        .update(
+          buildAkashSdl(SPEC, {
+            pricingDenom: "uakt",
+            pricingAmount: 10000,
+            auditors: [AKASH_OVERCLOCK_AUDITOR],
+          })
+        )
+        .digest("hex")
+    );
+  });
+  it.each([
+    ["uact", "100.000000000000000001"],
+    ["uakt", "1"],
+    ["uact", "-1"],
+  ])("cannot lease an out-of-policy bid %s %s", async (denom, amount) => {
+    const h = harness({
+      providers: [providerEntry("p1")],
+      bids: (dseq) => [
+        {
+          bid: {
+            id: { dseq, provider: "p1" },
+            state: "open",
+            price: { denom, amount },
+          },
+        },
+      ],
+    });
+    await expect(
+      makeAdapter(h.fetchImpl).allocateAndLease({
+        spec: SPEC,
+        allocationPolicy: policy,
+      })
+    ).rejects.toBeInstanceOf(AkashComputeError);
+    expect(h.leased).toEqual([]);
+  });
+});
