@@ -102,11 +102,13 @@ COPY sources /sources
 COPY proof.sh /proof.sh
 ENTRYPOINT ["bash", "/proof.sh", "inside"]
 DOCKER
-  timeout 100 docker build --quiet --build-arg "BASE_IMAGE=$base_image" \
+  # Cold package installation and image transfer need separate phase budgets;
+  # the enclosing 270s watchdog (+25s kill grace) still bounds the whole run.
+  timeout 180 docker build --quiet --build-arg "BASE_IMAGE=$base_image" \
     --build-arg "YQ_VERSION=$yq_version" -t "$image" "$stage"
   docker image inspect "$image" --format 'fixture_image={{.Id}}'
   # shellcheck disable=SC2016 # $1 is the child shell's argument, not outer interpolation.
-  timeout 20 bash -o pipefail -c 'docker save "$1" | k3s ctr images import -' _ "$image" >/dev/null
+  timeout 60 bash -o pipefail -c 'docker save "$1" | k3s ctr images import -' _ "$image" >/dev/null
   # No host mounts, host namespaces, service-account token or network service.
   # SYS_ADMIN permits only this Pod's nested netns/mount operations; never
   # escalate to privileged or hostNetwork if the runtime refuses them.
