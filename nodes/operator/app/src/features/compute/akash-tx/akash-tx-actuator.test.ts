@@ -953,7 +953,7 @@ describe("qualified cell app releases", () => {
     ).resolves.toMatchObject({ externalName: "7001", replayed: true });
     expect(context.api.allocateCalls + other.api.allocateCalls).toBe(1);
   });
-  it("ships the actual recovery profile disabled and funding unqualified", () => {
+  it("uses the packaged cold profile through the retained recovery writer", async () => {
     const file = path.resolve(
       __dirname,
       "../../../../../../../infra/database-budget-profiles.yaml"
@@ -961,15 +961,22 @@ describe("qualified cell app releases", () => {
     const document = parseYaml(readFileSync(file, "utf8")) as {
       recovery_profiles: Record<string, unknown>;
     };
-    expect(
-      DatabaseCellRecoveryProfileSchema.parse(
-        document.recovery_profiles["pg15-cold-capacity-v1"]
-      )
-    ).toEqual({
-      ...recoveryProfile,
-      enabled: false,
-      funding_status: "unqualified",
+    const packaged = DatabaseCellRecoveryProfileSchema.parse(
+      document.recovery_profiles["pg15-cold-capacity-v1"]
+    );
+    expect(packaged).toEqual(recoveryProfile);
+    const context = withCell(packaged);
+    const input = recoveryRequest(context);
+    const retainedSource = structuredClone(context.ledger.rows.get("cell"));
+    await expect(
+      context.actuator.createDatabaseCellRecovery(input)
+    ).resolves.toMatchObject({ externalName: "7001" });
+    expect(context.api.allocateCalls).toBe(1);
+    expect(context.ledger.rows.get(input.cogniKey)).toMatchObject({
+      state: "allocated",
+      retentionPolicy: "retain",
     });
+    expect(context.ledger.rows.get("cell")).toEqual(retainedSource);
   });
   it("cold recipe and key are bounded and contain no database initialization or credentials", () => {
     const context = withCell(recoveryProfile);

@@ -63,14 +63,14 @@ dedicated-high-throughput-v1:
     temp_file_limit_mib: 128
     work_mem_mib: 16
 
-# bug.5540: allocation dependency only. Enablement needs approved spending and a
-# separately qualified complete-copy/durable activation plan; never bootstraps PG.
+# bug.5540/subtask.5025: enable cold allocation only; never bootstraps PG.
+# Delivery requires parent-approved spending and qualified native copy/recovery.
 # Console ignores the legacy deposit field and enables automatic top-ups by default.
 # The proposed deposit below is not an enforced escrow or lifetime spend ceiling.
 recovery_profiles:
   pg15-cold-capacity-v1:
-    enabled: false
-    funding_status: unqualified
+    enabled: true
+    funding_status: qualified
     cpu_units: 4
     memory_mib: 16384
     ephemeral_size_mib: 1024
