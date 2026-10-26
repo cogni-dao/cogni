@@ -299,6 +299,8 @@ describe("work-prioritizer mission-loop agent", () => {
       "4. task.4 goal:goal-ai-work-converges — why",
       "5. task.5 — why — next: triage",
       "Changes: none",
+      "Refine:",
+      "1. task.9 goal:goal-ai-work-converges — outside the block — next: ignored",
     ].join("\n");
     const ai = (calls: Array<{ id: string; name: string; args: object }>) =>
       new AIMessage({ content: "", tool_calls: calls });
@@ -338,6 +340,21 @@ describe("work-prioritizer mission-loop agent", () => {
           name: WORK_ITEM_TRANSITION_NAME,
           args: { action: "patch", id: "bug.2", rank: 0, expectedRevision: 1 },
         },
+        {
+          id: "p3",
+          name: WORK_ITEM_TRANSITION_NAME,
+          args: { action: "patch", id: "bug.2", rank: 0, expectedRevision: 2 },
+        },
+        {
+          id: "p4",
+          name: WORK_ITEM_TRANSITION_NAME,
+          args: { action: "patch", id: "task.7", rank: 0 },
+        },
+        {
+          id: "p5",
+          name: WORK_ITEM_TRANSITION_NAME,
+          args: { action: "patch", id: "story.1", rank: 9 },
+        },
       ]),
       tool("p1", WORK_ITEM_TRANSITION_NAME, {
         success: true,
@@ -350,6 +367,24 @@ describe("work-prioritizer mission-loop agent", () => {
         action: "patch",
         id: "bug.2",
         revision: 2,
+      }),
+      // p3 re-sends what p2 just wrote → identical; p4 unseen item → novel; p5 denied → not counted
+      tool("p3", WORK_ITEM_TRANSITION_NAME, {
+        success: true,
+        action: "patch",
+        id: "bug.2",
+        revision: 3,
+      }),
+      tool("p4", WORK_ITEM_TRANSITION_NAME, {
+        success: true,
+        action: "patch",
+        id: "task.7",
+        revision: 1,
+      }),
+      tool("p5", WORK_ITEM_TRANSITION_NAME, {
+        success: false,
+        code: "authz_denied",
+        message: "authz_denied",
       }),
       ai([
         {
@@ -372,7 +407,7 @@ describe("work-prioritizer mission-loop agent", () => {
     ];
     const s = cycleScores(messages);
     expect(s.knowledgeReads).toBe(1);
-    expect(s.identicalPatches).toBe(1);
+    expect(s.identicalPatches).toBe(2);
     expect(s.topIds).toEqual([
       "story.1",
       "bug.2",
@@ -387,6 +422,24 @@ describe("work-prioritizer mission-loop agent", () => {
       focus: 1,
       action: 0.8,
     });
+    // derivesFromHypothesisId outside the listed goals → goal_cited 0; a failed knowledge search is not a read.
+    const off = cycleScores([
+      ai([{ id: "g", name: GOAL_LIST_NAME, args: {} }]),
+      tool("g", GOAL_LIST_NAME, goals),
+      ai([{ id: "k", name: "core__knowledge_search", args: {} }]),
+      tool("k", "core__knowledge_search", { error: "boom" }),
+      ai([
+        {
+          id: "d",
+          name: EDO_DECIDE_NAME,
+          args: { content, derivesFromHypothesisId: "goal-made-up" },
+        },
+      ]),
+      tool("d", EDO_DECIDE_NAME, { entry: { id: "x" }, committed: true }),
+    ]);
+    expect(off.scores.goal_cited).toBe(0);
+    expect(off.scores.knowledge_read).toBe(0);
+    expect(off.scores.focus).toBe(1);
     expect(cycleScores([]).scores).toEqual({
       knowledge_read: 0,
       goal_cited: 0,

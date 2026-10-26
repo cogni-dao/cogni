@@ -138,6 +138,10 @@ export function cycleScores(messages: readonly BaseMessage[]) {
       ) {
         identicalPatches++;
       }
+      // A later patch in the same run compares against what this one wrote.
+      const next: Snapshot = { ...prior };
+      for (const f of sent) next[f] = args[f];
+      seen.set(String(v.id), next);
     } else if (m.name === EDO_DECIDE_NAME && call?.name === EDO_DECIDE_NAME) {
       const a = call.args;
       decision = {
@@ -146,9 +150,16 @@ export function cycleScores(messages: readonly BaseMessage[]) {
       };
     }
   }
-  const topLines = (decision?.content ?? "")
-    .split("\n")
-    .filter((l) => TOP_LINE.test(l) && ITEM_ID.test(l));
+  // Only the `Top 5:` block counts, up to the next section label.
+  const lines = (decision?.content ?? "").split("\n");
+  const start = lines.findIndex((l) => /^\s*Top 5:/i.test(l));
+  const block = start < 0 ? [] : lines.slice(start + 1);
+  const end = block.findIndex((l) =>
+    /^\s*(Changes|Proposals|Refine)\b/i.test(l)
+  );
+  const topLines = (end < 0 ? block : block.slice(0, end))
+    .filter((l) => TOP_LINE.test(l) && ITEM_ID.test(l))
+    .slice(0, 5);
   const topIds = topLines.map((l) => l.match(ITEM_ID)?.[0] ?? "");
   const citesGoal = (l: string) => goalIds.some((g) => g && l.includes(g));
   const cited = topLines.filter(citesGoal).length;
