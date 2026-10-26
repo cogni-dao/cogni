@@ -56,7 +56,9 @@ const runtime = vi.hoisted(() => ({
 }));
 runtime.serviceDb = {
   select: () => ({
-    from: () => ({ where: async () => runtime.purchases }),
+    from: () => ({
+      innerJoin: () => ({ where: async () => runtime.purchases }),
+    }),
   }),
 };
 vi.mock("@/adapters/server/db/drizzle.service-client", () => ({
@@ -279,10 +281,12 @@ describe("operator finance evidence", () => {
     const db = {
       select: (shape: unknown) => ({
         from: (table: unknown) => ({
-          where: async (predicate: unknown) => {
-            calls.push({ shape, table, predicate });
-            return [{ amountUsdCents: 2000, createdAt: new Date(at) }];
-          },
+          innerJoin: (joined: unknown, on: unknown) => ({
+            where: async (predicate: unknown) => {
+              calls.push({ shape, table, joined, on, predicate });
+              return [{ amountUsdCents: 2000, createdAt: new Date(at) }];
+            },
+          }),
         }),
       }),
     };
@@ -355,12 +359,6 @@ describe("operator finance evidence", () => {
                     price: { denom: "uact", amount: "113.15" },
                   },
                 },
-                {
-                  lease: {
-                    id: { dseq: "9" },
-                    price: { denom: "uakt", amount: "5" },
-                  },
-                },
               ],
             };
       return { ok: true, status: 200, json: async () => body };
@@ -396,10 +394,12 @@ describe("operator finance evidence", () => {
     expect(row.burnPerDay).toBeCloseTo(burn, 9);
     expect(row.runwayDays).toBeCloseTo(7.89 / burn, 9);
     expect(row.source).toBe(
-      "Akash chain · Console grant + escrow · 3 leases at 14,683 blocks/day (measured)"
+      "Akash chain · Console grant + escrow · 2 leases at 14,683 blocks/day (measured)"
     );
+    const pooled = (7.89 / burn).toFixed(1);
+    const thinnest = (600000 / (113.15 * bpd)).toFixed(1);
     expect(row.detail).toBe(
-      `thinnest escrow ${(600000 / (113.15 * bpd)).toFixed(1)} d`
+      `Pooled ${pooled}d · Thinnest ${thinnest}d (dseq 2)`
     );
     const fallback = await akashCreditReader({
       owner: "x",
@@ -411,6 +411,324 @@ describe("operator finance evidence", () => {
       (213.15 * (86_400 / 5.884)) / 1e6,
       9
     );
+  });
+  it("grades the thinnest deployment when Console credit is zero: $1 escrow at $1/day is RED 1d, not pooled GREEN", async () => {
+    const signal = new AbortController().signal;
+    const bpd = 1e6; // 1 uact/block ⇒ 1 USD/day, so prices read as $/day
+    const fetch = async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        url.includes("/authz/")
+          ? {
+              grants: [
+                {
+                  authorization: {
+                    "@type": "/akash.deployment.v1beta3.DepositAuthorization",
+                    spend_limits: [{ denom: "uact", amount: "0" }],
+                  },
+                },
+              ],
+            }
+          : url.includes("/deployments/")
+            ? {
+                deployments: [
+                  {
+                    deployment: { id: { dseq: "A" } },
+                    escrow_account: {
+                      state: { funds: [{ denom: "uact", amount: "1000000" }] },
+                    },
+                  },
+                  {
+                    deployment: { id: { dseq: "B" } },
+                    escrow_account: {
+                      state: { funds: [{ denom: "uact", amount: "99000000" }] },
+                    },
+                  },
+                ],
+              }
+            : {
+                leases: [
+                  {
+                    lease: {
+                      id: { dseq: "A" },
+                      price: { denom: "uact", amount: "1" },
+                    },
+                  },
+                  {
+                    lease: {
+                      id: { dseq: "B" },
+                      price: { denom: "uact", amount: "1" },
+                    },
+                  },
+                ],
+              },
+    });
+    const row = await akashCreditReader({
+      owner: "x",
+      fetch,
+      blocksPerDay: bpd,
+    }).read(signal);
+    expect(row.balance).toBeCloseTo(100, 9);
+    expect(row.burnPerDay).toBeCloseTo(2, 9);
+    expect(row.runwayDays).toBeCloseTo(1, 9);
+    expect(row.grade).toBe("RED");
+    expect(row.detail).toBe("Pooled 50.0d · Thinnest 1.0d (dseq A)");
+  });
+  it("sums several leases on one deployment and lets shared Console credit grade on the pooled figure", async () => {
+    const signal = new AbortController().signal;
+    const bpd = 1e6;
+    const make = (credit: string) => async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        url.includes("/authz/")
+          ? {
+              grants: [
+                {
+                  authorization: {
+                    "@type": "/akash.deployment.v1beta3.DepositAuthorization",
+                    spend_limits: [{ denom: "uact", amount: credit }],
+                  },
+                },
+              ],
+            }
+          : url.includes("/deployments/")
+            ? {
+                deployments: [
+                  {
+                    deployment: { id: { dseq: "A" } },
+                    escrow_account: {
+                      state: { funds: [{ denom: "uact", amount: "4000000" }] },
+                    },
+                  },
+                ],
+              }
+            : {
+                leases: [
+                  {
+                    lease: {
+                      id: { dseq: "A" },
+                      price: { denom: "uact", amount: "1" },
+                    },
+                  },
+                  {
+                    lease: {
+                      id: { dseq: "A" },
+                      price: { denom: "uact", amount: "3" },
+                    },
+                  },
+                ],
+              },
+    });
+    const zero = await akashCreditReader({
+      owner: "x",
+      fetch: make("0"),
+      blocksPerDay: bpd,
+    }).read(signal);
+    expect(zero.burnPerDay).toBeCloseTo(4, 9);
+    expect(zero.runwayDays).toBeCloseTo(1, 9);
+    expect(zero.detail).toBe("Pooled 1.0d · Thinnest 1.0d (dseq A)");
+    const funded = await akashCreditReader({
+      owner: "x",
+      fetch: make("96000000"),
+      blocksPerDay: bpd,
+    }).read(signal);
+    expect(funded.balance).toBeCloseTo(100, 9);
+    expect(funded.runwayDays).toBeCloseTo(25, 9);
+    expect(funded.grade).toBe("GREEN");
+    expect(funded.detail).toBe("Pooled 25.0d · Thinnest 1.0d (dseq A)");
+  });
+  it("never turns a missing or malformed bill into zero spending", async () => {
+    const signal = new AbortController().signal;
+    const grant = {
+      grants: [
+        {
+          authorization: {
+            "@type": "/akash.deployment.v1beta3.DepositAuthorization",
+            spend_limits: [{ denom: "uact", amount: "5000000" }],
+          },
+        },
+      ],
+    };
+    const deployments = {
+      deployments: [
+        {
+          deployment: { id: { dseq: "A" } },
+          escrow_account: {
+            state: { funds: [{ denom: "uact", amount: "2000000" }] },
+          },
+        },
+      ],
+    };
+    const withLeases = (leases: unknown) => async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        url.includes("/authz/")
+          ? grant
+          : url.includes("/deployments/")
+            ? deployments
+            : leases,
+    });
+    const cases: [unknown, string][] = [
+      [{}, "leases list unavailable"],
+      [
+        {
+          leases: [
+            {
+              lease: {
+                id: { dseq: "A" },
+                price: { denom: "uact", amount: "nope" },
+              },
+            },
+          ],
+        },
+        "lease price invalid",
+      ],
+      [
+        {
+          leases: [
+            {
+              lease: {
+                id: { dseq: "A" },
+                price: { denom: "uakt", amount: "5" },
+              },
+            },
+          ],
+        },
+        "unsupported lease denom uakt",
+      ],
+      [
+        {
+          leases: [
+            {
+              lease: {
+                id: { dseq: "A" },
+                price: { denom: "wei", amount: "5" },
+              },
+            },
+          ],
+        },
+        "lease price denom unknown",
+      ],
+      [
+        {
+          leases: [
+            {
+              lease: {
+                id: { dseq: "A" },
+                price: { denom: "uact", amount: "1" },
+              },
+            },
+          ],
+          pagination: { next_key: "abc" },
+        },
+        "coverage incomplete · more pages than read",
+      ],
+    ];
+    for (const [leases, detail] of cases) {
+      const row = await akashCreditReader({
+        owner: "x",
+        fetch: withLeases(leases),
+        blocksPerDay: null,
+      }).read(signal);
+      expect(row).toMatchObject({
+        grade: "UNKNOWN",
+        reasonCode: "unreadable",
+        detail,
+        balance: null,
+        burnPerDay: null,
+      });
+    }
+    const missingDeployments = await akashCreditReader({
+      owner: "x",
+      blocksPerDay: null,
+      fetch: async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () =>
+          url.includes("/authz/")
+            ? grant
+            : url.includes("/deployments/")
+              ? {}
+              : { leases: [] },
+      }),
+    }).read(signal);
+    expect(missingDeployments).toMatchObject({
+      grade: "UNKNOWN",
+      detail: "deployments list unavailable",
+    });
+    const verifiedEmpty = await akashCreditReader({
+      owner: "x",
+      fetch: withLeases({ leases: [] }),
+      blocksPerDay: null,
+    }).read(signal);
+    expect(verifiedEmpty).toMatchObject({
+      grade: "GREEN",
+      burnPerDay: 0,
+      detail: "no priced lease",
+    });
+  });
+  it("follows pagination keys across pages and stops after the cap", async () => {
+    const signal = new AbortController().signal;
+    const grant = {
+      grants: [
+        {
+          authorization: {
+            "@type": "/akash.deployment.v1beta3.DepositAuthorization",
+            spend_limits: [{ denom: "uact", amount: "0" }],
+          },
+        },
+      ],
+    };
+    const seen: string[] = [];
+    const fetch = async (url: string) => {
+      seen.push(url);
+      const page = Number(
+        new URL(url).searchParams.get("pagination.key") ?? "0"
+      );
+      return {
+        ok: true,
+        status: 200,
+        json: async () =>
+          url.includes("/authz/")
+            ? grant
+            : url.includes("/deployments/")
+              ? {
+                  deployments: [
+                    {
+                      deployment: { id: { dseq: "A" } },
+                      escrow_account: {
+                        state: {
+                          funds: [{ denom: "uact", amount: "3000000" }],
+                        },
+                      },
+                    },
+                  ],
+                  pagination: { next_key: "" },
+                }
+              : {
+                  leases: [
+                    {
+                      lease: {
+                        id: { dseq: "A" },
+                        price: { denom: "uact", amount: "1" },
+                      },
+                    },
+                  ],
+                  pagination: { next_key: page < 2 ? String(page + 1) : "" },
+                },
+      };
+    };
+    const row = await akashCreditReader({
+      owner: "x",
+      fetch,
+      blocksPerDay: 1e6,
+    }).read(signal);
+    expect(seen.filter((u) => u.includes("/leases/"))).toHaveLength(3);
+    expect(row.burnPerDay).toBeCloseTo(3, 9);
+    expect(row.runwayDays).toBeCloseTo(1, 9);
   });
   it("grades an exhausted uakt-only grant as escrow-only balance and never throws from the chain read", async () => {
     const signal = new AbortController().signal;
@@ -550,7 +868,11 @@ describe("operator finance evidence", () => {
         ],
       };
     };
-    const row = await cherryFinanceReader({ token: "tok", fetch }).read(signal);
+    const row = await cherryFinanceReader({
+      token: "tok",
+      teamId: "183728",
+      fetch,
+    }).read(signal);
     expect(calls[0]).toMatchObject({
       url: "https://api.cherryservers.com/v1/teams",
       headers: { Authorization: "Bearer tok", Accept: "application/json" },
@@ -567,7 +889,11 @@ describe("operator finance evidence", () => {
     });
     expect(row.burnPerDay).toBeCloseTo(0.3432, 9);
     expect(
-      await cherryFinanceReader({ token: undefined, fetch }).read(signal)
+      await cherryFinanceReader({
+        token: undefined,
+        teamId: "183728",
+        fetch,
+      }).read(signal)
     ).toMatchObject({
       grade: "UNKNOWN",
       reasonCode: "unconfigured",
@@ -575,6 +901,7 @@ describe("operator finance evidence", () => {
     });
     const thrown = await cherryFinanceReader({
       token: "tok",
+      teamId: "183728",
       fetch: async () => {
         throw new Error("sensitive-token-value");
       },
@@ -587,6 +914,7 @@ describe("operator finance evidence", () => {
     expect(
       await cherryFinanceReader({
         token: "tok",
+        teamId: "1",
         fetch: async () => ({
           ok: true,
           status: 200,
@@ -599,6 +927,61 @@ describe("operator finance evidence", () => {
       balance: 3,
       grade: "UNKNOWN",
       reasonCode: "burn_unmeasured",
+    });
+  });
+  it("binds Cherry to the configured team: reordering teams does not change the result, missing config is UNKNOWN", async () => {
+    const signal = new AbortController().signal;
+    const green = {
+      id: 100,
+      credit: {
+        account: { remaining: 100, currency: "EUR" },
+        resources: { pricing: { price: 1 / 24 }, remaining: { time: 2400 } },
+      },
+    };
+    const red = {
+      id: 200,
+      credit: {
+        account: { remaining: 1, currency: "EUR" },
+        resources: { pricing: { price: 1 / 24 }, remaining: { time: 24 } },
+      },
+    };
+    const teams = (order: unknown[]) => async () => ({
+      ok: true,
+      status: 200,
+      json: async () => order,
+    });
+    for (const order of [
+      [green, red],
+      [red, green],
+    ]) {
+      const row = await cherryFinanceReader({
+        token: "tok",
+        teamId: "200",
+        fetch: teams(order),
+      }).read(signal);
+      expect(row).toMatchObject({ balance: 1, runwayDays: 1, grade: "RED" });
+    }
+    expect(
+      await cherryFinanceReader({
+        token: "tok",
+        teamId: undefined,
+        fetch: teams([green, red]),
+      }).read(signal)
+    ).toMatchObject({
+      grade: "UNKNOWN",
+      reasonCode: "unconfigured",
+      detail: "Cherry team not configured",
+    });
+    expect(
+      await cherryFinanceReader({
+        token: "tok",
+        teamId: "999",
+        fetch: teams([green, red]),
+      }).read(signal)
+    ).toMatchObject({
+      grade: "UNKNOWN",
+      reasonCode: "unconfigured",
+      detail: "configured team not found",
     });
   });
   it("reads Grafana month-to-date overage and averages it over UTC days elapsed", async () => {
@@ -896,25 +1279,30 @@ describe("operator finance evidence", () => {
       label: "OpenRouter credit",
       grade: "UNKNOWN",
       reasonCode: "unconfigured",
+      detail: "needs a management key · task.5361",
+      rail: { kind: "steward-manual", status: "supported" },
+      payAction: { kind: "steward-checkout", vendor: "openrouter" },
     });
+    expect(
+      fetch.mock.calls.some((call) => String(call[0]).includes("openrouter.ai"))
+    ).toBe(false);
     expect(runtime.report).toHaveBeenCalledTimes(1);
     expect(snapshot.rows.map((row) => row.grade)).not.toContain("GREEN");
     expect(
-      fetch.mock.calls.filter((call) => String(call[0]).includes("rdap.org"))
+      fetch.mock.calls.filter(
+        (call) => new URL(String(call[0])).hostname === "rdap.org"
+      )
     ).toHaveLength(1);
   });
-  it("reads OpenRouter credit only when the key is present, scopes the Akash read to the configured account, and leaves wallets unreadable without an RPC", async () => {
+  it("never calls OpenRouter with the inference key, scopes the Akash read to the configured account, and leaves wallets unreadable without an RPC", async () => {
     runtime.env = {
       OPENROUTER_API_KEY: "sk-test",
       AKASH_ACTUATOR_ACCOUNT_ID: "akash1custom",
     };
-    const fetch = vi.fn(async (url: string | URL | Request) => ({
+    const fetch = vi.fn(async (_url: string | URL | Request) => ({
       ok: true,
       status: 200,
-      json: async () =>
-        String(url).includes("openrouter")
-          ? { data: { total_credits: 100, total_usage: 96.9 } }
-          : { result: "0x0" },
+      json: async () => ({ result: "0x0" }),
     }));
     vi.stubGlobal("fetch", fetch);
     const { readers } = await createFinanceReaders();
@@ -930,19 +1318,38 @@ describe("operator finance evidence", () => {
         String(call[0]).includes("/grants/grantee/akash1custom")
       )
     ).toBe(true);
-    expect(snapshot.rows[3]).toMatchObject({
-      label: "OpenRouter credit",
-      currency: "USD",
-      grade: "UNKNOWN",
-      reasonCode: "burn_unmeasured",
+    expect(
+      fetch.mock.calls.some((call) => String(call[0]).includes("openrouter.ai"))
+    ).toBe(false);
+  });
+  it("bounds the Akash cadence probe: a hung LCD falls back to 5.884 s/block within the budget and keeps every row", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("/blocks/"))
+        return new Promise<never>((_, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new Error("AbortError"))
+          );
+        });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ result: "0x989680" }),
+      });
     });
-    expect(snapshot.rows[3]?.balance).toBeCloseTo(3.1, 6);
-    const openRouterCalls = fetch.mock.calls.filter((call) =>
-      String(call[0]).includes("openrouter")
-    );
-    expect(openRouterCalls).toHaveLength(1);
-    expect(openRouterCalls[0]?.[1]).toMatchObject({
-      headers: { Authorization: "Bearer sk-test" },
+    vi.stubGlobal("fetch", fetch);
+    const pending = createFinanceReaders();
+    let settled = false;
+    pending.then(() => {
+      settled = true;
     });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(2);
+    const { readers } = await pending;
+    expect(readers.map((r) => r.plane)).toContain("akash:credit");
+    expect(readers.map((r) => r.plane)).toContain("base:dao-treasury");
+    vi.useRealTimers();
   });
 });

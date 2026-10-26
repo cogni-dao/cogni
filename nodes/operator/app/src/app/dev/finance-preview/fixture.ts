@@ -264,6 +264,23 @@ const nodeServices = placeholder(
   }
 );
 
+/** OpenRouter /credits needs a management key; the inference key never reads it (task.5361). */
+const openRouterUnknown = placeholder(
+  "openrouter:account",
+  "OpenRouter credit",
+  "prepaid",
+  "needs a management key · task.5361",
+  {
+    payer: undefined,
+    rail: STEWARD,
+    payAction: {
+      kind: "steward-checkout",
+      vendor: "openrouter",
+      checkoutUrl: "https://openrouter.ai/settings/credits",
+    },
+  }
+);
+
 function liveRows(creditPurchases: MoneyPlaneRow): MoneyPlaneRow[] {
   return [
     creditPurchases,
@@ -280,28 +297,7 @@ function liveRows(creditPurchases: MoneyPlaneRow): MoneyPlaneRow[] {
       note: "Human-custodied; pays both vendors in USDC",
       rail: NO_RAIL,
     }),
-    {
-      plane: "openrouter:account",
-      label: "OpenRouter credit",
-      kind: "prepaid",
-      balance: 3.1,
-      currency: "USD",
-      burnPerDay: null,
-      runwayDays: null,
-      grade: "UNKNOWN",
-      reasonCode: "burn_unmeasured",
-      observedAt: now,
-      source: "OpenRouter credits API",
-      sourceObservedAt: now,
-      freshness: "current",
-      usageTotal: 96.9,
-      rail: STEWARD,
-      payAction: {
-        kind: "steward-checkout",
-        vendor: "openrouter",
-        checkoutUrl: "https://openrouter.ai/settings/credits",
-      },
-    },
+    openRouterUnknown,
     {
       plane: "cherry:team",
       label: "Cherry credit",
@@ -408,6 +404,8 @@ function model(
       { rows: projected },
       { treasuryPlane: "base:dao-treasury" }
     ),
+    stewardWalletUrl:
+      "https://basescan.org/address/0x3333333333333333333333333333333333333333",
   };
 }
 
@@ -423,6 +421,8 @@ export const sparseFinancePreview: FinanceReportModel = {
   worst: "UNKNOWN",
   treasuryPlane: "base:dao-treasury",
   summary: summarize({ rows: [] }),
+  stewardWalletUrl:
+    "https://basescan.org/address/0x3333333333333333333333333333333333333333",
   rows: [
     placeholder(
       "income:credit-purchases",
@@ -476,21 +476,7 @@ export const sparseFinancePreview: FinanceReportModel = {
         extra
       )
     ),
-    placeholder(
-      "openrouter:account",
-      "OpenRouter credit",
-      "prepaid",
-      "no OpenRouter key in this environment",
-      {
-        payer: undefined,
-        rail: STEWARD,
-        payAction: {
-          kind: "steward-checkout",
-          vendor: "openrouter",
-          checkoutUrl: "https://openrouter.ai/settings/credits",
-        },
-      }
-    ),
+    openRouterUnknown,
     placeholder(
       "cherry:team",
       "Cherry credit",

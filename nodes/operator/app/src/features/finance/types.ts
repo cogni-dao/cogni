@@ -16,4 +16,6 @@ export interface FinanceReportModel extends MoneyPlaneSnapshot {
   /** Plane id of the configured DAO treasury wallet, or null when none is declared. */
   treasuryPlane: string | null;
   summary: ReportSummary;
+  /** Explorer page of the steward wallet, for the "result unknown" check after a withdrawal. */
+  stewardWalletUrl: string | null;
 }

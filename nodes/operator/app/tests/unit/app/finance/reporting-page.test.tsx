@@ -25,7 +25,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const access = vi.hoisted(() => ({
   allowed: false,
-  readers: vi.fn(async () => ({ readers: [], treasuryPlane: null })),
+  readers: vi.fn(async () => ({
+    readers: [] as unknown[],
+    treasuryPlane: null as string | null,
+    stewardWalletUrl: null as string | null,
+  })),
   log: vi.fn(),
   refresh: vi.fn(),
 }));
@@ -168,6 +172,7 @@ describe("Financials reporting", () => {
     await expect(getFinanceReport()).resolves.toMatchObject({
       rows: [],
       treasuryPlane: null,
+      stewardWalletUrl: null,
       summary: { treasuryUsd: null, burnPerDay: null, incomePerDay: null },
     });
     expect(access.log).toHaveBeenCalledWith(
@@ -196,14 +201,16 @@ describe("Financials reporting", () => {
     const stat = (label: string) =>
       document.querySelector(`[data-finance-stat='${label}']`)?.textContent;
     expect(stat("Treasury")).toBe("$74.52");
-    expect(stat("Income")).toBe("$0.00/day");
+    expect(stat("Cash received")).toBe("$0.00/day");
     expect(stat("Burn")).toBe("$13.23/day");
-    expect(stat("Runway")).toBe("2d");
-    expect(
-      document.querySelector("[data-finance-stat='Runway']")?.className
-    ).toContain("text-destructive");
+    // DAO runway = treasury ÷ net burn (74.52 ÷ 13.23 ≈ 5.6d); the Akash deadline is a separate line.
+    expect(stat("Runway")).toBe("5d");
+    expect(screen.getByText("treasury ÷ net burn")).toBeVisible();
+    const deadline = document.querySelector("[data-finance-deadline]");
+    expect(deadline?.textContent).toBe("Next deadline 2d · Akash");
+    expect(deadline?.className).toContain("text-destructive");
     expect(screen.getByText("USDC on Base")).toBeVisible();
-    expect(screen.getByText("Akash", { selector: "p" })).toBeVisible();
+    expect(screen.getByText("credit purchases · 30d")).toBeVisible();
     expect(screen.getByText("EUR→USD 1.1188 · ECB 2026-10-26")).toBeVisible();
     expect(cells(1)).toContain("$13.87");
     expect(cells(2)).toContain("$0.38/day");
@@ -223,8 +230,8 @@ describe("Financials reporting", () => {
       "Cherry credit",
       "Domain cognidao.org",
       "Grafana overage",
-      "OpenRouter credit",
       "Alchemy RPC",
+      "OpenRouter credit",
       "Other SaaS",
       "System tenant",
       "DAO treasury",
@@ -232,8 +239,12 @@ describe("Financials reporting", () => {
       "Steward wallet",
     ]);
     expect(
-      document.querySelector("[data-finance-stat='Income']")?.textContent
+      document.querySelector("[data-finance-stat='Cash received']")?.textContent
     ).toBe("$1.50/day");
+    // Income lengthens DAO runway: 74.52 ÷ (13.23 − 1.50) ≈ 6.4d.
+    expect(
+      document.querySelector("[data-finance-stat='Runway']")?.textContent
+    ).toBe("6d");
     const red = within(rowOf("akash:credit")).getByText("2d");
     expect(red.className).toContain("text-destructive");
     expect(within(rowOf("cherry:team")).getByText("36d").className).toContain(
@@ -443,7 +454,11 @@ describe("Financials reporting", () => {
   });
   it("renders only the package report on the page; finance.server is the single read path", async () => {
     access.allowed = true;
-    access.readers.mockResolvedValueOnce({ readers: [], treasuryPlane: null });
+    access.readers.mockResolvedValueOnce({
+      readers: [],
+      treasuryPlane: null,
+      stewardWalletUrl: null,
+    });
     render(await FinancePage());
     expect(
       screen.getByRole("heading", { level: 1, name: "Financials" })

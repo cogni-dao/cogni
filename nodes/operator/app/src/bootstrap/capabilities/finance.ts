@@ -17,7 +17,6 @@ import {
   creditPurchaseIncomeReader,
   type FetchLike,
   type MoneyPlaneRow,
-  openRouterReader,
   type PayAction,
   type PlaneReader,
   type Rail,
@@ -102,9 +101,14 @@ const OTHER_SAAS_VENDORS = [
   "Privy",
 ] as const;
 
+/** Budget for the Akash cadence probe that runs before the snapshot; a hung LCD falls back to 5.884 s/block. */
+export const CADENCE_TIMEOUT_MS = 3000;
+
 export interface FinanceReaders {
   treasuryPlane: string | null;
   readers: PlaneReader[];
+  /** Explorer page of the steward wallet, for the "result unknown" check after a withdrawal. */
+  stewardWalletUrl: string | null;
 }
 
 export async function createFinanceReaders(): Promise<FinanceReaders> {
@@ -174,28 +178,33 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
     };
   });
 
-  const openRouterBase = openRouterReader({
-    apiKey: env.OPENROUTER_API_KEY,
-    fetch: safeFetch,
-    label: "OpenRouter credit",
-    payAction: OPENROUTER_CHECKOUT,
-  });
-  const openRouter: PlaneReader = {
-    ...openRouterBase,
-    read: async (signal) => ({
-      ...(await openRouterBase.read(signal)),
-      rail: STEWARD_RAIL,
-    }),
-  };
+  // OpenRouter /credits needs a management key; the inference key must not carry that authority.
+  // The balance stays unknown until task.5361 lands a scoped read; Top up stays reachable.
+  const openRouter = unavailableFinanceReader(
+    "openrouter:account",
+    "OpenRouter credit",
+    "prepaid",
+    "needs a management key · task.5361",
+    "unconfigured",
+    undefined,
+    OPENROUTER_CHECKOUT,
+    undefined,
+    { rail: STEWARD_RAIL }
+  );
   const cherry = cherryFinanceReader({
     token: env.CHERRY_AUTH_TOKEN,
+    teamId: env.CHERRY_TEAM_ID,
     fetch: safeFetch,
     payAction: CHERRY_CHECKOUT,
   });
   const spend = container?.akashSpendReader;
   const [reports, blocksPerDay] = await Promise.all([
     readAkashReports(spend ? () => spend.reportByNode() : undefined),
-    readAkashBlocksPerDay(safeFetch),
+    readAkashBlocksPerDay(
+      safeFetch,
+      undefined,
+      AbortSignal.timeout(CADENCE_TIMEOUT_MS)
+    ),
   ]);
   const akashCredit = akashCreditReader({
     owner: env.AKASH_ACTUATOR_ACCOUNT_ID?.trim() || AKASH_PRODUCTION_OWNER,
@@ -308,8 +317,12 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
     }
   );
 
+  const stewardAddress = getStewardWalletConfig()?.address;
   return {
     treasuryPlane: treasury ? `base:${treasury.name}` : null,
+    stewardWalletUrl: stewardAddress
+      ? `https://basescan.org/address/${stewardAddress}`
+      : null,
     readers: [
       purchases,
       nodeServices,

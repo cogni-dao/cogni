@@ -3,11 +3,16 @@
 
 /**
  * Module: `@adapters/server/finance/akash-credit.reader`
- * Purpose: Akash credit · fleet — Console credit (DepositAuthorization spend_limit) + deployment escrow ÷ lease burn → runway.
+ * Purpose: Akash credit · fleet — Console credit (DepositAuthorization spend_limit) + deployment escrow, lease burn, and the
+ *   earliest constrained exhaustion: escrow is locked per deployment, so the row grades the thinnest deployment when no
+ *   shared Console credit can refill it.
  * Scope: TypeScript port of `akashPlane()` and `blocksPerDay()` in scripts/money-plane-snapshot.mjs (PR #2874), same LCD
- *   endpoints, field paths and grading, behind the injected safe fetch. Keyless public reads only.
- * Invariants: READERS_NEVER_THROW — any failure is UNKNOWN "Akash chain read failed". uact is USD credit micro, never FX.
- *   RUNWAY_IS_GRANT_PLUS_ESCROW. Burn uses the measured chain cadence when supplied, else 5.884 s/block.
+ *   endpoints and field paths, behind the injected safe fetch. Keyless public reads only. Lists are paginated (≤ 5 pages).
+ * Invariants: READERS_NEVER_THROW — any failure is UNKNOWN. SHAPE_IS_VERIFIED — a missing list, an unparseable price, an
+ *   unsupported denomination or an unfinished pagination is UNKNOWN with its reason; only a verified empty active-lease
+ *   list means no burn. uact is USD credit micro, never FX. RUNWAY_IS_GRANT_PLUS_ESCROW for the pooled figure;
+ *   the grade follows min(pooled, thinnest deployment) when Console credit is zero. Burn uses the measured chain cadence
+ *   when supplied, else 5.884 s/block.
  * Side-effects: IO (HTTPS GET via injected fetch)
  * Links: scripts/money-plane-snapshot.mjs, https://cognidao.org/knowledge/money-plane-registry, https://cognidao.org/work/items/task.5347
  * @public
@@ -26,6 +31,8 @@ export const AKASH_SECONDS_PER_BLOCK = 5.884;
 export const FALLBACK_BLOCKS_PER_DAY = 86_400 / AKASH_SECONDS_PER_BLOCK;
 export const AKASH_LCD_URL = "https://api.akashnet.net";
 export const AKASH_CREDIT_PLANE = "akash:credit";
+/** Pages followed per list before the row is marked "coverage incomplete". */
+export const AKASH_MAX_PAGES = 5;
 /**
  * The Console account that pays every node's hosting in production; AKASH_ACTUATOR_ACCOUNT_ID
  * overrides it when set. Registry: https://cognidao.org/knowledge/money-plane-registry
@@ -33,6 +40,7 @@ export const AKASH_CREDIT_PLANE = "akash:credit";
 export const AKASH_PRODUCTION_OWNER =
   "akash10auj6u6wr7aqjawuxurgue9w7wfnca50t8cr4l";
 const UACT_PER_USD = 1e6;
+const KNOWN_DENOMS = new Set(["uact", "uakt"]);
 
 interface Coin {
   denom?: unknown;
@@ -88,6 +96,35 @@ export async function readAkashBlocksPerDay(
   }
 }
 
+/** A shape problem the row must report instead of hiding behind a zero. */
+class ShapeError extends Error {}
+
+/** Follow `pagination.next_key` up to AKASH_MAX_PAGES; the list must be present and an array on every page. */
+async function readList<T>(
+  fetch: FetchLike,
+  url: string,
+  key: "leases" | "deployments",
+  signal?: AbortSignal
+): Promise<{ items: T[]; complete: boolean }> {
+  const items: T[] = [];
+  let nextKey: string | null = null;
+  for (let page = 0; page < AKASH_MAX_PAGES; page++) {
+    const body = (await getJson(
+      fetch,
+      nextKey ? `${url}&pagination.key=${encodeURIComponent(nextKey)}` : url,
+      signal
+    )) as Record<string, unknown> | null;
+    const list = body?.[key];
+    if (!Array.isArray(list)) throw new ShapeError(`${key} list unavailable`);
+    items.push(...(list as T[]));
+    const next = (body?.pagination as { next_key?: unknown } | undefined)
+      ?.next_key;
+    nextKey = typeof next === "string" && next.length > 0 ? next : null;
+    if (nextKey === null) return { items, complete: true };
+  }
+  return { items, complete: false };
+}
+
 export interface AkashCreditReaderOptions {
   owner: string;
   fetch: FetchLike;
@@ -112,6 +149,24 @@ interface Lease {
     id?: { dseq?: unknown };
     price?: { denom?: unknown; amount?: unknown };
   };
+}
+
+/** Exact per-block uact price of one lease; throws a ShapeError for an unparseable or unsupported price. */
+function leasePriceUact(lease: Lease): number {
+  const price = lease.lease?.price;
+  const amount = Number(price?.amount);
+  const denom = price?.denom;
+  if (
+    typeof price?.amount !== "string" ||
+    !Number.isFinite(amount) ||
+    amount < 0
+  )
+    throw new ShapeError("lease price invalid");
+  if (typeof denom !== "string" || !KNOWN_DENOMS.has(denom))
+    throw new ShapeError("lease price denom unknown");
+  if (denom !== "uact")
+    throw new ShapeError(`unsupported lease denom ${denom}`);
+  return amount;
 }
 
 export function akashCreditReader(
@@ -151,66 +206,63 @@ export function akashCreditReader(
       try {
         const owner = encodeURIComponent(options.owner);
         const q = `filters.owner=${owner}&filters.state=active&pagination.limit=500`;
-        const [grants, deps, leases] = (await Promise.all([
-          getJson(
-            options.fetch,
-            `${lcd}/cosmos/authz/v1beta1/grants/grantee/${owner}`,
-            signal
-          ),
-          getJson(
-            options.fetch,
-            `${lcd}/akash/deployment/v1beta4/deployments/list?${q}`,
-            signal
-          ),
-          getJson(
-            options.fetch,
-            `${lcd}/akash/market/v1beta5/leases/list?${q}`,
-            signal
-          ),
-        ])) as [
-          { grants?: Grant[] } | null,
-          { deployments?: Deployment[] } | null,
-          { leases?: Lease[] } | null,
-        ];
+        // The grant decides whether this owner is a Console account at all; read it before the lists.
+        const grants = (await getJson(
+          options.fetch,
+          `${lcd}/cosmos/authz/v1beta1/grants/grantee/${owner}`,
+          signal
+        )) as { grants?: Grant[] } | null;
         const deposit = (grants?.grants ?? []).find((g) =>
           String(g.authorization?.["@type"] ?? "").endsWith(
             "DepositAuthorization"
           )
         );
         if (!deposit) return unknown("no Console credit grant");
+        const [deployments, leases] = await Promise.all([
+          readList<Deployment>(
+            options.fetch,
+            `${lcd}/akash/deployment/v1beta4/deployments/list?${q}`,
+            "deployments",
+            signal
+          ),
+          readList<Lease>(
+            options.fetch,
+            `${lcd}/akash/market/v1beta5/leases/list?${q}`,
+            "leases",
+            signal
+          ),
+        ]);
+        if (!deployments.complete || !leases.complete)
+          return unknown("coverage incomplete · more pages than read");
         const creditUact = sumUact(deposit.authorization?.spend_limits);
-        const deployments = deps?.deployments ?? [];
-        const escrowUact = deployments.reduce(
+        const escrowUact = deployments.items.reduce(
           (sum, d) => sum + sumUact(d.escrow_account?.state?.funds),
           0
         );
-        const activeLeases = leases?.leases ?? [];
-        const ratePerBlock = activeLeases.reduce((sum, l) => {
-          const amount = Number(l.lease?.price?.amount);
-          return l.lease?.price?.denom === "uact" && Number.isFinite(amount)
-            ? sum + amount
-            : sum;
-        }, 0);
+        // Σ price per deployment: a deployment can hold several leases.
+        const rateByDseq = new Map<string, number>();
+        let ratePerBlock = 0;
+        for (const lease of leases.items) {
+          const price = leasePriceUact(lease);
+          const dseq = String(lease.lease?.id?.dseq ?? "");
+          rateByDseq.set(dseq, (rateByDseq.get(dseq) ?? 0) + price);
+          ratePerBlock += price;
+        }
         const measured = options.blocksPerDay;
         const bpd =
           measured !== null && Number.isFinite(measured) && measured > 0
             ? measured
             : FALLBACK_BLOCKS_PER_DAY;
         const burnPerDay = (ratePerBlock * bpd) / UACT_PER_USD;
-        const rateByDseq = new Map(
-          activeLeases.map((l) => [
-            String(l.lease?.id?.dseq),
-            Number(l.lease?.price?.amount),
-          ])
-        );
-        const escrowDays = deployments.flatMap((d) => {
-          const rate = rateByDseq.get(String(d.deployment?.id?.dseq));
-          return rate
-            ? [sumUact(d.escrow_account?.state?.funds) / (rate * bpd)]
-            : [];
+        const perDeployment = deployments.items.flatMap((d) => {
+          const dseq = String(d.deployment?.id?.dseq ?? "");
+          const rate = rateByDseq.get(dseq);
+          if (!rate) return [];
+          const escrow = sumUact(d.escrow_account?.state?.funds);
+          return [{ dseq, days: escrow / (rate * bpd) }];
         });
-        const minEscrowDays = escrowDays.length
-          ? Math.min(...escrowDays)
+        const thinnest = perDeployment.length
+          ? perDeployment.reduce((a, b) => (b.days < a.days ? b : a))
           : null;
         const balance = (creditUact + escrowUact) / UACT_PER_USD;
         const observedAt = now().toISOString();
@@ -224,7 +276,7 @@ export function akashCreditReader(
           runwayDays: null,
           grade: "UNKNOWN",
           observedAt,
-          source: `Akash chain · Console grant + escrow · ${activeLeases.length} leases at ${Math.round(bpd).toLocaleString("en-US")} blocks/day (${measured ? "measured" : "5.884 s/block fallback"})`,
+          source: `Akash chain · Console grant + escrow · ${leases.items.length} leases at ${Math.round(bpd).toLocaleString("en-US")} blocks/day (${measured ? "measured" : "5.884 s/block fallback"})`,
           sourceObservedAt: observedAt,
           freshness: "current",
           payer: "Operator",
@@ -243,9 +295,6 @@ export function akashCreditReader(
             },
             { label: "Escrow", amount: String(escrowUact), currency: "uact" },
           ],
-          ...(minEscrowDays === null
-            ? {}
-            : { detail: `thinnest escrow ${minEscrowDays.toFixed(1)} d` }),
         };
         if (balance <= 0)
           return {
@@ -256,10 +305,26 @@ export function akashCreditReader(
           };
         if (burnPerDay === 0)
           return { ...base, grade: "GREEN", detail: "no priced lease" };
-        const runwayDays = balance / burnPerDay;
-        return { ...base, runwayDays, grade: gradeRunway(runwayDays) };
-      } catch {
-        return unknown("Akash chain read failed");
+        const pooled = balance / burnPerDay;
+        // Escrow is locked per deployment; only shared Console credit can refill the thinnest one.
+        const constrained =
+          creditUact > 0 || thinnest === null
+            ? pooled
+            : Math.min(pooled, thinnest.days);
+        return {
+          ...base,
+          runwayDays: constrained,
+          grade: gradeRunway(constrained),
+          detail: thinnest
+            ? `Pooled ${pooled.toFixed(1)}d · Thinnest ${thinnest.days.toFixed(1)}d (dseq ${thinnest.dseq})`
+            : `Pooled ${pooled.toFixed(1)}d`,
+        };
+      } catch (error) {
+        return unknown(
+          error instanceof ShapeError
+            ? error.message
+            : "Akash chain read failed"
+        );
       }
     },
   };

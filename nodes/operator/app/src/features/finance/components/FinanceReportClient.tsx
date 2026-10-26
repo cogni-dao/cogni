@@ -12,7 +12,10 @@
  */
 "use client";
 
-import { FinanceReport } from "@cogni/money-plane/react";
+import {
+  FinanceReport,
+  StewardWithdrawalRejected,
+} from "@cogni/money-plane/react";
 import { useRouter } from "next/navigation";
 import {
   Button,
@@ -30,7 +33,10 @@ import type { FinanceReportModel } from "../types";
 
 export const STEWARD_WITHDRAWAL_PATH = "/api/v1/payments/steward-withdrawal";
 
-/** POST the amount-only steward withdrawal; throws an Error carrying the server's text. */
+/**
+ * POST the amount-only steward withdrawal. An explicit JSON refusal throws `StewardWithdrawalRejected` (nothing was sent,
+ * retry allowed); a transport failure or a non-JSON body throws a plain Error (outcome unknown; the control locks).
+ */
 export async function fundSteward(
   amountUsd: number,
   fetchImpl: typeof fetch = fetch
@@ -40,16 +46,17 @@ export async function fundSteward(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ amountUsd }),
   });
-  const data = (await res.json().catch(() => ({}))) as {
-    txHash?: string;
-    error?: string;
-    detail?: string;
-    code?: string;
-  };
-  if (!res.ok)
-    throw new Error(
-      data.detail ?? data.error ?? data.code ?? `HTTP ${res.status}`
-    );
+  let data: { txHash?: string; error?: string; detail?: string; code?: string };
+  try {
+    data = (await res.json()) as typeof data;
+  } catch {
+    throw new Error(`Response unreadable (HTTP ${res.status})`);
+  }
+  if (!res.ok) {
+    const reason = data.detail ?? data.error ?? data.code;
+    if (reason) throw new StewardWithdrawalRejected(reason);
+    throw new Error(`HTTP ${res.status}`);
+  }
   return { txHash: data.txHash ?? null };
 }
 

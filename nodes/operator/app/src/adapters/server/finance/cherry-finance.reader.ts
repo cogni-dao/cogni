@@ -7,7 +7,8 @@
  * Scope: TypeScript port of `cherryPlane()` in scripts/money-plane-snapshot.mjs (PR #2874): GET /v1/teams with the
  *   bearer token through the injected safe fetch, same field paths (`credit.account.remaining`, `credit.account.currency`,
  *   `credit.resources.pricing.price` €/h, `credit.resources.remaining.time` h) and the shared runway grading.
- * Invariants: READERS_NEVER_THROW. No token ⇒ UNKNOWN "no Cherry credential in this runtime". EUR stays EUR, never FX.
+ * Invariants: READERS_NEVER_THROW. No token ⇒ UNKNOWN "no Cherry credential in this runtime"; no team id ⇒ "Cherry team not
+ *   configured"; id not in the response ⇒ "configured team not found" — the first team is never assumed. EUR stays EUR, never FX.
  *   Reuses the bearer + Accept header pattern of `cherry-compute.adapter.ts`; the snapshot runner owns the timeout.
  * Side-effects: IO (HTTPS GET via injected fetch)
  * Links: scripts/money-plane-snapshot.mjs, ../compute/cherry-compute.adapter.ts, https://cognidao.org/knowledge/money-plane-registry
@@ -27,6 +28,8 @@ export const CHERRY_PLANE = "cherry:team";
 
 export interface CherryFinanceReaderOptions {
   token: string | null | undefined;
+  /** The team to report; the token may see several and the first is never assumed. */
+  teamId: string | null | undefined;
   fetch: FetchLike;
   now?: () => Date;
   payAction?: PayAction;
@@ -81,6 +84,8 @@ export function cherryFinanceReader(
     async read(signal): Promise<MoneyPlaneRow> {
       if (!options.token)
         return unknown("unconfigured", "no Cherry credential in this runtime");
+      if (!options.teamId)
+        return unknown("unconfigured", "Cherry team not configured");
       try {
         const res = await options.fetch(CHERRY_TEAMS_URL, {
           headers: {
@@ -91,9 +96,13 @@ export function cherryFinanceReader(
         });
         if (!res.ok) return unknown("unreadable", `HTTP ${res.status}`);
         const teams = (await res.json()) as unknown;
-        const credit = Array.isArray(teams)
-          ? (teams[0] as CherryTeam | undefined)?.credit
-          : undefined;
+        if (!Array.isArray(teams))
+          return unknown("unreadable", "teams response unexpected");
+        const team = (teams as CherryTeam[]).find(
+          (t) => String(t?.id) === String(options.teamId)
+        );
+        if (!team) return unknown("unconfigured", "configured team not found");
+        const credit = team.credit;
         const balance = finite(credit?.account?.remaining);
         const currency = credit?.account?.currency;
         if (balance === null || typeof currency !== "string")
