@@ -85,16 +85,17 @@ if [[ ${1:-} == run-bounded ]]; then
     "$stage/head/scripts/bootstrap/install/install-yq.sh")
   [[ $base_image == postgres:* && $yq_version =~ ^v[0-9.]+$ ]]
   cat > "$stage/Dockerfile" <<'DOCKER'
-ARG YQ_VERSION
 ARG BASE_IMAGE
-FROM mikefarah/yq:${YQ_VERSION} AS yq
 FROM ${BASE_IMAGE}
+ARG YQ_VERSION
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
+COPY head/scripts/bootstrap/install/install-yq.sh /tmp/install-yq.sh
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
     iproute2 iptables iptables-persistent conntrack python3 util-linux procps \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=yq /usr/bin/yq /usr/local/bin/yq
+    curl ca-certificates sudo \
+    && YQ_VERSION="${YQ_VERSION}" bash /tmp/install-yq.sh \
+    && rm -rf /var/lib/apt/lists/* /tmp/install-yq.sh
 COPY base /base
 COPY head /head
 COPY sources /sources
@@ -169,7 +170,7 @@ print(json.dumps(dict(event="compute.egress.native", fixture="candidate-policy-p
 PY
 }
 trap 'emit terminal "exit=$?"' EXIT
-emit start "yq=$(yq --version)"
+emit start "yq=$(yq --version); binary=$(sha256sum /usr/local/bin/yq)"
 for tree in base head; do
   bash "/$tree/scripts/ci/render-compute-egress-allowlist.sh" preview preview > "/$tree.rules"
   emit render "$tree $(sha256sum "/$tree.rules")"
