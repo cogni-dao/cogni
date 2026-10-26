@@ -199,6 +199,10 @@ node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
 # scripts/ci/render-compute-egress-allowlist.sh and applied by
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:
+  - cidr: 95.217.139.183/32
+    envs: [preview]
+    ports: [5432]
+    comment: "Poly preview lease 1792059660790/app egress measured through authenticated provider shell on 2026-10-26; admit preview Postgres only (bug.5538)."
   - cidr: 65.108.194.156/32
     ports: [5435, 6379, 4000, 7233]
     envs: [production]

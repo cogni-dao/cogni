@@ -69,6 +69,10 @@ node_id: f66b260b-4633-41e2-8711-b7c1b8449cc1
 # NOTE: the node-birth generator does not yet mint this block (filed at birth of
 # toks5); added by hand-PR pending the generator fix.
 compute_egress_cidrs:
+  - cidr: 95.217.139.183/32
+    envs: [preview]
+    ports: [5432]
+    comment: "Toks5 preview lease 1792054180775/app egress measured through authenticated provider shell on 2026-10-26; admit preview Postgres only (bug.5538)."
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
   - cidr: 65.108.194.156/32
