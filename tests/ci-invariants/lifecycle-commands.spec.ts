@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/ci-invariants/lifecycle-commands`
  * Purpose: Keep agent lifecycle commands and skills from instructing retired or forbidden delivery steps.
- * Scope: Static line scan of `.claude/commands/*.md` and `.claude/skills/*\/SKILL.md`. Does not run git or touch the network.
+ * Scope: Static local command policy and thin lifecycle handoffs. Does not perform network or Git operations, or prove hub procedure behavior.
  * Invariants:
  *   - NO_STAGING_BASE: no file names `origin/staging`, `--base staging` or "from `staging`"; branches and diffs use `main`.
  *   - NO_PNPM_CHECK_STEP: no file instructs `pnpm check` or `pnpm check:fast` as a step; mentioning that it needs the human's explicit request is allowed.
@@ -169,5 +169,55 @@ describe("lifecycle commands on the committed tree", () => {
     files.map((file) => [path.relative(REPO_ROOT, file), file])
   )("%s instructs no staging base, pnpm check step or gh pr merge", (_, file) => {
     expect(findViolations(readFileSync(file, "utf8"))).toEqual([]);
+  });
+});
+
+describe("hub-owned lifecycle handoffs", () => {
+  const stages = [
+    ["design", "design"],
+    ["review-design", "review-design"],
+    ["implement", "implement"],
+    ["review-implementation", "review-implementation"],
+    ["closeout", "closeout"],
+  ];
+
+  it.each(
+    stages
+  )("/%s retains a bounded full-body handoff to %s", (command, entry) => {
+    const source = readFileSync(
+      path.join(COMMANDS_DIR, `${command}.md`),
+      "utf8"
+    );
+    expect(source).toContain("#$ITEM");
+    expect(source).not.toContain("cicd-e2e-required-sequence");
+    expect(source).toContain(`https://cognidao.org/api/v1/knowledge/${entry}`);
+    expect(source).toContain("set -euo pipefail");
+    expect(source).toContain("COGNI_NODE_API_KEY:?");
+    expect(source).not.toMatch(/COGNI_OPERATOR_(?:NODE_)?API_KEY/);
+    expect(source).toContain("curl -fsS --max-time");
+    expect(source).toContain(
+      "jq -er '.content | select(type == \"string\" and length > 0)'"
+    );
+    expect(source).toContain("required dependency");
+    expect(source).not.toMatch(/^## (?:Phase|Rules)/m);
+    expect(source.length).toBeLessThan(2500);
+  });
+
+  it("keeps both harness skill aliases on the same routing source", () => {
+    const canonical = readFileSync(
+      path.join(SKILLS_DIR, "contribute-to-cogni/SKILL.md"),
+      "utf8"
+    );
+    expect(
+      readFileSync(
+        path.join(REPO_ROOT, ".agents/skills/contribute-to-cogni/SKILL.md"),
+        "utf8"
+      )
+    ).toBe(canonical);
+    for (const [command] of stages) expect(canonical).toContain(`/${command}`);
+    expect(canonical).not.toMatch(
+      /```|cicd-e2e-required-sequence|validate-candidate/
+    );
+    expect(canonical.length).toBeLessThan(1400);
   });
 });
