@@ -226,7 +226,9 @@ else
   gh api --paginate "repos/$REPOSITORY/pulls/$pr_number/files" --jq '.[]' | jq -s '.' > "$files_json"
 fi
 
-jq -e 'length > 0 and length <= 6
+# Five membership files plus lane and derived-control scheduler patches.
+# Exact path and signed-hash checks below still bound every accepted change.
+jq -e 'length > 0 and length <= 7
   and all(.filename | type == "string")
   and all(.previous_filename == null)
   and all(.status == "added" or .status == "modified" or .status == "removed")' \
