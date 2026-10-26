@@ -24,7 +24,7 @@ import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 export async function getFinanceReport(): Promise<FinanceReportModel> {
   const user = await getServerSessionUser();
   if (!isDaoAdmin(user?.walletAddress ?? null)) redirect("/dashboard");
-  const { readers, treasuryPlane, costRateEvidence } =
+  const { readers, treasuryPlane, configuredWalletPlanes, costRateEvidence } =
     await createFinanceReaders();
   const report = await takeSnapshot(readers, {
     timeoutMs: 5000,
@@ -39,5 +39,5 @@ export async function getFinanceReport(): Promise<FinanceReportModel> {
     },
     "Finance report read"
   );
-  return { ...report, treasuryPlane, costRateEvidence };
+  return { ...report, treasuryPlane, configuredWalletPlanes, costRateEvidence };
 }

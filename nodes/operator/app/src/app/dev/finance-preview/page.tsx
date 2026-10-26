@@ -12,23 +12,10 @@
  */
 import { notFound } from "next/navigation";
 import type { ReactElement } from "react";
-import { AdminShell } from "@/app/(admin)/AdminShell";
-import { PageContainer } from "@/components";
-import { FinanceReport } from "@/features/finance/components/FinanceReport";
 import { getEnv } from "@/shared/env";
-
-import { financePreview } from "./fixture";
+import { FinancePreview } from "./Preview.client";
 
 export default function FinancePreviewPage(): ReactElement {
   if (getEnv("NODE_ENV") !== "development") notFound();
-  return (
-    <AdminShell>
-      <PageContainer maxWidth="full">
-        <div className="mx-auto max-w-7xl space-y-6">
-          <p className="text-muted-foreground text-xs">Demo data</p>
-          <FinanceReport report={financePreview} />
-        </div>
-      </PageContainer>
-    </AdminShell>
-  );
+  return <FinancePreview />;
 }

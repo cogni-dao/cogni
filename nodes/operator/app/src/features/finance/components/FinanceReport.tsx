@@ -3,10 +3,10 @@
 
 /**
  * Module: `@features/finance/components/FinanceReport`
- * Purpose: Compact, sortable Financials report using the existing app grid.
- * Scope: Presentation and shared read-only summaries; evidence expands on demand.
- * Invariants: Native units and wallet custody stay distinct; no payment controls.
- * Side-effects: Refreshes the current server page on request.
+ * Purpose: Responsive, readable DAO reporting using the existing kit and shared finance logic.
+ * Scope: One sorted model drives cards and the adaptive Services grid.
+ * Invariants: No pooled custody, empty numeric columns, horizontal scroller or payment actions.
+ * Side-effects: Refreshes the existing server report on request.
  * Links: https://cognidao.org/work/items/task.5347
  * @public
  */
@@ -15,27 +15,32 @@
 import { type MoneyPlaneRow, summarizeCostRates } from "@cogni/money-plane";
 import {
   type ColumnDef,
-  type ExpandedState,
   getCoreRowModel,
-  getExpandedRowModel,
   getSortedRowModel,
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { ChevronDown, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { type ReactElement, useMemo, useState, useTransition } from "react";
-
+import { useCallback, useMemo, useState, useTransition } from "react";
 import {
+  Badge,
   Button,
+  Card,
+  CardContent,
   DataGrid,
   DataGridColumnHeader,
   DataGridContainer,
   DataGridTable,
+  ReportText,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from "@/components";
-
 import type { FinanceReportModel } from "../types";
-
+import { FinanceSource } from "./FinanceSource";
 import {
   amountLabel,
   compareAmounts,
@@ -45,438 +50,560 @@ import {
   type SortAmount,
 } from "./format";
 
-const statuses = {
-  RED: { label: "Low", rank: 0, tone: "text-destructive" },
-  YELLOW: { label: "Watch", rank: 1, tone: "text-warning" },
-  UNKNOWN: { label: "Missing", rank: 2, tone: "text-muted-foreground" },
-  GREEN: { label: "OK", rank: 3, tone: "text-success" },
-  INFO: { label: "Holding", rank: 4, tone: "text-muted-foreground" },
-} as const;
-
-function Details({ row }: { row: MoneyPlaneRow }): ReactElement {
+const ranks = { RED: 0, YELLOW: 1, UNKNOWN: 2, GREEN: 3, INFO: 4 };
+function Status({ row }: { row: MoneyPlaneRow }) {
+  const label = {
+    RED: "Low runway",
+    YELLOW: "Watch",
+    UNKNOWN: nativeBurn(row) ? "Forecast unavailable" : "Not reported",
+    GREEN: "OK",
+    INFO: "Holding",
+  }[row.grade];
   return (
-    <dl className="grid gap-x-8 gap-y-2 bg-muted/20 p-4 text-sm sm:grid-cols-2">
-      <div>
-        <dt className="text-muted-foreground">Source</dt>
-        <dd>
-          {row.source ?? "Unavailable"} · {row.freshness ?? "unknown"}
-        </dd>
-      </div>
-      <div>
-        <dt className="text-muted-foreground">Source observed</dt>
-        <dd>{observedLabel(row.sourceObservedAt)}</dd>
-      </div>
-      <div>
-        <dt className="text-muted-foreground">Read at</dt>
-        <dd>{observedLabel(row.observedAt)}</dd>
-      </div>
-      <div>
-        <dt className="text-muted-foreground">Payer</dt>
-        <dd>{row.payer ?? "Unknown"}</dd>
-      </div>
-      <div>
-        <dt className="text-muted-foreground">Beneficiary / custody</dt>
-        <dd className="break-words">{row.beneficiary ?? "Unknown"}</dd>
-      </div>
-      {row.balance !== null && Number.isFinite(row.balance) && row.currency && (
-        <div>
-          <dt className="text-muted-foreground">Supplied balance</dt>
-          <dd>
-            {String(row.balance)} {row.currency}
-          </dd>
-        </div>
-      )}
-      {!row.nativeRate &&
-        row.burnPerDay !== null &&
-        Number.isFinite(row.burnPerDay) &&
-        row.currency && (
-          <div>
-            <dt className="text-muted-foreground">Supplied daily burn</dt>
-            <dd>
-              {String(row.burnPerDay)} {row.currency} / day
-            </dd>
-          </div>
-        )}
-      {row.nativeRate && (
-        <div>
-          <dt className="text-muted-foreground">Exact native rate</dt>
-          <dd>
-            {row.nativeRate.amount} {row.nativeRate.currency} /{" "}
-            {row.nativeRate.per}
-            {row.nativeRate.currency === "uact" && (
-              <span className="ml-2 text-muted-foreground">
-                ({Number(row.nativeRate.amount) / 1e6} ACT /{" "}
-                {row.nativeRate.per})
-              </span>
-            )}
-          </dd>
-        </div>
-      )}
-      {row.cumulativeVendorTransfer && (
-        <div>
-          <dt className="text-muted-foreground">
-            Provider transfers · cumulative
-          </dt>
-          <dd>
-            {row.cumulativeVendorTransfer.amount}{" "}
-            {row.cumulativeVendorTransfer.currency}
-            {row.cumulativeVendorTransfer.currency === "uact" && (
-              <span className="ml-2 text-muted-foreground">
-                ({Number(row.cumulativeVendorTransfer.amount) / 1e6} ACT)
-              </span>
-            )}
-          </dd>
-        </div>
-      )}
-      {row.detail && (
-        <div className="sm:col-span-2">
-          <dt className="sr-only">Evidence note</dt>
-          <dd>{row.detail}</dd>
-        </div>
-      )}
-      {row.reasonCode && (
-        <div>
-          <dt className="text-muted-foreground">Missing evidence</dt>
-          <dd>{row.reasonCode.replaceAll("_", " ")}</dd>
-        </div>
-      )}
-    </dl>
+    <Badge
+      intent={row.grade === "RED" ? "destructive" : "secondary"}
+      size="sm"
+      className="px-2 py-1"
+    >
+      {label}
+    </Badge>
   );
 }
-
-function moneyColumn(
-  id: string,
-  title: string,
-  accessor: (row: MoneyPlaneRow) => SortAmount | undefined
-): ColumnDef<MoneyPlaneRow> {
-  return {
-    id,
-    accessorFn: accessor,
-    sortUndefined: "last",
-    sortingFn: (a, b) =>
-      compareAmounts(accessor(a.original), accessor(b.original)),
-    header: ({ column }) => (
-      <DataGridColumnHeader column={column} title={title} />
-    ),
-    cell: ({ row }) => (
-      <span className="whitespace-nowrap tabular-nums">
-        {amountLabel(accessor(row.original))}
-      </span>
-    ),
-    meta: { headerTitle: title },
-  };
+const keys = {
+  status: "Status",
+  balance: "Balance / credit",
+  rate: "Rate",
+  runway: "Runway",
+} as const;
+type SortKey = keyof typeof keys;
+function runway(row: MoneyPlaneRow) {
+  return row.runwayDays !== null &&
+    Number.isFinite(row.runwayDays) &&
+    row.runwayDays >= 0
+    ? row.runwayDays
+    : undefined;
 }
 
-export function FinanceReport({
-  report,
-}: {
-  report: FinanceReportModel;
-}): ReactElement {
+const rateAge = (row: MoneyPlaneRow) =>
+  row.sourceObservedAt
+    ? row.freshness === "stale"
+      ? "Stale source"
+      : ""
+    : "Age unknown";
+
+export function FinanceReport({ report }: { report: FinanceReportModel }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [refreshMessage, setRefreshMessage] = useState("");
   const [sorting, setSorting] = useState<SortingState>([
     { id: "status", desc: false },
   ]);
-  const [expanded, setExpanded] = useState<ExpandedState>({});
-  const summary = useMemo(
-    () => summarizeCostRates(report.costRateEvidence),
-    [report.costRateEvidence]
-  );
   const costs = useMemo(
     () => report.rows.filter((row) => row.kind !== "wallet"),
     [report.rows]
   );
-  const treasury = report.rows.find(
-    (row) => row.kind === "wallet" && row.plane === report.treasuryPlane
-  );
-  const custody = report.rows.filter(
-    (row) => row.kind === "wallet" && row.plane !== report.treasuryPlane
-  );
   const evidence = useMemo(
     () => new Map(report.costRateEvidence.map((item) => [item.sourceId, item])),
     [report.costRateEvidence]
+  );
+  const summary = useMemo(
+    () => summarizeCostRates(report.costRateEvidence),
+    [report.costRateEvidence]
+  );
+  const treasury = report.rows.find(
+    (row) => row.kind === "wallet" && row.plane === report.treasuryPlane
+  );
+  const identifiedTreasury =
+    treasury && report.configuredWalletPlanes.includes(treasury.plane);
+  const custody = report.rows.filter(
+    (row) =>
+      row.kind === "wallet" &&
+      row.plane !== report.treasuryPlane &&
+      report.configuredWalletPlanes.includes(row.plane)
+  );
+  const visible = {
+    balance: costs.some((row) => rowAmount(row.balance, row.currency)),
+    rate: costs.some((row) => nativeBurn(row)),
+    runway: costs.some((row) => runway(row) !== undefined),
+  };
+  const sortKeys = (Object.keys(keys) as SortKey[]).filter(
+    (key) => key === "status" || visible[key]
+  );
+  const currentSort = sorting[0];
+  const activeSorting =
+    currentSort && sortKeys.includes(currentSort.id as SortKey)
+      ? sorting
+      : [{ id: "status", desc: false }];
+  const active = activeSorting[0] ?? { id: "status", desc: false };
+  const sponsored = costs.some((row) => row.coverage === "operator-covered");
+  const rateCaption = useCallback(
+    (row: MoneyPlaneRow) =>
+      evidence.get(row.plane)?.basis.kind === "contract"
+        ? "Contract rate"
+        : evidence.get(row.plane)?.basis.kind === "measured"
+          ? "Measured burn"
+          : "Reported rate",
+    [evidence]
+  );
+  const service = useCallback(
+    (row: MoneyPlaneRow) => (
+      <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
+        <div className="min-w-0 space-y-1">
+          <ReportText variant="label">{row.label}</ReportText>
+          {row.beneficiary && row.beneficiary !== "Fleet" && (
+            <ReportText variant="caption" tone="muted">
+              {row.beneficiary}
+            </ReportText>
+          )}
+          {row.coverage !== "operator-covered" && (
+            <ReportText variant="caption" tone="muted">
+              Funded by{" "}
+              {row.payer && row.payer !== "Not established"
+                ? row.payer
+                : "unknown payer"}
+            </ReportText>
+          )}
+        </div>
+        <FinanceSource row={row} evidence={evidence.get(row.plane)} />
+      </div>
+    ),
+    [evidence]
+  );
+  const moneyColumn = useCallback(
+    (
+      id: "balance" | "rate",
+      accessor: (row: MoneyPlaneRow) => SortAmount | undefined
+    ): ColumnDef<MoneyPlaneRow> => ({
+      id,
+      accessorFn: (row) => {
+        const value = accessor(row);
+        return value
+          ? {
+              ...value,
+              instrument: evidence.get(row.plane)?.instrumentId ?? row.plane,
+            }
+          : undefined;
+      },
+      sortUndefined: "last",
+      sortingFn: (a, b) => compareAmounts(a.getValue(id), b.getValue(id)),
+      header: ({ column }) => (
+        <DataGridColumnHeader column={column} title={keys[id]} />
+      ),
+      cell: ({ row }) => (
+        <div className="min-w-0 space-y-1">
+          <ReportText variant="amount">
+            {amountLabel(accessor(row.original))}
+          </ReportText>
+          {id === "rate" && accessor(row.original) && (
+            <ReportText variant="caption" tone="muted">
+              {rateCaption(row.original)}
+              {rateAge(row.original) ? ` · ${rateAge(row.original)}` : ""}
+            </ReportText>
+          )}
+        </div>
+      ),
+      meta: { headerTitle: keys[id] },
+    }),
+    [evidence, rateCaption]
   );
   const columns = useMemo<ColumnDef<MoneyPlaneRow>[]>(
     () => [
       {
         id: "service",
         accessorKey: "label",
-        size: 240,
-        minSize: 200,
-        header: ({ column }) => (
-          <DataGridColumnHeader column={column} title="Service" />
-        ),
-        cell: ({ row }) => (
-          <div className="min-w-0 space-y-0.5">
-            <span
-              className="block truncate font-medium"
-              title={row.original.label}
-            >
-              {row.original.label}
-            </span>
-            <span
-              className="block truncate text-muted-foreground text-xs"
-              title={row.original.beneficiary}
-            >
-              {row.original.beneficiary ?? "Scope unknown"}
-            </span>
-          </div>
-        ),
-        meta: {
-          headerTitle: "Service",
-          expandedContent: (row) => <Details row={row} />,
-        },
+        enableSorting: false,
+        header: "Service",
+        cell: ({ row }) => service(row.original),
       },
-      moneyColumn("balance", "Balance / credit", (row) => {
-        const amount = rowAmount(row.balance, row.currency);
-        return amount
-          ? {
-              ...amount,
-              instrument: evidence.get(row.plane)?.instrumentId ?? row.plane,
-            }
-          : undefined;
-      }),
-      {
-        ...moneyColumn("rate", "Rate", (row) => {
-          const rate = nativeBurn(row);
-          return rate
-            ? {
-                ...rate,
-                instrument: evidence.get(row.plane)?.instrumentId ?? row.plane,
-              }
-            : undefined;
-        }),
-        size: 210,
-        cell: ({ row }) => (
-          <div className="whitespace-nowrap tabular-nums">
-            {amountLabel(nativeBurn(row.original))}
-            {nativeBurn(row.original) && (
-              <span className="block text-muted-foreground text-xs">
-                {evidence.get(row.original.plane)?.basis.kind === "contract"
-                  ? "Contract rate"
-                  : evidence.get(row.original.plane)?.basis.kind === "measured"
-                    ? "Measured burn"
-                    : "Basis unavailable"}
-              </span>
-            )}
-          </div>
-        ),
-      },
-      {
-        id: "runway",
-        size: 100,
-        accessorFn: (row) =>
-          row.runwayDays !== null && Number.isFinite(row.runwayDays)
-            ? row.runwayDays
-            : undefined,
-        sortUndefined: "last",
-        sortingFn: "basic",
-        header: ({ column }) => (
-          <DataGridColumnHeader column={column} title="Runway" />
-        ),
-        cell: ({ getValue }) => (
-          <span className="whitespace-nowrap tabular-nums">
-            {getValue<number | undefined>() === undefined
-              ? "—"
-              : `${getValue<number>().toFixed(1)}d`}
-          </span>
-        ),
-        meta: { headerTitle: "Runway" },
-      },
-      {
-        id: "payer",
-        accessorKey: "payer",
-        size: 145,
-        header: ({ column }) => (
-          <DataGridColumnHeader column={column} title="Funded by" />
-        ),
-        cell: ({ row }) => (
-          <div className="text-sm">
-            {row.original.payer ?? "Unknown"}
-            {row.original.coverage === "operator-covered" && (
-              <span className="block text-muted-foreground text-xs">
-                Sponsored
-              </span>
-            )}
-          </div>
-        ),
-        meta: { headerTitle: "Funded by" },
-      },
+      ...(visible.balance
+        ? [
+            moneyColumn("balance", (row) =>
+              rowAmount(row.balance, row.currency)
+            ),
+          ]
+        : []),
+      ...(visible.rate ? [moneyColumn("rate", nativeBurn)] : []),
+      ...(visible.runway
+        ? [
+            {
+              id: "runway",
+              accessorFn: runway,
+              sortUndefined: "last" as const,
+              sortingFn: "basic" as const,
+              header: ({ column }) => (
+                <DataGridColumnHeader column={column} title="Runway" />
+              ),
+              cell: ({ getValue }) => (
+                <ReportText variant="amount">
+                  {getValue<number | undefined>() === undefined
+                    ? "—"
+                    : `${getValue<number>().toFixed(1)} days`}
+                </ReportText>
+              ),
+              meta: { headerTitle: "Runway" },
+            } satisfies ColumnDef<MoneyPlaneRow>,
+          ]
+        : []),
       {
         id: "status",
-        size: 110,
-        accessorFn: (row) => statuses[row.grade].rank,
+        accessorFn: (row) => ranks[row.grade],
         sortingFn: (a, b) =>
-          statuses[a.original.grade].rank - statuses[b.original.grade].rank ||
-          (a.original.runwayDays ?? Number.MAX_VALUE) -
-            (b.original.runwayDays ?? Number.MAX_VALUE),
+          ranks[a.original.grade] - ranks[b.original.grade] ||
+          (runway(a.original) ?? Number.MAX_VALUE) -
+            (runway(b.original) ?? Number.MAX_VALUE),
         header: ({ column }) => (
           <DataGridColumnHeader column={column} title="Status" />
         ),
-        cell: ({ row }) => (
-          <span className={statuses[row.original.grade].tone}>
-            {statuses[row.original.grade].label}
-          </span>
-        ),
+        cell: ({ row }) => <Status row={row.original} />,
         meta: { headerTitle: "Status" },
       },
-      {
-        id: "details",
-        enableSorting: false,
-        size: 48,
-        header: () => <span className="sr-only">Details</span>,
-        cell: ({ row }) => (
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-expanded={row.getIsExpanded()}
-            aria-label={`${row.getIsExpanded() ? "Hide" : "Show"} ${row.original.label} details`}
-            onClick={() => row.toggleExpanded()}
-          >
-            <ChevronDown
-              aria-hidden="true"
-              className={`size-4 ${row.getIsExpanded() ? "rotate-180" : ""}`}
-            />
-          </Button>
-        ),
-      },
     ],
-    [evidence]
+    [visible.balance, visible.rate, visible.runway, moneyColumn, service]
   );
   const table = useReactTable({
     data: costs,
     columns,
-    state: { sorting, expanded },
+    state: { sorting: activeSorting },
     onSortingChange: setSorting,
-    onExpandedChange: setExpanded,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getExpandedRowModel: getExpandedRowModel(),
-    getRowCanExpand: () => true,
     getRowId: (row) => row.plane,
   });
-
+  const missing = (Object.keys(visible) as (keyof typeof visible)[])
+    .filter((key) => !visible[key])
+    .map((key) => keys[key].toLowerCase());
+  function refresh() {
+    setRefreshMessage("");
+    startTransition(() => {
+      try {
+        router.refresh();
+        setRefreshMessage("Refresh requested.");
+      } catch {
+        setRefreshMessage("Refresh failed. Try again.");
+      }
+    });
+  }
   return (
-    <div className="min-w-0 space-y-5">
-      <header className="flex items-center justify-between gap-4">
-        <h1 className="font-semibold text-2xl">Financials</h1>
+    <div
+      className="@container mx-auto w-full min-w-0 max-w-6xl space-y-6"
+      data-finance-report
+    >
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <ReportText as="h1" variant="title">
+            Financials
+          </ReportText>
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <ReportText variant="caption" tone="muted">
+              DAO treasury and operator-funded services
+            </ReportText>
+            <ReportText variant="caption" tone="muted">
+              Report refreshed {observedLabel(report.takenAt)}
+            </ReportText>
+          </div>
+        </div>
         <Button
           variant="outline"
-          size="sm"
+          className="min-h-11"
           disabled={pending}
-          onClick={() => startTransition(() => router.refresh())}
+          onClick={refresh}
         >
-          <RefreshCw
-            aria-hidden="true"
-            className={`size-4 ${pending ? "animate-spin" : ""}`}
-          />
-          Refresh
+          <RefreshCw aria-hidden="true" className="size-4" />
+          {pending ? "Refreshing…" : "Refresh"}
         </Button>
+        <output className="sr-only" aria-live="polite">
+          {pending
+            ? "Refreshing report."
+            : refreshMessage
+              ? `${refreshMessage} Report refreshed ${observedLabel(report.takenAt)}.`
+              : ""}
+        </output>
       </header>
-      <dl>
-        <dt className="text-muted-foreground text-xs">DAO treasury</dt>
-        <dd className="font-semibold text-2xl tabular-nums">
-          {amountLabel(
-            treasury
-              ? rowAmount(treasury.balance, treasury.currency)
-              : undefined
-          )}
-        </dd>
-        {treasury && (
-          <dd>
-            <details className="mt-1 text-xs">
-              <summary className="cursor-pointer text-muted-foreground">
-                Treasury details
-              </summary>
-              <Details row={treasury} />
-            </details>
-          </dd>
-        )}
-      </dl>
-      <section className="space-y-3" aria-label="Costs">
-        <h2 className="font-medium">Costs</h2>
-        <DataGrid
-          table={table}
-          recordCount={costs.length}
-          tableLayout={{ dense: true, rowBorder: true, headerBackground: true }}
-          emptyMessage="No reported costs."
-        >
-          <DataGridContainer className="max-w-full overflow-x-auto">
-            <DataGridTable />
-          </DataGridContainer>
-        </DataGrid>
-        {summary.cohorts.map((cohort, index) => (
-          <div
-            key={`${cohort.ownerId}:${cohort.scopeId}:${cohort.instrumentId}:${index}`}
-            className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-md bg-muted/30 px-3 py-2 text-sm"
-          >
-            <div>
-              <span>
-                {cohort.basis.kind === "contract"
-                  ? cohort.instrumentId.startsWith("akash:")
-                    ? "Known Akash contract rate"
-                    : "Known contract rate"
-                  : "Measured burn"}{" "}
-                ·{" "}
-                {cohort.scopeId === "operator-fleet"
-                  ? "operator fleet"
-                  : cohort.scopeId}
-              </span>
-
-              <span className="block text-muted-foreground text-xs">
-                {cohort.ageUnknown
-                  ? "Last known · age unknown"
-                  : `Observed ${observedLabel(cohort.oldestObservedAt)}`}
-                {cohort.basis.kind === "measured" &&
-                  ` · ${observedLabel(cohort.basis.start)} – ${observedLabel(cohort.basis.end)}`}
-              </span>
+      <div className="grid min-w-0 @3xl:grid-cols-2 gap-4">
+        <Card className="py-0">
+          <CardContent className="space-y-2 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <ReportText variant="label">DAO treasury</ReportText>
+              {identifiedTreasury && <FinanceSource row={treasury} />}
             </div>
-            <span className="font-medium tabular-nums">
-              {amountLabel(
-                cohort.rate.amount === null
-                  ? undefined
-                  : { ...cohort.rate, amount: cohort.rate.amount }
+            <ReportText variant="value">
+              {identifiedTreasury
+                ? rowAmount(treasury.balance, treasury.currency)
+                  ? amountLabel(rowAmount(treasury.balance, treasury.currency))
+                  : "Balance unavailable"
+                : "Treasury not identified"}
+            </ReportText>
+            {identifiedTreasury && (
+              <ReportText variant="caption" tone="muted">
+                {treasury.sourceObservedAt
+                  ? `Balance observed ${observedLabel(treasury.sourceObservedAt)}${treasury.freshness === "stale" ? " · Stale" : ""}`
+                  : "Source age unknown"}
+              </ReportText>
+            )}
+          </CardContent>
+        </Card>
+        {summary.cohorts.length ? (
+          <Card className="py-0">
+            <CardContent className="space-y-4 p-4">
+              {summary.cohorts.map((cohort, index) => (
+                <div
+                  key={`${cohort.instrumentId}:${index}`}
+                  className="space-y-1"
+                >
+                  <ReportText variant="label">
+                    {cohort.basis.kind === "contract"
+                      ? "Known contract rate"
+                      : "Measured burn"}{" "}
+                    ·{" "}
+                    {cohort.scopeId === "operator-fleet"
+                      ? "operator fleet"
+                      : cohort.scopeId}
+                  </ReportText>
+                  <ReportText variant="value">
+                    {amountLabel(
+                      cohort.rate.amount === null
+                        ? undefined
+                        : { ...cohort.rate, amount: cohort.rate.amount }
+                    )}
+                  </ReportText>
+                  <ReportText variant="caption" tone="muted">
+                    {[
+                      ...new Set(
+                        report.costRateEvidence
+                          .filter(
+                            (item) =>
+                              item.instrumentId === cohort.instrumentId &&
+                              item.ownerId === cohort.ownerId &&
+                              item.scopeId === cohort.scopeId
+                          )
+                          .map(
+                            (item) =>
+                              report.rows.find(
+                                (row) => row.plane === item.sourceId
+                              )?.label
+                          )
+                          .filter(Boolean)
+                      ),
+                    ].join(" / ")}{" "}
+                    ·{" "}
+                    {cohort.ownerId === "operator"
+                      ? "Funded by operator"
+                      : `Funded by ${cohort.ownerId}`}{" "}
+                    · {cohort.partial ? "Partial coverage · " : ""}
+                    {cohort.ageUnknown
+                      ? "Last known · age unknown"
+                      : `Observed ${observedLabel(cohort.oldestObservedAt)}`}
+                  </ReportText>
+                  {cohort.basis.kind === "measured" && (
+                    <ReportText variant="caption" tone="muted">
+                      {observedLabel(cohort.basis.start)} –{" "}
+                      {observedLabel(cohort.basis.end)}
+                    </ReportText>
+                  )}
+                </div>
+              ))}
+              {summary.unattributedCount > 0 && (
+                <ReportText variant="caption" tone="muted">
+                  {summary.unattributedCount} cost sources lack attribution.
+                </ReportText>
               )}
-              {cohort.partial && (
-                <span className="ml-2 text-muted-foreground text-xs">
-                  Partial
-                </span>
-              )}
-            </span>
-          </div>
-        ))}
-        {summary.unattributedCount > 0 && (
-          <p className="text-muted-foreground text-xs">
-            {summary.unattributedCount} cost sources lack attribution
-          </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="py-0">
+            <CardContent className="space-y-2 p-4">
+              <ReportText variant="label">Operator-funded</ReportText>
+              <ReportText tone="muted">
+                Service costs are not yet reported.
+              </ReportText>
+            </CardContent>
+          </Card>
         )}
-        <p className="text-muted-foreground text-xs">
-          Partial cost coverage · Payment history unavailable
-        </p>
-      </section>
-      <details className="rounded-md border">
-        <summary className="cursor-pointer px-3 py-2 text-sm">
-          Funding accounts
-        </summary>
-        <div className="divide-y px-3">
-          {custody.map((row) => (
-            <details key={row.plane} className="py-2">
-              <summary className="flex cursor-pointer flex-wrap justify-between gap-2 text-sm">
-                <span>
-                  {row.label}
-                  <span className="ml-2 text-muted-foreground text-xs">
-                    {row.beneficiary}
-                  </span>
-                </span>
-                <span className="tabular-nums">
-                  {amountLabel(rowAmount(row.balance, row.currency))}
-                </span>
-              </summary>
-              <Details row={row} />
-            </details>
-          ))}
+      </div>
+      <section className="min-w-0 space-y-3" aria-label="Services">
+        <div>
+          <ReportText as="h2" variant="section">
+            Services
+          </ReportText>
+          {sponsored && (
+            <ReportText variant="caption" tone="muted">
+              Funded by operator
+            </ReportText>
+          )}
         </div>
-      </details>
+        {missing.length > 0 && (
+          <ReportText variant="caption" tone="muted">
+            Not yet available: {missing.join(", ")}.
+          </ReportText>
+        )}
+        <section
+          className="@3xl:block hidden min-w-0"
+          aria-label="Services table"
+        >
+          <DataGrid
+            table={table}
+            recordCount={costs.length}
+            tableLayout={{
+              width: "auto",
+              rowBorder: true,
+              headerBackground: true,
+            }}
+            tableClassNames={{ base: "break-words" }}
+            emptyMessage="No services reported."
+          >
+            <DataGridContainer>
+              <DataGridTable />
+            </DataGridContainer>
+          </DataGrid>
+        </section>
+        <section
+          className="@3xl:hidden min-w-0 space-y-3"
+          aria-label="Services list"
+        >
+          <div className="grid grid-cols-2 gap-2">
+            <Select
+              value={active.id}
+              onValueChange={(id) => setSorting([{ id, desc: active.desc }])}
+            >
+              <SelectTrigger
+                aria-label="Sort services by"
+                className="min-h-11 w-full"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {sortKeys.map((key) => (
+                  <SelectItem key={key} value={key}>
+                    {keys[key]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={active.desc ? "descending" : "ascending"}
+              onValueChange={(direction) =>
+                setSorting([
+                  { id: active.id, desc: direction === "descending" },
+                ])
+              }
+            >
+              <SelectTrigger
+                aria-label="Sort direction"
+                className="min-h-11 w-full"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ascending">Ascending</SelectItem>
+                <SelectItem value="descending">Descending</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {table.getRowModel().rows.map(({ original: row }) => (
+            <Card key={row.plane} className="py-0">
+              <CardContent className="min-w-0 space-y-3 p-4">
+                <div className="min-w-0 space-y-1">
+                  <ReportText variant="label">{row.label}</ReportText>
+                  {row.beneficiary && row.beneficiary !== "Fleet" && (
+                    <ReportText variant="caption" tone="muted">
+                      {row.beneficiary}
+                    </ReportText>
+                  )}
+                  {row.coverage !== "operator-covered" && (
+                    <ReportText variant="caption" tone="muted">
+                      Funded by{" "}
+                      {row.payer && row.payer !== "Not established"
+                        ? row.payer
+                        : "unknown payer"}
+                    </ReportText>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Status row={row} />
+                  <FinanceSource row={row} evidence={evidence.get(row.plane)} />
+                </div>
+                <dl className="grid min-w-0 gap-3">
+                  {rowAmount(row.balance, row.currency) && (
+                    <div>
+                      <ReportText as="dt" variant="caption" tone="muted">
+                        Balance / credit
+                      </ReportText>
+                      <ReportText as="dd" variant="amount">
+                        {amountLabel(rowAmount(row.balance, row.currency))}
+                      </ReportText>
+                    </div>
+                  )}
+                  {nativeBurn(row) && (
+                    <div>
+                      <ReportText as="dt" variant="caption" tone="muted">
+                        {rateCaption(row)}
+                        {rateAge(row) ? ` · ${rateAge(row)}` : ""}
+                      </ReportText>
+                      <ReportText as="dd" variant="amount">
+                        {amountLabel(nativeBurn(row))}
+                      </ReportText>
+                    </div>
+                  )}
+                  {runway(row) !== undefined && (
+                    <div>
+                      <ReportText as="dt" variant="caption" tone="muted">
+                        Runway
+                      </ReportText>
+                      <ReportText as="dd" variant="amount">
+                        {runway(row)?.toFixed(1)} days
+                      </ReportText>
+                    </div>
+                  )}
+                </dl>
+              </CardContent>
+            </Card>
+          ))}
+        </section>
+        <output className="sr-only" aria-live="polite">
+          Sorted by {keys[active.id as SortKey]},{" "}
+          {active.desc ? "descending" : "ascending"}.
+        </output>
+      </section>
+      {custody.length > 0 && (
+        <section className="space-y-3" aria-label="Other accounts">
+          <div>
+            <ReportText as="h2" variant="section">
+              Other accounts
+            </ReportText>
+            <ReportText variant="caption" tone="muted">
+              Custody accounts · ownership not established
+            </ReportText>
+          </div>
+          <Card className="py-0">
+            <CardContent className="space-y-4 p-4">
+              {custody.map((row) => (
+                <div
+                  key={row.plane}
+                  className="flex min-w-0 flex-wrap items-center justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <ReportText variant="label">{row.label}</ReportText>
+                    <ReportText variant="caption" tone="muted">
+                      {row.beneficiary}
+                    </ReportText>
+                  </div>
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <ReportText variant="amount">
+                      {rowAmount(row.balance, row.currency)
+                        ? amountLabel(rowAmount(row.balance, row.currency))
+                        : "Balance unavailable"}
+                    </ReportText>
+                    <FinanceSource row={row} />
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </section>
+      )}
+      <ReportText variant="caption" tone="muted">
+        Payment history is not available in this report.
+      </ReportText>
     </div>
   );
 }

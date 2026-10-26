@@ -59,7 +59,21 @@ export function compareAmounts(
     );
   return unit || Number(a.amount) - Number(b.amount);
 }
-export function observedLabel(value: string | null | undefined): string {
+export function observedLabel(
+  value: string | null | undefined,
+  precise = false
+): string {
   if (!value || !Number.isFinite(Date.parse(value))) return "Unknown";
-  return `${new Date(value).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+  return `${new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    ...(precise
+      ? { second: "2-digit" as const, fractionalSecondDigits: 3 as const }
+      : {}),
+  }).format(new Date(value))} UTC`;
 }

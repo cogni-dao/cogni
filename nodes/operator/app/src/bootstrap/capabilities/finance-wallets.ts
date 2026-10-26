@@ -13,6 +13,7 @@
 export interface FinanceWalletBinding {
   name: string;
   isTreasury?: boolean;
+  configured?: boolean;
   label: string;
   address: string | undefined;
   beneficiary: string;
@@ -37,7 +38,7 @@ export function uniqueWalletBindings(
       if (existing.payer !== binding.payer)
         existing.payer += ` / ${binding.payer}`;
     } else {
-      const copy = { ...binding };
+      const copy = { ...binding, configured: Boolean(binding.address) };
       result.push(copy);
       if (key) accounts.set(key, copy);
     }

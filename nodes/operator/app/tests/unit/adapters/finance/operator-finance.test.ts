@@ -192,7 +192,8 @@ describe("operator finance evidence", () => {
       json: async () => ({ result: "0x989680" }),
     }));
     vi.stubGlobal("fetch", fetch);
-    const { readers, treasuryPlane } = await createFinanceReaders();
+    const { readers, treasuryPlane, configuredWalletPlanes } =
+      await createFinanceReaders();
     const snapshot = await takeSnapshot(readers, { timeoutMs: 500 });
     expect(snapshot.rows.filter((row) => row.kind === "wallet")).toHaveLength(
       1
@@ -200,6 +201,7 @@ describe("operator finance evidence", () => {
     expect(
       snapshot.rows.find((row) => row.plane === treasuryPlane)?.balance
     ).toBe(10);
+    expect(configuredWalletPlanes).toEqual([treasuryPlane]);
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(
       fetch.mock.calls.every(
@@ -221,8 +223,11 @@ describe("operator finance evidence", () => {
         json: async () => ({ result: "0x989680" }),
       }))
     );
-    const { readers, treasuryPlane } = await createFinanceReaders();
+    const { readers, treasuryPlane, configuredWalletPlanes } =
+      await createFinanceReaders();
     const snapshot = await takeSnapshot(readers, { timeoutMs: 500 });
+    expect(configuredWalletPlanes).not.toContain(treasuryPlane);
+    expect(configuredWalletPlanes).toEqual(["base:operator-wallet"]);
     expect(
       snapshot.rows.find((row) => row.plane === treasuryPlane)
     ).toMatchObject({ balance: null, grade: "UNKNOWN" });

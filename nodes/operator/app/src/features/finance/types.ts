@@ -13,5 +13,6 @@
 import type { CostRateEvidence, MoneyPlaneSnapshot } from "@cogni/money-plane";
 export interface FinanceReportModel extends MoneyPlaneSnapshot {
   treasuryPlane: string | null;
+  configuredWalletPlanes: string[];
   costRateEvidence: CostRateEvidence[];
 }

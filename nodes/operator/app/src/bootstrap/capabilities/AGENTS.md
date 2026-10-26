@@ -28,7 +28,7 @@ Capability factories bridging ai-tools interfaces to adapters. Creates environme
 
 ## Public Surface
 
-- `createFinanceReaders()` returns public-wallet readers, stored compute rate evidence and explicit treasury identity for admin reporting; provider account credentials are not read by the report.
+- `createFinanceReaders()` returns public-wallet readers, stored compute rate evidence and explicit treasury/configured-account identity for admin reporting; provider account credentials are not read by the report.
 
 - **Exports:** `createMetricsCapability()`, `stubMetricsCapability`, `createRepoCapability()`, `stubRepoCapability`, `createWebSearchCapability()`
 - **Env/Config keys:** PROMETHEUS_REMOTE_WRITE_URL, PROMETHEUS_QUERY_URL, PROMETHEUS_READ_USERNAME, PROMETHEUS_READ_PASSWORD, COGNI_REPO_PATH, COGNI_REPO_ROOT, TAVILY_API_KEY via ServerEnv

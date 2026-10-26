@@ -31,9 +31,10 @@ const base: MoneyPlaneRow = {
   beneficiary: "Fleet",
   coverage: "operator-covered",
 };
-export const financePreview: FinanceReportModel = {
+export const richFinancePreview: FinanceReportModel = {
   takenAt: now,
   treasuryPlane: "demo:treasury",
+  configuredWalletPlanes: ["demo:treasury", "demo:float", "demo:steward"],
   costRateEvidence: [
     ...[2, 3].map(
       (amount, index): CostRateEvidence => ({
@@ -151,7 +152,7 @@ export const financePreview: FinanceReportModel = {
     },
     {
       ...base,
-      plane: "demo:cherry",
+      plane: "demo:cherry:account",
       label: "Cherry compute",
       detail: "Balance unavailable; scoped read-only provider access pending",
     },
@@ -170,6 +171,116 @@ export const financePreview: FinanceReportModel = {
       kind: "fixed",
       source: "Not connected",
       detail: "Subscription amount not available",
+    },
+  ],
+};
+
+/** Default source-shaped report: stored contract rates, no connected provider balances. */
+export const financePreview: FinanceReportModel = {
+  ...richFinancePreview,
+  configuredWalletPlanes: ["demo:treasury", "demo:float"],
+  worst: "UNKNOWN",
+  costRateEvidence: richFinancePreview.costRateEvidence.filter(
+    (item) => item.basis.kind === "contract"
+  ),
+  rows: richFinancePreview.rows
+    .filter((row) => !row.plane.includes("measured"))
+    .map((row) =>
+      row.plane === "demo:float"
+        ? {
+            ...row,
+            balance: null,
+            grade: "UNKNOWN",
+            sourceObservedAt: null,
+            freshness: "unknown",
+          }
+        : row
+    ),
+};
+
+export const missingFinancePreview: FinanceReportModel = {
+  ...financePreview,
+  treasuryPlane: null,
+  configuredWalletPlanes: ["demo:float"],
+  costRateEvidence: [],
+  rows: financePreview.rows.filter(
+    (row) => !row.plane.includes("akash") && row.plane !== "demo:treasury"
+  ),
+};
+
+/** Explicit fixture account, never a live/repo-spec treasury address. */
+export const previewTreasuryAddress =
+  "0x0000000000000000000000000000000000000010";
+
+/** Stress fixture is separate from source-shaped coverage and measured examples. */
+export const longFinancePreview: FinanceReportModel = {
+  ...richFinancePreview,
+  configuredWalletPlanes: ["demo:treasury"],
+  rows: [
+    ...richFinancePreview.rows
+      .filter((row) => row.kind !== "wallet" || row.plane === "demo:treasury")
+      .map((row) =>
+        row.plane === "demo:treasury"
+          ? {
+              ...row,
+              balance: 0,
+              beneficiary: "DAO treasury · Operator wallet · Steward custody",
+            }
+          : row.plane === "demo:akash:0"
+            ? {
+                ...row,
+                label:
+                  "Akash hosting for the international research and development node",
+                beneficiary:
+                  "node-with-an-extremely-long-unbroken-resource-identifier-for-reflow-testing-012345678901234567890123456789",
+                nativeRate: {
+                  amount: "123456789012345678901234567890.123456789",
+                  currency: "uact",
+                  per: "block",
+                },
+              }
+            : row
+      ),
+    {
+      ...base,
+      plane: "demo:other-instrument",
+      label: "Independent provider credit",
+      balance: 12,
+      currency: "USD",
+      burnPerDay: 6,
+      runwayDays: 2,
+      grade: "RED",
+      sourceObservedAt: now,
+      freshness: "current",
+      source: "Demo · Separate provider instrument",
+      beneficiary: "Synthetic example",
+    },
+  ],
+  costRateEvidence: [
+    ...richFinancePreview.costRateEvidence.map((item) =>
+      item.sourceId === "demo:akash:0"
+        ? {
+            ...item,
+            rate: {
+              ...item.rate,
+              amount: "123456789012345678901234567890.123456789",
+            },
+          }
+        : item
+    ),
+    {
+      sourceId: "demo:other-instrument",
+      ownerId: "example",
+      scopeId: "synthetic example",
+      instrumentId: "example:other-usd",
+      basis: {
+        kind: "measured",
+        start: "2026-10-24T00:00:00Z",
+        end: "2026-10-25T00:00:00Z",
+      },
+      rate: { amount: "6", currency: "USD", per: "day" },
+      sourceObservedAt: now,
+      partial: false,
     },
   ],
 };

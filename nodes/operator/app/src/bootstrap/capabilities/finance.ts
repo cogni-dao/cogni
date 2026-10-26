@@ -121,6 +121,9 @@ export async function createFinanceReaders() {
   const treasury = bindings.find((binding) => binding.isTreasury);
   return {
     treasuryPlane: treasury ? `base:${treasury.name}` : null,
+    configuredWalletPlanes: bindings
+      .filter((binding) => binding.configured)
+      .map((binding) => `base:${binding.name}`),
     costRateEvidence: compute.costRateEvidence,
     readers: [
       ...bindings.map((binding) =>
