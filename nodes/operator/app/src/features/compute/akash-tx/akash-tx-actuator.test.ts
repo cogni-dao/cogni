@@ -784,9 +784,21 @@ describe("qualified cell app releases", () => {
       ).rejects.toBeInstanceOf(AkashTxError);
     }
     const disabled = withCell({ ...recoveryProfile, enabled: false });
+    const disabledInput = recoveryRequest(disabled);
     await expect(
-      disabled.actuator.createDatabaseCellRecovery(recoveryRequest(disabled))
+      disabled.actuator.createDatabaseCellRecovery(disabledInput)
     ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(disabled.log.lines).toContainEqual({
+      level: "warn",
+      marker: "akash_tx_database_cell_recovery_refused",
+      fields: {
+        cogniKey: disabledInput.cogniKey,
+        nodeId: IDENTITY.nodeId,
+        environment: "production",
+        profileId: "pg15-cold-capacity-v1",
+        reasonCode: "profile_disabled",
+      },
+    });
     expect(disabled.ledger.rows.size).toBe(1);
     expect(context.api.allocateCalls).toBe(0);
   });
@@ -889,9 +901,21 @@ describe("qualified cell app releases", () => {
       enabled: true,
       funding_status: "unqualified",
     });
+    const input = recoveryRequest(context);
     await expect(
-      context.actuator.createDatabaseCellRecovery(recoveryRequest(context))
+      context.actuator.createDatabaseCellRecovery(input)
     ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(context.log.lines).toContainEqual({
+      level: "warn",
+      marker: "akash_tx_database_cell_recovery_refused",
+      fields: {
+        cogniKey: input.cogniKey,
+        nodeId: IDENTITY.nodeId,
+        environment: "production",
+        profileId: "pg15-cold-capacity-v1",
+        reasonCode: "funding_unqualified",
+      },
+    });
     expect(context.ledger.rows.size).toBe(1);
     expect(context.api.cursorCalls).toBe(0);
     expect(context.api.allocateCalls).toBe(0);

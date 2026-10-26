@@ -506,11 +506,27 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       !parsed.success ||
       !parsed.data.enabled ||
       parsed.data.funding_status !== "qualified"
-    )
+    ) {
+      const reasonCode = !parsed.success
+        ? "profile_unavailable"
+        : !parsed.data.enabled
+          ? "profile_disabled"
+          : "funding_unqualified";
+      this.log.warn(
+        {
+          cogniKey: input.cogniKey,
+          nodeId: input.identity.nodeId,
+          environment: input.environment,
+          profileId: "pg15-cold-capacity-v1",
+          reasonCode,
+        },
+        "akash_tx_database_cell_recovery_refused"
+      );
       throw new AkashTxError(
         "invalid_request",
         "cold recovery profile unavailable, disabled or funding unqualified"
       );
+    }
     const source = await this.readLedger(input.recovery.sourceCogniKey);
     const bindings =
       source?.appliedDatabaseCellBinding?.filter(
