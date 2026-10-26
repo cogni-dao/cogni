@@ -67,7 +67,13 @@ const parse = (s: string): Record<string, unknown> | null => {
 
 const ITEM_ID = /\b(?:story|task|bug|spike|subtask)\.\d+\b/;
 const TOP_LINE = /^\s*[1-5]\.\s/;
-const PATCH_FIELDS = ["priority", "rank", "labels", "summary"] as const;
+const PATCH_FIELDS = [
+  "priority",
+  "rank",
+  "labels",
+  "summary",
+  "scores",
+] as const;
 
 type Snapshot = Partial<Record<(typeof PATCH_FIELDS)[number], unknown>>;
 
