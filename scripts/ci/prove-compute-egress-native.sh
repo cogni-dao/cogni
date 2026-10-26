@@ -62,11 +62,14 @@ if [[ ${1:-} == run-bounded ]]; then
   cleanup() {
     status=$?
     trap - EXIT
+    cleanup_status=0
     timeout 10 k3s kubectl -n "$namespace" delete pod "$fixture" \
-      --ignore-not-found --wait=true --timeout=8s >/dev/null 2>&1 || status=1
-    timeout 5 k3s ctr images rm "$image" >/dev/null 2>&1 || status=1
-    timeout 5 docker image rm "$image" >/dev/null 2>&1 || status=1
-    rm -rf "$stage"
+      --ignore-not-found --wait=true --timeout=8s >/dev/null 2>&1 || cleanup_status=1
+    timeout 5 k3s ctr images rm "$image" >/dev/null 2>&1 || cleanup_status=1
+    timeout 5 docker image rm "$image" >/dev/null 2>&1 || cleanup_status=1
+    rm -rf "$stage" || cleanup_status=1
+    printf 'fixture_cleanup original_exit=%s cleanup_exit=%s\n' "$status" "$cleanup_status"
+    if [[ $status == 0 ]]; then status=$cleanup_status; fi
     exit "$status"
   }
   trap cleanup EXIT
@@ -104,11 +107,15 @@ ENTRYPOINT ["bash", "/proof.sh", "inside"]
 DOCKER
   # Cold package installation and image transfer need separate phase budgets;
   # the enclosing 270s watchdog (+25s kill grace) still bounds the whole run.
+  printf 'fixture_phase=build status=started\n'
   timeout 180 docker build --quiet --build-arg "BASE_IMAGE=$base_image" \
     --build-arg "YQ_VERSION=$yq_version" -t "$image" "$stage"
+  printf 'fixture_phase=build status=completed\n'
   docker image inspect "$image" --format 'fixture_image={{.Id}}'
+  printf 'fixture_phase=import status=started\n'
   # shellcheck disable=SC2016 # $1 is the child shell's argument, not outer interpolation.
   timeout 60 bash -o pipefail -c 'docker save "$1" | k3s ctr images import -' _ "$image" >/dev/null
+  printf 'fixture_phase=import status=completed\n'
   # No host mounts, host namespaces, service-account token or network service.
   # SYS_ADMIN permits only this Pod's nested netns/mount operations; never
   # escalate to privileged or hostNetwork if the runtime refuses them.
