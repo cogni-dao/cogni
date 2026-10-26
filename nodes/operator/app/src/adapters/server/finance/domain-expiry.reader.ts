@@ -47,7 +47,7 @@ export function domainExpiryReader(
   options: DomainExpiryReaderOptions
 ): PlaneReader {
   const plane = `domain:${options.domain}`;
-  const label = `Domain renewal · ${options.domain}`;
+  const label = `Domain ${options.domain}`;
   const now = options.now ?? (() => new Date());
   const unknown = (detail: string): MoneyPlaneRow =>
     unknownRow({

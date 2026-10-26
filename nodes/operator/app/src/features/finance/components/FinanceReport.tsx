@@ -3,17 +3,16 @@
 
 /**
  * Module: `@features/finance/components/FinanceReport`
- * Purpose: Financials — one read-only table (Line · Balance · Burn/day · Runway · Source) over the node's money planes, in risk order.
+ * Purpose: Financials — one table (Line · Balance · Burn/day · Runway · Action) over the node's money planes, in risk order. The table is the page.
  * Scope: Presentation of one shared snapshot with the existing kit; stacked rows below 42rem (@2xl) container width so a 1024px viewport beside the admin sidebar still shows the table.
- * Invariants: No pooled custody totals, no FX, no per-row status pills, no horizontal scroll, no payment actions.
- *   Unknown is a muted dash; the reason lives in the Source dialog. A numeric column no row can fill is omitted and named once below the table.
+ * Invariants: ONE_ROW_MODEL — actions are row payActions. No pooled custody totals, no FX, no status pills, no horizontal scroll.
+ *   Unknown is a muted dash; the reason lives in the row's dialog (the Line label opens it). A numeric column no row can fill is omitted.
  * Side-effects: Refreshes the server report on request.
  * Links: https://cognidao.org/work/items/task.5347
  * @public
  */
 "use client";
 
-import type { MoneyPlaneRow } from "@cogni/money-plane";
 import {
   type ColumnDef,
   getCoreRowModel,
@@ -34,21 +33,21 @@ import {
   DataGridTable,
   ReportText,
 } from "@/components";
-import type { FinanceReportModel } from "../types";
+import type { FinanceReportModel, FinanceRow } from "../types";
 import { FinanceSource } from "./FinanceSource";
 import {
-  attributionLabel,
   balance,
   balanceLabel,
   burn,
   burnLabel,
   byRisk,
   fleetBurnLabel,
-  observedLabel,
+  refreshedLabel,
   runway,
   runwayLabel,
   runwayTone,
 } from "./format";
+import { RowAction } from "./RowAction";
 
 const noop = () => () => {};
 /** Server renders UTC; the browser re-renders in its own zone after hydration. */
@@ -60,21 +59,7 @@ function useViewerTimeZone(): string | undefined {
   );
 }
 
-function Line({ row }: { row: MoneyPlaneRow }) {
-  const who = attributionLabel(row);
-  return (
-    <div className="min-w-0 space-y-0.5">
-      <ReportText variant="label">{row.label}</ReportText>
-      {who && (
-        <ReportText variant="caption" tone="muted">
-          {who}
-        </ReportText>
-      )}
-    </div>
-  );
-}
-
-function Runway({ row }: { row: MoneyPlaneRow }) {
+function Runway({ row }: { row: FinanceRow }) {
   const label = runwayLabel(row);
   return (
     <ReportText
@@ -97,9 +82,9 @@ function Amount({ children }: { children: string }) {
 const numeric = (
   id: string,
   title: string,
-  value: (row: MoneyPlaneRow) => number | undefined,
-  cell: (row: MoneyPlaneRow) => string
-): ColumnDef<MoneyPlaneRow> => ({
+  value: (row: FinanceRow) => number | undefined,
+  cell: (row: FinanceRow) => string
+): ColumnDef<FinanceRow> => ({
   id,
   accessorFn: value,
   sortUndefined: "last",
@@ -120,14 +105,6 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
   const rows = useMemo(() => [...report.rows].sort(byRisk), [report.rows]);
   const hasBurn = rows.some((row) => row.burnPerDay !== null);
   const hasRunway = rows.some((row) => row.runwayDays !== null);
-  const missing =
-    !hasBurn && !hasRunway
-      ? "Burn and runway are not yet reported."
-      : !hasBurn
-        ? "Burn is not yet reported."
-        : !hasRunway
-          ? "Runway is not yet reported."
-          : "";
   const treasury = report.rows.find(
     (row) => row.plane === report.treasuryPlane
   );
@@ -139,9 +116,9 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
   ]
     .filter(Boolean)
     .join(" · ");
-  const refreshed = observedLabel(report.takenAt, timeZone) ?? "—";
+  const refreshed = refreshedLabel(report.takenAt, timeZone);
 
-  const columns = useMemo<ColumnDef<MoneyPlaneRow>[]>(
+  const columns = useMemo<ColumnDef<FinanceRow>[]>(
     () => [
       {
         id: "line",
@@ -150,7 +127,9 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
         header: ({ column }) => (
           <DataGridColumnHeader column={column} title="Line" />
         ),
-        cell: ({ row }) => <Line row={row.original} />,
+        cell: ({ row }) => (
+          <FinanceSource row={row.original} timeZone={timeZone} />
+        ),
         meta: { headerTitle: "Line" },
       },
       numeric("balance", "Balance", balance, balanceLabel),
@@ -170,17 +149,15 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
                 headerTitle: "Runway",
                 cellClassName: "whitespace-nowrap",
               },
-            } satisfies ColumnDef<MoneyPlaneRow>,
+            } satisfies ColumnDef<FinanceRow>,
           ]
         : []),
       {
-        id: "source",
+        id: "action",
         enableSorting: false,
-        header: "Source",
-        cell: ({ row }) => (
-          <FinanceSource row={row.original} timeZone={timeZone} />
-        ),
-        meta: { headerTitle: "Source", cellClassName: "text-right" },
+        header: "Action",
+        cell: ({ row }) => <RowAction action={row.original.payAction} />,
+        meta: { headerTitle: "Action", cellClassName: "text-right" },
       },
     ],
     [timeZone, hasBurn, hasRunway]
@@ -219,7 +196,7 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
             Financials
           </ReportText>
           <ReportText variant="caption" tone="muted">
-            Report refreshed {refreshed}
+            Refreshed {refreshed}
           </ReportText>
         </div>
         <Button
@@ -235,7 +212,7 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
           {pending
             ? "Refreshing report."
             : refreshMessage
-              ? `${refreshMessage} Report refreshed ${refreshed}.`
+              ? `${refreshMessage} Refreshed ${refreshed}.`
               : ""}
         </output>
       </header>
@@ -272,10 +249,7 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
           <li key={row.plane}>
             <Card className="py-0">
               <CardContent className="min-w-0 space-y-3 p-4">
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <Line row={row} />
-                  <FinanceSource row={row} timeZone={timeZone} />
-                </div>
+                <FinanceSource row={row} timeZone={timeZone} />
                 <dl className="grid min-w-0 grid-cols-3 gap-2">
                   <div>
                     <ReportText as="dt" variant="caption" tone="muted">
@@ -306,19 +280,16 @@ export function FinanceReport({ report }: { report: FinanceReportModel }) {
                     </div>
                   )}
                 </dl>
+                {row.payAction && (
+                  <div className="border-border border-t pt-3">
+                    <RowAction action={row.payAction} />
+                  </div>
+                )}
               </CardContent>
             </Card>
           </li>
         ))}
       </ul>
-      {missing && (
-        <ReportText variant="caption" tone="muted" data-finance-missing>
-          {missing}
-        </ReportText>
-      )}
-      <ReportText variant="caption" tone="muted">
-        Payment history is not included in this report.
-      </ReportText>
     </div>
   );
 }

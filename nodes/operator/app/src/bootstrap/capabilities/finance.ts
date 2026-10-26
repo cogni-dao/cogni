@@ -15,6 +15,7 @@ import {
   baseWalletReader,
   type FetchLike,
   openRouterReader,
+  type PayAction,
   type PlaneReader,
 } from "@cogni/money-plane";
 
@@ -63,6 +64,26 @@ const safeFetch: FetchLike = async (url, init) => {
 
 /** No config helper exposes the public apex today; the registry row is Cloudflare/Namecheap for cognidao.org. */
 const OPERATOR_PUBLIC_DOMAIN = "cognidao.org";
+/** Human checkouts, paid from the steward wallet (hub guide fund-cogni-vendors). */
+const OPENROUTER_CHECKOUT: PayAction = {
+  kind: "steward-checkout",
+  vendor: "openrouter",
+  checkoutUrl: "https://openrouter.ai/settings/credits",
+};
+const CHERRY_CHECKOUT: PayAction = {
+  kind: "steward-checkout",
+  vendor: "cherry",
+  checkoutUrl: "https://portal.cherryservers.com/",
+};
+/** Console billing is card-only and sign-in gated (hub akash-crypto-selfcustody-fiat). */
+const AKASH_CONSOLE_TOP_UP: PayAction = {
+  kind: "external",
+  url: "https://console.akash.network/",
+  label: "Top up",
+};
+const FUND_STEWARD: PayAction = { kind: "fund-steward" };
+const MONEY_CHAIN =
+  "User payments → operator wallet → steward wallet → vendors";
 
 export interface FinanceReaders {
   treasuryPlane: string | null;
@@ -78,6 +99,7 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
     /* Other providers must not hide readable wallet evidence. */
   }
 
+  const stewardConfigured = Boolean(getStewardWalletConfig()?.address);
   const bindings = uniqueWalletBindings([
     {
       name: "dao-treasury",
@@ -87,42 +109,57 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
     },
     {
       name: "operator-wallet",
-      label: "Operator wallet · working capital",
+      label: "Operator wallet",
       address: getOperatorWalletConfig()?.address,
+      // The only write on the page; needs a configured steward destination (AMOUNT_ONLY).
+      ...(stewardConfigured ? { payAction: FUND_STEWARD } : {}),
+      note: MONEY_CHAIN,
     },
     {
       name: "steward-wallet",
-      label: "Steward wallet · human custody",
+      label: "Steward wallet",
       address: getStewardWalletConfig()?.address,
+      note: "Human-custodied; pays both vendors in USDC",
     },
   ]);
   const treasury = bindings.find((binding) => binding.isTreasury);
-  const wallets = bindings.map((binding) =>
-    env.EVM_RPC_URL
+  const wallets = bindings.map((binding): PlaneReader => {
+    const reader = env.EVM_RPC_URL
       ? baseWalletReader({
           name: binding.name,
           label: binding.label,
           address: binding.address,
           rpcUrl: env.EVM_RPC_URL,
           fetch: safeFetch,
+          ...(binding.payAction ? { payAction: binding.payAction } : {}),
         })
       : unavailableFinanceReader(
           `base:${binding.name}`,
           binding.label,
           "wallet",
           "RPC unavailable",
-          "unreadable"
-        )
-  );
+          "unreadable",
+          undefined,
+          binding.payAction
+        );
+    if (!binding.note) return reader;
+    const note = binding.note;
+    return {
+      ...reader,
+      read: async (signal) => ({ ...(await reader.read(signal)), note }),
+    };
+  });
 
   const openRouter = openRouterReader({
     apiKey: env.OPENROUTER_API_KEY,
     fetch: safeFetch,
     label: "OpenRouter credit",
+    payAction: OPENROUTER_CHECKOUT,
   });
   const cherry = cherryFinanceReader({
     token: env.CHERRY_AUTH_TOKEN,
     fetch: safeFetch,
+    payAction: CHERRY_CHECKOUT,
   });
   const spend = container?.akashSpendReader;
   const [reports, blocksPerDay] = await Promise.all([
@@ -133,6 +170,7 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
     owner: env.AKASH_ACTUATOR_ACCOUNT_ID?.trim() || AKASH_PRODUCTION_OWNER,
     fetch: safeFetch,
     blocksPerDay,
+    payAction: AKASH_CONSOLE_TOP_UP,
   });
   const akash = akashHostingReaders(
     reports,
@@ -151,7 +189,7 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
   const unread = [
     unavailableFinanceReader(
       "rpc:alchemy",
-      "Base RPC (Alchemy)",
+      "Alchemy RPC",
       "usage",
       "no billing-scoped credential",
       "unconfigured",
@@ -159,7 +197,7 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
     ),
     unavailableFinanceReader(
       "tenant:system",
-      "System tenant · internal credits",
+      "System tenant",
       "prepaid",
       "no read wired; balance lives in the operator DB",
       "unconfigured",
@@ -167,11 +205,13 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
     ),
     unavailableFinanceReader(
       "saas:other",
-      "Other SaaS · PostHog, Langfuse, Tavily, GitHub, DoltHub, SonarCloud, Privy",
+      "Other SaaS",
       "fixed",
       "no billing read; declared costs not yet in repo-spec",
       "unconfigured",
-      "Operator"
+      "Operator",
+      undefined,
+      "PostHog, Langfuse, Tavily, GitHub, DoltHub, SonarCloud, Privy"
     ),
   ];
 

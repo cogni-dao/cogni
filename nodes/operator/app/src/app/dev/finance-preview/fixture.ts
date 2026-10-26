@@ -12,7 +12,6 @@
  */
 import type { MoneyPlaneRow } from "@cogni/money-plane";
 
-import type { AiFunding } from "@/app/(admin)/admin/payments/funding.server";
 import type { FinanceReportModel, FinanceRow } from "@/features/finance/types";
 
 const now = "2026-10-26T13:40:00.000Z";
@@ -23,8 +22,9 @@ function wallet(
   name: string,
   label: string,
   usdc: number,
-  eth: string
-): MoneyPlaneRow {
+  eth: string,
+  extra: Partial<FinanceRow> = {}
+): FinanceRow {
   return {
     plane: `base:${name}`,
     label,
@@ -39,10 +39,15 @@ function wallet(
     sourceObservedAt: now,
     freshness: "current",
     detail: `${eth} ETH`,
+    ...extra,
   };
 }
 
-function walletUnreadable(name: string, label: string): MoneyPlaneRow {
+function walletUnreadable(
+  name: string,
+  label: string,
+  extra: Partial<FinanceRow> = {}
+): FinanceRow {
   return {
     plane: `base:${name}`,
     label,
@@ -57,6 +62,7 @@ function walletUnreadable(name: string, label: string): MoneyPlaneRow {
     sourceObservedAt: null,
     freshness: "unknown",
     detail: "eth_call HTTP 503",
+    ...extra,
   };
 }
 
@@ -69,7 +75,7 @@ function akash(
   const perBlock = ((usdPerDay * 1e6 * 5.884) / 86_400).toFixed(2);
   return {
     plane: `akash:${nodeId}`,
-    label: `Akash hosting · ${nodeId}`,
+    label: `Akash · ${nodeId}`,
     kind: "usage",
     balance: null,
     currency: "USD",
@@ -130,7 +136,7 @@ function akashCredit(
   const runwayDays = balance / burnPerDay;
   return {
     plane: "akash:credit",
-    label: "Akash credit · fleet",
+    label: "Akash credit",
     kind: "prepaid",
     balance,
     currency: "USD",
@@ -144,6 +150,11 @@ function akashCredit(
     freshness: "current",
     payer: "Operator",
     rollup: true,
+    payAction: {
+      kind: "external",
+      url: "https://console.akash.network/",
+      label: "Top up",
+    },
     parts: [
       {
         label: "Console credit",
@@ -159,29 +170,19 @@ function akashCredit(
   };
 }
 
-export const previewFunding: AiFunding = {
-  openRouterRemainingUsd: 3.1,
-  cherryRemaining: 12.4,
-  cherryCurrency: "EUR",
-  operatorWalletUsdc: 10.77,
-  stewardWalletUsdc: 7.07,
-  operatorWalletAddress: "0x2222222222222222222222222222222222222222",
-  stewardWalletAddress: "0x3333333333333333333333333333333333333333",
-};
-
 export const liveShapedFinancePreview: FinanceReportModel = {
   takenAt: now,
   worst: "RED",
   treasuryPlane: "base:dao-treasury",
   rows: [
     wallet("dao-treasury", "DAO treasury", 74.52, "0.0031"),
-    wallet(
-      "operator-wallet",
-      "Operator wallet · working capital",
-      10.77,
-      "0.0008"
-    ),
-    wallet("steward-wallet", "Steward wallet · human custody", 7.07, "0.0012"),
+    wallet("operator-wallet", "Operator wallet", 10.77, "0.0008", {
+      payAction: { kind: "fund-steward" },
+      note: "User payments → operator wallet → steward wallet → vendors",
+    }),
+    wallet("steward-wallet", "Steward wallet", 7.07, "0.0012", {
+      note: "Human-custodied; pays both vendors in USDC",
+    }),
     {
       plane: "openrouter:account",
       label: "OpenRouter credit",
@@ -197,10 +198,15 @@ export const liveShapedFinancePreview: FinanceReportModel = {
       sourceObservedAt: now,
       freshness: "current",
       usageTotal: 96.9,
+      payAction: {
+        kind: "steward-checkout",
+        vendor: "openrouter",
+        checkoutUrl: "https://openrouter.ai/settings/credits",
+      },
     },
     {
       plane: "cherry:team",
-      label: "Cherry compute credit",
+      label: "Cherry credit",
       kind: "prepaid",
       balance: 12.4,
       currency: "EUR",
@@ -211,12 +217,17 @@ export const liveShapedFinancePreview: FinanceReportModel = {
       source: "Cherry team API · price per hour × 24 · vendor remaining time",
       sourceObservedAt: now,
       freshness: "current",
+      payAction: {
+        kind: "steward-checkout",
+        vendor: "cherry",
+        checkoutUrl: "https://portal.cherryservers.com/",
+      },
     },
     akashCredit(5.79, 2.1, 3.13),
     akash("poly", 1.57, "4210000"),
     {
       plane: "grafana:overage",
-      label: "Grafana Cloud · overage this month",
+      label: "Grafana overage",
       kind: "usage",
       balance: null,
       currency: "USD",
@@ -237,7 +248,7 @@ export const liveShapedFinancePreview: FinanceReportModel = {
     },
     {
       plane: "domain:cognidao.org",
-      label: "Domain renewal · cognidao.org",
+      label: "Domain cognidao.org",
       kind: "expiry",
       balance: null,
       currency: null,
@@ -253,22 +264,26 @@ export const liveShapedFinancePreview: FinanceReportModel = {
     },
     placeholder(
       "rpc:alchemy",
-      "Base RPC (Alchemy)",
+      "Alchemy RPC",
       "usage",
       "no billing-scoped credential"
     ),
     placeholder(
       "tenant:system",
-      "System tenant · internal credits",
+      "System tenant",
       "prepaid",
       "no read wired; balance lives in the operator DB"
     ),
-    placeholder(
-      "saas:other",
-      "Other SaaS · PostHog, Langfuse, Tavily, GitHub, DoltHub, SonarCloud, Privy",
-      "fixed",
-      "no billing read; declared costs not yet in repo-spec"
-    ),
+    {
+      ...placeholder(
+        "saas:other",
+        "Other SaaS",
+        "fixed",
+        "no billing read; declared costs not yet in repo-spec"
+      ),
+      beneficiary:
+        "PostHog, Langfuse, Tavily, GitHub, DoltHub, SonarCloud, Privy",
+    },
     akash("red", 0.64),
     akash("toks5", 0.35),
     akash("levelup", 0.19),
@@ -283,8 +298,11 @@ export const sparseFinancePreview: FinanceReportModel = {
   treasuryPlane: "base:dao-treasury",
   rows: [
     walletUnreadable("dao-treasury", "DAO treasury"),
-    walletUnreadable("operator-wallet", "Operator wallet · working capital"),
-    walletUnreadable("steward-wallet", "Steward wallet · human custody"),
+    walletUnreadable("operator-wallet", "Operator wallet", {
+      payAction: { kind: "fund-steward" },
+      note: "User payments → operator wallet → steward wallet → vendors",
+    }),
+    walletUnreadable("steward-wallet", "Steward wallet"),
     {
       plane: "openrouter:account",
       label: "OpenRouter credit",
@@ -300,15 +318,22 @@ export const sparseFinancePreview: FinanceReportModel = {
       freshness: "unknown",
       detail: "no OpenRouter key in this environment",
     },
-    placeholder(
-      "cherry:team",
-      "Cherry compute credit",
-      "prepaid",
-      "no Cherry credential in this runtime"
-    ),
+    {
+      ...placeholder(
+        "cherry:team",
+        "Cherry credit",
+        "prepaid",
+        "no Cherry credential in this runtime"
+      ),
+      payAction: {
+        kind: "steward-checkout",
+        vendor: "cherry",
+        checkoutUrl: "https://portal.cherryservers.com/",
+      },
+    },
     {
       plane: "akash:credit",
-      label: "Akash credit · fleet",
+      label: "Akash credit",
       kind: "prepaid",
       balance: null,
       currency: null,
@@ -321,6 +346,11 @@ export const sparseFinancePreview: FinanceReportModel = {
       freshness: "unknown",
       detail: "Akash chain read failed",
       payer: "Operator",
+      payAction: {
+        kind: "external",
+        url: "https://console.akash.network/",
+        label: "Top up",
+      },
     },
     {
       plane: "akash:fleet",
@@ -345,28 +375,32 @@ export const sparseFinancePreview: FinanceReportModel = {
     ),
     placeholder(
       "domain:cognidao.org",
-      "Domain renewal · cognidao.org",
+      "Domain cognidao.org",
       "expiry",
       "registry read failed",
       "unreadable"
     ),
     placeholder(
       "rpc:alchemy",
-      "Base RPC (Alchemy)",
+      "Alchemy RPC",
       "usage",
       "no billing-scoped credential"
     ),
     placeholder(
       "tenant:system",
-      "System tenant · internal credits",
+      "System tenant",
       "prepaid",
       "no read wired; balance lives in the operator DB"
     ),
-    placeholder(
-      "saas:other",
-      "Other SaaS · PostHog, Langfuse, Tavily, GitHub, DoltHub, SonarCloud, Privy",
-      "fixed",
-      "no billing read; declared costs not yet in repo-spec"
-    ),
+    {
+      ...placeholder(
+        "saas:other",
+        "Other SaaS",
+        "fixed",
+        "no billing read; declared costs not yet in repo-spec"
+      ),
+      beneficiary:
+        "PostHog, Langfuse, Tavily, GitHub, DoltHub, SonarCloud, Privy",
+    },
   ],
 };

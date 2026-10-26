@@ -4,8 +4,8 @@
 /**
  * Module: `@features/finance/components/format`
  * Purpose: Human-scale labels, risk ordering and one-line reasons for the Financials table.
- * Scope: Presentation only. Grading and cadence conversion live in the money-plane package and operator adapter.
- * Invariants: No FX; a fleet total sums only USD-denominated burn; tiny positive burn never displays as zero;
+ * Scope: Presentation only. Grading and cadence conversion live in the money-plane package and operator adapters.
+ * Invariants: No FX; totals are per currency; tiny positive burn never displays as zero;
  *   an unavailable cell is a muted dash with a human reason, never a raw reason code.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/task.5347
@@ -14,6 +14,9 @@
 import type { Grade, MoneyPlaneRow } from "@cogni/money-plane";
 
 import type { FinanceRow } from "@/ports/finance-report.port";
+
+/** The node that renders this page; its own payer line is noise. */
+export const THIS_NODE_PAYER = "Operator";
 
 /** Rows that carry a measured number sort above rows that could not be read. */
 function hasData(row: MoneyPlaneRow): boolean {
@@ -39,6 +42,17 @@ export function byRisk(a: MoneyPlaneRow, b: MoneyPlaneRow): number {
   return riskRank(a) - riskRank(b) || a.label.localeCompare(b.label);
 }
 
+const SYMBOL: Record<string, string> = { USD: "$", EUR: "€", GBP: "£" };
+
+function money(amount: number, currency: string, digits = 2): string {
+  const text = amount.toLocaleString("en-US", {
+    minimumFractionDigits: Math.min(digits, 2),
+    maximumFractionDigits: digits,
+  });
+  const symbol = SYMBOL[currency];
+  return symbol ? `${symbol}${text}` : `${text} ${currency}`;
+}
+
 /** Exact native text, with uact scaled to USD credit for humans: "4.21 USD credit (4,210,000 uact)". */
 export function nativeLabel(amount: string, currency: string): string {
   const value = Number(amount);
@@ -49,17 +63,6 @@ export function nativeLabel(amount: string, currency: string): string {
     })} USD credit (${value.toLocaleString("en-US")} uact)`;
   }
   return `${amount} ${currency}`;
-}
-
-const SYMBOL: Record<string, string> = { USD: "$", EUR: "€", GBP: "£" };
-
-function money(amount: number, currency: string, digits = 2): string {
-  const text = amount.toLocaleString("en-US", {
-    minimumFractionDigits: Math.min(digits, 2),
-    maximumFractionDigits: digits,
-  });
-  const symbol = SYMBOL[currency];
-  return symbol ? `${symbol}${text}` : `${text} ${currency}`;
 }
 
 export function balance(row: MoneyPlaneRow): number | undefined {
@@ -84,13 +87,13 @@ export function burn(row: MoneyPlaneRow): number | undefined {
     : undefined;
 }
 
-/** "$0.19 / day" or "—"; a positive burn below one cent reads "<$0.01 / day". */
+/** "$0.19/day" or "—"; a positive burn below one cent reads "<$0.01/day". */
 export function burnLabel(row: MoneyPlaneRow): string {
   const value = burn(row);
   if (value === undefined) return "—";
   const currency = row.currency ?? "USD";
-  if (value > 0 && value < 0.005) return `<${money(0.01, currency)} / day`;
-  return `${money(value, currency)} / day`;
+  if (value > 0 && value < 0.005) return `<${money(0.01, currency)}/day`;
+  return `${money(value, currency)}/day`;
 }
 
 export function runway(row: MoneyPlaneRow): number | undefined {
@@ -104,11 +107,11 @@ export function runway(row: MoneyPlaneRow): number | undefined {
     : undefined;
 }
 
-/** "12 d" or "—"; a graded runway under one day reads "<1 d". */
+/** "12d" or "—"; a graded runway under one day reads "<1d". */
 export function runwayLabel(row: MoneyPlaneRow): string {
   const days = runway(row);
   if (days === undefined) return "—";
-  return days < 1 ? "<1 d" : `${Math.floor(days)} d`;
+  return days < 1 ? "<1d" : `${Math.floor(days)}d`;
 }
 
 export type RunwayTone = "destructive" | "warning" | "success" | "muted";
@@ -142,31 +145,27 @@ export function fleetBurnPerDay(
   return fleetBurnByCurrency(rows).get("USD");
 }
 
-/** "Fleet burn $12.85 / day ($89.93 / week) + €0.34 / day"; empty when nothing is measured. */
+/** "Burn $12.85/day · €0.34/day"; empty when nothing is measured. USD first, never converted. */
 export function fleetBurnLabel(rows: readonly FinanceRow[]): string {
   const totals = fleetBurnByCurrency(rows);
-  const usd = totals.get("USD");
-  const others = [...totals]
-    .filter(([currency]) => currency !== "USD")
-    .map(([currency, value]) => `+ ${money(value, currency)} / day`);
-  const head =
-    usd === undefined
-      ? ""
-      : `Fleet burn ${money(usd, "USD")} / day (${money(usd * 7, "USD")} / week)`;
-  if (!head && others.length === 0) return "";
-  return [head || "Fleet burn", ...others].join(" ");
+  const parts = [...totals]
+    .sort(([a], [b]) =>
+      a === "USD" ? -1 : b === "USD" ? 1 : a.localeCompare(b)
+    )
+    .map(([currency, value]) => `${money(value, currency)}/day`);
+  return parts.length ? `Burn ${parts.join(" · ")}` : "";
 }
 
-export function usdLabel(amount: number): string {
-  return money(amount, "USD");
+/** The payer, only when it is not this node; the beneficiary is dialog detail. */
+export function payerLabel(row: MoneyPlaneRow): string {
+  return row.payer && row.payer !== THIS_NODE_PAYER
+    ? `Paid by ${row.payer}`
+    : "";
 }
 
-/** Readable "Paid by … · for …" when the row names a payer or beneficiary; empty otherwise. */
-export function attributionLabel(row: MoneyPlaneRow): string {
-  return [
-    row.payer ? `Paid by ${row.payer}` : "",
-    row.beneficiary ? `for ${row.beneficiary}` : "",
-  ]
+/** "Operator · for beacon" for the dialog; empty when nothing is known. */
+export function whoPaysLabel(row: MoneyPlaneRow): string {
+  return [row.payer ?? "", row.beneficiary ? `for ${row.beneficiary}` : ""]
     .filter(Boolean)
     .join(" · ");
 }
@@ -198,16 +197,16 @@ export function unavailableReason(row: MoneyPlaneRow): string | undefined {
   }
 }
 
-/** Basis and cadence of the row's numbers, for the Source dialog. */
+/** Basis and cadence of the row's numbers, ≤ 4 words, for the Source dialog. */
 export function basisLabel(row: MoneyPlaneRow): string | undefined {
   const divided = runway(row) !== undefined && burn(row) !== undefined;
   if (row.nativeRate)
-    return `Contract rate · per ${row.nativeRate.per}${divided ? " · runway = balance ÷ burn per day" : ""}`;
-  if (divided) return "Runway = balance ÷ burn per day";
+    return `contract rate / ${row.nativeRate.per}${divided ? " · balance ÷ burn" : ""}`;
+  if (divided) return "balance ÷ burn";
   if (row.kind === "expiry" && runway(row) !== undefined)
-    return "Days until expiry";
-  if (burn(row) !== undefined) return "Measured burn · per day";
-  if (balance(row) !== undefined) return "Measured balance";
+    return "days to expiry";
+  if (burn(row) !== undefined) return "measured / day";
+  if (balance(row) !== undefined) return "balance read";
   return undefined;
 }
 
@@ -226,4 +225,29 @@ export function observedLabel(
     minute: "2-digit",
     timeZoneName: "short",
   }).format(new Date(value));
+}
+
+/** "6:40 AM" when the report is from today in the viewer's zone, else "Oct 25, 6:40 AM". */
+export function refreshedLabel(
+  value: string,
+  timeZone?: string,
+  now: Date = new Date()
+): string {
+  if (!Number.isFinite(Date.parse(value))) return "—";
+  const zone = timeZone ? { timeZone } : {};
+  const day = (d: Date) =>
+    new Intl.DateTimeFormat("en-CA", { ...zone, dateStyle: "short" }).format(d);
+  const at = new Date(value);
+  const time = new Intl.DateTimeFormat("en-US", {
+    ...zone,
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(at);
+  if (day(at) === day(now)) return time;
+  const date = new Intl.DateTimeFormat("en-US", {
+    ...zone,
+    month: "short",
+    day: "numeric",
+  }).format(at);
+  return `${date}, ${time}`;
 }

@@ -55,7 +55,7 @@ export function grafanaOverageReader(
   options: GrafanaOverageReaderOptions
 ): PlaneReader {
   const plane = GRAFANA_OVERAGE_PLANE;
-  const label = "Grafana Cloud · overage this month";
+  const label = "Grafana overage";
   const now = options.now ?? (() => new Date());
   const unknown = (
     reasonCode: "unconfigured" | "unreadable",

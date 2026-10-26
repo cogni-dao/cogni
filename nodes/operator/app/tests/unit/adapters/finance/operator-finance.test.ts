@@ -126,7 +126,7 @@ describe("operator finance evidence", () => {
     );
     expect(row).toMatchObject({
       plane: "akash:poly",
-      label: "Akash hosting · poly",
+      label: "Akash · poly",
       kind: "usage",
       balance: null,
       currency: "USD",
@@ -293,7 +293,7 @@ describe("operator finance evidence", () => {
     const burn = (213.15 * bpd) / 1e6;
     expect(row).toMatchObject({
       plane: "akash:credit",
-      label: "Akash credit · fleet",
+      label: "Akash credit",
       kind: "prepaid",
       currency: "USD",
       grade: "RED",
@@ -372,6 +372,11 @@ describe("operator finance evidence", () => {
     const row = await akashCreditReader({
       owner: "x",
       blocksPerDay: null,
+      payAction: {
+        kind: "external",
+        url: "https://console.akash.network/",
+        label: "Top up",
+      },
       fetch: async () => {
         throw new Error("sensitive-token-value");
       },
@@ -382,6 +387,7 @@ describe("operator finance evidence", () => {
       detail: "Akash chain read failed",
       balance: null,
       payer: "Operator",
+      payAction: { kind: "external", url: "https://console.akash.network/" },
     });
     expect(JSON.stringify(row)).not.toContain("sensitive-token-value");
     expect(
@@ -464,7 +470,7 @@ describe("operator finance evidence", () => {
     });
     expect(row).toMatchObject({
       plane: "cherry:team",
-      label: "Cherry compute credit",
+      label: "Cherry credit",
       kind: "prepaid",
       balance: 12.4,
       currency: "EUR",
@@ -624,7 +630,7 @@ describe("operator finance evidence", () => {
     expect(urls).toEqual(["https://rdap.org/domain/cognidao.org"]);
     expect(row).toMatchObject({
       plane: "domain:cognidao.org",
-      label: "Domain renewal · cognidao.org",
+      label: "Domain cognidao.org",
       kind: "expiry",
       balance: null,
       burnPerDay: null,
@@ -684,6 +690,18 @@ describe("operator finance evidence", () => {
     ]);
     expect(result[0]?.label).toBe("Treasury · Steward");
     expect(
+      uniqueWalletBindings([
+        { name: "a", label: "A", address: account },
+        {
+          name: "b",
+          label: "B",
+          address: account,
+          payAction: { kind: "fund-steward" },
+          note: "chain",
+        },
+      ])[0]
+    ).toMatchObject({ payAction: { kind: "fund-steward" }, note: "chain" });
+    expect(
       uniqueWalletBindings([...input].reverse()).find((row) => row.isTreasury)
         ?.name
     ).toBe("steward");
@@ -712,12 +730,38 @@ describe("operator finance evidence", () => {
     ]);
     const snapshot = await takeSnapshot(readers, { timeoutMs: 500 });
     expect(snapshot.rows[0]).toMatchObject({
-      label:
-        "DAO treasury · Operator wallet · working capital · Steward wallet · human custody",
+      label: "DAO treasury · Operator wallet · Steward wallet",
       balance: 10,
       currency: "USDC",
       grade: "INFO",
+      payAction: { kind: "fund-steward" },
+      note: "User payments → operator wallet → steward wallet → vendors",
     });
+    expect(snapshot.rows[1]?.payAction).toEqual({
+      kind: "steward-checkout",
+      vendor: "openrouter",
+      checkoutUrl: "https://openrouter.ai/settings/credits",
+    });
+    expect(snapshot.rows[2]?.payAction).toEqual({
+      kind: "steward-checkout",
+      vendor: "cherry",
+      checkoutUrl: "https://portal.cherryservers.com/",
+    });
+    expect(snapshot.rows[3]?.payAction).toEqual({
+      kind: "external",
+      url: "https://console.akash.network/",
+      label: "Top up",
+    });
+    expect(snapshot.rows.map((row) => row.label).slice(5)).toEqual([
+      "Grafana overage",
+      "Domain cognidao.org",
+      "Alchemy RPC",
+      "System tenant",
+      "Other SaaS",
+    ]);
+    expect(snapshot.rows[9]?.beneficiary).toBe(
+      "PostHog, Langfuse, Tavily, GitHub, DoltHub, SonarCloud, Privy"
+    );
     expect(
       fetch.mock.calls.filter(
         (call) => String(call[0]) === "https://rpc.example"

@@ -15,6 +15,7 @@
 import {
   type FetchLike,
   gradeRunway,
+  type PayAction,
   type PlaneReader,
   unknownRow,
 } from "@cogni/money-plane";
@@ -95,6 +96,8 @@ export interface AkashCreditReaderOptions {
   blocksPerDay: number | null;
   lcdUrl?: string;
   now?: () => Date;
+  /** Carried on every row, readable or not, so the top-up stays reachable (ONE_ROW_MODEL). */
+  payAction?: PayAction;
 }
 
 interface Grant {
@@ -116,9 +119,11 @@ export function akashCreditReader(
   options: AkashCreditReaderOptions
 ): PlaneReader {
   const plane = AKASH_CREDIT_PLANE;
-  const label = "Akash credit · fleet";
+  const label = "Akash credit";
   const lcd = options.lcdUrl ?? AKASH_LCD_URL;
   const now = options.now ?? (() => new Date());
+  const withAction =
+    options.payAction === undefined ? {} : { payAction: options.payAction };
   const unknown = (detail: string): FinanceRow => ({
     ...unknownRow({
       plane,
@@ -129,11 +134,13 @@ export function akashCreditReader(
       detail,
     }),
     payer: "Operator",
+    ...withAction,
   });
   return {
     plane,
     label,
     kind: "prepaid",
+    ...withAction,
     async read(signal): Promise<FinanceRow> {
       try {
         const owner = encodeURIComponent(options.owner);
@@ -216,6 +223,7 @@ export function akashCreditReader(
           freshness: "current",
           payer: "Operator",
           rollup: true,
+          ...withAction,
           nativeRate: {
             amount: String(ratePerBlock),
             currency: "uact",

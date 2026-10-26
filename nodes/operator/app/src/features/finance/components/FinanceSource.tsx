@@ -3,9 +3,9 @@
 
 /**
  * Module: `@features/finance/components/FinanceSource`
- * Purpose: Explain one row's evidence in the existing accessible Dialog: source, exact native amounts, basis and cadence, observed time, and the reason when unavailable.
+ * Purpose: The Line label is the trigger: one accessible Dialog per row with source, exact native amounts, basis, observed time, who pays, and the reason when unavailable.
  * Scope: Presentation only; source values stay unrounded and credentials stay server-side.
- * Invariants: No raw reason codes, identifiers, URLs or inferred payments.
+ * Invariants: ≤ 6 short rows; no raw reason codes, identifiers, URLs or inferred payments.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/task.5347
  * @internal
@@ -25,13 +25,14 @@ import {
 } from "@/components";
 import type { FinanceRow } from "../types";
 import {
-  attributionLabel,
   balance,
   basisLabel,
   burn,
   nativeLabel,
   observedLabel,
+  payerLabel,
   unavailableReason,
+  whoPaysLabel,
 } from "./format";
 
 function Fact({ term, children }: { term: string; children: ReactNode }) {
@@ -59,17 +60,30 @@ export function FinanceSource({
   const basis = basisLabel(row);
   const observed = observedLabel(row.sourceObservedAt, timeZone);
   const read = observedLabel(row.observedAt, timeZone);
-  const who = attributionLabel(row);
+  const who = whoPaysLabel(row);
+  const payer = payerLabel(row);
   return (
     <Dialog>
       <DialogTrigger asChild>
         <Button
-          variant="ghost"
+          variant="link"
           size="sm"
-          className="min-h-11 shrink-0 text-xs"
-          aria-label={`${row.label} source`}
+          className="h-auto min-w-0 flex-col items-start whitespace-normal p-0 text-left text-foreground no-underline hover:underline"
+          aria-label={row.label}
         >
-          Source
+          <ReportText as="span" variant="label" className="block">
+            {row.label}
+          </ReportText>
+          {payer && (
+            <ReportText
+              as="span"
+              variant="caption"
+              tone="muted"
+              className="block"
+            >
+              {payer}
+            </ReportText>
+          )}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-dvh w-11/12 min-w-0 max-w-lg overflow-y-auto break-words [&>button]:top-1 [&>button]:right-1 [&>button]:grid [&>button]:size-11 [&>button]:place-items-center">
@@ -80,7 +94,7 @@ export function FinanceSource({
             {basis ? ` · ${basis}` : ""}
           </DialogDescription>
         </DialogHeader>
-        <dl className="grid min-w-0 gap-4">
+        <dl className="grid min-w-0 gap-3">
           {reason && (
             <Fact term="Unavailable">
               {reason}
@@ -92,34 +106,37 @@ export function FinanceSource({
               ) : null}
             </Fact>
           )}
-          {balance(row) !== undefined && (
-            <Fact term="Balance · exact">
-              {row.balance} {row.currency}
-            </Fact>
-          )}
-          {row.parts?.map((part) => (
-            <Fact key={part.label} term={`${part.label} · exact`}>
-              {nativeLabel(part.amount, part.currency)}
-            </Fact>
-          ))}
-          {row.nativeRate && (
-            <Fact term="Native rate · exact">
+          {row.note && <Fact term="Note">{row.note}</Fact>}
+          {row.parts?.length
+            ? row.parts.map((part) => (
+                <Fact key={part.label} term={part.label}>
+                  {nativeLabel(part.amount, part.currency)}
+                </Fact>
+              ))
+            : balance(row) !== undefined && (
+                <Fact term="Balance · exact">
+                  {row.balance} {row.currency}
+                </Fact>
+              )}
+          {row.nativeRate ? (
+            <Fact term="Rate · exact">
               {row.nativeRate.amount} {row.nativeRate.currency} /{" "}
               {row.nativeRate.per}
             </Fact>
+          ) : (
+            burn(row) !== undefined && (
+              <Fact term="Burn / day">
+                {row.burnPerDay} {row.currency}
+              </Fact>
+            )
           )}
-          {burn(row) !== undefined && (
-            <Fact term="Burn per day">
-              {row.burnPerDay} {row.currency}
-            </Fact>
-          )}
-          {!reason && row.detail && <Fact term="Note">{row.detail}</Fact>}
+          {!reason && row.detail && <Fact term="Detail">{row.detail}</Fact>}
           <Fact term="Observed">
             {observed ?? `Source time unknown · read ${read ?? "—"}`}
           </Fact>
           {who && <Fact term="Who pays">{who}</Fact>}
           {row.cumulativeVendorTransfer && (
-            <Fact term="Provider transfers · cumulative">
+            <Fact term="Transfers · cumulative">
               {nativeLabel(
                 row.cumulativeVendorTransfer.amount,
                 row.cumulativeVendorTransfer.currency

@@ -23,4 +23,6 @@ export interface FinanceRow extends MoneyPlaneRow {
   readonly parts?: readonly FinanceRowPart[];
   /** True when this row's burn is the sum of other rows' burn (e.g. a credit pool over hosting lines); excluded from fleet totals. */
   readonly rollup?: boolean;
+  /** One short dialog line of context (e.g. how money moves through this wallet). ≤80 chars, no URLs. */
+  readonly note?: string;
 }

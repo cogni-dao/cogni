@@ -17,6 +17,7 @@ import {
   type FetchLike,
   gradeRunway,
   type MoneyPlaneRow,
+  type PayAction,
   type PlaneReader,
   unknownRow,
 } from "@cogni/money-plane";
@@ -28,6 +29,7 @@ export interface CherryFinanceReaderOptions {
   token: string | null | undefined;
   fetch: FetchLike;
   now?: () => Date;
+  payAction?: PayAction;
 }
 
 interface CherryTeam {
@@ -48,24 +50,29 @@ export function cherryFinanceReader(
   options: CherryFinanceReaderOptions
 ): PlaneReader {
   const plane = CHERRY_PLANE;
-  const label = "Cherry compute credit";
+  const label = "Cherry credit";
   const now = options.now ?? (() => new Date());
+  const withAction =
+    options.payAction === undefined ? {} : { payAction: options.payAction };
   const unknown = (
     reasonCode: "unconfigured" | "unreadable",
     detail: string
-  ): MoneyPlaneRow =>
-    unknownRow({
+  ): MoneyPlaneRow => ({
+    ...unknownRow({
       plane,
       label,
       kind: "prepaid",
       reasonCode,
       observedAt: now().toISOString(),
       detail,
-    });
+    }),
+    ...withAction,
+  });
   return {
     plane,
     label,
     kind: "prepaid",
+    ...withAction,
     async read(signal): Promise<MoneyPlaneRow> {
       if (!options.token)
         return unknown("unconfigured", "no Cherry credential in this runtime");
@@ -105,6 +112,7 @@ export function cherryFinanceReader(
             "Cherry team API · price per hour × 24 · vendor remaining time",
           sourceObservedAt: observedAt,
           freshness: "current",
+          ...withAction,
         };
         if (balance <= 0)
           return {

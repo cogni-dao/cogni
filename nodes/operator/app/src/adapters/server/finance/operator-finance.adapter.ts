@@ -15,6 +15,7 @@
  */
 import {
   type MoneyPlaneRow,
+  type PayAction,
   type PlaneReader,
   unknownRow,
 } from "@cogni/money-plane";
@@ -37,12 +38,16 @@ export function unavailableFinanceReader(
   kind: MoneyPlaneRow["kind"],
   detail: string,
   reasonCode: MoneyPlaneRow["reasonCode"] = "unconfigured",
-  payer?: string
+  payer?: string,
+  payAction?: PayAction,
+  beneficiary?: string
 ): PlaneReader {
+  const withAction = payAction === undefined ? {} : { payAction };
   return {
     plane,
     label,
     kind,
+    ...withAction,
     async read() {
       return {
         ...unknownRow({
@@ -54,6 +59,8 @@ export function unavailableFinanceReader(
           detail,
         }),
         ...(payer ? { payer } : {}),
+        ...(beneficiary ? { beneficiary } : {}),
+        ...withAction,
       };
     },
   };
@@ -85,7 +92,7 @@ export function akashHostingRow(
   blocksPerDay: number | null = null
 ): MoneyPlaneRow {
   const plane = `akash:${report.nodeId}`;
-  const label = `Akash hosting · ${report.nodeId}`;
+  const label = `Akash · ${report.nodeId}`;
   const bpd =
     blocksPerDay !== null && Number.isFinite(blocksPerDay) && blocksPerDay > 0
       ? blocksPerDay
