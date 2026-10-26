@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 /**
  * Module: `@app/api/v1/deploy/maintenance-cancel`
- * Purpose: Cancel an unexecuted candidate intent using existing operator environment authority.
- * Scope: Strict input, operator RBAC, target identity and typed deploy-plane delegation.
- * Invariants: no caller custody/ref; no target-node role substitution; authorization before Git IO.
+ * Purpose: Cancel an unexecuted candidate intent using target-node environment authority.
+ * Scope: Strict input, target RBAC and typed delegation; does not choose caller custody or refs.
+ * Invariants: no caller custody/ref; no operator-role substitution; authorization before Git IO.
  * Side-effects: IO (authorization, node read, operator GitHub App)
  * Links: task.5345, ordinary-node-delivery-boundary
  * @public
@@ -14,10 +14,9 @@ import { z } from "zod";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
-import { resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { resolveNodeRef } from "@/features/nodes/node-lookup";
 import { serverEnv } from "@/shared/env";
+import { EVENT_NAMES } from "@/shared/observability";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 const inputSchema = z.strictObject({
@@ -62,7 +61,7 @@ export const POST = wrapRouteHandlerWithLogging(
     if (!parsed.success)
       return NextResponse.json({ error: "invalid_input" }, { status: 400 });
     const gate = await resolveNodeAndAuthorize({
-      id: "operator",
+      id: parsed.data.nodeId,
       userId: sessionUser.id,
       action: "node.manage_envs",
     });
@@ -71,11 +70,7 @@ export const POST = wrapRouteHandlerWithLogging(
         { error: gate.errorCode },
         { status: gate.status }
       );
-    if (gate.node.slug !== "operator")
-      return NextResponse.json({ error: "operator_required" }, { status: 403 });
-    const target = await resolveNodeRef(resolveServiceDb(), parsed.data.nodeId);
-    if (!target)
-      return NextResponse.json({ error: "node_not_found" }, { status: 404 });
+    const target = gate.node;
     try {
       const result = await createOperatorDeployPlane(
         serverEnv()
@@ -88,7 +83,7 @@ export const POST = wrapRouteHandlerWithLogging(
       const output = outputSchema.parse(result);
       ctx.log.info(
         {
-          event: "deploy.maintenance_cancel_complete",
+          event: EVENT_NAMES.DEPLOY_MAINTENANCE_CANCEL_COMPLETE,
           nodeId: target.nodeId,
           env: "candidate-a",
           operationId: output.operationId,
@@ -106,7 +101,7 @@ export const POST = wrapRouteHandlerWithLogging(
           : "maintenance_unavailable";
       ctx.log.warn(
         {
-          event: "deploy.maintenance_cancel_refused",
+          event: EVENT_NAMES.DEPLOY_MAINTENANCE_CANCEL_REFUSED,
           nodeId: target.nodeId,
           errorCode,
         },

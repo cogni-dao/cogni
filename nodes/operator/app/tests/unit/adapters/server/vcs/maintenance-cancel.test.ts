@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 /**
  * Module: `@tests/unit/adapters/server/vcs/maintenance-cancel`
  * Purpose: Exercise the operator's exact legacy-fence cancellation contract.
- * Scope: Recording GitHub transport; no credentials or remote mutations.
+ * Scope: Recording GitHub transport; does not use credentials or mutate remote state.
  * Invariants: only an unchanged unexecuted marker is removed; races fail closed.
  * Side-effects: none
  * Links: task.5345

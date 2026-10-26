@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 /**
  * Module: `@tests/contract/app/deploy.maintenance-cancel`
- * Purpose: Verify the public cancellation boundary and operator-owned authorization.
- * Scope: Real HTTP handler with recording auth and deploy ports; no database mocks or Git IO.
+ * Purpose: Verify the public cancellation boundary and target-node authorization.
+ * Scope: Real HTTP handler with recording ports; does not mock databases or contact GitHub.
  * Invariants: every denial makes zero deploy calls; caller cannot choose custody or other lanes.
  * Side-effects: none
  * Links: task.5345
@@ -15,7 +15,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
   cancel: vi.fn(),
-  resolve: vi.fn(),
   log: { info: vi.fn(), warn: vi.fn() },
   session: { id: "actor" } as { id: string } | null,
 }));
@@ -25,10 +24,6 @@ vi.mock("@/app/_lib/auth/session", () => ({
 vi.mock("@/app/_lib/node-rbac", () => ({
   resolveNodeAndAuthorize: mocks.auth,
 }));
-vi.mock("@/features/nodes/node-lookup", () => ({
-  resolveNodeRef: mocks.resolve,
-}));
-vi.mock("@/bootstrap/container", () => ({ resolveServiceDb: () => ({}) }));
 vi.mock("@/shared/env", () => ({ serverEnv: () => ({}) }));
 vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
   createOperatorDeployPlane: () => ({
@@ -76,9 +71,8 @@ beforeEach(() => {
   mocks.session = { id: "actor" };
   mocks.auth.mockResolvedValue({
     ok: true,
-    node: { nodeId: "operator-id", slug: "operator" },
+    node: { nodeId, slug: "node-template" },
   });
-  mocks.resolve.mockResolvedValue({ nodeId, slug: "node-template" });
   mocks.cancel.mockResolvedValue({
     commitSha: "c".repeat(40),
     previousHead: input.expectedDeployHead,
@@ -88,10 +82,10 @@ beforeEach(() => {
   });
 });
 describe("POST maintenance-cancel", () => {
-  it("authorizes operator env_manager and binds resolved target", async () => {
+  it("authorizes target-only env_manager and binds resolved target", async () => {
     expect((await post(input))?.status).toBe(200);
     expect(mocks.auth).toHaveBeenCalledWith({
-      id: "operator",
+      id: nodeId,
       userId: "actor",
       action: "node.manage_envs",
     });
@@ -99,6 +93,23 @@ describe("POST maintenance-cancel", () => {
       ...input,
       slug: "node-template",
       actorId: "user:actor",
+    });
+  });
+  it.each([
+    "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+    "f66b260b-4633-41e2-8711-b7c1b8449cc1",
+  ])("does not substitute authority on another node %s", async (grantedNode) => {
+    mocks.auth.mockImplementation(async ({ id }) =>
+      id === grantedNode
+        ? { ok: true, node: { nodeId: grantedNode, slug: "operator" } }
+        : { ok: false, status: 403, errorCode: "authz_denied" }
+    );
+    expect((await post(input))?.status).toBe(403);
+    expect(mocks.cancel).not.toHaveBeenCalled();
+    expect(mocks.auth).toHaveBeenCalledExactlyOnceWith({
+      id: nodeId,
+      userId: "actor",
+      action: "node.manage_envs",
     });
   });
   it.each([

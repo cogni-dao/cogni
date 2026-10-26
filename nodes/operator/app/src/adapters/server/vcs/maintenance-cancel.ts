@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 /**
  * Module: `@adapters/server/vcs/maintenance-cancel`
  * Purpose: Retire an unchanged, unexecuted candidate maintenance intent through the operator App.
- * Scope: One marker deletion in Git; no workflow, engine, lease or credential mutation.
+ * Scope: One marker deletion in Git; does not mutate workflows, engines, leases or credentials.
  * Invariants: configured custody, complete inventory, pre-fence tree equality, non-force update.
  * Side-effects: IO (GitHub REST API)
  * Links: task.5345, ordinary-node-delivery-boundary
@@ -54,15 +54,15 @@ export async function cancelCandidateMaintenance(
     !/^[a-f0-9]{64}$/.test(input.operationId)
   )
     refuse("maintenance_invalid_identity", 400);
-  const common = {
+  const common = () => ({
     owner,
     repo,
     request: { signal: AbortSignal.timeout(10_000) },
-  };
+  });
   const branch = `deploy/candidate-a-${input.slug}`;
   const { data: catalogFile } = await octokit.request(
     "GET /repos/{owner}/{repo}/contents/{path}",
-    { ...common, path: `infra/catalog/${input.slug}.yaml`, ref: "main" }
+    { ...common(), path: `infra/catalog/${input.slug}.yaml`, ref: "main" }
   );
   if (
     Array.isArray(catalogFile) ||
@@ -105,17 +105,17 @@ export async function cancelCandidateMaintenance(
     : `${owner}/${repo}`;
   const { data: ref } = await octokit.request(
     "GET /repos/{owner}/{repo}/git/ref/{ref}",
-    { ...common, ref: `heads/${branch}` }
+    { ...common(), ref: `heads/${branch}` }
   );
   if (ref.object.sha !== input.expectedDeployHead)
     refuse("maintenance_head_conflict");
   const { data: current } = await octokit.request(
     "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
-    { ...common, commit_sha: input.expectedDeployHead }
+    { ...common(), commit_sha: input.expectedDeployHead }
   );
   const { data: root } = await octokit.request(
     "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
-    { ...common, tree_sha: current.tree.sha }
+    { ...common(), tree_sha: current.tree.sha }
   );
   if (root.truncated) refuse("maintenance_tree_incomplete");
   const directory = root.tree.find((e) => e.path === ".promote-state");
@@ -127,7 +127,7 @@ export async function cancelCandidateMaintenance(
     refuse("maintenance_marker_unproven");
   const { data: state } = await octokit.request(
     "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
-    { ...common, tree_sha: directory.sha }
+    { ...common(), tree_sha: directory.sha }
   );
   if (
     state.truncated ||
@@ -145,7 +145,7 @@ export async function cancelCandidateMaintenance(
     refuse("maintenance_marker_unproven");
   const { data: blob } = await octokit.request(
     "GET /repos/{owner}/{repo}/git/blobs/{file_sha}",
-    { ...common, file_sha: file.sha }
+    { ...common(), file_sha: file.sha }
   );
   if (
     blob.encoding !== "base64" ||
@@ -179,7 +179,7 @@ export async function cancelCandidateMaintenance(
     refuse("maintenance_marker_identity_mismatch");
   const { data: before } = await octokit.request(
     "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
-    { ...common, commit_sha: marker.request.expected.deployCommit }
+    { ...common(), commit_sha: marker.request.expected.deployCommit }
   );
   // Inventory is not a native process lock. Supported maintenance is read-only;
   // ordinary delivery retains the marker guard. A competing Git writer loses CAS.
@@ -194,7 +194,7 @@ export async function cancelCandidateMaintenance(
     ] as const) {
       const { data } = await octokit.request(
         "GET /repos/{owner}/{repo}/actions/runs",
-        { ...common, status, per_page: 100 }
+        { ...common(), status, per_page: 100 }
       );
       if (data.total_count >= 100 || data.workflow_runs.length >= 100)
         refuse("maintenance_inventory_incomplete");
@@ -217,7 +217,7 @@ export async function cancelCandidateMaintenance(
   const { data: deletion } = await octokit.request(
     "POST /repos/{owner}/{repo}/git/trees",
     {
-      ...common,
+      ...common(),
       base_tree: current.tree.sha,
       tree: [
         {
@@ -234,7 +234,7 @@ export async function cancelCandidateMaintenance(
   const { data: commit } = await octokit.request(
     "POST /repos/{owner}/{repo}/git/commits",
     {
-      ...common,
+      ...common(),
       tree: deletion.sha,
       parents: [input.expectedDeployHead],
       message: `chore(candidate-a): cancel unexecuted ${input.slug} maintenance\n\nOperation: ${input.operationId}\nPrevious-Head: ${input.expectedDeployHead}\nMarker-SHA256: ${input.expectedMarkerSha256}\nActor: ${input.actorId.replace(/[\r\n]/g, " ")}\nReason: ${input.reason.replace(/[\r\n]/g, " ")}`,
@@ -244,7 +244,7 @@ export async function cancelCandidateMaintenance(
   try {
     const { data: updated } = await octokit.request(
       "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
-      { ...common, ref: `heads/${branch}`, sha: commit.sha, force: false }
+      { ...common(), ref: `heads/${branch}`, sha: commit.sha, force: false }
     );
     if (updated.object.sha !== commit.sha)
       refuse("maintenance_update_unproven", 502);
