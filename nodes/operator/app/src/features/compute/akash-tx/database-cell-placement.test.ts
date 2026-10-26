@@ -17,6 +17,10 @@ import { repoSpecSchema } from "@cogni/repo-spec";
 import { buildTestRepoSpec } from "@cogni/repo-spec/testing";
 import { describe, expect, it } from "vitest";
 import {
+  PhysicalRecoveryArtifactSchema,
+  qualifyPhysicalPostimages,
+} from "@/adapters/server/compute/database-cell-physical-postimage";
+import {
   DatabaseCellAppliedRegistrationReferenceSchema,
   DatabaseCellBindingReferenceSchema,
 } from "@/contracts/database-cell-binding.v1.contract";
@@ -36,6 +40,7 @@ import {
 import {
   type AppliedDatabaseCellReceipt,
   AppliedDatabaseCellReceiptSchema,
+  AppliedDatabaseCellReceiptsSchema,
   assessDatabaseCellBackupRuntime,
   DatabaseCellAllocationMetadataSchema,
   DatabaseCellAppliedEvidenceBundleSchema,
@@ -57,6 +62,8 @@ import {
   dedicatedLane,
   validateDedicatedCustody,
 } from "../../../../../../../scripts/lib/run-node-substrate";
+
+import { databaseCellRecoveryIntent } from "./database-cell-recovery";
 
 const nodeId = "11111111-1111-4111-8111-111111111111";
 const sourceSha = "a".repeat(40);
@@ -2193,6 +2200,657 @@ describe("readonly initial probe custody bootstrap", () => {
       }
     } finally {
       rmSync(work, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("physical recovery receipt compatibility", () => {
+  const request = {
+    cogniKey: "fixture-cell",
+    nodeId,
+    allocationEnvironment: "production",
+    manualCutoverPacketSha256: "f".repeat(64),
+    readmissionReceiptId: "readmission-fixture",
+  };
+  it("keeps preserved identity exclusive to physical provenance and retains superseded history", async () => {
+    const current = fixture({
+      appliedFacts: registrationFacts(),
+      appliedCustody: appliedCustody(),
+    });
+    const [receipt] = await current.binder.registerApplied(request);
+    if (!receipt?.registration) throw new Error("audited receipt required");
+    const clone = structuredClone(receipt);
+    if (!clone.registration) throw new Error("registration absent");
+    clone.registration.sourceSystemIdentifier = clone.binding.systemIdentifier;
+    expect(AppliedDatabaseCellReceiptsSchema.safeParse([clone]).success).toBe(
+      false
+    );
+    const physical = {
+      ...clone,
+      registration: {
+        ...clone.registration,
+        scheduledBackupReceiptSha256: undefined,
+        independentRecoveryReceiptSha256: undefined,
+        preservedBackupReceiptSha256: "d".repeat(64),
+        physicalRecovery: {
+          kind: "same-cluster-physical-copy",
+          sourceCogniKey: "retained-source",
+          sourceReceiptId: "33333333-3333-4333-8333-333333333333",
+          sourceDseq: "10001",
+          evidenceSha256: "a".repeat(64),
+          copyManifestSha256: "b".repeat(64),
+        },
+      },
+    };
+    expect(
+      AppliedDatabaseCellReceiptsSchema.safeParse([physical]).success
+    ).toBe(true);
+    const history = {
+      ...receipt,
+      binding: {
+        ...receipt.binding,
+        phase: "superseded",
+        supersededBy: {
+          receiptId: "44444444-4444-4444-8444-444444444444",
+          packetSha256: "c".repeat(64),
+        },
+      },
+    };
+    expect(AppliedDatabaseCellReceiptsSchema.safeParse([history]).success).toBe(
+      true
+    );
+    expect(
+      AppliedDatabaseCellReceiptsSchema.safeParse([
+        { ...history, binding: { ...history.binding, phase: "applied" } },
+      ]).success
+    ).toBe(false);
+  });
+});
+
+async function physicalImportFixture() {
+  const base = registrationFacts(),
+    custody = appliedCustody();
+  const admitted = fixture({ appliedFacts: base, appliedCustody: custody });
+  const [sourceReceipt] = await admitted.binder.registerApplied({
+    ...admitted.ref,
+    manualCutoverPacketSha256: base.manualCutover.packetSha256,
+    readmissionReceiptId: base.readmission.receiptId,
+  });
+  if (!sourceReceipt) throw new Error("fixture source missing");
+  custody.manualProvenance.qualificationArtifactSha256 = "9".repeat(64);
+  sourceReceipt.binding.cogniKey = "source-cell";
+  sourceReceipt.binding.dseq = "321";
+  sourceReceipt.binding.failureDomainId = `akash:${base.provider.providerAccount}:321`;
+  let sourceBindings: readonly AppliedDatabaseCellReceipt[] = [sourceReceipt],
+    targetBindings: readonly AppliedDatabaseCellReceipt[] = [];
+  const source: AkashTxAllocationRecord = {
+    receiptId: sourceReceipt.binding.receiptId,
+    cogniKey: "source-cell",
+    identity: { nodeId, compositeUid: "fixture", compositeGeneration: 1 },
+    workload: "alpha-database-cell",
+    environment: "production",
+    state: "allocated",
+    externalName: "321",
+    providerAccount: base.provider.providerAccount,
+    retentionPolicy: "retain",
+    lastAppliedSdlHash: "d".repeat(64),
+  };
+  const recoveryProfile = {
+    enabled: false,
+    funding_status: "unqualified" as const,
+    cpu_units: 4 as const,
+    memory_mib: 16384 as const,
+    ephemeral_size_mib: 1024 as const,
+    persistent_size_mib: 204800 as const,
+    postgres_major: 15 as const,
+    image:
+      "postgres:15@sha256:1b92e7a80c021647bf70f5d3eb66066a998e4f5cf43c07bb9dc9f729782cf88e" as const,
+    command: ["sleep"] as ["sleep"],
+    args: ["infinity"] as ["infinity"],
+    volume_name: "database" as const,
+    mount_path: "/var/lib/postgresql/data" as const,
+    pgdata: "/var/lib/postgresql/data/pgdata" as const,
+    volume_tier: "nvme" as const,
+    pricing_denom: "uact" as const,
+    max_price_per_block: "100" as const,
+    initial_escrow_usd: "0.5" as const,
+  };
+  const intent = databaseCellRecoveryIntent(
+    {
+      environment: "production",
+      identity: source.identity,
+      nodeSlug: "alpha",
+      recovery: {
+        profileId: "pg15-cold-capacity-v1",
+        sourceCogniKey: source.cogniKey,
+        sourceExternalName: "321",
+        sourceSystemIdentifier: base.native.systemIdentifier,
+      },
+    },
+    source,
+    recoveryProfile
+  );
+  let target: AkashTxAllocationRecord = {
+    ...source,
+    receiptId: "33333333-3333-4333-8333-333333333333",
+    cogniKey: intent.key,
+    externalName: "123",
+    lastAppliedSdlHash: "e".repeat(64),
+  };
+  let app: AkashTxAllocationRecord = {
+    ...source,
+    receiptId: base.effectiveApp.allocationReceiptId,
+    cogniKey: base.manualCutover.appCogniKey,
+    workload: "alpha",
+    externalName: base.manualCutover.appDseq,
+    lastAppliedSdlHash: "c".repeat(64),
+  };
+  const now = new Date().toISOString(),
+    old = new Date(Date.now() - 10000).toISOString();
+  const facts: Mutable<
+    import("@/types/database-cell").DatabaseCellPhysicalRecoveryFacts
+  > = {
+    observedAt: now,
+    provider: base.provider,
+    native: {
+      ...base.native,
+      activeRuntimeSessions: 0,
+      migrationJournal: {
+        rowCount: 121,
+        sha256: "1".repeat(64),
+        observedAt: now,
+      },
+    },
+    effectiveApp: {
+      allocationReceiptId: app.receiptId,
+      deployedSourceSha: appSha,
+      appliedSdlHash: "a".repeat(64),
+      nodeId,
+      environment: "production",
+      appDsnSha256: base.effectiveApp.appDsnSha256,
+      serviceDsnSha256: base.effectiveApp.serviceDsnSha256,
+      migrationDsnSha256: base.effectiveApp.migrationDsnSha256,
+      tlsTrustKind: "system",
+      migrationConsumer: "app-database-url",
+      providerManifest: base.effectiveApp.providerManifest,
+    },
+    manualCutover: {
+      ...base.manualCutover,
+      manualProvenance: custody.manualProvenance,
+      appSdlHash: "a".repeat(64),
+      allocationReceiptId: target.receiptId,
+      sourceSystemIdentifier: base.native.systemIdentifier,
+      physicalRecovery: {
+        kind: "same-cluster-physical-copy",
+        sourceCogniKey: source.cogniKey,
+        sourceReceiptId: source.receiptId,
+        sourceDseq: "321",
+        evidenceSha256: "9".repeat(64),
+        copyManifestSha256: "6".repeat(64),
+      },
+    },
+    readmission: { ...base.readmission, allocationReceiptId: target.receiptId },
+    physicalRecovery: {
+      version: 1,
+      observedAt: now,
+      source: {
+        cogniKey: source.cogniKey,
+        receiptId: source.receiptId,
+        dseq: "321",
+        providerAccount: base.provider.providerAccount,
+        systemIdentifier: base.native.systemIdentifier,
+        originalAppliedSdlHash: "d".repeat(64),
+        heldSdlHash: "f".repeat(64),
+        manifestVersion: base.provider.manifestVersion,
+        serviceName: "postgres",
+        observedAt: now,
+        postgresAbsent: true,
+        mount: {
+          path: "/var/lib/postgresql/data",
+          device: "/dev/fixture",
+          majorMinor: "8:1",
+          readOnly: true,
+        },
+      },
+      copy: {
+        startedAt: old,
+        completedAt: old,
+        bytes: 100 * 1024 ** 3,
+        files: 100,
+        postgresMajor: 15,
+        uid: 999,
+        gid: 999,
+        sourceManifestSha256: "6".repeat(64),
+        targetManifestSha256: "6".repeat(64),
+        sourceMetadataSha256: "7".repeat(64),
+        targetMetadataSha256: "7".repeat(64),
+        allTablespacesCovered: true,
+        transportDrained: true,
+        originalStartupSha256: "8".repeat(64),
+        targetStartupSha256: "8".repeat(64),
+      },
+      target: {
+        observedAt: now,
+        dseq: "123",
+        providerAccount: base.provider.providerAccount,
+        originalAppliedSdlHash: "e".repeat(64),
+        preimageSdlHash: "e".repeat(64),
+        normalSdlHash: "d".repeat(64),
+        manifestVersion: base.provider.manifestVersion,
+        volume: {
+          path: "/var/lib/postgresql/data",
+          device: "/dev/target",
+          majorMinor: "8:2",
+          totalBytes: 200 * 1024 ** 3,
+          usedBytes: 110 * 1024 ** 3,
+          availableBytes: 80 * 1024 ** 3,
+          totalInodes: 100000,
+          availableInodes: 90000,
+        },
+      },
+      app: {
+        originalAppliedSdlHash: "c".repeat(64),
+        preimageSdlHash: "c".repeat(64),
+        heldSdlHash: "a".repeat(64),
+        manifestVersion: base.manualCutover.appManifestVersion,
+        observedAt: now,
+        businessWritersAbsent: true,
+      },
+      reconciliation: {
+        observedAt: now,
+        xrUid: nodeId,
+        pausedResourceUids: [nodeId, source.receiptId],
+        acknowledgedPaused: true,
+        providerOperationsSettled: true,
+        custodyVersionsSha256: "1".repeat(64),
+        dnsRecordSha256: "2".repeat(64),
+        independentCustodianWatching: true,
+      },
+      preservedBackup: {
+        receiptSha256: "3".repeat(64),
+        archiveSha256: "4".repeat(64),
+        bytes: 1000,
+      },
+    },
+  };
+  let writes = 0;
+  const binder = new DatabaseCellBinder({
+    recoveryProfile: async () => recoveryProfile,
+    ledger: {
+      read: async ({ cogniKey }) =>
+        [source, target, app].find((record) => record.cogniKey === cogniKey) ??
+        null,
+      listAllocated: async () => [source, target, app],
+    },
+    actuator: {
+      observe: async () => ({
+        found: true,
+        resource: {
+          externalName: "123",
+          state: "active",
+          endpoints: ["tcp://provider.example.org:15432"],
+          providerAccount: base.provider.providerAccount,
+        },
+      }),
+    },
+    store: {
+      read: async (key) =>
+        key === source.cogniKey ? sourceBindings : targetBindings,
+      save: async () => {
+        throw new Error("physical import used ordinary single-row write");
+      },
+      savePhysicalRecovery: async (input) => {
+        expect(input.expectedSource).toEqual(sourceBindings);
+        expect(input.expectedTarget).toEqual(targetBindings);
+        if (targetBindings.length) return;
+        sourceBindings = sourceBindings.map((receipt) => ({
+          ...receipt,
+          binding: {
+            ...receipt.binding,
+            phase: "superseded",
+            supersededBy: {
+              receiptId: target.receiptId,
+              packetSha256: input.packetSha256,
+            },
+          },
+        }));
+        targetBindings = input.targetBindings;
+        target = { ...target, lastAppliedSdlHash: input.targetSdlHash };
+        app = { ...app, lastAppliedSdlHash: input.appSdlHash };
+        writes++;
+      },
+    },
+    observeNative: async () => [],
+    kit: async () => scopedKit,
+    buildSha: sourceSha,
+    appliedCustody: async () => custody,
+    observeApplied: async () => facts,
+  });
+  return {
+    binder,
+    facts,
+    request: {
+      cogniKey: target.cogniKey,
+      nodeId,
+      allocationEnvironment: "production",
+      manualCutoverPacketSha256: facts.manualCutover.packetSha256,
+      readmissionReceiptId: facts.readmission.receiptId,
+    },
+    source: () => sourceBindings,
+    target: () => targetBindings,
+    writes: () => writes,
+  };
+}
+
+describe("audited held physical recovery import", () => {
+  it("preserves systemID, atomically delegates lineage, and exactly replays without inventing app readiness or DR", async () => {
+    const f = await physicalImportFixture();
+    const receipts = await f.binder.registerApplied(f.request);
+    expect(receipts[0]?.binding.systemIdentifier).toBe(
+      f.facts.native.systemIdentifier
+    );
+    expect(f.source()[0]?.binding.phase).toBe("superseded");
+    expect(f.source()[0]?.binding.supersededBy?.receiptId).toBe(
+      receipts[0]?.binding.receiptId
+    );
+    expect(receipts[0]?.registration?.preservedBackupReceiptSha256).toBe(
+      "3".repeat(64)
+    );
+    expect(
+      receipts[0]?.registration?.scheduledBackupReceiptSha256
+    ).toBeUndefined();
+    expect(
+      receipts[0]?.registration?.independentRecoveryReceiptSha256
+    ).toBeUndefined();
+    expect(await f.binder.registerApplied(f.request)).toEqual(receipts);
+    expect(f.writes()).toBe(1);
+    await expect(
+      f.binder.seal({ ...f.request, cogniKey: "source-cell" })
+    ).rejects.toThrow("historical");
+  });
+  it("offers read-only qualification without canonical mutation", async () => {
+    const f = await physicalImportFixture();
+    // Probe custody is intentionally absent in this fixture. Qualification cannot
+    // claim success, and the important effect boundary remains no canonical writes.
+    await expect(f.binder.qualifyAppliedProbe(f.request)).rejects.toThrow(
+      "probe qualification"
+    );
+    expect(f.writes()).toBe(0);
+  });
+  it("rejects stale fences, insufficient real headroom, changed copy or identities before any write", async () => {
+    const cases: Array<
+      (f: Awaited<ReturnType<typeof physicalImportFixture>>) => void
+    > = [
+      (f) => {
+        f.facts.physicalRecovery.source.observedAt = "2000-01-01T00:00:00Z";
+      },
+      (f) => {
+        f.facts.physicalRecovery.target.volume.availableBytes = 1024;
+      },
+      (f) => {
+        f.facts.physicalRecovery.target.volume.availableInodes = 1;
+      },
+      (f) => {
+        f.facts.physicalRecovery.copy.targetManifestSha256 = "0".repeat(64);
+      },
+      (f) => {
+        f.facts.physicalRecovery.copy.targetMetadataSha256 = "0".repeat(64);
+      },
+      (f) => {
+        f.facts.physicalRecovery.copy.targetStartupSha256 = "0".repeat(64);
+      },
+      (f) => {
+        f.facts.native.activeRuntimeSessions = 1;
+      },
+      (f) => {
+        f.facts.manualCutover.sourceSystemIdentifier = "42";
+      },
+      (f) => {
+        f.facts.physicalRecovery.source.receiptId =
+          f.facts.manualCutover.allocationReceiptId;
+      },
+      (f) => {
+        f.facts.manualCutover.appSdlHash = "0".repeat(64);
+      },
+      (f) => {
+        const role = f.facts.native.runtimeRoles[0];
+        if (!role) throw new Error("role absent");
+        role.connectionLimit = 99;
+      },
+      (f) => {
+        f.facts.native.endpointIdentity.canonical.addresses = ["192.0.2.33"];
+      },
+    ];
+    for (const mutate of cases) {
+      const f = await physicalImportFixture();
+      mutate(f);
+      await expect(f.binder.registerApplied(f.request)).rejects.toMatchObject({
+        code: "identity_conflict",
+      });
+      expect(f.writes()).toBe(0);
+    }
+  });
+});
+
+function postimageFixture() {
+  const now = new Date().toISOString();
+  const sha = (value: string) => value.repeat(64);
+  const id = (n: number) =>
+    `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const NODE = "5f79c3ac-7fbe-4d0f-a599-e364fb203755";
+  const sourceRecord = {
+    cogniKey: "source",
+    providerAccount: `akash1${"d".repeat(38)}`,
+  };
+  const targetRecord = { providerAccount: sourceRecord.providerAccount };
+  const image = `postgres@sha256:${sha("1")}`;
+  const original = {
+    version: "2.0",
+    services: {
+      postgres: {
+        image,
+        command: ["bash"],
+        args: ["/original-start.sh"],
+        env: ["PGDATA=/var/lib/postgresql/data/pgdata"],
+        params: {
+          storage: {
+            database: { mount: "/var/lib/postgresql/data", readOnly: false },
+          },
+        },
+        expose: [{ port: 5432, as: 5432, global: true }],
+      },
+    },
+    profiles: { resources: { cpu: 2, memory: 8, storage: 100 } },
+  };
+  const sourceHeld = structuredClone(original);
+  sourceHeld.services.postgres.command = ["sleep"];
+  sourceHeld.services.postgres.args = ["infinity"];
+  sourceHeld.services.postgres.params.storage.database.readOnly = true;
+  const cold = structuredClone(original);
+  cold.services.postgres.command = ["sleep"];
+  cold.services.postgres.args = ["infinity"];
+  cold.services.postgres.env = ["PGDATA=/var/lib/postgresql/data/pgdata"];
+  cold.profiles.resources = { cpu: 4, memory: 16, storage: 200 };
+  const normal = { ...cold, services: original.services };
+  const appOriginal = {
+    services: {
+      app: {
+        image: `app@sha256:${sha("2")}`,
+        command: ["node"],
+        args: ["server.js"],
+        env: [
+          "DATABASE_URL=old-app",
+          "DATABASE_SERVICE_URL=old-service",
+          "KEEP=original",
+        ],
+      },
+    },
+  };
+  const appHeld = structuredClone(appOriginal);
+  appHeld.services.app.command = ["sleep"];
+  appHeld.services.app.args = ["infinity"];
+  appHeld.services.app.env = [
+    "DATABASE_URL=new-app",
+    "DATABASE_SERVICE_URL=new-service",
+    "KEEP=original",
+  ];
+  const definitions = {
+    sourceOriginal: JSON.stringify(original),
+    sourceHeld: JSON.stringify(sourceHeld),
+    targetCold: JSON.stringify(cold),
+    targetNormal: JSON.stringify(normal),
+    appOriginal: JSON.stringify(appOriginal),
+    appHeld: JSON.stringify(appHeld),
+  };
+  const digest = (value: string) =>
+    createHash("sha256").update(value).digest("hex");
+  const startup = digest(
+    JSON.stringify([
+      original.services.postgres.command,
+      original.services.postgres.args,
+    ])
+  );
+  const evidence = {
+    version: 1,
+    observedAt: now,
+    source: {
+      cogniKey: sourceRecord.cogniKey,
+      receiptId: id(1),
+      dseq: "10001",
+      providerAccount: sourceRecord.providerAccount,
+      systemIdentifier: "1234567890",
+      originalAppliedSdlHash: sha("a"),
+      heldSdlHash: digest(definitions.sourceHeld),
+      manifestVersion: Buffer.alloc(32, 1).toString("base64"),
+      serviceName: "postgres",
+      observedAt: now,
+      postgresAbsent: true,
+      mount: {
+        path: "/var/lib/postgresql/data",
+        device: "/dev/a",
+        majorMinor: "8:1",
+        readOnly: true,
+      },
+    },
+    copy: {
+      startedAt: now,
+      completedAt: now,
+      bytes: 100,
+      files: 10,
+      postgresMajor: 15,
+      uid: 999,
+      gid: 999,
+      sourceManifestSha256: sha("1"),
+      targetManifestSha256: sha("1"),
+      sourceMetadataSha256: sha("2"),
+      targetMetadataSha256: sha("2"),
+      allTablespacesCovered: true,
+      transportDrained: true,
+      originalStartupSha256: startup,
+      targetStartupSha256: startup,
+    },
+    target: {
+      observedAt: now,
+      dseq: "10002",
+      providerAccount: targetRecord.providerAccount,
+      originalAppliedSdlHash: sha("b"),
+      preimageSdlHash: digest(definitions.targetCold),
+      normalSdlHash: digest(definitions.targetNormal),
+      manifestVersion: Buffer.alloc(32, 2).toString("base64"),
+      volume: {
+        path: "/var/lib/postgresql/data",
+        device: "/dev/b",
+        majorMinor: "8:2",
+        totalBytes: 200000,
+        usedBytes: 100000,
+        availableBytes: 90000,
+        totalInodes: 1000,
+        availableInodes: 900,
+      },
+    },
+    app: {
+      originalAppliedSdlHash: sha("c"),
+      preimageSdlHash: digest(definitions.appOriginal),
+      heldSdlHash: digest(definitions.appHeld),
+      manifestVersion: Buffer.alloc(32, 3).toString("base64"),
+      observedAt: now,
+      businessWritersAbsent: true,
+    },
+    reconciliation: {
+      observedAt: now,
+      xrUid: NODE,
+      pausedResourceUids: [id(1), id(2)],
+      acknowledgedPaused: true,
+      providerOperationsSettled: true,
+      custodyVersionsSha256: sha("3"),
+      dnsRecordSha256: sha("4"),
+      independentCustodianWatching: true,
+    },
+    preservedBackup: {
+      receiptSha256: sha("5"),
+      archiveSha256: sha("6"),
+      bytes: 1000,
+    },
+  };
+  const custody: DatabaseCellAppliedCustody = {
+    version: 1,
+    nodeId: NODE,
+    nodeSlug: "fixture",
+    environment: "production",
+    manualProvenance: {
+      kind: "manual-observed",
+      postgresImageDigest: `sha256:${sha("1")}`,
+      managedSdlSha256: sha("a"),
+      qualificationArtifactSha256: sha("b"),
+      qualifiedAt: now,
+    },
+    targetBuildSha: "a".repeat(40),
+    canonicalEndpointHost: "db.fixture.invalid",
+    databaseName: "cogni_fixture",
+    appRole: "app_fixture",
+    serviceRole: "service_fixture",
+    budgetProfile: "shared-default-v1",
+    budget: { kind: "preserved-role-bounds", roles: [] },
+    tlsCertificate: "fixture-certificate",
+    tls: { kind: "system" },
+    app: {
+      dsn: "new-app",
+      custody: { service: "fixture", key: "DATABASE_URL" },
+    },
+    service: {
+      dsn: "new-service",
+      custody: { service: "fixture", key: "DATABASE_SERVICE_URL" },
+    },
+    migration: { kind: "app-database-url" },
+  };
+  return {
+    artifact: PhysicalRecoveryArtifactSchema.parse({ evidence, definitions }),
+    custody,
+    primaryServiceName: "postgres",
+    appServiceName: "app",
+  };
+}
+describe("private known physical postimages", () => {
+  it("accepts only the fixed source hold, original target startup, and held consumer delta", () => {
+    expect(() => qualifyPhysicalPostimages(postimageFixture())).not.toThrow();
+    for (const field of ["sourceHeld", "targetNormal", "appHeld"] as const) {
+      const input = postimageFixture();
+      const altered = JSON.parse(input.artifact.definitions[field]);
+      const name = field === "appHeld" ? "app" : "postgres";
+      altered.services[name].env.push("UNREVIEWED=changed");
+      input.artifact.definitions[field] = JSON.stringify(altered);
+      // Even a correctly recomputed submitted hash cannot authorize an arbitrary native delta.
+      const digest = createHash("sha256")
+        .update(input.artifact.definitions[field])
+        .digest("hex");
+      if (field === "sourceHeld")
+        input.artifact.evidence.source.heldSdlHash = digest;
+      else if (field === "targetNormal")
+        input.artifact.evidence.target.normalSdlHash = digest;
+      else input.artifact.evidence.app.heldSdlHash = digest;
+      expect(() => qualifyPhysicalPostimages(input)).toThrow(
+        "unreviewed_delta"
+      );
     }
   });
 });

@@ -16,6 +16,7 @@ import type {
   DatabaseCellAppliedRegistrationFacts,
   DatabaseCellBootstrapKit,
   DatabaseCellEndpointIdentity,
+  DatabaseCellPhysicalRecoveryFacts,
 } from "@/types/database-cell";
 
 export interface DatabaseCellBindingReference {
@@ -97,7 +98,9 @@ export interface DatabaseCellAppliedRegistrationEvidencePort {
     readonly custody: DatabaseCellAppliedCustody;
     readonly manualCutoverPacketSha256: string;
     readonly readmissionReceiptId: string;
-  }): Promise<DatabaseCellAppliedRegistrationFacts>;
+  }): Promise<
+    DatabaseCellAppliedRegistrationFacts | DatabaseCellPhysicalRecoveryFacts
+  >;
 }
 
 /** Full applied evidence validation without saving a binding or publishing any secret. */
@@ -107,4 +110,18 @@ export interface DatabaseCellAppliedProbeQualificationPort {
   ): Promise<
     import("@/types/database-cell").DatabaseCellAppliedProbeQualification
   >;
+}
+
+/** Expected canonical preimages and observed native postimages, never mutation authority. */
+export interface DatabaseCellPhysicalRecoveryWrite {
+  readonly source: import("./akash-tx.port").AkashTxAllocationRecord;
+  readonly target: import("./akash-tx.port").AkashTxAllocationRecord;
+  readonly app: import("./akash-tx.port").AkashTxAllocationRecord;
+  readonly expectedSource: readonly AppliedDatabaseCellReceipt[];
+  readonly expectedTarget: readonly AppliedDatabaseCellReceipt[];
+  readonly targetBindings: readonly AppliedDatabaseCellReceipt[];
+  readonly recoveryIntentKey: string;
+  readonly targetSdlHash: string;
+  readonly appSdlHash: string;
+  readonly packetSha256: string;
 }

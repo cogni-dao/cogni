@@ -251,6 +251,10 @@ const DatabaseCellBindingBaseSchema = z
   .object({
     version: z.literal(1),
     phase: z.enum(["ready", "applied", "superseded"]),
+    supersededBy: z
+      .object({ receiptId: z.string().uuid(), packetSha256: sha256 })
+      .strict()
+      .optional(),
     receiptId: z.string().uuid(),
     cogniKey: z.string().min(1).max(512),
     nodeId: z.string().uuid(),
@@ -304,6 +308,11 @@ export const DatabaseCellBindingSchema = z
     }).strict(),
   ])
   .superRefine((binding, ctx) => {
+    if (Boolean(binding.supersededBy) !== (binding.phase === "superseded"))
+      ctx.addIssue({
+        code: "custom",
+        message: "superseded history requires exact successor provenance",
+      });
     const base = `cogni_${binding.nodeSlug.replaceAll("-", "_")}`;
     if (
       ![base, `${base}_${binding.environment.replaceAll("-", "_")}`].includes(
