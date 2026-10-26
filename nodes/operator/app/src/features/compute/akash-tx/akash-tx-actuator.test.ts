@@ -26,6 +26,7 @@ import { rootCertificates } from "node:tls";
 
 import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 
 import type {
   AkashAllocationProbe,
@@ -50,6 +51,11 @@ import {
   type AkashTxLogger,
   mapConsoleFailure,
 } from "./akash-tx-actuator";
+import { createAkashTxDispatcher } from "./akash-tx-http";
+import {
+  DatabaseCellRecoveryProfileSchema,
+  databaseCellRecoveryIntent,
+} from "./database-cell-recovery";
 
 const SPEC: ProvisionSpec = {
   name: "toks9",
@@ -613,8 +619,12 @@ function recordingLogger(): AkashTxLogger & {
   };
 }
 
-function build(consoleOptions: FakeConsoleOptions = {}) {
-  const ledger = new FakeLedger();
+function build(
+  consoleOptions: FakeConsoleOptions = {},
+  recoveryProfile?: unknown,
+  sharedLedger?: FakeLedger
+) {
+  const ledger = sharedLedger ?? new FakeLedger();
   const api = new FakeConsole(consoleOptions);
   const log = recordingLogger();
   const migration = new FakeMigration();
@@ -623,6 +633,7 @@ function build(consoleOptions: FakeConsoleOptions = {}) {
     console: api,
     ledger,
     log,
+    recoveryProfile: async () => recoveryProfile,
     migration,
     costEvidence: costs.costEvidence,
     costStore: costs.costStore,
@@ -634,8 +645,8 @@ function build(consoleOptions: FakeConsoleOptions = {}) {
 describe("qualified cell app releases", () => {
   const qualifiedSha = "a".repeat(40);
   const otherSha = "b".repeat(40);
-  function withCell() {
-    const context = build();
+  function withCell(recoveryProfile?: unknown) {
+    const context = build({}, recoveryProfile);
     const provider = `akash1${"a".repeat(38)}`;
     context.ledger.rows.set("cell", {
       receiptId: "22222222-2222-4222-8222-222222222222",
@@ -690,6 +701,279 @@ describe("qualified cell app releases", () => {
     });
     return context;
   }
+  const recoveryProfile = {
+    enabled: true,
+    funding_status: "qualified",
+    cpu_units: 4,
+    memory_mib: 16384,
+    ephemeral_size_mib: 1024,
+    persistent_size_mib: 204800,
+    postgres_major: 15,
+    image:
+      "postgres:15@sha256:1b92e7a80c021647bf70f5d3eb66066a998e4f5cf43c07bb9dc9f729782cf88e",
+    command: ["sleep"],
+    args: ["infinity"],
+    volume_name: "database",
+    mount_path: "/var/lib/postgresql/data",
+    pgdata: "/var/lib/postgresql/data/pgdata",
+    volume_tier: "nvme",
+    pricing_denom: "uact",
+    max_price_per_block: "100",
+    initial_escrow_usd: "0.5",
+  };
+  function recoveryRequest(context: ReturnType<typeof withCell>) {
+    const source = context.ledger.rows.get("cell");
+    if (!source) throw new Error("missing source");
+    context.ledger.rows.set("cell", { ...source, retentionPolicy: "retain" });
+    const reference = {
+      environment: "production",
+      identity: IDENTITY,
+      nodeSlug: "toks9",
+      recovery: {
+        profileId: "pg15-cold-capacity-v1" as const,
+        sourceCogniKey: "cell",
+        sourceExternalName: "9001",
+        sourceSystemIdentifier: "123",
+      },
+    };
+    const intent = databaseCellRecoveryIntent(
+      reference,
+      source,
+      DatabaseCellRecoveryProfileSchema.parse(recoveryProfile)
+    );
+    return { ...reference, cogniKey: intent.key };
+  }
+  it("allocates source-qualified cold recovery through the same receipt and keeps ordinary app admission", async () => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    await expect(
+      context.actuator.createDatabaseCellRecovery(input)
+    ).resolves.toMatchObject({ externalName: "7001" });
+    expect(context.api.allocateCalls).toBe(1);
+    expect(context.ledger.rows.get(input.cogniKey)).toMatchObject({
+      state: "allocated",
+      retentionPolicy: "retain",
+      allocationCursor: "7000",
+    });
+    await expect(
+      context.actuator.createDatabaseCellRecovery(input)
+    ).resolves.toMatchObject({ replayed: true });
+    expect(context.api.allocateCalls).toBe(1);
+    await expect(
+      context.actuator.create({
+        cogniKey: "disguised",
+        environment: "production",
+        identity: IDENTITY,
+        spec: { ...SPEC, retentionPolicy: "retain" },
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+  });
+  it("refuses disabled, changed-key, foreign and wrong-system recovery before a paid transaction", async () => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    for (const bad of [
+      { ...input, cogniKey: `${input.cogniKey.slice(0, -1)}z` },
+      { ...input, identity: OTHER_IDENTITY },
+      {
+        ...input,
+        recovery: { ...input.recovery, sourceSystemIdentifier: "999" },
+      },
+    ]) {
+      await expect(
+        context.actuator.createDatabaseCellRecovery(bad)
+      ).rejects.toBeInstanceOf(AkashTxError);
+    }
+    const disabled = withCell({ ...recoveryProfile, enabled: false });
+    await expect(
+      disabled.actuator.createDatabaseCellRecovery(recoveryRequest(disabled))
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(disabled.ledger.rows.size).toBe(1);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it("refuses another retained target in the same source family and clears only the unused claim", async () => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    const prefix = input.cogniKey.slice(0, -64);
+    const source = context.ledger.rows.get("cell");
+    if (!source) throw new Error("missing source");
+    context.ledger.rows.set(prefix + "f".repeat(64), {
+      ...source,
+      cogniKey: prefix + "f".repeat(64),
+      receiptId: "other",
+      externalName: "8001",
+      appliedDatabaseCellBinding: [],
+    });
+    await expect(
+      context.actuator.createDatabaseCellRecovery(input)
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(context.api.allocateCalls).toBe(0);
+    expect(context.ledger.rows.get(input.cogniKey)?.state).toBe("failed");
+    expect(context.ledger.rows.get("cell")?.state).toBe("allocated");
+  });
+  it("fails a truncated family scan without stranding the unused wallet claim", async () => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    const source = context.ledger.rows.get("cell");
+    if (!source) throw new Error("missing source");
+    for (let i = 0; i < 98; i++)
+      context.ledger.rows.set(`other-${i}`, {
+        ...source,
+        cogniKey: `other-${i}`,
+        receiptId: `other-${i}`,
+        externalName: String(10000 + i),
+        appliedDatabaseCellBinding: [],
+      });
+    await expect(
+      context.actuator.createDatabaseCellRecovery(input)
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(context.ledger.rows.get(input.cogniKey)?.state).toBe("failed");
+    expect(context.api.cursorCalls).toBe(0);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it("concurrent changed recovery keys cannot purchase another target", async () => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    const results = await Promise.allSettled([
+      context.actuator.createDatabaseCellRecovery(input),
+      context.actuator.createDatabaseCellRecovery({
+        ...input,
+        cogniKey: input.cogniKey.slice(0, -64) + "f".repeat(64),
+      }),
+    ]);
+    expect(results.map((result) => result.status).sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    expect(context.api.allocateCalls).toBe(1);
+  });
+  it("keeps recovery reference-only and the existing fresh branch unchanged", async () => {
+    const context = withCell({ ...recoveryProfile, enabled: false });
+    let freshCalls = 0;
+    const dispatch = createAkashTxDispatcher({
+      token: "fixture",
+      actuator: context.actuator,
+      databaseCellSpec: () => {
+        freshCalls++;
+        return SPEC;
+      },
+    });
+    const input = {
+      ...recoveryRequest(context),
+      budgetProfile: "dedicated-high-throughput-v1",
+    };
+    const request = (body: unknown) =>
+      dispatch({
+        method: "POST",
+        path: "/v1/akash/create-database-cell",
+        authorization: "Bearer fixture",
+        body: JSON.stringify(body),
+      });
+    expect((await request(input)).status).toBe(400);
+    expect(freshCalls).toBe(0);
+    expect(
+      (
+        await request({
+          ...input,
+          recovery: { ...input.recovery, pricingAmount: 10000 },
+        })
+      ).status
+    ).toBe(400);
+    const { recovery: _recovery, ...fresh } = input;
+    await request(fresh);
+    expect(freshCalls).toBe(1);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it("refuses unqualified funding even if a future recipe is enabled", async () => {
+    const context = withCell({
+      ...recoveryProfile,
+      enabled: true,
+      funding_status: "unqualified",
+    });
+    await expect(
+      context.actuator.createDatabaseCellRecovery(recoveryRequest(context))
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(context.ledger.rows.size).toBe(1);
+    expect(context.api.cursorCalls).toBe(0);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it("two actuator instances cannot both spend under the same preparing recovery key", async () => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    const other = build({}, recoveryProfile, context.ledger);
+    let signalEntered = () => {};
+    let resume = () => {};
+    const entered = new Promise<void>((resolve) => {
+      signalEntered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    context.api.allocationCursor = async () => {
+      context.api.cursorCalls++;
+      signalEntered();
+      await gate;
+      return "7000";
+    };
+    const first = context.actuator.createDatabaseCellRecovery(input);
+    await entered;
+    await expect(
+      other.actuator.createDatabaseCellRecovery(input)
+    ).rejects.toMatchObject({ code: "wallet_allocation_blocked" });
+    expect(other.api.cursorCalls).toBe(0);
+    expect(other.api.allocateCalls).toBe(0);
+    expect(context.ledger.rows.get(input.cogniKey)?.state).toBe("preparing");
+    resume();
+    await first;
+    await expect(
+      other.actuator.createDatabaseCellRecovery(input)
+    ).resolves.toMatchObject({ externalName: "7001", replayed: true });
+    expect(context.api.allocateCalls + other.api.allocateCalls).toBe(1);
+  });
+  it("ships the actual recovery profile disabled and funding unqualified", () => {
+    const file = path.resolve(
+      __dirname,
+      "../../../../../../../infra/database-budget-profiles.yaml"
+    );
+    const document = parseYaml(readFileSync(file, "utf8")) as {
+      recovery_profiles: Record<string, unknown>;
+    };
+    expect(
+      DatabaseCellRecoveryProfileSchema.parse(
+        document.recovery_profiles["pg15-cold-capacity-v1"]
+      )
+    ).toEqual({
+      ...recoveryProfile,
+      enabled: false,
+      funding_status: "unqualified",
+    });
+  });
+  it("cold recipe and key are bounded and contain no database initialization or credentials", () => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    const source = context.ledger.rows.get("cell");
+    if (!source) throw new Error("missing source");
+    const intent = databaseCellRecoveryIntent(
+      input,
+      source,
+      DatabaseCellRecoveryProfileSchema.parse(recoveryProfile)
+    );
+    expect(intent.key).toHaveLength(191);
+    expect(intent.key).toMatch(/^[A-Za-z0-9._:/-]+$/);
+    expect(intent.spec.services[0]).toMatchObject({
+      command: ["sleep"],
+      args: ["infinity"],
+      cpuUnits: 4,
+      memoryMi: 16384,
+      env: { PGDATA: "/var/lib/postgresql/data/pgdata" },
+      volumes: [{ sizeMi: 204800 }],
+    });
+    expect(Object.keys(intent.spec.services[0]?.env ?? {})).toEqual(["PGDATA"]);
+    expect(intent.policy).toEqual({
+      pricingDenom: "uact",
+      pricingAmount: 100,
+      initialEscrowUsd: 0.5,
+    });
+  });
   const specAt = (sha: string): ProvisionSpec => ({
     ...SPEC,
     services: SPEC.services.map((service) => ({
