@@ -210,8 +210,10 @@ ip -n server route add default via 198.18.0.1
 ip -n router route add default via 192.0.2.2
 # Kubelet mounts proc/sys read-only by default. Remount only inside this
 # Pod-owned router mount/network namespace; never change any host sysctl.
-ip netns exec router mount -o remount,rw /proc/sys
-ip netns exec router sysctl -q -w net.ipv4.ip_forward=1
+ip netns exec router sh -c \
+  'mount -o remount,bind,rw /proc/sys && sysctl -qw net.ipv4.ip_forward=1'
+[[ $(ip netns exec router sysctl -n net.ipv4.ip_forward) == 1 ]]
+emit forwarding-enabled 'router net.ipv4.ip_forward=1; private mount lifetime only'
 ip netns exec router iptables -N DOCKER-USER
 ip netns exec router iptables -A FORWARD -j DOCKER-USER
 for port in 5432 5435; do
