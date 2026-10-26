@@ -245,9 +245,12 @@ case ",$scoped_endpoints," in
   *) fail "env filtering removed the active placed sibling" ;;
 esac
 
+# Restore membership before testing placement independently of custody.
+yq -i '.envs = ["candidate-a", "preview", "production"]' "$PLACEMENT_CATALOG/zk.yaml"
+
 # LiteLLM (Compose-on-VM) is a Cherry-resident consumer too: k3s -> VM NodePort,
 # akash -> the same public URL (no NodePort exists for an off-cluster workload).
-placement_billing="$(COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" bash -c 'source scripts/ci/lib/image-tags.sh && node_billing_endpoint_csv candidate-a.vm.example.test candidate-a test.example.test')" \
+placement_billing="$(FLEET_CONTROL_ENV=candidate-a COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" bash -c 'source scripts/ci/lib/image-tags.sh && node_billing_endpoint_csv candidate-a.vm.example.test candidate-a test.example.test')" \
   || fail "placement billing render failed"
 case ",$placement_billing," in
   *",zk=http://candidate-a.vm.example.test:30401,"*) pass "billing zk (k3s) -> VM NodePort" ;;
@@ -267,7 +270,7 @@ deploy_billing_fragment="$(awk '
 assert_deploy_billing_route() {
   local env="$1" root="$2" fallback_root="$3" slug="$4" want_host="$5" csv alias
   csv="$(
-    REPO_ROOT="$REPO_ROOT" COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" \
+    REPO_ROOT="$REPO_ROOT" COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" FLEET_CONTROL_ENV="$env" \
       DEPLOY_ENVIRONMENT="$env" DOMAIN=isolated-workload.example.test \
       FORK_DOMAIN_ROOT="$root" COGNI_DOMAIN_ROOT="$fallback_root" \
       COGNI_DEPLOYMENT_SLUG="$slug" DEPLOY_BILLING_FRAGMENT="$deploy_billing_fragment" \
@@ -298,6 +301,54 @@ assert_deploy_billing_route preview '' '' '' cogni-preview.vm.cognidao.org
 assert_deploy_billing_route candidate-a '' '' '' cogni-candidate-a.vm.cognidao.org
 assert_deploy_billing_route production substrate.example.test ignored.example.test fleet fleet.vm.substrate.example.test
 assert_deploy_billing_route candidate-a '' fallback.example.test fleet fleet-candidate-a.vm.fallback.example.test
+
+# The shared gateway owns only registered lanes; placement and membership are
+# independent of build ownership. Exercise its emitted map through the real router.
+shared_billing="$(COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" FLEET_CONTROL_ENV=production \
+  bash -c 'source scripts/ci/lib/image-tags.sh; node_billing_endpoint_csv cogni.vm.substrate.test production isolated-workload.test')"
+for route in \
+  "cogni:candidate-a:$ZA_ID:app:v1=https://za-test.isolated-workload.test" \
+  "cogni:production:$ZA_ID:app:v1=https://za.isolated-workload.test" \
+  "cogni:production:$ZK_ID:app:v1=http://cogni.vm.substrate.test:30401"; do
+  case ",$shared_billing," in
+    *",$route,"*) pass "shared billing route $route" ;;
+    *) fail "missing authenticated workload route $route: $shared_billing" ;;
+  esac
+done
+case "$shared_billing" in
+  *"cogni:preview:"*|*"cogni:candidate-a:$ZK_ID:"*) fail "foreign k3s lane escaped its own gateway" ;;
+esac
+candidate_billing="$(COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" FLEET_CONTROL_ENV=production \
+  bash -c 'source scripts/ci/lib/image-tags.sh; node_billing_endpoint_csv candidate.vm.test candidate-a test.isolated-workload.test')"
+case ",$candidate_billing," in
+  *",za="*|*",$ZA_ID="*|*"cogni:candidate-a:$ZA_ID:"*|*"cogni:production:"*)
+    fail "candidate gateway claimed a production-custodied workload" ;;
+esac
+# No key is emitted for a declared node absent from the gateway lane.
+yq -i '.envs = ["production"]' "$PLACEMENT_CATALOG/zk.yaml"
+excluded_billing="$(COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" FLEET_CONTROL_ENV=production \
+  bash -c 'source scripts/ci/lib/image-tags.sh; node_billing_endpoint_csv candidate.vm.test candidate-a test.isolated-workload.test')"
+[ -z "$excluded_billing" ] || fail "billing renderer ignored membership: $excluded_billing"
+yq -i '.envs = ["candidate-a", "preview", "production"]' "$PLACEMENT_CATALOG/zk.yaml"
+# An isolated fleet controls foreign Akash lanes in its own gateway. Strip the
+# gateway lane's prefix exactly once before resolving each foreign workload host.
+isolated_billing="$(COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" FLEET_CONTROL_ENV=candidate-a \
+  bash -c 'source scripts/ci/lib/image-tags.sh; node_billing_endpoint_csv candidate.vm.test candidate-a test.isolated-workload.test')"
+case ",$isolated_billing," in
+  *",cogni:production:$ZA_ID:app:v1=https://za.isolated-workload.test,"*) pass "isolated fleet derives foreign workload domain" ;;
+  *) fail "isolated fleet used the gateway domain for a foreign lane: $isolated_billing" ;;
+esac
+# A foreign preview on Akash is owned by the production gateway too. Keep the
+# earlier preview-k3s exclusion, then prove the placed preview via actual callback.
+yq -i '.deployment_provider.preview = "akash"' "$PLACEMENT_CATALOG/za.yaml"
+shared_billing="$(COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" FLEET_CONTROL_ENV=production \
+  bash -c 'source scripts/ci/lib/image-tags.sh; node_billing_endpoint_csv cogni.vm.substrate.test production isolated-workload.test')"
+case ",$shared_billing," in
+  *",cogni:preview:$ZA_ID:app:v1=https://za-preview.isolated-workload.test,"*) pass "foreign preview Akash uses its own workload host" ;;
+  *) fail "missing foreign preview Akash route: $shared_billing" ;;
+esac
+RENDERED_BILLING_ENDPOINTS="$shared_billing" python3 "$SCRIPT_DIR/litellm-callback-routing.test.py" \
+  || fail "actual callback rejected the catalog-derived workload map"
 
 # An unsupported placement value must fail loud, never silently fall back to k3s.
 yq '.deployment_provider = {"candidate-a": "fly"}' "$PLACEMENT_CATALOG/za.yaml" > "$PLACEMENT_CATALOG/za.tmp" \

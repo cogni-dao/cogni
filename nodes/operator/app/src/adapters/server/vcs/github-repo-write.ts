@@ -515,6 +515,7 @@ function candidateInfraPathLane(
   }
   if (
     path === "infra/openfga/rbac-model.json" ||
+    path === "infra/images/litellm/cogni_callbacks.py" ||
     path.startsWith("infra/compose/edge/") ||
     path.startsWith("infra/compose/runtime/") ||
     path.startsWith("infra/k8s/argocd/image-updater/") ||
@@ -3472,7 +3473,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
     if (present) {
       // ADD touches the one WORKLOAD env's template overlay + external-secret (+ its scheduler
-      // routing patch for an akash lane), and the CONTROL env's appsets kustomization (bug.5204 —
+      // routing patch plus any foreign control-worker custody patch), and the CONTROL env's appsets kustomization (bug.5204 —
       // for an akash non-production lane that is appsets/production/, not the workload env's dir).
       const controlEnv = shape?.controlEnv ?? env;
       templateOverlayByEnv[env] = await this.readFileOnMain(
@@ -3500,12 +3501,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
         APPSET_TEMPLATE_PATH
       );
       const schedulerEndpointPatchByEnv: Record<string, string> = {};
-      if (shape?.placement === "akash") {
-        schedulerEndpointPatchByEnv[env] = await this.readFileOnMain(
+      for (const target of new Set([env, controlEnv])) {
+        schedulerEndpointPatchByEnv[target] = await this.readFileOnMain(
           octokit,
           owner,
           repo,
-          schedulerEndpointPatchPath(env)
+          schedulerEndpointPatchPath(target)
         );
       }
       const { port, nodePort } = parseCatalogPorts(catalog, slug);
@@ -3525,8 +3526,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
     // REMOVE (atomic per-env): the planner rewrites the CONTROL env's kustomization — derived from
     // the PRE-mutation catalog, whose placement cells still exist at plan time (bug.5204 parity
-    // with the add; `production` for an akash non-production lane). An akash remove also restores
-    // the env's scheduler-worker route to the in-cluster default, so fetch that env's patch too.
+    // with the add; `production` for an akash non-production lane). Remove routing aliases from
+    // both the workload lane and any foreign control-worker namespace (bug.5536).
     // (Caddy is per-node env-independent state and NOT touched by an env remove.)
     const removeProvider = parseCatalogPlacement(catalog)[env] ?? "k3s";
     const removeControlEnv = controlEnvFor(
@@ -3541,12 +3542,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
       appsetsKustomizationPath(removeControlEnv)
     );
     const removeSchedulerPatchByEnv: Record<string, string> = {};
-    if (removeProvider === "akash") {
-      removeSchedulerPatchByEnv[env] = await this.readFileOnMain(
+    for (const target of new Set([env, removeControlEnv])) {
+      removeSchedulerPatchByEnv[target] = await this.readFileOnMain(
         octokit,
         owner,
         repo,
-        schedulerEndpointPatchPath(env)
+        schedulerEndpointPatchPath(target)
       );
     }
     return {

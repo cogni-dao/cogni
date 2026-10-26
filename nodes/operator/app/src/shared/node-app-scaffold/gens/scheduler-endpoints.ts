@@ -9,7 +9,7 @@
  * Scope: Given ANY currently-committed ConfigMap document carrying a quoted `COGNI_NODE_ENDPOINTS`
  *   line — the shared base `infra/k8s/base/scheduler-worker/configmap.yaml` AND each deploy env's
  *   generated `infra/k8s/overlays/<env>/scheduler-worker/node-endpoints.patch.yaml` (bug.5094) —
- *   two edits:
+ *   membership edits keep workload and custodied namespace maps consistent; placement/birth edits:
  *     - `insertSchedulerEndpoint` splices a NEW node's slug + node_id (uuid) aliases in, byte-
  *       identical to what `pnpm gen:scheduler-worker-endpoints` produces once that node joins the
  *       catalog. A birth is always k3s (`deployment_provider` absent → K3S_IS_DEFAULT), so the
@@ -30,6 +30,139 @@
  */
 
 const ENDPOINTS_KEY = "COGNI_NODE_ENDPOINTS";
+const CUSTODY_KEY = "TEMPORAL_CUSTODIED_NODE_ENDPOINTS";
+
+/** Change one paired membership, retaining sibling bytes and canonical pair order. */
+function membershipCsv(
+  csv: string,
+  slug: string,
+  nodeId: string,
+  url: string | null
+): string {
+  const cells = csv ? csv.split(",") : [];
+  if (cells.length % 2) throw new Error("unpaired scheduler aliases");
+  const pairs: { slug: string; id: string; text: string }[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < cells.length; i += 2) {
+    const first = /^([a-z][a-z0-9-]*)=(https?:\/\/[^,]+)$/.exec(cells[i] ?? "");
+    const second =
+      /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})=(https?:\/\/[^,]+)$/.exec(
+        cells[i + 1] ?? ""
+      );
+    if (
+      !first ||
+      !second ||
+      first[2] !== second[2] ||
+      seen.has(first[1] ?? "") ||
+      seen.has(second[1] ?? "")
+    )
+      throw new Error("invalid or duplicate scheduler alias pair");
+    if (
+      !first[1] ||
+      !second[1] ||
+      !first[2] ||
+      new URL(first[2]).origin !== first[2]
+    )
+      throw new Error("invalid scheduler endpoint origin");
+    seen.add(first[1]);
+    seen.add(second[1]);
+    pairs.push({
+      slug: first[1],
+      id: second[1],
+      text: `${cells[i]},${cells[i + 1]}`,
+    });
+  }
+  const found = pairs.find((pair) => pair.slug === slug);
+  if (
+    (found && found.id !== nodeId) ||
+    pairs.some((pair) => pair.id === nodeId && pair.slug !== slug)
+  )
+    throw new Error("scheduler node identity mismatch");
+  const next = pairs.filter((pair) => pair.slug !== slug);
+  if (url !== null) {
+    const pair = { slug, id: nodeId, text: `${slug}=${url},${nodeId}=${url}` };
+    const index = next.findIndex((entry) => entry.slug > slug);
+    next.splice(index === -1 ? next.length : index, 0, pair);
+  }
+  return next.map((pair) => pair.text).join(",");
+}
+
+/** Env membership follows the renderer: absent nodes have no workload-lane aliases. */
+export function setSchedulerEndpointMembership(
+  text: string,
+  slug: string,
+  nodeId: string,
+  url: string | null
+): string {
+  const matches = [...text.matchAll(new RegExp(LINE_RE.source, "gm"))];
+  const match = matches[0];
+  if (
+    matches.length !== 1 ||
+    !match ||
+    match[1] === undefined ||
+    match[2] === undefined
+  )
+    throw new Error(`expected one quoted ${ENDPOINTS_KEY} line`);
+  return text.replace(
+    match[0],
+    `${match[1]}${ENDPOINTS_KEY}: "${membershipCsv(match[2], slug, nodeId, url)}"`
+  );
+}
+
+/** Update only one lane/node in its derived control worker's canonical JSON map. */
+export function setCustodiedSchedulerEndpointMembership(
+  text: string,
+  lane: string,
+  slug: string,
+  nodeId: string,
+  url: string | null
+): string {
+  const matches = [
+    ...text.matchAll(/^ {2}TEMPORAL_CUSTODIED_NODE_ENDPOINTS: (.*)$/gm),
+  ];
+  const match = matches[0];
+  if (matches.length !== 1 || !match || match[1] === undefined)
+    throw new Error(`expected one quoted ${CUSTODY_KEY} line`);
+  const scalar = match[1];
+  if (!(scalar === '"{}"' || /^'(?:[^']|'')*'$/.test(scalar)))
+    throw new Error("noncanonical custody scalar");
+  const raw =
+    scalar === '"{}"' ? "{}" : scalar.slice(1, -1).replaceAll("''", "'");
+  const parsed: unknown = JSON.parse(raw);
+  if (
+    !parsed ||
+    Array.isArray(parsed) ||
+    typeof parsed !== "object" ||
+    JSON.stringify(parsed) !== raw
+  )
+    throw new Error("noncanonical custody map");
+  const map = parsed as Record<string, unknown>;
+  const keys = Object.keys(map);
+  if (keys.join(",") !== [...keys].sort().join(","))
+    throw new Error("noncanonical custody namespace order");
+  for (const [key, value] of Object.entries(map)) {
+    if (!/^cogni-[a-z][a-z0-9-]*$/.test(key) || typeof value !== "string")
+      throw new Error("invalid custody namespace");
+    // Validate existing sibling maps without changing their representation.
+    membershipCsv(value, slug, nodeId, null);
+  }
+  const namespace = `cogni-${lane}`;
+  const next = membershipCsv(
+    (map[namespace] as string | undefined) ?? "",
+    slug,
+    nodeId,
+    url
+  );
+  if (next) map[namespace] = next;
+  else delete map[namespace];
+  const result = JSON.stringify(
+    Object.fromEntries(
+      Object.entries(map).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    )
+  );
+  const quoted = result === "{}" ? '"{}"' : `'${result.replaceAll("'", "''")}'`;
+  return text.replace(match[0], `  ${CUSTODY_KEY}: ${quoted}`);
+}
 /**
  * Mirrors the committed `data:` indent (2 spaces) + double-quoted value. The trailing class is
  * `[^\S\r\n]*` (horizontal whitespace only), NOT `\s*` — bug.5073's exact failure mode: `\s`
