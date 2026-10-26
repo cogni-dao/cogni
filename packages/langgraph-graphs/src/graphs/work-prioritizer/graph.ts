@@ -13,16 +13,23 @@
  *     the run fails and the provider's error log fires
  *   - TYPE_TRANSPARENT_RETURN: No explicit return type annotation
  * Side-effects: none
- * Links: story.5108, prompts.ts, tools.ts
+ * Links: story.5108, story.5116, prompts.ts, tools.ts
+ *   - EVERY_TICK_IMPROVES: `cycleScores` grades each run in code (knowledge_read, goal_cited, novel_change, focus, action)
  * @public
  */
 
 import {
   EDO_DECIDE_NAME,
   GOAL_LIST_NAME,
+  KNOWLEDGE_SEARCH_NAME,
+  WORK_ITEM_QUERY_NAME,
   WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
-import { type BaseMessage, isToolMessage } from "@langchain/core/messages";
+import {
+  type BaseMessage,
+  isAIMessage,
+  isToolMessage,
+} from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import {
   Annotation,
@@ -58,6 +65,111 @@ const parse = (s: string): Record<string, unknown> | null => {
   }
 };
 
+const ITEM_ID = /\b(?:story|task|bug|spike|subtask)\.\d+\b/;
+const TOP_LINE = /^\s*[1-5]\.\s/;
+const PATCH_FIELDS = ["priority", "rank", "labels", "summary"] as const;
+
+type Snapshot = Partial<Record<(typeof PATCH_FIELDS)[number], unknown>>;
+
+const same = (a: unknown, b: unknown): boolean =>
+  JSON.stringify(a) === JSON.stringify(b);
+
+/** Tool-call args keyed by tool_call id, from every AI message in the transcript. */
+function toolCallArgs(
+  messages: readonly BaseMessage[]
+): Map<string, { name: string; args: Record<string, unknown> }> {
+  const out = new Map<
+    string,
+    { name: string; args: Record<string, unknown> }
+  >();
+  for (const m of messages) {
+    if (!isAIMessage(m)) continue;
+    for (const c of m.tool_calls ?? []) {
+      if (c.id) out.set(c.id, { name: c.name, args: c.args ?? {} });
+    }
+  }
+  return out;
+}
+
+/**
+ * Code-graded scores for one run (0..1 each). EVERY_TICK_IMPROVES: the grader is deterministic over the transcript,
+ * so the same scores land in the cycle log and can be replayed from a stored trace.
+ *   knowledge_read  — at least one successful knowledge search (the hub was consulted)
+ *   goal_cited      — the decision derives from a listed goal and each Top-5 line cites a listed goal
+ *   novel_change    — share of landed patches whose values differ from what the run read (1 when no patches)
+ *   focus           — Top-5 lines present, each naming an item id (count / 5)
+ *   action          — share of Top-5 lines that carry a `next:` action
+ */
+export function cycleScores(messages: readonly BaseMessage[]) {
+  const calls = toolCallArgs(messages);
+  const seen = new Map<string, Snapshot>();
+  let goalIds: string[] = [];
+  let knowledgeReads = 0;
+  let patches = 0;
+  let identicalPatches = 0;
+  let decision: { content: string; derivesFromHypothesisId: string } | null =
+    null;
+  for (const m of messages) {
+    if (!isToolMessage(m)) continue;
+    const v = parse(text(m));
+    if (!v || typeof v.error === "string" || v.success === false) continue;
+    const call = m.tool_call_id ? calls.get(m.tool_call_id) : undefined;
+    if (m.name === GOAL_LIST_NAME && Array.isArray(v.goals)) {
+      goalIds = v.goals.map((g: { id?: unknown }) => String(g?.id));
+    } else if (m.name === KNOWLEDGE_SEARCH_NAME) {
+      knowledgeReads++;
+    } else if (m.name === WORK_ITEM_QUERY_NAME && Array.isArray(v.items)) {
+      for (const it of v.items as Array<Record<string, unknown>>) {
+        if (typeof it.id !== "string") continue;
+        const snap: Snapshot = {};
+        for (const f of PATCH_FIELDS) if (f in it) snap[f] = it[f];
+        seen.set(it.id, snap);
+      }
+    } else if (m.name === WORK_ITEM_TRANSITION_NAME && v.success === true) {
+      const args = call?.args;
+      if (args?.action !== "patch") continue;
+      patches++;
+      const prior = seen.get(String(v.id));
+      const sent = PATCH_FIELDS.filter((f) => f in args);
+      if (
+        prior &&
+        sent.length > 0 &&
+        sent.every((f) => f in prior && same(prior[f], args[f]))
+      ) {
+        identicalPatches++;
+      }
+    } else if (m.name === EDO_DECIDE_NAME && call?.name === EDO_DECIDE_NAME) {
+      const a = call.args;
+      decision = {
+        content: String(a.content ?? ""),
+        derivesFromHypothesisId: String(a.derivesFromHypothesisId ?? ""),
+      };
+    }
+  }
+  const topLines = (decision?.content ?? "")
+    .split("\n")
+    .filter((l) => TOP_LINE.test(l) && ITEM_ID.test(l));
+  const topIds = topLines.map((l) => l.match(ITEM_ID)?.[0] ?? "");
+  const citesGoal = (l: string) => goalIds.some((g) => g && l.includes(g));
+  const cited = topLines.filter(citesGoal).length;
+  const withNext = topLines.filter((l) => /\bnext:/i.test(l)).length;
+  const derivesOk =
+    decision !== null && goalIds.includes(decision.derivesFromHypothesisId);
+  return {
+    knowledgeReads,
+    identicalPatches,
+    topIds,
+    scores: {
+      knowledge_read: knowledgeReads > 0 ? 1 : 0,
+      goal_cited:
+        derivesOk && topLines.length > 0 ? cited / topLines.length : 0,
+      novel_change: patches === 0 ? 1 : 1 - identicalPatches / patches,
+      focus: Math.min(1, topLines.length / 5),
+      action: topLines.length > 0 ? withNext / topLines.length : 0,
+    },
+  };
+}
+
 /** One flat cycle summary from the run's messages (safe to log). */
 export function cycleTelemetry(
   messages: readonly BaseMessage[],
@@ -92,6 +204,7 @@ export function cycleTelemetry(
     deniedCount,
     toolErrorCount,
     ...(edoDecisionId && { edoDecisionId }),
+    ...cycleScores(messages),
     aborted,
     ...(aborted && {
       abortReason: abortReason.slice(0, ABORT_REASON_MAX_CHARS),

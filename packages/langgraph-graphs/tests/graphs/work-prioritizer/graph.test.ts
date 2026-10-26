@@ -25,10 +25,14 @@ import {
   workItemQueryContract,
   workItemTransitionContract,
 } from "@cogni/ai-tools";
+import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
 import { OPERATOR_LANGGRAPH_CATALOG } from "../../../src/catalog";
-import { createWorkPrioritizerGraph } from "../../../src/graphs/work-prioritizer/graph";
+import {
+  createWorkPrioritizerGraph,
+  cycleScores,
+} from "../../../src/graphs/work-prioritizer/graph";
 import { WORK_PRIORITIZER_SYSTEM_PROMPT } from "../../../src/graphs/work-prioritizer/prompts";
 import { WORK_PRIORITIZER_TOOL_IDS } from "../../../src/graphs/work-prioritizer/tools";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
@@ -229,6 +233,16 @@ describe("work-prioritizer mission-loop agent", () => {
       deniedCount: 1,
       toolErrorCount: 0,
       edoDecisionId: "mission-loop-20261023T00",
+      knowledgeReads: 0,
+      identicalPatches: 0,
+      topIds: [],
+      scores: {
+        knowledge_read: 0,
+        goal_cited: 0,
+        novel_change: 1,
+        focus: 0,
+        action: 0,
+      },
       aborted: false,
       report: REPORT,
     });
@@ -265,5 +279,120 @@ describe("work-prioritizer mission-loop agent", () => {
 
     expect(result.ok).toBe(false);
     expect(result.structuredOutput).toBeUndefined();
+  });
+
+  it("EVERY_TICK_IMPROVES: cycleScores grades hub reads, identical patches and the decision shape", () => {
+    const goals = { goals: [{ id: "goal-ai-work-converges" }] };
+    const items = {
+      items: [
+        { id: "story.1", priority: 2, rank: 0, labels: ["a"], revision: 3 },
+        { id: "bug.2", priority: 3, rank: 1, labels: [], revision: 1 },
+      ],
+      count: 2,
+    };
+    const content = [
+      "Since last tick: nothing new; guidance mission-loop-expert",
+      "Top 5:",
+      "1. story.1 goal:goal-ai-work-converges — why — next: open PR",
+      "2. bug.2 goal:goal-ai-work-converges — why — next: reproduce",
+      "3. task.3 goal:goal-ai-work-converges — why — next: design",
+      "4. task.4 goal:goal-ai-work-converges — why",
+      "5. task.5 — why — next: triage",
+      "Changes: none",
+    ].join("\n");
+    const ai = (calls: Array<{ id: string; name: string; args: object }>) =>
+      new AIMessage({ content: "", tool_calls: calls });
+    const tool = (id: string, name: string, value: unknown) =>
+      new ToolMessage({
+        tool_call_id: id,
+        name,
+        content: JSON.stringify(value),
+      });
+    const messages = [
+      ai([{ id: "g", name: GOAL_LIST_NAME, args: {} }]),
+      tool("g", GOAL_LIST_NAME, goals),
+      ai([
+        {
+          id: "k",
+          name: "core__knowledge_search",
+          args: { query: "mission loop" },
+        },
+      ]),
+      tool("k", "core__knowledge_search", { results: [] }),
+      ai([{ id: "q", name: "core__work_item_query", args: {} }]),
+      tool("q", "core__work_item_query", items),
+      ai([
+        {
+          id: "p1",
+          name: WORK_ITEM_TRANSITION_NAME,
+          args: {
+            action: "patch",
+            id: "story.1",
+            priority: 2,
+            labels: ["a"],
+            expectedRevision: 3,
+          },
+        },
+        {
+          id: "p2",
+          name: WORK_ITEM_TRANSITION_NAME,
+          args: { action: "patch", id: "bug.2", rank: 0, expectedRevision: 1 },
+        },
+      ]),
+      tool("p1", WORK_ITEM_TRANSITION_NAME, {
+        success: true,
+        action: "patch",
+        id: "story.1",
+        revision: 4,
+      }),
+      tool("p2", WORK_ITEM_TRANSITION_NAME, {
+        success: true,
+        action: "patch",
+        id: "bug.2",
+        revision: 2,
+      }),
+      ai([
+        {
+          id: "d",
+          name: EDO_DECIDE_NAME,
+          args: {
+            id: "mission-loop-x",
+            domain: "strategy",
+            title: "t",
+            content,
+            derivesFromHypothesisId: "goal-ai-work-converges",
+            sourceType: "agent",
+          },
+        },
+      ]),
+      tool("d", EDO_DECIDE_NAME, {
+        entry: { id: "mission-loop-x" },
+        committed: true,
+      }),
+    ];
+    const s = cycleScores(messages);
+    expect(s.knowledgeReads).toBe(1);
+    expect(s.identicalPatches).toBe(1);
+    expect(s.topIds).toEqual([
+      "story.1",
+      "bug.2",
+      "task.3",
+      "task.4",
+      "task.5",
+    ]);
+    expect(s.scores).toEqual({
+      knowledge_read: 1,
+      goal_cited: 0.8,
+      novel_change: 0.5,
+      focus: 1,
+      action: 0.8,
+    });
+    expect(cycleScores([]).scores).toEqual({
+      knowledge_read: 0,
+      goal_cited: 0,
+      novel_change: 1,
+      focus: 0,
+      action: 0,
+    });
   });
 });
