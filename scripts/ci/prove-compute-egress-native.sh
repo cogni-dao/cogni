@@ -113,10 +113,15 @@ DOCKER
     --build-arg "YQ_VERSION=$yq_version" -t "$image" "$stage"
   printf 'fixture_phase=build status=completed\n'
   docker image inspect "$image" --format 'fixture_image={{.Id}}'
+  # Direct children let each foreground timer signal the owning CLI itself;
+  # a timed shell pipeline could leave an import running after owned cleanup.
+  printf 'fixture_phase=export status=started\n'
+  timeout --foreground 60 docker save -o "$stage/image.tar" "$image"
+  printf 'fixture_phase=export status=completed\n'
   printf 'fixture_phase=import status=started\n'
-  # shellcheck disable=SC2016 # $1 is the child shell's argument, not outer interpolation.
-  timeout --foreground 60 bash -o pipefail -c 'docker save "$1" | k3s ctr images import -' _ "$image" >/dev/null
+  timeout --foreground 60 k3s ctr images import "$stage/image.tar" >/dev/null
   printf 'fixture_phase=import status=completed\n'
+  rm "$stage/image.tar"
   # No host mounts, host namespaces, service-account token or network service.
   # SYS_ADMIN permits only this Pod's nested netns/mount operations; never
   # escalate to privileged or hostNetwork if the runtime refuses them.
