@@ -62,13 +62,14 @@ const NativeSchema = z.object({
 const address = (value: string) => value.replace(/^::ffff:/, "");
 
 /** PG15 exposes session identities to all roles; backend details may be hidden.
- * Count every other authenticated session, including spoofed observer names.
+ * Count every other database-attached authenticated session, including spoofed names.
+ * Database-less system workers (for example the logical launcher) are not clients.
  */
 export async function countOtherAuthenticatedSessions(
   tx: postgres.TransactionSql
 ): Promise<number> {
   const rows = await tx`SELECT count(*)::int AS count FROM pg_stat_activity
-    WHERE usesysid IS NOT NULL AND pid<>pg_backend_pid()`;
+    WHERE datid IS NOT NULL AND usesysid IS NOT NULL AND pid<>pg_backend_pid()`;
   return z.coerce.number().int().nonnegative().parse(rows[0]?.count);
 }
 

@@ -243,7 +243,11 @@ describe("physical recovery canonical transaction (real PostgreSQL)", () => {
   });
   // Close after suite, not per case: a client must stay bounded and independently connected.
   afterAll(async () => {
-    await Promise.all([first.$client.end(), second.$client.end()]);
+    await Promise.all([
+      first.$client.end(),
+      second.$client.end(),
+      seed.$client.end(),
+    ]);
   });
   const state = async () => {
     const rows = await seed
@@ -380,78 +384,6 @@ describe("physical recovery canonical transaction (real PostgreSQL)", () => {
     expect(authorities.map((receipt) => receipt.binding.receiptId)).toEqual([
       id(2),
     ]);
-  });
-  it("counts a third-role session despite hidden PG15 details and a spoofed observer name", async () => {
-    const adminUrl = process.env.COMPONENT_POSTGRES_ADMIN_URL;
-    if (!adminUrl) throw new Error("isolated testcontainer admin URL required");
-    const admin = postgres(adminUrl, { max: 1 });
-    const observerUrl = new URL(adminUrl);
-    observerUrl.username = "physical_fixture_observer";
-    observerUrl.password = "synthetic_observer_password";
-    const writerUrl = new URL(adminUrl);
-    writerUrl.username = "physical_fixture_third_role";
-    writerUrl.password = "synthetic_third_role_password";
-    const observer = postgres(observerUrl.toString(), { max: 1 });
-    const spoofedPeer = postgres(observerUrl.toString(), {
-      max: 1,
-      connection: { application_name: "cogni_applied_cell_readonly_observer" },
-    });
-    const thirdRole = postgres(writerUrl.toString(), {
-      max: 1,
-      connection: { application_name: "cogni_applied_cell_readonly_observer" },
-    });
-    try {
-      // All credentials and roles are disposable fixture data in the CI container.
-      await admin`CREATE ROLE physical_fixture_observer LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION PASSWORD 'synthetic_observer_password'`;
-      await admin`CREATE ROLE physical_fixture_third_role LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION PASSWORD 'synthetic_third_role_password'`;
-      const [writer] =
-        await thirdRole`SELECT pg_backend_pid()::int AS pid, current_setting('application_name') AS name`;
-      expect(writer?.name).toBe("cogni_applied_cell_readonly_observer");
-      const [peer] = await spoofedPeer`SELECT pg_backend_pid()::int AS pid`;
-      await observer.begin("read only", async (tx) => {
-        const [role] = await tx`SELECT rolinherit,rolsuper,rolbypassrls,
-          pg_has_role(current_user,'pg_read_all_stats','USAGE') AS stats
-          FROM pg_roles WHERE rolname=current_user`;
-        expect(role).toMatchObject({
-          rolinherit: false,
-          rolsuper: false,
-          rolbypassrls: false,
-          stats: false,
-        });
-        const [visible] =
-          await tx`SELECT pid,usesysid,backend_type,application_name
-          FROM pg_stat_activity WHERE pid=${writer?.pid}`;
-        expect(visible?.pid).toBe(writer?.pid);
-        expect(visible?.usesysid).toBeTypeOf("number");
-        expect(visible?.backend_type).toBeNull();
-        expect(visible?.application_name).toBe(
-          "cogni_applied_cell_readonly_observer"
-        );
-        // Same-role details ARE visible, so this independently falsifies trusting
-        // the caller-controlled observer name even without permission redaction.
-        const [sameRole] = await tx`SELECT backend_type,application_name
-          FROM pg_stat_activity WHERE pid=${peer?.pid}`;
-        expect(sameRole?.backend_type).toBe("client backend");
-        expect(sameRole?.application_name).toBe(
-          "cogni_applied_cell_readonly_observer"
-        );
-        // Red control reproduces the rejected query as the real unprivileged probe.
-        const [old] =
-          await tx`SELECT count(*)::int AS count FROM pg_stat_activity
-          WHERE backend_type='client backend' AND pid<>pg_backend_pid()
-          AND application_name<>'cogni_applied_cell_readonly_observer'`;
-        expect(old?.count).toBe(0);
-        expect(await countOtherAuthenticatedSessions(tx)).toBeGreaterThan(0);
-      });
-    } finally {
-      await Promise.all([observer.end(), thirdRole.end(), spoofedPeer.end()]);
-      try {
-        await admin`DROP ROLE IF EXISTS physical_fixture_observer`;
-        await admin`DROP ROLE IF EXISTS physical_fixture_third_role`;
-      } finally {
-        await admin.end();
-      }
-    }
   });
   for (const protectedPath of [false, true]) {
     it(
@@ -604,4 +536,336 @@ describe("physical recovery canonical transaction (real PostgreSQL)", () => {
       }
     );
   }
+  for (const protectedPath of [false, true]) {
+    it(
+      protectedPath
+        ? "admits exactly one of two physical packets for the same source and G1 target"
+        : "red control loses physical lineage when both scope lock and serializable isolation are removed",
+      async () => {
+        const competingPacket = sha("f");
+        const competing: DatabaseCellPhysicalRecoveryWrite = {
+          ...write,
+          packetSha256: competingPacket,
+          targetBindings: AppliedDatabaseCellReceiptsSchema.parse(
+            targetBindings.map((receipt) => ({
+              ...receipt,
+              registration: {
+                ...receipt.registration,
+                manualCutoverPacketSha256: competingPacket,
+              },
+              binding: {
+                ...receipt.binding,
+                cutover: {
+                  ...receipt.binding.cutover,
+                  packetSha256: competingPacket,
+                },
+              },
+            }))
+          ),
+        };
+        const [one] = await first.$client`SELECT pg_backend_pid()::int AS pid`;
+        const [two] = await second.$client`SELECT pg_backend_pid()::int AS pid`;
+        if (!one?.pid || !two?.pid)
+          throw new Error("real physical backend IDs required");
+        expect(one.pid).not.toBe(two.pid);
+        await first.execute(
+          sql.raw(
+            `CREATE OR REPLACE FUNCTION pg_temp.gate_physical_import() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.wallet_scope='${WALLET}' AND NEW.id='${id(1)}'::uuid THEN PERFORM pg_advisory_xact_lock(55405024); END IF; RETURN NEW; END $$`
+          )
+        );
+        await first.execute(
+          sql.raw(
+            "CREATE TRIGGER physical_packet_gate BEFORE UPDATE ON akash_tx_allocations FOR EACH ROW EXECUTE FUNCTION pg_temp.gate_physical_import()"
+          )
+        );
+        const unsafe = (
+          db: typeof first,
+          input: DatabaseCellPhysicalRecoveryWrite
+        ) =>
+          db.transaction(
+            async (tx) => {
+              // Same reachable physical authority/preimage predicate and three writes,
+              // explicitly READ COMMITTED without the canonical FOR UPDATE protection.
+              const rows = await tx
+                .select()
+                .from(akashTxAllocations)
+                .where(
+                  and(
+                    eq(akashTxAllocations.walletScope, WALLET),
+                    eq(akashTxAllocations.nodeId, NODE),
+                    eq(akashTxAllocations.environment, "production"),
+                    eq(akashTxAllocations.state, "allocated")
+                  )
+                );
+              const sourceRow = rows.find(
+                (row) => row.id === input.source.receiptId
+              );
+              const targetRow = rows.find(
+                (row) => row.id === input.target.receiptId
+              );
+              const appRow = rows.find((row) => row.id === input.app.receiptId);
+              if (!sourceRow || !targetRow || !appRow)
+                throw new Error("fixture missing");
+              const source = DatabaseCellAllocationMetadataSchema.parse(
+                sourceRow.appliedDatabaseCellBinding
+              );
+              const target = DatabaseCellAllocationMetadataSchema.parse(
+                targetRow.appliedDatabaseCellBinding
+              );
+              const authorities = rows.flatMap((row) =>
+                DatabaseCellAllocationMetadataSchema.parse(
+                  row.appliedDatabaseCellBinding
+                ).bindings.filter(
+                  (receipt) => receipt.binding.phase === "applied"
+                )
+              );
+              if (
+                sourceRow.lastAppliedSdlHash !==
+                  input.source.lastAppliedSdlHash ||
+                targetRow.lastAppliedSdlHash !==
+                  input.target.lastAppliedSdlHash ||
+                appRow.lastAppliedSdlHash !== input.app.lastAppliedSdlHash ||
+                JSON.stringify(source.bindings) !==
+                  JSON.stringify(input.expectedSource) ||
+                JSON.stringify(target.bindings) !==
+                  JSON.stringify(input.expectedTarget) ||
+                source.bindings[0]?.binding.phase !== "applied" ||
+                authorities.length !== 1 ||
+                authorities[0]?.binding.receiptId !== input.source.receiptId ||
+                target.bindings.length !== 0
+              )
+                throw new Error("physical preimage changed");
+              const superseded = AppliedDatabaseCellReceiptsSchema.parse(
+                source.bindings.map((receipt) => ({
+                  ...receipt,
+                  binding: {
+                    ...receipt.binding,
+                    phase: "superseded",
+                    supersededBy: {
+                      receiptId: input.target.receiptId,
+                      packetSha256: input.packetSha256,
+                    },
+                  },
+                }))
+              );
+              await tx
+                .update(akashTxAllocations)
+                .set({
+                  appliedDatabaseCellBinding: {
+                    version: 1,
+                    retentionPolicy: "retain",
+                    bindings: superseded,
+                  },
+                })
+                .where(eq(akashTxAllocations.id, input.source.receiptId));
+              await tx
+                .update(akashTxAllocations)
+                .set({
+                  appliedDatabaseCellBinding: {
+                    version: 1,
+                    retentionPolicy: "retain",
+                    bindings: input.targetBindings,
+                  },
+                  lastAppliedSdlHash: input.targetSdlHash,
+                })
+                .where(eq(akashTxAllocations.id, input.target.receiptId));
+              await tx
+                .update(akashTxAllocations)
+                .set({ lastAppliedSdlHash: input.appSdlHash })
+                .where(eq(akashTxAllocations.id, input.app.receiptId));
+            },
+            { isolationLevel: "read committed" }
+          );
+        let pending: Promise<PromiseSettledResult<void>[]> | undefined;
+        try {
+          await seed.transaction(async (gate) => {
+            await gate.execute(sql`SELECT pg_advisory_xact_lock(55405024)`);
+            pending = Promise.allSettled(
+              protectedPath
+                ? [
+                    store.savePhysicalRecovery(write),
+                    otherStore.savePhysicalRecovery(competing),
+                  ]
+                : [unsafe(first, write), unsafe(second, competing)]
+            );
+            const deadline = Date.now() + 1200;
+            let blocked = 0;
+            do {
+              const rows = await seed.execute(
+                sql`SELECT count(*)::int AS count FROM pg_stat_activity WHERE pid IN (${one.pid},${two.pid}) AND cardinality(pg_blocking_pids(pid))>0`
+              );
+              blocked = Number(rows[0]?.count ?? 0);
+              if (blocked === 2) break;
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            } while (Date.now() < deadline);
+            expect(blocked).toBe(2);
+          }); // Owns and always releases the gate, including assertion failures.
+          if (!pending) throw new Error("physical writers never started");
+          const outcomes = await pending;
+          const fulfilled = outcomes.flatMap((outcome, index) =>
+            outcome.status === "fulfilled" ? [index] : []
+          );
+          expect(fulfilled).toHaveLength(protectedPath ? 1 : 2);
+          if (protectedPath)
+            expect(
+              outcomes.find((outcome) => outcome.status === "rejected")
+            ).toMatchObject({
+              status: "rejected",
+              reason: { code: "identity_conflict" },
+            });
+          const final = await state();
+          const source = final.find((row) => row.id === id(1))?.metadata
+            .bindings[0];
+          const target = final.find((row) => row.id === id(2))?.metadata
+            .bindings[0];
+          const winningPacket = target?.registration?.manualCutoverPacketSha256;
+          expect(source?.binding.supersededBy).toEqual({
+            receiptId: id(2),
+            packetSha256: winningPacket,
+          });
+          expect(target?.binding.cutover?.packetSha256).toBe(winningPacket);
+          expect([packetSha, competingPacket]).toContain(winningPacket);
+          if (protectedPath)
+            expect(winningPacket).toBe(
+              fulfilled[0] === 0 ? packetSha : competingPacket
+            );
+          // Red control: both callers succeed but only one packet survives; one success is lost.
+          expect(
+            final.flatMap((row) =>
+              row.metadata.bindings.filter(
+                (receipt) => receipt.binding.phase === "applied"
+              )
+            )
+          ).toHaveLength(1);
+          expect(final.find((row) => row.id === id(1))?.hash).toBe(sha("a"));
+          expect(final.find((row) => row.id === id(2))?.hash).toBe(sha("d"));
+          expect(final.find((row) => row.id === id(3))?.hash).toBe(sha("e"));
+        } finally {
+          await pending;
+          await first.execute(
+            sql.raw("DROP TRIGGER physical_packet_gate ON akash_tx_allocations")
+          );
+        }
+      }
+    );
+  }
+});
+
+// Runs after the canonical suite closes its app and seed pools. No background
+// fixture clients can make the quiet-state or differential assertions vacuous.
+describe("physical probe on a quiescent PG15 testcontainer", () => {
+  it("excludes database-less system workers and detects each spoofed authenticated client exactly", async () => {
+    const adminUrl = process.env.COMPONENT_POSTGRES_ADMIN_URL;
+    if (!adminUrl) throw new Error("isolated testcontainer admin URL required");
+    const admin = postgres(adminUrl, { max: 1 });
+    const cleanup = postgres(adminUrl, { max: 1 });
+    const observerUrl = new URL(adminUrl);
+    observerUrl.username = "physical_fixture_observer";
+    observerUrl.password = "synthetic_observer_password";
+    const writerUrl = new URL(adminUrl);
+    writerUrl.username = "physical_fixture_third_role";
+    writerUrl.password = "synthetic_third_role_password";
+    const observer = postgres(observerUrl.toString(), { max: 1 });
+    const spoofedPeer = postgres(observerUrl.toString(), {
+      max: 1,
+      connection: { application_name: "cogni_applied_cell_readonly_observer" },
+    });
+    const thirdRole = postgres(writerUrl.toString(), {
+      max: 1,
+      connection: { application_name: "cogni_applied_cell_readonly_observer" },
+    });
+    const count = () =>
+      observer.begin("read only", countOtherAuthenticatedSessions);
+    const quiet = async () => {
+      let value = -1;
+      const deadline = Date.now() + 1200;
+      do {
+        value = await count();
+        if (value === 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      } while (Date.now() < deadline);
+      expect(value).toBe(0);
+    };
+    try {
+      // Disposable fixture roles only; no extra grants to the application or probe.
+      await admin`CREATE ROLE physical_fixture_observer LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION PASSWORD 'synthetic_observer_password'`;
+      await admin`CREATE ROLE physical_fixture_third_role LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION PASSWORD 'synthetic_third_role_password'`;
+      const [launcher] =
+        await admin`SELECT pid,datid,usesysid FROM pg_stat_activity WHERE backend_type='logical replication launcher'`;
+      expect(launcher?.pid).toBeTypeOf("number");
+      expect(launcher?.datid).toBeNull();
+      expect(launcher?.usesysid).toBeTypeOf("number");
+      await admin.end(); // No privileged/fixture client remains during quiet proof.
+      await observer.begin("read only", async (tx) => {
+        const [role] = await tx`SELECT rolinherit,rolsuper,rolbypassrls,
+          pg_has_role(current_user,'pg_read_all_stats','USAGE') AS stats
+          FROM pg_roles WHERE rolname=current_user`;
+        expect(role).toMatchObject({
+          rolinherit: false,
+          rolsuper: false,
+          rolbypassrls: false,
+          stats: false,
+        });
+        const [system] =
+          await tx`SELECT datid,usesysid FROM pg_stat_activity WHERE pid=${launcher?.pid}`;
+        expect(system?.datid).toBeNull();
+        expect(system?.usesysid).toBeTypeOf("number");
+        const [old] =
+          await tx`SELECT count(*)::int AS count FROM pg_stat_activity WHERE usesysid IS NOT NULL AND pid<>pg_backend_pid()`;
+        expect(old?.count).toBeGreaterThan(0); // Reproduces the launcher's false positive.
+      });
+      await quiet();
+      const baseline = await count();
+      expect(baseline).toBe(0);
+      const [writer] =
+        await thirdRole`SELECT pg_backend_pid()::int AS pid, current_setting('application_name') AS name`;
+      expect(writer?.name).toBe("cogni_applied_cell_readonly_observer");
+      await observer.begin("read only", async (tx) => {
+        const [visible] =
+          await tx`SELECT datid,usesysid,backend_type,application_name FROM pg_stat_activity WHERE pid=${writer?.pid}`;
+        expect(visible?.datid).toBeTypeOf("number");
+        expect(visible?.usesysid).toBeTypeOf("number");
+        expect(visible?.backend_type).toBeNull();
+        expect(visible?.application_name).toBe(
+          "cogni_applied_cell_readonly_observer"
+        );
+        const [old] =
+          await tx`SELECT count(*)::int AS count FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid() AND application_name<>'cogni_applied_cell_readonly_observer'`;
+        expect(old?.count).toBe(0);
+        expect(await countOtherAuthenticatedSessions(tx)).toBe(baseline + 1);
+      });
+      await thirdRole.end();
+      await quiet();
+      expect(await count()).toBe(baseline);
+      const [peer] = await spoofedPeer`SELECT pg_backend_pid()::int AS pid`;
+      await observer.begin("read only", async (tx) => {
+        const [visible] =
+          await tx`SELECT backend_type,application_name FROM pg_stat_activity WHERE pid=${peer?.pid}`;
+        expect(visible?.backend_type).toBe("client backend");
+        expect(visible?.application_name).toBe(
+          "cogni_applied_cell_readonly_observer"
+        );
+        const [old] =
+          await tx`SELECT count(*)::int AS count FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid() AND application_name<>'cogni_applied_cell_readonly_observer'`;
+        expect(old?.count).toBe(0);
+        expect(await countOtherAuthenticatedSessions(tx)).toBe(baseline + 1);
+      });
+      await spoofedPeer.end();
+      await quiet();
+      expect(await count()).toBe(baseline);
+    } finally {
+      await Promise.all([
+        observer.end(),
+        thirdRole.end(),
+        spoofedPeer.end(),
+        admin.end(),
+      ]);
+      try {
+        await cleanup`DROP ROLE IF EXISTS physical_fixture_observer`;
+        await cleanup`DROP ROLE IF EXISTS physical_fixture_third_role`;
+      } finally {
+        await cleanup.end();
+      }
+    }
+  });
 });
