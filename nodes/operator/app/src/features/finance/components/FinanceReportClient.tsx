@@ -12,10 +12,8 @@
  */
 "use client";
 
-import {
-  FinanceReport,
-  StewardWithdrawalRejected,
-} from "@cogni/money-plane/react";
+import { StewardWithdrawalRejected } from "@cogni/money-plane";
+import { FinanceReport } from "@cogni/money-plane/react";
 import { useRouter } from "next/navigation";
 import {
   Button,
@@ -32,32 +30,47 @@ import {
 import type { FinanceReportModel } from "../types";
 
 export const STEWARD_WITHDRAWAL_PATH = "/api/v1/payments/steward-withdrawal";
+/** A hung socket must land in the "check BaseScan" path, not an endless "Funding…". */
+export const STEWARD_WITHDRAWAL_TIMEOUT_MS = 20_000;
 
 /**
- * POST the amount-only steward withdrawal. An explicit JSON refusal throws `StewardWithdrawalRejected` (nothing was sent,
- * retry allowed); a transport failure or a non-JSON body throws a plain Error (outcome unknown; the control locks).
+ * POST the amount-only steward withdrawal.
+ * - Refusals that are pre-broadcast by construction — 400 (invalid body), 403 (not the steward), 503 with an
+ *   `*_UNCONFIGURED` code — throw `StewardWithdrawalRejected` (nothing was sent; retry allowed).
+ * - Everything else (422, 5xx, non-JSON body, timeout, transport failure) is an unknown outcome: plain Error carrying
+ *   the server's `detail` when present; the control locks until a human checks the wallet (NO_BLIND_RETRY).
  */
 export async function fundSteward(
   amountUsd: number,
   fetchImpl: typeof fetch = fetch
-): Promise<{ txHash: string | null }> {
+): Promise<{ txHash: string | null; confirmed: boolean }> {
   const res = await fetchImpl(STEWARD_WITHDRAWAL_PATH, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ amountUsd }),
+    signal: AbortSignal.timeout(STEWARD_WITHDRAWAL_TIMEOUT_MS),
   });
-  let data: { txHash?: string; error?: string; detail?: string; code?: string };
+  let data: {
+    txHash?: string;
+    confirmed?: boolean;
+    error?: string;
+    detail?: string;
+    code?: string;
+  };
   try {
     data = (await res.json()) as typeof data;
   } catch {
     throw new Error(`Response unreadable (HTTP ${res.status})`);
   }
-  if (!res.ok) {
-    const reason = data.detail ?? data.error ?? data.code;
-    if (reason) throw new StewardWithdrawalRejected(reason);
-    throw new Error(`HTTP ${res.status}`);
-  }
-  return { txHash: data.txHash ?? null };
+  if (res.ok)
+    return { txHash: data.txHash ?? null, confirmed: data.confirmed !== false };
+  const reason = data.detail ?? data.error ?? data.code ?? `HTTP ${res.status}`;
+  const preBroadcast =
+    res.status === 400 ||
+    res.status === 403 ||
+    (res.status === 503 && /_UNCONFIGURED$/.test(data.code ?? ""));
+  if (preBroadcast) throw new StewardWithdrawalRejected(reason);
+  throw new Error(`${reason} (HTTP ${res.status})`);
 }
 
 const kit = {

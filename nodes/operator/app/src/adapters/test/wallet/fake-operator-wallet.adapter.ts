@@ -11,6 +11,8 @@
  * @public
  */
 
+import type { StewardWithdrawal } from "@cogni/operator-wallet";
+
 import type { OperatorWalletPort } from "@/ports";
 
 const FAKE_OPERATOR_ADDRESS = "0x1111111111111111111111111111111111111111";
@@ -42,9 +44,11 @@ export class FakeOperatorWalletAdapter implements OperatorWalletPort {
     return this.distributeSplitResult;
   }
 
-  async withdrawToSteward(amountUsdcAtomic: bigint): Promise<string> {
+  async withdrawToSteward(
+    amountUsdcAtomic: bigint
+  ): Promise<StewardWithdrawal> {
     this.lastWithdrawToStewardAmount = amountUsdcAtomic;
-    return this.withdrawToStewardResult;
+    return { txHash: this.withdrawToStewardResult, confirmed: true };
   }
 
   // ── Test helpers ──

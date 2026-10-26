@@ -10,6 +10,7 @@
  * Links: https://cognidao.org/work/items/task.5347
  * @internal
  */
+import { drizzle as drizzleProxy } from "drizzle-orm/pg-proxy";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -51,13 +52,13 @@ const runtime = vi.hoisted(() => ({
   >,
   balances: vi.fn(async () => [] as unknown[]),
   report: vi.fn(async () => [] as unknown[]),
-  purchases: [] as { amountUsdCents: number; createdAt: Date }[],
+  purchases: { totalUsdCents: 0, count: 0 },
   serviceDb: {} as unknown,
 }));
 runtime.serviceDb = {
   select: () => ({
     from: () => ({
-      innerJoin: () => ({ where: async () => runtime.purchases }),
+      innerJoin: () => ({ where: async () => [runtime.purchases] }),
     }),
   }),
 };
@@ -276,31 +277,38 @@ describe("operator finance evidence", () => {
     expect(noParent[0]?.children?.[0]?.plane).toBe("akash:poly");
     expect(collapseAkash([other])).toEqual([other]);
   });
-  it("queries only CREDITED payment attempts since the window start", async () => {
-    const calls: unknown[] = [];
-    const db = {
-      select: (shape: unknown) => ({
-        from: (table: unknown) => ({
-          innerJoin: (joined: unknown, on: unknown) => ({
-            where: async (predicate: unknown) => {
-              calls.push({ shape, table, joined, on, predicate });
-              return [{ amountUsdCents: 2000, createdAt: new Date(at) }];
-            },
-          }),
-        }),
-      }),
-    };
-    const query = creditedPurchasesQuery(db as never);
-    const since = new Date("2026-09-26T00:00:00Z");
-    expect(await query(since)).toEqual([
-      { amountUsdCents: 2000, createdAt: new Date(at) },
-    ]);
+  it("builds the credited-time income query on the payment_attempts status index with a CREDITED-event join and SQL aggregate", async () => {
+    const calls: { sql: string; params: unknown[] }[] = [];
+    const db = drizzleProxy(async (sqlText, params) => {
+      calls.push({ sql: sqlText, params });
+      return { rows: [["4500", "3"]] };
+    });
+    const since = new Date("2026-09-26T00:00:00.000Z");
+    const totals = await creditedPurchasesQuery(db as never)(
+      since,
+      new AbortController().signal
+    );
+    expect(totals).toEqual({ totalUsdCents: 4500, count: 3 });
     expect(CREDITED_STATUS).toBe("CREDITED");
+    const q = calls[0]?.sql.replace(/\s+/g, " ") ?? "";
+    expect(q).toMatch(/from "payment_attempts"/);
+    expect(q).toMatch(
+      /inner join "payment_events" on \("payment_events"\."attempt_id" = "payment_attempts"\."id" and "payment_events"\."to_status" = \$\d\)/
+    );
+    expect(q).toMatch(/"payment_attempts"\."status" = \$\d/);
+    expect(q).toMatch(/"payment_events"\."created_at" >= \$\d/);
+    expect(q).not.toMatch(/"payment_attempts"\."created_at"/);
+    expect(q).toMatch(
+      /coalesce\(sum\("payment_attempts"\."amount_usd_cents"\), 0\)/
+    );
+    expect(q).toMatch(/count\(\*\)/);
+    expect(calls[0]?.params.filter((p) => p === "CREDITED")).toHaveLength(2);
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(
+      creditedPurchasesQuery(db as never)(since, aborted.signal)
+    ).rejects.toThrow("income query aborted");
     expect(calls).toHaveLength(1);
-    expect(Object.keys((calls[0] as { shape: object }).shape)).toEqual([
-      "amountUsdCents",
-      "createdAt",
-    ]);
   });
   it("ports akashPlane: grant credit + escrow, lease burn at the chain cadence, thinnest escrow, graded runway", async () => {
     const signal = new AbortController().signal;

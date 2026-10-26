@@ -14,6 +14,9 @@
  *   - STEWARD_SELF_AUTHORIZED — only the configured steward wallet may trigger a withdrawal to itself.
  *   - STEWARD_PINNED_DESTINATION — destination is payments_out.steward_wallet, never caller-supplied.
  *   - FAIL_CLOSED — 503 when the operator/steward wallet is unconfigured in this environment.
+ *   - NO_BLIND_RETRY — only pre-broadcast failures are refusals (400/403/503/422); once the wallet accepted the
+ *     transfer the route answers 200 `{ txHash, confirmed }` (confirmed:false when no receipt was seen) or 502
+ *     "result unknown", so a client never re-enables a retry after a real broadcast.
  * Side-effects: IO (on-chain USDC transfer via Privy HSM; structured log event).
  * Links: docs/design/node-steward-wallet.md, OperatorWalletPort.withdrawToSteward
  * @public
@@ -34,6 +37,10 @@ export const runtime = "nodejs";
 const USDC_DECIMALS = 6;
 
 /** Manual top-ups are small; a hard request ceiling backs the adapter's per-tx cap. */
+/** The adapter's pre-broadcast gates; only these are refusals (everything else is an unknown outcome). */
+const PRE_BROADCAST_GUARD =
+  /\[OperatorWallet\] (STEWARD_NOT_CONFIGURED|INVALID_AMOUNT|MAX_TOPUP_CAP)/;
+
 const StewardWithdrawalSchema = z.object({
   amountUsd: z.number().positive().max(10_000),
 });
@@ -97,30 +104,50 @@ export const POST = wrapRouteHandlerWithLogging(
       Math.round(amountUsd * 10 ** USDC_DECIMALS)
     );
 
-    let txHash: string;
+    let outcome: { txHash: string; confirmed: boolean };
     try {
-      txHash = await operatorWallet.withdrawToSteward(amountUsdcAtomic);
+      outcome = await operatorWallet.withdrawToSteward(amountUsdcAtomic);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      // STEWARD_NOT_CONFIGURED / cap / amount guards surface here as fail-closed.
-      ctx.log.warn({ amountUsd, error: detail }, "steward_withdrawal_rejected");
+      if (PRE_BROADCAST_GUARD.test(detail)) {
+        // STEWARD_NOT_CONFIGURED / INVALID_AMOUNT / MAX_TOPUP_CAP: the adapter refused before signing.
+        ctx.log.warn(
+          { amountUsd, error: detail },
+          "steward_withdrawal_rejected"
+        );
+        return NextResponse.json(
+          { error: "Steward withdrawal rejected", detail },
+          { status: 422 }
+        );
+      }
+      // Anything else may have happened after the wallet accepted the transfer: unknown, not refused.
+      ctx.log.error(
+        { amountUsd, error: detail },
+        "steward_withdrawal_result_unknown"
+      );
       return NextResponse.json(
-        { error: "Steward withdrawal rejected", detail },
-        { status: 422 }
+        { error: "Steward withdrawal result unknown", detail },
+        { status: 502 }
       );
     }
 
     ctx.log.info(
       {
         event: EVENT_NAMES.PAYMENTS_STEWARD_WITHDRAWAL,
-        txHash,
+        txHash: outcome.txHash,
+        confirmed: outcome.confirmed,
         amountUsd,
         amountUsdcAtomic: amountUsdcAtomic.toString(),
         steward: stewardConfig.address,
       },
-      "steward wallet funded"
+      outcome.confirmed
+        ? "steward wallet funded"
+        : "steward wallet funding broadcast, unconfirmed"
     );
 
-    return NextResponse.json({ txHash, amountUsd }, { status: 200 });
+    return NextResponse.json(
+      { txHash: outcome.txHash, confirmed: outcome.confirmed, amountUsd },
+      { status: 200 }
+    );
   }
 );

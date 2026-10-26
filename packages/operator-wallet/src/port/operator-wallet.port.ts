@@ -50,8 +50,16 @@ export interface OperatorWalletPort {
    * in USDC from that wallet via each vendor's hosted crypto checkout.
    *
    * @param amountUsdcAtomic - USDC atomic units (6 decimals) to transfer
-   * @returns txHash on successful broadcast
-   * @throws if the steward wallet is not configured or the amount exceeds the per-tx cap
+   * @returns the broadcast hash and whether one confirmation was observed. Once the transfer is
+   *   broadcast this method never throws: a receipt-wait or RPC failure returns `confirmed: false`
+   *   so the caller can never read a real transfer as a refusal (NO_BLIND_RETRY).
+   * @throws only BEFORE broadcast: steward not configured, non-positive amount, or amount over the per-tx cap
    */
-  withdrawToSteward(amountUsdcAtomic: bigint): Promise<string>;
+  withdrawToSteward(amountUsdcAtomic: bigint): Promise<StewardWithdrawal>;
+}
+
+/** Outcome of a steward withdrawal: the transfer is on the wire; `confirmed` says whether a receipt was seen. */
+export interface StewardWithdrawal {
+  txHash: string;
+  confirmed: boolean;
 }

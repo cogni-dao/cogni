@@ -23,7 +23,10 @@ import {
   SPLIT_TOTAL_ALLOCATION,
 } from "../../domain/split-allocation.js";
 import { ERC20_TRANSFER_ABI } from "../../domain/transfers-abi.js";
-import type { OperatorWalletPort } from "../../port/operator-wallet.port.js";
+import type {
+  OperatorWalletPort,
+  StewardWithdrawal,
+} from "../../port/operator-wallet.port.js";
 
 /** Base chain ID — hardcoded per spec (chain-specific adapter). */
 const BASE_CHAIN_ID = 8453;
@@ -219,7 +222,9 @@ export class PrivyOperatorWalletAdapter implements OperatorWalletPort {
     return result.hash;
   }
 
-  async withdrawToSteward(amountUsdcAtomic: bigint): Promise<string> {
+  async withdrawToSteward(
+    amountUsdcAtomic: bigint
+  ): Promise<StewardWithdrawal> {
     await this.verify();
 
     // Gate 1: STEWARD_CONFIGURED — fail closed when no destination is pinned
@@ -265,13 +270,17 @@ export class PrivyOperatorWalletAdapter implements OperatorWalletPort {
         authorization_context: this.authContext,
       });
 
-    // Wait for confirmation so the steward wallet balance is settled before
-    // a human is told to proceed with the vendor checkout.
-    await this.rpcClient.waitForTransactionReceipt({
-      hash: result.hash as Hex,
-      confirmations: 1,
-    });
-
-    return result.hash;
+    // The transfer is on the wire from here on. Wait for one confirmation so the steward
+    // balance is settled before a human proceeds, but NEVER throw past this point: a
+    // receipt-wait or RPC failure is an unknown outcome, not a refusal (NO_BLIND_RETRY).
+    try {
+      await this.rpcClient.waitForTransactionReceipt({
+        hash: result.hash as Hex,
+        confirmations: 1,
+      });
+      return { txHash: result.hash, confirmed: true };
+    } catch {
+      return { txHash: result.hash, confirmed: false };
+    }
   }
 }

@@ -127,11 +127,16 @@ function lines(): string[] {
   return bodyRows().map((row) => row.getAttribute("data-finance-row") ?? "");
 }
 function labels(): string[] {
+  // The Line trigger is named by its visible text (first span); the chevron carries an Expand/Collapse aria-label.
   return bodyRows().map(
     (row) =>
-      Array.from(row.querySelectorAll<HTMLElement>("td button[aria-label]"))
-        .map((b) => b.getAttribute("aria-label") ?? "")
-        .find((name) => !/^(Expand|Collapse) /.test(name)) ?? ""
+      Array.from(row.querySelectorAll<HTMLElement>("td:first-child button"))
+        .filter(
+          (b) => !/^(Expand|Collapse) /.test(b.getAttribute("aria-label") ?? "")
+        )
+        .map(
+          (b) => b.querySelector("span")?.textContent ?? b.textContent ?? ""
+        )[0] ?? ""
   );
 }
 function cells(column: number): string[] {

@@ -47,9 +47,10 @@ describe("OperatorWalletPort contract", () => {
     );
   });
 
-  it("withdrawToSteward returns a transaction hash", async () => {
-    const txHash = await adapter.withdrawToSteward(1_000_000n);
+  it("withdrawToSteward returns a transaction hash and a confirmation flag", async () => {
+    const { txHash, confirmed } = await adapter.withdrawToSteward(1_000_000n);
     expect(txHash).toMatch(/^0x[a-fA-F0-9]{64}$/);
+    expect(confirmed).toBe(true);
     expect(adapter.lastWithdrawToStewardAmount).toBe(1_000_000n);
   });
 
