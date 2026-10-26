@@ -69,12 +69,14 @@ vi.mock("@/components", async () => {
   const text = await import("@/components/kit/typography/ReportText");
   const button = await import("@/components/kit/inputs/Button");
   const input = await import("@/components/kit/inputs/Input");
+  const card = await import("@/components/kit/layout/Card");
   return {
     ...dialog,
     ...select,
     ...text,
     ...button,
     ...input,
+    ...card,
     PageContainer: ({ children }: { children: ReactNode }) => (
       <div>{children}</div>
     ),
@@ -191,11 +193,17 @@ describe("Financials reporting", () => {
       "Action",
     ]);
     expect(groupsInOrder()).toEqual(["Income", "Costs", "Reserves"]);
+    const stat = (label: string) =>
+      document.querySelector(`[data-finance-stat='${label}']`)?.textContent;
+    expect(stat("Treasury")).toBe("$74.52");
+    expect(stat("Income")).toBe("$0.00/day");
+    expect(stat("Burn")).toBe("$13.23/day");
+    expect(stat("Runway")).toBe("2d");
     expect(
-      screen.getByText(
-        "Treasury $74.52 · Income $0.00/day · Burn $13.23/day · Runway 2d (Akash)"
-      )
-    ).toBeVisible();
+      document.querySelector("[data-finance-stat='Runway']")?.className
+    ).toContain("text-destructive");
+    expect(screen.getByText("USDC on Base")).toBeVisible();
+    expect(screen.getByText("Akash", { selector: "p" })).toBeVisible();
     expect(screen.getByText("EUR→USD 1.1188 · ECB 2026-10-26")).toBeVisible();
     expect(cells(1)).toContain("$13.87");
     expect(cells(2)).toContain("$0.38/day");
@@ -224,8 +232,8 @@ describe("Financials reporting", () => {
       "Steward wallet",
     ]);
     expect(
-      screen.getByText(/Treasury \$74\.52 · Income \$1\.50\/day · Burn/)
-    ).toBeVisible();
+      document.querySelector("[data-finance-stat='Income']")?.textContent
+    ).toBe("$1.50/day");
     const red = within(rowOf("akash:credit")).getByText("2d");
     expect(red.className).toContain("text-destructive");
     expect(within(rowOf("cherry:team")).getByText("36d").className).toContain(
@@ -384,7 +392,9 @@ describe("Financials reporting", () => {
     render(<FinanceReportClient report={sparseFinancePreview} />);
     expect(headers()).toEqual(["Line", "Balance", "Action"]);
     expect(new Set(cells(1))).toEqual(new Set(["—"]));
-    expect(screen.queryByText(/Treasury/)).not.toBeInTheDocument();
+    expect(
+      document.querySelector("[data-finance-stat='Treasury']")?.textContent
+    ).toBe("—");
     expect(screen.queryByText(/ECB/)).not.toBeInTheDocument();
     await userEvent.click(
       grid().getByRole("button", { name: "DAO treasury", exact: true })
