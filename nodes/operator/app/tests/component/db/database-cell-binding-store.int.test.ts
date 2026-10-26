@@ -127,7 +127,7 @@ const targetBindings = AppliedDatabaseCellReceiptsSchema.parse([
         evidenceSha256: sha("3"),
         copyManifestSha256: sha("4"),
       },
-      executionActor: { kind: "agent", id: "fixture-agent" },
+      executionActor: { kind: "agent", id: id(5) },
       approvalAuthority: {
         kind: "conversation-user",
         label: "CEO",
@@ -166,7 +166,7 @@ const targetBindings = AppliedDatabaseCellReceiptsSchema.parse([
       },
       cutover: {
         packetSha256: packetSha,
-        actorId: "agent:fixture-agent",
+        actorId: `agent:${id(5)}`,
         approvedAt: now,
       },
     },
