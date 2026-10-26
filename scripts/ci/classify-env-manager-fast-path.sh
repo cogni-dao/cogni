@@ -291,6 +291,7 @@ else
   # shellcheck disable=SC1090
   source <(git show origin/main:scripts/ci/lib/appset-paths.sh)
 fi
+expected_control_env="$(control_env_for "$env_name" "$node")"
 expected_appset="$(appset_rel_path "$env_name" "$node")"
 expected_appsets_kustomization="$(appsets_kustomization_rel_path "$env_name" "$node")"
 
@@ -302,7 +303,8 @@ while IFS= read -r changed_file; do
     "infra/catalog/$node.yaml")
       catalog_seen=true
       ;;
-    "infra/k8s/overlays/$env_name/scheduler-worker/node-endpoints.patch.yaml")
+    "infra/k8s/overlays/$env_name/scheduler-worker/node-endpoints.patch.yaml"|\
+    "infra/k8s/overlays/$expected_control_env/scheduler-worker/node-endpoints.patch.yaml")
       ;;
     "infra/k8s/overlays/$env_name/$node/kustomization.yaml"|\
     "infra/k8s/overlays/$env_name/$node/external-secret.yaml")

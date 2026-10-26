@@ -115,6 +115,23 @@ run_classifier "$tmpdir/valid.out"
 [[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/valid.out")" == true ]]
 [[ "$(awk -F= '$1=="claimed"{v=$2} END{print v}' "$tmpdir/valid.out")" == true ]]
 
+# Custodied routing may touch only the derived control worker, never another lane.
+cp "$paths_file" "$tmpdir/original-paths.txt"
+printf '%s\n' "infra/k8s/overlays/$control_env/scheduler-worker/node-endpoints.patch.yaml" >> "$paths_file"
+LC_ALL=C sort -u "$paths_file" > "$tmpdir/with-custody.txt"
+mv "$tmpdir/with-custody.txt" "$paths_file"
+custody_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
+write_fixtures "${valid_message/$paths_hash/$custody_hash}"
+run_classifier "$tmpdir/custody.out"
+[[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/custody.out")" == true ]]
+sed 's#overlays/production/scheduler-worker#overlays/candidate-a/scheduler-worker#' "$paths_file" > "$tmpdir/foreign-paths.txt"
+LC_ALL=C sort -u "$tmpdir/foreign-paths.txt" > "$paths_file"
+foreign_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
+write_fixtures "${valid_message/$paths_hash/$foreign_hash}"
+run_classifier "$tmpdir/foreign-routing.out"
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/foreign-routing.out")" == path-outside-env-manager-boundary ]]
+cp "$tmpdir/original-paths.txt" "$paths_file"
+
 # The production-shaped E2E repository trusts only its dedicated test App.
 repository='cogni-test-org/cogni-monorepo'
 bot_login='cogni-operator-test[bot]'
