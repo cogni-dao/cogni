@@ -14,21 +14,27 @@
 import type { ContributionRecord } from "@cogni/node-contracts";
 import { ContributionCloseRequestSchema } from "@cogni/node-contracts";
 import {
+  QueryClient,
+  QueryClientProvider,
+  useQuery,
+} from "@tanstack/react-query";
+import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
   screen,
   waitFor,
 } from "@testing-library/react";
 import { NextRequest } from "next/server";
 import pino from "pino";
-import type { ButtonHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeContribution,
   ReviewedCloseError,
 } from "@/app/(app)/knowledge/_api/closeContribution";
+import { fetchContributions } from "@/app/(app)/knowledge/_api/fetchContributions";
 import { parseReviewedClose } from "@/app/(app)/knowledge/_api/reviewedClose";
 import { ReviewedClosePanel } from "@/app/(app)/knowledge/_components/ReviewedClosePanel";
 import { handleClose } from "@/app/api/v1/knowledge/contributions/_handlers";
@@ -84,6 +90,39 @@ vi.mock("@/shared/observability", async () => ({
   httpRequestDurationMs: { observe: vi.fn() },
 }));
 
+function render(
+  ui: ReactElement,
+  client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+  })
+) {
+  return renderUi(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ),
+  });
+}
+
+function CachedInboxSummary() {
+  const query = useQuery({
+    queryKey: ["knowledge", "contributions", "open"],
+    queryFn: () => fetchContributions("open"),
+    staleTime: 15_000,
+  });
+  return (
+    <aside>
+      <output data-testid="inbox-count">
+        {query.data?.contributions.length}
+      </output>
+      <ul data-testid="inbox-table">
+        {query.data?.contributions.map((item) => (
+          <li key={item.contributionId}>{item.message}</li>
+        ))}
+      </ul>
+    </aside>
+  );
+}
+
 function record(
   id: string,
   head: string | null = "head-1",
@@ -122,6 +161,16 @@ function network(
     const id = decodeURIComponent(url.split("/")[5] ?? "");
     const method = options?.method ?? "GET";
     calls.push(`${method} ${id}`);
+    if (
+      method === "GET" &&
+      url.startsWith("/api/v1/knowledge/contributions?")
+    ) {
+      return Response.json({
+        contributions: [...current.values()].filter(
+          (item) => item.state === "open"
+        ),
+      });
+    }
     if (method === "POST") {
       if (post) return post(id, JSON.parse(String(options?.body)));
       const item = current.get(id);
@@ -531,6 +580,109 @@ describe("reviewed close", () => {
     });
     expect(lines).toHaveLength(3);
     expect(JSON.stringify(lines)).not.toContain("private-driver-diagnostic");
+  });
+
+  it.each([
+    "complete",
+    "partial",
+    "cancel",
+  ])("automatically refreshes the fresh shared inbox count/table after %s settlement", async (mode) => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const n = network([record("a"), record("b")], async (id) => {
+      if (mode === "cancel") await gate;
+      if (mode === "partial" && id === "b")
+        throw new TypeError("lost connection");
+      n.current.set(id, record(id, "head-1", "closed"));
+      return Response.json({ closed: true });
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    client.setQueryData(["knowledge", "contributions", "open"], {
+      contributions: [record("a"), record("b")],
+    });
+    const value = link([
+      { contributionId: "a", expectedHeadCommit: "head-1" },
+      { contributionId: "b", expectedHeadCommit: "head-1" },
+    ]);
+    const { rerender } = render(
+      <>
+        <CachedInboxSummary />
+        <ReviewedClosePanel value={value} />
+      </>,
+      client
+    );
+    expect(screen.getByTestId("inbox-count").textContent).toBe("2");
+    expect(
+      n.fetchMock.mock.calls.filter(([url]) => url.includes("?state=open"))
+    ).toHaveLength(0);
+    await clickReady(2);
+    if (mode === "cancel") {
+      await waitFor(() => expect(n.calls).toContain("POST a"));
+      rerender(<CachedInboxSummary />);
+      await act(async () => {
+        release?.();
+        await gate;
+      });
+    }
+    await waitFor(() =>
+      expect(screen.getByTestId("inbox-count").textContent).toBe(
+        mode === "complete" ? "0" : "1"
+      )
+    );
+    expect(screen.getByTestId("inbox-table").textContent).not.toContain(
+      "Proposal a"
+    );
+    expect(
+      n.fetchMock.mock.calls.filter(([url]) => url.includes("?state=open"))
+    ).toHaveLength(1);
+    if (mode !== "complete")
+      expect(screen.getByTestId("inbox-table").textContent).toContain(
+        "Proposal b"
+      );
+    if (mode === "cancel")
+      expect(n.calls.filter((call) => call.startsWith("POST"))).toEqual([
+        "POST a",
+      ]);
+  });
+
+  it("explicit refresh reconciles the shared inbox count/table after another actor closes a row", async () => {
+    const n = network([record("a")]);
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    client.setQueryData(["knowledge", "contributions", "open"], {
+      contributions: [record("a")],
+    });
+    render(
+      <>
+        <CachedInboxSummary />
+        <ReviewedClosePanel
+          value={link([{ contributionId: "a", expectedHeadCommit: "head-1" }])}
+        />
+      </>,
+      client
+    );
+    await screen.findByRole("button", { name: "Close 1 reviewed proposals" });
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Refresh results",
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(false)
+    );
+    n.current.set("a", record("a", "head-1", "closed"));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh results" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("inbox-count").textContent).toBe("0")
+    );
+    expect(screen.getByTestId("inbox-table").textContent).toBe("");
+    expect(n.calls.some((call) => call.startsWith("POST"))).toBe(false);
   });
 
   it("changing the URL stops future dispatch from the previous frozen selection", async () => {

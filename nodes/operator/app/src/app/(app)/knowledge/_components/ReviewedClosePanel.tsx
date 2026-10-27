@@ -12,6 +12,7 @@
 
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components";
@@ -27,6 +28,7 @@ import {
 } from "../_api/reviewedClose";
 
 export function ReviewedClosePanel({ value }: { readonly value: string }) {
+  const queryClient = useQueryClient();
   const [selection] = useState(() => {
     try {
       return parseReviewedClose(value);
@@ -78,6 +80,13 @@ export function ReviewedClosePanel({ value }: { readonly value: string }) {
     );
   const eligible = rows.filter(isReviewedCloseEligible);
 
+  const refreshResults = () => {
+    // Refresh the shared dashboard table/count as well as this private preview.
+    // Partial and unmounted runs must reconcile the same cache as single-close.
+    void queryClient.invalidateQueries({ queryKey: ["knowledge"] });
+    if (mounted.current) setReadRequest({ selection });
+  };
+
   const run = async () => {
     if (running.current || loading) return;
     running.current = true;
@@ -121,10 +130,8 @@ export function ReviewedClosePanel({ value }: { readonly value: string }) {
       }
     } finally {
       running.current = false;
-      if (mounted.current) {
-        setBusy(false);
-        setReadRequest({ selection });
-      }
+      refreshResults();
+      if (mounted.current) setBusy(false);
     }
   };
 
@@ -179,7 +186,7 @@ export function ReviewedClosePanel({ value }: { readonly value: string }) {
           type="button"
           variant="outline"
           disabled={loading || busy}
-          onClick={() => setReadRequest({ selection })}
+          onClick={refreshResults}
         >
           Refresh results
         </Button>
