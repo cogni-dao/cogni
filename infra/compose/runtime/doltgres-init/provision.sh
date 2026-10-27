@@ -76,11 +76,21 @@ for COGNI_DB in $(echo "$COGNI_NODE_DBS" | tr ',' ' '); do
   # Doltgres has partial/evolving GRANT support. Each statement is best-effort:
   # GRANT USAGE works on Doltgres 0.56.x; ALTER DEFAULT PRIVILEGES does not yet
   # (dolthub/doltgresql: "ALTER DEFAULT PRIVILEGES statement is not yet supported").
-  # Doltgres roles are permissive by default, so missing grants don't block reads/writes.
+  # Doltgres roles are permissive by default on the `public` schema, so missing
+  # grants there don't block reads/writes. The `dolt` system schema is NOT
+  # permissive: without these grants, knowledge_writer gets "permission denied
+  # for table status/branches/merge_status/conflicts" on every atomic branch
+  # mutation (bug.5545) — @cogni-dao/doltgres-admission's clean-state checks
+  # (dolt.status, dolt.branches, dolt.merge_status, dolt.conflicts) run on
+  # every EDO hypothesize/decide/outcome write and every knowledge contribution.
   run_sql_quiet "$DB" "GRANT USAGE ON SCHEMA public TO knowledge_reader"
   run_sql_quiet "$DB" "GRANT USAGE ON SCHEMA public TO knowledge_writer"
   run_sql_quiet "$DB" "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO knowledge_reader"
   run_sql_quiet "$DB" "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO knowledge_writer"
+  run_sql_quiet "$DB" "GRANT USAGE ON SCHEMA dolt TO knowledge_reader"
+  run_sql_quiet "$DB" "GRANT USAGE ON SCHEMA dolt TO knowledge_writer"
+  run_sql_quiet "$DB" "GRANT SELECT ON ALL TABLES IN SCHEMA dolt TO knowledge_reader"
+  run_sql_quiet "$DB" "GRANT SELECT ON ALL TABLES IN SCHEMA dolt TO knowledge_writer"
 
   # Provisioning does not own application working sets. Schema migrations and
   # admitted content writers own commits, including the first schema commit.
