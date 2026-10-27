@@ -12,7 +12,7 @@
  *   - Per HOST_INJECTS_BILLING_HEADER: Proxy injects x-litellm-end-user-id
  *   - Per LLM_VIA_SOCKET_ONLY: LLM access only via localhost:8080 -> socket -> proxy
  * Side-effects: IO (Docker containers, nginx proxy, filesystem)
- * Links: docs/spec/sandboxed-agents.md, P0.5 spec
+ * Links: https://cognidao.org/knowledge/sandbox-agent-execution-architecture, P0.5 spec
  * @public
  */
 

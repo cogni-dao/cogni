@@ -24,7 +24,7 @@ tags: [billing, litellm, sandbox]
 | ----------- | ------------------------------------------------------------------------------------ | --------------------------------------------------- |
 | **Project** | [proj.unified-graph-launch](../../work/projects/proj.unified-graph-launch.md)        | Unified execution roadmap                           |
 | **Spec**    | [billing-evolution](./billing-evolution.md)                                          | Charge receipt schema, credit unit                  |
-| **Spec**    | [billing-sandbox](./billing-sandbox.md)                                              | Current proxy audit log pipeline (to be superseded) |
+| **Spec**    | [sandbox-billing-pipeline](https://cognidao.org/knowledge/sandbox-billing-pipeline)  | Current proxy audit log pipeline (to be superseded) |
 | **Spec**    | [external-executor-billing](./external-executor-billing.md)                          | Reconciliation design                               |
 | **Spec**    | [multi-node-tenancy](./multi-node-tenancy.md)                                        | Per-node DB isolation, callback routing invariants  |
 | **Task**    | [task.0029](../../work/items/task.0029.callback-driven-billing-kill-log-scraping.md) | Original callback billing implementation            |
@@ -283,7 +283,7 @@ Tested against running dev:stack with LiteLLM `generic_api` callback pointed at 
 ## Related
 
 - [billing-evolution](./billing-evolution.md) — Charge receipt schema, credit unit standard
-- [billing-sandbox](./billing-sandbox.md) — Current proxy audit log pipeline (to be superseded)
+- [sandbox-billing-pipeline](https://cognidao.org/knowledge/sandbox-billing-pipeline) — Current proxy audit log pipeline (to be superseded)
 - [external-executor-billing](./external-executor-billing.md) — Reconciliation design (converges with this spec)
 - [openclaw-sandbox-spec](./openclaw-sandbox-spec.md) — Gateway billing architecture
 - [proj.unified-graph-launch](../../work/projects/proj.unified-graph-launch.md) — Unified execution roadmap

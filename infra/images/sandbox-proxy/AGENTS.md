@@ -13,7 +13,7 @@ Nginx config template for the **ephemeral** sandbox LLM proxy container (`nginx.
 
 ## Pointers
 
-- [Sandbox Spec](../../../docs/spec/sandboxed-agents.md)
+- [Sandbox Spec](https://cognidao.org/knowledge/sandbox-agent-execution-architecture)
 - [LlmProxyManager](../../../apps/operator/src/adapters/server/sandbox/llm-proxy-manager.ts) (generates config from template)
 - [Billing Spec](../../../docs/spec/external-executor-billing.md)
 - [Billing Ingest Spec](../../../docs/spec/billing-ingest.md)

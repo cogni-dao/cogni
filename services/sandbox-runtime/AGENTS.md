@@ -13,7 +13,7 @@ Docker image definition for network-isolated sandbox containers. Provides minima
 
 ## Pointers
 
-- [Sandbox Spec](../../docs/spec/sandboxed-agents.md)
+- [Sandbox Spec](https://cognidao.org/knowledge/sandbox-agent-execution-architecture)
 - [Sandbox Adapter](../../apps/operator/src/adapters/server/sandbox/)
 - [Proxy Config](../../infra/compose/)
 
