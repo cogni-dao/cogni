@@ -10,7 +10,7 @@
  *   - Per NETWORK_DEFAULT_DENY: Container runs with network=none by default
  *   - Per SECRETS_HOST_ONLY: No tokens/credentials passed to sandbox
  * Side-effects: none (interface definition only)
- * Links: docs/spec/sandboxed-agents.md
+ * Links: https://cognidao.org/knowledge/sandbox-agent-execution-architecture
  * @public
  */
 
