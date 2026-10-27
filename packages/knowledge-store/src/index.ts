@@ -36,6 +36,8 @@ export {
   ContributionCommitRecordSchema,
   type ContributionDiffEntry,
   ContributionDiffEntrySchema,
+  type ContributionMergePreview,
+  ContributionMergePreviewSchema,
   type ContributionRecord,
   ContributionRecordSchema,
   type ContributionState,
