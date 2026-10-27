@@ -59,6 +59,39 @@ curl -s "https://www.dolthub.com/api/v1alpha1/cogni-dao/operator/main" | jq -r .
 
 > Same string, opposite meaning: `table has unknown fields` from the **`dolt` CLI** = healthy-but-wrong-tool; from **web-SQL** = corrupted.
 
+## Reseed a stale local **dev** doltgres from the hub
+
+When local dev proof is blocked because your `knowledge_<node>` DB is on an old
+schema (e.g. `entry_type` missing) and `pnpm db:migrate:<node>:doltgres` errors,
+do **not** fight the migration. The local dev doltgres engine is the **same
+`0.57.3`** as the fleet (`infra/compose/runtime/docker-compose.dev.yml`), so you
+can clone the current hub schema **plus real rows** straight into your running
+dev volume. Proven 2026-10-27 for `operator` (empty 10-col `knowledge` → full
+17-col schema + 300 rows).
+
+```bash
+# Against the RUNNING dev doltgres (port 5435, DOLTGRES_PASSWORD from .env.local).
+Q(){ PGPASSWORD=doltgres psql -h localhost -p 5435 -U postgres -d "$1" -tAc "$2"; }
+
+# 1. Drop the stale DB (dev only; back up first if it holds local-only work).
+Q postgres "DROP DATABASE knowledge_operator;"
+
+# 2. Clone the hub INTO the name the app's DSN expects (DOLT_CLONE takes a target name).
+Q postgres "SELECT DOLT_CLONE('cogni-dao/operator', 'knowledge_operator');"
+
+# 3. Re-apply the reader/writer grants from provision.sh (roles already exist).
+Q knowledge_operator "GRANT USAGE ON SCHEMA public TO knowledge_reader"
+Q knowledge_operator "GRANT USAGE ON SCHEMA public TO knowledge_writer"
+Q knowledge_operator "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO knowledge_writer"
+
+# 4. Verify. DOLTGRES_URL_OPERATOR already points at knowledge_operator — no .env change.
+Q knowledge_operator "SELECT count(*) FROM knowledge;"
+```
+
+Gotcha: as `knowledge_writer`, `count()` is denied on a freshly cloned DB until
+`GRANT EXECUTE ON ALL FUNCTIONS` — step 3 above (plain `SELECT`s work without it).
+This is **reseed only**: `dolt_push` back to the hub stays out of scope.
+
 ## Notes
 
 - **Naming.** The mirror is `<owner>/<slug>` (`DOLTHUB_OWNER` + slug, no `knowledge-` prefix). Prod owner `cogni-dao`; non-prod uses a non-prod org. So operator → `cogni-dao/operator`, poly → `cogni-dao/poly`.
