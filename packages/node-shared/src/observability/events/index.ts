@@ -16,7 +16,15 @@
 // Event Name Registry (as const)
 // ============================================================================
 
+export const WORK_ITEMS_LIST_ERROR_CODES = {
+  INVALID_INPUT: "invalid_input",
+  INVALID_CURSOR: "invalid_cursor",
+  BACKEND_UNAVAILABLE: "backend_unavailable",
+  INTERNAL_ERROR: "internal_error",
+} as const;
+
 export const EVENT_NAMES = {
+  WORK_ITEMS_LIST_COMPLETE: "work.items.list_complete",
   // AI Domain - Server
   AI_COMPLETION: "ai.completion",
   AI_LLM_CALL: "ai.llm_call",
