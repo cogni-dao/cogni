@@ -37,7 +37,7 @@ export const GIT_REVIEWER_GRAPH_NAME = "git-reviewer" as const;
  * @throws Error if systemPrompt is not provided
  */
 export function createOperatorGraph(opts: CreateReactAgentGraphOptions) {
-  if (opts.program) return createCogniProgram(opts, createOperatorGraph);
+  if (opts.program) return createCogniProgram(opts);
   if (!opts.systemPrompt) {
     throw new Error(
       "createOperatorGraph requires systemPrompt — operator graphs are prompt-driven via catalog"

@@ -32,6 +32,9 @@ const nextConfig: NextConfig = {
     "pino-pretty",
     "prom-client",
     "posthog-node",
+    // Agent runtime: ESM NodeNext (`./types.js`) subpath imports turbopack can't
+    // bundle in dev — resolve as Node requires at runtime (story.5116 local run).
+    "@langchain/mcp-adapters",
   ],
   // WalletConnect pulls pino@7 → thread-stream@0.15 which ships test files
   // requiring 'tape'. outputFileTracingRoot broadens tracing to monorepo root,

@@ -470,6 +470,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       messages: Message[];
       model: string;
       tools?: readonly LlmToolDefinition[];
+      toolChoice?: import("@/ports").LlmToolChoice;
       abortSignal?: AbortSignal;
     }) => {
       const result = this.adapter.executeCompletionUnit({
@@ -478,6 +479,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         runContext: { runId, attempt, graphId },
         ...(params.abortSignal && { abortSignal: params.abortSignal }),
         ...(params.tools?.length && { tools: [...params.tools] }),
+        ...(params.toolChoice && { toolChoice: params.toolChoice }),
       });
 
       return {

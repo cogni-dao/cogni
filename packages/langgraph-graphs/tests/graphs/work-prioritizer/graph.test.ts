@@ -801,7 +801,7 @@ describe("Cogni read-only common program", () => {
       toolContracts: CORE_TOOL_BUNDLE.filter((t) =>
         (COGNI_TOOL_IDS as readonly string[]).includes(t.contract.name)
       ).map((t) => t.contract),
-      completionFn: ({ messages }) => {
+      completionFn: ({ messages, tools, toolChoice }) => {
         const response = (value: CompletionResult) => ({
           stream: (async function* () {
             yield { type: "text_delta" as const, delta: "RAW UNVALIDATED" };
@@ -849,9 +849,13 @@ describe("Cogni read-only common program", () => {
               arguments: { decision: "pretended" },
             }),
           });
+        expect(toolChoice).toBe("required");
+        const extraction = (tools as { function: { name: string } }[]).find((tool) => tool.function.name.startsWith("extract-"));
+        expect(extraction).toBeDefined();
         return response({
-          ok: true,
-          content: JSON.stringify({
+          ok: true, content: "", finishReason: "tool_calls",
+          toolCalls: [{ id: "result-extraction", type: "function", function: {
+            name: extraction!.function.name, arguments: JSON.stringify({
             summary: "Defer blocked work; preserve the human's late constraint",
             items: [
               {
@@ -885,7 +889,7 @@ describe("Cogni read-only common program", () => {
                   "Keep blocked until the explicitly named reviewer responds",
               },
             ],
-          }),
+          }), } }],
         });
       },
       createToolExecFn: () => async (name, args) => {

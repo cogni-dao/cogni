@@ -168,7 +168,9 @@ export function createInProcGraphRunner<TTool = unknown>(
   const toolExecFn = createToolExecFn(emit);
 
   // Create no-arg CogniCompletionAdapter (reads from ALS + configurable at invoke time)
-  const llm = new CogniCompletionAdapter();
+  const llm = new CogniCompletionAdapter().bindRun(
+    request.configurable.model, request.abortSignal, !!opts.program
+  );
 
   // Use toLangChainToolsCaptured since runner provides toolExecFn directly (not from ALS)
   const contractTools = toLangChainToolsCaptured({
@@ -186,6 +188,10 @@ export function createInProcGraphRunner<TTool = unknown>(
 
   // Use factory from catalog instead of hardcoded graph
   const graph = createGraph({
+    onInternalToolEvent: ({ id, name, status }) => {
+      if (status === "start") emit({ type: "tool_call_start", toolCallId: id, toolName: name, args: { stateOnly: true } });
+      else emit({ type: "tool_call_result", toolCallId: id, result: { stateOnly: true, operation: name, status }, ...(status === "error" ? { isError: true } : {}) });
+    },
     ...(opts.sourceContext !== undefined && {
       sourceContext: opts.sourceContext,
     }),

@@ -51,6 +51,8 @@ export type MessageGraphOutput = { messages: BaseMessage[] };
  * Extend per-graph when additional dependencies are needed.
  */
 export interface CreateReactAgentGraphOptions {
+  /** Sanitized observation of isolated SDK state operations; never arbitrary scratch content. */
+  readonly onInternalToolEvent?: (event: { id: string; name: string; status: "start" | "success" | "error" }) => void;
   /** Host-bound source provenance, never accepted from model/tool arguments. */
   readonly sourceContext?: {
     readonly nodeId: string;
