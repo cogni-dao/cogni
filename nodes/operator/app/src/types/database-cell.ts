@@ -14,6 +14,9 @@ export type CellEnvironment = "candidate-a" | "preview" | "production";
 interface DatabaseCellBindingBase {
   version: 1;
   phase: "ready" | "applied" | "superseded";
+  supersededBy?:
+    | { readonly receiptId: string; readonly packetSha256: string }
+    | undefined;
   receiptId: string;
   cogniKey: string;
   nodeId: string;
@@ -185,6 +188,33 @@ export interface DatabaseCellBootstrapKit {
       }
     | undefined;
 }
+/** Independently written reserved custody; a registration caller cannot supply this anchor. */
+export interface DatabaseCellPhysicalSourceCustody {
+  readonly kind: "legacy-native-capture";
+  readonly incidentRef: string;
+  readonly sourceReceiptId: string;
+  readonly captureSha256: string;
+  readonly sourceBindingSha256: string;
+  readonly approvalArtifactSha256: string;
+  readonly startupGuardSha256: string;
+}
+/** Immutable physical-copy lineage, never provider mutation authority. */
+export interface DatabaseCellPhysicalRecoveryProvenance {
+  readonly kind: "same-cluster-physical-copy";
+  readonly sourceCogniKey: string;
+  readonly sourceReceiptId: string;
+  readonly sourceDseq: string;
+  readonly sourceProviderAccount: string;
+  readonly sourceBindingSha256: string;
+  readonly sourceAnchorKind: "legacy-native-capture";
+  readonly evidenceSha256: string;
+  readonly copyManifestSha256: string;
+  readonly originalAppliedSdlHashes: {
+    readonly source: string;
+    readonly target: string;
+    readonly app: string;
+  };
+}
 export interface AppliedDatabaseCellReceipt {
   allocationEnvironment: CellEnvironment;
   targetBuildSha: string;
@@ -192,14 +222,16 @@ export interface AppliedDatabaseCellReceipt {
   registration?:
     | {
         kind: "audited-manual";
+        physicalRecovery?: DatabaseCellPhysicalRecoveryProvenance | undefined;
         executionActor: DatabaseCellExecutionActor;
         approvalAuthority: DatabaseCellApprovalAuthority;
-        readmissionReceiptId: string;
+        readmissionReceiptId?: string | undefined;
         manualCutoverPacketSha256: string;
         sourceSystemIdentifier: string;
         schemaEvolutionReceiptSha256?: string | undefined;
-        scheduledBackupReceiptSha256: string;
-        independentRecoveryReceiptSha256: string;
+        scheduledBackupReceiptSha256?: string | undefined;
+        independentRecoveryReceiptSha256?: string | undefined;
+        preservedBackupReceiptSha256?: string | undefined;
         appAllocationReceiptId: string;
         appSdlHash: string;
         appDsnSha256: string;
@@ -256,6 +288,9 @@ export interface DatabaseCellRuntimePoolLimits {
 }
 /** Imported current consumers only: no provider root, signing key, or invented control roles. */
 export interface DatabaseCellAppliedCustody {
+  readonly physicalRecoverySource?:
+    | DatabaseCellPhysicalSourceCustody
+    | undefined;
   readonly version: 1;
   readonly nodeId: string;
   readonly nodeSlug: string;
@@ -313,6 +348,8 @@ export interface DatabaseCellAppliedCustody {
 }
 
 export type DatabaseCellAppliedEvidenceKind =
+  | "physical-current"
+  | "physical-recovery"
   | "manual-cutover"
   | "readmission"
   | "source-parity"
@@ -535,6 +572,9 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly appSourceSha: string;
     readonly sourceSystemIdentifier: string;
     readonly schemaEvolution?: { readonly receiptSha256: string } | undefined;
+    readonly physicalRecovery?:
+      | DatabaseCellPhysicalRecoveryProvenance
+      | undefined;
     readonly sourceFenceReceiptSha256: string;
     readonly restorationParityManifestSha256: string;
     readonly executionActor: DatabaseCellExecutionActor;
@@ -597,9 +637,114 @@ export interface DatabaseCellAppliedProbeQualification {
   systemIdentifier: string;
   targetBuildSha: string;
   manualCutoverPacketSha256: string;
-  readmissionReceiptId: string;
+  registrationKind?: "legacy-physical" | undefined;
+  readmissionReceiptId?: string | undefined;
   probeDsnSha256: string;
   observedFactsSha256: string;
   observedAt: string;
   qualificationSha256: string;
 }
+
+/** Owned physical proof, measured by native operations rather than SQL size estimates. */
+export interface DatabaseCellPhysicalRecoveryEvidence {
+  readonly version: 1;
+  readonly observedAt: string;
+  readonly source: {
+    readonly cogniKey: string;
+    readonly receiptId: string;
+    readonly dseq: string;
+    readonly providerAccount: string;
+    readonly systemIdentifier: string;
+    readonly originalAppliedSdlHash: string;
+    readonly heldSdlHash: string;
+    readonly manifestVersion: string;
+    readonly serviceName: string;
+    readonly observedAt: string;
+    readonly postgresAbsent: true;
+    readonly mount: {
+      readonly path: string;
+      readonly device: string;
+      readonly majorMinor: string;
+      readonly readOnly: true;
+    };
+    readonly storedSdlSha256?: string | undefined;
+  };
+  readonly copy: {
+    readonly startedAt: string;
+    readonly completedAt: string;
+    readonly bytes: number;
+    readonly files: number;
+    readonly postgresMajor: 15;
+    readonly uid: number;
+    readonly gid: number;
+    readonly sourceManifestSha256: string;
+    readonly targetManifestSha256: string;
+    readonly sourceRawMetadataSha256: string;
+    readonly targetRawMetadataSha256: string;
+    readonly normalizedMetadataDomain: "path-kind-mode-uid-gid-size-mtime-link-hardlink-v1";
+    readonly sourceNormalizedMetadataSha256: string;
+    readonly targetNormalizedMetadataSha256: string;
+    readonly allTablespacesCovered: true;
+    readonly transportDrained: true;
+    readonly originalStartupSha256: string;
+    readonly targetStartupSha256: string;
+  };
+  readonly target: {
+    readonly observedAt: string;
+    readonly dseq: string;
+    readonly providerAccount: string;
+    readonly originalAppliedSdlHash: string;
+    readonly preimageSdlHash: string;
+    readonly normalSdlHash: string;
+    readonly manifestVersion: string;
+    readonly volume: {
+      readonly path: string;
+      readonly device: string;
+      readonly majorMinor: string;
+      readonly totalBytes: number;
+      readonly usedBytes: number;
+      readonly availableBytes: number;
+      readonly totalInodes: number;
+      readonly availableInodes: number;
+    };
+    readonly storedSdlSha256?: string | undefined;
+  };
+  readonly app: {
+    readonly originalAppliedSdlHash: string;
+    readonly preimageSdlHash: string;
+    readonly heldSdlHash: string;
+    readonly manifestVersion: string;
+    readonly observedAt: string;
+    readonly businessWritersAbsent: true;
+  };
+  readonly reconciliation: {
+    readonly kind: "incident-owner";
+    readonly observedAt: string;
+    readonly providerOperationsSettled: true;
+    readonly custodyVersionsSha256: string;
+    readonly approvalArtifactSha256: string;
+    readonly independentCustodianWatching: true;
+  };
+  readonly preservedBackup: {
+    readonly receiptSha256: string;
+    readonly archiveSha256: string;
+    readonly bytes: number;
+  };
+}
+export type DatabaseCellPhysicalRecoveryFacts = Omit<
+  DatabaseCellAppliedRegistrationFacts,
+  | "effectiveApp"
+  | "scheduledBackup"
+  | "independentRecovery"
+  | "backupRuntime"
+  | "readmission"
+> & {
+  readonly readmission?:
+    | DatabaseCellAppliedRegistrationFacts["readmission"]
+    | undefined;
+  readonly physicalRecovery: DatabaseCellPhysicalRecoveryEvidence;
+  readonly effectiveApp: Omit<
+    DatabaseCellAppliedRegistrationFacts["effectiveApp"],
+    "regions" | "readinessReceiptSha256" | "runtimeAdoption"
+  >;
+};

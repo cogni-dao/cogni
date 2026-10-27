@@ -51,7 +51,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - PaymentAttemptUserRepository, PaymentAttemptServiceRepository, OnChainVerifier
 - MetricsQueryPort, AiTelemetryPort, LangfusePort, Clock
 - Port-level errors (InsufficientCreditsPortError, BillingAccountNotFoundPortError, etc.)
-- DatabaseCellAppliedRegistrationPort/EvidencePort — reference-only import of an audited manual cutover; measured provider/native/application/backup/recovery facts; missing trusted evidence supply fails closed
+- DatabaseCellAppliedRegistrationPort/EvidencePort — reference-only import of an audited manual cutover; measured provider/native/application/backup/recovery facts; typed atomic physical-recovery lineage and postimage preimages; missing trusted evidence supply fails closed
 - SandboxRunnerPort, SandboxRunSpec, SandboxRunResult, SandboxProgramContract
 - ThreadPersistencePort, ThreadConflictError, ThreadSummary
 - OperatorWalletPort

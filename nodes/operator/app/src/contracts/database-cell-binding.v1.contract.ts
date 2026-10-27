@@ -32,5 +32,17 @@ export const DatabaseCellBindingIdentitySchema =
 export const DatabaseCellAppliedRegistrationReferenceSchema =
   DatabaseCellBindingReferenceSchema.extend({
     manualCutoverPacketSha256: z.string().regex(/^[0-9a-f]{64}$/),
-    readmissionReceiptId: z.string().min(1).max(256),
+    registrationKind: z.literal("legacy-physical").optional(),
+    readmissionReceiptId: z.string().min(1).max(256).optional(),
+  }).superRefine((value, ctx) => {
+    if (
+      value.registrationKind === "legacy-physical"
+        ? value.readmissionReceiptId !== undefined
+        : !value.readmissionReceiptId
+    )
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "Legacy physical references forbid invented readmission; ordinary references require genuine readmission",
+      });
   });

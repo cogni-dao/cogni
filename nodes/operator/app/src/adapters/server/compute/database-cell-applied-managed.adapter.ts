@@ -25,6 +25,14 @@ import type {
   DatabaseCellAppliedRegistrationFacts as Facts,
 } from "@/types/database-cell";
 
+import {
+  expectedPhysicalNativePostimages,
+  type PhysicalRecoveryArtifact,
+  qualifyCurrentPhysicalApp,
+  qualifyLivePhysicalPostimage,
+  qualifyPhysicalPostimages,
+} from "./database-cell-physical-postimage";
+
 type ManagedObservation = Pick<Facts, "provider"> & {
   readonly providerEndpoint: { readonly host: string; readonly port: number };
   readonly effectiveApp: Omit<
@@ -47,6 +55,7 @@ export async function observeAppliedCellManaged(input: {
   readonly reference: DatabaseCellBindingReference;
   readonly custody: DatabaseCellAppliedCustody;
   readonly packet: Facts["manualCutover"];
+  readonly physicalArtifact?: PhysicalRecoveryArtifact;
   readonly ledger: Pick<AkashTxAllocationLedgerPort, "read">;
   readonly console: Pick<
     AkashTxConsolePort,
@@ -61,6 +70,13 @@ export async function observeAppliedCellManaged(input: {
   if (JSON.stringify(custody) !== JSON.stringify(input.custody))
     throw new Error("applied_mounted_custody_changed_during_observation");
   const packet = input.packet;
+  const physical = input.physicalArtifact;
+  const legacy =
+    packet.physicalRecovery?.sourceAnchorKind === "legacy-native-capture";
+  if (legacy !== Boolean(custody.physicalRecoverySource))
+    throw new Error("physical_source_custody_variant_mismatch");
+  if (Boolean(packet.physicalRecovery) !== Boolean(physical))
+    throw new Error("physical_managed_evidence_missing");
   const [primary, app] = await Promise.all([
     input.ledger.read({ cogniKey: input.reference.cogniKey }),
     input.ledger.read({ cogniKey: packet.appCogniKey }),
@@ -83,9 +99,22 @@ export async function observeAppliedCellManaged(input: {
     app.externalName !== packet.appDseq ||
     primary.externalName === app.externalName ||
     !primary.providerAccount ||
+    !primary.lastAppliedSdlHash ||
+    !app.lastAppliedSdlHash ||
     !app.providerAccount ||
-    primary.lastAppliedSdlHash !== custody.manualProvenance.managedSdlSha256 ||
-    app.lastAppliedSdlHash !== packet.appSdlHash ||
+    (physical
+      ? ![
+          physical.evidence.target.originalAppliedSdlHash,
+          physical.evidence.target.normalSdlHash,
+        ].includes(primary.lastAppliedSdlHash ?? "")
+      : primary.lastAppliedSdlHash !==
+        custody.manualProvenance.managedSdlSha256) ||
+    (physical
+      ? ![
+          physical.evidence.app.originalAppliedSdlHash,
+          physical.evidence.app.heldSdlHash,
+        ].includes(app.lastAppliedSdlHash ?? "")
+      : app.lastAppliedSdlHash !== packet.appSdlHash) ||
     app.workload !== custody.nodeSlug ||
     packet.appDsnSha256 !== sha(custody.app.dsn) ||
     packet.serviceDsnSha256 !== sha(custody.service.dsn) ||
@@ -97,8 +126,14 @@ export async function observeAppliedCellManaged(input: {
       "applied_managed_owned_receipt_or_configured_custody_mismatch"
     );
   const [primaryDefinition, appDefinition, primaryStatus] = await Promise.all([
-    input.console.readManagedDefinition({ leaseId: primary.externalName }),
-    input.console.readManagedDefinition({ leaseId: packet.appDseq }),
+    input.console.readManagedDefinition({
+      leaseId: primary.externalName,
+      ...(physical ? { resolveProviderManifest: true } : {}),
+    }),
+    input.console.readManagedDefinition({
+      leaseId: packet.appDseq,
+      ...(physical ? { resolveProviderManifest: true } : {}),
+    }),
     input.console.status({ leaseId: primary.externalName }),
   ]);
   if (
@@ -113,6 +148,110 @@ export async function observeAppliedCellManaged(input: {
     primaryStatus.leaseId !== primary.externalName
   )
     throw new Error("applied_managed_current_provider_identity_mismatch");
+  if (physical) {
+    const source = await input.ledger.read({
+      cogniKey: physical.evidence.source.cogniKey,
+    });
+    if (
+      !source ||
+      source.state !== "allocated" ||
+      source.retentionPolicy !== "retain" ||
+      primary.retentionPolicy !== "retain" ||
+      source.identity.nodeId !== custody.nodeId ||
+      source.environment !== "production" ||
+      source.receiptId !== physical.evidence.source.receiptId ||
+      source.externalName !== physical.evidence.source.dseq ||
+      source.providerAccount !== physical.evidence.source.providerAccount ||
+      source.lastAppliedSdlHash !==
+        physical.evidence.source.originalAppliedSdlHash ||
+      source.externalName === primary.externalName ||
+      source.externalName === app.externalName
+    )
+      throw new Error("physical_managed_source_receipt_mismatch");
+    const history = primary.appliedDatabaseCellBinding?.find(
+      (receipt) => receipt.binding.environment === "production"
+    );
+    let ledgerHashes = {
+      source: source.lastAppliedSdlHash,
+      target: primary.lastAppliedSdlHash,
+      app: app.lastAppliedSdlHash,
+    };
+    if (history) {
+      const old = history.registration?.physicalRecovery;
+      if (
+        history.binding.phase !== "applied" ||
+        !old ||
+        JSON.stringify(old) !== JSON.stringify(packet.physicalRecovery) ||
+        history.registration?.manualCutoverPacketSha256 !==
+          packet.packetSha256 ||
+        primary.lastAppliedSdlHash !== physical.evidence.target.normalSdlHash ||
+        app.lastAppliedSdlHash !==
+          physical.evidence.app.originalAppliedSdlHash ||
+        source.lastAppliedSdlHash !== old.originalAppliedSdlHashes.source
+      )
+        throw new Error("physical_managed_original_anchor_history_mismatch");
+      ledgerHashes = old.originalAppliedSdlHashes;
+    }
+    if (
+      !ledgerHashes.source ||
+      JSON.stringify(ledgerHashes) !==
+        JSON.stringify(packet.physicalRecovery?.originalAppliedSdlHashes)
+    )
+      throw new Error("physical_managed_independent_original_anchors_missing");
+    qualifyPhysicalPostimages({
+      artifact: physical,
+      custody,
+      primaryServiceName: packet.primaryServiceName,
+      appServiceName: packet.appServiceName,
+      ledgerHashes: {
+        source: ledgerHashes.source,
+        target: ledgerHashes.target,
+        app: ledgerHashes.app,
+      },
+    });
+    const sourceDefinition = await input.console.readManagedDefinition({
+      leaseId: source.externalName,
+      resolveProviderManifest: true,
+    });
+    const expectedNative = expectedPhysicalNativePostimages(
+      physical,
+      packet.primaryServiceName
+    );
+    qualifyCurrentPhysicalApp(physical, appDefinition.resolvedProviderManifest);
+    qualifyLivePhysicalPostimage(
+      sourceDefinition.providerSdl,
+      sourceDefinition.resolvedProviderManifest,
+      physical.definitions.sourceHeld,
+      packet.primaryServiceName,
+      expectedNative.sourceHeld
+    );
+    qualifyLivePhysicalPostimage(
+      primaryDefinition.providerSdl,
+      primaryDefinition.resolvedProviderManifest,
+      physical.definitions.targetNormal,
+      packet.primaryServiceName,
+      expectedNative.targetNormal
+    );
+    const e = physical.evidence;
+    if (
+      sourceDefinition.leaseId !== source.externalName ||
+      sourceDefinition.providerAccount !== source.providerAccount ||
+      sourceDefinition.ownerAccount !== primaryDefinition.ownerAccount ||
+      sourceDefinition.ownerAccount !== appDefinition.ownerAccount ||
+      sourceDefinition.consoleManifestVersion !== e.source.manifestVersion ||
+      sourceDefinition.chainManifestVersion !== e.source.manifestVersion ||
+      sourceDefinition.providerSdlSha256 !== e.source.storedSdlSha256 ||
+      sha(sourceDefinition.providerSdl) !== e.source.storedSdlSha256 ||
+      primaryDefinition.providerSdlSha256 !== e.target.storedSdlSha256 ||
+      sha(primaryDefinition.providerSdl) !== e.target.storedSdlSha256 ||
+      appDefinition.providerSdlSha256 !== e.app.heldSdlHash ||
+      sha(appDefinition.providerSdl) !== e.app.heldSdlHash ||
+      sourceDefinition.consoleManifestVersion !==
+        sourceDefinition.chainManifestVersion ||
+      Date.parse(sourceDefinition.observedAt) < Date.now() - 60000
+    )
+      throw new Error("physical_managed_known_postimage_mismatch");
+  }
   const primaryService = primaryDefinition.services[0];
   if (
     primaryDefinition.services.length !== 1 ||
@@ -168,7 +307,8 @@ export async function observeAppliedCellManaged(input: {
       observedAt: primaryDefinition.observedAt,
       dseq: primary.externalName,
       providerAccount: primary.providerAccount,
-      appliedSdlHash: primary.lastAppliedSdlHash,
+      appliedSdlHash:
+        physical?.evidence.target.normalSdlHash ?? primary.lastAppliedSdlHash,
       postgresImageDigest: custody.manualProvenance.postgresImageDigest,
       manifestVersion: primaryDefinition.consoleManifestVersion,
       service: primaryService,

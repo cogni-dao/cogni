@@ -456,21 +456,23 @@ const allocationLedger = new DrizzleAkashTxAllocationLedger(
   getDb,
   wallet.walletScope
 );
+const loadDatabaseCellRecoveryProfile = async () => {
+  const content = await readFile(
+    "/app/database-cell-bootstrap/database-budget-profiles.yaml",
+    "utf8"
+  );
+  const document: unknown = parseYaml(content);
+  return z
+    .object({
+      recovery_profiles: z.record(z.string(), z.unknown()).optional(),
+    })
+    .parse(document).recovery_profiles?.["pg15-cold-capacity-v1"];
+};
+
 const actuator = new AkashTxActuator({
   console: consoleClient,
   ledger: allocationLedger,
-  recoveryProfile: async () => {
-    const content = await readFile(
-      "/app/database-cell-bootstrap/database-budget-profiles.yaml",
-      "utf8"
-    );
-    const document: unknown = parseYaml(content);
-    return z
-      .object({
-        recovery_profiles: z.record(z.string(), z.unknown()).optional(),
-      })
-      .parse(document).recovery_profiles?.["pg15-cold-capacity-v1"];
-  },
+  recoveryProfile: loadDatabaseCellRecoveryProfile,
   costEvidence: consoleClient,
   costStore: new DrizzleComputeCostStore(getDb),
   providerConsumerAccountId: wallet.expectedAccountId,
@@ -697,6 +699,8 @@ const appliedCellObserver = new ReadOnlyAppliedDatabaseCellObserver({
 });
 
 const databaseCellBindings = new DatabaseCellBinder({
+  recoverySdlHash: consoleClient.sdlHash.bind(consoleClient),
+  recoveryProfile: loadDatabaseCellRecoveryProfile,
   ledger: allocationLedger,
   actuator,
   store: new DrizzleDatabaseCellBindingStore(getDb, wallet.walletScope),

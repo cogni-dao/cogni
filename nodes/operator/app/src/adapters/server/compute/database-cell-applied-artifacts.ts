@@ -85,13 +85,13 @@ type Canonical =
   | number
   | string
   | readonly Canonical[]
-  | { readonly [key: string]: Canonical };
+  | { readonly [key: string]: Canonical | undefined };
 /** Matches native UTF8 canonical JSON: sorted object keys, no whitespace. */
 export function canonicalEvidenceJson(value: Canonical): string {
   if (Array.isArray(value))
     return `[${value.map((x) => canonicalEvidenceJson(x)).join(",")}]`;
   if (value !== null && typeof value === "object") {
-    const object = value as { readonly [key: string]: Canonical };
+    const object = value as { readonly [key: string]: Canonical | undefined };
     return `{${Object.keys(object)
       .sort()
       .map(

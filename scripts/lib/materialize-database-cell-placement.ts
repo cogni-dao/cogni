@@ -28,6 +28,7 @@ import {
   AppliedDatabaseCellReceiptSchema,
   DatabaseCellAppliedEvidenceBundleSchema,
   DatabaseCellNativeControlObservationSchema,
+  DatabaseCellPhysicalRecoveryProvenanceSchema,
 } from "../../nodes/operator/app/src/shared/secrets/database-cell-placement.data";
 
 const InputSchema = z
@@ -243,7 +244,22 @@ export function projectDatabaseCellPlacement(input: unknown) {
         }),
       };
     }
-    if (requireApplied && !nativeProjection)
+    const legacyPhysical =
+      receipt.registration.physicalRecovery?.sourceAnchorKind ===
+      "legacy-native-capture";
+    if (
+      legacyPhysical &&
+      (!custody.physicalRecoverySource ||
+        custody.physicalRecoverySource.sourceReceiptId !==
+          receipt.registration.physicalRecovery?.sourceReceiptId ||
+        custody.physicalRecoverySource.sourceBindingSha256 !==
+          receipt.registration.physicalRecovery.sourceBindingSha256 ||
+        control !== undefined)
+    )
+      throw new Error(
+        "legacy physical publication lacks independently anchored source custody"
+      );
+    if (requireApplied && !nativeProjection && !legacyPhysical)
       throw new Error(
         "manual cell placement activation requires real reviewed native control projections"
       );
@@ -257,13 +273,25 @@ export function projectDatabaseCellPlacement(input: unknown) {
       probe: nativeProjection?.probe ?? null,
       admin: nativeProjection?.admin ?? null,
       readmit: nativeProjection?.readmit ?? null,
-      retireSourceBinding: nativeProjection
-        ? {
-            nodeId: b.nodeId,
-            environment: b.environment,
-            systemIdentifier: receipt.registration.sourceSystemIdentifier,
-          }
-        : null,
+      retireSourceBinding:
+        nativeProjection || legacyPhysical
+          ? {
+              nodeId: b.nodeId,
+              environment: b.environment,
+              systemIdentifier: receipt.registration.sourceSystemIdentifier,
+              ...(legacyPhysical
+                ? {
+                    allocationReceiptId:
+                      receipt.registration.physicalRecovery?.sourceReceiptId,
+                    dseq: receipt.registration.physicalRecovery?.sourceDseq,
+                    providerAccount:
+                      receipt.registration.physicalRecovery
+                        ?.sourceProviderAccount,
+                    substrateHost: `akash:${receipt.registration.physicalRecovery?.sourceProviderAccount}:${receipt.registration.physicalRecovery?.sourceDseq}`,
+                  }
+                : {}),
+            }
+          : null,
       backup: null,
     };
   }
@@ -493,7 +521,8 @@ const ProbeQualificationSchema = z
     systemIdentifier: z.string().regex(/^[0-9]+$/),
     targetBuildSha: z.string().regex(/^[0-9a-f]{40}$/),
     manualCutoverPacketSha256: z.string().regex(/^[0-9a-f]{64}$/),
-    readmissionReceiptId: z.string().min(1),
+    registrationKind: z.literal("legacy-physical").optional(),
+    readmissionReceiptId: z.string().min(1).optional(),
     probeDsnSha256: z.string().regex(/^[0-9a-f]{64}$/),
     observedFactsSha256: z.string().regex(/^[0-9a-f]{64}$/),
     observedAt: z.string().datetime({ offset: true }),
@@ -513,7 +542,11 @@ export function validateAppliedDatabaseCellProbeQualification(input: unknown) {
           nodeId: z.string().uuid(),
           cogniKey: z.string().min(1),
           manualCutoverPacketSha256: z.string().regex(/^[0-9a-f]{64}$/),
-          readmissionReceiptId: z.string().regex(/^[0-9a-f]{64}$/),
+          registrationKind: z.literal("legacy-physical").optional(),
+          readmissionReceiptId: z
+            .string()
+            .regex(/^[0-9a-f]{64}$/)
+            .optional(),
         })
         .strict(),
     })
@@ -531,7 +564,15 @@ export function validateAppliedDatabaseCellProbeQualification(input: unknown) {
       artifact.kind === "readmission" &&
       artifact.sha256 === value.reference.readmissionReceiptId
   );
-  if (packets.length !== 1 || readmits.length !== 1 || !packets[0])
+  const legacy = value.reference.registrationKind === "legacy-physical";
+  if (
+    packets.length !== 1 ||
+    (legacy
+      ? readmits.length !== 0 ||
+        value.reference.readmissionReceiptId !== undefined
+      : readmits.length !== 1 || !value.reference.readmissionReceiptId) ||
+    !packets[0]
+  )
     throw new Error(
       "immutable probe qualification references absent or ambiguous"
     );
@@ -544,6 +585,7 @@ export function validateAppliedDatabaseCellProbeQualification(input: unknown) {
         allocationReceiptId: z.string().uuid(),
         systemIdentifier: z.string(),
       }),
+      physicalRecovery: DatabaseCellPhysicalRecoveryProvenanceSchema.optional(),
       sourceFence: z.object({ systemIdentifier: z.string() }),
     })
     .parse(
@@ -567,7 +609,20 @@ export function validateAppliedDatabaseCellProbeQualification(input: unknown) {
     core.readmissionReceiptId !== value.reference.readmissionReceiptId ||
     core.allocationReceiptId !== packet.primary.allocationReceiptId ||
     core.systemIdentifier !== packet.primary.systemIdentifier ||
-    core.systemIdentifier === packet.sourceFence.systemIdentifier ||
+    core.registrationKind !== value.reference.registrationKind ||
+    legacy !==
+      (packet.physicalRecovery?.sourceAnchorKind === "legacy-native-capture") ||
+    (packet.physicalRecovery
+      ? core.systemIdentifier !== packet.sourceFence.systemIdentifier ||
+        packet.physicalRecovery.sourceReceiptId ===
+          packet.primary.allocationReceiptId ||
+        (legacy &&
+          (!value.custody.physicalRecoverySource ||
+            value.custody.physicalRecoverySource.sourceReceiptId !==
+              packet.physicalRecovery.sourceReceiptId ||
+            value.custody.physicalRecoverySource.sourceBindingSha256 !==
+              packet.physicalRecovery.sourceBindingSha256))
+      : core.systemIdentifier === packet.sourceFence.systemIdentifier) ||
     core.targetBuildSha !== value.custody.targetBuildSha ||
     core.probeDsnSha256 !== sha(value.custody.readOnlyProbe.dsn)
   )

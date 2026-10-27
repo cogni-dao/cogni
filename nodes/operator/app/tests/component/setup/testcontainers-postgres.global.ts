@@ -10,6 +10,7 @@
  *   - DATABASE_URL → app_user (RLS-enforced, DB owner)
  *   - DATABASE_SERVICE_URL → app_service (BYPASSRLS)
  *   - Migrations run as app_user (DB owner, same as production)
+ *   - COMPONENT_POSTGRES_ADMIN_URL is ephemeral testcontainer custody for role fixtures only
  * Side-effects: IO (Docker containers, process.env, file system)
  * Notes: Used by vitest.component.config.mts as globalSetup; sets APP_ENV=test for fake adapters.
  * Links: vitest component config, infra/compose/runtime/postgres-init/provision.sh
@@ -110,6 +111,8 @@ export async function setup() {
     ...CORE_TEST_ENV,
     DATABASE_URL: appUserUri,
     DATABASE_SERVICE_URL: serviceUserUri,
+    // Isolated container only: fixture role creation must not grant CREATEROLE to app roles.
+    COMPONENT_POSTGRES_ADMIN_URL: `postgresql://${encodeURIComponent(superuser)}:${encodeURIComponent(superpass)}@${host}:${port}/${APP_DB_NAME}`,
     APP_ENV: "test",
   });
 

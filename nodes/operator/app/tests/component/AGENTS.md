@@ -36,7 +36,7 @@ Component tests using isolated docker testcontainers. Tests adapter implementati
 
 - **Exports:** none
 - **CLI:** pnpm test:component or vitest run tests/component
-- **Env/Config keys:** .env.test only (e.g., TEST_DB_URL, TEST_LITELLM_URL)
+- **Env/Config keys:** .env.test (e.g., TEST_DB_URL, TEST_LITELLM_URL); global setup also provides COMPONENT_POSTGRES_ADMIN_URL for disposable testcontainer role fixtures only
 
 ## Responsibilities
 

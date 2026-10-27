@@ -16,6 +16,7 @@ import type {
   AkashTxActuatorPort,
   AkashTxAllocationLedgerPort,
   AkashTxAllocationRecord,
+  AkashTxConsolePort,
   DatabaseCellAppliedProbeQualificationPort,
   DatabaseCellAppliedRegistrationEvidencePort,
   DatabaseCellAppliedRegistrationPort,
@@ -24,6 +25,7 @@ import type {
   DatabaseCellCutoverReference,
   DatabaseCellNativeObserverPort,
   DatabaseCellNativeProof,
+  DatabaseCellPhysicalRecoveryWrite,
 } from "@/ports";
 import { AkashTxError } from "@/ports";
 import {
@@ -36,9 +38,20 @@ import {
   AppliedDatabaseCellReceiptsSchema,
   assessDatabaseCellBackupRuntime,
   DatabaseCellAppliedRegistrationFactsSchema,
+  DatabaseCellPhysicalRecoveryFactsSchema,
+  physicalSourceBindingSha256,
 } from "@/shared/secrets/database-cell-placement.data";
+import type { DatabaseCellPhysicalRecoveryFacts } from "@/types/database-cell";
+
+import {
+  DatabaseCellRecoveryProfileSchema,
+  databaseCellRecoveryIntent,
+} from "./database-cell-recovery";
 
 interface BindingStore {
+  savePhysicalRecovery?(
+    input: DatabaseCellPhysicalRecoveryWrite
+  ): Promise<void>;
   read(cogniKey: string): Promise<readonly AppliedDatabaseCellReceipt[]>;
   save(
     record: AkashTxAllocationRecord,
@@ -66,6 +79,8 @@ export class DatabaseCellBinder
         reference: DatabaseCellBindingReference
       ): Promise<DatabaseCellBootstrapKit>;
       buildSha: string;
+      recoveryProfile?(): Promise<unknown>;
+      recoverySdlHash?: AkashTxConsolePort["sdlHash"];
     }
   ) {}
 
@@ -161,6 +176,11 @@ export class DatabaseCellBinder
   async seal(input: DatabaseCellBindingReference) {
     const record = await this.record(input);
     const previous = await this.read(input);
+    if (previous.some((receipt) => receipt.binding.phase === "superseded"))
+      throw new AkashTxError(
+        "identity_conflict",
+        "superseded physical allocation is historical and cannot be resealed"
+      );
     if (previous.some((receipt) => receipt.registration))
       throw new AkashTxError(
         "identity_conflict",
@@ -353,7 +373,12 @@ export class DatabaseCellBinder
       systemIdentifier: receipt.binding.systemIdentifier,
       targetBuildSha: receipt.targetBuildSha,
       manualCutoverPacketSha256: input.manualCutoverPacketSha256,
-      readmissionReceiptId: input.readmissionReceiptId,
+      ...(input.registrationKind
+        ? { registrationKind: input.registrationKind }
+        : {}),
+      ...(input.readmissionReceiptId
+        ? { readmissionReceiptId: input.readmissionReceiptId }
+        : {}),
       probeDsnSha256: result.probeDsnSha256,
       observedFactsSha256: result.observedFactsSha256,
       observedAt: result.observedAt,
@@ -377,7 +402,10 @@ export class DatabaseCellBinder
     if (
       input.allocationEnvironment !== "production" ||
       !/^[0-9a-f]{64}$/.test(input.manualCutoverPacketSha256) ||
-      !input.readmissionReceiptId
+      (input.registrationKind !== "legacy-physical" &&
+        !input.readmissionReceiptId) ||
+      (input.registrationKind === "legacy-physical" &&
+        input.readmissionReceiptId !== undefined)
     )
       refuse("production registration requires audited receipt references");
     if (!this.deps.observeApplied || !this.deps.appliedCustody)
@@ -393,14 +421,35 @@ export class DatabaseCellBinder
       refuse("registration lacks its owned production applied custody");
     // This observer is distinct from prestage qualification. It must only read actual
     // provider/native/runtime state and authenticated immutable receipt artifacts.
-    const parsedFacts = DatabaseCellAppliedRegistrationFactsSchema.safeParse(
-      await this.deps.observeApplied({
-        reference: input,
+    const observedFacts = await this.deps.observeApplied({
+      reference: input,
+      custody,
+      manualCutoverPacketSha256: input.manualCutoverPacketSha256,
+      ...(input.registrationKind
+        ? { registrationKind: input.registrationKind }
+        : {}),
+      ...(input.readmissionReceiptId
+        ? { readmissionReceiptId: input.readmissionReceiptId }
+        : {}),
+    });
+    if ("physicalRecovery" in observedFacts) {
+      const physical =
+        DatabaseCellPhysicalRecoveryFactsSchema.safeParse(observedFacts);
+      if (!physical.success)
+        throw new AkashTxError(
+          "ledger_unavailable",
+          "trusted physical recovery evidence malformed"
+        );
+      return this.validatePhysicalRecovery(
+        input,
+        record,
         custody,
-        manualCutoverPacketSha256: input.manualCutoverPacketSha256,
-        readmissionReceiptId: input.readmissionReceiptId,
-      })
-    );
+        physical.data,
+        persist
+      );
+    }
+    const parsedFacts =
+      DatabaseCellAppliedRegistrationFactsSchema.safeParse(observedFacts);
     if (!parsedFacts.success)
       throw new AkashTxError(
         "ledger_unavailable",
@@ -729,64 +778,7 @@ export class DatabaseCellBinder
       refuse(
         "current native schema journal differs from canonical post-restore evolution"
       );
-    const control = custody.nativeControl?.provenance;
-    const qualification = facts.nativeControl;
-    if (Boolean(control) !== Boolean(qualification))
-      refuse(
-        "native control custody requires genuine fresh read-only qualification"
-      );
-    if (control && qualification) {
-      const functions = (
-        values: readonly { signature: string; definitionSha256: string }[]
-      ) =>
-        JSON.stringify(
-          values
-            .map(({ signature, definitionSha256 }) => ({
-              signature,
-              definitionSha256,
-            }))
-            .sort((a, b) => a.signature.localeCompare(b.signature))
-        );
-      const roles = (values: typeof qualification.exactRoleBounds) =>
-        JSON.stringify(
-          [...values].sort((a, b) => a.name.localeCompare(b.name))
-        );
-      if (
-        !fresh(qualification.observedAt) ||
-        qualification.nodeId !== custody.nodeId ||
-        qualification.nodeSlug !== custody.nodeSlug ||
-        qualification.environment !== "production" ||
-        qualification.controlDatabaseName !== "postgres" ||
-        qualification.databaseName !== custody.databaseName ||
-        qualification.systemIdentifier !== native.systemIdentifier ||
-        control.systemIdentifier !== native.systemIdentifier ||
-        qualification.allocationReceiptId !== record.receiptId ||
-        qualification.dseq !== record.externalName ||
-        qualification.providerAccount !== record.providerAccount ||
-        qualification.reviewedSourceSha !== control.reviewedSourceSha ||
-        qualification.migrationManifestSha256 !==
-          control.migrationManifestSha256 ||
-        qualification.installedAt !== control.installedAt ||
-        qualification.logicalProbeFunction.definitionSha256 !==
-          control.logicalProbeDefinitionSha256 ||
-        Date.parse(control.qualifiedAt) >
-          Date.parse(qualification.observedAt) ||
-        qualification.admission.manualPacketSha256 !== packet.packetSha256 ||
-        qualification.admission.readmissionReceiptSha256 !==
-          readmission.receiptId ||
-        qualification.admission.admittedAt !== readmission.admittedAt ||
-        JSON.stringify(qualification.admission.executionActor) !==
-          JSON.stringify(packet.executionActor) ||
-        JSON.stringify(qualification.admission.approvalAuthority) !==
-          JSON.stringify(packet.approvalAuthority) ||
-        functions(qualification.requiredFunctions) !==
-          functions(control.functions) ||
-        roles(qualification.exactRoleBounds) !== roles(custody.budget.roles)
-      )
-        refuse(
-          "native control differs from actual installation, immutable admission or owned capabilities"
-        );
-    }
+    const control = this.qualifyNativeControl(facts, custody, record);
     const previous = await this.read(input);
     const old = previous.find(
       (receipt) => receipt.binding.environment === "production"
@@ -932,6 +924,589 @@ export class DatabaseCellBinder
     ]);
     if (persist) await this.deps.store.save(record, next, previous);
     return validated(next);
+  }
+
+  private qualifyNativeControl(
+    facts:
+      | import("@/types/database-cell").DatabaseCellAppliedRegistrationFacts
+      | DatabaseCellPhysicalRecoveryFacts,
+    custody: DatabaseCellAppliedCustody,
+    record: AkashTxAllocationRecord
+  ) {
+    const { native, manualCutover: packet, readmission } = facts;
+    const fresh = (value: string) =>
+      Date.parse(value) >= Date.now() - 60000 &&
+      Date.parse(value) <= Date.now() + 5000;
+    const refuse: (message: string) => never = (message) => {
+      throw new AkashTxError("identity_conflict", message);
+    };
+    const control = custody.nativeControl?.provenance;
+    const qualification = facts.nativeControl;
+    if (Boolean(control) !== Boolean(qualification))
+      refuse(
+        "native control custody requires genuine fresh read-only qualification"
+      );
+    if (control && qualification) {
+      if (!readmission)
+        refuse("native control requires genuine installed admission");
+      const functions = (
+        values: readonly { signature: string; definitionSha256: string }[]
+      ) =>
+        JSON.stringify(
+          values
+            .map(({ signature, definitionSha256 }) => ({
+              signature,
+              definitionSha256,
+            }))
+            .sort((a, b) => a.signature.localeCompare(b.signature))
+        );
+      const roles = (values: typeof qualification.exactRoleBounds) =>
+        JSON.stringify(
+          [...values].sort((a, b) => a.name.localeCompare(b.name))
+        );
+      if (
+        !fresh(qualification.observedAt) ||
+        qualification.nodeId !== custody.nodeId ||
+        qualification.nodeSlug !== custody.nodeSlug ||
+        qualification.environment !== "production" ||
+        qualification.controlDatabaseName !== "postgres" ||
+        qualification.databaseName !== custody.databaseName ||
+        qualification.systemIdentifier !== native.systemIdentifier ||
+        control.systemIdentifier !== native.systemIdentifier ||
+        qualification.allocationReceiptId !== record.receiptId ||
+        qualification.dseq !== record.externalName ||
+        qualification.providerAccount !== record.providerAccount ||
+        qualification.reviewedSourceSha !== control.reviewedSourceSha ||
+        qualification.migrationManifestSha256 !==
+          control.migrationManifestSha256 ||
+        qualification.installedAt !== control.installedAt ||
+        qualification.logicalProbeFunction.definitionSha256 !==
+          control.logicalProbeDefinitionSha256 ||
+        Date.parse(control.qualifiedAt) >
+          Date.parse(qualification.observedAt) ||
+        qualification.admission.manualPacketSha256 !== packet.packetSha256 ||
+        qualification.admission.readmissionReceiptSha256 !==
+          readmission.receiptId ||
+        qualification.admission.admittedAt !== readmission.admittedAt ||
+        JSON.stringify(qualification.admission.executionActor) !==
+          JSON.stringify(packet.executionActor) ||
+        JSON.stringify(qualification.admission.approvalAuthority) !==
+          JSON.stringify(packet.approvalAuthority) ||
+        functions(qualification.requiredFunctions) !==
+          functions(control.functions) ||
+        roles(qualification.exactRoleBounds) !== roles(custody.budget.roles)
+      )
+        refuse(
+          "native control differs from actual installation, immutable admission or owned capabilities"
+        );
+    }
+    return control;
+  }
+
+  private async validatePhysicalRecovery(
+    input: Parameters<
+      DatabaseCellAppliedRegistrationPort["registerApplied"]
+    >[0],
+    record: AkashTxAllocationRecord,
+    custody: DatabaseCellAppliedCustody,
+    facts: DatabaseCellPhysicalRecoveryFacts,
+    persist: boolean
+  ): Promise<{
+    receipts: readonly AppliedDatabaseCellReceipt[];
+    observedAt: string;
+    observedFactsSha256: string;
+    probeDsnSha256: string | null;
+  }> {
+    const refuse: (message: string) => never = (message) => {
+      throw new AkashTxError("identity_conflict", message);
+    };
+    if (!this.deps.store.savePhysicalRecovery)
+      throw new AkashTxError(
+        "ledger_unavailable",
+        "atomic physical import store unavailable"
+      );
+    const {
+      physicalRecovery: e,
+      manualCutover: packet,
+      native,
+      provider,
+      effectiveApp: app,
+    } = facts;
+    const lineage = packet.physicalRecovery;
+    if (
+      !lineage ||
+      input.registrationKind !== "legacy-physical" ||
+      !custody.physicalRecoverySource ||
+      facts.readmission !== undefined ||
+      facts.nativeControl !== undefined ||
+      custody.nativeControl !== undefined ||
+      lineage.sourceBindingSha256 !==
+        custody.physicalRecoverySource.sourceBindingSha256 ||
+      lineage.sourceReceiptId !== custody.physicalRecoverySource.sourceReceiptId
+    )
+      refuse(
+        "legacy physical import requires independent source custody and forbids invented admission or controls"
+      );
+    const fresh = (value: string) =>
+      Date.parse(value) >= Date.now() - 60000 &&
+      Date.parse(value) <= Date.now() + 5000;
+    const sha = (value: string) =>
+      createHash("sha256").update(value).digest("hex");
+    const json = (value: unknown) => JSON.stringify(value);
+    if (
+      !lineage ||
+      !record.externalName ||
+      !record.providerAccount ||
+      !record.lastAppliedSdlHash ||
+      ![
+        facts.observedAt,
+        e.observedAt,
+        e.source.observedAt,
+        e.target.observedAt,
+        e.app.observedAt,
+        e.reconciliation.observedAt,
+        provider.observedAt,
+        app.providerManifest.observedAt,
+      ].every(fresh)
+    )
+      refuse("physical import requires fresh complete native observations");
+    const source = await this.deps.ledger.read({ cogniKey: e.source.cogniKey });
+    const appRecord = await this.deps.ledger.read({
+      cogniKey: packet.appCogniKey,
+    });
+    if (!source || !appRecord)
+      refuse("physical source or app allocation absent");
+    if (
+      source.state !== "allocated" ||
+      appRecord.state !== "allocated" ||
+      source.identity.nodeId !== custody.nodeId ||
+      appRecord.identity.nodeId !== custody.nodeId ||
+      record.identity.nodeId !== custody.nodeId ||
+      [
+        source.environment,
+        appRecord.environment,
+        record.environment,
+        custody.environment,
+      ].some((value) => value !== "production") ||
+      source.receiptId !== lineage.sourceReceiptId ||
+      source.receiptId !== e.source.receiptId ||
+      source.cogniKey !== lineage.sourceCogniKey ||
+      source.externalName !== lineage.sourceDseq ||
+      source.externalName !== e.source.dseq ||
+      source.providerAccount !== e.source.providerAccount ||
+      lineage.sourceProviderAccount !== source.providerAccount ||
+      source.lastAppliedSdlHash !== e.source.originalAppliedSdlHash ||
+      source.retentionPolicy !== "retain" ||
+      record.retentionPolicy !== "retain" ||
+      source.workload !== `${custody.nodeSlug}-database-cell` ||
+      record.workload !== source.workload ||
+      appRecord.workload !== custody.nodeSlug ||
+      new Set([source.receiptId, record.receiptId, appRecord.receiptId])
+        .size !== 3 ||
+      new Set([
+        source.externalName,
+        record.externalName,
+        appRecord.externalName,
+      ]).size !== 3
+    )
+      refuse(
+        "physical import allocation ownership or retained lineage differs"
+      );
+    const profile = DatabaseCellRecoveryProfileSchema.safeParse(
+      await this.deps.recoveryProfile?.()
+    );
+    if (!profile.success)
+      refuse("physical recovery requires its canonical fixed recipe");
+    const intent = databaseCellRecoveryIntent(
+      {
+        environment: "production",
+        identity: record.identity,
+        nodeSlug: custody.nodeSlug,
+        recovery: {
+          profileId: "pg15-cold-capacity-v1",
+          sourceCogniKey: source.cogniKey,
+          sourceExternalName: e.source.dseq,
+          sourceSystemIdentifier: e.source.systemIdentifier,
+        },
+      },
+      source,
+      profile.data
+    );
+    if (record.cogniKey !== intent.key)
+      refuse("physical target differs from canonical source recovery intent");
+    if (
+      !this.deps.recoverySdlHash ||
+      this.deps.recoverySdlHash(intent.spec, intent.policy) !==
+        e.target.originalAppliedSdlHash ||
+      lineage.originalAppliedSdlHashes.source !==
+        e.source.originalAppliedSdlHash ||
+      lineage.originalAppliedSdlHashes.target !==
+        e.target.originalAppliedSdlHash ||
+      lineage.originalAppliedSdlHashes.app !== e.app.originalAppliedSdlHash
+    )
+      refuse(
+        "physical target cold preimage differs from canonical G1 recipe or original ledger anchors"
+      );
+    if (
+      packet.packetSha256 !== input.manualCutoverPacketSha256 ||
+      packet.nodeId !== custody.nodeId ||
+      packet.nodeSlug !== custody.nodeSlug ||
+      packet.allocationReceiptId !== record.receiptId ||
+      packet.appAllocationReceiptId !== appRecord.receiptId ||
+      packet.appDseq !== appRecord.externalName ||
+      packet.appSourceSha !== custody.targetBuildSha ||
+      app.deployedSourceSha !== custody.targetBuildSha ||
+      app.nodeId !== custody.nodeId ||
+      packet.sourceSystemIdentifier !== native.systemIdentifier ||
+      packet.systemIdentifier !== native.systemIdentifier ||
+      e.source.systemIdentifier !== native.systemIdentifier ||
+      json(packet.manualProvenance) !== json(custody.manualProvenance) ||
+      custody.manualProvenance.managedSdlSha256 !== e.target.normalSdlHash ||
+      custody.manualProvenance.qualificationArtifactSha256 !==
+        lineage.evidenceSha256 ||
+      e.source.serviceName !== packet.primaryServiceName ||
+      ![e.target.originalAppliedSdlHash, e.target.normalSdlHash].includes(
+        record.lastAppliedSdlHash
+      ) ||
+      ![e.app.originalAppliedSdlHash, e.app.heldSdlHash].includes(
+        appRecord.lastAppliedSdlHash ?? ""
+      ) ||
+      e.target.dseq !== record.externalName ||
+      e.target.providerAccount !== record.providerAccount ||
+      e.target.normalSdlHash !== provider.appliedSdlHash ||
+      e.target.manifestVersion !== provider.manifestVersion ||
+      packet.primaryManifestVersion !== provider.manifestVersion ||
+      packet.primaryServiceName !== provider.service.name ||
+      provider.dseq !== record.externalName ||
+      provider.providerAccount !== record.providerAccount ||
+      provider.postgresImageDigest !==
+        custody.manualProvenance.postgresImageDigest ||
+      e.app.originalAppliedSdlHash !== app.appliedSdlHash ||
+      packet.appSdlHash !== app.appliedSdlHash ||
+      app.allocationReceiptId !== appRecord.receiptId ||
+      e.app.manifestVersion !== packet.appManifestVersion ||
+      app.providerManifest.consoleVersion !== packet.appManifestVersion ||
+      app.providerManifest.chainVersion !== packet.appManifestVersion ||
+      app.providerManifest.imageDigest !== packet.appImageDigest
+    )
+      refuse(
+        "physical packet or known native postimage differs from owned custody"
+      );
+    const v = e.target.volume;
+    if (
+      lineage.copyManifestSha256 !== e.copy.sourceManifestSha256 ||
+      e.copy.sourceManifestSha256 !== e.copy.targetManifestSha256 ||
+      e.copy.sourceNormalizedMetadataSha256 !==
+        e.copy.targetNormalizedMetadataSha256 ||
+      packet.restorationParityManifestSha256 !== e.copy.sourceManifestSha256 ||
+      Date.parse(e.copy.startedAt) > Date.parse(e.copy.completedAt) ||
+      Date.parse(e.copy.completedAt) > Date.parse(e.target.observedAt) ||
+      v.usedBytes + v.availableBytes > v.totalBytes ||
+      v.availableInodes > v.totalInodes ||
+      v.availableBytes < Math.max(10 * 1024 ** 3, v.totalBytes * 0.1) ||
+      v.availableInodes < Math.max(1024, v.totalInodes * 0.05) ||
+      e.reconciliation.approvalArtifactSha256 !==
+        custody.physicalRecoverySource.approvalArtifactSha256 ||
+      custody.physicalRecoverySource.approvalArtifactSha256 !==
+        packet.approvalAuthority.delegationDigest
+    )
+      refuse(
+        "physical complete-copy, startup chronology or measured headroom is unqualified"
+      );
+    if (
+      native.databaseName !== custody.databaseName ||
+      native.appRole !== custody.appRole ||
+      native.serviceRole !== custody.serviceRole ||
+      native.activeRuntimeSessions !== 0 ||
+      !native.migrationJournal ||
+      !fresh(native.migrationJournal.observedAt) ||
+      facts.schemaEvolution !== undefined ||
+      packet.schemaEvolution !== undefined
+    )
+      refuse(
+        "physical target must have the preserved catalog and no business writers"
+      );
+    const roles = [...custody.budget.roles].sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+    const actual = native.runtimeRoles
+      .map(({ canLogin, roleReadOnly, ...bounds }) => {
+        if (!canLogin || roleReadOnly)
+          refuse("physical target roles are not genuinely readmitted");
+        return bounds;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const frozen = [...packet.preservedRoleBounds].sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+    if (json(roles) !== json(actual) || json(roles) !== json(frozen))
+      refuse("physical target role bounds differ from custody");
+    const observed = await this.deps.actuator.observe({
+      cogniKey: record.cogniKey,
+      externalName: record.externalName,
+    });
+    const endpoints = [...new Set(observed.resource?.endpoints ?? [])].filter(
+      (value) => value.startsWith("tcp://")
+    );
+    if (
+      !observed.found ||
+      observed.resource?.state !== "active" ||
+      observed.resource.externalName !== record.externalName ||
+      observed.resource.providerAccount !== record.providerAccount ||
+      endpoints.length !== 1 ||
+      !endpoints[0]
+    )
+      refuse("physical paid target endpoint is absent or ambiguous");
+    const endpoint = new URL(endpoints[0]);
+    const canonical = new URL(
+      `tcp://${custody.canonicalEndpointHost}:${endpoint.port}`
+    );
+    if (
+      isIP(endpoint.hostname) ||
+      !endpoint.port ||
+      endpoint.username ||
+      endpoint.password ||
+      endpoint.search ||
+      endpoint.hash ||
+      endpoint.pathname ||
+      !matchesEndpointIdentity(
+        native.endpointIdentity,
+        native.systemIdentifier,
+        endpoint,
+        canonical,
+        createHash("sha256")
+          .update(new X509Certificate(custody.tlsCertificate).raw)
+          .digest("hex")
+      )
+    )
+      refuse(
+        "physical import requires current paid DNS, strict TLS and native identity"
+      );
+    const migrationDsn =
+      custody.migration.kind === "app-database-url"
+        ? custody.app.dsn
+        : custody.migration.dsn;
+    if (
+      [custody.app.dsn, custody.service.dsn, migrationDsn].some(
+        (dsn) => Number(new URL(dsn).port) !== Number(canonical.port)
+      ) ||
+      app.appDsnSha256 !== sha(custody.app.dsn) ||
+      packet.appDsnSha256 !== app.appDsnSha256 ||
+      app.serviceDsnSha256 !== sha(custody.service.dsn) ||
+      packet.serviceDsnSha256 !== app.serviceDsnSha256 ||
+      app.migrationDsnSha256 !== sha(migrationDsn) ||
+      app.migrationConsumer !== custody.migration.kind ||
+      packet.migrationConsumer !== custody.migration.kind ||
+      app.tlsTrustKind !== custody.tls.kind ||
+      native.tlsTrustKind !== custody.tls.kind ||
+      (custody.tls.kind === "private-ca"
+        ? app.tlsCaSha256 !== sha(custody.tls.caCertificate)
+        : app.tlsCaSha256 !== undefined) ||
+      json(app.runtimePoolLimits) !== json(custody.runtimePoolLimits) ||
+      json(packet.runtimePoolLimits) !== json(custody.runtimePoolLimits)
+    )
+      refuse(
+        "fenced physical application consumers differ from owned mounted custody"
+      );
+    const services = [provider.service, ...app.providerManifest.services];
+    if (
+      !app.providerManifest.services.some(
+        (service) => service.name === packet.appServiceName
+      ) ||
+      services.some(
+        (service) =>
+          service.observedGeneration <= 0 ||
+          [
+            service.replicas,
+            service.updatedReplicas,
+            service.readyReplicas,
+            service.availableReplicas,
+            service.total,
+            service.available,
+          ].some((value) => value !== 1)
+      )
+    )
+      refuse(
+        "physical target and fenced application postimages are not fully rolled out"
+      );
+
+    const previous = await this.read(input);
+    const expectedSource = await this.deps.store.read(source.cogniKey);
+    const old = expectedSource.find(
+      (receipt) => receipt.binding.environment === "production"
+    );
+    if (
+      !old ||
+      old.binding.systemIdentifier !== native.systemIdentifier ||
+      old.binding.receiptId !== source.receiptId ||
+      physicalSourceBindingSha256(old) !== lineage.sourceBindingSha256
+    )
+      refuse("physical source no longer has its original binding");
+    const existing = previous[0];
+    let next: readonly AppliedDatabaseCellReceipt[];
+    if (existing) {
+      if (
+        previous.length !== 1 ||
+        existing.binding.phase !== "applied" ||
+        json(existing.registration?.physicalRecovery) !== json(lineage) ||
+        existing.registration?.manualCutoverPacketSha256 !==
+          packet.packetSha256 ||
+        existing.registration?.readmissionReceiptId !== undefined ||
+        existing.binding.appliedSdlHash !== provider.appliedSdlHash ||
+        existing.registration.appSdlHash !== app.appliedSdlHash
+      )
+        refuse("physical import cannot replace a different target admission");
+      next = previous;
+    } else {
+      next = AppliedDatabaseCellReceiptsSchema.parse([
+        {
+          allocationEnvironment: "production",
+          targetBuildSha: custody.targetBuildSha,
+          registration: {
+            kind: "audited-manual",
+            physicalRecovery: lineage,
+            executionActor: packet.executionActor,
+            approvalAuthority: packet.approvalAuthority,
+            manualCutoverPacketSha256: packet.packetSha256,
+            sourceSystemIdentifier: packet.sourceSystemIdentifier,
+            preservedBackupReceiptSha256: e.preservedBackup.receiptSha256,
+            appAllocationReceiptId: app.allocationReceiptId,
+            appSdlHash: app.appliedSdlHash,
+            appDsnSha256: app.appDsnSha256,
+            serviceDsnSha256: app.serviceDsnSha256,
+            migrationDsnSha256: app.migrationDsnSha256,
+            ...(app.tlsCaSha256 ? { tlsCaSha256: app.tlsCaSha256 } : {}),
+            migrationConsumer: app.migrationConsumer,
+            tlsTrustKind: app.tlsTrustKind,
+            ...(custody.runtimePoolLimits
+              ? { runtimePoolLimits: custody.runtimePoolLimits }
+              : {}),
+            registeredAt: facts.observedAt,
+          },
+          binding: {
+            version: 1,
+            phase: "applied",
+            receiptId: record.receiptId,
+            cogniKey: record.cogniKey,
+            nodeId: custody.nodeId,
+            nodeSlug: custody.nodeSlug,
+            environment: "production",
+            provider: "akash",
+            dseq: record.externalName,
+            providerAccount: record.providerAccount,
+            endpoint: {
+              host: canonical.hostname,
+              port: Number(canonical.port),
+              tlsMode: "verify-full",
+              tlsCertificateSha256: sha(custody.tlsCertificate),
+            },
+            databaseName: custody.databaseName,
+            appRole: custody.appRole,
+            serviceRole: custody.serviceRole,
+            ...(custody.migration.kind === "dedicated-migration-url"
+              ? {
+                  migrationRole: decodeURIComponent(
+                    new URL(custody.migration.dsn).username
+                  ),
+                }
+              : {}),
+            systemIdentifier: native.systemIdentifier,
+            failureDomainId: `akash:${record.providerAccount}:${record.externalName}`,
+            manualProvenance: custody.manualProvenance,
+            budgetProfile: custody.budgetProfile,
+            appliedSdlHash: provider.appliedSdlHash,
+            readyAt: facts.observedAt,
+            cutover: {
+              packetSha256: packet.packetSha256,
+              actorId: `${packet.executionActor.kind}:${packet.executionActor.id}`,
+              approvedAt: packet.approvedAt,
+            },
+          },
+        },
+      ]);
+    }
+    if (persist) {
+      await this.deps.store.savePhysicalRecovery({
+        source,
+        target: record,
+        app: appRecord,
+        expectedSource,
+        expectedTarget: previous,
+        targetBindings: next,
+        targetSdlHash: provider.appliedSdlHash,
+        appSdlHash: app.appliedSdlHash,
+        packetSha256: packet.packetSha256,
+        recoveryIntentKey: intent.key,
+      });
+      // Commit is not cross-system atomic. A lost/drifted native observation leaves
+      // canonical lineage committed, consumers still held, and replay must requalify.
+      if (!this.deps.observeApplied)
+        throw new AkashTxError(
+          "ledger_unavailable",
+          "physical recovery observer unavailable after commit"
+        );
+      const post = DatabaseCellPhysicalRecoveryFactsSchema.parse(
+        await this.deps.observeApplied({
+          reference: input,
+          custody,
+          manualCutoverPacketSha256: input.manualCutoverPacketSha256,
+          ...(input.registrationKind
+            ? { registrationKind: input.registrationKind }
+            : {}),
+          ...(input.readmissionReceiptId
+            ? { readmissionReceiptId: input.readmissionReceiptId }
+            : {}),
+        })
+      );
+      if (
+        !fresh(post.observedAt) ||
+        post.manualCutover.packetSha256 !== packet.packetSha256 ||
+        post.readmission !== undefined ||
+        post.native.systemIdentifier !== native.systemIdentifier ||
+        post.native.activeRuntimeSessions !== 0 ||
+        post.provider.appliedSdlHash !== provider.appliedSdlHash ||
+        post.provider.manifestVersion !== provider.manifestVersion ||
+        post.effectiveApp.appliedSdlHash !== app.appliedSdlHash ||
+        post.physicalRecovery.source.heldSdlHash !== e.source.heldSdlHash ||
+        post.physicalRecovery.source.manifestVersion !==
+          e.source.manifestVersion ||
+        post.effectiveApp.providerManifest.consoleVersion !==
+          app.providerManifest.consoleVersion ||
+        ![
+          post.physicalRecovery.source.observedAt,
+          post.physicalRecovery.app.observedAt,
+          post.physicalRecovery.reconciliation.observedAt,
+        ].every(fresh)
+      )
+        throw new AkashTxError(
+          "ledger_unavailable",
+          "physical recovery committed; containment must be requalified before resume"
+        );
+      // Apply every initial admission/bounds/fence/copy/identity invariant again.
+      // This cannot persist recursively: committed lineage stays historical on refusal.
+      try {
+        return await this.validatePhysicalRecovery(
+          input,
+          await this.record(input),
+          custody,
+          post,
+          false
+        );
+      } catch {
+        throw new AkashTxError(
+          "ledger_unavailable",
+          "physical recovery committed; complete postcommit qualification failed; consumers must remain fenced"
+        );
+      }
+    }
+    return {
+      receipts: next,
+      observedAt: facts.observedAt,
+      observedFactsSha256: sha(json(facts)),
+      probeDsnSha256: custody.readOnlyProbe
+        ? sha(custody.readOnlyProbe.dsn)
+        : null,
+    };
   }
 
   async cutover(input: DatabaseCellCutoverReference) {

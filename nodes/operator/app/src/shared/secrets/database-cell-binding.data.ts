@@ -251,6 +251,10 @@ const DatabaseCellBindingBaseSchema = z
   .object({
     version: z.literal(1),
     phase: z.enum(["ready", "applied", "superseded"]),
+    supersededBy: z
+      .object({ receiptId: z.string().uuid(), packetSha256: sha256 })
+      .strict()
+      .optional(),
     receiptId: z.string().uuid(),
     cogniKey: z.string().min(1).max(512),
     nodeId: z.string().uuid(),
@@ -304,6 +308,11 @@ export const DatabaseCellBindingSchema = z
     }).strict(),
   ])
   .superRefine((binding, ctx) => {
+    if (Boolean(binding.supersededBy) !== (binding.phase === "superseded"))
+      ctx.addIssue({
+        code: "custom",
+        message: "superseded history requires exact successor provenance",
+      });
     const base = `cogni_${binding.nodeSlug.replaceAll("-", "_")}`;
     if (
       ![base, `${base}_${binding.environment.replaceAll("-", "_")}`].includes(
@@ -413,8 +422,21 @@ export const DatabaseCellRuntimePoolLimitsSchema = z
   })
   .strict();
 
+export const DatabaseCellPhysicalSourceCustodySchema = z
+  .object({
+    kind: z.literal("legacy-native-capture"),
+    incidentRef: z.string().url(),
+    sourceReceiptId: z.string().uuid(),
+    captureSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    sourceBindingSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    approvalArtifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    startupGuardSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
 export const DatabaseCellAppliedCustodySchema = z
   .object({
+    physicalRecoverySource: DatabaseCellPhysicalSourceCustodySchema.optional(),
     version: z.literal(1),
     nodeId: z.string().uuid(),
     nodeSlug: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),

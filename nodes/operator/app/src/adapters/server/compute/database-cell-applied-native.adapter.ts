@@ -44,6 +44,7 @@ const SessionSchema = z.object({
   count: z.number().int().positive(),
 });
 const RoleObservationSchema = RoleSchema.extend({
+  unsafePrivilege: z.literal(false),
   sessions: z.array(SessionSchema),
 });
 const NativeSchema = z.object({
@@ -61,6 +62,18 @@ const NativeSchema = z.object({
 });
 const address = (value: string) => value.replace(/^::ffff:/, "");
 
+/** PG15 exposes session identities to all roles; backend details may be hidden.
+ * Count every other database-attached authenticated session, including spoofed names.
+ * Database-less system workers (for example the logical launcher) are not clients.
+ */
+export async function countOtherAuthenticatedSessions(
+  tx: postgres.TransactionSql
+): Promise<number> {
+  const rows = await tx`SELECT count(*)::int AS count FROM pg_stat_activity
+    WHERE datid IS NOT NULL AND usesysid IS NOT NULL AND pid<>pg_backend_pid()`;
+  return z.coerce.number().int().nonnegative().parse(rows[0]?.count);
+}
+
 /** Credentials are provided by the bootstrap-owned custody reader, never the route caller. */
 export async function observeAppliedDatabaseCellNative(input: {
   custody: DatabaseCellAppliedCustody;
@@ -68,6 +81,8 @@ export async function observeAppliedDatabaseCellNative(input: {
   expectedRuntimeApplications: DatabaseCellAppliedRegistrationFacts["manualCutover"]["expectedRuntimeApplications"];
   providerEndpoint: { host: string; port: number };
   observeMigrationJournal?: boolean;
+  requireAbsentBusinessWriters?: true;
+  expectedRelations?: readonly string[];
 }): Promise<{
   native: DatabaseCellAppliedRegistrationFacts["native"];
   runtimeAdoption: DatabaseCellAppliedRegistrationFacts["effectiveApp"]["runtimeAdoption"];
@@ -202,6 +217,22 @@ export async function observeAppliedDatabaseCellNative(input: {
         identity.role !== probe.role
       )
         throw new Error("applied_cell_native_scope_mismatch");
+      if (input.requireAbsentBusinessWriters) {
+        const writers = await countOtherAuthenticatedSessions(tx);
+        if (identity.activeRuntimeSessions !== 0 || writers !== 0)
+          throw new Error("physical_import_business_sessions_present");
+        const relations =
+          await tx`SELECT schemaname || '.' || tablename AS name FROM pg_tables
+          WHERE schemaname NOT IN ('pg_catalog','information_schema') ORDER BY 1 LIMIT 10001`;
+        const names = relations.map((row) => String(row.name));
+        const expected = [...(input.expectedRelations ?? [])].sort();
+        if (
+          names.length > 10000 ||
+          !expected.length ||
+          JSON.stringify(names.sort()) !== JSON.stringify(expected)
+        )
+          throw new Error("physical_import_current_catalog_mismatch");
+      }
       if (input.observeMigrationJournal) {
         const journal =
           await tx`SELECT id,hash,created_at FROM drizzle.__drizzle_migrations ORDER BY created_at,id LIMIT 1025`;
@@ -245,6 +276,8 @@ export async function observeAppliedDatabaseCellNative(input: {
       const role = await roleClient.sql.begin("read only", async (tx) => {
         const rows = await tx`SELECT session_user AS name,
           (SELECT rolcanlogin FROM pg_roles WHERE rolname = session_user) AS "canLogin",
+          (SELECT rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR (rolname = ${custody.appRole} AND rolbypassrls)
+            FROM pg_roles WHERE rolname = session_user) AS "unsafePrivilege",
           (SELECT rolconnlimit FROM pg_roles WHERE rolname = session_user) AS "connectionLimit",
           (SELECT setting::numeric FROM pg_settings WHERE name = 'statement_timeout') AS "statementTimeoutMs",
           (SELECT setting::numeric FROM pg_settings WHERE name = 'lock_timeout') AS "lockTimeoutMs",
@@ -268,8 +301,12 @@ export async function observeAppliedDatabaseCellNative(input: {
       await roleClient.sql.end({ timeout: 1 });
     }
   }
-  if (!sessions.length)
-    throw new Error("applied_cell_actual_named_app_sessions_unavailable");
+  if (
+    input.requireAbsentBusinessWriters
+      ? sessions.length !== 0
+      : !sessions.length
+  )
+    throw new Error("applied_cell_business_session_state_mismatch");
   const expected = z
     .array(
       z.object({ role: z.string().min(1), applicationName: z.string().min(1) })

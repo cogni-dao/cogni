@@ -98,6 +98,7 @@ const ManualPacket = z.object({
       }),
     }),
   }),
+  physicalRecovery: parts.manualCutover.shape.physicalRecovery,
   schemaEvolution: z.object({ receiptSha256: digest }).strict().optional(),
   sourceFence: z.object({
     handoffSha256: digest,
@@ -130,7 +131,10 @@ export function mapAppliedManualPacket(artifact: {
     throw new Error("applied_packet_delegation_byte_identity_mismatch");
   if (
     packet.primary.image !== packet.primary.implementationProvenance.image ||
-    packet.primary.systemIdentifier === packet.sourceFence.systemIdentifier ||
+    (packet.physicalRecovery
+      ? packet.primary.systemIdentifier !== packet.sourceFence.systemIdentifier
+      : packet.primary.systemIdentifier ===
+        packet.sourceFence.systemIdentifier) ||
     packet.primary.providerAdoption.consoleManifestVersion !==
       packet.primary.providerAdoption.chainManifestVersion ||
     packet.effectiveApp.providerAdoption.consoleManifestVersion !==
@@ -141,6 +145,9 @@ export function mapAppliedManualPacket(artifact: {
   if (!postgresImageDigest)
     throw new Error("applied_packet_native_image_digest_missing");
   return parts.manualCutover.parse({
+    ...(packet.physicalRecovery
+      ? { physicalRecovery: packet.physicalRecovery }
+      : {}),
     packetSha256: artifact.sha256,
     purpose: packet.purpose,
     nodeId: packet.nodeId,

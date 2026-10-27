@@ -151,6 +151,7 @@ export type {
   DatabaseCellCutoverReference,
   DatabaseCellNativeObserverPort,
   DatabaseCellNativeProof,
+  DatabaseCellPhysicalRecoveryWrite,
 } from "./database-cell-binding.port";
 export type {
   DatabaseCellPressureObservation,

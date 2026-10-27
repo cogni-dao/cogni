@@ -233,7 +233,20 @@ publish_database_cell_projection() {
     prefetch_path "$service"
     prior="$(bao_get_field "$service" "$key")"
     entry="$(jq -c --arg field "$field" '.[$field]' <<<"$projection")"
-    [[ "$entry" != null ]] || continue
+    if [[ "$entry" == null ]]; then
+      if [[ "$retire" != null && "$(jq -r '.allocationReceiptId // empty' <<<"$retire")" != "" ]]; then
+        merged="$(jq -nc --argjson prior "${prior:-[]}" --argjson retire "$retire" '
+          if ($prior|type)!="array" then error("cell routes are not an array")
+          elif ([$prior[]|select(.nodeId==$retire.nodeId and .environment==$retire.environment)]|length)>1 then error("ambiguous owned source routes")
+          else $prior|map(if .nodeId==$retire.nodeId and .environment==$retire.environment then
+            if .systemIdentifier==$retire.systemIdentifier and .substrateHost==$retire.substrateHost and
+              .version==2 and .allocationReceiptId==$retire.allocationReceiptId and .dseq==$retire.dseq and .providerAccount==$retire.providerAccount
+            then empty else error("unexpected owned source route identity") end
+          else . end) end')" || fail "owned source control route differs from authenticated physical lineage"
+        cell_seed_exact "$service" "$key" "$merged"
+      fi
+      continue
+    fi
     merged="$(jq -nc --argjson prior "${prior:-[]}" --argjson entry "$entry" '$prior|map(select(.nodeId!=$entry.nodeId or .environment!=$entry.environment))+[$entry]|sort_by(.nodeId,.environment)')"
     cell_seed_exact "$service" "$key" "$merged"
   done <<'PROJECTIONS'
@@ -326,7 +339,7 @@ materialize_database_cell_control_components() {
 # authenticates mounted immutable bytes and current native/provider observations.
 materialize_database_cell_applied_registration() {
   [[ "$TARGET_NODE" == "$RELIABILITY_CONTROLLER" && "$DEPLOY_ENVIRONMENT" == production && "$SECRETS_CONTROL_ENV" == production ]] || fail "manual registration requires the local production owner"
-  [[ "${DATABASE_CELL_CONTROL_NODE_ID:-}" =~ ^[0-9a-f-]{36}$ && "${DATABASE_CELL_REGISTER_PACKET_SHA256:-}" =~ ^[0-9a-f]{64}$ && "${DATABASE_CELL_REGISTER_READMISSION_SHA256:-}" =~ ^[0-9a-f]{64}$ && -n "${DATABASE_CELL_REGISTER_COGNI_KEY:-}" ]] || fail "audited manual registration requires explicit owned references"
+  [[ "${DATABASE_CELL_CONTROL_NODE_ID:-}" =~ ^[0-9a-f-]{36}$ && "${DATABASE_CELL_REGISTER_PACKET_SHA256:-}" =~ ^[0-9a-f]{64}$ && ( "${DATABASE_CELL_REGISTER_READMISSION_SHA256:-}" =~ ^[0-9a-f]{64}$ || ( "${DATABASE_CELL_REGISTER_KIND:-}" == legacy-physical && -z "${DATABASE_CELL_REGISTER_READMISSION_SHA256:-}" ) ) && -n "${DATABASE_CELL_REGISTER_COGNI_KEY:-}" ]] || fail "audited manual registration requires explicit owned references"
   local node selected='' bank custody response receipt projection request
   for node in "${NODE_TARGETS[@]}"; do
     [[ "$(node_id_for_target "$node")" == "$DATABASE_CELL_CONTROL_NODE_ID" ]] || continue
@@ -341,7 +354,7 @@ materialize_database_cell_applied_registration() {
   [[ -n "$custody" ]] || fail "actual applied consumer custody absent"
   validate_applied_cell_consumer_custody "$node" "$custody"
   materialize_database_cell_applied_custodies "$node"
-  request="$(jq -nc --arg cogniKey "$DATABASE_CELL_REGISTER_COGNI_KEY" --arg nodeId "$DATABASE_CELL_CONTROL_NODE_ID" --arg packet "$DATABASE_CELL_REGISTER_PACKET_SHA256" --arg readmission "$DATABASE_CELL_REGISTER_READMISSION_SHA256" '{cogniKey:$cogniKey,nodeId:$nodeId,allocationEnvironment:"production",manualCutoverPacketSha256:$packet,readmissionReceiptId:$readmission}')"
+  request="$(jq -nc --arg cogniKey "$DATABASE_CELL_REGISTER_COGNI_KEY" --arg nodeId "$DATABASE_CELL_CONTROL_NODE_ID" --arg packet "$DATABASE_CELL_REGISTER_PACKET_SHA256" --arg readmission "${DATABASE_CELL_REGISTER_READMISSION_SHA256:-}" '{cogniKey:$cogniKey,nodeId:$nodeId,allocationEnvironment:"production",manualCutoverPacketSha256:$packet} + (if $readmission=="" then {registrationKind:"legacy-physical"} else {readmissionReceiptId:$readmission} end)')"
   response="$(cell_actor_http /v1/akash/database-cell-binding/register-applied "$request")"
   receipt="$(jq -ec '.receipts[] | select(.binding.environment=="production" and .registration.kind=="audited-manual")' <<<"$response")" || fail "actual applied registration receipt absent"
   # Validate every private target and real qualification before any publication.
@@ -356,7 +369,7 @@ materialize_database_cell_applied_registration() {
 # a password, saves a binding, installs control, or retires any source aggregate.
 materialize_database_cell_probe_custody() {
   [[ "$TARGET_NODE" == "$RELIABILITY_CONTROLLER" && "$DEPLOY_ENVIRONMENT" == production && "$SECRETS_CONTROL_ENV" == production ]] || fail "probe custody requires local production owner"
-  [[ "${DATABASE_CELL_CONTROL_NODE_ID:-}" =~ ^[0-9a-f-]{36}$ && "${DATABASE_CELL_REGISTER_PACKET_SHA256:-}" =~ ^[0-9a-f]{64}$ && "${DATABASE_CELL_REGISTER_READMISSION_SHA256:-}" =~ ^[0-9a-f]{64}$ && -n "${DATABASE_CELL_REGISTER_COGNI_KEY:-}" ]] || fail "probe custody requires exact immutable owned references"
+  [[ "${DATABASE_CELL_CONTROL_NODE_ID:-}" =~ ^[0-9a-f-]{36}$ && "${DATABASE_CELL_REGISTER_PACKET_SHA256:-}" =~ ^[0-9a-f]{64}$ && ( "${DATABASE_CELL_REGISTER_READMISSION_SHA256:-}" =~ ^[0-9a-f]{64}$ || ( "${DATABASE_CELL_REGISTER_KIND:-}" == legacy-physical && -z "${DATABASE_CELL_REGISTER_READMISSION_SHA256:-}" ) ) && -n "${DATABASE_CELL_REGISTER_COGNI_KEY:-}" ]] || fail "probe custody requires exact immutable owned references"
   local node selected='' bank custody bundle raw version old_url password request response qualification current current_version next
   for node in "${NODE_TARGETS[@]}"; do
     [[ "$(node_id_for_target "$node")" == "$DATABASE_CELL_CONTROL_NODE_ID" ]] || continue
@@ -379,7 +392,7 @@ materialize_database_cell_probe_custody() {
   validate_applied_cell_consumer_banks "$node" "$custody" 'app service migration tls'
   # Only this owned phase tolerates the old logical probe URL, before readonly qualification.
   materialize_database_cell_applied_custodies "$node" probe-repair
-  request="$(jq -nc --arg cogniKey "$DATABASE_CELL_REGISTER_COGNI_KEY" --arg nodeId "$DATABASE_CELL_CONTROL_NODE_ID" --arg packet "$DATABASE_CELL_REGISTER_PACKET_SHA256" --arg readmission "$DATABASE_CELL_REGISTER_READMISSION_SHA256" '{cogniKey:$cogniKey,nodeId:$nodeId,allocationEnvironment:"production",manualCutoverPacketSha256:$packet,readmissionReceiptId:$readmission}')"
+  request="$(jq -nc --arg cogniKey "$DATABASE_CELL_REGISTER_COGNI_KEY" --arg nodeId "$DATABASE_CELL_CONTROL_NODE_ID" --arg packet "$DATABASE_CELL_REGISTER_PACKET_SHA256" --arg readmission "${DATABASE_CELL_REGISTER_READMISSION_SHA256:-}" '{cogniKey:$cogniKey,nodeId:$nodeId,allocationEnvironment:"production",manualCutoverPacketSha256:$packet} + (if $readmission=="" then {registrationKind:"legacy-physical"} else {readmissionReceiptId:$readmission} end)')"
   response="$(cell_actor_http /v1/akash/database-cell-binding/qualify-applied-probe "$request")" || fail "actual target probe qualification unavailable"
   printf '%s' "$bundle" > "${CACHE_DIR}/probe-repair-evidence"
   printf '%s' "$response" > "${CACHE_DIR}/probe-repair-response"

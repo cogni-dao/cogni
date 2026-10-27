@@ -16,9 +16,14 @@ import {
   DatabaseCellAppliedRegistrationFactsSchema,
   DatabaseCellBackupRuntimeObservationSchema,
   DatabaseCellNativeControlObservationSchema,
+  DatabaseCellPhysicalRecoveryEvidenceSchema,
+  DatabaseCellPhysicalRecoveryFactsSchema,
   qualifyAppliedSchemaEvolution,
 } from "@/shared/secrets/database-cell-placement.data";
-import type { DatabaseCellAppliedRegistrationFacts } from "@/types/database-cell";
+import type {
+  DatabaseCellAppliedRegistrationFacts,
+  DatabaseCellPhysicalRecoveryFacts,
+} from "@/types/database-cell";
 import {
   canonicalEvidenceJson,
   decodeAppliedEvidenceBundle,
@@ -32,6 +37,11 @@ import {
   mapAppliedManualPacket,
   mapAppliedReadmission,
 } from "./database-cell-applied-packet";
+
+import {
+  type PhysicalRecoveryArtifact,
+  PhysicalRecoveryArtifactSchema,
+} from "./database-cell-physical-postimage";
 
 type Input = Parameters<
   DatabaseCellAppliedRegistrationEvidencePort["observe"]
@@ -223,6 +233,7 @@ export class ReadOnlyAppliedDatabaseCellObserver
         reference: Input["reference"];
         custody: Input["custody"];
         packet: Facts["manualCutover"];
+        physicalArtifact?: PhysicalRecoveryArtifact;
       }) => Promise<AppliedDatabaseCellManagedObservation>;
       observeNativeControl?:
         | ((input: {
@@ -231,11 +242,14 @@ export class ReadOnlyAppliedDatabaseCellObserver
             native: Facts["native"];
             provider: Facts["provider"];
             packet: Facts["manualCutover"];
+            physicalArtifact?: PhysicalRecoveryArtifact;
           }) => Promise<NonNullable<Facts["nativeControl"]>>)
         | undefined;
     }
   ) {}
-  async observe(input: Input): Promise<Facts> {
+  async observe(
+    input: Input
+  ): Promise<Facts | DatabaseCellPhysicalRecoveryFacts> {
     try {
       return await this.observeOwned(input);
     } catch {
@@ -246,23 +260,139 @@ export class ReadOnlyAppliedDatabaseCellObserver
       );
     }
   }
-  private async observeOwned(input: Input): Promise<Facts> {
+  private async observeOwned(
+    input: Input
+  ): Promise<Facts | DatabaseCellPhysicalRecoveryFacts> {
     const bundle = decodeAppliedEvidenceBundle(
       await this.deps.readOwnedBundle(input.reference),
       input.reference.nodeId
     );
     const packet = mapAppliedManualPacket(bundle.require("manual-cutover"));
-    const readmission = mapAppliedReadmission(
-      bundle.require("readmission"),
-      packet
-    );
+    const legacy =
+      packet.physicalRecovery?.sourceAnchorKind === "legacy-native-capture";
+    if (
+      (input.registrationKind === "legacy-physical") !== legacy ||
+      (legacy && input.readmissionReceiptId !== undefined)
+    )
+      throw new Error("physical_legacy_reference_variant_mismatch");
+    const readmission = legacy
+      ? undefined
+      : mapAppliedReadmission(bundle.require("readmission"), packet);
     if (
       packet.packetSha256 !== input.manualCutoverPacketSha256 ||
-      readmission.receiptId !== input.readmissionReceiptId ||
+      (!legacy && readmission?.receiptId !== input.readmissionReceiptId) ||
       packet.nodeId !== input.custody.nodeId ||
       packet.environment !== input.custody.environment
     )
       throw new Error("applied_registration_owned_packet_reference_mismatch");
+    if (packet.physicalRecovery) {
+      const artifact = bundle.require("physical-recovery");
+      const physical = PhysicalRecoveryArtifactSchema.parse(artifact.json);
+      const current = z
+        .object({
+          physicalEvidenceSha256: digest,
+          evidence: DatabaseCellPhysicalRecoveryEvidenceSchema,
+        })
+        .strict()
+        .parse(bundle.require("physical-current").json);
+      const immutable = (e: typeof physical.evidence) => ({
+        ...e,
+        observedAt: "",
+        source: { ...e.source, observedAt: "" },
+        target: {
+          ...e.target,
+          observedAt: "",
+          volume: {
+            ...e.target.volume,
+            usedBytes: 0,
+            availableBytes: 0,
+            availableInodes: 0,
+          },
+        },
+        app: { ...e.app, observedAt: "" },
+        reconciliation: { ...e.reconciliation, observedAt: "" },
+      });
+      if (
+        current.physicalEvidenceSha256 !== artifact.sha256 ||
+        canonicalEvidenceJson(immutable(current.evidence)) !==
+          canonicalEvidenceJson(immutable(physical.evidence))
+      )
+        throw new Error("physical_current_observation_identity_changed");
+      const e = current.evidence;
+      const backupArtifact = bundle.require("scheduled-backup");
+      const backup = Scheduled.parse(backupArtifact.json);
+      const archive = Authenticated.parse(
+        bundle.require("backup-archive-verification").json
+      );
+      if (
+        artifact.sha256 !== packet.physicalRecovery.evidenceSha256 ||
+        backupArtifact.sha256 !== e.preservedBackup.receiptSha256 ||
+        backup.cipherSha256 !== e.preservedBackup.archiveSha256 ||
+        archive.cipherSha256 !== backup.cipherSha256 ||
+        archive.cipherBytes !== e.preservedBackup.bytes ||
+        backup.metadata.cipherBytes !== archive.cipherBytes ||
+        archive.sourceSystemId !== packet.sourceSystemIdentifier ||
+        archive.sourceLease !== e.source.dseq ||
+        backup.metadata.sourceLease !== e.source.dseq
+      )
+        throw new Error("physical_preserved_archive_custody_mismatch");
+      const managed = await this.deps.observeManaged({
+        reference: input.reference,
+        custody: input.custody,
+        packet,
+        physicalArtifact: physical,
+      });
+      const native = await observeAppliedDatabaseCellNative({
+        custody: input.custody,
+        providerEndpoint: managed.providerEndpoint,
+        appEgressIp: packet.appEgressIp,
+        expectedRuntimeApplications: packet.expectedRuntimeApplications,
+        requireAbsentBusinessWriters: true,
+        expectedRelations: packet.expectedRelations,
+        observeMigrationJournal: true,
+      });
+      let nativeControl: Facts["nativeControl"];
+      if (input.custody.nativeControl) {
+        if (!this.deps.observeNativeControl)
+          throw new Error("physical_native_control_observer_unavailable");
+        nativeControl = DatabaseCellNativeControlObservationSchema.parse(
+          await this.deps.observeNativeControl({
+            reference: input.reference,
+            custody: input.custody,
+            native: native.native,
+            provider: managed.provider,
+            packet,
+          })
+        );
+      }
+      // Re-read provider/source/app containment after SQL too; a changed private bank
+      // or native postimage invalidates the entire observation, never updates the ledger.
+      const finalManaged = await this.deps.observeManaged({
+        reference: input.reference,
+        custody: input.custody,
+        packet,
+        physicalArtifact: physical,
+      });
+      if (
+        canonicalEvidenceJson({ ...managed.provider, observedAt: "" }) !==
+          canonicalEvidenceJson({ ...finalManaged.provider, observedAt: "" }) ||
+        managed.effectiveApp.appliedSdlHash !==
+          finalManaged.effectiveApp.appliedSdlHash
+      )
+        throw new Error("physical_managed_postimage_changed_during_sql");
+      return DatabaseCellPhysicalRecoveryFactsSchema.parse({
+        observedAt: new Date().toISOString(),
+        physicalRecovery: e,
+        provider: finalManaged.provider,
+        native: native.native,
+        effectiveApp: finalManaged.effectiveApp,
+        manualCutover: packet,
+        readmission,
+        ...(nativeControl ? { nativeControl } : {}),
+      });
+    }
+    if (!readmission)
+      throw new Error("ordinary_registration_requires_genuine_readmission");
     const backupArtifact = bundle.require("scheduled-backup"),
       archiveArtifact = bundle.require("backup-archive-verification"),
       recoveryArtifact = bundle.require("independent-recovery");

@@ -41,6 +41,26 @@ const approvalAuthority = z
   })
   .strict();
 
+export const DatabaseCellPhysicalRecoveryProvenanceSchema = z
+  .object({
+    kind: z.literal("same-cluster-physical-copy"),
+    sourceCogniKey: z.string().min(1).max(512),
+    sourceReceiptId: z.string().uuid(),
+    sourceDseq: z.string().regex(/^[0-9]+$/),
+    sourceProviderAccount: z.string().regex(/^akash1[0-9a-z]{38}$/),
+    sourceBindingSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    sourceAnchorKind: z.literal("legacy-native-capture"),
+    evidenceSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    copyManifestSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    originalAppliedSdlHashes: z
+      .object({
+        source: z.string().regex(/^[0-9a-f]{64}$/),
+        target: z.string().regex(/^[0-9a-f]{64}$/),
+        app: z.string().regex(/^[0-9a-f]{64}$/),
+      })
+      .strict(),
+  })
+  .strict();
 export const AppliedDatabaseCellReceiptSchema = z
   .object({
     allocationEnvironment: z.enum(["candidate-a", "preview", "production"]),
@@ -49,17 +69,29 @@ export const AppliedDatabaseCellReceiptSchema = z
     registration: z
       .object({
         kind: z.literal("audited-manual"),
+        physicalRecovery:
+          DatabaseCellPhysicalRecoveryProvenanceSchema.optional(),
         executionActor,
         approvalAuthority,
-        readmissionReceiptId: z.string().min(1).max(256),
+        readmissionReceiptId: z.string().min(1).max(256).optional(),
         manualCutoverPacketSha256: z.string().regex(/^[0-9a-f]{64}$/),
         sourceSystemIdentifier: z.string().regex(/^[0-9]+$/),
         schemaEvolutionReceiptSha256: z
           .string()
           .regex(/^[0-9a-f]{64}$/)
           .optional(),
-        scheduledBackupReceiptSha256: z.string().regex(/^[0-9a-f]{64}$/),
-        independentRecoveryReceiptSha256: z.string().regex(/^[0-9a-f]{64}$/),
+        scheduledBackupReceiptSha256: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .optional(),
+        independentRecoveryReceiptSha256: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .optional(),
+        preservedBackupReceiptSha256: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .optional(),
         appAllocationReceiptId: z.string().uuid(),
         appSdlHash: z.string().regex(/^[0-9a-f]{64}$/),
         appDsnSha256: z.string().regex(/^[0-9a-f]{64}$/),
@@ -85,12 +117,32 @@ export const AppliedDatabaseCellReceiptSchema = z
   .superRefine((receipt, ctx) => {
     if (
       receipt.registration
-        ? receipt.initialIncidentId !== undefined ||
+        ? (receipt.registration.physicalRecovery?.sourceAnchorKind ===
+          "legacy-native-capture"
+            ? receipt.registration.readmissionReceiptId !== undefined ||
+              receipt.binding.nativeControl !== undefined
+            : !receipt.registration.readmissionReceiptId) ||
+          receipt.initialIncidentId !== undefined ||
           !receipt.binding.manualProvenance ||
           receipt.binding.sourceSha !== undefined ||
-          receipt.binding.phase !== "applied" ||
-          receipt.registration.sourceSystemIdentifier ===
-            receipt.binding.systemIdentifier ||
+          !["applied", "superseded"].includes(receipt.binding.phase) ||
+          (receipt.registration.physicalRecovery
+            ? receipt.registration.sourceSystemIdentifier !==
+                receipt.binding.systemIdentifier ||
+              receipt.registration.physicalRecovery.sourceReceiptId ===
+                receipt.binding.receiptId ||
+              receipt.registration.physicalRecovery.sourceDseq ===
+                receipt.binding.dseq ||
+              !receipt.registration.preservedBackupReceiptSha256 ||
+              receipt.registration.scheduledBackupReceiptSha256 !== undefined ||
+              receipt.registration.independentRecoveryReceiptSha256 !==
+                undefined
+            : receipt.registration.sourceSystemIdentifier ===
+                receipt.binding.systemIdentifier ||
+              !receipt.registration.scheduledBackupReceiptSha256 ||
+              !receipt.registration.independentRecoveryReceiptSha256 ||
+              receipt.registration.preservedBackupReceiptSha256 !==
+                undefined) ||
           receipt.registration.manualCutoverPacketSha256 !==
             receipt.binding.cutover?.packetSha256
         : !receipt.initialIncidentId ||
@@ -106,6 +158,30 @@ export const AppliedDatabaseCellReceiptSchema = z
       });
     }
   });
+/** Hash the exact original applied receipt. Replay removes only our supersession delta. */
+export function physicalSourceBindingSha256(value: unknown): string {
+  const receipt = AppliedDatabaseCellReceiptSchema.parse(value);
+  if (receipt.binding.phase === "superseded") {
+    const { supersededBy: _supersededBy, ...binding } = receipt.binding;
+    receipt.binding = { ...binding, phase: "applied" };
+  }
+  const original = AppliedDatabaseCellReceiptSchema.parse(receipt);
+  const canonical = (value: unknown): string => {
+    if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+    if (value !== null && typeof value === "object")
+      return `{${Object.entries(value)
+        .filter(([, v]) => v !== undefined)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, v]) => `${JSON.stringify(key)}:${canonical(v)}`)
+        .join(",")}}`;
+    const scalar = JSON.stringify(value);
+    if (scalar === undefined)
+      throw new Error("source receipt contains a non-JSON value");
+    return scalar;
+  };
+  return createHash("sha256").update(canonical(original)).digest("hex");
+}
+
 export const AppliedDatabaseCellReceiptsSchema = z
   .array(AppliedDatabaseCellReceiptSchema)
   .max(3)
@@ -496,6 +572,8 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
           .object({ receiptSha256: digest })
           .strict()
           .optional(),
+        physicalRecovery:
+          DatabaseCellPhysicalRecoveryProvenanceSchema.optional(),
         sourceFenceReceiptSha256: digest,
         restorationParityManifestSha256: digest,
         executionActor,
@@ -559,6 +637,8 @@ export const DatabaseCellAppliedEvidenceBundleSchema = z
         z
           .object({
             kind: z.enum([
+              "physical-current",
+              "physical-recovery",
               "manual-cutover",
               "readmission",
               "source-parity",
@@ -745,3 +825,146 @@ export function qualifyAppliedSchemaEvolution(input: unknown) {
     throw new Error("applied_schema_evolution_receipt_chain_mismatch");
   return value;
 }
+
+/** Exact filesystem observations come from authenticated native custody, never SQL approximations. */
+export const DatabaseCellPhysicalRecoveryEvidenceSchema = z
+  .object({
+    version: z.literal(1),
+    observedAt: timestamp,
+    source: z
+      .object({
+        cogniKey: z.string().min(1).max(512),
+        receiptId: z.string().uuid(),
+        dseq: systemIdentifier,
+        providerAccount: z.string().regex(/^akash1[0-9a-z]{38}$/),
+        systemIdentifier,
+        originalAppliedSdlHash: digest,
+        storedSdlSha256: digest.optional(),
+        heldSdlHash: digest,
+        manifestVersion,
+        serviceName: z.string().min(1).max(63),
+        observedAt: timestamp,
+        postgresAbsent: z.literal(true),
+        mount: z
+          .object({
+            path: z.literal("/var/lib/postgresql/data"),
+            device: z.string().min(1),
+            majorMinor: z.string().regex(/^\d+:\d+$/),
+            readOnly: z.literal(true),
+          })
+          .strict(),
+      })
+      .strict(),
+    copy: z
+      .object({
+        startedAt: timestamp,
+        completedAt: timestamp,
+        bytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        files: z.number().int().positive(),
+        postgresMajor: z.literal(15),
+        uid: z.number().int().nonnegative(),
+        gid: z.number().int().nonnegative(),
+        sourceManifestSha256: digest,
+        targetManifestSha256: digest,
+        sourceRawMetadataSha256: digest,
+        targetRawMetadataSha256: digest,
+        normalizedMetadataDomain: z.literal(
+          "path-kind-mode-uid-gid-size-mtime-link-hardlink-v1"
+        ),
+        sourceNormalizedMetadataSha256: digest,
+        targetNormalizedMetadataSha256: digest,
+        allTablespacesCovered: z.literal(true),
+        transportDrained: z.literal(true),
+        originalStartupSha256: digest,
+        targetStartupSha256: digest,
+      })
+      .strict(),
+    target: z
+      .object({
+        observedAt: timestamp,
+        dseq: systemIdentifier,
+        providerAccount: z.string().regex(/^akash1[0-9a-z]{38}$/),
+        originalAppliedSdlHash: digest,
+        storedSdlSha256: digest.optional(),
+        preimageSdlHash: digest,
+        normalSdlHash: digest,
+        manifestVersion,
+        volume: z
+          .object({
+            path: z.literal("/var/lib/postgresql/data"),
+            device: z.string().min(1),
+            majorMinor: z.string().regex(/^\d+:\d+$/),
+            totalBytes: z
+              .number()
+              .int()
+              .positive()
+              .max(Number.MAX_SAFE_INTEGER),
+            usedBytes: z
+              .number()
+              .int()
+              .nonnegative()
+              .max(Number.MAX_SAFE_INTEGER),
+            availableBytes: z
+              .number()
+              .int()
+              .nonnegative()
+              .max(Number.MAX_SAFE_INTEGER),
+            totalInodes: z.number().int().positive(),
+            availableInodes: z.number().int().nonnegative(),
+          })
+          .strict(),
+      })
+      .strict(),
+    app: z
+      .object({
+        originalAppliedSdlHash: digest,
+        preimageSdlHash: digest,
+        heldSdlHash: digest,
+        manifestVersion,
+        observedAt: timestamp,
+        businessWritersAbsent: z.literal(true),
+      })
+      .strict(),
+    reconciliation: z
+      .object({
+        kind: z.literal("incident-owner"),
+        observedAt: timestamp,
+        providerOperationsSettled: z.literal(true),
+        custodyVersionsSha256: digest,
+        approvalArtifactSha256: digest,
+        independentCustodianWatching: z.literal(true),
+      })
+      .strict(),
+    preservedBackup: z
+      .object({
+        receiptSha256: digest,
+        archiveSha256: digest,
+        bytes: z.number().int().positive(),
+      })
+      .strict(),
+  })
+  .strict() satisfies z.ZodType<
+  import("@/types/database-cell").DatabaseCellPhysicalRecoveryEvidence
+>;
+export const DatabaseCellPhysicalRecoveryFactsSchema =
+  DatabaseCellAppliedRegistrationFactsSchema.omit({
+    effectiveApp: true,
+    readmission: true,
+    scheduledBackup: true,
+    independentRecovery: true,
+    backupRuntime: true,
+  })
+    .extend({
+      physicalRecovery: DatabaseCellPhysicalRecoveryEvidenceSchema,
+      readmission:
+        DatabaseCellAppliedRegistrationFactsSchema.shape.readmission.optional(),
+      effectiveApp:
+        DatabaseCellAppliedRegistrationFactsSchema.shape.effectiveApp.omit({
+          regions: true,
+          readinessReceiptSha256: true,
+          runtimeAdoption: true,
+        }),
+    })
+    .strict() satisfies z.ZodType<
+    import("@/types/database-cell").DatabaseCellPhysicalRecoveryFacts
+  >;
