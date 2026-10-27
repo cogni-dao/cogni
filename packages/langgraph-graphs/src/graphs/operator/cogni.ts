@@ -5,9 +5,9 @@
  * Module: `@cogni/langgraph-graphs/graphs/operator/cogni`
  * Purpose: Compiled, checkpointable mission-loop StateGraph for the read-only Cogni agent.
  * Scope: Read-only phase-node graph; does NOT write, merge, mutate sources, or call EDO.
- *   Phases load_context → investigate ⇄ tools → propose over the three read planes (work
- *   items, knowledge, git). Propose-only (R1 Prioritize / R3 Discover). Source-read
- *   verification is a trace-grader (bug.5542), not enforced inside the graph.
+ *   Phases investigate ⇄ tools → propose; the agent dynamically gathers context across the
+ *   three read planes (work items, knowledge, git). Propose-only (R1 Prioritize / R3
+ *   Discover). Source-read coverage is a trace-grader (bug.5542), not enforced in the graph.
  * Invariants:
  *   - COMPILED_NATIVE_GRAPH: returns a compiled StateGraph (no RunnableLambda wrapper); langgraph
  *     dev / langgraph-server own checkpoints, threads and resume (agent-run-lifecycle).
@@ -163,33 +163,32 @@ export function createCogniProgram(opts: CreateReactAgentGraphOptions) {
       ),
     ].join("\n\n");
 
-  // Phase 1: fail-closed identity guard + inject mission and governing guidance.
-  const loadContext = async (
-    _state: typeof CogniState.State
-  ): Promise<Partial<typeof CogniState.State>> => {
+  // Host-owned preamble: fail-closed identity + this node's mission + a systematic-coverage
+  // instruction. Built per invoke (runtime), never stored in state, so the graph STRUCTURE
+  // renders in langgraph dev even when node bindings are absent. The model and the assignment
+  // come from configurable.model and the run's input messages — never from this preamble.
+  const buildPreamble = (): SystemMessage => {
     if (!opts.sourceContext?.nodeId || !opts.sourceContext.origin)
       throw new Error("node_source_identity_unavailable");
     const mission = opts.sourceContext.mission;
     if (!mission?.content.trim())
       throw new Error("node_mission_source_unavailable");
-    const missionBlock = `Host-owned node mission (${mission.sourceRef}; serving build ${mission.buildSha ?? "local/unversioned"}):\n${mission.content}`;
-    const guidanceBlock = `Before proposing, read the full body of each governing guide by exact ID with core__knowledge_read: ${requiredGuides.join(", ")}. Then read this node's approved goals with core__goal_list and investigate the backlog, knowledge inbox and repository as needed.`;
-    return {
-      messages: [
-        new SystemMessage(COGNI_PROMPT),
-        new SystemMessage(missionBlock),
-        new SystemMessage(guidanceBlock),
-      ],
-    };
+    return new SystemMessage(
+      `${COGNI_PROMPT}\n\nHost-owned node mission (${mission.sourceRef}; serving build ${mission.buildSha ?? "local/unversioned"}):\n${mission.content}\n\nSystematically gather context across every plane BEFORE proposing, reading full bodies (never propose from a list or search alone): approved goals (core__goal_list); governing guides and relevant knowledge by exact ID — your governing guides include ${requiredGuides.join(", ")} (core__knowledge_read; discover more via core__knowledge_index / core__knowledge_search); the open knowledge inbox and relevant full diffs (core__knowledge_contribution_read); the work items you judge (core__work_item_query then core__work_item_read); and relevant repository code (core__node_code_list then core__node_code_read). Read the full body of everything you cite.`
+    );
   };
 
-  // Phase 2: the thinker investigates — reads across work items, knowledge and git via tools.
+  // The agent investigates — it decides, dynamically, what to read across work items,
+  // knowledge and git. The preamble is prepended to each model call, not stored in state.
   const investigate = async (
     state: typeof CogniState.State,
     config?: RunnableConfig
   ): Promise<Partial<typeof CogniState.State>> => {
     const model = (opts.llm as unknown as ToolBindableModel).bindTools(tools);
-    const response = await model.invoke(state.messages, config);
+    const response = await model.invoke(
+      [buildPreamble(), ...state.messages],
+      config
+    );
     return { messages: [response] };
   };
 
@@ -212,6 +211,7 @@ export function createCogniProgram(opts: CreateReactAgentGraphOptions) {
         .withStructuredOutput(Proposal)
         .invoke(
           [
+            buildPreamble(),
             ...state.messages,
             new SystemMessage(
               "Return ONLY the final proposal object now. Cite exactly the goal IDs and source receipt IDs you actually read."
@@ -251,12 +251,10 @@ export function createCogniProgram(opts: CreateReactAgentGraphOptions) {
   };
 
   return new StateGraph(CogniState)
-    .addNode("load_context", loadContext)
     .addNode("investigate", investigate)
     .addNode("tools", toolNode)
     .addNode("propose", propose)
-    .addEdge(START, "load_context")
-    .addEdge("load_context", "investigate")
+    .addEdge(START, "investigate")
     .addConditionalEdges("investigate", routeInvestigate, {
       tools: "tools",
       propose: "propose",
