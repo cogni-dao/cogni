@@ -1011,7 +1011,12 @@ export class DatabaseCellBinder
     custody: DatabaseCellAppliedCustody,
     facts: DatabaseCellPhysicalRecoveryFacts,
     persist: boolean
-  ) {
+  ): Promise<{
+    receipts: readonly AppliedDatabaseCellReceipt[];
+    observedAt: string;
+    observedFactsSha256: string;
+    probeDsnSha256: string | null;
+  }> {
     const refuse: (message: string) => never = (message) => {
       throw new AkashTxError("identity_conflict", message);
     };
@@ -1477,6 +1482,22 @@ export class DatabaseCellBinder
           "ledger_unavailable",
           "physical recovery committed; containment must be requalified before resume"
         );
+      // Apply every initial admission/bounds/fence/copy/identity invariant again.
+      // This cannot persist recursively: committed lineage stays historical on refusal.
+      try {
+        return await this.validatePhysicalRecovery(
+          input,
+          await this.record(input),
+          custody,
+          post,
+          false
+        );
+      } catch {
+        throw new AkashTxError(
+          "ledger_unavailable",
+          "physical recovery committed; complete postcommit qualification failed; consumers must remain fenced"
+        );
+      }
     }
     return {
       receipts: next,

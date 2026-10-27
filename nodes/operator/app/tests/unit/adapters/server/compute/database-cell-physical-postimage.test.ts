@@ -14,7 +14,9 @@ import { describe, expect, it, vi } from "vitest";
 import { AkashComputeAdapter } from "@/adapters/server/compute/akash-compute.adapter";
 import { canonicalEvidenceJson } from "@/adapters/server/compute/database-cell-applied-artifacts";
 import {
+  expectedPhysicalNativePostimages,
   PhysicalRecoveryArtifactSchema,
+  qualifyCurrentPhysicalApp,
   qualifyLivePhysicalPostimage,
   qualifyPhysicalPostimages,
 } from "@/adapters/server/compute/database-cell-physical-postimage";
@@ -258,6 +260,26 @@ function rehashPrivatePostimages(
   e.copy.originalStartupSha256 = shaBytes(script(d.sourceOriginal));
   e.copy.targetStartupSha256 = shaBytes(script(d.targetNormal));
 }
+function nativeFixture(definition: ReturnType<typeof JSON.parse>) {
+  const service = structuredClone(definition.services.postgres);
+  service.params.storage = Object.entries(service.params.storage).map(
+    ([name, mount]) => ({ name, ...(mount as object) })
+  );
+  return [
+    {
+      name: "dcloud",
+      services: [
+        {
+          name: "postgres",
+          ...service,
+          resources: structuredClone(definition.profiles.resources),
+          count: 1,
+          credentials: null,
+        },
+      ],
+    },
+  ];
+}
 function legacyPostimageFixture() {
   const input = basePostimageFixture(),
     d = input.artifact.definitions,
@@ -348,11 +370,22 @@ function legacyPostimageFixture() {
   });
   const capture = {
     sourceCapturedAt: e.copy.startedAt,
-    originalStoredSdl: JSON.stringify({ ...original, storedAliasDomain: true }),
+    originalStoredSdl: JSON.stringify({
+      ...original,
+      services: {
+        postgres: {
+          ...original.services.postgres,
+          env: original.services.postgres.env.map(
+            (v: string) =>
+              `${v.slice(0, v.indexOf("=") + 1)}ac-secret://source-alias`
+          ),
+        },
+      },
+    }),
     originalAppStoredSdl: d.appOriginal,
-    originalProviderManifest: [
-      { services: [{ name: "postgres", ...original.services.postgres }] },
-    ],
+    originalProviderManifest: nativeFixture(original),
+    targetColdStoredSdl: d.targetCold,
+    targetColdProviderManifest: nativeFixture(JSON.parse(d.targetCold)),
     originalAppProviderManifest: [
       {
         services: [{ name: "app", ...JSON.parse(d.appOriginal).services.app }],
@@ -475,28 +508,16 @@ describe("complete live physical postimage binding", () => {
     const approved = input.artifact.definitions.targetNormal;
     const stored = JSON.parse(approved);
     const service = stored.services.postgres;
-    const resolved = structuredClone(service);
-    const native = [
-      {
-        services: [
-          {
-            ...resolved,
-            name: "postgres",
-            params: {
-              ...resolved.params,
-              storage: Object.entries(resolved.params.storage).map(
-                ([name, mount]) => ({ name, ...(mount as object) })
-              ),
-            },
-          },
-        ],
-      },
-    ];
+    const expected = expectedPhysicalNativePostimages(
+      input.artifact,
+      "postgres"
+    ).targetNormal;
+    const native = JSON.parse(JSON.stringify(expected));
     service.env = service.env.map(
       (entry: string) =>
         `${entry.slice(0, entry.indexOf("=") + 1)}ac-secret://new-target-alias`
     );
-    return { stored, native, approved };
+    return { stored, native, approved, expected };
   }
   it("privately resolves current provider aliases and compares the entire approved configuration", () => {
     const f = liveFixture();
@@ -505,7 +526,8 @@ describe("complete live physical postimage binding", () => {
         JSON.stringify(f.stored),
         f.native,
         f.approved,
-        "postgres"
+        "postgres",
+        f.expected
       )
     ).not.toThrow();
     expect(() =>
@@ -513,7 +535,8 @@ describe("complete live physical postimage binding", () => {
         JSON.stringify(f.stored),
         undefined,
         f.approved,
-        "postgres"
+        "postgres",
+        f.expected
       )
     ).toThrow();
   });
@@ -541,7 +564,8 @@ describe("complete live physical postimage binding", () => {
           currentBytes,
           f.native,
           f.approved,
-          "postgres"
+          "postgres",
+          f.expected
         )
       ).toThrow();
     }
@@ -554,7 +578,8 @@ describe("complete live physical postimage binding", () => {
         JSON.stringify(f.stored),
         f.native,
         f.approved,
-        "postgres"
+        "postgres",
+        f.expected
       )
     ).toThrow();
   });
@@ -709,5 +734,106 @@ describe("existing managed reader private resolved-manifest observation", () => 
         .resolvedProviderManifest
     ).toBeUndefined();
     expect(ordinary.requests).toHaveLength(1);
+  });
+});
+
+describe("complete independent native capture chain", () => {
+  it("rejects coherent sourceOriginal/sourceHeld profile, deployment and expose changes with unchanged capture", () => {
+    for (const change of [
+      (value: ReturnType<typeof JSON.parse>) => {
+        value.profiles.resources.memory = 128;
+      },
+      (value: ReturnType<typeof JSON.parse>) => {
+        value.deployment = {
+          postgres: { dcloud: { profile: "different", count: 2 } },
+        };
+      },
+      (value: ReturnType<typeof JSON.parse>) => {
+        value.services.postgres.expose[0].as = 9999;
+      },
+    ]) {
+      const f = legacyPostimageFixture();
+      for (const name of ["sourceOriginal", "sourceHeld"] as const) {
+        const value = JSON.parse(f.artifact.definitions[name]);
+        change(value);
+        f.artifact.definitions[name] = JSON.stringify(value);
+      }
+      rehashPrivatePostimages(f);
+      expect(() => qualifyPhysicalPostimages(f)).toThrow("unreviewed_delta");
+    }
+  });
+  it("rejects live native-only resources, expose, count and credentials drift with approved stored SDL unchanged", () => {
+    for (const change of [
+      (service: ReturnType<typeof JSON.parse>) => {
+        service.resources.memory = 999;
+      },
+      (service: ReturnType<typeof JSON.parse>) => {
+        service.expose[0].port = 9999;
+      },
+      (service: ReturnType<typeof JSON.parse>) => {
+        service.count = 2;
+      },
+      (service: ReturnType<typeof JSON.parse>) => {
+        service.credentials = { host: "different" };
+      },
+    ]) {
+      const f = legacyPostimageFixture(),
+        expected = expectedPhysicalNativePostimages(
+          f.artifact,
+          "postgres"
+        ).targetNormal;
+      const current = structuredClone(expected);
+      change(current[0]?.services[0]);
+      expect(() =>
+        qualifyLivePhysicalPostimage(
+          f.artifact.definitions.targetNormal,
+          current,
+          f.artifact.definitions.targetNormal,
+          "postgres",
+          expected
+        )
+      ).toThrow("unreviewed_delta");
+    }
+  });
+  it("checks current app resolved consumers even when stored aliases and target session count stay unchanged", () => {
+    const f = legacyPostimageFixture(),
+      capture = f.artifact.nativeCapture;
+    if (!capture) throw new Error("capture missing");
+    const app = JSON.parse(capture.originalAppStoredSdl);
+    app.services.app.env = [
+      "DATABASE_URL=ac-secret://stable-app-alias",
+      "DATABASE_SERVICE_URL=ac-secret://stable-service-alias",
+      "KEEP=original",
+    ];
+    capture.originalAppStoredSdl = JSON.stringify(app);
+    f.artifact.definitions.appOriginal = capture.originalAppStoredSdl;
+    f.artifact.definitions.appHeld = capture.originalAppStoredSdl;
+    if (!f.custody.physicalRecoverySource) throw new Error("anchor missing");
+    f.custody = {
+      ...f.custody,
+      physicalRecoverySource: {
+        ...f.custody.physicalRecoverySource,
+        captureSha256: shaBytes(canonicalEvidenceJson(capture)),
+      },
+    };
+    f.artifact.evidence.app.preimageSdlHash = shaBytes(
+      capture.originalAppStoredSdl
+    );
+    f.artifact.evidence.app.heldSdlHash = shaBytes(
+      capture.originalAppStoredSdl
+    );
+    expect(() => qualifyPhysicalPostimages(f)).not.toThrow();
+    expect(() =>
+      qualifyCurrentPhysicalApp(f.artifact, capture.originalAppProviderManifest)
+    ).not.toThrow();
+    const current = structuredClone(capture.originalAppProviderManifest);
+    current[0].services[0].env = [
+      "DATABASE_URL=new-target-app",
+      "DATABASE_SERVICE_URL=old-service",
+      "KEEP=original",
+    ];
+    expect(() => qualifyCurrentPhysicalApp(f.artifact, current)).toThrow(
+      "unreviewed_delta"
+    );
   });
 });

@@ -43,6 +43,16 @@ export const PhysicalRecoveryArtifactSchema = z
               .passthrough()
           )
           .length(1),
+        targetColdStoredSdl: sdl,
+        targetColdProviderManifest: z
+          .array(
+            z
+              .object({
+                services: z.array(z.record(z.string(), z.unknown())).length(1),
+              })
+              .passthrough()
+          )
+          .length(1),
         originalAppProviderManifest: z
           .array(
             z
@@ -128,6 +138,13 @@ export function qualifyPhysicalPostimages(input: {
   const anchor = input.custody.physicalRecoverySource;
   if (!anchor)
     throw new Error("physical_native_capture_independent_custody_missing");
+  if (
+    evidenceSha256(l.targetCold) !== input.ledgerHashes.target ||
+    e.source.originalAppliedSdlHash !== input.ledgerHashes.source ||
+    e.target.originalAppliedSdlHash !== input.ledgerHashes.target ||
+    e.app.originalAppliedSdlHash !== input.ledgerHashes.app
+  )
+    throw new Error("physical_postimage_independent_ledger_anchor_mismatch");
   {
     if (
       !capture ||
@@ -158,34 +175,26 @@ export function qualifyPhysicalPostimages(input: {
       Date.parse(capture.sourceCapturedAt) > Date.parse(e.copy.startedAt)
     )
       throw new Error("physical_native_capture_independent_custody_mismatch");
-    const captured = capture.originalProviderManifest[0]?.services[0];
+    // The entire independently captured original SDL anchors every profile,
+    // deployment and expose field; env aliases resolve only against its native capture.
+    qualifyLivePhysicalPostimage(
+      capture.originalStoredSdl,
+      capture.originalProviderManifest,
+      d.sourceOriginal,
+      input.primaryServiceName,
+      capture.originalProviderManifest
+    );
+    qualifyLivePhysicalPostimage(
+      capture.targetColdStoredSdl,
+      capture.targetColdProviderManifest,
+      d.targetCold,
+      input.primaryServiceName,
+      capture.targetColdProviderManifest
+    );
     const source = onlyService(
       decode(d.sourceOriginal),
       input.primaryServiceName
     );
-    if (!captured) throw new Error("physical_native_capture_source_missing");
-    same(
-      [source.image, source.command, source.args, source.env],
-      [captured.image, captured.command, captured.args, captured.env]
-    );
-    const params = z
-      .object({ storage: z.unknown() })
-      .passthrough()
-      .parse(captured.params);
-    let storage = params.storage;
-    if (Array.isArray(storage)) {
-      const entries = storage.map((value) => {
-        const { name, ...mount } = z
-          .object({ name: z.string() })
-          .passthrough()
-          .parse(value);
-        return [name, mount] as const;
-      });
-      if (new Set(entries.map(([name]) => name)).size !== entries.length)
-        throw new Error("physical_native_capture_duplicate_volume");
-      storage = Object.fromEntries(entries);
-    }
-    same(source.params, { ...params, storage });
     const originalScript = source.args?.[0] ?? "";
     if (
       ["fsync", "synchronous_commit", "full_page_writes"].some(
@@ -226,13 +235,6 @@ export function qualifyPhysicalPostimages(input: {
     )
       throw new Error("physical_legacy_app_consumer_proof_missing");
   }
-  if (
-    evidenceSha256(l.targetCold) !== input.ledgerHashes.target ||
-    e.source.originalAppliedSdlHash !== input.ledgerHashes.source ||
-    e.target.originalAppliedSdlHash !== input.ledgerHashes.target ||
-    e.app.originalAppliedSdlHash !== input.ledgerHashes.app
-  )
-    throw new Error("physical_postimage_independent_ledger_anchor_mismatch");
   same(decode(d.targetCold), decode(l.targetCold));
   if (
     evidenceSha256(d.sourceHeld) !== e.source.heldSdlHash ||
@@ -307,8 +309,10 @@ export function qualifyLivePhysicalPostimage(
   storedSdl: string,
   providerManifest: unknown,
   approvedSdl: string,
-  serviceName: string
+  serviceName: string,
+  approvedProviderManifest: unknown
 ) {
+  same(providerManifest, approvedProviderManifest);
   const live = decode(storedSdl);
   const approved = decode(approvedSdl);
   const service = onlyService(live, serviceName);
@@ -388,4 +392,99 @@ export function qualifyLivePhysicalPostimage(
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => `${key}=${value}`);
   same(live, approved);
+}
+
+/** No native field is projected away: only reviewed command/args/env/RO changes are derived. */
+export function expectedPhysicalNativePostimages(
+  artifact: PhysicalRecoveryArtifact,
+  serviceName: string
+) {
+  const capture = artifact.nativeCapture;
+  if (!capture) throw new Error("physical_native_capture_missing");
+  const sourceHeld = structuredClone(capture.originalProviderManifest);
+  const targetNormal = structuredClone(capture.targetColdProviderManifest);
+  const source = sourceHeld[0]?.services[0],
+    target = targetNormal[0]?.services[0];
+  const original = capture.originalProviderManifest[0]?.services[0];
+  if (
+    !source ||
+    !target ||
+    !original ||
+    source.name !== serviceName ||
+    target.name !== serviceName
+  )
+    throw new Error("physical_native_template_service_mismatch");
+  source.command = ["sleep"];
+  source.args = ["infinity"];
+  const mounts = z
+    .object({
+      storage: z.array(
+        z
+          .object({
+            name: z.string(),
+            mount: z.string(),
+            readOnly: z.boolean(),
+          })
+          .passthrough()
+      ),
+    })
+    .passthrough()
+    .parse(source.params);
+  if (
+    mounts.storage.filter((m) => m.mount === "/var/lib/postgresql/data")
+      .length !== 1
+  )
+    throw new Error("physical_native_template_mount_ambiguous");
+  for (const mount of mounts.storage)
+    if (mount.mount === "/var/lib/postgresql/data") mount.readOnly = true;
+  source.params = mounts;
+  target.command = structuredClone(original.command);
+  target.env = structuredClone(original.env);
+  const args = z.array(z.string()).length(1).parse(original.args);
+  if (!artifact.startupGuard)
+    throw new Error("physical_native_template_guard_absent");
+  target.args = [artifact.startupGuard + args[0]];
+  return { sourceHeld, targetNormal };
+}
+
+/** Every current app consumer remains byte-bound to the admitted source before AND after commit. */
+export function qualifyCurrentPhysicalApp(
+  artifact: PhysicalRecoveryArtifact,
+  providerManifest: unknown
+) {
+  const capture = artifact.nativeCapture;
+  if (!capture) throw new Error("physical_native_capture_missing");
+  same(providerManifest, capture.originalAppProviderManifest);
+  const registration = capture.sourceBinding.registration;
+  if (!registration) throw new Error("physical_source_admission_missing");
+  const current = z
+    .array(
+      z
+        .object({
+          services: z.array(
+            z.object({ env: z.array(z.string()) }).passthrough()
+          ),
+        })
+        .passthrough()
+    )
+    .parse(providerManifest);
+  const observed = new Set<string>();
+  for (const group of current)
+    for (const service of group.services)
+      for (const [name, digest] of [
+        ["DATABASE_URL", registration.appDsnSha256],
+        ["DATABASE_SERVICE_URL", registration.serviceDsnSha256],
+        ["DATABASE_MIGRATION_URL", registration.migrationDsnSha256],
+      ]) {
+        const values = service.env.filter((v) => v.startsWith(`${name}=`));
+        if (
+          values.length > 1 ||
+          (values[0] &&
+            evidenceSha256(values[0].slice((name?.length ?? 0) + 1)) !== digest)
+        )
+          throw new Error("physical_current_app_consumer_not_fenced_on_source");
+        if (values.length) observed.add(name as string);
+      }
+  if (!observed.has("DATABASE_URL") || !observed.has("DATABASE_SERVICE_URL"))
+    throw new Error("physical_current_app_consumer_proof_missing");
 }

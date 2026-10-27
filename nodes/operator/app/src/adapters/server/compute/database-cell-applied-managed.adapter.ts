@@ -26,7 +26,9 @@ import type {
 } from "@/types/database-cell";
 
 import {
+  expectedPhysicalNativePostimages,
   type PhysicalRecoveryArtifact,
+  qualifyCurrentPhysicalApp,
   qualifyLivePhysicalPostimage,
   qualifyPhysicalPostimages,
 } from "./database-cell-physical-postimage";
@@ -128,7 +130,10 @@ export async function observeAppliedCellManaged(input: {
       leaseId: primary.externalName,
       ...(physical ? { resolveProviderManifest: true } : {}),
     }),
-    input.console.readManagedDefinition({ leaseId: packet.appDseq }),
+    input.console.readManagedDefinition({
+      leaseId: packet.appDseq,
+      ...(physical ? { resolveProviderManifest: true } : {}),
+    }),
     input.console.status({ leaseId: primary.externalName }),
   ]);
   if (
@@ -208,17 +213,24 @@ export async function observeAppliedCellManaged(input: {
       leaseId: source.externalName,
       resolveProviderManifest: true,
     });
+    const expectedNative = expectedPhysicalNativePostimages(
+      physical,
+      packet.primaryServiceName
+    );
+    qualifyCurrentPhysicalApp(physical, appDefinition.resolvedProviderManifest);
     qualifyLivePhysicalPostimage(
       sourceDefinition.providerSdl,
       sourceDefinition.resolvedProviderManifest,
       physical.definitions.sourceHeld,
-      packet.primaryServiceName
+      packet.primaryServiceName,
+      expectedNative.sourceHeld
     );
     qualifyLivePhysicalPostimage(
       primaryDefinition.providerSdl,
       primaryDefinition.resolvedProviderManifest,
       physical.definitions.targetNormal,
-      packet.primaryServiceName
+      packet.primaryServiceName,
+      expectedNative.targetNormal
     );
     const e = physical.evidence;
     if (

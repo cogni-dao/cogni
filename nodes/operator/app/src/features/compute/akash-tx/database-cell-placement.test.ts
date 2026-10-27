@@ -43,7 +43,10 @@ import {
   physicalSourceBindingSha256,
   qualifyAppliedSchemaEvolution,
 } from "@/shared/secrets/database-cell-placement.data";
-import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
+import type {
+  DatabaseCellAppliedCustody,
+  DatabaseCellPhysicalRecoveryFacts,
+} from "@/types/database-cell";
 import {
   materializeDatabaseCellKits,
   planDatabaseCellKits,
@@ -2446,7 +2449,13 @@ describe("legacy physical recovery references", () => {
 });
 
 async function physicalImportFixture(
-  options: { legacy?: boolean; nodeId?: string } = {}
+  options: {
+    legacy?: boolean;
+    nodeId?: string;
+    postCommitMutation?: (
+      facts: Mutable<DatabaseCellPhysicalRecoveryFacts>
+    ) => void;
+  } = {}
 ) {
   const laneId = options.nodeId ?? nodeId;
   const base = registrationFacts();
@@ -2533,9 +2542,7 @@ async function physicalImportFixture(
   };
   const now = new Date().toISOString(),
     old = new Date(Date.now() - 10000).toISOString();
-  const facts: Mutable<
-    import("@/types/database-cell").DatabaseCellPhysicalRecoveryFacts
-  > = {
+  const facts: Mutable<DatabaseCellPhysicalRecoveryFacts> = {
     observedAt: now,
     provider: base.provider,
     native: {
@@ -2762,6 +2769,7 @@ async function physicalImportFixture(
         target = { ...target, lastAppliedSdlHash: input.targetSdlHash };
         app = { ...app, lastAppliedSdlHash: input.appSdlHash };
         writes++;
+        options.postCommitMutation?.(facts);
       },
     },
     observeNative: async () => [],
@@ -2820,6 +2828,35 @@ describe("audited legacy physical recovery import", () => {
     );
     expect(await f.binder.registerApplied(f.request)).toEqual([receipt]);
     expect(f.writes()).toBe(1);
+  });
+  it("reapplies complete qualification after commit and refuses postcommit-only role or bounds drift", async () => {
+    for (const mutate of [
+      (
+        role: Mutable<DatabaseCellPhysicalRecoveryFacts>["native"]["runtimeRoles"][number]
+      ) => {
+        role.connectionLimit += 1;
+      },
+      (
+        role: Mutable<DatabaseCellPhysicalRecoveryFacts>["native"]["runtimeRoles"][number]
+      ) => {
+        role.roleReadOnly = true;
+      },
+    ]) {
+      const f = await physicalImportFixture({
+        legacy: true,
+        postCommitMutation: (facts) => {
+          const role = facts.native.runtimeRoles[0];
+          if (!role) throw new Error("role missing");
+          mutate(role);
+        },
+      });
+      await expect(f.binder.registerApplied(f.request)).rejects.toThrow(
+        "complete postcommit qualification failed"
+      );
+      expect(f.writes()).toBe(1);
+      expect(f.source()[0]?.binding.phase).toBe("superseded");
+      expect(f.target()[0]?.binding.phase).toBe("applied");
+    }
   });
   it("refuses legacy NOLOGIN or fabricated target readmission", async () => {
     const f = await physicalImportFixture({ legacy: true });
