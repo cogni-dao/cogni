@@ -128,6 +128,7 @@ const targetBindings = AppliedDatabaseCellReceiptsSchema.parse([
         sourceCogniKey: sourceRecord.cogniKey,
         sourceReceiptId: id(1),
         sourceDseq: "10001",
+        sourceProviderAccount: sourceRecord.providerAccount,
         sourceBindingSha256: physicalSourceBindingSha256(sourceBindings[0]),
         evidenceSha256: sha("3"),
         copyManifestSha256: sha("4"),

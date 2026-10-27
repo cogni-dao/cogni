@@ -367,7 +367,7 @@ export interface AkashTxProviderOutcomesPort {
  * inside that adapter. The private read-only proof seam exposes observed definition
  * bytes only; their opaque environment values never prove effective secrets.
  */
-/** Private observed definition, not reconstructed managed spec or readable secret values. */
+/** Private observed definition; optional resolved manifest never crosses public HTTP or logs. */
 export interface AkashTxManagedDeploymentDefinition {
   readonly observedAt: string;
   readonly leaseId: string;
@@ -377,6 +377,8 @@ export interface AkashTxManagedDeploymentDefinition {
   readonly providerSdl: string;
   /** Hash of returned definition bytes ONLY; not the guarded full managed SDL hash. */
   readonly providerSdlSha256: string;
+  /** Private authenticated provider response; never returned by public HTTP or logged. */
+  readonly resolvedProviderManifest?: unknown;
   readonly consoleManifestVersion: string;
   readonly chainManifestVersion: string;
   /** Provider-reported current rollout counters, not inspection of terminated pods. */
@@ -422,6 +424,8 @@ export interface AkashTxConsolePort {
   /** Read-only existing Console auth/client. Missing implementation denies applied qualification. */
   readManagedDefinition?(input: {
     leaseId: string;
+    /** Fixed read-only manifest scope, used only for physical postimage qualification. */
+    resolveProviderManifest?: boolean;
   }): Promise<AkashTxManagedDeploymentDefinition>;
   /**
    * The screened country of a provider account, or `null` when the marketplace read did not

@@ -47,6 +47,7 @@ export const DatabaseCellPhysicalRecoveryProvenanceSchema = z
     sourceCogniKey: z.string().min(1).max(512),
     sourceReceiptId: z.string().uuid(),
     sourceDseq: z.string().regex(/^[0-9]+$/),
+    sourceProviderAccount: z.string().regex(/^akash1[0-9a-z]{38}$/),
     sourceBindingSha256: z.string().regex(/^[0-9a-f]{64}$/),
     sourceAnchorKind: z.literal("legacy-native-capture"),
     evidenceSha256: z.string().regex(/^[0-9a-f]{64}$/),
@@ -865,8 +866,13 @@ export const DatabaseCellPhysicalRecoveryEvidenceSchema = z
         gid: z.number().int().nonnegative(),
         sourceManifestSha256: digest,
         targetManifestSha256: digest,
-        sourceMetadataSha256: digest,
-        targetMetadataSha256: digest,
+        sourceRawMetadataSha256: digest,
+        targetRawMetadataSha256: digest,
+        normalizedMetadataDomain: z.literal(
+          "path-kind-mode-uid-gid-size-mtime-link-hardlink-v1"
+        ),
+        sourceNormalizedMetadataSha256: digest,
+        targetNormalizedMetadataSha256: digest,
         allTablespacesCovered: z.literal(true),
         transportDrained: z.literal(true),
         originalStartupSha256: digest,

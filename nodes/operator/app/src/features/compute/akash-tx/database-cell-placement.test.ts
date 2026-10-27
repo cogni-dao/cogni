@@ -1653,6 +1653,88 @@ describe("genuine installed control on admitted manual cells", () => {
     ).toThrow();
     expect(() => run([source, source, ...siblings])).toThrow();
   });
+  it("retires exact physical source routes from all three control aggregates and preserves neighbors", () => {
+    const repoRoot = fileURLToPath(
+      new URL("../../../../../../../", import.meta.url)
+    );
+    const retire = {
+      nodeId,
+      environment: "production",
+      systemIdentifier: "12",
+      allocationReceiptId: "11111111-1111-4111-8111-111111111111",
+      dseq: "10001",
+      providerAccount: `akash1${"d".repeat(38)}`,
+      substrateHost: `akash:akash1${"d".repeat(38)}:10001`,
+    };
+    const source = { ...retire, version: 2 };
+    const neighbor = {
+      ...source,
+      nodeId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      opaque: "preserve-neighbor",
+    };
+    const preview = {
+      ...source,
+      environment: "preview",
+      opaque: "preserve-preview",
+    };
+    const keys = [
+      "DATABASE_RECOVERY_CELL_PROBE_URLS_JSON",
+      "DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON",
+      "DATABASE_RELIABILITY_CELL_READMIT_URLS_JSON",
+    ];
+    const script = [
+      "set -eu",
+      'REPO_ROOT="$1"',
+      'source "$REPO_ROOT/scripts/ci/lib/materialize-database-cell-placement.sh"',
+      'input="$(cat)"',
+      'fixture_prior="$(jq -c .prior <<<"$input")"',
+      'projection="$(jq -c .projection <<<"$input")"',
+      'result="{}"',
+      "DEPLOY_ENVIRONMENT=production; SECRETS_CONTROL_ENV=production",
+      `node_id_for_target() { printf '%s' '${nodeId}'; }`,
+      'fail() { echo "source control retirement refused" >&2; exit 1; }',
+      "prefetch_path() { :; }",
+      'bao_get_field() { if [[ "$2" == DATABASE_RECOVERY_PROBE_URLS_JSON ]]; then printf "[]"; else printf "%s" "$fixture_prior"; fi; }',
+      `cell_seed_exact() { result="$(jq -nc --argjson result "$result" --arg key "$2" --argjson value "$3" '$result+{($key):$value}')"; }`,
+      "flush_batch() { :; }",
+      'publish_database_cell_projection alpha "$projection"',
+      'printf "%s" "$result"',
+    ].join("\n");
+    const run = (prior: unknown[]) =>
+      JSON.parse(
+        execFileSync("bash", ["-c", script, "fixture", repoRoot], {
+          encoding: "utf8",
+          input: JSON.stringify({
+            prior,
+            projection: {
+              retireSourceBinding: retire,
+              probe: null,
+              admin: null,
+              readmit: null,
+              backup: null,
+              publicValues: null,
+            },
+          }),
+          stdio: ["pipe", "pipe", "pipe"],
+        })
+      );
+    const result = run([source, neighbor, preview]);
+    for (const key of keys) expect(result[key]).toEqual([neighbor, preview]);
+    for (const key of keys)
+      expect(run([neighbor, preview])[key]).toEqual([neighbor, preview]);
+    for (const changed of [
+      {
+        ...source,
+        allocationReceiptId: "22222222-2222-4222-8222-222222222222",
+      },
+      { ...source, dseq: "999" },
+      { ...source, allocationReceiptId: undefined },
+      { ...source, systemIdentifier: "99" },
+      { ...source, substrateHost: "different" },
+    ])
+      expect(() => run([changed, neighbor])).toThrow();
+    expect(() => run([source, source, neighbor])).toThrow();
+  });
   it("rejects widened function capabilities and unsafe search paths against the fixed reviewed signature set", () => {
     const fn = {
       ...DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS[0],
@@ -2298,6 +2380,7 @@ describe("physical recovery receipt compatibility", () => {
           sourceCogniKey: "retained-source",
           sourceReceiptId: "33333333-3333-4333-8333-333333333333",
           sourceDseq: "10001",
+          sourceProviderAccount: receipt.binding.providerAccount,
           sourceBindingSha256: physicalSourceBindingSha256(receipt),
           evidenceSha256: "a".repeat(64),
           copyManifestSha256: "b".repeat(64),
@@ -2490,6 +2573,7 @@ async function physicalImportFixture(
         sourceCogniKey: source.cogniKey,
         sourceReceiptId: source.receiptId,
         sourceDseq: "321",
+        sourceProviderAccount: source.providerAccount as string,
         sourceBindingSha256: physicalSourceBindingSha256(sourceReceipt),
         evidenceSha256: "9".repeat(64),
         copyManifestSha256: "6".repeat(64),
@@ -2533,8 +2617,12 @@ async function physicalImportFixture(
         gid: 999,
         sourceManifestSha256: "6".repeat(64),
         targetManifestSha256: "6".repeat(64),
-        sourceMetadataSha256: "7".repeat(64),
-        targetMetadataSha256: "7".repeat(64),
+        sourceRawMetadataSha256: "7".repeat(64),
+        targetRawMetadataSha256: "d".repeat(64),
+        normalizedMetadataDomain:
+          "path-kind-mode-uid-gid-size-mtime-link-hardlink-v1",
+        sourceNormalizedMetadataSha256: "7".repeat(64),
+        targetNormalizedMetadataSha256: "7".repeat(64),
         allTablespacesCovered: true,
         transportDrained: true,
         originalStartupSha256: "8".repeat(64),
@@ -2813,7 +2901,8 @@ describe("audited legacy physical recovery import", () => {
         f.facts.physicalRecovery.copy.targetManifestSha256 = "0".repeat(64);
       },
       (f) => {
-        f.facts.physicalRecovery.copy.targetMetadataSha256 = "0".repeat(64);
+        f.facts.physicalRecovery.copy.targetNormalizedMetadataSha256 =
+          "0".repeat(64);
       },
       (f) => {
         f.facts.native.activeRuntimeSessions = 1;

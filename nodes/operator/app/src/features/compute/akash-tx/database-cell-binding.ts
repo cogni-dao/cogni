@@ -1089,6 +1089,7 @@ export class DatabaseCellBinder
       source.externalName !== lineage.sourceDseq ||
       source.externalName !== e.source.dseq ||
       source.providerAccount !== e.source.providerAccount ||
+      lineage.sourceProviderAccount !== source.providerAccount ||
       source.lastAppliedSdlHash !== e.source.originalAppliedSdlHash ||
       source.retentionPolicy !== "retain" ||
       record.retentionPolicy !== "retain" ||
@@ -1190,7 +1191,8 @@ export class DatabaseCellBinder
     if (
       lineage.copyManifestSha256 !== e.copy.sourceManifestSha256 ||
       e.copy.sourceManifestSha256 !== e.copy.targetManifestSha256 ||
-      e.copy.sourceMetadataSha256 !== e.copy.targetMetadataSha256 ||
+      e.copy.sourceNormalizedMetadataSha256 !==
+        e.copy.targetNormalizedMetadataSha256 ||
       packet.restorationParityManifestSha256 !== e.copy.sourceManifestSha256 ||
       Date.parse(e.copy.startedAt) > Date.parse(e.copy.completedAt) ||
       Date.parse(e.copy.completedAt) > Date.parse(e.target.observedAt) ||

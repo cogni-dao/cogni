@@ -301,3 +301,91 @@ export function qualifyPhysicalPostimages(input: {
   )
     throw new Error("physical_postimage_original_startup_mismatch");
 }
+
+/** Bind the complete live SDL to its approved postimage using private provider-resolved env. */
+export function qualifyLivePhysicalPostimage(
+  storedSdl: string,
+  providerManifest: unknown,
+  approvedSdl: string,
+  serviceName: string
+) {
+  const live = decode(storedSdl);
+  const approved = decode(approvedSdl);
+  const service = onlyService(live, serviceName);
+  const native = z
+    .array(
+      z
+        .object({
+          services: z
+            .array(
+              z
+                .object({
+                  name: z.string(),
+                  image: z.string(),
+                  command: z.array(z.string()).optional(),
+                  args: z.array(z.string()).optional(),
+                  env: z.array(z.string()).optional(),
+                  params: z
+                    .object({
+                      storage: z.array(
+                        z
+                          .object({
+                            name: z.string(),
+                            mount: z.string(),
+                            readOnly: z.boolean().default(false),
+                          })
+                          .passthrough()
+                      ),
+                    })
+                    .passthrough(),
+                })
+                .passthrough()
+            )
+            .length(1),
+        })
+        .passthrough()
+    )
+    .length(1)
+    .parse(providerManifest)[0]?.services[0];
+  if (!native || native.name !== serviceName)
+    throw new Error("physical_live_native_service_mismatch");
+  const env = (values: readonly string[] = []) => {
+    const result: Record<string, string> = {};
+    for (const value of values) {
+      const index = value.indexOf("=");
+      if (index < 1 || Object.hasOwn(result, value.slice(0, index)))
+        throw new Error("physical_live_env_ambiguous");
+      result[value.slice(0, index)] = value.slice(index + 1);
+    }
+    return result;
+  };
+  const storedEnv = env(service.env),
+    resolvedEnv = env(native.env);
+  same(Object.keys(storedEnv).sort(), Object.keys(resolvedEnv).sort());
+  for (const [key, value] of Object.entries(storedEnv))
+    if (!value.startsWith("ac-secret://")) same(value, resolvedEnv[key]);
+  const storageEntries = native.params.storage.map(
+    ({ name, ...mount }) => [name, mount] as const
+  );
+  if (
+    new Set(storageEntries.map(([name]) => name)).size !== storageEntries.length
+  )
+    throw new Error("physical_live_native_duplicate_volume");
+  same(
+    [service.image, service.command, service.args, service.params],
+    [
+      native.image,
+      native.command,
+      native.args,
+      { ...native.params, storage: Object.fromEntries(storageEntries) },
+    ]
+  );
+  service.env = Object.entries(resolvedEnv)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`);
+  const expectedService = onlyService(approved, serviceName);
+  expectedService.env = Object.entries(env(expectedService.env))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`);
+  same(live, approved);
+}

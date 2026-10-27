@@ -27,6 +27,7 @@ import type {
 
 import {
   type PhysicalRecoveryArtifact,
+  qualifyLivePhysicalPostimage,
   qualifyPhysicalPostimages,
 } from "./database-cell-physical-postimage";
 
@@ -123,7 +124,10 @@ export async function observeAppliedCellManaged(input: {
       "applied_managed_owned_receipt_or_configured_custody_mismatch"
     );
   const [primaryDefinition, appDefinition, primaryStatus] = await Promise.all([
-    input.console.readManagedDefinition({ leaseId: primary.externalName }),
+    input.console.readManagedDefinition({
+      leaseId: primary.externalName,
+      ...(physical ? { resolveProviderManifest: true } : {}),
+    }),
     input.console.readManagedDefinition({ leaseId: packet.appDseq }),
     input.console.status({ leaseId: primary.externalName }),
   ]);
@@ -202,7 +206,20 @@ export async function observeAppliedCellManaged(input: {
     });
     const sourceDefinition = await input.console.readManagedDefinition({
       leaseId: source.externalName,
+      resolveProviderManifest: true,
     });
+    qualifyLivePhysicalPostimage(
+      sourceDefinition.providerSdl,
+      sourceDefinition.resolvedProviderManifest,
+      physical.definitions.sourceHeld,
+      packet.primaryServiceName
+    );
+    qualifyLivePhysicalPostimage(
+      primaryDefinition.providerSdl,
+      primaryDefinition.resolvedProviderManifest,
+      physical.definitions.targetNormal,
+      packet.primaryServiceName
+    );
     const e = physical.evidence;
     if (
       sourceDefinition.leaseId !== source.externalName ||

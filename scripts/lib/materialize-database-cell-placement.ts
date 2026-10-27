@@ -279,6 +279,17 @@ export function projectDatabaseCellPlacement(input: unknown) {
               nodeId: b.nodeId,
               environment: b.environment,
               systemIdentifier: receipt.registration.sourceSystemIdentifier,
+              ...(legacyPhysical
+                ? {
+                    allocationReceiptId:
+                      receipt.registration.physicalRecovery?.sourceReceiptId,
+                    dseq: receipt.registration.physicalRecovery?.sourceDseq,
+                    providerAccount:
+                      receipt.registration.physicalRecovery
+                        ?.sourceProviderAccount,
+                    substrateHost: `akash:${receipt.registration.physicalRecovery?.sourceProviderAccount}:${receipt.registration.physicalRecovery?.sourceDseq}`,
+                  }
+                : {}),
             }
           : null,
       backup: null,

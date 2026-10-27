@@ -204,6 +204,7 @@ export interface DatabaseCellPhysicalRecoveryProvenance {
   readonly sourceCogniKey: string;
   readonly sourceReceiptId: string;
   readonly sourceDseq: string;
+  readonly sourceProviderAccount: string;
   readonly sourceBindingSha256: string;
   readonly sourceAnchorKind: "legacy-native-capture";
   readonly evidenceSha256: string;
@@ -678,8 +679,11 @@ export interface DatabaseCellPhysicalRecoveryEvidence {
     readonly gid: number;
     readonly sourceManifestSha256: string;
     readonly targetManifestSha256: string;
-    readonly sourceMetadataSha256: string;
-    readonly targetMetadataSha256: string;
+    readonly sourceRawMetadataSha256: string;
+    readonly targetRawMetadataSha256: string;
+    readonly normalizedMetadataDomain: "path-kind-mode-uid-gid-size-mtime-link-hardlink-v1";
+    readonly sourceNormalizedMetadataSha256: string;
+    readonly targetNormalizedMetadataSha256: string;
     readonly allTablespacesCovered: true;
     readonly transportDrained: true;
     readonly originalStartupSha256: string;

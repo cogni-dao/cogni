@@ -233,7 +233,20 @@ publish_database_cell_projection() {
     prefetch_path "$service"
     prior="$(bao_get_field "$service" "$key")"
     entry="$(jq -c --arg field "$field" '.[$field]' <<<"$projection")"
-    [[ "$entry" != null ]] || continue
+    if [[ "$entry" == null ]]; then
+      if [[ "$retire" != null && "$(jq -r '.allocationReceiptId // empty' <<<"$retire")" != "" ]]; then
+        merged="$(jq -nc --argjson prior "${prior:-[]}" --argjson retire "$retire" '
+          if ($prior|type)!="array" then error("cell routes are not an array")
+          elif ([$prior[]|select(.nodeId==$retire.nodeId and .environment==$retire.environment)]|length)>1 then error("ambiguous owned source routes")
+          else $prior|map(if .nodeId==$retire.nodeId and .environment==$retire.environment then
+            if .systemIdentifier==$retire.systemIdentifier and .substrateHost==$retire.substrateHost and
+              .version==2 and .allocationReceiptId==$retire.allocationReceiptId and .dseq==$retire.dseq and .providerAccount==$retire.providerAccount
+            then empty else error("unexpected owned source route identity") end
+          else . end) end')" || fail "owned source control route differs from authenticated physical lineage"
+        cell_seed_exact "$service" "$key" "$merged"
+      fi
+      continue
+    fi
     merged="$(jq -nc --argjson prior "${prior:-[]}" --argjson entry "$entry" '$prior|map(select(.nodeId!=$entry.nodeId or .environment!=$entry.environment))+[$entry]|sort_by(.nodeId,.environment)')"
     cell_seed_exact "$service" "$key" "$merged"
   done <<'PROJECTIONS'

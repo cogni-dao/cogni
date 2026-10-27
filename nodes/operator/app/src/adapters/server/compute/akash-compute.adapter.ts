@@ -6,8 +6,9 @@
  * Purpose: Akash Console API client implementing ComputeResourcePort — balance read over the
  *   managed (USD-billed) Console wallet PLUS the write half: provision a container workload
  *   (create deployment → screen provider bids → lease → prove boot) (task.5044, task.5051).
- * Scope: HTTPS calls to console-api.akash.network with x-api-key auth (+ unauthenticated
- *   /version probes against the leased workload's own ingress). Does NOT hold a Cosmos
+ * Scope: HTTPS calls to console-api.akash.network with x-api-key auth; private physical
+ *   proof may GET an owned provider manifest with a lease-scoped read-only JWT through
+ *   the existing Console proxy (+ unauthenticated workload /version probes). Does NOT hold a Cosmos
  *   key, sign transactions, or settle on-chain — the Console managed wallet bills the shared
  *   operator account in USD (v0 billing model; vNext = per-spawner pass-through + crypto funding).
  * Invariants:
@@ -40,6 +41,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import type {
   ComputeBalance,
@@ -658,6 +660,7 @@ export class AkashComputeAdapter
   /** Private, read-only observation of the managed definition. Values may be opaque. */
   async readManagedDefinition(input: {
     leaseId: string;
+    resolveProviderManifest?: boolean;
   }): Promise<AkashTxManagedDeploymentDefinition> {
     if (!/^[0-9]+$/.test(input.leaseId))
       throw new AkashComputeError(
@@ -751,8 +754,18 @@ export class AkashComputeAdapter
         "UNEXPECTED_SHAPE",
         "provider rollout observation absent"
       );
+    const resolvedProviderManifest = input.resolveProviderManifest
+      ? await this.readPhysicalProviderManifest(
+          input.leaseId,
+          lease.id,
+          Object.keys(lease.status?.services ?? {})
+        )
+      : undefined;
     return {
       observedAt: this.now().toISOString(),
+      ...(resolvedProviderManifest === undefined
+        ? {}
+        : { resolvedProviderManifest }),
       leaseId: input.leaseId,
       ownerAccount: this.config.expectedCostConsumerAccountId,
       providerAccount: lease.id.provider,
@@ -762,6 +775,112 @@ export class AkashComputeAdapter
       chainManifestVersion: chainVersion,
       services,
     };
+  }
+
+  /** Private fixed manifest GET using the same managed wallet/provider lookup as log reads. */
+  private async readPhysicalProviderManifest(
+    leaseId: string,
+    id: ConsoleBidId,
+    services: string[]
+  ): Promise<unknown> {
+    const provider = id.provider;
+    const host = provider ? await this.providerHostUri(provider) : undefined;
+    if (
+      !provider ||
+      !host ||
+      !Number.isSafeInteger(Number(leaseId)) ||
+      Number(leaseId) <= 0 ||
+      !Number.isSafeInteger(id.gseq) ||
+      (id.gseq ?? 0) <= 0 ||
+      !Number.isSafeInteger(id.oseq) ||
+      (id.oseq ?? 0) <= 0
+    )
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "physical manifest coordinates unavailable"
+      );
+    const url = new URL(host);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !["", "/"].includes(url.pathname)
+    )
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "physical manifest provider URI invalid"
+      );
+    const permissions = [
+      {
+        provider,
+        access: "granular",
+        deployments: [
+          {
+            scope: ["get-manifest"],
+            dseq: Number(leaseId),
+            gseq: id.gseq,
+            oseq: id.oseq,
+            services,
+          },
+        ],
+      },
+    ];
+    const minted = await this.request<{ token?: string }>(
+      "POST",
+      "/v1/create-jwt-token",
+      { data: { ttl: 60, leases: { access: "granular", permissions } } }
+    );
+    if (!minted?.token)
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "physical manifest token absent"
+      );
+    try {
+      const claims = JSON.parse(
+        Buffer.from(minted.token.split(".")[1] ?? "", "base64url").toString(
+          "utf8"
+        )
+      );
+      if (
+        claims.iss !== this.config.expectedCostConsumerAccountId ||
+        !Number.isSafeInteger(claims.iat) ||
+        !Number.isSafeInteger(claims.exp) ||
+        claims.exp <= Math.floor(this.now().getTime() / 1000) ||
+        claims.iat > Math.floor(this.now().getTime() / 1000) + 5 ||
+        claims.exp - claims.iat > 60 ||
+        claims.exp <= claims.iat ||
+        !isDeepStrictEqual(claims.leases, { access: "granular", permissions })
+      )
+        throw new Error("scope");
+      url.pathname = `/lease/${leaseId}/${id.gseq}/${id.oseq}/manifest`;
+      const response = await this.fetchImpl(
+        "https://console.akash.network/provider-proxy-mainnet",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            method: "GET",
+            url: url.href,
+            providerAddress: provider,
+            auth: { type: "jwt", token: minted.token },
+            timeout: 15000,
+          }),
+          signal: AbortSignal.timeout(20000),
+        }
+      );
+      if (!response.ok) throw new Error("provider");
+      const body = await response.text();
+      if (Buffer.byteLength(body) > 256 * 1024) throw new Error("size");
+      return JSON.parse(body);
+    } catch {
+      // Provider replies and tokens contain private material. Never propagate their errors.
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "physical manifest observation failed"
+      );
+    }
   }
 
   /** Exact chain-native cost evidence. No fiat conversion or payer inference occurs here. */

@@ -10,10 +10,12 @@
  * @internal
  */
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { AkashComputeAdapter } from "@/adapters/server/compute/akash-compute.adapter";
 import { canonicalEvidenceJson } from "@/adapters/server/compute/database-cell-applied-artifacts";
 import {
   PhysicalRecoveryArtifactSchema,
+  qualifyLivePhysicalPostimage,
   qualifyPhysicalPostimages,
 } from "@/adapters/server/compute/database-cell-physical-postimage";
 import {
@@ -142,8 +144,12 @@ function basePostimageFixture() {
       gid: 999,
       sourceManifestSha256: sha("1"),
       targetManifestSha256: sha("1"),
-      sourceMetadataSha256: sha("2"),
-      targetMetadataSha256: sha("2"),
+      sourceRawMetadataSha256: sha("2"),
+      targetRawMetadataSha256: "d".repeat(64),
+      normalizedMetadataDomain:
+        "path-kind-mode-uid-gid-size-mtime-link-hardlink-v1",
+      sourceNormalizedMetadataSha256: sha("2"),
+      targetNormalizedMetadataSha256: sha("2"),
       allTablespacesCovered: true,
       transportDrained: true,
       originalStartupSha256: startup,
@@ -460,5 +466,248 @@ describe("fixed legacy postimage boundaries", () => {
     expect(() => qualifyPhysicalPostimages(changed)).toThrow(
       "independent_custody"
     );
+  });
+});
+
+describe("complete live physical postimage binding", () => {
+  function liveFixture() {
+    const input = legacyPostimageFixture();
+    const approved = input.artifact.definitions.targetNormal;
+    const stored = JSON.parse(approved);
+    const service = stored.services.postgres;
+    const resolved = structuredClone(service);
+    const native = [
+      {
+        services: [
+          {
+            ...resolved,
+            name: "postgres",
+            params: {
+              ...resolved.params,
+              storage: Object.entries(resolved.params.storage).map(
+                ([name, mount]) => ({ name, ...(mount as object) })
+              ),
+            },
+          },
+        ],
+      },
+    ];
+    service.env = service.env.map(
+      (entry: string) =>
+        `${entry.slice(0, entry.indexOf("=") + 1)}ac-secret://new-target-alias`
+    );
+    return { stored, native, approved };
+  }
+  it("privately resolves current provider aliases and compares the entire approved configuration", () => {
+    const f = liveFixture();
+    expect(() =>
+      qualifyLivePhysicalPostimage(
+        JSON.stringify(f.stored),
+        f.native,
+        f.approved,
+        "postgres"
+      )
+    ).not.toThrow();
+    expect(() =>
+      qualifyLivePhysicalPostimage(
+        JSON.stringify(f.stored),
+        undefined,
+        f.approved,
+        "postgres"
+      )
+    ).toThrow();
+  });
+  it("refuses coherently different live startup/mount/resources despite hashes matching those live bytes", () => {
+    for (const mutate of [
+      (f: ReturnType<typeof liveFixture>) => {
+        f.stored.services.postgres.args = ["postgres -c fsync=off"];
+        f.native[0].services[0].args = ["postgres -c fsync=off"];
+      },
+      (f: ReturnType<typeof liveFixture>) => {
+        f.stored.services.postgres.params.storage.database.mount = "/different";
+        f.native[0].services[0].params.storage[0].mount = "/different";
+      },
+      (f: ReturnType<typeof liveFixture>) => {
+        f.stored.profiles.resources.memory = 64;
+      },
+    ]) {
+      const f = liveFixture();
+      mutate(f);
+      const currentBytes = JSON.stringify(f.stored),
+        currentHash = shaBytes(currentBytes);
+      expect(currentHash).not.toBe(shaBytes(f.approved));
+      expect(() =>
+        qualifyLivePhysicalPostimage(
+          currentBytes,
+          f.native,
+          f.approved,
+          "postgres"
+        )
+      ).toThrow();
+    }
+  });
+  it("does not turn arbitrary opaque or literal env into an approved secret", () => {
+    const f = liveFixture();
+    f.stored.services.postgres.env = ["PGDATA=opaque"];
+    expect(() =>
+      qualifyLivePhysicalPostimage(
+        JSON.stringify(f.stored),
+        f.native,
+        f.approved,
+        "postgres"
+      )
+    ).toThrow();
+  });
+});
+
+describe("existing managed reader private resolved-manifest observation", () => {
+  function readerFixture(wrongScope = false) {
+    const f = legacyPostimageFixture();
+    const owner = "akash1synthetic-owner",
+      provider = f.artifact.evidence.target.providerAccount;
+    const version = Buffer.alloc(32, 1).toString("base64");
+    const requests: { url: string; method: string; body: unknown }[] = [];
+    const native = [
+      {
+        services: [
+          {
+            name: "postgres",
+            ...JSON.parse(f.artifact.definitions.targetNormal).services
+              .postgres,
+          },
+        ],
+      },
+    ];
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input),
+        body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      requests.push({ url, method: init?.method ?? "GET", body });
+      let result: unknown;
+      if (url.endsWith("/v1/deployments/10002"))
+        result = {
+          data: {
+            deployment: {
+              id: { dseq: "10002", owner },
+              state: "active",
+              hash: version,
+            },
+            consoleSettings: {
+              sdl: f.artifact.definitions.targetNormal,
+              manifestVersion: version,
+            },
+            leases: [
+              {
+                state: "active",
+                id: { dseq: "10002", gseq: 1, oseq: 1, provider },
+                status: {
+                  services: {
+                    postgres: {
+                      observed_generation: 1,
+                      replicas: 1,
+                      updated_replicas: 1,
+                      ready_replicas: 1,
+                      available_replicas: 1,
+                      total: 1,
+                      available: 1,
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        };
+      else if (url.endsWith(`/v1/providers/${provider}`))
+        result = { data: { hostUri: "https://provider.fixture.invalid:8443" } };
+      else if (url.endsWith("/v1/create-jwt-token")) {
+        const now = Math.floor(Date.now() / 1000);
+        const claims = {
+          iss: owner,
+          iat: now,
+          exp: now + 60,
+          leases: wrongScope ? { access: "full" } : body.data.leases,
+        };
+        result = {
+          data: {
+            token: `synthetic.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`,
+          },
+        };
+      } else if (url === "https://console.akash.network/provider-proxy-mainnet")
+        result = native;
+      else throw new Error("unexpected synthetic request");
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const adapter = new AkashComputeAdapter({
+      apiKey: "synthetic-console-key",
+      expectedCostConsumerAccountId: owner,
+      timeoutMs: 1000,
+      outcomeStore: { record: async () => {}, stats: async () => new Map() },
+      fetchImpl,
+    });
+    return { adapter, requests, native };
+  }
+  it("uses exact owned lease get-manifest scope and fixed GET proxy without exposing the account key", async () => {
+    const f = readerFixture();
+    const observed = await f.adapter.readManagedDefinition({
+      leaseId: "10002",
+      resolveProviderManifest: true,
+    });
+    expect(observed.resolvedProviderManifest).toEqual(f.native);
+    const mint = f.requests.find((r) => r.url.endsWith("create-jwt-token"));
+    expect(mint?.body).toMatchObject({
+      data: {
+        ttl: 60,
+        leases: {
+          access: "granular",
+          permissions: [
+            {
+              access: "granular",
+              deployments: [
+                {
+                  scope: ["get-manifest"],
+                  dseq: 10002,
+                  gseq: 1,
+                  oseq: 1,
+                  services: ["postgres"],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    const proxy = f.requests.at(-1);
+    expect(proxy?.body).toMatchObject({
+      method: "GET",
+      url: "https://provider.fixture.invalid:8443/lease/10002/1/1/manifest",
+      auth: { type: "jwt" },
+    });
+    expect(JSON.stringify(proxy)).not.toContain("synthetic-console-key");
+    expect(f.requests.map((r) => r.method)).toEqual([
+      "GET",
+      "GET",
+      "POST",
+      "POST",
+    ]);
+  });
+  it("refuses broader JWT scope before touching the provider and leaves ordinary reads unchanged", async () => {
+    const invalid = readerFixture(true);
+    await expect(
+      invalid.adapter.readManagedDefinition({
+        leaseId: "10002",
+        resolveProviderManifest: true,
+      })
+    ).rejects.toThrow("physical manifest observation failed");
+    expect(invalid.requests.some((r) => r.url.includes("provider-proxy"))).toBe(
+      false
+    );
+    const ordinary = readerFixture();
+    expect(
+      (await ordinary.adapter.readManagedDefinition({ leaseId: "10002" }))
+        .resolvedProviderManifest
+    ).toBeUndefined();
+    expect(ordinary.requests).toHaveLength(1);
   });
 });

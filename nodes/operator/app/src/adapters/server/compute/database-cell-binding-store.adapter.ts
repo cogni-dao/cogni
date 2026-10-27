@@ -275,6 +275,7 @@ export class DrizzleDatabaseCellBindingStore {
           if (
             !old ||
             source.bindings.length !== 1 ||
+            lineage.sourceProviderAccount !== sourceRow.providerAccount ||
             old.binding.systemIdentifier !== target.binding.systemIdentifier ||
             physicalSourceBindingSha256(old) !== lineage.sourceBindingSha256
           )
