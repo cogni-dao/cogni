@@ -412,8 +412,11 @@ export function createCogniProgram(
             `${index + 1}. **Proposed ${item.operation}: ${item.target}**\n\n   ${item.rationale}\n\n   ${item.proposal}\n\n   **Next:** ${item.nextAction}\n\n   Goals: ${item.goalIds.map(citation).join(", ")} · Evidence: ${item.sourceIds.map(citation).join(", ")}`
         ),
       ].join("\n\n");
+    // SWC transform + minify corrupts escaped backticks inside template literals.
     const receiptArtifact = (output: unknown) =>
-      `\n\n<details>\n<summary>Evidence for this review</summary>\n\n\x60\x60\x60json\n${JSON.stringify(output, null, 2)}\n\x60\x60\x60\n</details>`;
+      "\n\n<details>\n<summary>Evidence for this review</summary>\n\n```json\n" +
+      JSON.stringify(output, null, 2) +
+      "\n```\n</details>";
     let failure: string | undefined;
     let finalMessages = messages;
     try {
