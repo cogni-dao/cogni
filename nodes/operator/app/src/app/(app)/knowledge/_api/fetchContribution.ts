@@ -12,6 +12,17 @@
 
 import type { ContributionRecord } from "@cogni/node-contracts";
 
+/** Keep definitive read refusals distinct from transport and timeout failures. */
+export class ContributionReadError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "ContributionReadError";
+  }
+}
+
 export async function fetchContribution(
   id: string,
   signal?: AbortSignal
@@ -30,7 +41,10 @@ export async function fetchContribution(
     const error = await response.json().catch(() => ({
       error: "Failed to fetch contribution",
     }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+    throw new ContributionReadError(
+      error.error || `HTTP ${response.status}`,
+      response.status
+    );
   }
   return response.json() as Promise<ContributionRecord>;
 }

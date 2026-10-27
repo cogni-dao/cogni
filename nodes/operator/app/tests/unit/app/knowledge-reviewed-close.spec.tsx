@@ -21,6 +21,8 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { NextRequest } from "next/server";
+import pino from "pino";
 import type { ButtonHTMLAttributes } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -29,6 +31,9 @@ import {
 } from "@/app/(app)/knowledge/_api/closeContribution";
 import { parseReviewedClose } from "@/app/(app)/knowledge/_api/reviewedClose";
 import { ReviewedClosePanel } from "@/app/(app)/knowledge/_components/ReviewedClosePanel";
+import { handleClose } from "@/app/api/v1/knowledge/contributions/_handlers";
+import { wrapRouteHandlerWithLogging } from "@/bootstrap/http/wrapRouteHandlerWithLogging";
+import { EVENT_NAMES } from "@/shared/observability";
 
 vi.mock("@/components", () => ({
   Button: ({
@@ -46,6 +51,37 @@ vi.mock("next/link", () => ({
     children: React.ReactNode;
     href: string;
   }) => <a href={href}>{children}</a>,
+}));
+
+const routeClose = vi.hoisted(() => vi.fn());
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: () => ({ knowledgeContributionService: { close: routeClose } }),
+}));
+vi.mock("@/bootstrap/node-admin-gate", () => ({
+  checkNodeAdmin: vi.fn(),
+  isGoalRowId: vi.fn(),
+  nodeAdminFailureBody: vi.fn(),
+}));
+vi.mock("@/shared/config/repoSpec.server", () => ({
+  getNodeId: () => "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+}));
+vi.mock("@/bootstrap/otel", () => ({
+  withRootSpan: async (
+    _name: string,
+    _attributes: unknown,
+    run: (ctx: {
+      traceId: string;
+      span: { setAttribute: ReturnType<typeof vi.fn> };
+    }) => Promise<unknown>
+  ) => run({ traceId: "test-trace", span: { setAttribute: vi.fn() } }),
+}));
+vi.mock("@/shared/observability", async () => ({
+  ...(await vi.importActual<typeof import("@cogni/node-shared")>(
+    "@cogni/node-shared"
+  )),
+  statusBucket: (status: number) => `${Math.floor(status / 100)}xx`,
+  httpRequestsTotal: { inc: vi.fn() },
+  httpRequestDurationMs: { observe: vi.fn() },
 }));
 
 function record(
@@ -348,6 +384,153 @@ describe("reviewed close", () => {
     expect(
       fetchMock.mock.calls.every(([, options]) => options?.method === "GET")
     ).toBe(true);
+  });
+
+  it("continues after POST404 and authoritative GET404 without reporting the missing row closed", async () => {
+    const n = network([record("missing"), record("next")], async (id) => {
+      if (id === "missing") {
+        n.current.delete(id);
+        return Response.json({ error: "not found" }, { status: 404 });
+      }
+      n.current.set(id, record(id, "head-1", "closed"));
+      return Response.json({ closed: true });
+    });
+    render(
+      <ReviewedClosePanel
+        value={link([
+          { contributionId: "missing", expectedHeadCommit: "head-1" },
+          { contributionId: "next", expectedHeadCommit: "head-1" },
+        ])}
+      />
+    );
+    await clickReady(2);
+    await screen.findByText("Verified closed");
+    expect(
+      screen.getByText("Proposal no longer exists; skipped.")
+    ).toBeTruthy();
+    expect(n.calls.filter((call) => call.startsWith("POST"))).toEqual([
+      "POST missing",
+      "POST next",
+    ]);
+    expect(n.calls.slice(2, 6)).toEqual([
+      "POST missing",
+      "GET missing",
+      "POST next",
+      "GET next",
+    ]);
+  });
+
+  it("stops an old selection's busy retries after a URL remount", async () => {
+    const n = network([record("a"), record("b")], async () =>
+      Response.json(
+        { retryable: true },
+        { status: 503, headers: { "Retry-After": "2" } }
+      )
+    );
+    const { rerender } = render(
+      <ReviewedClosePanel
+        key="old"
+        value={link([{ contributionId: "a", expectedHeadCommit: "head-1" }])}
+      />
+    );
+    const button = await screen.findByRole("button", {
+      name: "Close 1 reviewed proposals",
+    });
+    await waitFor(() =>
+      expect((button as HTMLButtonElement).disabled).toBe(false)
+    );
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(button);
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(n.calls).toEqual(["GET a", "POST a", "GET a"]);
+    rerender(
+      <ReviewedClosePanel
+        key="new"
+        value={link([{ contributionId: "b", expectedHeadCommit: "head-1" }])}
+      />
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(n.calls.filter((call) => call.startsWith("POST"))).toEqual([
+      "POST a",
+    ]);
+    expect(screen.getByText("Proposal b")).toBeTruthy();
+  });
+
+  it("contains an unknown close error with one terminal feature event and three total request logs", async () => {
+    const lines: Record<string, unknown>[] = [];
+    const log = pino(
+      {
+        level: "info",
+        base: { nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d" },
+      },
+      {
+        write: (line: string) => {
+          lines.push(JSON.parse(line));
+        },
+      }
+    );
+    const user = {
+      id: "reviewer",
+      walletAddress: null,
+      displayName: null,
+      avatarColor: null,
+    };
+    routeClose.mockRejectedValueOnce(new Error("private-driver-diagnostic"));
+    const handler = wrapRouteHandlerWithLogging(
+      {
+        routeId: "knowledge.contributions.close",
+        auth: { mode: "required", getSessionUser: async () => user },
+        getRequestDependencies: () => ({
+          log,
+          clock: { now: () => new Date().toISOString() },
+          config: { unhandledErrorPolicy: "respond_500" },
+        }),
+      },
+      async (ctx, request, principal) =>
+        handleClose(request, "fixture", principal, ctx)
+    );
+    const response = await handler(
+      new NextRequest(
+        "https://test.cognidao.org/api/v1/knowledge/contributions/fixture/close",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-request-id": "close-unknown-proof",
+          },
+          body: JSON.stringify({
+            reason: "reviewed",
+            expectedHeadCommit: null,
+          }),
+        }
+      )
+    );
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({
+      errorCode: "close_failed",
+      retryable: false,
+    });
+    expect(routeClose).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedHeadCommit: null })
+    );
+    const terminal = lines.filter(
+      (line) => line.event === EVENT_NAMES.KNOWLEDGE_CONTRIBUTION_CLOSE_COMPLETE
+    );
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]).toMatchObject({
+      reqId: "close-unknown-proof",
+      routeId: "knowledge.contributions.close",
+      status: 500,
+      outcome: "error",
+      errorCode: "close_failed",
+      guarded: true,
+    });
+    expect(lines).toHaveLength(3);
+    expect(JSON.stringify(lines)).not.toContain("private-driver-diagnostic");
   });
 
   it("changing the URL stops future dispatch from the previous frozen selection", async () => {

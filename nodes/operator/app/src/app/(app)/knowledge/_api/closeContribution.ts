@@ -11,7 +11,7 @@
  * @internal
  */
 
-import { fetchContribution } from "./fetchContribution";
+import { ContributionReadError, fetchContribution } from "./fetchContribution";
 
 export interface CloseResult {
   contributionId: string;
@@ -32,13 +32,14 @@ function wait(milliseconds: number): Promise<void> {
 export async function closeContribution(
   contributionId: string,
   reason: string,
-  review?: { expectedHeadCommit: string | null }
+  review?: { expectedHeadCommit: string | null; stillActive?: () => boolean }
 ): Promise<CloseResult> {
   if (review)
     return closeReviewedContribution(
       contributionId,
       reason,
-      review.expectedHeadCommit
+      review.expectedHeadCommit,
+      review.stillActive ?? (() => true)
     );
   for (let attempt = 1; attempt <= MAX_TRANSIENT_ATTEMPTS; attempt += 1) {
     const response = await fetch(
@@ -100,9 +101,20 @@ export class ReviewedCloseError extends Error {
 async function closeReviewedContribution(
   contributionId: string,
   reason: string,
-  expectedHeadCommit: string | null
+  expectedHeadCommit: string | null,
+  stillActive: () => boolean
 ): Promise<CloseResult> {
   for (let attempt = 1; attempt <= MAX_TRANSIENT_ATTEMPTS; attempt += 1) {
+    // Check again after any retry delay. Unmount never cancels native settlement,
+    // but it must prevent dispatch of another HTTP attempt for an old review.
+    if (!stillActive()) {
+      throw new ReviewedCloseError(
+        "Review closed; no further close was sent.",
+        null,
+        "close_cancelled",
+        true
+      );
+    }
     let response: Response | undefined;
     let failure: { error?: string; errorCode?: string; retryable?: boolean } =
       {};
@@ -124,11 +136,25 @@ async function closeReviewedContribution(
     }
 
     // Every POST attempt, including 2xx and transport failures, is reconciled.
-    const current = await fetchContribution(
+    const { record: current, status: readbackStatus } = await fetchContribution(
       contributionId,
       AbortSignal.timeout(10_000)
-    ).catch(() => null);
+    ).then(
+      (record) => ({ record, status: 200 }),
+      (error: unknown) => ({
+        record: null,
+        status: error instanceof ContributionReadError ? error.status : null,
+      })
+    );
     if (current?.state === "closed") return { contributionId, closed: true };
+    if (response?.status === 404 && readbackStatus === 404) {
+      throw new ReviewedCloseError(
+        "Proposal no longer exists; skipped.",
+        404,
+        "not_found",
+        false
+      );
+    }
     if (!current) {
       throw new ReviewedCloseError(
         "Could not verify the close. Reload before trying again.",

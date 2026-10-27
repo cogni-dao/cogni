@@ -99,6 +99,7 @@ export function ReviewedClosePanel({ value }: { readonly value: string }) {
           }));
           await closeContribution(row.item.contributionId, selection.reason, {
             expectedHeadCommit: row.item.expectedHeadCommit,
+            stillActive: () => mounted.current,
           });
           if (mounted.current)
             setResults((prior) => ({

@@ -542,6 +542,22 @@ export async function handleClose(
                       : "close_failed";
       return finish(mapError(e), code);
     }
+  } catch {
+    // A terminally instrumented close contains unexpected failures locally:
+    // wrapper start + this feature terminal + wrapper end stay within 3 logs.
+    // Neither HTTP nor logs expose raw database/driver error text.
+    return finish(
+      NextResponse.json(
+        {
+          error:
+            "Unable to close the proposal. Read its state before retrying.",
+          errorCode: "close_failed",
+          retryable: false,
+        },
+        { status: 500 }
+      ),
+      "close_failed"
+    );
   } finally {
     logEvent(ctx.log, EVENT_NAMES.KNOWLEDGE_CONTRIBUTION_CLOSE_COMPLETE, {
       reqId: ctx.reqId,
