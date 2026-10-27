@@ -1,7 +1,8 @@
 ---
 id: agent-development-guide
 type: guide
-status: retired
+status: superseded
+trust: reviewed
 title: Agent Development Guide
 summary: Migrated to the Cogni knowledge hub. See the canonical entries linked below.
 read_when: Adding a new AI agent graph — now served from the hub.
