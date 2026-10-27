@@ -7,8 +7,8 @@
  *   GATHERS context across the read planes (goals, knowledge, work items, git), then a DECIDE
  *   state files exactly one `core__edo_decide` — the designed artifact — with the full run
  *   context. Same agent, same tools for every mission program; nothing model- or node-specific.
- * Scope: Generic, reusable graph factory. Program-specific guidance and the node mission arrive
- *   via opts; the decision tool is the generic EDO decision seam.
+ * Scope: Generic, reusable graph factory. Does NOT read env, enforce authz, or write beyond the
+ *   single EDO decision. Program-specific guidance and the node mission arrive via opts.
  * Invariants:
  *   - TWO_PHASE_DECIDE: gather (read-only tools) → a dedicated decide state that emits the
  *     decision via NATIVE structured output (the model's own tool call), not prompt-coaxed JSON.

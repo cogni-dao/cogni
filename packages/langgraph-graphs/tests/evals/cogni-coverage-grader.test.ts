@@ -4,7 +4,11 @@
 /**
  * Module: `@cogni/langgraph-graphs/tests/evals/cogni-coverage-grader`
  * Purpose: Lock the systematic-knowledge-gathering metric, incl. the grader counterexample
- *   as a FAILING control. Does NOT run the graph, call tools, or hit the network.
+ *   as a FAILING control.
+ * Scope: Pure unit test over the coverage-grader. Does NOT run the graph, call tools, or hit the network.
+ * Invariants:
+ *   - FAILING_CONTROL: the grader counterexample must score fail, so a silent pass can never regress in.
+ * Side-effects: none
  * Links: https://cognidao.org/work/items/bug.5542
  */
 import { describe, expect, it } from "vitest";
