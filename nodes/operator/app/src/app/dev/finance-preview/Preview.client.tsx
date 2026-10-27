@@ -5,12 +5,18 @@
  * Module: `@app/dev/finance-preview/Preview.client`
  * Purpose: Render the /admin/payments report inside the real admin shell on fixture data, isolated from live treasury queries.
  * Scope: Development route only; static same-fixture treasury seed and independent query cache.
- * Invariants: Treasury query stays disabled across staleness, focus and invalidation.
+ * Invariants: Treasury query stays disabled across staleness, focus and invalidation. Fixture-owned actions
+ *   cannot POST or refresh live data; checkout links are removed. No fake funding success.
  * Side-effects: No live financial IO.
  * Links: https://cognidao.org/work/items/task.5347
  * @internal
  */
 "use client";
+import {
+  type MoneyPlaneRow,
+  StewardWithdrawalRejected,
+} from "@cogni/money-plane";
+import type { FinanceActions } from "@cogni/money-plane/react";
 import type { TreasurySnapshotResponseV1 } from "@cogni/node-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
@@ -75,6 +81,26 @@ export function FixtureQueryBoundary({
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
+const demoActions: FinanceActions = {
+  async fundSteward() {
+    throw new StewardWithdrawalRejected("Demo only · no payments");
+  },
+  refresh() {},
+};
+
+function demoRow(row: MoneyPlaneRow): MoneyPlaneRow {
+  const children = row.children?.map(demoRow);
+  const withChildren = children ? { ...row, children } : row;
+  if (!row.payAction || row.payAction.kind === "fund-steward")
+    return withChildren;
+  const { payAction: _checkout, ...withoutCheckout } = withChildren;
+  return {
+    ...withoutCheckout,
+    rail: { kind: row.rail?.kind ?? "none", status: "unsupported" },
+    note: "Demo only · payments disabled",
+  };
+}
+
 const scenarios = {
   "live-shaped": liveShapedFinancePreview,
   "with-income": withIncomeFinancePreview,
@@ -113,7 +139,10 @@ export function FinancePreview() {
                 </SelectContent>
               </Select>
             </div>
-            <FinanceReportClient report={report} />
+            <FinanceReportClient
+              report={{ ...report, rows: report.rows.map(demoRow) }}
+              actions={demoActions}
+            />
           </div>
         </PageContainer>
       </AdminShell>

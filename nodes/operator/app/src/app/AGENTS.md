@@ -39,7 +39,7 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
 
 ## Public Surface
 
-- `/dev/finance-preview`: fixture-only preview of the Financials page inside the shell with an isolated, disabled treasury query; development runtime only, otherwise 404. `/admin/payments` remains repo-spec-admin gated; `finance.server.ts` is its only read path and the fund-steward row action its only write.
+- `/dev/finance-preview`: fixture-only preview of the Financials page inside the shell with an isolated, disabled treasury query; development runtime only, otherwise 404. Fixture actions cannot POST payments or refresh live data; external checkout links are removed. `/admin/payments` remains repo-spec-admin gated; `finance.server.ts` is its only read path and the fund-steward row action its only write.
 
 - **Exports:** none
 - **Route Groups:**

@@ -369,9 +369,9 @@ describe("Financials reporting", () => {
   it.each([
     {},
     { txHash: `0x${"a".repeat(64)}` },
-    { txHash: "0xshort", confirmed: true },
-    { txHash: `0x${"a".repeat(64)}`, confirmed: "true" },
-    { txHash: null, confirmed: false },
+    { txHash: "0xshort", receiptStatus: "success" },
+    { txHash: `0x${"a".repeat(64)}`, receiptStatus: "unknown" },
+    { txHash: null, receiptStatus: "pending" },
   ])("keeps malformed withdrawal success unknown: %j", async (body) => {
     const fetch = vi.fn(async () => ({
       ok: true,
@@ -382,8 +382,11 @@ describe("Financials reporting", () => {
       fundSteward(1, fetch as unknown as typeof globalThis.fetch)
     ).rejects.toThrow("Withdrawal result incomplete");
   });
-  it("preserves an explicit unconfirmed broadcast", async () => {
-    const body = { txHash: `0x${"a".repeat(64)}`, confirmed: false };
+  it.each([
+    "pending",
+    "reverted",
+  ] as const)("preserves an explicit %s receipt", async (receiptStatus) => {
+    const body = { txHash: `0x${"a".repeat(64)}`, receiptStatus };
     const fetch = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -402,7 +405,7 @@ describe("Financials reporting", () => {
             status: 200,
             json: async () => ({
               txHash: `0xabcd${"0".repeat(56)}7890`,
-              confirmed: true,
+              receiptStatus: "success",
             }),
           }
         : {
@@ -563,6 +566,33 @@ describe("Financials reporting", () => {
     expect(
       screen.getAllByRole("button", { name: "Fund steward" }).length
     ).toBeGreaterThan(0);
+  });
+  it("keeps demo funding and refresh inert and removes real checkout links", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const fetch = vi.fn(async () => {
+      throw new Error("No live IO allowed");
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(FinancePreviewPage());
+    const row = rowOf("base:operator-wallet");
+    const amount = within(row).getByRole("spinbutton", {
+      name: "Fund steward (USD)",
+    });
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "2.5");
+    await userEvent.click(
+      within(row).getByRole("button", { name: "Fund steward" })
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(fetch).not.toHaveBeenCalled();
+    expect(access.refresh).not.toHaveBeenCalled();
+    expect(within(row).getByRole("alert")).toHaveTextContent(
+      "Demo only · no payments"
+    );
+    expect(
+      screen.queryByRole("link", { name: /Top up/ })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Sent /)).not.toBeInTheDocument();
   });
   it("a row with a payer other than this node shows a payer subline", () => {
     const first = liveShapedFinancePreview.rows[0];

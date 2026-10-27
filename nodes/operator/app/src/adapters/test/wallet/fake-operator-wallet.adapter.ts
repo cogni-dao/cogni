@@ -48,7 +48,7 @@ export class FakeOperatorWalletAdapter implements OperatorWalletPort {
     amountUsdcAtomic: bigint
   ): Promise<StewardWithdrawal> {
     this.lastWithdrawToStewardAmount = amountUsdcAtomic;
-    return { txHash: this.withdrawToStewardResult, confirmed: true };
+    return { txHash: this.withdrawToStewardResult, receiptStatus: "success" };
   }
 
   // ── Test helpers ──

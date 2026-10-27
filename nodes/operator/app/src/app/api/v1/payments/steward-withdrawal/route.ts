@@ -15,7 +15,7 @@
  *   - STEWARD_PINNED_DESTINATION — destination is payments_out.steward_wallet, never caller-supplied.
  *   - FAIL_CLOSED — 503 when the operator/steward wallet is unconfigured in this environment.
  *   - NO_BLIND_RETRY — only pre-broadcast failures are refusals (400/403/503/422); once the wallet accepted the
- *     transfer the route answers 200 `{ txHash, confirmed }` (confirmed:false when no receipt was seen) or 502
+ *     transfer the route answers 200 `{ txHash, receiptStatus }` (success, reverted, or pending) or 502
  *     "result unknown", so a client never re-enables a retry after a real broadcast.
  * Side-effects: IO (on-chain USDC transfer via Privy HSM; structured log event).
  * Links: docs/design/node-steward-wallet.md, OperatorWalletPort.withdrawToSteward
@@ -104,7 +104,10 @@ export const POST = wrapRouteHandlerWithLogging(
       Math.round(amountUsd * 10 ** USDC_DECIMALS)
     );
 
-    let outcome: { txHash: string; confirmed: boolean };
+    let outcome: {
+      txHash: string;
+      receiptStatus: "success" | "reverted" | "pending";
+    };
     try {
       outcome = await operatorWallet.withdrawToSteward(amountUsdcAtomic);
     } catch (err) {
@@ -135,18 +138,24 @@ export const POST = wrapRouteHandlerWithLogging(
       {
         event: EVENT_NAMES.PAYMENTS_STEWARD_WITHDRAWAL,
         txHash: outcome.txHash,
-        confirmed: outcome.confirmed,
+        receiptStatus: outcome.receiptStatus,
         amountUsd,
         amountUsdcAtomic: amountUsdcAtomic.toString(),
         steward: stewardConfig.address,
       },
-      outcome.confirmed
+      outcome.receiptStatus === "success"
         ? "steward wallet funded"
-        : "steward wallet funding broadcast, unconfirmed"
+        : outcome.receiptStatus === "reverted"
+          ? "steward wallet funding reverted"
+          : "steward wallet funding broadcast, receipt pending"
     );
 
     return NextResponse.json(
-      { txHash: outcome.txHash, confirmed: outcome.confirmed, amountUsd },
+      {
+        txHash: outcome.txHash,
+        receiptStatus: outcome.receiptStatus,
+        amountUsd,
+      },
       { status: 200 }
     );
   }

@@ -13,7 +13,7 @@
 "use client";
 
 import { StewardWithdrawalRejected } from "@cogni/money-plane";
-import { FinanceReport } from "@cogni/money-plane/react";
+import { type FinanceActions, FinanceReport } from "@cogni/money-plane/react";
 import { useRouter } from "next/navigation";
 import {
   Button,
@@ -43,7 +43,10 @@ export const STEWARD_WITHDRAWAL_TIMEOUT_MS = 20_000;
 export async function fundSteward(
   amountUsd: number,
   fetchImpl: typeof fetch = fetch
-): Promise<{ txHash: string; confirmed: boolean }> {
+): Promise<{
+  txHash: string;
+  receiptStatus: "success" | "reverted" | "pending";
+}> {
   const res = await fetchImpl(STEWARD_WITHDRAWAL_PATH, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -52,7 +55,7 @@ export async function fundSteward(
   });
   let data: {
     txHash?: string;
-    confirmed?: boolean;
+    receiptStatus?: "success" | "reverted" | "pending";
     error?: string;
     detail?: string;
     code?: string;
@@ -67,10 +70,12 @@ export async function fundSteward(
       !data ||
       typeof data.txHash !== "string" ||
       !/^0x[0-9a-fA-F]{64}$/.test(data.txHash) ||
-      typeof data.confirmed !== "boolean"
+      (data.receiptStatus !== "success" &&
+        data.receiptStatus !== "reverted" &&
+        data.receiptStatus !== "pending")
     )
       throw new Error("Withdrawal result incomplete");
-    return { txHash: data.txHash, confirmed: data.confirmed };
+    return { txHash: data.txHash, receiptStatus: data.receiptStatus };
   }
   const reason = data.detail ?? data.error ?? data.code ?? `HTTP ${res.status}`;
   const preBroadcast =
@@ -96,8 +101,11 @@ const kit = {
 
 export function FinanceReportClient({
   report,
+  actions,
 }: {
   report: FinanceReportModel;
+  /** Development fixtures supply inert actions; the admin page uses defaults. */
+  actions?: FinanceActions;
 }) {
   const router = useRouter();
   return (
@@ -105,10 +113,12 @@ export function FinanceReportClient({
       report={report}
       summary={report.summary}
       kit={kit}
-      actions={{
-        fundSteward: (amount) => fundSteward(amount),
-        refresh: () => router.refresh(),
-      }}
+      actions={
+        actions ?? {
+          fundSteward: (amount) => fundSteward(amount),
+          refresh: () => router.refresh(),
+        }
+      }
       thisNode="Operator"
     />
   );

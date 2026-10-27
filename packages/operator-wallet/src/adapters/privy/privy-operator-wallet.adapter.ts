@@ -274,13 +274,21 @@ export class PrivyOperatorWalletAdapter implements OperatorWalletPort {
     // balance is settled before a human proceeds, but NEVER throw past this point: a
     // receipt-wait or RPC failure is an unknown outcome, not a refusal (NO_BLIND_RETRY).
     try {
-      await this.rpcClient.waitForTransactionReceipt({
+      const receipt = await this.rpcClient.waitForTransactionReceipt({
         hash: result.hash as Hex,
         confirmations: 1,
       });
-      return { txHash: result.hash, confirmed: true };
+      return {
+        txHash: result.hash,
+        receiptStatus:
+          receipt.status === "success"
+            ? "success"
+            : receipt.status === "reverted"
+              ? "reverted"
+              : "pending",
+      };
     } catch {
-      return { txHash: result.hash, confirmed: false };
+      return { txHash: result.hash, receiptStatus: "pending" };
     }
   }
 }
