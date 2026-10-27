@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-22
+- **Last reviewed:** 2026-10-27
 
 ## Purpose
 
@@ -102,6 +102,8 @@ docker compose --project-name cogni-runtime logs -f app
 - Alloy writes to local Loki (http://loki:3100)
 - Grafana on http://localhost:3001 (anonymous admin access)
 - No cloud credentials needed
+- `dev:stack` captures host app stdout in `.context/dev-logs/app.log`. Dev Alloy tails only that log directory through `alloy-host-dev.alloy` and the existing JSON/Loki pipeline. It does not mount private workspace state.
+- Dev app, worker and Temporal use the same explicit `TEMPORAL_NAMESPACE`. `DOLTGRES_DATA_VOLUME` can select an isolated local named volume; the default preserves `doltgres_data`.
 
 **Preview/Production (docker-compose.yml):**
 

@@ -14,6 +14,16 @@ tags: [agent-api, validation, candidate-a, billing]
 
 # Agent-First API Validation (Candidate-A + Local)
 
+> Local development is being consolidated into the [portable startup and E2E guide
+> (review draft)](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-469da024).
+> Use the target node's current discovery and OpenAPI schemas. The historical
+> node-local lease/delete examples below do not describe current v2 leases or
+> retired DELETE routes. Bearer authentication now works on the normal ai/chat
+> and agent-discovery routes. For LangGraph dev, use the stateful ai/chat path;
+> the completions example does not supply its required state key.
+> This source remains during human review of the hub replacement.
+
+
 This guide is a **route exercise recipe**, not the full contribution lifecycle.
 For the lifecycle, use [`docs/spec/development-lifecycle.md`](../spec/development-lifecycle.md).
 For post-flight PR validation, use [`.claude/skills/validate-candidate`](../../.claude/skills/validate-candidate/SKILL.md); it owns the scorecard and Loki evidence format.

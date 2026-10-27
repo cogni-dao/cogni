@@ -7,7 +7,8 @@
  * Module: `@scripts/db/seed-doltgres`
  * Purpose: Seed Doltgres knowledge databases from per-node knowledge packages.
  * Scope: Reads DOLTGRES_URL, imports seeds from node packages, upserts + commits. Does not create schema or roles (provision script handles that).
- * Invariants: Idempotent (upsert). Requires packages:build to have run first.
+ * Invariants: Idempotent (upsert). Independent read/write clients and the normal
+ *   database writer scope own every seed commit. Requires packages:build first.
  * Side-effects: IO (database writes, console output)
  * Links: docs/spec/knowledge-data-plane.md
  * @public
@@ -17,6 +18,7 @@ import type { NewKnowledge } from "@cogni/knowledge-store";
 import { createKnowledgeCapability } from "@cogni/knowledge-store";
 import {
   buildDoltgresClient,
+  DoltBranchSessionRunner,
   DoltgresKnowledgeStoreAdapter,
 } from "@cogni/knowledge-store/adapters/doltgres";
 
@@ -34,7 +36,18 @@ const client = buildDoltgresClient({
   applicationName: "cogni_knowledge_seed",
 });
 
-const adapter = new DoltgresKnowledgeStoreAdapter({ sql: client });
+const writerClient = buildDoltgresClient({
+  connectionString: DOLTGRES_URL,
+  applicationName: "cogni_knowledge_seed_writer",
+  max: 1,
+});
+const writerSession = new DoltBranchSessionRunner(writerClient, {
+  writerProtocol: "database",
+});
+const adapter = new DoltgresKnowledgeStoreAdapter({
+  sql: client,
+  writerSession,
+});
 const capability = createKnowledgeCapability(adapter);
 
 // Load seeds — base domains + base knowledge from the shared knowledge-base package.
@@ -54,7 +67,7 @@ try {
   console.error(
     `❌ Could not load @cogni/knowledge-base seeds: ${e instanceof Error ? e.message : String(e)}`
   );
-  await client.end();
+  await Promise.all([client.end(), writerClient.end()]);
   process.exit(1);
 }
 
@@ -98,7 +111,14 @@ for (const seed of seeds) {
   }
 }
 
-await client.end();
+// A write acknowledges its commit before native branch cleanup finishes.
+// Queue a settlement barrier before ending pools; it acquires and reconciles
+// the native writer even though its callback does not issue domain DML.
+// Never force-close an unsettled writer or report it as successful.
+await writerSession.run("knowledge.seed.settle", async () => undefined, {
+  awaitSettlement: true,
+});
+await Promise.all([client.end(), writerClient.end()]);
 
 if (hardFailures > 0) {
   // Never let a provision report green with an empty/partial knowledge plane.

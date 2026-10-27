@@ -57,7 +57,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 - `DoltgresKnowledgeStoreAdapter`, `DoltgresAdapterConfig`, `buildDoltgresClient`, `DoltgresClientConfig`
 - `DoltgresKnowledgeContributionAdapter`, `DoltgresKnowledgeContributionAdapterConfig` (contribution-branch lifecycle)
-- `DoltBranchSessionRunner` (thin operator error/telemetry/budget wrapper over the shared native executor; branch client is separate from reads)
+- `DoltBranchSessionRunner` (`run` accepts `awaitSettlement` for CLI pool shutdown; thin operator error/telemetry/budget wrapper over the shared native executor; branch client is separate from reads)
 - `createDoltgresPusher`, `DoltgresPusher`, `DoltgresPushConfig` (post-merge mirror to a Dolt remote; lazy `dolt_remote add` + `dolt_push`)
 - `wrapPushSafe`, `PushOutcomeListener` (fire-and-forget wrapper with injectable success/failure callbacks — keeps logging out of the adapter)
 

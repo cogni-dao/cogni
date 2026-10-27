@@ -366,6 +366,44 @@ describe("Dolt session admission control (bug.5386, bug.5391)", () => {
     }
   });
 
+  it.each([
+    false,
+    true,
+  ])("awaitSettlement=%s preserves cleanup ownership before pool shutdown", async (awaitSettlement) => {
+    const sql = client(1);
+    const runner = new DoltBranchSessionRunner(sql);
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    try {
+      const write = runner.run(
+        "seed-write",
+        async (_conn, _guard, owner) => {
+          owner.registerReconciliation(async () => true);
+          owner.committed(
+            { value: "committed", commitHash: "seed-test" },
+            () => cleanupGate
+          );
+          return "committed";
+        },
+        { awaitSettlement }
+      );
+      expect(await outcomeWithin(write, 50)).toBe(
+        awaitSettlement ? "pending" : "settled"
+      );
+      releaseCleanup();
+      await expect(write).resolves.toBe("committed");
+      await runner.run("seed-settle", async () => undefined, {
+        awaitSettlement: true,
+      });
+      await sql.end();
+    } finally {
+      releaseCleanup();
+      void sql.end({ timeout: 0 }).catch(() => undefined);
+    }
+  });
+
   it("keeps serving after an operation throws", async () => {
     const sql = client(1);
     const runner = new DoltBranchSessionRunner(sql);
