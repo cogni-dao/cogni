@@ -21,6 +21,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as session from "@/app/_lib/auth/session";
 import * as appHandler from "@/app/api/v1/work/items/route";
+import { getContainer } from "@/bootstrap/container";
 
 vi.mock("@/bootstrap/container", () => {
   const log = {
@@ -69,6 +70,7 @@ vi.mock("@/app/_lib/auth/session", () => ({
 
 describe("GET /api/v1/work/items — cursor error translation", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.mocked(session.getSessionUser).mockResolvedValue(TEST_SESSION_USER_1);
   });
 
@@ -80,7 +82,11 @@ describe("GET /api/v1/work/items — cursor error translation", () => {
         const res = await fetch({ method: "GET" });
         expect(res.status).toBe(400);
         const body = await res.json();
-        expect(body).toEqual({ error: "invalid cursor" });
+        expect(body).toMatchObject({
+          error: "invalid cursor",
+          code: "invalid_cursor",
+          message: expect.stringContaining("Restart pagination"),
+        });
       },
     });
   });
@@ -93,6 +99,42 @@ describe("GET /api/v1/work/items — cursor error translation", () => {
       async test({ fetch }) {
         const res = await fetch({ method: "GET" });
         expect(res.status).toBe(400);
+      },
+    });
+  });
+
+  it.each([
+    "sortBy=arbitrary_sql",
+    "sortDirection=sideways",
+    "sortBy=",
+    "sortDirection=",
+  ])("rejects invalid sort parameters with 400: %s", async (query) => {
+    await testApiHandler({
+      appHandler,
+      url: `/api/v1/work/items?${query}`,
+      async test({ fetch }) {
+        const response = await fetch({ method: "GET" });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ error: "invalid input" });
+      },
+    });
+  });
+
+  it("passes validated sorting through to the authoritative store", async () => {
+    const container = getContainer();
+    vi.mocked(getContainer).mockReturnValue(container);
+    await testApiHandler({
+      appHandler,
+      url: "/api/v1/work/items?sortBy=updatedAt&sortDirection=asc&limit=2",
+      async test({ fetch }) {
+        const response = await fetch({ method: "GET" });
+        expect(response.status).toBe(200);
+        expect(container.doltgresWorkItems.list).toHaveBeenCalledWith({
+          sortBy: "updatedAt",
+          sortDirection: "asc",
+          limit: 2,
+        });
+        expect(container.workItemQuery.list).not.toHaveBeenCalled();
       },
     });
   });

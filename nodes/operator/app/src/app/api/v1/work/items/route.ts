@@ -4,7 +4,7 @@
 /**
  * Module: `@app/api/v1/work/items/route`
  * Purpose: HTTP endpoints for listing and creating work items.
- * Scope: Auth-protected GET (list — markdown ∪ Doltgres) and POST (create — Doltgres only).
+ * Scope: Auth-protected GET (list from one configured backend) and POST (create — Doltgres only).
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, ID_RANGE_RESERVED, CODED_WRITE_ERRORS.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write)
  * Links: contracts/work.items.{list,create}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
@@ -15,6 +15,7 @@ import {
   workItemsCreateOperation,
   workItemsListOperation,
 } from "@cogni/node-contracts";
+import { normalizeWorkItemOrder } from "@cogni/work-items";
 import { NextResponse } from "next/server";
 
 import {
@@ -34,8 +35,8 @@ export const runtime = "nodejs";
  * GET /api/v1/work/items — List work items with optional query filters.
  *
  * Query params: types, statuses (comma-separated), text, projectId, node (single
- * or comma-separated), limit. Lists span both legacy markdown items and
- * Doltgres-allocated items (≥5000) — their ID ranges are disjoint.
+ * or comma-separated), limit, cursor, sortBy and sortDirection. Ordering and
+ * pagination belong to the shared store; configured Doltgres is authoritative.
  */
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "work.items.list", auth: { mode: "required", getSessionUser } },
@@ -51,7 +52,7 @@ export const GET = wrapRouteHandlerWithLogging(
     const limitParam = url.searchParams.get("limit");
     const cursorParam = url.searchParams.get("cursor");
 
-    const input = workItemsListOperation.input.parse({
+    const parsed = workItemsListOperation.input.safeParse({
       types: typesParam ? typesParam.split(",") : undefined,
       statuses: statusesParam ? statusesParam.split(",") : undefined,
       text: textParam ?? undefined,
@@ -64,19 +65,49 @@ export const GET = wrapRouteHandlerWithLogging(
         : undefined,
       limit: limitParam ? Number(limitParam) : undefined,
       cursor: cursorParam ?? undefined,
+      sortBy: url.searchParams.get("sortBy") ?? undefined,
+      sortDirection: url.searchParams.get("sortDirection") ?? undefined,
     });
+
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "invalid input", issues: parsed.error.issues },
+        { status: 400 }
+      );
+    }
 
     let result: Awaited<ReturnType<typeof listWorkItems>>;
     try {
-      result = await listWorkItems(input);
+      result = await listWorkItems(parsed.data);
     } catch (e) {
       if (e instanceof InvalidCursorError) {
-        return NextResponse.json({ error: "invalid cursor" }, { status: 400 });
+        return NextResponse.json(
+          {
+            error: "invalid cursor",
+            code: "invalid_cursor",
+            message: "Restart pagination using the selected sort order.",
+          },
+          { status: 400 }
+        );
       }
       throw e;
     }
 
-    ctx.log.info({ count: result.items.length }, "work.items.list_success");
+    const order = normalizeWorkItemOrder({
+      ...(parsed.data.sortBy && { sortBy: parsed.data.sortBy }),
+      ...(parsed.data.sortDirection && {
+        sortDirection: parsed.data.sortDirection,
+      }),
+    });
+    ctx.log.info(
+      {
+        count: result.items.length,
+        ...order,
+        limit: parsed.data.limit ?? 100,
+        hasMore: result.pageInfo?.hasMore ?? false,
+      },
+      "work.items.list_success"
+    );
 
     return NextResponse.json(workItemsListOperation.output.parse(result));
   }
