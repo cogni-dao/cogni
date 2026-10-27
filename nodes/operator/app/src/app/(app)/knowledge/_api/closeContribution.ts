@@ -11,11 +11,14 @@
  * @internal
  */
 
+import type { ContributionRecord } from "@cogni/node-contracts";
 import { ContributionReadError, fetchContribution } from "./fetchContribution";
 
 export interface CloseResult {
   contributionId: string;
   closed: true;
+  /** Authoritative guarded-call readback; legacy callers retain their response. */
+  record?: ContributionRecord;
 }
 
 const MAX_TRANSIENT_ATTEMPTS = 4;
@@ -146,7 +149,8 @@ async function closeReviewedContribution(
         status: error instanceof ContributionReadError ? error.status : null,
       })
     );
-    if (current?.state === "closed") return { contributionId, closed: true };
+    if (current?.state === "closed")
+      return { contributionId, closed: true, record: current };
     if (response?.status === 404 && readbackStatus === 404) {
       throw new ReviewedCloseError(
         "Proposal no longer exists; skipped.",

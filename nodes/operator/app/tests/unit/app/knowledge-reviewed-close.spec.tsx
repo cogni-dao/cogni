@@ -257,7 +257,9 @@ describe("reviewed close", () => {
     );
     await screen.findByText("Proposal current");
     expect(n.calls.filter((call) => call.startsWith("POST"))).toEqual([]);
-    expect(screen.getByText("Changed since review; excluded")).toBeTruthy();
+    expect(
+      await screen.findByText("Changed since review; excluded")
+    ).toBeTruthy();
     expect(screen.getByText("Already closed; excluded")).toBeTruthy();
     await clickReady(2);
     await waitFor(() =>
@@ -330,7 +332,11 @@ describe("reviewed close", () => {
     });
     await expect(
       closeContribution("a", "reviewed", { expectedHeadCommit: "head-1" })
-    ).resolves.toEqual({ contributionId: "a", closed: true });
+    ).resolves.toMatchObject({
+      contributionId: "a",
+      closed: true,
+      record: { state: "closed", headCommit: "head-1" },
+    });
     expect(n.calls).toEqual(["POST a", "GET a"]);
   });
 
@@ -363,7 +369,9 @@ describe("reviewed close", () => {
       "POST a",
       "POST b",
     ]);
-    expect(screen.getByText("Changed since review")).toBeTruthy();
+    expect(
+      await screen.findByText("Changed since review; excluded")
+    ).toBeTruthy();
   });
 
   it("bounds busy retries and rereads after every attempt", async () => {
@@ -683,6 +691,117 @@ describe("reviewed close", () => {
     );
     expect(screen.getByTestId("inbox-table").textContent).toBe("");
     expect(n.calls.some((call) => call.startsWith("POST"))).toBe(false);
+  });
+
+  it("refresh recovers delayed native closure without replaying an uncertain POST", async () => {
+    const n = network([record("a"), record("b")], async () => {
+      throw new TypeError("lost acknowledgement before settlement");
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    client.setQueryData(["knowledge", "contributions", "open"], {
+      contributions: [record("a"), record("b")],
+    });
+    render(
+      <>
+        <CachedInboxSummary />
+        <ReviewedClosePanel
+          value={link([
+            { contributionId: "a", expectedHeadCommit: "head-1" },
+            { contributionId: "b", expectedHeadCommit: "head-1" },
+          ])}
+        />
+      </>,
+      client
+    );
+    await clickReady(2);
+    await screen.findByText(
+      "Close outcome is unresolved. Reload before trying again."
+    );
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Refresh results",
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(false)
+    );
+    n.current.set("a", record("a", "head-1", "closed"));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh results" }));
+    await screen.findByText("Verified closed");
+    expect(
+      screen.queryByText(
+        "Close outcome is unresolved. Reload before trying again."
+      )
+    ).toBeNull();
+    expect(screen.getByText("Not attempted")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Close 1 reviewed proposals" })
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByTestId("inbox-count").textContent).toBe("1")
+    );
+    expect(screen.getByTestId("inbox-table").textContent).toBe("Proposal b");
+    expect(n.calls.filter((call) => call.startsWith("POST"))).toEqual([
+      "POST a",
+    ]);
+  });
+
+  it.each([
+    "changed",
+    "closed",
+    "merged",
+    "unreadable",
+  ] as const)("refresh replaces an unattempted row's current status when it becomes %s", async (state) => {
+    const n = network([record("a"), record("b")], async () => {
+      throw new TypeError("uncertain first close");
+    });
+    render(
+      <ReviewedClosePanel
+        value={link([
+          { contributionId: "a", expectedHeadCommit: "head-1" },
+          { contributionId: "b", expectedHeadCommit: "head-1" },
+        ])}
+      />
+    );
+    await clickReady(2);
+    await screen.findByText("Not attempted");
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Refresh results",
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(false)
+    );
+    if (state === "unreadable") n.current.delete("b");
+    else
+      n.current.set(
+        "b",
+        state === "changed"
+          ? record("b", "new-head")
+          : record("b", "head-1", state)
+      );
+    fireEvent.click(screen.getByRole("button", { name: "Refresh results" }));
+    await waitFor(() => expect(screen.queryByText("Not attempted")).toBeNull());
+    const expected =
+      state === "changed"
+        ? "Changed since review; excluded"
+        : state === "closed"
+          ? "Already closed; excluded"
+          : state === "merged"
+            ? "Already merged; excluded"
+            : "Could not read this proposal; excluded.";
+    await screen.findByText(expected);
+    expect(
+      screen.getByRole("button", { name: "Close 1 reviewed proposals" })
+    ).toBeTruthy();
+    expect(n.calls.filter((call) => call.startsWith("POST"))).toEqual([
+      "POST a",
+    ]);
   });
 
   it("changing the URL stops future dispatch from the previous frozen selection", async () => {

@@ -27,6 +27,24 @@ import {
   type ReviewedCloseRow,
 } from "../_api/reviewedClose";
 
+type CloseAttempt =
+  | { phase: "waiting" | "closing" | "complete" }
+  | { phase: "failed"; message: string };
+
+/** Server observations own current status; an attempt is only local history. */
+function currentStatus(row: ReviewedCloseRow, attempt?: CloseAttempt): string {
+  if (row.error) return row.error;
+  if (row.record?.state === "closed")
+    return attempt && attempt.phase !== "waiting"
+      ? "Verified closed"
+      : "Already closed; excluded";
+  if (row.record?.state === "merged") return "Already merged; excluded";
+  if (!isReviewedCloseEligible(row)) return "Changed since review; excluded";
+  if (attempt?.phase === "closing") return "Closing…";
+  if (attempt?.phase === "waiting") return "Not attempted";
+  return "Ready to close";
+}
+
 export function ReviewedClosePanel({ value }: { readonly value: string }) {
   const queryClient = useQueryClient();
   const [selection] = useState(() => {
@@ -37,7 +55,7 @@ export function ReviewedClosePanel({ value }: { readonly value: string }) {
     }
   });
   const [rows, setRows] = useState<ReviewedCloseRow[]>([]);
-  const [results, setResults] = useState<Record<string, string>>({});
+  const [attempts, setAttempts] = useState<Record<string, CloseAttempt>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [readRequest, setReadRequest] = useState({ selection });
@@ -84,7 +102,10 @@ export function ReviewedClosePanel({ value }: { readonly value: string }) {
     // Refresh the shared dashboard table/count as well as this private preview.
     // Partial and unmounted runs must reconcile the same cache as single-close.
     void queryClient.invalidateQueries({ queryKey: ["knowledge"] });
-    if (mounted.current) setReadRequest({ selection });
+    if (mounted.current) {
+      setLoading(true);
+      setReadRequest({ selection });
+    }
   };
 
   const run = async () => {
@@ -93,37 +114,56 @@ export function ReviewedClosePanel({ value }: { readonly value: string }) {
     setBusy(true);
     // Freeze the clicked preview. A new URL remounts this panel and stops future calls.
     const pending = [...eligible];
-    setResults(
-      Object.fromEntries(
-        pending.map((row) => [row.item.contributionId, "Not attempted"])
-      )
-    );
+    setAttempts((prior) => ({
+      ...prior,
+      ...Object.fromEntries(
+        pending.map((row) => [
+          row.item.contributionId,
+          { phase: "waiting" as const },
+        ])
+      ),
+    }));
     try {
       for (const row of pending) {
         if (!mounted.current) break;
         try {
-          setResults((prior) => ({
+          setAttempts((prior) => ({
             ...prior,
-            [row.item.contributionId]: "Closing…",
+            [row.item.contributionId]: { phase: "closing" },
           }));
-          await closeContribution(row.item.contributionId, selection.reason, {
-            expectedHeadCommit: row.item.expectedHeadCommit,
-            stillActive: () => mounted.current,
-          });
-          if (mounted.current)
-            setResults((prior) => ({
+          const result = await closeContribution(
+            row.item.contributionId,
+            selection.reason,
+            {
+              expectedHeadCommit: row.item.expectedHeadCommit,
+              stillActive: () => mounted.current,
+            }
+          );
+          if (mounted.current) {
+            // Use the helper's actual GET record, never synthesize a closed state.
+            const record = result.record;
+            if (record)
+              setRows((prior) =>
+                prior.map((current) =>
+                  current.item.contributionId === row.item.contributionId
+                    ? { item: current.item, record }
+                    : current
+                )
+              );
+            setAttempts((prior) => ({
               ...prior,
-              [row.item.contributionId]: "Verified closed",
+              [row.item.contributionId]: { phase: "complete" },
             }));
+          }
         } catch (error) {
           const message =
             error instanceof Error
               ? error.message
               : "Close could not be verified.";
           if (mounted.current)
-            setResults((prior) => ({
+            setAttempts((prior) => ({
               ...prior,
-              [row.item.contributionId]: message,
+              [row.item.contributionId]: { phase: "failed", message },
             }));
           if (!(error instanceof ReviewedCloseError) || error.stopBatch) break;
         }
@@ -150,27 +190,32 @@ export function ReviewedClosePanel({ value }: { readonly value: string }) {
       </p>
       {loading && <output>Reading selected proposals…</output>}
       <ul className="flex flex-col gap-2 text-sm">
-        {rows.map((row) => (
-          <li key={row.item.contributionId} className="flex flex-col gap-1">
-            <Link
-              className="underline"
-              href={`/knowledge/inbox/${encodeURIComponent(row.item.contributionId)}`}
-            >
-              {row.record?.message ?? row.item.contributionId}
-            </Link>
-            <span>
-              {results[row.item.contributionId] ??
-                row.error ??
-                (row.record?.state !== "open"
-                  ? `Already ${row.record?.state}; excluded`
-                  : isReviewedCloseEligible(row)
-                    ? busy
-                      ? "Waiting for close"
-                      : "Ready to close"
-                    : "Changed since review; excluded")}
-            </span>
-          </li>
-        ))}
+        {rows.map((row) => {
+          const attempt = attempts[row.item.contributionId];
+          // Retain relevant failure detail without letting history mask a newer
+          // closed/merged/changed observation. Refresh itself never writes.
+          const diagnostic =
+            attempt?.phase === "failed" &&
+            (isReviewedCloseEligible(row) || row.error)
+              ? attempt.message
+              : null;
+          return (
+            <li key={row.item.contributionId} className="flex flex-col gap-1">
+              <Link
+                className="underline"
+                href={`/knowledge/inbox/${encodeURIComponent(row.item.contributionId)}`}
+              >
+                {row.record?.message ?? row.item.contributionId}
+              </Link>
+              <span>{currentStatus(row, attempt)}</span>
+              {diagnostic && (
+                <p className="text-muted-foreground">
+                  Last attempt: <span>{diagnostic}</span>
+                </p>
+              )}
+            </li>
+          );
+        })}
       </ul>
       <div className="flex flex-wrap gap-2">
         <Button
