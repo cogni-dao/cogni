@@ -50,8 +50,9 @@ import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-
 import type {
+  CancelCandidateMaintenanceInput,
+  CancelCandidateMaintenanceResult,
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
   ClassifyEnvManagerPrInput,
@@ -119,6 +120,7 @@ import {
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 import { classifyEnvManagerCommit } from "@/shared/vcs/env-manager-pr";
+import { cancelCandidateMaintenance } from "./maintenance-cancel";
 import { resolveReviewedWorkflowRef } from "./reviewed-workflow-ref";
 import { reconcileWorkerRouting } from "./worker-custodied-routing";
 
@@ -1083,6 +1085,24 @@ export class GitHubRepoWriter implements DeployPlanePort {
       appId: config.appId,
       privateKey: config.privateKey,
     });
+  }
+
+  async cancelCandidateMaintenance(
+    input: CancelCandidateMaintenanceInput
+  ): Promise<CancelCandidateMaintenanceResult> {
+    const { parentOwner, parentRepo } = this.config;
+    if (!parentOwner || !parentRepo)
+      throw deployPlaneError(
+        "maintenance_parent_unconfigured",
+        "operator mutation parent is required",
+        503
+      );
+    return cancelCandidateMaintenance(
+      await this.getOctokit(parentOwner, parentRepo),
+      parentOwner,
+      parentRepo,
+      input
+    );
   }
 
   async prepareNodeRefCandidateFlight(

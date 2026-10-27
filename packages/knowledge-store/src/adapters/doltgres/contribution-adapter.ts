@@ -62,6 +62,7 @@ import {
 import type {
   ContributionCommitRecord,
   ContributionDiffEntry,
+  ContributionMergePreview,
   ContributionRecord,
   ContributionState,
   KnowledgeContributionEdit,
@@ -96,6 +97,11 @@ import {
   HypothesisMissingEvaluateAtError,
   KnowledgeWriteOutcomeUnknownError,
 } from "../../port/knowledge-store.port.js";
+import {
+  previewContributionMerge,
+  previewMainIsClean,
+  unavailableMergePreview,
+} from "./merge-preview.js";
 import {
   type BranchSessionLogger,
   type BranchSessionOptions,
@@ -1791,6 +1797,27 @@ export class DoltgresKnowledgeContributionAdapter
     }
 
     return entries;
+  }
+
+  async previewMerge(
+    contributionId: string
+  ): Promise<ContributionMergePreview> {
+    try {
+      return await this.session.run(
+        "contribution.merge_check",
+        async (conn, _guard, owner) => {
+          // Register before the first SQL. No mutation reconciliation is needed:
+          // uncertain or dirty state is retained by the existing native owner.
+          owner.registerReconciliation(() => previewMainIsClean(conn));
+          return await previewContributionMerge(conn, contributionId);
+        },
+        { awaitSettlement: true }
+      );
+    } catch {
+      // Unsupported engine, timeout, admission and uncertain cleanup are all
+      // unknown; SQL details and native credentials never reach this surface.
+      return unavailableMergePreview(contributionId);
+    }
   }
 
   async merge(input: {

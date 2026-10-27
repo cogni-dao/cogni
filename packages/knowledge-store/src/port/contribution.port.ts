@@ -18,6 +18,7 @@
 import type {
   ContributionCommitRecord,
   ContributionDiffEntry,
+  ContributionMergePreview,
   ContributionRecord,
   ContributionState,
   KnowledgeContributionEdit,
@@ -167,6 +168,9 @@ export interface KnowledgeContributionPort {
   listCommits(contributionId: string): Promise<ContributionCommitRecord[]>;
 
   diff(contributionId: string): Promise<ContributionDiffEntry[]>;
+
+  /** Expensive admitted diagnostic. Missing native capability is unavailable. */
+  previewMerge?(contributionId: string): Promise<ContributionMergePreview>;
 
   merge(input: {
     contributionId: string;
