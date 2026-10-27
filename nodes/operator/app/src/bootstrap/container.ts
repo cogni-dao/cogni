@@ -880,6 +880,7 @@ function createContainer(): Container {
   // VcsCapability for AI tools (requires GH_REVIEW_APP_ID)
   const vcsCapability = createVcsCapability(env);
   const nodeCodeCapability = createNodeCodeCapability({
+    getAuthorization: () => authorization,
     nodeId,
     origin: env.APP_BASE_URL,
     ...getGithubRepo(),

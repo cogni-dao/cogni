@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@bootstrap/capabilities/knowledge-contribution-read`
  * Purpose: Bind existing authenticated node-local contribution read scope to AI tools.
- * Scope: Bounded open-list and coherent selected diff; no mutation or new auth identity.
+ * Scope: Bounded open-list and coherent selected diff; no mutation or new auth identity. Does not perform source mutations.
  * Invariants: Execution node and authenticated actor required; retain actual author metadata.
  * Side-effects: IO (existing ContributionService reads only).
  * Links: https://cognidao.org/work/items/task.5367

@@ -773,6 +773,9 @@ describe("Cogni read-only common program", () => {
       create?: boolean;
       inboxIncomplete?: boolean;
       codeUnknown?: boolean;
+      recalledDomain?: string;
+      createTarget?: string;
+      missingRevision?: boolean;
     } = {}
   ) {
     const calls: string[] = [];
@@ -823,7 +826,10 @@ describe("Cogni read-only common program", () => {
                   arguments: JSON.stringify(
                     options.kind === "knowledge"
                       ? options.create
-                        ? { domain: "reference", limit: 50 }
+                        ? {
+                            domain: options.recalledDomain ?? "reference",
+                            limit: 50,
+                          }
                         : { id: "reference-one" }
                       : options.kind === "code"
                         ? { path: "src/thing.ts" }
@@ -852,11 +858,15 @@ describe("Cogni read-only common program", () => {
                 target:
                   options.kind === "knowledge"
                     ? options.create
-                      ? "Proposed guide about a missing reference"
+                      ? (options.createTarget ??
+                        "Proposed guide about a missing reference")
                       : "reference-one"
                     : options.kind === "code"
                       ? "src/thing.ts"
                       : "task.5016",
+                ...(options.kind === "knowledge"
+                  ? { domain: "reference" }
+                  : {}),
                 rationale: "Explicit human condition at end of full outcome",
                 nextAction: "Ask the named reviewer for the missing decision",
                 goalIds: ["goal-useful"],
@@ -887,7 +897,7 @@ describe("Cogni read-only common program", () => {
                 : [
                     {
                       id: input.id ?? "reference-one",
-                      domain: "reference",
+                      domain: input.domain ?? "reference",
                       content:
                         "Full owning guidance requires source-backed proposals",
                       sourceRef: `main:${input.id}`,
@@ -951,7 +961,7 @@ describe("Cogni read-only common program", () => {
                   type: "task",
                   title: "Held reviewer decision",
                   status: options.terminal ? "cancelled" : "blocked",
-                  revision: 9,
+                  ...(options.missingRevision ? {} : { revision: 9 }),
                   labels: [],
                   assignees: [],
                   updatedAt: "2026-10-27",
@@ -1006,7 +1016,21 @@ describe("Cogni read-only common program", () => {
     expect(finalEvents).toHaveLength(1);
     expect(finalEvents[0]).toMatchObject({ content: run.result.content });
     expect(run.result.content).toContain("**Next:** Ask the named reviewer");
-    expect(run.result.content).not.toContain("sha256");
+    expect(run.result.content).toContain("<details>");
+    const artifact = JSON.parse(
+      run.result.content?.match(/```json\n([\s\S]*?)\n```/)?.[1] ?? "null"
+    );
+    expect(artifact).toEqual(run.result.structuredOutput?.proposal);
+    expect(
+      artifact.receipts.find(
+        (receipt: { id: string }) => receipt.id === "node-mission"
+      )
+    ).toMatchObject({
+      nodeId: "fixture-node",
+      origin: "https://fixture.invalid",
+      content: "Build a useful organization",
+      buildSha: null,
+    });
     expect(run.calls).not.toContain(WORK_ITEM_TRANSITION_NAME);
     expect(run.calls).not.toContain(EDO_DECIDE_NAME);
     expect(run.events.filter((e) => e.type === "text_delta")).toHaveLength(0);
@@ -1065,6 +1089,35 @@ describe("Cogni read-only common program", () => {
     const run = await qualify({ kind: "code", codeUnknown: true });
     expect(JSON.stringify(run.result.structuredOutput)).toContain(
       '"status":"incomplete"'
+    );
+  });
+  it("does not let unrelated-domain recall authorize knowledge creation", async () => {
+    const run = await qualify({
+      kind: "knowledge",
+      create: true,
+      recalledDomain: "unrelated",
+    });
+    expect(JSON.stringify(run.result.structuredOutput)).toContain(
+      "knowledge_create_recall_incomplete"
+    );
+  });
+  it("does not propose creation of a canonical target already observed in preflight", async () => {
+    const run = await qualify({
+      kind: "knowledge",
+      create: true,
+      createTarget: "mission-loop-expert",
+    });
+    expect(JSON.stringify(run.result.structuredOutput)).toContain(
+      "knowledge_create_target_already_observed"
+    );
+  });
+  it("does not manufacture a work receipt from an undefined revision", async () => {
+    const run = await qualify({ missingRevision: true });
+    expect(JSON.stringify(run.result.structuredOutput)).toContain(
+      '"status":"incomplete"'
+    );
+    expect(JSON.stringify(run.result.structuredOutput)).not.toContain(
+      "work:task.5016:undefined"
     );
   });
 });

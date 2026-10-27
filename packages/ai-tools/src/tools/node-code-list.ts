@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/ai-tools/tools/node-code-list`
  * Purpose: Inspect direct admitted code entries at the owning node's immutable serving commit.
- * Scope: Bounded tree metadata only; no arbitrary refs, recursive traversal or writes.
+ * Scope: Bounded tree metadata only; no arbitrary refs, recursive traversal or writes. Does not perform source mutations.
  * Invariants: Existing developer authority; capped/inaccessible trees cannot prove absence.
- * Side-effects: IO via injected NodeCodeCapability.
+ * Side-effects: IO (injected capability reads)
  * Links: https://cognidao.org/work/items/subtask.5027
  * @public
  */

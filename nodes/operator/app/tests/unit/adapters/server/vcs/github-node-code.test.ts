@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@tests/unit/adapters/server/vcs/github-node-code`
  * Purpose: Prove immutable byte/range identity, path policy and honest absence with Git object fixtures.
- * Scope: Injected Git API and execution scope; no network, real credentials or model calls.
+ * Scope: Injected Git API and execution scope; no network, real credentials or model calls. Does not perform source mutations.
  * Invariants: Deny links before blob access; inaccessible/capped sources cannot prove absence.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/subtask.5027
  * @internal
  */
+
 import { createHash } from "node:crypto";
+import { FakeAuthorizationAdapter } from "@cogni/authorization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { NodeCodeGitRequest } from "@/adapters/server/vcs/github-node-code.adapter";
 import { GitHubNodeCodeAdapter } from "@/adapters/server/vcs/github-node-code.adapter";
@@ -20,6 +22,7 @@ import { createNodeCodeCapability } from "@/bootstrap/capabilities/node-code";
 const scope = vi.hoisted(() => ({
   nodeId: "node-own",
   actorUserId: "developer",
+  billing: { billingAccountId: "payer" },
 }));
 const boundRead = vi.hoisted(() => vi.fn());
 const authCalls = vi.hoisted(() =>
@@ -316,7 +319,80 @@ describe("host-bound immutable node Git reader", () => {
     });
   });
 
+  it("bound capability independently rechecks computed FGA authority before every source request", async () => {
+    const authorization = new FakeAuthorizationAdapter();
+    const request = {
+      actorId: "user:developer",
+      action: "node.flight" as const,
+      resource: "node:node-own",
+      context: { nodeId: "node-own", tenantId: "payer" },
+    };
+    const check = vi.spyOn(authorization, "check");
+    const cap = createNodeCodeCapability({
+      ...binding,
+      appId: "123",
+      privateKeyBase64: "aw==",
+      log,
+      getAuthorization: () => authorization,
+    });
+    scope.nodeId = "node-own";
+    boundRead.mockClear();
+    await expect(cap.read({ path: "packages/source.ts" })).rejects.toThrow(
+      "authz_denied"
+    );
+    expect(check).toHaveBeenLastCalledWith(request);
+    expect(boundRead).not.toHaveBeenCalled();
+    authorization.allow(request);
+    boundRead.mockResolvedValue({ complete: true });
+    await cap.read({ path: "packages/source.ts" });
+    expect(boundRead).toHaveBeenCalledTimes(1);
+    authorization.deny(request);
+    await expect(cap.list({ path: "packages" })).rejects.toThrow(
+      "authz_denied"
+    );
+    expect(boundRead).toHaveBeenCalledTimes(1);
+    authorization.unavailable(request);
+    await expect(cap.read({ path: "packages/source.ts" })).rejects.toThrow(
+      "authz_unavailable"
+    );
+    expect(boundRead).toHaveBeenCalledTimes(1);
+    check.mockRejectedValueOnce(new Error("FGA offline"));
+    await expect(cap.read({ path: "packages/source.ts" })).rejects.toThrow(
+      "authz_unavailable"
+    );
+    expect(boundRead).toHaveBeenCalledTimes(1);
+    const noAuthority = createNodeCodeCapability({
+      ...binding,
+      appId: "123",
+      privateKeyBase64: "aw==",
+      log,
+    });
+    await expect(
+      noAuthority.read({ path: "packages/source.ts" })
+    ).rejects.toThrow("authz_unavailable");
+    expect(boundRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves optional private-code source unavailable when the host origin is missing or invalid", async () => {
+    scope.nodeId = "node-own";
+    boundRead.mockClear();
+    for (const origin of [undefined, "invalid-origin"]) {
+      const cap = createNodeCodeCapability({
+        ...binding,
+        origin,
+        appId: "123",
+        privateKeyBase64: "aw==",
+        log,
+      });
+      await expect(cap.read({ path: "packages/source.ts" })).rejects.toThrow(
+        "node_code_source_unavailable"
+      );
+    }
+    expect(boundRead).not.toHaveBeenCalled();
+  });
+
   it("host wrapper rejects a mismatched execution node and never falls back when source is unavailable", async () => {
+    boundRead.mockClear();
     const cap = createNodeCodeCapability({
       ...binding,
       appId: "123",

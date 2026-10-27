@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@adapters/server/vcs/github-node-code`
  * Purpose: Bounded immutable Git-tree/blob evidence for the owning node.
- * Scope: Git object reads only, with host-owned identity and admitted source paths.
+ * Scope: Git object reads only, with host-owned identity and admitted source paths. Does not perform source mutations.
  * Invariants: No Contents symlink following; no raw-404 absence; reject secret paths before IO.
  * Side-effects: IO (injected GitHub App read transport).
  * Links: https://cognidao.org/work/items/subtask.5027

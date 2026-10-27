@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/ai-tools/tools/node-code-read`
  * Purpose: Read an admitted source range at the owning node's immutable serving commit.
- * Scope: No model-selected repository, node, origin, credential or revision; no writes.
+ * Scope: No model-selected repository, node, origin, credential or revision; no writes. Does not perform source mutations.
  * Invariants: Existing node.flight developer authorization is required, never node.collaborate.
- * Side-effects: IO via injected NodeCodeCapability.
+ * Side-effects: IO (injected capability reads)
  * Links: https://cognidao.org/work/items/subtask.5027
  * @public
  */

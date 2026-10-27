@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/langgraph-graphs/graphs/operator/server`
  * Purpose: Expose the same Cogni factory to LangGraph Studio for structural development.
- * Scope: Dev-only inspection. No authenticated node binding or production capability proof.
+ * Scope: Dev-only inspection. No authenticated node binding or production capability proof. Does not perform source mutations.
  * Invariants: Missing host source context returns incomplete before any tool/model invocation.
- * Side-effects: process.env through existing makeServerGraph helper.
+ * Side-effects: process.env (existing dev helper)
  * Links: https://cognidao.org/work/items/task.5367
  * @internal
  */

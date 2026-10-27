@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@tests/unit/bootstrap/knowledge-contribution-read`
  * Purpose: Verify node-local read scope, moving-head rejection and honest completeness.
- * Scope: Real execution ALS + capability; fake underlying contribution store only.
+ * Scope: Real execution ALS + capability; fake underlying contribution store only. Does not perform source mutations.
  * Invariants: Missing actor/foreign node never reach the store; no writes are available.
- * Side-effects: none.
+ * Side-effects: none
  * Links: https://cognidao.org/work/items/task.5367
  * @internal
  */

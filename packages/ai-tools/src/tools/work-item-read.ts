@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/ai-tools/tools/work-item-read`
  * Purpose: Read one complete work item through the existing query capability.
- * Scope: Exact-ID read only. Never clips an item's constraints or performs a write.
+ * Scope: Exact-ID read only. Never clips an item's constraints or performs a write. Does not perform source mutations.
  * Invariants: Explicit failure on missing, ambiguous, or oversized source.
  * Side-effects: IO (work-item query).
  * Links: https://cognidao.org/work/items/task.5367
@@ -19,7 +19,9 @@ export const WORK_ITEM_READ_NAME = "core__work_item_read" as const;
 const inputSchema = z.object({ id: z.string().min(1) }).strict();
 const outputSchema = z.object({
   complete: z.literal(true),
-  item: WorkItemOutputSchema,
+  item: WorkItemOutputSchema.extend({
+    revision: z.number().int().nonnegative(),
+  }),
 });
 type Input = z.infer<typeof inputSchema>;
 type Output = z.infer<typeof outputSchema>;
@@ -53,11 +55,15 @@ export function createWorkItemReadImplementation(deps: {
           "work_source_unavailable: exact item missing or ambiguous"
         );
       const item = WorkItemOutputSchema.parse(items[0]);
+      if (!Number.isSafeInteger(item.revision))
+        throw new Error(
+          "work_source_revision_unavailable: exact item has no numeric revision"
+        );
       if (new TextEncoder().encode(JSON.stringify(item)).length > 65536)
         throw new Error(
           "work_source_incomplete: item exceeds complete-read budget"
         );
-      return { complete: true, item };
+      return outputSchema.parse({ complete: true, item });
     },
   };
 }

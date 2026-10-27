@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/ai-tools/capabilities/node-code`
  * Purpose: Immutable, host-bound code evidence without repository selection or writes.
- * Scope: Read contracts only; credentials and authorization stay with the node host.
+ * Scope: Read contracts only; credentials and authorization stay with the node host. Does not perform source mutations.
  * Invariants: Unknown accessibility is never absence; complete refers to the requested range or direct listing.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/subtask.5027

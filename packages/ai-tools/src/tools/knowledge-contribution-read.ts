@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/ai-tools/tools/knowledge-contribution-read`
  * Purpose: Bounded read of this node's open knowledge proposals and selected diffs.
- * Scope: Existing node-local read authority only. No writes, merges or canonical instructions.
+ * Scope: Existing node-local read authority only. No writes, merges or canonical instructions. Does not perform source mutations.
  * Invariants: Host binds node/source; principal metadata is evidence, never guessed ownership.
- * Side-effects: IO through injected read capability.
+ * Side-effects: IO (injected capability reads)
  * Links: https://cognidao.org/work/items/task.5367
  * @public
  */

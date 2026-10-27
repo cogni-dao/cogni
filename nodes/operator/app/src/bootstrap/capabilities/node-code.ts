@@ -1,22 +1,29 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@bootstrap/capabilities/node-code`
  * Purpose: Bind immutable code reads to this node, source repository and serving revision.
- * Scope: Existing App installation contents:read only; no local filesystem fallback or new grants.
- * Invariants: Normal ToolRunner requires node.flight developer authority; reject wrong execution node.
- * Side-effects: none at construction; injected capability performs GitHub reads.
+ * Scope: Existing App installation contents:read only; no local filesystem fallback or new grants. Does not perform source mutations.
+ * Invariants: ToolRunner and this bound capability independently require computed node.flight authority; reject wrong execution node.
+ * Side-effects: none
  * Links: https://cognidao.org/work/items/subtask.5027
  * @internal
  */
+
 import type { NodeCodeCapability } from "@cogni/ai-tools";
+import {
+  type AuthorizationPort,
+  type AuthzDecision,
+  authzNodeResource,
+} from "@cogni/authorization-core";
 import { GitHubVcsAdapter } from "@/adapters/server";
 import { getExecutionScope } from "@/adapters/server/ai/execution-scope";
 
 export function createNodeCodeCapability(deps: {
+  getAuthorization?: () => AuthorizationPort | undefined;
   nodeId: string;
-  origin: string;
+  origin: string | undefined;
   owner: string;
   repo: string;
   commitSha: string | undefined;
@@ -28,7 +35,18 @@ export function createNodeCodeCapability(deps: {
   };
 }): NodeCodeCapability {
   let reader: NodeCodeCapability | undefined;
+  let origin: string | undefined;
+  if (deps.origin) {
+    try {
+      const parsed = new URL(deps.origin);
+      if (parsed.protocol === "https:" || parsed.protocol === "http:")
+        origin = parsed.origin;
+    } catch {
+      /* Invalid optional source configuration remains unavailable. */
+    }
+  }
   if (
+    origin &&
     deps.appId &&
     deps.privateKeyBase64 &&
     deps.commitSha &&
@@ -41,7 +59,7 @@ export function createNodeCodeCapability(deps: {
     reader = adapter.nodeCodeReader(
       {
         nodeId: deps.nodeId,
-        origin: new URL(deps.origin).origin,
+        origin,
         owner: deps.owner,
         repo: deps.repo,
         commitSha: deps.commitSha,
@@ -64,15 +82,38 @@ export function createNodeCodeCapability(deps: {
       deps.log
     );
   }
-  function scoped(): NodeCodeCapability {
+  async function scoped(): Promise<NodeCodeCapability> {
     const scope = getExecutionScope();
     if (!scope.actorUserId || scope.nodeId !== deps.nodeId)
       throw new Error("node_code_scope_unavailable");
     if (!reader) throw new Error("node_code_source_unavailable");
+    const authorization = deps.getAuthorization?.();
+    if (!authorization) throw new Error("node_code_authz_unavailable");
+    let decision: AuthzDecision;
+    try {
+      decision = await authorization.check({
+        actorId: `user:${scope.actorUserId}`,
+        action: "node.flight",
+        resource: authzNodeResource(deps.nodeId),
+        context: {
+          nodeId: deps.nodeId,
+          tenantId: scope.billing.billingAccountId,
+          ...(scope.grantId ? { grantId: scope.grantId } : {}),
+        },
+      });
+    } catch {
+      throw new Error("node_code_authz_unavailable");
+    }
+    if (decision.decision !== "allow")
+      throw new Error(
+        decision.code === "authz_unavailable"
+          ? "node_code_authz_unavailable"
+          : "node_code_authz_denied"
+      );
     return reader;
   }
   return {
-    read: async (input) => scoped().read(input),
-    list: async (input) => scoped().list(input),
+    read: async (input) => (await scoped()).read(input),
+    list: async (input) => (await scoped()).list(input),
   };
 }

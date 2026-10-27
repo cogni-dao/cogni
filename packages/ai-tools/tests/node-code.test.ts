@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/ai-tools/tests/node-code`
  * Purpose: Prove source identity cannot be selected by the model and private reads fail closed.
- * Scope: Real ToolRunner and contract adapters with fake source IO/authorization; no model or GitHub calls.
+ * Scope: Real ToolRunner and contract adapters with fake source IO/authorization; no model or GitHub calls. Does not perform source mutations.
  * Invariants: Collaborator identity is insufficient; developer authority is checked on the owning node.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/subtask.5027
