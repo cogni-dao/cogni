@@ -120,6 +120,8 @@ export function createCogniProgram(
     let consumed = 0;
     let inboxRecallComplete = false;
     const completeDomains = new Set<string>();
+    // Shelf existence comes from canonical row/index metadata, never an empty query.
+    const knownDomains = new Set<string>();
     const observedKnowledgeIds = new Set<string>();
     const codeSources = new Map<string, Record<string, unknown>>();
     const telemetry = (
@@ -199,6 +201,8 @@ export function createCogniProgram(
         )
           throw new Error(`required_guidance_missing:${args.id}`);
         observedKnowledgeIds.add(args.id);
+        if (typeof entry.domain === "string" && entry.domain.trim())
+          knownDomains.add(entry.domain);
         add(
           args.id,
           entry.content,
@@ -219,6 +223,8 @@ export function createCogniProgram(
             typeof entry.content === "string"
           ) {
             observedKnowledgeIds.add(entry.id);
+            if (typeof entry.domain === "string" && entry.domain.trim())
+              knownDomains.add(entry.domain);
             add(
               entry.id,
               entry.content,
@@ -229,6 +235,7 @@ export function createCogniProgram(
         }
         if (
           value.mode === "list" &&
+          knownDomains.has(args.domain) &&
           value.totalFound === value.entries.length &&
           value.entries.every(
             (rawEntry) => record(rawEntry)?.domain === args.domain
@@ -246,8 +253,15 @@ export function createCogniProgram(
         if (Array.isArray(rows))
           for (const rawEntry of rows) {
             const entry = record(rawEntry);
-            if (typeof entry?.id === "string")
+            if (typeof entry?.id === "string") {
               observedKnowledgeIds.add(entry.id);
+              if (
+                name === "core__knowledge_index" &&
+                typeof entry.domain === "string" &&
+                entry.domain.trim()
+              )
+                knownDomains.add(entry.domain);
+            }
           }
       } else if (name === "core__knowledge_contribution_read") {
         if (value.nodeId !== opts.sourceContext?.nodeId)
@@ -285,6 +299,7 @@ export function createCogniProgram(
             typeof goal.content === "string"
           ) {
             goals.add(goal.id);
+            observedKnowledgeIds.add(goal.id);
             add(goal.id, goal.content, null, true);
           }
         }

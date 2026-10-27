@@ -776,6 +776,8 @@ describe("Cogni read-only common program", () => {
       recalledDomain?: string;
       createTarget?: string;
       missingRevision?: boolean;
+      emptyRecall?: boolean;
+      proposedDomain?: string;
     } = {}
   ) {
     const calls: string[] = [];
@@ -865,14 +867,16 @@ describe("Cogni read-only common program", () => {
                       ? "src/thing.ts"
                       : "task.5016",
                 ...(options.kind === "knowledge"
-                  ? { domain: "reference" }
+                  ? { domain: options.proposedDomain ?? "reference" }
                   : {}),
                 rationale: "Explicit human condition at end of full outcome",
                 nextAction: "Ask the named reviewer for the missing decision",
                 goalIds: ["goal-useful"],
                 sourceIds: [
                   options.kind === "knowledge"
-                    ? "reference-one"
+                    ? options.emptyRecall
+                      ? "mission-loop-expert"
+                      : "reference-one"
                     : options.kind === "code"
                       ? codeCitation
                       : "task.5016",
@@ -892,18 +896,22 @@ describe("Cogni read-only common program", () => {
             ok: true,
             value: {
               mode: input.id ? "get" : "list",
-              entries: options.missingGuide
-                ? []
-                : [
-                    {
-                      id: input.id ?? "reference-one",
-                      domain: input.domain ?? "reference",
-                      content:
-                        "Full owning guidance requires source-backed proposals",
-                      sourceRef: `main:${input.id}`,
-                    },
-                  ],
-              totalFound: 1,
+              entries:
+                options.missingGuide || (input.domain && options.emptyRecall)
+                  ? []
+                  : [
+                      {
+                        id: input.id ?? "reference-one",
+                        domain: input.domain ?? "reference",
+                        content:
+                          "Full owning guidance requires source-backed proposals",
+                        sourceRef: `main:${input.id}`,
+                      },
+                    ],
+              totalFound:
+                options.missingGuide || (input.domain && options.emptyRecall)
+                  ? 0
+                  : 1,
             },
           };
         if (name === "core__knowledge_contribution_read")
@@ -1118,6 +1126,28 @@ describe("Cogni read-only common program", () => {
     );
     expect(JSON.stringify(run.result.structuredOutput)).not.toContain(
       "work:task.5016:undefined"
+    );
+  });
+  it("does not propose creation of an existing canonical goal observed through goal_list", async () => {
+    const run = await qualify({
+      kind: "knowledge",
+      create: true,
+      createTarget: "goal-useful",
+    });
+    expect(JSON.stringify(run.result.structuredOutput)).toContain(
+      "knowledge_create_target_already_observed"
+    );
+  });
+  it("does not treat an empty unknown shelf as complete eligible creation coverage", async () => {
+    const run = await qualify({
+      kind: "knowledge",
+      create: true,
+      recalledDomain: "invented-shelf",
+      proposedDomain: "invented-shelf",
+      emptyRecall: true,
+    });
+    expect(JSON.stringify(run.result.structuredOutput)).toContain(
+      "knowledge_create_recall_incomplete"
     );
   });
 });
