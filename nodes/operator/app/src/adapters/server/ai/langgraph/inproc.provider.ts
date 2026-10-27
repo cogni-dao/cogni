@@ -128,7 +128,19 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       readonly content: string;
       readonly sourceRef: string;
       readonly buildSha: string | null;
-    }
+    },
+    /**
+     * Host-owned governing-index reader (same `listGoverningIndex` the cognition bundle uses).
+     * Read per run so a reviewed hub change is seen without an app rebuild; metadata only.
+     */
+    private readonly governingIndexReader?: () => Promise<
+      ReadonlyArray<{
+        readonly id: string;
+        readonly domain: string;
+        readonly entryType: string;
+        readonly useWhen: string;
+      }>
+    >
   ) {
     this.log = makeLogger({
       component: "LangGraphInProcProvider",
@@ -354,6 +366,17 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         },
       };
 
+      // Host-owned governing index, read per run (best-effort) so a reviewed hub change is
+      // seen without a rebuild. Held in the agent's context; the agent reads bodies on demand.
+      const governingIndex = this.governingIndexReader
+        ? await this.governingIndexReader().catch((error) => {
+            this.log.warn(
+              { err: error },
+              "governing index read failed; proceeding without it"
+            );
+            return [];
+          })
+        : [];
       const runner = createInProcGraphRunner({
         createGraph: entry.graphFactory,
         ...(this.nodeId && this.nodeOrigin
@@ -362,6 +385,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
                 nodeId: this.nodeId,
                 origin: this.nodeOrigin,
                 ...(this.nodeMission ? { mission: this.nodeMission } : {}),
+                ...(governingIndex.length ? { governingIndex } : {}),
               },
             }
           : {}),

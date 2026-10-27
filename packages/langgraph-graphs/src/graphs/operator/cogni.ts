@@ -42,7 +42,6 @@ export const COGNI_TOOL_IDS = [
   "core__node_code_read",
   "core__node_code_list",
   "core__knowledge_contribution_read",
-  "core__knowledge_index",
   "core__knowledge_search",
   "core__work_item_query",
   "core__work_item_read",
@@ -181,8 +180,17 @@ export function createCogniProgram(opts: CreateReactAgentGraphOptions) {
     const mission = opts.sourceContext.mission;
     if (!mission?.content.trim())
       throw new Error("node_mission_source_unavailable");
+    // Governing index held in context (guidance-routing-design progressive disclosure): the
+    // same listGoverningIndex the cognition bundle renders. The agent selects by use-when and
+    // reads each body on demand with core__knowledge_read — it never dumps the index at runtime.
+    const index = opts.sourceContext.governingIndex ?? [];
+    const indexBlock = index.length
+      ? `\n\nYour governing index (${index.length} entries; metadata only — read bodies on demand). Select the entries whose use-when fits your task and read each full body with core__knowledge_read before acting:\n${index
+          .map((e) => `- ${e.id} · ${e.domain} · ${e.entryType} — ${e.useWhen}`)
+          .join("\n")}`
+      : "";
     return new SystemMessage(
-      `${COGNI_PROMPT}\n\nHost-owned node mission (${mission.sourceRef}; serving build ${mission.buildSha ?? "local/unversioned"}):\n${mission.content}\n\nSystematically gather context across every plane BEFORE proposing, reading full bodies (never propose from a list or search alone): approved goals (core__goal_list); governing guides and relevant knowledge by exact ID — your governing guides include ${requiredGuides.join(", ")} (core__knowledge_read; discover more via core__knowledge_index / core__knowledge_search); the open knowledge inbox and relevant full diffs (core__knowledge_contribution_read); the work items you judge (core__work_item_query then core__work_item_read); and relevant repository code (core__node_code_list then core__node_code_read). Read the full body of everything you cite.`
+      `${COGNI_PROMPT}\n\nHost-owned node mission (${mission.sourceRef}; serving build ${mission.buildSha ?? "local/unversioned"}):\n${mission.content}${indexBlock}\n\nSystematically gather context across every plane BEFORE proposing, reading full bodies (never propose from a list or search alone): approved goals (core__goal_list); the governing guides whose use-when fits — including ${requiredGuides.join(", ")} — and relevant knowledge by exact ID (core__knowledge_read; narrow with core__knowledge_search); the open knowledge inbox and relevant full diffs (core__knowledge_contribution_read); the work items you judge (core__work_item_query then core__work_item_read); and relevant repository code (core__node_code_list then core__node_code_read). Read the full body of everything you cite.`
     );
   };
 

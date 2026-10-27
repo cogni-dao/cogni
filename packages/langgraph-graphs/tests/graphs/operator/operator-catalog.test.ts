@@ -85,7 +85,6 @@ describe("operator catalog entries", () => {
         GOAL_LIST_NAME,
         WORK_ITEM_QUERY_NAME,
         "core__work_item_read",
-        "core__knowledge_index",
         KNOWLEDGE_READ_NAME,
         "core__node_code_read",
         "core__node_code_list",
