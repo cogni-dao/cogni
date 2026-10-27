@@ -90,6 +90,7 @@ export {
   type PaymentsStatusReadEvent,
   type PaymentsVerifiedEvent,
   type RequestContext,
+  WORK_ITEMS_LIST_ERROR_CODES,
 } from "@cogni/node-shared";
 // --- App-local: server logger/metrics/redact (pino + prom-client runtime deps) ---
 export * from "./server";

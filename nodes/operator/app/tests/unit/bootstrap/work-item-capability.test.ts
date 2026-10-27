@@ -100,6 +100,28 @@ describe("createWorkItemCapability", () => {
     ]);
   });
 
+  it("forwards sort overrides through query and queryPage", async () => {
+    const md = markdownPorts();
+    const backlogReader = {
+      list: vi.fn().mockResolvedValue({ items: [item()], nextCursor: "next" }),
+    };
+    const cap = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+      backlogReader,
+    });
+    const params = {
+      sortBy: "rankScore",
+      sortDirection: "asc",
+      limit: 2,
+    } as const;
+    await cap.query(params);
+    expect(await cap.queryPage?.(params)).toMatchObject({ nextCursor: "next" });
+    expect(backlogReader.list).toHaveBeenNthCalledWith(1, params);
+    expect(backlogReader.list).toHaveBeenNthCalledWith(2, params);
+    expect(md.query.list).not.toHaveBeenCalled();
+  });
+
   it("falls back to workItemQuery when no backlogReader is wired", async () => {
     const md = markdownPorts();
     const cap = createWorkItemCapability({

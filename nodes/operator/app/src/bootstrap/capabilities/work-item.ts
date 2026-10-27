@@ -138,6 +138,8 @@ export function createWorkItemCapability(
       ...(params.ids && { ids: params.ids.map((id) => toWorkItemId(id)) }),
       ...(params.cursor && { cursor: params.cursor }),
       ...(params.limit && { limit: params.limit }),
+      ...(params.sortBy && { sortBy: params.sortBy }),
+      ...(params.sortDirection && { sortDirection: params.sortDirection }),
     });
   }
 
@@ -166,6 +168,8 @@ export function createWorkItemCapability(
           projectId: toWorkItemId(params.projectId),
         }),
         ...(params.limit && { limit: params.limit }),
+        ...(params.sortBy && { sortBy: params.sortBy }),
+        ...(params.sortDirection && { sortDirection: params.sortDirection }),
       });
       return result.items.map(toWorkItemInfo);
     },

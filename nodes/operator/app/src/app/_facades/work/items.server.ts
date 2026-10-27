@@ -4,7 +4,7 @@
 /**
  * Module: `@app/_facades/work/items.server`
  * Purpose: Server-side facade for work item read/write operations across the markdown + Doltgres surfaces.
- * Scope: Maps content results to DTOs; does not own adapters or PostgreSQL coordination. Dolt IDs start at 5000; lower IDs use markdown.
+ * Scope: Maps content to DTOs; lists use configured Doltgres or unconfigured markdown alone. Does not own adapters or PostgreSQL coordination.
  * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED.
  *   Priority (including 0/1) carries no extra node-admin gate (task.5306); the store's own
  *   author-scoped write authority applies unchanged.
@@ -21,7 +21,7 @@ import type {
   WorkItemsListOutput,
 } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemId } from "@cogni/work-items";
-import { toWorkItemId } from "@cogni/work-items";
+import { rankScore, toWorkItemId } from "@cogni/work-items";
 
 import { getContainer } from "@/bootstrap/container";
 
@@ -237,6 +237,7 @@ function mapStoreError(e: unknown): unknown {
 }
 
 function toDto(item: WorkItem): WorkItemDto {
+  const evaluationRank = rankScore(item.scores);
   return {
     id: item.id as string,
     type: item.type,
@@ -245,6 +246,7 @@ function toDto(item: WorkItem): WorkItemDto {
     ...(item.actor !== "either" && { actor: item.actor }),
     priority: item.priority,
     rank: item.rank,
+    ...(evaluationRank !== undefined && { rankScore: evaluationRank }),
     estimate: item.estimate,
     ...(item.scores !== undefined && { scores: item.scores }),
     summary: item.summary,
@@ -303,57 +305,44 @@ export async function listWorkItems(
     ...(input.actor && { actor: input.actor as WorkItem["actor"] }),
     ...(input.projectId && { projectId: toWorkItemId(input.projectId) }),
     ...(input.node && { node: input.node }),
-    ...(input.limit && { limit: input.limit }),
+    limit: input.limit ?? 100,
     ...(input.cursor && { cursor: input.cursor }),
+    ...(input.sortBy && { sortBy: input.sortBy }),
+    ...(input.sortDirection && { sortDirection: input.sortDirection }),
   };
 
-  // Pagination strategy:
-  //   - Doltgres is the cursor-paginated source of truth (post-#1144 importer
-  //     back-fills markdown items into Doltgres at their original IDs).
-  //   - On the first page (no cursor) we ALSO query the markdown adapter so
-  //     any items that haven't been imported yet still appear. Doltgres rows
-  //     win on id conflict (single-source dedup).
-  //   - Merged page is truncated to `limit` so the response never overflows.
-  //   - hasMore tracks Doltgres only — markdown is finite/small and only
-  //     contributes to page 1; once Doltgres exhausts pagination ends.
-  //   - Markdown-only items that overflow page 1 are dropped from the response;
-  //     this is acceptable because markdown is being deprecated and the
-  //     importer back-fill closes the gap.
-  let dgItems: WorkItem[] = [];
-  let endCursor: string | null = null;
-  let hasMore = false;
-
+  // One backend owns the complete ordering and cursor. Mixing markdown rows
+  // into a Dolt page drops matches and cannot preserve global rank order.
   try {
-    const dgResult = await container.doltgresWorkItems.list(queryShared);
-    dgItems = [...dgResult.items];
-    endCursor = dgResult.pageInfo.endCursor;
-    hasMore = dgResult.pageInfo.hasMore;
+    const result = await container.doltgresWorkItems.list(queryShared);
+    const { endCursor, hasMore } = result.pageInfo;
+    return {
+      items: result.items.map(toDto),
+      pageInfo: { endCursor, hasMore },
+      ...(endCursor !== null && { nextCursor: endCursor }),
+    };
   } catch (e) {
-    const name = (e as Error)?.name;
-    if (name === "InvalidCursorError") {
+    if ((e as Error)?.name === "InvalidCursorError") {
       throw new InvalidCursorError((e as Error).message);
     }
-    if (name !== "DoltgresNotConfiguredError") throw e;
+    // Configured outages must remain visible; this is not a failover path.
+    if ((e as Error)?.name !== "DoltgresNotConfiguredError") throw e;
   }
 
-  let merged: WorkItem[] = dgItems;
-  if (!input.cursor) {
-    const mdResult = await container.workItemQuery.list(queryShared);
-    const dgIds = new Set(dgItems.map((i) => i.id as string));
-    const mdOnly = mdResult.items.filter((i) => !dgIds.has(i.id as string));
-    merged = [...dgItems, ...mdOnly];
+  try {
+    const result = await container.workItemQuery.list(queryShared);
+    const endCursor = result.nextCursor ?? null;
+    return {
+      items: result.items.map(toDto),
+      pageInfo: { endCursor, hasMore: endCursor !== null },
+      ...(endCursor !== null && { nextCursor: endCursor }),
+    };
+  } catch (e) {
+    if ((e as Error)?.name === "InvalidCursorError") {
+      throw new InvalidCursorError((e as Error).message);
+    }
+    throw e;
   }
-
-  const requestedLimit = input.limit ?? 100;
-  if (merged.length > requestedLimit) {
-    merged = merged.slice(0, requestedLimit);
-  }
-
-  return {
-    items: merged.map(toDto),
-    pageInfo: { endCursor, hasMore },
-    ...(endCursor !== null && { nextCursor: endCursor }),
-  };
 }
 
 export async function getWorkItem(id: string): Promise<WorkItemDto | null> {

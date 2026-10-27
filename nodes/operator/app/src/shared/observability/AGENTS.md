@@ -32,7 +32,7 @@ Cross-cutting observability concerns: structured logging, request context, and e
 ## Public Surface
 
 - **Exports:**
-  - `EVENT_NAMES` - Event name registry as const (prevents ad-hoc strings)
+  - `EVENT_NAMES` - Event name registry as const (prevents ad-hoc strings); `WORK_ITEMS_LIST_ERROR_CODES` - stable work-list terminal error codes
   - `EventName`, `EventBase` - Registry-derived types
   - `makeLogger(bindings?)` - Pino logger factory (sync mode, zero buffering)
   - `makeNoopLogger()` - Silent logger for tests

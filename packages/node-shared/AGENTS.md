@@ -44,7 +44,7 @@ Shared pure utilities, constants, observability helpers, and domain types for al
   - **Constants:** `COGNI_SYSTEM_BILLING_ACCOUNT_ID`, `COGNI_SYSTEM_PRINCIPAL_USER_ID`, payment constants
   - **Crypto:** `aeadEncrypt`, `aeadDecrypt` (AES-256-GCM)
   - **Errors:** `ChatValidationError`, `toUiError`
-  - **Observability:** `EVENT_NAMES`, `logEvent`, `logRequestStart/End/Warn/Error`, `createRequestContext`, `clientLogger`, event payload types
+  - **Observability:** `EVENT_NAMES`, `WORK_ITEMS_LIST_ERROR_CODES`, `logEvent`, `logRequestStart/End/Warn/Error`, `createRequestContext`, `clientLogger`, event payload types
   - **Schemas:** LiteLLM spend-log Zod schemas
   - **Time:** `deriveTimeRange`, `TIME_RANGE_PRESETS`
   - **Util:** `isValidUuid`, `deriveAccountIdFromApiKey`
