@@ -19,6 +19,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   EDO_DECIDE_NAME,
@@ -79,8 +80,7 @@ const PATCH_FIELDS = [
 
 type Snapshot = Partial<Record<(typeof PATCH_FIELDS)[number], unknown>>;
 
-const same = (a: unknown, b: unknown): boolean =>
-  JSON.stringify(a) === JSON.stringify(b);
+const same = isDeepStrictEqual;
 
 /** Tool-call args keyed by tool_call id, from every AI message in the transcript. */
 function toolCallArgs(
@@ -107,13 +107,22 @@ function toolCallArgs(
  *                     This is retrieval evidence, not proof the model applied the guidance.
  *   evidence_read   — at least one work-item query returned items
  *   goal_cited      — the decision derives from a listed goal and each Top-5 line cites a listed goal
- *   novel_change    — share of landed patches whose values differ from what the run read (1 when no patches)
+ *   novel_change    — share of landed patches with a known baseline and different values (unknown baseline earns 0; no patches = 1)
  *   grounded        — distinct Top-5 item ids that were actually read this run (count / 5)
  *   action          — share of Top-5 lines whose `next:` carries real text
  */
 export function cycleScores(messages: readonly BaseMessage[]) {
   const calls = toolCallArgs(messages);
   const seen = new Map<string, Snapshot>();
+  const queryReadIds = new Set<string>();
+  type Evidence = {
+    readIds: Set<string>;
+    goals: string[];
+    knowledgeReads: number;
+    itemsRead: number;
+  };
+  const pendingDecisions = new Map<string, Evidence>();
+  let decisionEvidence: Evidence | undefined;
   let goalIds: string[] = [];
   const guidanceReceipts: Array<{
     id: string;
@@ -123,9 +132,22 @@ export function cycleScores(messages: readonly BaseMessage[]) {
   let itemsRead = 0;
   let patches = 0;
   let identicalPatches = 0;
+  let novelPatches = 0;
+  let unknownBaselinePatches = 0;
   let decision: { content: string; derivesFromHypothesisId: string } | null =
     null;
   for (const m of messages) {
+    if (isAIMessage(m)) {
+      for (const call of m.tool_calls ?? []) {
+        if (call.name === EDO_DECIDE_NAME && call.id)
+          pendingDecisions.set(call.id, {
+            readIds: new Set(queryReadIds),
+            goals: [...goalIds],
+            knowledgeReads: guidanceReceipts.length,
+            itemsRead,
+          });
+      }
+    }
     if (!isToolMessage(m)) continue;
     const v = parse(text(m));
     if (!v || typeof v.error === "string" || v.success === false) continue;
@@ -164,6 +186,7 @@ export function cycleScores(messages: readonly BaseMessage[]) {
         const snap: Snapshot = {};
         for (const f of PATCH_FIELDS) if (f in it) snap[f] = it[f];
         seen.set(it.id, snap);
+        queryReadIds.add(it.id);
       }
     } else if (m.name === WORK_ITEM_TRANSITION_NAME && v.success === true) {
       const args = call?.args;
@@ -171,12 +194,12 @@ export function cycleScores(messages: readonly BaseMessage[]) {
       patches++;
       const prior = seen.get(String(v.id));
       const sent = PATCH_FIELDS.filter((f) => f in args);
-      if (
-        prior &&
-        sent.length > 0 &&
-        sent.every((f) => f in prior && same(prior[f], args[f]))
-      ) {
+      if (!prior || sent.length === 0 || !sent.every((f) => f in prior)) {
+        unknownBaselinePatches++;
+      } else if (sent.every((f) => same(prior[f], args[f]))) {
         identicalPatches++;
+      } else {
+        novelPatches++;
       }
       // A later patch in the same run compares against what this one wrote.
       const next: Snapshot = { ...prior };
@@ -184,6 +207,7 @@ export function cycleScores(messages: readonly BaseMessage[]) {
       seen.set(String(v.id), next);
     } else if (m.name === EDO_DECIDE_NAME && call?.name === EDO_DECIDE_NAME) {
       const a = call.args;
+      decisionEvidence = pendingDecisions.get(m.tool_call_id);
       decision = {
         content: String(a.content ?? ""),
         derivesFromHypothesisId: String(a.derivesFromHypothesisId ?? ""),
@@ -201,24 +225,39 @@ export function cycleScores(messages: readonly BaseMessage[]) {
     .filter((l) => TOP_LINE.test(l) && ITEM_ID.test(l))
     .slice(0, 5);
   const topIds = topLines.map((l) => l.match(ITEM_ID)?.[0] ?? "");
-  const grounded = new Set(topIds.filter((id) => seen.has(id))).size;
-  const citesGoal = (l: string) => goalIds.some((g) => g && l.includes(g));
+  const evidenceIds = decisionEvidence?.readIds ?? queryReadIds;
+  const evidenceGoals = decisionEvidence?.goals ?? goalIds;
+  const grounded = new Set(topIds.filter((id) => evidenceIds.has(id))).size;
+  const citesGoal = (l: string) =>
+    evidenceGoals.some((g) => g && l.includes(g));
   const cited = topLines.filter(citesGoal).length;
-  const withNext = topLines.filter((l) => /\bnext:\s*\S{3,}/i.test(l)).length;
+  const withNext = topLines.filter((l) => {
+    const action = l.match(/\bnext:\s*(.*)$/i)?.[1]?.trim() ?? "";
+    return (
+      action.length >= 3 &&
+      /[\p{L}\p{N}]/u.test(action) &&
+      !/^(?:tbd|todo|none|n\/a)$/i.test(action)
+    );
+  }).length;
   const derivesOk =
-    decision !== null && goalIds.includes(decision.derivesFromHypothesisId);
+    decision !== null &&
+    evidenceGoals.includes(decision.derivesFromHypothesisId);
   return {
     knowledgeReads: guidanceReceipts.length,
     guidanceReceipts,
     itemsRead,
     identicalPatches,
+    unknownBaselinePatches,
     topIds,
     scores: {
-      knowledge_read: guidanceReceipts.length > 0 ? 1 : 0,
-      evidence_read: itemsRead > 0 ? 1 : 0,
+      knowledge_read:
+        (decisionEvidence?.knowledgeReads ?? guidanceReceipts.length) > 0
+          ? 1
+          : 0,
+      evidence_read: (decisionEvidence?.itemsRead ?? itemsRead) > 0 ? 1 : 0,
       goal_cited:
         derivesOk && topLines.length > 0 ? cited / topLines.length : 0,
-      novel_change: patches === 0 ? 1 : 1 - identicalPatches / patches,
+      novel_change: patches === 0 ? 1 : novelPatches / patches,
       grounded: grounded / 5,
       action: topLines.length > 0 ? withNext / topLines.length : 0,
     },

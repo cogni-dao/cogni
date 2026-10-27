@@ -241,12 +241,13 @@ describe("work-prioritizer mission-loop agent", () => {
       guidanceReceipts: [],
       itemsRead: 0,
       identicalPatches: 0,
+      unknownBaselinePatches: 1,
       topIds: [],
       scores: {
         knowledge_read: 0,
         evidence_read: 0,
         goal_cited: 0,
-        novel_change: 1,
+        novel_change: 0,
         grounded: 0,
         action: 0,
       },
@@ -467,6 +468,92 @@ describe("work-prioritizer mission-loop agent", () => {
     });
   });
 
+  it("rejects patch-manufactured reads, late reads and placeholder actions; compares objects by value", () => {
+    const tool = (name: string, id: string, value: unknown) =>
+      new ToolMessage({
+        name,
+        tool_call_id: id,
+        content: JSON.stringify(value),
+      });
+    const ai = (name: string, id: string, args: Record<string, unknown>) =>
+      new AIMessage({ content: "", tool_calls: [{ name, id, args }] });
+    const content = [
+      "Top 5:",
+      ...[1, 2, 3, 4, 5].map(
+        (n) => `${n}. task.${n} goal:goal-a — why — next: ...`
+      ),
+    ].join("\n");
+    const decide = [
+      ai(EDO_DECIDE_NAME, "d", { content, derivesFromHypothesisId: "goal-a" }),
+      tool(EDO_DECIDE_NAME, "d", { committed: true }),
+    ];
+    const writes = [1, 2, 3, 4, 5].flatMap((n) => [
+      ai(WORK_ITEM_TRANSITION_NAME, `p${n}`, {
+        action: "patch",
+        id: `task.${n}`,
+        rank: n,
+      }),
+      tool(WORK_ITEM_TRANSITION_NAME, `p${n}`, {
+        success: true,
+        id: `task.${n}`,
+      }),
+    ]);
+    expect(cycleScores([...writes, ...decide])).toMatchObject({
+      itemsRead: 0,
+      unknownBaselinePatches: 5,
+      scores: { grounded: 0, novel_change: 0, action: 0 },
+    });
+    const lateReads = [
+      ai(GOAL_LIST_NAME, "g", {}),
+      tool(GOAL_LIST_NAME, "g", { goals: [{ id: "goal-a" }] }),
+      ai("core__work_item_query", "q", {}),
+      tool("core__work_item_query", "q", {
+        items: [1, 2, 3, 4, 5].map((n) => ({ id: `task.${n}` })),
+      }),
+      ai(KNOWLEDGE_READ_NAME, "k", { id: "mission-loop-expert" }),
+      tool(KNOWLEDGE_READ_NAME, "k", {
+        mode: "get",
+        entries: [{ id: "mission-loop-expert", content: "guidance" }],
+      }),
+    ];
+    expect(cycleScores([...decide, ...lateReads]).scores).toMatchObject({
+      knowledge_read: 0,
+      evidence_read: 0,
+      grounded: 0,
+      goal_cited: 0,
+      action: 0,
+    });
+    // A read in the same tool batch as a decision was not available when the decision was made.
+    expect(
+      cycleScores([
+        lateReads[0],
+        lateReads[1],
+        decide[0],
+        ...lateReads.slice(2),
+        decide[1],
+      ]).scores
+    ).toMatchObject({ knowledge_read: 0, evidence_read: 0, grounded: 0 });
+    const reordered = cycleScores([
+      ai("core__work_item_query", "q", {}),
+      tool("core__work_item_query", "q", {
+        items: [
+          { id: "task.1", scores: { value: 5, evidence: { a: 1, b: 2 } } },
+        ],
+      }),
+      ai(WORK_ITEM_TRANSITION_NAME, "p", {
+        action: "patch",
+        id: "task.1",
+        scores: { evidence: { b: 2, a: 1 }, value: 5 },
+      }),
+      tool(WORK_ITEM_TRANSITION_NAME, "p", { success: true, id: "task.1" }),
+    ]);
+    expect(reordered).toMatchObject({
+      identicalPatches: 1,
+      unknownBaselinePatches: 0,
+      scores: { novel_change: 0 },
+    });
+  });
+
   it("EVERY_TICK_IMPROVES: cycleScores grades hub reads, identical patches and the decision shape", () => {
     const goals = { goals: [{ id: "goal-ai-work-converges" }] };
     const items = {
@@ -556,7 +643,7 @@ describe("work-prioritizer mission-loop agent", () => {
         id: "bug.2",
         revision: 2,
       }),
-      // p3 re-sends what p2 just wrote → identical; p4 unseen item → novel; p5 denied → not counted
+      // p3 re-sends what p2 just wrote → identical; p4 unseen item → unknown; p5 denied → not counted
       tool("p3", WORK_ITEM_TRANSITION_NAME, {
         success: true,
         action: "patch",
@@ -608,7 +695,7 @@ describe("work-prioritizer mission-loop agent", () => {
       knowledge_read: 0,
       evidence_read: 1,
       goal_cited: 0.8,
-      novel_change: 0.5,
+      novel_change: 0.25,
       grounded: 0.4, // only story.1 and bug.2 were read this run; task.3-5 are invented
       action: 0.8,
     });
