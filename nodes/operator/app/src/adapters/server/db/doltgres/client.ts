@@ -4,6 +4,7 @@
 /**
  * Module: `@adapters/server/db/doltgres/client`
  * Purpose: Lazy operator-Doltgres `Sql` singleton + adapter wiring for the work_items API.
+ * Evaluation: the released work-items parser accepts any safe HTTPS source without host configuration.
  * Scope: Builds the injected Dolt content adapter; does not construct PostgreSQL coordination sessions.
  * Invariants: One writer; reader width two and generation budget four; lazy construction.
  *   Missing DOLTGRES_URL throws DoltgresNotConfiguredError.

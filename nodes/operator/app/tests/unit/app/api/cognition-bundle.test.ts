@@ -14,11 +14,13 @@
 import { describe, expect, it } from "vitest";
 import {
   type GoalView,
+  renderBundle,
   renderBundleMarkdown,
   resolveGoals,
   resolveOrientation,
   SESSION_BOOTSTRAP_INVARIANTS,
   SESSION_WATCH_GATE,
+  WHOLE_BUNDLE_BUDGET_BYTES,
 } from "@/app/api/v1/cognition/_bundle";
 
 const baseInput = {
@@ -29,12 +31,12 @@ const baseInput = {
   origin: "https://test.cognidao.org",
   buildSha: "f52036b33ffecdf5244662e673a0d6d174c50150",
   toolingInvariants: ["Adopt one production work item."],
-  skillsIndex: [
+  governingIndex: [
     {
       id: "node-launch-handoff",
-      title: "Node launch handoff",
       entryType: "guide",
       domain: "infrastructure",
+      useWhen: "handing a launched node to its first agent",
     },
   ],
   domainPointers: [
@@ -48,77 +50,105 @@ const baseInput = {
   goals: { status: "ok", goals: [] },
 } as const;
 
-const SKILL_WITH_TRIGGER = {
+const RULE_ROW = {
   id: "shelf-one-axis",
-  title: "A shelf sorts on one axis or regrows a catch-all",
   useWhen: "designing or reviewing a knowledge domain set",
   entryType: "rule",
   domain: "method",
 };
 
-describe("bundle growth — large indexes render whole, no serve-side ceiling (story.5070)", () => {
-  // The hub is designed to accumulate: every new skill/guide/playbook adds a row.
-  // Delivery is now uncapped on both runtimes (Codex raw stdout with spill off;
-  // Claude Code native cache import), so the producer no longer enforces
-  // a byte ceiling. The former 16 KB cap (bug.5284) would have rejected this shape
-  // at the source and 500'd /api/v1/cognition; growth must now render whole.
-  function indexOf(rows: number, triggerLen: number) {
-    return Array.from({ length: rows }, (_, i) => ({
-      id: `build-compute-entry-${i}`,
-      title: `Claim sentence number ${i} stating what the entry concludes`,
-      useWhen: "x".repeat(triggerLen),
-      entryType: "guide",
-      domain: "build-compute",
-    }));
-  }
+/** `n` governing rows of ~184 bytes each once rendered, like the prod hub. */
+function governingRows(n: number, domain = "build-compute") {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `${domain}-entry-${i}`,
+    entryType: i % 3 === 0 ? "rule" : "guide",
+    domain,
+    useWhen: `a situation number ${i} that this entry governs, stated as the reader would meet it in a task description`,
+  }));
+}
 
-  it("renders a bundle well past the former 16 KB cap, whole and untruncated", () => {
+const bytesOf = (md: string) => new TextEncoder().encode(md).byteLength;
+
+describe("governing index — the session index routes skills, guides, rules, designs, decisions and references", () => {
+  it("renders every governing row with id, type, domain and use-when, rules included", () => {
     const md = renderBundleMarkdown({
       ...baseInput,
-      skillsIndex: indexOf(80, 314),
+      governingIndex: [RULE_ROW, ...baseInput.governingIndex],
     });
-    const bytes = new TextEncoder().encode(
-      `${md.replace(/\n+$/, "")}\n`
-    ).byteLength;
-    // Past the old ceiling — which would have thrown here.
-    expect(bytes).toBeGreaterThan(16 * 1024);
-    // The last row is present ⇒ nothing was dropped.
-    expect(md).toContain("build-compute-entry-79");
+    expect(md).toContain("## Governing index");
+    expect(md).toContain("| entry | type | domain | use when |");
+    expect(md).toContain(
+      "| `shelf-one-axis` | rule | method | designing or reviewing a knowledge domain set |"
+    );
+    expect(md).toContain(
+      "| `node-launch-handoff` | guide | infrastructure | handing a launched node to its first agent |"
+    );
+    // SELECT_THEN_LOAD: the section tells the agent to read the bodies it picks.
+    expect(md).toContain("read each chosen entry");
+    // The old skills-only section is gone.
+    expect(md).not.toContain("## Skills index");
+  });
+
+  it("renders a placeholder row when the hub has no governing entries", () => {
+    const md = renderBundleMarkdown({ ...baseInput, governingIndex: [] });
+    expect(md).toContain("| _(none merged yet)_ | | | |");
   });
 });
 
-describe("skills index — the 'use when' column shows the trigger", () => {
-  it("renders use_when, not the title, when the entry has one", () => {
-    const md = renderBundleMarkdown({
+describe("renderBundle — reports the governing render it used (eval row 0)", () => {
+  it("reports whole-index mode and the whole render's bytes when it fits", () => {
+    const out = renderBundle({
       ...baseInput,
-      skillsIndex: [SKILL_WITH_TRIGGER],
+      governingIndex: governingRows(118),
     });
-    // The header has always claimed "use when"; it must now be true.
-    expect(md).toContain("| entry | type | use when |");
-    expect(md).toContain("designing or reviewing a knowledge domain set");
-    // The claim belongs in the entry body, not this column.
-    expect(md).not.toContain(
-      "A shelf sorts on one axis or regrows a catch-all"
+    expect(out.governingRender.mode).toBe("whole-index");
+    expect(out.governingRender.wholeBytes).toBe(bytesOf(out.markdown));
+    expect(out.markdown).toBe(
+      renderBundleMarkdown({ ...baseInput, governingIndex: governingRows(118) })
     );
   });
 
-  it("falls back to the title when use_when is null", () => {
-    // A node that has not backfilled must still show a usable line rather
-    // than an empty cell.
-    const md = renderBundleMarkdown({
+  it("reports shelf-pointer mode and the over-budget whole bytes past the cap", () => {
+    const out = renderBundle({
       ...baseInput,
-      skillsIndex: [{ ...SKILL_WITH_TRIGGER, useWhen: null }],
+      governingIndex: governingRows(400),
     });
-    expect(md).toContain("A shelf sorts on one axis or regrows a catch-all");
+    expect(out.governingRender.mode).toBe("shelf-pointer");
+    expect(out.governingRender.wholeBytes).toBeGreaterThan(
+      WHOLE_BUNDLE_BUDGET_BYTES
+    );
+    expect(bytesOf(out.markdown)).toBeLessThanOrEqual(
+      WHOLE_BUNDLE_BUDGET_BYTES
+    );
+  });
+});
+
+describe("whole-bundle budget (WHOLE_BUNDLE_BUDGET_64KIB)", () => {
+  it("is 64 KiB", () => {
+    expect(WHOLE_BUNDLE_BUDGET_BYTES).toBe(64 * 1024);
   });
 
-  it("falls back to the title when use_when is absent entirely", () => {
-    const { useWhen: _omitted, ...withoutField } = SKILL_WITH_TRIGGER;
-    const md = renderBundleMarkdown({
-      ...baseInput,
-      skillsIndex: [withoutField],
-    });
-    expect(md).toContain("A shelf sorts on one axis or regrows a catch-all");
+  it("renders the whole governing index inline at today's prod size (118 rows)", () => {
+    const rows = governingRows(118);
+    const md = renderBundleMarkdown({ ...baseInput, governingIndex: rows });
+    expect(bytesOf(md)).toBeLessThanOrEqual(WHOLE_BUNDLE_BUDGET_BYTES);
+    expect(md).toContain("build-compute-entry-117");
+    expect(md).not.toContain("exceeds the 64 KiB bundle budget");
+  });
+
+  it("past the budget, carries only the method shelf inline plus the shelf-pull pointer, and stays under 64 KiB", () => {
+    const rows = [...governingRows(400), ...governingRows(5, "method")];
+    const md = renderBundleMarkdown({ ...baseInput, governingIndex: rows });
+    expect(bytesOf(md)).toBeLessThanOrEqual(WHOLE_BUNDLE_BUDGET_BYTES);
+    expect(md).toContain("exceeds the 64 KiB bundle budget");
+    expect(md).toContain(
+      `GET ${baseInput.origin}/api/v1/knowledge/index?domain=<shelf>`
+    );
+    expect(md).toContain("method-entry-4");
+    expect(md).not.toContain("build-compute-entry-0 ");
+    expect(md).not.toContain("`build-compute-entry-0`");
+    // The domain pointers the agent pulls from still render.
+    expect(md).toContain("## Knowledge domains");
   });
 });
 
@@ -131,7 +161,7 @@ describe("renderBundleMarkdown", () => {
     expect(heading).toBe("# operator — Cogni Session Cognition");
     expect(blank).toBe("");
     expect(subtitle).toBe(
-      "> Coordinate code, deploys, and validation for Cogni nodes. · 1 skills · 1 domains · loaded 2026-06-16 19:31"
+      "> Coordinate code, deploys, and validation for Cogni nodes. · 1 governing entries · 1 domains · loaded 2026-06-16 19:31"
     );
     expect(spacer).toBe(">");
     expect(delivered).toContain("node `4ff8eac1-4eba-4ed0-931b-b1fe4f64713d`");
@@ -311,6 +341,22 @@ describe("renderBundleMarkdown", () => {
     expect(cicd).toBeDefined();
     expect(cicd).not.toContain("--fail-fast");
     expect(cicd).toContain("<watch-gate>");
+  });
+
+  it("orders the CICD loop as fresh review, flight, validate, then operator merge", () => {
+    const cicd =
+      SESSION_BOOTSTRAP_INVARIANTS.find((line) =>
+        line.startsWith("Follow the CICD checklist")
+      ) ?? "";
+    const review = cicd.indexOf("/review-implementation");
+    const flight = cicd.indexOf("/api/v1/vcs/flight");
+    const validate = cicd.indexOf("/validate-candidate");
+    const merge = cicd.indexOf("/api/v1/vcs/merge");
+
+    expect(review).toBeGreaterThanOrEqual(0);
+    expect(review).toBeLessThan(flight);
+    expect(flight).toBeLessThan(validate);
+    expect(validate).toBeLessThan(merge);
   });
 
   it("prompts seeding an orientation entry when none exists", () => {

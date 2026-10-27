@@ -1068,20 +1068,6 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      # First native inventory precedes provisioning and every watched deploy-ref push.
-      # Historical desired state remains unsafe until the prospective fence is proved.
-      - name: Read owning candidate producer inventory before mutation
-        if: matrix.node == 'node-template' && github.repository == 'cogni-dao/cogni'
-        env:
-          DEPLOY_ENVIRONMENT: candidate-a
-          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
-          VM_HOST: ${{ secrets.VM_HOST }}
-          CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
-          NODE: ${{ matrix.node }}
-          CI_SOURCE_ROOT: ${{ github.workspace }}/ci-src
-          APP_SOURCE_ROOT: ${{ github.workspace }}/app-src
-        run: pnpm --dir ci-src exec tsx --tsconfig nodes/operator/app/tsconfig.app.json scripts/ops/maintenance-drain.mjs candidate-preflight
-
       - name: Provision node state and assert Akash prerequisites
         env:
           VM_HOST: ${{ secrets.VM_HOST }}

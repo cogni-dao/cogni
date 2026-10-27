@@ -17,6 +17,10 @@ import {
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
 import { type ActiveGoal, selectActiveGoals } from "../../domain/dao-goals.js";
+import {
+  type GoverningIndexRow,
+  selectGoverningIndex,
+} from "../../domain/governing.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
 import type {
   Citation,
@@ -30,6 +34,7 @@ import type {
 import {
   citedEntryTypesFor,
   HYPOTHESIS_TARGETED_EDGES,
+  isEdoEntryType,
   isWorkItemEndpointId,
   requiresEvaluateAt,
 } from "../../domain/schemas.js";
@@ -155,9 +160,20 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
 
   async listKnowledge(
     domain: string,
-    opts?: { tags?: string[]; limit?: number; q?: string }
+    opts?: {
+      tags?: string[];
+      limit?: number;
+      q?: string;
+      includeEdo?: boolean;
+    }
   ): Promise<Knowledge[]> {
-    let out = Array.from(this.rows.values()).filter((r) => r.domain === domain);
+    // Mirrors the Doltgres adapter's default EDO exclusion
+    // (SCHEMA_REFINED_BY_READ_FILTER).
+    let out = Array.from(this.rows.values()).filter(
+      (r) =>
+        r.domain === domain &&
+        (opts?.includeEdo || !isEdoEntryType(r.entryType))
+    );
     if (opts?.tags?.length) {
       const wanted = new Set(opts.tags);
       out = out.filter((r) => (r.tags ?? []).some((t) => wanted.has(t)));
@@ -172,6 +188,14 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       (a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)
     );
     return opts?.limit ? out.slice(0, opts.limit) : out;
+  }
+
+  async listGoverningIndex(): Promise<GoverningIndexRow[]> {
+    // Same selector as the Doltgres adapter (GOVERNING_SET_DEFINED_ONCE).
+    return selectGoverningIndex(
+      Array.from(this.rows.values()),
+      Array.from(this.edges.values())
+    );
   }
 
   async listActiveGoals(): Promise<ActiveGoal[]> {
@@ -191,12 +215,13 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
   async searchKnowledge(
     domain: string,
     query: string,
-    opts?: { limit?: number }
+    opts?: { limit?: number; includeEdo?: boolean }
   ): Promise<Knowledge[]> {
     const q = query.toLowerCase();
     const out = Array.from(this.rows.values()).filter(
       (r) =>
         r.domain === domain &&
+        (opts?.includeEdo || !isEdoEntryType(r.entryType)) &&
         (r.title.toLowerCase().includes(q) ||
           r.content.toLowerCase().includes(q))
     );
@@ -505,7 +530,10 @@ export class FakeEdoResolverAdapter implements EdoResolverPort {
     const all = await this.store.listDomains();
     const candidates: Knowledge[] = [];
     for (const d of all) {
-      const rows = await this.store.listKnowledge(d, { limit: 10_000 });
+      const rows = await this.store.listKnowledge(d, {
+        limit: 10_000,
+        includeEdo: true,
+      });
       for (const r of rows) {
         if (r.entryType !== "hypothesis") continue;
         if (!r.resolutionStrategy) continue;

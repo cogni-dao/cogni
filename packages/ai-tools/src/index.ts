@@ -31,6 +31,7 @@ export type {
   EnvSummary,
   GetChainParams,
   GetChainResult,
+  GoverningIndexEntry,
   HypothesizeParams,
   KnowledgeCapability,
   KnowledgeEntry,
@@ -176,6 +177,19 @@ export {
   goalListStubImplementation,
 } from "./tools/goal-list";
 export {
+  createKnowledgeIndexImplementation,
+  KNOWLEDGE_INDEX_MAX_BYTES,
+  KNOWLEDGE_INDEX_NAME,
+  type KnowledgeIndexDeps,
+  type KnowledgeIndexInput,
+  KnowledgeIndexInputSchema,
+  type KnowledgeIndexOutput,
+  KnowledgeIndexOutputSchema,
+  knowledgeIndexBoundTool,
+  knowledgeIndexContract,
+  knowledgeIndexStubImplementation,
+} from "./tools/knowledge-index";
+export {
   createKnowledgeReadImplementation,
   KNOWLEDGE_READ_NAME,
   type KnowledgeReadDeps,
@@ -190,6 +204,7 @@ export {
 } from "./tools/knowledge-read";
 export {
   createKnowledgeSearchImplementation,
+  KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS,
   KNOWLEDGE_SEARCH_NAME,
   type KnowledgeSearchDeps,
   type KnowledgeSearchInput,

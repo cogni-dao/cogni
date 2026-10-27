@@ -286,14 +286,18 @@ prefetch_path() {
 # Reads serve from the cache the single prefetch populated — no per-key ssh.
 # Overrides the lib's ssh/ROOT_TOKEN variants (sourced above).
 bao_get_field() {
-  local f="${CACHE_DIR}/$1/$2"
-  [[ -f "$f" ]] && { cat "$f"; return 0; }
-  # SHARED-SUBSTRATE OWNERS LIVE WHERE THE SUBSTRATE DOES (bug.5206). A foreign-custodied
-  # lane runs on the CONTROL env's substrate, so its LiteLLM master key, Doltgres superuser
-  # and _shared values are that cluster's, not the lane's — `cogni/candidate-a/operator`
-  # does not exist in production's vault and never should. This dir is populated ONLY when
-  # the control env differs from the lane, so for every row today the lookup ends above.
-  f="${CACHE_DIR}/__owner__/$1/$2"
+  local svc="$1" key="$2" authority="${3:-target}" f
+  case "$authority" in
+    target) f="${CACHE_DIR}/${svc}/${key}" ;;
+    owner)
+      if [[ "$SECRETS_CONTROL_ENV" == "$DEPLOY_ENVIRONMENT" ]]; then
+        f="${CACHE_DIR}/${svc}/${key}"
+      else
+        f="${CACHE_DIR}/__owner__/${svc}/${key}"
+      fi ;;
+    *) fail "unknown secret bank authority" ;;
+  esac
+  # Missing is missing in THIS authority. Never retry under a greater owner.
   [[ -f "$f" ]] && cat "$f" || true
 }
 
@@ -393,46 +397,34 @@ DSN_DEFER_KEYS=" "
 # must receive a URL derived from that same SSOT or the migrator 28P01s.
 COMPOSED_DSN_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL DATABASE_SSL_CA_CERT "
 
-# Transitional shared/human inheritance — the blind ancestor scan the north star
-# replaces with explicit catalog `inheritFrom` (catalog-custody lane). Now serves
-# from the prefetched cache, and only runs for non-agent keys.
+# Shared/human inheritance uses only explicit catalog inheritFrom authority.
+# Unspecified optional keys stay target-owned; there is no ancestor scan.
 inherit_shared_value() {
   local k="$1" v="" from=""
   [[ -n "${!k:-}" ]] && return 0
-  # Explicit catalog `inheritFrom: <service>` — the canonical-custody lane that
-  # replaces the blind ancestor scan for keys whose value must byte-match ONE
-  # owner (e.g. SCHEDULER_API_TOKEN must equal the token the worker SENDS, which
-  # deploy-infra writes into scheduler-worker-secrets from cogni/<env>/operator). bug.5021.
   from="$(_cat_field "$k" '.inheritFrom')"
-  if [[ -n "$from" && "$from" != "null" ]]; then
-    v="$(bao_get_field "$from" "$k")"
-    [[ -n "$v" ]] && export "${k}=${v}"
-    return 0
-  fi
-  for svc in node-template operator _shared; do
-    v="$(bao_get_field "$svc" "$k")"
-    if [[ -n "$v" ]]; then export "${k}=${v}"; return 0; fi
-  done
+  [[ -n "$from" && "$from" != "null" ]] || return 0
+  v="$(bao_get_field "$from" "$k" owner)"
+  [[ -n "$v" ]] && export "${k}=${v}"
   return 0
 }
 
-# One prefetch: node/ancestor key maps (O(1) ssh). operator is the inheritFrom
-# source for SCHEDULER_API_TOKEN (bug.5021) and is already in the prefetch set
-# below, so bao_get_field (cache-only) resolves it.
-# (bug.5068: the old `kv metadata get` node-path-existence precheck was removed —
-# flush_batch now derives create-vs-merge from patch's own output, so a transient
-# precheck failure can no longer flip a merge into a bucket-clobbering put.)
-for svc in "$TARGET_NODE" node-template operator _shared; do
-  prefetch_path "$svc"
-done
-# Ancestors, re-read from the cluster that HOSTS this lane's substrate. Additive: the
-# lane's own buckets are still prefetched above and still win; this only supplies what a
-# foreign lane structurally cannot have locally. No-op when control env == lane.
-if [[ "${SECRETS_CONTROL_ENV}" != "$DEPLOY_ENVIRONMENT" ]]; then
-  for svc in node-template operator _shared; do
+# Target and explicit owner reads have distinct authority, even for operator.
+# The shared superuser is explicitly read from operator; all other inherited
+# sources come solely from existing catalog inheritFrom declarations.
+prefetch_path "$TARGET_NODE"
+mapfile -t declared_owners < <(
+  { printf '%s\n' operator
+    yq -N '.secrets[] | .inheritFrom // ""' "${CATALOG_FILES[@]}"
+  } | sed '/^$/d' | LC_ALL=C sort -u
+)
+for svc in "${declared_owners[@]}"; do
+  if [[ "$SECRETS_CONTROL_ENV" == "$DEPLOY_ENVIRONMENT" ]]; then
+    [[ "$svc" == "$TARGET_NODE" ]] || prefetch_path "$svc"
+  else
     prefetch_path "$svc" "$SECRETS_CONTROL_ENV" "__owner__/$svc"
-  done
-fi
+  fi
+done
 
 # Same canonical writer loads applied cell custody before composing any runtime URL.
 source "$SCRIPT_DIR/lib/materialize-database-cell-kits.sh"
@@ -578,8 +570,16 @@ for k in "${NODE_BASELINE_KEYS[@]}"; do
   # worker→node 401 (bug.5021). No-op when already equal (no pod churn).
   inherit_from="$(_cat_field "$k" '.inheritFrom')"
   if [[ -n "$inherit_from" && "$inherit_from" != "null" ]]; then
-    v="$(bao_get_field "$inherit_from" "$k")"
-    [[ -z "$v" ]] && continue
+    v="$(bao_get_field "$inherit_from" "$k" owner)"
+    if [[ -z "$v" ]]; then
+      # Optional, wholly unconfigured integrations stay disabled. A required
+      # input or an existing target copy needs affirmative owner authority;
+      # neither a stale target nor a runner env value can replace that read.
+      if [[ "$(_cat_field "$k" '.required')" == true || -n "$(bao_get_field "$TARGET_NODE" "$k")" ]]; then
+        fail "declared owner ${inherit_from}/${k} is absent in ${SECRETS_CONTROL_ENV}; refusing target fallback"
+      fi
+      continue
+    fi
     if [[ "$(bao_get_field "$TARGET_NODE" "$k")" == "$v" ]]; then
       unchanged=$((unchanged + 1))
       continue
@@ -939,7 +939,7 @@ register_litellm_virtual_key() {
   [[ -n "$value" ]] || fail "catalog sync target ${key_name} was not materialized for ${TARGET_NODE}"
   [[ "$value" =~ ^sk-cogni-[0-9a-f]{48}$ ]] \
     || fail "catalog sync target ${key_name} has invalid format (expected sk-cogni-<48 lowercase hex>)"
-  master="$(bao_get_field operator LITELLM_MASTER_KEY)"
+  master="$(bao_get_field operator LITELLM_MASTER_KEY owner)"
   [[ -n "$master" ]] \
     || fail "cannot register ${key_name}: operator LITELLM_MASTER_KEY is absent"
   node_id="$(node_id_for_target "$TARGET_NODE")" \

@@ -14,6 +14,7 @@
  */
 
 import {
+  KNOWLEDGE_INDEX_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
   KNOWLEDGE_WRITE_NAME,
@@ -29,6 +30,7 @@ import {
  * Single source of truth - imported by server.ts, cogni-exec.ts, and catalog.ts.
  */
 export const BRAIN_TOOL_IDS = [
+  KNOWLEDGE_INDEX_NAME,
   KNOWLEDGE_SEARCH_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_WRITE_NAME,

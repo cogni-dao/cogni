@@ -99,3 +99,7 @@ scripts/bootstrap
 work
 docs
 *.md
+
+# Private agent workspace state and captured credentials
+.context
+.local-auth

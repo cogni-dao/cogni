@@ -92,10 +92,9 @@ interface ProviderCatalogEntry {
   readonly report?: GraphReportDecl;
 }
 
-/** CatalogEntry.report: registered event names for the graph's telemetry and per-batch samples. */
+/** CatalogEntry.report: the registered event name for the graph's telemetry. */
 interface GraphReportDecl {
   readonly event: string;
-  readonly sampleEvent?: string;
 }
 
 /**
@@ -548,8 +547,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
 }
 
 /**
- * Log lines for a catalog-declared report: one `report.event` from `structuredOutput.telemetry`, plus one
- * `report.sampleEvent` per `structuredOutput.samples[]` entry (≤10). Empty when the output carries none.
+ * Log lines for a catalog-declared report: one `report.event` from `structuredOutput.telemetry`. Empty when
+ * the output carries none.
  */
 export function graphReportLogFields(
   report: GraphReportDecl,
@@ -557,20 +556,9 @@ export function graphReportLogFields(
   structuredOutput: Record<string, unknown> | undefined
 ): Record<string, unknown>[] {
   const telemetry = structuredOutput?.telemetry;
-  const samples = structuredOutput?.samples;
-  return [
-    ...(telemetry && typeof telemetry === "object"
-      ? [{ event: report.event, runId, ...telemetry }]
-      : []),
-    ...(report.sampleEvent && Array.isArray(samples)
-      ? samples.slice(0, 10).map((sample, batch) => ({
-          event: report.sampleEvent,
-          runId,
-          batch,
-          ...(sample as Record<string, unknown>),
-        }))
-      : []),
-  ];
+  return telemetry && typeof telemetry === "object"
+    ? [{ event: report.event, runId, ...telemetry }]
+    : [];
 }
 
 /** The stream echo of a catalog-declared report (`<graph_report>{telemetry}</graph_report>`), or null. */

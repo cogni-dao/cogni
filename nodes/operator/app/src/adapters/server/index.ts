@@ -182,7 +182,9 @@ export {
   resolveNodeLiveness,
 } from "./node-registry/prod-liveness";
 export { DrizzleNodeMigrationReportStore } from "./observability/drizzle-node-migration-report.adapter";
+export { HttpLangfuseOwnershipVerifier } from "./observability/langfuse-ownership.adapter";
 export { HttpLangfuseReader } from "./observability/langfuse-reader.adapter";
+export { HttpLangfuseRootOwnershipVerifier } from "./observability/langfuse-root-ownership.adapter";
 export { HttpLokiPusher } from "./observability/loki-push.adapter";
 export { HttpLokiReader } from "./observability/loki-reader.adapter";
 export { ViemEvmOnchainClient } from "./onchain/viem-evm-onchain-client.adapter";

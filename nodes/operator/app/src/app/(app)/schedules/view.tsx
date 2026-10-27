@@ -16,6 +16,7 @@
 import type { ModelRef } from "@cogni/ai-core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronUp, Plus, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import {
@@ -72,6 +73,7 @@ function cronToHumanReadable(cron: string): string {
 export function SchedulesView() {
   const queryClient = useQueryClient();
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [filter, setFilter] = useState<"all" | "active" | "paused">("all");
   const [prompt, setPrompt] = useState("");
   const [selectedAgent, setSelectedAgent] = useState("");
   const [selectedCron, setSelectedCron] = useState("");
@@ -181,6 +183,9 @@ export function SchedulesView() {
 
   const agents = agentsData?.agents ?? [];
   const schedules = schedulesData?.schedules ?? [];
+  const visibleSchedules = schedules.filter(
+    (schedule) => filter === "all" || schedule.enabled === (filter === "active")
+  );
   const models = modelsData?.models ?? [];
   const defaultModelId = modelsData?.defaultRef?.modelId ?? "";
   const hasAgents = agents.length > 0;
@@ -193,8 +198,8 @@ export function SchedulesView() {
     hasAgents &&
     hasModels;
 
-  if (schedulesError || agentsError || modelsError) {
-    const error = schedulesError ?? agentsError ?? modelsError;
+  if (schedulesError) {
+    const error = schedulesError;
     return (
       <div className="mx-auto flex max-w-[var(--max-width-container-screen)] flex-col gap-8 p-4 md:p-8 lg:px-16">
         <div className="rounded-lg border border-destructive bg-destructive/10 p-6">
@@ -209,7 +214,7 @@ export function SchedulesView() {
     );
   }
 
-  if (schedulesLoading || agentsLoading || modelsLoading) {
+  if (schedulesLoading) {
     return (
       <div className="mx-auto flex max-w-[var(--max-width-container-screen)] flex-col gap-8 p-4 md:p-8 lg:px-16">
         <div className="animate-pulse space-y-8">
@@ -250,6 +255,28 @@ export function SchedulesView() {
       {isFormOpen && (
         <div className="rounded-lg border bg-card p-6">
           <h2 className="mb-4 font-semibold text-lg">New Schedule</h2>
+          {(agentsLoading || modelsLoading) && (
+            <output className="mb-4 block text-sm">
+              Loading creation options…
+            </output>
+          )}
+          {(agentsError || modelsError) && (
+            <div role="alert" className="mb-4 text-sm">
+              Creation options are unavailable. Existing schedules remain
+              accessible.{" "}
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  void queryClient.invalidateQueries({ queryKey: ["agents"] });
+                  void queryClient.invalidateQueries({
+                    queryKey: ["ai-models"],
+                  });
+                }}
+              >
+                Try again
+              </Button>
+            </div>
+          )}
           <div className="grid gap-4 md:grid-cols-2">
             {/* Prompt */}
             <div className="md:col-span-2">
@@ -364,10 +391,33 @@ export function SchedulesView() {
         </div>
       )}
 
+      <fieldset aria-label="Filter schedules" className="flex gap-2">
+        {(["all", "active", "paused"] as const).map((value) => (
+          <Button
+            key={value}
+            variant={filter === value ? "default" : "outline"}
+            size="sm"
+            aria-pressed={filter === value}
+            onClick={() => setFilter(value)}
+          >
+            {value === "all" ? "All" : value === "active" ? "Active" : "Paused"}{" "}
+            (
+            {
+              schedules.filter(
+                (schedule) =>
+                  value === "all" || schedule.enabled === (value === "active")
+              ).length
+            }
+            )
+          </Button>
+        ))}
+      </fieldset>
       {/* Schedules Table */}
-      {schedules.length === 0 ? (
+      {visibleSchedules.length === 0 ? (
         <div className="rounded-lg border bg-card p-12 text-center">
-          <p className="text-muted-foreground">No schedules</p>
+          <p className="text-muted-foreground">
+            {filter === "all" ? "No schedules" : `No ${filter} schedules`}
+          </p>
           <p className="mt-2 text-muted-foreground text-sm">
             Create your first schedule to automate graph runs.
           </p>
@@ -383,12 +433,12 @@ export function SchedulesView() {
                 <TableHead>Prompt</TableHead>
                 <TableHead>Schedule</TableHead>
                 <TableHead>Timezone</TableHead>
-                <TableHead>Latest Trace</TableHead>
+                <TableHead>History</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {schedules.map((schedule) => {
+              {visibleSchedules.map((schedule) => {
                 const promptText =
                   typeof schedule.input?.messages === "object" &&
                   Array.isArray(schedule.input.messages) &&
@@ -437,7 +487,12 @@ export function SchedulesView() {
                     <TableCell>{cronToHumanReadable(schedule.cron)}</TableCell>
                     <TableCell>{schedule.timezone}</TableCell>
                     <TableCell className="text-muted-foreground text-sm">
-                      No runs yet
+                      <Link
+                        href={`/schedules/${schedule.id}`}
+                        className="underline"
+                      >
+                        View runs
+                      </Link>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-2">

@@ -275,6 +275,12 @@ export const workItems = pgTable(
     priority: integer("priority"),
     rank: integer("rank"),
     estimate: integer("estimate"),
+    // Do-it-now scores (story.5111): { "<axis id>": { v: 0–5, ev?: url } }.
+    // Axis ids are config (hub `work-item-scores-design`), so no column per axis.
+    // Recorded one-line literal port (hub `port-node-source-once`) of
+    // cogni-dao/node-template#198 packages/knowledge-base/src/schema.ts; bounds
+    // live in `parseWorkItemScores` (@cogni-dao/work-items 0.2.3).
+    scores: jsonb("scores"),
 
     // Free-text
     summary: text("summary"),

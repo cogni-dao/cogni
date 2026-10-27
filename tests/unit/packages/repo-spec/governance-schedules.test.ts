@@ -9,7 +9,7 @@
  *   - GRAPH_REQUIRES_MODEL: `graph` without `model` is rejected at parse time
  *   - BACK_COMPAT_SHAPE: an entry without graph/model maps to the exact pre-task.5282 object
  *   - LEDGER_PRESERVED: the operator runtime repo-spec still synthesizes exactly one LEDGER_INGEST (cron 0 0 * * *)
- *   - OPERATOR_PRIORITIZER (story.5096): the operator declares WORK_PRIORITIZER on langgraph:work-prioritizer hourly; the graph is propose-only by construction
+ *   - OPERATOR_PRIORITIZER (story.5108): the operator declares WORK_PRIORITIZER on langgraph:work-prioritizer (the mission-loop agent) hourly
  * Side-effects: IO (reads the operator repo-spec file from disk)
  * Links: packages/repo-spec/src/schema.ts, packages/repo-spec/src/accessors.ts
  * @public

@@ -36,6 +36,8 @@ export {
   ContributionCommitRecordSchema,
   type ContributionDiffEntry,
   ContributionDiffEntrySchema,
+  type ContributionMergePreview,
+  ContributionMergePreviewSchema,
   type ContributionRecord,
   ContributionRecordSchema,
   type ContributionState,
@@ -114,6 +116,16 @@ export {
   type MetricResolutionStrategy,
   MetricResolutionStrategySchema,
 } from "./domain/goal-loop.js";
+// Governing guidance index (GOVERNING_SET_DEFINED_ONCE) — read via KnowledgeStorePort.listGoverningIndex
+export {
+  GOVERNING_ENTRY_TYPES,
+  type GoverningCandidateEdge,
+  type GoverningCandidateRow,
+  type GoverningEntryType,
+  type GoverningIndexRow,
+  isGoverningEntryType,
+  selectGoverningIndex,
+} from "./domain/governing.js";
 // Knowledge-graph view model (shared assembly, no N+1)
 export {
   buildKnowledgeGraph,
@@ -156,10 +168,12 @@ export {
   DoltCommitSchema,
   type DoltDiffEntry,
   DoltDiffEntrySchema,
+  EDO_ENTRY_TYPES,
   type EntryType,
   EntryTypeSchema,
   EVALUATE_AT_REQUIRED_ENTRY_TYPES,
   HYPOTHESIS_TARGETED_EDGES,
+  isEdoEntryType,
   isWorkItemEndpointId,
   type Knowledge,
   KnowledgeSchema,

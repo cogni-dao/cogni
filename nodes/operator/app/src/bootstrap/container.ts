@@ -25,7 +25,7 @@ import type {
   VcsCapability,
   WebSearchCapability,
 } from "@cogni/ai-tools";
-import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import type { AttributionStore } from "@cogni/attribution-ledger";
 import {
   createDefaultRegistries,
@@ -78,6 +78,8 @@ import {
 import { numberToPpm } from "@cogni/operator-wallet";
 import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/privy";
 import type { ScheduleControlPort } from "@cogni/scheduler-core";
+import type { ScheduleRunReader } from "@cogni/scheduling";
+import { PostgresScheduleRunReader } from "@cogni/scheduling/adapters/postgres";
 import type { WorkItemQueryPort } from "@cogni/work-items";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
 import {
@@ -108,7 +110,6 @@ import {
   GitHubNodeDeploymentTopologyAdapter,
   GitHubWebhookNormalizer,
   getAppDb,
-  getExecutionScope,
   LangfuseAdapter,
   LiteLlmAdapter,
   type MimirAdapterConfig,
@@ -165,6 +166,7 @@ import {
   getTestOnChainVerifier,
   getTestOperatorWallet,
 } from "@/adapters/test";
+import { OPERATOR_CORE_TOOL_BUNDLE } from "@/bootstrap/ai/evaluation-baseline";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
 import { createComputeCapability } from "@/bootstrap/capabilities/compute";
@@ -187,7 +189,6 @@ import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { startCatalogRegistryReconcileOnBoot } from "@/bootstrap/catalog-registry-reconcile";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
-import { checkNodeAdmin } from "@/bootstrap/node-admin-gate";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
 import {
@@ -309,6 +310,7 @@ export interface Container {
   executionRequestPort: ExecutionRequestPort;
   graphRunRepository: GraphRunRepository;
   scheduleManager: ScheduleUserPort;
+  scheduleRunReader: ScheduleRunReader;
   /** Metrics capability for AI tools - requires PROMETHEUS_URL to be configured */
   metricsCapability: MetricsCapability;
   /** Compute-substrate balance reads (story.5011) — stub (empty) until CHERRY_AUTH_TOKEN is on the runtime */
@@ -803,6 +805,8 @@ function createContainer(): Container {
     log.child({ component: "DrizzleScheduleUserAdapter" })
   );
 
+  const scheduleRunReader = new PostgresScheduleRunReader(db.$client);
+
   // Worker scheduling (serviceDb, BYPASSRLS)
   const executionGrantWorkerPort = new DrizzleExecutionGrantWorkerAdapter(
     serviceDb,
@@ -1039,22 +1043,11 @@ function createContainer(): Container {
       store: doltgresWorkItems,
       principalId: `actor:${COGNI_SYSTEM_PRINCIPAL_USER_ID}`,
     },
-    // P0P1_IS_NODE_ADMIN (task.5286): gate priority 0/1 on the INVOKING actor from the
-    // run's execution scope — never the system principal the write is attributed to.
-    // Outside a graph run (no scope) the actor is missing ⇒ authz_unavailable.
-    privilegedPriorityGate: () => {
-      let actorUserId: string | undefined;
-      try {
-        actorUserId = getExecutionScope().actorUserId;
-      } catch {
-        actorUserId = undefined;
-      }
-      return checkNodeAdmin(authorization, { userId: actorUserId, nodeId });
-    },
   });
 
   // ToolSource with real implementations (per CAPABILITY_INJECTION)
   const toolBindings = createToolBindings({
+    nodePublicOrigin: env.APP_BASE_URL,
     knowledgeCapability,
     edoCapability,
     metricsCapability,
@@ -1064,7 +1057,7 @@ function createContainer(): Container {
     vcsCapability,
     workItemCapability,
   });
-  const operatorToolBundle = [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE];
+  const operatorToolBundle = [...OPERATOR_CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE];
   const toolSource = createBoundToolSource(operatorToolBundle, toolBindings);
 
   // Config: rethrow in dev/test for diagnosis, respond_500 in production for safety
@@ -1307,6 +1300,7 @@ function createContainer(): Container {
     executionRequestPort,
     graphRunRepository,
     scheduleManager,
+    scheduleRunReader,
     metricsCapability,
     computeCapability,
     leaseReadCapability,

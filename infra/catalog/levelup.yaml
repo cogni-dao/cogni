@@ -18,6 +18,7 @@ production_branch: deploy/production-levelup
 # are dropped with it. Production is this node's only slot.
 envs: [production]
 database:
+  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
   production: { tier: shared, budget_profile: shared-default-v1 }
 deployment_provider:
   production: akash
@@ -37,25 +38,7 @@ compute_api:
 # re-spend a settled idempotence key). Bumping this is the ONLY redeploy-after-close
 # path — kubectl patch is reverted by Argo selfHeal.
 lease_generation:
-  # 3 -> 2. DELIBERATELY BACKWARD: this ADOPTS the live lease, it does not mint one (bug.5498;
-  # same move as poly #2557, hub akash-adopt-live-lease).
-  #
-  # #2677 bumped 2 -> 3 on 2026-10-10 because in-place updates had stalled. The next day,
-  # gen-2 converged in place anyway (akash_tx_updated 2026-10-11T23:24Z, dseq 1790714267559,
-  # zencloud), and it served 942d1487 from then on. Gen 3 stayed only in the catalog until the
-  # 2026-10-21 fleet refresh promote rendered it. That paid auction went to akash.rhite.co.uk
-  # (dseq 1792564697291). Its egress 65.108.194.156 is not trusted for production Postgres
-  # 5432 (see infra/catalog/poly.yaml), so the lease reached BootDeadlineExceeded under Hold.
-  #
-  # Gen-2's key xcw:cogni-production:557d8b59-...:2 is NOT spent. Console read with the
-  # actuator credential on 2026-10-21 showed deployment, lease and escrow all active. Rendering
-  # gen 2 binds that handle and takes observe -> UPDATE in place. No auction runs, and the
-  # UPDATE re-sends the SDL with the env resolved now. That carries the post-cutover DSNs
-  # (production substrate 84.32.244.43), so levelup stops using the old VM relay. The gen-3 child is
-  # no longer rendered, so its normal REMOVE closes the RHITE lease.
-  #
-  # Never reuse gen 3: it is the RHITE key and is settled once closed.
-  production: 2
+  production: 4
 # bug.5079 — activity_env is the SINGLETON env allowed to ingest Git receipts. GitHub
 # App webhooks are delivered to production only (one App, one webhook URL), and the
 # production operator's route index filters to `activityEnv === DEPLOY_ENVIRONMENT`

@@ -8,7 +8,7 @@
  * Invariants:
  *   - ERRORCODE_IS_THE_CONTRACT: every mapped response carries a stable `errorCode`; callers branch on it, never on the message text.
  *   - PERMANENT_VS_RETRYABLE: author-scoped refusal → 403 `authz_denied`; store unavailability → 503 `work_items_busy` + retry hint.
- *   - DENIED_VS_UNAVAILABLE (task.5286): a node-admin priority refusal is 403 `authz_denied`; an authorization outage is 503 `authz_unavailable` — never conflated.
+ *   - SCORES_INVALID_IS_400: a `scores` write the package validator (`parseWorkItemScores`, run once by the adapter) rejected → 400 `work_item_scores_invalid` carrying its `issues`; nothing was written (story.5111).
  *   - CAS_CONFLICT_IS_409: a lost `expectedRevision` compare-and-set → 409 `revision_conflict` carrying `currentRevision`; nothing was written.
  *   - UNRECOGNIZED_STAYS_500: an unmapped error returns null so the route rethrows and the wrapper answers 500 — the catch is never broadened.
  * Side-effects: IO (HTTP response construction, structured log entry)
@@ -20,10 +20,10 @@ import { NextResponse } from "next/server";
 
 import {
   WorkItemAuthorizationError,
-  WorkItemAuthzUnavailableError,
   WorkItemDeletionRetiredError,
   WorkItemNotFoundError,
   WorkItemRevisionConflictError,
+  WorkItemScoresInvalidError,
   WorkItemsBackendNotReadyError,
   WorkItemsBusyError,
   WorkItemWriteOutcomeUnknownError,
@@ -64,6 +64,18 @@ function classify(error: unknown): Mapped | null {
     return { status: 403, errorCode: "authz_denied", error: "not authorized" };
   }
 
+  // PERMANENT, CALLER'S ERROR (story.5111). SCORES_ONE_ENFORCER: the adapter's
+  // `parseWorkItemScores` is the only bounds check and refused before any SQL;
+  // the issues name each failed axis path. Never a 500.
+  if (error instanceof WorkItemScoresInvalidError) {
+    return {
+      status: 400,
+      errorCode: error.code,
+      error: "invalid input",
+      details: { issues: error.issues },
+    };
+  }
+
   if (error instanceof WorkItemDeletionRetiredError) {
     return {
       status: 410,
@@ -82,16 +94,6 @@ function classify(error: unknown): Mapped | null {
       retryable: false,
       lookup: error.receipt.lookup,
     };
-
-  // FAIL CLOSED, DISTINCT FROM DENY. The authorization service could not
-  // decide a privileged write (priority 0/1); nothing was written.
-  if (error instanceof WorkItemAuthzUnavailableError) {
-    return {
-      status: 503,
-      errorCode: "authz_unavailable",
-      error: "authorization unavailable",
-    };
-  }
 
   // RETRYABLE. Query timeout / destroyed connection / contended Dolt operation
   // branch. The next attempt usually succeeds, so this must never look like the

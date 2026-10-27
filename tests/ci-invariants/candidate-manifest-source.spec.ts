@@ -798,13 +798,58 @@ describe("candidate-a manifest source", () => {
         /maintenance-fence\.py (begin|audited|finish)/
       );
     }
-    const inventory = namedStep(
-      "external-node-preflight",
-      "Read owning candidate producer inventory before mutation"
+    expect(
+      parsed.jobs["external-node-preflight"].steps.some((step) =>
+        (step.run ?? "").includes("maintenance-drain.mjs")
+      )
+    ).toBe(false);
+  });
+
+  it("keeps every ordinary node outside shared native lifecycle and custody", () => {
+    const reconcile = readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/reconcile-node-substrate.sh"),
+      "utf8"
     );
-    expect(inventory.run?.trim()).toMatch(
-      /maintenance-drain\.mjs candidate-preflight$/
+    const runner = readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/run-node-substrate.sh"),
+      "utf8"
     );
+    const materialize = readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/secret-materialize.sh"),
+      "utf8"
+    );
+    expect(reconcile).not.toMatch(
+      /up -d (?:postgres|doltgres)|force-recreate|dolt_mirror_reconcile|DOLT_CREDS_|DOLTHUB_/
+    );
+    expect(reconcile).not.toMatch(
+      /touch .*runtime_env|mv -f .*runtime_env|install_exact .*doltgres_install_creds/
+    );
+    expect(
+      reconcile.match(/--profile bootstrap run --rm --no-deps/g)
+    ).toHaveLength(2);
+    expect(reconcile).toContain(
+      "bao_get_field operator DOLTGRES_PASSWORD owner"
+    );
+    for (const source of [runner, reconcile]) {
+      expect(source).toContain(
+        'deployment_provider_for_target "$TARGET_NODE" "$DEPLOY_ENVIRONMENT"'
+      );
+      expect(source).toContain(
+        "requested provider disagrees with owning catalog"
+      );
+      expect(source).not.toContain("native_preservation");
+      expect(source).not.toContain("node-template");
+    }
+    expect(materialize).not.toContain("node-template");
+    expect(materialize).toContain('bao_get_field "$inherit_from" "$k" owner');
+    const guard = readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/lib/maintenance-fence.py"),
+      "utf8"
+    );
+    expect(guard).not.toMatch(
+      /check_qualification|claim_qualification|preserve_qualification/
+    );
+    expect(guard).toContain("maintenance_floor_not_on_main");
   });
 
   it("fails candidate verification unless worker /version matches SHA and digest", () => {

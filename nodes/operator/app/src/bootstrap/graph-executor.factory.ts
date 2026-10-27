@@ -21,7 +21,7 @@
  */
 
 import type { SourceSystem, ToolSourcePort } from "@cogni/ai-core";
-import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import type {
   ExecutionContext,
   GraphFinal,
@@ -52,6 +52,7 @@ import {
   LangGraphInProcProvider,
 } from "@/adapters/server";
 import { runInScope } from "@/adapters/server/ai/execution-scope";
+import { OPERATOR_CORE_TOOL_BUNDLE } from "@/bootstrap/ai/evaluation-baseline";
 import type {
   AiExecutionErrorCode,
   BillingContext,
@@ -544,7 +545,7 @@ function createInProcProvider(
     inprocAdapter,
     container.toolSource,
     () => cache.getSource(),
-    [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE],
+    [...OPERATOR_CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE],
     container.authorization
   );
 }

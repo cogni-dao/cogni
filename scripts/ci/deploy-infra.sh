@@ -542,6 +542,10 @@ emit_deployment_event "infra_deployment.started" "in_progress" "Deploying infras
 # a new type:node (e.g. canary) auto-provisions. Fail loud, never empty.
 # shellcheck source=scripts/ci/lib/image-tags.sh
 source "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
+# shellcheck source=scripts/ci/lib/appset-paths.sh
+source "$REPO_ROOT/scripts/ci/lib/appset-paths.sh"
+# shellcheck source=scripts/setup/lib/cogni-deployment-identity.sh
+source "$REPO_ROOT/scripts/setup/lib/cogni-deployment-identity.sh"
 NODE_APP_TARGETS="${NODE_TARGETS[*]}"
 [ -n "$NODE_APP_TARGETS" ] || log_fatal "deploy-infra: no type:node targets from infra/catalog — refusing to deploy with an empty node list"
 log_info "Node-app targets (catalog-driven): ${NODE_APP_TARGETS}"
@@ -550,9 +554,15 @@ log_info "Node-app targets (catalog-driven): ${NODE_APP_TARGETS}"
 # source tree. Dedicated cells have their own provisioner and must never be
 # reconciled against this VM's shared Postgres.
 render_shared_db_provision_config() {
-  local node tier profile budget config='{}'
+  local node owner tier profile budget config='{}'
   for node in "${NODE_TARGETS[@]}"; do
     target_in_env "$node" "$DEPLOY_ENVIRONMENT" || continue
+    # LANE_IS_NOT_CONTROL: a lane reconciled by another control env (akash rows) keeps its
+    # role passwords in THAT env's vault, and its reconcile-node-substrate is the one writer
+    # of this lane's roles. Provisioning it here from this VM's bank re-ALTERs the same roles
+    # to a foreign copy → the runtime 28P01s (task.5301, node-template candidate-a 10-23).
+    owner="$(CATALOG_DIR="$REPO_ROOT/infra/catalog" control_env_for "$DEPLOY_ENVIRONMENT" "$node")" || return 1
+    [ "$owner" = "$DEPLOY_ENVIRONMENT" ] || continue
     tier="$(yq -er ".database.\"${DEPLOY_ENVIRONMENT}\".tier" "$REPO_ROOT/infra/catalog/$node.yaml")" || return 1
     case "$tier" in
       dedicated) continue ;;
@@ -615,7 +625,10 @@ log_info "Edge routing (catalog-driven): ${EDGE_ENV_LINES}"
 # any other: a node whose catalog row places it on akash for THIS env has no
 # NodePort on this VM, and is reached at its public URL instead. Placement comes
 # from the row (deployment_provider.<env>), never a second list of nodes.
-LITELLM_NODE_HOST="${DEPLOY_ENVIRONMENT}.vm.cognidao.org"
+# This host addresses the k3s app in the workload lane, not a dependency owned
+# by its control env. Resolving the control env here would misroute callbacks
+# from a non-production lane; Akash destinations remain public URLs below.
+LITELLM_NODE_HOST="$(cogni_vm_host_for_env "$DEPLOY_ENVIRONMENT" "${FORK_DOMAIN_ROOT:-$(cogni_domain_root)}" "$(cogni_deployment_slug)")"
 LITELLM_NODE_ENDPOINTS="$(node_billing_endpoint_csv "$LITELLM_NODE_HOST" "$DEPLOY_ENVIRONMENT" "$DOMAIN")"
 log_info "LiteLLM callback routing (catalog-driven): ${LITELLM_NODE_ENDPOINTS}"
 # LiteLLM image is a type:infra catalog target — content-hash tagged + built in

@@ -112,39 +112,69 @@ describe("work-item session policy", () => {
     ).toContain("already claimed by agent-one");
   });
 
-  it("demands /validate-candidate for needs_merge items without deployVerified", () => {
-    const text = nextActionForWorkItem({
-      workItem: { ...WORK_ITEM, status: "needs_merge", deployVerified: false },
+  const linked = (overrides: Partial<WorkItemDto>) =>
+    nextActionForWorkItem({
+      workItem: { ...WORK_ITEM, ...overrides },
       session: session({ prNumber: 1204 }),
       now: NOW,
     });
-    expect(text).toContain("/validate-candidate");
+
+  // Legacy field: the PR scorecard for the head SHA is the only validation signal.
+  const LEGACY_VALIDATION_FLAG = /deploy_?verified/i;
+
+  it("orders needs_merge as review, flight, validate, PATCH needs_closeout, then operator merge", () => {
+    const text = linked({ status: "needs_merge" });
+    const review = text.indexOf("/review-implementation");
+    const flight = text.indexOf("/api/v1/vcs/flight");
+    const validate = text.indexOf("/validate-candidate");
+    const closeout = text.indexOf("PATCH status needs_closeout");
+    const merge = text.indexOf("/api/v1/vcs/merge");
+
     expect(text).toContain("PR #1204");
-    expect(text).toContain("deployVerified");
+    expect(review).toBeGreaterThanOrEqual(0);
+    expect(review).toBeLessThan(flight);
+    expect(flight).toBeLessThan(validate);
+    expect(validate).toBeLessThan(closeout);
+    expect(closeout).toBeLessThan(merge);
   });
 
-  it("clears to /review-implementation once deployVerified is true", () => {
-    const text = nextActionForWorkItem({
-      workItem: { ...WORK_ITEM, status: "needs_merge", deployVerified: true },
-      session: session({ prNumber: 1204 }),
-      now: NOW,
-    });
-    expect(text).toContain("/review-implementation");
+  it("asks /closeout to verify CI, review and scorecard at one head SHA before merging", () => {
+    const text = linked({ status: "needs_closeout" });
+    const verify = text.indexOf("one head SHA");
+    const merge = text.indexOf("/api/v1/vcs/merge");
+    const done = text.indexOf("set done");
+
+    expect(text).toContain("/closeout");
+    expect(text).toContain("/validate-candidate scorecard");
+    expect(verify).toBeGreaterThanOrEqual(0);
+    expect(verify).toBeLessThan(merge);
+    expect(merge).toBeLessThan(done);
+  });
+
+  it("never names the legacy validation flag in any linked-PR next action", () => {
+    for (const status of [
+      "needs_implement",
+      "needs_merge",
+      "needs_closeout",
+      "done",
+    ] as const) {
+      expect(linked({ status, pr: "1204" })).not.toMatch(
+        LEGACY_VALIDATION_FLAG
+      );
+    }
+  });
+
+  it("does not send done items back to /validate-candidate", () => {
+    const text = linked({ status: "done", pr: "1204" });
+
+    expect(text).toContain("is done");
     expect(text).not.toContain("/validate-candidate");
   });
 
-  it("flags done work items still missing deployVerified", () => {
-    const text = nextActionForWorkItem({
-      workItem: {
-        ...WORK_ITEM,
-        status: "done",
-        deployVerified: false,
-        pr: "1204",
-      },
-      session: session({ prNumber: 1204 }),
-      now: NOW,
-    });
-    expect(text).toContain("deployVerified is false");
-    expect(text).toContain("/validate-candidate");
+  it("hands needs_implement to needs_merge, not closeout", () => {
+    const text = linked({ status: "needs_implement" });
+
+    expect(text).toContain("needs_merge");
+    expect(text).not.toContain("closeout");
   });
 });

@@ -4,12 +4,10 @@
 /**
  * Module: `@app/_facades/work/items.server`
  * Purpose: Server-side facade for work item read/write operations across the markdown + Doltgres surfaces.
- * Scope: Maps content results to DTOs; does not own adapters or PostgreSQL coordination. Dolt IDs start at 5000; lower IDs use markdown.
- * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED,
- *   P0P1_IS_NODE_ADMIN (task.5286): a create or patch that sets priority 0 or 1 requires
- *   `node.administer` on this node, checked BEFORE the store write (deny →
- *   WorkItemAuthorizationError/403, outage → WorkItemAuthzUnavailableError/503). Priority 2+ and
- *   every other field are unchanged.
+ * Scope: Maps content to DTOs; lists use configured Doltgres or unconfigured markdown alone. Does not own adapters or PostgreSQL coordination.
+ * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED.
+ *   Priority (including 0/1) carries no extra node-admin gate (task.5306); the store's own
+ *   author-scoped write authority applies unchanged.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
@@ -23,14 +21,9 @@ import type {
   WorkItemsListOutput,
 } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemId } from "@cogni/work-items";
-import { toWorkItemId } from "@cogni/work-items";
+import { rankScore, toWorkItemId } from "@cogni/work-items";
 
 import { getContainer } from "@/bootstrap/container";
-import {
-  checkNodeAdmin,
-  isPrivilegedPriority,
-} from "@/bootstrap/node-admin-gate";
-import { getNodeId } from "@/shared/config/repoSpec.server";
 
 /**
  * Thrown when the opaque pagination cursor cannot be decoded — translated
@@ -111,42 +104,6 @@ export class WorkItemWriteOutcomeUnknownError extends Error {
 }
 
 /**
- * Thrown when the authorization service could not decide (OpenFGA unconfigured,
- * unreachable, or erroring). FAIL CLOSED but DISTINCT from a denial: the route
- * answers 503 `authz_unavailable`, never 403.
- */
-export class WorkItemAuthzUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "WorkItemAuthzUnavailableError";
-  }
-}
-
-/**
- * P0P1_IS_NODE_ADMIN: refuse a priority-0/1 write unless the caller holds
- * `node.administer`. A no-op for any other priority (including absent).
- */
-async function assertPriorityAuthority(
-  priority: number | null | undefined,
-  userId: string
-): Promise<void> {
-  if (!isPrivilegedPriority(priority)) return;
-  const gate = await checkNodeAdmin(getContainer().authorization, {
-    userId,
-    nodeId: getNodeId(),
-  });
-  if (gate.ok) return;
-  if (gate.errorCode === "authz_unavailable") {
-    throw new WorkItemAuthzUnavailableError(
-      `priority ${priority} authorization unavailable: ${gate.reason}`
-    );
-  }
-  throw new WorkItemAuthorizationError(
-    `priority ${priority} requires node admin`
-  );
-}
-
-/**
  * Thrown when the store was momentarily unavailable (query timeout, destroyed
  * connection, contended Dolt operation branch). RETRYABLE: the identical
  * request typically succeeds on the next attempt — the route answers 503 with
@@ -179,6 +136,36 @@ export class WorkItemRevisionConflictError extends Error {
     this.expectedRevision = expectedRevision;
     this.currentRevision = currentRevision;
   }
+}
+
+/** One `scores` bound violation, as reported by `parseWorkItemScores`. */
+export type WorkItemScoresIssue = {
+  readonly code: string;
+  readonly path: readonly string[];
+  readonly message: string;
+};
+
+/**
+ * Thrown when a `scores` write broke the package bounds (story.5111).
+ * PERMANENT, CALLER'S ERROR: the adapter's `parseWorkItemScores` (the ONLY
+ * bounds check — SCORES_ONE_ENFORCER) rejected it before any SQL, so nothing
+ * was written; the route answers 400 with the package issues, never 500.
+ */
+export class WorkItemScoresInvalidError extends Error {
+  readonly code = "work_item_scores_invalid" as const;
+  constructor(readonly issues: readonly WorkItemScoresIssue[]) {
+    super("Invalid work-item scores");
+    this.name = "WorkItemScoresInvalidError";
+  }
+}
+
+function isScoresIssue(value: unknown): value is WorkItemScoresIssue {
+  const issue = value as Partial<WorkItemScoresIssue> | null;
+  return (
+    typeof issue?.code === "string" &&
+    typeof issue.message === "string" &&
+    Array.isArray(issue.path)
+  );
 }
 
 /**
@@ -221,6 +208,12 @@ function mapStoreError(e: unknown): unknown {
   if (name === "WorkItemAuthorizationError") {
     return new WorkItemAuthorizationError(message);
   }
+  if (name === "WorkItemScoresInvalidError") {
+    const issues = (e as { issues?: unknown }).issues;
+    return new WorkItemScoresInvalidError(
+      Array.isArray(issues) ? issues.filter(isScoresIssue) : []
+    );
+  }
   if (name === "WorkItemsBusyError") {
     return new WorkItemsBusyError(message);
   }
@@ -244,6 +237,7 @@ function mapStoreError(e: unknown): unknown {
 }
 
 function toDto(item: WorkItem): WorkItemDto {
+  const evaluationRank = rankScore(item.scores);
   return {
     id: item.id as string,
     type: item.type,
@@ -252,7 +246,9 @@ function toDto(item: WorkItem): WorkItemDto {
     ...(item.actor !== "either" && { actor: item.actor }),
     priority: item.priority,
     rank: item.rank,
+    ...(evaluationRank !== undefined && { rankScore: evaluationRank }),
     estimate: item.estimate,
+    ...(item.scores !== undefined && { scores: item.scores }),
     summary: item.summary,
     outcome: item.outcome,
     projectId: item.projectId as string | undefined,
@@ -309,57 +305,44 @@ export async function listWorkItems(
     ...(input.actor && { actor: input.actor as WorkItem["actor"] }),
     ...(input.projectId && { projectId: toWorkItemId(input.projectId) }),
     ...(input.node && { node: input.node }),
-    ...(input.limit && { limit: input.limit }),
+    limit: input.limit ?? 100,
     ...(input.cursor && { cursor: input.cursor }),
+    ...(input.sortBy && { sortBy: input.sortBy }),
+    ...(input.sortDirection && { sortDirection: input.sortDirection }),
   };
 
-  // Pagination strategy:
-  //   - Doltgres is the cursor-paginated source of truth (post-#1144 importer
-  //     back-fills markdown items into Doltgres at their original IDs).
-  //   - On the first page (no cursor) we ALSO query the markdown adapter so
-  //     any items that haven't been imported yet still appear. Doltgres rows
-  //     win on id conflict (single-source dedup).
-  //   - Merged page is truncated to `limit` so the response never overflows.
-  //   - hasMore tracks Doltgres only — markdown is finite/small and only
-  //     contributes to page 1; once Doltgres exhausts pagination ends.
-  //   - Markdown-only items that overflow page 1 are dropped from the response;
-  //     this is acceptable because markdown is being deprecated and the
-  //     importer back-fill closes the gap.
-  let dgItems: WorkItem[] = [];
-  let endCursor: string | null = null;
-  let hasMore = false;
-
+  // One backend owns the complete ordering and cursor. Mixing markdown rows
+  // into a Dolt page drops matches and cannot preserve global rank order.
   try {
-    const dgResult = await container.doltgresWorkItems.list(queryShared);
-    dgItems = [...dgResult.items];
-    endCursor = dgResult.pageInfo.endCursor;
-    hasMore = dgResult.pageInfo.hasMore;
+    const result = await container.doltgresWorkItems.list(queryShared);
+    const { endCursor, hasMore } = result.pageInfo;
+    return {
+      items: result.items.map(toDto),
+      pageInfo: { endCursor, hasMore },
+      ...(endCursor !== null && { nextCursor: endCursor }),
+    };
   } catch (e) {
-    const name = (e as Error)?.name;
-    if (name === "InvalidCursorError") {
+    if ((e as Error)?.name === "InvalidCursorError") {
       throw new InvalidCursorError((e as Error).message);
     }
-    if (name !== "DoltgresNotConfiguredError") throw e;
+    // Configured outages must remain visible; this is not a failover path.
+    if ((e as Error)?.name !== "DoltgresNotConfiguredError") throw e;
   }
 
-  let merged: WorkItem[] = dgItems;
-  if (!input.cursor) {
-    const mdResult = await container.workItemQuery.list(queryShared);
-    const dgIds = new Set(dgItems.map((i) => i.id as string));
-    const mdOnly = mdResult.items.filter((i) => !dgIds.has(i.id as string));
-    merged = [...dgItems, ...mdOnly];
+  try {
+    const result = await container.workItemQuery.list(queryShared);
+    const endCursor = result.nextCursor ?? null;
+    return {
+      items: result.items.map(toDto),
+      pageInfo: { endCursor, hasMore: endCursor !== null },
+      ...(endCursor !== null && { nextCursor: endCursor }),
+    };
+  } catch (e) {
+    if ((e as Error)?.name === "InvalidCursorError") {
+      throw new InvalidCursorError((e as Error).message);
+    }
+    throw e;
   }
-
-  const requestedLimit = input.limit ?? 100;
-  if (merged.length > requestedLimit) {
-    merged = merged.slice(0, requestedLimit);
-  }
-
-  return {
-    items: merged.map(toDto),
-    pageInfo: { endCursor, hasMore },
-    ...(endCursor !== null && { nextCursor: endCursor }),
-  };
 }
 
 export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
@@ -381,7 +364,6 @@ export async function createWorkItem(
   input: ContractCreateInput,
   sessionUser: { id: string; displayName: string | null }
 ): Promise<WorkItemDto> {
-  await assertPriorityAuthority(input.priority, sessionUser.id);
   const container = getContainer();
   try {
     const created = await container.doltgresWorkItems.create(
@@ -405,6 +387,7 @@ export async function createWorkItem(
         ...(input.priority !== undefined && { priority: input.priority }),
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
+        ...(input.scores !== undefined && { scores: input.scores }),
       },
       authorTagFromSession(sessionUser)
     );
@@ -418,7 +401,6 @@ export async function patchWorkItem(
   input: ContractPatchInput,
   sessionUser: { id: string; displayName: string | null }
 ): Promise<WorkItemDto> {
-  await assertPriorityAuthority(input.set.priority, sessionUser.id);
   const container = getContainer();
   try {
     const patched = await container.doltgresWorkItems.patch(

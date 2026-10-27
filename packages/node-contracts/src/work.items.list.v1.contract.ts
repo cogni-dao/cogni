@@ -13,6 +13,10 @@
  * @internal
  */
 
+import {
+  WORK_ITEM_SORT_DIRECTIONS,
+  WORK_ITEM_SORT_FIELDS,
+} from "@cogni/work-items";
 import { z } from "zod";
 
 const SubjectRefSchema = z.discriminatedUnion("kind", [
@@ -29,6 +33,30 @@ const ExternalRefSchema = z.object({
   title: z.string().optional(),
 });
 
+/**
+ * Do-it-now scores (story.5111): axis id → { v: int 0–5, ev?: evidence URL }.
+ * Axis ids are config (hub `work-item-scores-design`), so keys are an open,
+ * bounded string set rather than an enum. Writes replace the whole object.
+ *
+ * SCORES_ONE_ENFORCER: this schema is only the OpenAPI-visible outline and
+ * states no bounds. Every bound (axis-id pattern, ≤12 axes, integer 0–5,
+ * SCORE_NEEDS_EVIDENCE, https `ev` on the node's allow-list, ≤300 chars,
+ * ≤1 KB) is `parseWorkItemScores` from `@cogni-dao/work-items`, run by the
+ * Doltgres adapter with the node's ONE configured evidence-host list; the
+ * facade maps its `WorkItemScoresInvalidError` to HTTP 400. Validating here
+ * too would need a second copy of that list. `looseObject` keeps unknown
+ * entry keys so the package validator rejects them.
+ */
+export const WorkItemScoresInputSchema = z.record(
+  z.string(),
+  z.looseObject({ v: z.number(), ev: z.string().optional() })
+);
+
+const WorkItemScoresDtoSchema = z.record(
+  z.string(),
+  z.object({ v: z.number(), ev: z.string().optional() })
+);
+
 export const WorkItemDtoSchema = z.object({
   id: z.string(),
   type: z.string(),
@@ -36,7 +64,10 @@ export const WorkItemDtoSchema = z.object({
   status: z.string(),
   priority: z.number().optional(),
   rank: z.number().optional(),
+  /** Read-only evaluation rank derived by the shared work-items package. */
+  rankScore: z.number().optional(),
   estimate: z.number().optional(),
+  scores: WorkItemScoresDtoSchema.optional(),
   summary: z.string().optional(),
   outcome: z.string().optional(),
   projectId: z.string().optional(),
@@ -64,7 +95,7 @@ export const workItemsListOperation = {
   id: "work.items.list.v1",
   summary: "List work items with optional filters",
   description:
-    "Returns work items matching optional type, status, text, and project filters.",
+    "Returns work items matching optional filters, globally ordered by evaluation rank descending unless sortBy/sortDirection override it. Unknown sort values remain last; changing order requires restarting pagination.",
   input: z.object({
     types: z.array(z.string()).optional(),
     statuses: z.array(z.string()).optional(),
@@ -74,6 +105,8 @@ export const workItemsListOperation = {
     node: z.union([z.string(), z.array(z.string())]).optional(),
     limit: z.number().int().positive().max(500).optional(),
     cursor: z.string().optional(),
+    sortBy: z.enum(WORK_ITEM_SORT_FIELDS).optional(),
+    sortDirection: z.enum(WORK_ITEM_SORT_DIRECTIONS).optional(),
   }),
   output: z.object({
     items: z.array(WorkItemDtoSchema),

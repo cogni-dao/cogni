@@ -7,5 +7,5 @@ export default defineConfig({
   clean: false,
   sourcemap: true,
   platform: "node",
-  external: ["@cogni/langgraph-graphs"],
+  external: ["@cogni/langgraph-graphs", "@cogni/shared-langgraph-graphs"],
 });

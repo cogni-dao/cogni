@@ -46,6 +46,9 @@ reconcile_scheduler_platform_manifests() {
   local relative="infra/k8s/overlays/$deploy_env/scheduler-worker"
   local source_overlay="$platform_root/$relative" target_overlay="$deploy_root/$relative"
   local replicas serial="serial-rollout.patch.yaml"
+  if [ "$deploy_env" = production ]; then
+    python3 "$platform_root/scripts/ci/lib/worker-routing-preservation.py" "$platform_root" "$deploy_root" || return 1
+  fi
   [ -f "$source_overlay/kustomization.yaml" ] && [ -f "$target_overlay/kustomization.yaml" ] || {
     echo '[ERROR] deployed scheduler overlay missing' >&2; return 1;
   }

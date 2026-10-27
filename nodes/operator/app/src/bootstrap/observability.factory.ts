@@ -14,9 +14,17 @@
  * @public
  */
 
-import { HttpLangfuseReader, HttpLokiReader } from "@/adapters/server";
+import { createHash } from "node:crypto";
+import {
+  HttpLangfuseOwnershipVerifier,
+  HttpLangfuseReader,
+  HttpLangfuseRootOwnershipVerifier,
+  HttpLokiReader,
+} from "@/adapters/server";
 import type { LangfuseReaderPort, LokiReaderPort } from "@/ports";
+import { getNodeId } from "@/shared/config/repoSpec.server";
 import { serverEnv } from "@/shared/env";
+import { TokenBucketRateLimiter } from "./http/rateLimiter";
 
 /** The operator's Loki reader, or null when `GRAFANA_URL`/`GRAFANA_SERVICE_ACCOUNT_TOKEN` are unset. */
 export function createLokiReader(): LokiReaderPort | null {
@@ -47,5 +55,38 @@ export function createLangfuseReader(): LangfuseReaderPort | null {
     baseUrl: env.LANGFUSE_BASE_URL ?? LANGFUSE_DEFAULT_BASE_URL,
     publicKey: env.LANGFUSE_PUBLIC_KEY,
     secretKey: env.LANGFUSE_SECRET_KEY,
+    operatorNodeId: getNodeId(),
+    ...(env.DEPLOY_ENVIRONMENT
+      ? { operatorEnvironment: env.DEPLOY_ENVIRONMENT }
+      : {}),
+    ...(env.GRAFANA_URL && env.GRAFANA_SERVICE_ACCOUNT_TOKEN
+      ? {
+          rootOwnership: new HttpLangfuseRootOwnershipVerifier({
+            grafanaUrl: env.GRAFANA_URL,
+            token: env.GRAFANA_SERVICE_ACCOUNT_TOKEN,
+          }),
+        }
+      : {}),
+    ownership: new HttpLangfuseOwnershipVerifier({
+      baseUrl: env.LITELLM_BASE_URL,
+      apiKey: env.LITELLM_MASTER_KEY,
+      operatorNodeId: getNodeId(),
+      operatorMasterKeyHash: createHash("sha256")
+        .update(env.LITELLM_MASTER_KEY)
+        .digest("hex"),
+      ...(env.DEPLOY_ENVIRONMENT
+        ? { operatorEnvironment: env.DEPLOY_ENVIRONMENT }
+        : {}),
+    }),
   });
+}
+
+// Per-node, per-process bound. A replica has an independent bucket, matching the existing limiter.
+const traceReadLimiter = new TokenBucketRateLimiter({
+  maxTokens: 10,
+  refillRate: 10 / 60,
+  burstSize: 5,
+});
+export function consumeTraceReadBudget(nodeId: string): boolean {
+  return traceReadLimiter.consume(nodeId);
 }

@@ -52,3 +52,5 @@ this floor; the closest file wins for code-local rules.
 Pointers: [code delivery](.agents/skills/contribute-to-cogni/SKILL.md) ·
 [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) ·
 [discovery](https://cognidao.org/.well-known/agent.json)
+
+Local development: follow the [portable startup and agent API guide (review draft)](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-469da024). Use the target node repository, its environment example, and its own startup commands. Current node discovery and schemas take precedence over old operator examples.

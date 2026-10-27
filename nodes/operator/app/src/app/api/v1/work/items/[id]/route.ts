@@ -104,7 +104,8 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       ctx.log.info({ workItemId: id }, "work.items.patch_success");
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {
-      // Coded responses: 403 authz_denied (permanent), 409 revision_conflict
+      // Coded responses: 400 work_item_scores_invalid (story.5111), 403
+      // authz_denied (permanent), 409 revision_conflict
       // (CAS lost, nothing written), 503 work_items_busy (retryable), 503
       // not-ready, 404 missing. Anything unrecognized rethrows
       // to the wrapper's 500 — the catch is NOT broadened (bug.5408).

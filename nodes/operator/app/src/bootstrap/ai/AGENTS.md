@@ -28,8 +28,8 @@ AI tool bindings and tool source factory. Wires tool implementations with inject
 
 ## Public Surface
 
-- **Exports:** `createToolBindings()`, `createBoundToolSource()`, `ToolBindings`, `ToolBindingDeps`
-- **Files considered API:** `tool-bindings.ts`, `tool-source.factory.ts`
+- **Exports:** `createToolBindings()`, `createBoundToolSource()`, `ToolBindings`, `ToolBindingDeps`, `OPERATOR_CORE_TOOL_BUNDLE` (shared baseline contracts with existing operator requires metadata)
+- **Files considered API:** `tool-bindings.ts`, `tool-source.factory.ts`, `evaluation-baseline.ts`
 
 ## Responsibilities
 

@@ -50,6 +50,7 @@ import type {
 } from "@cogni/ai-tools";
 import type {
   AkashLeaseLogDescriptor,
+  AkashTxAllocationPolicy,
   AkashTxManagedDeploymentDefinition,
   ComputeCostEvidencePort,
   ComputeResourceCostEvidence,
@@ -137,7 +138,7 @@ export interface AkashComputeAdapterConfig {
    * Also used for the large `/v1/providers` index read.
    */
   writeTimeoutMs?: number;
-  /** USD escrow deposited per deployment (Console minimum 0.5). */
+  /** Legacy requested deposit field; current Console ignores it and owns funding defaults. */
   deployDepositUsd?: number;
   /** How long to wait for provider bids before failing, in ms. */
   bidTimeoutMs?: number;
@@ -432,9 +433,9 @@ export class AkashComputeAdapter
     this.fetchImpl = config.fetchImpl ?? fetch;
     this.sleep = config.sleepImpl ?? defaultSleep;
     this.writeTimeoutMs = config.writeTimeoutMs ?? 30_000;
-    // Default to the Console MINIMUM: idle escrow stays small and trial/thin wallets can
-    // deploy (a $5 default 402'd on prod against the $0.50 trial — task.5044). Escrow is a
-    // refundable float, not the spend cap; top-ups/auto-reload govern lease lifetime.
+    // Preserve legacy request serialization. Current Console ignores this field:
+    // platform defaults and automatic top-ups determine actual escrow/lifetime.
+    // Recovery funding therefore needs a separately qualified policy before use.
     this.deployDepositUsd = config.deployDepositUsd ?? 0.5;
     this.bidTimeoutMs = config.bidTimeoutMs ?? 90_000;
     this.bidPollIntervalMs = config.bidPollIntervalMs ?? 3_000;
@@ -802,9 +803,31 @@ export class AkashComputeAdapter
    * redeploy on EVERY PUT, and re-deploying a not-yet-serving node denies it a stable window.
    * Kept here, next to `buildAkashSdl` + `sdlOptions`, so SDL construction never crosses the port.
    */
-  sdlHash(spec: ProvisionSpec): string {
+  private allocationOptions(policy?: AkashTxAllocationPolicy): AkashSdlOptions {
+    if (!policy) return this.sdlOptions;
+    if (
+      policy.pricingDenom !== "uact" ||
+      policy.pricingAmount !== 100 ||
+      policy.initialEscrowUsd !== 0.5
+    )
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "invalid recovery allocation policy"
+      );
+    // Operation-native policy is independently owned; legacy uakt is not comparable.
+    return {
+      ...this.sdlOptions,
+      pricingDenom: policy.pricingDenom,
+      pricingAmount: policy.pricingAmount,
+    };
+  }
+
+  sdlHash(
+    spec: ProvisionSpec,
+    allocationPolicy?: AkashTxAllocationPolicy
+  ): string {
     return createHash("sha256")
-      .update(buildAkashSdl(spec, this.sdlOptions))
+      .update(buildAkashSdl(spec, this.allocationOptions(allocationPolicy)))
       .digest("hex");
   }
 
@@ -1048,6 +1071,7 @@ export class AkashComputeAdapter
    */
   async allocateAndLease(p: {
     spec: ProvisionSpec;
+    allocationPolicy?: AkashTxAllocationPolicy;
     /**
      * Durably publish the allocated handle. A throw here closes the deployment: an
      * unrecorded dseq is a paid lease nobody can ever find.
@@ -1061,7 +1085,10 @@ export class AkashComputeAdapter
      */
     excludedProviders?: ReadonlySet<string>;
   }): Promise<{ leaseId: string; providerAccount: string }> {
-    const sdl = buildAkashSdl(p.spec, this.sdlOptions);
+    const sdl = buildAkashSdl(
+      p.spec,
+      this.allocationOptions(p.allocationPolicy)
+    );
     const { dseq, provider } = await this.createAndLease(
       sdl,
       this.withPlacement(await this.loadScreeningContext(), p.spec),
@@ -1071,7 +1098,8 @@ export class AkashComputeAdapter
             await p.onAllocated?.(resource.leaseId);
           }
         : undefined,
-      retainsStorage(p.spec)
+      retainsStorage(p.spec),
+      p.allocationPolicy
     );
     return { leaseId: String(dseq), providerAccount: provider };
   }
@@ -1086,12 +1114,18 @@ export class AkashComputeAdapter
     screening: ScreeningContext,
     tried: Set<string>,
     onAllocated?: (resource: ProvisionOutput) => Promise<void>,
-    retainStorage = false
+    retainStorage = false,
+    allocationPolicy?: AkashTxAllocationPolicy
   ): Promise<{ dseq: string; provider: string }> {
     const created = await this.request<{ dseq?: string; manifest?: unknown }>(
       "POST",
       "/v1/deployments",
-      { data: { sdl, deposit: this.deployDepositUsd } },
+      {
+        data: {
+          sdl,
+          deposit: allocationPolicy?.initialEscrowUsd ?? this.deployDepositUsd,
+        },
+      },
       this.writeTimeoutMs
     );
     const dseq = created?.dseq;
@@ -1138,7 +1172,12 @@ export class AkashComputeAdapter
           "Console POST /v1/deployments returned no manifest"
         );
       }
-      const bid = await this.awaitScreenedBid(dseq, screening, tried);
+      const bid = await this.awaitScreenedBid(
+        dseq,
+        screening,
+        tried,
+        allocationPolicy
+      );
       provider = String(bid.provider);
       leaseAttempted = true;
       await this.request(
@@ -1227,7 +1266,8 @@ export class AkashComputeAdapter
   private async awaitScreenedBid(
     dseq: string,
     screening: ScreeningContext,
-    tried: ReadonlySet<string>
+    tried: ReadonlySet<string>,
+    allocationPolicy?: AkashTxAllocationPolicy
   ): Promise<ConsoleBidId> {
     const deadline = Date.now() + this.bidTimeoutMs;
     const preferred = this.config.preferredProviders ?? [];
@@ -1259,6 +1299,25 @@ export class AkashComputeAdapter
         const id = b.bid?.id;
         const owner = id?.provider;
         if (!id || !owner) continue;
+        if (allocationPolicy) {
+          const price = b.bid?.price;
+          const amount = price?.amount;
+          // Cosmos decimal has up to 18 fractional digits; compare native units exactly.
+          if (
+            price?.denom !== allocationPolicy.pricingDenom ||
+            typeof amount !== "string" ||
+            !/^(0|[1-9][0-9]{0,29})(\.[0-9]{1,18})?$/.test(amount)
+          )
+            continue;
+          const [whole = "0", fractional = ""] = amount.split(".");
+          const native =
+            BigInt(whole) * 10n ** 18n + BigInt(fractional.padEnd(18, "0"));
+          if (
+            native <= 0n ||
+            native > BigInt(allocationPolicy.pricingAmount) * 10n ** 18n
+          )
+            continue;
+        }
         byProvider.set(owner, id);
         screenable.push({
           provider: owner,

@@ -5,17 +5,20 @@
  * Module: `@app/api/v1/cognition/route`
  * Purpose: GET /api/v1/cognition — the node's session-start cognition substrate
  *   bundle. Composes the irreducible session invariants (code-owned)
- *   with a live skills index + domain pointers from the knowledge hub, plus a
- *   rendered markdown bundle a SessionStart hook echoes into agent context.
+ *   with the live governing index + domain pointers from the knowledge hub,
+ *   plus a rendered markdown bundle a SessionStart hook echoes into agent context.
  * Scope: Single authed GET (any principal: cookie-session human OR bearer
- *   agent). Reads via container.knowledgeStorePort. Index-first for skills +
- *   domains — their full bodies stay behind the same authed read routes
+ *   agent). Reads via container.knowledgeStorePort. Index-first for governing
+ *   entries + domains — their full bodies stay behind the same authed read routes
  *   (KNOWLEDGE_READ_REQUIRES_PRINCIPAL); the current-node orientation entry is
  *   rendered IN FULL so the bootstrap IS the agent's operating map.
  *   The public bootstrap seam stays /api/v1/agent/register: register → key → cognition.
  * Invariants:
- *   - INDEX_FIRST: returns skill/domain pointers; the current-node orientation
+ *   - INDEX_FIRST: returns governing/domain pointers; the current-node orientation
  *     entry is the one full body (ORIENTATION_LOADED_IN_FULL).
+ *   - INDEX_BUILT_BY_OWN_QUERY: the governing index is one
+ *     `listGoverningIndex()` read, not the PER_DOMAIN_LIMIT scan, which now
+ *     only discovers suffix-named orientation entries.
  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: invariants + markdown render even
  *     when the hub is unconfigured or empty.
  *   - GOALS_DIRECT_READ: approved DAO goals come from one
@@ -29,7 +32,6 @@
 import {
   CognitionBundleResponseSchema,
   type CognitionDomainPointer,
-  type CognitionSkillPointer,
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -38,9 +40,8 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeMission, getNodeName } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import {
-  isCognitionEntry,
   type OrientationEntry,
-  renderBundleMarkdown,
+  renderBundle,
   resolveGoals,
   resolveOrientation,
   SESSION_BOOTSTRAP_INVARIANTS,
@@ -84,7 +85,6 @@ export const GET = wrapRouteHandlerWithLogging(
     const buildSha = serverEnv().APP_BUILD_SHA ?? "unknown";
     const generatedAt = new Date().toISOString();
 
-    const skillsIndex: CognitionSkillPointer[] = [];
     const domainPointers: CognitionDomainPointer[] = [];
     // The current node's orientation entry id, by `<slug>-agent-orientation`
     // convention — captured during the scan, its excerpt fetched below. A
@@ -116,17 +116,13 @@ export const GET = wrapRouteHandlerWithLogging(
           } else if (!orientationId && r.id.endsWith("-agent-orientation")) {
             orientationId = r.id;
           }
-          if (!isCognitionEntry(r.entryType)) continue;
-          skillsIndex.push({
-            id: r.id,
-            title: r.title,
-            useWhen: r.useWhen ?? null,
-            entryType: r.entryType ?? "guide",
-            domain: r.domain,
-          });
         }
       }
     }
+
+    // The governing index comes from its own cross-domain query, never from the
+    // capped domain scan above (INDEX_BUILT_BY_OWN_QUERY, bug.5350).
+    const governingIndex = port ? await port.listGoverningIndex() : [];
 
     // Direct lookup, not scan-dependent: the scan above is capped at
     // PER_DOMAIN_LIMIT rows per domain and misses older entries (bug.5280).
@@ -146,7 +142,7 @@ export const GET = wrapRouteHandlerWithLogging(
       `and your open contribution branch via GET ${origin}/api/v1/knowledge/contributions/{id}/diff. ` +
       "Refine in place over writing new (REFINE_OVER_EXTEND).";
 
-    const markdown = renderBundleMarkdown({
+    const { markdown, governingRender } = renderBundle({
       node,
       name,
       mission,
@@ -154,7 +150,7 @@ export const GET = wrapRouteHandlerWithLogging(
       origin,
       buildSha,
       toolingInvariants,
-      skillsIndex,
+      governingIndex,
       domainPointers,
       orientation,
       goals,
@@ -164,7 +160,9 @@ export const GET = wrapRouteHandlerWithLogging(
       {
         node,
         name,
-        skills: skillsIndex.length,
+        governing: governingIndex.length,
+        governingMode: governingRender.mode,
+        governingWholeBytes: governingRender.wholeBytes,
         domains: domainPointers.length,
         orientation: orientation?.id ?? null,
         goalsStatus: goals.status,
@@ -183,7 +181,8 @@ export const GET = wrapRouteHandlerWithLogging(
         buildSha,
         generatedAt,
         toolingInvariants,
-        skillsIndex,
+        governingIndex,
+        governingRender,
         domainPointers,
         recallProtocol,
         markdown,

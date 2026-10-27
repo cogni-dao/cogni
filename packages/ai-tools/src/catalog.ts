@@ -20,6 +20,7 @@ import { edoHypothesizeBoundTool } from "./tools/edo-hypothesize";
 import { edoRecordOutcomeBoundTool } from "./tools/edo-record-outcome";
 import { getCurrentTimeBoundTool } from "./tools/get-current-time";
 import { goalListBoundTool } from "./tools/goal-list";
+import { knowledgeIndexBoundTool } from "./tools/knowledge-index";
 import { knowledgeReadBoundTool } from "./tools/knowledge-read";
 import { knowledgeSearchBoundTool } from "./tools/knowledge-search";
 import { knowledgeWriteBoundTool } from "./tools/knowledge-write";
@@ -113,6 +114,7 @@ export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
   edoRecordOutcomeBoundTool as CatalogBoundTool,
   getCurrentTimeBoundTool as CatalogBoundTool,
   goalListBoundTool as CatalogBoundTool,
+  knowledgeIndexBoundTool as CatalogBoundTool,
   knowledgeReadBoundTool as CatalogBoundTool,
   knowledgeSearchBoundTool as CatalogBoundTool,
   knowledgeWriteBoundTool as CatalogBoundTool,

@@ -4,18 +4,18 @@
 
 /**
  * Module: `@scripts/vm-health-snapshot`
- * Purpose: Grades each shared env VM against the ONE reliability policy (recorded cogni_reliability_v1_* series) and names what is eating it.
- * Scope: Read-only Grafana datasource-proxy instant queries; does not SSH, write, or own any threshold.
- * Invariants: ONE_HEALTH_CONTRACT (grade only reliability-policy.v1.json signals) ; MISSING_IS_UNKNOWN (null/stale/multi-host never GREEN) ; ENDPOINTS_ARE_NOT_VM, evaluate() pure
+ * Purpose: Grades each shared env VM against the ONE reliability policy (recorded cogni_reliability_v1_* series) and names what is eating it; also prints the story.5084 soak objectives (24h per-endpoint availability, throttle-controller liveness, backup receipts) exactly as the private Fleet Reliability dashboard shows them.
+ * Scope: Read-only Grafana datasource-proxy instant queries (Prometheus + Loki); does not SSH, write, or own any threshold.
+ * Invariants: ONE_HEALTH_CONTRACT (grade only reliability-policy.v1.json signals and objectives) ; MISSING_IS_UNKNOWN (null/stale/multi-host never GREEN) ; ENDPOINTS_ARE_NOT_VM and OBJECTIVES_ARE_NOT_VM (neither changes the VM verdict or exit code), evaluate()/evaluateObjectives() pure
  * Side-effects: IO
  * Notes: Consumers, swap-in and major faults are ungraded diagnostic detail. Envs are validated before any PromQL is built; hosts must be 32-hex.
- * Links: packages/node-contracts/src/reliability-policy.v1.json, infra/grafana/synthetic/main.tf, .claude/skills/vm-health/SKILL.md, story.5084
+ * Links: packages/node-contracts/src/reliability-policy.v1.json, infra/grafana/synthetic/main.tf, infra/grafana/dashboards/operator/fleet-capacity.json, .claude/skills/vm-health/SKILL.md, story.5084
  * @public
  *
  * Usage:
  *   node scripts/vm-health-snapshot.mjs [production|preview|candidate-a ...] [--json]
  * Credentials: GRAFANA_URL (https) + GRAFANA_SERVICE_ACCOUNT_TOKEN from env, else ./.env.cogni.
- * Exit code: 0 all GREEN · 1 worst YELLOW · 2 any RED or UNKNOWN · 3 usage/credential error · 4 Grafana unreachable for every env.
+ * Exit code (VM verdict only): 0 all GREEN · 1 worst YELLOW · 2 any RED or UNKNOWN · 3 usage/credential error · 4 Grafana unreachable for every env.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -86,8 +86,29 @@ export function gradeSignal(key, value) {
   return "GREEN";
 }
 
-const isFresh = (tsSec, nowSec) =>
-  finite(tsSec) && nowSec - tsSec <= TTL_SEC && tsSec - nowSec <= 15;
+/** Subquery step for the probe last-sample-time read; adds at most this much age. */
+export const PROBE_SAMPLE_TIME_STEP = "10s";
+
+const isFresh = (tsSec, nowSec, ttlSec = TTL_SEC) =>
+  finite(tsSec) && nowSec - tsSec <= ttlSec && tsSec - nowSec <= 15;
+
+/**
+ * Serve-probe evidence bounds for one env, owned by policy serveProbes (bug.5527):
+ * the readiness window, and a freshness TTL that tolerates one missed probe run
+ * (never tighter than the policy evidence TTL).
+ */
+export function serveProbeBounds(env) {
+  const p = POLICY.serveProbes?.[env];
+  if (
+    !finite(p?.frequencyMs) ||
+    !/^[1-9][0-9]*[smh]$/.test(p?.evidenceWindow ?? "")
+  )
+    throw new Error(`policy has no usable serveProbes for ${env}`);
+  return {
+    window: p.evidenceWindow,
+    ttlSec: Math.max(TTL_SEC, (2 * p.frequencyMs) / 1000),
+  };
+}
 
 /**
  * Pure: one env's evidence → verdict.
@@ -206,7 +227,11 @@ export function evaluate(input) {
 
 /** Pure: probe evidence → separate node-endpoint status (never part of the VM verdict). */
 export function evaluateEndpoints(probes, nowSec) {
-  if (!probes || !isFresh(probes.tsSec, nowSec))
+  // Evidence without env bounds is held to production's (strictest) policy bounds.
+  const { window, ttlSec } = probes?.window
+    ? probes
+    : serveProbeBounds("production");
+  if (!probes || !isFresh(probes.tsSec, nowSec, ttlSec))
     return {
       status: "UNKNOWN",
       failing: [],
@@ -224,9 +249,143 @@ export function evaluateEndpoints(probes, nowSec) {
     failing,
     total: new Set(nodes.map((n) => n.slug)).size,
     text: failing.length
-      ? `${failing.length}/${nodes.length} failing in 5m (${failing.join(", ")}) — node app/lease, not the VM: read their readyz in Loki`
+      ? `${failing.length}/${nodes.length} failing in ${window} (${failing.join(", ")}) — node app/lease, not the VM: read their readyz in Loki`
       : `${nodes.length} passing`,
   };
+}
+
+/** story.5084 soak objectives, owned by the policy (never VM signals). */
+export const OBJECTIVES = POLICY.objectives;
+
+/** Loki selectors for the objectives; identical to fleet-capacity.json panels. */
+export const OBJECTIVE_LOGS = {
+  // The actuator pod's container is `actuator`, so that is its Loki `service`.
+  throttleController:
+    'service="actuator",pod=~"operator-database-reliability-actuator-.*"',
+  sweepEvent: "feature.node_reliability.sweep_complete",
+  backup: 'service="db-backup"',
+  backupEvent: "db_backup.completed",
+};
+
+const pct = (v) => (finite(v) ? `${v.toFixed(3)}%` : "n/a");
+const ago = (sec) =>
+  finite(sec)
+    ? sec >= 3600
+      ? `${(sec / 3600).toFixed(1)}h ago`
+      : `${Math.max(0, Math.round(sec / 60))}m ago`
+    : "none in 7d";
+
+/**
+ * Pure: soak evidence → graded objectives (never part of the VM verdict).
+ * input = { availability: {nodes: [{slug, ratio}], byProbe: [{slug, probe, ratio}]} | null,
+ *   controller: {sweeps, lastSec, errorLines} | null, backups: {receipts, lastSec} | null }.
+ * Availability is graded per endpoint (node_slug × probe); per-node averages are ungraded context.
+ * An empty Loki count is a real zero (no receipt), so it grades RED, never GREEN; null = query failed = UNKNOWN.
+ * Throws when the policy has no usable objectives; callers wrap it (guardObjectives).
+ */
+export function evaluateObjectives(input, nowSec, objectives = OBJECTIVES) {
+  const av = objectives?.nodeAvailability;
+  const tc = objectives?.throttleController;
+  const br = objectives?.backupReceipts;
+  if (
+    !finite(av?.targetPercent) ||
+    !finite(tc?.minSweeps) ||
+    !finite(br?.minReceipts)
+  )
+    throw new Error("policy has no usable objectives");
+  const since = (t) => (finite(t) ? nowSec - t : null);
+  const byPercent = (x, y) =>
+    x.percent - y.percent || x.name.localeCompare(y.name);
+
+  const a = input?.availability;
+  const endpoints = (a?.byProbe ?? [])
+    .filter((p) => SLUG_RE.test(p.slug ?? "") && finite(p.ratio))
+    .map((p) => {
+      const percent = p.ratio * 100;
+      return {
+        name: `${p.slug}·${p.probe || "unknown-probe"}`,
+        slug: p.slug,
+        probe: p.probe || "unknown-probe",
+        percent,
+        level: percent >= av.targetPercent ? "GREEN" : "RED",
+      };
+    })
+    .sort(byPercent);
+  const nodes = (a?.nodes ?? [])
+    .filter((n) => SLUG_RE.test(n.slug ?? "") && finite(n.ratio))
+    .map((n) => ({ name: n.slug, slug: n.slug, percent: n.ratio * 100 }))
+    .sort(byPercent);
+  const below = endpoints.filter((e) => e.level === "RED").map((e) => e.name);
+  const availability = {
+    level: !endpoints.length ? "UNKNOWN" : below.length ? "RED" : "GREEN",
+    window: av.window,
+    targetPercent: av.targetPercent,
+    endpoints,
+    below,
+    nodes,
+  };
+
+  const c = input?.controller;
+  const sweeps = c ? (finite(c.sweeps) ? c.sweeps : 0) : null;
+  const controller = {
+    level:
+      sweeps === null ? "UNKNOWN" : sweeps >= tc.minSweeps ? "GREEN" : "RED",
+    window: tc.window,
+    minSweeps: tc.minSweeps,
+    sweeps,
+    lastSweepAgeSec: since(c?.lastSec),
+    errorLines1h: c && finite(c.errorLines) ? c.errorLines : c ? 0 : null,
+  };
+
+  const b = input?.backups;
+  const receipts = b ? (finite(b.receipts) ? b.receipts : 0) : null;
+  const backups = {
+    level:
+      receipts === null
+        ? "UNKNOWN"
+        : receipts >= br.minReceipts
+          ? "GREEN"
+          : "RED",
+    window: br.window,
+    minReceipts: br.minReceipts,
+    receipts,
+    lastAgeSec: since(b?.lastSec),
+  };
+
+  return {
+    level: [availability, controller, backups]
+      .map((o) => o.level)
+      .reduce(worst, "GREEN"),
+    availability,
+    controller,
+    backups,
+  };
+}
+
+/** OBJECTIVES_ARE_NOT_VM: any objectives failure becomes `{level: UNKNOWN, error}`; it can never reject a snapshot. */
+export async function guardObjectives(run) {
+  try {
+    return await run();
+  } catch (e) {
+    return { level: "UNKNOWN", error: String(e?.message ?? e), errors: [] };
+  }
+}
+
+/** Pure: graded objectives → the CLI lines (same numbers as the dashboard top row). */
+export function renderObjectives(o) {
+  if (!o?.availability || !o.controller || !o.backups)
+    return [`   objectives: ⚪ UNKNOWN (${o?.error ?? "not evaluated"})`];
+  const a = o.availability;
+  const c = o.controller;
+  const b = o.backups;
+  const mark = (level) => (level === "GREEN" ? "" : `${ICON[level]} `);
+  const n = a.endpoints.length;
+  return [
+    `   availability ${a.window} per endpoint (not VM; target ≥${a.targetPercent}%): ${a.level === "UNKNOWN" ? "⚪ UNKNOWN no probe_success" : `${a.below.length ? `🔴 ${a.below.length}/${n} endpoints below target` : `OK ${n}/${n} endpoints at target`} (${n} observed) — ${a.endpoints.map((e) => `${mark(e.level)}${e.name} ${pct(e.percent)}`).join(" · ")}`}`,
+    `   node averages ${a.window} (context, ungraded): ${a.nodes.length ? a.nodes.map((x) => `${x.slug} ${pct(x.percent)}`).join(" · ") : "n/a"}`,
+    `   throttle controller (not VM): ${c.level === "UNKNOWN" ? "⚪ UNKNOWN Loki query failed" : `${c.level === "GREEN" ? "OK alive" : "🔴 DEAD"} ${c.sweeps} sweeps in ${c.window} (min ${c.minSweeps}) · last sweep ${ago(c.lastSweepAgeSec)} · ${c.errorLines1h ?? "n/a"} "Error: " lines in 1h`}`,
+    `   backups (not VM): ${b.level === "UNKNOWN" ? "⚪ UNKNOWN Loki query failed" : `${b.level === "GREEN" ? "OK" : "🔴"} ${b.receipts} receipts in ${b.window} (min ${b.minReceipts}) · last ${ago(b.lastAgeSec)}`}`,
+  ];
 }
 
 /** Pure: per-service rss/swap rows → top consumers + memory outside per-service RSS (ungraded). */
@@ -289,12 +448,23 @@ function loadCreds() {
   return { base: base.toString().replace(/\/$/, ""), token };
 }
 
-async function prom(creds, expr, timeSec) {
-  const u = new URL(
-    `${creds.base}/api/datasources/proxy/uid/grafanacloud-prom/api/v1/query`
-  );
+const DATASOURCES = {
+  prometheus: {
+    path: "grafanacloud-prom/api/v1/query",
+    time: (sec) => String(sec),
+  },
+  // Loki reads an integer `time` as nanoseconds.
+  loki: {
+    path: "grafanacloud-logs/loki/api/v1/query",
+    time: (sec) => `${sec}000000000`,
+  },
+};
+
+async function query(creds, kind, expr, timeSec) {
+  const ds = DATASOURCES[kind];
+  const u = new URL(`${creds.base}/api/datasources/proxy/uid/${ds.path}`);
   u.searchParams.set("query", expr);
-  u.searchParams.set("time", String(timeSec));
+  u.searchParams.set("time", ds.time(timeSec));
   let res;
   try {
     res = await fetch(u, {
@@ -309,11 +479,11 @@ async function prom(creds, expr, timeSec) {
     throw new CredentialError(
       `grafana rejected credentials (HTTP ${res.status})`
     );
-  if (!res.ok) throw new GrafanaError(`prometheus HTTP ${res.status}`);
+  if (!res.ok) throw new GrafanaError(`${kind} HTTP ${res.status}`);
   const body = await res.json().catch(() => null);
   if (body?.status !== "success" || body.data?.resultType !== "vector")
     throw new GrafanaError(
-      `prometheus status ${body?.status ?? "malformed"}: ${body?.error ?? ""}`.trim()
+      `${kind} status ${body?.status ?? "malformed"}: ${body?.error ?? ""}`.trim()
     );
   return body.data.result;
 }
@@ -337,6 +507,75 @@ function selectors(env, host) {
     family: (f) =>
       `${f.metric}{env="${env}",job="${f.job}",substrate_host!=""}`,
     probe: `probe_success{environment="${env}",proof_class="serve"}`,
+    logs: (labels) => `{env="${env}",${labels}}`,
+  };
+}
+
+const DURATION_RE = /^[1-9][0-9]*[smhd]$/;
+const LAST_TS =
+  " | label_format ts=`{{ __timestamp__ | unixEpoch }}` | unwrap ts [7d]";
+
+/**
+ * Queries the story.5084 objectives with the dashboard's own expressions. A failed group stays null (UNKNOWN);
+ * an ungraded "last …" or error-count read failing never turns its graded count UNKNOWN.
+ */
+async function objectives(run, env, nowSec, policyObjectives) {
+  const s = selectors(env);
+  const av = policyObjectives?.nodeAvailability;
+  const tc = policyObjectives?.throttleController;
+  const br = policyObjectives?.backupReceipts;
+  for (const w of [av?.window, tc?.window, br?.window])
+    if (!DURATION_RE.test(w ?? ""))
+      throw new Error(`invalid or missing policy objectives window ${w}`);
+  const prom1 = (expr) => run("prometheus", expr);
+  const loki1 = async (expr) => {
+    const r = await run("loki", expr);
+    return r.length ? num(r[0]) : null;
+  };
+  const detail = (expr) => loki1(expr).catch(() => null);
+  const L = OBJECTIVE_LOGS;
+  const sweep = `${s.logs(L.throttleController)} | json | event="${L.sweepEvent}"`;
+  const backup = `${s.logs(L.backup)} | json | event="${L.backupEvent}"`;
+  const availability = `avg_over_time(${s.probe}[${av.window}])`;
+  const [a, c, b] = await Promise.allSettled([
+    Promise.all([
+      prom1(`avg by (node_slug) (${availability})`),
+      prom1(`avg by (node_slug, probe) (${availability})`),
+    ]).then(([nodes, byProbe]) => ({
+      nodes: nodes.map((r) => ({ slug: r.metric.node_slug, ratio: num(r) })),
+      byProbe: byProbe.map((r) => ({
+        slug: r.metric.node_slug,
+        probe: r.metric.probe,
+        ratio: num(r),
+      })),
+    })),
+    Promise.all([
+      loki1(`sum(count_over_time(${sweep} [${tc.window}]))`),
+      detail(`max(max_over_time(${sweep}${LAST_TS}))`),
+      detail(
+        `sum(count_over_time(${s.logs(L.throttleController)} |= "Error: " [1h]))`
+      ),
+    ]).then(([sweeps, lastSec, errorLines]) => ({
+      sweeps,
+      lastSec,
+      errorLines,
+    })),
+    Promise.all([
+      loki1(`sum(count_over_time(${backup} [${br.window}]))`),
+      detail(`max(max_over_time(${backup}${LAST_TS}))`),
+    ]).then(([receipts, lastSec]) => ({ receipts, lastSec })),
+  ]);
+  const ok = (r) => (r.status === "fulfilled" ? r.value : null);
+  const errors = [a, c, b]
+    .filter((r) => r.status === "rejected")
+    .map((r) => String(r.reason?.message ?? r.reason));
+  return {
+    ...evaluateObjectives(
+      { availability: ok(a), controller: ok(c), backups: ok(b) },
+      nowSec,
+      policyObjectives
+    ),
+    errors,
   };
 }
 
@@ -345,9 +584,16 @@ const fresh = (sel) =>
 const byService = (sel) =>
   `sum by (class, service) (max without (instance) (${sel}))`;
 
-async function snapshot(creds, env, nowSec) {
+/**
+ * One env: VM verdict plus guarded objectives. `deps` exists for tests:
+ * `run(kind, expr)` replaces Grafana, `objectives` replaces policy.objectives.
+ */
+export async function snapshot(creds, env, nowSec, deps = {}) {
   const s = selectors(env);
-  const q = (expr) => prom(creds, expr, nowSec);
+  const run = deps.run ?? ((kind, expr) => query(creds, kind, expr, nowSec));
+  const policyObjectives =
+    "objectives" in deps ? deps.objectives : POLICY.objectives;
+  const q = (expr) => run("prometheus", expr);
   const signalEntries = await Promise.all(
     Object.keys(POLICY.signals).map(async (key) => {
       const metric = SIGNAL_SERIES[key];
@@ -376,15 +622,23 @@ async function snapshot(creds, env, nowSec) {
       ),
     ])
   );
+  const bounds = serveProbeBounds(env);
+  // timestamp() inside the subquery keeps each real sample time, so a probe that
+  // runs less often than the 5m instant lookback still proves its last sample age.
+  // The step adds up to one step of apparent age; 10s keeps 60s probes inside a
+  // 120s TTL (same query as the operator readiness adapter).
   const [probeTs, probeNodes] = await Promise.all([
-    q(`max(timestamp(${s.probe}))`),
-    q(`min by (node_slug) (min_over_time(${s.probe}[5m]))`),
+    q(
+      `max(max_over_time(timestamp(${s.probe})[${bounds.window}:${PROBE_SAMPLE_TIME_STEP}]))`
+    ),
+    q(`min by (node_slug) (min_over_time(${s.probe}[${bounds.window}]))`),
   ]);
   const input = {
     nowSec,
     signals: Object.fromEntries(signalEntries),
     families: Object.fromEntries(familyEntries),
     probes: {
+      ...bounds,
       tsSec: probeTs.length ? num(probeTs[0]) : null,
       nodes: probeNodes.map((r) => ({ slug: r.metric.node_slug, min: num(r) })),
     },
@@ -437,7 +691,14 @@ async function snapshot(creds, env, nowSec) {
         .sort((a, b) => b.rate - a.rate),
     };
   }
-  return { env, ...result, detail };
+  return {
+    env,
+    ...result,
+    detail,
+    objectives: await guardObjectives(() =>
+      objectives(run, env, nowSec, policyObjectives)
+    ),
+  };
 }
 
 const fmt = (v, d = 1) => (finite(v) ? v.toFixed(d) : "n/a");
@@ -489,7 +750,18 @@ export function render(s) {
   lines.push(
     `   node endpoints (not VM): ${e.status === "UNKNOWN" ? "⚪ UNKNOWN" : e.status === "OK" ? "OK" : "🔴"} ${e.text}`
   );
+  if (s.objectives) {
+    lines.push(...renderObjectives(s.objectives));
+    for (const err of s.objectives.errors ?? [])
+      lines.push(`   ⚪ objective query failed: ${err}`);
+  }
   return lines.join("\n");
+}
+
+/** Pure: exit code from VM verdicts only; objectives are never read (OBJECTIVES_ARE_NOT_VM). */
+export function vmExitCode(snaps) {
+  const rank = Math.max(...snaps.map((s) => RANK[s.verdict] ?? RANK.UNKNOWN));
+  return rank === 0 ? 0 : rank === 1 ? 1 : 2;
 }
 
 export function parseArgs(args) {
@@ -544,8 +816,7 @@ async function main() {
     );
   if (settled.some((r) => r.reason instanceof CredentialError)) process.exit(3);
   if (settled.every((r) => r.status === "rejected")) process.exit(4);
-  const rank = Math.max(...snaps.map((s) => RANK[s.verdict]));
-  process.exit(rank === 0 ? 0 : rank === 1 ? 1 : 2);
+  process.exit(vmExitCode(snaps));
 }
 
 if (

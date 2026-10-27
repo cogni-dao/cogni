@@ -4,9 +4,9 @@
 /**
  * Module: `@contracts/nodes.launch-pack.v1`
  * Purpose: Owner-gated AI-assistant handoff contract for the node wizard.
- * Scope: Stable wire shape for `/api/v1/nodes/[id]/launch-pack`.
+ * Scope: Published legacy shape retained for existing callers; successor is nodes.launch-pack.v2.
  * Side-effects: none
- * Links: src/features/nodes/launch-pack.ts, node-launch-handoff
+ * Links: src/features/nodes/launch-pack.ts, cicd-e2e-required-sequence, bug.5388
  * @public
  */
 

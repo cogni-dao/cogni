@@ -39,6 +39,8 @@ REST API routes for schedule CRUD operations. Auth-protected endpoints for creat
 - **Routes:**
   - `POST /api/v1/schedules` — create schedule (returns 201)
   - `GET /api/v1/schedules` — list user's schedules
+  - `GET /api/v1/schedules/[scheduleId]` — owned detail
+  - `GET /api/v1/schedules/[scheduleId]/runs` — bounded metadata history through the shared package
   - `PATCH /api/v1/schedules/[scheduleId]` — update schedule
   - `DELETE /api/v1/schedules/[scheduleId]` — delete schedule (returns 204)
 - **Files considered API:** route.ts, [scheduleId]/route.ts

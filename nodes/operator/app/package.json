@@ -42,7 +42,7 @@
     "@cogni/financial-ledger": "workspace:*",
     "@cogni/ids": "workspace:*",
     "@cogni/ingestion-core": "workspace:*",
-    "@cogni/knowledge-base-ui": "https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.2.1/cogni-dao-knowledge-base-ui-0.2.1.tgz",
+    "@cogni/knowledge-base-ui": "https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.2.2/cogni-dao-knowledge-base-ui-0.2.2.tgz",
     "@cogni/knowledge-store": "workspace:*",
     "@cogni/node-contracts": "workspace:*",
     "@cogni/node-core": "workspace:*",
@@ -53,7 +53,8 @@
     "@cogni/langgraph-graphs": "workspace:*",
     "@cogni/repo-spec": "workspace:*",
     "@cogni/scheduler-core": "workspace:*",
-    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.1/cogni-dao-work-items-0.2.1.tgz",
+    "@cogni/scheduling": "https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz",
+    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.5/cogni-dao-work-items-0.2.5.tgz",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/modifiers": "^9.0.0",
     "@dnd-kit/sortable": "^10.0.0",
@@ -134,7 +135,8 @@
     "wagmi": "2.19.5",
     "yaml": "^2.8.3",
     "zod": "^4.1.12",
-    "zustand": "^5.0.9"
+    "zustand": "^5.0.9",
+    "@cogni/shared-ai-tools": "https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.1.2/cogni-dao-ai-tools-0.1.2.tgz"
   },
   "devDependencies": {
     "@types/three": "^0.183.1",

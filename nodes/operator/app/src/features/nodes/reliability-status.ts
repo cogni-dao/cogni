@@ -61,6 +61,21 @@ export const EXPECTED_RELIABILITY_REGIONS =
   RELIABILITY_POLICY_V1.expectedRegions;
 export const RELIABILITY_EVIDENCE_TTL_MS = RELIABILITY_POLICY_V1.evidenceTtlMs;
 
+/**
+ * Max age of a serve-probe sample before readiness is stale (bug.5527). Probe
+ * cadence is per environment (policy serveProbes), so the bound tolerates one
+ * missed probe run and is never looser than needed nor tighter than the policy
+ * evidence TTL. An unknown environment gets the strictest bound.
+ */
+export function serveEvidenceTtlMs(
+  environment?: ReliabilityEnvironment
+): number {
+  const probe = environment
+    ? RELIABILITY_POLICY_V1.serveProbes[environment]
+    : undefined;
+  return Math.max(RELIABILITY_EVIDENCE_TTL_MS, 2 * (probe?.frequencyMs ?? 0));
+}
+
 /** Failed current behavior fences immediately; an incomplete window waits only while behavior is healthy. */
 export async function verifyCurrentDatabaseRecovery(input: {
   readonly incident: DatabaseRecoveryIncident;
@@ -223,6 +238,7 @@ export async function readReliabilityStatus(
   };
   const verdict = evaluateReliabilityPolicy({
     buildSha,
+    environment: input.environment,
     database: input.database,
     regionalReadiness: snapshot.regionalReadiness,
     utilization,
@@ -334,6 +350,8 @@ export async function runReliabilitySweep(
 
 export function evaluateReliabilityPolicy(input: {
   readonly buildSha: string | null;
+  /** Selects the serve-probe freshness bound; falls back to the database row. */
+  readonly environment?: ReliabilityEnvironment;
   readonly database: DatabaseContainmentStatus | null;
   readonly regionalReadiness: readonly {
     readonly region: string;
@@ -379,6 +397,10 @@ export function evaluateReliabilityPolicy(input: {
   const readinessRegions = new Set(
     input.regionalReadiness.map((sample) => sample.region)
   );
+  // observedAt is each region's last real probe sample time, not query time.
+  const readinessTtlMs = serveEvidenceTtlMs(
+    input.environment ?? input.database?.environment
+  );
   const hasExactFreshReadiness =
     input.regionalReadiness.length === EXPECTED_RELIABILITY_REGIONS.length &&
     readinessRegions.size === EXPECTED_RELIABILITY_REGIONS.length &&
@@ -388,7 +410,7 @@ export function evaluateReliabilityPolicy(input: {
       return (
         Number.isFinite(sampledAtMs) &&
         sampledAtMs <= observedAtMs + 15_000 &&
-        observedAtMs - sampledAtMs <= RELIABILITY_EVIDENCE_TTL_MS
+        observedAtMs - sampledAtMs <= readinessTtlMs
       );
     });
   const databaseShares = Object.values(input.utilization.databaseShare5m);

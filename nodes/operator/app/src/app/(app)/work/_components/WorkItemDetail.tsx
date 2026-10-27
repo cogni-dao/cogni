@@ -16,6 +16,7 @@ import {
 
 import { EntityCitationLinks } from "../../_components/EntityCitationLinks";
 import { WorkItemFetchError } from "../_api/fetchWorkItems";
+import { hasScores, WorkItemScoresRadar } from "./WorkItemScoresRadar";
 import { StatusPill, TypeIcon } from "./work-item-icons";
 
 type SubjectRef = WorkItemDto["assignees"][number];
@@ -156,6 +157,13 @@ export function WorkItemDetail({
                   </span>
                 )}
               </div>
+
+              {/* Evaluation (story.5111) */}
+              {hasScores(item.scores) && (
+                <Field label="Evaluation">
+                  <WorkItemScoresRadar scores={item.scores} />
+                </Field>
+              )}
 
               {/* Summary */}
               {item.summary && (

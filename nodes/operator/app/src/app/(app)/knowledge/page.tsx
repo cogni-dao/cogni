@@ -57,8 +57,9 @@ export default async function KnowledgePage({
 
   const [initialList, initialDomains, initialGraph] = port
     ? await Promise.all([
-        // limit=500 matches the browse client fetcher (LIST_LIMIT_PARITY).
-        safe(loadKnowledgeList(port, { limit: 500 })),
+        // limit=500 + includeEdo match the browse client fetcher
+        // (LIST_LIMIT_PARITY); the chains tab filters EDO rows from this list.
+        safe(loadKnowledgeList(port, { limit: 500, includeEdo: true })),
         safe(loadDomains(port)),
         mode === "graph"
           ? safe(loadKnowledgeGraph(port))
