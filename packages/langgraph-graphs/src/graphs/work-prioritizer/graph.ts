@@ -18,10 +18,12 @@
  * @public
  */
 
+import { createHash } from "node:crypto";
+
 import {
   EDO_DECIDE_NAME,
   GOAL_LIST_NAME,
-  KNOWLEDGE_SEARCH_NAME,
+  KNOWLEDGE_READ_NAME,
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
@@ -101,7 +103,8 @@ function toolCallArgs(
  * Code-graded guardrails for one run (0..1 each). EVERY_TICK_IMPROVES: deterministic over the transcript, so the
  * same scores land in the cycle log and can be replayed from a stored trace. These grade grounding and waste,
  * not usefulness: a run can score 1 everywhere and still be a poor judgment. Usefulness is a human rating.
- *   knowledge_read  — at least one knowledge search returned a non-empty result (titles only; not proof of reading)
+ *   knowledge_read  — a correlated canonical id read returned a non-empty full body; receipts fingerprint those bytes
+ *                     This is retrieval evidence, not proof the model applied the guidance.
  *   evidence_read   — at least one work-item query returned items
  *   goal_cited      — the decision derives from a listed goal and each Top-5 line cites a listed goal
  *   novel_change    — share of landed patches whose values differ from what the run read (1 when no patches)
@@ -112,7 +115,11 @@ export function cycleScores(messages: readonly BaseMessage[]) {
   const calls = toolCallArgs(messages);
   const seen = new Map<string, Snapshot>();
   let goalIds: string[] = [];
-  let knowledgeReads = 0;
+  const guidanceReceipts: Array<{
+    id: string;
+    sourceRef: string | null;
+    sha256: string;
+  }> = [];
   let itemsRead = 0;
   let patches = 0;
   let identicalPatches = 0;
@@ -125,9 +132,31 @@ export function cycleScores(messages: readonly BaseMessage[]) {
     const call = m.tool_call_id ? calls.get(m.tool_call_id) : undefined;
     if (m.name === GOAL_LIST_NAME && Array.isArray(v.goals)) {
       goalIds = v.goals.map((g: { id?: unknown }) => String(g?.id));
-    } else if (m.name === KNOWLEDGE_SEARCH_NAME) {
-      const hits = [v.results, v.entries, v.items].find(Array.isArray);
-      if (hits && hits.length > 0) knowledgeReads++;
+    } else if (
+      m.name === KNOWLEDGE_READ_NAME &&
+      call?.name === KNOWLEDGE_READ_NAME &&
+      typeof call.args.id === "string" &&
+      v.mode === "get" &&
+      Array.isArray(v.entries)
+    ) {
+      for (const entry of v.entries) {
+        if (
+          !entry ||
+          typeof entry !== "object" ||
+          entry.id !== call.args.id ||
+          typeof entry.content !== "string" ||
+          entry.content.trim().length === 0
+        )
+          continue;
+        guidanceReceipts.push({
+          id: entry.id,
+          sourceRef:
+            typeof entry.sourceRef === "string" ? entry.sourceRef : null,
+          sha256: createHash("sha256")
+            .update(entry.content, "utf8")
+            .digest("hex"),
+        });
+      }
     } else if (m.name === WORK_ITEM_QUERY_NAME && Array.isArray(v.items)) {
       itemsRead += v.items.length;
       for (const it of v.items as Array<Record<string, unknown>>) {
@@ -179,12 +208,13 @@ export function cycleScores(messages: readonly BaseMessage[]) {
   const derivesOk =
     decision !== null && goalIds.includes(decision.derivesFromHypothesisId);
   return {
-    knowledgeReads,
+    knowledgeReads: guidanceReceipts.length,
+    guidanceReceipts,
     itemsRead,
     identicalPatches,
     topIds,
     scores: {
-      knowledge_read: knowledgeReads > 0 ? 1 : 0,
+      knowledge_read: guidanceReceipts.length > 0 ? 1 : 0,
       evidence_read: itemsRead > 0 ? 1 : 0,
       goal_cited:
         derivesOk && topLines.length > 0 ? cited / topLines.length : 0,

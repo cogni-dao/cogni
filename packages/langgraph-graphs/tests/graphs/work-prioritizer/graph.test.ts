@@ -20,6 +20,8 @@ import {
   GET_CURRENT_TIME_NAME,
   GOAL_LIST_NAME,
   goalListContract,
+  KNOWLEDGE_READ_NAME,
+  knowledgeReadContract,
   knowledgeSearchContract,
   WORK_ITEM_TRANSITION_NAME,
   workItemQueryContract,
@@ -182,13 +184,14 @@ const fakeExec: (emit: (e: AiEvent) => void) => ToolExecFn =
   };
 
 describe("work-prioritizer mission-loop agent", () => {
-  it("catalog entry wires the factory, the six tools, and the cycle event", () => {
+  it("catalog entry wires the factory, the seven tools, and the cycle event", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry.graphFactory).toBe(createWorkPrioritizerGraph);
     expect(entry.toolIds).toEqual(WORK_PRIORITIZER_TOOL_IDS);
-    expect(entry.toolIds).toHaveLength(6);
+    expect(entry.toolIds).toHaveLength(7);
     expect(entry.toolIds).toContain(EDO_DECIDE_NAME);
     expect(entry.toolIds).toContain(GET_CURRENT_TIME_NAME);
+    expect(entry.toolIds).toContain(KNOWLEDGE_READ_NAME);
     expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });
   });
 
@@ -201,6 +204,7 @@ describe("work-prioritizer mission-loop agent", () => {
         goalListContract,
         workItemQueryContract,
         workItemTransitionContract,
+        knowledgeReadContract,
         knowledgeSearchContract,
         edoDecideContract,
       ],
@@ -234,6 +238,7 @@ describe("work-prioritizer mission-loop agent", () => {
       toolErrorCount: 0,
       edoDecisionId: "mission-loop-20261023T00",
       knowledgeReads: 0,
+      guidanceReceipts: [],
       itemsRead: 0,
       identicalPatches: 0,
       topIds: [],
@@ -281,6 +286,185 @@ describe("work-prioritizer mission-loop agent", () => {
 
     expect(result.ok).toBe(false);
     expect(result.structuredOutput).toBeUndefined();
+  });
+
+  it("reads canonical guidance through the real runner and fingerprints exact returned bodies", async () => {
+    const body = "Apply the owning rule.\nUse evidence before a change. 🧭";
+    const executed: string[] = [];
+    let turn = 0;
+    const completionFn: CompletionFn = () => {
+      const calls =
+        turn++ === 0
+          ? [
+              {
+                id: "guidance",
+                name: KNOWLEDGE_READ_NAME,
+                args: { id: "mission-loop-expert" },
+              },
+            ]
+          : turn === 2
+            ? [
+                {
+                  id: "patch",
+                  name: WORK_ITEM_TRANSITION_NAME,
+                  args: {
+                    action: "patch",
+                    id: "task.1",
+                    rank: 0,
+                    expectedRevision: 1,
+                  },
+                },
+              ]
+            : [];
+      return {
+        stream: (async function* () {})(),
+        final: Promise.resolve(
+          calls.length
+            ? {
+                ok: true,
+                content: "",
+                finishReason: "tool_calls",
+                toolCalls: calls.map((c) => ({
+                  id: c.id,
+                  type: "function" as const,
+                  function: { name: c.name, arguments: JSON.stringify(c.args) },
+                })),
+              }
+            : {
+                ok: true,
+                content: "Read guidance before the patch.",
+                finishReason: "stop",
+              }
+        ),
+      };
+    };
+    const { stream, final } = createInProcGraphRunner({
+      createGraph: createWorkPrioritizerGraph,
+      completionFn,
+      createToolExecFn: () => async (name) => {
+        executed.push(name);
+        return {
+          ok: true,
+          value:
+            name === KNOWLEDGE_READ_NAME
+              ? {
+                  mode: "get",
+                  entries: [
+                    {
+                      id: "mission-loop-expert",
+                      domain: "build-agents",
+                      entityId: null,
+                      title: "Mission",
+                      content: body,
+                      sourceRef: "contribution:reviewed:2",
+                      sourceType: "external",
+                      confidencePct: 80,
+                      tags: ["expertise-role"],
+                    },
+                  ],
+                  totalFound: 1,
+                }
+              : {
+                  success: true,
+                  action: "patch",
+                  id: "task.1",
+                  revision: 2,
+                  message: "ok",
+                },
+        };
+      },
+      toolContracts: [knowledgeReadContract, workItemTransitionContract],
+      request: {
+        runId: "guidance-run",
+        messages: [{ role: "user", content: "Review priorities" }],
+        configurable: {
+          model: "test-model",
+          toolIds: [...WORK_PRIORITIZER_TOOL_IDS],
+        },
+      },
+    });
+    for await (const _ of stream) {
+      /* drain for billing */
+    }
+    const result = await final;
+    expect(result.ok).toBe(true);
+    expect(executed).toEqual([KNOWLEDGE_READ_NAME, WORK_ITEM_TRANSITION_NAME]);
+    expect(result.structuredOutput?.telemetry).toMatchObject({
+      knowledgeReads: 1,
+      guidanceReceipts: [
+        {
+          id: "mission-loop-expert",
+          sourceRef: "contribution:reviewed:2",
+          sha256:
+            "328c762dda41e780657c92f937dfb2b7442a309b6d9f9adc970811b866564a6a",
+        },
+      ],
+      scores: { knowledge_read: 1 },
+    });
+  });
+
+  it("does not count missing, empty, list-only or uncorrelated guidance as canonical reads", () => {
+    const messages = [
+      new AIMessage({
+        content: "",
+        tool_calls: [
+          {
+            id: "k",
+            name: KNOWLEDGE_READ_NAME,
+            args: { id: "mission-loop-expert" },
+          },
+        ],
+      }),
+      new ToolMessage({
+        name: KNOWLEDGE_READ_NAME,
+        tool_call_id: "k",
+        content: JSON.stringify({
+          mode: "get",
+          entries: [
+            { id: "mission-loop-expert", content: "", sourceRef: null },
+          ],
+        }),
+      }),
+      new ToolMessage({
+        name: KNOWLEDGE_READ_NAME,
+        tool_call_id: "unknown",
+        content: JSON.stringify({
+          mode: "get",
+          entries: [
+            { id: "mission-loop-expert", content: "unbound", sourceRef: null },
+          ],
+        }),
+      }),
+      new ToolMessage({
+        name: KNOWLEDGE_READ_NAME,
+        tool_call_id: "k",
+        content: JSON.stringify({
+          mode: "list",
+          entries: [
+            {
+              id: "mission-loop-expert",
+              content: "list result",
+              sourceRef: null,
+            },
+          ],
+        }),
+      }),
+      new ToolMessage({
+        name: KNOWLEDGE_READ_NAME,
+        tool_call_id: "k",
+        content: JSON.stringify({
+          mode: "get",
+          entries: [
+            { id: "another-entry", content: "wrong source", sourceRef: null },
+          ],
+        }),
+      }),
+    ];
+    expect(cycleScores(messages)).toMatchObject({
+      knowledgeReads: 0,
+      guidanceReceipts: [],
+      scores: { knowledge_read: 0 },
+    });
   });
 
   it("EVERY_TICK_IMPROVES: cycleScores grades hub reads, identical patches and the decision shape", () => {
@@ -410,7 +594,7 @@ describe("work-prioritizer mission-loop agent", () => {
       }),
     ];
     const s = cycleScores(messages);
-    expect(s.knowledgeReads).toBe(1);
+    expect(s.knowledgeReads).toBe(0); // Search metadata is not a full guidance read.
     expect(s.identicalPatches).toBe(2);
     expect(s.topIds).toEqual([
       "story.1",
@@ -421,7 +605,7 @@ describe("work-prioritizer mission-loop agent", () => {
     ]);
     expect(s.itemsRead).toBe(2);
     expect(s.scores).toEqual({
-      knowledge_read: 1,
+      knowledge_read: 0,
       evidence_read: 1,
       goal_cited: 0.8,
       novel_change: 0.5,
