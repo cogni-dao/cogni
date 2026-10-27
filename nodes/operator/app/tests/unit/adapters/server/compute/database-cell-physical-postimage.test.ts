@@ -11,13 +11,18 @@
  */
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { canonicalEvidenceJson } from "@/adapters/server/compute/database-cell-applied-artifacts";
 import {
   PhysicalRecoveryArtifactSchema,
   qualifyPhysicalPostimages,
 } from "@/adapters/server/compute/database-cell-physical-postimage";
+import {
+  AppliedDatabaseCellReceiptSchema,
+  physicalSourceBindingSha256,
+} from "@/shared/secrets/database-cell-placement.data";
 import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
 
-function postimageFixture() {
+function basePostimageFixture() {
   const now = new Date().toISOString();
   const sha = (value: string) => value.repeat(64);
   const id = (n: number) =>
@@ -173,12 +178,10 @@ function postimageFixture() {
     },
     reconciliation: {
       observedAt: now,
-      xrUid: NODE,
-      pausedResourceUids: [id(1), id(2)],
-      acknowledgedPaused: true,
+      kind: "incident-owner",
+      approvalArtifactSha256: sha("f"),
       providerOperationsSettled: true,
       custodyVersionsSha256: sha("3"),
-      dnsRecordSha256: sha("4"),
       independentCustodianWatching: true,
     },
     preservedBackup: {
@@ -222,7 +225,7 @@ function postimageFixture() {
     artifact: PhysicalRecoveryArtifactSchema.parse({
       evidence,
       definitions,
-      ledgerPreimages,
+      ledgerPreimages: { targetCold: ledgerPreimages.targetCold },
     }),
     ledgerHashes,
     custody,
@@ -230,35 +233,12 @@ function postimageFixture() {
     appServiceName: "app",
   };
 }
-describe("private known physical postimages", () => {
-  it("accepts only the fixed source hold, original target startup, and held consumer delta", () => {
-    expect(() => qualifyPhysicalPostimages(postimageFixture())).not.toThrow();
-    for (const field of ["sourceHeld", "targetNormal", "appHeld"] as const) {
-      const input = postimageFixture();
-      const altered = JSON.parse(input.artifact.definitions[field]);
-      const name = field === "appHeld" ? "app" : "postgres";
-      altered.services[name].env.push("UNREVIEWED=changed");
-      input.artifact.definitions[field] = JSON.stringify(altered);
-      // Even a correctly recomputed submitted hash cannot authorize an arbitrary native delta.
-      const digest = createHash("sha256")
-        .update(input.artifact.definitions[field])
-        .digest("hex");
-      if (field === "sourceHeld")
-        input.artifact.evidence.source.heldSdlHash = digest;
-      else if (field === "targetNormal")
-        input.artifact.evidence.target.normalSdlHash = digest;
-      else input.artifact.evidence.app.heldSdlHash = digest;
-      expect(() => qualifyPhysicalPostimages(input)).toThrow(
-        "unreviewed_delta"
-      );
-    }
-  });
-});
-
 function shaBytes(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
-function rehashPrivatePostimages(input: ReturnType<typeof postimageFixture>) {
+function rehashPrivatePostimages(
+  input: ReturnType<typeof basePostimageFixture>
+) {
   const { definitions: d, evidence: e } = input.artifact;
   e.source.heldSdlHash = shaBytes(d.sourceHeld);
   e.target.preimageSdlHash = shaBytes(d.targetCold);
@@ -272,73 +252,187 @@ function rehashPrivatePostimages(input: ReturnType<typeof postimageFixture>) {
   e.copy.originalStartupSha256 = shaBytes(script(d.sourceOriginal));
   e.copy.targetStartupSha256 = shaBytes(script(d.targetNormal));
 }
-describe("independent preimage anchors", () => {
-  it("compares actual recorded-domain bytes without equating canonical and Console raw hashes", () => {
-    const input = postimageFixture();
+function legacyPostimageFixture() {
+  const input = basePostimageFixture(),
+    d = input.artifact.definitions,
+    e = input.artifact.evidence;
+  const original = JSON.parse(d.sourceOriginal);
+  original.services.postgres.command = ["/bin/sh", "-ec"];
+  original.services.postgres.args = [
+    "exec postgres -c fsync=on -c synchronous_commit=on -c full_page_writes=on",
+  ];
+  d.sourceOriginal = JSON.stringify(original);
+  const held = structuredClone(original);
+  held.services.postgres.command = ["sleep"];
+  held.services.postgres.args = ["infinity"];
+  held.services.postgres.params.storage.database.readOnly = true;
+  d.sourceHeld = JSON.stringify(held);
+  const guard = "# independently reviewed existing-cluster guard\n";
+  const normal = JSON.parse(d.targetNormal);
+  normal.services.postgres = structuredClone(original.services.postgres);
+  normal.services.postgres.args = [guard + original.services.postgres.args[0]];
+  d.targetNormal = JSON.stringify(normal);
+  d.appHeld = d.appOriginal;
+  input.ledgerHashes.source = "d".repeat(64);
+  e.source.originalAppliedSdlHash = input.ledgerHashes.source;
+  const at = e.observedAt,
+    packet = "a".repeat(64),
+    authority = {
+      kind: "conversation-user",
+      label: "CEO",
+      humanAppUserId: null,
+      source: "direct-user-instruction",
+      decisionRef: "fixture:approved",
+      capturedAt: at,
+      delegationDigest: "f".repeat(64),
+    };
+  const binding = AppliedDatabaseCellReceiptSchema.parse({
+    allocationEnvironment: "production",
+    targetBuildSha: input.custody.targetBuildSha,
+    registration: {
+      kind: "audited-manual",
+      executionActor: { kind: "agent", id: input.custody.nodeId },
+      approvalAuthority: authority,
+      readmissionReceiptId: "genuine-source-admission",
+      manualCutoverPacketSha256: packet,
+      sourceSystemIdentifier: "777777777",
+      scheduledBackupReceiptSha256: packet,
+      independentRecoveryReceiptSha256: packet,
+      appAllocationReceiptId: "00000000-0000-4000-8000-000000000003",
+      appSdlHash: input.ledgerHashes.app,
+      appDsnSha256: shaBytes("old-app"),
+      serviceDsnSha256: shaBytes("old-service"),
+      migrationDsnSha256: shaBytes("old-app"),
+      migrationConsumer: "app-database-url",
+      tlsTrustKind: "system",
+      registeredAt: at,
+    },
+    binding: {
+      version: 1,
+      phase: "applied",
+      receiptId: e.source.receiptId,
+      cogniKey: e.source.cogniKey,
+      nodeId: input.custody.nodeId,
+      nodeSlug: "fixture",
+      environment: "production",
+      provider: "akash",
+      dseq: e.source.dseq,
+      providerAccount: e.source.providerAccount,
+      endpoint: {
+        host: "source.fixture.invalid",
+        port: 25432,
+        tlsMode: "verify-full",
+        tlsCertificateSha256: packet,
+      },
+      databaseName: "cogni_fixture",
+      appRole: "app_fixture",
+      serviceRole: "service_fixture",
+      systemIdentifier: e.source.systemIdentifier,
+      failureDomainId: `akash:${e.source.providerAccount}:${e.source.dseq}`,
+      manualProvenance: input.custody.manualProvenance,
+      budgetProfile: "shared-default-v1",
+      appliedSdlHash: input.ledgerHashes.source,
+      readyAt: at,
+      cutover: {
+        packetSha256: packet,
+        actorId: "human:fixture",
+        approvedAt: at,
+      },
+    },
+  });
+  const capture = {
+    sourceCapturedAt: e.copy.startedAt,
+    originalStoredSdl: JSON.stringify({ ...original, storedAliasDomain: true }),
+    originalAppStoredSdl: d.appOriginal,
+    originalProviderManifest: [
+      { services: [{ name: "postgres", ...original.services.postgres }] },
+    ],
+    originalAppProviderManifest: [
+      {
+        services: [{ name: "app", ...JSON.parse(d.appOriginal).services.app }],
+      },
+    ],
+    sourceBinding: binding,
+    historicalCanonicalBytesRecovered: false as const,
+  };
+  input.artifact.nativeCapture = capture;
+  input.artifact.startupGuard = guard;
+  input.custody = {
+    ...input.custody,
+    physicalRecoverySource: {
+      kind: "legacy-native-capture",
+      incidentRef: "https://fixture.invalid/incidents/recovery",
+      sourceReceiptId: e.source.receiptId,
+      captureSha256: shaBytes(canonicalEvidenceJson(capture)),
+      sourceBindingSha256: physicalSourceBindingSha256(binding),
+      approvalArtifactSha256: authority.delegationDigest,
+      startupGuardSha256: shaBytes(guard),
+    },
+  };
+  rehashPrivatePostimages(input);
+  e.copy.originalStartupSha256 = shaBytes(original.services.postgres.args[0]);
+  e.copy.targetStartupSha256 = shaBytes(normal.services.postgres.args[0]);
+  return input;
+}
+
+describe("authenticated legacy native custody", () => {
+  it("accepts preserved unknown historical bytes and separately approved guard without fake SDK equality", () => {
+    const input = legacyPostimageFixture();
     expect(shaBytes(input.artifact.definitions.sourceOriginal)).not.toBe(
       input.ledgerHashes.source
     );
-    expect(shaBytes(input.artifact.definitions.targetCold)).not.toBe(
-      input.ledgerHashes.target
-    );
-    expect(shaBytes(input.artifact.definitions.appOriginal)).not.toBe(
-      input.ledgerHashes.app
-    );
     expect(() => qualifyPhysicalPostimages(input)).not.toThrow();
   });
-  it("rejects the coherent source-original plus target-startup fsync=off substitution", () => {
-    const input = postimageFixture();
-    for (const field of ["sourceOriginal", "targetNormal"] as const) {
-      const value = JSON.parse(input.artifact.definitions[field]);
-      value.services.postgres.command = ["postgres"];
-      value.services.postgres.args = ["-c", "fsync=off"];
-      input.artifact.definitions[field] = JSON.stringify(value);
+  it("rejects coherently changed originals and target startup against the independently pinned capture", () => {
+    const input = legacyPostimageFixture();
+    const capture = input.artifact.nativeCapture;
+    if (!capture) throw new Error("capture missing");
+    for (const name of ["sourceOriginal", "targetNormal"] as const) {
+      const changed = JSON.parse(input.artifact.definitions[name]);
+      changed.services.postgres.args = ["exec postgres -c fsync=off"];
+      input.artifact.definitions[name] = JSON.stringify(changed);
     }
+    capture.originalProviderManifest[0].services[0].args = [
+      "exec postgres -c fsync=off",
+    ];
     rehashPrivatePostimages(input);
-    // Source hold is unchanged and all artifact-local startup/native hashes match.
-    // The separately recorded source bytes still forbid changing the original.
-    expect(() => qualifyPhysicalPostimages(input)).toThrow("unreviewed_delta");
-    input.artifact.ledgerPreimages.sourceOriginal =
-      input.artifact.definitions.sourceOriginal;
     expect(() => qualifyPhysicalPostimages(input)).toThrow(
-      "independent_ledger_anchor"
+      "independent_custody"
     );
   });
-  it("rejects paired app-original and held non-database env changes with coherently rehashed receipts", () => {
-    const input = postimageFixture();
-    for (const field of ["appOriginal", "appHeld"] as const) {
-      const value = JSON.parse(input.artifact.definitions[field]);
-      value.services.app.env = value.services.app.env.map((v: string) =>
-        v === "KEEP=original" ? "KEEP=changed" : v
-      );
-      input.artifact.definitions[field] = JSON.stringify(value);
-    }
-    rehashPrivatePostimages(input);
-    expect(() => qualifyPhysicalPostimages(input)).toThrow("unreviewed_delta");
-    input.artifact.ledgerPreimages.appOriginal =
-      input.artifact.definitions.appOriginal;
+  it("rejects replacement guard or a secretly retargeted business consumer", () => {
+    const input = legacyPostimageFixture();
+    input.artifact.startupGuard = "# bypass existing cluster checks\n";
     expect(() => qualifyPhysicalPostimages(input)).toThrow(
-      "independent_ledger_anchor"
+      "independent_custody"
+    );
+    const moved = legacyPostimageFixture();
+    const capture = moved.artifact.nativeCapture;
+    if (!capture) throw new Error("capture missing");
+    capture.originalAppProviderManifest[0].services[0].env = [
+      "DATABASE_URL=new-app",
+      "DATABASE_SERVICE_URL=old-service",
+    ];
+    expect(() => qualifyPhysicalPostimages(moved)).toThrow(
+      "independent_custody"
     );
   });
-  it("rejects malformed env entries even in independently anchored originals", () => {
-    const input = postimageFixture();
-    for (const field of ["appOriginal", "appHeld"] as const) {
+});
+
+describe("fixed legacy postimage boundaries", () => {
+  it("refuses coherently rehashed source hold, target env and app changes", () => {
+    for (const field of ["sourceHeld", "targetNormal", "appHeld"] as const) {
+      const input = legacyPostimageFixture();
       const value = JSON.parse(input.artifact.definitions[field]);
-      value.services.app.env.push("MALFORMED_ENV");
+      const name = field === "appHeld" ? "app" : "postgres";
+      value.services[name].env.push("UNREVIEWED=changed");
       input.artifact.definitions[field] = JSON.stringify(value);
+      rehashPrivatePostimages(input);
+      expect(() => qualifyPhysicalPostimages(input)).toThrow();
     }
-    input.artifact.ledgerPreimages.appOriginal =
-      input.artifact.definitions.appOriginal;
-    input.ledgerHashes.app = shaBytes(
-      input.artifact.ledgerPreimages.appOriginal
-    );
-    input.artifact.evidence.app.originalAppliedSdlHash = input.ledgerHashes.app;
-    rehashPrivatePostimages(input);
-    expect(() => qualifyPhysicalPostimages(input)).toThrow();
   });
-  it("rejects a paired cold-recipe and normal capacity change even with new self-consistent preimage bytes", () => {
-    const input = postimageFixture();
+  it("keeps the cold recipe independently ledger anchored", () => {
+    const input = legacyPostimageFixture();
     for (const field of ["targetCold", "targetNormal"] as const) {
       const value = JSON.parse(input.artifact.definitions[field]);
       value.profiles.resources.storage = 50;
@@ -350,6 +444,21 @@ describe("independent preimage anchors", () => {
       input.artifact.definitions.targetCold;
     expect(() => qualifyPhysicalPostimages(input)).toThrow(
       "independent_ledger_anchor"
+    );
+  });
+  it("rejects missing independent capture or altered historical source binding", () => {
+    const input = legacyPostimageFixture();
+    delete input.artifact.nativeCapture;
+    expect(() => qualifyPhysicalPostimages(input)).toThrow(
+      "independent_custody"
+    );
+    const changed = legacyPostimageFixture();
+    const capture = changed.artifact.nativeCapture;
+    if (!capture) throw new Error("capture absent");
+    capture.sourceBinding.registration.readmissionReceiptId =
+      "invented-source-admission";
+    expect(() => qualifyPhysicalPostimages(changed)).toThrow(
+      "independent_custody"
     );
   });
 });

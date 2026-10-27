@@ -422,8 +422,21 @@ export const DatabaseCellRuntimePoolLimitsSchema = z
   })
   .strict();
 
+export const DatabaseCellPhysicalSourceCustodySchema = z
+  .object({
+    kind: z.literal("legacy-native-capture"),
+    incidentRef: z.string().url(),
+    sourceReceiptId: z.string().uuid(),
+    captureSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    sourceBindingSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    approvalArtifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    startupGuardSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
 export const DatabaseCellAppliedCustodySchema = z
   .object({
+    physicalRecoverySource: DatabaseCellPhysicalSourceCustodySchema.optional(),
     version: z.literal(1),
     nodeId: z.string().uuid(),
     nodeSlug: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),

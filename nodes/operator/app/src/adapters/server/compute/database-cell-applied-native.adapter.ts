@@ -44,6 +44,7 @@ const SessionSchema = z.object({
   count: z.number().int().positive(),
 });
 const RoleObservationSchema = RoleSchema.extend({
+  unsafePrivilege: z.literal(false),
   sessions: z.array(SessionSchema),
 });
 const NativeSchema = z.object({
@@ -275,6 +276,8 @@ export async function observeAppliedDatabaseCellNative(input: {
       const role = await roleClient.sql.begin("read only", async (tx) => {
         const rows = await tx`SELECT session_user AS name,
           (SELECT rolcanlogin FROM pg_roles WHERE rolname = session_user) AS "canLogin",
+          (SELECT rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR (rolname = ${custody.appRole} AND rolbypassrls)
+            FROM pg_roles WHERE rolname = session_user) AS "unsafePrivilege",
           (SELECT rolconnlimit FROM pg_roles WHERE rolname = session_user) AS "connectionLimit",
           (SELECT setting::numeric FROM pg_settings WHERE name = 'statement_timeout') AS "statementTimeoutMs",
           (SELECT setting::numeric FROM pg_settings WHERE name = 'lock_timeout') AS "lockTimeoutMs",

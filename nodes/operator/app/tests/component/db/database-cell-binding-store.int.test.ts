@@ -23,6 +23,7 @@ import { akashTxAllocations } from "@/shared/db/schema";
 import {
   AppliedDatabaseCellReceiptsSchema,
   DatabaseCellAllocationMetadataSchema,
+  physicalSourceBindingSha256,
 } from "@/shared/secrets/database-cell-placement.data";
 import { getSeedDb } from "../../_fixtures/db/seed-client";
 
@@ -123,9 +124,11 @@ const targetBindings = AppliedDatabaseCellReceiptsSchema.parse([
       kind: "audited-manual",
       physicalRecovery: {
         kind: "same-cluster-physical-copy",
+        sourceAnchorKind: "legacy-native-capture",
         sourceCogniKey: sourceRecord.cogniKey,
         sourceReceiptId: id(1),
         sourceDseq: "10001",
+        sourceBindingSha256: physicalSourceBindingSha256(sourceBindings[0]),
         evidenceSha256: sha("3"),
         copyManifestSha256: sha("4"),
         originalAppliedSdlHashes: {
@@ -144,7 +147,6 @@ const targetBindings = AppliedDatabaseCellReceiptsSchema.parse([
         capturedAt: now,
         delegationDigest: sha("5"),
       },
-      readmissionReceiptId: "fixture-native-readmission",
       manualCutoverPacketSha256: packetSha,
       sourceSystemIdentifier: sourceBinding.systemIdentifier,
       preservedBackupReceiptSha256: sha("6"),
@@ -292,6 +294,35 @@ describe("physical recovery canonical transaction (real PostgreSQL)", () => {
       })
     ).rejects.toThrow();
     expect(await state()).toEqual(committed);
+  });
+  it("rejects a changed source admission even when its CAS preimage is refreshed", async () => {
+    const changed = AppliedDatabaseCellReceiptsSchema.parse(
+      sourceBindings.map((receipt) => ({
+        ...receipt,
+        binding: {
+          ...receipt.binding,
+          cutover: {
+            ...receipt.binding.cutover,
+            actorId: "human:different-authority",
+          },
+        },
+      }))
+    );
+    await seed
+      .update(akashTxAllocations)
+      .set({
+        appliedDatabaseCellBinding: {
+          version: 1,
+          retentionPolicy: "retain",
+          bindings: changed,
+        },
+      })
+      .where(eq(akashTxAllocations.id, sourceRecord.receiptId));
+    const before = await state();
+    await expect(
+      store.savePhysicalRecovery({ ...write, expectedSource: changed })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(await state()).toEqual(before);
   });
   it("rolls back all three writes when PostgreSQL rejects the transaction at commit", async () => {
     // A deferred real database trigger fails AFTER source, target and app updates.

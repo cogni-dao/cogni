@@ -22,6 +22,7 @@ import {
   type AppliedDatabaseCellReceipt,
   AppliedDatabaseCellReceiptsSchema,
   DatabaseCellAllocationMetadataSchema,
+  physicalSourceBindingSha256,
 } from "@/shared/secrets/database-cell-placement.data";
 
 export class DrizzleDatabaseCellBindingStore {
@@ -274,7 +275,8 @@ export class DrizzleDatabaseCellBindingStore {
           if (
             !old ||
             source.bindings.length !== 1 ||
-            old.binding.systemIdentifier !== target.binding.systemIdentifier
+            old.binding.systemIdentifier !== target.binding.systemIdentifier ||
+            physicalSourceBindingSha256(old) !== lineage.sourceBindingSha256
           )
             throw new Error("physical source identity changed");
           if (

@@ -47,6 +47,8 @@ export const DatabaseCellPhysicalRecoveryProvenanceSchema = z
     sourceCogniKey: z.string().min(1).max(512),
     sourceReceiptId: z.string().uuid(),
     sourceDseq: z.string().regex(/^[0-9]+$/),
+    sourceBindingSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    sourceAnchorKind: z.literal("legacy-native-capture"),
     evidenceSha256: z.string().regex(/^[0-9a-f]{64}$/),
     copyManifestSha256: z.string().regex(/^[0-9a-f]{64}$/),
     originalAppliedSdlHashes: z
@@ -70,7 +72,7 @@ export const AppliedDatabaseCellReceiptSchema = z
           DatabaseCellPhysicalRecoveryProvenanceSchema.optional(),
         executionActor,
         approvalAuthority,
-        readmissionReceiptId: z.string().min(1).max(256),
+        readmissionReceiptId: z.string().min(1).max(256).optional(),
         manualCutoverPacketSha256: z.string().regex(/^[0-9a-f]{64}$/),
         sourceSystemIdentifier: z.string().regex(/^[0-9]+$/),
         schemaEvolutionReceiptSha256: z
@@ -114,7 +116,12 @@ export const AppliedDatabaseCellReceiptSchema = z
   .superRefine((receipt, ctx) => {
     if (
       receipt.registration
-        ? receipt.initialIncidentId !== undefined ||
+        ? (receipt.registration.physicalRecovery?.sourceAnchorKind ===
+          "legacy-native-capture"
+            ? receipt.registration.readmissionReceiptId !== undefined ||
+              receipt.binding.nativeControl !== undefined
+            : !receipt.registration.readmissionReceiptId) ||
+          receipt.initialIncidentId !== undefined ||
           !receipt.binding.manualProvenance ||
           receipt.binding.sourceSha !== undefined ||
           !["applied", "superseded"].includes(receipt.binding.phase) ||
@@ -150,6 +157,30 @@ export const AppliedDatabaseCellReceiptSchema = z
       });
     }
   });
+/** Hash the exact original applied receipt. Replay removes only our supersession delta. */
+export function physicalSourceBindingSha256(value: unknown): string {
+  const receipt = AppliedDatabaseCellReceiptSchema.parse(value);
+  if (receipt.binding.phase === "superseded") {
+    const { supersededBy: _supersededBy, ...binding } = receipt.binding;
+    receipt.binding = { ...binding, phase: "applied" };
+  }
+  const original = AppliedDatabaseCellReceiptSchema.parse(receipt);
+  const canonical = (value: unknown): string => {
+    if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+    if (value !== null && typeof value === "object")
+      return `{${Object.entries(value)
+        .filter(([, v]) => v !== undefined)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, v]) => `${JSON.stringify(key)}:${canonical(v)}`)
+        .join(",")}}`;
+    const scalar = JSON.stringify(value);
+    if (scalar === undefined)
+      throw new Error("source receipt contains a non-JSON value");
+    return scalar;
+  };
+  return createHash("sha256").update(canonical(original)).digest("hex");
+}
+
 export const AppliedDatabaseCellReceiptsSchema = z
   .array(AppliedDatabaseCellReceiptSchema)
   .max(3)
@@ -807,6 +838,7 @@ export const DatabaseCellPhysicalRecoveryEvidenceSchema = z
         providerAccount: z.string().regex(/^akash1[0-9a-z]{38}$/),
         systemIdentifier,
         originalAppliedSdlHash: digest,
+        storedSdlSha256: digest.optional(),
         heldSdlHash: digest,
         manifestVersion,
         serviceName: z.string().min(1).max(63),
@@ -847,6 +879,7 @@ export const DatabaseCellPhysicalRecoveryEvidenceSchema = z
         dseq: systemIdentifier,
         providerAccount: z.string().regex(/^akash1[0-9a-z]{38}$/),
         originalAppliedSdlHash: digest,
+        storedSdlSha256: digest.optional(),
         preimageSdlHash: digest,
         normalSdlHash: digest,
         manifestVersion,
@@ -888,13 +921,11 @@ export const DatabaseCellPhysicalRecoveryEvidenceSchema = z
       .strict(),
     reconciliation: z
       .object({
+        kind: z.literal("incident-owner"),
         observedAt: timestamp,
-        xrUid: z.string().uuid(),
-        pausedResourceUids: z.array(z.string().uuid()).min(2).max(32),
-        acknowledgedPaused: z.literal(true),
         providerOperationsSettled: z.literal(true),
         custodyVersionsSha256: digest,
-        dnsRecordSha256: digest,
+        approvalArtifactSha256: digest,
         independentCustodianWatching: z.literal(true),
       })
       .strict(),
@@ -912,12 +943,15 @@ export const DatabaseCellPhysicalRecoveryEvidenceSchema = z
 export const DatabaseCellPhysicalRecoveryFactsSchema =
   DatabaseCellAppliedRegistrationFactsSchema.omit({
     effectiveApp: true,
+    readmission: true,
     scheduledBackup: true,
     independentRecovery: true,
     backupRuntime: true,
   })
     .extend({
       physicalRecovery: DatabaseCellPhysicalRecoveryEvidenceSchema,
+      readmission:
+        DatabaseCellAppliedRegistrationFactsSchema.shape.readmission.optional(),
       effectiveApp:
         DatabaseCellAppliedRegistrationFactsSchema.shape.effectiveApp.omit({
           regions: true,

@@ -268,13 +268,19 @@ export class ReadOnlyAppliedDatabaseCellObserver
       input.reference.nodeId
     );
     const packet = mapAppliedManualPacket(bundle.require("manual-cutover"));
-    const readmission = mapAppliedReadmission(
-      bundle.require("readmission"),
-      packet
-    );
+    const legacy =
+      packet.physicalRecovery?.sourceAnchorKind === "legacy-native-capture";
+    if (
+      (input.registrationKind === "legacy-physical") !== legacy ||
+      (legacy && input.readmissionReceiptId !== undefined)
+    )
+      throw new Error("physical_legacy_reference_variant_mismatch");
+    const readmission = legacy
+      ? undefined
+      : mapAppliedReadmission(bundle.require("readmission"), packet);
     if (
       packet.packetSha256 !== input.manualCutoverPacketSha256 ||
-      readmission.receiptId !== input.readmissionReceiptId ||
+      (!legacy && readmission?.receiptId !== input.readmissionReceiptId) ||
       packet.nodeId !== input.custody.nodeId ||
       packet.environment !== input.custody.environment
     )
@@ -385,6 +391,8 @@ export class ReadOnlyAppliedDatabaseCellObserver
         ...(nativeControl ? { nativeControl } : {}),
       });
     }
+    if (!readmission)
+      throw new Error("ordinary_registration_requires_genuine_readmission");
     const backupArtifact = bundle.require("scheduled-backup"),
       archiveArtifact = bundle.require("backup-archive-verification"),
       recoveryArtifact = bundle.require("independent-recovery");

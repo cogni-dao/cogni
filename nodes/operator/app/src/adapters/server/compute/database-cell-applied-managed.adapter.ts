@@ -68,6 +68,10 @@ export async function observeAppliedCellManaged(input: {
     throw new Error("applied_mounted_custody_changed_during_observation");
   const packet = input.packet;
   const physical = input.physicalArtifact;
+  const legacy =
+    packet.physicalRecovery?.sourceAnchorKind === "legacy-native-capture";
+  if (legacy !== Boolean(custody.physicalRecoverySource))
+    throw new Error("physical_source_custody_variant_mismatch");
   if (Boolean(packet.physicalRecovery) !== Boolean(physical))
     throw new Error("physical_managed_evidence_missing");
   const [primary, app] = await Promise.all([
@@ -172,7 +176,8 @@ export async function observeAppliedCellManaged(input: {
         history.registration?.manualCutoverPacketSha256 !==
           packet.packetSha256 ||
         primary.lastAppliedSdlHash !== physical.evidence.target.normalSdlHash ||
-        app.lastAppliedSdlHash !== physical.evidence.app.heldSdlHash ||
+        app.lastAppliedSdlHash !==
+          physical.evidence.app.originalAppliedSdlHash ||
         source.lastAppliedSdlHash !== old.originalAppliedSdlHashes.source
       )
         throw new Error("physical_managed_original_anchor_history_mismatch");
@@ -206,10 +211,10 @@ export async function observeAppliedCellManaged(input: {
       sourceDefinition.ownerAccount !== appDefinition.ownerAccount ||
       sourceDefinition.consoleManifestVersion !== e.source.manifestVersion ||
       sourceDefinition.chainManifestVersion !== e.source.manifestVersion ||
-      sourceDefinition.providerSdlSha256 !== e.source.heldSdlHash ||
-      sha(sourceDefinition.providerSdl) !== e.source.heldSdlHash ||
-      primaryDefinition.providerSdlSha256 !== e.target.normalSdlHash ||
-      sha(primaryDefinition.providerSdl) !== e.target.normalSdlHash ||
+      sourceDefinition.providerSdlSha256 !== e.source.storedSdlSha256 ||
+      sha(sourceDefinition.providerSdl) !== e.source.storedSdlSha256 ||
+      primaryDefinition.providerSdlSha256 !== e.target.storedSdlSha256 ||
+      sha(primaryDefinition.providerSdl) !== e.target.storedSdlSha256 ||
       appDefinition.providerSdlSha256 !== e.app.heldSdlHash ||
       sha(appDefinition.providerSdl) !== e.app.heldSdlHash ||
       sourceDefinition.consoleManifestVersion !==
@@ -283,8 +288,7 @@ export async function observeAppliedCellManaged(input: {
     effectiveApp: {
       allocationReceiptId: app.receiptId,
       deployedSourceSha: packet.appSourceSha,
-      appliedSdlHash:
-        physical?.evidence.app.heldSdlHash ?? app.lastAppliedSdlHash,
+      appliedSdlHash: app.lastAppliedSdlHash,
       nodeId: custody.nodeId,
       environment: "production",
       // These are current mounted configured consumers. The canonical writer verifies

@@ -39,6 +39,7 @@ import {
   assessDatabaseCellBackupRuntime,
   DatabaseCellAppliedRegistrationFactsSchema,
   DatabaseCellPhysicalRecoveryFactsSchema,
+  physicalSourceBindingSha256,
 } from "@/shared/secrets/database-cell-placement.data";
 import type { DatabaseCellPhysicalRecoveryFacts } from "@/types/database-cell";
 
@@ -372,7 +373,12 @@ export class DatabaseCellBinder
       systemIdentifier: receipt.binding.systemIdentifier,
       targetBuildSha: receipt.targetBuildSha,
       manualCutoverPacketSha256: input.manualCutoverPacketSha256,
-      readmissionReceiptId: input.readmissionReceiptId,
+      ...(input.registrationKind
+        ? { registrationKind: input.registrationKind }
+        : {}),
+      ...(input.readmissionReceiptId
+        ? { readmissionReceiptId: input.readmissionReceiptId }
+        : {}),
       probeDsnSha256: result.probeDsnSha256,
       observedFactsSha256: result.observedFactsSha256,
       observedAt: result.observedAt,
@@ -396,7 +402,10 @@ export class DatabaseCellBinder
     if (
       input.allocationEnvironment !== "production" ||
       !/^[0-9a-f]{64}$/.test(input.manualCutoverPacketSha256) ||
-      !input.readmissionReceiptId
+      (input.registrationKind !== "legacy-physical" &&
+        !input.readmissionReceiptId) ||
+      (input.registrationKind === "legacy-physical" &&
+        input.readmissionReceiptId !== undefined)
     )
       refuse("production registration requires audited receipt references");
     if (!this.deps.observeApplied || !this.deps.appliedCustody)
@@ -416,7 +425,12 @@ export class DatabaseCellBinder
       reference: input,
       custody,
       manualCutoverPacketSha256: input.manualCutoverPacketSha256,
-      readmissionReceiptId: input.readmissionReceiptId,
+      ...(input.registrationKind
+        ? { registrationKind: input.registrationKind }
+        : {}),
+      ...(input.readmissionReceiptId
+        ? { readmissionReceiptId: input.readmissionReceiptId }
+        : {}),
     });
     if ("physicalRecovery" in observedFacts) {
       const physical =
@@ -933,6 +947,8 @@ export class DatabaseCellBinder
         "native control custody requires genuine fresh read-only qualification"
       );
     if (control && qualification) {
+      if (!readmission)
+        refuse("native control requires genuine installed admission");
       const functions = (
         values: readonly { signature: string; definitionSha256: string }[]
       ) =>
@@ -1010,9 +1026,22 @@ export class DatabaseCellBinder
       native,
       provider,
       effectiveApp: app,
-      readmission,
     } = facts;
     const lineage = packet.physicalRecovery;
+    if (
+      !lineage ||
+      input.registrationKind !== "legacy-physical" ||
+      !custody.physicalRecoverySource ||
+      facts.readmission !== undefined ||
+      facts.nativeControl !== undefined ||
+      custody.nativeControl !== undefined ||
+      lineage.sourceBindingSha256 !==
+        custody.physicalRecoverySource.sourceBindingSha256 ||
+      lineage.sourceReceiptId !== custody.physicalRecoverySource.sourceReceiptId
+    )
+      refuse(
+        "legacy physical import requires independent source custody and forbids invented admission or controls"
+      );
     const fresh = (value: string) =>
       Date.parse(value) >= Date.now() - 60000 &&
       Date.parse(value) <= Date.now() + 5000;
@@ -1146,7 +1175,7 @@ export class DatabaseCellBinder
       provider.providerAccount !== record.providerAccount ||
       provider.postgresImageDigest !==
         custody.manualProvenance.postgresImageDigest ||
-      e.app.heldSdlHash !== app.appliedSdlHash ||
+      e.app.originalAppliedSdlHash !== app.appliedSdlHash ||
       packet.appSdlHash !== app.appliedSdlHash ||
       app.allocationReceiptId !== appRecord.receiptId ||
       e.app.manifestVersion !== packet.appManifestVersion ||
@@ -1162,37 +1191,20 @@ export class DatabaseCellBinder
       lineage.copyManifestSha256 !== e.copy.sourceManifestSha256 ||
       e.copy.sourceManifestSha256 !== e.copy.targetManifestSha256 ||
       e.copy.sourceMetadataSha256 !== e.copy.targetMetadataSha256 ||
-      e.copy.originalStartupSha256 !== e.copy.targetStartupSha256 ||
       packet.restorationParityManifestSha256 !== e.copy.sourceManifestSha256 ||
       Date.parse(e.copy.startedAt) > Date.parse(e.copy.completedAt) ||
       Date.parse(e.copy.completedAt) > Date.parse(e.target.observedAt) ||
-      Date.parse(e.copy.completedAt) > Date.parse(readmission.admittedAt) ||
       v.usedBytes + v.availableBytes > v.totalBytes ||
       v.availableInodes > v.totalInodes ||
       v.availableBytes < Math.max(10 * 1024 ** 3, v.totalBytes * 0.1) ||
       v.availableInodes < Math.max(1024, v.totalInodes * 0.05) ||
-      new Set(e.reconciliation.pausedResourceUids).size !==
-        e.reconciliation.pausedResourceUids.length
+      e.reconciliation.approvalArtifactSha256 !==
+        custody.physicalRecoverySource.approvalArtifactSha256 ||
+      custody.physicalRecoverySource.approvalArtifactSha256 !==
+        packet.approvalAuthority.delegationDigest
     )
       refuse(
         "physical complete-copy, startup chronology or measured headroom is unqualified"
-      );
-    if (
-      readmission.receiptId !== input.readmissionReceiptId ||
-      readmission.packetSha256 !== packet.packetSha256 ||
-      readmission.allocationReceiptId !== record.receiptId ||
-      readmission.systemIdentifier !== native.systemIdentifier ||
-      json(readmission.executionActor) !== json(packet.executionActor) ||
-      json(readmission.approvalAuthority) !== json(packet.approvalAuthority) ||
-      Date.parse(packet.approvalAuthority.capturedAt) >
-        Date.parse(packet.approvedAt) ||
-      Date.parse(packet.approvedAt) > Date.parse(readmission.admittedAt) ||
-      Date.parse(readmission.admittedAt) > Date.parse(facts.observedAt) ||
-      Date.parse(custody.manualProvenance.qualifiedAt) >
-        Date.parse(facts.observedAt)
-    )
-      refuse(
-        "physical import lacks genuine chronological delegated readmission"
       );
     if (
       native.databaseName !== custody.databaseName ||
@@ -1287,7 +1299,7 @@ export class DatabaseCellBinder
       json(packet.runtimePoolLimits) !== json(custody.runtimePoolLimits)
     )
       refuse(
-        "held physical application consumers differ from owned mounted custody"
+        "fenced physical application consumers differ from owned mounted custody"
       );
     const services = [provider.service, ...app.providerManifest.services];
     if (
@@ -1308,9 +1320,8 @@ export class DatabaseCellBinder
       )
     )
       refuse(
-        "physical target and held application postimages are not fully rolled out"
+        "physical target and fenced application postimages are not fully rolled out"
       );
-    const control = this.qualifyNativeControl(facts, custody, record);
 
     const previous = await this.read(input);
     const expectedSource = await this.deps.store.read(source.cogniKey);
@@ -1320,7 +1331,8 @@ export class DatabaseCellBinder
     if (
       !old ||
       old.binding.systemIdentifier !== native.systemIdentifier ||
-      old.binding.receiptId !== source.receiptId
+      old.binding.receiptId !== source.receiptId ||
+      physicalSourceBindingSha256(old) !== lineage.sourceBindingSha256
     )
       refuse("physical source no longer has its original binding");
     const existing = previous[0];
@@ -1332,7 +1344,7 @@ export class DatabaseCellBinder
         json(existing.registration?.physicalRecovery) !== json(lineage) ||
         existing.registration?.manualCutoverPacketSha256 !==
           packet.packetSha256 ||
-        existing.registration?.readmissionReceiptId !== readmission.receiptId ||
+        existing.registration?.readmissionReceiptId !== undefined ||
         existing.binding.appliedSdlHash !== provider.appliedSdlHash ||
         existing.registration.appSdlHash !== app.appliedSdlHash
       )
@@ -1348,7 +1360,6 @@ export class DatabaseCellBinder
             physicalRecovery: lineage,
             executionActor: packet.executionActor,
             approvalAuthority: packet.approvalAuthority,
-            readmissionReceiptId: readmission.receiptId,
             manualCutoverPacketSha256: packet.packetSha256,
             sourceSystemIdentifier: packet.sourceSystemIdentifier,
             preservedBackupReceiptSha256: e.preservedBackup.receiptSha256,
@@ -1392,12 +1403,6 @@ export class DatabaseCellBinder
                   ),
                 }
               : {}),
-            ...(control
-              ? {
-                  nativeControl: control,
-                  probeRole: `probe_${custody.databaseName.slice("cogni_".length)}`,
-                }
-              : {}),
             systemIdentifier: native.systemIdentifier,
             failureDomainId: `akash:${record.providerAccount}:${record.externalName}`,
             manualProvenance: custody.manualProvenance,
@@ -1438,13 +1443,18 @@ export class DatabaseCellBinder
           reference: input,
           custody,
           manualCutoverPacketSha256: input.manualCutoverPacketSha256,
-          readmissionReceiptId: input.readmissionReceiptId,
+          ...(input.registrationKind
+            ? { registrationKind: input.registrationKind }
+            : {}),
+          ...(input.readmissionReceiptId
+            ? { readmissionReceiptId: input.readmissionReceiptId }
+            : {}),
         })
       );
       if (
         !fresh(post.observedAt) ||
         post.manualCutover.packetSha256 !== packet.packetSha256 ||
-        post.readmission.receiptId !== readmission.receiptId ||
+        post.readmission !== undefined ||
         post.native.systemIdentifier !== native.systemIdentifier ||
         post.native.activeRuntimeSessions !== 0 ||
         post.provider.appliedSdlHash !== provider.appliedSdlHash ||

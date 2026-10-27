@@ -40,6 +40,7 @@ import {
   assessDatabaseCellBackupRuntime,
   DatabaseCellAllocationMetadataSchema,
   DatabaseCellAppliedEvidenceBundleSchema,
+  physicalSourceBindingSha256,
   qualifyAppliedSchemaEvolution,
 } from "@/shared/secrets/database-cell-placement.data";
 import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
@@ -1897,7 +1898,62 @@ describe("owned immutable applied evidence transport", () => {
 });
 
 describe("readonly initial probe custody bootstrap", () => {
-  async function prepared() {
+  async function prepared(legacy = false) {
+    if (legacy) {
+      const f = await physicalImportFixture({ legacy: true });
+      const password = "a".repeat(64);
+      f.custody.readOnlyProbe = {
+        dsn: composeDatabaseCellDsn(
+          { host: f.custody.canonicalEndpointHost, port: 15432 },
+          f.custody.databaseName,
+          "probe_alpha",
+          password
+        ),
+        custodyRef: {
+          service: "alpha-database-recovery-probe",
+          key: "DATABASE_RECOVERY_PROBE_URL",
+        },
+      };
+      const data = {
+        nodeId,
+        nodeSlug: "alpha",
+        environment: "production",
+        primary: {
+          allocationReceiptId: f.facts.manualCutover.allocationReceiptId,
+          systemIdentifier: f.facts.native.systemIdentifier,
+        },
+        sourceFence: { systemIdentifier: f.facts.native.systemIdentifier },
+        physicalRecovery: f.facts.manualCutover.physicalRecovery,
+      };
+      const bytes = Buffer.from(JSON.stringify(data));
+      const manual = {
+        kind: "manual-cutover" as const,
+        mediaType: "application/json" as const,
+        sha256: shaBuffer(bytes),
+        bytesBase64: bytes.toString("base64"),
+      };
+      f.facts.manualCutover.packetSha256 = manual.sha256;
+      f.request.manualCutoverPacketSha256 = manual.sha256;
+      const qualification = await f.binder.qualifyAppliedProbe(f.request);
+      const readOnlyProbe = f.custody.readOnlyProbe;
+      if (!readOnlyProbe) throw new Error("legacy probe missing");
+      const { allocationEnvironment: _lane, ...referenceOnly } = f.request;
+      return {
+        facts: f.facts,
+        custody: { ...f.custody, readOnlyProbe },
+        password,
+        current: { binder: f.binder, writes: f.writes },
+        qualification,
+        bundle: {
+          version: 1,
+          nodeId,
+          environment: "production",
+          artifacts: [manual],
+        },
+        reference: f.request,
+        referenceOnly,
+      };
+    }
     const facts = registrationFacts();
     const password = "a".repeat(64);
     const custody = {
@@ -2109,7 +2165,7 @@ describe("readonly initial probe custody bootstrap", () => {
       'source "$REPO_ROOT/scripts/ci/lib/materialize-database-cell-placement.sh"',
       "TARGET_NODE=operator; RELIABILITY_CONTROLLER=operator; DEPLOY_ENVIRONMENT=production; SECRETS_CONTROL_ENV=production; SECRET_MATERIALIZE_PHASE=database-cell-probe-custody",
       'NODE_TARGETS=(alpha); [[ "$CASE" != ambiguous ]] || NODE_TARGETS=(alpha alpha)',
-      'DATABASE_CELL_CONTROL_NODE_ID="$NODE_ID"; DATABASE_CELL_REGISTER_COGNI_KEY=fixture-cell; DATABASE_CELL_REGISTER_PACKET_SHA256="$PACKET_SHA"; DATABASE_CELL_REGISTER_READMISSION_SHA256="$READMIT_SHA"',
+      'DATABASE_CELL_CONTROL_NODE_ID="$NODE_ID"; DATABASE_CELL_REGISTER_COGNI_KEY="$COGNI_KEY"; DATABASE_CELL_REGISTER_PACKET_SHA256="$PACKET_SHA"; DATABASE_CELL_REGISTER_READMISSION_SHA256="$READMIT_SHA"; DATABASE_CELL_REGISTER_KIND="$REGISTER_KIND"',
       '[[ "$CASE" != wrongowner ]] || TARGET_NODE=alpha',
       '[[ "$CASE" != missingref ]] || DATABASE_CELL_REGISTER_PACKET_SHA256=""',
       'fail() { echo "$*" >&2; exit 39; }',
@@ -2135,6 +2191,7 @@ describe("readonly initial probe custody bootstrap", () => {
     try {
       for (const name of [
         "valid",
+        "legacy",
         "wrongowner",
         "missingref",
         "ambiguous",
@@ -2142,12 +2199,13 @@ describe("readonly initial probe custody bootstrap", () => {
         "native",
         "race",
       ]) {
+        const selected = name === "legacy" ? await prepared(true) : value;
         const dir = join(work, name);
         mkdirSync(dir);
         const bank = structuredClone(rawBank);
         if (name === "password")
           bank.data.data.DATABASE_RECOVERY_PROBE_PASSWORD = "wrong";
-        const qualification = structuredClone(value.qualification);
+        const qualification = structuredClone(selected.qualification);
         if (name === "native") {
           qualification.systemIdentifier = "999";
           const { qualificationSha256: _sha, ...core } = qualification;
@@ -2160,12 +2218,17 @@ describe("readonly initial probe custody bootstrap", () => {
           ...process.env,
           CASE: name,
           NODE_ID: nodeId,
-          PACKET_SHA: value.reference.manualCutoverPacketSha256,
-          READMIT_SHA: value.reference.readmissionReceiptId,
-          CUSTODY: JSON.stringify(value.custody),
-          BUNDLE: JSON.stringify(value.bundle),
-          APP_DSN: value.custody.app.dsn,
-          SERVICE_DSN: value.custody.service.dsn,
+          COGNI_KEY: selected.reference.cogniKey,
+          PACKET_SHA: selected.reference.manualCutoverPacketSha256,
+          READMIT_SHA:
+            "readmissionReceiptId" in selected.reference
+              ? (selected.reference.readmissionReceiptId ?? "")
+              : "",
+          REGISTER_KIND: name === "legacy" ? "legacy-physical" : "",
+          CUSTODY: JSON.stringify(selected.custody),
+          BUNDLE: JSON.stringify(selected.bundle),
+          APP_DSN: selected.custody.app.dsn,
+          SERVICE_DSN: selected.custody.service.dsn,
           RESPONSE: JSON.stringify({ qualification }),
           BANK: JSON.stringify(bank),
           RACED_BANK: JSON.stringify({
@@ -2173,7 +2236,7 @@ describe("readonly initial probe custody bootstrap", () => {
             data: { ...bank.data, metadata: { version: 8 } },
           }),
         };
-        if (name === "valid") {
+        if (name === "valid" || name === "legacy") {
           execFileSync("bash", ["-c", script, "fixture", repoRoot, dir], {
             env,
             encoding: "utf8",
@@ -2181,7 +2244,7 @@ describe("readonly initial probe custody bootstrap", () => {
           expect(
             JSON.parse(readFileSync(join(dir, "written"), "utf8"))
           ).toEqual({
-            DATABASE_RECOVERY_PROBE_URL: value.custody.readOnlyProbe.dsn,
+            DATABASE_RECOVERY_PROBE_URL: selected.custody.readOnlyProbe.dsn,
           });
         } else {
           expect(() =>
@@ -2228,11 +2291,14 @@ describe("physical recovery receipt compatibility", () => {
         scheduledBackupReceiptSha256: undefined,
         independentRecoveryReceiptSha256: undefined,
         preservedBackupReceiptSha256: "d".repeat(64),
+        readmissionReceiptId: undefined,
         physicalRecovery: {
           kind: "same-cluster-physical-copy",
+          sourceAnchorKind: "legacy-native-capture",
           sourceCogniKey: "retained-source",
           sourceReceiptId: "33333333-3333-4333-8333-333333333333",
           sourceDseq: "10001",
+          sourceBindingSha256: physicalSourceBindingSha256(receipt),
           evidenceSha256: "a".repeat(64),
           copyManifestSha256: "b".repeat(64),
           originalAppliedSdlHashes: {
@@ -2268,9 +2334,40 @@ describe("physical recovery receipt compatibility", () => {
   });
 });
 
-async function physicalImportFixture() {
-  const base = registrationFacts(),
-    custody = appliedCustody();
+describe("legacy physical recovery references", () => {
+  it("accepts contained physical packet references without inventing readmission", () => {
+    const reference = {
+      cogniKey: "physical-target",
+      nodeId,
+      allocationEnvironment: "production",
+      manualCutoverPacketSha256: "a".repeat(64),
+      registrationKind: "legacy-physical",
+    };
+    expect(
+      DatabaseCellAppliedRegistrationReferenceSchema.safeParse(reference)
+        .success
+    ).toBe(true);
+    expect(
+      DatabaseCellAppliedRegistrationReferenceSchema.safeParse({
+        ...reference,
+        readmissionReceiptId: "fake",
+      }).success
+    ).toBe(false);
+    expect(
+      DatabaseCellAppliedRegistrationReferenceSchema.safeParse({
+        ...reference,
+        registrationKind: undefined,
+      }).success
+    ).toBe(false);
+  });
+});
+
+async function physicalImportFixture(
+  options: { legacy?: boolean; nodeId?: string } = {}
+) {
+  const laneId = options.nodeId ?? nodeId;
+  const base = registrationFacts();
+  const custody: Mutable<DatabaseCellAppliedCustody> = appliedCustody();
   const admitted = fixture({ appliedFacts: base, appliedCustody: custody });
   const [sourceReceipt] = await admitted.binder.registerApplied({
     ...admitted.ref,
@@ -2279,6 +2376,7 @@ async function physicalImportFixture() {
   });
   if (!sourceReceipt) throw new Error("fixture source missing");
   custody.manualProvenance.qualificationArtifactSha256 = "9".repeat(64);
+  sourceReceipt.binding.nodeId = laneId;
   sourceReceipt.binding.cogniKey = "source-cell";
   sourceReceipt.binding.dseq = "321";
   sourceReceipt.binding.failureDomainId = `akash:${base.provider.providerAccount}:321`;
@@ -2287,7 +2385,11 @@ async function physicalImportFixture() {
   const source: AkashTxAllocationRecord = {
     receiptId: sourceReceipt.binding.receiptId,
     cogniKey: "source-cell",
-    identity: { nodeId, compositeUid: "fixture", compositeGeneration: 1 },
+    identity: {
+      nodeId: laneId,
+      compositeUid: "fixture",
+      compositeGeneration: 1,
+    },
     workload: "alpha-database-cell",
     environment: "production",
     state: "allocated",
@@ -2366,7 +2468,7 @@ async function physicalImportFixture() {
       allocationReceiptId: app.receiptId,
       deployedSourceSha: appSha,
       appliedSdlHash: "a".repeat(64),
-      nodeId,
+      nodeId: laneId,
       environment: "production",
       appDsnSha256: base.effectiveApp.appDsnSha256,
       serviceDsnSha256: base.effectiveApp.serviceDsnSha256,
@@ -2377,15 +2479,18 @@ async function physicalImportFixture() {
     },
     manualCutover: {
       ...base.manualCutover,
+      nodeId: laneId,
       manualProvenance: custody.manualProvenance,
       appSdlHash: "a".repeat(64),
       allocationReceiptId: target.receiptId,
       sourceSystemIdentifier: base.native.systemIdentifier,
       physicalRecovery: {
         kind: "same-cluster-physical-copy",
+        sourceAnchorKind: "legacy-native-capture",
         sourceCogniKey: source.cogniKey,
         sourceReceiptId: source.receiptId,
         sourceDseq: "321",
+        sourceBindingSha256: physicalSourceBindingSha256(sourceReceipt),
         evidenceSha256: "9".repeat(64),
         copyManifestSha256: "6".repeat(64),
         originalAppliedSdlHashes: {
@@ -2464,12 +2569,11 @@ async function physicalImportFixture() {
       },
       reconciliation: {
         observedAt: now,
-        xrUid: nodeId,
-        pausedResourceUids: [nodeId, source.receiptId],
-        acknowledgedPaused: true,
+        kind: "incident-owner",
+        approvalArtifactSha256:
+          base.manualCutover.approvalAuthority.delegationDigest,
         providerOperationsSettled: true,
         custodyVersionsSha256: "1".repeat(64),
-        dnsRecordSha256: "2".repeat(64),
         independentCustodianWatching: true,
       },
       preservedBackup: {
@@ -2479,6 +2583,51 @@ async function physicalImportFixture() {
       },
     },
   };
+  {
+    const lineage = facts.manualCutover.physicalRecovery;
+    if (!lineage || !sourceReceipt.registration)
+      throw new Error("legacy source missing");
+    custody.nodeId = laneId;
+    sourceReceipt.binding.endpoint.port = 25432;
+    sourceReceipt.registration.sourceSystemIdentifier = "987654321"; // Historical LOGICAL predecessor is not this physical source.
+    lineage.sourceBindingSha256 = physicalSourceBindingSha256(sourceReceipt);
+    lineage.sourceAnchorKind = "legacy-native-capture";
+    custody.physicalRecoverySource = {
+      kind: "legacy-native-capture",
+      incidentRef: "https://fixture.example.org/incidents/recovery",
+      sourceReceiptId: source.receiptId,
+      sourceBindingSha256: lineage.sourceBindingSha256,
+      captureSha256: "9".repeat(64),
+      approvalArtifactSha256:
+        facts.manualCutover.approvalAuthority.delegationDigest,
+      startupGuardSha256: "8".repeat(64),
+    };
+    custody.readOnlyProbe = {
+      dsn: composeDatabaseCellDsn(
+        { host: custody.canonicalEndpointHost, port: 15432 },
+        custody.databaseName,
+        "probe_alpha",
+        "fixture"
+      ),
+      custodyRef: {
+        service: "alpha-database-recovery-probe",
+        key: "DATABASE_RECOVERY_PROBE_URL",
+      },
+    };
+    delete facts.readmission;
+    facts.manualCutover.appSdlHash = "c".repeat(64);
+    facts.effectiveApp.appliedSdlHash = "c".repeat(64);
+    facts.physicalRecovery.copy.targetStartupSha256 = "5".repeat(64);
+    facts.physicalRecovery.reconciliation = {
+      kind: "incident-owner",
+      observedAt: now,
+      providerOperationsSettled: true,
+      custodyVersionsSha256: "1".repeat(64),
+      approvalArtifactSha256:
+        facts.manualCutover.approvalAuthority.delegationDigest,
+      independentCustodianWatching: true,
+    };
+  }
   let writes = 0;
   const binder = new DatabaseCellBinder({
     recoveryProfile: async () => recoveryProfile,
@@ -2536,12 +2685,13 @@ async function physicalImportFixture() {
   return {
     binder,
     facts,
+    custody,
     request: {
       cogniKey: target.cogniKey,
-      nodeId,
+      nodeId: laneId,
       allocationEnvironment: "production",
       manualCutoverPacketSha256: facts.manualCutover.packetSha256,
-      readmissionReceiptId: facts.readmission.receiptId,
+      registrationKind: "legacy-physical" as const,
     },
     source: () => sourceBindings,
     target: () => targetBindings,
@@ -2552,7 +2702,50 @@ async function physicalImportFixture() {
   };
 }
 
-describe("audited held physical recovery import", () => {
+describe("audited legacy physical recovery import", () => {
+  it.each([
+    nodeId,
+    "99999999-9999-4999-8999-999999999999",
+  ])("qualifies and publishes genuine legacy physical admission for node %s", async (identity) => {
+    const f = await physicalImportFixture({ legacy: true, nodeId: identity });
+    const qualification = await f.binder.qualifyAppliedProbe(f.request);
+    expect(qualification.registrationKind).toBe("legacy-physical");
+    expect(qualification.readmissionReceiptId).toBeUndefined();
+    expect(f.writes()).toBe(0);
+    const [receipt] = await f.binder.registerApplied(f.request);
+    expect(receipt?.registration?.readmissionReceiptId).toBeUndefined();
+    expect(receipt?.binding.nativeControl).toBeUndefined();
+    const projection = projectDatabaseCellPlacement({
+      receipt,
+      custody: f.custody,
+      requireApplied: true,
+    });
+    expect(projection.publicValues?.DATABASE_URL).toBe(f.custody.app.dsn);
+    expect(projection.probe).toBeNull();
+    expect(projection.admin).toBeNull();
+    expect(projection.readmit).toBeNull();
+    expect(projection.retireSourceBinding?.systemIdentifier).toBe(
+      f.facts.native.systemIdentifier
+    );
+    expect(f.source()[0]?.registration?.sourceSystemIdentifier).toBe(
+      "987654321"
+    );
+    expect(await f.binder.registerApplied(f.request)).toEqual([receipt]);
+    expect(f.writes()).toBe(1);
+  });
+  it("refuses legacy NOLOGIN or fabricated target readmission", async () => {
+    const f = await physicalImportFixture({ legacy: true });
+    const role = f.facts.native.runtimeRoles[0];
+    if (!role) throw new Error("runtime role missing");
+    role.canLogin = false;
+    await expect(f.binder.registerApplied(f.request)).rejects.toThrow(
+      "genuinely readmitted"
+    );
+    expect(f.writes()).toBe(0);
+    await expect(
+      f.binder.registerApplied({ ...f.request, readmissionReceiptId: "fake" })
+    ).rejects.toThrow("references");
+  });
   it("preserves systemID, atomically delegates lineage, and exactly replays without inventing app readiness or DR", async () => {
     const f = await physicalImportFixture();
     const receipts = await f.binder.registerApplied(f.request);
@@ -2578,13 +2771,22 @@ describe("audited held physical recovery import", () => {
       f.binder.seal({ ...f.request, cogniKey: "source-cell" })
     ).rejects.toThrow("historical");
   });
+  it("rejects a changed source cutover despite unchanged allocation and SDL identity", async () => {
+    const f = await physicalImportFixture();
+    const original = f.source()[0];
+    if (!original?.binding.cutover)
+      throw new Error("source cutover fixture absent");
+    original.binding.cutover.actorId = "human:another-review";
+    await expect(f.binder.registerApplied(f.request)).rejects.toThrow(
+      "original binding"
+    );
+    expect(f.writes()).toBe(0);
+  });
   it("offers read-only qualification without canonical mutation", async () => {
     const f = await physicalImportFixture();
-    // Probe custody is intentionally absent in this fixture. Qualification cannot
-    // claim success, and the important effect boundary remains no canonical writes.
-    await expect(f.binder.qualifyAppliedProbe(f.request)).rejects.toThrow(
-      "probe qualification"
-    );
+    expect(
+      (await f.binder.qualifyAppliedProbe(f.request)).registrationKind
+    ).toBe("legacy-physical");
     expect(f.writes()).toBe(0);
   });
   it("rejects stale fences, insufficient real headroom, changed copy or identities before any write", async () => {
@@ -2612,9 +2814,6 @@ describe("audited held physical recovery import", () => {
       },
       (f) => {
         f.facts.physicalRecovery.copy.targetMetadataSha256 = "0".repeat(64);
-      },
-      (f) => {
-        f.facts.physicalRecovery.copy.targetStartupSha256 = "0".repeat(64);
       },
       (f) => {
         f.facts.native.activeRuntimeSessions = 1;

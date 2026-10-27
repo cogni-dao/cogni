@@ -4,7 +4,7 @@
  * Module: `@adapters/server/compute/database-cell-physical-postimage`
  * Purpose: Qualify fixed physical-recovery postimages from owned private preimage bytes.
  * Scope: Parse and compare only; no config-edit API or provider mutation.
- * Invariants: Original bytes match independent ledger anchors; source/app sleep holds and fixed target delta.
+ * Invariants: Originals match ledger or independent native custody; source RO and exact guarded target delta.
  * Side-effects: none
  * Links: database-cell-applied-managed.adapter.ts, subtask.5023
  * @internal
@@ -12,19 +12,53 @@
 import { isDeepStrictEqual } from "node:util";
 import { parse } from "yaml";
 import { z } from "zod";
-import { DatabaseCellPhysicalRecoveryEvidenceSchema } from "@/shared/secrets/database-cell-placement.data";
+import {
+  AppliedDatabaseCellReceiptSchema,
+  DatabaseCellPhysicalRecoveryEvidenceSchema,
+  physicalSourceBindingSha256,
+} from "@/shared/secrets/database-cell-placement.data";
 import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
-import { evidenceSha256 } from "./database-cell-applied-artifacts";
+import {
+  canonicalEvidenceJson,
+  evidenceSha256,
+} from "./database-cell-applied-artifacts";
 
 const sdl = z.string().min(1).max(100000);
 export const PhysicalRecoveryArtifactSchema = z
   .object({
     evidence: DatabaseCellPhysicalRecoveryEvidenceSchema,
-    // Exact bytes in the independently recorded ledger hash domain. They may
-    // format differently from Console SDL; hashes of those objects are never equated.
-    ledgerPreimages: z
-      .object({ sourceOriginal: sdl, targetCold: sdl, appOriginal: sdl })
-      .strict(),
+    // A reserved-bank anchor authenticates this full pre-hold capture independently
+    // from the submitted packet. Missing historical canonical bytes remain unknown.
+    nativeCapture: z
+      .object({
+        sourceCapturedAt: z.string().datetime({ offset: true }),
+        originalStoredSdl: sdl,
+        originalAppStoredSdl: sdl,
+        originalProviderManifest: z
+          .array(
+            z
+              .object({
+                services: z.array(z.record(z.string(), z.unknown())).length(1),
+              })
+              .passthrough()
+          )
+          .length(1),
+        originalAppProviderManifest: z
+          .array(
+            z
+              .object({
+                services: z.array(z.record(z.string(), z.unknown())).min(1),
+              })
+              .passthrough()
+          )
+          .length(1),
+        sourceBinding: AppliedDatabaseCellReceiptSchema,
+        historicalCanonicalBytesRecovered: z.literal(false),
+      })
+      .strict()
+      .optional(),
+    startupGuard: sdl.optional(),
+    ledgerPreimages: z.object({ targetCold: sdl }).strict(),
     // These private bytes stay inside bootstrap-owned custody. Facts/HTTP contain hashes only.
     definitions: z
       .object({
@@ -85,21 +119,121 @@ export function qualifyPhysicalPostimages(input: {
     readonly app: string;
   };
 }) {
-  const { evidence: e, definitions: d, ledgerPreimages: l } = input.artifact;
+  const {
+    evidence: e,
+    definitions: d,
+    ledgerPreimages: l,
+    nativeCapture: capture,
+  } = input.artifact;
+  const anchor = input.custody.physicalRecoverySource;
+  if (!anchor)
+    throw new Error("physical_native_capture_independent_custody_missing");
+  {
+    if (
+      !capture ||
+      !input.artifact.startupGuard ||
+      evidenceSha256(
+        canonicalEvidenceJson(JSON.parse(JSON.stringify(capture)))
+      ) !== anchor.captureSha256 ||
+      evidenceSha256(input.artifact.startupGuard) !==
+        anchor.startupGuardSha256 ||
+      physicalSourceBindingSha256(capture.sourceBinding) !==
+        anchor.sourceBindingSha256 ||
+      capture.sourceBinding.binding.receiptId !== anchor.sourceReceiptId ||
+      capture.sourceBinding.binding.receiptId !== e.source.receiptId ||
+      capture.sourceBinding.binding.cogniKey !== e.source.cogniKey ||
+      capture.sourceBinding.binding.dseq !== e.source.dseq ||
+      capture.sourceBinding.binding.providerAccount !==
+        e.source.providerAccount ||
+      capture.sourceBinding.binding.nodeId !== input.custody.nodeId ||
+      capture.sourceBinding.binding.nodeSlug !== input.custody.nodeSlug ||
+      capture.sourceBinding.binding.databaseName !==
+        input.custody.databaseName ||
+      capture.sourceBinding.binding.appRole !== input.custody.appRole ||
+      capture.sourceBinding.binding.serviceRole !== input.custody.serviceRole ||
+      capture.sourceBinding.binding.systemIdentifier !==
+        e.source.systemIdentifier ||
+      !capture.sourceBinding.registration?.readmissionReceiptId ||
+      capture.sourceBinding.binding.nativeControl !== undefined ||
+      Date.parse(capture.sourceCapturedAt) > Date.parse(e.copy.startedAt)
+    )
+      throw new Error("physical_native_capture_independent_custody_mismatch");
+    const captured = capture.originalProviderManifest[0]?.services[0];
+    const source = onlyService(
+      decode(d.sourceOriginal),
+      input.primaryServiceName
+    );
+    if (!captured) throw new Error("physical_native_capture_source_missing");
+    same(
+      [source.image, source.command, source.args, source.env],
+      [captured.image, captured.command, captured.args, captured.env]
+    );
+    const params = z
+      .object({ storage: z.unknown() })
+      .passthrough()
+      .parse(captured.params);
+    let storage = params.storage;
+    if (Array.isArray(storage)) {
+      const entries = storage.map((value) => {
+        const { name, ...mount } = z
+          .object({ name: z.string() })
+          .passthrough()
+          .parse(value);
+        return [name, mount] as const;
+      });
+      if (new Set(entries.map(([name]) => name)).size !== entries.length)
+        throw new Error("physical_native_capture_duplicate_volume");
+      storage = Object.fromEntries(entries);
+    }
+    same(source.params, { ...params, storage });
+    const originalScript = source.args?.[0] ?? "";
+    if (
+      ["fsync", "synchronous_commit", "full_page_writes"].some(
+        (name) =>
+          !originalScript.includes(`-c ${name}=on`) ||
+          originalScript.includes(`-c ${name}=off`)
+      )
+    )
+      throw new Error("physical_original_durability_not_enabled");
+    same(d.appOriginal, capture.originalAppStoredSdl);
+    same(d.appHeld, d.appOriginal);
+    const originalRegistration = capture.sourceBinding.registration;
+    const observedConsumers = new Set<string>();
+    for (const group of capture.originalAppProviderManifest)
+      for (const service of group.services) {
+        const env = z.array(z.string()).parse(service.env ?? []);
+        for (const [key, expected] of [
+          ["DATABASE_URL", originalRegistration.appDsnSha256],
+          ["DATABASE_SERVICE_URL", originalRegistration.serviceDsnSha256],
+          ["DATABASE_MIGRATION_URL", originalRegistration.migrationDsnSha256],
+        ]) {
+          const values = env.filter((v) => v.startsWith(`${key}=`));
+          if (values.length && key) observedConsumers.add(key);
+          if (
+            values.length > 1 ||
+            (values[0] &&
+              evidenceSha256(values[0].slice((key?.length ?? 0) + 1)) !==
+                expected)
+          )
+            throw new Error(
+              "physical_legacy_app_consumer_not_fenced_on_source"
+            );
+        }
+      }
+    if (
+      !observedConsumers.has("DATABASE_URL") ||
+      !observedConsumers.has("DATABASE_SERVICE_URL")
+    )
+      throw new Error("physical_legacy_app_consumer_proof_missing");
+  }
   if (
-    evidenceSha256(l.sourceOriginal) !== input.ledgerHashes.source ||
     evidenceSha256(l.targetCold) !== input.ledgerHashes.target ||
-    evidenceSha256(l.appOriginal) !== input.ledgerHashes.app ||
     e.source.originalAppliedSdlHash !== input.ledgerHashes.source ||
     e.target.originalAppliedSdlHash !== input.ledgerHashes.target ||
     e.app.originalAppliedSdlHash !== input.ledgerHashes.app
   )
     throw new Error("physical_postimage_independent_ledger_anchor_mismatch");
-  // Alias expansion and object key order are semantic; all values must still be
-  // identical. Opaque/encrypted Console values fail closed rather than replacing proof.
-  same(decode(d.sourceOriginal), decode(l.sourceOriginal));
   same(decode(d.targetCold), decode(l.targetCold));
-  same(decode(d.appOriginal), decode(l.appOriginal));
   if (
     evidenceSha256(d.sourceHeld) !== e.source.heldSdlHash ||
     evidenceSha256(d.targetCold) !== e.target.preimageSdlHash ||
@@ -140,66 +274,30 @@ export function qualifyPhysicalPostimages(input: {
   )
     throw new Error("physical_postimage_target_image_or_cold_hold_mismatch");
   const normalExpected = structuredClone(cold);
-  normalExpected.services[input.primaryServiceName] = {
-    ...source,
-    params: targetCold.params,
-    expose: targetCold.expose,
-  };
+  {
+    normalExpected.services[input.primaryServiceName] = {
+      ...targetCold,
+      command: source.command,
+      args: source.args,
+      env: source.env,
+    };
+    const service = onlyService(normalExpected, input.primaryServiceName);
+    if (
+      JSON.stringify(service.command) !== JSON.stringify(["/bin/sh", "-ec"]) ||
+      service.args?.length !== 1
+    )
+      throw new Error("physical_legacy_original_startup_shape_refused");
+    const originalScript = service.args?.[0];
+    if (!input.artifact.startupGuard || originalScript === undefined)
+      throw new Error("physical_legacy_guard_missing");
+    service.args = [input.artifact.startupGuard + originalScript];
+  }
   same(normal, normalExpected);
-  const script = (service: z.infer<typeof Service>) =>
-    JSON.stringify([service.command ?? [], service.args ?? []]);
+  const script = (service: z.infer<typeof Service>) => service.args?.[0] ?? "";
   if (
     evidenceSha256(script(source)) !== e.copy.originalStartupSha256 ||
     evidenceSha256(script(onlyService(normal, input.primaryServiceName))) !==
       e.copy.targetStartupSha256
   )
     throw new Error("physical_postimage_original_startup_mismatch");
-  const appOriginal = decode(d.appOriginal),
-    appHeld = decode(d.appHeld),
-    appExpected = structuredClone(appOriginal);
-  const appService = appExpected.services[input.appServiceName];
-  if (!appService) throw new Error("physical_postimage_app_service_missing");
-  // Every declared service must be held, including workers/sidecars that might write.
-  for (const service of Object.values(appExpected.services)) {
-    service.command = ["sleep"];
-    service.args = ["infinity"];
-  }
-  const values = new Map(
-    (appService.env ?? []).map((value) => {
-      const i = value.indexOf("=");
-      return [value.slice(0, i), value.slice(i + 1)];
-    })
-  );
-  for (const [key, value] of [
-    ["DATABASE_URL", input.custody.app.dsn],
-    ["DATABASE_SERVICE_URL", input.custody.service.dsn],
-    ...(input.custody.tls.kind === "private-ca"
-      ? [["DATABASE_SSL_CA_CERT", input.custody.tls.caCertificate]]
-      : []),
-    ...(input.custody.migration.kind === "dedicated-migration-url" &&
-    values.has("DATABASE_MIGRATION_URL")
-      ? [["DATABASE_MIGRATION_URL", input.custody.migration.dsn]]
-      : []),
-  ]) {
-    if (!key || value === undefined)
-      throw new Error("physical_postimage_consumer_missing");
-    values.set(key, value);
-  }
-  appService.env = [...values.entries()].map(
-    ([key, value]) => `${key}=${value}`
-  );
-  // Env order has no runtime meaning; compare exact values without permitting duplicate names.
-  for (const definition of [appHeld, appExpected])
-    for (const service of Object.values(definition.services)) {
-      if (service.env) {
-        if (
-          new Set(
-            service.env.map((value) => value.slice(0, value.indexOf("=")))
-          ).size !== service.env.length
-        )
-          throw new Error("physical_postimage_duplicate_env");
-        service.env.sort();
-      }
-    }
-  same(appHeld, appExpected);
 }

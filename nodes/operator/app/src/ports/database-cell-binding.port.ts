@@ -75,15 +75,16 @@ export interface DatabaseCellNativeObserverPort {
 }
 
 /**
- * Post-readmission import seam. Separate from prestage seal/cutover:
- * the request names audited receipts, never supplies native facts or approval flags.
+ * Audited import seam: genuine post-readmission or preserved legacy physical admission.
+ * References never supply native facts, credentials or approval flags.
  * Missing trusted evidence supply refuses registration; prestage containment is unchanged.
  */
 export interface DatabaseCellAppliedRegistrationPort {
   registerApplied(
     input: DatabaseCellBindingReference & {
       readonly manualCutoverPacketSha256: string;
-      readonly readmissionReceiptId: string;
+      readonly registrationKind?: "legacy-physical" | undefined;
+      readonly readmissionReceiptId?: string | undefined;
     }
   ): Promise<readonly AppliedDatabaseCellReceipt[]>;
 }
@@ -97,7 +98,8 @@ export interface DatabaseCellAppliedRegistrationEvidencePort {
     readonly reference: DatabaseCellBindingReference;
     readonly custody: DatabaseCellAppliedCustody;
     readonly manualCutoverPacketSha256: string;
-    readonly readmissionReceiptId: string;
+    readonly registrationKind?: "legacy-physical" | undefined;
+    readonly readmissionReceiptId?: string | undefined;
   }): Promise<
     DatabaseCellAppliedRegistrationFacts | DatabaseCellPhysicalRecoveryFacts
   >;
