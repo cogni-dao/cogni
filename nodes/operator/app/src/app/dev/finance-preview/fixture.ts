@@ -162,9 +162,9 @@ const AKASH_NODES = [
   akashNode("node-template", 0.19),
 ];
 
-/** Console credit + escrow ÷ fleet burn; the one row with a real runway on the operator today. */
+/** Demo available credit ÷ fleet burn; reserved escrow stays separate in Source details. */
 function akash(creditUsd: number, escrowUsd: number): MoneyPlaneRow {
-  const balance = creditUsd + escrowUsd;
+  const balance = creditUsd;
   const burnPerDay = AKASH_NODES.reduce(
     (sum, n) => sum + (n.burnPerDay ?? 0),
     0
@@ -172,7 +172,7 @@ function akash(creditUsd: number, escrowUsd: number): MoneyPlaneRow {
   const runwayDays = balance / burnPerDay;
   return {
     plane: "akash:credit",
-    label: "Akash",
+    label: "Akash credit",
     kind: "prepaid",
     balance,
     currency: "USD",
@@ -180,8 +180,7 @@ function akash(creditUsd: number, escrowUsd: number): MoneyPlaneRow {
     runwayDays,
     grade: runwayDays < 7 ? "RED" : runwayDays < 21 ? "YELLOW" : "GREEN",
     observedAt: now,
-    source:
-      "Akash chain · Console grant + escrow · 7 leases at 14,683 blocks/day (5.884 s/block fallback)",
+    source: "Available Console credit · escrow excluded · demo lease burn",
     sourceObservedAt: now,
     freshness: "current",
     payer: "Operator",
@@ -203,6 +202,8 @@ function akash(creditUsd: number, escrowUsd: number): MoneyPlaneRow {
         currency: "uact",
       },
     ],
+    detail:
+      "Account top-up estimate, not shutdown time. Escrow is reserved by deployment; Console normally refills it.",
     children: AKASH_NODES,
   };
 }
@@ -492,24 +493,30 @@ export const sparseFinancePreview: FinanceReportModel = {
         },
       }
     ),
-    placeholder("akash:credit", "Akash", "prepaid", "Akash chain read failed", {
-      reasonCode: "unreadable",
-      rail: CONSOLE,
-      payAction: {
-        kind: "external",
-        url: "https://console.akash.network/",
-        label: "Top up",
-      },
-      children: [
-        placeholder(
-          "akash:fleet",
-          "Akash · fleet",
-          "usage",
-          "cost ledger unavailable",
-          { reasonCode: "unreadable", rail: undefined }
-        ),
-      ],
-    }),
+    placeholder(
+      "akash:credit",
+      "Akash credit",
+      "prepaid",
+      "Akash chain read failed",
+      {
+        reasonCode: "unreadable",
+        rail: CONSOLE,
+        payAction: {
+          kind: "external",
+          url: "https://console.akash.network/",
+          label: "Top up",
+        },
+        children: [
+          placeholder(
+            "akash:fleet",
+            "Akash · fleet",
+            "usage",
+            "cost ledger unavailable",
+            { reasonCode: "unreadable", rail: undefined }
+          ),
+        ],
+      }
+    ),
     placeholder(
       "grafana:overage",
       "Grafana overage",

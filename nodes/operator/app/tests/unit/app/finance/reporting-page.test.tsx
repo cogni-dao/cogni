@@ -215,7 +215,7 @@ describe("Financials reporting", () => {
     expect(stat("Runway")).toBe("—");
     expect(screen.getByText("Costs incomplete")).toBeVisible();
     const deadline = document.querySelector("[data-finance-deadline]");
-    expect(deadline?.textContent).toBe("Next deadline 2d · Akash");
+    expect(deadline?.textContent).toBe("Next deadline 1d · Akash credit");
     expect(deadline?.className).toContain("text-destructive");
     expect(screen.getByText("USDC on Base")).toBeVisible();
     expect(screen.getByText("credit purchases · 30d")).toBeVisible();
@@ -234,7 +234,7 @@ describe("Financials reporting", () => {
     expect(labels()).toEqual([
       "Credit purchases",
       "Node services",
-      "Akash",
+      "Akash credit",
       "Cherry credit",
       "Domain cognidao.org",
       "Grafana overage",
@@ -253,7 +253,7 @@ describe("Financials reporting", () => {
     expect(
       document.querySelector("[data-finance-stat='Runway']")?.textContent
     ).toBe("—");
-    const red = within(rowOf("akash:credit")).getByText("2d");
+    const red = within(rowOf("akash:credit")).getByText("1d");
     expect(red.className).toContain("text-destructive");
     expect(within(rowOf("cherry:team")).getByText("36d").className).toContain(
       "text-success"
@@ -265,7 +265,7 @@ describe("Financials reporting", () => {
       screen.getByRole("table").querySelectorAll("tr[data-finance-child]")
     ).toHaveLength(0);
     await userEvent.click(
-      grid().getByRole("button", { name: "Expand Akash", exact: true })
+      grid().getByRole("button", { name: "Expand Akash credit", exact: true })
     );
     const children = Array.from(
       screen.getByRole("table").querySelectorAll("tr[data-finance-child]")
@@ -283,7 +283,7 @@ describe("Financials reporting", () => {
       .querySelector("tr[data-finance-child='akash:poly']");
     expect(poly?.textContent).toContain("$1.57/day");
     expect(
-      grid().getByRole("button", { name: "Collapse Akash", exact: true })
+      grid().getByRole("button", { name: "Collapse Akash credit", exact: true })
     ).toHaveAttribute("aria-expanded", "true");
     await userEvent.click(
       grid().getByRole("button", { name: "Expand Other SaaS", exact: true })
@@ -308,6 +308,7 @@ describe("Financials reporting", () => {
       within(rowOf("cherry:team")).getByRole("link", { name: /Top up/ })
     ).toHaveAttribute("href", "https://portal.cherryservers.com/");
     const akash = rowOf("akash:credit");
+    expect(within(akash).getByText("$5.79")).toBeVisible();
     expect(within(akash).queryByRole("link")).not.toBeInTheDocument();
     expect(within(akash).getByText("Card · Console")).toBeVisible();
     expect(
@@ -321,9 +322,12 @@ describe("Financials reporting", () => {
       within(rowOf("income:credit-purchases")).getByText("Split · auto")
     ).toBeVisible();
     await userEvent.click(
-      grid().getByRole("button", { name: "Akash", exact: true })
+      grid().getByRole("button", { name: "Akash credit", exact: true })
     );
-    const dialog = screen.getByRole("dialog", { name: "Akash" });
+    const dialog = screen.getByRole("dialog", { name: "Akash credit" });
+    expect(
+      within(dialog).getByText(/Available Console credit · escrow excluded/)
+    ).toBeVisible();
     expect(
       within(dialog).getByText(
         /paid by card, not from the steward wallet · planned/
@@ -456,7 +460,7 @@ describe("Financials reporting", () => {
     ).toBeVisible();
     await userEvent.keyboard("{Escape}");
     await userEvent.click(
-      grid().getByRole("button", { name: "Akash", exact: true })
+      grid().getByRole("button", { name: "Akash credit", exact: true })
     );
     expect(
       within(screen.getByRole("dialog")).getByText(/Akash chain read failed/)
