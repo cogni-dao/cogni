@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// Dev-only host Next.js stdout, captured by pnpm dev:stack.
+// Use the existing JSON processing and Loki writer. Never mount private .context.
+local.file_match "host_app_logs" {
+  sync_period = "5s"
+  path_targets = [{
+    "__path__" = "/var/log/cogni-dev/app.log",
+    "app"      = "cogni-template",
+    "env"      = "local",
+    "service"  = "app",
+    "stream"   = "stdout",
+  }]
+}
+loki.source.file "host_app" {
+  targets = local.file_match.host_app_logs.targets
+  forward_to = [loki.process.docker_logs.receiver]
+}
