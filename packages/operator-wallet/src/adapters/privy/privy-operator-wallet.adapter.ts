@@ -278,6 +278,15 @@ export class PrivyOperatorWalletAdapter implements OperatorWalletPort {
         hash: result.hash as Hex,
         confirmations: 1,
       });
+      // viem can resolve a replacement/cancellation receipt. It proves this transfer
+      // only when its valid transaction hash matches the submitted transaction.
+      if (
+        !/^0x[0-9a-fA-F]{64}$/.test(result.hash) ||
+        typeof receipt.transactionHash !== "string" ||
+        !/^0x[0-9a-fA-F]{64}$/.test(receipt.transactionHash) ||
+        receipt.transactionHash.toLowerCase() !== result.hash.toLowerCase()
+      )
+        return { txHash: result.hash, receiptStatus: "pending" };
       return {
         txHash: result.hash,
         receiptStatus:

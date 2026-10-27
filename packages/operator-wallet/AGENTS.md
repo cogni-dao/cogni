@@ -48,7 +48,7 @@ Standalone workspace package (`@cogni/operator-wallet`) providing Privy-managed 
 
 ## Responsibilities
 
-- This directory **does**: implement `distributeSplit()` (Split distribute via Privy HSM on Base) and `withdrawToSteward()` (a fixed ERC-20 `transfer` to the config-pinned steward wallet); validate signing gates (STEWARD_CONFIGURED, POSITIVE_AMOUNT, MAX_TOPUP_CAP). Steward withdrawals return a broadcast hash plus explicit success/reverted/pending receipt status; a revert is never reported as funded.
+- This directory **does**: implement `distributeSplit()` (Split distribute via Privy HSM on Base) and `withdrawToSteward()` (a fixed ERC-20 `transfer` to the config-pinned steward wallet); validate signing gates (STEWARD_CONFIGURED, POSITIVE_AMOUNT, MAX_TOPUP_CAP). Steward withdrawals return a broadcast hash plus explicit success/reverted/pending receipt status; a revert is never reported as funded. Success/revert requires a valid receipt hash matching the submitted hash; replacement, missing or malformed receipt identity stays pending.
 - This directory **does not**: hold raw key material, manage env vars, orchestrate charge creation, persist state, interact with databases, or expose a generic `signTypedData`/`signMessage` surface (NO_GENERIC_SIGNING — every signing method is named for its use-case). Polymarket CLOB order signing does NOT live here — it flows through `@privy-io/node/viem#createViemAccount` directly in the trader-role runtime (task.0315 CP2).
 
 ## Notes

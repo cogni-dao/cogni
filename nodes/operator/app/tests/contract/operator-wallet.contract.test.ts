@@ -97,16 +97,57 @@ describe("Privy steward receipt outcomes", () => {
     );
   });
   afterEach(() => vi.unstubAllGlobals());
+  const txHash = `0x${"a".repeat(64)}`;
   it.each([
-    "success",
-    "reverted",
-    "pending",
-  ] as const)("keeps %s distinct without losing the broadcast hash", async (receiptStatus) => {
-    const txHash = `0x${"a".repeat(64)}`;
+    {
+      name: "original success",
+      receipt: { status: "success", transactionHash: txHash },
+      expected: "success",
+    },
+    {
+      name: "original revert",
+      receipt: { status: "reverted", transactionHash: txHash },
+      expected: "reverted",
+    },
+    {
+      name: "mixed-case original hash",
+      receipt: { status: "success", transactionHash: `0x${"A".repeat(64)}` },
+      expected: "success",
+    },
+    {
+      name: "successful replacement",
+      receipt: { status: "success", transactionHash: `0x${"b".repeat(64)}` },
+      expected: "pending",
+    },
+    {
+      name: "reverted replacement",
+      receipt: { status: "reverted", transactionHash: `0x${"b".repeat(64)}` },
+      expected: "pending",
+    },
+    {
+      name: "missing receipt hash",
+      receipt: { status: "success" },
+      expected: "pending",
+    },
+    {
+      name: "invalid receipt hash",
+      receipt: { status: "success", transactionHash: "0xshort" },
+      expected: "pending",
+    },
+    {
+      name: "unsupported status",
+      receipt: { status: "unknown", transactionHash: txHash },
+      expected: "pending",
+    },
+    { name: "unread receipt", receipt: null, expected: "pending" },
+  ])("keeps $name tied to the submitted transfer", async ({
+    receipt,
+    expected,
+  }) => {
     const sendTransaction = vi.fn(async () => ({ hash: txHash }));
     const waitForTransactionReceipt = vi.fn(async () => {
-      if (receiptStatus === "pending") throw new Error("RPC timeout");
-      return { status: receiptStatus };
+      if (!receipt) throw new Error("RPC timeout");
+      return receipt;
     });
     // Exercise the real method while replacing only external service boundaries.
     const adapter = Object.assign(
@@ -122,7 +163,7 @@ describe("Privy steward receipt outcomes", () => {
     ) as PrivyOperatorWalletAdapter;
     expect(await adapter.withdrawToSteward(1_000_000n)).toEqual({
       txHash,
-      receiptStatus,
+      receiptStatus: expected,
     });
     expect(sendTransaction).toHaveBeenCalledTimes(1);
     expect(waitForTransactionReceipt).toHaveBeenCalledTimes(1);
