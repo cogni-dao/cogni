@@ -341,7 +341,7 @@ materialize_database_cell_applied_registration() {
   [[ -n "$custody" ]] || fail "actual applied consumer custody absent"
   validate_applied_cell_consumer_custody "$node" "$custody"
   materialize_database_cell_applied_custodies "$node"
-  request="$(jq -nc --arg cogniKey "$DATABASE_CELL_REGISTER_COGNI_KEY" --arg nodeId "$DATABASE_CELL_CONTROL_NODE_ID" --arg packet "$DATABASE_CELL_REGISTER_PACKET_SHA256" --arg readmission "$DATABASE_CELL_REGISTER_READMISSION_SHA256" '{cogniKey:$cogniKey,nodeId:$nodeId,allocationEnvironment:"production",manualCutoverPacketSha256:$packet} + (if $readmission=="" then {registrationKind:"legacy-physical"} else {readmissionReceiptId:$readmission} end)')"
+  request="$(jq -nc --arg cogniKey "$DATABASE_CELL_REGISTER_COGNI_KEY" --arg nodeId "$DATABASE_CELL_CONTROL_NODE_ID" --arg packet "$DATABASE_CELL_REGISTER_PACKET_SHA256" --arg readmission "${DATABASE_CELL_REGISTER_READMISSION_SHA256:-}" '{cogniKey:$cogniKey,nodeId:$nodeId,allocationEnvironment:"production",manualCutoverPacketSha256:$packet} + (if $readmission=="" then {registrationKind:"legacy-physical"} else {readmissionReceiptId:$readmission} end)')"
   response="$(cell_actor_http /v1/akash/database-cell-binding/register-applied "$request")"
   receipt="$(jq -ec '.receipts[] | select(.binding.environment=="production" and .registration.kind=="audited-manual")' <<<"$response")" || fail "actual applied registration receipt absent"
   # Validate every private target and real qualification before any publication.
@@ -379,7 +379,7 @@ materialize_database_cell_probe_custody() {
   validate_applied_cell_consumer_banks "$node" "$custody" 'app service migration tls'
   # Only this owned phase tolerates the old logical probe URL, before readonly qualification.
   materialize_database_cell_applied_custodies "$node" probe-repair
-  request="$(jq -nc --arg cogniKey "$DATABASE_CELL_REGISTER_COGNI_KEY" --arg nodeId "$DATABASE_CELL_CONTROL_NODE_ID" --arg packet "$DATABASE_CELL_REGISTER_PACKET_SHA256" --arg readmission "$DATABASE_CELL_REGISTER_READMISSION_SHA256" '{cogniKey:$cogniKey,nodeId:$nodeId,allocationEnvironment:"production",manualCutoverPacketSha256:$packet} + (if $readmission=="" then {registrationKind:"legacy-physical"} else {readmissionReceiptId:$readmission} end)')"
+  request="$(jq -nc --arg cogniKey "$DATABASE_CELL_REGISTER_COGNI_KEY" --arg nodeId "$DATABASE_CELL_CONTROL_NODE_ID" --arg packet "$DATABASE_CELL_REGISTER_PACKET_SHA256" --arg readmission "${DATABASE_CELL_REGISTER_READMISSION_SHA256:-}" '{cogniKey:$cogniKey,nodeId:$nodeId,allocationEnvironment:"production",manualCutoverPacketSha256:$packet} + (if $readmission=="" then {registrationKind:"legacy-physical"} else {readmissionReceiptId:$readmission} end)')"
   response="$(cell_actor_http /v1/akash/database-cell-binding/qualify-applied-probe "$request")" || fail "actual target probe qualification unavailable"
   printf '%s' "$bundle" > "${CACHE_DIR}/probe-repair-evidence"
   printf '%s' "$response" > "${CACHE_DIR}/probe-repair-response"
