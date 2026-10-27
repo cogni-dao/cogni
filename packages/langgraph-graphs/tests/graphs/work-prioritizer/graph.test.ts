@@ -850,46 +850,61 @@ describe("Cogni read-only common program", () => {
             }),
           });
         expect(toolChoice).toBe("required");
-        const extraction = (tools as { function: { name: string } }[]).find((tool) => tool.function.name.startsWith("extract-"));
+        const extraction = (tools as { function: { name: string } }[]).find(
+          (tool) => tool.function.name.startsWith("extract-")
+        );
         expect(extraction).toBeDefined();
         return response({
-          ok: true, content: "", finishReason: "tool_calls",
-          toolCalls: [{ id: "result-extraction", type: "function", function: {
-            name: extraction!.function.name, arguments: JSON.stringify({
-            summary: "Defer blocked work; preserve the human's late constraint",
-            items: [
-              {
-                kind: options.kind ?? "work",
-                operation: options.create ? "create" : "refine",
-                target:
-                  options.kind === "knowledge"
-                    ? options.create
-                      ? (options.createTarget ??
-                        "Proposed guide about a missing reference")
-                      : "reference-one"
-                    : options.kind === "code"
-                      ? "src/thing.ts"
-                      : "task.5016",
-                ...(options.kind === "knowledge"
-                  ? { domain: options.proposedDomain ?? "reference" }
-                  : {}),
-                rationale: "Explicit human condition at end of full outcome",
-                nextAction: "Ask the named reviewer for the missing decision",
-                goalIds: ["goal-useful"],
-                sourceIds: [
-                  options.kind === "knowledge"
-                    ? options.emptyRecall
-                      ? "mission-loop-expert"
-                      : "reference-one"
-                    : options.kind === "code"
-                      ? codeCitation
-                      : "task.5016",
-                ],
-                proposal:
-                  "Keep blocked until the explicitly named reviewer responds",
+          ok: true,
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            {
+              id: "result-extraction",
+              type: "function",
+              function: {
+                name: extraction!.function.name,
+                arguments: JSON.stringify({
+                  summary:
+                    "Defer blocked work; preserve the human's late constraint",
+                  items: [
+                    {
+                      kind: options.kind ?? "work",
+                      operation: options.create ? "create" : "refine",
+                      target:
+                        options.kind === "knowledge"
+                          ? options.create
+                            ? (options.createTarget ??
+                              "Proposed guide about a missing reference")
+                            : "reference-one"
+                          : options.kind === "code"
+                            ? "src/thing.ts"
+                            : "task.5016",
+                      ...(options.kind === "knowledge"
+                        ? { domain: options.proposedDomain ?? "reference" }
+                        : {}),
+                      rationale:
+                        "Explicit human condition at end of full outcome",
+                      nextAction:
+                        "Ask the named reviewer for the missing decision",
+                      goalIds: ["goal-useful"],
+                      sourceIds: [
+                        options.kind === "knowledge"
+                          ? options.emptyRecall
+                            ? "mission-loop-expert"
+                            : "reference-one"
+                          : options.kind === "code"
+                            ? codeCitation
+                            : "task.5016",
+                      ],
+                      proposal:
+                        "Keep blocked until the explicitly named reviewer responds",
+                    },
+                  ],
+                }),
               },
-            ],
-          }), } }],
+            },
+          ],
         });
       },
       createToolExecFn: () => async (name, args) => {

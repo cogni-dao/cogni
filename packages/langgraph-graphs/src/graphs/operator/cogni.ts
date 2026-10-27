@@ -127,8 +127,13 @@ const CogniState = Annotation.Root({
   }),
 });
 
-/** Max investigate ⇄ tools rounds before the agent is forced to propose from what it has. */
-const MAX_INVESTIGATE_STEPS = 24;
+/**
+ * The agent's work budget: investigate ⇄ tools rounds before it is forced to propose from
+ * what it has. This is the real bound (not the runner's recursionLimit, which is only an
+ * infinite-loop backstop set to >2× this). 30 rounds lets a long-running agent read goals,
+ * the fitting guides, the inbox, several work items and repo code across many turns.
+ */
+const MAX_INVESTIGATE_STEPS = 30;
 
 /**
  * Build the compiled, checkpointable Cogni mission-loop graph.

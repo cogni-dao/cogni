@@ -169,7 +169,9 @@ export function createInProcGraphRunner<TTool = unknown>(
 
   // Create no-arg CogniCompletionAdapter (reads from ALS + configurable at invoke time)
   const llm = new CogniCompletionAdapter().bindRun(
-    request.configurable.model, request.abortSignal, !!opts.program
+    request.configurable.model,
+    request.abortSignal,
+    !!opts.program
   );
 
   // Use toLangChainToolsCaptured since runner provides toolExecFn directly (not from ALS)
@@ -189,8 +191,20 @@ export function createInProcGraphRunner<TTool = unknown>(
   // Use factory from catalog instead of hardcoded graph
   const graph = createGraph({
     onInternalToolEvent: ({ id, name, status }) => {
-      if (status === "start") emit({ type: "tool_call_start", toolCallId: id, toolName: name, args: { stateOnly: true } });
-      else emit({ type: "tool_call_result", toolCallId: id, result: { stateOnly: true, operation: name, status }, ...(status === "error" ? { isError: true } : {}) });
+      if (status === "start")
+        emit({
+          type: "tool_call_start",
+          toolCallId: id,
+          toolName: name,
+          args: { stateOnly: true },
+        });
+      else
+        emit({
+          type: "tool_call_result",
+          toolCallId: id,
+          result: { stateOnly: true, operation: name, status },
+          ...(status === "error" ? { isError: true } : {}),
+        });
     },
     ...(opts.sourceContext !== undefined && {
       sourceContext: opts.sourceContext,
@@ -221,6 +235,11 @@ export function createInProcGraphRunner<TTool = unknown>(
             {
               signal: request.abortSignal,
               configurable: request.configurable,
+              // A BACKSTOP against an infinite graph, never the real work bound — each
+              // graph self-limits (e.g. cogni's MAX_INVESTIGATE_STEPS). Must exceed any
+              // graph's budget: a gather round is 2 node visits, so this clears 2×the
+              // largest step cap with margin. Raise it with the caps, never below them.
+              recursionLimit: 100,
             }
           )
       );

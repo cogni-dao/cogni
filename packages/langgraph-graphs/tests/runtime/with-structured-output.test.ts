@@ -117,41 +117,108 @@ describe("billed BaseChatModel compatibility", () => {
   it("preserves required extraction choice and uses maintained schema feedback", async () => {
     const { createAgent, toolStrategy } = await import("langchain");
     const requests: unknown[] = [];
-    await runWithCogniExecContext({
-      tokenSink: { push: () => {} }, toolExecFn: async () => ({ ok: true, value: {} }),
-      completionFn: (request) => {
-        requests.push(request);
-        const extraction = (request.tools as { function: { name: string } }[])[0]!;
-        const valid = requests.length > 1;
-        return { stream: (async function* () {})(), final: Promise.resolve({ ok: true,
-          toolCalls: [{ id: `extract-${requests.length}`, type: "function", function: {
-            name: extraction.function.name, arguments: JSON.stringify({ score: valid ? 0.8 : 8, label: "review" }),
-          } }],
-        }) };
+    await runWithCogniExecContext(
+      {
+        tokenSink: { push: () => {} },
+        toolExecFn: async () => ({ ok: true, value: {} }),
+        completionFn: (request) => {
+          requests.push(request);
+          const extraction = (
+            request.tools as { function: { name: string } }[]
+          )[0]!;
+          const valid = requests.length > 1;
+          return {
+            stream: (async function* () {})(),
+            final: Promise.resolve({
+              ok: true,
+              toolCalls: [
+                {
+                  id: `extract-${requests.length}`,
+                  type: "function",
+                  function: {
+                    name: extraction.function.name,
+                    arguments: JSON.stringify({
+                      score: valid ? 0.8 : 8,
+                      label: "review",
+                    }),
+                  },
+                },
+              ],
+            }),
+          };
+        },
       },
-    }, async () => {
-      const model = new CogniCompletionAdapter().bindRun("fixture-model");
-      const agent = createAgent({ model, responseFormat: toolStrategy(TestSchema) });
-      const result = await agent.invoke({ messages: [new HumanMessage("Review the evidence")] });
-      expect(result.structuredResponse).toEqual({ score: 0.8, label: "review" });
-    });
+      async () => {
+        const model = new CogniCompletionAdapter().bindRun("fixture-model");
+        const agent = createAgent({
+          model,
+          responseFormat: toolStrategy(TestSchema),
+        });
+        const result = await agent.invoke({
+          messages: [new HumanMessage("Review the evidence")],
+        });
+        expect(result.structuredResponse).toEqual({
+          score: 0.8,
+          label: "review",
+        });
+      }
+    );
     expect(requests).toHaveLength(2);
-    for (const request of requests) expect(request).toMatchObject({ model: "fixture-model", toolChoice: "required" });
-    expect(JSON.stringify(requests[1])).toContain("Failed to parse structured output");
+    for (const request of requests)
+      expect(request).toMatchObject({
+        model: "fixture-model",
+        toolChoice: "required",
+      });
+    expect(JSON.stringify(requests[1])).toContain(
+      "Failed to parse structured output"
+    );
   });
 
   it("rejects an empty completion and lets maintained retry recover without replaying tools", async () => {
     const { createAgent, modelRetryMiddleware } = await import("langchain");
-    const { InvalidCompletionError } = await import("../../src/runtime/cogni/completion-adapter");
+    const { InvalidCompletionError } = await import(
+      "../../src/runtime/cogni/completion-adapter"
+    );
     let calls = 0;
-    await runWithCogniExecContext({ tokenSink: { push: () => {} }, toolExecFn: async () => { throw new Error("no tools expected"); },
-      completionFn: () => ({ stream: (async function* () {})(), final: Promise.resolve({ ok: true, content: ++calls === 1 ? "" : "Evidence reviewed", finishReason: "stop" }) }),
-    }, async () => {
-      const agent = createAgent({ model: new CogniCompletionAdapter().bindRun("fixture-model", undefined, true),
-        middleware: [modelRetryMiddleware({ maxRetries: 1, initialDelayMs: 0, jitter: false, onFailure: "error", retryOn: (error) => error instanceof InvalidCompletionError })],
-      });
-      expect((await agent.invoke({ messages: [new HumanMessage("Review")] })).messages.at(-1)?.content).toBe("Evidence reviewed");
-    });
+    await runWithCogniExecContext(
+      {
+        tokenSink: { push: () => {} },
+        toolExecFn: async () => {
+          throw new Error("no tools expected");
+        },
+        completionFn: () => ({
+          stream: (async function* () {})(),
+          final: Promise.resolve({
+            ok: true,
+            content: ++calls === 1 ? "" : "Evidence reviewed",
+            finishReason: "stop",
+          }),
+        }),
+      },
+      async () => {
+        const agent = createAgent({
+          model: new CogniCompletionAdapter().bindRun(
+            "fixture-model",
+            undefined,
+            true
+          ),
+          middleware: [
+            modelRetryMiddleware({
+              maxRetries: 1,
+              initialDelayMs: 0,
+              jitter: false,
+              onFailure: "error",
+              retryOn: (error) => error instanceof InvalidCompletionError,
+            }),
+          ],
+        });
+        expect(
+          (
+            await agent.invoke({ messages: [new HumanMessage("Review")] })
+          ).messages.at(-1)?.content
+        ).toBe("Evidence reviewed");
+      }
+    );
     expect(calls).toBe(2);
   });
 
@@ -159,20 +226,53 @@ describe("billed BaseChatModel compatibility", () => {
     const signal = new AbortController().signal;
     const requests: unknown[] = [];
     const events: AiEvent[] = [];
-    await runWithCogniExecContext({ tokenSink: { push: (event) => { events.push(event); } }, toolExecFn: async () => ({ ok: true, value: {} }),
-      completionFn: (request) => {
-        requests.push(request);
-        return { stream: (async function* () { yield { type: "text_delta" as const, delta: "summary" }; })(), final: Promise.resolve({ ok: true, content: "summary", usage: { promptTokens: 20, completionTokens: 3 }, finishReason: "stop" }) };
+    await runWithCogniExecContext(
+      {
+        tokenSink: {
+          push: (event) => {
+            events.push(event);
+          },
+        },
+        toolExecFn: async () => ({ ok: true, value: {} }),
+        completionFn: (request) => {
+          requests.push(request);
+          return {
+            stream: (async function* () {
+              yield { type: "text_delta" as const, delta: "summary" };
+            })(),
+            final: Promise.resolve({
+              ok: true,
+              content: "summary",
+              usage: { promptTokens: 20, completionTokens: 3 },
+              finishReason: "stop",
+            }),
+          };
+        },
       },
-    }, async () => {
-      const adapter = new CogniCompletionAdapter().bindRun("same-billed-model", signal);
-      const summary = await adapter.invoke([new HumanMessage("Summarize")]);
-      expect(summary.usage_metadata).toEqual({ input_tokens: 20, output_tokens: 3, total_tokens: 23 });
-      expect(summary.response_metadata.finish_reason).toBe("stop");
-      await expect(adapter.invoke("bad model", { configurable: { model: "another-model" } })).rejects.toThrow("bound_model_mismatch");
-    });
+      async () => {
+        const adapter = new CogniCompletionAdapter().bindRun(
+          "same-billed-model",
+          signal
+        );
+        const summary = await adapter.invoke([new HumanMessage("Summarize")]);
+        expect(summary.usage_metadata).toEqual({
+          input_tokens: 20,
+          output_tokens: 3,
+          total_tokens: 23,
+        });
+        expect(summary.response_metadata.finish_reason).toBe("stop");
+        await expect(
+          adapter.invoke("bad model", {
+            configurable: { model: "another-model" },
+          })
+        ).rejects.toThrow("bound_model_mismatch");
+      }
+    );
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({ model: "same-billed-model", abortSignal: signal });
+    expect(requests[0]).toMatchObject({
+      model: "same-billed-model",
+      abortSignal: signal,
+    });
     expect(events).toEqual([{ type: "text_delta", delta: "summary" }]);
   });
 });

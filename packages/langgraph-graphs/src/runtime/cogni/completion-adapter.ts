@@ -22,8 +22,15 @@ import {
   AiExecutionError,
   isAiExecutionErrorCode,
 } from "@cogni/ai-core";
-import type { BaseLanguageModelInput, StructuredOutputMethodOptions } from "@langchain/core/language_models/base";
-import { BaseChatModel, type BaseChatModelCallOptions, type BindToolsInput } from "@langchain/core/language_models/chat_models";
+import type {
+  BaseLanguageModelInput,
+  StructuredOutputMethodOptions,
+} from "@langchain/core/language_models/base";
+import {
+  BaseChatModel,
+  type BaseChatModelCallOptions,
+  type BindToolsInput,
+} from "@langchain/core/language_models/chat_models";
 import type { BaseMessage } from "@langchain/core/messages";
 import type { ChatResult } from "@langchain/core/outputs";
 import type { SerializableSchema } from "@langchain/core/utils/standard_schema";
@@ -57,10 +64,17 @@ export type CompletionFn<TTool = unknown> = (params: {
   final: Promise<CompletionResult>;
 };
 
-export type CompletionToolChoice = "auto" | "none" | "required" | { readonly type: "function"; readonly function: { readonly name: string } };
+export type CompletionToolChoice =
+  | "auto"
+  | "none"
+  | "required"
+  | { readonly type: "function"; readonly function: { readonly name: string } };
 
 export class InvalidCompletionError extends Error {
-  constructor() { super("empty_model_completion"); this.name = "InvalidCompletionError"; }
+  constructor() {
+    super("empty_model_completion");
+    this.name = "InvalidCompletionError";
+  }
 }
 
 /**
@@ -131,8 +145,12 @@ export class CogniCompletionAdapter extends BaseChatModel {
   lc_namespace = ["cogni", "langgraph"];
   // Trusted harness-profile identity; the actual billed model is binding.model.
   readonly modelName = "cogni:read-only-v0";
-  static lc_name(): string { return "CogniCompletionAdapter"; }
-  _llmType(): string { return "cogni_completion"; }
+  static lc_name(): string {
+    return "CogniCompletionAdapter";
+  }
+  _llmType(): string {
+    return "cogni_completion";
+  }
   constructor(binding: CogniCompletionAdapterConfig = {}) {
     super({ disableStreaming: true });
     this.binding = binding;
@@ -142,54 +160,106 @@ export class CogniCompletionAdapter extends BaseChatModel {
   bindRun(model: string, signal?: AbortSignal, rejectEmpty = false) {
     if (this.binding.model && this.binding.model !== model)
       throw new Error("bound_model_mismatch");
-    return new CogniCompletionAdapter({ ...this.binding, model,
-      ...(signal ? { signal } : {}), rejectEmpty });
+    return new CogniCompletionAdapter({
+      ...this.binding,
+      model,
+      ...(signal ? { signal } : {}),
+      rejectEmpty,
+    });
   }
 
-  override async invoke(input: BaseLanguageModelInput, config?: CogniCompletionConfig): Promise<AIMessageChunk> {
+  override async invoke(
+    input: BaseLanguageModelInput,
+    config?: CogniCompletionConfig
+  ): Promise<AIMessageChunk> {
     const model = config?.configurable?.model ?? this.binding.model;
-    if (!model) throw new Error("[CogniCompletionAdapter] config.configurable.model is required.");
-    if (this.binding.model && model !== this.binding.model) throw new Error("bound_model_mismatch");
-    if (!this.binding.model) return this.bindRun(model, config?.signal).invoke(input, config);
+    if (!model)
+      throw new Error(
+        "[CogniCompletionAdapter] config.configurable.model is required."
+      );
+    if (this.binding.model && model !== this.binding.model)
+      throw new Error("bound_model_mismatch");
+    if (!this.binding.model)
+      return this.bindRun(model, config?.signal).invoke(input, config);
     return super.invoke(input, config);
   }
 
-  async _generate(messages: BaseMessage[], options: BaseChatModelCallOptions): Promise<ChatResult> {
+  async _generate(
+    messages: BaseMessage[],
+    options: BaseChatModelCallOptions
+  ): Promise<ChatResult> {
     const model = this.binding.model;
     if (!model) throw new Error("bound_model_required");
     const { completionFn, tokenSink } = getCogniExecContext();
     const { stream, final } = completionFn({
-      messages: messages.map(fromBaseMessage), model,
-      ...(this.binding.signal || options.signal ? { abortSignal: this.binding.signal ?? options.signal } : {}),
-      ...(this.binding.boundTools?.length ? { tools: this.binding.boundTools } : {}),
-      ...(this.binding.toolChoice ? { toolChoice: this.binding.toolChoice } : {}),
+      messages: messages.map(fromBaseMessage),
+      model,
+      ...(this.binding.signal || options.signal
+        ? { abortSignal: this.binding.signal ?? options.signal }
+        : {}),
+      ...(this.binding.boundTools?.length
+        ? { tools: this.binding.boundTools }
+        : {}),
+      ...(this.binding.toolChoice
+        ? { toolChoice: this.binding.toolChoice }
+        : {}),
     });
     const guarded = final.catch(() => undefined);
-    try { for await (const event of stream) tokenSink.push(event); }
-    finally { await guarded; }
+    try {
+      for await (const event of stream) tokenSink.push(event);
+    } finally {
+      await guarded;
+    }
     const result = await final;
     if (!result.ok) {
-      const code = result.error && isAiExecutionErrorCode(result.error) ? result.error : "internal";
+      const code =
+        result.error && isAiExecutionErrorCode(result.error)
+          ? result.error
+          : "internal";
       throw new AiExecutionError(code, `Completion failed: ${code}`);
     }
     // Usage has already traversed the normal sink before this retryable classification.
-    if (this.binding.rejectEmpty && !result.content?.trim() && !result.toolCalls?.length)
+    if (
+      this.binding.rejectEmpty &&
+      !result.content?.trim() &&
+      !result.toolCalls?.length
+    )
       throw new InvalidCompletionError();
     const message = new AIMessageChunk({
       content: result.content ?? "",
       response_metadata: { finish_reason: result.finishReason },
-      ...(result.usage ? { usage_metadata: {
-        input_tokens: result.usage.promptTokens,
-        output_tokens: result.usage.completionTokens,
-        total_tokens: result.usage.promptTokens + result.usage.completionTokens,
-      } } : {}),
+      ...(result.usage
+        ? {
+            usage_metadata: {
+              input_tokens: result.usage.promptTokens,
+              output_tokens: result.usage.completionTokens,
+              total_tokens:
+                result.usage.promptTokens + result.usage.completionTokens,
+            },
+          }
+        : {}),
       tool_calls: result.toolCalls?.map((tc, i) => {
-        if (!tc.function?.name) throw new Error(`missing toolCall function.name at index ${i}`);
-        return { id: tc.id, name: tc.function.name,
-          args: JSON.parse(tc.function.arguments || "{}") as Record<string, unknown>, type: "tool_call" as const };
+        if (!tc.function?.name)
+          throw new Error(`missing toolCall function.name at index ${i}`);
+        return {
+          id: tc.id,
+          name: tc.function.name,
+          args: JSON.parse(tc.function.arguments || "{}") as Record<
+            string,
+            unknown
+          >,
+          type: "tool_call" as const,
+        };
       }),
     });
-    return { generations: [{ text: typeof message.content === "string" ? message.content : "", message }] };
+    return {
+      generations: [
+        {
+          text: typeof message.content === "string" ? message.content : "",
+          message,
+        },
+      ],
+    };
   }
 
   /**
@@ -207,24 +277,40 @@ export class CogniCompletionAdapter extends BaseChatModel {
    * @param schema - Zod schema or JSON Schema object
    * @param _options - StructuredOutputMethodOptions (name, method, includeRaw, strict)
    */
-  override withStructuredOutput<RunOutput extends Record<string, unknown> = Record<string, unknown>>(
-    schema: SerializableSchema<RunOutput> | InteropZodType<RunOutput> | Record<string, unknown>,
+  override withStructuredOutput<
+    RunOutput extends Record<string, unknown> = Record<string, unknown>,
+  >(
+    schema:
+      | SerializableSchema<RunOutput>
+      | InteropZodType<RunOutput>
+      | Record<string, unknown>,
     options?: StructuredOutputMethodOptions<false>
   ): Runnable<BaseLanguageModelInput, RunOutput>;
-  override withStructuredOutput<RunOutput extends Record<string, unknown> = Record<string, unknown>>(
-    schema: SerializableSchema<RunOutput> | InteropZodType<RunOutput> | Record<string, unknown>,
+  override withStructuredOutput<
+    RunOutput extends Record<string, unknown> = Record<string, unknown>,
+  >(
+    schema:
+      | SerializableSchema<RunOutput>
+      | InteropZodType<RunOutput>
+      | Record<string, unknown>,
     options?: StructuredOutputMethodOptions<true>
   ): Runnable<BaseLanguageModelInput, { raw: BaseMessage; parsed: RunOutput }>;
-  override withStructuredOutput<RunOutput extends Record<string, unknown> = Record<string, unknown>>(
-    schema: SerializableSchema<RunOutput> | InteropZodType<RunOutput> | Record<string, unknown>,
+  override withStructuredOutput<
+    RunOutput extends Record<string, unknown> = Record<string, unknown>,
+  >(
+    schema:
+      | SerializableSchema<RunOutput>
+      | InteropZodType<RunOutput>
+      | Record<string, unknown>,
     options?: StructuredOutputMethodOptions<boolean>
-  ): Runnable<BaseLanguageModelInput, RunOutput | { raw: BaseMessage; parsed: RunOutput }> {
+  ): Runnable<
+    BaseLanguageModelInput,
+    RunOutput | { raw: BaseMessage; parsed: RunOutput }
+  > {
     return RunnableLambda.from(
-      async (
-        input: BaseLanguageModelInput,
-        config?: RunnableConfig
-      ) => {
-        const messages = BaseChatModel._convertInputToPromptValue(input).toChatMessages();
+      async (input: BaseLanguageModelInput, config?: RunnableConfig) => {
+        const messages =
+          BaseChatModel._convertInputToPromptValue(input).toChatMessages();
         // Prepend system instruction for JSON output
         const augmented = [
           new SystemMessage({
@@ -276,9 +362,16 @@ export class CogniCompletionAdapter extends BaseChatModel {
           parsed = schema.parse(parsed) as RunOutput;
         }
 
-        if ("~standard" in schema && schema["~standard"] && typeof schema["~standard"] === "object" && "validate" in schema["~standard"] && typeof schema["~standard"].validate === "function") {
+        if (
+          "~standard" in schema &&
+          schema["~standard"] &&
+          typeof schema["~standard"] === "object" &&
+          "validate" in schema["~standard"] &&
+          typeof schema["~standard"].validate === "function"
+        ) {
           const validation = await schema["~standard"].validate(parsed);
-          if (validation.issues) throw new Error("structured_output_schema_invalid");
+          if (validation.issues)
+            throw new Error("structured_output_schema_invalid");
           parsed = validation.value as RunOutput;
         }
         return options?.includeRaw ? { raw: aiMessage, parsed } : parsed;
@@ -292,19 +385,29 @@ export class CogniCompletionAdapter extends BaseChatModel {
    *
    * Per #35/#37: model is NOT captured here — always read from configurable in invoke().
    */
-  override bindTools(tools: BindToolsInput[], kwargs?: Partial<BaseChatModelCallOptions>): CogniCompletionAdapter {
+  override bindTools(
+    tools: BindToolsInput[],
+    kwargs?: Partial<BaseChatModelCallOptions>
+  ): CogniCompletionAdapter {
     const choice = kwargs?.tool_choice;
     let toolChoice: CompletionToolChoice | undefined;
     if (choice === "any" || choice === "required") toolChoice = "required";
     else if (choice === "auto" || choice === "none") toolChoice = choice;
-    else if (typeof choice === "string") toolChoice = { type: "function", function: { name: choice } };
+    else if (typeof choice === "string")
+      toolChoice = { type: "function", function: { name: choice } };
     else if (choice && typeof choice === "object" && "function" in choice) {
       const fn = choice.function;
-      if (fn && typeof fn === "object" && "name" in fn && typeof fn.name === "string")
+      if (
+        fn &&
+        typeof fn === "object" &&
+        "name" in fn &&
+        typeof fn.name === "string"
+      )
         toolChoice = { type: "function", function: { name: fn.name } };
       else throw new Error("unsupported_tool_choice");
     } else if (choice !== undefined) throw new Error("unsupported_tool_choice");
-    return new CogniCompletionAdapter({ ...this.binding,
+    return new CogniCompletionAdapter({
+      ...this.binding,
       boundTools: tools.map((tool) => convertToOpenAITool(tool)),
       ...(toolChoice ? { toolChoice } : {}),
     });
