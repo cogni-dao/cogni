@@ -124,7 +124,7 @@ await Promise.all([
     if (!result.data?.length) throw new Error("Empty model catalog");
     return { modelCount: result.data.length };
   }),
-  check("Studio Cogni discovery", async () => {
+  check("Studio graph discovery", async () => {
     const info = await request(langgraph, "/info");
     const assistants = await request(
       langgraph,
@@ -132,18 +132,53 @@ await Promise.all([
       {},
       { limit: 100 }
     );
-    if (!assistants.some((assistant) => assistant.graph_id === "cogni")) {
-      throw new Error("Cogni is not registered");
-    }
-    return { version: info.version, langsmith: info.flags?.langsmith === true };
+    const graphs = [
+      ...new Set(
+        assistants.map((assistant) => assistant.graph_id).filter(Boolean)
+      ),
+    ];
+    if (graphs.length === 0) throw new Error("No graph registered");
+    return {
+      version: info.version,
+      langsmith: info.flags?.langsmith === true,
+      graphs,
+    };
   }),
-  check("authenticated node Cogni discovery", async () => {
+  check("authenticated node graph discovery", async () => {
     if (!apiKey) throw new Error("Local identity required");
-    const result = await request(app, "/api/v1/ai/agents", appHeaders);
-    if (!result.agents?.some((agent) => agent.agentId === "langgraph:cogni")) {
-      throw new Error("Cogni is not registered");
+    // Portable across nodes: do not assume a graph name. Assert the authenticated
+    // registry exposes at least one LangGraph agent, and that every graph the local
+    // Studio serves is exposed by the node registry (studio <-> app parity).
+    const [registry, assistants] = await Promise.all([
+      request(app, "/api/v1/ai/agents", appHeaders),
+      request(langgraph, "/assistants/search", {}, { limit: 100 }),
+    ]);
+    const exposed = new Set(
+      (registry.agents ?? []).map((agent) => agent.agentId)
+    );
+    const langgraphAgents = [...exposed].filter((id) =>
+      id.startsWith("langgraph:")
+    );
+    if (langgraphAgents.length === 0) {
+      throw new Error("No LangGraph agent exposed");
     }
-    return {};
+    const studioGraphs = [
+      ...new Set(
+        assistants.map((assistant) => assistant.graph_id).filter(Boolean)
+      ),
+    ];
+    const missing = studioGraphs.filter(
+      (graph) => !exposed.has(`langgraph:${graph}`)
+    );
+    if (missing.length) {
+      throw new Error(
+        `Studio graphs not exposed by node: ${missing.join(", ")}`
+      );
+    }
+    return {
+      exposedLanggraphAgents: langgraphAgents.length,
+      studioGraphs: studioGraphs.length,
+    };
   }),
   check("authenticated knowledge body", async () => {
     if (!apiKey) throw new Error("Local identity required");
