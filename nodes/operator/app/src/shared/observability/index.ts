@@ -25,6 +25,8 @@ export const EVENT_NAMES = {
   // PRE-PROD lane can dispatch a PRODUCTION promote (the custodian owns the lane's substrate),
   // so this name is how that is found in Loki — never a mystery deploy.
   LANE_ONBOARD_COMPLETE: "feature.lane_onboard.complete",
+  DEPLOY_MAINTENANCE_CANCEL_COMPLETE: "deploy.maintenance_cancel_complete",
+  DEPLOY_MAINTENANCE_CANCEL_REFUSED: "deploy.maintenance_cancel_refused",
   DEPLOY_INFRA_RECONCILE_COMPLETE: "deploy.infra_reconcile.complete",
   NODE_SCHEDULES_SYNC_COMPLETE: "feature.node_schedules_sync.complete",
   NODE_RELIABILITY_STATUS_COMPLETE: "feature.node_reliability_status.complete",
