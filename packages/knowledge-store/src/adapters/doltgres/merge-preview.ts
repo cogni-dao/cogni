@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `knowledge-store/adapters/doltgres/merge-preview`
+ * Module: `@cogni/knowledge-store/adapters/doltgres/merge-preview`
  * Purpose: Inspect native conflicts for a pinned committed pair rather than infer from displayed fields.
- * Scope: SQL protocol on an already-admitted connection; no capacity or mutation mechanism.
+ * Scope: SQL protocol on an already-admitted connection. Does not own capacity or mutations.
  * Invariants: Fail closed; no merge, DML, commit, reset or branch creation; metadata follows main.
  * Side-effects: IO (native reads and session-local checkout only)
  * Links: https://cognidao.org/work/items/spike.5016, https://cognidao.org/work/items/story.5029

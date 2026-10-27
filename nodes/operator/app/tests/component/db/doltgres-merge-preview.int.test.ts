@@ -2,11 +2,11 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `tests/component/db/doltgres-merge-preview`
+ * Module: `@tests/component/db/doltgres-merge-preview`
  * Purpose: Prove native conflict checks, fresh metadata and retained session ownership on the qualified engine.
- * Scope: Ephemeral minimal Dolt schema plus real adapter/executor; no production access or mocked database.
+ * Scope: Ephemeral minimal Dolt schema plus real adapter/executor. Does not access production or mock a database.
  * Invariants: Hidden fields can conflict; clean checks change no refs; timeout never replaces native capacity.
- * Side-effects: Docker, test-only schema/data/branches, native SQL and timers
+ * Side-effects: IO (Docker container, test database schema, native SQL), time (timers)
  * Links: https://cognidao.org/work/items/spike.5016
  * @internal
  */
@@ -152,11 +152,16 @@ describe("qualified native contribution preview", () => {
     const before = await refsAndState();
     const result = await adapter.previewMerge(conflictId);
     expect(result.status).toBe("conflicted");
-    expect(
-      result.conflicts.some(
-        (r) => r.table === "knowledge" && r.dataConflicts === "1"
-      )
-    ).toBe(true);
+    // Doltgres keeps the PostgreSQL schema in TableName.String(); the native
+    // summary returns public.knowledge rather than an unqualified table name.
+    expect(result.conflicts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          table: "public.knowledge",
+          dataConflicts: "1",
+        }),
+      ])
+    );
     expect(await refsAndState()).toEqual(before);
   });
 
@@ -173,9 +178,11 @@ describe("qualified native contribution preview", () => {
   it("retains a late native query, serves ordinary reads, then admits a queued mutation", async () => {
     // This real server function does not honor PostgreSQL cancellation. Its
     // running query outlives the caller's1s budget on the SAME native owner.
+    let heldKeys: readonly string[] = [];
     const slow = writer.run(
       "test.preview_late_native",
-      async (conn, _guard, owner) => {
+      async (conn, guard, owner) => {
+        heldKeys = guard.keys;
         owner.registerReconciliation(
           async () => !(await conn.unsafe("SELECT * FROM dolt.status")).length
         );
@@ -188,14 +195,34 @@ describe("qualified native contribution preview", () => {
       "SELECT pid,query,state FROM pg_catalog.pg_stat_activity"
     );
     expect(
-      activity.some(
+      activity.filter(
         (r) => String(r.query).includes("pg_sleep(2)") && r.state === "active"
       )
-    ).toBe(true);
+    ).toHaveLength(1);
+    expect(heldKeys.length).toBeGreaterThan(0);
+    for (const key of heldKeys) {
+      expect(key).toMatch(/^-?[0-9]+$/);
+      expect(
+        (
+          await setup.unsafe(`SELECT pg_try_advisory_lock(${key}) AS acquired`)
+        )[0]?.acquired
+      ).toBe(false);
+    }
     expect((await adapter.previewMerge(cleanId)).status).toBe("unavailable");
+    const readStartedAt = performance.now();
     expect(
       (await reader.unsafe("SELECT COUNT(*) AS n FROM knowledge"))[0]
     ).toBeDefined();
+    expect(performance.now() - readStartedAt).toBeLessThan(400);
+    expect(
+      (
+        await setup.unsafe(
+          "SELECT query,state FROM pg_catalog.pg_stat_activity"
+        )
+      ).filter(
+        (r) => String(r.query).includes("pg_sleep(2)") && r.state === "active"
+      )
+    ).toHaveLength(1);
     expect(writer.client).toBe(branch);
     // Polling the product operation is bounded; unavailable retains capacity.
     const deadline = Date.now() + 5000;
@@ -205,12 +232,54 @@ describe("qualified native contribution preview", () => {
       status = (await adapter.previewMerge(cleanId)).status;
     }
     expect(status).toBe("clean");
-    // The next normal mutation uses the same shared owner after settlement.
-    await adapter.close({
-      contributionId: conflictId,
-      principal: { id: "preview-test", kind: "agent" },
-      reason: "native fixture cleanup",
-    });
+    for (const key of heldKeys) {
+      expect(
+        (
+          await setup.unsafe(`SELECT pg_try_advisory_lock(${key}) AS acquired`)
+        )[0]?.acquired
+      ).toBe(true);
+      await setup.unsafe(`SELECT pg_advisory_unlock(${key})`);
+    }
+    // Hold a known, non-timed-out native read on that same owner; start an
+    // actual contribution mutation while it owns the session and native lock.
+    const barrier = writer.run(
+      "test.queued_after_preview",
+      async (conn, _guard, owner) => {
+        owner.registerReconciliation(
+          async () => !(await conn.unsafe("SELECT * FROM dolt.status")).length
+        );
+        await conn.unsafe("SELECT pg_sleep(0.5)");
+      },
+      { awaitSettlement: true }
+    );
+    const startedDeadline = Date.now() + 3000;
+    while (
+      !(
+        await setup.unsafe(
+          "SELECT query,state FROM pg_catalog.pg_stat_activity"
+        )
+      ).some(
+        (r) => String(r.query).includes("pg_sleep(0.5)") && r.state === "active"
+      )
+    ) {
+      if (Date.now() > startedDeadline)
+        throw new Error("queued-read fixture did not start");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    let mutationSettled = false;
+    const mutation = adapter
+      .close({
+        contributionId: conflictId,
+        principal: { id: "preview-test", kind: "agent" },
+        reason: "native fixture cleanup",
+      })
+      .finally(() => {
+        mutationSettled = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mutationSettled).toBe(false);
+    await barrier;
+    await mutation;
     await setup.unsafe("SELECT dolt_checkout('main')");
     expect(
       (

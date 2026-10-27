@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `app/api/v1/knowledge/contributions/[id]/merge-check/route`
+ * Module: `@app/api/v1/knowledge/contributions/[id]/merge-check/route`
  * Purpose: Explicit native conflict diagnostic for an authenticated reviewer.
- * Scope: Thin operator route; no mutation or merge permission is conferred.
+ * Scope: Thin operator route. Does not mutate data or confer merge permission.
  * Invariants: VALIDATE_IO; no caching; caller cannot choose SQL, refs or tables.
  * Side-effects: IO (HTTP and admitted native reads/session checkout)
  * Links: https://cognidao.org/work/items/spike.5016

@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `knowledge-store/tests/contribution-merge-preview`
+ * Module: `@cogni/knowledge-store/tests/contribution-merge-preview`
  * Purpose: Check native-preview result policy through the public adapter method.
- * Scope: Unit doubles only; native execution and session lifetime require component proof.
+ * Scope: Unit doubles only. Does not prove native execution or session lifetime.
  * Invariants: Displayed diffs never establish mergeability; errors never become clean.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/spike.5016
