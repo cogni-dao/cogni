@@ -19,6 +19,7 @@
 import {
   ContributionCommitRecordSchema,
   ContributionDiffEntrySchema,
+  ContributionMergePreviewSchema,
   ContributionRecordSchema,
   KnowledgeContributionEditSchema,
 } from "@cogni/knowledge-store/contribution-schemas";
@@ -100,4 +101,11 @@ export const ContributionMergeResponseSchema = z.object({
 });
 export type ContributionMergeResponse = z.infer<
   typeof ContributionMergeResponseSchema
+>;
+
+export const ContributionMergeCheckRequestSchema = z.strictObject({});
+export const ContributionMergeCheckResponseSchema =
+  ContributionMergePreviewSchema;
+export type ContributionMergeCheckResponse = z.infer<
+  typeof ContributionMergeCheckResponseSchema
 >;

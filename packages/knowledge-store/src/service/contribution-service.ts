@@ -14,6 +14,7 @@
 import type {
   ContributionCommitRecord,
   ContributionDiffEntry,
+  ContributionMergePreview,
   ContributionRecord,
   ContributionState,
   KnowledgeContributionEdit,
@@ -127,6 +128,7 @@ export interface ContributionService {
   getById(contributionId: string): Promise<ContributionRecord | null>;
   listCommits(contributionId: string): Promise<ContributionCommitRecord[]>;
   diff(contributionId: string): Promise<ContributionDiffEntry[]>;
+  previewMerge(contributionId: string): Promise<ContributionMergePreview>;
   merge(args: {
     principal: Principal;
     contributionId: string;
@@ -209,6 +211,18 @@ export function createContributionService(
   }
 
   return {
+    async previewMerge(contributionId) {
+      if (deps.port.previewMerge) return deps.port.previewMerge(contributionId);
+      return {
+        contributionId,
+        status: "unavailable",
+        mainCommit: null,
+        contributionCommit: null,
+        checkedAt: new Date().toISOString(),
+        reason: "native_unavailable",
+        conflicts: [],
+      };
+    },
     async create({ principal, body }) {
       const replayed = await idempotencyReplay(principal, body.idempotencyKey);
       if (replayed) return replayed;
