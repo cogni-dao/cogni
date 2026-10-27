@@ -17,8 +17,7 @@ import {
   type AuthzDecision,
   authzNodeResource,
 } from "@cogni/authorization-core";
-import { GitHubVcsAdapter } from "@/adapters/server";
-import { getExecutionScope } from "@/adapters/server/ai/execution-scope";
+import { GitHubVcsAdapter, getExecutionScope } from "@/adapters/server";
 
 export function createNodeCodeCapability(deps: {
   getAuthorization?: () => AuthorizationPort | undefined;

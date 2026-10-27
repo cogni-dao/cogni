@@ -12,7 +12,7 @@
  */
 import type { KnowledgeContributionReadCapability } from "@cogni/ai-tools";
 import type { ContributionService } from "@cogni/knowledge-store";
-import { getExecutionScope } from "@/adapters/server/ai/execution-scope";
+import { getExecutionScope } from "@/adapters/server";
 
 export function createKnowledgeContributionReadCapability(deps: {
   nodeId: string;

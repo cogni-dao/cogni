@@ -41,10 +41,8 @@ vi.mock("@octokit/core", () => ({
     request = apiCalls;
   },
 }));
-vi.mock("@/adapters/server/ai/execution-scope", () => ({
-  getExecutionScope: () => scope,
-}));
 vi.mock("@/adapters/server", () => ({
+  getExecutionScope: () => scope,
   GitHubVcsAdapter: class {
     nodeCodeReader() {
       return { read: boundRead, list: boundRead };
