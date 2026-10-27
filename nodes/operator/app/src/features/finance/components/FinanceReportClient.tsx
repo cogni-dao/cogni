@@ -12,7 +12,10 @@
  */
 "use client";
 
-import { StewardWithdrawalRejected } from "@cogni/money-plane";
+import {
+  readStewardWithdrawal,
+  StewardWithdrawalRejected,
+} from "@cogni/money-plane";
 import { type FinanceActions, FinanceReport } from "@cogni/money-plane/react";
 import { useRouter } from "next/navigation";
 import {
@@ -35,7 +38,8 @@ export const STEWARD_WITHDRAWAL_TIMEOUT_MS = 20_000;
 
 /**
  * POST the amount-only steward withdrawal.
- * - Refusals that are pre-broadcast by construction — 400 (invalid body), 403 (not the steward), 503 with an
+ * - A valid transaction hash always survives; HTTP errors or missing receipt status stay pending.
+ * - Without a hash, refusals that are pre-broadcast by construction — 400 (invalid body), 403 (not the steward), 503 with an
  *   `*_UNCONFIGURED` code — throw `StewardWithdrawalRejected` (nothing was sent; retry allowed).
  * - Everything else (422, 5xx, non-JSON body, timeout, transport failure) is an unknown outcome: plain Error carrying
  *   the server's `detail` when present; the control locks until a human checks the wallet (NO_BLIND_RETRY).
@@ -54,8 +58,6 @@ export async function fundSteward(
     signal: AbortSignal.timeout(STEWARD_WITHDRAWAL_TIMEOUT_MS),
   });
   let data: {
-    txHash?: string;
-    receiptStatus?: "success" | "reverted" | "pending";
     error?: string;
     detail?: string;
     code?: string;
@@ -65,18 +67,12 @@ export async function fundSteward(
   } catch {
     throw new Error(`Response unreadable (HTTP ${res.status})`);
   }
-  if (res.ok) {
-    if (
-      !data ||
-      typeof data.txHash !== "string" ||
-      !/^0x[0-9a-fA-F]{64}$/.test(data.txHash) ||
-      (data.receiptStatus !== "success" &&
-        data.receiptStatus !== "reverted" &&
-        data.receiptStatus !== "pending")
-    )
-      throw new Error("Withdrawal result incomplete");
-    return { txHash: data.txHash, receiptStatus: data.receiptStatus };
-  }
+  // A known broadcast hash wins over HTTP/refusal labels. Preserve its evidence
+  // and retry lock even when the response cannot establish receipt status.
+  const outcome = readStewardWithdrawal(data);
+  if (outcome)
+    return res.ok ? outcome : { ...outcome, receiptStatus: "pending" };
+  if (res.ok) throw new Error("Withdrawal result incomplete");
   const reason = data.detail ?? data.error ?? data.code ?? `HTTP ${res.status}`;
   const preBroadcast =
     res.status === 400 ||

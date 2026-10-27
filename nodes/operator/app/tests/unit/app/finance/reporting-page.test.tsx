@@ -334,10 +334,10 @@ describe("Financials reporting", () => {
       )
     ).toBeVisible();
     expect(
-      within(dialog).getByText("5.79 USD credit (5,790,000 uact)")
+      within(dialog).getByText("5.79 USD credit (5790000 uact)")
     ).toBeVisible();
     expect(
-      within(dialog).getByText("2.10 USD credit (2,100,000 uact)")
+      within(dialog).getByText("2.10 USD credit (2100000 uact)")
     ).toBeVisible();
   });
   it("shows native exact amounts and the conversion in the Line dialog, closes with Escape and restores focus", async () => {
@@ -368,9 +368,7 @@ describe("Financials reporting", () => {
   });
   it.each([
     {},
-    { txHash: `0x${"a".repeat(64)}` },
     { txHash: "0xshort", receiptStatus: "success" },
-    { txHash: `0x${"a".repeat(64)}`, receiptStatus: "unknown" },
     { txHash: null, receiptStatus: "pending" },
   ])("keeps malformed withdrawal success unknown: %j", async (body) => {
     const fetch = vi.fn(async () => ({
@@ -381,6 +379,31 @@ describe("Financials reporting", () => {
     await expect(
       fundSteward(1, fetch as unknown as typeof globalThis.fetch)
     ).rejects.toThrow("Withdrawal result incomplete");
+  });
+  it.each([
+    { status: 200, receiptStatus: undefined },
+    { status: 200, receiptStatus: "invalid" },
+    { status: 400, receiptStatus: "success" },
+    { status: 403, receiptStatus: "success" },
+    { status: 503, receiptStatus: "success" },
+    { status: 502, receiptStatus: "reverted" },
+  ])("preserves a known hash before HTTP $status or receipt classification", async ({
+    status,
+    receiptStatus,
+  }) => {
+    const txHash = `0x${"a".repeat(64)}`;
+    const fetch = vi.fn(async () => ({
+      ok: status === 200,
+      status,
+      json: async () => ({
+        txHash,
+        receiptStatus,
+        code: "STEWARD_UNCONFIGURED",
+      }),
+    }));
+    expect(
+      await fundSteward(1, fetch as unknown as typeof globalThis.fetch)
+    ).toEqual({ txHash, receiptStatus: "pending" });
   });
   it.each([
     "pending",
