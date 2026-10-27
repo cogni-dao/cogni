@@ -62,3 +62,27 @@ dedicated-high-throughput-v1:
     idle_in_transaction_session_timeout_ms: 30000
     temp_file_limit_mib: 128
     work_mem_mib: 16
+
+# bug.5540/subtask.5025: enable cold allocation only; never bootstraps PG.
+# Delivery requires parent-approved spending and qualified native copy/recovery.
+# Console ignores the legacy deposit field and enables automatic top-ups by default.
+# The proposed deposit below is not an enforced escrow or lifetime spend ceiling.
+recovery_profiles:
+  pg15-cold-capacity-v1:
+    enabled: true
+    funding_status: qualified
+    cpu_units: 4
+    memory_mib: 16384
+    ephemeral_size_mib: 1024
+    persistent_size_mib: 204800
+    postgres_major: 15
+    image: postgres:15@sha256:1b92e7a80c021647bf70f5d3eb66066a998e4f5cf43c07bb9dc9f729782cf88e
+    command: [sleep]
+    args: [infinity]
+    volume_name: database
+    mount_path: /var/lib/postgresql/data
+    pgdata: /var/lib/postgresql/data/pgdata
+    volume_tier: nvme
+    pricing_denom: uact
+    max_price_per_block: "100"
+    initial_escrow_usd: "0.5"

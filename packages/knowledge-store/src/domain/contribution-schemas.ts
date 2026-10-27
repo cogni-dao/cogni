@@ -268,3 +268,47 @@ export const ContributionDiffEntrySchema = z.object({
   after: z.record(z.string(), z.unknown()).nullable(),
 });
 export type ContributionDiffEntry = z.infer<typeof ContributionDiffEntrySchema>;
+
+/** A native check of one immutable committed pair, never a future merge guarantee. */
+export const ContributionMergePreviewSchema = z.object({
+  contributionId: z.string(),
+  status: z.enum(["clean", "conflicted", "changed", "unavailable"]),
+  mainCommit: z
+    .string()
+    .regex(/^[0-9a-v]{32}$/)
+    .nullable(),
+  contributionCommit: z
+    .string()
+    .regex(/^[0-9a-v]{32}$/)
+    .nullable(),
+  checkedAt: z.string().datetime(),
+  reason: z
+    .enum([
+      "empty",
+      "not_open",
+      "not_found",
+      "head_changed",
+      "dirty_main",
+      "native_unavailable",
+      "malformed_result",
+    ])
+    .nullable(),
+  conflicts: z
+    .array(
+      z.object({
+        table: z.string().min(1).max(256),
+        dataConflicts: z
+          .string()
+          .regex(/^(0|[1-9][0-9]*)$/)
+          .nullable(),
+        schemaConflicts: z
+          .string()
+          .regex(/^(0|[1-9][0-9]*)$/)
+          .nullable(),
+      })
+    )
+    .max(50),
+});
+export type ContributionMergePreview = z.infer<
+  typeof ContributionMergePreviewSchema
+>;
