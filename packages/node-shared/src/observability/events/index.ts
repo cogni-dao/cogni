@@ -122,6 +122,8 @@ export const EVENT_NAMES = {
   SCHEDULE_CREDIT_GATE_REJECTED: "schedules.credit_gate_rejected",
   SCHEDULE_DETAIL_READ: "schedules.detail_read",
   SCHEDULE_HISTORY_READ: "schedules.history_read",
+  KNOWLEDGE_CONTRIBUTION_CLOSE_COMPLETE:
+    "knowledge.contribution.close.complete",
   KNOWLEDGE_MERGE_CHECK_COMPLETE: "knowledge.merge_check.complete",
   AI_THREAD_READ: "ai.thread_read",
 

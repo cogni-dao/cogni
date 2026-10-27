@@ -65,6 +65,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 - `createContributionService`, `ContributionService`, `ContributionServiceDeps`
 - `ContributionServiceDeps.pushMainOnMerge?: () => Promise<void>` — optional post-merge mirror hook; caller owns error handling (service does not await + does not catch)
+- `close({ expectedHeadCommit? })` compares an explicit nullable reviewed head under the existing native writer before an open close transition; omission preserves existing callers and closed repeats stay idempotent.
 - `previewMerge(id)` uses the optional native port capability; unavailable capability fails closed. It shares admitted native session capacity, while ordinary reads keep their independent pool.
 
 ## Ports

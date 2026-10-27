@@ -4,7 +4,9 @@
 /**
  * Module: `@app/(app)/knowledge/_api/closeContribution`
  * Purpose: Client-side POST to reject (close) a contribution branch without merging.
- * Scope: Cookie-session only — server-side authSource() checks for Bearer header and rejects.
+ * Scope: Same-origin session UI; the service retains author-or-session authority.
+ * Invariants: Guarded review calls verify closed state after every POST attempt;
+ *   uncertain outcomes stop the batch, and omitted options preserve legacy callers.
  * Side-effects: IO; flips knowledge_<node> contribution state to `closed` and deletes its branch.
  * @internal
  */
@@ -29,8 +31,15 @@ function wait(milliseconds: number): Promise<void> {
 
 export async function closeContribution(
   contributionId: string,
-  reason: string
+  reason: string,
+  review?: { expectedHeadCommit: string | null }
 ): Promise<CloseResult> {
+  if (review)
+    return closeReviewedContribution(
+      contributionId,
+      reason,
+      review.expectedHeadCommit
+    );
   for (let attempt = 1; attempt <= MAX_TRANSIENT_ATTEMPTS; attempt += 1) {
     const response = await fetch(
       `/api/v1/knowledge/contributions/${encodeURIComponent(contributionId)}/close`,
@@ -73,4 +82,95 @@ export async function closeContribution(
   }
 
   throw new Error("Failed to reject contribution");
+}
+
+/** Structured guarded-call failures retain the server/transport recovery boundary. */
+export class ReviewedCloseError extends Error {
+  constructor(
+    message: string,
+    readonly status: number | null,
+    readonly code: string,
+    readonly stopBatch: boolean
+  ) {
+    super(message);
+    this.name = "ReviewedCloseError";
+  }
+}
+
+async function closeReviewedContribution(
+  contributionId: string,
+  reason: string,
+  expectedHeadCommit: string | null
+): Promise<CloseResult> {
+  for (let attempt = 1; attempt <= MAX_TRANSIENT_ATTEMPTS; attempt += 1) {
+    let response: Response | undefined;
+    let failure: { error?: string; errorCode?: string; retryable?: boolean } =
+      {};
+    try {
+      response = await fetch(
+        `/api/v1/knowledge/contributions/${encodeURIComponent(contributionId)}/close`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          cache: "no-store",
+          signal: AbortSignal.timeout(30_000),
+          body: JSON.stringify({ reason, expectedHeadCommit }),
+        }
+      );
+      if (!response.ok) failure = await response.json().catch(() => ({}));
+    } catch {
+      // A timeout ends this caller's wait, not the native owner's operation.
+    }
+
+    // Every POST attempt, including 2xx and transport failures, is reconciled.
+    const current = await fetchContribution(
+      contributionId,
+      AbortSignal.timeout(10_000)
+    ).catch(() => null);
+    if (current?.state === "closed") return { contributionId, closed: true };
+    if (!current) {
+      throw new ReviewedCloseError(
+        "Could not verify the close. Reload before trying again.",
+        response?.status ?? null,
+        "close_unverified",
+        true
+      );
+    }
+    if (response?.status === 503 && failure.retryable === true) {
+      if (attempt < MAX_TRANSIENT_ATTEMPTS) {
+        await wait(Math.min(10_000, Math.max(1_000, retryDelayMs(response))));
+        continue;
+      }
+      throw new ReviewedCloseError(
+        "Knowledge writer is busy. Reload and retry.",
+        503,
+        "knowledge_busy",
+        true
+      );
+    }
+    if (response && !response.ok && response.status < 500) {
+      const uncertain =
+        response.status === 409 &&
+        failure.errorCode !== "contribution_head_changed";
+      throw new ReviewedCloseError(
+        failure.error || `Close refused (HTTP ${response.status}).`,
+        response.status,
+        failure.errorCode || "close_refused",
+        uncertain || response.status === 401
+      );
+    }
+    throw new ReviewedCloseError(
+      "Close outcome is unresolved. Reload before trying again.",
+      response?.status ?? null,
+      failure.errorCode || "close_unverified",
+      true
+    );
+  }
+  throw new ReviewedCloseError(
+    "Close was not verified.",
+    null,
+    "close_unverified",
+    true
+  );
 }

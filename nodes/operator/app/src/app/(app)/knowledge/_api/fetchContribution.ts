@@ -13,7 +13,8 @@
 import type { ContributionRecord } from "@cogni/node-contracts";
 
 export async function fetchContribution(
-  id: string
+  id: string,
+  signal?: AbortSignal
 ): Promise<ContributionRecord> {
   const response = await fetch(
     `/api/v1/knowledge/contributions/${encodeURIComponent(id)}`,
@@ -22,6 +23,7 @@ export async function fetchContribution(
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
       cache: "no-store",
+      ...(signal ? { signal } : {}),
     }
   );
   if (!response.ok) {

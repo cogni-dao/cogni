@@ -1,0 +1,389 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@tests/unit/app/knowledge-reviewed-close`
+ * Purpose: Prove reviewed selection, explicit serial writes and authoritative recovery.
+ * Scope: Real panel/fetch helpers with simulated HTTP, not native database proof.
+ * Invariants: NO_WRITE_ON_GET, EXACT_REVIEWED_HEAD, RECONCILE_EVERY_ATTEMPT.
+ * Side-effects: global (stubbed fetch)
+ * @vitest-environment jsdom
+ * @internal
+ */
+
+import type { ContributionRecord } from "@cogni/node-contracts";
+import { ContributionCloseRequestSchema } from "@cogni/node-contracts";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import type { ButtonHTMLAttributes } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  closeContribution,
+  ReviewedCloseError,
+} from "@/app/(app)/knowledge/_api/closeContribution";
+import { parseReviewedClose } from "@/app/(app)/knowledge/_api/reviewedClose";
+import { ReviewedClosePanel } from "@/app/(app)/knowledge/_components/ReviewedClosePanel";
+
+vi.mock("@/components", () => ({
+  Button: ({
+    variant: _variant,
+    ...props
+  }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string }) => (
+    <button {...props} />
+  ),
+}));
+vi.mock("next/link", () => ({
+  default: ({
+    children,
+    href,
+  }: {
+    children: React.ReactNode;
+    href: string;
+  }) => <a href={href}>{children}</a>,
+}));
+
+function record(
+  id: string,
+  head: string | null = "head-1",
+  state: ContributionRecord["state"] = "open"
+): ContributionRecord {
+  return {
+    contributionId: id,
+    headCommit: head,
+    state,
+    message: `Proposal ${id}`,
+    branch: `contrib/${id}`,
+    baseCommit: "base",
+    commitCount: head === null ? 0 : 1,
+    principalId: "author",
+    principalKind: "agent",
+    mergedCommit: null,
+    closedReason: null,
+    idempotencyKey: null,
+    createdAt: "2026-10-27T00:00:00Z",
+    resolvedAt: null,
+    resolvedBy: null,
+  };
+}
+function link(
+  items: { contributionId: string; expectedHeadCommit: string | null }[]
+) {
+  return JSON.stringify({ reason: "Reviewed obsolete proposals", items });
+}
+function network(
+  records: ContributionRecord[],
+  post?: (id: string, body: unknown) => Promise<Response>
+) {
+  const current = new Map(records.map((item) => [item.contributionId, item]));
+  const calls: string[] = [];
+  const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+    const id = decodeURIComponent(url.split("/")[5] ?? "");
+    const method = options?.method ?? "GET";
+    calls.push(`${method} ${id}`);
+    if (method === "POST") {
+      if (post) return post(id, JSON.parse(String(options?.body)));
+      const item = current.get(id);
+      if (item) current.set(id, { ...item, state: "closed" });
+      return Response.json({ contributionId: id, closed: true });
+    }
+    const item = current.get(id);
+    return item
+      ? Response.json(item)
+      : Response.json({ error: "missing" }, { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { current, calls, fetchMock };
+}
+async function clickReady(count: number) {
+  const button = await screen.findByRole("button", {
+    name: `Close ${count} reviewed proposals`,
+  });
+  await waitFor(() =>
+    expect((button as HTMLButtonElement).disabled).toBe(false)
+  );
+  fireEvent.click(button);
+}
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+describe("reviewed close", () => {
+  it("keeps explicit null and omitted API guards distinct", () => {
+    expect(
+      ContributionCloseRequestSchema.parse({
+        reason: "reviewed",
+        expectedHeadCommit: null,
+      })
+    ).toHaveProperty("expectedHeadCommit", null);
+    expect(
+      ContributionCloseRequestSchema.parse({ reason: "legacy" })
+    ).not.toHaveProperty("expectedHeadCommit");
+    expect(
+      ContributionCloseRequestSchema.safeParse({
+        reason: "bad",
+        expectedHeadCommit: "",
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects duplicate, missing-head, unknown-field and oversized review data before reads", () => {
+    const { fetchMock } = network([]);
+    const item = { contributionId: "a", expectedHeadCommit: null };
+    for (const value of [
+      link([item, item]),
+      JSON.stringify({ reason: "r", items: [{ contributionId: "a" }] }),
+      JSON.stringify({ reason: "r", items: [item], extra: true }),
+      "x".repeat(16_385),
+    ]) {
+      expect(() => parseReviewedClose(value)).toThrow();
+    }
+    render(<ReviewedClosePanel value="invalid" />);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Invalid review link"
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("previews real titles, excludes changed/closed records and serially sends exact nullable guards only after click", async () => {
+    const n = network([
+      record("empty", null),
+      record("stale", "new"),
+      record("closed", "head-1", "closed"),
+      record("current"),
+    ]);
+    render(
+      <ReviewedClosePanel
+        value={link([
+          { contributionId: "empty", expectedHeadCommit: null },
+          { contributionId: "stale", expectedHeadCommit: "old" },
+          { contributionId: "closed", expectedHeadCommit: "head-1" },
+          { contributionId: "current", expectedHeadCommit: "head-1" },
+        ])}
+      />
+    );
+    await screen.findByText("Proposal current");
+    expect(n.calls.filter((call) => call.startsWith("POST"))).toEqual([]);
+    expect(screen.getByText("Changed since review; excluded")).toBeTruthy();
+    expect(screen.getByText("Already closed; excluded")).toBeTruthy();
+    await clickReady(2);
+    await waitFor(() =>
+      expect(screen.getAllByText("Verified closed")).toHaveLength(2)
+    );
+    expect(n.calls.slice(4, 8)).toEqual([
+      "POST empty",
+      "GET empty",
+      "POST current",
+      "GET current",
+    ]);
+    const writes = n.fetchMock.mock.calls.filter(
+      ([, opts]) => opts?.method === "POST"
+    );
+    expect(
+      writes.map(
+        ([, opts]) => JSON.parse(String(opts?.body)).expectedHeadCommit
+      )
+    ).toEqual([null, "head-1"]);
+    expect(
+      writes.every(([, opts]) => opts?.credentials === "same-origin")
+    ).toBe(true);
+  });
+
+  it.each([
+    "success-open",
+    "network-open",
+    "unknown409",
+    "unauthorized",
+  ])("stops on %s and leaves later rows unattempted", async (mode) => {
+    const n = network([record("a"), record("b")], async () => {
+      if (mode === "network-open") throw new TypeError("connection lost");
+      if (mode === "unknown409")
+        return Response.json(
+          { error: "Uncertain", errorCode: "knowledge_write_outcome_unknown" },
+          { status: 409 }
+        );
+      return Response.json(
+        { error: "Session required" },
+        { status: mode === "unauthorized" ? 401 : 200 }
+      );
+    });
+    render(
+      <ReviewedClosePanel
+        value={link([
+          { contributionId: "a", expectedHeadCommit: "head-1" },
+          { contributionId: "b", expectedHeadCommit: "head-1" },
+        ])}
+      />
+    );
+    await clickReady(2);
+    await screen.findByText(
+      mode === "unknown409"
+        ? "Uncertain"
+        : mode === "unauthorized"
+          ? "Session required"
+          : "Close outcome is unresolved. Reload before trying again."
+    );
+    expect(n.calls.filter((call) => call.startsWith("POST"))).toEqual([
+      "POST a",
+    ]);
+    expect(n.calls).toContain("GET a");
+    expect(screen.getByText("Not attempted")).toBeTruthy();
+  });
+
+  it("reconciles a lost acknowledgement to closed without replay", async () => {
+    const n = network([record("a")], async () => {
+      n.current.set("a", record("a", "head-1", "closed"));
+      throw new TypeError("lost acknowledgement");
+    });
+    await expect(
+      closeContribution("a", "reviewed", { expectedHeadCommit: "head-1" })
+    ).resolves.toEqual({ contributionId: "a", closed: true });
+    expect(n.calls).toEqual(["POST a", "GET a"]);
+  });
+
+  it("continues after a structured changed-head conflict without replacing the reviewed head", async () => {
+    const n = network([record("a"), record("b")], async (id) => {
+      if (id === "a") {
+        n.current.set("a", record("a", "new"));
+        return Response.json(
+          {
+            error: "Changed since review",
+            errorCode: "contribution_head_changed",
+          },
+          { status: 409 }
+        );
+      }
+      n.current.set(id, record(id, "head-1", "closed"));
+      return Response.json({ closed: true });
+    });
+    render(
+      <ReviewedClosePanel
+        value={link([
+          { contributionId: "a", expectedHeadCommit: "head-1" },
+          { contributionId: "b", expectedHeadCommit: "head-1" },
+        ])}
+      />
+    );
+    await clickReady(2);
+    await screen.findByText("Verified closed");
+    expect(n.calls.filter((call) => call.startsWith("POST"))).toEqual([
+      "POST a",
+      "POST b",
+    ]);
+    expect(screen.getByText("Changed since review")).toBeTruthy();
+  });
+
+  it("bounds busy retries and rereads after every attempt", async () => {
+    vi.useFakeTimers();
+    const n = network([record("a")], async () =>
+      Response.json(
+        { retryable: true },
+        { status: 503, headers: { "Retry-After": "999" } }
+      )
+    );
+    const result = closeContribution("a", "reviewed", {
+      expectedHeadCommit: "head-1",
+    }).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(30_001);
+    const error = await result;
+    expect(error).toBeInstanceOf(ReviewedCloseError);
+    expect(error).toMatchObject({
+      status: 503,
+      code: "knowledge_busy",
+      stopBatch: true,
+    });
+    expect(n.calls).toEqual([
+      "POST a",
+      "GET a",
+      "POST a",
+      "GET a",
+      "POST a",
+      "GET a",
+      "POST a",
+      "GET a",
+    ]);
+  });
+
+  it("bounds initial reads and excludes a timed-out proposal without writing", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), milliseconds);
+      return controller.signal;
+    });
+    const fetchMock = vi.fn(
+      (_url: string, options?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("timeout")),
+            { once: true }
+          );
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ReviewedClosePanel
+        value={link([{ contributionId: "a", expectedHeadCommit: null }])}
+      />
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_999);
+    });
+    expect(screen.getByText("Reading selected proposals…")).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2);
+    });
+    expect(
+      screen.getByText("Could not read this proposal; excluded.")
+    ).toBeTruthy();
+    expect(
+      fetchMock.mock.calls.every(([, options]) => options?.method === "GET")
+    ).toBe(true);
+  });
+
+  it("changing the URL stops future dispatch from the previous frozen selection", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const n = network([record("a"), record("b"), record("c")], async (id) => {
+      await gate;
+      n.current.set(id, record(id, "head-1", "closed"));
+      return Response.json({ closed: true });
+    });
+    const { rerender } = render(
+      <ReviewedClosePanel
+        key="old"
+        value={link([
+          { contributionId: "a", expectedHeadCommit: "head-1" },
+          { contributionId: "b", expectedHeadCommit: "head-1" },
+        ])}
+      />
+    );
+    await clickReady(2);
+    await waitFor(() => expect(n.calls).toContain("POST a"));
+    rerender(
+      <ReviewedClosePanel
+        key="new"
+        value={link([{ contributionId: "c", expectedHeadCommit: "head-1" }])}
+      />
+    );
+    await act(async () => {
+      release?.();
+      await gate;
+    });
+    await screen.findByText("Proposal c");
+    expect(n.calls.filter((call) => call.startsWith("POST"))).toEqual([
+      "POST a",
+    ]);
+  });
+});
