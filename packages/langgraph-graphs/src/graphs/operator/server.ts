@@ -3,20 +3,26 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/graphs/operator/server`
- * Purpose: Expose the same Cogni factory to LangGraph Studio for structural development.
- * Scope: Dev-only inspection. No authenticated node binding or production capability proof. Does not perform source mutations.
- * Invariants: Missing host source context returns incomplete before any tool/model invocation.
- * Side-effects: process.env (existing dev helper)
+ * Purpose: LangGraph dev server entrypoint for the Cogni mission-loop graph.
+ * Scope: Thin dev entrypoint; does NOT import the catalog, read node bindings, or enforce
+ *   policy. Renders the compiled phase-node graph (load_context → investigate ⇄ tools →
+ *   propose) in LangGraph dev/Studio. Node identity (sourceContext) is supplied only by the
+ *   node host at runtime, so a dev invocation fails closed at load_context; the graph
+ *   STRUCTURE still renders for inspection.
+ * Invariants:
+ *   - LANGGRAPH_JSON_POINTS_TO_SERVER_ONLY: Referenced by langgraph.json
+ *   - HELPERS_DO_NOT_IMPORT_CATALOG: Uses makeServerGraph with explicit toolIds
+ * Side-effects: process.env (via makeServerGraph)
  * Links: https://cognidao.org/work/items/task.5367
  * @internal
  */
 import { makeServerGraph } from "../../runtime/core/make-server-graph";
+import { COGNI_TOOL_IDS } from "./cogni";
 import { createOperatorGraph } from "./graph";
-// Deliberately no stub tools or invented sourceContext. Actual capabilities enter via
-// the local node GraphExecutorPort; this entry truthfully reports missing bindings.
+
 export const cogni = await makeServerGraph({
-  name: "cogni (dev: node bindings unavailable)",
+  name: "cogni",
   createGraph: createOperatorGraph,
-  toolIds: [],
+  toolIds: COGNI_TOOL_IDS,
   program: "cogni",
 });
