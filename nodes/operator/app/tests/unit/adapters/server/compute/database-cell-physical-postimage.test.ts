@@ -799,6 +799,10 @@ describe("complete independent native capture chain", () => {
     const f = legacyPostimageFixture(),
       capture = f.artifact.nativeCapture;
     if (!capture) throw new Error("capture missing");
+    capture.originalAppProviderManifest[0].services.push({
+      name: "nonconsumer",
+      image: "synthetic-sidecar",
+    });
     const app = JSON.parse(capture.originalAppStoredSdl);
     app.services.app.env = [
       "DATABASE_URL=ac-secret://stable-app-alias",

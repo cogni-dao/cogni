@@ -462,7 +462,7 @@ export function qualifyCurrentPhysicalApp(
       z
         .object({
           services: z.array(
-            z.object({ env: z.array(z.string()) }).passthrough()
+            z.object({ env: z.array(z.string()).default([]) }).passthrough()
           ),
         })
         .passthrough()
