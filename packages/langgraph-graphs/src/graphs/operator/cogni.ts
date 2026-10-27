@@ -121,7 +121,15 @@ const CogniState = Annotation.Root({
     reducer: (_prev, next) => next,
     default: () => null,
   }),
+  /** Investigate rounds taken; bounds the gather loop so a run always reaches propose. */
+  steps: Annotation<number>({
+    reducer: (prev, next) => (prev ?? 0) + (next ?? 0),
+    default: () => 0,
+  }),
 });
+
+/** Max investigate ⇄ tools rounds before the agent is forced to propose from what it has. */
+const MAX_INVESTIGATE_STEPS = 24;
 
 /**
  * Build the compiled, checkpointable Cogni mission-loop graph.
@@ -189,12 +197,14 @@ export function createCogniProgram(opts: CreateReactAgentGraphOptions) {
       [buildPreamble(), ...state.messages],
       config
     );
-    return { messages: [response] };
+    return { messages: [response], steps: 1 };
   };
 
   const toolNode = new ToolNode(tools);
 
   const routeInvestigate = (state: typeof CogniState.State) => {
+    // Bound the gather loop: once the step budget is spent, propose from what was read.
+    if ((state.steps ?? 0) >= MAX_INVESTIGATE_STEPS) return "propose";
     const last = state.messages.at(-1);
     if (last && isAIMessage(last) && (last.tool_calls?.length ?? 0) > 0)
       return "tools";
