@@ -71,7 +71,7 @@ describe("operator catalog entries", () => {
     expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
   });
 
-  it("work-prioritizer (mission loop) is operator-only with the exact read-only allowlist", () => {
+  it("work-prioritizer (mission loop) is operator-only with the exact read allowlist plus the one decision write (core__edo_decide)", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
     expect(entry.graphFactory).toBe(createOperatorGraph);
@@ -91,6 +91,7 @@ describe("operator catalog entries", () => {
         "core__knowledge_contribution_read",
         KNOWLEDGE_SEARCH_NAME,
         GET_CURRENT_TIME_NAME,
+        EDO_DECIDE_NAME,
       ].sort()
     );
     expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });

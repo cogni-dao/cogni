@@ -5,10 +5,10 @@
  * Module: `@cogni/langgraph-graphs/graphs/operator/server`
  * Purpose: LangGraph dev server entrypoint for the Cogni mission-loop graph.
  * Scope: Thin dev entrypoint; does NOT import the catalog, read node bindings, or enforce
- *   policy. Renders the compiled phase-node graph (load_context → investigate ⇄ tools →
- *   propose) in LangGraph dev/Studio. Node identity (sourceContext) is supplied only by the
- *   node host at runtime, so a dev invocation fails closed at load_context; the graph
- *   STRUCTURE still renders for inspection.
+ *   policy. Renders the compiled phase-node graph (gather → decide → file → report) in
+ *   LangGraph dev/Studio. Node identity (sourceContext) is supplied only by the node host at
+ *   runtime, so a dev invocation fails closed when the preamble is built; the graph STRUCTURE
+ *   still renders for inspection.
  * Invariants:
  *   - LANGGRAPH_JSON_POINTS_TO_SERVER_ONLY: Referenced by langgraph.json
  *   - HELPERS_DO_NOT_IMPORT_CATALOG: Uses makeServerGraph with explicit toolIds

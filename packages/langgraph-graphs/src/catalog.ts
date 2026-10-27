@@ -257,12 +257,13 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
   },
 
   /**
-   * Read-only Cogni pilot (task.5367). The existing scheduled graph ID is a compatibility
-   * assignment of the same factory used by chat. No write or EDO tools are exposed.
+   * Cogni mission agent (story.5116). The existing scheduled graph ID is a compatibility
+   * assignment of the same factory used by chat. It gathers across the read planes, then files
+   * exactly one core__edo_decide decision — the run's only write (requires node.collaborate).
    */
   cogni: {
     displayName: "Cogni",
-    description: "Hub-grounded read-only mission agent",
+    description: "Hub-grounded mission agent; files one EDO decision",
     toolIds: COGNI_TOOL_IDS,
     graphFactory: createOperatorGraph,
     systemPrompt: COGNI_PROMPT,
@@ -271,7 +272,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
   [WORK_PRIORITIZER_GRAPH_NAME]: {
     displayName: "Cogni Work Review",
     description:
-      "Read-only, source-grounded work proposals from the same Cogni factory",
+      "Source-grounded work review from the same Cogni factory; files one EDO decision",
     toolIds: COGNI_TOOL_IDS,
     graphFactory: createOperatorGraph,
     systemPrompt: COGNI_PROMPT,
