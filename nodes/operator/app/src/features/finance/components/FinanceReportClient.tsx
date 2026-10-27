@@ -43,7 +43,7 @@ export const STEWARD_WITHDRAWAL_TIMEOUT_MS = 20_000;
 export async function fundSteward(
   amountUsd: number,
   fetchImpl: typeof fetch = fetch
-): Promise<{ txHash: string | null; confirmed: boolean }> {
+): Promise<{ txHash: string; confirmed: boolean }> {
   const res = await fetchImpl(STEWARD_WITHDRAWAL_PATH, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -62,8 +62,16 @@ export async function fundSteward(
   } catch {
     throw new Error(`Response unreadable (HTTP ${res.status})`);
   }
-  if (res.ok)
-    return { txHash: data.txHash ?? null, confirmed: data.confirmed !== false };
+  if (res.ok) {
+    if (
+      !data ||
+      typeof data.txHash !== "string" ||
+      !/^0x[0-9a-fA-F]{64}$/.test(data.txHash) ||
+      typeof data.confirmed !== "boolean"
+    )
+      throw new Error("Withdrawal result incomplete");
+    return { txHash: data.txHash, confirmed: data.confirmed };
+  }
   const reason = data.detail ?? data.error ?? data.code ?? `HTTP ${res.status}`;
   const preBroadcast =
     res.status === 400 ||

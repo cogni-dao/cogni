@@ -10,6 +10,7 @@
  * Links: https://cognidao.org/work/items/task.5347
  * @internal
  */
+import { DatabaseSync } from "node:sqlite";
 import { drizzle as drizzleProxy } from "drizzle-orm/pg-proxy";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -59,6 +60,11 @@ runtime.serviceDb = {
   select: () => ({
     from: () => ({
       innerJoin: () => ({ where: async () => [runtime.purchases] }),
+      where: () => ({
+        groupBy: () => ({
+          as: () => ({ attemptId: "attempt_id", creditedAt: "credited_at" }),
+        }),
+      }),
     }),
   }),
 };
@@ -277,7 +283,7 @@ describe("operator finance evidence", () => {
     expect(noParent[0]?.children?.[0]?.plane).toBe("akash:poly");
     expect(collapseAkash([other])).toEqual([other]);
   });
-  it("builds the credited-time income query on the payment_attempts status index with a CREDITED-event join and SQL aggregate", async () => {
+  it("builds a unique earliest credited-transition query with an outer time filter", async () => {
     const calls: { sql: string; params: unknown[] }[] = [];
     const db = drizzleProxy(async (sqlText, params) => {
       calls.push({ sql: sqlText, params });
@@ -292,23 +298,56 @@ describe("operator finance evidence", () => {
     expect(CREDITED_STATUS).toBe("CREDITED");
     const q = calls[0]?.sql.replace(/\s+/g, " ") ?? "";
     expect(q).toMatch(/from "payment_attempts"/);
-    expect(q).toMatch(
-      /inner join "payment_events" on \("payment_events"\."attempt_id" = "payment_attempts"\."id" and "payment_events"\."to_status" = \$\d\)/
-    );
+    expect(q).toMatch(/inner join \(select/);
+    expect(q).toMatch(/min\("created_at"\)/);
+    expect(q).toMatch(/"payment_events"\."event_type" = \$\d/);
+    expect(q).toMatch(/"payment_events"\."from_status" <> \$\d/);
+    expect(q).toMatch(/group by "payment_events"\."attempt_id"/);
     expect(q).toMatch(/"payment_attempts"\."status" = \$\d/);
-    expect(q).toMatch(/"payment_events"\."created_at" >= \$\d/);
+    expect(q).toMatch(/"credited_at" >= \$\d/);
     expect(q).not.toMatch(/"payment_attempts"\."created_at"/);
     expect(q).toMatch(
       /coalesce\(sum\("payment_attempts"\."amount_usd_cents"\), 0\)/
     );
     expect(q).toMatch(/count\(\*\)/);
-    expect(calls[0]?.params.filter((p) => p === "CREDITED")).toHaveLength(2);
+    expect(calls[0]?.params.filter((p) => p === "CREDITED")).toHaveLength(3);
     const aborted = new AbortController();
     aborted.abort();
     await expect(
       creditedPurchasesQuery(db as never)(since, aborted.signal)
     ).rejects.toThrow("income query aborted");
     expect(calls).toHaveLength(1);
+  });
+  it("counts each first credited transition once and ignores later verification status copies", async () => {
+    const sqlite = new DatabaseSync(":memory:");
+    try {
+      sqlite.exec(`
+        CREATE TABLE payment_attempts (id TEXT, status TEXT, amount_usd_cents INTEGER);
+        CREATE TABLE payment_events (attempt_id TEXT, event_type TEXT, from_status TEXT, to_status TEXT, created_at TEXT);
+        INSERT INTO payment_attempts VALUES ('recent', 'CREDITED', 1000), ('old', 'CREDITED', 2000), ('verification-only', 'CREDITED', 3000);
+        INSERT INTO payment_events VALUES
+          ('recent', 'STATUS_CHANGED', 'VERIFIED', 'CREDITED', '2026-10-01T00:00:00.000Z'),
+          ('recent', 'STATUS_CHANGED', 'VERIFIED', 'CREDITED', '2026-10-02T00:00:00.000Z'),
+          ('old', 'STATUS_CHANGED', 'VERIFIED', 'CREDITED', '2026-09-01T00:00:00.000Z'),
+          ('old', 'VERIFICATION_ATTEMPTED', 'CREDITED', 'CREDITED', '2026-10-03T00:00:00.000Z'),
+          ('old', 'STATUS_CHANGED', 'CREDITED', 'CREDITED', '2026-10-04T00:00:00.000Z'),
+          ('verification-only', 'VERIFICATION_ATTEMPTED', 'CREDITED', 'CREDITED', '2026-10-05T00:00:00.000Z');
+      `);
+      const db = drizzleProxy(async (query, params) => ({
+        rows: sqlite
+          .prepare(query.replace(/\$\d+/g, "?"))
+          .all(...(params as (string | number | null)[]))
+          .map(Object.values),
+      }));
+      expect(
+        await creditedPurchasesQuery(db as never)(
+          new Date("2026-09-26T00:00:00Z"),
+          new AbortController().signal
+        )
+      ).toEqual({ totalUsdCents: 1000, count: 1 });
+    } finally {
+      sqlite.close();
+    }
   });
   it("reports available grant credit and lease burn, retaining escrow as source evidence", async () => {
     const signal = new AbortController().signal;

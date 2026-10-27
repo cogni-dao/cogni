@@ -104,7 +104,10 @@ import {
 } from "@/app/dev/finance-preview/fixture";
 import { FixtureQueryBoundary } from "@/app/dev/finance-preview/Preview.client";
 import FinancePreviewPage from "@/app/dev/finance-preview/page";
-import { FinanceReportClient } from "@/features/finance/components/FinanceReportClient";
+import {
+  FinanceReportClient,
+  fundSteward,
+} from "@/features/finance/components/FinanceReportClient";
 import type { FinanceReportModel } from "@/features/finance/types";
 import { useTreasurySnapshot } from "@/features/treasury/hooks/useTreasurySnapshot";
 
@@ -208,9 +211,9 @@ describe("Financials reporting", () => {
     expect(stat("Treasury")).toBe("$74.52");
     expect(stat("Cash received")).toBe("$0.00/day");
     expect(stat("Burn")).toBe("$13.23/day");
-    // DAO runway = treasury ÷ net burn (74.52 ÷ 13.23 ≈ 5.6d); the Akash deadline is a separate line.
-    expect(stat("Runway")).toBe("5d");
-    expect(screen.getByText("treasury ÷ net burn")).toBeVisible();
+    // Missing costs prevent a DAO estimate; the account top-up deadline stays separate.
+    expect(stat("Runway")).toBe("—");
+    expect(screen.getByText("Costs incomplete")).toBeVisible();
     const deadline = document.querySelector("[data-finance-deadline]");
     expect(deadline?.textContent).toBe("Next deadline 2d · Akash");
     expect(deadline?.className).toContain("text-destructive");
@@ -246,10 +249,10 @@ describe("Financials reporting", () => {
     expect(
       document.querySelector("[data-finance-stat='Cash received']")?.textContent
     ).toBe("$1.50/day");
-    // Income lengthens DAO runway: 74.52 ÷ (13.23 − 1.50) ≈ 6.4d.
+    // Past receipts do not repair missing costs or predict future income.
     expect(
       document.querySelector("[data-finance-stat='Runway']")?.textContent
-    ).toBe("6d");
+    ).toBe("—");
     const red = within(rowOf("akash:credit")).getByText("2d");
     expect(red.className).toContain("text-destructive");
     expect(within(rowOf("cherry:team")).getByText("36d").className).toContain(
@@ -359,6 +362,33 @@ describe("Financials reporting", () => {
       )
     ).toBeVisible();
   });
+  it.each([
+    {},
+    { txHash: `0x${"a".repeat(64)}` },
+    { txHash: "0xshort", confirmed: true },
+    { txHash: `0x${"a".repeat(64)}`, confirmed: "true" },
+    { txHash: null, confirmed: false },
+  ])("keeps malformed withdrawal success unknown: %j", async (body) => {
+    const fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => body,
+    }));
+    await expect(
+      fundSteward(1, fetch as unknown as typeof globalThis.fetch)
+    ).rejects.toThrow("Withdrawal result incomplete");
+  });
+  it("preserves an explicit unconfirmed broadcast", async () => {
+    const body = { txHash: `0x${"a".repeat(64)}`, confirmed: false };
+    const fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => body,
+    }));
+    expect(
+      await fundSteward(1, fetch as unknown as typeof globalThis.fetch)
+    ).toEqual(body);
+  });
   it("fund-steward POSTs the amount only and shows the tx link or the server error", async () => {
     const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { amountUsd: number };
@@ -366,7 +396,10 @@ describe("Financials reporting", () => {
         ? {
             ok: true,
             status: 200,
-            json: async () => ({ txHash: "0xabcdef1234567890" }),
+            json: async () => ({
+              txHash: `0xabcd${"0".repeat(56)}7890`,
+              confirmed: true,
+            }),
           }
         : {
             ok: false,
@@ -394,7 +427,10 @@ describe("Financials reporting", () => {
     );
     expect(
       await within(operator).findByRole("link", { name: /Sent 0xabcd…7890/ })
-    ).toHaveAttribute("href", "https://basescan.org/tx/0xabcdef1234567890");
+    ).toHaveAttribute(
+      "href",
+      `https://basescan.org/tx/0xabcd${"0".repeat(56)}7890`
+    );
     await userEvent.clear(amount);
     await userEvent.type(amount, "999");
     await userEvent.click(
