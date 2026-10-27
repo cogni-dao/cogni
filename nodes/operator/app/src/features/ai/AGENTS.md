@@ -76,7 +76,7 @@ AI feature owns all LLM interaction endpoints, runtimes, and services. Provides 
 ## Ports
 
 - **Uses ports:** AccountService (recordChargeReceipt), AiTelemetryPort (recordInvocation), LangfusePort (createTrace, recordGeneration), GraphExecutorPort (runGraph — used by internal execution route, not facade)
-  - `LlmService` (completionStream) is **executor-internal only** — consumed solely by `services/completion.ts` (`executeStream`) and the in-proc completion adapter. It carries NO preflight credit gate and NO usage-receipt commit on its own (those live in the GraphExecutorPort decorator stack). Features/routes MUST NOT inject or call it directly — that silently bypasses fair billing (bug.5042). Enforced by `no-direct-completion-executestream.stack.test.ts`. Build AI features via the graph executor / `completionStream` facade. See [agent-development.md](../../../../../docs/guides/agent-development.md#billing-safe-ai-the-only-way-to-call-an-llm).
+  - `LlmService` (completionStream) is **executor-internal only** — consumed solely by `services/completion.ts` (`executeStream`) and the in-proc completion adapter. It carries NO preflight credit gate and NO usage-receipt commit on its own (those live in the GraphExecutorPort decorator stack). Features/routes MUST NOT inject or call it directly — that silently bypasses fair billing (bug.5042). Enforced by `no-direct-completion-executestream.stack.test.ts`. Build AI features via the graph executor / `completionStream` facade. See the [agent-development guide](https://cognidao.org/knowledge/agent-development) (§ Call an LLM only through the graph executor).
 - **Implements ports:** none
 - **Contracts:** chat.completions.v1, ai.chat.v1, ai.threads.v1, ai.models.v1, ai.activity.v1
 
