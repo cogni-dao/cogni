@@ -23,7 +23,6 @@ tags: [agent-api, validation, candidate-a, billing]
 > the completions example does not supply its required state key.
 > This source remains during human review of the hub replacement.
 
-
 This guide is a **route exercise recipe**, not the full contribution lifecycle.
 For the lifecycle, use [`docs/spec/development-lifecycle.md`](../spec/development-lifecycle.md).
 For post-flight PR validation, use [`.claude/skills/validate-candidate`](../../.claude/skills/validate-candidate/SKILL.md); it owns the scorecard and Loki evidence format.
