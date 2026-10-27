@@ -160,7 +160,11 @@ export function createInProcGraphRunner<TTool = unknown>(
     queue.push(e);
   };
 
-  const tokenSink = { push: emit };
+  const tokenSink = {
+    push: (event: AiEvent) => {
+      if (!opts.program || event.type !== "text_delta") emit(event);
+    },
+  };
   const toolExecFn = createToolExecFn(emit);
 
   // Create no-arg CogniCompletionAdapter (reads from ALS + configurable at invoke time)
@@ -182,6 +186,10 @@ export function createInProcGraphRunner<TTool = unknown>(
 
   // Use factory from catalog instead of hardcoded graph
   const graph = createGraph({
+    ...(opts.sourceContext !== undefined && {
+      sourceContext: opts.sourceContext,
+    }),
+    ...(opts.program !== undefined && { program: opts.program }),
     llm,
     tools,
     ...(responseFormat !== undefined && { responseFormat }),

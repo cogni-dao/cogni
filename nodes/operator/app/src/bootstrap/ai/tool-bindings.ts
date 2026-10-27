@@ -18,7 +18,9 @@
 import type {
   EdoCapability,
   KnowledgeCapability,
+  KnowledgeContributionReadCapability,
   MetricsCapability,
+  NodeCodeCapability,
   RepoCapability,
   ScheduleCapability,
   ToolImplementation,
@@ -28,10 +30,13 @@ import type {
 import {
   createEdoHypothesizeImplementation,
   createEdoRecordOutcomeImplementation,
+  createKnowledgeContributionReadImplementation,
   createKnowledgeIndexImplementation,
   createKnowledgeReadImplementation,
   createKnowledgeWriteImplementation,
   createMetricsQueryImplementation,
+  createNodeCodeListImplementation,
+  createNodeCodeReadImplementation,
   createRepoListImplementation,
   createRepoOpenImplementation,
   createRepoSearchImplementation,
@@ -43,16 +48,20 @@ import {
   createVcsListPrsImplementation,
   createVcsMergePrImplementation,
   createWebSearchImplementation,
+  createWorkItemReadImplementation,
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
   GET_CURRENT_TIME_NAME,
   GOAL_LIST_NAME,
+  KNOWLEDGE_CONTRIBUTION_READ_NAME,
   KNOWLEDGE_INDEX_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
   KNOWLEDGE_WRITE_NAME,
   METRICS_QUERY_NAME,
+  NODE_CODE_LIST_NAME,
+  NODE_CODE_READ_NAME,
   REPO_LIST_NAME,
   REPO_OPEN_NAME,
   REPO_SEARCH_NAME,
@@ -65,6 +74,7 @@ import {
   VCS_MERGE_PR_NAME,
   WEB_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
+  WORK_ITEM_READ_NAME,
   WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
 
@@ -83,6 +93,8 @@ import {
  * These are resolved from the container at bootstrap time.
  */
 export interface ToolBindingDeps {
+  readonly nodeCodeCapability?: NodeCodeCapability;
+  readonly knowledgeContributionReadCapability?: KnowledgeContributionReadCapability;
   readonly nodePublicOrigin?: string | undefined;
   readonly knowledgeCapability: KnowledgeCapability;
   readonly edoCapability: EdoCapability;
@@ -118,7 +130,32 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
   // Type widening: implementations are contravariant in input type, so we
   // cast to the base type. This is safe because contractToRuntime validates
   // at runtime via Zod schemas.
+  const nodeCodeCapability = deps.nodeCodeCapability ?? {
+    read: async () => {
+      throw new Error("node_code_source_unavailable");
+    },
+    list: async () => {
+      throw new Error("node_code_source_unavailable");
+    },
+  };
   return {
+    [NODE_CODE_READ_NAME]: createNodeCodeReadImplementation({
+      nodeCodeCapability,
+    }) as AnyToolImplementation,
+    [NODE_CODE_LIST_NAME]: createNodeCodeListImplementation({
+      nodeCodeCapability,
+    }) as AnyToolImplementation,
+    [KNOWLEDGE_CONTRIBUTION_READ_NAME]:
+      createKnowledgeContributionReadImplementation(
+        deps.knowledgeContributionReadCapability ?? {
+          read: async () => {
+            throw new Error("knowledge_inbox_source_unavailable");
+          },
+        }
+      ) as AnyToolImplementation,
+    [WORK_ITEM_READ_NAME]: createWorkItemReadImplementation({
+      workItemCapability: deps.workItemCapability,
+    }) as AnyToolImplementation,
     // Pure tools (no I/O dependencies)
     [GET_CURRENT_TIME_NAME]:
       getCurrentTimeImplementation as AnyToolImplementation,

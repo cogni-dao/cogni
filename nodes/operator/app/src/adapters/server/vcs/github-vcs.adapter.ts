@@ -27,12 +27,14 @@ import type {
   CreateBranchResult,
   DispatchCandidateFlightResult,
   MergeResult,
+  NodeCodeBinding,
+  NodeCodeCapability,
   PrSummary,
   VcsCapability,
 } from "@cogni/ai-tools";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
-
+import { GitHubNodeCodeAdapter } from "./github-node-code.adapter";
 import { resolveReviewedWorkflowRef } from "./reviewed-workflow-ref";
 
 // ---------------------------------------------------------------------------
@@ -59,6 +61,67 @@ export class GitHubVcsAdapter implements VcsCapability {
       appId: config.appId,
       privateKey: config.privateKey,
     });
+  }
+
+  /** Read-only Git objects for a host-pinned node source; never exposes credentials or arbitrary routes. */
+  nodeCodeReader(
+    binding: NodeCodeBinding,
+    log: {
+      info(fields: Record<string, unknown>): void;
+      warn(fields: Record<string, unknown>): void;
+    }
+  ): NodeCodeCapability {
+    const { owner, repo } = binding;
+    const readAuth = createAppAuth({
+      appId: this.config.appId,
+      privateKey: this.config.privateKey,
+      request: new Octokit({ request: { timeout: 15000 } }).request,
+    });
+    return new GitHubNodeCodeAdapter(
+      binding,
+      async (route, params, signal) => {
+        // Resolve the existing installation, then request a repository-limited contents:read token.
+        // auth-app retains its normal token refresh/cache; write credentials never enter tool arguments.
+        if (params.owner !== owner || params.repo !== repo)
+          throw new Error("node_code_repository_mismatch");
+        const installationId = await this.resolveInstallationId(
+          owner,
+          repo,
+          signal
+        );
+        const { token } = await readAuth({
+          type: "installation",
+          installationId,
+          repositoryNames: [repo],
+          permissions: { contents: "read" },
+        });
+        const client = new Octokit({
+          auth: token,
+          request: { timeout: 15000 },
+        });
+        const common = {
+          owner,
+          repo,
+          headers: { "X-GitHub-Api-Version": "2022-11-28" },
+          request: { signal },
+        };
+        const objectSha =
+          params.commit_sha ?? params.tree_sha ?? params.file_sha;
+        if (!objectSha || !/^[0-9a-f]{40}$/.test(objectSha))
+          throw new Error("node_code_object_invalid");
+        if (route === "GET /repos/{owner}/{repo}/git/commits/{commit_sha}")
+          return (
+            await client.request(route, { ...common, commit_sha: objectSha })
+          ).data;
+        if (route === "GET /repos/{owner}/{repo}/git/trees/{tree_sha}")
+          return (
+            await client.request(route, { ...common, tree_sha: objectSha })
+          ).data;
+        return (await client.request(route, { ...common, file_sha: objectSha }))
+          .data;
+      },
+      log
+    );
   }
 
   async listPrs(params: {
@@ -638,7 +701,8 @@ export class GitHubVcsAdapter implements VcsCapability {
    */
   private async resolveInstallationId(
     owner: string,
-    repo: string
+    repo: string,
+    signal?: AbortSignal
   ): Promise<number> {
     const cacheKey = `${owner}/${repo}`;
     const cached = this.installationCache.get(cacheKey);
@@ -648,6 +712,7 @@ export class GitHubVcsAdapter implements VcsCapability {
     const response = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/installation`,
       {
+        ...(signal ? { signal } : {}),
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: "application/vnd.github+json",
