@@ -3,16 +3,11 @@
 
 /**
  * Module: `@adapters/server/finance/akash-credit.reader`
- * Purpose: Akash credit · fleet — Console credit (DepositAuthorization spend_limit) + deployment escrow, lease burn, and the
- *   earliest constrained exhaustion: escrow is locked per deployment, so the row grades the thinnest deployment when no
- *   shared Console credit can refill it.
- * Scope: TypeScript port of `akashPlane()` and `blocksPerDay()` in scripts/money-plane-snapshot.mjs (PR #2874), same LCD
- *   endpoints and field paths, behind the injected safe fetch. Keyless public reads only. Lists are paginated (≤ 5 pages).
- * Invariants: READERS_NEVER_THROW — any failure is UNKNOWN. SHAPE_IS_VERIFIED — a missing list, an unparseable price, an
- *   unsupported denomination or an unfinished pagination is UNKNOWN with its reason; only a verified empty active-lease
- *   list means no burn. uact is USD credit micro, never FX. RUNWAY_IS_GRANT_PLUS_ESCROW for the pooled figure;
- *   the grade follows min(pooled, thinnest deployment) when Console credit is zero. Burn uses the measured chain cadence
- *   when supplied, else 5.884 s/block.
+ * Purpose: Available Console credit and active lease burn provide an account top-up estimate.
+ * Scope: Public Akash chain reads through injected fetch. All lists use bounded pagination.
+ * Invariants: READERS_NEVER_THROW; invalid/incomplete evidence is UNKNOWN. The grant must match the
+ *   injected funding identity, owner, deployment scope and expiry. Reserved escrow is source detail only,
+ *   never available credit or grade. No active leases means INFO, not an urgent top-up.
  * Side-effects: IO (HTTPS GET via injected fetch)
  * Links: scripts/money-plane-snapshot.mjs, https://cognidao.org/knowledge/money-plane-registry, https://cognidao.org/work/items/task.5347
  * @public
@@ -103,7 +98,7 @@ class ShapeError extends Error {}
 async function readList<T>(
   fetch: FetchLike,
   url: string,
-  key: "leases" | "deployments",
+  key: "leases" | "deployments" | "grants",
   signal?: AbortSignal
 ): Promise<{ items: T[]; complete: boolean }> {
   const items: T[] = [];
@@ -119,6 +114,8 @@ async function readList<T>(
     items.push(...(list as T[]));
     const next = (body?.pagination as { next_key?: unknown } | undefined)
       ?.next_key;
+    if (next !== undefined && next !== null && typeof next !== "string")
+      throw new ShapeError(`${key} pagination invalid`);
     nextKey = typeof next === "string" && next.length > 0 ? next : null;
     if (nextKey === null) return { items, complete: true };
   }
@@ -127,6 +124,8 @@ async function readList<T>(
 
 export interface AkashCreditReaderOptions {
   owner: string;
+  /** Trusted public Console funding identity, supplied by runtime composition. */
+  expectedGranter: string;
   fetch: FetchLike;
   /** Measured chain cadence from readAkashBlocksPerDay; null falls back to 5.884 s/block. */
   blocksPerDay: number | null;
@@ -138,7 +137,14 @@ export interface AkashCreditReaderOptions {
 
 interface Grant {
   granter?: unknown;
-  authorization?: { "@type"?: unknown; spend_limits?: unknown };
+  grantee?: unknown;
+  expiration?: unknown;
+  authorization?: {
+    "@type"?: unknown;
+    scopes?: unknown;
+    spend_limits?: unknown;
+    spend_limit?: unknown;
+  };
 }
 interface Deployment {
   deployment?: { id?: { dseq?: unknown } };
@@ -151,6 +157,36 @@ interface Lease {
   };
 }
 
+/** Chain amounts must be explicit nonnegative decimal strings; never coerce absence to zero. */
+function amountValue(value: unknown): number {
+  if (
+    typeof value !== "string" ||
+    !/^\d+(?:\.\d+)?$/.test(value) ||
+    !Number.isFinite(Number(value))
+  )
+    throw new ShapeError("fund amount invalid");
+  return Number(value);
+}
+
+function verifiedUact(coins: unknown): number {
+  if (!Array.isArray(coins)) throw new ShapeError("funds unavailable");
+  let total = 0;
+  for (const coin of coins as Coin[]) {
+    const amount = amountValue(coin?.amount);
+    if (coin?.denom === "uact") total += amount;
+    else if (coin?.denom !== "uakt" || amount !== 0)
+      throw new ShapeError("unsupported fund denomination");
+  }
+  if (!Number.isFinite(total)) throw new ShapeError("fund total invalid");
+  return total;
+}
+
+function deploymentId(value: unknown): string {
+  if (typeof value !== "string" || !value.trim())
+    throw new ShapeError("deployment identity unavailable");
+  return value;
+}
+
 /** Exact per-block uact price of one lease; throws a ShapeError for an unparseable or unsupported price. */
 function leasePriceUact(lease: Lease): number {
   const price = lease.lease?.price;
@@ -158,6 +194,7 @@ function leasePriceUact(lease: Lease): number {
   const denom = price?.denom;
   if (
     typeof price?.amount !== "string" ||
+    !/^\d+(?:\.\d+)?$/.test(price.amount) ||
     !Number.isFinite(amount) ||
     amount < 0
   )
@@ -173,7 +210,7 @@ export function akashCreditReader(
   options: AkashCreditReaderOptions
 ): PlaneReader {
   const plane = AKASH_CREDIT_PLANE;
-  const label = "Akash";
+  const label = "Akash credit";
   /** Console billing is card-only and sign-in gated; not from the steward wallet. */
   const rail = {
     kind: "card-manual" as const,
@@ -206,18 +243,43 @@ export function akashCreditReader(
       try {
         const owner = encodeURIComponent(options.owner);
         const q = `filters.owner=${owner}&filters.state=active&pagination.limit=500`;
-        // The grant decides whether this owner is a Console account at all; read it before the lists.
-        const grants = (await getJson(
+        const grants = await readList<Grant>(
           options.fetch,
-          `${lcd}/cosmos/authz/v1beta1/grants/grantee/${owner}`,
+          `${lcd}/cosmos/authz/v1beta1/grants/grantee/${owner}?pagination.limit=500`,
+          "grants",
           signal
-        )) as { grants?: Grant[] } | null;
-        const deposit = (grants?.grants ?? []).find((g) =>
-          String(g.authorization?.["@type"] ?? "").endsWith(
-            "DepositAuthorization"
-          )
         );
-        if (!deposit) return unknown("no Console credit grant");
+        if (!grants.complete)
+          return unknown("coverage incomplete · more pages than read");
+        const matches = grants.items.filter(
+          (g) =>
+            g?.granter === options.expectedGranter &&
+            g?.grantee === options.owner &&
+            g?.authorization?.["@type"] ===
+              "/akash.escrow.v1.DepositAuthorization"
+        );
+        if (!options.expectedGranter || matches.length !== 1)
+          return unknown("Console credit grant missing or ambiguous");
+        const deposit = matches[0];
+        const authorization = deposit?.authorization;
+        const expiration =
+          typeof deposit?.expiration === "string"
+            ? Date.parse(deposit.expiration)
+            : NaN;
+        if (
+          !Number.isFinite(expiration) ||
+          expiration <= now().getTime() ||
+          !Array.isArray(authorization?.scopes) ||
+          !authorization.scopes.includes("deployment")
+        )
+          return unknown("Console credit grant scope or expiry invalid");
+        const legacy = authorization.spend_limit as Coin | undefined;
+        if (
+          legacy !== undefined &&
+          (verifiedUact([legacy]) !== 0 || amountValue(legacy.amount) !== 0)
+        )
+          return unknown("legacy grant credit unsupported");
+        const creditUact = verifiedUact(authorization.spend_limits);
         const [deployments, leases] = await Promise.all([
           readList<Deployment>(
             options.fetch,
@@ -234,17 +296,26 @@ export function akashCreditReader(
         ]);
         if (!deployments.complete || !leases.complete)
           return unknown("coverage incomplete · more pages than read");
-        const creditUact = sumUact(deposit.authorization?.spend_limits);
-        const escrowUact = deployments.items.reduce(
-          (sum, d) => sum + sumUact(d.escrow_account?.state?.funds),
-          0
-        );
+        const escrowByDseq = new Map<string, number>();
+        let escrowUact = 0;
+        for (const deployment of deployments.items) {
+          const dseq = deploymentId(deployment?.deployment?.id?.dseq);
+          if (escrowByDseq.has(dseq))
+            return unknown("duplicate deployment identity");
+          const amount = verifiedUact(deployment.escrow_account?.state?.funds);
+          escrowByDseq.set(dseq, amount);
+          escrowUact += amount;
+        }
+        if (!Number.isFinite(escrowUact))
+          return unknown("escrow total invalid");
         // Σ price per deployment: a deployment can hold several leases.
         const rateByDseq = new Map<string, number>();
         let ratePerBlock = 0;
         for (const lease of leases.items) {
           const price = leasePriceUact(lease);
-          const dseq = String(lease.lease?.id?.dseq ?? "");
+          const dseq = deploymentId(lease.lease?.id?.dseq);
+          if (!escrowByDseq.has(dseq))
+            return unknown("lease escrow unavailable");
           rateByDseq.set(dseq, (rateByDseq.get(dseq) ?? 0) + price);
           ratePerBlock += price;
         }
@@ -254,17 +325,13 @@ export function akashCreditReader(
             ? measured
             : FALLBACK_BLOCKS_PER_DAY;
         const burnPerDay = (ratePerBlock * bpd) / UACT_PER_USD;
-        const perDeployment = deployments.items.flatMap((d) => {
-          const dseq = String(d.deployment?.id?.dseq ?? "");
-          const rate = rateByDseq.get(dseq);
-          if (!rate) return [];
-          const escrow = sumUact(d.escrow_account?.state?.funds);
-          return [{ dseq, days: escrow / (rate * bpd) }];
-        });
-        const thinnest = perDeployment.length
-          ? perDeployment.reduce((a, b) => (b.days < a.days ? b : a))
-          : null;
-        const balance = (creditUact + escrowUact) / UACT_PER_USD;
+        if (!Number.isFinite(burnPerDay)) return unknown("lease burn invalid");
+        const perDeployment = [...rateByDseq].flatMap(([dseq, rate]) =>
+          rate > 0
+            ? [{ dseq, days: (escrowByDseq.get(dseq) ?? 0) / (rate * bpd) }]
+            : []
+        );
+        const balance = creditUact / UACT_PER_USD;
         const observedAt = now().toISOString();
         const base: MoneyPlaneRow = {
           plane,
@@ -276,7 +343,7 @@ export function akashCreditReader(
           runwayDays: null,
           grade: "UNKNOWN",
           observedAt,
-          source: `Akash chain · Console grant + escrow · ${leases.items.length} leases at ${Math.round(bpd).toLocaleString("en-US")} blocks/day (${measured ? "measured" : "5.884 s/block fallback"})`,
+          source: `Available Console credit · escrow excluded · ${leases.items.length} leases at ${Math.round(bpd).toLocaleString("en-US")} blocks/day (${measured ? "measured" : "5.884 s/block fallback"})`,
           sourceObservedAt: observedAt,
           freshness: "current",
           payer: "Operator",
@@ -296,28 +363,21 @@ export function akashCreditReader(
             { label: "Escrow", amount: String(escrowUact), currency: "uact" },
           ],
         };
-        if (balance <= 0)
+        if (burnPerDay === 0)
           return {
             ...base,
-            runwayDays: 0,
-            grade: "RED",
-            detail: "credit exhausted",
+            grade: "INFO",
+            detail:
+              leases.items.length === 0 ? "No active leases" : "No priced burn",
           };
-        if (burnPerDay === 0)
-          return { ...base, grade: "GREEN", detail: "no priced lease" };
-        const pooled = balance / burnPerDay;
-        // Escrow is locked per deployment; only shared Console credit can refill the thinnest one.
-        const constrained =
-          creditUact > 0 || thinnest === null
-            ? pooled
-            : Math.min(pooled, thinnest.days);
+        const runwayDays = balance / burnPerDay;
+        if (!Number.isFinite(runwayDays))
+          return unknown("credit runway invalid");
         return {
           ...base,
-          runwayDays: constrained,
-          grade: gradeRunway(constrained),
-          detail: thinnest
-            ? `Pooled ${pooled.toFixed(1)}d · Thinnest ${thinnest.days.toFixed(1)}d (dseq ${thinnest.dseq})`
-            : `Pooled ${pooled.toFixed(1)}d`,
+          runwayDays,
+          grade: gradeRunway(runwayDays),
+          detail: `Account top-up estimate, not shutdown time. Escrow at last settlement: ${perDeployment.map(({ dseq, days }) => `${dseq} ${days.toFixed(1)}d`).join("; ")}. Console normally refills escrow. Allowance does not prove provider solvency or refill success.`,
         };
       } catch (error) {
         return unknown(

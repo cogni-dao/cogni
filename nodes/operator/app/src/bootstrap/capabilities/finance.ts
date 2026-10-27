@@ -207,6 +207,8 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
     ),
   ]);
   const akashCredit = akashCreditReader({
+    // Public Console funding identity, independently verified for this managed account.
+    expectedGranter: "akash17f8kfdvzaamk6gapy6tsrf8sg4cdd0296kkhnz",
     owner: env.AKASH_ACTUATOR_ACCOUNT_ID?.trim() || AKASH_PRODUCTION_OWNER,
     fetch: safeFetch,
     blocksPerDay,

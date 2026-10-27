@@ -222,7 +222,7 @@ describe("operator finance evidence", () => {
   it("collapses hosting rows into children of the one Akash row and fills burn from the ledger when the chain is unread", () => {
     const parent: MoneyPlaneRow = {
       plane: "akash:credit",
-      label: "Akash",
+      label: "Akash credit",
       kind: "prepaid",
       balance: 7.89,
       currency: "USD",
@@ -270,7 +270,7 @@ describe("operator finance evidence", () => {
     const noParent = collapseAkash([poly]);
     expect(noParent[0]).toMatchObject({
       plane: "akash:credit",
-      label: "Akash",
+      label: "Akash credit",
       grade: "UNKNOWN",
       rail: { kind: "card-manual", status: "planned", guide: "Console" },
     });
@@ -310,7 +310,7 @@ describe("operator finance evidence", () => {
     ).rejects.toThrow("income query aborted");
     expect(calls).toHaveLength(1);
   });
-  it("ports akashPlane: grant credit + escrow, lease burn at the chain cadence, thinnest escrow, graded runway", async () => {
+  it("reports available grant credit and lease burn, retaining escrow as source evidence", async () => {
     const signal = new AbortController().signal;
     const urls: string[] = [];
     const fetch = async (url: string) => {
@@ -325,8 +325,11 @@ describe("operator finance evidence", () => {
               },
               {
                 granter: "akash1console",
+                grantee: AKASH_PRODUCTION_OWNER,
+                expiration: "2036-09-29T20:04:46.002Z",
                 authorization: {
-                  "@type": "/akash.deployment.v1beta3.DepositAuthorization",
+                  "@type": "/akash.escrow.v1.DepositAuthorization",
+                  scopes: ["deployment"],
                   spend_limits: [
                     { denom: "uact", amount: "5790000" },
                     { denom: "uakt", amount: "0" },
@@ -350,7 +353,6 @@ describe("operator finance evidence", () => {
                     state: { funds: [{ denom: "uact", amount: "600000" }] },
                   },
                 },
-                { deployment: { id: { dseq: "3" } }, escrow_account: null },
               ],
             }
           : {
@@ -373,20 +375,21 @@ describe("operator finance evidence", () => {
     };
     const bpd = 14_683;
     const row = await akashCreditReader({
+      expectedGranter: "akash1console",
       owner: AKASH_PRODUCTION_OWNER,
       fetch,
       blocksPerDay: bpd,
     }).read(signal);
     const q = `filters.owner=${AKASH_PRODUCTION_OWNER}&filters.state=active&pagination.limit=500`;
     expect(urls).toEqual([
-      `https://api.akashnet.net/cosmos/authz/v1beta1/grants/grantee/${AKASH_PRODUCTION_OWNER}`,
+      `https://api.akashnet.net/cosmos/authz/v1beta1/grants/grantee/${AKASH_PRODUCTION_OWNER}?pagination.limit=500`,
       `https://api.akashnet.net/akash/deployment/v1beta4/deployments/list?${q}`,
       `https://api.akashnet.net/akash/market/v1beta5/leases/list?${q}`,
     ]);
     const burn = (213.15 * bpd) / 1e6;
     expect(row).toMatchObject({
       plane: "akash:credit",
-      label: "Akash",
+      label: "Akash credit",
       kind: "prepaid",
       currency: "USD",
       grade: "RED",
@@ -398,19 +401,16 @@ describe("operator finance evidence", () => {
         { label: "Escrow", amount: "2100000", currency: "uact" },
       ],
     });
-    expect(row.balance).toBeCloseTo(7.89, 9);
+    expect(row.balance).toBeCloseTo(5.79, 9);
     expect(row.burnPerDay).toBeCloseTo(burn, 9);
-    expect(row.runwayDays).toBeCloseTo(7.89 / burn, 9);
+    expect(row.runwayDays).toBeCloseTo(5.79 / burn, 9);
     expect(row.source).toBe(
-      "Akash chain · Console grant + escrow · 2 leases at 14,683 blocks/day (measured)"
+      "Available Console credit · escrow excluded · 2 leases at 14,683 blocks/day (measured)"
     );
-    const pooled = (7.89 / burn).toFixed(1);
-    const thinnest = (600000 / (113.15 * bpd)).toFixed(1);
-    expect(row.detail).toBe(
-      `Pooled ${pooled}d · Thinnest ${thinnest}d (dseq 2)`
-    );
+    expect(row.detail).toContain("Escrow at last settlement");
     const fallback = await akashCreditReader({
-      owner: "x",
+      expectedGranter: "akash1console",
+      owner: AKASH_PRODUCTION_OWNER,
       fetch,
       blocksPerDay: null,
     }).read(signal);
@@ -420,7 +420,7 @@ describe("operator finance evidence", () => {
       9
     );
   });
-  it("grades the thinnest deployment when Console credit is zero: $1 escrow at $1/day is RED 1d, not pooled GREEN", async () => {
+  it("reports zero available credit as RED even with reserved escrow", async () => {
     const signal = new AbortController().signal;
     const bpd = 1e6; // 1 uact/block ⇒ 1 USD/day, so prices read as $/day
     const fetch = async (url: string) => ({
@@ -431,8 +431,12 @@ describe("operator finance evidence", () => {
           ? {
               grants: [
                 {
+                  granter: "akash1console",
+                  grantee: "x",
+                  expiration: "2036-09-29T20:04:46.002Z",
                   authorization: {
-                    "@type": "/akash.deployment.v1beta3.DepositAuthorization",
+                    "@type": "/akash.escrow.v1.DepositAuthorization",
+                    scopes: ["deployment"],
                     spend_limits: [{ denom: "uact", amount: "0" }],
                   },
                 },
@@ -473,17 +477,18 @@ describe("operator finance evidence", () => {
               },
     });
     const row = await akashCreditReader({
+      expectedGranter: "akash1console",
       owner: "x",
       fetch,
       blocksPerDay: bpd,
     }).read(signal);
-    expect(row.balance).toBeCloseTo(100, 9);
+    expect(row.balance).toBe(0);
     expect(row.burnPerDay).toBeCloseTo(2, 9);
-    expect(row.runwayDays).toBeCloseTo(1, 9);
+    expect(row.runwayDays).toBe(0);
     expect(row.grade).toBe("RED");
-    expect(row.detail).toBe("Pooled 50.0d · Thinnest 1.0d (dseq A)");
+    expect(row.detail).toContain("Escrow at last settlement");
   });
-  it("sums several leases on one deployment and lets shared Console credit grade on the pooled figure", async () => {
+  it("sums leases per deployment but grades only available credit", async () => {
     const signal = new AbortController().signal;
     const bpd = 1e6;
     const make = (credit: string) => async (url: string) => ({
@@ -494,8 +499,12 @@ describe("operator finance evidence", () => {
           ? {
               grants: [
                 {
+                  granter: "akash1console",
+                  grantee: "x",
+                  expiration: "2036-09-29T20:04:46.002Z",
                   authorization: {
-                    "@type": "/akash.deployment.v1beta3.DepositAuthorization",
+                    "@type": "/akash.escrow.v1.DepositAuthorization",
+                    scopes: ["deployment"],
                     spend_limits: [{ denom: "uact", amount: credit }],
                   },
                 },
@@ -530,30 +539,36 @@ describe("operator finance evidence", () => {
               },
     });
     const zero = await akashCreditReader({
+      expectedGranter: "akash1console",
       owner: "x",
       fetch: make("0"),
       blocksPerDay: bpd,
     }).read(signal);
     expect(zero.burnPerDay).toBeCloseTo(4, 9);
-    expect(zero.runwayDays).toBeCloseTo(1, 9);
-    expect(zero.detail).toBe("Pooled 1.0d · Thinnest 1.0d (dseq A)");
+    expect(zero.runwayDays).toBe(0);
+    expect(zero.detail).toContain("Escrow at last settlement");
     const funded = await akashCreditReader({
+      expectedGranter: "akash1console",
       owner: "x",
       fetch: make("96000000"),
       blocksPerDay: bpd,
     }).read(signal);
-    expect(funded.balance).toBeCloseTo(100, 9);
-    expect(funded.runwayDays).toBeCloseTo(25, 9);
+    expect(funded.balance).toBe(96);
+    expect(funded.runwayDays).toBe(24);
     expect(funded.grade).toBe("GREEN");
-    expect(funded.detail).toBe("Pooled 25.0d · Thinnest 1.0d (dseq A)");
+    expect(funded.detail).toContain("Escrow at last settlement");
   });
   it("never turns a missing or malformed bill into zero spending", async () => {
     const signal = new AbortController().signal;
     const grant = {
       grants: [
         {
+          granter: "akash1console",
+          grantee: "x",
+          expiration: "2036-09-29T20:04:46.002Z",
           authorization: {
-            "@type": "/akash.deployment.v1beta3.DepositAuthorization",
+            "@type": "/akash.escrow.v1.DepositAuthorization",
+            scopes: ["deployment"],
             spend_limits: [{ denom: "uact", amount: "5000000" }],
           },
         },
@@ -637,6 +652,7 @@ describe("operator finance evidence", () => {
     ];
     for (const [leases, detail] of cases) {
       const row = await akashCreditReader({
+        expectedGranter: "akash1console",
         owner: "x",
         fetch: withLeases(leases),
         blocksPerDay: null,
@@ -650,6 +666,7 @@ describe("operator finance evidence", () => {
       });
     }
     const missingDeployments = await akashCreditReader({
+      expectedGranter: "akash1console",
       owner: "x",
       blocksPerDay: null,
       fetch: async (url: string) => ({
@@ -668,14 +685,15 @@ describe("operator finance evidence", () => {
       detail: "deployments list unavailable",
     });
     const verifiedEmpty = await akashCreditReader({
+      expectedGranter: "akash1console",
       owner: "x",
       fetch: withLeases({ leases: [] }),
       blocksPerDay: null,
     }).read(signal);
     expect(verifiedEmpty).toMatchObject({
-      grade: "GREEN",
+      grade: "INFO",
       burnPerDay: 0,
-      detail: "no priced lease",
+      detail: "No active leases",
     });
   });
   it("follows pagination keys across pages and stops after the cap", async () => {
@@ -683,8 +701,12 @@ describe("operator finance evidence", () => {
     const grant = {
       grants: [
         {
+          granter: "akash1console",
+          grantee: "x",
+          expiration: "2036-09-29T20:04:46.002Z",
           authorization: {
-            "@type": "/akash.deployment.v1beta3.DepositAuthorization",
+            "@type": "/akash.escrow.v1.DepositAuthorization",
+            scopes: ["deployment"],
             spend_limits: [{ denom: "uact", amount: "0" }],
           },
         },
@@ -730,15 +752,16 @@ describe("operator finance evidence", () => {
       };
     };
     const row = await akashCreditReader({
+      expectedGranter: "akash1console",
       owner: "x",
       fetch,
       blocksPerDay: 1e6,
     }).read(signal);
     expect(seen.filter((u) => u.includes("/leases/"))).toHaveLength(3);
     expect(row.burnPerDay).toBeCloseTo(3, 9);
-    expect(row.runwayDays).toBeCloseTo(1, 9);
+    expect(row.runwayDays).toBe(0);
   });
-  it("grades an exhausted uakt-only grant as escrow-only balance and never throws from the chain read", async () => {
+  it("reports an exhausted grant with no leases as INFO and never throws", async () => {
     const signal = new AbortController().signal;
     const exhausted = async (url: string) => ({
       ok: true,
@@ -748,8 +771,12 @@ describe("operator finance evidence", () => {
           ? {
               grants: [
                 {
+                  granter: "akash1console",
+                  grantee: "x",
+                  expiration: "2036-09-29T20:04:46.002Z",
                   authorization: {
-                    "@type": "/akash.deployment.v1beta3.DepositAuthorization",
+                    "@type": "/akash.escrow.v1.DepositAuthorization",
+                    scopes: ["deployment"],
                     spend_limits: [{ denom: "uakt", amount: "0" }],
                   },
                 },
@@ -769,20 +796,22 @@ describe("operator finance evidence", () => {
             : { leases: [] },
     });
     const escrowOnly = await akashCreditReader({
+      expectedGranter: "akash1console",
       owner: "x",
       fetch: exhausted,
       blocksPerDay: null,
     }).read(signal);
     expect(escrowOnly).toMatchObject({
-      grade: "GREEN",
-      detail: "no priced lease",
+      grade: "INFO",
+      detail: "No active leases",
       parts: [
         { label: "Console credit", amount: "0", currency: "uact" },
         { label: "Escrow", amount: "2100000", currency: "uact" },
       ],
     });
-    expect(escrowOnly.balance).toBeCloseTo(2.1, 9);
+    expect(escrowOnly.balance).toBe(0);
     const row = await akashCreditReader({
+      expectedGranter: "akash1console",
       owner: "x",
       blocksPerDay: null,
       payAction: {
@@ -805,6 +834,7 @@ describe("operator finance evidence", () => {
     expect(JSON.stringify(row)).not.toContain("sensitive-token-value");
     expect(
       await akashCreditReader({
+        expectedGranter: "akash1console",
         owner: "x",
         blocksPerDay: null,
         fetch: async () => ({ ok: false, status: 503, json: async () => ({}) }),
@@ -815,13 +845,14 @@ describe("operator finance evidence", () => {
     });
     expect(
       await akashCreditReader({
+        expectedGranter: "akash1console",
         owner: "x",
         blocksPerDay: null,
         fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
       }).read(signal)
     ).toMatchObject({
       reasonCode: "unreadable",
-      detail: "no Console credit grant",
+      detail: "grants list unavailable",
     });
     expect(
       sumUact([
@@ -1242,7 +1273,7 @@ describe("operator finance evidence", () => {
       payAction: { kind: "steward-checkout", vendor: "cherry" },
     });
     expect(byPlane.get("akash:credit")).toMatchObject({
-      label: "Akash",
+      label: "Akash credit",
       rail: { kind: "card-manual", status: "planned", guide: "Console" },
       payAction: { kind: "external", url: "https://console.akash.network/" },
     });

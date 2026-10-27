@@ -239,7 +239,7 @@ export function akashHostingReaders(
 }
 
 /**
- * One Akash row: the credit pool is the parent (balance = credit + escrow, burn = Σ lease burn, runway);
+ * One Akash row: available credit is the parent balance; reserved escrow stays in source detail;
  * the per-node hosting rows become its children. Never N top-level node rows.
  */
 export function collapseAkash(rows: readonly MoneyPlaneRow[]): MoneyPlaneRow[] {
@@ -258,7 +258,7 @@ export function collapseAkash(rows: readonly MoneyPlaneRow[]): MoneyPlaneRow[] {
       ...out,
       {
         plane: AKASH_CREDIT_PLANE,
-        label: "Akash",
+        label: "Akash credit",
         kind: "prepaid",
         balance: null,
         currency: "USD",
