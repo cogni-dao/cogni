@@ -10,7 +10,7 @@ resources:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:52bd7d6502464379a432e2cda53dab46dc6fad639b9728a5cac1029b536c0069"
+    digest: "sha256:910cff74b8f158eee964a559bdc64f5dc79473e2c16bbf3b7de8525fb48fc752"
 patches:
   # GENERATED sibling (render-scheduler-worker-endpoints.sh): this env's
   # PROVIDER-RESOLVED COGNI_NODE_ENDPOINTS. bug.5094 — a node placed on akash has
@@ -31,10 +31,10 @@ patches:
         value: "preview"
       - op: replace
         path: /data/IMAGE_DIGEST
-        value: "sha256:52bd7d6502464379a432e2cda53dab46dc6fad639b9728a5cac1029b536c0069"
+        value: "sha256:910cff74b8f158eee964a559bdc64f5dc79473e2c16bbf3b7de8525fb48fc752"
       - op: add
         path: /data/GIT_SHA
-        value: "452fdf8351347409e7f43e9520944cb06d67d24e"
+        value: "c117c33420864c2f2dd83cfb8bdf0e7cef050a76"
   # bug.0295: VM discovery via DNS (cogni-preview.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.
   - target: {kind: Service, name: temporal}
