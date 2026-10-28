@@ -175,10 +175,12 @@ import {
   type LeaseReadCapability,
 } from "@/bootstrap/capabilities/compute-leases";
 import { createDeployCapability } from "@/bootstrap/capabilities/deploy";
+import { createKnowledgeContributionReadCapability } from "@/bootstrap/capabilities/knowledge-contribution-read";
 import {
   createMetricsCapability,
   derivePrometheusQueryUrl,
 } from "@/bootstrap/capabilities/metrics";
+import { createNodeCodeCapability } from "@/bootstrap/capabilities/node-code";
 import { createLivenessAccessor } from "@/bootstrap/capabilities/node-registry";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { createRepoCapability } from "@/bootstrap/capabilities/repo";
@@ -247,6 +249,7 @@ import type {
 import {
   getDaoTreasuryAddress,
   getEmissionsHolderAddress,
+  getGithubRepo,
   getKnowledgeConfig,
   getLedgerSelectionConfig,
   getNodeId,
@@ -876,6 +879,16 @@ function createContainer(): Container {
 
   // VcsCapability for AI tools (requires GH_REVIEW_APP_ID)
   const vcsCapability = createVcsCapability(env);
+  const nodeCodeCapability = createNodeCodeCapability({
+    getAuthorization: () => authorization,
+    nodeId,
+    origin: env.APP_BASE_URL,
+    ...getGithubRepo(),
+    commitSha: env.APP_BUILD_SHA,
+    appId: env.GH_REVIEW_APP_ID,
+    privateKeyBase64: env.GH_REVIEW_APP_PRIVATE_KEY_BASE64,
+    log,
+  });
 
   // DeployCapability (read-only SEE flow) — probe-backed v0; undefined when no base domain.
   const deployCapability = createDeployCapability(env);
@@ -1047,6 +1060,12 @@ function createContainer(): Container {
 
   // ToolSource with real implementations (per CAPABILITY_INJECTION)
   const toolBindings = createToolBindings({
+    nodeCodeCapability,
+    knowledgeContributionReadCapability:
+      createKnowledgeContributionReadCapability({
+        nodeId: getNodeId(),
+        service: knowledgeContributionService,
+      }),
     nodePublicOrigin: env.APP_BASE_URL,
     knowledgeCapability,
     edoCapability,

@@ -51,6 +51,35 @@ export type MessageGraphOutput = { messages: BaseMessage[] };
  * Extend per-graph when additional dependencies are needed.
  */
 export interface CreateReactAgentGraphOptions {
+  /** Sanitized observation of isolated SDK state operations; never arbitrary scratch content. */
+  readonly onInternalToolEvent?: (event: {
+    id: string;
+    name: string;
+    status: "start" | "success" | "error";
+  }) => void;
+  /** Host-bound source provenance, never accepted from model/tool arguments. */
+  readonly sourceContext?: {
+    readonly nodeId: string;
+    readonly origin: string;
+    readonly mission?: {
+      readonly content: string;
+      readonly sourceRef: string;
+      readonly buildSha: string | null;
+    };
+    /**
+     * Host-owned governing index (same `listGoverningIndex` the cognition bundle renders):
+     * id · domain · entryType · useWhen metadata held in context so an agent selects its
+     * guidance and reads each body on demand (guidance-routing-design progressive disclosure).
+     */
+    readonly governingIndex?: ReadonlyArray<{
+      readonly id: string;
+      readonly domain: string;
+      readonly entryType: string;
+      readonly useWhen: string;
+    }>;
+  };
+  /** Trusted catalog assignment; never supplied by model/tool content. */
+  readonly program?: "cogni" | "work-review";
   /** LLM instance - LanguageModelLike to match createReactAgent expectation */
   readonly llm: LanguageModelLike;
   /** Tools wrapped via toLangChainTools() */

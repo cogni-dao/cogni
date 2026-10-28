@@ -138,6 +138,7 @@ export class DoltBranchSessionRunner {
     ) => Promise<T>,
     options: {
       readonly operationId?: string;
+      /** CLI owners must settle native cleanup before closing their pool. */
       readonly awaitSettlement?: boolean;
     } = {}
   ): Promise<T> {

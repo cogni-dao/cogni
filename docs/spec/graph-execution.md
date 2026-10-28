@@ -94,7 +94,7 @@ Provide a single execution interface (`GraphExecutorPort.runGraph()`) that all g
 
 25. **CONFIGURABLE_IS_JSON**: `config.configurable` must be JSON-serializable (no functions, no object instances). Executors access non-serializable runtime context via `AsyncLocalStorage`.
 
-26. **TOOLS_BY_ID**: `configurable.toolIds: string[]` is a **capability allowlist**, not a registry lookup. Tool schemas are bound at graph compile time; `toolIds` gates which tools may execute at runtime. `toLangChainTool` wrapper checks this allowlist and returns `policy_denied` (via existing `ToolExecResult`) if tool not in list. OAuth/MCP auth is resolved from ALS runtime context, never from configurable.
+26. **TOOLS_BY_ID**: `configurable.toolIds: string[]` is a **capability allowlist**, not a registry lookup. Capability tool schemas are bound at graph compile time; `toolIds` gates which capability tools may execute at runtime. Isolated SDK state operations follow the narrow [harness-state boundary](tool-use.md#isolated-harness-state), never granting external capability. `toLangChainTool` wrapper checks this allowlist and returns `policy_denied` (via existing `ToolExecResult`) if tool not in list. OAuth/MCP auth is resolved from ALS runtime context, never from configurable.
 
 27. **EXECUTOR_OWNS_TRANSPORT**: Executor decides LLM routing (CogniCompletionAdapter vs ChatOpenAI). Graph code is transport-agnostic.
 

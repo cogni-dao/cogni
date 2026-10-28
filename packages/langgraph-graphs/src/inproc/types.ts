@@ -108,6 +108,8 @@ export interface InProcGraphRequest {
  * Generic TTool allows src/ to specify LlmToolDefinition while package defaults to unknown.
  */
 export interface InProcRunnerOptions<TTool = unknown> {
+  readonly program?: CreateReactAgentGraphOptions["program"];
+  readonly sourceContext?: CreateReactAgentGraphOptions["sourceContext"];
   /** Graph factory from catalog - creates compiled graph with LLM and tools */
   readonly createGraph: CreateGraphFn;
 

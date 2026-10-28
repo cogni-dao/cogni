@@ -92,6 +92,13 @@ export {
   systemClock,
   WorkItemPatchConflictError,
 } from "./capabilities";
+export type {
+  NodeCodeBinding,
+  NodeCodeCapability,
+  NodeCodeListResult,
+  NodeCodeReadResult,
+  NodeCodeSource,
+} from "./capabilities/node-code";
 // Tool catalog
 export {
   type CatalogBoundTool,
@@ -177,6 +184,13 @@ export {
   goalListStubImplementation,
 } from "./tools/goal-list";
 export {
+  createKnowledgeContributionReadImplementation,
+  KNOWLEDGE_CONTRIBUTION_READ_NAME,
+  type KnowledgeContributionReadCapability,
+  knowledgeContributionReadBoundTool,
+  knowledgeContributionReadContract,
+} from "./tools/knowledge-contribution-read";
+export {
   createKnowledgeIndexImplementation,
   KNOWLEDGE_INDEX_MAX_BYTES,
   KNOWLEDGE_INDEX_NAME,
@@ -246,6 +260,18 @@ export {
   metricsQueryContract,
   metricsQueryStubImplementation,
 } from "./tools/metrics-query";
+export {
+  createNodeCodeListImplementation,
+  NODE_CODE_LIST_NAME,
+  nodeCodeListBoundTool,
+  nodeCodeListContract,
+} from "./tools/node-code-list";
+export {
+  createNodeCodeReadImplementation,
+  NODE_CODE_READ_NAME,
+  nodeCodeReadBoundTool,
+  nodeCodeReadContract,
+} from "./tools/node-code-read";
 export {
   createRepoListImplementation,
   REPO_LIST_NAME,
@@ -406,6 +432,12 @@ export {
   workItemQueryContract,
   workItemQueryStubImplementation,
 } from "./tools/work-item-query";
+export {
+  createWorkItemReadImplementation,
+  WORK_ITEM_READ_NAME,
+  workItemReadBoundTool,
+  workItemReadContract,
+} from "./tools/work-item-read";
 export {
   createWorkItemTransitionImplementation,
   WORK_ITEM_TRANSITION_NAME,

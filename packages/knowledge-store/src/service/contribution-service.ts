@@ -122,7 +122,7 @@ export interface ContributionService {
     body: AppendCommitBody;
   }): Promise<ContributionCommitRecord>;
   list(args: {
-    principal: Principal;
+    principal?: Principal;
     query: ListQuery;
   }): Promise<ContributionRecord[]>;
   getById(contributionId: string): Promise<ContributionRecord | null>;

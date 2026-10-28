@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/ai-tools/tests/tool-requires`
- * Purpose: Lock the authz v0 node-policy declarations: exactly eight tools declare node.collaborate (incl. the work prioritizer's four and core__knowledge_index).
+ * Purpose: Lock the authz v0 node-policy declarations: exactly ten tools declare node.collaborate and two declare node.flight (incl. the work prioritizer's four and core__knowledge_index).
  * Scope: Contract metadata only; does not execute tools or evaluate policy.
  * Invariants:
  *   - PRIORITIZER_TOOLS_DECLARED (story.5096): the prioritizer's reads + its EDO decide declare `requires:
@@ -23,7 +23,7 @@ import { toBoundToolRuntime } from "../src/runtime-adapter";
 const ALL = [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE];
 
 describe("tool node-policy declarations (authz v0)", () => {
-  it("declares node.collaborate on exactly eight tools", () => {
+  it("declares exact existing collaboration and private-code developer gates", () => {
     const declared = ALL.filter((t) => t.contract.requires !== undefined)
       .map((t) => [t.contract.name, t.contract.requires])
       .sort();
@@ -34,6 +34,10 @@ describe("tool node-policy declarations (authz v0)", () => {
         ["core__goal_list", "node.collaborate"],
         ["core__knowledge_index", "node.collaborate"],
         ["core__knowledge_read", "node.collaborate"],
+        ["core__knowledge_contribution_read", "node.collaborate"],
+        ["core__node_code_read", "node.flight"],
+        ["core__node_code_list", "node.flight"],
+        ["core__work_item_read", "node.collaborate"],
         ["core__knowledge_search", "node.collaborate"],
         ["core__work_item_query", "node.collaborate"],
         ["core__work_item_transition", "node.collaborate"],

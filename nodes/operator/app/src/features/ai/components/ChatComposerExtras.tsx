@@ -43,6 +43,11 @@ const createGraphOption = (
 
 const AVAILABLE_GRAPHS: readonly GraphOption[] = [
   {
+    graphId: "langgraph:cogni" satisfies GraphId,
+    name: "Cogni",
+    description: "Hub-grounded read-only mission agent",
+  },
+  {
     graphId: "langgraph:poly-brain" satisfies GraphId,
     name: "Poly Brain",
     description: "Prediction market analyst with live market data",

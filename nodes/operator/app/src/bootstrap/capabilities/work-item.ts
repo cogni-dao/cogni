@@ -155,22 +155,7 @@ export function createWorkItemCapability(
     },
 
     async query(params): Promise<readonly WorkItemInfo[]> {
-      const result = await reader.list({
-        ...(params.statuses && {
-          statuses: params.statuses as readonly WorkItemStatus[],
-        }),
-        ...(params.types && {
-          types: params.types as readonly WorkItemType[],
-        }),
-        ...(params.text && { text: params.text }),
-        ...(params.actor && { actor: params.actor as ActorKind }),
-        ...(params.projectId && {
-          projectId: toWorkItemId(params.projectId),
-        }),
-        ...(params.limit && { limit: params.limit }),
-        ...(params.sortBy && { sortBy: params.sortBy }),
-        ...(params.sortDirection && { sortDirection: params.sortDirection }),
-      });
+      const result = await listPage(params);
       return result.items.map(toWorkItemInfo);
     },
 

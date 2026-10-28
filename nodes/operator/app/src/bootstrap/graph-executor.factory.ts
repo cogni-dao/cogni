@@ -62,6 +62,7 @@ import type {
   ModelProviderResolverPort,
   PreflightCreditCheckFn,
 } from "@/ports";
+import { getNodeMission } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { makeLogger } from "@/shared/observability";
 import {
@@ -546,7 +547,20 @@ function createInProcProvider(
     container.toolSource,
     () => cache.getSource(),
     [...OPERATOR_CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE],
-    container.authorization
+    container.authorization,
+    container.nodeId,
+    serverEnv().APP_BASE_URL,
+    {
+      content: getNodeMission() ?? "",
+      sourceRef: ".cogni/repo-spec.yaml#intent.mission",
+      buildSha: serverEnv().APP_BUILD_SHA ?? null,
+    },
+    // Host-owned governing index (same listGoverningIndex the cognition bundle renders),
+    // read per run so Cogni holds its guidance map in context without a mid-run index dump.
+    () =>
+      container.knowledgeStorePort
+        ? container.knowledgeStorePort.listGoverningIndex()
+        : Promise.resolve([])
   );
 }
 

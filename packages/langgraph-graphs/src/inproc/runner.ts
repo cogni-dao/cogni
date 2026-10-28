@@ -160,11 +160,19 @@ export function createInProcGraphRunner<TTool = unknown>(
     queue.push(e);
   };
 
-  const tokenSink = { push: emit };
+  const tokenSink = {
+    push: (event: AiEvent) => {
+      if (!opts.program || event.type !== "text_delta") emit(event);
+    },
+  };
   const toolExecFn = createToolExecFn(emit);
 
   // Create no-arg CogniCompletionAdapter (reads from ALS + configurable at invoke time)
-  const llm = new CogniCompletionAdapter();
+  const llm = new CogniCompletionAdapter().bindRun(
+    request.configurable.model,
+    request.abortSignal,
+    !!opts.program
+  );
 
   // Use toLangChainToolsCaptured since runner provides toolExecFn directly (not from ALS)
   const contractTools = toLangChainToolsCaptured({
@@ -182,6 +190,26 @@ export function createInProcGraphRunner<TTool = unknown>(
 
   // Use factory from catalog instead of hardcoded graph
   const graph = createGraph({
+    onInternalToolEvent: ({ id, name, status }) => {
+      if (status === "start")
+        emit({
+          type: "tool_call_start",
+          toolCallId: id,
+          toolName: name,
+          args: { stateOnly: true },
+        });
+      else
+        emit({
+          type: "tool_call_result",
+          toolCallId: id,
+          result: { stateOnly: true, operation: name, status },
+          ...(status === "error" ? { isError: true } : {}),
+        });
+    },
+    ...(opts.sourceContext !== undefined && {
+      sourceContext: opts.sourceContext,
+    }),
+    ...(opts.program !== undefined && { program: opts.program }),
     llm,
     tools,
     ...(responseFormat !== undefined && { responseFormat }),
@@ -207,6 +235,11 @@ export function createInProcGraphRunner<TTool = unknown>(
             {
               signal: request.abortSignal,
               configurable: request.configurable,
+              // A BACKSTOP against an infinite graph, never the real work bound — each
+              // graph self-limits (e.g. cogni's MAX_INVESTIGATE_STEPS). Must exceed any
+              // graph's budget: a gather round is 2 node visits, so this clears 2×the
+              // largest step cap with margin. Raise it with the caps, never below them.
+              recursionLimit: 100,
             }
           )
       );
