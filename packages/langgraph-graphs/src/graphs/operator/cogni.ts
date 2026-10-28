@@ -266,8 +266,13 @@ export function createCogniProgram(opts: CreateReactAgentGraphOptions) {
           .map((e) => `- ${e.id} · ${e.domain} · ${e.entryType} — ${e.useWhen}`)
           .join("\n")}`
       : "";
+    // HOST_OWNED_CLOCK: inject the real UTC time per invoke so a dated decision id uses the true
+    // date. The date must never be model-inferred — without this the model guesses its training-prior
+    // year (observed: a `cogni-2023…` id filed in 2026). core__get_current_time stays available, but
+    // grounding the clock here is fail-closed and does not depend on the model choosing to call it.
+    const nowUtc = new Date().toISOString();
     return new SystemMessage(
-      `${COGNI_PROMPT}\n\nHost-owned node mission (${mission.sourceRef}; serving build ${mission.buildSha ?? "local/unversioned"}):\n${mission.content}${indexBlock}\n\nSystematically gather context across every plane BEFORE deciding, reading full bodies (never decide from a list or search alone): approved goals (core__goal_list); the governing guides whose use-when fits — including ${requiredGuides.join(", ")} — and relevant knowledge by exact ID (core__knowledge_read; narrow with core__knowledge_search); the open knowledge inbox and relevant full diffs (core__knowledge_contribution_read); the work items you judge (core__work_item_query then core__work_item_read); and relevant repository code (core__node_code_list then core__node_code_read). Read the full body of everything you cite.`
+      `${COGNI_PROMPT}\n\nHost-owned current UTC time: ${nowUtc} (authoritative — use this exact clock for any dated id or time reasoning; never infer the date or year yourself).\n\nHost-owned node mission (${mission.sourceRef}; serving build ${mission.buildSha ?? "local/unversioned"}):\n${mission.content}${indexBlock}\n\nSystematically gather context across every plane BEFORE deciding, reading full bodies (never decide from a list or search alone): approved goals (core__goal_list); the governing guides whose use-when fits — including ${requiredGuides.join(", ")} — and relevant knowledge by exact ID (core__knowledge_read; narrow with core__knowledge_search); the open knowledge inbox and relevant full diffs (core__knowledge_contribution_read); the work items you judge (core__work_item_query then core__work_item_read); and relevant repository code (core__node_code_list then core__node_code_read). Read the full body of everything you cite.`
     );
   };
 
