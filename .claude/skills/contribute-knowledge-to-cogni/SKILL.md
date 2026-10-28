@@ -7,6 +7,9 @@ description: Use when contributing or refining durable knowledge in a Cogni node
 
 This file selects the contracts; the hub holds their maintained content.
 
+Write in ASD-STE100 style: short active sentences, one idea each, plain words
+a 10-year-old knows, one meaning per term.
+
 Read `GET /api/v1/knowledge/knowledge-contribution-flow` on the current node,
 using its verified origin and saved `COGNI_NODE_API_KEY`. Read the full response
 `content`, not only its index row. That guide owns recall of merged knowledge
