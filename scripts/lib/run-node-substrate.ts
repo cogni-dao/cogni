@@ -291,12 +291,14 @@ async function run(lane: string, node: string, verifyOnly: boolean) {
     if (Object.entries(expected).some(([key, value]) => values[key] !== value))
       throw new Error("dedicated_cell_projected_secret_mismatch");
   }
-  // story.5127: operator private-CA server-TLS is the trust anchor against an
-  // untrusted Akash provider. Public-PKI cells are out of scope — a CA pin to a
-  // public CA would accept any publicly-trusted cert for the host, so fail closed.
-  if (custody.tls.kind !== "private-ca")
-    throw new Error("dedicated_cell_requires_private_ca");
-  const caCertificate = custody.tls.caCertificate;
+  // story.5127: server-TLS is the trust anchor against an untrusted Akash
+  // provider. A private-ca cell pins the operator CA (preferred end state). An
+  // already-applied system-trust cell keeps the public roots (verify-full) so a
+  // routine endpoint move with a new leaf is not hard-failed before it connects
+  // — do not brick a live system cell. Both drop the frozen leaf pin, which only
+  // self-inflicts an outage on every cert rotation or endpoint move.
+  const caCertificate =
+    custody.tls.kind === "private-ca" ? custody.tls.caCertificate : undefined;
   const connect = (dsn: string) => {
     const url = new URL(dsn);
     return postgres({

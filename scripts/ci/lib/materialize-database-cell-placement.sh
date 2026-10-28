@@ -60,8 +60,26 @@ project_applied_database_cell() {
   jq -n --slurpfile receipt "${CACHE_DIR}/cell-projection-receipt" --slurpfile custody "${CACHE_DIR}/cell-projection-custody" --argjson requireApplied "$required" --slurpfile material "${CACHE_DIR}/cell-projection-material" --slurpfile bundle "${CACHE_DIR}/cell-projection-evidence" '{receipt:$receipt[0],custody:$custody[0],requireApplied:$requireApplied} + (if $material[0]==null then {} else {controlMaterial:$material[0],evidenceBundle:$bundle[0]} end)' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts"
 }
 
+# story.5127: the cell endpoint (host:port) is node-reconcilable config, not a
+# frozen receipt derivation. When the node-owned DATABASE_CELL_ENDPOINT secret is
+# set, re-source the host:port of a projected consumer DSN from it so a routine
+# move (resize/failover/provider change — bug.5540) reaches the pod and the
+# promotion preflight. Role, password, database and query stay substrate-owned;
+# the CA stays operator-owned. Absent → the DSN is unchanged (frozen endpoint),
+# so an un-reconciled cell keeps its current behavior.
+cell_endpoint_reconciled_dsn() {
+  local node="$1" dsn="$2" endpoint prefix after
+  [[ -n "$dsn" ]] || return 0
+  endpoint="$(bao_get_field "$node" DATABASE_CELL_ENDPOINT)"
+  if [[ -z "$endpoint" ]]; then printf '%s' "$dsn"; return 0; fi
+  [[ "$endpoint" =~ ^[A-Za-z0-9.-]+:[0-9]+$ ]] || fail "node-owned DATABASE_CELL_ENDPOINT must be host:port"
+  prefix="${dsn%@*}"          # scheme://role:password (generated passwords carry no '@')
+  after="${dsn#*@}"           # host:port/database?query
+  printf '%s@%s/%s' "$prefix" "$endpoint" "${after#*/}"
+}
+
 cell_placement_composed_value() {
-  local node="$1" key="$2"
+  local node="$1" key="$2" dsn
   [[ "$node" == "$TARGET_NODE" && -n "$CELL_PLACEMENT_JSON" ]] || return 1
   # System trust deliberately owns an absent custom-CA value. Return success with
   # empty stdout so the shared substrate CA composer cannot supply another value.
@@ -73,7 +91,13 @@ cell_placement_composed_value() {
     jq -er '.logicalProbeDsn // empty' <<<"$CELL_PLACEMENT_JSON" 2>/dev/null
     return $?
   fi
-  jq -er --arg key "$key" '.publicValues[$key] // empty' <<<"$CELL_PLACEMENT_JSON" 2>/dev/null
+  dsn="$(jq -er --arg key "$key" '.publicValues[$key] // empty' <<<"$CELL_PLACEMENT_JSON" 2>/dev/null)" || return 1
+  # The consumer DSN endpoint is node-reconcilable; role/password/db/CA are not.
+  case "$key" in
+    DATABASE_URL | DATABASE_SERVICE_URL | DATABASE_MIGRATION_URL)
+      cell_endpoint_reconciled_dsn "$node" "$dsn"; return 0 ;;
+  esac
+  printf '%s' "$dsn"
 }
 
 # Values must already exist in their real private consumer banks. This helper
@@ -95,6 +119,14 @@ validate_applied_cell_consumer_banks() {
     esac
     prefetch_path "$service"
     value="$(jq -r --arg field "$field" '.[$field].dsn // .[$field].caCertificate' <<<"$custody")"
+    # story.5127: the consumer-DSN endpoint is node-reconcilable config, so the
+    # stored value may carry a moved host:port. Re-source the expected value's
+    # endpoint from the same node-owned secret before comparing; role/password/
+    # db/CA stay frozen. Leaves the probe DSN and CA bytes unchanged.
+    case "$key" in
+      DATABASE_URL | DATABASE_SERVICE_URL | DATABASE_MIGRATION_URL)
+        value="$(cell_endpoint_reconciled_dsn "$node" "$value")" ;;
+    esac
     [[ "$(bao_get_field "$service" "$key")" == "$value" ]] || fail "manual applied consumer value differs from current secret custody"
   done
   if [[ "$(jq -r '.nativeControl != null' <<<"$custody")" == true ]]; then

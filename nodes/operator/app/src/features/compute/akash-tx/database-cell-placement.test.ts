@@ -1875,12 +1875,16 @@ describe("owned immutable applied evidence transport", () => {
     const repoRoot = fileURLToPath(
       new URL("../../../../../../../", import.meta.url)
     );
+    const dsn =
+      "postgresql://app_alpha:secretpass@old.host:5432/cogni_alpha?sslmode=disable";
     const script = [
       "set -eu",
       'REPO_ROOT="$1"',
       'source "$REPO_ROOT/scripts/ci/lib/materialize-database-cell-placement.sh"',
       "TARGET_NODE=alpha",
-      `CELL_PLACEMENT_JSON='{"publicValues":{"DATABASE_URL":"opaque-owned-current-dsn"}}'`,
+      // No node-owned DATABASE_CELL_ENDPOINT set → the DSN endpoint is unchanged.
+      "bao_get_field() { :; }",
+      `CELL_PLACEMENT_JSON='{"publicValues":{"DATABASE_URL":"${dsn}"}}'`,
       'value="$(cell_placement_composed_value alpha DATABASE_SSL_CA_CERT)"',
       '[ -z "$value" ]',
       "cell_placement_composed_value alpha DATABASE_URL",
@@ -1889,7 +1893,31 @@ describe("owned immutable applied evidence transport", () => {
       execFileSync("bash", ["-c", script, "fixture", repoRoot], {
         encoding: "utf8",
       })
-    ).toBe("opaque-owned-current-dsn\n");
+    ).toBe(dsn);
+  });
+  it("re-sources the consumer DSN endpoint from the node-owned secret (story.5127)", () => {
+    const repoRoot = fileURLToPath(
+      new URL("../../../../../../../", import.meta.url)
+    );
+    const dsn =
+      "postgresql://app_alpha:secretpass@old.host:5432/cogni_alpha?sslmode=disable";
+    const script = [
+      "set -eu",
+      'REPO_ROOT="$1"',
+      'source "$REPO_ROOT/scripts/ci/lib/materialize-database-cell-placement.sh"',
+      "TARGET_NODE=alpha",
+      // A moved cell: the node-owned endpoint carries the new host:port.
+      'bao_get_field() { [ "$2" = DATABASE_CELL_ENDPOINT ] && printf new.host:32728; }',
+      `CELL_PLACEMENT_JSON='{"publicValues":{"DATABASE_URL":"${dsn}"}}'`,
+      "cell_placement_composed_value alpha DATABASE_URL",
+    ].join("\n");
+    expect(
+      execFileSync("bash", ["-c", script, "fixture", repoRoot], {
+        encoding: "utf8",
+      })
+    ).toBe(
+      "postgresql://app_alpha:secretpass@new.host:32728/cogni_alpha?sslmode=disable"
+    );
   });
 });
 
