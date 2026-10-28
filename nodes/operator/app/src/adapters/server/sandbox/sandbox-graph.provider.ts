@@ -11,7 +11,7 @@
  *   - Per SECRETS_HOST_ONLY: Only messages + model passed to sandbox, never credentials
  *   - Per BILLING_INDEPENDENT_OF_CLIENT: ephemeral emits usage_report for RunEventRelay billing
  * Side-effects: IO (creates tmp workspace, runs Docker containers via SandboxRunnerPort)
- * Links: docs/spec/sandboxed-agents.md, sandbox-runner.adapter.ts
+ * Links: https://cognidao.org/knowledge/sandbox-agent-execution-architecture, sandbox-runner.adapter.ts
  * @internal
  */
 

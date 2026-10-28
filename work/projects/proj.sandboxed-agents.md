@@ -3,18 +3,20 @@ id: proj.sandboxed-agents
 type: project
 primary_charter:
 title: Sandboxed Agents — OpenClaw Integration, Git Relay & Dashboard
-state: Active
+state: Dropped
 priority: 1
 estimate: 5
 summary: Wire OpenClaw into sandbox agent catalog, build host-side git relay for code PRs, add sandbox dashboard and metrics
 outcome: Sandbox agents (simple + OpenClaw) discoverable via API catalog, producing code PRs via host-side git relay, with observability dashboard
 assignees: derekg1729
 created: 2026-02-07
-updated: 2026-02-07
+updated: 2026-10-27
 labels: [sandbox, openclaw, ai-agents]
 ---
 
 # Sandboxed Agents — OpenClaw Integration, Git Relay & Dashboard
+
+> **Dropped 2026-10-27**: the sandboxed/OpenClaw coding-agent direction (gateway chat, git relay, warm pool, multi-agent) was confirmed not current and not pursued. The P0 base sandbox layer it depended on (network-isolated container, LLM proxy, billing) is real and live under `sandbox:agent` — its invariants are migrated to the hub as [sandbox-agent-execution-architecture](https://cognidao.org/knowledge/sandbox-agent-execution-architecture), [sandbox-billing-pipeline](https://cognidao.org/knowledge/sandbox-billing-pipeline), and [sandbox-proxy-threat-model](https://cognidao.org/knowledge/sandbox-proxy-threat-model). This charter's OpenClaw-specific roadmap below is historical; links to deleted research docs are not repaired.
 
 > Source: docs/spec/openclaw-sandbox-controls.md (roadmap content extracted during docs migration)
 

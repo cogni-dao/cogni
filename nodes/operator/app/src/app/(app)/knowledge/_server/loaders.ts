@@ -34,6 +34,7 @@ import {
   KnowledgeListResponseSchema,
   type KnowledgeRow,
 } from "@cogni/node-contracts";
+import { unstable_cache } from "next/cache";
 
 export interface KnowledgeListOpts {
   domain?: string | undefined;
@@ -110,14 +111,52 @@ export async function loadDomains(
 export async function loadKnowledgeGraph(
   port: KnowledgeStorePort
 ): Promise<KnowledgeGraphModel> {
-  const domains = await port.listDomains();
-  const perDomain = await Promise.all(
-    // The graph renders EDO chains — opt in to the full shelf.
-    domains.map((d) =>
-      port.listKnowledge(d, { limit: 10_000, includeEdo: true })
-    )
-  );
-  const entries = perDomain.flat();
-  const citations = await port.listAllCitations();
-  return buildKnowledgeGraph({ domains, entries, citations });
+  // ONE projected read of all entries (6 graph columns, never `content`) +
+  // one citation read. Memory is bounded by node/edge count, not body bytes —
+  // the old `limit:10_000` per-domain full-body read materialized ~168 bodies
+  // the graph discards, the heap-OOM driver (bug.5547).
+  const [domains, nodes, citations] = await Promise.all([
+    port.listDomains(),
+    port.listKnowledgeGraphNodes(),
+    port.listAllCitations(),
+  ]);
+  return buildKnowledgeGraph({ domains, nodes, citations });
+}
+
+/**
+ * Revision-keyed SSR cache (bug.5547). `force-dynamic` stays for the per-request
+ * auth check; only the store READ is cached, keyed by the Dolt head commit
+ * (`currentCommit()`) so repeat `/knowledge` refreshes are cache hits — zero
+ * body re-reads — while a contribution merge (which moves the head commit)
+ * busts the cache the same request, with no stale window. One cheap
+ * `dolt_hashof('HEAD')` read per request computes the key.
+ *
+ * Scoped to the SSR page (the OOM source); the `/api/v1/knowledge*` routes keep
+ * the raw loaders, so their response freshness is unchanged.
+ */
+const KNOWLEDGE_CACHE_TAG = "knowledge";
+
+export async function loadKnowledgeListCached(
+  port: KnowledgeStorePort,
+  opts: KnowledgeListOpts = {}
+): Promise<KnowledgeListResponse> {
+  const rev = await port.currentCommit();
+  return unstable_cache(
+    () => loadKnowledgeList(port, opts),
+    ["knowledge-list", rev, JSON.stringify(opts)],
+    { tags: [KNOWLEDGE_CACHE_TAG] }
+  )();
+}
+
+export async function loadKnowledgeGraphCached(
+  port: KnowledgeStorePort
+): Promise<KnowledgeGraphModel> {
+  const rev = await port.currentCommit();
+  return unstable_cache(
+    () => loadKnowledgeGraph(port),
+    ["knowledge-graph", rev],
+    {
+      tags: [KNOWLEDGE_CACHE_TAG],
+    }
+  )();
 }

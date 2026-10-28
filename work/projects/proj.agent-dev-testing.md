@@ -3,7 +3,7 @@ id: proj.agent-dev-testing
 type: project
 primary_charter:
 title: Agent Development Testing — Self-Validating Code Agents
-state: Active
+state: Dropped
 priority: 1
 estimate: 5
 summary: Give OpenClaw agents the ability to fully validate their own code changes — lint, type-check, unit tests, stack tests, and Playwright e2e — before submitting PRs
@@ -11,11 +11,13 @@ outcome: An OpenClaw coding agent can run `pnpm check`, launch test infrastructu
 assignees:
   - derekg1729
 created: 2026-02-11
-updated: 2026-02-11
+updated: 2026-10-27
 labels: [openclaw, testing, sandbox, ci]
 ---
 
 # Agent Development Testing — Self-Validating Code Agents
+
+> **Dropped 2026-10-27**: depends entirely on the OpenClaw `sandbox:coder` self-validation loop, which was never built (no `sandbox:coder` registry entry exists on main) and whose direction is not current. See [openclaw-docker-build-finding](https://cognidao.org/knowledge/openclaw-docker-build-finding) for the preserved research evidence. Links to deleted research docs below are not repaired.
 
 > Relationship to other projects:
 >

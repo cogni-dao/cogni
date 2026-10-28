@@ -65,6 +65,8 @@ export function makeCogniGraph<
   readonly createGraph: TCreateGraph;
   /** Tool IDs this graph uses (from per-graph tools.ts) */
   readonly toolIds: readonly string[];
+  /** Trusted catalog program assignment (e.g. "cogni"); never from model/tool content. */
+  readonly program?: CreateReactAgentGraphOptions["program"];
 }): ReturnType<TCreateGraph> {
   const { name, createGraph, toolIds } = opts;
 
@@ -97,5 +99,9 @@ export function makeCogniGraph<
   });
 
   // Create graph using factory - cast preserves concrete return type
-  return createGraph({ llm, tools }) as ReturnType<TCreateGraph>;
+  return createGraph({
+    llm,
+    tools,
+    ...(opts.program ? { program: opts.program } : {}),
+  }) as ReturnType<TCreateGraph>;
 }

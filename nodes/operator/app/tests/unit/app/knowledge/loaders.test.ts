@@ -99,9 +99,7 @@ describe("knowledge SSR loaders", () => {
   it("buildKnowledgeGraph drops an edge whose endpoint is not a node (EDGE_ENDPOINTS_EXIST)", async () => {
     const store = await seed();
     const domains = await store.listDomains();
-    const entries = (
-      await Promise.all(domains.map((d) => store.listKnowledge(d)))
-    ).flat();
+    const nodes = await store.listKnowledgeGraphNodes();
     const dangling: Citation = {
       id: "dangle",
       citingId: "k1",
@@ -112,7 +110,7 @@ describe("knowledge SSR loaders", () => {
 
     const graph = buildKnowledgeGraph({
       domains,
-      entries,
+      nodes,
       citations: [...(await store.listAllCitations()), dangling],
     });
 

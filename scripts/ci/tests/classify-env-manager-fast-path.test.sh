@@ -115,6 +115,23 @@ run_classifier "$tmpdir/valid.out"
 [[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/valid.out")" == true ]]
 [[ "$(awk -F= '$1=="claimed"{v=$2} END{print v}' "$tmpdir/valid.out")" == true ]]
 
+# Custodied routing may touch only the derived control worker, never another lane.
+cp "$paths_file" "$tmpdir/original-paths.txt"
+printf '%s\n' "infra/k8s/overlays/$control_env/scheduler-worker/node-endpoints.patch.yaml" >> "$paths_file"
+LC_ALL=C sort -u "$paths_file" > "$tmpdir/with-custody.txt"
+mv "$tmpdir/with-custody.txt" "$paths_file"
+custody_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
+write_fixtures "${valid_message/$paths_hash/$custody_hash}"
+run_classifier "$tmpdir/custody.out"
+[[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/custody.out")" == true ]]
+sed 's#overlays/production/scheduler-worker#overlays/candidate-a/scheduler-worker#' "$paths_file" > "$tmpdir/foreign-paths.txt"
+LC_ALL=C sort -u "$tmpdir/foreign-paths.txt" > "$paths_file"
+foreign_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
+write_fixtures "${valid_message/$paths_hash/$foreign_hash}"
+run_classifier "$tmpdir/foreign-routing.out"
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/foreign-routing.out")" == path-outside-env-manager-boundary ]]
+cp "$tmpdir/original-paths.txt" "$paths_file"
+
 # The production-shaped E2E repository trusts only its dedicated test App.
 repository='cogni-test-org/cogni-monorepo'
 bot_login='cogni-operator-test[bot]'
@@ -155,6 +172,46 @@ FAST_PATH_TEST_HEAD_CATALOG="$remove_head_catalog" \
   run_classifier "$tmpdir/remove.out"
 [[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/remove.out")" == true ]]
 cp "$head_catalog" "$tmpdir/catalog/blue.yaml"
+
+# A foreign-custody membership plan contains the five membership files plus
+# BOTH lane and control scheduler patches (seven paths, as in live Beacon/LevelUp).
+cp "$paths_file" "$tmpdir/membership-only-paths.txt"
+printf '%s\n' \
+  'infra/k8s/overlays/preview/scheduler-worker/node-endpoints.patch.yaml' \
+  "infra/k8s/overlays/$control_env/scheduler-worker/node-endpoints.patch.yaml" >> "$paths_file"
+LC_ALL=C sort -u "$paths_file" > "$tmpdir/seven-paths.txt"
+cp "$tmpdir/seven-paths.txt" "$paths_file"
+[[ "$(wc -l < "$paths_file" | tr -d ' ')" == 7 ]]
+seven_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
+write_fixtures "${valid_message/$paths_hash/$seven_hash}"
+run_classifier "$tmpdir/seven-add.out"
+[[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/seven-add.out")" == true ]]
+
+write_fixtures "${remove_message/$paths_hash/$seven_hash}"
+cp "$remove_head_catalog" "$tmpdir/catalog/blue.yaml"
+FAST_PATH_TEST_BASE_CATALOG="$remove_base_catalog" \
+FAST_PATH_TEST_HEAD_CATALOG="$remove_head_catalog" \
+  run_classifier "$tmpdir/seven-remove.out"
+[[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/seven-remove.out")" == true ]]
+cp "$head_catalog" "$tmpdir/catalog/blue.yaml"
+
+# Even a correctly signed eight-path claim exceeds this bounded capability.
+printf '%s\n' 'infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml' >> "$paths_file"
+LC_ALL=C sort -u "$paths_file" > "$tmpdir/eight-paths.txt"
+cp "$tmpdir/eight-paths.txt" "$paths_file"
+eight_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
+write_fixtures "${valid_message/$paths_hash/$eight_hash}"
+run_classifier "$tmpdir/eight.out"
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/eight.out")" == invalid-file-metadata ]]
+
+# Staying within seven paths cannot authorize an unrelated control environment.
+sed "s#overlays/$control_env/scheduler-worker/#overlays/candidate-a/scheduler-worker/#" \
+  "$tmpdir/seven-paths.txt" | LC_ALL=C sort -u > "$paths_file"
+foreign_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
+write_fixtures "${valid_message/$paths_hash/$foreign_hash}"
+run_classifier "$tmpdir/foreign-control.out"
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/foreign-control.out")" == path-outside-env-manager-boundary ]]
+cp "$tmpdir/membership-only-paths.txt" "$paths_file"
 
 # A copied title without the reserved signed trailer stays on full CI.
 write_fixtures 'feat(node): add blue to preview'

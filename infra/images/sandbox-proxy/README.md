@@ -1,6 +1,6 @@
 # Sandbox LLM Proxy
 
-Per [Sandboxed Agents](../../../docs/spec/sandboxed-agents.md) P0.5: Nginx proxy that injects authentication and billing headers for sandbox LLM calls.
+Per [Sandboxed Agents](https://cognidao.org/knowledge/sandbox-agent-execution-architecture) P0.5: Nginx proxy that injects authentication and billing headers for sandbox LLM calls.
 
 ## Architecture
 

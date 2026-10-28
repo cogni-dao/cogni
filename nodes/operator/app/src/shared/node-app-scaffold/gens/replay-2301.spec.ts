@@ -13,7 +13,8 @@
  *   pinned in its README). Drives the planner twice — candidate-a over the pre state, then preview
  *   over the COMPOSED output — exactly #2301's one-commit-two-envs shape.
  * Invariants: the 9 rendered files are BYTE-EQUAL to expected/; the catalog is STRUCTURALLY equal
- *   (catalog comments are human narrative; the 9 rendered files are byte-law).
+ *   (catalog comments are human narrative; the 9 rendered files are byte-law). The current
+ *   custody contract additionally writes the production scheduler map without changing its own lane.
  * Side-effects: none (fs reads of checked-in fixtures only)
  * Links: src/shared/node-app-scaffold/gens/env-membership-plan.ts, scripts/ci/lib/appset-paths.sh,
  *   story.5039, task.5132, bug.5204
@@ -66,7 +67,7 @@ function catalogPorts(catalog: string): { port: number; nodePort: number } {
 /**
  * Mirror `collectEnvPlanCurrent`'s ADD inputs over an in-memory tree: the WORKLOAD env's
  * node-template overlay + external-secret + scheduler patch, and the CONTROL env's (production —
- * poly is akash) appsets kustomization.
+ * poly is akash) appsets kustomization and scheduler patch.
  */
 function currentFor(
   tree: Map<string, string>,
@@ -76,7 +77,8 @@ function currentFor(
   const kustomization = tree.get(PRODUCTION_KUSTOMIZATION);
   const template = tree.get(APPSET_TEMPLATE);
   const patch = tree.get(schedulerPatch(env));
-  if (!catalog || !kustomization || !template || !patch) {
+  const controlPatch = tree.get(schedulerPatch("production"));
+  if (!catalog || !kustomization || !template || !patch || !controlPatch) {
     throw new Error("replay tree is missing a plan input");
   }
   return {
@@ -97,7 +99,7 @@ function currentFor(
     appsetRepoUrl: "https://github.com/cogni-dao/cogni.git",
     appsetsKustomizationByEnv: { production: kustomization },
     ...catalogPorts(catalog),
-    schedulerEndpointPatchByEnv: { [env]: patch },
+    schedulerEndpointPatchByEnv: { [env]: patch, production: controlPatch },
   };
 }
 
@@ -125,6 +127,7 @@ describe("replay of PR #2301 — poly candidate-a + preview activation (story.50
     [APPSET_TEMPLATE, read("pre", APPSET_TEMPLATE)],
     [schedulerPatch("candidate-a"), read("pre", schedulerPatch("candidate-a"))],
     [schedulerPatch("preview"), read("pre", schedulerPatch("preview"))],
+    [schedulerPatch("production"), read("pre", schedulerPatch("production"))],
   ]);
   planEnv(tree, "candidate-a");
   planEnv(tree, "preview");
@@ -155,11 +158,26 @@ describe("replay of PR #2301 — poly candidate-a + preview activation (story.50
     }
   });
 
-  it("emits no files besides the catalog + the 9 rendered artifacts + the seeded template", () => {
+  it("adds both custody namespaces while preserving production lane endpoints", () => {
+    const control = parseYaml(
+      tree.get(schedulerPatch("production")) ?? ""
+    ).data;
+    const original = parseYaml(read("pre", schedulerPatch("production"))).data;
+    expect(control.COGNI_NODE_ENDPOINTS).toBe(original.COGNI_NODE_ENDPOINTS);
+    expect(JSON.parse(control.TEMPORAL_CUSTODIED_NODE_ENDPOINTS)).toEqual({
+      "cogni-candidate-a":
+        "poly=https://poly-test.cognidao.org,4b06359a-a859-4399-888e-a8c7a6696f7e=https://poly-test.cognidao.org",
+      "cogni-preview":
+        "poly=https://poly-preview.cognidao.org,4b06359a-a859-4399-888e-a8c7a6696f7e=https://poly-preview.cognidao.org",
+    });
+  });
+
+  it("emits only the historical artifacts plus the control scheduler patch", () => {
     const expectedPaths = new Set<string>([
       CATALOG,
       APPSET_TEMPLATE,
       ...RENDERED_FILES,
+      schedulerPatch("production"),
     ]);
     expect([...tree.keys()].sort()).toEqual([...expectedPaths].sort());
   });

@@ -28,7 +28,6 @@ import {
   REPO_SEARCH_NAME,
   WEB_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
-  WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 import {
@@ -39,7 +38,6 @@ import {
 } from "../../../src/catalog";
 import { createAutoresearchGraph } from "../../../src/graphs/autoresearch/graph";
 import { createOperatorGraph } from "../../../src/graphs/operator/graph";
-import { createWorkPrioritizerGraph } from "../../../src/graphs/work-prioritizer/graph";
 
 describe("operator catalog entries", () => {
   it("operating-review entry exists with systemPrompt and graphFactory", () => {
@@ -73,18 +71,27 @@ describe("operator catalog entries", () => {
     expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
   });
 
-  it("work-prioritizer (mission loop) is operator-only with the exact six-tool allowlist", () => {
+  it("work-prioritizer (mission loop) is operator-only with the exact read allowlist plus the one decision write (core__edo_decide)", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
-    expect(entry.graphFactory).toBe(createWorkPrioritizerGraph);
+    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(OPERATOR_LANGGRAPH_CATALOG.cogni.graphFactory).toBe(
+      entry.graphFactory
+    );
+    expect(OPERATOR_LANGGRAPH_CATALOG.cogni.program).toBe("cogni");
+    expect(entry.program).toBe("work-review");
     expect([...entry.toolIds].sort()).toEqual(
       [
         GOAL_LIST_NAME,
         WORK_ITEM_QUERY_NAME,
-        WORK_ITEM_TRANSITION_NAME,
+        "core__work_item_read",
+        KNOWLEDGE_READ_NAME,
+        "core__node_code_read",
+        "core__node_code_list",
+        "core__knowledge_contribution_read",
         KNOWLEDGE_SEARCH_NAME,
-        EDO_DECIDE_NAME,
         GET_CURRENT_TIME_NAME,
+        EDO_DECIDE_NAME,
       ].sort()
     );
     expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });

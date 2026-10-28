@@ -3383,6 +3383,76 @@ spec:
     );
   });
 
+  it("dispatches the exact LiteLLM callback image source through the existing Compose lane", async () => {
+    const runId = 34722512027;
+    routeHandlers = {
+      ...candidateReviewHandlers([
+        "infra/images/litellm/cogni_callbacks.py",
+        "infra/images/litellm/AGENTS.md",
+        "scripts/ci/tests/litellm-callback-routing.test.py",
+      ]),
+      [DISPATCH]: () => ({
+        workflow_run_id: runId,
+        run_url: `https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/${runId}`,
+        html_url: `https://github.com/Cogni-DAO/cogni/actions/runs/${runId}`,
+      }),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).resolves.toMatchObject({
+      status: "dispatched",
+      lane: "compose",
+      sourceSha: candidateSourceSha,
+      runId,
+    });
+    expect(
+      requests.find((request) => request.route === DISPATCH)?.params
+    ).toMatchObject({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      workflow_id: "candidate-flight-infra.yml",
+      ref: "main",
+      inputs: { ref: candidateSourceSha },
+    });
+    expect(requests.some((request) => request.route.includes("git/ref"))).toBe(
+      false
+    );
+  });
+
+  it.each([
+    "infra/images/litellm/Dockerfile",
+    "infra/images/litellm/cogni_callbacks.py.extra",
+    "infra/images/other/cogni_callbacks.py",
+  ])("rejects neighboring image source %s beside the allowed LiteLLM callback", async (path) => {
+    routeHandlers = candidateReviewHandlers([
+      "infra/images/litellm/cogni_callbacks.py",
+      path,
+    ]);
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).rejects.toMatchObject({
+      code: "candidate_infra_path_rejected",
+      status: 422,
+    });
+    expect(requests.every((request) => request.route.startsWith("GET "))).toBe(
+      true
+    );
+  });
+
   it("dispatches an exact OpenFGA model change with explicit authorization collateral", async () => {
     const runId = 34722512026;
     routeHandlers = {
@@ -3478,9 +3548,12 @@ spec:
     });
   });
 
-  it("rejects a PR that mixes Compose and control-plane runtime changes", async () => {
+  it.each([
+    "scripts/ci/deploy-infra.sh",
+    "infra/images/litellm/cogni_callbacks.py",
+  ])("rejects mixed control-plane and Compose path %s before any mutation", async (path) => {
     routeHandlers = candidateReviewHandlers([
-      "scripts/ci/deploy-infra.sh",
+      path,
       "infra/k8s/argocd/control-plane/candidate-a/crossplane-core-application.yaml",
     ]);
 
@@ -3496,7 +3569,9 @@ spec:
       code: "candidate_infra_mixed_lanes",
       status: 422,
     });
-    expect(requests.some((request) => request.route === DISPATCH)).toBe(false);
+    expect(requests.every((request) => request.route.startsWith("GET "))).toBe(
+      true
+    );
   });
 
   it("maps a stale non-force ref update to a retryable typed conflict", async () => {

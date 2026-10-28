@@ -17,8 +17,10 @@
 model_list:
   # ===== FLASH / FAST TIER (default picks) =====
 
-  # OpenAI gpt-oss 120B — OpenAI's open-weight model. Effectively free-cost, reasoning-capable.
-  # Designated default_free: capable OSS reasoning at ~$0.04/1M in.  ($0.037 → $0.17, 131K)
+  # OpenAI gpt-oss 120B — OpenAI's open-weight reasoning model, built for agentic tool-use.
+  # Our FREE THINKER (is_free). True OpenRouter cost ~$0.15 → $0.60 /1M, 131K ctx — the config
+  # comment used to say ~$0.04 in, which was ~4x stale. default_free moved to deepseek-v4-flash.
+  # Live roster + true-vs-our pricing: hub entry `model-pricing-registry`.
   - model_name: gpt-oss-120b
     litellm_params:
       model: openrouter/openai/gpt-oss-120b
@@ -27,22 +29,23 @@ model_list:
       display_name: "GPT-OSS 120B"
       is_free: true
       provider_key: "openai"
-      metadata:
-        cogni:
-          default_free: true
 
-  # DeepSeek V4 Flash — cheapest 1M-context flash in the fleet.  ($0.078 → $0.156, 1M)
+  # DeepSeek V4 Flash — cheapest model in the fleet. True cost ~$0.047 → $0.095 /1M, 1M ctx.
+  # Our FREE FLASHER + default_free (is_free): fast, tool-reliable, the catch-all free pick.
+  # Live roster: hub entry `model-pricing-registry`.
   - model_name: deepseek-v4-flash
     litellm_params:
       model: openrouter/deepseek/deepseek-v4-flash
       api_key: "os.environ/OPENROUTER_API_KEY"
     model_info:
       display_name: "DeepSeek V4 Flash"
-      is_free: false
+      is_free: true
       provider_key: "deepseek"
       metadata:
         cogni:
           default_flash: true
+          default_free: true
+          default_preferred: true
 
   # NVIDIA Nemotron 3.5 Lightning — ultra-low-latency OSS, 1M context.  ($0.08 → $0.20, 262K)
   - model_name: nemotron-lightning
@@ -54,7 +57,9 @@ model_list:
       is_free: false
       provider_key: "nvidia"
 
-  # Google Gemini 3.7 Flash — best-quality flash (closed, ZDR).  ($0.375 → $1.875, 1M)
+  # Google Gemini 3.7 Flash — best-quality flash (closed, ZDR). True cost $0.75 → $3.75 /1M
+  # (2x the old config comment), 1M ctx. Premium flash — kept available, but no longer the
+  # default: default_preferred moved to deepseek-v4-flash (10x+ cheaper, the most-used path).
   - model_name: gemini-3.7-flash
     litellm_params:
       model: openrouter/google/gemini-3.7-flash
@@ -70,9 +75,6 @@ model_list:
       is_free: false
       is_zdr: true
       provider_key: "google"
-      metadata:
-        cogni:
-          default_preferred: true
 
   # ===== THINKING / REASONING TIER (open-weight) =====
 

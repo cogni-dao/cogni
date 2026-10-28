@@ -32,7 +32,7 @@ You are adding a new tool that AI agents can invoke. Tools are defined in `@cogn
 
 | #   | Rule                                                                                                      | Ref                    |
 | --- | --------------------------------------------------------------------------------------------------------- | ---------------------- |
-| 1   | **TOOLS_VIA_TOOLRUNNER**: All execution through `toolRunner.exec()`. No direct calls.                     | TOOL_USE_SPEC #1       |
+| 1   | **TOOLS_VIA_TOOLRUNNER**: All capability execution through `toolRunner.exec()`. No direct calls.          | TOOL_USE_SPEC #1       |
 | 2   | **TOOLS_IN_PACKAGES**: Contracts + implementations in `@cogni/ai-tools`. No tool definitions in `src/**`. | TOOL_USE_SPEC #2       |
 | 3   | **TOOLS_IO_VIA_CAPABILITIES**: I/O via injected interfaces, not imports.                                  | TOOL_USE_SPEC #3       |
 | 4   | **REDACTION_REQUIRED**: Allowlist-based output filtering. Missing config = error.                         | TOOL_USE_SPEC #4       |
@@ -43,6 +43,8 @@ You are adding a new tool that AI agents can invoke. Tools are defined in `@cogn
 | 9   | **NO_DEFAULT_EXECUTABLE_CATALOG**: ai-tools exports contracts only, no default executable catalog.        | TOOL_USE_SPEC #35      |
 
 ---
+
+Capability tools follow the rules below. The maintained SDK's isolated run-state controls follow [the owning harness-state boundary](../spec/tool-use.md#isolated-harness-state); do not add them to another domain catalog.
 
 ## Decide first: cross-node or node-only?
 

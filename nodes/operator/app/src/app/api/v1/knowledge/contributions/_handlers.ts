@@ -37,6 +37,8 @@ import {
 import {
   ContributionAppendCommitRequestSchema,
   ContributionCloseRequestSchema,
+  ContributionMergeCheckRequestSchema,
+  ContributionMergeCheckResponseSchema,
   ContributionMergeRequestSchema,
   ContributionsCreateRequestSchema,
   ContributionsListQuerySchema,
@@ -337,6 +339,45 @@ export async function handleDiff(
     branch: record.branch,
     entries,
   });
+}
+
+/** Explicit admitted diagnostic; an empty displayed diff is never merge proof. */
+export async function handleMergeCheck(
+  request: Request,
+  contributionId: string,
+  sessionUser: SessionUser | null
+): Promise<NextResponse> {
+  const headers = { "Cache-Control": "no-store" };
+  if (!sessionUser)
+    return NextResponse.json(
+      { error: "unauthorized" },
+      { status: 401, headers }
+    );
+  const svc = service();
+  if (!svc)
+    return NextResponse.json(
+      { error: "knowledge contribution service not configured" },
+      { status: 503, headers }
+    );
+  let body: unknown;
+  try {
+    const text = await request.text();
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    return NextResponse.json(
+      { error: "invalid JSON body" },
+      { status: 400, headers }
+    );
+  }
+  if (!ContributionMergeCheckRequestSchema.safeParse(body).success)
+    return NextResponse.json(
+      { error: "merge check accepts only an empty object" },
+      { status: 400, headers }
+    );
+  const result = ContributionMergeCheckResponseSchema.parse(
+    await svc.previewMerge(contributionId)
+  );
+  return NextResponse.json(result, { headers });
 }
 
 /** A diff entry that changes a goal row, or a citation edge leaving one. */

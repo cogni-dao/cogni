@@ -258,6 +258,8 @@ export interface ExecuteStreamParams {
   tools?: readonly import("@/ports").LlmToolDefinition[];
   /** Optional tool choice policy */
   toolChoice?: import("@/ports").LlmToolChoice;
+  /** Optional output-token budget; falls back to DEFAULT_MAX_TOKENS in the LLM adapter when unset. */
+  maxTokens?: number;
   /** Billing correlation metadata forwarded to LiteLLM as x-litellm-spend-logs-metadata header */
   spendLogsMetadata?: { run_id: string; graph_id: string; node_id?: string };
 }
@@ -281,6 +283,7 @@ export async function executeStream({
   abortSignal,
   tools,
   toolChoice,
+  maxTokens,
   spendLogsMetadata,
 }: ExecuteStreamParams): Promise<{
   stream: AsyncIterable<import("@/ports").ChatDeltaEvent>;
@@ -334,6 +337,7 @@ export async function executeStream({
       ...(abortSignal && { abortSignal }),
       ...(tools && tools.length > 0 && { tools }),
       ...(toolChoice && { toolChoice }),
+      ...(maxTokens && { maxTokens }),
       ...(spendLogsMetadata && { spendLogsMetadata }),
     });
     stream = result.stream;

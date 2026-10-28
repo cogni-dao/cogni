@@ -82,6 +82,7 @@ export interface CompletionUnitAdapter {
  * Per NODE_BUNDLE_IS_CANONICAL: tools referenced by ID, resolved from the injected node bundle.
  */
 interface ProviderCatalogEntry {
+  readonly program?: "cogni" | "work-review";
   readonly displayName: string;
   readonly description: string;
   readonly toolIds: readonly string[];
@@ -120,9 +121,31 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     private readonly getMcpToolSource: () => Promise<ToolSourcePort | null> = () =>
       Promise.resolve(null),
     nodeBundle: readonly CatalogBoundTool[] = [],
-    private readonly authorization?: AuthorizationPort
+    private readonly authorization?: AuthorizationPort,
+    private readonly nodeId?: string,
+    private readonly nodeOrigin?: string,
+    private readonly nodeMission?: {
+      readonly content: string;
+      readonly sourceRef: string;
+      readonly buildSha: string | null;
+    },
+    /**
+     * Host-owned governing-index reader (same `listGoverningIndex` the cognition bundle uses).
+     * Read per run so a reviewed hub change is seen without an app rebuild; metadata only.
+     */
+    private readonly governingIndexReader?: () => Promise<
+      ReadonlyArray<{
+        readonly id: string;
+        readonly domain: string;
+        readonly entryType: string;
+        readonly useWhen: string;
+      }>
+    >
   ) {
-    this.log = makeLogger({ component: "LangGraphInProcProvider" });
+    this.log = makeLogger({
+      component: "LangGraphInProcProvider",
+      ...(nodeId ? { nodeId } : {}),
+    });
     this.boundToolMap = new Map(nodeBundle.map((bt) => [bt.contract.name, bt]));
 
     // Use node graph package catalog (single source of truth for this runtime)
@@ -343,8 +366,30 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         },
       };
 
+      // Host-owned governing index, read per run (best-effort) so a reviewed hub change is
+      // seen without a rebuild. Held in the agent's context; the agent reads bodies on demand.
+      const governingIndex = this.governingIndexReader
+        ? await this.governingIndexReader().catch((error) => {
+            this.log.warn(
+              { err: error },
+              "governing index read failed; proceeding without it"
+            );
+            return [];
+          })
+        : [];
       const runner = createInProcGraphRunner({
         createGraph: entry.graphFactory,
+        ...(this.nodeId && this.nodeOrigin
+          ? {
+              sourceContext: {
+                nodeId: this.nodeId,
+                origin: this.nodeOrigin,
+                ...(this.nodeMission ? { mission: this.nodeMission } : {}),
+                ...(governingIndex.length ? { governingIndex } : {}),
+              },
+            }
+          : {}),
+        ...(entry.program !== undefined && { program: entry.program }),
         completionFn,
         createToolExecFn,
         toolContracts,
@@ -397,7 +442,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       }
       for await (const event of inner.stream) {
         // CatalogEntry.report: echo the telemetry as one text delta just before `done`.
-        if (event.type === "done" && report) {
+        if (event.type === "done" && report && !entry.program) {
           const delta = graphReportDelta((await inner.final).structuredOutput);
           if (delta) yield { type: "text_delta" as const, delta };
         }
@@ -449,6 +494,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       messages: Message[];
       model: string;
       tools?: readonly LlmToolDefinition[];
+      toolChoice?: import("@/ports").LlmToolChoice;
       abortSignal?: AbortSignal;
     }) => {
       const result = this.adapter.executeCompletionUnit({
@@ -457,6 +503,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         runContext: { runId, attempt, graphId },
         ...(params.abortSignal && { abortSignal: params.abortSignal }),
         ...(params.tools?.length && { tools: [...params.tools] }),
+        ...(params.toolChoice && { toolChoice: params.toolChoice }),
       });
 
       return {

@@ -571,30 +571,60 @@ node_internal_service_endpoint_csv() {
   done
 }
 
-node_billing_endpoint_csv() {
-  # Routing (NOT build): billing attribution resolves a node_id per catalog type:node
-  # for EVERY node, submodule or not. Build filtering does not belong here.
-  #
-  # LiteLLM runs in Compose on the env VM, so a k3s node is reached at the VM's
-  # NodePort. bug.5094: an akash node has no NodePort on that VM — it is reached at
-  # its public URL, resolved from the same catalog placement as every other consumer.
-  local host="$1" env="${2:-}" domain="${3:-}" sep="" node node_id port url provider
+node_billing_endpoint_csv() (
+  # Key registration follows control_env_for; workload destinations follow their
+  # OWN lane. A gateway must never route a registered foreign lane by UUID alone.
+  # Subshell confines helper shell options and fixture catalog scope to this call.
+  local host="$1" env="${2:-}" domain="${3:-}" sep="" node node_id port url
+  local lane lanes owner provider lane_domain domain_root prefix
+  CATALOG_DIR="$_image_tags_catalog_root"
+  # shellcheck source=scripts/ci/lib/appset-paths.sh
+  source "$_image_tags_lib_dir/appset-paths.sh"
+  # shellcheck source=scripts/setup/lib/fork-identity.sh
+  source "$_image_tags_repo_root/scripts/setup/lib/fork-identity.sh"
+  domain_root="$domain"
+  if [ -n "$env" ]; then
+    prefix="$(domain_for_env "$env" "")" || return 1
+    domain_root="${domain#"$prefix"}"
+  fi
   for node in "${NODE_TARGETS[@]}"; do
     node_id="$(node_id_for_target "$node")" || return 1
-    provider="k3s"
-    if [ -n "$env" ]; then
-      provider="$(deployment_provider_for_target "$node" "$env")" || return 1
-    fi
-    if [ "$provider" = "akash" ]; then
-      url="$(node_app_url_for_target "$node" "$env" "$domain")" || return 1
-    else
+    if [ -z "$env" ]; then
+      # Local/bootstrap compatibility: no workload aliases without an explicit lane.
       port="$(node_port_for_target "$node")" || return 1
       url="http://${host}:${port}"
+      printf '%s%s=%s,%s=%s' "$sep" "$node" "$url" "$node_id" "$url"
+      sep=","
+      continue
     fi
-    printf '%s%s=%s,%s=%s' "$sep" "$node" "$url" "$node_id" "$url"
-    sep=","
+    lanes="$(yq -r '.envs[]?' "$CATALOG_DIR/$node.yaml")" || return 1
+    for lane in $lanes; do
+      target_in_env "$node" "$lane" || return 1
+      provider="$(deployment_provider_for_target "$node" "$lane")" || return 1
+      owner="$(control_env_for "$lane" "$node")" || return 1
+      [ "$owner" = "$env" ] || continue
+      if [ "$provider" = "akash" ]; then
+        if [ "$lane" = "$env" ]; then
+          lane_domain="$domain"
+        else
+          lane_domain="$(domain_for_env "$lane" "$domain_root")" || return 1
+        fi
+        url="$(node_app_url_for_target "$node" "$lane" "$lane_domain")" || return 1
+      else
+        # k3s workloads are local to their own gateway by the custody resolver.
+        [ "$lane" = "$env" ] || return 1
+        port="$(node_port_for_target "$node")" || return 1
+        url="http://${host}:${port}"
+      fi
+      if [ "$lane" = "$env" ]; then
+        printf '%s%s=%s,%s=%s' "$sep" "$node" "$url" "$node_id" "$url"
+        sep=","
+      fi
+      printf '%scogni:%s:%s:app:v1=%s' "$sep" "$lane" "$node_id" "$url"
+      sep=","
+    done
   done
-}
+)
 
 # missing_image_action <explicit_targets_csv>
 #

@@ -25,12 +25,13 @@ fail() {
 
 grep -Fq 'additionalContextLimit = 0' "$REPO_ROOT/.codex/config.toml" ||
   fail "project hook still uses Codex's truncating default"
-grep -Fq 'Every human-facing reply, including answers and follow-ups, is exactly this skeleton' \
-  "$REPO_ROOT/AGENTS.md" || fail "root AGENTS.md omitted the universal response floor"
-grep -Fq 'reproduce `Goal` and `Done when` byte-for-byte' "$REPO_ROOT/AGENTS.md" ||
-  fail "root AGENTS.md omitted immutable session state"
-grep -Eq '\| status[[:space:]]+\| ETA · Conf[[:space:]]+\| next' "$REPO_ROOT/AGENTS.md" ||
-  fail "root AGENTS.md omitted per-row ETA and confidence"
+# The floor is thin: the complete response contract lives in the hub bundle, not here.
+# Guard the original regression — a response skeleton in the floor competes with the
+# hub contract and drops the Roles row fleet-wide. It must NOT come back.
+grep -Fq 'cognition bundle' "$REPO_ROOT/AGENTS.md" ||
+  fail "root AGENTS.md must stay the thin floor and point to the bundle contract"
+! grep -Fq 'is exactly this skeleton' "$REPO_ROOT/AGENTS.md" ||
+  fail "root AGENTS.md re-introduced the response skeleton (the Roles-dropping regression)"
 ! grep -Fq '@.cogni/.cognition-cache.md' "$REPO_ROOT/AGENTS.md" ||
   fail "universal AGENTS.md exposes a Claude-only import directive"
 [[ ! -L "$REPO_ROOT/CLAUDE.md" ]] ||
@@ -45,110 +46,16 @@ grep -Fxq '@.cogni/.cognition-cache.md' "$REPO_ROOT/CLAUDE.md" ||
   fail "Claude Code project settings omitted the Cogni Contract output style"
 OUTPUT_STYLE="$REPO_ROOT/.claude/output-styles/Cogni Contract.md"
 [[ -f "$OUTPUT_STYLE" ]] || fail "Claude Code Cogni Contract output style is missing"
-grep -Fq 'This response protocol has no task-type exceptions' "$OUTPUT_STYLE" ||
-  fail "Claude Code output style permits task-type formatting exceptions"
-grep -Fq 'preserve Goal and Done when byte-for-byte' "$OUTPUT_STYLE" ||
-  fail "Claude Code output style omitted immutable session state"
-grep -Fq '5m–4h wall-clock ETA' "$OUTPUT_STYLE" ||
-  fail "Claude Code output style omitted short-horizon row estimates"
+# Thin output style: reinforce the loaded bundle contract, never restate it (same
+# anti-duplication rule as the floor — a second copy drifts and drops rows).
+grep -Fq 'loaded contract' "$OUTPUT_STYLE" ||
+  fail "Claude Code output style must reinforce the loaded bundle contract, not restate it"
 STOP_VALIDATOR="$REPO_ROOT/scripts/agent/validate-status-contract.sh"
 [[ -x "$STOP_VALIDATOR" ]] || fail "Claude Code status-contract Stop hook is not executable"
 jq -e '.hooks.Stop[0].hooks[0].command | contains("validate-status-contract.sh")' \
   "$REPO_ROOT/.claude/settings.json" >/dev/null ||
   fail "Claude Code settings omitted the status-contract Stop hook"
 
-VALID_MESSAGE='| 🎯 **Goal** | Keep contract state |
-|---|---|
-| **Done when** | Two turns preserve exact fields. |
-| **Status** | 🔵 in progress |
-| **ETA · Conf** | 10m · earned 90% + reviewed 3/3 sources |
-| **Followed** | https://cognidao.org/knowledge/cognition-substrate-bootstrap · https://github.com/cogni-dao/cogni/blob/main/AGENTS.md · https://cognidao.org/knowledge/node-baas-substrate-model · https://cognidao.org/work/items/story.5070 |
-
----
-
-| item | owner | deliverable links | status | ETA · Conf | next |
-|---|---|---|---|---|---|
-| proposed story — contract | dev-manager, me | - | 🔵 in progress | 10m · earned 90% | Test next turn |
-
-> 🔵 **Bottom line —** Contract-shaped response.'
-VALIDATOR_SCRATCH="$FIXTURE_ROOT/validator-scratch"
-mkdir -p "$VALIDATOR_SCRATCH"
-valid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" \
-  '{last_assistant_message:$message,scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
-[[ -z "$valid_output" ]] || fail "status-contract Stop hook rejected a valid response"
-
-# Build large messages inside jq, not a single argv value (Linux caps its size).
-# Early-exit awk/grep readers previously closed printf pipes under pipefail,
-# turning valid responses into SIGPIPE failures instead of warn-only decisions.
-large_valid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" '
-  {last_assistant_message: ($message | sub("\\| \\*\\*Followed\\*\\* \\| ";
-    "| **Followed** | " + ("https://cognidao.org/knowledge/cognition-substrate-bootstrap " * 8192))),
-   scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
-[[ -z "$large_valid_output" ]] || fail "large valid response failed the warn-only detector"
-
-large_invalid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" '
-  {last_assistant_message: ($message | sub("\n---\n";
-    "\n" + ("unexpected prose " * 32768) + "\n---\n")),
-   scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
-[[ -n "$(printf '%s' "$large_invalid_output" | jq -r '.systemMessage // empty')" &&
-   -z "$(printf '%s' "$large_invalid_output" | jq -r '.decision // empty')" ]] ||
-  fail "large invalid response did not warn without blocking"
-echo "session-cognition-hook.test: large-response pipe safety PASS"
-
-invalid_output="$(jq -cn --arg message 'This is a design question, so the contract does not apply.' \
-  --arg scratch "$VALIDATOR_SCRATCH" '{last_assistant_message:$message,scratchpad_dir:$scratch}' | \
-  bash "$STOP_VALIDATOR")"
-# Warn-only contract: a breach surfaces as a non-blocking advisory (systemMessage), never decision:block.
-[[ -n "$(printf '%s' "$invalid_output" | jq -r '.systemMessage // empty')" &&
-   -z "$(printf '%s' "$invalid_output" | jq -r '.decision // empty')" ]] ||
-  fail "status-contract Stop hook did not warn (non-blocking) on prose outside the contract block"
-
-MUTATED_MESSAGE="${VALID_MESSAGE/Keep contract state/Change contract state}"
-mutated_output="$(jq -cn --arg message "$MUTATED_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" \
-  '{last_assistant_message:$message,scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
-[[ -n "$(printf '%s' "$mutated_output" | jq -r '.systemMessage // empty')" &&
-   -z "$(printf '%s' "$mutated_output" | jq -r '.decision // empty')" ]] ||
-  fail "status-contract Stop hook did not warn (non-blocking) on mutated Goal state"
-
-ZERO_RESEARCH_MESSAGE='| 🎯 **Goal** | Design a strategy agent |
-|---|---|
-| **Done when** | Design is approved. |
-| **Status** | 👉 needs you |
-| **ETA · Conf** | 2h · earned 40% + reviewed 0/5 sources |
-| **Followed** | — |
-
----
-
-| item | owner | deliverable links | status | ETA · Conf | next |
-|---|---|---|---|---|---|
-| proposed story — strategy | dev-manager, me | - | 👉 needs you | 15m · earned 40% | 👉 needs you: [approve scope](https://cognidao.org/work/items/story.5070) |
-
-> 👉 **Bottom line —** Approve the proposal.'
-zero_research_output="$(jq -cn --arg message "$ZERO_RESEARCH_MESSAGE" \
-  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
-[[ -n "$(printf '%s' "$zero_research_output" | jq -r '.systemMessage // empty')" &&
-   -z "$(printf '%s' "$zero_research_output" | jq -r '.decision // empty')" ]] ||
-  fail "status-contract Stop hook did not warn (non-blocking) on a substantive zero-research proposal"
-
-PRELIMINARY_STOP_MESSAGE='| 🎯 **Goal** | — |
-|---|---|
-| **Done when** | — |
-| **Status** | — |
-| **ETA · Conf** | — · 0% + reviewed 0/5 sources |
-| **Followed** | — |
-
----
-
-| item | owner | deliverable links | status | ETA · Conf | next |
-|---|---|---|---|---|---|
-| proposed story — strategy | dev-manager, me | - | 🔵 in progress | 15m · earned 20% | Research relevant sources |
-
-> 🔵 **Bottom line —** Researching the existing substrate.'
-preliminary_stop_output="$(jq -cn --arg message "$PRELIMINARY_STOP_MESSAGE" \
-  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
-[[ -n "$(printf '%s' "$preliminary_stop_output" | jq -r '.systemMessage // empty')" &&
-   -z "$(printf '%s' "$preliminary_stop_output" | jq -r '.decision // empty')" ]] ||
-  fail "status-contract Stop hook did not warn (non-blocking) on an agent-owned preliminary state as a final reply"
 
 grep -Fq "if [[ \"\${CONDUCTOR_IS_LOCAL:-1}\" == \"1\" ]]; then" "$CONDUCTOR_SETUP" ||
   fail "Conductor setup does not guard user-hook installation to local workspaces"

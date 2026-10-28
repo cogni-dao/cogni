@@ -341,7 +341,7 @@ describe("Dolt session admission control (bug.5386, bug.5391)", () => {
     "missing",
     "malformed",
     "merging",
-  ] as const)("retains %s merge-state capacity without another callback or pool replacement", async (state) => {
+  ] as const)("evicts %s merge-state capacity and keeps serving (bug.5544)", async (state) => {
     const sql = client(1);
     const recreate = vi.fn(() => sql);
     const runner = new DoltBranchSessionRunner(sql, {
@@ -354,14 +354,62 @@ describe("Dolt session admission control (bug.5386, bug.5391)", () => {
           await conn.unsafe("SELECT 1");
         })
       ).resolves.toBeUndefined();
-      const next = vi.fn(async () => "unsafe");
-      await expect(runner.run("after-unknown", next)).rejects.toBeInstanceOf(
-        KnowledgeBusyError
-      );
-      expect(next).not.toHaveBeenCalled();
+      // bug.5544: an uncertain merge-state cleanup must EVICT and let the writer
+      // RECOVER (no permanent wedge). Once the eviction settles, a retried op is
+      // admitted and serves. The client is evicted, never recreated.
+      await expect
+        .poll(
+          async () => {
+            try {
+              return await runner.run("after-unknown", async () => "served");
+            } catch {
+              return "busy";
+            }
+          },
+          { timeout: 3000 }
+        )
+        .toBe("served");
       expect(recreate).not.toHaveBeenCalled();
     } finally {
       mergeStatus = "clean";
+      void sql.end({ timeout: 0 }).catch(() => undefined);
+    }
+  });
+
+  it.each([
+    false,
+    true,
+  ])("awaitSettlement=%s preserves cleanup ownership before pool shutdown", async (awaitSettlement) => {
+    const sql = client(1);
+    const runner = new DoltBranchSessionRunner(sql);
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    try {
+      const write = runner.run(
+        "seed-write",
+        async (_conn, _guard, owner) => {
+          owner.registerReconciliation(async () => true);
+          owner.committed(
+            { value: "committed", commitHash: "seed-test" },
+            () => cleanupGate
+          );
+          return "committed";
+        },
+        { awaitSettlement }
+      );
+      expect(await outcomeWithin(write, 50)).toBe(
+        awaitSettlement ? "pending" : "settled"
+      );
+      releaseCleanup();
+      await expect(write).resolves.toBe("committed");
+      await runner.run("seed-settle", async () => undefined, {
+        awaitSettlement: true,
+      });
+      await sql.end();
+    } finally {
+      releaseCleanup();
       void sql.end({ timeout: 0 }).catch(() => undefined);
     }
   });

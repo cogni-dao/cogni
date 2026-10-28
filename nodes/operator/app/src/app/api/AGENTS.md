@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-10-24
+- **Last reviewed:** 2026-10-26
 - **Status:** draft
 
 ## Purpose
@@ -38,6 +38,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
 
 - **Exports:** none
 - **Routes (if any):**
+  - `/api/v1/deploy/maintenance-cancel` [POST] — target-node env-manager-gated cancellation of unchanged unexecuted candidate intent; exact Git preconditions, no runtime mutation
   - `/api/v1/nodes/[id]/observability/langfuse/api/public/v2/observations` [GET] — developer-gated native Langfuse observation reads with independent receipt ownership, bounded native pagination and privacy projection
   - `/api/auth/[...nextauth]` [GET, POST]
   - `/api/setup/verify` [POST] - DAO formation verification
@@ -82,6 +83,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
   - `/api/v1/knowledge/contributions/[id]/commits` [GET, POST] - list/append authenticated contribution branch commits
+  - `/api/v1/knowledge/contributions/[id]/merge-check` [POST] - authenticated admitted native conflict check of immutable committed roots; does not merge or grant merge authority
 - Fixed service target `scheduler-worker-custodied-routing` on `/api/v1/deploy/infra-reconcile`: own-production custodian only; additive Git publication or receipt rollback; publication is not rollout proof.
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
 

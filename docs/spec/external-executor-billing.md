@@ -126,7 +126,7 @@ Provide reliable, idempotent billing for LLM calls made by external executors, u
 | ExecutorType    | `sandbox`                                                                        |
 | SourceSystem    | `litellm`                                                                        |
 
-**Mechanism:** Proxy injects `x-litellm-end-user-id` and `x-litellm-spend-logs-metadata` headers. Both overwrite any client-sent values. Sandbox cannot spoof identity. See [sandboxed-agents.md](./sandboxed-agents.md) invariant #10.
+**Mechanism:** Proxy injects `x-litellm-end-user-id` and `x-litellm-spend-logs-metadata` headers. Both overwrite any client-sent values. Sandbox cannot spoof identity. See invariant 7 (HOST_INJECTS_BILLING_HEADER) in [sandbox-billing-pipeline](https://cognidao.org/knowledge/sandbox-billing-pipeline).
 
 #### Claude SDK — P2
 

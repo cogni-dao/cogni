@@ -73,13 +73,13 @@ type DoltgresMock = {
 };
 
 function createDoltgresMock(): DoltgresMock {
-  // Default behavior: doltgres returns empty so the facade tests focus on
-  // markdown path + DTO mapping.
+  // Default: genuinely unconfigured Dolt uses markdown as its sole backend.
   return {
-    list: vi.fn().mockResolvedValue({
-      items: [],
-      pageInfo: { endCursor: null, hasMore: false },
-    }),
+    list: vi.fn().mockRejectedValue(
+      Object.assign(new Error("not configured"), {
+        name: "DoltgresNotConfiguredError",
+      })
+    ),
     get: vi.fn(),
     create: vi.fn(),
     patch: vi.fn(),
@@ -164,6 +164,8 @@ describe("app/_facades/work/items.server", () => {
         text: "search",
         projectId: "proj.test",
         limit: 50,
+        sortBy: "updatedAt",
+        sortDirection: "desc",
       });
 
       expect(mockPort.list).toHaveBeenCalledWith({
@@ -172,6 +174,8 @@ describe("app/_facades/work/items.server", () => {
         text: "search",
         projectId: toWorkItemId("proj.test"),
         limit: 50,
+        sortBy: "updatedAt",
+        sortDirection: "desc",
       });
     });
 
@@ -183,7 +187,37 @@ describe("app/_facades/work/items.server", () => {
 
       await listWorkItems({});
 
-      expect(mockPort.list).toHaveBeenCalledWith({});
+      expect(mockPort.list).toHaveBeenCalledWith({ limit: 100 });
+    });
+
+    it("keeps the default 100-row bound and continuation on markdown-only reads", async () => {
+      const rows = Array.from({ length: 101 }, (_, index) => ({
+        ...SAMPLE_WORK_ITEM,
+        id: toWorkItemId(`task.${String(index + 1).padStart(4, "0")}`),
+      }));
+      vi.mocked(mockPort.list).mockImplementation(async (query) => {
+        const start = query.cursor === "page-two" ? 100 : 0;
+        const end = start + (query.limit ?? rows.length);
+        return {
+          items: rows.slice(start, end),
+          ...(end < rows.length && { nextCursor: "page-two" }),
+        };
+      });
+
+      const first = await listWorkItems({});
+      expect(first.items).toHaveLength(100);
+      expect(first.pageInfo).toEqual({ endCursor: "page-two", hasMore: true });
+      const second = await listWorkItems({
+        ...(first.nextCursor && { cursor: first.nextCursor }),
+      });
+      expect(second.items.map((item) => item.id)).toEqual(["task.0101"]);
+      expect(second.pageInfo).toEqual({ endCursor: null, hasMore: false });
+      expect(mockDoltgres.list).toHaveBeenNthCalledWith(1, { limit: 100 });
+      expect(mockPort.list).toHaveBeenNthCalledWith(1, { limit: 100 });
+      expect(mockPort.list).toHaveBeenNthCalledWith(2, {
+        limit: 100,
+        cursor: "page-two",
+      });
     });
 
     it("returns empty items for empty result", async () => {
@@ -194,6 +228,85 @@ describe("app/_facades/work/items.server", () => {
 
       const result = await listWorkItems({});
       expect(result.items).toEqual([]);
+    });
+
+    it("uses configured Dolt alone, preserving its ordered page and cursor", async () => {
+      mockDoltgres.list.mockResolvedValue({
+        items: [SAMPLE_WORK_ITEM],
+        pageInfo: { endCursor: "cursor-xyz", hasMore: true },
+      });
+      vi.mocked(mockPort.list).mockResolvedValue({
+        items: [{ ...SAMPLE_WORK_ITEM, id: toWorkItemId("task.0002") }],
+      });
+
+      const result = await listWorkItems({
+        limit: 1,
+        sortBy: "rankScore",
+        sortDirection: "desc",
+      });
+      expect(result.items.map((item) => item.id)).toEqual(["task.0001"]);
+      expect(result.pageInfo).toEqual({
+        endCursor: "cursor-xyz",
+        hasMore: true,
+      });
+      expect(result.nextCursor).toBe("cursor-xyz");
+      expect(mockPort.list).not.toHaveBeenCalled();
+      expect(mockDoltgres.list).toHaveBeenCalledWith({
+        limit: 1,
+        sortBy: "rankScore",
+        sortDirection: "desc",
+      });
+    });
+
+    it("preserves markdown-only pagination when Dolt is unconfigured", async () => {
+      vi.mocked(mockPort.list).mockResolvedValue({
+        items: [SAMPLE_WORK_ITEM],
+        nextCursor: "md1-cursor",
+      });
+      const result = await listWorkItems({
+        cursor: "md1-previous",
+        sortBy: "priority",
+      });
+      expect(result.pageInfo).toEqual({
+        endCursor: "md1-cursor",
+        hasMore: true,
+      });
+      expect(result.nextCursor).toBe("md1-cursor");
+      expect(mockPort.list).toHaveBeenCalledWith({
+        cursor: "md1-previous",
+        sortBy: "priority",
+        limit: 100,
+      });
+    });
+
+    it("does not hide a configured Dolt failure by reading markdown", async () => {
+      const unavailable = new Error("native read deadline exceeded");
+      mockDoltgres.list.mockRejectedValue(unavailable);
+      await expect(listWorkItems({})).rejects.toBe(unavailable);
+      expect(mockPort.list).not.toHaveBeenCalled();
+    });
+
+    it("returns shared evaluation rank without changing legacy rank", async () => {
+      mockDoltgres.list.mockResolvedValue({
+        items: [
+          {
+            ...SAMPLE_WORK_ITEM,
+            scores: {
+              goal: { v: 3 },
+              time: { v: 3 },
+              unblocks: { v: 3 },
+              ease: { v: 3 },
+              confidence: { v: 3 },
+              agent: { v: 3 },
+            },
+          },
+        ],
+        pageInfo: { endCursor: null, hasMore: false },
+      });
+      const result = workItemsListOperation.output.parse(
+        await listWorkItems({})
+      );
+      expect(result.items[0]).toMatchObject({ rank: 5, rankScore: 2.16 });
     });
 
     it("passes through nextCursor and pageInfo from doltgres", async () => {

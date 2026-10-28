@@ -82,10 +82,12 @@ import {
   type AkashAllocationProbe,
   type AkashTxActuatorPort,
   type AkashTxAllocationLedgerPort,
+  type AkashTxAllocationPolicy,
   type AkashTxAllocationRecord,
   type AkashTxCompositeVerdict,
   type AkashTxConsolePort,
   type AkashTxCreateResult,
+  type AkashTxDatabaseCellRecoveryInput,
   AkashTxError,
   type AkashTxErrorCode,
   type AkashTxLeaseLogSource,
@@ -103,8 +105,11 @@ import {
   type ComputeCostStorePort,
   type NodeMigrationReportStorePort,
 } from "@/ports";
-
 import { runMigrationStep } from "./akash-tx-migration-step";
+import {
+  DatabaseCellRecoveryProfileSchema,
+  databaseCellRecoveryIntent,
+} from "./database-cell-recovery";
 
 /** Structural pino subset. Fields first, stable marker second. */
 export interface AkashTxLogger {
@@ -154,6 +159,7 @@ export interface AkashTxActuatorDeps {
    * whatever history exists, but recovery attempts record nothing (test/degraded mode).
    */
   readonly outcomes?: AkashTxProviderOutcomesPort;
+  readonly recoveryProfile?: () => Promise<unknown>;
 }
 
 const SYSTEM_ROOT_FINGERPRINTS = new Set(
@@ -351,6 +357,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private readonly costStore: ComputeCostStorePort;
   private readonly providerConsumerAccountId: string;
   private readonly outcomes?: AkashTxProviderOutcomesPort;
+  private readonly recoveryProfile?: () => Promise<unknown>;
   /**
    * Per-process load-shed for boot_ok writes on every observe tick — correctness comes
    * from the DB's unique (lease_id, outcome), never from this cache (task.5153).
@@ -368,6 +375,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     this.costStore = deps.costStore;
     this.providerConsumerAccountId = deps.providerConsumerAccountId;
     if (deps.outcomes) this.outcomes = deps.outcomes;
+    if (deps.recoveryProfile) this.recoveryProfile = deps.recoveryProfile;
   }
 
   async observe(input: {
@@ -484,6 +492,93 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       ),
       spec: input.spec,
     });
+    return this.allocate(input);
+  }
+
+  /** References only: applied source identity admits capacity, never an app release. */
+  async createDatabaseCellRecovery(
+    input: AkashTxDatabaseCellRecoveryInput
+  ): Promise<AkashTxCreateResult> {
+    const parsed = DatabaseCellRecoveryProfileSchema.safeParse(
+      await this.recoveryProfile?.()
+    );
+    if (
+      !parsed.success ||
+      !parsed.data.enabled ||
+      parsed.data.funding_status !== "qualified"
+    ) {
+      const reasonCode = !parsed.success
+        ? "profile_unavailable"
+        : !parsed.data.enabled
+          ? "profile_disabled"
+          : "funding_unqualified";
+      this.log.warn(
+        {
+          cogniKey: input.cogniKey,
+          nodeId: input.identity.nodeId,
+          environment: input.environment,
+          profileId: "pg15-cold-capacity-v1",
+          reasonCode,
+        },
+        "akash_tx_database_cell_recovery_refused"
+      );
+      throw new AkashTxError(
+        "invalid_request",
+        "cold recovery profile unavailable, disabled or funding unqualified"
+      );
+    }
+    const source = await this.readLedger(input.recovery.sourceCogniKey);
+    const bindings =
+      source?.appliedDatabaseCellBinding?.filter(
+        ({ binding }) =>
+          binding.phase === "applied" &&
+          binding.nodeId === input.identity.nodeId &&
+          binding.nodeSlug === input.nodeSlug &&
+          binding.environment === input.environment &&
+          binding.receiptId === source.receiptId &&
+          binding.cogniKey === source.cogniKey &&
+          source.providerAccount !== undefined &&
+          binding.providerAccount === source.providerAccount &&
+          binding.dseq === input.recovery.sourceExternalName &&
+          binding.systemIdentifier === input.recovery.sourceSystemIdentifier
+      ) ?? [];
+    if (
+      !source ||
+      source.state !== "allocated" ||
+      source.retentionPolicy !== "retain" ||
+      source.identity.nodeId !== input.identity.nodeId ||
+      source.environment !== input.environment ||
+      source.externalName !== input.recovery.sourceExternalName ||
+      bindings.length !== 1 ||
+      input.cogniKey === source.cogniKey ||
+      input.recovery.profileId !== "pg15-cold-capacity-v1"
+    )
+      throw new AkashTxError(
+        "identity_conflict",
+        "recovery source lacks one owned retained applied binding"
+      );
+    const intent = databaseCellRecoveryIntent(input, source, parsed.data);
+    if (input.cogniKey !== intent.key)
+      throw new AkashTxError(
+        "identity_conflict",
+        "recovery key differs from immutable source and policy"
+      );
+    return this.allocate({
+      ...input,
+      spec: intent.spec,
+      allocationPolicy: intent.policy,
+      recoveryFamilyPrefix: intent.familyPrefix,
+    });
+  }
+
+  private async allocate(input: {
+    cogniKey: string;
+    environment: string;
+    identity: AkashTxWorkloadIdentity;
+    spec: ProvisionSpec;
+    allocationPolicy?: AkashTxAllocationPolicy;
+    recoveryFamilyPrefix?: string;
+  }): Promise<AkashTxCreateResult> {
     // The claim IS the receipt, and it is the FIRST mutation this method does: its INSERT carries
     // {nodeId, environment, compositeUid, compositeGeneration, cogniKey}. Everything below this
     // line — the cursor read and the paid POST — happens strictly after that row is durable.
@@ -533,6 +628,15 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
     }
 
+    // A preparing receipt is not transferable request ownership. Another pod may
+    // still be executing it; only observe/sweeper may resolve abandoned custody.
+    if (input.recoveryFamilyPrefix && claim.state === "owned")
+      throw new AkashTxError(
+        "wallet_allocation_blocked",
+        "recovery receipt already preparing; observe its durable outcome",
+        input.cogniKey
+      );
+
     if (claim.state === "settled") {
       if (claim.record.externalName) {
         this.log.info(
@@ -574,6 +678,43 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         "allocation_rolled_back",
         "the previous attempt under this key is proven closed; its receipt was settled — retry with the same key"
       );
+    }
+
+    const recoveryFamilyPrefix = input.recoveryFamilyPrefix;
+    if (recoveryFamilyPrefix) {
+      try {
+        const receipts = await this.ledger.listReceipts({
+          nodeId: input.identity.nodeId,
+          environment: input.environment,
+          limit: 100,
+        });
+        if (
+          receipts.length >= 100 ||
+          receipts.some(
+            (record) =>
+              record.cogniKey !== input.cogniKey &&
+              record.cogniKey.startsWith(recoveryFamilyPrefix)
+          )
+        )
+          throw new AkashTxError(
+            "identity_conflict",
+            "recovery family already has a target or receipt scan is truncated"
+          );
+      } catch (error) {
+        // No cursor/handle and no provider IO: only this unused claim is safe to fail.
+        const current = await this.readLedger(input.cogniKey);
+        if (
+          current?.state === "preparing" &&
+          !current.externalName &&
+          !current.allocationCursor
+        )
+          await this.ledger.fail({
+            cogniKey: input.cogniKey,
+            failureCode: "recovery_family_refused",
+          });
+        if (error instanceof AkashTxError) throw error;
+        throw this.ledgerUnavailable(error, input.cogniKey, "recovery family");
+      }
     }
 
     // task.5153 — LEDGER-DERIVED TRIED SET + STRIKE ON RECOVERY ENTRY. Crossplane
@@ -657,6 +798,9 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     try {
       allocated = await this.console.allocateAndLease({
         spec: input.spec,
+        ...(input.allocationPolicy
+          ? { allocationPolicy: input.allocationPolicy }
+          : {}),
         ...(excludedProviders && excludedProviders.size > 0
           ? { excludedProviders }
           : {}),
@@ -708,7 +852,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     });
     await this.ledger.recordAppliedSdlHash({
       cogniKey: input.cogniKey,
-      sdlHash: this.console.sdlHash(input.spec),
+      sdlHash: this.console.sdlHash(input.spec, input.allocationPolicy),
     });
     const allocationRecord = await this.requireStoredHandle(
       input.cogniKey,

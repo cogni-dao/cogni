@@ -18,7 +18,11 @@
  * @internal
  */
 
-import { WorkItemPatchConflictError } from "@cogni/shared-ai-tools";
+import { createWorkItemReadImplementation } from "@cogni/ai-tools";
+import {
+  createWorkItemQueryImplementation,
+  WorkItemPatchConflictError,
+} from "@cogni/shared-ai-tools";
 import type {
   WorkItem,
   WorkItemCommandPort,
@@ -98,6 +102,124 @@ describe("createWorkItemCapability", () => {
         specRefs: ["work-items-port"],
       }),
     ]);
+  });
+
+  it("forwards sort overrides through query and queryPage", async () => {
+    const md = markdownPorts();
+    const backlogReader = {
+      list: vi.fn().mockResolvedValue({ items: [item()], nextCursor: "next" }),
+    };
+    const cap = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+      backlogReader,
+    });
+    const params = {
+      sortBy: "rankScore",
+      sortDirection: "asc",
+      limit: 2,
+    } as const;
+    await cap.query(params);
+    expect(await cap.queryPage?.(params)).toMatchObject({ nextCursor: "next" });
+    expect(backlogReader.list).toHaveBeenNthCalledWith(1, params);
+    expect(backlogReader.list).toHaveBeenNthCalledWith(2, params);
+    expect(md.query.list).not.toHaveBeenCalled();
+  });
+
+  it("reads an exact selected full item through the real capability while discovery stays clipped", async () => {
+    const md = markdownPorts();
+    const lateConstraint = "HUMAN APPROVAL REQUIRED before proceeding";
+    const selected = item({
+      id: "task.7777" as WorkItemId,
+      outcome: `${"context ".repeat(100)}${lateConstraint}`,
+      summary: "summary ".repeat(100),
+    });
+    const backlog = [
+      item({ id: "task.1" as WorkItemId }),
+      item({ id: "task.2" as WorkItemId }),
+      selected,
+    ];
+    const backlogReader = {
+      list: vi.fn(async (params: Parameters<WorkItemQueryPort["list"]>[0]) => ({
+        items: (params?.ids
+          ? backlog.filter((row) => params.ids?.includes(row.id))
+          : backlog
+        ).slice(0, params?.limit ?? 20),
+      })),
+    };
+    const capability = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+      backlogReader,
+    });
+    const discovery = await createWorkItemQueryImplementation({
+      workItemCapability: capability,
+    }).execute({ limit: 3 });
+    expect(
+      discovery.items.find((row) => row.id === selected.id)?.outcome
+    ).not.toContain(lateConstraint);
+    expect(
+      discovery.items.find((row) => row.id === selected.id)?.summary?.length
+    ).toBe(601);
+    const full = await createWorkItemReadImplementation({
+      workItemCapability: capability,
+    }).execute({ id: selected.id });
+    expect(full.complete).toBe(true);
+    expect(full.item).toMatchObject({
+      id: selected.id,
+      revision: 4,
+      outcome: selected.outcome,
+      summary: selected.summary,
+    });
+    expect(backlogReader.list).toHaveBeenLastCalledWith({
+      ids: [selected.id],
+      limit: 2,
+    });
+    expect(md.query.get).not.toHaveBeenCalled();
+    expect(md.query.list).not.toHaveBeenCalled();
+  });
+
+  it("requires numeric source revision while allowing honest missing acceptance text", async () => {
+    const md = markdownPorts();
+    const list = vi
+      .fn()
+      .mockResolvedValue({ items: [item({ revision: undefined })] });
+    const capability = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+      backlogReader: { list },
+    });
+    const read = createWorkItemReadImplementation({
+      workItemCapability: capability,
+    });
+    await expect(read.execute({ id: "task.5282" })).rejects.toThrow(
+      "work_source_revision_unavailable"
+    );
+    list.mockResolvedValue({ items: [item({ outcome: undefined })] });
+    expect(await read.execute({ id: "task.5282" })).toMatchObject({
+      complete: true,
+      item: { id: "task.5282", revision: 4 },
+    });
+  });
+
+  it("forwards exact IDs and cursor through query's shared read mapping", async () => {
+    const md = markdownPorts();
+    const backlogReader = { list: vi.fn().mockResolvedValue({ items: [] }) };
+    const capability = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+      backlogReader,
+    });
+    await capability.query({
+      ids: ["task.7777"],
+      cursor: "cursor-2",
+      limit: 2,
+    });
+    expect(backlogReader.list).toHaveBeenCalledWith({
+      ids: ["task.7777"],
+      cursor: "cursor-2",
+      limit: 2,
+    });
   });
 
   it("falls back to workItemQuery when no backlogReader is wired", async () => {

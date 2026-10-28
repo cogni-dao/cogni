@@ -62,11 +62,13 @@ export {
   type AkashLeaseLogDescriptor,
   type AkashTxActuatorPort,
   type AkashTxAllocationLedgerPort,
+  type AkashTxAllocationPolicy,
   type AkashTxAllocationRecord,
   type AkashTxAllocationState,
   type AkashTxCompositeVerdict,
   type AkashTxConsolePort,
   type AkashTxCreateResult,
+  type AkashTxDatabaseCellRecoveryInput,
   AkashTxError,
   type AkashTxErrorCode,
   type AkashTxLeaseLogSource,
@@ -201,6 +203,8 @@ export type {
 } from "./database-containment.port";
 export { DATABASE_CELL_METRIC_LABEL_KEYS } from "./database-containment.port";
 export type {
+  CancelCandidateMaintenanceInput,
+  CancelCandidateMaintenanceResult,
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
   ClassifyEnvManagerPrInput,

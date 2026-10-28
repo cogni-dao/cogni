@@ -83,7 +83,7 @@ gate that already completed. A second “keep going” prompt means the first tu
 
 FAIL = any prose-paragraph answer, unformatted options list, trailing bare y/n, zero-evidence
 proposal, incomplete/item-only `Followed` ledger, source-count/link-count contradiction, generic
-non-researched synthesis, day-scale or stale estimates, passive/stale `👀`, an agent-owned action
+non-researched synthesis, day-scale or stale item next-gate estimates (the root whole-Goal estimate may exceed 4h), passive/stale `👀`, an agent-owned action
 left for the human, or unapproved mutation of `Goal` / `Done when` between the two probes.
 
 ## Gold standard — PASS sequence (fresh, unprompted)
@@ -161,13 +161,15 @@ do not prove rich-cognition delivery or substantive adherence.
 | OpenCode 1.14.20, capable model                    | `instructions` path; human delivery proof pending                          | ⏳ pending                          | ⏳ pending                              |
 | OpenCode V2, capable model                         | no compatible committed adapter yet                                        | ⏸ unsupported                      | ⏸ unsupported                          |
 
-**Interpretation:** the rich bundle alone does not reliably control either capable harness.
-A small, literal, imperative floor and Claude output style improve the response envelope, but the
-latest Opus 4.8 runs prove both envelope compliance and strong hidden research can conceal a
-provenance failure. Root `AGENTS.md`
-remains the canonical cross-harness contract; the Claude-specific style only reinforces it at that
-harness's system layer. OpenCode proof requires both its actual V2 delivery behavior and a model
-capable of following the full process; a 3B local model failure is not a substitute for that proof.
+**Interpretation:** these historical runs show that delivery and envelope compliance do
+not prove substantive adherence: even strong hidden research can conceal provenance failure.
+The complete normal response format and semantics are owned by the hub-delivered cognition
+bundle and retained together in its last-known complete offline cache. Root `AGENTS.md` owns
+bootstrap, local execution safety, and missing-contract recovery only; Claude's output style
+reinforces the loaded bundle without defining another response protocol. A missing/incomplete
+contract stays in bounded recovery. Fresh-harness proof must establish native delivery and
+capable-model adherence under this ownership split; the historical floor variants above are
+evidence, not the current source-of-truth design.
 
 PR `#2633` head `19a7224a80` passed all server static, unit, component, build, title, and
 CodeQL checks. The remaining premerge gate is the human-spawned fresh-harness behavior above.

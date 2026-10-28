@@ -15,7 +15,7 @@
  * @public
  */
 
-import type { Citation, Knowledge } from "./schemas.js";
+import type { Citation } from "./schemas.js";
 
 export interface KnowledgeGraphNode {
   id: string;
@@ -40,28 +40,31 @@ export interface KnowledgeGraphModel {
 }
 
 /**
- * Build the graph view model. `citations` is the full edge set (one query);
- * edges are filtered to those whose citing AND cited endpoints are both entry
- * nodes, yielding the exact edge list the legacy N+1-per-entry gather produced.
+ * Build the graph view model. `nodes` is the projected entry set (id, domain,
+ * title, entryType, confidencePct, sourceType — never `content`; one projected
+ * read, see `KnowledgeStorePort.listKnowledgeGraphNodes`). `citations` is the
+ * full edge set (one query); edges are filtered to those whose citing AND cited
+ * endpoints are both nodes in the set, yielding the exact edge list the legacy
+ * N+1-per-entry gather produced.
  */
 export function buildKnowledgeGraph(input: {
   domains: string[];
-  entries: readonly Knowledge[];
+  nodes: readonly KnowledgeGraphNode[];
   citations: readonly Citation[];
 }): KnowledgeGraphModel {
-  const { domains, entries, citations } = input;
+  const { domains, nodes: inputNodes, citations } = input;
 
   const nodeIds = new Set<string>();
   const nodes: KnowledgeGraphNode[] = [];
-  for (const r of entries) {
-    nodeIds.add(r.id);
+  for (const n of inputNodes) {
+    nodeIds.add(n.id);
     nodes.push({
-      id: r.id,
-      domain: r.domain,
-      title: r.title,
-      entryType: r.entryType ?? "finding",
-      confidencePct: r.confidencePct ?? null,
-      sourceType: r.sourceType,
+      id: n.id,
+      domain: n.domain,
+      title: n.title,
+      entryType: n.entryType,
+      confidencePct: n.confidencePct,
+      sourceType: n.sourceType,
     });
   }
 

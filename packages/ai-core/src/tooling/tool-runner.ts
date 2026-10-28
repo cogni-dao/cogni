@@ -6,7 +6,7 @@
  * Purpose: Tool execution with AiEvent emission, policy enforcement, and payload redaction.
  * Scope: Sole owner of toolCallId generation; executes tools via injected implementations. Does not import from src/ or perform observability scrubbing.
  * Invariants:
- *   - GRAPHS_USE_TOOLRUNNER_ONLY: Graphs invoke tools exclusively through toolRunner.exec()
+ *   - GRAPHS_USE_TOOLRUNNER_ONLY: Graphs invoke all capability tools through toolRunner.exec(); isolated SDK state controls follow TOOL_USE_SPEC
  *   - TOOLCALL_ID_STABLE: Same toolCallId across start→result
  *   - TOOLRUNNER_ALLOWLIST_HARD_FAIL: Missing allowlist or redaction failure → error event
  *   - TOOLRUNNER_RESULT_SHAPE: Returns {ok:true, value} | {ok:false, errorCode, safeMessage}

@@ -86,7 +86,7 @@ export const WorkItemQueryInputSchema = z.object({
 });
 export type WorkItemQueryInput = z.infer<typeof WorkItemQueryInputSchema>;
 
-const WorkItemOutputSchema = z.object({
+export const WorkItemOutputSchema = z.object({
   id: z.string(),
   type: z.string(),
   title: z.string(),

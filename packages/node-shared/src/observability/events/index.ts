@@ -16,7 +16,15 @@
 // Event Name Registry (as const)
 // ============================================================================
 
+export const WORK_ITEMS_LIST_ERROR_CODES = {
+  INVALID_INPUT: "invalid_input",
+  INVALID_CURSOR: "invalid_cursor",
+  BACKEND_UNAVAILABLE: "backend_unavailable",
+  INTERNAL_ERROR: "internal_error",
+} as const;
+
 export const EVENT_NAMES = {
+  WORK_ITEMS_LIST_COMPLETE: "work.items.list_complete",
   // AI Domain - Server
   AI_COMPLETION: "ai.completion",
   AI_LLM_CALL: "ai.llm_call",
@@ -120,6 +128,10 @@ export const EVENT_NAMES = {
 
   // Scheduling Domain
   SCHEDULE_CREDIT_GATE_REJECTED: "schedules.credit_gate_rejected",
+  SCHEDULE_DETAIL_READ: "schedules.detail_read",
+  SCHEDULE_HISTORY_READ: "schedules.history_read",
+  KNOWLEDGE_MERGE_CHECK_COMPLETE: "knowledge.merge_check.complete",
+  AI_THREAD_READ: "ai.thread_read",
 
   // Governance Domain
   GOVERNANCE_SYNC_COMPLETE: "governance.sync.complete",

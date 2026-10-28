@@ -51,12 +51,13 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 - Six edit ops: `insert`, full `update`, strict `patch`, `delete`, `cite`, `uncite`
 - `patch` may set only `useWhen` and `entryType`; it cannot carry the body or gate-governed fields
+- `ContributionMergePreviewSchema` describes a native check of immutable committed roots; `clean` never promises a future merge
 
 **Subpath** (`@cogni/knowledge-store/adapters/doltgres`):
 
 - `DoltgresKnowledgeStoreAdapter`, `DoltgresAdapterConfig`, `buildDoltgresClient`, `DoltgresClientConfig`
 - `DoltgresKnowledgeContributionAdapter`, `DoltgresKnowledgeContributionAdapterConfig` (contribution-branch lifecycle)
-- `DoltBranchSessionRunner` (thin operator error/telemetry/budget wrapper over the shared native executor; branch client is separate from reads)
+- `DoltBranchSessionRunner` (`run` accepts `awaitSettlement` for CLI pool shutdown; thin operator error/telemetry/budget wrapper over the shared native executor; branch client is separate from reads)
 - `createDoltgresPusher`, `DoltgresPusher`, `DoltgresPushConfig` (post-merge mirror to a Dolt remote; lazy `dolt_remote add` + `dolt_push`)
 - `wrapPushSafe`, `PushOutcomeListener` (fire-and-forget wrapper with injectable success/failure callbacks — keeps logging out of the adapter)
 
@@ -64,6 +65,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 - `createContributionService`, `ContributionService`, `ContributionServiceDeps`
 - `ContributionServiceDeps.pushMainOnMerge?: () => Promise<void>` — optional post-merge mirror hook; caller owns error handling (service does not await + does not catch)
+- `previewMerge(id)` uses the optional native port capability; unavailable capability fails closed. It shares admitted native session capacity, while ordinary reads keep their independent pool.
 
 ## Ports
 

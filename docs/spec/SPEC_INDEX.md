@@ -61,8 +61,6 @@ This is a master index of all specs, updated as specs are migrated.
 | spec.onchain-readers             | On-Chain Treasury & Ownership                | draft    | web3       | [onchain-readers.md](./onchain-readers.md)                         |
 | openclaw-sandbox-controls-spec   | OpenClaw Sandbox Controls Design             | draft    | ai-graphs  | [openclaw-sandbox-controls.md](./openclaw-sandbox-controls.md)     |
 | openclaw-sandbox-spec            | OpenClaw Sandbox Integration                 | draft    | ai-graphs  | [openclaw-sandbox-spec.md](./openclaw-sandbox-spec.md)             |
-| sandboxed-agents-spec            | Sandboxed Agent System                       | draft    | ai-graphs  | [sandboxed-agents.md](./sandboxed-agents.md)                       |
-| sandbox-scaling-spec             | Sandbox Proxy Scaling Design                 | draft    | ai-graphs  | [sandbox-scaling.md](./sandbox-scaling.md)                         |
 | packages-architecture-spec       | Packages Architecture                        | draft    | infra      | [packages-architecture.md](./packages-architecture.md)             |
 | payments-design-spec             | Payments: USDC with Backend Verify           | draft    | billing    | [payments-design.md](./payments-design.md)                         |
 | prompt-registry-spec             | Prompt Registry                              | draft    | ai-graphs  | [prompt-registry.md](./prompt-registry.md)                         |
