@@ -233,9 +233,9 @@ describe("Financials reporting", () => {
       grid().getByRole("button", { name: "Credit purchases", exact: true })
     );
     expect(
-      within(screen.getByRole("dialog", { name: "Credit purchases" })).getByText(
-        /payment_events · CREDITED · trailing 30 days/
-      )
+      within(
+        screen.getByRole("dialog", { name: "Credit purchases" })
+      ).getByText(/payment_events · CREDITED · trailing 30 days/)
     ).toBeVisible();
   });
   it("orders each group by risk and lists income first", () => {
