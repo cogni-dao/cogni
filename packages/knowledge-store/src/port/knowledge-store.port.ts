@@ -19,6 +19,7 @@
 
 import type { ActiveGoal } from "../domain/dao-goals.js";
 import type { GoverningIndexRow } from "../domain/governing.js";
+import type { KnowledgeGraphNode } from "../domain/knowledge-graph.js";
 import type {
   Citation,
   CitationType,
@@ -305,6 +306,15 @@ export interface KnowledgeStorePort {
    * metadata only, never bodies (INDEX_CARRIES_NO_CONTENT).
    */
   listGoverningIndex(): Promise<GoverningIndexRow[]>;
+  /**
+   * Every entry projected to the knowledge-graph node shape — id, domain,
+   * title, entryType, confidencePct, sourceType; never `content`
+   * (INDEX_BUILT_BY_OWN_QUERY, same idiom as `listGoverningIndex`). ONE query,
+   * all rows (EDO included, like the graph view), no limit: memory is bounded
+   * by node count, not body bytes. Feeds `buildKnowledgeGraph` so the graph SSR
+   * never materializes full bodies it discards (bug.5547).
+   */
+  listKnowledgeGraphNodes(): Promise<KnowledgeGraphNode[]>;
   /** List distinct domain values present in the `knowledge` table (legacy / back-compat). */
   listDomains(): Promise<string[]>;
 

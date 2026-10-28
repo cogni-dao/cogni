@@ -24,8 +24,8 @@ import { getContainer } from "@/bootstrap/container";
 import { getServerSessionUser } from "@/lib/auth/server";
 import {
   loadDomains,
-  loadKnowledgeGraph,
-  loadKnowledgeList,
+  loadKnowledgeGraphCached,
+  loadKnowledgeListCached,
 } from "./_server/loaders";
 import { KnowledgeDashboardView } from "./view";
 
@@ -59,10 +59,12 @@ export default async function KnowledgePage({
     ? await Promise.all([
         // limit=500 + includeEdo match the browse client fetcher
         // (LIST_LIMIT_PARITY); the chains tab filters EDO rows from this list.
-        safe(loadKnowledgeList(port, { limit: 500, includeEdo: true })),
+        // Cached reads keyed by the store revision (bug.5547): repeat refreshes
+        // are cache hits, not full re-materializations.
+        safe(loadKnowledgeListCached(port, { limit: 500, includeEdo: true })),
         safe(loadDomains(port)),
         mode === "graph"
-          ? safe(loadKnowledgeGraph(port))
+          ? safe(loadKnowledgeGraphCached(port))
           : Promise.resolve(undefined),
       ])
     : [undefined, undefined, undefined];
