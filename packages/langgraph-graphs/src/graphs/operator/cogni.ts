@@ -363,7 +363,11 @@ export function createCogniProgram(opts: CreateReactAgentGraphOptions) {
       )
       .addEdge("file", "report")
       .addEdge("report", END)
-      .compile()
+      // Persistence foundation (langgraph-persistence): compile with the host-injected checkpointer
+      // + Store when present (the deep-agent-depth prerequisite). Both undefined ⇒ no persistence,
+      // so the pure structure still renders in langgraph dev. The host injects a stable thread_id at
+      // the invoke seam.
+      .compile({ checkpointer: opts.checkpointer, store: opts.store })
       .withConfig({ recursionLimit: 50 })
   );
 }

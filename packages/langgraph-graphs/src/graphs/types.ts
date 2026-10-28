@@ -20,6 +20,7 @@ import type {
   RunnableInterface,
 } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import type { BaseCheckpointSaver, BaseStore } from "@langchain/langgraph";
 
 /**
  * Options for graph invocation.
@@ -91,4 +92,16 @@ export interface CreateReactAgentGraphOptions {
   };
   /** Optional system prompt override. Used by operator graphs that are configured via catalog. */
   readonly systemPrompt?: string;
+  /**
+   * LangGraph persistence foundation (langgraph-persistence). When present, the engine compiles
+   * with a checkpointer — per-run/thread state under a stable `thread_id`, resumable within a run —
+   * and a `Store` for cross-thread working memory. This is the prerequisite for deep-agent depth
+   * (write_todos planning, reflection, SubAgentMiddleware). Absent ⇒ the graph compiles with no
+   * persistence, so the pure structure still renders in langgraph dev. The host injects a stable
+   * `thread_id` at the invoke seam; the checkpointer/store backend is dev `MemorySaver`/`InMemoryStore`
+   * and prod `PostgresSaver`/store (`.setup()` at deploy, never at request time). Durable syntropy
+   * memory remains the hub; the checkpointer/store hold only per-run working state.
+   */
+  readonly checkpointer?: BaseCheckpointSaver;
+  readonly store?: BaseStore;
 }

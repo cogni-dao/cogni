@@ -29,6 +29,7 @@ import {
   DynamicStructuredTool,
   type StructuredToolInterface,
 } from "@langchain/core/tools";
+import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
 import { z } from "zod";
 import {
   CogniCompletionAdapter,
@@ -43,6 +44,17 @@ import {
 } from "../runtime/core";
 
 import type { GraphResult, InProcRunnerOptions } from "./types";
+
+/**
+ * Dev persistence foundation (langgraph-persistence). Module-level singletons so two runs in the
+ * same process share them: the checkpointer holds each run's state under its `thread_id`; the Store
+ * holds working memory that crosses threads (and therefore crosses mission ticks within a process).
+ * MemorySaver/InMemoryStore are dev/in-process only — state is lost on restart. Prod injects a
+ * PostgresSaver-backed pair whose `.setup()` runs at deploy, never at request time (a later rung).
+ * Only the cogni engine compiles with these; other factories ignore the extra opts.
+ */
+const devCheckpointer = new MemorySaver();
+const devStore = new InMemoryStore();
 
 /**
  * Create LangChain tool wrappers from MCP ToolSpecs.
@@ -136,7 +148,12 @@ export function createInProcGraphRunner<TTool = unknown>(
     request,
     responseFormat,
     systemPrompt,
+    persistence,
   } = opts;
+
+  // Persistence foundation: host-injected backend, else the in-process dev singletons.
+  const checkpointer = persistence?.checkpointer ?? devCheckpointer;
+  const store = persistence?.store ?? devStore;
 
   // SINGLE_QUEUE_PER_RUN: Runner creates queue, all events flow here
   const queue = new AsyncQueue<AiEvent>();
@@ -214,6 +231,9 @@ export function createInProcGraphRunner<TTool = unknown>(
     tools,
     ...(responseFormat !== undefined && { responseFormat }),
     ...(systemPrompt !== undefined && { systemPrompt }),
+    // Persistence foundation: factories that support it (cogni) compile with these; others ignore.
+    checkpointer,
+    store,
   });
 
   const final = (async (): Promise<GraphResult> => {
@@ -234,7 +254,16 @@ export function createInProcGraphRunner<TTool = unknown>(
             { messages },
             {
               signal: request.abortSignal,
-              configurable: request.configurable,
+              // STABLE_THREAD_ID: a checkpointer-compiled graph requires a thread_id. One run = one
+              // thread (crash-resumable within the run, isolated per mission tick); cross-tick working
+              // memory lives in the Store, not the checkpointer. graphId scopes it per node+program.
+              configurable: {
+                ...request.configurable,
+                thread_id:
+                  request.configurable.graphId != null
+                    ? `${request.configurable.graphId}:${request.runId}`
+                    : request.runId,
+              },
               // A BACKSTOP against an infinite graph, never the real work bound — each
               // graph self-limits (e.g. cogni's MAX_INVESTIGATE_STEPS). Must exceed any
               // graph's budget: a gather round is 2 node visits, so this clears 2×the
