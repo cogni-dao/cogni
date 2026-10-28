@@ -506,7 +506,10 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
         id: row.id as string,
         domain: row.domain as string,
         title: row.title as string,
-        entryType: row.entry_type as string,
+        // `?? "finding"` keeps adapter parity with the fake + the pre-refactor
+        // buildKnowledgeGraph default, and honors the non-null
+        // KnowledgeGraphNode.entryType type if a row's entry_type is NULL.
+        entryType: (row.entry_type as string | null) ?? "finding",
         confidencePct:
           row.confidence_pct != null ? Number(row.confidence_pct) : null,
         sourceType: row.source_type as string,
