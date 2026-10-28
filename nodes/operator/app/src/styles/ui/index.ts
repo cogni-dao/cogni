@@ -87,5 +87,6 @@ export {
   paragraph,
   prompt,
   prose,
+  reportText,
   textAccent,
 } from "./typography";

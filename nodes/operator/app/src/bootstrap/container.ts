@@ -94,6 +94,7 @@ import { parse as parseYaml } from "yaml";
 import {
   ALCHEMY_ADAPTER_VERSION,
   AlchemyWebhookNormalizer,
+  creditedPurchasesQuery,
   type Database,
   DrizzleAiTelemetryAdapter,
   DrizzleComputeCostStore,
@@ -331,6 +332,8 @@ export interface Container {
         reportByNode(): Promise<readonly ComputeCostReport[]>;
       }
     | undefined;
+  /** Credited-purchases income query bound to the BYPASSRLS service DB; the finance capability composer may not import the service-db adapter itself. */
+  creditedPurchasesQuery: ReturnType<typeof creditedPurchasesQuery>;
   /** Web search capability for AI tools - requires TAVILY_API_KEY to be configured */
   webSearchCapability: WebSearchCapability;
   /** Repo capability for AI tools - requires COGNI_REPO_PATH */
@@ -848,6 +851,8 @@ function createContainer(): Container {
           new DrizzleComputeCostStore(async () => serviceDb).reportByNode(),
       }
     : undefined;
+  // BYPASSRLS income query for the finance report; built here (approved service-db importer) and injected into createFinanceReaders.
+  const financeCreditedPurchasesQuery = creditedPurchasesQuery(serviceDb);
 
   // WebSearchCapability for AI tools (requires TAVILY_API_KEY)
   const webSearchCapability = createWebSearchCapability(env);
@@ -1324,6 +1329,7 @@ function createContainer(): Container {
     computeCapability,
     leaseReadCapability,
     akashSpendReader,
+    creditedPurchasesQuery: financeCreditedPurchasesQuery,
     webSearchCapability,
     repoCapability,
     vcsCapability,

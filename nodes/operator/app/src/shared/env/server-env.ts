@@ -262,6 +262,9 @@ export const serverSchema = z.object({
   // Optional: when unset the compute capability returns no balances (graceful degradation)
   // until ESO surfaces the token onto the operator runtime.
   CHERRY_AUTH_TOKEN: optionalString,
+  // The Cherry team whose credit the Financials page reports. The token can see several teams;
+  // the report binds to this id and shows UNKNOWN when it is absent or not found (never teams[0]).
+  CHERRY_TEAM_ID: optionalString,
   // NOTE: AKASH_CONSOLE_API_KEY is deliberately GONE (task.5138). One Console account has ONE
   // key and it belongs to that account's actuator (hub `akash-actuator-wallet-cutover`). The
   // app's Akash awareness is the actuator's own ledger (akashSpend on /compute/balances,

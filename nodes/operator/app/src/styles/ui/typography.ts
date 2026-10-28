@@ -202,3 +202,34 @@ export const brandText = cva("tracking-tight", {
 export type HeadingLevel = VariantProps<typeof heading>["level"];
 export type BrandTextSize = VariantProps<typeof brandText>["size"];
 export type BrandTextTone = VariantProps<typeof brandText>["tone"];
+
+/** Compact administrative reporting type, separate from marketing headings. */
+const reportTextVariantVariants = {
+  title: "font-sans font-semibold text-2xl tracking-tight",
+  section: "font-sans font-semibold text-lg",
+  value: "font-sans font-semibold text-2xl tabular-nums",
+  amount: "font-medium font-sans text-sm tabular-nums",
+  label: "font-medium font-sans text-sm",
+  body: "font-sans text-sm",
+  caption: "font-sans text-xs leading-relaxed",
+} satisfies Record<
+  "title" | "section" | "value" | "amount" | "label" | "body" | "caption",
+  string
+>;
+const reportTextToneVariants = {
+  default: "text-foreground",
+  muted: "text-muted-foreground",
+  destructive: "text-destructive",
+  warning: "text-warning",
+  success: "text-success",
+} satisfies Record<
+  "default" | "muted" | "destructive" | "warning" | "success",
+  string
+>;
+export const reportText = cva("wrap-anywhere", {
+  variants: {
+    variant: reportTextVariantVariants,
+    tone: reportTextToneVariants,
+  },
+  defaultVariants: { variant: "body", tone: "default" },
+});

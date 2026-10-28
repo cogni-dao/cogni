@@ -1,42 +1,30 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2025 Cogni-DAO
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
  * Module: `@app/(admin)/admin/payments/page`
- * Purpose: Server entrypoint for the admin provider-funding pipeline. Reads the balances
- *   (OpenRouter inference runway, Cherry compute runway, operator wallet, steward wallet)
- *   and hands them to the client panel.
- * Scope: Server component. Access gating handled upstream by `(admin)/layout.tsx`.
- * Invariants: Read-only here; the only write is the panel's Fund-steward POST. Addresses from repo-spec.
- * Side-effects: IO (OpenRouter read + on-chain balance reads via getAiFunding).
- * Links: src/app/(admin)/admin/payments/{funding.server,AiFundingPanel.client}.tsx, docs/design/node-steward-wallet.md
+ * Purpose: Financials — the package FinanceReport (one UI for every node) over this node's money planes.
+ * Scope: Server component; access remains guarded by the existing admin layout. finance.server is the only read path.
+ * Invariants: ONE_ROW_MODEL — every action is a row `payAction`; the only write stays the fund-steward POST.
+ * Side-effects: Bounded provider reads through the shared finance service.
+ * Links: https://cognidao.org/work/items/task.5347, ./finance.server.ts
  * @public
  */
-
 import type { ReactElement } from "react";
 
 import { PageContainer } from "@/components";
+import { FinanceReportClient } from "@/features/finance/components/FinanceReportClient";
 
-import { AiFundingPanel } from "./AiFundingPanel.client";
-import { getAiFunding } from "./funding.server";
+import { getFinanceReport } from "./finance.server";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export default async function ProviderTopUpsPage(): Promise<ReactElement> {
-  const funding = await getAiFunding();
-
+export default async function FinancePage(): Promise<ReactElement> {
+  const report = await getFinanceReport();
   return (
-    <PageContainer maxWidth="2xl">
-      <div className="space-y-1">
-        <h1 className="font-bold text-2xl tracking-tight">Provider Funding</h1>
-        <p className="text-muted-foreground text-sm">
-          The money chain that keeps the node alive: user payments → operator
-          wallet → steward wallet → vendors. The steward wallet pays both
-          OpenRouter (inference) and Cherry (compute) in USDC — no card.
-        </p>
-      </div>
-      <AiFundingPanel funding={funding} />
+    <PageContainer maxWidth="full">
+      <FinanceReportClient report={report} />
     </PageContainer>
   );
 }
