@@ -46,17 +46,6 @@ import {
 import type { GraphResult, InProcRunnerOptions } from "./types";
 
 /**
- * Dev persistence foundation (langgraph-persistence). Module-level singletons so two runs in the
- * same process share them: the checkpointer holds each run's state under its `thread_id`; the Store
- * holds working memory that crosses threads (and therefore crosses mission ticks within a process).
- * MemorySaver/InMemoryStore are dev/in-process only — state is lost on restart. Prod injects a
- * PostgresSaver-backed pair whose `.setup()` runs at deploy, never at request time (a later rung).
- * Only the cogni engine compiles with these; other factories ignore the extra opts.
- */
-const devCheckpointer = new MemorySaver();
-const devStore = new InMemoryStore();
-
-/**
  * Create LangChain tool wrappers from MCP ToolSpecs.
  * These delegate to toolExecFn which routes through toolRunner (policy, billing, redaction).
  */
@@ -151,9 +140,14 @@ export function createInProcGraphRunner<TTool = unknown>(
     persistence,
   } = opts;
 
-  // Persistence foundation: host-injected backend, else the in-process dev singletons.
-  const checkpointer = persistence?.checkpointer ?? devCheckpointer;
-  const store = persistence?.store ?? devStore;
+  // Persistence foundation (langgraph-persistence): the host-injected backend, else a fresh
+  // per-run dev pair. Per-run (not a shared singleton) is deliberate: one run = one thread, so a
+  // fresh MemorySaver is GC'd with the run and a long-lived process does not accumulate every
+  // thread's checkpoint. Dev savers are in-process — interrupt-resumable within the run, but NOT
+  // crash-resumable (a crash loses the saver). Prod injects a PostgresSaver-backed pair (shared,
+  // crash-resumable, cross-tick) whose `.setup()` runs at deploy, never at request time.
+  const checkpointer = persistence?.checkpointer ?? new MemorySaver();
+  const store = persistence?.store ?? new InMemoryStore();
 
   // SINGLE_QUEUE_PER_RUN: Runner creates queue, all events flow here
   const queue = new AsyncQueue<AiEvent>();
@@ -255,8 +249,9 @@ export function createInProcGraphRunner<TTool = unknown>(
             {
               signal: request.abortSignal,
               // STABLE_THREAD_ID: a checkpointer-compiled graph requires a thread_id. One run = one
-              // thread (crash-resumable within the run, isolated per mission tick); cross-tick working
-              // memory lives in the Store, not the checkpointer. graphId scopes it per node+program.
+              // thread (interrupt-resumable within the run, crash-resumable once Postgres-backed;
+              // isolated per mission tick); cross-tick working memory lives in the Store, not the
+              // checkpointer. graphId scopes it per node+program.
               configurable: {
                 ...request.configurable,
                 thread_id:

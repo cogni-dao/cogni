@@ -8,7 +8,7 @@
  * Invariants:
  *   - ENGINE_PERSISTS_PER_THREAD: a run writes a checkpoint retrievable by its thread_id
  *   - STABLE_THREAD_ID: the host injects thread_id at the invoke seam (graphId:runId, else runId)
- *   - STORE_IS_CROSS_THREAD: the injected Store round-trips a value across namespaces
+ *   - PERSISTENCE_WIRED: the runner forwards a checkpointer + Store to the engine factory
  *   - DURABLE_MEMORY_IS_THE_HUB: the checkpointer/Store hold per-run working state only
  * Side-effects: none (in-memory saver/store)
  * Links: src/graphs/operator/cogni.ts (.compile), src/inproc/runner.ts (thread_id seam)
@@ -23,7 +23,12 @@ import { describe, expect, it } from "vitest";
 import { COGNI_TOOL_IDS } from "../../src/graphs/operator/cogni";
 import { createOperatorGraph } from "../../src/graphs/operator/graph";
 import { createInProcGraphRunner } from "../../src/inproc/runner";
-import type { CompletionFn, ToolExecFn } from "../../src/inproc/types";
+import type {
+  CompiledGraph,
+  CompletionFn,
+  CreateGraphFn,
+  ToolExecFn,
+} from "../../src/inproc/types";
 
 // A completion that never calls a tool: gather ends on the first turn, no goals were read, so the
 // graph runs GATHER → report → END (NO_GOALS_NO_DECISION). Deterministic: exactly one model call.
@@ -124,12 +129,49 @@ describe("cogni engine persistence foundation", () => {
     expect(bare).toBeUndefined();
   });
 
-  it("STORE_IS_CROSS_THREAD: the injected Store round-trips a value", async () => {
+  it("PERSISTENCE_WIRED: the runner forwards a checkpointer + Store to the engine factory (fresh per-run default, and the injected instances)", async () => {
+    const captured: Array<{ checkpointer: unknown; store: unknown }> = [];
+    const captureGraph: CreateGraphFn = (opts) => {
+      captured.push({ checkpointer: opts.checkpointer, store: opts.store });
+      return {
+        invoke: async () => ({ messages: [] }),
+      } as unknown as CompiledGraph;
+    };
+
+    const drainCapture = async (persistence?: {
+      checkpointer: MemorySaver;
+      store: InMemoryStore;
+    }) => {
+      const { stream, final } = createInProcGraphRunner({
+        program: "work-review",
+        sourceContext: SOURCE,
+        createGraph: captureGraph,
+        completionFn: noGoalsCompletion,
+        createToolExecFn: noopExec,
+        toolContracts: [goalListContract, edoDecideContract],
+        ...(persistence ? { persistence } : {}),
+        request: {
+          runId: "wire",
+          messages: [{ role: "user", content: "TICK" }],
+          configurable: { model: "test-model", toolIds: [...COGNI_TOOL_IDS] },
+        },
+      });
+      for await (const _ of stream) {
+        // drain
+      }
+      await final;
+    };
+
+    // (a) no injected persistence ⇒ the runner supplies a fresh dev pair
+    await drainCapture();
+    // (b) injected persistence ⇒ the runner forwards the exact instances (prod's PostgresSaver seam)
+    const checkpointer = new MemorySaver();
     const store = new InMemoryStore();
-    await store.put(["mission", "test-node"], "last-tick", {
-      at: "2026-10-28",
-    });
-    const got = await store.get(["mission", "test-node"], "last-tick");
-    expect(got?.value).toEqual({ at: "2026-10-28" });
+    await drainCapture({ checkpointer, store });
+
+    expect(captured[0]?.checkpointer).toBeInstanceOf(MemorySaver);
+    expect(captured[0]?.store).toBeInstanceOf(InMemoryStore);
+    expect(captured[1]?.checkpointer).toBe(checkpointer);
+    expect(captured[1]?.store).toBe(store);
   });
 });
