@@ -11,13 +11,13 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:4db8616b9f4eda5585504ed4ff8b5ed680cf7416fafaec8ab57a6a11d04378c7
+    ref: ghcr.io/cogni-dao/poly@sha256:960573cd9c0c8ac6bfbb993ede78e8db88e98db51f40209dfd257f80ead84d95
     source:
       repository: cogni-dao/poly
-      sha: 9f6ceb53c27765e70da09c797075a36e95c5f83d
+      sha: 144bf4c8a0216dcb8adc61964bc882ac1156f3c9
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:356b0a9e1c953cac059a05d7dff27c307eab3ab8849096d005eb2d94b620d88c
+        image: ghcr.io/cogni-dao/poly@sha256:704676beac0027e83c63a13424a1b85b4a0616d65f8d713ec2333b3bd4f88079
   workload:
     name: poly
     publicHost: poly.cognidao.org
