@@ -11,13 +11,13 @@ spec:
   nodeId: f97f68f2-8406-4a3b-b5a9-d579b779f19d
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/beacon@sha256:d30b0f76fefbfb8dc88319d24aae9ca9cde503b3a21b91e5242e1620039cf235
+    ref: ghcr.io/cogni-dao/beacon@sha256:7c6d3a582ea6bf8764690364ae7be590335ec9c89748c523f6b00c2c24599744
     source:
       repository: cogni-dao/beacon
-      sha: ca668bef3b2687c29e2ec62fbffb9b8145a74ba9
+      sha: 57084e2b201bddabc6a685b1b340328ba4395f72
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/beacon@sha256:20b431812d61d08495c8839f26a7c4efade973138d62a37606b6215c6fe96ce0
+        image: ghcr.io/cogni-dao/beacon@sha256:8bc4e742ed43cbe33a5f3ecf594101d91dc3e357afd1af906c3c55a969eb9f66
   workload:
     name: beacon
     publicHost: beacon.cognidao.org
