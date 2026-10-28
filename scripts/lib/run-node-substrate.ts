@@ -10,17 +10,15 @@
  * @internal
  */
 import { spawnSync } from "node:child_process";
-import { createHash, X509Certificate } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { checkServerIdentity, type PeerCertificate } from "node:tls";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { parse } from "yaml";
 import { z } from "zod";
 import { DatabaseCellAppliedCustodySchema } from "../../nodes/operator/app/src/shared/secrets/database-cell-binding.data";
 import { AppliedDatabaseCellReceiptSchema } from "../../nodes/operator/app/src/shared/secrets/database-cell-placement.data";
-import { projectDatabaseCellPlacement } from "./materialize-database-cell-placement";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -87,21 +85,10 @@ export function validateDedicatedCustody(input: {
     )
   )
     throw new Error("dedicated_cell_owner_or_runtime_policy_mismatch");
-  const projection = projectDatabaseCellPlacement({
-    receipt,
-    custody,
-    requireApplied: false,
-  });
-  if (
-    !projection.publicValues ||
-    input.app.DATABASE_URL !== projection.publicValues.DATABASE_URL ||
-    input.app.DATABASE_SERVICE_URL !==
-      projection.publicValues.DATABASE_SERVICE_URL ||
-    input.migration.DATABASE_MIGRATION_URL !==
-      projection.publicValues.DATABASE_MIGRATION_URL
-  )
-    throw new Error("dedicated_cell_consumer_custody_mismatch");
-  return { receipt, custody, probeDsn: custody.readOnlyProbe.dsn };
+  // The live materialized DATABASE_URL/DATABASE_SERVICE_URL endpoint (host:port)
+  // is now reconcilable config (story.5127): it is verified against the real
+  // server at connect time, not pinned to the frozen receipt projection here.
+  return { receipt, custody };
 }
 
 function command(
@@ -242,7 +229,7 @@ async function run(lane: string, node: string, verifyOnly: boolean) {
   const cell = readBank(`${node}-database-cell`),
     app = readBank(node),
     migration = readBank(`${node}-database-migration`);
-  const { receipt, custody, probeDsn } = validateDedicatedCustody({
+  const { receipt, custody } = validateDedicatedCustody({
     node,
     nodeId: catalog.node_id,
     cell,
@@ -304,10 +291,12 @@ async function run(lane: string, node: string, verifyOnly: boolean) {
     if (Object.entries(expected).some(([key, value]) => values[key] !== value))
       throw new Error("dedicated_cell_projected_secret_mismatch");
   }
-  const certificate = new X509Certificate(custody.tlsCertificate);
-  const expectedCertificate = createHash("sha256")
-    .update(certificate.raw)
-    .digest("hex");
+  // story.5127: operator private-CA server-TLS is the trust anchor against an
+  // untrusted Akash provider. Public-PKI cells are out of scope — a CA pin to a
+  // public CA would accept any publicly-trusted cert for the host, so fail closed.
+  if (custody.tls.kind !== "private-ca")
+    throw new Error("dedicated_cell_requires_private_ca");
+  const caCertificate = custody.tls.caCertificate;
   const connect = (dsn: string) => {
     const url = new URL(dsn);
     return postgres({
@@ -323,62 +312,51 @@ async function run(lane: string, node: string, verifyOnly: boolean) {
       connection: {
         application_name: "cogni_dedicated_substrate_preflight",
       },
+      // Pin the operator private CA, not a frozen leaf: the server cert must
+      // chain to that CA and match the hostname (verify-full). This survives a
+      // cert rotation or an endpoint move (resize/failover/provider change).
       ssl: {
         rejectUnauthorized: true,
         servername: url.hostname,
-        ...(custody.tls.kind === "private-ca"
-          ? { ca: custody.tls.caCertificate }
-          : {}),
-        checkServerIdentity: (_hostname: string, cert: PeerCertificate) =>
-          checkServerIdentity(url.hostname, cert) ??
-          (createHash("sha256").update(cert.raw).digest("hex") ===
-          expectedCertificate
-            ? undefined
-            : new Error("dedicated_cell_tls_leaf_mismatch")),
+        ca: caCertificate,
       },
     });
   };
-  const probe = connect(probeDsn);
-  try {
-    const rows = await probe.begin(
-      "read only",
-      (tx) =>
-        tx`SELECT current_database() AS database, session_user AS role, (SELECT system_identifier::text FROM pg_control_system()) AS identity, current_setting('transaction_read_only') AS readonly, (SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()) AS tls`
-    );
-    const observed = rows[0];
-    if (
-      observed?.identity !== receipt.binding.systemIdentifier ||
-      observed.database !== custody.databaseName ||
-      observed.role !== decodeURIComponent(new URL(probeDsn).username) ||
-      observed.readonly !== "on" ||
-      observed.tls !== true
-    )
-      throw new Error("dedicated_cell_native_identity_mismatch");
-  } finally {
-    await probe.end({ timeout: 1 });
-  }
+  // Verify the LIVE materialized endpoint (reconcilable host:port carried in
+  // DATABASE_URL / DATABASE_SERVICE_URL), never the frozen receipt DSN. The real
+  // guards remain: operator-CA chain (connect), expected database, expected
+  // role, read-only default and the preserved per-role budget bounds.
+  const appDsn = app.DATABASE_URL,
+    serviceDsn = app.DATABASE_SERVICE_URL;
+  if (!appDsn || !serviceDsn)
+    throw new Error("dedicated_cell_live_endpoint_missing");
   for (const [dsn, role] of [
-    [custody.app.dsn, custody.appRole],
-    [custody.service.dsn, custody.serviceRole],
+    [appDsn, custody.appRole],
+    [serviceDsn, custody.serviceRole],
   ] as const) {
     const sql = connect(dsn);
     try {
       const rows = await sql.begin(
         "read only",
         (tx) =>
-          tx`SELECT session_user AS name, (SELECT rolcanlogin FROM pg_roles WHERE rolname=session_user) AS login, (SELECT rolconnlimit FROM pg_roles WHERE rolname=session_user) AS limit, (current_setting('default_transaction_read_only')='on') AS readonly,
+          tx`SELECT current_database() AS database, session_user AS name, (SELECT rolcanlogin FROM pg_roles WHERE rolname=session_user) AS login, (SELECT rolconnlimit FROM pg_roles WHERE rolname=session_user) AS limit, (current_setting('default_transaction_read_only')='on') AS readonly, (SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()) AS tls,
           (SELECT setting::numeric FROM pg_settings WHERE name='statement_timeout') AS statement_timeout,
           (SELECT setting::numeric FROM pg_settings WHERE name='lock_timeout') AS lock_timeout,
           (SELECT setting::numeric FROM pg_settings WHERE name='idle_in_transaction_session_timeout') AS idle_timeout,
           (SELECT setting::numeric/1024 FROM pg_settings WHERE name='temp_file_limit') AS temp_limit,
           (SELECT setting::numeric/1024 FROM pg_settings WHERE name='work_mem') AS work_mem`
       );
-      const bound = custody.budget.roles.find((item) => item.name === role),
-        observed = rows[0];
+      const observed = rows[0];
+      if (
+        observed?.database !== custody.databaseName ||
+        observed.name !== role ||
+        observed.tls !== true
+      )
+        throw new Error("dedicated_cell_native_identity_mismatch");
+      const bound = custody.budget.roles.find((item) => item.name === role);
       // BEGIN READ ONLY preserves the role defaults we actually measure here.
       if (
         !bound ||
-        observed?.name !== role ||
         observed.login !== true ||
         observed.limit !== bound.connectionLimit ||
         observed.readonly !== false ||

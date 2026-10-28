@@ -1010,14 +1010,14 @@ describe("audited already-applied registration", () => {
       migration: { DATABASE_MIGRATION_URL: custody.app.dsn },
     };
     expect(validateDedicatedCustody(input).receipt).toEqual(receipts[0]);
+    // story.5127: the live consumer endpoint (DATABASE_URL/DATABASE_SERVICE_URL/
+    // DATABASE_MIGRATION_URL) is reconcilable config, verified against the real
+    // server at connect time, not pinned to the frozen receipt projection here.
+    // Only the owner identity and runtime-pool policy are gated in this function.
     for (const drift of [
       { nodeId: "22222222-2222-4222-8222-222222222222" },
       { pools: { ...limits, app: 2 } },
       { cell: {} },
-      {
-        app: { ...input.app, DATABASE_URL: "postgresql://wrong.invalid/other" },
-      },
-      { migration: { DATABASE_MIGRATION_URL: custody.service.dsn } },
     ])
       expect(() => validateDedicatedCustody({ ...input, ...drift })).toThrow();
     expect(() =>
