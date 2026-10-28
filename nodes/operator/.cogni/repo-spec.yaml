@@ -66,15 +66,18 @@ governance:
   schedules:
     # Mission loop (story.5108) on the work-prioritizer slot: a ReAct agent that reads the DAO goals and
     # makes at most ~5 goal-cited work-item changes per cycle; p0/p1 writes are server-denied and listed
-    # as proposals for the node admin. Model = LiteLLM default_free (gpt-oss-120b, is_free: true): the
-    # system tenant that bills governance runs holds zero credits, and the preflight credit gate passes
-    # free models — a paid model would fail with insufficient_credits. Hourly is the prod-safe cadence.
+    # as proposals for the node admin. Model = deepseek-v4-flash (is_free: true): the system tenant that
+    # bills governance runs holds zero credits, so the model MUST be free (the preflight gate passes free
+    # models; a paid model fails insufficient_credits). gpt-oss-120b is free too but too weak — it gathers
+    # shallowly then answers in prose and calls no core__edo_decide, so the schedule filed no EDO (prod
+    # 06:00 run, story.5116). deepseek-v4-flash is free AND reliably files a grounded EDO (proven on
+    # candidate, cogni-20261028T00). Hourly is the prod-safe cadence.
     - charter: WORK_PRIORITIZER
       cron: "0 * * * *"
       timezone: UTC
       entrypoint: PRIORITIZE
       graph: langgraph:work-prioritizer
-      model: gpt-oss-120b
+      model: deepseek-v4-flash
 
 payments:
   status: active
