@@ -32,6 +32,7 @@ import {
   type GoverningIndexRow,
   selectGoverningIndex,
 } from "../../domain/governing.js";
+import type { KnowledgeGraphNode } from "../../domain/knowledge-graph.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
 import type {
   Citation,
@@ -489,6 +490,28 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
         };
       })
     );
+  }
+
+  async listKnowledgeGraphNodes(): Promise<KnowledgeGraphNode[]> {
+    // ONE projected read of every entry (INDEX_BUILT_BY_OWN_QUERY, same idiom
+    // as listGoverningIndex): the 6 graph-node columns only, never `content`.
+    // All rows, EDO included (the graph view opts into the full shelf), no
+    // LIMIT — memory is bounded by node count, not body bytes (bug.5547).
+    const rows = await this.sql.unsafe(
+      "SELECT id, domain, title, entry_type, confidence_pct, source_type FROM knowledge"
+    );
+    return rows.map((r) => {
+      const row = r as Record<string, unknown>;
+      return {
+        id: row.id as string,
+        domain: row.domain as string,
+        title: row.title as string,
+        entryType: row.entry_type as string,
+        confidencePct:
+          row.confidence_pct != null ? Number(row.confidence_pct) : null,
+        sourceType: row.source_type as string,
+      };
+    });
   }
 
   async listDomains(): Promise<string[]> {

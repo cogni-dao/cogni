@@ -21,6 +21,7 @@ import {
   type GoverningIndexRow,
   selectGoverningIndex,
 } from "../../domain/governing.js";
+import type { KnowledgeGraphNode } from "../../domain/knowledge-graph.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
 import type {
   Citation,
@@ -196,6 +197,19 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       Array.from(this.rows.values()),
       Array.from(this.edges.values())
     );
+  }
+
+  async listKnowledgeGraphNodes(): Promise<KnowledgeGraphNode[]> {
+    // Every row projected to the graph-node shape, EDO included, no limit —
+    // mirrors the Doltgres projected read (bug.5547).
+    return Array.from(this.rows.values()).map((r) => ({
+      id: r.id,
+      domain: r.domain,
+      title: r.title,
+      entryType: r.entryType ?? "finding",
+      confidencePct: r.confidencePct ?? null,
+      sourceType: r.sourceType,
+    }));
   }
 
   async listActiveGoals(): Promise<ActiveGoal[]> {
