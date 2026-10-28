@@ -94,6 +94,7 @@ import { parse as parseYaml } from "yaml";
 import {
   ALCHEMY_ADAPTER_VERSION,
   AlchemyWebhookNormalizer,
+  creditedPurchasesQuery,
   type Database,
   DrizzleAiTelemetryAdapter,
   DrizzleComputeCostStore,
@@ -109,7 +110,6 @@ import {
   GITHUB_ADAPTER_VERSION,
   GitHubNodeDeploymentTopologyAdapter,
   GitHubWebhookNormalizer,
-  creditedPurchasesQuery,
   getAppDb,
   LangfuseAdapter,
   LiteLlmAdapter,
