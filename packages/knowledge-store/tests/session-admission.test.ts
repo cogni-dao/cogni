@@ -341,7 +341,7 @@ describe("Dolt session admission control (bug.5386, bug.5391)", () => {
     "missing",
     "malformed",
     "merging",
-  ] as const)("retains %s merge-state capacity without another callback or pool replacement", async (state) => {
+  ] as const)("evicts %s merge-state capacity and keeps serving (bug.5544)", async (state) => {
     const sql = client(1);
     const recreate = vi.fn(() => sql);
     const runner = new DoltBranchSessionRunner(sql, {
@@ -354,11 +354,21 @@ describe("Dolt session admission control (bug.5386, bug.5391)", () => {
           await conn.unsafe("SELECT 1");
         })
       ).resolves.toBeUndefined();
-      const next = vi.fn(async () => "unsafe");
-      await expect(runner.run("after-unknown", next)).rejects.toBeInstanceOf(
-        KnowledgeBusyError
-      );
-      expect(next).not.toHaveBeenCalled();
+      // bug.5544: an uncertain merge-state cleanup must EVICT and let the writer
+      // RECOVER (no permanent wedge). Once the eviction settles, a retried op is
+      // admitted and serves. The client is evicted, never recreated.
+      await expect
+        .poll(
+          async () => {
+            try {
+              return await runner.run("after-unknown", async () => "served");
+            } catch {
+              return "busy";
+            }
+          },
+          { timeout: 3000 }
+        )
+        .toBe("served");
       expect(recreate).not.toHaveBeenCalled();
     } finally {
       mergeStatus = "clean";
