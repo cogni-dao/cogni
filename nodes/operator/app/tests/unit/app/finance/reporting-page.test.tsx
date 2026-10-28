@@ -194,7 +194,7 @@ describe("Financials reporting", () => {
       "Finance report read"
     );
   });
-  it("renders the package table in USD: five columns, Income · Costs · Reserves, one summary, one FX line", () => {
+  it("renders the package table in USD: five columns, Income · Costs · Reserves, one summary, one FX line", async () => {
     render(<FinanceReportClient report={liveShapedFinancePreview} />);
     expect(screen.getByRole("heading", { name: "Financials" })).toBeVisible();
     expect(screen.getByText(/^Refreshed /)).toBeVisible();
@@ -218,9 +218,6 @@ describe("Financials reporting", () => {
     expect(deadline?.textContent).toBe("Next deadline 1d · Akash credit");
     expect(deadline?.className).toContain("text-destructive");
     expect(screen.getByText("USDC on Base")).toBeVisible();
-    expect(
-      screen.getByText("payment_events · CREDITED · trailing 30 days")
-    ).toBeVisible();
     expect(screen.getByText("EUR→USD 1.1188 · ECB 2026-10-26")).toBeVisible();
     expect(cells(1)).toContain("$13.87");
     expect(cells(2)).toContain("$0.38/day");
@@ -230,6 +227,16 @@ describe("Financials reporting", () => {
     expect(screen.queryByText(/Payment history/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Provider funding/i)).not.toBeInTheDocument();
     expect(lines()).not.toContain("akash:poly");
+    // The income row's Source carries the exact credited-basis label the published
+    // money-plane reader emits; it renders in the row's Line dialog.
+    await userEvent.click(
+      grid().getByRole("button", { name: "Credit purchases", exact: true })
+    );
+    expect(
+      within(screen.getByRole("dialog", { name: "Credit purchases" })).getByText(
+        /payment_events · CREDITED · trailing 30 days/
+      )
+    ).toBeVisible();
   });
   it("orders each group by risk and lists income first", () => {
     render(<FinanceReportClient report={withIncomeFinancePreview} />);

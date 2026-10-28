@@ -79,12 +79,22 @@ vi.mock("@/adapters/server", async () => ({
   ...(await import("@/adapters/server/finance/grafana-overage.reader")),
   ...(await import("@/adapters/server/finance/domain-expiry.reader")),
 }));
-vi.mock("@/bootstrap/container", () => ({
-  getContainer: () => ({
-    akashSpendReader: { reportByNode: runtime.report },
-    computeCapability: { balances: runtime.balances },
-  }),
-}));
+vi.mock("@/bootstrap/container", async () => {
+  // Mirror the real container wiring: the BYPASSRLS income query is built from the
+  // service DB in the container (the only approved service-db importer) and injected.
+  const { creditedPurchasesQuery } = await import(
+    "@/adapters/server/finance/credit-purchase-income.query"
+  );
+  return {
+    getContainer: () => ({
+      akashSpendReader: { reportByNode: runtime.report },
+      computeCapability: { balances: runtime.balances },
+      creditedPurchasesQuery: creditedPurchasesQuery(
+        runtime.serviceDb as Parameters<typeof creditedPurchasesQuery>[0]
+      ),
+    }),
+  };
+});
 vi.mock("@/shared/env", () => ({ serverEnv: () => runtime.env }));
 vi.mock("@/shared/config", () => ({
   getDaoTreasuryAddress: () => runtime.dao,
@@ -157,7 +167,8 @@ describe("operator finance evidence", () => {
       runwayDays: null,
       grade: "INFO",
       source: AKASH_RATE_SOURCE,
-      sourceObservedAt: null,
+      // Informational hosting-cost rate is current as of the report read (the `at` timestamp).
+      sourceObservedAt: at,
       payer: "Operator",
       beneficiary: "poly",
       coverage: "operator-covered",
