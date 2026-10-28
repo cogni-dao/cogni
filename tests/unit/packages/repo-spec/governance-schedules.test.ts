@@ -87,7 +87,7 @@ describe("operator runtime repo-spec governance (nodes/operator/.cogni)", () => 
       timezone: "UTC",
       entrypoint: "PRIORITIZE",
       graph: "langgraph:work-prioritizer",
-      model: "gpt-oss-120b",
+      model: "deepseek-v4-flash",
     });
   });
 
