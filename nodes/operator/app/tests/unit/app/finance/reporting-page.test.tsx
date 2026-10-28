@@ -218,7 +218,9 @@ describe("Financials reporting", () => {
     expect(deadline?.textContent).toBe("Next deadline 1d · Akash credit");
     expect(deadline?.className).toContain("text-destructive");
     expect(screen.getByText("USDC on Base")).toBeVisible();
-    expect(screen.getByText("credit purchases · 30d")).toBeVisible();
+    expect(
+      screen.getByText("payment_events · CREDITED · trailing 30 days")
+    ).toBeVisible();
     expect(screen.getByText("EUR→USD 1.1188 · ECB 2026-10-26")).toBeVisible();
     expect(cells(1)).toContain("$13.87");
     expect(cells(2)).toContain("$0.38/day");

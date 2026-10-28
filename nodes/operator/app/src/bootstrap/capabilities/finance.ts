@@ -27,14 +27,12 @@ import {
   akashCreditReader,
   akashHostingReaders,
   cherryFinanceReader,
-  creditedPurchasesQuery,
   domainExpiryReader,
   grafanaOverageReader,
   readAkashBlocksPerDay,
   readAkashReports,
   unavailableFinanceReader,
 } from "@/adapters/server";
-import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import {
   getDaoTreasuryAddress,
   getOperatorWalletConfig,
@@ -285,9 +283,11 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
   // Income: credited purchases from this node's own ledger; node services stay planned (x402).
   let purchases: PlaneReader;
   try {
-    purchases = creditPurchaseIncomeReader({
-      query: creditedPurchasesQuery(getServiceDb()),
-    });
+    // The BYPASSRLS income query is wired in the DI container (the only
+    // approved importer of the service-db adapter); never read it here.
+    const query = container?.creditedPurchasesQuery;
+    if (!query) throw new Error("credited-purchases query unavailable");
+    purchases = creditPurchaseIncomeReader({ query });
   } catch {
     purchases = unavailableFinanceReader(
       "income:credit-purchases",

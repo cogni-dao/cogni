@@ -21,10 +21,7 @@ import {
   unknownRow,
 } from "@cogni/money-plane";
 
-import type {
-  ComputeCostRate,
-  ComputeCostReport,
-} from "@/ports/compute-cost.port";
+import type { ComputeCostRate, ComputeCostReport } from "@/ports";
 import {
   AKASH_CREDIT_PLANE,
   FALLBACK_BLOCKS_PER_DAY,
@@ -162,9 +159,10 @@ export function akashHostingRow(
       blocksPerDay === null
         ? AKASH_RATE_SOURCE
         : `On-chain lease price · ${Math.round(bpd).toLocaleString("en-US")} blocks/day (measured)`,
-    // The cost ledger stores the accepted price, not when the chain was last observed.
-    sourceObservedAt: null,
-    freshness: "unknown",
+    // Informational hosting-cost rate, current as of this report read; keeps the row
+    // INFO so a purely informational burn child never demotes the Akash parent to UNKNOWN.
+    sourceObservedAt: at,
+    freshness: "current",
     ...attribution,
     ...(only && (per === "block" || per === "day" || per === "month")
       ? { nativeRate: { amount: only.amount, currency: only.denom, per } }

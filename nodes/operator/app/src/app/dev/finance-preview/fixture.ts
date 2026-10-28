@@ -242,7 +242,7 @@ function income(
     runwayDays: null,
     grade: "INFO",
     observedAt: now,
-    source: "payment_attempts · CREDITED · trailing 30 days",
+    source: "payment_events · CREDITED · trailing 30 days",
     sourceObservedAt: now,
     freshness: "current",
     detail: `${purchases} purchases · ${totalUsd.toFixed(2)} USD in 30d`,
