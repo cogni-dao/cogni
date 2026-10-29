@@ -169,14 +169,33 @@ if [ -n "${DNS_RECONCILE_SUMMARY_FILE:-}" ]; then
   trap 'status=$?; if [ "$status" -ne 0 ] && [ "${SUMMARY_WRITTEN:-false}" != "true" ]; then write_dns_summary "failure"; fi; rm -f "${records_tmp:-}"' EXIT
 fi
 
-: "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN required (GH env secret)}"
-: "${CLOUDFLARE_ZONE_ID:?CLOUDFLARE_ZONE_ID required (GH env secret)}"
 FORK_ROOT="${FORK_DOMAIN_ROOT:?FORK_DOMAIN_ROOT required (Cloudflare zone name)}"
 
 if [ -z "${DOMAIN:-}" ]; then
   DOMAIN=$(domain_for_env "$DEPLOY_ENV" "$FORK_ROOT") \
     || { echo "[ERROR] cannot derive DOMAIN for env '$DEPLOY_ENV'" >&2; exit 1; }
 fi
+
+# A catalog projection can contain only the primary node. Its apex is provisioned
+# separately and is never written by this reconciler, so there is no Cloudflare
+# operation to perform. Decide that before requiring credentials or resolving an
+# apex VM IP: isolated Akash workload zones intentionally have neither.
+has_managed_record=false
+for node in "${NODE_TARGETS[@]}"; do
+  is_primary_host "$node" && continue
+  if is_k3s_placed "$node" "$DEPLOY_ENV"; then
+    has_managed_record=true
+    break
+  fi
+done
+if ! $has_managed_record; then
+  echo "No non-primary k3s node DNS records to reconcile for env '${DEPLOY_ENV}'."
+  write_dns_summary "success"
+  exit 0
+fi
+
+: "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN required (GH env secret)}"
+: "${CLOUDFLARE_ZONE_ID:?CLOUDFLARE_ZONE_ID required (GH env secret)}"
 
 # VM IP = the apex (operator) A record's origin content. Cloudflare returns the
 # origin IP even for proxied records, so this works regardless of proxy state.

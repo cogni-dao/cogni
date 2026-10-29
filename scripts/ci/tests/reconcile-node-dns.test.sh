@@ -249,6 +249,29 @@ assert_eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ru
 # primarynode is is_primary_host (apex) — it must NOT get a primarynode-test record.
 assert_eq "$(count_name primarynode-test.cognidao.org)" "0" "primary node skipped (no primarynode-test record)"
 
+# A primary-only k3s projection has no record for this reconciler to own. The
+# isolated test-fleet workload zone intentionally has no apex A record, so this
+# path must succeed without Cloudflare credentials or a VM_IP override.
+PRIMARY_ONLY_CATALOG="$TMPROOT/catalog-primary-only"
+mkdir -p "$PRIMARY_ONLY_CATALOG"
+cp "$EARLY_FIXTURE_CATALOG/primarynode.yaml" "$PRIMARY_ONLY_CATALOG/primarynode.yaml"
+primary_only_summary="$TMPROOT/primary-only-summary.json"
+if env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ZONE_ID -u VM_IP \
+  COGNI_CATALOG_ROOT="$PRIMARY_ONLY_CATALOG" \
+  DOMAIN="cogni-testing.org" \
+  DNS_RECONCILE_SUMMARY_FILE="$primary_only_summary" \
+  bash scripts/ci/reconcile-node-dns.sh candidate-a >"$TMPROOT/primary-only.out" 2>&1; then
+  printf 'OK   primary-only reconcile succeeds without credentials or apex VM IP\n'; pass=$((pass + 1))
+else
+  printf 'FAIL primary-only reconcile must be a zero-action success\n'; cat "$TMPROOT/primary-only.out"; fail=$((fail + 1))
+fi
+assert_eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$primary_only_summary")" \
+  "success" "primary-only reconcile writes a success summary"
+assert_eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["record_count"])' "$primary_only_summary")" \
+  "0" "primary-only reconcile reports zero managed records"
+assert_eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["origin_ip"])' "$primary_only_summary")" \
+  "" "primary-only reconcile does not invent an origin IP"
+
 # Re-run is idempotent (no growth).
 COGNI_CATALOG_ROOT="$EARLY_FIXTURE_CATALOG" bash scripts/ci/reconcile-node-dns.sh candidate-a >/dev/null
 assert_eq "$(count_name k3snode-test.cognidao.org)" "1" "second reconcile is idempotent"
