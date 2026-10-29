@@ -114,7 +114,11 @@ function asOpenFgaReturnsIt(authored: string): string {
   }
 
   return JSON.stringify({
-    authorization_model: { id: "01ABCDEF", ...model, conditions: {} },
+    authorization_model: {
+      id: "01ABCDEF",
+      ...model,
+      conditions: model.conditions ?? {},
+    },
   });
 }
 
@@ -130,7 +134,10 @@ describe("openfga authorization model canonicalization (bug.5417)", () => {
     expect(occurrences('"condition":""')).toBeGreaterThan(0);
     expect(occurrences('"object":""')).toBeGreaterThan(0);
     expect(occurrences('"relations":{}')).toBeGreaterThan(0);
-    expect(occurrences('"conditions":{}')).toBe(1);
+    expect(occurrences('"conditions":{')).toBe(1);
+    expect(JSON.parse(DEPLOYED).authorization_model.conditions).toStrictEqual(
+      JSON.parse(AUTHORED).conditions
+    );
   });
 
   it("ROUND_TRIP_STABLE: a model read back from OpenFGA hashes the same as the git model", () => {
@@ -151,12 +158,7 @@ describe("openfga authorization model canonicalization (bug.5417)", () => {
     const canonical = JSON.parse(canonicalOf(AUTHORED)) as Json;
     const authored = JSON.parse(AUTHORED) as Json;
 
-    expect(Object.keys(canonical).sort()).toStrictEqual([
-      "schema_version",
-      "type_definitions",
-    ]);
-    expect(canonical.schema_version).toStrictEqual(authored.schema_version);
-    expect(canonical.type_definitions).toStrictEqual(authored.type_definitions);
+    expect(canonical).toStrictEqual(authored);
   });
 
   it("EMPTY_OBJECTS_ARE_LOAD_BEARING: `this: {}` survives while empty protobuf maps do not", () => {
@@ -170,12 +172,14 @@ describe("openfga authorization model canonicalization (bug.5417)", () => {
     expect(thisMarkers(gitCanonical)).toBeGreaterThan(0);
     expect(thisMarkers(deployedCanonical)).toBe(thisMarkers(gitCanonical));
 
-    // Empty protobuf map fields are normalized away on BOTH sides, which is what makes
-    // the two comparable at all.
+    // Empty protobuf map fields are normalized away on BOTH sides, while an authored
+    // non-empty conditions map remains part of the model and must round-trip unchanged.
     for (const canonical of [gitCanonical, deployedCanonical]) {
-      expect(canonical).not.toContain('"conditions"');
       expect(canonical).not.toContain('"relations": {}');
       expect(canonical).not.toContain('""');
     }
+    expect(JSON.parse(deployedCanonical).conditions).toStrictEqual(
+      JSON.parse(gitCanonical).conditions
+    );
   });
 });
