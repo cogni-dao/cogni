@@ -148,16 +148,89 @@ describe("compute readiness CLI public revision gate", () => {
     await failure;
   });
 
-  it("still requires native readiness even when the public SHA is correct", async () => {
+  it("succeeds on a matching public SHA even when the control-plane read keeps timing out", async () => {
+    mocks.readLive.mockRejectedValue({ killed: true });
+    await main();
+    expect(mocks.version).toHaveBeenCalledWith(
+      "https://poly-preview.cognidao.org",
+      sourceSha,
+      5_000
+    );
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Public revision verified; public buildSha=${sourceSha}`
+      )
+    );
+  });
+
+  it("succeeds on a matching public SHA even when the control plane reports a not-observed bundle", async () => {
+    const manifest = fixture();
+    mocks.readLive.mockResolvedValue({
+      stdout: JSON.stringify({
+        ...manifest,
+        status: {
+          ...manifest.status,
+          observedBundle: {
+            ...manifest.spec.bundle,
+            ref: `ghcr.io/cogni-dao/poly@sha256:${"b".repeat(64)}`,
+          },
+        },
+      }),
+    });
+    await main();
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      expect.stringContaining("Public revision verified")
+    );
+  });
+
+  it("succeeds when the control-plane read first times out and the public SHA matches later", async () => {
+    mocks.readLive.mockRejectedValue({ killed: true });
+    mocks.version
+      .mockResolvedValueOnce("version_unavailable")
+      .mockResolvedValue("matched");
+    const completed = vi.fn();
+    const wait = main().then(completed);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(completed).not.toHaveBeenCalled();
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      expect.stringContaining("read_timeout; waiting")
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await wait;
+    expect(completed).toHaveBeenCalledOnce();
+  });
+
+  it("fails naming the control-plane reason when public never matches and the read times out", async () => {
+    mocks.version.mockResolvedValue("version_unavailable");
+    mocks.readLive.mockRejectedValue({ killed: true });
+    const failure = expect(main()).rejects.toThrow(
+      /read_timeout - the control-plane read timed out/
+    );
+    await vi.advanceTimersByTimeAsync(12_000);
+    await failure;
+    expect(Date.now()).toBe(12_000);
+  });
+
+  it("keeps resource_absent as the failure owner when public never matches", async () => {
+    mocks.version.mockResolvedValue("source_mismatch");
+    mocks.readLive.mockRejectedValue({
+      stderr: "Error: NotFound ... not found",
+    });
+    const failure = expect(main()).rejects.toThrow("resource_absent");
+    await vi.advanceTimersByTimeAsync(12_000);
+    await failure;
+  });
+
+  it("still fails on a non-serving composite when the public SHA never matches", async () => {
     const manifest = fixture();
     setManifest({
       ...manifest,
       status: { ...manifest.status, serving: false },
     });
+    mocks.version.mockResolvedValue("source_mismatch");
     const failure = expect(main()).rejects.toThrow("not_serving");
     await vi.advanceTimersByTimeAsync(12_000);
     await failure;
-    expect(mocks.version).not.toHaveBeenCalled();
   });
 
   it("retains native-only readiness for a workload without publicHost", async () => {
@@ -168,6 +241,19 @@ describe("compute readiness CLI public revision gate", () => {
     expect(process.stdout.write).toHaveBeenCalledWith(
       expect.stringContaining("Ready at current generation")
     );
+  });
+
+  it("keeps the control plane as the only authority for a workload without publicHost", async () => {
+    const manifest = fixture();
+    setManifest({
+      ...manifest,
+      spec: { ...manifest.spec, workload: {} },
+      status: { ...manifest.status, serving: false },
+    });
+    const failure = expect(main()).rejects.toThrow("not_serving");
+    await vi.advanceTimersByTimeAsync(12_000);
+    await failure;
+    expect(mocks.version).not.toHaveBeenCalled();
   });
 
   it("public-only waits for the manifest SHA without an SSH host or identity", async () => {

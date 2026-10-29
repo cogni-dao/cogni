@@ -72,6 +72,33 @@ export async function main(): Promise<void> {
   let lastReason = "not_yet_polled";
 
   while (Date.now() < deadline) {
+    // The externally-served /version.buildSha is ground truth (watch-gate
+    // <truth>; promote-green-not-proof): a deploy has landed when the public host
+    // serves the expected SHA. It is probed every iteration, independent of the
+    // control-plane read, so an SSH read_timeout or an XR status that lags the
+    // served artifact cannot fail a run that already serves the target (bug.5555).
+    // This reads a STRONGER signal than the control plane; it does not loosen the gate.
+    let publicReason: string | undefined;
+    if (versionTarget) {
+      const publicRemainingMs = deadline - Date.now();
+      if (publicRemainingMs > 0) {
+        const version = await probePublicVersion(
+          versionTarget,
+          Math.min(5_000, publicRemainingMs)
+        );
+        if (version === "matched") {
+          process.stdout.write(
+            `[compute-workload-ready] ${namespace}/${name} Public revision verified; public buildSha=${versionTarget.sourceSha}\n`
+          );
+          return;
+        }
+        publicReason = `public_${version}`;
+      } else {
+        publicReason = "public_version_unavailable";
+      }
+    }
+    // The control-plane read stays authoritative for workloads WITHOUT a public
+    // host, and names the failure owner (resource_absent, ...) on timeout.
     const observation = publicOnly
       ? undefined
       : await readLiveWorkload({
@@ -82,37 +109,26 @@ export async function main(): Promise<void> {
           resource,
           timeoutMs: Math.max(1, Math.min(40_000, deadline - Date.now())),
         });
-    if (!observation || observation.ok) {
-      const assessment = observation
-        ? assessComputeWorkloadReadiness({
-            expected,
-            live: observation.resource,
-          })
-        : { ready: true as const };
-      if (assessment.ready) {
-        // Controller Ready can precede the provider applying this revision. Keep
-        // convergence inside THIS budget until the canonical public host proves
-        // the requested source; the downstream verifier remains an independent gate.
-        const remainingMs = deadline - Date.now();
-        const version = versionTarget
-          ? remainingMs > 0
-            ? await probePublicVersion(
-                versionTarget,
-                Math.min(5_000, remainingMs)
-              )
-            : "version_unavailable"
-          : "matched";
-        if (version === "matched" && Date.now() <= deadline) {
-          process.stdout.write(
-            `[compute-workload-ready] ${namespace}/${name} ${publicOnly ? "Public revision verified" : "Ready at current generation"}${versionTarget ? `; public buildSha=${versionTarget.sourceSha}` : ""}\n`
-          );
-          return;
-        }
-        lastReason = `public_${version === "matched" ? "version_unavailable" : version}`;
-      } else {
+    if (!observation) {
+      lastReason = publicReason ?? lastReason;
+    } else if (observation.ok) {
+      const assessment = assessComputeWorkloadReadiness({
+        expected,
+        live: observation.resource,
+      });
+      if (!assessment.ready) {
         lastReason = assessment.reason;
+      } else if (!versionTarget) {
+        process.stdout.write(
+          `[compute-workload-ready] ${namespace}/${name} Ready at current generation\n`
+        );
+        return;
+      } else {
+        // Controller Ready, but the public host has not yet proven the SHA.
+        lastReason = publicReason ?? "public_version_unavailable";
       }
     } else {
+      // A control-plane-origin reason is more informative than a public symptom.
       lastReason = observation.reason;
     }
     process.stdout.write(
