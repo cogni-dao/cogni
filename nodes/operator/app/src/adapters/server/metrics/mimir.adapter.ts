@@ -84,6 +84,10 @@ const ALLOWED_TEMPLATES: readonly MetricTemplate[] = [
   "latency_p50",
   "latency_p95",
   "latency_p99",
+  "vm_memory_headroom",
+  "vm_disk_headroom",
+  "vm_io_pressure",
+  "vm_swap_in",
 ];
 
 /** Max lookback per window */
@@ -105,8 +109,71 @@ const WINDOW_STEP: Record<MetricWindow, string> = {
 /** Max data points enforced before query */
 const MAX_POINTS = 100;
 
+type VmTemplate = Extract<MetricTemplate, `vm_${string}`>;
+type ServiceTemplate = Exclude<MetricTemplate, VmTemplate>;
+
+const isVmTemplate = (template: MetricTemplate): template is VmTemplate =>
+  template.startsWith("vm_");
+
+/** Envs with a shared substrate VM recorded by the reliability policy. */
+const VM_ENVIRONMENTS: readonly TemplateQueryParams["environment"][] = [
+  "candidate-a",
+  "preview",
+  "production",
+];
+
+/**
+ * Host/VM health templates (story.5105). These mirror
+ * scripts/vm-health-snapshot.mjs: the same recorded cogni_reliability_v1_*
+ * series under the same policy selector, the same evidence TTL, the CLI's
+ * 32-hex substrate_host guard, policy-worst aggregation across
+ * node_slug/instance recordings (min for headroom, max for pressure), and one
+ * row per substrate_host so an ambiguous env fails closed through
+ * MULTI_SERIES_RESULT. Swap-in is the CLI's rate(node_vmstat_pswpin[5m]),
+ * deduped across instance and gated to the host the policy attests for the env.
+ */
+const VM_HOST_LABEL = 'substrate_host=~"[0-9a-f]{32}"';
+const VM_TTL_SEC = RELIABILITY_POLICY_V1.evidenceTtlMs / 1000;
+const VM_POLICY_SERIES: Record<
+  Exclude<VmTemplate, "vm_swap_in">,
+  { readonly metric: string; readonly aggregation: "min" | "max" }
+> = {
+  vm_memory_headroom: {
+    metric: "cogni_reliability_v1_memory_headroom_percent",
+    aggregation: "min",
+  },
+  vm_disk_headroom: {
+    metric: "cogni_reliability_v1_disk_headroom_percent",
+    aggregation: "min",
+  },
+  vm_io_pressure: {
+    metric: "cogni_reliability_v1_io_pressure_percent",
+    aggregation: "max",
+  },
+};
+
+const freshVmSelector = (selector: string): string =>
+  `(${selector} and (time() - timestamp(${selector}) <= ${VM_TTL_SEC}))`;
+
+const vmPolicySelector = (metric: string, environment: string): string =>
+  `${metric}{environment="${environment}",policy_version="${RELIABILITY_POLICY_V1.version}",${VM_HOST_LABEL}}`;
+
+function buildVmPromQL(
+  template: VmTemplate,
+  environment: TemplateQueryParams["environment"]
+): string {
+  if (template === "vm_swap_in") {
+    const attestedHost = freshVmSelector(
+      vmPolicySelector(VM_POLICY_SERIES.vm_memory_headroom.metric, environment)
+    );
+    return `max by (substrate_host) (rate(node_vmstat_pswpin{env="${environment}",${VM_HOST_LABEL}}[5m])) and on (substrate_host) count by (substrate_host) ${attestedHost}`;
+  }
+  const { metric, aggregation } = VM_POLICY_SERIES[template];
+  return `${aggregation} by (substrate_host) ${freshVmSelector(vmPolicySelector(metric, environment))}`;
+}
+
 /** Template → PromQL mapping. Labels: app (not service), env (not environment) */
-const TEMPLATE_PROMQL: Record<MetricTemplate, string> = {
+const TEMPLATE_PROMQL: Record<ServiceTemplate, string> = {
   request_rate:
     'sum(rate(http_requests_total{app="{service}", env="{environment}"}[{window}]))',
   error_rate:
@@ -120,9 +187,11 @@ const TEMPLATE_PROMQL: Record<MetricTemplate, string> = {
 };
 
 /**
- * Build PromQL from template. Pure function.
+ * Build PromQL from template. Pure function; callers validate params first.
  */
-function buildPromQL(params: TemplateQueryParams): string {
+export function buildTemplatePromQL(params: TemplateQueryParams): string {
+  if (isVmTemplate(params.template))
+    return buildVmPromQL(params.template, params.environment);
   const template = TEMPLATE_PROMQL[params.template];
   return template
     .replace(/{service}/g, params.service)
@@ -442,8 +511,20 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
       );
     }
 
+    // vm_* templates read the env's shared VM; service is never interpolated.
+    const vm = isVmTemplate(params.template);
+    if (vm && !VM_ENVIRONMENTS.includes(params.environment)) {
+      throw new TemplateQueryError(
+        "ENVIRONMENT_NOT_ALLOWED",
+        `${params.template} has no shared VM in environment: ${params.environment}`
+      );
+    }
+
     // Validate service allowlist
-    if (!(ALLOWED_SERVICES as readonly string[]).includes(params.service)) {
+    if (
+      !vm &&
+      !(ALLOWED_SERVICES as readonly string[]).includes(params.service)
+    ) {
       logger.error(
         {
           event: EVENT_NAMES.ADAPTER_MIMIR_ERROR,
@@ -469,7 +550,7 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
     const executedAt = endTime.toISOString();
 
     // Build PromQL and execute
-    const promql = buildPromQL(params);
+    const promql = buildTemplatePromQL(params);
     const rawResult = await this.queryRange({
       query: promql,
       start: startTime,
@@ -495,6 +576,13 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
 
     // Transform result
     const series = this.transformToDataPoints(rawResult);
+    // MISSING_IS_UNKNOWN: a VM signal without fresh evidence is never 0/healthy.
+    if (vm && series.length === 0) {
+      throw new TemplateQueryError(
+        "NO_DATA",
+        `${params.template} has no fresh evidence for ${params.environment}; treat as UNKNOWN`
+      );
+    }
     const truncated = series.length > MAX_POINTS;
     const limitedSeries = series.slice(0, MAX_POINTS);
     const summary = this.calculateSummary(limitedSeries);
@@ -686,7 +774,9 @@ function singleAttributedSample(
 export type TemplateQueryErrorCode =
   | "UNKNOWN_TEMPLATE"
   | "SERVICE_NOT_ALLOWED"
-  | "MULTI_SERIES_RESULT";
+  | "MULTI_SERIES_RESULT"
+  | "ENVIRONMENT_NOT_ALLOWED"
+  | "NO_DATA";
 
 /**
  * Error thrown for template query validation/execution failures.
