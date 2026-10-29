@@ -31,6 +31,17 @@ export function classifyGithubOpError(error: unknown): GithubOpErrorResult {
       ? Number((error as { status: unknown }).status)
       : undefined;
   const message = error instanceof Error ? error.message : String(error);
+  if (
+    status === 422 &&
+    /actions has been disabled for this repository/i.test(message)
+  ) {
+    return {
+      status: 422,
+      errorCode: "actions_disabled",
+      error:
+        "GitHub is blocking Actions execution for this repository. Check its Actions page for a fork reactivation prompt; enabled permissions do not prove workflows can execute.",
+    };
+  }
   if (/not installed/i.test(message)) {
     return {
       status: 502,

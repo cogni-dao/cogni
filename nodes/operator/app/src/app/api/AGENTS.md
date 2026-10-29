@@ -46,6 +46,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/dashboard/nodes` [GET] - authenticated principal's display-safe node operations overview (owner-scoped in v0)
   - `/api/v1/nodes/[id]` [GET, PATCH] - read + state-machine-aware update of a registered node row
   - `/api/v1/nodes/[id]/developers` [POST] - owner-gated approve/reject for registered agent developer flight authority
+  - `/api/v1/nodes/[id]/reconcile-actions` [GET, POST] - node-admin App-authenticated Actions inspection and reconciliation
   - `/api/v1/nodes/[id]/reconcile-merge-queue` [POST] - env-manager-gated convergence of a node repo's live merge queue to the git-owned operator policy
   - `/api/v1/nodes/[id]/launch-pack` [GET] - owner-gated AI-assistant handoff for post-publish node launch
   - `/api/v1/nodes/[id]/launch-pack/v2` [GET] - owner-gated successor handoff with maintained canonical guidance; the legacy route retains its published metadata

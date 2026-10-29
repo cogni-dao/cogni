@@ -20,6 +20,16 @@ Before changing node-wizard launch behavior, recall the operator knowledge block
 
 That block is the evolving handoff contract for personal AI assistants launching a newly birthed node. Treat it as the operator-owned playbook; refine it when the launch process changes instead of duplicating long runbooks in the wizard UI.
 
+## Recall fork execution diagnosis
+
+For zero child CI runs or an Actions-disabled dispatch error, use the saved
+operator bearer credential to GET
+`https://cognidao.org/api/v1/knowledge/node-fork-actions-reactivation`. Read the
+response's `content`, then fetch the required dependency bodies in its stated
+order. The guide owns diagnosis, recovery, and the limits of App-only automation
+proof. If retrieval fails, record the missing evidence; do not report activation
+or unattended formation as proved. Keep the remaining launch guidance below.
+
 ## North-star birth contract — do not normalize the current gap
 
 `akash-cicd-pareto-scope` is mandatory for any formation design or review. The

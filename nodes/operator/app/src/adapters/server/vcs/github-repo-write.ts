@@ -4089,6 +4089,59 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * minted before that step — whose PR workflows therefore never start — is healed without
    * reformation. REMOTE_SOURCE_ONLY: the parent monorepo's Actions config is admin-owned.
    */
+  async inspectNodeActionsPermissions(input: {
+    owner: string;
+    repo: string;
+    slug: string;
+    isInRepoNode: boolean;
+  }): Promise<{
+    repo: string;
+    permissions: { enabled: boolean; allowed_actions: string | null };
+    workflow: {
+      default_workflow_permissions: string;
+      can_approve_pull_request_reviews: boolean;
+    };
+    contributorApproval: { approval_policy: string };
+  }> {
+    if (input.isInRepoNode) {
+      throw deployPlaneError(
+        "in_repo_node_unsupported",
+        "Actions inspection requires a remote-source node",
+        422
+      );
+    }
+    const { owner, repo } = input;
+    const octokit = await this.getOctokit(owner, repo);
+    const [permissions, workflow, approval] = await Promise.all([
+      octokit.request("GET /repos/{owner}/{repo}/actions/permissions", {
+        owner,
+        repo,
+      }),
+      octokit.request(
+        "GET /repos/{owner}/{repo}/actions/permissions/workflow",
+        { owner, repo }
+      ),
+      octokit.request(
+        "GET /repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval",
+        { owner, repo }
+      ),
+    ]);
+    return {
+      repo: `${owner}/${repo}`,
+      permissions: {
+        enabled: permissions.data.enabled,
+        allowed_actions: permissions.data.allowed_actions ?? null,
+      },
+      workflow: {
+        default_workflow_permissions:
+          workflow.data.default_workflow_permissions,
+        can_approve_pull_request_reviews:
+          workflow.data.can_approve_pull_request_reviews,
+      },
+      contributorApproval: { approval_policy: approval.data.approval_policy },
+    };
+  }
+
   async reconcileNodeActionsPermissions(input: {
     owner: string;
     repo: string;
