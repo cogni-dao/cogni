@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-20
+- **Last reviewed:** 2026-10-24
 
 ## Purpose
 
@@ -55,7 +55,7 @@ Mounted as volumes in docker-compose.yml.
 **Alloy Config** (env-specific):
 
 - `alloy-config.alloy` - Logs only (local dev); scrapes Docker containers → Loki; includes log noise suppression stages
-- `alloy-config.metrics.alloy` - Logs + metrics (preview/prod); adds app, scheduler-worker, OpenFGA, cAdvisor, node exporter + prometheus.scrape → Mimir; strict metric allowlists + label cardinality policy
+- `alloy-config.metrics.alloy` - Logs + metrics (preview/prod); adds app, scheduler-worker, OpenFGA (60s), cAdvisor, node exporter, Postgres, kubelet cAdvisor (30s) + prometheus.scrape → Mimir; strict metric allowlists + label cardinality policy. Grafana Cloud bills series × samples/min, so keep consumer range windows ≥ 2× the scrape interval (`tests/ci-invariants/alloy-cost-trim.spec.ts`). Argo CD pod logs ship warning and above only.
 - docker-compose.dev.yml mounts `alloy-config.alloy`; docker-compose.yml mounts `alloy-config.metrics.alloy`
 - Docker log source already decodes the transport envelope and preserves its native timestamp/stream. Process stages consume the application line directly; do not decode a second Docker envelope (valid JSON without `log` would become empty).
 - Both configs collect PostgreSQL container stderr and share identical log noise suppression: drops successful fast health-check/metrics-scrape logs (fail-safe — only drops when JSON parses AND required fields match). The deployed metrics config also reads the persistent host kernel journal for OOM/SIGKILL attribution.
