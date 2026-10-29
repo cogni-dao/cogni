@@ -200,7 +200,7 @@ lease_generation:
   # RHITE Finland akash127x6cuk4…dhz7 @ 9.69 and akash1z9nr23cg… @ 10.00. The 9f6ceb53
   # DB migration already succeeded and the DB-cell banks are repointed to :32728, so
   # the new lease should connect and hold /readyz. (poly prod outage recovery, bug.5293)
-  production: 24
+  production: 25
 required_placement_countries:
   candidate-a: [BE]
   production: [FI, NL, PT]
