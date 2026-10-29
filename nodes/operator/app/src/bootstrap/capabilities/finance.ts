@@ -17,6 +17,7 @@ import {
   creditPurchaseIncomeReader,
   type FetchLike,
   type MoneyPlaneRow,
+  openRouterReader,
   type PayAction,
   type PlaneReader,
   type Rail,
@@ -176,21 +177,29 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
     };
   });
 
-  // OpenRouter /credits needs a management key; the inference key must not carry that authority.
-  // The balance stays unknown until task.5361 lands a scoped read; Top up stays reachable.
-  const openRouter = unavailableFinanceReader(
-    "openrouter:account",
-    "OpenRouter credit",
-    "prepaid",
-    "needs a management key · task.5361",
-    "unconfigured",
-    undefined,
-    OPENROUTER_CHECKOUT,
-    undefined,
-    { rail: STEWARD_RAIL }
-  );
+  // OpenRouter /credits needs a MANAGEMENT/provisioning key; the inference key
+  // (OPENROUTER_API_KEY) must never carry that authority (task.5361,
+  // identity-keys-no-overload). Read from the dedicated OPENROUTER_PROVISIONING_KEY;
+  // unset → the reader returns UNKNOWN (no key) and Top up stays reachable. The
+  // underlying reader row carries no rail, so wrap it to attach the steward rail
+  // (mirrors the wallet-binding rail wrap above).
+  const openRouterBase = openRouterReader({
+    apiKey: env.OPENROUTER_PROVISIONING_KEY,
+    fetch: safeFetch,
+    label: "OpenRouter credit",
+    payAction: OPENROUTER_CHECKOUT,
+  });
+  const openRouter: PlaneReader = {
+    ...openRouterBase,
+    read: async (signal) => ({
+      ...(await openRouterBase.read(signal)),
+      rail: STEWARD_RAIL,
+    }),
+  };
+  // Cherry billing read uses the DEDICATED read-only token, never the provisioning
+  // write token CHERRY_AUTH_TOKEN (task.5382, identity-keys-no-overload).
   const cherry = cherryFinanceReader({
-    token: env.CHERRY_AUTH_TOKEN,
+    token: env.CHERRY_READONLY_TOKEN,
     teamId: env.CHERRY_TEAM_ID,
     fetch: safeFetch,
     payAction: CHERRY_CHECKOUT,

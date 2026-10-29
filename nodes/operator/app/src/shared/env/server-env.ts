@@ -256,12 +256,17 @@ export const serverSchema = z.object({
   ANALYTICS_K_THRESHOLD: z.coerce.number().int().positive().default(50),
   ANALYTICS_QUERY_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
 
-  // Compute-substrate spend awareness (story.5011). CHERRY_AUTH_TOKEN is the same Cherry
-  // Servers API token used for provisioning; here it powers the READ-only balance read
-  // exposed on-demand via GET /api/v1/compute/balances (ComputeResourcePort + CherryComputeAdapter).
-  // Optional: when unset the compute capability returns no balances (graceful degradation)
-  // until ESO surfaces the token onto the operator runtime.
+  // Cherry Servers WRITE/provisioning token (tier E, CI-only). The DB-cell containment
+  // write-path reads it from process.env directly; it is NOT the reporting credential and
+  // is deliberately NOT used by the compute/Financials readers (identity-keys-no-overload).
   CHERRY_AUTH_TOKEN: optionalString,
+  // Compute-substrate spend awareness (story.5011, task.5382). CHERRY_READONLY_TOKEN is a
+  // DEDICATED read-only Cherry API key — never the provisioning write token above — that
+  // powers the balance read exposed on-demand via GET /api/v1/compute/balances
+  // (ComputeResourcePort + CherryComputeAdapter) and the Financials Cherry row. Optional:
+  // when unset the compute capability returns no balances (graceful degradation) until ESO
+  // surfaces the read-only token (cogni/<env>/operator/CHERRY_READONLY_TOKEN) onto the pod.
+  CHERRY_READONLY_TOKEN: optionalString,
   // The Cherry team whose credit the Financials page reports. The token can see several teams;
   // the report binds to this id and shows UNKNOWN when it is absent or not found (never teams[0]).
   CHERRY_TEAM_ID: optionalString,
@@ -369,7 +374,13 @@ export const serverSchema = z.object({
   OPERATOR_MAX_TOPUP_USD: z.coerce.number().positive().default(500),
 
   // OpenRouter API key — optional. Provider funding disabled when not set.
+  // This is the INFERENCE key; it must NOT be used for the /credits reporting read
+  // (identity-keys-no-overload). The Financials credit read uses OPENROUTER_PROVISIONING_KEY.
   OPENROUTER_API_KEY: optionalString,
+  // OpenRouter MANAGEMENT/PROVISIONING key (task.5361/task.5382) — the only key the
+  // /credits read may use. Optional: unset → the OpenRouter Financials row stays UNKNOWN
+  // (graceful degradation), never falling back to the inference key.
+  OPENROUTER_PROVISIONING_KEY: optionalString,
 
   // OpenRouter crypto payment fee (0–1, default 0.05 = 5%)
   // Per web3-openrouter-payments spec: Coinbase Commerce protocol fee.

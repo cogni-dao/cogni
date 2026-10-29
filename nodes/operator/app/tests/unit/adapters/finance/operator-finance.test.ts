@@ -1368,7 +1368,9 @@ describe("operator finance evidence", () => {
       label: "OpenRouter credit",
       grade: "UNKNOWN",
       reasonCode: "unconfigured",
-      detail: "needs a management key · task.5361",
+      // No OPENROUTER_PROVISIONING_KEY in the default env → UNKNOWN, no fetch. The
+      // inference OPENROUTER_API_KEY is never consulted (task.5361/task.5382).
+      detail: "no OpenRouter key in this environment",
       rail: { kind: "steward-manual", status: "supported" },
       payAction: { kind: "steward-checkout", vendor: "openrouter" },
     });
@@ -1410,6 +1412,61 @@ describe("operator finance evidence", () => {
     expect(
       fetch.mock.calls.some((call) => String(call[0]).includes("openrouter.ai"))
     ).toBe(false);
+  });
+  it("reads OpenRouter /credits with the provisioning key and Cherry with the read-only token (task.5382 dedicated read credentials)", async () => {
+    runtime.env = {
+      EVM_RPC_URL: "https://rpc.example",
+      // Inference key present but MUST NOT be used for the /credits read.
+      OPENROUTER_API_KEY: "sk-inference",
+      OPENROUTER_PROVISIONING_KEY: "sk-provisioning",
+      CHERRY_READONLY_TOKEN: "cherry-readonly",
+      CHERRY_TEAM_ID: "183728",
+    };
+    const fetch = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes("openrouter.ai"))
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { total_credits: 100, total_usage: 40 } }),
+        };
+      if (u.includes("api.cherryservers.com"))
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              id: 183728,
+              credit: { account: { remaining: 25, currency: "USD" } },
+            },
+          ],
+        };
+      return { ok: true, status: 200, json: async () => ({ result: "0x0" }) };
+    });
+    vi.stubGlobal("fetch", fetch);
+    const { readers } = await createFinanceReaders();
+    const snapshot = await takeSnapshot(readers, { timeoutMs: 500 });
+    const byPlane = new Map(snapshot.rows.map((row) => [row.plane, row]));
+    // OpenRouter read used the provisioning key (balance = credits - usage = 60), never the inference key.
+    expect(byPlane.get("openrouter:account")).toMatchObject({
+      balance: 60,
+      currency: "USD",
+    });
+    const orCall = fetch.mock.calls.find((call) =>
+      String(call[0]).includes("openrouter.ai")
+    );
+    expect(orCall).toBeDefined();
+    expect((orCall?.[1] as RequestInit | undefined)?.headers).toMatchObject({
+      Authorization: "Bearer sk-provisioning",
+    });
+    // Cherry read used the dedicated read-only token, never CHERRY_AUTH_TOKEN.
+    const cherryCall = fetch.mock.calls.find((call) =>
+      String(call[0]).includes("api.cherryservers.com")
+    );
+    expect(cherryCall).toBeDefined();
+    expect((cherryCall?.[1] as RequestInit | undefined)?.headers).toMatchObject(
+      { Authorization: "Bearer cherry-readonly" }
+    );
   });
   it("bounds the Akash cadence probe: a hung LCD falls back to 5.884 s/block within the budget and keeps every row", async () => {
     vi.useFakeTimers();

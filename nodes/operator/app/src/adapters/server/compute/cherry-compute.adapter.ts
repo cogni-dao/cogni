@@ -24,7 +24,7 @@ import type { ComputeBalance, ComputeResourcePort } from "@cogni/ai-tools";
 const PROVIDER = "cherry";
 
 export interface CherryComputeAdapterConfig {
-  /** Cherry Servers API token (Bearer). Same value as the provisioning CHERRY_AUTH_TOKEN. */
+  /** Cherry Servers READ-ONLY API token (Bearer) — CHERRY_READONLY_TOKEN, never the provisioning CHERRY_AUTH_TOKEN (task.5382). */
   authToken: string;
   /** Request timeout in milliseconds. */
   timeoutMs: number;
