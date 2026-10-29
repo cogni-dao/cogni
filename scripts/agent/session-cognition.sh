@@ -14,8 +14,8 @@
 #     because a stale-but-present bundle always beats a network stall or a scary
 #     wall. Once a session has ever oriented, a hub outage is invisible here.
 # Only genuine first-boot with no cache surfaces a short, honest notice, and it
-# never cries wolf: it separates "no credentials yet" (a setup step) from a
-# key-present failure (hub down/slow, or a key without a principal).
+# never cries wolf: it separates absent local credentials, HTTP rejection,
+# transport failure, and malformed responses without diagnosing an outage.
 #
 # Why this matters: this hook runs on every agent session across the whole
 # fleet. Coupling boot to a live cognidao.org fetch made the apex a fleet-wide
@@ -100,14 +100,31 @@ esac
 # Bearer = this node's NODE account key (environment first, then ./.env.cogni).
 AGENT_KEY="${COGNI_NODE_API_KEY:-$(read_env_file_value COGNI_NODE_API_KEY)}"
 
-# fetch_bundle → prints the .markdown bundle on stdout, or nothing on any failure.
+# fetch_bundle sets bundle on success or FETCH_FAILURE on failure.
+# Capture status separately from the body; never emit response bodies or credentials
+# on a failed fetch. One request preserves the six-second first-boot bound.
 fetch_bundle() {
+  bundle=""
+  FETCH_FAILURE=""
+  local response curl_status http_status body
   if [ -n "$AGENT_KEY" ]; then
-    curl -fsS --max-time "$FETCH_TIMEOUT" -H "Authorization: Bearer ${AGENT_KEY}" "$URL" 2>/dev/null \
-      | jq -r '.markdown // empty' 2>/dev/null
+    response="$(curl -fsS --max-time "$FETCH_TIMEOUT" -w '\n%{http_code}' -H "Authorization: Bearer ${AGENT_KEY}" "$URL" 2>/dev/null)"
+    curl_status=$?
   else
-    curl -fsS --max-time "$FETCH_TIMEOUT" "$URL" 2>/dev/null \
-      | jq -r '.markdown // empty' 2>/dev/null
+    response="$(curl -fsS --max-time "$FETCH_TIMEOUT" -w '\n%{http_code}' "$URL" 2>/dev/null)"
+    curl_status=$?
+  fi
+  http_status="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  if [ "$curl_status" -ne 0 ] && [ "$curl_status" -ne 22 ]; then
+    FETCH_FAILURE="Transport/client failure (curl exit $curl_status); hub availability is unconfirmed."
+  elif [ "$http_status" = 401 ] || [ "$http_status" = 403 ]; then
+    FETCH_FAILURE="HTTP $http_status: authentication or authorization rejected; this is not evidence of a hub outage."
+  elif [[ "$http_status" != 2[0-9][0-9] ]]; then
+    FETCH_FAILURE="HTTP $http_status: cognition request failed; check the node before diagnosing an outage."
+  elif ! bundle="$(printf '%s' "$body" | jq -er '.markdown | select(type == "string") | select(test("[^[:space:]]"))' 2>/dev/null)"; then
+    bundle=""
+    FETCH_FAILURE="HTTP $http_status: malformed response or missing/non-string/empty markdown bundle."
   fi
 }
 
@@ -138,7 +155,8 @@ cache_is_repo_tracked() {
 refresh_in_background() {
   cache_is_stale || return 0
   (
-    fresh="$(fetch_bundle)"
+    fetch_bundle
+    fresh="$bundle"
     [ -n "$fresh" ] && write_cache_atomic "$fresh"
   ) >/dev/null 2>&1 &
 }
@@ -154,43 +172,46 @@ fi
 # FIRST BOOT (no usable untracked cache): this is the only path allowed to touch
 # the network in the foreground, and the only one that can surface a notice.
 # Bounded fetch.
-bundle="$(fetch_bundle)"
+fetch_bundle
 if [ -n "$bundle" ]; then
   write_cache_atomic "$bundle"
   emit_agent_context "$bundle"
   exit 0
 fi
 
-# First boot AND fetch failed. Be honest, never cry wolf — separate a setup gap
-# (no key) from a key-present failure, without a second network probe.
+# A failed hook cannot determine what another native instruction path already
+# loaded. Recovery is agent-owned; a failed fetch is not a stop instruction.
 if [ -z "$AGENT_KEY" ]; then
-  emit_agent_context "$(cat <<EOF
-COGNI COGNITION — no node credentials yet (first boot)
-
-No COGNI_NODE_API_KEY was found, so this session could not load its cognition
-bundle from:
-  $URL
-
-This is a setup step, not an outage. To bootstrap:
-- register a NODE agent via /api/v1/agent/register
-- save COGNI_NODE_API_KEY in the clone-root .env.cogni
-- for Codex, review and trust the repo's SessionStart hook via /hooks
-
-Then restart or resume the agent. (Once it loads once, it is cached locally and
-survives hub outages.)
-EOF
-)"
+  recovery_reason="No COGNI_NODE_API_KEY was found in the environment or worktree .env.cogni. Inspect the existing clone-root credential and worktree link before concluding credentials are missing."
 else
-  emit_agent_context "$(cat <<EOF
-COGNI COGNITION — could not load bundle (first boot, no cache)
+  recovery_reason="A node credential is present. Reuse it; do not register a replacement identity or overwrite credentials because this request failed."
+fi
+emit_agent_context "$(cat <<EOF
+COGNI COGNITION — bounded recovery required
 
-A credential IS present, so this is NOT a missing-key setup problem. Either the
-hub is down/slow, or the key lacks a principal on this hub (or the node has no
-cognition published yet). There's no local cache to fall back on this first time.
+The SessionStart fetch did not load cognition from:
+  $URL
+$FETCH_FAILURE
+$recovery_reason
 
-Check hub health (cognidao.org/version) and that GET /api/v1/cognition resolves
-with your key. Proceed with the repo's own AGENTS.md + skills meanwhile —
-cognition caches itself once it loads, and then survives hub outages.
+Own recovery before asking the human to act. Inspect local node URL, credential
+presence/link, and hook delivery without printing secrets. Then make at most two
+additional requests, each bounded to six seconds: this node's /version and one
+cognition retry using existing credentials. Preserve every usable cached bundle.
+Do not create a new identity, replace keys, or loosen authentication automatically.
+
+If a complete cognition contract is already loaded through native instructions,
+continue authorized work under it while repairing this fetch. If no complete
+contract is loaded, continue bounded recovery, local diagnostics, and authorized
+bootstrap repairs under the committed safety floor; do not claim normal contract
+readiness or invent a replacement contract. A failed request alone proves neither
+an outage nor missing credentials.
+
+After recovery, verify native contract delivery. Request human action only for a
+specific remaining dependency outside your authority, supported by the observed
+failure. Restart/resume is needed only when a repaired native import cannot load
+in the current session (for example Claude's already-resolved imports), not as a
+default response to a failed fetch. This notice proves the hook ran; hook trust
+is only a diagnosis when the hook did not run. Report recovery evidence concisely.
 EOF
 )"
-fi
