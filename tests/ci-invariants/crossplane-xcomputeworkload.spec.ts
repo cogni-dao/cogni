@@ -1114,6 +1114,73 @@ describe("XComputeWorkload authority handoff (task.5096)", () => {
   });
 });
 
+describe("XComputeWorkload secret rotation re-sends the SDL (bug.5256)", () => {
+  // The lease Request block only — the retained outgoing child must stay OBSERVE-only.
+  const leaseBlock = templateCode.slice(
+    templateCode.indexOf("composition-resource-name: {{ $leaseResourceName }}"),
+    templateCode.indexOf("composition-resource-name: dns-record")
+  );
+
+  it("reads the env Secret as a Crossplane required resource in the XR namespace", () => {
+    expect(templateCode).toContain(
+      "apiVersion: meta.gotemplating.fn.crossplane.io/v1alpha1"
+    );
+    expect(templateCode).toContain("kind: ExtraResources");
+    expect(templateCode).toMatch(
+      /compute-env-secrets:\s+apiVersion: v1\s+kind: Secret\s+matchName: \{\{ \$secretName \| quote \}\}\s+namespace: \{\{ \$ns \| quote \}\}/
+    );
+    // Only workloads that actually reference the Secret ask for it.
+    expect(templateCode).toContain("{{- if $hasSecretRefs }}");
+  });
+
+  it("lets only a value-free fingerprint out of the Secret object", () => {
+    const reads = [
+      ...templateCode.matchAll(/dig ([^\n]*?) \$envSecretsObject/g),
+    ].map((m) => m[1]);
+    expect(reads).toEqual([
+      '"metadata" "annotations" "reconcile.external-secrets.io/data-hash" ""',
+    ]);
+    // The object is never rendered, serialized or indexed any other way.
+    expect(templateCode).not.toMatch(/toJson \$envSecretsObject/);
+    expect(templateCode).not.toMatch(/\$envSecretsObject\.data/);
+    expect(templateCode).not.toMatch(/index \$envSecretsObject/);
+  });
+
+  it("latches only a fingerprint a 2xx CREATE/UPDATE under the current key actually carried", () => {
+    expect(templateCode).toContain(
+      '$envSecretsApplied := dig "status" "envSecrets" "fingerprint" "" $xr'
+    );
+    expect(templateCode).toContain(
+      '$lastActionMutated := or (hasSuffix "/v1/akash/update" $lastActionUrl) (hasSuffix "/v1/akash/create" $lastActionUrl)'
+    );
+    expect(templateCode).toContain(
+      "{{- if and $lastActionMutated (ge $respStatus 200) (lt $respStatus 300) (eq $responseKey $cogniKey) (has $envSecretsFingerprint $lastActionFingerprints) }}"
+    );
+    expect(statusSchema.envSecrets).toBeDefined();
+    expect(templateCode).toContain(
+      "fingerprint: {{ $envSecretsApplied | quote }}"
+    );
+  });
+
+  it("drives the EXISTING update action and never the paid key", () => {
+    // Drift only falsifies the candidate's expectedResponseCheck; it never touches cogniKey,
+    // leaseGeneration or the retained child's observe-only logic.
+    expect(templateCode).toContain(
+      '$upToDateLogic = printf "%s and (%q == %q)" $upToDateLogic $envSecretsApplied $envSecretsFingerprint'
+    );
+    expect(templateCode).not.toMatch(/\$retainedUpToDateLogic = /);
+    expect(templateCode).not.toMatch(/\$cogniKey :?=[^\n]*envSecrets/);
+    expect(templateCode).not.toMatch(/envSecrets[^\n]*\$leaseGeneration/);
+    // The header that binds a request to its fingerprint rides the candidate lease only.
+    expect(leaseBlock).toContain(
+      "{{ $envSecretsFingerprintHeader }}: [{{ $envSecretsFingerprint | quote }}]"
+    );
+    expect(
+      templateCode.match(/\{\{ \$envSecretsFingerprintHeader \}\}:/g)
+    ).toHaveLength(1);
+  });
+});
+
 describe("XComputeWorkload public reachability (bug.5152)", () => {
   // Everything from the Cloudflare Request to the end of the template. Sliced from the
   // prose-stripped source because the assertions below are mostly negative, and the comments
@@ -2424,7 +2491,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
    * worse than no copy: REMOVE is how the retained child eventually closes its lease, so it has
    * to keep speaking the same actuator wire as the child that minted it.
    */
-  describe("the retained Request is the paid Request, modulo five documented differences", () => {
+  describe("the retained Request is the paid Request, modulo six documented differences", () => {
     const COMMENT = /\{\{-?\s*\/\*[\s\S]*?\*\/\s*-?\}\}/g;
     const retainedBlock = template.slice(
       template.lastIndexOf("{{- if $holdOutgoingLease }}"),
@@ -2460,7 +2527,8 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
             ) &&
             !t.startsWith("crossplane.io/reconcile-requested-at:") &&
             !t.startsWith("crossplane.io/external-create-succeeded:") &&
-            !t.startsWith("gotemplating.fn.crossplane.io/ready:")
+            !t.startsWith("gotemplating.fn.crossplane.io/ready:") &&
+            !t.startsWith("{{ $envSecretsFingerprintHeader }}:")
           );
         })
         .map((line) =>
@@ -2479,7 +2547,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
 
     it("differs nowhere else — same baseUrl, auth, mappings and isRemovedCheck", () => {
       expect(normalized(retainedBlock)).toEqual(normalized(candidateBlock));
-      // The five differences, asserted positively so a future edit cannot quietly merge them.
+      // The six differences, asserted positively so a future edit cannot quietly merge them.
       expect(retainedBlock).toContain(
         "composition-resource-name: {{ $retainedResourceName }}"
       );
@@ -2498,6 +2566,10 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       // observe-only and must preserve Crossplane's generic ambiguity guard.
       expect(candidateBlock).toContain("$recoverLeaseCreateAmbiguity");
       expect(retainedBlock).not.toContain("external-create-succeeded");
+      // bug.5256: only the candidate binds its requests to an env-secret fingerprint; the
+      // incumbent is observe-only and must never be driven to UPDATE by a rotation.
+      expect(candidateBlock).toContain("{{ $envSecretsFingerprintHeader }}:");
+      expect(retainedBlock).not.toContain("envSecrets");
     });
 
     it("is OBSERVE-only: expectedResponseCheck can never choose UPDATE on a live lease", () => {
