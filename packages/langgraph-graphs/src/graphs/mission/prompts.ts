@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/langgraph-graphs/graphs/operator/prompts`
- * Purpose: System prompts for operator roles (Operating Review, Git Reviewer).
+ * Module: `@cogni/langgraph-graphs/graphs/mission/prompts`
+ * Purpose: System prompts for mission-engine roles (Operating Review, Git Reviewer).
  * Scope: Prompt strings only. Does NOT import runtime dependencies.
  * Invariants:
  *   - PROMPT_IS_THE_PLAYBOOK: The system prompt IS the role's instructions

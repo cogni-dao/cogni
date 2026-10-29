@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/langgraph-graphs/graphs/autoresearch/graph`
  * Purpose: Graph name constants and factory for Karpathy-style autoresearch agents.
- * Scope: Reuses the prompt-driven ReAct operator graph factory. Does not execute graphs or read env.
+ * Scope: Reuses the prompt-driven ReAct mission graph factory. Does not execute graphs or read env.
  * Invariants:
  *   - Pure factory function — no side effects, no env reads
  *   - TYPE_TRANSPARENT_RETURN: No explicit return type annotation to preserve CompiledStateGraph for CLI schema extraction
@@ -13,7 +13,7 @@
  * @public
  */
 
-import { createOperatorGraph } from "../operator/graph";
+import { createMissionGraph } from "../mission/graph";
 import type { CreateReactAgentGraphOptions } from "../types";
 
 export const AUTORESEARCH_SINGLE_LANE_GRAPH_NAME =
@@ -24,5 +24,5 @@ export const AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME =
   "autoresearch-registry-swarm" as const;
 
 export function createAutoresearchGraph(opts: CreateReactAgentGraphOptions) {
-  return createOperatorGraph(opts);
+  return createMissionGraph(opts);
 }

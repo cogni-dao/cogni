@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/langgraph-graphs/graphs/operator/server`
+ * Module: `@cogni/langgraph-graphs/graphs/mission/server`
  * Purpose: LangGraph dev server entrypoint for the Cogni mission-loop graph.
  * Scope: Thin dev entrypoint; does NOT import the catalog, read node bindings, or enforce
  *   policy. Renders the compiled phase-node graph (gather → decide → file → report) in
@@ -18,11 +18,11 @@
  */
 import { makeServerGraph } from "../../runtime/core/make-server-graph";
 import { COGNI_TOOL_IDS } from "./cogni";
-import { createOperatorGraph } from "./graph";
+import { createMissionGraph } from "./graph";
 
 export const cogni = await makeServerGraph({
   name: "cogni",
-  createGraph: createOperatorGraph,
+  createGraph: createMissionGraph,
   toolIds: COGNI_TOOL_IDS,
   program: "cogni",
 });

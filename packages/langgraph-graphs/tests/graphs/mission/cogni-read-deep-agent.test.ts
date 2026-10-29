@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/langgraph-graphs/tests/graphs/operator/cogni-read-deep-agent`
+ * Module: `@cogni/langgraph-graphs/tests/graphs/mission/cogni-read-deep-agent`
  * Purpose: Falsifiable proof that a READ request ("what's our top priority?") runs the smallest deep-agent trajectory on the cogni engine: explicit plan → delegated Flash subagent reads goals + work items → synthesized source-backed answer → ZERO writes.
  * Scope: One run through the real in-proc runner + real CogniCompletionAdapter with a scripted fake CompletionFn and fake tool results. Does not call a real LLM, hub or network.
  * Invariants:
@@ -11,7 +11,7 @@
  *   - READ_MODE_FILES_NOTHING: core__edo_decide is never bound to any model and never executed, even though its contract is offered to the runner
  *   - BILLED_PATH_ONLY: every model call (parent and Flash subagent) arrives through the injected CompletionFn
  * Side-effects: none
- * Links: src/graphs/operator/cogni-read.ts · https://cognidao.org/work/items/task.5377
+ * Links: src/graphs/mission/cogni-read.ts · https://cognidao.org/work/items/task.5377
  * @internal
  */
 
@@ -30,8 +30,8 @@ import { describe, expect, it } from "vitest";
 import {
   COGNI_READ_TOOL_IDS,
   FLASH_SUBAGENT_MODEL,
-} from "../../../src/graphs/operator/cogni-read";
-import { createOperatorGraph } from "../../../src/graphs/operator/graph";
+} from "../../../src/graphs/mission/cogni-read";
+import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
 import type { CompletionFn, ToolExecFn } from "../../../src/inproc/types";
 
@@ -163,7 +163,7 @@ describe("cogni READ-mode deep agent (task.5377)", () => {
           buildSha: null,
         },
       },
-      createGraph: createOperatorGraph,
+      createGraph: createMissionGraph,
       completionFn: script(seen),
       createToolExecFn,
       // The write contract is OFFERED to the runner (as in prod); READ mode must still never bind it.

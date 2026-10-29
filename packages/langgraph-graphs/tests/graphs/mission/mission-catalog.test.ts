@@ -2,12 +2,12 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/langgraph-graphs/tests/graphs/operator/operator-catalog`
- * Purpose: Validate operator catalog entries and createOperatorGraph factory.
+ * Module: `@cogni/langgraph-graphs/tests/graphs/mission/mission-catalog`
+ * Purpose: Validate mission-engine catalog entries and createMissionGraph factory.
  * Scope: Catalog structure + factory validation. Does NOT invoke graphs with LLM.
  * Invariants:
  *   - CATALOG_SINGLE_SOURCE_OF_TRUTH: entries exist in catalog
- *   - FACTORY_SEAM: createOperatorGraph requires systemPrompt
+ *   - FACTORY_SEAM: createMissionGraph requires systemPrompt
  *   - EXISTING_FACTORIES_UNCHANGED: other entries unaffected
  * Side-effects: none
  * Links: agent-roles spec, catalog.ts
@@ -37,8 +37,8 @@ import {
   OPERATOR_LANGGRAPH_GRAPH_IDS,
 } from "../../../src/catalog";
 import { createAutoresearchGraph } from "../../../src/graphs/autoresearch/graph";
-import { COGNI_READ_TOOL_IDS } from "../../../src/graphs/operator/cogni-read";
-import { createOperatorGraph } from "../../../src/graphs/operator/graph";
+import { COGNI_READ_TOOL_IDS } from "../../../src/graphs/mission/cogni-read";
+import { createMissionGraph } from "../../../src/graphs/mission/graph";
 
 describe("operator catalog entries", () => {
   it("operating-review entry exists with systemPrompt and graphFactory", () => {
@@ -49,7 +49,7 @@ describe("operator catalog entries", () => {
     expect(typeof entry.systemPrompt).toBe("string");
     expect((entry.systemPrompt ?? "").length).toBeGreaterThan(100);
     expect(entry.toolIds.length).toBeGreaterThan(0);
-    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(entry.graphFactory).toBe(createMissionGraph);
   });
 
   it("git-reviewer entry exists with systemPrompt and graphFactory", () => {
@@ -59,7 +59,7 @@ describe("operator catalog entries", () => {
     expect(entry.systemPrompt).toBeDefined();
     expect(typeof entry.systemPrompt).toBe("string");
     expect((entry.systemPrompt ?? "").length).toBeGreaterThan(100);
-    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(entry.graphFactory).toBe(createMissionGraph);
   });
 
   it("pr-manager entry exists only in the operator catalog", () => {
@@ -68,14 +68,14 @@ describe("operator catalog entries", () => {
     expect(entry).toBeDefined();
     expect(entry.displayName).toBe("PR Manager");
     expect(entry.systemPrompt).toBeDefined();
-    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(entry.graphFactory).toBe(createMissionGraph);
     expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
   });
 
   it("work-prioritizer (mission loop) is operator-only with the exact read allowlist plus the one decision write (core__edo_decide)", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
-    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(entry.graphFactory).toBe(createMissionGraph);
     expect(OPERATOR_LANGGRAPH_CATALOG.cogni.graphFactory).toBe(
       entry.graphFactory
     );
@@ -105,7 +105,7 @@ describe("operator catalog entries", () => {
 
   it("cogni-chat (READ mode) is operator-only, uses the read-only allowlist and binds no write tool", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["cogni-chat"];
-    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(entry.graphFactory).toBe(createMissionGraph);
     expect(entry.program).toBe("cogni-chat");
     expect([...entry.toolIds].sort()).toEqual([...COGNI_READ_TOOL_IDS].sort());
     expect(entry.toolIds).not.toContain(EDO_DECIDE_NAME);
@@ -192,14 +192,14 @@ describe("operator catalog entries", () => {
   });
 });
 
-describe("createOperatorGraph", () => {
+describe("createMissionGraph", () => {
   it("throws when systemPrompt is not provided", () => {
     const fakeOpts = {
       llm: {} as never,
       tools: [],
     };
-    expect(() => createOperatorGraph(fakeOpts)).toThrow(
-      "createOperatorGraph requires systemPrompt"
+    expect(() => createMissionGraph(fakeOpts)).toThrow(
+      "createMissionGraph requires systemPrompt"
     );
   });
 });

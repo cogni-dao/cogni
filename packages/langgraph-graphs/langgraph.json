@@ -5,6 +5,6 @@
     "poet": "./src/graphs/poet/server.ts:poet",
     "ponderer": "./src/graphs/ponderer/server.ts:ponderer",
     "research": "./src/graphs/research/server.ts:research",
-    "cogni": "./src/graphs/operator/server.ts:cogni"
+    "cogni": "./src/graphs/mission/server.ts:cogni"
   }
 }

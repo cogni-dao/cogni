@@ -33,24 +33,24 @@ import {
   createFrontendTesterGraph,
   FRONTEND_TESTER_GRAPH_NAME,
 } from "./graphs/frontend-tester/graph";
-import { COGNI_PROMPT, COGNI_TOOL_IDS } from "./graphs/operator/cogni";
+import { COGNI_PROMPT, COGNI_TOOL_IDS } from "./graphs/mission/cogni";
 import {
   COGNI_READ_PROMPT,
   COGNI_READ_TOOL_IDS,
-} from "./graphs/operator/cogni-read";
+} from "./graphs/mission/cogni-read";
 import {
-  createOperatorGraph,
+  createMissionGraph,
   GIT_REVIEWER_GRAPH_NAME,
   OPERATING_REVIEW_GRAPH_NAME,
-} from "./graphs/operator/graph";
+} from "./graphs/mission/graph";
 import {
   GIT_REVIEWER_PROMPT,
   OPERATING_REVIEW_PROMPT,
-} from "./graphs/operator/prompts";
+} from "./graphs/mission/prompts";
 import {
   GIT_REVIEWER_TOOL_IDS,
   OPERATING_REVIEW_TOOL_IDS,
-} from "./graphs/operator/tools";
+} from "./graphs/mission/tools";
 import { createPoetGraph, POET_GRAPH_NAME } from "./graphs/poet/graph";
 import { POET_TOOL_IDS } from "./graphs/poet/tools";
 import {
@@ -238,7 +238,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     description:
       "Periodic review — triages backlog, flags risks, produces structured briefs",
     toolIds: OPERATING_REVIEW_TOOL_IDS as readonly string[],
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: OPERATING_REVIEW_PROMPT,
   },
 
@@ -247,7 +247,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     description:
       "Merge bot — auto-merges green PRs, flags blockers, tracks PR throughput",
     toolIds: PR_MANAGER_TOOL_IDS as readonly string[],
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: PR_MANAGER_PROMPT,
   },
 
@@ -256,7 +256,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     description:
       "Queue observer — reports review, flight and validation status from metadata",
     toolIds: GIT_REVIEWER_TOOL_IDS as readonly string[],
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: GIT_REVIEWER_PROMPT,
   },
 
@@ -269,7 +269,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     displayName: "Cogni",
     description: "Hub-grounded mission agent; files one EDO decision",
     toolIds: COGNI_TOOL_IDS,
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: COGNI_PROMPT,
     program: "cogni",
   },
@@ -283,7 +283,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     description:
       "Hub-grounded read-only chat: plans, delegates goal and work-item reading to a cheap subagent, answers; files nothing",
     toolIds: COGNI_READ_TOOL_IDS as readonly string[],
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: COGNI_READ_PROMPT,
     program: "cogni-chat",
   },
@@ -292,7 +292,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     description:
       "Source-grounded work review from the same Cogni factory; files one EDO decision",
     toolIds: COGNI_TOOL_IDS,
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: COGNI_PROMPT,
     program: "work-review",
     report: { event: "ai.work_prioritizer.cycle" },

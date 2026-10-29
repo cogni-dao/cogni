@@ -2,13 +2,13 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/langgraph-graphs/tests/graphs/operator/cogni-clock-grounding`
+ * Module: `@cogni/langgraph-graphs/tests/graphs/mission/cogni-clock-grounding`
  * Purpose: The cogni engine grounds the real UTC clock in its host-owned preamble so a dated decision id uses the true year instead of a model-guessed one.
  * Scope: One run through the real in-proc runner capturing the system preamble; does not call a real LLM, hub, or clock service.
  * Invariants:
  *   - HOST_OWNED_CLOCK: the preamble carries the current UTC year, never a model-inferred date (regression: a `cogni-2023…` id filed in 2026)
  * Side-effects: none
- * Links: src/graphs/operator/cogni.ts (buildPreamble)
+ * Links: src/graphs/mission/cogni.ts (buildPreamble)
  * @internal
  */
 
@@ -16,8 +16,8 @@ import type { AiEvent } from "@cogni/ai-core";
 import { edoDecideContract, goalListContract } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 
-import { COGNI_TOOL_IDS } from "../../../src/graphs/operator/cogni";
-import { createOperatorGraph } from "../../../src/graphs/operator/graph";
+import { COGNI_TOOL_IDS } from "../../../src/graphs/mission/cogni";
+import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
 import type { CompletionFn, ToolExecFn } from "../../../src/inproc/types";
 
@@ -50,7 +50,7 @@ describe("cogni engine host-owned clock grounding", () => {
           buildSha: null,
         },
       },
-      createGraph: createOperatorGraph,
+      createGraph: createMissionGraph,
       completionFn,
       createToolExecFn: noopExec,
       toolContracts: [goalListContract, edoDecideContract],

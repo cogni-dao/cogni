@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/langgraph-graphs/graphs/operator/cogni-read`
+ * Module: `@cogni/langgraph-graphs/graphs/mission/cogni-read`
  * Purpose: Run a READ request ("what's our top priority?") as the smallest deep agent on the cogni engine.
  *   PLAN (write_todos-style), DELEGATE the context-heavy goal and work-item read to an isolated cheap Flash subagent, SYNTHESIZE, ANSWER. Files nothing.
  * Scope: Generic graph factory. Does NOT read env, enforce authz, or write. Node identity and the

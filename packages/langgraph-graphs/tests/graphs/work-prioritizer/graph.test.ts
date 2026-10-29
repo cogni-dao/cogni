@@ -31,8 +31,8 @@ import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
 import { OPERATOR_LANGGRAPH_CATALOG } from "../../../src/catalog";
-import { COGNI_TOOL_IDS } from "../../../src/graphs/operator/cogni";
-import { createOperatorGraph } from "../../../src/graphs/operator/graph";
+import { COGNI_TOOL_IDS } from "../../../src/graphs/mission/cogni";
+import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import {
   createWorkPrioritizerGraph,
   cycleScores,
@@ -188,7 +188,7 @@ const fakeExec: (emit: (e: AiEvent) => void) => ToolExecFn =
 describe("work-prioritizer mission-loop agent", () => {
   it("catalog entry binds the common Cogni factory (reads + edo_decide) and cycle event", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
-    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(entry.graphFactory).toBe(createMissionGraph);
     expect(entry.toolIds).toEqual(COGNI_TOOL_IDS);
     expect(entry.toolIds).toContain(EDO_DECIDE_NAME);
     expect(entry.toolIds).toContain(GET_CURRENT_TIME_NAME);

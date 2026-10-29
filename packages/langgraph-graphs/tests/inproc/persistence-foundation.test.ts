@@ -11,7 +11,7 @@
  *   - PERSISTENCE_WIRED: the runner forwards a checkpointer + Store to the engine factory
  *   - DURABLE_MEMORY_IS_THE_HUB: the checkpointer/Store hold per-run working state only
  * Side-effects: none (in-memory saver/store)
- * Links: src/graphs/operator/cogni.ts (.compile), src/inproc/runner.ts (thread_id seam)
+ * Links: src/graphs/mission/cogni.ts (.compile), src/inproc/runner.ts (thread_id seam)
  * @internal
  */
 
@@ -20,8 +20,8 @@ import { edoDecideContract, goalListContract } from "@cogni/ai-tools";
 import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
 import { describe, expect, it } from "vitest";
 
-import { COGNI_TOOL_IDS } from "../../src/graphs/operator/cogni";
-import { createOperatorGraph } from "../../src/graphs/operator/graph";
+import { COGNI_TOOL_IDS } from "../../src/graphs/mission/cogni";
+import { createMissionGraph } from "../../src/graphs/mission/graph";
 import { createInProcGraphRunner } from "../../src/inproc/runner";
 import type {
   CompiledGraph,
@@ -63,7 +63,7 @@ async function runTick(opts: {
   const { stream, final } = createInProcGraphRunner({
     program: "work-review",
     sourceContext: SOURCE,
-    createGraph: createOperatorGraph,
+    createGraph: createMissionGraph,
     completionFn: noGoalsCompletion,
     createToolExecFn: noopExec,
     // edo_decide must be present or the engine throws cogni_decision_tool_unavailable at build.

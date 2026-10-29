@@ -2,11 +2,11 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/langgraph-graphs/graphs/operator/tools`
- * Purpose: Tool IDs for operator roles (Operating Review, Git Reviewer).
+ * Module: `@cogni/langgraph-graphs/graphs/mission/tools`
+ * Purpose: Tool IDs for mission-engine roles (Operating Review, Git Reviewer).
  * Scope: Exports tool capability metadata. Does NOT enforce policy.
  * Invariants:
- *   - SINGLE_SOURCE_OF_TRUTH: This is THE list of tools each operator role can use
+ *   - SINGLE_SOURCE_OF_TRUTH: This is THE list of tools each mission-engine role can use
  *   - CAPABILITY_NOT_POLICY: These are capabilities, not authorization
  * Side-effects: none
  * Links: agent-roles spec, TOOL_USE_SPEC.md

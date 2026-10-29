@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/langgraph-graphs/graphs/operator/cogni`
+ * Module: `@cogni/langgraph-graphs/graphs/mission/cogni`
  * Purpose: The hub-grounded Cogni mission agent. A generic two-phase StateGraph: the agent
  *   GATHERS context across the read planes (goals, knowledge, work items, git), then a DECIDE
  *   state files exactly one `core__edo_decide` — the designed artifact — with the full run
