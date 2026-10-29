@@ -102,7 +102,7 @@ These existing specs reference wallet address as identity and will need updates 
 
 ## As-Built Specs
 
-- [decentralized-identity](../../docs/spec/decentralized-identity.md) — user_bindings + identity_events schema, invariants, auth flow
+- [user-identity-bindings](https://cognidao.org/knowledge/user-identity-bindings) — user_bindings + identity_events schema, invariants, auth flow
 - [authentication](../../docs/spec/authentication.md) — multi-provider auth (SIWE + OAuth), account linking, wallet-session coherence
 
 ## Design Notes

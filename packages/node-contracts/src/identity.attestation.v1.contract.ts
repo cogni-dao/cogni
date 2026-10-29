@@ -13,7 +13,7 @@
  *   - NONCE_IS_ONE_TIME_AT_RP: the opaque nonce is minted and consumed once by the relying node.
  *   - GITHUB_LOGIN_NULLABLE: GitHub's stable provider id is authoritative; login is display metadata.
  * Side-effects: none
- * Links: task.5024, docs/spec/decentralized-user-identity.md
+ * Links: task.5024, https://cognidao.org/knowledge/identity-attestation-v1
  * @public
  */
 

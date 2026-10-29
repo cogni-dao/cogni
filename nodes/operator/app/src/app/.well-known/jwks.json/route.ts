@@ -13,7 +13,7 @@
  *     `{ keys: [] }` — verifiers fail closed on an empty set.
  *   - PUBLIC_HALF_ONLY: only the exported public JWK ever leaves this route.
  * Side-effects: none
- * Links: docs/spec/decentralized-user-identity.md, src/shared/identity/attestation-keys.ts
+ * Links: https://cognidao.org/knowledge/identity-attestation-v1, src/shared/identity/attestation-keys.ts
  * @public
  */
 
