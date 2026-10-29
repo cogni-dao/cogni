@@ -7,7 +7,8 @@ image_tag_suffix: "-toks5"
 migrator_tag_suffix: "-toks5-migrate"
 source_repo: https://github.com/cogni-dao/toks5.git
 image_repository: ghcr.io/cogni-dao/toks5
-source_sha: 7c9b1e08d68839384d1db183d13bbcf33ff2fe7e
+# Recovery uses the existing desired preview source, not the stale birth pin.
+source_sha: 8359e24ac611c5b46d1b10ab6dc33b4f8fa9428f
 candidate_a_branch: deploy/candidate-a-toks5
 preview_branch: deploy/preview-toks5
 production_branch: deploy/production-toks5
@@ -52,7 +53,10 @@ compute_api:
 lease_generation:
   # Generation 1 closed at its boot deadline; lease/escrow closure verified on-chain.
   candidate-a: 2
-  preview: 3
+  # bug.5538: gen-3 lease 1792054180775 closed at its 2026-10-26 boot deadline.
+  # Every-state allocation audit at 19:46Z found only 0..3; :4 is unspent.
+  # DB admission precedes CREATE; replacement egress/health still require proof.
+  preview: 4
   production: 6
 # story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
@@ -69,6 +73,10 @@ node_id: f66b260b-4633-41e2-8711-b7c1b8449cc1
 # NOTE: the node-birth generator does not yet mint this block (filed at birth of
 # toks5); added by hand-PR pending the generator fix.
 compute_egress_cidrs:
+  - cidr: 95.217.139.183/32
+    envs: [preview]
+    ports: [5432]
+    comment: "Toks5 preview lease 1792054180775/app egress measured through authenticated provider shell on 2026-10-26; admit preview Postgres only (bug.5538)."
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
   - cidr: 65.108.194.156/32
