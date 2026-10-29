@@ -18,6 +18,7 @@ import { MessagesAnnotation } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import type { CreateReactAgentGraphOptions } from "../types";
 import { createCogniProgram } from "./cogni";
+import { createCogniDecideProgram } from "./cogni-decide";
 import { createCogniReadProgram } from "./cogni-read";
 
 /**
@@ -41,6 +42,7 @@ export function createOperatorGraph(opts: CreateReactAgentGraphOptions) {
   // Behavior mode is the program: READ (chat) answers and files nothing; the scheduled programs
   // DECIDE. The read topology has no write tool bound at all.
   if (opts.program === "cogni-chat") return createCogniReadProgram(opts);
+  if (opts.program === "cogni-decide") return createCogniDecideProgram(opts);
   if (opts.program) return createCogniProgram(opts);
   if (!opts.systemPrompt) {
     throw new Error(

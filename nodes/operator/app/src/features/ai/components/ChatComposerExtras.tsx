@@ -48,6 +48,12 @@ const AVAILABLE_GRAPHS: readonly GraphOption[] = [
     description: "Hub-grounded read-only mission agent",
   },
   {
+    graphId: "langgraph:cogni-chat" satisfies GraphId,
+    name: "Cogni (deep read)",
+    description:
+      "Plans, delegates goal and work-item reading to a cheap subagent, answers; files nothing",
+  },
+  {
     graphId: "langgraph:poly-brain" satisfies GraphId,
     name: "Poly Brain",
     description: "Prediction market analyst with live market data",

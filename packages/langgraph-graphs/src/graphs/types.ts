@@ -80,7 +80,7 @@ export interface CreateReactAgentGraphOptions {
     }>;
   };
   /** Trusted catalog assignment; never supplied by model/tool content. */
-  readonly program?: "cogni" | "work-review" | "cogni-chat";
+  readonly program?: "cogni" | "work-review" | "cogni-chat" | "cogni-decide";
   /** LLM instance - LanguageModelLike to match createReactAgent expectation */
   readonly llm: LanguageModelLike;
   /** Tools wrapped via toLangChainTools() */

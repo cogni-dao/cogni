@@ -116,6 +116,19 @@ describe("operator catalog entries", () => {
     expect("cogni-chat" in LANGGRAPH_GRAPH_IDS).toBe(false);
   });
 
+  it("cogni-decide (scheduled DECIDE) is operator-only, has reads + the host transition tool and never edo_decide", () => {
+    const entry = OPERATOR_LANGGRAPH_CATALOG["cogni-decide"];
+    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(entry.program).toBe("cogni-decide");
+    expect(entry.toolIds).toContain("core__work_item_transition");
+    expect(entry.toolIds).not.toContain(EDO_DECIDE_NAME);
+    expect(OPERATOR_LANGGRAPH_GRAPH_IDS["cogni-decide"]).toBe(
+      "langgraph:cogni-decide"
+    );
+    expect(LANGGRAPH_CATALOG["cogni-decide"]).toBeUndefined();
+    expect("cogni-decide" in LANGGRAPH_GRAPH_IDS).toBe(false);
+  });
+
   it("brain reads the governing guidance index (core__knowledge_index)", () => {
     expect(LANGGRAPH_CATALOG.brain?.toolIds).toContain(KNOWLEDGE_INDEX_NAME);
     expect(OPERATOR_LANGGRAPH_CATALOG.brain?.toolIds).toContain(
