@@ -37,6 +37,7 @@ import {
   OPERATOR_LANGGRAPH_GRAPH_IDS,
 } from "../../../src/catalog";
 import { createAutoresearchGraph } from "../../../src/graphs/autoresearch/graph";
+import { COGNI_READ_TOOL_IDS } from "../../../src/graphs/operator/cogni-read";
 import { createOperatorGraph } from "../../../src/graphs/operator/graph";
 
 describe("operator catalog entries", () => {
@@ -100,6 +101,19 @@ describe("operator catalog entries", () => {
     );
     expect(LANGGRAPH_CATALOG["work-prioritizer"]).toBeUndefined();
     expect("work-prioritizer" in LANGGRAPH_GRAPH_IDS).toBe(false);
+  });
+
+  it("cogni-chat (READ mode) is operator-only, uses the read-only allowlist and binds no write tool", () => {
+    const entry = OPERATOR_LANGGRAPH_CATALOG["cogni-chat"];
+    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(entry.program).toBe("cogni-chat");
+    expect([...entry.toolIds].sort()).toEqual([...COGNI_READ_TOOL_IDS].sort());
+    expect(entry.toolIds).not.toContain(EDO_DECIDE_NAME);
+    expect(OPERATOR_LANGGRAPH_GRAPH_IDS["cogni-chat"]).toBe(
+      "langgraph:cogni-chat"
+    );
+    expect(LANGGRAPH_CATALOG["cogni-chat"]).toBeUndefined();
+    expect("cogni-chat" in LANGGRAPH_GRAPH_IDS).toBe(false);
   });
 
   it("brain reads the governing guidance index (core__knowledge_index)", () => {

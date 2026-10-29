@@ -18,6 +18,7 @@ import { MessagesAnnotation } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import type { CreateReactAgentGraphOptions } from "../types";
 import { createCogniProgram } from "./cogni";
+import { createCogniReadProgram } from "./cogni-read";
 
 /**
  * Graph name constants for operator roles.
@@ -37,6 +38,9 @@ export const GIT_REVIEWER_GRAPH_NAME = "git-reviewer" as const;
  * @throws Error if systemPrompt is not provided
  */
 export function createOperatorGraph(opts: CreateReactAgentGraphOptions) {
+  // Behavior mode is the program: READ (chat) answers and files nothing; the scheduled programs
+  // DECIDE. The read topology has no write tool bound at all.
+  if (opts.program === "cogni-chat") return createCogniReadProgram(opts);
   if (opts.program) return createCogniProgram(opts);
   if (!opts.systemPrompt) {
     throw new Error(
