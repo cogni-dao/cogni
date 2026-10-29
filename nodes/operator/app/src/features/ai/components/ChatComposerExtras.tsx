@@ -43,15 +43,10 @@ const createGraphOption = (
 
 const AVAILABLE_GRAPHS: readonly GraphOption[] = [
   {
-    graphId: "langgraph:cogni" satisfies GraphId,
-    name: "Cogni",
-    description: "Hub-grounded read-only mission agent",
-  },
-  {
     graphId: "langgraph:cogni-chat" satisfies GraphId,
-    name: "Cogni (deep read)",
+    name: "Cogni",
     description:
-      "Plans, delegates goal and work-item reading to a cheap subagent, answers; files nothing",
+      "Hub-grounded mission agent: plans, delegates the heavy read to a cheap subagent, answers",
   },
   {
     graphId: "langgraph:poly-brain" satisfies GraphId,
