@@ -111,10 +111,13 @@ payments_out:
 # PR review on/off + model selection. The operator reads THIS block from the
 # target repo, so each node controls its own review with no operator-side hardcode.
 #   enabled: false → operator skips review entirely (no Check Run, no comment).
-#   model: any platform (LiteLLM-resolvable) model id; omit to use operator default.
+#   model: a `model_name` served by infra/compose/runtime/configs/litellm.config.yaml
+#     with `is_free: true` — review runs bill the unfunded system tenant, so a paid
+#     or unserved model fails every AI gate as NEUTRAL "Graph execution failed".
+#     Pinned by tests/ci-invariants/review-model-served.spec.ts (story.5102).
 review:
   enabled: true
-  model: gpt-4o-mini
+  model: gpt-oss-120b
 
 # Gates run in the order they appear below.
 gates:
