@@ -17,7 +17,6 @@ import {
   creditPurchaseIncomeReader,
   type FetchLike,
   type MoneyPlaneRow,
-  openRouterReader,
   type PayAction,
   type PlaneReader,
   type Rail,
@@ -177,29 +176,30 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
     };
   });
 
-  // OpenRouter /credits needs a MANAGEMENT/provisioning key; the inference key
-  // (OPENROUTER_API_KEY) must never carry that authority (task.5361,
-  // identity-keys-no-overload). Read from the dedicated OPENROUTER_PROVISIONING_KEY;
-  // unset → the reader returns UNKNOWN (no key) and Top up stays reachable. The
-  // underlying reader row carries no rail, so wrap it to attach the steward rail
-  // (mirrors the wallet-binding rail wrap above).
-  const openRouterBase = openRouterReader({
-    apiKey: env.OPENROUTER_PROVISIONING_KEY,
-    fetch: safeFetch,
-    label: "OpenRouter credit",
-    payAction: OPENROUTER_CHECKOUT,
-  });
-  const openRouter: PlaneReader = {
-    ...openRouterBase,
-    read: async (signal) => ({
-      ...(await openRouterBase.read(signal)),
-      rail: STEWARD_RAIL,
-    }),
-  };
-  // Cherry billing read uses the DEDICATED read-only token, never the provisioning
-  // write token CHERRY_AUTH_TOKEN (task.5382, identity-keys-no-overload).
+  // OpenRouter account-wide /credits needs a MANAGEMENT key, which is WRITE-capable
+  // (it mints and revokes API keys). OpenRouter ships NO read-only credential for
+  // /credits, so there is no key we can safely place in the app pod
+  // (identity-keys-no-overload, guard-needs-proven-writer). The row stays honestly
+  // UNKNOWN until the out-of-band read lands (task.5361): a trusted scheduled job
+  // holds the management key, reads /credits, and writes the balance to a store the
+  // app reads — the write key never enters the app pod. Top up stays reachable.
+  const openRouter = unavailableFinanceReader(
+    "openrouter:account",
+    "OpenRouter credit",
+    "prepaid",
+    "needs an out-of-band scoped read · task.5361",
+    "unconfigured",
+    undefined,
+    OPENROUTER_CHECKOUT,
+    undefined,
+    { rail: STEWARD_RAIL }
+  );
+  // Cherry billing read uses a SEPARATE report-only token, never the provisioning
+  // write token CHERRY_AUTH_TOKEN (task.5382, identity-keys-no-overload). Cherry has
+  // no read-only key scope (all keys are account-wide full-access), so this is a
+  // distinct key for blast-radius isolation, not a scope-limited read.
   const cherry = cherryFinanceReader({
-    token: env.CHERRY_READONLY_TOKEN,
+    token: env.CHERRY_REPORT_TOKEN,
     teamId: env.CHERRY_TEAM_ID,
     fetch: safeFetch,
     payAction: CHERRY_CHECKOUT,

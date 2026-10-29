@@ -1368,9 +1368,9 @@ describe("operator finance evidence", () => {
       label: "OpenRouter credit",
       grade: "UNKNOWN",
       reasonCode: "unconfigured",
-      // No OPENROUTER_PROVISIONING_KEY in the default env → UNKNOWN, no fetch. The
-      // inference OPENROUTER_API_KEY is never consulted (task.5361/task.5382).
-      detail: "no OpenRouter key in this environment",
+      // OpenRouter's /credits needs a write-capable management key, which must not enter
+      // the pod; the row stays UNKNOWN until an out-of-band scoped read lands (task.5361).
+      detail: "needs an out-of-band scoped read · task.5361",
       rail: { kind: "steward-manual", status: "supported" },
       payAction: { kind: "steward-checkout", vendor: "openrouter" },
     });
@@ -1413,13 +1413,12 @@ describe("operator finance evidence", () => {
       fetch.mock.calls.some((call) => String(call[0]).includes("openrouter.ai"))
     ).toBe(false);
   });
-  it("reads OpenRouter /credits with the provisioning key and Cherry with the read-only token (task.5382 dedicated read credentials)", async () => {
+  it("reads Cherry with the separate report token, and leaves OpenRouter UNKNOWN with no call (task.5382 / task.5361)", async () => {
     runtime.env = {
       EVM_RPC_URL: "https://rpc.example",
-      // Inference key present but MUST NOT be used for the /credits read.
+      // Inference key present but MUST NOT be used for any reporting read.
       OPENROUTER_API_KEY: "sk-inference",
-      OPENROUTER_PROVISIONING_KEY: "sk-provisioning",
-      CHERRY_READONLY_TOKEN: "cherry-readonly",
+      CHERRY_REPORT_TOKEN: "cherry-report",
       CHERRY_TEAM_ID: "183728",
     };
     // Match on exact hostname, never a URL substring (js/incomplete-url-substring-sanitization).
@@ -1432,12 +1431,6 @@ describe("operator finance evidence", () => {
     };
     const fetch = vi.fn(async (url: string | URL | Request) => {
       const host = hostOf(url);
-      if (host === "openrouter.ai")
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ data: { total_credits: 100, total_usage: 40 } }),
-        };
       if (host === "api.cherryservers.com")
         return {
           ok: true,
@@ -1455,25 +1448,22 @@ describe("operator finance evidence", () => {
     const { readers } = await createFinanceReaders();
     const snapshot = await takeSnapshot(readers, { timeoutMs: 500 });
     const byPlane = new Map(snapshot.rows.map((row) => [row.plane, row]));
-    // OpenRouter read used the provisioning key (balance = credits - usage = 60), never the inference key.
+    // OpenRouter row stays honestly UNKNOWN — no write-capable key enters the pod,
+    // so no OpenRouter call is made at all (task.5361 out-of-band read pending).
     expect(byPlane.get("openrouter:account")).toMatchObject({
-      balance: 60,
-      currency: "USD",
+      grade: "UNKNOWN",
+      reasonCode: "unconfigured",
     });
-    const orCall = fetch.mock.calls.find(
-      (call) => hostOf(call[0]) === "openrouter.ai"
-    );
-    expect(orCall).toBeDefined();
-    expect((orCall?.[1] as RequestInit | undefined)?.headers).toMatchObject({
-      Authorization: "Bearer sk-provisioning",
-    });
-    // Cherry read used the dedicated read-only token, never CHERRY_AUTH_TOKEN.
+    expect(
+      fetch.mock.calls.some((call) => hostOf(call[0]) === "openrouter.ai")
+    ).toBe(false);
+    // Cherry read used the SEPARATE report token, never the provisioning CHERRY_AUTH_TOKEN.
     const cherryCall = fetch.mock.calls.find(
       (call) => hostOf(call[0]) === "api.cherryservers.com"
     );
     expect(cherryCall).toBeDefined();
     expect((cherryCall?.[1] as RequestInit | undefined)?.headers).toMatchObject(
-      { Authorization: "Bearer cherry-readonly" }
+      { Authorization: "Bearer cherry-report" }
     );
   });
   it("bounds the Akash cadence probe: a hung LCD falls back to 5.884 s/block within the budget and keeps every row", async () => {
