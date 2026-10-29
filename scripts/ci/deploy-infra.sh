@@ -35,6 +35,7 @@
 #     single handshake and cannot trip sshd's MaxStartups admission control.
 #   - INFRA_REF_IS_EXPLICIT (task.0314): rsync source is a clean worktree of --ref,
 #     never the caller's working tree.
+#   - Candidate proof branch: executable behavior is identical to merged #2734.
 # Callers:
 #   - .github/workflows/candidate-flight-infra.yml  (candidate-a infra lever)
 #   - .github/workflows/promote-and-deploy.yml      (preview/prod deploy-infra job)
