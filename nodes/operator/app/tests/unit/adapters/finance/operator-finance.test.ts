@@ -1422,15 +1422,23 @@ describe("operator finance evidence", () => {
       CHERRY_READONLY_TOKEN: "cherry-readonly",
       CHERRY_TEAM_ID: "183728",
     };
+    // Match on exact hostname, never a URL substring (js/incomplete-url-substring-sanitization).
+    const hostOf = (u: string | URL | Request): string => {
+      try {
+        return new URL(String(u)).hostname;
+      } catch {
+        return "";
+      }
+    };
     const fetch = vi.fn(async (url: string | URL | Request) => {
-      const u = String(url);
-      if (u.includes("openrouter.ai"))
+      const host = hostOf(url);
+      if (host === "openrouter.ai")
         return {
           ok: true,
           status: 200,
           json: async () => ({ data: { total_credits: 100, total_usage: 40 } }),
         };
-      if (u.includes("api.cherryservers.com"))
+      if (host === "api.cherryservers.com")
         return {
           ok: true,
           status: 200,
@@ -1452,16 +1460,16 @@ describe("operator finance evidence", () => {
       balance: 60,
       currency: "USD",
     });
-    const orCall = fetch.mock.calls.find((call) =>
-      String(call[0]).includes("openrouter.ai")
+    const orCall = fetch.mock.calls.find(
+      (call) => hostOf(call[0]) === "openrouter.ai"
     );
     expect(orCall).toBeDefined();
     expect((orCall?.[1] as RequestInit | undefined)?.headers).toMatchObject({
       Authorization: "Bearer sk-provisioning",
     });
     // Cherry read used the dedicated read-only token, never CHERRY_AUTH_TOKEN.
-    const cherryCall = fetch.mock.calls.find((call) =>
-      String(call[0]).includes("api.cherryservers.com")
+    const cherryCall = fetch.mock.calls.find(
+      (call) => hostOf(call[0]) === "api.cherryservers.com"
     );
     expect(cherryCall).toBeDefined();
     expect((cherryCall?.[1] as RequestInit | undefined)?.headers).toMatchObject(
