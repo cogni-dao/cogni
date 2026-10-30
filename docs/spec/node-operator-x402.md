@@ -41,7 +41,7 @@ Define the minimum a new AI project needs to become a sovereign Cogni node, what
 
 All 10 invariants from [node-operator-contract.md](./node-operator-contract.md) are retained. This spec adds:
 
-11. **NO_FINANCIAL_INTERMEDIATION**: Operator never sits in a payment path. Inbound x402 settlements go directly to the Node's receiving address. Outbound provider payments use the Node's own API key. Operator never custodies, routes, or settles funds.
+11. **NO_FINANCIAL_INTERMEDIATION**: Operator never sits in a payment path. **Corollary (2026-09-30):** this is why node↔node settlement must be USDC on-chain rather than credits — a credit balance lives in ONE node's Postgres, so billing another node in credits requires a database both can write, which makes its owner a central bank. Credits remain correct for the **node-local human on-ramp** (a person wants a spend cap, not to sign USDC per request); they are never the unit between two nodes. See `node-service-usdc-northstar`. Inbound x402 settlements go directly to the Node's receiving address. Outbound provider payments use the Node's own API key. Operator never custodies, routes, or settles funds.
 
 12. **NODE_HAS_RECEIVING_ADDRESS**: A Node's on-chain identity is its receiving wallet address (`NODE_RECEIVING_ADDRESS`). The x402 facilitator settles inbound payments to this address. **The Node does NOT sign transactions in P0** — it only receives. No private keys, no Privy, no Splits.
 
@@ -425,7 +425,52 @@ With x402, federation is **agent discovery**, not financial pooling:
 
 ## Open Questions
 
-1. **Operator revenue model** — If the Operator never touches money, how does it fund itself? Options: (a) Nodes pay Operator for services via x402, (b) Operator runs its own Node and earns margin, (c) DAO treasury funds Operator from epoch allocations. This is a governance question, not a technical one.
+> **Two of these are now RESOLVED by owner ruling (2026-09-30, derekg1729) and one by an existing
+> design this spec did not cite. Kept in place with their answers so the reasoning survives.**
+
+### ✅ RESOLVED — Q1 Operator revenue model
+
+**Operator is not special. It is the first node providing the first service** (CI/CD, PR review,
+deploy) and other nodes — beacon among them — will sell services back to it. So options (a) and (b)
+below are the same answer: operator earns by selling, and pays by buying, exactly like any
+`node-template` spawn. There is no operator-only billing path and no privileged table.
+
+Consequence for every downstream design: **if a design requires operator to hold other nodes'
+balances, it is centralised and wrong** — it contradicts `NO_FINANCIAL_INTERMEDIATION` above.
+
+### ✅ RESOLVED — Q4 Node wallet key management
+
+Answered by [`design.node-payments-empowerment`](../design/node-payments-empowerment.md), which
+post-dates this spec's question list: a node's wallet is a **Privy wallet owned by a P-256 key
+quorum**. The EVM key never leaves Privy's HSM (`KEY_NEVER_IN_APP`), and the operator — which
+provisions the wallet — does **not** retain the owner's authorization key, so it **cannot spend the
+node's funds**. That satisfies this spec's `NO_PRIVATE_KEY_ENV_VARS` constraint without a keystore,
+Vault, or CDP wallet.
+
+⚠️ One assertion there remains **unproven at runtime**: that an owned wallet _rejects_ a
+`sendTransaction` signed with a non-owner key. Types support it; no test does. That test is a
+prerequisite for trusting non-custody.
+
+### 🔴 THE REAL GAP — the buy side is unspecified
+
+This spec and [`x402-e2e.md`](./x402-e2e.md) both specify a node **being paid**
+(`NODE_HAS_RECEIVING_ADDRESS`, "the Node does NOT sign transactions in P0 — it only receives").
+**Neither specifies a node PAYING another node.** But the product goal is a network where nodes buy
+each other's services, so the buy side is load-bearing, not P2 garnish.
+
+What is missing, minimally:
+
+| Need                                  | Why it isn't covered today                                                                                                                                                                                           |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A node signs an outbound x402 payment | P0 is receive-only by design; Q4's signer (now answered) was scoped to P2                                                                                                                                            |
+| A **spend cap** per counterparty      | Nothing bounds what a node may spend. A runaway loop drains a real wallet, and `system-tenant.md` `BUDGETS_FOR_ALL` — the one existing cap invariant — is entirely unimplemented (bug.5332)                          |
+| A **price list** a buyer can read     | No offering/price/rate-card concept exists in `packages/repo-spec/src/schema.ts` or `infra/catalog/_schema.json`                                                                                                     |
+| Who may authorise spend               | OpenFGA `node:<id>` has `developer`/`env_manager`/`production_promoter`; no `treasurer`/`spender`. The substrate is already principal-agnostic (`node.developer: [user, agent]`) — only the money relation is absent |
+
+Tracked in `story.5056`. Durable statement of the boundary:
+[`node-service-usdc-northstar`](https://cognidao.org/knowledge/node-service-usdc-northstar).
+
+### Still open
 
 2. **Hyperbolic account funding** — P0 uses API key auth to Hyperbolic, which means the Hyperbolic account needs pre-funded balance. This is simpler than Privy+Splits+Coinbase Commerce, but still a manual step. P2 x402 outbound would eliminate this.
 

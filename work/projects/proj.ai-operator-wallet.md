@@ -3,7 +3,7 @@ id: proj.ai-operator-wallet
 type: project
 primary_charter:
 title: AI Operator Wallet
-state: Active
+state: Dropped
 priority: 1
 estimate: 3
 summary: App-controlled operator wallet (Privy-managed) receives user USDC payments via a Splits contract that trustlessly routes DAO share to treasury, then tops up OpenRouter credits autonomously. No custom smart contracts, no raw signing in app.
@@ -13,6 +13,12 @@ created: 2026-02-11
 updated: 2026-03-09
 labels: [wallet, billing, web3]
 ---
+
+> **SUPERSEDED 2026-09-30.** `proj.x402-e2e-migration` already declared this superseded, yet it
+> stayed `state: Active` — two Active projects for one money loop is how the doc plane drifted.
+> Custody now lives in [node-payments-empowerment](../../docs/design/node-payments-empowerment.md)
+> (non-custodial Privy owner quorum); the boundary lives in
+> [node-operator-x402.md](../../docs/spec/node-operator-x402.md). Retained for history only.
 
 # AI Operator Wallet
 
