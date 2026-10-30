@@ -607,6 +607,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { AkashComputeAdapter } from "@/adapters/server/compute/akash-compute.adapter";
 import { optionalComputeProofIdentity } from "@/bootstrap/compute-proof-identity";
+import { DatabaseCellAppliedRegistrationFactsSchema } from "@/shared/secrets/database-cell-placement.data";
 import { SUBSTRATE_RESERVED_KEYS } from "@/shared/secrets/node-secrets-reserved.data";
 import { loadSecretsCatalog } from "../../../../../../../scripts/lib/secrets-catalog-loader";
 
@@ -716,6 +717,82 @@ describe("private proof standalone composition and bounded errors", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+  it("preserves both strict legacy service schemas when current-artifact evidence is absent", async () => {
+    // Synthetic Console response only. No paid allocation or current-image proof.
+    const owner = `akash1${"a".repeat(38)}`;
+    const manifestVersion = Buffer.alloc(32, 1).toString("base64");
+    const fetchImpl = vi.fn(async () =>
+      Response.json({
+        data: {
+          deployment: {
+            id: { dseq: "12345", owner },
+            state: "active",
+            hash: manifestVersion,
+          },
+          consoleSettings: { sdl: "services: {}", manifestVersion },
+          leases: [
+            {
+              state: "active",
+              id: { dseq: "12345", provider: owner },
+              status: {
+                services: {
+                  postgres: {
+                    observed_generation: 1,
+                    replicas: 1,
+                    updated_replicas: 1,
+                    ready_replicas: 1,
+                    available_replicas: 1,
+                    total: 1,
+                    available: 1,
+                  },
+                },
+              },
+            },
+          ],
+        },
+      })
+    );
+    const adapter = new AkashComputeAdapter({
+      apiKey: "test-only",
+      timeoutMs: 1000,
+      expectedCostConsumerAccountId: owner,
+      fetchImpl,
+      outcomeStore: {
+        record: async () => {
+          throw new Error("unexpected mutation");
+        },
+        stats: async () => new Map(),
+      },
+    });
+    for (const signal of [undefined, new AbortController().signal]) {
+      const observed = await adapter.readManagedDefinition({
+        leaseId: "12345",
+        ...(signal ? { signal } : {}),
+      });
+      const service = required(observed.services[0]);
+      const legacy = DatabaseCellAppliedRegistrationFactsSchema.shape;
+      expect(legacy.provider.shape.service.parse(service)).toEqual(service);
+      expect(
+        legacy.effectiveApp.shape.providerManifest.shape.services.parse(
+          observed.services
+        )
+      ).toEqual(observed.services);
+      expect(service).not.toHaveProperty("currentArtifact");
+      // Keep strict excess-field rejection; the missing proof fact stays unavailable.
+      expect(
+        legacy.provider.shape.service.safeParse({
+          ...service,
+          currentArtifact: null,
+        }).success
+      ).toBe(false);
+      expect(
+        legacy.effectiveApp.shape.providerManifest.shape.services.safeParse([
+          { ...service, currentArtifact: null },
+        ]).success
+      ).toBe(false);
+    }
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
   it("never collects oversized non2xx bodies and awaits the original body cancellation", async () => {
     let settle: (() => void) | undefined;

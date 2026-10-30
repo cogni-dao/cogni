@@ -762,8 +762,9 @@ describe("akash-tx-actuator runtime", () => {
       expect(rule.resources).not.toContain("secrets");
       expect(rule.resources).not.toContain("pods/exec");
       if (
-        rule.apiGroups.includes("apps") ||
-        rule.apiGroups.includes("compute.cogni.io")
+        rule.apiGroups.some(
+          (group: string) => group === "apps" || group === "compute.cogni.io"
+        )
       )
         expect(rule.verbs).toEqual(["get"]);
     }

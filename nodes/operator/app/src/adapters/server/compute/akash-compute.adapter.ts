@@ -711,8 +711,8 @@ export class AkashComputeAdapter
           name,
           observedGeneration: service.observed_generation,
           // Console exposes desired SDL and counters, but does not bind those
-          // counters to the current provider template/running image. Never infer it.
-          currentArtifact: null,
+          // counters to the current provider template/running image. Omit the optional
+          // proof evidence: retained strict managed-observation consumers keep their shape.
           replicas: service.replicas,
           updatedReplicas: service.updated_replicas,
           readyReplicas: service.ready_replicas,
@@ -745,7 +745,6 @@ export class AkashComputeAdapter
         return {
           name,
           observedGeneration: Number(value.observedGeneration),
-          currentArtifact: value.currentArtifact,
           replicas: Number(value.replicas),
           updatedReplicas: Number(value.updatedReplicas),
           readyReplicas: Number(value.readyReplicas),

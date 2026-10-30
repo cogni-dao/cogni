@@ -59,6 +59,16 @@ const array = (v: unknown): unknown[] => {
   if (!Array.isArray(v) || v.length > 64) throw new Error("unavailable");
   return v;
 };
+/** Effective migration env must be the sealed projection, never first-match or envFrom. */
+function canonicalMigrationEnv(
+  container: Record<string, unknown>,
+  expected: unknown[]
+): boolean {
+  return (
+    (container.envFrom === undefined || same(container.envFrom, [])) &&
+    same(container.env, expected)
+  );
+}
 function list(v: unknown): unknown[] {
   const r = record(v);
   if (record(r.metadata ?? {}).continue) throw new Error("unavailable");
@@ -117,7 +127,13 @@ export class NativeComputeReleaseProofAdapter
         signal.throwIfAborted();
         const ns = `cogni-${input.expected.environment}`;
         if (w.kind === "Deployment") {
-          const result = await this.k3s(input, w, ns, signal);
+          const result = await this.k3s(
+            input,
+            w,
+            ns,
+            signal,
+            registration.slug
+          );
           dimensions.push({ workload: name, ...result });
           continue;
         }
@@ -295,7 +311,8 @@ export class NativeComputeReleaseProofAdapter
     input: ComputeReleaseProofInput,
     w: Workload,
     ns: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    registeredSlug: string
   ): Promise<
     Omit<ComputeReleaseProofOutput["dimensions"][number], "workload">
   > {
@@ -306,6 +323,7 @@ export class NativeComputeReleaseProofAdapter
       code: "unavailable" as const,
     };
     if (
+      registeredSlug !== "operator" ||
       !this.localOperator ||
       input.expected.nodeId !== this.localOperator.nodeId ||
       input.expected.repository !== this.localOperator.repository ||
@@ -443,14 +461,33 @@ export class NativeComputeReleaseProofAdapter
         record(record(state.state).terminated).exitCode !== 0
       )
         return unavailable;
-      const env = array(container.env).map(record),
-        db = env.find((e) => e.name === "DATABASE_URL");
+      // Existing k3s writers use opaque envFrom. Without reading private banks we
+      // cannot establish their effective NODE_NAME/CA or credential precedence.
+      // Only a complete explicit canonical projection can support this observation.
+      const expectedEnv = [
+        { name: "NODE_NAME", value: registeredSlug },
+        {
+          name: "DATABASE_URL",
+          valueFrom: { secretKeyRef: { name: phase.secret, key: phase.key } },
+        },
+        {
+          name: "DATABASE_SSL_CA_CERT",
+          valueFrom: {
+            secretKeyRef: {
+              name: "operator-env-secrets",
+              key: "DATABASE_SSL_CA_CERT",
+              optional: true,
+            },
+          },
+        },
+      ];
+      const podInit = array(record(pod.spec).initContainers).map(record);
+      const podContainer = podInit.find((c) => c.name === phase.name);
       if (
-        !db ||
-        !same(record(db.valueFrom).secretKeyRef, {
-          name: phase.secret,
-          key: phase.key,
-        })
+        podInit.length !== phases.length ||
+        !podContainer ||
+        !canonicalMigrationEnv(container, expectedEnv) ||
+        !canonicalMigrationEnv(podContainer, expectedEnv)
       )
         return unavailable;
       const log = await this.kube.log(
@@ -673,8 +710,7 @@ export class NativeComputeReleaseProofAdapter
           container.image === image &&
           same(container.command, sealed.command) &&
           same(container.args, sealed.args) &&
-          (container.envFrom === undefined || same(container.envFrom, [])) &&
-          same(container.env, [
+          canonicalMigrationEnv(container, [
             { name: "NODE_NAME", value: slug },
             {
               name: "DATABASE_URL",

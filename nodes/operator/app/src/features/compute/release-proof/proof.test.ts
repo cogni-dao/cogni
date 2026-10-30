@@ -822,3 +822,216 @@ function addPrivateSibling(h: ReturnType<typeof nativeHarness>) {
   });
   h.observed.providerSdl = stringify(h.sdl);
 }
+
+/** Synthetic owned k3s objects only; no native success or secret values are provided. */
+function k3sHarness() {
+  const nodeId = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+    ns = "cogni-candidate-a",
+    image = `ghcr.io/cogni/app@sha256:${"e".repeat(64)}`;
+  const raw = requestFixture();
+  required(raw.expected.workloads[0]).kind = "Deployment";
+  const input = parseComputeProof(JSON.stringify(raw));
+  const phases = [
+    {
+      name: "migrate",
+      key: "DATABASE_MIGRATION_URL",
+      secret: "operator-migration-secrets",
+      command: [
+        "/bin/sh",
+        "-c",
+        "exec node /app/nodes/$(NODE_NAME)/app/migrate.mjs /app/nodes/$(NODE_NAME)/app/migrations",
+      ],
+    },
+    {
+      name: "migrate-doltgres",
+      key: "DOLTGRES_URL",
+      secret: "operator-env-secrets",
+      command: [
+        "/bin/sh",
+        "-c",
+        'exec node --input-type=module -e \'import { migrateOperatorAfterNativeDrain } from "/app/nodes/operator/app/migrate-doltgres.mjs"; await migrateOperatorAfterNativeDrain("/app/nodes/operator/app/doltgres-migrations")\'',
+      ],
+    },
+  ];
+  const template = {
+    spec: {
+      containers: [{ name: "app", image }],
+      initContainers: phases.map((p) => ({
+        name: p.name,
+        image,
+        command: p.command,
+        env: [
+          { name: "NODE_NAME", value: "operator" },
+          {
+            name: "DATABASE_URL",
+            valueFrom: { secretKeyRef: { name: p.secret, key: p.key } },
+          },
+          {
+            name: "DATABASE_SSL_CA_CERT",
+            valueFrom: {
+              secretKeyRef: {
+                name: "operator-env-secrets",
+                key: "DATABASE_SSL_CA_CERT",
+                optional: true,
+              },
+            },
+          },
+        ],
+      })),
+    },
+  };
+  const deployment = {
+    metadata: {
+      name: "operator-node-app",
+      namespace: ns,
+      uid: "dep",
+      generation: 1,
+    },
+    spec: { replicas: 1, template },
+    status: {
+      observedGeneration: 1,
+      replicas: 1,
+      updatedReplicas: 1,
+      readyReplicas: 1,
+      availableReplicas: 1,
+    },
+  };
+  const pod = {
+    metadata: {
+      name: "operator-node-app-abc-def",
+      namespace: ns,
+      ownerReferences: [
+        {
+          kind: "ReplicaSet",
+          name: "operator-node-app-abc",
+          uid: "rs",
+          controller: true,
+        },
+      ],
+    },
+    spec: structuredClone(template.spec),
+    status: {
+      phase: "Running",
+      conditions: [{ type: "Ready", status: "True" }],
+      initContainerStatuses: phases.map((p) => ({
+        name: p.name,
+        image,
+        state: { terminated: { exitCode: 0 } },
+      })),
+    },
+  };
+  const rs = {
+    metadata: {
+      uid: "rs",
+      ownerReferences: [{ kind: "Deployment", uid: "dep", controller: true }],
+    },
+    spec: { template },
+  };
+  const kube = {
+    json: vi.fn(async (path: string) =>
+      path.includes("/deployments/")
+        ? deployment
+        : path.includes("/replicasets/")
+          ? rs
+          : { metadata: {}, items: [pod] }
+    ),
+    log: vi.fn(async (path: string) =>
+      path.includes("container=migrate&")
+        ? "COGNI_MIGRATION_RECEIPT_V1 " +
+          JSON.stringify({
+            node: "operator",
+            declared: ["0000"],
+            applied: [{ tag: "0000", hash: "9".repeat(64), appliedAtMs: 1 }],
+          })
+        : "✅ operator-doltgres migrate complete: 0 migration(s) applied + verified + read-only no-op; no journal DDL or commit in 1ms"
+    ),
+  };
+  const adapter = new NativeComputeReleaseProofAdapter(
+    kube,
+    undefined,
+    {},
+    { nodeId, repository: "cogni-dao/cogni", namespace: ns }
+  );
+  return {
+    input,
+    template,
+    pod,
+    kube,
+    adapter,
+    context(slug = "operator") {
+      return parsePrivateComputeProof(
+        serializePrivateComputeProof(input, {
+          nodeId,
+          slug,
+          repository: input.expected.repository,
+          environment: input.expected.environment,
+        })
+      ).registration;
+    },
+  };
+}
+describe("registered k3s migration projection", () => {
+  it("rejects a foreign registered slug before all native IO", async () => {
+    const h = k3sHarness();
+    const result = await h.adapter.sample(
+      h.input,
+      new AbortController().signal,
+      h.context("foreign")
+    );
+    expect(result.dimensions[0]?.migration).toBe("unavailable");
+    expect(h.kube.json).not.toHaveBeenCalled();
+    expect(h.kube.log).not.toHaveBeenCalled();
+  });
+  it("requires independently sealed deployment and pod credentials before logs", async () => {
+    const baseline = k3sHarness();
+    expect(
+      (
+        await baseline.adapter.sample(
+          baseline.input,
+          new AbortController().signal,
+          baseline.context()
+        )
+      ).dimensions[0]?.migration
+    ).toBe("verified");
+    for (const side of ["both", "template", "pod"] as const) {
+      for (const field of [
+        "NODE_NAME",
+        "DATABASE_URL",
+        "DATABASE_SSL_CA_CERT",
+        "envFrom",
+      ]) {
+        const h = k3sHarness();
+        const specs =
+          side === "both"
+            ? [h.template.spec, h.pod.spec]
+            : [side === "template" ? h.template.spec : h.pod.spec];
+        for (const spec of specs) {
+          const container = required(spec.initContainers[0]);
+          if (field === "envFrom")
+            Object.assign(container, {
+              envFrom: [{ secretRef: { name: "unknown-bank" } }],
+            });
+          else {
+            const duplicate = structuredClone(
+              required(container.env.find((e) => e.name === field))
+            );
+            if (duplicate.value !== undefined) duplicate.value = "foreign";
+            if (duplicate.valueFrom)
+              duplicate.valueFrom.secretKeyRef.name =
+                "foreign-migration-secrets";
+            container.env.push(duplicate);
+          }
+        }
+        const result = await h.adapter.sample(
+          h.input,
+          new AbortController().signal,
+          h.context()
+        );
+        expect(result.dimensions[0]?.migration, `${side}/${field}`).toBe(
+          "unavailable"
+        );
+        expect(h.kube.log).not.toHaveBeenCalled();
+      }
+    }
+  });
+});
