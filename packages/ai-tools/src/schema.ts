@@ -15,7 +15,7 @@
 
 import type { ToolSpec } from "@cogni/ai-core";
 import type { JSONSchema7 } from "json-schema";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z } from "zod";
 
 import type { ToolContract } from "./types";
 
@@ -39,8 +39,9 @@ export interface ToToolSpecResult {
 export function toToolSpec(
   contract: ToolContract<string, unknown, unknown, unknown>
 ): ToToolSpecResult {
-  const rawSchema = zodToJsonSchema(contract.inputSchema, {
-    $refStrategy: "none",
+  const rawSchema = z.toJSONSchema(contract.inputSchema, {
+    target: "draft-7",
+    io: "input",
   });
 
   const inputSchema: JSONSchema7 =

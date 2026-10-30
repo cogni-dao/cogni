@@ -16,6 +16,7 @@
  * @public
  */
 
+import { KnowledgeRowSchema } from "@cogni/shared-knowledge-store/contracts";
 import { z } from "zod";
 
 import type { EdoCapability } from "../capabilities/edo";
@@ -49,13 +50,7 @@ export const EdoDecideInputSchema = z.object({
 export type EdoDecideInput = z.infer<typeof EdoDecideInputSchema>;
 
 export const EdoDecideOutputSchema = z.object({
-  entry: z.object({
-    id: z.string(),
-    domain: z.string(),
-    title: z.string(),
-    confidencePct: z.number().nullable(),
-    sourceType: z.string(),
-  }),
+  entry: KnowledgeRowSchema,
   derivesFromHypothesisId: z.string(),
   committed: z.boolean(),
   message: z.string(),
@@ -115,13 +110,7 @@ export function createEdoDecideImplementation(
       });
 
       return {
-        entry: {
-          id: entry.id,
-          domain: entry.domain,
-          title: entry.title,
-          confidencePct: entry.confidencePct,
-          sourceType: entry.sourceType,
-        },
+        entry: { ...entry },
         derivesFromHypothesisId: input.derivesFromHypothesisId,
         committed: true,
         message: `Decision '${entry.id}' filed; derives from '${input.derivesFromHypothesisId}'`,

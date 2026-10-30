@@ -40,8 +40,8 @@ const outputSchema = z
         z.object({
           changeType: z.string(),
           rowId: z.string(),
-          before: z.record(z.unknown()).nullable(),
-          after: z.record(z.unknown()).nullable(),
+          before: z.record(z.string(), z.unknown()).nullable(),
+          after: z.record(z.string(), z.unknown()).nullable(),
         })
       )
       .optional(),

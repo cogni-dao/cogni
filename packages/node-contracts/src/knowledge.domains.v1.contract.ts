@@ -7,7 +7,7 @@
  * Scope: Zod schemas for the wire format. Does not contain business logic, I/O, or auth policy.
  * Invariants:
  *   - DOMAIN_HTTP_COOKIE_ONLY (route enforces; contract does not).
- *   - DOMAIN_REGISTRATION_IS_STICKY: no DELETE/PUT in v0.
+ *   - Domain IDs are immutable; item PATCH changes name/description only.
  *   - id is short, slug-shaped (alnum, dash, underscore).
  * Side-effects: none
  * Links: docs/spec/knowledge-domain-registry.md
@@ -16,7 +16,7 @@
 
 import { z } from "zod";
 
-const DomainIdSchema = z
+export const DomainIdSchema = z
   .string()
   .min(2)
   .max(64)
@@ -48,3 +48,27 @@ export type DomainsCreateRequest = z.infer<typeof DomainsCreateRequestSchema>;
 
 export const DomainsCreateResponseSchema = DomainSchema;
 export type DomainsCreateResponse = z.infer<typeof DomainsCreateResponseSchema>;
+
+/** Item route contracts. The store owns no-op, non-empty and missing-domain behavior. */
+export const DomainsUpdateBodySchema = z
+  .strictObject({
+    name: z.string().min(1).max(128).optional(),
+    description: z.string().max(512).nullable().optional(),
+  })
+  .refine((body) => body.name !== undefined || body.description !== undefined, {
+    message: "patch must set at least one of: name, description",
+  });
+export type DomainsUpdateBody = z.infer<typeof DomainsUpdateBodySchema>;
+
+export const domainsGetOperation = {
+  input: z.object({ domain: DomainIdSchema }),
+  output: DomainSchema,
+} as const;
+export const domainsUpdateOperation = {
+  input: z.object({ domain: DomainIdSchema, body: DomainsUpdateBodySchema }),
+  output: DomainSchema,
+} as const;
+export const domainsDeleteOperation = {
+  input: z.object({ domain: DomainIdSchema }),
+  output: z.object({ id: z.string(), deleted: z.literal(true) }),
+} as const;

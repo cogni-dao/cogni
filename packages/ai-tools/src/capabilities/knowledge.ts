@@ -26,17 +26,8 @@ export const CONFIDENCE = {
   HARDENED: 95,
 } as const;
 
-export interface KnowledgeEntry {
-  id: string;
-  domain: string;
-  entityId: string | null;
-  title: string;
-  content: string;
-  confidencePct: number | null;
-  sourceType: string;
-  sourceRef: string | null;
-  tags: string[] | null;
-}
+export type { KnowledgeRow as KnowledgeEntry } from "@cogni/shared-knowledge-store/contracts";
+import type { KnowledgeRow as KnowledgeEntry } from "@cogni/shared-knowledge-store/contracts";
 
 export interface KnowledgeSearchParams {
   domain: string;

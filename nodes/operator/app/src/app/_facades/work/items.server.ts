@@ -21,7 +21,7 @@ import type {
   WorkItemsListOutput,
 } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemId } from "@cogni/work-items";
-import { rankScore, toWorkItemId } from "@cogni/work-items";
+import { toWorkItemDto, toWorkItemId } from "@cogni/work-items";
 
 import { getContainer } from "@/bootstrap/container";
 
@@ -236,41 +236,7 @@ function mapStoreError(e: unknown): unknown {
   return e;
 }
 
-function toDto(item: WorkItem): WorkItemDto {
-  const evaluationRank = rankScore(item.scores);
-  return {
-    id: item.id as string,
-    type: item.type,
-    title: item.title,
-    status: item.status,
-    ...(item.actor !== "either" && { actor: item.actor }),
-    priority: item.priority,
-    rank: item.rank,
-    ...(evaluationRank !== undefined && { rankScore: evaluationRank }),
-    estimate: item.estimate,
-    ...(item.scores !== undefined && { scores: item.scores }),
-    summary: item.summary,
-    outcome: item.outcome,
-    projectId: item.projectId as string | undefined,
-    parentId: item.parentId as string | undefined,
-    node: item.node,
-    assignees: item.assignees as WorkItemDto["assignees"],
-    externalRefs: item.externalRefs as WorkItemDto["externalRefs"],
-    labels: item.labels as string[],
-    specRefs: item.specRefs as string[],
-    branch: item.branch,
-    pr: item.pr,
-    reviewer: item.reviewer,
-    revision: item.revision,
-    blockedBy: item.blockedBy as string | undefined,
-    deployVerified: item.deployVerified,
-    claimedByRun: item.claimedByRun,
-    claimedAt: item.claimedAt,
-    lastCommand: item.lastCommand,
-    createdAt: item.createdAt,
-    updatedAt: item.updatedAt,
-  };
-}
+const toDto = toWorkItemDto;
 
 function authorTagFromSession(user: {
   id: string;
@@ -305,6 +271,9 @@ export async function listWorkItems(
     ...(input.actor && { actor: input.actor as WorkItem["actor"] }),
     ...(input.projectId && { projectId: toWorkItemId(input.projectId) }),
     ...(input.node && { node: input.node }),
+    ...(input.labels && { labels: input.labels }),
+    ...(input.labelPrefix && { labelPrefix: input.labelPrefix }),
+    ...(input.scored !== undefined && { scored: input.scored }),
     limit: input.limit ?? 100,
     ...(input.cursor && { cursor: input.cursor }),
     ...(input.sortBy && { sortBy: input.sortBy }),

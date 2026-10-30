@@ -16,6 +16,7 @@
  * @public
  */
 
+import { KnowledgeRowSchema } from "@cogni/shared-knowledge-store/contracts";
 import { z } from "zod";
 
 import type { KnowledgeCapability } from "../capabilities/knowledge";
@@ -53,15 +54,7 @@ export const KnowledgeSearchInputSchema = z.object({
 });
 export type KnowledgeSearchInput = z.infer<typeof KnowledgeSearchInputSchema>;
 
-export const KnowledgeSearchResultSchema = z.object({
-  id: z.string(),
-  domain: z.string(),
-  title: z.string(),
-  content: z.string(),
-  confidencePct: z.number().nullable(),
-  sourceType: z.string(),
-  tags: z.array(z.string()).nullable(),
-});
+export const KnowledgeSearchResultSchema = KnowledgeRowSchema;
 
 export const KnowledgeSearchOutputSchema = z.object({
   query: z.string(),
@@ -123,13 +116,8 @@ export function createKnowledgeSearchImplementation(
         query: input.query,
         domain: input.domain,
         results: results.map((r) => ({
-          id: r.id,
-          domain: r.domain,
-          title: r.title,
+          ...r,
           content: truncate(r.content, KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS),
-          confidencePct: r.confidencePct,
-          sourceType: r.sourceType,
-          tags: r.tags,
         })),
         totalFound: results.length,
       };
