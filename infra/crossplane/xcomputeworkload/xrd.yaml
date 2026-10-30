@@ -610,6 +610,7 @@ spec:
                 # workload is observed serving, so the fleet converges with zero churn.
                 activeLeaseGeneration:
                   { type: integer, minimum: 0, maximum: 1000000 }
+                # Null until a paid allocation is observed for the current attempt.
                 bootDeadlineAt:
                   { type: string, format: date-time, nullable: true }
                 # BOOT EPOCH (bug.5244, bug.5287). The (bundle sha, leaseGeneration,
@@ -622,6 +623,7 @@ spec:
                     key: { type: string, maxLength: 128 }
                     at: { type: string, format: date-time }
                     # First active read-back for this paid attempt. Retained across observe
-                    # failures; absent before allocation and cleared for a new attempt key.
+                    # failures; null before allocation and cleared for a new attempt key.
+                    # Existing active attempts adopt one fresh bounded window on rollout.
                     mintedAt:
                       { type: string, format: date-time, nullable: true }
