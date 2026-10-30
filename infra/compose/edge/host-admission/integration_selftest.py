@@ -248,6 +248,13 @@ def legacy_policy(raw, family="ipv4"):
         # other chains before OR after a conditional/returning protected jump.
         # Exclude suffix callees only after a PROVEN unconditional terminal path.
         terminal = set()
+        def transfer(targets, unconditional, goto):
+            # Packet verdict, current-chain suffix, and possible return are
+            # distinct. -g never resumes this chain; returning -j does.
+            packet = bool(targets) and targets <= (terminal | {'ACCEPT', 'DROP', 'REJECT'})
+            leaves = 'RETURN' in targets or (goto and not packet)
+            ends = unconditional and (packet or goto or 'RETURN' in targets)
+            return packet, ends, leaves
         todo = list(chains)
         work = 0
         while todo:
@@ -257,10 +264,10 @@ def legacy_policy(raw, family="ipv4"):
             for targets, _, unconditional, goto in data['calls'].get(name, []):
                 work += 1
                 check(work <= 1048576 and time.monotonic() < deadline, 'semantic dependency work/deadline')
-                known_terminal = bool(targets) and targets <= (terminal | {'ACCEPT', 'DROP', 'REJECT'})
-                if 'RETURN' in targets or (goto and not known_terminal):
+                packet, _, leaves = transfer(targets, unconditional, goto)
+                if leaves:
                     break
-                if unconditional and known_terminal:
+                if unconditional and packet:
                     terminal.add(name)
                     todo.extend(reverse.get(name, ()))
                     break
@@ -268,11 +275,11 @@ def legacy_policy(raw, family="ipv4"):
             # The SAME ordered selector governs context and recursive influence.
             # Selected bodies remain complete; only unreachable callees vanish.
             nonlocal work
-            for targets, _, unconditional, _ in data['calls'].get(name, []):
+            for targets, _, unconditional, goto in data['calls'].get(name, []):
                 work += 1
                 check(work <= 1048576 and time.monotonic() < deadline, 'semantic dependency work/deadline')
                 yield from targets & chains.keys()
-                if unconditional and targets and targets <= (terminal | {'ACCEPT', 'DROP', 'REJECT'}):
+                if transfer(targets, unconditional, goto)[1]:
                     break
         preempting = set()
         visited = set(callers)

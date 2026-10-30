@@ -194,7 +194,7 @@ class Tests(unittest.TestCase):
   before=legacy_policy(raw)
   self.assertIn('BYPASS',before['filter']);self.assertNotIn('UNRELATED',before['filter'])
   self.assertNotEqual(before,legacy_policy(raw.replace('--dport 5432 -j RETURN','--dport 5432 -j ACCEPT')))
-  returning=raw.replace('-A DOCKER-USER -m comment','-A DOCKER-USER -p tcp -m comment').replace('COMMIT','-A UNRELATED -j RETURN\nCOMMIT')
+  returning=raw.replace('-A OUTER -g INNER','-A OUTER -j INNER').replace('-A DOCKER-USER -m comment','-A DOCKER-USER -p tcp -m comment').replace('COMMIT','-A UNRELATED -j RETURN\nCOMMIT')
   self.assertIn('UNRELATED',legacy_policy(returning)['filter'])
   self.assertNotEqual(legacy_policy(returning),legacy_policy(returning.replace('-A UNRELATED -j RETURN','-A UNRELATED -j ACCEPT')))
   deep=raw.replace('-A BYPASS -p tcp --dport 5432 -j RETURN','-A BYPASS -j HELPER\n-A HELPER -p tcp --dport 5432 -j RETURN')
@@ -233,6 +233,33 @@ class Tests(unittest.TestCase):
    # of the terminal proof used to prune merely semantic influence.
    owned=raw.replace('cogni-harden-internal-ports:drop-public -j DROP','cogni-harden-internal-ports:drop-public -j BYPASS')
    with self.assertRaisesRegex(AssertionError,'overflow:class=owned-dependency'):legacy_policy(owned+large+'COMMIT\n')
+ def test_chain_transfer_algebra_at_each_semantic_depth(self):
+  from integration_selftest import legacy_policy
+  # Rule matching supplies alternatives; only unconditional transfers can
+  # discard this chain's suffix. Returning jump and goto differ at the caller.
+  cases=[('-j RETURN','-j RETURN',False),('-g TARGET','-j RETURN',False),('-g TARGET','-j ACCEPT',False),('-j TARGET','-j ACCEPT',False),('-p tcp -j RETURN','-j RETURN',True),('-p tcp -g TARGET','-j RETURN',True),('-p tcp -g TARGET','-j ACCEPT',True),('-j TARGET','-j RETURN',True),('-j TARGET','-p udp -g TARGET\n-A TARGET -j RETURN',True)]
+  for depth in (0,2):
+   for rule,target,reachable in cases:
+    with self.subTest(depth=depth,rule=rule,target=target):
+     names=['BYPASS']+['NEST'+str(i) for i in range(depth)]
+     raw='*filter\n:FORWARD DROP [0:0]\n:DOCKER-USER - [0:0]\n:TARGET - [0:0]\n:KUBE-SVC-X - [0:0]\n'+''.join(':'+n+' - [0:0]\n' for n in names)
+     raw+='-A FORWARD -p tcp -j BYPASS\n-A FORWARD -j DOCKER-USER\n-A DOCKER-USER -j RETURN\n'
+     raw+=''.join('-A '+a+' -j '+b+'\n' for a,b in zip(names,names[1:]))
+     raw+='-A '+names[-1]+' '+rule+'\n-A '+names[-1]+' -j KUBE-SVC-X\n-A TARGET '+target+'\n'
+     small=raw+'-A KUBE-SVC-X -j RETURN\nCOMMIT\n';scope=legacy_policy(small)
+     self.assertEqual('KUBE-SVC-X' in scope['filter'],reachable)
+     if 'TARGET' in rule:self.assertIn('TARGET',scope['filter'])
+     self.assertEqual(len(scope['filter'][names[-1]]['rules']),2)
+     changed=small.replace('-A '+names[-1]+' -j KUBE-SVC-X','-A '+names[-1]+' -j RETURN')
+     self.assertNotEqual(scope,legacy_policy(changed))
+     large=raw+('-A KUBE-SVC-X -m comment --comment "namespace/service ordinary endpoint" -j RETURN\n'*1000)+'COMMIT\n'
+     if reachable:
+      self.assertNotEqual(scope,legacy_policy(small.replace('-A KUBE-SVC-X -j RETURN','-A KUBE-SVC-X -j ACCEPT')))
+      with self.assertRaisesRegex(AssertionError,'relevant host policy overflow'):legacy_policy(large)
+     else:self.assertEqual(scope,legacy_policy(large))
+     # Whole ownership deliberately ignores dead suffix pruning.
+     owned=large.replace('-A DOCKER-USER -j RETURN','-A DOCKER-USER -m comment --comment cogni-harden-internal-ports:drop-public -j BYPASS')
+     with self.assertRaisesRegex(AssertionError,'overflow:class=owned-dependency'):legacy_policy(owned)
  def test_policy_ownership_uses_real_tag_without_claiming_shared_siblings(self):
   from integration_selftest import legacy_policy,LEGACY_RULE_TAG
   base='*filter\n:FORWARD DROP [0:0]\n:OUTER - [0:0]\n:DOCKER-USER - [0:0]\n:OWNED-DEP - [0:0]\n:KUBE-SERVICES - [0:0]\n:KUBE-SVC-X - [0:0]\n-A FORWARD -j OUTER\n-A OUTER -j DOCKER-USER\n-A DOCKER-USER -m comment --comment "'+LEGACY_RULE_TAG+':drop-public" -j OWNED-DEP\n-A DOCKER-USER -m comment --comment "cogni-candidate-a/service cluster IP" -j KUBE-SERVICES\n-A OWNED-DEP -j DROP\n-A KUBE-SERVICES -m comment --comment "cogni-production/app" -j KUBE-SVC-X\n'
