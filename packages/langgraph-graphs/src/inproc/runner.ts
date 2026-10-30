@@ -29,6 +29,7 @@ import {
   DynamicStructuredTool,
   type StructuredToolInterface,
 } from "@langchain/core/tools";
+import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
 import { z } from "zod";
 import {
   CogniCompletionAdapter,
@@ -136,7 +137,17 @@ export function createInProcGraphRunner<TTool = unknown>(
     request,
     responseFormat,
     systemPrompt,
+    persistence,
   } = opts;
+
+  // Persistence foundation (langgraph-persistence): the host-injected backend, else a fresh
+  // per-run dev pair. Per-run (not a shared singleton) is deliberate: one run = one thread, so a
+  // fresh MemorySaver is GC'd with the run and a long-lived process does not accumulate every
+  // thread's checkpoint. Dev savers are in-process — interrupt-resumable within the run, but NOT
+  // crash-resumable (a crash loses the saver). Prod injects a PostgresSaver-backed pair (shared,
+  // crash-resumable, cross-tick) whose `.setup()` runs at deploy, never at request time.
+  const checkpointer = persistence?.checkpointer ?? new MemorySaver();
+  const store = persistence?.store ?? new InMemoryStore();
 
   // SINGLE_QUEUE_PER_RUN: Runner creates queue, all events flow here
   const queue = new AsyncQueue<AiEvent>();
@@ -214,6 +225,9 @@ export function createInProcGraphRunner<TTool = unknown>(
     tools,
     ...(responseFormat !== undefined && { responseFormat }),
     ...(systemPrompt !== undefined && { systemPrompt }),
+    // Persistence foundation: factories that support it (cogni) compile with these; others ignore.
+    checkpointer,
+    store,
   });
 
   const final = (async (): Promise<GraphResult> => {
@@ -234,7 +248,17 @@ export function createInProcGraphRunner<TTool = unknown>(
             { messages },
             {
               signal: request.abortSignal,
-              configurable: request.configurable,
+              // STABLE_THREAD_ID: a checkpointer-compiled graph requires a thread_id. One run = one
+              // thread (interrupt-resumable within the run, crash-resumable once Postgres-backed;
+              // isolated per mission tick); cross-tick working memory lives in the Store, not the
+              // checkpointer. graphId scopes it per node+program.
+              configurable: {
+                ...request.configurable,
+                thread_id:
+                  request.configurable.graphId != null
+                    ? `${request.configurable.graphId}:${request.runId}`
+                    : request.runId,
+              },
               // A BACKSTOP against an infinite graph, never the real work bound — each
               // graph self-limits (e.g. cogni's MAX_INVESTIGATE_STEPS). Must exceed any
               // graph's budget: a gather round is 2 node visits, so this clears 2×the
