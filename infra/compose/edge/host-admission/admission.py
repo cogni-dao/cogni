@@ -192,7 +192,7 @@ class Engine:
         path = self.root / 'checkpoint.json'
         if not path.exists():
             return {'version': 1, 'destination': self.policy.destination, 'owners': {},
-                    'pending': False, 'desiredHash': None, 'appliedHash': None, 'wall': 0, 'boot': self.boot(), 'mono': 0}
+                    'ownerBoots': {}, 'pending': False, 'desiredHash': None, 'appliedHash': None, 'wall': 0, 'boot': self.boot(), 'mono': 0}
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         try:
             raw = os.read(fd, 1024*1024 + 1)
@@ -202,7 +202,12 @@ class Engine:
             raise Rejected('checkpoint_overflow')
         try:
             state = json.loads(raw, object_pairs_hook=unique)
-            fields(state, ('version', 'destination', 'owners', 'pending', 'desiredHash', 'appliedHash', 'wall', 'boot', 'mono'))
+            if 'ownerBoots' not in state:
+                state['ownerBoots'] = {owner: state['boot'] for owner in state['owners']}
+            if type(state['ownerBoots']) is not dict or set(state['ownerBoots']) != set(state['owners']) or any(
+                    not isinstance(value, str) or len(value) > 128 for value in state['ownerBoots'].values()):
+                raise Rejected('checkpoint_owner_boots')
+            fields(state, ('ownerBoots', 'version', 'destination', 'owners', 'pending', 'desiredHash', 'appliedHash', 'wall', 'boot', 'mono'))
             if type(state['pending']) is not bool or not isinstance(state['boot'], str) or len(state['boot']) > 128:
                 raise Rejected('checkpoint_metadata')
             for key in ('wall', 'mono'):
@@ -250,8 +255,10 @@ class Engine:
 
     def union(self, state, now):
         result = {port: {} for port in self.policy.ports}
-        for stored in state['owners'].values():
-            if stored['validUntil'] <= now:
+        for owner, stored in state['owners'].items():
+            # Wall-clock continuity across reboot is unproved. Never revive a
+            # preboot observation; keep its CAS/hash until a fresh N+1 snapshot.
+            if state['ownerBoots'][owner] != self.boot() or stored['validUntil'] <= now:
                 continue
             for entry in stored['entries']:
                 if entry['expiresAt'] > now:
@@ -261,16 +268,46 @@ class Engine:
             raise Rejected('union_overflow')
         return result
 
+    def repair(self, state, union, wall, mono, boot, preserve_clock=False):
+        """Kernel calls the durable barrier BEFORE any actual repair mutation.
+
+        Hash equality proves desired intent only, never actual kernel state.
+        A true no-op performs readback without an extra pending/kernel write.
+        """
+        desired = digest(union)
+        barrier_done = False
+        def pending():
+            nonlocal barrier_done
+            if not barrier_done:
+                # Re-fsync a recovered pending mark too: its prior directory
+                # sync may have failed. Exactly one barrier per mutating repair.
+                state.update(pending=True, desiredHash=desired)
+                self.save(state)
+                barrier_done = True
+        try:
+            self.kernel.reconcile(union, before_mutation=pending)
+            # Only complete native readbacks can retire an existing pending mark.
+            if state['pending'] or state['appliedHash'] != desired or boot != state['boot'] or wall-state['wall'] >= 1:
+                state.update(pending=False, desiredHash=desired, appliedHash=desired)
+                if not preserve_clock:
+                    state.update(wall=wall, mono=mono, boot=boot)
+                self.save(state)
+        except BaseException:
+            # Readback/fence failure is unavailable even if no swap was needed.
+            # Also restore pending if the final applied checkpoint failed fsync.
+            state.update(pending=True, desiredHash=desired)
+            self.save(state)
+            raise
+
     def execute(self, owner, request):
         # Caller holds the sole host lock for load, commit, all swaps and readback.
         state = self.load()
         wall, mono, boot = self.clock(), self.monotonic(), self.boot()
         if wall < state['wall'] or (boot == state['boot'] and wall + 1 < state['wall'] + mono - state['mono']):
-            self.kernel.reconcile({port: {} for port in self.policy.ports})
+            self.repair(state, {port: {} for port in self.policy.ports}, wall, mono, boot, preserve_clock=True)
             raise Rejected('clock_rollback')
         now = max(wall, state['wall'])
         previous = state['owners'].get(owner, {'sequence': 0, 'hash': None})
-        changed = False
         if request['operation'] == 'apply':
             replay = request['nextSequence'] == previous['sequence'] and request['snapshotHash'] == previous['hash']
             if not replay:
@@ -278,6 +315,7 @@ class Engine:
                     raise Rejected('stale_or_conflict')
                 if any(e['expiresAt'] <= now for e in request['entries']):
                     raise Rejected('expired_snapshot')
+                state['ownerBoots'][owner] = boot
                 state['owners'][owner] = {'sequence': request['nextSequence'], 'hash': request['snapshotHash'],
                     'epoch': request['writerEpoch'], 'entries': request['entries'],
                     'validUntil': max([e['expiresAt'] for e in request['entries']], default=0)}
@@ -285,16 +323,8 @@ class Engine:
                 self.union(state, now)
                 state.update(pending=True, desiredHash=digest(self.union(state, now)), wall=wall, mono=mono, boot=boot)
                 self.save(state)
-                changed = True
         union = self.union(state, now)
-        desired = digest(union)
-        if not state['pending'] and desired != state['appliedHash']:
-            state.update(pending=True, desiredHash=desired, wall=wall, mono=mono, boot=boot)
-            self.save(state)
-        self.kernel.reconcile(union)
-        if state['pending'] or changed or boot != state['boot'] or wall-state['wall'] >= 1:
-            state.update(pending=False, desiredHash=desired, appliedHash=desired, wall=wall, mono=mono, boot=boot)
-            self.save(state)
+        self.repair(state, union, wall, mono, boot)
         current = state['owners'].get(owner, {'sequence': 0, 'hash': None})
         return {'version': 1, 'sequence': current['sequence'], 'snapshotHash': current['hash'],
-                'pending': False, 'verdict': 'applied', 'entries': sum(map(len, union.values()))}
+                'pending': False, 'verdict': ('fresh_snapshot_required' if owner in state['owners'] and state['ownerBoots'][owner] != boot else 'applied'), 'entries': sum(map(len, union.values()))}

@@ -17,14 +17,10 @@ import stat
 import sys
 import syslog
 import time
+import types
 
-# -I excludes caller Python environment and cwd. Only this trusted sibling tree.
-BASE = Path(__file__).resolve().parent
+BASE = Path(__file__).absolute().parent
 sys.dont_write_bytecode = True
-sys.path.insert(0, str(BASE))
-from admission import Engine, Policy, Rejected, locked, parse, receive
-from kernel import Kernel
-
 ROOT = Path('/var/lib/cogni-host-admission')
 POLICY = Path('/etc/cogni-host-admission/policy.json')
 OWNER = 'control'
@@ -43,13 +39,64 @@ def interrupted(_signum, _frame):
     raise Rejected('operation_interrupted')
 
 
+def verified_source():
+    """Stdlib-only bootstrap; no sibling search path or code before trust checks."""
+    base = Path(__file__).absolute().parent
+    def read_regular(path, cap=65536):
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                raise RuntimeError('untrusted_source_file')
+            data = os.read(fd, cap+1)
+            if len(data) > cap:
+                raise RuntimeError('source_overflow')
+            return data
+        finally:
+            os.close(fd)
+    for parent in (base, *base.parents):
+        info = parent.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise RuntimeError('untrusted_source_ancestor')
+    raw = read_regular(base/'source.json', 32768)
+    manifest = json.loads(raw)
+    if not re.fullmatch('[0-9a-f]{40}', manifest['sourceSha']):
+        raise RuntimeError('source_identity')
+    closure = {}
+    for name in ('entrypoint.py', 'wrapper.py', 'admission.py', 'kernel.py'):
+        data = read_regular(base/name)
+        if hashlib.sha256(data).hexdigest() != manifest['files'][name]:
+            raise RuntimeError('source_digest')
+        closure[name] = data
+    # Only these two explicitly verified modules become local imports. Their
+    # stdlib imports resolve through the system path; base is NEVER on sys.path.
+    loaded = {}
+    for name in ('admission', 'kernel'):
+        module = types.ModuleType(name)
+        module.__file__ = str(base/(name+'.py'))
+        sys.modules[name] = module
+        exec(compile(closure[name+'.py'], module.__file__, 'exec'), module.__dict__)
+        loaded[name] = module
+    return base, manifest, hashlib.sha256(raw).hexdigest(), loaded
+
+
+def perform(engine, owner, request):
+    return engine.execute(owner, request)
+
+
 def main():
     if len(sys.argv) != 1 or os.environ.get('SSH_ORIGINAL_COMMAND') or os.geteuid() != 0:
-        raise Rejected('entrypoint_boundary')
+        raise RuntimeError('entrypoint_boundary')
     for name in ('PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'BASH_ENV', 'ENV'):
         if name in os.environ:
-            raise Rejected('caller_environment')
-    # Check every ancestor of the executable, policy and state roots.
+            raise RuntimeError('caller_environment')
+    global Rejected
+    _, manifest, manifest_digest, modules = verified_source()
+    Rejected = modules['admission'].Rejected
+    Engine, Policy = modules['admission'].Engine, modules['admission'].Policy
+    locked, parse, receive = modules['admission'].locked, modules['admission'].parse, modules['admission'].receive
+    Kernel = modules['kernel'].Kernel
+    # Fixed policy/state paths are checked only after the verified code closure.
     for target in (BASE, POLICY.parent, ROOT):
         for parent in (target, *target.parents):
             trusted(parent, directory=True)
@@ -59,22 +106,13 @@ def main():
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGALRM):
         signal.signal(sig, interrupted)
     signal.alarm(12)
-    manifest_path = BASE / 'source.json'
-    trusted(manifest_path)
-    manifest_raw = manifest_path.read_bytes()
-    manifest = json.loads(manifest_raw)
-    if not re.fullmatch(r'[0-9a-f]{40}', manifest['sourceSha']):
-        raise Rejected('source_identity')
-    CONTEXT.update(sourceSha=manifest['sourceSha'], manifestDigest=hashlib.sha256(manifest_raw).hexdigest())
-    for name in ('entrypoint.py', 'wrapper.py', 'admission.py', 'kernel.py'):
-        if hashlib.sha256((BASE/name).read_bytes()).hexdigest() != manifest['files'][name]:
-            raise Rejected('source_digest')
+    CONTEXT.update(sourceSha=manifest['sourceSha'], manifestDigest=manifest_digest)
     policy = Policy(json.loads(POLICY.read_bytes()))
     with locked(ROOT):
         raw = receive(0)
         request = parse(raw, policy, OWNER, time.time())
         CONTEXT['operation'] = request['operation']
-        response = Engine(policy, ROOT, Kernel(policy)).execute(OWNER, request)
+        response = perform(Engine(policy, ROOT, Kernel(policy)), OWNER, request)
     return {**CONTEXT, **response}
 
 

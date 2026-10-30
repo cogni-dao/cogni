@@ -17,6 +17,8 @@ from pathlib import Path
 import re
 import select
 import signal
+import shlex
+import stat
 import socket
 import subprocess
 import sys
@@ -91,15 +93,80 @@ def preflight():
          provisionPrerequisite='Fixed trusted provisioner packages: python3 ipset iptables util-linux iproute2 openssh-server openssh-client procps coreutils. No flight-time install fallback.')
 
 
+def legacy_policy(raw):
+    """Compare owned rules, dependencies and complete caller chains, not Kube churn.
+
+    Whole-line save comments and chain packet counters are generated metadata.
+    Rule comments, ordering, targets, chain policies and inbound hooks remain.
+    """
+    tables = {}
+    current = None
+    for line in raw.splitlines():
+        if not line or line.startswith('#'):
+            continue
+        if line.startswith('*'):
+            current = line[1:]
+            tables[current] = {'chains': {}, 'rules': {}}
+        elif line == 'COMMIT':
+            current = None
+        elif current is not None and line.startswith(':'):
+            name, policy, counters = line[1:].split()
+            check(re.fullmatch(r'\[\d+:\d+\]', counters), 'save chain counters')
+            tables[current]['chains'][name] = policy
+        elif current is not None and line.startswith('-A '):
+            tokens = shlex.split(line)
+            tables[current]['rules'].setdefault(tokens[1], []).append(tokens)
+        else:
+            raise AssertionError('unrecognized native save output')
+    result = {}
+    for table, data in tables.items():
+        chains, rules = data['chains'], data['rules']
+        def targets(rule):
+            return {rule[i+1] for i, token in enumerate(rule[:-1]) if token in ('-j', '-g')}
+        owned = {name for name in chains if name in ('DOCKER-USER', 'CGADMIT')}
+        owned |= {name for name, rows in rules.items() if any(
+            'cogni' in row[i+1].lower() for row in rows for i, token in enumerate(row[:-1]) if token == '--comment')}
+        while True:
+            expanded = owned | {target for name in owned for row in rules.get(name, [])
+                                for target in targets(row) if target in chains}
+            if expanded == owned:
+                break
+            owned = expanded
+        # Complete callers expose an ACCEPT inserted before the admission jump.
+        callers = {name for name, rows in rules.items() if any(targets(row) & owned for row in rows)}
+        selected = owned | callers | ({'FORWARD'} if table == 'filter' else set())
+        if selected:
+            result[table] = {name: {'policy': chains[name], 'rules': rules.get(name, [])}
+                             for name in sorted(selected)}
+    return result
+
+
+def file_fingerprint(path):
+    path = Path(path)
+    if not path.exists() and not path.is_symlink():
+        return None
+    info = path.lstat()
+    # Include mode/ownership/type and link identity, not only file contents.
+    value = {'mode': info.st_mode, 'uid': info.st_uid, 'gid': info.st_gid}
+    if path.is_symlink():
+        value['link'] = os.readlink(path)
+    if path.is_file():
+        value['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return value
+
+
 def host_snapshot():
-    # Native rule shape (not counters). Legacy files only; never read private keys.
+    # Scoped legacy policy and its full caller chains; unrelated Kube internals
+    # are not this writer's state. Never read host credentials/private keys.
     files = ['/etc/iptables/rules.v4', '/etc/iptables/rules.v6',
              '/etc/cogni/compute-egress-allowlist', '/etc/cogni-compute-egress.allowlist',
-             '/usr/local/sbin/cogni-harden-docker-public-ports.sh', '/etc/systemd/system/cogni-harden-docker-public-ports.service', '/opt/cogni-template-runtime/compute-egress-allowlist']
+             '/usr/local/sbin/cogni-harden-docker-public-ports.sh',
+             '/etc/systemd/system/cogni-harden-docker-public-ports.service',
+             '/opt/cogni-template-runtime/compute-egress-allowlist']
     return {'net': namespace('net'), 'mnt': namespace('mnt'),
-            'rules4': run('/usr/sbin/iptables-save'), 'rules6': run('/usr/sbin/ip6tables-save'),
-            'files': {name: hashlib.sha256(Path(name).read_bytes()).hexdigest()
-                      if Path(name).is_file() else None for name in files}}
+            'rules4': legacy_policy(run('/usr/sbin/iptables-save')),
+            'rules6': legacy_policy(run('/usr/sbin/ip6tables-save')),
+            'files': {name: file_fingerprint(name) for name in files}}
 
 
 def terminate(child):
@@ -128,6 +195,8 @@ def outer():
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(sig, cancel)
     result = None
+    worker_error = None
+    preservation_error = None
     total = bytearray()
     deadline = time.monotonic()+180
     try:
@@ -144,6 +213,8 @@ def outer():
             if len(total) > 262144:
                 raise RuntimeError('bounded selftest output exceeded')
         result = child.wait(timeout=2)
+    except BaseException as exc:
+        worker_error = exc
     finally:
         try:
             os.killpg(child.pid, signal.SIGTERM)
@@ -155,9 +226,13 @@ def outer():
         except ProcessLookupError:
             pass
         child.stdout.close()
-        after = host_snapshot()
-        check(before == after, 'legacy host rules/files or namespace changed')
-        emit('legacy-host-unchanged', hostNet=before['net'], hostMount=before['mnt'])
+        try:
+            after = host_snapshot()
+            check(before == after, 'legacy host rules/files or namespace changed')
+            emit('legacy-host-unchanged', hostNet=before['net'], hostMount=before['mnt'])
+        except BaseException as exc:
+            preservation_error = exc
+            emit('legacy-host-preservation', 'failure', detail=str(exc)[:512])
     diagnostics = False
     for line in total.decode(errors='replace').splitlines():
         try:
@@ -168,19 +243,76 @@ def outer():
         except (ValueError, AttributeError):
             diagnostics = True
             emit('worker-diagnostic', 'failure', detail=line[:1024])
+    if worker_error is not None:
+        raise worker_error
     check(result == 0 and not diagnostics, 'isolated kernel/SSH proof failed; exit='+str(result))
+    if preservation_error is not None:
+        raise preservation_error
     check(any('"operation": "suite"' in line and '"verdict": "pass"' in line
               for line in total.decode().splitlines()), 'missing actual assertion completion')
     emit('selftest', result='actual-kernel-ssh-complete')
+
+
+FIXED_EXECUTABLES = ('/usr/sbin/iptables', '/usr/sbin/iptables-save', '/usr/sbin/ip6tables-save',
+                     '/usr/sbin/ipset', '/usr/sbin/ip', '/usr/sbin/sshd', '/usr/bin/python3',
+                     '/usr/bin/mount', '/usr/bin/ssh', '/usr/bin/ssh-keygen', '/usr/bin/scp',
+                     '/usr/bin/ssh-agent', '/usr/bin/ssh-add', '/usr/bin/ps', '/bin/sh')
+
+
+def executable_closure():
+    """Read only fixed public executable links, never copy host /etc contents."""
+    links, identities = {}, {}
+    for name in FIXED_EXECUTABLES:
+        cursor = Path(name)
+        for _ in range(16):
+            if not cursor.is_symlink():
+                break
+            check(cursor.lstat().st_uid == 0, 'non-root executable link')
+            target = os.readlink(cursor)
+            if str(cursor).startswith('/etc/'):
+                check(cursor.parent == Path('/etc/alternatives'), 'unapproved executable config link')
+                links[str(cursor)] = target
+            cursor = Path(os.path.normpath(str(cursor.parent/target))) if not target.startswith('/') else Path(target)
+        else:
+            raise AssertionError('executable link cycle')
+        final = Path(name).resolve(strict=True)
+        info = final.stat()
+        check(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022,
+              'untrusted executable closure '+name)
+        identities[name] = {'resolved': str(final), 'sha256': hashlib.sha256(final.read_bytes()).hexdigest()}
+    versions = {name: run(name, '--version').strip() for name in ('/usr/sbin/iptables', '/usr/sbin/ipset')}
+    return links, identities, versions
+
+
+def restore_executable_links(links):
+    for name, target in links.items():
+        path = Path(name)
+        check(path.parent == Path('/etc/alternatives'), 'only fixed alternatives links may be restored')
+        path.parent.mkdir(mode=0o755, exist_ok=True)
+        path.symlink_to(target)
+
+
+def isolated_tool_preflight(expected, versions):
+    # Runs after private /etc replacement and BEFORE packet/link/sysctl mutation.
+    for name, identity in expected.items():
+        resolved = Path(name).resolve(strict=True)
+        check(str(resolved) == identity['resolved'] and hashlib.sha256(resolved.read_bytes()).hexdigest() == identity['sha256'],
+              'private executable closure mismatch '+name)
+    observed = {name: run(name, '--version').strip() for name in versions}
+    check(observed == versions, 'isolated native backend differs from outer executable')
+    emit('isolated-tool-preflight', executableIdentities=expected, backends=observed)
 
 
 def private_filesystem(host_net, host_mount):
     # THIS assertion precedes ANY kernel mutation, including fixture creation.
     check(namespace('net') != host_net and namespace('mnt') != host_mount, 'unsafe initial host namespace')
     check(Path('/proc/1/ns/net').readlink() == Path('/proc/self/ns/net').readlink(), 'private PID/proc binding')
+    links, executables, versions = executable_closure()
     run('/usr/bin/mount', '--make-rprivate', '/')
     for path in ('/run', '/etc', '/var/lib', '/var/log', '/root', '/tmp'):
         run('/usr/bin/mount', '-t', 'tmpfs', '-o', 'mode=755', 'h1-private', path)
+        if path == '/etc':
+            restore_executable_links(links)
     run('/usr/bin/mount', '-t', 'devpts', '-o', 'newinstance,ptmxmode=0666,mode=0620', 'devpts', '/dev/pts')
     run('/usr/bin/mount', '--bind', str(BASE), str(BASE))
     run('/usr/bin/mount', '-o', 'remount,bind,ro', str(BASE))
@@ -195,6 +327,7 @@ def private_filesystem(host_net, host_mount):
     Path('/etc/shadow').chmod(0o600)
     (ROOT/'home/.ssh').mkdir(parents=True, mode=0o700)
     (ROOT/'home/.ssh/rc').write_text('touch /run/h1/RC_EXECUTED\n')
+    isolated_tool_preflight(executables, versions)
     emit('isolation', hostNet=host_net, testNet=namespace('net'), hostMount=host_mount, testMount=namespace('mnt'))
 
 
@@ -391,24 +524,302 @@ def kernel_cases(policy):
     probe(5432, True)
     emit('native-readback-failure', result='unavailable-then-read-repair')
 
-    # Reboot style empty kernel + compatible older Engine code, same durable format.
+    # Reboot reconstruction only; rollback is a separately pinned executable case.
     engine = reset(policy)
     r = request([entry(5432, 12)])
     apply(engine, r)
     for p in policy.ports:
         run('/usr/sbin/ipset', 'flush', f'cga{p}')
     rebooted = Engine(policy, STATE, Kernel(policy), boot=lambda: 'simulated-new-boot')
-    read(rebooted)
-    check(rebooted.load()['owners']['control']['sequence'] == 1, 'reboot/rollback decreased sequence')
-    check(Kernel(policy).read(5432)['8.8.8.2'] <= r['entries'][0]['expiresAt']-time.time(), 'reboot extended lifetime')
+    check(read(rebooted)['verdict'] == 'fresh_snapshot_required', 'preboot grants admitted without time continuity')
+    check(rebooted.load()['owners']['control']['sequence'] == 1, 'reboot decreased sequence')
+    apply(rebooted, r)
+    probe(5432, False)
+    apply(rebooted, request([entry(5432, 12)], 2))
+    probe(5432, True)
+    check(Kernel(policy).read(5432)['8.8.8.2'] <= rebooted.load()['owners']['control']['entries'][0]['expiresAt']-time.time(),
+          'fresh reboot snapshot extended native lifetime')
     # Inject only test-side clocks; kernel remains REAL. No host clock mutation.
-    back = Engine(policy, STATE, Kernel(policy), clock=lambda: time.time()-100)
+    back = Engine(policy, STATE, Kernel(policy), clock=lambda: time.time()-100, boot=lambda: 'simulated-new-boot')
     rejected(lambda: read(back))
     probe(5432, False)
-    forward = Engine(policy, STATE, Kernel(policy), clock=lambda: time.time()+700)
+    forward = Engine(policy, STATE, Kernel(policy), clock=lambda: time.time()+700, boot=lambda: 'simulated-new-boot')
     read(forward)
     probe(5432, False)
-    emit('reboot-compatible-rollback-clock', result='absolute-expiry-preserved;backward-fails-closed;forward-expires')
+    emit('reboot-clock', result='absolute-expiry-preserved;backward-fails-closed;forward-expires')
+
+
+def repair_fault_cases(policy):
+    """Actual kernel repair at every port, independent of desired/applied hash."""
+    engine = reset(policy)
+    body = request([entry(p, 90) for p in policy.ports])
+    apply(engine, body)
+    writes = []
+    class NoopKernel(Kernel):
+        def run(self, tool, *args, **kwargs):
+            if tool == 'ipset' and args[0] in ('create', 'flush', 'restore', 'swap'):
+                writes.append(args)
+            return super().run(tool, *args, **kwargs)
+    apply(Engine(policy, STATE, NoopKernel(policy)), body)
+    check(not writes, 'unchanged exact replay performed kernel writes')
+    emit('native-noop', result='same-input-exact-replay-zero-kernel-mutation')
+    for mode in ('read', 'exact-replay', 'reboot', 'backward-clock'):
+        for port in policy.ports:
+            for fault in ('SIGKILL', 'readback'):
+                engine = reset(policy)
+                r = request([entry(p, 90) for p in policy.ports])
+                apply(engine, r)
+                before = engine.load()['owners']
+                if mode not in ('backward-clock', 'reboot'):
+                    for p in policy.ports:
+                        run('/usr/sbin/ipset', 'flush', f'cga{p}')
+                check(not engine.load()['pending'], 'fixture did not start applied')
+                pid = os.fork()
+                if pid == 0:
+                    class RepairKernel(Kernel):
+                        def run(self, tool, *args, **kwargs):
+                            if tool == 'ipset' and args[0] in ('create', 'flush', 'restore', 'swap', 'add', 'del'):
+                                check(json.loads((STATE/'checkpoint.json').read_bytes())['pending'],
+                                      'repair mutation preceded durable pending')
+                            return super().run(tool, *args, **kwargs)
+                        def swapped(self, swapped_port):
+                            self.fence()
+                            probe(8080, False)
+                            if swapped_port == port:
+                                if fault == 'SIGKILL':
+                                    os.kill(os.getpid(), signal.SIGKILL)
+                                if mode in ('backward-clock', 'reboot'):
+                                    self.run('ipset', 'add', f'cga{port}', '8.8.8.2', 'timeout', '30')
+                                else:
+                                    self.run('ipset', 'del', f'cga{port}', '8.8.8.2')
+                    options = {'boot': lambda: 'reboot-repair'} if mode == 'reboot' else {}
+                    if mode == 'backward-clock':
+                        options['clock'] = lambda: time.time()-100
+                    broken = Engine(policy, STATE, RepairKernel(policy), **options)
+                    try:
+                        apply(broken, r) if mode == 'exact-replay' else read(broken)
+                    except Rejected as exc:
+                        # A clock refusal alone is NOT a readback-fault observation.
+                        os._exit(77 if str(exc) == 'kernel_readback_failed' else 78)
+                    except BaseException:
+                        os._exit(79)
+                    os._exit(80)
+                _, status = os.waitpid(pid, 0)
+                expected = -signal.SIGKILL if fault == 'SIGKILL' else 77
+                check(os.waitstatus_to_exitcode(status) == expected, 'native repair fault never executed')
+                state = engine.load()
+                check(state['pending'] and state['owners'] == before, 'repair lost pending or changed owner sequence/expiry')
+                Kernel(policy).fence()
+                probe(8080, False)
+                recovery = Engine(policy, STATE, Kernel(policy), boot=lambda: 'reboot-repair') if mode == 'reboot' else engine
+                response = read(recovery)
+                check(not engine.load()['pending'] and engine.load()['owners'] == before, 'repair did not complete readback')
+                if mode == 'reboot':
+                    check(response['verdict'] == 'fresh_snapshot_required', 'preboot state was admitted')
+                    apply(recovery, r)
+                    for p in policy.ports:
+                        probe(p, False)
+                    apply(recovery, request([entry(p, 90) for p in policy.ports], 2))
+                for p in policy.ports:
+                    probe(p, True)
+                emit('native-repair-fault', mode=mode, port=port, fault=fault,
+                     result='durable-pending-before-mutation;owner-state-preserved;read-repair')
+
+
+def fsync_fault_cases(policy):
+    """Fault real file/directory sync boundaries while using the actual Kernel."""
+    from unittest.mock import patch
+    for phase in ('new-apply', 'same-hash-repair', 'backward-clear', 'applied-mark'):
+        for boundary in ('file', 'directory'):
+            engine = reset(policy)
+            r = request([entry(p, 90) for p in policy.ports])
+            apply(engine, r)
+            old = engine.load()
+            if phase == 'same-hash-repair':
+                for port in policy.ports:
+                    run('/usr/sbin/ipset', 'flush', f'cga{port}')
+            observed = {port: Kernel(policy).read(port) for port in policy.ports}
+            real_fsync = os.fsync
+            injected = [False]
+            def fail_once(fd):
+                directory = stat.S_ISDIR(os.fstat(fd).st_mode)
+                current = json.loads((STATE/'checkpoint.json').read_bytes())
+                # Applied-mark faults happen only after all native readbacks;
+                # distinguish that save from the earlier pending barrier.
+                final_mark = phase == 'applied-mark' and not engine_state[0]['pending']
+                eligible = final_mark if phase == 'applied-mark' else True
+                if eligible and not injected[0] and directory == (boundary == 'directory'):
+                    injected[0] = True
+                    raise OSError('injected native '+boundary+' fsync failure')
+                return real_fsync(fd)
+            engine_state = [None]
+            class ObservedEngine(Engine):
+                def save(self, state):
+                    engine_state[0] = state
+                    super().save(state)
+            options = {'clock': lambda: time.time()-100} if phase == 'backward-clear' else {}
+            faulty = ObservedEngine(policy, STATE, Kernel(policy), **options)
+            if phase == 'applied-mark':
+                for port in policy.ports:
+                    run('/usr/sbin/ipset', 'flush', f'cga{port}')
+            try:
+                with patch('admission.os.fsync', side_effect=fail_once):
+                    apply(faulty, request([entry(p, 95) for p in policy.ports], 2)) if phase == 'new-apply' else read(faulty)
+            except OSError:
+                pass
+            else:
+                raise AssertionError('native fsync fault returned applied')
+            check(injected[0], 'native fsync boundary was not reached')
+            state = engine.load()
+            if phase != 'applied-mark':
+                # No active set may change before a successful durable barrier.
+                after = {port: Kernel(policy).read(port) for port in policy.ports}
+                check(all(set(after[p]) == set(observed[p]) for p in policy.ports), 'fsync refusal mutated active sets')
+                if boundary == 'file' and phase == 'new-apply':
+                    check(state['owners'] == old['owners'], 'pre-rename fsync advanced sequence')
+            if phase == 'applied-mark' or boundary == 'directory':
+                check(state['pending'], 'fsync failure falsely retired pending')
+            Kernel(policy).fence()
+            probe(8080, False)
+            read(engine)
+            check(not engine.load()['pending'], 'fsync fault repair pending remained')
+            for owner, value in state['owners'].items():
+                check(engine.load()['owners'][owner] == value, 'fsync repair changed absolute expiry/sequence')
+            emit('native-fsync-fault', phase=phase, boundary=boundary,
+                 result='unavailable;no-premature-kernel-write;durable-state-repaired')
+
+
+def compatible_manifest_rollback_case(policy):
+    """Execute TWO independently pinned packages through one private active link.
+
+    The reference artifact is new test machinery, not a claimed historical
+    production release. Its eager pending algorithm differs from current code.
+    Both versions use the real entrypoint, same durable state and actual Kernel.
+    """
+    reference = BASE/'fixtures/compatible-v1'
+    pinned = json.loads((reference/'manifest.json').read_bytes())
+    check(hashlib.sha256((reference/'admission.py').read_bytes()).hexdigest() == pinned['admissionSha256'],
+          'compatible artifact differs from committed version pin')
+    check(pinned['helperVersion'] == 'h1-compatible-v1-reference' and pinned['checkpointVersion'] == 1,
+          'incompatible rollback artifact')
+    (CONFIG/'policy.json').write_bytes(canonical(policy.value))
+    (CONFIG/'policy.json').chmod(0o600)
+    releases = ROOT/'releases'
+    releases.mkdir(mode=0o700)
+    manifests = {}
+    for name in ('current', 'compatible-v1'):
+        release = releases/name
+        release.mkdir(mode=0o700)
+        digests = {}
+        for module in ('entrypoint.py', 'wrapper.py', 'admission.py', 'kernel.py'):
+            origin = reference/module if name == 'compatible-v1' and module == 'admission.py' else BASE/module
+            data = origin.read_bytes()
+            (release/module).write_bytes(data)
+            (release/module).chmod(0o600)
+            digests[module] = hashlib.sha256(data).hexdigest()
+            expected = pinned['admissionSha256'] if name == 'compatible-v1' and module == 'admission.py' else IDENTITY['fileDigests'][module]
+            check(digests[module] == expected, 'release module pin mismatch')
+        raw = canonical({'sourceSha': IDENTITY['sourceSha'], 'files': digests, 'helperVersion': name})
+        (release/'source.json').write_bytes(raw)
+        (release/'source.json').chmod(0o600)
+        manifests[name] = hashlib.sha256(raw).hexdigest()
+    check(manifests['current'] != manifests['compatible-v1'], 'rollback packages not distinct')
+    active = releases/'active'
+    def select_release(name):
+        temporary = releases/'next'
+        temporary.symlink_to(releases/name)
+        os.replace(temporary, active)
+    def invoke(body):
+        child = subprocess.run(['/usr/bin/python3', '-I', str(active.resolve()/'entrypoint.py')],
+                               input=canonical(body), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=14)
+        check(child.returncode == 0, 'selected helper failed: '+child.stdout.decode(errors='replace')[:512])
+        value = json.loads(child.stdout)
+        check(value['manifestDigest'] == manifests[active.resolve().name], 'wrong helper executed')
+        return value
+    reset(policy)
+    r = request([entry(p, 90) for p in policy.ports])
+    select_release('current')
+    check(invoke(r)['sequence'] == 1, 'current helper initial commit')
+    engine = Engine(policy, STATE, Kernel(policy))
+    original = engine.load()['owners']
+    select_release('compatible-v1')
+    # Force REAL repair by the separately loaded reference implementation.
+    for port in policy.ports:
+        run('/usr/sbin/ipset', 'flush', f'cga{port}')
+    check(invoke(r)['sequence'] == 1, 'compatible exact replay advanced sequence')
+    for port in policy.ports:
+        observed = Kernel(policy).read(port)
+        check('8.8.8.2' in observed and observed['8.8.8.2'] <= r['entries'][0]['expiresAt']-time.time(),
+              'compatible rollback extended absolute expiry')
+        probe(port, True)
+    Kernel(policy).fence()
+    probe(8080, False)
+    check(engine.load()['owners'] == original and not engine.load()['pending'], 'rollback changed sequence/expiry')
+    select_release('current')
+    check(invoke(r)['sequence'] == 1 and engine.load()['owners'] == original, 'forward restore changed owner state')
+    emit('compatible-manifest-rollback', helperVersion=pinned['helperVersion'],
+         referenceManifestDigest=hashlib.sha256((reference/'manifest.json').read_bytes()).hexdigest(),
+         transitionedManifests=manifests, result='current-to-pinned-reference-to-current;actual-repair;sequence-and-expiry-preserved',
+         limitation='New explicit compatible reference fixture; no historical production release or real-host cutover claimed')
+
+
+def source_trust_cases(policy):
+    """Root-owned sandbox counterexamples must refuse before ANY sibling effect."""
+    package = ROOT/'trust-package'
+    package.mkdir(mode=0o700)
+    marker = ROOT/'UNTRUSTED_IMPORT_EXECUTED'
+    evil = ROOT/'untrusted.py'
+    evil.write_text('from pathlib import Path;Path('+repr(str(marker))+').touch()')
+    for name in ('entrypoint.py', 'wrapper.py', 'admission.py', 'kernel.py'):
+        (package/name).write_bytes((BASE/name).read_bytes())
+        (package/name).chmod(0o600)
+    raw = canonical({'sourceSha': IDENTITY['sourceSha'], 'files': {
+        name: IDENTITY['fileDigests'][name] for name in ('entrypoint.py', 'wrapper.py', 'admission.py', 'kernel.py')}})
+    (package/'source.json').write_bytes(raw)
+    for fault in ('symlink', 'digest'):
+        (package/'kernel.py').unlink()
+        if fault == 'symlink':
+            (package/'kernel.py').symlink_to(evil)
+        else:
+            (package/'kernel.py').write_bytes(evil.read_bytes())
+        for name in ('wrapper.py', 'entrypoint.py'):
+            child = subprocess.run(['/usr/bin/python3', '-I', str(package/name)], input=b'{}',
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3)
+            check(child.returncode != 0 and not marker.exists(), 'untrusted sibling executed before refusal')
+    # An unmanifested sibling named like a stdlib module must never be imported.
+    (package/'kernel.py').write_bytes((BASE/'kernel.py').read_bytes())
+    (package/'ctypes.py').write_bytes(evil.read_bytes())
+    body = canonical({'version':1, 'operation':'read', 'writerEpoch':'epoch-control'})
+    child = subprocess.run(['/usr/bin/python3', '-I', str(package/'entrypoint.py')], input=body,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=14)
+    check(child.returncode == 0 and not marker.exists(), 'sibling search path admitted unmanifested code')
+    emit('source-trust', result='root-owned-fixture;symlink/digest-denied-before-effect;unmanifested-stdlib-shadow-never-imported')
+
+
+def reboot_backward_expired_case(policy):
+    engine = reset(policy)
+    r = request([entry(5432, 6)])
+    apply(engine, r)
+    history = engine.load()['owners']
+    saved_wall = engine.load()['wall']
+    probe(5432, True)
+    time.sleep(max(0, r['entries'][0]['expiresAt']-time.time()+.2))
+    probe(5432, False)
+    # Old absolute expiry looks FUTURE to this unsynced wall, which is still
+    # ABOVE the saved wall. Different boot invalidates persisted grants anyway.
+    rebooted = Engine(policy, STATE, Kernel(policy), boot=lambda:'unsynced-new-boot',
+                      clock=lambda:saved_wall+1, monotonic=lambda:1)
+    response = read(rebooted)
+    check(response['verdict'] == 'fresh_snapshot_required', 'combined reboot/clock counterexample admitted')
+    apply(rebooted, r)
+    probe(5432, False)
+    check(engine.load()['owners'] == history and not engine.load()['pending'], 'expired replay changed history')
+    synced = Engine(policy, STATE, Kernel(policy), boot=lambda:'unsynced-new-boot')
+    read(synced)
+    apply(synced, request([entry(5435, 12)], 2))
+    probe(5435, True)
+    probe(5432, False)
+    emit('reboot-backward-expired-replay', result='no-preboot-revival;CAS-history-preserved;fresh-post-read-N+1-required')
 
 
 def ssh_cases(policy):
@@ -592,6 +1003,10 @@ def process_cases(policy):
     (private/'kernel.py').write_bytes((BASE/'kernel.py').read_bytes())
     (private/'admission.py').write_bytes((BASE/'admission.py').read_bytes())
     (private/'entrypoint.py').write_text('import time\ntime.sleep(60)\n')
+    digest_map = {name: hashlib.sha256((private/name).read_bytes()).hexdigest()
+                  for name in ('wrapper.py', 'entrypoint.py', 'admission.py', 'kernel.py')}
+    (private/'source.json').write_bytes(canonical({'sourceSha': IDENTITY['sourceSha'], 'files': digest_map}))
+
     start = time.monotonic()
     child = subprocess.Popen(['/usr/bin/python3', '-I', str(private/'wrapper.py')], stdin=subprocess.DEVNULL)
     PROCESSES.append(child)
@@ -608,17 +1023,20 @@ def process_cases(policy):
             def __init__(self, *args):
                 pass
             def execute(self, *args):
+                (ROOT/'deadline-execute-entered').write_text('entered')
                 time.sleep(60)
-        module.Engine = Hung
+        sys.argv = [str(BASE/'entrypoint.py')]
+        module.perform = Hung().execute
         r,w=os.pipe();os.write(w,canonical({'version':1,'operation':'read','writerEpoch':'epoch-control'}));os.close(w)
         os.dup2(r,0);os.close(r)
         try:
             module.main()
-        except Rejected as exc:
+        except module.Rejected as exc:
             os._exit(77 if str(exc) == 'operation_interrupted' else 78)
         os._exit(79)
     start = time.monotonic()
     _,status = os.waitpid(pid,0)
+    check((ROOT/'deadline-execute-entered').read_text() == 'entered', 'deadline test bypassed execute')
     check(os.waitstatus_to_exitcode(status) == 77 and 11 <= time.monotonic()-start < 14, '12s operation deadline')
     emit('process-bounds', result='1s-child;output-cap;SIGTERM;SIGKILL;12s-operation;20s-watchdog-plus-2s-grace')
 
@@ -633,6 +1051,11 @@ def worker():
     try:
         setup_network(policy)
         kernel_cases(policy)
+        repair_fault_cases(policy)
+        fsync_fault_cases(policy)
+        compatible_manifest_rollback_case(policy)
+        source_trust_cases(policy)
+        reboot_backward_expired_case(policy)
         ssh_cases(policy)
         process_cases(policy)
     finally:

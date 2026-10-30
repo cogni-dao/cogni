@@ -1,0 +1,7 @@
+{
+  "admissionSha256": "f1cfed497dbe489dabb4a5c46126eeaabb4dd8a6a032d4e801231d6b740f970f",
+  "checkpointVersion": 1,
+  "helperVersion": "h1-compatible-v1-reference",
+  "origin": "NEW test-only reference artifact; conservative eager repair barrier with boot fencing; not a previously deployed release",
+  "sourceBase": "99a3ea86c5d0a302ed8dcafdcebc5df52c097333"
+}

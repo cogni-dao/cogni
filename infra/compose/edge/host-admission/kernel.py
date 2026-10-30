@@ -131,13 +131,14 @@ class Kernel:
     def swapped(self, port):
         """Test subclass seam only; never selected by the production entrypoint."""
 
-    def reconcile(self, union):
+    def reconcile(self, union, before_mutation=lambda: None):
         self.fence()
         for port in self.policy.ports:
             entries = union[port]
             if self.matches(entries, self.read(port), time.time()):
                 continue
             # A fixed compatible scratch set per port; lock serializes its use.
+            before_mutation()
             scratch = f'cgat{port}'
             self.run('ipset', 'create', scratch, 'hash:ip', 'family', 'inet',
                      'timeout', '600', 'maxelem', str(CAPACITY), '-exist')
