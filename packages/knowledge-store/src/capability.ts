@@ -13,7 +13,6 @@
  * @public
  */
 
-import { toKnowledgeRow as toEntry } from "@cogni/shared-knowledge-store";
 import type {
   GoverningIndexEntry,
   KnowledgeCapability,
@@ -22,6 +21,7 @@ import type {
   KnowledgeSearchParams,
   KnowledgeWriteParams,
 } from "@cogni/ai-tools";
+import { toKnowledgeRow as toEntry } from "@cogni/shared-knowledge-store";
 import { initializeConfidence } from "./domain/confidence-policy.js";
 import {
   type KnowledgeGate,
@@ -31,7 +31,6 @@ import {
 } from "./domain/gates/index.js";
 import { KnowledgeWriteConflictError } from "./domain/write-replay.js";
 import type { KnowledgeStorePort } from "./port/knowledge-store.port.js";
-
 
 export interface KnowledgeCapabilityOptions {
   /**

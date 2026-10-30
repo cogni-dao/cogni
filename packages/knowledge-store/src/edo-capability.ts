@@ -14,7 +14,6 @@
  * @public
  */
 
-import { toKnowledgeRow as toEntry } from "@cogni/shared-knowledge-store";
 import type {
   ChainNodeEntry,
   DecideParams,
@@ -26,11 +25,11 @@ import type {
   RecordOutcomeParams,
   RecordOutcomeResult,
 } from "@cogni/ai-tools";
+import { toKnowledgeRow as toEntry } from "@cogni/shared-knowledge-store";
 import { initializeConfidence } from "./domain/confidence-policy.js";
 import { assertCitationReplay } from "./domain/write-replay.js";
 import type { EdoResolverPort } from "./port/edo-resolver.port.js";
 import type { KnowledgeStorePort } from "./port/knowledge-store.port.js";
-
 
 /**
  * Create an EdoCapability backed by KnowledgeStorePort + EdoResolverPort.

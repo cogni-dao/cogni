@@ -13,8 +13,8 @@
  * @public
  */
 
-import { toKnowledgeRow } from "@cogni/shared-knowledge-store";
 import { KnowledgeRowSchema } from "@cogni/node-contracts";
+import { toKnowledgeRow } from "@cogni/shared-knowledge-store";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
@@ -56,8 +56,6 @@ export const GET = wrapRouteHandlerWithLogging<{
 
     ctx.log.info({ id }, "knowledge.get_success");
 
-    return NextResponse.json(
-      KnowledgeRowSchema.parse(toKnowledgeRow(entry))
-    );
+    return NextResponse.json(KnowledgeRowSchema.parse(toKnowledgeRow(entry)));
   }
 );

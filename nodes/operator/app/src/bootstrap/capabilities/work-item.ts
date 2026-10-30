@@ -79,7 +79,12 @@ function toWorkItemInfo(item: WorkItem): WorkItemInfo {
     ...dto,
     assignees: dto.assignees.map((a) => ({
       kind: a.kind,
-      id: a.kind === "user" ? a.userId : a.kind === "agent" ? a.agentId : a.serviceId,
+      id:
+        a.kind === "user"
+          ? a.userId
+          : a.kind === "agent"
+            ? a.agentId
+            : a.serviceId,
     })),
   };
 }

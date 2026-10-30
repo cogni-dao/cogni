@@ -54,11 +54,12 @@ export function createWorkItemReadImplementation(deps: {
         throw new Error(
           "work_source_unavailable: exact item missing or ambiguous"
         );
-      const item = WorkItemOutputSchema.parse(items[0]);
-      if (!Number.isSafeInteger(item.revision))
+      const source = items[0];
+      if (!Number.isSafeInteger(source.revision))
         throw new Error(
           "work_source_revision_unavailable: exact item has no numeric revision"
         );
+      const item = WorkItemOutputSchema.parse(source);
       if (new TextEncoder().encode(JSON.stringify(item)).length > 65536)
         throw new Error(
           "work_source_incomplete: item exceeds complete-read budget"

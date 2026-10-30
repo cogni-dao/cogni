@@ -14,14 +14,14 @@
  */
 
 export type {
-  EdoSourceType,
-  HypothesizeParams,
+  ChainDirection,
+  ChainNodeEntry,
   DecideParams,
+  EdoCapability,
+  EdoSourceType,
+  GetChainParams,
+  GetChainResult,
+  HypothesizeParams,
   RecordOutcomeParams,
   RecordOutcomeResult,
-  ChainDirection,
-  GetChainParams,
-  ChainNodeEntry,
-  GetChainResult,
-  EdoCapability,
 } from "@cogni/shared-knowledge-store/contracts";

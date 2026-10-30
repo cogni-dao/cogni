@@ -18,7 +18,10 @@
  * @internal
  */
 
-import { createWorkItemReadImplementation } from "@cogni/ai-tools";
+import {
+  createWorkItemReadImplementation,
+  WorkItemQueryOutputSchema,
+} from "@cogni/ai-tools";
 import {
   createWorkItemQueryImplementation,
   WorkItemPatchConflictError,
@@ -29,6 +32,7 @@ import type {
   WorkItemId,
   WorkItemQueryPort,
 } from "@cogni/work-items";
+import { WorkItemDtoSchema } from "@cogni/work-items";
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { describe, expect, it, vi } from "vitest";
 
@@ -86,6 +90,10 @@ describe("createWorkItemCapability", () => {
     });
 
     const result = await cap.query({ statuses: ["needs_implement"], limit: 5 });
+    const outputFields = WorkItemQueryOutputSchema.shape.items.element.shape;
+    for (const field of Object.keys(WorkItemDtoSchema.shape)) {
+      expect(outputFields).toHaveProperty(field);
+    }
 
     expect(backlogReader.list).toHaveBeenCalledWith({
       statuses: ["needs_implement"],

@@ -26,7 +26,9 @@
   "dependencies": {
     "@cogni/ai-core": "workspace:*",
     "@types/json-schema": "^7.0.15",
-    "zod": "^4.1.12"
+    "zod": "^4.1.12",
+    "@cogni/shared-knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz",
+    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

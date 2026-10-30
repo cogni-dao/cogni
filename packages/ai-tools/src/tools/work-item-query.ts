@@ -16,6 +16,7 @@
  * @public
  */
 
+import { WorkItemDtoSchema } from "@cogni/work-items";
 import { z } from "zod";
 
 import type {
@@ -86,33 +87,12 @@ export const WorkItemQueryInputSchema = z.object({
 });
 export type WorkItemQueryInput = z.infer<typeof WorkItemQueryInputSchema>;
 
-export const WorkItemOutputSchema = z.object({
-  id: z.string(),
-  type: z.string(),
-  title: z.string(),
-  status: z.string(),
-  actor: z.string().optional(),
-  priority: z.number().optional(),
-  rank: z.number().optional(),
-  summary: z.string().optional(),
-  projectId: z.string().optional(),
-  labels: z.array(z.string()),
-  assignees: z.array(z.object({ kind: z.string(), id: z.string() })),
-  branch: z.string().optional(),
-  pr: z.string().optional(),
-  blockedBy: z.string().optional(),
-  updatedAt: z.string(),
-  // Additive, optional (backward compatible) — fields a planner needs to cite
-  // an exact item state and reason about scope.
-  revision: z.number().optional(),
-  outcome: z.string().optional(),
-  estimate: z.number().optional(),
-  /** Do-it-now scores (story.5111): axis id → { v: 0–5, ev?: opaque evidence link }. */
-  scores: z
-    .record(z.string(), z.object({ v: z.number(), ev: z.string().optional() }))
-    .optional(),
-  parentId: z.string().optional(),
-  specRefs: z.array(z.string()).optional(),
+export const WorkItemOutputSchema = WorkItemDtoSchema.extend({
+  assignees: z.array(
+    WorkItemDtoSchema.shape.assignees.element.and(
+      z.object({ id: z.string().optional() })
+    )
+  ),
 });
 
 /** Max characters of `outcome` returned per item (keeps backlog pages bounded). */
@@ -219,24 +199,17 @@ export function createWorkItemQueryImplementation(
 
       return {
         items: items.map((item) => ({
-          id: item.id,
-          type: item.type,
-          title: item.title,
-          status: item.status,
-          actor: item.actor,
-          priority: item.priority,
-          rank: item.rank,
+          ...item,
           summary: truncate(item.summary, WORK_ITEM_QUERY_SUMMARY_MAX_CHARS),
-          projectId: item.projectId,
           labels: [...item.labels],
-          assignees: item.assignees.map((a) => ({
-            kind: a.kind,
-            id: a.id,
-          })),
-          branch: item.branch,
-          pr: item.pr,
-          blockedBy: item.blockedBy,
-          updatedAt: item.updatedAt,
+          assignees: item.assignees.map((a) => {
+            if (!("id" in a)) return { ...a };
+            return a.kind === "user"
+              ? { ...a, kind: "user" as const, userId: a.id }
+              : a.kind === "agent"
+                ? { ...a, kind: "agent" as const, agentId: a.id }
+                : { ...a, kind: "system" as const, serviceId: a.id };
+          }),
           ...(item.revision !== undefined && { revision: item.revision }),
           ...(item.outcome !== undefined && {
             outcome: truncate(item.outcome, WORK_ITEM_QUERY_OUTCOME_MAX_CHARS),

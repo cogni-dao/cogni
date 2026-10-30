@@ -31,7 +31,11 @@ export const KnowledgeListQuerySchema = z.object({
 export type KnowledgeListQuery = z.infer<typeof KnowledgeListQuerySchema>;
 
 import { KnowledgeRowSchema } from "@cogni/shared-knowledge-store/contracts";
-export { KnowledgeRowSchema, type KnowledgeRow } from "@cogni/shared-knowledge-store/contracts";
+
+export {
+  type KnowledgeRow,
+  KnowledgeRowSchema,
+} from "@cogni/shared-knowledge-store/contracts";
 
 export const KnowledgeListResponseSchema = z.object({
   items: z.array(KnowledgeRowSchema),
