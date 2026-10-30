@@ -53,10 +53,9 @@ not certify inference, billing, persistence, or agent quality. `dev:stack` start
 and infrastructure; LangGraph dev still needs its own terminal.
 
 Then edit a graph, watch LangGraph dev re-register it on save, and run it — no restart. The
-startup and authenticated execution recipe is the
-[portable guide replacement awaiting review](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-32ab8994).
-Until it is merged, use these checkout commands and the
-[API validation guide](docs/guides/agent-api-validation.md).
+startup and authenticated execution recipe is the merged
+[local development guide](https://cognidao.org/knowledge/local-agent-development).
+The [API validation guide](docs/guides/agent-api-validation.md) owns route exercises.
 Nodes forked from node-template run against this same local substrate; see their own README.
 
 [PolyForm Shield license](LICENSE.md)

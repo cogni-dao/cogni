@@ -67,8 +67,8 @@ pnpm check:docs
 Worktree setup prepares dependencies and cognition; it does not start the app or graph
 server. Follow this checkout's [README](../../README.md) for local startup and the
 [API validation guide](agent-api-validation.md) for authenticated route proof. The
-[portable guide replacement](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-32ab8994)
-is pending human review. Use the node's own environment example and commands.
+[merged local development guide](https://cognidao.org/knowledge/local-agent-development)
+owns the shared startup journey. Use the node's own environment example and commands.
 
 ## Why Package Declarations Are Required
 

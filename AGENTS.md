@@ -53,4 +53,4 @@ Pointers: [code delivery](.agents/skills/contribute-to-cogni/SKILL.md) ·
 [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) ·
 [discovery](https://cognidao.org/.well-known/agent.json)
 
-Local development: use the target node's [README](README.md), environment example, and current discovery/contracts. The [API validation guide](docs/guides/agent-api-validation.md) owns route exercises. The [portable startup guide replacement](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-32ab8994) awaits human review; the conflicted prior inbox is closed.
+Local development: use the target node's [README](README.md), environment example, and current discovery/contracts. The [API validation guide](docs/guides/agent-api-validation.md) owns route exercises. The merged [portable local development guide](https://cognidao.org/knowledge/local-agent-development) owns the shared startup and agent-iteration journey.

@@ -19,10 +19,9 @@ coordination, sovereign lease releases and graph catalogs differ by node and ver
 Do not treat an old payload or a successful HTTP status as proof of the whole flow.
 
 For local startup, use that checkout's README and environment example. The
-[portable startup and iteration guide replacement](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-32ab8994)
-awaits human review; the old conflicted inbox is closed. This repository guide remains
-usable while that review is pending. It owns route exercises, not the full shipping
-lifecycle or proof that a model's answer is useful.
+merged [local development guide](https://cognidao.org/knowledge/local-agent-development)
+owns the shared startup and iteration journey. This repository guide owns route
+exercises, not the full shipping lifecycle or proof that a model's answer is useful.
 
 Before candidate validation, load
 [validate-candidate](https://cognidao.org/knowledge/validate-candidate). For an agent
