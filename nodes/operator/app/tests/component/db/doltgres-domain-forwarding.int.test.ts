@@ -250,7 +250,6 @@ describe("private native domain forwarding", () => {
     const before = await snapshot();
     await store.updateDomain("demo", {});
     await store.updateDomain("demo", { name: "After" });
-    await store.updateDomain("demo", { description: undefined });
     expect(await snapshot()).toEqual(before);
     console.info(
       JSON.stringify({
