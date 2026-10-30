@@ -242,6 +242,7 @@ def outer():
     worker_error = None
     preservation_error = None
     total = bytearray()
+    progress = set()
     deadline = time.monotonic()+180
     try:
         while True:
@@ -254,6 +255,16 @@ def outer():
             if not chunk:
                 break
             total.extend(chunk)
+            for line in total.decode(errors='replace').splitlines():
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                phase = row.get('operation')
+                if phase in ('private-setup-start', 'native-preflight') and phase not in progress:
+                    check(row.get('sourceSha') == IDENTITY['sourceSha'] and row.get('runId') == IDENTITY['runId'], 'progress identity')
+                    progress.add(phase)
+                    emit('suite-progress', 'observed', phase=phase)
             if len(total) > 262144:
                 raise RuntimeError('bounded selftest output exceeded')
         result = child.wait(timeout=2)
@@ -361,6 +372,9 @@ def private_filesystem(host_net, host_mount):
     check(Path('/proc/1/ns/net').readlink() == Path('/proc/self/ns/net').readlink(), 'private PID/proc binding')
     links, executables, versions = executable_closure()
     run('/usr/bin/mount', '--make-rprivate', '/')
+    emit('private-setup-start', 'observed')
+    # Give the native cancellation observer a bounded partial-setup window.
+    time.sleep(.25)
     for path in ('/run', '/etc', '/var/lib', '/var/log', '/root', '/tmp'):
         run('/usr/bin/mount', '-t', 'tmpfs', '-o', 'mode=755', 'h1-private', path)
         if path == '/etc':
@@ -470,6 +484,125 @@ def reset(policy):
     kernel = Kernel(policy)
     kernel.reconcile({p: {} for p in policy.ports})
     return Engine(policy, STATE, kernel)
+
+
+def fence_order_case(policy):
+    engine = reset(policy)
+    body = request([entry()])
+    apply(engine, body)
+    rules = fence_rules(policy)
+    # Only this already-asserted private net namespace is modified.
+    try:
+        run('/usr/sbin/iptables', '-F', 'CGADMIT')
+        for rule in (rules[1], rules[0], *rules[2:]):
+            run('/usr/sbin/iptables', '-A', 'CGADMIT', *rule)
+        for action in (lambda: read(engine), lambda: apply(engine, body)):
+            rejected(action)
+            check(engine.load()['pending'], 'reordered fence retired pending')
+        probe(5435, False)
+    finally:
+        run('/usr/sbin/iptables', '-F', 'CGADMIT')
+        for rule in rules:
+            run('/usr/sbin/iptables', '-A', 'CGADMIT', *rule)
+    read(engine)
+    check(not engine.load()['pending'], 'restored sandbox fence did not repair')
+    probe(5435, True)
+    emit('ordered-fence-negative', result='drop-before-accept-unavailable;pending-retained;restored')
+
+
+def delivery_cancellation_cases():
+    """Kill the actual delivery PID1 while its real suite reaches each phase."""
+    global IDENTITY
+    IDENTITY = source_identity()
+    import runpy
+    delivery = runpy.run_path(str(BASE/'test_delivery.py'))
+    delivery_root = delivery['ROOT']
+    def descendants(pid):
+        found = []
+        try:
+            children = Path(f'/proc/{pid}/task/{pid}/children').read_text().split()
+        except FileNotFoundError:
+            return found
+        for child in children:
+            found.append(int(child))
+            found.extend(descendants(int(child)))
+        return found
+    for phase in ('private-setup-start', 'native-preflight'):
+        before = host_snapshot()
+        sources = sorted(str(p) for p in (delivery_root/'runs').iterdir())
+        # Test-side Python call runs the SAME private delivery/stage/Popen chain,
+        # omitting only recursive cancellation instrumentation. No dummy suite.
+        argv = delivery['namespace_argv']()
+        code = ("import runpy,sys;sys.argv=["+repr(str(delivery_root/'test_delivery.py'))+",'--private'];"
+                "m=runpy.run_path(sys.argv[0]);m['private_main'](False)")
+        argv = argv[:-2]+['-c', code]
+        child = subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, start_new_session=True,
+                                 preexec_fn=lambda parent=os.getpid(): die_with_parent(parent))
+        data = bytearray()
+        killed = False
+        try:
+            deadline = time.monotonic()+20
+            while time.monotonic() < deadline:
+                if not select.select([child.stdout], [], [], .1)[0]:
+                    continue
+                chunk = os.read(child.stdout.fileno(), 4096)
+                check(bool(chunk), 'delivery exited before cancellation phase')
+                data.extend(chunk)
+                check(len(data) < 262144, 'cancellation output bound')
+                rows = []
+                for line in data.decode(errors='replace').splitlines():
+                    try:
+                        rows.append(json.loads(line))
+                    except ValueError:
+                        pass
+                if any(row.get('operation') == 'suite-progress' and row.get('phase') == phase for row in rows):
+                    tree = descendants(child.pid)
+                    check(bool(tree), 'delivery namespace PID1 missing')
+                    delivery_pid = tree[0]
+                    workers = []
+                    for pid in tree:
+                        try:
+                            args = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+                            if args[0] == b'/usr/bin/python3' and b'--worker' in args:
+                                workers.append(pid)
+                        except FileNotFoundError:
+                            pass
+                    check(len(workers) == 1, 'actual suite worker not identified')
+                    ready = Path(f'/proc/{workers[0]}/root/run/h1').exists()
+                    check(ready == (phase == 'native-preflight'), 'cancellation missed actual setup/native phase')
+                    start = time.monotonic()
+                    os.kill(delivery_pid, signal.SIGKILL)
+                    killed = True
+                    check(child.wait(timeout=2) != 0, 'killed delivery reported success')
+                    data.extend(child.communicate(timeout=2)[0])
+                    for pid in tree:
+                        status = Path(f'/proc/{pid}/stat')
+                        while status.exists():
+                            try:
+                                if status.read_text().split(') ', 1)[1].startswith('Z '):
+                                    break
+                            except FileNotFoundError:
+                                break
+                            check(time.monotonic()-start < 2, 'delivery descendant survived')
+                            time.sleep(.01)
+                    check(time.monotonic()-start < 2, 'delivery cancellation exceeded grace')
+                    break
+            check(killed, 'actual delivery phase not exercised')
+            for line in data.decode(errors='replace').splitlines():
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                check(not (row.get('operation') in ('suite', 'selftest') and row.get('verdict') == 'pass'), 'terminal PASS after failed delivery')
+            check(sorted(str(p) for p in (delivery_root/'runs').iterdir()) == sources, 'temporary source lifetime escaped mount namespace')
+            check(host_snapshot() == before, 'delivery cancellation changed original host state')
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=2)
+            child.stdout.close()
+        emit('delivery-cancellation', phase=phase, result='actual-delivery-SIGKILL;descendants-dead;no-terminal-pass;source-mount-released;host-preserved')
 
 
 def kernel_cases(policy):
@@ -1165,6 +1298,7 @@ def worker():
                      'owners': {owner: {'writerEpoch': 'epoch-'+owner, 'ports': PORTS} for owner in ('control', 'other')}})
     try:
         setup_network(policy)
+        fence_order_case(policy)
         kernel_cases(policy)
         repair_fault_cases(policy)
         fsync_fault_cases(policy)

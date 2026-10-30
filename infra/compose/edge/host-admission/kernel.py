@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import select
 import signal
+import shlex
 import subprocess
 import time
 from admission import CAPACITY, Rejected
@@ -98,10 +99,35 @@ class Kernel:
         text = self.run('iptables', '-w', '0', '-S', 'CGADMIT')
         lines = [line for line in text.splitlines() if line.startswith('-A ')]
         expected = fence_rules(self.policy)
-        if len(lines) != len(expected):
-            raise Rejected('fence_shape')
-        for args in expected:
-            self.run('iptables', '-w', '0', '-C', 'CGADMIT', *args)
+        def semantics(line):
+            fields = shlex.split(line)
+            if fields[:2] != ['-A', 'CGADMIT']:
+                raise Rejected('fence_shape')
+            fields = fields[2:]
+            groups = []
+            sizes = {'-i': 1, '-p': 1, '-m': 1, '--ctdir': 1,
+                     '--ctorigdst': 1, '--ctorigdstport': 1, '--match-set': 2, '-j': 1}
+            while fields:
+                option = fields.pop(0)
+                size = sizes.get(option)
+                if size is None or len(fields) < size:
+                    raise Rejected('fence_shape')
+                values, fields = fields[:size], fields[size:]
+                if option == '-m' and values == ['tcp']:
+                    # iptables may render the implicit TCP protocol module.
+                    if ('-m', 'tcp') in groups:
+                        raise Rejected('fence_shape')
+                    groups.append(('-m', 'tcp'))
+                    continue
+                if option == '--ctorigdst' and values == [self.policy.destination+'/32']:
+                    values = [self.policy.destination]
+                group = (option, *values)
+                if group in groups or (option != '-m' and any(g[0] == option for g in groups)):
+                    raise Rejected('fence_shape')
+                groups.append(group)
+            return sorted(g for g in groups if g != ('-m', 'tcp'))
+        if [semantics(line) for line in lines] != [semantics(shlex.join(['-A', 'CGADMIT', *args])) for args in expected]:
+            raise Rejected('fence_order_or_shape')
 
     def read(self, port):
         text = self.run('ipset', 'save', f'cga{port}')

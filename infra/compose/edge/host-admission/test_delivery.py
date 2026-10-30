@@ -67,7 +67,7 @@ def stage():
         if hashlib.sha256(data).hexdigest() != manifest['files'][name]:
             raise RuntimeError('delivery_digest:'+name)
     # Fresh directory; never reuse an earlier mutable archive or follow a link.
-    destination = Path(tempfile.mkdtemp(prefix='closure-', dir=ROOT))
+    destination = Path(tempfile.mkdtemp(prefix='closure-', dir=ROOT/'runs'))
     try:
         for name, data in {**closure, 'source.json': raw}.items():
             target = destination/name
@@ -102,7 +102,7 @@ def custody_cases(destination):
     """Harmless pre-setup falsifiers using real root custody and isolated Python."""
     import shutil
     import subprocess
-    probe = Path(tempfile.mkdtemp(prefix='custody-', dir=ROOT))
+    probe = Path(tempfile.mkdtemp(prefix='custody-', dir=ROOT/'runs'))
     marker = probe/'UNMANIFESTED_EFFECT'
     package = probe/'bundle'
     try:
@@ -124,10 +124,49 @@ def custody_cases(destination):
         shutil.rmtree(probe)
 
 
+def validate_bootstrap():
+    if os.geteuid() != 0 or Path(__file__).absolute() != ROOT/'test_delivery.py':
+        raise RuntimeError('fixed_test_delivery_boundary')
+    raw = read(ROOT/'source.json', True)
+    manifest = json.loads(raw)
+    if set(manifest) != {'sourceSha', 'files'} or set(manifest['files']) != set(FILES) or not re.fullmatch('[0-9a-f]{40}', manifest['sourceSha']):
+        raise RuntimeError('delivery_manifest')
+    if hashlib.sha256(read(ROOT/'test_delivery.py', True)).hexdigest() != manifest['files']['test_delivery.py']:
+        raise RuntimeError('delivery_bootstrap_digest')
+
+
 def main():
+    validate_bootstrap()
     if len(sys.argv) != 1 or os.geteuid() != 0 or Path(__file__).absolute() != ROOT/'test_delivery.py':
         raise RuntimeError('fixed_test_delivery_boundary')
+    # The kernel owns temporary source lifetime even if this PID is SIGKILLed.
+    # The original SSH process becomes unshare; --kill-child binds namespace PID1.
+    runs = ROOT/'runs'
+    runs.mkdir(mode=0o700, exist_ok=True)
+    trusted(runs, True)
+    os.execv('/usr/bin/unshare', namespace_argv())
+
+
+def namespace_argv():
+    return ['/usr/bin/unshare', '--mount', '--propagation', 'private', '--pid',
+            '--fork', '--mount-proc', '--kill-child=SIGKILL',
+            '/usr/bin/python3', '-I', str(ROOT/'test_delivery.py'), '--private']
+
+
+def private_main(cancellation_proof=True):
+    validate_bootstrap()
+    if os.getpid() != 1 or len(sys.argv) != 2 or sys.argv[1] != '--private':
+        raise RuntimeError('private_delivery_pid_namespace_required')
+    trusted(ROOT/'runs', True)
+    import subprocess
+    subprocess.run(['/usr/bin/mount', '-t', 'tmpfs', '-o', 'mode=700',
+                    'h1-test-source', str(ROOT/'runs')], check=True, timeout=2)
     destination = stage()
+    # Only verified source provides the existing checked parent-death mechanism.
+    import runpy
+    harness = runpy.run_path(str(destination/'integration_selftest.py'))
+    harness['load_verified_bundle']()
+    die_with_parent = sys.modules['kernel'].die_with_parent
     # Supervisor retains cleanup ownership even on cancellation or failed proof.
     import subprocess
     import shutil
@@ -139,7 +178,10 @@ def main():
         signal.signal(sig, cancel)
     try:
         custody_cases(destination)
-        child = subprocess.Popen(['/usr/bin/python3', '-I', str(destination/'integration_selftest.py')])
+        if cancellation_proof:
+            harness['delivery_cancellation_cases']()
+        child = subprocess.Popen(['/usr/bin/python3', '-I', str(destination/'integration_selftest.py')],
+                                 preexec_fn=lambda parent=os.getpid(): die_with_parent(parent))
         result = child.wait(timeout=185)
         if result:
             raise RuntimeError('isolated_test_failed:'+str(result))
@@ -155,4 +197,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:] == ['--private']:
+        private_main()
+    else:
+        main()

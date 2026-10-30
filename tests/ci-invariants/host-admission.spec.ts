@@ -131,7 +131,7 @@ class Tests(unittest.TestCase):
  def test_delivery_copies_nonroot_bytes_and_rejects_tampering(self):
   import test_delivery as d,hashlib,shutil
   from unittest.mock import patch
-  source=self.root/'archive';source.mkdir();target=self.root/'delivery';target.mkdir()
+  source=self.root/'archive';source.mkdir();target=self.root/'delivery';target.mkdir();(target/'runs').mkdir()
   closure={name:(pathlib.Path(sys.argv[1])/name).read_bytes() for name in d.FILES}
   for name,data in closure.items():
    f=source/name;f.parent.mkdir(parents=True,exist_ok=True);f.write_bytes(data)
@@ -145,7 +145,38 @@ class Tests(unittest.TestCase):
    self.assertEqual((staged/'source.json').read_text(),json.dumps(manifest))
    (source/'kernel.py').write_text('modified')
    with self.assertRaisesRegex(RuntimeError,'delivery_digest'):d.stage()
-   self.assertEqual(len(list(target.glob('closure-*'))),1)
+   self.assertEqual(len(list((target/'runs').glob('closure-*'))),1)
+ def test_delivery_suite_uses_checked_parent_death_and_namespace_lifetime(self):
+  import test_delivery as d,kernel,types,signal
+  from unittest.mock import patch,Mock
+  libc=types.SimpleNamespace(prctl=Mock(return_value=0))
+  child=types.SimpleNamespace(wait=lambda **kw:0,poll=lambda:0)
+  def launch(argv,**kwargs):
+   self.assertEqual(argv,['/usr/bin/python3','-I',str(self.root/'integration_selftest.py')])
+   kwargs['preexec_fn']()  # actual checked Linux binding, only libc is a seam
+   return child
+  with patch.object(d,'validate_bootstrap'),patch.object(d,'trusted'),patch.object(d,'stage',return_value=self.root),patch.object(d,'custody_cases'),patch.object(sys,'argv',['test_delivery.py','--private']),patch.object(os,'getpid',return_value=1),patch.object(os,'getppid',return_value=1),patch('subprocess.run'),patch('subprocess.Popen',side_effect=launch),patch('runpy.run_path',return_value={'load_verified_bundle':lambda:None}),patch('shutil.rmtree'),patch.object(kernel.ctypes,'CDLL',return_value=libc):
+   d.private_main(False)
+  libc.prctl.assert_called_once_with(1,signal.SIGKILL,0,0,0)
+  class DeadParent(Exception):pass
+  for result,parent in ((-1,42),(0,99)):
+   libc.prctl.return_value=result
+   with patch.object(kernel.ctypes,'CDLL',return_value=libc),patch.object(os,'getppid',return_value=parent),patch.object(os,'_exit',side_effect=DeadParent):
+    with self.assertRaises(DeadParent):kernel.die_with_parent(42)
+  argv=d.namespace_argv()
+  self.assertIn('--mount',argv);self.assertIn('--pid',argv);self.assertIn('--kill-child=SIGKILL',argv)
+ def test_fence_requires_exact_ordered_native_rules(self):
+  import kernel,shlex
+  expected=['-A CGADMIT '+shlex.join(row) for row in kernel.fence_rules(self.e.policy)]
+  class NativeListing(kernel.Kernel):
+   def run(self,tool,*args,**kwargs):
+    self_test.assertEqual(args[:3],('-w','0','-S'))
+    return {'DOCKER-USER':'-N DOCKER-USER\n-A DOCKER-USER -j CGADMIT','FORWARD':'-P FORWARD DROP\n-A FORWARD -j DOCKER-USER','CGADMIT':'\n'.join(self.lines)}[args[3]]
+  self_test=self;k=NativeListing(self.e.policy);k.lines=expected;k.fence()
+  k.lines=[line.replace('--ctorigdst 192.0.2.1','--ctorigdst 192.0.2.1/32').replace('-p tcp','-p tcp -m tcp') for line in expected];k.fence()
+  for lines in ([expected[1],expected[0],*expected[2:]],expected+[expected[0]],expected[:-1], [expected[0].replace('src','dst'),*expected[1:]], [expected[0]+' -j ACCEPT',*expected[1:]]):
+   k.lines=lines
+   with self.assertRaises(Rejected):k.fence()
  def test_kernel_wall_jump_never_extends_accepted_lifetime(self):
   import kernel
   from unittest.mock import patch
