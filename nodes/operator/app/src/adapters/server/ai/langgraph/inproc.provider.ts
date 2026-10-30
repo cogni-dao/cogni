@@ -82,7 +82,7 @@ export interface CompletionUnitAdapter {
  * Per NODE_BUNDLE_IS_CANONICAL: tools referenced by ID, resolved from the injected node bundle.
  */
 interface ProviderCatalogEntry {
-  readonly program?: "cogni" | "work-review";
+  readonly program?: "cogni" | "work-review" | "cogni-chat" | "cogni-decide";
   readonly displayName: string;
   readonly description: string;
   readonly toolIds: readonly string[];

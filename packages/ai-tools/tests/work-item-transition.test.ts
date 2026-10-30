@@ -162,3 +162,51 @@ describe("core__work_item_transition patch", () => {
     expect(cap.transitionStatus).not.toHaveBeenCalled();
   });
 });
+
+describe("core__work_item_transition patch scores (story.5111 pass-through)", () => {
+  it("forwards a CAS scores patch to the capability unchanged", async () => {
+    const cap = capability(async () => PATCHED);
+    const tool = createWorkItemTransitionImplementation({
+      workItemCapability: cap,
+    });
+    const scores = { goal: { v: 3 }, time: { v: 4, ev: "https://x.test/e" } };
+
+    const out = await tool.execute({
+      action: "patch",
+      id: "task.5001",
+      expectedRevision: 7,
+      scores,
+    });
+
+    expect(cap.patch).toHaveBeenCalledWith({
+      id: "task.5001",
+      expectedRevision: 7,
+      set: { scores },
+    });
+    expect(out).toMatchObject({ success: true, revision: 8 });
+  });
+
+  it("refuses a scores patch without expectedRevision or with priority; nothing reaches the capability", async () => {
+    const cap = capability(async () => PATCHED);
+    const tool = createWorkItemTransitionImplementation({
+      workItemCapability: cap,
+    });
+    await expect(
+      tool.execute({
+        action: "patch",
+        id: "task.5001",
+        scores: { goal: { v: 3 } },
+      })
+    ).rejects.toThrow();
+    await expect(
+      tool.execute({
+        action: "patch",
+        id: "task.5001",
+        expectedRevision: 7,
+        priority: 0,
+        scores: { goal: { v: 3 } },
+      })
+    ).rejects.toThrow();
+    expect(cap.patch).not.toHaveBeenCalled();
+  });
+});
