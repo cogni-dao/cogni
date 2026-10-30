@@ -6,12 +6,13 @@
  * Never shares/reserves/cancels/closes the wallet's pool. No global/session admission locks.
  * No positive after abort; reserve, query and transport originals settle before local reuse.
  */
-import postgres, { type ReservedSql } from "postgres";
+import type { ReservedSql } from "postgres";
 import { z } from "zod";
 import type {
   ComputeProofAllocation,
   ComputeProofAllocationReadPort,
-} from "@/ports/compute-release-proof.port";
+} from "@/ports";
+import { proofPostgres } from "./compute-release-proof-postgres";
 
 const rowSchema = z
   .object({
@@ -60,22 +61,14 @@ export class PostgresComputeProofAllocationReader
       reserveAbort.signal,
       AbortSignal.timeout(1900),
     ]);
-    const client = postgres(this.dsn, {
-      max: 1,
-      connect_timeout: 1,
-      idle_timeout: 1,
-      connection: {
-        application_name: "compute-release-proof-allocation",
-        default_transaction_read_only: true,
-        statement_timeout: 1500,
-        lock_timeout: 1000,
-      },
+    const transport = proofPostgres(this.dsn, {
+      application_name: "compute-release-proof-allocation",
+      default_transaction_read_only: true,
+      statement_timeout: 1500,
+      lock_timeout: 1000,
     });
-    let closing: Promise<void> | undefined;
-    const close = (): Promise<void> => {
-      closing ??= client.end({ timeout: 0 });
-      return closing;
-    };
+    const client = transport.sql;
+    const close = () => transport.close();
     const abort = () => {
       void close().catch(() => {
         /* original close is awaited below; no capacity reuse on uncertainty */
@@ -113,7 +106,7 @@ export class PostgresComputeProofAllocationReader
       });
       session.release();
       session = undefined;
-      await close();
+      if (!(await close())) throw new Error("unavailable");
       signal.throwIfAborted();
       return allocations;
     } catch {
@@ -123,9 +116,9 @@ export class PostgresComputeProofAllocationReader
       signal.removeEventListener("abort", abort);
       // Every earlier await observes its original. A rejected/unsettled teardown leaves
       // this reader fenced; it never destroys or reuses the wallet writer connection.
-      await close();
+      const confirmed = await close();
       session?.release();
-      this.active = false;
+      if (confirmed) this.active = false;
     }
   }
 }

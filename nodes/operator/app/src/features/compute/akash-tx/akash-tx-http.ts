@@ -60,6 +60,7 @@ import {
 } from "@/contracts/database-cell-binding.v1.contract";
 import { parseComputeProof } from "@/features/compute/release-proof/request";
 import type {
+  ComputeReleaseProofPort,
   DatabaseCellAppliedProbeQualificationPort,
   DatabaseCellAppliedRegistrationPort,
   DatabaseCellBindingPort,
@@ -69,7 +70,6 @@ import {
   AkashTxError,
   type AkashTxErrorCode,
 } from "@/ports";
-import type { ComputeReleaseProofPort } from "@/ports/compute-release-proof.port";
 
 import type { AkashTxLogger } from "./akash-tx-actuator";
 import type {

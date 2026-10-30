@@ -383,6 +383,12 @@ export interface AkashTxManagedDeploymentDefinition {
   readonly services: readonly {
     readonly name: string;
     readonly observedGeneration: number;
+    /** Same provider-native observation binds desired generation and RUNNING image.
+     * Null when the native reader cannot supply this axis; desired SDL is not evidence. */
+    readonly currentArtifact?: {
+      readonly generation: number;
+      readonly image: string;
+    } | null;
     readonly replicas: number;
     readonly updatedReplicas: number;
     readonly readyReplicas: number;

@@ -118,6 +118,14 @@ export type {
 } from "./compute-cost.port";
 export { ComputeCostInvariantError } from "./compute-cost.port";
 export type {
+  ComputeProofAdmissionLease,
+  ComputeProofAdmissionPort,
+  ComputeProofAllocation,
+  ComputeProofAllocationReadPort,
+  ComputeReleaseProofPort,
+  ProofKubeReadClient,
+} from "./compute-release-proof.port";
+export type {
   ComputeWorkloadArtifact,
   ComputeWorkloadBundle,
   ComputeWorkloadSecretRef,

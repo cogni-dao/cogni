@@ -5,7 +5,12 @@
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
-import type { AddressInfo } from "node:net";
+import {
+  type AddressInfo,
+  connect as netConnect,
+  createServer as netServer,
+  type Socket,
+} from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { COMPUTE_PROOF_PATH } from "@/contracts/compute.release-proof.v1.contract";
 import {
@@ -13,10 +18,15 @@ import {
   createAkashTxActuatorServer,
   createAkashTxDispatcher,
 } from "@/features/compute/akash-tx/akash-tx-http";
+import { PublicComputeProof } from "@/features/compute/release-proof/public-proof";
+import {
+  computeProofHash,
+  parseComputeProof,
+} from "@/features/compute/release-proof/request";
 import type { ComputeReleaseProofInput } from "@/types/compute-release-proof";
-import { PublicComputeProof } from "./public-proof";
-import { computeProofHash, parseComputeProof } from "./request";
 
+// Test-only barrel isolation retains the ACTUAL port error classes without loading
+// unrelated optional authorization SDKs. This test lives outside feature layering.
 vi.mock("@/ports", () => import("@/ports/akash-tx.port"));
 
 const raw = () => ({
@@ -120,7 +130,10 @@ const routes = [
 describe("purpose-only proof transport", () => {
   it("enumerates every actual wallet/diagnostic/custody/log-source route and denies proof authority BEFORE parsing", async () => {
     const source = readFileSync(
-      new URL("../akash-tx/akash-tx-http.ts", import.meta.url),
+      new URL(
+        "../../../../src/features/compute/akash-tx/akash-tx-http.ts",
+        import.meta.url
+      ),
       "utf8"
     );
     expect(
@@ -498,14 +511,60 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { afterAll, beforeAll } from "vitest";
 import { DrizzleAkashTxAllocationLedger } from "@/adapters/server/compute/akash-tx-allocation-ledger.adapter";
+import { PostgresComputeProofAdmission } from "@/adapters/server/compute/compute-release-proof-admission.adapter";
 import { PostgresComputeProofAllocationReader } from "@/adapters/server/compute/compute-release-proof-allocation.adapter";
+
+describe("real driver half-open cold connection fence", () => {
+  it("permanently retires both proof lanes when end and original reserve settle before TCP closure", async () => {
+    for (const kind of ["allocation", "admission"]) {
+      const peers: Socket[] = [];
+      const server = netServer({ allowHalfOpen: true }, (socket) => {
+        peers.push(socket);
+        socket.on("error", () => {});
+        socket.on("data", () => {});
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address() as AddressInfo;
+      const dsn = `postgres://proof_test@127.0.0.1:${address.port}/postgres`;
+      const allocation = new PostgresComputeProofAllocationReader(
+        dsn,
+        `akash-console:akash1${"x".repeat(38)}`
+      );
+      const admission = new PostgresComputeProofAdmission(dsn);
+      const input = parseComputeProof(JSON.stringify(raw()));
+      const attempt = () =>
+        kind === "allocation"
+          ? allocation.readOwnedAllocations(
+              {
+                nodeId: input.expected.nodeId,
+                environment: input.expected.environment,
+              },
+              new AbortController().signal
+            )
+          : admission.acquire(input, new AbortController().signal);
+      try {
+        const started = performance.now();
+        await expect(attempt()).rejects.toThrow("unavailable");
+        expect(performance.now() - started).toBeLessThan(1500);
+        expect(peers).toHaveLength(1);
+        expect(peers[0]?.destroyed).toBe(false);
+        await expect(attempt()).rejects.toThrow("unavailable");
+        expect(peers).toHaveLength(1); // No replacement connection while original is half-open.
+      } finally {
+        for (const peer of peers) peer.destroy();
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve()))
+        );
+      }
+    }
+  });
+});
 
 // This lane requires an explicit, empty, temporary LOCAL PostgreSQL fixture. It never
 // reads .env.test/node DSNs, inserts allocation/payment receipts, or contacts a provider.
-// biome-ignore lint/style/noProcessEnv: Explicit test-only local fixture opt-in, never application DSNs.
 const localProofDsn = process.env.COMPUTE_PROOF_TEST_DATABASE_URL ?? "";
 const localProofFixture =
-  // biome-ignore lint/style/noProcessEnv: This explicit test-only guard prevents use of node credentials or databases.
   process.env.COMPUTE_PROOF_TEST_LOCAL_EMPTY_FIXTURE === "1" &&
   /^postgres:\/\/proof_test@127\.0\.0\.1:\d+\/postgres$/.test(localProofDsn);
 describe.skipIf(!localProofFixture)(
@@ -538,10 +597,15 @@ describe.skipIf(!localProofFixture)(
       // EMPTY test relation only. No fabricated paid receipt or provider-success row.
       await observer`CREATE TABLE public.akash_tx_allocations (node_id uuid,composite_uid text,composite_generation integer,workload text,environment text,state text,external_name text,provider_account text,wallet_scope text,updated_at timestamptz,id uuid,cogni_key text,allocation_cursor text,last_applied_sdl_hash text,applied_database_cell_binding jsonb)`;
       fixtureCreated = true;
+      // Inert LOCAL registry fixture only; never an allocation/payment/provider receipt.
+      await observer`CREATE TABLE public.nodes (id uuid, slug text, repo_owner text, repo_name text, deploy_envs text[])`;
+      await observer`INSERT INTO public.nodes VALUES (${input.nodeId}::uuid,'operator','cogni-dao','cogni',ARRAY['candidate-a'])`;
     });
     afterAll(async () => {
-      if (fixtureCreated)
+      if (fixtureCreated) {
         await observer`DROP TABLE public.akash_tx_allocations`;
+        await observer`DROP TABLE public.nodes`;
+      }
       await Promise.all([
         blocker?.end({ timeout: 0 }),
         observer?.end({ timeout: 0 }),
@@ -597,8 +661,27 @@ describe.skipIf(!localProofFixture)(
         await h.lock`ROLLBACK`;
         h.lock.release();
       }
+      // A lock-waiting backend may not ACK Terminate before the close deadline.
+      // That instance stays retired. If it is reusable, the original backend MUST be gone.
+      const reused = await h.reader
+        .readOwnedAllocations(input, new AbortController().signal)
+        .then(
+          () => true,
+          () => false
+        );
+      if (reused)
+        expect(
+          await observer`SELECT pid FROM pg_stat_activity WHERE pid=${h.pid}`
+        ).toHaveLength(0);
+      const healthy = new PostgresComputeProofAllocationReader(
+        localProofDsn,
+        scope
+      );
       expect(
-        await h.reader.readOwnedAllocations(input, new AbortController().signal)
+        await healthy.readOwnedAllocations(input, new AbortController().signal)
+      ).toEqual([]);
+      expect(
+        await healthy.readOwnedAllocations(input, new AbortController().signal)
       ).toEqual([]);
       expect((await wallet`SELECT 1 AS available`)[0]?.available).toBe(1);
       const walletDb: Database = drizzle(wallet, { schema: proofTestSchema });
@@ -622,6 +705,67 @@ describe.skipIf(!localProofFixture)(
         await h.original.catch(() => {});
         await h.lock`ROLLBACK`;
         h.lock.release();
+      }
+    });
+    it("aborts a silent established health response within one second and refuses replacement without confirmed closure", async () => {
+      const healthyAdmission = new PostgresComputeProofAdmission(localProofDsn);
+      const parsedInput = parseComputeProof(JSON.stringify(raw()));
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const healthyLease = await healthyAdmission.acquire(
+          parsedInput,
+          new AbortController().signal
+        );
+        await healthyLease.release();
+        expect(healthyLease.signal.aborted).toBe(false);
+      }
+      const sockets: Socket[] = [];
+      let blackhole = false;
+      const target = new URL(localProofDsn);
+      const server = netServer({ allowHalfOpen: true }, (front) => {
+        const backend = netConnect({
+          host: "127.0.0.1",
+          port: Number(target.port),
+          allowHalfOpen: true,
+        });
+        sockets.push(front, backend);
+        front.on("error", () => {});
+        backend.on("error", () => {});
+        front.pipe(backend, { end: false });
+        backend.on("data", (chunk) => {
+          if (!blackhole) front.write(chunk);
+        });
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address() as AddressInfo;
+      const admission = new PostgresComputeProofAdmission(
+        `postgres://proof_test@127.0.0.1:${address.port}/postgres`
+      );
+      const parsed = parseComputeProof(JSON.stringify(raw()));
+      try {
+        const lease = await admission.acquire(
+          parsed,
+          new AbortController().signal
+        );
+        blackhole = true;
+        const started = performance.now();
+        await Promise.race([
+          once(lease.signal, "abort"),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("health deadline missing")), 1500)
+          ),
+        ]);
+        expect(performance.now() - started).toBeLessThan(1100);
+        await expect(lease.release()).rejects.toThrow("unavailable");
+        await expect(
+          admission.acquire(parsed, new AbortController().signal)
+        ).rejects.toThrow("unavailable");
+        expect((await wallet`SELECT 1 AS available`)[0]?.available).toBe(1);
+      } finally {
+        for (const socket of sockets) socket.destroy();
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve()))
+        );
       }
     });
     it("settles real proof backend loss without destroying the wallet session", async () => {

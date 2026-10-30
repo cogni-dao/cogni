@@ -4,7 +4,7 @@
 import { readFile } from "node:fs/promises";
 /** Fixed in-cluster GET/list/log transport. Socket close settles before admission reuse. */
 import { request as httpsRequest } from "node:https";
-import type { ProofKubeReadClient } from "@/ports/compute-release-proof.port";
+import type { ProofKubeReadClient } from "@/ports";
 export class InClusterProofKubeReadClient implements ProofKubeReadClient {
   constructor(
     private readonly server: string,

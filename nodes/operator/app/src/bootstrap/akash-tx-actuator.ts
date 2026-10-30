@@ -82,7 +82,6 @@ import { sql } from "drizzle-orm";
 import pino from "pino";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-
 import {
   AkashComputeAdapter,
   DrizzleAkashTxAllocationLedger,
@@ -90,17 +89,17 @@ import {
   DrizzleDatabaseCellBindingStore,
   DrizzleNodeMigrationReportStore,
   DrizzleProviderOutcomeStore,
+  InClusterProofKubeReadClient,
   KubernetesMigrationJobAdapter,
   observeAppliedCellManaged,
   observeDatabaseCellNativeControl,
+  PostgresComputeProofAllocationReader,
   PostgresDatabaseCellObserver,
   ReadOnlyAppliedDatabaseCellObserver,
   safeHostRoutedVersionProbe,
   safeReadyzProbe,
   safeVersionProbe,
 } from "@/adapters/server";
-import { PostgresComputeProofAllocationReader } from "@/adapters/server/compute/compute-release-proof-allocation.adapter";
-import { InClusterProofKubeReadClient } from "@/adapters/server/compute/compute-release-proof-native.client";
 import {
   checkConsoleBalance,
   classifyConsoleBalance,

@@ -18,12 +18,12 @@ import {
   canonicalProofJson,
   computeProofHash,
 } from "@/features/compute/release-proof/request";
-import type { AkashTxConsolePort } from "@/ports";
 import type {
+  AkashTxConsolePort,
   ComputeProofAllocationReadPort,
   ComputeReleaseProofPort,
   ProofKubeReadClient,
-} from "@/ports/compute-release-proof.port";
+} from "@/ports";
 import {
   diffDeclaredVsApplied,
   parseMigrationReceipt,
@@ -524,7 +524,11 @@ export class NativeComputeReleaseProofAdapter
       const rollout = observed.services.find((r) => r.name === service.name);
       if (
         !rollout ||
+        !Number.isSafeInteger(rollout.observedGeneration) ||
         rollout.observedGeneration < 1 ||
+        !rollout.currentArtifact ||
+        rollout.currentArtifact.generation !== rollout.observedGeneration ||
+        rollout.currentArtifact.image !== artifact?.image ||
         [
           rollout.replicas,
           rollout.updatedReplicas,
@@ -650,28 +654,45 @@ export class NativeComputeReleaseProofAdapter
         ...array(template.containers),
       ];
     if (containers.length !== phases.length) return "unavailable";
-    for (let i = 0; i < phases.length; i++) {
-      const phase = required(phases[i]),
-        container = record(containers[i]),
-        sealed = withDatabaseCaTrust(phase.command);
-      if (
-        container.name !== phase.name ||
-        container.image !== image ||
-        !same(container.command, sealed.command) ||
-        !same(container.args, sealed.args)
-      )
-        return "unavailable";
-      const env = array(container.env),
-        db = env.map(record).find((e) => e.name === "DATABASE_URL");
-      if (
-        !db ||
-        !same(record(db.valueFrom).secretKeyRef, {
-          name: `${slug}-compute-migration-secrets`,
-          key: phase.databaseUrlSecretKey,
-        })
-      )
-        return "unavailable";
-    }
+    // Each native projection must match the fixed writer independently. Job/pod
+    // agreement alone cannot prove the effective credentials or CA references.
+    const canonicalContainers = (items: unknown[]): boolean => {
+      if (items.length !== phases.length) return false;
+      return phases.every((phase, i) => {
+        const container = record(items[i]),
+          sealed = withDatabaseCaTrust(phase.command);
+        return (
+          container.name === phase.name &&
+          container.image === image &&
+          same(container.command, sealed.command) &&
+          same(container.args, sealed.args) &&
+          (container.envFrom === undefined || same(container.envFrom, [])) &&
+          same(container.env, [
+            { name: "NODE_NAME", value: slug },
+            {
+              name: "DATABASE_URL",
+              valueFrom: {
+                secretKeyRef: {
+                  name: `${slug}-compute-migration-secrets`,
+                  key: phase.databaseUrlSecretKey,
+                },
+              },
+            },
+            {
+              name: "DATABASE_SSL_CA_CERT",
+              valueFrom: {
+                secretKeyRef: {
+                  name: `${slug}-compute-migration-secrets`,
+                  key: "DATABASE_SSL_CA_CERT",
+                  optional: true,
+                },
+              },
+            },
+          ])
+        );
+      });
+    };
+    if (!canonicalContainers(containers)) return "unavailable";
     const pods = list(
       await this.kube.json(
         `/api/v1/namespaces/${ns}/pods?labelSelector=${encodeURIComponent(`job-name=${jobName}`)}&limit=9`,
@@ -698,7 +719,7 @@ export class NativeComputeReleaseProofAdapter
       typeof podMeta.name !== "string" ||
       podMeta.deletionTimestamp ||
       podStatus.phase !== "Succeeded" ||
-      !declaredSubset(containers, [
+      !canonicalContainers([
         ...array(podSpec.initContainers ?? []),
         ...array(podSpec.containers),
       ])

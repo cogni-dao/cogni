@@ -5,7 +5,7 @@
 import type {
   ComputeProofAdmissionPort,
   ComputeReleaseProofPort,
-} from "@/ports/compute-release-proof.port";
+} from "@/ports";
 import { parseComputeProof } from "./request";
 export class PublicComputeProof {
   private active = false;

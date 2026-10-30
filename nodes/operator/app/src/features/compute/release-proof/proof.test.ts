@@ -211,7 +211,7 @@ function nativeHarness() {
         },
       ],
     },
-    spec: { containers: [phase] },
+    spec: { containers: [structuredClone(phase)] },
     status: {
       phase: "Succeeded",
       containerStatuses: [
@@ -289,6 +289,8 @@ function nativeHarness() {
       {
         name: "app",
         observedGeneration: 7,
+        // Test-only native observation injection. Console cannot supply this today.
+        currentArtifact: { generation: 7, image },
         replicas: 1,
         updatedReplicas: 1,
         readyReplicas: 1,
@@ -390,6 +392,88 @@ describe("current native evidence (test-only injection)", () => {
         new AbortController().signal
       );
       expect(result.dimensions[0]?.migration).not.toBe("verified");
+    }
+  });
+  it("rejects ambiguous or foreign effective migration env on Job and owned pod independently", async () => {
+    for (const target of ["job", "pod", "both"] as const) {
+      for (const kind of [
+        "ca-name",
+        "ca-key",
+        "ca-optional",
+        "duplicate-db",
+        "literal-db",
+        "envFrom",
+        "node",
+      ]) {
+        const h = nativeHarness();
+        const mutate = (container: { env: unknown[] }) => {
+          const env = container.env as Record<string, unknown>[];
+          if (kind === "duplicate-db")
+            env.push({
+              name: "DATABASE_URL",
+              value: "foreign-private-fixture",
+            });
+          if (kind === "literal-db")
+            Object.assign(required(env[1]), {
+              value: "foreign-private-fixture",
+            });
+          if (kind === "node")
+            Object.assign(required(env[0]), { value: "foreign" });
+          if (kind === "envFrom")
+            Object.assign(container, {
+              envFrom: [{ secretRef: { name: "foreign" } }],
+            });
+          if (kind.startsWith("ca-")) {
+            const ca = required(env[2]) as {
+              valueFrom: { secretKeyRef: Record<string, unknown> };
+            };
+            Object.assign(
+              ca.valueFrom.secretKeyRef,
+              kind === "ca-name"
+                ? { name: "foreign" }
+                : kind === "ca-key"
+                  ? { key: "FOREIGN_CA" }
+                  : { optional: false }
+            );
+          }
+        };
+        if (target !== "pod")
+          mutate(required(h.job.spec.template.spec.containers[0]));
+        if (target !== "job") mutate(required(h.pod.spec.containers[0]));
+        const result = await h.adapter.sample(
+          h.input,
+          new AbortController().signal
+        );
+        expect(result.dimensions[0]?.migration, `${target}:${kind}`).toBe(
+          "unavailable"
+        );
+        expect(h.kube.log).not.toHaveBeenCalled();
+        expect(JSON.stringify(result)).not.toContain("foreign-private-fixture");
+      }
+    }
+  });
+  it("requires current provider-native generation AND running image, never desired SDL or counters alone", async () => {
+    for (const target of ["app", "worker"]) {
+      for (const kind of ["absent", "old-generation", "old-image"]) {
+        const h = nativeHarness();
+        addPrivateSibling(h);
+        const service = required(
+          h.observed.services.find((x) => x.name === target)
+        );
+        if (kind === "absent")
+          Object.assign(service, { currentArtifact: null });
+        if (kind === "old-generation") service.observedGeneration = 1;
+        if (kind === "old-image")
+          service.currentArtifact.image = `ghcr.io/cogni/old@sha256:${"1".repeat(64)}`;
+        const result = await h.adapter.sample(
+          h.input,
+          new AbortController().signal
+        );
+        expect(result.dimensions[0]?.provider, `${target}:${kind}`).toBe(
+          "unavailable"
+        );
+        expect(result.dimensions[0]?.code).toBe("provider_unavailable");
+      }
     }
   });
   it("provider wrong image/private exposure/rollout and unknown sealed command fail closed without SDL equality oracle", async () => {
@@ -610,6 +694,10 @@ function addPrivateSibling(h: ReturnType<typeof nativeHarness>) {
   h.observed.services.push({
     ...required(h.observed.services[0]),
     name: "worker",
+    currentArtifact: {
+      generation: 7,
+      image: required(workload.artifacts[1]).image,
+    },
   });
   h.observed.providerSdl = stringify(h.sdl);
 }

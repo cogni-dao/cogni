@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 /** Fixed purpose-only private client. No caller header/path/host forwarding. */
 import { request as httpRequest } from "node:http";
-import type { ComputeReleaseProofPort } from "@/ports/compute-release-proof.port";
+import type { ComputeReleaseProofPort } from "@/ports";
 import {
   COMPUTE_PROOF_PATH,
   ComputeProofRequestSchema,

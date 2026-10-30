@@ -239,11 +239,12 @@ export {
 // NOTE: PrivyOperatorWalletAdapter lives in @cogni/operator-wallet/adapters/privy.
 // @privy-io/node is heavy — lazy-import in container.ts only.
 
+export { PostgresComputeProofAllocationReader } from "./compute/compute-release-proof-allocation.adapter";
+export { InClusterProofKubeReadClient } from "./compute/compute-release-proof-native.client";
 export { observeAppliedCellManaged } from "./compute/database-cell-applied-managed.adapter";
 export { ReadOnlyAppliedDatabaseCellObserver } from "./compute/database-cell-applied-observer.adapter";
 export { DrizzleDatabaseCellBindingStore } from "./compute/database-cell-binding-store.adapter";
 export { PostgresDatabaseCellObserver } from "./compute/database-cell-observer.adapter";
-
 export {
   AKASH_PRODUCTION_OWNER,
   akashCreditReader,

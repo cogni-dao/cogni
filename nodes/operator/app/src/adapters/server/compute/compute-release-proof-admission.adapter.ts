@@ -6,53 +6,45 @@
  * No new tables or anonymous/keyed queues. The app feature is the sole admission owner.
  * Transport loss aborts native work; original reserve/query promises settle before reuse.
  */
-import postgres, { type ReservedSql, type Sql } from "postgres";
+import type { ReservedSql } from "postgres";
 import type {
   ComputeProofAdmissionLease,
   ComputeProofAdmissionPort,
-} from "@/ports/compute-release-proof.port";
+} from "@/ports";
 import type { ComputeReleaseProofInput } from "@/types/compute-release-proof";
+import { proofPostgres } from "./compute-release-proof-postgres";
 
 export class PostgresComputeProofAdmission
   implements ComputeProofAdmissionPort
 {
-  private sql: Sql | undefined;
-  private retiring = false;
+  private active = false;
+  private retired = false;
   constructor(private readonly dsn: string) {}
-
-  private client(): Sql {
-    if (this.retiring) throw new Error("unavailable");
-    this.sql ??= postgres(this.dsn, {
-      max: 1,
-      connect_timeout: 1,
-      idle_timeout: 20,
-      connection: {
-        application_name: "compute-release-proof",
-        statement_timeout: 100,
-        lock_timeout: 100,
-      },
-    });
-    return this.sql;
-  }
 
   async acquire(
     input: ComputeReleaseProofInput,
     parent: AbortSignal
   ): Promise<ComputeProofAdmissionLease> {
     parent.throwIfAborted();
-    const sql = this.client();
+    if (this.active || this.retired) throw new Error("unavailable");
+    this.active = true;
+    const transport = proofPostgres(this.dsn, {
+      application_name: "compute-release-proof",
+      statement_timeout: 100,
+      lock_timeout: 100,
+    });
+    const sql = transport.sql;
     const controller = new AbortController();
     const signal = AbortSignal.any([parent, controller.signal]);
-    let closing: Promise<void> | undefined;
+    let closing: Promise<boolean> | undefined;
     let session: ReservedSql | undefined;
     let health = Promise.resolve();
     let stopped = false;
     let healthTimer: ReturnType<typeof setTimeout> | undefined;
-    const retire = (): Promise<void> => {
+    const retire = (): Promise<boolean> => {
       if (!closing) {
-        this.retiring = true;
         // Assign before abort: the abort listener may re-enter this function.
-        closing = Promise.resolve().then(() => sql.end({ timeout: 0 }));
+        closing = Promise.resolve().then(() => transport.close());
         controller.abort();
       }
       return closing;
@@ -63,10 +55,18 @@ export class PostgresComputeProofAdmission
       });
     };
     signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
     const original = async <T>(query: PromiseLike<T>): Promise<T> => {
-      const value = await query;
-      signal.throwIfAborted();
-      return value;
+      // Server statement_timeout cannot deliver through a silent response path.
+      // Abort native work within 150ms, then await the SAME original query.
+      const timer = setTimeout(abort, 150);
+      try {
+        const value = await query;
+        signal.throwIfAborted();
+        return value;
+      } finally {
+        clearTimeout(timer);
+      }
     };
     const cleanup = async (): Promise<void> => {
       stopped = true;
@@ -80,12 +80,16 @@ export class PostgresComputeProofAdmission
             await retire();
           }
         }
-        if (closing) {
-          // No replacement client exists until the real transport has closed.
-          await closing;
-          this.sql = undefined;
-          this.retiring = false;
+        closing ??= transport.close();
+        const confirmed = await closing;
+        if (!confirmed) {
+          this.retired = true;
+          throw new Error("unavailable");
         }
+        this.active = false;
+      } catch (error) {
+        this.retired = true;
+        throw error;
       } finally {
         session?.release();
         signal.removeEventListener("abort", abort);
