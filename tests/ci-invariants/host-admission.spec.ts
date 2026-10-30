@@ -119,9 +119,13 @@ class Tests(unittest.TestCase):
   with self.assertRaisesRegex(AssertionError,'cycle/depth'):h.file_fingerprint(link)
   target.unlink();target.symlink_to('/etc/shadow')
   with self.assertRaisesRegex(AssertionError,'unsupported persistence link target'):h.file_fingerprint(link)
-  chain=[self.root/('depth-'+str(i)) for i in range(9)]
+  # Canonical parents keep macOS /var aliases out of the measured link depth.
+  # Ten nodes create nine links; the eight-link boundary remains accepted.
+  chain=[self.root.resolve()/('depth-'+str(i)) for i in range(10)]
   for first,second in zip(chain,chain[1:]):first.symlink_to(second)
   chain[-1].write_text('safe')
+  boundary=h.file_fingerprint(chain[1])
+  self.assertEqual(len(boundary['links']),8);self.assertEqual(boundary['target']['ino'],chain[-1].stat().st_ino)
   with self.assertRaisesRegex(AssertionError,'cycle/depth'):h.file_fingerprint(chain[0])
   target.unlink();target.write_text('safe')
   real_readlink=os.readlink
