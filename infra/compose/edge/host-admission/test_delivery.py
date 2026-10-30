@@ -284,6 +284,8 @@ def main(cancellation_proof=True):
         if any(hashlib.sha256(data).hexdigest() != manifest['files'][name] for name, data in closure.items()):
             raise RuntimeError('delivery_digest')
         observe = observer(closure)
+        observe['IDENTITY'] = identity
+        observe['preflight']()  # read-only prerequisites BEFORE whole-host observation
         runs = ROOT/'runs'
         runs.mkdir(mode=0o700, exist_ok=True)
         trusted(runs, True)

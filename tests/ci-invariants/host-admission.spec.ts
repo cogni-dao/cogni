@@ -80,6 +80,8 @@ class Tests(unittest.TestCase):
   f=self.root/'legacy';f.write_text('old');before=file_fingerprint(f);f.write_text('new')
   self.assertNotEqual(before,file_fingerprint(f));f.chmod(0o644);before=file_fingerprint(f);f.chmod(0o600)
   self.assertNotEqual(before,file_fingerprint(f))
+  link=self.root/'boot-enable';link.symlink_to(f);before=file_fingerprint(link);link.unlink();link.symlink_to(self.root/'missing')
+  self.assertNotEqual(before,file_fingerprint(link));before=file_fingerprint(link);link.unlink();self.assertNotEqual(before,file_fingerprint(link))
  def test_scoped_host_observation_streams_large_unrelated_rules_exactly(self):
   import integration_selftest as h,subprocess,io
   from unittest.mock import patch
@@ -103,8 +105,8 @@ class Tests(unittest.TestCase):
    self.assertIn('preexec_fn',kwargs);kwargs.pop('preexec_fn')
    return real_popen([sys.executable,'-c','import pathlib,sys;sys.stdout.buffer.write(pathlib.Path(sys.argv[1]).read_bytes())',str(fixture)],**kwargs)
   for tool in ('/usr/sbin/iptables-save','/usr/sbin/ip6tables-save'):
-   with patch.object(h.subprocess,'Popen',side_effect=producer):self.assertEqual(h.legacy_snapshot(tool),expected)
-  fixture.write_text(base+('-A CALLER -j ACCEPT\n'*6000)+'COMMIT\n')
+   with patch.object(h.subprocess,'Popen',side_effect=producer):self.assertEqual(h.legacy_snapshot(tool),h.legacy_policy(large,family='ipv6') if tool.endswith('ip6tables-save') else expected)
+  fixture.write_text(base+('-A FORWARD -j ACCEPT\n'*6000)+'COMMIT\n')
   with patch.object(h.subprocess,'Popen',side_effect=producer):
    with self.assertRaisesRegex(AssertionError,'relevant host policy overflow'):h.legacy_snapshot('/usr/sbin/ip6tables-save')
   fixture.write_text(large)
@@ -137,6 +139,33 @@ class Tests(unittest.TestCase):
   self.assertEqual(snapshot,legacy_policy(cyclic+('-A KUBE-EP -d 10.0.0.1 -j ACCEPT\n'*6000)+'COMMIT\n'))
   with self.assertRaisesRegex(AssertionError,'relevant host policy overflow'):
    legacy_policy(cyclic+('-A OUTER -s 8.8.8.8 -j ACCEPT\n'*6000)+'COMMIT\n')
+ def test_policy_ownership_uses_real_tag_without_claiming_shared_siblings(self):
+  from integration_selftest import legacy_policy,LEGACY_RULE_TAG
+  base='*filter\n:FORWARD DROP [0:0]\n:OUTER - [0:0]\n:DOCKER-USER - [0:0]\n:OWNED-DEP - [0:0]\n:KUBE-SERVICES - [0:0]\n:KUBE-SVC-X - [0:0]\n-A FORWARD -j OUTER\n-A OUTER -j DOCKER-USER\n-A DOCKER-USER -m comment --comment "'+LEGACY_RULE_TAG+':drop-public" -j OWNED-DEP\n-A DOCKER-USER -m comment --comment "cogni-candidate-a/service cluster IP" -j KUBE-SERVICES\n-A OWNED-DEP -j DROP\n-A KUBE-SERVICES -m comment --comment "cogni-production/app" -j KUBE-SVC-X\n'
+  huge=base+('-A KUBE-SVC-X -m comment --comment "cogni-candidate-a/app endpoint" -j ACCEPT\n'*6000)+'COMMIT\n'
+  scope=legacy_policy(huge)
+  self.assertEqual(set(scope['filter']),{'FORWARD','OUTER','DOCKER-USER','OWNED-DEP'})
+  self.assertEqual(scope,legacy_policy(base+'COMMIT\n'))
+  for suffix in ('established','pod-cidr','svc-cidr','loopback','compute-egress-allow','stale-unknown'):
+   self.assertNotEqual(scope,legacy_policy(huge.replace(':drop-public',':'+suffix)))
+  for changed in (huge.replace('-A OWNED-DEP -j DROP','-A OWNED-DEP -j ACCEPT'),huge.replace('-A OUTER -j DOCKER-USER','-A OUTER -j ACCEPT\n-A OUTER -j DOCKER-USER'),huge.replace(':FORWARD DROP',':FORWARD ACCEPT'),huge.replace('-A DOCKER-USER -m comment','-A DOCKER-USER -j ACCEPT\n-A DOCKER-USER -m comment',1),huge.replace(':drop-public',':drop-public-duplicate',1)):
+   self.assertNotEqual(scope,legacy_policy(changed))
+  # A real owned jump makes its COMPLETE target a dependency, even if shared
+  # and even if a cycle returns to its container. Such true scope may overflow.
+  cycle=base+'-A OWNED-DEP -j DOCKER-USER\nCOMMIT\n'
+  self.assertEqual(set(legacy_policy(cycle)['filter']),{'FORWARD','OUTER','DOCKER-USER','OWNED-DEP','KUBE-SERVICES','KUBE-SVC-X'})
+  with self.assertRaisesRegex(AssertionError,'overflow:class=owned-dependency'):
+   legacy_policy(huge.replace('COMMIT\n','-A OWNED-DEP -j DOCKER-USER\nCOMMIT\n'))
+  unrelated='*nat\n:PREROUTING ACCEPT [0:0]\n:KUBE-SVC-X - [0:0]\n-A PREROUTING -m comment --comment "cogni-harden-internal-ports-service/app" -j KUBE-SVC-X\n'+('-A KUBE-SVC-X -m comment --comment "cogni/app" -j ACCEPT\n'*6000)+'COMMIT\n'
+  self.assertEqual(legacy_policy(unrelated),{})
+  for family in ('ipv4','ipv6'):
+   exact=unrelated.replace('cogni-harden-internal-ports-service/app',LEGACY_RULE_TAG+':compute-egress-allow')
+   with self.assertRaisesRegex(AssertionError,'ambiguous legacy ownership'):legacy_policy(exact,family)
+  no_tag=huge.replace(LEGACY_RULE_TAG+':drop-public','ordinary-service')
+  self.assertEqual(set(legacy_policy(no_tag,'ipv6')['filter']),{'FORWARD'})
+  with self.assertRaisesRegex(AssertionError,'ambiguous legacy ownership'):legacy_policy(huge,'ipv6')
+  with self.assertRaisesRegex(AssertionError,'overflow:class=legacy-container'):
+   legacy_policy(base+('-A DOCKER-USER -j ACCEPT\n'*6000)+'COMMIT\n')
  def test_reboot_backward_above_saved_wall_never_revives_old_snapshot(self):
   r=self.request();self.apply(r);history=copy.deepcopy(self.e.load()['owners'])
   # Real elapsed time may exceed expiry, but post-reboot unsynced wall remains
@@ -267,17 +296,17 @@ class Tests(unittest.TestCase):
   for failed in (False,True):
    events=[]
    def operate(identity,observe,cancellation):
-    self.assertFalse(events)
+    self.assertEqual(events,['prerequisites'])
     if failed:raise OSError('owned cleanup failed')
     events.append('all-owned-gates-complete');return 'suite'
-   with patch.object(d,'bind_parent') as bind,patch.object(d,'validate_bootstrap',return_value=(b'manifest',manifest)),patch.object(d,'read',return_value=b'fixture'),patch.object(d,'observer',return_value={}),patch.object(d,'ROOT',self.root),patch.object(d,'trusted'),patch.object(d,'operation',side_effect=operate),patch.object(d,'publish',side_effect=lambda identity,verdict,**kw:events.append((identity,verdict))),patch.object(d.signal,'signal'),patch.object(d.signal,'alarm'),patch.object(sys,'argv',['test_delivery.py']):
+   with patch.object(d,'bind_parent') as bind,patch.object(d,'validate_bootstrap',return_value=(b'manifest',manifest)),patch.object(d,'read',return_value=b'fixture'),patch.object(d,'observer',return_value={'preflight':lambda:events.append('prerequisites')}),patch.object(d,'ROOT',self.root),patch.object(d,'trusted'),patch.object(d,'operation',side_effect=operate),patch.object(d,'publish',side_effect=lambda identity,verdict,**kw:events.append((identity,verdict))),patch.object(d.signal,'signal'),patch.object(d.signal,'alarm'),patch.object(sys,'argv',['test_delivery.py']):
     if failed:
      with self.assertRaises(OSError):d.main(False)
     else:d.main(False)
    bind.assert_called_once_with(d.CALLER)
    self.assertEqual(events[-1][1],'failure' if failed else 'pass')
    self.assertEqual(events[-1][0]['sourceSha'],'a'*40);self.assertTrue(events[-1][0]['runId'])
-   if not failed:self.assertEqual(events[0],'all-owned-gates-complete')
+   if not failed:self.assertEqual(events[:2],['prerequisites','all-owned-gates-complete'])
  def test_fence_requires_exact_ordered_native_rules(self):
   import kernel,shlex
   expected=['-A CGADMIT '+shlex.join(row) for row in kernel.fence_rules(self.e.policy)]

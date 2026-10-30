@@ -143,14 +143,16 @@ def preflight():
 # command cap remains 64KiB/1s. Only the exact relevant snapshot may use 64KiB.
 SAVE_INPUT_CAP = 32 * 1024 * 1024
 SAVE_SCOPE_CAP = 65536
+LEGACY_RULE_TAG = 'cogni-harden-internal-ports'
 
 
-def legacy_policy(raw):
+def legacy_policy(raw, family="ipv4"):
     """Two bounded passes: graph/ownership first, exact selected rules second.
 
     Unrelated rule bodies never accumulate in memory. Full selected callers,
     policies, ordering, comments and owned-chain dependencies remain exact.
     """
+    check(family in ('ipv4', 'ipv6'), 'fixed observation family')
     stream = io.StringIO(raw) if isinstance(raw, str) else raw
     tables = {}
     current = None
@@ -168,7 +170,7 @@ def legacy_policy(raw):
         if line.startswith('*'):
             check(current is None and line[1:] not in tables, 'save table shape')
             current = line[1:]
-            tables[current] = {'chains': {}, 'edges': {}, 'owned': set()}
+            tables[current] = {'chains': {}, 'edges': {}, 'tagged_targets': set()}
             check(len(tables) <= 16, 'save table work bound')
         elif line == 'COMMIT':
             check(current is not None, 'save commit shape')
@@ -186,17 +188,31 @@ def legacy_policy(raw):
             name = tokens[1]
             edges = tables[current]['edges'].setdefault(name, set())
             edges.update(tokens[i+1] for i, token in enumerate(tokens[:-1]) if token in ('-j', '-g'))
-            if any('cogni' in tokens[i+1].lower() for i, token in enumerate(tokens[:-1]) if token == '--comment'):
-                tables[current]['owned'].add(name)
+            comments = [tokens[i+1] for i, token in enumerate(tokens[:-1]) if token == '--comment']
+            legacy_container = family == 'ipv4' and current == 'filter' and name == 'DOCKER-USER'
+            if legacy_container and any(LEGACY_RULE_TAG in comment for comment in comments):
+                # Writer deletion matches the full literal tag in this container;
+                # retain stale/unknown suffixes as well as its six current tags.
+                tables[current]['tagged_targets'].update(tokens[i+1] for i, token in enumerate(tokens[:-1]) if token in ('-j', '-g'))
+            elif any(comment == LEGACY_RULE_TAG or comment.startswith(LEGACY_RULE_TAG+':') for comment in comments):
+                raise AssertionError('ambiguous legacy ownership:class=tag-location;family='+family)
+
         else:
             raise AssertionError('unrecognized native save output')
     check(current is None, 'incomplete native save output')
     result = {}
+    classes = {}
     for table, data in tables.items():
         chains, edges = data['chains'], data['edges']
-        owned = data['owned'] | (set(chains) & {'DOCKER-USER', 'CGADMIT'})
+        # Docker owns the shared legacy container. Its complete rules matter,
+        # but unowned sibling jumps confer no ownership on their target trees.
+        native_filter = family == 'ipv4' and table == 'filter'
+        roots = (set(chains) & {'CGADMIT'}) if native_filter else set()
+        contexts = (set(chains) & {'DOCKER-USER'}) if native_filter else set()
+        owned = roots | (data['tagged_targets'] & set(chains))
         pending = list(owned)
         while pending:
+            check(time.monotonic() < deadline, 'host save parse deadline')
             name = pending.pop()
             for target in edges.get(name, ()):
                 if target in chains and target not in owned:
@@ -208,8 +224,8 @@ def legacy_policy(raw):
         for caller, targets in edges.items():
             for target in targets:
                 reverse.setdefault(target, set()).add(caller)
-        callers = set(owned)
-        pending = list(owned)
+        callers = owned | contexts
+        pending = list(callers)
         while pending:
             check(time.monotonic() < deadline, 'host save parse deadline')
             for caller in reverse.get(pending.pop(), ()):
@@ -217,6 +233,8 @@ def legacy_policy(raw):
                     callers.add(caller)
                     pending.append(caller)
         selected = callers | ({'FORWARD'} if table == 'filter' else set())
+        for name in selected:
+            classes[(table, name)] = ('owned-chain' if name in roots else 'owned-dependency' if name in owned else 'legacy-container' if name in contexts else 'caller-context')
         if selected:
             result[table] = {name: {'policy': chains[name], 'rules': []} for name in sorted(selected)}
     stream.seek(0)
@@ -229,9 +247,9 @@ def legacy_policy(raw):
         elif line.startswith('-A ') and line.split(' ', 2)[1] in result.get(current, {}):
             tokens = shlex.split(line)
             relevant += len(json.dumps(tokens).encode())
-            check(relevant <= SAVE_SCOPE_CAP, 'relevant host policy overflow')
+            check(relevant <= SAVE_SCOPE_CAP, 'relevant host policy overflow:class='+classes[(current, tokens[1])]+';bytes='+str(relevant)+';limit='+str(SAVE_SCOPE_CAP)+';selectedChains='+str(len(classes)))
             result[current][tokens[1]]['rules'].append(tokens)
-    check(len(json.dumps(result, sort_keys=True).encode()) <= SAVE_SCOPE_CAP, 'relevant host policy overflow')
+    check(len(json.dumps(result, sort_keys=True).encode()) <= SAVE_SCOPE_CAP, 'relevant host policy overflow:class=chain-metadata;selectedChains='+str(len(classes))+';limit='+str(SAVE_SCOPE_CAP))
     return result
 
 
@@ -259,7 +277,7 @@ def legacy_snapshot(tool):
             check(child.wait(timeout=max(.001, deadline-time.monotonic())) == 0, 'host save child failed')
             spool.seek(0)
             with io.TextIOWrapper(spool, encoding='utf-8', errors='strict') as text:
-                return legacy_policy(text)
+                return legacy_policy(text, family='ipv6' if tool.endswith('ip6tables-save') else 'ipv4')
     finally:
         if child.poll() is None:
             child.kill()
@@ -288,6 +306,8 @@ def host_snapshot():
              '/etc/cogni/compute-egress-allowlist', '/etc/cogni-compute-egress.allowlist',
              '/usr/local/sbin/cogni-harden-docker-public-ports.sh',
              '/etc/systemd/system/cogni-harden-docker-public-ports.service',
+             '/etc/systemd/system/multi-user.target.wants/cogni-harden-docker-public-ports.service',
+             '/etc/systemd/system/docker.service.wants/cogni-harden-docker-public-ports.service',
              '/opt/cogni-template-runtime/compute-egress-allowlist']
     return {'net': namespace('net'), 'mnt': namespace('mnt'),
             'rules4': legacy_snapshot('/usr/sbin/iptables-save'),
