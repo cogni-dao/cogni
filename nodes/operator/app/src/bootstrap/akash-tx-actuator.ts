@@ -99,6 +99,7 @@ import {
   safeReadyzProbe,
   safeVersionProbe,
 } from "@/adapters/server";
+import { PostgresComputeProofAllocationReader } from "@/adapters/server/compute/compute-release-proof-allocation.adapter";
 import { InClusterProofKubeReadClient } from "@/adapters/server/compute/compute-release-proof-native.client";
 import {
   checkConsoleBalance,
@@ -809,7 +810,12 @@ const releaseProof =
           await readFile(proofCluster.caFile, "utf8"),
           "/var/run/secrets/kubernetes.io/serviceaccount/token"
         ),
-        allocationLedger,
+        // One additional read-only app-role connection per actuator replica, max1.
+        // Never borrow/cancel the wallet max1 pool; this reader owns no PG admission locks.
+        new PostgresComputeProofAllocationReader(
+          databaseUrl,
+          wallet.walletScope
+        ),
         consoleClient,
         {
           nodeId: getNodeId(),

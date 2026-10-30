@@ -54,7 +54,22 @@ export const ProofServiceSchema = z
     memoryMi: z.number().int().min(1).max(1048576),
     storageMi: z.number().int().min(0).max(10485760),
   })
-  .strict();
+  .strict()
+  .superRefine((service, ctx) => {
+    const topologyKeys = new Set([
+      "HOST",
+      "HOSTNAME",
+      "PORT",
+      ...service.bindings.map((binding) => binding.key),
+    ]);
+    if (
+      service.bindings.some((binding) =>
+        ["HOST", "HOSTNAME", "PORT"].includes(binding.key)
+      ) ||
+      service.secretRefs.some((ref) => topologyKeys.has(ref.key))
+    )
+      ctx.addIssue({ code: "custom", message: "ambiguous public topology" });
+  });
 export const ProofWorkloadSchema = z
   .object({
     instance: z

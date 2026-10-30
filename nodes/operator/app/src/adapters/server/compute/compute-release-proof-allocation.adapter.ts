@@ -1,0 +1,131 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+/**
+ * One bounded SELECT on a proof-only, read-only max1 connection using the existing app role.
+ * Never shares/reserves/cancels/closes the wallet's pool. No global/session admission locks.
+ * No positive after abort; reserve, query and transport originals settle before local reuse.
+ */
+import postgres, { type ReservedSql } from "postgres";
+import { z } from "zod";
+import type {
+  ComputeProofAllocation,
+  ComputeProofAllocationReadPort,
+} from "@/ports/compute-release-proof.port";
+
+const rowSchema = z
+  .object({
+    node_id: z.string().uuid(),
+    composite_uid: z.string().min(1).max(128),
+    composite_generation: z.number().int().positive(),
+    workload: z.string().min(1).max(128),
+    environment: z.enum(["candidate-a", "preview", "production"]),
+    state: z.literal("allocated"),
+    external_name: z
+      .string()
+      .regex(/^[0-9]+$/)
+      .max(128),
+    provider_account: z.string().min(1).max(128),
+  })
+  .strict();
+
+export class PostgresComputeProofAllocationReader
+  implements ComputeProofAllocationReadPort
+{
+  private active = false;
+  constructor(
+    private readonly dsn: string,
+    private readonly walletScope: string
+  ) {
+    if (!/^akash-console:akash1[0-9a-z]{38}$/.test(walletScope))
+      throw new Error("unavailable");
+  }
+  async readOwnedAllocations(
+    input: { nodeId: string; environment: string },
+    parent: AbortSignal
+  ): Promise<readonly ComputeProofAllocation[]> {
+    z.object({
+      nodeId: z.string().uuid(),
+      environment: z.enum(["candidate-a", "preview", "production"]),
+    })
+      .strict()
+      .parse(input);
+    parent.throwIfAborted();
+    // Transport busy refusal, not a second application/global admission owner or queue.
+    if (this.active) throw new Error("unavailable");
+    this.active = true;
+    const reserveAbort = new AbortController();
+    const signal = AbortSignal.any([
+      parent,
+      reserveAbort.signal,
+      AbortSignal.timeout(1900),
+    ]);
+    const client = postgres(this.dsn, {
+      max: 1,
+      connect_timeout: 1,
+      idle_timeout: 1,
+      connection: {
+        application_name: "compute-release-proof-allocation",
+        default_transaction_read_only: true,
+        statement_timeout: 1500,
+        lock_timeout: 1000,
+      },
+    });
+    let closing: Promise<void> | undefined;
+    const close = (): Promise<void> => {
+      closing ??= client.end({ timeout: 0 });
+      return closing;
+    };
+    const abort = () => {
+      void close().catch(() => {
+        /* original close is awaited below; no capacity reuse on uncertainty */
+      });
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    let session: ReservedSql | undefined;
+    let reserveTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const originalReserve = client.reserve();
+      reserveTimer = setTimeout(() => reserveAbort.abort(), 100);
+      // Do not race and discard the original reservation; abort destroys THIS transport.
+      session = await originalReserve;
+      clearTimeout(reserveTimer);
+      signal.throwIfAborted();
+      const originalQuery = session`SELECT node_id, composite_uid, composite_generation, workload, environment, state, external_name, provider_account FROM public.akash_tx_allocations WHERE wallet_scope=${this.walletScope} AND node_id=${input.nodeId}::uuid AND environment=${input.environment} AND state='allocated' AND external_name IS NOT NULL ORDER BY updated_at LIMIT 33`;
+      const rows = await originalQuery;
+      signal.throwIfAborted();
+      if (rows.length >= 33) throw new Error("unavailable");
+      const allocations = rows.map((value) => {
+        const row = rowSchema.parse(value);
+        return {
+          identity: {
+            nodeId: row.node_id,
+            compositeUid: row.composite_uid,
+            compositeGeneration: row.composite_generation,
+          },
+          workload: row.workload,
+          environment: row.environment,
+          state: row.state,
+          externalName: row.external_name,
+          providerAccount: row.provider_account,
+        };
+      });
+      session.release();
+      session = undefined;
+      await close();
+      signal.throwIfAborted();
+      return allocations;
+    } catch {
+      throw new Error("unavailable");
+    } finally {
+      clearTimeout(reserveTimer);
+      signal.removeEventListener("abort", abort);
+      // Every earlier await observes its original. A rejected/unsettled teardown leaves
+      // this reader fenced; it never destroys or reuses the wallet writer connection.
+      await close();
+      session?.release();
+      this.active = false;
+    }
+  }
+}

@@ -18,8 +18,9 @@ import {
   canonicalProofJson,
   computeProofHash,
 } from "@/features/compute/release-proof/request";
-import type { AkashTxAllocationLedgerPort, AkashTxConsolePort } from "@/ports";
+import type { AkashTxConsolePort } from "@/ports";
 import type {
+  ComputeProofAllocationReadPort,
   ComputeReleaseProofPort,
   ProofKubeReadClient,
 } from "@/ports/compute-release-proof.port";
@@ -69,7 +70,7 @@ export class NativeComputeReleaseProofAdapter
 {
   constructor(
     private readonly kube: ProofKubeReadClient,
-    private readonly ledger: Pick<AkashTxAllocationLedgerPort, "listAllocated">,
+    private readonly allocations: ComputeProofAllocationReadPort | undefined,
     private readonly provider: Pick<
       AkashTxConsolePort,
       "readManagedDefinition"
@@ -186,11 +187,14 @@ export class NativeComputeReleaseProofAdapter
         if (!ready.ready) throw new Error("actuator_lag");
         native = "verified";
         // Handle comes only from the owned allocation. The public input cannot select one.
-        const rows = await this.ledger.listAllocated({
-          nodeId: input.expected.nodeId,
-          environment: input.expected.environment,
-          limit: 33,
-        });
+        if (!this.allocations) throw new Error("unavailable");
+        const rows = await this.allocations.readOwnedAllocations(
+          {
+            nodeId: input.expected.nodeId,
+            environment: input.expected.environment,
+          },
+          signal
+        );
         signal.throwIfAborted();
         if (rows.length >= 33) throw new Error("ownership");
         const matches = rows.filter(
@@ -531,23 +535,51 @@ export class NativeComputeReleaseProofAdapter
         ].some((n) => n !== 1)
       )
         throw new Error("provider_unavailable");
-      // Keys only; provider secret/env values are neither compared nor returned/hashed.
-      const env = array(s.env ?? []).map((x) => {
+      // Compare only the finite PUBLIC topology emitted by the owned assembler.
+      // Arbitrary env/secret values are never accepted, compared, hashed or returned.
+      const entries = array(s.env ?? []).map((x) => {
         if (typeof x !== "string" || !x.includes("="))
           throw new Error("provider_unavailable");
-        return x.slice(0, x.indexOf("="));
+        const at = x.indexOf("=");
+        return [x.slice(0, at), x.slice(at + 1)] as const;
       });
+      if (new Set(entries.map(([key]) => key)).size !== entries.length)
+        throw new Error("provider_unavailable");
+      const topology: Record<string, string> = {
+        HOST: service.bindHost,
+        HOSTNAME: service.bindHost,
+        PORT: String(service.port),
+      };
+      for (const binding of service.bindings) {
+        const target = w.services.find(
+          (candidate) => candidate.name === binding.service
+        );
+        if (
+          !target ||
+          binding.key in topology ||
+          service.secretRefs.some((ref) => ref.key === binding.key)
+        )
+          throw new Error("provider_unavailable");
+        topology[binding.key] = `http://${target.name}:${target.port}`;
+      }
+      if (service.secretRefs.some((ref) => ref.key in topology))
+        throw new Error("provider_unavailable");
+      for (const [key, expected] of Object.entries(topology)) {
+        const actual = entries.find(([name]) => name === key);
+        if (!actual || actual[1] !== expected)
+          throw new Error("provider_unavailable");
+      }
+      const keys = entries.map(([key]) => key);
       if (
-        new Set(env).size !== env.length ||
-        [
-          ...service.secretRefs.map((r) =>
-            r.key === "LITELLM_VIRTUAL_KEY" &&
-            service.runtimeProfile === "cogni-node-app-v1"
-              ? "LITELLM_MASTER_KEY"
-              : r.key
-          ),
-          ...service.bindings.map((b) => b.key),
-        ].some((k) => !env.includes(k))
+        service.secretRefs.some(
+          (ref) =>
+            !keys.includes(
+              ref.key === "LITELLM_VIRTUAL_KEY" &&
+                service.runtimeProfile === "cogni-node-app-v1"
+                ? "LITELLM_MASTER_KEY"
+                : ref.key
+            )
+        )
       )
         throw new Error("provider_unavailable");
     }

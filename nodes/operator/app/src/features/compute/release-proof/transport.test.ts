@@ -491,3 +491,157 @@ describe("proof credential custody declarations", () => {
     ]);
   });
 });
+
+import type { Database } from "@cogni/db-client";
+import * as proofTestSchema from "@cogni/db-schema";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import { afterAll, beforeAll } from "vitest";
+import { DrizzleAkashTxAllocationLedger } from "@/adapters/server/compute/akash-tx-allocation-ledger.adapter";
+import { PostgresComputeProofAllocationReader } from "@/adapters/server/compute/compute-release-proof-allocation.adapter";
+
+// This lane requires an explicit, empty, temporary LOCAL PostgreSQL fixture. It never
+// reads .env.test/node DSNs, inserts allocation/payment receipts, or contacts a provider.
+// biome-ignore lint/style/noProcessEnv: Explicit test-only local fixture opt-in, never application DSNs.
+const localProofDsn = process.env.COMPUTE_PROOF_TEST_DATABASE_URL ?? "";
+const localProofFixture =
+  // biome-ignore lint/style/noProcessEnv: This explicit test-only guard prevents use of node credentials or databases.
+  process.env.COMPUTE_PROOF_TEST_LOCAL_EMPTY_FIXTURE === "1" &&
+  /^postgres:\/\/proof_test@127\.0\.0\.1:\d+\/postgres$/.test(localProofDsn);
+describe.skipIf(!localProofFixture)(
+  "real proof allocation transport (empty local PostgreSQL only)",
+  () => {
+    const options = {
+      max: 1,
+      connect_timeout: 1,
+      connection: { application_name: "proof-test-control" },
+    };
+    let fixtureCreated = false;
+    let blocker: ReturnType<typeof postgres>,
+      observer: ReturnType<typeof postgres>,
+      wallet: ReturnType<typeof postgres>;
+    const input = {
+      nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+      environment: "candidate-a",
+    };
+    const scope = `akash-console:akash1${"x".repeat(38)}`;
+    beforeAll(async () => {
+      blocker = postgres(localProofDsn, options);
+      observer = postgres(localProofDsn, options);
+      wallet = postgres(localProofDsn, {
+        ...options,
+        connection: { application_name: "proof-test-wallet" },
+      });
+      const tables =
+        await observer`SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='akash_tx_allocations'`;
+      if (tables.length !== 0) throw new Error("fixture must start empty");
+      // EMPTY test relation only. No fabricated paid receipt or provider-success row.
+      await observer`CREATE TABLE public.akash_tx_allocations (node_id uuid,composite_uid text,composite_generation integer,workload text,environment text,state text,external_name text,provider_account text,wallet_scope text,updated_at timestamptz,id uuid,cogni_key text,allocation_cursor text,last_applied_sdl_hash text,applied_database_cell_binding jsonb)`;
+      fixtureCreated = true;
+    });
+    afterAll(async () => {
+      if (fixtureCreated)
+        await observer`DROP TABLE public.akash_tx_allocations`;
+      await Promise.all([
+        blocker?.end({ timeout: 0 }),
+        observer?.end({ timeout: 0 }),
+        wallet?.end({ timeout: 0 }),
+      ]);
+    });
+    async function lockedReader() {
+      const lock = await blocker.reserve();
+      await lock`BEGIN`;
+      await lock`LOCK TABLE public.akash_tx_allocations IN ACCESS EXCLUSIVE MODE`;
+      const reader = new PostgresComputeProofAllocationReader(
+          localProofDsn,
+          scope
+        ),
+        controller = new AbortController();
+      const original = reader.readOwnedAllocations(input, controller.signal);
+      void original.catch(() => {});
+      let pid: number | undefined;
+      for (let i = 0; i < 30; i++) {
+        const rows = await observer<
+          { pid: number }[]
+        >`SELECT pid FROM pg_stat_activity WHERE application_name='compute-release-proof-allocation' AND wait_event_type='Lock'`;
+        if (rows[0]) {
+          pid = rows[0].pid;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+      if (!pid) {
+        controller.abort();
+        await original.catch(() => {});
+        await lock`ROLLBACK`;
+        lock.release();
+        throw new Error("real read never reached the relation lock");
+      }
+      return { lock, reader, controller, original, pid };
+    }
+    it("aborts the original locked SELECT, refuses queueing, settles before reuse and leaves wallet capacity available", async () => {
+      const h = await lockedReader();
+      try {
+        const started = performance.now();
+        expect((await wallet`SELECT 1 AS available`)[0]?.available).toBe(1);
+        expect(performance.now() - started).toBeLessThan(1000);
+        await expect(
+          h.reader.readOwnedAllocations(input, new AbortController().signal)
+        ).rejects.toThrow("unavailable");
+        h.controller.abort();
+        await expect(h.original).rejects.toThrow("unavailable");
+        expect(performance.now() - started).toBeLessThan(2000);
+      } finally {
+        h.controller.abort();
+        await h.original.catch(() => {});
+        await h.lock`ROLLBACK`;
+        h.lock.release();
+      }
+      expect(
+        await h.reader.readOwnedAllocations(input, new AbortController().signal)
+      ).toEqual([]);
+      expect((await wallet`SELECT 1 AS available`)[0]?.available).toBe(1);
+      const walletDb: Database = drizzle(wallet, { schema: proofTestSchema });
+      const actualWalletLedger = new DrizzleAkashTxAllocationLedger(
+        async () => walletDb,
+        scope
+      );
+      expect(
+        await actualWalletLedger.listAllocated({ ...input, limit: 1 })
+      ).toEqual([]);
+    });
+    it("bounds an original lock wait without caller cancellation", async () => {
+      const started = performance.now(),
+        h = await lockedReader();
+      try {
+        await expect(h.original).rejects.toThrow("unavailable");
+        expect(performance.now() - started).toBeLessThan(2000);
+        expect((await wallet`SELECT 1 AS available`)[0]?.available).toBe(1);
+      } finally {
+        h.controller.abort();
+        await h.original.catch(() => {});
+        await h.lock`ROLLBACK`;
+        h.lock.release();
+      }
+    });
+    it("settles real proof backend loss without destroying the wallet session", async () => {
+      const walletBefore = (await wallet`SELECT pg_backend_pid() AS pid`)[0]
+        ?.pid;
+      const h = await lockedReader(),
+        started = performance.now();
+      try {
+        await observer`SELECT pg_terminate_backend(${h.pid})`;
+        await expect(h.original).rejects.toThrow("unavailable");
+        expect(performance.now() - started).toBeLessThan(2000);
+        expect((await wallet`SELECT pg_backend_pid() AS pid`)[0]?.pid).toBe(
+          walletBefore
+        );
+      } finally {
+        h.controller.abort();
+        await h.original.catch(() => {});
+        await h.lock`ROLLBACK`;
+        h.lock.release();
+      }
+    });
+  }
+);

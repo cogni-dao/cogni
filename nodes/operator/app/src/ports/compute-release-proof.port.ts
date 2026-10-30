@@ -29,3 +29,20 @@ export interface ComputeProofAdmissionPort {
     signal: AbortSignal
   ): Promise<ComputeProofAdmissionLease>;
 }
+
+/** Private allocation facts only; this capability cannot borrow the wallet writer pool. */
+export type ComputeProofAllocation = Pick<
+  import("./akash-tx.port").AkashTxAllocationRecord,
+  | "identity"
+  | "workload"
+  | "environment"
+  | "state"
+  | "externalName"
+  | "providerAccount"
+>;
+export interface ComputeProofAllocationReadPort {
+  readOwnedAllocations(
+    input: { readonly nodeId: string; readonly environment: string },
+    signal: AbortSignal
+  ): Promise<readonly ComputeProofAllocation[]>;
+}

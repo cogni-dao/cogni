@@ -239,12 +239,20 @@ function nativeHarness() {
     externalName: "12345",
     providerAccount: "provider-owned",
   };
-  const ledger = { listAllocated: vi.fn(async () => [allocation]) };
+  const ledger = {
+    readOwnedAllocations: vi.fn(
+      async (
+        _input: { nodeId: string; environment: string },
+        _signal: AbortSignal
+      ) => [allocation]
+    ),
+  };
   const sdl = {
     version: "2.0",
     services: {
       app: {
         image,
+        env: ["HOST=0.0.0.0", "HOSTNAME=0.0.0.0", "PORT=3000"],
         expose: [
           {
             port: 3000,
@@ -411,40 +419,8 @@ describe("current native evidence (test-only injection)", () => {
     }
   });
   it("covers private sibling services and rejects missing provider evidence for them", async () => {
-    const h = nativeHarness(),
-      workload = required(h.input.expected.workloads[0]);
-    const worker = {
-      ...required(workload.services[0]),
-      name: "worker",
-      artifact: "worker",
-      runtimeProfile: "image-default" as const,
-      visibility: "private" as const,
-      port: 9000,
-    };
-    workload.services.push(worker);
-    workload.artifacts.push({
-      name: "worker",
-      image: `ghcr.io/cogni/worker@sha256:${"f".repeat(64)}`,
-    });
-    const { commandTemplate: _, bindings: __, ...declared } = worker;
-    h.live.spec.workload.services.push({ ...declared, bindings: {} });
-    Object.assign(h.sdl.services, {
-      worker: {
-        image: required(workload.artifacts[1]).image,
-        expose: [{ port: 9000, as: 9000, to: [{ service: "app" }] }],
-      },
-    });
-    Object.assign(h.sdl.profiles.compute, {
-      worker: structuredClone(h.sdl.profiles.compute.app),
-    });
-    Object.assign(h.sdl.deployment, {
-      worker: { cogni: { profile: "worker", count: 1 } },
-    });
-    h.observed.services.push({
-      ...required(h.observed.services[0]),
-      name: "worker",
-    });
-    h.observed.providerSdl = stringify(h.sdl);
+    const h = nativeHarness();
+    addPrivateSibling(h);
     expect(
       (await h.adapter.sample(h.input, new AbortController().signal))
         .dimensions[0]?.provider
@@ -455,6 +431,89 @@ describe("current native evidence (test-only injection)", () => {
         .dimensions[0]?.provider
     ).toBe("unavailable");
   });
+  it("rejects wrong/missing public and private bind host, listen port and declared binding target", async () => {
+    for (const target of ["app", "worker"]) {
+      for (const bad of [
+        "HOST=127.0.0.1",
+        "HOSTNAME=127.0.0.1",
+        "PORT=9999",
+        "UPSTREAM_URL=http://foreign:9000",
+      ]) {
+        const h = nativeHarness();
+        addPrivateSibling(h);
+        const workload = required(h.input.expected.workloads[0]);
+        const source = required(
+          workload.services.find((service) => service.name === target)
+        );
+        source.bindings = [
+          { key: "UPSTREAM_URL", service: target === "app" ? "worker" : "app" },
+        ];
+        Object.assign(
+          required(
+            h.live.spec.workload.services.find(
+              (service) => service.name === target
+            )
+          ).bindings,
+          { UPSTREAM_URL: target === "app" ? "worker" : "app" }
+        );
+        const services = h.sdl.services as Record<string, { env: string[] }>;
+        const service = required(services[target]);
+        service.env = [
+          "HOST=0.0.0.0",
+          "HOSTNAME=0.0.0.0",
+          `PORT=${source.port}`,
+          `UPSTREAM_URL=http://${target === "app" ? "worker:9000" : "app:3000"}`,
+        ];
+        h.observed.providerSdl = stringify(h.sdl);
+        expect(
+          (await h.adapter.sample(h.input, new AbortController().signal))
+            .dimensions[0]?.provider
+        ).toBe("verified");
+        const key = bad.slice(0, bad.indexOf("="));
+        service.env = service.env.filter(
+          (entry) => !entry.startsWith(`${key}=`)
+        );
+        service.env.push(bad);
+        h.observed.providerSdl = stringify(h.sdl);
+        expect(
+          (await h.adapter.sample(h.input, new AbortController().signal))
+            .dimensions[0]?.provider
+        ).toBe("unavailable");
+        service.env = service.env.filter(
+          (entry) => !entry.startsWith(`${key}=`)
+        );
+        h.observed.providerSdl = stringify(h.sdl);
+        expect(
+          (await h.adapter.sample(h.input, new AbortController().signal))
+            .dimensions[0]?.provider
+        ).toBe("unavailable");
+      }
+    }
+  });
+  it("passes the original abort to the owned allocation reader and fences original settlement", async () => {
+    const h = nativeHarness(),
+      controller = new AbortController();
+    let stopped: () => void = () => {};
+    const entered = new Promise<void>((resolve) => {
+      stopped = resolve;
+    });
+    h.ledger.readOwnedAllocations.mockImplementationOnce(
+      async (_input, signal: AbortSignal) => {
+        stopped();
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => setTimeout(resolve, 25), {
+            once: true,
+          })
+        );
+        throw new Error("unavailable");
+      }
+    );
+    const sample = h.adapter.sample(h.input, controller.signal);
+    await entered;
+    controller.abort();
+    expect((await sample).dimensions[0]?.provider).toBe("unavailable");
+    expect(h.provider.readManagedDefinition).not.toHaveBeenCalled();
+  });
   it("does not invent k3s or forbidden native evidence", async () => {
     const h = nativeHarness();
     required(h.input.expected.workloads[0]).kind = "Deployment";
@@ -463,6 +522,18 @@ describe("current native evidence (test-only injection)", () => {
         .dimensions[0]?.native
     ).toBe("unavailable");
     expect(h.kube.json).not.toHaveBeenCalled();
+    const missing = nativeHarness();
+    const noReader = new NativeComputeReleaseProofAdapter(
+      missing.kube,
+      undefined,
+      missing.provider
+    );
+    expect(
+      (await noReader.sample(missing.input, new AbortController().signal))
+        .dimensions[0]?.provider
+    ).toBe("unavailable");
+    expect(missing.ledger.readOwnedAllocations).not.toHaveBeenCalled();
+    expect(missing.provider.readManagedDefinition).not.toHaveBeenCalled();
     const forbidden = nativeHarness();
     forbidden.kube.json.mockRejectedValueOnce(
       new Error("private token and native URL must stay private")
@@ -504,4 +575,41 @@ describe("current native evidence (test-only injection)", () => {
 function required<T>(value: T | undefined): T {
   if (value === undefined) throw new Error("unavailable");
   return value;
+}
+
+function addPrivateSibling(h: ReturnType<typeof nativeHarness>) {
+  const workload = required(h.input.expected.workloads[0]);
+  const worker = {
+    ...required(workload.services[0]),
+    name: "worker",
+    artifact: "worker",
+    runtimeProfile: "image-default" as const,
+    visibility: "private" as const,
+    port: 9000,
+  };
+  workload.services.push(worker);
+  workload.artifacts.push({
+    name: "worker",
+    image: `ghcr.io/cogni/worker@sha256:${"f".repeat(64)}`,
+  });
+  const { commandTemplate: _, bindings: __, ...declared } = worker;
+  h.live.spec.workload.services.push({ ...declared, bindings: {} });
+  Object.assign(h.sdl.services, {
+    worker: {
+      image: required(workload.artifacts[1]).image,
+      env: ["HOST=0.0.0.0", "HOSTNAME=0.0.0.0", "PORT=9000"],
+      expose: [{ port: 9000, as: 9000, to: [{ service: "app" }] }],
+    },
+  });
+  Object.assign(h.sdl.profiles.compute, {
+    worker: structuredClone(h.sdl.profiles.compute.app),
+  });
+  Object.assign(h.sdl.deployment, {
+    worker: { cogni: { profile: "worker", count: 1 } },
+  });
+  h.observed.services.push({
+    ...required(h.observed.services[0]),
+    name: "worker",
+  });
+  h.observed.providerSdl = stringify(h.sdl);
 }

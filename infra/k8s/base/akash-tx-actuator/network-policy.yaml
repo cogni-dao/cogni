@@ -25,4 +25,4 @@ spec:
             matchLabels:
               pkg.crossplane.io/provider: provider-http
       ports:
-        - {protocol: TCP, port: 8080}
+        - { protocol: TCP, port: 8080 }
