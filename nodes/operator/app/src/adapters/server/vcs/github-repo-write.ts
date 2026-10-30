@@ -11,6 +11,8 @@
  *   Does not belong in `VcsCapability` because that capability is shared with poly/resy/node-template stubs
  *   and these write ops are operator-only.
  * Invariants:
+ *   - INDEPENDENT_WORKFLOW_SOURCE: a separately authorized remote-node workflow override
+ *     pins parent workflow code independently while retaining child-only artifact inputs.
  *   - GH_APP_INSTALL_REQUIRED: caller must verify the app is installed on the target repo; we surface a
  *     clear error if not. Installation must cover the node repo (private-safe).
  *   - NODE_FORMATION_TREE: a publish creates one reviewable tree — catalog row (with source_sha pin),
@@ -48,8 +50,9 @@ import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-
 import type {
+  CancelCandidateMaintenanceInput,
+  CancelCandidateMaintenanceResult,
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
   ClassifyEnvManagerPrInput,
@@ -117,7 +120,9 @@ import {
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 import { classifyEnvManagerCommit } from "@/shared/vcs/env-manager-pr";
+import { cancelCandidateMaintenance } from "./maintenance-cancel";
 import { resolveReviewedWorkflowRef } from "./reviewed-workflow-ref";
+import { reconcileWorkerRouting } from "./worker-custodied-routing";
 
 const ENV_MANAGER_CHANGE_TYPE = "cogni.env-manager.v1";
 
@@ -137,6 +142,10 @@ export function envManagerCommitMessage(input: {
 
 export interface GitHubRepoWriterConfig {
   readonly appId: string;
+  /** Fixed service-write boundary. Missing values fail closed for worker routing. */
+  readonly hostingEnv?: string | undefined;
+  readonly parentOwner?: string | undefined;
+  readonly parentRepo?: string | undefined;
   readonly privateKey: string;
   /**
    * Flag-gated DNS reverse/forward reconcile (story.5020 W4). v0 ships false — the env-membership verb
@@ -508,6 +517,7 @@ function candidateInfraPathLane(
   }
   if (
     path === "infra/openfga/rbac-model.json" ||
+    path === "infra/images/litellm/cogni_callbacks.py" ||
     path.startsWith("infra/compose/edge/") ||
     path.startsWith("infra/compose/runtime/") ||
     path.startsWith("infra/k8s/argocd/image-updater/") ||
@@ -1075,6 +1085,24 @@ export class GitHubRepoWriter implements DeployPlanePort {
       appId: config.appId,
       privateKey: config.privateKey,
     });
+  }
+
+  async cancelCandidateMaintenance(
+    input: CancelCandidateMaintenanceInput
+  ): Promise<CancelCandidateMaintenanceResult> {
+    const { parentOwner, parentRepo } = this.config;
+    if (!parentOwner || !parentRepo)
+      throw deployPlaneError(
+        "maintenance_parent_unconfigured",
+        "operator mutation parent is required",
+        503
+      );
+    return cancelCandidateMaintenance(
+      await this.getOctokit(parentOwner, parentRepo),
+      parentOwner,
+      parentRepo,
+      input
+    );
   }
 
   async prepareNodeRefCandidateFlight(
@@ -1788,6 +1816,14 @@ export class GitHubRepoWriter implements DeployPlanePort {
   async reconcileNodeInfra(
     input: ReconcileNodeInfraInput
   ): Promise<NodeInfraReconcileResult> {
+    if ("target" in input) {
+      return reconcileWorkerRouting(
+        input,
+        this.config,
+        () => this.getOctokit(input.parentOwner, input.parentRepo),
+        (client) => this.resolveOperatorBotIdentity(client)
+      );
+    }
     if (input.env === "candidate-a") {
       return this.reconcileCandidateInfra(input);
     }
@@ -2259,7 +2295,15 @@ export class GitHubRepoWriter implements DeployPlanePort {
     slug: string;
     sourceSha: string;
     workflowRef?: string;
+    workflowSha?: string;
   }): Promise<CandidateFlightDispatchResult> {
+    if (input.workflowSha !== undefined && input.workflowRef === undefined) {
+      throw deployPlaneError(
+        "workflow_ref_required",
+        "workflowSha requires workflowRef",
+        400
+      );
+    }
     const octokit = await this.getOctokit(input.owner, input.repo);
     const reviewedWorkflow = input.workflowRef
       ? await resolveReviewedWorkflowRef({
@@ -2267,7 +2311,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
           owner: input.owner,
           repo: input.repo,
           workflowRef: input.workflowRef,
-          sourceSha: input.sourceSha,
+          sourceSha: input.workflowSha ?? input.sourceSha,
         })
       : null;
     const workflowRef = reviewedWorkflow?.dispatchRef ?? "main";
@@ -2280,17 +2324,18 @@ export class GitHubRepoWriter implements DeployPlanePort {
         // GitHub accepts a branch/tag, not a raw commit SHA. Explicit refs dispatch through an
         // operator-created content-addressed branch whose target was verified above.
         ref: workflowRef,
-        inputs: reviewedWorkflow
-          ? {
-              // Reviewed workflow code is necessarily a same-repository parent PR. Dispatch the
-              // existing PR mode so candidate-flight resolves every affected parent target.
-              pr_number: String(reviewedWorkflow.prNumber),
-              head_sha: reviewedWorkflow.resolvedSha,
-            }
-          : {
-              node_slug: input.slug,
-              source_sha: input.sourceSha,
-            },
+        inputs:
+          reviewedWorkflow && input.workflowSha === undefined
+            ? {
+                // Reviewed workflow code is necessarily a same-repository parent PR. Dispatch the
+                // existing PR mode so candidate-flight resolves every affected parent target.
+                pr_number: String(reviewedWorkflow.prNumber),
+                head_sha: reviewedWorkflow.resolvedSha,
+              }
+            : {
+                node_slug: input.slug,
+                source_sha: input.sourceSha,
+              },
         request: { signal: AbortSignal.timeout(15_000) },
       }
     );
@@ -3448,7 +3493,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
     if (present) {
       // ADD touches the one WORKLOAD env's template overlay + external-secret (+ its scheduler
-      // routing patch for an akash lane), and the CONTROL env's appsets kustomization (bug.5204 —
+      // routing patch plus any foreign control-worker custody patch), and the CONTROL env's appsets kustomization (bug.5204 —
       // for an akash non-production lane that is appsets/production/, not the workload env's dir).
       const controlEnv = shape?.controlEnv ?? env;
       templateOverlayByEnv[env] = await this.readFileOnMain(
@@ -3476,12 +3521,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
         APPSET_TEMPLATE_PATH
       );
       const schedulerEndpointPatchByEnv: Record<string, string> = {};
-      if (shape?.placement === "akash") {
-        schedulerEndpointPatchByEnv[env] = await this.readFileOnMain(
+      for (const target of new Set([env, controlEnv])) {
+        schedulerEndpointPatchByEnv[target] = await this.readFileOnMain(
           octokit,
           owner,
           repo,
-          schedulerEndpointPatchPath(env)
+          schedulerEndpointPatchPath(target)
         );
       }
       const { port, nodePort } = parseCatalogPorts(catalog, slug);
@@ -3501,8 +3546,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
     // REMOVE (atomic per-env): the planner rewrites the CONTROL env's kustomization — derived from
     // the PRE-mutation catalog, whose placement cells still exist at plan time (bug.5204 parity
-    // with the add; `production` for an akash non-production lane). An akash remove also restores
-    // the env's scheduler-worker route to the in-cluster default, so fetch that env's patch too.
+    // with the add; `production` for an akash non-production lane). Remove routing aliases from
+    // both the workload lane and any foreign control-worker namespace (bug.5536).
     // (Caddy is per-node env-independent state and NOT touched by an env remove.)
     const removeProvider = parseCatalogPlacement(catalog)[env] ?? "k3s";
     const removeControlEnv = controlEnvFor(
@@ -3517,12 +3562,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
       appsetsKustomizationPath(removeControlEnv)
     );
     const removeSchedulerPatchByEnv: Record<string, string> = {};
-    if (removeProvider === "akash") {
-      removeSchedulerPatchByEnv[env] = await this.readFileOnMain(
+    for (const target of new Set([env, removeControlEnv])) {
+      removeSchedulerPatchByEnv[target] = await this.readFileOnMain(
         octokit,
         owner,
         repo,
-        schedulerEndpointPatchPath(env)
+        schedulerEndpointPatchPath(target)
       );
     }
     return {

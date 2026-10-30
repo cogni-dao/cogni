@@ -33,6 +33,7 @@ import {
   createFrontendTesterGraph,
   FRONTEND_TESTER_GRAPH_NAME,
 } from "./graphs/frontend-tester/graph";
+import { COGNI_PROMPT, COGNI_TOOL_IDS } from "./graphs/operator/cogni";
 import {
   createOperatorGraph,
   GIT_REVIEWER_GRAPH_NAME,
@@ -67,6 +68,7 @@ import {
   RESEARCH_GRAPH_NAME,
 } from "./graphs/research/graph";
 import { RESEARCH_TOOL_IDS } from "./graphs/research/tools";
+import { WORK_PRIORITIZER_GRAPH_NAME } from "./graphs/work-prioritizer/graph";
 import type { CreateGraphFn } from "./inproc/types";
 
 /**
@@ -76,6 +78,7 @@ import type { CreateGraphFn } from "./inproc/types";
  * Providers resolve tools from TOOL_CATALOG using these IDs.
  */
 export interface CatalogEntry {
+  readonly program?: "cogni" | "work-review";
   readonly displayName: string;
   readonly description: string;
   /** Native tool IDs this graph may use. Providers resolve from TOOL_CATALOG. */
@@ -85,7 +88,17 @@ export interface CatalogEntry {
   readonly graphFactory: CreateGraphFn;
   /** Optional system prompt for operator graphs (catalog-driven, not hardcoded). */
   readonly systemPrompt?: string;
+  /**
+   * Graph-owned run report (PURE_GRAPH_FACTORY): the graph returns `structuredResponse.telemetry` (flat,
+   * safe to log). The provider logs it as `event` (a registered event name) and echoes it onto the run
+   * stream as one GRAPH_REPORT_OPEN…GRAPH_REPORT_CLOSE text delta.
+   */
+  readonly report?: { readonly event: string };
 }
+
+/** Delimiters of a catalog-declared run report on the run stream (CatalogEntry.report). */
+export const GRAPH_REPORT_OPEN = "<graph_report>";
+export const GRAPH_REPORT_CLOSE = "</graph_report>";
 
 export type LangGraphCatalog = Readonly<Record<string, CatalogEntry>>;
 
@@ -237,10 +250,34 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
   [GIT_REVIEWER_GRAPH_NAME]: {
     displayName: "Git Reviewer",
     description:
-      "Queue observer — reports merge-ready item status from metadata",
+      "Queue observer — reports review, flight and validation status from metadata",
     toolIds: GIT_REVIEWER_TOOL_IDS as readonly string[],
     graphFactory: createOperatorGraph,
     systemPrompt: GIT_REVIEWER_PROMPT,
+  },
+
+  /**
+   * Cogni mission agent (story.5116). The existing scheduled graph ID is a compatibility
+   * assignment of the same factory used by chat. It gathers across the read planes, then files
+   * exactly one core__edo_decide decision — the run's only write (requires node.collaborate).
+   */
+  cogni: {
+    displayName: "Cogni",
+    description: "Hub-grounded mission agent; files one EDO decision",
+    toolIds: COGNI_TOOL_IDS,
+    graphFactory: createOperatorGraph,
+    systemPrompt: COGNI_PROMPT,
+    program: "cogni",
+  },
+  [WORK_PRIORITIZER_GRAPH_NAME]: {
+    displayName: "Cogni Work Review",
+    description:
+      "Source-grounded work review from the same Cogni factory; files one EDO decision",
+    toolIds: COGNI_TOOL_IDS,
+    graphFactory: createOperatorGraph,
+    systemPrompt: COGNI_PROMPT,
+    program: "work-review",
+    report: { event: "ai.work_prioritizer.cycle" },
   },
 } as const;
 
@@ -279,10 +316,12 @@ export const NODE_LANGGRAPH_GRAPH_IDS = {
 } as const;
 
 export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
+  cogni: `${LANGGRAPH_PROVIDER_ID}:cogni`,
   ...NODE_LANGGRAPH_GRAPH_IDS,
   "operating-review": `${LANGGRAPH_PROVIDER_ID}:${OPERATING_REVIEW_GRAPH_NAME}`,
   "pr-manager": `${LANGGRAPH_PROVIDER_ID}:${PR_MANAGER_GRAPH_NAME}`,
   "git-reviewer": `${LANGGRAPH_PROVIDER_ID}:${GIT_REVIEWER_GRAPH_NAME}`,
+  "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,
 } as const;
 
 /**

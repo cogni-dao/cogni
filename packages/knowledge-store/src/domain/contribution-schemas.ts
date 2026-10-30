@@ -22,6 +22,8 @@
 
 import { z } from "zod";
 
+import { ResolutionStrategySchema } from "./schemas.js";
+
 export const PrincipalKindSchema = z.enum(["agent", "user"]);
 export type PrincipalKind = z.infer<typeof PrincipalKindSchema>;
 
@@ -57,6 +59,16 @@ export const KnowledgeEntryInputSchema = z.object({
   useWhen: z.string().min(1).max(320).optional(),
   entryType: z.string().min(1).max(64).optional(),
   tags: z.array(z.string().max(64)).max(32).optional(),
+  /**
+   * ISO datetime — a hypothesis's appointment with truth or a goal's `By:`
+   * deadline. Required by the adapter when `entryType` is `hypothesis` or
+   * `goal` (HYPOTHESIS_HAS_EVALUATE_AT). Lets a goal or bet be
+   * proposed through a focused inbox (bug.5504). Kept a string on the wire;
+   * the adapter converts it to a timestamp at write.
+   */
+  evaluateAt: z.string().datetime({ offset: true }).optional(),
+  /** Namespaced resolver id on hypothesis rows (`agent`, `metric:<kpi-id>`, …). */
+  resolutionStrategy: ResolutionStrategySchema.optional(),
 });
 export type KnowledgeEntryInput = z.infer<typeof KnowledgeEntryInputSchema>;
 
@@ -256,3 +268,47 @@ export const ContributionDiffEntrySchema = z.object({
   after: z.record(z.string(), z.unknown()).nullable(),
 });
 export type ContributionDiffEntry = z.infer<typeof ContributionDiffEntrySchema>;
+
+/** A native check of one immutable committed pair, never a future merge guarantee. */
+export const ContributionMergePreviewSchema = z.object({
+  contributionId: z.string(),
+  status: z.enum(["clean", "conflicted", "changed", "unavailable"]),
+  mainCommit: z
+    .string()
+    .regex(/^[0-9a-v]{32}$/)
+    .nullable(),
+  contributionCommit: z
+    .string()
+    .regex(/^[0-9a-v]{32}$/)
+    .nullable(),
+  checkedAt: z.string().datetime(),
+  reason: z
+    .enum([
+      "empty",
+      "not_open",
+      "not_found",
+      "head_changed",
+      "dirty_main",
+      "native_unavailable",
+      "malformed_result",
+    ])
+    .nullable(),
+  conflicts: z
+    .array(
+      z.object({
+        table: z.string().min(1).max(256),
+        dataConflicts: z
+          .string()
+          .regex(/^(0|[1-9][0-9]*)$/)
+          .nullable(),
+        schemaConflicts: z
+          .string()
+          .regex(/^(0|[1-9][0-9]*)$/)
+          .nullable(),
+      })
+    )
+    .max(50),
+});
+export type ContributionMergePreview = z.infer<
+  typeof ContributionMergePreviewSchema
+>;

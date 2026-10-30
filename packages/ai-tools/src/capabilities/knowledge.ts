@@ -42,12 +42,16 @@ export interface KnowledgeSearchParams {
   domain: string;
   query: string;
   limit?: number;
+  /** Include EDO rows (event/hypothesis/decision/outcome). Default false. */
+  includeEdo?: boolean;
 }
 
 export interface KnowledgeListParams {
   domain: string;
   tags?: string[];
   limit?: number;
+  /** Include EDO rows (event/hypothesis/decision/outcome). Default false. */
+  includeEdo?: boolean;
 }
 
 /**
@@ -89,4 +93,34 @@ export interface KnowledgeCapability {
   get(id: string): Promise<KnowledgeEntry | null>;
   /** Write a knowledge entry + auto-commit. Returns the entry with defaults applied. */
   write(params: KnowledgeWriteParams): Promise<KnowledgeEntry>;
+  /**
+   * The approved DAO goals (ONE_GOAL_LIST, dao-goals-design): merged `goal-*` atoms, not deprecated.
+   * Optional: a node whose store has no goal reader omits it and `core__goal_list` reports goals
+   * unavailable.
+   */
+  listActiveGoals?(): Promise<readonly ActiveGoalInfo[]>;
+  /**
+   * The hub's governing guidance index (guidance-routing-design): every governing row across all
+   * domains with its use-when trigger, sorted by domain then id. Optional: a node whose store has no
+   * index reader omits it and `core__knowledge_index` reports the index unavailable.
+   */
+  listGoverningIndex?(): Promise<readonly GoverningIndexEntry[]>;
+}
+
+/** One governing index row as tools see it: routing metadata, never a body. */
+export interface GoverningIndexEntry {
+  readonly id: string;
+  readonly domain: string;
+  readonly entryType: string;
+  readonly useWhen: string;
+}
+
+/** One approved DAO goal as tools see it. */
+export interface ActiveGoalInfo {
+  readonly id: string;
+  readonly title: string;
+  /** The goal statement (KPI, baseline, target, by, serves-mission). */
+  readonly content: string;
+  /** ISO `By:` deadline, when set. */
+  readonly evaluateAt: string | null;
 }

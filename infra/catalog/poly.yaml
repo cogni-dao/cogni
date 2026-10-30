@@ -185,7 +185,22 @@ lease_generation:
   # closes + re-mints elsewhere; ours serves.
   #
   # DO NOT widen required_placement_countries to rescue this. (bug.5293)
-  production: 20
+  #
+  # 20 -> 24. Gen-20 is now SPENT: the adopted Finland lease (dseq 1790822853178,
+  # RHITE akash127x6cuk4…dhz7) was CLOSED on 2026-10-28T23:08Z, reason
+  # lease_closed_owner, confirmed on-chain + Console. Cause was a stale-bootEpoch
+  # trap, NOT the market: a paused XR's boot deadline (20:51:16Z epoch) was not
+  # reset across pause/unpause, so re-unpausing after it had lapsed tripped
+  # bootPolicy.onDeadline=Close immediately. Gens 21/22/23 are also spent, so 24 is
+  # the next free generation (create idempotency key is generation-only). A fresh
+  # generation gets a FRESH boot window — no stale epoch.
+  #
+  # Market is NOT dry: a throwaway-wallet bid probe (dseq 1793229530311, closed) of
+  # poly's exact SDL returned 10 bids in 7s, 5 from AKASH_ALLOWED_PROVIDERS incl.
+  # RHITE Finland akash127x6cuk4…dhz7 @ 9.69 and akash1z9nr23cg… @ 10.00. The 9f6ceb53
+  # DB migration already succeeded and the DB-cell banks are repointed to :32728, so
+  # the new lease should connect and hold /readyz. (poly prod outage recovery, bug.5293)
+  production: 24
 required_placement_countries:
   candidate-a: [BE]
   production: [FI, NL, PT]

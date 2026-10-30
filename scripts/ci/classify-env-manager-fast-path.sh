@@ -226,7 +226,9 @@ else
   gh api --paginate "repos/$REPOSITORY/pulls/$pr_number/files" --jq '.[]' | jq -s '.' > "$files_json"
 fi
 
-jq -e 'length > 0 and length <= 6
+# Five membership files plus lane and derived-control scheduler patches.
+# Exact path and signed-hash checks below still bound every accepted change.
+jq -e 'length > 0 and length <= 7
   and all(.filename | type == "string")
   and all(.previous_filename == null)
   and all(.status == "added" or .status == "modified" or .status == "removed")' \
@@ -291,6 +293,7 @@ else
   # shellcheck disable=SC1090
   source <(git show origin/main:scripts/ci/lib/appset-paths.sh)
 fi
+expected_control_env="$(control_env_for "$env_name" "$node")"
 expected_appset="$(appset_rel_path "$env_name" "$node")"
 expected_appsets_kustomization="$(appsets_kustomization_rel_path "$env_name" "$node")"
 
@@ -302,7 +305,8 @@ while IFS= read -r changed_file; do
     "infra/catalog/$node.yaml")
       catalog_seen=true
       ;;
-    "infra/k8s/overlays/$env_name/scheduler-worker/node-endpoints.patch.yaml")
+    "infra/k8s/overlays/$env_name/scheduler-worker/node-endpoints.patch.yaml"|\
+    "infra/k8s/overlays/$expected_control_env/scheduler-worker/node-endpoints.patch.yaml")
       ;;
     "infra/k8s/overlays/$env_name/$node/kustomization.yaml"|\
     "infra/k8s/overlays/$env_name/$node/external-secret.yaml")

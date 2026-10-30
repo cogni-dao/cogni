@@ -24,7 +24,8 @@
  *   - NARROWEST_ACTIVATION: exactly one managed type is activated, and it is namespaced.
  *   - DNS_TYPE_FOLLOWS_TARGET: hostnames publish as CNAME; IPv4-only ingress publishes as A.
  *   - CREATE_AMBIGUITY_RECOVERY_REQUIRES_IDEMPOTENCE_PROOF: DNS adopts by name; a paid lease
- *     releases the guard only with exact-key, active-resource, external-handle and revision proof.
+ *     releases the guard only with a pending timestamp and exact-key, active-resource,
+ *     external-handle OBSERVE proof, including revisions that previously served.
  *   - OVERLAP_BEFORE_CLOSE: a lease close is IRREVERSIBLE and its idempotence key is refused
  *     forever once settled, so the outgoing lease is held open until the incoming one is proven
  *     serving and DNS has flipped. Never more than two lease children for one (node, env).
@@ -241,7 +242,7 @@ describe("XComputeWorkload composite API (task.5096)", () => {
       // bug.5287: the deadline binds to the CURRENT attempt via $hasServedDesired.
       // The retired '$neverServed' form keyed on a LATCHED field, so it could only ever be
       // true on a first boot and made BOOT_SLO_OR_CLOSE unreachable thereafter.
-      "$deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds)"
+      '$deadlineExceeded := and (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds)'
     );
   });
 
@@ -262,7 +263,15 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     // The latch is persisted where the next render reads it.
     const bootEpoch = (statusSchema.bootEpoch as YamlObject)
       .properties as YamlObject;
-    expect(Object.keys(bootEpoch)).toEqual(["key", "at"]);
+    expect(Object.keys(bootEpoch)).toEqual(["key", "at", "mintedAt"]);
+    expect(template).toContain('dig "status" "bootEpoch" "mintedAt" "" $xr');
+    expect(template).toContain(
+      'and (eq $mintedAt "") $found (not $closed) (ne $externalName "") (eq $responseKey $currentKey)'
+    );
+    // Explicit null clears the previous attempt through Crossplane's status merge.
+    expect((bootEpoch.mintedAt as YamlObject).nullable).toBe(true);
+    expect(template).toContain("mintedAt: null");
+    expect(template).toContain("bootDeadlineAt: null");
   });
 
   it("emits the host-routed serving proof after the phase-1 reader rollout (bug.5237)", () => {
@@ -319,7 +328,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // deadline on it made BOOT_SLO_OR_CLOSE unreachable for the rest of an XR's life — toks5
     // production billed three generations with bootDeadlineAt hours past and reason=None.
     expect(templateCode).toContain(
-      "$deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds)"
+      '$deadlineExceeded := and (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds)'
     );
     // no live template expression may reference the retired predicate
     const live = templateCode
@@ -1113,73 +1122,6 @@ describe("XComputeWorkload authority handoff (task.5096)", () => {
   });
 });
 
-describe("XComputeWorkload secret rotation re-sends the SDL (bug.5256)", () => {
-  // The lease Request block only — the retained outgoing child must stay OBSERVE-only.
-  const leaseBlock = templateCode.slice(
-    templateCode.indexOf("composition-resource-name: {{ $leaseResourceName }}"),
-    templateCode.indexOf("composition-resource-name: dns-record")
-  );
-
-  it("reads the env Secret as a Crossplane required resource in the XR namespace", () => {
-    expect(templateCode).toContain(
-      "apiVersion: meta.gotemplating.fn.crossplane.io/v1alpha1"
-    );
-    expect(templateCode).toContain("kind: ExtraResources");
-    expect(templateCode).toMatch(
-      /compute-env-secrets:\s+apiVersion: v1\s+kind: Secret\s+matchName: \{\{ \$secretName \| quote \}\}\s+namespace: \{\{ \$ns \| quote \}\}/
-    );
-    // Only workloads that actually reference the Secret ask for it.
-    expect(templateCode).toContain("{{- if $hasSecretRefs }}");
-  });
-
-  it("lets only a value-free fingerprint out of the Secret object", () => {
-    const reads = [
-      ...templateCode.matchAll(/dig ([^\n]*?) \$envSecretsObject/g),
-    ].map((m) => m[1]);
-    expect(reads).toEqual([
-      '"metadata" "annotations" "reconcile.external-secrets.io/data-hash" ""',
-    ]);
-    // The object is never rendered, serialized or indexed any other way.
-    expect(templateCode).not.toMatch(/toJson \$envSecretsObject/);
-    expect(templateCode).not.toMatch(/\$envSecretsObject\.data/);
-    expect(templateCode).not.toMatch(/index \$envSecretsObject/);
-  });
-
-  it("latches only a fingerprint a 2xx CREATE/UPDATE under the current key actually carried", () => {
-    expect(templateCode).toContain(
-      '$envSecretsApplied := dig "status" "envSecrets" "fingerprint" "" $xr'
-    );
-    expect(templateCode).toContain(
-      '$lastActionMutated := or (hasSuffix "/v1/akash/update" $lastActionUrl) (hasSuffix "/v1/akash/create" $lastActionUrl)'
-    );
-    expect(templateCode).toContain(
-      "{{- if and $lastActionMutated (ge $respStatus 200) (lt $respStatus 300) (eq $responseKey $cogniKey) (has $envSecretsFingerprint $lastActionFingerprints) }}"
-    );
-    expect(statusSchema.envSecrets).toBeDefined();
-    expect(templateCode).toContain(
-      "fingerprint: {{ $envSecretsApplied | quote }}"
-    );
-  });
-
-  it("drives the EXISTING update action and never the paid key", () => {
-    // Drift only falsifies the candidate's expectedResponseCheck; it never touches cogniKey,
-    // leaseGeneration or the retained child's observe-only logic.
-    expect(templateCode).toContain(
-      '$upToDateLogic = printf "%s and (%q == %q)" $upToDateLogic $envSecretsApplied $envSecretsFingerprint'
-    );
-    expect(templateCode).not.toMatch(/\$retainedUpToDateLogic = /);
-    expect(templateCode).not.toMatch(/\$cogniKey :?=[^\n]*envSecrets/);
-    expect(templateCode).not.toMatch(/envSecrets[^\n]*\$leaseGeneration/);
-    // The header that binds a request to its fingerprint rides the candidate lease only.
-    expect(leaseBlock).toContain(
-      "{{ $envSecretsFingerprintHeader }}: [{{ $envSecretsFingerprint | quote }}]"
-    );
-    expect(
-      templateCode.match(/\{\{ \$envSecretsFingerprintHeader \}\}:/g)
-    ).toHaveLength(1);
-  });
-});
-
 describe("XComputeWorkload public reachability (bug.5152)", () => {
   // Everything from the Cloudflare Request to the end of the template. Sliced from the
   // prose-stripped source because the assertions below are mostly negative, and the comments
@@ -1312,11 +1254,9 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     expect(templateCode).toContain(
       '$leaseReceiptProven := and (ge $leaseReceiptStatus 200) (lt $leaseReceiptStatus 300) $leaseReceiptObserved $leaseReceiptFound (eq $leaseReceiptState "active") (ne $leaseReceiptExternalName "") (eq $responseKey $currentKey)'
     );
+    expect(templateCode).not.toContain("$leaseRevisionPending");
     expect(templateCode).toContain(
-      "$leaseRevisionPending := ne $prevSha $desiredSha"
-    );
-    expect(templateCode).toContain(
-      '$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven $leaseRevisionPending'
+      '$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven'
     );
     expect(templateCode).toContain(
       "$unsafeLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $recoverLeaseCreateAmbiguity)"
@@ -1329,6 +1269,7 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     type Proof = {
       ambiguous: boolean;
       pending: string;
+      currentStatus: number;
       currentObserved: boolean;
       cachedStatus: number;
       cachedObserved: boolean;
@@ -1340,12 +1281,10 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       externalName: string;
       responseKey: string;
       currentKey: string;
-      previousSha: string;
-      desiredSha: string;
     };
     const safe = (p: Proof) => {
       const useCache = !p.currentObserved;
-      const receiptStatus = useCache ? p.cachedStatus : 200;
+      const receiptStatus = useCache ? p.cachedStatus : p.currentStatus;
       const observed = useCache ? p.cachedObserved : p.currentObserved;
       const found = useCache ? p.cachedFound : p.found;
       const active = useCache ? p.cachedActive : p.active;
@@ -1359,13 +1298,13 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
         found &&
         active &&
         externalName !== "" &&
-        p.responseKey === p.currentKey &&
-        p.previousSha !== p.desiredSha
+        p.responseKey === p.currentKey
       );
     };
     const valid: Proof = {
       ambiguous: true,
       pending: "2026-10-14T07:05:33Z",
+      currentStatus: 200,
       currentObserved: true,
       cachedStatus: 200,
       cachedObserved: true,
@@ -1377,18 +1316,18 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       externalName: "1791427850757",
       responseKey: "xcw:cogni-production:red:0",
       currentKey: "xcw:cogni-production:red:0",
-      previousSha: "old",
-      desiredSha: "new",
     };
     expect(safe(valid)).toBe(true);
     for (const unsafe of [
       { ambiguous: false },
       { pending: "" },
+      { currentStatus: 199 },
+      { currentStatus: 300 },
+      { currentStatus: 503 },
       { found: false },
       { active: false },
       { externalName: "" },
       { responseKey: "different-key" },
-      { previousSha: "new" },
     ]) {
       expect(safe({ ...valid, ...unsafe })).toBe(false);
     }
@@ -1398,6 +1337,7 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     expect(
       safe({
         ...valid,
+        currentStatus: 503,
         currentObserved: false,
         found: false,
         active: false,
@@ -1414,6 +1354,7 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       expect(
         safe({
           ...valid,
+          currentStatus: 503,
           currentObserved: false,
           found: false,
           active: false,
@@ -1422,6 +1363,36 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
         })
       ).toBe(false);
     }
+
+    // A current OBSERVE that says gone/closed is contrary evidence, not permission
+    // to fall back to the otherwise valid cached allocation.
+    expect(safe({ ...valid, found: false })).toBe(false);
+    expect(safe({ ...valid, active: false })).toBe(false);
+    // A CREATE/UPDATE echo may carry a handle, but without found it cannot prove
+    // an allocation on its own. Only an independently valid OBSERVE cache can.
+    expect(
+      safe({ ...valid, currentObserved: false, cachedObserved: false })
+    ).toBe(false);
+  });
+
+  it("does not use served revision history to block an otherwise proven allocation", () => {
+    // Source-level regression: Beacon had already observed its desired SHA when
+    // a later response lost serving. The allocation/key remained the same; that
+    // SHA latch must not prevent provider-http from observing it again.
+    const recoveryDeclaration = templateCode.match(
+      /\$recoverLeaseCreateAmbiguity :=[^\n]+/
+    )?.[0];
+    expect(recoveryDeclaration).toBe(
+      '$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven }}'
+    );
+    expect(leaseBlock).toContain(
+      "crossplane.io/external-create-succeeded: {{ $leaseCreatePending | quote }}"
+    );
+    // Acknowledging the create receipt does not fabricate a successful probe.
+    expect(leaseBlock).toContain("{{- if and $active $serving }}");
+    expect(templateCode).toContain(
+      '{{- $serving := dig "serving" false $resp }}'
+    );
   });
 });
 
@@ -1546,8 +1517,9 @@ describe("catalog lease generation naming", () => {
     // that re-enters createAndLease to retry the manifest delivery.
     // task.5256: preview gen-2 was intentionally retired through the actuator;
     // provider closure and its released receipt permit reviewed replacement :3.
+    // bug.5532: explicitly reviewed replacement of the unhealthy ACTIVE production placement.
     expect(toks5.lease_generation?.preview).toBe(3);
-    expect(toks5.lease_generation?.production).toBe(5);
+    expect(toks5.lease_generation?.production).toBe(6);
   });
 });
 
@@ -2460,7 +2432,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
    * worse than no copy: REMOVE is how the retained child eventually closes its lease, so it has
    * to keep speaking the same actuator wire as the child that minted it.
    */
-  describe("the retained Request is the paid Request, modulo six documented differences", () => {
+  describe("the retained Request is the paid Request, modulo five documented differences", () => {
     const COMMENT = /\{\{-?\s*\/\*[\s\S]*?\*\/\s*-?\}\}/g;
     const retainedBlock = template.slice(
       template.lastIndexOf("{{- if $holdOutgoingLease }}"),
@@ -2496,8 +2468,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
             ) &&
             !t.startsWith("crossplane.io/reconcile-requested-at:") &&
             !t.startsWith("crossplane.io/external-create-succeeded:") &&
-            !t.startsWith("gotemplating.fn.crossplane.io/ready:") &&
-            !t.startsWith("{{ $envSecretsFingerprintHeader }}:")
+            !t.startsWith("gotemplating.fn.crossplane.io/ready:")
           );
         })
         .map((line) =>
@@ -2516,7 +2487,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
 
     it("differs nowhere else — same baseUrl, auth, mappings and isRemovedCheck", () => {
       expect(normalized(retainedBlock)).toEqual(normalized(candidateBlock));
-      // The six differences, asserted positively so a future edit cannot quietly merge them.
+      // The five differences, asserted positively so a future edit cannot quietly merge them.
       expect(retainedBlock).toContain(
         "composition-resource-name: {{ $retainedResourceName }}"
       );
@@ -2535,10 +2506,6 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       // observe-only and must preserve Crossplane's generic ambiguity guard.
       expect(candidateBlock).toContain("$recoverLeaseCreateAmbiguity");
       expect(retainedBlock).not.toContain("external-create-succeeded");
-      // bug.5256: only the candidate binds its requests to an env-secret fingerprint; the
-      // incumbent is observe-only and must never be driven to UPDATE by a rotation.
-      expect(candidateBlock).toContain("{{ $envSecretsFingerprintHeader }}:");
-      expect(retainedBlock).not.toContain("envSecrets");
     });
 
     it("is OBSERVE-only: expectedResponseCheck can never choose UPDATE on a live lease", () => {

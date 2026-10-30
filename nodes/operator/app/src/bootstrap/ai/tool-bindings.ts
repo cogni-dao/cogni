@@ -7,6 +7,7 @@
  * Scope: Creates bindings record for tool source factory. Does NOT execute tools.
  * Invariants:
  *   - CAPABILITY_INJECTION: Implementations receive capabilities at construction
+ *   - SHARED_EVALUATION: baseline implementations come from the exact tools release; operator gates stay node-owned.
  *   - NO_STUB_AT_RUNTIME: All tools have real implementations with I/O
  *   - IO_VIA_ADAPTERS: Capabilities wrap adapter ports from container
  * Side-effects: none
@@ -17,22 +18,25 @@
 import type {
   EdoCapability,
   KnowledgeCapability,
+  KnowledgeContributionReadCapability,
   MetricsCapability,
+  NodeCodeCapability,
   RepoCapability,
   ScheduleCapability,
   ToolImplementation,
   VcsCapability,
   WebSearchCapability,
-  WorkItemCapability,
 } from "@cogni/ai-tools";
 import {
-  createEdoDecideImplementation,
   createEdoHypothesizeImplementation,
   createEdoRecordOutcomeImplementation,
+  createKnowledgeContributionReadImplementation,
+  createKnowledgeIndexImplementation,
   createKnowledgeReadImplementation,
-  createKnowledgeSearchImplementation,
   createKnowledgeWriteImplementation,
   createMetricsQueryImplementation,
+  createNodeCodeListImplementation,
+  createNodeCodeReadImplementation,
   createRepoListImplementation,
   createRepoOpenImplementation,
   createRepoSearchImplementation,
@@ -44,17 +48,20 @@ import {
   createVcsListPrsImplementation,
   createVcsMergePrImplementation,
   createWebSearchImplementation,
-  createWorkItemQueryImplementation,
-  createWorkItemTransitionImplementation,
+  createWorkItemReadImplementation,
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
   GET_CURRENT_TIME_NAME,
-  getCurrentTimeImplementation,
+  GOAL_LIST_NAME,
+  KNOWLEDGE_CONTRIBUTION_READ_NAME,
+  KNOWLEDGE_INDEX_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
   KNOWLEDGE_WRITE_NAME,
   METRICS_QUERY_NAME,
+  NODE_CODE_LIST_NAME,
+  NODE_CODE_READ_NAME,
   REPO_LIST_NAME,
   REPO_OPEN_NAME,
   REPO_SEARCH_NAME,
@@ -67,14 +74,28 @@ import {
   VCS_MERGE_PR_NAME,
   WEB_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
+  WORK_ITEM_READ_NAME,
   WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
+
+import {
+  createEdoDecideImplementation,
+  createGoalListImplementation,
+  createKnowledgeSearchImplementation,
+  createWorkItemQueryImplementation,
+  createWorkItemTransitionImplementation,
+  getCurrentTimeImplementation,
+  type WorkItemCapability,
+} from "@cogni/shared-ai-tools";
 
 /**
  * Dependencies required to create tool bindings.
  * These are resolved from the container at bootstrap time.
  */
 export interface ToolBindingDeps {
+  readonly nodeCodeCapability?: NodeCodeCapability;
+  readonly knowledgeContributionReadCapability?: KnowledgeContributionReadCapability;
+  readonly nodePublicOrigin?: string | undefined;
   readonly knowledgeCapability: KnowledgeCapability;
   readonly edoCapability: EdoCapability;
   readonly metricsCapability: MetricsCapability;
@@ -109,13 +130,46 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
   // Type widening: implementations are contravariant in input type, so we
   // cast to the base type. This is safe because contractToRuntime validates
   // at runtime via Zod schemas.
+  const nodeCodeCapability = deps.nodeCodeCapability ?? {
+    read: async () => {
+      throw new Error("node_code_source_unavailable");
+    },
+    list: async () => {
+      throw new Error("node_code_source_unavailable");
+    },
+  };
   return {
+    [NODE_CODE_READ_NAME]: createNodeCodeReadImplementation({
+      nodeCodeCapability,
+    }) as AnyToolImplementation,
+    [NODE_CODE_LIST_NAME]: createNodeCodeListImplementation({
+      nodeCodeCapability,
+    }) as AnyToolImplementation,
+    [KNOWLEDGE_CONTRIBUTION_READ_NAME]:
+      createKnowledgeContributionReadImplementation(
+        deps.knowledgeContributionReadCapability ?? {
+          read: async () => {
+            throw new Error("knowledge_inbox_source_unavailable");
+          },
+        }
+      ) as AnyToolImplementation,
+    [WORK_ITEM_READ_NAME]: createWorkItemReadImplementation({
+      workItemCapability: deps.workItemCapability,
+    }) as AnyToolImplementation,
     // Pure tools (no I/O dependencies)
     [GET_CURRENT_TIME_NAME]:
       getCurrentTimeImplementation as AnyToolImplementation,
 
     // Knowledge tools (Doltgres-backed knowledge store)
+    [GOAL_LIST_NAME]: createGoalListImplementation({
+      nodePublicOrigin: deps.nodePublicOrigin,
+      knowledgeCapability: deps.knowledgeCapability,
+    }) as AnyToolImplementation,
+    [KNOWLEDGE_INDEX_NAME]: createKnowledgeIndexImplementation({
+      knowledgeCapability: deps.knowledgeCapability,
+    }) as AnyToolImplementation,
     [KNOWLEDGE_SEARCH_NAME]: createKnowledgeSearchImplementation({
+      nodePublicOrigin: deps.nodePublicOrigin,
       knowledgeCapability: deps.knowledgeCapability,
     }) as AnyToolImplementation,
     [KNOWLEDGE_READ_NAME]: createKnowledgeReadImplementation({
@@ -187,6 +241,7 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
     }) as AnyToolImplementation,
 
     [WORK_ITEM_QUERY_NAME]: createWorkItemQueryImplementation({
+      nodePublicOrigin: deps.nodePublicOrigin,
       workItemCapability: deps.workItemCapability,
     }) as AnyToolImplementation,
 

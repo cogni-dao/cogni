@@ -4,8 +4,8 @@
 /**
  * Module: `@app/api/v1/work/items/[id]/route`
  * Purpose: HTTP endpoints for getting, patching, and deleting a single work item by ID.
- * Scope: Auth-protected GET (markdown ∪ Doltgres routed by ID range), PATCH (Doltgres only), and DELETE (Doltgres hard-delete with dolt_log audit).
- * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, HARD_DELETE_RECOVERABLE_VIA_DOLT_REVERT, CODED_WRITE_ERRORS.
+ * Scope: Auth-protected GET/PATCH and retired DELETE response; does not implement persistence or allow hard deletion.
+ * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, DURABLE_IDENTITY_NEVER_REUSED, CODED_WRITE_ERRORS.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write/delete)
  * Links: contracts/work.items.{get,patch,delete}.v1.contract
  * @public
@@ -61,8 +61,10 @@ export const GET = wrapRouteHandlerWithLogging<{
 /**
  * PATCH /api/v1/work/items/:id — Patch a work item (Doltgres only).
  *
- * v0 trusts the bearer of a valid token (no expectedRevision, no transition
- * state-machine — see PATCH_ALLOWLIST). Author embedded in dolt_log.
+ * Trusts the bearer of a valid token under the store's author-scoped authority
+ * (no transition state-machine — see PATCH_ALLOWLIST). Optional top-level
+ * `expectedRevision` is compare-and-set: a moved row answers 409
+ * `revision_conflict` with `currentRevision`. Author embedded in dolt_log.
  */
 export const PATCH = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
@@ -102,8 +104,10 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       ctx.log.info({ workItemId: id }, "work.items.patch_success");
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {
-      // Coded responses: 403 authz_denied (permanent), 503 work_items_busy
-      // (retryable), 503 not-ready, 404 missing. Anything unrecognized rethrows
+      // Coded responses: 400 work_item_scores_invalid (story.5111), 403
+      // authz_denied (permanent), 409 revision_conflict
+      // (CAS lost, nothing written), 503 work_items_busy (retryable), 503
+      // not-ready, 404 missing. Anything unrecognized rethrows
       // to the wrapper's 500 — the catch is NOT broadened (bug.5408).
       const coded = workItemsWriteErrorResponse(ctx, e);
       if (coded) return coded;
@@ -113,11 +117,10 @@ export const PATCH = wrapRouteHandlerWithLogging<{
 );
 
 /**
- * DELETE /api/v1/work/items/:id — Hard-delete a work item from Doltgres.
+ * DELETE /api/v1/work/items/:id — Retired by the shared content adapter.
  *
- * The deletion is captured as a dolt_log commit; recovery via dolt_revert
- * remains available. Idempotent at the contract level: a missing id returns 404,
- * not 500. Returns `{id, deleted: true}` on success.
+ * Returns a coded 410 directing callers to PATCH status=cancelled. The shared
+ * adapter refuses before SQL, preserving durable item identity and provenance.
  */
 export const DELETE = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;

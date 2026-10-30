@@ -654,6 +654,252 @@ describe("syncGovernanceSchedules", () => {
   });
 });
 
+describe("GRAPH_CHARTER — governance schedule `graph:` (task.5282)", () => {
+  const GRAPH_GRANT_ID = "test-graph-grant-id-001";
+  const PRIORITIZER = {
+    charter: "WORK_PRIORITIZER",
+    cron: "*/30 * * * *",
+    timezone: "UTC",
+    entrypoint: "PRIORITIZE",
+    graph: "langgraph:work-prioritizer",
+    model: "gpt-oss-120b",
+  };
+  const operatorCreated = (deps: GovernanceScheduleSyncDeps) =>
+    vi
+      .mocked(deps.scheduleControl.createSchedule)
+      .mock.calls.map(([params]) => params);
+
+  it("runs the declared langgraph graph via GraphRunWorkflow with a messages + platform modelRef input", async () => {
+    const deps = makeMockDeps({
+      isOperatorNode: true,
+      ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
+    });
+
+    const result = await syncGovernanceSchedules(
+      { schedules: [PRIORITIZER] },
+      deps
+    );
+
+    expect(result.created).toEqual(["governance:work_prioritizer"]);
+    const [params] = operatorCreated(deps);
+    expect(params).toMatchObject({
+      scheduleId: "governance:work_prioritizer",
+      graphId: "langgraph:work-prioritizer",
+      executionGrantId: GRAPH_GRANT_ID,
+      cron: "*/30 * * * *",
+      timezone: "UTC",
+      input: {
+        messages: [{ role: "user", content: "PRIORITIZE" }],
+        modelRef: { providerKey: "platform", modelId: "gpt-oss-120b" },
+      },
+    });
+    // undefined workflowType ⇒ adapter default GraphRunWorkflow; default queue.
+    expect(params?.workflowType).toBeUndefined();
+    expect(params?.taskQueueOverride).toBeUndefined();
+    expect(deps.ensureGraphGrant).toHaveBeenCalledWith(
+      "langgraph:work-prioritizer"
+    );
+    expect(deps.upsertGovernanceScheduleRow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        graphId: "langgraph:work-prioritizer",
+        executionGrantId: GRAPH_GRANT_ID,
+      })
+    );
+  });
+
+  it("appends a trusted policy payload to the graph message as a fenced json block", async () => {
+    const deps = makeMockDeps({
+      isOperatorNode: true,
+      ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
+    });
+    const payload = { workPrioritization: { policyVersion: "v5.0" } };
+    await syncGovernanceSchedules(
+      { schedules: [{ ...PRIORITIZER, payload }] },
+      deps
+    );
+    const [params] = operatorCreated(deps);
+    expect(params?.input).toEqual({
+      messages: [
+        {
+          role: "user",
+          content: `PRIORITIZE\n\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``,
+        },
+      ],
+      modelRef: { providerKey: "platform", modelId: "gpt-oss-120b" },
+    });
+  });
+
+  it("GRAPH_CRON_DRIFT: a cron change (*/15 → */5) on a graph charter updates the Temporal schedule", async () => {
+    const existing = (nextRunAtIso: string): ScheduleDescription => ({
+      scheduleId: "governance:work_prioritizer",
+      nextRunAtIso,
+      lastRunAtIso: null,
+      isPaused: false,
+      cron: null, // Temporal never returns the cron
+      timezone: "UTC",
+      input: {
+        messages: [{ role: "user", content: "PRIORITIZE" }],
+        modelRef: { providerKey: "platform", modelId: PRIORITIZER.model },
+      },
+      dbScheduleId: `${MOCK_DB_SCHEDULE_ID}-1`,
+    });
+    const make = (nextCronRun: string) => {
+      const deps = makeMockDeps({
+        isOperatorNode: true,
+        ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
+        nextCronRun: vi.fn().mockReturnValue(nextCronRun),
+      });
+      deps.scheduleControl.createSchedule = vi
+        .fn()
+        .mockRejectedValue(
+          new ScheduleControlConflictError("governance:work_prioritizer")
+        );
+      // The live schedule still fires on the old */15 calendar.
+      deps.scheduleControl.describeSchedule = vi
+        .fn()
+        .mockResolvedValue(existing("2026-10-21T03:00:00.000Z"));
+      return deps;
+    };
+
+    const changed = make("2026-10-21T02:55:00.000Z"); // */5 fires sooner
+    const r1 = await syncGovernanceSchedules(
+      { schedules: [{ ...PRIORITIZER, cron: "*/5 * * * *" }] },
+      changed
+    );
+    expect(r1.updated).toEqual(["governance:work_prioritizer"]);
+    expect(changed.scheduleControl.updateSchedule).toHaveBeenCalledWith(
+      "governance:work_prioritizer",
+      expect.objectContaining({ cron: "*/5 * * * *" })
+    );
+
+    const same = make("2026-10-21T03:00:00.000Z"); // cron unchanged → same next fire
+    const r2 = await syncGovernanceSchedules(
+      { schedules: [{ ...PRIORITIZER, cron: "*/15 * * * *" }] },
+      same
+    );
+    expect(r2.skipped).toEqual(["governance:work_prioritizer"]);
+    expect(same.scheduleControl.updateSchedule).not.toHaveBeenCalled();
+  });
+
+  it("keeps a charter WITHOUT graph on sandbox:openclaw byte-for-byte (governance grant, message+model input)", async () => {
+    const deps = makeMockDeps({
+      ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
+    });
+
+    await syncGovernanceSchedules(
+      makeConfig([
+        { charter: "HEARTBEAT", cron: "0 * * * *", entrypoint: "HEARTBEAT" },
+      ]),
+      deps
+    );
+
+    const [params] = operatorCreated(deps);
+    expect(params?.graphId).toBe("sandbox:openclaw");
+    expect(params?.executionGrantId).toBe(GRANT_ID);
+    expect(params?.input).toEqual({ message: "HEARTBEAT", model: "kimi-k2.5" });
+    expect(params?.workflowType).toBeUndefined();
+    expect(deps.ensureGraphGrant).not.toHaveBeenCalled();
+  });
+
+  it("LEDGER_PRESERVED: adding a graph charter leaves the operator CollectEpoch ledger schedule exactly as before", async () => {
+    const ledgerOnly = makeMockDeps({ isOperatorNode: true });
+    await syncGovernanceSchedules(
+      makeConfig(
+        [
+          {
+            charter: "LEDGER_INGEST",
+            cron: "0 0 * * *",
+            entrypoint: "LEDGER_INGEST",
+          },
+        ],
+        { ledger: LEDGER }
+      ),
+      ledgerOnly
+    );
+    const [ledgerBefore] = operatorCreated(ledgerOnly);
+
+    const withPrioritizer = makeMockDeps({
+      isOperatorNode: true,
+      ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
+    });
+    const result = await syncGovernanceSchedules(
+      {
+        schedules: [
+          PRIORITIZER,
+          {
+            charter: "LEDGER_INGEST",
+            cron: "0 0 * * *",
+            timezone: "UTC",
+            entrypoint: "LEDGER_INGEST",
+          },
+        ],
+        ledger: LEDGER,
+      },
+      withPrioritizer
+    );
+    const ledgerAfter = operatorCreated(withPrioritizer).find(
+      (p) => p.scheduleId === "governance:ledger_ingest"
+    );
+
+    expect(result.created).toEqual([
+      "governance:work_prioritizer",
+      "governance:ledger_ingest",
+    ]);
+    expect(ledgerAfter).toBeDefined();
+    // Same schedule id, workflow, queue, grant, input — only the per-call dbScheduleId differs.
+    const strip = (p: typeof ledgerAfter) => ({ ...p, dbScheduleId: "x" });
+    expect(strip(ledgerAfter)).toEqual(strip(ledgerBefore));
+    expect(ledgerAfter?.workflowType).toBe("CollectEpochWorkflow");
+    expect(ledgerAfter?.executionGrantId).toBe(GRANT_ID);
+    expect(result.paused).toEqual([]);
+  });
+
+  it("ignores `graph` on LEDGER_INGEST (always the epoch-collect workflow)", async () => {
+    const deps = makeMockDeps({
+      isOperatorNode: true,
+      ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
+    });
+    await syncGovernanceSchedules(
+      {
+        schedules: [
+          {
+            charter: "LEDGER_INGEST",
+            cron: "0 0 * * *",
+            timezone: "UTC",
+            entrypoint: "LEDGER_INGEST",
+            graph: "langgraph:work-prioritizer",
+            model: "gpt-oss-120b",
+          },
+        ],
+        ledger: LEDGER,
+      },
+      deps
+    );
+    const [params] = operatorCreated(deps);
+    expect(params?.workflowType).toBe("CollectEpochWorkflow");
+    expect(params?.graphId).toBe("ledger:ingest");
+    expect(deps.ensureGraphGrant).not.toHaveBeenCalled();
+  });
+
+  it("skips (and lets prune pause) a graph charter when no graph grant dep is wired", async () => {
+    const deps = makeMockDeps({
+      isOperatorNode: true,
+      listGovernanceScheduleIds: vi
+        .fn()
+        .mockResolvedValue(["governance:work_prioritizer"]),
+    });
+
+    const result = await syncGovernanceSchedules(
+      { schedules: [PRIORITIZER] },
+      deps
+    );
+
+    expect(deps.scheduleControl.createSchedule).not.toHaveBeenCalled();
+    expect(result.skipped).toEqual(["governance:work_prioritizer"]);
+    expect(result.paused).toEqual(["governance:work_prioritizer"]);
+  });
+});
+
 describe("governanceScheduleId", () => {
   it("is node-scoped and lowercases the charter name", () => {
     expect(governanceScheduleId("node-x", "COMMUNITY")).toBe(

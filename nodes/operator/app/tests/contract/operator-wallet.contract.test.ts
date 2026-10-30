@@ -4,14 +4,15 @@
 /**
  * Module: `@tests/contract/operator-wallet.contract`
  * Purpose: Port contract tests for OperatorWalletPort — validates that adapters fulfill the port contract.
- * Scope: Tests FakeOperatorWalletAdapter against OperatorWalletPort interface. Does not test Privy API calls.
+ * Scope: Fake port and real Privy withdrawal method with injected fake RPC/SDK boundaries. No network calls.
  * Invariants: NO_GENERIC_SIGNING — port exposes named methods only. All methods return expected types.
  * Side-effects: none
  * Links: src/ports/operator-wallet.port.ts
  * @internal
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/privy";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   FakeOperatorWalletAdapter,
@@ -47,9 +48,11 @@ describe("OperatorWalletPort contract", () => {
     );
   });
 
-  it("withdrawToSteward returns a transaction hash", async () => {
-    const txHash = await adapter.withdrawToSteward(1_000_000n);
+  it("withdrawToSteward returns a transaction hash and explicit receipt status", async () => {
+    const { txHash, receiptStatus } =
+      await adapter.withdrawToSteward(1_000_000n);
     expect(txHash).toMatch(/^0x[a-fA-F0-9]{64}$/);
+    expect(receiptStatus).toBe("success");
     expect(adapter.lastWithdrawToStewardAmount).toBe(1_000_000n);
   });
 
@@ -81,5 +84,89 @@ describe("test singleton accessor", () => {
 
     resetTestOperatorWallet();
     expect(wallet.lastDistributeSplitToken).toBeUndefined();
+  });
+});
+
+describe("Privy steward receipt outcomes", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("No live IO allowed");
+      })
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+  const txHash = `0x${"a".repeat(64)}`;
+  it.each([
+    {
+      name: "original success",
+      receipt: { status: "success", transactionHash: txHash },
+      expected: "success",
+    },
+    {
+      name: "original revert",
+      receipt: { status: "reverted", transactionHash: txHash },
+      expected: "reverted",
+    },
+    {
+      name: "mixed-case original hash",
+      receipt: { status: "success", transactionHash: `0x${"A".repeat(64)}` },
+      expected: "success",
+    },
+    {
+      name: "successful replacement",
+      receipt: { status: "success", transactionHash: `0x${"b".repeat(64)}` },
+      expected: "pending",
+    },
+    {
+      name: "reverted replacement",
+      receipt: { status: "reverted", transactionHash: `0x${"b".repeat(64)}` },
+      expected: "pending",
+    },
+    {
+      name: "missing receipt hash",
+      receipt: { status: "success" },
+      expected: "pending",
+    },
+    {
+      name: "invalid receipt hash",
+      receipt: { status: "success", transactionHash: "0xshort" },
+      expected: "pending",
+    },
+    {
+      name: "unsupported status",
+      receipt: { status: "unknown", transactionHash: txHash },
+      expected: "pending",
+    },
+    { name: "unread receipt", receipt: null, expected: "pending" },
+  ])("keeps $name tied to the submitted transfer", async ({
+    receipt,
+    expected,
+  }) => {
+    const sendTransaction = vi.fn(async () => ({ hash: txHash }));
+    const waitForTransactionReceipt = vi.fn(async () => {
+      if (!receipt) throw new Error("RPC timeout");
+      return receipt;
+    });
+    // Exercise the real method while replacing only external service boundaries.
+    const adapter = Object.assign(
+      Object.create(PrivyOperatorWalletAdapter.prototype),
+      {
+        walletId: "fake-wallet",
+        stewardAddress: "0x1111111111111111111111111111111111111111",
+        maxTopUpUsd: 100,
+        authContext: {},
+        client: { wallets: () => ({ ethereum: () => ({ sendTransaction }) }) },
+        rpcClient: { waitForTransactionReceipt },
+      }
+    ) as PrivyOperatorWalletAdapter;
+    expect(await adapter.withdrawToSteward(1_000_000n)).toEqual({
+      txHash,
+      receiptStatus: expected,
+    });
+    expect(sendTransaction).toHaveBeenCalledTimes(1);
+    expect(waitForTransactionReceipt).toHaveBeenCalledTimes(1);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

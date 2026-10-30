@@ -38,6 +38,7 @@ Shared Zod route contracts and HTTP router definitions for all node apps. PURE_L
 
 All contract files re-exported via `src/index.ts`. Selective re-export for `ai.chat.v1.contract` to avoid `ChatMessage` name collision with `ai.completions.v1.contract`.
 
+- `vcs.flight.v1.contract` — node artifact identity plus an optional paired exact parent workflow SHA/ref for maintainer-authorized remote-node flight
 - `identity.attestation.v1.contract` — frozen operator↔node identity protocol, canonical HTTPS-origin schema, and cross-repository protocol fingerprint
 
 **Internal scheduler-worker → node-app contracts (task.0280):**

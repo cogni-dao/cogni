@@ -66,8 +66,8 @@ export {
 // (story.5060). Routes and facades still depend on this barrel, never on the
 // concrete adapter.
 export type {
+  WorkItemsContentPort,
   WorkItemsCreateInput,
-  WorkItemsDoltgresPort,
   WorkItemsPatchInput,
   WorkItemsPatchSet,
 } from "@cogni/work-items/adapters/doltgres";

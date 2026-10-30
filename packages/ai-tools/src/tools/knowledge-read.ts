@@ -42,6 +42,12 @@ export const KnowledgeReadInputSchema = z
       .max(50)
       .optional()
       .describe("Max results for list mode (1-50, default 20)"),
+    includeEdo: z
+      .boolean()
+      .optional()
+      .describe(
+        "List mode only: include EDO rows (event/hypothesis/decision/outcome); default false"
+      ),
   })
   .refine((d) => d.id || d.domain, {
     message: "Either 'id' or 'domain' is required",
@@ -84,6 +90,7 @@ export const knowledgeReadContract: ToolContract<
     "Use with 'id' to get a specific entry, or 'domain' to list entries (optionally filtered by tags). " +
     "Each entry includes a confidence score (0-100): 30=draft, 80=verified, 95+=hardened.",
   effect: "read_only",
+  requires: "node.collaborate",
   inputSchema: KnowledgeReadInputSchema,
   outputSchema: KnowledgeReadOutputSchema,
   redact: (output) => output,
@@ -130,6 +137,7 @@ export function createKnowledgeReadImplementation(
         domain,
         tags: input.tags,
         limit: input.limit ?? 20,
+        ...(input.includeEdo ? { includeEdo: true } : {}),
       });
       return {
         mode: "list" as const,

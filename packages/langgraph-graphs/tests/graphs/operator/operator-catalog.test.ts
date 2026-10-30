@@ -18,12 +18,16 @@ import {
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
+  GET_CURRENT_TIME_NAME,
+  GOAL_LIST_NAME,
+  KNOWLEDGE_INDEX_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
   KNOWLEDGE_WRITE_NAME,
   REPO_OPEN_NAME,
   REPO_SEARCH_NAME,
   WEB_SEARCH_NAME,
+  WORK_ITEM_QUERY_NAME,
 } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 import {
@@ -67,6 +71,44 @@ describe("operator catalog entries", () => {
     expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
   });
 
+  it("work-prioritizer (mission loop) is operator-only with the exact read allowlist plus the one decision write (core__edo_decide)", () => {
+    const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
+    expect(entry).toBeDefined();
+    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(OPERATOR_LANGGRAPH_CATALOG.cogni.graphFactory).toBe(
+      entry.graphFactory
+    );
+    expect(OPERATOR_LANGGRAPH_CATALOG.cogni.program).toBe("cogni");
+    expect(entry.program).toBe("work-review");
+    expect([...entry.toolIds].sort()).toEqual(
+      [
+        GOAL_LIST_NAME,
+        WORK_ITEM_QUERY_NAME,
+        "core__work_item_read",
+        KNOWLEDGE_READ_NAME,
+        "core__node_code_read",
+        "core__node_code_list",
+        "core__knowledge_contribution_read",
+        KNOWLEDGE_SEARCH_NAME,
+        GET_CURRENT_TIME_NAME,
+        EDO_DECIDE_NAME,
+      ].sort()
+    );
+    expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });
+    expect(OPERATOR_LANGGRAPH_GRAPH_IDS["work-prioritizer"]).toBe(
+      "langgraph:work-prioritizer"
+    );
+    expect(LANGGRAPH_CATALOG["work-prioritizer"]).toBeUndefined();
+    expect("work-prioritizer" in LANGGRAPH_GRAPH_IDS).toBe(false);
+  });
+
+  it("brain reads the governing guidance index (core__knowledge_index)", () => {
+    expect(LANGGRAPH_CATALOG.brain?.toolIds).toContain(KNOWLEDGE_INDEX_NAME);
+    expect(OPERATOR_LANGGRAPH_CATALOG.brain?.toolIds).toContain(
+      KNOWLEDGE_INDEX_NAME
+    );
+  });
+
   it("graph IDs include operator roles", () => {
     expect(OPERATOR_LANGGRAPH_GRAPH_IDS["operating-review"]).toBe(
       "langgraph:operating-review"
@@ -104,6 +146,7 @@ describe("operator catalog entries", () => {
 
       expect(entry.toolIds).toEqual(
         expect.arrayContaining([
+          KNOWLEDGE_INDEX_NAME,
           KNOWLEDGE_SEARCH_NAME,
           KNOWLEDGE_READ_NAME,
           KNOWLEDGE_WRITE_NAME,

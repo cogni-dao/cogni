@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** stable
+- **Last reviewed:** 2026-10-24
 
 ## Purpose
 
@@ -44,7 +45,9 @@ Vertical slices containing use cases like accounts/, ai/, and home/. Orchestrate
 
 ## Public Surface
 
-- **Exports:** accounts/services (admin ops), ai/services (completion), identity/services (attestation issuance policy), home/components (landing page), ingestion/services (webhook receiver), site-meta/services (route manifest)
+- Finance: `finance/types` is the page model (snapshot projected to USD + treasury id + summary); `finance/components/FinanceReportClient` binds the package `@cogni/money-plane/react` FinanceReport (ONE_UI) to this node's kit and routes (fund-steward POST, router.refresh). No table logic, no provider reads here. Development previews inject inert actions; the live binding uses the shared outcome parser to retain valid transaction hashes before HTTP/refusal classification; missing status or HTTP errors remain pending.
+
+- **Exports:** accounts/services (admin ops), ai/services (completion), identity/services (attestation issuance policy), home/components (landing page), ingestion/services (webhook receiver), site-meta/services (route manifest), nodes/launch-pack (legacy and successor packet projections sharing maintained prompt guidance)
 - **Routes (if any):** Feature-specific routes via app/
 - **Env/Config keys:** Feature-specific environment variables
 - **Files considered API:** actions.ts, index.ts, public components

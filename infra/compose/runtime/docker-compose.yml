@@ -177,6 +177,8 @@ services:
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
       - LANGFUSE_HOST=${LANGFUSE_BASE_URL}
       - LANGFUSE_TRACING_ENVIRONMENT=${DEPLOY_ENVIRONMENT}
+      # Record the emitter image identity, using the same expression as image above.
+      - LANGFUSE_RELEASE=${LITELLM_IMAGE:-ghcr.io/cogni-dao/cogni-template:litellm-b6e4e942cb23}
       # Per-node billing callback routing (custom callback class — cogni_callbacks.CogniNodeRouter)
       - COGNI_NODE_ENDPOINTS=${COGNI_NODE_ENDPOINTS}
       # Default node for unattributed spend — primary-host node_id from repo-spec
@@ -478,7 +480,7 @@ services:
     # `postgres` DB that survives restart; CREATE DATABASE is durable across
     # connections + restart; ILIKE remains "not yet supported" (adapter assumption
     # unchanged — the sql.unsafe/escapeValue path is wire-protocol-level).
-    image: dolthub/doltgresql:0.57.3
+    image: ghcr.io/cogni-dao/cogni-template@sha256:f892b365ad6fc6c683da839260f20c4015615c105176a3c21c015ca90d2b70a3
     restart: unless-stopped
     labels:
       # bug.5105: stateful stores are never autohealed. autoheal restarting a

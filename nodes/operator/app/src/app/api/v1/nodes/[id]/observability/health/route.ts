@@ -1,27 +1,119 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Authenticated, node-scoped ReliabilityStatusV1 read. Missing evidence returns unknown. */
+/**
+ * Module: `@app/api/v1/nodes/[id]/observability/health`
+ * Purpose: Authenticated, node-scoped ReliabilityStatusV1 read (GET) and human-session
+ *   readmission command (POST). Missing evidence returns `unknown`.
+ * Scope: Thin shell — session auth, OpenFGA gate, delegate to the reliability actuator,
+ *   local fallback, or metrics-derived status.
+ * Invariants:
+ *   - OBSERVABLE: both verbs run inside `wrapRouteHandlerWithLogging` (routeId
+ *     `nodes.observability.health`) with request-logging-only dependencies, so a cold
+ *     request with fenced DB roles still logs and never constructs the container (bug.5528).
+ *   - TERMINAL_EVENT: each handled request emits exactly one terminal event — GET
+ *     `feature.node_observability_health.complete` (state, regionCount, source), POST
+ *     `feature.node_observability_health.readmit_complete` (phase) — with outcome,
+ *     errorCode, targetNodeId and environment. `nodeId` stays the serving node's binding.
+ *     Never the status body, tokens, actors or incident reasons.
+ *   - AUTH_UNCHANGED: GET accepts session or bearer (`getSessionUser`); POST accepts only a
+ *     human session (`getServerSessionUser`). Both answer a missing identity with 401
+ *     `{error:"unauthorized"}`.
+ * Side-effects: IO (authz check, actuator/metrics/placement reads, readmission command)
+ * Links: src/features/nodes/reliability-status.ts, src/bootstrap/database-reliability-actuator.ts,
+ *   task.5247, bug.5528
+ * @public
+ */
 
-import { reliabilityStatusV1Schema } from "@cogni/node-contracts";
+import {
+  type ReliabilityStatusV1,
+  reliabilityStatusV1Schema,
+} from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import {
   getContainer,
+  getRequestLoggingDependencies,
   resolveDatabasePlacementResolver,
   resolveLocalReliabilityControl,
 } from "@/bootstrap/container";
+import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { readReliabilityStatus } from "@/features/nodes/reliability-status";
 import { getServerSessionUser } from "@/lib/auth/server";
 import type { DatabaseContainmentStatus } from "@/ports";
+import { EVENT_NAMES, type RequestContext } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+const ROUTE_ID = "nodes.observability.health";
+
 const ENVIRONMENTS = ["candidate-a", "preview", "production"] as const;
 type Environment = (typeof ENVIRONMENTS)[number];
+
+interface RouteParams {
+  params: Promise<{ id: string }>;
+}
+
+type HealthSource = "actuator" | "local_fallback" | "metrics";
+
+type GateErrorCode = "node_not_found" | "authz_unavailable" | "authz_denied";
+type HealthErrorCode =
+  | "unauthorized"
+  | GateErrorCode
+  | "reliability_environment_unavailable"
+  | "invalid_env";
+type ReadmitErrorCode =
+  | "unauthorized"
+  | GateErrorCode
+  | "invalid_env"
+  | "reliability_readmit_unavailable"
+  | "reliability_incident_unavailable"
+  | "database_recovery_new_incident_required"
+  | "reliability_recovery_unavailable";
+
+/**
+ * One terminal event per handled request (start + terminal + request-complete = 3 lines).
+ * Unhandled throws skip it: the wrapper's `request failed` line is the terminal there.
+ * App-local registry names, so this logs via ctx.log directly. The target node is
+ * `targetNodeId`: the logger already binds `nodeId` to the serving node.
+ * Privacy: enums, ids and counts only — never bodies, incident reasons or actors.
+ */
+function logTerminal(
+  ctx: RequestContext,
+  event:
+    | typeof EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_COMPLETE
+    | typeof EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_READMIT_COMPLETE,
+  startedAt: number,
+  fields: {
+    outcome: "success" | "error";
+    status: number;
+    errorCode?: HealthErrorCode | ReadmitErrorCode;
+    targetNodeId?: string | undefined;
+    environment?: string | undefined;
+    state?: string;
+    regionCount?: number;
+    source?: HealthSource;
+    phase?: string;
+  }
+): void {
+  const payload = {
+    event,
+    reqId: ctx.reqId,
+    routeId: ctx.routeId,
+    durationMs: Math.round(performance.now() - startedAt),
+    ...fields,
+  };
+  const level =
+    fields.outcome === "success"
+      ? "info"
+      : fields.status >= 500
+        ? "error"
+        : "warn";
+  ctx.log[level](payload, event);
+}
 
 function isEnvironment(value: string | null | undefined): value is Environment {
   return ENVIRONMENTS.some((candidate) => candidate === value);
@@ -41,7 +133,7 @@ async function resolveReliabilityGate(input: {
     return {
       ok: false as const,
       status: 503,
-      errorCode: "authz_unavailable",
+      errorCode: "authz_unavailable" as const,
       local,
     };
   const decision = await local.authorization.check({
@@ -56,49 +148,87 @@ async function resolveReliabilityGate(input: {
       status: decision.code === "authz_unavailable" ? 503 : 403,
       errorCode:
         decision.code === "authz_unavailable"
-          ? "authz_unavailable"
-          : "authz_denied",
+          ? ("authz_unavailable" as const)
+          : ("authz_denied" as const),
       local,
     };
   return { ok: true as const, node, local };
 }
 
-export async function GET(
-  request: Request,
-  context: { params: Promise<{ id: string }> }
-): Promise<NextResponse> {
-  const user = await getSessionUser();
-  if (!user)
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+export const GET = wrapRouteHandlerWithLogging<RouteParams>(
+  {
+    routeId: ROUTE_ID,
+    getRequestDependencies: getRequestLoggingDependencies,
+    auth: { mode: "optional", getSessionUser },
+  },
+  async (ctx, request, user, context) => {
+    if (!context) throw new Error("context required for dynamic routes");
+    const startedAt = performance.now();
+    const fail = (status: number, errorCode: HealthErrorCode, body: object) => {
+      logTerminal(
+        ctx,
+        EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_COMPLETE,
+        startedAt,
+        { outcome: "error", status, errorCode }
+      );
+      return NextResponse.json(body, { status });
+    };
 
-  const { id } = await context.params;
-  const gate = await resolveReliabilityGate({
-    id,
-    userId: user.id,
-    action: "node.flight",
-  });
-  if (!gate.ok)
-    return NextResponse.json(
-      { error: gate.errorCode },
-      { status: gate.status }
-    );
+    if (!user) return fail(401, "unauthorized", { error: "unauthorized" });
 
-  const environment = new URL(request.url).searchParams.get("env");
-  // biome-ignore lint/style/noProcessEnv: deployment-local actuator boundary
-  const localEnvironment = process.env.DEPLOY_ENVIRONMENT;
-  if (!isEnvironment(localEnvironment)) {
-    return NextResponse.json(
-      { error: "reliability_environment_unavailable" },
-      { status: 503 }
+    const { id } = await context.params;
+    const gate = await resolveReliabilityGate({
+      id,
+      userId: user.id,
+      action: "node.flight",
+    });
+    if (!gate.ok)
+      return fail(gate.status, gate.errorCode, { error: gate.errorCode });
+
+    const environment = new URL(request.url).searchParams.get("env");
+    // biome-ignore lint/style/noProcessEnv: deployment-local actuator boundary
+    const localEnvironment = process.env.DEPLOY_ENVIRONMENT;
+    if (!isEnvironment(localEnvironment)) {
+      return fail(503, "reliability_environment_unavailable", {
+        error: "reliability_environment_unavailable",
+      });
+    }
+    if (!isEnvironment(environment) || environment !== localEnvironment) {
+      return fail(400, "invalid_env", {
+        error: "invalid_env",
+        environment: localEnvironment,
+      });
+    }
+
+    // A throw here is the wrapper's `request failed` terminal (3-line budget).
+    const status = await readHealthStatus(gate, environment);
+    logTerminal(
+      ctx,
+      EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_COMPLETE,
+      startedAt,
+      {
+        outcome: "success",
+        status: 200,
+        targetNodeId: status.body.nodeId,
+        environment: status.body.environment,
+        state: status.body.state,
+        regionCount: status.body.regionalReadiness.length,
+        source: status.source,
+      }
     );
+    return NextResponse.json(status.body);
   }
-  if (!isEnvironment(environment) || environment !== localEnvironment) {
-    return NextResponse.json(
-      { error: "invalid_env", environment: localEnvironment },
-      { status: 400 }
-    );
-  }
+);
 
+type ResolvedGate = Extract<
+  Awaited<ReturnType<typeof resolveReliabilityGate>>,
+  { ok: true }
+>;
+
+async function readHealthStatus(
+  gate: ResolvedGate,
+  environment: Environment
+): Promise<{ body: ReliabilityStatusV1; source: HealthSource }> {
   const statusReader =
     gate.local?.statusReader ??
     (gate.local ? undefined : getContainer().reliabilityStatusReader);
@@ -112,7 +242,10 @@ export async function GET(
         .catch(() => null)
     : null;
   if (actuatorStatus) {
-    return NextResponse.json(reliabilityStatusV1Schema.parse(actuatorStatus));
+    return {
+      body: reliabilityStatusV1Schema.parse(actuatorStatus),
+      source: "actuator",
+    };
   }
   if (gate.local) {
     const placement = gate.local.buildSha
@@ -124,8 +257,9 @@ export async function GET(
           })
           .catch(() => null)
       : null;
-    return NextResponse.json(
-      reliabilityStatusV1Schema.parse({
+    return {
+      source: "local_fallback",
+      body: reliabilityStatusV1Schema.parse({
         version: "reliability-status.v1",
         nodeId: gate.node.nodeId,
         slug: gate.node.slug,
@@ -152,8 +286,8 @@ export async function GET(
         observedAt: new Date().toISOString(),
         lastTransitionAt: null,
         evidenceQueryRefs: [],
-      })
-    );
+      }),
+    };
   }
   const container = getContainer();
 
@@ -223,104 +357,133 @@ export async function GET(
     evidenceQueryRefs: [],
   }));
 
-  return NextResponse.json(reliabilityStatusV1Schema.parse(status));
+  return { body: reliabilityStatusV1Schema.parse(status), source: "metrics" };
 }
 
 /** Human-session-attributed command; actor identity is never accepted from the body. */
-export async function POST(
-  request: Request,
-  context: { params: Promise<{ id: string }> }
-): Promise<NextResponse> {
-  const user = await getServerSessionUser();
-  if (!user)
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-
-  const { id } = await context.params;
-  const gate = await resolveReliabilityGate({
-    id,
-    userId: user.id,
-    action: "node.manage_envs",
-  });
-  if (!gate.ok) {
-    return NextResponse.json(
-      { error: gate.errorCode },
-      { status: gate.status }
-    );
-  }
-
-  const body = (await request.json().catch(() => null)) as {
-    env?: unknown;
-  } | null;
-  const environment = body?.env;
-  // biome-ignore lint/style/noProcessEnv: deployment-local command boundary
-  const localEnvironment = process.env.DEPLOY_ENVIRONMENT;
-  if (
-    typeof environment !== "string" ||
-    !ENVIRONMENTS.includes(environment as Environment) ||
-    environment !== localEnvironment
-  ) {
-    return NextResponse.json({ error: "invalid_env" }, { status: 400 });
-  }
-
-  const command =
-    gate.local?.readmit ??
-    (gate.local ? undefined : getContainer().reliabilityReadmit);
-  const statusReader =
-    gate.local?.statusReader ??
-    (gate.local ? undefined : getContainer().reliabilityStatusReader);
-  if (!command || !statusReader) {
-    return NextResponse.json(
-      { error: "reliability_readmit_unavailable" },
-      { status: 503 }
-    );
-  }
-  const currentStatus = await statusReader
-    .read({
-      nodeId: gate.node.nodeId,
-      nodeSlug: gate.node.slug,
-      environment: environment as Environment,
-    })
-    .catch(() => null);
-  if (
-    currentStatus?.state !== "contained" ||
-    !currentStatus.incidentId ||
-    !/^reliability\.v1:[a-zA-Z0-9._:-]{1,180}$/.test(currentStatus.incidentId)
-  ) {
-    return NextResponse.json(
-      { error: "reliability_incident_unavailable" },
-      { status: 409 }
-    );
-  }
-  const incidentId = currentStatus.incidentId;
-  try {
-    const result = await command.readmit({
-      nodeId: gate.node.nodeId,
-      nodeSlug: gate.node.slug,
-      environment: environment as Environment,
-      actorId: user.id,
-      incidentId,
-    });
-    return NextResponse.json(
-      { ...result, incidentId },
-      { status: result.phase === "recovering" ? 202 : 200 }
-    );
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message === "database_recovery_new_incident_required"
-    ) {
-      return NextResponse.json(
-        { error: error.message, incidentId },
-        { status: 409 }
+export const POST = wrapRouteHandlerWithLogging<RouteParams>(
+  {
+    routeId: ROUTE_ID,
+    getRequestDependencies: getRequestLoggingDependencies,
+    auth: { mode: "optional", getSessionUser: getServerSessionUser },
+  },
+  async (ctx, request, user, context) => {
+    if (!context) throw new Error("context required for dynamic routes");
+    const startedAt = performance.now();
+    let targetNodeId: string | undefined;
+    let targetEnvironment: Environment | undefined;
+    const fail = (
+      status: number,
+      errorCode: ReadmitErrorCode,
+      body: object
+    ) => {
+      logTerminal(
+        ctx,
+        EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_READMIT_COMPLETE,
+        startedAt,
+        {
+          outcome: "error",
+          status,
+          errorCode,
+          targetNodeId,
+          environment: targetEnvironment,
+        }
       );
+      return NextResponse.json(body, { status });
+    };
+
+    if (!user) return fail(401, "unauthorized", { error: "unauthorized" });
+
+    const { id } = await context.params;
+    const gate = await resolveReliabilityGate({
+      id,
+      userId: user.id,
+      action: "node.manage_envs",
+    });
+    if (!gate.ok)
+      return fail(gate.status, gate.errorCode, { error: gate.errorCode });
+    targetNodeId = gate.node.nodeId;
+
+    const body = (await request.json().catch(() => null)) as {
+      env?: unknown;
+    } | null;
+    const environment = body?.env;
+    // biome-ignore lint/style/noProcessEnv: deployment-local command boundary
+    const localEnvironment = process.env.DEPLOY_ENVIRONMENT;
+    if (
+      typeof environment !== "string" ||
+      !ENVIRONMENTS.includes(environment as Environment) ||
+      environment !== localEnvironment
+    ) {
+      return fail(400, "invalid_env", { error: "invalid_env" });
     }
-    return NextResponse.json(
-      {
+    targetEnvironment = environment as Environment;
+
+    const command =
+      gate.local?.readmit ??
+      (gate.local ? undefined : getContainer().reliabilityReadmit);
+    const statusReader =
+      gate.local?.statusReader ??
+      (gate.local ? undefined : getContainer().reliabilityStatusReader);
+    if (!command || !statusReader) {
+      return fail(503, "reliability_readmit_unavailable", {
+        error: "reliability_readmit_unavailable",
+      });
+    }
+    const currentStatus = await statusReader
+      .read({
+        nodeId: gate.node.nodeId,
+        nodeSlug: gate.node.slug,
+        environment: targetEnvironment,
+      })
+      .catch(() => null);
+    if (
+      currentStatus?.state !== "contained" ||
+      !currentStatus.incidentId ||
+      !/^reliability\.v1:[a-zA-Z0-9._:-]{1,180}$/.test(currentStatus.incidentId)
+    ) {
+      return fail(409, "reliability_incident_unavailable", {
+        error: "reliability_incident_unavailable",
+      });
+    }
+    const incidentId = currentStatus.incidentId;
+    try {
+      const result = await command.readmit({
+        nodeId: gate.node.nodeId,
+        nodeSlug: gate.node.slug,
+        environment: targetEnvironment,
+        actorId: user.id,
+        incidentId,
+      });
+      const status = result.phase === "recovering" ? 202 : 200;
+      logTerminal(
+        ctx,
+        EVENT_NAMES.NODE_OBSERVABILITY_HEALTH_READMIT_COMPLETE,
+        startedAt,
+        {
+          outcome: "success",
+          status,
+          targetNodeId,
+          environment: targetEnvironment,
+          phase: result.phase,
+        }
+      );
+      return NextResponse.json({ ...result, incidentId }, { status });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "database_recovery_new_incident_required"
+      ) {
+        return fail(409, "database_recovery_new_incident_required", {
+          error: error.message,
+          incidentId,
+        });
+      }
+      return fail(503, "reliability_recovery_unavailable", {
         error: "reliability_recovery_unavailable",
         state: "unknown",
         incidentId,
-      },
-      { status: 503 }
-    );
+      });
+    }
   }
-}
+);

@@ -16,7 +16,11 @@
  * @public
  */
 
-import type { ToolEffect } from "@cogni/ai-core";
+import type {
+  ToolAuthzRequirement,
+  ToolEffect,
+  ToolFailureReceipt,
+} from "@cogni/ai-core";
 import type { z } from "zod";
 
 /**
@@ -35,6 +39,8 @@ export type ToolResult<T> =
       readonly ok: false;
       readonly errorCode: ToolErrorCode;
       readonly safeMessage: string;
+      readonly retryable?: false;
+      readonly receipt?: ToolFailureReceipt;
     };
 
 /**
@@ -83,6 +89,12 @@ export interface ToolContract<
   readonly redact: (output: TOutput) => TRedacted;
   /** Allowlisted fields that appear in redacted output */
   readonly allowlist: ReadonlyArray<keyof TOutput>;
+  /**
+   * Node policy (authz v0). "node.collaborate" = authenticated actor on this node, no
+   * OpenFGA call; an AuthzAction = OpenFGA check on `node:<nodeId>`. Omit → legacy
+   * `tool.execute` on `tool:<id>` (unchanged).
+   */
+  readonly requires?: ToolAuthzRequirement;
 }
 
 /**

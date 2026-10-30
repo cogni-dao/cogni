@@ -34,12 +34,42 @@ import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
 const logger = makeLogger({ component: "MimirMetricsAdapter" });
 
-export function buildReliabilityReadinessQuery(input: {
+type ReadinessQueryInput = {
   readonly environment: ReliabilityQueryParams["environment"];
   readonly nodeSlug: string;
-  readonly window: "1m" | "5m";
-}): string {
-  return `min_over_time(probe_success{environment="${input.environment}",node_slug="${input.nodeSlug}",proof_class="serve"}[${input.window}])`;
+};
+
+const serveSelector = (input: ReadinessQueryInput) =>
+  `probe_success{environment="${input.environment}",node_slug="${input.nodeSlug}",proof_class="serve"}`;
+const serveWindow = (input: ReadinessQueryInput) =>
+  RELIABILITY_POLICY_V1.serveProbes[input.environment].evidenceWindow;
+
+/**
+ * Worst serve readiness per probe region over the policy evidence window.
+ * Probe cadence differs per environment (bug.5527), so the window is never a
+ * literal; grouping by region keeps a check re-version (new config_version
+ * series) from reading as a duplicate region.
+ */
+export function buildReliabilityReadinessQuery(
+  input: ReadinessQueryInput
+): string {
+  return `min by (probe) (min_over_time(${serveSelector(input)}[${serveWindow(input)}]))`;
+}
+
+/**
+ * Real last-sample time per probe region. An instant query stamps results with
+ * the evaluation time; timestamp() inside the subquery keeps the sample time,
+ * so a stopped or deleted check ages out instead of reading fresh (bug.5527).
+ * The subquery step adds up to one step of apparent age on top of the probe
+ * cadence; 10s keeps 60s production probes inside the 120s TTL (a 1m step
+ * measured p99 115s / max 133s).
+ */
+export const READINESS_SAMPLE_TIME_STEP = "10s";
+
+export function buildReliabilityReadinessSampleTimeQuery(
+  input: ReadinessQueryInput
+): string {
+  return `max by (probe) (max_over_time(timestamp(${serveSelector(input)})[${serveWindow(input)}:${READINESS_SAMPLE_TIME_STEP}]))`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,7 +224,6 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
       readiness: buildReliabilityReadinessQuery({
         environment: env,
         nodeSlug: node,
-        window: "5m",
       }),
       io: `cogni_reliability_v1_io_pressure_percent{${identity}}`,
       connections: `cogni_reliability_v1_connections_percent{${identity}}`,
@@ -230,10 +259,21 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
         })
       )
     );
-    const [valueResults, sourceResults] = await Promise.all([
-      valueReads,
-      timestampReads,
-    ]);
+    const readinessSampleTimeRead = this.queryInstant({
+      query: buildReliabilityReadinessSampleTimeQuery({
+        environment: env,
+        nodeSlug: node,
+      }),
+      time: evaluationTime,
+    });
+    const [valueResults, sourceResults, readinessSampleTimes] =
+      await Promise.all([valueReads, timestampReads, readinessSampleTimeRead]);
+    const readinessSampledAt = new Map(
+      readinessSampleTimes.result.map(
+        (sample) =>
+          [sample.metric.probe ?? "", Number(sample.value[1])] as const
+      )
+    );
     const labels = (metric: Readonly<Record<string, string>>) =>
       JSON.stringify(
         Object.entries(metric)
@@ -334,15 +374,28 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
 
     return {
       regionalReadiness: readiness.result
-        .map((sample) => ({
-          region:
+        .flatMap((sample) => {
+          const region =
             sample.metric.probe ??
             sample.metric.region ??
             sample.metric.instance ??
-            "unknown",
-          healthy: Number(sample.value[1]) >= 1,
-          observedAt: new Date(sample.value[0] * 1000).toISOString(),
-        }))
+            "unknown";
+          const sampledAt = readinessSampledAt.get(region);
+          // No proven sample time is no readiness evidence (missing is unknown).
+          if (
+            sampledAt === undefined ||
+            !Number.isFinite(sampledAt) ||
+            sampledAt <= 0
+          )
+            return [];
+          return [
+            {
+              region,
+              healthy: Number(sample.value[1]) >= 1,
+              observedAt: new Date(sampledAt * 1000).toISOString(),
+            },
+          ];
+        })
         .sort((a, b) => a.region.localeCompare(b.region)),
       evidenceScope: hasCompleteDatabaseAttribution
         ? "node"

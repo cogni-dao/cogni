@@ -19,10 +19,15 @@ import { edoDecideBoundTool } from "./tools/edo-decide";
 import { edoHypothesizeBoundTool } from "./tools/edo-hypothesize";
 import { edoRecordOutcomeBoundTool } from "./tools/edo-record-outcome";
 import { getCurrentTimeBoundTool } from "./tools/get-current-time";
+import { goalListBoundTool } from "./tools/goal-list";
+import { knowledgeContributionReadBoundTool } from "./tools/knowledge-contribution-read";
+import { knowledgeIndexBoundTool } from "./tools/knowledge-index";
 import { knowledgeReadBoundTool } from "./tools/knowledge-read";
 import { knowledgeSearchBoundTool } from "./tools/knowledge-search";
 import { knowledgeWriteBoundTool } from "./tools/knowledge-write";
 import { metricsQueryBoundTool } from "./tools/metrics-query";
+import { nodeCodeListBoundTool } from "./tools/node-code-list";
+import { nodeCodeReadBoundTool } from "./tools/node-code-read";
 import { repoListBoundTool } from "./tools/repo-list";
 import { repoOpenBoundTool } from "./tools/repo-open";
 import { repoSearchBoundTool } from "./tools/repo-search";
@@ -35,6 +40,7 @@ import { vcsListPrsBoundTool } from "./tools/vcs-list-prs";
 import { vcsMergePrBoundTool } from "./tools/vcs-merge-pr";
 import { webSearchBoundTool } from "./tools/web-search";
 import { workItemQueryBoundTool } from "./tools/work-item-query";
+import { workItemReadBoundTool } from "./tools/work-item-read";
 import { workItemTransitionBoundTool } from "./tools/work-item-transition";
 import type { BoundTool } from "./types";
 
@@ -111,7 +117,12 @@ export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
   edoHypothesizeBoundTool as CatalogBoundTool,
   edoRecordOutcomeBoundTool as CatalogBoundTool,
   getCurrentTimeBoundTool as CatalogBoundTool,
+  goalListBoundTool as CatalogBoundTool,
+  knowledgeIndexBoundTool as CatalogBoundTool,
   knowledgeReadBoundTool as CatalogBoundTool,
+  nodeCodeReadBoundTool as CatalogBoundTool,
+  nodeCodeListBoundTool as CatalogBoundTool,
+  knowledgeContributionReadBoundTool as CatalogBoundTool,
   knowledgeSearchBoundTool as CatalogBoundTool,
   knowledgeWriteBoundTool as CatalogBoundTool,
   metricsQueryBoundTool as CatalogBoundTool,
@@ -122,6 +133,7 @@ export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
   scheduleManageBoundTool as CatalogBoundTool,
   webSearchBoundTool as CatalogBoundTool,
   workItemQueryBoundTool as CatalogBoundTool,
+  workItemReadBoundTool as CatalogBoundTool,
   workItemTransitionBoundTool as CatalogBoundTool,
 ];
 

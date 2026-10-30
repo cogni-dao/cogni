@@ -39,6 +39,8 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
 
 ## Public Surface
 
+- `/dev/finance-preview`: fixture-only preview of the Financials page inside the shell with an isolated, disabled treasury query; development runtime only, otherwise 404. Fixture actions cannot POST payments or refresh live data; external checkout links are removed. `/admin/payments` remains repo-spec-admin gated; `finance.server.ts` is its only read path and the fund-steward row action its only write.
+
 - **Exports:** none
 - **Route Groups:**
   - `(public)`: Unauthenticated pages (landing, marketing, docs)
@@ -53,7 +55,7 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
   - API: `/api/auth/*`, `/api/v1/chat/completions`
   - Internal ops: `/api/internal/ops/governance/schedules/sync` [POST] (deploy-only trigger)
   - Agent discovery: `/.well-known/agent.json` [GET] — public discovery document for machine clients
-  - Shared-lane infra reconcile: `/api/v1/deploy/infra-reconcile` [POST] — operator node only; `preview` env-manager-gated, `production`/`candidate-a` production-promoter-gated. Dispatches via the operator GitHub App and preserves the requested lane's app pin
+  - Shared-lane infra reconcile: `/api/v1/deploy/infra-reconcile` [POST] — operator node only; `preview` env-manager-gated, `production`/`candidate-a` production-promoter-gated. Dispatches via the operator GitHub App and preserves the requested lane's app pin; a strict fixed production-worker target publishes candidate routing or reverses its Git receipt
   - Attestation JWKS: `/.well-known/jwks.json` [GET] — public keys for verifying operator-signed identity attestations (task.5024)
 - **Files considered API:** layout.tsx, page.tsx, loading.tsx, error.tsx, api/\*\*/route.ts, (infra)/\*\*/route.ts, .well-known/\*\*/route.ts
 - **Suspense / error boundaries:** each route group exposes a

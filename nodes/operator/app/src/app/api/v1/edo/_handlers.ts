@@ -9,7 +9,7 @@
  *   `ContributionService` from the container; principal is derived from the
  *   auth path. All adapter invariants enforced by the capability/adapter —
  *   handlers map known typed errors to HTTP status codes.
- * Scope: Operator-side wiring for `POST /api/v1/edo/{hypothesize,decide,record-outcome}`.
+ * Scope: Operator-side EDO HTTP wiring; does not implement persistence or domain policy.
  * Invariants:
  *   - VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, PRINCIPAL_DERIVES_SOURCE
  *     (caller MUST NOT supply sourceType/sourceRef/sourceNode — those are
@@ -42,7 +42,11 @@ import {
   DomainNotRegisteredError,
   EdoEntryTypeRequiresAtomicToolError,
   HypothesisMissingEvaluateAtError,
+  KnowledgeBusyError,
   KnowledgeGateError,
+  KnowledgeWriteConflictError,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
   type PrincipalAuthSource,
   sessionUserToPrincipal,
 } from "@cogni/knowledge-store";
@@ -62,6 +66,40 @@ function authSource(request: Request): PrincipalAuthSource {
 }
 
 function mapError(e: unknown): NextResponse {
+  if (e instanceof KnowledgeWriteOutcomeUnknownError)
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: e.code,
+        retryable: false,
+        ...e.receipt.lookup,
+      },
+      { status: 409 }
+    );
+  if (e instanceof KnowledgeWriteConflictError)
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: e.receipt.code,
+        retryable: false,
+        ...e.receipt.lookup,
+      },
+      { status: 409 }
+    );
+  if (e instanceof KnowledgeWriteScopeRequiredError)
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: "knowledge_write_scope_required",
+        retryable: false,
+      },
+      { status: 500 }
+    );
+  if (e instanceof KnowledgeBusyError)
+    return NextResponse.json(
+      { error: e.message, retryable: true },
+      { status: 503, headers: { "Retry-After": "2" } }
+    );
   if (e instanceof HypothesisMissingEvaluateAtError)
     return NextResponse.json({ error: e.message }, { status: 400 });
   if (e instanceof CitationTargetNotFoundError)

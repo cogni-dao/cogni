@@ -16,8 +16,8 @@
 
 import { MessagesAnnotation } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
-
 import type { CreateReactAgentGraphOptions } from "../types";
+import { createCogniProgram } from "./cogni";
 
 /**
  * Graph name constants for operator roles.
@@ -37,6 +37,7 @@ export const GIT_REVIEWER_GRAPH_NAME = "git-reviewer" as const;
  * @throws Error if systemPrompt is not provided
  */
 export function createOperatorGraph(opts: CreateReactAgentGraphOptions) {
+  if (opts.program) return createCogniProgram(opts);
   if (!opts.systemPrompt) {
     throw new Error(
       "createOperatorGraph requires systemPrompt — operator graphs are prompt-driven via catalog"

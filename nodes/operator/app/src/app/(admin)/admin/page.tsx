@@ -58,9 +58,9 @@ const GOVERNANCE_VIEWS = [
 const TREASURY_SERVICES = [
   {
     href: "/admin/payments",
-    title: "Provider Top-Ups",
+    title: "Financials",
     description:
-      "Fund the steward wallet from the operator wallet, then settle vendor invoices (OpenRouter, Cherry) in USDC.",
+      "Balances, burn per day and runway for every money plane, plus provider funding actions.",
     icon: Wallet,
   },
 ] as const;

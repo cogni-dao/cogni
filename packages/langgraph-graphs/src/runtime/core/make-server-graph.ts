@@ -53,6 +53,8 @@ import { toLangChainToolsCaptured } from "./langchain-tools";
 export async function makeServerGraph<
   TCreateGraph extends (opts: CreateReactAgentGraphOptions) => unknown,
 >(opts: {
+  /** Static dev entry assignment. Source bindings remain unavailable unless supplied by the node host. */
+  readonly program?: CreateReactAgentGraphOptions["program"];
   /** Graph name (for error messages) */
   readonly name: string;
   /** Pure graph factory function */
@@ -107,5 +109,9 @@ export async function makeServerGraph<
   });
 
   // Create graph using factory - cast preserves concrete return type
-  return createGraph({ llm, tools }) as ReturnType<TCreateGraph>;
+  return createGraph({
+    llm,
+    tools,
+    ...(opts.program ? { program: opts.program } : {}),
+  }) as ReturnType<TCreateGraph>;
 }

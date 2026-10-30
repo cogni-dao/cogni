@@ -11,7 +11,7 @@
  * Invariants:
  *   - INTERNAL_API_SHARED_SECRET: Bearer SCHEDULER_API_TOKEN.
  *   - Returns the resolved owningNode; the worker activity emits the
- *     `review.routed` structured log for the deploy_verified loop.
+ *     `review.routed` structured log for the validate-candidate scorecard loop.
  * Side-effects: IO (GitHub REST via adapter).
  * Links: review.pr-context.internal.v1 contract, docs/spec/node-ci-cd-contract.md
  * @internal

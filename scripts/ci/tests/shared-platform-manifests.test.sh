@@ -48,18 +48,39 @@ STALE_SECRET
   reconcile_shared_platform_manifests "$ROOT" "$TEST_ROOT" "$lane" operator
   cmp "$overlay" "$TEST_ROOT/before.yaml"
 
+  worker_platform_root="$ROOT"
+  if [ "$lane" = production ]; then
+    # The production selection guard reads the pre-copy Git HEAD and one fetched main.
+    # Both are local fixture repositories; this suite must never fetch real infrastructure.
+    worker_platform_root="$TEST_ROOT/platform-source"
+    mkdir -p "$worker_platform_root/infra/k8s/overlays/production" "$worker_platform_root/infra/k8s/base" "$worker_platform_root/scripts/ci/lib"
+    cp -R "$ROOT/infra/k8s/overlays/production/scheduler-worker" "$worker_platform_root/infra/k8s/overlays/production/"
+    cp -R "$ROOT/infra/k8s/base/scheduler-worker" "$worker_platform_root/infra/k8s/base/"
+    cp "$ROOT/scripts/ci/lib/worker-routing-preservation.py" "$worker_platform_root/scripts/ci/lib/"
+    git init -q -b main "$worker_platform_root"
+    git -C "$worker_platform_root" config user.name fixture
+    git -C "$worker_platform_root" config user.email fixture@example.invalid
+    git -C "$worker_platform_root" add .
+    HUSKY=0 git -C "$worker_platform_root" commit -qm authority
+    git -C "$worker_platform_root" remote add origin "$worker_platform_root"
+    git init -q -b main "$TEST_ROOT"
+    git -C "$TEST_ROOT" config user.name fixture
+    git -C "$TEST_ROOT" config user.email fixture@example.invalid
+    git -C "$TEST_ROOT" add infra/k8s/overlays/production/scheduler-worker/node-endpoints.patch.yaml
+    HUSKY=0 git -C "$TEST_ROOT" commit -qm selected-worker-routing
+  fi
   overlay="$TEST_ROOT/infra/k8s/overlays/$lane/scheduler-worker/kustomization.yaml"
   yq -i '.replicas = [{"name": "scheduler-worker", "count": 9}] | .patches += [{"target": {"kind": "Deployment", "name": "scheduler-worker"}, "patch": "- op: replace\n  path: /spec/replicas\n  value: 9\n"}]' "$overlay"
   before_images="$(yq -o=json -I=0 '.images' "$overlay")"
   before_routes="$(shasum -a 256 "$(dirname "$overlay")/node-endpoints.patch.yaml" | cut -d ' ' -f 1)"
-  reconcile_shared_platform_manifests "$ROOT" "$TEST_ROOT" "$lane" scheduler-worker
+  reconcile_shared_platform_manifests "$worker_platform_root" "$TEST_ROOT" "$lane" scheduler-worker
   count="$(kubectl kustomize "$(dirname "$overlay")" | yq -N 'select(.kind == "Deployment") | .spec.replicas')"
   expected=1; [ "$lane" = preview ] && expected=2
   [ "$count" = "$expected" ]
   [ "$(yq -o=json -I=0 '.images' "$overlay")" = "$before_images" ]
   [ "$(shasum -a 256 "$(dirname "$overlay")/node-endpoints.patch.yaml" | cut -d ' ' -f 1)" = "$before_routes" ]
   cp "$overlay" "$TEST_ROOT/before.yaml"
-  reconcile_shared_platform_manifests "$ROOT" "$TEST_ROOT" "$lane" scheduler-worker
+  reconcile_shared_platform_manifests "$worker_platform_root" "$TEST_ROOT" "$lane" scheduler-worker
   cmp "$overlay" "$TEST_ROOT/before.yaml"
   echo "PASS: $lane stale writers removed; scheduler=$expected; app images/routes retained; idempotent"
 done

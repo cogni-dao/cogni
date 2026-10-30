@@ -38,6 +38,7 @@ Static structural tests that pin CI/CD-side policy invariants (workflow shape, a
 ## Responsibilities
 
 - This directory **does**: pin runtime workflow filter generation from `nodes/*`, assert action SHA-pinning, replay shared fixtures through a reference classifier, forbid GitOps ownership of Argo's own `argocd-*` config (bug.5095).
+- `lifecycle-commands.spec.ts` keeps `.claude/commands/*.md` and `.claude/skills/*/SKILL.md` from instructing a `staging` base, a local `pnpm check`/`check:fast` step, or `gh pr merge` (task.5293).
 - This directory **does not**: invoke GitHub Actions, shell out to `git`, or run network I/O.
 
 ## Notes

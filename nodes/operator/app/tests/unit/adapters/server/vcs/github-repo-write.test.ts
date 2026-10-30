@@ -4,7 +4,8 @@
 /**
  * Module: `@tests/unit/adapters/server/vcs/github-repo-write`
  * Purpose: Unit tests for node repo minting through the operator GitHub App adapter.
- * Scope: Mocked Octokit/fetch; does not access GitHub.
+ * Scope: Mocked Octokit/fetch, including independent reviewed workflow and child artifact identities;
+ *   does not access GitHub.
  * Invariants: NODE_TEMPLATE_ANCESTRY — wizard-minted nodes are named forks of node-template.
  * Side-effects: none
  * Links: src/adapters/server/vcs/github-repo-write.ts, docs/spec/node-formation.md
@@ -3382,6 +3383,76 @@ spec:
     );
   });
 
+  it("dispatches the exact LiteLLM callback image source through the existing Compose lane", async () => {
+    const runId = 34722512027;
+    routeHandlers = {
+      ...candidateReviewHandlers([
+        "infra/images/litellm/cogni_callbacks.py",
+        "infra/images/litellm/AGENTS.md",
+        "scripts/ci/tests/litellm-callback-routing.test.py",
+      ]),
+      [DISPATCH]: () => ({
+        workflow_run_id: runId,
+        run_url: `https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/${runId}`,
+        html_url: `https://github.com/Cogni-DAO/cogni/actions/runs/${runId}`,
+      }),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).resolves.toMatchObject({
+      status: "dispatched",
+      lane: "compose",
+      sourceSha: candidateSourceSha,
+      runId,
+    });
+    expect(
+      requests.find((request) => request.route === DISPATCH)?.params
+    ).toMatchObject({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      workflow_id: "candidate-flight-infra.yml",
+      ref: "main",
+      inputs: { ref: candidateSourceSha },
+    });
+    expect(requests.some((request) => request.route.includes("git/ref"))).toBe(
+      false
+    );
+  });
+
+  it.each([
+    "infra/images/litellm/Dockerfile",
+    "infra/images/litellm/cogni_callbacks.py.extra",
+    "infra/images/other/cogni_callbacks.py",
+  ])("rejects neighboring image source %s beside the allowed LiteLLM callback", async (path) => {
+    routeHandlers = candidateReviewHandlers([
+      "infra/images/litellm/cogni_callbacks.py",
+      path,
+    ]);
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).rejects.toMatchObject({
+      code: "candidate_infra_path_rejected",
+      status: 422,
+    });
+    expect(requests.every((request) => request.route.startsWith("GET "))).toBe(
+      true
+    );
+  });
+
   it("dispatches an exact OpenFGA model change with explicit authorization collateral", async () => {
     const runId = 34722512026;
     routeHandlers = {
@@ -3477,9 +3548,12 @@ spec:
     });
   });
 
-  it("rejects a PR that mixes Compose and control-plane runtime changes", async () => {
+  it.each([
+    "scripts/ci/deploy-infra.sh",
+    "infra/images/litellm/cogni_callbacks.py",
+  ])("rejects mixed control-plane and Compose path %s before any mutation", async (path) => {
     routeHandlers = candidateReviewHandlers([
-      "scripts/ci/deploy-infra.sh",
+      path,
       "infra/k8s/argocd/control-plane/candidate-a/crossplane-core-application.yaml",
     ]);
 
@@ -3495,7 +3569,9 @@ spec:
       code: "candidate_infra_mixed_lanes",
       status: 422,
     });
-    expect(requests.some((request) => request.route === DISPATCH)).toBe(false);
+    expect(requests.every((request) => request.route.startsWith("GET "))).toBe(
+      true
+    );
   });
 
   it("maps a stale non-force ref update to a retryable typed conflict", async () => {
@@ -4116,6 +4192,70 @@ describe("GitHubRepoWriter.dispatchNodeRefCandidateFlight", () => {
         head_sha: sourceSha,
       },
     });
+  });
+  it("dispatches an independent parent workflow with only the requested child inputs", async () => {
+    const workflowSha = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/commits/{ref}": () => ({ sha: workflowSha }),
+      "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls": () => [
+        {
+          number: 2691,
+          html_url: "https://github.com/Cogni-DAO/cogni/pull/2691",
+          state: "open",
+          base: { ref: "main" },
+          head: { sha: workflowSha, repo: { full_name: "Cogni-DAO/cogni" } },
+        },
+      ],
+      "GET /repos/{owner}/{repo}/compare/{basehead}": () => ({
+        status: "ahead",
+      }),
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () =>
+        Promise.reject(statusError(404, "Not Found")),
+      "POST /repos/{owner}/{repo}/git/refs": () => ({}),
+      [DISPATCH_ROUTE]: () => ({}),
+    };
+    await makeWriter().dispatchNodeRefCandidateFlight({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      slug: "creative",
+      sourceSha,
+      workflowRef: "maintainer/workflow",
+      workflowSha,
+    });
+    expect(
+      requests.find(
+        ({ route }) => route === "POST /repos/{owner}/{repo}/git/refs"
+      )?.params
+    ).toMatchObject({
+      ref: `refs/heads/cogni-flight/${workflowSha}`,
+      sha: workflowSha,
+    });
+    expect(
+      requests.find(({ route }) => route === DISPATCH_ROUTE)?.params
+    ).toMatchObject({
+      ref: `cogni-flight/${workflowSha}`,
+      inputs: { node_slug: "creative", source_sha: sourceSha },
+    });
+    expect(
+      requests.find(({ route }) => route === DISPATCH_ROUTE)?.params.inputs
+    ).not.toHaveProperty("pr_number");
+  });
+
+  it("refuses a moved independent parent ref before creating refs or dispatching", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/commits/{ref}": () => ({ sha: sourceSha }),
+    };
+    await expect(
+      makeWriter().dispatchNodeRefCandidateFlight({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        slug: "creative",
+        sourceSha,
+        workflowRef: "maintainer/workflow",
+        workflowSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      })
+    ).rejects.toMatchObject({ code: "workflow_ref_source_mismatch" });
+    expect(requests.some(({ route }) => route.startsWith("POST "))).toBe(false);
   });
 });
 

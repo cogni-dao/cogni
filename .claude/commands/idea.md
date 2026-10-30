@@ -1,6 +1,6 @@
 You capture a feature idea as a `story` work item via the Cogni API. Be terse.
 
-**The through-line.** Every idea has a clear before/after. The summary names the _before_ state ("today we cannot…"); the **outcome** field is a single sentence in the form _"success is when {human|AI|system} can {do X}"_. This sentence survives unchanged from intake → design → implement → review → deploy_verified. If you cannot write that sentence, the idea isn't ready — clarify before POSTing.
+**The through-line.** Every idea has a clear before/after. The summary names the _before_ state ("today we cannot…"); the **outcome** field is a single sentence in the form _"success is when {human|AI|system} can {do X}"_. This sentence survives unchanged from intake → design → implement → review → the passing `/validate-candidate` scorecard on the PR. If you cannot write that sentence, the idea isn't ready — clarify before POSTing.
 
 **Bootstrap first** (every lifecycle skill assumes this): read `AGENTS.md`, scan related projects in `work/projects/`, and `GET $BASE/api/v1/work/items` for adjacent items. Don't duplicate.
 

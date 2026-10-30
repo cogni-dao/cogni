@@ -15,6 +15,7 @@ import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
 import { DoltgresKnowledgeStoreAdapter } from "../src/adapters/doltgres/index.js";
+import { DoltBranchSessionRunner } from "../src/adapters/doltgres/session-admission.js";
 import { CitationTargetNotFoundError } from "../src/port/knowledge-store.port.js";
 
 type Rows = Record<string, unknown>[] & { count?: number };
@@ -43,6 +44,14 @@ function rows(values: Record<string, unknown>[], count?: number): Rows {
 
 class FakeSql {
   readonly queries: string[] = [];
+  private active = "main";
+  private dirty = false;
+  private inserted = false;
+  release() {}
+  async reserve() {
+    return this;
+  }
+  async end() {}
 
   constructor(
     private readonly knowledgeEntryTypes = new Map([["policy-row", "finding"]]),
@@ -51,6 +60,42 @@ class FakeSql {
 
   async unsafe(query: string): Promise<Rows> {
     this.queries.push(query);
+    if (query.includes("current_database()"))
+      return rows([{ dolt_writer_database: "fake_knowledge" }]);
+    if (query.includes("pg_try_advisory_lock"))
+      return rows([{ pg_try_advisory_lock: true }]);
+    if (query.includes("pg_advisory_unlock"))
+      return rows([{ pg_advisory_unlock: true }]);
+    if (query.includes("dolt.merge_status"))
+      return rows([{ is_merging: false }]);
+    if (query.includes("FROM dolt.branches")) return rows([]);
+    if (query.startsWith("SELECT dolt_checkout('-b'")) {
+      this.active = query.split("'")[3] ?? "";
+      return rows([{ dolt_checkout: 0 }]);
+    }
+    if (query === "SELECT dolt_checkout('main')") {
+      this.active = "main";
+      return rows([{ dolt_checkout: 0 }]);
+    }
+    if (query.includes("active_branch()"))
+      return rows([{ branch_name: this.active }]);
+    if (query.includes("FROM dolt.status"))
+      return rows(this.dirty ? [{ table_name: "knowledge" }] : []);
+    if (query.startsWith("SELECT dolt_commit")) {
+      this.dirty = false;
+      return rows([{ dolt_commit: ["a".repeat(32)] }]);
+    }
+    if (query.startsWith("SELECT dolt_hashof"))
+      return rows([{ commit_hash: "a".repeat(32) }]);
+    if (query.startsWith("SELECT hash, fast_forward"))
+      return rows([{ hash: "a".repeat(32), conflicts: 0 }]);
+    if (query.startsWith("SELECT dolt_merge_base"))
+      return rows([{ merge_base: "a".repeat(32) }]);
+    if (query.startsWith("SELECT dolt_reset")) {
+      this.dirty = false;
+      return rows([{ dolt_reset: 0 }]);
+    }
+    if (/^(INSERT|UPDATE|DELETE)/.test(query)) this.dirty = true;
     if (query.includes("FROM work_items")) {
       return rows(
         Array.from(this.workItemIds).some((id) => query.includes(`'${id}'`))
@@ -67,7 +112,10 @@ class FakeSql {
         : rows([]);
     }
     if (query.includes("FROM domains")) return rows([{ "?column?": 1 }]);
-    if (query.startsWith("INSERT INTO knowledge")) return rows([knowledgeRow]);
+    if (query.startsWith("INSERT INTO knowledge")) {
+      this.inserted = true;
+      return rows([knowledgeRow]);
+    }
     if (query.startsWith("INSERT INTO citations")) {
       return rows([
         {
@@ -82,14 +130,18 @@ class FakeSql {
     }
     if (query.startsWith("UPDATE knowledge")) return rows([knowledgeRow], 1);
     if (query.includes("SELECT * FROM knowledge WHERE id")) {
-      return rows([knowledgeRow]);
+      return rows(this.inserted ? [knowledgeRow] : []);
     }
     return rows([]);
   }
 }
 
 function adapterFor(fake: FakeSql): DoltgresKnowledgeStoreAdapter {
-  return new DoltgresKnowledgeStoreAdapter({ sql: fake as unknown as Sql });
+  const sql = fake as unknown as Sql;
+  return new DoltgresKnowledgeStoreAdapter({
+    sql: { unsafe: sql.unsafe.bind(sql) } as unknown as Sql,
+    writerSession: new DoltBranchSessionRunner(sql),
+  });
 }
 
 function insertOf(fake: FakeSql): string {
@@ -103,13 +155,17 @@ function insertOf(fake: FakeSql): string {
 describe("DoltgresKnowledgeStoreAdapter — confidence policy on writes", () => {
   it("writes the source-type baseline (agent → 30) when confidence is omitted, never NULL", async () => {
     const fake = new FakeSql();
-    await adapterFor(fake).addKnowledge({
-      id: "policy-row",
-      domain: "meta",
-      title: "Policy row",
-      content: "Omitted confidence resolves to the agent baseline.",
-      sourceType: "agent",
-    });
+    await adapterFor(fake).withWrite(
+      { operationId: "policy:157", message: "policy fixture" },
+      (write) =>
+        write.addKnowledge({
+          id: "policy-row",
+          domain: "meta",
+          title: "Policy row",
+          content: "Omitted confidence resolves to the agent baseline.",
+          sourceType: "agent",
+        })
+    );
     const insert = insertOf(fake);
     expect(insert).toContain("confidence_pct");
     expect(insert).not.toContain("NULL, 'agent'"); // confidence slot is not NULL
@@ -118,14 +174,18 @@ describe("DoltgresKnowledgeStoreAdapter — confidence policy on writes", () => 
 
   it("treats null confidence as omitted and still writes the baseline (NO_NULL_CONFIDENCE_WRITES)", async () => {
     const fake = new FakeSql();
-    await adapterFor(fake).addKnowledge({
-      id: "policy-row",
-      domain: "meta",
-      title: "Policy row",
-      content: "Null confidence resolves to the agent baseline.",
-      sourceType: "agent",
-      confidencePct: null,
-    });
+    await adapterFor(fake).withWrite(
+      { operationId: "policy:172", message: "policy fixture" },
+      (write) =>
+        write.addKnowledge({
+          id: "policy-row",
+          domain: "meta",
+          title: "Policy row",
+          content: "Null confidence resolves to the agent baseline.",
+          sourceType: "agent",
+          confidencePct: null,
+        })
+    );
     const insert = insertOf(fake);
     expect(insert).toContain("confidence_pct");
     expect(insert).toMatch(/30,\s*'agent'/);
@@ -133,36 +193,48 @@ describe("DoltgresKnowledgeStoreAdapter — confidence policy on writes", () => 
 
   it("writes the external baseline (50) when confidence is omitted", async () => {
     const fake = new FakeSql();
-    await adapterFor(fake).addKnowledge({
-      id: "policy-row",
-      domain: "meta",
-      title: "Policy row",
-      content: "External baseline.",
-      sourceType: "external",
-      sourceRef: "https://example.com",
-    });
+    await adapterFor(fake).withWrite(
+      { operationId: "policy:187", message: "policy fixture" },
+      (write) =>
+        write.addKnowledge({
+          id: "policy-row",
+          domain: "meta",
+          title: "Policy row",
+          content: "External baseline.",
+          sourceType: "external",
+          sourceRef: "https://example.com",
+        })
+    );
     expect(insertOf(fake)).toMatch(/50,\s*'external'/);
   });
 
   it("preserves an explicit confidence value", async () => {
     const fake = new FakeSql();
-    await adapterFor(fake).addKnowledge({
-      id: "policy-row",
-      domain: "meta",
-      title: "Policy row",
-      content: "Explicit confidence is preserved.",
-      sourceType: "human",
-      confidencePct: 88,
-    });
+    await adapterFor(fake).withWrite(
+      { operationId: "policy:200", message: "policy fixture" },
+      (write) =>
+        write.addKnowledge({
+          id: "policy-row",
+          domain: "meta",
+          title: "Policy row",
+          content: "Explicit confidence is preserved.",
+          sourceType: "human",
+          confidencePct: 88,
+        })
+    );
     expect(insertOf(fake)).toMatch(/88,\s*'human'/);
   });
 
   it("never updates confidence_pct to NULL — a nullish update preserves the row", async () => {
     const fake = new FakeSql();
-    await adapterFor(fake).updateKnowledge("policy-row", {
-      title: "Renamed",
-      confidencePct: null,
-    });
+    await adapterFor(fake).withWrite(
+      { operationId: "policy:213", message: "policy fixture" },
+      (write) =>
+        write.updateKnowledge("policy-row", {
+          title: "Renamed",
+          confidencePct: null,
+        })
+    );
     const update = fake.queries.find((q) => q.startsWith("UPDATE knowledge"));
     expect(update).toBeDefined();
     expect(update).not.toContain("confidence_pct");
@@ -170,7 +242,10 @@ describe("DoltgresKnowledgeStoreAdapter — confidence policy on writes", () => 
 
   it("writes an explicit confidence on update", async () => {
     const fake = new FakeSql();
-    await adapterFor(fake).updateKnowledge("policy-row", { confidencePct: 55 });
+    await adapterFor(fake).withWrite(
+      { operationId: "policy:224", message: "policy fixture" },
+      (write) => write.updateKnowledge("policy-row", { confidencePct: 55 })
+    );
     const update = fake.queries.find((q) => q.startsWith("UPDATE knowledge"));
     expect(update).toContain("confidence_pct = 55");
   });
@@ -181,11 +256,15 @@ describe("DoltgresKnowledgeStoreAdapter — work-item tracking citations", () =>
     const fake = new FakeSql(new Map(), new Set(["task.5017"]));
 
     await expect(
-      adapterFor(fake).addCitation({
-        citingId: "missing-knowledge",
-        citedId: "task.5017",
-        citationType: "tracks",
-      })
+      adapterFor(fake).withWrite(
+        { operationId: "policy:235", message: "policy fixture" },
+        (write) =>
+          write.addCitation({
+            citingId: "missing-knowledge",
+            citedId: "task.5017",
+            citationType: "tracks",
+          })
+      )
     ).rejects.toBeInstanceOf(CitationTargetNotFoundError);
 
     expect(
@@ -203,11 +282,15 @@ describe("DoltgresKnowledgeStoreAdapter — work-item tracking citations", () =>
       new Set(["task.5017"])
     );
 
-    const citation = await adapterFor(fake).addCitation({
-      citingId: "knowledge-row",
-      citedId: "task.5017",
-      citationType: "tracks",
-    });
+    const citation = await adapterFor(fake).withWrite(
+      { operationId: "policy:257", message: "policy fixture" },
+      (write) =>
+        write.addCitation({
+          citingId: "knowledge-row",
+          citedId: "task.5017",
+          citationType: "tracks",
+        })
+    );
 
     expect(citation.citationType).toBe("tracks");
     expect(

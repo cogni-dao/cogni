@@ -8,6 +8,8 @@
  * Invariants:
  *   - ERRORCODE_IS_THE_CONTRACT: every mapped response carries a stable `errorCode`; callers branch on it, never on the message text.
  *   - PERMANENT_VS_RETRYABLE: author-scoped refusal → 403 `authz_denied`; store unavailability → 503 `work_items_busy` + retry hint.
+ *   - SCORES_INVALID_IS_400: a `scores` write the package validator (`parseWorkItemScores`, run once by the adapter) rejected → 400 `work_item_scores_invalid` carrying its `issues`; nothing was written (story.5111).
+ *   - CAS_CONFLICT_IS_409: a lost `expectedRevision` compare-and-set → 409 `revision_conflict` carrying `currentRevision`; nothing was written.
  *   - UNRECOGNIZED_STAYS_500: an unmapped error returns null so the route rethrows and the wrapper answers 500 — the catch is never broadened.
  * Side-effects: IO (HTTP response construction, structured log entry)
  * Links: nodes/operator/app/src/app/_facades/work/items.server.ts, nodes/operator/app/src/app/api/v1/vcs/merge/route.ts, bug.5408
@@ -18,9 +20,13 @@ import { NextResponse } from "next/server";
 
 import {
   WorkItemAuthorizationError,
+  WorkItemDeletionRetiredError,
   WorkItemNotFoundError,
+  WorkItemRevisionConflictError,
+  WorkItemScoresInvalidError,
   WorkItemsBackendNotReadyError,
   WorkItemsBusyError,
+  WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import {
   logRequestError,
@@ -36,6 +42,9 @@ type Mapped = {
   readonly errorCode: string;
   readonly error: string;
   readonly retryable?: boolean;
+  readonly lookup?: Readonly<Record<string, string | null>>;
+  /** Extra machine-readable body fields (e.g. `currentRevision` on a conflict). */
+  readonly details?: Readonly<Record<string, unknown>>;
 };
 
 /**
@@ -54,6 +63,37 @@ function classify(error: unknown): Mapped | null {
   if (error instanceof WorkItemAuthorizationError) {
     return { status: 403, errorCode: "authz_denied", error: "not authorized" };
   }
+
+  // PERMANENT, CALLER'S ERROR (story.5111). SCORES_ONE_ENFORCER: the adapter's
+  // `parseWorkItemScores` is the only bounds check and refused before any SQL;
+  // the issues name each failed axis path. Never a 500.
+  if (error instanceof WorkItemScoresInvalidError) {
+    return {
+      status: 400,
+      errorCode: error.code,
+      error: "invalid input",
+      details: { issues: error.issues },
+    };
+  }
+
+  if (error instanceof WorkItemDeletionRetiredError) {
+    return {
+      status: 410,
+      errorCode: "work_item_deletion_retired",
+      error:
+        message ||
+        "Work-item hard deletion is retired; PATCH status=cancelled to preserve identity and provenance",
+    };
+  }
+
+  if (error instanceof WorkItemWriteOutcomeUnknownError)
+    return {
+      status: 409,
+      errorCode: error.code,
+      error: error.message,
+      retryable: false,
+      lookup: error.receipt.lookup,
+    };
 
   // RETRYABLE. Query timeout / destroyed connection / contended Dolt operation
   // branch. The next attempt usually succeeds, so this must never look like the
@@ -78,6 +118,19 @@ function classify(error: unknown): Mapped | null {
   }
   if (error instanceof WorkItemNotFoundError) {
     return { status: 404, errorCode: "work_item_not_found", error: message };
+  }
+  // RETRY AFTER RE-READ. The caller's `expectedRevision` lost the
+  // compare-and-set; nothing was written. 409 with the row's current revision.
+  if (error instanceof WorkItemRevisionConflictError) {
+    return {
+      status: 409,
+      errorCode: "revision_conflict",
+      error: message,
+      details: {
+        expectedRevision: error.expectedRevision,
+        currentRevision: error.currentRevision,
+      },
+    };
   }
   if ((error as Error)?.name === "WorkItemAlreadyExistsError") {
     return { status: 409, errorCode: "work_item_exists", error: message };
@@ -110,6 +163,10 @@ export function workItemsWriteErrorResponse(
     {
       error: mapped.error,
       errorCode: mapped.errorCode,
+      ...(mapped.retryable === false
+        ? { retryable: false, lookup: mapped.lookup }
+        : {}),
+      ...(mapped.details ?? {}),
       ...(mapped.retryable === true
         ? { retryable: true, retryAfterSeconds: BUSY_RETRY_AFTER_SECONDS }
         : {}),

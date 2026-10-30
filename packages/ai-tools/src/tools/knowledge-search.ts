@@ -9,6 +9,8 @@
  *   - TOOL_ID_NAMESPACED: ID is `core__knowledge_search`
  *   - EFFECT_TYPED: effect is `read_only`
  *   - HARD_BOUNDS: max 20 results
+ *   - BOUNDED_RESULTS: each result's `content` is truncated to KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS (≤20 hits ×
+ *     1500 chars), so one call can never return a multi-MB entry (bug.5518)
  * Side-effects: IO (database read via capability)
  * Links: docs/spec/knowledge-data-plane.md
  * @public
@@ -42,6 +44,12 @@ export const KnowledgeSearchInputSchema = z.object({
     .max(20)
     .optional()
     .describe("Maximum results (1-20, default 10)"),
+  includeEdo: z
+    .boolean()
+    .optional()
+    .describe(
+      "include EDO rows (event/hypothesis/decision/outcome); default false"
+    ),
 });
 export type KnowledgeSearchInput = z.infer<typeof KnowledgeSearchInputSchema>;
 
@@ -80,6 +88,7 @@ export const knowledgeSearchContract: ToolContract<
     "Returns entries with confidence scores and provenance. Search BEFORE using web search — " +
     "the knowledge store contains verified, curated information relevant to this node's domain.",
   effect: "read_only",
+  requires: "node.collaborate",
   inputSchema: KnowledgeSearchInputSchema,
   outputSchema: KnowledgeSearchOutputSchema,
   redact: (output) => output,
@@ -87,6 +96,13 @@ export const knowledgeSearchContract: ToolContract<
 };
 
 // ─── Implementation ──────────────────────────────────────────────────────────
+
+/** BOUNDED_RESULTS: max chars of each result's `content` (bug.5518). */
+export const KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS = 1500;
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
 
 export interface KnowledgeSearchDeps {
   knowledgeCapability: KnowledgeCapability;
@@ -101,6 +117,7 @@ export function createKnowledgeSearchImplementation(
         domain: input.domain,
         query: input.query,
         limit: input.limit ?? 10,
+        ...(input.includeEdo ? { includeEdo: true } : {}),
       });
       return {
         query: input.query,
@@ -109,7 +126,7 @@ export function createKnowledgeSearchImplementation(
           id: r.id,
           domain: r.domain,
           title: r.title,
-          content: r.content,
+          content: truncate(r.content, KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS),
           confidencePct: r.confidencePct,
           sourceType: r.sourceType,
           tags: r.tags,

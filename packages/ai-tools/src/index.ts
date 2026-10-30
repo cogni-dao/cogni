@@ -12,6 +12,7 @@
  */
 
 export type {
+  ActiveGoalInfo,
   ApproveWorkflowRunsResult,
   AuthCapability,
   ChainDirection,
@@ -30,6 +31,7 @@ export type {
   EnvSummary,
   GetChainParams,
   GetChainResult,
+  GoverningIndexEntry,
   HypothesizeParams,
   KnowledgeCapability,
   KnowledgeEntry,
@@ -76,6 +78,7 @@ export type {
   WorkItemAssignee,
   WorkItemCapability,
   WorkItemInfo,
+  WorkItemQueryPage,
   WorkItemQueryParams,
   WorkItemTransitionResult,
 } from "./capabilities";
@@ -87,7 +90,15 @@ export {
   REPO_CITATION_REGEX,
   stubAuthCapability,
   systemClock,
+  WorkItemPatchConflictError,
 } from "./capabilities";
+export type {
+  NodeCodeBinding,
+  NodeCodeCapability,
+  NodeCodeListResult,
+  NodeCodeReadResult,
+  NodeCodeSource,
+} from "./capabilities/node-code";
 // Tool catalog
 export {
   type CatalogBoundTool,
@@ -161,6 +172,38 @@ export {
   getCurrentTimeImplementation,
 } from "./tools/get-current-time";
 export {
+  createGoalListImplementation,
+  GOAL_LIST_NAME,
+  type GoalListDeps,
+  type GoalListInput,
+  GoalListInputSchema,
+  type GoalListOutput,
+  GoalListOutputSchema,
+  goalListBoundTool,
+  goalListContract,
+  goalListStubImplementation,
+} from "./tools/goal-list";
+export {
+  createKnowledgeContributionReadImplementation,
+  KNOWLEDGE_CONTRIBUTION_READ_NAME,
+  type KnowledgeContributionReadCapability,
+  knowledgeContributionReadBoundTool,
+  knowledgeContributionReadContract,
+} from "./tools/knowledge-contribution-read";
+export {
+  createKnowledgeIndexImplementation,
+  KNOWLEDGE_INDEX_MAX_BYTES,
+  KNOWLEDGE_INDEX_NAME,
+  type KnowledgeIndexDeps,
+  type KnowledgeIndexInput,
+  KnowledgeIndexInputSchema,
+  type KnowledgeIndexOutput,
+  KnowledgeIndexOutputSchema,
+  knowledgeIndexBoundTool,
+  knowledgeIndexContract,
+  knowledgeIndexStubImplementation,
+} from "./tools/knowledge-index";
+export {
   createKnowledgeReadImplementation,
   KNOWLEDGE_READ_NAME,
   type KnowledgeReadDeps,
@@ -175,6 +218,7 @@ export {
 } from "./tools/knowledge-read";
 export {
   createKnowledgeSearchImplementation,
+  KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS,
   KNOWLEDGE_SEARCH_NAME,
   type KnowledgeSearchDeps,
   type KnowledgeSearchInput,
@@ -216,6 +260,18 @@ export {
   metricsQueryContract,
   metricsQueryStubImplementation,
 } from "./tools/metrics-query";
+export {
+  createNodeCodeListImplementation,
+  NODE_CODE_LIST_NAME,
+  nodeCodeListBoundTool,
+  nodeCodeListContract,
+} from "./tools/node-code-list";
+export {
+  createNodeCodeReadImplementation,
+  NODE_CODE_READ_NAME,
+  nodeCodeReadBoundTool,
+  nodeCodeReadContract,
+} from "./tools/node-code-read";
 export {
   createRepoListImplementation,
   REPO_LIST_NAME,
@@ -376,6 +432,12 @@ export {
   workItemQueryContract,
   workItemQueryStubImplementation,
 } from "./tools/work-item-query";
+export {
+  createWorkItemReadImplementation,
+  WORK_ITEM_READ_NAME,
+  workItemReadBoundTool,
+  workItemReadContract,
+} from "./tools/work-item-read";
 export {
   createWorkItemTransitionImplementation,
   WORK_ITEM_TRANSITION_NAME,

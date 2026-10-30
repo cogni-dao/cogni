@@ -64,7 +64,6 @@ const REQUIRED_PATHS: PathRequirement[] = [
 ];
 
 const ALLOWED_ROOT_ENTRIES = new Set<string>([
-  ".agent",
   ".agents",
   ".allstar",
   ".claude",

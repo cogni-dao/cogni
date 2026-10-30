@@ -13,14 +13,14 @@
  *     a burst still burns a slot per cold reserve. That is why admission
  *     control sits ABOVE the pool rather than the pool being made bigger.
  *   - `DoltBranchSessionRunner` admits one operation at a time, fails loud with
- *     `KnowledgeBusyError` instead of hanging, and rebuilds a wedged client.
+ *     `KnowledgeBusyError` instead of hanging, and retains uncertain native capacity without replacing its client.
  * Side-effects: IO (binds a loopback TCP server on an ephemeral port)
  * Links: packages/knowledge-store/src/adapters/doltgres/session-admission.ts
  * @internal
  */
 
 import net from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildDoltgresClient } from "../src/adapters/doltgres/build-client.js";
 import { DoltBranchSessionRunner } from "../src/adapters/doltgres/session-admission.js";
 import { KnowledgeBusyError } from "../src/port/knowledge-store.port.js";
@@ -109,6 +109,39 @@ const LOCK_RESPONSE = Buffer.concat([
   READY_IDLE,
 ]);
 
+/** Wire-only identity fixture; real native identity is proved in shared CI. */
+function textResponse(column: string, value: string, oid = 25): Buffer {
+  return Buffer.concat([
+    PARSE_COMPLETE,
+    BIND_COMPLETE,
+    msg(
+      "T",
+      Buffer.concat([
+        int16(1),
+        Buffer.from(`${column}\0`),
+        int32(0),
+        int16(0),
+        int32(oid),
+        int16(-1),
+        int32(-1),
+        int16(0),
+      ])
+    ),
+    msg(
+      "D",
+      Buffer.concat([
+        int16(1),
+        int32(Buffer.byteLength(value)),
+        Buffer.from(value),
+      ])
+    ),
+    msg("C", Buffer.from("SELECT 1\0")),
+    READY_IDLE,
+  ]);
+}
+
+let mergeStatus: "clean" | "missing" | "malformed" | "merging" = "clean";
+
 function startFakePostgres(): Promise<{
   server: net.Server;
   port: number;
@@ -131,11 +164,32 @@ function startFakePostgres(): Promise<{
         // Any Sync ('S') or simple Query ('Q') byte terminates a client
         // message batch; answer it with an empty result + ReadyForQuery.
         if (buf.includes(0x53) || buf.includes(0x51)) {
-          socket.write(
-            buf.includes("pg_try_advisory_lock")
-              ? LOCK_RESPONSE
-              : QUERY_RESPONSE
-          );
+          if (buf.includes("dolt_writer_database")) {
+            socket.write(textResponse("dolt_writer_database", "knowledge"));
+          } else if (buf.includes("dolt.merge_status")) {
+            socket.write(
+              mergeStatus === "missing"
+                ? QUERY_RESPONSE
+                : textResponse(
+                    "is_merging",
+                    mergeStatus === "clean"
+                      ? "false"
+                      : mergeStatus === "merging"
+                        ? "true"
+                        : "invalid"
+                  )
+            );
+          } else if (buf.includes("branch_name")) {
+            socket.write(textResponse("branch_name", "main"));
+          } else if (buf.includes("pg_advisory_unlock")) {
+            socket.write(textResponse("pg_advisory_unlock", "t", 16));
+          } else {
+            socket.write(
+              buf.includes("pg_try_advisory_lock")
+                ? LOCK_RESPONSE
+                : QUERY_RESPONSE
+            );
+          }
         }
       });
       socket.on("error", () => undefined);
@@ -283,6 +337,83 @@ describe("Dolt session admission control (bug.5386, bug.5391)", () => {
     }
   });
 
+  it.each([
+    "missing",
+    "malformed",
+    "merging",
+  ] as const)("evicts %s merge-state capacity and keeps serving (bug.5544)", async (state) => {
+    const sql = client(1);
+    const recreate = vi.fn(() => sql);
+    const runner = new DoltBranchSessionRunner(sql, {
+      recreateClient: recreate,
+    });
+    mergeStatus = state;
+    try {
+      await expect(
+        runner.run("unknown-cleanup", async (conn) => {
+          await conn.unsafe("SELECT 1");
+        })
+      ).resolves.toBeUndefined();
+      // bug.5544: an uncertain merge-state cleanup must EVICT and let the writer
+      // RECOVER (no permanent wedge). Once the eviction settles, a retried op is
+      // admitted and serves. The client is evicted, never recreated.
+      await expect
+        .poll(
+          async () => {
+            try {
+              return await runner.run("after-unknown", async () => "served");
+            } catch {
+              return "busy";
+            }
+          },
+          { timeout: 3000 }
+        )
+        .toBe("served");
+      expect(recreate).not.toHaveBeenCalled();
+    } finally {
+      mergeStatus = "clean";
+      void sql.end({ timeout: 0 }).catch(() => undefined);
+    }
+  });
+
+  it.each([
+    false,
+    true,
+  ])("awaitSettlement=%s preserves cleanup ownership before pool shutdown", async (awaitSettlement) => {
+    const sql = client(1);
+    const runner = new DoltBranchSessionRunner(sql);
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    try {
+      const write = runner.run(
+        "seed-write",
+        async (_conn, _guard, owner) => {
+          owner.registerReconciliation(async () => true);
+          owner.committed(
+            { value: "committed", commitHash: "seed-test" },
+            () => cleanupGate
+          );
+          return "committed";
+        },
+        { awaitSettlement }
+      );
+      expect(await outcomeWithin(write, 50)).toBe(
+        awaitSettlement ? "pending" : "settled"
+      );
+      releaseCleanup();
+      await expect(write).resolves.toBe("committed");
+      await runner.run("seed-settle", async () => undefined, {
+        awaitSettlement: true,
+      });
+      await sql.end();
+    } finally {
+      releaseCleanup();
+      void sql.end({ timeout: 0 }).catch(() => undefined);
+    }
+  });
+
   it("keeps serving after an operation throws", async () => {
     const sql = client(1);
     const runner = new DoltBranchSessionRunner(sql);
@@ -325,25 +456,37 @@ describe("Dolt session admission control (bug.5386, bug.5391)", () => {
     }
   });
 
-  it("rebuilds a wedged client rather than leaving a slot burnt", async () => {
-    // Every slot pre-burnt by bare cold reserves: reserve can never be served.
-    const create = () => {
-      const sql = client(1);
-      void sql.reserve().catch(() => undefined);
-      return sql;
-    };
-    const first = create();
+  it("retains an uncertain client instead of manufacturing fresh native capacity", async () => {
+    const first = client(1);
+    void first.reserve().catch(() => undefined);
+    const unsafe = vi.spyOn(first, "unsafe");
+    let recreated = 0;
+    let callbacks = 0;
     const runner = new DoltBranchSessionRunner(first, {
-      acquireTimeoutMs: 300,
-      recreateClient: create,
+      acquireTimeoutMs: 50,
+      recreateClient: () => {
+        recreated++;
+        return client(1);
+      },
     });
     try {
-      await expect(runner.run("wedged", async () => undefined)).rejects.toThrow(
-        KnowledgeBusyError
-      );
-      // The condemned pool is replaced, so the next caller does not inherit it.
-      await sleep(200);
-      expect(runner.client).not.toBe(first);
+      await expect(
+        runner.run("wedged", async () => {
+          callbacks++;
+        })
+      ).rejects.toBeInstanceOf(KnowledgeBusyError);
+      const queriesAfterTimeout = unsafe.mock.calls.length;
+      for (let i = 0; i < 5; i++) {
+        await expect(
+          runner.run("retry", async () => {
+            callbacks++;
+          })
+        ).rejects.toBeInstanceOf(KnowledgeBusyError);
+      }
+      expect(runner.client).toBe(first);
+      expect(recreated).toBe(0);
+      expect(unsafe.mock.calls.length).toBe(queriesAfterTimeout);
+      expect(callbacks).toBe(0);
     } finally {
       void runner.client.end({ timeout: 0 }).catch(() => undefined);
       void first.end({ timeout: 0 }).catch(() => undefined);

@@ -20,11 +20,11 @@ tags:
 
 ## Context
 
-Tools execute via `toolRunner.exec()` only. Route maps AiEvents to `assistant-stream` format via `controller.addToolCallPart()`. The tool system uses canonical semantic types (`ToolSpec`, `ToolInvocationRecord`) independent of wire formats, with policy enforcement at both catalog construction and runtime execution.
+Capability tools execute via `toolRunner.exec()` only. Route maps AiEvents to `assistant-stream` format via `controller.addToolCallPart()`. The tool system uses canonical semantic types (`ToolSpec`, `ToolInvocationRecord`) independent of wire formats, with policy enforcement at both catalog construction and runtime execution.
 
 ## Goal
 
-Define the tool execution invariants, semantic types, wire format adapters, policy enforcement rules, capability injection patterns, and execution pipeline that govern all tool usage across all executors (InProc, LangGraph dev, server).
+Define the tool execution invariants, semantic types, wire format adapters, policy enforcement rules, capability injection patterns, and execution pipeline that govern capability tool usage across all executors (InProc, LangGraph dev, server).
 
 ## Non-Goals
 
@@ -32,9 +32,19 @@ Define the tool execution invariants, semantic types, wire format adapters, poli
 - Graph-as-Tool subagents (future — see initiative P3)
 - Multi-tool parallel execution (future — see initiative PX)
 
+## Isolated harness state
+
+These rules govern capability tools: any operation on node knowledge, work, Git, credentials, host paths, networks, stores, processes, sandboxes, MCP or delegated models. They always use ToolRunner, the runtime capability allowlist and applicable authorization. A tool name cannot waive these rules.
+
+The pinned Deep Agents core may operate directly on fresh invocation-only `StateBackend` state through its actual maintained `write_todos`, `ls`, `read_file`, `write_file`, `edit_file`, `delete`, `glob` and `grep` handlers. Its approved structured-response extraction handler may validate run state. These are agent mechanisms, not domain capability tools. They do not enter the capability catalog, namespace or effect registry. Domain tools cannot impersonate them by name.
+
+This profile admits no host filesystem, external store, persistent checkpointer, sandbox, shell, interpreter, credentials or child agent. Disable the general-purpose child; exclude and reject `task` and `execute`. Exclusions alone are not an authority boundary: the actual backend and absent child/process bindings enforce isolation. New built-ins require review. A fresh run cannot inherit scratch from another invocation.
+
+Observe state operations through normal SDK traces and bounded existing tool events: stable call ID, operation name, state-only classification and success/error only. Do not emit scratch contents or arguments, raw reasoning or private paths. Keep capability audit/redaction singly owned by ToolRunner. State changes never establish a canonical-source receipt or domain improvement. Model/tool limits include these operations. Every executor must prove this isolation before using the exception.
+
 ## Core Invariants
 
-1. **TOOLS_VIA_TOOLRUNNER**: All tool execution flows through `toolRunner.exec()` for ALL executors (InProc, langgraph dev, server). LangChain tool wrappers (`@cogni/langgraph-graphs`) must delegate to `toolRunner.exec()` to preserve validation/redaction pipeline. No direct tool implementation calls. No executor-specific bypass paths. **Documented deviation:** Codex SDK (`CodexLlmAdapter`) calls MCP tools directly via its own agent loop (config.toml). Mitigated by: server-level scoping, $0 billing (user-funded), output stays in agent loop. See `INVARIANT_DEVIATION: TOOLS_VIA_TOOLRUNNER` in `codex-llm.adapter.ts`.
+1. **TOOLS_VIA_TOOLRUNNER**: All capability tool execution flows through `toolRunner.exec()` for ALL executors (InProc, langgraph dev, server). LangChain tool wrappers (`@cogni/langgraph-graphs`) must delegate to `toolRunner.exec()` to preserve validation/redaction pipeline. No direct tool implementation calls. No executor-specific bypass paths. **Documented deviation:** Codex SDK (`CodexLlmAdapter`) calls MCP tools directly via its own agent loop (config.toml). Mitigated by: server-level scoping, $0 billing (user-funded), output stays in agent loop. See `INVARIANT_DEVIATION: TOOLS_VIA_TOOLRUNNER` in `codex-llm.adapter.ts`.
 
 2. **TOOLS_IN_PACKAGES**: Cross-node `core__` tool contracts + implementations live in `@cogni/ai-tools` (operator domain — shared by all nodes). Node-scoped tool contracts + implementations live in that node's `@cogni/<node>-ai-tools` package at `nodes/<node>/packages/ai-tools/` (poly today via `@cogni/poly-ai-tools`; resy/node-template create their own when the first node-only tool ships). Semantic types (`ToolSpec`, `ToolInvocationRecord`) in `@cogni/ai-core/tooling/`. Wire adapters (OpenAI/Anthropic encoders/decoders) in adapters layer. LangChain wrappers in `@cogni/langgraph-graphs/runtime`. Binding in composition roots only. No tool definitions in `src/**`.
 
@@ -88,7 +98,7 @@ Define the tool execution invariants, semantic types, wire format adapters, poli
 
 22. **TOOL_ID_STABILITY**: Tool IDs in `TOOL_CONTRACTS` are canonical and stable. ID collisions throw at catalog construction time. Never silently overwrite. Format: `core__<tool_name>` for core tools, `mcp__<server>__<tool>` for MCP tools.
 
-23. **TOOL_CONFIG_PROPAGATION**: LangChain tool wrappers receive `RunnableConfig` as 3rd parameter. Wrappers MUST accept and use config for per-run authorization via `configurable.toolIds`. Same policy/redaction path for all executors (InProc, langgraph dev, server).
+23. **TOOL_CONFIG_PROPAGATION**: LangChain capability tool wrappers receive `RunnableConfig` as 3rd parameter. Wrappers MUST accept and use config for per-run authorization via `configurable.toolIds`. Same policy/redaction path for all executors (InProc, langgraph dev, server).
 
 24. **TOOL_CONTRACTS_ARE_CANONICAL**: Tool contracts (name, schema, effect, redaction) live in tool-source packages. `@cogni/ai-tools` exports `CORE_TOOL_BUNDLE` (cross-node `core__` tools; single hand-maintained list). Each node may also expose `@cogni/<node>-ai-tools` exporting its own `<NODE>_TOOL_BUNDLE` (e.g. `POLY_TOOL_BUNDLE`). The full canonical surface for a node is the union of `CORE_TOOL_BUNDLE` and any node-scoped bundles it imports. None of these packages export a default executable catalog (per **NO_DEFAULT_EXECUTABLE_CATALOG** and **NODE_OWNED_TOOL_PACKAGES**); each runtime builds its own `ToolSourcePort` by composing the bundles its node owns and binding capabilities in its composition root. `langgraph-graphs` wraps tools from the runtime-bound source; it does not define tool contracts.
 
@@ -98,7 +108,7 @@ Define the tool execution invariants, semantic types, wire format adapters, poli
 
 24c. **NODE_BUNDLE_IS_CANONICAL_AT_RESOLUTION**: Every site that resolves a tool ID to a `BoundTool` (LangChain wrapper construction, contract extraction for the LLM tool list, etc.) MUST resolve against the per-node bundle (`CORE_TOOL_BUNDLE [+ <NODE>_TOOL_BUNDLE]`), NOT against the singleton `TOOL_CATALOG`. After the per-node ai-tools split, `TOOL_CATALOG` only contains the core subset; resolving via `TOOL_CATALOG[id]` silently drops node-only tools and presents an incomplete tool surface to the LLM (the LLM then "rationally" picks the only research-y tool it sees, often `core__web_search`). Symmetric across all nodes — operator/resy/node-template only dodge this trap today because their toolIds happen to all live in `CORE_TOOL_BUNDLE`. Verified during PR #1080 validation. See `nodes/<node>/app/src/adapters/server/ai/langgraph/inproc.provider.ts` for the canonical resolution pattern (4th constructor arg is the node bundle).
 
-25. **TOOL_SAME_PATH_ALL_EXECUTORS**: Same policy/redaction/audit path for dev, server, and InProc. No executor-specific bypass paths (e.g., no dev.ts that skips policy). `toLangChainTool` wrapper enforces `configurable.toolIds` allowlist for all executors.
+25. **TOOL_SAME_PATH_ALL_EXECUTORS**: Capability tools use the same policy/redaction/audit path for dev, server, and InProc. No executor-specific bypass paths (e.g., no dev.ts that skips policy). `toLangChainTool` wrapper enforces `configurable.toolIds` allowlist for all executors.
 
 26. **CONNECTION_ID_ONLY**: Tools requiring external auth receive `connectionId` (opaque reference), never raw credentials. Connection Broker resolves tokens at invocation time. No secrets in `configurable`, `ToolPolicyContext`, or ALS context. Applies to all authenticated tools regardless of source (`@cogni/ai-tools` or MCP). See [tenant-connections.md](./tenant-connections.md).
 
@@ -114,7 +124,7 @@ Define the tool execution invariants, semantic types, wire format adapters, poli
 
 30. **GRANT_INTERSECTION_REQUIRED**: `toolRunner.exec()` computes `effectiveConnectionIds = grant.allowedConnectionIds ∩ request.connectionIds`. Tool invocation's `connectionId` must be in this intersection BEFORE broker resolution or external calls. Missing/empty intersection = `policy_denied`. Prevents confused-deputy and UI-driven escalation attacks.
 
-31. **ARCH_SINGLE_EXECUTION_PATH**: All tool implementations execute ONLY through `toolRunner.exec()`. No direct `tool.func()` calls in LangChain wrappers, no direct MCP `callTool()` invocations, no executor-specific bypass paths. Enforced by architectural grep tests that fail on bypass patterns.
+31. **ARCH_SINGLE_EXECUTION_PATH**: All capability tool implementations execute ONLY through `toolRunner.exec()`. No direct `tool.func()` calls in LangChain wrappers, no direct MCP `callTool()` invocations, no executor-specific bypass paths. Enforced by architectural grep tests that fail on bypass patterns.
 
 32. **TOOL_FILE_PURITY**: Tool files must not read env, instantiate clients, import `src/**`, or access secrets. All I/O through capabilities passed to `execute(validatedArgs, ctx, caps)`.
 

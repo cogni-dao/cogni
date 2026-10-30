@@ -47,3 +47,10 @@ export type {
   MessageGraphInput,
   MessageGraphOutput,
 } from "./types";
+// Mission loop (operator-only ReAct agent on the work-prioritizer slot, story.5108)
+export {
+  createWorkPrioritizerGraph,
+  cycleTelemetry,
+  type MissionLoopTelemetry,
+  WORK_PRIORITIZER_GRAPH_NAME,
+} from "./work-prioritizer/graph";

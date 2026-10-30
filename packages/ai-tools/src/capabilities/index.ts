@@ -47,6 +47,8 @@ export type {
 } from "./edo";
 // Knowledge capability (per knowledge-data-plane spec)
 export type {
+  ActiveGoalInfo,
+  GoverningIndexEntry,
   KnowledgeCapability,
   KnowledgeEntry,
   KnowledgeListParams,
@@ -113,9 +115,11 @@ export type {
   WorkItemAssignee,
   WorkItemCapability,
   WorkItemInfo,
+  WorkItemQueryPage,
   WorkItemQueryParams,
   WorkItemTransitionResult,
 } from "./work-item";
+export { WorkItemPatchConflictError } from "./work-item";
 
 import type { AuthCapability, ClockCapability } from "./types";
 

@@ -46,7 +46,7 @@ compute_api:
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
   candidate-a: 0
-  production: 2
+  production: 3
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/node-template/
@@ -59,3 +59,10 @@ node_id: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
 compute_egress_cidrs:
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
+  - cidr: 95.217.139.183/32
+    envs: [candidate-a]
+    ports: [5432]
+    comment: Candidate PostgreSQL SYN source observed on the lane VM at 2026-10-24T18:06Z while lease 1792715065695 readiness timed out; ingress 95.217.139.177 is not its egress identity (bug.5533).
+  - cidr: 2.29.118.117/32
+    envs: [production, candidate-a]
+    comment: node-template lease egress MEASURED on both substrate VMs 2026-10-29 — prod (cogni.vm.cognidao.org) 39/40 SYNs to :5432 correlated 1:1 with node-template /readyz; candidate-a 12 SYNs/18s correlated to node-template-test /readyz. Hetzner (static.117.118.29.2.clients.your-server.de); both leases share this NAT. The leases rotated off 80.200.246.35, so every substrate connection (Postgres/Redis/Temporal/LiteLLM) was dropped by the fail-closed firewall; / and /version served 200 while /readyz 503 after a ~10s connect timeout and pg_stat_activity showed zero cogni_node_template connections. Durable fix = auto-measure egress at boot and self-allowlist; there is still no TS writer for compute_egress_cidrs. (bug.5550)

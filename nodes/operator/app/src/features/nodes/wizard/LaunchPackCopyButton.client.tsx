@@ -4,7 +4,7 @@
 /**
  * Module: `@features/nodes/wizard/LaunchPackCopyButton.client`
  * Purpose: Launch prompt copy affordance for the node wizard handoff. Fetches the canonical
- *   launch pack at click time and copies the agent prompt to the clipboard.
+ *   v2 launch pack at click time, validates it, and copies the prompt to the clipboard.
  * Scope: Client clipboard action only.
  * Links: src/features/nodes/launch-pack.ts, src/features/nodes/wizard/steps/HandoffStep.client.tsx
  * @public
@@ -17,7 +17,7 @@ import { type ReactElement, useState } from "react";
 
 import { Button } from "@/components";
 import type { ButtonProps } from "@/components/kit/inputs/Button";
-import type { NodeLaunchPackOutput } from "@/contracts/nodes.launch-pack.v1.contract";
+import { nodeLaunchPackV2Operation } from "@/contracts/nodes.launch-pack.v2.contract";
 
 interface Props {
   readonly nodeId: string;
@@ -40,10 +40,11 @@ export function LaunchPackCopyButton({
   const copyLaunchPrompt = async () => {
     setBusy(true);
     try {
-      const res = await fetch(`/api/v1/nodes/${nodeId}/launch-pack`);
+      const res = await fetch(`/api/v1/nodes/${nodeId}/launch-pack/v2`);
       if (!res.ok) return;
-      const pack = (await res.json()) as NodeLaunchPackOutput;
-      await navigator.clipboard.writeText(pack.prompt);
+      const pack = nodeLaunchPackV2Operation.output.safeParse(await res.json());
+      if (!pack.success) return;
+      await navigator.clipboard.writeText(pack.data.prompt);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
     } finally {

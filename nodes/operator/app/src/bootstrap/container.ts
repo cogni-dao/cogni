@@ -5,7 +5,7 @@
  * Module: `@bootstrap/container`
  * Purpose: Dependency injection container for application composition root with environment-based adapter selection.
  * Scope: Wire adapters to ports for runtime dependency injection. Provides webhookRegistrations for ingestion route, Temporal WorkflowClient singleton. Does not handle request-scoped lifecycle.
- * Invariants: All ports wired; single container instance per process; config.unhandledErrorPolicy set by env; webhookRegistrations lazy-initialized; Temporal connection singleton with race-safe init.
+ * Invariants: Ports bound once per process; request/session dependencies stay lazy; Temporal connection init is race-safe.
  * Side-effects: IO (initializes logger and emits startup log on first access)
  * Notes: LLM always uses LiteLlmAdapter; stack tests route to mock-openai-api. ContainerConfig controls wrapper behavior.
  * Links: Used by API routes and other entry points; configure adapters here for DI.
@@ -25,7 +25,7 @@ import type {
   VcsCapability,
   WebSearchCapability,
 } from "@cogni/ai-tools";
-import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import type { AttributionStore } from "@cogni/attribution-ledger";
 import {
   createDefaultRegistries,
@@ -59,6 +59,7 @@ import {
 import {
   buildDoltgresClient,
   createDoltgresPusher,
+  DoltBranchSessionRunner,
   DoltgresEdoResolverAdapter,
   DoltgresKnowledgeContributionAdapter,
   DoltgresKnowledgeStoreAdapter,
@@ -77,6 +78,8 @@ import {
 import { numberToPpm } from "@cogni/operator-wallet";
 import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/privy";
 import type { ScheduleControlPort } from "@cogni/scheduler-core";
+import type { ScheduleRunReader } from "@cogni/scheduling";
+import { PostgresScheduleRunReader } from "@cogni/scheduling/adapters/postgres";
 import type { WorkItemQueryPort } from "@cogni/work-items";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
 import {
@@ -91,6 +94,7 @@ import { parse as parseYaml } from "yaml";
 import {
   ALCHEMY_ADAPTER_VERSION,
   AlchemyWebhookNormalizer,
+  creditedPurchasesQuery,
   type Database,
   DrizzleAiTelemetryAdapter,
   DrizzleComputeCostStore,
@@ -163,6 +167,7 @@ import {
   getTestOnChainVerifier,
   getTestOperatorWallet,
 } from "@/adapters/test";
+import { OPERATOR_CORE_TOOL_BUNDLE } from "@/bootstrap/ai/evaluation-baseline";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
 import { createComputeCapability } from "@/bootstrap/capabilities/compute";
@@ -171,10 +176,12 @@ import {
   type LeaseReadCapability,
 } from "@/bootstrap/capabilities/compute-leases";
 import { createDeployCapability } from "@/bootstrap/capabilities/deploy";
+import { createKnowledgeContributionReadCapability } from "@/bootstrap/capabilities/knowledge-contribution-read";
 import {
   createMetricsCapability,
   derivePrometheusQueryUrl,
 } from "@/bootstrap/capabilities/metrics";
+import { createNodeCodeCapability } from "@/bootstrap/capabilities/node-code";
 import { createLivenessAccessor } from "@/bootstrap/capabilities/node-registry";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { createRepoCapability } from "@/bootstrap/capabilities/repo";
@@ -238,11 +245,12 @@ import type {
   ExecutionRequestPort,
   GraphRunRepository,
   ScheduleUserPort,
-  WorkItemsDoltgresPort,
+  WorkItemsContentPort,
 } from "@/ports/server";
 import {
   getDaoTreasuryAddress,
   getEmissionsHolderAddress,
+  getGithubRepo,
   getKnowledgeConfig,
   getLedgerSelectionConfig,
   getNodeId,
@@ -306,6 +314,7 @@ export interface Container {
   executionRequestPort: ExecutionRequestPort;
   graphRunRepository: GraphRunRepository;
   scheduleManager: ScheduleUserPort;
+  scheduleRunReader: ScheduleRunReader;
   /** Metrics capability for AI tools - requires PROMETHEUS_URL to be configured */
   metricsCapability: MetricsCapability;
   /** Compute-substrate balance reads (story.5011) — stub (empty) until CHERRY_AUTH_TOKEN is on the runtime */
@@ -323,6 +332,8 @@ export interface Container {
         reportByNode(): Promise<readonly ComputeCostReport[]>;
       }
     | undefined;
+  /** Credited-purchases income query bound to the BYPASSRLS service DB; the finance capability composer may not import the service-db adapter itself. */
+  creditedPurchasesQuery: ReturnType<typeof creditedPurchasesQuery>;
   /** Web search capability for AI tools - requires TAVILY_API_KEY to be configured */
   webSearchCapability: WebSearchCapability;
   /** Repo capability for AI tools - requires COGNI_REPO_PATH */
@@ -354,7 +365,7 @@ export interface Container {
   /** Work item queries — reads from markdown files via WorkItemQueryPort */
   workItemQuery: WorkItemQueryPort;
   /** Doltgres-backed work-items API surface — task.0423 v0. Throws if DOLTGRES_URL is unset. */
-  doltgresWorkItems: WorkItemsDoltgresPort;
+  doltgresWorkItems: WorkItemsContentPort;
   /** Operator-local active work-item coordination sessions. */
   workItemSessions: WorkItemSessionPort;
   /** Run event streaming — publish/subscribe via Redis Streams */
@@ -453,16 +464,18 @@ let _workflowClientPromise: Promise<{
 export function getContainer(): Container {
   if (!_container) {
     _container = createContainer();
+    // First container init (e.g. the readyz probe) is the earliest in-bootstrap seam to
+    // self-activate this deploy's governance schedules from repo-spec (SELF_RECONCILE_ON_BOOT) —
+    // instrumentation.ts cannot import bootstrap. Detached, fire-once, retry-until-Temporal-ready.
+    // SELF_FIRST (task.5282): the operator's OWN charters come from its image repo-spec and need
+    // no GitHub/catalog read, so they activate now, independent of the fleet registry.
+    startGovernanceSyncOnBoot("self");
     // Project merged catalog intent into THIS environment's Postgres + OpenFGA.
     // Detached and single-writer guarded; a periodic App-read heals missed push triggers. Only
-    // start governance sync after the first successful projection: its routable-node set is a
+    // start the routable-node ("all") sync after the first successful projection: that set is a
     // consumer of this registry and must never race stale environment/activity authority.
     void startCatalogRegistryReconcileOnBoot().then(() => {
-      // First container init (e.g. the readyz probe) is the earliest in-bootstrap seam
-      // to self-activate this deploy's governance schedules from repo-spec
-      // (SELF_RECONCILE_ON_BOOT) — instrumentation.ts cannot import bootstrap. Detached,
-      // fire-once, retry-until-Temporal-ready; never blocks the caller.
-      startGovernanceSyncOnBoot();
+      startGovernanceSyncOnBoot("all");
     });
   }
   return _container;
@@ -798,6 +811,8 @@ function createContainer(): Container {
     log.child({ component: "DrizzleScheduleUserAdapter" })
   );
 
+  const scheduleRunReader = new PostgresScheduleRunReader(db.$client);
+
   // Worker scheduling (serviceDb, BYPASSRLS)
   const executionGrantWorkerPort = new DrizzleExecutionGrantWorkerAdapter(
     serviceDb,
@@ -836,6 +851,8 @@ function createContainer(): Container {
           new DrizzleComputeCostStore(async () => serviceDb).reportByNode(),
       }
     : undefined;
+  // BYPASSRLS income query for the finance report; built here (approved service-db importer) and injected into createFinanceReaders.
+  const financeCreditedPurchasesQuery = creditedPurchasesQuery(serviceDb);
 
   // WebSearchCapability for AI tools (requires TAVILY_API_KEY)
   const webSearchCapability = createWebSearchCapability(env);
@@ -843,14 +860,11 @@ function createContainer(): Container {
   // RepoCapability for AI tools (requires COGNI_REPO_PATH)
   const repoCapability = createRepoCapability(env);
 
-  // WorkItemCapability for AI tools (delegates to markdown adapter ports)
+  // Legacy markdown work-item adapter (container.workItemQuery + the AI tool's
+  // command path). The runtime image carries no `work/` tree, so it reads empty.
   const workItemAdapter = new MarkdownWorkItemAdapter(
     env.COGNI_REPO_ROOT ?? "/nonexistent"
   );
-  const workItemCapability = createWorkItemCapability({
-    workItemQuery: workItemAdapter,
-    workItemCommand: workItemAdapter,
-  });
 
   // ScheduleCapability for AI tools (reads actorUserId from ALS at invocation time)
   const scheduleCapability = createScheduleCapability({
@@ -870,6 +884,16 @@ function createContainer(): Container {
 
   // VcsCapability for AI tools (requires GH_REVIEW_APP_ID)
   const vcsCapability = createVcsCapability(env);
+  const nodeCodeCapability = createNodeCodeCapability({
+    getAuthorization: () => authorization,
+    nodeId,
+    origin: env.APP_BASE_URL,
+    ...getGithubRepo(),
+    commitSha: env.APP_BUILD_SHA,
+    appId: env.GH_REVIEW_APP_ID,
+    privateKeyBase64: env.GH_REVIEW_APP_PRIVATE_KEY_BASE64,
+    log,
+  });
 
   // DeployCapability (read-only SEE flow) — probe-backed v0; undefined when no base domain.
   const deployCapability = createDeployCapability(env);
@@ -891,11 +915,34 @@ function createContainer(): Container {
       connectionString: env.DOLTGRES_URL,
       applicationName: `cogni_knowledge_${env.SERVICE_NAME ?? "app"}`,
     });
+    const createKnowledgeBranchClient = () =>
+      buildDoltgresClient({
+        connectionString: env.DOLTGRES_URL as string,
+        applicationName: `cogni_knowledge_branch_${env.SERVICE_NAME ?? "app"}`,
+        max: 1,
+      });
+    const knowledgeWriter = new DoltBranchSessionRunner(
+      createKnowledgeBranchClient(),
+      { logger: log, writerProtocol: "database" }
+    );
     const knowledgePort = new DoltgresKnowledgeStoreAdapter({
       sql: doltClient,
+      writerSession: knowledgeWriter,
     });
     knowledgeStorePort = knowledgePort;
-    knowledgeCapability = createKnowledgeCapability(knowledgePort);
+    knowledgeCapability = {
+      ...createKnowledgeCapability(knowledgePort),
+      // ONE_GOAL_LIST (dao-goals-design): the store's goal reader, for core__goal_list. Cap-agnostic: any
+      // reader failure surfaces as a tool error (the graph ends goals_error). story.5101 lifts this into
+      // createKnowledgeCapability.
+      listActiveGoals: async () =>
+        (await knowledgePort.listActiveGoals()).map((g) => ({
+          id: g.id,
+          title: g.title,
+          content: g.content,
+          evaluateAt: g.evaluateAt ? g.evaluateAt.toISOString() : null,
+        })),
+    };
     const edoResolver = new DoltgresEdoResolverAdapter({
       sql: doltClient,
       store: knowledgePort,
@@ -907,12 +954,6 @@ function createContainer(): Container {
     // is what keeps a burst of admin rejects from burning every slot — and
     // keeping them off the read pool is what keeps knowledge reads alive while
     // a write is degraded (bug.5391, bug.5358).
-    const createKnowledgeBranchClient = () =>
-      buildDoltgresClient({
-        connectionString: env.DOLTGRES_URL as string,
-        applicationName: `cogni_knowledge_branch_${env.SERVICE_NAME ?? "app"}`,
-        max: 1,
-      });
     // CONTRIBUTION_READS_FOLLOW_MAIN: Doltgres connections retain the main
     // root they first observed. A shared max:5 pool therefore returned
     // alternating 200/404 responses immediately after a contribution commit.
@@ -926,8 +967,7 @@ function createContainer(): Container {
     });
     const contributionPort = new DoltgresKnowledgeContributionAdapter({
       sql: contributionReadClient,
-      branchSql: createKnowledgeBranchClient(),
-      recreateBranchClient: createKnowledgeBranchClient,
+      writerSession: knowledgeWriter,
       logger: log,
     });
     const remoteUrl = resolveNodeKnowledgeRemoteUrl({
@@ -974,6 +1014,7 @@ function createContainer(): Container {
       list: notConfigured,
       get: notConfigured,
       write: notConfigured,
+      listActiveGoals: notConfigured,
     };
     edoCapability = {
       hypothesize: notConfigured,
@@ -986,7 +1027,7 @@ function createContainer(): Container {
     log.warn("Knowledge store not configured (DOLTGRES_URL not set)");
   }
 
-  let doltgresWorkItems: WorkItemsDoltgresPort;
+  let doltgresWorkItems: WorkItemsContentPort;
   try {
     doltgresWorkItems = getDoltgresWorkItemsAdapter(log);
   } catch (e) {
@@ -1000,17 +1041,37 @@ function createContainer(): Container {
       create: notConfigured,
       patch: notConfigured,
       delete: notConfigured,
-      // The shared port carries the creator-bound lease lifecycle. Operator's
-      // own 409-line adapter had no counterpart, so this stub predates them;
-      // they must still fail closed with the same error rather than be absent.
-      claim: notConfigured,
-      heartbeat: notConfigured,
-      release: notConfigured,
     };
   }
 
+  // WorkItemCapability for AI tools (task.5282). `core__work_item_query` lists
+  // through the Doltgres read path — the same `doltgresWorkItems.list` that
+  // `GET /api/v1/work/items` serves (read pool, never writer admission). The
+  // command path for transition stays on the markdown ports. `patch` (story.5096)
+  // writes through the SAME Doltgres patch `PATCH /api/v1/work/items/{id}` uses —
+  // the runtime image has no markdown `work/` tree, so a markdown patch could never
+  // land — attributed to the system principal scheduled runs execute as, under the
+  // store's unchanged authority (non-creator ⇒ triage fields only) and with the
+  // caller's optional `expectedRevision` as compare-and-set.
+  const workItemCapability = createWorkItemCapability({
+    workItemQuery: workItemAdapter,
+    workItemCommand: workItemAdapter,
+    backlogReader: doltgresWorkItems,
+    backlogWriter: {
+      store: doltgresWorkItems,
+      principalId: `actor:${COGNI_SYSTEM_PRINCIPAL_USER_ID}`,
+    },
+  });
+
   // ToolSource with real implementations (per CAPABILITY_INJECTION)
   const toolBindings = createToolBindings({
+    nodeCodeCapability,
+    knowledgeContributionReadCapability:
+      createKnowledgeContributionReadCapability({
+        nodeId: getNodeId(),
+        service: knowledgeContributionService,
+      }),
+    nodePublicOrigin: env.APP_BASE_URL,
     knowledgeCapability,
     edoCapability,
     metricsCapability,
@@ -1020,7 +1081,7 @@ function createContainer(): Container {
     vcsCapability,
     workItemCapability,
   });
-  const operatorToolBundle = [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE];
+  const operatorToolBundle = [...OPERATOR_CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE];
   const toolSource = createBoundToolSource(operatorToolBundle, toolBindings);
 
   // Config: rethrow in dev/test for diagnosis, respond_500 in production for safety
@@ -1263,10 +1324,12 @@ function createContainer(): Container {
     executionRequestPort,
     graphRunRepository,
     scheduleManager,
+    scheduleRunReader,
     metricsCapability,
     computeCapability,
     leaseReadCapability,
     akashSpendReader,
+    creditedPurchasesQuery: financeCreditedPurchasesQuery,
     webSearchCapability,
     repoCapability,
     vcsCapability,

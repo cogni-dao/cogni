@@ -20,14 +20,19 @@
  *     authority ever enters a lease environment (supersedes the bug.5127 app-push lane).
  *   - FAIL_OPEN_PER_SOURCE: one unreachable provider or sick lease skips that source for the
  *     cycle and never wedges the rest. Observability must never block or break a deploy.
- *   - CURSORS_COMMIT_AFTER_PUSH: tail windows advance only after Loki accepted the batch, so
- *     a failed push re-ships (at-least-once) instead of losing lines.
+ *   - CURSORS_COMMIT_AFTER_PUSH: a stream's tail window advances only after Loki accepted
+ *     EVERY chunk of THAT stream, so a failed push re-ships (at-least-once) instead of
+ *     losing lines. Commit is per stream, never per cycle.
+ *   - BOUNDED_PER_STREAM_PUSHES: each stream ships in its own push requests, chunked by line
+ *     count and bytes, with bounded concurrency. One slow, oversized or rejected stream fails
+ *     alone and never starves the others (bug.5516: one all-streams POST of ~7.4k lines
+ *     failed `fetch failed` on 52/53 ticks and silenced lease logs fleet-wide).
  *   - SILENCE_IS_DETECTABLE: every newly seen stream gets one synthetic attach marker, so
  *     "no app output" and "pump never attached" are distinguishable in Loki.
  * Side-effects: none directly (IO via injected seams)
  * Links: @ports/akash-tx.port (AkashTxLeaseLogSources), ./tail-merge,
  *   adapters/server/observability/loki-push.adapter, bootstrap/lease-log-pump, bug.5240,
- *   task.5144, docs/spec/grafana-observability-access.md
+ *   bug.5516, task.5144, docs/spec/grafana-observability-access.md
  * @internal
  */
 
@@ -60,6 +65,12 @@ export interface LeaseLogPumpDeps {
   readonly tailLines?: number;
   /** Retained merge window per stream. Default 200. */
   readonly maxTail?: number;
+  /** Max values per push request. Default 1000. */
+  readonly maxPushLines?: number;
+  /** Max approximate UTF-8 payload bytes per push request. Default 1 MB. */
+  readonly maxPushBytes?: number;
+  /** Streams pushed in parallel. Default 4. */
+  readonly pushConcurrency?: number;
 }
 
 interface StreamCursor {
@@ -70,6 +81,14 @@ interface StreamCursor {
   lastSeenTick: number;
 }
 
+/** One stream ready to ship plus the cursor commit it earns on success. */
+interface PendingStream {
+  readonly stream: LeaseLogStream;
+  readonly commit: () => void;
+  readonly dseq: string;
+  readonly emitter: string;
+}
+
 /** Ticks a pod-name cursor may go unseen before it is dropped (pod churn hygiene). */
 const CURSOR_STALE_TICKS = 240;
 
@@ -77,9 +96,78 @@ const CURSOR_STALE_TICKS = 240;
 export interface LeaseLogPumpTickReport {
   readonly sources: number;
   readonly streams: number;
+  /** Streams whose every chunk Loki accepted (cursor committed). */
+  readonly pushedStreams: number;
+  /** Streams with a failed chunk (cursor NOT committed; re-ships next cycle). */
+  readonly failedStreams: number;
+  /** Lines of the committed streams only. */
   readonly pushedLines: number;
   readonly skippedSources: number;
+  /** True when at least one stream shipped this cycle. */
   readonly pushed: boolean;
+}
+
+const utf8 = new TextEncoder();
+
+/** Approximate push-body bytes of one value: ts + UTF-8 line + JSON punctuation. */
+function valueBytes(value: readonly [string, string]): number {
+  return value[0].length + utf8.encode(value[1]).byteLength + 8;
+}
+
+/**
+ * Split a stream's ordered values into push-sized chunks capped by line count and
+ * approximate UTF-8 bytes. Order is preserved; a single over-cap line ships alone rather
+ * than being dropped.
+ */
+export function chunkValues(
+  values: LeaseLogStream["values"],
+  maxLines: number,
+  maxBytes: number
+): LeaseLogStream["values"][] {
+  const chunks: (readonly [string, string])[][] = [];
+  let current: (readonly [string, string])[] = [];
+  let bytes = 0;
+  for (const value of values) {
+    const size = valueBytes(value);
+    if (
+      current.length > 0 &&
+      (current.length >= maxLines || bytes + size > maxBytes)
+    ) {
+      chunks.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(value);
+    bytes += size;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+/**
+ * Diagnosable shape of a push failure. undici reports every network failure as
+ * `TypeError: fetch failed` with the real reason on `cause` (`code` such as
+ * `UND_ERR_SOCKET`, `ECONNRESET`, `UND_ERR_CONNECT_TIMEOUT`); a timeout surfaces as
+ * `TimeoutError`. The adapter never puts credentials in errors and request headers are not
+ * part of either object, so these fields are safe to log.
+ */
+function describePushError(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) return { causeMessage: "unknown" };
+  const cause = (error as { cause?: unknown }).cause;
+  const detail =
+    typeof cause === "object" && cause !== null
+      ? (cause as { code?: unknown; name?: unknown; message?: unknown })
+      : undefined;
+  return {
+    errorName: error.name,
+    causeMessage: error.message.slice(0, 300),
+    causeCode: typeof detail?.code === "string" ? detail.code : undefined,
+    causeName: typeof detail?.name === "string" ? detail.name : undefined,
+    causeDetail:
+      typeof detail?.message === "string"
+        ? detail.message.slice(0, 300)
+        : undefined,
+  };
 }
 
 export class LeaseLogPump {
@@ -88,11 +176,20 @@ export class LeaseLogPump {
   private readonly now: () => Date;
   private readonly tailLines: number;
   private readonly maxTail: number;
+  private readonly maxPushLines: number;
+  private readonly maxPushBytes: number;
+  private readonly pushConcurrency: number;
 
   constructor(private readonly deps: LeaseLogPumpDeps) {
     this.now = deps.now ?? (() => new Date());
     this.tailLines = deps.tailLines ?? 500;
-    this.maxTail = deps.maxTail ?? 200;
+    // The retained tail must cover a full polled window: prefix-anchored tail-merge only
+    // finds the shipped overlap when the tail is at least as long as the window, otherwise
+    // every poll past maxTail lines re-ships the whole window (bug.5516).
+    this.maxTail = Math.max(deps.maxTail ?? this.tailLines, this.tailLines);
+    this.maxPushLines = Math.max(1, deps.maxPushLines ?? 1000);
+    this.maxPushBytes = Math.max(1, deps.maxPushBytes ?? 1_000_000);
+    this.pushConcurrency = Math.max(1, deps.pushConcurrency ?? 4);
   }
 
   /** One bounded cycle. Never throws: every failure is logged and absorbed. */
@@ -112,14 +209,15 @@ export class LeaseLogPump {
       return {
         sources: 0,
         streams: 0,
+        pushedStreams: 0,
+        failedStreams: 0,
         pushedLines: 0,
         skippedSources: 0,
         pushed: false,
       };
     }
 
-    const streams: LeaseLogStream[] = [];
-    const commits: (() => void)[] = [];
+    const pending: PendingStream[] = [];
     let skippedSources = 0;
 
     for (const source of snapshot.sources) {
@@ -133,7 +231,7 @@ export class LeaseLogPump {
           token: snapshot.token,
           tail: this.tailLines,
         });
-        this.collect(source, lines, streams, commits);
+        this.collect(source, lines, pending);
       } catch (error) {
         skippedSources += 1;
         this.deps.log.warn(
@@ -151,32 +249,16 @@ export class LeaseLogPump {
 
     this.pruneCursors(snapshot.sources);
 
-    const pushedLines = streams.reduce((n, s) => n + s.values.length, 0);
-    let pushed = false;
-    if (streams.length > 0) {
-      try {
-        await this.deps.push(streams);
-        for (const commit of commits) commit();
-        pushed = true;
-      } catch (error) {
-        // CURSORS_COMMIT_AFTER_PUSH: nothing committed; the next cycle re-merges and re-ships.
-        this.deps.log.error(
-          {
-            streams: streams.length,
-            lines: pushedLines,
-            causeMessage: error instanceof Error ? error.message : "unknown",
-          },
-          "lease_log_pump_push_failed"
-        );
-      }
-    }
+    const shipped = await this.pushAll(pending);
 
     const report: LeaseLogPumpTickReport = {
       sources: snapshot.sources.length,
-      streams: streams.length,
-      pushedLines: pushed ? pushedLines : 0,
+      streams: pending.length,
+      pushedStreams: shipped.pushedStreams,
+      failedStreams: pending.length - shipped.pushedStreams,
+      pushedLines: shipped.pushedLines,
       skippedSources,
-      pushed,
+      pushed: shipped.pushedStreams > 0,
     };
     this.deps.log.info({ ...report }, "lease_log_pump_tick");
     return report;
@@ -185,8 +267,7 @@ export class LeaseLogPump {
   private collect(
     source: AkashTxLeaseLogSource,
     lines: readonly ProviderLeaseLogLine[],
-    streams: LeaseLogStream[],
-    commits: (() => void)[]
+    pending: PendingStream[]
   ): void {
     const byEmitter = new Map<string, string[]>();
     for (const line of lines) {
@@ -234,27 +315,86 @@ export class LeaseLogPump {
       // deliberately NOT a label; `service_name` mirrors `service` exactly as the k8s
       // lane does (container name), never a second identity axis. No `stream` label —
       // the provider merges stdout/stderr and the envelope must not assert otherwise.
-      streams.push({
-        labels: {
-          app: "cogni-template",
-          env: source.environment,
-          node: source.nodeId,
-          service,
-          service_name: service,
-          source: "lease",
-        },
-        values,
-      });
       const committedTs = tsNs;
-      commits.push(() => {
-        this.cursors.set(key, {
-          tail: merged.nextTail,
-          lastTsNs: committedTs,
-          attached: true,
-          lastSeenTick: this.tick_,
-        });
+      pending.push({
+        stream: {
+          labels: {
+            app: "cogni-template",
+            env: source.environment,
+            node: source.nodeId,
+            service,
+            service_name: service,
+            source: "lease",
+          },
+          values,
+        },
+        commit: () => {
+          this.cursors.set(key, {
+            tail: merged.nextTail,
+            lastTsNs: committedTs,
+            attached: true,
+            lastSeenTick: this.tick_,
+          });
+        },
+        dseq: source.dseq,
+        emitter: name,
       });
     }
+  }
+
+  /** Ship every pending stream through a small worker pool. Never throws. */
+  private async pushAll(
+    pending: readonly PendingStream[]
+  ): Promise<{ pushedStreams: number; pushedLines: number }> {
+    let next = 0;
+    let pushedStreams = 0;
+    let pushedLines = 0;
+    const worker = async (): Promise<void> => {
+      for (let item = pending[next++]; item; item = pending[next++]) {
+        if (await this.pushStream(item)) {
+          pushedStreams += 1;
+          pushedLines += item.stream.values.length;
+        }
+      }
+    };
+    const workers = Math.min(this.pushConcurrency, pending.length);
+    await Promise.all(Array.from({ length: workers }, worker));
+    return { pushedStreams, pushedLines };
+  }
+
+  /**
+   * Push one stream in bounded chunks; commit its cursor only if every chunk lands. A failed
+   * chunk stops this stream (later chunks would land out of order) and leaves its cursor
+   * untouched, so the next cycle re-ships it (CURSORS_COMMIT_AFTER_PUSH).
+   */
+  private async pushStream(item: PendingStream): Promise<boolean> {
+    const { labels, values } = item.stream;
+    const chunks = chunkValues(values, this.maxPushLines, this.maxPushBytes);
+    for (const [index, chunk] of chunks.entries()) {
+      try {
+        await this.deps.push([{ labels, values: chunk }]);
+      } catch (error) {
+        this.deps.log.error(
+          {
+            node: labels.node,
+            env: labels.env,
+            service: labels.service,
+            dseq: item.dseq,
+            emitter: item.emitter,
+            chunk: index + 1,
+            chunks: chunks.length,
+            lines: chunk.length,
+            bytes: chunk.reduce((n, value) => n + valueBytes(value), 0),
+            streamLines: values.length,
+            ...describePushError(error),
+          },
+          "lease_log_pump_push_failed"
+        );
+        return false;
+      }
+    }
+    item.commit();
+    return true;
   }
 
   /**

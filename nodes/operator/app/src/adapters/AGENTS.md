@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** stable
-- **Last reviewed:** 2026-10-09 (shared-lane infra reconcile: preview + production)
+- **Last reviewed:** 2026-10-26
 
 ## Purpose
 
@@ -29,7 +29,9 @@ Infrastructure implementations of ports including server/, worker/, cli/, and te
 
 ## Public Surface
 
-- **Exports:** Port implementations for bootstrap injection (including identity-attestation live-catalog/Drizzle/Jose adapters and receipt-linked `DrizzleComputeCostStore`), database client (db, Database), MimirMetricsAdapter, ViemEvmOnchainClient, EvmRpcOnChainVerifierAdapter, EvmOnchainClient (type), GitHubWebhookNormalizer (ingestion), GitHubRepoWriter (operator App-backed deploy plane, including production infra reconcile), scheduling adapters (re-exported from @cogni/db-client)
+- Finance (`server/finance/`): `akashHostingReaders` (one operator-covered USD/day row per node from the exact on-chain lease price, measured blocks/day or 5.884 s/block), `akashCreditReader` (injected expected Console granter; verified available-credit/burn estimate, escrow excluded) + `readAkashBlocksPerDay`, `cherryFinanceReader` (port of `cherryPlane`), `grafanaOverageReader`, `domainExpiryReader`, `readAkashReports`, `collapseAkash` (hosting rows become children of the one Akash row), `creditedPurchasesQuery` (CREDITED payment_attempts for the package income reader), `unavailableFinanceReader` — every row in the hub money-plane-registry as a never-throwing `PlaneReader`, each carrying its `rail`.
+
+- **Exports:** Port implementations for bootstrap injection (including identity-attestation live-catalog/Drizzle/Jose adapters and receipt-linked `DrizzleComputeCostStore`), database client (db, Database), MimirMetricsAdapter, ViemEvmOnchainClient, EvmRpcOnChainVerifierAdapter, EvmOnchainClient (type), GitHubWebhookNormalizer (ingestion), GitHubRepoWriter (operator App-backed deploy plane, including candidate legacy-intent cancellation, production infra reconcile and fixed worker-routing receipt rollback), scheduling adapters (re-exported from @cogni/db-client)
 - **CLI (if any):** cli/ adapter implementations
 - **Env/Config keys:** DATABASE_URL, LITELLM_BASE_URL, LITELLM_MASTER_KEY, FLEET_CONTROL_ENV and FORK_DOMAIN_ROOT (injected into GitHubRepoWriter), PROMETHEUS_QUERY_URL, PROMETHEUS_READ_USERNAME, PROMETHEUS_READ_PASSWORD, ANALYTICS_QUERY_TIMEOUT_MS, EVM_RPC_URL
 - **Files considered API:** Port implementation exports, database client, onchain client interfaces

@@ -44,7 +44,7 @@ Shared pure utilities, constants, observability helpers, and domain types for al
   - **Constants:** `COGNI_SYSTEM_BILLING_ACCOUNT_ID`, `COGNI_SYSTEM_PRINCIPAL_USER_ID`, payment constants
   - **Crypto:** `aeadEncrypt`, `aeadDecrypt` (AES-256-GCM)
   - **Errors:** `ChatValidationError`, `toUiError`
-  - **Observability:** `EVENT_NAMES`, `logEvent`, `logRequestStart/End/Warn/Error`, `createRequestContext`, `clientLogger`, event payload types
+  - **Observability:** `EVENT_NAMES`, `WORK_ITEMS_LIST_ERROR_CODES`, `logEvent`, `logRequestStart/End/Warn/Error`, `createRequestContext`, `clientLogger`, event payload types
   - **Schemas:** LiteLLM spend-log Zod schemas
   - **Time:** `deriveTimeRange`, `TIME_RANGE_PRESETS`
   - **Util:** `isValidUuid`, `deriveAccountIdFromApiKey`
@@ -74,3 +74,5 @@ pnpm --filter @cogni/node-shared build
 - Extracted from `apps/operator/src/shared/` (task.0248 Phase 1b)
 - App-local files remain in each app's `src/shared/`: env, db, hooks, config server, model-catalog, wagmi, evm-wagmi, onchain, logger, metrics, redact, cn
 - Mixed barrels (`@/shared/observability`, `@/shared/web3`, `@/shared/util`) re-export from both local files and `@cogni/node-shared`
+
+Schedule detail/history and saved-thread reads use registered metadata-only terminal events.

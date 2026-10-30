@@ -28,6 +28,8 @@ Capability factories bridging ai-tools interfaces to adapters. Creates environme
 
 ## Public Surface
 
+- `createFinanceReaders()` composes every plane of the hub money-plane-registry in order: repo-spec Base wallets (treasury, operator, steward; deduplicated by address), OpenRouter credit (`OPENROUTER_API_KEY`), Cherry team credit (`CHERRY_AUTH_TOKEN`), Akash available credit (keyless chain read, `AKASH_ACTUATOR_ACCOUNT_ID` or the production owner; explicit trusted Console funding identity injected into the reader), one Akash hosting row per node, Grafana Cloud overage (`GRAFANA_URL` + `GRAFANA_SERVICE_ACCOUNT_TOKEN`), domain renewal (RDAP), and unread placeholders (Alchemy, system tenant, other SaaS); returns the readers plus the configured treasury plane id. Credentials stay server-side.
+
 - **Exports:** `createMetricsCapability()`, `stubMetricsCapability`, `createRepoCapability()`, `stubRepoCapability`, `createWebSearchCapability()`
 - **Env/Config keys:** PROMETHEUS_REMOTE_WRITE_URL, PROMETHEUS_QUERY_URL, PROMETHEUS_READ_USERNAME, PROMETHEUS_READ_PASSWORD, COGNI_REPO_PATH, COGNI_REPO_ROOT, TAVILY_API_KEY via ServerEnv
 - **Files considered API:** `metrics.ts`, `repo.ts`, `web-search.ts`

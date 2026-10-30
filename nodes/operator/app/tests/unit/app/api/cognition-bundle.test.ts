@@ -13,10 +13,14 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  type GoalView,
+  renderBundle,
   renderBundleMarkdown,
+  resolveGoals,
   resolveOrientation,
   SESSION_BOOTSTRAP_INVARIANTS,
   SESSION_WATCH_GATE,
+  WHOLE_BUNDLE_BUDGET_BYTES,
 } from "@/app/api/v1/cognition/_bundle";
 
 const baseInput = {
@@ -27,12 +31,12 @@ const baseInput = {
   origin: "https://test.cognidao.org",
   buildSha: "f52036b33ffecdf5244662e673a0d6d174c50150",
   toolingInvariants: ["Adopt one production work item."],
-  skillsIndex: [
+  governingIndex: [
     {
       id: "node-launch-handoff",
-      title: "Node launch handoff",
       entryType: "guide",
       domain: "infrastructure",
+      useWhen: "handing a launched node to its first agent",
     },
   ],
   domainPointers: [
@@ -43,79 +47,108 @@ const baseInput = {
     },
   ],
   orientation: null,
+  goals: { status: "ok", goals: [] },
 } as const;
 
-const SKILL_WITH_TRIGGER = {
+const RULE_ROW = {
   id: "shelf-one-axis",
-  title: "A shelf sorts on one axis or regrows a catch-all",
   useWhen: "designing or reviewing a knowledge domain set",
   entryType: "rule",
   domain: "method",
 };
 
-describe("bundle growth — large indexes render whole, no serve-side ceiling (story.5070)", () => {
-  // The hub is designed to accumulate: every new skill/guide/playbook adds a row.
-  // Delivery is now uncapped on both runtimes (Codex raw stdout with spill off;
-  // Claude Code structured additionalContext), so the producer no longer enforces
-  // a byte ceiling. The former 16 KB cap (bug.5284) would have rejected this shape
-  // at the source and 500'd /api/v1/cognition; growth must now render whole.
-  function indexOf(rows: number, triggerLen: number) {
-    return Array.from({ length: rows }, (_, i) => ({
-      id: `build-compute-entry-${i}`,
-      title: `Claim sentence number ${i} stating what the entry concludes`,
-      useWhen: "x".repeat(triggerLen),
-      entryType: "guide",
-      domain: "build-compute",
-    }));
-  }
+/** `n` governing rows of ~184 bytes each once rendered, like the prod hub. */
+function governingRows(n: number, domain = "build-compute") {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `${domain}-entry-${i}`,
+    entryType: i % 3 === 0 ? "rule" : "guide",
+    domain,
+    useWhen: `a situation number ${i} that this entry governs, stated as the reader would meet it in a task description`,
+  }));
+}
 
-  it("renders a bundle well past the former 16 KB cap, whole and untruncated", () => {
+const bytesOf = (md: string) => new TextEncoder().encode(md).byteLength;
+
+describe("governing index — the session index routes skills, guides, rules, designs, decisions and references", () => {
+  it("renders every governing row with id, type, domain and use-when, rules included", () => {
     const md = renderBundleMarkdown({
       ...baseInput,
-      skillsIndex: indexOf(80, 314),
+      governingIndex: [RULE_ROW, ...baseInput.governingIndex],
     });
-    const bytes = new TextEncoder().encode(
-      `${md.replace(/\n+$/, "")}\n`
-    ).byteLength;
-    // Past the old ceiling — which would have thrown here.
-    expect(bytes).toBeGreaterThan(16 * 1024);
-    // The last row is present ⇒ nothing was dropped.
-    expect(md).toContain("build-compute-entry-79");
+    expect(md).toContain("## Governing index");
+    expect(md).toContain("| entry | type | domain | use when |");
+    expect(md).toContain(
+      "| `shelf-one-axis` | rule | method | designing or reviewing a knowledge domain set |"
+    );
+    expect(md).toContain(
+      "| `node-launch-handoff` | guide | infrastructure | handing a launched node to its first agent |"
+    );
+    // SELECT_THEN_LOAD: the section tells the agent to read the bodies it picks.
+    expect(md).toContain("read each chosen entry");
+    // The old skills-only section is gone.
+    expect(md).not.toContain("## Skills index");
+  });
+
+  it("renders a placeholder row when the hub has no governing entries", () => {
+    const md = renderBundleMarkdown({ ...baseInput, governingIndex: [] });
+    expect(md).toContain("| _(none merged yet)_ | | | |");
   });
 });
 
-describe("skills index — the 'use when' column shows the trigger", () => {
-  it("renders use_when, not the title, when the entry has one", () => {
-    const md = renderBundleMarkdown({
+describe("renderBundle — reports the governing render it used (eval row 0)", () => {
+  it("reports whole-index mode and the whole render's bytes when it fits", () => {
+    const out = renderBundle({
       ...baseInput,
-      skillsIndex: [SKILL_WITH_TRIGGER],
+      governingIndex: governingRows(118),
     });
-    // The header has always claimed "use when"; it must now be true.
-    expect(md).toContain("| entry | type | use when |");
-    expect(md).toContain("designing or reviewing a knowledge domain set");
-    // The claim belongs in the entry body, not this column.
-    expect(md).not.toContain(
-      "A shelf sorts on one axis or regrows a catch-all"
+    expect(out.governingRender.mode).toBe("whole-index");
+    expect(out.governingRender.wholeBytes).toBe(bytesOf(out.markdown));
+    expect(out.markdown).toBe(
+      renderBundleMarkdown({ ...baseInput, governingIndex: governingRows(118) })
     );
   });
 
-  it("falls back to the title when use_when is null", () => {
-    // A node that has not backfilled must still show a usable line rather
-    // than an empty cell.
-    const md = renderBundleMarkdown({
+  it("reports shelf-pointer mode and the over-budget whole bytes past the cap", () => {
+    const out = renderBundle({
       ...baseInput,
-      skillsIndex: [{ ...SKILL_WITH_TRIGGER, useWhen: null }],
+      governingIndex: governingRows(400),
     });
-    expect(md).toContain("A shelf sorts on one axis or regrows a catch-all");
+    expect(out.governingRender.mode).toBe("shelf-pointer");
+    expect(out.governingRender.wholeBytes).toBeGreaterThan(
+      WHOLE_BUNDLE_BUDGET_BYTES
+    );
+    expect(bytesOf(out.markdown)).toBeLessThanOrEqual(
+      WHOLE_BUNDLE_BUDGET_BYTES
+    );
+  });
+});
+
+describe("whole-bundle budget (WHOLE_BUNDLE_BUDGET_64KIB)", () => {
+  it("is 64 KiB", () => {
+    expect(WHOLE_BUNDLE_BUDGET_BYTES).toBe(64 * 1024);
   });
 
-  it("falls back to the title when use_when is absent entirely", () => {
-    const { useWhen: _omitted, ...withoutField } = SKILL_WITH_TRIGGER;
-    const md = renderBundleMarkdown({
-      ...baseInput,
-      skillsIndex: [withoutField],
-    });
-    expect(md).toContain("A shelf sorts on one axis or regrows a catch-all");
+  it("renders the whole governing index inline at today's prod size (118 rows)", () => {
+    const rows = governingRows(118);
+    const md = renderBundleMarkdown({ ...baseInput, governingIndex: rows });
+    expect(bytesOf(md)).toBeLessThanOrEqual(WHOLE_BUNDLE_BUDGET_BYTES);
+    expect(md).toContain("build-compute-entry-117");
+    expect(md).not.toContain("exceeds the 64 KiB bundle budget");
+  });
+
+  it("past the budget, carries only the method shelf inline plus the shelf-pull pointer, and stays under 64 KiB", () => {
+    const rows = [...governingRows(400), ...governingRows(5, "method")];
+    const md = renderBundleMarkdown({ ...baseInput, governingIndex: rows });
+    expect(bytesOf(md)).toBeLessThanOrEqual(WHOLE_BUNDLE_BUDGET_BYTES);
+    expect(md).toContain("exceeds the 64 KiB bundle budget");
+    expect(md).toContain(
+      `GET ${baseInput.origin}/api/v1/knowledge/index?domain=<shelf>`
+    );
+    expect(md).toContain("method-entry-4");
+    expect(md).not.toContain("build-compute-entry-0 ");
+    expect(md).not.toContain("`build-compute-entry-0`");
+    // The domain pointers the agent pulls from still render.
+    expect(md).toContain("## Knowledge domains");
   });
 });
 
@@ -128,7 +161,7 @@ describe("renderBundleMarkdown", () => {
     expect(heading).toBe("# operator — Cogni Session Cognition");
     expect(blank).toBe("");
     expect(subtitle).toBe(
-      "> Coordinate code, deploys, and validation for Cogni nodes. · 1 skills · 1 domains · loaded 2026-06-16 19:31"
+      "> Coordinate code, deploys, and validation for Cogni nodes. · 1 governing entries · 1 domains · loaded 2026-06-16 19:31"
     );
     expect(spacer).toBe(">");
     expect(delivered).toContain("node `4ff8eac1-4eba-4ed0-931b-b1fe4f64713d`");
@@ -175,13 +208,18 @@ describe("renderBundleMarkdown", () => {
     expect(markdown).toContain("- Recall before write, refine over extend.");
     // No second-recall footer: the bootstrap IS the orientation.
     expect(markdown).not.toContain("for the full context");
-    // INVARIANT FLOOR (story.5070): the code-owned invariants + watch-gate are
-    // the always-present contract spine. They render ALONGSIDE a served
-    // orientation (the node map), never suppressed by it — reversing the earlier
-    // ONE_VOICE suppression (task.5155) whose defect was that a served
-    // orientation dropped the contract.
+    // Tooling invariants and watch commands remain available alongside the
+    // full hub-owned orientation; they cannot replace a complete contract.
     expect(markdown).toContain("## Tooling invariants");
     expect(markdown).toContain("<watch-gate");
+    expect(markdown).toContain(
+      `Source: [operator-agent-orientation](${baseInput.origin}/knowledge/operator-agent-orientation)`
+    );
+    expect(markdown.split(fullOrientation)).toHaveLength(2);
+    expect(markdown.endsWith(`${fullOrientation}\n`)).toBe(true);
+    expect(
+      markdown.indexOf("## Orientation — recall this first")
+    ).toBeGreaterThan(markdown.indexOf("## Recall + contribute"));
   });
 
   // The work-item write seam is the one thing agents could NOT discover from a
@@ -305,6 +343,22 @@ describe("renderBundleMarkdown", () => {
     expect(cicd).toContain("<watch-gate>");
   });
 
+  it("orders the CICD loop as fresh review, flight, validate, then operator merge", () => {
+    const cicd =
+      SESSION_BOOTSTRAP_INVARIANTS.find((line) =>
+        line.startsWith("Follow the CICD checklist")
+      ) ?? "";
+    const review = cicd.indexOf("/review-implementation");
+    const flight = cicd.indexOf("/api/v1/vcs/flight");
+    const validate = cicd.indexOf("/validate-candidate");
+    const merge = cicd.indexOf("/api/v1/vcs/merge");
+
+    expect(review).toBeGreaterThanOrEqual(0);
+    expect(review).toBeLessThan(flight);
+    expect(flight).toBeLessThan(validate);
+    expect(validate).toBeLessThan(merge);
+  });
+
   it("prompts seeding an orientation entry when none exists", () => {
     const markdown = renderBundleMarkdown(baseInput);
 
@@ -361,5 +415,77 @@ describe("resolveOrientation", () => {
       null
     );
     expect(empty).toBeNull();
+  });
+});
+
+describe("Goals section — approved DAO goals right after the mission (task.5287)", () => {
+  const goal = (n: number): GoalView => ({
+    id: `goal-g${n}`,
+    title: `Goal: outcome ${n}`,
+    // Content deliberately states a DIFFERENT date: the rendered deadline must
+    // come from the evaluate_at column, never from parsing the body.
+    content: `Statement: s${n}.\nKPI: \`gh pr list\` | count\nTarget: ${n}\nBy: someday`,
+    evaluateAt: new Date(`2026-12-0${n}T00:00:00.000Z`),
+  });
+  const port = (goals: GoalView[] | Error) => ({
+    listActiveGoals: async () => {
+      if (goals instanceof Error) throw goals;
+      return goals;
+    },
+  });
+
+  it("renders exactly `no approved goals` with zero goals", async () => {
+    const goals = await resolveGoals(port([]));
+    const md = renderBundleMarkdown({ ...baseInput, goals });
+    expect(md).toContain("## Goals\n\nno approved goals\n");
+  });
+
+  it("renders 1–3 goals' title and content verbatim, after mission and before the invariants", async () => {
+    const three = [goal(1), goal(2), goal(3)];
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      orientation: { id: "operator-agent-orientation", content: "the map" },
+      goals: await resolveGoals(port(three)),
+    });
+    for (const g of three) {
+      expect(md).toContain(
+        `### ${g.title}\n\nBy: 2026-12-0${g.id.slice(-1)} · \`${g.id}\`\n\n${g.content}`
+      );
+    }
+    expect(md).not.toContain("no approved goals");
+    const at = (needle: string) => md.indexOf(needle);
+    expect(at(baseInput.mission)).toBeLessThan(at("## Goals"));
+    expect(at("## Goals")).toBeLessThan(at("## Orientation"));
+    expect(md.match(/the map/g)).toHaveLength(1);
+    expect(at("## Goals")).toBeLessThan(at("## Tooling invariants"));
+  });
+
+  it("renders a visible `goals unavailable` line when the read fails (e.g. >3 goals)", async () => {
+    const goals = await resolveGoals(
+      port(new Error("4 active DAO goals exceed the max of 3: goal-a, goal-b"))
+    );
+    expect(goals.status).toBe("unavailable");
+    const md = renderBundleMarkdown({ ...baseInput, goals });
+    expect(md).toContain("## Goals");
+    expect(md).toContain(
+      "goals unavailable: 4 active DAO goals exceed the max of 3: goal-a, goal-b"
+    );
+    expect(md).not.toContain("no approved goals");
+  });
+
+  it("marks a goal with no evaluate_at instead of inventing a deadline", async () => {
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      goals: await resolveGoals(port([{ ...goal(1), evaluateAt: null }])),
+    });
+    expect(md).toContain("By: no deadline set · `goal-g1`");
+  });
+
+  it("renders `goals unavailable` when the hub is not configured", async () => {
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      goals: await resolveGoals(undefined),
+    });
+    expect(md).toContain("goals unavailable: knowledge hub not configured");
   });
 });

@@ -21,7 +21,7 @@
  */
 
 import type { SourceSystem, ToolSourcePort } from "@cogni/ai-core";
-import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import type {
   ExecutionContext,
   GraphFinal,
@@ -52,6 +52,7 @@ import {
   LangGraphInProcProvider,
 } from "@/adapters/server";
 import { runInScope } from "@/adapters/server/ai/execution-scope";
+import { OPERATOR_CORE_TOOL_BUNDLE } from "@/bootstrap/ai/evaluation-baseline";
 import type {
   AiExecutionErrorCode,
   BillingContext,
@@ -61,6 +62,7 @@ import type {
   ModelProviderResolverPort,
   PreflightCreditCheckFn,
 } from "@/ports";
+import { getNodeMission } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { makeLogger } from "@/shared/observability";
 import {
@@ -135,6 +137,8 @@ export function createScopedGraphExecutor(params: {
   readonly broker?: ConnectionBrokerPort;
   readonly resolver: ModelProviderResolverPort;
   readonly actorId: string;
+  /** Execution grant backing a scheduled run; threaded into tool authz audit. */
+  readonly grantId?: string;
 }): GraphExecutorPort {
   const container = getContainer();
 
@@ -250,6 +254,8 @@ export function createScopedGraphExecutor(params: {
             billing: params.billing,
             llmService,
             usageSource: provider.usageSource,
+            nodeId: container.nodeId,
+            ...(params.grantId ? { grantId: params.grantId } : {}),
             ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
           });
 
@@ -271,6 +277,8 @@ export function createScopedGraphExecutor(params: {
         billing: params.billing,
         llmService,
         usageSource: provider.usageSource,
+        nodeId: container.nodeId,
+        ...(params.grantId ? { grantId: params.grantId } : {}),
         ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
       });
     },
@@ -294,6 +302,8 @@ export function runGraphWithScope(params: {
   readonly llmService: LlmService;
   readonly usageSource: SourceSystem;
   readonly abortSignal?: AbortSignal;
+  readonly nodeId?: string;
+  readonly grantId?: string;
 }): GraphRunResult {
   const { executor, req, ctx, billing, llmService, usageSource } = params;
   return runInScope(
@@ -301,6 +311,8 @@ export function runGraphWithScope(params: {
       billing,
       llmService,
       usageSource,
+      ...(params.nodeId ? { nodeId: params.nodeId } : {}),
+      ...(params.grantId ? { grantId: params.grantId } : {}),
       ...(ctx?.actorUserId ? { actorUserId: ctx.actorUserId } : {}),
       ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     },
@@ -534,8 +546,21 @@ function createInProcProvider(
     inprocAdapter,
     container.toolSource,
     () => cache.getSource(),
-    [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE],
-    container.authorization
+    [...OPERATOR_CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE],
+    container.authorization,
+    container.nodeId,
+    serverEnv().APP_BASE_URL,
+    {
+      content: getNodeMission() ?? "",
+      sourceRef: ".cogni/repo-spec.yaml#intent.mission",
+      buildSha: serverEnv().APP_BUILD_SHA ?? null,
+    },
+    // Host-owned governing index (same listGoverningIndex the cognition bundle renders),
+    // read per run so Cogni holds its guidance map in context without a mid-run index dump.
+    () =>
+      container.knowledgeStorePort
+        ? container.knowledgeStorePort.listGoverningIndex()
+        : Promise.resolve([])
   );
 }
 

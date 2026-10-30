@@ -3,7 +3,7 @@ id: proj.openclaw-capabilities
 type: project
 primary_charter:
 title: OpenClaw Capabilities Integration
-state: Active
+state: Dropped
 priority: 1
 estimate: 5
 summary: Integrate OpenClaw's gateway protocol, agent runtime, git relay, and multi-agent capabilities into Cogni's graph execution pipeline
@@ -11,11 +11,13 @@ outcome: OpenClaw agents are fully operational via Cogni UI — gateway chat wor
 assignees:
   - derekg1729
 created: 2026-02-09
-updated: 2026-02-11
+updated: 2026-10-27
 labels: [openclaw, ai-agents, sandbox]
 ---
 
 # OpenClaw Capabilities Integration
+
+> **Dropped 2026-10-27**: confirmed not current. Several items this charter marks "Done" (`sandbox:openclaw` in the `SANDBOX_AGENTS` registry, `LazySandboxGraphProvider` gateway-client wiring, `openclaw-gateway-client.ts`) are not present on `origin/main` as of this date — only the base `sandbox:agent` provider exists. See [sandbox-git-relay-finding](https://cognidao.org/knowledge/sandbox-git-relay-finding) and [openclaw-docker-build-finding](https://cognidao.org/knowledge/openclaw-docker-build-finding) for the preserved research evidence. Links to deleted research docs below are not repaired.
 
 > Relationship to [proj.sandboxed-agents](proj.sandboxed-agents.md): that project owns the **container sandbox layer** (Docker isolation, socket bridge, proxy plumbing, `SandboxRunnerPort`). This project owns everything **above** that layer: gateway protocol client, agent catalog wiring, UI integration, git relay, multi-agent routing, and OpenClaw-specific capabilities.
 

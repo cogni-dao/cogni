@@ -18,6 +18,7 @@ production_branch: deploy/production-levelup
 # are dropped with it. Production is this node's only slot.
 envs: [production]
 database:
+  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
   production: { tier: shared, budget_profile: shared-default-v1 }
 deployment_provider:
   production: akash
@@ -37,7 +38,7 @@ compute_api:
 # re-spend a settled idempotence key). Bumping this is the ONLY redeploy-after-close
 # path — kubectl patch is reverted by Argo selfHeal.
 lease_generation:
-  production: 3
+  production: 4
 # bug.5079 — activity_env is the SINGLETON env allowed to ingest Git receipts. GitHub
 # App webhooks are delivered to production only (one App, one webhook URL), and the
 # production operator's route index filters to `activityEnv === DEPLOY_ENVIRONMENT`

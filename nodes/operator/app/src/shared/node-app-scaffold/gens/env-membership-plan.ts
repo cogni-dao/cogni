@@ -52,9 +52,8 @@
  *     so the emitted catalog satisfies NO_PLACEMENT_FOR_UNDECLARED_ENV
  *     (tests/ci-invariants/env-declaration-completeness.spec.ts). A stranded cell is authority
  *     pointed at a workload that does not exist — the exact shape the invariant fails CI on.
- *     For an akash lane the remove also restores the env's scheduler-worker route to the k3s
- *     in-cluster default (the byte-inverse of the add's public-host write, bug.5094), so a later
- *     re-add starts from the same bytes a never-removed row has. The CLOSE of the paid lease is
+ *     Removal deletes the paired aliases from the workload lane and foreign control-worker
+ *     namespace, matching canonical rendering of absent membership (bug.5536). The CLOSE of the paid lease is
  *     deliberately NOT here: Argo prunes the AppSet → Crossplane observes REMOVE → the actuator
  *     deletes the deployment. This plan only makes the removal COMPLETE in git.
  *   - IDEMPOTENT — requesting the state that already holds (env already present on add / already absent on
@@ -116,7 +115,11 @@ import {
 } from "./env-membership";
 import type { NodeFormationEnv } from "./envs";
 import { renderOverlay, renderOverlayFile } from "./overlay";
-import { updateSchedulerEndpointHost } from "./scheduler-endpoints";
+import {
+  setCustodiedSchedulerEndpointMembership,
+  setSchedulerEndpointMembership,
+  updateSchedulerEndpointHost,
+} from "./scheduler-endpoints";
 
 /** Repo-relative path of a node's per-env overlay kustomization. */
 export const overlayPath = (env: string, slug: string): string =>
@@ -196,8 +199,8 @@ export interface EnvPlanCurrent {
   /**
    * Current per-env scheduler-worker node-endpoints patch — needed for the placement lever
    * ({@link buildPlacementPlan}), an akash-derived ADD (public-host route from the first
-   * flight), and an akash REMOVE (in-cluster restore, REMOVE_COMPLETES_THE_ROW). Keyed by
-   * env — only the env being mutated is ever read.
+   * flight), and membership changes (absent aliases are removed). Keyed by env; membership also
+   * reads the derived control environment for foreign-lane queue custody.
    */
   readonly schedulerEndpointPatchByEnv?: Readonly<Record<string, string>>;
 }
@@ -307,14 +310,12 @@ export function planEnvAddShape(
  *
  * - ADD (present, env absent): catalog `envs:` += env PLUS the derived placement cells
  *   (ADD_DERIVES_PLACEMENT), render overlay + appset (under the CONTROL env's dir, bug.5204), fold
- *   the `(env, slug)` pair into that control env's appsets kustomization, and for an akash lane
- *   move the env's scheduler-worker route to the node's public host (bug.5094 — a fresh akash lane
- *   has no `<slug>-node-app` Service to dial).
+ *   the `(env, slug)` pair into that control env's appsets kustomization, and add the paired
+ *   route to the workload lane and any foreign control-worker namespace.
  * - REMOVE (¬present, env present): catalog `envs:` −= env AND −= the env's placement cells
  *   (REMOVE_COMPLETES_THE_ROW), DELETE the overlay + the appset at its CONTROL-env path, regenerate
- *   that control env's appsets kustomization without the pair, and for an akash lane restore the
- *   env's scheduler-worker route to the in-cluster default. Applies to candidate-a exactly like any
- *   other env.
+ *   that control env's appsets kustomization without the pair, and remove the paired routes
+ *   from the workload lane and any foreign control-worker namespace.
  *   Removing the final env or the current activity authority is rejected with a typed 422.
  *   `node-template` removes emit a REDUCED delete set (TEMPLATE_OVERLAY_IS_RENDER_SOURCE): its overlay
  *   files stay in the tree as the render template; only the appset + kustomization entry + catalog env
@@ -510,18 +511,16 @@ function planAdd(args: {
       content: insertAppsetKustomization(appsetsKustomization, slug, env),
     },
   ];
-  if (shape.placement === "akash") {
-    // PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) at activation: an akash lane has no
-    // `<slug>-node-app` Service, so the env's scheduler-worker route must carry the node's
-    // public host from the very first flight. A removed env may have no pair at all after
-    // canonical rendering, so ADD may insert it; placement/removal still require an existing pair.
-    // A k3s add needs no op — every env patch already
-    // renders the in-cluster default for every catalog row.
-    const schedulerOp = buildSchedulerEndpointOp(slug, env, "akash", current, {
-      insertIfMissing: true,
-    });
-    if (schedulerOp) ops.push(schedulerOp);
-  }
+  ops.push(
+    ...buildMembershipRoutingOps(
+      slug,
+      env,
+      shape.placement,
+      shape.controlEnv,
+      true,
+      current
+    )
+  );
   return { kind: "add", ops, nextEnvs };
 }
 
@@ -616,15 +615,16 @@ function planRemove(args: {
       content: removeFromAppsetsKustomization(appsetsKustomization, slug, env),
     },
   ];
-  if (provider === "akash") {
-    // PLACEMENT_DECIDES_THE_ADDRESS (bug.5094), inverted: the akash add moved this env's
-    // scheduler-worker route to the node's public host; the remove restores the k3s in-cluster
-    // default (`http://<slug>-node-app:3000`) so the routing map never keeps dialing a host
-    // whose lease the Argo→Crossplane chain is about to close. Byte-inverse of planAdd's write;
-    // idempotent when the route is already in-cluster.
-    const schedulerOp = buildSchedulerEndpointOp(slug, env, "k3s", current);
-    if (schedulerOp) ops.push(schedulerOp);
-  }
+  ops.push(
+    ...buildMembershipRoutingOps(
+      slug,
+      env,
+      provider,
+      controlEnv,
+      false,
+      current
+    )
+  );
   return { kind: "remove", ops, nextEnvs: remaining };
 }
 
@@ -876,8 +876,7 @@ export function buildPlacementPlan(input: {
 }
 
 /**
- * PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) applies to the placement lever AND the akash-derived
- * add (story.5039): the flip/activation decides WHICH address the scheduler-worker must dial for
+ * PLACEMENT_DECIDES_THE_ADDRESS (bug.5094): the placement flip decides which address to dial for
  * `slug` in `env`, so the env's generated node-endpoints patch has to move with it — else the
  * routing map keeps pointing at the LANE THE NODE JUST LEFT (or, on activation, at a Service that
  * never exists). Returns `null` when the routed URL already matches (idempotent — a catalog-only
@@ -887,8 +886,7 @@ function buildSchedulerEndpointOp(
   slug: string,
   env: NodeFormationEnv,
   placement: PlacementProvider,
-  current: EnvPlanCurrent,
-  options: { readonly insertIfMissing?: boolean } = {}
+  current: EnvPlanCurrent
 ): EnvPlanOp | null {
   const currentPatch = current.schedulerEndpointPatchByEnv?.[env];
   if (currentPatch === undefined) {
@@ -909,8 +907,7 @@ function buildSchedulerEndpointOp(
     currentPatch,
     slug,
     nodeId,
-    url,
-    options
+    url
   );
   if (nextPatch === currentPatch) return null;
   return {
@@ -918,4 +915,51 @@ function buildSchedulerEndpointOp(
     path: schedulerEndpointPatchPath(env),
     content: nextPatch,
   };
+}
+
+/** Membership changes must update both the workload lane and its existing queue custodian. */
+function buildMembershipRoutingOps(
+  slug: string,
+  env: NodeFormationEnv,
+  provider: PlacementProvider,
+  controlEnv: string,
+  present: boolean,
+  current: EnvPlanCurrent
+): EnvPlanOp[] {
+  const nodeId = parseCatalogNodeId(current.catalog);
+  const url = present
+    ? nodeAppBaseUrl({
+        slug,
+        provider,
+        environment: env,
+        apexDomain: current.publicDomainRoot ?? CANONICAL_DOMAIN_ROOT,
+      })
+    : null;
+  const ops: EnvPlanOp[] = [];
+  for (const target of new Set([env, controlEnv])) {
+    const before = current.schedulerEndpointPatchByEnv?.[target];
+    if (before === undefined)
+      throw new EnvPlanError(
+        "env_render_inputs_missing",
+        `cannot plan membership routing for '${env}'/'${slug}': missing '${target}' scheduler patch.`,
+        422
+      );
+    const after =
+      target === env
+        ? setSchedulerEndpointMembership(before, slug, nodeId, url)
+        : setCustodiedSchedulerEndpointMembership(
+            before,
+            env,
+            slug,
+            nodeId,
+            url
+          );
+    if (after !== before)
+      ops.push({
+        op: "upsert",
+        path: schedulerEndpointPatchPath(target),
+        content: after,
+      });
+  }
+  return ops;
 }

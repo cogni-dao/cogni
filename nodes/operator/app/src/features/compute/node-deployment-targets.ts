@@ -13,6 +13,14 @@ export interface DeploymentTargetSelection {
   readonly providers: Readonly<Record<string, "akash" | "k3s">>;
   readonly k3s: readonly string[];
   readonly k3sNodes: readonly string[];
+  /**
+   * Every selected node target's canonical GitHub `owner/name` (bug.5510). A
+   * remote-source node carries its catalog `source_repo`; an in-repo node
+   * (no `source_repo`, e.g. operator) is built from the repository running the
+   * workflow, so it carries `parentRepository`. The deploy-branch maintenance
+   * fence compares this exact value with an audited receipt's
+   * `request.sourceRepository`; an empty value is never a valid identity.
+   */
   readonly sourceRepositories: Readonly<Record<string, string>>;
   readonly sourceShas: Readonly<Record<string, string>>;
 }
@@ -80,7 +88,20 @@ export function resolveDeploymentTargets(input: {
   readonly catalogRows: readonly Readonly<Record<string, unknown>>[];
   readonly environment: DeploymentEnvironment;
   readonly flightTargets: readonly string[];
+  /** GitHub `owner/name` running this workflow; the source of in-repo nodes. */
+  readonly parentRepository: string;
+  /** Exact reviewed parent checkout; never a substitute for a child catalog pin. */
+  readonly parentSourceSha?: string;
 }): DeploymentTargetSelection {
+  const parentRepository = parseParentRepository(input.parentRepository);
+  if (
+    input.parentSourceSha !== undefined &&
+    !/^[a-fA-F0-9]{40}$/.test(input.parentSourceSha)
+  ) {
+    throw new Error(
+      "[deployment-targets] parentSourceSha must be a full commit SHA"
+    );
+  }
   const byName = new Map(
     input.catalogRows.map((row) => [row.name, row] as const)
   );
@@ -117,6 +138,18 @@ export function resolveDeploymentTargets(input: {
       sourceShas[target] = parseSourceSha(row, target);
     } else {
       k3sNodes.push(target);
+      sourceRepositories[target] = resolveNodeSourceRepository(
+        row,
+        target,
+        parentRepository
+      );
+      if (
+        row.source_repo === undefined &&
+        sourceRepositories[target] === parentRepository &&
+        input.parentSourceSha !== undefined
+      ) {
+        sourceShas[target] = input.parentSourceSha;
+      }
     }
   }
 
@@ -144,7 +177,10 @@ export function resolvePromoteDeploymentTargets(input: {
   readonly legacyK3sTargets: readonly string[];
   /** Run-wide preview-forward mode, decided by the caller. Off ⇒ the map is all false. */
   readonly previewForwardMode?: boolean;
+  /** GitHub `owner/name` running this workflow; the source of in-repo nodes. */
+  readonly parentRepository: string;
 }): PromoteDeploymentTargetSelection {
+  const parentRepository = parseParentRepository(input.parentRepository);
   const byName = new Map(
     input.catalogRows.map((row) => [row.name, row] as const)
   );
@@ -192,6 +228,13 @@ export function resolvePromoteDeploymentTargets(input: {
     if (isOffCluster || isRemoteSource) {
       sourceRepositories[target] = parseSourceRepository(row, target);
       sourceShas[target] = parseSourceSha(row, target);
+    } else {
+      // In-repo node: its image and deploy source are this parent repository.
+      sourceRepositories[target] = resolveNodeSourceRepository(
+        row,
+        target,
+        parentRepository
+      );
     }
   }
 
@@ -291,22 +334,70 @@ function catalogScalar(value: unknown): string | number | boolean | null {
     : null;
 }
 
+/** One GitHub owner or repository name segment (shared by both repository forms). */
+const GITHUB_NAME = "[A-Za-z0-9_.-]+";
+const GITHUB_REPOSITORY = new RegExp(`^(${GITHUB_NAME})/(${GITHUB_NAME})$`);
+const GITHUB_REPOSITORY_URL = new RegExp(
+  `^https://github\\.com/(${GITHUB_NAME})/(${GITHUB_NAME}?)(?:\\.git)?$`
+);
+
+/**
+ * Canonical lowercase `owner/name`, or undefined for a `.`/`..` segment (path
+ * traversal, never a repository). Lowercase is the identity the maintenance fence
+ * compares byte-for-byte with an audited receipt's `request.sourceRepository`, so
+ * receipt writers must record the same canonical lowercase form.
+ */
+function canonicalRepository(
+  match: RegExpMatchArray | null
+): string | undefined {
+  const owner = match?.[1];
+  const name = match?.[2];
+  if (!owner || !name) return undefined;
+  if ([owner, name].some((segment) => /^\.\.?$/.test(segment)))
+    return undefined;
+  return `${owner}/${name}`.toLowerCase();
+}
+
+/** Fails closed on an empty, malformed or traversal parent repository. */
+function parseParentRepository(value: string): string {
+  const repository =
+    typeof value === "string"
+      ? canonicalRepository(value.match(GITHUB_REPOSITORY))
+      : undefined;
+  if (!repository) {
+    throw new Error(
+      "[deployment-targets] parentRepository must be a GitHub owner/name"
+    );
+  }
+  return repository;
+}
+
+function resolveNodeSourceRepository(
+  row: Readonly<Record<string, unknown>>,
+  target: string,
+  parentRepository: string
+): string {
+  return row.source_repo === undefined
+    ? parentRepository
+    : parseSourceRepository(row, target);
+}
+
 function parseSourceRepository(
   row: Readonly<Record<string, unknown>>,
   target: string
 ): string {
   if (typeof row.source_repo !== "string") {
     throw new Error(
-      `[deployment-targets] Off-cluster target ${target} requires source_repo`
+      `[deployment-targets] Target ${target} requires source_repo`
     );
   }
-  const match = row.source_repo.match(
-    /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/
+  const repository = canonicalRepository(
+    row.source_repo.match(GITHUB_REPOSITORY_URL)
   );
-  if (!match) {
+  if (!repository) {
     throw new Error(
-      `[deployment-targets] Off-cluster target ${target} has invalid source_repo`
+      `[deployment-targets] Target ${target} has invalid source_repo`
     );
   }
-  return `${match[1]}/${match[2]}`.toLowerCase();
+  return repository;
 }

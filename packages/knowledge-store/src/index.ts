@@ -17,6 +17,7 @@ export { createKnowledgeCapability } from "./capability.js";
 export {
   assertWritableConfidence,
   BASELINE_CONFIDENCE_BY_SOURCE,
+  CONFIDENCE_EXEMPT_ENTRY_TYPES,
   CONFIDENCE_POLICY_VERSION,
   type ConfidenceCitationBasis,
   type ConfidenceDecision,
@@ -24,6 +25,7 @@ export {
   clampConfidence,
   explainConfidence,
   initializeConfidence,
+  isConfidenceExempt,
   recomputeConfidence,
 } from "./domain/confidence-policy.js";
 // Contribution domain
@@ -34,6 +36,8 @@ export {
   ContributionCommitRecordSchema,
   type ContributionDiffEntry,
   ContributionDiffEntrySchema,
+  type ContributionMergePreview,
+  ContributionMergePreviewSchema,
   type ContributionRecord,
   ContributionRecordSchema,
   type ContributionState,
@@ -52,6 +56,16 @@ export {
   PrincipalKindSchema,
   PrincipalSchema,
 } from "./domain/contribution-schemas.js";
+// DAO goal list (ONE_GOAL_LIST · MAX_THREE_GOALS) — read via KnowledgeStorePort.listActiveGoals
+export {
+  type ActiveGoal,
+  GOAL_ENTRY_TYPE,
+  GOAL_ID_PREFIX,
+  type GoalCandidateRow,
+  isActiveGoalRow,
+  MAX_ACTIVE_GOALS,
+  selectActiveGoals,
+} from "./domain/dao-goals.js";
 // Write-pipeline gates (proj.knowledge-syntropy — W0 Gates tier)
 export {
   type GateContext,
@@ -102,6 +116,16 @@ export {
   type MetricResolutionStrategy,
   MetricResolutionStrategySchema,
 } from "./domain/goal-loop.js";
+// Governing guidance index (GOVERNING_SET_DEFINED_ONCE) — read via KnowledgeStorePort.listGoverningIndex
+export {
+  GOVERNING_ENTRY_TYPES,
+  type GoverningCandidateEdge,
+  type GoverningCandidateRow,
+  type GoverningEntryType,
+  type GoverningIndexRow,
+  isGoverningEntryType,
+  selectGoverningIndex,
+} from "./domain/governing.js";
 // Knowledge-graph view model (shared assembly, no N+1)
 export {
   buildKnowledgeGraph,
@@ -139,13 +163,17 @@ export {
   CitationSchema,
   type CitationType,
   CitationTypeSchema,
+  citedEntryTypesFor,
   type DoltCommit,
   DoltCommitSchema,
   type DoltDiffEntry,
   DoltDiffEntrySchema,
+  EDO_ENTRY_TYPES,
   type EntryType,
   EntryTypeSchema,
+  EVALUATE_AT_REQUIRED_ENTRY_TYPES,
   HYPOTHESIS_TARGETED_EDGES,
+  isEdoEntryType,
   isWorkItemEndpointId,
   type Knowledge,
   KnowledgeSchema,
@@ -156,9 +184,11 @@ export {
   RAW_WRITE_REJECTS_TYPES,
   type ResolutionStrategy,
   ResolutionStrategySchema,
+  requiresEvaluateAt,
   type SourceType,
   SourceTypeSchema,
 } from "./domain/schemas.js";
+export { KnowledgeWriteConflictError } from "./domain/write-replay.js";
 export { createEdoCapability } from "./edo-capability.js";
 export {
   ContributionConflictError,
@@ -195,7 +225,11 @@ export {
   HypothesisMissingEvaluateAtError,
   KnowledgeBusyError,
   type KnowledgeStorePort,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
+  type KnowledgeWriteSession,
   type NewDomain,
+  TooManyActiveGoalsError,
 } from "./port/knowledge-store.port.js";
 // KPI reader port (goal-loop — verifier-independent metric read)
 export {

@@ -132,8 +132,11 @@ export function makeLangChainTool(
       }
       // Discriminated union guarantees errorCode and safeMessage exist when ok=false
       return JSON.stringify({
-        error: result.errorCode,
+        error: result.receipt?.code ?? result.errorCode,
         message: result.safeMessage,
+        ...(result.receipt
+          ? { retryable: false, lookup: result.receipt.lookup }
+          : {}),
       });
     },
   });

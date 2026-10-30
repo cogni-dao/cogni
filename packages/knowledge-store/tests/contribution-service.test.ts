@@ -355,6 +355,36 @@ class FakeContributionPort implements KnowledgeContributionPort {
 }
 
 describe("createContributionService", () => {
+  it("reports native preview unavailable when the optional capability is absent", async () => {
+    const port = new FakeContributionPort();
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: () => false,
+    });
+    expect(await service.previewMerge("contrib-test")).toMatchObject({
+      status: "unavailable",
+      mainCommit: null,
+      contributionCommit: null,
+    });
+  });
+
+  it("forwards native preview without conferring merge authority", async () => {
+    const port = new FakeContributionPort();
+    const preview = {
+      contributionId: "contrib-test",
+      status: "conflicted" as const,
+      mainCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      contributionCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      checkedAt: "2026-10-27T00:00:00.000Z",
+      reason: null,
+      conflicts: [],
+    };
+    const service = createContributionService({
+      port: Object.assign(port, { previewMerge: async () => preview }),
+      canMergeKnowledge: () => false,
+    });
+    expect(await service.previewMerge("contrib-test")).toEqual(preview);
+  });
   it("runs configured gates on create insert/update edits and rejects bad slugs", async () => {
     const port = new FakeContributionPort();
     const service = createContributionService({

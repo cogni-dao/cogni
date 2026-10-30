@@ -28,6 +28,9 @@ export function createOperatorDeployPlane(env: ServerEnv): DeployPlanePort {
     appId: env.GH_REVIEW_APP_ID,
     privateKey,
     fleetControlEnv: env.FLEET_CONTROL_ENV,
+    hostingEnv: env.DEPLOY_ENVIRONMENT,
+    parentOwner: env.NODE_SUBMODULE_PARENT_OWNER,
+    parentRepo: env.NODE_SUBMODULE_PARENT_REPO,
     // WORKLOAD public domain: DOMAIN (e.g. cogni-testing.org on the test-parent)
     // wins over the SUBSTRATE root FORK_DOMAIN_ROOT (cognidao.org); they diverge on
     // the test-parent mirror. Byte-exact twin of render-node-overlays.sh's

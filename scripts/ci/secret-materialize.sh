@@ -286,14 +286,18 @@ prefetch_path() {
 # Reads serve from the cache the single prefetch populated — no per-key ssh.
 # Overrides the lib's ssh/ROOT_TOKEN variants (sourced above).
 bao_get_field() {
-  local f="${CACHE_DIR}/$1/$2"
-  [[ -f "$f" ]] && { cat "$f"; return 0; }
-  # SHARED-SUBSTRATE OWNERS LIVE WHERE THE SUBSTRATE DOES (bug.5206). A foreign-custodied
-  # lane runs on the CONTROL env's substrate, so its LiteLLM master key, Doltgres superuser
-  # and _shared values are that cluster's, not the lane's — `cogni/candidate-a/operator`
-  # does not exist in production's vault and never should. This dir is populated ONLY when
-  # the control env differs from the lane, so for every row today the lookup ends above.
-  f="${CACHE_DIR}/__owner__/$1/$2"
+  local svc="$1" key="$2" authority="${3:-target}" f
+  case "$authority" in
+    target) f="${CACHE_DIR}/${svc}/${key}" ;;
+    owner)
+      if [[ "$SECRETS_CONTROL_ENV" == "$DEPLOY_ENVIRONMENT" ]]; then
+        f="${CACHE_DIR}/${svc}/${key}"
+      else
+        f="${CACHE_DIR}/__owner__/${svc}/${key}"
+      fi ;;
+    *) fail "unknown secret bank authority" ;;
+  esac
+  # Missing is missing in THIS authority. Never retry under a greater owner.
   [[ -f "$f" ]] && cat "$f" || true
 }
 
@@ -393,46 +397,34 @@ DSN_DEFER_KEYS=" "
 # must receive a URL derived from that same SSOT or the migrator 28P01s.
 COMPOSED_DSN_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL DATABASE_SSL_CA_CERT "
 
-# Transitional shared/human inheritance — the blind ancestor scan the north star
-# replaces with explicit catalog `inheritFrom` (catalog-custody lane). Now serves
-# from the prefetched cache, and only runs for non-agent keys.
+# Shared/human inheritance uses only explicit catalog inheritFrom authority.
+# Unspecified optional keys stay target-owned; there is no ancestor scan.
 inherit_shared_value() {
   local k="$1" v="" from=""
   [[ -n "${!k:-}" ]] && return 0
-  # Explicit catalog `inheritFrom: <service>` — the canonical-custody lane that
-  # replaces the blind ancestor scan for keys whose value must byte-match ONE
-  # owner (e.g. SCHEDULER_API_TOKEN must equal the token the worker SENDS, which
-  # deploy-infra writes into scheduler-worker-secrets from cogni/<env>/operator). bug.5021.
   from="$(_cat_field "$k" '.inheritFrom')"
-  if [[ -n "$from" && "$from" != "null" ]]; then
-    v="$(bao_get_field "$from" "$k")"
-    [[ -n "$v" ]] && export "${k}=${v}"
-    return 0
-  fi
-  for svc in node-template operator _shared; do
-    v="$(bao_get_field "$svc" "$k")"
-    if [[ -n "$v" ]]; then export "${k}=${v}"; return 0; fi
-  done
+  [[ -n "$from" && "$from" != "null" ]] || return 0
+  v="$(bao_get_field "$from" "$k" owner)"
+  [[ -n "$v" ]] && export "${k}=${v}"
   return 0
 }
 
-# One prefetch: node/ancestor key maps (O(1) ssh). operator is the inheritFrom
-# source for SCHEDULER_API_TOKEN (bug.5021) and is already in the prefetch set
-# below, so bao_get_field (cache-only) resolves it.
-# (bug.5068: the old `kv metadata get` node-path-existence precheck was removed —
-# flush_batch now derives create-vs-merge from patch's own output, so a transient
-# precheck failure can no longer flip a merge into a bucket-clobbering put.)
-for svc in "$TARGET_NODE" node-template operator _shared; do
-  prefetch_path "$svc"
-done
-# Ancestors, re-read from the cluster that HOSTS this lane's substrate. Additive: the
-# lane's own buckets are still prefetched above and still win; this only supplies what a
-# foreign lane structurally cannot have locally. No-op when control env == lane.
-if [[ "${SECRETS_CONTROL_ENV}" != "$DEPLOY_ENVIRONMENT" ]]; then
-  for svc in node-template operator _shared; do
+# Target and explicit owner reads have distinct authority, even for operator.
+# The shared superuser is explicitly read from operator; all other inherited
+# sources come solely from existing catalog inheritFrom declarations.
+prefetch_path "$TARGET_NODE"
+mapfile -t declared_owners < <(
+  { printf '%s\n' operator
+    yq -N '.secrets[] | .inheritFrom // ""' "${CATALOG_FILES[@]}"
+  } | sed '/^$/d' | LC_ALL=C sort -u
+)
+for svc in "${declared_owners[@]}"; do
+  if [[ "$SECRETS_CONTROL_ENV" == "$DEPLOY_ENVIRONMENT" ]]; then
+    [[ "$svc" == "$TARGET_NODE" ]] || prefetch_path "$svc"
+  else
     prefetch_path "$svc" "$SECRETS_CONTROL_ENV" "__owner__/$svc"
-  done
-fi
+  fi
+done
 
 # Same canonical writer loads applied cell custody before composing any runtime URL.
 source "$SCRIPT_DIR/lib/materialize-database-cell-kits.sh"
@@ -493,16 +485,50 @@ if [[ "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" == "db-ready" ]]; then
   # proves the provisioned role/database boundary before any secret-array write.
   observation="$(remote "docker run --rm --network host -e PGPASSWORD='${probe_password}' -e PGCONNECT_TIMEOUT=5 postgres:15 psql -h '${COGNI_LANE_DB_HOST}' -p 5432 -U '${probe_role}' -d '${probe_database}' -XAtv ON_ERROR_STOP=1 -c 'SELECT public.database_recovery_probe();'")" \
     || fail "DB-ready native probe receipt unavailable"
-  prior_bindings="$(bao_get_field database-reliability-actuator DATABASE_RECOVERY_PROBE_URLS_JSON)"
-  [[ -n "$prior_bindings" ]] || prior_bindings='[]'
-  next_bindings="$(jq -n --arg nodeId "$probe_node_id" --arg nodeSlug "$TARGET_NODE" --arg environment "$DEPLOY_ENVIRONMENT" \
+  # Read aggregate and version from the SAME authoritative response. The cache
+  # deliberately contains values only and cannot authorize a versioned probe reattestation.
+  binding_bank="$(cogni_openbao_read_path "$DEPLOY_ENVIRONMENT" database-reliability-actuator)" \
+    || fail "DB-ready binding bank unavailable"
+  prior_bindings="$(jq -er '.data.data.DATABASE_RECOVERY_PROBE_URLS_JSON // "[]"' <<<"$binding_bank")" \
+    || fail "DB-ready binding aggregate invalid"
+  binding_plan="$(jq -n --arg nodeId "$probe_node_id" --arg nodeSlug "$TARGET_NODE" --arg environment "$DEPLOY_ENVIRONMENT" \
     --arg databaseName "$probe_database" --arg probeRole "$probe_role" --arg dsn "$probe_dsn" \
     --arg expectedHost "$COGNI_LANE_DB_HOST" --arg machineId "$machine_id" --arg localSystemIdentifier "$local_system_id" --argjson observation "$observation" \
     --argjson existingBindings "$prior_bindings" \
     '{nodeId:$nodeId,nodeSlug:$nodeSlug,environment:$environment,databaseName:$databaseName,probeRole:$probeRole,dsn:$dsn,expectedHost:$expectedHost,machineId:$machineId,localSystemIdentifier:$localSystemIdentifier,observation:$observation,existingBindings:$existingBindings}' \
-    | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-recovery-binding.ts")" \
+    | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/plan-database-recovery-host-rebind.ts")" \
     || fail "DB-ready measured binding validation failed"
-  if [[ "$next_bindings" == "$prior_bindings" ]]; then
+  next_bindings="$(jq -c .bindings <<<"$binding_plan")"
+  if [[ "$(jq -r '.rebind != null' <<<"$binding_plan")" == true ]]; then
+    binding_version="$(jq -er '.data.metadata.version | select(type=="number" and .>0 and floor==.)' <<<"$binding_bank")" \
+      || fail "DB-ready probe reattestation requires an existing KV version"
+    # Native proof must not race a canonical credential rotation. No retries or
+    # repair of component drift: the concurrent owner wins.
+    current_probe="$(cogni_openbao_read_path "$DEPLOY_ENVIRONMENT" "$probe_service")" \
+      || fail "DB-ready canonical probe recheck unavailable"
+    [[ "$(jq -r .data.data.DATABASE_RECOVERY_PROBE_PASSWORD <<<"$current_probe")" == "$probe_password" && "$(jq -r .data.data.DATABASE_RECOVERY_PROBE_URL <<<"$current_probe")" == "$probe_dsn" ]] \
+      || fail "DB-ready canonical probe changed during qualification"
+    printf '%s' "$next_bindings" > "${CACHE_DIR}/host-rebind-bindings"
+    # Patch exactly one field at the observed bank version, never flush_batch's
+    # unversioned patch/put fallback. Use the SAME trusted SSH argv directly:
+    # remote()/bao_exec() retry transport failures and could replay this mutation.
+    patch_result="$(jq -n --rawfile bindings "${CACHE_DIR}/host-rebind-bindings" '{DATABASE_RECOVERY_PROBE_URLS_JSON:$bindings}' \
+      | "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao kv patch -format=json -method=patch -cas=${binding_version} 'cogni/${DEPLOY_ENVIRONMENT}/database-reliability-actuator' -" 2>/dev/null)" \
+      || fail "DB-ready probe reattestation CAS failed or outcome unknown; no replay; reconcile before retry"
+    applied_version="$(jq -er --argjson before "$binding_version" '.data.version | select(. == $before + 1)' <<<"$patch_result")" \
+      || fail "DB-ready probe reattestation applied but version receipt unavailable; reconcile before retry"
+    # CAS may already have applied even if this read fails. Reconcile, never
+    # replay: independently read the same bank through its authoritative reader.
+    readback_bank="$(cogni_openbao_read_path "$DEPLOY_ENVIRONMENT" database-reliability-actuator)" \
+      || fail "DB-ready probe reattestation applied; aggregate readback unknown; reconcile before retry"
+    jq -e --argjson applied "$applied_version" --slurpfile expected "${CACHE_DIR}/host-rebind-bindings" \
+      '.data.metadata.version as $version | ($version | type == "number") and ($version >= $applied) and ((.data.data.DATABASE_RECOVERY_PROBE_URLS_JSON | fromjson) == $expected[0])' \
+      <<<"$readback_bank" >/dev/null 2>&1 \
+      || fail "DB-ready probe reattestation applied; aggregate readback mismatch or unknown; reconcile before retry"
+    # Only allowlisted credential-free evidence reaches CI/Loki.
+    safe_receipt="$(jq -c --argjson before "$binding_version" --argjson after "$applied_version" '.rebind + {beforeVersion:$before,afterVersion:$after,readbackMatched:true}' <<<"$binding_plan")"
+    log "DB-ready probe reattestation applied receipt=${safe_receipt}"
+  elif [[ "$next_bindings" == "$prior_bindings" ]]; then
     log 'DB-ready binding converged; created=0'
   else
     rm -f "${CACHE_DIR}/database-reliability-actuator/DATABASE_RECOVERY_PROBE_URLS_JSON"
@@ -544,8 +570,16 @@ for k in "${NODE_BASELINE_KEYS[@]}"; do
   # worker→node 401 (bug.5021). No-op when already equal (no pod churn).
   inherit_from="$(_cat_field "$k" '.inheritFrom')"
   if [[ -n "$inherit_from" && "$inherit_from" != "null" ]]; then
-    v="$(bao_get_field "$inherit_from" "$k")"
-    [[ -z "$v" ]] && continue
+    v="$(bao_get_field "$inherit_from" "$k" owner)"
+    if [[ -z "$v" ]]; then
+      # Optional, wholly unconfigured integrations stay disabled. A required
+      # input or an existing target copy needs affirmative owner authority;
+      # neither a stale target nor a runner env value can replace that read.
+      if [[ "$(_cat_field "$k" '.required')" == true || -n "$(bao_get_field "$TARGET_NODE" "$k")" ]]; then
+        fail "declared owner ${inherit_from}/${k} is absent in ${SECRETS_CONTROL_ENV}; refusing target fallback"
+      fi
+      continue
+    fi
     if [[ "$(bao_get_field "$TARGET_NODE" "$k")" == "$v" ]]; then
       unchanged=$((unchanged + 1))
       continue
@@ -905,7 +939,7 @@ register_litellm_virtual_key() {
   [[ -n "$value" ]] || fail "catalog sync target ${key_name} was not materialized for ${TARGET_NODE}"
   [[ "$value" =~ ^sk-cogni-[0-9a-f]{48}$ ]] \
     || fail "catalog sync target ${key_name} has invalid format (expected sk-cogni-<48 lowercase hex>)"
-  master="$(bao_get_field operator LITELLM_MASTER_KEY)"
+  master="$(bao_get_field operator LITELLM_MASTER_KEY owner)"
   [[ -n "$master" ]] \
     || fail "cannot register ${key_name}: operator LITELLM_MASTER_KEY is absent"
   node_id="$(node_id_for_target "$TARGET_NODE")" \

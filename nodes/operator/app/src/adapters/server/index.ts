@@ -182,7 +182,9 @@ export {
   resolveNodeLiveness,
 } from "./node-registry/prod-liveness";
 export { DrizzleNodeMigrationReportStore } from "./observability/drizzle-node-migration-report.adapter";
+export { HttpLangfuseOwnershipVerifier } from "./observability/langfuse-ownership.adapter";
 export { HttpLangfuseReader } from "./observability/langfuse-reader.adapter";
+export { HttpLangfuseRootOwnershipVerifier } from "./observability/langfuse-root-ownership.adapter";
 export { HttpLokiPusher } from "./observability/loki-push.adapter";
 export { HttpLokiReader } from "./observability/loki-reader.adapter";
 export { ViemEvmOnchainClient } from "./onchain/viem-evm-onchain-client.adapter";
@@ -241,3 +243,22 @@ export { observeAppliedCellManaged } from "./compute/database-cell-applied-manag
 export { ReadOnlyAppliedDatabaseCellObserver } from "./compute/database-cell-applied-observer.adapter";
 export { DrizzleDatabaseCellBindingStore } from "./compute/database-cell-binding-store.adapter";
 export { PostgresDatabaseCellObserver } from "./compute/database-cell-observer.adapter";
+
+export {
+  AKASH_PRODUCTION_OWNER,
+  akashCreditReader,
+  readAkashBlocksPerDay,
+} from "./finance/akash-credit.reader";
+export { cherryFinanceReader } from "./finance/cherry-finance.reader";
+export {
+  CREDITED_STATUS,
+  creditedPurchasesQuery,
+} from "./finance/credit-purchase-income.query";
+export { domainExpiryReader } from "./finance/domain-expiry.reader";
+export { grafanaOverageReader } from "./finance/grafana-overage.reader";
+export {
+  akashHostingReaders,
+  collapseAkash,
+  readAkashReports,
+  unavailableFinanceReader,
+} from "./finance/operator-finance.adapter";

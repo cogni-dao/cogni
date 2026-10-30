@@ -67,6 +67,27 @@ patches:
                     value: preview
                   - name: FORK_DOMAIN_ROOT
                     value: cognidao.org
+  # bug.5546: the operator serving container ran at base tier (512Mi limit /
+  # 384MB V8 heap = 128MB non-heap headroom). A heavy /knowledge|/graph SSR
+  # refresh hit V8's 384MB old-space ceiling -> FATAL JS heap OOM -> in-place
+  # restart -> 502. Operator is hand-authored (generator-exempt), so this is a
+  # per-node bump: 1Gi container limit + matching --max-old-space-size=768
+  # (256MB non-heap margin). requests + cpu limit are left unchanged (no QoS /
+  # scheduling / surge change). A larger per-env operator-control tier is a
+  # tracked follow-up; see .context/compute-sizing-design.md.
+  - target:
+      kind: Deployment
+      name: node-app
+    # JSON6902 (not strategic-merge): operator-rollout-strategy.test.sh parses
+    # every node-app patch as an op-list. Base env[0] is NODE_OPTIONS; the
+    # overlay only appends env, so index 0 is stable.
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "1Gi"
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: "--max-old-space-size=768"
   - target:
       kind: Deployment
       name: node-app
@@ -212,6 +233,10 @@ patches:
       kind: Deployment
       name: node-app
     patch: |
+      # One-time legacy writer cutover; restore RollingUpdate after all operator lanes prove v2.
+      - op: replace
+        path: /spec/strategy
+        value: {type: Recreate}
       - op: add
         path: /spec/template/spec/initContainers/-
         value:
@@ -220,7 +245,7 @@ patches:
           command:
             - /bin/sh
             - -c
-            - exec node /app/nodes/$(NODE_NAME)/app/migrate-doltgres.mjs /app/nodes/$(NODE_NAME)/app/doltgres-migrations
+            - exec node --input-type=module -e 'import { migrateOperatorAfterNativeDrain } from "/app/nodes/operator/app/migrate-doltgres.mjs"; await migrateOperatorAfterNativeDrain("/app/nodes/operator/app/doltgres-migrations")'
           envFrom:
             - configMapRef:
                 name: operator-node-app-config

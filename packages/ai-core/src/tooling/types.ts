@@ -16,6 +16,7 @@
  * @public
  */
 
+import type { AuthzAction } from "@cogni/authorization-core";
 import type { JSONSchema7 } from "json-schema";
 
 import type { AiEvent } from "../events/ai-events";
@@ -147,6 +148,10 @@ export interface ToolInvocationContext {
   readonly subjectId?: string;
   /** Graph context for authorization and audit. */
   readonly graphId?: string;
+  /** Node the run executes on (authz v0: node policy + audit). */
+  readonly nodeId?: string;
+  /** Execution grant backing a scheduled run (audit only; API/chat runs carry none). */
+  readonly grantId?: string;
   /**
    * Connection ID for authenticated tools (out-of-band, not in tool args).
    * Per CONNECTION_IN_CONTEXT_NOT_ARGS: connectionId in context, not tool schemas.
@@ -184,6 +189,15 @@ export interface ParseableSchema {
 }
 
 /**
+ * Node policy a tool declares (authz v0, .context/authz-v0-design.md §3).
+ *   - "node.collaborate": allowed iff the run has an authenticated actor AND runs on this
+ *     node — evaluated in code, no OpenFGA call (mirrors the work-items/knowledge/EDO routes).
+ *   - an AuthzAction (e.g. "node.flight"): OpenFGA check on `node:<nodeId>`.
+ * Undeclared → legacy `tool.execute` on `tool:<id>` (unchanged).
+ */
+export type ToolAuthzRequirement = "node.collaborate" | AuthzAction;
+
+/**
  * Bound tool runtime interface.
  *
  * Per TOOL_SOURCE_RETURNS_BOUND_TOOL (TOOL_USE_SPEC.md #27):
@@ -205,6 +219,9 @@ export interface BoundToolRuntime {
 
   /** Whether tool requires authenticated connection */
   readonly requiresConnection: boolean;
+
+  /** Node policy (authz v0). Undeclared → legacy `tool.execute` authorization. */
+  readonly requires?: ToolAuthzRequirement;
 
   /** Capability dependencies (e.g., ['auth', 'clock']) */
   readonly capabilities: readonly string[];
@@ -261,12 +278,21 @@ export interface BoundToolRuntime {
  * Tool result from implementation (pre-redaction).
  * Structurally identical to ToolExecResult but semantically distinct layer.
  */
+/** Optional domain-owned lookup receipt for a refused automatic retry. */
+export interface ToolFailureReceipt {
+  readonly code: string;
+  readonly retryable: false;
+  readonly lookup: Readonly<Record<string, string | null>>;
+}
+
 export type ToolResult<T> =
   | { readonly ok: true; readonly value: T }
   | {
       readonly ok: false;
       readonly errorCode: ToolErrorCode;
       readonly safeMessage: string;
+      readonly retryable?: false;
+      readonly receipt?: ToolFailureReceipt;
     };
 
 // -----------------------------------------------------------------------------
@@ -290,6 +316,8 @@ export type ToolExecResult<T> =
       readonly ok: false;
       readonly errorCode: ToolErrorCode;
       readonly safeMessage: string;
+      readonly retryable?: false;
+      readonly receipt?: ToolFailureReceipt;
     };
 
 /**

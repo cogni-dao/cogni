@@ -81,6 +81,8 @@ export interface CompletionStreamParams {
   tools?: readonly import("@/ports").LlmToolDefinition[];
   /** Tool choice for LLM (optional) */
   toolChoice?: import("@/ports").LlmToolChoice;
+  /** Output-token budget; falls back to DEFAULT_MAX_TOKENS when unset. */
+  maxTokens?: number;
   /** Billing correlation metadata forwarded to LiteLLM as x-litellm-spend-logs-metadata header */
   spendLogsMetadata?: { run_id: string; graph_id: string; node_id?: string };
 }
@@ -89,6 +91,15 @@ export interface CompletionStreamParams {
  * Parameters for a single completion unit execution.
  * Used by graph runners that need multiple LLM calls.
  */
+/**
+ * Output-token budget for graph/agent completions. The global DEFAULT_MAX_TOKENS (4096) is a
+ * prompt-hash default and is too small for a reasoning model: after a large gather it exhausts the
+ * budget on reasoning and returns an empty completion (finishReason=length), which stalls the run.
+ * This is reasoning HEADROOM, not license to write more — the agent prompts demand terse, high-signal
+ * output; the budget just lets the model finish thinking before it emits that signal.
+ */
+const AGENT_GRAPH_MAX_TOKENS = 32768;
+
 export interface CompletionUnitParams {
   messages: GraphRunRequest["messages"];
   model: string;
@@ -194,6 +205,7 @@ export class InProcCompletionUnitAdapter {
         completionPromiseHolder.promise = this.completionStream({
           messages,
           model,
+          maxTokens: AGENT_GRAPH_MAX_TOKENS,
           llmService,
           accountService: this.deps.accountService,
           clock: this.deps.clock,

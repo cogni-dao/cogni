@@ -9,7 +9,8 @@
  * Scope: Static grep over the deploy actions/workflows/scripts that build a substrate host; does not execute them, resolve YAML, hit the network, or verify the host resolves.
  * Invariants:
  *   VM_HOST_FOR_ENV_TAKES_A_RESOLVED_ENV: `vm_host_for_env` is never called with a raw
- *     workload-env variable; its first argument must be a control-env-resolved value.
+ *     workload-env variable for a substrate consumer. The LiteLLM callback app destination
+ *     follows workload placement, with its exact assignment covered by routing execution tests.
  * Side-effects: IO (reads .github/, scripts/)
  * Links: scripts/ci/lib/appset-paths.sh (control_env_for), bug.5206, task.5132
  * @public
@@ -36,6 +37,20 @@ const EXTS = new Set([".sh", ".yml", ".yaml"]);
 const RAW_ENV_ARG =
   /vm_host_for_env\s+"?\$\{?(DEPLOYMENT_ENVIRONMENT|DEPLOY_ENVIRONMENT|DEPLOY_ENV|ENVIRONMENT)\b/;
 
+// A callback addresses the app, not a dependency consumed by the app. k3s apps
+// live on the lane's VM; node_billing_endpoint_csv routes Akash apps to their
+// public URL. Keep this exception to the exact assignment, not the whole file:
+// deploy-infra also contains real substrate consumers. Execution coverage lives
+// in scripts/ci/tests/scheduler-runtime-routing.test.sh (bug.5530).
+const CALLBACK_APP_HOST =
+  'LITELLM_NODE_HOST="$(cogni_vm_host_for_env "$DEPLOY_ENVIRONMENT" "${FORK_DOMAIN_ROOT:-$(cogni_domain_root)}" "$(cogni_deployment_slug)")"';
+
+function usesRawSubstrateEnv(file: string, code: string): boolean {
+  const isCallbackAppHost =
+    file === "scripts/ci/deploy-infra.sh" && code.trim() === CALLBACK_APP_HOST;
+  return RAW_ENV_ARG.test(code) && !isCallbackAppHost;
+}
+
 function walk(dir: string): string[] {
   const abs = path.join(REPO_ROOT, dir);
   let entries: string[];
@@ -56,6 +71,24 @@ function walk(dir: string): string[] {
 }
 
 describe("substrate host consumers (bug.5206)", () => {
+  it.each([
+    ["scripts/ci/deploy-infra.sh", CALLBACK_APP_HOST, false],
+    ["scripts/ci/another-consumer.sh", CALLBACK_APP_HOST, true],
+    [
+      "scripts/ci/deploy-infra.sh",
+      CALLBACK_APP_HOST.replace("LITELLM_NODE_HOST=", "SUBSTRATE_HOST="),
+      true,
+    ],
+    ["scripts/ci/deploy-infra.sh", `${CALLBACK_APP_HOST}; other_call`, true],
+    [
+      "scripts/ci/deploy-infra.sh",
+      'SUBSTRATE_HOST="$(cogni_vm_host_for_env "$DEPLOYMENT_ENVIRONMENT" "$root" "$slug")"',
+      true,
+    ],
+  ])("classifies only the callback app assignment: %s %s", (file, code, raw) => {
+    expect(usesRawSubstrateEnv(file, code)).toBe(raw);
+  });
+
   it("VM_HOST_FOR_ENV_TAKES_A_RESOLVED_ENV: never the raw workload env", () => {
     const offences: string[] = [];
     for (const file of SEARCH_ROOTS.flatMap(walk)) {
@@ -64,7 +97,7 @@ describe("substrate host consumers (bug.5206)", () => {
         .split("\n")
         .forEach((text, i) => {
           const code = text.replace(/^\s*#\s?.*$/, "");
-          if (RAW_ENV_ARG.test(code)) {
+          if (usesRawSubstrateEnv(file, code)) {
             offences.push(
               `  ${file}:${i + 1}\n    ${text.trim().slice(0, 140)}`
             );

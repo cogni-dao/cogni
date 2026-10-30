@@ -56,7 +56,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `getRequestLoggingDependencies()` - Pure logger, clock, and error policy for explicitly opted-in operational routes
   - `resetContainer()` - Reset singleton (tests only)
   - `startOperatorPublishers(deps)` - Start health probe publisher (60s interval, publishes to node stream)
-  - `Container` interface - Ports + logger + config (includes accountsForUser(userId), serviceAccountService, metricsQuery, metricsCapability, repoCapability, toolSource, threadPersistenceForUser(userId), authorization, modelCatalog, providerResolver, nodeStream; no usageService)
+  - `Container` interface - Ports + logger + config (includes scheduleRunReader using the existing app-role Sql, accountsForUser(userId), serviceAccountService, metricsQuery, metricsCapability, repoCapability, toolSource, threadPersistenceForUser(userId), authorization, modelCatalog, providerResolver, nodeStream; no usageService)
   - `ContainerConfig` interface - Runtime config (unhandledErrorPolicy, rateLimitBypass, DEPLOY_ENVIRONMENT)
   - `UnhandledErrorPolicy` type - `"rethrow" | "respond_500"`
   - `getTemporalWorkflowClient()` - Process-wide Temporal WorkflowClient singleton (race-safe init, cleaned up by resetContainer)
@@ -119,6 +119,8 @@ Bootstrap application runtime dependencies.
 - Bump **Last reviewed** date
 
 ## Notes
+
+- Work-item content uses `WorkItemsContentPort`; existing PostgreSQL coordination remains behind the separate lazy `getWorkItemSessionPort()`. Shared Dolt native admission never becomes the session authority.
 
 - System installers moved to scripts/bootstrap/
 - Focus on runtime composition only

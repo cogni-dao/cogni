@@ -13,7 +13,7 @@ Sandbox adapter for AI agent execution via **ephemeral** containers (`network=no
 
 ## Pointers
 
-- [Sandbox Spec](../../../../../../docs/spec/sandboxed-agents.md)
+- [Sandbox Spec](https://cognidao.org/knowledge/sandbox-agent-execution-architecture)
 - [Sandbox Runtime](../../../../../../services/sandbox-runtime/)
 - [Port Definition](../../../ports/sandbox-runner.port.ts)
 

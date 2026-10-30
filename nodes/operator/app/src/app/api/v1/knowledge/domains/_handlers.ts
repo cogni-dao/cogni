@@ -16,7 +16,13 @@
  * @internal
  */
 
-import { DomainAlreadyRegisteredError } from "@cogni/knowledge-store";
+import {
+  DomainAlreadyRegisteredError,
+  KnowledgeBusyError,
+  KnowledgeWriteConflictError,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
+} from "@cogni/knowledge-store";
 import {
   DomainsCreateRequestSchema,
   DomainsCreateResponseSchema,
@@ -99,6 +105,40 @@ export async function handleCreate(
       status: 201,
     });
   } catch (e: unknown) {
+    if (e instanceof KnowledgeWriteOutcomeUnknownError)
+      return NextResponse.json(
+        {
+          error: e.message,
+          errorCode: e.code,
+          retryable: false,
+          ...e.receipt.lookup,
+        },
+        { status: 409 }
+      );
+    if (e instanceof KnowledgeWriteConflictError)
+      return NextResponse.json(
+        {
+          error: e.message,
+          errorCode: e.receipt.code,
+          retryable: false,
+          ...e.receipt.lookup,
+        },
+        { status: 409 }
+      );
+    if (e instanceof KnowledgeWriteScopeRequiredError)
+      return NextResponse.json(
+        {
+          error: e.message,
+          errorCode: "knowledge_write_scope_required",
+          retryable: false,
+        },
+        { status: 500 }
+      );
+    if (e instanceof KnowledgeBusyError)
+      return NextResponse.json(
+        { error: e.message, retryable: true },
+        { status: 503, headers: { "Retry-After": "2" } }
+      );
     if (e instanceof DomainAlreadyRegisteredError) {
       return NextResponse.json({ error: e.message }, { status: 409 });
     }

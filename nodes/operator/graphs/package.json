@@ -20,7 +20,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@cogni/langgraph-graphs": "workspace:*"
+    "@cogni/langgraph-graphs": "workspace:*",
+    "@cogni/shared-langgraph-graphs": "https://github.com/cogni-dao/node-template/releases/download/langgraph-graphs-v0.1.1/cogni-dao-langgraph-graphs-0.1.1.tgz",
+    "@cogni/ai-tools": "https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.1.2/cogni-dao-ai-tools-0.1.2.tgz",
+    "@cogni/ai-core": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

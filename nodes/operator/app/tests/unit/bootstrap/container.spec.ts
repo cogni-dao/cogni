@@ -103,7 +103,7 @@ describe("bootstrap container DI wiring", { timeout: 30_000 }, () => {
       expect(container1.log).toBe(container2.log);
     });
 
-    it("starts governance sync only after the catalog projection succeeds", async () => {
+    it("starts own-charter (self) governance sync immediately and the full (all) sync only after the catalog projection succeeds", async () => {
       let resolveCatalog: (() => void) | undefined;
       const catalogReady = new Promise<void>((resolve) => {
         resolveCatalog = resolve;
@@ -121,12 +121,15 @@ describe("bootstrap container DI wiring", { timeout: 30_000 }, () => {
       getContainer();
 
       expect(startCatalogRegistryReconcileOnBoot).toHaveBeenCalledOnce();
-      expect(startGovernanceSyncOnBoot).not.toHaveBeenCalled();
+      // SELF_FIRST: the operator's own charters never wait on the fleet registry.
+      expect(startGovernanceSyncOnBoot).toHaveBeenCalledTimes(1);
+      expect(startGovernanceSyncOnBoot).toHaveBeenCalledWith("self");
 
       resolveCatalog?.();
       await vi.waitFor(() => {
-        expect(startGovernanceSyncOnBoot).toHaveBeenCalledOnce();
+        expect(startGovernanceSyncOnBoot).toHaveBeenCalledTimes(2);
       });
+      expect(startGovernanceSyncOnBoot).toHaveBeenLastCalledWith("all");
 
       vi.doUnmock("@/bootstrap/catalog-registry-reconcile");
       vi.doUnmock("@/bootstrap/startup-reconcile");

@@ -37,4 +37,7 @@ export {
   SignatureFormatError,
   SignerRequestError,
 } from "./port/cosmos-signer.port.js";
-export type { OperatorWalletPort } from "./port/operator-wallet.port.js";
+export type {
+  OperatorWalletPort,
+  StewardWithdrawal,
+} from "./port/operator-wallet.port.js";

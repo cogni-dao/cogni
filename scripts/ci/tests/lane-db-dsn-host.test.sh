@@ -470,6 +470,8 @@ echo "  ok  scope guards hold"
     [[ -n "$function_source" ]] || fail "missing actual caller function $function_name"
     eval "$function_source"
   done
+  # shellcheck source=scripts/ci/lib/appset-paths.sh
+  source "$real_repo/scripts/ci/lib/appset-paths.sh"
   log_error() { echo "$*" >&2; }
   log_fatal() { echo "$*" >&2; exit 1; }
   log_info() { :; }
@@ -478,11 +480,17 @@ echo "  ok  scope guards hold"
   NODE_TARGETS=(operator red poly)
   DEPLOY_ENVIRONMENT=candidate-a
   NODE_DB_PROVISION_CONFIG="$(render_shared_db_provision_config)"
-  [[ "$(jq -r 'keys | join(",")' <<<"$NODE_DB_PROVISION_CONFIG")" == operator,red ]] \
-    || fail "dedicated or inactive node entered shared provisioning"
+  [[ "$(jq -r 'keys | join(",")' <<<"$NODE_DB_PROVISION_CONFIG")" == operator ]] \
+    || fail "dedicated, inactive or foreign-controlled node entered shared provisioning"
+  # red is akash on candidate-a: production custody reconciles its lane roles. A
+  # self-controlled (k3s) red row is this VM's to provision.
+  yq -i '.deployment_provider."candidate-a" = "k3s"' "$fixture/infra/catalog/red.yaml"
+  [[ "$(render_shared_db_provision_config | jq -r 'keys | join(",")')" == operator,red ]] \
+    || fail "self-controlled shared node skipped"
+  [[ "$(render_shared_db_provision_config | jq -r '.red.DB_APP_CONNECTION_LIMIT')" == 2 ]]
+  cp "$real_repo/infra/catalog/red.yaml" "$fixture/infra/catalog/"
   [[ "$(jq -r '.operator.DB_BUDGET_PROFILE' <<<"$NODE_DB_PROVISION_CONFIG")" == operator-control-v1 ]]
   [[ "$(jq -r '.operator.DB_SERVICE_CONNECTION_LIMIT' <<<"$NODE_DB_PROVISION_CONFIG")" == 15 ]]
-  [[ "$(jq -r '.red.DB_APP_CONNECTION_LIMIT' <<<"$NODE_DB_PROVISION_CONFIG")" == 2 ]]
   DEPLOY_ENVIRONMENT=preview
   [[ "$(render_shared_db_provision_config | jq -r 'keys | join(",")')" == operator ]] \
     || fail "environment-absent red entered preview provisioning"
@@ -549,6 +557,7 @@ echo "  ok  scope guards hold"
   grep -q '^APP_DB_MIGRATION_PASSWORD=isolated fixture$' "$compose_log" || fail "migration credential not forwarded"
   ! grep -q 'cogni/candidate-a/poly' "$read_log" || fail "dedicated cell credential read"
   ! grep -q 'cogni/production/' "$read_log" || fail "foreign environment credential read"
+  ! grep -q 'cogni/candidate-a/red' "$read_log" || fail "foreign-controlled lane credential read"
   # Unknown app/service credentials keep the existing unborn-node skip; red
   # must never reach Docker. An incomplete migration bank is also skipped,
   # preserving the existing per-node fail-soft policy without weakening provision.sh.

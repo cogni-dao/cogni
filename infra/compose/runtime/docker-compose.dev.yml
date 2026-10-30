@@ -103,7 +103,7 @@ services:
       - POSTHOG_HOST=${POSTHOG_HOST?POSTHOG_HOST is required}
       # Temporal schedule orchestration (per SCHEDULER_SPEC.md)
       - TEMPORAL_ADDRESS=temporal:7233
-      - TEMPORAL_NAMESPACE=cogni-${APP_ENV:-dev}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:?TEMPORAL_NAMESPACE is required}
       - TEMPORAL_TASK_QUEUE=scheduler-tasks
       # Scheduler-worker health URL (for /readyz dependency check)
       # Default: http://scheduler-worker:9000 for Docker networks
@@ -321,7 +321,7 @@ services:
     # 64 MiB /dev/shm default. Sized to match the app Postgres so the knowledge
     # plane cannot die the way the operational plane did.
     shm_size: 1gb
-    image: dolthub/doltgresql:0.57.3
+    image: ghcr.io/cogni-dao/cogni-template@sha256:f892b365ad6fc6c683da839260f20c4015615c105176a3c21c015ca90d2b70a3
     container_name: doltgres
     restart: unless-stopped
     labels:
@@ -580,6 +580,8 @@ services:
       - "127.0.0.1:12345:12345"
     volumes:
       - ./configs/alloy-config.alloy:/etc/alloy/config.alloy:ro
+      - ./configs/alloy-host-dev.alloy:/etc/alloy/host-dev.alloy:ro
+      - ../../../.context/dev-logs:/var/log/cogni-dev:ro
       - alloy_data:/var/lib/alloy
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Host mounts for prometheus.exporter.unix (node-level metrics)
@@ -588,7 +590,7 @@ services:
       - /:/host/root:ro
     command:
       - run
-      - /etc/alloy/config.alloy
+      - /etc/alloy
       - --server.http.listen-addr=0.0.0.0:12345
       - --storage.path=/var/lib/alloy
     environment:
@@ -724,7 +726,7 @@ services:
     environment:
       # Temporal connection
       - TEMPORAL_ADDRESS=temporal:7233
-      - TEMPORAL_NAMESPACE=cogni-${APP_ENV:-dev}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:?TEMPORAL_NAMESPACE is required}
       - TEMPORAL_TASK_QUEUE=scheduler-tasks
       # Database: service role (BYPASSRLS) for cross-tenant scheduler operations.
       # DATABASE_SERVICE_URL_DOCKER provides Docker-internal URL (postgres:5432) for test scripts.
@@ -911,4 +913,4 @@ volumes:
   tigerbeetle_data:
     name: tigerbeetle_data
   doltgres_data:
-    name: doltgres_data
+    name: ${DOLTGRES_DATA_VOLUME:-doltgres_data}

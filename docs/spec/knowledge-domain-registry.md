@@ -186,16 +186,17 @@ No edit, no delete, no row-detail Sheet in v0. The grid is read + register only.
 
 **Universal baseline (shipped by EVERY node).** SSOT is `BASE_DOMAIN_SEEDS` in `@cogni/knowledge-base` (`packages/knowledge-base/src/seeds/domains.ts`); the table below mirrors it for reference — if they disagree, the code wins:
 
-| id         | Purpose                                                                        | feeds cognition bundle     |
-| ---------- | ------------------------------------------------------------------------------ | -------------------------- |
-| `meta`     | How to operate this node + the hub itself (orientation, conventions, skills)   | Orientation + Skills index |
-| `mission`  | The node's charter — why it exists, values, non-goals                          | `mission` field            |
-| `strategy` | How the node pursues its mission — decision approaches + EDO hypothesis chains | Domains + the EDO engine   |
+| id         | Purpose                                                                        | feeds cognition bundle        |
+| ---------- | ------------------------------------------------------------------------------ | ----------------------------- |
+| `meta`     | How to operate this node + the hub itself (orientation, conventions, skills)   | Orientation + governing index |
+| `mission`  | The node's charter — why it exists, values, non-goals                          | `mission` field               |
+| `strategy` | How the node pursues its mission — decision approaches + EDO hypothesis chains | Domains + the EDO engine      |
 
 Only three domains are universal, because they map 1:1 to what the cognition bootstrap
 (`nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`) assembles for every session. **`skills`
-is deliberately NOT a domain** — the bundle builds its skills index cross-domain from `entry_type ∈ {skill, guide,
-playbook}`. A node registers a new domain only once it has content for it; the bundle suppresses empty domains
+is deliberately NOT a domain** — the bundle builds its governing index cross-domain with
+`KnowledgeStorePort.listGoverningIndex`: `entry_type ∈ {skill, guide, playbook, rule, design, decision, reference}`,
+a non-blank `use_when`, and no inbound `supersedes` edge (`@cogni/knowledge-store` `selectGoverningIndex`). A node registers a new domain only once it has content for it; the bundle suppresses empty domains
 (`route.ts` skips `entryCount === 0`), so registering-without-seeding is dead weight.
 
 **Niche (subject-matter) domains are PER-NODE — registered on that node only, NEVER in the shared base.**

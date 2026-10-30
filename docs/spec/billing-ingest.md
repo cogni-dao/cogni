@@ -16,7 +16,7 @@ tags: [billing, litellm, sandbox]
 
 # Billing Ingest: Callback-Driven, Port-Level Billing
 
-> Billing is canonicalized at GraphExecutorPort. Adapters never implement billing — they only emit `usage_unit_created{call_id}`. Cost data comes from a single source (LiteLLM custom callback). In multi-node deployments, the callback routes each completion to the correct node's ingest endpoint based on `node_id` metadata. The decorator logs call_ids for observability; a periodic reconciliation job catches missing receipts. **No synchronous receipt barrier blocks the user response.**
+> Billing is canonicalized at GraphExecutorPort. Adapters never implement billing — they only emit `usage_unit_created{call_id}`. Cost data comes from a single source (LiteLLM custom callback). In multi-node deployments, the callback routes each completion to the correct node's ingest endpoint using the authenticated virtual-key workload alias; verified master-key traffic retains local node routing. The decorator logs call_ids for observability; a periodic reconciliation job catches missing receipts. **No synchronous receipt barrier blocks the user response.**
 
 ### Key References
 
@@ -24,7 +24,7 @@ tags: [billing, litellm, sandbox]
 | ----------- | ------------------------------------------------------------------------------------ | --------------------------------------------------- |
 | **Project** | [proj.unified-graph-launch](../../work/projects/proj.unified-graph-launch.md)        | Unified execution roadmap                           |
 | **Spec**    | [billing-evolution](./billing-evolution.md)                                          | Charge receipt schema, credit unit                  |
-| **Spec**    | [billing-sandbox](./billing-sandbox.md)                                              | Current proxy audit log pipeline (to be superseded) |
+| **Spec**    | [sandbox-billing-pipeline](https://cognidao.org/knowledge/sandbox-billing-pipeline)  | Current proxy audit log pipeline (to be superseded) |
 | **Spec**    | [external-executor-billing](./external-executor-billing.md)                          | Reconciliation design                               |
 | **Spec**    | [multi-node-tenancy](./multi-node-tenancy.md)                                        | Per-node DB isolation, callback routing invariants  |
 | **Task**    | [task.0029](../../work/items/task.0029.callback-driven-billing-kill-log-scraping.md) | Original callback billing implementation            |
@@ -37,19 +37,19 @@ tags: [billing, litellm, sandbox]
 
 ## Invariants
 
-| Rule                                  | Constraint                                                                                                                                                                                  |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ONE_BILLING_PATH                      | All billing confirmation is receipt-existence by `litellm_call_id` (platform) or deterministic BYO key. No adapter-specific billing logic, no log parsing, no cost extraction in adapters.  |
-| ADAPTERS_NEVER_BILL                   | Adapters only emit `usage_report` events. They never parse cost data, read logs, or write receipts. `UsageCommitDecorator` handles commit.                                                  |
-| COST_ORACLE_IS_LITELLM                | For platform runs, cost comes from LiteLLM callback payload (`response_cost`). BYO runs report `costUsd: 0` (zero platform cost) or adapter-provided cost.                                  |
-| CALLBACK_WRITES_PLATFORM_RECEIPTS     | LiteLLM callback writes receipts for platform runs. BYO receipts are written directly by `UsageCommitDecorator` via `commitUsageFact()`. Both paths converge on the same idempotent writer. |
-| NO_PLACEHOLDER_RECEIPTS               | Never write $0/empty receipts as placeholders. If cost is unknown, defer until authoritative cost arrives via callback (COST_ORACLE_IS_LITELLM) or reconciler (task.0039).                  |
-| CHARGE_RECEIPTS_IDEMPOTENT_BY_CALL_ID | `UNIQUE(source_system, source_reference)` where `source_reference` includes `litellm_call_id`. Duplicate callbacks are no-ops (swallowed by commitUsageFact, HTTP 200).                     |
-| NO_SYNCHRONOUS_RECEIPT_BARRIER        | The user response is NEVER blocked waiting for callback receipt arrival. Reconciliation is async (task.0039).                                                                               |
-| CALLBACK_AUTHENTICATED                | Ingest endpoint requires `Authorization: Bearer BILLING_INGEST_TOKEN`.                                                                                                                      |
-| INGEST_ENDPOINT_IS_INTERNAL           | `/api/internal/billing/ingest` — internal Docker network only, not exposed through Caddy.                                                                                                   |
-| NO_DOCKER_SOCK_IN_APP                 | App container never mounts docker.sock or uses dockerode for billing. (Preserved from bug.0027 bridge fix.)                                                                                 |
-| BILLING_CORRELATION_BY_RUN_ID         | Gateway mode correlates billing by `metadata.spend_logs_metadata.run_id` from the callback, not by per-call barrier. Requires `x-litellm-spend-logs-metadata` header set with `run_id`.     |
+| Rule                                  | Constraint                                                                                                                                                                                                                                |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ONE_BILLING_PATH                      | All billing confirmation is receipt-existence by `litellm_call_id` (platform) or deterministic BYO key. No adapter-specific billing logic, no log parsing, no cost extraction in adapters.                                                |
+| ADAPTERS_NEVER_BILL                   | Adapters only emit `usage_report` events. They never parse cost data, read logs, or write receipts. `UsageCommitDecorator` handles commit.                                                                                                |
+| COST_ORACLE_IS_LITELLM                | For platform runs, cost comes from LiteLLM callback payload (`response_cost`). BYO runs report `costUsd: 0` (zero platform cost) or adapter-provided cost.                                                                                |
+| CALLBACK_WRITES_PLATFORM_RECEIPTS     | LiteLLM callback writes receipts for platform runs. BYO receipts are written directly by `UsageCommitDecorator` via `commitUsageFact()`. Both paths converge on the same idempotent writer.                                               |
+| NO_PLACEHOLDER_RECEIPTS               | Never write $0/empty receipts as placeholders. If cost is unknown, defer until authoritative cost arrives via callback (COST_ORACLE_IS_LITELLM) or reconciler (task.0039).                                                                |
+| CHARGE_RECEIPTS_IDEMPOTENT_BY_CALL_ID | `UNIQUE(source_system, source_reference)` where `source_reference` includes `litellm_call_id`. Duplicate callbacks are no-ops (swallowed by commitUsageFact, HTTP 200).                                                                   |
+| NO_SYNCHRONOUS_RECEIPT_BARRIER        | The user response is NEVER blocked waiting for callback receipt arrival. Reconciliation is async (task.0039).                                                                                                                             |
+| CALLBACK_AUTHENTICATED                | Ingest endpoint requires `Authorization: Bearer BILLING_INGEST_TOKEN`.                                                                                                                                                                    |
+| INGEST_ENDPOINT_IS_INTERNAL           | `/api/internal/billing/ingest` is a service-authenticated endpoint. Same-host deployments use internal transport; off-cluster Akash workloads use their catalog-derived public HTTPS endpoint with the same required ingest bearer token. |
+| NO_DOCKER_SOCK_IN_APP                 | App container never mounts docker.sock or uses dockerode for billing. (Preserved from bug.0027 bridge fix.)                                                                                                                               |
+| BILLING_CORRELATION_BY_RUN_ID         | Gateway mode correlates billing by `metadata.spend_logs_metadata.run_id` from the callback, not by per-call barrier. Requires `x-litellm-spend-logs-metadata` header set with `run_id`.                                                   |
 
 ## Design
 
@@ -82,11 +82,11 @@ tags: [billing, litellm, sandbox]
 │                                                                     │
 │  On every successful LLM call:                                      │
 │  1. Computes response_cost                                          │
-│  2. CogniNodeRouter reads node_id from spend_logs_metadata          │
-│  3. Routes POST to correct node's /api/internal/billing/ingest      │
-│     (COGNI_NODE_ENDPOINTS env: node_id=endpoint_url,...)            │
-│  4. Missing node_id → defaults to operator + warning                │
-│     (MISSING_NODE_ID_DEFAULTS_OPERATOR)                             │
+│  2. Read server-stamped user_api_key_alias + user_api_key_hash        │
+│  3. Route exact cogni:<lane>:<node UUID>:app:v1 via endpoint map       │
+│     Reject conflicting node_id or unknown authenticated identity     │
+│  4. Verified master key alone may use local legacy node/default       │
+│     Forward provider payload unchanged (AUTHENTICATED_WORKLOAD_ROUTING)│
 └──────────────────────┬──────────────────────────────────────────────┘
                        │ (per-completion, not batched)
                        ▼
@@ -178,7 +178,7 @@ litellm_settings:
   # CogniNodeRouter replaces generic_api — routes per-completion to correct node
   success_callback: ["langfuse", "cogni_callbacks.CogniNodeRouter"]
 # Environment variables (on LiteLLM container):
-# COGNI_NODE_ENDPOINTS=operator=http://app:3000/api/internal/billing/ingest,poly=http://poly:3100/api/internal/billing/ingest
+# COGNI_NODE_ENDPOINTS=<local-node-uuid>=http://app:3000,cogni:<lane>:<node-uuid>:app:v1=https://node.example.org
 # BILLING_INGEST_TOKEN=<shared-secret>
 ```
 
@@ -205,7 +205,7 @@ const StandardLoggingPayloadBilling = z.object({
         .object({
           // From x-litellm-spend-logs-metadata header
           run_id: z.string(),
-          node_id: z.string().optional(), // Used by CogniNodeRouter for per-node routing
+          node_id: z.string().optional(), // Must agree with the authenticated virtual-key node; local master routing
           graph_id: z.string().optional(),
           attempt: z.number().int().optional(),
         })
@@ -258,8 +258,8 @@ Canonicalize billing at GraphExecutorPort so adapters never implement billing. S
 Callback and log-scraping paths coexisted briefly during cutover:
 
 1. **Add ingest endpoint** — ~~Done (task.0029).~~ `POST /api/internal/billing/ingest` accepting `List[StandardLoggingPayload]`, Zod validation, `commitUsageFact()`, shared-secret auth.
-2. **Configure LiteLLM callback** — ~~Done (task.0029, upgraded task.0256).~~ Originally `generic_api` with `GENERIC_LOGGER_ENDPOINT`. Replaced by custom callback class `CogniNodeRouter` (`infra/litellm/cogni_callbacks.py`) for per-node routing via `COGNI_NODE_ENDPOINTS` env var.
-3. **Per-node callback routing** — ~~Done (task.0256).~~ Each node stamps `node_id` in `spendLogsMetadata`. Custom callback reads it and routes to correct node's ingest endpoint. Missing `node_id` defaults to operator with warning.
+2. **Configure LiteLLM callback** — ~~Done (task.0029, upgraded task.0256).~~ Originally `generic_api` with `GENERIC_LOGGER_ENDPOINT`. Replaced by custom callback class `CogniNodeRouter` (`infra/images/litellm/cogni_callbacks.py`) for per-node routing via `COGNI_NODE_ENDPOINTS` env var.
+3. **Per-node callback routing** — ~~Done (task.0256).~~ Each node stamps `node_id` in `spendLogsMetadata`. Custom callback checks it against the authenticated `cogni:<lane>:<node UUID>:app:v1` key alias, then routes by that exact alias. Only a hash-verified master key may use local legacy routes or the missing-node default. The catalog emits aliases only for declared lanes controlled by this gateway.
 4. **Fix gateway `run_id` gap** — Not started. Add `x-litellm-spend-logs-metadata` to OpenClaw `outboundHeaders` per session.
 5. **Strip billing from adapters** — ~~Done (task.0029).~~ `ProxyBillingReader` deleted, gateway billing removed from `SandboxGraphProvider`, `OPENCLAW_BILLING_DIR` removed. Gateway nginx audit log removed.
 6. **Delete old paths** — ~~Done (task.0029).~~ `ProxyBillingReader`, billing volumes, `OPENCLAW_BILLING_DIR`, gateway audit log all removed. `commitUsageFact()` refactored to strict cost-known/unknown branching (COST_AUTHORITY_IS_LITELLM).
@@ -283,7 +283,7 @@ Tested against running dev:stack with LiteLLM `generic_api` callback pointed at 
 ## Related
 
 - [billing-evolution](./billing-evolution.md) — Charge receipt schema, credit unit standard
-- [billing-sandbox](./billing-sandbox.md) — Current proxy audit log pipeline (to be superseded)
+- [sandbox-billing-pipeline](https://cognidao.org/knowledge/sandbox-billing-pipeline) — Current proxy audit log pipeline (to be superseded)
 - [external-executor-billing](./external-executor-billing.md) — Reconciliation design (converges with this spec)
 - [openclaw-sandbox-spec](./openclaw-sandbox-spec.md) — Gateway billing architecture
 - [proj.unified-graph-launch](../../work/projects/proj.unified-graph-launch.md) — Unified execution roadmap

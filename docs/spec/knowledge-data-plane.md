@@ -263,6 +263,7 @@ interface KnowledgeStorePort {
     opts?: { limit?: number }
   ): Promise<Knowledge[]>;
   knowledgeExists(id: string): Promise<boolean>; // shared FK check (knowledge-syntropy)
+  listActiveGoals(): Promise<ActiveGoal[]>; // ONE_GOAL_LIST: merged entry_type 'goal' rows with id `goal-*`, not deprecated; throws past 3 (MAX_THREE_GOALS)
 
   // Read — domains
   listDomains(): Promise<string[]>; // distinct domain values from knowledge rows
@@ -319,13 +320,14 @@ returns `content`, and its `q` is not full-text search over claims.
 
 ### Tool Catalog
 
-Three tools in `@cogni/ai-tools`, registered in `TOOL_CATALOG`:
+Four tools in `@cogni/ai-tools`, registered in `TOOL_CATALOG`:
 
-| Tool                     | Effect       | Description                        |
-| ------------------------ | ------------ | ---------------------------------- |
-| `core__knowledge_search` | read_only    | Text search by domain + query      |
-| `core__knowledge_read`   | read_only    | Get by ID or list by domain + tags |
-| `core__knowledge_write`  | state_change | Add entry + auto-commit            |
+| Tool                     | Effect       | Description                                                                                                                                        |
+| ------------------------ | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core__knowledge_index`  | read_only    | Governing index: id, domain, type, useWhen of every governing row (`listGoverningIndex`); past 48 KiB only the `method` shelf plus omitted domains |
+| `core__knowledge_search` | read_only    | Text search by domain + query                                                                                                                      |
+| `core__knowledge_read`   | read_only    | Get by ID or list by domain + tags                                                                                                                 |
+| `core__knowledge_write`  | state_change | Add entry + auto-commit                                                                                                                            |
 
 ### Capability Wiring
 

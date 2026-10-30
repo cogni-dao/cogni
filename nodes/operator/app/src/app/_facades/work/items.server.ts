@@ -4,8 +4,10 @@
 /**
  * Module: `@app/_facades/work/items.server`
  * Purpose: Server-side facade for work item read/write operations across the markdown + Doltgres surfaces.
- * Scope: Maps port results to contract DTOs. Routes Doltgres-allocated IDs (5000+) to the Doltgres port from `getContainer()`; legacy markdown IDs to the markdown port.
+ * Scope: Maps content to DTOs; lists use configured Doltgres or unconfigured markdown alone. Does not own adapters or PostgreSQL coordination.
  * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED.
+ *   Priority (including 0/1) carries no extra node-admin gate (task.5306); the store's own
+ *   author-scoped write authority applies unchanged.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
@@ -19,7 +21,7 @@ import type {
   WorkItemsListOutput,
 } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemId } from "@cogni/work-items";
-import { toWorkItemId } from "@cogni/work-items";
+import { rankScore, toWorkItemId } from "@cogni/work-items";
 
 import { getContainer } from "@/bootstrap/container";
 
@@ -64,17 +66,106 @@ export class WorkItemAuthorizationError extends Error {
   }
 }
 
+/** Permanent retirement: cancel the durable item instead of reusing its identity. */
+export class WorkItemDeletionRetiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkItemDeletionRetiredError";
+  }
+}
+
+/** A current mutation may have committed; preserve lookup evidence and forbid automatic replay. */
+export class WorkItemWriteOutcomeUnknownError extends Error {
+  readonly code = "work_item_write_outcome_unknown";
+  readonly retryable = false;
+  constructor(
+    readonly operationId: string,
+    readonly branch: string,
+    readonly commitHash?: string,
+    readonly itemId?: string
+  ) {
+    super(
+      "Work-item write outcome is unknown; inspect the operation branch and main before retrying."
+    );
+    this.name = "WorkItemWriteOutcomeUnknownError";
+  }
+  get receipt() {
+    return {
+      code: this.code,
+      retryable: false as const,
+      lookup: {
+        operationId: this.operationId,
+        branch: this.branch,
+        commitHash: this.commitHash ?? null,
+        itemId: this.itemId ?? null,
+      },
+    };
+  }
+}
+
 /**
  * Thrown when the store was momentarily unavailable (query timeout, destroyed
  * connection, contended Dolt operation branch). RETRYABLE: the identical
  * request typically succeeds on the next attempt — the route answers 503 with
  * a retry hint, never an opaque 500.
  */
+
 export class WorkItemsBusyError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "WorkItemsBusyError";
   }
+}
+
+/**
+ * Thrown when a patch's `expectedRevision` no longer matches the row. RETRY
+ * AFTER RE-READ: nothing was written; the route answers 409 `revision_conflict`
+ * with the row's current revision.
+ */
+export class WorkItemRevisionConflictError extends Error {
+  readonly expectedRevision: number;
+  readonly currentRevision: number;
+
+  constructor(
+    message: string,
+    expectedRevision: number,
+    currentRevision: number
+  ) {
+    super(message);
+    this.name = "WorkItemRevisionConflictError";
+    this.expectedRevision = expectedRevision;
+    this.currentRevision = currentRevision;
+  }
+}
+
+/** One `scores` bound violation, as reported by `parseWorkItemScores`. */
+export type WorkItemScoresIssue = {
+  readonly code: string;
+  readonly path: readonly string[];
+  readonly message: string;
+};
+
+/**
+ * Thrown when a `scores` write broke the package bounds (story.5111).
+ * PERMANENT, CALLER'S ERROR: the adapter's `parseWorkItemScores` (the ONLY
+ * bounds check — SCORES_ONE_ENFORCER) rejected it before any SQL, so nothing
+ * was written; the route answers 400 with the package issues, never 500.
+ */
+export class WorkItemScoresInvalidError extends Error {
+  readonly code = "work_item_scores_invalid" as const;
+  constructor(readonly issues: readonly WorkItemScoresIssue[]) {
+    super("Invalid work-item scores");
+    this.name = "WorkItemScoresInvalidError";
+  }
+}
+
+function isScoresIssue(value: unknown): value is WorkItemScoresIssue {
+  const issue = value as Partial<WorkItemScoresIssue> | null;
+  return (
+    typeof issue?.code === "string" &&
+    typeof issue.message === "string" &&
+    Array.isArray(issue.path)
+  );
 }
 
 /**
@@ -92,16 +183,61 @@ function mapStoreError(e: unknown): unknown {
   if (name === "DoltgresNotConfiguredError") {
     return new WorkItemsBackendNotReadyError(message);
   }
+  if (name === "WorkItemWriteOutcomeUnknownError") {
+    const receipt = e as {
+      operationId?: unknown;
+      branch?: unknown;
+      commitHash?: unknown;
+      itemId?: unknown;
+    };
+    if (
+      typeof receipt.operationId === "string" &&
+      typeof receipt.branch === "string"
+    )
+      return new WorkItemWriteOutcomeUnknownError(
+        receipt.operationId,
+        receipt.branch,
+        typeof receipt.commitHash === "string" ? receipt.commitHash : undefined,
+        typeof receipt.itemId === "string" ? receipt.itemId : undefined
+      );
+    return e;
+  }
+  if (name === "WorkItemDeletionRetiredError") {
+    return new WorkItemDeletionRetiredError(message);
+  }
   if (name === "WorkItemAuthorizationError") {
     return new WorkItemAuthorizationError(message);
   }
+  if (name === "WorkItemScoresInvalidError") {
+    const issues = (e as { issues?: unknown }).issues;
+    return new WorkItemScoresInvalidError(
+      Array.isArray(issues) ? issues.filter(isScoresIssue) : []
+    );
+  }
   if (name === "WorkItemsBusyError") {
     return new WorkItemsBusyError(message);
+  }
+  if (name === "WorkItemRevisionConflictError") {
+    const { expectedRevision, currentRevision } = e as {
+      expectedRevision?: unknown;
+      currentRevision?: unknown;
+    };
+    if (
+      typeof expectedRevision === "number" &&
+      typeof currentRevision === "number"
+    ) {
+      return new WorkItemRevisionConflictError(
+        message,
+        expectedRevision,
+        currentRevision
+      );
+    }
   }
   return e;
 }
 
 function toDto(item: WorkItem): WorkItemDto {
+  const evaluationRank = rankScore(item.scores);
   return {
     id: item.id as string,
     type: item.type,
@@ -110,7 +246,9 @@ function toDto(item: WorkItem): WorkItemDto {
     ...(item.actor !== "either" && { actor: item.actor }),
     priority: item.priority,
     rank: item.rank,
+    ...(evaluationRank !== undefined && { rankScore: evaluationRank }),
     estimate: item.estimate,
+    ...(item.scores !== undefined && { scores: item.scores }),
     summary: item.summary,
     outcome: item.outcome,
     projectId: item.projectId as string | undefined,
@@ -167,57 +305,44 @@ export async function listWorkItems(
     ...(input.actor && { actor: input.actor as WorkItem["actor"] }),
     ...(input.projectId && { projectId: toWorkItemId(input.projectId) }),
     ...(input.node && { node: input.node }),
-    ...(input.limit && { limit: input.limit }),
+    limit: input.limit ?? 100,
     ...(input.cursor && { cursor: input.cursor }),
+    ...(input.sortBy && { sortBy: input.sortBy }),
+    ...(input.sortDirection && { sortDirection: input.sortDirection }),
   };
 
-  // Pagination strategy:
-  //   - Doltgres is the cursor-paginated source of truth (post-#1144 importer
-  //     back-fills markdown items into Doltgres at their original IDs).
-  //   - On the first page (no cursor) we ALSO query the markdown adapter so
-  //     any items that haven't been imported yet still appear. Doltgres rows
-  //     win on id conflict (single-source dedup).
-  //   - Merged page is truncated to `limit` so the response never overflows.
-  //   - hasMore tracks Doltgres only — markdown is finite/small and only
-  //     contributes to page 1; once Doltgres exhausts pagination ends.
-  //   - Markdown-only items that overflow page 1 are dropped from the response;
-  //     this is acceptable because markdown is being deprecated and the
-  //     importer back-fill closes the gap.
-  let dgItems: WorkItem[] = [];
-  let endCursor: string | null = null;
-  let hasMore = false;
-
+  // One backend owns the complete ordering and cursor. Mixing markdown rows
+  // into a Dolt page drops matches and cannot preserve global rank order.
   try {
-    const dgResult = await container.doltgresWorkItems.list(queryShared);
-    dgItems = [...dgResult.items];
-    endCursor = dgResult.pageInfo.endCursor;
-    hasMore = dgResult.pageInfo.hasMore;
+    const result = await container.doltgresWorkItems.list(queryShared);
+    const { endCursor, hasMore } = result.pageInfo;
+    return {
+      items: result.items.map(toDto),
+      pageInfo: { endCursor, hasMore },
+      ...(endCursor !== null && { nextCursor: endCursor }),
+    };
   } catch (e) {
-    const name = (e as Error)?.name;
-    if (name === "InvalidCursorError") {
+    if ((e as Error)?.name === "InvalidCursorError") {
       throw new InvalidCursorError((e as Error).message);
     }
-    if (name !== "DoltgresNotConfiguredError") throw e;
+    // Configured outages must remain visible; this is not a failover path.
+    if ((e as Error)?.name !== "DoltgresNotConfiguredError") throw e;
   }
 
-  let merged: WorkItem[] = dgItems;
-  if (!input.cursor) {
-    const mdResult = await container.workItemQuery.list(queryShared);
-    const dgIds = new Set(dgItems.map((i) => i.id as string));
-    const mdOnly = mdResult.items.filter((i) => !dgIds.has(i.id as string));
-    merged = [...dgItems, ...mdOnly];
+  try {
+    const result = await container.workItemQuery.list(queryShared);
+    const endCursor = result.nextCursor ?? null;
+    return {
+      items: result.items.map(toDto),
+      pageInfo: { endCursor, hasMore: endCursor !== null },
+      ...(endCursor !== null && { nextCursor: endCursor }),
+    };
+  } catch (e) {
+    if ((e as Error)?.name === "InvalidCursorError") {
+      throw new InvalidCursorError((e as Error).message);
+    }
+    throw e;
   }
-
-  const requestedLimit = input.limit ?? 100;
-  if (merged.length > requestedLimit) {
-    merged = merged.slice(0, requestedLimit);
-  }
-
-  return {
-    items: merged.map(toDto),
-    pageInfo: { endCursor, hasMore },
-    ...(endCursor !== null && { nextCursor: endCursor }),
-  };
 }
 
 export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
@@ -262,6 +387,7 @@ export async function createWorkItem(
         ...(input.priority !== undefined && { priority: input.priority }),
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
+        ...(input.scores !== undefined && { scores: input.scores }),
       },
       authorTagFromSession(sessionUser)
     );
@@ -280,6 +406,9 @@ export async function patchWorkItem(
     const patched = await container.doltgresWorkItems.patch(
       {
         id: toWorkItemId(input.id),
+        ...(input.expectedRevision !== undefined && {
+          expectedRevision: input.expectedRevision,
+        }),
         set: dropUndefined(input.set),
       },
       authorTagFromSession(sessionUser)

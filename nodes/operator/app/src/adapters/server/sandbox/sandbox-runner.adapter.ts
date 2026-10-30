@@ -11,7 +11,7 @@
  *   - Per SECRETS_HOST_ONLY: No credentials passed to container; LLM auth via host proxy
  *   - Per LLM_VIA_SOCKET_ONLY: LLM access via unix socket bridge (Docker volume at /llm-sock)
  * Side-effects: IO (creates/removes Docker containers and volumes, starts proxy containers)
- * Links: docs/spec/sandboxed-agents.md, src/ports/sandbox-runner.port.ts
+ * Links: https://cognidao.org/knowledge/sandbox-agent-execution-architecture, src/ports/sandbox-runner.port.ts
  * @internal
  */
 

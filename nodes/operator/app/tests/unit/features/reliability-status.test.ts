@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-import { reliabilityStatusV1Schema } from "@cogni/node-contracts";
+import {
+  RELIABILITY_POLICY_V1,
+  reliabilityStatusV1Schema,
+} from "@cogni/node-contracts";
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   evaluateReliabilityPolicy,
@@ -11,6 +15,7 @@ import {
   isReliabilitySweepReady,
   reconcileReliabilityContainment,
   runReliabilitySweep,
+  serveEvidenceTtlMs,
   verifyCurrentDatabaseRecovery,
 } from "@/features/nodes/reliability-status";
 import type { DatabaseContainmentPort, MetricsQueryPort } from "@/ports";
@@ -57,6 +62,22 @@ vi.mock("@/bootstrap/container", () => ({
   resolveDatabasePlacementResolver: () => ({
     resolve: routeMocks.resolvePlacement,
   }),
+  getRequestLoggingDependencies: () => {
+    const log = {
+      child: () => log,
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+    };
+    return {
+      log,
+      clock: { now: () => new Date().toISOString() },
+      config: { unhandledErrorPolicy: "rethrow" },
+    };
+  },
 }));
 
 import {
@@ -380,6 +401,44 @@ describe("ReliabilityStatusV1 policy", () => {
         },
       })
     ).toEqual({ state: "contained", reason: "operator_action" });
+  });
+
+  it("grades readiness unknown once the last probe sample outlives its cadence bound (bug.5527)", () => {
+    const now = Date.now();
+    const at = (ageMs: number) => ({
+      ...healthy,
+      observedAt: new Date(now).toISOString(),
+      regionalReadiness: healthy.regionalReadiness.map((sample) => ({
+        ...sample,
+        observedAt: new Date(now - ageMs).toISOString(),
+      })),
+    });
+    const unknown = {
+      state: "unknown",
+      reason: "required reliability evidence is missing",
+    };
+    const nonProdTtl = serveEvidenceTtlMs("candidate-a");
+    expect(nonProdTtl).toBe(
+      Math.max(
+        RELIABILITY_POLICY_V1.evidenceTtlMs,
+        2 * RELIABILITY_POLICY_V1.serveProbes["candidate-a"].frequencyMs
+      )
+    );
+    expect(serveEvidenceTtlMs("production")).toBe(
+      RELIABILITY_POLICY_V1.evidenceTtlMs
+    );
+    // One non-prod probe interval old is fresh; past one missed run is stale.
+    const interval =
+      RELIABILITY_POLICY_V1.serveProbes["candidate-a"].frequencyMs;
+    expect(evaluateReliabilityPolicy(at(interval))).toEqual({
+      state: "healthy",
+      reason: null,
+    });
+    expect(evaluateReliabilityPolicy(at(nonProdTtl + 1_000))).toEqual(unknown);
+    // The same sample age is stale for production's 60s cadence.
+    expect(
+      evaluateReliabilityPolicy({ ...at(interval), environment: "production" })
+    ).toEqual(unknown);
   });
 
   it("returns healthy only with two healthy regions and full headroom", () => {
@@ -822,7 +881,7 @@ describe("reliability HTTP boundaries", () => {
 
   it("returns 200 unknown and resolves catalog at parent SHA on metrics failure", async () => {
     const response = await GET_HEALTH(
-      new Request(
+      new NextRequest(
         "https://operator.example/api/v1/nodes/poly/observability/health?env=candidate-a"
       ),
       { params: Promise.resolve({ id: ROUTE_NODE_ID }) }
@@ -849,7 +908,7 @@ describe("reliability HTTP boundaries", () => {
 
   it("binds readmission actor to session and rejects cross-environment reads", async () => {
     const rejected = await GET_HEALTH(
-      new Request(
+      new NextRequest(
         "https://operator.example/api/v1/nodes/poly/observability/health?env=production"
       ),
       { params: Promise.resolve({ id: ROUTE_NODE_ID }) }
@@ -866,7 +925,7 @@ describe("reliability HTTP boundaries", () => {
     });
 
     const response = await POST_READMIT(
-      new Request(
+      new NextRequest(
         "https://operator.example/api/v1/nodes/poly/observability/health",
         {
           method: "POST",

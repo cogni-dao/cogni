@@ -5,7 +5,7 @@
 # Proves the materialize side of the secret-materialize / reconcile split:
 #   - source:agent app keys ARE materialized per-node (AUTH_SECRET);
 #   - genuinely-shared values inherited from the env bank ARE materialized
-#     (POSTHOG_API_KEY from node-template via the blind ancestor scan);
+#     (POSTHOG_API_KEY/HOST from their declared operator owner);
 #   - canonical-custody (inheritFrom: operator) keys are materialized from the
 #     operator path, NOT the blind ancestor scan (OPENROUTER_API_KEY — kills the
 #     per-node split-brain that 429'd freshly-formed prod nodes);
@@ -45,10 +45,13 @@ put_secret() {
   printf '%s' "$value" > "$BAO_ROOT/cogni/candidate-a/${svc}/${key}"
 }
 
-# Blind-ancestor-scan shared values a node legitimately inherits (transitional).
-# POSTHOG_* are source:human shared substrate inherited from an ancestor.
-put_secret node-template POSTHOG_API_KEY phc_existing
-put_secret node-template POSTHOG_HOST https://us.i.posthog.com
+# Explicit shared integration owners differ from the ordinary target.
+put_secret operator POSTHOG_API_KEY phc_existing
+put_secret operator POSTHOG_HOST https://us.i.posthog.com
+put_secret operator TAVILY_API_KEY tvly-owner-fixture
+put_secret operator SCHEDULER_API_TOKEN scheduler-owner-fixture
+put_secret operator BILLING_INGEST_TOKEN billing-owner-fixture
+put_secret operator GH_WEBHOOK_SECRET webhook-owner-fixture
 # Canonical-custody (inheritFrom: operator) values: seeded at the OPERATOR path
 # only, with a divergent copy at the TARGET node (node-template). That divergent
 # per-node copy must be IGNORED — the node inherits the operator value
@@ -72,6 +75,12 @@ done
 [ "$#" -gt 0 ] && shift # root@host
 cmd="$*"
 PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$cmd"
+rc=$?
+if [[ "${FAKE_CAS_TRANSPORT_RESET:-0}" == 1 && "$cmd" == *'bao kv patch '* && "$cmd" == *'-cas='* && "$rc" == 0 ]]; then
+  echo 'Connection reset by peer' >&2
+  exit 255 # mutation applied; caller lost the response
+fi
+exit "$rc"
 EOF
 chmod +x "$FAKEBIN/ssh"
 
@@ -111,6 +120,17 @@ if [ "${1:-}" = "exec" ]; then
     [ -d "${FAKE_BAO_ROOT}/${path}" ] && exit 0 || exit 2
   fi
   if printf '%s\n' "$*" | grep -Eq 'bao kv (put|patch)'; then
+    if [[ "$*" == *'-cas='* ]]; then
+      [[ -z "${FAKE_CAS_LOG:-}" ]] || printf 'attempt\n' >> "$FAKE_CAS_LOG"
+      [[ "$*" == *'-cas=7 '* && "$*" == *'-method=patch '* && "$*" == *'-format=json '* ]] || exit 9
+      [[ "${FAKE_CAS_FAIL:-0}" != 1 ]] || exit 2
+      patch_body="$(cat)"
+      jq -e 'keys == ["DATABASE_RECOVERY_PROBE_URLS_JSON"]' <<<"$patch_body" >/dev/null || exit 9
+      printf '%s' "$(jq -r .DATABASE_RECOVERY_PROBE_URLS_JSON <<<"$patch_body")" > "${FAKE_BAO_ROOT}/cogni/candidate-a/database-reliability-actuator/DATABASE_RECOVERY_PROBE_URLS_JSON"
+      touch "$FAKE_CAS_APPLIED_MARKER"
+      printf '{"data":{"version":8}}\n'
+      exit 0
+    fi
     [[ -z "${FAKE_PATCH_LOG:-}" ]] || printf '%s\n' "$*" >> "$FAKE_PATCH_LOG"
     key_arg="${args[$last_index]}"
     path="${args[$((last_index - 1))]}"
@@ -167,7 +187,25 @@ if [[ "${!#}" == http://127.0.0.1:8200/v1/cogni/data/* ]]; then
     [[ -f "$f" ]] || continue
     data="$(printf '%s' "$data" | jq --arg k "$(basename "$f")" --rawfile v "$f" '.[$k]=$v')"
   done
-  printf '{"data":{"data":%s}}' "$data" > "$out"
+  if [[ "${FAKE_PROBE_DRIFT:-0}" == 1 && "$path" == 'candidate-a/node-template-database-recovery-probe' ]]; then
+    if [[ -f "$FAKE_PROBE_READ_MARKER" ]]; then
+      data="$(jq '.DATABASE_RECOVERY_PROBE_PASSWORD="concurrent-rotation"' <<<"$data")"
+    else
+      touch "$FAKE_PROBE_READ_MARKER"
+    fi
+  fi
+  version=7
+  if [[ "$path" == 'candidate-a/database-reliability-actuator' && -f "${FAKE_CAS_APPLIED_MARKER:-/nonexistent}" ]]; then
+    version=8
+    case "${FAKE_READBACK_FAIL:-0}" in
+      1)
+        printf '{"errors":["fixture readback unavailable"]}' > "$out"
+        printf '503'; exit 0 ;;
+      stale) version=7 ;;
+      mismatch) data="$(jq '.DATABASE_RECOVERY_PROBE_URLS_JSON="[]"' <<<"$data")" ;;
+    esac
+  fi
+  printf '{"data":{"metadata":{"version":%s},"data":%s}}' "$version" "$data" > "$out"
   printf '200'; exit 0
 fi
 config="" body_file="" output_file="" wanted_alias=""
@@ -303,12 +341,12 @@ env \
 # source:agent app key generated per-node
 test -f "$BAO_ROOT/cogni/candidate-a/node-template/AUTH_SECRET" \
   || { echo "materialize did not seed AUTH_SECRET" >&2; exit 1; }
-# source:human shared substrate inherited via blind ancestor scan (POSTHOG_*).
-# required:true — a node MUST receive them or the fail-fast guard trips (bug.5087).
+# Source:human shared integrations inherit only their declared owner.
 for k in POSTHOG_API_KEY POSTHOG_HOST; do
-  test -f "$BAO_ROOT/cogni/candidate-a/node-template/$k" \
-    || { echo "materialize did not inherit required shared substrate $k" >&2; exit 1; }
+  cmp "$BAO_ROOT/cogni/candidate-a/operator/$k" "$BAO_ROOT/cogni/candidate-a/node-template/$k" \
+    || { echo "materialize did not inherit declared shared integration $k" >&2; exit 1; }
 done
+cmp "$BAO_ROOT/cogni/candidate-a/operator/TAVILY_API_KEY" "$BAO_ROOT/cogni/candidate-a/node-template/TAVILY_API_KEY"
 # canonical-custody keys (inheritFrom: operator): must be the OPERATOR value, NOT a
 # stale per-node copy — proves inheritFrom overwrites the per-node split-brain.
 # OPENROUTER_API_KEY (bug.5021/429) and EVM_RPC_URL (bug.5087 chain substrate) share
@@ -317,6 +355,8 @@ test "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/OPENROUTER_API_KEY")" = s
   || { echo "OPENROUTER_API_KEY must inherit the operator-canonical value, not the stale per-node copy" >&2; exit 1; }
 test "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/EVM_RPC_URL")" = https://base-mainnet.example/v2/operator-key \
   || { echo "EVM_RPC_URL must inherit the operator value (inheritFrom: operator), not the stale per-node copy" >&2; exit 1; }
+cmp "$BAO_ROOT/cogni/candidate-a/operator/BILLING_INGEST_TOKEN" "$BAO_ROOT/cogni/candidate-a/node-template/BILLING_INGEST_TOKEN" \
+  || { echo "BILLING_INGEST_TOKEN must inherit the operator-canonical value" >&2; exit 1; }
 # per-node DB creds generated (source:agent), not inherited from any shared bank
 for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD; do
   test -f "$BAO_ROOT/cogni/candidate-a/node-template/$k" \
@@ -663,8 +703,22 @@ mkdir -p "$DB_READY_CATALOG"
 cp "$REPO_ROOT"/infra/catalog/*.yaml "$DB_READY_CATALOG/"
 yq -i '.reliability.controller = false' "$DB_READY_CATALOG/operator.yaml"
 yq -i '.reliability.controller = true | .envs = ["candidate-a", "production"]' "$DB_READY_CATALOG/node-template.yaml"
+REAL_PNPM="$(command -v pnpm)"
+cat > "$FAKEBIN/pnpm" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n "${FAKE_REBIND_PLAN_FILE:-}" && "$*" == *'/plan-database-recovery-host-rebind.ts'* ]]; then
+  exec "$REAL_PNPM" exec tsx -e 'const fs = require("node:fs"); const {planRecoveryBinding} = require("./scripts/lib/plan-database-recovery-host-rebind"); try { process.stdout.write(JSON.stringify(planRecoveryBinding(JSON.parse(fs.readFileSync(0,"utf8")), JSON.parse(fs.readFileSync(process.env.FAKE_REBIND_PLAN_FILE,"utf8"))))); } catch { process.stderr.write("fixture planner refused\n"); process.exitCode=1; }'
+fi
+exec "$REAL_PNPM" "$@"
+EOF
+chmod +x "$FAKEBIN/pnpm"
 run_db_ready() {
-  env VM_HOST=fake DOMAIN=test.cognidao.org SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+  env PATH="$FAKEBIN:$PATH" REAL_PNPM="$REAL_PNPM" \
+    FAKE_REBIND_PLAN_FILE="${FAKE_REBIND_PLAN_FILE:-}" FAKE_CAS_FAIL="${FAKE_CAS_FAIL:-0}" FAKE_CAS_LOG="$TMPROOT/cas-log" \
+    FAKE_PROBE_DRIFT="${FAKE_PROBE_DRIFT:-0}" FAKE_PROBE_READ_MARKER="$TMPROOT/probe-read-marker" \
+    FAKE_READBACK_FAIL="${FAKE_READBACK_FAIL:-0}" FAKE_CAS_APPLIED_MARKER="$TMPROOT/cas-applied-marker" \
+    FAKE_CAS_TRANSPORT_RESET="${FAKE_CAS_TRANSPORT_RESET:-0}" \
+    VM_HOST=fake DOMAIN=test.cognidao.org SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
     SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" FAKE_REMOTE_PATH="$FAKEBIN" FAKE_BAO_ROOT="$BAO_ROOT" \
     COGNI_CATALOG_ROOT="$DB_READY_CATALOG" SECRET_MATERIALIZE_PHASE=db-ready \
     FAKE_PROBE_RECEIPT="$TMPROOT/probe.json" FAKE_PATCH_LOG="$TMPROOT/db-ready-writes" \
@@ -701,5 +755,210 @@ jq '.database="cogni_other"' "$TMPROOT/probe.json" > "$TMPROOT/wrong.json"
 mv "$TMPROOT/wrong.json" "$TMPROOT/probe.json"
 if run_db_ready >/dev/null 2>&1; then echo 'foreign native DB accepted' >&2; exit 1; fi
 [ ! -s "$TMPROOT/db-ready-writes" ]
+
+# Source-reviewed hostname-only probe reattestation: test the real pure planner through the real
+# db-ready shell, with a test-only pnpm wrapper supplying an armed fixture.
+# No production CLI/env mechanism can replace its source-owned plan.
+jq '.database="cogni_node_template" | .observedAt=(now | todate)' "$TMPROOT/probe.json" > "$TMPROOT/right.json"
+mv "$TMPROOT/right.json" "$TMPROOT/probe.json"
+cp "$BINDING_FILE" "$TMPROOT/binding-good"
+jq -c 'map(if .nodeSlug=="node-template" then .dsn |= sub("10.0.0.1";"10.0.0.9") else . end)' "$BINDING_FILE" > "$TMPROOT/binding-old"
+cp "$TMPROOT/binding-old" "$BINDING_FILE"
+jq '[.[] | select(.nodeSlug=="node-template") | {id:"fixture-rehost",operation:"hostname-only-probe-reattestation",nodeId,nodeSlug,environment,transition:"existing-same-identity-to-canonical-host",newHost:"10.0.0.1",machineId:.substrateHost,authorization:{state:"armed",receipt:{reference:"https://example.invalid/test-only-authorization-receipt"}}}]' "$BINDING_FILE" > "$TMPROOT/armed-plan"
+FAKE_REBIND_PLAN_FILE="$TMPROOT/armed-plan"
+: > "$TMPROOT/cas-log"
+run_db_ready > "$TMPROOT/rebind-out"
+[ "$(cat "$TMPROOT/cas-log")" = attempt ]
+[ "$(jq -S . "$BINDING_FILE")" = "$(jq -S . "$TMPROOT/binding-good")" ]
+grep -q '"beforeVersion":7,"afterVersion":8,"readbackMatched":true' "$TMPROOT/rebind-out"
+if grep -qF "$probe_password_before" "$TMPROOT/rebind-out"; then echo 'host rebind leaked probe password' >&2; exit 1; fi
+: > "$TMPROOT/cas-log"
+run_db_ready > /dev/null
+[ ! -s "$TMPROOT/cas-log" ] # no-op, no second CAS
+# Successful CAS with unavailable, stale or mismatched readback is
+# applied/unknown, never replayed or reported as matched (including HTTP200).
+for FAKE_READBACK_FAIL in 1 stale mismatch; do
+  cp "$TMPROOT/binding-old" "$BINDING_FILE"
+  rm -f "$TMPROOT/cas-applied-marker"
+  : > "$TMPROOT/cas-log"
+  if run_db_ready > "$TMPROOT/readback-failure-out" 2>&1; then echo 'invalid reattestation readback accepted' >&2; exit 1; fi
+  [ "$(cat "$TMPROOT/cas-log")" = attempt ]
+  [ "$(jq -S . "$BINDING_FILE")" = "$(jq -S . "$TMPROOT/binding-good")" ]
+  grep -q 'applied; aggregate readback.*reconcile before retry' "$TMPROOT/readback-failure-out"
+  if grep -q 'readbackMatched' "$TMPROOT/readback-failure-out"; then echo 'invalid readback claimed matched' >&2; exit 1; fi
+done
+unset FAKE_READBACK_FAIL
+# A reset AFTER actual application must not enter remote()'s transport retry.
+cp "$TMPROOT/binding-old" "$BINDING_FILE"
+rm -f "$TMPROOT/cas-applied-marker"
+: > "$TMPROOT/cas-log"
+FAKE_CAS_TRANSPORT_RESET=1
+if run_db_ready > "$TMPROOT/cas-unknown-out" 2>&1; then echo 'lost CAS response accepted' >&2; exit 1; fi
+[ "$(cat "$TMPROOT/cas-log")" = attempt ]
+[ "$(jq -S . "$BINDING_FILE")" = "$(jq -S . "$TMPROOT/binding-good")" ]
+grep -q 'CAS failed or outcome unknown; no replay; reconcile before retry' "$TMPROOT/cas-unknown-out"
+if grep -q 'readbackMatched' "$TMPROOT/cas-unknown-out"; then echo 'lost CAS response claimed matched' >&2; exit 1; fi
+unset FAKE_CAS_TRANSPORT_RESET
+cp "$TMPROOT/binding-old" "$BINDING_FILE"
+rm -f "$TMPROOT/cas-applied-marker"
+: > "$TMPROOT/cas-log"
+FAKE_CAS_FAIL=1
+if run_db_ready > /dev/null 2>&1; then echo 'host rebind CAS conflict accepted' >&2; exit 1; fi
+[ "$(cat "$TMPROOT/cas-log")" = attempt ] # no retry
+cmp "$BINDING_FILE" "$TMPROOT/binding-old"
+FAKE_CAS_FAIL=0
+FAKE_PROBE_DRIFT=1
+: > "$TMPROOT/cas-log"
+if run_db_ready > /dev/null 2>&1; then echo 'concurrent canonical probe rotation accepted' >&2; exit 1; fi
+[ ! -s "$TMPROOT/cas-log" ]
+cmp "$BINDING_FILE" "$TMPROOT/binding-old"
+unset FAKE_PROBE_DRIFT
+jq '.[0].authorization={state:"unarmed",receipt:null}' "$TMPROOT/armed-plan" > "$TMPROOT/unarmed-plan"
+FAKE_REBIND_PLAN_FILE="$TMPROOT/unarmed-plan"
+: > "$TMPROOT/cas-log"
+if run_db_ready > /dev/null 2>&1; then echo 'unarmed host rebind accepted' >&2; exit 1; fi
+[ ! -s "$TMPROOT/cas-log" ]
+unset FAKE_REBIND_PLAN_FILE FAKE_CAS_FAIL
+cp "$TMPROOT/binding-good" "$BINDING_FILE"
+
+# Exercise the real binding CLI, including its private stdin/stdout boundary.
+# Rejections expose a finite category, never a DSN, parser error, or input value.
+python3 - "$REPO_ROOT/scripts/lib/materialize-database-recovery-binding.ts" <<'PY'
+import copy
+import json
+import subprocess
+import sys
+
+script = sys.argv[1]
+canary = "PRIVATE_BINDING_VALUE_DO_NOT_LOG"
+dsn = f"postgresql://probe_operator:{canary}@10.0.0.1:5432/cogni_operator?sslmode=disable"
+binding = {
+    "nodeId": "44444444-4444-4444-8444-444444444444",
+    "nodeSlug": "operator", "environment": "production",
+    "databaseName": "cogni_operator", "probeRole": "probe_operator",
+    "systemIdentifier": "123456789", "substrateHost": "a" * 32, "dsn": dsn,
+}
+other = {**binding, "nodeId": "33333333-3333-4333-8333-333333333333", "environment": "preview"}
+valid = {
+    "nodeId": binding["nodeId"], "nodeSlug": "operator", "environment": "production",
+    "databaseName": "cogni_operator", "probeRole": "probe_operator", "dsn": dsn,
+    "expectedHost": "10.0.0.1", "machineId": "a" * 32,
+    "localSystemIdentifier": "123456789",
+    "observation": {
+        "database": "cogni_operator", "role": "probe_operator", "systemTenantExists": True,
+        "serverAddress": "10.0.0.1", "serverPort": 5432, "systemIdentifier": "123456789",
+        "appRolesCanLogin": True, "runtimeRolesPresent": True, "runtimeRolesNoLogin": False,
+        "activeRuntimeSessions": 0, "observedAt": "2026-10-21T07:00:00.000+00:00",
+        "probeRoleIsolated": True,
+    },
+    "existingBindings": [other, binding],
+}
+
+def invoke(raw):
+    return subprocess.run(["pnpm", "exec", "tsx", script], input=raw, text=True, capture_output=True)
+
+for existing in ([other], [other, binding]):
+    value = {**valid, "existingBindings": existing}
+    result = invoke(json.dumps(value))
+    assert result.returncode == 0 and result.stderr == "", "valid binding rejected"
+    assert json.loads(result.stdout) == [other, binding], "binding payload or unrelated scope changed"
+
+def rejected(category, mutate=None, raw=None):
+    value = copy.deepcopy(valid)
+    if mutate:
+        mutate(value)
+    result = invoke(json.dumps(value) if raw is None else raw)
+    assert result.returncode == 1, f"guard accepted: {category}"
+    assert result.stdout == "", f"rejection wrote private stdout: {category}"
+    assert result.stderr == f"recovery binding receipt rejected: {category}\n", f"unexpected diagnostic: {category}"
+    assert canary not in result.stdout + result.stderr, f"private value leaked: {category}"
+
+rejected("input_json", raw='{"private": "' + canary + '", invalid}')
+rejected("input_schema", lambda v: v["observation"].update({canary: canary}))
+rejected("input_schema", lambda v: v.update(nodeId=canary))
+rejected("canonical_identity", lambda v: v.update(databaseName="cogni_other"))
+rejected("canonical_dsn_invalid", lambda v: v.update(dsn=canary + "\ninvalid"))
+rejected("canonical_dsn_mismatch", lambda v: v.update(dsn=v["dsn"].replace("10.0.0.1", "10.0.0.2")))
+rejected("validation_error", lambda v: v.update(dsn=v["dsn"].replace("probe_operator:", canary + "%zz:")))
+rejected("native_identity", lambda v: v["observation"].update(systemIdentifier="987654321"))
+rejected("native_identity", lambda v: v["observation"].update(database="cogni_other"))
+rejected("duplicate_binding", lambda v: v["existingBindings"].append(binding))
+for field, value, category in [
+    ("substrateHost", "b" * 32, "prior_machine_id"),
+    ("systemIdentifier", "987654321", "prior_system_identifier"),
+    ("dsn", dsn.replace("10.0.0.1", "10.0.0.2"), "prior_host"),
+    ("dsn", canary + "\ninvalid", "prior_dsn_invalid"),
+    ("databaseName", "cogni_other", "prior_database"),
+    ("probeRole", "probe_other", "prior_role"),
+    ("nodeSlug", "other", "prior_node_slug"),
+]:
+    rejected(category, lambda v: v["existingBindings"][1].update({field: value}))
+rejected("prior_machine_id", lambda v: v["existingBindings"][1].update(substrateHost="b" * 32, dsn=canary))
+
+# The new planner must leave the original seal rejection intact and preserve
+# every field except one authorized hostname, using genuine native/local guards.
+planner_js = """
+const fs=require('node:fs');
+const {planRecoveryBinding}=require('./scripts/lib/plan-database-recovery-host-rebind');
+const {recoveryBindingErrorCategory}=require('./scripts/lib/materialize-database-recovery-binding');
+const v=JSON.parse(fs.readFileSync(0,'utf8'));
+try { process.stdout.write(JSON.stringify(planRecoveryBinding(v.input,v.plans,v.now))); }
+catch(e) { process.stderr.write(recoveryBindingErrorCategory(e)+'\\n'); process.exitCode=1; }
+"""
+plan = {"id":"fixture-rehost", "operation":"hostname-only-probe-reattestation", "nodeId":valid["nodeId"], "nodeSlug":"operator", "environment":"production", "transition":"existing-same-identity-to-canonical-host", "newHost":"10.0.0.1", "machineId":"a"*32,
+        "authorization":{"state":"armed","receipt":{"reference":"https://example.invalid/test-only-authorization-receipt"}}}
+rehost=copy.deepcopy(valid)
+rehost["existingBindings"][1]["dsn"]=dsn.replace("10.0.0.1","10.0.0.9")
+def invoke_plan(value=rehost, plans=None, now=1792566000000):
+    return subprocess.run(["pnpm","exec","tsx","-e",planner_js], input=json.dumps({"input":value,"plans":[plan] if plans is None else plans,"now":now}),text=True,capture_output=True)
+# Timestamp follows the fixture's exact 07:00 UTC observation, not wall clock.
+from datetime import datetime
+fixture_now=int(datetime.fromisoformat(valid["observation"]["observedAt"]).timestamp()*1000)
+r=invoke_plan(now=fixture_now)
+assert r.returncode==0, r.stderr
+assert json.loads(r.stdout)["bindings"]==[other,binding]
+assert json.loads(r.stdout)["rebind"]["credentialsPreserved"] is True
+assert canary not in json.dumps(json.loads(r.stdout)["rebind"])
+# Distinct former addresses converge only to the source-pinned canonical target.
+# Neither a remembered IPv4 nor a DNS alias is authority for the destination.
+for prior_host in ["10.0.0.8", "former-probe.example.invalid"]:
+    value=copy.deepcopy(rehost)
+    value["existingBindings"][1]["dsn"]=dsn.replace("10.0.0.1",prior_host)
+    r=invoke_plan(value,now=fixture_now)
+    assert r.returncode==0 and json.loads(r.stdout)["bindings"]==[other,binding], prior_host
+    assert canary not in json.dumps(json.loads(r.stdout)["rebind"])
+# Removing the exact source plan still preserves the ordinary host rejection.
+assert invoke_plan(plans=[],now=fixture_now).returncode==1
+for field,value in [("machineId","b"*32),("nodeId",other["nodeId"]),("transition","arbitrary-host-override"),("newHost","10.0.0.8"),("operation","data-cutover")]:
+    wrong={**plan,field:value}; r=invoke_plan(plans=[wrong],now=fixture_now)
+    assert r.returncode==1 and not r.stdout and canary not in r.stderr, field
+unarmed={**plan,"authorization":{"state":"unarmed","receipt":None}}
+assert invoke_plan(plans=[unarmed],now=fixture_now).returncode==1
+legacy_fence_claim={**plan,"authorization":{**plan["authorization"],"oldSourceFenced":True}}
+assert invoke_plan(plans=[legacy_fence_claim],now=fixture_now).returncode==1
+assert invoke_plan(plans=[],now=fixture_now).returncode==1
+assert invoke_plan(plans=[plan,plan],now=fixture_now).returncode==1
+assert invoke_plan(now=fixture_now+120001).returncode==1
+assert invoke_plan(now=fixture_now-5001).returncode==1
+for mutate in [
+    lambda v:v["existingBindings"][1].update(systemIdentifier="987654321"),
+    lambda v:v["existingBindings"][1].update(databaseName="cogni_other"),
+    lambda v:v["existingBindings"][1].update(probeRole="probe_other"),
+    lambda v:v["existingBindings"][1].update(nodeSlug="other"),
+    lambda v:v["existingBindings"][1].update(dsn=v["existingBindings"][1]["dsn"].replace(canary,"changed")),
+    lambda v:v["existingBindings"][1].update(dsn=v["existingBindings"][1]["dsn"].replace("disable","require")),
+    lambda v:v["existingBindings"][1].update(dsn=v["existingBindings"][1]["dsn"].replace("postgresql:","postgres:")),
+    lambda v:v["existingBindings"][1].update(dsn=v["existingBindings"][1]["dsn"].replace(":5432/",":5433/")),
+    lambda v:v["existingBindings"][1].update(dsn=v["existingBindings"][1]["dsn"]+"#changed"),
+    lambda v:v["existingBindings"].append(v["existingBindings"][1]),
+    lambda v:v["observation"].update(systemIdentifier="987654321"),
+]:
+    value=copy.deepcopy(rehost);mutate(value);r=invoke_plan(value,now=fixture_now)
+    assert r.returncode==1 and not r.stdout and canary not in r.stderr
+# An already-applied binding takes the unmodified ordinary seal path.
+r=invoke_plan(valid,now=fixture_now)
+assert r.returncode==0 and json.loads(r.stdout)["rebind"] is None
+print("PASS: binding CLI and host-rebind guards preserve private values and identities")
+PY
 
 echo "PASS: secret-materialize.test.sh"

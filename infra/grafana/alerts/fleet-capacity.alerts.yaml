@@ -20,7 +20,7 @@ groups:
             relativeTimeRange: { from: 300, to: 0 }
             model:
               datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'min by (job) (up{env="__ENVIRONMENT__",job=~"integrations/(unix|cadvisor|postgres)|prometheus.scrape.(app_metrics|worker_metrics)"})'
+              expr: 'min by (job) (up{env="__ENVIRONMENT__",job=~"integrations/(unix|cadvisor|postgres)|kubelet_cadvisor|prometheus.scrape.(app_metrics|worker_metrics)"})'
               instant: true
               refId: SIGNAL
           - refId: THRESHOLD
@@ -295,8 +295,10 @@ groups:
               datasource: { type: prometheus, uid: grafanacloud-prom }
               # One alert instance per node. A regional probe failure alone is
               # not a fleet outage: serving is unavailable only when every
-              # independent probe region reports failure.
-              expr: 'max by (environment, node_slug) (probe_success{environment="__ENVIRONMENT__",proof_class="serve"})'
+              # independent probe region reports failure. Each region's latest
+              # sample is read over the policy evidenceWindow (serveProbes),
+              # because probe cadence differs per environment (bug.5527).
+              expr: 'max by (environment, node_slug) (last_over_time(probe_success{environment="__ENVIRONMENT__",proof_class="serve"}[__SERVE_WINDOW__]))'
               instant: true
               refId: SERVING
           - refId: THRESHOLD
@@ -310,5 +312,39 @@ groups:
         labels: { severity: critical, proof_class: serve }
         annotations:
           summary: "{{ $labels.node_slug }} is unreachable from every independent probe region."
+        noDataState: Alerting
+        execErrState: Alerting
+
+      # VM paging early warning (story.5084). Memory and disk warning tiers are
+      # owned by reliability-memory-warning / reliability-disk-warning
+      # (infra/grafana/synthetic/main.tf); this rule adds only the database
+      # page-fault signal those headroom rules cannot see.
+      - uid: fleet-db-major-faults
+        title: __ENVIRONMENT__ database paging from disk above 5 faults/s
+        condition: THRESHOLD
+        for: 10m
+        data:
+          - refId: FAULTS
+            datasourceUid: grafanacloud-prom
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              datasource: { type: prometheus, uid: grafanacloud-prom }
+              # A database container with no faults still reports a 0 rate, so
+              # an empty result means its telemetry is missing; the deadman rule
+              # owns that signal and this rule fails open to 0.
+              expr: 'max by (service) (rate(container_memory_failures_total{env="__ENVIRONMENT__",failure_type="pgmajfault",service=~"doltgres|temporal|temporal-postgres|postgres"}[5m])) or vector(0)'
+              instant: true
+              refId: FAULTS
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: FAULTS
+              conditions:
+                - evaluator: { type: gt, params: [5] }
+              refId: THRESHOLD
+        labels: { severity: warning, proof_class: run }
+        annotations:
+          summary: "__ENVIRONMENT__ database {{ $labels.service }} is paging from disk above 5 major faults/s."
         noDataState: Alerting
         execErrState: Alerting

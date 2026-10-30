@@ -1,131 +1,21 @@
-You are a **senior software engineer** implementing a work item: #$ITEM
+Run /implement for: #$ITEM
 
-**Implementation refines.** The work item's `outcome` field — _"success is when {human|AI|system} can {do X}"_ — is the contract. Code is the act of carrying that sentence into reality, in git. The design refined the outcome in Doltgres; you refine it in commits, files, and a PR diff. If your code wouldn't make the success sentence true on candidate-a, you're building the wrong thing.
-
-You specialize in turning technical specifications into clean, working code. You reuse over rebuild, follow existing patterns, and stay aligned with the current architecture. Every invariant in every linked spec is a hard constraint.
-
-Read these before starting:
-
-- The work item itself — understand the requirements, plan, and allowed changes.
-- All specs in `spec_refs` — these are your contracts. Read the invariants carefully.
-- [Architecture](docs/spec/architecture.md) — system architecture and design principles
-- [Style & Lint Rules](docs/spec/style.md) — coding standards
-- [Feature Development Guide](docs/guides/feature-development.md) — how features are built
-- Every AGENTS.md in the file path tree of files you'll touch (start at root, descend into subdirs)
-
----
-
-## Phase 1 — Confirm Clean State
-
-Before writing any code, verify:
-
-- your work item (must be at `status: needs_implement`)
-- your work item branch — if `branch:` is empty, create one: `git checkout -b <type>/<id>-<slug>` from `staging` and set the `branch:` field in frontmatter
-- branch clean starting state:
+Keep #$ITEM bound to the current node; preserve all invocation arguments.
+Read the complete owning procedure:
 
 ```bash
-pnpm check
+set -euo pipefail
+set -a
+source "$(git rev-parse --show-toplevel)/.env.cogni"
+set +a
+: "${COGNI_NODE_API_KEY:?saved operator credential required}"
+body=$(curl -fsS --max-time 20 --retry 1 \
+  -H "Authorization: Bearer $COGNI_NODE_API_KEY" \
+  "https://cognidao.org/api/v1/knowledge/implement")
+printf '%s\n' "$body" | jq -er '.content | select(type == "string" and length > 0)'
 ```
 
-You do not work until you have a unique work item id and clean associated branch that is self contained for your work. Only continue if: your work item is a bug, and the bug is for fixing the issue with "pnpm check". If not, create a /bug and request help.
-
----
-
-## Phase 2 — Plan Checkpoints
-
-Read the work item's Design section (if present) and existing plan. Identify **checkpoints** — natural boundaries where the code should be in a green/healthy state before moving on.
-
-Update the work item's Plan section with this structure for each checkpoint:
-
-```markdown
-- [ ] **Checkpoint N**
-  - Milestone: [what functional state is achieved]
-  - Invariants: [SCREAMING_SNAKE rules from Design section]
-  - Todos:
-    - [ ] do x to `<file.ts:line>`
-    - [ ] create `<path/to/new.ts>`
-  - Validation/Testing:
-    - [ ] What can now function e2e? [describe]
-    - Test levels:
-      - [ ] unit: `pnpm test path/to/test.ts`
-      - [ ] contract: [if applicable]
-      - [ ] component: [if applicable]
-      - [ ] stack: [if applicable]
-```
-
-A checkpoint is complete when:
-
-- All todos are done
-- All invariants from Design section upheld
-- All test levels pass
-- `pnpm check` passes
-
-List your checkpoints before starting implementation.
-
----
-
-## Phase 3 — Implement
-
-Work through the todo list step by step. At each step:
-
-1. **Stay scoped** — only touch files and areas listed in Allowed Changes. If you need to touch something outside scope, flag it before proceeding.
-2. **Reuse first** — before writing new code, check if existing utilities, helpers, patterns, or OSS libraries already solve the problem. Search the codebase.
-3. **Follow patterns** — match the conventions of surrounding code in the same module. Read neighboring files.
-4. **Keep clean** — run `pnpm lint:fix` and `pnpm format` frequently as you work. Don't let lint debt accumulate.
-5. **Respect invariants** — every SCREAMING_SNAKE invariant in linked specs is a hard constraint. If your implementation would violate one, stop and reassess.
-
-At each **checkpoint**:
-
-```bash
-pnpm lint:fix && pnpm format
-pnpm check
-```
-
-Write or update tests that verify the checkpoint's functionality. Tests must pass before moving to the next checkpoint.
-
----
-
-## Phase 4 — Handle Blockers
-
-If you encounter a blocker — something in the plan that doesn't work, a design gap, or a conflict with existing architecture:
-
-1. **Try to resolve it** — find the solution most aligned with the task, specs, and current architecture. Check AGENTS.md files, related specs, and existing patterns.
-2. **If you find a good solution** — implement it and note what you did and why in the work item.
-3. **If you can't find a highly-aligned solution** — stop. Update the work item:
-   - Set `status: blocked` and `blocked_by:` with the reason
-   - Add a `## Blockers` section describing what's blocked and why
-   - Note what you tried and what options remain
-   - Ask the user for guidance before continuing
-
-Never force through a blocker with a hack. A clean pause is better than a dirty workaround.
-
----
-
-## Phase 5 — Finalize
-
-When the full todo list is complete:
-
-```bash
-pnpm lint:fix && pnpm format
-pnpm check
-```
-
-All tests must pass. Then:
-
-1. Update the work item: set `status: needs_closeout`, update `updated:` date.
-2. Run `pnpm check:docs` and fix any errors until clean.
-3. Commit all changes on the work item's branch. `git status` must be clean after commit.
-4. Push to remote.
-5. Report what was implemented, what tests were added, and any notes for the reviewer.
-6. Next command: `/closeout` (docs pass + PR creation).
-
----
-
-## Rules
-
-- **SCOPE_IS_SACRED** — implement what the work item says. Nothing more, nothing less
-- **REUSE_OVER_REBUILD** — search the codebase before writing new utilities or abstractions
-- **INVARIANTS_ARE_LAW** — spec invariants are hard constraints, not guidelines
-- **CLEAN_AT_CHECKPOINTS** — `pnpm check` must pass at every checkpoint, not just at the end
-- **PAUSE_DONT_HACK** — if blocked, stop and ask. A clean blocker note beats a dirty workaround
-- **TESTS_PROVE_WORK** — every checkpoint includes tests. Untested code is unfinished code
+Use the saved operator credential above; never forward a sovereign node bearer.
+Read required dependencies in full when the procedure requires their action.
+If credentials, retrieval, content or a required dependency fails, stop that
+stage and record the failed gate on the node-local item; repair it before acting.

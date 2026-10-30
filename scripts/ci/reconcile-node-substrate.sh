@@ -23,6 +23,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 DEPLOY_ENVIRONMENT="${1:-${DEPLOY_ENVIRONMENT:-}}"
 TARGET_NODE="${2:-${TARGET:-}}"
+DEPLOYMENT_PROVIDER_REQUESTED="${DEPLOYMENT_PROVIDER:-}"
 DEPLOYMENT_PROVIDER="${DEPLOYMENT_PROVIDER:-k3s}"
 APP_SOURCE_DIR="${APP_SOURCE_DIR:-$REPO_ROOT}"
 COGNI_CATALOG_ROOT="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR}/infra/catalog}"
@@ -196,6 +197,11 @@ CATALOG_DIR="$COGNI_CATALOG_ROOT"
 source "$SCRIPT_DIR/lib/appset-paths.sh"
 # shellcheck source=lib/image-tags.sh
 source "$SCRIPT_DIR/lib/image-tags.sh"
+actual_provider="$(deployment_provider_for_target "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")" || fail "catalog provider unresolved"
+[[ -z "$DEPLOYMENT_PROVIDER_REQUESTED" || "$DEPLOYMENT_PROVIDER_REQUESTED" == "$actual_provider" ]] \
+  || fail "requested provider disagrees with owning catalog"
+DEPLOYMENT_PROVIDER="$actual_provider"
+export DEPLOYMENT_PROVIDER
 # shellcheck source=lib/lane-db-residency.sh
 source "$SCRIPT_DIR/lib/lane-db-residency.sh"
 
@@ -344,23 +350,20 @@ export REPO_ROOT APP_SOURCE_DIR COGNI_CATALOG_ROOT DOMAIN
 # as "key absent": the swallowed-error shape produced lying "per-node DB creds absent"
 # failures on paths that demonstrably held 35 keys. Only "No value found" (an unborn
 # path) is a legitimate empty; anything else retries and then fails naming the transport.
-# SHARED-SUBSTRATE OWNERS LIVE WHERE THE SUBSTRATE DOES (bug.5206). A node-scoped read is
-# the LANE's (`cogni/<lane>/<node>`), but `operator` and `_shared` describe the SERVER this
-# run is mutating — the Doltgres superuser, the DoltHub mirror creds — and that server is the
-# CONTROL env's. `cogni/<lane>/operator` does not exist in the paying cluster's vault and
-# never should. secret-materialize.sh already resolves this via its `__owner__` cache; this
-# file is its twin and never got the fix, so the production-side lane reconcile died on
-# "doltgres superuser SSOT absent at cogni/candidate-a/operator/DOLTGRES_PASSWORD".
+# Target app/runtime/migration reads use LANE custody. Only explicit owner reads
+# use CONTROL custody, including when operator occupies both roles.
 _bao_env_for_svc() {
-  case "$1" in
-    operator|_shared|node-template) printf '%s' "$SUBSTRATE_CONTROL_ENV" ;;
-    *)                              printf '%s' "$DEPLOY_ENVIRONMENT" ;;
+  # The operation chooses custody, including when operator occupies both roles.
+  case "${2:-target}" in
+    target) printf '%s' "$DEPLOY_ENVIRONMENT" ;;
+    owner) printf '%s' "$SUBSTRATE_CONTROL_ENV" ;;
+    *) fail "unknown secret bank authority" ;;
   esac
 }
 
 bao_get_field() {
   local svc="$1" k="$2" raw attempt bao_env
-  bao_env="$(_bao_env_for_svc "$svc")"
+  bao_env="$(_bao_env_for_svc "$svc" "${3:-target}")"
   for attempt in 1 2 3; do
     if raw="$(remote "kubectl exec -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
       bao kv get -format=json 'cogni/${bao_env}/${svc}'" 2>&1)"; then
@@ -376,7 +379,7 @@ bao_get_field() {
 
 bao_get_version() {
   local svc="$1" raw attempt bao_env
-  bao_env="$(_bao_env_for_svc "$svc")"
+  bao_env="$(_bao_env_for_svc "$svc" "${2:-target}")"
   for attempt in 1 2 3; do
     if raw="$(remote "kubectl exec -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
       bao kv get -format=json 'cogni/${bao_env}/${svc}'" 2>&1)"; then
@@ -525,64 +528,13 @@ fi
 # value via `pnpm secrets:set <env> operator DOLTGRES_PASSWORD` (secrets-rotate.md),
 # never re-derived. Passed to doltgres-provision so it connects as the live superuser.
 # Fail-loud if the SSOT is empty — never silently fall back to a poisoned VM .env.
-doltgres_superuser_password="$(bao_get_field operator DOLTGRES_PASSWORD)"
+doltgres_superuser_password="$(bao_get_field operator DOLTGRES_PASSWORD owner)"
 [[ -n "$doltgres_superuser_password" ]] \
-  || fail "doltgres superuser SSOT absent at cogni/${DEPLOY_ENVIRONMENT}/operator/DOLTGRES_PASSWORD — run secret-materialize, or seed/reconcile it via 'pnpm secrets:set ${DEPLOY_ENVIRONMENT} operator DOLTGRES_PASSWORD' (never fall back to a derived/.env value)"
+  || fail "doltgres superuser SSOT absent at cogni/${SUBSTRATE_CONTROL_ENV}/operator/DOLTGRES_PASSWORD — seed/reconcile the shared owner bank via 'pnpm secrets:set ${SUBSTRATE_CONTROL_ENV} operator DOLTGRES_PASSWORD' (never fall back to a derived/.env value)"
 dg_pw_env="-e DOLTGRES_PASSWORD='${doltgres_superuser_password}'"
 
-# DoltHub knowledge-mirror creds — env-global (one doltgres server + one DoltHub
-# identity per env), so read from the operator-canonical bank (cogni/<env>/operator),
-# the same SSOT idiom as DOLTGRES_PASSWORD just above (#1613 pattern). secret-materialize
-# already materializes these _shared/source:human keys into every node bank (they are in
-# NODE_BASELINE_KEYS), so the db-reader token resolves them here with zero new writes.
-#
-# WHY HERE (Option B — substrate lane, not deploy-infra): the doltgres Compose service
-# reads DOLT_CREDS_JWK/KEYID from the VM runtime .env via install-creds.sh at container
-# start. Only deploy-infra wrote them there, but an app-only promote runs skip_infra and
-# skips deploy-infra — so a fresh env that pasted DOLT_CREDS via THE PATH + a normal
-# promote got the app code but a credless doltgres, and dolt_push failed silently. This
-# folds the SAME render-.env + recreate-doltgres primitive deploy-infra runs into the
-# always-on substrate-readiness lane (Axiom 22), so the mirror comes up on EVERY flight/
-# promote with no separate infra run — the exact shape bug.5041 used for the Alloy config.
-#
-# FAIL-CLOSED: absent JWK/KEYID ⇒ mirror stays disabled (install-creds.sh is a no-op when
-# unset). NEVER a hardcoded fallback. Key names only in logs; values never echoed.
-# PROD-ONLY blast-radius guard (bug.5003): the DoltHub push identity (JWK/KEYID) +
-# repo-create PAT are ONE shared, PROD-CAPABLE credential (push rights to cogni-dao).
-# A non-prod env must NEVER hold it in the doltgres — not even a value left over from a
-# pre-guard materialize or a prior flight's render. So ONLY production reads + delivers
-# the mirror creds; every other env actively STRIPS them from the VM runtime .env +
-# recreates doltgres (fail-closed = actively disabled, not merely not-rendered). This
-# is the VM-side complement to the reconcile-secrets.sh _node_gets_key prod-only guard
-# (which stops future bank writes but cannot remove an already-delivered VM cred).
-dolt_mirror_enabled=false
-dolt_mirror_purge=false
-# THE VM DECIDES, NOT THE LANE (bug.5206). bug.5003's rule is that a NON-PRODUCTION VM must
-# not hold prod-capable DoltHub creds — that is a property of the HOST being mutated, and for
-# a foreign-custodied lane the host is the CONTROL env's VM. Keyed on the lane, a candidate-a
-# lane reconcile running against PRODUCTION's VM took the purge branch: it would strip
-# DOLT_CREDS_*/DOLTHUB_* out of production's runtime .env and force-recreate production's
-# doltgres, taking the production knowledge mirror dark on every lane promote. This is why it
-# lands in the SAME commit as the owner-read fix above — that fix is what lets this line be
-# reached at all.
-if [[ "$SUBSTRATE_CONTROL_ENV" == "production" ]]; then
-  dolt_creds_jwk="$(bao_get_field operator DOLT_CREDS_JWK)"
-  dolt_creds_keyid="$(bao_get_field operator DOLT_CREDS_KEYID)"
-  dolthub_owner="$(bao_get_field operator DOLTHUB_OWNER)"
-  dolthub_api_token="$(bao_get_field operator DOLTHUB_API_TOKEN)"
-  if [[ -n "$dolt_creds_jwk" && -n "$dolt_creds_keyid" ]]; then
-    dolt_mirror_enabled=true
-    mark_row dolt_mirror_creds read "read DoltHub mirror creds from OpenBao (key names only)"
-    log "DoltHub mirror creds present — will render to VM runtime .env + recreate doltgres"
-  else
-    mark_row dolt_mirror_creds skipped "DoltHub mirror creds absent — mirror stays disabled (no fallback)"
-    log "DoltHub mirror creds absent at cogni/${DEPLOY_ENVIRONMENT}/operator — mirror disabled (fail-closed, no fallback)"
-  fi
-else
-  dolt_mirror_purge=true
-  mark_row dolt_mirror_creds purged "non-prod: DoltHub mirror is prod-only — creds withheld + stripped from VM .env (bug.5003)"
-  log "non-prod (${DEPLOY_ENVIRONMENT}): DoltHub mirror is prod-only — stripping any mirror creds from VM runtime .env + recreating doltgres if present"
-fi
+# Shared mirror credentials and lifecycle belong exclusively to the infra lane.
+# Ordinary target reconciliation neither reads nor rotates that authority.
 
 # DSN seeding removed: secret-materialize composes + writes the per-node DSNs
 # (DATABASE_URL/DATABASE_SERVICE_URL/DOLTGRES_URL) to cogni/<env>/<node>. This phase
@@ -831,53 +783,9 @@ postgres_watchdog_migration_sha256="$STAGED_EXACT_SHA256"
 stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/control-migrations/0003_disable_database_locking.sql" postgres-locking-retirement
 postgres_locking_retirement_stage="$STAGED_EXACT_PATH"
 postgres_locking_retirement_sha256="$STAGED_EXACT_SHA256"
-stage_exact "$REPO_ROOT/infra/compose/runtime/doltgres-init/install-creds.sh" doltgres-install-creds
-doltgres_install_creds_stage="$STAGED_EXACT_PATH"
-doltgres_install_creds_sha256="$STAGED_EXACT_SHA256"
 stage_exact "$REPO_ROOT/infra/compose/runtime/doltgres-init/provision.sh" doltgres-provisioner
 doltgres_provisioner_stage="$STAGED_EXACT_PATH"
 doltgres_provisioner_sha256="$STAGED_EXACT_SHA256"
-
-# DoltHub mirror creds → VM runtime .env + hash-gated doltgres recreate (Option B).
-# Staged only when the creds are present in OpenBao; absent ⇒ mirror stays disabled.
-# dolt_mirror_reconcile_snippet is spliced into the remote heredoc's doltgres block
-# below (empty string when disabled → the heredoc is byte-identical to before).
-dolt_mirror_reconcile_snippet=""
-if "$dolt_mirror_purge"; then
-  # Non-prod: strip any DoltHub mirror creds from the VM runtime .env + hash-gated
-  # recreate so a prod-capable cred can never linger on a test VM (bug.5003). No
-  # values transit — MODE=purge only removes keys. Byte-identical no-op when the
-  # .env already lacks them.
-  stage_exact "$REPO_ROOT/scripts/ci/reconcile-dolt-mirror-creds.remote.sh" dolt-mirror-helper
-  dolt_mirror_helper_stage="$STAGED_EXACT_PATH"
-  dolt_mirror_reconcile_snippet="    RUNTIME_ENV=\"\$runtime_env\" \\
-    RUNTIME_COMPOSE_BIN=\"docker compose --project-name cogni-runtime --env-file \$runtime_env -f /opt/cogni-template-runtime/docker-compose.yml\" \\
-    HASH_DIR=/var/lib/cogni \\
-    MODE=purge \\
-      bash '${dolt_mirror_helper_stage}'
-"
-elif "$dolt_mirror_enabled"; then
-  stage_exact "$REPO_ROOT/scripts/ci/reconcile-dolt-mirror-creds.remote.sh" dolt-mirror-helper
-  dolt_mirror_helper_stage="$STAGED_EXACT_PATH"
-  # base64 the values CI-side so the single-line-JSON JWK never touches a sed/shell
-  # interpolation path (no injection; never echoed). Decoded VM-side by the helper.
-  dolt_creds_jwk_b64="$(printf '%s' "$dolt_creds_jwk" | base64 | tr -d '\n')"
-  dolt_creds_keyid_b64="$(printf '%s' "$dolt_creds_keyid" | base64 | tr -d '\n')"
-  dolthub_owner_b64="$(printf '%s' "$dolthub_owner" | base64 | tr -d '\n')"
-  dolthub_api_token_b64="$(printf '%s' "$dolthub_api_token" | base64 | tr -d '\n')"
-  # Runs after doltgres is up: render the creds into the runtime .env then hash-gated
-  # force-recreate so install-creds.sh re-runs. base64 values transit the SSH command
-  # (VM-local, not echoed to CI logs). Leading newline keeps the heredoc line-clean.
-  dolt_mirror_reconcile_snippet="    RUNTIME_ENV=\"\$runtime_env\" \\
-    RUNTIME_COMPOSE_BIN=\"docker compose --project-name cogni-runtime --env-file \$runtime_env -f /opt/cogni-template-runtime/docker-compose.yml\" \\
-    HASH_DIR=/var/lib/cogni \\
-    DOLT_CREDS_JWK_B64='${dolt_creds_jwk_b64}' \\
-    DOLT_CREDS_KEYID_B64='${dolt_creds_keyid_b64}' \\
-    DOLTHUB_OWNER_B64='${dolthub_owner_b64}' \\
-    DOLTHUB_API_TOKEN_B64='${dolthub_api_token_b64}' \\
-      bash '${dolt_mirror_helper_stage}'
-"
-fi
 
 # THE LANE'S TEMPORAL NAMESPACE MUST EXIST ON THE SERVER THE LANE DIALS (task.5132).
 # The composite sets TEMPORAL_ADDRESS to the CONTROL env's VM (the substrate is the paying
@@ -973,47 +881,12 @@ remote "set -euo pipefail
   install_exact '${postgres_control_migration_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0000_database_recovery_control.sql '${postgres_control_migration_sha256}' 0444 postgres-control-migration
   install_exact '${postgres_watchdog_migration_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql '${postgres_watchdog_migration_sha256}' 0444 postgres-watchdog-migration
   install_exact '${postgres_locking_retirement_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0003_disable_database_locking.sql '${postgres_locking_retirement_sha256}' 0444 postgres-locking-retirement
-  install_exact '${doltgres_install_creds_stage}' /opt/cogni-template-runtime/doltgres-init/install-creds.sh '${doltgres_install_creds_sha256}' 0555 doltgres-install-creds
   install_exact '${doltgres_provisioner_stage}' /opt/cogni-template-runtime/doltgres-init/provision.sh '${doltgres_provisioner_sha256}' 0444 doltgres-provisioner
   echo '[remote] exact runtime compose and provisioners installed ok'
 
 ${edge_reconcile_snippet}
 
-  touch \"\$runtime_env\"
-  current=\$(awk -F= '/^COGNI_NODE_DBS=/ {print substr(\$0, length(\"COGNI_NODE_DBS=\") + 1)}' \"\$runtime_env\" | tail -1)
-  if [[ -z \"\$current\" ]]; then
-    next='${node_doltgres_db}'
-  elif [[ \",\$current,\" == *\",${node_doltgres_db},\"* ]]; then
-    next=\"\$current\"
-  else
-    next=\"\$current,${node_doltgres_db}\"
-  fi
-  # ATOMIC-OR-REFUSE. This file is the SHARED runtime env every compose service reads.
-  # An in-place sed or append mutates it live, so a reader in that window sees a truncated or
-  # half-appended file — which is how a mid-run failure here bounced production agent auth
-  # for ~5 minutes on 2026-09-17. Render to a temp, VERIFY it, then publish with mv, which is
-  # atomic on one filesystem: a reader sees either the old file or the new one, never a
-  # partial one. A failed render is discarded and the run fails loudly with the file intact.
-  env_tmp=\"\${runtime_env}.reconcile.\$\$\"
-  if grep -qE '^COGNI_NODE_DBS=' \"\$runtime_env\"; then
-    sed \"s|^COGNI_NODE_DBS=.*\$|COGNI_NODE_DBS=\$next|\" \"\$runtime_env\" > \"\$env_tmp\"
-  else
-    { cat \"\$runtime_env\"; printf '%s=%s\n' COGNI_NODE_DBS \"\$next\"; } > \"\$env_tmp\"
-  fi
-  dbs_n=\$(grep -cE '^COGNI_NODE_DBS=' \"\$env_tmp\" || true)
-  new_n=\$(wc -l < \"\$env_tmp\")
-  old_n=\$(wc -l < \"\$runtime_env\")
-  env_guard_fail() {
-    rm -f \"\$env_tmp\"
-    echo \"::error::reconcile-node-substrate[remote]: \$1 (dbs_n=\$dbs_n new_n=\$new_n old_n=\$old_n) — refusing to publish a malformed runtime env; original left intact\" >&2
-    exit 1
-  }
-  [ -s \"\$env_tmp\" ] || env_guard_fail 'rendered runtime env is EMPTY'
-  [ \"\$dbs_n\" = 1 ] || env_guard_fail \"rendered runtime env must hold exactly one COGNI_NODE_DBS line, found \$dbs_n\"
-  [ \"\$new_n\" -ge \"\$old_n\" ] || env_guard_fail 'rendered runtime env LOST lines vs the live file'
-  mv -f \"\$env_tmp\" \"\$runtime_env\"
-  rm -f \"\$runtime_env.bak\"
-  echo '[remote] runtime env published (COGNI_NODE_DBS reconciled) ok'
+  # Shared runtime env is infra-owned. Target provisioners receive scoped overrides.
 
   # Alloy node-label reconcile — stage the fresh config (rsync's restart-on-change
   # half) then the SAME hash-gated restart deploy-infra runs. Born-observable on
@@ -1062,14 +935,13 @@ ${edge_reconcile_snippet}
   echo '[remote] exact runtime compose mounts verified ok'
 
   if ${postgres_provision_here}; then
-  \"\${runtime_compose[@]}\" up -d postgres >/dev/null
-  echo '[remote] postgres up ok'
+  echo '[remote] using existing shared postgres'
   # Single-node db-provision: override COGNI_NODE_DBS to THIS node and inject its
   # per-node OpenBao passwords (read above) via -e, so provision.sh reconciles the
   # per-node app/service roles to the OpenBao value. The passwords transit this SSH
   # command + the docker run env (VM-local, not echoed to CI logs); the declarative
   # endgame (vm-secrets-repair.md) removes this bash transport.
-  \"\${runtime_compose[@]}\" --profile bootstrap run --rm \
+  \"\${runtime_compose[@]}\" --profile bootstrap run --rm --no-deps \
     -e COGNI_NODE_DBS='${node_db}' \
     -e APP_DB_PASSWORD='${app_db_password}' \
     -e APP_DB_SERVICE_PASSWORD='${app_db_service_password}' \
@@ -1093,19 +965,20 @@ ${edge_reconcile_snippet}
     echo '[remote] Postgres already provisioned on lane-local ${postgres_residency_env}; no Postgres mutation on ${SUBSTRATE_CONTROL_ENV}'
   fi
 
-  if \"\${runtime_compose[@]}\" config --services 2>/dev/null | grep -q '^doltgres$'; then
-    \"\${runtime_compose[@]}\" up -d doltgres >/dev/null
-    echo '[remote] doltgres up ok'
-    # bug.5033: node-scope doltgres-provision with its control-resident input,
-    # symmetric with db-provision above. Otherwise doltgres-provision relied on the
-    # env-file COGNI_NODE_DBS (whole fleet) and the surrounding grep gate silently
-    # skips on any compose hiccup → knowledge_<node> uncreated → node-app
-    # Init:CrashLoopBackOff. Scoping to THIS node is deterministic + idempotent.
-    \"\${runtime_compose[@]}\" --profile bootstrap run --rm \
-      -e COGNI_NODE_DBS='${node_doltgres_db}' \
-      ${dg_pw_env} doltgres-provision >/dev/null
-    echo '[remote] doltgres-provision ok'
-${dolt_mirror_reconcile_snippet}  fi" \
+  \"\${runtime_compose[@]}\" config --services | grep -x 'doltgres' >/dev/null || {
+    echo 'shared doltgres prerequisite is missing or unreadable' >&2
+    exit 1
+  }
+  echo '[remote] using existing shared doltgres'
+  # bug.5033: node-scope doltgres-provision with its control-resident input,
+  # symmetric with db-provision above. Otherwise doltgres-provision relied on the
+  # env-file COGNI_NODE_DBS (whole fleet). Missing/unreadable shared prerequisites
+  # refuse above. Scoping to THIS node is deterministic + idempotent.
+  \"\${runtime_compose[@]}\" --profile bootstrap run --rm --no-deps \
+    -e COGNI_NODE_DBS='${node_doltgres_db}' \
+    ${dg_pw_env} doltgres-provision >/dev/null
+  echo '[remote] doltgres-provision ok'
+  " \
   || fail "remote reconcile block failed (rc=$?) — the last '[remote] … ok' breadcrumb above names the last completed step"
 
 CURRENT_ROW=migration_dsn_proven

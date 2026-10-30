@@ -16,6 +16,7 @@ RUN apk add --no-cache g++ make python3
 #    --parents preserves directory structure with wildcards (BuildKit feature)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --parents nodes/operator/app/package.json ./
+COPY --parents nodes/operator/graphs/package.json ./
 COPY --parents packages/*/package.json ./
 COPY --parents nodes/*/app/package.json ./
 COPY --parents nodes/*/packages/*/package.json ./
@@ -167,6 +168,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/src/adapters/s
 # and runs the post-migrate schema check before any tracking-row stamping,
 # closing the silent-skip gap from drizzle-orm's folderMillis-only "applied?"
 # check.
+# The standalone CLI imports the exact released helper index outside Next's trace.
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@cogni-dao/doltgres-admission/dist /app/node_modules/@cogni-dao/doltgres-admission/dist
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@cogni-dao/doltgres-admission/package.json /app/node_modules/@cogni-dao/doltgres-admission/package.json
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/migrate-doltgres.mjs /app/nodes/operator/app/migrate-doltgres.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/verify-doltgres-schema.mjs /app/nodes/operator/app/verify-doltgres-schema.mjs
 
