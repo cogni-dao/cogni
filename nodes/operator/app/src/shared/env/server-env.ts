@@ -256,12 +256,19 @@ export const serverSchema = z.object({
   ANALYTICS_K_THRESHOLD: z.coerce.number().int().positive().default(50),
   ANALYTICS_QUERY_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
 
-  // Compute-substrate spend awareness (story.5011). CHERRY_AUTH_TOKEN is the same Cherry
-  // Servers API token used for provisioning; here it powers the READ-only balance read
-  // exposed on-demand via GET /api/v1/compute/balances (ComputeResourcePort + CherryComputeAdapter).
-  // Optional: when unset the compute capability returns no balances (graceful degradation)
-  // until ESO surfaces the token onto the operator runtime.
+  // Cherry Servers WRITE/provisioning token (tier E, CI-only). The DB-cell containment
+  // write-path reads it from process.env directly; it is NOT the reporting credential and
+  // is deliberately NOT used by the compute/Financials readers (identity-keys-no-overload).
   CHERRY_AUTH_TOKEN: optionalString,
+  // Compute-substrate spend awareness (story.5011, task.5382). CHERRY_REPORT_TOKEN is a
+  // SEPARATE Cherry API key used only for reporting — never the provisioning write token
+  // above (identity-keys-no-overload). Cherry has no read-only key scope (all keys are
+  // account-wide full-access), so this is a distinct key for blast-radius isolation, not a
+  // scope-limited read. It powers the balance read exposed on-demand via
+  // GET /api/v1/compute/balances (ComputeResourcePort + CherryComputeAdapter) and the
+  // Financials Cherry row. Optional: when unset the compute capability returns no balances
+  // (graceful degradation) until ESO surfaces cogni/<env>/operator/CHERRY_REPORT_TOKEN.
+  CHERRY_REPORT_TOKEN: optionalString,
   // The Cherry team whose credit the Financials page reports. The token can see several teams;
   // the report binds to this id and shows UNKNOWN when it is absent or not found (never teams[0]).
   CHERRY_TEAM_ID: optionalString,
@@ -369,6 +376,11 @@ export const serverSchema = z.object({
   OPERATOR_MAX_TOPUP_USD: z.coerce.number().positive().default(500),
 
   // OpenRouter API key — optional. Provider funding disabled when not set.
+  // This is the INFERENCE key. The account-wide /credits reporting read needs a
+  // MANAGEMENT key, which is write-capable (mints/revokes keys) and must NOT live in the
+  // app pod (identity-keys-no-overload, guard-needs-proven-writer). OpenRouter ships no
+  // read-only credential, so the Financials OpenRouter row stays UNKNOWN until an
+  // out-of-band scoped read lands (task.5361) — no provisioning key is declared here.
   OPENROUTER_API_KEY: optionalString,
 
   // OpenRouter crypto payment fee (0–1, default 0.05 = 5%)

@@ -7,7 +7,10 @@
  *   (Cherry today). Akash is deliberately absent: the app holds no Console credential.
  * Scope: Creates ComputeResourcePort from ServerEnv. Does not implement transport.
  * Invariants:
- *   - NO_SECRETS_IN_CONTEXT: CHERRY_AUTH_TOKEN resolved from env here, never passed to tools.
+ *   - NO_SECRETS_IN_CONTEXT: CHERRY_REPORT_TOKEN resolved from env here, never passed to tools.
+ *   - SEPARATE_REPORTING_CREDENTIAL (task.5382, identity-keys-no-overload): the balance read uses
+ *     the dedicated CHERRY_REPORT_TOKEN, never the provisioning/write CHERRY_AUTH_TOKEN. Cherry has
+ *     no read-only key scope, so this is a distinct key for blast-radius isolation.
  *   - CAPABILITY_INJECTION: constructed at bootstrap, injected via the container.
  *   - GRACEFUL_DEGRADATION: unconfigured → empty-balance stub (build stays green; the awareness
  *     surface simply observes zero accounts) until the token reaches the operator runtime via ESO.
@@ -37,13 +40,13 @@ export const stubComputeCapability: ComputeResourcePort = {
 /**
  * Create ComputeResourcePort from server environment.
  *
- * - CHERRY_AUTH_TOKEN set: Cherry billing read.
+ * - CHERRY_REPORT_TOKEN set: Cherry billing read (dedicated reporting key).
  * - Unset: empty-balance stub (graceful degradation).
  */
 export function createComputeCapability(env: ServerEnv): ComputeResourcePort {
-  if (!env.CHERRY_AUTH_TOKEN) return stubComputeCapability;
+  if (!env.CHERRY_REPORT_TOKEN) return stubComputeCapability;
   return new CherryComputeAdapter({
-    authToken: env.CHERRY_AUTH_TOKEN,
+    authToken: env.CHERRY_REPORT_TOKEN,
     timeoutMs: env.COMPUTE_BALANCE_QUERY_TIMEOUT_MS,
   });
 }

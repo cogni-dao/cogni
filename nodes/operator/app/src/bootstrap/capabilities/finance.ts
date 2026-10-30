@@ -176,21 +176,30 @@ export async function createFinanceReaders(): Promise<FinanceReaders> {
     };
   });
 
-  // OpenRouter /credits needs a management key; the inference key must not carry that authority.
-  // The balance stays unknown until task.5361 lands a scoped read; Top up stays reachable.
+  // OpenRouter account-wide /credits needs a MANAGEMENT key, which is WRITE-capable
+  // (it mints and revokes API keys). OpenRouter ships NO read-only credential for
+  // /credits, so there is no key we can safely place in the app pod
+  // (identity-keys-no-overload, guard-needs-proven-writer). The row stays honestly
+  // UNKNOWN until the out-of-band read lands (task.5361): a trusted scheduled job
+  // holds the management key, reads /credits, and writes the balance to a store the
+  // app reads — the write key never enters the app pod. Top up stays reachable.
   const openRouter = unavailableFinanceReader(
     "openrouter:account",
     "OpenRouter credit",
     "prepaid",
-    "needs a management key · task.5361",
+    "needs an out-of-band scoped read · task.5361",
     "unconfigured",
     undefined,
     OPENROUTER_CHECKOUT,
     undefined,
     { rail: STEWARD_RAIL }
   );
+  // Cherry billing read uses a SEPARATE report-only token, never the provisioning
+  // write token CHERRY_AUTH_TOKEN (task.5382, identity-keys-no-overload). Cherry has
+  // no read-only key scope (all keys are account-wide full-access), so this is a
+  // distinct key for blast-radius isolation, not a scope-limited read.
   const cherry = cherryFinanceReader({
-    token: env.CHERRY_AUTH_TOKEN,
+    token: env.CHERRY_REPORT_TOKEN,
     teamId: env.CHERRY_TEAM_ID,
     fetch: safeFetch,
     payAction: CHERRY_CHECKOUT,

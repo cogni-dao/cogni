@@ -1368,7 +1368,9 @@ describe("operator finance evidence", () => {
       label: "OpenRouter credit",
       grade: "UNKNOWN",
       reasonCode: "unconfigured",
-      detail: "needs a management key · task.5361",
+      // OpenRouter's /credits needs a write-capable management key, which must not enter
+      // the pod; the row stays UNKNOWN until an out-of-band scoped read lands (task.5361).
+      detail: "needs an out-of-band scoped read · task.5361",
       rail: { kind: "steward-manual", status: "supported" },
       payAction: { kind: "steward-checkout", vendor: "openrouter" },
     });
@@ -1410,6 +1412,59 @@ describe("operator finance evidence", () => {
     expect(
       fetch.mock.calls.some((call) => String(call[0]).includes("openrouter.ai"))
     ).toBe(false);
+  });
+  it("reads Cherry with the separate report token, and leaves OpenRouter UNKNOWN with no call (task.5382 / task.5361)", async () => {
+    runtime.env = {
+      EVM_RPC_URL: "https://rpc.example",
+      // Inference key present but MUST NOT be used for any reporting read.
+      OPENROUTER_API_KEY: "sk-inference",
+      CHERRY_REPORT_TOKEN: "cherry-report",
+      CHERRY_TEAM_ID: "183728",
+    };
+    // Match on exact hostname, never a URL substring (js/incomplete-url-substring-sanitization).
+    const hostOf = (u: string | URL | Request): string => {
+      try {
+        return new URL(String(u)).hostname;
+      } catch {
+        return "";
+      }
+    };
+    const fetch = vi.fn(async (url: string | URL | Request) => {
+      const host = hostOf(url);
+      if (host === "api.cherryservers.com")
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              id: 183728,
+              credit: { account: { remaining: 25, currency: "USD" } },
+            },
+          ],
+        };
+      return { ok: true, status: 200, json: async () => ({ result: "0x0" }) };
+    });
+    vi.stubGlobal("fetch", fetch);
+    const { readers } = await createFinanceReaders();
+    const snapshot = await takeSnapshot(readers, { timeoutMs: 500 });
+    const byPlane = new Map(snapshot.rows.map((row) => [row.plane, row]));
+    // OpenRouter row stays honestly UNKNOWN — no write-capable key enters the pod,
+    // so no OpenRouter call is made at all (task.5361 out-of-band read pending).
+    expect(byPlane.get("openrouter:account")).toMatchObject({
+      grade: "UNKNOWN",
+      reasonCode: "unconfigured",
+    });
+    expect(
+      fetch.mock.calls.some((call) => hostOf(call[0]) === "openrouter.ai")
+    ).toBe(false);
+    // Cherry read used the SEPARATE report token, never the provisioning CHERRY_AUTH_TOKEN.
+    const cherryCall = fetch.mock.calls.find(
+      (call) => hostOf(call[0]) === "api.cherryservers.com"
+    );
+    expect(cherryCall).toBeDefined();
+    expect((cherryCall?.[1] as RequestInit | undefined)?.headers).toMatchObject(
+      { Authorization: "Bearer cherry-report" }
+    );
   });
   it("bounds the Akash cadence probe: a hung LCD falls back to 5.884 s/block within the budget and keeps every row", async () => {
     vi.useFakeTimers();
