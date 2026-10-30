@@ -716,9 +716,10 @@ spec:
               creation, a never-served XR older than the deadline was a roach motel:
               $closeForBudget latched true, the lease Request stopped rendering, so no
               OBSERVE could ever set $prevSha and no spec change could un-close it. The
-              at/key retain the attempt's render time. The spend deadline starts only
-              after the current paid lease is observed active (bug.5551). An unallocated
-              attempt must keep rendering its Request, even after a long pause/refusal.
+              anchor is latched through status.bootEpoch: same key -> keep the recorded
+              start; key changed -> this render opens a fresh window. A first render (no
+              recorded epoch) keeps creationTimestamp, so every existing XR renders
+              byte-identically until its spec next changes.
             */ -}}
             {{- $bootKey := printf "%s:%d" $desiredSha $leaseGeneration }}
             {{- if gt $recoveryCount 0 }}{{ $bootKey = printf "%s:recover:%d" $bootKey $recoveryCount }}{{ end }}
@@ -730,18 +731,9 @@ spec:
             {{- else if ne $prevBootKey "" }}
             {{- $bootAnchorAt = dateInZone "2006-01-02T15:04:05Z07:00" now "UTC" }}
             {{- end }}
-            {{- $mintedAt := "" }}
-            {{- if eq $prevBootKey $bootKey }}
-            {{- $mintedAt = dig "status" "bootEpoch" "mintedAt" "" $xr | default "" }}
-            {{- end }}
-            {{- if and (eq $mintedAt "") $active (ne $externalName "") (eq $responseKey $currentKey) }}
-            {{- $mintedAt = dateInZone "2006-01-02T15:04:05Z07:00" now "UTC" }}
-            {{- end }}
             {{- $anchorTime := toDate "2006-01-02T15:04:05Z07:00" $bootAnchorAt }}
             {{- $ageSeconds := int (sub (now | unixEpoch) ($anchorTime | unixEpoch)) }}
-            {{- $mintTime := toDate "2006-01-02T15:04:05Z07:00" (default $bootAnchorAt $mintedAt) }}
-            {{- $mintAgeSeconds := int (sub (now | unixEpoch) ($mintTime | unixEpoch)) }}
-            {{- $bootDeadlineAt := dateInZone "2006-01-02T15:04:05Z07:00" ($mintTime | dateModify (printf "%ds" $bootDeadlineSeconds)) "UTC" }}
+            {{- $bootDeadlineAt := dateInZone "2006-01-02T15:04:05Z07:00" ($anchorTime | dateModify (printf "%ds" $bootDeadlineSeconds)) "UTC" }}
             {{- /*
               THE DEADLINE MUST BIND TO THE CURRENT ATTEMPT, NOT TO "EVER SERVED ANYTHING"
               (bug.5287, the arc's original finding). `$prevSha` is the LATCHED
@@ -769,7 +761,7 @@ spec:
               a live node on a false negative is worse than leaving that case to a human; it
               waits on bug.5237's host-routed probe.
             */ -}}
-            {{- $deadlineExceeded := and (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds) }}
+            {{- $deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds) }}
             {{- $closeForBudget := and $deadlineExceeded (eq $onDeadline "Close") }}
 
             {{- /*
@@ -1264,20 +1256,10 @@ spec:
             status:
               phase: {{ $phase | quote }}
               serving: {{ and $active $serving }}
-              {{- if ne $mintedAt "" }}
               bootDeadlineAt: {{ $bootDeadlineAt | quote }}
-              {{- else }}
-              bootDeadlineAt: null
-              {{- end }}
               bootEpoch:
                 key: {{ $bootKey | quote }}
                 at: {{ $bootAnchorAt | quote }}
-                {{- if ne $mintedAt "" }}
-                mintedAt: {{ $mintedAt | quote }}
-                {{- else }}
-                {{- /* Status fields merge: omission would carry the previous attempt's clock. */}}
-                mintedAt: null
-                {{- end }}
               {{- if gt $recoveryCount 0 }}
               recovery:
                 leaseGeneration: {{ $leaseGeneration }}
