@@ -10,7 +10,7 @@
  * Links: task.5385, compute-egress-measurement-writer
  * @internal
  */
-import type { EgressReceiptPort } from "@/ports/egress-receipt.port";
+import type { EgressReceiptPort } from "@/ports";
 import type { EgressReportIdentity } from "@/types/egress-admission";
 import { type EgressReportKeyring, verifyReportCapability } from "./hmac";
 import { isPublicEgressIpv4 } from "./policy";

@@ -11,7 +11,7 @@
  * @internal
  */
 import type postgres from "postgres";
-import type { EgressReceiptPort } from "@/ports/egress-receipt.port";
+import type { EgressReceiptPort } from "@/ports";
 import type {
   EgressObservationSnapshot,
   EgressReceiptObservation,
