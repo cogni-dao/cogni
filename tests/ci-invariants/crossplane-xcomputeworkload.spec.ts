@@ -266,7 +266,7 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     expect(Object.keys(bootEpoch)).toEqual(["key", "at", "mintedAt"]);
     expect(template).toContain('dig "status" "bootEpoch" "mintedAt" "" $xr');
     expect(template).toContain(
-      'and (eq $mintedAt "") $active (ne $externalName "") (eq $responseKey $currentKey)'
+      'and (eq $mintedAt "") $found (not $closed) (ne $externalName "") (eq $responseKey $currentKey)'
     );
     // Explicit null clears the previous attempt through Crossplane's status merge.
     expect((bootEpoch.mintedAt as YamlObject).nullable).toBe(true);
@@ -328,7 +328,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // deadline on it made BOOT_SLO_OR_CLOSE unreachable for the rest of an XR's life — toks5
     // production billed three generations with bootDeadlineAt hours past and reason=None.
     expect(templateCode).toContain(
-      "$deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds)"
+      '$deadlineExceeded := and (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds)'
     );
     // no live template expression may reference the retired predicate
     const live = templateCode

@@ -399,7 +399,7 @@ spec:
                   type: object
                   properties:
                     bootDeadlineSeconds:
-                      description: Seconds from XR creation within which status.serving must become true.
+                      description: Seconds from the first handle-bearing observation of the current paid allocation within which the desired revision must serve. No allocation means no spend deadline.
                       type: integer
                       minimum: 60
                       maximum: 86400
@@ -615,14 +615,15 @@ spec:
                   { type: string, format: date-time, nullable: true }
                 # BOOT EPOCH (bug.5244, bug.5287). The (bundle sha, leaseGeneration,
                 # optional recovery ordinal) attempt this XR's boot deadline is anchored to,
-                # and when that window opened. Latched by the composition so a NEW attempt gets
+                # and when rendering started. Latched by the composition so a NEW attempt gets
                 # a fresh window instead of inheriting the XR's age.
                 bootEpoch:
                   type: object
                   properties:
                     key: { type: string, maxLength: 128 }
                     at: { type: string, format: date-time }
-                    # First active read-back for this paid attempt. Retained across observe
+                    # First handle-bearing read-back for this paid attempt, including pending.
+                    # Retained across observe
                     # failures; null before allocation and cleared for a new attempt key.
                     # Existing active attempts adopt one fresh bounded window on rollout.
                     mintedAt:

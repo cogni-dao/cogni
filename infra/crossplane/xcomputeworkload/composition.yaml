@@ -717,7 +717,7 @@ spec:
               $closeForBudget latched true, the lease Request stopped rendering, so no
               OBSERVE could ever set $prevSha and no spec change could un-close it. The
               at/key retain the attempt's render time. The spend deadline starts only
-              after the current paid lease is observed active (bug.5551). An unallocated
+              after the current paid allocation is observed (bug.5551). An unallocated
               attempt must keep rendering its Request, even after a long pause/refusal.
             */ -}}
             {{- $bootKey := printf "%s:%d" $desiredSha $leaseGeneration }}
@@ -734,7 +734,7 @@ spec:
             {{- if eq $prevBootKey $bootKey }}
             {{- $mintedAt = dig "status" "bootEpoch" "mintedAt" "" $xr | default "" }}
             {{- end }}
-            {{- if and (eq $mintedAt "") $active (ne $externalName "") (eq $responseKey $currentKey) }}
+            {{- if and (eq $mintedAt "") $found (not $closed) (ne $externalName "") (eq $responseKey $currentKey) }}
             {{- $mintedAt = dateInZone "2006-01-02T15:04:05Z07:00" now "UTC" }}
             {{- end }}
             {{- $anchorTime := toDate "2006-01-02T15:04:05Z07:00" $bootAnchorAt }}
