@@ -17,6 +17,16 @@ packages:
   # hand-installed on the production VM on 2026-09-09 while diagnosing
   # bug.5105; declaring it here is what makes a rebuilt VM reproducible.
   - sqlite3
+  # Fixed native H1 prerequisites; provision before admission, never in flight.
+  - python3
+  - ipset
+  - iptables
+  - util-linux
+  - iproute2
+  - openssh-server
+  - openssh-client
+  - procps
+  - coreutils
 
 swap:
   filename: /swapfile
