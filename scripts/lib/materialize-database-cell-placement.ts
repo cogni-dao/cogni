@@ -63,6 +63,8 @@ export function projectDatabaseCellPlacement(input: unknown) {
     } = AppliedInputSchema.parse(input);
 
     const b = receipt.binding;
+    // Current custody owns connection bytes. The cutover receipt owns retained-state history.
+    const currentEndpoint = new URL(custody.app.dsn);
     if (
       !receipt.registration ||
       b.phase !== "applied" ||
@@ -79,12 +81,9 @@ export function projectDatabaseCellPlacement(input: unknown) {
       b.appRole !== custody.appRole ||
       b.serviceRole !== custody.serviceRole ||
       b.budgetProfile !== custody.budgetProfile ||
-      b.endpoint.host !== custody.canonicalEndpointHost ||
-      b.endpoint.tlsMode !== "verify-full" ||
-      b.endpoint.port !== Number(new URL(custody.app.dsn).port) ||
-      b.endpoint.port !== Number(new URL(custody.service.dsn).port) ||
-      b.endpoint.tlsCertificateSha256 !==
-        createHash("sha256").update(custody.tlsCertificate).digest("hex") ||
+      currentEndpoint.port !== new URL(custody.service.dsn).port ||
+      (custody.readOnlyProbe !== undefined &&
+        currentEndpoint.port !== new URL(custody.readOnlyProbe.dsn).port) ||
       receipt.registration.migrationConsumer !== custody.migration.kind ||
       receipt.registration.tlsTrustKind !== custody.tls.kind ||
       JSON.stringify(receipt.registration.runtimePoolLimits) !==
@@ -103,24 +102,13 @@ export function projectDatabaseCellPlacement(input: unknown) {
       (custody.migration.kind === "dedicated-migration-url" &&
         (b.migrationRole !==
           decodeURIComponent(new URL(migrationDsn).username) ||
-          b.endpoint.port !== Number(new URL(migrationDsn).port)))
+          currentEndpoint.port !== new URL(migrationDsn).port))
     )
       throw new Error(
         "applied migration consumer differs from audited binding"
       );
     const sha = (value: string) =>
       createHash("sha256").update(value).digest("hex");
-    if (
-      receipt.registration.appDsnSha256 !== sha(custody.app.dsn) ||
-      receipt.registration.serviceDsnSha256 !== sha(custody.service.dsn) ||
-      receipt.registration.migrationDsnSha256 !== sha(migrationDsn) ||
-      (custody.tls.kind === "private-ca"
-        ? receipt.registration.tlsCaSha256 !== sha(custody.tls.caCertificate)
-        : receipt.registration.tlsCaSha256 !== undefined)
-    )
-      throw new Error(
-        "applied consumer bytes differ from authenticated custody"
-      );
     const publicValues = {
       DATABASE_URL: custody.app.dsn,
       DATABASE_SERVICE_URL: custody.service.dsn,

@@ -10,10 +10,9 @@
  * @internal
  */
 import { spawnSync } from "node:child_process";
-import { createHash, X509Certificate } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { checkServerIdentity, type PeerCertificate } from "node:tls";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { parse } from "yaml";
@@ -242,7 +241,7 @@ async function run(lane: string, node: string, verifyOnly: boolean) {
   const cell = readBank(`${node}-database-cell`),
     app = readBank(node),
     migration = readBank(`${node}-database-migration`);
-  const { receipt, custody, probeDsn } = validateDedicatedCustody({
+  const { custody, probeDsn } = validateDedicatedCustody({
     node,
     nodeId: catalog.node_id,
     cell,
@@ -304,10 +303,6 @@ async function run(lane: string, node: string, verifyOnly: boolean) {
     if (Object.entries(expected).some(([key, value]) => values[key] !== value))
       throw new Error("dedicated_cell_projected_secret_mismatch");
   }
-  const certificate = new X509Certificate(custody.tlsCertificate);
-  const expectedCertificate = createHash("sha256")
-    .update(certificate.raw)
-    .digest("hex");
   const connect = (dsn: string) => {
     const url = new URL(dsn);
     return postgres({
@@ -329,12 +324,6 @@ async function run(lane: string, node: string, verifyOnly: boolean) {
         ...(custody.tls.kind === "private-ca"
           ? { ca: custody.tls.caCertificate }
           : {}),
-        checkServerIdentity: (_hostname: string, cert: PeerCertificate) =>
-          checkServerIdentity(url.hostname, cert) ??
-          (createHash("sha256").update(cert.raw).digest("hex") ===
-          expectedCertificate
-            ? undefined
-            : new Error("dedicated_cell_tls_leaf_mismatch")),
       },
     });
   };
@@ -343,12 +332,11 @@ async function run(lane: string, node: string, verifyOnly: boolean) {
     const rows = await probe.begin(
       "read only",
       (tx) =>
-        tx`SELECT current_database() AS database, session_user AS role, (SELECT system_identifier::text FROM pg_control_system()) AS identity, current_setting('transaction_read_only') AS readonly, (SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()) AS tls`
+        tx`SELECT current_database() AS database, session_user AS role, current_setting('transaction_read_only') AS readonly, (SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()) AS tls`
     );
     const observed = rows[0];
     if (
-      observed?.identity !== receipt.binding.systemIdentifier ||
-      observed.database !== custody.databaseName ||
+      observed?.database !== custody.databaseName ||
       observed.role !== decodeURIComponent(new URL(probeDsn).username) ||
       observed.readonly !== "on" ||
       observed.tls !== true
@@ -422,7 +410,8 @@ async function run(lane: string, node: string, verifyOnly: boolean) {
       event: "dedicated_cell_substrate_verified",
       nodeId: catalog.node_id,
       environment: lane,
-      systemIdentifier: receipt.binding.systemIdentifier,
+      databaseHost: custody.canonicalEndpointHost,
+      databasePort: Number(new URL(custody.app.dsn).port),
       receiptSha256: hash(cell.DATABASE_CELL_PLACEMENT_RECEIPT_JSON),
       sharedPostgresProvisioned: false,
       nativeMutations: false,
