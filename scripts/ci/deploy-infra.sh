@@ -2830,6 +2830,17 @@ rsync -av -e "ssh $SSH_OPTS" \
   "$REPO_ROOT/infra/compose/runtime/" \
   root@"$VM_HOST":/opt/cogni-template-runtime/
 
+# H1: run the SAME fixed native gate after pinned edge/runtime source delivery,
+# before remote reconciliation or staging its secret env file. Success continues
+# through every existing convergence/verification action below.
+if [[ "$DEPLOY_ENVIRONMENT" == "candidate-a" ]]; then
+  (cd "$REPO_ROOT" && python3 infra/compose/edge/host-admission/source_manifest.py) > "$ARTIFACT_DIR/host-admission-source.json"
+  ssh $SSH_OPTS root@"$VM_HOST" "test ! -L /opt/cogni-host-admission-test-delivery && install -d -o root -g root -m 0700 /opt/cogni-host-admission-test-delivery"
+  scp $SSH_OPTS "$ARTIFACT_DIR/host-admission-source.json" root@"$VM_HOST":/opt/cogni-host-admission-test-delivery/source.json
+  scp $SSH_OPTS "$REPO_ROOT/infra/compose/edge/host-admission/test_delivery.py" root@"$VM_HOST":/opt/cogni-host-admission-test-delivery/test_delivery.py
+  ssh $SSH_OPTS root@"$VM_HOST" "exec /usr/bin/python3 -I /opt/cogni-host-admission-test-delivery/test_delivery.py"
+fi
+
 # Upload Argo CD Image Updater kustomize tree (bug.0344 — consumed by Step 7b
 # in the remote script). Scoped to the image-updater subtree only; the rest
 # of infra/k8s/argocd/ (ApplicationSets) is reconciled by promote-and-deploy.yml /
@@ -2936,15 +2947,6 @@ scp $SSH_OPTS "$REMOTE_ENV_FILE" root@"$VM_HOST":/tmp/deploy-infra-env.sh
 ssh $SSH_OPTS root@"$VM_HOST" \
     "set -a; . /tmp/deploy-infra-env.sh; set +a; rm -f /tmp/deploy-infra-env.sh; bash /tmp/deploy-infra-remote.sh"
 rm -f "$REMOTE_ENV_FILE"
-
-# H1: fixed reviewed bytes + isolated proof only; keep every legacy host action.
-if [[ "$DEPLOY_ENVIRONMENT" == "candidate-a" ]]; then
-  (cd "$REPO_ROOT" && python3 infra/compose/edge/host-admission/source_manifest.py) > "$ARTIFACT_DIR/host-admission-source.json"
-  ssh $SSH_OPTS root@"$VM_HOST" "test ! -L /opt/cogni-host-admission-test-delivery && install -d -o root -g root -m 0700 /opt/cogni-host-admission-test-delivery"
-  scp $SSH_OPTS "$ARTIFACT_DIR/host-admission-source.json" root@"$VM_HOST":/opt/cogni-host-admission-test-delivery/source.json
-  scp $SSH_OPTS "$REPO_ROOT/infra/compose/edge/host-admission/test_delivery.py" root@"$VM_HOST":/opt/cogni-host-admission-test-delivery/test_delivery.py
-  ssh $SSH_OPTS root@"$VM_HOST" "exec /usr/bin/python3 -I /opt/cogni-host-admission-test-delivery/test_delivery.py"
-fi
 
 emit_deployment_event "infra_deployment.complete" "success" "Infrastructure deployment completed"
 log_info "Infrastructure deployment complete!"

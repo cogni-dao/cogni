@@ -119,6 +119,24 @@ class Tests(unittest.TestCase):
     with self.assertRaisesRegex(AssertionError,'host save input overflow'):h.legacy_snapshot('/usr/sbin/iptables-save')
   with self.assertRaisesRegex(AssertionError,'incomplete native save'):
    h.legacy_policy(base)
+ def test_preservation_includes_all_transitive_callers_and_cycles(self):
+  from integration_selftest import legacy_policy
+  base='*filter\n:FORWARD DROP [0:0]\n:OUTER - [0:0]\n:INNER - [0:0]\n:DOCKER-USER - [0:0]\n:KUBE-EP - [0:0]\n-A FORWARD -j OUTER\n-A OUTER -s 8.8.8.8 -j ACCEPT\n-A OUTER -j INNER\n-A INNER -j DOCKER-USER\n-A DOCKER-USER -m comment --comment "cogni:fence" -j DROP\n'
+  expected=legacy_policy(base+'COMMIT\n')
+  self.assertEqual(set(expected['filter']),{'FORWARD','OUTER','INNER','DOCKER-USER'})
+  self.assertEqual(expected['filter']['OUTER']['rules'],[['-A','OUTER','-s','8.8.8.8','-j','ACCEPT'],['-A','OUTER','-j','INNER']])
+  for changed in (base.replace('-A OUTER -j INNER','-A OUTER -j ACCEPT'),base.replace('-A OUTER -s 8.8.8.8 -j ACCEPT','-A OUTER -j ACCEPT'),base.replace('-A OUTER -s 8.8.8.8 -j ACCEPT\n-A OUTER -j INNER','-A OUTER -j INNER\n-A OUTER -s 8.8.8.8 -j ACCEPT')):
+   self.assertNotEqual(expected,legacy_policy(changed+'COMMIT\n'))
+  self.assertEqual(set(legacy_policy(base.replace('-A OUTER -j INNER','-A OUTER -g INNER')+'COMMIT\n')['filter']),set(expected['filter']))
+  cyclic=base+'-A INNER -j OUTER\n'
+  snapshot=legacy_policy(cyclic+'COMMIT\n')
+  self.assertEqual(set(snapshot['filter']),set(expected['filter']))
+  self.assertNotEqual(snapshot,expected)
+  self.assertNotEqual(snapshot,legacy_policy(cyclic.replace('-A OUTER -s 8.8.8.8 -j ACCEPT','-A OUTER -s 1.1.1.1 -j ACCEPT')+'COMMIT\n'))
+  self.assertNotEqual(snapshot,legacy_policy(cyclic.replace(':FORWARD DROP',':FORWARD ACCEPT')+'COMMIT\n'))
+  self.assertEqual(snapshot,legacy_policy(cyclic+('-A KUBE-EP -d 10.0.0.1 -j ACCEPT\n'*6000)+'COMMIT\n'))
+  with self.assertRaisesRegex(AssertionError,'relevant host policy overflow'):
+   legacy_policy(cyclic+('-A OUTER -s 8.8.8.8 -j ACCEPT\n'*6000)+'COMMIT\n')
  def test_reboot_backward_above_saved_wall_never_revives_old_snapshot(self):
   r=self.request();self.apply(r);history=copy.deepcopy(self.e.load()['owners'])
   # Real elapsed time may exceed expiry, but post-reboot unsynced wall remains

@@ -202,8 +202,21 @@ def legacy_policy(raw):
                 if target in chains and target not in owned:
                     owned.add(target)
                     pending.append(target)
-        callers = {name for name, targets in edges.items() if targets & owned}
-        selected = owned | callers | ({'FORWARD'} if table == 'filter' else set())
+        # Every ancestor can bypass the protected path before its next jump.
+        # Reverse reachability must therefore include callers of callers too.
+        reverse = {}
+        for caller, targets in edges.items():
+            for target in targets:
+                reverse.setdefault(target, set()).add(caller)
+        callers = set(owned)
+        pending = list(owned)
+        while pending:
+            check(time.monotonic() < deadline, 'host save parse deadline')
+            for caller in reverse.get(pending.pop(), ()):
+                if caller not in callers:
+                    callers.add(caller)
+                    pending.append(caller)
+        selected = callers | ({'FORWARD'} if table == 'filter' else set())
         if selected:
             result[table] = {name: {'policy': chains[name], 'rules': []} for name in sorted(selected)}
     stream.seek(0)
