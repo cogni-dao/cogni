@@ -3,8 +3,8 @@
 /**
  * Module: `@scripts/lib/run-node-substrate`
  * Purpose: Route day-2 substrate readiness to the workload's database placement.
- * Scope: Verify admitted manual cells and delegate shared lanes. Does not provision new cells or mutate native roles.
- * Invariants: No shared Postgres provisioner or native mutation for an admitted dedicated target; initial admission stays immutable.
+ * Scope: Verify current dedicated credentials, TLS, roles and budgets; delegate shared lanes. Does not provision cells or mutate native roles.
+ * Invariants: Current custody owns connection bytes. Retained-instance identity belongs to native recovery, not routine release readiness.
  * Side-effects: IO (existing canonical writer, SSH/Kubernetes reads, idempotent ESO refresh, bounded read-only PostgreSQL transactions).
  * Links: docs/spec/databases.md, scripts/ci/run-node-substrate.sh, scripts/lib/materialize-database-cell-placement.ts
  * @internal

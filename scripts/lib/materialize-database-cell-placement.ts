@@ -5,7 +5,7 @@
  * Module: `@scripts/lib/materialize-database-cell-placement`
  * Purpose: Derive scoped cell projections from an audited allocation binding and private component custody.
  * Scope: Validates JSON and composes values; does not query providers, mutate databases, or publish secrets.
- * Invariants: Readiness never changes public DSNs; only approved production cutover replaces the shared endpoint.
+ * Invariants: Current custody owns applied connection bytes; receipts retain admission/data history. Readiness never publishes or changes DSNs.
  * Side-effects: IO (CLI stdin/stdout)
  * Links: docs/spec/secrets-management.md, shared/secrets/database-cell-binding.data.ts
  * @internal
