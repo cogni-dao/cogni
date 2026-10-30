@@ -62,6 +62,14 @@ node scripts/run-scoped-package-build.mjs
 pnpm check:docs
 ```
 
+## Start the local app separately
+
+Worktree setup prepares dependencies and cognition; it does not start the app or graph
+server. Follow this checkout's [README](../../README.md) for local startup and the
+[API validation guide](agent-api-validation.md) for authenticated route proof. The
+[portable guide replacement](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-32ab8994)
+is pending human review. Use the node's own environment example and commands.
+
 ## Why Package Declarations Are Required
 
 Workspace packages (`packages/ai-core`, `packages/scheduler-core`, etc.) publish TypeScript declarations from `dist/`. Without declaration output, Vite/vitest cannot resolve their entry points and tests fail with:
