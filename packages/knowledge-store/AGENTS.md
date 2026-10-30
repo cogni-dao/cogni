@@ -43,6 +43,8 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 **Root barrel** (`@cogni/knowledge-store`):
 
+- Domain registry: `getDomain`, `updateDomain`, `deleteDomain`; shared `DomainPatch` and `DomainNotEmptyError`. Private admitted mutations forward a per-call scope-checked SQL function to the published domain operations. Only shared missing-domain errors convert to the existing private constructor.
+
 - Types: `KnowledgeWriteSession`, `KnowledgeStorePort`, `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
 - Governing index: `GOVERNING_ENTRY_TYPES`, `isGoverningEntryType`, `selectGoverningIndex`, `GoverningIndexRow` — the one definition of governing guidance, read through `KnowledgeStorePort.listGoverningIndex` (guidance-routing-design)
 - Schemas: `KnowledgeSchema`, `NewKnowledgeSchema`, `DoltCommitSchema`, `DoltDiffEntrySchema`, `SourceTypeSchema`

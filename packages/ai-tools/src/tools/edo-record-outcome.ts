@@ -16,6 +16,7 @@
  * @public
  */
 
+import { KnowledgeRowSchema } from "@cogni/shared-knowledge-store/contracts";
 import { z } from "zod";
 
 import type { EdoCapability } from "../capabilities/edo";
@@ -54,13 +55,7 @@ export const EdoRecordOutcomeInputSchema = z.object({
 export type EdoRecordOutcomeInput = z.infer<typeof EdoRecordOutcomeInputSchema>;
 
 export const EdoRecordOutcomeOutputSchema = z.object({
-  outcome: z.object({
-    id: z.string(),
-    domain: z.string(),
-    title: z.string(),
-    confidencePct: z.number().nullable(),
-    sourceType: z.string(),
-  }),
+  outcome: KnowledgeRowSchema,
   hypothesisId: z.string(),
   edge: z.string(),
   resolvedConfidence: z.number(),
@@ -129,13 +124,7 @@ export function createEdoRecordOutcomeImplementation(
       });
 
       return {
-        outcome: {
-          id: result.outcome.id,
-          domain: result.outcome.domain,
-          title: result.outcome.title,
-          confidencePct: result.outcome.confidencePct,
-          sourceType: result.outcome.sourceType,
-        },
+        outcome: { ...result.outcome },
         hypothesisId: result.hypothesisId,
         edge: input.edge,
         resolvedConfidence: result.resolvedConfidence,

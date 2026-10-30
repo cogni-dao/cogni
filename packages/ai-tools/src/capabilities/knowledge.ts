@@ -13,44 +13,25 @@
  * @public
  */
 
-/**
- * Confidence score defaults for knowledge entries.
- *
- * - DRAFT (30%): Agent-produced, unverified. Default for all new writes.
- * - VERIFIED (80%): Human-reviewed OR agent-confirmed with fresh sources.
- * - HARDENED (95%): Outcome-validated, statistically significant, or repeatedly confirmed.
- */
-export const CONFIDENCE = {
-  DRAFT: 30,
-  VERIFIED: 80,
-  HARDENED: 95,
-} as const;
+import type {
+  KnowledgeRow as KnowledgeEntry,
+  KnowledgeCapability as SharedKnowledgeCapability,
+  KnowledgeListParams as SharedKnowledgeListParams,
+  KnowledgeSearchParams as SharedKnowledgeSearchParams,
+  KnowledgeWriteParams as SharedKnowledgeWriteParams,
+} from "@cogni/shared-knowledge-store/contracts";
 
-export interface KnowledgeEntry {
-  id: string;
-  domain: string;
-  entityId: string | null;
-  title: string;
-  content: string;
-  confidencePct: number | null;
-  sourceType: string;
-  sourceRef: string | null;
-  tags: string[] | null;
-}
+export {
+  type ActiveGoalInfo,
+  CONFIDENCE,
+  type KnowledgeRow as KnowledgeEntry,
+} from "@cogni/shared-knowledge-store/contracts";
 
-export interface KnowledgeSearchParams {
-  domain: string;
-  query: string;
-  limit?: number;
-  /** Include EDO rows (event/hypothesis/decision/outcome). Default false. */
+export interface KnowledgeSearchParams extends SharedKnowledgeSearchParams {
+  /** Operator browse callers may opt in to EDO machinery. */
   includeEdo?: boolean;
 }
-
-export interface KnowledgeListParams {
-  domain: string;
-  tags?: string[];
-  limit?: number;
-  /** Include EDO rows (event/hypothesis/decision/outcome). Default false. */
+export interface KnowledgeListParams extends SharedKnowledgeListParams {
   includeEdo?: boolean;
 }
 
@@ -67,15 +48,7 @@ export interface KnowledgeWriteCitation {
   context?: string;
 }
 
-export interface KnowledgeWriteParams {
-  id: string;
-  domain: string;
-  title: string;
-  content: string;
-  sourceType: "human" | "analysis_signal" | "external" | "derived";
-  entityId?: string;
-  sourceRef?: string;
-  tags?: string[];
+export interface KnowledgeWriteParams extends SharedKnowledgeWriteParams {
   /** Outgoing edges (citing = this entry) committed in the same write. */
   citations?: KnowledgeWriteCitation[];
 }
@@ -84,21 +57,10 @@ export interface KnowledgeWriteParams {
  * Knowledge capability — injected into tool implementations at runtime.
  * Backed by KnowledgeStorePort + auto-commit on writes.
  */
-export interface KnowledgeCapability {
-  /** Search knowledge by domain + text query */
+export interface KnowledgeCapability extends SharedKnowledgeCapability {
   search(params: KnowledgeSearchParams): Promise<KnowledgeEntry[]>;
-  /** List knowledge by domain, optionally filtered by tags */
   list(params: KnowledgeListParams): Promise<KnowledgeEntry[]>;
-  /** Get a single knowledge entry by ID */
-  get(id: string): Promise<KnowledgeEntry | null>;
-  /** Write a knowledge entry + auto-commit. Returns the entry with defaults applied. */
   write(params: KnowledgeWriteParams): Promise<KnowledgeEntry>;
-  /**
-   * The approved DAO goals (ONE_GOAL_LIST, dao-goals-design): merged `goal-*` atoms, not deprecated.
-   * Optional: a node whose store has no goal reader omits it and `core__goal_list` reports goals
-   * unavailable.
-   */
-  listActiveGoals?(): Promise<readonly ActiveGoalInfo[]>;
   /**
    * The hub's governing guidance index (guidance-routing-design): every governing row across all
    * domains with its use-when trigger, sorted by domain then id. Optional: a node whose store has no
@@ -113,14 +75,4 @@ export interface GoverningIndexEntry {
   readonly domain: string;
   readonly entryType: string;
   readonly useWhen: string;
-}
-
-/** One approved DAO goal as tools see it. */
-export interface ActiveGoalInfo {
-  readonly id: string;
-  readonly title: string;
-  /** The goal statement (KPI, baseline, target, by, serves-mission). */
-  readonly content: string;
-  /** ISO `By:` deadline, when set. */
-  readonly evaluateAt: string | null;
 }

@@ -3,11 +3,11 @@
 
 /**
  * Module: `@contracts/knowledge.domains.v1.contract`
- * Purpose: HTTP contract for the knowledge domain registry — GET list with entry counts and POST register (cookie-session only).
+ * Purpose: HTTP contract for the knowledge domain registry — list/register plus item read, update and delete.
  * Scope: Zod schemas for the wire format. Does not contain business logic, I/O, or auth policy.
  * Invariants:
- *   - DOMAIN_HTTP_COOKIE_ONLY (route enforces; contract does not).
- *   - DOMAIN_REGISTRATION_IS_STICKY: no DELETE/PUT in v0.
+ *   - List retains cookie-only auth; item verbs match bearer/session registration auth.
+ *   - Domain IDs are immutable; item PATCH changes name/description only.
  *   - id is short, slug-shaped (alnum, dash, underscore).
  * Side-effects: none
  * Links: docs/spec/knowledge-domain-registry.md
@@ -16,7 +16,7 @@
 
 import { z } from "zod";
 
-const DomainIdSchema = z
+export const DomainIdSchema = z
   .string()
   .min(2)
   .max(64)
@@ -48,3 +48,53 @@ export type DomainsCreateRequest = z.infer<typeof DomainsCreateRequestSchema>;
 
 export const DomainsCreateResponseSchema = DomainSchema;
 export type DomainsCreateResponse = z.infer<typeof DomainsCreateResponseSchema>;
+
+/** Item route contracts. The store owns no-op, non-empty and missing-domain behavior. */
+export const DomainsUpdateBodySchema = z
+  .strictObject({
+    name: z.string().min(1).max(128).optional(),
+    description: z.string().max(512).nullable().optional(),
+  })
+  .refine((body) => body.name !== undefined || body.description !== undefined, {
+    message: "patch must set at least one of: name, description",
+  });
+export type DomainsUpdateBody = z.infer<typeof DomainsUpdateBodySchema>;
+
+export const domainsGetOperation = {
+  input: z.object({ domain: DomainIdSchema }),
+  output: DomainSchema,
+} as const;
+export const domainsUpdateOperation = {
+  input: z.object({ domain: DomainIdSchema, body: DomainsUpdateBodySchema }),
+  output: DomainSchema,
+} as const;
+export const domainsDeleteOperation = {
+  input: z.object({ domain: DomainIdSchema }),
+  output: z.object({ id: z.string(), deleted: z.literal(true) }),
+} as const;
+
+/** Item handler refusals and native write receipts. */
+export const DomainsErrorResponseSchema = z.object({
+  error: z.string(),
+  errorCode: z.enum([
+    "unauthorized",
+    "invalid_json",
+    "invalid_input",
+    "domain_not_found",
+    "domain_not_empty",
+    "domain_protected",
+    "store_not_configured",
+    "knowledge_write_outcome_unknown",
+    "knowledge_write_scope_required",
+    "knowledge_write_conflict",
+    "knowledge_busy",
+  ]),
+  retryable: z.boolean().optional(),
+  entryCount: z.number().int().optional(),
+  issues: z.array(z.unknown()).optional(),
+  operationId: z.string().optional(),
+  branch: z.string().optional(),
+  commitHash: z.string().nullable().optional(),
+  entryId: z.string().optional(),
+});
+export type DomainsErrorResponse = z.infer<typeof DomainsErrorResponseSchema>;

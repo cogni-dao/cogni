@@ -69,7 +69,7 @@
     "db:migrate:operator:doltgres:container": "tsx node_modules/drizzle-kit/bin.cjs migrate --config=nodes/operator/drizzle.doltgres.config.ts && node nodes/operator/packages/doltgres-schema/stamp-commit.mjs",
     "db:provision": "docker compose --env-file .env.local -f infra/compose/runtime/docker-compose.dev.yml --profile bootstrap run --rm db-provision && pnpm db:provision:doltgres",
     "db:provision:doltgres": "docker compose --env-file .env.local -f infra/compose/runtime/docker-compose.dev.yml --profile bootstrap run --rm doltgres-provision",
-    "doltgres:nuke": "docker stop doltgres 2>/dev/null; docker rm doltgres 2>/dev/null; docker volume rm doltgres_data 2>/dev/null; echo '✅ Doltgres nuked (container + volume)'",
+    "doltgres:nuke": "docker stop doltgres 2>/dev/null; docker rm doltgres 2>/dev/null; docker volume rm doltgres_data 2>/dev/null; echo '\u2705 Doltgres nuked (container + volume)'",
     "db:provision:test": "docker compose --env-file .env.test -f infra/compose/runtime/docker-compose.dev.yml --profile bootstrap run --rm db-provision && docker compose --env-file .env.test -f infra/compose/runtime/docker-compose.dev.yml --profile bootstrap run --rm doltgres-provision",
     "db:migrate": "pnpm db:migrate:dev",
     "db:migrate:dev": "dotenv -e .env.local -- tsx node_modules/drizzle-kit/bin.cjs migrate --config=nodes/operator/drizzle.config.ts",
@@ -213,14 +213,16 @@
     "@cogni/repo-spec": "workspace:*",
     "@cogni/scheduler-core": "workspace:*",
     "@cogni/temporal-workflows": "workspace:*",
-    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.5/cogni-dao-work-items-0.2.5.tgz",
+    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz",
     "@privy-io/node": "^0.10.1",
     "cron-parser": "^4.9.0",
     "drizzle-orm": "^0.44.7",
     "pino": "^10.1.0",
     "postgres": "^3.4.5",
     "prom-client": "^15.1.3",
-    "zod": "^4.1.12"
+    "zod": "^4.1.12",
+    "@cogni-dao/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz",
+    "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz"
   },
   "devDependencies": {
     "@0xsplits/splits-sdk": "6.4.1",

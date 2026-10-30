@@ -14,6 +14,8 @@
 
 import { buildKnowledgeGraph, type Citation } from "@cogni/knowledge-store";
 import { FakeKnowledgeStoreAdapter } from "@cogni/knowledge-store/adapters/fake";
+import { KnowledgeRowSchema } from "@cogni/node-contracts";
+import { KnowledgeRowSchema as CanonicalKnowledgeRowSchema } from "@cogni/shared-knowledge-store/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -60,6 +62,10 @@ async function seed() {
 }
 
 describe("knowledge SSR loaders", () => {
+  it("uses the published canonical knowledge envelope", () => {
+    expect(KnowledgeRowSchema).toBe(CanonicalKnowledgeRowSchema);
+  });
+
   it("loadKnowledgeList returns JSON-safe wire rows (createdAt string|null, not Date)", async () => {
     const store = await seed();
     const res = await loadKnowledgeList(store, { limit: 500 });

@@ -57,7 +57,9 @@ import {
   CitationTypeMismatchError,
   type Domain,
   DomainAlreadyRegisteredError,
+  DomainNotEmptyError,
   DomainNotRegisteredError,
+  type DomainPatch,
   HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
   KnowledgeWriteScopeRequiredError,
@@ -261,6 +263,50 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
         (r) => r.domain === d.id
       ).length,
     }));
+  }
+
+  async getDomain(id: string): Promise<Domain | null> {
+    return (
+      (await this.listDomainsFull()).find((domain) => domain.id === id) ?? null
+    );
+  }
+
+  async updateDomain(id: string, patch: DomainPatch): Promise<Domain> {
+    return this.withWrite(
+      { operationId: `domain.update:${id}`, message: `update domain ${id}` },
+      async (write) => {
+        if (!(write instanceof FakeKnowledgeStoreAdapter))
+          throw new KnowledgeWriteScopeRequiredError();
+        write.assertWriteScope();
+        const existing = await write.getDomain(id);
+        if (!existing) throw new DomainNotRegisteredError(id);
+        const updated = {
+          ...existing,
+          ...(patch.name !== undefined && { name: patch.name }),
+          ...(patch.description !== undefined && {
+            description: patch.description,
+          }),
+        };
+        write.domainsMap.set(id, updated);
+        return updated;
+      }
+    );
+  }
+
+  async deleteDomain(id: string): Promise<void> {
+    return this.withWrite(
+      { operationId: `domain.delete:${id}`, message: `delete domain ${id}` },
+      async (write) => {
+        if (!(write instanceof FakeKnowledgeStoreAdapter))
+          throw new KnowledgeWriteScopeRequiredError();
+        write.assertWriteScope();
+        const existing = await write.getDomain(id);
+        if (!existing) throw new DomainNotRegisteredError(id);
+        if (existing.entryCount > 0)
+          throw new DomainNotEmptyError(id, existing.entryCount);
+        write.domainsMap.delete(id);
+      }
+    );
   }
 
   async registerDomain(input: NewDomain): Promise<Domain> {

@@ -15,10 +15,11 @@ import { describe, expect, it } from "vitest";
 
 import { createKnowledgeCapability } from "../src/capability.js";
 import { KnowledgeGateError } from "../src/domain/gates/index.js";
-import type {
-  Knowledge,
-  NewCitation,
-  NewKnowledge,
+import {
+  type Knowledge,
+  KnowledgeSchema,
+  type NewCitation,
+  type NewKnowledge,
 } from "../src/domain/schemas.js";
 import type {
   KnowledgeStorePort,
@@ -26,22 +27,10 @@ import type {
 } from "../src/port/knowledge-store.port.js";
 
 function stubKnowledge(entry: NewKnowledge): Knowledge {
-  return {
-    id: entry.id,
-    domain: entry.domain,
-    entityId: entry.entityId ?? null,
-    title: entry.title,
-    content: entry.content,
-    entryType: entry.entryType ?? "finding",
-    status: entry.status ?? "draft",
-    confidencePct: entry.confidencePct ?? 30,
-    sourceType: entry.sourceType,
-    sourceRef: entry.sourceRef ?? null,
-    sourceNode: entry.sourceNode ?? null,
-    tags: entry.tags ?? null,
-    createdAt: "2026-05-27T00:00:00.000Z",
-    updatedAt: "2026-05-27T00:00:00.000Z",
-  };
+  return KnowledgeSchema.parse({
+    ...entry,
+    createdAt: new Date("2026-05-27T00:00:00.000Z"),
+  });
 }
 
 function makeStubPort(rejectCitation = false) {
@@ -164,6 +153,7 @@ describe("createKnowledgeCapability — write path with v0 gates", () => {
     });
 
     expect(entry.id).toBe("fed-rate-base-rate");
+    expect(entry.createdAt).toBe("2026-05-27T00:00:00.000Z");
     expect(calls.upsert).toHaveLength(1);
     expect(calls.upsert[0]?.id).toBe("fed-rate-base-rate");
     expect(calls.commits).toHaveLength(1);

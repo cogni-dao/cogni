@@ -11,6 +11,7 @@
  * @internal
  */
 
+import { WorkItemDtoSchema } from "@cogni/work-items";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -37,15 +38,20 @@ function capabilityReturning(
   };
 }
 
-const BASE: WorkItemInfo = {
+const BASE = WorkItemDtoSchema.parse({
   id: "task.5001",
   type: "task",
   title: "A task",
   status: "needs_implement",
   labels: [],
   assignees: [],
+  externalRefs: [],
+  specRefs: [],
+  revision: 4,
+  deployVerified: false,
+  createdAt: "2026-10-19T00:00:00.000Z",
   updatedAt: "2026-10-19T00:00:00.000Z",
-};
+});
 
 describe("core__work_item_query", () => {
   it("stays read_only", () => {
@@ -81,13 +87,14 @@ describe("core__work_item_query", () => {
     );
   });
 
-  it("is backward compatible when the store has no enrichment fields", async () => {
+  it("preserves canonical fields when optional enrichment is absent", async () => {
     const cap = capabilityReturning([BASE]);
     const impl = createWorkItemQueryImplementation({ workItemCapability: cap });
     const out = await impl.execute({});
 
     expect(WorkItemQueryOutputSchema.parse(out)).toEqual(out);
-    expect(out.items[0]).not.toHaveProperty("revision");
+    expect(out.items[0]).toEqual(BASE);
+    expect(out.items[0]?.revision).toBe(4);
     expect(out.items[0]).not.toHaveProperty("outcome");
     expect(out.count).toBe(1);
   });
