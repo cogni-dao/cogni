@@ -2937,5 +2937,12 @@ ssh $SSH_OPTS root@"$VM_HOST" \
     "set -a; . /tmp/deploy-infra-env.sh; set +a; rm -f /tmp/deploy-infra-env.sh; bash /tmp/deploy-infra-remote.sh"
 rm -f "$REMOTE_ENV_FILE"
 
+# H1: fixed reviewed bytes + isolated proof only; keep every legacy host action.
+if [[ "$DEPLOY_ENVIRONMENT" == "candidate-a" ]]; then
+  (cd "$REPO_ROOT" && python3 infra/compose/edge/host-admission/source_manifest.py) > "$ARTIFACT_DIR/host-admission-source.json"
+  scp $SSH_OPTS "$ARTIFACT_DIR/host-admission-source.json" root@"$VM_HOST":/opt/cogni-template-edge/host-admission/source.json
+  ssh $SSH_OPTS root@"$VM_HOST" "timeout --signal=TERM --kill-after=2s 190s /usr/bin/python3 -I /opt/cogni-template-edge/host-admission/integration_selftest.py"
+fi
+
 emit_deployment_event "infra_deployment.complete" "success" "Infrastructure deployment completed"
 log_info "Infrastructure deployment complete!"

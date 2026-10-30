@@ -84,6 +84,22 @@ loki.source.journal "kernel" {
   forward_to = [loki.write.loki.receiver]
 }
 
+// Fixed native admission evidence only. Source SHA/run/file digests stay in JSON,
+// never metric or stream labels. Python syslog is not a Docker/kernel transport.
+loki.source.journal "host_admission" {
+  path           = "/var/log/journal"
+  matches        = "SYSLOG_IDENTIFIER=cogni-host-admission"
+  max_age        = "1h"
+  format_as_json = false
+  labels = {
+    app     = "cogni-template",
+    env     = sys.env("DEPLOY_ENVIRONMENT"),
+    service = "host-admission",
+    source  = "journal",
+  }
+  forward_to = [loki.write.loki.receiver]
+}
+
 // =============================================================================
 // Log Processing with Health-Check Noise Suppression
 // =============================================================================
