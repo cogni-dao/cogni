@@ -17,6 +17,13 @@
  * @public
  */
 
+import type { DomainPatch } from "@cogni/shared-knowledge-store";
+
+export {
+  DomainNotEmptyError,
+  type DomainPatch,
+} from "@cogni/shared-knowledge-store";
+
 import type { ActiveGoal } from "../domain/dao-goals.js";
 import type { GoverningIndexRow } from "../domain/governing.js";
 import type { KnowledgeGraphNode } from "../domain/knowledge-graph.js";
@@ -206,7 +213,7 @@ export class TooManyActiveGoalsError extends Error {
 /** Scoped row/edge API. It expires when withWrite returns; commit belongs to the adapter. */
 export type KnowledgeWriteSession = Omit<
   KnowledgeStorePort,
-  "withWrite" | "registerDomain" | "commit"
+  "withWrite" | "registerDomain" | "updateDomain" | "deleteDomain" | "commit"
 >;
 
 export class KnowledgeWriteOutcomeUnknownError extends Error {
@@ -328,6 +335,9 @@ export interface KnowledgeStorePort {
    * `DomainAlreadyRegisteredError` on duplicate id.
    */
   registerDomain(input: NewDomain): Promise<Domain>;
+  getDomain(id: string): Promise<Domain | null>;
+  updateDomain(id: string, patch: DomainPatch): Promise<Domain>;
+  deleteDomain(id: string): Promise<void>;
 
   // --- Write — rows (root adapters fail closed; use the withWrite scoped handle) ---
   /** Insert or return an identical existing request; differing payload requires explicit update. */
