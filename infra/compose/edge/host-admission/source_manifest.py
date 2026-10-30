@@ -8,7 +8,8 @@ stdout is public digests only. source.json is a delivery artifact, never policy.
 """
 import hashlib
 import json
-from pathlib import Path
+import os
+import stat
 import subprocess
 
 FILES = ('admission.py', 'kernel.py', 'entrypoint.py', 'wrapper.py',
@@ -22,8 +23,17 @@ def main():
     digests = {}
     for name in FILES:
         committed = subprocess.check_output(['git', 'show', sha+':'+PREFIX+name], timeout=2)
-        if committed != Path(PREFIX+name).read_bytes():
-            raise RuntimeError('uncommitted host source: '+name)
+        fd = os.open(PREFIX+name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise RuntimeError('nonregular host source')
+            local = os.read(fd, 262145)
+            if len(local) > 262144:
+                raise RuntimeError('host source overflow')
+            if committed != local:
+                raise RuntimeError('uncommitted host source: '+name)
+        finally:
+            os.close(fd)
         digests[name] = hashlib.sha256(committed).hexdigest()
     print(json.dumps({'sourceSha': sha, 'files': digests}, sort_keys=True))
 

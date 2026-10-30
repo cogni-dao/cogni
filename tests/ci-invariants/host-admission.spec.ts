@@ -255,6 +255,63 @@ class Tests(unittest.TestCase):
    for args in ([],['forbidden']):
     result=subprocess.run([sys.executable,'-I',str(package/launcher),*args],capture_output=True,timeout=2)
     self.assertNotEqual(result.returncode,0);self.assertFalse(marker.exists())
+ def test_fixed_bootstrap_refuses_fifo_manifest_and_modules(self):
+  import subprocess
+  # Real FIFO opens run in a disposable process. Only ancestor UID custody is
+  # modeled; fstat/type rejection and all content reads remain production code.
+  probe = """
+import sys,runpy,pathlib,os,stat,types,json,hashlib
+from unittest.mock import patch
+launcher,package,target=sys.argv[1:]
+g=runpy.run_path(launcher);base=pathlib.Path(package)
+g['verified_source'].__globals__['__file__']=str(base/'launcher.py')
+for name in ('entrypoint.py','wrapper.py','admission.py','kernel.py'):(base/name).write_bytes(b'')
+(base/'source.json').write_text(json.dumps({'sourceSha':'a'*40,'files':{n:hashlib.sha256(b'').hexdigest() for n in ('entrypoint.py','wrapper.py','admission.py','kernel.py')}}))
+f=base/target;f.unlink();os.mkfifo(f)
+with patch.object(pathlib.Path,'lstat',return_value=types.SimpleNamespace(st_mode=stat.S_IFDIR|0o755,st_uid=0)):
+ try:g['verified_source']()
+ except RuntimeError as e:
+  assert str(e)=='untrusted_source_file',str(e)
+ else:raise AssertionError('FIFO accepted')
+"""
+  for launcher in ('wrapper.py','entrypoint.py'):
+   for target in ('source.json','entrypoint.py','wrapper.py','admission.py','kernel.py'):
+    package=self.root/(launcher+target);package.mkdir()
+    subprocess.run([sys.executable,'-I','-c',probe,str(pathlib.Path(sys.argv[1])/launcher),str(package),target],check=True,timeout=2,capture_output=True)
+ def test_bootstrap_spends_existing_watchdog_budget(self):
+  import runpy,types,signal
+  from unittest.mock import patch,Mock
+  w=runpy.run_path(str(pathlib.Path(sys.argv[1])/'wrapper.py'));g=w['main'].__globals__
+  child=Mock();child.wait.return_value=0;child.poll.return_value=0
+  verified=lambda:(None,None,None,{'kernel':types.SimpleNamespace(die_with_parent=lambda parent:None)})
+  with patch.object(sys,'argv',['wrapper']),patch.dict(os.environ,{},clear=True),patch.object(os,'geteuid',return_value=0),patch.object(signal,'signal'),patch.object(signal,'setitimer') as timer,patch.object(g['time'],'monotonic',side_effect=[100,100,107,109]),patch.object(g['subprocess'],'Popen',return_value=child),patch.object(os,'killpg'),patch.dict(g,verified_source=verified):
+   self.assertEqual(w['main'](),0);child.wait.assert_called_once_with(timeout=11)
+   self.assertEqual(timer.call_args_list[0].args,(signal.ITIMER_REAL,20))
+  with patch.object(sys,'argv',['wrapper']),patch.dict(os.environ,{},clear=True),patch.object(os,'geteuid',return_value=0),patch.object(signal,'signal'),patch.object(signal,'setitimer'),patch.object(g['time'],'monotonic',side_effect=[100,100,121]),patch.object(g['subprocess'],'Popen') as spawn,patch.dict(g,verified_source=verified):
+   self.assertEqual(w['main'](),1);spawn.assert_not_called()
+  # Timer is armed before verification in BOTH launchers, including cancellation
+  # before Popen. Entrypoint must not renew its operation budget after bootstrap.
+  for launcher,alarm in (('wrapper.py','setitimer'),('entrypoint.py','alarm')):
+   m=runpy.run_path(str(pathlib.Path(sys.argv[1])/launcher));mg=m['main'].__globals__;events=[]
+   def cancel():
+    self.assertEqual(len(events),1);self.assertGreater(events[0],19 if launcher=='wrapper.py' else 11);self.assertLessEqual(events[0],20 if launcher=='wrapper.py' else 12);raise RuntimeError('startup_cancelled')
+   def armed(*args):
+    if args[1:]!=(0,):events.append(args[-1])
+   with patch.object(sys,'argv',[launcher]),patch.dict(os.environ,{},clear=True),patch.object(os,'geteuid',return_value=0),patch.object(signal,'signal'),patch.object(signal,alarm,side_effect=armed),patch.dict(mg,verified_source=cancel):
+    with self.assertRaisesRegex(RuntimeError,'startup_cancelled'):m['main']()
+  # A real signal interrupts deliberately stalled bootstrap before any child.
+  # Only timer duration is scaled; handlers/finally and bootstrap call are real.
+  import subprocess
+  probe="""
+import runpy,sys,os,time,signal
+from unittest.mock import patch
+m=runpy.run_path(sys.argv[1]);g=m['main'].__globals__;real=signal.setitimer
+with patch.object(sys,'argv',['wrapper']),patch.dict(os.environ,{},clear=True),patch.object(os,'geteuid',return_value=0),patch.object(signal,'setitimer',side_effect=lambda kind,seconds:real(kind,min(seconds,.05))),patch.dict(g,verified_source=lambda:time.sleep(5)),patch.object(g['subprocess'],'Popen',side_effect=AssertionError('child created after cancellation')):
+ try:m['main']()
+ except SystemExit as e:assert e.code==1
+ else:raise AssertionError('bootstrap escaped deadline')
+"""
+  subprocess.run([sys.executable,'-I','-c',probe,str(pathlib.Path(sys.argv[1])/'wrapper.py')],check=True,timeout=2,capture_output=True)
  def test_harness_verifies_all_bytes_before_loading_siblings(self):
   import integration_selftest as h,hashlib,types,stat
   from unittest.mock import patch

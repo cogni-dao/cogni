@@ -24,6 +24,7 @@ sys.dont_write_bytecode = True
 ROOT = Path('/var/lib/cogni-host-admission')
 POLICY = Path('/etc/cogni-host-admission/policy.json')
 OWNER = 'control'
+Rejected = RuntimeError  # Signal refusal is available before verified siblings load.
 CONTEXT = {'runId': str(uuid.uuid4()), 'sourceSha': None, 'manifestDigest': None, 'operation': 'admission'}
 
 
@@ -43,7 +44,7 @@ def verified_source():
     """Stdlib-only bootstrap; no sibling search path or code before trust checks."""
     base = Path(__file__).absolute().parent
     def read_regular(path, cap=65536):
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         try:
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
@@ -90,6 +91,10 @@ def main():
     for name in ('PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'BASH_ENV', 'ENV'):
         if name in os.environ:
             raise RuntimeError('caller_environment')
+    # The operation's single 12s budget includes bootstrap, policy and work.
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGALRM):
+        signal.signal(sig, interrupted)
+    signal.alarm(12)
     global Rejected
     _, manifest, manifest_digest, modules = verified_source()
     Rejected = modules['admission'].Rejected
@@ -103,11 +108,18 @@ def main():
     trusted(POLICY)
     for file in ('entrypoint.py', 'wrapper.py', 'admission.py', 'kernel.py'):
         trusted(BASE / file)
-    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGALRM):
-        signal.signal(sig, interrupted)
-    signal.alarm(12)
     CONTEXT.update(sourceSha=manifest['sourceSha'], manifestDigest=manifest_digest)
-    policy = Policy(json.loads(POLICY.read_bytes()))
+    fd = os.open(POLICY, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise Rejected('untrusted_policy_file')
+        raw_policy = os.read(fd, 32769)
+        if len(raw_policy) > 32768:
+            raise Rejected('policy_overflow')
+    finally:
+        os.close(fd)
+    policy = Policy(json.loads(raw_policy))
     with locked(ROOT):
         raw = receive(0)
         request = parse(raw, policy, OWNER, time.time())

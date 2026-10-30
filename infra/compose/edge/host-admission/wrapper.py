@@ -15,6 +15,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 sys.dont_write_bytecode = True
 
@@ -23,7 +24,7 @@ def verified_source():
     """Stdlib-only bootstrap; no sibling search path or code before trust checks."""
     base = Path(__file__).absolute().parent
     def read_regular(path, cap=65536):
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         try:
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
@@ -63,33 +64,50 @@ def verified_source():
 def main():
     if len(sys.argv) != 1 or os.environ.get('SSH_ORIGINAL_COMMAND') or os.geteuid() != 0:
         return 1
-    _, _, _, modules = verified_source()
-    die_with_parent = modules['kernel'].die_with_parent
-    child = subprocess.Popen(['/usr/bin/python3', '-I', str(Path(__file__).resolve().with_name('entrypoint.py'))],
-                             start_new_session=True, preexec_fn=lambda parent=os.getpid(): die_with_parent(parent),
-                             env={key: value for key, value in os.environ.items()
-                                  if key in ('SSH_ORIGINAL_COMMAND', 'SSH_CONNECTION')})
-    def stop(_sig=None, _frame=None):
-        if child.poll() is None:
-            os.killpg(child.pid, signal.SIGTERM)
-            try:
-                child.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGKILL)
-                child.wait()
+    # One budget starts before custody verification; startup cannot renew it.
+    deadline = time.monotonic() + 20
+    child = None
+    def interrupted(_sig, _frame):
         raise SystemExit(1)
-    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-        signal.signal(sig, stop)
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGALRM):
+        signal.signal(sig, interrupted)
+    signal.setitimer(signal.ITIMER_REAL, max(0.000001, deadline-time.monotonic()))
     try:
-        return child.wait(timeout=20)
+        _, _, _, modules = verified_source()
+        remaining = deadline-time.monotonic()
+        if remaining <= 0:
+            return 1
+        die_with_parent = modules['kernel'].die_with_parent
+        child = subprocess.Popen(['/usr/bin/python3', '-I', str(Path(__file__).absolute().with_name('entrypoint.py'))],
+                                 start_new_session=True, preexec_fn=lambda parent=os.getpid(): die_with_parent(parent),
+                                 env={key: value for key, value in os.environ.items()
+                                      if key in ('SSH_ORIGINAL_COMMAND', 'SSH_CONNECTION')})
+        remaining = deadline-time.monotonic()
+        if remaining <= 0:
+            return 1
+        return child.wait(timeout=remaining)
     except subprocess.TimeoutExpired:
-        stop()
+        return 1
     finally:
-        # Reap any descendant in the worker group even after a normal worker exit.
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        # Cancellation before child creation also reaches this cleanup. Repeated
+        # signals cannot interrupt reaping or restart the fixed two-second grace.
+        for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGALRM):
+            signal.signal(sig, signal.SIG_IGN)
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        if child is not None:
+            try:
+                if child.poll() is None:
+                    os.killpg(child.pid, signal.SIGTERM)
+                    try:
+                        child.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(child.pid, signal.SIGKILL)
+                        child.wait()
+            finally:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
 if __name__ == '__main__':
