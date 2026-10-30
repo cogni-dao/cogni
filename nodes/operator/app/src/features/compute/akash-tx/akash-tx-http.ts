@@ -32,6 +32,10 @@
  * @internal
  */
 
+import { COMPUTE_PROOF_PATH, COMPUTE_PROOF_BODY_BYTES, ComputeProofResponseSchema } from "@/contracts/compute.release-proof.v1.contract";
+import { parseComputeProof } from "@/features/compute/release-proof/request";
+import type { ComputeReleaseProofPort } from "@/ports/compute-release-proof.port";
+
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type Server } from "node:http";
 
@@ -106,6 +110,7 @@ export interface AkashTxHttpRequest {
   readonly authorization?: string;
   /** Raw JSON text; undefined for GETs. */
   readonly body?: string;
+  readonly signal?: AbortSignal;
 }
 
 export interface AkashTxHttpResponse {
@@ -117,6 +122,9 @@ export interface AkashTxHttpDeps {
   readonly actuator: AkashTxActuatorPort;
   /** Shared secret required on every operation. Empty is rejected at construction. */
   readonly token: string;
+  /** Distinct purpose-only credential; absent disables proof, never wallet operations. */
+  readonly proofReadToken?: string;
+  readonly releaseProof?: ComputeReleaseProofPort;
   readonly databaseCellBindings?: DatabaseCellBindingPort;
   readonly databaseCellAppliedRegistration?: DatabaseCellAppliedRegistrationPort;
   readonly databaseCellAppliedProbeQualification?: DatabaseCellAppliedProbeQualificationPort;
@@ -249,6 +257,7 @@ export function createAkashTxDispatcher(
     );
   }
 
+  let proofActive = false;
   return async function dispatch(
     request: AkashTxHttpRequest
   ): Promise<AkashTxHttpResponse> {
@@ -261,6 +270,27 @@ export function createAkashTxDispatcher(
       return errorResponse(
         new AkashTxError("invalid_request", "method not allowed")
       );
+    }
+    // This exact branch precedes unchanged wallet authorization and never falls through.
+    if (request.path === COMPUTE_PROOF_PATH) {
+      if (!deps.proofReadToken || !/^[0-9a-f]{64}$/.test(deps.proofReadToken) || deps.proofReadToken === deps.token || !deps.releaseProof)
+        return {status:503,body:{code:"unavailable"}};
+      if (!authorized(request.authorization, deps.proofReadToken))
+        return {status:401,body:{code:"unauthorized"}};
+      if (Buffer.byteLength(request.body ?? "") > COMPUTE_PROOF_BODY_BYTES)
+        return {status:413,body:{code:"invalid_request"}};
+      let input;
+      try {input=parseComputeProof(request.body ?? "");}catch{return {status:400,body:{code:"invalid_request"}};}
+      if(proofActive)return {status:429,body:{code:"unavailable"}};
+      proofActive=true;
+      const signal=AbortSignal.any([request.signal ?? new AbortController().signal,AbortSignal.timeout(20_000)]);
+      try {
+        signal.throwIfAborted();
+        const value=await deps.releaseProof.sample(input,signal);
+        signal.throwIfAborted();
+        return {status:200,body:ComputeProofResponseSchema.parse(value)};
+      }catch{return {status:503,body:{code:"unavailable"}};}
+      finally{proofActive=false;} // Original sample settles before this fence opens.
     }
     if (!authorized(request.authorization, deps.token)) {
       return errorResponse(new AkashTxError("unauthorized", "unauthorized"));
@@ -584,12 +614,20 @@ function isZodError(error: unknown): boolean {
 export function createAkashTxActuatorServer(deps: AkashTxHttpDeps): Server {
   const dispatch = createAkashTxDispatcher(deps);
   return createServer((req, res) => {
+    const controller = new AbortController();
+    req.on("aborted", () => controller.abort());
+    res.on("close", () => { if (!res.writableEnded) controller.abort(); });
+    const rawPath = req.url ?? "/";
+    // Reject proof aliases before the legacy wallet query normalization.
+    let proofAlias = false;
+    try { const normalized = decodeURIComponent(new URL(rawPath, "http://actuator.invalid").pathname).replace(/\/+$/, ""); proofAlias = normalized === COMPUTE_PROOF_PATH && rawPath !== COMPUTE_PROOF_PATH; } catch { proofAlias = true; }
+    if (proofAlias) { res.writeHead(400, {"content-type":"application/json"}); res.end(JSON.stringify({code:"invalid_request"})); req.resume(); return; }
     const chunks: Buffer[] = [];
     let size = 0;
     let rejected = false;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > AKASH_TX_MAX_BODY_BYTES) {
+      if (size > (rawPath === COMPUTE_PROOF_PATH ? COMPUTE_PROOF_BODY_BYTES : AKASH_TX_MAX_BODY_BYTES)) {
         rejected = true;
         res.writeHead(413, { "content-type": "application/json" });
         res.end(
@@ -609,6 +647,7 @@ export function createAkashTxActuatorServer(deps: AkashTxHttpDeps): Server {
           ? { authorization: req.headers.authorization }
           : {}),
         body: Buffer.concat(chunks).toString("utf8"),
+        signal: controller.signal,
       })
         .then((response) => {
           res.writeHead(response.status, {

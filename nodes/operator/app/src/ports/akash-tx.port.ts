@@ -422,6 +422,8 @@ export interface AkashTxConsolePort {
   /** Read-only existing Console auth/client. Missing implementation denies applied qualification. */
   readManagedDefinition?(input: {
     leaseId: string;
+    /** Proof-only cancellation reaches the original provider request. */
+    signal?: AbortSignal;
   }): Promise<AkashTxManagedDeploymentDefinition>;
   /**
    * The screened country of a provider account, or `null` when the marketplace read did not

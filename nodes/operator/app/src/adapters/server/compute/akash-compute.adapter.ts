@@ -658,6 +658,7 @@ export class AkashComputeAdapter
   /** Private, read-only observation of the managed definition. Values may be opaque. */
   async readManagedDefinition(input: {
     leaseId: string;
+    signal?: AbortSignal;
   }): Promise<AkashTxManagedDeploymentDefinition> {
     if (!/^[0-9]+$/.test(input.leaseId))
       throw new AkashComputeError(
@@ -666,7 +667,11 @@ export class AkashComputeAdapter
       );
     const detail = await this.request<ConsoleDeploymentDetail>(
       "GET",
-      `/v1/deployments/${encodeURIComponent(input.leaseId)}`
+      `/v1/deployments/${encodeURIComponent(input.leaseId)}`,
+      undefined,
+      2000,
+      input.signal,
+      1_048_576
     );
     const active = (detail?.leases ?? []).filter(
       (lease) => lease.state === "active"
@@ -1470,7 +1475,7 @@ export class AkashComputeAdapter
       url.hash = "";
       const response = await this.fetchImpl(url.toString(), {
         method: "GET",
-        signal: controller.signal,
+        signal: parentSignal ? AbortSignal.any([controller.signal, parentSignal]) : controller.signal,
       });
       return response.ok;
     } catch {
@@ -1599,7 +1604,9 @@ export class AkashComputeAdapter
     method: string,
     path: string,
     body?: unknown,
-    timeoutOverrideMs?: number
+    timeoutOverrideMs?: number,
+    parentSignal?: AbortSignal,
+    responseLimitBytes?: number
   ): Promise<T | undefined> {
     const timeoutMs = timeoutOverrideMs ?? this.config.timeoutMs;
     const controller = new AbortController();
@@ -1613,7 +1620,7 @@ export class AkashComputeAdapter
           ...(body !== undefined ? { "content-type": "application/json" } : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        signal: controller.signal,
+        signal: parentSignal ? AbortSignal.any([controller.signal, parentSignal]) : controller.signal,
       });
       if (!response.ok) {
         // Provider bodies are still never retained — they echo the SDL and resolved secrets.
@@ -1630,7 +1637,7 @@ export class AkashComputeAdapter
           response.status
         );
       }
-      const json = (await response.json().catch(() => undefined)) as
+      const json = (await (responseLimitBytes ? readBoundedManagedJson(response, responseLimitBytes) : response.json()).catch(() => undefined)) as
         | { data?: T }
         | T
         | undefined;
@@ -2033,4 +2040,12 @@ function retainsStorage(spec: ProvisionSpec): boolean {
     spec.retentionPolicy === "retain" ||
     spec.services.some((service) => Boolean(service.volumes?.length))
   );
+}
+
+/** Proof reads fail on a truncated/oversized body; cancellation settles original body IO. */
+async function readBoundedManagedJson(response: Response, cap: number): Promise<unknown> {
+ const reader=response.body?.getReader();if(!reader)throw new Error("unavailable");
+ const chunks:Uint8Array[]=[];let bytes=0;
+ try {for(;;){const {done,value}=await reader.read();if(done)break;bytes+=value.byteLength;if(bytes>=cap){await reader.cancel();throw new Error("unavailable");}chunks.push(value);}return JSON.parse(Buffer.concat(chunks).toString("utf8"));}
+ finally{reader.releaseLock();}
 }

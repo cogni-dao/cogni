@@ -21,6 +21,10 @@ kind: Role
 metadata:
   name: akash-tx-actuator
 rules:
+  # task.5390: read current native state only. No new mutation, Secret, exec or lease grants.
+  - apiGroups: [compute.cogni.io]
+    resources: [xcomputeworkloads, computeworkloads]
+    verbs: [get]
   # A completed Job is the durable per-digest skip marker; delete is for superseded-digest GC
   # and for re-creating a Job that failed on infrastructure rather than on the migration script.
   - apiGroups: [batch]

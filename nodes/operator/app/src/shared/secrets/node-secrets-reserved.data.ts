@@ -91,6 +91,7 @@ export const SUBSTRATE_RESERVED_KEYS: ReadonlySet<string> = new Set<string>([
   // into `cogni/<env>/akash-tx-actuator`. A self-serve write would clobber the value the
   // Crossplane Composition authenticates with and silently wedge every paid mutation.
   "AKASH_TX_ACTUATOR_TOKEN",
+  "COMPUTE_PROOF_READ_TOKEN",
   "DATABASE_RELIABILITY_PASSWORD", // private actuator database role material
   "DATABASE_RELIABILITY_STATUS_TOKEN", // private actuator status/readback auth
   "DATABASE_RELIABILITY_READMIT_TOKEN", // human-only private actuator command auth
@@ -205,6 +206,7 @@ export const OFF_CLUSTER_WORKLOAD_DENIED_KEYS: ReadonlySet<string> = new Set([
   // actuator is a private ClusterIP wallet writer with no other authentication, so a
   // copy on a rented multi-tenant provider is equivalent to holding the key itself.
   "AKASH_TX_ACTUATOR_TOKEN",
+  "COMPUTE_PROOF_READ_TOKEN",
   "CLOUDFLARE_API_TOKEN",
   "CLOUDFLARE_ZONE_ID",
   "GH_GRAFANA_PARENT_SA_TOKEN",

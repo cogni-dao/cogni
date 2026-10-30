@@ -110,6 +110,8 @@ import {
   type AkashTxServingProbe,
 } from "@/features/compute/akash-tx/akash-tx-actuator";
 import { databaseCellSpecFactory } from "@/features/compute/akash-tx/akash-tx-database-cell";
+import { InClusterProofKubeReadClient } from "@/adapters/server/compute/compute-release-proof-native.client";
+import { NativeComputeReleaseProofAdapter } from "@/features/compute/release-proof/native-proof";
 import { createAkashTxActuatorServer } from "@/features/compute/akash-tx/akash-tx-http";
 import {
   AkashTxWalletConfigError,
@@ -163,10 +165,11 @@ const readCredential = (name: string): Promise<string> =>
     .then((value) => value.trim())
     .catch(() => "");
 
-const [actuatorApiKey, bearerToken, databaseUrl] = await Promise.all([
+const [actuatorApiKey, bearerToken, databaseUrl, proofReadToken] = await Promise.all([
   readCredential("AKASH_ACTUATOR_CONSOLE_API_KEY"),
   readCredential("AKASH_TX_ACTUATOR_TOKEN"),
   readCredential("DATABASE_URL"),
+  readCredential("COMPUTE_PROOF_READ_TOKEN"),
 ]);
 
 /**
@@ -795,7 +798,13 @@ const databaseCellDiagnosticObserve = async (
   return observeDatabaseCellDiagnostic(kit, binding, actuatorBuildSha);
 };
 
+const proofCluster = kubeConfig.getCurrentCluster();
+const releaseProof = proofCluster?.caFile && /^[0-9a-f]{64}$/.test(proofReadToken)
+ ? new NativeComputeReleaseProofAdapter(new InClusterProofKubeReadClient(proofCluster.server, await readFile(proofCluster.caFile,"utf8"), "/var/run/secrets/kubernetes.io/serviceaccount/token"), allocationLedger, consoleClient)
+ : undefined;
 const server = createAkashTxActuatorServer({
+  proofReadToken,
+  ...(releaseProof ? {releaseProof} : {}),
   actuator,
   databaseCellBindings,
   // The route is wired, but registration stays fail-closed until a distinct,

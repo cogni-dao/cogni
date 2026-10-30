@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+# Purpose bearer and peer restriction are both required. Kubelet probes use host networking.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: akash-tx-actuator-peers
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: akash-tx-actuator
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: node-app
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: lease-log-pump
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: crossplane-system
+          podSelector:
+            matchLabels:
+              pkg.crossplane.io/provider: provider-http
+      ports:
+        - {protocol: TCP, port: 8080}

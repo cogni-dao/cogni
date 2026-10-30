@@ -152,7 +152,7 @@ spec:
               #
               # This owner bank includes scoped bootstrap kits. Mount the whole bank so its
               # sole materializer can add owned keys without a second projection inventory.
-              # The foreign operator bank below stays narrowed to DATABASE_URL.
+              # The foreign operator bank below selects only the ledger DSN and purpose-only proof bearer.
               #
               # `optional: true` is what MAKES the refusal diagnosable — it is not a relaxation.
               #
@@ -195,3 +195,5 @@ spec:
                   items:
                     - key: DATABASE_URL
                       path: DATABASE_URL
+                    - key: COMPUTE_PROOF_READ_TOKEN
+                      path: COMPUTE_PROOF_READ_TOKEN

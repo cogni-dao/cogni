@@ -41,7 +41,7 @@
 # nodes that don't own it. Drift between this list and the catalog's
 # node-baseline set is guarded by scripts/ci/tests/secrets-fanout.test.sh.
 declare -ga NODE_BASELINE_KEYS=(
-  AUTH_SECRET LITELLM_MASTER_KEY
+  AUTH_SECRET LITELLM_MASTER_KEY COMPUTE_PROOF_READ_TOKEN
   SCHEDULER_API_TOKEN BILLING_INGEST_TOKEN
   INTERNAL_OPS_TOKEN METRICS_TOKEN GH_WEBHOOK_SECRET
   IDENTITY_ATTESTATION_PRIVATE_KEY

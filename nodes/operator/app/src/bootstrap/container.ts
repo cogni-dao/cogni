@@ -1770,3 +1770,15 @@ export async function finalizeEpochInProcess(
 ): Promise<FinalizeEpochOutput> {
   return runFinalizeEpoch(buildFinalizeEpochDeps(logger), input);
 }
+
+/** Additive public comparison; no wallet bearer or Console credential enters this app client. */
+let publicComputeProof: import("@/features/compute/release-proof/public-proof").PublicComputeProof | undefined;
+export async function getPublicComputeProof() {
+ const env=serverEnv();
+ if(!env.COMPUTE_PROOF_READ_TOKEN || !/^[0-9a-f]{64}$/.test(env.COMPUTE_PROOF_READ_TOKEN) || !/^(candidate-a|preview|production)$/.test(env.DEPLOY_ENVIRONMENT??""))return undefined;
+ if(!publicComputeProof){
+  const [{PublicComputeProof},{PostgresComputeProofAdmission},{ComputeReleaseProofClient}]=await Promise.all([import("@/features/compute/release-proof/public-proof"),import("@/adapters/server/compute/compute-release-proof-admission.adapter"),import("@/adapters/server/compute/compute-release-proof.client")]);
+  publicComputeProof=new PublicComputeProof(new PostgresComputeProofAdmission(env.DATABASE_SERVICE_URL),new ComputeReleaseProofClient(`cogni-${env.DEPLOY_ENVIRONMENT}`,env.COMPUTE_PROOF_READ_TOKEN));
+ }
+ return publicComputeProof;
+}

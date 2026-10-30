@@ -127,6 +127,8 @@ export const serverSchema = z.object({
   DATABASE_URL: z.string().url(),
   // app_service role (BYPASSRLS) — used by auth, workers, bootstrap
   DATABASE_SERVICE_URL: z.string().url(),
+  // Purpose-only native proof credential; invalid/absent disables only this capability.
+  COMPUTE_PROOF_READ_TOKEN: z.string().optional(),
 
   // NextAuth secret (required for JWT signing)
   AUTH_SECRET: z.string().min(32),
