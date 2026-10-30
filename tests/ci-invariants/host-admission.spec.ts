@@ -21,7 +21,7 @@ from admission import Policy, Engine, Rejected, digest, parse, receive, locked
 P={'version':1,'destination':'192.0.2.1','interface':'eth0','ports':[5432,5435], 'owners':{'alpha':{'writerEpoch':'epoch-a','ports':[5432,5435]},'beta':{'writerEpoch':'epoch-b','ports':[5432]}}}
 class Kernel:
  def __init__(self): self.value={};self.writes=0;self.fail=False
- def reconcile(self,value,before_mutation=lambda:None):
+ def reconcile(self,value,before_mutation=lambda:None,accepted_at=None):
   if self.value!=value:before_mutation()
   if self.fail:raise Rejected('readback_failed')
   if self.value!=value:self.value=copy.deepcopy(value);self.writes+=1
@@ -42,10 +42,10 @@ class Tests(unittest.TestCase):
     if mode=='backward':self.now=900;self.k.value={5435:{'8.8.8.8':1100}}
     if mode=='reboot':self.e.boot=lambda:'new-boot'
     original=self.k.reconcile
-    def guarded(value,before_mutation=lambda:None):
+    def guarded(value,before_mutation=lambda:None,accepted_at=None):
      def check_pending():
       before_mutation();self.assertTrue(self.e.load()['pending'])
-     return original(value,check_pending)
+     return original(value,check_pending,accepted_at=accepted_at)
     self.k.reconcile=guarded
     action=lambda:self.apply() if mode=='replay' else self.e.execute('alpha',{'version':1,'operation':'read','writerEpoch':'epoch-a'})
     if mode=='backward':
@@ -96,14 +96,133 @@ class Tests(unittest.TestCase):
   package=self.root/'untrusted';package.mkdir()
   marker=self.root/'UNTRUSTED_IMPORT_EXECUTED'
   evil=self.root/'evil.py';evil.write_text('from pathlib import Path;Path('+repr(str(marker))+').touch()')
-  for launcher in ('entrypoint.py','wrapper.py'):
+  for launcher in ('entrypoint.py','wrapper.py','integration_selftest.py'):
    shutil.copyfile(BASE/launcher,package/launcher)
   (package/'kernel.py').symlink_to(evil)
   (package/'admission.py').symlink_to(evil)
-  for launcher in ('entrypoint.py','wrapper.py'):
+  for launcher in ('entrypoint.py','wrapper.py','integration_selftest.py'):
    for args in ([],['forbidden']):
     result=subprocess.run([sys.executable,'-I',str(package/launcher),*args],capture_output=True,timeout=2)
     self.assertNotEqual(result.returncode,0);self.assertFalse(marker.exists())
+ def test_harness_verifies_all_bytes_before_loading_siblings(self):
+  import integration_selftest as h,hashlib,types,stat
+  from unittest.mock import patch
+  marker=self.root/'module-effect'
+  evil=('from pathlib import Path;Path('+repr(str(marker))+').touch()').encode()
+  closure={name:(h.BASE/name).read_bytes() for name in h.FILES}
+  manifest={'sourceSha':'a'*40,'files':{n:hashlib.sha256(v).hexdigest() for n,v in closure.items()}}
+  package=self.root/'closure';package.mkdir()
+  for name,data in closure.items():
+   target=package/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
+  (package/'source.json').write_text(json.dumps(manifest))
+  (package/'kernel.py').write_bytes(evil)
+  # Test-side custody seam only: actual digest/file checks still read the fixture.
+  original_lstat=pathlib.Path.lstat;original_fstat=os.fstat
+  def root_info(info):
+   values=list(info);values[4]=0;values[0]&=~0o022;return os.stat_result(values)
+  def trusted_lstat(p):
+   info=root_info(original_lstat(p))
+   if p in package.parents:
+    values=list(info);values[0]=stat.S_IFDIR|0o755;info=os.stat_result(values)
+   return info
+  with patch.object(h,'BASE',package),patch.object(pathlib.Path,'lstat',trusted_lstat),patch.object(os,'fstat',lambda fd:root_info(original_fstat(fd))):
+   with self.assertRaisesRegex(RuntimeError,'source_digest'):h.load_verified_bundle()
+  self.assertFalse(marker.exists())
+ def test_delivery_copies_nonroot_bytes_and_rejects_tampering(self):
+  import test_delivery as d,hashlib,shutil
+  from unittest.mock import patch
+  source=self.root/'archive';source.mkdir();target=self.root/'delivery';target.mkdir()
+  closure={name:(pathlib.Path(sys.argv[1])/name).read_bytes() for name in d.FILES}
+  for name,data in closure.items():
+   f=source/name;f.parent.mkdir(parents=True,exist_ok=True);f.write_bytes(data)
+  manifest={'sourceSha':'a'*40,'files':{n:hashlib.sha256(v).hexdigest() for n,v in closure.items()}}
+  (target/'source.json').write_text(json.dumps(manifest));(target/'test_delivery.py').write_bytes(closure['test_delivery.py'])
+  # No root claims on Mac: source uses actual checkout UID; only target custody
+  # is a trusted test seam. Native candidate repeats real UID/SSH assertions.
+  with patch('syslog.syslog'),patch.object(d,'ROOT',target),patch.object(d,'SOURCE',source),patch.object(d,'trusted'),patch.object(d,'read',side_effect=lambda path,root_owned=False:path.read_bytes()):
+   staged=d.stage()
+   for name,data in closure.items():self.assertEqual((staged/name).read_bytes(),data)
+   self.assertEqual((staged/'source.json').read_text(),json.dumps(manifest))
+   (source/'kernel.py').write_text('modified')
+   with self.assertRaisesRegex(RuntimeError,'delivery_digest'):d.stage()
+   self.assertEqual(len(list(target.glob('closure-*'))),1)
+ def test_kernel_wall_jump_never_extends_accepted_lifetime(self):
+  import kernel
+  from unittest.mock import patch
+  class Capture(kernel.Kernel):
+   def __init__(self,policy):super().__init__(policy);self.observed={p:{} for p in policy.ports};self.restores=[]
+   def fence(self):pass
+   def read(self,p):return self.observed[p]
+   def run(self,tool,*args,payload=None):
+    if args[0]=='restore':
+     for row in payload.decode().splitlines():
+      _,name,ip,_,ttl=row.split();self.restores.append(int(ttl));self.observed[int(name[4:])]={ip:int(ttl)}
+    return ''
+  k=Capture(self.e.policy)
+  union={5432:{},5435:{'8.8.8.8':1040}}
+  with self.assertRaises(Rejected):k.reconcile(union)
+  with patch('kernel.time.time',return_value=900),patch('kernel.time.monotonic',return_value=100):
+   with self.assertRaisesRegex(Rejected,'clock_rollback_during_apply'):
+    k.reconcile(union,accepted_at=(1000,100))
+  self.assertFalse(k.restores)
+  for tick,wall,maximum in ((100,1000,40),(120,1020,20)):
+   k=Capture(self.e.policy)
+   with patch('kernel.time.time',return_value=wall),patch('kernel.time.monotonic',return_value=tick):
+    k.reconcile(union,accepted_at=(1000,100))
+   self.assertTrue(k.restores);self.assertLessEqual(max(k.restores),maximum)
+  k=Capture(self.e.policy)
+  with patch('kernel.time.time',side_effect=[1000,1100,900,900]),patch('kernel.time.monotonic',return_value=100):
+   with self.assertRaisesRegex(Rejected,'clock_rollback_during_apply'):
+    k.reconcile(union,accepted_at=(1000,100))
+  self.assertFalse(k.restores)  # forward then backward cannot revive expired intent
+
+ def test_outer_never_publishes_terminal_success_on_failed_gate(self):
+  import integration_selftest as h,types,io,contextlib
+  from unittest.mock import patch
+  identity={'sourceSha':'a'*40,'runId':'outer-test'}
+  before={'net':'host-net','mnt':'host-mount','files':'original'}
+  for case in ('preservation-mismatch','preservation-read-failure','worker-nonzero','timeout','cancel-after-buffer','worker-terminal','success'):
+   with self.subTest(case=case):
+    row={**identity,'operation':'worker-complete','verdict':'complete'}
+    payload=json.dumps(row)+'\n'
+    if case=='worker-terminal':payload+=json.dumps({**identity,'operation':'suite','verdict':'pass'})+'\n'
+    r,w=os.pipe();os.write(w,payload.encode());os.close(w)
+    child=types.SimpleNamespace(pid=987654,stdout=os.fdopen(r,'rb'),wait=lambda **kw:1 if case=='worker-nonzero' else 0)
+    snapshots=[before,({**before,'files':'changed'} if case=='preservation-mismatch' else OSError('read failed') if case=='preservation-read-failure' else before)]
+    calls=[0];clock_calls=[0]
+    def selected(*args):
+     calls[0]+=1
+     if case=='cancel-after-buffer' and calls[0]>1:raise InterruptedError('canceled after buffered completion')
+     return ([child.stdout],[],[])
+    def clock():
+     clock_calls[0]+=1
+     return 181 if case=='timeout' and clock_calls[0]>2 else 0
+    output=io.StringIO();logged=[]
+    with patch.object(h,'source_identity',return_value=identity),patch.object(h,'preflight'),patch.object(h,'host_snapshot',side_effect=snapshots),patch.object(h.subprocess,'Popen',return_value=child),patch.object(h.os,'killpg'),patch.object(h.signal,'signal'),patch.object(h.select,'select',side_effect=selected),patch.object(h,'time',types.SimpleNamespace(monotonic=clock)),patch.object(h.syslog,'syslog',side_effect=lambda level,line:logged.append(json.loads(line))),contextlib.redirect_stdout(output):
+     if case=='success':h.outer()
+     else:
+      with self.assertRaises((AssertionError,OSError,TimeoutError,InterruptedError)):h.outer()
+    printed=[json.loads(line) for line in output.getvalue().splitlines()]
+    terminal=lambda rows:[row for row in rows if row.get('operation') in ('suite','selftest') and row.get('verdict')=='pass']
+    self.assertEqual(len(terminal(printed)),1 if case=='success' else 0)
+    self.assertEqual(len(terminal(logged)),1 if case=='success' else 0)
+ def test_engine_hands_precommit_anchor_to_kernel_after_checkpoint_jump(self):
+  import kernel
+  from unittest.mock import patch
+  class NativeBoundary(kernel.Kernel):
+   def fence(self):pass
+   def read(self,port):return {}
+   def run(self,*args,**kwargs):raise AssertionError('rollback must refuse before native mutation')
+  self.e.kernel=NativeBoundary(self.e.policy)
+  save=self.e.save
+  def jump_after_commit(state):
+   save(state)
+   if state['pending']:self.now=900
+  self.e.save=jump_after_commit
+  with patch('kernel.time.time',return_value=900),patch('kernel.time.monotonic',return_value=100):
+   with self.assertRaisesRegex(Rejected,'clock_rollback_during_apply'):self.apply()
+  self.assertEqual(self.e.load()['owners']['alpha']['sequence'],1)
+  self.assertTrue(self.e.load()['pending'])
  def test_strict_parser(self):
   for edit in [{'owner':'beta'},{'destination':'1.1.1.1'},{'entries':[{'ipv4':'127.0.0.1','publishedPort':5435,'expiresAt':1100}]},{'version':True},{'entries':[{'ipv4':'8.8.8.8','publishedPort':8080,'expiresAt':1100}]},{'nextSequence':2},{'entries':[{'ipv4':'8.8.8.8','publishedPort':5435,'expiresAt':1601}]}]:
    r=self.request();r.update(edit)

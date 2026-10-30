@@ -25,13 +25,63 @@ import sys
 import syslog
 import time
 import uuid
+import types
 
-BASE = Path(__file__).resolve().parent
+BASE = Path(__file__).absolute().parent
 sys.dont_write_bytecode = True
-sys.path.insert(0, str(BASE))
-from admission import Engine, Policy, Rejected, canonical, digest, locked, parse
-from kernel import Kernel, command, fence_rules, die_with_parent
-from source_manifest import FILES
+FILES = ('admission.py', 'kernel.py', 'entrypoint.py', 'wrapper.py',
+         'integration_selftest.py', 'source_manifest.py', 'test_delivery.py',
+         'fixtures/compatible-v1/admission.py', 'fixtures/compatible-v1/manifest.json')
+
+
+def verified_bundle():
+    """Read the complete trusted closure before executing any sibling bytes."""
+    def trusted(path, directory=False):
+        info = path.lstat()
+        if info.st_uid != 0 or info.st_mode & 0o022 or stat.S_ISLNK(info.st_mode):
+            raise RuntimeError('untrusted_source_custody')
+        if directory and not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError('untrusted_source_directory')
+    for parent in (BASE, *BASE.parents):
+        trusted(parent, True)
+    def read(name):
+        path = BASE/name
+        for ancestor in path.parents:
+            if ancestor == BASE:
+                break
+            trusted(ancestor, True)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                raise RuntimeError('untrusted_source_file')
+            data = os.read(fd, 262145)
+            if len(data) > 262144:
+                raise RuntimeError('source_overflow')
+            return data
+        finally:
+            os.close(fd)
+    raw = read('source.json')
+    manifest = json.loads(raw)
+    if set(manifest) != {'sourceSha', 'files'} or not re.fullmatch('[0-9a-f]{40}', manifest['sourceSha']) or set(manifest['files']) != set(FILES):
+        raise RuntimeError('source_manifest_shape')
+    closure = {name: read(name) for name in FILES}
+    for name, data in closure.items():
+        if hashlib.sha256(data).hexdigest() != manifest['files'][name]:
+            raise RuntimeError('source_digest')
+    return raw, manifest, closure
+
+
+def load_verified_bundle():
+    raw, manifest, closure = verified_bundle()
+    for name, exports in (('admission', ('Engine', 'Policy', 'Rejected', 'canonical', 'digest', 'locked', 'parse')),
+                          ('kernel', ('Kernel', 'command', 'fence_rules', 'die_with_parent'))):
+        module = types.ModuleType(name)
+        module.__file__ = str(BASE/(name+'.py'))
+        sys.modules[name] = module
+        exec(compile(closure[name+'.py'], module.__file__, 'exec'), module.__dict__)
+        globals().update({key: getattr(module, key) for key in exports})
+    return raw, manifest
 
 PORTS = [4000, 5432, 5435, 6379, 7233]
 STATE = Path('/var/lib/cogni-host-admission')
@@ -63,13 +113,7 @@ def namespace(kind):
 
 
 def source_identity():
-    raw = (BASE / 'source.json').read_bytes()
-    manifest = json.loads(raw)
-    check(set(manifest) == {'sourceSha', 'files'}, 'manifest shape')
-    check(re.fullmatch('[0-9a-f]{40}', manifest['sourceSha']), 'source SHA')
-    check(set(manifest['files']) == set(FILES), 'complete source closure')
-    for name in FILES:
-        check(hashlib.sha256((BASE/name).read_bytes()).hexdigest() == manifest['files'][name], 'source digest '+name)
+    raw, manifest, _ = verified_bundle()
     return {'sourceSha': manifest['sourceSha'], 'manifestDigest': hashlib.sha256(raw).hexdigest(),
             'fileDigests': manifest['files'], 'runId': str(uuid.uuid4())}
 
@@ -234,10 +278,18 @@ def outer():
             preservation_error = exc
             emit('legacy-host-preservation', 'failure', detail=str(exc)[:512])
     diagnostics = False
+    completions = 0
     for line in total.decode(errors='replace').splitlines():
         try:
             row = json.loads(line)
             check(row.get('sourceSha') == IDENTITY['sourceSha'] and row.get('runId') == IDENTITY['runId'], 'worker source binding')
+            if row.get('operation') in ('suite', 'selftest') and row.get('verdict') == 'pass':
+                # Worker diagnostics cannot commit an outer terminal verdict.
+                diagnostics = True
+                emit('worker-terminal-refused', 'failure', detail='terminal success belongs to outer supervisor')
+                continue
+            if row.get('operation') == 'worker-complete' and row.get('verdict') == 'complete':
+                completions += 1
             syslog.syslog(syslog.LOG_INFO, json.dumps(row))
             print(json.dumps(row), flush=True)
         except (ValueError, AttributeError):
@@ -248,8 +300,8 @@ def outer():
     check(result == 0 and not diagnostics, 'isolated kernel/SSH proof failed; exit='+str(result))
     if preservation_error is not None:
         raise preservation_error
-    check(any('"operation": "suite"' in line and '"verdict": "pass"' in line
-              for line in total.decode().splitlines()), 'missing actual assertion completion')
+    check(completions == 1, 'missing/duplicate worker assertion completion')
+    # Sole terminal success, after exit/cleanup/preservation/identity/completion.
     emit('selftest', result='actual-kernel-ssh-complete')
 
 
@@ -808,7 +860,7 @@ def reboot_backward_expired_case(policy):
     # Old absolute expiry looks FUTURE to this unsynced wall, which is still
     # ABOVE the saved wall. Different boot invalidates persisted grants anyway.
     rebooted = Engine(policy, STATE, Kernel(policy), boot=lambda:'unsynced-new-boot',
-                      clock=lambda:saved_wall+1, monotonic=lambda:1)
+                      clock=lambda:saved_wall+1)
     response = read(rebooted)
     check(response['verdict'] == 'fresh_snapshot_required', 'combined reboot/clock counterexample admitted')
     apply(rebooted, r)
@@ -820,6 +872,69 @@ def reboot_backward_expired_case(policy):
     probe(5435, True)
     probe(5432, False)
     emit('reboot-backward-expired-replay', result='no-preboot-revival;CAS-history-preserved;fresh-post-read-N+1-required')
+
+
+def kernel_clock_jump_cases(policy):
+    """Actual native TTLs across a wall jump after acceptance/build/readback.
+
+    Only the adapter's wall reader is changed. The host clock, monotonic clock,
+    native kernel expiry and NEW packet connections remain real.
+    """
+    import types
+    from unittest.mock import patch
+    for phase in ('after-checkpoint', 'during-construction', 'during-readback'):
+        engine = reset(policy)
+        body = request([entry(port, 6) for port in policy.ports])
+        expires = min(value['expiresAt'] for value in body['entries'])
+        jumped = [False]
+        payloads = []
+        def wall():
+            return time.time()-100 if jumped[0] else time.time()
+        class JumpKernel(Kernel):
+            def run(self, tool, *args, payload=None):
+                if phase == 'during-construction' and tool == 'ipset' and args[0] == 'flush':
+                    jumped[0] = True
+                if tool == 'ipset' and args[0] == 'restore':
+                    for line in payload.decode().splitlines():
+                        ttl = int(line.split()[-1])
+                        check(ttl <= math.floor(expires-time.time()), 'wall jump extended native restore lifetime')
+                        payloads.append(ttl)
+                return super().run(tool, *args, payload=payload)
+            def swapped(self, port):
+                self.fence()
+                if phase == 'during-readback':
+                    jumped[0] = True
+        class JumpEngine(Engine):
+            def save(self, state):
+                super().save(state)
+                if state['pending'] and phase == 'after-checkpoint':
+                    jumped[0] = True
+        native = JumpKernel(policy)
+        with patch('kernel.time', types.SimpleNamespace(time=wall, monotonic=time.monotonic)):
+            try:
+                apply(JumpEngine(policy, STATE, native), body)
+            except Rejected as exc:
+                check(str(exc) == 'clock_rollback_during_apply', 'wrong clock refusal')
+            else:
+                raise AssertionError('mid-operation wall rollback returned applied')
+        check(jumped[0], 'wall-jump falsifier never entered its target stage')
+        check(engine.load()['pending'], 'clock failure falsely retired pending')
+        check(bool(payloads) == (phase == 'during-readback'), 'unexpected native writes before clock refusal')
+        Kernel(policy).fence()
+        for port in policy.ports:
+            observed = Kernel(policy).read(port)
+            check(all(ttl <= math.ceil(expires-time.time()) for ttl in observed.values()),
+                  'kernel readback exceeds acceptance-time expiry budget')
+            if phase != 'during-readback':
+                probe(port, False)
+        if phase == 'during-readback':
+            probe(policy.ports[0], True)
+        # No invocation repairs or refreshes anything while time actually passes.
+        time.sleep(max(0, expires-time.time()+.2))
+        for port in policy.ports:
+            probe(port, False)
+        emit('native-kernel-clock-jump', phase=phase, restoreTtls=payloads,
+             result='rollback-refused;pending-preserved;monotonic-bound;actual-readback;no-invocation-expiry')
 
 
 def ssh_cases(policy):
@@ -1056,6 +1171,7 @@ def worker():
         compatible_manifest_rollback_case(policy)
         source_trust_cases(policy)
         reboot_backward_expired_case(policy)
+        kernel_clock_jump_cases(policy)
         ssh_cases(policy)
         process_cases(policy)
     finally:
@@ -1063,12 +1179,13 @@ def worker():
             terminate(child)
         # Netns names and mounts are private and die with PID1; no host iptables
         # cleanup or global namespace deletion is ever attempted.
-    emit('suite', result='all-actual-assertions-complete')
+    emit('worker-complete', 'complete', result='all-actual-assertions-complete')
 
 
 if __name__ == '__main__':
     syslog.openlog('cogni-host-admission', syslog.LOG_PID, syslog.LOG_AUTHPRIV)
     try:
+        load_verified_bundle()
         if '--worker' in sys.argv:
             worker()
         else:

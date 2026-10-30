@@ -131,11 +131,32 @@ class Kernel:
     def swapped(self, port):
         """Test subclass seam only; never selected by the production entrypoint."""
 
-    def reconcile(self, union, before_mutation=lambda: None):
+    def reconcile(self, union, before_mutation=lambda: None, accepted_at=None):
+        # Absolute expiry becomes a one-way monotonic budget at acceptance.
+        # A later backward wall read can never replenish it, including between
+        # ports or during native readback. Forward jumps can only shorten it.
+        if accepted_at is None:
+            if any(union.values()):
+                raise Rejected('expiry_acceptance_required')
+            accepted_at = (time.time(), time.monotonic())
+        wall_anchor, mono_anchor = accepted_at
+        if not all(type(value) in (int, float) and math.isfinite(value) for value in accepted_at):
+            raise Rejected('expiry_anchor_invalid')
+        def now():
+            nonlocal wall_anchor, mono_anchor
+            tick, wall = time.monotonic(), time.time()
+            if not math.isfinite(tick) or not math.isfinite(wall) or tick < mono_anchor:
+                raise Rejected('expiry_clock_invalid')
+            projected = wall_anchor + tick-mono_anchor
+            if any(union.values()) and wall + 1 < projected:
+                raise Rejected('clock_rollback_during_apply')
+            wall_anchor = max(projected, wall)
+            mono_anchor = tick
+            return wall_anchor
         self.fence()
         for port in self.policy.ports:
             entries = union[port]
-            if self.matches(entries, self.read(port), time.time()):
+            if self.matches(entries, self.read(port), now()):
                 continue
             # A fixed compatible scratch set per port; lock serializes its use.
             before_mutation()
@@ -143,10 +164,10 @@ class Kernel:
             self.run('ipset', 'create', scratch, 'hash:ip', 'family', 'inet',
                      'timeout', '600', 'maxelem', str(CAPACITY), '-exist')
             self.run('ipset', 'flush', scratch)
-            now = time.time()
+            sampled_now = now()
             lines = []
             for ip, expiry in sorted(entries.items()):
-                ttl = math.floor(expiry-now)-2
+                ttl = math.floor(expiry-sampled_now)-2
                 if ttl > 0:
                     lines.append(f'add {scratch} {ip} timeout {ttl}')
             if lines:
@@ -155,6 +176,6 @@ class Kernel:
             self.fence()
             self.swapped(port)
         for port in self.policy.ports:
-            if not self.matches(union[port], self.read(port), time.time()):
+            if not self.matches(union[port], self.read(port), now()):
                 raise Rejected('kernel_readback_failed')
         self.fence()

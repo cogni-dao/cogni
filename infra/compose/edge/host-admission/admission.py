@@ -285,7 +285,7 @@ class Engine:
                 self.save(state)
                 barrier_done = True
         try:
-            self.kernel.reconcile(union, before_mutation=pending)
+            self.kernel.reconcile(union, before_mutation=pending, accepted_at=(wall, mono))
             # Only complete native readbacks can retire an existing pending mark.
             if state['pending'] or state['appliedHash'] != desired or boot != state['boot'] or wall-state['wall'] >= 1:
                 state.update(pending=False, desiredHash=desired, appliedHash=desired)

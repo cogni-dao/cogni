@@ -12,7 +12,7 @@ from pathlib import Path
 import subprocess
 
 FILES = ('admission.py', 'kernel.py', 'entrypoint.py', 'wrapper.py',
-         'integration_selftest.py', 'source_manifest.py',
+         'integration_selftest.py', 'source_manifest.py', 'test_delivery.py',
          'fixtures/compatible-v1/admission.py', 'fixtures/compatible-v1/manifest.json')
 PREFIX = 'infra/compose/edge/host-admission/'
 

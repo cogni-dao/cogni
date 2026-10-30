@@ -2940,8 +2940,10 @@ rm -f "$REMOTE_ENV_FILE"
 # H1: fixed reviewed bytes + isolated proof only; keep every legacy host action.
 if [[ "$DEPLOY_ENVIRONMENT" == "candidate-a" ]]; then
   (cd "$REPO_ROOT" && python3 infra/compose/edge/host-admission/source_manifest.py) > "$ARTIFACT_DIR/host-admission-source.json"
-  scp $SSH_OPTS "$ARTIFACT_DIR/host-admission-source.json" root@"$VM_HOST":/opt/cogni-template-edge/host-admission/source.json
-  ssh $SSH_OPTS root@"$VM_HOST" "timeout --signal=TERM --kill-after=2s 190s /usr/bin/python3 -I /opt/cogni-template-edge/host-admission/integration_selftest.py"
+  ssh $SSH_OPTS root@"$VM_HOST" "test ! -L /opt/cogni-host-admission-test-delivery && install -d -o root -g root -m 0700 /opt/cogni-host-admission-test-delivery"
+  scp $SSH_OPTS "$ARTIFACT_DIR/host-admission-source.json" root@"$VM_HOST":/opt/cogni-host-admission-test-delivery/source.json
+  scp $SSH_OPTS "$REPO_ROOT/infra/compose/edge/host-admission/test_delivery.py" root@"$VM_HOST":/opt/cogni-host-admission-test-delivery/test_delivery.py
+  ssh $SSH_OPTS root@"$VM_HOST" "timeout --signal=TERM --kill-after=2s 190s /usr/bin/python3 -I /opt/cogni-host-admission-test-delivery/test_delivery.py"
 fi
 
 emit_deployment_event "infra_deployment.complete" "success" "Infrastructure deployment completed"

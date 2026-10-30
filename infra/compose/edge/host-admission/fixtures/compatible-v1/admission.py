@@ -291,7 +291,7 @@ class Engine:
         # adapter callback to avoid even checkpoint writes on a true no-op.
         try:
             pending()
-            self.kernel.reconcile(union)
+            self.kernel.reconcile(union, accepted_at=(wall, mono))
             # Only complete native readbacks can retire an existing pending mark.
             if state['pending'] or state['appliedHash'] != desired or boot != state['boot'] or wall-state['wall'] >= 1:
                 state.update(pending=False, desiredHash=desired, appliedHash=desired)
