@@ -99,6 +99,7 @@ import {
   safeReadyzProbe,
   safeVersionProbe,
 } from "@/adapters/server";
+import { InClusterProofKubeReadClient } from "@/adapters/server/compute/compute-release-proof-native.client";
 import {
   checkConsoleBalance,
   classifyConsoleBalance,
@@ -110,8 +111,6 @@ import {
   type AkashTxServingProbe,
 } from "@/features/compute/akash-tx/akash-tx-actuator";
 import { databaseCellSpecFactory } from "@/features/compute/akash-tx/akash-tx-database-cell";
-import { InClusterProofKubeReadClient } from "@/adapters/server/compute/compute-release-proof-native.client";
-import { NativeComputeReleaseProofAdapter } from "@/features/compute/release-proof/native-proof";
 import { createAkashTxActuatorServer } from "@/features/compute/akash-tx/akash-tx-http";
 import {
   AkashTxWalletConfigError,
@@ -125,8 +124,10 @@ import {
   observeDatabaseCellDiagnostic,
   prepareDatabaseCellDiagnostic,
 } from "@/features/compute/akash-tx/database-cell-diagnostic";
+import { NativeComputeReleaseProofAdapter } from "@/features/compute/release-proof/native-proof";
 import type { DatabaseCellBindingReference } from "@/ports";
 import { AkashTxError, type AkashTxWorkloadIdentity } from "@/ports";
+import { getGithubRepo, getNodeId } from "@/shared/config/repoSpec.server";
 import {
   ACCOUNT_WALLET_SCOPE_PATTERN,
   akashTxAllocations,
@@ -165,12 +166,13 @@ const readCredential = (name: string): Promise<string> =>
     .then((value) => value.trim())
     .catch(() => "");
 
-const [actuatorApiKey, bearerToken, databaseUrl, proofReadToken] = await Promise.all([
-  readCredential("AKASH_ACTUATOR_CONSOLE_API_KEY"),
-  readCredential("AKASH_TX_ACTUATOR_TOKEN"),
-  readCredential("DATABASE_URL"),
-  readCredential("COMPUTE_PROOF_READ_TOKEN"),
-]);
+const [actuatorApiKey, bearerToken, databaseUrl, proofReadToken] =
+  await Promise.all([
+    readCredential("AKASH_ACTUATOR_CONSOLE_API_KEY"),
+    readCredential("AKASH_TX_ACTUATOR_TOKEN"),
+    readCredential("DATABASE_URL"),
+    readCredential("COMPUTE_PROOF_READ_TOKEN"),
+  ]);
 
 /**
  * WHICH Console credential this pod booted with (bug.5142). Computed once, over the exact
@@ -799,12 +801,26 @@ const databaseCellDiagnosticObserve = async (
 };
 
 const proofCluster = kubeConfig.getCurrentCluster();
-const releaseProof = proofCluster?.caFile && /^[0-9a-f]{64}$/.test(proofReadToken)
- ? new NativeComputeReleaseProofAdapter(new InClusterProofKubeReadClient(proofCluster.server, await readFile(proofCluster.caFile,"utf8"), "/var/run/secrets/kubernetes.io/serviceaccount/token"), allocationLedger, consoleClient)
- : undefined;
+const releaseProof =
+  proofCluster?.caFile && /^[0-9a-f]{64}$/.test(proofReadToken)
+    ? new NativeComputeReleaseProofAdapter(
+        new InClusterProofKubeReadClient(
+          proofCluster.server,
+          await readFile(proofCluster.caFile, "utf8"),
+          "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        ),
+        allocationLedger,
+        consoleClient,
+        {
+          nodeId: getNodeId(),
+          repository: `${getGithubRepo().owner}/${getGithubRepo().repo}`,
+          namespace,
+        }
+      )
+    : undefined;
 const server = createAkashTxActuatorServer({
   proofReadToken,
-  ...(releaseProof ? {releaseProof} : {}),
+  ...(releaseProof ? { releaseProof } : {}),
   actuator,
   databaseCellBindings,
   // The route is wired, but registration stays fail-closed until a distinct,

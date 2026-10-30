@@ -25,6 +25,9 @@ rules:
   - apiGroups: [compute.cogni.io]
     resources: [xcomputeworkloads, computeworkloads]
     verbs: [get]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get]
   # A completed Job is the durable per-digest skip marker; delete is for superseded-digest GC
   # and for re-creating a Job that failed on infrastructure rather than on the migration script.
   - apiGroups: [batch]

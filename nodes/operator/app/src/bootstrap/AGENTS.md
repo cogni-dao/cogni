@@ -46,6 +46,8 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
 
 ## Public Surface
 
+- `getPublicComputeProof()` — lazy single proof admission/client owner; invalid/absent purpose-only bearer disables only proof. Actuator bootstrap injects a distinct read capability without granting wallet authority to the app.
+
 - **Exports:**
   - `verifySystemTenant(serviceAccountService)` - Startup healthcheck: fails fast if cogni_system billing account missing (per SYSTEM_TENANT_STARTUP_CHECK)
   - `runGovernanceSchedulesSyncJob()` - Job: advisory lock + governance schedule sync via container

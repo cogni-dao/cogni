@@ -1475,7 +1475,7 @@ export class AkashComputeAdapter
       url.hash = "";
       const response = await this.fetchImpl(url.toString(), {
         method: "GET",
-        signal: parentSignal ? AbortSignal.any([controller.signal, parentSignal]) : controller.signal,
+        signal: controller.signal,
       });
       return response.ok;
     } catch {
@@ -1620,7 +1620,9 @@ export class AkashComputeAdapter
           ...(body !== undefined ? { "content-type": "application/json" } : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        signal: parentSignal ? AbortSignal.any([controller.signal, parentSignal]) : controller.signal,
+        signal: parentSignal
+          ? AbortSignal.any([controller.signal, parentSignal])
+          : controller.signal,
       });
       if (!response.ok) {
         // Provider bodies are still never retained — they echo the SDL and resolved secrets.
@@ -1637,10 +1639,10 @@ export class AkashComputeAdapter
           response.status
         );
       }
-      const json = (await (responseLimitBytes ? readBoundedManagedJson(response, responseLimitBytes) : response.json()).catch(() => undefined)) as
-        | { data?: T }
-        | T
-        | undefined;
+      const json = (await (responseLimitBytes
+        ? readBoundedManagedJson(response, responseLimitBytes)
+        : response.json()
+      ).catch(() => undefined)) as { data?: T } | T | undefined;
       if (json && typeof json === "object" && "data" in json) {
         return (json as { data?: T }).data;
       }
@@ -2043,9 +2045,27 @@ function retainsStorage(spec: ProvisionSpec): boolean {
 }
 
 /** Proof reads fail on a truncated/oversized body; cancellation settles original body IO. */
-async function readBoundedManagedJson(response: Response, cap: number): Promise<unknown> {
- const reader=response.body?.getReader();if(!reader)throw new Error("unavailable");
- const chunks:Uint8Array[]=[];let bytes=0;
- try {for(;;){const {done,value}=await reader.read();if(done)break;bytes+=value.byteLength;if(bytes>=cap){await reader.cancel();throw new Error("unavailable");}chunks.push(value);}return JSON.parse(Buffer.concat(chunks).toString("utf8"));}
- finally{reader.releaseLock();}
+async function readBoundedManagedJson(
+  response: Response,
+  cap: number
+): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("unavailable");
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes >= cap) {
+        await reader.cancel();
+        throw new Error("unavailable");
+      }
+      chunks.push(value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } finally {
+    reader.releaseLock();
+  }
 }

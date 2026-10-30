@@ -36,6 +36,8 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
 
 ## Public Surface
 
+- `POST /api/v1/public/releases/proof` — bounded value-free comparison against current owned native state; no caller transport/header forwarding or protected CI markers.
+
 - **Exports:** none
 - **Routes (if any):**
   - `/api/v1/deploy/maintenance-cancel` [POST] — target-node env-manager-gated cancellation of unchanged unexecuted candidate intent; exact Git preconditions, no runtime mutation

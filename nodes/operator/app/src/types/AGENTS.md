@@ -38,6 +38,8 @@ Bottom-of-tree type definitions. TS utility types, branded types, ambient global
 
 ## Public Surface
 
+- `compute-release-proof.ts` — value-free comparison input, finite dimension verdicts and correlation tuple; no private provider handles or secret values.
+
 - **Exports:** TS utility types, branded types, global.d.ts, Env interfaces, domain enums
   - `payments.ts` - PaymentFlowState, PaymentStatus, PaymentAttemptStatus, PaymentErrorCode (canonical source)
   - `billing.ts` - Re-exports SourceSystem from @cogni/ai-core; defines ChargeReason, BillingCommitFn (DI callback type for billing decorator)

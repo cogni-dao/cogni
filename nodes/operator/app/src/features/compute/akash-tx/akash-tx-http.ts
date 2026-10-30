@@ -32,15 +32,9 @@
  * @internal
  */
 
-import { COMPUTE_PROOF_PATH, COMPUTE_PROOF_BODY_BYTES, ComputeProofResponseSchema } from "@/contracts/compute.release-proof.v1.contract";
-import { parseComputeProof } from "@/features/compute/release-proof/request";
-import type { ComputeReleaseProofPort } from "@/ports/compute-release-proof.port";
-
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type Server } from "node:http";
-
 import type { ProvisionSpec } from "@cogni/ai-tools";
-
 import {
   AkashTxCreateDatabaseCellInputSchema,
   type AkashTxCreateInput,
@@ -54,11 +48,17 @@ import {
   AkashTxUpdateInputSchema,
 } from "@/contracts/compute.akash-tx.v1.contract";
 import {
+  COMPUTE_PROOF_BODY_BYTES,
+  COMPUTE_PROOF_PATH,
+  ComputeProofResponseSchema,
+} from "@/contracts/compute.release-proof.v1.contract";
+import {
   DatabaseCellAppliedRegistrationReferenceSchema,
   DatabaseCellBindingIdentitySchema,
   DatabaseCellBindingReferenceSchema,
   DatabaseCellCutoverReferenceSchema,
 } from "@/contracts/database-cell-binding.v1.contract";
+import { parseComputeProof } from "@/features/compute/release-proof/request";
 import type {
   DatabaseCellAppliedProbeQualificationPort,
   DatabaseCellAppliedRegistrationPort,
@@ -69,6 +69,7 @@ import {
   AkashTxError,
   type AkashTxErrorCode,
 } from "@/ports";
+import type { ComputeReleaseProofPort } from "@/ports/compute-release-proof.port";
 
 import type { AkashTxLogger } from "./akash-tx-actuator";
 import type {
@@ -273,24 +274,53 @@ export function createAkashTxDispatcher(
     }
     // This exact branch precedes unchanged wallet authorization and never falls through.
     if (request.path === COMPUTE_PROOF_PATH) {
-      if (!deps.proofReadToken || !/^[0-9a-f]{64}$/.test(deps.proofReadToken) || deps.proofReadToken === deps.token || !deps.releaseProof)
-        return {status:503,body:{code:"unavailable"}};
+      if (
+        !deps.proofReadToken ||
+        !/^[0-9a-f]{64}$/.test(deps.proofReadToken) ||
+        deps.proofReadToken === deps.token ||
+        !deps.releaseProof
+      )
+        return { status: 503, body: { code: "unavailable" } };
       if (!authorized(request.authorization, deps.proofReadToken))
-        return {status:401,body:{code:"unauthorized"}};
+        return { status: 401, body: { code: "unauthorized" } };
       if (Buffer.byteLength(request.body ?? "") > COMPUTE_PROOF_BODY_BYTES)
-        return {status:413,body:{code:"invalid_request"}};
-      let input;
-      try {input=parseComputeProof(request.body ?? "");}catch{return {status:400,body:{code:"invalid_request"}};}
-      if(proofActive)return {status:429,body:{code:"unavailable"}};
-      proofActive=true;
-      const signal=AbortSignal.any([request.signal ?? new AbortController().signal,AbortSignal.timeout(20_000)]);
+        return { status: 413, body: { code: "invalid_request" } };
+      let input: ReturnType<typeof parseComputeProof>;
+      try {
+        input = parseComputeProof(request.body ?? "");
+      } catch {
+        return { status: 400, body: { code: "invalid_request" } };
+      }
+      if (proofActive) return { status: 429, body: { code: "unavailable" } };
+      proofActive = true;
+      const signal = AbortSignal.any([
+        request.signal ?? new AbortController().signal,
+        AbortSignal.timeout(20_000),
+      ]);
       try {
         signal.throwIfAborted();
-        const value=await deps.releaseProof.sample(input,signal);
+        const value = await deps.releaseProof.sample(input, signal);
         signal.throwIfAborted();
-        return {status:200,body:ComputeProofResponseSchema.parse(value)};
-      }catch{return {status:503,body:{code:"unavailable"}};}
-      finally{proofActive=false;} // Original sample settles before this fence opens.
+        const body = ComputeProofResponseSchema.parse(value);
+        deps.log?.info(
+          {
+            nodeId: input.expected.nodeId,
+            sourceSha: input.expected.sourceSha,
+            dimensions: body.dimensions.map((d) => ({
+              native: d.native,
+              migration: d.migration,
+              provider: d.provider,
+              code: d.code,
+            })),
+          },
+          "compute_release_proof_sample"
+        );
+        return { status: 200, body };
+      } catch {
+        return { status: 503, body: { code: "unavailable" } };
+      } finally {
+        proofActive = false;
+      } // Original sample settles before this fence opens.
     }
     if (!authorized(request.authorization, deps.token)) {
       return errorResponse(new AkashTxError("unauthorized", "unauthorized"));
@@ -616,18 +646,51 @@ export function createAkashTxActuatorServer(deps: AkashTxHttpDeps): Server {
   return createServer((req, res) => {
     const controller = new AbortController();
     req.on("aborted", () => controller.abort());
-    res.on("close", () => { if (!res.writableEnded) controller.abort(); });
+    res.on("close", () => {
+      if (!res.writableEnded) controller.abort();
+    });
     const rawPath = req.url ?? "/";
+    const sampleSignal =
+      rawPath === COMPUTE_PROOF_PATH
+        ? AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)])
+        : controller.signal;
+    if (rawPath === COMPUTE_PROOF_PATH)
+      sampleSignal.addEventListener(
+        "abort",
+        () => {
+          req.destroy();
+          res.destroy();
+        },
+        { once: true }
+      );
     // Reject proof aliases before the legacy wallet query normalization.
     let proofAlias = false;
-    try { const normalized = decodeURIComponent(new URL(rawPath, "http://actuator.invalid").pathname).replace(/\/+$/, ""); proofAlias = normalized === COMPUTE_PROOF_PATH && rawPath !== COMPUTE_PROOF_PATH; } catch { proofAlias = true; }
-    if (proofAlias) { res.writeHead(400, {"content-type":"application/json"}); res.end(JSON.stringify({code:"invalid_request"})); req.resume(); return; }
+    try {
+      const normalized = decodeURIComponent(
+        new URL(rawPath, "http://actuator.invalid").pathname
+      ).replace(/\/+$/, "");
+      proofAlias =
+        normalized === COMPUTE_PROOF_PATH && rawPath !== COMPUTE_PROOF_PATH;
+    } catch {
+      proofAlias = true;
+    }
+    if (proofAlias) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ code: "invalid_request" }));
+      req.resume();
+      return;
+    }
     const chunks: Buffer[] = [];
     let size = 0;
     let rejected = false;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > (rawPath === COMPUTE_PROOF_PATH ? COMPUTE_PROOF_BODY_BYTES : AKASH_TX_MAX_BODY_BYTES)) {
+      if (
+        size >
+        (rawPath === COMPUTE_PROOF_PATH
+          ? COMPUTE_PROOF_BODY_BYTES
+          : AKASH_TX_MAX_BODY_BYTES)
+      ) {
         rejected = true;
         res.writeHead(413, { "content-type": "application/json" });
         res.end(
@@ -647,15 +710,17 @@ export function createAkashTxActuatorServer(deps: AkashTxHttpDeps): Server {
           ? { authorization: req.headers.authorization }
           : {}),
         body: Buffer.concat(chunks).toString("utf8"),
-        signal: controller.signal,
+        signal: sampleSignal,
       })
         .then((response) => {
+          if (res.destroyed) return;
           res.writeHead(response.status, {
             "content-type": "application/json",
           });
           res.end(JSON.stringify(response.body));
         })
         .catch(() => {
+          if (res.destroyed) return;
           res.writeHead(500, { "content-type": "application/json" });
           res.end(
             JSON.stringify({ code: "internal", message: "internal error" })

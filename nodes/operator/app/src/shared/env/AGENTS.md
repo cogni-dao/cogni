@@ -38,6 +38,8 @@ Single source of truth for environment variables. Lazy validation with Zod preve
 
 ## Public Surface
 
+- `COMPUTE_PROOF_READ_TOKEN` — optional purpose-only control/operator bearer; feature composition rejects absent/invalid material without changing ordinary app health.
+
 **Exports:**
 
 - `server.ts`: serverEnv() (unified lazy function)
