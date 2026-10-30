@@ -240,7 +240,12 @@ export async function handleUpdate(
   try {
     return NextResponse.json(
       domainsUpdateOperation.output.parse(
-        await p.updateDomain(input.data, patch.data)
+        await p.updateDomain(input.data, {
+          ...(patch.data.name !== undefined && { name: patch.data.name }),
+          ...(patch.data.description !== undefined && {
+            description: patch.data.description,
+          }),
+        })
       )
     );
   } catch (error) {

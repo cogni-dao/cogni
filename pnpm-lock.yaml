@@ -16,8 +16,8 @@ importers:
         specifier: https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.1/cogni-dao-doltgres-admission-0.1.1.tgz
         version: https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.1/cogni-dao-doltgres-admission-0.1.1.tgz
       '@cogni-dao/knowledge-store':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz
-        version: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz
+        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
+        version: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
       '@cogni-dao/work-items':
         specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz
         version: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz
@@ -353,8 +353,8 @@ importers:
         specifier: ^1.7.0
         version: 1.11.1
       '@cogni-dao/knowledge-store':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz
-        version: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz
+        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
+        version: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
       '@cogni-dao/work-items':
         specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz
         version: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz
@@ -440,11 +440,11 @@ importers:
         specifier: https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz
         version: '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz(postgres@3.4.7)'
       '@cogni/shared-ai-tools':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.0/cogni-dao-ai-tools-0.3.0.tgz
-        version: '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.0/cogni-dao-ai-tools-0.3.0.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz)(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz)'
+        specifier: https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.1/cogni-dao-ai-tools-0.3.1.tgz
+        version: '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.1/cogni-dao-ai-tools-0.3.1.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz)(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz)'
       '@cogni/shared-knowledge-store':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz
-        version: '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz'
+        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
+        version: '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz'
       '@cogni/work-items':
         specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz
         version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz'
@@ -702,8 +702,8 @@ importers:
   nodes/operator/graphs:
     dependencies:
       '@cogni-dao/knowledge-store':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz
-        version: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz
+        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
+        version: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
       '@cogni-dao/work-items':
         specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz
         version: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz
@@ -711,14 +711,14 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/ai-core
       '@cogni/ai-tools':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.0/cogni-dao-ai-tools-0.3.0.tgz
-        version: '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.0/cogni-dao-ai-tools-0.3.0.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz)(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz)'
+        specifier: https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.1/cogni-dao-ai-tools-0.3.1.tgz
+        version: '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.1/cogni-dao-ai-tools-0.3.1.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz)(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz)'
       '@cogni/langgraph-graphs':
         specifier: workspace:*
         version: link:../../../packages/langgraph-graphs
       '@cogni/shared-langgraph-graphs':
         specifier: https://github.com/cogni-dao/node-template/releases/download/langgraph-graphs-v0.2.1/cogni-dao-langgraph-graphs-0.2.1.tgz
-        version: '@cogni-dao/langgraph-graphs@https://github.com/cogni-dao/node-template/releases/download/langgraph-graphs-v0.2.1/cogni-dao-langgraph-graphs-0.2.1.tgz(@cfworker/json-schema@4.1.1)(@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.0/cogni-dao-ai-tools-0.3.0.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz)(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz))(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(undici@7.24.5)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))'
+        version: '@cogni-dao/langgraph-graphs@https://github.com/cogni-dao/node-template/releases/download/langgraph-graphs-v0.2.1/cogni-dao-langgraph-graphs-0.2.1.tgz(@cfworker/json-schema@4.1.1)(@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.1/cogni-dao-ai-tools-0.3.1.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz)(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz))(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(undici@7.24.5)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))'
     devDependencies:
       tsup:
         specifier: ^8.5.1
@@ -768,8 +768,8 @@ importers:
         specifier: workspace:*
         version: link:../ai-core
       '@cogni/shared-knowledge-store':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz
-        version: '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz'
+        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
+        version: '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz'
       '@cogni/work-items':
         specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz
         version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz'
@@ -1057,8 +1057,8 @@ importers:
         specifier: workspace:*
         version: link:../ai-tools
       '@cogni/shared-knowledge-store':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz
-        version: '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz'
+        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
+        version: '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz'
       zod:
         specifier: ^4.1.12
         version: 4.3.6
@@ -1137,8 +1137,8 @@ importers:
         specifier: workspace:*
         version: link:../node-core
       '@cogni/shared-knowledge-store':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz
-        version: '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz'
+        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
+        version: '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz'
       '@cogni/work-items':
         specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz
         version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz'
@@ -1871,11 +1871,11 @@ packages:
   '@clack/prompts@0.9.1':
     resolution: {integrity: sha512-JIpyaboYZeWYlyP0H+OoPPxd6nqueG/CmN6ixBiNFsIDHREevjIf0n0Ohh5gr5C8pEDknzgvz+pIJ8dMhzWIeg==}
 
-  '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.0/cogni-dao-ai-tools-0.3.0.tgz':
-    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.0/cogni-dao-ai-tools-0.3.0.tgz}
-    version: 0.3.0
+  '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.1/cogni-dao-ai-tools-0.3.1.tgz':
+    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.1/cogni-dao-ai-tools-0.3.1.tgz}
+    version: 0.3.1
     peerDependencies:
-      '@cogni-dao/knowledge-store': 0.8.0
+      '@cogni-dao/knowledge-store': 0.9.0
       '@cogni-dao/work-items': 0.4.0
 
   '@cogni-dao/doltgres-admission@https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.1/cogni-dao-doltgres-admission-0.1.1.tgz':
@@ -1889,9 +1889,9 @@ packages:
       '@cogni/work-items': '>=0.2.4'
       react: '>=19'
 
-  '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz':
-    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz}
-    version: 0.8.0
+  '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz':
+    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz}
+    version: 0.9.0
 
   '@cogni-dao/langgraph-graphs@https://github.com/cogni-dao/node-template/releases/download/langgraph-graphs-v0.2.1/cogni-dao-langgraph-graphs-0.2.1.tgz':
     resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/langgraph-graphs-v0.2.1/cogni-dao-langgraph-graphs-0.2.1.tgz}
@@ -13459,9 +13459,9 @@ snapshots:
       picocolors: 1.1.1
       sisteransi: 1.0.5
 
-  '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.0/cogni-dao-ai-tools-0.3.0.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz)(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz)':
+  '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.1/cogni-dao-ai-tools-0.3.1.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz)(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz)':
     dependencies:
-      '@cogni-dao/knowledge-store': https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz
+      '@cogni-dao/knowledge-store': https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
       '@cogni-dao/work-items': https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz
       '@types/json-schema': 7.0.15
       zod: 4.3.6
@@ -13473,14 +13473,14 @@ snapshots:
       '@cogni/work-items': '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz'
       react: 19.0.0
 
-  '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz':
+  '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz':
     dependencies:
       postgres: 3.4.7
       zod: 4.3.6
 
-  '@cogni-dao/langgraph-graphs@https://github.com/cogni-dao/node-template/releases/download/langgraph-graphs-v0.2.1/cogni-dao-langgraph-graphs-0.2.1.tgz(@cfworker/json-schema@4.1.1)(@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.0/cogni-dao-ai-tools-0.3.0.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz)(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz))(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(undici@7.24.5)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))':
+  '@cogni-dao/langgraph-graphs@https://github.com/cogni-dao/node-template/releases/download/langgraph-graphs-v0.2.1/cogni-dao-langgraph-graphs-0.2.1.tgz(@cfworker/json-schema@4.1.1)(@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.1/cogni-dao-ai-tools-0.3.1.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz)(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz))(@opentelemetry/api@1.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(undici@7.24.5)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))':
     dependencies:
-      '@cogni/ai-tools': '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.0/cogni-dao-ai-tools-0.3.0.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz)(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz)'
+      '@cogni/ai-tools': '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.1/cogni-dao-ai-tools-0.3.1.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz)(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz)'
       '@langchain/core': 1.2.14(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-trace-otlp-proto@0.208.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.2.0(@opentelemetry/api@1.9.1))(openai@7.45.0(undici@7.24.5)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       '@langchain/langgraph': 1.4.10(@langchain/core@1.2.14(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-trace-otlp-proto@0.208.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.2.0(@opentelemetry/api@1.9.1))(openai@7.45.0(undici@7.24.5)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(zod@3.25.76)
       '@langchain/mcp-adapters': 1.1.3(@cfworker/json-schema@4.1.1)(@langchain/core@1.2.14(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-trace-otlp-proto@0.208.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.2.0(@opentelemetry/api@1.9.1))(openai@7.45.0(undici@7.24.5)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@langchain/langgraph@1.4.10(@langchain/core@1.2.14(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-trace-otlp-proto@0.208.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.2.0(@opentelemetry/api@1.9.1))(openai@7.45.0(undici@7.24.5)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(zod@3.25.76))

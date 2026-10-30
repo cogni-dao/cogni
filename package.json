@@ -222,7 +222,7 @@
     "prom-client": "^15.1.3",
     "zod": "^4.1.12",
     "@cogni-dao/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz",
-    "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz"
+    "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz"
   },
   "devDependencies": {
     "@0xsplits/splits-sdk": "6.4.1",

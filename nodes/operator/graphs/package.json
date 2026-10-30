@@ -22,10 +22,10 @@
   "dependencies": {
     "@cogni/langgraph-graphs": "workspace:*",
     "@cogni/shared-langgraph-graphs": "https://github.com/cogni-dao/node-template/releases/download/langgraph-graphs-v0.2.1/cogni-dao-langgraph-graphs-0.2.1.tgz",
-    "@cogni/ai-tools": "https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.0/cogni-dao-ai-tools-0.3.0.tgz",
+    "@cogni/ai-tools": "https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.3.1/cogni-dao-ai-tools-0.3.1.tgz",
     "@cogni/ai-core": "workspace:*",
     "@cogni-dao/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz",
-    "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz"
+    "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

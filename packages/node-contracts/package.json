@@ -28,7 +28,7 @@
     "@ts-rest/core": "^3.52.1",
     "@ts-rest/open-api": "^3.52.1",
     "zod": "^4.1.12",
-    "@cogni/shared-knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.8.0/cogni-dao-knowledge-store-0.8.0.tgz"
+    "@cogni/shared-knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz"
   },
   "devDependencies": {
     "tsup": "^8.5.1",
