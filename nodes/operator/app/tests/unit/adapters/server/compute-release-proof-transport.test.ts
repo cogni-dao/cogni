@@ -454,6 +454,65 @@ import { parse as parseYaml } from "yaml";
 import { SUBSTRATE_RESERVED_KEYS } from "@/shared/secrets/node-secrets-reserved.data";
 import { loadSecretsCatalog } from "../../../../../../../scripts/lib/secrets-catalog-loader";
 
+describe("operator proof connection budget source envelope", () => {
+  it("includes Recreate, one actuator/worker rollout with drain, diagnostics and reconnect margin", () => {
+    const root = fileURLToPath(
+      new URL("../../../../../../../", import.meta.url)
+    );
+    const yaml = (path: string) =>
+      parseYaml(readFileSync(`${root}/${path}`, "utf8"));
+    const app = yaml("infra/k8s/base/node-app/deployment.yaml");
+    const actuator = yaml("infra/k8s/base/akash-tx-actuator/deployment.yaml");
+    const worker = yaml("infra/k8s/base/scheduler-worker/deployment.yaml");
+    for (const lane of ["candidate-a", "preview", "production"]) {
+      const overlay = yaml(
+        `infra/k8s/overlays/${lane}/operator/kustomization.yaml`
+      );
+      const patches = overlay.patches.filter(
+        (p: { target?: { kind?: string; name?: string }; patch?: string }) =>
+          p.target?.kind === "Deployment" &&
+          p.target?.name === "node-app" &&
+          p.patch
+      );
+      const strategy = patches
+        .flatMap((p: { patch: string }) => parseYaml(p.patch))
+        .find((p: { path: string }) => p.path === "/spec/strategy");
+      expect(strategy?.value).toEqual({ type: "Recreate" });
+    }
+    expect(app.spec.replicas).toBe(1);
+    expect(actuator.spec.replicas).toBe(1);
+    expect(actuator.spec.strategy.rollingUpdate.maxSurge).toBe(1);
+    expect(worker.spec.replicas).toBe(2);
+    expect(worker.spec.strategy).toBeUndefined(); // Kubernetes default 25% surge => ceil(2/4)=1.
+    const acceptingActuators =
+      actuator.spec.replicas + actuator.spec.strategy.rollingUpdate.maxSurge;
+    const drainingActuators = actuator.spec.replicas;
+    const acceptingWorkers =
+      worker.spec.replicas + Math.ceil(worker.spec.replicas * 0.25);
+    const drainingWorkers = worker.spec.replicas;
+    const appDemand =
+      app.spec.replicas * 2 +
+      (acceptingActuators + drainingActuators) * (1 + 1) +
+      1;
+    const serviceDemand =
+      app.spec.replicas * (4 + 1) +
+      (acceptingWorkers + drainingWorkers) * 2 +
+      1 +
+      1;
+    const budget = yaml("infra/database-budget-profiles.yaml")[
+      "operator-control-v1"
+    ];
+    expect(appDemand).toBe(9);
+    expect(serviceDemand).toBe(17);
+    expect(budget.roles.app.connection_limit).toBeGreaterThanOrEqual(appDemand);
+    expect(budget.roles.service.connection_limit).toBeGreaterThanOrEqual(
+      serviceDemand
+    );
+    // Existing materializers continue to consume this profile. This finite source
+    // envelope does not prove arbitrary overlapping rollouts or native wallet capacity.
+  });
+});
+
 describe("proof credential custody declarations", () => {
   it("loads through the real catalog schema, reserves the key and projects only the selected operator properties", () => {
     const repoRoot = fileURLToPath(

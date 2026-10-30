@@ -30,12 +30,17 @@ operator-control-v1:
     compute_class: shared
   roles:
     app:
-      # Rolling app (2 x 2), actuator (2 x 1), one diagnostic connection.
-      connection_limit: 7
+      # Single-rollout envelope: Recreate app (1 x 2), actuator (2 accepting +
+      # 1 draining) x (wallet 1 + proof read 1), diagnostic 1 = 9.
+      # Not a bound on arbitrarily accumulated terminating generations; native
+      # drain/role-cap/wallet capacity requires separate HF/load proof.
+      connection_limit: 9
       statement_timeout_ms: 5000
     service:
-      # Rolling app (2 x 4), worker (3 x 2), one diagnostic connection.
-      connection_limit: 15
+      # Recreate app (1 x (ordinary 4 + proof admission 1)), workers
+      # (3 accepting + 2 draining) x 2, diagnostic 1, reconnect margin 1 = 17.
+      # Source arithmetic only; no claim that maxSurge bounds terminating pods.
+      connection_limit: 17
       statement_timeout_ms: 2000
   common:
     lock_timeout_ms: 2000
