@@ -242,7 +242,7 @@ describe("XComputeWorkload composite API (task.5096)", () => {
       // bug.5287: the deadline binds to the CURRENT attempt via $hasServedDesired.
       // The retired '$neverServed' form keyed on a LATCHED field, so it could only ever be
       // true on a first boot and made BOOT_SLO_OR_CLOSE unreachable thereafter.
-      "$deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds)"
+      '$deadlineExceeded := and (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds)'
     );
   });
 
@@ -263,7 +263,15 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     // The latch is persisted where the next render reads it.
     const bootEpoch = (statusSchema.bootEpoch as YamlObject)
       .properties as YamlObject;
-    expect(Object.keys(bootEpoch)).toEqual(["key", "at"]);
+    expect(Object.keys(bootEpoch)).toEqual(["key", "at", "mintedAt"]);
+    expect(template).toContain('dig "status" "bootEpoch" "mintedAt" "" $xr');
+    expect(template).toContain(
+      'and (eq $mintedAt "") $active (ne $externalName "") (eq $responseKey $currentKey)'
+    );
+    // Explicit null clears the previous attempt through Crossplane's status merge.
+    expect((bootEpoch.mintedAt as YamlObject).nullable).toBe(true);
+    expect(template).toContain("mintedAt: null");
+    expect(template).toContain("bootDeadlineAt: null");
   });
 
   it("emits the host-routed serving proof after the phase-1 reader rollout (bug.5237)", () => {
