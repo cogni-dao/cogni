@@ -84,7 +84,7 @@ scripts/fetch_github_job_logs.sh  # Fetch job logs from GitHub Actions API (requ
 
 - `secret-materialize.sh` owns explicit production `database-cell-control-components` preparation, selected by `DATABASE_CELL_CONTROL_NODE_ID`; it creates missing scoped private components only, without native installation or catalog activation. The separate `database-cell-register-applied` phase accepts only `DATABASE_CELL_REGISTER_COGNI_KEY`, `DATABASE_CELL_REGISTER_PACKET_SHA256`, and `DATABASE_CELL_REGISTER_READMISSION_SHA256` references; the existing private actor authenticates evidence before the canonical writer persists an applied receipt and scoped projections.
 
-- `render-compute-egress-allowlist.sh <lane> [destination-env]` keeps provider rules lane-scoped; only a lane's own nonproduction destination may admit its catalog-derived production migration custodian on TCP5432. Foreign admission requires explicit `FORK_DOMAIN_ROOT`; the composite action supplies the repo variable without a DAO fallback and control-host twins pass their actual destination environment.
+- `render-compute-egress-allowlist.sh <lane> [destination-env]` keeps provider rules lane-scoped; only a lane's own nonproduction destination may admit its catalog-derived production migration custodian on TCP5432. Foreign admission requires explicit `FORK_DOMAIN_ROOT`; explicit infrastructure callers supply the repository-owned domain root. App flights and promotions do not write firewall policy; their existing substrate preflights remain read-only.
 
 - Scripts designed to be called from GitHub Actions or Jenkins
 - Keep actual YAML pipelines in repository root .github/ directory

@@ -323,32 +323,29 @@ grep -qv '^#' "$TMPROOT/k3s-only.list" && fail "k3s-only lane gained migration a
 [ ! -s "$DNS_QUERY_LOG" ] || fail "k3s-only lane performed foreign DNS"
 ok "a k3s-only lane resolves and admits no foreign migration control"
 
-ACTION="$REPO_ROOT/.github/actions/reconcile-compute-egress/action.yml"
-[ "$(yq -r '.runs.steps[0].env.FORK_DOMAIN_ROOT' "$ACTION")" = '${{ inputs.fork_domain_root }}' ] \
-  || fail "composite must receive explicit repo-owned root through its supported inputs context"
-if grep -Eq '\$\{\{[^}]*vars' "$ACTION"; then
-  fail "composite manifest must not use unsupported vars expressions"
-fi
-[ "$(yq -r '.inputs.fork_domain_root.default' "$ACTION")" = '' ] \
-  || fail "composite must not invent a domain-root fallback"
-[ "$(yq -r '.runs.steps[0].env.DESTINATION_ENVIRONMENT' "$ACTION")" = '${{ inputs.destination_environment || inputs.environment }}' ] \
-  || fail "composite destination must default to lane"
+# App delivery cannot replace the shared VM policy from an old app catalog.
+[ ! -f "$REPO_ROOT/.github/actions/reconcile-compute-egress/action.yml" ] \
+  || fail "ordinary app firewall action must be removed"
 for workflow in candidate-flight.yml promote-and-deploy.yml; do
-  caller_roots="$(yq -r '.jobs[].steps[]? | select(.uses == "./app-src/.github/actions/reconcile-compute-egress") | .with.fork_domain_root' "$REPO_ROOT/.github/workflows/$workflow")"
-  [ "$(printf '%s\n' "$caller_roots" | wc -l | tr -d ' ')" = 2 ] \
-    || fail "$workflow must pass explicit root to both existing composite callers"
-  while IFS= read -r caller_root; do
-    [ "$caller_root" = '${{ vars.FORK_DOMAIN_ROOT }}' ] \
-      || fail "$workflow composite caller must pass raw repo-owned root without fallback"
-  done <<< "$caller_roots"
-  actual_destination="$(yq -r '.jobs.reconcile-compute-egress-control.steps[] | select(.uses == "./app-src/.github/actions/reconcile-compute-egress") | .with.destination_environment' "$REPO_ROOT/.github/workflows/$workflow")"
-  [ "$actual_destination" = '${{ vars.FLEET_CONTROL_ENV || '\''production'\'' }}' ] \
-    || fail "$workflow control twin did not declare its actual destination"
+  if grep -Eq 'reconcile-compute-egress|render-compute-egress-allowlist|harden-docker-public-ports' "$REPO_ROOT/.github/workflows/$workflow"; then
+    fail "$workflow retains a direct shared-firewall writer"
+  fi
 done
-yq -r '.jobs.reconcile-compute-egress.if' "$REPO_ROOT/.github/workflows/promote-and-deploy.yml" \
-  | grep -Fq "needs.decide.outputs.has_external_compute_node_targets == 'true'" \
-  || fail "foreign Akash-only promote must reconcile its lane-owned Postgres firewall"
-ok "canonical composite/control twins preserve explicit trust provenance and actual destination; Akash owner job runs"
+# Keep the existing required-grant preflight before the watched workload write.
+yq -r '.jobs.prepare-substrate-deploy-branch.needs[]' "$REPO_ROOT/.github/workflows/candidate-flight.yml" \
+  | grep -Fxq external-node-preflight || fail "candidate workload write lost its preflight dependency"
+yq -r '.jobs.promote-k8s.needs[]' "$REPO_ROOT/.github/workflows/promote-and-deploy.yml" \
+  | grep -Fxq node-substrate || fail "promotion lost its substrate preflight dependency"
+# Explicit infra delivery still runs the existing complete-policy renderer and hardener.
+grep -Fq 'scripts/ci/deploy-infra.sh' "$REPO_ROOT/.github/workflows/candidate-flight-infra.yml" \
+  || fail "candidate infra path lost deploy-infra"
+infra_steps="$(yq -r '.jobs.deploy-infra.steps[].run // ""' "$REPO_ROOT/.github/workflows/promote-and-deploy.yml")"
+grep -Fq 'scripts/ci/deploy-infra.sh' <<< "$infra_steps" || fail "shared infra path lost deploy-infra"
+grep -Fq '"$REPO_ROOT/scripts/ci/render-compute-egress-allowlist.sh" "$DEPLOY_ENVIRONMENT"' "$REPO_ROOT/scripts/ci/deploy-infra.sh" \
+  || fail "explicit infra path lost the catalog renderer"
+grep -Fq 'STAGED_ALLOWLIST="$REMOTE_COMPUTE_EGRESS_ALLOWLIST" bash "$REMOTE_HARDEN_SCRIPT"' "$REPO_ROOT/scripts/ci/deploy-infra.sh" \
+  || fail "explicit infra path lost the shared hardener"
+ok "app delivery preserves policy; existing infra path owns writes and workload preflights remain"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Fake VM toolchain for harden-docker-public-ports.sh

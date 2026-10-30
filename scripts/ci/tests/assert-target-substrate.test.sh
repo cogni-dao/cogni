@@ -771,6 +771,30 @@ XCW_ENV=(
   FAKE_REMOTE_PATH="$XCW_BIN"
 )
 
+# A new node declaration on an existing production environment must not reach
+# its workload-write dependency until explicit infra has installed its new grant.
+NEW_NODE_SRC="$TMPROOT/new-node-grant-src"
+cp -R "$XCW_SRC" "$NEW_NODE_SRC"
+yq -i '.envs = ["production"] | .deployment_provider.production = "akash" | .compute_api.production = "crossplane" | .compute_egress_cidrs += [{"cidr":"198.51.100.45/32","ports":[5432],"envs":["production"],"comment":"new node requires explicit infra admission"}]' "$NEW_NODE_SRC/infra/catalog/toks5.yaml"
+NEW_NODE_ENV=(
+  "${XCW_ENV[@]}"
+  FLEET_CONTROL_ENV=production
+  DEPLOY_ENVIRONMENT=production
+  FAKE_EXPECT_CONTROL_ENV=production
+  FAKE_EXPECT_LANE_ENV=production
+  APP_SOURCE_DIR="$NEW_NODE_SRC"
+  COGNI_CATALOG_ROOT="$NEW_NODE_SRC/infra/catalog"
+)
+if env "${NEW_NODE_ENV[@]}" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/new-node-grant-missing.out" 2>&1; then
+  echo "new node preflight accepted a grant that explicit infra has not installed" >&2; exit 1
+fi
+grep -Fq 'missing exact catalog rule: 198.51.100.45/32:5432' "$TMPROOT/new-node-grant-missing.out"
+cp "$EXTERNAL_ALLOWLIST" "$TMPROOT/allowlist-before-new-node"
+printf '%s\n' '198.51.100.45/32:5432' >> "$EXTERNAL_ALLOWLIST"
+env "${NEW_NODE_ENV[@]}" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/new-node-grant-ready.out"
+grep -Fq 'catalog compute egress CIDRs are installed' "$TMPROOT/new-node-grant-ready.out"
+cp "$TMPROOT/allowlist-before-new-node" "$EXTERNAL_ALLOWLIST"
+
 env "${XCW_ENV[@]}" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/xcw-success.out"
 grep -q "compute_api=crossplane" "$TMPROOT/xcw-success.out"
 grep -q "CRD xcomputeworkloads.compute.cogni.io is Established" "$TMPROOT/xcw-success.out"
