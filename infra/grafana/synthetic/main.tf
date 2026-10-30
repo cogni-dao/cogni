@@ -214,9 +214,11 @@ resource "grafana_synthetic_monitoring_check" "environment_readyz" {
 
   # Cadence is policy, not HCL (bug.5527): every execution is billed, and every
   # serve-evidence consumer reads the same per-environment evidenceWindow.
-  job                = "cogni-${each.value.environment}-${each.value.node_slug}-readyz"
-  target             = "https://${each.value.host}/readyz"
-  enabled            = true
+  job    = "cogni-${each.value.environment}-${each.value.node_slug}-readyz"
+  target = "https://${each.value.host}/readyz"
+  # CEO hard stop on all paid synthetics (task.5396, 2026-10-30).
+  # Retain check definitions and history; re-enabling needs explicit approval.
+  enabled            = false
   probes             = local.public_probe_ids
   frequency          = local.reliability_policy.serveProbes[each.value.environment].frequencyMs
   timeout            = 5000
@@ -254,7 +256,8 @@ resource "grafana_synthetic_monitoring_check" "database_recovery" {
   target = each.value.database_tier == "dedicated" ? (
     "https://${local.environment_configs[each.value.environment].primary_host}/readyz?proof=${each.value.proof_class}&node_slug=${each.value.node_slug}"
   ) : "https://${each.value.host}/readyz?proof=${each.value.proof_class}"
-  enabled            = true
+  # The hard stop includes incident-scoped recovery checks (task.5396).
+  enabled            = false
   probes             = [for region in local.reliability_policy.expectedRegions : data.grafana_synthetic_monitoring_probes.public.probes[region]]
   frequency          = 60000
   timeout            = 10000
