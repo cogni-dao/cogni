@@ -459,6 +459,8 @@ const allocationLedger = new DrizzleAkashTxAllocationLedger(
 const actuator = new AkashTxActuator({
   console: consoleClient,
   ledger: allocationLedger,
+  appliedCellCustody: (nodeId, allocationEnvironment) =>
+    loadAppliedCellCustody({ nodeId, allocationEnvironment }),
   recoveryProfile: async () => {
     const content = await readFile(
       "/app/database-cell-bootstrap/database-budget-profiles.yaml",
@@ -632,7 +634,10 @@ const databaseCellSpec = async (
 
 const databaseCellObserver = new PostgresDatabaseCellObserver();
 const loadAppliedCellCustody = async (
-  reference: DatabaseCellBindingReference
+  reference: Pick<
+    DatabaseCellBindingReference,
+    "nodeId" | "allocationEnvironment"
+  >
 ) => {
   const value = await readCredential(
     "AKASH_DATABASE_CELL_APPLIED_CUSTODIES_JSON"

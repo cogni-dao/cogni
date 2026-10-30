@@ -1010,6 +1010,51 @@ describe("audited already-applied registration", () => {
       migration: { DATABASE_MIGRATION_URL: custody.app.dsn },
     };
     expect(validateDedicatedCustody(input).receipt).toEqual(receipts[0]);
+    const initialReceipt = structuredClone(receipts[0]);
+    const movedDsn = (dsn: string) => {
+      const url = new URL(dsn);
+      url.hostname = "moved-db.fixture.example.org";
+      url.port = "32728";
+      url.password = `${url.password}-rotated`;
+      return url.toString();
+    };
+    const movedCustody = {
+      ...probeCustody,
+      canonicalEndpointHost: "moved-db.fixture.example.org",
+      tlsCertificate: `${probeCustody.tlsCertificate}\n`,
+      app: { ...probeCustody.app, dsn: movedDsn(probeCustody.app.dsn) },
+      service: {
+        ...probeCustody.service,
+        dsn: movedDsn(probeCustody.service.dsn),
+      },
+      readOnlyProbe: {
+        ...probeCustody.readOnlyProbe,
+        dsn: movedDsn(probeCustody.readOnlyProbe.dsn),
+      },
+    };
+    const movedInput = {
+      ...input,
+      cell: {
+        ...input.cell,
+        DATABASE_CELL_APPLIED_CUSTODY_JSON: JSON.stringify(movedCustody),
+      },
+      app: {
+        DATABASE_URL: movedCustody.app.dsn,
+        DATABASE_SERVICE_URL: movedCustody.service.dsn,
+      },
+      migration: { DATABASE_MIGRATION_URL: movedCustody.app.dsn },
+    };
+    expect(validateDedicatedCustody(movedInput).custody).toEqual(movedCustody);
+    expect(
+      projectDatabaseCellPlacement({
+        receipt: receipts[0],
+        custody: movedCustody,
+      }).publicValues
+    ).toMatchObject(movedInput.app);
+    expect(receipts[0]).toEqual(initialReceipt);
+    expect(() =>
+      validateDedicatedCustody({ ...movedInput, app: input.app })
+    ).toThrow("dedicated_cell_consumer_custody_mismatch");
     for (const drift of [
       { nodeId: "22222222-2222-4222-8222-222222222222" },
       { pools: { ...limits, app: 2 } },

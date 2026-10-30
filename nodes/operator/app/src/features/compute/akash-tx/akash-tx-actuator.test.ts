@@ -45,9 +45,11 @@ import type {
   RecordNodeMigrationReportInput,
 } from "@/ports";
 import { AkashTxError } from "@/ports";
+import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
 
 import {
   AkashTxActuator,
+  type AkashTxActuatorDeps,
   type AkashTxLogger,
   mapConsoleFailure,
 } from "./akash-tx-actuator";
@@ -622,7 +624,8 @@ function recordingLogger(): AkashTxLogger & {
 function build(
   consoleOptions: FakeConsoleOptions = {},
   recoveryProfile?: unknown,
-  sharedLedger?: FakeLedger
+  sharedLedger?: FakeLedger,
+  appliedCellCustody?: AkashTxActuatorDeps["appliedCellCustody"]
 ) {
   const ledger = sharedLedger ?? new FakeLedger();
   const api = new FakeConsole(consoleOptions);
@@ -634,6 +637,7 @@ function build(
     ledger,
     log,
     recoveryProfile: async () => recoveryProfile,
+    ...(appliedCellCustody ? { appliedCellCustody } : {}),
     migration,
     costEvidence: costs.costEvidence,
     costStore: costs.costStore,
@@ -645,8 +649,11 @@ function build(
 describe("qualified cell app releases", () => {
   const qualifiedSha = "a".repeat(40);
   const otherSha = "b".repeat(40);
-  function withCell(recoveryProfile?: unknown) {
-    const context = build({}, recoveryProfile);
+  function withCell(
+    recoveryProfile?: unknown,
+    appliedCellCustody?: AkashTxActuatorDeps["appliedCellCustody"]
+  ) {
+    const context = build({}, recoveryProfile, undefined, appliedCellCustody);
     const provider = `akash1${"a".repeat(38)}`;
     context.ledger.rows.set("cell", {
       receiptId: "22222222-2222-4222-8222-222222222222",
@@ -1012,8 +1019,44 @@ describe("qualified cell app releases", () => {
       env: { COGNI_REPO_SHA: sha },
     })),
   });
-  function withBoundedManualCell() {
-    const context = withCell();
+  function withBoundedManualCell(
+    resolve?: AkashTxActuatorDeps["appliedCellCustody"]
+  ) {
+    const custody: { value: DatabaseCellAppliedCustody } = {
+      value: {
+        version: 1,
+        nodeId: IDENTITY.nodeId,
+        nodeSlug: SPEC.name,
+        environment: "production",
+        manualProvenance: {
+          kind: "manual-observed",
+          postgresImageDigest: `sha256:${"1".repeat(64)}`,
+          managedSdlSha256: "d".repeat(64),
+          qualificationArtifactSha256: "2".repeat(64),
+          qualifiedAt: "2026-10-15T00:00:00Z",
+        },
+        targetBuildSha: qualifiedSha,
+        canonicalEndpointHost: "owned.example",
+        databaseName: "cogni_toks9",
+        appRole: "app_toks9",
+        serviceRole: "service_toks9",
+        budgetProfile: "dedicated-high-throughput-v1",
+        runtimePoolLimits: { replicaCount: 1, app: 3, service: 4, read: 2 },
+        budget: { kind: "preserved-role-bounds", roles: [] },
+        tlsCertificate: rootCertificates[0] ?? "",
+        tls: { kind: "system" },
+        app: {
+          dsn: appDsn,
+          custody: { service: "toks9", key: "DATABASE_URL" },
+        },
+        service: {
+          dsn: serviceDsn,
+          custody: { service: "toks9", key: "DATABASE_SERVICE_URL" },
+        },
+        migration: { kind: "app-database-url" },
+      },
+    };
+    const context = withCell(undefined, resolve ?? (async () => custody.value));
     const receipt =
       context.ledger.rows.get("cell")?.appliedDatabaseCellBinding?.[0];
     if (!receipt) throw new Error("missing cell fixture");
@@ -1044,12 +1087,12 @@ describe("qualified cell app releases", () => {
       runtimePoolLimits: { replicaCount: 1, app: 3, service: 4, read: 2 },
       registeredAt: "2026-10-15T00:00:00Z",
     };
-    return context;
+    return { ...context, custody };
   }
   const appDsn =
-    "postgresql://app:fixture@owned.example/cogni_toks9?sslmode=verify-full";
+    "postgresql://app_toks9:fixture@owned.example:30349/cogni_toks9?sslmode=verify-full";
   const serviceDsn =
-    "postgresql://service:fixture@owned.example/cogni_toks9?sslmode=verify-full";
+    "postgresql://service_toks9:fixture@owned.example:30349/cogni_toks9?sslmode=verify-full";
   const boundedSpecAt = (sha: string): ProvisionSpec => ({
     ...specAt(sha),
     services: specAt(sha).services.map((service) => ({
@@ -1094,6 +1137,149 @@ describe("qualified cell app releases", () => {
     expect(migration.calls).toHaveLength(1);
     expect(ledger.rows.get("cell")).toEqual(admission);
     expect(ledger.rows.get("app")?.externalName).toBe("7001");
+  });
+  const moveCustody = (
+    custody: { value: DatabaseCellAppliedCustody },
+    port: string
+  ) => {
+    const moved = (dsn: string) => {
+      const url = new URL(dsn);
+      url.port = port;
+      return url.toString();
+    };
+    custody.value = {
+      ...custody.value,
+      app: { ...custody.value.app, dsn: moved(custody.value.app.dsn) },
+      service: {
+        ...custody.value.service,
+        dsn: moved(custody.value.service.dsn),
+      },
+    };
+  };
+  const specForCustody = (
+    custody: { value: DatabaseCellAppliedCustody },
+    sha: string
+  ): ProvisionSpec => {
+    const spec = boundedSpecAt(sha);
+    return {
+      ...spec,
+      services: spec.services.map((service) => ({
+        ...service,
+        env: {
+          ...service.env,
+          DATABASE_URL: custody.value.app.dsn,
+          DATABASE_SERVICE_URL: custody.value.service.dsn,
+        },
+      })),
+    };
+  };
+  it("releases at the current owned port without rewriting historical DSN hashes", async () => {
+    const { actuator, custody, ledger, api, migration } =
+      withBoundedManualCell();
+    const admission = structuredClone(ledger.rows.get("cell"));
+    moveCustody(custody, "32728");
+    await actuator.create({
+      cogniKey: "app",
+      environment: "production",
+      identity: IDENTITY,
+      spec: specForCustody(custody, qualifiedSha),
+    });
+    await actuator.observe({
+      cogniKey: "app",
+      workload: SPEC.name,
+      environment: "production",
+      migration: STEP,
+      expectedSourceSha: otherSha,
+    });
+    await actuator.update({
+      cogniKey: "app",
+      externalName: "7001",
+      environment: "production",
+      identity: { ...IDENTITY, compositeGeneration: 4 },
+      spec: specForCustody(custody, otherSha),
+    });
+    expect(api.allocateCalls).toBe(1);
+    expect(api.updateCalls).toBe(1);
+    expect(migration.calls).toHaveLength(1);
+    expect(ledger.rows.get("cell")).toEqual(admission);
+  });
+  it("rereads custody and refuses stale endpoint bytes before an update", async () => {
+    const { actuator, custody, api } = withBoundedManualCell();
+    await actuator.create({
+      cogniKey: "app",
+      environment: "production",
+      identity: IDENTITY,
+      spec: boundedSpecAt(qualifiedSha),
+    });
+    moveCustody(custody, "32728");
+    const input = {
+      cogniKey: "app",
+      externalName: "7001",
+      environment: "production",
+      identity: { ...IDENTITY, compositeGeneration: 4 },
+    };
+    await expect(
+      actuator.update({ ...input, spec: boundedSpecAt(otherSha) })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(api.updateCalls).toBe(0);
+    await actuator.update({
+      ...input,
+      spec: specForCustody(custody, otherSha),
+    });
+    expect(api.updateCalls).toBe(1);
+  });
+  it("refuses absent custody even when the request matches historical hashes", async () => {
+    const original = withBoundedManualCell();
+    const { actuator, api, ledger } = build({}, undefined, original.ledger);
+    await expect(
+      actuator.create({
+        cogniKey: "app",
+        environment: "production",
+        identity: IDENTITY,
+        spec: boundedSpecAt(qualifiedSha),
+      })
+    ).rejects.toMatchObject({ code: "ledger_unavailable" });
+    expect(api.allocateCalls).toBe(0);
+    expect(ledger.rows.has("app")).toBe(false);
+  });
+  it.each([
+    { nodeId: "foreign-node" },
+    { nodeSlug: "foreign" },
+    { environment: "preview" },
+    { databaseName: "foreign" },
+    { appRole: "foreign" },
+    { serviceRole: "foreign" },
+    { canonicalEndpointHost: "foreign.example" },
+    { runtimePoolLimits: { replicaCount: 1, app: 30, service: 4, read: 2 } },
+  ])("refuses foreign custody before allocation: %j", async (change) => {
+    const { actuator, custody, api } = withBoundedManualCell();
+    Object.assign(custody.value, change);
+    await expect(
+      actuator.create({
+        cogniKey: "app",
+        environment: "production",
+        identity: IDENTITY,
+        spec: boundedSpecAt(qualifiedSha),
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(api.allocateCalls).toBe(0);
+  });
+  it("redacts custody read failures before allocating", async () => {
+    const { actuator, api } = withBoundedManualCell(async () => {
+      throw new Error("postgresql://secret:password@private.example/db");
+    });
+    await expect(
+      actuator.create({
+        cogniKey: "app",
+        environment: "production",
+        identity: IDENTITY,
+        spec: boundedSpecAt(qualifiedSha),
+      })
+    ).rejects.toMatchObject({
+      code: "ledger_unavailable",
+      message: "current database cell custody unavailable",
+    });
+    expect(api.allocateCalls).toBe(0);
   });
   it.each([
     { DB_POOL_MAX: "30" },
@@ -1163,10 +1349,18 @@ describe("qualified cell app releases", () => {
     expect(api.allocateCalls).toBe(1);
   });
   it("preserves private CA bytes across releases and refuses a replacement before provider mutation", async () => {
-    const { actuator, ledger, api } = withBoundedManualCell();
+    const { actuator, ledger, api, custody } = withBoundedManualCell();
     const receipt = ledger.rows.get("cell")?.appliedDatabaseCellBinding?.[0];
     const ca = rootCertificates[0];
     if (!receipt?.registration || !ca) throw new Error("missing TLS fixture");
+    custody.value = {
+      ...custody.value,
+      tls: {
+        kind: "private-ca",
+        caCertificate: ca,
+        custody: { service: "toks9", key: "DATABASE_SSL_CA_CERT" },
+      },
+    };
     receipt.registration = {
       ...receipt.registration,
       tlsTrustKind: "private-ca",
