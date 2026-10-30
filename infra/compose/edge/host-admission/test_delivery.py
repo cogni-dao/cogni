@@ -15,6 +15,16 @@ import re
 import stat
 import sys
 import tempfile
+import ctypes
+import signal
+import subprocess
+import select
+import time
+import types
+import uuid
+import syslog
+
+CALLER = os.getppid()
 
 ROOT = Path('/opt/cogni-host-admission-test-delivery')
 SOURCE = Path('/opt/cogni-template-edge/host-admission')
@@ -133,24 +143,159 @@ def validate_bootstrap():
         raise RuntimeError('delivery_manifest')
     if hashlib.sha256(read(ROOT/'test_delivery.py', True)).hexdigest() != manifest['files']['test_delivery.py']:
         raise RuntimeError('delivery_bootstrap_digest')
+    return raw, manifest
 
 
-def main():
-    validate_bootstrap()
-    if len(sys.argv) != 1 or os.geteuid() != 0 or Path(__file__).absolute() != ROOT/'test_delivery.py':
-        raise RuntimeError('fixed_test_delivery_boundary')
-    # The kernel owns temporary source lifetime even if this PID is SIGKILLed.
-    # The original SSH process becomes unshare; --kill-child binds namespace PID1.
+def bind_parent(parent):
+    """Same checked Linux binding as kernel; bootstrap is stdlib-only."""
+    if ctypes.CDLL(None).prctl(1, signal.SIGKILL, 0, 0, 0) != 0 or os.getppid() != parent:
+        os._exit(127)
+
+
+def observer(closure):
+    # Entire fixed closure has already been checked against the trusted manifest.
+    for name in ('admission', 'kernel'):
+        module = types.ModuleType(name)
+        module.__file__ = str(SOURCE/(name+'.py'))
+        sys.modules[name] = module
+        exec(compile(closure[name+'.py'], module.__file__, 'exec'), module.__dict__)
+    namespace = {'__name__': 'delivery_observer', '__file__': str(SOURCE/'integration_selftest.py')}
+    exec(compile(closure['integration_selftest.py'], namespace['__file__'], 'exec'), namespace)
+    namespace['command'] = sys.modules['kernel'].command
+    return namespace
+
+
+def publish(identity, verdict, **detail):
+    row = json.dumps({**identity, 'operation': 'delivery', 'verdict': verdict, **detail}, sort_keys=True)
+    syslog.openlog('cogni-host-admission', syslog.LOG_PID, syslog.LOG_AUTHPRIV)
+    syslog.syslog(syslog.LOG_INFO if verdict == 'pass' else syslog.LOG_ERR, row)
+    try:
+        print(row, flush=True)
+    except BrokenPipeError:
+        # The committed result describes completed work, not socket delivery.
+        pass
+
+
+def namespace_argv(cancellation_proof=True):
+    argv = ['/usr/bin/unshare', '--mount', '--propagation', 'private', '--pid',
+            '--fork', '--mount-proc', '--kill-child=SIGKILL', '/usr/bin/python3', '-I']
+    if cancellation_proof:
+        return argv+[str(ROOT/'test_delivery.py'), '--private']
+    # Trusted native falsifier only; fixed public launcher accepts no test option.
+    code = ("import runpy,sys;sys.argv=["+repr(str(ROOT/'test_delivery.py'))+",'--private'];"
+            "m=runpy.run_path(sys.argv[0]);m['private_main'](False)")
+    return argv+['-c', code]
+
+
+def operation(identity, observe, cancellation_proof=True):
+    """ONE native invocation owner; no terminal result below this boundary."""
+    child = None
+    before = observe['host_snapshot']()
     runs = ROOT/'runs'
-    runs.mkdir(mode=0o700, exist_ok=True)
-    trusted(runs, True)
-    os.execv('/usr/bin/unshare', namespace_argv())
+    sources = sorted(str(p) for p in runs.iterdir())
+    total = bytearray()
+    forwarded = 0
+    result = None
+    error = None
+    try:
+        child = subprocess.Popen(namespace_argv(cancellation_proof), stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'},
+                                 preexec_fn=lambda parent=os.getpid(): bind_parent(parent))
+        deadline = time.monotonic()+190
+        while True:
+            left = deadline-time.monotonic()
+            if left <= 0:
+                raise TimeoutError('native_delivery_deadline')
+            if not select.select([child.stdout], [], [], min(1, left))[0]:
+                continue
+            chunk = os.read(child.stdout.fileno(), 4096)
+            if not chunk:
+                break
+            total.extend(chunk)
+            if len(total) > 524288:
+                raise RuntimeError('delivery_output_overflow')
+            lines = total.decode(errors='strict').splitlines(keepends=True)
+            for line in lines[forwarded:]:
+                if not line.endswith('\n'):
+                    break
+                row = json.loads(line)
+                if row.get('sourceSha') != identity['sourceSha']:
+                    raise RuntimeError('delivery_source_identity')
+                if row.get('operation') in ('suite', 'selftest', 'delivery') and row.get('verdict') == 'pass':
+                    raise RuntimeError('lower_terminal_verdict')
+                # Individual diagnostics/progress are not terminal invocation results.
+                print(line, end='', flush=True)
+                forwarded += 1
+        result = child.wait(timeout=2)
+    except BaseException as exc:
+        error = exc
+    finally:
+        try:
+            if child is not None:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=2)
+                child.stdout.close()
+            # Reaped unshare has reaped its namespace PID1. PID1 death kills all
+            # nested sessions; the last namespace holder releases its source tmpfs.
+            if sorted(str(p) for p in runs.iterdir()) != sources:
+                raise RuntimeError('delivery_source_cleanup')
+            if observe['host_snapshot']() != before:
+                raise RuntimeError('delivery_host_preservation')
+        except BaseException as exc:
+            error = exc
+    if error is not None:
+        raise error
+    if result != 0:
+        raise RuntimeError('private_delivery_exit:'+str(result))
+    rows = [json.loads(line) for line in total.decode().splitlines()]
+    if any(row.get('sourceSha') != identity['sourceSha'] or (row.get('operation') in ('suite', 'selftest', 'delivery') and row.get('verdict') == 'pass') for row in rows):
+        raise RuntimeError('delivery_final_evidence')
+    completed = [row for row in rows if row.get('operation') == 'suite-complete' and row.get('verdict') == 'complete']
+    if len(completed) != 1 or not completed[0].get('runId') or completed[0].get('fileDigests') != identity['fileDigests'] or completed[0].get('manifestDigest') != identity['manifestDigest']:
+        raise RuntimeError('delivery_completion_identity')
+    return completed[0]['runId']
 
 
-def namespace_argv():
-    return ['/usr/bin/unshare', '--mount', '--propagation', 'private', '--pid',
-            '--fork', '--mount-proc', '--kill-child=SIGKILL',
-            '/usr/bin/python3', '-I', str(ROOT/'test_delivery.py'), '--private']
+def main(cancellation_proof=True):
+    # SSH executes this directly: no timeout/shell lifetime gap above the owner.
+    bind_parent(CALLER)
+    committed = False
+    interrupted = False
+    identity = {'runId': str(uuid.uuid4())}
+    def cancel(sig, frame):
+        nonlocal interrupted
+        if not committed:
+            if interrupted:
+                os._exit(1)  # hard 2s cleanup grace after the 190s owner deadline
+            interrupted = True
+            signal.alarm(2)
+            raise InterruptedError('native_delivery_cancelled:'+str(sig))
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGALRM):
+        signal.signal(sig, cancel)
+    signal.alarm(190)
+    try:
+        raw, manifest = validate_bootstrap()
+        identity.update(sourceSha=manifest['sourceSha'], manifestDigest=hashlib.sha256(raw).hexdigest(), fileDigests=manifest['files'])
+        if len(sys.argv) != 1:
+            raise RuntimeError('fixed_test_delivery_boundary')
+        closure = {name: read(SOURCE/name) for name in FILES}
+        if any(hashlib.sha256(data).hexdigest() != manifest['files'][name] for name, data in closure.items()):
+            raise RuntimeError('delivery_digest')
+        observe = observer(closure)
+        runs = ROOT/'runs'
+        runs.mkdir(mode=0o700, exist_ok=True)
+        trusted(runs, True)
+        child_run = operation(identity, observe, cancellation_proof)
+    except BaseException as exc:
+        signal.alarm(0)
+        publish(identity, 'failure', detail=type(exc).__name__+':'+str(exc)[:1024])
+        raise
+    # The one terminal commit follows ALL child/namespace/source/preservation and
+    # identity gates. A later SSH disconnect cannot undo this completed operation.
+    signal.alarm(0)
+    committed = True
+    publish(identity, 'pass', childRunId=child_run, result='all-native-delivery-gates-complete')
 
 
 def private_main(cancellation_proof=True):

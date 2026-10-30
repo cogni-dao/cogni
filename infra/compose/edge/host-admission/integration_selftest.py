@@ -294,7 +294,7 @@ def outer():
         try:
             row = json.loads(line)
             check(row.get('sourceSha') == IDENTITY['sourceSha'] and row.get('runId') == IDENTITY['runId'], 'worker source binding')
-            if row.get('operation') in ('suite', 'selftest') and row.get('verdict') == 'pass':
+            if row.get('operation') in ('suite', 'selftest', 'delivery') and row.get('verdict') == 'pass':
                 # Worker diagnostics cannot commit an outer terminal verdict.
                 diagnostics = True
                 emit('worker-terminal-refused', 'failure', detail='terminal success belongs to outer supervisor')
@@ -313,7 +313,7 @@ def outer():
         raise preservation_error
     check(completions == 1, 'missing/duplicate worker assertion completion')
     # Sole terminal success, after exit/cleanup/preservation/identity/completion.
-    emit('selftest', result='actual-kernel-ssh-complete')
+    emit('suite-complete', 'complete', result='actual-kernel-ssh-complete')
 
 
 FIXED_EXECUTABLES = ('/usr/sbin/iptables', '/usr/sbin/iptables-save', '/usr/sbin/ip6tables-save',
@@ -527,16 +527,16 @@ def delivery_cancellation_cases():
             found.append(int(child))
             found.extend(descendants(int(child)))
         return found
-    for phase in ('private-setup-start', 'native-preflight'):
+    for phase, target in ((phase, target) for phase in ('private-setup-start', 'native-preflight') for target in ('launcher', 'enclosing-owner')):
         before = host_snapshot()
         sources = sorted(str(p) for p in (delivery_root/'runs').iterdir())
-        # Test-side Python call runs the SAME private delivery/stage/Popen chain,
-        # omitting only recursive cancellation instrumentation. No dummy suite.
-        argv = delivery['namespace_argv']()
-        code = ("import runpy,sys;sys.argv=["+repr(str(delivery_root/'test_delivery.py'))+",'--private'];"
-                "m=runpy.run_path(sys.argv[0]);m['private_main'](False)")
-        argv = argv[:-2]+['-c', code]
-        child = subprocess.Popen(argv, stdout=subprocess.PIPE,
+        # Real highest launcher, its real native namespace and suite. Only
+        # recursive cancellation instrumentation is omitted by a Python seam.
+        code = ("import runpy,sys;sys.argv=["+repr(str(delivery_root/'test_delivery.py'))+"];"
+                "m=runpy.run_path(sys.argv[0]);m['main'](False)")
+        argv = ['/usr/bin/python3', '-I', '-c', code]
+        owner = "import subprocess,sys;child=subprocess.Popen("+repr(argv)+");sys.exit(child.wait())"
+        child = subprocess.Popen(['/usr/bin/python3', '-I', '-c', owner], stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, start_new_session=True,
                                  preexec_fn=lambda parent=os.getpid(): die_with_parent(parent))
         data = bytearray()
@@ -559,7 +559,7 @@ def delivery_cancellation_cases():
                 if any(row.get('operation') == 'suite-progress' and row.get('phase') == phase for row in rows):
                     tree = descendants(child.pid)
                     check(bool(tree), 'delivery namespace PID1 missing')
-                    delivery_pid = tree[0]
+                    delivery_pid = tree[0] if target == 'launcher' else child.pid
                     workers = []
                     for pid in tree:
                         try:
@@ -594,7 +594,7 @@ def delivery_cancellation_cases():
                     row = json.loads(line)
                 except ValueError:
                     continue
-                check(not (row.get('operation') in ('suite', 'selftest') and row.get('verdict') == 'pass'), 'terminal PASS after failed delivery')
+                check(not (row.get('operation') in ('suite', 'selftest', 'delivery') and row.get('verdict') == 'pass'), 'terminal PASS after failed delivery')
             check(sorted(str(p) for p in (delivery_root/'runs').iterdir()) == sources, 'temporary source lifetime escaped mount namespace')
             check(host_snapshot() == before, 'delivery cancellation changed original host state')
         finally:
@@ -602,7 +602,7 @@ def delivery_cancellation_cases():
                 child.kill()
                 child.wait(timeout=2)
             child.stdout.close()
-        emit('delivery-cancellation', phase=phase, result='actual-delivery-SIGKILL;descendants-dead;no-terminal-pass;source-mount-released;host-preserved')
+        emit('delivery-cancellation', phase=phase, target=target, result='actual-delivery-SIGKILL;descendants-dead;no-terminal-pass;source-mount-released;host-preserved')
 
 
 def kernel_cases(policy):
@@ -1326,5 +1326,5 @@ if __name__ == '__main__':
             check(len(sys.argv) == 1, 'no caller selftest options')
             outer()
     except BaseException as exc:
-        emit('selftest', 'failure', detail=type(exc).__name__+':'+str(exc)[:1024])
+        emit('suite-failed', 'failure', detail=type(exc).__name__+':'+str(exc)[:1024])
         sys.exit(1)

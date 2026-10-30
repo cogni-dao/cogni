@@ -162,9 +162,65 @@ class Tests(unittest.TestCase):
   for result,parent in ((-1,42),(0,99)):
    libc.prctl.return_value=result
    with patch.object(kernel.ctypes,'CDLL',return_value=libc),patch.object(os,'getppid',return_value=parent),patch.object(os,'_exit',side_effect=DeadParent):
-    with self.assertRaises(DeadParent):kernel.die_with_parent(42)
+    for binding in (kernel.die_with_parent,d.bind_parent):
+     with self.assertRaises(DeadParent):binding(42)
   argv=d.namespace_argv()
   self.assertIn('--mount',argv);self.assertIn('--pid',argv);self.assertIn('--kill-child=SIGKILL',argv)
+ def test_highest_delivery_gates_terminal_on_every_owned_boundary(self):
+  import test_delivery as d,types,io,contextlib,hashlib
+  from unittest.mock import patch
+  identity={'sourceSha':'a'*40,'runId':'highest','fileDigests':{'fixed':'bytes'},'manifestDigest':'digest'}
+  before={'rules':'original'}
+  runs=self.root/'runs';runs.mkdir()
+  for case in ('mismatch','cleanup-error','child-nonzero','timeout','cancel-after-buffer','source-mismatch','terminal-spoof','completion-mismatch','success'):
+   with self.subTest(case=case):
+    row={**identity,'runId':'suite','operation':'suite-complete','verdict':'complete'}
+    if case=='source-mismatch':row['sourceSha']='b'*40
+    if case=='completion-mismatch':row['fileDigests']={}
+    if case=='terminal-spoof':row.update(operation='selftest',verdict='pass')
+    r,w=os.pipe();os.write(w,(json.dumps(row)+'\n').encode());os.close(w)
+    def wait(**kwargs):
+     if case=='cleanup-error':raise OSError('cleanup failed')
+     return 1 if case=='child-nonzero' else 0
+    child=types.SimpleNamespace(stdout=os.fdopen(r,'rb'),wait=wait,poll=lambda:0,kill=lambda:None)
+    snapshots=[before,{'rules':'changed'} if case=='mismatch' else before]
+    calls=[0];ticks=[0]
+    def selected(*args):
+     calls[0]+=1
+     if case=='cancel-after-buffer' and calls[0]>1:raise InterruptedError('after complete, before commit')
+     return ([child.stdout],[],[])
+    def clock():
+     ticks[0]+=1
+     return 191 if case=='timeout' and ticks[0]>2 else 0
+    observe={'host_snapshot':lambda:snapshots.pop(0)}
+    output=io.StringIO()
+    with patch.object(d,'ROOT',self.root),patch.object(d.subprocess,'Popen',side_effect=lambda argv,**kw:(kw['preexec_fn'](),child)[1]),patch.object(d,'bind_parent') as native_bind,patch.object(d.select,'select',side_effect=selected),patch.object(d.time,'monotonic',side_effect=clock),contextlib.redirect_stdout(output):
+     if case=='success':self.assertEqual(d.operation(identity,observe,False),'suite')
+     else:
+      with self.assertRaises((RuntimeError,OSError,TimeoutError,InterruptedError)):d.operation(identity,observe,False)
+    native_bind.assert_called_once_with(os.getpid())
+    child.stdout.close()
+    rows=[json.loads(line) for line in output.getvalue().splitlines()]
+    self.assertFalse(any(row.get('operation')=='delivery' and row.get('verdict')=='pass' for row in rows))
+ def test_main_owns_single_terminal_after_operation_and_records_failure(self):
+  import test_delivery as d,hashlib,types
+  from unittest.mock import patch,Mock
+  closure={name:b'fixture' for name in d.FILES}
+  manifest={'sourceSha':'a'*40,'files':{n:hashlib.sha256(v).hexdigest() for n,v in closure.items()}}
+  for failed in (False,True):
+   events=[]
+   def operate(identity,observe,cancellation):
+    self.assertFalse(events)
+    if failed:raise OSError('owned cleanup failed')
+    events.append('all-owned-gates-complete');return 'suite'
+   with patch.object(d,'bind_parent') as bind,patch.object(d,'validate_bootstrap',return_value=(b'manifest',manifest)),patch.object(d,'read',return_value=b'fixture'),patch.object(d,'observer',return_value={}),patch.object(d,'ROOT',self.root),patch.object(d,'trusted'),patch.object(d,'operation',side_effect=operate),patch.object(d,'publish',side_effect=lambda identity,verdict,**kw:events.append((identity,verdict))),patch.object(d.signal,'signal'),patch.object(d.signal,'alarm'),patch.object(sys,'argv',['test_delivery.py']):
+    if failed:
+     with self.assertRaises(OSError):d.main(False)
+    else:d.main(False)
+   bind.assert_called_once_with(d.CALLER)
+   self.assertEqual(events[-1][1],'failure' if failed else 'pass')
+   self.assertEqual(events[-1][0]['sourceSha'],'a'*40);self.assertTrue(events[-1][0]['runId'])
+   if not failed:self.assertEqual(events[0],'all-owned-gates-complete')
  def test_fence_requires_exact_ordered_native_rules(self):
   import kernel,shlex
   expected=['-A CGADMIT '+shlex.join(row) for row in kernel.fence_rules(self.e.policy)]
@@ -235,8 +291,9 @@ class Tests(unittest.TestCase):
       with self.assertRaises((AssertionError,OSError,TimeoutError,InterruptedError)):h.outer()
     printed=[json.loads(line) for line in output.getvalue().splitlines()]
     terminal=lambda rows:[row for row in rows if row.get('operation') in ('suite','selftest') and row.get('verdict')=='pass']
-    self.assertEqual(len(terminal(printed)),1 if case=='success' else 0)
-    self.assertEqual(len(terminal(logged)),1 if case=='success' else 0)
+    self.assertEqual(len(terminal(printed)),0)
+    self.assertEqual(sum(row.get('operation')=='suite-complete' and row.get('verdict')=='complete' for row in printed),1 if case=='success' else 0)
+    self.assertEqual(len(terminal(logged)),0)
  def test_engine_hands_precommit_anchor_to_kernel_after_checkpoint_jump(self):
   import kernel
   from unittest.mock import patch
