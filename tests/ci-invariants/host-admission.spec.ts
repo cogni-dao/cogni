@@ -80,6 +80,45 @@ class Tests(unittest.TestCase):
   f=self.root/'legacy';f.write_text('old');before=file_fingerprint(f);f.write_text('new')
   self.assertNotEqual(before,file_fingerprint(f));f.chmod(0o644);before=file_fingerprint(f);f.chmod(0o600)
   self.assertNotEqual(before,file_fingerprint(f))
+ def test_scoped_host_observation_streams_large_unrelated_rules_exactly(self):
+  import integration_selftest as h,subprocess,io
+  from unittest.mock import patch
+  base='*filter\n:FORWARD DROP [1:2]\n:DOCKER-USER - [0:0]\n:CGADMIT - [0:0]\n:DEPENDENCY - [0:0]\n:CALLER - [0:0]\n:KUBE-EP - [0:0]\n-A FORWARD -j DOCKER-USER\n-A FORWARD -j KUBE-EP\n-A CALLER -j DOCKER-USER\n-A DOCKER-USER -m comment --comment "cogni:fence" -j CGADMIT\n-A CGADMIT -j DEPENDENCY\n-A DEPENDENCY -j DROP\n'
+  expected=h.legacy_policy(base+'COMMIT\n')
+  self.assertEqual(set(expected['filter']),{'FORWARD','DOCKER-USER','CGADMIT','DEPENDENCY','CALLER'})
+  self.assertEqual(expected['filter']['CALLER']['rules'],[['-A','CALLER','-j','DOCKER-USER']])
+  large=base+('-A KUBE-EP -d 10.0.0.1 -j ACCEPT\n'*6000)+'COMMIT\n'
+  self.assertGreater(len(large.encode()),65536)
+  self.assertEqual(expected,h.legacy_policy(io.StringIO(large)))
+  for changed in (large.replace('-A DEPENDENCY -j DROP','-A DEPENDENCY -j ACCEPT'),large.replace('-A CALLER -j DOCKER-USER','-A CALLER -j ACCEPT\n-A CALLER -j DOCKER-USER'),large.replace('-A FORWARD -j DOCKER-USER\n-A FORWARD -j KUBE-EP','-A FORWARD -j KUBE-EP\n-A FORWARD -j DOCKER-USER')):
+   self.assertNotEqual(expected,h.legacy_policy(io.StringIO(changed)))
+  with self.assertRaisesRegex(AssertionError,'relevant host policy overflow'):
+   h.legacy_policy(base+('-A CALLER -j ACCEPT\n'*6000)+'COMMIT\n')
+  # Actual bounded pipe/spool reader for BOTH fixed tools; only native executable
+  # and Linux preexec are seams. Producer really writes >64KiB, never truncates.
+  fixture=self.root/'save-output';fixture.write_text(large)
+  real_popen=subprocess.Popen
+  def producer(argv,**kwargs):
+   self.assertIn(argv,[['/usr/sbin/iptables-save'],['/usr/sbin/ip6tables-save']])
+   self.assertIn('preexec_fn',kwargs);kwargs.pop('preexec_fn')
+   return real_popen([sys.executable,'-c','import pathlib,sys;sys.stdout.buffer.write(pathlib.Path(sys.argv[1]).read_bytes())',str(fixture)],**kwargs)
+  for tool in ('/usr/sbin/iptables-save','/usr/sbin/ip6tables-save'):
+   with patch.object(h.subprocess,'Popen',side_effect=producer):self.assertEqual(h.legacy_snapshot(tool),expected)
+  fixture.write_text(base+('-A CALLER -j ACCEPT\n'*6000)+'COMMIT\n')
+  with patch.object(h.subprocess,'Popen',side_effect=producer):
+   with self.assertRaisesRegex(AssertionError,'relevant host policy overflow'):h.legacy_snapshot('/usr/sbin/ip6tables-save')
+  fixture.write_text(large)
+  def failed(argv,**kwargs):
+   kwargs.pop('preexec_fn')
+   return real_popen([sys.executable,'-c','raise SystemExit(7)'],**kwargs)
+  with patch.object(h.subprocess,'Popen',side_effect=failed):
+   with self.assertRaisesRegex(AssertionError,'host save child failed'):h.legacy_snapshot('/usr/sbin/iptables-save')
+  with patch.object(h,'SAVE_INPUT_CAP',100):
+   with self.assertRaisesRegex(AssertionError,'input/work bound'):h.legacy_policy(large)
+   with patch.object(h.subprocess,'Popen',side_effect=producer):
+    with self.assertRaisesRegex(AssertionError,'host save input overflow'):h.legacy_snapshot('/usr/sbin/iptables-save')
+  with self.assertRaisesRegex(AssertionError,'incomplete native save'):
+   h.legacy_policy(base)
  def test_reboot_backward_above_saved_wall_never_revives_old_snapshot(self):
   r=self.request();self.apply(r);history=copy.deepcopy(self.e.load()['owners'])
   # Real elapsed time may exceed expiry, but post-reboot unsynced wall remains

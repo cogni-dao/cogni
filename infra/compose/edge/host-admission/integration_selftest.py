@@ -26,6 +26,8 @@ import syslog
 import time
 import uuid
 import types
+import tempfile
+import io
 
 BASE = Path(__file__).absolute().parent
 sys.dont_write_bytecode = True
@@ -137,52 +139,119 @@ def preflight():
          provisionPrerequisite='Fixed trusted provisioner packages: python3 ipset iptables util-linux iproute2 openssh-server openssh-client procps coreutils. No flight-time install fallback.')
 
 
-def legacy_policy(raw):
-    """Compare owned rules, dependencies and complete caller chains, not Kube churn.
+# Observation has a separate whole-host input budget. The production admission
+# command cap remains 64KiB/1s. Only the exact relevant snapshot may use 64KiB.
+SAVE_INPUT_CAP = 32 * 1024 * 1024
+SAVE_SCOPE_CAP = 65536
 
-    Whole-line save comments and chain packet counters are generated metadata.
-    Rule comments, ordering, targets, chain policies and inbound hooks remain.
+
+def legacy_policy(raw):
+    """Two bounded passes: graph/ownership first, exact selected rules second.
+
+    Unrelated rule bodies never accumulate in memory. Full selected callers,
+    policies, ordering, comments and owned-chain dependencies remain exact.
     """
+    stream = io.StringIO(raw) if isinstance(raw, str) else raw
     tables = {}
     current = None
-    for line in raw.splitlines():
+    size = lines = tokens_seen = 0
+    deadline = time.monotonic()+5
+    for line in stream:
+        size += len(line.encode('utf-8'))
+        lines += 1
+        check(size <= SAVE_INPUT_CAP and lines <= 131072 and len(line) <= 16384,
+              'host save input/work bound')
+        check(time.monotonic() < deadline, 'host save parse deadline')
+        line = line.rstrip('\n')
         if not line or line.startswith('#'):
             continue
         if line.startswith('*'):
+            check(current is None and line[1:] not in tables, 'save table shape')
             current = line[1:]
-            tables[current] = {'chains': {}, 'rules': {}}
+            tables[current] = {'chains': {}, 'edges': {}, 'owned': set()}
+            check(len(tables) <= 16, 'save table work bound')
         elif line == 'COMMIT':
+            check(current is not None, 'save commit shape')
             current = None
         elif current is not None and line.startswith(':'):
             name, policy, counters = line[1:].split()
             check(re.fullmatch(r'\[\d+:\d+\]', counters), 'save chain counters')
+            check(name not in tables[current]['chains'], 'duplicate save chain')
             tables[current]['chains'][name] = policy
+            check(sum(len(t['chains']) for t in tables.values()) <= 16384, 'save chain work bound')
         elif current is not None and line.startswith('-A '):
             tokens = shlex.split(line)
-            tables[current]['rules'].setdefault(tokens[1], []).append(tokens)
+            tokens_seen += len(tokens)
+            check(tokens_seen <= 1048576 and len(tokens) >= 2, 'save token work bound')
+            name = tokens[1]
+            edges = tables[current]['edges'].setdefault(name, set())
+            edges.update(tokens[i+1] for i, token in enumerate(tokens[:-1]) if token in ('-j', '-g'))
+            if any('cogni' in tokens[i+1].lower() for i, token in enumerate(tokens[:-1]) if token == '--comment'):
+                tables[current]['owned'].add(name)
         else:
             raise AssertionError('unrecognized native save output')
+    check(current is None, 'incomplete native save output')
     result = {}
     for table, data in tables.items():
-        chains, rules = data['chains'], data['rules']
-        def targets(rule):
-            return {rule[i+1] for i, token in enumerate(rule[:-1]) if token in ('-j', '-g')}
-        owned = {name for name in chains if name in ('DOCKER-USER', 'CGADMIT')}
-        owned |= {name for name, rows in rules.items() if any(
-            'cogni' in row[i+1].lower() for row in rows for i, token in enumerate(row[:-1]) if token == '--comment')}
-        while True:
-            expanded = owned | {target for name in owned for row in rules.get(name, [])
-                                for target in targets(row) if target in chains}
-            if expanded == owned:
-                break
-            owned = expanded
-        # Complete callers expose an ACCEPT inserted before the admission jump.
-        callers = {name for name, rows in rules.items() if any(targets(row) & owned for row in rows)}
+        chains, edges = data['chains'], data['edges']
+        owned = data['owned'] | (set(chains) & {'DOCKER-USER', 'CGADMIT'})
+        pending = list(owned)
+        while pending:
+            name = pending.pop()
+            for target in edges.get(name, ()):
+                if target in chains and target not in owned:
+                    owned.add(target)
+                    pending.append(target)
+        callers = {name for name, targets in edges.items() if targets & owned}
         selected = owned | callers | ({'FORWARD'} if table == 'filter' else set())
         if selected:
-            result[table] = {name: {'policy': chains[name], 'rules': rules.get(name, [])}
-                             for name in sorted(selected)}
+            result[table] = {name: {'policy': chains[name], 'rules': []} for name in sorted(selected)}
+    stream.seek(0)
+    current = None
+    relevant = 0
+    for line in stream:
+        check(time.monotonic() < deadline, 'host save parse deadline')
+        if line.startswith('*'):
+            current = line[1:].rstrip('\n')
+        elif line.startswith('-A ') and line.split(' ', 2)[1] in result.get(current, {}):
+            tokens = shlex.split(line)
+            relevant += len(json.dumps(tokens).encode())
+            check(relevant <= SAVE_SCOPE_CAP, 'relevant host policy overflow')
+            result[current][tokens[1]]['rules'].append(tokens)
+    check(len(json.dumps(result, sort_keys=True).encode()) <= SAVE_SCOPE_CAP, 'relevant host policy overflow')
     return result
+
+
+def legacy_snapshot(tool):
+    """Fixed v4/v6 read: bounded disk spool, then exact bounded selection."""
+    check(tool in ('/usr/sbin/iptables-save', '/usr/sbin/ip6tables-save'), 'fixed save tool')
+    child = subprocess.Popen([tool], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT,
+                             env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'},
+                             preexec_fn=lambda parent=os.getpid(): die_with_parent(parent))
+    deadline = time.monotonic()+1
+    count = 0
+    try:
+        with tempfile.TemporaryFile(mode='w+b') as spool:
+            while True:
+                left = deadline-time.monotonic()
+                if left <= 0 or not select.select([child.stdout], [], [], left)[0]:
+                    raise TimeoutError('host save read deadline')
+                chunk = os.read(child.stdout.fileno(), 65536)
+                if not chunk:
+                    break
+                count += len(chunk)
+                check(count <= SAVE_INPUT_CAP, 'host save input overflow')
+                spool.write(chunk)
+            check(child.wait(timeout=max(.001, deadline-time.monotonic())) == 0, 'host save child failed')
+            spool.seek(0)
+            with io.TextIOWrapper(spool, encoding='utf-8', errors='strict') as text:
+                return legacy_policy(text)
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=1)
+        child.stdout.close()
 
 
 def file_fingerprint(path):
@@ -208,8 +277,8 @@ def host_snapshot():
              '/etc/systemd/system/cogni-harden-docker-public-ports.service',
              '/opt/cogni-template-runtime/compute-egress-allowlist']
     return {'net': namespace('net'), 'mnt': namespace('mnt'),
-            'rules4': legacy_policy(run('/usr/sbin/iptables-save')),
-            'rules6': legacy_policy(run('/usr/sbin/ip6tables-save')),
+            'rules4': legacy_snapshot('/usr/sbin/iptables-save'),
+            'rules6': legacy_snapshot('/usr/sbin/ip6tables-save'),
             'files': {name: file_fingerprint(name) for name in files}}
 
 

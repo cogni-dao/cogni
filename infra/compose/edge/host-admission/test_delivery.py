@@ -162,6 +162,7 @@ def observer(closure):
     namespace = {'__name__': 'delivery_observer', '__file__': str(SOURCE/'integration_selftest.py')}
     exec(compile(closure['integration_selftest.py'], namespace['__file__'], 'exec'), namespace)
     namespace['command'] = sys.modules['kernel'].command
+    namespace['die_with_parent'] = sys.modules['kernel'].die_with_parent
     return namespace
 
 
