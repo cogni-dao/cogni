@@ -154,6 +154,12 @@ export const akashTxAllocations = pgTable(
      * it, so the first update after a create always applies once and records the hash.
      */
     lastAppliedSdlHash: text("last_applied_sdl_hash"),
+    /** Purpose-key version pinned once per receipt; null keeps legacy receipts unenrolled. */
+    egressKeyVersion: text("egress_key_version"),
+    /** Bounded authenticated observations. Absolute millisecond timestamps, never relative TTLs. */
+    egressObservations: jsonb("egress_observations")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     /** Stable redacted failure code; never provider response bodies. */
     failureCode: text("failure_code"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -177,6 +183,10 @@ export const akashTxAllocations = pgTable(
     index("akash_tx_allocations_external_name_idx").on(table.externalName),
     // NODE_ID_IS_THE_COST_GROUPING_KEY — the access path every cost question takes.
     index("akash_tx_allocations_node_idx").on(table.nodeId, table.environment),
+    check(
+      "akash_tx_allocations_egress_observations_check",
+      sql`jsonb_typeof(${table.egressObservations}) = 'array' AND jsonb_array_length(${table.egressObservations}) <= 4`
+    ),
     check(
       "akash_tx_allocations_generation_check",
       sql`${table.compositeGeneration} > 0`
