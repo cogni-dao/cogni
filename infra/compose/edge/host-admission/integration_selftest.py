@@ -170,7 +170,7 @@ def legacy_policy(raw, family="ipv4"):
         if line.startswith('*'):
             check(current is None and line[1:] not in tables, 'save table shape')
             current = line[1:]
-            tables[current] = {'chains': {}, 'edges': {}, 'tagged_targets': set()}
+            tables[current] = {'chains': {}, 'edges': {}, 'calls': {}, 'tagged_targets': set()}
             check(len(tables) <= 16, 'save table work bound')
         elif line == 'COMMIT':
             check(current is not None, 'save commit shape')
@@ -190,7 +190,19 @@ def legacy_policy(raw, family="ipv4"):
             edges.update(tokens[i+1] for i, token in enumerate(tokens[:-1]) if token in ('-j', '-g'))
             comments = [tokens[i+1] for i, token in enumerate(tokens[:-1]) if token == '--comment']
             legacy_container = family == 'ipv4' and current == 'filter' and name == 'DOCKER-USER'
-            if legacy_container and any(LEGACY_RULE_TAG in comment for comment in comments):
+            tagged = legacy_container and any(LEGACY_RULE_TAG in comment for comment in comments)
+            targets = {tokens[i+1] for i, token in enumerate(tokens[:-1]) if token in ('-j', '-g')}
+            plain = []
+            i = 2
+            while i < len(tokens):
+                if tokens[i:i+2] == ['-m', 'comment'] or tokens[i] == '--comment':
+                    i += 2
+                else:
+                    plain.append(tokens[i])
+                    i += 1
+            unconditional = len(plain) == 2 and plain[0] in ('-j', '-g')
+            tables[current]['calls'].setdefault(name, []).append((targets, tagged, unconditional, '-g' in plain))
+            if tagged:
                 # Writer deletion matches the full literal tag in this container;
                 # retain stale/unknown suffixes as well as its six current tags.
                 tables[current]['tagged_targets'].update(tokens[i+1] for i, token in enumerate(tokens[:-1]) if token in ('-j', '-g'))
@@ -232,9 +244,42 @@ def legacy_policy(raw, family="ipv4"):
                 if caller not in callers:
                     callers.add(caller)
                     pending.append(caller)
-        selected = callers | ({'FORWARD'} if table == 'filter' else set())
+        # Ownership and semantic influence differ. Retained callers can execute
+        # other chains before OR after a conditional/returning protected jump.
+        # Exclude suffix callees only after a PROVEN unconditional terminal path.
+        terminal = set()
+        todo = list(chains)
+        work = 0
+        while todo:
+            name = todo.pop()
+            if name in terminal:
+                continue
+            for targets, _, unconditional, goto in data['calls'].get(name, []):
+                work += 1
+                check(work <= 1048576 and time.monotonic() < deadline, 'semantic dependency work/deadline')
+                known_terminal = bool(targets) and targets <= (terminal | {'ACCEPT', 'DROP', 'REJECT'})
+                if 'RETURN' in targets or (goto and not known_terminal):
+                    break
+                if unconditional and known_terminal:
+                    terminal.add(name)
+                    todo.extend(reverse.get(name, ()))
+                    break
+        preempting = set()
+        for caller in callers:
+            for targets, _, unconditional, _ in data['calls'].get(caller, []):
+                preempting.update((targets & set(chains)) - callers)
+                if unconditional and targets and targets <= (terminal | {'ACCEPT', 'DROP', 'REJECT'}):
+                    break
+        pending = list(preempting)
+        while pending:
+            check(time.monotonic() < deadline, 'host save parse deadline')
+            for target in edges.get(pending.pop(), ()):
+                if target in chains and target not in preempting:
+                    preempting.add(target)
+                    pending.append(target)
+        selected = callers | preempting | ({'FORWARD'} if table == 'filter' else set())
         for name in selected:
-            classes[(table, name)] = ('owned-chain' if name in roots else 'owned-dependency' if name in owned else 'legacy-container' if name in contexts else 'caller-context')
+            classes[(table, name)] = ('owned-chain' if name in roots else 'owned-dependency' if name in owned else 'legacy-container' if name in contexts else 'preempting-dependency' if name in preempting else 'caller-context')
         if selected:
             result[table] = {name: {'policy': chains[name], 'rules': []} for name in sorted(selected)}
     stream.seek(0)
@@ -285,18 +330,116 @@ def legacy_snapshot(tool):
         child.stdout.close()
 
 
+FILE_INPUT_CAP = 32 * 1024 * 1024
+
+
 def file_fingerprint(path):
-    path = Path(path)
-    if not path.exists() and not path.is_symlink():
-        return None
-    info = path.lstat()
-    # Include mode/ownership/type and link identity, not only file contents.
-    value = {'mode': info.st_mode, 'uid': info.st_uid, 'gid': info.st_gid}
-    if path.is_symlink():
-        value['link'] = os.readlink(path)
-    if path.is_file():
-        value['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return value
+    """Bounded fixed-file observation; never follow an unchecked alias at open.
+
+    Persistence aliases stay within their source directory. The fixed unit may
+    use ordinary systemd unit directories. All links and the final regular file
+    retain custody/identity; unsupported targets, races and cycles refuse proof.
+    """
+    source = Path(os.path.abspath(path))
+    target = source
+    observed = {}
+    links = []
+    seen = set()
+    parent_aliases = {}
+    deadline = time.monotonic()+5
+    def metadata(info):
+        keys = ('mode', 'uid', 'gid', 'dev', 'ino')
+        if not stat.S_ISDIR(info.st_mode):
+            keys += ('nlink', 'size', 'mtime_ns', 'ctime_ns')
+        return {key: getattr(info, 'st_'+key) for key in keys}
+    def stable():
+        for name, expected in observed.items():
+            try:
+                actual = metadata(name.lstat())
+            except FileNotFoundError:
+                actual = None
+            check(actual == expected, 'file observation alias race')
+    def allowed(destination):
+        def normalized(name):
+            for alias, resolved in parent_aliases.items():
+                if name.is_relative_to(alias):
+                    name = resolved/name.relative_to(alias)
+            return name
+        destination = normalized(destination)
+        if source.name == 'cogni-harden-docker-public-ports.service':
+            dirs = {Path('/etc/systemd/system'), Path('/lib/systemd/system'), Path('/usr/lib/systemd/system')}
+            if source.parent.name.endswith('.wants'):
+                dirs.add(source.parent.parent)
+            return destination.name == source.name and destination.parent in {normalized(name) for name in dirs}
+        return destination.is_relative_to(normalized(source.parent))
+    while True:
+        check(time.monotonic() < deadline and len(target.parts) <= 64, 'file observation work deadline')
+        directory = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        restart = False
+        try:
+            for index, part in enumerate(target.parts[1:]):
+                current = Path('/').joinpath(*target.parts[1:index+2])
+                last = index == len(target.parts)-2
+                try:
+                    info = os.stat(part, dir_fd=directory, follow_symlinks=False)
+                except FileNotFoundError:
+                    observed[current] = None
+                    stable()
+                    return {'links': links, 'target': None} if links else None
+                record = metadata(info)
+                if current in observed:
+                    check(observed[current] == record, 'file observation alias race')
+                observed[current] = record
+                if stat.S_ISLNK(info.st_mode):
+                    check((not last or current not in seen) and len(links) < 8, 'file observation symlink cycle/depth')
+                    if last:
+                        seen.add(current)
+                    raw = os.readlink(part, dir_fd=directory)
+                    destination = Path(os.path.normpath(str(current.parent/raw) if not raw.startswith('/') else raw))
+                    if last:
+                        check(allowed(destination), 'unsupported persistence link target')
+                    else:
+                        # Maintained distro directory aliases only, never an
+                        # arbitrary parent link into another host data tree.
+                        aliases = {'/lib': '/usr/lib', '/lib64': '/usr/lib64', '/bin': '/usr/bin', '/sbin': '/usr/sbin',
+                                   '/var': '/private/var', '/etc': '/private/etc', '/tmp': '/private/tmp'}
+                        check(aliases.get(str(current)) == str(destination), 'unsupported persistence parent alias')
+                        parent_aliases[current] = destination
+                    links.append({'path': str(current), 'link': raw, **record})
+                    suffix = target.parts[index+2:]
+                    target = destination.joinpath(*suffix)
+                    restart = True
+                    break
+                if not last:
+                    check(stat.S_ISDIR(info.st_mode), 'file observation parent type')
+                    child_dir = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                    check(metadata(os.fstat(child_dir)) == record, 'file observation parent race')
+                    os.close(directory)
+                    directory = child_dir
+                    continue
+                check(stat.S_ISREG(info.st_mode), 'unsupported persistence file type')
+                check(info.st_size <= FILE_INPUT_CAP, 'persistence file input overflow')
+                fd = os.open(part, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                try:
+                    check(metadata(os.fstat(fd)) == record, 'file observation target race')
+                    digest = hashlib.sha256()
+                    count = 0
+                    while True:
+                        check(time.monotonic() < deadline, 'file observation read deadline')
+                        chunk = os.read(fd, min(65536, FILE_INPUT_CAP-count+1))
+                        if not chunk:
+                            break
+                        count += len(chunk)
+                        check(count <= FILE_INPUT_CAP, 'persistence file input overflow')
+                        digest.update(chunk)
+                    check(metadata(os.fstat(fd)) == record and count == info.st_size, 'file observation target changed')
+                finally:
+                    os.close(fd)
+                stable()
+                return {'links': links, 'target': {'path': str(target), **record, 'sha256': digest.hexdigest()}}
+        finally:
+            os.close(directory)
+        check(restart, 'file observation resolution failed')
 
 
 def host_snapshot():
