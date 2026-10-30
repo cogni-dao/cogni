@@ -264,17 +264,24 @@ def legacy_policy(raw, family="ipv4"):
                     terminal.add(name)
                     todo.extend(reverse.get(name, ()))
                     break
-        preempting = set()
-        for caller in callers:
-            for targets, _, unconditional, _ in data['calls'].get(caller, []):
-                preempting.update((targets & set(chains)) - callers)
+        def semantic_targets(name):
+            # The SAME ordered selector governs context and recursive influence.
+            # Selected bodies remain complete; only unreachable callees vanish.
+            nonlocal work
+            for targets, _, unconditional, _ in data['calls'].get(name, []):
+                work += 1
+                check(work <= 1048576 and time.monotonic() < deadline, 'semantic dependency work/deadline')
+                yield from targets & chains.keys()
                 if unconditional and targets and targets <= (terminal | {'ACCEPT', 'DROP', 'REJECT'}):
                     break
-        pending = list(preempting)
+        preempting = set()
+        visited = set(callers)
+        pending = list(callers)
         while pending:
             check(time.monotonic() < deadline, 'host save parse deadline')
-            for target in edges.get(pending.pop(), ()):
-                if target in chains and target not in preempting:
+            for target in semantic_targets(pending.pop()):
+                if target not in visited:
+                    visited.add(target)
                     preempting.add(target)
                     pending.append(target)
         selected = callers | preempting | ({'FORWARD'} if table == 'filter' else set())

@@ -204,6 +204,35 @@ class Tests(unittest.TestCase):
   self.assertIn('HELPER',legacy_policy(cyclic)['filter'])
   with self.assertRaisesRegex(AssertionError,'relevant host policy overflow'):
    legacy_policy(deep.replace('COMMIT',('-A HELPER -j RETURN\n'*6000)+'COMMIT'))
+ def test_nested_terminal_dependencies_exclude_only_proven_dead_subtrees(self):
+  from integration_selftest import legacy_policy
+  # The caller remains conditional so the protected path is live for other
+  # packets. Every semantic depth must apply the same ordered callee selector.
+  for depth in (1,3):
+   names=['BYPASS']+['HELPER'+str(i) for i in range(depth)]
+   raw='*filter\n:FORWARD DROP [0:0]\n:DOCKER-USER - [0:0]\n:KUBE-SVC-X - [0:0]\n'
+   raw+=''.join(':'+n+' - [0:0]\n' for n in names)
+   raw+='-A FORWARD -p tcp -j BYPASS\n-A FORWARD -j DOCKER-USER\n-A DOCKER-USER -m comment --comment cogni-harden-internal-ports:drop-public -j DROP\n'
+   for caller,target in zip(names,names[1:]):raw+='-A '+caller+' -j '+target+'\n-A '+caller+' -j KUBE-SVC-X\n'
+   terminal='-A '+names[-1]+' -j ACCEPT\n';raw+=terminal
+   large='-A KUBE-SVC-X -m comment --comment "namespace/service endpoint" -j ACCEPT\n'*1200
+   expected=legacy_policy(raw+'COMMIT\n')
+   self.assertEqual(expected,legacy_policy(raw+large+'COMMIT\n'))
+   self.assertNotIn('KUBE-SVC-X',expected['filter'])
+   self.assertEqual(len(expected['filter']['BYPASS']['rules']),2)
+   self.assertNotEqual(expected,legacy_policy(raw.replace('-A BYPASS -j KUBE-SVC-X','-A BYPASS -j RETURN')+'COMMIT\n'))
+   # No proof of terminality: conditional, returning and cyclic helpers must
+   # retain reachable suffix bodies, detect changes and refuse true overflow.
+   for replacement in ('-A '+names[-1]+' -p udp -j ACCEPT\n','-A '+names[-1]+' -j RETURN\n','-A '+names[-1]+' -p udp -j BYPASS\n-A '+names[-1]+' -j RETURN\n'):
+    reachable=raw.replace(terminal,replacement)
+    small=reachable+'-A KUBE-SVC-X -j RETURN\nCOMMIT\n'
+    self.assertIn('KUBE-SVC-X',legacy_policy(small)['filter'])
+    self.assertNotEqual(legacy_policy(small),legacy_policy(small.replace('-A KUBE-SVC-X -j RETURN','-A KUBE-SVC-X -j ACCEPT')))
+    with self.assertRaisesRegex(AssertionError,'relevant host policy overflow'):legacy_policy(reachable+large+'COMMIT\n')
+   # A true owned target retains its COMPLETE dependency closure, regardless
+   # of the terminal proof used to prune merely semantic influence.
+   owned=raw.replace('cogni-harden-internal-ports:drop-public -j DROP','cogni-harden-internal-ports:drop-public -j BYPASS')
+   with self.assertRaisesRegex(AssertionError,'overflow:class=owned-dependency'):legacy_policy(owned+large+'COMMIT\n')
  def test_policy_ownership_uses_real_tag_without_claiming_shared_siblings(self):
   from integration_selftest import legacy_policy,LEGACY_RULE_TAG
   base='*filter\n:FORWARD DROP [0:0]\n:OUTER - [0:0]\n:DOCKER-USER - [0:0]\n:OWNED-DEP - [0:0]\n:KUBE-SERVICES - [0:0]\n:KUBE-SVC-X - [0:0]\n-A FORWARD -j OUTER\n-A OUTER -j DOCKER-USER\n-A DOCKER-USER -m comment --comment "'+LEGACY_RULE_TAG+':drop-public" -j OWNED-DEP\n-A DOCKER-USER -m comment --comment "cogni-candidate-a/service cluster IP" -j KUBE-SERVICES\n-A OWNED-DEP -j DROP\n-A KUBE-SERVICES -m comment --comment "cogni-production/app" -j KUBE-SVC-X\n'
