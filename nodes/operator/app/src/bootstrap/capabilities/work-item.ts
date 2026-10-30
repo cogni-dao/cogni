@@ -78,7 +78,7 @@ function toWorkItemInfo(item: WorkItem): WorkItemInfo {
   return {
     ...dto,
     assignees: dto.assignees.map((a) => ({
-      kind: a.kind,
+      ...a,
       id:
         a.kind === "user"
           ? a.userId
