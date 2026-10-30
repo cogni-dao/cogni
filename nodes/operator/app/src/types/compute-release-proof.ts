@@ -70,3 +70,15 @@ export interface ComputeReleaseProofOutput {
       | "unavailable";
   }[];
 }
+
+/** Server-derived public registry facts, never accepted by the public API. */
+export interface ComputeProofRegistration {
+  readonly nodeId: string;
+  readonly slug: string;
+  readonly repository: string;
+  readonly environment: "candidate-a" | "preview" | "production";
+}
+export interface ComputeProofContext extends ComputeProofRegistration {
+  readonly requestHash: string;
+  readonly nonce: string;
+}

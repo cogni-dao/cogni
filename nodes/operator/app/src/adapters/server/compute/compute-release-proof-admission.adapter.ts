@@ -138,6 +138,7 @@ export class PostgresComputeProofAdmission
       const row = rows[0];
       if (
         !row ||
+        !/^[a-z0-9][a-z0-9-]{0,62}$/.test(row.slug) ||
         `${row.repo_owner}/${row.repo_name}` !== input.expected.repository ||
         !row.deploy_envs.includes(input.expected.environment)
       )
@@ -167,6 +168,12 @@ export class PostgresComputeProofAdmission
       tick();
       let released: Promise<void> | undefined;
       return {
+        registration: Object.freeze({
+          nodeId: input.expected.nodeId,
+          slug: row.slug,
+          repository: `${row.repo_owner}/${row.repo_name}`,
+          environment: input.expected.environment,
+        }),
         signal,
         release: () => {
           released ??= cleanup();

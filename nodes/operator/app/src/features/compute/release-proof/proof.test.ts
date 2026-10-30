@@ -2,6 +2,11 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import { describe, expect, it } from "vitest";
+import {
+  parsePrivateComputeProof,
+  serializePrivateComputeProof,
+} from "@/shared/compute-release-proof-private";
+import type { ComputeReleaseProofInput } from "@/types/compute-release-proof";
 import { computeProofHash, parseComputeProof } from "./request";
 export const requestFixture = () => ({
   version: 1,
@@ -97,7 +102,10 @@ describe("comparative proof boundary", () => {
 import { vi } from "vitest";
 import { stringify } from "yaml";
 import { withDatabaseCaTrust } from "@/shared/secrets/database-ca-command";
-import { NativeComputeReleaseProofAdapter } from "./native-proof";
+import {
+  isDoltMigrationComplete,
+  NativeComputeReleaseProofAdapter,
+} from "./native-proof";
 
 /** Labeled injection harness ONLY. No Kubernetes/provider/allocation writes or runtime proof. */
 function nativeHarness() {
@@ -233,8 +241,6 @@ function nativeHarness() {
     receiptId: "test-only-receipt",
     cogniKey: "xcw:cogni-candidate-a:test:0",
     identity: { nodeId: e.nodeId, compositeUid: uid, compositeGeneration: 7 },
-    registeredSlug: "operator",
-    registeredRepository: "cogni-dao/cogni",
     workload: "operator",
     environment: "candidate-a",
     state: "allocated" as const,
@@ -303,7 +309,24 @@ function nativeHarness() {
     ],
   };
   const provider = { readManagedDefinition: vi.fn(async () => observed) };
-  const adapter = new NativeComputeReleaseProofAdapter(kube, ledger, provider);
+  const native = new NativeComputeReleaseProofAdapter(kube, ledger, provider);
+  const registration = {
+    nodeId: e.nodeId,
+    slug: "operator",
+    repository: "cogni-dao/cogni",
+    environment: "candidate-a" as const,
+  };
+  // Labeled test-only trusted registry projection, separate from injected native state.
+  const adapter = {
+    sample: (value: ComputeReleaseProofInput, signal: AbortSignal) =>
+      native.sample(
+        value,
+        signal,
+        parsePrivateComputeProof(
+          serializePrivateComputeProof(value, registration)
+        ).registration
+      ),
+  };
   return {
     input,
     live,
@@ -316,12 +339,66 @@ function nativeHarness() {
     observed,
     sdl,
     adapter,
+    native,
+    registration,
     setLogs: (text: string) => {
       logs = text;
     },
   };
 }
+
+import { readFileSync } from "node:fs";
+
+describe("canonical Dolt completion reader", () => {
+  it("matches the actual writer node suffix and terminal phase semantics shared by k3s and external readers", () => {
+    const writer = readFileSync(
+      new URL(
+        "../../../../../../../scripts/db/migrate-doltgres.mjs",
+        import.meta.url
+      ),
+      "utf8"
+    );
+    expect(writer).toContain('NODE_NAME?.trim() || "unknown"');
+    expect(writer).toContain("NODE} migrate complete:"); // writer line also carries a success glyph
+    for (const phase of [
+      "owned branch committed",
+      "read-only no-op; no journal DDL or commit",
+    ]) {
+      expect(writer).toContain(phase);
+      expect(
+        isDoltMigrationComplete(
+          `✅ operator-doltgres migrate complete: 0 migration(s) applied + verified + ${phase} in 4ms`,
+          "operator"
+        )
+      ).toBe(true);
+    }
+    for (const line of [
+      "✅ operator migrate complete: 0 migration(s) applied + verified + owned branch committed in 4ms",
+      "✅ foreign-doltgres migrate complete: 0 migration(s) applied + verified + owned branch committed in 4ms",
+      "✅ operator-doltgres migrate complete: 0 migration(s) applied + verified + unknown in 4ms",
+    ])
+      expect(isDoltMigrationComplete(line, "operator")).toBe(false);
+  });
+});
+
 describe("current native evidence (test-only injection)", () => {
+  it("rejects missing or spliced private context before native IO", async () => {
+    const h = nativeHarness();
+    await expect(
+      h.native.sample(h.input, new AbortController().signal)
+    ).rejects.toThrow();
+    const ctx = parsePrivateComputeProof(
+      serializePrivateComputeProof(h.input, h.registration)
+    ).registration;
+    await expect(
+      h.native.sample(h.input, new AbortController().signal, {
+        ...ctx,
+        nonce: "0".repeat(64),
+      })
+    ).rejects.toThrow();
+    expect(h.kube.json).not.toHaveBeenCalled();
+    expect(h.ledger.readOwnedAllocations).not.toHaveBeenCalled();
+  });
   it("joins complete current XR/allocation/provider/Job/pod/receipt without returning raw state", async () => {
     const h = nativeHarness();
     const result = await h.adapter.sample(
@@ -650,8 +727,15 @@ describe("current native evidence (test-only injection)", () => {
       missing.provider
     );
     expect(
-      (await noReader.sample(missing.input, new AbortController().signal))
-        .dimensions[0]?.provider
+      (
+        await noReader.sample(
+          missing.input,
+          new AbortController().signal,
+          parsePrivateComputeProof(
+            serializePrivateComputeProof(missing.input, missing.registration)
+          ).registration
+        )
+      ).dimensions[0]?.provider
     ).toBe("unavailable");
     expect(missing.ledger.readOwnedAllocations).not.toHaveBeenCalled();
     expect(missing.provider.readManagedDefinition).not.toHaveBeenCalled();

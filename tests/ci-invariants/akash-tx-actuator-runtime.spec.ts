@@ -388,7 +388,7 @@ describe("akash-tx-actuator runtime", () => {
 
   it("receives its complete owned bank and only the foreign ledger DSN, as files", () => {
     // cicd-secrets-expert invariants 1–3: new owned keys need no projection YAML edit.
-    // The foreign operator bank remains narrowed to the one legitimate ledger DSN.
+    // The foreign operator bank remains narrowed to the ledger DSN and purpose-only proof bearer.
     expect(container()).not.toHaveProperty("envFrom");
     const sources = projectedSources();
 
@@ -397,12 +397,15 @@ describe("akash-tx-actuator runtime", () => {
       name: ENV_SECRET_NAME,
       optional: true,
     });
-    // Only the ledger DSN legitimately comes from the operator bucket: the receipts table is
+    // The ledger DSN and proof-only bearer come from the operator bucket: the receipts table is
     // operator-local schema in the operator's own Postgres.
     expect(sources[1]?.secret).toEqual({
       name: "operator-env-secrets",
       optional: true,
-      items: [{ key: "DATABASE_URL", path: "DATABASE_URL" }],
+      items: [
+        { key: "DATABASE_URL", path: "DATABASE_URL" },
+        { key: "COMPUTE_PROOF_READ_TOKEN", path: "COMPUTE_PROOF_READ_TOKEN" },
+      ],
     });
     expect(sources).toHaveLength(2);
   });
@@ -734,7 +737,36 @@ describe("akash-tx-actuator runtime", () => {
     const [role, binding] = rbac;
     // Exact equality, not `toContain`: the point of this test is what is ABSENT. Derived from
     // ADAPTER_CALL_GRANTS rather than restated, so the Role cannot drift behind the adapter.
-    expect(fingerprint(role?.rules)).toEqual(requiredFingerprint());
+    const native = read(
+      "nodes/operator/app/src/features/compute/release-proof/native-proof.ts"
+    );
+    // Concrete bounded native GET inventory; migration/wallet reach stays separate.
+    for (const resource of [
+      "deployments/operator-node-app",
+      "replicasets/${segment(owner.name)}",
+      "xcomputeworkloads",
+      "computeworkloads",
+    ])
+      expect(native).toContain(resource);
+    const proofGet = [
+      "apps|deployments+replicasets|get",
+      "compute.cogni.io|computeworkloads+xcomputeworkloads|get",
+    ];
+    expect(fingerprint(role?.rules)).toEqual(
+      [...requiredFingerprint(), ...proofGet].sort()
+    );
+    for (const rule of role?.rules ?? []) {
+      expect(rule.apiGroups).not.toContain("*");
+      expect(rule.resources).not.toContain("*");
+      expect(rule.verbs).not.toContain("*");
+      expect(rule.resources).not.toContain("secrets");
+      expect(rule.resources).not.toContain("pods/exec");
+      if (
+        rule.apiGroups.includes("apps") ||
+        rule.apiGroups.includes("compute.cogni.io")
+      )
+        expect(rule.verbs).toEqual(["get"]);
+    }
     expect(binding?.roleRef).toEqual({
       apiGroup: "rbac.authorization.k8s.io",
       kind: "Role",

@@ -122,6 +122,7 @@ export type {
   ComputeProofAdmissionPort,
   ComputeProofAllocation,
   ComputeProofAllocationReadPort,
+  ComputeProofClientPort,
   ComputeReleaseProofPort,
   ProofKubeReadClient,
 } from "./compute-release-proof.port";

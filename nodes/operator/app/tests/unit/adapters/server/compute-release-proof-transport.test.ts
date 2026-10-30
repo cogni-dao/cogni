@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+import {
+  parsePrivateComputeProof,
+  serializePrivateComputeProof,
+} from "@/shared/compute-release-proof-private";
 /** Test-only injected native capability. No paid resources or runtime evidence. */
 
 import { once } from "node:events";
@@ -24,7 +29,10 @@ import {
   computeProofHash,
   parseComputeProof,
 } from "@/features/compute/release-proof/request";
-import type { ComputeReleaseProofInput } from "@/types/compute-release-proof";
+import type {
+  ComputeProofRegistration,
+  ComputeReleaseProofInput,
+} from "@/types/compute-release-proof";
 
 // Test-only barrel isolation retains the ACTUAL port error classes without loading
 // unrelated optional authorization SDKs. This test lives outside feature layering.
@@ -60,7 +68,7 @@ const raw = () => ({
             artifact: "app",
             runtimeProfile: "image-default",
             commandTemplate: "image-default",
-            secretRefs: [],
+            secretRefs: [] as { key: string }[],
             bindings: [],
             port: 3000,
             visibility: "public",
@@ -74,6 +82,17 @@ const raw = () => ({
     ],
   },
 });
+const registered = () => ({
+  nodeId: raw().expected.nodeId,
+  slug: "operator",
+  repository: "cogni-dao/cogni",
+  environment: "candidate-a" as const,
+});
+const wire = () =>
+  serializePrivateComputeProof(
+    parseComputeProof(JSON.stringify(raw())),
+    registered()
+  );
 const output = (input: ComputeReleaseProofInput) => {
   const { workloads: _, ...tuple } = input.expected;
   return {
@@ -205,7 +224,7 @@ describe("purpose-only proof transport", () => {
       method: "POST",
       path: COMPUTE_PROOF_PATH,
       authorization: `Bearer ${token}`,
-      body: JSON.stringify(raw()),
+      body: wire(),
     });
     expect(value.status).toBe(200);
     expect(JSON.stringify(value)).not.toContain(token);
@@ -248,7 +267,7 @@ describe("purpose-only proof transport", () => {
       method: "POST",
       path: COMPUTE_PROOF_PATH,
       authorization: `Bearer ${token}`,
-      body: JSON.stringify(raw()),
+      body: wire(),
       signal: abort.signal,
     });
     await Promise.resolve();
@@ -259,7 +278,7 @@ describe("purpose-only proof transport", () => {
           method: "POST",
           path: COMPUTE_PROOF_PATH,
           authorization: `Bearer ${token}`,
-          body: JSON.stringify(raw()),
+          body: wire(),
         })
       ).status
     ).toBe(429);
@@ -281,7 +300,7 @@ describe("purpose-only proof transport", () => {
           method: "POST",
           path: COMPUTE_PROOF_PATH,
           authorization: `Bearer ${token}`,
-          body: JSON.stringify(raw()),
+          body: wire(),
         })
       ).status
     ).toBe(200);
@@ -308,7 +327,7 @@ describe("purpose-only proof transport", () => {
           }
         );
         req.on("error", reject);
-        req.end(JSON.stringify(raw()));
+        req.end(wire());
       });
     try {
       for (const path of [
@@ -339,7 +358,13 @@ describe("purpose-only proof transport", () => {
       await hold;
     });
     const service = new PublicComputeProof(
-      { acquire: async () => ({ signal: controller.signal, release }) },
+      {
+        acquire: async () => ({
+          registration: registered(),
+          signal: controller.signal,
+          release,
+        }),
+      },
       { sample: async (input) => output(input) }
     );
     const sample = service.sample(JSON.stringify(raw()), controller.signal);
@@ -364,7 +389,11 @@ describe("purpose-only proof transport", () => {
       finish = r;
     });
     const release = vi.fn(async () => {}),
-      acquire = vi.fn(async () => ({ signal: signal.signal, release })),
+      acquire = vi.fn(async () => ({
+        registration: registered(),
+        signal: signal.signal,
+        release,
+      })),
       sample = vi.fn(async (i: ComputeReleaseProofInput) => {
         await hold;
         return output(i);
@@ -397,7 +426,118 @@ describe("purpose-only proof transport", () => {
 
 import { ComputeReleaseProofClient } from "@/adapters/server/compute/compute-release-proof.client";
 
+describe("R8 private registration context", () => {
+  it("rejects E-only, malformed and spliced registration before the native capability", async () => {
+    const h = harness();
+    for (const body of [
+      JSON.stringify(raw()),
+      ...["nodeId", "repository", "environment", "requestHash", "nonce"].map(
+        (key) => {
+          const envelope = JSON.parse(wire());
+          envelope.registration[key] =
+            key === "nodeId"
+              ? "11111111-1111-4111-8111-111111111111"
+              : key === "environment"
+                ? "production"
+                : key === "repository"
+                  ? "foreign/repo"
+                  : "1".repeat(64);
+          return JSON.stringify(envelope);
+        }
+      ),
+    ]) {
+      expect(
+        (
+          await h.dispatch({
+            method: "POST",
+            path: COMPUTE_PROOF_PATH,
+            authorization: `Bearer ${token}`,
+            body,
+          })
+        ).status
+      ).toBe(400);
+    }
+    expect(h.sample).not.toHaveBeenCalled();
+    const envelope = parsePrivateComputeProof(wire());
+    expect(envelope.registration.requestHash).toBe(
+      computeProofHash(envelope.request)
+    );
+    expect(() =>
+      parseComputeProof(
+        JSON.stringify({ ...raw(), registration: registered() })
+      )
+    ).toThrow();
+    // Original serialized bytes, not the reserialized parsed projection, govern the cap.
+    const padded = wire() + " ".repeat(65536);
+    expect(Buffer.byteLength(JSON.stringify(JSON.parse(padded)))).toBeLessThan(
+      65536
+    );
+    expect(() => parsePrivateComputeProof(padded)).toThrow();
+  });
+  it("keeps the service-projected registration separate from public E and omits it from output", async () => {
+    const registration = Object.freeze({
+      ...registered(),
+      slug: "registry-owned",
+    });
+    const sample = vi.fn(
+      async (
+        i: ComputeReleaseProofInput,
+        _signal: AbortSignal,
+        _registration?: ComputeProofRegistration
+      ) => output(i)
+    );
+    const service = new PublicComputeProof(
+      {
+        acquire: async (_input, signal) => ({
+          registration,
+          signal,
+          release: async () => {},
+        }),
+      },
+      { sample }
+    );
+    const result = await service.sample(
+      JSON.stringify(raw()),
+      new AbortController().signal
+    );
+    expect(sample.mock.calls[0]?.[2]).toBe(registration);
+    expect(JSON.stringify(result)).not.toContain("registry-owned");
+  });
+});
+
 describe("fixed private client boundary", () => {
+  it("rejects a valid near-cap public projection when registration makes original private wire exceed64KiB", async () => {
+    const value = raw();
+    const base = required(value.expected.workloads[0]);
+    const original = required(base.services[0]);
+    base.services = Array.from({ length: 8 }, (_, i) => ({
+      ...original,
+      name: `app${i}`,
+      secretRefs: Array.from({ length: 64 }, (_, j) => ({ key: `K_${j}_` })),
+    }));
+    const padding = 65480 - Buffer.byteLength(JSON.stringify(value));
+    expect(padding).toBeGreaterThan(0);
+    let index = 0;
+    for (const service of base.services)
+      for (const ref of service.secretRefs) {
+        ref.key += "A".repeat(
+          Math.floor(padding / 512) + (index++ < padding % 512 ? 1 : 0)
+        );
+      }
+    const publicBody = JSON.stringify(value);
+    expect(Buffer.byteLength(publicBody)).toBe(65480);
+    const input = parseComputeProof(publicBody);
+    const send = vi.fn() as unknown as typeof httpRequest;
+    const client = new ComputeReleaseProofClient(
+      "cogni-candidate-a",
+      token,
+      send
+    );
+    await expect(
+      client.sample(input, new AbortController().signal, registered())
+    ).rejects.toThrow("unavailable");
+    expect(send).not.toHaveBeenCalled();
+  });
   it("constructs its own fixed destination and bearer; forged transport inputs fail before IO", async () => {
     const send = vi.fn(() => {
       throw new Error("test-only transport stop");
@@ -409,7 +549,11 @@ describe("fixed private client boundary", () => {
     );
     const signal = new AbortController().signal;
     await expect(
-      client.sample(parseComputeProof(JSON.stringify(raw())), signal)
+      client.sample(
+        parseComputeProof(JSON.stringify(raw())),
+        signal,
+        registered()
+      )
     ).rejects.toThrow("test-only transport stop");
     const call = required(vi.mocked(send).mock.calls[0]);
     expect(String(call[0])).toBe(
@@ -433,7 +577,11 @@ describe("fixed private client boundary", () => {
     ]) {
       const input = { ...raw(), [field]: "hostile" };
       await expect(
-        client.sample(input as unknown as ComputeReleaseProofInput, signal)
+        client.sample(
+          input as unknown as ComputeReleaseProofInput,
+          signal,
+          registered()
+        )
       ).rejects.toThrow();
     }
     expect(send).not.toHaveBeenCalled();
@@ -560,7 +708,7 @@ describe("private proof standalone composition and bounded errors", () => {
               method: "POST",
               path: COMPUTE_PROOF_PATH,
               authorization: `Bearer ${token}`,
-              body: JSON.stringify(raw()),
+              body: wire(),
             })
           ).status
         ).toBe(optionalIdentity ? 200 : 503);
@@ -821,19 +969,85 @@ describe.skipIf(!localProofFixture)(
       await observer`CREATE TABLE public.akash_tx_allocations (node_id uuid,composite_uid text,composite_generation integer,workload text,environment text,state text,external_name text,provider_account text,wallet_scope text,updated_at timestamptz,id uuid,cogni_key text,allocation_cursor text,last_applied_sdl_hash text,applied_database_cell_binding jsonb)`;
       fixtureCreated = true;
       // Inert LOCAL registry fixture only; never an allocation/payment/provider receipt.
-      await observer`CREATE TABLE public.nodes (id uuid, slug text, repo_owner text, repo_name text, deploy_envs text[])`;
-      await observer`INSERT INTO public.nodes VALUES (${input.nodeId}::uuid,'operator','cogni-dao','cogni',ARRAY['candidate-a'])`;
+      await observer`CREATE ROLE proof_rls_app LOGIN INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 9`;
+      await observer`CREATE ROLE proof_rls_service LOGIN INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION BYPASSRLS CONNECTION LIMIT 17`;
+      await observer`CREATE ROLE proof_rls_migration LOGIN NOINHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 1`;
+      await observer`CREATE TABLE public.nodes (id uuid, slug text, repo_owner text, repo_name text, deploy_envs text[], owner_user_id text DEFAULT 'owner-private-sentinel')`;
+      await observer`ALTER TABLE public.nodes ENABLE ROW LEVEL SECURITY`;
+      await observer`ALTER TABLE public.nodes FORCE ROW LEVEL SECURITY`;
+      await observer`CREATE POLICY tenant_isolation ON public.nodes USING (owner_user_id = current_setting('app.current_user_id', true)) WITH CHECK (owner_user_id = current_setting('app.current_user_id', true))`;
+      await observer`GRANT USAGE ON SCHEMA public TO proof_rls_app, proof_rls_service, proof_rls_migration`;
+      await observer`GRANT SELECT ON public.nodes TO proof_rls_app, proof_rls_service, proof_rls_migration`;
+      await observer`GRANT SELECT ON public.akash_tx_allocations TO proof_rls_app`;
+      await observer`ALTER TABLE public.nodes OWNER TO proof_rls_app`;
+      await observer`INSERT INTO public.nodes (id,slug,repo_owner,repo_name,deploy_envs) VALUES (${input.nodeId}::uuid,'operator','cogni-dao','cogni',ARRAY['candidate-a'])`;
     });
     afterAll(async () => {
       if (fixtureCreated) {
         await observer`DROP TABLE public.akash_tx_allocations`;
         await observer`DROP TABLE public.nodes`;
+        await observer`DROP OWNED BY proof_rls_app, proof_rls_service, proof_rls_migration`;
+        await observer`DROP ROLE proof_rls_app, proof_rls_service, proof_rls_migration`;
       }
       await Promise.all([
         blocker?.end({ timeout: 0 }),
         observer?.end({ timeout: 0 }),
         wallet?.end({ timeout: 0 }),
       ]);
+    });
+    it("uses one service-role registry projection while FORCE RLS hides nodes from context-free app/migration and ledger stays independent", async () => {
+      const dsn = (role: string) =>
+        localProofDsn.replace("proof_test@", `${role}@`);
+      const app = postgres(dsn("proof_rls_app"), { max: 1 });
+      const migration = postgres(dsn("proof_rls_migration"), { max: 1 });
+      try {
+        expect(
+          (
+            await app`SELECT current_setting('app.current_user_id',true) AS owner`
+          )[0]?.owner
+        ).toBeNull();
+        expect(await app`SELECT * FROM public.nodes`).toHaveLength(0);
+        expect(await migration`SELECT * FROM public.nodes`).toHaveLength(0);
+        const roles =
+          await observer`SELECT rolname,rolbypassrls,rolsuper FROM pg_roles WHERE rolname IN ('proof_rls_app','proof_rls_service','proof_rls_migration') ORDER BY rolname`;
+        expect(
+          roles.map((r) => [r.rolname, r.rolbypassrls, r.rolsuper])
+        ).toEqual([
+          ["proof_rls_app", false, false],
+          ["proof_rls_migration", false, false],
+          ["proof_rls_service", true, false],
+        ]);
+        const admission = new PostgresComputeProofAdmission(
+          dsn("proof_rls_service")
+        );
+        const lease = await admission.acquire(
+          parseComputeProof(JSON.stringify(raw())),
+          new AbortController().signal
+        );
+        expect(lease.registration).toEqual(registered());
+        expect(Object.keys(lease.registration).sort()).toEqual([
+          "environment",
+          "nodeId",
+          "repository",
+          "slug",
+        ]);
+        expect(Object.isFrozen(lease.registration)).toBe(true);
+        await lease.release();
+        // Removing even SELECT proves the ledger query cannot depend on nodes.
+        await observer`REVOKE SELECT ON public.nodes FROM proof_rls_app`;
+        const reader = new PostgresComputeProofAllocationReader(
+          dsn("proof_rls_app"),
+          scope
+        );
+        expect(
+          await reader.readOwnedAllocations(input, new AbortController().signal)
+        ).toEqual([]);
+      } finally {
+        await Promise.all([
+          app.end({ timeout: 0 }),
+          migration.end({ timeout: 0 }),
+        ]);
+      }
     });
     async function lockedReader() {
       const lock = await blocker.reserve();

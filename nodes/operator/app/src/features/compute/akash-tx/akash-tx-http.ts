@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
+import { parsePrivateComputeProof } from "@/shared/compute-release-proof-private";
+
 /**
  * Module: `@features/compute/akash-tx/akash-tx-http`
  * Purpose: The private ClusterIP surface of the Akash transaction actuator — four typed
@@ -58,7 +60,7 @@ import {
   DatabaseCellBindingReferenceSchema,
   DatabaseCellCutoverReferenceSchema,
 } from "@/contracts/database-cell-binding.v1.contract";
-import { parseComputeProof } from "@/features/compute/release-proof/request";
+import type { parseComputeProof } from "@/features/compute/release-proof/request";
 import type {
   ComputeReleaseProofPort,
   DatabaseCellAppliedProbeQualificationPort,
@@ -286,8 +288,13 @@ export function createAkashTxDispatcher(
       if (Buffer.byteLength(request.body ?? "") > COMPUTE_PROOF_BODY_BYTES)
         return { status: 413, body: { code: "invalid_request" } };
       let input: ReturnType<typeof parseComputeProof>;
+      let registration: ReturnType<
+        typeof parsePrivateComputeProof
+      >["registration"];
       try {
-        input = parseComputeProof(request.body ?? "");
+        const envelope = parsePrivateComputeProof(request.body ?? "");
+        input = envelope.request;
+        registration = envelope.registration;
       } catch {
         return { status: 400, body: { code: "invalid_request" } };
       }
@@ -299,7 +306,11 @@ export function createAkashTxDispatcher(
       ]);
       try {
         signal.throwIfAborted();
-        const value = await deps.releaseProof.sample(input, signal);
+        const value = await deps.releaseProof.sample(
+          input,
+          signal,
+          registration
+        );
         signal.throwIfAborted();
         const body = ComputeProofResponseSchema.parse(value);
         deps.log?.info(

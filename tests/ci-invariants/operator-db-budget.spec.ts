@@ -58,9 +58,31 @@ describe("operator database connection envelope", () => {
     "services/scheduler-worker/src/bootstrap/container.ts",
     "cogni_operator_ledger_worker"
   );
-  const appReplicas = rollingReplicas(
-    "infra/k8s/base/node-app/deployment.yaml"
+  const proofPool = Number(
+    read(
+      "nodes/operator/app/src/adapters/server/compute/compute-release-proof-postgres.ts"
+    ).match(/max:\s*(\d+)/u)?.[1]
   );
+  expect(proofPool).toBe(1);
+  const appReplicas = parse("infra/k8s/base/node-app/deployment.yaml").spec
+    .replicas;
+  for (const lane of ["candidate-a", "preview", "production"]) {
+    const overlay = parse(
+      `infra/k8s/overlays/${lane}/operator/kustomization.yaml`
+    );
+    const strategies = overlay.patches
+      .filter(
+        (p: { target?: { kind?: string; name?: string }; patch?: string }) =>
+          p.target?.kind === "Deployment" &&
+          p.target?.name === "node-app" &&
+          p.patch
+      )
+      .flatMap((p: { patch: string }) => yaml.parse(p.patch))
+      .filter((p: { path: string }) => p.path === "/spec/strategy");
+    expect(strategies.map((p: { value: unknown }) => p.value)).toContainEqual({
+      type: "Recreate",
+    });
+  }
   const actuatorReplicas = rollingReplicas(
     "infra/k8s/base/akash-tx-actuator/deployment.yaml"
   );
@@ -68,17 +90,28 @@ describe("operator database connection envelope", () => {
     "infra/k8s/base/scheduler-worker/deployment.yaml"
   );
 
-  it("covers simultaneous rolling consumers plus one diagnostic session per role", () => {
+  it("covers Recreate app, accepting and draining consumers, proof pools, diagnostics and reconnect margin", () => {
     const profiles = parse("infra/database-budget-profiles.yaml");
     const profile = profiles["operator-control-v1"];
     expect(profile.roles.app.connection_limit).toBe(
-      appReplicas * app + actuatorReplicas * actuator + 1
+      appReplicas * app +
+        (actuatorReplicas +
+          parse("infra/k8s/base/akash-tx-actuator/deployment.yaml").spec
+            .replicas) *
+          (actuator + proofPool) +
+        1
     );
     expect(profile.roles.service.connection_limit).toBe(
-      appReplicas * service + workerReplicas * worker + 1
+      appReplicas * (service + proofPool) +
+        (workerReplicas +
+          parse("infra/k8s/base/scheduler-worker/deployment.yaml").spec
+            .replicas) *
+          worker +
+        1 +
+        1
     );
-    expect(profile.roles.app.connection_limit).toBe(7);
-    expect(profile.roles.service.connection_limit).toBe(15);
+    expect(profile.roles.app.connection_limit).toBe(9);
+    expect(profile.roles.service.connection_limit).toBe(17);
     expect(profiles["shared-default-v1"].roles.app.connection_limit).toBe(2);
     expect(profiles["shared-default-v1"].roles.service.connection_limit).toBe(
       4

@@ -4,14 +4,14 @@
 /** Sole app admission owner. Cap one, zero wait, before registry/native/provider/log IO. */
 import type {
   ComputeProofAdmissionPort,
-  ComputeReleaseProofPort,
+  ComputeProofClientPort,
 } from "@/ports";
 import { parseComputeProof } from "./request";
 export class PublicComputeProof {
   private active = false;
   constructor(
     private readonly admission: ComputeProofAdmissionPort,
-    private readonly client: ComputeReleaseProofPort
+    private readonly client: ComputeProofClientPort
   ) {}
   async sample(body: string, parent: AbortSignal) {
     const input = parseComputeProof(body);
@@ -24,7 +24,11 @@ export class PublicComputeProof {
     try {
       signal.throwIfAborted();
       lease = await this.admission.acquire(input, signal);
-      const value = await this.client.sample(input, lease.signal);
+      const value = await this.client.sample(
+        input,
+        lease.signal,
+        lease.registration
+      );
       lease.signal.throwIfAborted();
       const held = lease;
       lease = undefined;

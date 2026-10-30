@@ -36,7 +36,7 @@ Ports describe _what_ the domain needs from external services, not _how_ they wo
 
 ## Public Surface
 
-- `compute-release-proof.port.ts` — operator-local comparative read capability, fixed internal Kube reader, isolated registry-bound allocation read and proof admission lease, exported via index.ts; no mutation or release approval authority.
+- `compute-release-proof.port.ts` — operator-local comparative read capability, fixed internal Kube reader, isolated ledger-only allocation read and proof admission lease with four server-derived registry fields, exported via index.ts; no mutation or release approval authority.
 
 Two entrypoints enforce Next.js App Router environment boundaries (see bug.0147):
 

@@ -3,13 +3,25 @@
 
 /** Read-only capability. A caller abort never releases admission before original IO settles. */
 import type {
+  ComputeProofContext,
+  ComputeProofRegistration,
   ComputeReleaseProofInput,
   ComputeReleaseProofOutput,
 } from "@/types/compute-release-proof";
 export interface ComputeReleaseProofPort {
   sample(
     input: ComputeReleaseProofInput,
-    signal: AbortSignal
+    signal: AbortSignal,
+    context?: ComputeProofContext
+  ): Promise<ComputeReleaseProofOutput>;
+}
+
+/** App-only fixed client accepts registry facts separately from public E/N. */
+export interface ComputeProofClientPort {
+  sample(
+    input: ComputeReleaseProofInput,
+    signal: AbortSignal,
+    registration?: ComputeProofRegistration
   ): Promise<ComputeReleaseProofOutput>;
 }
 
@@ -20,6 +32,7 @@ export interface ProofKubeReadClient {
 }
 
 export interface ComputeProofAdmissionLease {
+  readonly registration: Readonly<ComputeProofRegistration>;
   readonly signal: AbortSignal;
   release(): Promise<void>;
 }
@@ -39,11 +52,7 @@ export type ComputeProofAllocation = Pick<
   | "state"
   | "externalName"
   | "providerAccount"
-> & {
-  /** Identity from the registry row joined by the bounded reader, never native/caller input. */
-  readonly registeredSlug: string;
-  readonly registeredRepository: string;
-};
+>;
 export interface ComputeProofAllocationReadPort {
   readOwnedAllocations(
     input: { readonly nodeId: string; readonly environment: string },

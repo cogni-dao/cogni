@@ -4,18 +4,20 @@
 import { createHash } from "node:crypto";
 /** Fixed purpose-only private client. No caller header/path/host forwarding. */
 import { request as httpRequest } from "node:http";
-import type { ComputeReleaseProofPort } from "@/ports";
+import type { ComputeProofClientPort } from "@/ports";
 import {
   COMPUTE_PROOF_PATH,
   ComputeProofRequestSchema,
   ComputeProofResponseSchema,
 } from "@/shared/compute-release-proof.schema";
 import { canonicalProofJson } from "@/shared/compute-release-proof-canonical";
+import { serializePrivateComputeProof } from "@/shared/compute-release-proof-private";
 import type {
+  ComputeProofRegistration,
   ComputeReleaseProofInput,
   ComputeReleaseProofOutput,
 } from "@/types/compute-release-proof";
-export class ComputeReleaseProofClient implements ComputeReleaseProofPort {
+export class ComputeReleaseProofClient implements ComputeProofClientPort {
   private readonly origin: string;
   constructor(
     namespace: string,
@@ -28,12 +30,13 @@ export class ComputeReleaseProofClient implements ComputeReleaseProofPort {
   }
   async sample(
     raw: ComputeReleaseProofInput,
-    signal: AbortSignal
+    signal: AbortSignal,
+    registration?: ComputeProofRegistration
   ): Promise<ComputeReleaseProofOutput> {
     if (!/^[0-9a-f]{64}$/.test(this.token)) throw new Error("unavailable");
     const input = ComputeProofRequestSchema.parse(raw);
     signal.throwIfAborted();
-    const body = JSON.stringify(input);
+    const body = serializePrivateComputeProof(input, registration);
     const startedAt = Date.now();
     const response = await new Promise<string>((resolve, reject) => {
       let result: string | undefined;

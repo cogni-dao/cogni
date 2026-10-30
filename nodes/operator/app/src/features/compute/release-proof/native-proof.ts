@@ -24,12 +24,14 @@ import type {
   ComputeReleaseProofPort,
   ProofKubeReadClient,
 } from "@/ports";
+import { validateComputeProofContext } from "@/shared/compute-release-proof-private";
 import {
   diffDeclaredVsApplied,
   parseMigrationReceipt,
 } from "@/shared/migrations/migration-receipt";
 import { withDatabaseCaTrust } from "@/shared/secrets/database-ca-command";
 import type {
+  ComputeProofContext,
   ComputeReleaseProofInput,
   ComputeReleaseProofOutput,
   ProofVerdict,
@@ -64,6 +66,17 @@ function list(v: unknown): unknown[] {
   if (items.length >= 9) throw new Error("unavailable");
   return items;
 }
+/** Canonical scripts/db/migrate-doltgres.mjs completion, shared by both native paths. */
+export function isDoltMigrationComplete(log: string, slug: string): boolean {
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(slug)) return false;
+  return log
+    .split("\n")
+    .some((line) =>
+      new RegExp(
+        `^✅ ${slug}-doltgres migrate complete: [0-9]+ migration\\(s\\) applied \\+ verified \\+ (?:owned branch committed|read-only no-op; no journal DDL or commit) in [0-9]+ms$`
+      ).test(line)
+    );
+}
 const segment = (s: string) => encodeURIComponent(s);
 export class NativeComputeReleaseProofAdapter
   implements ComputeReleaseProofPort
@@ -83,9 +96,11 @@ export class NativeComputeReleaseProofAdapter
   ) {}
   async sample(
     raw: ComputeReleaseProofInput,
-    parent: AbortSignal
+    parent: AbortSignal,
+    context?: ComputeProofContext
   ): Promise<ComputeReleaseProofOutput> {
     const input = ComputeProofRequestSchema.parse(raw);
+    const registration = validateComputeProofContext(input, context);
     parent.throwIfAborted();
     const signal = AbortSignal.any([parent, AbortSignal.timeout(20_000)]);
     const dimensions: ComputeReleaseProofOutput["dimensions"][number][] = [];
@@ -121,8 +136,9 @@ export class NativeComputeReleaseProofAdapter
           bundle = record(spec.bundle),
           source = record(bundle.source),
           workload = record(spec.workload);
-        const slug = workload.name;
+        const slug = registration.slug;
         if (
+          workload.name !== slug ||
           typeof slug !== "string" ||
           !/^[a-z0-9][a-z0-9-]{0,62}$/.test(slug) ||
           metadata.name !== name ||
@@ -198,9 +214,7 @@ export class NativeComputeReleaseProofAdapter
         if (rows.length >= 33) throw new Error("ownership");
         const matches = rows.filter(
           (r) =>
-            r.registeredSlug === slug &&
-            r.registeredRepository === input.expected.repository &&
-            r.workload === r.registeredSlug &&
+            r.workload === slug &&
             r.identity.nodeId === input.expected.nodeId &&
             r.identity.compositeUid === metadata.uid &&
             r.identity.compositeGeneration === metadata.generation &&
@@ -453,16 +467,7 @@ export class NativeComputeReleaseProofAdapter
           diffDeclaredVsApplied(receipt).missing.length
         )
           return unavailable;
-      } else if (
-        !log
-          .split("\n")
-          .some(
-            (line) =>
-              line.includes("operator migrate complete:") &&
-              line.includes("migration(s) applied + verified +")
-          )
-      )
-        return unavailable;
+      } else if (!isDoltMigrationComplete(log, "operator")) return unavailable;
     }
     // k3s currently has no full bundle/source annotation. Reporting its image or /version as
     // that missing native identity would invent proof. Preserve all old k3s gates and expose
@@ -757,18 +762,7 @@ export class NativeComputeReleaseProofAdapter
           diffDeclaredVsApplied(receipt).missing.length > 0
         )
           return "unavailable";
-      } else if (
-        !log
-          .split("\n")
-          .some(
-            (line) =>
-              line.includes(`${slug} migrate complete:`) &&
-              line.includes("migration(s) applied + verified +") &&
-              (line.includes("owned branch committed") ||
-                line.includes("read-only no-op; no journal DDL or commit"))
-          )
-      )
-        return "unavailable";
+      } else if (!isDoltMigrationComplete(log, slug)) return "unavailable";
     }
     return "verified";
   }
