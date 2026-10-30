@@ -490,7 +490,7 @@ echo "  ok  scope guards hold"
   [[ "$(render_shared_db_provision_config | jq -r '.red.DB_APP_CONNECTION_LIMIT')" == 2 ]]
   cp "$real_repo/infra/catalog/red.yaml" "$fixture/infra/catalog/"
   [[ "$(jq -r '.operator.DB_BUDGET_PROFILE' <<<"$NODE_DB_PROVISION_CONFIG")" == operator-control-v1 ]]
-  [[ "$(jq -r '.operator.DB_SERVICE_CONNECTION_LIMIT' <<<"$NODE_DB_PROVISION_CONFIG")" == 15 ]]
+  [[ "$(jq -r '.operator.DB_SERVICE_CONNECTION_LIMIT' <<<"$NODE_DB_PROVISION_CONFIG")" == 17 ]]
   DEPLOY_ENVIRONMENT=preview
   [[ "$(render_shared_db_provision_config | jq -r 'keys | join(",")')" == operator ]] \
     || fail "environment-absent red entered preview provisioning"
@@ -542,9 +542,9 @@ echo "  ok  scope guards hold"
     [[ "${passed[APP_DB_SERVICE_PASSWORD]}" == 'service fixture' ]]
     [[ "${passed[APP_DB_MIGRATION_PASSWORD]}" == 'isolated fixture' ]]
     [[ "${passed[DB_BUDGET_PROFILE]}" == operator-control-v1 ]]
-    [[ "${passed[DB_APP_CONNECTION_LIMIT]}" == 7 ]]
+    [[ "${passed[DB_APP_CONNECTION_LIMIT]}" == 9 ]]
     [[ "${passed[DB_APP_STATEMENT_TIMEOUT_MS]}" == 5000 ]]
-    [[ "${passed[DB_SERVICE_CONNECTION_LIMIT]}" == 15 ]]
+    [[ "${passed[DB_SERVICE_CONNECTION_LIMIT]}" == 17 ]]
     [[ "${passed[DB_SERVICE_STATEMENT_TIMEOUT_MS]}" == 2000 ]]
     [[ "${passed[DB_LOCK_TIMEOUT_MS]}" == 2000 ]]
     [[ "${passed[DB_IDLE_IN_TRANSACTION_TIMEOUT_MS]}" == 30000 ]]

@@ -18,6 +18,7 @@ import {
   createAkashTxActuatorServer,
   createAkashTxDispatcher,
 } from "@/features/compute/akash-tx/akash-tx-http";
+import { NativeComputeReleaseProofAdapter } from "@/features/compute/release-proof/native-proof";
 import { PublicComputeProof } from "@/features/compute/release-proof/public-proof";
 import {
   computeProofHash,
@@ -28,6 +29,11 @@ import type { ComputeReleaseProofInput } from "@/types/compute-release-proof";
 // Test-only barrel isolation retains the ACTUAL port error classes without loading
 // unrelated optional authorization SDKs. This test lives outside feature layering.
 vi.mock("@/ports", () => import("@/ports/akash-tx.port"));
+// Keep the actual logger; isolate unrelated metrics/authorization barrel dependencies.
+vi.mock(
+  "@/shared/observability",
+  () => import("@/shared/observability/server/logger")
+);
 
 const raw = () => ({
   version: 1,
@@ -451,8 +457,166 @@ function required<T>(value: T | undefined): T {
 
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { AkashComputeAdapter } from "@/adapters/server/compute/akash-compute.adapter";
+import { optionalComputeProofIdentity } from "@/bootstrap/compute-proof-identity";
 import { SUBSTRATE_RESERVED_KEYS } from "@/shared/secrets/node-secrets-reserved.data";
 import { loadSecretsCatalog } from "../../../../../../../scripts/lib/secrets-catalog-loader";
+
+describe("private proof standalone composition and bounded errors", () => {
+  it("loads shipped public identity without web env and keeps wallet/health routes with missing optional identity", async () => {
+    for (const key of [
+      "AUTH_SECRET",
+      "DATABASE_SERVICE_URL",
+      "LITELLM_MASTER_KEY",
+      "COGNI_REPO_PATH",
+      "DATABASE_URL",
+      "APP_ENV",
+    ])
+      vi.stubEnv(key, undefined);
+    try {
+      const root = fileURLToPath(
+        new URL("../../../../../../../", import.meta.url)
+      );
+      const identity = optionalComputeProofIdentity(() =>
+        readFileSync(`${root}/nodes/operator/.cogni/repo-spec.yaml`, "utf8")
+      );
+      expect(identity).toEqual({
+        nodeId: raw().expected.nodeId,
+        repository: "cogni-dao/cogni",
+      });
+      const source = readFileSync(
+        `${root}/nodes/operator/app/src/bootstrap/akash-tx-actuator.ts`,
+        "utf8"
+      );
+      expect(source).not.toContain("repoSpec.server");
+      expect(source).not.toContain("serverEnv(");
+      for (const readSpec of [
+        () =>
+          readFileSync(`${root}/nodes/operator/.cogni/repo-spec.yaml`, "utf8"),
+        () => {
+          throw new Error("absent");
+        },
+        () => "node_id: malformed",
+      ]) {
+        const optionalIdentity = optionalComputeProofIdentity(readSpec);
+        const h = harness();
+        const { releaseProof: _proof, ...walletDeps } = h.deps;
+        const deps: AkashTxHttpDeps = {
+          ...walletDeps,
+          ...(optionalIdentity
+            ? {
+                releaseProof: new NativeComputeReleaseProofAdapter(
+                  {
+                    json: async () => {
+                      throw new Error("native unavailable");
+                    },
+                    log: async () => {
+                      throw new Error("native unavailable");
+                    },
+                  },
+                  undefined,
+                  {},
+                  { ...optionalIdentity, namespace: "cogni-candidate-a" }
+                ),
+              }
+            : {}),
+        };
+        const dispatcher = createAkashTxDispatcher(deps);
+        const server = createAkashTxActuatorServer(deps);
+        server.listen(0, "127.0.0.1");
+        await once(server, "listening");
+        try {
+          const status = await new Promise<number>((resolve, reject) => {
+            const req = httpRequest(
+              {
+                host: "127.0.0.1",
+                port: (server.address() as AddressInfo).port,
+                path: "/healthz",
+                method: "GET",
+              },
+              (res) => {
+                res.resume();
+                res.once("end", () => resolve(res.statusCode ?? 0));
+              }
+            );
+            req.once("error", reject);
+            req.end();
+          });
+          expect(status).toBe(200);
+        } finally {
+          server.closeAllConnections();
+          await new Promise<void>((resolve) => server.close(() => resolve()));
+        }
+        const result = await dispatcher({
+          method: "POST",
+          path: "/v1/akash/observe",
+          authorization: `Bearer ${wallet}`,
+          body: "{}",
+        });
+        expect(result.status).not.toBe(401);
+        expect(
+          (
+            await dispatcher({
+              method: "POST",
+              path: COMPUTE_PROOF_PATH,
+              authorization: `Bearer ${token}`,
+              body: JSON.stringify(raw()),
+            })
+          ).status
+        ).toBe(optionalIdentity ? 200 : 503);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it("never collects oversized non2xx bodies and awaits the original body cancellation", async () => {
+    let settle: (() => void) | undefined;
+    const cancelled = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          settle = resolve;
+        })
+    );
+    const response = new Response(
+      new ReadableStream({
+        pull(controller) {
+          controller.enqueue(new Uint8Array(64 * 1024));
+        },
+        cancel: cancelled,
+      }),
+      { status: 500 }
+    );
+    const text = vi.spyOn(response, "text");
+    const adapter = new AkashComputeAdapter({
+      apiKey: "test-only",
+      timeoutMs: 1000,
+      outcomeStore: {
+        record: async () => {
+          throw new Error("unexpected mutation");
+        },
+        stats: async () => new Map(),
+      },
+      fetchImpl: vi.fn(async () => response),
+    });
+    let finished = false;
+    const original = adapter
+      .readManagedDefinition({
+        leaseId: "12345",
+        signal: new AbortController().signal,
+      })
+      .catch((error) => {
+        finished = true;
+        throw error;
+      });
+    void original.catch(() => {});
+    await vi.waitFor(() => expect(cancelled).toHaveBeenCalledOnce());
+    expect(text).not.toHaveBeenCalled();
+    expect(finished).toBe(false);
+    settle?.();
+    await expect(original).rejects.toThrow("HTTP 500");
+    expect(finished).toBe(true);
+  });
+});
 
 describe("operator proof connection budget source envelope", () => {
   it("includes Recreate, one actuator/worker rollout with drain, diagnostics and reconnect margin", () => {

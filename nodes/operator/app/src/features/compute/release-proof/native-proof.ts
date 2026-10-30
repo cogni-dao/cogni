@@ -185,7 +185,6 @@ export class NativeComputeReleaseProofAdapter
           live,
         });
         if (!ready.ready) throw new Error("actuator_lag");
-        native = "verified";
         // Handle comes only from the owned allocation. The public input cannot select one.
         if (!this.allocations) throw new Error("unavailable");
         const rows = await this.allocations.readOwnedAllocations(
@@ -199,7 +198,9 @@ export class NativeComputeReleaseProofAdapter
         if (rows.length >= 33) throw new Error("ownership");
         const matches = rows.filter(
           (r) =>
-            r.workload === slug &&
+            r.registeredSlug === slug &&
+            r.registeredRepository === input.expected.repository &&
+            r.workload === r.registeredSlug &&
             r.identity.nodeId === input.expected.nodeId &&
             r.identity.compositeUid === metadata.uid &&
             r.identity.compositeGeneration === metadata.generation &&
@@ -208,6 +209,7 @@ export class NativeComputeReleaseProofAdapter
         );
         if (matches.length !== 1) throw new Error("ownership");
         const allocation = required(matches[0]);
+        native = "verified";
         if (!this.provider.readManagedDefinition || !allocation.externalName)
           throw new Error("provider_unavailable");
         const observed = await this.provider.readManagedDefinition({

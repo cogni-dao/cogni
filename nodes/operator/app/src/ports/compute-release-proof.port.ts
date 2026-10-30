@@ -39,7 +39,11 @@ export type ComputeProofAllocation = Pick<
   | "state"
   | "externalName"
   | "providerAccount"
->;
+> & {
+  /** Identity from the registry row joined by the bounded reader, never native/caller input. */
+  readonly registeredSlug: string;
+  readonly registeredRepository: string;
+};
 export interface ComputeProofAllocationReadPort {
   readOwnedAllocations(
     input: { readonly nodeId: string; readonly environment: string },

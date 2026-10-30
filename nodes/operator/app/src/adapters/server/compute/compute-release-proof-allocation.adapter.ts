@@ -17,6 +17,10 @@ import { proofPostgres } from "./compute-release-proof-postgres";
 const rowSchema = z
   .object({
     node_id: z.string().uuid(),
+    registered_slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+    registered_repository: z
+      .string()
+      .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
     composite_uid: z.string().min(1).max(128),
     composite_generation: z.number().int().positive(),
     workload: z.string().min(1).max(128),
@@ -85,7 +89,7 @@ export class PostgresComputeProofAllocationReader
       session = await originalReserve;
       clearTimeout(reserveTimer);
       signal.throwIfAborted();
-      const originalQuery = session`SELECT node_id, composite_uid, composite_generation, workload, environment, state, external_name, provider_account FROM public.akash_tx_allocations WHERE wallet_scope=${this.walletScope} AND node_id=${input.nodeId}::uuid AND environment=${input.environment} AND state='allocated' AND external_name IS NOT NULL ORDER BY updated_at LIMIT 33`;
+      const originalQuery = session`SELECT a.node_id, n.slug AS registered_slug, n.repo_owner || '/' || n.repo_name AS registered_repository, a.composite_uid, a.composite_generation, a.workload, a.environment, a.state, a.external_name, a.provider_account FROM public.akash_tx_allocations a JOIN public.nodes n ON n.id=a.node_id AND a.environment=ANY(n.deploy_envs) WHERE a.wallet_scope=${this.walletScope} AND a.node_id=${input.nodeId}::uuid AND a.environment=${input.environment} AND a.state='allocated' AND a.external_name IS NOT NULL ORDER BY a.updated_at LIMIT 33`;
       const rows = await originalQuery;
       signal.throwIfAborted();
       if (rows.length >= 33) throw new Error("unavailable");
@@ -97,6 +101,8 @@ export class PostgresComputeProofAllocationReader
             compositeUid: row.composite_uid,
             compositeGeneration: row.composite_generation,
           },
+          registeredSlug: row.registered_slug,
+          registeredRepository: row.registered_repository,
           workload: row.workload,
           environment: row.environment,
           state: row.state,

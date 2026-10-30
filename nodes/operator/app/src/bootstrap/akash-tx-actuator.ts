@@ -127,7 +127,6 @@ import {
 import { NativeComputeReleaseProofAdapter } from "@/features/compute/release-proof/native-proof";
 import type { DatabaseCellBindingReference } from "@/ports";
 import { AkashTxError, type AkashTxWorkloadIdentity } from "@/ports";
-import { getGithubRepo, getNodeId } from "@/shared/config/repoSpec.server";
 import {
   ACCOUNT_WALLET_SCOPE_PATTERN,
   akashTxAllocations,
@@ -138,6 +137,7 @@ import {
   DatabaseCellBootstrapKitsSchema,
 } from "@/shared/secrets/database-cell-binding.data";
 import { DatabaseCellAppliedEvidenceBundleSchema } from "@/shared/secrets/database-cell-placement.data";
+import { optionalComputeProofIdentity } from "./compute-proof-identity";
 
 /**
  * The port the XComputeWorkload Composition hard-codes in
@@ -801,28 +801,36 @@ const databaseCellDiagnosticObserve = async (
 };
 
 const proofCluster = kubeConfig.getCurrentCluster();
-const releaseProof =
-  proofCluster?.caFile && /^[0-9a-f]{64}$/.test(proofReadToken)
-    ? new NativeComputeReleaseProofAdapter(
-        new InClusterProofKubeReadClient(
-          proofCluster.server,
-          await readFile(proofCluster.caFile, "utf8"),
-          "/var/run/secrets/kubernetes.io/serviceaccount/token"
-        ),
-        // One additional read-only app-role connection per actuator replica, max1.
-        // Never borrow/cancel the wallet max1 pool; this reader owns no PG admission locks.
-        new PostgresComputeProofAllocationReader(
-          databaseUrl,
-          wallet.walletScope
-        ),
-        consoleClient,
-        {
-          nodeId: getNodeId(),
-          repository: `${getGithubRepo().owner}/${getGithubRepo().repo}`,
-          namespace,
-        }
-      )
-    : undefined;
+const proofIdentity = optionalComputeProofIdentity();
+let releaseProof: NativeComputeReleaseProofAdapter | undefined;
+try {
+  releaseProof =
+    proofIdentity &&
+    proofCluster?.caFile &&
+    /^[0-9a-f]{64}$/.test(proofReadToken)
+      ? new NativeComputeReleaseProofAdapter(
+          new InClusterProofKubeReadClient(
+            proofCluster.server,
+            await readFile(proofCluster.caFile, "utf8"),
+            "/var/run/secrets/kubernetes.io/serviceaccount/token"
+          ),
+          // One additional read-only app-role connection per actuator replica, max1.
+          // Never borrow/cancel the wallet max1 pool; this reader owns no PG admission locks.
+          new PostgresComputeProofAllocationReader(
+            databaseUrl,
+            wallet.walletScope
+          ),
+          consoleClient,
+          {
+            ...proofIdentity,
+            namespace,
+          }
+        )
+      : undefined;
+} catch {
+  // Optional proof identity/CA evidence must never prevent existing wallet/health listen.
+  releaseProof = undefined;
+}
 const server = createAkashTxActuatorServer({
   proofReadToken,
   ...(releaseProof ? { releaseProof } : {}),

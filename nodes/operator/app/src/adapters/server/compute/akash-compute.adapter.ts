@@ -1634,7 +1634,9 @@ export class AkashComputeAdapter
         // cause is undiagnosable from logs alone: poly's candidate lane retried a deterministic
         // Console rejection ~1.5x/min for five days against a PAID API and nobody could say why
         // without redeploying the actuator (bug.5247).
-        const detail = await readProviderDetail(response);
+        let detail: string | undefined;
+        if (responseLimitBytes) await response.body?.cancel();
+        else detail = await readProviderDetail(response);
         throw new AkashComputeError(
           "HTTP_ERROR",
           `Console request failed with HTTP ${response.status}${

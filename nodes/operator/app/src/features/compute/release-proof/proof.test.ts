@@ -233,6 +233,8 @@ function nativeHarness() {
     receiptId: "test-only-receipt",
     cogniKey: "xcw:cogni-candidate-a:test:0",
     identity: { nodeId: e.nodeId, compositeUid: uid, compositeGeneration: 7 },
+    registeredSlug: "operator",
+    registeredRepository: "cogni-dao/cogni",
     workload: "operator",
     environment: "candidate-a",
     state: "allocated" as const,
@@ -361,6 +363,41 @@ describe("current native evidence (test-only injection)", () => {
       expect(result.dimensions[0]?.native).not.toBe("verified");
       expect(h.provider.readManagedDefinition).not.toHaveBeenCalled();
     }
+  });
+  it("rejects mutually matching foreign native/allocation slugs before native certification or provider/log work", async () => {
+    for (const instance of [null, "isolated"]) {
+      const h = nativeHarness();
+      if (instance) {
+        Object.assign(required(h.input.expected.workloads[0]), { instance });
+        Object.assign(h.live.spec, { instance });
+        h.live.metadata.name = `${h.input.expected.nodeId}-${instance}`;
+      }
+      h.live.spec.workload.name = "foreign";
+      h.live.metadata.labels["cogni.io/node"] = "foreign";
+      h.allocation.workload = "foreign";
+      const result = await h.adapter.sample(
+        h.input,
+        new AbortController().signal
+      );
+      expect(result.dimensions[0]?.native).toBe("unavailable");
+      expect(result.dimensions[0]?.code).toBe("ownership");
+      expect(h.provider.readManagedDefinition).not.toHaveBeenCalled();
+      expect(h.kube.log).not.toHaveBeenCalled();
+    }
+  });
+  it("keeps registered slug and migration identity on isolated instances", async () => {
+    const h = nativeHarness();
+    Object.assign(required(h.input.expected.workloads[0]), {
+      instance: "isolated",
+    });
+    Object.assign(h.live.spec, { instance: "isolated" });
+    h.live.metadata.name = `${h.input.expected.nodeId}-isolated`;
+    const result = await h.adapter.sample(
+      h.input,
+      new AbortController().signal
+    );
+    expect(result.dimensions[0]?.native).toBe("verified");
+    expect(result.dimensions[0]?.migration).toBe("verified");
   });
   it("current failed/running Job beats old successful receipt; wrong owner UID/image/malformed last receipt is unavailable", async () => {
     for (const change of [
