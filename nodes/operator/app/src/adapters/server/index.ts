@@ -81,6 +81,7 @@ export {
   AkashComputeError,
   type AkashComputeErrorCode,
 } from "./compute/akash-compute.adapter";
+export { AkashNativeStateReader } from "./compute/akash-native-state.adapter";
 export { DrizzleAkashTxAllocationLedger } from "./compute/akash-tx-allocation-ledger.adapter";
 export { AkashTxSourcesClient } from "./compute/akash-tx-sources.client";
 export {

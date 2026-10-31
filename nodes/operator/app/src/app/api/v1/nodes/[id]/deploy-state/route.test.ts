@@ -19,6 +19,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const authorize = vi.fn();
 const getDeployState = vi.fn();
 const listAllocated = vi.fn();
+const listReceipts = vi.fn();
+const read = vi.fn();
+const readNativeStates = vi.fn();
 
 const NODE = { nodeId: "123e4567-e89b-12d3-a456-426614174001", slug: "blue" };
 
@@ -87,11 +90,11 @@ const receiptOf = (environment: string, externalName: string) => ({
   externalName,
 });
 
-const get = async (): Promise<Response> => {
+const get = async (query = ""): Promise<Response> => {
   const { GET } = await import("./route");
   return GET(
     new Request(
-      `https://operator.example/api/v1/nodes/${NODE.nodeId}/deploy-state`
+      `https://operator.example/api/v1/nodes/${NODE.nodeId}/deploy-state${query}`
     ),
     { params: Promise.resolve({ id: NODE.nodeId }) }
   );
@@ -103,7 +106,16 @@ describe("GET /api/v1/nodes/[id]/deploy-state — lease read (story.5039 PR-B)",
     authorize.mockResolvedValue({ ok: true, node: NODE });
     getDeployState.mockResolvedValue(DEPLOY_CELL);
     container.deployCapability = { getDeployState };
-    container.leaseReadCapability = { listAllocated };
+    container.leaseReadCapability = {
+      listAllocated,
+      listReceipts,
+      read,
+      readNativeStates,
+    };
+    listAllocated.mockResolvedValue([]);
+    listReceipts.mockResolvedValue([]);
+    read.mockResolvedValue(null);
+    readNativeStates.mockResolvedValue({});
   });
 
   it("returns leases with closure 'unknown' (no app-side Console read-back) AND the orphan diff", async () => {
@@ -163,5 +175,276 @@ describe("GET /api/v1/nodes/[id]/deploy-state — lease read (story.5039 PR-B)",
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).not.toHaveProperty("leases");
     expect(body.liveEnvs).toEqual(["candidate-a"]);
+  });
+});
+
+describe("bug.5556 exact receipt authorization and independent evidence", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authorize.mockResolvedValue({ ok: true, node: NODE });
+    getDeployState.mockResolvedValue(DEPLOY_CELL);
+    container.deployCapability = { getDeployState };
+    container.leaseReadCapability = {
+      listAllocated,
+      listReceipts,
+      read,
+      readNativeStates,
+    };
+    listAllocated.mockResolvedValue([]);
+    listReceipts.mockResolvedValue([]);
+    read.mockResolvedValue(null);
+    readNativeStates.mockResolvedValue({});
+  });
+
+  it("reads an exact key beyond 50 before slow history and queries only its native handle", async () => {
+    const exact = {
+      ...receiptOf("candidate-a", "9007199254740993"),
+      cogniKey: "exact",
+    };
+    const order: string[] = [];
+    let releaseHistory: () => void = () => undefined;
+    let enterHistory: () => void = () => undefined;
+    const historyGate = new Promise<void>((resolve) => {
+      releaseHistory = resolve;
+    });
+    const historyEntered = new Promise<void>((resolve) => {
+      enterHistory = resolve;
+    });
+    read.mockImplementation(async () => {
+      order.push("exact");
+      return exact;
+    });
+    const native = {
+      source: "akash-lcd",
+      observedAt: "2026-10-31T02:30:00Z",
+      deploymentState: "active",
+      deploymentCoverage: "complete",
+      deploymentObservedAt: "2026-10-31T02:30:00Z",
+      leaseStates: [
+        {
+          id: {
+            owner: "akash1owner",
+            dseq: exact.externalName,
+            gseq: 1,
+            oseq: 1,
+            provider: "akash1provider",
+            bseq: 0,
+          },
+          state: "reclaiming",
+          observedAt: "2026-10-31T02:30:00Z",
+        },
+      ],
+      leaseCoverage: "complete",
+      leasePages: [{ observedAt: "2026-10-31T02:30:00Z", count: 1 }],
+      errorCode: null,
+    };
+    readNativeStates.mockImplementation(async () => {
+      order.push("native");
+      return { [exact.externalName]: native };
+    });
+    listReceipts.mockImplementation(async () => {
+      order.push("history");
+      enterHistory();
+      await historyGate;
+      return Array.from({ length: 51 }, (_, i) => ({
+        ...receiptOf("candidate-a", String(i + 1)),
+        cogniKey: `old-${i}`,
+      }));
+    });
+    const pending = get("?cogniKey=exact&environment=candidate-a");
+    await historyEntered;
+    expect(order).toEqual(["exact", "native", "history"]);
+    releaseHistory();
+    const res = await pending;
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.exactReceipt).toMatchObject({
+      cogniKey: "exact",
+      externalName: "9007199254740993",
+      closure: "unknown",
+      native,
+    });
+    expect(body.receiptStates).toHaveLength(50);
+    expect(body.receiptCoverage).toMatchObject({
+      status: "truncated",
+      limit: 50,
+    });
+    expect(body.exactCoverage).toMatchObject({ status: "complete" });
+    expect(read).toHaveBeenCalledWith({ cogniKey: "exact" });
+    expect(readNativeStates).toHaveBeenCalledTimes(1);
+    expect(readNativeStates).toHaveBeenCalledWith(
+      expect.objectContaining({ dseqs: ["9007199254740993"] })
+    );
+    expect(order.indexOf("native")).toBeLessThan(order.indexOf("history"));
+    expect(body.receiptStates[0].native).toMatchObject({
+      errorCode: "not_requested",
+    });
+  });
+
+  it.each([
+    "absent",
+    "foreign",
+    "wrong-env",
+  ])("hides %s keys before all native I/O", async (kind) => {
+    read.mockResolvedValue(
+      kind === "absent"
+        ? null
+        : {
+            ...receiptOf(
+              kind === "wrong-env" ? "preview" : "candidate-a",
+              "7001"
+            ),
+            cogniKey: "exact",
+            identity: {
+              nodeId: kind === "foreign" ? "other-node" : NODE.nodeId,
+            },
+          }
+    );
+    const res = await get("?cogniKey=exact&environment=candidate-a");
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "key_not_found" });
+    expect(readNativeStates).not.toHaveBeenCalled();
+    expect(listAllocated).not.toHaveBeenCalled();
+    expect(listReceipts).not.toHaveBeenCalled();
+  });
+
+  it("keeps authorization ahead of query validation, ledger and native reads", async () => {
+    authorize.mockResolvedValue({
+      ok: false,
+      status: 403,
+      errorCode: "authz_denied",
+    });
+    expect((await get("?owner=untrusted")).status).toBe(403);
+    expect(read).not.toHaveBeenCalled();
+    expect(readNativeStates).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "?cogniKey=",
+    "?environment=garbage",
+    "?owner=akash1evil",
+    "?dseq=123",
+    "?cogniKey=x&cogniKey=y",
+  ])("rejects invalid query %s", async (query) => {
+    expect((await get(query)).status).toBe(400);
+    expect(read).not.toHaveBeenCalled();
+    expect(readNativeStates).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "unwired",
+    "error",
+  ])("returns evidence_unavailable for exact ledger %s", async (kind) => {
+    if (kind === "unwired") container.leaseReadCapability = undefined;
+    else read.mockRejectedValue(new Error("ledger down"));
+    const res = await get("?cogniKey=exact");
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "evidence_unavailable" });
+    expect(readNativeStates).not.toHaveBeenCalled();
+  });
+
+  it("keeps receipt coverage complete when native and legacy reads fail", async () => {
+    listAllocated.mockRejectedValue(new Error("legacy unavailable"));
+    listReceipts.mockResolvedValue([
+      { ...receiptOf("candidate-a", "7001"), state: "released" },
+    ]);
+    readNativeStates.mockRejectedValue(new Error("native unavailable"));
+    const body = await (await get()).json();
+    expect(body.receiptCoverage.status).toBe("complete");
+    expect(body.legacyCoverage.status).toBe("unknown");
+    expect(body.receiptStates[0]).toMatchObject({
+      ledgerState: "released",
+      closure: "unknown",
+      native: { deploymentCoverage: "unknown", leaseCoverage: "unknown" },
+    });
+    expect(body).not.toHaveProperty("leases");
+  });
+
+  it("keeps handle-bearing closure unknown when native deployment and lease are closed", async () => {
+    const receipt = receiptOf("candidate-a", "7001");
+    listReceipts.mockResolvedValue([
+      receipt,
+      {
+        ...receiptOf("candidate-a", "unused"),
+        cogniKey: "handleless-failed",
+        externalName: undefined,
+        state: "failed",
+      },
+    ]);
+    const observedAt = "2026-10-31T02:30:00.000Z";
+    const native = {
+      source: "akash-lcd",
+      observedAt,
+      deploymentState: "closed",
+      deploymentCoverage: "complete",
+      deploymentObservedAt: observedAt,
+      leaseStates: [
+        {
+          id: {
+            owner: "akash1owner",
+            dseq: "7001",
+            gseq: 1,
+            oseq: 1,
+            provider: "akash1provider",
+            bseq: 0,
+          },
+          state: "closed",
+          observedAt,
+        },
+      ],
+      leaseCoverage: "complete",
+      leasePages: [{ observedAt, count: 1 }],
+      errorCode: null,
+    };
+    readNativeStates.mockResolvedValue({ "7001": native });
+    const response = await get();
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.receiptStates).toMatchObject([
+      {
+        cogniKey: receipt.cogniKey,
+        externalName: "7001",
+        closure: "unknown",
+        native,
+      },
+      {
+        ledgerState: "failed",
+        closure: "closed",
+        native: { observedAt: null },
+      },
+    ]);
+    expect(readNativeStates).toHaveBeenCalledTimes(1);
+    expect(readNativeStates).toHaveBeenCalledWith(
+      expect.objectContaining({ dseqs: ["7001"] })
+    );
+  });
+
+  it("retains allocated legacy truncation and ledger-only failed closure independently", async () => {
+    listAllocated.mockResolvedValue(
+      Array.from({ length: 50 }, (_, i) =>
+        receiptOf("candidate-a", String(i + 1))
+      )
+    );
+    listReceipts.mockResolvedValue([
+      {
+        ...receiptOf("candidate-a", "unused"),
+        externalName: undefined,
+        state: "failed",
+      },
+    ]);
+    const body = await (await get()).json();
+    expect(body.leases).toHaveLength(50);
+    expect(body.legacyCoverage.status).toBe("potentially_truncated");
+    expect(body.receiptCoverage.status).toBe("complete");
+    expect(body.receiptStates[0]).toMatchObject({
+      ledgerState: "failed",
+      closure: "closed",
+      native: { observedAt: null },
+    });
+    expect(readNativeStates).not.toHaveBeenCalled();
+    expect(listReceipts).toHaveBeenCalledWith({
+      nodeId: NODE.nodeId,
+      limit: 51,
+    });
   });
 });
