@@ -193,7 +193,7 @@ func dnsTarget(out output) interface{} {
 func TestPaidIdentityReplay(t *testing.T) {
 	tmpl := loadTemplate(t)
 	f := fixture(1)
-	incumbent := child(t, t, key(1), blue, true)
+	incumbent := child(t, key(1), blue, true)
 	observed(f)["akash-lease"] = incumbent
 	dns(f, blue)
 	before := render(t, tmpl, f)
@@ -289,7 +289,7 @@ func TestUnsafeObservationsFailWholeRender(t *testing.T) {
 			at(observed(f)["akash-lease"].(obj), "resource", "metadata").(obj)["deletionTimestamp"] = "2026-10-31T00:55:47Z"
 		},
 		"deleting duplicate": func(f obj) {
-			c := child(t, t, key(1), blue, true)
+			c := child(t, key(1), blue, true)
 			at(c, "resource", "metadata").(obj)["deletionTimestamp"] = "2026-10-31T00:55:47Z"
 			observed(f)["akash-lease-g1"] = c
 		},
@@ -375,7 +375,7 @@ func TestReplacementProvesThenCutsOverThenAllowsNativeDelete(t *testing.T) {
 		t.Fatal("traffic before proof")
 	}
 	// A serving result without the provider admitting the host is insufficient.
-	c := child(t, t, key(2), green, false, "akash-lease-g2")
+	c := child(t, key(2), green, false, "akash-lease-g2")
 	at(c, "resource", "status", "response").(obj)["body"] = jsonString(obj{"found": true, "serving": true, "resource": obj{"state": "active", "externalName": "lease-green", "endpoints": []string{green}}})
 	observed(f)["akash-lease-g2"] = c
 	if dnsTarget(render(t, tmpl, f)) != blue {

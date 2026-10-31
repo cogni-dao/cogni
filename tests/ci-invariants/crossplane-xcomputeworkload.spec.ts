@@ -36,12 +36,14 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -2685,10 +2687,94 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
     rmSync(cache, { recursive: true, force: true });
   }, 40_000);
 
+  it("rejects exact b829 recovery retargeting at the native behavior assertion", () => {
+    // CI's existing unit checkout has full history. Read the exact ancestor
+    // offline; no fetch, downloaded template, or mutable branch is a substitute.
+    const oldSha = "b829d404677b9b0c8735fa78ba9abc1bd5da9480";
+    const old = spawnSync(
+      "git",
+      ["show", `${oldSha}:infra/crossplane/xcomputeworkload/composition.yaml`],
+      { cwd: REPO_ROOT, env, encoding: "utf8", timeout: 10_000 }
+    );
+    expect(old.error, old.error?.message).toBeUndefined();
+    expect(old.status, old.stderr).toBe(0);
+    expect(createHash("sha256").update(old.stdout).digest("hex")).toBe(
+      "5c715dbcf1f7df4c05d375d3e8bebea6d201523d50c099525d85c647e2a0a955"
+    );
+    const oldComposition = path.join(cache, "composition-b829.yaml");
+    writeFileSync(oldComposition, old.stdout);
+    const test = "TestR2DistinctRecoveryAndPropagation";
+    const subtest = `${test}/status-first`;
+    const result = spawnSync(
+      go,
+      [
+        "test",
+        "-mod=readonly",
+        "-count=1",
+        "-json",
+        "-run",
+        `^${test}$/^status-first$`,
+        ".",
+        "-args",
+        "-composition",
+        oldComposition,
+      ],
+      {
+        cwd,
+        // Reuse only the verified modules/compiler. This one negative replay
+        // must not warm the corrected suite's cold compiler cache.
+        env: { ...env, GOCACHE: path.join(cache, "sensitivity-build") },
+        encoding: "utf8",
+        timeout: 120_000,
+      }
+    );
+    const evidence = `Native sensitivity ${oldSha} (isolated build cache):\n${result.stdout}\n${result.stderr}`;
+    process.stdout.write(`${evidence}\n`);
+    expect(
+      result.error,
+      `${evidence}\n${result.error?.message}`
+    ).toBeUndefined();
+    expect(result.signal, evidence).toBeNull();
+    expect(result.status, evidence).toBe(1);
+    expect(result.stderr, evidence).toBe("");
+    // A nonzero exit alone could be a toolchain, compile, parse or setup error.
+    // Require the selected native test to reach its exact paid-child assertion.
+    const events: { Action: string; Test?: string; Output?: string }[] =
+      result.stdout
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line));
+    expect(
+      events
+        .filter((event) => event.Action === "run")
+        .map((event) => event.Test),
+      evidence
+    ).toEqual([test, subtest]);
+    expect(
+      events
+        .filter((event) => event.Action === "fail")
+        .map((event) => event.Test ?? "<package>")
+        .sort(),
+      evidence
+    ).toEqual(["<package>", test, subtest].sort());
+    expect(
+      events
+        .filter((event) =>
+          event.Output?.includes("missing distinct native successor")
+        )
+        .map((event) => event.Output),
+      evidence
+    ).toEqual([
+      expect.stringMatching(
+        /^\s+render_test\.go:\d+: missing distinct native successor akash-lease-g1-recover-1; emitted \[akash-lease\]\n$/
+      ),
+    ]);
+  }, 140_000);
+
   it.each([
     "cold",
     "warm",
-  ])("replays identity restoration, unsafe receipts, and prove-before-close (%s build cache)", () => {
+  ])("replays identity restoration, unsafe receipts, and prove-before-close (%s build cache)", (cacheState) => {
     const result = spawnSync(
       go,
       ["test", "-mod=readonly", "-count=1", "-v", "."],
@@ -2698,6 +2784,9 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
         encoding: "utf8",
         timeout: 120_000,
       }
+    );
+    process.stdout.write(
+      `Native corrected Composition (${cacheState} build cache):\n${result.stdout}\n${result.stderr}\n`
     );
     expect(result.error, result.error?.message).toBeUndefined();
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
