@@ -2796,6 +2796,16 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
       expected:
         /^\s+render_test\.go:\d+: allocated recovery history escaped missing-child refusal\n$/,
     },
+    {
+      label: "exact 179 predecessor native pending before condition",
+      oldSha: "17917e5af055fb443baaa801702d00516c1ee2b1",
+      hash: "b3a133239a954e8ece33211970e58326b77cf16ff518eca9bd6d95d720be1f2a",
+      test: "TestR2AcknowledgementCannotBorrowSelectedProof",
+      caseName: "predecessor-response-before-native-success",
+      diagnostic: "predecessor native pending escaped whole-render refusal",
+      expected:
+        /^\s+render_test\.go:\d+: predecessor native pending escaped whole-render refusal\n$/,
+    },
   ])("rejects $label at the native behavior assertion", ({
     oldSha,
     hash,

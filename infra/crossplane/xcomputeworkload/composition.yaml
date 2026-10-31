@@ -426,6 +426,7 @@ spec:
             {{- $childKeys := dict }}
             {{- $closedKeys := dict }}
             {{- $ambiguousKeys := dict }}
+            {{- $incompleteKeys := dict }}
             {{- $activeMatches := 0 }}
             {{- range $childName, $child := $observedResources }}
             {{- if hasPrefix "akash-lease" $childName }}
@@ -517,6 +518,16 @@ spec:
             {{- range (dig "status" "conditions" (list) $native) }}
             {{- if contains "cannot determine creation result" (dig "message" "" .) }}{{ $_ := set $ambiguousKeys $paidKey true }}{{ end }}
             {{- end }}
+            {{- /* Match runtime v2.3.3 ExternalCreateIncomplete for EVERY native
+              owner, before selection can hide its metadata. Parse failures are zero;
+              pending must be strictly after BOTH succeeded and failed, including
+              fractional seconds and timezone offsets. CLOSED is not a native ack.
+            */ -}}
+            {{- $nativeAnnotations := dig "metadata" "annotations" (dict) $native }}
+            {{- $pendingTime := toDate "2006-01-02T15:04:05Z07:00" (get $nativeAnnotations "crossplane.io/external-create-pending" | default "") }}
+            {{- $succeededTime := toDate "2006-01-02T15:04:05Z07:00" (get $nativeAnnotations "crossplane.io/external-create-succeeded" | default "") }}
+            {{- $failedTime := toDate "2006-01-02T15:04:05Z07:00" (get $nativeAnnotations "crossplane.io/external-create-failed" | default "") }}
+            {{- if and (not $pendingTime.IsZero) ($pendingTime.After $succeededTime) ($pendingTime.After $failedTime) }}{{ $_ := set $incompleteKeys $paidKey true }}{{ end }}
             {{- $_ := set $owners $paidKey $childName }}
             {{- $_ := set $childKeys $childName $paidKey }}
             {{- if and (ge $activeLeaseGeneration 0) (ne $activeLeaseGeneration $leaseGeneration) (has $paidKey $activeKeys) (not (hasKey $closedKeys $paidKey)) }}
@@ -857,19 +868,8 @@ spec:
             {{- $leaseReceiptState := dig "state" "unknown" $leaseReceiptRes }}
             {{- $leaseReceiptExternalName := dig "externalName" "" $leaseReceiptRes }}
             {{- $leaseReceiptProven := and (ge $leaseReceiptStatus 200) (lt $leaseReceiptStatus 300) $leaseReceiptObserved $leaseReceiptFound (eq $leaseReceiptState "active") (ne $leaseReceiptExternalName "") (eq $responseKey $currentKey) }}
-            {{- /* Match runtime v2.3.3 meta.ExternalCreateIncomplete: malformed
-              timestamps parse to zero; pending must be strictly newer than BOTH
-              succeeded and failed. Equal timestamps discharge the native guard.
-              A nonempty malformed pending value never authorizes an acknowledgement.
-            */ -}}
             {{- $leaseCreatePendingTime := toDate "2006-01-02T15:04:05Z07:00" $leaseCreatePending }}
-            {{- $leaseCreateIncomplete := false }}
-            {{- if $leaseObs }}
-            {{- $leaseAnnotations := dig "metadata" "annotations" (dict) $leaseObs.resource }}
-            {{- $leaseCreateSucceededTime := toDate "2006-01-02T15:04:05Z07:00" (get $leaseAnnotations "crossplane.io/external-create-succeeded" | default "") }}
-            {{- $leaseCreateFailedTime := toDate "2006-01-02T15:04:05Z07:00" (get $leaseAnnotations "crossplane.io/external-create-failed" | default "") }}
-            {{- $leaseCreateIncomplete = and (not $leaseCreatePendingTime.IsZero) ($leaseCreatePendingTime.After $leaseCreateSucceededTime) ($leaseCreatePendingTime.After $leaseCreateFailedTime) }}
-            {{- end }}
+            {{- $leaseCreateIncomplete := hasKey $incompleteKeys $currentKey }}
             {{- $recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $leaseCreatePendingTime.IsZero) $leaseReceiptProven }}
             {{- $unsafeLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $recoverLeaseCreateAmbiguity) }}
             {{- if and (or $parkedClosed $parkedBudget) $unsafeLeaseCreateAmbiguity }}{{ fail "terminal park has an unproven ambiguous create result" }}{{ end }}
@@ -971,6 +971,18 @@ spec:
             {{- if $leaseCreateIncomplete }}{{ $_ := set $stagedChildren $leaseResourceName $leaseObs }}{{ end }}
             {{- end }}
             {{- $renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed $parkedClosed) }}
+            {{- /* A predecessor can persist its CLOSED response before runtime writes
+              success, and its ambiguity condition can lag or be absent. Refuse the
+              WHOLE unsafe render before emitting any successor/retirement intent.
+              Check all nonselected owners, including closed outgoing generations:
+              native GC drops refs without waiting for their guarded finalizers.
+              The existing selected-child proof may acknowledge only that child.
+              Re-read each predecessor's OWN metadata on retry; do not park Replace
+              or manufacture an ack from closure, history, or successor evidence.
+            */ -}}
+            {{- range $childName, $paidKey := $childKeys }}
+            {{- if and (ne $childName $leaseResourceName) (not (and $holdOutgoingLease (eq $childName $retainedResourceName))) (or (hasKey $incompleteKeys $paidKey) (hasKey $ambiguousKeys $paidKey)) }}{{ fail "predecessor retirement has an unproven native create result" }}{{ end }}
+            {{- end }}
 
             {{- /*
               BOOT GRACE. `serving` is the convergence signal, so a not-yet-serving workload

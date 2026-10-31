@@ -500,6 +500,11 @@ func TestR2DistinctRecoveryAndPropagation(t *testing.T) {
 			r2Stamp(old, oldKey, "closed", false, true) // Producer-valid settled CREATE replay.
 			observed(f)[oldName] = old
 			for n := 1; n <= 3; n++ {
+				// Positive closed predecessors have observed native CREATE tracking,
+				// independently of the settled response and successor's annotations.
+				a := at(old, "resource", "metadata", "annotations").(obj)
+				a["crossplane.io/external-create-pending"] = "2026-10-30T00:00:00.500Z"
+				a["crossplane.io/external-create-succeeded"] = "2026-10-29T17:00:00.500-07:00"
 				original := jsonString(at(old, "resource", "spec"))
 				first := render(t, tm, f)
 				name := r2Check(t, first, n)
@@ -2339,6 +2344,123 @@ func TestR2RetirementAcknowledgementRejectsUnprovenFrames(t *testing.T) {
 }
 
 func TestR2AcknowledgementCannotBorrowSelectedProof(t *testing.T) {
+	t.Run("predecessor-response-before-native-success", func(t *testing.T) {
+		// A direct CLOSED response is persisted before runtime's success write.
+		// Exercise neither-applied, child-before-status, durable selection and restart.
+		// Fixture assignments model native persistence; they do not run GC or SSA.
+		for _, stage := range []string{"before-selection", "child-first", "selection-persisted", "restart", "outgoing-closed", "outgoing-after-cutover"} {
+			for _, condition := range []string{"absent", "lagged", "ambiguous"} {
+				tm := loadTemplate(t)
+				f, predecessor := r2ClosedBase(t, "Replace", true)
+				first := render(t, tm, f)
+				selected := r2Check(t, first, 1)
+				k := key(1) + ":recover:1"
+				if stage != "before-selection" {
+					current := r2Native(t, first.leases[selected], selected, "own-ack-successor")
+					r2Stamp(current, k, "active", false, false)
+					ca := at(current, "resource", "metadata", "annotations").(obj)
+					ca["crossplane.io/external-create-pending"] = "2026-10-30T00:00:01Z"
+					ca["crossplane.io/external-create-succeeded"] = ca["crossplane.io/external-create-pending"]
+					observed(f)[selected] = current // Successor's OWN ack cannot discharge predecessor.
+				}
+				if stage == "selection-persisted" || stage == "restart" || strings.HasPrefix(stage, "outgoing-") {
+					r2Merge(f, first)
+				}
+				if strings.HasPrefix(stage, "outgoing-") {
+					// Cover closed outgoing omission and live outgoing retirement after cutover.
+					status(f)["activeLeaseGeneration"] = 0
+					predecessor = child(t, key(0), blue, false, "akash-lease-g0")
+					if stage == "outgoing-closed" {
+						r2Stamp(predecessor, key(0), "closed", false, true)
+					} else {
+						status(f)["activeLeaseGeneration"] = 1 // Earlier edge-qualified cutover persisted.
+					}
+					observed(f)["akash-lease-g0"] = predecessor
+				}
+				a := at(predecessor, "resource", "metadata", "annotations").(obj)
+				a["crossplane.io/external-create-pending"] = "2026-10-30T00:00:00.500Z"
+				a["crossplane.io/external-create-succeeded"] = "2026-10-30T00:00:00Z"
+				a["crossplane.io/external-create-failed"] = "2026-10-30T00:00:00.499Z"
+				st := at(predecessor, "resource", "status").(obj)
+				if condition == "lagged" {
+					st["conditions"] = []obj{{"message": "creating external resource"}}
+				} else if condition == "ambiguous" {
+					st["conditions"] = []obj{{"message": "cannot determine creation result"}}
+				}
+				// An ambiguous CURRENT closed child is already held without new intent;
+				// the timestamp-only frames must refuse the entire unsafe render.
+				if condition == "ambiguous" && (stage == "before-selection" || stage == "child-first") {
+					continue
+				}
+				if stage == "restart" {
+					f = r2Copy(t, f)
+					predecessor = observed(f)["akash-lease"].(obj)
+					a = at(predecessor, "resource", "metadata", "annotations").(obj)
+					st = at(predecessor, "resource", "status").(obj)
+				}
+				before := jsonString(f)
+				for i := 0; i < 2; i++ {
+					o, err := execute(t, loadTemplate(t), f)
+					if err == nil {
+						t.Fatal("predecessor native pending escaped whole-render refusal")
+					}
+					if !strings.Contains(err.Error(), "predecessor retirement has an unproven native create result") || o.leases != nil || o.status != nil || jsonString(f) != before {
+						t.Fatal("unsafe predecessor frame emitted intent or changed native evidence", stage, condition, err)
+					}
+				}
+				// Only observed OWN acknowledgement discharges the pending guard.
+				a["crossplane.io/external-create-succeeded"] = "2026-10-29T17:00:00.500-07:00"
+				delete(st, "conditions")
+				o := render(t, loadTemplate(t), f)
+				r2Check(t, o, 1)
+				if stage == "before-selection" || stage == "child-first" {
+					wantNames(t, o, "akash-lease", selected)
+					r2Cleanup(t, o.leases["akash-lease"], key(1))
+					if at(o.leases["akash-lease"], "metadata", "annotations", "crossplane.io/external-create-succeeded") != a["crossplane.io/external-create-succeeded"] {
+						t.Fatal("retained predecessor lost its own observed native acknowledgement")
+					}
+				} else {
+					wantNames(t, o, selected) // Persisted selection now permits predecessor omission.
+				}
+				r2Merge(f, o)
+				wantNames(t, render(t, loadTemplate(t), r2Copy(t, f)), selected)
+			}
+		}
+	})
+	t.Run("predecessor-runtime-timestamps", func(t *testing.T) {
+		for _, tc := range []struct {
+			pending, succeeded, failed string
+			incomplete                 bool
+		}{
+			{"", "", "", false},
+			{"not-a-time", "", "", false},
+			{"0001-01-01T00:00:00Z", "", "", false},
+			{"2026-10-30T00:00:00.500Z", "", "", true},
+			{"2026-10-30T00:00:00.500Z", "not-a-time", "not-a-time", true},
+			{"2026-10-30T00:00:00.500Z", "2026-10-30T00:00:00Z", "2026-10-30T00:00:00.499Z", true},
+			{"2026-10-30T00:00:00.500Z", "2026-10-30T00:00:00.500Z", "", false},
+			{"2026-10-30T00:00:00.500Z", "", "2026-10-30T00:00:00.500Z", false},
+			{"2026-10-30T00:00:00.500Z", "2026-10-29T17:00:00.500-07:00", "", false},
+			{"2026-10-30T00:00:00.500Z", "", "2026-10-30T01:00:00.501+01:00", false},
+		} {
+			f, predecessor := r2ClosedBase(t, "Replace", true)
+			a := at(predecessor, "resource", "metadata", "annotations").(obj)
+			a["crossplane.io/external-create-pending"] = tc.pending
+			a["crossplane.io/external-create-succeeded"] = tc.succeeded
+			a["crossplane.io/external-create-failed"] = tc.failed
+			o, err := execute(t, loadTemplate(t), f)
+			if tc.incomplete {
+				if err == nil || o.leases != nil || o.status != nil {
+					t.Fatal("native strict pending predicate bypassed", tc)
+				}
+			} else {
+				if err != nil {
+					t.Fatal("discharged native metadata blocked recovery", tc, err)
+				}
+				r2Check(t, o, 1)
+			}
+		}
+	})
 	for _, cache := range []bool{false, true} {
 		t.Run(fmt.Sprint(cache), func(t *testing.T) {
 			tm := loadTemplate(t)
