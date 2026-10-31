@@ -1962,6 +1962,14 @@ describe("recovery allocation money policy", () => {
 
 describe("bug.5560 native terminal producer", () => {
   const identity = { dseq: "7001", owner: "akash1consumer" };
+  function unpinnedAdapter(fetchImpl: typeof fetch) {
+    return new AkashComputeAdapter({
+      apiKey: "console-key",
+      timeoutMs: 1000,
+      fetchImpl,
+      outcomeStore: memStore().store,
+    });
+  }
   function closed(over: Record<string, unknown> = {}) {
     return {
       deployment: { id: identity, state: "closed" },
@@ -1980,7 +1988,7 @@ describe("bug.5560 native terminal producer", () => {
       }
     );
   }
-  const invalidIds = [
+  const invalidIds: ({ dseq?: unknown; owner?: unknown } | undefined)[] = [
     undefined,
     {},
     { ...identity, dseq: undefined },
@@ -2011,12 +2019,13 @@ describe("bug.5560 native terminal producer", () => {
     "bad pin",
     "akash1other",
   ])("requires owner pin %j", async (pin) => {
-    const adapter = makeAdapter(
-      vi.fn<typeof fetch>(async () => jsonResponse({ data: closed() })),
-      {
-        expectedCostConsumerAccountId: pin,
-      }
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ data: closed() })
     );
+    const adapter =
+      pin === undefined
+        ? unpinnedAdapter(fetchImpl)
+        : makeAdapter(fetchImpl, { expectedCostConsumerAccountId: pin });
     await expect(adapter.status({ leaseId: "7001" })).rejects.toMatchObject({
       code: "UNEXPECTED_SHAPE",
     });
@@ -2227,9 +2236,11 @@ describe("bug.5560 native terminal producer", () => {
     "akash1other",
   ])("refuses exact CLOSED rollback without correct pin %j", async (pin) => {
     const h = harness();
-    const error = await makeAdapter(h.fetchImpl, {
-      expectedCostConsumerAccountId: pin,
-    })
+    const adapter =
+      pin === undefined
+        ? unpinnedAdapter(h.fetchImpl)
+        : makeAdapter(h.fetchImpl, { expectedCostConsumerAccountId: pin });
+    const error = await adapter
       .allocateAndLease({
         spec: SPEC,
         onAllocated: async () => {
