@@ -9,7 +9,8 @@
  *   money or leaks a real credential.
  * Scope: Static YAML/text checks; does NOT contact a cluster, a provider, or a wallet. Reads
  *   infra/crossplane/xcomputeworkload and its Argo Application. Includes an actual Go +
- *   sprig render replay using the pinned fixture module; requires Go on the test runner.
+ *   sprig render replay using the pinned fixture module. Setup requires Go >=1.21 as a
+ *   bootstrap and HTTPS access to proxy.golang.org/sum.golang.org; assertions run offline.
  * Invariants:
  *   - NO_SECRET_VALUES: every credential on the wire is a provider-http `{{ name:ns:key }}`
  *     placeholder; a literal value in this directory is unrecoverable once it reaches git.
@@ -34,9 +35,16 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -2581,14 +2589,110 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
 });
 
 // Run the committed template through Go/sprig as well as the source/model checks.
-// Missing Go fails explicitly; CI must not silently lose native render coverage.
+// The existing ubuntu-latest CI runner supplies the Go >=1.21 bootstrap. Native
+// GOTOOLCHAIN provisions the exact declared compiler, not the bootstrap's version.
+// Provisioning is bounded and completes BEFORE either offline render assertion.
+// Missing bootstrap, unavailable downloads or invalid checksums fail; never skip.
 describe("XComputeWorkload native template acceptance (bug.5557)", () => {
-  it("replays identity restoration, unsafe receipts, and prove-before-close", () => {
-    const result = spawnSync("go", ["test", "-count=1", "-v", "."], {
-      cwd: path.join(__dirname, "fixtures/xcomputeworkload-render"),
+  const cwd = path.join(__dirname, "fixtures/xcomputeworkload-render");
+  let cache: string;
+  let env: NodeJS.ProcessEnv;
+  let go = "go";
+  const manifests = ["go.mod", "go.sum"].map((file) =>
+    readFileSync(path.join(cwd, file), "utf8")
+  );
+
+  beforeAll(() => {
+    const toolchain = manifests[0]?.match(
+      /^toolchain (go\d+\.\d+\.\d+)$/m
+    )?.[1];
+    expect(
+      toolchain,
+      "fixture must declare an exact Go toolchain"
+    ).toBeDefined();
+    cache = mkdtempSync(path.join(tmpdir(), "xcw-render-"));
+    // Allow only the executable search path and controlled Go settings. Ignore
+    // ambient GOENV, go.work, GOFLAGS, GOROOT, platform overrides and private proxies.
+    env = {
+      PATH: process.env.PATH,
+      GOENV: "off",
+      GOWORK: "off",
+      GO111MODULE: "on",
+      GOFLAGS: "-mod=readonly",
+      GOTOOLCHAIN: toolchain,
+      GOPATH: cache,
+      GOMODCACHE: path.join(cache, "pkg/mod"),
+      GOCACHE: path.join(cache, "build"),
+      CGO_ENABLED: "0",
+      GOTELEMETRY: "off",
+      GOPROXY: "https://proxy.golang.org",
+      GOSUMDB: "sum.golang.org",
+    };
+    for (const args of [
+      ["env", "GOVERSION", "GOROOT"],
+      ["mod", "download"],
+      ["mod", "verify"],
+    ]) {
+      const result = spawnSync(go, args, {
+        cwd,
+        env,
+        encoding: "utf8",
+        timeout: 90_000,
+      });
+      const evidence = `Go setup (${args.join(" ")}): ${result.stdout}\n${result.stderr}`;
+      expect(
+        result.error,
+        `${evidence}\n${result.error?.message}`
+      ).toBeUndefined();
+      expect(result.status, evidence).toBe(0);
+      if (args[0] === "env") {
+        const [version, goroot] = result.stdout.trim().split(/\r?\n/);
+        expect(version).toBe(toolchain);
+        if (!goroot || !path.isAbsolute(goroot)) {
+          throw new Error("Go setup did not resolve an absolute GOROOT");
+        }
+        go = path.join(goroot, "bin/go");
+      }
+    }
+    expect(
+      ["go.mod", "go.sum"].map((file) =>
+        readFileSync(path.join(cwd, file), "utf8")
+      ),
+      "provisioning must use the committed dependency closure"
+    ).toEqual(manifests);
+    // Invoke the selected compiler directly offline. Re-entering an older
+    // bootstrap would require toolchain checksum verification even when cached.
+    env = { ...env, GOTOOLCHAIN: "local", GOPROXY: "off", GOSUMDB: "off" };
+  }, 280_000);
+
+  afterAll(() => {
+    if (!cache) return;
+    // Module directories are read-only by default; Go owns their removal.
+    const result = spawnSync("go", ["clean", "-modcache"], {
+      cwd: cache,
+      env: { ...env, GOTOOLCHAIN: "local", GOPROXY: "off", GOSUMDB: "off" },
       encoding: "utf8",
-      timeout: 120_000,
+      timeout: 30_000,
     });
+    expect(result.error, result.error?.message).toBeUndefined();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    rmSync(cache, { recursive: true, force: true });
+  }, 40_000);
+
+  it.each([
+    "cold",
+    "warm",
+  ])("replays identity restoration, unsafe receipts, and prove-before-close (%s build cache)", () => {
+    const result = spawnSync(
+      go,
+      ["test", "-mod=readonly", "-count=1", "-v", "."],
+      {
+        cwd,
+        env,
+        encoding: "utf8",
+        timeout: 120_000,
+      }
+    );
     expect(result.error, result.error?.message).toBeUndefined();
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   }, 130_000);
