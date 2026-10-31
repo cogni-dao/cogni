@@ -73,6 +73,17 @@ export interface UsageFact {
   readonly provider?: string;
   readonly model?: string;
 
+  /**
+   * Whether this call used a free-tier model, per the platform catalog's `is_free` flag.
+   *
+   * FREE_TIER_RESOLVED_BY_PRODUCER (bug.5266): resolved HERE, by the producer that still holds the
+   * catalog model id — never re-derived downstream. `model` above is a human display name on the
+   * callback path (`resolveDisplayName(entry.model_group)` → `"GPT-OSS 120B"`), so a catalog lookup
+   * keyed on it silently misses and every free call reads as paid. `undefined` means "not resolved"
+   * and is treated as paid (fail-to-charge, never fail-to-free).
+   */
+  readonly isFreeTier?: boolean;
+
   // Usage metrics
   readonly inputTokens?: number;
   readonly outputTokens?: number;

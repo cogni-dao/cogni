@@ -34,7 +34,11 @@ export const creditsSummaryOperation = {
   }),
   output: z.object({
     billingAccountId: z.string(),
-    balanceCredits: z.number().nonnegative(),
+    // A balance CAN legitimately be negative: POST_CALL_NEVER_BLOCKS means a charge completes
+    // even when it overdraws (billing-evolution.md invariant 6), so overage is reconciled, not
+    // prevented. `.nonnegative()` made this route throw a ZodError on every poll once an account
+    // went red, breaking the credits UI exactly when a user most needs to see it (bug.5266).
+    balanceCredits: z.number(),
     ledger: z.array(ledgerEntrySchema),
   }),
 } as const;

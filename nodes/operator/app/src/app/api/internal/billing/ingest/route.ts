@@ -197,6 +197,10 @@ function buildUsageFact(
     graphId,
     provider: entry.custom_llm_provider,
     model: resolveDisplayName(entry.model_group), // Display name from catalog, falls back to model_group
+    // FREE_TIER_RESOLVED_BY_PRODUCER (bug.5266): resolve from the CATALOG ID (`model_group`) while we
+    // still hold it — `model` above is a display name, so a downstream lookup would always miss.
+    // Cache miss (`null`) stays undefined → treated as paid downstream (fail-to-charge).
+    ...(isFreeFromCache !== null && { isFreeTier: isFreeFromCache }),
     inputTokens: entry.prompt_tokens,
     outputTokens: entry.completion_tokens,
     ...(costUsd !== undefined && { costUsd }),
