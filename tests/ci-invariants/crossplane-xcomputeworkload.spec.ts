@@ -1406,7 +1406,10 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     // Acknowledging the create receipt does not fabricate a successful probe.
     expect(leaseBlock).toContain("{{- if and $active $serving }}");
     expect(templateCode).toContain(
-      '{{- $serving := dig "serving" false $resp }}'
+      '{{- if $leaseObs }}{{ $isCurrentObservation = and (eq (dig "status" "requestDetails" "method" "" $leaseObs.resource) "POST") (eq (dig "status" "requestDetails" "url" "" $leaseObs.resource) (printf "%s/v1/akash/observe" $baseUrl)) }}{{ end }}'
+    );
+    expect(templateCode).toContain(
+      '{{- $serving := and $isCurrentObservation (ge $respStatus 200) (lt $respStatus 300) (eq $responseKey $currentKey) (eq $lastRequestedSha $desiredSha) (hasKey $resp "found") (dig "serving" false $resp) }}'
     );
   });
 });
@@ -2687,10 +2690,37 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
     rmSync(cache, { recursive: true, force: true });
   }, 40_000);
 
-  it("rejects exact b829 recovery retargeting at the native behavior assertion", () => {
-    // CI's existing unit checkout has full history. Read the exact ancestor
+  it.each([
+    {
+      label: "exact b829 recovery retargeting",
+      oldSha: "b829d404677b9b0c8735fa78ba9abc1bd5da9480",
+      hash: "5c715dbcf1f7df4c05d375d3e8bebea6d201523d50c099525d85c647e2a0a955",
+      test: "TestR2DistinctRecoveryAndPropagation",
+      caseName: "status-first",
+      diagnostic: "missing distinct native successor",
+      expected:
+        /^\s+render_test\.go:\d+: missing distinct native successor akash-lease-g1-recover-1; emitted \[akash-lease\]\n$/,
+    },
+    {
+      label: "exact 64402 terminal-refusal evidence loss",
+      oldSha: "64402fc6ca6078bb0165adc41368c1abb56fc212",
+      hash: "30d853fa4f2157e337e8265ef417935509fa3dff8a825f3a009aac17cb4285c9",
+      test: "TestR2TerminalParksSurviveRestartShaAndDelayedGC",
+      caseName: "default",
+      diagnostic: "refusal destroyed durable terminal tuple",
+      expected:
+        /^\s+render_test\.go:\d+: refusal destroyed durable terminal tuple false 409 map\[.*failure:map\[message:unproven reason:ledger_unavailable\].*\]\n$/,
+    },
+  ])("rejects $label at the native behavior assertion", ({
+    oldSha,
+    hash,
+    test,
+    caseName,
+    diagnostic,
+    expected,
+  }) => {
+    // CI's existing unit checkout has full history. Read each exact ancestor
     // offline; no fetch, downloaded template, or mutable branch is a substitute.
-    const oldSha = "b829d404677b9b0c8735fa78ba9abc1bd5da9480";
     const old = spawnSync(
       "git",
       ["show", `${oldSha}:infra/crossplane/xcomputeworkload/composition.yaml`],
@@ -2698,13 +2728,10 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
     );
     expect(old.error, old.error?.message).toBeUndefined();
     expect(old.status, old.stderr).toBe(0);
-    expect(createHash("sha256").update(old.stdout).digest("hex")).toBe(
-      "5c715dbcf1f7df4c05d375d3e8bebea6d201523d50c099525d85c647e2a0a955"
-    );
-    const oldComposition = path.join(cache, "composition-b829.yaml");
+    expect(createHash("sha256").update(old.stdout).digest("hex")).toBe(hash);
+    const oldComposition = path.join(cache, `composition-${oldSha}.yaml`);
     writeFileSync(oldComposition, old.stdout);
-    const test = "TestR2DistinctRecoveryAndPropagation";
-    const subtest = `${test}/status-first`;
+    const subtest = `${test}/${caseName}`;
     const result = spawnSync(
       go,
       [
@@ -2713,7 +2740,7 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
         "-count=1",
         "-json",
         "-run",
-        `^${test}$/^status-first$`,
+        `^${test}$/^${caseName}$`,
         ".",
         "-args",
         "-composition",
@@ -2721,9 +2748,12 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
       ],
       {
         cwd,
-        // Reuse only the verified modules/compiler. This one negative replay
+        // Reuse only the verified modules/compiler. Each negative replay
         // must not warm the corrected suite's cold compiler cache.
-        env: { ...env, GOCACHE: path.join(cache, "sensitivity-build") },
+        env: {
+          ...env,
+          GOCACHE: path.join(cache, `sensitivity-build-${oldSha}`),
+        },
         encoding: "utf8",
         timeout: 120_000,
       }
@@ -2759,16 +2789,10 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
     ).toEqual(["<package>", test, subtest].sort());
     expect(
       events
-        .filter((event) =>
-          event.Output?.includes("missing distinct native successor")
-        )
+        .filter((event) => event.Output?.includes(diagnostic))
         .map((event) => event.Output),
       evidence
-    ).toEqual([
-      expect.stringMatching(
-        /^\s+render_test\.go:\d+: missing distinct native successor akash-lease-g1-recover-1; emitted \[akash-lease\]\n$/
-      ),
-    ]);
+    ).toEqual([expect.stringMatching(expected)]);
   }, 140_000);
 
   it.each([

@@ -809,11 +809,146 @@ func TestR2TerminalParksSurviveRestartShaAndDelayedGC(t *testing.T) {
 					t.Fatal("timer fabricated closure", first.status)
 				}
 			}
+			// Inspect the retained cleanup intent before any omission. This Request
+			// keeps its original paid key, spec and own handle, not a new attempt.
+			originalKey := key(1)
+			if mode == "max3" {
+				originalKey += ":recover:3"
+			}
+			r2Cleanup(t, first.leases[selected], originalKey)
+			if jsonString(at(first.leases[selected], "spec")) != jsonString(at(c, "resource", "spec")) ||
+				at(first.status, "resource", "id") != "handle-"+originalKey {
+				t.Fatal("retaining pass changed original cleanup identity", first.status)
+			}
 			r2Merge(f, first) // Earlier status survives subsequent GC/ref/apply crash.
-			wantNames(t, render(t, tm, f))
-			at(c, "resource", "metadata").(obj)["deletionTimestamp"] = "2026-10-31T00:55:47Z"
-			wantNames(t, render(t, tm, f)) // Already retired terminal child may finish GC.
-			delete(observed(f), selected)
+			parkedInput := r2Copy(t, f)
+			// Refusals arrive BEFORE first omission and DURING delayed GC. Persist
+			// each output, so a lost terminal discriminator breaks the NEXT frame.
+			originalStatus := r2Copy(t, at(c, "resource", "status").(obj))
+			closedResponse := r2Copy(t, originalStatus["response"].(obj))
+			for _, deleting := range []bool{false, true} {
+				if deleting {
+					at(c, "resource", "metadata").(obj)["deletionTimestamp"] = "2026-10-31T00:55:47Z"
+				}
+				for _, code := range []int{409, 503, 422} {
+					st := at(c, "resource", "status").(obj)
+					st["requestDetails"] = obj{"method": "POST", "url": "http://akash-tx-actuator.cogni-candidate-a.svc.cluster.local:8080/v1/akash/observe",
+						"body": jsonString(obj{"cogniKey": originalKey, "expectedSourceSha": strings.Repeat("b", 40), "publicHost": host})}
+					message := "unproven"
+					if code == 422 {
+						message += strings.Repeat("x", 300) // Status must remain schema-bounded.
+					}
+					st["response"] = obj{"statusCode": code, "body": jsonString(obj{"code": "ledger_unavailable", "message": message})}
+					if code == 503 {
+						delete(st, "cache") // A terminal tuple does not need provider cache.
+					} else {
+						st["cache"] = obj{"response": closedResponse}
+					}
+					for i := 0; i < 3; i++ {
+						o := render(t, tm, f)
+						wantNames(t, o) // No CREATE, UPDATE or new recovery intent.
+						if at(o.status, "failure", "reason") != reason || o.status["phase"] != "Failed" || o.status["serving"] != false ||
+							jsonString(o.status["resource"]) != jsonString(first.status["resource"]) ||
+							jsonString(o.status["bootEpoch"]) != jsonString(first.status["bootEpoch"]) ||
+							jsonString(o.status["recovery"]) != jsonString(first.status["recovery"]) {
+							t.Fatal("refusal destroyed durable terminal tuple", deleting, code, o.status)
+						}
+						if len(at(o.status, "failure", "message").(string)) > 256 {
+							t.Fatal("refusal made terminal status exceed its schema", o.status)
+						}
+						if mode != "budget" && (!strings.Contains(at(o.status, "failure", "message").(string), "ledger_unavailable") ||
+							!strings.Contains(at(o.status, "failure", "message").(string), "unproven")) {
+							t.Fatal("terminal park hid refusal", o.status)
+						}
+						r2Merge(f, o)
+					}
+				}
+			}
+			conflicts := []string{"ambiguous"}
+			if mode != "budget" {
+				conflicts = append(conflicts, "active-success", "foreign-handle", "foreign-key", "malformed", "cache-conflict", "wrong-owner")
+			}
+			for _, conflict := range conflicts {
+				bad := r2Copy(t, parkedInput)
+				bc := observed(bad)[selected].(obj)
+				switch conflict {
+				case "active-success":
+					r2Stamp(bc, originalKey, "active", false, false)
+				case "foreign-handle":
+					at(bc, "resource", "status", "response").(obj)["body"] = jsonString(obj{"found": true, "resource": obj{"state": "closed", "externalName": "foreign"}})
+				case "foreign-key":
+					at(bc, "resource", "status", "requestDetails").(obj)["body"] = jsonString(obj{"cogniKey": key(2)})
+				case "ambiguous":
+					// No successful active cache can acknowledge this ambiguity.
+					at(bc, "resource", "status").(obj)["response"] = obj{"statusCode": 503, "body": `{"code":"ledger_unavailable","message":"unproven"}`}
+					at(bc, "resource", "status").(obj)["conditions"] = []obj{{"message": "cannot determine creation result"}}
+					at(bc, "resource", "metadata", "annotations").(obj)["crossplane.io/external-create-pending"] = "2026-10-30T00:00:00Z"
+				case "malformed":
+					at(bc, "resource", "status", "response").(obj)["body"] = "null"
+				case "cache-conflict":
+					at(bc, "resource", "status").(obj)["cache"] = obj{"response": obj{"statusCode": 200, "body": jsonString(obj{"resource": obj{"state": "closed", "externalName": "foreign"}})}}
+				case "wrong-owner":
+					at(bc, "resource", "metadata").(obj)["ownerReferences"] = []obj{}
+				}
+				r2WantFailure(t, tm, bad)
+				if conflict == "ambiguous" {
+					// Whole-render refusal leaves the earlier CLOSED or budget tuple
+					// durable. Ref/child loss and restart still cannot recreate it.
+					delete(observed(bad), selected)
+					bad = r2Copy(t, bad)
+					for i := 0; i < 3; i++ {
+						o := render(t, loadTemplate(t), bad)
+						wantNames(t, o)
+						if at(o.status, "failure", "reason") != reason ||
+							jsonString(o.status["resource"]) != jsonString(first.status["resource"]) ||
+							jsonString(o.status["bootEpoch"]) != jsonString(first.status["bootEpoch"]) ||
+							jsonString(o.status["recovery"]) != jsonString(first.status["recovery"]) {
+							t.Fatal("ambiguity erased durable terminal tuple", o.status)
+						}
+						r2Merge(bad, o)
+					}
+				}
+			}
+			// A delayed successful response for the same original allocation also
+			// stays omitted. The budget case still reports active, not closed.
+			at(c, "resource").(obj)["status"] = r2Copy(t, originalStatus)
+			replayed := render(t, tm, f)
+			wantNames(t, replayed)
+			if at(replayed.status, "failure", "reason") != reason {
+				t.Fatal("delayed original response erased park", replayed.status)
+			}
+			r2Merge(f, replayed)
+			// Migration results ride on OBSERVE, independently of paid closure.
+			observedState := "closed"
+			if mode == "budget" {
+				observedState = "active"
+			}
+			r2Stamp(c, originalKey, observedState, false, false)
+			response := at(c, "resource", "status", "response").(obj)
+			var migrationBody obj
+			if err := json.Unmarshal([]byte(response["body"].(string)), &migrationBody); err != nil {
+				t.Fatal(err)
+			}
+			migrationBody["migration"] = obj{"phase": "failed"}
+			response["body"] = jsonString(migrationBody)
+			for i := 0; i < 3; i++ {
+				o := render(t, tm, f)
+				wantNames(t, o)
+				if at(o.status, "failure", "reason") != reason || at(o.status, "migration", "phase") != "failed" {
+					t.Fatal("migration display erased terminal reason", o.status)
+				}
+				r2Merge(f, o)
+			}
+			// Loss of a response is also unproven, not permission to recreate.
+			delete(at(c, "resource", "status").(obj), "response")
+			delete(at(c, "resource", "status").(obj), "cache")
+			unproven := render(t, tm, f)
+			wantNames(t, unproven)
+			if at(unproven.status, "failure", "reason") != reason {
+				t.Fatal("missing response erased terminal reason", unproven.status)
+			}
+			r2Merge(f, unproven)
+			delete(observed(f), selected) // Child/ref loss after omission, then restart.
 			f = r2Copy(t, f)
 			for i := 0; i < 6; i++ {
 				if i == 2 {

@@ -790,6 +790,7 @@ spec:
             {{- $leaseReceiptProven := and (ge $leaseReceiptStatus 200) (lt $leaseReceiptStatus 300) $leaseReceiptObserved $leaseReceiptFound (eq $leaseReceiptState "active") (ne $leaseReceiptExternalName "") (eq $responseKey $currentKey) }}
             {{- $recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven }}
             {{- $unsafeLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $recoverLeaseCreateAmbiguity) }}
+            {{- if and (or $parkedClosed $parkedBudget) $unsafeLeaseCreateAmbiguity }}{{ fail "terminal park has an unproven ambiguous create result" }}{{ end }}
             {{- /*
               TARGETED REQUEUE AFTER A LOST PROVIDER EVENT (bug.0001). A transient kube-apiserver
               refusal can strand one provider-http Request even while its sibling Requests keep
@@ -1318,6 +1319,16 @@ spec:
             {{- $phase = "Failed" }}
             {{- $failReason = "BootDeadlineExceeded" }}
             {{- $failMessage = printf "workload did not serve %s within %ds; spend continues because bootPolicy.onDeadline is Hold" (substr 0 12 $desiredSha) $bootDeadlineSeconds }}
+            {{- else if $parkedClosed }}
+            {{- /* The validated earlier tuple authorizes omission. A later refusal is
+              not contrary allocation evidence and must not erase its terminal reason.
+              Ownership, conflicting allocation and ambiguity guards run before this.
+            */ -}}
+            {{- $phase = "Failed" }}
+            {{- $failReason = $prevFailure }}
+            {{- $failMessage = printf "lease %s remains closed; durable %s park permits no further paid mutation" $externalName $prevFailure }}
+            {{- $failMessage = trunc 256 $failMessage }}
+            {{- if ne $refusalCode "" }}{{ $failMessage = printf "actuator refusal %s: %s; lease remains closed" $refusalCode $refusalMessage | trunc 256 }}{{ end }}
             {{- else if and (ne $refusalCode "") (not $refusalRetryable) }}
             {{- $phase = "Failed" }}
             {{- $failReason = $refusalCode }}
