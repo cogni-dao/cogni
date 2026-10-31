@@ -1623,3 +1623,389 @@ func TestR2FirstRetirementRejectsConflictingHistory(t *testing.T) {
 		})
 	}
 }
+
+// R4 cases model persistence inputs only. They execute the full template, not
+// native SSA, GC, provider finalization, external cleanup or accounting.
+func r4ParkStatus(t *testing.T, o output, prior obj, reason string) {
+	t.Helper()
+	if at(o.status, "failure", "reason") != reason || o.status["phase"] != "Failed" || o.status["serving"] != false {
+		t.Fatal("terminal lifecycle evidence changed", o.status)
+	}
+	for _, field := range []string{"resource", "bootEpoch", "recovery"} {
+		if jsonString(o.status[field]) != jsonString(prior[field]) {
+			t.Fatal("terminal tuple changed", field, o.status)
+		}
+	}
+}
+
+func TestR2IncompleteFoundRetirementPreservesEvidence(t *testing.T) {
+	for _, body := range []struct{ name, raw string }{
+		{"absent-resource", `{"found":true,"serving":false}`},
+		{"empty-id", `{"found":true,"serving":false,"resource":{"externalName":"","state":"unknown","endpoints":[]}}`},
+	} {
+		for _, cache := range []bool{false, true} {
+			for _, attempt := range []int{0, 1} {
+				for _, parked := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s-cache%v-attempt%d-park%v", body.name, cache, attempt, parked), func(t *testing.T) {
+						tm := loadTemplate(t)
+						f, c, selected, k := r2AllocatedBudgetAttempt(t, attempt)
+						status(f)["bootEpoch"].(obj)["mintedAt"] = "2000-01-01T00:00:00Z"
+						if parked {
+							r2Merge(f, render(t, tm, f))
+						}
+						history := r2Copy(t, status(f))
+						st := at(c, "resource", "status").(obj)
+						if cache {
+							st["cache"] = obj{"response": r2Copy(t, st["response"].(obj))}
+						}
+						st["response"] = obj{"statusCode": 200, "body": body.raw}
+						before := jsonString(f)
+						for i := 0; i < 2; i++ {
+							o, err := execute(t, tm, f)
+							if err == nil {
+								t.Fatal("incomplete found allocation escaped whole-render refusal")
+							}
+							if !strings.Contains(err.Error(), "found allocation requires a nonempty own handle") || o.leases != nil || o.status != nil || jsonString(f) != before {
+								t.Fatal("incomplete response mutated durable evidence or failed for another cause", err)
+							}
+						}
+						// A repaired response is still usable because the refused frame
+						// never replaced A with an empty id or a poisoned terminal tuple.
+						r2Stamp(c, k, "active", false, false)
+						repaired := render(t, tm, f)
+						if !parked {
+							wantNames(t, repaired, selected)
+							r2Cleanup(t, repaired.leases[selected], k)
+						} else {
+							wantNames(t, repaired)
+						}
+						r4ParkStatus(t, repaired, history, "BootDeadlineClosed")
+						r2Merge(f, repaired)
+						wantNames(t, render(t, tm, f))
+						delete(observed(f), selected) // Observed child/ref loss after persisted intent.
+						f = r2Copy(t, f)
+						for i := 0; i < 3; i++ {
+							if i == 1 {
+								r2SetSha(f, strings.Repeat("d", 40))
+							}
+							o := render(t, loadTemplate(t), f)
+							wantNames(t, o)
+							r4ParkStatus(t, o, repaired.status, "BootDeadlineClosed")
+							r2Merge(f, o)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestR2FirstTerminalClosureOutranksMigrationDisplay(t *testing.T) {
+	for _, mode := range []string{"default", "Hold", "max3", "budget"} {
+		t.Run(mode, func(t *testing.T) {
+			tm := loadTemplate(t)
+			attempt := 0
+			if mode == "max3" {
+				attempt = 3
+			}
+			f, c, selected, k := r2AllocatedBudgetAttempt(t, attempt)
+			reason, state := "LeaseClosed", "closed"
+			switch mode {
+			case "default":
+				delete(xr(f)["spec"].(obj), "bootPolicy")
+			case "Hold":
+				xr(f)["spec"].(obj)["bootPolicy"] = obj{"onGiveUp": "Hold"}
+			case "max3":
+				xr(f)["spec"].(obj)["bootPolicy"] = obj{"onGiveUp": "Replace"}
+				reason = "RecoveryLimitExceeded"
+			case "budget":
+				status(f)["bootEpoch"].(obj)["mintedAt"] = "2000-01-01T00:00:00Z"
+				reason, state = "BootDeadlineClosed", "active"
+			}
+			r2Stamp(c, k, state, false, false)
+			response := at(c, "resource", "status", "response").(obj)
+			var body obj
+			if err := json.Unmarshal([]byte(response["body"].(string)), &body); err != nil {
+				t.Fatal(err)
+			}
+			body["migration"] = obj{"phase": "failed"}
+			response["body"] = jsonString(body)
+			first := render(t, tm, f)
+			if at(first.status, "failure", "reason") != reason {
+				t.Fatalf("first terminal closure lost lifecycle discriminator: got %v, want %s", at(first.status, "failure", "reason"), reason)
+			}
+			wantNames(t, first, selected)
+			r2Cleanup(t, first.leases[selected], k)
+			if at(first.status, "migration", "phase") != "failed" || at(first.status, "resource", "id") != "handle-"+k || at(first.status, "resource", "state") != state || first.status["serving"] != false {
+				t.Fatal("first terminal status erased migration or invented proof", first.status)
+			}
+			wantNames(t, render(t, tm, f), selected) // XR-status patch lost.
+			r2Merge(f, first)
+			for _, code := range []int{409, 422, 503, 0} {
+				st := at(c, "resource", "status").(obj)
+				if code == 0 {
+					delete(st, "response")
+				} else {
+					st["response"] = obj{"statusCode": code, "body": `{"code":"ledger_unavailable","message":"unproven"}`}
+				}
+				o := render(t, tm, f)
+				wantNames(t, o)
+				r4ParkStatus(t, o, first.status, reason)
+				if mode != "budget" && code != 0 && !strings.Contains(at(o.status, "failure", "message").(string), "ledger_unavailable") {
+					t.Fatal("durable closure hid current refusal", o.status)
+				}
+				r2Merge(f, o)
+			}
+			at(c, "resource", "metadata").(obj)["deletionTimestamp"] = "2026-10-31T00:55:47Z"
+			wantNames(t, render(t, tm, f))
+			delete(observed(f), selected)
+			f = r2Copy(t, f)
+			for i := 0; i < 3; i++ {
+				if i == 1 {
+					r2SetSha(f, strings.Repeat("d", 40))
+				}
+				o := render(t, loadTemplate(t), f)
+				wantNames(t, o)
+				r4ParkStatus(t, o, first.status, reason)
+				r2Merge(f, o)
+			}
+		})
+	}
+}
+
+func r4Ambiguous(c obj, cache bool) {
+	st := at(c, "resource", "status").(obj)
+	st["conditions"] = []obj{{"message": "cannot determine creation result"}}
+	at(c, "resource", "metadata", "annotations").(obj)["crossplane.io/external-create-pending"] = "2026-10-30T00:00:00.500Z"
+	if cache {
+		st["cache"] = obj{"response": st["response"]}
+		st["response"] = obj{"statusCode": 503, "body": `{"code":"ledger_unavailable","message":"unproven"}`}
+	}
+}
+
+func r4RetainedAck(t *testing.T, o output, c obj, selected, k string) {
+	t.Helper()
+	if at(o.leases[selected], "metadata", "annotations", "crossplane.io/external-create-succeeded") != at(c, "resource", "metadata", "annotations", "crossplane.io/external-create-pending") {
+		t.Fatal("retiring child lost exact authorized native acknowledgement")
+	}
+	wantNames(t, o, selected)
+	r2Cleanup(t, o.leases[selected], k)
+	if jsonString(at(o.leases[selected], "spec")) != jsonString(at(c, "resource", "spec")) || at(o.leases[selected], "metadata", "annotations", annotation) != selected || at(o.leases[selected], "metadata", "name") != nil || at(o.leases[selected], "metadata", "uid") != nil {
+		t.Fatal("retirement retargeted native identity/spec", o.leases[selected])
+	}
+}
+
+func TestR2BudgetRetirementWaitsForNativeAcknowledgement(t *testing.T) {
+	for _, stage := range []string{"first", "park", "park-deleting"} {
+		for _, cache := range []bool{false, true} {
+			for _, attempt := range []int{0, 1} {
+				t.Run(fmt.Sprintf("%s-cache%v-attempt%d", stage, cache, attempt), func(t *testing.T) {
+					tm := loadTemplate(t)
+					f, c, selected, k := r2AllocatedBudgetAttempt(t, attempt)
+					status(f)["bootEpoch"].(obj)["mintedAt"] = "2000-01-01T00:00:00Z"
+					if stage != "first" {
+						r2Merge(f, render(t, tm, f))
+						wantNames(t, render(t, tm, f))
+					}
+					if stage == "park-deleting" {
+						at(c, "resource", "metadata").(obj)["deletionTimestamp"] = "2026-10-31T00:55:47Z"
+					}
+					r4Ambiguous(c, cache)
+					prior := r2Copy(t, status(f))
+					originalUID := at(c, "resource", "metadata", "uid")
+					first := render(t, tm, f)
+					r4RetainedAck(t, first, c, selected, k)
+					r4ParkStatus(t, first, prior, "BootDeadlineClosed")
+					for i := 0; i < 2; i++ { // Neither acknowledgement nor XR status persisted.
+						r4RetainedAck(t, render(t, tm, f), c, selected, k)
+					}
+					// Child metadata observed before this pass's XR status: the FIRST
+					// retaining pass is still mandatory if no durable park exists yet.
+					childFirst := r2Copy(t, f)
+					cc := observed(childFirst)[selected].(obj)
+					ca := at(cc, "resource", "metadata", "annotations").(obj)
+					ca["crossplane.io/external-create-succeeded"] = ca["crossplane.io/external-create-pending"]
+					// The native condition can clear, and the current/cache read can
+					// disappear, after ack apply but before the XR-status patch. Retain
+					// observed sufficient metadata so a retaining apply cannot revoke it.
+					cst := at(cc, "resource", "status").(obj)
+					delete(cst, "conditions")
+					delete(cst, "response")
+					delete(cst, "cache")
+					ackFirst := render(t, tm, childFirst)
+					if stage == "first" {
+						r4RetainedAck(t, ackFirst, cc, selected, k)
+					} else {
+						wantNames(t, ackFirst)
+					}
+					r2Merge(childFirst, ackFirst)
+					wantNames(t, render(t, tm, childFirst))
+					// XR status persisted but acknowledgement apply was lost. Same-second
+					// older success, malformed success and older failure cannot discharge
+					// runtime's strict pending.After(latest) check.
+					r2Merge(f, first)
+					a := at(c, "resource", "metadata", "annotations").(obj)
+					for _, succeeded := range []string{"", "not-a-time", "2026-10-30T00:00:00Z"} {
+						a["crossplane.io/external-create-succeeded"] = succeeded
+						a["crossplane.io/external-create-failed"] = "2026-10-30T00:00:00.499Z"
+						for i := 0; i < 2; i++ {
+							o := render(t, loadTemplate(t), f)
+							r4RetainedAck(t, o, c, selected, k)
+							r4ParkStatus(t, o, first.status, "BootDeadlineClosed")
+							r2Merge(f, o)
+						}
+					}
+					// Native metadata observed equal/newer success OR equal failure is
+					// sufficient. These fixture assignments model persistence, not SSA.
+					for _, ack := range []struct{ field, timestamp string }{
+						{"crossplane.io/external-create-succeeded", "2026-10-30T00:00:00.500Z"},
+						{"crossplane.io/external-create-succeeded", "2026-10-29T17:00:01-07:00"},
+						{"crossplane.io/external-create-failed", "2026-10-30T00:00:00.500Z"},
+					} {
+						acknowledged := r2Copy(t, f)
+						ac := observed(acknowledged)[selected].(obj)
+						at(ac, "resource", "metadata", "annotations").(obj)[ack.field] = ack.timestamp
+						o := render(t, tm, acknowledged)
+						wantNames(t, o)
+						r4ParkStatus(t, o, first.status, "BootDeadlineClosed")
+					}
+					a["crossplane.io/external-create-succeeded"] = a["crossplane.io/external-create-pending"]
+					wantNames(t, render(t, tm, f))
+					// A NEWER pending annotation restores the obligation during a park.
+					a["crossplane.io/external-create-pending"] = "2026-10-30T00:00:00.501Z"
+					r4RetainedAck(t, render(t, tm, f), c, selected, k)
+					a["crossplane.io/external-create-succeeded"] = a["crossplane.io/external-create-pending"]
+					wantNames(t, render(t, tm, f))
+					if at(c, "resource", "metadata", "uid") != originalUID {
+						t.Fatal("fixture native owner changed")
+					}
+					delete(observed(f), selected)
+					f = r2Copy(t, f)
+					r2SetSha(f, strings.Repeat("d", 40))
+					for i := 0; i < 3; i++ {
+						o := render(t, loadTemplate(t), f)
+						wantNames(t, o)
+						r4ParkStatus(t, o, first.status, "BootDeadlineClosed")
+						r2Merge(f, o)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestR2RetirementAcknowledgementRejectsUnprovenFrames(t *testing.T) {
+	for _, parked := range []bool{false, true} {
+		for _, mode := range []string{"no-pending", "malformed-pending", "missing-condition", "no-response", "history-only", "found-false", "closed", "direct-only", "empty-handle", "foreign-current", "foreign-cache", "foreign-key", "failed-cache", "foreign-incumbent", "deleting-selected"} {
+			t.Run(fmt.Sprintf("%s-park%v", mode, parked), func(t *testing.T) {
+				tm := loadTemplate(t)
+				f, c, selected, k := r2AllocatedBudgetAttempt(t, 1)
+				status(f)["bootEpoch"].(obj)["mintedAt"] = "2000-01-01T00:00:00Z"
+				if parked {
+					r2Merge(f, render(t, tm, f))
+				}
+				r4Ambiguous(c, false)
+				st := at(c, "resource", "status").(obj)
+				a := at(c, "resource", "metadata", "annotations").(obj)
+				switch mode {
+				case "no-pending":
+					delete(a, "crossplane.io/external-create-pending")
+				case "malformed-pending":
+					a["crossplane.io/external-create-pending"] = "not-a-time"
+				case "missing-condition":
+					delete(st, "conditions") // Native pending guard still blocks before Observe.
+				case "no-response", "history-only", "foreign-incumbent":
+					delete(st, "response")
+					if mode == "foreign-incumbent" {
+						status(f)["activeLeaseGeneration"] = 0
+						observed(f)["akash-lease-g0"] = child(t, key(0), blue, true, "akash-lease-g0")
+					}
+				case "found-false":
+					st["cache"] = obj{"response": st["response"]}
+					st["response"] = obj{"statusCode": 200, "body": `{"found":false,"serving":false}`}
+				case "closed", "direct-only":
+					state := "closed"
+					if mode == "direct-only" {
+						state = "active"
+					}
+					r2Stamp(c, k, state, false, mode == "direct-only")
+					r4Ambiguous(c, false)
+				case "empty-handle":
+					st["response"] = obj{"statusCode": 200, "body": `{"found":true,"resource":{"state":"active","externalName":"","endpoints":[]}}`}
+				case "foreign-current":
+					st["response"] = obj{"statusCode": 200, "body": `{"found":true,"resource":{"state":"active","externalName":"foreign"}}`}
+				case "foreign-cache":
+					st["cache"] = obj{"response": obj{"statusCode": 200, "body": `{"found":true,"resource":{"state":"active","externalName":"foreign"}}`}}
+				case "foreign-key":
+					st["requestDetails"].(obj)["body"] = jsonString(obj{"cogniKey": key(1)})
+				case "failed-cache":
+					st["cache"] = obj{"response": obj{"statusCode": 503, "body": `{"found":true,"resource":{"state":"active","externalName":"handle-` + k + `"}}`}}
+					delete(st, "response")
+				case "deleting-selected":
+					at(c, "resource", "metadata").(obj)["deletionTimestamp"] = "2026-10-31T00:55:47Z"
+					if parked {
+						delete(st, "response") // Proven late deletion is covered by the positive matrix.
+					}
+				}
+				before := jsonString(f)
+				o, err := execute(t, tm, f)
+				if mode == "closed" && !parked {
+					// Ambiguity prevents this fresh CLOSED answer from authorizing
+					// retirement. Keep the original refusal and same paid child.
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantNames(t, o, selected)
+					r2Cleanup(t, o.leases[selected], k)
+					if at(o.leases[selected], "metadata", "annotations", "crossplane.io/external-create-succeeded") != nil || at(o.status, "failure", "reason") != "CreateResultAmbiguous" || fmt.Sprint(at(o.status, "recovery", "count")) != "1" {
+						t.Fatal("unproven closure gained a terminal label or acknowledgement", o.status)
+					}
+					return
+				}
+				if err == nil || o.leases != nil || o.status != nil || jsonString(f) != before {
+					t.Fatal("unproven retirement emitted an acknowledgement or changed evidence", mode, err)
+				}
+			})
+		}
+	}
+	// CLOSED parks also refuse unproven ambiguity, regardless of their history.
+	f, c := r2ClosedBase(t, "Hold", true)
+	r2Merge(f, render(t, loadTemplate(t), f))
+	r4Ambiguous(c, false)
+	r2WantFailure(t, loadTemplate(t), f)
+}
+
+func TestR2AcknowledgementCannotBorrowSelectedProof(t *testing.T) {
+	for _, cache := range []bool{false, true} {
+		t.Run(fmt.Sprint(cache), func(t *testing.T) {
+			tm := loadTemplate(t)
+			f, predecessor := r2ClosedBase(t, "Replace", true)
+			first := render(t, tm, f)
+			selected := r2Check(t, first, 1)
+			k := key(1) + ":recover:1"
+			current := r2Native(t, first.leases[selected], selected, "adjacent-ambiguous")
+			r2Stamp(current, k, "active", false, false)
+			r4Ambiguous(current, cache)
+			observed(f)[selected] = current // Native apply observed; selection status patch lost.
+			status(f)["activeLeaseGeneration"] = 0
+			incumbent := child(t, key(0), blue, true, "akash-lease-g0")
+			observed(f)["akash-lease-g0"] = incumbent
+			o := render(t, tm, f)
+			wantNames(t, o, "akash-lease", "akash-lease-g0", selected)
+			if at(o.leases[selected], "metadata", "annotations", "crossplane.io/external-create-succeeded") != at(current, "resource", "metadata", "annotations", "crossplane.io/external-create-pending") {
+				t.Fatal("normal selected acknowledgement changed")
+			}
+			for logical, original := range map[string]obj{"akash-lease": predecessor, "akash-lease-g0": incumbent} {
+				if at(o.leases[logical], "metadata", "annotations", "crossplane.io/external-create-succeeded") != nil {
+					t.Fatal("selected allocation acknowledged a different native owner", logical)
+				}
+				var binding obj
+				if err := json.Unmarshal([]byte(at(original, "resource", "spec", "forProvider", "payload", "body").(string)), &binding); err != nil {
+					t.Fatal(err)
+				}
+				r2Cleanup(t, o.leases[logical], binding["cogniKey"].(string))
+			}
+			r2Check(t, o, 1) // Same ordinal/key after the stale base closure replay.
+		})
+	}
+}

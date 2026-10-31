@@ -683,6 +683,11 @@ spec:
             {{- $endpoints := dig "endpoints" (list) $res }}
             {{- $externalName := dig "externalName" "" $res }}
             {{- $found := dig "found" (ne $externalName "") $resp }}
+            {{- /* A found flag is not an allocation handle. Refuse the whole frame
+              before status/child output, including parks: history must never satisfy
+              a completeness guard while this incomplete answer supplies emitted status.
+            */ -}}
+            {{- if and $found (eq $externalName "") }}{{ fail "found allocation requires a nonempty own handle" }}{{ end }}
             {{- $isCurrentObservation := false }}
             {{- if $leaseObs }}{{ $isCurrentObservation = and (eq (dig "status" "requestDetails" "method" "" $leaseObs.resource) "POST") (eq (dig "status" "requestDetails" "url" "" $leaseObs.resource) (printf "%s/v1/akash/observe" $baseUrl)) }}{{ end }}
             {{- $serving := and $isCurrentObservation (ge $respStatus 200) (lt $respStatus 300) (eq $responseKey $currentKey) (eq $lastRequestedSha $desiredSha) (hasKey $resp "found") (dig "serving" false $resp) }}
@@ -802,7 +807,20 @@ spec:
             {{- $leaseReceiptState := dig "state" "unknown" $leaseReceiptRes }}
             {{- $leaseReceiptExternalName := dig "externalName" "" $leaseReceiptRes }}
             {{- $leaseReceiptProven := and (ge $leaseReceiptStatus 200) (lt $leaseReceiptStatus 300) $leaseReceiptObserved $leaseReceiptFound (eq $leaseReceiptState "active") (ne $leaseReceiptExternalName "") (eq $responseKey $currentKey) }}
-            {{- $recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven }}
+            {{- /* Match runtime v2.3.3 meta.ExternalCreateIncomplete: malformed
+              timestamps parse to zero; pending must be strictly newer than BOTH
+              succeeded and failed. Equal timestamps discharge the native guard.
+              A nonempty malformed pending value never authorizes an acknowledgement.
+            */ -}}
+            {{- $leaseCreatePendingTime := toDate "2006-01-02T15:04:05Z07:00" $leaseCreatePending }}
+            {{- $leaseCreateIncomplete := false }}
+            {{- if $leaseObs }}
+            {{- $leaseAnnotations := dig "metadata" "annotations" (dict) $leaseObs.resource }}
+            {{- $leaseCreateSucceededTime := toDate "2006-01-02T15:04:05Z07:00" (get $leaseAnnotations "crossplane.io/external-create-succeeded" | default "") }}
+            {{- $leaseCreateFailedTime := toDate "2006-01-02T15:04:05Z07:00" (get $leaseAnnotations "crossplane.io/external-create-failed" | default "") }}
+            {{- $leaseCreateIncomplete = and (not $leaseCreatePendingTime.IsZero) ($leaseCreatePendingTime.After $leaseCreateSucceededTime) ($leaseCreatePendingTime.After $leaseCreateFailedTime) }}
+            {{- end }}
+            {{- $recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $leaseCreatePendingTime.IsZero) $leaseReceiptProven }}
             {{- $unsafeLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $recoverLeaseCreateAmbiguity) }}
             {{- if and (or $parkedClosed $parkedBudget) $unsafeLeaseCreateAmbiguity }}{{ fail "terminal park has an unproven ambiguous create result" }}{{ end }}
             {{- /*
@@ -880,7 +898,14 @@ spec:
               validate. Absence is not closure: if it erased the only usable handle,
               deny this frame rather than poison the earlier tuple or invent liveness.
             */ -}}
-            {{- if and $closeForBudget (or (eq $bootAnchorAt "") (eq $mintedAt "") (not (or (and $found (ne $externalName "")) $retainResourceHistory))) }}{{ fail "budget retirement requires complete bound allocation history" }}{{ end }}
+            {{- /* The SAME selected resource drives both this guard and status emission. */ -}}
+            {{- $statusResource := dict }}
+            {{- if and $found (ne $externalName "") }}
+            {{- $statusResource = dict "provider" "akash" "id" $externalName "state" $state "endpoints" $endpoints }}
+            {{- else if $retainResourceHistory }}
+            {{- $statusResource = $prevResource }}
+            {{- end }}
+            {{- if and $closeForBudget (or (eq $bootAnchorAt "") (eq $mintedAt "") (eq (dig "id" "" $statusResource) "")) }}{{ fail "budget retirement requires complete bound allocation history" }}{{ end }}
 
             {{- /* B1: persist the complete terminal/retirement tuple while retaining
               its native child. Only a later read of that tuple may omit it. Crossplane
@@ -888,6 +913,15 @@ spec:
             */ -}}
             {{- if and (or $closeForBudget $recoveryExhausted $heldClosed) (not (or $parkedClosed $parkedBudget)) $leaseObs }}
             {{- $_ := set $stagedChildren $leaseResourceName $leaseObs }}
+            {{- end }}
+            {{- /* Native GC precedes child apply and XR status. Keep the SAME retiring
+              Request until observed metadata clears the pre-Observe/pre-Delete guard.
+              Repeated lost applies/status patches therefore re-emit only the existing
+              exact-active current/cache proof acknowledgement, never a new paid intent.
+            */ -}}
+            {{- if or $closeForBudget $recoveryExhausted $heldClosed $parkedClosed }}
+            {{- if or $unsafeLeaseCreateAmbiguity (and $leaseCreateIncomplete (not $recoverLeaseCreateAmbiguity)) }}{{ fail "terminal retirement has an unproven pending create result" }}{{ end }}
+            {{- if $leaseCreateIncomplete }}{{ $_ := set $stagedChildren $leaseResourceName $leaseObs }}{{ end }}
             {{- end }}
             {{- $renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed $parkedClosed) }}
 
@@ -1021,12 +1055,26 @@ spec:
             {{- end }}
             {{- end }}
             {{- $_ := set $cleanupSpec.forProvider "isRemovedCheck" (dict "type" "CUSTOM" "logic" `(.response.body.found == false) or ((.response.body.resource.state // .response.body.state) == "closed")`) }}
+            {{- /* Retain this child's ALREADY sufficient native success annotation.
+              Otherwise SSA can revoke an applied acknowledgement after its condition
+              clears but before XR status persists. This copies observed metadata only;
+              it cannot discharge a newer pending timestamp or borrow another child's proof.
+            */ -}}
+            {{- $cleanupAnnotations := dig "metadata" "annotations" (dict) $child.resource }}
+            {{- $cleanupPendingTime := toDate "2006-01-02T15:04:05Z07:00" (get $cleanupAnnotations "crossplane.io/external-create-pending" | default "") }}
+            {{- $cleanupSucceeded := get $cleanupAnnotations "crossplane.io/external-create-succeeded" | default "" }}
+            {{- $cleanupSucceededTime := toDate "2006-01-02T15:04:05Z07:00" $cleanupSucceeded }}
+            {{- if or $cleanupPendingTime.IsZero $cleanupSucceededTime.IsZero ($cleanupPendingTime.After $cleanupSucceededTime) }}{{ $cleanupSucceeded = "" }}{{ end }}
+            {{- if and (eq $childName $leaseResourceName) $recoverLeaseCreateAmbiguity (eq $cleanupSucceeded "") }}{{ $cleanupSucceeded = $leaseCreatePending }}{{ end }}
             ---
             apiVersion: http.m.crossplane.io/v1alpha2
             kind: Request
             metadata:
               annotations:
                 gotemplating.fn.crossplane.io/composition-resource-name: {{ $childName }}
+                {{- if ne $cleanupSucceeded "" }}
+                crossplane.io/external-create-succeeded: {{ $cleanupSucceeded | quote }}
+                {{- end }}
             spec: {{ toJson $cleanupSpec }}
             {{- end }}
 
@@ -1348,6 +1396,16 @@ spec:
             {{- $failMessage = printf "lease %s remains closed; durable %s park permits no further paid mutation" $externalName $prevFailure }}
             {{- $failMessage = trunc 256 $failMessage }}
             {{- if ne $refusalCode "" }}{{ $failMessage = printf "actuator refusal %s: %s; lease remains closed" $refusalCode $refusalMessage | trunc 256 }}{{ end }}
+            {{- else if $heldClosed }}
+            {{- /* Ordered BEFORE recoveryExhausted: if someone flips Replace back to Hold
+              mid-recovery, the human choice (Hold) names the state. */ -}}
+            {{- $phase = "Failed" }}
+            {{- $failReason = "LeaseClosed" }}
+            {{- $failMessage = printf "lease %s is closed and bootPolicy.onGiveUp is Hold; bump spec.leaseGeneration to mint a replacement (no paid recovery is attempted under Hold)" $externalName }}
+            {{- else if $recoveryExhausted }}
+            {{- $phase = "Failed" }}
+            {{- $failReason = "RecoveryLimitExceeded" }}
+            {{- $failMessage = printf "lease recovery exhausted after %d attempts for generation %d; no further paid mutation will be attempted" $recoveryCount $leaseGeneration }}
             {{- else if and (ne $refusalCode "") (not $refusalRetryable) }}
             {{- $phase = "Failed" }}
             {{- $failReason = $refusalCode }}
@@ -1367,16 +1425,6 @@ spec:
             {{- $phase = "Progressing" }}
             {{- $failReason = $refusalCode }}
             {{- $failMessage = substr 0 256 $refusalMessage }}
-            {{- else if $heldClosed }}
-            {{- /* Ordered BEFORE recoveryExhausted: if someone flips Replace back to Hold
-              mid-recovery, the human choice (Hold) names the state. */ -}}
-            {{- $phase = "Failed" }}
-            {{- $failReason = "LeaseClosed" }}
-            {{- $failMessage = printf "lease %s is closed and bootPolicy.onGiveUp is Hold; bump spec.leaseGeneration to mint a replacement (no paid recovery is attempted under Hold)" $externalName }}
-            {{- else if $recoveryExhausted }}
-            {{- $phase = "Failed" }}
-            {{- $failReason = "RecoveryLimitExceeded" }}
-            {{- $failMessage = printf "lease recovery exhausted after %d attempts for generation %d; no further paid mutation will be attempted" $recoveryCount $leaseGeneration }}
             {{- else if gt $recoveryCount 0 }}
             {{- $phase = "Progressing" }}
             {{- $failReason = "LeaseRecoveryInProgress" }}
@@ -1459,21 +1507,8 @@ spec:
               {{- else if ne $prevSha "" }}
               observedBundle: {{ toJson (dig "status" "observedBundle" (dict) $xr) }}
               {{- end }}
-              {{- if $found }}
-              resource:
-                provider: akash
-                id: {{ $externalName | quote }}
-                state: {{ $state | quote }}
-                endpoints: {{ toJson $endpoints }}
-              {{- else if $retainResourceHistory }}
-              {{- /*
-                Retain the validated same-attempt resource as HISTORY through an
-                unproven response. No code or cache is required. The paid clock and
-                original id must survive the FIRST retirement status, before omission.
-                A positive current observation of absence is not latched. Fresh
-                readiness and closure still require their independent current proof.
-              */}}
-              resource: {{ toJson $prevResource }}
+              {{- if $statusResource }}
+              resource: {{ toJson $statusResource }}
               {{- else }}
               resource: null
               {{- end }}

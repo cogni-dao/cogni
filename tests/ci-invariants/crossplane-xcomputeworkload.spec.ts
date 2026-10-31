@@ -1275,7 +1275,7 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     );
     expect(templateCode).not.toContain("$leaseRevisionPending");
     expect(templateCode).toContain(
-      '$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven'
+      "$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $leaseCreatePendingTime.IsZero) $leaseReceiptProven"
     );
     expect(templateCode).toContain(
       "$unsafeLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $recoverLeaseCreateAmbiguity)"
@@ -1402,7 +1402,7 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       /\$recoverLeaseCreateAmbiguity :=[^\n]+/
     )?.[0];
     expect(recoveryDeclaration).toBe(
-      '$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven }}'
+      "$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $leaseCreatePendingTime.IsZero) $leaseReceiptProven }}"
     );
     expect(leaseBlock).toContain(
       "crossplane.io/external-create-succeeded: {{ $leaseCreatePending | quote }}"
@@ -2725,6 +2725,36 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
       expected:
         /^\s+render_test\.go:\d+: first budget retirement lost bound handle: got <nil>, want handle-xcw:cogni-candidate-a:b927a9dd-6132-4fc9-a51e-e3cee2568e3c:1\n$/,
     },
+    {
+      label: "exact 90e incomplete found allocation",
+      oldSha: "90e72f4d1dd8d8bccab37c0e97ec4a344ca57b26",
+      hash: "ea16a3b00798ab317e538efa30377b536f026bfc85f64ac00fc9080c960ef666",
+      test: "TestR2IncompleteFoundRetirementPreservesEvidence",
+      caseName: "absent-resource-cachefalse-attempt0-parkfalse",
+      diagnostic: "incomplete found allocation escaped whole-render refusal",
+      expected:
+        /^\s+render_test\.go:\d+: incomplete found allocation escaped whole-render refusal\n$/,
+    },
+    {
+      label: "exact 90e first CLOSED migration discriminator",
+      oldSha: "90e72f4d1dd8d8bccab37c0e97ec4a344ca57b26",
+      hash: "ea16a3b00798ab317e538efa30377b536f026bfc85f64ac00fc9080c960ef666",
+      test: "TestR2FirstTerminalClosureOutranksMigrationDisplay",
+      caseName: "default",
+      diagnostic: "first terminal closure lost lifecycle discriminator:",
+      expected:
+        /^\s+render_test\.go:\d+: first terminal closure lost lifecycle discriminator: got MigrationFailed, want LeaseClosed\n$/,
+    },
+    {
+      label: "exact 90e retiring native acknowledgement",
+      oldSha: "90e72f4d1dd8d8bccab37c0e97ec4a344ca57b26",
+      hash: "ea16a3b00798ab317e538efa30377b536f026bfc85f64ac00fc9080c960ef666",
+      test: "TestR2BudgetRetirementWaitsForNativeAcknowledgement",
+      caseName: "first-cachefalse-attempt0",
+      diagnostic: "retiring child lost exact authorized native acknowledgement",
+      expected:
+        /^\s+render_test\.go:\d+: retiring child lost exact authorized native acknowledgement\n$/,
+    },
   ])("rejects $label at the native behavior assertion", ({
     oldSha,
     hash,
@@ -2766,7 +2796,7 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
         // must not warm the corrected suite's cold compiler cache.
         env: {
           ...env,
-          GOCACHE: path.join(cache, `sensitivity-build-${oldSha}`),
+          GOCACHE: path.join(cache, `sensitivity-build-${oldSha}-${test}`),
         },
         encoding: "utf8",
         timeout: 120_000,
