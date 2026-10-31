@@ -137,6 +137,7 @@ export interface ContributionService {
     principal: Principal;
     contributionId: string;
     reason: string;
+    expectedHeadCommit?: string | null;
   }): Promise<void>;
 }
 
@@ -348,7 +349,7 @@ export function createContributionService(
       return result;
     },
 
-    async close({ principal, contributionId, reason }) {
+    async close({ principal, contributionId, reason, expectedHeadCommit }) {
       const record = await deps.port.getById(contributionId);
       if (!record) {
         throw new ContributionNotFoundError(contributionId);
@@ -359,7 +360,12 @@ export function createContributionService(
       if (!ownsContribution && !deps.canMergeKnowledge(principal)) {
         throw new ContributionForbiddenError("close requires admin session");
       }
-      return deps.port.close({ contributionId, principal, reason });
+      return deps.port.close({
+        contributionId,
+        principal,
+        reason,
+        ...(expectedHeadCommit === undefined ? {} : { expectedHeadCommit }),
+      });
     },
   };
 }

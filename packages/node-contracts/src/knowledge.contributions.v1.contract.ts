@@ -58,6 +58,8 @@ export type ContributionMergeRequest = z.infer<
 
 export const ContributionCloseRequestSchema = z.object({
   reason: z.string().min(1).max(512),
+  // Omission preserves existing callers; null reviews an empty contribution.
+  expectedHeadCommit: z.string().min(1).max(128).nullable().optional(),
 });
 export type ContributionCloseRequest = z.infer<
   typeof ContributionCloseRequestSchema
