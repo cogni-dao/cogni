@@ -1074,7 +1074,7 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     );
     expect(template).toContain("{{- else if $retainResourceHistory }}");
     expect(template).toContain(
-      '$retainResourceHistory := and $samePaidAttempt (not $attemptChanged) (ne (dig "id" "" $prevResource) "") (not $observedAbsent)'
+      '$retainResourceHistory := and $samePaidAttempt (ne (dig "id" "" $prevResource) "") (not $observedAbsent)'
     );
     expect(template).toContain(
       '$observedAbsent := and $isCurrentObservation (ge $respStatus 200) (lt $respStatus 300) (hasKey $resp "found") (not $found)'
@@ -2775,6 +2775,16 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
       diagnostic: "allocated recovery history escaped missing-child refusal",
       expected:
         /^\s+render_test\.go:\d+: allocated recovery history escaped missing-child refusal\n$/,
+    },
+    {
+      label: "exact 509928 selection repair history reset",
+      oldSha: "5099289c60562c9f9eebcfe0fa9324f5a0529030",
+      hash: "83c586ff1162e907d8ed4e15313ebac6a39e5567aca47c1dfa85a7895923d4d3",
+      test: "TestR2MissingChildBootstrapAndDurableSuccessorRemainAllowed",
+      caseName: "exact-owner-missing-served-503-cachefalse",
+      diagnostic: "selection repair reset bound paid history",
+      expected:
+        /^\s+render_test\.go:\d+: selection repair reset bound paid history\n$/,
     },
   ])("rejects $label at the native behavior assertion", ({
     oldSha,

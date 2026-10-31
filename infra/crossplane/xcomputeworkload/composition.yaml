@@ -398,13 +398,17 @@ spec:
             {{- if eq (len $bootParts) 4 }}{{ $prevBootRecoveryCount = int (index $bootParts 3) }}{{ end }}
             {{- end }}
             {{- if and (hasSuffix ":served" $prevBootKey) (ne (dig "status" "observedBundle" "source" "sha" "" $xr) (first (splitList ":" $prevBootKey))) }}{{ fail "served boot history conflicts with observed bundle" }}{{ end }}
-            {{- $samePaidAttempt := and (eq $prevBootGeneration $leaseGeneration) (eq $prevBootRecoveryCount $recoveryCount) }}
+            {{- $prevPaidKey := "" }}
+            {{- if ge $prevBootGeneration 0 }}
+            {{- $prevPaidKey = printf "xcw:%s:%s:%d" $ns $name $prevBootGeneration }}
+            {{- if gt $prevBootRecoveryCount 0 }}{{ $prevPaidKey = printf "%s:recover:%d" $prevPaidKey $prevBootRecoveryCount }}{{ end }}
+            {{- end }}
             {{- $prevResource := dig "status" "resource" (dict) $xr | default (dict) }}
             {{- $prevFailure := dig "status" "failure" "reason" "" $xr }}
             {{- $terminalReason := has $prevFailure (list "LeaseClosed" "RecoveryLimitExceeded" "BootDeadlineClosed") }}
             {{- $completeSelection := or (eq $recoveryCount 0) (and (eq (get $recovery "key") $currentKey) (eq (int (get $recovery "maxAttempts")) 3)) }}
-            {{- $parkedClosed := and $samePaidAttempt $completeSelection (ne (dig "status" "bootEpoch" "at" "" $xr) "") (ne (dig "id" "" $prevResource) "") (eq (dig "state" "" $prevResource) "closed") (has $prevFailure (list "LeaseClosed" "RecoveryLimitExceeded")) }}
-            {{- $parkedBudget := and $samePaidAttempt $completeSelection (ne (dig "status" "bootEpoch" "at" "" $xr) "") (eq $prevFailure "BootDeadlineClosed") (ne (dig "id" "" $prevResource) "") (ne (dig "status" "bootEpoch" "mintedAt" "" $xr | default "") "") }}
+            {{- $parkedClosed := and (eq $prevPaidKey $currentKey) $completeSelection (ne (dig "status" "bootEpoch" "at" "" $xr) "") (ne (dig "id" "" $prevResource) "") (eq (dig "state" "" $prevResource) "closed") (has $prevFailure (list "LeaseClosed" "RecoveryLimitExceeded")) }}
+            {{- $parkedBudget := and (eq $prevPaidKey $currentKey) $completeSelection (ne (dig "status" "bootEpoch" "at" "" $xr) "") (eq $prevFailure "BootDeadlineClosed") (ne (dig "id" "" $prevResource) "") (ne (dig "status" "bootEpoch" "mintedAt" "" $xr | default "") "") }}
             {{- if and $parkedClosed (eq $prevFailure "RecoveryLimitExceeded") (ne $recoveryCount 3) }}{{ fail "terminal recovery tuple is not max3" }}{{ end }}
             {{- if and $terminalReason (or (eq $prevBootKey "") (hasSuffix (printf ":%d" $leaseGeneration) (regexReplaceAll ":recover:[1-3]$" $prevBootCanonical ""))) (not (or $parkedClosed $parkedBudget)) }}{{ fail "incomplete or conflicting terminal attempt tuple" }}{{ end }}
 
@@ -507,7 +511,7 @@ spec:
               permitting retirement. Both park kinds, and their first retaining pass,
               must agree with every own cleanup handle, including cache-only evidence.
             */ -}}
-            {{- if and $samePaidAttempt (eq $paidKey $currentKey) (ne (dig "id" "" $prevResource) "") }}
+            {{- if and (eq $paidKey $prevPaidKey) (ne (dig "id" "" $prevResource) "") }}
             {{- if or (and (ne $handle "") (ne $handle $prevResource.id)) (and (ne $recordedHandle "") (ne $recordedHandle $prevResource.id)) }}{{ fail "bound attempt handle conflicts with own cleanup evidence" }}{{ end }}
             {{- end }}
             {{- range (dig "status" "conditions" (list) $native) }}
@@ -562,7 +566,7 @@ spec:
               replay an already allocated successor merely from predecessor closure.
             */ -}}
             {{- if and (or (eq (int $recoveryCount) (int $recordedCount)) (and (eq $prevBootGeneration $leaseGeneration) (ne (int $prevBootRecoveryCount) (int $recordedCount)))) (or (eq $prevBootGeneration $leaseGeneration) (and (eq $prevBootKey "") (eq $activeLeaseGeneration $leaseGeneration))) (or (ne (dig "id" "" $prevResource) "") (ne (dig "status" "bootEpoch" "mintedAt" "" $xr | default "") "")) (not (or $parkedClosed $parkedBudget)) }}{{ fail "allocated selected child disappeared without terminal proof" }}{{ end }}
-            {{- if and (gt $recordedCount 0) (not $samePaidAttempt) }}{{ fail "missing successor lacks durable selection tuple" }}{{ end }}
+            {{- if and (gt $recordedCount 0) (not (and (eq $prevBootGeneration $leaseGeneration) (eq $prevBootRecoveryCount $recordedCount))) }}{{ fail "missing successor lacks durable selection tuple" }}{{ end }}
             {{- $leaseResourceName = "akash-lease" }}
             {{- if gt $recoveryCount 0 }}
             {{- $leaseResourceName = printf "akash-lease-g%d-recover-%d" $leaseGeneration $recoveryCount }}
@@ -572,8 +576,15 @@ spec:
             {{- end }}
             {{- if index $observedResources $leaseResourceName }}{{ fail "deterministic lease name already holds another paid key" }}{{ end }}
             {{- end }}
-            {{- $attemptChanged := ne (int $recoveryCount) (int $recordedCount) }}
-            {{- if or $attemptChanged (not $samePaidAttempt) }}{{ $prevResource = dict }}{{ end }}
+            {{- /* Selection metadata may be repaired without changing the paid allocation.
+              Resolve continuity only after closure/adoption selects the final paid key.
+              The independently parsed history also binds handle checks above.
+            */ -}}
+            {{- $samePaidAttempt := eq $prevPaidKey $currentKey }}
+            {{- $bootKey := printf "%s:%d" $desiredSha $leaseGeneration }}
+            {{- if gt $recoveryCount 0 }}{{ $bootKey = printf "%s:recover:%d" $bootKey $recoveryCount }}{{ end }}
+            {{- $sameBootAttempt := and $samePaidAttempt (eq $prevBootCanonical $bootKey) }}
+            {{- if not $samePaidAttempt }}{{ $prevResource = dict }}{{ end }}
             {{- $cogniKey = $currentKey }}
             {{- $_ := set $payload "cogniKey" $cogniKey }}
             {{- /*
@@ -734,7 +745,7 @@ spec:
               These predicates never make found/active/serving/closed true.
             */ -}}
             {{- $observedAbsent := and $isCurrentObservation (ge $respStatus 200) (lt $respStatus 300) (hasKey $resp "found") (not $found) }}
-            {{- $retainResourceHistory := and $samePaidAttempt (not $attemptChanged) (ne (dig "id" "" $prevResource) "") (not $observedAbsent) }}
+            {{- $retainResourceHistory := and $samePaidAttempt (ne (dig "id" "" $prevResource) "") (not $observedAbsent) }}
             {{- if or $parkedClosed $parkedBudget }}
             {{- if and $parkedClosed (ne $externalName "") (ge $respStatus 200) (lt $respStatus 300) (ne $state "closed") }}{{ fail "closed terminal tuple conflicts with selected allocation state" }}{{ end }}
             {{- $externalName = get $prevResource "id" }}
@@ -888,9 +899,6 @@ spec:
               after the current paid allocation is observed (bug.5551). An unallocated
               attempt must keep rendering its Request, even after a long pause/refusal.
             */ -}}
-            {{- $bootKey := printf "%s:%d" $desiredSha $leaseGeneration }}
-            {{- if gt $recoveryCount 0 }}{{ $bootKey = printf "%s:recover:%d" $bootKey $recoveryCount }}{{ end }}
-            {{- $sameBootAttempt := and (not $attemptChanged) (eq $prevBootCanonical $bootKey) }}
             {{- /* Qualified history belongs to this paid attempt. A bare legacy key is
               conservatively protected only at its unchanged canonical tuple. Qualifying
               the key never restarts the clock. CREATE echoes cannot prove service.
@@ -903,7 +911,7 @@ spec:
             {{- $bootAnchorAt := $createdAt }}
             {{- if and $sameBootAttempt (ne $prevBootAt "") }}
             {{- $bootAnchorAt = $prevBootAt }}
-            {{- else if or $attemptChanged (ne $prevBootKey "") }}
+            {{- else if or (ne $currentKey $baseCogniKey) (ne $prevBootKey "") }}
             {{- $bootAnchorAt = dateInZone "2006-01-02T15:04:05Z07:00" now "UTC" }}
             {{- end }}
             {{- /* A parked tuple remains bound to the old attempt even after a SHA edit.

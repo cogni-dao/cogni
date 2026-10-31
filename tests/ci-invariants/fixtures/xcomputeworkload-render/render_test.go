@@ -1346,26 +1346,114 @@ func TestR2MissingChildBootstrapAndDurableSuccessorRemainAllowed(t *testing.T) {
 			t.Fatal("genuine bootstrap changed identity or input")
 		}
 	})
-	t.Run("exact-owner-with-predecessor-closure", func(t *testing.T) {
-		f, _ := r2ClosedBase(t, "Replace", true)
-		first := render(t, loadTemplate(t), f)
-		n := r2Check(t, first, 1)
-		r2Merge(f, first)
-		current := r2Native(t, first.leases[n], n, "exact-recovery-owner")
-		r2Stamp(current, key(1)+":recover:1", "active", false, false)
-		observed(f)[n] = current
-		r2Merge(f, render(t, loadTemplate(t), f))
-		status(f)["recovery"] = nil
-		before := jsonString(f)
-		o := render(t, loadTemplate(t), f)
-		wantNames(t, o, "akash-lease", n)
-		r2Check(t, o, 1)
-		r2Cleanup(t, o.leases["akash-lease"], key(1))
-		r2Cleanup(t, o.leases[n], key(1)+":recover:1")
-		if at(o.status, "resource", "id") != "handle-"+key(1)+":recover:1" || jsonString(f) != before {
-			t.Fatal("exact owner repair lost allocation identity or mutated input", o.status)
+	// Selection metadata is not the paid/boot identity. Repair it while preserving
+	// aged history through current negatives, refusals and absent responses.
+	for _, selection := range []string{"missing", "null", "other-generation"} {
+		for _, qualifier := range []string{"served", "unserved", "legacy"} {
+			for _, frame := range []string{"active-negative", "503", "missing-response"} {
+				for _, cache := range []bool{false, true} {
+					t.Run(fmt.Sprintf("exact-owner-%s-%s-%s-cache%v", selection, qualifier, frame, cache), func(t *testing.T) {
+						tm := loadTemplate(t)
+						f, _ := r2ClosedBase(t, "Replace", true)
+						first := render(t, tm, f)
+						n := r2Check(t, first, 1)
+						r2Merge(f, first)
+						k := key(1) + ":recover:1"
+						current := r2Native(t, first.leases[n], n, "exact-recovery-owner")
+						r2Stamp(current, k, "active", qualifier != "unserved", false)
+						observed(f)[n] = current
+						r2Merge(f, render(t, tm, f))
+						canonical := strings.Repeat("b", 40) + ":1:recover:1"
+						bootKey := canonical + ":" + qualifier
+						if qualifier == "legacy" {
+							bootKey = canonical
+						}
+						aged := "2000-01-01T00:00:00Z"
+						status(f)["bootEpoch"] = obj{"key": bootKey, "at": aged, "mintedAt": aged}
+						// Hold permits checking history before separately testing the Close policy.
+						xr(f)["spec"].(obj)["bootPolicy"] = obj{"onGiveUp": "Replace", "onDeadline": "Hold", "bootDeadlineSeconds": 60}
+						switch selection {
+						case "missing":
+							delete(status(f), "recovery")
+						case "null":
+							status(f)["recovery"] = nil
+						case "other-generation":
+							status(f)["recovery"] = obj{"leaseGeneration": 0, "count": 1, "key": key(0) + ":recover:1", "maxAttempts": 3}
+						}
+						r2Stamp(current, k, "active", false, false)
+						st := at(current, "resource", "status").(obj)
+						if cache {
+							st["cache"] = obj{"response": r2Copy(t, st["response"].(obj))}
+						}
+						switch frame {
+						case "503":
+							st["response"] = obj{"statusCode": 503, "body": `{"code":"ledger_unavailable","message":"unproven"}`}
+						case "missing-response":
+							delete(st, "response")
+						}
+						for i := 0; i < 3; i++ {
+							f = r2Copy(t, f) // Persist/restart each repaired frame.
+							before := jsonString(f)
+							o := render(t, tm, f)
+							r2Check(t, o, 1)
+							if at(o.status, "bootEpoch", "key") != bootKey || at(o.status, "bootEpoch", "at") != aged || at(o.status, "bootEpoch", "mintedAt") != aged || at(o.status, "resource", "id") != "handle-"+k {
+								t.Fatal("selection repair reset bound paid history")
+							}
+							if o.status["serving"] == true || o.status["phase"] == "Ready" || jsonString(f) != before {
+								t.Fatal("selection repair manufactured fresh proof or mutated input", o.status)
+							}
+							r2Cleanup(t, o.leases[n], k)
+							if i == 0 {
+								wantNames(t, o, "akash-lease", n)
+								r2Cleanup(t, o.leases["akash-lease"], key(1))
+							} else {
+								wantNames(t, o, n)
+							}
+							r2Merge(f, o)
+						}
+						closeFrame := r2Copy(t, f)
+						xr(closeFrame)["spec"].(obj)["bootPolicy"].(obj)["onDeadline"] = "Close"
+						closed := render(t, tm, closeFrame)
+						if (at(closed.status, "failure", "reason") == "BootDeadlineClosed") != (qualifier == "unserved") {
+							t.Fatal("selection repair changed original paid deadline", closed.status)
+						}
+						// With selection lost again, the repaired history must still deny
+						// a missing owner's bootstrap, even with its closed predecessor.
+						missing := r2Copy(t, f)
+						delete(status(missing), "recovery")
+						delete(observed(missing), n)
+						o, err := execute(t, tm, missing)
+						if err == nil || !strings.Contains(err.Error(), "allocated selected child disappeared without terminal proof") || o.leases != nil || o.status != nil {
+							t.Fatal("repaired allocation history escaped missing-owner refusal", err)
+						}
+						// Conflicting own cleanup evidence must fail BEFORE repair clears anything.
+						conflict := r2Copy(t, f)
+						delete(status(conflict), "recovery")
+						status(conflict)["resource"].(obj)["id"] = "another-allocation"
+						if frame == "active-negative" || cache {
+							_, err := execute(t, tm, conflict)
+							if err == nil || !strings.Contains(err.Error(), "bound attempt handle conflicts with own cleanup evidence") {
+								t.Fatal("selection repair bypassed bound handle conflict", err)
+							}
+						}
+						// Only a fresh exact-key/SHA positive observation can restore Ready.
+						current = observed(f)[n].(obj)
+						r2Stamp(current, k, "active", true, false)
+						proved := render(t, tm, f)
+						if proved.status["phase"] != "Ready" || at(proved.status, "bootEpoch", "key") != canonical+":served" || at(proved.status, "bootEpoch", "mintedAt") != aged {
+							t.Fatal("fresh proof lost original clock or readiness", proved.status)
+						}
+						r2Merge(f, proved)
+						r2Stamp(current, k, "active", false, false)
+						negative := render(t, tm, f)
+						if negative.status["phase"] == "Ready" || at(negative.status, "bootEpoch", "key") != canonical+":served" || at(negative.status, "bootEpoch", "mintedAt") != aged {
+							t.Fatal("later negative lost recorded service", negative.status)
+						}
+					})
+				}
+			}
 		}
-	})
+	}
 	for _, nextGeneration := range []bool{false, true} {
 		t.Run(fmt.Sprintf("different-generation-%v", nextGeneration), func(t *testing.T) {
 			f, _ := r2ClosedBase(t, "Replace", true)
