@@ -12,7 +12,7 @@
  * @public
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AkashTxAllocationRecord } from "@/ports";
 
@@ -159,5 +159,312 @@ describe("requiredLeaseGeneration", () => {
         receipts: [{ ...malformed, cogniKey: "legacy-key" }],
       })
     ).toThrow(/no valid lease generation suffix/);
+  });
+});
+
+import type { AkashNativeObservation } from "@/types/akash-native-state";
+// Existing-lane repair uses full identities and fresh native evidence, never the legacy suffix max.
+import {
+  evaluateTerminalLaneRepair,
+  parseAppLeaseKey,
+  qualifyTerminalLaneRepair,
+} from "./lease-reactivation";
+
+const repairSubject = {
+  nodeId: NODE_ID,
+  slug: "blue",
+  environment: "candidate-a",
+  namespace: "cogni-candidate-a",
+  catalogGeneration: 20,
+  accountId: "akash1owner",
+};
+const currentReceipt = (): AkashTxAllocationRecord => ({
+  ...receipt({ state: "released", generation: 20 }),
+  cogniKey: `xcw:cogni-candidate-a:${NODE_ID}:20`,
+  externalName: "7001",
+  providerAccount: "akash1supplier",
+});
+const closedNative = (): AkashNativeObservation => ({
+  source: "https://api.akashnet.net",
+  observedAt: "2026-10-31T22:00:00Z",
+  deploymentState: "closed",
+  deploymentCoverage: "complete",
+  deploymentObservedAt: "2026-10-31T22:00:00Z",
+  leaseCoverage: "complete",
+  leasePages: [{ observedAt: "2026-10-31T22:00:00Z", count: 1 }],
+  errorCode: null,
+  leaseStates: [
+    {
+      id: {
+        owner: "akash1owner",
+        dseq: "7001",
+        gseq: 1,
+        oseq: 1,
+        bseq: 0,
+        provider: "akash1supplier",
+      },
+      state: "closed",
+      observedAt: "2026-10-31T22:00:00Z",
+    },
+  ],
+});
+const evaluate = (
+  rows = [currentReceipt()],
+  native: Readonly<Record<string, AkashNativeObservation>> = {
+    "7001": closedNative(),
+  },
+  complete = true
+) =>
+  evaluateTerminalLaneRepair({
+    subject: repairSubject,
+    receipts: rows,
+    native,
+    historyComplete: complete,
+  });
+
+describe("existing present:true terminal repair", () => {
+  it("advances one base after exact terminal/native closure; Kubernetes generation is irrelevant", () => {
+    expect(evaluate()).toMatchObject({
+      kind: "repair",
+      generation: 21,
+      currentKey: currentReceipt().cogniKey,
+      handle: "7001",
+    });
+  });
+  it.each([
+    "020",
+    "1000001",
+    "20:recover:0",
+    "20:recover:4",
+    "20:recover:01",
+    "20:recover:1:extra",
+    "20:other:1",
+  ])("rejects malformed whole key %s", (suffix) => {
+    expect(() =>
+      parseAppLeaseKey(
+        `xcw:cogni-candidate-a:${NODE_ID}:${suffix}`,
+        repairSubject
+      )
+    ).toThrow();
+  });
+  it("recovery suffix is separate from base; a settled recovery does not jump to attempt+1", () => {
+    const recoveries = [1, 2, 3].map((attempt) => ({
+      ...currentReceipt(),
+      receiptId: `r-recovery-${attempt}`,
+      externalName: String(7001 + attempt),
+      cogniKey: `${currentReceipt().cogniKey}:recover:${attempt}`,
+    }));
+    const native = Object.fromEntries(
+      [7001, 7002, 7003, 7004].map((handle) => [
+        String(handle),
+        {
+          ...closedNative(),
+          leaseStates: closedNative().leaseStates.map((lease) => ({
+            ...lease,
+            id: { ...lease.id, dseq: String(handle) },
+          })),
+        },
+      ])
+    );
+    expect(evaluate([currentReceipt(), ...recoveries], native)).toMatchObject({
+      generation: 21,
+    });
+  });
+  it.each([
+    "allocated",
+    "preparing",
+  ] as const)("never advances current %s", (state) => {
+    expect(() => evaluate([{ ...currentReceipt(), state }])).toThrow();
+  });
+  it("unused current floor is pending, never a second target", () => {
+    expect(
+      evaluateTerminalLaneRepair({
+        subject: { ...repairSubject, catalogGeneration: 21 },
+        receipts: [currentReceipt()],
+        native: { "7001": closedNative() },
+        historyComplete: true,
+      })
+    ).toEqual({ kind: "no_changes" });
+  });
+  it.each([
+    { deploymentState: "active" },
+    { deploymentState: null },
+    { deploymentCoverage: "unknown" },
+    { leaseCoverage: "partial" },
+    { errorCode: "timeout" },
+    { observedAt: null },
+    {
+      leaseStates: [{ ...closedNative().leaseStates[0], state: "reclaiming" }],
+    },
+    {
+      leaseStates: [
+        {
+          ...closedNative().leaseStates[0],
+          id: { ...closedNative().leaseStates[0]?.id, owner: "foreign" },
+        },
+      ],
+    },
+  ])("refuses unknown, live, incomplete or foreign native evidence %j", (change) => {
+    expect(() =>
+      evaluate([currentReceipt()], {
+        "7001": { ...closedNative(), ...change } as AkashNativeObservation,
+      })
+    ).toThrow();
+  });
+  it("refuses incomplete history, missing native, retained data and handle-less current failures", () => {
+    expect(() => evaluate(undefined, undefined, false)).toThrow();
+    expect(() => evaluate(undefined, {})).toThrow();
+    expect(() =>
+      evaluate([{ ...currentReceipt(), retentionPolicy: "retain" }])
+    ).toThrow();
+    const { externalName: _handle, ...noHandle } = currentReceipt();
+    expect(() => evaluate([{ ...noHandle, state: "failed" }])).toThrow();
+  });
+  it("refuses foreign family, node, composite, duplicate receipt and unresolved sibling", () => {
+    for (const bad of [
+      { ...currentReceipt(), cogniKey: `xcw:cogni-preview:${NODE_ID}:20` },
+      {
+        ...currentReceipt(),
+        identity: { ...currentReceipt().identity, nodeId: "foreign" },
+      },
+      {
+        ...currentReceipt(),
+        identity: { ...currentReceipt().identity, compositeUid: "" },
+      },
+    ])
+      expect(() => evaluate([bad])).toThrow();
+    expect(() => evaluate([currentReceipt(), currentReceipt()])).toThrow();
+    expect(() =>
+      evaluate([
+        currentReceipt(),
+        {
+          ...currentReceipt(),
+          receiptId: "sibling",
+          cogniKey: `xcw:cogni-candidate-a:${NODE_ID}:21`,
+          state: "preparing",
+        },
+      ])
+    ).toThrow();
+  });
+});
+
+describe("terminal repair existing read capability", () => {
+  const catalog = `name: blue\nnode_id: ${NODE_ID}\nsource_repo: https://github.com/cogni-dao/blue.git\nenvs: [candidate-a, production]\ndeployment_provider: {candidate-a: akash}\ncompute_api: {candidate-a: crossplane}\nlease_generation: {candidate-a: 20, production: 6}\n`;
+  function setup() {
+    const listReceipts = vi.fn(async () => [currentReceipt()]);
+    const readNativeStates = vi.fn(async () => ({ "7001": closedNative() }));
+    const input = {
+      catalog,
+      nodeId: NODE_ID,
+      slug: "blue",
+      environment: "candidate-a" as const,
+      accountId: "akash1owner",
+      hostingEnv: "production",
+      fleetControlEnv: "production",
+      leaseRead: { listReceipts, readNativeStates },
+    };
+    return { listReceipts, readNativeStates, input };
+  }
+  it("reads limit-plus-one history and exact handles at the existing native seam", async () => {
+    const { input, listReceipts, readNativeStates } = setup();
+    await expect(qualifyTerminalLaneRepair(input)).resolves.toMatchObject({
+      generation: 21,
+    });
+    expect(listReceipts).toHaveBeenCalledWith({
+      nodeId: NODE_ID,
+      environment: "candidate-a",
+      limit: 51,
+    });
+    expect(readNativeStates).toHaveBeenCalledWith({ dseqs: ["7001"] });
+  });
+  it("history truncation refuses before native reads", async () => {
+    const { input, listReceipts, readNativeStates } = setup();
+    listReceipts.mockResolvedValue(Array(51).fill(currentReceipt()));
+    await expect(qualifyTerminalLaneRepair(input)).rejects.toMatchObject({
+      code: "generation_evidence_unavailable",
+      status: 503,
+    });
+    expect(readNativeStates).not.toHaveBeenCalled();
+  });
+  it("owner/control/wallet and catalog identities cannot drift", async () => {
+    for (const change of [
+      { hostingEnv: "preview" },
+      { accountId: undefined },
+      { catalog: catalog.replace(NODE_ID, "foreign") },
+      { catalog: catalog.replace("cogni-dao/blue", "unknown/blue") },
+    ]) {
+      const { input, listReceipts } = setup();
+      await expect(
+        qualifyTerminalLaneRepair({ ...input, ...change })
+      ).rejects.toBeDefined();
+      expect(listReceipts).not.toHaveBeenCalled();
+    }
+  });
+  it.each([
+    "history",
+    "native",
+  ])("%s read failures retain 503", async (read) => {
+    const { input, listReceipts, readNativeStates } = setup();
+    if (read === "history")
+      listReceipts.mockRejectedValue(new Error("unavailable"));
+    else readNativeStates.mockRejectedValue(new Error("unavailable"));
+    await expect(qualifyTerminalLaneRepair(input)).rejects.toMatchObject({
+      status: 503,
+      code: "generation_evidence_unavailable",
+    });
+  });
+  it("a known active deployment retains conflict semantics", async () => {
+    const { input, readNativeStates } = setup();
+    readNativeStates.mockResolvedValue({
+      "7001": { ...closedNative(), deploymentState: "active" },
+    });
+    await expect(qualifyTerminalLaneRepair(input)).rejects.toMatchObject({
+      status: 409,
+      code: "repair_native_not_closed",
+    });
+  });
+  it.each([
+    "name: blue\nenvs: [candidate-a, production]\n",
+    `name: blue\nnode_id: ${NODE_ID}\nsource_repo: https://github.com/cogni-dao/blue.git\nenvs: [candidate-a, production]\ndeployment_provider: {candidate-a: k3s}\n`,
+  ])("valid in-repo/k3s membership stays a no-op without native reads", async (catalog) => {
+    const { input, listReceipts, readNativeStates } = setup();
+    await expect(
+      qualifyTerminalLaneRepair({ ...input, catalog })
+    ).resolves.toBeNull();
+    expect(listReceipts).not.toHaveBeenCalled();
+    expect(readNativeStates).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["candidate-a: akash", "candidate-a: unsupported"],
+    ["candidate-a: crossplane", "candidate-a: legacy"],
+    ["candidate-a: 20", "candidate-a: -1"],
+  ])("malformed or unsupported policy %s retains 422", async (from, to) => {
+    const { input, listReceipts, readNativeStates } = setup();
+    await expect(
+      qualifyTerminalLaneRepair({
+        ...input,
+        catalog: catalog.replace(from, to),
+      })
+    ).rejects.toMatchObject({ status: 422, code: "repair_policy_invalid" });
+    expect(listReceipts).not.toHaveBeenCalled();
+    expect(readNativeStates).not.toHaveBeenCalled();
+  });
+  it("only explicitly declared canonical isolated-service families are excluded", async () => {
+    const { input, listReceipts } = setup();
+    const instance = {
+      ...currentReceipt(),
+      receiptId: "instance",
+      cogniKey: `xcw:cogni-candidate-a:${NODE_ID}-db:3`,
+    };
+    listReceipts.mockResolvedValue([currentReceipt(), instance]);
+    await expect(
+      qualifyTerminalLaneRepair({
+        ...input,
+        catalog: `${catalog}isolated_services: {db: {}}\n`,
+      })
+    ).resolves.toMatchObject({ generation: 21 });
+    await expect(qualifyTerminalLaneRepair(input)).rejects.toMatchObject({
+      code: "repair_identity_conflict",
+    });
   });
 });

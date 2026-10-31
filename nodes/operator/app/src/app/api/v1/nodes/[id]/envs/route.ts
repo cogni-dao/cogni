@@ -56,6 +56,7 @@ import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
+  qualifyTerminalLaneRepair,
   replacementLeaseGeneration,
   requiredLeaseGeneration,
 } from "@/features/compute/lease-reactivation";
@@ -70,6 +71,7 @@ import {
   type NodeFormationEnv,
   PLACEMENT_PROVIDERS,
   type PlacementProvider,
+  parseCatalogEnvs,
 } from "@/shared/node-app-scaffold/gens";
 
 export const runtime = "nodejs";
@@ -447,30 +449,76 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         );
       }
     }
-    const leaseGeneration =
-      present === true && envReceipts
-        ? requiredLeaseGeneration({
-            catalogGeneration: 0,
-            receipts: receiptsExcludingInstances(envReceipts, node.id),
-          })
-        : undefined;
 
     let result: Awaited<ReturnType<typeof writer.openNodeEnvPr>>;
     try {
+      const snapshot =
+        present === true
+          ? await writer.readNodeEnvSnapshot({ owner, repo, slug: node.slug })
+          : undefined;
+      let generation: {
+        leaseGeneration?: number;
+        repairGeneration?: number;
+        repairEvidence?: string;
+      } = {};
+      if (snapshot) {
+        let declared: readonly NodeFormationEnv[];
+        try {
+          declared = parseCatalogEnvs(snapshot.catalog);
+        } catch {
+          throw Object.assign(
+            new Error("Malformed environment membership policy"),
+            { code: "repair_policy_invalid", status: 422 }
+          );
+        }
+        if (!declared.includes(targetEnv as NodeFormationEnv)) {
+          generation = {
+            leaseGeneration: requiredLeaseGeneration({
+              catalogGeneration: 0,
+              receipts: receiptsExcludingInstances(envReceipts ?? [], node.id),
+            }),
+          };
+        } else {
+          const repair = await qualifyTerminalLaneRepair({
+            catalog: snapshot.catalog,
+            nodeId: node.id,
+            slug: node.slug,
+            environment: targetEnv as NodeFormationEnv,
+            accountId: env.AKASH_ACTUATOR_ACCOUNT_ID,
+            hostingEnv: env.DEPLOY_ENVIRONMENT,
+            fleetControlEnv: env.FLEET_CONTROL_ENV,
+            leaseRead,
+          });
+          if (repair)
+            generation = {
+              repairGeneration: repair.generation,
+              repairEvidence: JSON.stringify(repair.evidence),
+            };
+        }
+      }
       result = await writer.openNodeEnvPr({
         owner,
         repo,
         slug: node.slug,
-        env: targetEnv as (typeof NODE_DEPLOY_ENVS)[number],
+        env: targetEnv as NodeFormationEnv,
         present: present as boolean,
-        leaseGeneration,
+        ...(snapshot
+          ? { qualifiedGeneration: { snapshot, ...generation } }
+          : {}),
       });
     } catch (err) {
       const status = (err as { status?: number })?.status;
       const code = (err as { code?: string })?.code;
       const reason = err instanceof Error ? err.message : "unknown";
       return NextResponse.json(
-        { error: "node env-membership write failed", errorCode: code, reason },
+        {
+          error:
+            code === "generation_evidence_unavailable"
+              ? code
+              : "node env-membership write failed",
+          errorCode: code,
+          reason,
+        },
         { status: typeof status === "number" ? status : 502 }
       );
     }

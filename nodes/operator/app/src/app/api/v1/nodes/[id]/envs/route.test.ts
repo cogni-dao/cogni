@@ -18,6 +18,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const authorize = vi.fn();
 const openNodeEnvPr = vi.fn();
+const snapshot = {
+  owner: "cogni-dao",
+  repo: "cogni-template",
+  slug: "blue",
+  baseCommitSha: "a".repeat(40),
+  baseTreeSha: "b".repeat(40),
+  catalog: "name: blue\nenvs: [preview]\nactivity_env: preview\n",
+};
+const readNodeEnvSnapshot = vi.fn();
 const openNodePlacementPr = vi.fn();
 const listAllocated = vi.fn();
 const listReceipts = vi.fn();
@@ -46,6 +55,9 @@ vi.mock("@/shared/env", () => ({
     GH_REVIEW_APP_PRIVATE_KEY_BASE64: "a2V5",
     NODE_SUBMODULE_PARENT_OWNER: "cogni-dao",
     NODE_SUBMODULE_PARENT_REPO: "cogni-template",
+    AKASH_ACTUATOR_ACCOUNT_ID: "akash1owner",
+    DEPLOY_ENVIRONMENT: "production",
+    FLEET_CONTROL_ENV: "production",
   }),
 }));
 vi.mock("@/bootstrap/container", () => ({
@@ -73,7 +85,11 @@ vi.mock("@/bootstrap/http", () => ({
       ),
 }));
 vi.mock("@/bootstrap/capabilities/node-repo-write", () => ({
-  createNodeRepoWriter: () => ({ openNodeEnvPr, openNodePlacementPr }),
+  createNodeRepoWriter: () => ({
+    openNodeEnvPr,
+    openNodePlacementPr,
+    readNodeEnvSnapshot,
+  }),
 }));
 vi.mock("@/features/nodes/node-lookup", () => ({ nodeIdOrSlug: () => ({}) }));
 vi.mock("@/shared/db/nodes", () => ({ nodes: {} }));
@@ -93,6 +109,7 @@ const post = async (body: unknown): Promise<Response> => {
 describe("POST /api/v1/nodes/[id]/envs — schema", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    readNodeEnvSnapshot.mockResolvedValue(snapshot);
     // EVIDENCE_OR_REFUSE (task.5132): an ADD refuses without a readable ledger, so even the
     // schema-level happy paths must wire the capability (an empty ledger = generation 0).
     listAllocated.mockResolvedValue([]);
@@ -252,6 +269,7 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
 
   beforeEach(() => {
     vi.clearAllMocks();
+    readNodeEnvSnapshot.mockResolvedValue(snapshot);
     authorize.mockResolvedValue({ ok: true });
     openNodeEnvPr.mockResolvedValue({
       status: "pr_opened",
@@ -323,9 +341,13 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
       expect.objectContaining({
         env: "candidate-a",
         present: true,
-        leaseGeneration: 2,
+        qualifiedGeneration: { snapshot, leaseGeneration: 2 },
       })
     );
+    expect(openNodeEnvPr.mock.calls[0]?.[0].qualifiedGeneration).toEqual({
+      snapshot,
+      leaseGeneration: 2,
+    });
   });
 
   it("present:true over a terminally FAILED gen-0 receipt derives leaseGeneration 1 (task.5132)", async () => {
@@ -336,17 +358,19 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
       { ...RECEIPT, state: "failed", environment: "candidate-a" },
     ]);
     await post({ env: "candidate-a", present: true });
-    expect(openNodeEnvPr).toHaveBeenCalledWith(
-      expect.objectContaining({ leaseGeneration: 1 })
-    );
+    expect(openNodeEnvPr.mock.calls[0]?.[0].qualifiedGeneration).toEqual({
+      snapshot,
+      leaseGeneration: 1,
+    });
   });
 
   it("present:true with an empty ledger passes generation 0 (a birth-identical row)", async () => {
     listReceipts.mockResolvedValue([]);
     await post({ env: "candidate-a", present: true });
-    expect(openNodeEnvPr).toHaveBeenCalledWith(
-      expect.objectContaining({ leaseGeneration: 0 })
-    );
+    expect(openNodeEnvPr.mock.calls[0]?.[0].qualifiedGeneration).toEqual({
+      snapshot,
+      leaseGeneration: 0,
+    });
   });
 
   it("present:true with the ledger UNWIRED refuses — 503 generation_evidence_unavailable, no PR (EVIDENCE_OR_REFUSE)", async () => {
@@ -384,5 +408,122 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
     await post({ env: "preview", placement: "akash" });
     expect(listAllocated).not.toHaveBeenCalled();
     expect(listReceipts).not.toHaveBeenCalled();
+  });
+});
+
+describe("present:true existing-lane repair HTTP seams", () => {
+  const readNativeStates = vi.fn();
+  const catalog = `name: blue\nnode_id: ${NODE.id}\nsource_repo: https://github.com/cogni-dao/blue.git\nenvs: [candidate-a, production]\ndeployment_provider: {candidate-a: akash}\ncompute_api: {candidate-a: crossplane}\nlease_generation: {candidate-a: 20, production: 6}\n`;
+  const receipt = {
+    receiptId: "terminal-20",
+    cogniKey: `xcw:cogni-candidate-a:${NODE.id}:20`,
+    identity: {
+      nodeId: NODE.id,
+      compositeUid: "xr-20",
+      compositeGeneration: 1,
+    },
+    environment: "candidate-a",
+    workload: "blue",
+    state: "released",
+    externalName: "7001",
+  };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authorize.mockResolvedValue({ ok: true });
+    readNodeEnvSnapshot.mockResolvedValue({ ...snapshot, catalog });
+    listReceipts.mockReset().mockResolvedValue([receipt]);
+    readNativeStates.mockReset().mockResolvedValue({});
+    container.leaseReadCapability = {
+      listReceipts,
+      listAllocated,
+      readNativeStates,
+    };
+    openNodeEnvPr.mockResolvedValue({ status: "no_changes" });
+  });
+  it.each([
+    "history",
+    "native",
+  ])("a later %s read failure is 503, no publication", async (read) => {
+    if (read === "history")
+      listReceipts
+        .mockResolvedValueOnce([receipt])
+        .mockRejectedValueOnce(new Error("history down"));
+    else readNativeStates.mockRejectedValue(new Error("native down"));
+    const res = await post({ env: "candidate-a", present: true });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({
+      error: "generation_evidence_unavailable",
+      errorCode: "generation_evidence_unavailable",
+    });
+    expect(openNodeEnvPr).not.toHaveBeenCalled();
+  });
+  it("known nonterminal receipt is 409 without publication", async () => {
+    listReceipts.mockResolvedValue([{ ...receipt, state: "allocated" }]);
+    const res = await post({ env: "candidate-a", present: true });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      errorCode: "repair_current_not_terminal",
+    });
+    expect(openNodeEnvPr).not.toHaveBeenCalled();
+  });
+  it("unsupported policy is 422 without native reads or publication", async () => {
+    readNodeEnvSnapshot.mockResolvedValue({
+      ...snapshot,
+      catalog: catalog.replace(
+        "candidate-a: crossplane",
+        "candidate-a: legacy"
+      ),
+    });
+    const res = await post({ env: "candidate-a", present: true });
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({
+      errorCode: "repair_policy_invalid",
+    });
+    expect(readNativeStates).not.toHaveBeenCalled();
+    expect(openNodeEnvPr).not.toHaveBeenCalled();
+  });
+  it("unreadable snapshot is unavailable rather than a known intent conflict", async () => {
+    readNodeEnvSnapshot.mockRejectedValue(
+      Object.assign(new Error("unavailable"), {
+        code: "generation_evidence_unavailable",
+        status: 503,
+      })
+    );
+    const res = await post({ env: "candidate-a", present: true });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({
+      errorCode: "generation_evidence_unavailable",
+    });
+    expect(openNodeEnvPr).not.toHaveBeenCalled();
+  });
+  it("malformed membership policy is 422, never a transport failure", async () => {
+    readNodeEnvSnapshot.mockResolvedValue({
+      ...snapshot,
+      catalog: "name: blue\nenvs: [unknown]\n",
+    });
+    const res = await post({ env: "candidate-a", present: true });
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({
+      errorCode: "repair_policy_invalid",
+    });
+    expect(openNodeEnvPr).not.toHaveBeenCalled();
+  });
+  it("valid in-repo membership remains no_changes, no native proof or repair plan", async () => {
+    const current = {
+      ...snapshot,
+      catalog:
+        "name: blue\nenvs: [candidate-a, production]\nactivity_env: production\n",
+    };
+    readNodeEnvSnapshot.mockResolvedValue(current);
+    const res = await post({ env: "candidate-a", present: true });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      result: { status: "no_changes" },
+    });
+    expect(readNativeStates).not.toHaveBeenCalled();
+    expect(listReceipts).toHaveBeenCalledTimes(1);
+    expect(openNodeEnvPr).toHaveBeenCalledWith(
+      expect.objectContaining({ qualifiedGeneration: { snapshot: current } })
+    );
   });
 });

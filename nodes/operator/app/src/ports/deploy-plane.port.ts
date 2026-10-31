@@ -264,6 +264,13 @@ export interface ResolvedNodeRepo {
 
 /** Input to `classifyEnvManagerPr` — a PR addressed in the parent monorepo. */
 export interface ClassifyEnvManagerPrInput {
+  /** Only the verified merged webhook supplies this immutable operation identity. Default is open-PR authorization. */
+  readonly mergedOperation?: {
+    readonly repository: string;
+    readonly prNumber: number;
+    readonly headSha: string;
+    readonly mergeSha: string;
+  };
   readonly owner: string;
   readonly repo: string;
   readonly prNumber: number;
@@ -278,6 +285,15 @@ export interface EnvManagerPrClassificationResult {
   readonly isEnvManagerPr: boolean;
   /** The `Cogni-Node` trailer value — the node whose env membership the PR changes. */
   readonly targetNodeRef?: string;
+  readonly action?: "add" | "remove" | "repair";
+  readonly environment?: "candidate-a" | "preview" | "production";
+  readonly headSha?: string;
+  readonly parentSha?: string;
+  readonly baseCatalog?: string;
+  readonly headCatalog?: string;
+  readonly errorCode?: "repair_context_unavailable" | "repair_context_conflict";
+  /** A reserved repair claim must never fall through to ordinary node.flight. */
+  readonly repairClaimed?: boolean;
 }
 
 export interface DeployPlanePort {
@@ -444,6 +460,16 @@ export interface DeployPlanePort {
    * the catalog row's `source_sha` is a legitimate stand-in. Anywhere else, reading the catalog for
    * a deploy sha reverts a live env to its birth pin (bug.5043, re-observed as bug.5237).
    */
+  /** Existing discriminated pin read; missing is distinguishable from invalid/unreadable. */
+  readNodeDeployPinState(input: {
+    parentOwner: string;
+    parentRepo: string;
+    env: string;
+    slug: string;
+  }): Promise<
+    { kind: "ok"; sha: string } | { kind: "missing" } | { kind: "invalid" }
+  >;
+
   readNodeDeployPin(input: {
     parentOwner: string;
     parentRepo: string;

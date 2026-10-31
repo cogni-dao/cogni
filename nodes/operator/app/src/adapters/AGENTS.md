@@ -29,6 +29,8 @@ Infrastructure implementations of ports including server/, worker/, cli/, and te
 
 ## Public Surface
 
+- `GitHubRepoWriter.readNodeEnvSnapshot` returns immutable MAIN/catalog facts. `openNodeEnvPr` accepts feature-qualified structural generation inputs bound to those facts; it runs no ledger/native proof callback.
+
 - App-private `AkashNativeStateReader` (exported through `@/adapters/server`) reads only fixed public Akash deployment/lease GETs. Bootstrap injects public owner and transport; full identities, pagination, bytes, concurrency and deadlines are bounded. It returns observations, never closure or recovery policy.
 
 - Finance (`server/finance/`): `akashHostingReaders` (one operator-covered USD/day row per node from the exact on-chain lease price, measured blocks/day or 5.884 s/block), `akashCreditReader` (injected expected Console granter; verified available-credit/burn estimate, escrow excluded) + `readAkashBlocksPerDay`, `cherryFinanceReader` (port of `cherryPlane`), `grafanaOverageReader`, `domainExpiryReader`, `readAkashReports`, `collapseAkash` (hosting rows become children of the one Akash row), `creditedPurchasesQuery` (CREDITED payment_attempts for the package income reader), `unavailableFinanceReader` — every row in the hub money-plane-registry as a never-throwing `PlaneReader`, each carrying its `rail`.

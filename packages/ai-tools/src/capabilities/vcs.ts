@@ -156,6 +156,8 @@ export interface VcsCapability {
      * the queue ruleset's sole bypass actor.
      */
     bypassQueue?: boolean;
+    /** Provider enforces this exact reviewed head on direct merge. */
+    expectedHeadSha?: string;
   }): Promise<MergeResult>;
 
   /** Create a new branch from a ref (branch name or SHA). */

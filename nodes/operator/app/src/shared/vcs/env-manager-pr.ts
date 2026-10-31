@@ -31,7 +31,9 @@
  *     `GET /app` slug → bot user), never hardcoded here — the classifier stays pure.
  *   - FAIL_CLOSED: any missing/duplicate trailer, unsigned commit, branch mismatch, fork head,
  *     non-bot opener/author, wrong base, or multi-commit PR returns `{ isEnvManagerPr: false }` —
- *     the caller then keeps the ordinary `node.flight` gate.
+ *     a reserved repair claim must refuse rather than fall through to `node.flight`.
+ *   - MERGED_IS_NOT_OPEN: only explicit verified-event mode accepts closed and actually merged PRs;
+ *     repository/PR/head/merge identities must agree. Open authorization stays strict.
  * Side-effects: none (pure)
  * Links: nodes/operator/app/src/app/api/v1/vcs/merge/route.ts,
  *   nodes/operator/app/src/app/_facades/deploy/lane-onboard.server.ts,
@@ -39,6 +41,9 @@
  *   scripts/ci/classify-env-manager-fast-path.sh
  * @public
  */
+
+import { isDeepStrictEqual } from "node:util";
+import { parse as parseYaml } from "yaml";
 
 /** The reserved change-type trailer value minted by `envManagerCommitMessage`. */
 export const ENV_MANAGER_CHANGE_TYPE = "cogni.env-manager.v1";
@@ -102,6 +107,8 @@ export interface EnvManagerPrClassification {
   readonly isEnvManagerPr: boolean;
   /** The `Cogni-Node` trailer value — the node whose env membership the PR changes. */
   readonly targetNodeRef?: string;
+  readonly action?: "add" | "remove" | "repair";
+  readonly environment?: "candidate-a" | "preview" | "production";
 }
 
 /**
@@ -122,7 +129,22 @@ function singleTrailer(message: string, key: string): string | null {
  * Total and fail-closed: every gate must pass, else `{ isEnvManagerPr: false }`.
  */
 export function classifyEnvManagerCommit(
-  facts: EnvManagerCommitFacts
+  facts: EnvManagerCommitFacts,
+  merged?: {
+    readonly event: {
+      repository: string;
+      prNumber: number;
+      headSha: string;
+      mergeSha: string;
+    };
+    readonly actual: {
+      repository: string;
+      prNumber: number;
+      headSha: string;
+      mergeSha: string | null;
+      merged: boolean;
+    };
+  }
 ): EnvManagerPrClassification {
   const branchMatch = ENV_MANAGER_VERB_BRANCH.exec(facts.headRef);
   const branchSlug = branchMatch?.[1];
@@ -156,7 +178,19 @@ export function classifyEnvManagerCommit(
   if (
     !Number.isInteger(facts.expectedBotId) ||
     facts.expectedBotLogin.length === 0 ||
-    facts.prState !== "open" ||
+    (merged
+      ? facts.prState !== "closed" ||
+        !merged.actual.merged ||
+        merged.actual.repository.toLowerCase() !==
+          merged.event.repository.toLowerCase() ||
+        merged.event.repository.toLowerCase() !==
+          facts.expectedHeadRepoFullName.toLowerCase() ||
+        merged.actual.prNumber !== merged.event.prNumber ||
+        !/^[0-9a-f]{40}$/.test(merged.event.headSha) ||
+        !/^[0-9a-f]{40}$/.test(merged.event.mergeSha) ||
+        merged.actual.headSha !== merged.event.headSha ||
+        merged.actual.mergeSha !== merged.event.mergeSha
+      : facts.prState !== "open") ||
     facts.baseRef !== "main" ||
     facts.prUserLogin !== facts.expectedBotLogin ||
     facts.prUserId !== facts.expectedBotId ||
@@ -179,5 +213,66 @@ export function classifyEnvManagerCommit(
     return { isEnvManagerPr: false };
   }
 
-  return { isEnvManagerPr: true, targetNodeRef: node };
+  const action = singleTrailer(facts.commitMessage, "Cogni-Action");
+  const environment = singleTrailer(facts.commitMessage, "Cogni-Environment");
+  if (
+    (action !== "add" && action !== "remove" && action !== "repair") ||
+    environment !== branchMatch?.[2]
+  )
+    return { isEnvManagerPr: false };
+  if (
+    action === "repair" &&
+    facts.commitMessage.split("\n")[0] !==
+      `fix(node): repair ${node} ${environment}`
+  )
+    return { isEnvManagerPr: false };
+  return {
+    isEnvManagerPr: true,
+    targetNodeRef: node,
+    action,
+    environment: environment as "candidate-a" | "preview" | "production",
+  };
+}
+
+/** Repair has one semantic writer: this lane's explicit bounded generation cell. */
+export function verifyRepairCatalogDelta(
+  before: string,
+  after: string,
+  node: string,
+  lane: string
+): boolean {
+  try {
+    const base = parseYaml(before);
+    const head = parseYaml(after);
+    if (
+      !base ||
+      !head ||
+      base.name !== node ||
+      head.name !== node ||
+      !Array.isArray(base.envs) ||
+      !Array.isArray(head.envs) ||
+      !base.envs.includes(lane) ||
+      !head.envs.includes(lane) ||
+      typeof base.node_id !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        base.node_id
+      ) ||
+      base.node_id !== head.node_id
+    )
+      return false;
+    const from = base.lease_generation?.[lane];
+    const to = head.lease_generation?.[lane];
+    if (
+      !Number.isSafeInteger(from) ||
+      !Number.isSafeInteger(to) ||
+      from < 0 ||
+      to <= from ||
+      to > 1_000_000
+    )
+      return false;
+    head.lease_generation[lane] = from;
+    return isDeepStrictEqual(base, head);
+  } catch {
+    return false;
+  }
 }

@@ -164,7 +164,7 @@ signed_paths_hash="$(trailer_value Cogni-Changed-Paths-SHA256)" || reject_claim 
 [[ "$change_type" == "$CHANGE_TYPE" ]] || reject_claim invalid-change-type
 [[ "$node" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || reject_claim invalid-node
 [[ "$env_name" =~ ^(candidate-a|preview|production)$ ]] || reject_claim invalid-environment
-[[ "$action" =~ ^(add|remove)$ ]] || reject_claim invalid-action
+[[ "$action" =~ ^(add|remove|repair)$ ]] || reject_claim invalid-action
 [[ "$signed_paths_hash" =~ ^[0-9a-f]{64}$ ]] || reject_claim invalid-path-hash
 
 jq -e \
@@ -198,6 +198,10 @@ case "$action" in
     [[ "$head_ref" == "cogni-operator/node-env-$node-$env_name" ]] || reject_claim invalid-branch
     [[ "$subject" == "feat(node): add $node to $env_name" ]] || reject_claim invalid-subject
     ;;
+  repair)
+    [[ "$head_ref" == "cogni-operator/node-env-$node-$env_name" ]] || reject_claim invalid-branch
+    [[ "$subject" == "fix(node): repair $node $env_name" ]] || reject_claim invalid-subject
+    ;;
   remove)
     [[ "$head_ref" == "cogni-operator/node-env-$node-$env_name" ]] || reject_claim invalid-branch
     [[ "$subject" == "feat(node): remove $node from $env_name" ]] || reject_claim invalid-subject
@@ -207,6 +211,10 @@ esac
 if [[ "$EVENT_NAME" == "pull_request" ]]; then
   [[ "$head_sha" == "$PR_HEAD_SHA_PR" ]] || reject_claim event-head-mismatch
   catalog_base_sha="$(jq -r '.base.sha' "$pr_json")"
+  if [[ "$action" == "repair" ]]; then
+    catalog_base_sha="$(jq -r '.parents[0].sha // empty' "$commit_json")"
+    [[ "$catalog_base_sha" =~ ^[0-9a-f]{40}$ ]] || reject_claim invalid-head-parent
+  fi
   catalog_head_sha="$head_sha"
 else
   mq_leaf="${MQ_HEAD_REF##*/}"
@@ -271,6 +279,34 @@ load_catalog "$catalog_head_sha" "${FAST_PATH_HEAD_CATALOG:-}" "$head_catalog_ya
 if ! yq -o=json '.' "$base_catalog_yaml" > "$base_catalog_json" 2>/dev/null \
   || ! yq -o=json '.' "$head_catalog_yaml" > "$head_catalog_json" 2>/dev/null; then
   reject_claim invalid-catalog-yaml
+fi
+
+# Repair is a reserved signed operation, but NEVER a CI-skip capability.
+if [[ "$action" == "repair" ]]; then
+  jq -e --arg path "infra/catalog/$node.yaml" 'length == 1 and .[0].filename == $path and .[0].status == "modified"' "$files_json" >/dev/null || reject_claim invalid-repair-paths
+  if ! jq -e -n --slurpfile base "$base_catalog_json" --slurpfile head "$head_catalog_json" --arg node "$node" --arg env "$env_name" '
+    ($base[0]) as $b | ($head[0]) as $h
+    | ($b.name == $node and $h.name == $node)
+    and ($b.node_id | type == "string" and length > 0)
+    and ($b.node_id == $h.node_id)
+    and ($b.envs | type == "array" and index($env) != null)
+    and ($h.envs | type == "array" and index($env) != null)
+    and ($b.lease_generation[$env] | type == "number" and floor == . and . >= 0 and . <= 1000000)
+    and ($h.lease_generation[$env] | type == "number" and floor == . and . <= 1000000)
+    and ($h.lease_generation[$env] > $b.lease_generation[$env])
+    and (($h | .lease_generation[$env] = $b.lease_generation[$env]) == $b)
+  ' >/dev/null; then reject_claim invalid-repair-delta; fi
+  if [[ "$EVENT_NAME" == "merge_group" ]]; then
+    git diff --name-only --no-renames "$MQ_BASE_SHA" "$MQ_HEAD_SHA" | LC_ALL=C sort -u > "$tmpdir/repair-queue-paths.txt"
+    cmp -s "$changed_paths" "$tmpdir/repair-queue-paths.txt" || reject_claim merge-group-path-mismatch
+  fi
+  emit eligible false
+  emit claimed false
+  emit reason verified-repair-full-ci
+  emit node "$node"
+  emit environment "$env_name"
+  emit action repair
+  exit 0
 fi
 
 # APPSET_PATH_IS_CONTROL_ENV_SCOPED: ask the one shared resolver where this

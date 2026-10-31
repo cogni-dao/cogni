@@ -2130,3 +2130,32 @@ describe("custodied paired delta guards", () => {
     ).toThrow(/missing 'production'/);
   });
 });
+
+describe("generation-only repair plan", () => {
+  it("keeps every unrelated byte, membership, regions, egress and data binding", () => {
+    const catalog =
+      "name: blue\nnode_id: 2f8b7a10-4c6e-4a7b-9d31-1c2e3f4a5b60\nenvs: [candidate-a, preview, production]\nactivity_env: production\nlease_generation:\n  candidate-a: 20 # old terminal key\n  production: 6\ncompute_egress_cidrs: [{cidr: 1.2.3.4/32, ports: [5432], envs: [preview]}]\nregions: [FI, NL, PT]\ndata: {dseq: 1793062228500, pools: [3, 4, 2]}\n";
+    const result = buildEnvDeltaPlan({
+      slug: "blue",
+      env: "candidate-a",
+      present: true,
+      repairGeneration: 21,
+      current: {
+        catalog,
+        templateOverlayByEnv: {},
+        appsetsKustomizationByEnv: {},
+      },
+    });
+    expect(result).toEqual({
+      kind: "repair",
+      nextEnvs: ["candidate-a", "preview", "production"],
+      ops: [
+        {
+          op: "upsert",
+          path: "infra/catalog/blue.yaml",
+          content: catalog.replace("candidate-a: 20", "candidate-a: 21"),
+        },
+      ],
+    });
+  });
+});
