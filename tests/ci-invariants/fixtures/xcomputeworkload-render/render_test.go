@@ -1260,6 +1260,147 @@ func TestR2UnsafeNativeBindingsAndPropagation(t *testing.T) {
 	r2WantFailure(t, tm, f)
 }
 
+// Losing selection and native refs cannot turn observed recovery allocation
+// history into a new base CREATE. Build the history from the actual template.
+func TestR2AllocatedRecoveryHistorySurvivesSelectionLoss(t *testing.T) {
+	f, base := r2ClosedBase(t, "Replace", true)
+	first := render(t, loadTemplate(t), f)
+	n := r2Check(t, first, 1)
+	r2Merge(f, first)
+	delete(observed(f), "akash-lease")
+	current := r2Native(t, first.leases[n], n, "allocated-recovery")
+	r2Stamp(current, key(1)+":recover:1", "active", false, false)
+	observed(f)[n] = current
+	r2Merge(f, render(t, loadTemplate(t), f))
+	if at(status(f), "resource", "id") != "handle-"+key(1)+":recover:1" || at(status(f), "bootEpoch", "mintedAt") == nil {
+		t.Fatal("fixture did not persist allocated recovery1 history", status(f))
+	}
+	status(f)["failure"] = obj{"reason": "LeaseStarting", "message": "allocated recovery is not serving"}
+	xr(f)["spec"].(obj)["crossplane"] = obj{"resourceRefs": []interface{}{obj{
+		"apiVersion": "http.m.crossplane.io/v1alpha2", "kind": "Request", "name": at(current, "resource", "metadata", "name"),
+	}}}
+	delete(observed(f), n)
+	for _, selection := range []string{"missing", "null", "other-generation"} {
+		for _, history := range []string{"both", "handle-only", "clock-only"} {
+			for _, refs := range []string{"stale-ref", "lost-ref", "closed-predecessor"} {
+				for _, qualifier := range []string{"unserved", "served", "legacy"} {
+					t.Run(selection+"-"+history+"-"+refs+"-"+qualifier, func(t *testing.T) {
+						bad := r2Copy(t, f) // JSON round trip models a restarted function.
+						switch selection {
+						case "missing":
+							delete(status(bad), "recovery")
+						case "null":
+							status(bad)["recovery"] = nil
+						case "other-generation":
+							status(bad)["recovery"] = obj{"leaseGeneration": 0, "count": 1, "key": key(0) + ":recover:1", "maxAttempts": 3}
+						}
+						boot := status(bad)["bootEpoch"].(obj)
+						if history == "handle-only" {
+							boot["mintedAt"] = nil
+						} else if history == "clock-only" {
+							status(bad)["resource"] = nil
+						}
+						if refs == "lost-ref" {
+							delete(xr(bad)["spec"].(obj)["crossplane"].(obj), "resourceRefs")
+						} else if refs == "closed-predecessor" {
+							// Old closure cannot recreate a successor already observed allocated.
+							observed(bad)["akash-lease"] = r2Copy(t, base)
+						}
+						canonical := strings.Repeat("b", 40) + ":1:recover:1"
+						if qualifier == "legacy" {
+							boot["key"] = canonical
+						} else {
+							boot["key"] = canonical + ":" + qualifier
+						}
+						if qualifier == "served" {
+							status(bad)["observedBundle"] = r2Copy(t, xr(bad)["spec"].(obj)["bundle"].(obj))
+						}
+						for i := 0; i < 3; i++ {
+							if i == 1 {
+								r2SetSha(bad, strings.Repeat("d", 40)) // A release edit is not a paid generation change.
+							}
+							bad = r2Copy(t, bad)
+							before := jsonString(bad)
+							o, err := execute(t, loadTemplate(t), bad)
+							if err == nil {
+								t.Fatal("allocated recovery history escaped missing-child refusal")
+							}
+							if !strings.Contains(err.Error(), "allocated selected child disappeared without terminal proof") || o.leases != nil || o.status != nil || o.dns != nil || jsonString(bad) != before {
+								t.Fatal("allocated history mutated input, emitted output or failed for another cause", err)
+							}
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestR2MissingChildBootstrapAndDurableSuccessorRemainAllowed(t *testing.T) {
+	t.Run("no-history", func(t *testing.T) {
+		f := fixture(1)
+		before := jsonString(f)
+		o := render(t, loadTemplate(t), f)
+		wantNames(t, o, "akash-lease")
+		if paid(o, "akash-lease") != key(1) || jsonString(f) != before {
+			t.Fatal("genuine bootstrap changed identity or input")
+		}
+	})
+	t.Run("exact-owner-with-predecessor-closure", func(t *testing.T) {
+		f, _ := r2ClosedBase(t, "Replace", true)
+		first := render(t, loadTemplate(t), f)
+		n := r2Check(t, first, 1)
+		r2Merge(f, first)
+		current := r2Native(t, first.leases[n], n, "exact-recovery-owner")
+		r2Stamp(current, key(1)+":recover:1", "active", false, false)
+		observed(f)[n] = current
+		r2Merge(f, render(t, loadTemplate(t), f))
+		status(f)["recovery"] = nil
+		before := jsonString(f)
+		o := render(t, loadTemplate(t), f)
+		wantNames(t, o, "akash-lease", n)
+		r2Check(t, o, 1)
+		r2Cleanup(t, o.leases["akash-lease"], key(1))
+		r2Cleanup(t, o.leases[n], key(1)+":recover:1")
+		if at(o.status, "resource", "id") != "handle-"+key(1)+":recover:1" || jsonString(f) != before {
+			t.Fatal("exact owner repair lost allocation identity or mutated input", o.status)
+		}
+	})
+	for _, nextGeneration := range []bool{false, true} {
+		t.Run(fmt.Sprintf("different-generation-%v", nextGeneration), func(t *testing.T) {
+			f, _ := r2ClosedBase(t, "Replace", true)
+			first := render(t, loadTemplate(t), f)
+			n := r2Check(t, first, 1)
+			r2Merge(f, first) // Complete durable successor selection, not yet observed.
+			delete(observed(f), "akash-lease")
+			if nextGeneration {
+				// Allocated history from generation1 must not block an explicit generation2.
+				status(f)["resource"] = obj{"id": "original-recovery-handle", "state": "active"}
+				status(f)["bootEpoch"].(obj)["mintedAt"] = "2026-10-31T00:00:00Z"
+				xr(f)["spec"].(obj)["leaseGeneration"] = 2
+			}
+			for i := 0; i < 3; i++ {
+				f = r2Copy(t, f)
+				before := jsonString(f)
+				o := render(t, loadTemplate(t), f)
+				if nextGeneration {
+					wantNames(t, o, "akash-lease")
+					if paid(o, "akash-lease") != key(2) || o.status["recovery"] != nil {
+						t.Fatal("explicit different-generation replacement lost its base identity", o.status)
+					}
+				} else {
+					wantNames(t, o, n)
+					r2Check(t, o, 1)
+				}
+				if at(o.status, "resource", "id") != nil || at(o.status, "bootEpoch", "mintedAt") != nil || jsonString(f) != before {
+					t.Fatal("unobserved intent borrowed paid history or mutated input", o.status)
+				}
+				r2Merge(f, o)
+			}
+		})
+	}
+}
+
 // Admission checks the observed intent before rebuilding any paid CREATE body.
 // Start with real emitted spec/ownership and persisted recovery selection, then
 // damage only required provision fields. No receipt/cache can mask the damage.

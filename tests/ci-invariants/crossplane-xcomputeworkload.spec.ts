@@ -2766,6 +2766,16 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
       expected:
         /^\s+render_test\.go:\d+: incomplete receipt-free provision intent escaped whole-render refusal\n$/,
     },
+    {
+      label: "exact 8cfb allocated recovery selection loss",
+      oldSha: "8cfb2e5f2294f6e72e47b5a134f62c2456b99f3f",
+      hash: "4c9a035603ce3435843da6bf2c35d3d0e597c1cb036a25677c5ca22cdf5b74cc",
+      test: "TestR2AllocatedRecoveryHistorySurvivesSelectionLoss",
+      caseName: "missing-both-lost-ref-unserved",
+      diagnostic: "allocated recovery history escaped missing-child refusal",
+      expected:
+        /^\s+render_test\.go:\d+: allocated recovery history escaped missing-child refusal\n$/,
+    },
   ])("rejects $label at the native behavior assertion", ({
     oldSha,
     hash,

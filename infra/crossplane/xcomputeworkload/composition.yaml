@@ -387,10 +387,18 @@ spec:
             {{- $prevBootKey := dig "status" "bootEpoch" "key" "" $xr }}
             {{- if and (ne $prevBootKey "") (not (regexMatch "^[0-9a-f]{40}:(0|[1-9][0-9]*)(:recover:[1-3])?(:unserved|:served)?$" $prevBootKey)) }}{{ fail "malformed boot attempt key" }}{{ end }}
             {{- $prevBootCanonical := regexReplaceAll ":(unserved|served)$" $prevBootKey "" }}
-            {{- $bootAttemptSuffix := printf ":%d" $leaseGeneration }}
-            {{- if gt $recoveryCount 0 }}{{ $bootAttemptSuffix = printf "%s:recover:%d" $bootAttemptSuffix $recoveryCount }}{{ end }}
+            {{- /* Stored allocation history has its own generation/ordinal even when
+              recovery selection is lost. Parse it before bootstrap or clearing history.
+            */ -}}
+            {{- $prevBootGeneration := -1 }}
+            {{- $prevBootRecoveryCount := 0 }}
+            {{- if ne $prevBootCanonical "" }}
+            {{- $bootParts := splitList ":" $prevBootCanonical }}
+            {{- $prevBootGeneration = int (index $bootParts 1) }}
+            {{- if eq (len $bootParts) 4 }}{{ $prevBootRecoveryCount = int (index $bootParts 3) }}{{ end }}
+            {{- end }}
             {{- if and (hasSuffix ":served" $prevBootKey) (ne (dig "status" "observedBundle" "source" "sha" "" $xr) (first (splitList ":" $prevBootKey))) }}{{ fail "served boot history conflicts with observed bundle" }}{{ end }}
-            {{- $samePaidAttempt := regexMatch (printf "^[0-9a-f]{40}%s$" (regexQuoteMeta $bootAttemptSuffix)) $prevBootCanonical }}
+            {{- $samePaidAttempt := and (eq $prevBootGeneration $leaseGeneration) (eq $prevBootRecoveryCount $recoveryCount) }}
             {{- $prevResource := dig "status" "resource" (dict) $xr | default (dict) }}
             {{- $prevFailure := dig "status" "failure" "reason" "" $xr }}
             {{- $terminalReason := has $prevFailure (list "LeaseClosed" "RecoveryLimitExceeded" "BootDeadlineClosed") }}
@@ -550,7 +558,10 @@ spec:
             {{- if regexMatch "^akash-lease-g[0-9]+$" $leaseResourceName }}{{ $leaseRequestGeneration = int (trimPrefix "akash-lease-g" $leaseResourceName) }}{{ end }}
             {{- else }}
             {{- if and (gt $recordedCount 0) (not $completeSelection) }}{{ fail "legacy recovery requires its exact observed receipt" }}{{ end }}
-            {{- if and (eq (int $recoveryCount) (int $recordedCount)) (or $samePaidAttempt (and (eq $prevBootKey "") (eq $activeLeaseGeneration $leaseGeneration))) (or (ne (dig "id" "" $prevResource) "") (ne (dig "status" "bootEpoch" "mintedAt" "" $xr | default "") "")) (not (or $parkedClosed $parkedBudget)) }}{{ fail "allocated selected child disappeared without terminal proof" }}{{ end }}
+            {{- /* Fresh closure can advance aligned history. A lost selection cannot
+              replay an already allocated successor merely from predecessor closure.
+            */ -}}
+            {{- if and (or (eq (int $recoveryCount) (int $recordedCount)) (and (eq $prevBootGeneration $leaseGeneration) (ne (int $prevBootRecoveryCount) (int $recordedCount)))) (or (eq $prevBootGeneration $leaseGeneration) (and (eq $prevBootKey "") (eq $activeLeaseGeneration $leaseGeneration))) (or (ne (dig "id" "" $prevResource) "") (ne (dig "status" "bootEpoch" "mintedAt" "" $xr | default "") "")) (not (or $parkedClosed $parkedBudget)) }}{{ fail "allocated selected child disappeared without terminal proof" }}{{ end }}
             {{- if and (gt $recordedCount 0) (not $samePaidAttempt) }}{{ fail "missing successor lacks durable selection tuple" }}{{ end }}
             {{- $leaseResourceName = "akash-lease" }}
             {{- if gt $recoveryCount 0 }}
