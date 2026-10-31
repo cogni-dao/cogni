@@ -14,6 +14,7 @@
  */
 
 import { KnowledgeRowSchema } from "@cogni/node-contracts";
+import { toKnowledgeRow } from "@cogni/shared-knowledge-store";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
@@ -55,23 +56,6 @@ export const GET = wrapRouteHandlerWithLogging<{
 
     ctx.log.info({ id }, "knowledge.get_success");
 
-    return NextResponse.json(
-      KnowledgeRowSchema.parse({
-        id: entry.id,
-        domain: entry.domain,
-        entityId: entry.entityId ?? null,
-        title: entry.title,
-        content: entry.content,
-        useWhen: entry.useWhen ?? null,
-        entryType: entry.entryType ?? "finding",
-        confidencePct: entry.confidencePct ?? null,
-        sourceType: entry.sourceType,
-        sourceRef: entry.sourceRef ?? null,
-        tags: entry.tags ?? null,
-        evaluateAt: entry.evaluateAt ? entry.evaluateAt.toISOString() : null,
-        resolutionStrategy: entry.resolutionStrategy ?? null,
-        createdAt: entry.createdAt ? entry.createdAt.toISOString() : null,
-      })
-    );
+    return NextResponse.json(KnowledgeRowSchema.parse(toKnowledgeRow(entry)));
   }
 );

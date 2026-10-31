@@ -16,6 +16,13 @@
  * @public
  */
 
+import { DomainNotRegisteredError as SharedDomainNotRegisteredError } from "@cogni/shared-knowledge-store";
+import {
+  deleteDoltgresDomain,
+  getDoltgresDomain,
+  updateDoltgresDomain,
+} from "@cogni/shared-knowledge-store/adapters/doltgres";
+
 import {
   DoltBranchMutationUncertainError,
   runDoltBranchMutation,
@@ -60,6 +67,8 @@ import {
   CitationTypeMismatchError,
   type Domain,
   DomainAlreadyRegisteredError,
+  DomainNotRegisteredError,
+  type DomainPatch,
   HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
   KnowledgeWriteOutcomeUnknownError,
@@ -552,6 +561,54 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
             : String(created ?? ""),
       };
     });
+  }
+
+  async getDomain(id: string): Promise<Domain | null> {
+    return getDoltgresDomain((query) => this.sql.unsafe(query), id);
+  }
+
+  async updateDomain(id: string, patch: DomainPatch): Promise<Domain> {
+    return this.withWrite(
+      { operationId: `domain.update:${id}`, message: `update domain ${id}` },
+      async (write) => {
+        if (!(write instanceof DoltgresKnowledgeStoreAdapter))
+          throw new KnowledgeWriteScopeRequiredError();
+        try {
+          return await updateDoltgresDomain(
+            (query) => {
+              write.assertWriteScope();
+              return write.sql.unsafe(query);
+            },
+            id,
+            patch
+          );
+        } catch (error) {
+          if (error instanceof SharedDomainNotRegisteredError)
+            throw new DomainNotRegisteredError(error.domain);
+          throw error;
+        }
+      }
+    );
+  }
+
+  async deleteDomain(id: string): Promise<void> {
+    return this.withWrite(
+      { operationId: `domain.delete:${id}`, message: `delete domain ${id}` },
+      async (write) => {
+        if (!(write instanceof DoltgresKnowledgeStoreAdapter))
+          throw new KnowledgeWriteScopeRequiredError();
+        try {
+          await deleteDoltgresDomain((query) => {
+            write.assertWriteScope();
+            return write.sql.unsafe(query);
+          }, id);
+        } catch (error) {
+          if (error instanceof SharedDomainNotRegisteredError)
+            throw new DomainNotRegisteredError(error.domain);
+          throw error;
+        }
+      }
+    );
   }
 
   async registerDomain(input: NewDomain): Promise<Domain> {

@@ -363,39 +363,64 @@ spec:
 
             {{- /* ---------- observed state ---------- */ -}}
             {{- $observedResources := default (dict) .observed.resources }}
-            {{- /*
-              GENERATION_BUMP_REPLACES_THE_REQUEST (story.5050). provider-http chooses CREATE
-              only for a NEW managed Request; changing the payload of the existing Request chooses
-              UPDATE, which cannot mint a replacement lease. Keep the historical static child name
-              for every XR that has not crossed this seam (zero fleet churn), then latch a
-              generation-qualified name the first time an observed response belongs to an older
-              base generation. Later explicit bumps advance that name directly. The old child is
-              garbage-collected through its normal REMOVE path while the new child enters through
-              CREATE with the fresh wallet-wide key.
-
-              This block alone only ADVANCES the name. Holding the outgoing child open until the
-              incoming one has proved itself is the OVERLAP_BEFORE_CLOSE block immediately below
-              (bug.5322); without it, advancing the name is also what closes a live lease.
+            {{- /* PAID_KEY_OWNS_CHILD_IDENTITY (bug.5557). Resolve observed paid keys BEFORE
+              naming. A spec rollback/restoration must reuse the original logical child: GC of
+              an alias closes the SAME paid lease. Naming status is only a bootstrap hint.
+              Missing/malformed receipts, duplicate family members and deletion already in flight
+              are unsafe: fail the whole function, never return a partial desired resource set.
             */ -}}
             {{- $leaseRequestGeneration := int (dig "status" "leaseRequestGeneration" -1 $xr) }}
-            {{- $leaseResourceName := "akash-lease" }}
-            {{- if ge $leaseRequestGeneration 0 }}
-            {{- $leaseResourceName = printf "akash-lease-g%d" $leaseRequestGeneration }}
+            {{- $leaseResourceName := "" }}
+            {{- $selectedPaidKey := "" }}
+            {{- $activeLeaseGeneration := int (dig "status" "activeLeaseGeneration" -1 $xr) }}
+            {{- $activeBaseKey := printf "xcw:%s:%s:%d" $ns $name $activeLeaseGeneration }}
+            {{- $desiredKeys := list $baseCogniKey }}
+            {{- $activeKeys := list $activeBaseKey }}
+            {{- range $attempt := untilStep 1 4 1 }}
+            {{- $desiredKeys = append $desiredKeys (printf "%s:recover:%d" $baseCogniKey $attempt) }}
+            {{- $activeKeys = append $activeKeys (printf "%s:recover:%d" $activeBaseKey $attempt) }}
             {{- end }}
-            {{- $initialLeaseObs := index $observedResources $leaseResourceName }}
-            {{- $initialResponseKey := "" }}
-            {{- if $initialLeaseObs }}
-            {{- $initialRequestBodyRaw := dig "status" "requestDetails" "body" "" $initialLeaseObs.resource }}
-            {{- if ne $initialRequestBodyRaw "" }}
-            {{- $initialRequestBody := fromJson $initialRequestBodyRaw }}
-            {{- $initialResponseKey = dig "cogniKey" "" $initialRequestBody }}
+            {{- $paidKeyPattern := printf "^xcw:%s:%s:(0|[1-9][0-9]*)(:recover:[1-3])?$" (regexQuoteMeta $ns) (regexQuoteMeta $name) }}
+            {{- $activeMatches := 0 }}
+            {{- range $childName, $child := $observedResources }}
+            {{- if hasPrefix "akash-lease" $childName }}
+            {{- $bodyRaw := dig "status" "requestDetails" "body" "" $child.resource }}
+            {{- if eq $bodyRaw "" }}{{ fail (printf "lease child %s has no recorded paid key" $childName) }}{{ end }}
+            {{- $body := mustFromJson $bodyRaw }}
+            {{- if not (kindIs "map" $body) }}{{ fail (printf "lease child %s has malformed requestDetails" $childName) }}{{ end }}
+            {{- $paidKey := dig "cogniKey" "" $body }}
+            {{- if not (kindIs "string" $paidKey) }}{{ fail (printf "lease child %s has malformed paid key" $childName) }}{{ end }}
+            {{- if not (regexMatch $paidKeyPattern $paidKey) }}{{ fail (printf "lease child %s has unsupported paid key %q" $childName $paidKey) }}{{ end }}
+            {{- $desiredMatch := has $paidKey $desiredKeys }}
+            {{- $activeMatch := and (ge $activeLeaseGeneration 0) (ne $activeLeaseGeneration $leaseGeneration) (has $paidKey $activeKeys) }}
+            {{- if and (or $desiredMatch $activeMatch) (not (empty (dig "metadata" "deletionTimestamp" "" $child.resource))) }}
+            {{- fail (printf "eligible lease child %s is deleting; refusing paid-key adoption" $childName) }}
+            {{- end }}
+            {{- if $activeMatch }}
+            {{- $activeMatches = add1 $activeMatches }}
+            {{- if gt $activeMatches 1 }}{{ fail "multiple lease children match the active paid-key family" }}{{ end }}
+            {{- end }}
+            {{- if $desiredMatch }}
+            {{- if ne $leaseResourceName "" }}{{ fail "multiple lease children match the desired paid-key family" }}{{ end }}
+            {{- $leaseResourceName = $childName }}
+            {{- $selectedPaidKey = $paidKey }}
             {{- end }}
             {{- end }}
-            {{- $desiredRecoveryPrefix := printf "%s:recover:" $baseCogniKey }}
-            {{- $initialResponseMatchesDesiredGeneration := or (eq $initialResponseKey $baseCogniKey) (hasPrefix $desiredRecoveryPrefix $initialResponseKey) }}
-            {{- if or (and (ge $leaseRequestGeneration 0) (ne $leaseRequestGeneration $leaseGeneration)) (and (lt $leaseRequestGeneration 0) (ne $initialResponseKey "") (not $initialResponseMatchesDesiredGeneration)) }}
+            {{- end }}
+            {{- if ne $leaseResourceName "" }}
+            {{- /* Persist the selected name's hint, never reinterpret it as the paid generation. */ -}}
+            {{- $leaseRequestGeneration = -1 }}
+            {{- if regexMatch "^akash-lease-g[0-9]+$" $leaseResourceName }}
+            {{- $leaseRequestGeneration = int (trimPrefix "akash-lease-g" $leaseResourceName) }}
+            {{- end }}
+            {{- else }}
+            {{- $leaseResourceName = "akash-lease" }}
+            {{- if or (ge $leaseRequestGeneration 0) (hasKey $observedResources "akash-lease") }}
             {{- $leaseRequestGeneration = $leaseGeneration }}
             {{- $leaseResourceName = printf "akash-lease-g%d" $leaseGeneration }}
+            {{- end }}
+            {{- /* A differently-keyed child cannot be updated into the new paid identity. */ -}}
+            {{- if index $observedResources $leaseResourceName }}{{ fail (printf "lease child %s already holds another paid key" $leaseResourceName) }}{{ end }}
             {{- end }}
             {{- /*
               OVERLAP_BEFORE_CLOSE (bug.5322). Crossplane garbage-collects whatever this function
@@ -445,19 +470,16 @@ spec:
               exactly as it does on main. The field is adopted the first time that workload is
               observed `active && serving`, after which its next bump is protected.
             */ -}}
-            {{- $activeLeaseGeneration := int (dig "status" "activeLeaseGeneration" -1 $xr) }}
             {{- $retainedResourceName := "" }}
             {{- $retainedKey := "" }}
             {{- $retainedResp := dict }}
             {{- if and (ge $activeLeaseGeneration 0) (ne $activeLeaseGeneration $leaseGeneration) }}
-            {{- $activeBaseKey := printf "xcw:%s:%s:%d" $ns $name $activeLeaseGeneration }}
-            {{- $activeRecoveryPrefix := printf "%s:recover:" $activeBaseKey }}
             {{- range $childName, $child := $observedResources }}
             {{- if and (eq $retainedResourceName "") (hasPrefix "akash-lease" $childName) (ne $childName $leaseResourceName) }}
             {{- $childKey := "" }}
             {{- $childBodyRaw := dig "status" "requestDetails" "body" "" $child.resource }}
             {{- if ne $childBodyRaw "" }}{{ $childKey = dig "cogniKey" "" (fromJson $childBodyRaw) }}{{ end }}
-            {{- if or (eq $childKey $activeBaseKey) (and (ne $childKey "") (hasPrefix $activeRecoveryPrefix $childKey)) }}
+            {{- if has $childKey $activeKeys }}
             {{- $retainedResourceName = $childName }}
             {{- $retainedKey = $childKey }}
             {{- $childRaw := dig "status" "response" "body" "" $child.resource }}
@@ -587,6 +609,12 @@ spec:
             {{- $responseKey = dig "cogniKey" "" $requestBody }}
             {{- $lastRequestedSha = dig "expectedSourceSha" "" $requestBody }}
             {{- end }}
+            {{- end }}
+            {{- /* Recovery status may lag a paid receipt, but must never rewrite its key.
+              Fail closed until status/request propagation agrees; only the terminal read-back
+              below may authorize the next bounded recovery key. */ -}}
+            {{- if and (ne $selectedPaidKey "") (ne $selectedPaidKey $currentKey) }}
+            {{- fail (printf "selected paid key %s disagrees with recovery key %s" $selectedPaidKey $currentKey) }}
             {{- end }}
             {{- $closedForCurrentKey := and $closed (eq $responseKey $currentKey) }}
             {{- $recoveryExhausted := and $closedForCurrentKey (ge $recoveryCount $maxRecoveryAttempts) }}

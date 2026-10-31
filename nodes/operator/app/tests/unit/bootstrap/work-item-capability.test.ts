@@ -18,10 +18,15 @@
  * @internal
  */
 
-import { createWorkItemReadImplementation } from "@cogni/ai-tools";
+import {
+  createWorkItemReadImplementation,
+  WorkItemQueryOutputSchema,
+  workItemReadContract,
+} from "@cogni/ai-tools";
 import {
   createWorkItemQueryImplementation,
   WorkItemPatchConflictError,
+  workItemQueryContract,
 } from "@cogni/shared-ai-tools";
 import type {
   WorkItem,
@@ -29,6 +34,7 @@ import type {
   WorkItemId,
   WorkItemQueryPort,
 } from "@cogni/work-items";
+import { toWorkItemDto, WorkItemDtoSchema } from "@cogni/work-items";
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { describe, expect, it, vi } from "vitest";
 
@@ -86,6 +92,10 @@ describe("createWorkItemCapability", () => {
     });
 
     const result = await cap.query({ statuses: ["needs_implement"], limit: 5 });
+    const outputFields = WorkItemQueryOutputSchema.shape.items.element.shape;
+    for (const field of Object.keys(WorkItemDtoSchema.shape)) {
+      expect(outputFields).toHaveProperty(field);
+    }
 
     expect(backlogReader.list).toHaveBeenCalledWith({
       statuses: ["needs_implement"],
@@ -177,6 +187,88 @@ describe("createWorkItemCapability", () => {
     });
     expect(md.query.get).not.toHaveBeenCalled();
     expect(md.query.list).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: "user", userId: "owner-user" },
+    { kind: "agent", agentId: "owner-agent" },
+    { kind: "system", serviceId: "owner-service" },
+  ] satisfies WorkItem["assignees"])("preserves $kind assignees through complete read and query output validation/redaction", async (assignee) => {
+    const md = markdownPorts();
+    const selected = item({
+      assignees: [assignee],
+      revision: 17,
+      outcome: "full constraint ".repeat(70),
+      externalRefs: [
+        {
+          system: "github",
+          kind: "pull_request",
+          url: "https://github.com/cogni-dao/cogni/pull/2982",
+        },
+      ],
+    });
+    const capability = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+      backlogReader: { list: vi.fn().mockResolvedValue({ items: [selected] }) },
+    });
+    const expectedAssignees = [
+      {
+        ...assignee,
+        id:
+          assignee.kind === "user"
+            ? assignee.userId
+            : assignee.kind === "agent"
+              ? assignee.agentId
+              : assignee.serviceId,
+      },
+    ];
+    const result = await createWorkItemReadImplementation({
+      workItemCapability: capability,
+    }).execute({ id: selected.id });
+    const full = workItemReadContract.redact(
+      workItemReadContract.outputSchema.parse(result)
+    );
+    expect(full).toEqual({
+      complete: true,
+      item: { ...toWorkItemDto(selected), assignees: expectedAssignees },
+    });
+    const queryResult = await createWorkItemQueryImplementation({
+      workItemCapability: capability,
+      nodePublicOrigin: "https://cognidao.org",
+    }).execute({ ids: [selected.id] });
+    const query = workItemQueryContract.redact(
+      workItemQueryContract.outputSchema.parse(queryResult)
+    );
+    expect(query.items[0]).toEqual({
+      ...full.item,
+      sourceUrl: `https://cognidao.org/work/items/${selected.id}`,
+      outcome: `${selected.outcome?.slice(0, 600)}…`,
+    });
+  });
+
+  it("retains missing, ambiguous and oversized complete-read refusals", async () => {
+    const md = markdownPorts();
+    const list = vi.fn().mockResolvedValue({ items: [] });
+    const capability = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+      backlogReader: { list },
+    });
+    const read = createWorkItemReadImplementation({
+      workItemCapability: capability,
+    });
+    await expect(read.execute({ id: "task.5282" })).rejects.toThrow(
+      "work_source_unavailable"
+    );
+    list.mockResolvedValue({ items: [item(), item()] });
+    await expect(read.execute({ id: "task.5282" })).rejects.toThrow(
+      "work_source_unavailable"
+    );
+    list.mockResolvedValue({ items: [item({ outcome: "x".repeat(65536) })] });
+    await expect(read.execute({ id: "task.5282" })).rejects.toThrow(
+      "work_source_incomplete"
+    );
   });
 
   it("requires numeric source revision while allowing honest missing acceptance text", async () => {

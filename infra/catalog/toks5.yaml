@@ -69,6 +69,10 @@ node_id: f66b260b-4633-41e2-8711-b7c1b8449cc1
 # NOTE: the node-birth generator does not yet mint this block (filed at birth of
 # toks5); added by hand-PR pending the generator fix.
 compute_egress_cidrs:
+  - cidr: 95.217.30.59/32
+    envs: [production]
+    ports: [5432, 5435, 6379, 4000, 7233]
+    comment: Temporary recovery grant for production RHITE lease 1792832230729; egress measured inside the lease at 2026-10-30T20:40:07Z while all five substrate TCP ports timed out (bug.5557). Automatic egress admission remains unbuilt.
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
   - cidr: 65.108.194.156/32

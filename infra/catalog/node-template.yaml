@@ -45,7 +45,7 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 0
+  candidate-a: 1
   production: 3
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
@@ -57,6 +57,10 @@ node_id: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
 # scripts/ci/render-compute-egress-allowlist.sh and applied by
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:
+  - cidr: 95.217.30.59/32
+    envs: [production]
+    ports: [5432, 5435, 6379, 4000, 7233]
+    comment: Temporary recovery grant for production RHITE lease 1792831352201; egress measured inside the lease at 2026-10-30T20:38:56Z while all five substrate TCP ports timed out (bug.5557). Automatic egress admission remains unbuilt.
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
   - cidr: 95.217.139.183/32

@@ -84,6 +84,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
   - `/api/v1/knowledge/contributions/[id]/commits` [GET, POST] - list/append authenticated contribution branch commits
   - `/api/v1/knowledge/contributions/[id]/merge-check` [POST] - authenticated admitted native conflict check of immutable committed roots; does not merge or grant merge authority
+- `/api/v1/knowledge/domains/[domain]` [GET, PATCH, DELETE] — bearer/session principal, immutable ID, partial metadata patch, delete only empty non-baseline domains; domain operations retain private admission.
 - Fixed service target `scheduler-worker-custodied-routing` on `/api/v1/deploy/infra-reconcile`: own-production custodian only; additive Git publication or receipt rollback; publication is not rollout proof.
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
 

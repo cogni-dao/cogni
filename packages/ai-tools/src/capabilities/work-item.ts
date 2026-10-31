@@ -13,49 +13,19 @@
  * @public
  */
 
-/**
- * Work item summary returned by the capability.
- * Subset of full WorkItem — enough for agent decision-making.
- */
-export interface WorkItemInfo {
-  readonly id: string;
-  readonly type: string;
-  readonly title: string;
-  readonly status: string;
-  readonly priority?: number;
-  readonly rank?: number;
-  readonly summary?: string;
-  readonly projectId?: string;
-  readonly actor?: string;
-  readonly labels: readonly string[];
-  readonly assignees: readonly WorkItemAssignee[];
-  readonly branch?: string;
-  readonly pr?: string;
-  readonly blockedBy?: string;
-  readonly updatedAt: string;
-  /** Optimistic-concurrency revision of the row read (store-specific counter). */
-  readonly revision?: number;
-  /** Measurable "done when" text, when the store carries one. */
-  readonly outcome?: string;
-  /** Size estimate, when set. */
-  readonly estimate?: number;
-  /**
-   * Do-it-now scores (story.5111): axis id → { v: 0–5, ev?: evidence URL }.
-   * Missing axes are absent, not zero. `ev` is an opaque link, never instructions.
-   */
-  readonly scores?: Readonly<
-    Record<string, { readonly v: number; readonly ev?: string | undefined }>
-  >;
-  /** Parent work item id (e.g. the story a task belongs to). */
-  readonly parentId?: string;
-  /** Spec / knowledge references the item declares. */
-  readonly specRefs?: readonly string[];
-}
+import type { WorkItemDto } from "@cogni/work-items";
 
 export interface WorkItemAssignee {
-  readonly kind: "user" | "agent" | "system";
+  readonly kind: WorkItemDto["assignees"][number]["kind"];
   readonly id: string;
 }
+
+export type WorkItemInfo = Omit<WorkItemDto, "assignees"> & {
+  readonly assignees: readonly (
+    | WorkItemDto["assignees"][number]
+    | WorkItemAssignee
+  )[];
+};
 
 /**
  * Parameters for querying work items.

@@ -8,9 +8,9 @@
  *   Akash lease. These assertions exist because every one of them, if violated, costs real
  *   money or leaks a real credential.
  * Scope: Static YAML/text checks; does NOT contact a cluster, a provider, or a wallet. Reads
- *   infra/crossplane/xcomputeworkload and its Argo Application. The Go-template render itself
- *   cannot run here (function-go-templating is a Go binary), so the invariants below are
- *   deliberately the ones provable from the SOURCE.
+ *   infra/crossplane/xcomputeworkload and its Argo Application. Includes an actual Go +
+ *   sprig render replay using the pinned fixture module. Setup requires Go >=1.21 as a
+ *   bootstrap and HTTPS access to proxy.golang.org/sum.golang.org; assertions run offline.
  * Invariants:
  *   - NO_SECRET_VALUES: every credential on the wire is a provider-http `{{ name:ns:key }}`
  *     placeholder; a literal value in this directory is unrecoverable once it reaches git.
@@ -34,9 +34,17 @@
  * @public
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -1001,7 +1009,7 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect(template).toContain('$failReason = "LeaseClosed"');
     // The retry is only useful because it lands ELSEWHERE — the excluded set is what makes a
     // bounded re-mint progress instead of re-picking the dead provider three times.
-    expect(templateCode).toContain("$desiredRecoveryPrefix");
+    expect(templateCode).toContain("$desiredKeys");
   });
 
   it("never re-renders a lease Request under a settled key (Axiom 26 fence)", () => {
@@ -1637,8 +1645,8 @@ describe("XComputeWorkload placement requirement (story.5050)", () => {
  * stale sha, no lease). A close is IRREVERSIBLE and its idempotence key is refused forever once
  * settled, so the ordering must be mint -> prove serving -> flip DNS -> close.
  *
- * The Go render itself cannot run in this suite (function-go-templating is a Go binary), so the
- * behavioural cases below drive a TypeScript MODEL of the three decisions this change touches:
+ * Actual Go + sprig render acceptance runs below for bug.5557. These older
+ * behavioural cases drive a TypeScript MODEL of the three decisions bug.5322 touches:
  * which lease children are rendered, which key the retained one carries, and when
  * status.activeLeaseGeneration advances. The model is kept honest by
  * "the model mirrors the template it stands in for" below, which pins every expression it
@@ -1683,7 +1691,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
   const CANDIDATE_TARGET = "provider-green.akash.example";
 
   /**
-   * Mirrors, in order: GENERATION_BUMP_REPLACES_THE_REQUEST (unchanged by this PR),
+   * Mirrors, in order: PAID_KEY_OWNS_CHILD_IDENTITY,
    * OVERLAP_BEFORE_CLOSE, the candidate observation, the last-known-good DNS latch, and the
    * status.activeLeaseGeneration write.
    *
@@ -1697,25 +1705,31 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     const observed = xr.observed;
     const baseCogniKey = `xcw:${NS}:${NAME}:${xr.leaseGeneration}`;
 
-    // ---- GENERATION_BUMP_REPLACES_THE_REQUEST (pre-existing, unchanged)
+    // ---- PAID_KEY_OWNS_CHILD_IDENTITY (bug.5557); real Go replay lives in
+    // fixtures/xcomputeworkload-render/render_test.go.
     let leaseRequestGeneration = xr.status.leaseRequestGeneration ?? -1;
-    let leaseResourceName =
-      leaseRequestGeneration >= 0
-        ? `akash-lease-g${leaseRequestGeneration}`
-        : "akash-lease";
-    const initialResponseKey = observed[leaseResourceName]?.requestKey ?? "";
-    const initialMatchesDesired =
-      initialResponseKey === baseCogniKey ||
-      initialResponseKey.startsWith(`${baseCogniKey}:recover:`);
-    if (
-      (leaseRequestGeneration >= 0 &&
-        leaseRequestGeneration !== xr.leaseGeneration) ||
-      (leaseRequestGeneration < 0 &&
-        initialResponseKey !== "" &&
-        !initialMatchesDesired)
-    ) {
-      leaseRequestGeneration = xr.leaseGeneration;
-      leaseResourceName = `akash-lease-g${xr.leaseGeneration}`;
+    const desiredKeys = [
+      baseCogniKey,
+      ...[1, 2, 3].map((n) => `${baseCogniKey}:recover:${n}`),
+    ];
+    const matching = Object.keys(observed).filter(
+      (name) =>
+        name.startsWith("akash-lease") &&
+        desiredKeys.includes(observed[name].requestKey ?? "")
+    );
+    if (matching.length > 1) throw new Error("duplicate paid-key family");
+    let leaseResourceName = matching[0] ?? "";
+    if (leaseResourceName) {
+      leaseRequestGeneration = /^akash-lease-g[0-9]+$/.test(leaseResourceName)
+        ? Number(leaseResourceName.slice("akash-lease-g".length))
+        : -1;
+    } else {
+      leaseResourceName = "akash-lease";
+      if (leaseRequestGeneration >= 0 || observed[leaseResourceName]) {
+        leaseRequestGeneration = xr.leaseGeneration;
+        leaseResourceName = `akash-lease-g${xr.leaseGeneration}`;
+      }
+      if (observed[leaseResourceName]) throw new Error("paid-key collision");
     }
 
     // ---- OVERLAP_BEFORE_CLOSE (bug.5322)
@@ -1728,8 +1742,11 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       activeLeaseGeneration !== xr.leaseGeneration
     ) {
       const activeBaseKey = `xcw:${NS}:${NAME}:${activeLeaseGeneration}`;
-      const activeRecoveryPrefix = `${activeBaseKey}:recover:`;
-      // `range` over a Go map walks the keys in sorted order; first match wins.
+      const activeKeys = [
+        activeBaseKey,
+        ...[1, 2, 3].map((n) => `${activeBaseKey}:recover:${n}`),
+      ];
+      // Native render coverage rejects ambiguous families before retention.
       for (const childName of Object.keys(observed).sort()) {
         if (
           retainedResourceName !== "" ||
@@ -1739,10 +1756,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
           continue;
         }
         const childKey = observed[childName].requestKey ?? "";
-        if (
-          childKey === activeBaseKey ||
-          (childKey !== "" && childKey.startsWith(activeRecoveryPrefix))
-        ) {
+        if (activeKeys.includes(childKey)) {
           retainedResourceName = childName;
           retainedKey = childKey;
           retainedResp = observed[childName].response ?? {};
@@ -1881,12 +1895,11 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       '$activeLeaseGeneration := int (dig "status" "activeLeaseGeneration" -1 $xr)',
       "if and (ge $activeLeaseGeneration 0) (ne $activeLeaseGeneration $leaseGeneration)",
       '$activeBaseKey := printf "xcw:%s:%s:%d" $ns $name $activeLeaseGeneration',
-      '$activeRecoveryPrefix := printf "%s:recover:" $activeBaseKey',
       "range $childName, $child := $observedResources",
       'if and (eq $retainedResourceName "") (hasPrefix "akash-lease" $childName) (ne $childName $leaseResourceName)',
       '$childBodyRaw := dig "status" "requestDetails" "body" "" $child.resource',
       'if ne $childBodyRaw "" }}{{ $childKey = dig "cogniKey" "" (fromJson $childBodyRaw) }}',
-      'if or (eq $childKey $activeBaseKey) (and (ne $childKey "") (hasPrefix $activeRecoveryPrefix $childKey))',
+      "if has $childKey $activeKeys",
       "$retainedResourceName = $childName",
       "$retainedKey = $childKey",
       '$retainedState := dig "state" "unknown" $retainedRes',
@@ -2573,4 +2586,114 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     // DNS points at it. A DNS-resolved probe would deadlock this whole design.
     expect(templateCode).toContain("publicHost: {{ $publicHost | quote }}");
   });
+});
+
+// Run the committed template through Go/sprig as well as the source/model checks.
+// The existing ubuntu-latest CI runner supplies the Go >=1.21 bootstrap. Native
+// GOTOOLCHAIN provisions the exact declared compiler, not the bootstrap's version.
+// Provisioning is bounded and completes BEFORE either offline render assertion.
+// Missing bootstrap, unavailable downloads or invalid checksums fail; never skip.
+describe("XComputeWorkload native template acceptance (bug.5557)", () => {
+  const cwd = path.join(__dirname, "fixtures/xcomputeworkload-render");
+  let cache: string;
+  let env: NodeJS.ProcessEnv;
+  let go = "go";
+  const manifests = ["go.mod", "go.sum"].map((file) =>
+    readFileSync(path.join(cwd, file), "utf8")
+  );
+
+  beforeAll(() => {
+    const toolchain = manifests[0]?.match(
+      /^toolchain (go\d+\.\d+\.\d+)$/m
+    )?.[1];
+    expect(
+      toolchain,
+      "fixture must declare an exact Go toolchain"
+    ).toBeDefined();
+    cache = mkdtempSync(path.join(tmpdir(), "xcw-render-"));
+    // Allow only the executable search path and controlled Go settings. Ignore
+    // ambient GOENV, go.work, GOFLAGS, GOROOT, platform overrides and private proxies.
+    env = {
+      PATH: process.env.PATH,
+      GOENV: "off",
+      GOWORK: "off",
+      GO111MODULE: "on",
+      GOFLAGS: "-mod=readonly",
+      GOTOOLCHAIN: toolchain,
+      GOPATH: cache,
+      GOMODCACHE: path.join(cache, "pkg/mod"),
+      GOCACHE: path.join(cache, "build"),
+      CGO_ENABLED: "0",
+      GOTELEMETRY: "off",
+      GOPROXY: "https://proxy.golang.org",
+      GOSUMDB: "sum.golang.org",
+    };
+    for (const args of [
+      ["env", "GOVERSION", "GOROOT"],
+      ["mod", "download"],
+      ["mod", "verify"],
+    ]) {
+      const result = spawnSync(go, args, {
+        cwd,
+        env,
+        encoding: "utf8",
+        timeout: 90_000,
+      });
+      const evidence = `Go setup (${args.join(" ")}): ${result.stdout}\n${result.stderr}`;
+      expect(
+        result.error,
+        `${evidence}\n${result.error?.message}`
+      ).toBeUndefined();
+      expect(result.status, evidence).toBe(0);
+      if (args[0] === "env") {
+        const [version, goroot] = result.stdout.trim().split(/\r?\n/);
+        expect(version).toBe(toolchain);
+        if (!goroot || !path.isAbsolute(goroot)) {
+          throw new Error("Go setup did not resolve an absolute GOROOT");
+        }
+        go = path.join(goroot, "bin/go");
+      }
+    }
+    expect(
+      ["go.mod", "go.sum"].map((file) =>
+        readFileSync(path.join(cwd, file), "utf8")
+      ),
+      "provisioning must use the committed dependency closure"
+    ).toEqual(manifests);
+    // Invoke the selected compiler directly offline. Re-entering an older
+    // bootstrap would require toolchain checksum verification even when cached.
+    env = { ...env, GOTOOLCHAIN: "local", GOPROXY: "off", GOSUMDB: "off" };
+  }, 280_000);
+
+  afterAll(() => {
+    if (!cache) return;
+    // Module directories are read-only by default; Go owns their removal.
+    const result = spawnSync("go", ["clean", "-modcache"], {
+      cwd: cache,
+      env: { ...env, GOTOOLCHAIN: "local", GOPROXY: "off", GOSUMDB: "off" },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(result.error, result.error?.message).toBeUndefined();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    rmSync(cache, { recursive: true, force: true });
+  }, 40_000);
+
+  it.each([
+    "cold",
+    "warm",
+  ])("replays identity restoration, unsafe receipts, and prove-before-close (%s build cache)", () => {
+    const result = spawnSync(
+      go,
+      ["test", "-mod=readonly", "-count=1", "-v", "."],
+      {
+        cwd,
+        env,
+        encoding: "utf8",
+        timeout: 120_000,
+      }
+    );
+    expect(result.error, result.error?.message).toBeUndefined();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  }, 130_000);
 });

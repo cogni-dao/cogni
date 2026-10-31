@@ -73,7 +73,7 @@
  * @internal
  */
 
-import { createHash, X509Certificate } from "node:crypto";
+import { X509Certificate } from "node:crypto";
 import { rootCertificates } from "node:tls";
 
 import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
@@ -105,6 +105,7 @@ import {
   type ComputeCostStorePort,
   type NodeMigrationReportStorePort,
 } from "@/ports";
+import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
 import { runMigrationStep } from "./akash-tx-migration-step";
 import {
   DatabaseCellRecoveryProfileSchema,
@@ -160,6 +161,11 @@ export interface AkashTxActuatorDeps {
    */
   readonly outcomes?: AkashTxProviderOutcomesPort;
   readonly recoveryProfile?: () => Promise<unknown>;
+  /** Read current private custody afresh; historical DSN hashes are not release pins. */
+  readonly appliedCellCustody?: (
+    nodeId: string,
+    environment: "production"
+  ) => Promise<DatabaseCellAppliedCustody>;
 }
 
 const SYSTEM_ROOT_FINGERPRINTS = new Set(
@@ -358,6 +364,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private readonly providerConsumerAccountId: string;
   private readonly outcomes?: AkashTxProviderOutcomesPort;
   private readonly recoveryProfile?: () => Promise<unknown>;
+  private readonly appliedCellCustody?: AkashTxActuatorDeps["appliedCellCustody"];
   /**
    * Per-process load-shed for boot_ok writes on every observe tick — correctness comes
    * from the DB's unique (lease_id, outcome), never from this cache (task.5153).
@@ -376,6 +383,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     this.providerConsumerAccountId = deps.providerConsumerAccountId;
     if (deps.outcomes) this.outcomes = deps.outcomes;
     if (deps.recoveryProfile) this.recoveryProfile = deps.recoveryProfile;
+    if (deps.appliedCellCustody)
+      this.appliedCellCustody = deps.appliedCellCustody;
   }
 
   async observe(input: {
@@ -1145,7 +1154,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     );
   }
 
-  /** Initial admission stays immutable; app releases preserve its consumer/pool boundary. */
+  /** App releases use current owned credentials; retained-cell recovery keeps its own guards. */
   private async requireQualifiedCellRelease(input: {
     cogniKey: string;
     environment: string;
@@ -1230,22 +1239,60 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       const consumer = consumers[0];
       const env = consumer?.env;
       // provider-http resolves the owned references before this private wire call.
-      // Compare the actual credentials with their immutable audited digests.
-      const digest = (value: string | undefined) =>
-        value === undefined
-          ? undefined
-          : createHash("sha256").update(value).digest("hex");
+      // A moved endpoint or rotated password must not require rewriting a cutover receipt.
+      let custody: DatabaseCellAppliedCustody;
+      let app: URL;
+      let service: URL;
+      try {
+        if (!this.appliedCellCustody) throw new Error();
+        custody = await this.appliedCellCustody(
+          cell.binding.nodeId,
+          input.environment
+        );
+        app = new URL(custody.app.dsn);
+        service = new URL(custody.service.dsn);
+      } catch {
+        throw new AkashTxError(
+          "ledger_unavailable",
+          "current database cell custody unavailable"
+        );
+      }
+      const ownedConsumers = [
+        { url: app, role: cell.binding.appRole },
+        { url: service, role: cell.binding.serviceRole },
+      ].every(
+        ({ url, role }) =>
+          url.protocol === "postgresql:" &&
+          url.hostname === custody.canonicalEndpointHost &&
+          url.port !== "" &&
+          url.port === app.port &&
+          url.username === role &&
+          url.pathname === `/${cell.binding.databaseName}` &&
+          url.searchParams.get("sslmode") === "verify-full"
+      );
       const ca = env?.DATABASE_SSL_CA_CERT?.replaceAll("\\n", "\n");
       const tlsMatches =
-        cell.registration?.tlsTrustKind === "system"
+        custody.tls.kind === "system"
           ? usesSystemTrust(ca)
-          : ca !== undefined && digest(ca) === cell.registration?.tlsCaSha256;
+          : ca?.trim() ===
+            custody.tls.caCertificate.replaceAll("\\n", "\n").trim();
+      const currentPools = custody.runtimePoolLimits;
       if (
         consumers.length !== 1 ||
         !env ||
-        digest(env.DATABASE_URL) !== cell.registration?.appDsnSha256 ||
-        digest(env.DATABASE_SERVICE_URL) !==
-          cell.registration?.serviceDsnSha256 ||
+        custody.nodeId !== cell.binding.nodeId ||
+        custody.nodeSlug !== input.workload ||
+        custody.environment !== input.environment ||
+        custody.databaseName !== cell.binding.databaseName ||
+        custody.appRole !== cell.binding.appRole ||
+        custody.serviceRole !== cell.binding.serviceRole ||
+        !ownedConsumers ||
+        currentPools?.replicaCount !== pools.replicaCount ||
+        currentPools.app !== pools.app ||
+        currentPools.service !== pools.service ||
+        currentPools.read !== pools.read ||
+        env.DATABASE_URL !== custody.app.dsn ||
+        env.DATABASE_SERVICE_URL !== custody.service.dsn ||
         !tlsMatches ||
         env.COGNI_REPO_SHA !== input.requestedShas[0] ||
         env.DB_POOL_MAX !== String(pools.app) ||

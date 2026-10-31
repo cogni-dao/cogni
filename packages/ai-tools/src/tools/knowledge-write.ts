@@ -15,6 +15,7 @@
  * @public
  */
 
+import { KnowledgeRowSchema } from "@cogni/shared-knowledge-store/contracts";
 import { z } from "zod";
 
 import {
@@ -93,14 +94,7 @@ export const KnowledgeWriteInputSchema = z.object({
 export type KnowledgeWriteInput = z.infer<typeof KnowledgeWriteInputSchema>;
 
 export const KnowledgeWriteOutputSchema = z.object({
-  entry: z.object({
-    id: z.string(),
-    domain: z.string(),
-    title: z.string(),
-    confidencePct: z.number().nullable(),
-    sourceType: z.string(),
-    tags: z.array(z.string()).nullable(),
-  }),
+  entry: KnowledgeRowSchema,
   committed: z.boolean(),
   citationsWritten: z.number(),
   message: z.string(),
@@ -165,14 +159,7 @@ export function createKnowledgeWriteImplementation(
       const linkSuffix =
         citationsWritten > 0 ? `, ${citationsWritten} edge(s) linked` : "";
       return {
-        entry: {
-          id: entry.id,
-          domain: entry.domain,
-          title: entry.title,
-          confidencePct: entry.confidencePct,
-          sourceType: entry.sourceType,
-          tags: entry.tags,
-        },
+        entry: { ...entry },
         committed: true,
         citationsWritten,
         message: `Knowledge '${entry.id}' written and committed (confidence: ${entry.confidencePct ?? CONFIDENCE.DRAFT}%${linkSuffix})`,

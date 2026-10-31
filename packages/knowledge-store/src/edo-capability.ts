@@ -25,34 +25,11 @@ import type {
   RecordOutcomeParams,
   RecordOutcomeResult,
 } from "@cogni/ai-tools";
+import { toKnowledgeRow as toEntry } from "@cogni/shared-knowledge-store";
 import { initializeConfidence } from "./domain/confidence-policy.js";
 import { assertCitationReplay } from "./domain/write-replay.js";
 import type { EdoResolverPort } from "./port/edo-resolver.port.js";
 import type { KnowledgeStorePort } from "./port/knowledge-store.port.js";
-
-function toEntry(k: {
-  id: string;
-  domain: string;
-  entityId?: string | null;
-  title: string;
-  content: string;
-  confidencePct?: number | null;
-  sourceType: string;
-  sourceRef?: string | null;
-  tags?: string[] | null;
-}): KnowledgeEntry {
-  return {
-    id: k.id,
-    domain: k.domain,
-    entityId: k.entityId ?? null,
-    title: k.title,
-    content: k.content,
-    confidencePct: k.confidencePct ?? null,
-    sourceType: k.sourceType,
-    sourceRef: k.sourceRef ?? null,
-    tags: k.tags ?? null,
-  };
-}
 
 /**
  * Create an EdoCapability backed by KnowledgeStorePort + EdoResolverPort.

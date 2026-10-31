@@ -44,6 +44,10 @@ node_id: f97f68f2-8406-4a3b-b5a9-d579b779f19d
 # scripts/ci/render-compute-egress-allowlist.sh and applied by
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:
+  - cidr: 95.217.30.59/32
+    envs: [production]
+    ports: [5432, 5435, 6379, 4000, 7233]
+    comment: Temporary recovery grant for production RHITE lease 1792830679206; egress measured inside the lease at 2026-10-30T20:40:08Z while all five substrate TCP ports timed out (bug.5557). Automatic egress admission remains unbuilt.
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
   - cidr: 95.217.139.183/32

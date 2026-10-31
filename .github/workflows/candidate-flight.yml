@@ -411,76 +411,13 @@ jobs:
           path: ${{ runner.temp }}/resolved-pr-images.json
           retention-days: 1
 
-  reconcile-compute-egress:
-    needs: decide
-    if: needs.decide.result == 'success'
-    runs-on: ubuntu-latest
-    environment: candidate-a
-    steps:
-      - name: Checkout reviewed application source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          ref: ${{ needs.decide.outputs.head_sha }}
-          fetch-depth: 1
-          path: app-src
-
-      - name: Reconcile catalog-derived external compute egress
-        uses: ./app-src/.github/actions/reconcile-compute-egress
-        with:
-          app_source_root: ${{ github.workspace }}/app-src
-          environment: candidate-a
-          fork_domain_root: ${{ vars.FORK_DOMAIN_ROOT }}
-          vm_host: ${{ secrets.VM_HOST }}
-          ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
-
-  # A foreign-custodied lane's substrate (Postgres/Temporal/LiteLLM) lives on the
-  # CONTROL env's VM (production for cogni-dao nodes), not the candidate VM. The
-  # job above hardens the candidate VM only, so the Akash provider NAT hole for
-  # such lanes never reaches the machine their substrate answers from: the leased
-  # app boots but readyz?deep=1 dies on unreachable Postgres/Temporal. Same
-  # lane-vs-control conflation as bug.5216. This twin binds environment:
-  # production for its VM secrets while rendering the candidate-a lane allowlist —
-  # the action already separates those two concerns.
-  reconcile-compute-egress-control:
-    needs: decide
-    if: needs.decide.result == 'success'
-    runs-on: ubuntu-latest
-    # The control env owns the akash lane's substrate VM. Default 'production' (cogni-dao);
-    # an isolated fleet (cogni-test-org) binds its own control env via FLEET_CONTROL_ENV so
-    # this job reads that env's VM_HOST/SSH_DEPLOY_KEY, never production's (subtask.5007).
-    environment: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
-    steps:
-      - name: Checkout reviewed application source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          ref: ${{ needs.decide.outputs.head_sha }}
-          fetch-depth: 1
-          path: app-src
-
-      - name: Reconcile lane egress on the control-env substrate VM
-        uses: ./app-src/.github/actions/reconcile-compute-egress
-        with:
-          app_source_root: ${{ github.workspace }}/app-src
-          environment: candidate-a
-          destination_environment: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
-          fork_domain_root: ${{ vars.FORK_DOMAIN_ROOT }}
-          vm_host: ${{ secrets.VM_HOST }}
-          ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
-
+  # Shared firewall policy is applied only by the explicit infrastructure lane.
   prepare-substrate-deploy-branch:
-    needs:
-      [
-        decide,
-        reconcile-compute-egress,
-        reconcile-compute-egress-control,
-        external-node-preflight,
-      ]
+    needs: [decide, external-node-preflight]
     if: |
       always() &&
       needs.decide.result == 'success' &&
-      needs.decide.outputs.has_deployment_node_targets == 'true' &&
-      needs.reconcile-compute-egress.result == 'success' &&
-      needs.reconcile-compute-egress-control.result == 'success'
+      needs.decide.outputs.has_deployment_node_targets == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -984,12 +921,11 @@ jobs:
           retention-days: 1
 
   external-node-preflight:
-    needs: [decide, reconcile-compute-egress, reconcile-compute-egress-control]
+    needs: decide
     if: |
       always() &&
-      needs.decide.outputs.has_external_compute_node_targets == 'true' &&
-      needs.reconcile-compute-egress.result == 'success' &&
-      needs.reconcile-compute-egress-control.result == 'success'
+      needs.decide.result == 'success' &&
+      needs.decide.outputs.has_external_compute_node_targets == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -2112,7 +2048,6 @@ jobs:
     needs:
       [
         decide,
-        reconcile-compute-egress,
         prepare-substrate-deploy-branch,
         node-substrate,
         assert-substrate,
@@ -2133,7 +2068,6 @@ jobs:
           HAS_DEPLOYMENT_NODE_TARGETS: ${{ needs.decide.outputs.has_deployment_node_targets }}
           HAS_EXTERNAL_COMPUTE_NODE_TARGETS: ${{ needs.decide.outputs.has_external_compute_node_targets }}
           HAS_SUBSTRATE_NODE_TARGETS: ${{ needs.decide.outputs.has_substrate_node_targets }}
-          COMPUTE_EGRESS_RESULT: ${{ needs.reconcile-compute-egress.result }}
           PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT: ${{ needs.prepare-substrate-deploy-branch.result }}
           NODE_SUBSTRATE_RESULT: ${{ needs.node-substrate.result }}
           ASSERT_SUBSTRATE_RESULT: ${{ needs.assert-substrate.result }}
@@ -2142,7 +2076,7 @@ jobs:
           TARGETS_JSON: ${{ needs.decide.outputs.flight_targets_json }}
         run: |
           set -euo pipefail
-          echo "has_targets=${HAS_TARGETS} has_flight_targets=${HAS_FLIGHT_TARGETS} external_compute=${HAS_EXTERNAL_COMPUTE_NODE_TARGETS} compute_egress=${COMPUTE_EGRESS_RESULT} substrate=${HAS_SUBSTRATE_NODE_TARGETS} prepare_substrate_deploy_branch=${PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT} node_substrate=${NODE_SUBSTRATE_RESULT} assert_substrate=${ASSERT_SUBSTRATE_RESULT} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} flight_targets=${TARGETS_JSON}"
+          echo "has_targets=${HAS_TARGETS} has_flight_targets=${HAS_FLIGHT_TARGETS} external_compute=${HAS_EXTERNAL_COMPUTE_NODE_TARGETS} substrate=${HAS_SUBSTRATE_NODE_TARGETS} prepare_substrate_deploy_branch=${PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT} node_substrate=${NODE_SUBSTRATE_RESULT} assert_substrate=${ASSERT_SUBSTRATE_RESULT} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} flight_targets=${TARGETS_JSON}"
           if [ "$HAS_FLIGHT_TARGETS" != "true" ]; then
             # No k8s app-lever targets. Either nothing affected, or the affected
             # set is type:infra only (e.g. litellm) — which deploys via the
@@ -2153,9 +2087,6 @@ jobs:
             else
               DESC="Candidate flight no-op (no affected nodes)"
             fi
-          elif [ "$HAS_DEPLOYMENT_NODE_TARGETS" = "true" ] && [ "$COMPUTE_EGRESS_RESULT" != "success" ]; then
-            STATE=failure
-            DESC="Candidate flight failed before desired-state write (reconcile-compute-egress=${COMPUTE_EGRESS_RESULT})"
           elif [ "$HAS_DEPLOYMENT_NODE_TARGETS" = "true" ] && [ "$PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT" != "success" ]; then
             STATE=failure
             DESC="Candidate flight failed before promotion (prepare-substrate-deploy-branch=${PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT})"

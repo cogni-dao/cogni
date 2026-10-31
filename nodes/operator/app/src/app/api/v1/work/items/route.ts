@@ -82,6 +82,15 @@ export const GET = wrapRouteHandlerWithLogging(
           : undefined,
         limit: limitParam ? Number(limitParam) : undefined,
         cursor: cursorParam ?? undefined,
+        labels: url.searchParams.get("labels")?.split(","),
+        labelPrefix: url.searchParams.get("labelPrefix") ?? undefined,
+        scored: url.searchParams.has("scored")
+          ? url.searchParams.get("scored") === "true"
+            ? true
+            : url.searchParams.get("scored") === "false"
+              ? false
+              : url.searchParams.get("scored")
+          : undefined,
       });
 
       if (!parsed.success) {

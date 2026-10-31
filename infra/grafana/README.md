@@ -30,6 +30,15 @@ resource's checked-in input, not evidence that Git Sync owns the live object.
 
 ## Fleet reliability reconcile
 
+**Synthetic monitoring is disabled by CEO instruction (2026-10-30,
+[task.5396](https://cognidao.org/work/items/task.5396)).** All serve and
+incident recovery check definitions must remain disabled. Re-enabling any
+synthetic check requires explicit cost approval. Existing metrics, logs,
+dashboards, and alert rules remain configured. Serve and recovery views lose
+fresh external probe evidence while checks are stopped; historical data stays
+available under its existing retention policy. Do not apply an older checkout
+that enables checks.
+
 The reviewed [fleet reliability guide](https://cognidao.org/knowledge/fleet-reliability-reconcile-guide) is canonical. Reconcile `cloud-bootstrap/` before `synthetic/`; both use mode-0600, gitignored local state. Grafana remains the durable runtime authority, so state loss cannot interrupt live checks or alerts and must be recovered by adopting stable resource identities before planning.
 
 This reconcile is operator-substrate administration, not a node-developer

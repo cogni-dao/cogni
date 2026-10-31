@@ -4,13 +4,14 @@
 /**
  * Module: `@bootstrap/jobs/syncGovernanceSchedules.job`
  * Purpose: Job module that wires governance schedule sync to the application container.
- * Scope: Syncs governance schedules for the operator's own node and every other routable node under an advisory lock; does not contain business logic (scheduler-core owns orchestration).
+ * Scope: Syncs own governance and foreign Ledger dispatch under an advisory lock; does not contain business logic (scheduler-core owns orchestration).
  * Invariants:
  *   - SINGLE_WRITER: pg_advisory_lock on a reserved (pinned) pool connection prevents concurrent sync runs
  *   - GRANT_VIA_PORT: Uses ensureGrant on ExecutionGrantUserPort, no raw SQL
  *   - SYSTEM_PRINCIPAL: Grant created for COGNI_SYSTEM_PRINCIPAL_USER_ID
- *   - MULTI_NODE_SCHEDULE_ID: each NON-operator node's sync prunes only ITS OWN `governance:{nodeId}:`
- *     schedules; the operator syncs its FLAT `governance:{charter}` schedules.
+ *   - FOREIGN_LEDGER_ONLY: foreign desired writes and prune candidates contain only the exact
+ *     node-scoped Ledger dispatch; sovereign mission/graph schedules remain node-owned.
+ *     The operator syncs its own FLAT `governance:{charter}` schedules.
  *   - OPERATOR_STAYS_ON_COLLECT_EPOCH (story.5001 REGRESSION_BAR): step 1 syncs the operator with
  *     `isOperator=true`, so its LEDGER_INGEST stays on the live FLAT `governance:ledger_ingest`
  *     CollectEpochWorkflow schedule (`ledger-tasks` queue) — byte-for-byte unchanged, NOT rewired
@@ -141,9 +142,8 @@ export async function runGovernanceSchedulesSyncJob(
         );
     };
 
-    // Sync ONE node's governance schedules. Deps are identical across nodes except
-    // `nodeId` + the prune scope (MULTI_NODE_SCHEDULE_ID): a node prunes only its
-    // own `governance:{nodeId}:` schedules, never a sibling node's.
+    // Sync own flat charters or a foreign node's operator-owned Ledger dispatch.
+    // Foreign sovereign charters stay outside both desired writes and prune ownership.
     //
     // `isOperator` (OPERATOR_STAYS_ON_COLLECT_EPOCH, story.5001 REGRESSION_BAR): true ONLY for
     // the operator's own node (step 1). It keeps the operator's LEDGER_INGEST on the live FLAT
@@ -248,8 +248,9 @@ export async function runGovernanceSchedulesSyncJob(
         nodeId,
         scheduleControl: container.scheduleControl,
         // Prune scope:
-        //  - NON-operator node → MULTI_NODE_SCHEDULE_ID: only its own
-        //    `governance:{nodeId}:` schedules (never a sibling's, never the operator's flat).
+        //  - Foreign node → only the exact operator-owned Ledger dispatch.
+        //    Sovereign mission/graph schedules belong to that node's startup; even a
+        //    removed foreign declaration must never make them prune candidates.
         //  - operator (isOperator) → its own FLAT `governance:{charter}` schedules only. It
         //    lists the bare `governance:` prefix (pre-swap behavior) then filters to the flat
         //    (legacy, 2-segment) ids, so it prunes a removed operator charter WITHOUT ever
@@ -260,10 +261,13 @@ export async function runGovernanceSchedulesSyncJob(
                 await container.scheduleControl.listScheduleIds("governance:");
               return all.filter(isLegacyGovernanceScheduleId);
             }
-          : () =>
-              container.scheduleControl.listScheduleIds(
+          : async () => {
+              const all = await container.scheduleControl.listScheduleIds(
                 governancePrunePrefix(nodeId)
-              ),
+              );
+              const collectSid = governanceScheduleId(nodeId, "LEDGER_INGEST");
+              return all.filter((id) => id === collectSid);
+            },
         disableSchedule,
         log,
       });
@@ -316,7 +320,15 @@ export async function runGovernanceSchedulesSyncJob(
     for (const { nodeId, slug, config } of nodeConfigs) {
       if (nodeId === operatorNodeId) continue; // OPERATOR_NOT_DOUBLE_COLLECTED
       try {
-        add(await syncFor(nodeId, config, false));
+        // Foreign graph/mission declarations are reconciled only by sovereign startup.
+        // Match the router's case-insensitive Ledger classification.
+        const foreignLedgerConfig = {
+          ...config,
+          schedules: config.schedules.filter(
+            ({ charter }) => charter.toUpperCase() === "LEDGER_INGEST"
+          ),
+        };
+        add(await syncFor(nodeId, foreignLedgerConfig, false));
 
         // DEPLOY_COLLECT: kick each routable node's epoch-collect dispatch once per sync so a
         // node's ledger is populated promptly instead of waiting up to a full cron period. This

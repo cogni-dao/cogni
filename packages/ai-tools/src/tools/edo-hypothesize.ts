@@ -15,6 +15,7 @@
  * @public
  */
 
+import { KnowledgeRowSchema } from "@cogni/shared-knowledge-store/contracts";
 import { z } from "zod";
 
 import type { EdoCapability } from "../capabilities/edo";
@@ -87,13 +88,7 @@ export const EdoHypothesizeInputSchema = z.object({
 export type EdoHypothesizeInput = z.infer<typeof EdoHypothesizeInputSchema>;
 
 export const EdoHypothesizeOutputSchema = z.object({
-  entry: z.object({
-    id: z.string(),
-    domain: z.string(),
-    title: z.string(),
-    confidencePct: z.number().nullable(),
-    sourceType: z.string(),
-  }),
+  entry: KnowledgeRowSchema,
   evaluateAt: z.string(),
   resolutionStrategy: z.string().nullable(),
   evidenceCitationCount: z.number(),
@@ -164,13 +159,7 @@ export function createEdoHypothesizeImplementation(
       });
 
       return {
-        entry: {
-          id: entry.id,
-          domain: entry.domain,
-          title: entry.title,
-          confidencePct: entry.confidencePct,
-          sourceType: entry.sourceType,
-        },
+        entry: { ...entry },
         evaluateAt: input.evaluateAt,
         resolutionStrategy:
           input.resolutionStrategy === "manual" ||

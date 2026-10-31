@@ -7,7 +7,7 @@
  * Scope: Unit test with every IO dep mocked; does not touch Temporal, Postgres, GitHub, or the catalog registry.
  * Invariants:
  *   - SELF_SCOPE_NEEDS_NO_REGISTRY: "self" never calls resolveRoutableNodeGovernanceConfigs
- *   - ALL_UNCHANGED: default/"all" syncs the operator then every routable node (operator skipped)
+ *   - FOREIGN_LEDGER_ONLY: foreign desired writes and prune candidates exclude sovereign charters
  *   - LOCK_RACE_RETRIABLE: throwIfLocked surfaces a held advisory lock as an error
  * Side-effects: none
  * Links: src/bootstrap/jobs/syncGovernanceSchedules.job.ts
@@ -24,6 +24,15 @@ const mocks = vi.hoisted(() => ({
   lockAcquired: { value: true },
   describeSchedule: vi.fn(),
   triggerSchedule: vi.fn(),
+  listScheduleIds: vi.fn(),
+  ownConfig: {
+    schedules: [] as Array<{
+      charter: string;
+      cron: string;
+      timezone: string;
+      entrypoint: string;
+    }>,
+  },
 }));
 
 vi.mock("@cogni/scheduler-core", async (importOriginal) => ({
@@ -37,7 +46,7 @@ vi.mock("@/bootstrap/jobs/resolveRoutableNodeGovernanceConfigs", () => ({
 }));
 
 vi.mock("@/shared/config", () => ({
-  getGovernanceConfig: () => ({ schedules: [] }),
+  getGovernanceConfig: () => mocks.ownConfig,
   getNodeId: () => OPERATOR_NODE_ID,
 }));
 
@@ -69,7 +78,7 @@ vi.mock("@/bootstrap/container", () => ({
     scheduleControl: {
       describeSchedule: mocks.describeSchedule,
       triggerSchedule: mocks.triggerSchedule,
-      listScheduleIds: vi.fn().mockResolvedValue([]),
+      listScheduleIds: mocks.listScheduleIds,
     },
   }),
 }));
@@ -90,6 +99,8 @@ const EMPTY = {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.lockAcquired.value = true;
+  mocks.ownConfig.schedules = [];
+  mocks.listScheduleIds.mockResolvedValue([]);
   mocks.syncGovernanceSchedules.mockResolvedValue({
     ...EMPTY,
     created: ["governance:work_prioritizer"],
@@ -127,6 +138,71 @@ describe("runGovernanceSchedulesSyncJob scope", () => {
       ["node-b", false],
     ]);
     expect(summary.created).toBe(2);
+  });
+
+  it("limits foreign desired writes and prune ownership to Ledger while retaining own charters", async () => {
+    const entry = (charter: string) => ({
+      charter,
+      cron: "0 * * * *",
+      timezone: "UTC",
+      entrypoint: "DECIDE",
+    });
+    mocks.ownConfig.schedules = [entry("HEARTBEAT"), entry("LEDGER_INGEST")];
+    const ledger = entry("ledger_ingest");
+    mocks.resolveRoutableNodeGovernanceConfigs.mockResolvedValue([
+      {
+        nodeId: "node-b",
+        slug: "b",
+        config: {
+          schedules: [
+            entry("MISSION_DECIDE"),
+            entry("WORK_PRIORITIZER"),
+            ledger,
+          ],
+        },
+      },
+    ]);
+    mocks.listScheduleIds.mockResolvedValue([
+      "governance:heartbeat",
+      "governance:ledger_ingest",
+      "governance:retired_charter",
+      "governance:node-b:mission_decide",
+      "governance:node-b:work_prioritizer",
+      "governance:node-b:ledger_ingest",
+      "governance:node-b:ledger_ingest_extra",
+      "governance:node-c:ledger_ingest",
+    ]);
+    await runGovernanceSchedulesSyncJob();
+
+    const [own, foreign] = mocks.syncGovernanceSchedules.mock.calls;
+    expect(own?.[0]).toBe(mocks.ownConfig);
+    expect(await own?.[1].listGovernanceScheduleIds()).toEqual([
+      "governance:heartbeat",
+      "governance:ledger_ingest",
+      "governance:retired_charter",
+    ]);
+    expect.soft(foreign?.[0].schedules).toEqual([ledger]);
+    expect
+      .soft(await foreign?.[1].listGovernanceScheduleIds())
+      .toEqual(["governance:node-b:ledger_ingest"]);
+    expect(mocks.listScheduleIds).toHaveBeenLastCalledWith(
+      "governance:node-b:"
+    );
+
+    // Even with no desired Ledger, its stale dispatch remains a prune candidate.
+    mocks.resolveRoutableNodeGovernanceConfigs.mockResolvedValue([
+      {
+        nodeId: "node-b",
+        slug: "b",
+        config: { schedules: [entry("MISSION_DECIDE")] },
+      },
+    ]);
+    await runGovernanceSchedulesSyncJob();
+    const withoutLedger = mocks.syncGovernanceSchedules.mock.calls[3];
+    expect(withoutLedger?.[0].schedules).toEqual([]);
+    expect(await withoutLedger?.[1].listGovernanceScheduleIds()).toEqual([
+      "governance:node-b:ledger_ingest",
+    ]);
   });
 
   it('explicit "all" matches the default', async () => {

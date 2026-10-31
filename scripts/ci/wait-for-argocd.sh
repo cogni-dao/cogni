@@ -4,8 +4,7 @@
 #
 # wait-for-argocd.sh — Block until all ArgoCD Applications for an environment
 # have reconciled to EXPECTED_SHA and are Healthy. Called between promote-k8s
-# and deploy-infra so that k8s resources are fully rolled out before
-# deploy-infra mutates secrets or restarts pods.
+# and downstream readiness, ReplicaSet availability and public identity checks.
 #
 # Correctness contract: we check `status.sync.revision == EXPECTED_SHA` and
 # `status.health.status == Healthy`, not `status.sync.status == Synced`. The
@@ -30,8 +29,8 @@
 # caught up to EXPECTED_SHA, we (1) request a hard git refresh on the
 # Application. After task.0370 step 1 retired Argo PreSync Job hooks, the
 # refresh nudge is the only kick we need — no Job to babysit, no stale hook
-# operation to clear. New-RS availability check (rollout_check) + downstream
-# verify-buildsha.sh (`.buildSha == expected`) are the real gates.
+# operation to clear. Downstream wait-for-in-cluster-services.sh owns new-RS
+# availability; verify-buildsha.sh proves `.buildSha == expected`.
 #
 # Usage: wait-for-argocd.sh
 # Env:
@@ -228,56 +227,6 @@ deployment_sync_ready() {
   [ "$status" = "Synced" ]
 }
 
-# Assert the Deployment's new ReplicaSet has reached desired count and is
-# Available. Called AFTER sync.revision + Healthy. Closes bug.0326's actual
-# concern (new pods serving new image) without `kubectl rollout status`'s
-# stricter "old RS is fully gone" wait — that condition is not part of the
-# contract and routinely false-fails on operator when an old pod terminates
-# slowly while the new RS is already serving traffic. verify-buildsha.sh
-# (downstream gate) provides the canonical "/version.buildSha == expected"
-# proof per Axiom 19.
-rollout_check() {
-  local app_name="$1"
-  local deployment namespace spec_replicas updated available observed generation revision new_available
-
-  case "$(echo "$app_name" | sed -E "s/^${DEPLOY_ENVIRONMENT}-//")" in
-    scheduler-worker|*-migrator|migrator)
-      echo "    ⚠️  ${app_name}: non-HTTP app — skipping new-RS availability check (bug.0371)"
-      return 0
-      ;;
-  esac
-
-  deployment=$(resolve_deployment "$app_name")
-  if [ -z "$deployment" ]; then
-    echo "    ⚠️  ${app_name}: no Deployment mapping — skipping new-RS availability check"
-    return 0
-  fi
-  namespace="cogni-${DEPLOY_ENVIRONMENT}"
-
-  read -r spec_replicas updated available observed generation revision < <(
-    kubectl -n "$namespace" get deployment "$deployment" \
-      -o jsonpath='{.spec.replicas} {.status.updatedReplicas} {.status.availableReplicas} {.status.observedGeneration} {.metadata.generation} {.metadata.annotations.deployment\.kubernetes\.io/revision}' 2>/dev/null \
-      || true
-  )
-  new_available="$(kubectl -n "$namespace" get rs -o json 2>/dev/null | jq -r \
-    --arg deployment "$deployment" \
-    --arg revision "${revision:-}" \
-    '[.items[]
-      | select(any(.metadata.ownerReferences[]?; .kind == "Deployment" and .name == $deployment))
-      | select(.metadata.annotations["deployment.kubernetes.io/revision"] == $revision)
-      | (.status.availableReplicas // 0)
-    ] | max // 0' 2>/dev/null || printf '0')"
-
-  echo "    ↻ ${app_name}: new-RS state — desired=${spec_replicas:-?} updated=${updated:-0} deploymentAvailable=${available:-0} newRsAvailable=${new_available:-0} revision=${revision:-?}"
-
-  if [ "${observed:-0}" -ge "${generation:-0}" ] \
-     && [ "${updated:-0}" -ge "${spec_replicas:-1}" ] \
-     && [ "${new_available:-0}" -ge "${spec_replicas:-1}" ]; then
-    return 0
-  fi
-  return 1
-}
-
 # Surface the actionable cause when a rollout fails. Without this, CI logs
 # only say "stale ReplicaSet still present" — investigators must SSH into
 # the VM to discover which container crashed and why. We have kubectl right
@@ -321,8 +270,8 @@ dump_pod_diagnostics() {
 # Deployment initContainers. The pre-sync hook-Job babysitting (delete_stale_hook_jobs,
 # clear_stale_missing_hook_operation) is gone with the hooks. The kick that
 # remains is just a hard-refresh annotation poke; if Argo is in Running/phase=Running
-# during a rolling update, rollout_check (new-RS available) + downstream
-# verify-buildsha.sh (`.buildSha == expected`) are the real gates.
+# during a rolling update, downstream wait-for-in-cluster-services.sh owns
+# new-RS availability; verify-buildsha.sh proves `.buildSha == expected`.
 
 # Prefer status.sync.revision; fall back to last successful operation revision
 # (some Argo states leave sync.revision empty while a sync completed).
@@ -369,10 +318,9 @@ wait_for_app() {
       deployment_status=$(get_deployment_resource_sync_status "$app_name")
     fi
 
-    # Decide whether to proceed to the new-RS availability check.
     # Only accept: Healthy, OR Progressing when sync operation completed.
-    # rollout_check (new-RS available) is the gate — health is the preliminary filter.
-    can_proceed_to_rollout_check() {
+    # ReplicaSet availability is checked by wait-for-in-cluster-services.sh.
+    app_health_ready() {
       local health="$1"
       local phase="$2"
       [ "$health" = "Healthy" ] && return 0
@@ -381,26 +329,10 @@ wait_for_app() {
     }
 
     if rev_includes_expected "$REV" "$EXPECTED_SHA" &&
-       can_proceed_to_rollout_check "$HEALTH" "$SYNC_PHASE" &&
+       app_health_ready "$HEALTH" "$SYNC_PHASE" &&
        deployment_sync_ready "$deployment" "$deployment_status"; then
-      # bug.0326: Argo "Healthy" + sync.revision match are Application-level
-      # signals that fire while the old ReplicaSet's pods may still be Ready.
-      # rollout_check asserts the *new* RS is available at desired count;
-      # verify-buildsha.sh downstream proves /version.buildSha matches per
-      # Axiom 19. We deliberately do NOT wait for the old RS to fully drain
-      # — that's not part of the contract and false-fails on slow terminations.
-      if rollout_check "$app_name"; then
-        echo "  ✅ ${app_name} at ${REV:0:8} (Healthy + new RS available)"
-        return 0
-      fi
-      # rollout_check failed: new ReplicaSet exists but updated/available
-      # replicas haven't caught up to desired yet. On a first-deploy or cold
-      # image-cache pull, this window can be 10-60s — keep polling inside the
-      # outer ARGOCD_TIMEOUT window instead of failing immediately. Bare
-      # rollout_check stderr line above is the per-tick status; no extra
-      # message needed here.
-      sleep 10
-      continue
+      echo "  ✅ ${app_name} at ${REV:0:8} (acceptable health + Deployment Synced)"
+      return 0
     fi
 
     if [ -n "$deployment" ]; then
@@ -411,7 +343,7 @@ wait_for_app() {
 
     if [ $SECONDS -ge "$next_kick" ] &&
        { ! rev_includes_expected "$REV" "$EXPECTED_SHA" ||
-         ! can_proceed_to_rollout_check "$HEALTH" "$SYNC_PHASE" ||
+         ! app_health_ready "$HEALTH" "$SYNC_PHASE" ||
          ! deployment_sync_ready "$deployment" "$deployment_status"; }; then
       kick_count=$((kick_count + 1))
       echo "    ⚡ ${app_name}: Argo hard-refresh kick #${kick_count}"
