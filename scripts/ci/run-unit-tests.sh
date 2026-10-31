@@ -9,7 +9,9 @@
 #
 #     ROOT config (`vitest run`) — tests/** + packages/*/tests + services/*/tests
 #       (ci-invariants, catalog SSoT specs, arch, all package/service unit tests).
-#       ALWAYS runs full. Many of these are coupled to their triggers by
+#       Runs full except native specs when CI_NATIVE_SPLIT=true: the workflow's
+#       separate native lane and terminal unit gate own those atomically.
+#       Ordinary local discovery remains full. Many tests couple to triggers by
 #       filesystem read (readFileSync/glob of catalog/manifests/docs), NOT by
 #       import — invisible to any import-graph affected selector — so running the
 #       full root suite on every PR is the deliberate safety floor. It's ~89s.
@@ -30,6 +32,7 @@
 #
 # Env: CI_EVENT      — github.event_name (pull_request | merge_group | push)
 #      TURBO_SCM_BASE — affected base ref (default origin/main)
+#      CI_NATIVE_SPLIT — true only in the CI graph with required native aggregation
 
 set -euo pipefail
 
@@ -38,7 +41,11 @@ BASE="${TURBO_SCM_BASE:-origin/main}"
 
 run_root() {
   echo "::group::run-unit-tests: root config (always full)"
-  pnpm exec vitest run
+  if [ "${CI_NATIVE_SPLIT:-false}" = true ]; then
+    pnpm exec vitest run --exclude 'tests/ci-invariants/native/**'
+  else
+    pnpm exec vitest run
+  fi
   echo "::endgroup::"
 }
 
