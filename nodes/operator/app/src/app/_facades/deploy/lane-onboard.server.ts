@@ -11,15 +11,17 @@
  *   PREVIOUS render (for Akash, a spent `leaseGeneration` → `identity_conflict`) against a
  *   database that was never created. This closes the verb: on merge, dispatch the reconcile
  *   the lane actually needs.
- * Scope: Webhook-triggered facade, sibling of `node-preview-promote.server`. Matches the verb's
- *   own branch, reads the merged catalog, and delegates to EXISTING deploy-plane dispatchers.
+ * Scope: Verified-webhook facade, sibling of `node-preview-promote.server`. Binds signed operation
+ *   history to the event's repository/PR/head/merge and delegates to EXISTING deploy-plane dispatchers.
  *   It owns no promotion semantics of its own and creates no new render path.
  * Invariants:
  *   - VERB_BRANCH_ONLY: acts only on a merged PR whose head ref is the verb's own
  *     `cogni-operator/node-env-<slug>-<env>` (github-repo-write.ts `nodeEnvBranch`) on the
  *     parent monorepo. Every other merge — the overwhelming majority — is a no-op.
- *   - CATALOG_AFTER_MERGE_DECIDES: ADD vs REMOVE is read from the MERGED catalog `envs:`, never
- *     inferred from the branch name (both actions use the same branch). A remove dispatches the
+ *   - VERIFIED_OPERATION: closed/merged classification is separate from open-PR authorization.
+ *     Signed-head-parent and actual merge-parent deltas bind repair/add/remove identity.
+ *   - CATALOG_AFTER_MERGE_DECIDES: signed action must agree with immutable merged membership.
+ *     A remove dispatches the
  *     narrow prune workflow against the lane's control cluster; it never renders/promotes the
  *     lane that just left (which would resurrect it).
  *   - SUBSTRATE_FOLLOWS_THE_CUSTODIAN: when `controlEnvFor(lane) !== lane` the lane's database,
@@ -30,12 +32,14 @@
  *   - REPLAY_NEVER_ADVANCES (bug.5237): every dispatch here renders an env AT THE SHA THAT ENV IS
  *     ALREADY RUNNING — `readNodeDeployPin(env)`, the pin promote/flight wrote on
  *     `deploy/<env>-<slug>`. The catalog `source_sha` is BIRTH-ONLY metadata and is used only when
- *     an env has no pin yet, exactly as `promoteNode` has always documented (bug.5043 retired it
+ *     a verified first add has a proven missing own pin, as `promoteNode` has documented (bug.5043 retired it
  *     as a deploy authority). Reading it otherwise made a lane add on ANY env silently revert
  *     PRODUCTION to its birth sha: adding toks5 to candidate-a on 2026-09-23 re-promoted
  *     toks5.cognidao.org from the proven d6bc40d1 back to 7c9b1e08, twice. Substrate still gets
  *     created; the app never moves. Advancing an app stays the deploy verb's job, behind its
  *     own human gate — the same line `node-preview-promote.server` refuses to cross.
+ *   - BOTH_PINS_BEFORE_EFFECTS: repair never falls back to birth; missing/invalid/unreadable
+ *     own pins refuse with zero prepare/flight/promote calls. Later failures retain completed count.
  *   - NAME_AND_PATH_FOLLOW_THE_LANE: the render is dispatched for the LANE — candidate-a through
  *     the flight lever, preview/production through the promote lever. One existing dispatcher
  *     each; no fourth trigger (spec.node-ci-cd-contract § Lane vs control env).
@@ -79,6 +83,8 @@ interface LaneOnboardContext {
    * `main` has already dropped that cell (see the REMOVE path). Null when the webhook omits it.
    */
   readonly baseSha: string | null;
+  readonly headSha: string | null;
+  readonly mergeSha: string | null;
 }
 
 /**
@@ -114,8 +120,9 @@ function extractLaneOnboard(
   // The verb only ever opens its PR on the parent monorepo (CATALOG_IS_SSOT). A same-named
   // branch on a node's own repo is not this operation.
   if (
-    repoOwner !== env.NODE_SUBMODULE_PARENT_OWNER ||
-    repoName !== env.NODE_SUBMODULE_PARENT_REPO
+    repoOwner.toLowerCase() !==
+      env.NODE_SUBMODULE_PARENT_OWNER?.toLowerCase() ||
+    repoName.toLowerCase() !== env.NODE_SUBMODULE_PARENT_REPO?.toLowerCase()
   ) {
     return null;
   }
@@ -130,6 +137,12 @@ function extractLaneOnboard(
     slug: match[1],
     lane: match[2] as Lane,
     baseSha: typeof baseSha === "string" ? baseSha : null,
+    headSha:
+      typeof (pr.head as Record<string, unknown>)?.sha === "string"
+        ? String((pr.head as Record<string, unknown>).sha)
+        : null,
+    mergeSha:
+      typeof pr.merge_commit_sha === "string" ? pr.merge_commit_sha : null,
   };
 }
 
@@ -201,35 +214,62 @@ async function onboardLane(
     slug: ctx.slug,
     env: ctx.lane,
     prNumber: ctx.prNumber,
+    repository: `${ctx.owner}/${ctx.repo}`,
+    headSha: ctx.headSha,
+    mergeSha: ctx.mergeSha,
   };
+  let dispatched = 0;
+  const completed: {
+    env: string;
+    sourceSha: string;
+    runId?: number;
+    workflowUrl?: string;
+  }[] = [];
 
   try {
     const deployPlane = createOperatorDeployPlane(env);
-    const catalogText = await deployPlane.fetchFileText({
+    if (
+      !ctx.headSha ||
+      !ctx.mergeSha ||
+      !/^[0-9a-f]{40}$/.test(ctx.headSha) ||
+      !/^[0-9a-f]{40}$/.test(ctx.mergeSha)
+    )
+      throw Object.assign(new Error("Missing verified operation identity"), {
+        code: "repair_context_unavailable",
+      });
+    const operation = await deployPlane.classifyEnvManagerPr({
       owner: ctx.owner,
       repo: ctx.repo,
-      path: `infra/catalog/${ctx.slug}.yaml`,
-      ref: "main",
+      prNumber: ctx.prNumber,
+      mergedOperation: {
+        repository: `${ctx.owner}/${ctx.repo}`,
+        prNumber: ctx.prNumber,
+        headSha: ctx.headSha,
+        mergeSha: ctx.mergeSha,
+      },
     });
-    if (!catalogText) {
-      log.info(
-        {
-          ...base,
-          dispatched: 0,
-          outcome: "skipped",
-          errorCode: "catalog_absent",
-        },
-        EVENT_NAMES.LANE_ONBOARD_COMPLETE
-      );
-      return;
-    }
-
+    if (
+      !operation.isEnvManagerPr ||
+      operation.targetNodeRef !== ctx.slug ||
+      operation.environment !== ctx.lane ||
+      !operation.action ||
+      !operation.headCatalog ||
+      !operation.baseCatalog
+    )
+      throw Object.assign(new Error("Merged operation cannot be verified"), {
+        code: operation.errorCode ?? "repair_context_conflict",
+      });
+    const catalogText = operation.headCatalog;
     const row = parseYaml(catalogText) as CatalogRow;
     // CATALOG_AFTER_MERGE_DECIDES — a REMOVE leaves the lane out of `envs:`. The generated
     // AppSet disappeared from git, but the live per-node AppSet is not guaranteed to be watched
     // by a main-tracking keystone (observed test-org #97: the paid lease remained orphaned).
     // Dispatch the one-object prune against the control cluster; never promote a retired lane.
     if (!row.envs?.includes(ctx.lane)) {
+      if (operation.action !== "remove")
+        throw Object.assign(new Error("Operation membership conflicts"), {
+          code: "repair_context_conflict",
+        });
       // CONTROL_ENV_FOLLOWS_THE_REMOVED_LANE (bug.5141 orphan-lease): resolve the control env from
       // the REMOVED lane's OWN provider, NOT from whatever providers survive in the post-merge
       // catalog. The merge dropped this lane's `deployment_provider.<lane>` cell, so scanning the
@@ -238,7 +278,10 @@ async function onboardLane(
       // removed cell from the PRE-MERGE catalog (`base.sha`), exactly as the CI twin resolves a
       // REMOVE from the base catalog. If it cannot be read, default to `akash` so the prune targets
       // the custodian rather than silently leaking a lease.
-      const provider = await removedLaneProvider(ctx, deployPlane);
+      const provider = await removedLaneProvider(
+        { ...ctx, baseSha: operation.parentSha ?? ctx.baseSha },
+        deployPlane
+      );
       const resolvedControlEnv = controlEnvFor(
         ctx.lane,
         provider,
@@ -281,18 +324,71 @@ async function onboardLane(
     // The FLEET CONTROL ENV owns the akash lane's control cluster (bug.5204/bug.5235): on an
     // isolated fleet (FLEET_CONTROL_ENV=candidate-a) the custodian is candidate-a, not production.
     const controlEnv = controlEnvFor(ctx.lane, provider, env.FLEET_CONTROL_ENV);
-    // REPLAY_NEVER_ADVANCES — an env renders at the sha it is already running. The catalog row is
-    // the BIRTH pin, used only for an env that has never deployed (no `deploy/<env>-<slug>` pin).
-    const birthSha = row.source_sha;
-    const shaFor = async (renderEnv: string): Promise<string | undefined> =>
-      (await deployPlane.readNodeDeployPin({
-        parentOwner: ctx.owner,
-        parentRepo: ctx.repo,
-        env: renderEnv,
-        slug: ctx.slug,
-      })) ?? birthSha;
-
-    let dispatched = 0;
+    if (operation.action !== "repair" && operation.action !== "add")
+      throw Object.assign(new Error("Unknown activation context"), {
+        code: "repair_context_conflict",
+      });
+    if (
+      controlEnv !== "candidate-a" &&
+      controlEnv !== "preview" &&
+      controlEnv !== "production"
+    )
+      throw Object.assign(new Error("Invalid control environment"), {
+        code: "invalid_control_environment",
+      });
+    if (!row.node_id)
+      throw Object.assign(new Error("Missing node identity"), {
+        code: "repair_context_conflict",
+      });
+    // Resolve BOTH own pins before any external effect. A missing pin never establishes birth.
+    const renderEnvs = [...new Set<Lane>([controlEnv, ctx.lane])];
+    const pins = await Promise.allSettled(
+      renderEnvs.map(async (renderEnv) => {
+        const subject = {
+          parentOwner: ctx.owner,
+          parentRepo: ctx.repo,
+          env: renderEnv,
+          slug: ctx.slug,
+        };
+        let sha: string | null = null;
+        if (operation.action === "repair")
+          sha = await deployPlane.readNodeDeployPin(subject);
+        else {
+          const pin = await deployPlane.readNodeDeployPinState(subject);
+          if (pin.kind === "ok") sha = pin.sha;
+          else if (
+            pin.kind === "missing" &&
+            renderEnv === ctx.lane &&
+            !(
+              parseYaml(operation.baseCatalog ?? "") as CatalogRow
+            ).envs?.includes(ctx.lane)
+          )
+            sha = row.source_sha ?? null;
+        }
+        if (!sha || !/^[0-9a-f]{40}$/i.test(sha))
+          throw new Error("missing_or_invalid");
+        return sha;
+      })
+    );
+    const sources = new Map<Lane, string>();
+    for (let i = 0; i < pins.length; i++) {
+      const pin = pins[i];
+      const renderEnv = renderEnvs[i];
+      if (!pin || !renderEnv || pin.status === "rejected")
+        throw Object.assign(new Error("Required own deploy pin unavailable"), {
+          code:
+            operation.action === "repair"
+              ? "repair_pin_unavailable"
+              : "activation_pin_unavailable",
+          renderEnv,
+          cause:
+            pin?.status === "rejected" ? "unavailable_or_invalid" : "missing",
+        });
+      sources.set(renderEnv, pin.value);
+    }
+    const custodianSha =
+      controlEnv !== ctx.lane ? sources.get(controlEnv) : undefined;
+    const laneSha = sources.get(ctx.lane);
 
     // SUBSTRATE_FOLLOWS_THE_CUSTODIAN — dispatch the custodian's own run first so its
     // `run-node-substrate.sh <controlEnv> <slug>` lane loop creates this lane's database,
@@ -311,16 +407,21 @@ async function onboardLane(
           slug: ctx.slug,
           sourceSha,
         });
-        await deployPlane.dispatchNodeRefCandidateFlight({
+        const result = await deployPlane.dispatchNodeRefCandidateFlight({
           owner: ctx.owner,
           repo: ctx.repo,
           slug: prepared.slug,
           sourceSha: prepared.sourceSha,
         });
         dispatched += 1;
+        completed.push({
+          env: renderEnv,
+          sourceSha,
+          workflowUrl: result.workflowUrl,
+        });
         return;
       }
-      await deployPlane.promoteNode({
+      const result = await deployPlane.promoteNode({
         env: renderEnv,
         parentOwner: ctx.owner,
         parentRepo: ctx.repo,
@@ -328,18 +429,16 @@ async function onboardLane(
         sourceSha,
       });
       dispatched += 1;
+      completed.push({
+        env: renderEnv,
+        sourceSha,
+        ...(result.runId ? { runId: result.runId } : {}),
+        ...(result.workflowUrl ? { workflowUrl: result.workflowUrl } : {}),
+      });
     };
 
-    const custodianSha =
-      controlEnv !== ctx.lane ? await shaFor(controlEnv) : undefined;
-    if (controlEnv !== ctx.lane && custodianSha) {
-      await dispatchReplay(controlEnv as Lane, custodianSha);
-    }
-
-    // NAME_AND_PATH_FOLLOW_THE_LANE — render the lane's own desired state. candidate-a renders
-    // through the flight lever (the same prepare→dispatch pair POST /vcs/flight uses, so the
-    // GHCR preflight is not re-derived here); preview and production through the promote lever.
-    const laneSha = await shaFor(ctx.lane);
+    if (controlEnv !== ctx.lane && custodianSha)
+      await dispatchReplay(controlEnv, custodianSha);
     if (laneSha) await dispatchReplay(ctx.lane, laneSha);
 
     log.info(
@@ -350,6 +449,7 @@ async function onboardLane(
         ...(custodianSha ? { custodianSha8: custodianSha.slice(0, 8) } : {}),
         ...(laneSha ? { laneSha8: laneSha.slice(0, 8) } : {}),
         dispatched,
+        completed,
         outcome: dispatched > 0 ? "dispatched" : "skipped",
       },
       EVENT_NAMES.LANE_ONBOARD_COMPLETE
@@ -358,7 +458,16 @@ async function onboardLane(
     log.error(
       {
         ...base,
-        dispatched: 0,
+        dispatched,
+        completed,
+        renderEnv:
+          error && typeof error === "object" && "renderEnv" in error
+            ? error.renderEnv
+            : undefined,
+        pinCause:
+          error && typeof error === "object" && "cause" in error
+            ? error.cause
+            : undefined,
         outcome: "error",
         errorCode:
           error && typeof error === "object" && "code" in error

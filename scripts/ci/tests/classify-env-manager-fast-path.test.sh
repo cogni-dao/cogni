@@ -318,4 +318,43 @@ mkdir -p "$queue_repo"
 [[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/queue.out")" == true ]]
 [[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/queue-extra.out")" == merge-group-path-mismatch ]]
 
+# Signed terminal repair is recognized, but permanently opts into full CI/build.
+repository='Cogni-DAO/cogni'
+bot_login='cogni-operator[bot]'
+bot_id=265189974
+printf '%s\n' 'infra/catalog/blue.yaml' > "$paths_file"
+repair_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
+cat > "$base_catalog" <<'YAML'
+name: blue
+node_id: 11111111-1111-4111-8111-111111111111
+envs: [candidate-a, preview, production]
+lease_generation:
+  candidate-a: 2
+  preview: 3
+  production: 6
+compute_egress_cidrs: [{cidr: 1.2.3.4/32, ports: [5432], envs: [preview]}]
+YAML
+sed 's/preview: 3/preview: 4/' "$base_catalog" > "$head_catalog"
+repair_message="fix(node): repair blue preview
+
+Cogni-Change-Type: cogni.env-manager.v1
+Cogni-Node: blue
+Cogni-Environment: preview
+Cogni-Action: repair
+Cogni-Changed-Paths-SHA256: $repair_hash"
+write_fixtures "$repair_message"
+run_classifier "$tmpdir/repair.out"
+[[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/repair.out")" == false ]]
+[[ "$(awk -F= '$1=="claimed"{v=$2} END{print v}' "$tmpdir/repair.out")" == false ]]
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/repair.out")" == verified-repair-full-ci ]]
+# Egress drift and invalid signature remain reserved-claim refusals, never a skip grant.
+sed 's/5432/5433/' "$head_catalog" > "$tmpdir/repair-bad.yaml"
+FAST_PATH_TEST_HEAD_CATALOG="$tmpdir/repair-bad.yaml" run_classifier "$tmpdir/repair-egress.out"
+[[ "$(awk -F= '$1=="claimed"{v=$2} END{print v}' "$tmpdir/repair-egress.out")" == true ]]
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/repair-egress.out")" == invalid-repair-delta ]]
+jq '.commit.verification.verified=false' "$tmpdir/commit.json" > "$tmpdir/repair-unsigned.json"
+mv "$tmpdir/repair-unsigned.json" "$tmpdir/commit.json"
+run_classifier "$tmpdir/repair-unsigned.out"
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/repair-unsigned.out")" == invalid-commit-signature ]]
+
 echo "classify-env-manager-fast-path tests passed"

@@ -56,8 +56,9 @@
  *     namespace, matching canonical rendering of absent membership (bug.5536). The CLOSE of the paid lease is
  *     deliberately NOT here: Argo prunes the AppSet → Crossplane observes REMOVE → the actuator
  *     deletes the deployment. This plan only makes the removal COMPLETE in git.
- *   - IDEMPOTENT — requesting the state that already holds (env already present on add / already absent on
- *     remove) yields an EMPTY op list (`{ kind: "no_changes" }`), so the adapter opens no PR.
+ *   - IDEMPOTENT — an unchanged membership request yields no operations unless an internal,
+ *     policy-qualified repair generation is supplied for an already-present lane. Repair changes
+ *     only that explicit numeric token and renders no membership artifacts.
  *   - DELETE_VIA_SHA_NULL — file removals are emitted as `{ op: "delete", path }`; the adapter maps these
  *     to `{ sha: null }` tree entries (delete-from-base_tree).
  *   - PLACEMENT_IS_A_LANE_SWITCH (story.5016 T5) — `buildPlacementPlan` flips WHICH lane serves an
@@ -208,7 +209,7 @@ export interface EnvPlanCurrent {
 export type EnvDeltaResult =
   | { readonly kind: "no_changes" }
   | {
-      readonly kind: "add" | "remove";
+      readonly kind: "add" | "remove" | "repair";
       readonly ops: readonly EnvPlanOp[];
       /** The node's non-empty env-set AFTER the mutation. */
       readonly nextEnvs: readonly NodeFormationEnv[];
@@ -329,6 +330,8 @@ export function buildEnvDeltaPlan(input: {
   readonly current: EnvPlanCurrent;
   /** Explicit akash lease replacement counter for the added env (defaults 0 — a fresh lease). */
   readonly leaseGeneration?: number | undefined;
+  /** Internal policy-qualified existing-lane repair, never caller input. */
+  readonly repairGeneration?: number | undefined;
   /**
    * THE FLEET CONTROL ENV (`FLEET_CONTROL_ENV`, `controlEnvFor`) — the env whose cluster reconciles
    * an akash lane, so the env whose `appsets/<control-env>/` dir the AppSet is written into/deleted
@@ -351,6 +354,54 @@ export function buildEnvDeltaPlan(input: {
 
   const currentEnvs = parseCatalogEnvs(current.catalog);
   const activityEnv = parseCatalogActivityEnv(current.catalog);
+
+  if (
+    present &&
+    currentEnvs.includes(env) &&
+    input.repairGeneration !== undefined
+  ) {
+    const generation = input.repairGeneration;
+    const map = parseCatalogPlacementMap(current.catalog, "lease_generation");
+    const floor = Number(map[env]);
+    if (
+      map[env] === undefined ||
+      !Number.isSafeInteger(generation) ||
+      generation <= floor ||
+      generation > 1_000_000
+    )
+      throw new EnvPlanError(
+        "repair_generation_invalid",
+        "Repair must increase one explicit bounded cell",
+        409
+      );
+    // Splice only the numeric token. Comments, ordering, scoped grants and all other bytes survive.
+    const block =
+      /^lease_generation:[^\S\r\n]*\r?\n((?:[ \t]+[^\n]*\n|[ \t]+[^\n]*$)*)/m.exec(
+        current.catalog
+      );
+    const cell = new RegExp(
+      `^(  ${env}:[ \t]*)(0|[1-9]\\d*)(?=[ \t]*(?:#|$))`,
+      "m"
+    );
+    if (!block || !cell.test(block[0]))
+      throw new EnvPlanError(
+        "repair_generation_invalid",
+        "Repair requires an unambiguous generation cell",
+        409
+      );
+    const content =
+      current.catalog.slice(0, block.index) +
+      block[0].replace(
+        cell,
+        (_all, prefix: string) => `${prefix}${generation}`
+      ) +
+      current.catalog.slice(block.index + block[0].length);
+    return {
+      kind: "repair",
+      nextEnvs: currentEnvs,
+      ops: [{ op: "upsert", path: CATALOG_PATH(slug), content }],
+    };
+  }
 
   if (present) {
     return planAdd({

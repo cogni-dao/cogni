@@ -93,6 +93,7 @@ import {
   type NodeFormationEnv,
   nextFreeNodePort,
   type PlacementProvider,
+  parseCatalogEnvs,
   parseCatalogPlacement,
   planEnvAddShape,
   renderCatalog,
@@ -119,7 +120,10 @@ import {
   parseNodeRepoPolicy,
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
-import { classifyEnvManagerCommit } from "@/shared/vcs/env-manager-pr";
+import {
+  classifyEnvManagerCommit,
+  verifyRepairCatalogDelta,
+} from "@/shared/vcs/env-manager-pr";
 import { cancelCandidateMaintenance } from "./maintenance-cancel";
 import { resolveReviewedWorkflowRef } from "./reviewed-workflow-ref";
 import { reconcileWorkerRouting } from "./worker-custodied-routing";
@@ -130,7 +134,7 @@ export function envManagerCommitMessage(input: {
   readonly subject: string;
   readonly node: string;
   readonly env: NodeFormationEnv;
-  readonly action: "add" | "remove";
+  readonly action: "add" | "remove" | "repair";
   readonly paths: readonly string[];
 }): string {
   const canonicalPaths = [...new Set(input.paths)].sort();
@@ -201,6 +205,12 @@ export interface OpenNodeEnvPrInput {
    * flow; today's callers pass undefined, which the planner writes as an explicit `0` cell.
    */
   readonly leaseGeneration?: number | undefined;
+  /** Feature policy evaluated against the writer's immutable MAIN snapshot. */
+  readonly resolveGeneration?: (catalog: string) => Promise<{
+    leaseGeneration?: number | undefined;
+    repairGeneration?: number | undefined;
+    repairEvidence?: string | undefined;
+  }>;
 }
 
 /** What an ADD derived from the catalog row (ADD_DERIVES_PLACEMENT, story.5039). */
@@ -219,7 +229,7 @@ export interface OpenNodeEnvPrDerived {
 export type OpenNodeEnvPrResult =
   | {
       readonly status: "pr_opened";
-      readonly action: "add" | "remove";
+      readonly action: "add" | "remove" | "repair";
       readonly prNumber: number;
       readonly prUrl: string;
       /** Present on `add` only — what the verb derived (ADD_DERIVES_PLACEMENT). */
@@ -1364,27 +1374,193 @@ export class GitHubRepoWriter implements DeployPlanePort {
       }
     );
 
-    return classifyEnvManagerCommit({
-      headRef: pr.head.ref,
-      commitMessage: commit.commit.message,
-      verified: commit.commit.verification?.verified === true,
-      verificationReason: commit.commit.verification?.reason ?? null,
-      parentCount: commit.parents?.length ?? 0,
-      prState: pr.state ?? null,
-      baseRef: pr.base?.ref ?? null,
-      prUserLogin: pr.user?.login ?? null,
-      prUserId: pr.user?.id ?? null,
-      prUserType: pr.user?.type ?? null,
-      headRepoFullName: pr.head.repo?.full_name ?? null,
-      commitCount: pr.commits ?? 0,
-      // `.author` is the linked GitHub account for the commit (a Bot for App-authored commits),
-      // distinct from `.commit.author` (the raw git author name/email) — parity with the shell twin.
-      commitAuthorLogin: commit.author?.login ?? null,
-      commitAuthorId: commit.author?.id ?? null,
-      expectedBotLogin: botIdentity.login,
-      expectedBotId: botIdentity.id,
-      expectedHeadRepoFullName: `${input.owner}/${input.repo}`,
+    const repairClaimed = /^Cogni-Action: repair$/m.test(commit.commit.message);
+    const classification = classifyEnvManagerCommit(
+      {
+        headRef: pr.head.ref,
+        commitMessage: commit.commit.message,
+        verified: commit.commit.verification?.verified === true,
+        verificationReason: commit.commit.verification?.reason ?? null,
+        parentCount: commit.parents?.length ?? 0,
+        prState: pr.state ?? null,
+        baseRef: pr.base?.ref ?? null,
+        prUserLogin: pr.user?.login ?? null,
+        prUserId: pr.user?.id ?? null,
+        prUserType: pr.user?.type ?? null,
+        headRepoFullName: pr.head.repo?.full_name ?? null,
+        commitCount: pr.commits ?? 0,
+        // `.author` is the linked GitHub account for the commit (a Bot for App-authored commits),
+        // distinct from `.commit.author` (the raw git author name/email) — parity with the shell twin.
+        commitAuthorLogin: commit.author?.login ?? null,
+        commitAuthorId: commit.author?.id ?? null,
+        expectedBotLogin: botIdentity.login,
+        expectedBotId: botIdentity.id,
+        expectedHeadRepoFullName: `${input.owner}/${input.repo}`,
+      },
+      input.mergedOperation
+        ? {
+            event: input.mergedOperation,
+            actual: {
+              repository: pr.base.repo.full_name,
+              prNumber: pr.number,
+              headSha: pr.head.sha,
+              mergeSha: pr.merge_commit_sha,
+              merged: pr.merged === true,
+            },
+          }
+        : undefined
+    );
+    const conflict = (): EnvManagerPrClassificationResult => ({
+      isEnvManagerPr: false,
+      repairClaimed,
+      errorCode: "repair_context_conflict",
     });
+    if (!classification.isEnvManagerPr)
+      return repairClaimed || input.mergedOperation
+        ? conflict()
+        : classification;
+    if (classification.action !== "repair" && !input.mergedOperation)
+      return classification;
+    const node = classification.targetNodeRef;
+    const lane = classification.environment;
+    const parentSha = commit.parents?.[0]?.sha;
+    if (
+      !node ||
+      !lane ||
+      commit.sha !== pr.head.sha ||
+      !parentSha ||
+      !SOURCE_SHA_PATTERN.test(parentSha)
+    )
+      return conflict();
+    try {
+      const { data: files } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+        {
+          owner: input.owner,
+          repo: input.repo,
+          pull_number: input.prNumber,
+          per_page: 100,
+          page: 1,
+        }
+      );
+      const paths = files.map((file) => file.filename).sort();
+      const hashes = commit.commit.message
+        .split("\n")
+        .filter((line) => line.startsWith("Cogni-Changed-Paths-SHA256: "));
+      if (
+        files.length !== pr.changed_files ||
+        files.length < 1 ||
+        files.length > 7 ||
+        new Set(paths).size !== paths.length ||
+        files.some((file) => file.previous_filename) ||
+        hashes.length !== 1 ||
+        hashes[0] !==
+          `Cogni-Changed-Paths-SHA256: ${createHash("sha256")
+            .update(`${paths.join("\n")}\n`)
+            .digest("hex")}`
+      )
+        return conflict();
+      if (
+        classification.action === "repair" &&
+        (files.length !== 1 ||
+          files[0]?.filename !== `infra/catalog/${node}.yaml` ||
+          files[0]?.status !== "modified")
+      )
+        return conflict();
+      if (
+        classification.action === "repair" &&
+        (commit.files?.length !== 1 ||
+          commit.files[0]?.filename !== paths[0] ||
+          commit.files[0]?.status !== "modified")
+      )
+        return conflict();
+      const readCatalog = async (ref: string): Promise<string> => {
+        const text = await this.fetchFileText({
+          owner: input.owner,
+          repo: input.repo,
+          path: `infra/catalog/${node}.yaml`,
+          ref,
+        });
+        if (text === null) throw new Error("catalog unavailable");
+        return text;
+      };
+      const baseCatalog = await readCatalog(parentSha);
+      const headCatalog = await readCatalog(pr.head.sha);
+      const transition = (before: string, after: string): boolean => {
+        if (classification.action === "repair")
+          return verifyRepairCatalogDelta(before, after, node, lane);
+        const b = parseYaml(before);
+        const h = parseYaml(after);
+        if (
+          b?.name !== node ||
+          h?.name !== node ||
+          !b.node_id ||
+          b.node_id !== h.node_id ||
+          !Array.isArray(b.envs) ||
+          !Array.isArray(h.envs)
+        )
+          return false;
+        return classification.action === "add"
+          ? !b.envs.includes(lane) && h.envs.includes(lane)
+          : b.envs.includes(lane) && !h.envs.includes(lane);
+      };
+      if (!transition(baseCatalog, headCatalog)) return conflict();
+      if (input.mergedOperation) {
+        const { data: merged } = await octokit.request(
+          "GET /repos/{owner}/{repo}/commits/{ref}",
+          {
+            owner: input.owner,
+            repo: input.repo,
+            ref: input.mergedOperation.mergeSha,
+          }
+        );
+        const mergeParent = merged.parents[0]?.sha;
+        if (merged.sha !== input.mergedOperation.mergeSha || !mergeParent)
+          return conflict();
+        const actualBase = await readCatalog(mergeParent);
+        const actualHead = await readCatalog(merged.sha);
+        if (!transition(actualBase, actualHead)) return conflict();
+        if (classification.action === "repair") {
+          if (
+            merged.files?.length !== 1 ||
+            merged.files[0]?.filename !== paths[0] ||
+            merged.files[0]?.status !== "modified"
+          )
+            return conflict();
+          const b = parseYaml(baseCatalog);
+          const h = parseYaml(headCatalog);
+          const mb = parseYaml(actualBase);
+          const mh = parseYaml(actualHead);
+          if (
+            b.lease_generation[lane] !== mb.lease_generation[lane] ||
+            h.lease_generation[lane] !== mh.lease_generation[lane]
+          )
+            return conflict();
+        }
+        return {
+          ...classification,
+          repairClaimed,
+          headSha: pr.head.sha,
+          parentSha,
+          baseCatalog: actualBase,
+          headCatalog: actualHead,
+        };
+      }
+      return {
+        ...classification,
+        repairClaimed,
+        headSha: pr.head.sha,
+        parentSha,
+        baseCatalog,
+        headCatalog,
+      };
+    } catch {
+      return {
+        isEnvManagerPr: false,
+        repairClaimed,
+        errorCode: "repair_context_unavailable",
+      };
+    }
   }
 
   private operatorBotIdentity?: { login: string; id: number };
@@ -1761,8 +1937,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
   /**
    * The raw read behind `readNodeDeployPin`, kept discriminated so the two callers can differ:
    * `reconcileNodeInfra` must fail LOUDLY (a missing pin means it has no sha to replay), while
-   * `readNodeDeployPin` folds every non-answer into `null` so its caller can fall back to a birth
-   * pin. One read path, two contracts — never two copies of the branch/path/shape knowledge.
+   * `readNodeDeployPin` folds non-answers into null; onboarding instead uses the discriminant
+   * when a trusted first activation needs proof of absence. Invalid content is never absence.
+   * One pin reader owns the branch/path/shape and delegates large-file reads to readBlob.
    */
   private async fetchDeployPin(input: {
     parentOwner: string;
@@ -1772,13 +1949,30 @@ export class GitHubRepoWriter implements DeployPlanePort {
   }): Promise<
     { kind: "ok"; sha: string } | { kind: "missing" } | { kind: "invalid" }
   > {
-    const text = await this.fetchFileText({
-      owner: input.parentOwner,
-      repo: input.parentRepo,
-      path: ".promote-state/source-sha-by-app.json",
-      ref: `deploy/${input.env}-${input.slug}`,
-    });
-    if (!text) return { kind: "missing" };
+    const octokit = await this.getOctokit(input.parentOwner, input.parentRepo);
+    const response = await octokit
+      .request("GET /repos/{owner}/{repo}/contents/{path}", {
+        owner: input.parentOwner,
+        repo: input.parentRepo,
+        path: ".promote-state/source-sha-by-app.json",
+        ref: `deploy/${input.env}-${input.slug}`,
+      })
+      .catch((error: unknown) => {
+        if ((error as { status?: number }).status === 404) return null;
+        throw error;
+      });
+    if (!response) return { kind: "missing" };
+    const { data } = response;
+    if (Array.isArray(data) || data.type !== "file") return { kind: "invalid" };
+    const text =
+      data.encoding === "base64" && typeof data.content === "string"
+        ? Buffer.from(data.content, "base64").toString("utf8")
+        : await this.readBlob(
+            octokit,
+            input.parentOwner,
+            input.parentRepo,
+            data.sha
+          );
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -1793,6 +1987,17 @@ export class GitHubRepoWriter implements DeployPlanePort {
       return { kind: "invalid" };
     }
     return { kind: "ok", sha };
+  }
+
+  async readNodeDeployPinState(input: {
+    parentOwner: string;
+    parentRepo: string;
+    env: string;
+    slug: string;
+  }): Promise<
+    { kind: "ok"; sha: string } | { kind: "missing" } | { kind: "invalid" }
+  > {
+    return this.fetchDeployPin(input);
   }
 
   /** @see DeployPlanePort.readNodeDeployPin — deployed truth, or null for a birth lane. */
@@ -3046,127 +3251,381 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * a flag-gated v0 seam (DNS_REVERSE_RECONCILE, default off) — see the `dnsSeam` call below.
    */
   async openNodeEnvPr(input: OpenNodeEnvPrInput): Promise<OpenNodeEnvPrResult> {
-    const { owner, repo, slug, env, present, leaseGeneration } = input;
+    const { owner, repo, slug, env, present } = input;
     const octokit = await this.getOctokit(owner, repo);
     const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
       octokit,
       owner,
       repo
     );
-
-    // The catalog row is the existence gate: a node absent from the catalog can't have its env-set edited.
     const catalog = await this.fetchFileText({
       owner,
       repo,
       path: `infra/catalog/${slug}.yaml`,
-      ref: "main",
+      ref: baseCommitSha,
     });
-    if (catalog === null) {
+    if (catalog === null)
       throw deployPlaneError(
         "node_not_in_catalog",
-        `infra/catalog/${slug}.yaml not found on main; '${slug}' is not a registered node.`,
+        "Node catalog is absent",
         404
       );
-    }
-
-    // ADD_DERIVES_PLACEMENT (story.5039) — derive FIRST: the shape decides which control-env
-    // kustomization to fetch (bug.5204) and whether the node's own repo-spec must already carry a
-    // `deployment:` block (an akash lane serves env ONLY through declared secret_refs).
-    let shape: EnvAddShape | undefined;
-    if (present) {
-      try {
-        shape = planEnvAddShape(catalog, env, this.config.fleetControlEnv);
-      } catch (err) {
-        if (err instanceof EnvPlanError) {
-          throw deployPlaneError(err.code, err.message, err.status);
-        }
-        throw err;
-      }
-      if (shape.placement === "akash") {
-        await this.assertAkashDeploymentBlock(catalog, slug);
-      }
-    }
-    const derived: OpenNodeEnvPrDerived | undefined = shape
-      ? {
-          placement: shape.placement,
-          computeApi: shape.computeApi,
-          controlEnv: shape.controlEnv,
-          leaseGeneration: leaseGeneration ?? 0,
-        }
-      : undefined;
-
-    const current = await this.collectEnvPlanCurrent(
-      octokit,
-      owner,
-      repo,
+    const generation =
+      present && input.resolveGeneration
+        ? await input.resolveGeneration(catalog)
+        : { leaseGeneration: input.leaseGeneration, repairEvidence: undefined };
+    const presentAlready = parseCatalogEnvs(catalog).includes(env);
+    const shape =
+      present && !presentAlready
+        ? planEnvAddShape(catalog, env, this.config.fleetControlEnv)
+        : undefined;
+    if (shape?.placement === "akash")
+      await this.assertAkashDeploymentBlock(catalog, slug);
+    // A repair reads no overlay, AppSet, secret, routing or DNS state.
+    const current: EnvPlanCurrent =
+      present && presentAlready
+        ? { catalog, templateOverlayByEnv: {}, appsetsKustomizationByEnv: {} }
+        : await this.collectEnvPlanCurrent(
+            octokit,
+            owner,
+            repo,
+            slug,
+            env,
+            present,
+            catalog,
+            shape,
+            baseCommitSha
+          );
+    const plan = buildEnvDeltaPlan({
       slug,
       env,
       present,
-      catalog,
-      shape
-    );
-
-    let plan: ReturnType<typeof buildEnvDeltaPlan>;
-    try {
-      plan = buildEnvDeltaPlan({
-        slug,
-        env,
-        present,
-        current,
-        leaseGeneration,
-        fleetControlEnv: this.config.fleetControlEnv,
-      });
-    } catch (err) {
-      if (err instanceof EnvPlanError) {
-        throw deployPlaneError(err.code, err.message, err.status);
-      }
-      throw err;
-    }
-
-    if (plan.kind === "no_changes") {
+      current,
+      ...generation,
+      fleetControlEnv: this.config.fleetControlEnv,
+    });
+    const derived: OpenNodeEnvPrDerived | undefined = shape
+      ? { ...shape, leaseGeneration: generation.leaseGeneration ?? 0 }
+      : undefined;
+    if (plan.kind === "no_changes")
       return derived
         ? { status: "no_changes", derived }
         : { status: "no_changes" };
-    }
-
-    // DNS seam — flag-gated v0 (DNS_REVERSE_RECONCILE, default off). ADD ⇒ forward upsert; REMOVE /
-    // DECOMMISSION ⇒ reverse prune. v0 ships flag-off so we only LOG the intended change.
-    await this.dnsSeam(slug, env, present);
-
+    if (plan.kind !== "repair") await this.dnsSeam(slug, env, present);
+    const title =
+      plan.kind === "repair"
+        ? `fix(node): repair ${slug} ${env}`
+        : `feat(node): ${present ? "add" : "remove"} ${slug} ${present ? "to" : "from"} ${env}`;
+    const message = envManagerCommitMessage({
+      subject: title,
+      node: slug,
+      env,
+      action: plan.kind,
+      paths: plan.ops.map((op) => op.path),
+    });
     const entries = await this.planOpsToTreeEntries(
       octokit,
       owner,
       repo,
       plan.ops
     );
-
-    const title = `feat(node): ${present ? "add" : "remove"} ${slug} ${present ? "to" : "from"} ${env}`;
-    const message = envManagerCommitMessage({
-      subject: title,
-      node: slug,
+    const body =
+      plan.kind === "repair"
+        ? `Repairs one proven terminal ${slug}/${env} allocation by increasing only its lease generation. Membership, pins, scoped grants and data stay unchanged. Full CI and fresh merge-time qualification are required.\n\nImmutable MAIN: ${baseCommitSha}\n\nQualification (read-only observations, not paid-writer closure):\n\n\`\`\`json\n${generation.repairEvidence ?? "{}"}\n\`\`\``
+        : this.envPrBody(plan.kind, slug, env, plan.nextEnvs);
+    if (Buffer.byteLength(body, "utf8") > 60_000)
+      throw deployPlaneError(
+        "repair_evidence_too_large",
+        "Qualification exceeds bounded PR evidence size",
+        409
+      );
+    const result = await this.publishEnvPlan(octokit, {
+      owner,
+      repo,
+      slug,
       env,
-      action: present ? "add" : "remove",
-      paths: entries.map((entry) => entry.path),
-    });
-    const branch = `cogni-operator/node-env-${slug}-${env}`;
-    const body = this.envPrBody(plan.kind, slug, env, plan.nextEnvs);
-
-    const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
       baseCommitSha,
       baseTreeSha,
       entries,
       message,
-      branch,
-      pr: { title, body },
+      title,
+      body,
+      catalog,
+      plan,
     });
-    await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
     return {
       status: "pr_opened",
       action: plan.kind,
-      prNumber: result.prNumber,
-      prUrl: result.prUrl,
+      ...result,
       ...(derived ? { derived } : {}),
     };
+  }
+
+  /** Only the shared node/lane env branch uses expected-old-OID publication. Never replace an open head. */
+  private async publishEnvPlan(
+    octokit: Octokit,
+    input: {
+      owner: string;
+      repo: string;
+      slug: string;
+      env: NodeFormationEnv;
+      baseCommitSha: string;
+      baseTreeSha: string;
+      entries: GitTreeEntry[];
+      message: string;
+      title: string;
+      body: string;
+      catalog: string;
+      plan: Exclude<
+        ReturnType<typeof buildEnvDeltaPlan>,
+        { kind: "no_changes" }
+      >;
+    }
+  ): Promise<OpenNodeAppPrResult> {
+    const { owner, repo, slug, env } = input;
+    const branch = `cogni-operator/node-env-${slug}-${env}`;
+    const conflict = () =>
+      deployPlaneError(
+        "env_branch_conflict",
+        "Shared env branch has a different or unverified operation",
+        409
+      );
+    const readHead = async (): Promise<string | null> => {
+      try {
+        return (
+          await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+            owner,
+            repo,
+            ref: `heads/${branch}`,
+          })
+        ).data.object.sha;
+      } catch (error) {
+        if ((error as { status?: number }).status === 404) return null;
+        throw error;
+      }
+    };
+    const { data: tree } = await octokit.request(
+      "POST /repos/{owner}/{repo}/git/trees",
+      { owner, repo, base_tree: input.baseTreeSha, tree: input.entries }
+    );
+    const reuseOpen = async (
+      head: string | null
+    ): Promise<OpenNodeAppPrResult | null> => {
+      const { data: prs } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls",
+        {
+          owner,
+          repo,
+          state: "open",
+          head: `${owner}:${branch}`,
+          base: "main",
+          per_page: 100,
+        }
+      );
+      if (prs.length === 0) return null;
+      if (prs.length !== 1 || !head || prs[0]?.head.sha !== head)
+        throw conflict();
+      const pr = prs[0];
+      if (!pr) throw conflict();
+      if (input.plan.kind === "repair") {
+        const classified = await this.classifyEnvManagerPr({
+          owner,
+          repo,
+          prNumber: pr.number,
+        });
+        const target = input.plan.ops[0];
+        if (
+          !classified.isEnvManagerPr ||
+          classified.action !== "repair" ||
+          classified.headSha !== head ||
+          classified.baseCatalog !== input.catalog ||
+          target?.op !== "upsert" ||
+          classified.headCatalog !== target.content
+        )
+          throw conflict();
+      } else {
+        const { data: commit } = await octokit.request(
+          "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+          { owner, repo, commit_sha: head }
+        );
+        if (
+          commit.message !== input.message ||
+          commit.tree.sha !== tree.sha ||
+          commit.parents.length !== 1 ||
+          commit.parents[0]?.sha !== input.baseCommitSha
+        )
+          throw conflict();
+      }
+      return { prNumber: pr.number, prUrl: pr.html_url };
+    };
+    const oldHead = await readHead();
+    const open = await reuseOpen(oldHead);
+    if (open) return open;
+    if (oldHead) {
+      // Recover a committed intent whose ref/PR response was lost, without changing its head.
+      const { data: orphan } = await octokit.request(
+        "GET /repos/{owner}/{repo}/commits/{ref}",
+        { owner, repo, ref: oldHead }
+      );
+      const bot = await this.resolveOperatorBotIdentity(octokit);
+      let sameIntent =
+        orphan.sha === oldHead &&
+        orphan.commit.message === input.message &&
+        orphan.parents.length === 1 &&
+        orphan.commit.verification?.verified === true &&
+        orphan.commit.verification.reason === "valid" &&
+        orphan.author?.id === bot.id &&
+        orphan.author.login === bot.login;
+      if (sameIntent && input.plan.kind === "repair") {
+        const before = await this.fetchFileText({
+          owner,
+          repo,
+          path: `infra/catalog/${slug}.yaml`,
+          ref: orphan.parents[0]?.sha ?? "",
+        });
+        const after = await this.fetchFileText({
+          owner,
+          repo,
+          path: `infra/catalog/${slug}.yaml`,
+          ref: oldHead,
+        });
+        const target = input.plan.ops[0];
+        sameIntent =
+          before === input.catalog &&
+          target?.op === "upsert" &&
+          after === target.content &&
+          orphan.files?.length === 1 &&
+          orphan.files[0]?.filename === target.path &&
+          orphan.files[0]?.status === "modified";
+      } else if (sameIntent)
+        sameIntent =
+          orphan.commit.tree.sha === tree.sha &&
+          orphan.parents[0]?.sha === input.baseCommitSha;
+      if (sameIntent) {
+        const { data: closedIntent } = await octokit.request(
+          "GET /repos/{owner}/{repo}/pulls",
+          {
+            owner,
+            repo,
+            state: "closed",
+            head: `${owner}:${branch}`,
+            base: "main",
+            per_page: 100,
+          }
+        );
+        if (
+          closedIntent.length >= 100 ||
+          closedIntent.some((pr) => pr.head.sha === oldHead)
+        )
+          throw conflict();
+        const recovered = await this.openOrFindPr(
+          octokit,
+          owner,
+          repo,
+          slug,
+          branch,
+          { title: input.title, body: input.body }
+        );
+        if ((await readHead()) !== oldHead) throw conflict();
+        return recovered;
+      }
+      const { data: closed } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls",
+        {
+          owner,
+          repo,
+          state: "closed",
+          head: `${owner}:${branch}`,
+          base: "main",
+          per_page: 100,
+        }
+      );
+      if (
+        orphan.sha !== oldHead ||
+        orphan.parents.length !== 1 ||
+        orphan.commit.verification?.verified !== true ||
+        orphan.commit.verification.reason !== "valid" ||
+        orphan.author?.id !== bot.id ||
+        orphan.author.login !== bot.login ||
+        closed.length >= 100 ||
+        !closed.some(
+          (pr) =>
+            pr.state === "closed" &&
+            pr.head.sha === oldHead &&
+            pr.head.ref === branch &&
+            pr.head.repo?.full_name.toLowerCase() ===
+              `${owner}/${repo}`.toLowerCase() &&
+            pr.user?.type === "Bot" &&
+            pr.user.id === bot.id &&
+            pr.user.login === bot.login
+        )
+      )
+        throw conflict();
+    }
+    const { data: main } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/ref/{ref}",
+      { owner, repo, ref: "heads/main" }
+    );
+    if (main.object.sha !== input.baseCommitSha)
+      throw deployPlaneError(
+        "env_main_conflict",
+        "MAIN moved before env publication",
+        409
+      );
+    const { data: commit } = await octokit.request(
+      "POST /repos/{owner}/{repo}/git/commits",
+      {
+        owner,
+        repo,
+        message: input.message,
+        tree: tree.sha,
+        parents: [input.baseCommitSha],
+      }
+    );
+    try {
+      const { data: repository } = await octokit.request(
+        "GET /repos/{owner}/{repo}",
+        { owner, repo }
+      );
+      await octokit.graphql(
+        `mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }`,
+        {
+          input: {
+            repositoryId: repository.node_id,
+            refUpdates: [
+              {
+                name: `refs/heads/${branch}`,
+                beforeOid: oldHead ?? "0".repeat(40),
+                afterOid: commit.sha,
+                force: oldHead !== null,
+              },
+            ],
+          },
+        }
+      );
+    } catch {
+      // A lost response can mean success. Read the exact shared branch before deciding.
+      const observed = await readHead();
+      if (observed !== commit.sha) {
+        const reused = await reuseOpen(observed);
+        if (reused) return reused;
+        throw conflict();
+      }
+    }
+    if ((await readHead()) !== commit.sha) throw conflict();
+    let result: OpenNodeAppPrResult;
+    try {
+      result = await this.openOrFindPr(octokit, owner, repo, slug, branch, {
+        title: input.title,
+        body: input.body,
+      });
+    } catch (error) {
+      const recovered = await reuseOpen(await readHead());
+      if (!recovered) throw error;
+      result = recovered;
+    }
+    if ((await readHead()) !== commit.sha) throw conflict();
+    return result;
   }
 
   /**
@@ -3485,8 +3944,29 @@ export class GitHubRepoWriter implements DeployPlanePort {
     env: NodeFormationEnv,
     present: boolean,
     catalog: string,
-    shape?: EnvAddShape
+    shape?: EnvAddShape,
+    snapshotRef?: string
   ): Promise<EnvPlanCurrent> {
+    const readSnapshot = async (
+      _client: Octokit,
+      _owner: string,
+      _repo: string,
+      path: string
+    ): Promise<string> => {
+      const text = await this.fetchFileText({
+        owner,
+        repo,
+        path,
+        ref: snapshotRef ?? "main",
+      });
+      if (text === null)
+        throw deployPlaneError(
+          "env_snapshot_unavailable",
+          "Required env source file is absent",
+          409
+        );
+      return text;
+    };
     const appsetsKustomizationByEnv: Record<string, string> = {};
     const templateOverlayByEnv: Record<string, string> = {};
     const templateExternalSecretByEnv: Record<string, string> = {};
@@ -3496,25 +3976,25 @@ export class GitHubRepoWriter implements DeployPlanePort {
       // routing patch plus any foreign control-worker custody patch), and the CONTROL env's appsets kustomization (bug.5204 —
       // for an akash non-production lane that is appsets/production/, not the workload env's dir).
       const controlEnv = shape?.controlEnv ?? env;
-      templateOverlayByEnv[env] = await this.readFileOnMain(
+      templateOverlayByEnv[env] = await readSnapshot(
         octokit,
         owner,
         repo,
         `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/kustomization.yaml`
       );
-      templateExternalSecretByEnv[env] = await this.readFileOnMain(
+      templateExternalSecretByEnv[env] = await readSnapshot(
         octokit,
         owner,
         repo,
         `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/external-secret.yaml`
       );
-      appsetsKustomizationByEnv[controlEnv] = await this.readFileOnMain(
+      appsetsKustomizationByEnv[controlEnv] = await readSnapshot(
         octokit,
         owner,
         repo,
         appsetsKustomizationPath(controlEnv)
       );
-      const appsetTemplate = await this.readFileOnMain(
+      const appsetTemplate = await readSnapshot(
         octokit,
         owner,
         repo,
@@ -3522,7 +4002,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
       const schedulerEndpointPatchByEnv: Record<string, string> = {};
       for (const target of new Set([env, controlEnv])) {
-        schedulerEndpointPatchByEnv[target] = await this.readFileOnMain(
+        schedulerEndpointPatchByEnv[target] = await readSnapshot(
           octokit,
           owner,
           repo,
@@ -3555,7 +4035,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       removeProvider,
       this.config.fleetControlEnv
     );
-    appsetsKustomizationByEnv[removeControlEnv] = await this.readFileOnMain(
+    appsetsKustomizationByEnv[removeControlEnv] = await readSnapshot(
       octokit,
       owner,
       repo,
@@ -3563,7 +4043,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     );
     const removeSchedulerPatchByEnv: Record<string, string> = {};
     for (const target of new Set([env, removeControlEnv])) {
-      removeSchedulerPatchByEnv[target] = await this.readFileOnMain(
+      removeSchedulerPatchByEnv[target] = await readSnapshot(
         octokit,
         owner,
         repo,

@@ -32,6 +32,12 @@ vi.mock("@octokit/auth-app", () => ({
 
 vi.mock("@octokit/core", () => ({
   Octokit: class MockOctokit {
+    async graphql(query: string, params: Record<string, unknown>) {
+      requests.push({ route: "graphql", params: { ...params, query } });
+      const handler = routeHandlers.graphql;
+      if (!handler) throw new Error("Unhandled GraphQL");
+      return handler(params);
+    }
     async request(route: string, params: Record<string, unknown>) {
       requests.push({ route, params });
       const handler = routeHandlers[route];
@@ -5185,5 +5191,411 @@ describe("GitHubRepoWriter.reconcileMergeQueuePolicy (task.5141)", () => {
     ).toContain(
       'bypass_actors are ["Integration:2994706:always"], expected ["Integration:1:always"]'
     );
+  });
+});
+
+describe("existing env repair adapter — immutable source, CAS and trusted merge history", () => {
+  const main = "a".repeat(40),
+    head = "b".repeat(40),
+    merged = "c".repeat(40),
+    mergeParent = "d".repeat(40);
+  const path = "infra/catalog/blue.yaml",
+    branch = "cogni-operator/node-env-blue-candidate-a";
+  const nodeId = "2f8b7a10-4c6e-4a7b-9d31-1c2e3f4a5b60";
+  const catalog = `name: blue\nnode_id: ${nodeId}\nsource_repo: https://github.com/cogni-dao/blue.git\nenvs: [candidate-a, production]\nactivity_env: production\ndeployment_provider:\n  candidate-a: akash\ncompute_api:\n  candidate-a: crossplane\nlease_generation:\n  candidate-a: 20\n  production: 6\ncompute_egress_cidrs: [{cidr: 1.2.3.4/32, envs: [preview], ports: [5432]}]\n`;
+  const target = catalog.replace("candidate-a: 20", "candidate-a: 21");
+  const message = envManagerCommitMessage({
+    subject: "fix(node): repair blue candidate-a",
+    node: "blue",
+    env: "candidate-a",
+    action: "repair",
+    paths: [path],
+  });
+  const bot = { login: "cogni-operator[bot]", id: 265189974, type: "Bot" };
+  let branchHead: string | null,
+    open: boolean,
+    closed: boolean,
+    mainHead: string,
+    state: "open" | "closed",
+    actualHead: string,
+    actualMerged: string,
+    delta: string;
+  const pr = () => ({
+    number: 42,
+    html_url: "https://github.com/Cogni-DAO/cogni/pull/42",
+    state,
+    user: bot,
+    base: { ref: "main", sha: main, repo: { full_name: "Cogni-DAO/cogni" } },
+    head: {
+      ref: branch,
+      sha: actualHead,
+      repo: { full_name: "Cogni-DAO/cogni" },
+    },
+    commits: 1,
+    changed_files: 1,
+    merged: state === "closed",
+    merge_commit_sha: actualMerged,
+  });
+  beforeEach(() => {
+    branchHead = null;
+    open = false;
+    closed = false;
+    mainHead = main;
+    state = "open";
+    actualHead = head;
+    actualMerged = merged;
+    delta = target;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => ({
+        ok: true,
+        json: async () =>
+          url.endsWith("/app") ? { slug: "cogni-operator" } : { id: 123 },
+      }))
+    );
+    routeHandlers = {
+      "GET /users/{username}": () => bot,
+      "GET /repos/{owner}/{repo}": () => ({ node_id: "R_repo" }),
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
+        if (params.ref === "heads/main") return { object: { sha: mainHead } };
+        if (!branchHead)
+          throw Object.assign(new Error("not found"), { status: 404 });
+        return { object: { sha: branchHead } };
+      },
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "tree-main" },
+        message,
+        parents: [{ sha: main }],
+      }),
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => ({
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(
+          params.ref === head || params.ref === merged ? delta : catalog
+        ).toString("base64"),
+      }),
+      "POST /repos/{owner}/{repo}/git/blobs": () => ({ sha: "blob" }),
+      "POST /repos/{owner}/{repo}/git/trees": () => ({ sha: "tree-repair" }),
+      "POST /repos/{owner}/{repo}/git/commits": () => ({ sha: head }),
+      "GET /repos/{owner}/{repo}/pulls": (params) =>
+        params.state === "open"
+          ? open
+            ? [pr()]
+            : []
+          : closed
+            ? [{ ...pr(), state: "closed" }]
+            : [],
+      "POST /repos/{owner}/{repo}/pulls": () => {
+        open = true;
+        return pr();
+      },
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => pr(),
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/files": () => [
+        { filename: path, status: "modified" },
+      ],
+      "GET /repos/{owner}/{repo}/commits/{ref}": (params) => ({
+        sha: params.ref,
+        author: bot,
+        parents: [{ sha: params.ref === merged ? mergeParent : main }],
+        files: [{ filename: path, status: "modified" }],
+        commit: {
+          message,
+          tree: { sha: "tree-repair" },
+          verification: { verified: true, reason: "valid" },
+        },
+      }),
+      graphql: (params) => {
+        const input = params.input as {
+          refUpdates: { beforeOid: string; afterOid: string; name: string }[];
+        };
+        const update = input.refUpdates[0];
+        expect(update?.name).toBe(`refs/heads/${branch}`);
+        if (update?.beforeOid !== (branchHead ?? "0".repeat(40)))
+          throw new Error("compare failed");
+        branchHead = update.afterOid;
+        return { updateRefs: { clientMutationId: null } };
+      },
+    };
+  });
+  const input = () => ({
+    owner: "Cogni-DAO",
+    repo: "cogni",
+    slug: "blue",
+    env: "candidate-a" as const,
+    present: true,
+    resolveGeneration: vi.fn(async (text: string) => {
+      expect(text).toBe(catalog);
+      return { repairGeneration: 21 };
+    }),
+  });
+  it.each([
+    "",
+    "{}",
+    "not-json",
+    "directory",
+  ])("pin read never labels invalid %s as missing", async (value) => {
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = () =>
+      value === "directory"
+        ? []
+        : {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(value).toString("base64"),
+          };
+    await expect(
+      makeWriter().readNodeDeployPinState({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        env: "candidate-a",
+        slug: "blue",
+      })
+    ).resolves.toEqual({ kind: "invalid" });
+  });
+  it("pin absence is a proven 404; unreadable state propagates", async () => {
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = () => {
+      throw Object.assign(new Error("missing"), { status: 404 });
+    };
+    await expect(
+      makeWriter().readNodeDeployPinState({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        env: "candidate-a",
+        slug: "blue",
+      })
+    ).resolves.toEqual({ kind: "missing" });
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = () => {
+      throw Object.assign(new Error("unreadable"), { status: 403 });
+    };
+    await expect(
+      makeWriter().readNodeDeployPinState({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        env: "candidate-a",
+        slug: "blue",
+      })
+    ).rejects.toMatchObject({ status: 403 });
+  });
+  it("an existing pin whose blob cannot be read is never missing", async () => {
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = () => ({
+      type: "file",
+      encoding: "none",
+      sha: "blob",
+    });
+    routeHandlers["GET /repos/{owner}/{repo}/git/blobs/{file_sha}"] = () => {
+      throw Object.assign(new Error("lost blob"), { status: 404 });
+    };
+    await expect(
+      makeWriter().readNodeDeployPinState({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        env: "candidate-a",
+        slug: "blue",
+      })
+    ).rejects.toBeDefined();
+  });
+  it("reads immutable catalog, commits one exact cell, uses atomic absent-ref CAS and reuses pending head", async () => {
+    const writer = makeWriter();
+    const result = await writer.openNodeEnvPr(input());
+    expect(result).toMatchObject({
+      status: "pr_opened",
+      action: "repair",
+      prNumber: 42,
+    });
+    const reads = requests.filter((call) => call.route.includes("contents"));
+    expect(reads.every((call) => call.params.ref === main)).toBe(true);
+    const blob = requests.find((call) => call.route.endsWith("/git/blobs"));
+    expect(
+      Buffer.from(String(blob?.params.content), "base64").toString("utf8")
+    ).toBe(target);
+    expect(requests.some((call) => call.route.startsWith("PATCH"))).toBe(false);
+    const writes = requests.filter((call) => call.route === "graphql").length;
+    await expect(writer.openNodeEnvPr(input())).resolves.toMatchObject({
+      prNumber: 42,
+    });
+    expect(requests.filter((call) => call.route === "graphql")).toHaveLength(
+      writes
+    );
+  });
+  it("MAIN movement refuses before branch mutation", async () => {
+    const request = input();
+    request.resolveGeneration.mockImplementation(async () => {
+      mainHead = head;
+      return { repairGeneration: 21 };
+    });
+    await expect(makeWriter().openNodeEnvPr(request)).rejects.toMatchObject({
+      code: "env_main_conflict",
+    });
+    expect(requests.some((call) => call.route === "graphql")).toBe(false);
+  });
+  it("add/remove on shared branch never overwrites pending repair", async () => {
+    branchHead = head;
+    open = true;
+    const read = routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) =>
+      String(params.path).includes("appsets/")
+        ? {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(
+              "resources:\n  - candidate-a-blue-applicationset.yaml\n"
+            ).toString("base64"),
+          }
+        : String(params.path).includes("scheduler-worker/")
+          ? {
+              type: "file",
+              encoding: "base64",
+              content: Buffer.from(
+                'apiVersion: v1\nkind: ConfigMap\ndata:\n  COGNI_NODE_ENDPOINTS: ""\n  TEMPORAL_CUSTODIED_NODE_ENDPOINTS: "{}"\n'
+              ).toString("base64"),
+            }
+          : read?.(params);
+    await expect(
+      makeWriter().openNodeEnvPr({ ...input(), present: false })
+    ).rejects.toMatchObject({ code: "env_branch_conflict" });
+    expect(
+      requests.some(
+        (call) => call.route === "graphql" || call.route.startsWith("PATCH")
+      )
+    ).toBe(false);
+  });
+  it("lost CAS response reads back committed head and opens its PR once", async () => {
+    routeHandlers.graphql = () => {
+      branchHead = head;
+      throw new Error("response lost");
+    };
+    await expect(makeWriter().openNodeEnvPr(input())).resolves.toMatchObject({
+      prNumber: 42,
+    });
+    expect(branchHead).toBe(head);
+  });
+  it("lost PR response returns the actual existing PR without replacing head", async () => {
+    routeHandlers["POST /repos/{owner}/{repo}/pulls"] = () => {
+      open = true;
+      throw new Error("response lost");
+    };
+    await expect(makeWriter().openNodeEnvPr(input())).resolves.toMatchObject({
+      prNumber: 42,
+    });
+    expect(requests.filter((call) => call.route === "graphql")).toHaveLength(1);
+  });
+  it("orphaned signed intent from an earlier lost response reopens without a ref update", async () => {
+    branchHead = head;
+    await expect(makeWriter().openNodeEnvPr(input())).resolves.toMatchObject({
+      prNumber: 42,
+    });
+    expect(requests.some((call) => call.route === "graphql")).toBe(false);
+  });
+  it("concurrent identical publication reuses its actual open PR", async () => {
+    routeHandlers.graphql = () => {
+      branchHead = head;
+      open = true;
+      throw new Error("compare failed");
+    };
+    await expect(makeWriter().openNodeEnvPr(input())).resolves.toMatchObject({
+      prNumber: 42,
+    });
+    expect(
+      requests.filter(
+        (call) => call.route === "POST /repos/{owner}/{repo}/pulls"
+      )
+    ).toHaveLength(0);
+  });
+  it("concurrent divergent branch head cannot be forced", async () => {
+    routeHandlers.graphql = () => {
+      branchHead = merged;
+      throw new Error("compare failed");
+    };
+    await expect(makeWriter().openNodeEnvPr(input())).rejects.toMatchObject({
+      code: "env_branch_conflict",
+    });
+    expect(branchHead).toBe(merged);
+  });
+  it("closed branch reuse names its exact old head in native CAS", async () => {
+    branchHead = merged;
+    closed = true;
+    actualHead = merged;
+    routeHandlers["GET /repos/{owner}/{repo}/commits/{ref}"] = (params) => ({
+      sha: params.ref,
+      author: bot,
+      parents: [{ sha: main }],
+      commit: {
+        message: "old add",
+        verification: { verified: true, reason: "valid" },
+      },
+    });
+    await expect(makeWriter().openNodeEnvPr(input())).resolves.toMatchObject({
+      action: "repair",
+    });
+    const call = requests.find((row) => row.route === "graphql");
+    expect(call?.params.input).toMatchObject({
+      refUpdates: [{ beforeOid: merged, afterOid: head, force: true }],
+    });
+  });
+  it("merged mode binds signed parent AND actual merge delta; ordinary open mode remains strict", async () => {
+    state = "closed";
+    const writer = makeWriter();
+    const address = { owner: "Cogni-DAO", repo: "cogni", prNumber: 42 };
+    expect((await writer.classifyEnvManagerPr(address)).isEnvManagerPr).toBe(
+      false
+    );
+    const operation = {
+      repository: "Cogni-DAO/cogni",
+      prNumber: 42,
+      headSha: head,
+      mergeSha: merged,
+    };
+    expect(
+      await writer.classifyEnvManagerPr({
+        ...address,
+        mergedOperation: operation,
+      })
+    ).toMatchObject({
+      isEnvManagerPr: true,
+      action: "repair",
+      baseCatalog: catalog,
+      headCatalog: target,
+    });
+    expect(
+      requests
+        .filter((call) => call.route.includes("contents"))
+        .every((call) => call.params.ref !== "main")
+    ).toBe(true);
+    delta = target.replace("production: 6", "production: 7");
+    expect(
+      (
+        await writer.classifyEnvManagerPr({
+          ...address,
+          mergedOperation: operation,
+        })
+      ).isEnvManagerPr
+    ).toBe(false);
+  });
+  it("forged merged head and extra non-generation delta refuse", async () => {
+    state = "closed";
+    const address = {
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      prNumber: 42,
+      mergedOperation: {
+        repository: "Cogni-DAO/cogni",
+        prNumber: 42,
+        headSha: merged,
+        mergeSha: merged,
+      },
+    };
+    expect(
+      (await makeWriter().classifyEnvManagerPr(address)).isEnvManagerPr
+    ).toBe(false);
+    state = "open";
+    delta = target.replace("ports: [5432]", "ports: [5433]");
+    expect(
+      (
+        await makeWriter().classifyEnvManagerPr({
+          owner: "Cogni-DAO",
+          repo: "cogni",
+          prNumber: 42,
+        })
+      ).isEnvManagerPr
+    ).toBe(false);
   });
 });

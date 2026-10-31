@@ -42,6 +42,11 @@ const fakeVcs = vi.hoisted(() => ({
 
 const mockResolveNodeRepo = vi.hoisted(() => vi.fn());
 const mockClassifyEnvManagerPr = vi.hoisted(() => vi.fn());
+const mockRepairQualification = vi.hoisted(() => vi.fn());
+const mockFetchFileText = vi.hoisted(() => vi.fn());
+vi.mock("@/features/compute/lease-reactivation", () => ({
+  qualifyTerminalLaneRepair: mockRepairQualification,
+}));
 // Fresh adapter per test (no reset API); holder swapped in beforeEach.
 const authzHolder = vi.hoisted(
   () =>
@@ -82,6 +87,7 @@ vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
   createOperatorDeployPlane: () => ({
     resolveNodeRepo: mockResolveNodeRepo,
     classifyEnvManagerPr: mockClassifyEnvManagerPr,
+    fetchFileText: mockFetchFileText,
   }),
 }));
 
@@ -210,6 +216,8 @@ describe("POST /api/v1/vcs/merge", () => {
     });
     // Default: not a signed env-membership PR (ordinary merge).
     mockClassifyEnvManagerPr.mockResolvedValue({ isEnvManagerPr: false });
+    mockRepairQualification.mockReset();
+    mockRepairQualification.mockResolvedValue({ generation: 21 });
     // FakeAuthorizationAdapter denies by default; each test grants what it needs.
   });
 
@@ -521,7 +529,7 @@ describe("POST /api/v1/vcs/merge", () => {
     expect(fakeVcs.mergePr).not.toHaveBeenCalled();
   });
 
-  it("env-manager classify FAILURE fails CLOSED to the node.flight denial (403)", async () => {
+  it("env-manager classification outage refuses before any independent flight fallback", async () => {
     grantManageEnvs(NODE_ID);
     mockResolveNodeRepo.mockResolvedValue({
       owner: "cogni-test-org",
@@ -530,9 +538,9 @@ describe("POST /api/v1/vcs/merge", () => {
     mockClassifyEnvManagerPr.mockRejectedValue(new Error("GitHub 500"));
 
     const res = await post({ prNumber: 42, nodeId: "operator" });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(503);
     const body = await res.json();
-    expect(body.errorCode).toBe("authz_denied");
+    expect(body.errorCode).toBe("repair_context_unavailable");
     expect(fakeVcs.mergePr).not.toHaveBeenCalled();
   });
 
@@ -565,6 +573,112 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: NODE_SLUG,
       prNumber: 42,
       method: "squash",
+    });
+  });
+  describe("signed repair cannot escape through node.flight", () => {
+    const catalog = `name: creative\nnode_id: ${NODE_ID}\nenvs: [candidate-a, production]\nlease_generation: {candidate-a: 20, production: 6}\n`;
+    function repairGrant() {
+      grant(OPERATOR_NODE_ID);
+      grantManageEnvs(NODE_ID);
+      mockResolveNodeRepo.mockResolvedValue({
+        owner: "cogni-test-org",
+        repo: "cogni-monorepo",
+      });
+      mockClassifyEnvManagerPr.mockResolvedValue({
+        isEnvManagerPr: true,
+        repairClaimed: true,
+        action: "repair",
+        targetNodeRef: NODE_SLUG,
+        environment: "candidate-a",
+        headSha: greenCi().headSha,
+        baseCatalog: catalog,
+        headCatalog: catalog.replace("candidate-a: 20", "candidate-a: 21"),
+      });
+      mockFetchFileText.mockResolvedValue(catalog);
+    }
+    it("requalifies current proof and binds exact CI head to provider merge", async () => {
+      repairGrant();
+      const response = await post({ prNumber: 42, nodeId: "operator" });
+      expect(response.status).toBe(200);
+      expect(mockRepairQualification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          catalog,
+          nodeId: NODE_ID,
+          environment: "candidate-a",
+        })
+      );
+      expect(fakeVcs.mergePr).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expectedHeadSha: greenCi().headSha,
+          bypassQueue: true,
+        })
+      );
+    });
+    it("independent node.flight does not bypass failed fresh native proof", async () => {
+      repairGrant();
+      mockRepairQualification.mockRejectedValue(
+        Object.assign(new Error("unknown"), {
+          code: "repair_native_unavailable",
+        })
+      );
+      const response = await post({ prNumber: 42, nodeId: "operator" });
+      expect(response.status).toBe(409);
+      expect(fakeVcs.mergePr).not.toHaveBeenCalled();
+    });
+    it.each([
+      "head",
+      "main",
+      "generation",
+    ])("refuses changed %s before merge", async (cause) => {
+      repairGrant();
+      if (cause === "head")
+        fakeVcs.getCiStatus.mockResolvedValue(
+          greenCi({ headSha: "f".repeat(40) })
+        );
+      if (cause === "main")
+        mockFetchFileText.mockResolvedValue(
+          catalog.replace("production: 6", "production: 7")
+        );
+      if (cause === "generation")
+        mockRepairQualification.mockResolvedValue(null);
+      expect((await post({ prNumber: 42, nodeId: "operator" })).status).toBe(
+        409
+      );
+      expect(fakeVcs.mergePr).not.toHaveBeenCalled();
+    });
+    it("catalog UUID must match the node that granted manage_envs", async () => {
+      repairGrant();
+      const foreign = catalog.replace(
+        NODE_ID,
+        "22222222-2222-4222-8222-222222222222"
+      );
+      mockClassifyEnvManagerPr.mockResolvedValue({
+        isEnvManagerPr: true,
+        repairClaimed: true,
+        action: "repair",
+        targetNodeRef: NODE_SLUG,
+        environment: "candidate-a",
+        headSha: greenCi().headSha,
+        baseCatalog: foreign,
+        headCatalog: foreign.replace("candidate-a: 20", "candidate-a: 21"),
+      });
+      mockFetchFileText.mockResolvedValue(foreign);
+      const response = await post({ prNumber: 42, nodeId: "operator" });
+      expect(response.status).toBe(409);
+      expect(mockRepairQualification).not.toHaveBeenCalled();
+      expect(fakeVcs.mergePr).not.toHaveBeenCalled();
+    });
+    it("invalid reserved repair claim refuses even for flight-authorized principal", async () => {
+      repairGrant();
+      mockClassifyEnvManagerPr.mockResolvedValue({
+        isEnvManagerPr: false,
+        repairClaimed: true,
+        errorCode: "repair_context_conflict",
+      });
+      expect((await post({ prNumber: 42, nodeId: "operator" })).status).toBe(
+        409
+      );
+      expect(fakeVcs.mergePr).not.toHaveBeenCalled();
     });
   });
 });

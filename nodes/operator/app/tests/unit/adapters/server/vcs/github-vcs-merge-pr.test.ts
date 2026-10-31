@@ -278,3 +278,47 @@ describe("GitHubVcsAdapter.getCiStatus — ruleset-required checks", () => {
     expect(result.pending).toBe(false);
   });
 });
+
+describe("expected-head direct merge guard", () => {
+  const sha = "a".repeat(40);
+  it("passes expected sha to GitHub's native merge precondition", async () => {
+    onRequest = (route, params) => {
+      if (route === PR_GET_ROUTE)
+        return { base: { ref: "main" }, head: { sha }, node_id: "PR_1" };
+      if (route === MERGE_ROUTE) {
+        expect(params.sha).toBe(sha);
+        return { merged: true, sha: "b".repeat(40), message: "Merged" };
+      }
+      throw new Error(route);
+    };
+    await expect(
+      adapter().mergePr({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        prNumber: 42,
+        method: "squash",
+        bypassQueue: true,
+        expectedHeadSha: sha,
+      })
+    ).resolves.toMatchObject({ merged: true });
+  });
+  it("head drift refuses without merge or queue mutation", async () => {
+    onRequest = () => ({
+      base: { ref: "main" },
+      head: { sha: "c".repeat(40) },
+      node_id: "PR_1",
+    });
+    await expect(
+      adapter().mergePr({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        prNumber: 42,
+        method: "squash",
+        bypassQueue: true,
+        expectedHeadSha: sha,
+      })
+    ).resolves.toMatchObject({ merged: false, status: 409 });
+    expect(requestRoutes).not.toContain(MERGE_ROUTE);
+    expect(graphqlQueries).toHaveLength(0);
+  });
+});

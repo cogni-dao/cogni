@@ -323,9 +323,12 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
       expect.objectContaining({
         env: "candidate-a",
         present: true,
-        leaseGeneration: 2,
+        resolveGeneration: expect.any(Function),
       })
     );
+    await expect(
+      openNodeEnvPr.mock.calls[0]?.[0].resolveGeneration("envs: [production]\n")
+    ).resolves.toEqual({ leaseGeneration: 2 });
   });
 
   it("present:true over a terminally FAILED gen-0 receipt derives leaseGeneration 1 (task.5132)", async () => {
@@ -336,17 +339,17 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
       { ...RECEIPT, state: "failed", environment: "candidate-a" },
     ]);
     await post({ env: "candidate-a", present: true });
-    expect(openNodeEnvPr).toHaveBeenCalledWith(
-      expect.objectContaining({ leaseGeneration: 1 })
-    );
+    await expect(
+      openNodeEnvPr.mock.calls[0]?.[0].resolveGeneration("envs: [production]\n")
+    ).resolves.toEqual({ leaseGeneration: 1 });
   });
 
   it("present:true with an empty ledger passes generation 0 (a birth-identical row)", async () => {
     listReceipts.mockResolvedValue([]);
     await post({ env: "candidate-a", present: true });
-    expect(openNodeEnvPr).toHaveBeenCalledWith(
-      expect.objectContaining({ leaseGeneration: 0 })
-    );
+    await expect(
+      openNodeEnvPr.mock.calls[0]?.[0].resolveGeneration("envs: [production]\n")
+    ).resolves.toEqual({ leaseGeneration: 0 });
   });
 
   it("present:true with the ledger UNWIRED refuses — 503 generation_evidence_unavailable, no PR (EVIDENCE_OR_REFUSE)", async () => {

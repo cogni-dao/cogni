@@ -42,6 +42,8 @@
  *     its sole bypass to the executing App, while this route grants use of that bypass only after
  *     the reserved branch + trailers + App-signature classifier and target-node RBAC both pass.
  *     Ordinary PRs remain queue-tolerant: required queue → `enqueued`, otherwise direct merge.
+ *   - REPAIR_REQUALIFIES: a signed repair requires fresh current catalog/receipt/native proof and
+ *     provider expected-head merge, even when the caller also holds node.flight.
  *   - NO_SEPARATION_OF_DUTIES (V0): autonomous self-merge on green is intended ("no human required
  *     for routine merges"); a second-reviewer policy is vNext. The operator-App execution boundary
  *     is the structural control today.
@@ -55,12 +57,14 @@
 
 import { mergeOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
+import { parse as parseYaml } from "yaml";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { stubVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { qualifyTerminalLaneRepair } from "@/features/compute/lease-reactivation";
 import { classifyGithubOpError } from "@/features/vcs/github-op-error";
 import {
   classifyMergeFailure,
@@ -187,6 +191,10 @@ export const POST = wrapRouteHandlerWithLogging(
     //     branch+trailers cannot steal this path. Classification or target-RBAC failure falls back to
     //     `node.flight` only when that independent authority already passed; otherwise it fails closed.
     let authzPath: "env_manager" | "node_flight" | undefined;
+    let repairNodeId: string | undefined;
+    let repair:
+      | Awaited<ReturnType<typeof deployPlane.classifyEnvManagerPr>>
+      | undefined;
     const targetsParentMonorepo =
       owner.toLowerCase() === parentOwner.toLowerCase() &&
       repo.toLowerCase() === parentRepo.toLowerCase();
@@ -201,8 +209,21 @@ export const POST = wrapRouteHandlerWithLogging(
           prNumber,
         });
       } catch {
-        classification = { isEnvManagerPr: false };
+        return fail(
+          503,
+          "repair_context_unavailable",
+          "Env operation classification unavailable",
+          { prNumber }
+        );
       }
+      if (classification.repairClaimed && !classification.isEnvManagerPr)
+        return fail(
+          409,
+          classification.errorCode ?? "repair_context_conflict",
+          "Reserved repair claim refused",
+          { prNumber }
+        );
+      if (classification.action === "repair") repair = classification;
       if (classification.isEnvManagerPr && classification.targetNodeRef) {
         const envRbac = await resolveNodeAndAuthorize({
           id: classification.targetNodeRef,
@@ -211,7 +232,9 @@ export const POST = wrapRouteHandlerWithLogging(
         });
         if (envRbac.ok) {
           authzPath = "env_manager";
-        } else if (!flightRbac.ok) {
+          if (classification.action === "repair")
+            repairNodeId = envRbac.node.nodeId;
+        } else if (!flightRbac.ok || classification.action === "repair") {
           return fail(
             envRbac.status,
             envRbac.errorCode,
@@ -262,6 +285,81 @@ export const POST = wrapRouteHandlerWithLogging(
       );
     }
 
+    // Requalify the exact signed repair against current catalog and fresh native receipts,
+    // regardless of the principal's independent node.flight grant.
+    if (repair) {
+      try {
+        const fresh = await deployPlane.classifyEnvManagerPr({
+          owner,
+          repo,
+          prNumber,
+        });
+        if (
+          !fresh.isEnvManagerPr ||
+          fresh.action !== "repair" ||
+          fresh.headSha !== repair.headSha ||
+          fresh.headSha !== ci.headSha ||
+          !fresh.baseCatalog ||
+          !fresh.headCatalog ||
+          !fresh.environment ||
+          !fresh.targetNodeRef
+        )
+          return fail(409, "repair_head_conflict", "Repair head changed", {
+            prNumber,
+          });
+        const catalog = await deployPlane.fetchFileText({
+          owner,
+          repo,
+          path: `infra/catalog/${fresh.targetNodeRef}.yaml`,
+          ref: "main",
+        });
+        if (catalog !== fresh.baseCatalog)
+          return fail(
+            409,
+            "repair_main_conflict",
+            "Repair catalog changed on MAIN",
+            { prNumber }
+          );
+        const row = parseYaml(catalog);
+        if (!repairNodeId || row.node_id !== repairNodeId)
+          return fail(
+            409,
+            "repair_identity_conflict",
+            "Repair node identity changed",
+            { prNumber }
+          );
+        const generation = await qualifyTerminalLaneRepair({
+          catalog,
+          nodeId: repairNodeId,
+          slug: fresh.targetNodeRef,
+          environment: fresh.environment,
+          accountId: env.AKASH_ACTUATOR_ACCOUNT_ID,
+          hostingEnv: env.DEPLOY_ENVIRONMENT,
+          fleetControlEnv: env.FLEET_CONTROL_ENV,
+          leaseRead: getContainer().leaseReadCapability,
+        });
+        if (
+          generation === null ||
+          parseYaml(fresh.headCatalog).lease_generation?.[fresh.environment] !==
+            generation.generation
+        )
+          return fail(
+            409,
+            "repair_generation_conflict",
+            "Repair no longer qualifies",
+            { prNumber }
+          );
+        repair = fresh;
+      } catch (error) {
+        return fail(
+          409,
+          (error as { code?: string }).code ?? "repair_evidence_unavailable",
+          "Fresh repair qualification refused",
+          { prNumber }
+        );
+      }
+    }
+
     // 6. Merge. The signed env-manager path is the ONE queue bypass: it has already passed the
     //    App-signature classifier + target-node RBAC above, and all required checks are green.
     //    Every ordinary PR remains queue-tolerant. GitHub independently rejects the direct call
@@ -273,6 +371,7 @@ export const POST = wrapRouteHandlerWithLogging(
         repo,
         prNumber,
         method,
+        ...(repair?.headSha ? { expectedHeadSha: repair.headSha } : {}),
         ...(authzPath === "env_manager" ? { bypassQueue: true } : {}),
       });
     } catch (error) {

@@ -75,6 +75,8 @@ describe("classifyEnvManagerCommit", () => {
     expect(classifyEnvManagerCommit(signedFacts())).toEqual({
       isEnvManagerPr: true,
       targetNodeRef: "spawny-boi",
+      action: "add",
+      environment: "candidate-a",
     });
   });
 
@@ -239,6 +241,37 @@ describe("classifyEnvManagerCommit", () => {
       classifyEnvManagerCommit(
         signedFacts({ expectedBotLogin: "", expectedBotId: Number.NaN })
       ).isEnvManagerPr
+    ).toBe(false);
+  });
+});
+
+describe("merged-operation identity stays separate from open authorization", () => {
+  const event = {
+    repository: MONOREPO,
+    prNumber: 42,
+    headSha: "a".repeat(40),
+    mergeSha: "b".repeat(40),
+  };
+  const actual = { ...event, merged: true };
+  it("accepts exact verified merged facts only in explicit merged mode", () => {
+    const facts = signedFacts({ prState: "closed" });
+    expect(classifyEnvManagerCommit(facts).isEnvManagerPr).toBe(false);
+    expect(
+      classifyEnvManagerCommit(facts, { event, actual }).isEnvManagerPr
+    ).toBe(true);
+  });
+  it.each([
+    { repository: "foreign/cogni" },
+    { prNumber: 43 },
+    { headSha: "c".repeat(40) },
+    { mergeSha: "d".repeat(40) },
+    { merged: false },
+  ])("rejects forged event/PR identity %j", (change) => {
+    expect(
+      classifyEnvManagerCommit(signedFacts({ prState: "closed" }), {
+        event,
+        actual: { ...actual, ...change },
+      }).isEnvManagerPr
     ).toBe(false);
   });
 });

@@ -389,6 +389,7 @@ export class GitHubVcsAdapter implements VcsCapability {
     prNumber: number;
     method: "squash" | "merge" | "rebase";
     bypassQueue?: boolean;
+    expectedHeadSha?: string;
   }): Promise<MergeResult> {
     const octokit = await this.getOctokit(params.owner, params.repo);
 
@@ -401,6 +402,13 @@ export class GitHubVcsAdapter implements VcsCapability {
         "GET /repos/{owner}/{repo}/pulls/{pull_number}",
         { owner: params.owner, repo: params.repo, pull_number: params.prNumber }
       );
+      if (params.expectedHeadSha && pr.head.sha !== params.expectedHeadSha)
+        return {
+          merged: false,
+          enqueued: false,
+          status: 409,
+          message: "Reviewed head changed",
+        };
       baseRef = pr.base.ref;
       prNodeId = pr.node_id;
     } catch (error) {
@@ -416,6 +424,13 @@ export class GitHubVcsAdapter implements VcsCapability {
           baseRef
         );
 
+    if (queueEnabled && params.expectedHeadSha)
+      return {
+        merged: false,
+        enqueued: false,
+        status: 409,
+        message: "Exact-head repair cannot enter merge queue",
+      };
     if (queueEnabled) {
       try {
         await this.enableAutoMerge(octokit, prNodeId, params.method);
@@ -437,6 +452,7 @@ export class GitHubVcsAdapter implements VcsCapability {
           repo: params.repo,
           pull_number: params.prNumber,
           merge_method: params.method,
+          ...(params.expectedHeadSha ? { sha: params.expectedHeadSha } : {}),
         }
       );
 

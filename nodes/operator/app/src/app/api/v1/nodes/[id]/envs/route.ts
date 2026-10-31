@@ -56,6 +56,7 @@ import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
+  qualifyTerminalLaneRepair,
   replacementLeaseGeneration,
   requiredLeaseGeneration,
 } from "@/features/compute/lease-reactivation";
@@ -70,6 +71,7 @@ import {
   type NodeFormationEnv,
   PLACEMENT_PROVIDERS,
   type PlacementProvider,
+  parseCatalogEnvs,
 } from "@/shared/node-app-scaffold/gens";
 
 export const runtime = "nodejs";
@@ -447,13 +449,6 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         );
       }
     }
-    const leaseGeneration =
-      present === true && envReceipts
-        ? requiredLeaseGeneration({
-            catalogGeneration: 0,
-            receipts: receiptsExcludingInstances(envReceipts, node.id),
-          })
-        : undefined;
 
     let result: Awaited<ReturnType<typeof writer.openNodeEnvPr>>;
     try {
@@ -463,7 +458,43 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         slug: node.slug,
         env: targetEnv as (typeof NODE_DEPLOY_ENVS)[number],
         present: present as boolean,
-        leaseGeneration,
+        ...(present === true
+          ? {
+              resolveGeneration: async (catalog: string) => {
+                if (
+                  !parseCatalogEnvs(catalog).includes(
+                    targetEnv as NodeFormationEnv
+                  )
+                ) {
+                  return {
+                    leaseGeneration: requiredLeaseGeneration({
+                      catalogGeneration: 0,
+                      receipts: receiptsExcludingInstances(
+                        envReceipts ?? [],
+                        node.id
+                      ),
+                    }),
+                  };
+                }
+                const repairGeneration = await qualifyTerminalLaneRepair({
+                  catalog,
+                  nodeId: node.id,
+                  slug: node.slug,
+                  environment: targetEnv as NodeFormationEnv,
+                  accountId: env.AKASH_ACTUATOR_ACCOUNT_ID,
+                  hostingEnv: env.DEPLOY_ENVIRONMENT,
+                  fleetControlEnv: env.FLEET_CONTROL_ENV,
+                  leaseRead,
+                });
+                return repairGeneration === null
+                  ? {}
+                  : {
+                      repairGeneration: repairGeneration.generation,
+                      repairEvidence: JSON.stringify(repairGeneration.evidence),
+                    };
+              },
+            }
+          : {}),
       });
     } catch (err) {
       const status = (err as { status?: number })?.status;
