@@ -2494,3 +2494,132 @@ func TestR2AcknowledgementCannotBorrowSelectedProof(t *testing.T) {
 		})
 	}
 }
+
+// R12 admission covers all native generations, before any desired child or XR
+// history can be emitted. GC intent and acknowledgement are not paid closure.
+func TestR2DoubleBumpCannotAdmitThirdPaidKey(t *testing.T) {
+	for _, frame := range []string{"active-acknowledged", "unknown", "absent-response", "503", "deleting", "closed"} {
+		t.Run(frame, func(t *testing.T) {
+			tm := loadTemplate(t)
+			f := fixture(9)
+			status(f)["activeLeaseGeneration"] = 7
+			status(f)["leaseRequestGeneration"] = 8
+			incumbent := child(t, key(7), blue, true, "akash-lease-g7")
+			candidate := child(t, key(8), green, false, "akash-lease-g8")
+			r2Stamp(incumbent, key(7), "active", true, false)
+			r2Stamp(candidate, key(8), "active", false, false)
+			annotations := at(candidate, "resource", "metadata", "annotations").(obj)
+			annotations["crossplane.io/external-create-pending"] = "2026-10-31T00:00:00Z"
+			annotations["crossplane.io/external-create-succeeded"] = "2026-10-31T00:00:01Z"
+			switch frame {
+			case "unknown":
+				r2Stamp(candidate, key(8), "unknown", false, false)
+			case "absent-response":
+				delete(at(candidate, "resource", "status").(obj), "response")
+			case "503":
+				at(candidate, "resource", "status").(obj)["response"] = obj{"statusCode": 503, "body": `{}`}
+			case "deleting":
+				at(candidate, "resource", "metadata").(obj)["deletionTimestamp"] = "2026-10-31T00:00:02Z"
+			case "closed":
+				r2Stamp(candidate, key(8), "closed", false, true)
+			}
+			observed(f)["akash-lease-g7"] = incumbent
+			observed(f)["akash-lease-g8"] = candidate
+			before := jsonString(f)
+			for i := 0; i < 2; i++ {
+				o, err := execute(t, loadTemplate(t), f)
+				if frame == "closed" {
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantNames(t, o, "akash-lease-g7", "akash-lease-g9")
+					if paid(o, "akash-lease-g7") != key(7) || paid(o, "akash-lease-g9") != key(9) || o.status["activeLeaseGeneration"] != 7 || dnsTarget(o) != blue {
+						t.Fatal("closed predecessor blocked safe overlap", o.status)
+					}
+					r2Cleanup(t, o.leases["akash-lease-g7"], key(7))
+					r2Cleanup(t, o.leases["akash-lease-g9"], key(9))
+				} else {
+					if err == nil {
+						t.Fatal("third paid key escaped whole-render refusal")
+					}
+					if !strings.Contains(err.Error(), "new paid key would exceed two unclosed native owners") || o.leases != nil || o.status != nil || o.dns != nil {
+						t.Fatal("unsafe overlap failed for another cause", err)
+					}
+				}
+				if jsonString(f) != before {
+					t.Fatal("admission mutated observed history")
+				}
+			}
+			// Updating the existing key with two live owners remains legitimate.
+			if frame == "active-acknowledged" {
+				xr(f)["spec"].(obj)["leaseGeneration"] = 8
+				o := render(t, tm, f)
+				wantNames(t, o, "akash-lease-g7", "akash-lease-g8")
+				if paid(o, "akash-lease-g8") != key(8) {
+					t.Fatal("same-key update retargeted")
+				}
+			}
+		})
+	}
+}
+
+func TestR2UnattributedAllocationHistoryCannotBootstrap(t *testing.T) {
+	for _, mode := range []string{"handle-missing-bindings", "handle-null-bindings", "clock-only"} {
+		t.Run(mode, func(t *testing.T) {
+			f := fixture(1)
+			for _, field := range []string{"bootEpoch", "recovery", "activeLeaseGeneration", "leaseRequestGeneration"} {
+				delete(status(f), field)
+				if mode == "handle-null-bindings" {
+					status(f)[field] = nil
+				}
+			}
+			status(f)["resource"] = obj{"id": "surviving-H", "state": "active"}
+			if mode == "clock-only" {
+				delete(status(f), "resource")
+				status(f)["bootEpoch"] = obj{"mintedAt": "2000-01-01T00:00:00Z"}
+			}
+			// No refs or observed paid child; restart and desired-SHA changes cannot
+			// turn optional missing metadata into positive closure or new ownership.
+			for i := 0; i < 3; i++ {
+				if i == 1 {
+					r2SetSha(f, strings.Repeat("d", 40))
+				}
+				f = r2Copy(t, f)
+				before := jsonString(f)
+				o, err := execute(t, loadTemplate(t), f)
+				if err == nil {
+					t.Fatal("unattributed allocation history escaped whole-render refusal")
+				}
+				if !strings.Contains(err.Error(), "unattributed allocation history cannot bootstrap") || o.leases != nil || o.status != nil || o.dns != nil || jsonString(f) != before {
+					t.Fatal("unbound history mutated or failed for another cause", err)
+				}
+			}
+		})
+	}
+	t.Run("history-free-null-bootstrap", func(t *testing.T) {
+		f := fixture(1)
+		for _, field := range []string{"bootEpoch", "recovery", "activeLeaseGeneration", "resource"} {
+			status(f)[field] = nil
+		}
+		o := render(t, loadTemplate(t), f)
+		wantNames(t, o, "akash-lease")
+		if paid(o, "akash-lease") != key(1) {
+			t.Fatal("null history-free bootstrap changed key")
+		}
+	})
+	// A strict owned receipt/handle is positive legacy authority even with no
+	// boot/recovery/active selection metadata. No defaulted key supplies it.
+	t.Run("legacy-owned-handle", func(t *testing.T) {
+		f := fixture(1)
+		delete(status(f), "activeLeaseGeneration")
+		c := child(t, key(1), blue, false)
+		r2Stamp(c, key(1), "active", false, false)
+		observed(f)["akash-lease"] = c
+		status(f)["resource"] = obj{"id": "handle-" + key(1), "state": "active"}
+		o := render(t, loadTemplate(t), f)
+		wantNames(t, o, "akash-lease")
+		if at(o.status, "resource", "id") != "handle-"+key(1) {
+			t.Fatal("legacy own-handle upgrade lost history", o.status)
+		}
+	})
+}

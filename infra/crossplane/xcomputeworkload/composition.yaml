@@ -384,7 +384,7 @@ spec:
             {{- $recordedCount := $recoveryCount }}
             {{- $currentKey := $baseCogniKey }}
             {{- if gt $recoveryCount 0 }}{{ $currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount }}{{ end }}
-            {{- $prevBootKey := dig "status" "bootEpoch" "key" "" $xr }}
+            {{- $prevBootKey := dig "key" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "" }}
             {{- if and (ne $prevBootKey "") (not (regexMatch "^[0-9a-f]{40}:(0|[1-9][0-9]*)(:recover:[1-3])?(:unserved|:served)?$" $prevBootKey)) }}{{ fail "malformed boot attempt key" }}{{ end }}
             {{- $prevBootCanonical := regexReplaceAll ":(unserved|served)$" $prevBootKey "" }}
             {{- /* Stored allocation history has its own generation/ordinal even when
@@ -407,13 +407,14 @@ spec:
             {{- $prevFailure := dig "status" "failure" "reason" "" $xr }}
             {{- $terminalReason := has $prevFailure (list "LeaseClosed" "RecoveryLimitExceeded" "BootDeadlineClosed") }}
             {{- $completeSelection := or (eq $recoveryCount 0) (and (eq (get $recovery "key") $currentKey) (eq (int (get $recovery "maxAttempts")) 3)) }}
-            {{- $parkedClosed := and (eq $prevPaidKey $currentKey) $completeSelection (ne (dig "status" "bootEpoch" "at" "" $xr) "") (ne (dig "id" "" $prevResource) "") (eq (dig "state" "" $prevResource) "closed") (has $prevFailure (list "LeaseClosed" "RecoveryLimitExceeded")) }}
-            {{- $parkedBudget := and (eq $prevPaidKey $currentKey) $completeSelection (ne (dig "status" "bootEpoch" "at" "" $xr) "") (eq $prevFailure "BootDeadlineClosed") (ne (dig "id" "" $prevResource) "") (ne (dig "status" "bootEpoch" "mintedAt" "" $xr | default "") "") }}
+            {{- $parkedClosed := and (eq $prevPaidKey $currentKey) $completeSelection (ne (dig "at" "" (dig "status" "bootEpoch" (dict) $xr | default (dict))) "") (ne (dig "id" "" $prevResource) "") (eq (dig "state" "" $prevResource) "closed") (has $prevFailure (list "LeaseClosed" "RecoveryLimitExceeded")) }}
+            {{- $parkedBudget := and (eq $prevPaidKey $currentKey) $completeSelection (ne (dig "at" "" (dig "status" "bootEpoch" (dict) $xr | default (dict))) "") (eq $prevFailure "BootDeadlineClosed") (ne (dig "id" "" $prevResource) "") (ne (dig "mintedAt" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "") "") }}
             {{- if and $parkedClosed (eq $prevFailure "RecoveryLimitExceeded") (ne $recoveryCount 3) }}{{ fail "terminal recovery tuple is not max3" }}{{ end }}
             {{- if and $terminalReason (or (eq $prevBootKey "") (hasSuffix (printf ":%d" $leaseGeneration) (regexReplaceAll ":recover:[1-3]$" $prevBootCanonical ""))) (not (or $parkedClosed $parkedBudget)) }}{{ fail "incomplete or conflicting terminal attempt tuple" }}{{ end }}
 
             {{- $leaseRequestGeneration := int (dig "status" "leaseRequestGeneration" -1 $xr) }}
-            {{- $activeLeaseGeneration := int (dig "status" "activeLeaseGeneration" -1 $xr) }}
+            {{- $activeLeaseGeneration := -1 }}
+            {{- if ne (dig "status" "activeLeaseGeneration" nil $xr) nil }}{{ $activeLeaseGeneration = int $xr.status.activeLeaseGeneration }}{{ end }}
             {{- $activeBaseKey := printf "xcw:%s:%s:%d" $ns $name $activeLeaseGeneration }}
             {{- $desiredKeys := list $baseCogniKey }}
             {{- $activeKeys := list $activeBaseKey }}
@@ -428,6 +429,8 @@ spec:
             {{- $ambiguousKeys := dict }}
             {{- $incompleteKeys := dict }}
             {{- $activeMatches := 0 }}
+            {{- $unclosedOwners := 0 }}
+            {{- $historyOwnerKey := "" }}
             {{- range $childName, $child := $observedResources }}
             {{- if hasPrefix "akash-lease" $childName }}
             {{- if not (regexMatch "^akash-lease(-g(0|[1-9][0-9]*)(-recover-[1-3])?)?$" $childName) }}{{ fail "unsupported lease logical name" }}{{ end }}
@@ -528,6 +531,14 @@ spec:
             {{- $succeededTime := toDate "2006-01-02T15:04:05Z07:00" (get $nativeAnnotations "crossplane.io/external-create-succeeded" | default "") }}
             {{- $failedTime := toDate "2006-01-02T15:04:05Z07:00" (get $nativeAnnotations "crossplane.io/external-create-failed" | default "") }}
             {{- if and (not $pendingTime.IsZero) ($pendingTime.After $succeededTime) ($pendingTime.After $failedTime) }}{{ $_ := set $incompleteKeys $paidKey true }}{{ end }}
+            {{- /* Every validated owner can still hold a paid allocation until its
+              OWN successful handle-bearing response proves closure. Native GC,
+              deletion intent, missing responses and other generations do not. */ -}}
+            {{- if not (hasKey $closedKeys $paidKey) }}{{ $unclosedOwners = add1 $unclosedOwners }}{{ end }}
+            {{- if and (eq $prevPaidKey "") (ne (dig "id" "" $prevResource) "") (or (eq $handle $prevResource.id) (eq $recordedHandle $prevResource.id)) }}
+            {{- if ne $historyOwnerKey "" }}{{ fail "allocation history matches multiple native owners" }}{{ end }}
+            {{- $historyOwnerKey = $paidKey }}
+            {{- end }}
             {{- $_ := set $owners $paidKey $childName }}
             {{- $_ := set $childKeys $childName $paidKey }}
             {{- if and (ge $activeLeaseGeneration 0) (ne $activeLeaseGeneration $leaseGeneration) (has $paidKey $activeKeys) (not (hasKey $closedKeys $paidKey)) }}
@@ -565,6 +576,14 @@ spec:
             {{- if or (gt (int $i) (int $recoveryCount)) (and (lt (int $i) (int $recoveryCount)) (not (hasKey $closedKeys $k))) }}{{ fail "unexplained ahead/behind paid attempt" }}{{ end }}
             {{- end }}
             {{- end }}
+            {{- /* Optional selection metadata cannot erase a known allocation.
+              An exact owned native handle can bind legacy history; defaulted
+              selection is never evidence of its owner or generation. */ -}}
+            {{- if and (eq $prevPaidKey "") (or (ne (dig "id" "" $prevResource) "") (ne (dig "mintedAt" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "") "")) }}
+            {{- if eq $historyOwnerKey "" }}{{ fail "unattributed allocation history cannot bootstrap" }}{{ end }}
+            {{- $prevPaidKey = $historyOwnerKey }}
+            {{- end }}
+            {{- if and (not (hasKey $owners $currentKey)) (ge (int $unclosedOwners) 2) }}{{ fail "new paid key would exceed two unclosed native owners" }}{{ end }}
             {{- /* Allocation history owns admission independently of nominal selection.
               Before accepting ANY owner or clearing history, its bound paid owner
               must still exist, unless an earlier complete tuple permits omission.
@@ -572,7 +591,7 @@ spec:
               Fresh authorized closure still advances from its observed own owner;
               explicit generation changes and unallocated successor replay stay valid.
             */ -}}
-            {{- if and (or (eq $prevBootGeneration $leaseGeneration) (and (eq $prevBootKey "") (eq $activeLeaseGeneration $leaseGeneration))) (or (ne (dig "id" "" $prevResource) "") (ne (dig "status" "bootEpoch" "mintedAt" "" $xr | default "") "")) (not (or $parkedClosed $parkedBudget)) (not (hasKey $owners (default $currentKey $prevPaidKey))) }}{{ fail "allocated selected child disappeared without terminal proof" }}{{ end }}
+            {{- if and (or (eq $prevBootGeneration $leaseGeneration) (and (eq $prevBootKey "") (eq $activeLeaseGeneration $leaseGeneration))) (or (ne (dig "id" "" $prevResource) "") (ne (dig "mintedAt" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "") "")) (not (or $parkedClosed $parkedBudget)) (not (hasKey $owners (default $currentKey $prevPaidKey))) }}{{ fail "allocated selected child disappeared without terminal proof" }}{{ end }}
             {{- $leaseResourceName := get $owners $currentKey }}
             {{- if ne $leaseResourceName "" }}
             {{- if and (not (or $parkedClosed $parkedBudget)) (not (empty (dig "metadata" "deletionTimestamp" "" (index $observedResources $leaseResourceName).resource))) }}{{ fail "selected lease child is deleting" }}{{ end }}
@@ -911,7 +930,7 @@ spec:
             {{- $bootStatusKey := printf "%s:unserved" $bootKey }}
             {{- if $hasServedDesired }}{{ $bootStatusKey = printf "%s:served" $bootKey }}{{ end }}
             {{- if and $sameBootAttempt (eq $prevBootKey $prevBootCanonical) (eq $prevSha $desiredSha) (not (and $active $serving)) }}{{ $bootStatusKey = $prevBootKey }}{{ end }}
-            {{- $prevBootAt := dig "status" "bootEpoch" "at" "" $xr }}
+            {{- $prevBootAt := dig "at" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) }}
             {{- $bootAnchorAt := $createdAt }}
             {{- if and $sameBootAttempt (ne $prevBootAt "") }}
             {{- $bootAnchorAt = $prevBootAt }}
@@ -927,7 +946,7 @@ spec:
             {{- end }}
             {{- $mintedAt := "" }}
             {{- if or $sameBootAttempt $parkedClosed $parkedBudget }}
-            {{- $mintedAt = dig "status" "bootEpoch" "mintedAt" "" $xr | default "" }}
+            {{- $mintedAt = dig "mintedAt" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "" }}
             {{- end }}
             {{- if and (eq $mintedAt "") $found (not $closed) (ne $externalName "") (eq $responseKey $currentKey) (ge $respStatus 200) (lt $respStatus 300) }}
             {{- $mintedAt = dateInZone "2006-01-02T15:04:05Z07:00" now "UTC" }}

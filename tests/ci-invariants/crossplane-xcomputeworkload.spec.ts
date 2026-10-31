@@ -2806,6 +2806,27 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
       expected:
         /^\s+render_test\.go:\d+: predecessor native pending escaped whole-render refusal\n$/,
     },
+    {
+      label: "exact 895 double-bump live allocation admission",
+      oldSha: "895c910899104aa05b531f8aab319626be202a6e",
+      hash: "f6840bd45d68eeaccb066e7e3726a2970a55f63bd0c2f0a76f9fde5a866ee6ed",
+      test: "TestR2DoubleBumpCannotAdmitThirdPaidKey",
+      caseName: "active-acknowledged",
+      diagnostic: "third paid key escaped whole-render refusal",
+      expected:
+        /^\s+render_test\.go:\d+: third paid key escaped whole-render refusal\n$/,
+    },
+    {
+      label: "exact 895 unattributed allocation history bootstrap",
+      oldSha: "895c910899104aa05b531f8aab319626be202a6e",
+      hash: "f6840bd45d68eeaccb066e7e3726a2970a55f63bd0c2f0a76f9fde5a866ee6ed",
+      test: "TestR2UnattributedAllocationHistoryCannotBootstrap",
+      caseName: "handle-missing-bindings",
+      diagnostic:
+        "unattributed allocation history escaped whole-render refusal",
+      expected:
+        /^\s+render_test\.go:\d+: unattributed allocation history escaped whole-render refusal\n$/,
+    },
   ])("rejects $label at the native behavior assertion", ({
     oldSha,
     hash,
