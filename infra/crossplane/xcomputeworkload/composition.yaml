@@ -471,6 +471,13 @@ spec:
             {{- end }}
             {{- end }}
             {{- if and (ne $recordedHandle "") (ne $handle "") (ne $recordedHandle $handle) }}{{ fail "recorded cleanup handle conflicts with own allocation" }}{{ end }}
+            {{- /* Compare independently bound history BEFORE normalizing status or
+              permitting retirement. Both park kinds, and their first retaining pass,
+              must agree with every own cleanup handle, including cache-only evidence.
+            */ -}}
+            {{- if and $samePaidAttempt (eq $paidKey $currentKey) (ne (dig "id" "" $prevResource) "") }}
+            {{- if or (and (ne $handle "") (ne $handle $prevResource.id)) (and (ne $recordedHandle "") (ne $recordedHandle $prevResource.id)) }}{{ fail "bound attempt handle conflicts with own cleanup evidence" }}{{ end }}
+            {{- end }}
             {{- range (dig "status" "conditions" (list) $native) }}
             {{- if contains "cannot determine creation result" (dig "message" "" .) }}{{ $_ := set $ambiguousKeys $paidKey true }}{{ end }}
             {{- end }}
@@ -681,8 +688,15 @@ spec:
             {{- $serving := and $isCurrentObservation (ge $respStatus 200) (lt $respStatus 300) (eq $responseKey $currentKey) (eq $lastRequestedSha $desiredSha) (hasKey $resp "found") (dig "serving" false $resp) }}
             {{- $active := and $found (eq $state "active") }}
             {{- $closed := and $found (eq $state "closed") (ge $respStatus 200) (lt $respStatus 300) (eq $responseKey $currentKey) (ne $externalName "") }}
+            {{- /* History is not liveness. Preserve the unchanged paid attempt through
+              unproven responses regardless of error-code spelling or cache presence.
+              A successful current OBSERVE of absence still clears the resource.
+              These predicates never make found/active/serving/closed true.
+            */ -}}
+            {{- $observedAbsent := and $isCurrentObservation (ge $respStatus 200) (lt $respStatus 300) (hasKey $resp "found") (not $found) }}
+            {{- $retainResourceHistory := and $samePaidAttempt (not $attemptChanged) (ne (dig "id" "" $prevResource) "") (not $observedAbsent) }}
             {{- if or $parkedClosed $parkedBudget }}
-            {{- if and $parkedClosed (ne $externalName "") (or (ne $externalName (get $prevResource "id")) (and (ge $respStatus 200) (lt $respStatus 300) (ne $state "closed"))) }}{{ fail "terminal tuple conflicts with selected allocation" }}{{ end }}
+            {{- if and $parkedClosed (ne $externalName "") (ge $respStatus 200) (lt $respStatus 300) (ne $state "closed") }}{{ fail "closed terminal tuple conflicts with selected allocation state" }}{{ end }}
             {{- $externalName = get $prevResource "id" }}
             {{- $state = get $prevResource "state" }}
             {{- $endpoints = dig "endpoints" (list) $prevResource }}
@@ -862,6 +876,11 @@ spec:
               predecessor cannot exempt a successor from its own paid boot deadline. */ -}}
             {{- $deadlineExceeded := and (not $closed) (not $parkedClosed) (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds) }}
             {{- $closeForBudget := or $parkedBudget (and $deadlineExceeded (eq $onDeadline "Close")) }}
+            {{- /* Never persist a terminal discriminator that the next render cannot
+              validate. Absence is not closure: if it erased the only usable handle,
+              deny this frame rather than poison the earlier tuple or invent liveness.
+            */ -}}
+            {{- if and $closeForBudget (or (eq $bootAnchorAt "") (eq $mintedAt "") (not (or (and $found (ne $externalName "")) $retainResourceHistory))) }}{{ fail "budget retirement requires complete bound allocation history" }}{{ end }}
 
             {{- /* B1: persist the complete terminal/retirement tuple while retaining
               its native child. Only a later read of that tuple may omit it. Crossplane
@@ -1446,16 +1465,13 @@ spec:
                 id: {{ $externalName | quote }}
                 state: {{ $state | quote }}
                 endpoints: {{ toJson $endpoints }}
-              {{- else if and (ne $refusalCode "") $prevResource $samePaidAttempt (not $attemptChanged) }}
+              {{- else if $retainResourceHistory }}
               {{- /*
-                LATCH THE HANDLE THROUGH A REFUSAL. provider-http overwrites
-                status.response.body with the ERROR body of a failed mutation, so a 4xx on
-                UPDATE leaves this render with no observation at all — and the naive result is
-                that status.resource.id vanishes at the exact moment an operator needs the lease
-                handle to diagnose the failure. A refusal is "we did not get to look", NOT "the
-                lease is gone", so the last observation is carried forward. A genuine
-                `found: false` observation is NOT latched: that one really does mean gone, and
-                advertising a stale handle there would be a lie.
+                Retain the validated same-attempt resource as HISTORY through an
+                unproven response. No code or cache is required. The paid clock and
+                original id must survive the FIRST retirement status, before omission.
+                A positive current observation of absence is not latched. Fresh
+                readiness and closure still require their independent current proof.
               */}}
               resource: {{ toJson $prevResource }}
               {{- else }}

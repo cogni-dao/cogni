@@ -1064,7 +1064,7 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     }
   });
 
-  it("carries the lease handle through a refusal, but never invents one", () => {
+  it("retains bound history through unproven responses without inventing liveness", () => {
     // provider-http overwrites status.response.body with the ERROR body of a failed mutation,
     // so a 4xx on UPDATE leaves the render with no observation — and the naive result is that
     // status.resource.id vanishes at the exact moment an operator needs the lease handle to
@@ -1072,12 +1072,16 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect(template).toContain(
       '$prevResource := dig "status" "resource" (dict) $xr'
     );
+    expect(template).toContain("{{- else if $retainResourceHistory }}");
     expect(template).toContain(
-      '{{- else if and (ne $refusalCode "") $prevResource $samePaidAttempt (not $attemptChanged) }}'
+      '$retainResourceHistory := and $samePaidAttempt (not $attemptChanged) (ne (dig "id" "" $prevResource) "") (not $observedAbsent)'
     );
-    // The latch is guarded on the REFUSAL, not merely on `found == false`: a genuine
-    // `found: false` observation really does mean gone, and advertising a stale handle there
-    // would be a lie.
+    expect(template).toContain(
+      '$observedAbsent := and $isCurrentObservation (ge $respStatus 200) (lt $respStatus 300) (hasKey $resp "found") (not $found)'
+    );
+    // Missing/no-code responses cannot erase a paid tuple. A positive current
+    // found:false observation still clears normal resource status. Actual-template
+    // sequences below discriminate both cases without treating history as liveness.
     expect(template).not.toContain("{{- else if $prevResource }}");
   });
 
@@ -2711,6 +2715,16 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
       expected:
         /^\s+render_test\.go:\d+: refusal destroyed durable terminal tuple false 409 map\[.*failure:map\[message:unproven reason:ledger_unavailable\].*\]\n$/,
     },
+    {
+      label: "exact 6769 first-budget incomplete tuple",
+      oldSha: "6769a72f495040fcb5fdbc36fbf37dd518c04328",
+      hash: "753773636e87e451ccd640e67d9ef5261425b83f7b9ac8cfb22268c274e47f41",
+      test: "TestR2FirstBudgetRetirementPreservesTuple",
+      caseName: "503-empty-no-cache-attempt0",
+      diagnostic: "first budget retirement lost bound handle:",
+      expected:
+        /^\s+render_test\.go:\d+: first budget retirement lost bound handle: got <nil>, want handle-xcw:cogni-candidate-a:b927a9dd-6132-4fc9-a51e-e3cee2568e3c:1\n$/,
+    },
   ])("rejects $label at the native behavior assertion", ({
     oldSha,
     hash,
@@ -2769,11 +2783,29 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
     expect(result.stderr, evidence).toBe("");
     // A nonzero exit alone could be a toolchain, compile, parse or setup error.
     // Require the selected native test to reach its exact paid-child assertion.
-    const events: { Action: string; Test?: string; Output?: string }[] =
-      result.stdout
-        .trim()
-        .split(/\r?\n/)
-        .map((line) => JSON.parse(line));
+    const events: {
+      Action: string;
+      Package: string;
+      Test?: string;
+      Output?: string;
+    }[] = result.stdout
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line));
+    expect(
+      [...new Set(events.map((event) => event.Package))],
+      evidence
+    ).toEqual(["cogni.test/xcomputeworkload-render"]);
+    expect(
+      events
+        .filter((event) => event.Action === "start")
+        .map((event) => event.Test),
+      evidence
+    ).toEqual([undefined]);
+    expect(
+      events.some((event) => event.Action === "pass"),
+      evidence
+    ).toBe(false);
     expect(
       events
         .filter((event) => event.Action === "run")

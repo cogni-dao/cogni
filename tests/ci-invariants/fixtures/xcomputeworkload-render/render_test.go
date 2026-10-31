@@ -864,9 +864,10 @@ func TestR2TerminalParksSurviveRestartShaAndDelayedGC(t *testing.T) {
 					}
 				}
 			}
-			conflicts := []string{"ambiguous"}
+			conflicts := []string{"ambiguous", "foreign-handle", "foreign-key", "malformed", "cache-conflict", "wrong-owner"}
 			if mode != "budget" {
-				conflicts = append(conflicts, "active-success", "foreign-handle", "foreign-key", "malformed", "cache-conflict", "wrong-owner")
+				// Only CLOSED parks reject the same handle merely for being active.
+				conflicts = append(conflicts, "active-success")
 			}
 			for _, conflict := range conflicts {
 				bad := r2Copy(t, parkedInput)
@@ -1364,6 +1365,260 @@ func TestR2MigrationAndRefusalStatusStayObservational(t *testing.T) {
 			}
 			if mode == "budget-before-refusal" && at(o.status, "resource", "id") != at(initial.status, "resource", "id") {
 				t.Fatal("own handle lost through refusal")
+			}
+		})
+	}
+}
+
+// Establish paid history from the full template's own current allocation frame.
+// No terminal reason exists yet: the next render is the FIRST budget retirement.
+func r2AllocatedBudgetAttempt(t *testing.T, attempt int) (obj, obj, string, string) {
+	t.Helper()
+	f := fixture(1)
+	xr(f)["spec"].(obj)["bootPolicy"] = obj{"onGiveUp": "Replace", "onDeadline": "Close", "bootDeadlineSeconds": 60}
+	selected, k := "akash-lease", key(1)
+	if attempt > 0 {
+		selected = fmt.Sprintf("akash-lease-g1-recover-%d", attempt)
+		k = fmt.Sprintf("%s:recover:%d", k, attempt)
+		status(f)["recovery"] = obj{"leaseGeneration": 1, "count": attempt, "key": k, "maxAttempts": 3}
+		status(f)["bootEpoch"] = obj{"key": fmt.Sprintf("%s:1:recover:%d:unserved", strings.Repeat("b", 40), attempt), "at": "2000-01-01T00:00:00Z"}
+	}
+	seed := render(t, loadTemplate(t), f)
+	c := r2Native(t, seed.leases[selected], selected, "budget-history")
+	r2Stamp(c, k, "active", false, false)
+	observed(f)[selected] = c
+	r2Merge(f, render(t, loadTemplate(t), f))
+	return f, c, selected, k
+}
+
+func TestR2FirstBudgetRetirementPreservesTuple(t *testing.T) {
+	frames := []struct {
+		name string
+		code int
+		body string
+	}{
+		{"503-empty", 503, ""},
+		{"503-object", 503, `{}`},
+		{"missing-response", 0, ""},
+		{"coded409", 409, `{"code":"wallet_allocation_blocked","message":"unproven"}`},
+		{"coded503", 503, `{"code":"ledger_unavailable","message":"unproven"}`},
+		{"terminal422", 422, `{"code":"identity_conflict","message":"unproven"}`},
+	}
+	for _, frame := range frames {
+		for _, cache := range []bool{false, true} {
+			for _, attempt := range []int{0, 1} {
+				cacheName := "no-cache"
+				if cache {
+					cacheName = "own-cache"
+				}
+				t.Run(fmt.Sprintf("%s-%s-attempt%d", frame.name, cacheName, attempt), func(t *testing.T) {
+					f, c, selected, k := r2AllocatedBudgetAttempt(t, attempt)
+					tm := loadTemplate(t)
+					status(f)["bootEpoch"].(obj)["mintedAt"] = "2000-01-01T00:00:00Z"
+					history := r2Copy(t, status(f))
+					st := at(c, "resource", "status").(obj)
+					ownResponse := r2Copy(t, st["response"].(obj))
+					var wire obj
+					if err := json.Unmarshal([]byte(at(c, "resource", "spec", "forProvider", "payload", "body").(string)), &wire); err != nil {
+						t.Fatal(err)
+					}
+					wire["externalName"] = "handle-" + k
+					st["requestDetails"] = obj{"method": "POST", "url": "http://akash-tx-actuator.cogni-candidate-a.svc.cluster.local:8080/v1/akash/update", "body": jsonString(wire)}
+					if cache {
+						st["cache"] = obj{"response": ownResponse}
+					}
+					if frame.code == 0 {
+						delete(st, "response")
+					} else {
+						st["response"] = obj{"statusCode": frame.code, "body": frame.body}
+					}
+					first := render(t, tm, f)
+					// This is the earliest discriminating assertion for exact6769 CI.
+					if at(first.status, "resource", "id") != "handle-"+k {
+						t.Fatalf("first budget retirement lost bound handle: got %v, want %s", at(first.status, "resource", "id"), "handle-"+k)
+					}
+					wantNames(t, first, selected)
+					r2Cleanup(t, first.leases[selected], k)
+					if jsonString(at(first.leases[selected], "spec")) != jsonString(at(c, "resource", "spec")) ||
+						jsonString(first.status["resource"]) != jsonString(history["resource"]) ||
+						jsonString(first.status["bootEpoch"]) != jsonString(history["bootEpoch"]) ||
+						jsonString(first.status["recovery"]) != jsonString(history["recovery"]) ||
+						first.status["serving"] != false || first.status["phase"] != "Failed" ||
+						at(first.status, "failure", "reason") != "BootDeadlineClosed" ||
+						!strings.Contains(at(first.status, "failure", "message").(string), "external closure and settlement are unproven") {
+						t.Fatal("first retirement tuple/cleanup was incomplete or invented proof", first.status)
+					}
+					// Status patch lost: repeated renders must still RETAIN this child.
+					wantNames(t, render(t, tm, f), selected)
+					r2Merge(f, first)
+					// Same unproven frame, then recovered current response, then deletion.
+					// A later successful active response cannot cancel retirement or spend.
+					for i := 0; i < 4; i++ {
+						if i == 1 {
+							r2Stamp(c, k, "active", false, false)
+						}
+						if i == 2 {
+							at(c, "resource", "metadata").(obj)["deletionTimestamp"] = "2026-10-31T00:55:47Z"
+						}
+						if i == 3 {
+							delete(at(c, "resource", "status").(obj), "response")
+							delete(at(c, "resource", "status").(obj), "cache")
+						}
+						o := render(t, tm, f)
+						wantNames(t, o)
+						if at(o.status, "failure", "reason") != "BootDeadlineClosed" || o.status["serving"] != false ||
+							jsonString(o.status["resource"]) != jsonString(first.status["resource"]) ||
+							jsonString(o.status["bootEpoch"]) != jsonString(first.status["bootEpoch"]) ||
+							jsonString(o.status["recovery"]) != jsonString(first.status["recovery"]) {
+							t.Fatal("persisted first retirement did not survive later child evidence", o.status)
+						}
+						r2Merge(f, o)
+					}
+					delete(observed(f), selected) // GC/ref loss before this pass's status.
+					f = r2Copy(t, f)              // Restart: retain only the earlier durable tuple.
+					for i := 0; i < 4; i++ {
+						if i == 1 {
+							r2SetSha(f, strings.Repeat("d", 40))
+						}
+						o := render(t, loadTemplate(t), f)
+						wantNames(t, o)
+						if at(o.status, "failure", "reason") != "BootDeadlineClosed" || o.status["serving"] != false ||
+							jsonString(o.status["resource"]) != jsonString(first.status["resource"]) ||
+							jsonString(o.status["bootEpoch"]) != jsonString(first.status["bootEpoch"]) ||
+							jsonString(o.status["recovery"]) != jsonString(first.status["recovery"]) {
+							t.Fatal("restart/SHA edit resurrected or advanced retired paid attempt", o.status)
+						}
+						r2Merge(f, o)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestR2BudgetHistoryIsNotAllocationOrLiveness(t *testing.T) {
+	tm := loadTemplate(t)
+	for _, mode := range []string{"never-allocated", "wrong-attempt", "changed-generation", "found-false", "expired-found-false", "missing-handle"} {
+		t.Run(mode, func(t *testing.T) {
+			f, c, selected, k := r2AllocatedBudgetAttempt(t, 0)
+			st := at(c, "resource", "status").(obj)
+			st["response"] = obj{"statusCode": 503, "body": `{}`}
+			status(f)["bootEpoch"].(obj)["mintedAt"] = "2000-01-01T00:00:00Z"
+			switch mode {
+			case "never-allocated":
+				status(f)["resource"] = nil
+				status(f)["bootEpoch"].(obj)["mintedAt"] = nil
+			case "wrong-attempt":
+				status(f)["bootEpoch"].(obj)["key"] = strings.Repeat("b", 40) + ":1:recover:1:unserved"
+			case "changed-generation":
+				xr(f)["spec"].(obj)["leaseGeneration"] = 2
+			case "found-false", "expired-found-false":
+				// This exact current OBSERVE proves absence. The old cache must not
+				// re-advertise it as a found allocation or authorize recovery.
+				st["cache"] = obj{"response": obj{"statusCode": 200, "body": jsonString(obj{"found": true, "resource": obj{"state": "active", "externalName": "handle-" + k}})}}
+				st["response"] = obj{"statusCode": 200, "body": `{"found":false,"serving":false}`}
+				if mode == "found-false" {
+					// No elapsed paid deadline: absence still clears normal status.
+					status(f)["bootEpoch"].(obj)["mintedAt"] = nil
+				}
+			case "missing-handle":
+				status(f)["resource"] = nil
+			}
+			if mode == "expired-found-false" || mode == "missing-handle" {
+				out, err := execute(t, tm, f)
+				if err == nil || out.leases != nil || !strings.Contains(err.Error(), "budget retirement requires complete bound allocation history") {
+					t.Fatal("incomplete first retirement escaped whole-render refusal", err)
+				}
+				return
+			}
+			o := render(t, tm, f)
+			if o.status["resource"] != nil || at(o.status, "bootEpoch", "mintedAt") != nil || o.status["serving"] != false ||
+				at(o.status, "failure", "reason") == "BootDeadlineClosed" || at(o.status, "recovery", "count") != nil {
+				t.Fatal("unbound history invented allocation, liveness, deadline or ordinal", o.status)
+			}
+			if mode == "changed-generation" {
+				wantNames(t, o, selected, "akash-lease-g2") // Live incumbent stays protected.
+				r2Cleanup(t, o.leases["akash-lease-g2"], key(2))
+			} else {
+				wantNames(t, o, selected)
+				r2Cleanup(t, o.leases[selected], k)
+			}
+		})
+	}
+}
+
+func TestR2BudgetParkRejectsOwnHandleConflicts(t *testing.T) {
+	tm := loadTemplate(t)
+	for _, deleting := range []bool{false, true} {
+		for _, evidence := range []string{"current-only", "cache-only", "both-foreign", "recorded-only", "same-active", "same-closed"} {
+			t.Run(fmt.Sprintf("%s-deleting%v", evidence, deleting), func(t *testing.T) {
+				f, c, selected, k := r2AllocatedBudgetAttempt(t, 1)
+				status(f)["bootEpoch"].(obj)["mintedAt"] = "2000-01-01T00:00:00Z"
+				first := render(t, tm, f)
+				wantNames(t, first, selected)
+				r2Cleanup(t, first.leases[selected], k)
+				r2Merge(f, first)
+				if deleting {
+					at(c, "resource", "metadata").(obj)["deletionTimestamp"] = "2026-10-31T00:55:47Z"
+				}
+				r2Stamp(c, k, "active", false, false)
+				st := at(c, "resource", "status").(obj)
+				foreign := obj{"statusCode": 200, "body": jsonString(obj{"found": true, "resource": obj{"state": "active", "externalName": "foreign"}})}
+				switch evidence {
+				case "current-only":
+					st["response"] = foreign // No cache or requestDetails handle to compare.
+				case "cache-only":
+					delete(st, "response")
+					st["cache"] = obj{"response": foreign}
+				case "both-foreign":
+					st["response"] = foreign
+					st["cache"] = obj{"response": foreign} // They agree with each other, not XR A.
+				case "recorded-only":
+					delete(st, "response")
+					st["requestDetails"].(obj)["body"] = jsonString(obj{"cogniKey": k, "externalName": "foreign"})
+				case "same-closed":
+					r2Stamp(c, k, "closed", false, true)
+				}
+				if evidence == "same-active" || evidence == "same-closed" {
+					o := render(t, tm, f)
+					wantNames(t, o)
+					if at(o.status, "failure", "reason") != "BootDeadlineClosed" || o.status["serving"] != false ||
+						jsonString(o.status["resource"]) != jsonString(first.status["resource"]) ||
+						jsonString(o.status["recovery"]) != jsonString(first.status["recovery"]) {
+						t.Fatal("same-handle observation changed budget intent or granted recovery", o.status)
+					}
+				} else {
+					out, err := execute(t, tm, f)
+					if err == nil || out.leases != nil || !strings.Contains(err.Error(), "bound attempt handle conflicts with own cleanup evidence") {
+						t.Fatal("budget park masked contradictory original cleanup identity", evidence, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestR2FirstRetirementRejectsConflictingHistory(t *testing.T) {
+	tm := loadTemplate(t)
+	for _, evidence := range []string{"current", "cache", "recorded"} {
+		t.Run(evidence, func(t *testing.T) {
+			f, c, _, k := r2AllocatedBudgetAttempt(t, 1)
+			status(f)["bootEpoch"].(obj)["mintedAt"] = "2000-01-01T00:00:00Z"
+			st := at(c, "resource", "status").(obj)
+			foreign := obj{"statusCode": 200, "body": jsonString(obj{"found": true, "resource": obj{"state": "active", "externalName": "foreign"}})}
+			switch evidence {
+			case "current":
+				st["response"] = foreign
+			case "cache":
+				st["response"] = obj{"statusCode": 503, "body": `{}`}
+				st["cache"] = obj{"response": foreign}
+			case "recorded":
+				delete(st, "response")
+				st["requestDetails"].(obj)["body"] = jsonString(obj{"cogniKey": k, "externalName": "foreign"})
+			}
+			out, err := execute(t, tm, f)
+			if err == nil || out.leases != nil || !strings.Contains(err.Error(), "bound attempt handle conflicts with own cleanup evidence") {
+				t.Fatal("first retirement rewrote independently bound history", evidence, err)
 			}
 		})
 	}
