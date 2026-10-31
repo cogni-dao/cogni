@@ -20,6 +20,8 @@
  *   - SCOPED_LIKE_THE_WRITER: every ledger read is wallet-scoped exactly like the actuator's
  *     writes — the scope is receipt identity (SCOPE_IS_HALF_THE_LOOKUP_KEY), so an unscoped or
  *     differently-derived read silently sees nothing.
+ *   - TEST_NATIVE_ISOLATION: test mode keeps ledger reads but returns not-requested native
+ *     evidence without constructing the public transport.
  * Side-effects: none at construction; returned methods read the ledger and public LCD.
  * Links: @adapters/server/compute/akash-tx-allocation-ledger.adapter,
  *   @features/compute/akash-tx/akash-tx-wallet (accountWalletScope),
@@ -29,8 +31,10 @@
 
 import type { Database } from "@cogni/db-client";
 
-import { DrizzleAkashTxAllocationLedger } from "@/adapters/server";
-import { AkashNativeStateReader } from "@/adapters/server/compute/akash-native-state.adapter";
+import {
+  AkashNativeStateReader,
+  DrizzleAkashTxAllocationLedger,
+} from "@/adapters/server";
 import { accountWalletScope } from "@/features/compute/akash-tx/akash-tx-wallet";
 import type { AkashTxAllocationRecord } from "@/ports";
 import type { ServerEnv } from "@/shared/env";
@@ -76,10 +80,30 @@ export function createLeaseReadCapability(
     getDb,
     accountWalletScope(accountId)
   );
-  const native = new AkashNativeStateReader(accountId, fetch, makeLogger());
+  const native = env.isTestMode
+    ? undefined
+    : new AkashNativeStateReader(accountId, fetch, makeLogger());
   return {
     read: (input) => ledger.read(input),
-    readNativeStates: (input) => native.readMany(input),
+    readNativeStates: async (input) => {
+      if (native) return native.readMany(input);
+      return Object.fromEntries(
+        input.dseqs.map((dseq) => [
+          dseq,
+          {
+            source: null,
+            observedAt: null,
+            deploymentState: null,
+            deploymentCoverage: "unknown",
+            deploymentObservedAt: null,
+            leaseStates: [],
+            leaseCoverage: "unknown",
+            leasePages: [],
+            errorCode: "not_requested",
+          } satisfies AkashNativeObservation,
+        ])
+      );
+    },
     listAllocated: (input) => ledger.listAllocated(input),
     listReceipts: (input) => ledger.listReceipts(input),
   };

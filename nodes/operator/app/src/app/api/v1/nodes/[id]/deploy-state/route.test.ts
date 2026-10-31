@@ -360,6 +360,65 @@ describe("bug.5556 exact receipt authorization and independent evidence", () => 
     expect(body).not.toHaveProperty("leases");
   });
 
+  it("keeps handle-bearing closure unknown when native deployment and lease are closed", async () => {
+    const receipt = receiptOf("candidate-a", "7001");
+    listReceipts.mockResolvedValue([
+      receipt,
+      {
+        ...receiptOf("candidate-a", "unused"),
+        cogniKey: "handleless-failed",
+        externalName: undefined,
+        state: "failed",
+      },
+    ]);
+    const observedAt = "2026-10-31T02:30:00.000Z";
+    const native = {
+      source: "akash-lcd",
+      observedAt,
+      deploymentState: "closed",
+      deploymentCoverage: "complete",
+      deploymentObservedAt: observedAt,
+      leaseStates: [
+        {
+          id: {
+            owner: "akash1owner",
+            dseq: "7001",
+            gseq: 1,
+            oseq: 1,
+            provider: "akash1provider",
+            bseq: 0,
+          },
+          state: "closed",
+          observedAt,
+        },
+      ],
+      leaseCoverage: "complete",
+      leasePages: [{ observedAt, count: 1 }],
+      errorCode: null,
+    };
+    readNativeStates.mockResolvedValue({ "7001": native });
+    const response = await get();
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.receiptStates).toMatchObject([
+      {
+        cogniKey: receipt.cogniKey,
+        externalName: "7001",
+        closure: "unknown",
+        native,
+      },
+      {
+        ledgerState: "failed",
+        closure: "closed",
+        native: { observedAt: null },
+      },
+    ]);
+    expect(readNativeStates).toHaveBeenCalledTimes(1);
+    expect(readNativeStates).toHaveBeenCalledWith(
+      expect.objectContaining({ dseqs: ["7001"] })
+    );
+  });
+
   it("retains allocated legacy truncation and ledger-only failed closure independently", async () => {
     listAllocated.mockResolvedValue(
       Array.from({ length: 50 }, (_, i) =>

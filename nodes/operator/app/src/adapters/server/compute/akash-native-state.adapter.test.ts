@@ -199,6 +199,71 @@ describe("Akash native state — public read contract", () => {
     expect(result?.deploymentCoverage).toBe("complete");
   });
 
+  it.each([
+    ["first", true],
+    ["first", false],
+    ["second", true],
+    ["second", false],
+  ] as const)("records retained evidence and its window after a %s-page conflict (deployment valid: %s)", async (conflictPage, validDeployment) => {
+    vi.useFakeTimers();
+    const deploymentTime = "2026-10-31T02:30:00.000Z";
+    const firstPageTime = "2026-10-31T02:30:01.000Z";
+    const secondPageTime = "2026-10-31T02:30:02.000Z";
+    const unrelated = lease("reclaiming", {
+      provider: "akash1unrelated",
+      bseq: 7,
+    });
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      const u = new URL(String(url));
+      if (u.pathname.includes("deployments/info")) {
+        vi.setSystemTime(new Date(deploymentTime));
+        return validDeployment
+          ? json(deployment())
+          : new Response("unavailable", { status: 503 });
+      }
+      const secondPage = u.searchParams.has("pagination.key");
+      vi.setSystemTime(new Date(secondPage ? secondPageTime : firstPageTime));
+      if (conflictPage === "first")
+        return json(page([lease("active"), unrelated, lease("closed")]));
+      return json(
+        secondPage
+          ? page([unrelated, lease("closed")])
+          : page([lease("active")], "YQ==")
+      );
+    });
+    const result = (await read(fetcher))[DSEQ];
+    const retainedTime =
+      conflictPage === "first" ? firstPageTime : secondPageTime;
+    expect(fetcher).toHaveBeenCalledTimes(conflictPage === "first" ? 2 : 3);
+    expect(result).toMatchObject({
+      deploymentCoverage: validDeployment ? "complete" : "unknown",
+      deploymentObservedAt: validDeployment ? deploymentTime : null,
+      leaseCoverage: "partial",
+      errorCode: "conflicting_read",
+      observedAt: retainedTime,
+    });
+    // A is excluded; unrelated B survives with its actual response time and full identity.
+    expect(result?.leaseStates).toEqual([
+      { id: unrelated.lease.id, state: "reclaiming", observedAt: retainedTime },
+    ]);
+    expect(result?.leasePages).toEqual(
+      conflictPage === "first"
+        ? [{ observedAt: firstPageTime, count: 3 }]
+        : [
+            { observedAt: firstPageTime, count: 1 },
+            { observedAt: secondPageTime, count: 2 },
+          ]
+    );
+    for (const evidence of result?.leaseStates ?? []) {
+      expect(
+        result?.leasePages.some((p) => p.observedAt === evidence.observedAt)
+      ).toBe(true);
+      expect(Date.parse(result?.observedAt ?? "")).toBeGreaterThanOrEqual(
+        Date.parse(evidence.observedAt)
+      );
+    }
+  });
+
   it("retains first-page evidence after the second page fails", async () => {
     const fetcher = vi.fn(async (url: string | URL | Request) => {
       const u = new URL(String(url));

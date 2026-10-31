@@ -305,6 +305,12 @@ export class AkashNativeStateReader {
         );
         const parsed = pageResponse.safeParse(response.body);
         if (!parsed.success) throw new NativeReadError("invalid_response");
+        // Retained rows belong to this page even if a later row conflicts and exits.
+        leasePages.push({
+          observedAt: response.observedAt,
+          count: parsed.data.leases.length,
+        });
+        leaseCoverage = "partial";
         let invalid = false;
         for (const row of parsed.data.leases) {
           const lease = leaseResponse.safeParse(row);
@@ -332,11 +338,6 @@ export class AkashNativeStateReader {
             observedAt: response.observedAt,
           });
         }
-        leasePages.push({
-          observedAt: response.observedAt,
-          count: parsed.data.leases.length,
-        });
-        leaseCoverage = "partial";
         if (invalid) break;
         key = parsed.data.pagination.next_key;
         if (key === null || key === "") {
