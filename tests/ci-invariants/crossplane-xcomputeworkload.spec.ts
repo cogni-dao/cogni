@@ -28,7 +28,8 @@
  *     external-handle OBSERVE proof, including revisions that previously served.
  *   - OVERLAP_BEFORE_CLOSE: a lease close is IRREVERSIBLE and its idempotence key is refused
  *     forever once settled, so the outgoing lease is held open until the incoming one is proven
- *     serving and DNS has flipped. Never more than two lease children for one (node, env).
+ *     serving and DNS has flipped. At most two LIVE allocation intents for one (node, env).
+ *     A proven closed predecessor may remain as a third Request until selection persists.
  * Side-effects: IO (reads repo manifests)
  * Links: story.5016 R2.3, task.5095, task.5096, infra/crossplane/AGENTS.md
  * @public
@@ -250,7 +251,7 @@ describe("XComputeWorkload composite API (task.5096)", () => {
       // bug.5287: the deadline binds to the CURRENT attempt via $hasServedDesired.
       // The retired '$neverServed' form keyed on a LATCHED field, so it could only ever be
       // true on a first boot and made BOOT_SLO_OR_CLOSE unreachable thereafter.
-      '$deadlineExceeded := and (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds)'
+      '$deadlineExceeded := and (not $closed) (not $parkedClosed) (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds)'
     );
   });
 
@@ -265,9 +266,7 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     expect(template).toContain('dig "status" "bootEpoch" "key" "" $xr');
     // The window resets ONLY when the attempt key changes — a mere re-render of the same
     // attempt must keep the recorded start, or the deadline could never fire at all.
-    expect(template).toContain(
-      'and (eq $prevBootKey $bootKey) (ne $prevBootAt "")'
-    );
+    expect(template).toContain('and $sameBootAttempt (ne $prevBootAt "")');
     // The latch is persisted where the next render reads it.
     const bootEpoch = (statusSchema.bootEpoch as YamlObject)
       .properties as YamlObject;
@@ -336,7 +335,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // deadline on it made BOOT_SLO_OR_CLOSE unreachable for the rest of an XR's life — toks5
     // production billed three generations with bootDeadlineAt hours past and reason=None.
     expect(templateCode).toContain(
-      '$deadlineExceeded := and (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds)'
+      '$deadlineExceeded := and (not $closed) (not $parkedClosed) (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds)'
     );
     // no live template expression may reference the retired predicate
     const live = templateCode
@@ -487,7 +486,19 @@ describe("XComputeWorkload Composition (task.5096)", () => {
       '$currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount'
     );
     expect(templateCode).toContain(
-      "$closedForCurrentKey := and $closed (eq $responseKey $currentKey)"
+      "$closedForCurrentKey := and (hasKey $closedKeys $currentKey) (not (hasKey $ambiguousKeys $currentKey))"
+    );
+    expect(templateCode).toContain(
+      "native spec and recorded paid key disagree"
+    );
+    expect(templateCode).toContain("duplicate native owners of one paid key");
+    expect(templateCode).toContain(
+      '$leaseResourceName = printf "akash-lease-g%d-recover-%d" $leaseGeneration $recoveryCount'
+    );
+    expect(
+      templateCode.indexOf("$recoveryCount = add1 $recoveryCount")
+    ).toBeLessThan(
+      templateCode.indexOf("$leaseResourceName := get $owners $currentKey")
     );
     // An explicit base-generation bump must select a NEW provider-http Request child. Updating
     // the old child invokes UPDATE, which cannot mint the replacement the generation promises.
@@ -649,7 +660,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // The actuator still resolves a RELEASED key to its handle (state `closed`), so a naive
     // `found == false` check would leave the Request — and therefore the XR — undeletable.
     expect(template).toContain(
-      '(.response.body.found == false) or (.response.body.resource.state == "closed")'
+      '(.response.body.found == false) or ((.response.body.resource.state // .response.body.state) == "closed")'
     );
     // The namespaced Request has NO deletionPolicy field; management defaults to ["*"],
     // which includes Delete. Orphan is never right for a resource that costs money.
@@ -971,21 +982,15 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect("None").toMatch(reasonPattern);
   });
 
-  it("reports a settled-key closed lease as LeaseClosed, not a Progressing lie (task.5156)", () => {
-    // The render side PARKS a closed lease observed under a non-current key (the Axiom 26 fence
-    // above). The status side must tell the same truth. $heldClosed only catches
-    // $closedForCurrentKey, so before this branch a closed-under-foreign-key lease with no
-    // recovery in flight missed every fail branch and fell through to the default
-    // Progressing/reason:"None" — status claimed a permanently-parked lease was still coming up.
-    expect(template).toContain("{{- else if $closed }}");
-    // Ordered strictly AFTER the active-recovery branch, or it would swallow
-    // LeaseRecoveryInProgress and report a recovering lease as terminally closed.
-    const chain = template.slice(
-      template.lastIndexOf('{{- $phase := "Progressing" }}')
+  it("rejects conflicting paid ownership before returning any desired resources", () => {
+    // Native Go acceptance covers whole-render failure, first-pass terminal
+    // retention and durable LeaseClosed/max3 parking after native child loss.
+    expect(templateCode).toContain(
+      "native spec and recorded paid key disagree"
     );
-    expect(chain.indexOf("LeaseRecoveryInProgress")).toBeLessThan(
-      chain.indexOf("{{- else if $closed }}")
-    );
+    expect(templateCode).toContain("unexplained ahead/behind paid attempt");
+    expect(templateCode).toContain('$failReason = "LeaseClosed"');
+    expect(templateCode).toContain('$failReason = "RecoveryLimitExceeded"');
   });
 
   it("keeps paid replacement OPT-IN and BOUNDED now that Replace is admitted (story.5050)", () => {
@@ -1012,11 +1017,11 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect(templateCode).toContain("$desiredKeys");
   });
 
-  it("never re-renders a lease Request under a settled key (Axiom 26 fence)", () => {
-    // Closed current and foreign keys remain parked exactly as before. A different explicit base
-    // generation is handled by selecting a NEW generation-qualified child above this fence.
+  it("persists terminal proof before omission without selecting a spent key", () => {
+    // The native Go suite covers the required first retaining pass and durable
+    // parks. Conflicting foreign-key frames fail before producing resources.
     expect(template).toContain(
-      "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey)))"
+      "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed $parkedClosed)"
     );
     expect(template).toContain(
       '$heldClosed := and $closedForCurrentKey (ne $onGiveUp "Replace")'
@@ -1066,7 +1071,7 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
       '$prevResource := dig "status" "resource" (dict) $xr'
     );
     expect(template).toContain(
-      '{{- else if and (ne $refusalCode "") $prevResource }}'
+      '{{- else if and (ne $refusalCode "") $prevResource $samePaidAttempt (not $attemptChanged) }}'
     );
     // The latch is guarded on the REFUSAL, not merely on `found == false`: a genuine
     // `found: false` observation really does mean gone, and advertising a stale handle there
@@ -1695,9 +1700,9 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
    * OVERLAP_BEFORE_CLOSE, the candidate observation, the last-known-good DNS latch, and the
    * status.activeLeaseGeneration write.
    *
-   * Scope: assumes $renderLease is true (the terminal fences it is built from — $closeForBudget,
-   * $recoveryExhausted, $heldClosed, the settled-key clause — are untouched by this change and
-   * are pinned verbatim by "never re-renders a lease Request under a settled key"). The DNS leg
+   * Scope: non-recovery frames with $renderLease true. Native Go acceptance owns
+   * terminal two-pass retirement and the three-Request/two-live-allocation case.
+   * This model does not implement the recovery selector. The DNS leg
    * models the provider-HOSTNAME branch only; the IPv4/A-record split is pinned by
    * "uses a hostname CNAME when available and falls back to an IPv4 A record".
    */
@@ -1888,18 +1893,17 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     expect(doc).toContain("CLOSE-AFTER-CUTOVER");
   });
 
-  it("the model mirrors the template it stands in for", () => {
-    // Every expression the model above reproduces, pinned against the real source. If the
-    // template changes shape, this fails and the behavioural cases below stop being evidence.
+  it("pins the non-recovery model's retained/DNS gates to the template", () => {
+    // These pin the retained/DNS gates only. The Go/Sprig suite owns exact paid
+    // attempt selection, recovery staging, native bindings and reordered persistence.
     for (const expression of [
       '$activeLeaseGeneration := int (dig "status" "activeLeaseGeneration" -1 $xr)',
       "if and (ge $activeLeaseGeneration 0) (ne $activeLeaseGeneration $leaseGeneration)",
       '$activeBaseKey := printf "xcw:%s:%s:%d" $ns $name $activeLeaseGeneration',
       "range $childName, $child := $observedResources",
       'if and (eq $retainedResourceName "") (hasPrefix "akash-lease" $childName) (ne $childName $leaseResourceName)',
-      '$childBodyRaw := dig "status" "requestDetails" "body" "" $child.resource',
-      'if ne $childBodyRaw "" }}{{ $childKey = dig "cogniKey" "" (fromJson $childBodyRaw) }}',
-      "if has $childKey $activeKeys",
+      "$childKey := get $childKeys $childName",
+      "if and (has $childKey $activeKeys) (not (hasKey $closedKeys $childKey))",
       "$retainedResourceName = $childName",
       "$retainedKey = $childKey",
       '$retainedState := dig "state" "unknown" $retainedRes',
@@ -2346,8 +2350,10 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     expect(afterCutover.effectiveDnsTarget).toBe(CANDIDATE_TARGET);
   });
 
-  it("never renders a third lease child, whatever the observed history", () => {
-    // AT MOST TWO leases for one (node, env). A second bump during an overlap must still find
+  it("bounds the non-recovery model to two live allocation intents", () => {
+    // At most two LIVE allocations for one (node, env). Native Go acceptance also
+    // covers a third, proven-closed Request staged before selection persists.
+    // A second bump during an overlap must still find
     // the PROVEN-SERVING child — not the never-served candidate the first bump left behind —
     // and must not resurrect the stale one as a third.
     const doubleBump = render({
@@ -2381,8 +2387,8 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     ]);
     expect(doubleBump.retainedCogniKey).toBe(`xcw:${NS}:${NAME}:7`);
 
-    // Exhaustive sweep: every combination of observed children and candidate states still
-    // renders at most two lease children, and never the same name twice.
+    // Sweep this non-recovery model's states. Its two-object shape is not proof
+    // of the native recovery budget or two-pass retirement.
     const states: (LeaseResponse | undefined)[] = [
       undefined,
       { found: false },
@@ -2535,10 +2541,10 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       // UPDATE on the live lease on every single poll.
       expect(retainedBlock).not.toContain("$upToDateLogic");
       expect(retainedBlock).not.toContain(".response.body.serving == true");
-      // CLOSED_IS_REMOVED is preserved verbatim: it is what makes the eventual GC actually
-      // close the lease instead of leaving an undeletable Request.
+      // Wrapped observations and direct settled CREATE replays can both finish
+      // native finalization. Neither proves that REMOVE ran or costs settled.
       expect(retainedBlock).toContain(
-        '(.response.body.found == false) or (.response.body.resource.state == "closed")'
+        '(.response.body.found == false) or ((.response.body.resource.state // .response.body.state) == "closed")'
       );
       // The paid lease's leak-prevention refusal is not relaxed for the retained child either.
       expect(retainedBlock).not.toContain("external-create-succeeded");
@@ -2558,14 +2564,14 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     // assertions elsewhere in this file, gathered here because this change is the one most
     // likely to be tempted into relaxing them.
     expect(template).toContain(
-      "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey)))"
+      "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed $parkedClosed)"
     );
     expect(templateCode).toContain("$maxRecoveryAttempts := 3");
     expect(templateCode).toContain(
       "$recoveryExhausted := and $closedForCurrentKey (ge $recoveryCount $maxRecoveryAttempts)"
     );
     expect(templateCode).toContain(
-      '$closeForBudget := and $deadlineExceeded (eq $onDeadline "Close")'
+      '$closeForBudget := or $parkedBudget (and $deadlineExceeded (eq $onDeadline "Close"))'
     );
     expect(templateCode).toContain(
       '$heldClosed := and $closedForCurrentKey (ne $onGiveUp "Replace")'

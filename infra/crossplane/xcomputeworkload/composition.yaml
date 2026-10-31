@@ -363,15 +363,44 @@ spec:
 
             {{- /* ---------- observed state ---------- */ -}}
             {{- $observedResources := default (dict) .observed.resources }}
-            {{- /* PAID_KEY_OWNS_CHILD_IDENTITY (bug.5557). Resolve observed paid keys BEFORE
-              naming. A spec rollback/restoration must reuse the original logical child: GC of
-              an alias closes the SAME paid lease. Naming status is only a bootstrap hint.
-              Missing/malformed receipts, duplicate family members and deletion already in flight
-              are unsafe: fail the whole function, never return a partial desired resource set.
+            {{- /* PAID_KEY_OWNS_CHILD_IDENTITY (bug.5557 r2). Inventory native owners,
+              select the exact paid attempt, THEN name it. Never retarget a Request.
+              Spec/refs may precede provider status; only a fully bound native spec is
+              admissible without a receipt. Conflicting spec/receipt/cache is corruption.
             */ -}}
+            {{- $maxRecoveryAttempts := 3 }}
+            {{- $onGiveUp := dig "bootPolicy" "onGiveUp" "Hold" $spec }}
+            {{- $recoveryCount := 0 }}
+            {{- $recovery := dig "status" "recovery" (dict) $xr | default (dict) }}
+            {{- if $recovery }}
+            {{- $rg := int (get $recovery "leaseGeneration") }}
+            {{- $rc := int (get $recovery "count") }}
+            {{- $rk := printf "xcw:%s:%s:%d:recover:%d" $ns $name $rg $rc }}
+            {{- if or (not (hasKey $recovery "leaseGeneration")) (lt $rg 0) (ne (printf "%v" $recovery.leaseGeneration) (printf "%d" $rg)) (kindIs "string" $recovery.leaseGeneration) (kindIs "string" $recovery.count) (lt $rc 1) (gt $rc 3) (ne (printf "%v" $recovery.count) (printf "%d" $rc)) }}{{ fail "invalid recovery generation/count tuple" }}{{ end }}
+            {{- if and (hasKey $recovery "key") (ne $recovery.key $rk) }}{{ fail "recovery key disagrees with generation/count" }}{{ end }}
+            {{- if and (hasKey $recovery "maxAttempts") (or (ne (int $recovery.maxAttempts) $maxRecoveryAttempts) (ne (printf "%v" $recovery.maxAttempts) "3") (kindIs "string" $recovery.maxAttempts)) }}{{ fail "recovery cap disagrees with max3" }}{{ end }}
+            {{- if eq $rg $leaseGeneration }}{{ $recoveryCount = $rc }}{{ end }}
+            {{- end }}
+            {{- $recordedCount := $recoveryCount }}
+            {{- $currentKey := $baseCogniKey }}
+            {{- if gt $recoveryCount 0 }}{{ $currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount }}{{ end }}
+            {{- $prevBootKey := dig "status" "bootEpoch" "key" "" $xr }}
+            {{- if and (ne $prevBootKey "") (not (regexMatch "^[0-9a-f]{40}:(0|[1-9][0-9]*)(:recover:[1-3])?(:unserved|:served)?$" $prevBootKey)) }}{{ fail "malformed boot attempt key" }}{{ end }}
+            {{- $prevBootCanonical := regexReplaceAll ":(unserved|served)$" $prevBootKey "" }}
+            {{- $bootAttemptSuffix := printf ":%d" $leaseGeneration }}
+            {{- if gt $recoveryCount 0 }}{{ $bootAttemptSuffix = printf "%s:recover:%d" $bootAttemptSuffix $recoveryCount }}{{ end }}
+            {{- if and (hasSuffix ":served" $prevBootKey) (ne (dig "status" "observedBundle" "source" "sha" "" $xr) (first (splitList ":" $prevBootKey))) }}{{ fail "served boot history conflicts with observed bundle" }}{{ end }}
+            {{- $samePaidAttempt := regexMatch (printf "^[0-9a-f]{40}%s$" (regexQuoteMeta $bootAttemptSuffix)) $prevBootCanonical }}
+            {{- $prevResource := dig "status" "resource" (dict) $xr | default (dict) }}
+            {{- $prevFailure := dig "status" "failure" "reason" "" $xr }}
+            {{- $terminalReason := has $prevFailure (list "LeaseClosed" "RecoveryLimitExceeded" "BootDeadlineClosed") }}
+            {{- $completeSelection := or (eq $recoveryCount 0) (and (eq (get $recovery "key") $currentKey) (eq (int (get $recovery "maxAttempts")) 3)) }}
+            {{- $parkedClosed := and $samePaidAttempt $completeSelection (ne (dig "status" "bootEpoch" "at" "" $xr) "") (ne (dig "id" "" $prevResource) "") (eq (dig "state" "" $prevResource) "closed") (has $prevFailure (list "LeaseClosed" "RecoveryLimitExceeded")) }}
+            {{- $parkedBudget := and $samePaidAttempt $completeSelection (ne (dig "status" "bootEpoch" "at" "" $xr) "") (eq $prevFailure "BootDeadlineClosed") (ne (dig "id" "" $prevResource) "") (ne (dig "status" "bootEpoch" "mintedAt" "" $xr | default "") "") }}
+            {{- if and $parkedClosed (eq $prevFailure "RecoveryLimitExceeded") (ne $recoveryCount 3) }}{{ fail "terminal recovery tuple is not max3" }}{{ end }}
+            {{- if and $terminalReason (or (eq $prevBootKey "") (hasSuffix (printf ":%d" $leaseGeneration) (regexReplaceAll ":recover:[1-3]$" $prevBootCanonical ""))) (not (or $parkedClosed $parkedBudget)) }}{{ fail "incomplete or conflicting terminal attempt tuple" }}{{ end }}
+
             {{- $leaseRequestGeneration := int (dig "status" "leaseRequestGeneration" -1 $xr) }}
-            {{- $leaseResourceName := "" }}
-            {{- $selectedPaidKey := "" }}
             {{- $activeLeaseGeneration := int (dig "status" "activeLeaseGeneration" -1 $xr) }}
             {{- $activeBaseKey := printf "xcw:%s:%s:%d" $ns $name $activeLeaseGeneration }}
             {{- $desiredKeys := list $baseCogniKey }}
@@ -381,47 +410,130 @@ spec:
             {{- $activeKeys = append $activeKeys (printf "%s:recover:%d" $activeBaseKey $attempt) }}
             {{- end }}
             {{- $paidKeyPattern := printf "^xcw:%s:%s:(0|[1-9][0-9]*)(:recover:[1-3])?$" (regexQuoteMeta $ns) (regexQuoteMeta $name) }}
+            {{- $owners := dict }}
+            {{- $childKeys := dict }}
+            {{- $closedKeys := dict }}
+            {{- $ambiguousKeys := dict }}
             {{- $activeMatches := 0 }}
             {{- range $childName, $child := $observedResources }}
             {{- if hasPrefix "akash-lease" $childName }}
-            {{- $bodyRaw := dig "status" "requestDetails" "body" "" $child.resource }}
-            {{- if eq $bodyRaw "" }}{{ fail (printf "lease child %s has no recorded paid key" $childName) }}{{ end }}
-            {{- $body := mustFromJson $bodyRaw }}
-            {{- if not (kindIs "map" $body) }}{{ fail (printf "lease child %s has malformed requestDetails" $childName) }}{{ end }}
-            {{- $paidKey := dig "cogniKey" "" $body }}
-            {{- if not (kindIs "string" $paidKey) }}{{ fail (printf "lease child %s has malformed paid key" $childName) }}{{ end }}
+            {{- if not (regexMatch "^akash-lease(-g(0|[1-9][0-9]*)(-recover-[1-3])?)?$" $childName) }}{{ fail "unsupported lease logical name" }}{{ end }}
+            {{- $native := $child.resource }}
+            {{- if or (ne (dig "apiVersion" "" $native) "http.m.crossplane.io/v1alpha2") (ne (dig "kind" "" $native) "Request") (eq (dig "metadata" "name" "" $native) "") }}{{ fail "invalid native lease Request shape" }}{{ end }}
+            {{- $binding := mustFromJson (dig "spec" "forProvider" "payload" "body" "" $native) }}
+            {{- if not (kindIs "map" $binding) }}{{ fail "lease child has no native payload binding" }}{{ end }}
+            {{- $paidKey := dig "cogniKey" "" $binding }}
+            {{- if not (kindIs "string" $paidKey) }}{{ fail "lease child has malformed paid key" }}{{ end }}
             {{- if not (regexMatch $paidKeyPattern $paidKey) }}{{ fail (printf "lease child %s has unsupported paid key %q" $childName $paidKey) }}{{ end }}
-            {{- $desiredMatch := has $paidKey $desiredKeys }}
-            {{- $activeMatch := and (ge $activeLeaseGeneration 0) (ne $activeLeaseGeneration $leaseGeneration) (has $paidKey $activeKeys) }}
-            {{- if and (or $desiredMatch $activeMatch) (not (empty (dig "metadata" "deletionTimestamp" "" $child.resource))) }}
-            {{- fail (printf "eligible lease child %s is deleting; refusing paid-key adoption" $childName) }}
+            {{- if hasKey $owners $paidKey }}{{ fail "duplicate native owners of one paid key" }}{{ end }}
+            {{- if or (ne (dig "environment" "" $binding) $env) (ne (dig "identity" "nodeId" "" $binding) $spec.nodeId) (ne (dig "identity" "compositeUid" "" $binding) $compositeUid) (lt (int (dig "identity" "compositeGeneration" 0 $binding)) 1) (ne (dig "metadata" "namespace" "" $native) $ns) (eq (dig "metadata" "uid" "" $native) "") (ne (dig "metadata" "annotations" "crossplane.io/composition-resource-name" "" $native) $childName) }}{{ fail "lease child native identity/binding mismatch" }}{{ end }}
+            {{- $controllers := 0 }}
+            {{- range (dig "metadata" "ownerReferences" (list) $native) }}
+            {{- if (dig "controller" false .) }}
+            {{- $controllers = add1 $controllers }}
+            {{- if or (ne .uid $compositeUid) (ne .name $name) (ne .kind $xr.kind) (ne .apiVersion $xr.apiVersion) }}{{ fail "lease child has another controller owner" }}{{ end }}
             {{- end }}
-            {{- if $activeMatch }}
+            {{- end }}
+            {{- if ne (int $controllers) 1 }}{{ fail "lease child requires one XR controller owner" }}{{ end }}
+            {{- $recordedHandle := "" }}
+            {{- $bodyRaw := dig "status" "requestDetails" "body" "" $native }}
+            {{- if eq $bodyRaw "" }}
+            {{- $parts := splitList ":" $paidKey }}
+            {{- $nativeName := printf "akash-lease-g%s" (index $parts 3) }}
+            {{- if eq (len $parts) 6 }}{{ $nativeName = printf "%s-recover-%s" $nativeName (index $parts 5) }}{{ end }}
+            {{- if not (or (eq $childName $nativeName) (and (eq (len $parts) 4) (eq $childName "akash-lease"))) }}{{ fail "unrecorded child is not the exact native creation intent" }}{{ end }}
+            {{- end }}
+            {{- if ne $bodyRaw "" }}
+            {{- $body := mustFromJson $bodyRaw }}
+            {{- if not (kindIs "map" $body) }}{{ fail "malformed requestDetails" }}{{ end }}
+            {{- $recordedHandle = dig "externalName" "" $body }}
+            {{- if ne (dig "cogniKey" "" $body) $paidKey }}{{ fail "native spec and recorded paid key disagree" }}{{ end }}
+            {{- if and (hasKey $body "environment") (ne $body.environment $env) }}{{ fail "recorded lease environment conflicts" }}{{ end }}
+            {{- if and (hasKey $body "identity") (or (ne $body.identity.nodeId $spec.nodeId) (ne $body.identity.compositeUid $compositeUid)) }}{{ fail "recorded lease identity conflicts" }}{{ end }}
+            {{- else if or (not (empty (dig "status" "response" (dict) $native))) (not (empty (dig "status" "cache" (dict) $native))) (ne (dig "metadata" "annotations" "crossplane.io/external-name" "" $native) "") }}
+            {{- fail "lease child has external evidence without a recorded paid key" }}
+            {{- end }}
+            {{- $handle := "" }}
+            {{- range $slot := list "response" "cache" }}
+            {{- $response := dig "status" $slot (dict) $native }}
+            {{- if eq $slot "cache" }}{{ $response = dig "response" (dict) $response }}{{ end }}
+            {{- $raw := dig "body" "" $response }}
+            {{- if ne $raw "" }}
+            {{- $answer := mustFromJson $raw }}
+            {{- if not (kindIs "map" $answer) }}{{ fail "malformed lease response/cache" }}{{ end }}
+            {{- $allocation := dig "resource" $answer $answer }}
+            {{- if not (kindIs "map" $allocation) }}{{ fail "malformed lease allocation" }}{{ end }}
+            {{- $ownHandle := dig "externalName" "" $allocation }}
+            {{- if and (ne $handle "") (ne $ownHandle "") (ne $ownHandle $handle) }}{{ fail "lease response/cache handle conflict" }}{{ end }}
+            {{- if ne $ownHandle "" }}{{ $handle = $ownHandle }}{{ end }}
+            {{- $code := int (dig "statusCode" 0 $response) }}
+            {{- if and (eq $slot "response") (ge $code 200) (lt $code 300) (ne $ownHandle "") (dig "found" true $answer) (eq (dig "state" "" $allocation) "closed") }}{{ $_ := set $closedKeys $paidKey true }}{{ end }}
+            {{- end }}
+            {{- end }}
+            {{- if and (ne $recordedHandle "") (ne $handle "") (ne $recordedHandle $handle) }}{{ fail "recorded cleanup handle conflicts with own allocation" }}{{ end }}
+            {{- range (dig "status" "conditions" (list) $native) }}
+            {{- if contains "cannot determine creation result" (dig "message" "" .) }}{{ $_ := set $ambiguousKeys $paidKey true }}{{ end }}
+            {{- end }}
+            {{- $_ := set $owners $paidKey $childName }}
+            {{- $_ := set $childKeys $childName $paidKey }}
+            {{- if and (ge $activeLeaseGeneration 0) (ne $activeLeaseGeneration $leaseGeneration) (has $paidKey $activeKeys) (not (hasKey $closedKeys $paidKey)) }}
             {{- $activeMatches = add1 $activeMatches }}
-            {{- if gt $activeMatches 1 }}{{ fail "multiple lease children match the active paid-key family" }}{{ end }}
-            {{- end }}
-            {{- if $desiredMatch }}
-            {{- if ne $leaseResourceName "" }}{{ fail "multiple lease children match the desired paid-key family" }}{{ end }}
-            {{- $leaseResourceName = $childName }}
-            {{- $selectedPaidKey = $paidKey }}
-            {{- end }}
-            {{- end }}
-            {{- end }}
-            {{- if ne $leaseResourceName "" }}
-            {{- /* Persist the selected name's hint, never reinterpret it as the paid generation. */ -}}
-            {{- $leaseRequestGeneration = -1 }}
-            {{- if regexMatch "^akash-lease-g[0-9]+$" $leaseResourceName }}
-            {{- $leaseRequestGeneration = int (trimPrefix "akash-lease-g" $leaseResourceName) }}
+            {{- if gt $activeMatches 1 }}{{ fail "multiple live children match active paid-key family" }}{{ end }}
+            {{- if not (empty (dig "metadata" "deletionTimestamp" "" $native)) }}{{ fail "active lease child is deleting" }}{{ end }}
             {{- end }}
             {{- else }}
+            {{- $unqualifiedRaw := dig "spec" "forProvider" "payload" "body" "" $child.resource }}
+            {{- if ne $unqualifiedRaw "" }}
+            {{- $unqualified := mustFromJson $unqualifiedRaw }}
+            {{- if and (kindIs "map" $unqualified) (hasKey $unqualified "cogniKey") }}{{ fail "paid child has an unsupported logical name" }}{{ end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- /* The only adjacency proof is CURRENT closure. No maximum-ordinal adoption.
+              Retain its native spec until the successor selection survives a status read.
+            */ -}}
+            {{- $stagedChildren := dict }}
+            {{- $closedForCurrentKey := and (hasKey $closedKeys $currentKey) (not (hasKey $ambiguousKeys $currentKey)) }}
+            {{- $recoveryExhausted := and $closedForCurrentKey (ge $recoveryCount $maxRecoveryAttempts) }}
+            {{- $heldClosed := and $closedForCurrentKey (ne $onGiveUp "Replace") }}
+            {{- if and $closedForCurrentKey (not $recoveryExhausted) (eq $onGiveUp "Replace") (not (or $parkedClosed $parkedBudget)) }}
+            {{- $oldName := get $owners $currentKey }}
+            {{- if not (empty (dig "metadata" "deletionTimestamp" "" (index $observedResources $oldName).resource)) }}{{ fail "selected lease child is deleting" }}{{ end }}
+            {{- $_ := set $stagedChildren $oldName (index $observedResources $oldName) }}
+            {{- $recoveryCount = add1 $recoveryCount }}
+            {{- $currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount }}
+            {{- $closedForCurrentKey = hasKey $closedKeys $currentKey }}
+            {{- $heldClosed = false }}
+            {{- $recoveryExhausted = false }}
+            {{- end }}
+            {{- range $i, $k := $desiredKeys }}
+            {{- if hasKey $owners $k }}
+            {{- if or (gt (int $i) (int $recoveryCount)) (and (lt (int $i) (int $recoveryCount)) (not (hasKey $closedKeys $k))) }}{{ fail "unexplained ahead/behind paid attempt" }}{{ end }}
+            {{- end }}
+            {{- end }}
+            {{- $leaseResourceName := get $owners $currentKey }}
+            {{- if ne $leaseResourceName "" }}
+            {{- if and (not (or $parkedClosed $parkedBudget)) (not (empty (dig "metadata" "deletionTimestamp" "" (index $observedResources $leaseResourceName).resource))) }}{{ fail "selected lease child is deleting" }}{{ end }}
+            {{- if and (gt $recordedCount 0) (not $completeSelection) (eq (dig "status" "requestDetails" "body" "" (index $observedResources $leaseResourceName).resource) "") }}{{ fail "legacy recovery repair requires its exact recorded paid receipt" }}{{ end }}
+            {{- $leaseRequestGeneration = -1 }}
+            {{- if regexMatch "^akash-lease-g[0-9]+$" $leaseResourceName }}{{ $leaseRequestGeneration = int (trimPrefix "akash-lease-g" $leaseResourceName) }}{{ end }}
+            {{- else }}
+            {{- if and (gt $recordedCount 0) (not $completeSelection) }}{{ fail "legacy recovery requires its exact observed receipt" }}{{ end }}
+            {{- if and (eq (int $recoveryCount) (int $recordedCount)) (or $samePaidAttempt (and (eq $prevBootKey "") (eq $activeLeaseGeneration $leaseGeneration))) (or (ne (dig "id" "" $prevResource) "") (ne (dig "status" "bootEpoch" "mintedAt" "" $xr | default "") "")) (not (or $parkedClosed $parkedBudget)) }}{{ fail "allocated selected child disappeared without terminal proof" }}{{ end }}
+            {{- if and (gt $recordedCount 0) (not $samePaidAttempt) }}{{ fail "missing successor lacks durable selection tuple" }}{{ end }}
             {{- $leaseResourceName = "akash-lease" }}
-            {{- if or (ge $leaseRequestGeneration 0) (hasKey $observedResources "akash-lease") }}
+            {{- if gt $recoveryCount 0 }}
+            {{- $leaseResourceName = printf "akash-lease-g%d-recover-%d" $leaseGeneration $recoveryCount }}
+            {{- else if or (ge $leaseRequestGeneration 0) (hasKey $observedResources "akash-lease") }}
             {{- $leaseRequestGeneration = $leaseGeneration }}
             {{- $leaseResourceName = printf "akash-lease-g%d" $leaseGeneration }}
             {{- end }}
-            {{- /* A differently-keyed child cannot be updated into the new paid identity. */ -}}
-            {{- if index $observedResources $leaseResourceName }}{{ fail (printf "lease child %s already holds another paid key" $leaseResourceName) }}{{ end }}
+            {{- if index $observedResources $leaseResourceName }}{{ fail "deterministic lease name already holds another paid key" }}{{ end }}
             {{- end }}
+            {{- $attemptChanged := ne (int $recoveryCount) (int $recordedCount) }}
+            {{- if or $attemptChanged (not $samePaidAttempt) }}{{ $prevResource = dict }}{{ end }}
+            {{- $cogniKey = $currentKey }}
+            {{- $_ := set $payload "cogniKey" $cogniKey }}
             {{- /*
               OVERLAP_BEFORE_CLOSE (bug.5322). Crossplane garbage-collects whatever this function
               stops rendering, and for a LIVE, SERVING lease that GC is a REMOVE ->
@@ -476,10 +588,8 @@ spec:
             {{- if and (ge $activeLeaseGeneration 0) (ne $activeLeaseGeneration $leaseGeneration) }}
             {{- range $childName, $child := $observedResources }}
             {{- if and (eq $retainedResourceName "") (hasPrefix "akash-lease" $childName) (ne $childName $leaseResourceName) }}
-            {{- $childKey := "" }}
-            {{- $childBodyRaw := dig "status" "requestDetails" "body" "" $child.resource }}
-            {{- if ne $childBodyRaw "" }}{{ $childKey = dig "cogniKey" "" (fromJson $childBodyRaw) }}{{ end }}
-            {{- if has $childKey $activeKeys }}
+            {{- $childKey := get $childKeys $childName }}
+            {{- if and (has $childKey $activeKeys) (not (hasKey $closedKeys $childKey)) }}
             {{- $retainedResourceName = $childName }}
             {{- $retainedKey = $childKey }}
             {{- $childRaw := dig "status" "response" "body" "" $child.resource }}
@@ -532,6 +642,16 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
+            {{- $responseKey := "" }}
+            {{- $lastRequestedSha := "" }}
+            {{- if $leaseObs }}
+            {{- $requestBodyRaw := dig "status" "requestDetails" "body" "" $leaseObs.resource }}
+            {{- if ne $requestBodyRaw "" }}
+            {{- $requestBody := mustFromJson $requestBodyRaw }}
+            {{- $responseKey = dig "cogniKey" "" $requestBody }}
+            {{- $lastRequestedSha = dig "expectedSourceSha" "" $requestBody }}
+            {{- end }}
+            {{- end }}
             {{- /*
               REFUSAL_IS_OBSERVABLE (bug.5115: a wallet block that only reached provider logs was
               invisible for hours). A non-2xx answer carries the actuator's stable `code`, and the
@@ -548,7 +668,6 @@ spec:
             {{- $refusalCode := dig "code" "" $resp }}
             {{- $refusalMessage := dig "message" "" $resp }}
             {{- $refusalRetryable := or (eq $respStatus 409) (ge $respStatus 500) }}
-            {{- $prevResource := dig "status" "resource" (dict) $xr }}
             {{- /* OBSERVE wraps the resource; CREATE/UPDATE return it directly. Normalize both
               shapes so a replayed settled key cannot masquerade as an empty response and spin
               forever. */ -}}
@@ -557,9 +676,23 @@ spec:
             {{- $endpoints := dig "endpoints" (list) $res }}
             {{- $externalName := dig "externalName" "" $res }}
             {{- $found := dig "found" (ne $externalName "") $resp }}
-            {{- $serving := dig "serving" false $resp }}
+            {{- $isCurrentObservation := false }}
+            {{- if $leaseObs }}{{ $isCurrentObservation = and (eq (dig "status" "requestDetails" "method" "" $leaseObs.resource) "POST") (eq (dig "status" "requestDetails" "url" "" $leaseObs.resource) (printf "%s/v1/akash/observe" $baseUrl)) }}{{ end }}
+            {{- $serving := and $isCurrentObservation (ge $respStatus 200) (lt $respStatus 300) (eq $responseKey $currentKey) (eq $lastRequestedSha $desiredSha) (hasKey $resp "found") (dig "serving" false $resp) }}
             {{- $active := and $found (eq $state "active") }}
-            {{- $closed := and $found (eq $state "closed") }}
+            {{- $closed := and $found (eq $state "closed") (ge $respStatus 200) (lt $respStatus 300) (eq $responseKey $currentKey) (ne $externalName "") }}
+            {{- if or $parkedClosed $parkedBudget }}
+            {{- if and $parkedClosed (ne $externalName "") (or (ne $externalName (get $prevResource "id")) (and (ge $respStatus 200) (lt $respStatus 300) (ne $state "closed"))) }}{{ fail "terminal tuple conflicts with selected allocation" }}{{ end }}
+            {{- $externalName = get $prevResource "id" }}
+            {{- $state = get $prevResource "state" }}
+            {{- $endpoints = dig "endpoints" (list) $prevResource }}
+            {{- $found = true }}
+            {{- $active = false }}
+            {{- $serving = false }}
+            {{- $closed = $parkedClosed }}
+            {{- $heldClosed = and $parkedClosed (eq $prevFailure "LeaseClosed") }}
+            {{- $recoveryExhausted = and $parkedClosed (eq $prevFailure "RecoveryLimitExceeded") }}
+            {{- end }}
             {{- /* HOST_ADMITTED_BY_THE_CANDIDATE (story.5038 K2, 2026-10-16). `serving` is a
               host-routed probe against the candidate's endpoint presenting Host: <publicHost>.
               When the candidate and the incumbent sit on the SAME provider and run the SAME
@@ -575,67 +708,6 @@ spec:
             {{- range $endpoints }}
             {{- if eq (regexReplaceAll "^[A-Za-z][A-Za-z0-9+.-]*://" . "" | splitList "/" | first | splitList ":" | first | lower | trimSuffix ".") $publicHost }}{{ $hostAdmitted = true }}{{ end }}
             {{- end }}
-
-            {{- /*
-              BOUNDED RECOVERY (bug.5287). A settled key is deliberately never re-spent by the
-              actuator. The retired controller handled that fact with recoverBounded(3); dropping
-              the budget during the Crossplane port changed "one authority" into "zero automatic
-              recovery". Keep leaseGeneration as the operator-controlled base identity, then use
-              at most three deterministic recovery keys beneath that generation. A recovery is
-              opened ONLY after the actor read-back for the CURRENT key proves state=closed. The
-              provider's requestDetails body ties the response to its key, preventing a stale
-              closed response from consuming all three attempts while the managed Request update
-              is still propagating.
-
-              The count is generation-scoped. An explicit leaseGeneration bump resets it to zero;
-              no resourceVersion, wall clock, or reconcile tick can manufacture another paid key.
-            */ -}}
-            {{- $maxRecoveryAttempts := 3 }}
-            {{- $recoveryCount := 0 }}
-            {{- $recoveryLeaseGeneration := int (dig "status" "recovery" "leaseGeneration" -1 $xr) }}
-            {{- if eq $recoveryLeaseGeneration $leaseGeneration }}
-            {{- $recoveryCount = int (dig "status" "recovery" "count" 0 $xr) }}
-            {{- end }}
-            {{- $currentKey := $baseCogniKey }}
-            {{- if gt $recoveryCount 0 }}
-            {{- $currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount }}
-            {{- end }}
-            {{- $responseKey := "" }}
-            {{- $lastRequestedSha := "" }}
-            {{- if $leaseObs }}
-            {{- $requestBodyRaw := dig "status" "requestDetails" "body" "" $leaseObs.resource }}
-            {{- if ne $requestBodyRaw "" }}
-            {{- $requestBody := fromJson $requestBodyRaw }}
-            {{- $responseKey = dig "cogniKey" "" $requestBody }}
-            {{- $lastRequestedSha = dig "expectedSourceSha" "" $requestBody }}
-            {{- end }}
-            {{- end }}
-            {{- /* Recovery status may lag a paid receipt, but must never rewrite its key.
-              Fail closed until status/request propagation agrees; only the terminal read-back
-              below may authorize the next bounded recovery key. */ -}}
-            {{- if and (ne $selectedPaidKey "") (ne $selectedPaidKey $currentKey) }}
-            {{- fail (printf "selected paid key %s disagrees with recovery key %s" $selectedPaidKey $currentKey) }}
-            {{- end }}
-            {{- $closedForCurrentKey := and $closed (eq $responseKey $currentKey) }}
-            {{- $recoveryExhausted := and $closedForCurrentKey (ge $recoveryCount $maxRecoveryAttempts) }}
-            {{- /* PAID REPLACEMENT IS OPT-IN (bug.5287 review). bootPolicy.onGiveUp gates the
-              re-mint: Hold (the permanent default) NEVER spends on a replacement — a closed
-              lease parks as LeaseClosed until a human bumps spec.leaseGeneration. The XRD enum
-              is [Hold]-only until provider strikes are re-homed in the actuator (PR D), so
-              recovery is unreachable by TWO independent mechanisms: this gate, and the schema
-              rejecting a premature `Replace` catalog cell. */ -}}
-            {{- $onGiveUp := dig "bootPolicy" "onGiveUp" "Hold" $spec }}
-            {{- if and $closedForCurrentKey (not $recoveryExhausted) (eq $onGiveUp "Replace") }}
-            {{- $recoveryCount = add1 $recoveryCount }}
-            {{- $currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount }}
-            {{- end }}
-            {{- /* A closed lease we are NOT actively replacing must park, not re-render:
-              re-rendering under a settled key is refused by the actuator every reconcile
-              forever (Axiom 26 churn). Held ⇒ the lease closed under the CURRENT key and
-              onGiveUp is not Replace. */ -}}
-            {{- $heldClosed := and $closedForCurrentKey (ne $onGiveUp "Replace") }}
-            {{- $cogniKey = $currentKey }}
-            {{- $_ := set $payload "cogniKey" $cogniKey }}
 
             {{- /*
               THE RELEASE STEP, READ BACK (task.5135). Only an OBSERVE answer carries a phase —
@@ -669,7 +741,7 @@ spec:
               this: the deadline may only close a lease that has NEVER served.
             */ -}}
             {{- $prevSha := dig "status" "observedBundle" "source" "sha" "" $xr }}
-            {{- $hasServedDesired := or (and $active $serving) (eq $prevSha $desiredSha) }}
+
             {{- /*
               RECEIPT-BACKED CREATE-AMBIGUITY RECOVERY (bug.5464). provider-http's generic
               leak guard is correct for resources whose CREATE may allocate a different paid
@@ -750,19 +822,34 @@ spec:
             */ -}}
             {{- $bootKey := printf "%s:%d" $desiredSha $leaseGeneration }}
             {{- if gt $recoveryCount 0 }}{{ $bootKey = printf "%s:recover:%d" $bootKey $recoveryCount }}{{ end }}
-            {{- $prevBootKey := dig "status" "bootEpoch" "key" "" $xr }}
+            {{- $sameBootAttempt := and (not $attemptChanged) (eq $prevBootCanonical $bootKey) }}
+            {{- /* Qualified history belongs to this paid attempt. A bare legacy key is
+              conservatively protected only at its unchanged canonical tuple. Qualifying
+              the key never restarts the clock. CREATE echoes cannot prove service.
+            */ -}}
+            {{- $hasServedDesired := or (and $active $serving) (and $sameBootAttempt (eq $prevSha $desiredSha) (or (hasSuffix ":served" $prevBootKey) (eq $prevBootKey $prevBootCanonical))) }}
+            {{- $bootStatusKey := printf "%s:unserved" $bootKey }}
+            {{- if $hasServedDesired }}{{ $bootStatusKey = printf "%s:served" $bootKey }}{{ end }}
+            {{- if and $sameBootAttempt (eq $prevBootKey $prevBootCanonical) (eq $prevSha $desiredSha) (not (and $active $serving)) }}{{ $bootStatusKey = $prevBootKey }}{{ end }}
             {{- $prevBootAt := dig "status" "bootEpoch" "at" "" $xr }}
             {{- $bootAnchorAt := $createdAt }}
-            {{- if and (eq $prevBootKey $bootKey) (ne $prevBootAt "") }}
+            {{- if and $sameBootAttempt (ne $prevBootAt "") }}
             {{- $bootAnchorAt = $prevBootAt }}
-            {{- else if ne $prevBootKey "" }}
+            {{- else if or $attemptChanged (ne $prevBootKey "") }}
             {{- $bootAnchorAt = dateInZone "2006-01-02T15:04:05Z07:00" now "UTC" }}
             {{- end }}
+            {{- /* A parked tuple remains bound to the old attempt even after a SHA edit.
+              Omission/GC is not external closure, and does not authorize a new paid key.
+            */ -}}
+            {{- if or $parkedClosed $parkedBudget }}
+            {{- $bootStatusKey = $prevBootKey }}
+            {{- $bootAnchorAt = $prevBootAt }}
+            {{- end }}
             {{- $mintedAt := "" }}
-            {{- if eq $prevBootKey $bootKey }}
+            {{- if or $sameBootAttempt $parkedClosed $parkedBudget }}
             {{- $mintedAt = dig "status" "bootEpoch" "mintedAt" "" $xr | default "" }}
             {{- end }}
-            {{- if and (eq $mintedAt "") $found (not $closed) (ne $externalName "") (eq $responseKey $currentKey) }}
+            {{- if and (eq $mintedAt "") $found (not $closed) (ne $externalName "") (eq $responseKey $currentKey) (ge $respStatus 200) (lt $respStatus 300) }}
             {{- $mintedAt = dateInZone "2006-01-02T15:04:05Z07:00" now "UTC" }}
             {{- end }}
             {{- $anchorTime := toDate "2006-01-02T15:04:05Z07:00" $bootAnchorAt }}
@@ -770,50 +857,19 @@ spec:
             {{- $mintTime := toDate "2006-01-02T15:04:05Z07:00" (default $bootAnchorAt $mintedAt) }}
             {{- $mintAgeSeconds := int (sub (now | unixEpoch) ($mintTime | unixEpoch)) }}
             {{- $bootDeadlineAt := dateInZone "2006-01-02T15:04:05Z07:00" ($mintTime | dateModify (printf "%ds" $bootDeadlineSeconds)) "UTC" }}
-            {{- /*
-              THE DEADLINE MUST BIND TO THE CURRENT ATTEMPT, NOT TO "EVER SERVED ANYTHING"
-              (bug.5287, the arc's original finding). `$prevSha` is the LATCHED
-              status.observedBundle.source.sha, so `eq $prevSha ""` could only ever be true on
-              a workload's very first boot. Once an XR had recorded ANY bundle the old
-              predicate was permanently false, the deadline could never fire again, and
-              BOOT_SLO_OR_CLOSE was structurally unreachable for the rest of that XR's life.
+            {{- /* Never-served is attempt-scoped; historical same-SHA service by a
+              predecessor cannot exempt a successor from its own paid boot deadline. */ -}}
+            {{- $deadlineExceeded := and (not $closed) (not $parkedClosed) (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds) }}
+            {{- $closeForBudget := or $parkedBudget (and $deadlineExceeded (eq $onDeadline "Close")) }}
 
-              Observed on toks5 production: three generations, `bootDeadlineAt` hours past,
-              `failure.reason = None`, a lease billing with no workload and no terminal state —
-              because `observedBundle` still carried `cf5de44c…` from a generation that once
-              served. Combined with the actuator replaying a settled-but-never-served receipt
-              (task.5157), such a workload is unbounded in BOTH directions: nothing re-creates
-              it and nothing closes it.
-
-              `$hasServedDesired` (computed above) asks the right question: has THIS attempt's
-              sha actually served? A live serving workload is unaffected; a never-served XR
-              behaves exactly as before. What changes is that an XR which served an OLD sha and
-              never served the current one can now reach its deadline instead of hanging.
-
-              DELIBERATELY NOT WIDENED: an XR whose `observedBundle` EQUALS the desired sha —
-              served once, then stopped — still does not trip the deadline. Catching that needs
-              a trustworthy live-serving signal, and `serving` yields false negatives (toks4
-              production served HTTP 200 for 13 days while its XR read serving=false). Closing
-              a live node on a false negative is worse than leaving that case to a human; it
-              waits on bug.5237's host-routed probe.
+            {{- /* B1: persist the complete terminal/retirement tuple while retaining
+              its native child. Only a later read of that tuple may omit it. Crossplane
+              GCs/persists refs before applying children and patching XR status.
             */ -}}
-            {{- $deadlineExceeded := and (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds) }}
-            {{- $closeForBudget := and $deadlineExceeded (eq $onDeadline "Close") }}
-
-            {{- /*
-              A CLOSED lease opens the next bounded recovery key. Only the third closed recovery
-              is terminal; at that point the composed Request stops rendering and the XR exposes
-              RecoveryLimitExceeded. This is the Crossplane-owned equivalent of the retired
-              controller's recoverBounded(3), without an unbounded retry loop or implicit base
-              generation bump.
-            */ -}}
-            {{- /* Never render under a settled key (Axiom 26): a closed lease renders again
-              ONLY through a Replace-bumped fresh recovery key. $heldClosed parks Hold nodes;
-              the (closed && not-current-key) term fences the foreign/stale-key shape, where
-              $responseKey is absent or names another key and the guard would otherwise fail
-              open into refused-create churn every reconcile. An explicit BASE generation bump
-              selects a new generation-qualified child above before this fence is evaluated. */ -}}
-            {{- $renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey))) }}
+            {{- if and (or $closeForBudget $recoveryExhausted $heldClosed) (not (or $parkedClosed $parkedBudget)) $leaseObs }}
+            {{- $_ := set $stagedChildren $leaseResourceName $leaseObs }}
+            {{- end }}
+            {{- $renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed $parkedClosed) }}
 
             {{- /*
               BOOT GRACE. `serving` is the convergence signal, so a not-yet-serving workload
@@ -932,6 +988,28 @@ spec:
             {{- end }}
             {{- $edgeCutoverObserved := or (not $dns) $dnsCutoverObserved }}
 
+            {{- /* Closed predecessors/first-pass parks keep their own spec and mappings.
+              Normalizing each child's own response supports direct CREATE replay and
+              wrapped OBSERVE; provider-http may fall back only to that child's cache.
+              isRemovedCheck can skip REMOVE: omission is never settlement proof.
+            */ -}}
+            {{- range $childName, $child := $stagedChildren }}
+            {{- $cleanupSpec := mustFromJson (toJson $child.resource.spec) }}
+            {{- range $mapping := $cleanupSpec.forProvider.mappings }}
+            {{- if has $mapping.action (list "UPDATE" "REMOVE") }}
+            {{- $_ := set $mapping "body" (replace "externalName: .response.body.resource.externalName" "externalName: (.response.body.resource.externalName // .response.body.externalName)" $mapping.body) }}
+            {{- end }}
+            {{- end }}
+            {{- $_ := set $cleanupSpec.forProvider "isRemovedCheck" (dict "type" "CUSTOM" "logic" `(.response.body.found == false) or ((.response.body.resource.state // .response.body.state) == "closed")`) }}
+            ---
+            apiVersion: http.m.crossplane.io/v1alpha2
+            kind: Request
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ $childName }}
+            spec: {{ toJson $cleanupSpec }}
+            {{- end }}
+
             {{- /* ---------- composed: the OUTGOING Akash lease, held open ---------- */ -}}
             {{- /* bug.5322. A DELIBERATE COPY of the lease Request below, differing in exactly
               four places — the composition-resource-name, the absent `ready` annotation, the
@@ -991,7 +1069,7 @@ spec:
                     body: |
                       {
                         cogniKey: .payload.body.cogniKey,
-                        externalName: .response.body.resource.externalName,
+                        externalName: (.response.body.resource.externalName // .response.body.externalName),
                         environment: .payload.body.environment,
                         identity: .payload.body.identity,
                         spec: .payload.body.spec{{ if $hasLegacyMigration }},
@@ -1003,14 +1081,14 @@ spec:
                     body: |
                       {
                         cogniKey: .payload.body.cogniKey,
-                        externalName: .response.body.resource.externalName
+                        externalName: (.response.body.resource.externalName // .response.body.externalName)
                       }
                 expectedResponseCheck:
                   type: CUSTOM
                   logic: {{ $retainedUpToDateLogic | quote }}
                 isRemovedCheck:
                   type: CUSTOM
-                  logic: '(.response.body.found == false) or (.response.body.resource.state == "closed")'
+                  logic: '(.response.body.found == false) or ((.response.body.resource.state // .response.body.state) == "closed")'
             {{- end }}
 
             {{- /* ---------- composed: the paid Akash lease ---------- */ -}}
@@ -1090,7 +1168,7 @@ spec:
                     body: |
                       {
                         cogniKey: .payload.body.cogniKey,
-                        externalName: .response.body.resource.externalName,
+                        externalName: (.response.body.resource.externalName // .response.body.externalName),
                         environment: .payload.body.environment,
                         identity: .payload.body.identity,
                         spec: .payload.body.spec{{ if $hasLegacyMigration }},
@@ -1102,7 +1180,7 @@ spec:
                     body: |
                       {
                         cogniKey: .payload.body.cogniKey,
-                        externalName: .response.body.resource.externalName
+                        externalName: (.response.body.resource.externalName // .response.body.externalName)
                       }
                 expectedResponseCheck:
                   type: CUSTOM
@@ -1112,7 +1190,7 @@ spec:
                 # finish deleting. Closed IS removed.
                 isRemovedCheck:
                   type: CUSTOM
-                  logic: '(.response.body.found == false) or (.response.body.resource.state == "closed")'
+                  logic: '(.response.body.found == false) or ((.response.body.resource.state // .response.body.state) == "closed")'
             {{- end }}
 
             {{- /* ---------- composed: DNS intent ---------- */ -}}
@@ -1235,7 +1313,7 @@ spec:
             {{- else if $closeForBudget }}
             {{- $phase = "Failed" }}
             {{- $failReason = "BootDeadlineClosed" }}
-            {{- $failMessage = printf "workload did not serve %s within %ds; the lease was closed to stop spend" (substr 0 12 $desiredSha) $bootDeadlineSeconds }}
+            {{- $failMessage = printf "workload did not serve %s within %ds; lease retirement requested; external closure and settlement are unproven" (substr 0 12 $desiredSha) $bootDeadlineSeconds }}
             {{- else if $deadlineExceeded }}
             {{- $phase = "Failed" }}
             {{- $failReason = "BootDeadlineExceeded" }}
@@ -1273,18 +1351,6 @@ spec:
             {{- $phase = "Progressing" }}
             {{- $failReason = "LeaseRecoveryInProgress" }}
             {{- $failMessage = printf "lease recovery attempt %d of %d for generation %d" $recoveryCount $maxRecoveryAttempts $leaseGeneration }}
-            {{- else if $closed }}
-            {{- /* A lease observed closed under a NON-current recovery key (settled/foreign key).
-              $heldClosed above only catches $closedForCurrentKey, and every recovery branch
-              above has already claimed the active-recovery cases ($recoveryCount > 0), so what
-              reaches here is a settled, parked closed lease with no recovery in flight. Without
-              this branch the chain fell through to the default Progressing/reason:"None" and lied
-              that a permanently-closed lease was still coming up. $renderLease already PARKS this
-              case (Axiom 26 fence: (and $closed (not $closedForCurrentKey))); status must tell the
-              same truth. Terminal until a human bumps spec.leaseGeneration. */ -}}
-            {{- $phase = "Failed" }}
-            {{- $failReason = "LeaseClosed" }}
-            {{- $failMessage = printf "lease %s is closed under a settled recovery key; bump spec.leaseGeneration to mint a replacement" $externalName }}
             {{- end }}
             ---
             apiVersion: {{ $xr.apiVersion }}
@@ -1298,7 +1364,7 @@ spec:
               bootDeadlineAt: null
               {{- end }}
               bootEpoch:
-                key: {{ $bootKey | quote }}
+                key: {{ $bootStatusKey | quote }}
                 at: {{ $bootAnchorAt | quote }}
                 {{- if ne $mintedAt "" }}
                 mintedAt: {{ $mintedAt | quote }}
@@ -1312,6 +1378,8 @@ spec:
                 count: {{ $recoveryCount }}
                 maxAttempts: {{ $maxRecoveryAttempts }}
                 key: {{ $cogniKey | quote }}
+              {{- else }}
+              recovery: null
               {{- end }}
               {{- if ge $leaseRequestGeneration 0 }}
               leaseRequestGeneration: {{ $leaseRequestGeneration }}
@@ -1367,7 +1435,7 @@ spec:
                 id: {{ $externalName | quote }}
                 state: {{ $state | quote }}
                 endpoints: {{ toJson $endpoints }}
-              {{- else if and (ne $refusalCode "") $prevResource }}
+              {{- else if and (ne $refusalCode "") $prevResource $samePaidAttempt (not $attemptChanged) }}
               {{- /*
                 LATCH THE HANDLE THROUGH A REFUSAL. provider-http overwrites
                 status.response.body with the ERROR body of a failed mutation, so a 4xx on
@@ -1379,6 +1447,8 @@ spec:
                 advertising a stale handle there would be a lie.
               */}}
               resource: {{ toJson $prevResource }}
+              {{- else }}
+              resource: null
               {{- end }}
               {{- if ne $effectiveDnsTarget "" }}
               dns:
