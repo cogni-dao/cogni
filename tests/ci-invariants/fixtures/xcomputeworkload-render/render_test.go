@@ -2655,15 +2655,27 @@ func TestR2OldNativeOwnerWithoutIncumbentAuthority(t *testing.T) {
 				}
 			}
 			// Positive role authority permits the existing two-generation transition.
+			// R2 preserves base naming: no persisted name hint and no occupied
+			// akash-lease slot means key(9) starts there, independently of g8's name.
 			status(f)["activeLeaseGeneration"] = 8
 			status(f)["bootEpoch"] = obj{"key": strings.Repeat("b", 40) + ":8:served", "at": "2026-10-31T00:00:00Z"}
 			status(f)["observedBundle"] = xr(f)["spec"].(obj)["bundle"]
 			o := render(t, loadTemplate(t), f)
-			wantNames(t, o, "akash-lease-g8", "akash-lease-g9")
-			if paid(o, "akash-lease-g8") != key(8) || paid(o, "akash-lease-g9") != key(9) || o.status["activeLeaseGeneration"] != 8 || dnsTarget(o) != blue {
+			wantNames(t, o, "akash-lease", "akash-lease-g8")
+			if paid(o, "akash-lease-g8") != key(8) || paid(o, "akash-lease") != key(9) || o.status["activeLeaseGeneration"] != 8 || dnsTarget(o) != blue {
 				t.Fatal("bound incumbent transition changed", o.status)
 			}
 			r2Cleanup(t, o.leases["akash-lease-g8"], key(8))
+			r2Cleanup(t, o.leases["akash-lease"], key(9))
+			create := r2Mapping(t, o.leases["akash-lease"], "CREATE")
+			if create["method"] != "POST" || !strings.Contains(create["url"].(string), "/v1/akash/create") || !strings.Contains(create["body"].(string), "cogniKey: .payload.body.cogniKey") {
+				t.Fatal("fresh paid key lost native CREATE intent", create)
+			}
+			for _, logical := range []string{"akash-lease", "akash-lease-g8"} {
+				if at(o.leases[logical], "metadata", "annotations", annotation) != logical || at(o.leases[logical], "metadata", "name") != nil || at(o.leases[logical], "metadata", "uid") != nil {
+					t.Fatal("transition overrides native Request identity", o.leases[logical])
+				}
+			}
 		})
 	}
 }
