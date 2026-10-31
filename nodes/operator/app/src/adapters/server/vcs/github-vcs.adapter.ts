@@ -34,6 +34,7 @@ import type {
 } from "@cogni/ai-tools";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
+import { ENV_MANAGER_VERB_BRANCH } from "@/shared/vcs/env-manager-pr";
 import { GitHubNodeCodeAdapter } from "./github-node-code.adapter";
 import { resolveReviewedWorkflowRef } from "./reviewed-workflow-ref";
 
@@ -397,11 +398,25 @@ export class GitHubVcsAdapter implements VcsCapability {
     // the auto-merge mutation; base ref drives the queue check).
     let baseRef: string;
     let prNodeId: string;
+    let mergeHead: string;
     try {
       const { data: pr } = await octokit.request(
         "GET /repos/{owner}/{repo}/pulls/{pull_number}",
         { owner: params.owner, repo: params.repo, pull_number: params.prNumber }
       );
+      // Raw tools cannot select bypassQueue or expectedHeadSha. Reserved env operations must
+      // enter the HTTP policy owner, which classifies, authorizes and requalifies their exact head.
+      if (
+        ENV_MANAGER_VERB_BRANCH.test(pr.head?.ref ?? "") &&
+        !params.expectedHeadSha
+      )
+        return {
+          merged: false,
+          enqueued: false,
+          status: 409,
+          message:
+            "Reserved env operation requires the guarded operator merge seam",
+        };
       if (params.expectedHeadSha && pr.head.sha !== params.expectedHeadSha)
         return {
           merged: false,
@@ -409,6 +424,37 @@ export class GitHubVcsAdapter implements VcsCapability {
           status: 409,
           message: "Reviewed head changed",
         };
+      mergeHead = params.expectedHeadSha ?? pr.head.sha;
+      if (!/^[0-9a-f]{40}$/i.test(mergeHead))
+        return {
+          merged: false,
+          enqueued: false,
+          status: 503,
+          message: "Merge head unavailable",
+        };
+      if (!params.expectedHeadSha || !params.bypassQueue) {
+        const { data: commit } = await octokit.request(
+          "GET /repos/{owner}/{repo}/commits/{ref}",
+          { owner: params.owner, repo: params.repo, ref: mergeHead }
+        );
+        if (
+          commit.sha !== mergeHead ||
+          typeof commit.commit?.message !== "string"
+        )
+          return {
+            merged: false,
+            enqueued: false,
+            status: 503,
+            message: "Merge classification unavailable",
+          };
+        if (/^Cogni-Action:\s*repair\b/m.test(commit.commit.message))
+          return {
+            merged: false,
+            enqueued: false,
+            status: 409,
+            message: "Repair requires the guarded operator merge seam",
+          };
+      }
       baseRef = pr.base.ref;
       prNodeId = pr.node_id;
     } catch (error) {
@@ -424,16 +470,9 @@ export class GitHubVcsAdapter implements VcsCapability {
           baseRef
         );
 
-    if (queueEnabled && params.expectedHeadSha)
-      return {
-        merged: false,
-        enqueued: false,
-        status: 409,
-        message: "Exact-head repair cannot enter merge queue",
-      };
     if (queueEnabled) {
       try {
-        await this.enableAutoMerge(octokit, prNodeId, params.method);
+        await this.enableAutoMerge(octokit, prNodeId, params.method, mergeHead);
         return {
           merged: false,
           enqueued: true,
@@ -452,7 +491,7 @@ export class GitHubVcsAdapter implements VcsCapability {
           repo: params.repo,
           pull_number: params.prNumber,
           merge_method: params.method,
-          ...(params.expectedHeadSha ? { sha: params.expectedHeadSha } : {}),
+          sha: mergeHead,
         }
       );
 
@@ -520,16 +559,21 @@ export class GitHubVcsAdapter implements VcsCapability {
   private async enableAutoMerge(
     octokit: Octokit,
     pullRequestId: string,
-    method: "squash" | "merge" | "rebase"
+    method: "squash" | "merge" | "rebase",
+    expectedHeadOid?: string
   ): Promise<void> {
     const mergeMethod = method.toUpperCase(); // GraphQL PullRequestMergeMethod
     await octokit.graphql(
-      `mutation ($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
-        enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod }) {
+      `mutation ($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!, $expectedHeadOid: GitObjectID) {
+        enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod, expectedHeadOid: $expectedHeadOid }) {
           pullRequest { id state }
         }
       }`,
-      { pullRequestId, mergeMethod }
+      {
+        pullRequestId,
+        mergeMethod,
+        ...(expectedHeadOid ? { expectedHeadOid } : {}),
+      }
     );
   }
 

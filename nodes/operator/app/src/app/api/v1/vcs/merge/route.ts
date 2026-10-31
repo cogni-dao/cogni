@@ -191,6 +191,9 @@ export const POST = wrapRouteHandlerWithLogging(
     //     branch+trailers cannot steal this path. Classification or target-RBAC failure falls back to
     //     `node.flight` only when that independent authority already passed; otherwise it fails closed.
     let authzPath: "env_manager" | "node_flight" | undefined;
+    let classifiedHead:
+      | Awaited<ReturnType<typeof deployPlane.classifyEnvManagerPr>>
+      | undefined;
     let repairNodeId: string | undefined;
     let repair:
       | Awaited<ReturnType<typeof deployPlane.classifyEnvManagerPr>>
@@ -211,11 +214,19 @@ export const POST = wrapRouteHandlerWithLogging(
       } catch {
         return fail(
           503,
-          "repair_context_unavailable",
+          "generation_evidence_unavailable",
           "Env operation classification unavailable",
           { prNumber }
         );
       }
+      classifiedHead = classification;
+      if (classification.errorCode === "repair_context_unavailable")
+        return fail(
+          503,
+          "generation_evidence_unavailable",
+          "Classification evidence unavailable",
+          { prNumber }
+        );
       if (classification.repairClaimed && !classification.isEnvManagerPr)
         return fail(
           409,
@@ -285,15 +296,51 @@ export const POST = wrapRouteHandlerWithLogging(
       );
     }
 
-    // Requalify the exact signed repair against current catalog and fresh native receipts,
-    // regardless of the principal's independent node.flight grant.
-    if (repair) {
+    // Bind every parent-repository decision (including ordinary PRs) to the CI head.
+    if (targetsParentMonorepo) {
+      let fresh: Awaited<ReturnType<typeof deployPlane.classifyEnvManagerPr>>;
       try {
-        const fresh = await deployPlane.classifyEnvManagerPr({
+        fresh = await deployPlane.classifyEnvManagerPr({
           owner,
           repo,
           prNumber,
         });
+      } catch {
+        return fail(
+          503,
+          "generation_evidence_unavailable",
+          "Classification evidence unavailable",
+          { prNumber }
+        );
+      }
+      if (fresh.errorCode === "repair_context_unavailable")
+        return fail(
+          503,
+          "generation_evidence_unavailable",
+          "Classification evidence unavailable",
+          { prNumber }
+        );
+      if (
+        !classifiedHead?.headSha ||
+        classifiedHead.headSha !== ci.headSha ||
+        fresh.headSha !== ci.headSha ||
+        fresh.isEnvManagerPr !== classifiedHead.isEnvManagerPr ||
+        fresh.action !== classifiedHead.action ||
+        fresh.targetNodeRef !== classifiedHead.targetNodeRef ||
+        fresh.environment !== classifiedHead.environment ||
+        fresh.repairClaimed !== classifiedHead.repairClaimed
+      )
+        return fail(409, "repair_head_conflict", "Classified head changed", {
+          prNumber,
+        });
+      if (repair) repair = fresh;
+    }
+
+    // Requalify the exact signed repair against current catalog and fresh native receipts,
+    // regardless of the principal's independent node.flight grant.
+    if (repair) {
+      try {
+        const fresh = repair;
         if (
           !fresh.isEnvManagerPr ||
           fresh.action !== "repair" ||
@@ -313,6 +360,13 @@ export const POST = wrapRouteHandlerWithLogging(
           path: `infra/catalog/${fresh.targetNodeRef}.yaml`,
           ref: "main",
         });
+        if (catalog === null)
+          return fail(
+            503,
+            "generation_evidence_unavailable",
+            "Current catalog unavailable",
+            { prNumber }
+          );
         if (catalog !== fresh.baseCatalog)
           return fail(
             409,
@@ -352,8 +406,9 @@ export const POST = wrapRouteHandlerWithLogging(
         repair = fresh;
       } catch (error) {
         return fail(
-          409,
-          (error as { code?: string }).code ?? "repair_evidence_unavailable",
+          (error as { status?: number }).status ?? 503,
+          (error as { code?: string }).code ??
+            "generation_evidence_unavailable",
           "Fresh repair qualification refused",
           { prNumber }
         );
@@ -371,7 +426,7 @@ export const POST = wrapRouteHandlerWithLogging(
         repo,
         prNumber,
         method,
-        ...(repair?.headSha ? { expectedHeadSha: repair.headSha } : {}),
+        ...(targetsParentMonorepo ? { expectedHeadSha: ci.headSha } : {}),
         ...(authzPath === "env_manager" ? { bypassQueue: true } : {}),
       });
     } catch (error) {

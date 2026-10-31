@@ -215,7 +215,10 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: NODE_SLUG,
     });
     // Default: not a signed env-membership PR (ordinary merge).
-    mockClassifyEnvManagerPr.mockResolvedValue({ isEnvManagerPr: false });
+    mockClassifyEnvManagerPr.mockResolvedValue({
+      isEnvManagerPr: false,
+      headSha: greenCi().headSha,
+    });
     mockRepairQualification.mockReset();
     mockRepairQualification.mockResolvedValue({ generation: 21 });
     // FakeAuthorizationAdapter denies by default; each test grants what it needs.
@@ -348,6 +351,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
+      expectedHeadSha: greenCi().headSha,
     });
   });
 
@@ -364,6 +368,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
+      expectedHeadSha: greenCi().headSha,
     });
   });
 
@@ -425,6 +430,7 @@ describe("POST /api/v1/vcs/merge", () => {
     // A properly App-signed env-membership PR whose Cogni-Node trailer is the target node.
     mockClassifyEnvManagerPr.mockResolvedValue({
       isEnvManagerPr: true,
+      headSha: greenCi().headSha,
       targetNodeRef: NODE_SLUG,
     });
 
@@ -449,6 +455,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
+      expectedHeadSha: greenCi().headSha,
       bypassQueue: true,
     });
   });
@@ -462,6 +469,7 @@ describe("POST /api/v1/vcs/merge", () => {
     });
     mockClassifyEnvManagerPr.mockResolvedValue({
       isEnvManagerPr: true,
+      headSha: greenCi().headSha,
       targetNodeRef: NODE_SLUG,
     });
 
@@ -472,6 +480,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
+      expectedHeadSha: greenCi().headSha,
       bypassQueue: true,
     });
   });
@@ -484,6 +493,7 @@ describe("POST /api/v1/vcs/merge", () => {
     });
     mockClassifyEnvManagerPr.mockResolvedValue({
       isEnvManagerPr: true,
+      headSha: greenCi().headSha,
       targetNodeRef: NODE_SLUG,
     });
 
@@ -494,6 +504,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
+      expectedHeadSha: greenCi().headSha,
     });
   });
 
@@ -504,7 +515,10 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
     });
     // Ordinary PR → classifier says not an env-manager PR.
-    mockClassifyEnvManagerPr.mockResolvedValue({ isEnvManagerPr: false });
+    mockClassifyEnvManagerPr.mockResolvedValue({
+      isEnvManagerPr: false,
+      headSha: greenCi().headSha,
+    });
 
     const res = await post({ prNumber: 42, nodeId: "operator" });
     expect(res.status).toBe(403);
@@ -520,7 +534,10 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
     });
     // The classifier fails the App-signature gate for an unsigned/human commit → not env-manager.
-    mockClassifyEnvManagerPr.mockResolvedValue({ isEnvManagerPr: false });
+    mockClassifyEnvManagerPr.mockResolvedValue({
+      isEnvManagerPr: false,
+      headSha: greenCi().headSha,
+    });
 
     const res = await post({ prNumber: 42, nodeId: "operator" });
     expect(res.status).toBe(403);
@@ -552,6 +569,7 @@ describe("POST /api/v1/vcs/merge", () => {
     });
     mockClassifyEnvManagerPr.mockResolvedValue({
       isEnvManagerPr: true,
+      headSha: greenCi().headSha,
       targetNodeRef: NODE_SLUG,
     });
 
@@ -618,11 +636,12 @@ describe("POST /api/v1/vcs/merge", () => {
       repairGrant();
       mockRepairQualification.mockRejectedValue(
         Object.assign(new Error("unknown"), {
-          code: "repair_native_unavailable",
+          code: "generation_evidence_unavailable",
+          status: 503,
         })
       );
       const response = await post({ prNumber: 42, nodeId: "operator" });
-      expect(response.status).toBe(409);
+      expect(response.status).toBe(503);
       expect(fakeVcs.mergePr).not.toHaveBeenCalled();
     });
     it.each([
@@ -641,6 +660,52 @@ describe("POST /api/v1/vcs/merge", () => {
         );
       if (cause === "generation")
         mockRepairQualification.mockResolvedValue(null);
+      expect((await post({ prNumber: 42, nodeId: "operator" })).status).toBe(
+        409
+      );
+      expect(fakeVcs.mergePr).not.toHaveBeenCalled();
+    });
+    it.each([
+      503, 409, 422,
+    ])("preserves typed %s qualification refusal at HTTP merge", async (status) => {
+      repairGrant();
+      const code =
+        status === 503
+          ? "generation_evidence_unavailable"
+          : status === 422
+            ? "repair_policy_invalid"
+            : "repair_native_not_closed";
+      mockRepairQualification.mockRejectedValue(
+        Object.assign(new Error(code), { status, code })
+      );
+      const res = await post({ prNumber: 42, nodeId: "operator" });
+      expect(res.status).toBe(status);
+      expect(await res.json()).toMatchObject({ errorCode: code });
+      expect(fakeVcs.mergePr).not.toHaveBeenCalled();
+    });
+    it.each([
+      true,
+      false,
+    ])("ordinary classification drifting to repair (valid=%s) refuses without effects", async (valid) => {
+      grant(OPERATOR_NODE_ID);
+      mockResolveNodeRepo.mockResolvedValue({
+        owner: "cogni-test-org",
+        repo: "cogni-monorepo",
+      });
+      mockClassifyEnvManagerPr.mockResolvedValueOnce({
+        isEnvManagerPr: false,
+        headSha: greenCi().headSha,
+      });
+      mockClassifyEnvManagerPr.mockResolvedValue({
+        isEnvManagerPr: valid,
+        action: "repair",
+        repairClaimed: true,
+        headSha: "f".repeat(40),
+        targetNodeRef: NODE_SLUG,
+      });
+      fakeVcs.getCiStatus.mockResolvedValue(
+        greenCi({ headSha: "f".repeat(40) })
+      );
       expect((await post({ prNumber: 42, nodeId: "operator" })).status).toBe(
         409
       );

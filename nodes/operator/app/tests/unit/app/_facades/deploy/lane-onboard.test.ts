@@ -52,7 +52,7 @@ const readNodeDeployPinState = vi.fn(
   })
 );
 const catalog = (envs = "candidate-a, preview, production") =>
-  `name: toks5\nnode_id: ${nodeId}\nsource_sha: ${birth}\nenvs: [${envs}]\ndeployment_provider: {candidate-a: akash, preview: akash, production: akash}\nlease_generation: {candidate-a: 2, preview: 3, production: 6}\n`;
+  `name: toks5\nnode_id: ${nodeId}\nsource_sha: "${birth}"\nenvs: [${envs}]\ndeployment_provider: {candidate-a: akash, preview: akash, production: akash}\nlease_generation: {candidate-a: 2, preview: 3, production: 6}\n`;
 const fetchFileText = vi.fn(async (_input: unknown) => catalog());
 let operation: Record<string, unknown>;
 const classifyEnvManagerPr = vi.fn(async (_input: unknown) => operation);
@@ -104,6 +104,7 @@ function zeroEffects() {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  fetchFileText.mockImplementation(async () => catalog());
   readNodeDeployPin.mockImplementation(async (input) =>
     input.env === "production" ? custodianPin : lanePin
   );
@@ -350,5 +351,118 @@ describe("safe first activation and removal controls", () => {
     );
     expect(promoteNode).not.toHaveBeenCalled();
     expect(prepareNodeRefCandidateFlight).not.toHaveBeenCalled();
+  });
+});
+
+describe("retained onboarding regressions", () => {
+  it.each([
+    "unmerged",
+    "foreign-repository",
+    "foreign-owner",
+  ])("%s event is a no-op", async (cause) => {
+    const event = payload();
+    if (cause === "unmerged") event.pull_request.merged = false;
+    if (cause === "foreign-repository") event.repository.name = "other";
+    if (cause === "foreign-owner") event.repository.owner.login = "other";
+    dispatchLaneOnboard(event, env, log);
+    await settle();
+    zeroEffects();
+    expect(classifyEnvManagerPr).not.toHaveBeenCalled();
+  });
+  it("hyphenated slug resolves the entire node name before the lane suffix", async () => {
+    const event = payload();
+    event.pull_request.head.ref =
+      "cogni-operator/node-env-node-template-candidate-a";
+    operation.targetNodeRef = "node-template";
+    operation.baseCatalog = catalog().replace(
+      "name: toks5",
+      "name: node-template"
+    );
+    operation.headCatalog = operation.baseCatalog;
+    dispatchLaneOnboard(event, env, log);
+    await settle();
+    expect(prepareNodeRefCandidateFlight).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "node-template", sourceSha: lanePin })
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "node-template", dispatched: 2 }),
+      "feature.lane_onboard.complete"
+    );
+  });
+  it("isolated-fleet add replays its candidate custodian before preview at each own pin", async () => {
+    operation.action = "add";
+    operation.environment = "preview";
+    operation.baseCatalog = catalog("production");
+    readNodeDeployPinState.mockImplementation(async (input) => ({
+      kind: "ok",
+      sha: input.env === "candidate-a" ? custodianPin : lanePin,
+    }));
+    dispatchLaneOnboard(
+      payload("preview"),
+      { ...env, FLEET_CONTROL_ENV: "candidate-a" },
+      log
+    );
+    await settle();
+    expect(prepareNodeRefCandidateFlight).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceSha: custodianPin })
+    );
+    expect(promoteNode).toHaveBeenCalledWith(
+      expect.objectContaining({ env: "preview", sourceSha: lanePin })
+    );
+    expect(
+      prepareNodeRefCandidateFlight.mock.invocationCallOrder[0]
+    ).toBeLessThan(promoteNode.mock.invocationCallOrder[0] ?? 0);
+    expect(promoteNode).not.toHaveBeenCalledWith(
+      expect.objectContaining({ env: "production" })
+    );
+  });
+  it("isolated-fleet remove uses candidate-a custody", async () => {
+    operation.action = "remove";
+    operation.headCatalog = catalog("preview, production");
+    dispatchLaneOnboard(
+      payload(),
+      { ...env, FLEET_CONTROL_ENV: "candidate-a" },
+      log
+    );
+    await settle();
+    expect(pruneNodeEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({ env: "candidate-a", controlEnv: "candidate-a" })
+    );
+    expect(promoteNode).not.toHaveBeenCalled();
+    expect(prepareNodeRefCandidateFlight).not.toHaveBeenCalled();
+  });
+  it.each([
+    "akash",
+    "k3s",
+  ])("remove resolves removed lane's OWN %s provider, not surviving lanes", async (removed) => {
+    operation.action = "remove";
+    const survivor = removed === "akash" ? "k3s" : "akash";
+    operation.baseCatalog = catalog()
+      .replace("candidate-a: akash", `candidate-a: ${removed}`)
+      .replace("preview: akash", `preview: ${survivor}`);
+    operation.headCatalog = `name: toks5\nnode_id: ${nodeId}\nenvs: [preview, production]\ndeployment_provider: {preview: ${survivor}, production: k3s}\n`;
+    fetchFileText.mockResolvedValue(String(operation.baseCatalog));
+    dispatchLaneOnboard(payload(), env, log);
+    await settle();
+    expect(fetchFileText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ref: parentSha,
+        path: "infra/catalog/toks5.yaml",
+      })
+    );
+    expect(pruneNodeEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: "candidate-a",
+        controlEnv: removed === "akash" ? "production" : "candidate-a",
+      })
+    );
+    expect(promoteNode).not.toHaveBeenCalled();
+    expect(prepareNodeRefCandidateFlight).not.toHaveBeenCalled();
+    expect(
+      log.info.mock.calls.filter(
+        (call) => call[1] === "feature.lane_onboard.complete"
+      )
+    ).toHaveLength(1);
+    expect(log.error).not.toHaveBeenCalled();
   });
 });

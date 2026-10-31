@@ -12,6 +12,7 @@
  * @internal
  */
 
+import { createVcsMergePrImplementation } from "@cogni/ai-tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type RequestHandler = (
@@ -24,6 +25,8 @@ type GraphqlHandler = (
 ) => Promise<unknown> | unknown;
 
 let onRequest: RequestHandler;
+let rawCommitMessage: string;
+const mergeHead = "d".repeat(40);
 let onGraphql: GraphqlHandler;
 const requestRoutes: string[] = [];
 const graphqlQueries: string[] = [];
@@ -36,6 +39,10 @@ vi.mock("@octokit/core", () => ({
   Octokit: class MockOctokit {
     async request(route: string, params: Record<string, unknown>) {
       requestRoutes.push(route);
+      if (route === "GET /repos/{owner}/{repo}/commits/{ref}")
+        return {
+          data: { sha: params.ref, commit: { message: rawCommitMessage } },
+        };
       return { data: await onRequest(route, params) };
     }
     async graphql(query: string, vars: Record<string, unknown>) {
@@ -62,6 +69,7 @@ const ACTIVE_BRANCH_RULES_ROUTE =
   "GET /repos/{owner}/{repo}/rules/branches/{branch}";
 
 beforeEach(() => {
+  rawCommitMessage = "feat: ordinary change";
   requestRoutes.length = 0;
   graphqlQueries.length = 0;
   // Installation lookup goes through global fetch.
@@ -75,7 +83,11 @@ beforeEach(() => {
   );
   onRequest = (route) => {
     if (route === PR_GET_ROUTE) {
-      return { base: { ref: "main" }, node_id: "PR_node_1" };
+      return {
+        base: { ref: "main" },
+        head: { sha: mergeHead, ref: "agent/ordinary" },
+        node_id: "PR_node_1",
+      };
     }
     throw new Error(`Unhandled request route: ${route}`);
   };
@@ -87,7 +99,11 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
     onGraphql = () => ({ repository: { mergeQueue: null } });
     onRequest = (route) => {
       if (route === PR_GET_ROUTE) {
-        return { base: { ref: "main" }, node_id: "PR_node_1" };
+        return {
+          base: { ref: "main" },
+          head: { sha: mergeHead, ref: "agent/ordinary" },
+          node_id: "PR_node_1",
+        };
       }
       if (route === MERGE_ROUTE) {
         return { merged: true, sha: "deadbeef", message: "Merged" };
@@ -120,7 +136,11 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
     // Direct merge must NOT be attempted under a required queue.
     onRequest = (route) => {
       if (route === PR_GET_ROUTE) {
-        return { base: { ref: "main" }, node_id: "PR_node_1" };
+        return {
+          base: { ref: "main" },
+          head: { sha: mergeHead, ref: "agent/ordinary" },
+          node_id: "PR_node_1",
+        };
       }
       throw new Error(
         `Unexpected request route under a required queue: ${route}`
@@ -145,7 +165,11 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
   it("direct-merges a caller-authorized bypass without querying or entering the queue", async () => {
     onRequest = (route) => {
       if (route === PR_GET_ROUTE) {
-        return { base: { ref: "main" }, node_id: "PR_node_1" };
+        return {
+          base: { ref: "main" },
+          head: { sha: mergeHead, ref: "agent/ordinary" },
+          node_id: "PR_node_1",
+        };
       }
       if (route === MERGE_ROUTE) {
         return { merged: true, sha: "fast-path", message: "Merged" };
@@ -174,7 +198,11 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
     onGraphql = () => ({ repository: { mergeQueue: null } });
     onRequest = (route) => {
       if (route === PR_GET_ROUTE) {
-        return { base: { ref: "main" }, node_id: "PR_node_1" };
+        return {
+          base: { ref: "main" },
+          head: { sha: mergeHead, ref: "agent/ordinary" },
+          node_id: "PR_node_1",
+        };
       }
       if (route === MERGE_ROUTE) {
         throw Object.assign(new Error("not mergeable"), { status: 405 });
@@ -284,7 +312,11 @@ describe("expected-head direct merge guard", () => {
   it("passes expected sha to GitHub's native merge precondition", async () => {
     onRequest = (route, params) => {
       if (route === PR_GET_ROUTE)
-        return { base: { ref: "main" }, head: { sha }, node_id: "PR_1" };
+        return {
+          base: { ref: "main" },
+          head: { sha, ref: "cogni-operator/node-env-blue-preview" },
+          node_id: "PR_1",
+        };
       if (route === MERGE_ROUTE) {
         expect(params.sha).toBe(sha);
         return { merged: true, sha: "b".repeat(40), message: "Merged" };
@@ -320,5 +352,85 @@ describe("expected-head direct merge guard", () => {
     ).resolves.toMatchObject({ merged: false, status: 409 });
     expect(requestRoutes).not.toContain(MERGE_ROUTE);
     expect(graphqlQueries).toHaveLength(0);
+  });
+});
+
+describe("raw bound merge tool cannot authorize repair", () => {
+  for (const queue of [false, true]) {
+    for (const claim of ["signed", "invalid", "foreign-branch"]) {
+      it(`${claim} repair with queue=${queue} refuses before merge/enqueue`, async () => {
+        rawCommitMessage =
+          claim === "invalid"
+            ? "Cogni-Action: repair invalid"
+            : "Cogni-Action: repair";
+        onRequest = () => ({
+          base: { ref: "main" },
+          node_id: "PR_1",
+          head: {
+            sha: mergeHead,
+            ref:
+              claim === "foreign-branch"
+                ? "agent/forged"
+                : "cogni-operator/node-env-blue-preview",
+          },
+        });
+        onGraphql = () => ({
+          repository: { mergeQueue: queue ? { id: "MQ_1" } : null },
+        });
+        const tool = createVcsMergePrImplementation({
+          vcsCapability: adapter(),
+        });
+        const result = await tool.execute({
+          owner: "o",
+          repo: "r",
+          prNumber: 7,
+          method: "squash",
+        });
+        expect(result).toMatchObject({ merged: false, enqueued: false });
+        expect(requestRoutes).not.toContain(MERGE_ROUTE);
+        expect(
+          graphqlQueries.some((query) =>
+            query.includes("enablePullRequestAutoMerge")
+          )
+        ).toBe(false);
+      });
+    }
+  }
+  it("an expected head alone cannot qualify a reserved repair", async () => {
+    rawCommitMessage = "Cogni-Action: repair";
+    onRequest = () => ({
+      base: { ref: "main" },
+      node_id: "PR_1",
+      head: { sha: mergeHead, ref: "cogni-operator/node-env-blue-preview" },
+    });
+    expect(
+      await adapter().mergePr({
+        owner: "o",
+        repo: "r",
+        prNumber: 7,
+        method: "squash",
+        expectedHeadSha: mergeHead,
+      })
+    ).toMatchObject({ merged: false, enqueued: false, status: 409 });
+    expect(requestRoutes).not.toContain(MERGE_ROUTE);
+    expect(graphqlQueries).toHaveLength(0);
+  });
+  it("ordinary queue submission binds the head observed by classification", async () => {
+    onGraphql = (query, vars) => {
+      if (query.includes("mergeQueue"))
+        return { repository: { mergeQueue: { id: "MQ_1" } } };
+      expect(vars.expectedHeadOid).toBe(mergeHead);
+      expect(query).toContain("expectedHeadOid: $expectedHeadOid");
+      return {};
+    };
+    const tool = createVcsMergePrImplementation({ vcsCapability: adapter() });
+    expect(
+      await tool.execute({
+        owner: "o",
+        repo: "r",
+        prNumber: 7,
+        method: "squash",
+      })
+    ).toMatchObject({ enqueued: true });
   });
 });

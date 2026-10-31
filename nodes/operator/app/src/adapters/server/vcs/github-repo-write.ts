@@ -38,6 +38,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   extractNodeId,
   hasDeclaredNodeDeployment,
@@ -205,12 +206,23 @@ export interface OpenNodeEnvPrInput {
    * flow; today's callers pass undefined, which the planner writes as an explicit `0` cell.
    */
   readonly leaseGeneration?: number | undefined;
-  /** Feature policy evaluated against the writer's immutable MAIN snapshot. */
-  readonly resolveGeneration?: (catalog: string) => Promise<{
-    leaseGeneration?: number | undefined;
-    repairGeneration?: number | undefined;
-    repairEvidence?: string | undefined;
-  }>;
+  /** Feature-qualified structural inputs. No remote proof runs inside this writer. */
+  readonly qualifiedGeneration?: {
+    readonly snapshot: NodeEnvSnapshot;
+    readonly leaseGeneration?: number;
+    readonly repairGeneration?: number;
+    readonly repairEvidence?: string;
+  };
+}
+
+/** Immutable MAIN facts exposed for feature qualification before publication. */
+export interface NodeEnvSnapshot {
+  readonly owner: string;
+  readonly repo: string;
+  readonly slug: string;
+  readonly baseCommitSha: string;
+  readonly baseTreeSha: string;
+  readonly catalog: string;
 }
 
 /** What an ADD derived from the catalog row (ADD_DERIVES_PLACEMENT, story.5039). */
@@ -1374,7 +1386,16 @@ export class GitHubRepoWriter implements DeployPlanePort {
       }
     );
 
-    const repairClaimed = /^Cogni-Action: repair$/m.test(commit.commit.message);
+    if (commit.sha !== pr.head.sha)
+      return {
+        isEnvManagerPr: false,
+        headSha: pr.head.sha,
+        errorCode: "repair_context_unavailable",
+      };
+
+    const repairClaimed = /^Cogni-Action:\s*repair\b/m.test(
+      commit.commit.message
+    );
     const classification = classifyEnvManagerCommit(
       {
         headRef: pr.head.ref,
@@ -1413,14 +1434,15 @@ export class GitHubRepoWriter implements DeployPlanePort {
     const conflict = (): EnvManagerPrClassificationResult => ({
       isEnvManagerPr: false,
       repairClaimed,
+      headSha: pr.head.sha,
       errorCode: "repair_context_conflict",
     });
     if (!classification.isEnvManagerPr)
       return repairClaimed || input.mergedOperation
         ? conflict()
-        : classification;
+        : { ...classification, headSha: pr.head.sha };
     if (classification.action !== "repair" && !input.mergedOperation)
-      return classification;
+      return { ...classification, headSha: pr.head.sha };
     const node = classification.targetNodeRef;
     const lane = classification.environment;
     const parentSha = commit.parents?.[0]?.sha;
@@ -1531,10 +1553,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
           const h = parseYaml(headCatalog);
           const mb = parseYaml(actualBase);
           const mh = parseYaml(actualHead);
-          if (
-            b.lease_generation[lane] !== mb.lease_generation[lane] ||
-            h.lease_generation[lane] !== mh.lease_generation[lane]
-          )
+          if (!isDeepStrictEqual(b, mb) || !isDeepStrictEqual(h, mh))
             return conflict();
         }
         return {
@@ -3231,6 +3250,40 @@ export class GitHubRepoWriter implements DeployPlanePort {
     });
   }
 
+  /** Read catalog and tree facts at one immutable MAIN commit, before feature qualification. */
+  async readNodeEnvSnapshot(input: {
+    owner: string;
+    repo: string;
+    slug: string;
+  }): Promise<NodeEnvSnapshot> {
+    const { owner, repo, slug } = input;
+    try {
+      const octokit = await this.getOctokit(owner, repo);
+      const base = await this.resolveMainBase(octokit, owner, repo);
+      const catalog = await this.fetchFileText({
+        owner,
+        repo,
+        path: `infra/catalog/${slug}.yaml`,
+        ref: base.baseCommitSha,
+      });
+      if (catalog === null)
+        throw deployPlaneError(
+          "node_not_in_catalog",
+          "Node catalog is absent",
+          404
+        );
+      return { owner, repo, slug, ...base, catalog };
+    } catch (error) {
+      if ((error as { code?: string }).code === "node_not_in_catalog")
+        throw error;
+      throw deployPlaneError(
+        "generation_evidence_unavailable",
+        "Immutable env snapshot is unreadable",
+        503
+      );
+    }
+  }
+
   /**
    * Node env-membership verb (story.5020 W4): add OR remove ONE env from a node's deploy reach by editing
    * the OPERATOR monorepo catalog (owner/repo = the monorepo, exactly like {@link openNodeSubmodulePr}).
@@ -3253,27 +3306,27 @@ export class GitHubRepoWriter implements DeployPlanePort {
   async openNodeEnvPr(input: OpenNodeEnvPrInput): Promise<OpenNodeEnvPrResult> {
     const { owner, repo, slug, env, present } = input;
     const octokit = await this.getOctokit(owner, repo);
-    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
-      octokit,
-      owner,
-      repo
-    );
-    const catalog = await this.fetchFileText({
-      owner,
-      repo,
-      path: `infra/catalog/${slug}.yaml`,
-      ref: baseCommitSha,
-    });
-    if (catalog === null)
+    const { baseCommitSha, baseTreeSha, catalog } =
+      await this.readNodeEnvSnapshot({ owner, repo, slug });
+    const qualified = input.qualifiedGeneration;
+    if (
+      qualified &&
+      (qualified.snapshot.owner !== owner ||
+        qualified.snapshot.repo !== repo ||
+        qualified.snapshot.slug !== slug ||
+        qualified.snapshot.baseCommitSha !== baseCommitSha ||
+        qualified.snapshot.baseTreeSha !== baseTreeSha ||
+        qualified.snapshot.catalog !== catalog)
+    )
       throw deployPlaneError(
-        "node_not_in_catalog",
-        "Node catalog is absent",
-        404
+        "env_main_conflict",
+        "Qualified snapshot changed before planning",
+        409
       );
-    const generation =
-      present && input.resolveGeneration
-        ? await input.resolveGeneration(catalog)
-        : { leaseGeneration: input.leaseGeneration, repairEvidence: undefined };
+    const generation = qualified ?? {
+      leaseGeneration: input.leaseGeneration,
+      repairEvidence: undefined,
+    };
     const presentAlready = parseCatalogEnvs(catalog).includes(env);
     const shape =
       present && !presentAlready
@@ -3606,11 +3659,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
     } catch {
       // A lost response can mean success. Read the exact shared branch before deciding.
       const observed = await readHead();
-      if (observed !== commit.sha) {
-        const reused = await reuseOpen(observed);
-        if (reused) return reused;
-        throw conflict();
-      }
+      const reused = await reuseOpen(observed);
+      if (reused) return reused;
+      if (observed !== commit.sha) throw conflict();
     }
     if ((await readHead()) !== commit.sha) throw conflict();
     let result: OpenNodeAppPrResult;

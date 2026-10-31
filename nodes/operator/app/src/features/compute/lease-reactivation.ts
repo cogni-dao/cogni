@@ -145,8 +145,11 @@ export function parseAppLeaseKey(
   return { base: Number(fields[3]), attempt: Number(fields[4] ?? 0) };
 }
 
-function repairRefusal(code: string): Error & { code: string; status: number } {
-  return Object.assign(new Error(code), { code, status: 409 });
+function repairRefusal(
+  code: string,
+  status = 409
+): Error & { code: string; status: number } {
+  return Object.assign(new Error(code), { code, status });
 }
 
 export interface TerminalLaneSubject {
@@ -185,7 +188,7 @@ export function evaluateTerminalLaneRepair(input: {
     subject.catalogGeneration < 0 ||
     subject.catalogGeneration > 1_000_000
   )
-    throw repairRefusal("repair_evidence_unavailable");
+    throw repairRefusal("generation_evidence_unavailable", 503);
   const keys = new Set<string>();
   const handles = new Set<string>();
   const receiptIds = new Set<string>();
@@ -272,10 +275,12 @@ export function evaluateTerminalLaneRepair(input: {
       !proof.observedAt ||
       !proof.deploymentObservedAt ||
       proof.deploymentCoverage !== "complete" ||
-      proof.deploymentState !== "closed" ||
+      proof.deploymentState === null ||
       proof.leaseCoverage !== "complete"
     )
-      throw repairRefusal("repair_native_unavailable");
+      throw repairRefusal("generation_evidence_unavailable", 503);
+    if (proof.deploymentState !== "closed")
+      throw repairRefusal("repair_native_not_closed");
     if (
       proof.leaseStates.some(
         (lease) =>
@@ -363,7 +368,7 @@ export async function qualifyTerminalLaneRepair(input: {
   try {
     parsedCatalog = parseYaml(input.catalog);
   } catch {
-    throw repairRefusal("repair_subject_unavailable");
+    throw repairRefusal("repair_policy_invalid", 422);
   }
   const row = parsedCatalog as {
     name?: string;
@@ -375,30 +380,77 @@ export async function qualifyTerminalLaneRepair(input: {
     lease_generation?: Record<string, number>;
   };
   if (!row || typeof row !== "object")
-    throw repairRefusal("repair_subject_unavailable");
+    throw repairRefusal("repair_policy_invalid", 422);
+  // Existing k3s membership is a no-op. Contradictory/unsupported policy is not.
+  const maps = [row.deployment_provider, row.compute_api, row.lease_generation];
+  if (
+    row.name !== input.slug ||
+    !Array.isArray(row.envs) ||
+    !row.envs.includes(input.environment) ||
+    maps.some(
+      (map) =>
+        map !== undefined &&
+        (!map || typeof map !== "object" || Array.isArray(map))
+    )
+  )
+    throw repairRefusal("repair_policy_invalid", 422);
+  if (row.source_repo !== undefined) {
+    if (typeof row.source_repo !== "string" || !row.source_repo)
+      throw repairRefusal("repair_policy_invalid", 422);
+    try {
+      githubOwnerFromSourceRepo(row.source_repo);
+    } catch {
+      throw repairRefusal("repair_policy_invalid", 422);
+    }
+  }
+  const provider = row.deployment_provider?.[input.environment];
+  const authority = row.compute_api?.[input.environment];
   const generation = row.lease_generation?.[input.environment];
-  const writer = row.source_repo
-    ? writerFor(input.environment, githubOwnerFromSourceRepo(row.source_repo))
-    : undefined;
+  if (
+    provider === "k3s" ||
+    (provider === undefined && row.source_repo === undefined)
+  ) {
+    if (authority !== undefined || generation !== undefined)
+      throw repairRefusal("repair_policy_invalid", 422);
+    return null;
+  }
+  if (
+    provider !== "akash" ||
+    authority !== "crossplane" ||
+    typeof row.source_repo !== "string" ||
+    !row.source_repo ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      row.node_id ?? ""
+    ) ||
+    !Number.isSafeInteger(generation) ||
+    generation === undefined ||
+    generation < 0 ||
+    generation > 1_000_000
+  )
+    throw repairRefusal("repair_policy_invalid", 422);
+  let writer: ReturnType<typeof writerFor>;
+  try {
+    writer = writerFor(
+      input.environment,
+      githubOwnerFromSourceRepo(row.source_repo)
+    );
+  } catch {
+    throw repairRefusal("repair_policy_invalid", 422);
+  }
+  if (!writer) throw repairRefusal("repair_policy_invalid", 422);
   const control = controlEnvFor(
     input.environment,
     "akash",
     input.fleetControlEnv
   );
   if (
-    row.name !== input.slug ||
     row.node_id !== input.nodeId ||
-    !row.envs?.includes(input.environment) ||
-    row.deployment_provider?.[input.environment] !== "akash" ||
-    row.compute_api?.[input.environment] !== "crossplane" ||
-    generation === undefined ||
-    !writer ||
     writer.cluster !== input.hostingEnv ||
-    control !== input.hostingEnv ||
-    !input.leaseRead ||
-    !input.accountId?.trim()
+    control !== input.hostingEnv
   )
-    throw repairRefusal("repair_subject_unavailable");
+    throw repairRefusal("repair_subject_conflict");
+  if (!input.leaseRead || !input.accountId?.trim())
+    throw repairRefusal("generation_evidence_unavailable", 503);
   const subject: TerminalLaneSubject = {
     nodeId: input.nodeId,
     slug: input.slug,
@@ -414,13 +466,19 @@ export async function qualifyTerminalLaneRepair(input: {
       limit: 51,
     })
     .catch(() => {
-      throw repairRefusal("repair_evidence_unavailable");
+      throw repairRefusal("generation_evidence_unavailable", 503);
     });
-  if (all.length >= 51) throw repairRefusal("repair_history_incomplete");
-  const isolated = resolveNodeIsolatedServices({
-    catalog: row,
-    environment: input.environment,
-  });
+  if (all.length >= 51)
+    throw repairRefusal("generation_evidence_unavailable", 503);
+  let isolated: ReturnType<typeof resolveNodeIsolatedServices>;
+  try {
+    isolated = resolveNodeIsolatedServices({
+      catalog: row,
+      environment: input.environment,
+    });
+  } catch {
+    throw repairRefusal("repair_policy_invalid", 422);
+  }
   const receipts = all.filter(
     (receipt) =>
       !isolated.some((service) => {
@@ -449,7 +507,7 @@ export async function qualifyTerminalLaneRepair(input: {
       ],
     })
     .catch(() => {
-      throw repairRefusal("repair_native_unavailable");
+      throw repairRefusal("generation_evidence_unavailable", 503);
     });
   const result = evaluateTerminalLaneRepair({
     subject,

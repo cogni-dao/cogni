@@ -5323,10 +5323,17 @@ describe("existing env repair adapter — immutable source, CAS and trusted merg
     slug: "blue",
     env: "candidate-a" as const,
     present: true,
-    resolveGeneration: vi.fn(async (text: string) => {
-      expect(text).toBe(catalog);
-      return { repairGeneration: 21 };
-    }),
+    qualifiedGeneration: {
+      snapshot: {
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        slug: "blue",
+        baseCommitSha: main,
+        baseTreeSha: "tree-main",
+        catalog,
+      },
+      repairGeneration: 21,
+    },
   });
   it.each([
     "",
@@ -5418,10 +5425,7 @@ describe("existing env repair adapter — immutable source, CAS and trusted merg
   });
   it("MAIN movement refuses before branch mutation", async () => {
     const request = input();
-    request.resolveGeneration.mockImplementation(async () => {
-      mainHead = head;
-      return { repairGeneration: 21 };
-    });
+    mainHead = head;
     await expect(makeWriter().openNodeEnvPr(request)).rejects.toMatchObject({
       code: "env_main_conflict",
     });
@@ -5569,6 +5573,116 @@ describe("existing env repair adapter — immutable source, CAS and trusted merg
         })
       ).isEnvManagerPr
     ).toBe(false);
+  });
+  it.each([
+    [nodeId, "11111111-1111-4111-8111-111111111111"],
+    ["cogni-dao/blue.git", "cogni-test-org/blue.git"],
+    ["candidate-a: akash", "candidate-a: k3s"],
+    ["candidate-a: crossplane", "candidate-a: legacy"],
+    ["production: 6", "production: 7"],
+  ])("merged history cannot change signed policy %s", async (from, to) => {
+    state = "closed";
+    const read = routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) => {
+      if (params.ref !== merged && params.ref !== mergeParent)
+        return read?.(params);
+      return {
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(
+          (params.ref === merged ? target : catalog).replace(from, to)
+        ).toString("base64"),
+      };
+    };
+    expect(
+      await makeWriter().classifyEnvManagerPr({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        prNumber: 42,
+        mergedOperation: {
+          repository: "Cogni-DAO/cogni",
+          prNumber: 42,
+          headSha: head,
+          mergeSha: merged,
+        },
+      })
+    ).toMatchObject({
+      isEnvManagerPr: false,
+      errorCode: "repair_context_conflict",
+    });
+    expect(requests.some((call) => /^(POST|PUT|PATCH) /.test(call.route))).toBe(
+      false
+    );
+  });
+  it("exposes the exact immutable snapshot before feature qualification", async () => {
+    expect(
+      await makeWriter().readNodeEnvSnapshot({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        slug: "blue",
+      })
+    ).toEqual(input().qualifiedGeneration.snapshot);
+    expect(
+      requests
+        .filter((call) => call.route.includes("contents"))
+        .every((call) => call.params.ref === main)
+    ).toBe(true);
+    expect(requests.some((call) => /^(POST|PUT|PATCH) /.test(call.route))).toBe(
+      false
+    );
+  });
+  it("real snapshot → feature → writer composition preserves in-repo no-op", async () => {
+    const catalog =
+      "name: blue\nenvs: [candidate-a, production]\nactivity_env: production\n";
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = () => ({
+      type: "file",
+      encoding: "base64",
+      content: Buffer.from(catalog).toString("base64"),
+    });
+    const writer = makeWriter();
+    const snapshot = await writer.readNodeEnvSnapshot({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      slug: "blue",
+    });
+    const listReceipts = vi.fn(),
+      readNativeStates = vi.fn();
+    const { qualifyTerminalLaneRepair } = await import(
+      "@/features/compute/lease-reactivation"
+    );
+    const repair = await qualifyTerminalLaneRepair({
+      catalog: snapshot.catalog,
+      nodeId,
+      slug: "blue",
+      environment: "candidate-a",
+      accountId: "akash1owner",
+      hostingEnv: "production",
+      fleetControlEnv: "production",
+      leaseRead: { listReceipts, readNativeStates },
+    });
+    expect(repair).toBeNull();
+    expect(
+      await writer.openNodeEnvPr({
+        ...input(),
+        qualifiedGeneration: { snapshot },
+      })
+    ).toEqual({ status: "no_changes" });
+    expect(listReceipts).not.toHaveBeenCalled();
+    expect(readNativeStates).not.toHaveBeenCalled();
+    expect(requests.some((call) => /^(POST|PUT|PATCH) /.test(call.route))).toBe(
+      false
+    );
+  });
+  it("snapshot old-cell mismatch refuses before any publication", async () => {
+    const request = input();
+    request.qualifiedGeneration.snapshot.catalog = target;
+    await expect(makeWriter().openNodeEnvPr(request)).rejects.toMatchObject({
+      code: "env_main_conflict",
+      status: 409,
+    });
+    expect(requests.some((call) => /^(POST|PUT|PATCH) /.test(call.route))).toBe(
+      false
+    );
   });
   it("forged merged head and extra non-generation delta refuse", async () => {
     state = "closed";

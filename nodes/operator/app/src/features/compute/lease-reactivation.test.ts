@@ -381,7 +381,8 @@ describe("terminal repair existing read capability", () => {
     const { input, listReceipts, readNativeStates } = setup();
     listReceipts.mockResolvedValue(Array(51).fill(currentReceipt()));
     await expect(qualifyTerminalLaneRepair(input)).rejects.toMatchObject({
-      code: "repair_history_incomplete",
+      code: "generation_evidence_unavailable",
+      status: 503,
     });
     expect(readNativeStates).not.toHaveBeenCalled();
   });
@@ -398,6 +399,55 @@ describe("terminal repair existing read capability", () => {
       ).rejects.toBeDefined();
       expect(listReceipts).not.toHaveBeenCalled();
     }
+  });
+  it.each([
+    "history",
+    "native",
+  ])("%s read failures retain 503", async (read) => {
+    const { input, listReceipts, readNativeStates } = setup();
+    if (read === "history")
+      listReceipts.mockRejectedValue(new Error("unavailable"));
+    else readNativeStates.mockRejectedValue(new Error("unavailable"));
+    await expect(qualifyTerminalLaneRepair(input)).rejects.toMatchObject({
+      status: 503,
+      code: "generation_evidence_unavailable",
+    });
+  });
+  it("a known active deployment retains conflict semantics", async () => {
+    const { input, readNativeStates } = setup();
+    readNativeStates.mockResolvedValue({
+      "7001": { ...closedNative(), deploymentState: "active" },
+    });
+    await expect(qualifyTerminalLaneRepair(input)).rejects.toMatchObject({
+      status: 409,
+      code: "repair_native_not_closed",
+    });
+  });
+  it.each([
+    "name: blue\nenvs: [candidate-a, production]\n",
+    `name: blue\nnode_id: ${NODE_ID}\nsource_repo: https://github.com/cogni-dao/blue.git\nenvs: [candidate-a, production]\ndeployment_provider: {candidate-a: k3s}\n`,
+  ])("valid in-repo/k3s membership stays a no-op without native reads", async (catalog) => {
+    const { input, listReceipts, readNativeStates } = setup();
+    await expect(
+      qualifyTerminalLaneRepair({ ...input, catalog })
+    ).resolves.toBeNull();
+    expect(listReceipts).not.toHaveBeenCalled();
+    expect(readNativeStates).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["candidate-a: akash", "candidate-a: unsupported"],
+    ["candidate-a: crossplane", "candidate-a: legacy"],
+    ["candidate-a: 20", "candidate-a: -1"],
+  ])("malformed or unsupported policy %s retains 422", async (from, to) => {
+    const { input, listReceipts, readNativeStates } = setup();
+    await expect(
+      qualifyTerminalLaneRepair({
+        ...input,
+        catalog: catalog.replace(from, to),
+      })
+    ).rejects.toMatchObject({ status: 422, code: "repair_policy_invalid" });
+    expect(listReceipts).not.toHaveBeenCalled();
+    expect(readNativeStates).not.toHaveBeenCalled();
   });
   it("only explicitly declared canonical isolated-service families are excluded", async () => {
     const { input, listReceipts } = setup();
