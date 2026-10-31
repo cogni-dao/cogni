@@ -75,7 +75,7 @@ GitHub Actions is **not** assumed to be the long-term OSS CI answer for the cont
 | `pr-build.yml`                                                                                                               | Affected-only image build+push. Pure artifact, zero deploy logic. Handoff via build-manifest artifact. | 🟢 LEAVE ALONE |
 | `ci.yaml`, `pr-lint.yaml`, `stack-test.yml`                                                                                  | Test/lint/typecheck gates. No infra mutation.                                                          | 🟢 LEAVE ALONE |
 | `build-and-push-images.sh`, `detect-affected.sh`, `merge-build-fragments.sh`, `write-build-manifest.sh`, `lib/image-tags.sh` | Catalog-driven build/tag resolution. Idempotent; no state mutation beyond GHCR.                        | 🟢 LEAVE ALONE |
-| `sync-drift-detector.yml`, `archive-feature-history.yml`, `require-pinned-release-prs-to-main.yml`, `release.yml`            | Read-only observability + release-PR plumbing.                                                         | 🟢 LEAVE ALONE |
+| `sync-drift-detector.yml`, `archive-feature-history.yml`                                                                     | Sync drift detection + feature-history archival.                                                       | 🟢 LEAVE ALONE |
 
 ### Generators (catalog → committed desired state)
 
@@ -85,13 +85,13 @@ GitHub Actions is **not** assumed to be the long-term OSS CI answer for the cont
 
 ### Deploy brain (frozen — runs in prod, wrong home)
 
-| Surface                                                                                               | Owns                                                                                                             | Class                                            |
-| ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `promote-k8s-image.sh`, `promote-build-payload.sh`, `update-source-sha-map.sh`, `aggregate-rollup.sh` | Write digests + provenance into overlays/deploy branches. `sed`-based YAML edits, git push to `deploy/*`.        | 🔴 DANGER ZONE                                   |
-| `candidate-flight.yml`, `promote-and-deploy.yml`                                                      | App-digest promotion orchestration. ~1,100 + ~1,000 lines; 3-way inline digest-resolution trees; SSH to VM.      | 🔴 DANGER ZONE                                   |
-| `candidate-flight-infra.yml`, `provision-env.yml`                                                     | Infra/Compose lever + cold-start provisioning. Mutate VM + secrets + Cloudflare.                                 | 🔴 DANGER ZONE                                   |
-| `wait-for-argocd.sh`, `verify-buildsha.sh`, `aggregate-decide-outcome.sh`, `resolve-cell-state.sh`    | Deployment gates (Axioms 14/15/19). Read + assert only.                                                          | 🟡 FREEZE EXPANSION (load-bearing; don't extend) |
-| `flight-preview.yml`, `auto-merge-release-prs.yml`, `promote-preview-digest-seed.yml`                 | Preview-flight (latest-wins) + release contract boundaries. Hardcoded check-name lists; main-merge side-effects. | 🟡 FREEZE EXPANSION                              |
+| Surface                                                                                               | Owns                                                                                                        | Class                                            |
+| ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `promote-k8s-image.sh`, `promote-build-payload.sh`, `update-source-sha-map.sh`, `aggregate-rollup.sh` | Write digests + provenance into overlays/deploy branches. `sed`-based YAML edits, git push to `deploy/*`.   | 🔴 DANGER ZONE                                   |
+| `candidate-flight.yml`, `promote-and-deploy.yml`                                                      | App-digest promotion orchestration. ~1,100 + ~1,000 lines; 3-way inline digest-resolution trees; SSH to VM. | 🔴 DANGER ZONE                                   |
+| `candidate-flight-infra.yml`, `provision-env.yml`                                                     | Infra/Compose lever + cold-start provisioning. Mutate VM + secrets + Cloudflare.                            | 🔴 DANGER ZONE                                   |
+| `wait-for-argocd.sh`, `verify-buildsha.sh`, `aggregate-decide-outcome.sh`, `resolve-cell-state.sh`    | Deployment gates (Axioms 14/15/19). Read + assert only.                                                     | 🟡 FREEZE EXPANSION (load-bearing; don't extend) |
+| `flight-preview.yml`, `promote-preview-digest-seed.yml`                                               | Preview-flight (latest-wins) + digest seeding; main-merge side-effects.                                     | 🟡 FREEZE EXPANSION                              |
 
 ### The behemoth
 
