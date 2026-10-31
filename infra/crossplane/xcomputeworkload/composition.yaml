@@ -535,6 +535,10 @@ spec:
               OWN successful handle-bearing response proves closure. Native GC,
               deletion intent, missing responses and other generations do not. */ -}}
             {{- if not (hasKey $closedKeys $paidKey) }}{{ $unclosedOwners = add1 $unclosedOwners }}{{ end }}
+            {{- /* A native old owner is allocation history even if XR history vanished.
+              Without incumbent authority, omission can GC a still-serving lease.
+              Its handle proves ownership only; never infer an active role from it. */ -}}
+            {{- if and (not (hasKey $closedKeys $paidKey)) (not (has $paidKey $desiredKeys)) (lt $activeLeaseGeneration 0) }}{{ fail "old native owner lacks incumbent transition authority" }}{{ end }}
             {{- if and (eq $prevPaidKey "") (ne (dig "id" "" $prevResource) "") (or (eq $handle $prevResource.id) (eq $recordedHandle $prevResource.id)) }}
             {{- if ne $historyOwnerKey "" }}{{ fail "allocation history matches multiple native owners" }}{{ end }}
             {{- $historyOwnerKey = $paidKey }}
@@ -664,10 +668,10 @@ spec:
               reason: isRemovedCheck would read it as "does not exist" and CREATE under a settled
               key every reconcile forever, which is the Axiom 26 churn $renderLease fences below.
 
-              BOOTSTRAP IS ZERO-CHURN. Every XR in the fleet omits status.activeLeaseGeneration
-              today, which digs to -1 and disables this block entirely — such an XR renders
-              exactly as it does on main. The field is adopted the first time that workload is
-              observed `active && serving`, after which its next bump is protected.
+              BOOTSTRAP REQUIRES NO UNKNOWN OLD OWNER. Missing activeLeaseGeneration
+              disables retention; admission above refuses unclosed older native owners in
+              that case. History-free bootstrap and same-key legacy repair remain valid.
+              The field is adopted only after this workload is observed `active && serving`.
             */ -}}
             {{- $retainedResourceName := "" }}
             {{- $retainedKey := "" }}

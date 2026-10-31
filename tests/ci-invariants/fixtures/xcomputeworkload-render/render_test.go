@@ -2623,3 +2623,47 @@ func TestR2UnattributedAllocationHistoryCannotBootstrap(t *testing.T) {
 		}
 	})
 }
+
+// An acknowledged old native owner is not history-free bootstrap. A handle
+// binds ownership, but cannot restore the incumbent role needed for retention.
+func TestR2OldNativeOwnerWithoutIncumbentAuthority(t *testing.T) {
+	for _, history := range []string{"owned-handle", "no-xr-history", "null-role"} {
+		t.Run(history, func(t *testing.T) {
+			f := fixture(9)
+			for _, field := range []string{"bootEpoch", "recovery", "activeLeaseGeneration", "leaseRequestGeneration", "resource"} {
+				delete(status(f), field)
+			}
+			if history == "null-role" {
+				status(f)["activeLeaseGeneration"] = nil
+			}
+			c := child(t, key(8), blue, true, "akash-lease-g8")
+			r2Stamp(c, key(8), "active", true, false)
+			annotations := at(c, "resource", "metadata", "annotations").(obj)
+			annotations["crossplane.io/external-create-pending"] = "2026-10-31T00:00:00Z"
+			annotations["crossplane.io/external-create-succeeded"] = "2026-10-31T00:00:01Z"
+			observed(f)["akash-lease-g8"] = c
+			if history != "no-xr-history" {
+				status(f)["resource"] = obj{"id": "handle-" + key(8), "state": "active"}
+			}
+			dns(f, blue)
+			for i := 0; i < 2; i++ {
+				f = r2Copy(t, f)
+				before := jsonString(f)
+				o, err := execute(t, loadTemplate(t), f)
+				if err == nil || !strings.Contains(err.Error(), "old native owner lacks incumbent transition authority") || o.leases != nil || o.status != nil || o.dns != nil || jsonString(f) != before {
+					t.Fatal("unknown-role old owner escaped whole-render refusal", err, o)
+				}
+			}
+			// Positive role authority permits the existing two-generation transition.
+			status(f)["activeLeaseGeneration"] = 8
+			status(f)["bootEpoch"] = obj{"key": strings.Repeat("b", 40) + ":8:served", "at": "2026-10-31T00:00:00Z"}
+			status(f)["observedBundle"] = xr(f)["spec"].(obj)["bundle"]
+			o := render(t, loadTemplate(t), f)
+			wantNames(t, o, "akash-lease-g8", "akash-lease-g9")
+			if paid(o, "akash-lease-g8") != key(8) || paid(o, "akash-lease-g9") != key(9) || o.status["activeLeaseGeneration"] != 8 || dnsTarget(o) != blue {
+				t.Fatal("bound incumbent transition changed", o.status)
+			}
+			r2Cleanup(t, o.leases["akash-lease-g8"], key(8))
+		})
+	}
+}
