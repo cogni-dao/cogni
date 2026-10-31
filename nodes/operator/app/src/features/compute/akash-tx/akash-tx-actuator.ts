@@ -41,6 +41,9 @@
  *   - CLOSE_VERIFY_THEN_CLEAR: a receipt is only ever settled against positive evidence — no
  *     cursor (durably pre-transaction), a Console read-back showing `closed`, or a wallet scan
  *     showing nothing live beyond the baseline. Never on a timer (bug.5189).
+ *     CLOSED observation validates cost binding/evidence before release; only exact native
+ *     CLOSED/no-leases evidence may leave accounting unknown (bug.5560). Retained released
+ *     policy and cold provenance survive closure without granting live cell authority.
  *   - MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION: NO mutating call states, proves, or can be
  *     refused by a migration. bug.5140 made a completed per-digest DB migration a precondition
  *     of every paid transaction; task.5135 severed that. Node toks5 is the proof it was wrong:
@@ -103,8 +106,10 @@ import {
   type AkashTxWorkloadIdentity,
   type ComputeCostEvidencePort,
   type ComputeCostStorePort,
+  type ComputeResourceCostEvidence,
   type NodeMigrationReportStorePort,
 } from "@/ports";
+import { AppliedDatabaseCellReceiptsSchema } from "@/shared/secrets/database-cell-placement.data";
 import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
 import { runMigrationStep } from "./akash-tx-migration-step";
 import {
@@ -537,23 +542,20 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
     }
     const source = await this.readLedger(input.recovery.sourceCogniKey);
-    const bindings =
-      source?.appliedDatabaseCellBinding?.filter(
-        ({ binding }) =>
-          binding.phase === "applied" &&
-          binding.nodeId === input.identity.nodeId &&
-          binding.nodeSlug === input.nodeSlug &&
-          binding.environment === input.environment &&
-          binding.receiptId === source.receiptId &&
-          binding.cogniKey === source.cogniKey &&
-          source.providerAccount !== undefined &&
-          binding.providerAccount === source.providerAccount &&
-          binding.dseq === input.recovery.sourceExternalName &&
-          binding.systemIdentifier === input.recovery.sourceSystemIdentifier
-      ) ?? [];
+    const bindings = source
+      ? this.retainedAppliedBindings(source).filter(
+          ({ binding }) =>
+            binding.nodeId === input.identity.nodeId &&
+            binding.nodeSlug === input.nodeSlug &&
+            binding.environment === input.environment &&
+            binding.dseq === input.recovery.sourceExternalName &&
+            binding.systemIdentifier === input.recovery.sourceSystemIdentifier
+        )
+      : [];
     if (
       !source ||
-      source.state !== "allocated" ||
+      (source.state !== "allocated" && source.state !== "released") ||
+      source.cogniKey !== input.recovery.sourceCogniKey ||
       source.retentionPolicy !== "retain" ||
       source.identity.nodeId !== input.identity.nodeId ||
       source.environment !== input.environment ||
@@ -1154,6 +1156,45 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     );
   }
 
+  /** Authenticate retained policy/provenance before any caller filters its logical lane.
+   * A terminal receipt is history, never native liveness or permission to mutate it.
+   */
+  private retainedAppliedBindings(record: AkashTxAllocationRecord) {
+    const parsed = AppliedDatabaseCellReceiptsSchema.safeParse(
+      record.appliedDatabaseCellBinding ?? []
+    );
+    if (!parsed.success)
+      throw new AkashTxError(
+        "identity_conflict",
+        "retained cell binding metadata is corrupt"
+      );
+    const applied = parsed.data.filter(
+      ({ binding }) => binding.phase === "applied"
+    );
+    if (
+      applied.some(
+        ({ allocationEnvironment, binding }) =>
+          (record.state !== "allocated" && record.state !== "released") ||
+          record.retentionPolicy !== "retain" ||
+          !record.externalName ||
+          !record.providerAccount ||
+          !record.lastAppliedSdlHash ||
+          allocationEnvironment !== record.environment ||
+          binding.receiptId !== record.receiptId ||
+          binding.cogniKey !== record.cogniKey ||
+          binding.nodeId !== record.identity.nodeId ||
+          binding.dseq !== record.externalName ||
+          binding.providerAccount !== record.providerAccount ||
+          binding.appliedSdlHash !== record.lastAppliedSdlHash
+      )
+    )
+      throw new AkashTxError(
+        "identity_conflict",
+        "retained applied cell binding differs from its allocation"
+      );
+    return applied;
+  }
+
   /** App releases use current owned credentials; retained-cell recovery keeps its own guards. */
   private async requireQualifiedCellRelease(input: {
     cogniKey: string;
@@ -1166,7 +1207,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     if (input.environment !== "production") return;
     let records: readonly AkashTxAllocationRecord[];
     try {
-      records = await this.ledger.listAllocated({
+      records = await this.ledger.listReceipts({
         ...(input.nodeId ? { nodeId: input.nodeId } : {}),
         environment: input.environment,
         limit: 100,
@@ -1182,18 +1223,17 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         "identity_conflict",
         "qualified cell release metadata exceeds bounded scan"
       );
-    const cells = records.flatMap((record) =>
-      (record.appliedDatabaseCellBinding ?? []).filter(
-        (receipt) =>
-          receipt.binding.phase === "applied" &&
+    const cells = records.flatMap((record) => {
+      // The persistent cell itself still uses its stricter retained SDL guard.
+      if (record.cogniKey === input.cogniKey) return [];
+      return this.retainedAppliedBindings(record).filter(
+        ({ binding }) =>
           (input.nodeId
-            ? receipt.binding.nodeId === input.nodeId
-            : receipt.binding.nodeSlug === input.workload) &&
-          receipt.binding.environment === input.environment &&
-          // The persistent cell itself remains subject to its stricter retained SDL guard.
-          record.cogniKey !== input.cogniKey
-      )
-    );
+            ? binding.nodeId === input.nodeId
+            : binding.nodeSlug === input.workload) &&
+          binding.environment === input.environment
+      );
+    });
     if (cells.length === 0) return;
     const cell = cells[0];
     if (
@@ -1535,7 +1575,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
 
     if (probe.outcome === "settled") {
       // PROVEN not billing. Settling here is what makes recovery automatic and bounded.
-      await this.settleRollback(cogniKey, undefined, allocationCursor);
+      if (!(await this.settleRollback(cogniKey, undefined, allocationCursor))) {
+        throw new AkashTxError(
+          "ledger_unavailable",
+          "allocation settlement could not be verified"
+        );
+      }
       return null;
     }
 
@@ -1573,10 +1618,37 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     allocationCursor?: string
   ): Promise<boolean> {
     try {
-      await this.ledger.fail({
-        cogniKey,
-        failureCode: ROLLED_BACK_FAILURE_CODE,
-      });
+      const before = await this.ledger.read({ cogniKey });
+      if (!before) throw new Error("allocation receipt missing");
+      if (before.externalName) {
+        if (
+          !rolledBackDseq ||
+          before.externalName !== rolledBackDseq ||
+          (before.state !== "allocated" && before.state !== "released")
+        ) {
+          throw new Error("rollback handle or state mismatch");
+        }
+        await this.ledger.markReleased({ cogniKey });
+      } else {
+        if (before.state !== "preparing") {
+          throw new Error("handleless receipt state mismatch");
+        }
+        await this.ledger.fail({
+          cogniKey,
+          failureCode: ROLLED_BACK_FAILURE_CODE,
+        });
+      }
+      const after = await this.ledger.read({ cogniKey });
+      if (
+        !after ||
+        after.receiptId !== before.receiptId ||
+        (before.externalName
+          ? after.state !== "released" ||
+            after.externalName !== before.externalName
+          : after.state !== "failed" || after.externalName !== undefined)
+      ) {
+        throw new Error("allocation settlement read-back mismatch");
+      }
       this.log.warn(
         {
           cogniKey,
@@ -1772,13 +1844,33 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     providerAccount?: string,
     record?: AkashTxAllocationRecord
   ): Promise<AkashTxResource> {
+    let output: ProvisionOutput;
     try {
-      const output = await this.console.status({ leaseId: externalName });
-      if (record) await this.observeCost(record, externalName);
-      return resourceFrom(output, providerAccount);
+      output = await this.console.status({ leaseId: externalName });
     } catch (error) {
       throw mapConsoleFailure(error, { mutating: false });
     }
+    if (output.leaseId !== externalName) {
+      throw new AkashTxError(
+        "ledger_unavailable",
+        "provider returned a mismatched allocation handle"
+      );
+    }
+    if (record) {
+      // Bind and validate fresh cost evidence before any durable terminal mutation.
+      // Only the producer's exact CLOSED/no-leases absence may leave accounting unknown.
+      await this.observeCost(record, externalName, output.state === "closed");
+      if (
+        output.state === "closed" &&
+        !(await this.settleRollback(record.cogniKey, externalName))
+      ) {
+        throw new AkashTxError(
+          "ledger_unavailable",
+          "closed allocation settlement could not be verified"
+        );
+      }
+    }
+    return resourceFrom(output, providerAccount);
   }
 
   private async withServing(
@@ -1923,31 +2015,57 @@ export class AkashTxActuator implements AkashTxActuatorPort {
 
   private async observeCost(
     record: AkashTxAllocationRecord,
-    externalName: string
+    externalName: string,
+    allowClosedEvidenceAbsence = false
   ): Promise<void> {
     await this.bindCost(record, externalName);
+    let evidence: ComputeResourceCostEvidence;
     try {
-      const evidence = await this.costEvidence.observeCost({
+      evidence = await this.costEvidence.observeCost({
         resourceId: externalName,
       });
+    } catch (error) {
+      // Classify the raw evidence producer failure, before costUnavailable normalizes it.
+      // The same signal from bind/store is never allowed through this boundary.
+      const named = error as { name?: unknown; code?: unknown };
+      if (
+        allowClosedEvidenceAbsence &&
+        named?.name === "AkashComputeError" &&
+        named.code === "COST_EVIDENCE_UNAVAILABLE"
+      ) {
+        this.log.warn(
+          {
+            cogniKey: record.cogniKey,
+            externalName,
+            operation: "observe",
+            accounting: "unknown",
+            causeType: "provider_evidence_error",
+          },
+          "compute_cost_unavailable"
+        );
+        return;
+      }
+      throw this.costUnavailable(error, record.cogniKey, "observe");
+    }
+    try {
       await this.costStore.observe({
         allocationReceiptId: record.receiptId,
         evidence,
       });
-      this.log.info(
-        {
-          cogniKey: record.cogniKey,
-          nodeId: record.identity.nodeId,
-          externalName,
-          rateAmount: evidence.rate.amount,
-          rateDenom: evidence.rate.denom,
-          rateUnit: evidence.rate.unit,
-        },
-        "compute_cost_observed"
-      );
     } catch (error) {
       throw this.costUnavailable(error, record.cogniKey, "observe");
     }
+    this.log.info(
+      {
+        cogniKey: record.cogniKey,
+        nodeId: record.identity.nodeId,
+        externalName,
+        rateAmount: evidence.rate.amount,
+        rateDenom: evidence.rate.denom,
+        rateUnit: evidence.rate.unit,
+      },
+      "compute_cost_observed"
+    );
   }
 
   private async closeCost(record: AkashTxAllocationRecord): Promise<void> {
