@@ -438,6 +438,30 @@ spec:
             {{- $recordedHandle := "" }}
             {{- $bodyRaw := dig "status" "requestDetails" "body" "" $native }}
             {{- if eq $bodyRaw "" }}
+            {{- /* Receipt-free adoption needs the required AkashTxSpec/ServiceSpec
+              creation fields, not just a paid key. Check the stored intent's own
+              shape; never compare an older payload to the current release. Optional
+              wire fields and full strict schema validation remain actuator-owned.
+            */ -}}
+            {{- $provision := get $binding "spec" }}
+            {{- if not (kindIs "map" $provision) }}{{ fail "unrecorded child requires complete provision spec" }}{{ end }}
+            {{- $serviceNamePattern := "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" }}
+            {{- $provisionName := get $provision "name" }}
+            {{- if or (not (kindIs "string" $provisionName)) (gt (len $provisionName) 63) (not (regexMatch $serviceNamePattern $provisionName)) }}{{ fail "unrecorded child requires complete provision spec: invalid name" }}{{ end }}
+            {{- $provisionServices := get $provision "services" }}
+            {{- if or (not (kindIs "slice" $provisionServices)) (eq (len $provisionServices) 0) }}{{ fail "unrecorded child requires complete provision spec: nonempty services required" }}{{ end }}
+            {{- range $service := $provisionServices }}
+            {{- if not (kindIs "map" $service) }}{{ fail "unrecorded child requires complete provision spec: invalid service" }}{{ end }}
+            {{- $serviceName := get $service "name" }}
+            {{- $serviceImage := get $service "image" }}
+            {{- if or (not (kindIs "string" $serviceName)) (gt (len $serviceName) 63) (not (regexMatch $serviceNamePattern $serviceName)) (not (kindIs "string" $serviceImage)) (eq $serviceImage "") }}{{ fail "unrecorded child requires complete provision spec: invalid service name/image" }}{{ end }}
+            {{- $cpu := get $service "cpuUnits" }}
+            {{- if or (not (kindIs "float64" $cpu)) (le $cpu (float64 0)) }}{{ fail "unrecorded child requires complete provision spec: positive service cpuUnits required" }}{{ end }}
+            {{- range $field := list "memoryMi" "storageMi" }}
+            {{- $size := get $service $field }}
+            {{- if or (not (kindIs "float64" $size)) (le $size (float64 0)) (ne $size (floor $size)) }}{{ fail "unrecorded child requires complete provision spec: positive integer service memoryMi/storageMi required" }}{{ end }}
+            {{- end }}
+            {{- end }}
             {{- $parts := splitList ":" $paidKey }}
             {{- $nativeName := printf "akash-lease-g%s" (index $parts 3) }}
             {{- if eq (len $parts) 6 }}{{ $nativeName = printf "%s-recover-%s" $nativeName (index $parts 5) }}{{ end }}

@@ -2755,6 +2755,16 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
       expected:
         /^\s+render_test\.go:\d+: retiring child lost exact authorized native acknowledgement\n$/,
     },
+    {
+      label: "exact 5dc incomplete receipt-free provision intent",
+      oldSha: "5dc93364ebb82ad1f61717d04894469e457edc26",
+      hash: "a2d3896ff86f9b1728d919288920ee6709575ea9b7c2e33d34c9c086a74cdb47",
+      test: "TestR2ReceiptFreeNativeIntentRequiresCompleteProvisionSpec",
+      caseName: "missing-spec",
+      diagnostic: "incomplete receipt-free provision intent escaped whole-render refusal",
+      expected:
+        /^\s+render_test\.go:\d+: incomplete receipt-free provision intent escaped whole-render refusal\n$/,
+    },
   ])("rejects $label at the native behavior assertion", ({
     oldSha,
     hash,

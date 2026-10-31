@@ -1077,13 +1077,21 @@ func TestR2NoAdvanceWithoutSuccessfulCurrentClosure(t *testing.T) {
 				at(c, "resource", "metadata", "annotations").(obj)["crossplane.io/external-create-pending"] = "2026-10-30T00:00:00Z"
 				at(c, "resource", "status").(obj)["conditions"] = []obj{{"message": "cannot determine creation result"}}
 			}
+			before := jsonString(f)
 			for i := 0; i < 3; i++ {
+				if kind == "closed-no-handle" {
+					o, err := execute(t, tm, f)
+					if err == nil || !strings.Contains(err.Error(), "found allocation requires a nonempty own handle") || o.leases != nil || o.status != nil || jsonString(f) != before {
+						t.Fatal("incomplete closure did not refuse the whole render unchanged", err)
+					}
+					continue
+				}
 				o := render(t, tm, f)
 				wantNames(t, o, "akash-lease")
 				if paid(o, "akash-lease") != key(1) || at(o.status, "recovery", "count") != nil || o.status["serving"] == true || o.status["phase"] == "Ready" {
 					t.Fatal("non-proof allocated or served", kind, o.status)
 				}
-				if kind == "missing" || kind == "no-response" || kind == "refusal" || kind == "server-error" || kind == "closed-no-status" || kind == "closed-no-handle" {
+				if kind == "missing" || kind == "no-response" || kind == "refusal" || kind == "server-error" || kind == "closed-no-status" {
 					if at(o.status, "bootEpoch", "mintedAt") != nil {
 						t.Fatal("unproven allocation started paid clock", kind, o.status)
 					}
@@ -1250,6 +1258,105 @@ func TestR2UnsafeNativeBindingsAndPropagation(t *testing.T) {
 	r2WantFailure(t, tm, f)
 	status(f)["resource"] = nil // Its own paid clock is also allocation history.
 	r2WantFailure(t, tm, f)
+}
+
+// Admission checks the observed intent before rebuilding any paid CREATE body.
+// Start with real emitted spec/ownership and persisted recovery selection, then
+// damage only required provision fields. No receipt/cache can mask the damage.
+func TestR2ReceiptFreeNativeIntentRequiresCompleteProvisionSpec(t *testing.T) {
+	tm := loadTemplate(t)
+	cases := map[string]func(obj){
+		"missing-spec":     func(b obj) { delete(b, "spec") },
+		"missing-name":     func(b obj) { delete(b["spec"].(obj), "name") },
+		"missing-services": func(b obj) { delete(b["spec"].(obj), "services") },
+		"empty-services":   func(b obj) { b["spec"].(obj)["services"] = []interface{}{} },
+		"empty-service":    func(b obj) { b["spec"].(obj)["services"] = []interface{}{obj{}} },
+		"invalid-second-service": func(b obj) {
+			p := b["spec"].(obj)
+			p["services"] = append(p["services"].([]interface{}), nil)
+		},
+	}
+	for label, value := range map[string]interface{}{
+		"null": nil, "string": "invalid", "number": 1, "bool": true, "array": []interface{}{},
+	} {
+		value := value
+		cases[label+"-spec"] = func(b obj) { b["spec"] = value }
+	}
+	for _, field := range []string{"name", "services"} {
+		field := field
+		for label, value := range map[string]interface{}{
+			"null": nil, "number": 1, "bool": true, "object": obj{},
+		} {
+			value := value
+			cases[label+"-"+field] = func(b obj) { b["spec"].(obj)[field] = value }
+		}
+	}
+	cases["array-name"] = func(b obj) { b["spec"].(obj)["name"] = []interface{}{} }
+	cases["string-services"] = func(b obj) { b["spec"].(obj)["services"] = "app" }
+	for label, value := range map[string]interface{}{
+		"null": nil, "string": "app", "number": 1, "bool": true, "array": []interface{}{},
+	} {
+		value := value
+		cases[label+"-service"] = func(b obj) { b["spec"].(obj)["services"] = []interface{}{value} }
+	}
+	for _, field := range []string{"name", "image", "cpuUnits", "memoryMi", "storageMi"} {
+		field := field
+		service := func(b obj) obj { return b["spec"].(obj)["services"].([]interface{})[0].(obj) }
+		cases["missing-service-"+field] = func(b obj) { delete(service(b), field) }
+		for label, value := range map[string]interface{}{
+			"null": nil, "bool": true, "object": obj{}, "array": []interface{}{},
+		} {
+			value := value
+			cases[label+"-service-"+field] = func(b obj) { service(b)[field] = value }
+		}
+		if field == "name" || field == "image" {
+			cases["empty-service-"+field] = func(b obj) { service(b)[field] = "" }
+			cases["number-service-"+field] = func(b obj) { service(b)[field] = 1 }
+		} else {
+			for label, value := range map[string]interface{}{"zero": 0, "negative": -1, "string": "1"} {
+				value := value
+				cases[label+"-service-"+field] = func(b obj) { service(b)[field] = value }
+			}
+			if field != "cpuUnits" {
+				cases["fractional-service-"+field] = func(b obj) { service(b)[field] = 0.5 }
+			}
+		}
+	}
+	for label, value := range map[string]string{
+		"empty": "", "uppercase": "App", "underscore": "bad_name", "trailing-dash": "app-", "too-long": strings.Repeat("a", 64),
+	} {
+		value := value
+		cases[label+"-name"] = func(b obj) { b["spec"].(obj)["name"] = value }
+		cases[label+"-service-name"] = func(b obj) { b["spec"].(obj)["services"].([]interface{})[0].(obj)["name"] = value }
+	}
+	for label, mutate := range cases {
+		t.Run(label, func(t *testing.T) {
+			f, _ := r2ClosedBase(t, "Replace", true)
+			first := render(t, tm, f)
+			n := r2Check(t, first, 1)
+			r2Merge(f, first)
+			delete(observed(f), "akash-lease")
+			current := r2Native(t, first.leases[n], n, "incomplete-intent")
+			observed(f)[n] = current
+			payload := at(current, "resource", "spec", "forProvider", "payload").(obj)
+			var binding obj
+			if err := json.Unmarshal([]byte(payload["body"].(string)), &binding); err != nil {
+				t.Fatal(err)
+			}
+			mutate(binding)
+			payload["body"] = jsonString(binding)
+			before := jsonString(f) // Snapshot AFTER deliberately damaging the input.
+			for i := 0; i < 3; i++ {
+				o, err := execute(t, tm, f)
+				if err == nil {
+					t.Fatal("incomplete receipt-free provision intent escaped whole-render refusal")
+				}
+				if !strings.Contains(err.Error(), "unrecorded child requires complete provision spec") || o.leases != nil || o.status != nil || o.dns != nil || jsonString(f) != before {
+					t.Fatal("incomplete intent mutated input, emitted output or failed for another cause", err)
+				}
+			}
+		})
+	}
 }
 
 func TestR2SelectedOnlyAndNativeSpecBeforeStatus(t *testing.T) {
