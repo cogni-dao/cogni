@@ -20,7 +20,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import {
@@ -80,6 +80,7 @@ const options = {
   bundle: { type: "string" },
   "bundle-ref": { type: "string" },
   "bundle-repository": { type: "string" },
+  "accepted-overlay-dir": { type: "string" },
   "source-sha": { type: "string" },
   domain: { type: "string" },
   // Public Cloudflare zone identifier (NOT a credential — it appears in the dashboard URL).
@@ -178,6 +179,8 @@ async function main(): Promise<void> {
     bundleRef: values["bundle-ref"],
     bundleRepository: values["bundle-repository"],
     sourceSha,
+    sourceRepository: catalogIdentity.repository,
+    acceptedOverlayDir: values["accepted-overlay-dir"],
   });
   const domain = required(values.domain, "--domain");
   const outputDir = required(values["output-dir"], "--output-dir");
@@ -604,11 +607,13 @@ function parseStringArray(value: string, flag: string): string[] {
   return parsed as string[];
 }
 
-async function resolveBundleInput(input: {
+export async function resolveBundleInput(input: {
   readonly bundleFile: string | undefined;
   readonly bundleRef: string | undefined;
   readonly bundleRepository: string | undefined;
   readonly sourceSha: string;
+  readonly sourceRepository: string;
+  readonly acceptedOverlayDir: string | undefined;
 }): Promise<{ readonly ref: string; readonly payload: unknown }> {
   if (input.bundleFile || input.bundleRef) {
     const bundleFile = required(input.bundleFile, "--bundle");
@@ -619,15 +624,15 @@ async function resolveBundleInput(input: {
   }
 
   const repository = required(input.bundleRepository, "--bundle-repository");
-  const tagRef = buildNodeBundleTagRef({
-    repository,
-    sourceSha: input.sourceSha,
-  });
-  const { stdout: digestOutput } = await execFileAsync("oras", [
-    "resolve",
-    tagRef,
-  ]);
-  const digest = digestOutput.trim();
+  const acceptedRef = await readAcceptedBundleRef(input);
+  const digest = acceptedRef
+    ? acceptedRef.slice(repository.length + 1)
+    : (
+        await execFileAsync("oras", [
+          "resolve",
+          buildNodeBundleTagRef({ repository, sourceSha: input.sourceSha }),
+        ])
+      ).stdout.trim();
   const provisionalRef = `${repository}@${digest}`;
   const { stdout: manifestOutput } = await execFileAsync("oras", [
     "manifest",
@@ -657,6 +662,60 @@ async function resolveBundleInput(input: {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+async function readAcceptedBundleRef(input: {
+  readonly acceptedOverlayDir: string | undefined;
+  readonly sourceRepository: string;
+  readonly sourceSha: string;
+  readonly bundleRepository: string | undefined;
+}): Promise<string | undefined> {
+  if (!input.acceptedOverlayDir) return undefined;
+  const files = ["xcomputeworkload.yaml", "compute-workload.yaml"];
+  let selected: unknown;
+  for (const file of files) {
+    let text: string;
+    try {
+      text = await readFile(join(input.acceptedOverlayDir, file), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (selected !== undefined)
+      throw new Error("Multiple accepted workload manifests");
+    selected = parse(text) as unknown;
+  }
+  if (selected === undefined) return undefined;
+  const manifest = selected as {
+    spec?: {
+      bundle?: {
+        ref?: unknown;
+        source?: { repository?: unknown; sha?: unknown };
+      };
+    };
+  };
+  const bundle = manifest?.spec?.bundle;
+  if (
+    !bundle?.source ||
+    typeof bundle.source.repository !== "string" ||
+    typeof bundle.source.sha !== "string"
+  ) {
+    throw new Error("Accepted workload is missing bundle source");
+  }
+  if (
+    bundle.source.repository !== input.sourceRepository ||
+    bundle.source.sha !== input.sourceSha
+  )
+    return undefined;
+  const repository = required(input.bundleRepository, "--bundle-repository");
+  if (
+    typeof bundle.ref !== "string" ||
+    !bundle.ref.startsWith(`${repository}@`) ||
+    !/^sha256:[a-f0-9]{64}$/.test(bundle.ref.slice(repository.length + 1))
+  ) {
+    throw new Error("Accepted workload has invalid bundle ref");
+  }
+  return bundle.ref;
 }
 
 function parentRepository(value: string | undefined): string {
@@ -715,9 +774,14 @@ async function writeAtomically(path: string, contents: string): Promise<void> {
   await rename(temporary, path);
 }
 
-void main().catch((error: unknown) => {
-  process.stderr.write(
-    `${error instanceof Error ? error.message : String(error)}\n`
-  );
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] &&
+  basename(process.argv[1]) === "materialize-compute-workload.ts"
+) {
+  void main().catch((error: unknown) => {
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`
+    );
+    process.exitCode = 1;
+  });
+}

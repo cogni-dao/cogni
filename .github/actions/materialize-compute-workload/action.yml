@@ -4,6 +4,8 @@ description: Resolve a trusted OCI node bundle and replace one ephemeral checkou
 inputs:
   app_source_root:
     { required: true, description: "Absolute application source checkout" }
+  accepted_overlay_dir:
+    { required: false, default: "", description: "Previously accepted workload overlay" }
   node: { required: true, description: "Catalog node slug" }
   environment:
     { required: true, description: "candidate-a, preview, or production" }
@@ -76,6 +78,7 @@ runs:
       working-directory: ${{ inputs.app_source_root }}
       env:
         APP_SOURCE_ROOT: ${{ inputs.app_source_root }}
+        ACCEPTED_OVERLAY_DIR: ${{ inputs.accepted_overlay_dir }}
         NODE: ${{ inputs.node }}
         DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
         SOURCE_SHA: ${{ inputs.source_sha }}
@@ -139,6 +142,7 @@ runs:
           --repo-spec "${GITHUB_WORKSPACE}/.compute-node-source/.cogni/repo-spec.yaml" \
           --bundle-repository "$BUNDLE_REPOSITORY" \
           --source-sha "$SOURCE_SHA" \
+          ${ACCEPTED_OVERLAY_DIR:+--accepted-overlay-dir "$ACCEPTED_OVERLAY_DIR"} \
           --domain "$LANE_DOMAIN" \
           --substrate-host "$SUBSTRATE_HOST" \
           ${DNS_ZONE_ID:+--dns-zone-id "$DNS_ZONE_ID"} \

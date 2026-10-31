@@ -431,8 +431,12 @@ jobs:
           set -euo pipefail
           # shellcheck source=scripts/ci/lib/image-tags.sh
           . app-src/scripts/ci/lib/image-tags.sh
-          if [ "$PREVIEW_FORWARD" = "true" ] && [ "$DEPLOYMENT_PROVIDER" = "akash" ]; then
-            APP_SOURCE_SHA=$(resolve_remote_source_sha "$NODE" "$NODE_SOURCE_SHA" "$OPERATOR_SOURCE_SHA" "$CATALOG_SOURCE_SHA" "$PREVIEW_FORWARD" "$PREVIEW_SOURCE_SHA_MAP")
+          if [ "$DEPLOYMENT_PROVIDER" = "akash" ]; then
+            if is_remote_source_artifact_target "$NODE" || [ "$PREVIEW_FORWARD" = "true" ]; then
+              APP_SOURCE_SHA=$(resolve_remote_source_sha "$NODE" "$NODE_SOURCE_SHA" "$OPERATOR_SOURCE_SHA" "$CATALOG_SOURCE_SHA" "$PREVIEW_FORWARD" "$PREVIEW_SOURCE_SHA_MAP")
+            else
+              APP_SOURCE_SHA="$BUILD_SHA"
+            fi
             # External desired state is sourced from the immutable OCI bundle,
             # not a kustomization image pin. The materializer below resolves it.
             DIGEST=""
@@ -507,22 +511,6 @@ jobs:
           echo "source_sha=$APP_SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "promoted=true" >> "$GITHUB_OUTPUT"
 
-      - name: Materialize provider-neutral external workload
-        if: steps.digest.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER == 'akash'
-        uses: ./app-src/.github/actions/materialize-compute-workload
-        with:
-          app_source_root: ${{ github.workspace }}/app-src
-          node: ${{ matrix.node }}
-          environment: ${{ needs.decide.outputs.environment }}
-          source_sha: ${{ steps.digest.outputs.source_sha }}
-          source_repository: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
-          git_read_token: ${{ secrets.GIT_READ_TOKEN || github.token }}
-          domain: ${{ vars.DOMAIN }}
-          ghcr_username: ${{ secrets.GHCR_DEPLOY_USERNAME || github.actor }}
-          ghcr_token: ${{ secrets.GHCR_DEPLOY_TOKEN || github.token }}
-          dns_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          domain_root: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
-
       - name: Prepare per-node deploy branch (bootstrap from umbrella if missing)
         if: steps.digest.outputs.promoted == 'true'
         env:
@@ -552,6 +540,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
+
+      - name: Materialize provider-neutral external workload
+        if: steps.digest.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER == 'akash'
+        uses: ./app-src/.github/actions/materialize-compute-workload
+        with:
+          app_source_root: ${{ github.workspace }}/app-src
+          accepted_overlay_dir: ${{ fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node] && format('{0}/preview-src/infra/k8s/overlays/preview/{1}', github.workspace, matrix.node) || format('{0}/deploy-branch/infra/k8s/overlays/{1}/{2}', github.workspace, needs.decide.outputs.environment, matrix.node) }}
+          node: ${{ matrix.node }}
+          environment: ${{ needs.decide.outputs.environment }}
+          source_sha: ${{ steps.digest.outputs.source_sha }}
+          source_repository: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
+          git_read_token: ${{ secrets.GIT_READ_TOKEN || github.token }}
+          domain: ${{ vars.DOMAIN }}
+          ghcr_username: ${{ secrets.GHCR_DEPLOY_USERNAME || github.actor }}
+          ghcr_token: ${{ secrets.GHCR_DEPLOY_TOKEN || github.token }}
+          dns_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          domain_root: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
 
       - name: Sync infra/k8s + per-node catalog from app-src
         if: steps.digest.outputs.promoted == 'true'

@@ -84,3 +84,14 @@ GITHUB_OUTPUT="$work/noop.out" GITHUB_STEP_SUMMARY="$work/noop-summary.md" bash 
 grep -qx 'status=noop' "$work/noop.out"
 grep -q 'nothing deployed' "$work/noop-summary.md"
 echo '[PASS] CI-only preview scope is an explicit no-op'
+
+# The selected preview or target branch must be present before the shared writer reads it.
+prepare_line=$(grep -n 'name: Prepare per-node deploy branch' "$promote" | cut -d: -f1)
+materialize_line=$(grep -n 'name: Materialize provider-neutral external workload' "$promote" | cut -d: -f1)
+sync_line=$(grep -n 'name: Sync infra/k8s + per-node catalog' "$promote" | cut -d: -f1)
+[[ "$prepare_line" -lt "$materialize_line" && "$materialize_line" -lt "$sync_line" ]]
+overlay=$(yq -r '.jobs.promote-k8s.steps[] | select(.name == "Materialize provider-neutral external workload") | .with.accepted_overlay_dir' "$promote")
+[[ "$overlay" == *'preview-src/infra/k8s/overlays/preview/'* && "$overlay" == *'deploy-branch/infra/k8s/overlays/'* ]]
+# Candidate's existing shared action invocation must stay valid without the optional input.
+yq -e '.jobs | .. | select(tag == "!!map" and has("uses")) | select(.uses | contains("materialize-compute-workload")) | .with | has("accepted_overlay_dir") | not' "$WORKFLOW" >/dev/null
+echo '[PASS] replay reads the selected deploy overlay before syncing; candidate needs no new input'
