@@ -41,6 +41,8 @@
  *   - CLOSE_VERIFY_THEN_CLEAR: a receipt is only ever settled against positive evidence — no
  *     cursor (durably pre-transaction), a Console read-back showing `closed`, or a wallet scan
  *     showing nothing live beyond the baseline. Never on a timer (bug.5189).
+ *     CLOSED observation validates cost binding/evidence before release; only exact native
+ *     CLOSED/no-leases evidence may leave accounting unknown (bug.5560).
  *   - MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION: NO mutating call states, proves, or can be
  *     refused by a migration. bug.5140 made a completed per-digest DB migration a precondition
  *     of every paid transaction; task.5135 severed that. Node toks5 is the proof it was wrong:
@@ -103,6 +105,7 @@ import {
   type AkashTxWorkloadIdentity,
   type ComputeCostEvidencePort,
   type ComputeCostStorePort,
+  type ComputeResourceCostEvidence,
   type NodeMigrationReportStorePort,
 } from "@/ports";
 import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
@@ -1816,18 +1819,19 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         "provider returned a mismatched allocation handle"
       );
     }
-    if (output.state === "closed" && record) {
-      if (!(await this.settleRollback(record.cogniKey, externalName))) {
+    if (record) {
+      // Bind and validate fresh cost evidence before any durable terminal mutation.
+      // Only the producer's exact CLOSED/no-leases absence may leave accounting unknown.
+      await this.observeCost(record, externalName, output.state === "closed");
+      if (
+        output.state === "closed" &&
+        !(await this.settleRollback(record.cogniKey, externalName))
+      ) {
         throw new AkashTxError(
           "ledger_unavailable",
           "closed allocation settlement could not be verified"
         );
       }
-      // Accounting failure is explicit in compute_cost_unavailable. It cannot hide
-      // independently verified terminal state or fabricate a rate.
-      await this.observeCost(record, externalName).catch(() => undefined);
-    } else if (record) {
-      await this.observeCost(record, externalName);
     }
     return resourceFrom(output, providerAccount);
   }
@@ -1974,31 +1978,57 @@ export class AkashTxActuator implements AkashTxActuatorPort {
 
   private async observeCost(
     record: AkashTxAllocationRecord,
-    externalName: string
+    externalName: string,
+    allowClosedEvidenceAbsence = false
   ): Promise<void> {
     await this.bindCost(record, externalName);
+    let evidence: ComputeResourceCostEvidence;
     try {
-      const evidence = await this.costEvidence.observeCost({
+      evidence = await this.costEvidence.observeCost({
         resourceId: externalName,
       });
+    } catch (error) {
+      // Classify the raw evidence producer failure, before costUnavailable normalizes it.
+      // The same signal from bind/store is never allowed through this boundary.
+      const named = error as { name?: unknown; code?: unknown };
+      if (
+        allowClosedEvidenceAbsence &&
+        named?.name === "AkashComputeError" &&
+        named.code === "COST_EVIDENCE_UNAVAILABLE"
+      ) {
+        this.log.warn(
+          {
+            cogniKey: record.cogniKey,
+            externalName,
+            operation: "observe",
+            accounting: "unknown",
+            causeType: "provider_evidence_error",
+          },
+          "compute_cost_unavailable"
+        );
+        return;
+      }
+      throw this.costUnavailable(error, record.cogniKey, "observe");
+    }
+    try {
       await this.costStore.observe({
         allocationReceiptId: record.receiptId,
         evidence,
       });
-      this.log.info(
-        {
-          cogniKey: record.cogniKey,
-          nodeId: record.identity.nodeId,
-          externalName,
-          rateAmount: evidence.rate.amount,
-          rateDenom: evidence.rate.denom,
-          rateUnit: evidence.rate.unit,
-        },
-        "compute_cost_observed"
-      );
     } catch (error) {
       throw this.costUnavailable(error, record.cogniKey, "observe");
     }
+    this.log.info(
+      {
+        cogniKey: record.cogniKey,
+        nodeId: record.identity.nodeId,
+        externalName,
+        rateAmount: evidence.rate.amount,
+        rateDenom: evidence.rate.denom,
+        rateUnit: evidence.rate.unit,
+      },
+      "compute_cost_observed"
+    );
   }
 
   private async closeCost(record: AkashTxAllocationRecord): Promise<void> {

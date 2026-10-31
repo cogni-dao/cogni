@@ -25,7 +25,7 @@ import path from "node:path";
 import { rootCertificates } from "node:tls";
 
 import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 import type {
@@ -441,8 +441,12 @@ class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
   failObserve = false;
   failClose = false;
   failureMessage = "cost dependency down";
+  evidenceError?: Error;
+  bindError?: Error;
+  observeError?: Error;
 
   async observeCost(input: { resourceId: string }) {
+    if (this.evidenceError) throw this.evidenceError;
     if (this.failEvidence) throw new Error(this.failureMessage);
     return { ...COST_EVIDENCE, resourceId: input.resourceId };
   }
@@ -455,6 +459,7 @@ class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
       resourceId: string;
     };
   }) {
+    if (this.bindError) throw this.bindError;
     if (this.failBind) throw new Error(this.failureMessage);
     this.binds.push({
       allocationReceiptId: input.allocationReceiptId,
@@ -467,6 +472,7 @@ class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
     allocationReceiptId: string;
     evidence: ComputeResourceCostEvidence;
   }) {
+    if (this.observeError) throw this.observeError;
     if (this.failObserve) throw new Error(this.failureMessage);
     this.observations.push({
       allocationReceiptId: input.allocationReceiptId,
@@ -1907,6 +1913,183 @@ describe("AkashTxActuator.create", () => {
 });
 
 describe("bug.5560 terminal evidence", () => {
+  it.each([
+    "bind",
+    "evidence",
+    "store",
+  ] as const)("refuses generic %s errors before release", async (stage) => {
+    const { actuator, ledger, api, cost, log } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    if (stage === "bind") cost.failBind = true;
+    if (stage === "evidence") cost.failEvidence = true;
+    if (stage === "store") cost.failObserve = true;
+    const release = vi.spyOn(ledger, "markReleased");
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    expect(release).not.toHaveBeenCalled();
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+    expect(log.lines).toContainEqual(
+      expect.objectContaining({ marker: "compute_cost_unavailable" })
+    );
+  });
+  it.each([
+    "bind",
+    "store",
+  ] as const)("never suppresses the narrow code from %s", async (stage) => {
+    const { actuator, ledger, api, cost } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    const error = consoleError("COST_EVIDENCE_UNAVAILABLE");
+    if (stage === "bind") cost.bindError = error;
+    else cost.observeError = error;
+    const release = vi.spyOn(ledger, "markReleased");
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    expect(release).not.toHaveBeenCalled();
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+  });
+  it.each([
+    "active",
+    "unknown",
+  ] as const)("never allows the narrow absence signal for %s", async (state) => {
+    const { actuator, ledger, api, cost } = build();
+    seedAllocated(ledger);
+    api.statusState = state;
+    cost.evidenceError = consoleError("COST_EVIDENCE_UNAVAILABLE");
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+  });
+  it.each([
+    Object.assign(new Error("absence"), { code: "COST_EVIDENCE_UNAVAILABLE" }),
+    consoleError("UNEXPECTED_SHAPE"),
+    consoleError("NETWORK_ERROR"),
+  ])("requires exact error name and code: %j", async (error) => {
+    const { actuator, ledger, api, cost } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    cost.evidenceError = error;
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+  });
+  function faultAfterRelease(ledger: FakeLedger, fault: string) {
+    const release = ledger.markReleased.bind(ledger);
+    const read = ledger.read.bind(ledger);
+    let mutated = false;
+    vi.spyOn(ledger, "markReleased").mockImplementation(async (input) => {
+      if (fault === "write") throw new Error("release write unavailable");
+      await release(input);
+      mutated = true;
+    });
+    vi.spyOn(ledger, "read").mockImplementation(async (input) => {
+      const row = await read(input);
+      if (!mutated) return row;
+      if (fault === "throw") throw new Error("post-mutation read unavailable");
+      if (fault === "null") return null;
+      if (!row) throw new Error("expected durable released receipt");
+      if (fault === "receipt") return { ...row, receiptId: "another-receipt" };
+      if (fault === "handle") return { ...row, externalName: "7999" };
+      if (fault === "state") return { ...row, state: "allocated" };
+      return row;
+    });
+  }
+  it.each(
+    ["throw", "null", "receipt", "handle", "state"].flatMap((fault) =>
+      ["observe", "create"].map((operation) => ({ fault, operation }))
+    )
+  )("refuses $fault readback AFTER successful release in $operation", async ({
+    fault,
+    operation,
+  }) => {
+    const { actuator, ledger, api } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    faultAfterRelease(ledger, fault);
+    await expect(
+      operation === "observe"
+        ? actuator.observe({ cogniKey: "k1" })
+        : actuator.create({
+            cogniKey: "k1",
+            environment: "candidate-a",
+            identity: IDENTITY,
+            spec: SPEC,
+          })
+    ).rejects.toMatchObject({ code: "ledger_unavailable" });
+    // Prove the real mutation occurred before the injected readback failed.
+    expect(ledger.rows.get("k1")).toMatchObject({
+      state: "released",
+      externalName: "7001",
+    });
+    expect(api.allocateCalls).toBe(0);
+  });
+  it.each([
+    "write",
+    "throw",
+    "null",
+    "receipt",
+    "handle",
+    "state",
+  ])("preserves allocation code AND message when settlement %s fails", async (fault) => {
+    const original = consoleError("NO_ELIGIBLE_BIDS");
+    Object.assign(original, { rolledBackDseq: "7001" });
+    const { actuator, ledger, log } = build({
+      allocateError: original,
+      errorAfterCallback: true,
+    });
+    faultAfterRelease(ledger, fault);
+    await expect(
+      actuator.create({
+        cogniKey: "k1",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: SPEC,
+      })
+    ).rejects.toMatchObject({
+      code: "provider_rejected",
+      message: original.message,
+    });
+    expect(log.lines).toContainEqual(
+      expect.objectContaining({
+        marker: "akash_tx_allocation_rollback_unsettled",
+      })
+    );
+    expect(ledger.rows.get("k1")).toMatchObject({
+      externalName: "7001",
+      state: fault === "write" ? "allocated" : "released",
+    });
+  });
+  it.each([
+    "observe",
+    "create",
+  ] as const)("refuses no-op handleless settlement during uncertain %s", async (operation) => {
+    const { actuator, ledger, api } = build({
+      loseResponseAfterAllocation: true,
+    });
+    const call = {
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    };
+    await expect(actuator.create(call)).rejects.toMatchObject({
+      code: "outcome_unknown",
+    });
+    vi.spyOn(ledger, "fail").mockResolvedValue(undefined);
+    await expect(
+      operation === "observe"
+        ? actuator.observe({ cogniKey: "k1" })
+        : actuator.create(call)
+    ).rejects.toMatchObject({ code: "ledger_unavailable" });
+    expect(ledger.rows.get("k1")).toMatchObject({ state: "preparing" });
+    expect(api.allocateCalls).toBe(1);
+  });
+
   it("settles the bound handle after callback then verified rollback and replays after restart", async () => {
     const error = consoleError("NO_ELIGIBLE_BIDS");
     Object.assign(error, { rolledBackDseq: "7001" });
@@ -1928,7 +2111,12 @@ describe("bug.5560 terminal evidence", () => {
       externalName: "7001",
     });
     const restarted = build({}, undefined, ledger);
-    await restarted.actuator.create(call);
+    restarted.api.statusState = "closed";
+    await expect(restarted.actuator.create(call)).resolves.toMatchObject({
+      replayed: true,
+      externalName: "7001",
+      state: "closed",
+    });
     expect(restarted.api.allocateCalls).toBe(0);
   });
 
@@ -1936,7 +2124,7 @@ describe("bug.5560 terminal evidence", () => {
     const { actuator, ledger, api, cost, log } = build();
     seedAllocated(ledger);
     api.statusState = "closed";
-    cost.failEvidence = true;
+    cost.evidenceError = consoleError("COST_EVIDENCE_UNAVAILABLE");
     await expect(actuator.observe({ cogniKey: "k1" })).resolves.toMatchObject({
       found: true,
       resource: { state: "closed", externalName: "7001" },
@@ -1946,8 +2134,11 @@ describe("bug.5560 terminal evidence", () => {
       externalName: "7001",
     });
     expect(cost.observations).toHaveLength(0);
-    expect(log.lines.some((l) => l.marker === "compute_cost_unavailable")).toBe(
-      true
+    expect(log.lines).toContainEqual(
+      expect.objectContaining({
+        marker: "compute_cost_unavailable",
+        fields: expect.objectContaining({ accounting: "unknown" }),
+      })
     );
   });
 
@@ -1988,15 +2179,28 @@ describe("bug.5560 terminal evidence", () => {
     expect(ledger.rows.get("k1")?.state).toBe("allocated");
   });
 
-  it("refuses closure when a release write does not change the receipt", async () => {
+  it.each([
+    "observe",
+    "create",
+  ] as const)("refuses no-op release during %s", async (operation) => {
     const { actuator, ledger, api } = build();
     seedAllocated(ledger);
     api.statusState = "closed";
     ledger.releaseNoop = true;
-    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+    await expect(
+      operation === "observe"
+        ? actuator.observe({ cogniKey: "k1" })
+        : actuator.create({
+            cogniKey: "k1",
+            environment: "candidate-a",
+            identity: IDENTITY,
+            spec: SPEC,
+          })
+    ).rejects.toMatchObject({
       code: "ledger_unavailable",
     });
     expect(ledger.rows.get("k1")?.state).toBe("allocated");
+    expect(api.allocateCalls).toBe(0);
   });
 
   it("keeps the original allocation error if rollback has a mismatched handle", async () => {

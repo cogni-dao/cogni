@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Real-Postgres proof for receipt-linked compute cost attribution (task.5071). */
+/** Real-Postgres proof for receipt-linked cost attribution and native CLOSED settlement. */
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { AkashComputeAdapter } from "@/adapters/server/compute/akash-compute.adapter";
 import { DrizzleAkashTxAllocationLedger } from "@/adapters/server/compute/akash-tx-allocation-ledger.adapter";
 import { DrizzleComputeCostStore } from "@/adapters/server/compute/compute-cost-store.adapter";
+import {
+  AkashTxActuator,
+  type AkashTxLogger,
+} from "@/features/compute/akash-tx/akash-tx-actuator";
 import type { ComputeResourceCostEvidence } from "@/ports";
 import { akashTxAllocations, computeCostIntervals } from "@/shared/db/schema";
 
@@ -318,5 +323,323 @@ describe("DrizzleComputeCostStore (Component)", () => {
 
     const [row] = await db.select().from(computeCostIntervals);
     expect(row?.updatedAt.getTime()).toBeGreaterThanOrEqual(future.getTime());
+  });
+
+  // Revision4's approved local composition: production uses this SAME Console object
+  // for status and cost. Only provider transport is injected; every store is real SQL.
+  function nativeDetail(full = false, over: Record<string, unknown> = {}) {
+    return {
+      deployment: {
+        id: { dseq: "7001", owner: "akash1consumer" },
+        state: "closed",
+      },
+      leases: full
+        ? [
+            {
+              id: {
+                dseq: "7001",
+                owner: "akash1consumer",
+                provider: "akash1provider",
+              },
+              state: "closed",
+              price: { amount: "7.5", denom: "uakt" },
+              created_at: "100",
+              closed_on: "150",
+            },
+          ]
+        : [],
+      ...(full
+        ? {
+            escrow_account: {
+              state: {
+                owner: "akash1consumer",
+                state: "closed",
+                settled_at: "151",
+                funds: [{ amount: "499980.75", denom: "uakt" }],
+                transferred: [{ amount: "19.25", denom: "uakt" }],
+              },
+            },
+          }
+        : {}),
+      ...over,
+    };
+  }
+  function composed(detail: unknown, secondRead: unknown = detail) {
+    const posts: string[] = [];
+    const lines: { fields: Record<string, unknown>; marker: string }[] = [];
+    const capture: AkashTxLogger["info"] = (fields, marker) => {
+      lines.push({ fields, marker });
+    };
+    const log: AkashTxLogger = { info: capture, warn: capture, error: capture };
+    let reads = 0;
+    const consoleClient = new AkashComputeAdapter({
+      apiKey: "component-test-only",
+      expectedCostConsumerAccountId: "akash1consumer",
+      timeoutMs: 1000,
+      now: () => new Date("2026-09-15T00:01:00.000Z"),
+      outcomeStore: { record: async () => {}, stats: async () => new Map() },
+      fetchImpl: async (url, init) => {
+        const method = init?.method ?? "GET";
+        if (method === "POST") posts.push(String(url));
+        if (
+          method !== "GET" ||
+          String(url) !==
+            "https://console-api.akash.network/v1/deployments/7001"
+        )
+          throw new Error(`unexpected provider ${method} ${String(url)}`);
+        return new Response(
+          JSON.stringify({ data: ++reads === 1 ? detail : secondRead }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      },
+    });
+    const durableLedger = new DrizzleAkashTxAllocationLedger(
+      async () => db,
+      WALLET
+    );
+    const actuator = new AkashTxActuator({
+      console: consoleClient,
+      costEvidence: consoleClient,
+      ledger: durableLedger,
+      costStore: new DrizzleComputeCostStore(async () => db),
+      providerConsumerAccountId: "akash1consumer",
+      log,
+    });
+    return { actuator, posts, lines, ledger: durableLedger };
+  }
+  const replayCall = {
+    cogniKey: "k1",
+    environment: "candidate-a",
+    identity: IDENTITY,
+    spec: {
+      name: "toks9",
+      services: [
+        {
+          name: "app",
+          image: "ghcr.io/example/app:fixed",
+          cpuUnits: 0.5,
+          memoryMi: 512,
+          storageMi: 512,
+          env: {},
+          expose: [],
+        },
+      ],
+    },
+  };
+  it("observes exact CLOSED with no leases, preserves unknown cost and replays STILL-CLOSED across restart without provider POSTs", async () => {
+    const receiptId = await allocated();
+    const first = composed(nativeDetail());
+    await expect(
+      first.actuator.observe({ cogniKey: "k1" })
+    ).resolves.toMatchObject({
+      found: true,
+      resource: { state: "closed", externalName: "7001" },
+    });
+    await expect(first.ledger.read({ cogniKey: "k1" })).resolves.toMatchObject({
+      receiptId,
+      state: "released",
+      externalName: "7001",
+    });
+    await expect(first.actuator.create(replayCall)).resolves.toMatchObject({
+      replayed: true,
+      state: "closed",
+      externalName: "7001",
+    });
+    const restarted = composed(nativeDetail());
+    await expect(restarted.actuator.create(replayCall)).resolves.toMatchObject({
+      replayed: true,
+      state: "closed",
+      externalName: "7001",
+    });
+    await expect(
+      restarted.actuator.observe({ cogniKey: "k1" })
+    ).resolves.toMatchObject({ found: true, resource: { state: "closed" } });
+    expect(first.posts).toEqual([]);
+    expect(restarted.posts).toEqual([]);
+    const [row] = await db.select().from(computeCostIntervals);
+    expect(row).toMatchObject({
+      allocationReceiptId: receiptId,
+      resourceId: "7001",
+      rateAmount: null,
+      rateDenom: null,
+      cumulativeTransferred: [],
+    });
+    expect(first.lines).toContainEqual(
+      expect.objectContaining({
+        marker: "compute_cost_unavailable",
+        fields: expect.objectContaining({ accounting: "unknown" }),
+      })
+    );
+  });
+  it("keeps prior exact accounting unchanged when CLOSED has no fresh lease evidence", async () => {
+    const allocationReceiptId = await allocated();
+    await store.bind({ allocationReceiptId, resource: resource("7001") });
+    await store.observe({ allocationReceiptId, evidence: evidence() });
+    const [before] = await db.select().from(computeCostIntervals);
+    const c = composed(nativeDetail());
+    await expect(c.actuator.observe({ cogniKey: "k1" })).resolves.toMatchObject(
+      { found: true, resource: { state: "closed" } }
+    );
+    const [after] = await db.select().from(computeCostIntervals);
+    expect(after).toEqual(before);
+    expect(
+      c.lines.some((line) => line.marker === "compute_cost_observed")
+    ).toBe(false);
+    expect(c.lines).toContainEqual(
+      expect.objectContaining({
+        marker: "compute_cost_unavailable",
+        fields: expect.objectContaining({ accounting: "unknown" }),
+      })
+    );
+    expect(c.posts).toEqual([]);
+  });
+  it.each([
+    {},
+    { dseq: "7002", owner: "akash1consumer" },
+    { dseq: "7001" },
+    { dseq: "7001", owner: "akash1other" },
+  ])("native subject %j refuses without settling the real receipt", async (id) => {
+    await allocated();
+    const c = composed(
+      nativeDetail(false, { deployment: { id, state: "closed" } })
+    );
+    await expect(c.actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "provider_rejected",
+    });
+    await expect(c.ledger.read({ cogniKey: "k1" })).resolves.toMatchObject({
+      state: "allocated",
+      externalName: "7001",
+    });
+    expect(c.posts).toEqual([]);
+  });
+  it.each([
+    { dseq: "7002", owner: "akash1consumer" },
+    { dseq: "7001", owner: "akash1other" },
+  ])("wrong second-read native subject %j refuses before release", async (id) => {
+    await allocated();
+    const c = composed(
+      nativeDetail(),
+      nativeDetail(false, { deployment: { id, state: "closed" } })
+    );
+    await expect(c.actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    await expect(c.ledger.read({ cogniKey: "k1" })).resolves.toMatchObject({
+      state: "allocated",
+    });
+    expect(c.posts).toEqual([]);
+  });
+  it.each([
+    "consumer",
+    "resource",
+    "another receipt",
+  ])("real %s bind conflict refuses CLOSED/no-leases before release", async (conflict) => {
+    const allocationReceiptId = await allocated();
+    if (conflict === "another receipt") {
+      const other = await allocated("k2", "7001");
+      await store.bind({
+        allocationReceiptId: other,
+        resource: resource("7001"),
+      });
+    } else {
+      await store.bind({
+        allocationReceiptId,
+        resource: resource(
+          "7001",
+          conflict === "consumer" ? "akash1other" : "akash1consumer"
+        ),
+      });
+      if (conflict === "resource")
+        await db
+          .update(computeCostIntervals)
+          .set({ resourceId: "7999" })
+          .where(
+            eq(computeCostIntervals.allocationReceiptId, allocationReceiptId)
+          );
+    }
+    const c = composed(nativeDetail());
+    await expect(c.actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    await expect(c.ledger.read({ cogniKey: "k1" })).resolves.toMatchObject({
+      state: "allocated",
+    });
+    expect(c.lines).toContainEqual(
+      expect.objectContaining({
+        marker: "compute_cost_unavailable",
+        fields: expect.objectContaining({
+          operation: "bind",
+          causeType: "cost_invariant",
+        }),
+      })
+    );
+    expect(c.posts).toEqual([]);
+  });
+  it.each([
+    "receipt supplier",
+    "prior supplier",
+    "rate",
+    "transfer",
+    "chronology",
+  ])("real %s evidence conflict refuses before release", async (conflict) => {
+    const allocationReceiptId = await allocated();
+    await store.bind({ allocationReceiptId, resource: resource("7001") });
+    if (conflict === "prior supplier")
+      await db
+        .update(akashTxAllocations)
+        .set({ providerAccount: null })
+        .where(eq(akashTxAllocations.id, allocationReceiptId));
+    await store.observe({
+      allocationReceiptId,
+      evidence: evidence(
+        conflict === "chronology"
+          ? { observedAt: new Date("2026-09-15T00:01:00.000Z") }
+          : {}
+      ),
+    });
+    const detail = nativeDetail(true);
+    if (!detail.leases[0] || !detail.escrow_account)
+      throw new Error("missing full fixture");
+    if (conflict.includes("supplier"))
+      detail.leases[0].id.provider = "akash1other";
+    if (conflict === "rate") detail.leases[0].price.amount = "8";
+    if (conflict === "transfer")
+      detail.escrow_account.state.transferred[0] = {
+        amount: "9",
+        denom: "uakt",
+      };
+    const c = composed(detail);
+    await expect(c.actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    await expect(c.ledger.read({ cogniKey: "k1" })).resolves.toMatchObject({
+      state: "allocated",
+    });
+    expect(c.lines).toContainEqual(
+      expect.objectContaining({ marker: "compute_cost_unavailable" })
+    );
+    expect(c.posts).toEqual([]);
+  });
+  it("records exact full native CLOSED accounting before settlement", async () => {
+    const allocationReceiptId = await allocated();
+    const c = composed(nativeDetail(true));
+    await expect(c.actuator.observe({ cogniKey: "k1" })).resolves.toMatchObject(
+      { found: true, resource: { state: "closed", externalName: "7001" } }
+    );
+    await expect(c.ledger.read({ cogniKey: "k1" })).resolves.toMatchObject({
+      state: "released",
+      receiptId: allocationReceiptId,
+    });
+    const [row] = await db.select().from(computeCostIntervals);
+    expect(row).toMatchObject({
+      allocationReceiptId,
+      state: "closed",
+      rateAmount: "7.5",
+      rateDenom: "uakt",
+      providerSupplierAccountId: "akash1provider",
+      cumulativeTransferred: [{ amount: "19.25", denom: "uakt" }],
+      providerClosedAtPosition: "150",
+    });
+    expect(c.posts).toEqual([]);
   });
 });
