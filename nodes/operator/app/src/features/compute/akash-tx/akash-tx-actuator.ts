@@ -1535,7 +1535,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
 
     if (probe.outcome === "settled") {
       // PROVEN not billing. Settling here is what makes recovery automatic and bounded.
-      await this.settleRollback(cogniKey, undefined, allocationCursor);
+      if (!(await this.settleRollback(cogniKey, undefined, allocationCursor))) {
+        throw new AkashTxError(
+          "ledger_unavailable",
+          "allocation settlement could not be verified"
+        );
+      }
       return null;
     }
 
@@ -1573,10 +1578,37 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     allocationCursor?: string
   ): Promise<boolean> {
     try {
-      await this.ledger.fail({
-        cogniKey,
-        failureCode: ROLLED_BACK_FAILURE_CODE,
-      });
+      const before = await this.ledger.read({ cogniKey });
+      if (!before) throw new Error("allocation receipt missing");
+      if (before.externalName) {
+        if (
+          !rolledBackDseq ||
+          before.externalName !== rolledBackDseq ||
+          (before.state !== "allocated" && before.state !== "released")
+        ) {
+          throw new Error("rollback handle or state mismatch");
+        }
+        await this.ledger.markReleased({ cogniKey });
+      } else {
+        if (before.state !== "preparing") {
+          throw new Error("handleless receipt state mismatch");
+        }
+        await this.ledger.fail({
+          cogniKey,
+          failureCode: ROLLED_BACK_FAILURE_CODE,
+        });
+      }
+      const after = await this.ledger.read({ cogniKey });
+      if (
+        !after ||
+        after.receiptId !== before.receiptId ||
+        (before.externalName
+          ? after.state !== "released" ||
+            after.externalName !== before.externalName
+          : after.state !== "failed" || after.externalName !== undefined)
+      ) {
+        throw new Error("allocation settlement read-back mismatch");
+      }
       this.log.warn(
         {
           cogniKey,
@@ -1772,13 +1804,32 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     providerAccount?: string,
     record?: AkashTxAllocationRecord
   ): Promise<AkashTxResource> {
+    let output: ProvisionOutput;
     try {
-      const output = await this.console.status({ leaseId: externalName });
-      if (record) await this.observeCost(record, externalName);
-      return resourceFrom(output, providerAccount);
+      output = await this.console.status({ leaseId: externalName });
     } catch (error) {
       throw mapConsoleFailure(error, { mutating: false });
     }
+    if (output.leaseId !== externalName) {
+      throw new AkashTxError(
+        "ledger_unavailable",
+        "provider returned a mismatched allocation handle"
+      );
+    }
+    if (output.state === "closed" && record) {
+      if (!(await this.settleRollback(record.cogniKey, externalName))) {
+        throw new AkashTxError(
+          "ledger_unavailable",
+          "closed allocation settlement could not be verified"
+        );
+      }
+      // Accounting failure is explicit in compute_cost_unavailable. It cannot hide
+      // independently verified terminal state or fabricate a rate.
+      await this.observeCost(record, externalName).catch(() => undefined);
+    } else if (record) {
+      await this.observeCost(record, externalName);
+    }
+    return resourceFrom(output, providerAccount);
   }
 
   private async withServing(

@@ -159,6 +159,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
   readonly failCalls: { cogniKey: string; failureCode: string }[] = [];
   failReads = false;
   failWrites = false;
+  releaseNoop = false;
 
   async claim(input: {
     cogniKey: string;
@@ -306,8 +307,14 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
   }
 
   async markReleased(input: { cogniKey: string }) {
+    if (this.failWrites) throw new Error("ledger down");
     const row = this.rows.get(input.cogniKey);
-    if (row) this.rows.set(input.cogniKey, { ...row, state: "released" });
+    if (
+      !this.releaseNoop &&
+      row &&
+      (row.state === "allocated" || row.state === "released")
+    )
+      this.rows.set(input.cogniKey, { ...row, state: "released" });
   }
 
   async read(input: { cogniKey: string }) {
@@ -495,6 +502,7 @@ interface FakeConsoleOptions {
   /** Simulate a lost response: the lease IS created, then the call throws. */
   loseResponseAfterAllocation?: boolean;
   allocateError?: Error;
+  errorAfterCallback?: boolean;
   recovered?: ProvisionOutput | null;
   /** Several live allocations beyond the baseline: adoption is undecidable. */
   ambiguous?: readonly string[];
@@ -519,6 +527,7 @@ class FakeConsole implements AkashTxConsolePort {
   logDescriptors = new Map<string, AkashLeaseLogDescriptor>();
   mintedTokenProviders: string[][] = [];
   mintTokenError?: Error;
+  statusState: ProvisionOutput["state"] = "active";
 
   constructor(private readonly options: FakeConsoleOptions = {}) {
     this.loseResponse = options.loseResponseAfterAllocation ?? false;
@@ -538,13 +547,15 @@ class FakeConsole implements AkashTxConsolePort {
     onAllocated?: (leaseId: string) => Promise<void>;
   }): Promise<{ leaseId: string; providerAccount: string }> {
     this.allocateCalls += 1;
-    if (this.options.allocateError) throw this.options.allocateError;
+    if (this.options.allocateError && !this.options.errorAfterCallback)
+      throw this.options.allocateError;
     if (this.loseResponse) {
       // The transaction succeeded on-chain; only the response was lost, so the
       // caller never learns the handle and the ledger never gets it either.
       throw consoleError("TIMEOUT");
     }
     await input.onAllocated?.(this.nextLeaseId);
+    if (this.options.allocateError) throw this.options.allocateError;
     return { leaseId: this.nextLeaseId, providerAccount: "akash1provider" };
   }
 
@@ -565,7 +576,7 @@ class FakeConsole implements AkashTxConsolePort {
     return {
       provider: "akash",
       leaseId: input.leaseId,
-      state: "active",
+      state: this.statusState,
       endpoints: [`https://${input.leaseId}.example.net`],
     };
   }
@@ -1892,6 +1903,142 @@ describe("AkashTxActuator.create", () => {
         spec: SPEC,
       })
     ).rejects.toMatchObject({ code: "provider_rejected" });
+  });
+});
+
+describe("bug.5560 terminal evidence", () => {
+  it("settles the bound handle after callback then verified rollback and replays after restart", async () => {
+    const error = consoleError("NO_ELIGIBLE_BIDS");
+    Object.assign(error, { rolledBackDseq: "7001" });
+    const { actuator, ledger } = build({
+      allocateError: error,
+      errorAfterCallback: true,
+    });
+    const call = {
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    } as const;
+    await expect(actuator.create(call)).rejects.toMatchObject({
+      code: "provider_rejected",
+    });
+    expect(ledger.rows.get("k1")).toMatchObject({
+      state: "released",
+      externalName: "7001",
+    });
+    const restarted = build({}, undefined, ledger);
+    await restarted.actuator.create(call);
+    expect(restarted.api.allocateCalls).toBe(0);
+  });
+
+  it("observes an exact closed handle even when accounting is unavailable", async () => {
+    const { actuator, ledger, api, cost, log } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    cost.failEvidence = true;
+    await expect(actuator.observe({ cogniKey: "k1" })).resolves.toMatchObject({
+      found: true,
+      resource: { state: "closed", externalName: "7001" },
+    });
+    expect(ledger.rows.get("k1")).toMatchObject({
+      state: "released",
+      externalName: "7001",
+    });
+    expect(cost.observations).toHaveLength(0);
+    expect(log.lines.some((l) => l.marker === "compute_cost_unavailable")).toBe(
+      true
+    );
+  });
+
+  it("records available cost when observing closed", async () => {
+    const { actuator, ledger, api, cost } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    await expect(actuator.observe({ cogniKey: "k1" })).resolves.toMatchObject({
+      found: true,
+      resource: { state: "closed" },
+    });
+    expect(cost.observations).toEqual([
+      { allocationReceiptId: "receipt-k1", resourceId: "7001" },
+    ]);
+  });
+
+  it("refuses closure when the receipt cannot be read", async () => {
+    const { actuator, ledger, api } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    ledger.failReads = true;
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+  });
+
+  it.each([
+    "active",
+    "unknown",
+  ] as const)("refuses %s when accounting fails", async (state) => {
+    const { actuator, ledger, api, cost } = build();
+    seedAllocated(ledger);
+    api.statusState = state;
+    cost.failEvidence = true;
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+  });
+
+  it("refuses closure when a release write does not change the receipt", async () => {
+    const { actuator, ledger, api } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    ledger.releaseNoop = true;
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+  });
+
+  it("keeps the original allocation error if rollback has a mismatched handle", async () => {
+    const error = consoleError("NO_ELIGIBLE_BIDS");
+    Object.assign(error, { rolledBackDseq: "7999" });
+    const { actuator, ledger, log } = build({
+      allocateError: error,
+      errorAfterCallback: true,
+    });
+    await expect(
+      actuator.create({
+        cogniKey: "k1",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: SPEC,
+      })
+    ).rejects.toMatchObject({ code: "provider_rejected" });
+    expect(ledger.rows.get("k1")).toMatchObject({
+      state: "allocated",
+      externalName: "7001",
+    });
+    expect(
+      log.lines.some(
+        (line) => line.marker === "akash_tx_allocation_rollback_unsettled"
+      )
+    ).toBe(true);
+  });
+
+  it("refuses a settled probe if its receipt cannot be written", async () => {
+    const { actuator, ledger } = build({ loseResponseAfterAllocation: true });
+    await expect(
+      actuator.create({
+        cogniKey: "k1",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: SPEC,
+      })
+    ).rejects.toMatchObject({ code: "outcome_unknown" });
+    ledger.failWrites = true;
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
   });
 });
 
@@ -3418,6 +3565,28 @@ describe("AkashTxActuator provider strikes (task.5153)", () => {
         (l) => l.marker === "akash_tx_provider_strike_recorded"
       )
     ).toBe(true);
+  });
+
+  it("does not strike a provider for a handleless pre-lease failure", async () => {
+    const outcomes = new FakeOutcomes();
+    const ledger = new FakeLedger();
+    ledger.rows.set(BASE_KEY, {
+      receiptId: "receipt-base",
+      cogniKey: BASE_KEY,
+      identity: IDENTITY,
+      workload: "operator",
+      environment: "preview",
+      state: "failed",
+    });
+    const next = strikeBuild(outcomes, ledger);
+    await next.actuator.create({
+      cogniKey: `${BASE_KEY}:recover:1`,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(outcomes.records).toEqual([]);
+    expect(next.api.lastExcluded?.size ?? 0).toBe(0);
   });
 
   it("a strike-write failure degrades loudly and never blocks the paid recovery attempt", async () => {
