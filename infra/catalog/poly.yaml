@@ -93,7 +93,9 @@ lease_generation:
   # 84.48 ACT free at the time of this bump — the per-deployment escrow ran dry while the
   # account was unfunded, and the account has since been topped up. Gen-3 is the reviewed
   # re-mint; production (gen-20, Finland) was serving the expected sha throughout.
-  preview: 5
+  # 5 -> 6: preview lease 1792059660790 is closed; its released key cannot create again.
+  # Preserve the selected preview source and bindings (story.5127).
+  preview: 6
   # 20 -> 21 after gen-20 booted the old eed16dc0 bundle, missed the boot
   # deadline for the promoted 9033a162 bundle, and was closed by policy.
   # The settled xcw:cogni-production:<node-id>:20 key is spent and cannot be
