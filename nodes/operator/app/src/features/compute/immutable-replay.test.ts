@@ -63,7 +63,8 @@ const input = () => ({
   bundleRepository: repository,
   sourceRepository: "cogni-dao/node",
   sourceSha: sha,
-  acceptedOverlayDir: join(dir, "overlay"),
+  destinationAcceptedOverlayDir: join(dir, "overlay"),
+  previewOverlayDir: join(dir, "overlay"),
   nodeId: spec.node_id,
 });
 
@@ -274,9 +275,31 @@ describe("immutable replay", () => {
       })
     );
     await accepted(`${repository}@${oldDigest}`);
-    expect(
-      (await resolveBundleInput({ ...input(), previewForward: true })).ref
-    ).toBe(`${repository}@${oldDigest}`);
+    const paths = {
+      ...input(),
+      destinationAcceptedOverlayDir: join(dir, "destination"),
+    };
+    const preview = await resolveBundleInput({
+      ...paths,
+      previewForward: true,
+    });
+    const destination = await resolveBundleInput({
+      ...paths,
+      previewForward: false,
+    });
+    expect(preview.ref).toBe(`${repository}@${oldDigest}`);
+    expect(preview.payload).toEqual(payload);
+    expect(destination.ref).toBe(`${repository}@${newDigest}`);
+    expect(destination.payload).not.toEqual(payload);
+    expect(await calls()).not.toContain("resolve ");
+    await rm(join(dir, "overlay/xcomputeworkload.yaml"));
+    await expect(
+      resolveBundleInput({ ...paths, previewForward: true })
+    ).rejects.toThrow();
+    await accepted(`${repository}@${oldDigest}`, "b".repeat(40));
+    await expect(
+      resolveBundleInput({ ...paths, previewForward: true })
+    ).rejects.toThrow();
     expect(await calls()).not.toContain("resolve ");
   });
   it.each([
@@ -317,7 +340,12 @@ echo '{}'
       await accepted(`${repository}@${oldDigest}`, "b".repeat(40));
     const result = await resolveBundleInput({
       ...input(),
-      ...(mode === "candidate" ? { acceptedOverlayDir: undefined } : {}),
+      ...(mode === "candidate"
+        ? {
+            destinationAcceptedOverlayDir: undefined,
+            previewOverlayDir: undefined,
+          }
+        : {}),
     });
     expect(result.ref).toBe(`${repository}@${newDigest}`);
     expect(result.payload).not.toEqual(payload);

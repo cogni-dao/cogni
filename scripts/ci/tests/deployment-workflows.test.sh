@@ -90,10 +90,19 @@ prepare_line=$(grep -n 'name: Prepare per-node deploy branch' "$promote" | cut -
 materialize_line=$(grep -n 'name: Materialize provider-neutral external workload' "$promote" | cut -d: -f1)
 sync_line=$(grep -n 'name: Sync infra/k8s + per-node catalog' "$promote" | cut -d: -f1)
 [[ "$prepare_line" -lt "$materialize_line" && "$materialize_line" -lt "$sync_line" ]]
-overlay=$(yq -r '.jobs.promote-k8s.steps[] | select(.name == "Materialize provider-neutral external workload") | .with.accepted_overlay_dir' "$promote")
-[[ "$overlay" == *'preview-src/infra/k8s/overlays/preview/'* && "$overlay" == *'deploy-branch/infra/k8s/overlays/'* ]]
-# Candidate's existing shared action invocation must stay valid without the optional input.
-yq -e '.jobs | .. | select(tag == "!!map" and has("uses")) | select(.uses | contains("materialize-compute-workload")) | .with | has("accepted_overlay_dir") | not' "$WORKFLOW" >/dev/null
+destination=$(yq -r '.jobs.promote-k8s.steps[] | select(.name == "Materialize provider-neutral external workload") | .with.destination_accepted_overlay_dir' "$promote")
+preview_overlay=$(yq -r '.jobs.promote-k8s.steps[] | select(.name == "Materialize provider-neutral external workload") | .with.preview_overlay_dir' "$promote")
+preview_mode=$(yq -r '.jobs.promote-k8s.steps[] | select(.name == "Materialize provider-neutral external workload") | .with.preview_forward' "$promote")
+[[ "$destination" == '${{ github.workspace }}/deploy-branch/infra/k8s/overlays/${{ needs.decide.outputs.environment }}/${{ matrix.node }}' ]]
+[[ "$preview_overlay" == '${{ github.workspace }}/preview-src/infra/k8s/overlays/preview/${{ matrix.node }}' ]]
+[[ "$preview_mode" == '${{ fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node] }}' ]]
+action="$REPO_ROOT/.github/actions/materialize-compute-workload/action.yml"
+[[ $(yq -r '.runs.steps[] | select(.name == "Materialize immutable desired state") | .env.DESTINATION_ACCEPTED_OVERLAY_DIR // ""' "$action") == '${{ inputs.destination_accepted_overlay_dir }}' ]]
+[[ $(yq -r '.runs.steps[] | select(.name == "Materialize immutable desired state") | .env.PREVIEW_OVERLAY_DIR // ""' "$action") == '${{ inputs.preview_overlay_dir }}' ]]
+[[ $(yq -r '.runs.steps[] | select(.name == "Materialize immutable desired state") | .env.PREVIEW_FORWARD // ""' "$action") == '${{ inputs.preview_forward }}' ]]
+# Candidate's existing shared action invocation must stay valid without optional paths.
+yq -e '.jobs | .. | select(tag == "!!map" and has("uses")) | select(.uses | contains("materialize-compute-workload")) | .with | has("destination_accepted_overlay_dir") | not' "$WORKFLOW" >/dev/null
+yq -e '.jobs | .. | select(tag == "!!map" and has("uses")) | select(.uses | contains("materialize-compute-workload")) | .with | has("preview_overlay_dir") | not' "$WORKFLOW" >/dev/null
 echo '[PASS] replay reads the selected deploy overlay before syncing; candidate needs no new input'
 
 # Run the actual digest step with a missing app tag. Akash must not inspect it;

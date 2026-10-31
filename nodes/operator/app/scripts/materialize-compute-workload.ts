@@ -35,29 +35,29 @@ import {
   buildComputeWorkloadManifest,
   computeWorkloadManifestFile,
   resolveNodeDatabasePoolLimits,
-} from "@/features/compute/compute-workload-manifest";
-import { buildComputeSecretResources } from "@/features/compute/compute-workload-secret-manifests";
+} from "../src/features/compute/compute-workload-manifest";
+import { buildComputeSecretResources } from "../src/features/compute/compute-workload-secret-manifests";
 import {
   buildNodeBundleTagRef,
   NODE_BUNDLE_PAYLOAD_FILE,
   verifyNodeBundleManifest,
-} from "@/features/compute/node-artifact-bundle-oci";
-import { resolveNodeBootRecovery } from "@/features/compute/node-boot-recovery";
-import { resolveNodeComputeApi } from "@/features/compute/node-compute-api";
+} from "../src/features/compute/node-artifact-bundle-oci";
+import { resolveNodeBootRecovery } from "../src/features/compute/node-boot-recovery";
+import { resolveNodeComputeApi } from "../src/features/compute/node-compute-api";
 import {
   deploymentEnvironmentSchema,
   resolveNodeDeploymentProvider,
-} from "@/features/compute/node-deployment-provider";
+} from "../src/features/compute/node-deployment-provider";
 import {
   isInfraOnlyPromoteNoop,
   resolveDeploymentTargets,
   resolvePromoteDeploymentTargets,
-} from "@/features/compute/node-deployment-targets";
-import { resolveNodeIsolatedServices } from "@/features/compute/node-isolated-services";
-import { resolveNodeLeaseGeneration } from "@/features/compute/node-lease-generation";
-import { resolveNodeRequiredPlacement } from "@/features/compute/node-required-placement";
-import { assertDeclaredNodeDeployment } from "@/features/compute/node-services-workload-spec";
-import { hostForNode } from "@/shared/node-registry/resolve";
+} from "../src/features/compute/node-deployment-targets";
+import { resolveNodeIsolatedServices } from "../src/features/compute/node-isolated-services";
+import { resolveNodeLeaseGeneration } from "../src/features/compute/node-lease-generation";
+import { resolveNodeRequiredPlacement } from "../src/features/compute/node-required-placement";
+import { assertDeclaredNodeDeployment } from "../src/features/compute/node-services-workload-spec";
+import { hostForNode } from "../src/shared/node-registry/resolve";
 
 const options = {
   catalog: { type: "string" },
@@ -81,7 +81,8 @@ const options = {
   bundle: { type: "string" },
   "bundle-ref": { type: "string" },
   "bundle-repository": { type: "string" },
-  "accepted-overlay-dir": { type: "string" },
+  "destination-accepted-overlay-dir": { type: "string" },
+  "preview-overlay-dir": { type: "string" },
   "source-sha": { type: "string" },
   domain: { type: "string" },
   // Public Cloudflare zone identifier (NOT a credential — it appears in the dashboard URL).
@@ -181,7 +182,8 @@ async function main(): Promise<void> {
     bundleRepository: values["bundle-repository"],
     sourceSha,
     sourceRepository: catalogIdentity.repository,
-    acceptedOverlayDir: values["accepted-overlay-dir"],
+    destinationAcceptedOverlayDir: values["destination-accepted-overlay-dir"],
+    previewOverlayDir: values["preview-overlay-dir"],
     nodeId: catalogIdentity.nodeId,
     previewForward: values["preview-forward"] === "true",
   });
@@ -616,7 +618,8 @@ export async function resolveBundleInput(input: {
   readonly bundleRepository: string | undefined;
   readonly sourceSha: string;
   readonly sourceRepository: string;
-  readonly acceptedOverlayDir: string | undefined;
+  readonly destinationAcceptedOverlayDir: string | undefined;
+  readonly previewOverlayDir: string | undefined;
   readonly nodeId: string;
   readonly previewForward?: boolean;
 }): Promise<{ readonly ref: string; readonly payload: unknown }> {
@@ -670,14 +673,18 @@ export async function resolveBundleInput(input: {
 }
 
 async function readAcceptedBundleRef(input: {
-  readonly acceptedOverlayDir: string | undefined;
+  readonly destinationAcceptedOverlayDir: string | undefined;
+  readonly previewOverlayDir: string | undefined;
   readonly sourceRepository: string;
   readonly sourceSha: string;
   readonly bundleRepository: string | undefined;
   readonly nodeId: string;
   readonly previewForward?: boolean;
 }): Promise<string | undefined> {
-  if (!input.acceptedOverlayDir) {
+  const acceptedOverlayDir = input.previewForward
+    ? input.previewOverlayDir
+    : input.destinationAcceptedOverlayDir;
+  if (!acceptedOverlayDir) {
     if (input.previewForward) throw new Error("Preview acceptance is required");
     return undefined;
   }
@@ -686,7 +693,7 @@ async function readAcceptedBundleRef(input: {
   for (const file of files) {
     let text: string;
     try {
-      text = await readFile(join(input.acceptedOverlayDir, file), "utf8");
+      text = await readFile(join(acceptedOverlayDir, file), "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
