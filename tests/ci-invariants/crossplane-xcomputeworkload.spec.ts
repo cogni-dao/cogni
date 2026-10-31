@@ -265,7 +265,9 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     expect(template).toContain(
       '$bootKey := printf "%s:%d" $desiredSha $leaseGeneration'
     );
-    expect(template).toContain('dig "status" "bootEpoch" "key" "" $xr');
+    expect(template).toContain(
+      '{{- $prevBootKey := dig "key" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "" }}'
+    );
     // The window resets ONLY when the attempt key changes — a mere re-render of the same
     // attempt must keep the recorded start, or the deadline could never fire at all.
     expect(template).toContain('and $sameBootAttempt (ne $prevBootAt "")');
@@ -273,7 +275,9 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     const bootEpoch = (statusSchema.bootEpoch as YamlObject)
       .properties as YamlObject;
     expect(Object.keys(bootEpoch)).toEqual(["key", "at", "mintedAt"]);
-    expect(template).toContain('dig "status" "bootEpoch" "mintedAt" "" $xr');
+    expect(template).toContain(
+      '{{- $mintedAt = dig "mintedAt" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "" }}'
+    );
     expect(template).toContain(
       'and (eq $mintedAt "") $found (not $closed) (ne $externalName "") (eq $responseKey $currentKey)'
     );
@@ -1906,7 +1910,8 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     // These pin the retained/DNS gates only. The Go/Sprig suite owns exact paid
     // attempt selection, recovery staging, native bindings and reordered persistence.
     for (const expression of [
-      '$activeLeaseGeneration := int (dig "status" "activeLeaseGeneration" -1 $xr)',
+      "{{- $activeLeaseGeneration := -1 }}",
+      '{{- if ne (dig "status" "activeLeaseGeneration" nil $xr) nil }}{{ $activeLeaseGeneration = int $xr.status.activeLeaseGeneration }}{{ end }}',
       "if and (ge $activeLeaseGeneration 0) (ne $activeLeaseGeneration $leaseGeneration)",
       '$activeBaseKey := printf "xcw:%s:%s:%d" $ns $name $activeLeaseGeneration',
       "range $childName, $child := $observedResources",
