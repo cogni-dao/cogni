@@ -1282,8 +1282,14 @@ func TestR2AllocatedRecoveryHistorySurvivesSelectionLoss(t *testing.T) {
 	delete(observed(f), n)
 	for _, selection := range []string{"missing", "null", "other-generation"} {
 		for _, history := range []string{"both", "handle-only", "clock-only"} {
-			for _, refs := range []string{"stale-ref", "lost-ref", "closed-predecessor"} {
+			for _, refs := range []string{"stale-ref", "lost-ref", "closed-predecessor", "503-predecessor", "missing-response-predecessor", "active-predecessor", "unknown-predecessor"} {
 				for _, qualifier := range []string{"unserved", "served", "legacy"} {
+					// Keep the new predecessor cases bounded. Each crosses restart and
+					// desired SHA edits below; the existing matrix owns other history shapes.
+					if refs != "stale-ref" && refs != "lost-ref" && refs != "closed-predecessor" &&
+						(selection != "missing" || history != "both" || qualifier != "unserved") {
+						continue
+					}
 					t.Run(selection+"-"+history+"-"+refs+"-"+qualifier, func(t *testing.T) {
 						bad := r2Copy(t, f) // JSON round trip models a restarted function.
 						switch selection {
@@ -1302,9 +1308,20 @@ func TestR2AllocatedRecoveryHistorySurvivesSelectionLoss(t *testing.T) {
 						}
 						if refs == "lost-ref" {
 							delete(xr(bad)["spec"].(obj)["crossplane"].(obj), "resourceRefs")
-						} else if refs == "closed-predecessor" {
-							// Old closure cannot recreate a successor already observed allocated.
-							observed(bad)["akash-lease"] = r2Copy(t, base)
+						} else if strings.HasSuffix(refs, "-predecessor") {
+							// A valid older owner must not hide the missing paid owner,
+							// whether its current answer is closed, refused, absent or live.
+							delete(xr(bad)["spec"].(obj)["crossplane"].(obj), "resourceRefs")
+							predecessor := r2Copy(t, base)
+							switch refs {
+							case "503-predecessor":
+								at(predecessor, "resource", "status").(obj)["response"] = obj{"statusCode": 503, "body": `{"code":"ledger_unavailable","message":"unproven"}`}
+							case "missing-response-predecessor":
+								delete(at(predecessor, "resource", "status").(obj), "response")
+							case "active-predecessor", "unknown-predecessor":
+								r2Stamp(predecessor, key(1), strings.TrimSuffix(refs, "-predecessor"), false, false)
+							}
+							observed(bad)["akash-lease"] = predecessor
 						}
 						canonical := strings.Repeat("b", 40) + ":1:recover:1"
 						if qualifier == "legacy" {
@@ -1859,6 +1876,16 @@ func TestR2BudgetHistoryIsNotAllocationOrLiveness(t *testing.T) {
 				}
 			case "missing-handle":
 				status(f)["resource"] = nil
+			}
+			if mode == "wrong-attempt" {
+				// A valid base owner cannot erase independently bound recovery history.
+				// This contradictory allocated tuple now refuses before normalization.
+				before := jsonString(f)
+				o, err := execute(t, tm, f)
+				if err == nil || !strings.Contains(err.Error(), "allocated selected child disappeared without terminal proof") || o.leases != nil || o.status != nil || o.dns != nil || jsonString(f) != before {
+					t.Fatal("unbound allocated history escaped whole-render refusal", err)
+				}
+				return
 			}
 			if mode == "expired-found-false" || mode == "missing-handle" {
 				out, err := execute(t, tm, f)

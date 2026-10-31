@@ -554,6 +554,14 @@ spec:
             {{- if or (gt (int $i) (int $recoveryCount)) (and (lt (int $i) (int $recoveryCount)) (not (hasKey $closedKeys $k))) }}{{ fail "unexplained ahead/behind paid attempt" }}{{ end }}
             {{- end }}
             {{- end }}
+            {{- /* Allocation history owns admission independently of nominal selection.
+              Before accepting ANY owner or clearing history, its bound paid owner
+              must still exist, unless an earlier complete tuple permits omission.
+              A retained older Request cannot stand in for a lost allocated successor.
+              Fresh authorized closure still advances from its observed own owner;
+              explicit generation changes and unallocated successor replay stay valid.
+            */ -}}
+            {{- if and (or (eq $prevBootGeneration $leaseGeneration) (and (eq $prevBootKey "") (eq $activeLeaseGeneration $leaseGeneration))) (or (ne (dig "id" "" $prevResource) "") (ne (dig "status" "bootEpoch" "mintedAt" "" $xr | default "") "")) (not (or $parkedClosed $parkedBudget)) (not (hasKey $owners (default $currentKey $prevPaidKey))) }}{{ fail "allocated selected child disappeared without terminal proof" }}{{ end }}
             {{- $leaseResourceName := get $owners $currentKey }}
             {{- if ne $leaseResourceName "" }}
             {{- if and (not (or $parkedClosed $parkedBudget)) (not (empty (dig "metadata" "deletionTimestamp" "" (index $observedResources $leaseResourceName).resource))) }}{{ fail "selected lease child is deleting" }}{{ end }}
@@ -562,10 +570,6 @@ spec:
             {{- if regexMatch "^akash-lease-g[0-9]+$" $leaseResourceName }}{{ $leaseRequestGeneration = int (trimPrefix "akash-lease-g" $leaseResourceName) }}{{ end }}
             {{- else }}
             {{- if and (gt $recordedCount 0) (not $completeSelection) }}{{ fail "legacy recovery requires its exact observed receipt" }}{{ end }}
-            {{- /* Fresh closure can advance aligned history. A lost selection cannot
-              replay an already allocated successor merely from predecessor closure.
-            */ -}}
-            {{- if and (or (eq (int $recoveryCount) (int $recordedCount)) (and (eq $prevBootGeneration $leaseGeneration) (ne (int $prevBootRecoveryCount) (int $recordedCount)))) (or (eq $prevBootGeneration $leaseGeneration) (and (eq $prevBootKey "") (eq $activeLeaseGeneration $leaseGeneration))) (or (ne (dig "id" "" $prevResource) "") (ne (dig "status" "bootEpoch" "mintedAt" "" $xr | default "") "")) (not (or $parkedClosed $parkedBudget)) }}{{ fail "allocated selected child disappeared without terminal proof" }}{{ end }}
             {{- if and (gt $recordedCount 0) (not (and (eq $prevBootGeneration $leaseGeneration) (eq $prevBootRecoveryCount $recordedCount))) }}{{ fail "missing successor lacks durable selection tuple" }}{{ end }}
             {{- $leaseResourceName = "akash-lease" }}
             {{- if gt $recoveryCount 0 }}
