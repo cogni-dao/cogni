@@ -5,7 +5,7 @@
  * Module: `@features/compute/akash-tx/database-cell-binding`
  * Purpose: Seal native prestage identity or register an audited admitted cell on its existing paid allocation.
  * Scope: One bounded observe and native read per request; does not allocate compute or publish secrets.
- * Invariants: Caller supplies references only; provider receipt, owned kit and scoped native observations supply binding facts.
+ * Invariants: Caller supplies references only; retained history is metadata-only; live placement requires an exact active native resource.
  * Side-effects: IO (existing provider observation, native proof, allocation metadata)
  * Links: ports/database-cell-binding.port.ts, shared/secrets/database-cell-placement.data.ts
  * @internal
@@ -69,11 +69,11 @@ export class DatabaseCellBinder
     }
   ) {}
 
-  private async record(input: DatabaseCellBindingReference) {
+  private async identityRecord(input: DatabaseCellBindingReference) {
     const record = await this.deps.ledger.read({ cogniKey: input.cogniKey });
     if (
       !record ||
-      record.state !== "allocated" ||
+      record.cogniKey !== input.cogniKey ||
       record.identity.nodeId !== input.nodeId ||
       record.environment !== input.allocationEnvironment ||
       !record.externalName ||
@@ -90,6 +90,17 @@ export class DatabaseCellBinder
       providerAccount: record.providerAccount,
       lastAppliedSdlHash: record.lastAppliedSdlHash,
     };
+  }
+
+  /** Live operations require allocated custody even when metadata history survives. */
+  private async record(input: DatabaseCellBindingReference) {
+    const record = await this.identityRecord(input);
+    if (record.state !== "allocated")
+      throw new AkashTxError(
+        "identity_conflict",
+        "cell reference differs from its applied allocation"
+      );
+    return record;
   }
 
   async discover(input: Omit<DatabaseCellBindingReference, "cogniKey">) {
@@ -117,6 +128,7 @@ export class DatabaseCellBinder
     if (
       !observed.found ||
       !observed.resource ||
+      observed.resource.state !== "active" ||
       observed.resource.externalName !== record.externalName ||
       observed.resource.providerAccount !== record.providerAccount
     )
@@ -136,7 +148,17 @@ export class DatabaseCellBinder
   }
 
   async read(input: DatabaseCellBindingReference) {
-    const record = await this.record(input);
+    // Only this metadata reader can use terminal retained custody. No native IO,
+    // provider observation or save is authority for this historical response.
+    const record = await this.identityRecord(input);
+    if (
+      record.state !== "allocated" &&
+      !(record.state === "released" && record.retentionPolicy === "retain")
+    )
+      throw new AkashTxError(
+        "identity_conflict",
+        "cell history lacks retained released custody"
+      );
     const receipts = AppliedDatabaseCellReceiptsSchema.parse(
       await this.deps.store.read(input.cogniKey)
     );
@@ -148,7 +170,8 @@ export class DatabaseCellBinder
         binding.nodeId !== record.identity.nodeId ||
         binding.cogniKey !== record.cogniKey ||
         binding.dseq !== record.externalName ||
-        binding.providerAccount !== record.providerAccount
+        binding.providerAccount !== record.providerAccount ||
+        binding.appliedSdlHash !== record.lastAppliedSdlHash
       )
         throw new AkashTxError(
           "identity_conflict",
@@ -184,6 +207,7 @@ export class DatabaseCellBinder
     if (
       !observed.found ||
       !resource ||
+      resource.state !== "active" ||
       resource.externalName !== record.externalName ||
       resource.providerAccount !== record.providerAccount
     )

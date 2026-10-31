@@ -42,7 +42,8 @@
  *     cursor (durably pre-transaction), a Console read-back showing `closed`, or a wallet scan
  *     showing nothing live beyond the baseline. Never on a timer (bug.5189).
  *     CLOSED observation validates cost binding/evidence before release; only exact native
- *     CLOSED/no-leases evidence may leave accounting unknown (bug.5560).
+ *     CLOSED/no-leases evidence may leave accounting unknown (bug.5560). Retained released
+ *     policy and cold provenance survive closure without granting live cell authority.
  *   - MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION: NO mutating call states, proves, or can be
  *     refused by a migration. bug.5140 made a completed per-digest DB migration a precondition
  *     of every paid transaction; task.5135 severed that. Node toks5 is the proof it was wrong:
@@ -108,6 +109,7 @@ import {
   type ComputeResourceCostEvidence,
   type NodeMigrationReportStorePort,
 } from "@/ports";
+import { AppliedDatabaseCellReceiptsSchema } from "@/shared/secrets/database-cell-placement.data";
 import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
 import { runMigrationStep } from "./akash-tx-migration-step";
 import {
@@ -540,23 +542,20 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
     }
     const source = await this.readLedger(input.recovery.sourceCogniKey);
-    const bindings =
-      source?.appliedDatabaseCellBinding?.filter(
-        ({ binding }) =>
-          binding.phase === "applied" &&
-          binding.nodeId === input.identity.nodeId &&
-          binding.nodeSlug === input.nodeSlug &&
-          binding.environment === input.environment &&
-          binding.receiptId === source.receiptId &&
-          binding.cogniKey === source.cogniKey &&
-          source.providerAccount !== undefined &&
-          binding.providerAccount === source.providerAccount &&
-          binding.dseq === input.recovery.sourceExternalName &&
-          binding.systemIdentifier === input.recovery.sourceSystemIdentifier
-      ) ?? [];
+    const bindings = source
+      ? this.retainedAppliedBindings(source).filter(
+          ({ binding }) =>
+            binding.nodeId === input.identity.nodeId &&
+            binding.nodeSlug === input.nodeSlug &&
+            binding.environment === input.environment &&
+            binding.dseq === input.recovery.sourceExternalName &&
+            binding.systemIdentifier === input.recovery.sourceSystemIdentifier
+        )
+      : [];
     if (
       !source ||
-      source.state !== "allocated" ||
+      (source.state !== "allocated" && source.state !== "released") ||
+      source.cogniKey !== input.recovery.sourceCogniKey ||
       source.retentionPolicy !== "retain" ||
       source.identity.nodeId !== input.identity.nodeId ||
       source.environment !== input.environment ||
@@ -1157,6 +1156,45 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     );
   }
 
+  /** Authenticate retained policy/provenance before any caller filters its logical lane.
+   * A terminal receipt is history, never native liveness or permission to mutate it.
+   */
+  private retainedAppliedBindings(record: AkashTxAllocationRecord) {
+    const parsed = AppliedDatabaseCellReceiptsSchema.safeParse(
+      record.appliedDatabaseCellBinding ?? []
+    );
+    if (!parsed.success)
+      throw new AkashTxError(
+        "identity_conflict",
+        "retained cell binding metadata is corrupt"
+      );
+    const applied = parsed.data.filter(
+      ({ binding }) => binding.phase === "applied"
+    );
+    if (
+      applied.some(
+        ({ allocationEnvironment, binding }) =>
+          (record.state !== "allocated" && record.state !== "released") ||
+          record.retentionPolicy !== "retain" ||
+          !record.externalName ||
+          !record.providerAccount ||
+          !record.lastAppliedSdlHash ||
+          allocationEnvironment !== record.environment ||
+          binding.receiptId !== record.receiptId ||
+          binding.cogniKey !== record.cogniKey ||
+          binding.nodeId !== record.identity.nodeId ||
+          binding.dseq !== record.externalName ||
+          binding.providerAccount !== record.providerAccount ||
+          binding.appliedSdlHash !== record.lastAppliedSdlHash
+      )
+    )
+      throw new AkashTxError(
+        "identity_conflict",
+        "retained applied cell binding differs from its allocation"
+      );
+    return applied;
+  }
+
   /** App releases use current owned credentials; retained-cell recovery keeps its own guards. */
   private async requireQualifiedCellRelease(input: {
     cogniKey: string;
@@ -1169,7 +1207,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     if (input.environment !== "production") return;
     let records: readonly AkashTxAllocationRecord[];
     try {
-      records = await this.ledger.listAllocated({
+      records = await this.ledger.listReceipts({
         ...(input.nodeId ? { nodeId: input.nodeId } : {}),
         environment: input.environment,
         limit: 100,
@@ -1185,18 +1223,17 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         "identity_conflict",
         "qualified cell release metadata exceeds bounded scan"
       );
-    const cells = records.flatMap((record) =>
-      (record.appliedDatabaseCellBinding ?? []).filter(
-        (receipt) =>
-          receipt.binding.phase === "applied" &&
+    const cells = records.flatMap((record) => {
+      // The persistent cell itself still uses its stricter retained SDL guard.
+      if (record.cogniKey === input.cogniKey) return [];
+      return this.retainedAppliedBindings(record).filter(
+        ({ binding }) =>
           (input.nodeId
-            ? receipt.binding.nodeId === input.nodeId
-            : receipt.binding.nodeSlug === input.workload) &&
-          receipt.binding.environment === input.environment &&
-          // The persistent cell itself remains subject to its stricter retained SDL guard.
-          record.cogniKey !== input.cogniKey
-      )
-    );
+            ? binding.nodeId === input.nodeId
+            : binding.nodeSlug === input.workload) &&
+          binding.environment === input.environment
+      );
+    });
     if (cells.length === 0) return;
     const cell = cells[0];
     if (

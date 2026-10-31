@@ -45,6 +45,8 @@ import type {
   RecordNodeMigrationReportInput,
 } from "@/ports";
 import { AkashTxError } from "@/ports";
+import { DatabaseCellAppliedCustodySchema } from "@/shared/secrets/database-cell-binding.data";
+import { AppliedDatabaseCellReceiptsSchema } from "@/shared/secrets/database-cell-placement.data";
 import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
 
 import {
@@ -681,6 +683,8 @@ describe("qualified cell app releases", () => {
       state: "allocated",
       externalName: "9001",
       providerAccount: provider,
+      retentionPolicy: "retain",
+      lastAppliedSdlHash: "d".repeat(64),
       appliedDatabaseCellBinding: [
         {
           allocationEnvironment: "production",
@@ -723,6 +727,9 @@ describe("qualified cell app releases", () => {
         },
       ],
     });
+    const row = context.ledger.rows.get("cell");
+    if (!row) throw new Error("missing source fixture");
+    AppliedDatabaseCellReceiptsSchema.parse(row.appliedDatabaseCellBinding);
     return context;
   }
   const recoveryProfile = {
@@ -826,9 +833,13 @@ describe("qualified cell app releases", () => {
     expect(disabled.ledger.rows.size).toBe(1);
     expect(context.api.allocateCalls).toBe(0);
   });
-  it("refuses another retained target in the same source family and clears only the unused claim", async () => {
+  it.each([
+    "allocated",
+    "released",
+  ])("refuses another retained target in the same source family and clears only the unused claim (%s)", async (state) => {
     const context = withCell(recoveryProfile);
     const input = recoveryRequest(context);
+    if (state === "released") await closeCell(context);
     const prefix = input.cogniKey.slice(0, -64);
     const source = context.ledger.rows.get("cell");
     if (!source) throw new Error("missing source");
@@ -844,11 +855,15 @@ describe("qualified cell app releases", () => {
     ).rejects.toMatchObject({ code: "identity_conflict" });
     expect(context.api.allocateCalls).toBe(0);
     expect(context.ledger.rows.get(input.cogniKey)?.state).toBe("failed");
-    expect(context.ledger.rows.get("cell")?.state).toBe("allocated");
+    expect(context.ledger.rows.get("cell")?.state).toBe(state);
   });
-  it("fails a truncated family scan without stranding the unused wallet claim", async () => {
+  it.each([
+    "allocated",
+    "released",
+  ])("fails a truncated family scan without stranding the unused wallet claim (%s)", async (state) => {
     const context = withCell(recoveryProfile);
     const input = recoveryRequest(context);
+    if (state === "released") await closeCell(context);
     const source = context.ledger.rows.get("cell");
     if (!source) throw new Error("missing source");
     for (let i = 0; i < 98; i++)
@@ -1059,7 +1074,18 @@ describe("qualified cell app releases", () => {
         serviceRole: "service_toks9",
         budgetProfile: "dedicated-high-throughput-v1",
         runtimePoolLimits: { replicaCount: 1, app: 3, service: 4, read: 2 },
-        budget: { kind: "preserved-role-bounds", roles: [] },
+        budget: {
+          kind: "preserved-role-bounds",
+          roles: ["app_toks9", "service_toks9"].map((name) => ({
+            name,
+            connectionLimit: 20,
+            statementTimeoutMs: 5000,
+            lockTimeoutMs: 2000,
+            idleInTransactionTimeoutMs: 30000,
+            tempFileLimitMiB: 128,
+            workMemMiB: 16,
+          })),
+        },
         tlsCertificate: rootCertificates[0] ?? "",
         tls: { kind: "system" },
         app: {
@@ -1077,9 +1103,15 @@ describe("qualified cell app releases", () => {
     const receipt =
       context.ledger.rows.get("cell")?.appliedDatabaseCellBinding?.[0];
     if (!receipt) throw new Error("missing cell fixture");
+    delete receipt.initialIncidentId;
+    const { sourceSha: _sourceSha, ...binding } = receipt.binding;
+    receipt.binding = {
+      ...binding,
+      manualProvenance: custody.value.manualProvenance,
+    };
     receipt.registration = {
       kind: "audited-manual",
-      executionActor: { kind: "agent", id: "fixture" },
+      executionActor: { kind: "agent", id: IDENTITY.compositeUid },
       approvalAuthority: {
         kind: "conversation-user",
         label: "CEO",
@@ -1090,11 +1122,11 @@ describe("qualified cell app releases", () => {
         delegationDigest: "a".repeat(64),
       },
       readmissionReceiptId: "fixture",
-      manualCutoverPacketSha256: "a".repeat(64),
+      manualCutoverPacketSha256: "f".repeat(64),
       sourceSystemIdentifier: "456",
       scheduledBackupReceiptSha256: "b".repeat(64),
       independentRecoveryReceiptSha256: "c".repeat(64),
-      appAllocationReceiptId: "fixture",
+      appAllocationReceiptId: "33333333-3333-4333-8333-333333333333",
       appSdlHash: "d".repeat(64),
       appDsnSha256: createHash("sha256").update(appDsn).digest("hex"),
       serviceDsnSha256: createHash("sha256").update(serviceDsn).digest("hex"),
@@ -1104,6 +1136,8 @@ describe("qualified cell app releases", () => {
       runtimePoolLimits: { replicaCount: 1, app: 3, service: 4, read: 2 },
       registeredAt: "2026-10-15T00:00:00Z",
     };
+    AppliedDatabaseCellReceiptsSchema.parse([receipt]);
+    DatabaseCellAppliedCustodySchema.parse(custody.value);
     return { ...context, custody };
   }
   const appDsn =
@@ -1125,6 +1159,291 @@ describe("qualified cell app releases", () => {
         DB_READ_POOL_MAX: "2",
       },
     })),
+  });
+  async function closeCell(context: ReturnType<typeof withCell>) {
+    const before = structuredClone(context.ledger.rows.get("cell"));
+    context.api.statusState = "closed";
+    context.cost.evidenceError = consoleError("COST_EVIDENCE_UNAVAILABLE");
+    await expect(
+      context.actuator.observe({ cogniKey: "cell" })
+    ).resolves.toMatchObject({
+      found: true,
+      resource: { state: "closed", externalName: "9001" },
+    });
+    expect(context.ledger.rows.get("cell")).toEqual({
+      ...before,
+      state: "released",
+    });
+    context.api.statusState = "active";
+    delete context.cost.evidenceError;
+  }
+  it("P2 preserves preclosure cold intent and recipe through released source and restart replay", async () => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    const before = context.ledger.rows.get("cell");
+    if (!before) throw new Error("missing source");
+    const profile = DatabaseCellRecoveryProfileSchema.parse(recoveryProfile);
+    const intent = databaseCellRecoveryIntent(input, before, profile);
+    await closeCell(context);
+    const after = context.ledger.rows.get("cell");
+    if (!after) throw new Error("missing released source");
+    expect(databaseCellRecoveryIntent(input, after, profile)).toEqual(intent);
+    const allocate = vi.spyOn(context.api, "allocateAndLease");
+    await context.actuator.createDatabaseCellRecovery(input);
+    expect(allocate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: intent.spec,
+        allocationPolicy: intent.policy,
+      })
+    );
+    await expect(
+      context.actuator.createDatabaseCellRecovery(input)
+    ).resolves.toMatchObject({ replayed: true });
+    const restarted = build({}, recoveryProfile, context.ledger);
+    await expect(
+      restarted.actuator.createDatabaseCellRecovery(input)
+    ).resolves.toMatchObject({ replayed: true });
+    expect(context.api.allocateCalls + restarted.api.allocateCalls).toBe(1);
+    expect(restarted.api.cursorCalls).toBe(0);
+  });
+  it.each([
+    "receipt",
+    "key",
+    "handle",
+    "provider",
+    "SDL",
+    "missing handle",
+    "missing provider",
+    "missing SDL",
+    "node",
+    "slug",
+    "environment",
+    "allocation environment",
+    "system",
+    "retention",
+    "preparing",
+    "failed",
+    "absent",
+    "duplicate",
+    "corrupt",
+  ])("P2 refuses released provenance %s before provider IO", async (fault) => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    await closeCell(context);
+    const row = context.ledger.rows.get("cell");
+    const receipt = row?.appliedDatabaseCellBinding?.[0];
+    if (!row || !receipt) throw new Error("missing source");
+    const changed = structuredClone(receipt);
+    const binding = changed.binding;
+    if (fault === "receipt")
+      binding.receiptId = "33333333-3333-4333-8333-333333333333";
+    if (fault === "key") binding.cogniKey = "foreign";
+    if (fault === "handle") {
+      binding.dseq = "9002";
+      binding.failureDomainId = `akash:${binding.providerAccount}:9002`;
+    }
+    if (fault === "provider") {
+      binding.providerAccount = `akash1${"b".repeat(38)}`;
+      binding.failureDomainId = `akash:${binding.providerAccount}:9001`;
+    }
+    if (fault === "SDL") binding.appliedSdlHash = "f".repeat(64);
+    if (fault === "node") binding.nodeId = OTHER_IDENTITY.nodeId;
+    if (fault === "slug") {
+      binding.nodeSlug = "foreign";
+      binding.databaseName = "cogni_foreign";
+      binding.appRole = "app_foreign";
+      binding.serviceRole = "service_foreign";
+      binding.migrationRole = "migration_foreign";
+      binding.probeRole = "probe_foreign";
+    }
+    if (fault === "environment") binding.environment = "preview";
+    if (fault === "allocation environment")
+      changed.allocationEnvironment = "preview";
+    if (fault === "system") binding.systemIdentifier = "999";
+    if (fault === "corrupt") binding.receiptId = "not-a-uuid";
+    const { retentionPolicy: _retention, ...withoutRetention } = row;
+    context.ledger.rows.set("cell", {
+      ...(fault === "retention" ? withoutRetention : row),
+      ...(fault === "preparing" || fault === "failed" ? { state: fault } : {}),
+      appliedDatabaseCellBinding:
+        fault === "absent"
+          ? []
+          : fault === "duplicate"
+            ? [changed, changed]
+            : [changed],
+    });
+    const altered = context.ledger.rows.get("cell");
+    if (!altered) throw new Error("missing altered source");
+    const { externalName: _handle, ...withoutHandle } = altered;
+    const { providerAccount: _provider, ...withoutProvider } = altered;
+    const { lastAppliedSdlHash: _sdl, ...withoutSdl } = altered;
+    if (fault === "missing handle")
+      context.ledger.rows.set("cell", withoutHandle);
+    if (fault === "missing provider")
+      context.ledger.rows.set("cell", withoutProvider);
+    if (fault === "missing SDL") context.ledger.rows.set("cell", withoutSdl);
+    await expect(
+      context.actuator.createDatabaseCellRecovery(input)
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(context.api.cursorCalls).toBe(0);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it("P2 refuses absent/source-equal target references after closure", async () => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    await closeCell(context);
+    for (const bad of [
+      { ...input, cogniKey: "cell" },
+      { ...input, recovery: { ...input.recovery, sourceCogniKey: "absent" } },
+      { ...input, nodeSlug: "foreign" },
+      { ...input, environment: "preview" },
+    ])
+      await expect(
+        context.actuator.createDatabaseCellRecovery(bad)
+      ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(context.api.cursorCalls).toBe(0);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it.each([
+    undefined,
+    { ...recoveryProfile, enabled: false },
+    { ...recoveryProfile, funding_status: "unqualified" },
+  ])("P2 refuses unavailable/unqualified released-source profile %j", async (profile) => {
+    const context = withCell(profile);
+    const input = recoveryRequest(context);
+    await closeCell(context);
+    await expect(
+      context.actuator.createDatabaseCellRecovery(input)
+    ).rejects.toMatchObject({
+      code: "invalid_request",
+      message:
+        "cold recovery profile unavailable, disabled or funding unqualified",
+    });
+    expect(context.api.cursorCalls).toBe(0);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it.each([
+    "preparing",
+    "failed",
+    "corrupt",
+    "contradictory environment",
+    "contradictory node",
+    "duplicate",
+    "saturated100",
+  ])("P5 refuses apparent applied history %s before filtering can hide it", async (fault) => {
+    const context = withBoundedManualCell();
+    await closeCell(context);
+    const source = context.ledger.rows.get("cell");
+    if (!source) throw new Error("missing source");
+    const receipts = structuredClone(source.appliedDatabaseCellBinding);
+    const receipt = receipts?.[0];
+    if (!receipt) throw new Error("missing receipt");
+    if (fault === "corrupt") receipt.binding.receiptId = "not-a-uuid";
+    if (fault === "contradictory environment")
+      receipt.allocationEnvironment = "preview";
+    if (fault === "contradictory node")
+      receipt.binding.nodeId = OTHER_IDENTITY.nodeId;
+    context.ledger.rows.set("cell", {
+      ...source,
+      appliedDatabaseCellBinding: receipts,
+      ...(fault === "preparing" || fault === "failed" ? { state: fault } : {}),
+    });
+    if (fault === "duplicate") {
+      const duplicate = structuredClone(receipt);
+      duplicate.binding.cogniKey = "second";
+      duplicate.binding.receiptId = "33333333-3333-4333-8333-333333333333";
+      context.ledger.rows.set("second", {
+        ...source,
+        state: "allocated",
+        cogniKey: "second",
+        receiptId: duplicate.binding.receiptId,
+        appliedDatabaseCellBinding: [duplicate],
+      });
+    }
+    if (fault === "saturated100")
+      for (let i = 0; i < 99; i++)
+        context.ledger.rows.set(`history-${i}`, {
+          ...source,
+          cogniKey: `history-${i}`,
+          state: "released",
+          appliedDatabaseCellBinding: [],
+        });
+    await expect(
+      context.actuator.create({
+        cogniKey: "app",
+        environment: "production",
+        identity: IDENTITY,
+        spec: boundedSpecAt(otherSha),
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(context.api.cursorCalls).toBe(0);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it("P5 migration saturation scans the environment without an untrusted node narrowing", async () => {
+    const context = withBoundedManualCell();
+    const source = context.ledger.rows.get("cell");
+    if (!source) throw new Error("missing source");
+    for (let i = 0; i < 99; i++)
+      context.ledger.rows.set(`history-${i}`, {
+        ...source,
+        cogniKey: `history-${i}`,
+        state: "released",
+        appliedDatabaseCellBinding: [],
+      });
+    const scan = vi.spyOn(context.ledger, "listReceipts");
+    await expect(
+      context.actuator.observe({
+        cogniKey: "app",
+        environment: "production",
+        workload: "toks9",
+        expectedSourceSha: otherSha,
+        migration: STEP,
+      })
+    ).rejects.toMatchObject({
+      code: "identity_conflict",
+      message: "qualified cell release metadata exceeds bounded scan",
+    });
+    expect(scan).toHaveBeenCalledExactlyOnceWith({
+      environment: "production",
+      limit: 100,
+    });
+    expect(context.migration.calls).toHaveLength(0);
+    expect(context.api.cursorCalls).toBe(0);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it("P5 nonapplied history does not invent an applied release policy", async () => {
+    const context = withCell();
+    const receipt =
+      context.ledger.rows.get("cell")?.appliedDatabaseCellBinding?.[0];
+    if (!receipt) throw new Error("missing cell fixture");
+    receipt.binding.phase = "ready";
+    AppliedDatabaseCellReceiptsSchema.parse([receipt]);
+    await context.actuator.create({
+      cogniKey: "app",
+      environment: "production",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(context.api.allocateCalls).toBe(1);
+  });
+  it("P5 completes the all-state scan for no-policy shared release", async () => {
+    const context = build();
+    context.ledger.rows.set("old", {
+      receiptId: "old",
+      cogniKey: "old",
+      identity: IDENTITY,
+      environment: "production",
+      workload: SPEC.name,
+      state: "released",
+      appliedDatabaseCellBinding: [],
+    });
+    await context.actuator.create({
+      cogniKey: "app",
+      environment: "production",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(context.api.allocateCalls).toBe(1);
   });
   it("upgrades a resolved provider-http request without rewriting historical admission", async () => {
     const { actuator, ledger, api, migration } = withBoundedManualCell();
