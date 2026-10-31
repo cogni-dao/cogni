@@ -3461,6 +3461,65 @@ export class GitHubRepoWriter implements DeployPlanePort {
       "POST /repos/{owner}/{repo}/git/trees",
       { owner, repo, base_tree: input.baseTreeSha, tree: input.entries }
     );
+    // Bind the returned PR itself, including the generic helper's title-based 422 fallback.
+    // A correct reserved ref does not prove that an arbitrary returned PR names that ref.
+    const verifyResult = async (
+      result: OpenNodeAppPrResult,
+      head: string
+    ): Promise<OpenNodeAppPrResult> => {
+      const { data: pr } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+        { owner, repo, pull_number: result.prNumber }
+      );
+      const repository = `${owner}/${repo}`.toLowerCase();
+      if (
+        pr.number !== result.prNumber ||
+        pr.state !== "open" ||
+        pr.merged ||
+        pr.base.ref !== "main" ||
+        pr.base.repo?.full_name.toLowerCase() !== repository ||
+        pr.head.ref !== branch ||
+        pr.head.repo?.full_name.toLowerCase() !== repository ||
+        pr.head.sha !== head
+      )
+        throw conflict();
+      const classified = await this.classifyEnvManagerPr({
+        owner,
+        repo,
+        prNumber: pr.number,
+      });
+      if (
+        !classified.isEnvManagerPr ||
+        classified.action !== input.plan.kind ||
+        classified.targetNodeRef !== slug ||
+        classified.environment !== env ||
+        classified.headSha !== head
+      )
+        throw conflict();
+      if (input.plan.kind === "repair") {
+        const target = input.plan.ops[0];
+        if (
+          classified.baseCatalog !== input.catalog ||
+          target?.op !== "upsert" ||
+          classified.headCatalog !== target.content
+        )
+          throw conflict();
+      } else {
+        const { data: commit } = await octokit.request(
+          "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+          { owner, repo, commit_sha: head }
+        );
+        if (
+          commit.message !== input.message ||
+          commit.tree.sha !== tree.sha ||
+          commit.parents.length !== 1 ||
+          commit.parents[0]?.sha !== input.baseCommitSha
+        )
+          throw conflict();
+      }
+      if ((await readHead()) !== head) throw conflict();
+      return { prNumber: pr.number, prUrl: pr.html_url };
+    };
     const reuseOpen = async (
       head: string | null
     ): Promise<OpenNodeAppPrResult | null> => {
@@ -3480,36 +3539,23 @@ export class GitHubRepoWriter implements DeployPlanePort {
         throw conflict();
       const pr = prs[0];
       if (!pr) throw conflict();
-      if (input.plan.kind === "repair") {
-        const classified = await this.classifyEnvManagerPr({
-          owner,
-          repo,
-          prNumber: pr.number,
+      return verifyResult({ prNumber: pr.number, prUrl: pr.html_url }, head);
+    };
+    const openExactPr = async (head: string): Promise<OpenNodeAppPrResult> => {
+      let result: OpenNodeAppPrResult;
+      try {
+        result = await this.openOrFindPr(octokit, owner, repo, slug, branch, {
+          title: input.title,
+          body: input.body,
         });
-        const target = input.plan.ops[0];
-        if (
-          !classified.isEnvManagerPr ||
-          classified.action !== "repair" ||
-          classified.headSha !== head ||
-          classified.baseCatalog !== input.catalog ||
-          target?.op !== "upsert" ||
-          classified.headCatalog !== target.content
-        )
-          throw conflict();
-      } else {
-        const { data: commit } = await octokit.request(
-          "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
-          { owner, repo, commit_sha: head }
-        );
-        if (
-          commit.message !== input.message ||
-          commit.tree.sha !== tree.sha ||
-          commit.parents.length !== 1 ||
-          commit.parents[0]?.sha !== input.baseCommitSha
-        )
-          throw conflict();
+      } catch {
+        // A lost PR response can mean success. Reuse only the exact observed intent.
+        if ((await readHead()) !== head) throw conflict();
+        const recovered = await reuseOpen(head);
+        if (!recovered) throw conflict();
+        return recovered;
       }
-      return { prNumber: pr.number, prUrl: pr.html_url };
+      return verifyResult(result, head);
     };
     const oldHead = await readHead();
     const open = await reuseOpen(oldHead);
@@ -3571,16 +3617,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
           closedIntent.some((pr) => pr.head.sha === oldHead)
         )
           throw conflict();
-        const recovered = await this.openOrFindPr(
-          octokit,
-          owner,
-          repo,
-          slug,
-          branch,
-          { title: input.title, body: input.body }
-        );
-        if ((await readHead()) !== oldHead) throw conflict();
-        return recovered;
+        return openExactPr(oldHead);
       }
       const { data: closed } = await octokit.request(
         "GET /repos/{owner}/{repo}/pulls",
@@ -3664,19 +3701,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       if (observed !== commit.sha) throw conflict();
     }
     if ((await readHead()) !== commit.sha) throw conflict();
-    let result: OpenNodeAppPrResult;
-    try {
-      result = await this.openOrFindPr(octokit, owner, repo, slug, branch, {
-        title: input.title,
-        body: input.body,
-      });
-    } catch (error) {
-      const recovered = await reuseOpen(await readHead());
-      if (!recovered) throw error;
-      result = recovered;
-    }
-    if ((await readHead()) !== commit.sha) throw conflict();
-    return result;
+    return openExactPr(commit.sha);
   }
 
   /**

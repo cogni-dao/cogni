@@ -557,7 +557,7 @@ describe("POST /api/v1/vcs/merge", () => {
     const res = await post({ prNumber: 42, nodeId: "operator" });
     expect(res.status).toBe(503);
     const body = await res.json();
-    expect(body.errorCode).toBe("repair_context_unavailable");
+    expect(body.errorCode).toBe("generation_evidence_unavailable");
     expect(fakeVcs.mergePr).not.toHaveBeenCalled();
   });
 

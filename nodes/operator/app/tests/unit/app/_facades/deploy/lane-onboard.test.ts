@@ -11,6 +11,7 @@
  */
 import type { Logger } from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { ServerEnv } from "@/shared/env";
 
 const lanePin = "2".repeat(40),
@@ -53,7 +54,9 @@ const readNodeDeployPinState = vi.fn(
 );
 const catalog = (envs = "candidate-a, preview, production") =>
   `name: toks5\nnode_id: ${nodeId}\nsource_sha: "${birth}"\nenvs: [${envs}]\ndeployment_provider: {candidate-a: akash, preview: akash, production: akash}\nlease_generation: {candidate-a: 2, preview: 3, production: 6}\n`;
-const fetchFileText = vi.fn(async (_input: unknown) => catalog());
+const fetchFileText = vi.fn(
+  async (_input: unknown): Promise<string | null> => catalog()
+);
 let operation: Record<string, unknown>;
 const classifyEnvManagerPr = vi.fn(async (_input: unknown) => operation);
 vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
@@ -142,7 +145,13 @@ describe("trusted merged identity", () => {
         mergeSha,
       },
     });
-    expect(fetchFileText).not.toHaveBeenCalled(); // no moving MAIN history
+    // MAIN qualifies present intent; it never substitutes for authenticated operation history.
+    expect(fetchFileText).toHaveBeenCalledWith({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      path: "infra/catalog/toks5.yaml",
+      ref: "main",
+    });
   });
   it.each([
     "repair_context_conflict",
@@ -172,6 +181,238 @@ describe("trusted merged identity", () => {
     await settle();
     zeroEffects();
     expect(classifyEnvManagerPr).not.toHaveBeenCalled();
+  });
+});
+
+describe("R22 current intent before effects", () => {
+  for (const action of ["add", "repair"] as const) {
+    for (const lane of ["candidate-a", "preview"] as const) {
+      it(`${action} ${lane} delivery/redelivery after REMOVE is superseded despite both valid own pins`, async () => {
+        operation.action = action;
+        operation.environment = lane;
+        if (action === "add")
+          operation.baseCatalog = catalog(
+            lane === "candidate-a"
+              ? "preview, production"
+              : "candidate-a, production"
+          );
+        fetchFileText.mockResolvedValue(
+          catalog(
+            lane === "candidate-a"
+              ? "preview, production"
+              : "candidate-a, production"
+          )
+        );
+        for (let delivery = 0; delivery < 2; delivery++) {
+          dispatchLaneOnboard(payload(lane), env, log);
+          await settle();
+          zeroEffects();
+          expect(log.info).toHaveBeenCalledTimes(delivery + 1);
+          expect(log.info).toHaveBeenLastCalledWith(
+            expect.objectContaining({ outcome: "superseded", dispatched: 0 }),
+            "feature.lane_onboard.complete"
+          );
+        }
+        expect(log.error).not.toHaveBeenCalled();
+      });
+    }
+    it.each([
+      "missing",
+      "unreadable",
+      "foreign-node",
+      "foreign-name",
+      "malformed",
+      "malformed-policy",
+    ])(`${action} refuses %s current state with zero effects`, async (cause) => {
+      operation.action = action;
+      if (action === "add")
+        operation.baseCatalog = catalog("preview, production");
+      fetchFileText.mockImplementation(async () => {
+        if (cause === "missing") return null;
+        if (cause === "unreadable") throw new Error("GitHub unavailable");
+        if (cause === "foreign-node")
+          return catalog().replace(nodeId, "foreign-node");
+        if (cause === "foreign-name")
+          return catalog().replace("name: toks5", "name: other");
+        if (cause === "malformed-policy")
+          return catalog().replace(
+            "lease_generation: {candidate-a: 2, preview: 3, production: 6}",
+            "lease_generation: unreadable"
+          );
+        return "envs: [";
+      });
+      dispatchLaneOnboard(payload(), env, log);
+      await settle();
+      zeroEffects();
+      expect(log.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          errorCode: "repair_context_unavailable",
+          dispatched: 0,
+        }),
+        "feature.lane_onboard.complete"
+      );
+    });
+    it(`${action} remains valid after unrelated preview changes`, async () => {
+      operation.action = action;
+      if (action === "add")
+        operation.baseCatalog = catalog("preview, production");
+      const current = parseYaml(catalog());
+      current.envs = ["candidate-a", "production"];
+      current.lease_generation.preview = 99;
+      current.deployment_provider.preview = "k3s";
+      current.required_placement_countries = { preview: ["US"] };
+      current.isolated_services = {
+        worker: { lease_generation: { preview: 8 } },
+      };
+      current.compute_egress_cidrs = [
+        { cidr: "192.0.2.1/32", envs: ["preview"], ports: [5432] },
+      ];
+      // An unrelated policy map can be added without fencing this lane/custodian pair.
+      fetchFileText.mockResolvedValue(stringifyYaml(current));
+      dispatchLaneOnboard(payload(), env, log);
+      await settle();
+      expect(promoteNode).toHaveBeenCalledWith(
+        expect.objectContaining({ env: "production", sourceSha: custodianPin })
+      );
+      expect(dispatchNodeRefCandidateFlight).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceSha: lanePin })
+      );
+      expect(log.error).not.toHaveBeenCalled();
+    });
+  }
+  it.each([
+    [
+      "target generation",
+      "lease_generation",
+      { "candidate-a": 4, preview: 3, production: 6 },
+    ],
+    [
+      "target placement",
+      "deployment_provider",
+      { "candidate-a": "k3s", preview: "akash", production: "akash" },
+    ],
+    ["target authority", "compute_api", { "candidate-a": "legacy" }],
+    ["target boot policy", "boot_recovery", { "candidate-a": "auto" }],
+    [
+      "target placement policy",
+      "required_placement_countries",
+      { "candidate-a": ["US"] },
+    ],
+    [
+      "target data binding",
+      "database",
+      { "candidate-a": { tier: "dedicated" } },
+    ],
+    [
+      "custodian generation",
+      "lease_generation",
+      { "candidate-a": 2, preview: 3, production: 7 },
+    ],
+    ["source owner", "source_repo", "https://github.com/other/toks5.git"],
+    [
+      "node owner",
+      "owner_wallet",
+      "0x1111111111111111111111111111111111111111",
+    ],
+    ["activity owner", "activity_env", "preview"],
+  ])("superseded %s refuses old repair before either replay", async (_name, key, value) => {
+    const current = parseYaml(catalog());
+    current[key as string] = value;
+    fetchFileText.mockResolvedValue(stringifyYaml(current));
+    dispatchLaneOnboard(payload(), env, log);
+    await settle();
+    zeroEffects();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "superseded", dispatched: 0 }),
+      "feature.lane_onboard.complete"
+    );
+  });
+  it("old ADD cannot replay a superseded target generation", async () => {
+    operation.action = "add";
+    operation.baseCatalog = catalog("preview, production");
+    fetchFileText.mockResolvedValue(
+      catalog().replace("candidate-a: 2", "candidate-a: 4")
+    );
+    dispatchLaneOnboard(payload(), env, log);
+    await settle();
+    zeroEffects();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "superseded", dispatched: 0 }),
+      "feature.lane_onboard.complete"
+    );
+  });
+  it("ADD during the historical REMOVE provider read prevents prune", async () => {
+    operation.action = "remove";
+    operation.headCatalog = catalog("preview, production");
+    let reactivated = false;
+    fetchFileText.mockImplementation(async (input) => {
+      if ((input as { ref: string }).ref !== "main") {
+        reactivated = true;
+        return catalog();
+      }
+      return reactivated ? catalog() : String(operation.headCatalog);
+    });
+    dispatchLaneOnboard(payload(), env, log);
+    await settle();
+    zeroEffects();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "superseded", dispatched: 0 }),
+      "feature.lane_onboard.complete"
+    );
+  });
+  it("REMOVE during pin reads refuses before the first replay", async () => {
+    readNodeDeployPin.mockImplementation(async (input) => {
+      fetchFileText.mockResolvedValue(catalog("preview, production"));
+      return input.env === "production" ? custodianPin : lanePin;
+    });
+    dispatchLaneOnboard(payload(), env, log);
+    await settle();
+    zeroEffects();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "superseded", dispatched: 0 }),
+      "feature.lane_onboard.complete"
+    );
+  });
+  it("supersession between replays preserves the completed custodian count", async () => {
+    promoteNode.mockImplementation(async () => {
+      fetchFileText.mockResolvedValue(catalog("preview, production"));
+      return { runId: 99, workflowUrl: "https://github.com/x/y/actions" };
+    });
+    dispatchLaneOnboard(payload(), env, log);
+    await settle();
+    expect(promoteNode).toHaveBeenCalledTimes(1);
+    expect(prepareNodeRefCandidateFlight).not.toHaveBeenCalled();
+    expect(dispatchNodeRefCandidateFlight).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "superseded",
+        dispatched: 1,
+        completed: [
+          expect.objectContaining({
+            env: "production",
+            sourceSha: custodianPin,
+            runId: 99,
+          }),
+        ],
+      }),
+      "feature.lane_onboard.complete"
+    );
+  });
+  it("current state lost after candidate preparation refuses flight and retains completed replay", async () => {
+    prepareNodeRefCandidateFlight.mockImplementationOnce(async (input) => {
+      fetchFileText.mockResolvedValue(null);
+      return { slug: "toks5", sourceSha: input.sourceSha };
+    });
+    dispatchLaneOnboard(payload(), env, log);
+    await settle();
+    expect(dispatchNodeRefCandidateFlight).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatched: 1,
+        errorCode: "repair_context_unavailable",
+      }),
+      "feature.lane_onboard.complete"
+    );
   });
 });
 describe("R2 B1 both-own-pin falsifiers", () => {
@@ -341,9 +582,53 @@ describe("safe first activation and removal controls", () => {
     await settle();
     zeroEffects();
   });
+  it.each([
+    "delivery",
+    "redelivery",
+  ])("old REMOVE %s after ADD has zero effects", async (delivery) => {
+    operation.action = "remove";
+    operation.headCatalog = catalog("preview, production");
+    // Authentication still succeeds for the historical REMOVE. Current MAIN has a later ADD.
+    fetchFileText.mockResolvedValue(catalog());
+    dispatchLaneOnboard(payload(), env, log);
+    await settle();
+    zeroEffects();
+    expect(fetchFileText).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: "main", path: "infra/catalog/toks5.yaml" })
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ dispatched: 0, outcome: "superseded" }),
+      "feature.lane_onboard.complete"
+    );
+    if (delivery === "redelivery") {
+      dispatchLaneOnboard(payload(), env, log);
+      await settle();
+      zeroEffects();
+    }
+  });
+  it.each([
+    "missing",
+    "unreadable",
+    "foreign-node",
+    "malformed",
+  ])("REMOVE refuses %s current desired state before effects", async (cause) => {
+    operation.action = "remove";
+    operation.headCatalog = catalog("preview, production");
+    fetchFileText.mockImplementation(async () => {
+      if (cause === "unreadable") throw new Error("GitHub unavailable");
+      if (cause === "missing") return null;
+      if (cause === "malformed") return "envs: null\n";
+      return catalog("preview, production").replace(nodeId, "another-node");
+    });
+    dispatchLaneOnboard(payload(), env, log);
+    await settle();
+    zeroEffects();
+    expect(log.error).toHaveBeenCalled();
+  });
   it("signed removal keeps the existing prune owner", async () => {
     operation.action = "remove";
     operation.headCatalog = catalog("preview, production");
+    fetchFileText.mockResolvedValue(String(operation.headCatalog));
     dispatchLaneOnboard(payload(), env, log);
     await settle();
     expect(pruneNodeEnvironment).toHaveBeenCalledWith(
@@ -379,6 +664,7 @@ describe("retained onboarding regressions", () => {
       "name: node-template"
     );
     operation.headCatalog = operation.baseCatalog;
+    fetchFileText.mockResolvedValue(String(operation.headCatalog));
     dispatchLaneOnboard(event, env, log);
     await settle();
     expect(prepareNodeRefCandidateFlight).toHaveBeenCalledWith(
@@ -419,6 +705,7 @@ describe("retained onboarding regressions", () => {
   it("isolated-fleet remove uses candidate-a custody", async () => {
     operation.action = "remove";
     operation.headCatalog = catalog("preview, production");
+    fetchFileText.mockResolvedValue(String(operation.headCatalog));
     dispatchLaneOnboard(
       payload(),
       { ...env, FLEET_CONTROL_ENV: "candidate-a" },
@@ -441,7 +728,11 @@ describe("retained onboarding regressions", () => {
       .replace("candidate-a: akash", `candidate-a: ${removed}`)
       .replace("preview: akash", `preview: ${survivor}`);
     operation.headCatalog = `name: toks5\nnode_id: ${nodeId}\nenvs: [preview, production]\ndeployment_provider: {preview: ${survivor}, production: k3s}\n`;
-    fetchFileText.mockResolvedValue(String(operation.baseCatalog));
+    fetchFileText.mockImplementation(async (input) =>
+      (input as { ref: string }).ref === "main"
+        ? String(operation.headCatalog)
+        : String(operation.baseCatalog)
+    );
     dispatchLaneOnboard(payload(), env, log);
     await settle();
     expect(fetchFileText).toHaveBeenCalledWith(

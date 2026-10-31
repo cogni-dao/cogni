@@ -5409,7 +5409,10 @@ describe("existing env repair adapter — immutable source, CAS and trusted merg
       prNumber: 42,
     });
     const reads = requests.filter((call) => call.route.includes("contents"));
-    expect(reads.every((call) => call.params.ref === main)).toBe(true);
+    expect(
+      reads.every((call) => [main, head].includes(String(call.params.ref)))
+    ).toBe(true);
+    expect(reads.some((call) => call.params.ref === head)).toBe(true); // returned PR's signed catalog
     const blob = requests.find((call) => call.route.endsWith("/git/blobs"));
     expect(
       Buffer.from(String(blob?.params.content), "base64").toString("utf8")
@@ -5489,6 +5492,93 @@ describe("existing env repair adapter — immutable source, CAS and trusted merg
     });
     expect(requests.some((call) => call.route === "graphql")).toBe(false);
   });
+  it.each(
+    (["authoring", "orphan"] as const).flatMap((publication) =>
+      (["missing", "other-branch", "fork", "exact"] as const).map(
+        (fallback) => ({ publication, fallback })
+      )
+    )
+  )("$publication 422 fallback binds $fallback to the exact signed repair", async ({
+    publication,
+    fallback,
+  }) => {
+    if (publication === "orphan") branchHead = head;
+    const candidate = {
+      ...pr(),
+      number: 900,
+      title: "fix(node): repair blue candidate-a",
+      head: {
+        ...pr().head,
+        ref: fallback === "other-branch" ? "unrelated-branch" : branch,
+        repo: {
+          full_name: fallback === "fork" ? "other/cogni" : "Cogni-DAO/cogni",
+        },
+      },
+    };
+    routeHandlers["POST /repos/{owner}/{repo}/pulls"] = () => {
+      open = true;
+      throw statusError(422, "already exists");
+    };
+    routeHandlers["GET /repos/{owner}/{repo}/pulls"] = (params) => {
+      if (params.state !== "open" || !open) return [];
+      // No exact branch found: generic fallback sees a matching title on another subject.
+      if (params.head) return fallback === "exact" ? [pr()] : [];
+      return fallback === "missing" ? [] : [candidate];
+    };
+    routeHandlers["GET /repos/{owner}/{repo}/pulls/{pull_number}"] = (
+      params
+    ) => (params.pull_number === 900 ? candidate : pr());
+    const pending = makeWriter().openNodeEnvPr(input());
+    if (fallback === "exact") {
+      await expect(pending).resolves.toMatchObject({ prNumber: 42 });
+    } else {
+      await expect(pending).rejects.toMatchObject({
+        code: "env_branch_conflict",
+        status: 409,
+      });
+    }
+    expect(branchHead).toBe(head);
+    expect(requests.filter((call) => call.route === "graphql")).toHaveLength(
+      publication === "orphan" ? 0 : 1
+    );
+    expect(requests.some((call) => call.route.startsWith("PATCH"))).toBe(false);
+  });
+  it.each([
+    "other-branch",
+    "fork",
+    "base-repo",
+    "base-ref",
+    "head",
+    "unsigned",
+    "catalog",
+  ])("new publication refuses a returned PR with mismatched %s", async (mismatch) => {
+    const candidate = pr();
+    if (mismatch === "other-branch") candidate.head.ref = "other";
+    if (mismatch === "fork") candidate.head.repo.full_name = "other/cogni";
+    if (mismatch === "base-repo") candidate.base.repo.full_name = "other/cogni";
+    if (mismatch === "base-ref") candidate.base.ref = "other";
+    if (mismatch === "head") candidate.head.sha = merged;
+    routeHandlers["POST /repos/{owner}/{repo}/pulls"] = () => candidate;
+    routeHandlers["GET /repos/{owner}/{repo}/pulls/{pull_number}"] = () =>
+      candidate;
+    if (mismatch === "unsigned") {
+      const readCommit =
+        routeHandlers["GET /repos/{owner}/{repo}/commits/{ref}"];
+      routeHandlers["GET /repos/{owner}/{repo}/commits/{ref}"] = (params) => {
+        const commit = readCommit?.(params) as {
+          commit: { verification: { verified: boolean } };
+        };
+        commit.commit.verification.verified = false;
+        return commit;
+      };
+    }
+    if (mismatch === "catalog")
+      delta = target.replace("production: 6", "production: 7");
+    await expect(makeWriter().openNodeEnvPr(input())).rejects.toMatchObject({
+      code: "env_branch_conflict",
+      status: 409,
+    });
+  });
   it("concurrent identical publication reuses its actual open PR", async () => {
     routeHandlers.graphql = () => {
       branchHead = head;
@@ -5518,15 +5608,24 @@ describe("existing env repair adapter — immutable source, CAS and trusted merg
     branchHead = merged;
     closed = true;
     actualHead = merged;
-    routeHandlers["GET /repos/{owner}/{repo}/commits/{ref}"] = (params) => ({
-      sha: params.ref,
-      author: bot,
-      parents: [{ sha: main }],
-      commit: {
-        message: "old add",
-        verification: { verified: true, reason: "valid" },
-      },
-    });
+    const readCommit = routeHandlers["GET /repos/{owner}/{repo}/commits/{ref}"];
+    routeHandlers["POST /repos/{owner}/{repo}/pulls"] = () => {
+      actualHead = head;
+      open = true;
+      return pr();
+    };
+    routeHandlers["GET /repos/{owner}/{repo}/commits/{ref}"] = (params) =>
+      params.ref === head
+        ? readCommit?.(params)
+        : {
+            sha: params.ref,
+            author: bot,
+            parents: [{ sha: main }],
+            commit: {
+              message: "old add",
+              verification: { verified: true, reason: "valid" },
+            },
+          };
     await expect(makeWriter().openNodeEnvPr(input())).resolves.toMatchObject({
       action: "repair",
     });

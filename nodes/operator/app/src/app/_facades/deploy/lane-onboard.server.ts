@@ -20,8 +20,9 @@
  *     parent monorepo. Every other merge — the overwhelming majority — is a no-op.
  *   - VERIFIED_OPERATION: closed/merged classification is separate from open-PR authorization.
  *     Signed-head-parent and actual merge-parent deltas bind repair/add/remove identity.
- *   - CATALOG_AFTER_MERGE_DECIDES: signed action must agree with immutable merged membership.
- *     A remove dispatches the
+ *   - CURRENT_INTENT_BEFORE_EFFECTS: authenticate immutable merged membership separately;
+ *     current MAIN must still name the same subject, ownership and target policy before replay.
+ *     A remove must also remain absent on current MAIN before it dispatches the
  *     narrow prune workflow against the lane's control cluster; it never renders/promotes the
  *     lane that just left (which would resurrect it).
  *   - SUBSTRATE_FOLLOWS_THE_CUSTODIAN: when `controlEnvFor(lane) !== lane` the lane's database,
@@ -54,6 +55,7 @@
  * @public
  */
 
+import { isDeepStrictEqual } from "node:util";
 import type { Logger } from "pino";
 import { parse as parseYaml } from "yaml";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
@@ -146,12 +148,76 @@ function extractLaneOnboard(
   };
 }
 
-/** The two catalog cells this facade reads; everything else in the row is irrelevant here. */
-interface CatalogRow {
+/** Historical subject and current dispatch policy; unrelated lanes do not fence replay. */
+interface CatalogRow extends Readonly<Record<string, unknown>> {
+  readonly name?: string;
   readonly envs?: readonly string[];
   readonly node_id?: string;
   readonly source_sha?: string;
   readonly deployment_provider?: Readonly<Record<string, string>>;
+}
+
+/** Project only lanes affected by this replay, retaining shared identity/ownership policy. */
+function dispatchIntent(row: CatalogRow, lanes: readonly Lane[]) {
+  const intent: Record<string, unknown> = { ...row };
+  delete intent.source_sha; // Birth metadata is checked separately only for a genuine ADD.
+  intent.envs = lanes.map((lane) => row.envs?.includes(lane));
+  for (const key of [
+    "database",
+    "deployment_provider",
+    "compute_api",
+    "lease_generation",
+    "boot_recovery",
+    "required_placement_countries",
+    "reliability_validation",
+  ]) {
+    const cells = row[key];
+    if (
+      cells !== undefined &&
+      (!cells || typeof cells !== "object" || Array.isArray(cells))
+    )
+      throw new Error(`Invalid ${key} policy`);
+    intent[key] = lanes.map(
+      (lane) => (cells as Record<string, unknown> | undefined)?.[lane]
+    );
+  }
+  for (const lane of ["candidate-a", "preview", "production"] as const) {
+    if (!lanes.includes(lane))
+      delete intent[`${lane.replaceAll("-", "_")}_branch`];
+  }
+  intent.isolated_services = {};
+  if (row.isolated_services !== undefined) {
+    if (
+      !row.isolated_services ||
+      typeof row.isolated_services !== "object" ||
+      Array.isArray(row.isolated_services)
+    )
+      throw new Error("Invalid isolated service policy");
+    intent.isolated_services = Object.fromEntries(
+      Object.entries(row.isolated_services).flatMap(([name, policy]) => {
+        const cells = (policy as { lease_generation?: Record<string, unknown> })
+          .lease_generation;
+        const values = lanes.map((lane) => cells?.[lane]);
+        return values.some((value) => value !== undefined)
+          ? [[name, values]]
+          : [];
+      })
+    );
+  }
+  intent.compute_egress_cidrs = [];
+  if (row.compute_egress_cidrs !== undefined) {
+    if (!Array.isArray(row.compute_egress_cidrs))
+      throw new Error("Invalid egress policy");
+    intent.compute_egress_cidrs = row.compute_egress_cidrs.flatMap(
+      ({ envs, comment: _comment, ...grant }) => {
+        const applies = envs
+          ? lanes.filter((lane) => envs.includes(lane))
+          : lanes;
+        return applies.length ? [{ ...grant, envs: applies }] : [];
+      }
+    );
+  }
+  return intent;
 }
 
 /**
@@ -261,6 +327,65 @@ async function onboardLane(
       });
     const catalogText = operation.headCatalog;
     const row = parseYaml(catalogText) as CatalogRow;
+    const provider =
+      row.deployment_provider?.[ctx.lane] === "akash" ? "akash" : "k3s";
+    const controlEnv = controlEnvFor(ctx.lane, provider, env.FLEET_CONTROL_ENV);
+    const intentLanes: Lane[] = [ctx.lane];
+    if (operation.action !== "remove" && controlEnv !== ctx.lane) {
+      if (
+        controlEnv !== "candidate-a" &&
+        controlEnv !== "preview" &&
+        controlEnv !== "production"
+      )
+        throw Object.assign(new Error("Invalid control environment"), {
+          code: "invalid_control_environment",
+        });
+      intentLanes.push(controlEnv);
+    }
+    const qualifyCurrentIntent = async () => {
+      let current: CatalogRow;
+      let sameIntent: boolean;
+      try {
+        const currentText = await deployPlane.fetchFileText({
+          owner: ctx.owner,
+          repo: ctx.repo,
+          path: `infra/catalog/${ctx.slug}.yaml`,
+          ref: "main",
+        });
+        current = currentText ? parseYaml(currentText) : null;
+        if (
+          !current ||
+          row.name !== ctx.slug ||
+          current.name !== ctx.slug ||
+          !row.node_id ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+            row.node_id
+          ) ||
+          current.node_id !== row.node_id ||
+          !Array.isArray(current.envs) ||
+          !current.envs.length ||
+          current.envs.some(
+            (lane) => !["candidate-a", "preview", "production"].includes(lane)
+          )
+        )
+          throw new Error("Current subject is unavailable or foreign");
+        sameIntent =
+          isDeepStrictEqual(
+            dispatchIntent(row, intentLanes),
+            dispatchIntent(current, intentLanes)
+          ) &&
+          (operation.action !== "add" || current.source_sha === row.source_sha);
+      } catch {
+        throw Object.assign(new Error("Current lane intent is unavailable"), {
+          code: "repair_context_unavailable",
+        });
+      }
+      if (!sameIntent)
+        throw Object.assign(new Error("Merged lane intent was superseded"), {
+          code: "lane_intent_superseded",
+        });
+    };
+    await qualifyCurrentIntent();
     // CATALOG_AFTER_MERGE_DECIDES — a REMOVE leaves the lane out of `envs:`. The generated
     // AppSet disappeared from git, but the live per-node AppSet is not guaranteed to be watched
     // by a main-tracking keystone (observed test-org #97: the paid lease remained orphaned).
@@ -298,6 +423,8 @@ async function onboardLane(
         );
       }
       const controlEnv: Lane = resolvedControlEnv;
+      // Recheck after the historical provider read; queued name-deletion remains baseline debt.
+      await qualifyCurrentIntent();
       const result = await deployPlane.pruneNodeEnvironment({
         parentOwner: ctx.owner,
         parentRepo: ctx.repo,
@@ -319,11 +446,8 @@ async function onboardLane(
       return;
     }
 
-    const provider =
-      row.deployment_provider?.[ctx.lane] === "akash" ? "akash" : "k3s";
     // The FLEET CONTROL ENV owns the akash lane's control cluster (bug.5204/bug.5235): on an
     // isolated fleet (FLEET_CONTROL_ENV=candidate-a) the custodian is candidate-a, not production.
-    const controlEnv = controlEnvFor(ctx.lane, provider, env.FLEET_CONTROL_ENV);
     if (operation.action !== "repair" && operation.action !== "add")
       throw Object.assign(new Error("Unknown activation context"), {
         code: "repair_context_conflict",
@@ -398,6 +522,7 @@ async function onboardLane(
       renderEnv: Lane,
       sourceSha: string
     ): Promise<void> => {
+      await qualifyCurrentIntent();
       if (renderEnv === "candidate-a") {
         if (!row.node_id) return;
         const prepared = await deployPlane.prepareNodeRefCandidateFlight({
@@ -407,6 +532,7 @@ async function onboardLane(
           slug: ctx.slug,
           sourceSha,
         });
+        await qualifyCurrentIntent();
         const result = await deployPlane.dispatchNodeRefCandidateFlight({
           owner: ctx.owner,
           repo: ctx.repo,
@@ -455,6 +581,18 @@ async function onboardLane(
       EVENT_NAMES.LANE_ONBOARD_COMPLETE
     );
   } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "lane_intent_superseded"
+    ) {
+      log.info(
+        { ...base, dispatched, completed, outcome: "superseded" },
+        EVENT_NAMES.LANE_ONBOARD_COMPLETE
+      );
+      return;
+    }
     log.error(
       {
         ...base,
