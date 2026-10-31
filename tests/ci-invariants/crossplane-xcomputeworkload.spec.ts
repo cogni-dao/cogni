@@ -2761,7 +2761,8 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
       hash: "a2d3896ff86f9b1728d919288920ee6709575ea9b7c2e33d34c9c086a74cdb47",
       test: "TestR2ReceiptFreeNativeIntentRequiresCompleteProvisionSpec",
       caseName: "missing-spec",
-      diagnostic: "incomplete receipt-free provision intent escaped whole-render refusal",
+      diagnostic:
+        "incomplete receipt-free provision intent escaped whole-render refusal",
       expected:
         /^\s+render_test\.go:\d+: incomplete receipt-free provision intent escaped whole-render refusal\n$/,
     },
