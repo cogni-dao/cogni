@@ -20,10 +20,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import {
+  nodeArtifactBundleSourceSchema,
   parseRepoSpec,
   resolveNodeArtifactBundle,
   resolveNodeArtifactBundleForEnvironment,
@@ -34,29 +35,29 @@ import {
   buildComputeWorkloadManifest,
   computeWorkloadManifestFile,
   resolveNodeDatabasePoolLimits,
-} from "@/features/compute/compute-workload-manifest";
-import { buildComputeSecretResources } from "@/features/compute/compute-workload-secret-manifests";
+} from "../src/features/compute/compute-workload-manifest";
+import { buildComputeSecretResources } from "../src/features/compute/compute-workload-secret-manifests";
 import {
   buildNodeBundleTagRef,
   NODE_BUNDLE_PAYLOAD_FILE,
   verifyNodeBundleManifest,
-} from "@/features/compute/node-artifact-bundle-oci";
-import { resolveNodeBootRecovery } from "@/features/compute/node-boot-recovery";
-import { resolveNodeComputeApi } from "@/features/compute/node-compute-api";
+} from "../src/features/compute/node-artifact-bundle-oci";
+import { resolveNodeBootRecovery } from "../src/features/compute/node-boot-recovery";
+import { resolveNodeComputeApi } from "../src/features/compute/node-compute-api";
 import {
   deploymentEnvironmentSchema,
   resolveNodeDeploymentProvider,
-} from "@/features/compute/node-deployment-provider";
+} from "../src/features/compute/node-deployment-provider";
 import {
   isInfraOnlyPromoteNoop,
   resolveDeploymentTargets,
   resolvePromoteDeploymentTargets,
-} from "@/features/compute/node-deployment-targets";
-import { resolveNodeIsolatedServices } from "@/features/compute/node-isolated-services";
-import { resolveNodeLeaseGeneration } from "@/features/compute/node-lease-generation";
-import { resolveNodeRequiredPlacement } from "@/features/compute/node-required-placement";
-import { assertDeclaredNodeDeployment } from "@/features/compute/node-services-workload-spec";
-import { hostForNode } from "@/shared/node-registry/resolve";
+} from "../src/features/compute/node-deployment-targets";
+import { resolveNodeIsolatedServices } from "../src/features/compute/node-isolated-services";
+import { resolveNodeLeaseGeneration } from "../src/features/compute/node-lease-generation";
+import { resolveNodeRequiredPlacement } from "../src/features/compute/node-required-placement";
+import { assertDeclaredNodeDeployment } from "../src/features/compute/node-services-workload-spec";
+import { hostForNode } from "../src/shared/node-registry/resolve";
 
 const options = {
   catalog: { type: "string" },
@@ -80,6 +81,8 @@ const options = {
   bundle: { type: "string" },
   "bundle-ref": { type: "string" },
   "bundle-repository": { type: "string" },
+  "destination-accepted-overlay-dir": { type: "string" },
+  "preview-overlay-dir": { type: "string" },
   "source-sha": { type: "string" },
   domain: { type: "string" },
   // Public Cloudflare zone identifier (NOT a credential — it appears in the dashboard URL).
@@ -178,6 +181,11 @@ async function main(): Promise<void> {
     bundleRef: values["bundle-ref"],
     bundleRepository: values["bundle-repository"],
     sourceSha,
+    sourceRepository: catalogIdentity.repository,
+    destinationAcceptedOverlayDir: values["destination-accepted-overlay-dir"],
+    previewOverlayDir: values["preview-overlay-dir"],
+    nodeId: catalogIdentity.nodeId,
+    previewForward: values["preview-forward"] === "true",
   });
   const domain = required(values.domain, "--domain");
   const outputDir = required(values["output-dir"], "--output-dir");
@@ -604,11 +612,16 @@ function parseStringArray(value: string, flag: string): string[] {
   return parsed as string[];
 }
 
-async function resolveBundleInput(input: {
+export async function resolveBundleInput(input: {
   readonly bundleFile: string | undefined;
   readonly bundleRef: string | undefined;
   readonly bundleRepository: string | undefined;
   readonly sourceSha: string;
+  readonly sourceRepository: string;
+  readonly destinationAcceptedOverlayDir: string | undefined;
+  readonly previewOverlayDir: string | undefined;
+  readonly nodeId: string;
+  readonly previewForward?: boolean;
 }): Promise<{ readonly ref: string; readonly payload: unknown }> {
   if (input.bundleFile || input.bundleRef) {
     const bundleFile = required(input.bundleFile, "--bundle");
@@ -619,15 +632,15 @@ async function resolveBundleInput(input: {
   }
 
   const repository = required(input.bundleRepository, "--bundle-repository");
-  const tagRef = buildNodeBundleTagRef({
-    repository,
-    sourceSha: input.sourceSha,
-  });
-  const { stdout: digestOutput } = await execFileAsync("oras", [
-    "resolve",
-    tagRef,
-  ]);
-  const digest = digestOutput.trim();
+  const acceptedRef = await readAcceptedBundleRef(input);
+  const digest = acceptedRef
+    ? acceptedRef.slice(repository.length + 1)
+    : (
+        await execFileAsync("oras", [
+          "resolve",
+          buildNodeBundleTagRef({ repository, sourceSha: input.sourceSha }),
+        ])
+      ).stdout.trim();
   const provisionalRef = `${repository}@${digest}`;
   const { stdout: manifestOutput } = await execFileAsync("oras", [
     "manifest",
@@ -657,6 +670,84 @@ async function resolveBundleInput(input: {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+async function readAcceptedBundleRef(input: {
+  readonly destinationAcceptedOverlayDir: string | undefined;
+  readonly previewOverlayDir: string | undefined;
+  readonly sourceRepository: string;
+  readonly sourceSha: string;
+  readonly bundleRepository: string | undefined;
+  readonly nodeId: string;
+  readonly previewForward?: boolean;
+}): Promise<string | undefined> {
+  const acceptedOverlayDir = input.previewForward
+    ? input.previewOverlayDir
+    : input.destinationAcceptedOverlayDir;
+  if (!acceptedOverlayDir) {
+    if (input.previewForward) throw new Error("Preview acceptance is required");
+    return undefined;
+  }
+  const files = ["xcomputeworkload.yaml", "compute-workload.yaml"];
+  let selected: unknown;
+  for (const file of files) {
+    let text: string;
+    try {
+      text = await readFile(join(acceptedOverlayDir, file), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (selected !== undefined)
+      throw new Error("Multiple accepted workload manifests");
+    selected = parse(text) as unknown;
+  }
+  if (selected === undefined) {
+    if (input.previewForward) throw new Error("Preview acceptance is required");
+    return undefined;
+  }
+  const manifest = selected as {
+    apiVersion?: unknown;
+    kind?: unknown;
+    spec?: {
+      nodeId?: unknown;
+      bundle?: {
+        ref?: unknown;
+        source?: { repository?: unknown; sha?: unknown };
+      };
+    };
+  };
+  if (
+    manifest?.apiVersion !== "compute.cogni.io/v1alpha1" ||
+    (manifest.kind !== "ComputeWorkload" &&
+      manifest.kind !== "XComputeWorkload") ||
+    manifest.spec?.nodeId !== input.nodeId
+  ) {
+    throw new Error("Accepted workload has invalid envelope or node identity");
+  }
+  const bundle = manifest?.spec?.bundle;
+  const source = nodeArtifactBundleSourceSchema.parse(bundle?.source);
+  const expectedSource = nodeArtifactBundleSourceSchema.parse({
+    repository: input.sourceRepository,
+    sha: input.sourceSha,
+  });
+  if (
+    source.repository !== expectedSource.repository ||
+    source.sha !== expectedSource.sha
+  ) {
+    if (input.previewForward)
+      throw new Error("Preview acceptance source mismatch");
+    return undefined;
+  }
+  const repository = required(input.bundleRepository, "--bundle-repository");
+  if (
+    typeof bundle?.ref !== "string" ||
+    !bundle.ref.startsWith(`${repository}@`) ||
+    !/^sha256:[a-f0-9]{64}$/.test(bundle.ref.slice(repository.length + 1))
+  ) {
+    throw new Error("Accepted workload has invalid bundle ref");
+  }
+  return bundle.ref;
 }
 
 function parentRepository(value: string | undefined): string {
@@ -715,9 +806,14 @@ async function writeAtomically(path: string, contents: string): Promise<void> {
   await rename(temporary, path);
 }
 
-void main().catch((error: unknown) => {
-  process.stderr.write(
-    `${error instanceof Error ? error.message : String(error)}\n`
-  );
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] &&
+  basename(process.argv[1]) === "materialize-compute-workload.ts"
+) {
+  void main().catch((error: unknown) => {
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`
+    );
+    process.exitCode = 1;
+  });
+}
