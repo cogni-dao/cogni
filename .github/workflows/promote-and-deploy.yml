@@ -547,6 +547,7 @@ jobs:
         with:
           app_source_root: ${{ github.workspace }}/app-src
           accepted_overlay_dir: ${{ fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node] && format('{0}/preview-src/infra/k8s/overlays/preview/{1}', github.workspace, matrix.node) || format('{0}/deploy-branch/infra/k8s/overlays/{1}/{2}', github.workspace, needs.decide.outputs.environment, matrix.node) }}
+          preview_forward: ${{ fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node] }}
           node: ${{ matrix.node }}
           environment: ${{ needs.decide.outputs.environment }}
           source_sha: ${{ steps.digest.outputs.source_sha }}

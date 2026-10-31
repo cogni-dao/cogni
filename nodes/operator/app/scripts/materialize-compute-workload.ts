@@ -24,6 +24,7 @@ import { basename, join } from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import {
+  nodeArtifactBundleSourceSchema,
   parseRepoSpec,
   resolveNodeArtifactBundle,
   resolveNodeArtifactBundleForEnvironment,
@@ -181,6 +182,8 @@ async function main(): Promise<void> {
     sourceSha,
     sourceRepository: catalogIdentity.repository,
     acceptedOverlayDir: values["accepted-overlay-dir"],
+    nodeId: catalogIdentity.nodeId,
+    previewForward: values["preview-forward"] === "true",
   });
   const domain = required(values.domain, "--domain");
   const outputDir = required(values["output-dir"], "--output-dir");
@@ -614,6 +617,8 @@ export async function resolveBundleInput(input: {
   readonly sourceSha: string;
   readonly sourceRepository: string;
   readonly acceptedOverlayDir: string | undefined;
+  readonly nodeId: string;
+  readonly previewForward?: boolean;
 }): Promise<{ readonly ref: string; readonly payload: unknown }> {
   if (input.bundleFile || input.bundleRef) {
     const bundleFile = required(input.bundleFile, "--bundle");
@@ -669,8 +674,13 @@ async function readAcceptedBundleRef(input: {
   readonly sourceRepository: string;
   readonly sourceSha: string;
   readonly bundleRepository: string | undefined;
+  readonly nodeId: string;
+  readonly previewForward?: boolean;
 }): Promise<string | undefined> {
-  if (!input.acceptedOverlayDir) return undefined;
+  if (!input.acceptedOverlayDir) {
+    if (input.previewForward) throw new Error("Preview acceptance is required");
+    return undefined;
+  }
   const files = ["xcomputeworkload.yaml", "compute-workload.yaml"];
   let selected: unknown;
   for (const file of files) {
@@ -685,31 +695,46 @@ async function readAcceptedBundleRef(input: {
       throw new Error("Multiple accepted workload manifests");
     selected = parse(text) as unknown;
   }
-  if (selected === undefined) return undefined;
+  if (selected === undefined) {
+    if (input.previewForward) throw new Error("Preview acceptance is required");
+    return undefined;
+  }
   const manifest = selected as {
+    apiVersion?: unknown;
+    kind?: unknown;
     spec?: {
+      nodeId?: unknown;
       bundle?: {
         ref?: unknown;
         source?: { repository?: unknown; sha?: unknown };
       };
     };
   };
-  const bundle = manifest?.spec?.bundle;
   if (
-    !bundle?.source ||
-    typeof bundle.source.repository !== "string" ||
-    typeof bundle.source.sha !== "string"
+    manifest?.apiVersion !== "compute.cogni.io/v1alpha1" ||
+    (manifest.kind !== "ComputeWorkload" &&
+      manifest.kind !== "XComputeWorkload") ||
+    manifest.spec?.nodeId !== input.nodeId
   ) {
-    throw new Error("Accepted workload is missing bundle source");
+    throw new Error("Accepted workload has invalid envelope or node identity");
   }
+  const bundle = manifest?.spec?.bundle;
+  const source = nodeArtifactBundleSourceSchema.parse(bundle?.source);
+  const expectedSource = nodeArtifactBundleSourceSchema.parse({
+    repository: input.sourceRepository,
+    sha: input.sourceSha,
+  });
   if (
-    bundle.source.repository !== input.sourceRepository ||
-    bundle.source.sha !== input.sourceSha
-  )
+    source.repository !== expectedSource.repository ||
+    source.sha !== expectedSource.sha
+  ) {
+    if (input.previewForward)
+      throw new Error("Preview acceptance source mismatch");
     return undefined;
+  }
   const repository = required(input.bundleRepository, "--bundle-repository");
   if (
-    typeof bundle.ref !== "string" ||
+    typeof bundle?.ref !== "string" ||
     !bundle.ref.startsWith(`${repository}@`) ||
     !/^sha256:[a-f0-9]{64}$/.test(bundle.ref.slice(repository.length + 1))
   ) {

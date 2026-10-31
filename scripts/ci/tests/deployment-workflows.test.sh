@@ -95,3 +95,32 @@ overlay=$(yq -r '.jobs.promote-k8s.steps[] | select(.name == "Materialize provid
 # Candidate's existing shared action invocation must stay valid without the optional input.
 yq -e '.jobs | .. | select(tag == "!!map" and has("uses")) | select(.uses | contains("materialize-compute-workload")) | .with | has("accepted_overlay_dir") | not' "$WORKFLOW" >/dev/null
 echo '[PASS] replay reads the selected deploy overlay before syncing; candidate needs no new input'
+
+# Run the actual digest step with a missing app tag. Akash must not inspect it;
+# the explicitly requested k3s target must still fail its image lookup.
+yq -r '.jobs.promote-k8s.steps[] | select(.id == "digest") | .run' "$promote" > "$work/digest.sh"
+mkdir -p "$work/app-src/scripts/ci/lib" "$work/bin"
+ln -s "$REPO_ROOT/scripts/ci/lib/image-tags.sh" "$work/app-src/scripts/ci/lib/image-tags.sh"
+cat > "$work/bin/docker" <<'DOCKER'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_CALLS"
+exit 1
+DOCKER
+chmod +x "$work/bin/docker"
+for provider in akash k3s; do
+  result=0
+  (cd "$work"; PATH="$work/bin:$PATH" DOCKER_CALLS="$work/docker.calls" \
+    COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" NODE=operator \
+    DEPLOYMENT_PROVIDER="$provider" PREVIEW_FORWARD=false BUILD_SHA="$birth" \
+    NODE_SOURCE_SHA='' OPERATOR_SOURCE_SHA="$birth" CATALOG_SOURCE_SHA='' \
+    PREVIEW_SOURCE_SHA_MAP='' EXPLICIT_TARGETS=operator GITHUB_OUTPUT="$work/$provider.out" \
+    bash "$work/digest.sh") > "$work/$provider.log" 2>&1 || result=$?
+  if [[ "$provider" == akash ]]; then
+    [[ "$result" == 0 && ! -e "$work/docker.calls" ]] || { cat "$work/$provider.log"; exit 1; }
+    grep -qx 'promoted=true' "$work/$provider.out"
+  else
+    [[ "$result" != 0 && -s "$work/docker.calls" ]] || { cat "$work/$provider.log"; exit 1; }
+    grep -q 'Image not found' "$work/$provider.log"
+  fi
+done
+echo '[PASS] Akash skips unused app tag; k3s requires its image'

@@ -10,7 +10,7 @@ import {
 } from "@cogni/repo-spec";
 import { buildTestRepoSpec } from "@cogni/repo-spec/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stringify } from "yaml";
+import { parse, stringify } from "yaml";
 import { resolveBundleInput } from "../../../scripts/materialize-compute-workload";
 import { buildComputeWorkloadManifest } from "./compute-workload-manifest";
 
@@ -64,6 +64,7 @@ const input = () => ({
   sourceRepository: "cogni-dao/node",
   sourceSha: sha,
   acceptedOverlayDir: join(dir, "overlay"),
+  nodeId: spec.node_id,
 });
 
 beforeEach(async () => {
@@ -72,7 +73,20 @@ beforeEach(async () => {
   originalPath = process.env.PATH;
   // biome-ignore lint/style/noProcessEnv: isolate the fake ORAS executable for this test
   process.env.PATH = `${dir}:${originalPath}`;
-  await writeFile(join(dir, "payload.json"), JSON.stringify(payload));
+  await writeFile(join(dir, "old.json"), JSON.stringify(payload));
+  await writeFile(
+    join(dir, "new.json"),
+    JSON.stringify({
+      ...payload,
+      artifacts: payload.artifacts.map((artifact) => ({
+        ...artifact,
+        image: artifact.image.replace(
+          /sha256:[0-9a-f]{64}$/,
+          `sha256:${"9".repeat(64)}`
+        ),
+      })),
+    })
+  );
   await writeFile(
     join(dir, "oras"),
     `#!/bin/sh
@@ -80,7 +94,7 @@ printf '%s\\n' "$*" >> '${dir}/calls'
 case "$1" in
  resolve) echo '${newDigest}';;
  manifest) [ ! -f '${dir}/unavailable' ] || exit 1; printf '%s' '{"artifactType":"application/vnd.cogni.node-artifact-bundle.v1","layers":[{"mediaType":"application/vnd.cogni.node-artifact-bundle.v1+json","annotations":{"org.opencontainers.image.title":"node-artifact-bundle.json"}}]}';;
- pull) cp '${dir}/payload.json' "$3/node-artifact-bundle.json";;
+ pull) case "$4" in *'${oldDigest}') cp '${dir}/old.json' "$3/node-artifact-bundle.json";; *'${newDigest}') cp '${dir}/new.json' "$3/node-artifact-bundle.json";; *) exit 1;; esac;;
 esac
 `,
     { mode: 0o755 }
@@ -95,12 +109,36 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-async function accepted(ref: unknown, sourceSha = sha) {
+function manifest(generation: number) {
+  return buildComputeWorkloadManifest({
+    slug: "node",
+    environment: "preview",
+    bundleRef: `${repository}@${oldDigest}`,
+    bundle: resolveNodeArtifactBundle(spec, payload, {
+      sourceSha: sha,
+      repository: "cogni-dao/node",
+    }),
+    publicHost: "node-preview.example.com",
+    computeApi: "crossplane",
+    leaseGeneration: generation,
+  });
+}
+async function accepted(
+  ref: unknown,
+  sourceSha = sha,
+  changes: Record<string, unknown> = {}
+) {
+  const original = manifest(5);
   await writeFile(
     join(dir, "overlay/xcomputeworkload.yaml"),
     stringify({
+      ...original,
+      ...changes,
       spec: {
+        ...original.spec,
+        ...((changes.spec as object) ?? {}),
         bundle: {
+          ...original.spec.bundle,
           ref,
           source: { repository: "cogni-dao/node", sha: sourceSha },
         },
@@ -116,27 +154,130 @@ describe("immutable replay", () => {
   it("ignores the overwritten source tag and preserves the full spec across a generation change", async () => {
     await accepted(`${repository}@${oldDigest}`);
     const result = await resolveBundleInput(input());
+    const repeated = await resolveBundleInput(input());
+    expect(result).toEqual(repeated);
     expect(result.ref).toBe(`${repository}@${oldDigest}`);
     expect(await calls()).not.toContain("resolve ");
-    const resolved = resolveNodeArtifactBundle(spec, result.payload, {
-      sourceSha: sha,
-      repository: "cogni-dao/node",
-    });
-    const render = (generation: number) =>
+    const render = (value: typeof result) =>
       buildComputeWorkloadManifest({
         slug: "node",
         environment: "preview",
-        bundleRef: result.ref,
-        bundle: resolved,
+        bundleRef: value.ref,
+        bundle: resolveNodeArtifactBundle(spec, value.payload, {
+          sourceSha: sha,
+          repository: "cogni-dao/node",
+        }),
         publicHost: "node-preview.example.com",
         computeApi: "crossplane",
-        leaseGeneration: generation,
+        leaseGeneration: 6,
       });
-    const five = render(5).spec;
-    const six = render(6).spec;
-    expect(six).toEqual({ ...five, leaseGeneration: 6 });
-    expect(render(6).spec).toEqual(six);
-    expect(six.bundle.artifacts).toEqual(payload.artifacts);
+    const original = parse(
+      await readFile(join(dir, "overlay/xcomputeworkload.yaml"), "utf8")
+    ) as ReturnType<typeof manifest>;
+    expect(render(result)).toEqual({
+      ...original,
+      spec: { ...original.spec, leaseGeneration: 6 },
+    });
+    expect(render(repeated)).toEqual(render(result));
+    expect(render(result).spec.bundle.artifacts).toEqual(payload.artifacts);
+  });
+  it.each([
+    { apiVersion: undefined },
+    { apiVersion: "wrong" },
+    { kind: undefined },
+    { kind: "wrong" },
+    { spec: { nodeId: undefined } },
+    { spec: { nodeId: "wrong" } },
+  ])("rejects invalid acceptance envelope before registry access: %j", async (changes) => {
+    await accepted(`${repository}@${oldDigest}`, sha, changes);
+    await expect(resolveBundleInput(input())).rejects.toThrow();
+    await expect(calls()).rejects.toThrow();
+  });
+  it.each([
+    "",
+    "abc",
+    "Z".repeat(40),
+  ])("rejects malformed source SHA %s", async (badSha) => {
+    await accepted(`${repository}@${oldDigest}`, badSha);
+    await expect(resolveBundleInput(input())).rejects.toThrow();
+    await expect(calls()).rejects.toThrow();
+  });
+  it("rejects malformed source repository before registry access", async () => {
+    const original = manifest(5);
+    await writeFile(
+      join(dir, "overlay/xcomputeworkload.yaml"),
+      stringify({
+        ...original,
+        spec: {
+          ...original.spec,
+          bundle: {
+            ...original.spec.bundle,
+            source: { repository: "bad repo", sha },
+          },
+        },
+      })
+    );
+    await expect(resolveBundleInput(input())).rejects.toThrow();
+    await expect(calls()).rejects.toThrow();
+  });
+  it("accepts the legacy workload kind", async () => {
+    await accepted(`${repository}@${oldDigest}`, sha, {
+      kind: "ComputeWorkload",
+    });
+    expect((await resolveBundleInput(input())).ref).toBe(
+      `${repository}@${oldDigest}`
+    );
+  });
+  it.each([
+    "node identity",
+    "artifact coverage",
+  ])("retains payload validation for %s", async (failure) => {
+    await accepted(`${repository}@${oldDigest}`);
+    const invalid =
+      failure === "node identity"
+        ? { ...payload, node_id: "wrong" }
+        : { ...payload, artifacts: payload.artifacts.slice(0, 1) };
+    await writeFile(join(dir, "old.json"), JSON.stringify(invalid));
+    const result = await resolveBundleInput(input());
+    expect(() =>
+      resolveNodeArtifactBundle(spec, result.payload, {
+        sourceSha: sha,
+        repository: "cogni-dao/node",
+      })
+    ).toThrow();
+    expect(await calls()).not.toContain("resolve ");
+  });
+  it("requires matching preview acceptance before discovery", async () => {
+    await expect(
+      resolveBundleInput({ ...input(), previewForward: true })
+    ).rejects.toThrow();
+    await accepted(`${repository}@${oldDigest}`, "b".repeat(40));
+    await expect(
+      resolveBundleInput({ ...input(), previewForward: true })
+    ).rejects.toThrow();
+    await expect(calls()).rejects.toThrow();
+  });
+  it("selects preview acceptance instead of a different destination pin", async () => {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(join(dir, "destination"));
+    await writeFile(
+      join(dir, "destination/xcomputeworkload.yaml"),
+      stringify({
+        ...manifest(5),
+        spec: {
+          ...manifest(5).spec,
+          bundle: {
+            ...manifest(5).spec.bundle,
+            ref: `${repository}@${newDigest}`,
+          },
+        },
+      })
+    );
+    await accepted(`${repository}@${oldDigest}`);
+    expect(
+      (await resolveBundleInput({ ...input(), previewForward: true })).ref
+    ).toBe(`${repository}@${oldDigest}`);
+    expect(await calls()).not.toContain("resolve ");
   });
   it.each([
     undefined,
@@ -179,6 +320,7 @@ echo '{}'
       ...(mode === "candidate" ? { acceptedOverlayDir: undefined } : {}),
     });
     expect(result.ref).toBe(`${repository}@${newDigest}`);
+    expect(result.payload).not.toEqual(payload);
     expect(await calls()).toContain("resolve ");
   });
 });
