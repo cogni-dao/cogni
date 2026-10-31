@@ -404,10 +404,13 @@ spec:
             {{- if gt $prevBootRecoveryCount 0 }}{{ $prevPaidKey = printf "%s:recover:%d" $prevPaidKey $prevBootRecoveryCount }}{{ end }}
             {{- end }}
             {{- $prevResource := dig "status" "resource" (dict) $xr | default (dict) }}
+            {{- $hasAllocationHistory := or (ne (dig "id" "" $prevResource | default "") "") (ne (dig "mintedAt" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "") "") }}
             {{- $prevFailure := dig "status" "failure" "reason" "" $xr }}
             {{- $terminalReason := has $prevFailure (list "LeaseClosed" "RecoveryLimitExceeded" "BootDeadlineClosed") }}
             {{- $completeSelection := or (eq $recoveryCount 0) (and (eq (get $recovery "key") $currentKey) (eq (int (get $recovery "maxAttempts")) 3)) }}
-            {{- $parkedClosed := and (eq $prevPaidKey $currentKey) $completeSelection (ne (dig "at" "" (dig "status" "bootEpoch" (dict) $xr | default (dict))) "") (ne (dig "id" "" $prevResource) "") (eq (dig "state" "" $prevResource) "closed") (has $prevFailure (list "LeaseClosed" "RecoveryLimitExceeded")) }}
+            {{- $historySelectionComplete := or (eq $prevBootRecoveryCount 0) (and (eq (int (get $recovery "leaseGeneration")) $prevBootGeneration) (eq (int (get $recovery "count")) $prevBootRecoveryCount) (eq (get $recovery "key") $prevPaidKey) (eq (int (get $recovery "maxAttempts")) 3)) }}
+            {{- $historyClosed := and (ne $prevPaidKey "") $historySelectionComplete (ne (dig "at" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "") "") (ne (dig "id" "" $prevResource | default "") "") (eq (dig "state" "" $prevResource) "closed") (or (eq $prevFailure "LeaseClosed") (and (eq $prevFailure "RecoveryLimitExceeded") (eq $prevBootRecoveryCount 3))) }}
+            {{- $parkedClosed := and (eq $prevPaidKey $currentKey) $completeSelection $historyClosed }}
             {{- $parkedBudget := and (eq $prevPaidKey $currentKey) $completeSelection (ne (dig "at" "" (dig "status" "bootEpoch" (dict) $xr | default (dict))) "") (eq $prevFailure "BootDeadlineClosed") (ne (dig "id" "" $prevResource) "") (ne (dig "mintedAt" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "") "") }}
             {{- if and $parkedClosed (eq $prevFailure "RecoveryLimitExceeded") (ne $recoveryCount 3) }}{{ fail "terminal recovery tuple is not max3" }}{{ end }}
             {{- if and $terminalReason (or (eq $prevBootKey "") (hasSuffix (printf ":%d" $leaseGeneration) (regexReplaceAll ":recover:[1-3]$" $prevBootCanonical ""))) (not (or $parkedClosed $parkedBudget)) }}{{ fail "incomplete or conflicting terminal attempt tuple" }}{{ end }}
@@ -583,7 +586,7 @@ spec:
             {{- /* Optional selection metadata cannot erase a known allocation.
               An exact owned native handle can bind legacy history; defaulted
               selection is never evidence of its owner or generation. */ -}}
-            {{- if and (eq $prevPaidKey "") (or (ne (dig "id" "" $prevResource) "") (ne (dig "mintedAt" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "") "")) }}
+            {{- if and (eq $prevPaidKey "") $hasAllocationHistory }}
             {{- if eq $historyOwnerKey "" }}{{ fail "unattributed allocation history cannot bootstrap" }}{{ end }}
             {{- $prevPaidKey = $historyOwnerKey }}
             {{- end }}
@@ -593,9 +596,11 @@ spec:
               must still exist, unless an earlier complete tuple permits omission.
               A retained older Request cannot stand in for a lost allocated successor.
               Fresh authorized closure still advances from its observed own owner;
-              explicit generation changes and unallocated successor replay stay valid.
+              complete closure binds its own generation, not the desired generation.
+              Budget retirement permits same-attempt omission only; it is not closure.
+              An explicit generation change cannot forgive a missing allocated owner.
             */ -}}
-            {{- if and (or (eq $prevBootGeneration $leaseGeneration) (and (eq $prevBootKey "") (eq $activeLeaseGeneration $leaseGeneration))) (or (ne (dig "id" "" $prevResource) "") (ne (dig "mintedAt" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "") "")) (not (or $parkedClosed $parkedBudget)) (not (hasKey $owners (default $currentKey $prevPaidKey))) }}{{ fail "allocated selected child disappeared without terminal proof" }}{{ end }}
+            {{- if and $hasAllocationHistory (not (or $historyClosed $parkedBudget)) (not (hasKey $owners $prevPaidKey)) }}{{ fail "allocated selected child disappeared without terminal proof" }}{{ end }}
             {{- $leaseResourceName := get $owners $currentKey }}
             {{- if ne $leaseResourceName "" }}
             {{- if and (not (or $parkedClosed $parkedBudget)) (not (empty (dig "metadata" "deletionTimestamp" "" (index $observedResources $leaseResourceName).resource))) }}{{ fail "selected lease child is deleting" }}{{ end }}

@@ -2832,6 +2832,16 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
       expected:
         /^\s+render_test\.go:\d+: unattributed allocation history escaped whole-render refusal\n$/,
     },
+    {
+      label: "exact 728 lost older allocation across generation change",
+      oldSha: "728e72c99e3fc7a2fcac797dbb60ac3185c2c356",
+      hash: "0dffa479e0e35d61c7b8779ae56f60a1c8319ce749eb275305b2fbe2aff36414",
+      test: "TestR2LostOlderAllocationBlocksEveryGeneration",
+      caseName: "g7-serving-missing-g8-desired-g9",
+      diagnostic: "lost older allocation admitted a new paid intent",
+      expected:
+        /^\s+render_test\.go:\d+: lost older allocation admitted a new paid intent\n$/,
+    },
   ])("rejects $label at the native behavior assertion", ({
     oldSha,
     hash,

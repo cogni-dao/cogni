@@ -1484,7 +1484,7 @@ func TestR2MissingChildBootstrapAndDurableSuccessorRemainAllowed(t *testing.T) {
 			r2Merge(f, first) // Complete durable successor selection, not yet observed.
 			delete(observed(f), "akash-lease")
 			if nextGeneration {
-				// Allocated history from generation1 must not block an explicit generation2.
+				// A generation edit is not closure of the missing allocated owner.
 				status(f)["resource"] = obj{"id": "original-recovery-handle", "state": "active"}
 				status(f)["bootEpoch"].(obj)["mintedAt"] = "2026-10-31T00:00:00Z"
 				xr(f)["spec"].(obj)["leaseGeneration"] = 2
@@ -1492,16 +1492,16 @@ func TestR2MissingChildBootstrapAndDurableSuccessorRemainAllowed(t *testing.T) {
 			for i := 0; i < 3; i++ {
 				f = r2Copy(t, f)
 				before := jsonString(f)
-				o := render(t, loadTemplate(t), f)
 				if nextGeneration {
-					wantNames(t, o, "akash-lease")
-					if paid(o, "akash-lease") != key(2) || o.status["recovery"] != nil {
-						t.Fatal("explicit different-generation replacement lost its base identity", o.status)
+					o, err := execute(t, loadTemplate(t), f)
+					if err == nil || !strings.Contains(err.Error(), "allocated selected child disappeared without terminal proof") || o.leases != nil || o.status != nil || o.dns != nil || jsonString(f) != before {
+						t.Fatal("generation edit erased missing allocated recovery history", err)
 					}
-				} else {
-					wantNames(t, o, n)
-					r2Check(t, o, 1)
+					continue
 				}
+				o := render(t, loadTemplate(t), f)
+				wantNames(t, o, n)
+				r2Check(t, o, 1)
 				if at(o.status, "resource", "id") != nil || at(o.status, "bootEpoch", "mintedAt") != nil || jsonString(f) != before {
 					t.Fatal("unobserved intent borrowed paid history or mutated input", o.status)
 				}
@@ -2674,6 +2674,225 @@ func TestR2OldNativeOwnerWithoutIncumbentAuthority(t *testing.T) {
 			for _, logical := range []string{"akash-lease", "akash-lease-g8"} {
 				if at(o.leases[logical], "metadata", "annotations", annotation) != logical || at(o.leases[logical], "metadata", "name") != nil || at(o.leases[logical], "metadata", "uid") != nil {
 					t.Fatal("transition overrides native Request identity", o.leases[logical])
+				}
+			}
+		})
+	}
+}
+
+// Persist g8's own allocation through the full Go/Sprig template, with g7
+// serving throughout. Each recovery follows its own positively CLOSED owner.
+// This is rendered intent/status proof, not native GC or external closure proof.
+func r14AllocatedOlderAttempt(t *testing.T, attempt int) (obj, string, string) {
+	t.Helper()
+	f := fixture(8)
+	status(f)["activeLeaseGeneration"] = 7
+	status(f)["leaseRequestGeneration"] = 7
+	xr(f)["spec"].(obj)["bootPolicy"] = obj{"onGiveUp": "Replace"}
+	incumbent := child(t, key(7), blue, true, "akash-lease-g7")
+	r2Stamp(incumbent, key(7), "active", true, false)
+	observed(f)["akash-lease-g7"] = incumbent
+	intent := render(t, loadTemplate(t), f)
+	selected, k := "akash-lease-g8", key(8)
+	for n := 0; n <= attempt; n++ {
+		r2Merge(f, intent)
+		current := r2Native(t, intent.leases[selected], selected, fmt.Sprintf("older-attempt-%d", n))
+		r2Stamp(current, k, "active", false, false)
+		observed(f)[selected] = current
+		r2Merge(f, render(t, loadTemplate(t), f))
+		if at(status(f), "resource", "id") != "handle-"+k || at(status(f), "bootEpoch", "mintedAt") == nil || status(f)["activeLeaseGeneration"] != 7 {
+			t.Fatal("fixture did not persist older allocated attempt under serving g7", status(f))
+		}
+		if n < attempt {
+			r2Stamp(current, k, "closed", false, true)
+			intent = render(t, loadTemplate(t), f)
+			r2Cleanup(t, intent.leases[selected], k)
+			delete(observed(f), selected) // Earlier own closure remains in selection's input.
+			selected = fmt.Sprintf("akash-lease-g8-recover-%d", n+1)
+			k = fmt.Sprintf("%s:recover:%d", key(8), n+1)
+		}
+	}
+	return f, selected, k
+}
+
+func TestR2LostOlderAllocationBlocksEveryGeneration(t *testing.T) {
+	for _, attempt := range []int{0, 1, 2, 3} {
+		for _, history := range []string{"both", "handle-only", "clock-only"} {
+			for _, optional := range []string{"present", "missing", "null", "missing-role", "null-role"} {
+				label := fmt.Sprintf("attempt%d-%s-%s", attempt, history, optional)
+				if attempt == 0 && history == "both" && optional == "present" {
+					label = "g7-serving-missing-g8-desired-g9" // Exact728 counterfactual seam.
+				}
+				t.Run(label, func(t *testing.T) {
+					f, selected, _ := r14AllocatedOlderAttempt(t, attempt)
+					xr(f)["spec"].(obj)["crossplane"] = obj{"resourceRefs": []obj{{"name": at(observed(f)[selected].(obj), "resource", "metadata", "name")}}}
+					delete(observed(f), selected) // Neither native absence nor stale refs prove closure.
+					xr(f)["spec"].(obj)["leaseGeneration"] = 9
+					if history == "handle-only" {
+						status(f)["bootEpoch"].(obj)["mintedAt"] = nil
+					} else if history == "clock-only" {
+						status(f)["resource"] = nil
+					}
+					if optional == "missing" || optional == "null" {
+						for _, field := range []string{"recovery", "leaseRequestGeneration"} {
+							delete(status(f), field)
+							if optional == "null" {
+								status(f)[field] = nil
+							}
+						}
+					} else if strings.HasSuffix(optional, "-role") {
+						// With no incumbent object, optional active metadata must still
+						// not allow the missing allocated g8 to disappear from accounting.
+						delete(observed(f), "akash-lease-g7")
+						delete(status(f), "activeLeaseGeneration")
+						if optional == "null-role" {
+							status(f)["activeLeaseGeneration"] = nil
+						}
+					}
+					for i := 0; i < 3; i++ {
+						if i == 1 {
+							r2SetSha(f, strings.Repeat("d", 40))
+							delete(xr(f)["spec"].(obj), "crossplane") // Later ref loss is not closure either.
+						}
+						if i == 2 {
+							xr(f)["spec"].(obj)["leaseGeneration"] = 8 // Explicitly return to the old generation.
+						}
+						f = r2Copy(t, f)
+						before := jsonString(f)
+						o, err := execute(t, loadTemplate(t), f)
+						if err == nil {
+							t.Fatal("lost older allocation admitted a new paid intent")
+						}
+						if !strings.Contains(err.Error(), "allocated selected child disappeared without terminal proof") || o.leases != nil || o.status != nil || o.dns != nil || jsonString(f) != before {
+							t.Fatal("older allocation history mutated or failed for another cause", err)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestR2OlderClosureAndBoundOwnerPermitTransition(t *testing.T) {
+	for _, attempt := range []int{0, 1, 2, 3} {
+		for _, direct := range []bool{false, true} {
+			t.Run(fmt.Sprintf("closed-attempt%d-direct%v", attempt, direct), func(t *testing.T) {
+				f, selected, k := r14AllocatedOlderAttempt(t, attempt)
+				if attempt < 3 {
+					xr(f)["spec"].(obj)["bootPolicy"] = obj{"onGiveUp": "Hold"}
+				}
+				r2Stamp(observed(f)[selected].(obj), k, "closed", false, direct)
+				closed := render(t, loadTemplate(t), f)
+				wantNames(t, closed, "akash-lease-g7", selected)
+				r2Cleanup(t, closed.leases[selected], k)
+				r2Merge(f, closed) // Complete own terminal tuple persists BEFORE omission.
+				wantNames(t, render(t, loadTemplate(t), f), "akash-lease-g7")
+				delete(observed(f), selected)
+				xr(f)["spec"].(obj)["leaseGeneration"] = 9
+				// Each missing or contradictory component must deny the transition.
+				for _, damage := range []string{"reason-only", "missing-at", "null-at", "missing-handle", "missing-key", "null-key", "budget-intent", "recovery-key", "recovery-cap"} {
+					if strings.HasPrefix(damage, "recovery-") && attempt == 0 {
+						continue
+					}
+					bad := r2Copy(t, f)
+					switch damage {
+					case "reason-only":
+						status(bad)["resource"].(obj)["state"] = "active"
+					case "missing-at":
+						delete(status(bad)["bootEpoch"].(obj), "at")
+					case "null-at":
+						status(bad)["bootEpoch"].(obj)["at"] = nil
+					case "missing-handle":
+						delete(status(bad)["resource"].(obj), "id")
+					case "missing-key":
+						delete(status(bad)["bootEpoch"].(obj), "key")
+					case "null-key":
+						status(bad)["bootEpoch"].(obj)["key"] = nil
+					case "budget-intent":
+						status(bad)["failure"].(obj)["reason"] = "BootDeadlineClosed"
+					case "recovery-key":
+						delete(status(bad)["recovery"].(obj), "key")
+					case "recovery-cap":
+						delete(status(bad)["recovery"].(obj), "maxAttempts")
+					}
+					before := jsonString(bad)
+					r2WantFailure(t, loadTemplate(t), bad)
+					if jsonString(bad) != before {
+						t.Fatal("incomplete older terminal tuple was changed", damage)
+					}
+				}
+				for i := 0; i < 3; i++ {
+					f = r2Copy(t, f)
+					if i == 0 {
+						r2SetSha(f, strings.Repeat("d", 40))
+					}
+					o := render(t, loadTemplate(t), f)
+					wantNames(t, o, "akash-lease-g7", "akash-lease-g9")
+					if paid(o, "akash-lease-g9") != key(9) || o.status["resource"] != nil || at(o.status, "bootEpoch", "mintedAt") != nil || o.status["recovery"] != nil || o.status["activeLeaseGeneration"] != 7 || o.status["serving"] != false || dnsTarget(o) != blue {
+						t.Fatal("own closed history contaminated fresh generation", o.status)
+					}
+					r2Cleanup(t, o.leases["akash-lease-g7"], key(7))
+					r2Cleanup(t, o.leases["akash-lease-g9"], key(9))
+					r2Merge(f, o)
+				}
+			})
+		}
+	}
+	for _, boot := range []string{"present", "missing", "null"} {
+		t.Run("bound-owner-"+boot, func(t *testing.T) {
+			f, selected, k := r14AllocatedOlderAttempt(t, 1)
+			// Obtain active authority from fresh exact-key serving and DNS readback.
+			r2Stamp(observed(f)[selected].(obj), k, "active", true, false)
+			dns(f, blue)
+			r2Merge(f, render(t, loadTemplate(t), f))
+			if status(f)["activeLeaseGeneration"] != 8 {
+				t.Fatal("fixture did not prove g8 cutover")
+			}
+			delete(observed(f), "akash-lease-g7")
+			if boot != "present" {
+				delete(status(f), "bootEpoch")
+				if boot == "null" {
+					status(f)["bootEpoch"] = nil
+				}
+			}
+			xr(f)["spec"].(obj)["leaseGeneration"] = 9
+			o := render(t, loadTemplate(t), r2Copy(t, f))
+			wantNames(t, o, selected, "akash-lease-g9")
+			if paid(o, selected) != k || paid(o, "akash-lease-g9") != key(9) || o.status["activeLeaseGeneration"] != 8 || o.status["serving"] != false || o.status["resource"] != nil || at(o.status, "bootEpoch", "mintedAt") != nil || dnsTarget(o) != blue {
+				t.Fatal("bound incumbent transition changed", o.status)
+			}
+			r2Cleanup(t, o.leases[selected], k)
+			r2Cleanup(t, o.leases["akash-lease-g9"], key(9))
+		})
+	}
+}
+
+func TestR2OlderBudgetRetirementIsNotClosure(t *testing.T) {
+	for _, attempt := range []int{0, 1, 3} {
+		t.Run(fmt.Sprint(attempt), func(t *testing.T) {
+			f, selected, k := r14AllocatedOlderAttempt(t, attempt)
+			xr(f)["spec"].(obj)["bootPolicy"] = obj{"onGiveUp": "Replace", "onDeadline": "Close", "bootDeadlineSeconds": 60}
+			status(f)["bootEpoch"].(obj)["mintedAt"] = "2000-01-01T00:00:00Z"
+			retiring := render(t, loadTemplate(t), f)
+			wantNames(t, retiring, "akash-lease-g7", selected)
+			r2Cleanup(t, retiring.leases[selected], k)
+			if at(retiring.status, "failure", "reason") != "BootDeadlineClosed" || at(retiring.status, "resource", "state") != "active" {
+				t.Fatal("fixture did not persist retirement intent without closure", retiring.status)
+			}
+			r2Merge(f, retiring)
+			at(observed(f)[selected].(obj), "resource", "metadata").(obj)["deletionTimestamp"] = "2026-10-31T00:00:00Z"
+			wantNames(t, render(t, loadTemplate(t), f), "akash-lease-g7")
+			delete(observed(f), selected)
+			xr(f)["spec"].(obj)["leaseGeneration"] = 9
+			for i := 0; i < 3; i++ {
+				f = r2Copy(t, f)
+				if i == 1 {
+					r2SetSha(f, strings.Repeat("d", 40))
+				}
+				before := jsonString(f)
+				o, err := execute(t, loadTemplate(t), f)
+				if err == nil || !strings.Contains(err.Error(), "allocated selected child disappeared without terminal proof") || o.leases != nil || o.status != nil || o.dns != nil || jsonString(f) != before {
+					t.Fatal("older budget retirement admitted a replacement without closure", err)
 				}
 			}
 		})
