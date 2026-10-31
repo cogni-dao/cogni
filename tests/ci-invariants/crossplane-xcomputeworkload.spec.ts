@@ -2786,6 +2786,16 @@ describe("XComputeWorkload native template acceptance (bug.5557)", () => {
       expected:
         /^\s+render_test\.go:\d+: selection repair reset bound paid history\n$/,
     },
+    {
+      label: "exact 863 allocated recovery predecessor refusal",
+      oldSha: "863efc5da9711088ffb652a4acd0f84820f2d5fb",
+      hash: "5b46b4fbd5aaace7945ab57fa59643b8e6b0da144a9bf7c014a9a0f054306334",
+      test: "TestR2AllocatedRecoveryHistorySurvivesSelectionLoss",
+      caseName: "missing-both-503-predecessor-unserved",
+      diagnostic: "allocated recovery history escaped missing-child refusal",
+      expected:
+        /^\s+render_test\.go:\d+: allocated recovery history escaped missing-child refusal\n$/,
+    },
   ])("rejects $label at the native behavior assertion", ({
     oldSha,
     hash,
