@@ -42,6 +42,12 @@ describe("compatible receipts: real PostgreSQL", () => {
   const installGuard = async () =>
     app.transaction(async (tx) => {
       await tx.execute(
+        sql`ALTER TABLE public.akash_tx_allocations ADD CONSTRAINT akash_test_native_closed_shape CHECK (native_closed_verified IS NULL OR (native_closed_verified IS TRUE AND nullif(external_name, '') IS NOT NULL AND state IN ('allocated', 'released')))`
+      );
+      await tx.execute(
+        sql`ALTER TABLE public.akash_tx_allocations ADD CONSTRAINT akash_test_no_effect_shape CHECK (allocation_no_effect_verified IS NULL OR (allocation_no_effect_verified IS TRUE AND state IN ('preparing', 'failed') AND allocation_cursor IS NULL AND external_name IS NULL) OR (allocation_no_effect_verified IS FALSE AND ((state IN ('preparing', 'failed') AND allocation_cursor IS NOT NULL AND external_name IS NULL) OR (state IN ('allocated', 'released') AND nullif(external_name, '') IS NOT NULL))))`
+      );
+      await tx.execute(
         sql.raw(
           `CREATE FUNCTION public.akash_receipt_writer_guard_fn() RETURNS trigger LANGUAGE plpgsql AS $guard$${RECEIPT_GUARD_BODY}$guard$`
         )
@@ -60,6 +66,9 @@ describe("compatible receipts: real PostgreSQL", () => {
     );
     await app.execute(
       sql`DROP FUNCTION IF EXISTS public.akash_receipt_writer_guard_fn()`
+    );
+    await app.execute(
+      sql`ALTER TABLE public.akash_tx_allocations DROP CONSTRAINT IF EXISTS akash_test_native_closed_shape, DROP CONSTRAINT IF EXISTS akash_test_no_effect_shape`
     );
     await app.execute(sql`reset cogni.receipt_writer`);
   });
