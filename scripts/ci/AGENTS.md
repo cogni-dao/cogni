@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-22
+- **Last reviewed:** 2026-11-01
 
 ## Purpose
 
@@ -95,7 +95,10 @@ scripts/fetch_github_job_logs.sh  # Fetch job logs from GitHub Actions API (requ
 - `workflow-check.mjs` validates the GitHub Actions surface agents depend on: canonical `.yaml` CI filenames, removed legacy aliases, and which workflows are manually dispatchable.
 - `lib/image-tags.sh` is a thin shim that populates `ALL_TARGETS` / `NODE_TARGETS` and resolves image tags, node ports, DB names, and endpoint CSVs by reading `infra/catalog/*.yaml` at source time via the pre-installed `yq`. **Node IDs come from `nodes/<name>/.cogni/repo-spec.yaml`, not the catalog** (`REPO_SPEC_IS_IDENTITY_SSOT`, ci-cd.md axiom 16); `default_node_id` returns the `is_primary_host` node's `node_id` for `COGNI_DEFAULT_NODE_ID`. Repo-root-relative resolution; `COGNI_CATALOG_ROOT` overrides the catalog root for fixtures + the pre-merge birth flow, and the repo-spec tree is derived from it.
 - `next-free-node-port.sh` owns the scarce per-VM k8s `node_port` (NodePort 30000–32767). Default mode prints the next free port (`max(node_port)+100`, ~x00 stride) — the scaffolder (`scripts/setup/scaffold-node.sh`) defaults `$3` to it so minting a node needs no hand-picked value. `--check` asserts cross-file `node_port` uniqueness (inexpressible in pure JSON-schema) and runs in `pr-build.yml` alongside `check-jsonschema --schemafile infra/catalog/_schema.json`; a clash fails the build (CATALOG_IS_SSOT, ci-cd.md axiom 16). Tested by `scripts/ci/tests/next-free-node-port.test.sh`; aliases `pnpm node-port:next` / `pnpm check:node-port-unique`.
-- `build-and-push-images.sh` is the PR-build entrypoint for affected image pushes; workflows should pass resolved targets, not inline Docker command graphs
+- `build-and-push-images.sh` runs from workflow tooling against the exact app checkout. `SOURCE_REPOSITORY`, `BUILD_SHA`, and native `GITHUB_WORKFLOW_SHA` name distinct objects. `PUBLICATION_COORDINATE` must match the physical tag/platform under the native matrix lock. `PUBLICATION_PHASE=finalize` consumes runner-local BuildKit metadata after the pinned native action; `PUBLICATION_BUNDLE` may carry its original signed bundle. Only verified fragments are deployable evidence.
+- `lib/publication-proof.sh` is the bounded read-only adapter for operator-coordinate publication lookup, native/explicit-legacy qualification and physical matrix coordinates. Existing Docker login owns registry auth; registry failure is never absence. Sovereign coordinates keep their existing contract. No deploy state or lifecycle belongs here.
+- `merge-build-fragments.sh` accepts `EXPECTED_TARGETS_JSON` and `HEAD_SHA` for native-proof recovery on aggregate reruns/expiry. `COGNI_CATALOG_ROOT` supplies explicit app data; the code stays workflow-owned. Conflicting target evidence refuses.
+- `lib/overlay-digest.sh` also reads strict destination acceptance and fences stale full-infra intent before any app-state writer.
 - `write-build-manifest.sh` writes the canonical build artifact consumed by later candidate-flight automation
 - `resolve-pr-build-images.sh` resolves digest refs from the deterministic PR tag convention when candidate-flight needs the current pushed image set
 - `promote-build-payload.sh` translates a resolved image payload into overlay mutations via `promote-k8s-image.sh`, writes `promoted_apps=<csv>` to `$GITHUB_OUTPUT` incrementally after each successful promotion (trap EXIT guarantees the exit-time write even on abort — bug.0328), and merges per-app `source_sha` into `.promote-state/source-sha-by-app.json`. Map-write failures are `::warning::` annotations; total map-write failure exits non-zero so provenance decay cannot silently persist.

@@ -21,6 +21,31 @@ if [ -z "$IMAGE_TAG" ]; then
   exit 1
 fi
 
+# Aggregate-only reruns and expired fragments recover through the same native
+# digest verifier as normal readers. No new build or producer attribution.
+if [[ -n "${EXPECTED_TARGETS_JSON:-}" ]]; then
+  mkdir -p "$FRAGMENTS_DIR"
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  while IFS= read -r target; do
+    if ! python3 - "$FRAGMENTS_DIR" "$target" <<'PYTHON'
+import json, pathlib, sys
+entries = [e for p in pathlib.Path(sys.argv[1]).rglob('*.json')
+           for e in json.loads(p.read_text()).get('targets', []) if e.get('target') == sys.argv[2]]
+raise SystemExit(0 if entries else 1)
+PYTHON
+    then
+      NODE="$target" SOURCE_SHA="${HEAD_SHA:?}" OUTPUT_FILE="$FRAGMENTS_DIR/recovered-$target.json" \
+        GITHUB_OUTPUT=/dev/null bash "$SCRIPT_DIR/resolve-node-ref-image.sh"
+      # Record that this attempt recovered evidence, not built the image.
+      jq '.targets[].outcome="reused"' "$FRAGMENTS_DIR/recovered-$target.json" > "$FRAGMENTS_DIR/recovered-$target.tmp"
+      mv "$FRAGMENTS_DIR/recovered-$target.tmp" "$FRAGMENTS_DIR/recovered-$target.json"
+      # Resolver envelopes lack platform; the fragment envelope retains it.
+      jq --arg platform "$PLATFORM" '.platform=$platform' "$FRAGMENTS_DIR/recovered-$target.json" > "$FRAGMENTS_DIR/recovered-$target.tmp"
+      mv "$FRAGMENTS_DIR/recovered-$target.tmp" "$FRAGMENTS_DIR/recovered-$target.json"
+    fi
+  done < <(jq -r '.[]' <<< "$EXPECTED_TARGETS_JSON")
+fi
+
 image_name_lower=$(printf "%s" "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
 mkdir -p "$(dirname "$OUTPUT_FILE")"
 
@@ -32,7 +57,7 @@ import sys
 fragments_dir, output_file, image_name, image_tag, platform = sys.argv[1:6]
 
 targets = []
-seen = set()
+seen = {}
 
 if os.path.isdir(fragments_dir):
     for root, _dirs, files in os.walk(fragments_dir):
@@ -44,9 +69,16 @@ if os.path.isdir(fragments_dir):
                 payload = json.load(handle)
             for entry in payload.get("targets", []):
                 key = entry.get("target")
-                if key and key not in seen:
-                    seen.add(key)
-                    targets.append(entry)
+                if not key:
+                    raise SystemExit("build fragment target missing")
+                if key in seen:
+                    if seen[key] != entry:
+                        raise SystemExit(f"conflicting build fragments for {key}")
+                    continue
+                if payload.get("image_tag") != image_tag or payload.get("platform") != platform:
+                    raise SystemExit("build fragment envelope mismatch")
+                seen[key] = entry
+                targets.append(entry)
 
 # Stable order: per-node apps, then scheduler-worker. (task.0370 step 1 retired the per-node migrator companions.)
 canonical_order = ["operator", "poly", "resy", "node-template", "scheduler-worker"]

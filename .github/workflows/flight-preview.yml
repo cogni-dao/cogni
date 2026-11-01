@@ -13,8 +13,8 @@ run-name: "Flight Preview → preview · ${{ inputs.sha || github.sha }}"
 #
 # SHA resolution: HEAD_SHA is the commit on main (github.sha for push events,
 # inputs.sha for dispatch). pr-build publishes `<image>:sha-<HEAD_SHA>` on both
-# the merge_group build (queue commit == merged main SHA) and the push:main build
-# — so flight-preview source-addresses by `sha-<HEAD_SHA>`, passes HEAD_SHA as
+# the merge_group and push:main builds. Identical actual sources may reuse one
+# publication; distinct sources qualify separately. HEAD_SHA is passed as
 # both source_sha and the BUILD_SHA assertion.
 #
 # Direct pushes to main with no associated PR resolve no PR number; such pushes
@@ -36,6 +36,7 @@ permissions:
   packages: write
   pull-requests: read
   actions: write
+  attestations: read
 
 # Serialize flight dispatch: two merges landing within seconds run back-to-back,
 # not in parallel, so they dispatch promote-and-deploy in merge order.
@@ -213,7 +214,7 @@ jobs:
           password: ${{ github.token }}
 
       # Resolve the merge's `sha-<mainSha>` images directly (no re-tag). On a
-      # queue merge the merge_group build already published them (instant hit).
+      # queue merge with the same actual source, publication can be reused.
       # On a non-queue/admin/direct merge there is no merge_group build, so wait
       # (bounded) for the push:main build of pr-build.yml to publish them. This is
       # the only added cost of self-building on push:main; the queue path is
@@ -222,6 +223,7 @@ jobs:
         id: images
         if: steps.pr.outputs.skip != 'true' && steps.noop.outputs.status != 'noop'
         env:
+          GH_TOKEN: ${{ github.token }}
           IMAGE_TAG: ${{ steps.pr.outputs.image_tag }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}
@@ -230,7 +232,8 @@ jobs:
           set -euo pipefail
           deadline=$(( SECONDS + 900 ))   # 15 min — covers a cold push:main build
           while :; do
-            GITHUB_OUTPUT=/dev/null bash scripts/ci/resolve-pr-build-images.sh || true
+            # Failed qualification removes the output and cannot satisfy this wait.
+            GITHUB_OUTPUT=/dev/null bash scripts/ci/resolve-pr-build-images.sh || rm -f "$OUTPUT_FILE"
             if [ -s "$OUTPUT_FILE" ] && [ "$(jq '.targets | length' "$OUTPUT_FILE")" -gt 0 ]; then
               break
             fi

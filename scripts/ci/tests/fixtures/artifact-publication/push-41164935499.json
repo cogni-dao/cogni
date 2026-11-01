@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-31T03:41:10.078398Z",
+  "repository": "cogni-dao/cogni",
+  "pr_number": 2998,
+  "head_sha": "22947c5e71fdef7d905c5ef11d2b0e94c5a5447e",
+  "ref_name": "main",
+  "workflow": {
+    "name": "PR Build",
+    "run_id": "41164935499",
+    "run_attempt": "1"
+  },
+  "image_name": "ghcr.io/cogni-dao/cogni-template",
+  "image_tag": "sha-22947c5e71fdef7d905c5ef11d2b0e94c5a5447e",
+  "platform": "linux/amd64",
+  "targets": [
+    {
+      "target": "operator",
+      "tag": "ghcr.io/cogni-dao/cogni-template:sha-22947c5e71fdef7d905c5ef11d2b0e94c5a5447e",
+      "digest": "ghcr.io/cogni-dao/cogni-template@sha256:ad1a5e01778e88dc424472b22072a5b29dbad2981e05cb6eb0a79a8dfe114364"
+    }
+  ]
+}

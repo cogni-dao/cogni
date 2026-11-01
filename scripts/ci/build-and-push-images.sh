@@ -14,6 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib/image-tags.sh
 . "$SCRIPT_DIR/lib/image-tags.sh"
+. "$SCRIPT_DIR/lib/publication-proof.sh"
 
 TARGETS=${TARGETS:-}
 # Legacy single-repo input. bug.0344 split migrator images into a distinct
@@ -60,7 +61,7 @@ if [ -z "$trimmed_targets" ]; then
 
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
-      echo "## Built PR Images"
+      echo "## PR Image Publications"
       echo ""
       echo "- App package: \`$IMAGE_NAME_APP\`"
       echo "- Migrator package: \`$IMAGE_NAME_MIGRATOR\`"
@@ -94,7 +95,19 @@ IMAGE_NAME_MIGRATOR=$(printf "%s" "$IMAGE_NAME_MIGRATOR" | tr '[:upper:]' '[:low
 # instead of the ephemeral refs/pull/{N}/merge SHA that GitHub puts in GITHUB_SHA.
 # See bug.0313.
 git_sha="${BUILD_SHA:-${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}}"
-build_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# The checkout, workflow definition and tooling revisions are different objects.
+source_repository="${SOURCE_REPOSITORY:-${GITHUB_REPOSITORY:-cogni-dao/cogni}}"
+actual_head=$(git rev-parse HEAD)
+git diff-index --quiet HEAD -- || { echo 'publication_checkout_dirty' >&2; exit 1; }
+[[ "$git_sha" =~ ^[a-f0-9]{40}$ && "$actual_head" = "$git_sha" ]] || {
+  echo 'publication_checkout_mismatch' >&2; exit 1;
+}
+[[ "$PLATFORM" = linux/amd64 ]] || { echo 'publication_platform_invalid' >&2; exit 1; }
+origin_url=$(git remote get-url origin)
+[[ "$origin_url" = "https://github.com/${source_repository}.git" || "$origin_url" = "https://github.com/${source_repository}" ]] || {
+  echo 'publication_checkout_repository_mismatch' >&2; exit 1;
+}
+build_timestamp=$(git show -s --format=%cI "$git_sha")
 
 # bug.0344: image_name_for_target picks APP vs MIGRATOR package per-target.
 # image-tags.sh's image_tag_for_target joins them with the tag suffix.
@@ -134,18 +147,30 @@ build_target() {
   # their own self-contained dir so the Dockerfile stays context-relative.
   context=$(yq -N '.build_context // "."' "$catalog")
 
-  local args=(--platform "$PLATFORM" --file "$dockerfile")
+  local args=(--platform "$PLATFORM" --file "$dockerfile"
+    --build-arg "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$git_sha")")
   if [ "$type" = "node" ]; then
     args+=(--target runner --build-arg "BUILD_SHA=${git_sha}")
   fi
   args+=(
-    --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY:-cogni-dao/cogni}"
+    --label "org.opencontainers.image.source=https://github.com/${source_repository}"
     --label "org.opencontainers.image.revision=${git_sha}"
     --label "org.opencontainers.image.created=${build_timestamp}"
     --cache-from "type=gha,scope=build-${target}"
     --cache-to "type=gha,mode=max,scope=build-${target}"
     --tag "$tag"
   )
+  if publication_is_operator_coordinate "$tag" && ! is_infra_target "$target" && [[ "$SHOULD_PUSH" = true ]]; then
+    args+=(--provenance=mode=max --metadata-file "$metadata_file"
+      --label "io.cogni.publication.version=2"
+      --label "io.cogni.publication.source=$source_repository"
+      --label "io.cogni.publication.target=$target"
+      --label "io.cogni.publication.platform=$PLATFORM"
+      --label "io.cogni.publication.recipe=$recipe"
+      --label "io.cogni.publication.workflow-sha=${GITHUB_WORKFLOW_SHA:?}"
+      --label "io.cogni.publication.run=${GITHUB_RUN_ID:?}"
+      --label "io.cogni.publication.attempt=${GITHUB_RUN_ATTEMPT:?}")
+  fi
   if [ "$SHOULD_PUSH" = "false" ]; then
     # FORK_FREEDOM build-only: validate the image compiles; do not push.
     args+=("$context")
@@ -168,45 +193,99 @@ resolve_digest_ref() {
   printf '%s@%s' "${tag%%:*}" "$digest"
 }
 
-json_items=()
+# A matrix leg owns one coordinate through native attestation and fragment
+# upload. The pending file is runner-local build metadata, never deployable proof.
+pending="${OUTPUT_FILE}.pending"
+if [[ "${PUBLICATION_PHASE:-build}" = finalize ]]; then
+  [[ -s "$pending" ]] || { echo 'publication_pending_missing' >&2; exit 1; }
+  target=$(jq -er '.targets[0].target' "$pending")
+  digest_ref=$(jq -er '.targets[0].digest' "$pending")
+  proof=$(mktemp)
+  publication_verify "$digest_ref" "$source_repository" "$git_sha" "$target" "$proof" "${PUBLICATION_BUNDLE:-}"
+  jq --slurpfile proof "$proof" '.targets[0].publication = $proof[0]' "$pending" > "$OUTPUT_FILE"
+  rm -f "$proof" "$pending"
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    printf 'build_output_file=%s\nbuilt_targets=%s\nhas_images=true\n' "$OUTPUT_FILE" "$target" >> "$GITHUB_OUTPUT"
+  fi
+  log_info "Verified original publication: $target -> $digest_ref"
+  exit 0
+fi
+rm -f "$OUTPUT_FILE" "$pending"
+printf '{"image_name":"%s","image_name_migrator":"%s","image_tag":"%s","platform":"%s","targets":[]}\n' \
+  "$IMAGE_NAME_APP" "$IMAGE_NAME_MIGRATOR" "$IMAGE_TAG" "$PLATFORM" > "$pending"
 built_targets=()
 IFS=',' read -r -a requested_targets <<< "$trimmed_targets"
-
 for target in "${requested_targets[@]}"; do
   [ -z "$target" ] && continue
-
   full_tag=$(resolve_tag "$target")
-  log_info "Building ${target} -> ${full_tag} (push=${SHOULD_PUSH})"
-  build_target "$target" "$full_tag"
-  if [ "$SHOULD_PUSH" = "false" ]; then
-    # Build-only (FORK_FREEDOM): no pushed image, so no resolvable digest.
-    digest_ref=""
-    log_info "Built ${target} (not pushed); no digest"
-  else
-    digest_ref=$(resolve_digest_ref "$full_tag")
-    log_info "Resolved ${target} digest: ${digest_ref}"
+  outcome=built
+  proof=$(mktemp)
+  protected=false
+  if publication_is_operator_coordinate "$full_tag" && ! is_infra_target "$target" && [[ "$SHOULD_PUSH" = true ]]; then
+    protected=true
+    [[ "${#requested_targets[@]}" = 1 ]] || { echo 'publication_requires_matrix_lock' >&2; exit 1; }
+    [[ "${PUBLICATION_COORDINATE:-}" = "$full_tag-linux/amd64" ]] || {
+      echo 'publication_coordinate_mismatch' >&2; exit 1;
+    }
+    publication_require_verifier
+    recipe=$(publication_recipe "$source_repository" "$git_sha" "$target" "$PWD")
+    lookup_rc=0
+    digest_ref=$(publication_lookup "$full_tag") || lookup_rc=$?
+    if [[ "$lookup_rc" = 0 ]]; then
+      publication_verify "$digest_ref" "$source_repository" "$git_sha" "$target" "$proof"
+      outcome=reused
+      log_info "Reused $target -> $digest_ref (original producer retained)"
+    elif [[ "$lookup_rc" != 3 ]]; then
+      exit 1
+    fi
   fi
-
-  json_items+=("    {\n      \"target\": \"${target}\",\n      \"tag\": \"${full_tag}\",\n      \"digest\": \"${digest_ref}\"\n    }")
+  if [[ "$outcome" != reused ]]; then
+    metadata_file="${OUTPUT_FILE}.buildkit.json"
+    rm -f "$metadata_file"
+    rc=0
+    build_target "$target" "$full_tag" || rc=$?
+    if [[ "$SHOULD_PUSH" = false ]]; then
+      [[ "$rc" = 0 ]] || exit "$rc"
+      digest_ref=""
+    elif [[ "$protected" = true ]]; then
+      # A lost push response can be reconciled only from original BuildKit
+      # metadata and immutable registry readback. Never rebuild on ambiguity.
+      pushed=$(jq -er '."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' "$metadata_file")
+      digest_ref=$(publication_lookup "$full_tag")
+      [[ "$digest_ref" = "${full_tag%%:*}@${pushed}" ]] || { echo 'publication_readback_mismatch' >&2; exit 1; }
+      [[ "$rc" = 0 ]] || log_info 'Recovered completed push from retained BuildKit metadata'
+      if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+        echo "attest=true" >> "$GITHUB_OUTPUT"
+        echo "subject_name=${full_tag%%:*}" >> "$GITHUB_OUTPUT"
+        echo "subject_digest=$pushed" >> "$GITHUB_OUTPUT"
+      fi
+    else
+      [[ "$rc" = 0 ]] || exit "$rc"
+      digest_ref=$(resolve_digest_ref "$full_tag")
+    fi
+  fi
+  entry=$(jq -n --arg target "$target" --arg tag "$full_tag" --arg digest "$digest_ref" \
+    --arg source "$git_sha" --arg repo "$source_repository" --arg outcome "$outcome" \
+    '{target:$target,tag:$tag,digest:$digest,source_sha:$source,source_repository:$repo,outcome:$outcome}')
+  if [[ -s "$proof" ]]; then
+    entry=$(jq --slurpfile proof "$proof" '.publication=$proof[0]' <<< "$entry")
+  fi
+  jq --argjson entry "$entry" '.targets += [$entry]' "$pending" > "${pending}.tmp"
+  mv "${pending}.tmp" "$pending"
+  rm -f "$proof"
   built_targets+=("$target")
+  # A new protected image is not published evidence until the native action
+  # and the shared verifier finish. Consumers never receive the pending file.
+  if [[ "$protected" != true || "$outcome" = reused ]]; then
+    cp "$pending" "$OUTPUT_FILE"
+  fi
 done
 
-json_body=""
-if [ ${#json_items[@]} -gt 0 ]; then
-  json_body=$(printf '%b' "$(IFS=$',\n'; echo "${json_items[*]}")")
+# New publications await the native action before a verified fragment exists.
+if [[ ! -f "$OUTPUT_FILE" ]]; then
+  log_info "Image read back; native publication proof is pending"
+  exit 0
 fi
-
-cat > "$OUTPUT_FILE" <<EOF
-{
-  "image_name": "${IMAGE_NAME_APP}",
-  "image_name_migrator": "${IMAGE_NAME_MIGRATOR}",
-  "image_tag": "${IMAGE_TAG}",
-  "platform": "${PLATFORM}",
-  "targets": [
-${json_body}
-  ]
-}
-EOF
 
 built_targets_csv=$(IFS=,; echo "${built_targets[*]}")
 
@@ -220,7 +299,7 @@ fi
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
-    echo "## Built PR Images"
+    echo "## PR Image Publications"
     echo ""
     echo "- App package: \`${IMAGE_NAME_APP}\`"
     echo "- Migrator package: \`${IMAGE_NAME_MIGRATOR}\`"
