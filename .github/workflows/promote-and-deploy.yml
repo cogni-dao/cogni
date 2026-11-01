@@ -52,6 +52,7 @@ permissions:
   contents: write
   packages: read
   actions: read
+  attestations: read
 
 # Per-(env, nodes) lane (bug.5022). The operator-API prod-promote path dispatches
 # one node per run (github-repo-write.ts: `nodes: input.slug`), so an env-only group
@@ -403,10 +404,54 @@ jobs:
           token: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
           path: preview-src
 
+      - name: Prepare per-node deploy branch (bootstrap from umbrella if missing)
+        id: destination
+        env:
+          GH_TOKEN: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
+          NODE: ${{ matrix.node }}
+          OVERLAY_ENV: ${{ needs.decide.outputs.environment }}
+          PER_NODE_BRANCH: deploy/${{ needs.decide.outputs.environment }}-${{ matrix.node }}
+          UMBRELLA_BRANCH: deploy/${{ needs.decide.outputs.environment }}
+          SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
+          SOURCE_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" deploy-branch
+          cd deploy-branch
+          git fetch origin "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
+          if git rev-parse --verify --quiet "refs/remotes/origin/${PER_NODE_BRANCH}" >/dev/null; then
+            git checkout -B "${PER_NODE_BRANCH}" "origin/${PER_NODE_BRANCH}"
+            . ../ci-src/scripts/ci/lib/overlay-digest.sh
+            established=$(destination_app_is_established "$OVERLAY_ENV" "$NODE")
+            echo "established=$established" >> "$GITHUB_OUTPUT"
+          elif git rev-parse --verify --quiet "refs/remotes/origin/${UMBRELLA_BRANCH}" >/dev/null; then
+            echo "::warning::Per-node branch ${PER_NODE_BRANCH} missing — bootstrapping from ${UMBRELLA_BRANCH}"
+            git checkout -B "${PER_NODE_BRANCH}" "origin/${UMBRELLA_BRANCH}"
+            . ../ci-src/scripts/ci/lib/overlay-digest.sh
+            established=$(destination_app_is_established "$OVERLAY_ENV" "$NODE")
+            echo "established=$established" >> "$GITHUB_OUTPUT"
+          else
+            # A fleet may have no legacy umbrella branch at all (the isolated test fleet is
+            # intentionally born per-node). The reviewed main tree is the correct first seed;
+            # the next step replaces deploy state from app-src before anything is pushed.
+            echo "::warning::Neither ${PER_NODE_BRANCH} nor ${UMBRELLA_BRANCH} exists — bootstrapping the new lane from main"
+            git checkout -B "${PER_NODE_BRANCH}" origin/main
+            echo 'established=false' >> "$GITHUB_OUTPUT"
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
       - name: Resolve digest for this node
         id: digest
         env:
           NODE: ${{ matrix.node }}
+          GH_TOKEN: ${{ github.token }}
+          OVERLAY_ENV: ${{ needs.decide.outputs.environment }}
+          DESTINATION_ESTABLISHED: ${{ steps.destination.outputs.established }}
+          SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
+          SOURCE_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
+          PRESERVE_APP: ${{ inputs.skip_infra != 'true' && (inputs.deploy_infra_mode || 'full') == 'full' }}
+          COGNI_CATALOG_ROOT: ${{ github.workspace }}/app-src/infra/catalog
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
           BUILD_SHA: ${{ needs.decide.outputs.build_sha }}
           PREVIEW_FORWARD: ${{ fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node] }}
@@ -430,8 +475,36 @@ jobs:
         run: |
           set -euo pipefail
           # shellcheck source=scripts/ci/lib/image-tags.sh
-          . app-src/scripts/ci/lib/image-tags.sh
-          if [ "$DEPLOYMENT_PROVIDER" = "akash" ]; then
+          . ci-src/scripts/ci/lib/image-tags.sh
+          . ci-src/scripts/ci/lib/publication-proof.sh
+          . ci-src/scripts/ci/lib/overlay-digest.sh
+          # Destination checkout and its maintenance fence precede all artifact
+          # selection. No rsync/shared-role/materializer/image writer ran yet.
+          if is_remote_source_artifact_target "$NODE" || [ "$PREVIEW_FORWARD" = true ]; then
+            REQUESTED_SOURCE=$(resolve_remote_source_sha "$NODE" "$NODE_SOURCE_SHA" "$OPERATOR_SOURCE_SHA" "$CATALOG_SOURCE_SHA" "$PREVIEW_FORWARD" "$PREVIEW_SOURCE_SHA_MAP")
+          else
+            REQUESTED_SOURCE="$BUILD_SHA"
+          fi
+          (cd deploy-branch; SOURCE_SHA="$REQUESTED_SOURCE" python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .)
+          if [ "$PRESERVE_APP" = true ]; then
+            [ "$DESTINATION_ESTABLISHED" = true ] || { echo 'accepted_app_missing' >&2; exit 1; }
+            (cd deploy-branch; assert_infra_source_current "$REQUESTED_SOURCE" "$NODE")
+          fi
+          ACCEPTED=""
+          ACCEPTED_IMAGE_REPOSITORY="$(image_name_for_target "$NODE")"
+          if is_remote_source_artifact_target "$NODE"; then
+            ACCEPTED_IMAGE_REPOSITORY=$(yq -r '.image_repository' "app-src/infra/catalog/$NODE.yaml")
+          fi
+          if [ "$DESTINATION_ESTABLISHED" = true ] && [ "$DEPLOYMENT_PROVIDER" = k3s ]; then
+            ACCEPTED=$(cd deploy-branch; read_accepted_app "$OVERLAY_ENV" "$NODE" "$ACCEPTED_IMAGE_REPOSITORY" "$SOURCE_REPOSITORY")
+          fi
+          if [ -n "$ACCEPTED" ] && [ "$(jq -r .source_sha <<< "$ACCEPTED")" = "$REQUESTED_SOURCE" ]; then
+            DIGEST=$(jq -r .digest <<< "$ACCEPTED")
+            APP_SOURCE_SHA="$REQUESTED_SOURCE"
+            echo 'Reusing destination-accepted artifact without tag/proof lookup'
+          elif [ "$PRESERVE_APP" = true ] && [ "$DEPLOYMENT_PROVIDER" = k3s ]; then
+            echo 'stale_infra_source' >&2; exit 1
+          elif [ "$DEPLOYMENT_PROVIDER" = "akash" ]; then
             if is_remote_source_artifact_target "$NODE" || [ "$PREVIEW_FORWARD" = "true" ]; then
               APP_SOURCE_SHA=$(resolve_remote_source_sha "$NODE" "$NODE_SOURCE_SHA" "$OPERATOR_SOURCE_SHA" "$CATALOG_SOURCE_SHA" "$PREVIEW_FORWARD" "$PREVIEW_SOURCE_SHA_MAP")
             else
@@ -441,26 +514,9 @@ jobs:
             # not a kustomization image pin. The materializer below resolves it.
             DIGEST=""
           elif [ "$PREVIEW_FORWARD" = "true" ]; then
-            # Reuse the existing per-overlay digest resolver (battle-tested);
-            # it emits digests_json={...} for ALL_TARGETS, then we index by NODE.
-            PREVIEW_OVERLAY_ROOT="${{ github.workspace }}/preview-src/infra/k8s/overlays/preview"
-            export PREVIEW_OVERLAY_ROOT
-            DIGESTS_JSON=$(bash app-src/scripts/ci/resolve-digests-from-preview.sh \
-              | grep '^digests_json=' | head -1 | sed 's/^digests_json=//')
-            if [ -z "$DIGESTS_JSON" ]; then
-              echo "::error::preview-forward: resolve-digests-from-preview emitted no digests_json"
-              exit 1
-            fi
-            DIGEST=$(printf '%s' "$DIGESTS_JSON" | jq -r --arg k "$NODE" '.[$k] // ""')
-            if [ -z "$DIGEST" ]; then
-              echo "::error::preview-forward: no digest for $NODE in deploy/preview-$NODE"
-              exit 1
-            fi
-            APP_SOURCE_SHA=$(jq -r --arg k "$NODE" '.[$k] // ""' "${{ github.workspace }}/preview-src/.promote-state/source-sha-by-app.json")
-            if [ -z "$APP_SOURCE_SHA" ]; then
-              echo "::error::preview-forward: no source_sha for $NODE in preview map"
-              exit 1
-            fi
+            PREVIEW_ACCEPTED=$(cd preview-src; read_accepted_app preview "$NODE" "$ACCEPTED_IMAGE_REPOSITORY" "$SOURCE_REPOSITORY")
+            DIGEST=$(jq -r .digest <<< "$PREVIEW_ACCEPTED")
+            APP_SOURCE_SHA=$(jq -r .source_sha <<< "$PREVIEW_ACCEPTED")
           elif is_remote_source_artifact_target "$NODE"; then
             catalog="app-src/infra/catalog/${NODE}.yaml"
             image_repository="$(yq -N '.image_repository // ""' "$catalog")"
@@ -470,17 +526,10 @@ jobs:
             fi
             APP_SOURCE_SHA=$(resolve_remote_source_sha "$NODE" "$NODE_SOURCE_SHA" "$OPERATOR_SOURCE_SHA" "$CATALOG_SOURCE_SHA" "$PREVIEW_FORWARD" "$PREVIEW_SOURCE_SHA_MAP")
             full_tag="${image_repository}:sha-${APP_SOURCE_SHA}"
-            digest_only=$(docker buildx imagetools inspect "$full_tag" --raw 2>/dev/null \
-              | python3 -c "import json,sys; print(json.load(sys.stdin).get('digest',''))" 2>/dev/null || true)
-            if [ -z "$digest_only" ]; then
-              digest_only=$(docker buildx imagetools inspect "$full_tag" 2>/dev/null \
-                | grep -oP 'Digest:\s+\Ksha256:[a-f0-9]+' | head -1 || true)
+            DIGEST=$(publication_lookup "$full_tag")
+            if publication_is_operator_coordinate "$DIGEST"; then
+              publication_verify "$DIGEST" "$SOURCE_REPOSITORY" "$APP_SOURCE_SHA" "$NODE" "$RUNNER_TEMP/publication-$NODE.json"
             fi
-            if [ -z "$digest_only" ]; then
-              echo "::error::remote-source artifact image not found: $full_tag"
-              exit 1
-            fi
-            DIGEST="${full_tag%%:*}@${digest_only}"
           else
             # In-repo artifact (operator, scheduler-worker): ONE identity —
             # `<image>:sha-<sourceSha>{suffix}` (SOURCE_SHA_IS_DEPLOY_IDENTITY).
@@ -488,58 +537,24 @@ jobs:
             # asserts — so the tag-sha, the recorded source_sha, and /version.buildSha
             # are the same value. (Was the legacy preview-{sha} re-tag, now purged.)
             full_tag=$(image_tag_for_target "$(image_name_for_target "$NODE")" "sha-${BUILD_SHA}" "$NODE")
-            digest_only=$(docker buildx imagetools inspect "$full_tag" --raw 2>/dev/null \
-              | python3 -c "import json,sys; print(json.load(sys.stdin).get('digest',''))" 2>/dev/null || true)
-            if [ -z "$digest_only" ]; then
-              digest_only=$(docker buildx imagetools inspect "$full_tag" 2>/dev/null \
-                | grep -oP 'Digest:\s+\Ksha256:[a-f0-9]+' | head -1 || true)
-            fi
-            if [ -z "$digest_only" ]; then
-              if [ "$(missing_image_action "$EXPLICIT_TARGETS")" = "fail" ]; then
-                echo "::error::Image not found: $full_tag — $NODE was named by the caller, so skipping it would report SUCCESS for a promote that did nothing (bug.5248). A catalog/GitOps-only merge builds no app image; promote a sha whose image exists."
-                exit 1
+            lookup_rc=0
+            DIGEST=$(publication_lookup "$full_tag") || lookup_rc=$?
+            if [ "$lookup_rc" != 0 ]; then
+              if [ "$lookup_rc" != 3 ] || [ "$(missing_image_action "$EXPLICIT_TARGETS")" = fail ]; then
+                echo "::error::Image not found or unresolved: $full_tag"; exit 1
               fi
-              echo "::warning::Image not found: $full_tag (fleet fan-out, $NODE not rebuilt — skipping)"
-              echo "digest=" >> "$GITHUB_OUTPUT"
-              echo "promoted=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::Image not found: $full_tag (fleet fan-out, skipping)"
+              echo 'promoted=false' >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            DIGEST="${full_tag%%:*}@${digest_only}"
+            if publication_is_operator_coordinate "$DIGEST"; then
+              publication_verify "$DIGEST" "$SOURCE_REPOSITORY" "$BUILD_SHA" "$NODE" "$RUNNER_TEMP/publication-$NODE.json"
+            fi
             APP_SOURCE_SHA="$BUILD_SHA"
           fi
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
           echo "source_sha=$APP_SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "promoted=true" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare per-node deploy branch (bootstrap from umbrella if missing)
-        if: steps.digest.outputs.promoted == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
-          PER_NODE_BRANCH: deploy/${{ needs.decide.outputs.environment }}-${{ matrix.node }}
-          UMBRELLA_BRANCH: deploy/${{ needs.decide.outputs.environment }}
-          SOURCE_REPOSITORY: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
-          SOURCE_SHA: ${{ steps.digest.outputs.source_sha }}
-          SOURCE_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
-        run: |
-          set -euo pipefail
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" deploy-branch
-          cd deploy-branch
-          git fetch origin "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
-          if git rev-parse --verify --quiet "refs/remotes/origin/${PER_NODE_BRANCH}" >/dev/null; then
-            git checkout -B "${PER_NODE_BRANCH}" "origin/${PER_NODE_BRANCH}"
-          elif git rev-parse --verify --quiet "refs/remotes/origin/${UMBRELLA_BRANCH}" >/dev/null; then
-            echo "::warning::Per-node branch ${PER_NODE_BRANCH} missing — bootstrapping from ${UMBRELLA_BRANCH}"
-            git checkout -B "${PER_NODE_BRANCH}" "origin/${UMBRELLA_BRANCH}"
-          else
-            # A fleet may have no legacy umbrella branch at all (the isolated test fleet is
-            # intentionally born per-node). The reviewed main tree is the correct first seed;
-            # the next step replaces deploy state from app-src before anything is pushed.
-            echo "::warning::Neither ${PER_NODE_BRANCH} nor ${UMBRELLA_BRANCH} exists — bootstrapping the new lane from main"
-            git checkout -B "${PER_NODE_BRANCH}" origin/main
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          python3 ../ci-src/scripts/ci/lib/maintenance-fence.py check .
 
       - name: Materialize provider-neutral external workload
         if: steps.digest.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER == 'akash'

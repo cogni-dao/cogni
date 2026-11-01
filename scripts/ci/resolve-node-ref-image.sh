@@ -16,10 +16,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib/image-tags.sh
 . "$SCRIPT_DIR/lib/image-tags.sh"
+. "$SCRIPT_DIR/lib/publication-proof.sh"
 
 NODE=${NODE:-}
 SOURCE_SHA=${SOURCE_SHA:-}
 OUTPUT_FILE=${OUTPUT_FILE:-${RUNNER_TEMP:-/tmp}/resolved-node-ref-image.json}
+rm -f "$OUTPUT_FILE"
 
 if [ -z "$NODE" ]; then
   echo "[ERROR] NODE is required" >&2
@@ -61,14 +63,19 @@ else
   # In-repo node — its deployable is the parent app image at sha-<sourceSha>.
   source_repo=""
   image_repository="$(image_name_for_target "$NODE")"
-  tag="$(image_tag_for_target "$image_repository" "sha-${SOURCE_SHA}" "$NODE")"
+  if is_infra_target "$NODE"; then
+    tag=$(infra_image_tag "$NODE")
+  else
+    tag="$(image_tag_for_target "$image_repository" "sha-${SOURCE_SHA}" "$NODE")"
+  fi
 fi
-digest="$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"' || true)"
-if [ -z "$digest" ] || [ "$digest" = "null" ]; then
-  echo "[ERROR] remote-source artifact image not found: ${tag}" >&2
-  exit 1
+digest_ref=$(publication_lookup "$tag") || { echo "[ERROR] artifact image unresolved: $tag" >&2; exit 1; }
+proof=$(mktemp)
+trap 'rm -f "$proof"' EXIT
+if publication_is_operator_coordinate "$digest_ref" && ! is_infra_target "$NODE"; then
+  actual_repository="${source_repo:-${SOURCE_REPOSITORY:-${GITHUB_REPOSITORY:-cogni-dao/cogni}}}"
+  publication_verify "$digest_ref" "$actual_repository" "$SOURCE_SHA" "$NODE" "$proof"
 fi
-digest_ref="${tag%%:*}@${digest}"
 
 mkdir -p "$(dirname "$OUTPUT_FILE")"
 cat > "$OUTPUT_FILE" <<EOF
@@ -89,6 +96,11 @@ cat > "$OUTPUT_FILE" <<EOF
   ]
 }
 EOF
+
+if [[ -s "$proof" ]]; then
+  jq --slurpfile proof "$proof" '.targets[0].publication=$proof[0]' "$OUTPUT_FILE" > "${OUTPUT_FILE}.tmp"
+  mv "${OUTPUT_FILE}.tmp" "$OUTPUT_FILE"
+fi
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   {
