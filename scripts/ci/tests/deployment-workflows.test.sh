@@ -329,6 +329,11 @@ if args[:2] == ['attestation', 'verify']:
     emit([{'attestation':{'bundle':{'fixture':'original-signed-bundle'}}, 'verificationResult':{'signature':{'certificate':cert}, 'statement':{'subject':[subject], 'predicate':{'runDetails':{'metadata':{'invocationId':invocation}}}}}}]); sys.exit(0)
 if args[0] != 'api': fail('unexpected gh call')
 endpoint = args[1]
+if '/git/commits/' in endpoint:
+    revision = endpoint.rsplit('/', 1)[1]
+    data = subprocess.check_output(['git', '-C', str(root), 'show', '-s', '--format=%P', revision]).decode().split()
+    if os.environ.get('DEFECT') == 'execution-parents': data = []
+    emit({'sha':revision, 'parents':[{'sha':p} for p in data]}); sys.exit(0)
 if '/commits/' in endpoint:
     if os.environ.get('DEFECT') == 'unauthorized-repository': fail('commit not authorized in requested repository')
     emit({'sha':os.environ['FIXTURE_SOURCE']}); sys.exit(0)
@@ -341,12 +346,13 @@ if '/contents/' in endpoint:
         # Distinct native workflow and application checkout identities. Route
         # validation makes an incorrectly conflated implementation fail.
         workflow_path = path == '.github/workflows/pr-build.yml'
-        expected_revision = legacy_definition if workflow_path else os.environ['FIXTURE_SOURCE']
+        expected_revision = os.environ.get('LEGACY_EXECUTION', legacy_definition) if workflow_path else os.environ['FIXTURE_SOURCE']
         assert revision == expected_revision, (path, revision, expected_revision)
-        data = subprocess.check_output(['git', '-C', os.environ['FIXTURE_GIT'], 'show', legacy_definition + ':' + path])
+        history = str(root) if os.environ.get('LEGACY_EXECUTION') else os.environ['FIXTURE_GIT']
+        data = subprocess.check_output(['git', '-C', history, 'show', revision + ':' + path])
         if os.environ.get('DEFECT') == 'legacy-helper' and path == 'scripts/ci/lib/image-tags.sh': data += b'\n# unqualified helper\n'
     else:
-        history = os.environ['FIXTURE_GIT'] if revision == '29e194ab8b068b2c7bb3eb48803c8083f811ad84' else str(root)
+        history = os.environ['FIXTURE_GIT'] if revision in ('29e194ab8b068b2c7bb3eb48803c8083f811ad84', '02a72ff131b43f32e6d4a3292621c14d28c6f84c') else str(root)
         data = subprocess.check_output(['git', '-C', history, 'show', revision + ':' + path])
     if os.environ.get('DEFECT') == 'signer' and '.github/workflows' in path: data = b'foreign workflow'
     import hashlib
@@ -363,9 +369,33 @@ if '/actions/artifacts' in endpoint:
     else: emit({'artifacts':[]})
     sys.exit(0)
 if '/actions/runs/' in endpoint:
-    if '/jobs?' in endpoint: emit({'total_count':1,'jobs':[{'id':43,'name':'build (operator)','conclusion':'success'}]})
-    else: emit({'path':'.github/workflows/pr-build.yml','conclusion':os.environ.get('ORIGINAL_CONCLUSION', 'success') if '/attempts/' in endpoint else 'failure','head_sha':'f66aae9ee44fc74bda9e12623eb4c862c524e1d8' if os.environ.get('LEGACY') == '1' else os.environ['FIXTURE_SOURCE'],'run_attempt':int(os.environ.get('ORIGINAL_ATTEMPT', '1')) if '/attempts/' in endpoint else 2,'id':int(endpoint.split('/actions/runs/')[1].split('/')[0]),'event': 'push' if os.environ.get('DEFECT') == 'wrong-actual-repository' else 'workflow_dispatch'})
+    if '/jobs?' in endpoint:
+        jobs = [{'id':43,'name':'build (operator)','conclusion':'success'}]
+        if os.environ.get('LEGACY_EVENT') == 'pull_request' and os.environ.get('DEFECT') != 'missing-execution':
+            steps = [{'number':1,'name':'Set up job','conclusion':'success'},
+                     {'number':2,'name':'Run actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955','conclusion':'success'}]
+            jobs.append({'id':44,'name':'env-manager-fast-path','conclusion':'success','run_id':41163851879,'run_attempt':1,'steps':steps})
+        emit({'total_count':len(jobs),'jobs':jobs})
+    else:
+        legacy = os.environ.get('LEGACY') == '1'
+        head = os.environ['FIXTURE_SOURCE'] if os.environ.get('LEGACY_EVENT') == 'pull_request' or not legacy else 'f66aae9ee44fc74bda9e12623eb4c862c524e1d8'
+        event = os.environ.get('LEGACY_EVENT', 'push' if os.environ.get('DEFECT') == 'wrong-actual-repository' else 'workflow_dispatch')
+        emit({'path':'.github/workflows/pr-build.yml','conclusion':os.environ.get('ORIGINAL_CONCLUSION', 'success') if '/attempts/' in endpoint else 'failure',
+              'head_sha':head,'run_attempt':int(os.environ.get('ORIGINAL_ATTEMPT', '1')) if '/attempts/' in endpoint else 2,
+              'id':int(endpoint.split('/actions/runs/')[1].split('/')[0]),'event':event,
+              'pull_requests':[{'base':{'sha':'f66aae9ee44fc74bda9e12623eb4c862c524e1d8'},'head':{'sha':head}}]})
     sys.exit(0)
+if '/actions/jobs/44/logs' in endpoint:
+    action = 'actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955'
+    header = ['Complete job name: env-manager-fast-path','##[group]Run ' + action,'with:','  fetch-depth: 0','  repository: cogni-dao/cogni','env:','  IMAGE_NAME: ghcr.io/cogni-dao/cogni-template','##[endgroup]']
+    defect = os.environ.get('DEFECT')
+    if defect == 'execution-ref': header.insert(4, '  ref: ' + os.environ['FIXTURE_SOURCE'])
+    if defect == 'execution-shell': header.insert(3, 'shell: /usr/bin/bash -e {0}')
+    body = ['[command]/usr/bin/git log -1 --format=%H',os.environ['LEGACY_EXECUTION']]
+    if defect == 'execution-unresolved': body = []
+    if defect == 'execution-duplicate': body += body
+    if defect == 'execution-late-text': body = ['##[group]Run echo untrusted'] + body
+    print('\n'.join(header + body)); sys.exit(0)
 if '/actions/jobs/' in endpoint:
     print('repository: cogni-dao/cogni\nref: ' + os.environ['FIXTURE_SOURCE'] + '\n'); sys.exit(0)
 fail('unexpected gh endpoint ' + endpoint)
@@ -530,7 +560,44 @@ bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh"
 jq -e '.targets[0].publication.producer.run_attempt == "1"' "$OUTPUT_FILE" >/dev/null
 grep -q 'actions/runs/41163851879/attempts/1/jobs' "$pub/calls"
 echo '[PASS] legacy original attempt survives later failure; wrong/failed original attempts refuse'
-unset LEGACY
+# Real immutable Git objects distinguish PR application S from executed M.
+# S deliberately has a BAD workflow; only M carries the frozen workflow.
+git -C "$REPO_ROOT" fetch -q --no-tags "$FIXTURE_GIT" "$accepted_source" f66aae9ee44fc74bda9e12623eb4c862c524e1d8
+GIT_INDEX_FILE="$pub/legacy-index" git -C "$REPO_ROOT" read-tree "$accepted_source"
+printf 'unqualified workflow\n' > "$pub/legacy-bad-workflow"
+bad_workflow=$(git -C "$REPO_ROOT" hash-object -w "$pub/legacy-bad-workflow")
+GIT_INDEX_FILE="$pub/legacy-index" git -C "$REPO_ROOT" update-index --cacheinfo "100644,$bad_workflow,.github/workflows/pr-build.yml"
+source_tree=$(GIT_INDEX_FILE="$pub/legacy-index" git -C "$REPO_ROOT" write-tree)
+pr_source=$(printf 'legacy PR application fixture\n' | git -C "$REPO_ROOT" commit-tree "$source_tree" -p "$accepted_source")
+base=f66aae9ee44fc74bda9e12623eb4c862c524e1d8
+merge=$(printf 'retained PR merge execution\n' | git -C "$REPO_ROOT" commit-tree "$base^{tree}" -p "$base" -p "$pr_source")
+export LEGACY_EVENT=pull_request LEGACY_EXECUTION="$merge" FIXTURE_SOURCE="$pr_source" SOURCE_SHA="$pr_source"
+jq --arg s "$pr_source" '.head_sha=$s | .targets[0].tag="ghcr.io/cogni-dao/cogni-template:sha-"+$s' "$mq" > "$pub/pr-legacy-manifest.json"
+export LEGACY_MANIFEST="$pub/pr-legacy-manifest.json"
+jq --arg s "$pr_source" '.config.Labels["org.opencontainers.image.revision"]=$s' "$pub/config.json" > "$pub/pr-config.json"
+mv "$pub/pr-config.json" "$pub/config.json"
+bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh"
+jq -e --arg m "$merge" '.targets[0].publication.producer | .revision == $m and .run_attempt == "1"' "$OUTPUT_FILE" >/dev/null
+for defect in missing-execution execution-parents execution-ref execution-shell execution-unresolved execution-duplicate execution-late-text; do
+  if DEFECT="$defect" bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh" > "$pub/$defect.log" 2>&1; then
+    echo "[FAIL] accepted PR $defect"; exit 1
+  fi
+  [[ ! -e "$OUTPUT_FILE" ]]
+  grep -Eq 'publication_legacy_execution_(unresolved|contradiction)' "$pub/$defect.log"
+done
+# Inverse: frozen S cannot bless changed actual M.
+export FIXTURE_SOURCE="$accepted_source" SOURCE_SHA="$accepted_source" LEGACY_MANIFEST="$mq"
+bad_merge=$(printf 'bad actual execution\n' | git -C "$REPO_ROOT" commit-tree "$source_tree" -p "$base" -p "$accepted_source")
+export LEGACY_EXECUTION="$bad_merge"
+jq --arg s "$accepted_source" '.config.Labels["org.opencontainers.image.revision"]=$s' "$pub/config.json" > "$pub/pr-config.json"
+mv "$pub/pr-config.json" "$pub/config.json"
+if bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh" > "$pub/bad-execution.log" 2>&1; then
+  echo '[FAIL] frozen source blessed bad actual workflow'; exit 1
+fi
+grep -q publication_legacy_definition_mismatch "$pub/bad-execution.log"
+[[ ! -e "$OUTPUT_FILE" ]]
+unset LEGACY_EVENT LEGACY_EXECUTION LEGACY
+echo '[PASS] legacy PR merge execution and app source stay separate; missing/contradictory/late/free-text identity refuses'
 # A genuine unmodified sovereign publication needs no new operator attestation
 # entitlement or fields. The actual reader retains its existing catalog contract.
 mkdir -p "$pub/sovereign/infra/catalog"
@@ -643,6 +710,14 @@ promotion_discovery() {
     PREVIEW_SOURCE_SHA_MAP='' OVERLAY_ENV=production EXPLICIT_TARGETS=operator \
     RUNNER_TEMP="$pub" GITHUB_OUTPUT="$pub/trust-promotion.out" bash "$work/digest.sh")
 }
+# The immediately preceding qualified native producer remains reusable after
+# this legacy-only reader correction, separately from the older R1 anchor.
+set_signer 02a72ff131b43f32e6d4a3292621c14d28c6f84c
+for mode in api oci retained; do
+  NATIVE_MODE="$mode" OUTPUT_FILE="$pub/previous-$mode.json" bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh"
+  jq -e '.targets[0].publication.producer.revision == "02a72ff131b43f32e6d4a3292621c14d28c6f84c"' "$pub/previous-$mode.json" >/dev/null
+done
+echo '[PASS] preceding qualified 02a72 native producer survives legacy-only correction across API/OCI/bundle'
 set_signer "$r1"
 for mode in api oci retained; do
   export NATIVE_MODE="$mode"

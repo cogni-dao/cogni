@@ -170,6 +170,15 @@ retained_native_blobs = {
     'scripts/ci/lib/publication-proof.sh': '57e31dc98dfb81f139d4bb4cb9a6261f6a0922b0',
     'scripts/ci/lib/image-tags.sh': 'e50000359244f0d52024acbf4265897c9ae67b8c',
 }
+# R54 qualified the complete 02a72 original native publication path. Its sole
+# Spec blocker is the legacy reader repaired below, not native nomination.
+# Preserve those already published originals as this reader's bytes evolve.
+previous_native_blobs = {
+    workflow: 'bad3a08547715d47c5808d6ca65984b6ca910a75',
+    'scripts/ci/build-and-push-images.sh': '3a2b343a4e1cb611b39a7935a1f4311ac85a7420',
+    'scripts/ci/lib/publication-proof.sh': 'ecab36a3d7c205207b5bdfbfe720def48d1b6cd2',
+    'scripts/ci/lib/image-tags.sh': 'e50000359244f0d52024acbf4265897c9ae67b8c',
+}
 def git_blob(data):
     return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
 def trusted_current_closure():
@@ -199,8 +208,79 @@ def qualify_producer_closure(revision):
     # Recompute authenticated content hashes; do not trust a response's claimed
     # blob id alone. Every transport calls this before source labels mean proof.
     actual = {path: git_blob(remote_blob(repo, revision, path)) for path in retained_native_blobs}
-    if actual != current_native_blobs and actual != retained_native_blobs:
+    if actual != current_native_blobs and actual != retained_native_blobs and actual != previous_native_blobs:
         raise RuntimeError('publication_signer_implementation_mismatch')
+def legacy_workflow_revision(original, jobs, run_id, attempt):
+    # REST head_sha is the PR app head, NOT the merge execution revision.
+    # Only these original event families execute the REST head itself.
+    event = original.get('event')
+    if event in ('push', 'merge_group', 'workflow_dispatch'):
+        revision = original.get('head_sha', '')
+        if not re.fullmatch('[a-f0-9]{40}', revision):
+            raise SystemExit('publication_legacy_execution_unresolved')
+        return revision
+    if event != 'pull_request':
+        raise SystemExit('publication_legacy_execution_unresolved')
+    # The frozen workflow's first classifier action has NO ref override. The
+    # pinned checkout therefore reads the native event merge SHA. Authenticate
+    # the original attempt/job and its FIRST runner-issued action header before
+    # reading checkout output. Later script output or a named shell step cannot
+    # supply this identity. Never consult today's mutable refs/pull/N/merge.
+    witnesses = [j for j in jobs['jobs'] if j['name'] == 'env-manager-fast-path' and j['conclusion'] == 'success']
+    if len(witnesses) != 1:
+        raise SystemExit('publication_legacy_execution_unresolved')
+    job = witnesses[0]
+    checkout = 'actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955'
+    steps = job.get('steps', [])
+    if (str(job.get('run_id')) != run_id or str(job.get('run_attempt')) != attempt or len(steps) < 2
+            or [(x.get('number'), x.get('name'), x.get('conclusion')) for x in steps[:2]] !=
+               [(1, 'Set up job', 'success'), (2, 'Run ' + checkout, 'success')]):
+        raise SystemExit('publication_legacy_execution_unresolved')
+    logs = run(['gh', 'api', f'repos/{repo}/actions/jobs/{job["id"]}/logs']).decode('utf-8-sig')
+    lines = [re.sub(r'^\d{4}-\d\d-\d\dT[0-9:.]+Z ', '', line) for line in logs.splitlines()]
+    marker = 'Complete job name: env-manager-fast-path'
+    if lines.count(marker) != 1:
+        raise SystemExit('publication_legacy_execution_unresolved')
+    start = lines.index(marker) + 1
+    header = lines[start:]
+    if not header or header[0] != '##[group]Run ' + checkout or '##[endgroup]' not in header:
+        raise SystemExit('publication_legacy_execution_unresolved')
+    end = header.index('##[endgroup]')
+    inputs = header[1:end]
+    # These are the actual runner inputs, before the action executes. A ref,
+    # alternate server, shell, custom action env, or ambiguous input refuses.
+    allowed = {'fetch-depth', 'repository', 'token', 'ssh-strict', 'ssh-user', 'persist-credentials',
+               'clean', 'sparse-checkout-cone-mode', 'fetch-tags', 'show-progress', 'lfs',
+               'submodules', 'set-safe-directory', 'IMAGE_NAME', 'FLEET_CONTROL_ENV'}
+    values = {}
+    for line in inputs:
+        if line in ('with:', 'env:'):
+            continue
+        m = re.fullmatch(r'  ([A-Za-z_][A-Za-z0-9_-]*): (.*)', line)
+        if not m or m[1] not in allowed or m[1] in values:
+            raise SystemExit('publication_legacy_execution_unresolved')
+        values[m[1]] = m[2]
+    if values.get('repository') != repo or values.get('fetch-depth') != '0':
+        raise SystemExit('publication_legacy_execution_unresolved')
+    body = header[end + 1:]
+    # Stop BEFORE the next user step or post action. The pinned first action
+    # owns the single git log result, not an arbitrary match in whole-job text.
+    boundary = next((i for i, line in enumerate(body) if line.startswith('##[group]Run ') or line == 'Post job cleanup.'), len(body))
+    body = body[:boundary]
+    positions = [i for i, line in enumerate(body) if line == '[command]/usr/bin/git log -1 --format=%H']
+    if len(positions) != 1 or positions[0] + 1 >= len(body):
+        raise SystemExit('publication_legacy_execution_unresolved')
+    revision = body[positions[0] + 1]
+    if not re.fullmatch('[a-f0-9]{40}', revision):
+        raise SystemExit('publication_legacy_execution_unresolved')
+    prs = original.get('pull_requests', [])
+    if len(prs) != 1 or prs[0].get('head', {}).get('sha') != original.get('head_sha'):
+        raise SystemExit('publication_legacy_execution_unresolved')
+    commit = api(f'repos/{repo}/git/commits/{revision}')
+    if (commit.get('sha') != revision or [p.get('sha') for p in commit.get('parents', [])] !=
+            [prs[0].get('base', {}).get('sha'), original['head_sha']]):
+        raise SystemExit('publication_legacy_execution_contradiction')
+    return revision
 def inspect(expression):
     return json.loads(run(['docker', 'buildx', 'imagetools', 'inspect', ref, '--format', expression]))
 config = inspect('{{json .Image}}')
@@ -354,12 +434,16 @@ else:
                     or str(manifest.get('workflow', {}).get('run_id')) != run_id
                     or str(original.get('run_attempt')) != attempt):
                 raise SystemExit('publication_legacy_run_mismatch')
+            jobs = api(f'repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100')
+            if jobs['total_count'] > 100:
+                raise SystemExit('publication_legacy_job_bound')
+            workflow_revision = legacy_workflow_revision(original, jobs, run_id, attempt)
             # Legacy workflow executes at its own native run identity; builder,
             # sourced helper and unsigned aggregation execute at app checkout.
             # Check each file where it actually ran, never require app helpers
             # at a possibly different workflow revision (or vice versa).
             for path, trusted in legacy_blobs.items():
-                owner, revision = (repo, original['head_sha']) if path == workflow else (source_repo, source_sha)
+                owner, revision = (repo, workflow_revision) if path == workflow else (source_repo, source_sha)
                 if git_blob(remote_blob(owner, revision, path)) != trusted:
                     raise SystemExit('publication_legacy_definition_mismatch')
             entries = [x for x in manifest['targets'] if x['target'] == target]
@@ -368,9 +452,6 @@ else:
             expected_tag = image + ':sha-' + source_sha + (declaration.get('image_tag_suffix') or '')
             if len(entries) != 1 or entries[0]['digest'] != ref or entries[0]['tag'] != expected_tag:
                 raise SystemExit('publication_legacy_subject_mismatch')
-            jobs = api(f'repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100')
-            if jobs['total_count'] > 100:
-                raise SystemExit('publication_legacy_job_bound')
             producers = [j for j in jobs['jobs'] if j['name'] == f'build ({target})' and j['conclusion'] == 'success']
             if len(producers) != 1:
                 raise SystemExit('publication_legacy_producer_ambiguous')
@@ -379,7 +460,7 @@ else:
                 raise SystemExit('publication_legacy_checkout_unproven')
             evidence = {'kind': 'legacy-v1', 'source_repository': source_repo, 'source_sha': source_sha,
                         'target': target, 'platform': 'linux/amd64', 'artifact_id': a['id'],
-                        'producer': {'repository': repo, 'workflow': workflow, 'revision': r['head_sha'],
+                        'producer': {'repository': repo, 'workflow': workflow, 'revision': workflow_revision,
                                      'run_id': run_id, 'run_attempt': attempt}}
             break
         if evidence or len(artifacts) < 100:

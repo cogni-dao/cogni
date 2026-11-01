@@ -114,8 +114,20 @@ describe("candidate-a manifest source", () => {
     );
     expect(proof).toContain("'scripts/ci/merge-build-fragments.sh':");
     expect(proof).toContain(
-      "(repo, original['head_sha']) if path == workflow else (source_repo, source_sha)"
+      "(repo, workflow_revision) if path == workflow else (source_repo, source_sha)"
     );
+    expect(proof).toContain(
+      "workflow_revision = legacy_workflow_revision(original, jobs, run_id, attempt)"
+    );
+    expect(proof).toContain(
+      "event in ('push', 'merge_group', 'workflow_dispatch')"
+    );
+    expect(proof).toContain("publication_legacy_execution_contradiction");
+    expect(proof).toContain("and actual != previous_native_blobs");
+    expect(proof).toContain("(2, 'Run ' + checkout, 'success')");
+    expect(
+      proof.indexOf("workflow_revision = legacy_workflow_revision")
+    ).toBeLessThan(proof.indexOf("for path, trusted in legacy_blobs.items()"));
     expect(proof.indexOf("qualify_producer_closure(signer)")).toBeLessThan(
       proof.indexOf("actual_repo = labels.get")
     );
