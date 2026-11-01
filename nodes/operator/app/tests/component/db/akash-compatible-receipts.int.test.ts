@@ -113,9 +113,22 @@ describe("compatible receipts: real PostgreSQL", () => {
 
   const waitForRelationWait = async (tx: Tx) => {
     for (let attempt = 0; attempt < 100; attempt++) {
+      // Backend membership is cached within this DDL transaction. Clear it in a
+      // separate statement so a newly opened app connection appears in the poll.
+      await tx.execute(sql`select pg_stat_clear_snapshot()`);
       const [row] = await tx.execute<{ waiting: boolean }>(sql`
-        select exists(select 1 from pg_stat_activity where
-          application_name='compatible-receipts-test' and wait_event_type='Lock') as waiting`);
+        select exists (
+          select 1 from pg_stat_activity as activity
+          join pg_locks as lock on lock.pid = activity.pid
+          where activity.application_name = 'compatible-receipts-test'
+            and activity.datname = current_database()
+            and lock.database = (select oid from pg_database where datname = current_database())
+            and lock.locktype = 'relation'
+            and lock.relation = 'public.akash_tx_allocations'::regclass
+            and lock.mode = 'RowExclusiveLock'
+            and not lock.granted
+            and pg_backend_pid() = any(pg_blocking_pids(activity.pid))
+        ) as waiting`);
       if (row?.waiting) return;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
@@ -127,39 +140,51 @@ describe("compatible receipts: real PostgreSQL", () => {
     "remove",
   ] as const)("selects committed stage after %s DDL lock contention", async (stage) => {
     if (stage === "remove") await installGuard();
-    let operation!: Promise<boolean>;
-    await ddl.transaction(async (tx) => {
-      if (stage === "install") await installGuard(tx);
-      else
-        await tx.execute(
-          sql`drop trigger akash_receipt_writer_guard on public.akash_tx_allocations`
-        );
-      operation = receiptTransaction(
-        app,
-        async (locked, guarded) => {
-          const [context] = await locked.execute<{ writer: string }>(
-            sql`select current_setting('cogni.receipt_writer', true) as writer`
+    let operation!: Promise<
+      { value: boolean; error?: never } | { value?: never; error: unknown }
+    >;
+    try {
+      await ddl.transaction(async (tx) => {
+        if (stage === "install") await installGuard(tx);
+        else
+          await tx.execute(
+            sql`drop trigger akash_receipt_writer_guard on public.akash_tx_allocations`
           );
-          expect(context?.writer).toBe(guarded ? RECEIPT_CONTEXT : "");
-          await locked.insert(akashTxAllocations).values({
-            walletScope: WALLET,
-            cogniKey: "ddl-wait",
-            nodeId: identity.nodeId,
-            compositeUid: identity.compositeUid,
-            compositeGeneration: 3,
-            workload: "fixture",
-            environment: "candidate-a",
-            state: "preparing",
-            allocationNoEffectVerified: guarded ? true : null,
-          });
-          return guarded;
-        },
-        Date.now() + 5000
-      );
-      // Observe the actual PostgreSQL lock wait, not just a JavaScript pause.
-      await waitForRelationWait(tx);
-    });
-    expect(await operation).toBe(stage === "install");
+        operation = receiptTransaction(
+          app,
+          async (locked, guarded) => {
+            const [context] = await locked.execute<{ writer: string }>(
+              sql`select current_setting('cogni.receipt_writer', true) as writer`
+            );
+            expect(context?.writer).toBe(guarded ? RECEIPT_CONTEXT : "");
+            await locked.insert(akashTxAllocations).values({
+              walletScope: WALLET,
+              cogniKey: "ddl-wait",
+              nodeId: identity.nodeId,
+              compositeUid: identity.compositeUid,
+              compositeGeneration: 3,
+              workload: "fixture",
+              environment: "candidate-a",
+              state: "preparing",
+              allocationNoEffectVerified: guarded ? true : null,
+            });
+            return guarded;
+          },
+          Date.now() + 5000
+        ).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error })
+        );
+        // Observe the actual PostgreSQL lock wait, not just a JavaScript pause.
+        await waitForRelationWait(tx);
+      });
+    } finally {
+      // The DDL transaction has committed or rolled back before draining the writer.
+      await operation;
+    }
+    const result = await operation;
+    if ("error" in result) throw result.error;
+    expect(result.value).toBe(stage === "install");
     expect(
       (await guardedLedger.read({ cogniKey: "ddl-wait" }))
         ?.allocationNoEffectVerified
