@@ -84,6 +84,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import {
   AkashComputeAdapter,
+  AkashNativeStateReader,
   DrizzleAkashTxAllocationLedger,
   DrizzleComputeCostStore,
   DrizzleDatabaseCellBindingStore,
@@ -98,7 +99,6 @@ import {
   safeReadyzProbe,
   safeVersionProbe,
 } from "@/adapters/server";
-import { AkashNativeStateReader } from "@/adapters/server/compute/akash-native-state.adapter";
 import {
   checkConsoleBalance,
   classifyConsoleBalance,

@@ -27,10 +27,24 @@ END`;
 
 export async function receiptTransaction<T>(
   db: Database,
-  run: (tx: Tx, guarded: boolean) => Promise<T>
+  run: (tx: Tx, guarded: boolean) => Promise<T>,
+  deadlineAt?: number
 ): Promise<T> {
   return db.transaction(
     async (tx) => {
+      const checkDeadline = () => {
+        if (deadlineAt && Date.now() >= deadlineAt)
+          throw new Error("receipt operation deadline exceeded");
+      };
+      checkDeadline();
+      if (deadlineAt) {
+        const milliseconds = String(
+          Math.max(1, Math.min(2000, deadlineAt - Date.now()))
+        );
+        await tx.execute(
+          sql`select set_config('statement_timeout', ${milliseconds}, true), set_config('lock_timeout', ${milliseconds}, true)`
+        );
+      }
       // Held until commit. CREATE TRIGGER's conflicting lock cannot straddle the read/CAS.
       await tx.execute(
         sql`lock table public.akash_tx_allocations in row exclusive mode`
@@ -83,7 +97,10 @@ export async function receiptTransaction<T>(
       await tx.execute(
         sql`select set_config('cogni.receipt_writer', ${guard ? RECEIPT_CONTEXT : ""}, true)`
       );
-      return run(tx, Boolean(guard));
+      checkDeadline();
+      const result = await run(tx, Boolean(guard));
+      checkDeadline();
+      return result;
     },
     { isolationLevel: "repeatable read" }
   );

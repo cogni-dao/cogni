@@ -1785,7 +1785,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           if (!candidate) break;
           try {
             // Scheduling CAS is the actual start. Queued/expired rows do not rotate.
-            const original = await startRead(candidate);
+            const original = await startRead(candidate, deadlineAt);
             if (!original.externalName || Date.now() >= deadlineAt) continue;
             const evidence = await native.readOwnClosed({
               dseq: original.externalName,

@@ -568,7 +568,8 @@ export interface AkashTxStaleAllocation {
 export interface AkashTxAllocationLedgerPort {
   listClosureCandidates?(): Promise<readonly AkashTxAllocationRecord[]>;
   startClosureRead?(
-    expected: AkashTxAllocationRecord
+    expected: AkashTxAllocationRecord,
+    deadlineAt: number
   ): Promise<AkashTxAllocationRecord>;
   certifyNativeClosed?(input: {
     expected: AkashTxAllocationRecord;

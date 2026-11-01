@@ -422,7 +422,11 @@ export class DrizzleAkashTxAllocationLedger
   }
 
   private async change(
-    input: { cogniKey: string; expected?: AkashTxAllocationRecord },
+    input: {
+      cogniKey: string;
+      expected?: AkashTxAllocationRecord;
+      deadlineAt?: number;
+    },
     values: (
       record: AkashTxAllocationRecord,
       guarded: boolean,
@@ -444,26 +448,30 @@ export class DrizzleAkashTxAllocationLedger
         >
   ): Promise<AkashTxAllocationRecord> {
     const db = await this.getDb();
-    return receiptTransaction(db, async (tx, guarded) => {
-      const [row] = await tx
-        .select(RECEIPT_SELECTION)
-        .from(akashTxAllocations)
-        .where(receiptFence(this.walletScope, input.cogniKey, input.expected))
-        .for("update")
-        .limit(1);
-      if (!row) throw new Error("receipt custody changed");
-      const record = allocationRecord(row);
-      const changes = await values(record, guarded, tx);
-      if (changes === null) return record;
-      const [updated] = await tx
-        .update(akashTxAllocations)
-        .set({ ...changes, updatedAt: advanceReceiptVersion })
-        .where(receiptFence(this.walletScope, input.cogniKey, input.expected))
-        .returning(RECEIPT_SELECTION);
-      if (!updated)
-        throw new Error("receipt custody CAS returned no successor");
-      return allocationRecord(updated);
-    });
+    return receiptTransaction(
+      db,
+      async (tx, guarded) => {
+        const [row] = await tx
+          .select(RECEIPT_SELECTION)
+          .from(akashTxAllocations)
+          .where(receiptFence(this.walletScope, input.cogniKey, input.expected))
+          .for("update")
+          .limit(1);
+        if (!row) throw new Error("receipt custody changed");
+        const record = allocationRecord(row);
+        const changes = await values(record, guarded, tx);
+        if (changes === null) return record;
+        const [updated] = await tx
+          .update(akashTxAllocations)
+          .set({ ...changes, updatedAt: advanceReceiptVersion })
+          .where(receiptFence(this.walletScope, input.cogniKey, input.expected))
+          .returning(RECEIPT_SELECTION);
+        if (!updated)
+          throw new Error("receipt custody CAS returned no successor");
+        return allocationRecord(updated);
+      },
+      input.deadlineAt
+    );
   }
 
   async prepare(input: {
@@ -637,10 +645,11 @@ export class DrizzleAkashTxAllocationLedger
   }
 
   async startClosureRead(
-    expected: AkashTxAllocationRecord
+    expected: AkashTxAllocationRecord,
+    deadlineAt: number
   ): Promise<AkashTxAllocationRecord> {
     return this.change(
-      { cogniKey: expected.cogniKey, expected },
+      { cogniKey: expected.cogniKey, expected, deadlineAt },
       (record, guarded) => {
         if (
           !guarded ||
@@ -662,7 +671,11 @@ export class DrizzleAkashTxAllocationLedger
     deadlineAt: number;
   }): Promise<AkashTxAllocationRecord> {
     return this.change(
-      { cogniKey: input.expected.cogniKey, expected: input.expected },
+      {
+        cogniKey: input.expected.cogniKey,
+        expected: input.expected,
+        deadlineAt: input.deadlineAt,
+      },
       (record, guarded) => {
         if (
           !guarded ||

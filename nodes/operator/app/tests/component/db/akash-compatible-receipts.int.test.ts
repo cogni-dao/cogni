@@ -233,7 +233,10 @@ describe("compatible receipts: real PostgreSQL", () => {
       cogniKey: bound.cogniKey,
       expected: bound,
     });
-    const started = await guardedLedger.startClosureRead(released);
+    const started = await guardedLedger.startClosureRead(
+      released,
+      Date.now() + 30_000
+    );
     const certified = await guardedLedger.certifyNativeClosed({
       expected: started,
       owner: coverage().owner,
@@ -505,7 +508,13 @@ describe("compatible receipts: real PostgreSQL", () => {
     const [first, second] = await guardedLedger.listClosureCandidates();
     if (!first || !second) throw new Error("qualification fixtures missing");
     expect(first.state).toBe("allocated");
-    await guardedLedger.startClosureRead(first);
+    await expect(
+      guardedLedger.startClosureRead(first, Date.now() - 1)
+    ).rejects.toThrow(/deadline/);
+    expect(
+      (await guardedLedger.read({ cogniKey: first.cogniKey }))?.custody
+    ).toEqual(first.custody);
+    await guardedLedger.startClosureRead(first, Date.now() + 30_000);
     expect((await guardedLedger.listClosureCandidates())[0]?.receiptId).toBe(
       second.receiptId
     );
