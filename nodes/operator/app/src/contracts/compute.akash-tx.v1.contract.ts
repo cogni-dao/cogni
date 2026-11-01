@@ -10,6 +10,9 @@
  * Invariants:
  *   - SERVER_OWNS_THE_TRANSACTION: callers supply a logical spec and a `cogniKey`; escrow,
  *     bids, providers, SDL and dseq never appear on this wire.
+ *   - DESIRED_IS_OBSERVATION_ONLY: optional desired identity/spec bind a private complete
+ *     declared-image comparison. Evidence names its subject/time with fixed reasons only;
+ *     it adds no action authority and contains no SDL, env, spec or configuration hash.
  *   - STRICT_INPUT: every object is strict — an unexpected key is a 400, never a silent drop
  *     of a field the caller believed was honoured.
  *   - KEY_IS_REQUIRED_ON_EVERY_MUTATION: there is no anonymous create.
@@ -216,33 +219,60 @@ export const AkashTxCompositeVerdictSchema = z.strictObject({
  * why the release-side migration step rides here and not on create/update — asking a question
  * about a database can never be a reason not to rent a computer.
  */
-export const AkashTxObserveInputSchema = z.strictObject({
-  cogniKey: CogniKeySchema,
-  externalName: ExternalNameSchema.optional(),
-  expectedSourceSha: SourceShaSchema.optional(),
-  /**
-   * The workload's public hostname. When present, the serving probe must prove the exact
-   * SHA through the provider's host-routed path too — the bare lease ingress alone cannot
-   * see a stale deployment still owning the hostname (bug.5237).
-   */
-  publicHost: z.string().min(1).max(253).optional(),
-  migration: AkashTxMigrationStepSchema.optional(),
-  /**
-   * WHOSE database the attached migration step belongs to. Required in practice whenever
-   * `migration` is sent — the actuator refuses to infer either from `cogniKey` or from its own
-   * deployment, because inferring them is how "which environment's DB?" became a payment-plane
-   * question in the first place. Optional on the schema so an observe WITHOUT a migration stays
-   * byte-identical to the pre-task.5135 wire.
-   */
-  workload: ServiceNameSchema.optional(),
-  environment: EnvironmentSchema.optional(),
-  /**
-   * What the COMPOSITE decided last tick, stated by the composite itself (bug.5416). Optional
-   * so an observe from a composition that does not send it stays byte-identical to the
-   * pre-bug.5416 wire — which is the whole reason this reader ships BEFORE the sender does.
-   */
-  composite: AkashTxCompositeVerdictSchema.optional(),
-});
+export const AkashTxObserveInputSchema = z
+  .strictObject({
+    cogniKey: CogniKeySchema,
+    externalName: ExternalNameSchema.optional(),
+    expectedSourceSha: SourceShaSchema.optional(),
+    /**
+     * The workload's public hostname. When present, the serving probe must prove the exact
+     * SHA through the provider's host-routed path too — the bare lease ingress alone cannot
+     * see a stale deployment still owning the hostname (bug.5237).
+     */
+    publicHost: z.string().min(1).max(253).optional(),
+    migration: AkashTxMigrationStepSchema.optional(),
+    /**
+     * WHOSE database the attached migration step belongs to. Required in practice whenever
+     * `migration` is sent — the actuator refuses to infer either from `cogniKey` or from its own
+     * deployment, because inferring them is how "which environment's DB?" became a payment-plane
+     * question in the first place. Optional on the schema so an observe WITHOUT a migration stays
+     * byte-identical to the pre-task.5135 wire.
+     */
+    workload: ServiceNameSchema.optional(),
+    environment: EnvironmentSchema.optional(),
+    /**
+     * What the COMPOSITE decided last tick, stated by the composite itself (bug.5416). Optional
+     * so an observe from a composition that does not send it stays byte-identical to the
+     * pre-bug.5416 wire — which is the whole reason this reader ships BEFORE the sender does.
+     */
+    composite: AkashTxCompositeVerdictSchema.optional(),
+    /** Private comparison input only. Its presence grants no transaction authority. */
+    desired: z
+      .strictObject({
+        identity: AkashTxIdentitySchema,
+        spec: AkashTxSpecSchema,
+      })
+      .optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (!input.desired) return;
+    if (
+      !input.environment ||
+      !input.expectedSourceSha ||
+      (input.workload !== undefined &&
+        input.workload !== input.desired.spec.name) ||
+      input.desired.spec.services.some(
+        (service) =>
+          service.env?.COGNI_REPO_SHA !== undefined &&
+          service.env.COGNI_REPO_SHA !== input.expectedSourceSha
+      )
+    )
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "desired observation requires consistent environment, workload and source",
+      });
+  });
 
 export const AkashTxCreateInputSchema = z.strictObject({
   cogniKey: CogniKeySchema,
@@ -336,11 +366,31 @@ export const AkashTxResourceSchema = z.strictObject({
   providerAccount: z.string().optional(),
 });
 
+/** Fixed, nonsecret private image evidence. No definition, env or spec can enter it. */
+export const AkashTxDeclaredServiceImagesSchema = z.strictObject({
+  result: z.enum(["matched", "mismatched", "unknown"]),
+  observedAt: z.string().datetime(),
+  subject: AkashTxIdentitySchema.extend({
+    environment: EnvironmentSchema,
+    cogniKey: CogniKeySchema,
+    externalName: ExternalNameSchema,
+    expectedSourceSha: SourceShaSchema,
+  }),
+  reason: z.enum([
+    "service_images_match",
+    "service_images_differ",
+    "desired_images_invalid",
+    "managed_definition_invalid",
+    "managed_definition_unavailable",
+  ]),
+});
+
 export const AkashTxObserveOutputSchema = z.strictObject({
   found: z.boolean(),
   resource: AkashTxResourceSchema.optional(),
   serving: z.boolean().optional(),
   recovered: z.boolean().optional(),
+  declaredServiceImages: AkashTxDeclaredServiceImagesSchema.optional(),
   /**
    * Outcome of the release-side migration step for this digest, when the caller asked for one.
    * REPORTED, never enforced: the composite turns a `failed` phase into a named status reason,

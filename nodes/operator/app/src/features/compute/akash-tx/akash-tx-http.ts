@@ -206,6 +206,14 @@ function toObserveInput(parsed: AkashTxObserveInput) {
       : {}),
     ...(parsed.workload ? { workload: parsed.workload } : {}),
     ...(parsed.environment ? { environment: parsed.environment } : {}),
+    ...(parsed.desired
+      ? {
+          desired: {
+            identity: parsed.desired.identity,
+            spec: toSpec(parsed.desired.spec),
+          },
+        }
+      : {}),
     ...(parsed.composite
       ? {
           composite: {

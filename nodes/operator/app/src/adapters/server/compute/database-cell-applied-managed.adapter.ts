@@ -12,8 +12,6 @@
  */
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
-import { parse } from "yaml";
-import { z } from "zod";
 import type {
   AkashTxAllocationLedgerPort,
   AkashTxConsolePort,
@@ -25,6 +23,8 @@ import type {
   DatabaseCellAppliedRegistrationFacts as Facts,
 } from "@/types/database-cell";
 
+import { parseManagedServiceImages } from "./akash-managed-definition";
+
 type ManagedObservation = Pick<Facts, "provider"> & {
   readonly providerEndpoint: { readonly host: string; readonly port: number };
   readonly effectiveApp: Omit<
@@ -32,9 +32,6 @@ type ManagedObservation = Pick<Facts, "provider"> & {
     "runtimeAdoption" | "regions" | "readinessReceiptSha256"
   >;
 };
-const Definition = z.object({
-  services: z.record(z.string(), z.object({ image: z.string() })),
-});
 const imageDigest = (image: string) => {
   const digest = image.match(/@(?<digest>sha256:[0-9a-f]{64})$/)?.groups
     ?.digest;
@@ -129,12 +126,10 @@ export async function observeAppliedCellManaged(input: {
     ].some((count) => count !== 1)
   )
     throw new Error("applied_managed_primary_replica_identity_mismatch");
-  const appServices = Definition.parse(
-    parse(appDefinition.providerSdl)
-  ).services;
+  const appServices = parseManagedServiceImages(appDefinition.providerSdl);
   const appService = appServices[packet.appServiceName];
   const primaryImages = Object.values(
-    Definition.parse(parse(primaryDefinition.providerSdl)).services
+    parseManagedServiceImages(primaryDefinition.providerSdl)
   ).map((service) => imageDigest(service.image));
   if (
     !appService ||

@@ -48,14 +48,17 @@ import type {
   ProvisionSpec,
   ProvisionState,
 } from "@cogni/ai-tools";
+import { nodeArtifactBundleArtifactSchema } from "@cogni/repo-spec";
 import type {
   AkashLeaseLogDescriptor,
   AkashTxAllocationPolicy,
   AkashTxManagedDeploymentDefinition,
+  AkashTxServiceImageComparison,
   ComputeCostEvidencePort,
   ComputeResourceCostEvidence,
 } from "@/ports";
 import { makeLogger } from "@/shared/observability";
+import { parseManagedServiceImages } from "./akash-managed-definition";
 import {
   type AkashProviderInfo,
   countrySourcesDisagree,
@@ -762,6 +765,81 @@ export class AkashComputeAdapter
       chainManifestVersion: chainVersion,
       services,
     };
+  }
+
+  /**
+   * Read the selected managed definition afresh, then compare complete named immutable
+   * images in memory. An error in this additional read is evidence unknown, never resource
+   * absence or a serving verdict. No raw definition/error enters the result or logs.
+   */
+  async compareDeclaredServiceImages(input: {
+    leaseId: string;
+    providerAccount?: string;
+    spec: ProvisionSpec;
+  }): Promise<AkashTxServiceImageComparison> {
+    const unknown = (
+      reason: AkashTxServiceImageComparison["reason"]
+    ): AkashTxServiceImageComparison => ({
+      result: "unknown",
+      observedAt: this.now().toISOString(),
+      reason,
+    });
+    const pinned = (image: string) =>
+      nodeArtifactBundleArtifactSchema.shape.image.safeParse(image).success;
+    const named = (name: string) =>
+      /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name) && name.length <= 63;
+    const desired = new Map(
+      input.spec.services.map(({ name, image }) => [name, image])
+    );
+    if (
+      desired.size === 0 ||
+      desired.size > 32 ||
+      desired.size !== input.spec.services.length ||
+      input.spec.services.some(
+        ({ name, image }) => !named(name) || !pinned(image)
+      )
+    )
+      return unknown("desired_images_invalid");
+    let definition: AkashTxManagedDeploymentDefinition;
+    try {
+      definition = await this.readManagedDefinition({ leaseId: input.leaseId });
+    } catch {
+      return unknown("managed_definition_unavailable");
+    }
+    try {
+      if (
+        !input.providerAccount ||
+        definition.providerAccount !== input.providerAccount
+      )
+        return unknown("managed_definition_invalid");
+      const services = Object.entries(
+        parseManagedServiceImages(definition.providerSdl)
+      );
+      const observed = new Map(
+        services.map(([name, service]) => [name, service.image])
+      );
+      const rolloutNames = new Set(definition.services.map(({ name }) => name));
+      if (
+        observed.size === 0 ||
+        observed.size > 32 ||
+        services.some(
+          ([name, service]) => !named(name) || !pinned(service.image)
+        ) ||
+        rolloutNames.size !== observed.size ||
+        [...observed.keys()].some((name) => !rolloutNames.has(name))
+      )
+        return unknown("managed_definition_invalid");
+      const matched =
+        desired.size === observed.size &&
+        [...desired].every(([name, image]) => observed.get(name) === image);
+      return {
+        result: matched ? "matched" : "mismatched",
+        observedAt: definition.observedAt,
+        reason: matched ? "service_images_match" : "service_images_differ",
+      };
+    } catch {
+      return unknown("managed_definition_invalid");
+    }
   }
 
   /** Exact chain-native cost evidence. No fiat conversion or payer inference occurs here. */

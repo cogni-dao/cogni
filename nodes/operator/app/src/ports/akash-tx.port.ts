@@ -205,9 +205,32 @@ export interface AkashTxResource {
   readonly providerAccount?: string;
 }
 
+/** Read-only declared image agreement; never full configuration or applied-runtime proof. */
+export interface AkashTxServiceImageComparison {
+  readonly result: "matched" | "mismatched" | "unknown";
+  readonly observedAt: string;
+  readonly reason:
+    | "service_images_match"
+    | "service_images_differ"
+    | "desired_images_invalid"
+    | "managed_definition_invalid"
+    | "managed_definition_unavailable";
+}
+
+export interface AkashTxDeclaredServiceImages
+  extends AkashTxServiceImageComparison {
+  readonly subject: AkashTxWorkloadIdentity & {
+    readonly environment: string;
+    readonly cogniKey: string;
+    readonly externalName: string;
+    readonly expectedSourceSha: string;
+  };
+}
+
 /** Result of a logical observe. `found: false` means "safe to create". */
 export interface AkashTxObservation {
   readonly found: boolean;
+  readonly declaredServiceImages?: AkashTxDeclaredServiceImages;
   readonly resource?: AkashTxResource;
   /**
    * Single bounded serving probe (exact source SHA + fixed `/readyz`) when the caller asked
@@ -277,6 +300,8 @@ export interface AkashTxActuatorPort {
      * observation, probe, migration or transaction may branch on it (bug.5416).
      */
     composite?: AkashTxCompositeVerdict;
+    /** Current desired revision; immutable ownership is checked before native/migration IO. */
+    desired?: { identity: AkashTxWorkloadIdentity; spec: ProvisionSpec };
   }): Promise<AkashTxObservation>;
   create(input: {
     cogniKey: string;
@@ -423,6 +448,12 @@ export interface AkashTxConsolePort {
   readManagedDefinition?(input: {
     leaseId: string;
   }): Promise<AkashTxManagedDeploymentDefinition>;
+  /** Read-only complete named immutable-image comparison using the guarded owned reader. */
+  compareDeclaredServiceImages?(input: {
+    leaseId: string;
+    providerAccount?: string;
+    spec: ProvisionSpec;
+  }): Promise<AkashTxServiceImageComparison>;
   /**
    * The screened country of a provider account, or `null` when the marketplace read did not
    * resolve one. Exists so the UPDATE path can tell whether the lease it is about to re-image

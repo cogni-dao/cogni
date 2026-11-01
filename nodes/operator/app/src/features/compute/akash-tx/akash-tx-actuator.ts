@@ -57,6 +57,10 @@
  *     escrow/handle but re-triggers a provider redeploy every time, so re-PUTting a byte-
  *     identical SDL thrashes a not-yet-serving node; the gate skips only that case and any real
  *     spec change still applies + records the new hash.
+ *   - DESIRED_OBSERVATION_IS_READ_ONLY: optional image evidence binds immutable node/XR/key/
+ *     handle ownership before any migration/provider IO, without rebinding the receipt's
+ *     original generation. Comparison failure is unknown; independent serving/resource truth
+ *     and the legacy action/recovery/migration behavior stay unchanged.
  *   - REFUSAL_IS_OBSERVABLE: every refusal emits a structured log line before it throws
  *     (bug.5115: a wallet block that only reached CR status was invisible for hours). The same
  *     rule now covers what observe ANSWERS, not only what it refuses: every observe states the
@@ -98,9 +102,11 @@ import {
   type AkashTxObservation,
   type AkashTxProviderOutcomesPort,
   type AkashTxResource,
+  type AkashTxServiceImageComparison,
   type AkashTxStaleAllocation,
   type AkashTxSweepReport,
   type AkashTxWorkloadIdentity,
+  type Clock,
   type ComputeCostEvidencePort,
   type ComputeCostStorePort,
   type NodeMigrationReportStorePort,
@@ -133,6 +139,8 @@ export type AkashTxServingProbe = (input: {
 }) => Promise<boolean>;
 
 export interface AkashTxActuatorDeps {
+  /** Observation time for unavailable optional comparison capabilities. */
+  readonly clock?: Clock;
   readonly console: AkashTxConsolePort;
   readonly ledger: AkashTxAllocationLedgerPort;
   readonly log: AkashTxLogger;
@@ -353,6 +361,7 @@ function costFailureType(error: unknown): string {
  * beyond its injected seams.
  */
 export class AkashTxActuator implements AkashTxActuatorPort {
+  private readonly clock: Clock;
   private readonly console: AkashTxConsolePort;
   private readonly ledger: AkashTxAllocationLedgerPort;
   private readonly log: AkashTxLogger;
@@ -372,6 +381,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private readonly bootOkRecorded = new Set<string>();
 
   constructor(deps: AkashTxActuatorDeps) {
+    this.clock = deps.clock ?? { now: () => new Date().toISOString() };
     this.console = deps.console;
     this.ledger = deps.ledger;
     this.log = deps.log ?? NOOP_LOGGER;
@@ -387,16 +397,51 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       this.appliedCellCustody = deps.appliedCellCustody;
   }
 
-  async observe(input: {
-    cogniKey: string;
-    externalName?: string;
-    expectedSourceSha?: string;
-    publicHost?: string;
-    migration?: AkashTxMigrationStep;
-    workload?: string;
-    environment?: string;
-    composite?: AkashTxCompositeVerdict;
-  }): Promise<AkashTxObservation> {
+  async observe(
+    input: Parameters<AkashTxActuatorPort["observe"]>[0]
+  ): Promise<AkashTxObservation> {
+    // Only the additive desired-input path changes ordering. Check stable receipt ownership
+    // BEFORE native reads, migration, probes or logs can disclose the allocated subject.
+    // The allocation generation is history; it must not bind this current observation.
+    let owned: AkashTxAllocationRecord | null = null;
+    if (input.desired) {
+      if (
+        !input.environment ||
+        !input.expectedSourceSha ||
+        (input.workload !== undefined &&
+          input.workload !== input.desired.spec.name) ||
+        input.desired.spec.services.some(
+          ({ env }) =>
+            env?.COGNI_REPO_SHA !== undefined &&
+            env.COGNI_REPO_SHA !== input.expectedSourceSha
+        )
+      )
+        throw new AkashTxError(
+          "invalid_request",
+          "desired observation requires consistent environment, workload and source"
+        );
+      owned = await this.readLedger(input.cogniKey);
+      if (
+        (!owned && input.externalName) ||
+        (owned &&
+          (owned.cogniKey !== input.cogniKey ||
+            identityDiffers(owned, input.desired.identity, input.environment) ||
+            (input.externalName !== undefined &&
+              owned.externalName !== input.externalName)))
+      ) {
+        this.log.warn(
+          { cogniKey: input.cogniKey, operation: "observe" },
+          "akash_tx_desired_observation_identity_conflict"
+        );
+        throw new AkashTxError(
+          "identity_conflict",
+          "desired observation does not own the allocated subject"
+        );
+      }
+      // An initial observation has no allocated subject to disclose or compare. The existing
+      // CREATE path still owns receipt creation; comparison never creates or binds one.
+      if (!owned) return { found: false };
+    }
     // THE VERDICT THE COMPOSITE ALREADY REACHED, stated before anything else can throw
     // (bug.5416). Ordered ahead of the release step on purpose: this reports the PREVIOUS
     // tick's decision, so it owes nothing to this tick's work and must survive a refusal.
@@ -417,12 +462,62 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     // upstream of this line logs how the step WENT; only this line logs what the RESPONSE
     // carries, which is the single value `composition.yaml` turns into `MigrationFailed`.
     this.logMigrationVerdict(input, migration);
-    const withMigration = (
+    const withEvidence = async (
       observation: AkashTxObservation
-    ): AkashTxObservation =>
-      migration
+    ): Promise<AkashTxObservation> => {
+      const result = migration
         ? { ...observation, migration: { phase: migration } }
         : observation;
+      if (
+        !input.desired ||
+        !input.environment ||
+        !input.expectedSourceSha ||
+        !observation.resource
+      )
+        return result;
+      let comparison: AkashTxServiceImageComparison;
+      try {
+        comparison = this.console.compareDeclaredServiceImages
+          ? await this.console.compareDeclaredServiceImages({
+              leaseId: observation.resource.externalName,
+              ...(owned?.providerAccount
+                ? { providerAccount: owned.providerAccount }
+                : {}),
+              spec: input.desired.spec,
+            })
+          : {
+              result: "unknown",
+              reason: "managed_definition_unavailable",
+              observedAt: this.clock.now(),
+            };
+      } catch {
+        comparison = {
+          result: "unknown",
+          reason: "managed_definition_unavailable",
+          observedAt: this.clock.now(),
+        };
+      }
+      const declaredServiceImages = {
+        ...comparison,
+        subject: {
+          ...input.desired.identity,
+          environment: input.environment,
+          cogniKey: input.cogniKey,
+          externalName: observation.resource.externalName,
+          expectedSourceSha: input.expectedSourceSha,
+        },
+      };
+      this.log.info(
+        {
+          ...declaredServiceImages.subject,
+          result: comparison.result,
+          reason: comparison.reason,
+          observedAt: comparison.observedAt,
+        },
+        "akash_tx_declared_service_images_observed"
+      );
+      return { ...result, declaredServiceImages };
+    };
 
     if (input.externalName) {
       const record = await this.requireStoredHandle(
@@ -435,7 +530,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         record.providerAccount,
         record
       );
-      return withMigration(
+      return withEvidence(
         await this.withServing(
           { found: true, resource },
           input.expectedSourceSha,
@@ -444,14 +539,14 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
     }
     const record = await this.readLedger(input.cogniKey);
-    if (!record) return withMigration({ found: false });
+    if (!record) return withEvidence({ found: false });
     if (record.externalName) {
       const resource = await this.describe(
         record.externalName,
         record.providerAccount,
         record
       );
-      return withMigration(
+      return withEvidence(
         await this.withServing(
           { found: true, resource },
           input.expectedSourceSha,
@@ -469,8 +564,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       // Null = the receipt was PROVEN not to be billing and has just settled itself.
       // Observe reports what is true — nothing exists — so the caller proceeds to create
       // rather than reading a 409 forever (bug.5192).
-      if (!resource) return withMigration({ found: false });
-      return withMigration(
+      if (!resource) return withEvidence({ found: false });
+      return withEvidence(
         await this.withServing(
           { found: true, resource, recovered: true },
           input.expectedSourceSha,
@@ -480,7 +575,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     }
     // preparing with no cursor: the cursor is durable BEFORE the POST, so its absence
     // proves no transaction was started. Safe to create.
-    return withMigration({ found: false });
+    return withEvidence({ found: false });
   }
 
   async create(input: {
