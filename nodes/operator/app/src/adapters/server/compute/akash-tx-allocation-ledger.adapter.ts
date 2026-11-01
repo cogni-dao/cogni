@@ -700,7 +700,31 @@ export class DrizzleAkashTxAllocationLedger
     providerAccount?: string;
     expected: AkashTxAllocationRecord;
   }): Promise<AkashTxAllocationRecord> {
+    return this.writeAllocation(input, "callback");
+  }
+
+  async adoptAllocation(input: {
+    cogniKey: string;
+    externalName: string;
+    expected: AkashTxAllocationRecord;
+  }): Promise<AkashTxAllocationRecord> {
+    return this.writeAllocation(input, "recovery");
+  }
+
+  private async writeAllocation(
+    input: {
+      cogniKey: string;
+      externalName: string;
+      providerAccount?: string;
+      expected: AkashTxAllocationRecord;
+    },
+    producer: "callback" | "recovery"
+  ): Promise<AkashTxAllocationRecord> {
     return this.change(input, (record, guarded) => {
+      if (guarded && producer === "recovery")
+        throw new Error(
+          "cursor recovery cannot attribute a late native CREATE; receipt custody held"
+        );
       if (
         !input.externalName ||
         (record.externalName && record.externalName !== input.externalName)

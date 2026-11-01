@@ -265,6 +265,14 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     return next;
   }
 
+  async adoptAllocation(input: {
+    cogniKey: string;
+    externalName: string;
+    expected: AkashTxAllocationRecord;
+  }) {
+    return this.recordAllocation(input);
+  }
+
   async recordAppliedSdlHash(input: { cogniKey: string; sdlHash: string }) {
     const row = this.rows.get(input.cogniKey);
     if (!row) throw new Error("unknown key");

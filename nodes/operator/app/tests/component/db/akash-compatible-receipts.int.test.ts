@@ -237,6 +237,13 @@ describe("compatible receipts: real PostgreSQL", () => {
       deadlineAt: Date.now() + 30_000,
     });
     expect(prepared.allocationNoEffectVerified).toBe(false);
+    await expect(
+      guardedLedger.adoptAllocation({
+        cogniKey: prepared.cogniKey,
+        externalName: "7999",
+        expected: prepared,
+      })
+    ).rejects.toThrow(/late native CREATE/);
     const allocated = await guardedLedger.recordAllocation({
       cogniKey: prepared.cogniKey,
       externalName: "8001",

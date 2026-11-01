@@ -1613,7 +1613,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     }
 
     const adopted = probe.output;
-    await this.ledger.recordAllocation({
+    await this.ledger.adoptAllocation({
       cogniKey,
       externalName: adopted.leaseId,
       expected: original,

@@ -642,6 +642,12 @@ export interface AkashTxAllocationLedgerPort {
     providerAccount?: string;
     expected: AkashTxAllocationRecord;
   }): Promise<AkashTxAllocationRecord>;
+  /** Cursor-only recovery cannot attribute a late legacy CREATE after native enforcement. */
+  adoptAllocation(input: {
+    cogniKey: string;
+    externalName: string;
+    expected: AkashTxAllocationRecord;
+  }): Promise<AkashTxAllocationRecord>;
   /**
    * Persist the sha256 of the SDL just PUT for this key, so the next in-place update can no-op a
    * byte-identical re-PUT (bug.5238). Called ONLY after `updateAllocated` succeeds — persisting
