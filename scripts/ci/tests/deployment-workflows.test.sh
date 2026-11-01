@@ -54,6 +54,7 @@ promote="$REPO_ROOT/.github/workflows/promote-and-deploy.yml"
 yq -r '.jobs.promote-k8s.steps[] | select(.name == "Record external workload source-sha") | .run' "$promote" > "$work/pin.sh"
 mkdir -p "$work/ci-src/scripts/ci" "$work/app-src/infra/catalog" "$work/deploy-branch/.promote-state"
 ln -s "$REPO_ROOT/scripts/ci/update-source-sha-map.sh" "$work/ci-src/scripts/ci/update-source-sha-map.sh"
+ln -s "$REPO_ROOT/scripts/ci/promote-k8s-image.sh" "$work/ci-src/scripts/ci/promote-k8s-image.sh"
 birth=1111111111111111111111111111111111111111
 prior=2222222222222222222222222222222222222222
 printf 'source_sha: %s\n' "$birth" > "$work/app-src/infra/catalog/poly.yaml"
@@ -313,6 +314,9 @@ if args[:2] == ['attestation', 'verify']:
     emit([{'attestation':{'bundle':{'fixture':'original-signed-bundle'}}, 'verificationResult':{'signature':{'certificate':cert}, 'statement':{'subject':[subject], 'predicate':{'runDetails':{'metadata':{'invocationId':invocation}}}}}}]); sys.exit(0)
 if args[0] != 'api': fail('unexpected gh call')
 endpoint = args[1]
+if '/commits/' in endpoint:
+    if os.environ.get('DEFECT') == 'unauthorized-repository': fail('commit not authorized in requested repository')
+    emit({'sha':os.environ['FIXTURE_SOURCE']}); sys.exit(0)
 if '/contents/' in endpoint:
     path = endpoint.split('/contents/',1)[1].split('?',1)[0]
     legacy = os.environ.get('LEGACY') == '1'
@@ -334,7 +338,7 @@ if '/actions/artifacts' in endpoint:
     sys.exit(0)
 if '/actions/runs/' in endpoint:
     if '/jobs?' in endpoint: emit({'total_count':1,'jobs':[{'id':43,'name':'build (operator)','conclusion':'success'}]})
-    else: emit({'path':'.github/workflows/pr-build.yml','conclusion':'success','head_sha':os.environ['FIXTURE_SOURCE'],'run_attempt':1})
+    else: emit({'path':'.github/workflows/pr-build.yml','conclusion':os.environ.get('ORIGINAL_CONCLUSION', 'success') if '/attempts/' in endpoint else 'failure','head_sha':os.environ['FIXTURE_SOURCE'],'run_attempt':int(os.environ.get('ORIGINAL_ATTEMPT', '1')) if '/attempts/' in endpoint else 2,'id':int(endpoint.split('/actions/runs/')[1].split('/')[0]),'event': 'push' if os.environ.get('DEFECT') == 'wrong-actual-repository' else 'workflow_dispatch'})
     sys.exit(0)
 if '/actions/jobs/' in endpoint:
     print('repository: cogni-dao/cogni\nref: ' + os.environ['FIXTURE_SOURCE'] + '\n'); sys.exit(0)
@@ -392,6 +396,41 @@ jq -e '.targets[0].publication.producer.run_id == "99001" and .targets[0].outcom
 [[ $(grep -c '^docker buildx build ' "$pub/calls") == 1 ]]
 echo '[PASS] actual aggregate-only rerun recovers expired fragments without rebuilding'
 
+# Trusted producer labels bind the actual checkout. The operation independently
+# authorizes the exact commit in its declared repository, including nodeRef with
+# no current PR. Repo equality must not confuse the workflow with the checkout.
+cp "$pub/config.json" "$pub/native-config.json"
+python3 - "$pub/config.json" <<'PYTHON'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); l=d['config']['Labels']
+l['io.cogni.publication.source']='contributor/cogni'
+l['org.opencontainers.image.source']='https://github.com/contributor/cogni'
+json.dump(d,open(p,'w'))
+PYTHON
+for reader in resolve-node-ref-image resolve-pr-build-images; do
+  NODE=operator SOURCE_SHA="$FIXTURE_SOURCE" SOURCE_REPOSITORY=cogni-dao/cogni NATIVE_MODE=api \
+    OUTPUT_FILE="$pub/foreign-$reader.json" bash "$REPO_ROOT/scripts/ci/$reader.sh"
+  jq -e '.targets[] | select(.target=="operator") | .publication.source_repository == "contributor/cogni"' "$pub/foreign-$reader.json" >/dev/null
+  if NODE=operator SOURCE_SHA="$FIXTURE_SOURCE" SOURCE_REPOSITORY=unapproved/repo NATIVE_MODE=api \
+      DEFECT=unauthorized-repository OUTPUT_FILE="$pub/foreign-refused.json" \
+      bash "$REPO_ROOT/scripts/ci/$reader.sh" > "$pub/foreign-refused.log" 2>&1; then
+    echo '[FAIL] operation accepted unauthorized source repository'; exit 1
+  fi
+  [[ ! -e "$pub/foreign-refused.json" ]]
+  if NODE=operator SOURCE_SHA="$FIXTURE_SOURCE" SOURCE_REPOSITORY=cogni-dao/cogni NATIVE_MODE=api \
+      DEFECT=wrong-actual-repository OUTPUT_FILE="$pub/foreign-refused.json" \
+      bash "$REPO_ROOT/scripts/ci/$reader.sh" > "$pub/wrong-actual.log" 2>&1; then
+    echo '[FAIL] foreign source without authenticated dispatch accepted'; exit 1
+  fi
+  [[ ! -e "$pub/foreign-refused.json" ]]
+done
+NATIVE_MODE=api SOURCE_REPOSITORY=contributor/cogni EXPECTED_TARGETS_JSON='["operator"]' HEAD_SHA="$FIXTURE_SOURCE" \
+  FRAGMENTS_DIR="$pub/foreign-expired" OUTPUT_FILE="$pub/foreign-recovered.json" \
+  bash "$REPO_ROOT/scripts/ci/merge-build-fragments.sh"
+jq -e '.targets[0].publication.source_repository == "contributor/cogni" and .targets[0].publication.producer.run_id == "99001"' "$pub/foreign-recovered.json" >/dev/null
+cp "$pub/native-config.json" "$pub/config.json"
+echo '[PASS] actual foreign checkout survives PR/nodeRef and aggregate recovery; unauthorized operation repo refuses'
+
 # Corrected proof failures must refuse the actual nodeRef and PR readers, with
 # no stale output. Total proof loss cannot trigger another build or tag write.
 export NATIVE_MODE=api SOURCE_SHA="$FIXTURE_SOURCE" NODE=operator
@@ -444,6 +483,24 @@ jq -e '.targets[0].publication.kind == "legacy-v1" and .targets[0].publication.p
 if DEFECT=missing-fields bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh" > "$pub/not-legacy.log" 2>&1; then
   echo '[FAIL] corrected producer without new fields downgraded to legacy'; exit 1
 fi
+for defect in wrong-attempt failed-original; do
+  if [[ "$defect" == wrong-attempt ]]; then
+    export ORIGINAL_ATTEMPT=2 ORIGINAL_CONCLUSION=success
+  else
+    export ORIGINAL_ATTEMPT=1 ORIGINAL_CONCLUSION=failure
+  fi
+  if bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh" > "$pub/$defect.log" 2>&1; then
+    echo "[FAIL] accepted legacy $defect"; exit 1
+  fi
+  [[ ! -e "$OUTPUT_FILE" ]]
+done
+unset ORIGINAL_ATTEMPT ORIGINAL_CONCLUSION
+# The mutable latest attempt is FAILED/2 in the fixture; the retained original
+# manifest and original attempt-specific job still select SUCCESS/1.
+bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh"
+jq -e '.targets[0].publication.producer.run_attempt == "1"' "$OUTPUT_FILE" >/dev/null
+grep -q 'actions/runs/41163851879/attempts/1/jobs' "$pub/calls"
+echo '[PASS] legacy original attempt survives later failure; wrong/failed original attempts refuse'
 unset LEGACY
 # A genuine unmodified sovereign publication needs no new operator attestation
 # entitlement or fields. The actual reader retains its existing catalog contract.
@@ -477,21 +534,62 @@ echo '[PASS] authentic legacy-v1 and unmodified sovereign contracts remain selec
 )
 echo '[PASS] native job-lock inputs serialize physical aliases, separate unrelated sources, and preserve content-hash infrastructure semantics'
 
-# Initial lane detection must distinguish a shared umbrella's generated shape
-# from malformed established acceptance. Parse errors do not become bootstrap.
-initial="$work/initial-umbrella"
-mkdir -p "$initial/infra/k8s/overlays/production/new" "$initial/.promote-state"
-printf '{"other":"%s"}\n' "$accepted_source" > "$initial/.promote-state/source-sha-by-app.json"
-printf 'images:\n  - name: ghcr.io/cogni-dao/cogni-template\n    newTag: prod-placeholder-new\n' > "$initial/infra/k8s/overlays/production/new/kustomization.yaml"
+# Exercise real native branch history, including provision 4c's preview digest
+# copy. A marker, commit message or placeholder alone is never proof.
+initial="$work/initial-lane"
+mkdir -p "$initial/infra/k8s/overlays/production/operator" "$initial/infra/k8s/overlays/preview/operator" "$initial/infra/catalog"
+cp "$REPO_ROOT/infra/catalog/operator.yaml" "$initial/infra/catalog/"
+printf 'images:\n  - name: ghcr.io/cogni-dao/cogni-template\n    newName: ghcr.io/cogni-dao/cogni-template\n    digest: "sha256:%064d"\n' 0 > "$initial/infra/k8s/overlays/production/operator/kustomization.yaml"
+printf 'images:\n  - name: ghcr.io/cogni-dao/cogni-template\n    newName: ghcr.io/cogni-dao/cogni-template\n    digest: "%s"\n' "${accepted_ref##*@}" > "$initial/infra/k8s/overlays/preview/operator/kustomization.yaml"
 (
   cd "$initial"
+  git init -q
+  git config user.name fixture
+  git config user.email fixture@example.test
+  git add .; git commit -qm source
+  git update-ref refs/remotes/origin/main HEAD
   . "$REPO_ROOT/scripts/ci/lib/overlay-digest.sh"
-  [[ $(umbrella_app_is_established production new) == false ]]
-  printf '{"new":"malformed"}\n' > .promote-state/source-sha-by-app.json
-  [[ $(umbrella_app_is_established production new) == true ]]
-  printf '{"new":"a","new":"b"}\n' > .promote-state/source-sha-by-app.json
-  if umbrella_app_is_established production new > "$work/duplicate-map.log" 2>&1; then
-    echo '[FAIL] duplicate acceptance became an initial lane'; exit 1
+  [[ $(destination_app_is_established production operator) == false ]]
+  # This is the exact existing phase-4c digest substitution, without acceptance.
+  sed -i.bak -E "s|(^[[:space:]]*digest:[[:space:]]*\").*(\")|\\1${accepted_ref##*@}\\2|" infra/k8s/overlays/production/operator/kustomization.yaml
+  rm infra/k8s/overlays/production/operator/kustomization.yaml.bak
+  mkdir .promote-state
+  printf '{"other":"%s"}\n' "$accepted_source" > .promote-state/source-sha-by-app.json
+  git add .; git commit -qm 'arbitrary text is not seed authority'
+  initial_established=$(destination_app_is_established production operator)
+  [[ "$initial_established" == false ]]
+  # The real digest step selects the qualified publication from this seed state.
+  cp "$pub/native-config.json" "$pub/config.json"
+  export FIXTURE_SOURCE=$(jq -r '.config.Labels["org.opencontainers.image.revision"]' "$pub/native-config.json")
+  native_ref=$(jq -r '.targets[0].digest' "$pub/retained.json")
+  export FIXTURE_DIGEST="${native_ref##*@}"
+  (cd "$lab"; NODE=operator COGNI_CATALOG_ROOT="$lab/app-src/infra/catalog" \
+    SOURCE_REPOSITORY=cogni-dao/cogni SOURCE_SHA="$FIXTURE_SOURCE" BUILD_SHA="$FIXTURE_SOURCE" \
+    NATIVE_MODE=api DEPLOYMENT_PROVIDER=k3s PREVIEW_FORWARD=false \
+    DESTINATION_ESTABLISHED="$initial_established" PRESERVE_APP=false \
+    OVERLAY_ENV=production EXPLICIT_TARGETS=operator RUNNER_TEMP="$pub" \
+    GITHUB_OUTPUT="$work/seed-promotion.out" bash "$work/digest.sh")
+  grep -qx "digest=ghcr.io/cogni-dao/cogni-template@$FIXTURE_DIGEST" "$work/seed-promotion.out"
+  # Full infra cannot use even a proven initial branch.
+  if (cd "$lab"; NODE=operator COGNI_CATALOG_ROOT="$lab/app-src/infra/catalog" \
+      SOURCE_REPOSITORY=cogni-dao/cogni BUILD_SHA="$accepted_source" \
+      DEPLOYMENT_PROVIDER=k3s PREVIEW_FORWARD=false DESTINATION_ESTABLISHED=false \
+      PRESERVE_APP=true OVERLAY_ENV=production GITHUB_OUTPUT="$work/seed-infra.out" \
+      bash "$work/digest.sh") > "$work/seed-infra.log" 2>&1; then
+    echo '[FAIL] uninitialized full infra replay accepted'; exit 1
+  fi
+  grep -q accepted_app_missing "$work/seed-infra.log"
+  NODE=operator OVERLAY_ENV=production DIGEST="$native_ref" SOURCE_SHA="$FIXTURE_SOURCE" bash "$lab/write.sh"
+  [[ $(yq -r '.images[0].digest' infra/k8s/overlays/production/operator/kustomization.yaml) == "$FIXTURE_DIGEST" ]]
+  [[ $(jq -r .operator .promote-state/source-sha-by-app.json) == "$FIXTURE_SOURCE" ]]
+  git add .; git commit -qm accepted
+  rm .promote-state/source-sha-by-app.json
+  git add -A; git commit -qm damaged
+  [[ $(destination_app_is_established production operator) == true ]]
+  # Truncated native history is never absence of acceptance.
+  git update-ref -d refs/remotes/origin/main
+  if destination_app_is_established production absent > "$work/seed-incomplete.log" 2>&1; then
+    echo '[FAIL] incomplete seed history bootstrapped'; exit 1
   fi
 )
-echo '[PASS] genuine initial umbrella shape remains promotable; malformed acceptance never bootstraps'
+echo '[PASS] provision digest seed is initial; damaged acceptance remains established; full infra and incomplete history refuse'

@@ -238,35 +238,103 @@ if source != requested:
 PY
 }
 
-# An umbrella may contain only a new node's generated placeholder shape. That
-# is initial state, not an accepted release. An existing per-node branch always
-# counts as established; callers use this only for legacy umbrella bootstrap.
-umbrella_app_is_established() {
-  local env="$1" app="$2" images='null'
-  local overlay="infra/k8s/overlays/$env/$app/kustomization.yaml"
-  if [[ -f "$overlay" ]]; then images=$(yq -o=json '.images' "$overlay") || return 1; fi
-  python3 - "$env" "$app" "$images" <<'PY'
-import json, pathlib, sys
-env, app, images = sys.argv[1:]
+# Branch existence is not acceptance: provision 4b.5 seeds source HEAD and
+# 4c mirrors one env-state commit, including preview digests, to every node.
+# Prove that history against a native source ref. Missing/truncated history or
+# any old target acceptance cannot become initial state after file damage.
+destination_app_is_established() {
+  python3 - "$1" "$2" <<'PYTHON'
+import json, pathlib, re, subprocess, sys
+env, app = sys.argv[1:]
+def git(*args):
+    return subprocess.check_output(['git', *args], stderr=subprocess.PIPE, timeout=30).decode()
 def unique(pairs):
     out = {}
     for k,v in pairs:
-        if k in out: raise ValueError('duplicate accepted source')
+        if k in out: raise ValueError('duplicate acceptance field')
         out[k] = v
     return out
-path = pathlib.Path('.promote-state/source-sha-by-app.json')
-if path.exists():
-    source = json.loads(path.read_text(), object_pairs_hook=unique)
-    if not isinstance(source, dict): raise SystemExit('accepted_map_invalid')
-    if app in source:
-        print('true'); raise SystemExit(0)
-values = json.loads(images)
-if values is not None:
-    if not isinstance(values, list): raise SystemExit('accepted_images_invalid')
-    prefix = {'production':'prod', 'preview':'preview', 'candidate-a':'candidate'}[env]
-    for image in values:
-        if image.get('digest') or image.get('newTag') != f'{prefix}-placeholder-{app}':
+def blob(rev, path):
+    # ls-tree distinguishes absence from a failed or incomplete object read.
+    row = git('ls-tree', rev, '--', path).strip()
+    if not row: return None
+    if not row.startswith('100644 blob '): raise ValueError('seed_file_invalid')
+    return git('show', rev + ':' + path)
+def accepted(rev):
+    value = blob(rev, '.promote-state/source-sha-by-app.json')
+    if value is None: return False
+    value = json.loads(value, object_pairs_hook=unique)
+    if not isinstance(value, dict): raise ValueError('accepted_map_invalid')
+    return app in value
+try:
+    if git('rev-parse', '--is-shallow-repository').strip() != 'false':
+        raise ValueError('seed_history_incomplete')
+    revisions = git('rev-list', '--first-parent', '--max-count=257', 'HEAD').splitlines()
+    seed = None
+    for index, rev in enumerate(revisions):
+        if accepted(rev):
             print('true'); raise SystemExit(0)
-print('false')
-PY
+        refs = git('for-each-ref', '--contains=' + rev, '--format=%(refname)', 'refs/remotes/origin/').splitlines()
+        if any(x != 'refs/remotes/origin/HEAD' and not x.startswith('refs/remotes/origin/deploy/') for x in refs):
+            # A source ref name cannot erase acceptance history. Code branches
+            # never write deploy state, even when provisioning from a PR HEAD.
+            source_changes = git('rev-list', '--max-count=1', rev, '^origin/main', '--', '.promote-state').strip()
+            if not source_changes:
+                seed = rev; break
+    if seed is None: raise ValueError('seed_history_unproven')
+    # Check EACH commit, not just final shape: accepting then damaging/removing
+    # the map or reversing a non-provision mutation never erases that history.
+    for rev in revisions[:index]:
+        parents = git('show', '-s', '--format=%P', rev).split()
+        if len(parents) != 1: raise ValueError('seed_history_ambiguous')
+        paths = git('diff-tree', '--no-commit-id', '--name-only', '-r', parents[0], rev).splitlines()
+        for path in paths:
+            # Umbrella history includes other nodes. Their acceptance and
+            # configuration cannot establish THIS node's release. Every map
+            # revision was parsed above and contains no acceptance for app.
+            if path == '.promote-state/source-sha-by-app.json':
+                continue
+            if not path.startswith('infra/k8s/overlays/' + env + '/' + app + '/'):
+                continue
+            if re.fullmatch(r'infra/k8s/overlays/' + re.escape(env) + r'/[^/]+/env-state.yaml', path):
+                value = blob(rev, path)
+                data = json.loads(subprocess.check_output(['yq', '-o=json', '.'], input=value.encode(), timeout=20))
+                if (data.get('kind') != 'ConfigMap' or data.get('metadata', {}).get('name') != 'env-state'
+                        or set(data.get('data', {})) != {'VM_IP'}):
+                    raise ValueError('seed_env_state_invalid')
+                continue
+            m = re.fullmatch(r'infra/k8s/overlays/(' + re.escape(env) + r'|_template)/([^/]+)/kustomization.yaml', path)
+            if not m: raise ValueError('seed_mutation_unproven')
+            before, after = blob(parents[0], path), blob(rev, path)
+            if before is None and after == blob('origin/main', path):
+                # Existing umbrella receives a newly declared node's exact
+                # source-owned shape before its first release.
+                continue
+            if before is None or after is None: raise ValueError('seed_overlay_missing')
+            catalog = blob(seed, 'infra/catalog/' + m[2] + '.yaml')
+            if catalog is None: raise ValueError('seed_catalog_missing')
+            declaration = json.loads(subprocess.check_output(['yq', '-o=json', '.'], input=catalog.encode(), timeout=20))
+            boot = declaration.get('bootstrap_image_tag')
+            if boot:
+                before = before.replace('newTag: "' + env + '-placeholder-' + m[2] + '"', 'newTag: "' + boot + '"')
+                suffix, migrator = declaration.get('image_tag_suffix'), declaration.get('migrator_tag_suffix')
+                if suffix and migrator:
+                    before = before.replace('newTag: "' + env + '-placeholder' + migrator + '"',
+                                            'newTag: "' + boot.removesuffix(suffix) + migrator + '"')
+            preview = blob(seed, 'infra/k8s/overlays/preview/' + m[2] + '/kustomization.yaml')
+            if preview and m[1] == env:
+                value = json.loads(subprocess.check_output(['yq', '-o=json', '.'], input=preview.encode(), timeout=20))
+                digest = (value.get('images') or [{}])[0].get('digest')
+                if digest and digest != 'sha256:' + '0'*64:
+                    before = re.sub(r'(^[ \t]*digest:[ \t]*").*(")', lambda x: x[1] + digest + x[2], before, flags=re.M)
+            # Provision substitutes only the existing vm.cognidao.org endpoint.
+            host = re.search(r'([a-z0-9-]+\.)*vm\.[a-z0-9.-]+', after)
+            if host:
+                before = re.sub(r'([a-z0-9-]+\.)*vm\.cognidao\.org', lambda _: host[0], before)
+            if before != after: raise ValueError('seed_overlay_unproven')
+    print('false')
+except Exception as error:
+    print('destination_seed_unproven: ' + str(error), file=sys.stderr)
+    raise SystemExit(1)
+PYTHON
 }

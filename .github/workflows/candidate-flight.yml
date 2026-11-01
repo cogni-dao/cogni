@@ -170,10 +170,10 @@ jobs:
           if [ -n "$RESOLVED_PR_NUMBER" ]; then
             PR_META=$(gh api "repos/${{ github.repository }}/pulls/${RESOLVED_PR_NUMBER}")
             BASE_SHA=$(jq -r '.base.sha' <<< "$PR_META")
-            PR_SOURCE_SHA=$(jq -r '.head.sha' <<< "$PR_META")
-            if [ "$PR_SOURCE_SHA" = "$HEAD_SHA" ]; then
-              SOURCE_REPOSITORY=$(jq -er '.head.repo.full_name' <<< "$PR_META")
-            fi
+            # head.repo also owns historical commits after the PR advances.
+            # The operation's exact SHA must still resolve in that repository.
+            SOURCE_REPOSITORY=$(jq -er '.head.repo.full_name' <<< "$PR_META")
+            gh api "repos/${SOURCE_REPOSITORY}/commits/${HEAD_SHA}" --jq '.sha' | grep -Fx "$HEAD_SHA"
           fi
           echo "source_repository=$SOURCE_REPOSITORY" >> "$GITHUB_OUTPUT"
           echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"

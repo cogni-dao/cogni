@@ -241,19 +241,40 @@ if verified is not None:
             if not m:
                 raise RuntimeError('publication_invocation_invalid')
             same_tooling(signer)
-            expected = {'io.cogni.publication.version': '2', 'io.cogni.publication.source': source_repo,
+            # The operation authorizes a commit in its declared repository.
+            # A trusted dispatched producer can check that SAME commit out of a
+            # fork. Authenticate its actual checkout separately; GitHub's commit
+            # API must prove that it is also the operation's authorized source.
+            actual_repo = labels.get('io.cogni.publication.source', '')
+            if not re.fullmatch(r'[\w.-]+/[\w.-]+', actual_repo):
+                raise RuntimeError('publication_source_repository_invalid')
+            if actual_repo != source_repo:
+                # A PR/aggregate that names an actual foreign checkout is exact.
+                # Only the uniform in-repo nodeRef can recover the operator's
+                # authenticated foreign-dispatch publication of its own commit.
+                if source_repo != repo:
+                    raise RuntimeError('publication_source_repository_mismatch')
+                original = api(f'repos/{repo}/actions/runs/{m[1]}/attempts/{m[2]}')
+                if (original.get('event') != 'workflow_dispatch' or str(original.get('id')) != m[1]
+                        or str(original.get('run_attempt')) != m[2]
+                        or original.get('path', '').split('@')[0] != workflow):
+                    raise RuntimeError('publication_foreign_dispatch_unproven')
+                authorized = api(f'repos/{source_repo}/commits/{source_sha}')
+                if authorized.get('sha') != source_sha:
+                    raise RuntimeError('publication_source_not_authorized')
+            expected = {'io.cogni.publication.version': '2', 'io.cogni.publication.source': actual_repo,
                         'io.cogni.publication.target': target, 'io.cogni.publication.platform': 'linux/amd64',
                         'io.cogni.publication.workflow-sha': signer, 'io.cogni.publication.run': m[1],
                         'io.cogni.publication.attempt': m[2]}
-            if labels.get('org.opencontainers.image.source') != 'https://github.com/' + source_repo:
+            if labels.get('org.opencontainers.image.source') != 'https://github.com/' + actual_repo:
                 raise RuntimeError('publication_source_repository_mismatch')
             if any(labels.get(k) != val for k, val in expected.items()):
                 raise RuntimeError('publication_checkout_binding_mismatch')
             recipe = run(['bash', '-c', '. "$1"; publication_recipe "$2" "$3" "$4"', 'recipe',
-                          str(pathlib.Path(tooling, 'scripts/ci/lib/publication-proof.sh')), source_repo, source_sha, target]).decode().strip()
+                          str(pathlib.Path(tooling, 'scripts/ci/lib/publication-proof.sh')), actual_repo, source_sha, target]).decode().strip()
             if labels.get('io.cogni.publication.recipe') != recipe:
                 raise RuntimeError('publication_recipe_mismatch')
-            matches.append({'kind': 'native-v2', 'source_repository': source_repo, 'source_sha': source_sha,
+            matches.append({'kind': 'native-v2', 'source_repository': actual_repo, 'source_sha': source_sha,
                             'target': target, 'platform': 'linux/amd64', 'recipe': recipe,
                             'producer': {'repository': repo, 'workflow': workflow, 'revision': signer,
                                          'run_id': m[1], 'run_attempt': m[2]},
@@ -296,7 +317,7 @@ else:
                 raise SystemExit('publication_legacy_run_mismatch')
             original = api(f'repos/{repo}/actions/runs/{run_id}/attempts/{attempt}')
             if (original.get('conclusion') != 'success' or original.get('path', '').split('@')[0] != workflow
-                    or original.get('head_sha') != r['head_sha']):
+                    or original.get('head_sha') != r['head_sha'] or str(original.get('id')) != run_id):
                 raise SystemExit('publication_legacy_run_mismatch')
             if (manifest.get('schema_version') != 1 or manifest.get('repository') != repo
                     or manifest.get('head_sha') != source_sha or manifest.get('platform') != 'linux/amd64'

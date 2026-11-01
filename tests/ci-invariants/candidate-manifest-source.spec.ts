@@ -807,6 +807,38 @@ describe("candidate-a manifest source", () => {
     expect(digestRun.indexOf(helper)).toBeLessThan(
       digestRun.indexOf("read_accepted_app")
     );
+    expect(digestRun).toContain('REQUESTED_SOURCE="$BUILD_SHA"');
+    expect(digestRun).toContain(
+      'REQUESTED_SOURCE=$(resolve_remote_source_sha "$NODE" "$NODE_SOURCE_SHA"'
+    );
+    const digestGuards = digestRun
+      .split("\n")
+      .filter((line) => line.includes(helper));
+    expect(digestGuards).toHaveLength(1);
+    expect(digestGuards[0].trim()).toBe(
+      `(cd deploy-branch; SOURCE_SHA="$REQUESTED_SOURCE" ${helper})`
+    );
+    for (const mutation of [
+      "Materialize provider-neutral external workload",
+      "Sync infra/k8s + per-node catalog from app-src",
+      "Promote digest + record source-sha",
+      "Record external workload source-sha",
+    ]) {
+      const index = promoteJob.steps.findIndex(
+        (step) => step.name === mutation
+      );
+      expect(index, mutation).toBeGreaterThan(
+        promoteJob.steps.indexOf(promotionDigest)
+      );
+    }
+    for (const step of promoteJob.steps.slice(
+      0,
+      promoteJob.steps.indexOf(promotionDigest)
+    )) {
+      expect(step.run ?? "").not.toMatch(
+        /rsync |promote-k8s-image|update-source-sha-map|reconcile_shared_platform_manifests|git add |git push /
+      );
+    }
     for (const job of [
       parsed.jobs["prepare-substrate-deploy-branch"],
       parsed.jobs.flight,

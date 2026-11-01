@@ -421,12 +421,14 @@ jobs:
           git fetch origin "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
           if git rev-parse --verify --quiet "refs/remotes/origin/${PER_NODE_BRANCH}" >/dev/null; then
             git checkout -B "${PER_NODE_BRANCH}" "origin/${PER_NODE_BRANCH}"
-            echo 'established=true' >> "$GITHUB_OUTPUT"
+            . ../ci-src/scripts/ci/lib/overlay-digest.sh
+            established=$(destination_app_is_established "$OVERLAY_ENV" "$NODE")
+            echo "established=$established" >> "$GITHUB_OUTPUT"
           elif git rev-parse --verify --quiet "refs/remotes/origin/${UMBRELLA_BRANCH}" >/dev/null; then
             echo "::warning::Per-node branch ${PER_NODE_BRANCH} missing — bootstrapping from ${UMBRELLA_BRANCH}"
             git checkout -B "${PER_NODE_BRANCH}" "origin/${UMBRELLA_BRANCH}"
             . ../ci-src/scripts/ci/lib/overlay-digest.sh
-            established=$(umbrella_app_is_established "$OVERLAY_ENV" "$NODE")
+            established=$(destination_app_is_established "$OVERLAY_ENV" "$NODE")
             echo "established=$established" >> "$GITHUB_OUTPUT"
           else
             # A fleet may have no legacy umbrella branch at all (the isolated test fleet is
