@@ -234,7 +234,22 @@ echo '[PASS] malformed established lanes never fall through to tag discovery'
 # stubs. Only the external clients are replaced. There is no signing algorithm,
 # mock deployment controller or copied publication/selection implementation.
 pub="$work/publication"
-mkdir -p "$pub/bin"
+mkdir -p "$pub/bin" "$pub/current"
+# A clean real Git checkout supplies immutable C even while this test's source
+# checkout contains uncommitted edits. Preserve historical objects separately.
+export FIXTURE_GIT="$REPO_ROOT"
+git -C "$REPO_ROOT" archive HEAD scripts/ci .github/workflows infra nodes/operator/app/Dockerfile .cogni/repo-spec.yaml | tar -x -C "$pub/current"
+cp "$REPO_ROOT/scripts/ci/lib/publication-proof.sh" "$pub/current/scripts/ci/lib/publication-proof.sh"
+printf '\n# Compatible reader R2 fixture.\n' >> "$pub/current/.github/workflows/pr-build.yml"
+git -C "$pub/current" init -q
+git -C "$pub/current" config user.name fixture
+git -C "$pub/current" config user.email fixture@example.test
+git -C "$pub/current" remote add origin https://github.com/cogni-dao/cogni.git
+git -C "$pub/current" add .
+git -C "$pub/current" -c core.hooksPath=/dev/null commit -qm 'trusted immutable reader fixture'
+REPO_ROOT="$pub/current"
+rm "$lab/ci-src"
+ln -s "$REPO_ROOT" "$lab/ci-src"
 cat > "$pub/bin/client.py" <<'PY'
 #!/usr/bin/env python3
 import base64, io, json, os, pathlib, re, subprocess, sys, zipfile
@@ -320,11 +335,22 @@ if '/commits/' in endpoint:
 if '/contents/' in endpoint:
     path = endpoint.split('/contents/',1)[1].split('?',1)[0]
     legacy = os.environ.get('LEGACY') == '1'
-    legacy_blobs = {'.github/workflows/pr-build.yml':'6f43c32fbaf414f3c2919a4c0448cb83a75cacd0', 'scripts/ci/build-and-push-images.sh':'f52e1cd23a4758dbff2cd78ee0741113cf3761ba', 'scripts/ci/write-build-manifest.sh':'02da0177a038bdad230d33b850281890e21fb4d1'}
-    data = (root / path).read_bytes()
+    revision = endpoint.split('?ref=', 1)[1]
+    legacy_definition = 'f66aae9ee44fc74bda9e12623eb4c862c524e1d8'
+    if legacy and os.environ.get('DEFECT') != 'missing-fields':
+        # Distinct native workflow and application checkout identities. Route
+        # validation makes an incorrectly conflated implementation fail.
+        workflow_path = path == '.github/workflows/pr-build.yml'
+        expected_revision = legacy_definition if workflow_path else os.environ['FIXTURE_SOURCE']
+        assert revision == expected_revision, (path, revision, expected_revision)
+        data = subprocess.check_output(['git', '-C', os.environ['FIXTURE_GIT'], 'show', legacy_definition + ':' + path])
+        if os.environ.get('DEFECT') == 'legacy-helper' and path == 'scripts/ci/lib/image-tags.sh': data += b'\n# unqualified helper\n'
+    else:
+        history = os.environ['FIXTURE_GIT'] if revision == '29e194ab8b068b2c7bb3eb48803c8083f811ad84' else str(root)
+        data = subprocess.check_output(['git', '-C', history, 'show', revision + ':' + path])
     if os.environ.get('DEFECT') == 'signer' and '.github/workflows' in path: data = b'foreign workflow'
-    blob = legacy_blobs.get(path, '') if legacy else 'corrected-producer-blob'
-    if os.environ.get('DEFECT') == 'missing-fields': blob = 'corrected-producer-blob'
+    import hashlib
+    blob = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
     emit({'sha':blob, 'content':base64.b64encode(data).decode()}); sys.exit(0)
 if '/actions/artifacts' in endpoint:
     if endpoint.endswith('/zip'):
@@ -338,7 +364,7 @@ if '/actions/artifacts' in endpoint:
     sys.exit(0)
 if '/actions/runs/' in endpoint:
     if '/jobs?' in endpoint: emit({'total_count':1,'jobs':[{'id':43,'name':'build (operator)','conclusion':'success'}]})
-    else: emit({'path':'.github/workflows/pr-build.yml','conclusion':os.environ.get('ORIGINAL_CONCLUSION', 'success') if '/attempts/' in endpoint else 'failure','head_sha':os.environ['FIXTURE_SOURCE'],'run_attempt':int(os.environ.get('ORIGINAL_ATTEMPT', '1')) if '/attempts/' in endpoint else 2,'id':int(endpoint.split('/actions/runs/')[1].split('/')[0]),'event': 'push' if os.environ.get('DEFECT') == 'wrong-actual-repository' else 'workflow_dispatch'})
+    else: emit({'path':'.github/workflows/pr-build.yml','conclusion':os.environ.get('ORIGINAL_CONCLUSION', 'success') if '/attempts/' in endpoint else 'failure','head_sha':'f66aae9ee44fc74bda9e12623eb4c862c524e1d8' if os.environ.get('LEGACY') == '1' else os.environ['FIXTURE_SOURCE'],'run_attempt':int(os.environ.get('ORIGINAL_ATTEMPT', '1')) if '/attempts/' in endpoint else 2,'id':int(endpoint.split('/actions/runs/')[1].split('/')[0]),'event': 'push' if os.environ.get('DEFECT') == 'wrong-actual-repository' else 'workflow_dispatch'})
     sys.exit(0)
 if '/actions/jobs/' in endpoint:
     print('repository: cogni-dao/cogni\nref: ' + os.environ['FIXTURE_SOURCE'] + '\n'); sys.exit(0)
@@ -351,6 +377,7 @@ ln -s client.py "$pub/bin/curl"
 export FIXTURE_ROOT="$REPO_ROOT" FIXTURE_STATE="$pub" PATH="$pub/bin:$PATH"
 export GITHUB_REPOSITORY=cogni-dao/cogni GITHUB_REPOSITORY_OWNER=cogni-dao GH_TOKEN=fixture GHCR_USERNAME=fixture GHCR_TOKEN=fixture
 export FIXTURE_SOURCE="$(git -C "$REPO_ROOT" rev-parse HEAD)" GITHUB_WORKFLOW_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+export GITHUB_WORKFLOW_REF=cogni-dao/cogni/.github/workflows/pr-build.yml@refs/heads/main
 export FIXTURE_DIGEST="sha256:7777777777777777777777777777777777777777777777777777777777777777" GITHUB_RUN_ID=99001 GITHUB_RUN_ATTEMPT=1
 export SOURCE_REPOSITORY=cogni-dao/cogni BUILD_SHA="$FIXTURE_SOURCE" IMAGE_TAG="sha-$FIXTURE_SOURCE"
 export PUBLICATION_COORDINATE="ghcr.io/cogni-dao/cogni-template:sha-$FIXTURE_SOURCE-linux/amd64"
@@ -483,13 +510,15 @@ jq -e '.targets[0].publication.kind == "legacy-v1" and .targets[0].publication.p
 if DEFECT=missing-fields bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh" > "$pub/not-legacy.log" 2>&1; then
   echo '[FAIL] corrected producer without new fields downgraded to legacy'; exit 1
 fi
-for defect in wrong-attempt failed-original; do
+for defect in wrong-attempt failed-original legacy-helper; do
   if [[ "$defect" == wrong-attempt ]]; then
     export ORIGINAL_ATTEMPT=2 ORIGINAL_CONCLUSION=success
-  else
+  elif [[ "$defect" == failed-original ]]; then
     export ORIGINAL_ATTEMPT=1 ORIGINAL_CONCLUSION=failure
+  else
+    unset ORIGINAL_ATTEMPT ORIGINAL_CONCLUSION
   fi
-  if bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh" > "$pub/$defect.log" 2>&1; then
+  if DEFECT="$defect" bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh" > "$pub/$defect.log" 2>&1; then
     echo "[FAIL] accepted legacy $defect"; exit 1
   fi
   [[ ! -e "$OUTPUT_FILE" ]]
@@ -593,3 +622,101 @@ printf 'images:\n  - name: ghcr.io/cogni-dao/cogni-template\n    newName: ghcr.i
   fi
 )
 echo '[PASS] provision digest seed is initial; damaged acceptance remains established; full infra and incomplete history refuse'
+
+# Trust-policy seams use the actual private verifier and immutable real Git
+# blobs. Only external clients are fixtures: this is NOT cryptographic proof.
+trap 'result=$?; if [[ "$result" != 0 ]]; then tail -n 12 "$pub"/history-*.log "$pub"/unknown-*.log "$pub"/*reader.log "$pub"/wrong-current.log "$pub"/retired-history.log 2>/dev/null || :; fi; rm -rf "$work"' EXIT
+export NODE=operator COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" NATIVE_MODE=api
+export FIXTURE_SOURCE=$(jq -r '.config.Labels["org.opencontainers.image.revision"]' "$pub/native-config.json")
+export SOURCE_SHA="$FIXTURE_SOURCE" BUILD_SHA="$FIXTURE_SOURCE" HEAD_SHA="$FIXTURE_SOURCE"
+export FIXTURE_DIGEST="sha256:7777777777777777777777777777777777777777777777777777777777777777"
+r2="$GITHUB_WORKFLOW_SHA"
+r1=29e194ab8b068b2c7bb3eb48803c8083f811ad84
+set_signer() {
+  jq --arg revision "$1" '.config.Labels["io.cogni.publication.workflow-sha"]=$revision' "$pub/native-config.json" > "$pub/config.json"
+}
+promotion_discovery() {
+  (cd "$lab"; NODE=operator SOURCE_REPOSITORY=cogni-dao/cogni \
+    COGNI_CATALOG_ROOT="$lab/app-src/infra/catalog" DEPLOYMENT_PROVIDER=k3s \
+    DESTINATION_ESTABLISHED=false PRESERVE_APP=false PREVIEW_FORWARD=false \
+    NODE_SOURCE_SHA='' OPERATOR_SOURCE_SHA="$FIXTURE_SOURCE" CATALOG_SOURCE_SHA='' \
+    PREVIEW_SOURCE_SHA_MAP='' OVERLAY_ENV=production EXPLICIT_TARGETS=operator \
+    RUNNER_TEMP="$pub" GITHUB_OUTPUT="$pub/trust-promotion.out" bash "$work/digest.sh")
+}
+set_signer "$r1"
+for mode in api oci retained; do
+  export NATIVE_MODE="$mode"
+  for reader in resolve-node-ref-image resolve-pr-build-images; do
+    OUTPUT_FILE="$pub/history-$reader-$mode.json" bash "$REPO_ROOT/scripts/ci/$reader.sh" > "$pub/history-$reader-$mode.log" 2>&1
+    jq -e --arg r "$r1" '.targets[] | select(.target=="operator") | .publication.producer.revision == $r and .publication.producer.run_id == "99001" and .publication.producer.run_attempt == "1"' "$pub/history-$reader-$mode.json" >/dev/null
+  done
+  (cd "$REPO_ROOT"; OUTPUT_FILE="$pub/history-producer-$mode.json" bash "$REPO_ROOT/scripts/ci/build-and-push-images.sh") > "$pub/history-producer-$mode.log" 2>&1
+  jq -e --arg r "$r1" '.targets[0] | .outcome == "reused" and .publication.producer.revision == $r' "$pub/history-producer-$mode.json" >/dev/null
+  promotion_discovery > "$pub/history-promotion-$mode.log" 2>&1
+  EXPECTED_TARGETS_JSON='["operator"]' FRAGMENTS_DIR="$pub/history-fragments-$mode" \
+    OUTPUT_FILE="$pub/history-aggregate-$mode.json" bash "$REPO_ROOT/scripts/ci/merge-build-fragments.sh" > "$pub/history-aggregate-$mode.log" 2>&1
+  jq -e --arg r "$r1" '.targets[0].publication.producer.revision == $r' "$pub/history-aggregate-$mode.json" >/dev/null
+done
+[[ $(grep -c '^docker buildx build ' "$pub/calls") == 1 ]]
+! grep -Eq '^docker (tag|push) |^gh attestation (sign|create) ' "$pub/calls"
+echo '[PASS] retained fixed R1 survives compatible R2 through API/OCI/bundle and every owner with no rebuild/retag/reattest'
+
+# Rbad changes ONLY the formerly omitted executable helper. Authenticate actual
+# Git objects through the client fixture; plausible signed-result data cannot
+# stand in for producer qualification. No live signature is claimed here.
+git -C "$REPO_ROOT" fetch -q --no-tags "$FIXTURE_GIT" "$r1"
+GIT_INDEX_FILE="$pub/closure-index" git -C "$REPO_ROOT" read-tree "$r1"
+(git -C "$REPO_ROOT" show "$r1:scripts/ci/lib/image-tags.sh"; printf '\n# unqualified executable helper\n') > "$pub/bad-helper"
+bad_blob=$(git -C "$REPO_ROOT" hash-object -w "$pub/bad-helper")
+GIT_INDEX_FILE="$pub/closure-index" git -C "$REPO_ROOT" update-index --cacheinfo "100644,$bad_blob,scripts/ci/lib/image-tags.sh"
+bad_tree=$(GIT_INDEX_FILE="$pub/closure-index" git -C "$REPO_ROOT" write-tree)
+bad_revision=$(printf 'unqualified omitted helper fixture\n' | git -C "$REPO_ROOT" commit-tree "$bad_tree" -p "$r1")
+set_signer "$bad_revision"
+for mode in api oci retained; do
+  export NATIVE_MODE="$mode"
+  for reader in resolve-node-ref-image resolve-pr-build-images build-and-push-images; do
+    export OUTPUT_FILE="$pub/unknown-$reader-$mode.json"
+    if (cd "$REPO_ROOT"; bash "$REPO_ROOT/scripts/ci/$reader.sh") > "$pub/unknown-$reader-$mode.log" 2>&1; then
+      echo "[FAIL] $reader accepted omitted helper through $mode"; exit 1
+    fi
+    [[ ! -e "$OUTPUT_FILE" ]]
+    grep -q publication_signer_implementation_mismatch "$pub/unknown-$reader-$mode.log"
+  done
+  if promotion_discovery > "$pub/unknown-promotion-$mode.log" 2>&1; then
+    echo "[FAIL] promotion accepted omitted helper through $mode"; exit 1
+  fi
+  grep -q publication_signer_implementation_mismatch "$pub/unknown-promotion-$mode.log"
+done
+[[ $(grep -c '^docker buildx build ' "$pub/calls") == 1 ]]
+echo '[PASS] native verification client fixtures cannot qualify a changed omitted helper through any transport or discovery owner'
+
+set_signer "$r1"
+export NATIVE_MODE=api OUTPUT_FILE="$pub/dirty-reader.json"
+printf '\n# dirty local reader\n' >> "$REPO_ROOT/scripts/ci/lib/publication-proof.sh"
+if bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh" > "$pub/dirty-reader.log" 2>&1; then
+  echo '[FAIL] dirty reader qualified itself'; exit 1
+fi
+grep -q publication_reader_worktree_mismatch "$pub/dirty-reader.log"
+git -C "$REPO_ROOT" checkout -- scripts/ci/lib/publication-proof.sh
+if GITHUB_WORKFLOW_SHA="$r1" bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh" > "$pub/wrong-current.log" 2>&1; then
+  echo '[FAIL] wrong immutable current revision accepted'; exit 1
+fi
+grep -q publication_reader_revision_mismatch "$pub/wrong-current.log"
+[[ ! -e "$OUTPUT_FILE" ]]
+echo '[PASS] dirty executed local verifier and caller-selected wrong C both refuse'
+
+# Remove historical admission in a separate committed fixture C, so a dirty
+# reader rejection cannot accidentally satisfy the historical-policy test.
+python3 - "$REPO_ROOT/scripts/ci/lib/publication-proof.sh" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]); s=p.read_text(); s=s.replace('actual != current_native_blobs and actual != retained_native_blobs', 'actual != current_native_blobs'); p.write_text(s)
+PY
+git -C "$REPO_ROOT" add scripts/ci/lib/publication-proof.sh
+git -C "$REPO_ROOT" -c core.hooksPath=/dev/null commit -qm 'fixture retires historical support'
+if GITHUB_WORKFLOW_SHA=$(git -C "$REPO_ROOT" rev-parse HEAD) bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh" > "$pub/retired-history.log" 2>&1; then
+  echo '[FAIL] historical qualification was ornamental'; exit 1
+fi
+grep -q publication_signer_implementation_mismatch "$pub/retired-history.log"
+git -C "$REPO_ROOT" reset --hard -q "$r2"
+echo '[PASS] deleting retained qualification in immutable C refuses historical R1'

@@ -88,6 +88,53 @@ function namedStep(jobName: string, stepName: string): WorkflowStep {
 }
 
 describe("candidate-a manifest source", () => {
+  it("binds the full producer closure to native immutable tooling and retains qualified history", () => {
+    const proof = readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/lib/publication-proof.sh"),
+      "utf8"
+    );
+    const builder = readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/build-and-push-images.sh"),
+      "utf8"
+    );
+    const sources = [...builder.matchAll(/^\. "\$SCRIPT_DIR\/([^"\n]+)"/gm)]
+      .map((match) => `scripts/ci/${match[1]}`)
+      .sort();
+    expect(sources).toEqual([
+      "scripts/ci/lib/image-tags.sh",
+      "scripts/ci/lib/publication-proof.sh",
+    ]);
+    for (const source of sources) expect(proof).toContain(`'${source}':`);
+    expect(proof).toContain("os.environ.get('GITHUB_WORKFLOW_SHA'");
+    expect(proof).toContain("os.environ.get('GITHUB_WORKFLOW_REF'");
+    expect(proof).toContain("f'{current}:{path}'");
+    expect(proof).toContain("publication_reader_worktree_mismatch");
+    expect(proof).toContain(
+      "actual != current_native_blobs and actual != retained_native_blobs"
+    );
+    expect(proof).toContain("'scripts/ci/merge-build-fragments.sh':");
+    expect(proof).toContain(
+      "(repo, original['head_sha']) if path == workflow else (source_repo, source_sha)"
+    );
+    expect(proof.indexOf("qualify_producer_closure(signer)")).toBeLessThan(
+      proof.indexOf("actual_repo = labels.get")
+    );
+    const publication = yaml.parse(
+      readFileSync(
+        path.join(REPO_ROOT, ".github/workflows/pr-build.yml"),
+        "utf8"
+      )
+    ) as { jobs: Record<string, WorkflowJob> };
+    const steps = publication.jobs.build.steps;
+    expect(
+      steps.find((step) => step.name === "Checkout workflow tooling")?.with?.ref
+    ).toBe("${{ github.workflow_sha }}");
+    expect(
+      steps.find((step) => step.name === "Build and push ${{ matrix.target }}")
+        ?.run
+    ).toBe("bash ../ci-src/scripts/ci/build-and-push-images.sh");
+  });
+
   it("pairs preparatory init entrypoints with the preserved image, then restores the new audited rollout", () => {
     const fixture = mkdtempSync(
       path.join(os.tmpdir(), "candidate-init-contract-")

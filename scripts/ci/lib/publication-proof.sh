@@ -137,6 +137,8 @@ workflow = '.github/workflows/pr-build.yml'
 legacy_blobs = {
     workflow: '6f43c32fbaf414f3c2919a4c0448cb83a75cacd0',
     'scripts/ci/build-and-push-images.sh': 'f52e1cd23a4758dbff2cd78ee0741113cf3761ba',
+    'scripts/ci/lib/image-tags.sh': 'e50000359244f0d52024acbf4265897c9ae67b8c',
+    'scripts/ci/merge-build-fragments.sh': 'c7b18a6dbef51d19223d4afeb0680573b416748e',
     'scripts/ci/write-build-manifest.sh': '02da0177a038bdad230d33b850281890e21fb4d1',
 }
 image, digest = ref.split('@', 1)
@@ -159,12 +161,46 @@ def api(path):
 def remote_blob(repository, revision, path):
     d = api(f'repos/{repository}/contents/{path}?ref={revision}')
     return base64.b64decode(d['content'])
-def same_tooling(revision):
-    # Authenticate the signer IMPLEMENTATION, not an app-provided schema marker.
-    # Historical corrected publications use the same reviewed producer bytes.
-    for path in (workflow, 'scripts/ci/build-and-push-images.sh', 'scripts/ci/lib/publication-proof.sh'):
-        if remote_blob(repo, revision, path) != pathlib.Path(tooling, path).read_bytes():
-            raise RuntimeError('publication_signer_implementation_mismatch')
+# Independently qualified original-publication closure at 29e194. Retain this
+# explicit history when current tooling evolves. The old reader is NOT trusted
+# to qualify itself. See PR3000 issuecomment-6552584585 for the bounded review.
+retained_native_blobs = {
+    workflow: '974a71f16a47781df8ca8fc932a4a4dc047981a8',
+    'scripts/ci/build-and-push-images.sh': '3a2b343a4e1cb611b39a7935a1f4311ac85a7420',
+    'scripts/ci/lib/publication-proof.sh': '57e31dc98dfb81f139d4bb4cb9a6261f6a0922b0',
+    'scripts/ci/lib/image-tags.sh': 'e50000359244f0d52024acbf4265897c9ae67b8c',
+}
+def git_blob(data):
+    return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+def trusted_current_closure():
+    # Native runner context selects C, never application/label/CLI input. Exact
+    # review + authorized workflow execution remains the independent authority.
+    current = os.environ.get('GITHUB_WORKFLOW_SHA', '')
+    executing = os.environ.get('GITHUB_WORKFLOW_REF', '')
+    m = re.fullmatch(re.escape(repo) + r'/(\.github/workflows/[^/@]+\.ya?ml)@.+', executing)
+    if not re.fullmatch('[a-f0-9]{40}', current) or not m:
+        raise RuntimeError('publication_reader_context_invalid')
+    if run(['git', '-C', tooling, 'rev-parse', 'HEAD']).decode().strip() != current:
+        raise RuntimeError('publication_reader_revision_mismatch')
+    expected = {}
+    # Include the executing reader workflow as well as the producer closure.
+    for path in dict.fromkeys((*retained_native_blobs, m[1])):
+        immutable = run(['git', '-C', tooling, 'show', f'{current}:{path}'])
+        if pathlib.Path(tooling, path).read_bytes() != immutable:
+            raise RuntimeError('publication_reader_worktree_mismatch: ' + path)
+        if path in retained_native_blobs:
+            expected[path] = git_blob(immutable)
+    return expected
+try:
+    current_native_blobs = trusted_current_closure()
+except (RuntimeError, OSError) as error:
+    raise SystemExit('publication_unverified: ' + str(error))
+def qualify_producer_closure(revision):
+    # Recompute authenticated content hashes; do not trust a response's claimed
+    # blob id alone. Every transport calls this before source labels mean proof.
+    actual = {path: git_blob(remote_blob(repo, revision, path)) for path in retained_native_blobs}
+    if actual != current_native_blobs and actual != retained_native_blobs:
+        raise RuntimeError('publication_signer_implementation_mismatch')
 def inspect(expression):
     return json.loads(run(['docker', 'buildx', 'imagetools', 'inspect', ref, '--format', expression]))
 config = inspect('{{json .Image}}')
@@ -240,7 +276,7 @@ if verified is not None:
             m = re.fullmatch(r'https://github.com/' + re.escape(repo) + r'/actions/runs/(\d+)/attempts/(\d+)', invocation)
             if not m:
                 raise RuntimeError('publication_invocation_invalid')
-            same_tooling(signer)
+            qualify_producer_closure(signer)
             # The operation authorizes a commit in its declared repository.
             # A trusted dispatched producer can check that SAME commit out of a
             # fork. Authenticate its actual checkout separately; GitHub's commit
@@ -301,12 +337,6 @@ else:
             r = api(f'repos/{repo}/actions/runs/{run_id}')
             if r['path'].split('@')[0] != workflow:
                 continue
-            # Exact known legacy implementation. Both workflow and executed app
-            # helper must match it; foreign checkout cannot supply its own proof.
-            for path, trusted in legacy_blobs.items():
-                if (api(f'repos/{repo}/contents/{path}?ref={r["head_sha"]}')['sha'] != trusted or
-                        api(f'repos/{source_repo}/contents/{path}?ref={source_sha}')['sha'] != trusted):
-                    raise SystemExit('publication_legacy_definition_mismatch')
             archive = run(['gh', 'api', f'repos/{repo}/actions/artifacts/{a["id"]}/zip'])
             z = zipfile.ZipFile(io.BytesIO(archive))
             if sum(x.file_size for x in z.infolist()) > MAX or z.namelist() != ['build-manifest.json']:
@@ -324,6 +354,14 @@ else:
                     or str(manifest.get('workflow', {}).get('run_id')) != run_id
                     or str(original.get('run_attempt')) != attempt):
                 raise SystemExit('publication_legacy_run_mismatch')
+            # Legacy workflow executes at its own native run identity; builder,
+            # sourced helper and unsigned aggregation execute at app checkout.
+            # Check each file where it actually ran, never require app helpers
+            # at a possibly different workflow revision (or vice versa).
+            for path, trusted in legacy_blobs.items():
+                owner, revision = (repo, original['head_sha']) if path == workflow else (source_repo, source_sha)
+                if git_blob(remote_blob(owner, revision, path)) != trusted:
+                    raise SystemExit('publication_legacy_definition_mismatch')
             entries = [x for x in manifest['targets'] if x['target'] == target]
             catalog = remote_blob(source_repo, source_sha, f'infra/catalog/{target}.yaml')
             declaration = json.loads(subprocess.check_output(['yq', '-o=json', '.'], input=catalog, timeout=20))
