@@ -274,12 +274,16 @@ describe("compatible receipts: real PostgreSQL", () => {
       app.execute(
         sql`update public.akash_tx_allocations set state='allocated', external_name=coalesce(external_name, '8002') where cogni_key='compatible' and wallet_scope=${WALLET} returning id`
       )
-    ).rejects.toThrow(/incompatible receipt writer/);
+    ).rejects.toMatchObject({
+      cause: { code: "55000", message: "incompatible receipt writer" },
+    });
     await expect(
       app.execute(
         sql`update public.akash_tx_allocations set state='allocated', external_name=coalesce(external_name, '8002') where false returning id`
       )
-    ).rejects.toThrow(/incompatible receipt writer/);
+    ).rejects.toMatchObject({
+      cause: { code: "55000", message: "incompatible receipt writer" },
+    });
     await expect(
       app.execute(sql`delete from public.akash_tx_allocations where false`)
     ).rejects.toThrow();
