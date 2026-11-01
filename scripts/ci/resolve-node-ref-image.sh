@@ -73,7 +73,7 @@ digest_ref=$(publication_lookup "$tag") || { echo "[ERROR] artifact image unreso
 proof=$(mktemp)
 trap 'rm -f "$proof"' EXIT
 if publication_is_operator_coordinate "$digest_ref" && ! is_infra_target "$NODE"; then
-  actual_repository="${source_repo:-${GITHUB_REPOSITORY:-cogni-dao/cogni}}"
+  actual_repository="${source_repo:-${SOURCE_REPOSITORY:-${GITHUB_REPOSITORY:-cogni-dao/cogni}}}"
   publication_verify "$digest_ref" "$actual_repository" "$SOURCE_SHA" "$NODE" "$proof"
 fi
 

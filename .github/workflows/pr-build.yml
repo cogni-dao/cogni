@@ -484,6 +484,7 @@ jobs:
       IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
       PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
       HEAD_SHA: ${{ needs.resolve.outputs.source_sha }}
+      SOURCE_REPOSITORY: ${{ needs.resolve.outputs.checkout_repo }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:

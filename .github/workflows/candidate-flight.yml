@@ -166,9 +166,16 @@ jobs:
             # transitional monorepo dispatch until it is unified onto node_slug.)
             IMAGE_TAG="sha-${HEAD_SHA}"
           fi
+          SOURCE_REPOSITORY="${{ github.repository }}"
           if [ -n "$RESOLVED_PR_NUMBER" ]; then
-            BASE_SHA=$(gh api "repos/${{ github.repository }}/pulls/${RESOLVED_PR_NUMBER}" --jq '.base.sha')
+            PR_META=$(gh api "repos/${{ github.repository }}/pulls/${RESOLVED_PR_NUMBER}")
+            BASE_SHA=$(jq -r '.base.sha' <<< "$PR_META")
+            PR_SOURCE_SHA=$(jq -r '.head.sha' <<< "$PR_META")
+            if [ "$PR_SOURCE_SHA" = "$HEAD_SHA" ]; then
+              SOURCE_REPOSITORY=$(jq -er '.head.repo.full_name' <<< "$PR_META")
+            fi
           fi
+          echo "source_repository=$SOURCE_REPOSITORY" >> "$GITHUB_OUTPUT"
           echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
           echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
@@ -362,6 +369,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
           SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
+          SOURCE_REPOSITORY: ${{ steps.meta.outputs.source_repository }}
           NODE: ${{ steps.meta.outputs.node_slug }}
           RESOLVED_PR_NUMBER: ${{ steps.meta.outputs.resolved_pr_number }}
           NODE_SOURCE_SHA: ${{ steps.meta.outputs.node_source_sha }}

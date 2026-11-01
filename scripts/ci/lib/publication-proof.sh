@@ -278,7 +278,7 @@ else:
                 continue
             run_id = str(a['workflow_run']['id'])
             r = api(f'repos/{repo}/actions/runs/{run_id}')
-            if r['path'].split('@')[0] != workflow or r['conclusion'] != 'success':
+            if r['path'].split('@')[0] != workflow:
                 continue
             # Exact known legacy implementation. Both workflow and executed app
             # helper must match it; foreign checkout cannot supply its own proof.
@@ -291,10 +291,17 @@ else:
             if sum(x.file_size for x in z.infolist()) > MAX or z.namelist() != ['build-manifest.json']:
                 raise SystemExit('publication_legacy_artifact_invalid')
             manifest = json.loads(z.read('build-manifest.json'))
+            attempt = str(manifest.get('workflow', {}).get('run_attempt', ''))
+            if not re.fullmatch(r'[1-9][0-9]*', attempt):
+                raise SystemExit('publication_legacy_run_mismatch')
+            original = api(f'repos/{repo}/actions/runs/{run_id}/attempts/{attempt}')
+            if (original.get('conclusion') != 'success' or original.get('path', '').split('@')[0] != workflow
+                    or original.get('head_sha') != r['head_sha']):
+                raise SystemExit('publication_legacy_run_mismatch')
             if (manifest.get('schema_version') != 1 or manifest.get('repository') != repo
                     or manifest.get('head_sha') != source_sha or manifest.get('platform') != 'linux/amd64'
                     or str(manifest.get('workflow', {}).get('run_id')) != run_id
-                    or str(manifest.get('workflow', {}).get('run_attempt')) != str(r['run_attempt'])):
+                    or str(original.get('run_attempt')) != attempt):
                 raise SystemExit('publication_legacy_run_mismatch')
             entries = [x for x in manifest['targets'] if x['target'] == target]
             catalog = remote_blob(source_repo, source_sha, f'infra/catalog/{target}.yaml')
@@ -302,7 +309,7 @@ else:
             expected_tag = image + ':sha-' + source_sha + (declaration.get('image_tag_suffix') or '')
             if len(entries) != 1 or entries[0]['digest'] != ref or entries[0]['tag'] != expected_tag:
                 raise SystemExit('publication_legacy_subject_mismatch')
-            jobs = api(f'repos/{repo}/actions/runs/{run_id}/attempts/{r["run_attempt"]}/jobs?per_page=100')
+            jobs = api(f'repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100')
             if jobs['total_count'] > 100:
                 raise SystemExit('publication_legacy_job_bound')
             producers = [j for j in jobs['jobs'] if j['name'] == f'build ({target})' and j['conclusion'] == 'success']
@@ -314,7 +321,7 @@ else:
             evidence = {'kind': 'legacy-v1', 'source_repository': source_repo, 'source_sha': source_sha,
                         'target': target, 'platform': 'linux/amd64', 'artifact_id': a['id'],
                         'producer': {'repository': repo, 'workflow': workflow, 'revision': r['head_sha'],
-                                     'run_id': run_id, 'run_attempt': str(r['run_attempt'])}}
+                                     'run_id': run_id, 'run_attempt': attempt}}
             break
         if evidence or len(artifacts) < 100:
             break

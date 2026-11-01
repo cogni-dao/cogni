@@ -736,16 +736,18 @@ describe("candidate-a manifest source", () => {
         step.name ===
         "Prepare per-node deploy branch (bootstrap from umbrella if missing)"
     );
+    const promotionDigest = promoteJob.steps.find(
+      (step) => step.name === "Resolve digest for this node"
+    );
     const promotionPush = promoteJob.steps.find(
       (step) => step.name === "Commit and push"
     );
-    if (!promotionCheckout || !promotionPush)
+    if (!promotionCheckout || !promotionDigest || !promotionPush)
       throw new Error("ordinary promotion writer steps are required");
     for (const [label, step, checks] of [
       ["candidate prepare", prepare, 2],
       ["candidate checkout", candidateCheckout, 1],
       ["candidate push", candidatePush, 1],
-      ["promotion checkout", promotionCheckout, 1],
       ["promotion push", promotionPush, 1],
     ] as const) {
       const run = step.run ?? "";
@@ -785,6 +787,26 @@ describe("candidate-a manifest source", () => {
         );
       }
     }
+    expect(promotionDigest.env?.SOURCE_REPOSITORY).toBe(
+      "${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}"
+    );
+    expect(promotionDigest.env?.SOURCE_READ_TOKEN).toBe(
+      "${{ secrets.GIT_READ_TOKEN || github.token }}"
+    );
+    const digestRun = promotionDigest.run ?? "";
+    expect(digestRun).toContain(`SOURCE_SHA="$REQUESTED_SOURCE" ${helper}`);
+    expect(digestRun.indexOf("REQUESTED_SOURCE=")).toBeLessThan(
+      digestRun.indexOf(helper)
+    );
+    expect(promoteJob.steps.indexOf(promotionCheckout)).toBeLessThan(
+      promoteJob.steps.indexOf(promotionDigest)
+    );
+    expect(promoteJob.steps.indexOf(promotionDigest)).toBeLessThan(
+      promoteJob.steps.indexOf(promotionPush)
+    );
+    expect(digestRun.indexOf(helper)).toBeLessThan(
+      digestRun.indexOf("read_accepted_app")
+    );
     for (const job of [
       parsed.jobs["prepare-substrate-deploy-branch"],
       parsed.jobs.flight,

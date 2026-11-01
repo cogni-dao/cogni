@@ -103,7 +103,7 @@ for target in "${ALL_TARGETS[@]}"; do
   digest_ref=$(resolve_digest_ref "$full_tag") || lookup_rc=$?
   if [[ "$lookup_rc" = 0 ]]; then
     if publication_is_operator_coordinate "$digest_ref" && ! is_infra_target "$target"; then
-      publication_verify "$digest_ref" "${GITHUB_REPOSITORY:-cogni-dao/cogni}" "$SOURCE_SHA" "$target" "$proof_dir/$target.json"
+      publication_verify "$digest_ref" "${SOURCE_REPOSITORY:-${GITHUB_REPOSITORY:-cogni-dao/cogni}}" "$SOURCE_SHA" "$target" "$proof_dir/$target.json"
     fi
     json_items+=("    {\n      \"target\": \"${target}\",\n      \"tag\": \"${full_tag}\",\n      \"digest\": \"${digest_ref}\",\n      \"source_sha\": \"${SOURCE_SHA}\"\n    }")
     resolved_targets+=("$target")
