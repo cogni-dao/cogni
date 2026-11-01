@@ -199,6 +199,31 @@ describe("compatible receipts: real PostgreSQL", () => {
     ).toBeNull();
   });
 
+  it("refuses a pre-stage prepared continuation after committed guard DDL", async () => {
+    const old = await guardedClaim();
+    if (old.state !== "claimed") throw new Error("fixture claim failed");
+    const prepared = await guardedLedger.prepare({
+      cogniKey: old.record.cogniKey,
+      allocationCursor: "8000",
+      expected: old.record,
+    });
+    await installGuard();
+    await expect(
+      guardedLedger.recordAllocation({
+        cogniKey: prepared.cogniKey,
+        externalName: "8001",
+        expected: prepared,
+      })
+    ).rejects.toThrow(/post-barrier callback/);
+    expect(
+      await guardedLedger.read({ cogniKey: prepared.cogniKey })
+    ).toMatchObject({
+      state: "preparing",
+      allocationNoEffectVerified: null,
+      allocationCursor: "8000",
+    });
+  });
+
   it("qualifies all current writer seams without losing FALSE or rewriting an exact no-op", async () => {
     await installGuard();
     const first = await guardedClaim();

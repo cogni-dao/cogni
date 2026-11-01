@@ -700,7 +700,7 @@ export class DrizzleAkashTxAllocationLedger
     providerAccount?: string;
     expected: AkashTxAllocationRecord;
   }): Promise<AkashTxAllocationRecord> {
-    return this.change(input, (record) => {
+    return this.change(input, (record, guarded) => {
       if (
         !input.externalName ||
         (record.externalName && record.externalName !== input.externalName)
@@ -714,6 +714,14 @@ export class DrizzleAkashTxAllocationLedger
         throw new Error("receipt provider conflict");
       if (record.state !== "preparing" && record.state !== "allocated")
         throw new Error("receipt custody has no live wallet slot");
+      if (
+        guarded &&
+        record.state === "preparing" &&
+        record.allocationNoEffectVerified === null
+      )
+        throw new Error(
+          "legacy preparing receipt custody cannot authorize a post-barrier callback"
+        );
       if (record.allocationNoEffectVerified === true)
         throw new Error("unused receipt must prepare before binding");
       if (
