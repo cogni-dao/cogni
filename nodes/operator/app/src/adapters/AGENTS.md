@@ -29,6 +29,8 @@ Infrastructure implementations of ports including server/, worker/, cli/, and te
 
 ## Public Surface
 
+- The existing Console allocation path shares the original deadline across provider metadata, the auction, CREATE, LEASE, close verification and status. The native inventory reader first waits for a fresh post-start consensus block, then pins every page to that height.
+
 - App-private `AkashActorDatabase` owns the actuator's sole max1 local transport. Its concrete ledger, binding, cost, outcome, migration-report and startup methods share one deadline and export materialized results only. Raw roots, transactions and builders stay private. Other runtimes keep their separate clients. Every application await checks the original operation scope; graceful end retains admission until work and transport close; lost acknowledgements retain custody as `outcome_unknown`.
 
 - App-private `AkashNativeStateReader` (exported through `@/adapters/server`) reads only fixed public Akash deployment/lease GETs. Bootstrap injects public owner and transport; full identities, pagination, bytes, concurrency and deadlines are bounded. Its admission reader exhausts owner ACTIVE history at one response-verified height and reads relevant groups/orders/leases within a deadline. It returns observations, never financial discharge or recovery policy.

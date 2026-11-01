@@ -373,6 +373,14 @@ describe("wallet ACTIVE inventory at one height", () => {
     new Response(JSON.stringify(body), {
       headers: at ? { "x-cosmos-block-height": at } : {},
     });
+  const withFreshBlock =
+    (fetcher: typeof fetch): typeof fetch =>
+    async (input, init) =>
+      new URL(String(input)).pathname.includes("/blocks/")
+        ? atHeight({
+            block: { header: { height, time: new Date().toISOString() } },
+          })
+        : fetcher(input, init);
   const active = (dseq = DSEQ, owner = OWNER) => ({
     deployment: { id: { owner, dseq }, state: "active" },
     groups: [{ id: { owner, dseq, gseq: 1 }, state: "open" }],
@@ -380,6 +388,48 @@ describe("wallet ACTIVE inventory at one height", () => {
   const inventory = (rows: unknown[], next_key: string | null = null) => ({
     deployments: rows,
     pagination: { next_key },
+  });
+
+  it.each([
+    "uniformly stale",
+    "pre-start",
+    "future",
+    "fresh tip with stale page",
+  ])("refuses %s consensus evidence before granting an empty inventory", async (kind) => {
+    const now = Date.now();
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      if (new URL(String(input)).pathname.includes("/blocks/"))
+        return atHeight({
+          block: {
+            header: {
+              height,
+              time: new Date(
+                kind === "future"
+                  ? now + 60_000
+                  : kind === "uniformly stale"
+                    ? now - 60_000
+                    : kind === "pre-start"
+                      ? now - 1000
+                      : Date.now()
+              ).toISOString(),
+            },
+          },
+        });
+      return atHeight(inventory([]), "29999999");
+    });
+    await expect(
+      new AkashNativeStateReader(OWNER, fetcher).readWalletInventory({
+        deadlineAt: now + 50,
+      })
+    ).rejects.toThrow(
+      kind === "pre-start" ? /budget_exceeded|abort/i : "height_mismatch"
+    );
+    if (kind !== "fresh tip with stale page")
+      expect(
+        fetcher.mock.calls.every(([input]) =>
+          new URL(String(input)).pathname.includes("/blocks/")
+        )
+      ).toBe(true);
   });
 
   it("exhausts real owner continuation and includes unleased open groups/orders", async () => {
@@ -409,7 +459,7 @@ describe("wallet ACTIVE inventory at one height", () => {
     );
     const result = await new AkashNativeStateReader(
       OWNER,
-      fetcher
+      withFreshBlock(fetcher)
     ).readWalletInventory({ deadlineAt: Date.now() + 30_000 });
     expect(result).toMatchObject({
       owner: OWNER,
@@ -426,7 +476,7 @@ describe("wallet ACTIVE inventory at one height", () => {
     expect(requests[0]?.url.searchParams.get("filters.owner")).toBe(OWNER);
     expect(requests[0]?.url.searchParams.get("filters.state")).toBe("active");
     expect(requests[1]?.url.searchParams.get("pagination.key")).toBe("AQ==");
-    for (const request of requests.slice(1))
+    for (const request of requests)
       expect(
         new Headers(request.init?.headers).get("x-cosmos-block-height")
       ).toBe(height);
@@ -441,7 +491,10 @@ describe("wallet ACTIVE inventory at one height", () => {
       atHeight(inventory([], "AQ=="), calls++ === 0 ? height : secondHeight)
     );
     await expect(
-      new AkashNativeStateReader(OWNER, fetcher).readWalletInventory({
+      new AkashNativeStateReader(
+        OWNER,
+        withFreshBlock(fetcher)
+      ).readWalletInventory({
         deadlineAt: Date.now() + 30_000,
       })
     ).rejects.toThrow("height_mismatch");
@@ -450,7 +503,10 @@ describe("wallet ACTIVE inventory at one height", () => {
   it("does not call a repeated continuation complete", async () => {
     const fetcher = vi.fn(async () => atHeight(inventory([], "AQ==")));
     await expect(
-      new AkashNativeStateReader(OWNER, fetcher).readWalletInventory({
+      new AkashNativeStateReader(
+        OWNER,
+        withFreshBlock(fetcher)
+      ).readWalletInventory({
         deadlineAt: Date.now() + 30_000,
       })
     ).rejects.toThrow("pagination_incomplete");
@@ -462,7 +518,10 @@ describe("wallet ACTIVE inventory at one height", () => {
       atHeight(inventory([active(DSEQ, "akash1foreign")]))
     );
     await expect(
-      new AkashNativeStateReader(OWNER, fetcher).readWalletInventory({
+      new AkashNativeStateReader(
+        OWNER,
+        withFreshBlock(fetcher)
+      ).readWalletInventory({
         deadlineAt: Date.now() + 30_000,
       })
     ).rejects.toThrow("identity_mismatch");
@@ -489,7 +548,10 @@ describe("wallet ACTIVE inventory at one height", () => {
         )
       );
       await expect(
-        new AkashNativeStateReader(OWNER, fetcher).readWalletInventory({
+        new AkashNativeStateReader(
+          OWNER,
+          withFreshBlock(fetcher)
+        ).readWalletInventory({
           deadlineAt: Date.now() + 30_000,
         })
       ).rejects.toThrow("identity_mismatch");
@@ -499,7 +561,10 @@ describe("wallet ACTIVE inventory at one height", () => {
   it("aborts expired queued work and rejects late responses from an uncooperative transport", async () => {
     const never = vi.fn(() => new Promise<Response>(() => undefined));
     await expect(
-      new AkashNativeStateReader(OWNER, never).readWalletInventory({
+      new AkashNativeStateReader(
+        OWNER,
+        withFreshBlock(never)
+      ).readWalletInventory({
         deadlineAt: Date.now() - 1,
       })
     ).rejects.toThrow("budget_exceeded");
@@ -507,7 +572,7 @@ describe("wallet ACTIVE inventory at one height", () => {
     vi.useFakeTimers();
     const pending = new AkashNativeStateReader(
       OWNER,
-      never
+      withFreshBlock(never)
     ).readWalletInventory({ deadlineAt: Date.now() + 50 });
     const assertion = expect(pending).rejects.toThrow("budget_exceeded");
     await vi.advanceTimersByTimeAsync(51);

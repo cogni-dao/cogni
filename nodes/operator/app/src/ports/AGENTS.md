@@ -36,6 +36,8 @@ Ports describe _what_ the domain needs from external services, not _how_ they wo
 
 ## Public Surface
 
+- `AkashTxConsolePort.status` accepts the original optional absolute deadline and abort signal for the final allocation observation.
+
 Two entrypoints enforce Next.js App Router environment boundaries (see bug.0147):
 
 ### `index.ts` — Client-safe barrel

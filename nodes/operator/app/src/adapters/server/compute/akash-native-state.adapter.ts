@@ -5,13 +5,14 @@
  * Module: `@adapters/server/compute/akash-native-state.adapter`
  * Purpose: Bounded, keyless public LCD deployment/lease observations for verified receipts.
  * Scope: HTTP + validation only. Bootstrap supplies the public owner, never caller input.
- * Invariants: fixed GET origin; no credentials/retries; uint64 stays lossless; no closure verdict.
+ * Invariants: fixed GET origin; no credentials; lossless uint64; admission pins a fresh post-start block.
  * Side-effects: public HTTP reads; safe per-request boundary events through injected logger.
  * Links: bug.5556; served Akash 2.1.0, node 151b989a58f579ac08b688b325e0dfcc4b44fecb,
  *   chain-sdk 23a32e89d932c2a2e12e2d6383dcf6517e8399d7 proto/node/akash/{deployment/v1beta4,market/v1beta5}/query.proto;
  *   deployment/v1/deployment.proto, market/v1/{lease,filters}.proto; Cosmos v0.53.7-akash.2 pagination.proto.
  * @internal
  */
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type {
   AkashNativeObservation,
@@ -280,9 +281,12 @@ export class AkashNativeStateReader {
   }): Promise<AkashNativeWalletInventory> {
     if (!this.owner) throw new NativeReadError("owner_unavailable");
     const owner = this.owner;
+    // The actuator enters here only after its guarded claim acknowledgement. A
+    // consensus block produced after this read starts is therefore post-barrier.
+    const startedAt = Date.now();
     const { signal, clear } = this.inventoryDeadline(input);
     try {
-      let height: string | undefined;
+      const height = await this.freshInventoryHeight(startedAt, signal);
       const deployments = await this.inventoryPages(
         "/akash/deployment/v1beta4/deployments/list",
         {
@@ -291,10 +295,7 @@ export class AkashNativeStateReader {
         },
         "deployments",
         signal,
-        () => height,
-        (value) => {
-          height = value;
-        }
+        () => height
       );
       const targets: AkashNativeWalletInventory["targets"][number][] = [];
       let facts = 0;
@@ -395,6 +396,53 @@ export class AkashNativeStateReader {
       return { owner, height, observedAt: new Date().toISOString(), targets };
     } finally {
       clear();
+    }
+  }
+
+  /** Do not stamp old native state fresh with the local response-completion time. */
+  private async freshInventoryHeight(
+    startedAt: number,
+    signal: AbortSignal
+  ): Promise<string> {
+    let previousHeight: bigint | undefined;
+    for (;;) {
+      if (signal.aborted) throw signal.reason;
+      const response = await this.get(
+        "/cosmos/base/tendermint/v1beta1/blocks/latest",
+        {},
+        signal
+      );
+      const parsed = z
+        .object({
+          block: z.object({
+            header: z.object({
+              height: z.string(),
+              time: z.string().datetime({ offset: true }),
+            }),
+          }),
+        })
+        .safeParse(response.body);
+      if (!parsed.success || !validHeight(parsed.data.block.header.height))
+        throw new NativeReadError("invalid_response");
+      const header = parsed.data.block.header;
+      const blockTime = Date.parse(header.time);
+      if (
+        !Number.isFinite(blockTime) ||
+        blockTime > Date.now() ||
+        Date.now() - blockTime > 30_000
+      )
+        throw new NativeReadError("height_mismatch");
+      const height = BigInt(header.height);
+      if (previousHeight !== undefined && height < previousHeight)
+        throw new NativeReadError("height_mismatch");
+      if (
+        blockTime >= startedAt &&
+        (previousHeight === undefined || height > previousHeight)
+      )
+        return header.height;
+      previousHeight ??= height;
+      // Wait only for the next consensus block, within the existing pass signal.
+      await delay(1000, undefined, { signal });
     }
   }
 

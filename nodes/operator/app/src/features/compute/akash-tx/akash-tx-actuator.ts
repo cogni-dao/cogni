@@ -2045,7 +2045,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     deadlineAt?: number
   ): Promise<AkashTxResource> {
     try {
-      const output = await this.console.status({ leaseId: externalName });
+      const output = await this.console.status(
+        { leaseId: externalName },
+        deadlineAt !== undefined ? { deadlineAt } : undefined
+      );
       if (record) await this.observeCost(record, externalName, deadlineAt);
       return resourceFrom(output, providerAccount);
     } catch (error) {

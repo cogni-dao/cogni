@@ -442,7 +442,10 @@ export interface AkashTxConsolePort {
     cursor: string,
     budget?: { deadlineAt: number; signal?: AbortSignal }
   ): Promise<AkashAllocationProbe>;
-  status(input: { leaseId: string }): Promise<ProvisionOutput>;
+  status(
+    input: { leaseId: string },
+    budget?: { deadlineAt: number; signal?: AbortSignal }
+  ): Promise<ProvisionOutput>;
   /** Read-only existing Console auth/client. Missing implementation denies applied qualification. */
   readManagedDefinition?(input: {
     leaseId: string;

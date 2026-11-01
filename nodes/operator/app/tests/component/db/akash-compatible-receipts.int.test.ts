@@ -21,6 +21,7 @@ import {
 } from "@/adapters/server/compute/akash-receipt-transaction";
 import { DrizzleAkashTxAllocationLedger } from "@/adapters/server/compute/akash-tx-allocation-ledger.adapter";
 import { DrizzleDatabaseCellBindingStore } from "@/adapters/server/compute/database-cell-binding-store.adapter";
+import { AkashTxError } from "@/ports";
 import { akashTxAllocations } from "@/shared/db/schema";
 
 const WALLET = "akash-console:akash1testwalletaddressforcomponenttests0000";
@@ -764,9 +765,11 @@ describe("compatible receipts: real PostgreSQL", () => {
     const [first, second] = await guardedLedger.listClosureCandidates();
     if (!first || !second) throw new Error("qualification fixtures missing");
     expect(first.state).toBe("allocated");
-    await expect(
-      guardedLedger.startClosureRead(first, Date.now() - 1)
-    ).rejects.toThrow(/deadline/);
+    const expiredRead = guardedLedger.startClosureRead(first, Date.now() - 1);
+    await expect(expiredRead).rejects.toBeInstanceOf(AkashTxError);
+    await expect(expiredRead).rejects.toMatchObject({
+      code: "outcome_unknown",
+    });
     expect(
       (await guardedLedger.read({ cogniKey: first.cogniKey }))?.custody
     ).toEqual(first.custody);

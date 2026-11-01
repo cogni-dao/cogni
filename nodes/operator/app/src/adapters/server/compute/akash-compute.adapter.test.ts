@@ -1981,3 +1981,95 @@ describe("recovery allocation money policy", () => {
     expect(h.leased).toEqual([]);
   });
 });
+
+describe("allocation caller deadline with the normal auction window", () => {
+  it.each([
+    { preferredProviders: [] },
+    { preferredProviders: ["missing-preferred"] },
+    { preferredProviders: ["eligible"] },
+  ])("leases an eligible bidder with optional preference %j before the original budget expires", async ({
+    preferredProviders,
+  }) => {
+    let elapsed = 0;
+    const startedAt = Date.now();
+    const now = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => startedAt + elapsed);
+    try {
+      const h = harness({
+        providers: [providerEntry("eligible")],
+        bids: (dseq) => [bidEntry(dseq, "eligible", "1")],
+      });
+      const adapter = new AkashComputeAdapter({
+        apiKey: "inert-test-key",
+        timeoutMs: 1000,
+        fetchImpl: h.fetchImpl,
+        preferredProviders,
+        outcomeStore: memStore().store,
+        sleepImpl: async (ms) => {
+          elapsed += ms;
+        },
+      });
+      const recorded: string[] = [];
+      const result = await adapter.allocateAndLease({
+        spec: SPEC,
+        deadlineAt: startedAt + 30_000,
+        onAllocated: async (handle) => {
+          recorded.push(handle);
+        },
+      });
+      expect(recorded).toEqual([result.leaseId]);
+      expect(h.leased).toEqual([
+        { dseq: result.leaseId, provider: "eligible" },
+      ]);
+      expect(h.deletes).toEqual([]);
+      expect(elapsed).toBeLessThan(30_000);
+      if (preferredProviders.includes("eligible")) expect(elapsed).toBe(0);
+      else expect(elapsed).toBeGreaterThan(0);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it.each([
+    "/v1/providers",
+    "/v1/deployments",
+    "/v1/bids",
+    "/v1/leases",
+  ])("bounds stalled %s and revokes late answers without compensation", async (stalledPath) => {
+    let resume: ((response: Response) => void) | undefined;
+    const calls: string[] = [];
+    const h = harness({
+      providers: [providerEntry("eligible")],
+      bids: (dseq) => [bidEntry(dseq, "eligible", "1")],
+    });
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      calls.push(`${init?.method ?? "GET"} ${url.pathname}`);
+      if (url.pathname === stalledPath)
+        return new Promise<Response>((resolve) => {
+          resume = resolve;
+        });
+      return h.fetchImpl(input, init);
+    };
+    const adapter = makeAdapter(fetchImpl, {
+      preferredProviders: ["eligible"],
+    });
+    const recorded = vi.fn(async () => {});
+    await expect(
+      adapter.allocateAndLease({
+        spec: SPEC,
+        deadlineAt: Date.now() + 50,
+        onAllocated: recorded,
+      })
+    ).rejects.toMatchObject({ code: "outcome_unknown" });
+    const beforeLateAnswer = [...calls];
+    resume?.(jsonResponse({ data: { dseq: "late", manifest: [] } }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toEqual(beforeLateAnswer);
+    expect(calls.some((call) => call.startsWith("DELETE"))).toBe(false);
+    if (["/v1/providers", "/v1/deployments"].includes(stalledPath))
+      expect(recorded).not.toHaveBeenCalled();
+  });
+});
