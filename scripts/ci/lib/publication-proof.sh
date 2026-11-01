@@ -22,7 +22,7 @@ publication_require_verifier() {
 # 0 = present; 3 = positively absent; 1 = unresolved/auth/transport failure.
 # A failed read must never authorize replacement of a closed coordinate.
 publication_lookup() {
-  local tag="$1" result err rc=0
+  local tag="$1" result diagnostic err rc=0
   err=$(mktemp)
   result=$(timeout 60 docker buildx imagetools inspect "$tag" --format '{{json .Manifest.Digest}}' 2>"$err") || rc=$?
   if [[ "$rc" == 0 && "${result//\"/}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -33,8 +33,14 @@ publication_lookup() {
   # Buildx often reduces the registry's typed 404 to "not found". Confirm
   # missing-manifest with the authenticated registry API; never infer absence
   # from that lossy diagnostic, an anonymous 404, or a missing repository.
-  if [[ "$rc" != 0 ]] && grep -Eqi 'manifest unknown|MANIFEST_UNKNOWN|not found' "$err" &&
-      ! grep -Eqi 'unauthorized|denied|forbidden|timeout|connection|5[0-9][0-9]' "$err"; then
+  # Identity bytes are opaque: a source SHA may contain 503/595 and a target
+  # may be named connection/denied. Classify only the diagnostic after removing
+  # the EXACT requested coordinate. Typed authenticated confirmation below is
+  # still the sole authority for absence.
+  diagnostic=$(cat "$err")
+  diagnostic="${diagnostic//"$tag"/}"
+  if [[ "$rc" != 0 ]] && grep -Eqi 'manifest unknown|MANIFEST_UNKNOWN|not found' <<<"$diagnostic" &&
+      ! grep -Eqi 'unauthorized|denied|forbidden|timeout|connection|5[0-9][0-9]' <<<"$diagnostic"; then
     local absence_rc=0
     publication_confirm_absence "$tag" || absence_rc=$?
     if [[ "$absence_rc" = 3 ]]; then rm -f "$err"; return 3; fi
@@ -210,6 +216,67 @@ def qualify_producer_closure(revision):
     actual = {path: git_blob(remote_blob(repo, revision, path)) for path in retained_native_blobs}
     if actual != current_native_blobs and actual != retained_native_blobs and actual != previous_native_blobs:
         raise RuntimeError('publication_signer_implementation_mismatch')
+def legacy_app_checkout(job, run_id, attempt):
+    checkout = 'actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955'
+    # These are the actual frozen W step names/numbers, including custom names.
+    # The manifest's unsigned claims depend on its app-side merge/write chain.
+    names = (['Set up Docker Buildx', 'Login to GHCR', f'Build and push {target}', 'Upload build fragment']
+             if job['name'] == f'build ({target})' else
+             ['Download build fragments', 'Merge fragments into build-images.json', 'Write build manifest', 'Upload build manifest'])
+    names = ['Set up job', 'Run ' + checkout] + names
+    if (str(job.get('run_id')) != run_id or str(job.get('run_attempt')) != attempt
+            or [(x.get('number'), x.get('name'), x.get('conclusion')) for x in job.get('steps', [])[:6]] !=
+               [(i, name, 'success') for i, name in enumerate(names, 1)]):
+        raise SystemExit('publication_legacy_checkout_unproven: step chain')
+    logs = run(['gh', 'api', f'repos/{repo}/actions/jobs/{job["id"]}/logs']).decode('utf-8-sig')
+    lines = [re.sub(r'^\d{4}-\d\d-\d\dT[0-9:.]+Z ', '', line) for line in logs.splitlines()]
+    marker = 'Complete job name: ' + job['name']
+    if lines.count(marker) != 1:
+        raise SystemExit('publication_legacy_checkout_unproven: job boundary')
+    header = lines[lines.index(marker) + 1:]
+    if not header or header[0] != '##[group]Run ' + checkout or '##[endgroup]' not in header:
+        raise SystemExit('publication_legacy_checkout_unproven: first action')
+    end = header.index('##[endgroup]')
+    # Native runner inputs precede action execution. Never scan arbitrary tail
+    # text for a repository/ref. No server, path, sparse, shell or env override.
+    defaults = {'repository': source_repo, 'ref': source_sha, 'fetch-depth': '1', 'token': '***',
+                'ssh-strict': 'true', 'ssh-user': 'git', 'persist-credentials': 'true',
+                'clean': 'true', 'sparse-checkout-cone-mode': 'true', 'fetch-tags': 'false',
+                'show-progress': 'true', 'lfs': 'false', 'submodules': 'false', 'set-safe-directory': 'true'}
+    values, environment, section = {}, {}, None
+    for line in header[1:end]:
+        if line in ('with:', 'env:'):
+            if (line == 'with:' and section is not None) or (line == 'env:' and section != 'with:'):
+                raise SystemExit('publication_legacy_checkout_unproven: header sections')
+            section = line
+            continue
+        m = re.fullmatch(r'  ([A-Za-z_][A-Za-z0-9_-]*): (.*)', line)
+        if not m or section is None:
+            raise SystemExit('publication_legacy_checkout_unproven: input shape')
+        destination = values if section == 'with:' else environment
+        if m[1] in destination:
+            raise SystemExit('publication_legacy_checkout_unproven: duplicate input')
+        destination[m[1]] = m[2]
+    if (any(k not in defaults or defaults[k] != v for k, v in values.items())
+            or not all(values.get(k) == defaults[k] for k in ('repository', 'ref', 'fetch-depth'))):
+        raise SystemExit('publication_legacy_checkout_unproven: checkout inputs')
+    env_values = {'IMAGE_NAME': 'ghcr.io/' + repo.split('/')[0] + '/cogni-template',
+                  'HEAD_SHA': source_sha, 'IMAGE_TAG': 'sha-' + source_sha}
+    if (any(k not in {*env_values, 'FLEET_CONTROL_ENV', 'PR_NUMBER'} for k in environment)
+            or any(environment.get(k) != v for k, v in env_values.items())
+            or not re.fullmatch('[a-z][a-z0-9-]*', environment.get('FLEET_CONTROL_ENV', ''))
+            or not re.fullmatch('[0-9]*', environment.get('PR_NUMBER', ''))):
+        raise SystemExit('publication_legacy_checkout_unproven: checkout environment')
+    body = header[end + 1:]
+    boundary = next((i for i, line in enumerate(body) if line.startswith('##[group]Run ') or line == 'Post job cleanup.'), len(body))
+    body = body[:boundary]
+    positions = [i for i, line in enumerate(body) if line == '[command]/usr/bin/git log -1 --format=%H']
+    if (len(positions) != 1 or positions[0] + 1 >= len(body) or body[positions[0] + 1] != source_sha
+            or [line for line in body if line.startswith('Syncing repository: ')] != ['Syncing repository: ' + source_repo]
+            or [line for line in body if line.startswith('[command]/usr/bin/git checkout ')] !=
+               ['[command]/usr/bin/git checkout --progress --force ' + source_sha]):
+        raise SystemExit('publication_legacy_checkout_unproven: checkout result')
+
 def legacy_workflow_revision(original, jobs, run_id, attempt):
     # REST head_sha is the PR app head, NOT the merge execution revision.
     # Only these original event families execute the REST head itself.
@@ -455,9 +522,13 @@ else:
             producers = [j for j in jobs['jobs'] if j['name'] == f'build ({target})' and j['conclusion'] == 'success']
             if len(producers) != 1:
                 raise SystemExit('publication_legacy_producer_ambiguous')
-            logs = run(['gh', 'api', f'repos/{repo}/actions/jobs/{producers[0]["id"]}/logs']).decode(errors='replace')
-            if not re.search(r'repository: [\s\x1b\[0-9;m]*' + re.escape(source_repo) + r'\s', logs) or not re.search(r'ref: ' + source_sha + r'\s', logs):
-                raise SystemExit('publication_legacy_checkout_unproven')
+            aggregators = [j for j in jobs['jobs'] if j['name'] == 'manifest' and j['conclusion'] == 'success']
+            if len(aggregators) != 1:
+                raise SystemExit('publication_legacy_checkout_unproven: manifest job')
+            # Both application checkouts must execute the exact qualified S
+            # helpers. Authentic W alone cannot make arbitrary Q shell trusted.
+            legacy_app_checkout(producers[0], run_id, attempt)
+            legacy_app_checkout(aggregators[0], run_id, attempt)
             evidence = {'kind': 'legacy-v1', 'source_repository': source_repo, 'source_sha': source_sha,
                         'target': target, 'platform': 'linux/amd64', 'artifact_id': a['id'],
                         'producer': {'repository': repo, 'workflow': workflow, 'revision': workflow_revision,

@@ -269,9 +269,15 @@ if client == 'curl':
     assert sys.stdin.read().startswith('header = "Authorization: ')
     output = pathlib.Path(args[args.index('--output')+1])
     if '/token?' in args[-1]:
-        output.write_text(json.dumps({'token':'fixture-authenticated-pull'})); print('200',end='')
+        output.write_text(json.dumps({'token':'fixture-authenticated-pull'})); print('404' if os.environ.get('REGISTRY_ERROR') == 'anonymous' else '200',end='')
     else:
-        output.write_text(json.dumps({'errors':[{'code':'MANIFEST_UNKNOWN'}]})); print('404',end='')
+        defect = os.environ.get('REGISTRY_ERROR', '')
+        if defect == 'transport': fail('fixture connection reset')
+        if defect == 'malformed': output.write_text('not json'); print('404',end='')
+        else:
+            code = 'NAME_UNKNOWN' if defect == 'repository' else 'DENIED' if defect == 'auth' else 'MANIFEST_UNKNOWN'
+            status = '503' if defect == '503' else '401' if defect == 'auth' else '404'
+            output.write_text(json.dumps({'errors':[{'code':code}]})); print(status,end='')
     sys.exit(0)
 if client == 'docker':
     if args[:2] == ['buildx', 'version']: print('fixture-buildx'); sys.exit(0)
@@ -291,7 +297,7 @@ if client == 'docker':
     if args[:3] == ['buildx', 'imagetools', 'inspect']:
         subject = args[3]
         if os.environ.get('LOOKUP_ERROR'): fail(os.environ['LOOKUP_ERROR'])
-        if not (state / 'present').exists(): fail('manifest unknown')
+        if not (state / 'present').exists(): fail('ERROR: ' + subject + ': not found')
         # Only the selected operator coordinate is present, never unrelated apps.
         if ':sha-' in subject and subject.rsplit(':sha-',1)[1] != os.environ['FIXTURE_SOURCE']:
             fail('manifest unknown')
@@ -370,7 +376,13 @@ if '/actions/artifacts' in endpoint:
     sys.exit(0)
 if '/actions/runs/' in endpoint:
     if '/jobs?' in endpoint:
-        jobs = [{'id':43,'name':'build (operator)','conclusion':'success'}]
+        checkout = 'Run actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955'
+        def job(identifier, name, names):
+            steps = [{'number':i,'name':n,'conclusion':'success'} for i,n in enumerate(['Set up job',checkout]+names,1)]
+            if os.environ.get('DEFECT') == name.split(' ')[0] + '-step': steps[1]['name'] = 'arbitrary shell'
+            return {'id':identifier,'name':name,'conclusion':'success','run_id':41163851879,'run_attempt':1,'steps':steps}
+        jobs = [job(43,'build (operator)',['Set up Docker Buildx','Login to GHCR','Build and push operator','Upload build fragment']),
+                job(45,'manifest',['Download build fragments','Merge fragments into build-images.json','Write build manifest','Upload build manifest'])]
         if os.environ.get('LEGACY_EVENT') == 'pull_request' and os.environ.get('DEFECT') != 'missing-execution':
             steps = [{'number':1,'name':'Set up job','conclusion':'success'},
                      {'number':2,'name':'Run actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955','conclusion':'success'}]
@@ -397,7 +409,30 @@ if '/actions/jobs/44/logs' in endpoint:
     if defect == 'execution-late-text': body = ['##[group]Run echo untrusted'] + body
     print('\n'.join(header + body)); sys.exit(0)
 if '/actions/jobs/' in endpoint:
-    print('repository: cogni-dao/cogni\nref: ' + os.environ['FIXTURE_SOURCE'] + '\n'); sys.exit(0)
+    job = 'build' if '/43/' in endpoint else 'manifest'
+    name = 'build (operator)' if job == 'build' else 'manifest'
+    action = 'actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955'
+    source = os.environ['FIXTURE_SOURCE']; defect = os.environ.get('DEFECT', '')
+    defect = defect[len(job)+1:] if defect.startswith(job+'-') else ''
+    repository = 'wrong/repository' if defect == 'repo' else 'cogni-dao/cogni'
+    revision = 'e'*40 if defect == 'ref' else source
+    header = ['Complete job name: '+name,'##[group]Run '+action,'with:',
+              '  repository: '+repository,'  ref: '+revision,'  fetch-depth: 1','  token: ***',
+              'env:','  IMAGE_NAME: ghcr.io/cogni-dao/cogni-template','  FLEET_CONTROL_ENV: production',
+              '  IMAGE_TAG: sha-'+source,'  HEAD_SHA: '+source,'##[endgroup]']
+    if defect == 'duplicate-input': header.insert(4,'  repository: cogni-dao/cogni')
+    if defect == 'server': header.insert(4,'  github-server-url: https://foreign.invalid')
+    if defect == 'env': header.insert(-1,'  INPUT_REPOSITORY: wrong/repository')
+    body = ['Syncing repository: '+repository,'[command]/usr/bin/git checkout --progress --force '+revision,
+            '[command]/usr/bin/git log -1 --format=%H','e'*40 if defect == 'head' else source]
+    if defect == 'duplicate-head': body += body[-2:]
+    if defect == 'missing-head': body = body[:-2]
+    if defect == 'late-head': body = body[:-2]+['##[group]Run echo untrusted']+body[-2:]
+    if defect == 'late-checkout': header.insert(1,'##[group]Run echo untrusted')
+    # Arbitrary later user output claims S in every counterexample. This is not
+    # checkout authority, even when an unsigned manifest also claims S.
+    tail = ['##[group]Run echo untrusted','repository: cogni-dao/cogni','ref: '+source]
+    print('\ufeff'+'\n'.join('2026-10-31T03:19:42.0000000Z '+line for line in header+body+tail)); sys.exit(0)
 fail('unexpected gh endpoint ' + endpoint)
 PY
 chmod +x "$pub/bin/client.py"
@@ -560,6 +595,18 @@ bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh"
 jq -e '.targets[0].publication.producer.run_attempt == "1"' "$OUTPUT_FILE" >/dev/null
 grep -q 'actions/runs/41163851879/attempts/1/jobs' "$pub/calls"
 echo '[PASS] legacy original attempt survives later failure; wrong/failed original attempts refuse'
+# R58: later source claims cannot replace the native first app checkout in
+# either producer or unsigned aggregation. Exercise real helpers/Git blobs.
+for job in build manifest; do
+  for defect in repo ref head duplicate-input duplicate-head missing-head late-head late-checkout server env step; do
+    if DEFECT="$job-$defect" bash "$REPO_ROOT/scripts/ci/resolve-node-ref-image.sh" > "$pub/$job-$defect.log" 2>&1; then
+      echo "[FAIL] accepted legacy $job-$defect with later forged source text"; exit 1
+    fi
+    [[ ! -e "$OUTPUT_FILE" ]]
+  done
+done
+echo '[PASS] native build and manifest first checkouts reject forged later source, wrong HEAD, ambiguity and overrides'
+
 # Real immutable Git objects distinguish PR application S from executed M.
 # S deliberately has a BAD workflow; only M carries the frozen workflow.
 git -C "$REPO_ROOT" fetch -q --no-tags "$FIXTURE_GIT" "$accepted_source" f66aae9ee44fc74bda9e12623eb4c862c524e1d8
@@ -795,3 +842,60 @@ fi
 grep -q publication_signer_implementation_mismatch "$pub/retired-history.log"
 git -C "$REPO_ROOT" reset --hard -q "$r2"
 echo '[PASS] deleting retained qualification in immutable C refuses historical R1'
+
+# R58: use REAL source commits with status-like digits, tag-bearing native
+# diagnostics, actual registry confirmation and the actual build/finalize owner.
+# Only external clients are fixtures; no claim of native signatures is made.
+original_pub="$pub"
+source_parent=$(git -C "$REPO_ROOT" rev-parse HEAD)
+source_tree=$(git -C "$REPO_ROOT" rev-parse HEAD^{tree})
+for digits in 500 503 595; do
+  source=$(python3 - "$REPO_ROOT" "$source_tree" "$source_parent" "$digits" <<'PYTHON'
+import subprocess,sys
+root,tree,parent,digits=sys.argv[1:]
+for i in range(10000):
+    sha=subprocess.check_output(['git','-C',root,'commit-tree',tree,'-p',parent],input=f'opaque source {digits} {i}\n'.encode()).decode().strip()
+    if digits in sha:
+        print(sha);break
+else: raise SystemExit('fixture commit search exhausted')
+PYTHON
+)
+  git -C "$REPO_ROOT" checkout --detach -q "$source"
+  export FIXTURE_SOURCE="$source" BUILD_SHA="$source" GITHUB_WORKFLOW_SHA="$source"
+  export SOURCE_SHA="$source" SOURCE_REPOSITORY=cogni-dao/cogni TARGETS=operator
+  export COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" IMAGE_TAG="sha-$source"
+  export PUBLICATION_COORDINATE="ghcr.io/cogni-dao/cogni-template:sha-$source-linux/amd64"
+  pub="$original_pub/status-$digits"
+  mkdir -p "$pub"
+  export FIXTURE_STATE="$pub" OUTPUT_FILE="$pub/new.json" GITHUB_OUTPUT="$pub/output"
+  export GITHUB_RUN_ID=99001 NATIVE_MODE=api FIXTURE_DIGEST="sha256:7777777777777777777777777777777777777777777777777777777777777777"
+  # Lossy not-found diagnostic still needs authenticated typed MANIFEST_UNKNOWN.
+  for error in 503 auth transport repository malformed anonymous; do
+    if (cd "$REPO_ROOT"; REGISTRY_ERROR="$error" bash scripts/ci/build-and-push-images.sh) > "$pub/registry-$error.log" 2>&1; then
+      echo "[FAIL] registry $error authorized build for SHA containing $digits"; exit 1
+    fi
+    grep -q publication_lookup_failed "$pub/registry-$error.log"
+    [[ ! -e "$OUTPUT_FILE" && ! -e "$pub/present" ]]
+  done
+  for error in 'manifest unknown: HTTP 503' 'unauthorized: not found' 'connection reset: not found'; do
+    if (cd "$REPO_ROOT"; LOOKUP_ERROR="$error" bash scripts/ci/build-and-push-images.sh) > "$pub/diagnostic.log" 2>&1; then
+      echo '[FAIL] actual diagnostic ambiguity authorized build'; exit 1
+    fi
+    grep -q publication_lookup_failed "$pub/diagnostic.log"
+  done
+  [[ $(grep -c '^docker buildx build ' "$pub/calls" || true) == 0 ]]
+  # Coordinate words that look like diagnostic errors are equally opaque.
+  . "$REPO_ROOT/scripts/ci/lib/publication-proof.sh"
+  rc=0
+  publication_lookup "ghcr.io/cogni-dao/connection-denied:sha-$source" > "$pub/words.log" 2>&1 || rc=$?
+  [[ "$rc" == 3 ]]
+  (cd "$REPO_ROOT"; bash scripts/ci/build-and-push-images.sh) > "$pub/build.log"
+  [[ ! -e "$OUTPUT_FILE" && -s "$OUTPUT_FILE.pending" ]]
+  (cd "$REPO_ROOT"; PUBLICATION_PHASE=finalize bash scripts/ci/build-and-push-images.sh) > "$pub/finalize.log"
+  jq -e --arg source "$source" '.targets[0] | .outcome == "built" and .publication.source_sha == $source and .publication.producer.run_id == "99001"' "$OUTPUT_FILE" >/dev/null
+  export OUTPUT_FILE="$pub/reused.json" GITHUB_RUN_ID=99002
+  (cd "$REPO_ROOT"; bash scripts/ci/build-and-push-images.sh) > "$pub/reused.log"
+  jq -e '.targets[0] | .outcome == "reused" and .publication.producer.run_id == "99001"' "$OUTPUT_FILE" >/dev/null
+  [[ $(grep -c '^docker buildx build ' "$pub/calls") == 1 ]]
+  echo "[PASS] source SHA containing $digits confirms authenticated absence, builds once, finalizes and reuses; unresolved reads never mutate"
+done
