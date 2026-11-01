@@ -13,6 +13,7 @@
  * @internal
  */
 
+import type { Socket } from "node:net";
 import * as fullSchema from "@cogni/db-schema";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -21,6 +22,12 @@ export interface DbClientOptions {
   /** Maximum connections owned by this process, not the database role's limit. */
   readonly max?: number;
   readonly applicationName?: string;
+  /** Disable automatic catalog array-type discovery when the consumer uses no SQL arrays. */
+  readonly fetchTypes?: boolean;
+  /** Documented postgres.js custom transport; its owner must dispose it after end(). */
+  readonly socket?: () => Promise<Socket>;
+  /** Public postgres.js TLS options, including an explicit SNI name for custom sockets. */
+  readonly ssl?: postgres.Options<Record<string, never>>["ssl"];
 }
 
 export function buildClient(
@@ -32,14 +39,23 @@ export function buildClient(
   if (!Number.isSafeInteger(max) || max < 1) {
     throw new Error("Database pool max must be a positive safe integer");
   }
-  const client = postgres(connectionString, {
+  // v3.4.7 supports socket at runtime but omits it from its public declarations.
+  const transportOptions: postgres.Options<Record<string, never>> & {
+    socket?: () => Promise<Socket>;
+  } = {
     max,
     idle_timeout: 20,
     connect_timeout: 10,
+    ...(options.fetchTypes !== undefined
+      ? { fetch_types: options.fetchTypes }
+      : {}),
+    ...(options.socket ? { socket: options.socket } : {}),
+    ...(options.ssl !== undefined ? { ssl: options.ssl } : {}),
     connection: {
       application_name: options.applicationName ?? applicationName,
     },
-  });
+  };
+  const client = postgres(connectionString, transportOptions);
 
   return drizzle(client, { schema: fullSchema });
 }

@@ -11,15 +11,13 @@
  *   environment — `akash-lease` said "not yet ready" 1044 times while the actuator was never
  *   called at all. Buying compute and migrating a database are different jobs; this one is no
  *   longer allowed to stop the other.
- * Scope: One bounded, NON-THROWING attempt per call: translate the caller's step into the
+ * Scope: One bounded attempt per call: translate the caller's step into the
  *   per-digest migration contract, ask the migration port once, answer with a phase. Does NOT
  *   watch, poll, sleep, retry, hold state, or refuse anything — the caller (Crossplane, via the
  *   actuator's observe) owns requeue and backoff exactly as it does for every other tick.
  * Invariants:
- *   - NEVER_REFUSES: there is no failure path that throws. Every outcome — including an
- *     unreachable prover and a missing capability — is a PHASE. A thrown error here would
- *     re-create the coupling this module was rewritten to delete, because observe is the call
- *     Crossplane uses to decide whether to create the lease at all.
+ *   - Migration failures and missing capabilities report a PHASE. Uncertain operator receipt
+ *     acknowledgements remain HELD and escape unchanged; they cannot authorize CREATE.
  *   - COMMANDS_ARE_NOT_CALLER_SUPPLIED: the migration commands live here, keyed by
  *     runtimeProfile. A caller-supplied command would let anyone who can reach the actuator run
  *     an arbitrary container against the environment's database under its service account.
@@ -57,6 +55,7 @@ import type {
   ComputeWorkloadMigrationPhase,
   NodeMigrationReportStorePort,
 } from "@/ports";
+import { AkashTxError } from "@/ports";
 import {
   diffDeclaredVsApplied,
   hasMissingMigrations,
@@ -128,6 +127,7 @@ function workloadNamespace(environment: string): string {
 }
 
 export interface AkashTxMigrationStepInput {
+  readonly deadlineAt?: number;
   readonly step: AkashTxMigrationStep;
   readonly cogniKey: string;
   readonly environment: string;
@@ -167,8 +167,8 @@ export interface AkashTxMigrationStepDeps {
  * FORCE row-level-security tenant state, and from this session-less process that lookup returned
  * zero rows for every node in the fleet, so every receipt was discarded as `node_not_registered`.
  *
- * Non-throwing, like everything else in this module. It returns the drift it READ, or `null` for
- * "no verdict" — every path that could not obtain and durably store a receipt answers `null`, and
+ * It returns the drift it READ, or `null` for
+ * "no verdict". An uncertain store acknowledgement throws HELD. Other unreadable receipts return null, and
  * `null` is NOT "clean". That distinction is the whole safety property of the drift gate: an
  * unreadable Job log, a missing capability, a malformed line and an unbound node id are all
  * UNKNOWNS, and an unknown must never block a deploy.
@@ -177,6 +177,7 @@ async function recordReceipt(
   deps: AkashTxMigrationStepDeps,
   input: {
     readonly workload: string;
+    readonly deadlineAt?: number;
     readonly nodeId?: string | undefined;
     readonly environment: string;
     readonly bundleDigest: string;
@@ -209,14 +210,17 @@ async function recordReceipt(
       deps.log.info(input.fields, "akash_tx_migration_receipt_absent");
       return null;
     }
-    const outcome = await reports.record({
-      nodeId,
-      environment: input.environment,
-      declared: receipt.declared,
-      applied: receipt.applied,
-      bundleDigest: input.bundleDigest,
-      reporter: "migration-job",
-    });
+    const outcome = await reports.record(
+      {
+        nodeId,
+        environment: input.environment,
+        declared: receipt.declared,
+        applied: receipt.applied,
+        bundleDigest: input.bundleDigest,
+        reporter: "migration-job",
+      },
+      input.deadlineAt
+    );
     const drift = diffDeclaredVsApplied(receipt);
     // Counts and enums only on THIS line — it fires on every tick. Named tags appear once, on the
     // `akash_tx_migration_drift_missing` verdict, and only for the image's own journal (reportDrift).
@@ -232,6 +236,8 @@ async function recordReceipt(
     );
     return drift;
   } catch (error) {
+    if (error instanceof AkashTxError && error.code === "outcome_unknown")
+      throw error;
     deps.log.error(
       {
         ...input.fields,
@@ -290,8 +296,8 @@ function reportDrift(
 }
 
 /**
- * Ensure the bundle digest's migration and report where it got to. NEVER throws, and its
- * answer never gates anything in this process — the composite decides what a phase means.
+ * Ensure the bundle digest's migration and report its phase. Operator database acknowledgement
+ * uncertainty throws HELD; migration phase policy remains with the composite.
  */
 export async function runMigrationStep(
   deps: AkashTxMigrationStepDeps,
@@ -325,6 +331,8 @@ export async function runMigrationStep(
       phases: cogniNodeAppMigrationPhases({ doltgres }),
     });
   } catch (error) {
+    if (error instanceof AkashTxError && error.code === "outcome_unknown")
+      throw error;
     deps.log.error(
       {
         ...fields,
@@ -343,6 +351,9 @@ export async function runMigrationStep(
     // Declared-vs-applied becomes comparable here, and only here: the migrator just told us what
     // it applied. Awaited so the receipt is durable before the phase is reported.
     const drift = await recordReceipt(deps, {
+      ...(input.deadlineAt !== undefined
+        ? { deadlineAt: input.deadlineAt }
+        : {}),
       workload: input.workload,
       ...(input.nodeId ? { nodeId: input.nodeId } : {}),
       environment: input.environment,

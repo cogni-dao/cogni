@@ -28,7 +28,8 @@
  *     is closed (escrow refunds) and the provider is recorded as an SLO failure. The
  *     controller begins any later allocation only from a new durable recovery receipt.
  *   - OUTCOME_STORE_IS_ADVISORY: outcome persistence is best-effort — a store failure never
- *     fails a live provision and never blocks screening (empty history).
+ *     fails a live provision and never blocks screening (empty history). An uncertain operator
+ *     database acknowledgement remains HELD and cannot authorize provider continuation.
  * Side-effects: IO (HTTPS requests to the Akash Console API + workload ingress; provision()
  *   spends real escrow; boot outcomes append to Postgres)
  * Links: ComputeResourcePort (@cogni/ai-tools/capabilities/compute), ./akash-sdl,
@@ -55,6 +56,7 @@ import type {
   ComputeCostEvidencePort,
   ComputeResourceCostEvidence,
 } from "@/ports";
+import { AkashTxError } from "@/ports";
 import { makeLogger } from "@/shared/observability";
 import {
   type AkashProviderInfo,
@@ -557,8 +559,11 @@ export class AkashComputeAdapter
   }
 
   /** Opaque high-water mark used to recover an allocation whose POST response was lost. */
-  async allocationCursor(): Promise<string> {
-    const deployments = await this.listAllDeployments();
+  async allocationCursor(budget?: {
+    deadlineAt: number;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const deployments = await this.listAllDeployments(budget);
     let max = -1n;
     for (const item of deployments) {
       const raw = item.deployment?.id?.dseq;
@@ -584,7 +589,10 @@ export class AkashComputeAdapter
    * Neither is billing, so neither warrants fail-closed. Only a LIVE allocation we cannot
    * attribute does — and that is `ambiguous`.
    */
-  async findAllocationSince(cursor: string): Promise<AkashAllocationProbe> {
+  async findAllocationSince(
+    cursor: string,
+    budget?: { deadlineAt: number; signal?: AbortSignal }
+  ): Promise<AkashAllocationProbe> {
     if (!/^-?\d+$/.test(cursor)) {
       throw new AkashComputeError(
         "UNEXPECTED_SHAPE",
@@ -592,7 +600,7 @@ export class AkashComputeAdapter
       );
     }
     const baseline = BigInt(cursor);
-    const candidates = (await this.listAllDeployments())
+    const candidates = (await this.listAllDeployments(budget))
       // Defensive: today Console's list returns live deployments only, but a closed one
       // appearing here must never count as live spend — closed is settled by definition.
       .filter((item) => item.deployment?.state !== "closed")
@@ -610,7 +618,7 @@ export class AkashComputeAdapter
     }
     return {
       outcome: "adopted",
-      output: await this.status({ leaseId: unique[0] as string }),
+      output: await this.status({ leaseId: unique[0] as string }, budget),
     };
   }
 
@@ -647,10 +655,16 @@ export class AkashComputeAdapter
     return country;
   }
 
-  async status(p: { leaseId: string }): Promise<ProvisionOutput> {
+  async status(
+    p: { leaseId: string },
+    budget?: { deadlineAt: number; signal?: AbortSignal }
+  ): Promise<ProvisionOutput> {
     const detail = await this.request<ConsoleDeploymentDetail>(
       "GET",
-      `/v1/deployments/${encodeURIComponent(p.leaseId)}`
+      `/v1/deployments/${encodeURIComponent(p.leaseId)}`,
+      undefined,
+      undefined,
+      budget
     );
     return provisionOutputFromDetail(p.leaseId, detail);
   }
@@ -767,10 +781,16 @@ export class AkashComputeAdapter
   /** Exact chain-native cost evidence. No fiat conversion or payer inference occurs here. */
   async observeCost(input: {
     resourceId: string;
+    deadlineAt?: number;
   }): Promise<ComputeResourceCostEvidence> {
     const detail = await this.request<ConsoleDeploymentDetail>(
       "GET",
-      `/v1/deployments/${encodeURIComponent(input.resourceId)}`
+      `/v1/deployments/${encodeURIComponent(input.resourceId)}`,
+      undefined,
+      undefined,
+      input.deadlineAt !== undefined
+        ? { deadlineAt: input.deadlineAt }
+        : undefined
     );
     return costEvidenceFromDetail(
       input.resourceId,
@@ -851,12 +871,16 @@ export class AkashComputeAdapter
     );
   }
 
-  async release(p: { leaseId: string }): Promise<void> {
+  async release(
+    p: { leaseId: string },
+    budget?: { deadlineAt: number; signal?: AbortSignal }
+  ): Promise<void> {
     await this.request(
       "DELETE",
       `/v1/deployments/${encodeURIComponent(p.leaseId)}`,
       undefined,
-      this.writeTimeoutMs
+      this.writeTimeoutMs,
+      budget
     );
   }
 
@@ -966,7 +990,10 @@ export class AkashComputeAdapter
     return undefined;
   }
 
-  private async listAllDeployments(): Promise<ConsoleDeploymentDetail[]> {
+  private async listAllDeployments(budget?: {
+    deadlineAt: number;
+    signal?: AbortSignal;
+  }): Promise<ConsoleDeploymentDetail[]> {
     const deployments: ConsoleDeploymentDetail[] = [];
     // Console's spec caps `limit` at 100 ("Deployments per page, at most 100" —
     // GET /v1/doc, 2026-09-18); 1000 draws HTTP 400 on every call, which killed the
@@ -978,8 +1005,14 @@ export class AkashComputeAdapter
         "GET",
         `/v1/deployments?skip=${skip}&limit=${limit}`,
         undefined,
-        this.writeTimeoutMs
+        this.writeTimeoutMs,
+        budget
       );
+      if (budget && (Date.now() >= budget.deadlineAt || budget.signal?.aborted))
+        throw new AkashComputeError(
+          "TIMEOUT",
+          "allocation read deadline exceeded"
+        );
       deployments.push(...(page?.deployments ?? []));
       if (!page?.pagination?.hasMore) return deployments;
     }
@@ -1070,6 +1103,7 @@ export class AkashComputeAdapter
    * (task.5095: Crossplane owns retry/backoff/readiness; this call owns only the tx).
    */
   async allocateAndLease(p: {
+    deadlineAt?: number;
     spec: ProvisionSpec;
     allocationPolicy?: AkashTxAllocationPolicy;
     /**
@@ -1091,7 +1125,7 @@ export class AkashComputeAdapter
     );
     const { dseq, provider } = await this.createAndLease(
       sdl,
-      this.withPlacement(await this.loadScreeningContext(), p.spec),
+      this.withPlacement(await this.loadScreeningContext(p.deadlineAt), p.spec),
       new Set<string>(p.excludedProviders ?? []),
       p.onAllocated
         ? async (resource) => {
@@ -1099,7 +1133,8 @@ export class AkashComputeAdapter
           }
         : undefined,
       retainsStorage(p.spec),
-      p.allocationPolicy
+      p.allocationPolicy,
+      p.deadlineAt
     );
     return { leaseId: String(dseq), providerAccount: provider };
   }
@@ -1115,8 +1150,17 @@ export class AkashComputeAdapter
     tried: Set<string>,
     onAllocated?: (resource: ProvisionOutput) => Promise<void>,
     retainStorage = false,
-    allocationPolicy?: AkashTxAllocationPolicy
+    allocationPolicy?: AkashTxAllocationPolicy,
+    deadlineAt?: number
   ): Promise<{ dseq: string; provider: string }> {
+    const checkDeadline = () => {
+      if (deadlineAt !== undefined && Date.now() >= deadlineAt)
+        throw new AkashTxError(
+          "outcome_unknown",
+          "HELD: allocation pass deadline expired"
+        );
+    };
+    checkDeadline();
     const created = await this.request<{ dseq?: string; manifest?: unknown }>(
       "POST",
       "/v1/deployments",
@@ -1126,7 +1170,8 @@ export class AkashComputeAdapter
           deposit: allocationPolicy?.initialEscrowUsd ?? this.deployDepositUsd,
         },
       },
-      this.writeTimeoutMs
+      this.writeTimeoutMs,
+      deadlineAt !== undefined ? { deadlineAt } : undefined
     );
     const dseq = created?.dseq;
     if (!dseq) {
@@ -1144,11 +1189,13 @@ export class AkashComputeAdapter
           state: "pending",
           endpoints: [],
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof AkashTxError && error.code === "outcome_unknown")
+          throw error;
         // bug.5192: this is the exact path that wedged production for 33h. The deployment is
         // closed here, but the caller's durable receipt still holds the wallet-global writer
         // slot — so the close MUST be proven and reported, or nothing can ever settle it.
-        const rolledBack = await this.closeAndVerify(String(dseq));
+        const rolledBack = await this.closeAndVerify(String(dseq), deadlineAt);
         throw new AkashComputeError(
           "UNEXPECTED_SHAPE",
           rolledBack
@@ -1176,9 +1223,11 @@ export class AkashComputeAdapter
         dseq,
         screening,
         tried,
-        allocationPolicy
+        allocationPolicy,
+        deadlineAt
       );
       provider = String(bid.provider);
+      checkDeadline();
       leaseAttempted = true;
       await this.request(
         "POST",
@@ -1194,9 +1243,12 @@ export class AkashComputeAdapter
             },
           ],
         },
-        this.writeTimeoutMs
+        this.writeTimeoutMs,
+        deadlineAt !== undefined ? { deadlineAt } : undefined
       );
     } catch (error) {
+      if (error instanceof AkashTxError && error.code === "outcome_unknown")
+        throw error;
       if (retainStorage && leaseAttempted) {
         throw new AkashComputeError(
           "ALLOCATION_OUTCOME_UNKNOWN",
@@ -1206,7 +1258,7 @@ export class AkashComputeAdapter
       // The close is best-effort, but WHETHER it closed is not: a verified close is the only
       // evidence that lets the caller settle its receipt and release the wallet slot instead
       // of holding it against spend that no longer exists (bug.5192).
-      const rolledBack = await this.closeAndVerify(String(dseq));
+      const rolledBack = await this.closeAndVerify(String(dseq), deadlineAt);
       if (error instanceof AkashComputeError) {
         throw new AkashComputeError(
           error.code,
@@ -1234,19 +1286,30 @@ export class AkashComputeAdapter
    * keeps the caller's receipt held and hands the case to the stale-allocation sweeper. A
    * wedged receipt is recoverable; a silently-cleared receipt over a live lease is not.
    */
-  private async closeAndVerify(dseq: string): Promise<boolean> {
+  private async closeAndVerify(
+    dseq: string,
+    deadlineAt?: number
+  ): Promise<boolean> {
+    const budget = deadlineAt !== undefined ? { deadlineAt } : undefined;
     try {
-      await this.release({ leaseId: dseq });
-    } catch {
+      await this.release({ leaseId: dseq }, budget);
+    } catch (error) {
+      if (error instanceof AkashTxError && error.code === "outcome_unknown")
+        throw error;
       // Fall through: the deployment may already be closed, which the read-back settles.
     }
     try {
       const detail = await this.request<ConsoleDeploymentDetail>(
         "GET",
-        `/v1/deployments/${encodeURIComponent(dseq)}`
+        `/v1/deployments/${encodeURIComponent(dseq)}`,
+        undefined,
+        undefined,
+        budget
       );
       return detail?.deployment?.state === "closed";
     } catch (error) {
+      if (error instanceof AkashTxError && error.code === "outcome_unknown")
+        throw error;
       // Console has no such deployment: nothing exists to bill.
       return (
         error instanceof AkashComputeError &&
@@ -1267,9 +1330,20 @@ export class AkashComputeAdapter
     dseq: string,
     screening: ScreeningContext,
     tried: ReadonlySet<string>,
-    allocationPolicy?: AkashTxAllocationPolicy
+    allocationPolicy?: AkashTxAllocationPolicy,
+    deadlineAt?: number
   ): Promise<ConsoleBidId> {
-    const deadline = Date.now() + this.bidTimeoutMs;
+    const startedAt = Date.now();
+    // Share the remaining caller budget between collecting bids and completing the
+    // lease plus durable recording. The configured auction remains the upper bound;
+    // preference never prevents an eligible fallback within a shorter caller window.
+    const deadline = Math.min(
+      startedAt + this.bidTimeoutMs,
+      deadlineAt === undefined
+        ? Infinity
+        : startedAt + (deadlineAt - startedAt) / 2
+    );
+    const budget = deadlineAt !== undefined ? { deadlineAt } : undefined;
     const preferred = this.config.preferredProviders ?? [];
     // An EMPTY configured list collapses to `undefined` == no pin. Spelled out because `[]`
     // is TRUTHY: the old `config.allowedProviders ? new Set(...)` turned an empty list into
@@ -1284,10 +1358,22 @@ export class AkashComputeAdapter
     // hunting the wrong one for a full bid window.
     let lastRejections: ScreenedBids["rejections"] = {};
     let lastRoster: ScreenedBids["roster"] = [];
+    let fallbackBid: ConsoleBidId | undefined;
     for (;;) {
+      if (deadlineAt !== undefined && Date.now() >= deadlineAt)
+        throw new AkashTxError(
+          "outcome_unknown",
+          "HELD: allocation pass deadline expired"
+        );
+      // The last completed screen is the auction result. Do not spend the lease's
+      // remaining budget opening another poll after the collection window ends.
+      if (fallbackBid && Date.now() >= deadline) return fallbackBid;
       const bids = await this.request<ConsoleBid[]>(
         "GET",
-        `/v1/bids?dseq=${encodeURIComponent(dseq)}`
+        `/v1/bids?dseq=${encodeURIComponent(dseq)}`,
+        undefined,
+        undefined,
+        budget
       );
       const open = (bids ?? []).filter(
         (b) => b.bid?.id?.provider && (b.bid?.state ?? "open") === "open"
@@ -1339,6 +1425,7 @@ export class AkashComputeAdapter
       lastRejections = rejections;
       lastRoster = roster;
       const best = ranked[0];
+      fallbackBid = best ? byProvider.get(best.provider) : undefined;
       // A preferred provider that survived screening wins immediately; anyone else
       // waits out the window so late (often better) bids can compete.
       if (best && preferred.includes(best.provider)) {
@@ -1369,7 +1456,36 @@ export class AkashComputeAdapter
           `no provider bids for dseq ${dseq} within ${this.bidTimeoutMs}ms`
         );
       }
-      await this.sleep(this.bidPollIntervalMs);
+      const waitMs = Math.max(
+        0,
+        Math.min(this.bidPollIntervalMs, deadline - Date.now())
+      );
+      if (deadlineAt === undefined) {
+        await this.sleep(waitMs);
+      } else {
+        const remaining = deadlineAt - Date.now();
+        if (remaining <= 0)
+          throw new AkashTxError(
+            "outcome_unknown",
+            "HELD: allocation pass deadline expired"
+          );
+        try {
+          await abortableRead(
+            this.sleep(waitMs),
+            AbortSignal.timeout(Math.ceil(remaining))
+          );
+        } catch (error) {
+          if (
+            Date.now() >= deadlineAt ||
+            (error instanceof Error && error.name === "AbortError")
+          )
+            throw new AkashTxError(
+              "outcome_unknown",
+              "HELD: allocation pass deadline expired"
+            );
+          throw error;
+        }
+      }
     }
   }
 
@@ -1511,14 +1627,21 @@ export class AkashComputeAdapter
    * not a marketplace read, so a caller attaches it from the ProvisionSpec. Defaulting it to
    * `[]` keeps an unconstrained workload on exactly today's behaviour.
    */
-  private async loadScreeningContext(): Promise<ScreeningContext> {
+  private async loadScreeningContext(
+    deadlineAt?: number
+  ): Promise<ScreeningContext> {
     const providers = new Map<string, AkashProviderInfo>();
     const list = await this.request<ConsoleProvider[]>(
       "GET",
       "/v1/providers",
       undefined,
-      this.writeTimeoutMs // the provider index is large; read budget is too tight
-    ).catch(() => undefined);
+      this.writeTimeoutMs, // the provider index is large; read budget is too tight
+      deadlineAt !== undefined ? { deadlineAt } : undefined
+    ).catch((error: unknown) => {
+      if (error instanceof AkashTxError && error.code === "outcome_unknown")
+        throw error;
+      return undefined;
+    });
     for (const p of list ?? []) {
       if (!p.owner) continue;
       providers.set(p.owner, {
@@ -1557,8 +1680,12 @@ export class AkashComputeAdapter
       }
     }
     const outcomes = await this.outcomeStore
-      .stats(PROVIDER)
-      .catch(() => new Map<string, ProviderOutcomeStats>());
+      .stats(PROVIDER, deadlineAt)
+      .catch((error: unknown) => {
+        if (error instanceof AkashTxError && error.code === "outcome_unknown")
+          throw error;
+        return new Map<string, ProviderOutcomeStats>();
+      });
     // Unconstrained by default so this seam is TOTAL: a caller that forgets `withPlacement`
     // gets today's behaviour, never an undefined requirement the screener would crash on.
     return {
@@ -1574,6 +1701,8 @@ export class AkashComputeAdapter
     rec: Parameters<ProviderOutcomeStore["record"]>[0]
   ): Promise<void> {
     await this.outcomeStore.record(rec).catch((error: unknown) => {
+      if (error instanceof AkashTxError && error.code === "outcome_unknown")
+        throw error;
       // advisory: a history-write failure must never fail a live provision —
       // but it must be visible, or provider screening silently loses its
       // history and re-leases known-bad providers (bug.5128).
@@ -1599,13 +1728,25 @@ export class AkashComputeAdapter
     method: string,
     path: string,
     body?: unknown,
-    timeoutOverrideMs?: number
+    timeoutOverrideMs?: number,
+    budget?: { deadlineAt: number; signal?: AbortSignal }
   ): Promise<T | undefined> {
-    const timeoutMs = timeoutOverrideMs ?? this.config.timeoutMs;
+    const timeoutMs = Math.max(
+      0,
+      Math.min(
+        timeoutOverrideMs ?? this.config.timeoutMs,
+        budget ? budget.deadlineAt - Date.now() : Infinity
+      )
+    );
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const signal = budget?.signal
+      ? AbortSignal.any([budget.signal, controller.signal])
+      : controller.signal;
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      if (signal.aborted || timeoutMs <= 0)
+        throw new Error("read deadline exceeded");
+      const pendingResponse = this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
         headers: {
           "x-api-key": this.config.apiKey,
@@ -1613,15 +1754,21 @@ export class AkashComputeAdapter
           ...(body !== undefined ? { "content-type": "application/json" } : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        signal: controller.signal,
+        signal,
       });
+      const response = await abortableRead(pendingResponse, signal);
+      if (signal.aborted || (budget && Date.now() >= budget.deadlineAt))
+        throw new Error("read deadline exceeded");
       if (!response.ok) {
         // Provider bodies are still never retained — they echo the SDL and resolved secrets.
         // What IS taken is a bounded, allowlisted scalar digest, because "HTTP 422" with no
         // cause is undiagnosable from logs alone: poly's candidate lane retried a deterministic
         // Console rejection ~1.5x/min for five days against a PAID API and nobody could say why
         // without redeploying the actuator (bug.5247).
-        const detail = await readProviderDetail(response);
+        const detail = await abortableRead(
+          readProviderDetail(response),
+          signal
+        );
         throw new AkashComputeError(
           "HTTP_ERROR",
           `Console request failed with HTTP ${response.status}${
@@ -1630,15 +1777,22 @@ export class AkashComputeAdapter
           response.status
         );
       }
-      const json = (await response.json().catch(() => undefined)) as
-        | { data?: T }
-        | T
-        | undefined;
+      const json = (await abortableRead(
+        response.json().catch(() => undefined),
+        signal
+      )) as { data?: T } | T | undefined;
+      if (signal.aborted || (budget && Date.now() >= budget.deadlineAt))
+        throw new Error("read deadline exceeded");
       if (json && typeof json === "object" && "data" in json) {
         return (json as { data?: T }).data;
       }
       return json as T | undefined;
     } catch (error) {
+      if (budget && (signal.aborted || Date.now() >= budget.deadlineAt))
+        throw new AkashTxError(
+          "outcome_unknown",
+          "HELD: Console acknowledgement unavailable within allocation deadline"
+        );
       if (error instanceof AkashComputeError) throw error;
       if (error instanceof Error && error.name === "AbortError") {
         throw new AkashComputeError(
@@ -1654,6 +1808,21 @@ export class AkashComputeAdapter
       clearTimeout(timeoutId);
     }
   }
+}
+
+/** Abort stalled headers or bodies too; neither read can mutate provider state. */
+function abortableRead<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    void work.catch(() => undefined);
+    return Promise.reject(new DOMException("read aborted", "AbortError"));
+  }
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(new DOMException("read aborted", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    work
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abort));
+  });
 }
 
 function currencyForDenom(denom: string | undefined): string {

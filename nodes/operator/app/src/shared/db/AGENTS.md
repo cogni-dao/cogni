@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** stable
+- **Last reviewed:** 2026-11-01
 
 ## Purpose
 
@@ -51,6 +52,8 @@ Per DATABASE_RLS_SPEC.md design decision 7: runtime app uses explicit DSNs, no U
   (+ `COMPUTE_COST_INTERVAL_STATES`). Operator operational Postgres only —
   never `@cogni/db-schema`, never Doltgres. Cost rows join the allocation receipt
   for their sole grouping identity, `node_id`; they do not duplicate billing identity.
+  Allocation receipts add only nullable native-closed and no-effect facts. Expansion
+  installs no enforcement trigger, constraints or provenance backfill.
 
 **Direct imports (not in barrel):**
 

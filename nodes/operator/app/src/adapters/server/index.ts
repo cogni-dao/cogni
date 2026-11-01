@@ -12,8 +12,6 @@
  * @public
  */
 
-// Scheduling adapters - re-exported from @cogni/db-client package
-// Split by trust boundary: User (appDb, RLS enforced), Worker (serviceDb, BYPASSRLS)
 export {
   DrizzleExecutionGrantUserAdapter,
   DrizzleExecutionGrantWorkerAdapter,
@@ -75,6 +73,9 @@ export {
   type LangfuseAdapterConfig,
   type LangfuseSpanHandle,
 } from "./ai-telemetry/langfuse.adapter";
+// Scheduling adapters - re-exported from @cogni/db-client package
+// Split by trust boundary: User (appDb, RLS enforced), Worker (serviceDb, BYPASSRLS)
+export { AkashActorDatabase } from "./compute/akash-actor-database";
 export {
   AkashComputeAdapter,
   type AkashComputeAdapterConfig,

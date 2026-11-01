@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Last reviewed:** 2026-10-26
+- **Last reviewed:** 2026-11-01
 - **Status:** stable
 
 ## Purpose
@@ -36,6 +36,8 @@ Ports describe _what_ the domain needs from external services, not _how_ they wo
 
 ## Public Surface
 
+- `AkashTxConsolePort.status` accepts the original optional absolute deadline and abort signal for the allocation completion observation.
+
 Two entrypoints enforce Next.js App Router environment boundaries (see bug.0147):
 
 ### `index.ts` — Client-safe barrel
@@ -60,6 +62,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - IdentityAttestationRepositoryPort, IdentityAttestationSignerPort
 - TreasurySettlementPort, TreasurySettlementOutcome
 - DeployPlanePort, including candidate legacy-intent cancellation (target-node authority with operator App custody, exact marker/head and pre-fence tree, non-force Git update), separately bound reviewed workflow/remote-node identities, operator App-backed app promotion, the operator-only production infra reconcile contract, and fixed production-worker routing publication/receipt rollback
+- Akash receipt methods carry an original lossless custody tuple and return its CAS successor; optional native qualification methods use the existing sweep. Provider read budgets remain internal.
 - AkashTxDatabaseCellRecoveryInput + AkashTxAllocationPolicy (reference-only cold recovery; operation-native price/requested deposit; funding qualification fails closed)
 - AkashTxActuatorPort + AkashTxConsolePort (optional private readManagedDefinition returns observed SDL/manifest identity, never readable secret proof) + AkashTxManagedDeploymentDefinition + AkashTxAllocationLedgerPort + AkashTxWorkloadIdentity + AkashTxError (private Akash transaction boundary: one bounded attempt per call, durable retained-storage delete refusal, key-idempotent, fail-closed on an unresolved allocation — task.5095; every mutating call states an explicit `AkashTxWorkloadIdentity` that is durable in the receipt before the provider is contacted, and a key bound to another node is an `identity_conflict` — task.5103)
 - AkashTxMigrationStep + AkashTxMigrationPhase + AkashTxMigrationPort (MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION: no mutating call carries a migration and no migration state can refuse one. The per-digest migration is a RELEASE step attached to `observe` — the unpaid tick — whose phase is REPORTED on the observation. bug.5116 ordering, bug.5140 enforcement, **severed by task.5135** after node toks5 sat leaseless and unalarmed because its migration never ran)

@@ -50,9 +50,14 @@ describe("operator database connection envelope", () => {
     "nodes/operator/app/src/adapters/server/db/drizzle.service-client.ts",
     "cogni_operator_service"
   );
-  const actuator = pool(
-    "nodes/operator/app/src/bootstrap/akash-tx-actuator.ts",
-    "cogni_operator_akash_tx_actuator"
+  const actorSource = read(
+    "nodes/operator/app/src/adapters/server/compute/akash-actor-database.ts"
+  );
+  const actuator = Number(
+    actorSource.match(/const options = \{\s*max:\s*(\d+)/u)?.[1]
+  );
+  expect(actorSource).toContain(
+    'applicationName: "cogni_operator_akash_tx_actuator"'
   );
   const worker = pool(
     "services/scheduler-worker/src/bootstrap/container.ts",
@@ -173,7 +178,13 @@ describe("operator database connection envelope", () => {
     const source = read(
       "nodes/operator/app/src/bootstrap/akash-tx-actuator.ts"
     );
-    expect(source).toContain("createAppDbClient(databaseUrl,");
+    expect(source).toContain("new AkashActorDatabase(databaseUrl)");
+    const owner = read(
+      "nodes/operator/app/src/adapters/server/compute/akash-actor-database.ts"
+    );
+    expect(owner).toContain("createAppDbClient");
+    expect(owner).toContain("max: 1");
+    expect(owner).not.toContain("createServiceDbClient");
     expect(source).not.toContain("createServiceDbClient");
     expect(source).not.toContain('readCredential("DATABASE_SERVICE_URL")');
     const productionWorker = parse(

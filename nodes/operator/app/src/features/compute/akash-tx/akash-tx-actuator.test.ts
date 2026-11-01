@@ -240,13 +240,10 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
 
   async prepare(input: { cogniKey: string; allocationCursor: string }) {
     const row = this.rows.get(input.cogniKey);
-    if (!row || row.state !== "preparing") {
-      throw new Error("no preparing slot");
-    }
-    this.rows.set(input.cogniKey, {
-      ...row,
-      allocationCursor: input.allocationCursor,
-    });
+    if (!row || row.state !== "preparing") throw new Error("no preparing slot");
+    const next = { ...row, allocationCursor: input.allocationCursor };
+    this.rows.set(input.cogniKey, next);
+    return next;
   }
 
   async recordAllocation(input: {
@@ -256,34 +253,47 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
   }) {
     const row = this.rows.get(input.cogniKey);
     if (!row) throw new Error("unknown key");
-    this.rows.set(input.cogniKey, {
+    const next: AkashTxAllocationRecord = {
       ...row,
       state: "allocated",
       externalName: row.externalName ?? input.externalName,
       ...(input.providerAccount
         ? { providerAccount: row.providerAccount ?? input.providerAccount }
         : {}),
-    });
+    };
+    this.rows.set(input.cogniKey, next);
+    return next;
+  }
+
+  async adoptAllocation(input: {
+    cogniKey: string;
+    externalName: string;
+    expected: AkashTxAllocationRecord;
+  }) {
+    return this.recordAllocation(input);
   }
 
   async recordAppliedSdlHash(input: { cogniKey: string; sdlHash: string }) {
     const row = this.rows.get(input.cogniKey);
     if (!row) throw new Error("unknown key");
-    this.rows.set(input.cogniKey, {
-      ...row,
-      lastAppliedSdlHash: input.sdlHash,
-    });
+    const next = { ...row, lastAppliedSdlHash: input.sdlHash };
+    this.rows.set(input.cogniKey, next);
+    return next;
   }
 
   async fail(input: { cogniKey: string; failureCode: string }) {
     if (this.failWrites) throw new Error("ledger down");
-    this.failCalls.push(input);
+    this.failCalls.push({
+      cogniKey: input.cogniKey,
+      failureCode: input.failureCode,
+    });
     const row = this.rows.get(input.cogniKey);
-    if (row?.state === "preparing" && !row.externalName) {
-      const { allocationCursor: _dropped, ...rest } = row;
-      this.rows.set(input.cogniKey, { ...rest, state: "failed" });
-      this.heldForMs.delete(input.cogniKey);
-    }
+    if (!row || row.state !== "preparing" || row.externalName)
+      throw new Error("receipt custody cannot be discharged");
+    const next: AkashTxAllocationRecord = { ...row, state: "failed" };
+    this.rows.set(input.cogniKey, next);
+    this.heldForMs.delete(input.cogniKey);
+    return next;
   }
 
   async listStalePreparing(input: { olderThanMs: number; limit: number }) {
@@ -297,6 +307,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       )
       .slice(0, input.limit)
       .map((row) => ({
+        record: row,
         cogniKey: row.cogniKey,
         ...(row.allocationCursor
           ? { allocationCursor: row.allocationCursor }
@@ -307,7 +318,10 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
 
   async markReleased(input: { cogniKey: string }) {
     const row = this.rows.get(input.cogniKey);
-    if (row) this.rows.set(input.cogniKey, { ...row, state: "released" });
+    if (!row) throw new Error("unknown key");
+    const next: AkashTxAllocationRecord = { ...row, state: "released" };
+    this.rows.set(input.cogniKey, next);
+    return next;
   }
 
   async read(input: { cogniKey: string }) {
@@ -625,7 +639,8 @@ function build(
   consoleOptions: FakeConsoleOptions = {},
   recoveryProfile?: unknown,
   sharedLedger?: FakeLedger,
-  appliedCellCustody?: AkashTxActuatorDeps["appliedCellCustody"]
+  appliedCellCustody?: AkashTxActuatorDeps["appliedCellCustody"],
+  nativeAdmission?: AkashTxActuatorDeps["nativeAdmission"]
 ) {
   const ledger = sharedLedger ?? new FakeLedger();
   const api = new FakeConsole(consoleOptions);
@@ -636,6 +651,7 @@ function build(
     console: api,
     ledger,
     log,
+    ...(nativeAdmission ? { nativeAdmission } : {}),
     recoveryProfile: async () => recoveryProfile,
     ...(appliedCellCustody ? { appliedCellCustody } : {}),
     migration,
@@ -1492,13 +1508,49 @@ describe("qualified cell app releases", () => {
 });
 
 describe("AkashTxActuator.create", () => {
+  it("refuses a second caller's unused owned claim before cursor or POST", async () => {
+    const first = build();
+    const second = build({}, undefined, first.ledger);
+    let entered = () => {};
+    let resume = () => {};
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    first.api.allocationCursor = async () => {
+      first.api.cursorCalls++;
+      entered();
+      await gate;
+      return "7000";
+    };
+    const input = {
+      cogniKey: "same-claim",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    };
+    const pending = first.actuator.create(input);
+    await waiting;
+    await expect(second.actuator.create(input)).rejects.toMatchObject({
+      code: "wallet_allocation_blocked",
+    });
+    expect(second.api.cursorCalls).toBe(0);
+    expect(second.api.allocateCalls).toBe(0);
+    expect(first.ledger.failCalls).toEqual([]);
+    resume();
+    await pending;
+    expect(first.api.allocateCalls).toBe(1);
+  });
+
   it("writes the pre-transaction cursor BEFORE the Console transaction", async () => {
     const { actuator, ledger, api } = build();
     const order: string[] = [];
     const originalPrepare = ledger.prepare.bind(ledger);
     ledger.prepare = async (input) => {
       order.push("prepare");
-      await originalPrepare(input);
+      return await originalPrepare(input);
     };
     const originalAllocate = api.allocateAndLease.bind(api);
     api.allocateAndLease = async (input) => {
@@ -3007,7 +3059,8 @@ describe("composition root wiring (story.5016)", () => {
     expect(deps).toMatch(
       /\bproviderConsumerAccountId\s*:\s*wallet\.expectedAccountId/
     );
-    expect(source).toMatch(/new DrizzleComputeCostStore\(getDb\)/);
+    expect(source).toMatch(/actorDatabase\.costStore\(\)/);
+    expect(source.match(/new AkashActorDatabase\(/g)).toHaveLength(1);
   });
 
   it("uses the SAME per-digest Job prover the ComputeWorkload controller uses", () => {
@@ -3164,6 +3217,55 @@ describe("AkashTxActuator.sweepStaleAllocations", () => {
     });
 
     expect(report.scanned).toBe(2);
+  });
+
+  it("still starts independent qualification after preparing enumeration fails", async () => {
+    const ledger = new FakeLedger();
+    const candidate: AkashTxAllocationRecord = {
+      receiptId: "bound",
+      cogniKey: "bound",
+      identity: IDENTITY,
+      workload: "operator",
+      environment: "candidate-a",
+      state: "allocated",
+      externalName: "8001",
+    };
+    const deadlines: number[] = [];
+    const reads: string[] = [];
+    Object.assign(ledger, {
+      listStalePreparing: async (input: { deadlineAt: number }) => {
+        deadlines.push(input.deadlineAt);
+        throw new Error("preparing read failed");
+      },
+      listClosureCandidates: async (deadlineAt: number) => {
+        deadlines.push(deadlineAt);
+        return [candidate];
+      },
+      startClosureRead: async (
+        row: AkashTxAllocationRecord,
+        deadlineAt: number
+      ) => {
+        deadlines.push(deadlineAt);
+        return row;
+      },
+      certifyNativeClosed: async () => candidate,
+    });
+    const { actuator } = build({}, undefined, ledger, undefined, {
+      readWalletInventory: async () => {
+        throw new Error("not an admission");
+      },
+      readOwnClosed: async ({ dseq, deadlineAt }) => {
+        deadlines.push(deadlineAt);
+        reads.push(dseq);
+        return { owner: "akash1test", dseq, height: "10", closed: false };
+      },
+    });
+    const deadlineAt = Date.now() + 500;
+    await expect(
+      actuator.sweepStaleAllocations({ ...STALE, deadlineAt })
+    ).rejects.toMatchObject({ code: "ledger_unavailable" });
+    expect(reads).toEqual(["8001"]);
+    expect(deadlines).toEqual([deadlineAt, deadlineAt, deadlineAt, deadlineAt]);
   });
 
   it("refuses the whole pass when the ledger itself is unreadable", async () => {
