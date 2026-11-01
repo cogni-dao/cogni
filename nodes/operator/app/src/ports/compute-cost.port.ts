@@ -49,6 +49,7 @@ export interface ComputeResourceCostEvidence
 export interface ComputeCostEvidencePort {
   observeCost(input: {
     resourceId: string;
+    deadlineAt?: number;
   }): Promise<ComputeResourceCostEvidence>;
 }
 
@@ -79,10 +80,12 @@ export interface ComputeCostStorePort {
   bind(input: {
     allocationReceiptId: string;
     resource: ComputeResourceCostIdentity;
+    deadlineAt?: number;
   }): Promise<void>;
   observe(input: {
     allocationReceiptId: string;
     evidence: ComputeResourceCostEvidence;
+    deadlineAt?: number;
   }): Promise<void>;
   close(input: { allocationReceiptId: string }): Promise<void>;
   reportByNode(): Promise<readonly ComputeCostReport[]>;

@@ -26,25 +26,13 @@ export const RECEIPT_GUARD_BODY = `BEGIN
 END`;
 
 export async function receiptTransaction<T>(
-  db: Database,
+  db: Database | Promise<Database>,
   run: (tx: Tx, guarded: boolean) => Promise<T>,
   deadlineAt?: number
 ): Promise<T> {
-  return db.transaction(
+  return boundedReceiptTransaction(
+    db,
     async (tx) => {
-      const checkDeadline = () => {
-        if (deadlineAt && Date.now() >= deadlineAt)
-          throw new Error("receipt operation deadline exceeded");
-      };
-      checkDeadline();
-      if (deadlineAt) {
-        const milliseconds = String(
-          Math.max(1, Math.min(2000, deadlineAt - Date.now()))
-        );
-        await tx.execute(
-          sql`select set_config('statement_timeout', ${milliseconds}, true), set_config('lock_timeout', ${milliseconds}, true)`
-        );
-      }
       // Held until commit. CREATE TRIGGER's conflicting lock cannot straddle the read/CAS.
       await tx.execute(
         sql`lock table public.akash_tx_allocations in row exclusive mode`
@@ -97,13 +85,75 @@ export async function receiptTransaction<T>(
       await tx.execute(
         sql`select set_config('cogni.receipt_writer', ${guard ? RECEIPT_CONTEXT : ""}, true)`
       );
-      checkDeadline();
-      const result = await run(tx, Boolean(guard));
-      checkDeadline();
-      return result;
+      return run(tx, Boolean(guard));
     },
-    { isolationLevel: "repeatable read" }
+    deadlineAt,
+    "repeatable read"
   );
+}
+
+/**
+ * Pool admission has no postgres.js cancellation primitive. Race ONLY admission, never
+ * an executing mutation: a late callback must throw before running application SQL.
+ * Statement/lock timeouts and the final deadline check roll back late query results.
+ */
+export async function boundedReceiptTransaction<T>(
+  db: Database | Promise<Database>,
+  run: (tx: Tx) => Promise<T>,
+  deadlineAt?: number,
+  isolationLevel: "repeatable read" | "read committed" = "read committed"
+): Promise<T> {
+  const check = () => {
+    if (deadlineAt !== undefined && Date.now() >= deadlineAt)
+      throw new Error("receipt operation deadline exceeded");
+  };
+  check();
+  let admitted!: () => void;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const admission = new Promise<void>((resolve, reject) => {
+    admitted = resolve;
+    if (deadlineAt !== undefined)
+      timer = setTimeout(
+        () => reject(new Error("receipt pool deadline exceeded")),
+        Math.max(0, deadlineAt - Date.now())
+      );
+  });
+  const operation = Promise.resolve(db).then((database) => {
+    check();
+    return database.transaction(
+      async (tx) => {
+        admitted();
+        check();
+        if (deadlineAt !== undefined) {
+          const milliseconds = Math.max(
+            1,
+            Math.min(2000, Math.floor(deadlineAt - Date.now()))
+          );
+          // SET is a utility command. SELECT set_config would freeze the RR snapshot
+          // before receiptTransaction acquires its DDL-conflicting relation lock.
+          await tx.execute(
+            sql.raw(`set local statement_timeout = '${milliseconds}ms'`)
+          );
+          await tx.execute(
+            sql.raw(`set local lock_timeout = '${milliseconds}ms'`)
+          );
+        }
+        check();
+        const result = await run(tx);
+        check(); // No late result is allowed to authorize COMMIT.
+        return result;
+      },
+      { isolationLevel }
+    );
+  });
+  // A timed-out queued BEGIN can finish later, but its callback only rolls back.
+  void operation.catch(() => undefined);
+  try {
+    await Promise.race([admission, operation.then(() => undefined)]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+  return operation;
 }
 
 /** Every mutable part also fences the version, including exact NULL and explicit consumer. */

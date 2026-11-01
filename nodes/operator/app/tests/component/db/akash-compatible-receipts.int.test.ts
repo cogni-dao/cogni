@@ -10,13 +10,14 @@
  * Links: subtask.5033; paid-admission R3 seq4.
  * @internal
  */
-import { createAppDbClient } from "@cogni/db-client";
+import { createAppDbClient, type Database } from "@cogni/db-client";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   RECEIPT_CONTEXT,
   RECEIPT_GUARD_BODY,
+  receiptTransaction,
 } from "@/adapters/server/compute/akash-receipt-transaction";
 import { DrizzleAkashTxAllocationLedger } from "@/adapters/server/compute/akash-tx-allocation-ledger.adapter";
 import { DrizzleDatabaseCellBindingStore } from "@/adapters/server/compute/database-cell-binding-store.adapter";
@@ -39,8 +40,9 @@ describe("compatible receipts: real PostgreSQL", () => {
     async () => app,
     WALLET
   );
-  const installGuard = async () =>
-    app.transaction(async (tx) => {
+  type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
+  const installGuard = async (connection?: Tx) => {
+    const install = async (tx: Tx) => {
       await tx.execute(
         sql`ALTER TABLE public.akash_tx_allocations ADD CONSTRAINT akash_test_native_closed_shape CHECK (native_closed_verified IS NULL OR (native_closed_verified IS TRUE AND nullif(external_name, '') IS NOT NULL AND state IN ('allocated', 'released')))`
       );
@@ -58,7 +60,10 @@ describe("compatible receipts: real PostgreSQL", () => {
       await tx.execute(
         sql`ALTER TABLE public.akash_tx_allocations ENABLE ALWAYS TRIGGER akash_receipt_writer_guard`
       );
-    });
+    };
+    if (connection) await install(connection);
+    else await app.transaction(install);
+  };
 
   afterEach(async () => {
     await app.execute(
@@ -99,6 +104,182 @@ describe("compatible receipts: real PostgreSQL", () => {
     await db
       .delete(akashTxAllocations)
       .where(eq(akashTxAllocations.walletScope, WALLET));
+  });
+
+  const waitForRelationWait = async () => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const [row] = await db.execute<{ waiting: boolean }>(sql`
+        select exists(select 1 from pg_stat_activity where
+          application_name='compatible-receipts-test' and wait_event_type='Lock') as waiting`);
+      if (row?.waiting) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error("receipt operation never waited on real relation lock");
+  };
+
+  it.each([
+    "install",
+    "remove",
+  ] as const)("selects committed stage after %s DDL lock contention", async (stage) => {
+    if (stage === "remove") await installGuard();
+    let operation!: Promise<boolean>;
+    await db.transaction(async (tx) => {
+      if (stage === "install") await installGuard(tx);
+      else
+        await tx.execute(
+          sql`drop trigger akash_receipt_writer_guard on public.akash_tx_allocations`
+        );
+      operation = receiptTransaction(
+        app,
+        async (locked, guarded) => {
+          const [context] = await locked.execute<{ writer: string }>(
+            sql`select current_setting('cogni.receipt_writer', true) as writer`
+          );
+          expect(context?.writer).toBe(guarded ? RECEIPT_CONTEXT : "");
+          await locked.insert(akashTxAllocations).values({
+            walletScope: WALLET,
+            cogniKey: "ddl-wait",
+            nodeId: identity.nodeId,
+            compositeUid: identity.compositeUid,
+            compositeGeneration: 3,
+            workload: "fixture",
+            environment: "candidate-a",
+            state: "preparing",
+            allocationNoEffectVerified: guarded ? true : null,
+          });
+          return guarded;
+        },
+        Date.now() + 5000
+      );
+      // Observe the actual PostgreSQL lock wait, not just a JavaScript pause.
+      await waitForRelationWait();
+    });
+    expect(await operation).toBe(stage === "install");
+    expect(
+      (await guardedLedger.read({ cogniKey: "ddl-wait" }))
+        ?.allocationNoEffectVerified
+    ).toBe(stage === "install" ? true : null);
+  });
+
+  it.each([
+    false,
+    true,
+  ])("preserves immutable workload and atomic retained reclaim, guarded=%s", async (guarded) => {
+    if (guarded) await installGuard();
+    const first = await guardedClaim();
+    if (first.state !== "claimed") throw new Error("claim missing");
+    const failed = await guardedLedger.fail({
+      cogniKey: first.record.cogniKey,
+      failureCode: "unused",
+      expected: first.record,
+    });
+    const conflict = await guardedLedger.claim({
+      cogniKey: first.record.cogniKey,
+      workload: "foreign-workload",
+      environment: "candidate-a",
+      identity,
+      retentionPolicy: "retain",
+    });
+    expect(conflict.state).toBe("settled");
+    expect(
+      await guardedLedger.read({ cogniKey: first.record.cogniKey })
+    ).toEqual(failed);
+    const reclaimed = await guardedLedger.claim({
+      cogniKey: first.record.cogniKey,
+      workload: "fixture",
+      environment: "candidate-a",
+      identity: { ...identity, compositeGeneration: 4 },
+      retentionPolicy: "retain",
+    });
+    expect(reclaimed.state).toBe("claimed");
+    if (reclaimed.state !== "claimed") throw new Error("reclaim missing");
+    expect(reclaimed.record).toMatchObject({
+      state: "preparing",
+      workload: "fixture",
+      retentionPolicy: "retain",
+      identity: { compositeGeneration: 4 },
+      allocationNoEffectVerified: guarded ? true : null,
+    });
+    expect(reclaimed.record.custody).not.toEqual(failed.custody);
+  });
+
+  it("bounds a queued pool admission and refuses all late application SQL", async () => {
+    const first = await guardedClaim();
+    if (first.state !== "claimed") throw new Error("claim missing");
+    const connection = await app.$client.reserve();
+    let ran = false;
+    const started = Date.now();
+    try {
+      await expect(
+        receiptTransaction(
+          app,
+          async () => {
+            ran = true;
+          },
+          Date.now() + 100
+        )
+      ).rejects.toThrow(/deadline/);
+      expect(Date.now() - started).toBeLessThan(1000);
+    } finally {
+      connection.release();
+    }
+    // This queues behind the expired BEGIN and its rollback on the same one-slot pool.
+    await app.execute(sql`select 1`);
+    expect(ran).toBe(false);
+    expect(
+      await guardedLedger.read({ cogniKey: first.record.cogniKey })
+    ).toEqual(first.record);
+  });
+
+  it("times out a real relation wait without late fail or scheduler writes", async () => {
+    await db.insert(akashTxAllocations).values({
+      walletScope: WALLET,
+      cogniKey: "scheduled",
+      nodeId: identity.nodeId,
+      compositeUid: "bound-old",
+      compositeGeneration: 1,
+      workload: "fixture",
+      environment: "candidate-a",
+      state: "allocated",
+      externalName: "9000",
+    });
+    await installGuard();
+    const scheduled = await guardedLedger.read({ cogniKey: "scheduled" });
+    if (!scheduled) throw new Error("scheduler fixture missing");
+    const first = await guardedClaim();
+    if (first.state !== "claimed") throw new Error("claim missing");
+    await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`lock table public.akash_tx_allocations in access exclusive mode`
+      );
+      await expect(
+        guardedLedger.fail({
+          cogniKey: first.record.cogniKey,
+          failureCode: "late",
+          expected: first.record,
+          deadlineAt: Date.now() + 100,
+        })
+      ).rejects.toThrow();
+      await expect(
+        guardedLedger.listStalePreparing({
+          olderThanMs: 0,
+          limit: 20,
+          deadlineAt: Date.now() + 100,
+        })
+      ).rejects.toThrow();
+      await expect(
+        guardedLedger.listClosureCandidates(Date.now() + 100)
+      ).rejects.toThrow();
+      await expect(
+        guardedLedger.startClosureRead(scheduled, Date.now() + 100)
+      ).rejects.toThrow();
+    });
+    expect(
+      await guardedLedger.read({ cogniKey: first.record.cogniKey })
+    ).toEqual(first.record);
+    expect(await guardedLedger.read({ cogniKey: "scheduled" })).toEqual(
+      scheduled
+    );
   });
 
   it("returns lossless versions and refuses the original claim after prepare", async () => {

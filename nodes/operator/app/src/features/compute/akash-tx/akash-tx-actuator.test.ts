@@ -639,7 +639,8 @@ function build(
   consoleOptions: FakeConsoleOptions = {},
   recoveryProfile?: unknown,
   sharedLedger?: FakeLedger,
-  appliedCellCustody?: AkashTxActuatorDeps["appliedCellCustody"]
+  appliedCellCustody?: AkashTxActuatorDeps["appliedCellCustody"],
+  nativeAdmission?: AkashTxActuatorDeps["nativeAdmission"]
 ) {
   const ledger = sharedLedger ?? new FakeLedger();
   const api = new FakeConsole(consoleOptions);
@@ -650,6 +651,7 @@ function build(
     console: api,
     ledger,
     log,
+    ...(nativeAdmission ? { nativeAdmission } : {}),
     recoveryProfile: async () => recoveryProfile,
     ...(appliedCellCustody ? { appliedCellCustody } : {}),
     migration,
@@ -3214,6 +3216,55 @@ describe("AkashTxActuator.sweepStaleAllocations", () => {
     });
 
     expect(report.scanned).toBe(2);
+  });
+
+  it("still starts independent qualification after preparing enumeration fails", async () => {
+    const ledger = new FakeLedger();
+    const candidate: AkashTxAllocationRecord = {
+      receiptId: "bound",
+      cogniKey: "bound",
+      identity: IDENTITY,
+      workload: "operator",
+      environment: "candidate-a",
+      state: "allocated",
+      externalName: "8001",
+    };
+    const deadlines: number[] = [];
+    const reads: string[] = [];
+    Object.assign(ledger, {
+      listStalePreparing: async (input: { deadlineAt: number }) => {
+        deadlines.push(input.deadlineAt);
+        throw new Error("preparing read failed");
+      },
+      listClosureCandidates: async (deadlineAt: number) => {
+        deadlines.push(deadlineAt);
+        return [candidate];
+      },
+      startClosureRead: async (
+        row: AkashTxAllocationRecord,
+        deadlineAt: number
+      ) => {
+        deadlines.push(deadlineAt);
+        return row;
+      },
+      certifyNativeClosed: async () => candidate,
+    });
+    const { actuator } = build({}, undefined, ledger, undefined, {
+      readWalletInventory: async () => {
+        throw new Error("not an admission");
+      },
+      readOwnClosed: async ({ dseq, deadlineAt }) => {
+        deadlines.push(deadlineAt);
+        reads.push(dseq);
+        return { owner: "akash1test", dseq, height: "10", closed: false };
+      },
+    });
+    const deadlineAt = Date.now() + 500;
+    await expect(
+      actuator.sweepStaleAllocations({ ...STALE, deadlineAt })
+    ).rejects.toMatchObject({ code: "ledger_unavailable" });
+    expect(reads).toEqual(["8001"]);
+    expect(deadlines).toEqual([deadlineAt, deadlineAt, deadlineAt, deadlineAt]);
   });
 
   it("refuses the whole pass when the ledger itself is unreadable", async () => {

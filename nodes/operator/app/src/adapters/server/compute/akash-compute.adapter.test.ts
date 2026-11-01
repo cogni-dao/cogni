@@ -1440,6 +1440,30 @@ describe("AkashComputeAdapter boot SLO", () => {
 });
 
 describe("AkashComputeAdapter failure containment", () => {
+  it.each([
+    "headers",
+    "body",
+    "error-body",
+  ] as const)("bounds recovery %s by its caller deadline", async (stage) => {
+    let signal: AbortSignal | null | undefined;
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      signal = init?.signal;
+      if (stage === "headers") return new Promise<Response>(() => {});
+      return new Response(new ReadableStream({ start() {} }), {
+        status: stage === "error-body" ? 500 : 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const started = Date.now();
+    await expect(
+      makeAdapter(fetchImpl).findAllocationSince("41", {
+        deadlineAt: Date.now() + 50,
+      })
+    ).rejects.toMatchObject({ code: "TIMEOUT" });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(signal?.aborted).toBe(true);
+  });
+
   it("adopts exactly one deployment created beyond a durable allocation cursor", async () => {
     let listWave = 0;
     const fetchImpl = vi.fn<typeof fetch>(async (url) => {

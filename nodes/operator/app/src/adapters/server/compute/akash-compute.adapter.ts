@@ -779,10 +779,16 @@ export class AkashComputeAdapter
   /** Exact chain-native cost evidence. No fiat conversion or payer inference occurs here. */
   async observeCost(input: {
     resourceId: string;
+    deadlineAt?: number;
   }): Promise<ComputeResourceCostEvidence> {
     const detail = await this.request<ConsoleDeploymentDetail>(
       "GET",
-      `/v1/deployments/${encodeURIComponent(input.resourceId)}`
+      `/v1/deployments/${encodeURIComponent(input.resourceId)}`,
+      undefined,
+      undefined,
+      input.deadlineAt !== undefined
+        ? { deadlineAt: input.deadlineAt }
+        : undefined
     );
     return costEvidenceFromDetail(
       input.resourceId,
@@ -1638,7 +1644,7 @@ export class AkashComputeAdapter
     try {
       if (signal.aborted || timeoutMs <= 0)
         throw new Error("read deadline exceeded");
-      const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      const pendingResponse = this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
         headers: {
           "x-api-key": this.config.apiKey,
@@ -1648,6 +1654,10 @@ export class AkashComputeAdapter
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         signal,
       });
+      const response =
+        method === "GET"
+          ? await abortableRead(pendingResponse, signal)
+          : await pendingResponse;
       if (signal.aborted || (budget && Date.now() >= budget.deadlineAt))
         throw new Error("read deadline exceeded");
       if (!response.ok) {
@@ -1656,7 +1666,10 @@ export class AkashComputeAdapter
         // cause is undiagnosable from logs alone: poly's candidate lane retried a deterministic
         // Console rejection ~1.5x/min for five days against a PAID API and nobody could say why
         // without redeploying the actuator (bug.5247).
-        const detail = await readProviderDetail(response);
+        const detail = await abortableRead(
+          readProviderDetail(response),
+          signal
+        );
         throw new AkashComputeError(
           "HTTP_ERROR",
           `Console request failed with HTTP ${response.status}${
@@ -1665,10 +1678,10 @@ export class AkashComputeAdapter
           response.status
         );
       }
-      const json = (await response.json().catch(() => undefined)) as
-        | { data?: T }
-        | T
-        | undefined;
+      const json = (await abortableRead(
+        response.json().catch(() => undefined),
+        signal
+      )) as { data?: T } | T | undefined;
       if (signal.aborted || (budget && Date.now() >= budget.deadlineAt))
         throw new Error("read deadline exceeded");
       if (json && typeof json === "object" && "data" in json) {
@@ -1691,6 +1704,21 @@ export class AkashComputeAdapter
       clearTimeout(timeoutId);
     }
   }
+}
+
+/** Abort stalled headers or bodies too; neither read can mutate provider state. */
+function abortableRead<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    void work.catch(() => undefined);
+    return Promise.reject(new DOMException("read aborted", "AbortError"));
+  }
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(new DOMException("read aborted", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    work
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abort));
+  });
 }
 
 function currencyForDenom(denom: string | undefined): string {

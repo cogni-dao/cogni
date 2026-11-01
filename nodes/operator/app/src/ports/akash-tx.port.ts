@@ -304,6 +304,7 @@ export interface AkashTxActuatorPort {
   sweepStaleAllocations(input: {
     olderThanMs: number;
     limit: number;
+    deadlineAt?: number;
   }): Promise<AkashTxSweepReport>;
   /**
    * Bounded, read-only enumeration of every LIVE lease's log coordinates plus ONE short-lived
@@ -566,7 +567,9 @@ export interface AkashTxStaleAllocation {
  * whoever holds the key rather than only by the process that opened it.
  */
 export interface AkashTxAllocationLedgerPort {
-  listClosureCandidates?(): Promise<readonly AkashTxAllocationRecord[]>;
+  listClosureCandidates?(
+    deadlineAt?: number
+  ): Promise<readonly AkashTxAllocationRecord[]>;
   startClosureRead?(
     expected: AkashTxAllocationRecord,
     deadlineAt: number
@@ -647,6 +650,7 @@ export interface AkashTxAllocationLedgerPort {
     cogniKey: string;
     externalName: string;
     expected: AkashTxAllocationRecord;
+    deadlineAt?: number;
   }): Promise<AkashTxAllocationRecord>;
   /**
    * Persist the sha256 of the SDL just PUT for this key, so the next in-place update can no-op a
@@ -675,6 +679,7 @@ export interface AkashTxAllocationLedgerPort {
     cogniKey: string;
     failureCode: string;
     expected: AkashTxAllocationRecord;
+    deadlineAt?: number;
   }): Promise<AkashTxAllocationRecord>;
   /**
    * Bounded scan for receipts stuck mid-transaction. Read-only, newest-last, hard-limited —
@@ -685,6 +690,7 @@ export interface AkashTxAllocationLedgerPort {
   listStalePreparing(input: {
     olderThanMs: number;
     limit: number;
+    deadlineAt?: number;
   }): Promise<readonly AkashTxStaleAllocation[]>;
   /** Mark a previously allocated key as released after a provider delete. */
   markReleased(input: {

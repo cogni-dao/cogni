@@ -1602,7 +1602,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           cogniKey,
           undefined,
           allocationCursor,
-          original
+          original,
+          deadlineAt
         ))
       )
         throw new AkashTxError(
@@ -1613,18 +1614,14 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     }
 
     const adopted = probe.output;
-    await this.ledger.adoptAllocation({
+    const record = await this.ledger.adoptAllocation({
       cogniKey,
       externalName: adopted.leaseId,
       expected: original,
+      ...(deadlineAt !== undefined ? { deadlineAt } : {}),
     });
-    const record = await this.requireStoredHandle(
-      cogniKey,
-      adopted.leaseId,
-      "create"
-    );
-    await this.bindCost(record, adopted.leaseId);
-    await this.observeCost(record, adopted.leaseId);
+    await this.bindCost(record, adopted.leaseId, deadlineAt);
+    await this.observeCost(record, adopted.leaseId, deadlineAt);
     this.log.warn(
       { cogniKey, allocationCursor, externalName: adopted.leaseId },
       "akash_tx_allocation_recovered"
@@ -1645,7 +1642,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     cogniKey: string,
     rolledBackDseq?: string,
     allocationCursor?: string,
-    original?: AkashTxAllocationRecord
+    original?: AkashTxAllocationRecord,
+    deadlineAt?: number
   ): Promise<boolean> {
     if (!original) return false;
     try {
@@ -1653,6 +1651,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         cogniKey,
         failureCode: ROLLED_BACK_FAILURE_CODE,
         expected: original,
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
       });
       this.log.warn(
         {
@@ -1694,14 +1693,22 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   async sweepStaleAllocations(input: {
     olderThanMs: number;
     limit: number;
+    deadlineAt?: number;
   }): Promise<AkashTxSweepReport> {
-    const deadlineAt = Date.now() + 30_000;
+    const deadlineAt = Math.min(
+      Date.now() + 30_000,
+      input.deadlineAt ?? Infinity
+    );
     const preparingDeadlineAt = Math.min(deadlineAt, Date.now() + 10_000);
-    let stale: readonly AkashTxStaleAllocation[];
+    let stale: readonly AkashTxStaleAllocation[] = [];
+    let preparingError: unknown;
     try {
-      stale = await this.ledger.listStalePreparing(input);
+      stale = await this.ledger.listStalePreparing({
+        ...input,
+        deadlineAt: preparingDeadlineAt,
+      });
     } catch (error) {
-      throw this.ledgerUnavailable(error, "*", "listStalePreparing");
+      preparingError = error;
     }
 
     let rolledBack = 0;
@@ -1729,7 +1736,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
             row.cogniKey,
             undefined,
             undefined,
-            row.record
+            row.record,
+            preparingDeadlineAt
           )
         )
           rolledBack += 1;
@@ -1760,6 +1768,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     }
 
     await this.qualifyNativeClosures(deadlineAt);
+    if (preparingError !== undefined)
+      throw this.ledgerUnavailable(preparingError, "*", "listStalePreparing");
     const report = { scanned: stale.length, rolledBack, adopted, held };
     if (stale.length > 0) this.log.warn(report, "akash_tx_allocation_sweep");
     return report;
@@ -1777,7 +1787,16 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     const native = this.nativeAdmission;
     const startRead = this.ledger.startClosureRead.bind(this.ledger);
     const certify = this.ledger.certifyNativeClosed.bind(this.ledger);
-    const candidates = await this.ledger.listClosureCandidates();
+    let candidates: readonly AkashTxAllocationRecord[];
+    try {
+      candidates = await this.ledger.listClosureCandidates(deadlineAt);
+    } catch (error) {
+      this.log.warn(
+        { causeType: error instanceof Error ? error.name : "unknown" },
+        "akash_tx_native_qualification_held"
+      );
+      return;
+    }
     let cursor = 0;
     await Promise.all(
       Array.from({ length: Math.min(2, candidates.length) }, async () => {
@@ -2048,11 +2067,13 @@ export class AkashTxActuator implements AkashTxActuatorPort {
 
   private async bindCost(
     record: AkashTxAllocationRecord,
-    externalName: string
+    externalName: string,
+    deadlineAt?: number
   ): Promise<void> {
     try {
       await this.costStore.bind({
         allocationReceiptId: record.receiptId,
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
         resource: {
           computeProvider: "akash",
           providerConsumerAccountId: this.providerConsumerAccountId,
@@ -2066,15 +2087,18 @@ export class AkashTxActuator implements AkashTxActuatorPort {
 
   private async observeCost(
     record: AkashTxAllocationRecord,
-    externalName: string
+    externalName: string,
+    deadlineAt?: number
   ): Promise<void> {
-    await this.bindCost(record, externalName);
+    await this.bindCost(record, externalName, deadlineAt);
     try {
       const evidence = await this.costEvidence.observeCost({
         resourceId: externalName,
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
       });
       await this.costStore.observe({
         allocationReceiptId: record.receiptId,
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
         evidence,
       });
       this.log.info(

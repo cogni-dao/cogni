@@ -227,7 +227,8 @@ export class DrizzleAkashTxAllocationLedger
             existing.allocationCursor === null)) &&
         existing.nodeId === input.identity.nodeId &&
         existing.environment === input.environment &&
-        existing.compositeUid === input.identity.compositeUid;
+        existing.compositeUid === input.identity.compositeUid &&
+        existing.workload === input.workload;
       if (existing && !reclaimable) {
         return {
           state: "settled" as const,
@@ -271,7 +272,6 @@ export class DrizzleAkashTxAllocationLedger
             allocationCursor: null,
             failureCode: null,
             settledAt: null,
-            workload: input.workload,
             compositeGeneration: sql`greatest(${akashTxAllocations.compositeGeneration}, ${input.identity.compositeGeneration}::int)`,
             updatedAt: advanceReceiptVersion,
           })
@@ -447,7 +447,7 @@ export class DrizzleAkashTxAllocationLedger
           | null
         >
   ): Promise<AkashTxAllocationRecord> {
-    const db = await this.getDb();
+    const db = this.getDb();
     return receiptTransaction(
       db,
       async (tx, guarded) => {
@@ -461,6 +461,8 @@ export class DrizzleAkashTxAllocationLedger
         const record = allocationRecord(row);
         const changes = await values(record, guarded, tx);
         if (changes === null) return record;
+        if (input.deadlineAt !== undefined && Date.now() >= input.deadlineAt)
+          throw new Error("receipt operation deadline exceeded");
         const [updated] = await tx
           .update(akashTxAllocations)
           .set({ ...changes, updatedAt: advanceReceiptVersion })
@@ -623,25 +625,31 @@ export class DrizzleAkashTxAllocationLedger
       throw new Error("native admission deadline exceeded");
   }
 
-  async listClosureCandidates(): Promise<readonly AkashTxAllocationRecord[]> {
-    const db = await this.getDb();
-    return receiptTransaction(db, async (tx, guarded) => {
-      if (!guarded) return [];
-      const rows = await tx
-        .select(RECEIPT_SELECTION)
-        .from(akashTxAllocations)
-        .where(
-          and(
-            eq(akashTxAllocations.walletScope, this.walletScope),
-            inArray(akashTxAllocations.state, ["allocated", "released"]),
-            sql`${akashTxAllocations.externalName} is not null`,
-            sql`${akashTxAllocations.nativeClosedVerified} is null`
+  async listClosureCandidates(
+    deadlineAt?: number
+  ): Promise<readonly AkashTxAllocationRecord[]> {
+    const db = this.getDb();
+    return receiptTransaction(
+      db,
+      async (tx, guarded) => {
+        if (!guarded) return [];
+        const rows = await tx
+          .select(RECEIPT_SELECTION)
+          .from(akashTxAllocations)
+          .where(
+            and(
+              eq(akashTxAllocations.walletScope, this.walletScope),
+              inArray(akashTxAllocations.state, ["allocated", "released"]),
+              sql`${akashTxAllocations.externalName} is not null`,
+              sql`${akashTxAllocations.nativeClosedVerified} is null`
+            )
           )
-        )
-        .orderBy(akashTxAllocations.updatedAt, akashTxAllocations.id)
-        .limit(20);
-      return rows.map(allocationRecord);
-    });
+          .orderBy(akashTxAllocations.updatedAt, akashTxAllocations.id)
+          .limit(20);
+        return rows.map(allocationRecord);
+      },
+      deadlineAt
+    );
   }
 
   async startClosureRead(
@@ -707,6 +715,7 @@ export class DrizzleAkashTxAllocationLedger
     cogniKey: string;
     externalName: string;
     expected: AkashTxAllocationRecord;
+    deadlineAt?: number;
   }): Promise<AkashTxAllocationRecord> {
     return this.writeAllocation(input, "recovery");
   }
@@ -717,6 +726,7 @@ export class DrizzleAkashTxAllocationLedger
       externalName: string;
       providerAccount?: string;
       expected: AkashTxAllocationRecord;
+      deadlineAt?: number;
     },
     producer: "callback" | "recovery"
   ): Promise<AkashTxAllocationRecord> {
@@ -782,42 +792,50 @@ export class DrizzleAkashTxAllocationLedger
   async listStalePreparing(input: {
     olderThanMs: number;
     limit: number;
+    deadlineAt?: number;
   }): Promise<readonly AkashTxStaleAllocation[]> {
-    const db = await this.getDb();
-    const rows = await db
-      .select({
-        ...RECEIPT_SELECTION,
-        cogniKey: akashTxAllocations.cogniKey,
-        allocationCursor: akashTxAllocations.allocationCursor,
-        // Age is computed BY POSTGRES: the actuator's clock is not the ledger's clock, and a
-        // skewed pod must not be able to declare a fresh receipt stale.
-        heldForMs: sql<number>`floor(extract(epoch from (now() - ${akashTxAllocations.updatedAt})) * 1000)::int`,
-      })
-      .from(akashTxAllocations)
-      .where(
-        and(
-          eq(akashTxAllocations.walletScope, this.walletScope),
-          eq(akashTxAllocations.state, "preparing"),
-          sql`${akashTxAllocations.externalName} is null`,
-          sql`${akashTxAllocations.updatedAt} < now() - make_interval(secs => ${input.olderThanMs / 1000})`
-        )
-      )
-      .orderBy(akashTxAllocations.updatedAt)
-      .limit(input.limit);
-    return rows.map((row) => ({
-      record: allocationRecord(row),
-      cogniKey: row.cogniKey,
-      ...(row.allocationCursor
-        ? { allocationCursor: row.allocationCursor }
-        : {}),
-      heldForMs: Number(row.heldForMs),
-    }));
+    const db = this.getDb();
+    return receiptTransaction(
+      db,
+      async (tx) => {
+        const rows = await tx
+          .select({
+            ...RECEIPT_SELECTION,
+            cogniKey: akashTxAllocations.cogniKey,
+            allocationCursor: akashTxAllocations.allocationCursor,
+            // Age is computed BY POSTGRES: the actuator's clock is not the ledger's clock, and a
+            // skewed pod must not be able to declare a fresh receipt stale.
+            heldForMs: sql<number>`floor(extract(epoch from (now() - ${akashTxAllocations.updatedAt})) * 1000)::int`,
+          })
+          .from(akashTxAllocations)
+          .where(
+            and(
+              eq(akashTxAllocations.walletScope, this.walletScope),
+              eq(akashTxAllocations.state, "preparing"),
+              sql`${akashTxAllocations.externalName} is null`,
+              sql`${akashTxAllocations.updatedAt} < now() - make_interval(secs => ${input.olderThanMs / 1000})`
+            )
+          )
+          .orderBy(akashTxAllocations.updatedAt)
+          .limit(input.limit);
+        return rows.map((row) => ({
+          record: allocationRecord(row),
+          cogniKey: row.cogniKey,
+          ...(row.allocationCursor
+            ? { allocationCursor: row.allocationCursor }
+            : {}),
+          heldForMs: Number(row.heldForMs),
+        }));
+      },
+      input.deadlineAt
+    );
   }
 
   async fail(input: {
     cogniKey: string;
     failureCode: string;
     expected: AkashTxAllocationRecord;
+    deadlineAt?: number;
   }): Promise<AkashTxAllocationRecord> {
     return this.change(input, (record, guarded) => {
       if (
