@@ -36,6 +36,10 @@ describe("compatible receipts: real PostgreSQL", () => {
     max: 1,
     applicationName: "compatible-receipts-test",
   });
+  const ddl = createAppDbClient(process.env.DATABASE_URL ?? "", {
+    max: 1,
+    applicationName: "compatible-receipts-ddl-test",
+  });
   const guardedLedger = new DrizzleAkashTxAllocationLedger(
     async () => app,
     WALLET
@@ -79,6 +83,7 @@ describe("compatible receipts: real PostgreSQL", () => {
   });
   afterAll(async () => {
     await app.$client.end();
+    await ddl.$client.end();
   });
   const guardedClaim = () =>
     guardedLedger.claim({
@@ -106,9 +111,9 @@ describe("compatible receipts: real PostgreSQL", () => {
       .where(eq(akashTxAllocations.walletScope, WALLET));
   });
 
-  const waitForRelationWait = async () => {
+  const waitForRelationWait = async (tx: Tx) => {
     for (let attempt = 0; attempt < 100; attempt++) {
-      const [row] = await db.execute<{ waiting: boolean }>(sql`
+      const [row] = await tx.execute<{ waiting: boolean }>(sql`
         select exists(select 1 from pg_stat_activity where
           application_name='compatible-receipts-test' and wait_event_type='Lock') as waiting`);
       if (row?.waiting) return;
@@ -123,7 +128,7 @@ describe("compatible receipts: real PostgreSQL", () => {
   ] as const)("selects committed stage after %s DDL lock contention", async (stage) => {
     if (stage === "remove") await installGuard();
     let operation!: Promise<boolean>;
-    await db.transaction(async (tx) => {
+    await ddl.transaction(async (tx) => {
       if (stage === "install") await installGuard(tx);
       else
         await tx.execute(
@@ -152,7 +157,7 @@ describe("compatible receipts: real PostgreSQL", () => {
         Date.now() + 5000
       );
       // Observe the actual PostgreSQL lock wait, not just a JavaScript pause.
-      await waitForRelationWait();
+      await waitForRelationWait(tx);
     });
     expect(await operation).toBe(stage === "install");
     expect(
@@ -248,7 +253,7 @@ describe("compatible receipts: real PostgreSQL", () => {
     if (!scheduled) throw new Error("scheduler fixture missing");
     const first = await guardedClaim();
     if (first.state !== "claimed") throw new Error("claim missing");
-    await db.transaction(async (tx) => {
+    await ddl.transaction(async (tx) => {
       await tx.execute(
         sql`lock table public.akash_tx_allocations in access exclusive mode`
       );

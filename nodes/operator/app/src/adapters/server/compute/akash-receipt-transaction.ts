@@ -96,6 +96,8 @@ export async function receiptTransaction<T>(
  * Pool admission has no postgres.js cancellation primitive. Race ONLY admission, never
  * an executing mutation: a late callback must throw before running application SQL.
  * Statement/lock timeouts and the final deadline check roll back late query results.
+ * PG15 per-statement timeouts do not prove a whole-transaction transport bound.
+ * An in-flight query or COMMIT acknowledgement still needs native cancellation proof.
  */
 export async function boundedReceiptTransaction<T>(
   db: Database | Promise<Database>,
