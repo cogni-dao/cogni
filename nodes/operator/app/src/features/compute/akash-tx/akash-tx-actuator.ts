@@ -1647,11 +1647,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     allocationCursor?: string,
     original?: AkashTxAllocationRecord
   ): Promise<boolean> {
+    if (!original) return false;
     try {
       await this.ledger.fail({
         cogniKey,
         failureCode: ROLLED_BACK_FAILURE_CODE,
-        ...(original ? { expected: original } : {}),
+        expected: original,
       });
       this.log.warn(
         {

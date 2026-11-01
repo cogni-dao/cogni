@@ -631,7 +631,7 @@ export interface AkashTxAllocationLedgerPort {
   prepare(input: {
     cogniKey: string;
     allocationCursor: string;
-    expected?: AkashTxAllocationRecord;
+    expected: AkashTxAllocationRecord;
     coverage?: import("@/types/akash-native-state").AkashNativeWalletInventory;
     deadlineAt?: number;
   }): Promise<AkashTxAllocationRecord>;
@@ -640,7 +640,7 @@ export interface AkashTxAllocationLedgerPort {
     cogniKey: string;
     externalName: string;
     providerAccount?: string;
-    expected?: AkashTxAllocationRecord;
+    expected: AkashTxAllocationRecord;
   }): Promise<AkashTxAllocationRecord>;
   /**
    * Persist the sha256 of the SDL just PUT for this key, so the next in-place update can no-op a
@@ -651,7 +651,7 @@ export interface AkashTxAllocationLedgerPort {
   recordAppliedSdlHash(input: {
     cogniKey: string;
     sdlHash: string;
-    expected?: AkashTxAllocationRecord;
+    expected: AkashTxAllocationRecord;
   }): Promise<AkashTxAllocationRecord>;
   /**
    * Settle a receipt that never bound a paid resource, releasing the wallet-wide slot.
@@ -668,7 +668,7 @@ export interface AkashTxAllocationLedgerPort {
   fail(input: {
     cogniKey: string;
     failureCode: string;
-    expected?: AkashTxAllocationRecord;
+    expected: AkashTxAllocationRecord;
   }): Promise<AkashTxAllocationRecord>;
   /**
    * Bounded scan for receipts stuck mid-transaction. Read-only, newest-last, hard-limited —
@@ -683,7 +683,7 @@ export interface AkashTxAllocationLedgerPort {
   /** Mark a previously allocated key as released after a provider delete. */
   markReleased(input: {
     cogniKey: string;
-    expected?: AkashTxAllocationRecord;
+    expected: AkashTxAllocationRecord;
   }): Promise<AkashTxAllocationRecord>;
   read(input: { cogniKey: string }): Promise<AkashTxAllocationRecord | null>;
   /**

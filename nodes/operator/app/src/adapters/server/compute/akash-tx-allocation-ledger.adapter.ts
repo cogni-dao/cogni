@@ -424,7 +424,7 @@ export class DrizzleAkashTxAllocationLedger
   private async change(
     input: {
       cogniKey: string;
-      expected?: AkashTxAllocationRecord;
+      expected: AkashTxAllocationRecord;
       deadlineAt?: number;
     },
     values: (
@@ -477,7 +477,7 @@ export class DrizzleAkashTxAllocationLedger
   async prepare(input: {
     cogniKey: string;
     allocationCursor: string;
-    expected?: AkashTxAllocationRecord;
+    expected: AkashTxAllocationRecord;
     coverage?: AkashNativeWalletInventory;
     deadlineAt?: number;
   }): Promise<AkashTxAllocationRecord> {
@@ -687,6 +687,8 @@ export class DrizzleAkashTxAllocationLedger
         )
           throw new Error("native own-handle certificate refused");
         if (record.nativeClosedVerified === true) return null;
+        if (record.nativeClosedVerified !== null)
+          throw new Error("invalid native CLOSED fact");
         return { nativeClosedVerified: true };
       }
     );
@@ -696,7 +698,7 @@ export class DrizzleAkashTxAllocationLedger
     cogniKey: string;
     externalName: string;
     providerAccount?: string;
-    expected?: AkashTxAllocationRecord;
+    expected: AkashTxAllocationRecord;
   }): Promise<AkashTxAllocationRecord> {
     return this.change(input, (record) => {
       if (
@@ -735,7 +737,7 @@ export class DrizzleAkashTxAllocationLedger
   async recordAppliedSdlHash(input: {
     cogniKey: string;
     sdlHash: string;
-    expected?: AkashTxAllocationRecord;
+    expected: AkashTxAllocationRecord;
   }): Promise<AkashTxAllocationRecord> {
     return this.change(input, (record) => {
       if (record.state === "preparing")
@@ -783,7 +785,7 @@ export class DrizzleAkashTxAllocationLedger
   async fail(input: {
     cogniKey: string;
     failureCode: string;
-    expected?: AkashTxAllocationRecord;
+    expected: AkashTxAllocationRecord;
   }): Promise<AkashTxAllocationRecord> {
     return this.change(input, (record, guarded) => {
       if (
@@ -804,7 +806,7 @@ export class DrizzleAkashTxAllocationLedger
 
   async markReleased(input: {
     cogniKey: string;
-    expected?: AkashTxAllocationRecord;
+    expected: AkashTxAllocationRecord;
   }): Promise<AkashTxAllocationRecord> {
     return this.change(input, (record) => {
       if (record.state !== "allocated" && record.state !== "released")

@@ -172,20 +172,20 @@ describe("compatible receipts: real PostgreSQL", () => {
     ).rejects.toThrow(/custody/);
   });
   it("refuses an operation paused across committed guard DDL without manufacturing provenance", async () => {
-    const old = await claim();
+    const old = await guardedClaim();
     if (old.state !== "claimed") throw new Error("fixture claim failed");
     await installGuard();
     await expect(
       guardedLedger.prepare({
-        cogniKey: "compatible",
+        cogniKey: old.record.cogniKey,
         allocationCursor: "8000",
         expected: old.record,
         coverage: coverage(),
         deadlineAt: Date.now() + 30_000,
       })
-    ).rejects.toThrow();
+    ).rejects.toThrow(/unused wallet slot/);
     expect(
-      (await ledger.read({ cogniKey: "compatible" }))
+      (await ledger.read({ cogniKey: old.record.cogniKey }))
         ?.allocationNoEffectVerified
     ).toBeNull();
   });
