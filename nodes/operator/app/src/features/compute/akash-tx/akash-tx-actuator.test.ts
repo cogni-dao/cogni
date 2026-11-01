@@ -275,7 +275,10 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
 
   async fail(input: { cogniKey: string; failureCode: string }) {
     if (this.failWrites) throw new Error("ledger down");
-    this.failCalls.push(input);
+    this.failCalls.push({
+      cogniKey: input.cogniKey,
+      failureCode: input.failureCode,
+    });
     const row = this.rows.get(input.cogniKey);
     if (!row || row.state !== "preparing" || row.externalName)
       throw new Error("receipt custody cannot be discharged");
@@ -1495,6 +1498,42 @@ describe("qualified cell app releases", () => {
 });
 
 describe("AkashTxActuator.create", () => {
+  it("refuses a second caller's unused owned claim before cursor or POST", async () => {
+    const first = build();
+    const second = build({}, undefined, first.ledger);
+    let entered = () => {};
+    let resume = () => {};
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    first.api.allocationCursor = async () => {
+      first.api.cursorCalls++;
+      entered();
+      await gate;
+      return "7000";
+    };
+    const input = {
+      cogniKey: "same-claim",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    };
+    const pending = first.actuator.create(input);
+    await waiting;
+    await expect(second.actuator.create(input)).rejects.toMatchObject({
+      code: "wallet_allocation_blocked",
+    });
+    expect(second.api.cursorCalls).toBe(0);
+    expect(second.api.allocateCalls).toBe(0);
+    expect(first.ledger.failCalls).toEqual([]);
+    resume();
+    await pending;
+    expect(first.api.allocateCalls).toBe(1);
+  });
+
   it("writes the pre-transaction cursor BEFORE the Console transaction", async () => {
     const { actuator, ledger, api } = build();
     const order: string[] = [];
