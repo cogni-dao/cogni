@@ -31,6 +31,10 @@ const uint64 = z
   ])
   .transform(String)
   .refine((v) => /^(0|[1-9][0-9]{0,19})$/.test(v) && BigInt(v) <= UINT64_MAX);
+const validHeight = (value: string | null): value is string =>
+  value !== null &&
+  /^[1-9][0-9]{0,18}$/.test(value) &&
+  BigInt(value) <= 9223372036854775807n;
 const uint32 = z
   .union([
     z.number(),
@@ -317,7 +321,12 @@ export class AkashNativeStateReader {
           .safeParse(raw);
         if (!parsed.success) throw new NativeReadError("invalid_response");
         const { id, state } = parsed.data.deployment;
-        if (id.owner !== owner || state !== "active" || seen.has(id.dseq))
+        if (
+          id.owner !== owner ||
+          id.dseq === "0" ||
+          state !== "active" ||
+          seen.has(id.dseq)
+        )
           throw new NativeReadError("identity_mismatch");
         seen.add(id.dseq);
         const groups = parsed.data.groups.map((group) => {
@@ -399,7 +408,11 @@ export class AkashNativeStateReader {
     height: string;
     closed: boolean;
   }> {
-    if (!this.owner || !uint64.safeParse(input.dseq).success)
+    if (
+      !this.owner ||
+      !uint64.safeParse(input.dseq).success ||
+      input.dseq === "0"
+    )
       throw new NativeReadError("invalid_handle");
     const { signal, clear } = this.inventoryDeadline(input);
     try {
@@ -409,11 +422,7 @@ export class AkashNativeStateReader {
         signal
       );
       const parsed = deploymentResponse.safeParse(response.body);
-      if (
-        !parsed.success ||
-        !response.height ||
-        !/^[1-9][0-9]*$/.test(response.height)
-      )
+      if (!parsed.success || !validHeight(response.height))
         throw new NativeReadError("invalid_response");
       if (
         signal.aborted ||
@@ -475,8 +484,7 @@ export class AkashNativeStateReader {
         height()
       );
       if (
-        !response.height ||
-        !/^[1-9][0-9]*$/.test(response.height) ||
+        !validHeight(response.height) ||
         (height() && height() !== response.height)
       )
         throw new NativeReadError("height_mismatch");

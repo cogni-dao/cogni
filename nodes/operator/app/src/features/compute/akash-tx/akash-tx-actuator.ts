@@ -811,7 +811,20 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           "allocation_unresolved",
           "native admission reader unavailable"
         );
-      coverage = await this.nativeAdmission.readWalletInventory({ deadlineAt });
+      try {
+        coverage = await this.nativeAdmission.readWalletInventory({
+          deadlineAt,
+        });
+      } catch {
+        this.log.warn(
+          { cogniKey: input.cogniKey },
+          "akash_tx_native_admission_held"
+        );
+        throw new AkashTxError(
+          "allocation_unresolved",
+          "complete native admission coverage unavailable"
+        );
+      }
     }
     custody = await this.prepare(
       input.cogniKey,
