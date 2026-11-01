@@ -403,7 +403,13 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     workload?: string;
     environment?: string;
     composite?: AkashTxCompositeVerdict;
+
+    deadlineAt?: number;
   }): Promise<AkashTxObservation> {
+    const deadlineAt = Math.min(
+      Date.now() + 30_000,
+      input.deadlineAt ?? Infinity
+    );
     // THE VERDICT THE COMPOSITE ALREADY REACHED, stated before anything else can throw
     // (bug.5416). Ordered ahead of the release step on purpose: this reports the PREVIOUS
     // tick's decision, so it owes nothing to this tick's work and must survive a refusal.
@@ -414,12 +420,14 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     // (task.5135). A failed migration gates readiness rather than becoming a paid-lease gate.
     if (input.migration && input.environment === "production" && input.workload)
       await this.requireQualifiedCellRelease({
+        deadlineAt,
+
         cogniKey: input.cogniKey,
         environment: input.environment,
         workload: input.workload,
         requestedShas: input.expectedSourceSha ? [input.expectedSourceSha] : [],
       });
-    const migration = await this.releaseMigration(input);
+    const migration = await this.releaseMigration({ ...input, deadlineAt });
     // THE VERDICT THE COMPOSITE WILL READ, stated once per observe (bug.5416). Everything
     // upstream of this line logs how the step WENT; only this line logs what the RESPONSE
     // carries, which is the single value `composition.yaml` turns into `MigrationFailed`.
@@ -435,34 +443,39 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       const record = await this.requireStoredHandle(
         input.cogniKey,
         input.externalName,
-        "observe"
+        "observe",
+        deadlineAt
       );
       const resource = await this.describe(
         input.externalName,
         record.providerAccount,
-        record
+        record,
+        deadlineAt
       );
       return withMigration(
         await this.withServing(
           { found: true, resource },
           input.expectedSourceSha,
-          input.publicHost
+          input.publicHost,
+          deadlineAt
         )
       );
     }
-    const record = await this.readLedger(input.cogniKey);
+    const record = await this.readLedger(input.cogniKey, deadlineAt);
     if (!record) return withMigration({ found: false });
     if (record.externalName) {
       const resource = await this.describe(
         record.externalName,
         record.providerAccount,
-        record
+        record,
+        deadlineAt
       );
       return withMigration(
         await this.withServing(
           { found: true, resource },
           input.expectedSourceSha,
-          input.publicHost
+          input.publicHost,
+          deadlineAt
         )
       );
     }
@@ -472,7 +485,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       const resource = await this.resolveUncertain(
         input.cogniKey,
         record.allocationCursor,
-        record
+        record,
+        deadlineAt
       );
       // Null = the receipt was PROVEN not to be billing and has just settled itself.
       // Observe reports what is true — nothing exists — so the caller proceeds to create
@@ -482,7 +496,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         await this.withServing(
           { found: true, resource, recovered: true },
           input.expectedSourceSha,
-          input.publicHost
+          input.publicHost,
+          deadlineAt
         )
       );
     }
@@ -496,8 +511,16 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
+
+    deadlineAt?: number;
   }): Promise<AkashTxCreateResult> {
+    const deadlineAt = Math.min(
+      Date.now() + 30_000,
+      input.deadlineAt ?? Infinity
+    );
     await this.requireQualifiedCellRelease({
+      deadlineAt,
+
       cogniKey: input.cogniKey,
       environment: input.environment,
       nodeId: input.identity.nodeId,
@@ -509,13 +532,17 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       ),
       spec: input.spec,
     });
-    return this.allocate(input);
+    return this.allocate({ ...input, deadlineAt });
   }
 
   /** References only: applied source identity admits capacity, never an app release. */
   async createDatabaseCellRecovery(
     input: AkashTxDatabaseCellRecoveryInput
   ): Promise<AkashTxCreateResult> {
+    const deadlineAt = Math.min(
+      Date.now() + 30_000,
+      input.deadlineAt ?? Infinity
+    );
     const parsed = DatabaseCellRecoveryProfileSchema.safeParse(
       await this.recoveryProfile?.()
     );
@@ -544,7 +571,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         "cold recovery profile unavailable, disabled or funding unqualified"
       );
     }
-    const source = await this.readLedger(input.recovery.sourceCogniKey);
+    const source = await this.readLedger(
+      input.recovery.sourceCogniKey,
+      deadlineAt
+    );
     const bindings =
       source?.appliedDatabaseCellBinding?.filter(
         ({ binding }) =>
@@ -582,6 +612,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
     return this.allocate({
       ...input,
+      deadlineAt,
       spec: intent.spec,
       allocationPolicy: intent.policy,
       recoveryFamilyPrefix: intent.familyPrefix,
@@ -595,13 +626,18 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     spec: ProvisionSpec;
     allocationPolicy?: AkashTxAllocationPolicy;
     recoveryFamilyPrefix?: string;
+    deadlineAt?: number;
   }): Promise<AkashTxCreateResult> {
+    const deadlineAt = Math.min(
+      Date.now() + 30_000,
+      input.deadlineAt ?? Infinity
+    );
     // The claim IS the receipt, and it is the FIRST mutation this method does: its INSERT carries
     // {nodeId, environment, compositeUid, compositeGeneration, cogniKey}. Everything below this
     // line — the cursor read and the paid POST — happens strictly after that row is durable.
     // No provider mutation precedes it; the migration gate that used to sit here was severed by
     // task.5135, and RECEIPT_BEFORE_TRANSACTION is stronger for it.
-    const claim = await this.claim(input);
+    const claim = await this.claim({ ...input, deadlineAt });
 
     if (claim.state === "blocked") {
       // bug.5115: this refusal used to exist only in CR status, which made a fleet-wide
@@ -666,7 +702,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         const resource = await this.describe(
           claim.record.externalName,
           claim.record.providerAccount,
-          claim.record
+          claim.record,
+          deadlineAt
         );
         return { ...resource, replayed: true, recovered: false };
       }
@@ -686,7 +723,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       const resource = await this.resolveUncertain(
         input.cogniKey,
         claim.record.allocationCursor,
-        claim.record
+        claim.record,
+        deadlineAt
       );
       if (resource) return { ...resource, replayed: false, recovered: true };
       // The receipt just settled itself: nothing is billing and the wallet slot is free.
@@ -709,6 +747,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     if (recoveryFamilyPrefix) {
       try {
         const receipts = await this.ledger.listReceipts({
+          deadlineAt,
           nodeId: input.identity.nodeId,
           environment: input.environment,
           limit: 100,
@@ -726,8 +765,11 @@ export class AkashTxActuator implements AkashTxActuatorPort {
             "recovery family already has a target or receipt scan is truncated"
           );
       } catch (error) {
+        if (error instanceof AkashTxError && error.code === "outcome_unknown")
+          throw error;
         // No cursor/handle and no provider IO: only this unused claim is safe to fail.
         await this.ledger.fail({
+          deadlineAt,
           cogniKey: input.cogniKey,
           failureCode: "recovery_family_refused",
           expected: custody,
@@ -750,6 +792,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     let excludedProviders: ReadonlySet<string> | undefined;
     if (recovery.ordinal > 0) {
       const receipts = await this.ledger.listReceipts({
+        deadlineAt,
         nodeId: input.identity.nodeId,
         environment: input.environment,
         limit: 50,
@@ -771,14 +814,17 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       const prev = family.find((r) => r.cogniKey === prevKey);
       if (this.outcomes && prev?.providerAccount && prev.externalName) {
         try {
-          await this.outcomes.record({
-            computeProvider: "akash",
-            providerAccount: prev.providerAccount,
-            outcome: "slo_timeout",
-            leaseId: prev.externalName,
-            workload: input.spec.name,
-            detail: `bounded recovery: ${input.cogniKey} superseding ${prevKey}`,
-          });
+          await this.outcomes.record(
+            {
+              computeProvider: "akash",
+              providerAccount: prev.providerAccount,
+              outcome: "slo_timeout",
+              leaseId: prev.externalName,
+              workload: input.spec.name,
+              detail: `bounded recovery: ${input.cogniKey} superseding ${prevKey}`,
+            },
+            deadlineAt
+          );
           this.log.info(
             {
               cogniKey: input.cogniKey,
@@ -789,6 +835,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
             "akash_tx_provider_strike_recorded"
           );
         } catch (error) {
+          if (error instanceof AkashTxError && error.code === "outcome_unknown")
+            throw error;
           // BEST_EFFORT: a strike write must never block a paid recovery attempt.
           this.log.warn(
             {
@@ -802,7 +850,6 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       }
     }
 
-    const deadlineAt = Date.now() + 30_000;
     const cursor = await this.readCursor(deadlineAt);
     let coverage: AkashNativeWalletInventory | undefined;
     if (custody.allocationNoEffectVerified === true) {
@@ -846,6 +893,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     let allocated: { leaseId: string; providerAccount: string };
     try {
       allocated = await this.console.allocateAndLease({
+        deadlineAt,
         spec: input.spec,
         ...(input.allocationPolicy
           ? { allocationPolicy: input.allocationPolicy }
@@ -860,6 +908,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
             cogniKey: input.cogniKey,
             externalName: leaseId,
             expected: custody,
+            deadlineAt,
           });
           this.log.info(
             { cogniKey: input.cogniKey, externalName: leaseId },
@@ -890,12 +939,16 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       // the receipt keeps the WALLET-WIDE slot and every node in the environment stops
       // leasing. Settling is best-effort on purpose: the DB may be the very thing that died,
       // and the stale-allocation sweeper is the backstop for exactly that case.
-      if (rolledBackDseq)
+      if (
+        rolledBackDseq &&
+        !(error instanceof AkashTxError && error.code === "outcome_unknown")
+      )
         await this.settleRollback(
           input.cogniKey,
           rolledBackDseq,
           undefined,
-          custody
+          custody,
+          deadlineAt
         );
       throw mapped;
     }
@@ -905,22 +958,26 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       externalName: allocated.leaseId,
       providerAccount: allocated.providerAccount,
       expected: custody,
+      deadlineAt,
     });
     await this.ledger.recordAppliedSdlHash({
       cogniKey: input.cogniKey,
       sdlHash: this.console.sdlHash(input.spec, input.allocationPolicy),
       expected: custody,
+      deadlineAt,
     });
     const allocationRecord = await this.requireStoredHandle(
       input.cogniKey,
       allocated.leaseId,
-      "create"
+      "create",
+      deadlineAt
     );
-    await this.bindCost(allocationRecord, allocated.leaseId);
+    await this.bindCost(allocationRecord, allocated.leaseId, deadlineAt);
     const resource = await this.describe(
       allocated.leaseId,
       allocated.providerAccount,
-      allocationRecord
+      allocationRecord,
+      deadlineAt
     );
     this.log.info(
       {
@@ -940,8 +997,16 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
+
+    deadlineAt?: number;
   }): Promise<AkashTxResource> {
+    const deadlineAt = Math.min(
+      Date.now() + 30_000,
+      input.deadlineAt ?? Infinity
+    );
     await this.requireQualifiedCellRelease({
+      deadlineAt,
+
       cogniKey: input.cogniKey,
       environment: input.environment,
       nodeId: input.identity.nodeId,
@@ -959,6 +1024,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     // the SAME receipt row the create opened; there is no second ledger and no second table.
     const bound = await this.bindIdentity({
       ...input,
+      deadlineAt,
       ...(retainsStorage(input.spec)
         ? { retentionPolicy: "retain" as const }
         : {}),
@@ -1001,7 +1067,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     }
     // Refresh durable native evidence before replacing a paid workload. A failed cost read/write
     // holds the update retryably and must leave the provider untouched.
-    await this.observeCost(bound.record, input.externalName);
+    await this.observeCost(bound.record, input.externalName, deadlineAt);
     this.log.info(
       {
         cogniKey: input.cogniKey,
@@ -1088,7 +1154,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       return this.describe(
         input.externalName,
         bound.record.providerAccount,
-        bound.record
+        bound.record,
+        deadlineAt
       );
     }
 
@@ -1114,6 +1181,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       throw mapped;
     }
     await this.ledger.recordAppliedSdlHash({
+      deadlineAt,
+
       cogniKey: input.cogniKey,
       sdlHash: desiredSdlHash,
       expected: bound.record,
@@ -1129,18 +1198,26 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     return this.describe(
       input.externalName,
       bound.record.providerAccount,
-      bound.record
+      bound.record,
+      deadlineAt
     );
   }
 
   async delete(input: {
     cogniKey: string;
     externalName: string;
+
+    deadlineAt?: number;
   }): Promise<void> {
+    const deadlineAt = Math.min(
+      Date.now() + 30_000,
+      input.deadlineAt ?? Infinity
+    );
     const record = await this.requireStoredHandle(
       input.cogniKey,
       input.externalName,
-      "delete"
+      "delete",
+      deadlineAt
     );
     if (
       record.retentionPolicy === "retain" ||
@@ -1155,8 +1232,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         "retained storage requires audited retirement; ordinary delete is refused"
       );
     }
-    await this.observeCost(record, input.externalName).catch(
+    await this.observeCost(record, input.externalName, deadlineAt).catch(
       (error: unknown) => {
+        if (error instanceof AkashTxError && error.code === "outcome_unknown")
+          throw error;
         this.log.warn(
           {
             cogniKey: input.cogniKey,
@@ -1184,11 +1263,15 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       }
     }
     await this.ledger.markReleased({
+      deadlineAt,
+
       cogniKey: input.cogniKey,
       expected: record,
     });
-    await this.observeCost(record, input.externalName).catch(
+    await this.observeCost(record, input.externalName, deadlineAt).catch(
       (error: unknown) => {
+        if (error instanceof AkashTxError && error.code === "outcome_unknown")
+          throw error;
         this.log.warn(
           {
             cogniKey: input.cogniKey,
@@ -1199,7 +1282,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         );
       }
     );
-    await this.closeCost(record);
+    await this.closeCost(record, deadlineAt);
     this.log.info(
       { cogniKey: input.cogniKey, externalName: input.externalName },
       "akash_tx_released"
@@ -1214,16 +1297,22 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     workload: string;
     requestedShas: readonly string[];
     spec?: ProvisionSpec;
+
+    deadlineAt?: number;
   }): Promise<void> {
+    const deadlineAt = input.deadlineAt;
     if (input.environment !== "production") return;
     let records: readonly AkashTxAllocationRecord[];
     try {
       records = await this.ledger.listAllocated({
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
         ...(input.nodeId ? { nodeId: input.nodeId } : {}),
         environment: input.environment,
         limit: 100,
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof AkashTxError && error.code === "outcome_unknown")
+        throw error;
       throw new AkashTxError(
         "ledger_unavailable",
         "qualified cell release metadata unavailable"
@@ -1372,7 +1461,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     migration?: AkashTxMigrationStep;
     workload?: string;
     environment?: string;
+
+    deadlineAt?: number;
   }): Promise<AkashTxMigrationPhase | undefined> {
+    const deadlineAt = input.deadlineAt;
     if (!input.migration) return undefined;
     if (!input.workload || !input.environment) {
       // The step names a digest but not the workload whose database it belongs to. Refusing
@@ -1398,8 +1490,11 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         cogniKey: input.cogniKey,
         environment: input.environment,
         workload: input.workload,
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
         ...(this.migrationReports
-          ? { nodeId: await this.receiptBoundNodeId(input.cogniKey) }
+          ? {
+              nodeId: await this.receiptBoundNodeId(input.cogniKey, deadlineAt),
+            }
           : {}),
       }
     );
@@ -1524,12 +1619,18 @@ export class AkashTxActuator implements AkashTxActuatorPort {
    * read. The migration still runs; only the metadata waits for the next tick.
    */
   private async receiptBoundNodeId(
-    cogniKey: string
+    cogniKey: string,
+    deadlineAt?: number
   ): Promise<string | undefined> {
     try {
-      const record = await this.ledger.read({ cogniKey });
+      const record = await this.ledger.read({
+        cogniKey,
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
+      });
       return record?.identity.nodeId;
     } catch (error) {
+      if (error instanceof AkashTxError && error.code === "outcome_unknown")
+        throw error;
       this.log.warn(
         {
           cogniKey,
@@ -1836,7 +1937,13 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   async leaseLogSources(input: {
     environment?: string;
     limit?: number;
+
+    deadlineAt?: number;
   }): Promise<AkashTxLeaseLogSources> {
+    const deadlineAt = Math.min(
+      Date.now() + 30_000,
+      input.deadlineAt ?? Infinity
+    );
     const limit = Math.min(Math.max(input.limit ?? 32, 1), 64);
     let records: readonly AkashTxAllocationRecord[];
     try {
@@ -1844,6 +1951,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       // lease that boots but never serves is closed on its BootDeadline before its receipt ever
       // flips past `preparing`, so tailing only `allocated` loses exactly the boot logs we need.
       records = await this.ledger.listActive({
+        deadlineAt,
+
         ...(input.environment ? { environment: input.environment } : {}),
         limit,
       });
@@ -1932,11 +2041,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private async describe(
     externalName: string,
     providerAccount?: string,
-    record?: AkashTxAllocationRecord
+    record?: AkashTxAllocationRecord,
+    deadlineAt?: number
   ): Promise<AkashTxResource> {
     try {
       const output = await this.console.status({ leaseId: externalName });
-      if (record) await this.observeCost(record, externalName);
+      if (record) await this.observeCost(record, externalName, deadlineAt);
       return resourceFrom(output, providerAccount);
     } catch (error) {
       throw mapConsoleFailure(error, { mutating: false });
@@ -1946,7 +2056,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private async withServing(
     observation: AkashTxObservation,
     expectedSourceSha: string | undefined,
-    publicHost?: string
+    publicHost?: string,
+    deadlineAt?: number
   ): Promise<AkashTxObservation> {
     const endpoints = observation.resource?.endpoints ?? [];
     if (!this.probe || !expectedSourceSha || endpoints.length === 0) {
@@ -1957,28 +2068,36 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       expectedSourceSha,
       ...(publicHost ? { publicHost } : {}),
     });
-    // task.5153 — a positive host-routed serving proof is the live path's boot_ok. Fire and
-    // forget with a per-process cache; exactly-once lives in the DB unique (lease_id, outcome).
+    // task.5153 — a positive host-routed serving proof is the live path's boot_ok. We
+    // await with a per-process cache; exactly-once lives in the DB unique (lease_id, outcome).
     if (serving === true && observation.resource) {
-      void this.recordBootOk(observation.resource);
+      await this.recordBootOk(observation.resource, deadlineAt);
     }
     return { ...observation, serving };
   }
 
-  private async recordBootOk(resource: AkashTxResource): Promise<void> {
+  private async recordBootOk(
+    resource: AkashTxResource,
+    deadlineAt?: number
+  ): Promise<void> {
     if (!this.outcomes || !resource.providerAccount) return;
     if (this.bootOkRecorded.has(resource.externalName)) return;
     this.bootOkRecorded.add(resource.externalName);
     try {
-      await this.outcomes.record({
-        computeProvider: "akash",
-        providerAccount: resource.providerAccount,
-        outcome: "boot_ok",
-        leaseId: resource.externalName,
-      });
+      await this.outcomes.record(
+        {
+          computeProvider: "akash",
+          providerAccount: resource.providerAccount,
+          outcome: "boot_ok",
+          leaseId: resource.externalName,
+        },
+        deadlineAt
+      );
     } catch (error) {
-      // BEST_EFFORT: never let outcome IO shade an observation. Allow a later retry.
       this.bootOkRecorded.delete(resource.externalName);
+      if (error instanceof AkashTxError && error.code === "outcome_unknown")
+        throw error;
+      // BEST_EFFORT: ordinary history failures may retry on a later observation.
       this.log.warn(
         { externalName: resource.externalName, error: String(error) },
         "akash_tx_boot_ok_write_failed"
@@ -1999,10 +2118,14 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
+    deadlineAt?: number;
   }): Promise<Awaited<ReturnType<AkashTxAllocationLedgerPort["claim"]>>> {
     try {
       return await this.ledger.claim({
         cogniKey: input.cogniKey,
+        ...(input.deadlineAt !== undefined
+          ? { deadlineAt: input.deadlineAt }
+          : {}),
         workload: input.spec.name,
         environment: input.environment,
         identity: input.identity,
@@ -2020,11 +2143,15 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     retentionPolicy?: "retain";
+
+    deadlineAt?: number;
   }): Promise<
     Awaited<ReturnType<AkashTxAllocationLedgerPort["bindIdentity"]>>
   > {
+    const deadlineAt = input.deadlineAt;
     try {
       return await this.ledger.bindIdentity({
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
         cogniKey: input.cogniKey,
         environment: input.environment,
         identity: input.identity,
@@ -2040,9 +2167,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private async requireStoredHandle(
     cogniKey: string,
     externalName: string,
-    operation: "observe" | "create" | "update" | "delete"
+    operation: "observe" | "create" | "update" | "delete",
+    deadlineAt?: number
   ): Promise<AkashTxAllocationRecord> {
-    const record = await this.readLedger(cogniKey);
+    const record = await this.readLedger(cogniKey, deadlineAt);
     if (!record || record.externalName !== externalName) {
       this.log.error(
         {
@@ -2117,9 +2245,15 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     }
   }
 
-  private async closeCost(record: AkashTxAllocationRecord): Promise<void> {
+  private async closeCost(
+    record: AkashTxAllocationRecord,
+    deadlineAt?: number
+  ): Promise<void> {
     try {
-      await this.costStore.close({ allocationReceiptId: record.receiptId });
+      await this.costStore.close({
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
+        allocationReceiptId: record.receiptId,
+      });
     } catch (error) {
       throw this.costUnavailable(error, record.cogniKey, "close");
     }
@@ -2130,6 +2264,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     cogniKey: string,
     operation: string
   ): AkashTxError {
+    if (error instanceof AkashTxError && error.code === "outcome_unknown")
+      return error;
     this.log.error(
       {
         cogniKey,
@@ -2201,9 +2337,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     }
   }
 
-  private async readLedger(cogniKey: string) {
+  private async readLedger(cogniKey: string, deadlineAt?: number) {
     try {
-      return await this.ledger.read({ cogniKey });
+      return await this.ledger.read({
+        cogniKey,
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
+      });
     } catch (error) {
       throw this.ledgerUnavailable(error, cogniKey, "read");
     }

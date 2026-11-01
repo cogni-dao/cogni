@@ -3059,7 +3059,8 @@ describe("composition root wiring (story.5016)", () => {
     expect(deps).toMatch(
       /\bproviderConsumerAccountId\s*:\s*wallet\.expectedAccountId/
     );
-    expect(source).toMatch(/new DrizzleComputeCostStore\(getDb\)/);
+    expect(source).toMatch(/actorDatabase\.costStore\(\)/);
+    expect(source.match(/new AkashActorDatabase\(/g)).toHaveLength(1);
   });
 
   it("uses the SAME per-digest Job prover the ComputeWorkload controller uses", () => {

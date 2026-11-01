@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+import type { Database } from "@cogni/db-client";
+import { and, eq, sql } from "drizzle-orm";
+import type { AkashTxAllocationRecord } from "@/ports";
+import { akashTxAllocations as table } from "@/shared/db/schema";
 /**
  * Module: `@adapters/server/compute/akash-receipt-transaction`
  * Purpose: Order receipt protocol reads against DDL and fence every writer's original tuple.
@@ -10,10 +14,11 @@
  * Links: subtask.5033; R3 seq4 F1/native admission.
  * @internal
  */
-import type { Database } from "@cogni/db-client";
-import { and, eq, sql } from "drizzle-orm";
-import type { AkashTxAllocationRecord } from "@/ports";
-import { akashTxAllocations as table } from "@/shared/db/schema";
+import {
+  actorDatabaseAwait,
+  checkActorDatabaseScope,
+  trackActorDatabaseCallback,
+} from "./akash-actor-scope";
 
 type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 /** Source contract for a LATER separately reviewed migration. This file never installs it. */
@@ -33,28 +38,35 @@ export async function receiptTransaction<T>(
   return boundedReceiptTransaction(
     db,
     async (tx) => {
+      checkActorDatabaseScope();
       // Held until commit. CREATE TRIGGER's conflicting lock cannot straddle the read/CAS.
-      await tx.execute(
-        sql`lock table public.akash_tx_allocations in row exclusive mode`
+      await actorDatabaseAwait(() =>
+        tx.execute(
+          sql`lock table public.akash_tx_allocations in row exclusive mode`
+        )
       );
-      await tx.execute(sql`set local search_path = pg_catalog, public`);
-      const triggers = await tx.execute<{
-        name: string;
-        enabled: string;
-        type: number;
-        body: string;
-        language: string;
-        security_definer: boolean;
-        namespace: string;
-        attributes: string;
-        predicate: boolean;
-        arguments: number;
-        config: string[] | null;
-      }>(sql`select t.tgname as name, t.tgenabled as enabled, t.tgtype::int as type,
+      await actorDatabaseAwait(() =>
+        tx.execute(sql`set local search_path = pg_catalog, public`)
+      );
+      const triggers = await actorDatabaseAwait(() =>
+        tx.execute<{
+          name: string;
+          enabled: string;
+          type: number;
+          body: string;
+          language: string;
+          security_definer: boolean;
+          namespace: string;
+          attributes: string;
+          predicate: boolean;
+          arguments: number;
+          config: string[] | null;
+        }>(sql`select t.tgname as name, t.tgenabled as enabled, t.tgtype::int as type,
        p.prosrc as body, l.lanname as language, p.prosecdef as security_definer, n.nspname as namespace, t.tgattr::text as attributes, t.tgqual is not null as predicate, t.tgnargs::int as arguments, p.proconfig as config
        from pg_trigger t join pg_proc p on p.oid=t.tgfoid
        join pg_namespace n on n.oid=p.pronamespace join pg_language l on l.oid=p.prolang
-       where t.tgrelid='public.akash_tx_allocations'::regclass and not t.tgisinternal`);
+       where t.tgrelid='public.akash_tx_allocations'::regclass and not t.tgisinternal`)
+      );
       const guard = triggers.find(
         (t) => t.name === "akash_receipt_writer_guard"
       );
@@ -74,18 +86,22 @@ export async function receiptTransaction<T>(
       )
         throw new Error("unqualified receipt guard protocol");
       // Refuse inherited admitted context; SET LOCAL alone would restore that unsafe pool default.
-      const [context] = await tx.execute<{
-        writer: string | null;
-        replication: string;
-      }>(
-        sql`select current_setting('cogni.receipt_writer', true) as writer, current_setting('session_replication_role') as replication`
+      const [context] = await actorDatabaseAwait(() =>
+        tx.execute<{
+          writer: string | null;
+          replication: string;
+        }>(
+          sql`select current_setting('cogni.receipt_writer', true) as writer, current_setting('session_replication_role') as replication`
+        )
       );
       if (context?.writer || context?.replication !== "origin")
         throw new Error("unsafe receipt connection context");
-      await tx.execute(
-        sql`select set_config('cogni.receipt_writer', ${guard ? RECEIPT_CONTEXT : ""}, true)`
+      await actorDatabaseAwait(() =>
+        tx.execute(
+          sql`select set_config('cogni.receipt_writer', ${guard ? RECEIPT_CONTEXT : ""}, true)`
+        )
       );
-      return run(tx, Boolean(guard));
+      return actorDatabaseAwait(() => run(tx, Boolean(guard)));
     },
     deadlineAt,
     "repeatable read"
@@ -106,6 +122,7 @@ export async function boundedReceiptTransaction<T>(
   isolationLevel: "repeatable read" | "read committed" = "read committed"
 ): Promise<T> {
   const check = () => {
+    checkActorDatabaseScope();
     if (deadlineAt !== undefined && Date.now() >= deadlineAt)
       throw new Error("receipt operation deadline exceeded");
   };
@@ -123,35 +140,42 @@ export async function boundedReceiptTransaction<T>(
   const operation = Promise.resolve(db).then((database) => {
     check();
     return database.transaction(
-      async (tx) => {
-        admitted();
-        check();
-        if (deadlineAt !== undefined) {
-          const milliseconds = Math.max(
-            1,
-            Math.min(2000, Math.floor(deadlineAt - Date.now()))
-          );
-          // SET is a utility command. SELECT set_config would freeze the RR snapshot
-          // before receiptTransaction acquires its DDL-conflicting relation lock.
-          await tx.execute(
-            sql.raw(`set local statement_timeout = '${milliseconds}ms'`)
-          );
-          await tx.execute(
-            sql.raw(`set local lock_timeout = '${milliseconds}ms'`)
-          );
-        }
-        check();
-        const result = await run(tx);
-        check(); // No late result is allowed to authorize COMMIT.
-        return result;
-      },
+      (tx) =>
+        trackActorDatabaseCallback(async () => {
+          admitted();
+          check();
+          if (deadlineAt !== undefined) {
+            const milliseconds = Math.max(
+              1,
+              Math.min(2000, Math.floor(deadlineAt - Date.now()))
+            );
+            // SET is a utility command. SELECT set_config would freeze the RR snapshot
+            // before receiptTransaction acquires its DDL-conflicting relation lock.
+            await actorDatabaseAwait(() =>
+              tx.execute(
+                sql.raw(`set local statement_timeout = '${milliseconds}ms'`)
+              )
+            );
+            await actorDatabaseAwait(() =>
+              tx.execute(
+                sql.raw(`set local lock_timeout = '${milliseconds}ms'`)
+              )
+            );
+          }
+          check();
+          const result = await actorDatabaseAwait(() => run(tx));
+          check(); // No late result is allowed to authorize COMMIT.
+          return result;
+        }),
       { isolationLevel }
     );
   });
   // A timed-out queued BEGIN can finish later, but its callback only rolls back.
   void operation.catch(() => undefined);
   try {
-    await Promise.race([admission, operation.then(() => undefined)]);
+    await actorDatabaseAwait(() =>
+      Promise.race([admission, operation.then(() => undefined)])
+    );
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

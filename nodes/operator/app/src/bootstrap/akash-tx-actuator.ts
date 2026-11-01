@@ -76,20 +76,14 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { createAppDbClient, type Database } from "@cogni/db-client";
 import { BatchV1Api, CoreV1Api, KubeConfig } from "@kubernetes/client-node";
-import { sql } from "drizzle-orm";
 import pino from "pino";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import {
+  AkashActorDatabase,
   AkashComputeAdapter,
   AkashNativeStateReader,
-  DrizzleAkashTxAllocationLedger,
-  DrizzleComputeCostStore,
-  DrizzleDatabaseCellBindingStore,
-  DrizzleNodeMigrationReportStore,
-  DrizzleProviderOutcomeStore,
   KubernetesMigrationJobAdapter,
   observeAppliedCellManaged,
   observeDatabaseCellNativeControl,
@@ -125,10 +119,6 @@ import {
 } from "@/features/compute/akash-tx/database-cell-diagnostic";
 import type { DatabaseCellBindingReference } from "@/ports";
 import { AkashTxError, type AkashTxWorkloadIdentity } from "@/ports";
-import {
-  ACCOUNT_WALLET_SCOPE_PATTERN,
-  akashTxAllocations,
-} from "@/shared/db/akash-tx-allocations";
 import {
   DatabaseCellAppliedCustodySchema,
   type DatabaseCellBootstrapKit,
@@ -225,12 +215,7 @@ if (!databaseUrl) {
   );
 }
 
-const db: Database = createAppDbClient(databaseUrl, {
-  max: 1,
-  applicationName: "cogni_operator_akash_tx_actuator",
-});
-const getDb = async (): Promise<Database> => db;
-
+const actorDatabase = new AkashActorDatabase(databaseUrl);
 /**
  * LEDGER_SCOPE_IS_MIGRATED (bug.5187). `claimOnce` finds a prior receipt by
  * `(wallet_scope, cogni_key)`, so an account-keyed writer against an environment-keyed ledger
@@ -270,13 +255,7 @@ async function countLegacyScopedReceipts(): Promise<number> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= LEDGER_PROBE_ATTEMPTS; attempt += 1) {
     try {
-      return await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(akashTxAllocations)
-        .where(
-          sql`${akashTxAllocations.walletScope} !~ ${ACCOUNT_WALLET_SCOPE_PATTERN}`
-        )
-        .then(([row]) => row?.count ?? 0);
+      return await actorDatabase.countLegacyScopedReceipts(Date.now() + 10_000);
     } catch (error) {
       lastError = error;
       if (attempt === LEDGER_PROBE_ATTEMPTS) break;
@@ -381,7 +360,7 @@ const consoleClient = new AkashComputeAdapter({
   ...(preferredProviders.length > 0 ? { preferredProviders } : {}),
   // Provider screening keeps its memory: boot outcomes are durable in the SAME operator
   // Postgres that serializes the wallet, so a provider that stranded a lease is ranked down.
-  outcomeStore: new DrizzleProviderOutcomeStore(getDb),
+  outcomeStore: actorDatabase.outcomeStore(),
   log,
 });
 
@@ -452,10 +431,7 @@ try {
 const kubeConfig = new KubeConfig();
 kubeConfig.loadFromCluster();
 
-const allocationLedger = new DrizzleAkashTxAllocationLedger(
-  getDb,
-  wallet.walletScope
-);
+const allocationLedger = actorDatabase.allocationLedger(wallet.walletScope);
 const actuator = new AkashTxActuator({
   nativeAdmission: new AkashNativeStateReader(
     wallet.expectedAccountId,
@@ -479,13 +455,13 @@ const actuator = new AkashTxActuator({
       .parse(document).recovery_profiles?.["pg15-cold-capacity-v1"];
   },
   costEvidence: consoleClient,
-  costStore: new DrizzleComputeCostStore(getDb),
+  costStore: actorDatabase.costStore(),
   providerConsumerAccountId: wallet.expectedAccountId,
   // task.5153 — the actuator is now the LIVE writer of provider strikes/boot outcomes
   // (recovery-entry + serving-proof), feeding the same durable history the Console
   // adapter's screening reads above. One store instance would also do; a second handle
   // on the same table is harmless and keeps the seams independent.
-  outcomes: new DrizzleProviderOutcomeStore(getDb),
+  outcomes: actorDatabase.outcomeStore(),
   log,
   probe,
   /**
@@ -508,10 +484,10 @@ const actuator = new AkashTxActuator({
   /**
    * APPLIED migration state as operator-held deployment metadata. The migrator inside the node's
    * own workload prints what it applied; this seam stores that receipt in the OPERATOR's Postgres
-   * — the same `getDb` the spend ledger uses. No credential here can read a node's database
+   * — the same scoped database owner the spend ledger uses. No credential here can read a node's database
    * (docs/spec/multi-node-tenancy.md NO_CROSS_NODE_QUERIES); the operator holds metadata only.
    */
-  migrationReports: new DrizzleNodeMigrationReportStore(getDb),
+  migrationReports: actorDatabase.migrationReportStore(),
 });
 
 async function loadDatabaseCellFactory() {
@@ -709,7 +685,7 @@ const appliedCellObserver = new ReadOnlyAppliedDatabaseCellObserver({
 const databaseCellBindings = new DatabaseCellBinder({
   ledger: allocationLedger,
   actuator,
-  store: new DrizzleDatabaseCellBindingStore(getDb, wallet.walletScope),
+  store: actorDatabase.bindingStore(wallet.walletScope),
   observeNative: databaseCellObserver.observe.bind(databaseCellObserver),
   buildSha: runtimeEnv.APP_BUILD_SHA ?? "",
   appliedCustody: loadAppliedCellCustody,

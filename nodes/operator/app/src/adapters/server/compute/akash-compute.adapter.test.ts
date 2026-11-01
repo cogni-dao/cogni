@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import { createHash } from "node:crypto";
-
 import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { AkashTxError } from "@/ports";
 import {
   AKASH_OVERCLOCK_AUDITOR,
   AkashComputeAdapter,
@@ -1794,6 +1794,28 @@ describe("AkashComputeAdapter transaction boundary (task.5095)", () => {
     // A terminal screening refusal also leaves a receipt behind. Before bug.5192 that receipt
     // held the wallet slot forever too; the verified close is what lets it settle.
     expect((error as AkashComputeError).rolledBackDseq).toBe("1");
+  });
+
+  it("keeps an unknown database commit HELD without compensation or leasing", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1zen")],
+      bids: (dseq) => [bidEntry(dseq, "akash1zen", "100")],
+    });
+    const unknown = new AkashTxError(
+      "outcome_unknown",
+      "HELD: COMMIT ACK lost"
+    );
+    await expect(
+      makeAdapter(h.fetchImpl).allocateAndLease({
+        spec: SPEC,
+        onAllocated: async () => {
+          throw unknown;
+        },
+      })
+    ).rejects.toBe(unknown);
+    expect(h.createBodies).toHaveLength(1);
+    expect(h.deletes).toEqual([]);
+    expect(h.leased).toEqual([]);
   });
 
   it("closes the deployment when the caller cannot persist the allocated handle", async () => {

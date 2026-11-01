@@ -22,8 +22,8 @@
 
 import type { Database } from "@cogni/db-client";
 import { eq, sql } from "drizzle-orm";
-
 import { computeProviderOutcomes } from "@/shared/db/schema";
+import { actorDatabaseAwait } from "./akash-actor-scope";
 
 import type { ProviderOutcomeStats } from "./akash-provider-screen";
 
@@ -46,63 +46,80 @@ export interface ProviderOutcomeRecord {
 
 /** Persistence seam for provider boot outcomes; injectable for tests. */
 export interface ProviderOutcomeStore {
-  record(rec: ProviderOutcomeRecord): Promise<void>;
+  record(rec: ProviderOutcomeRecord, deadlineAt?: number): Promise<void>;
   /** Aggregate history for one marketplace, keyed by provider account address. */
   stats(
-    computeProvider: string
+    computeProvider: string,
+    deadlineAt?: number
   ): Promise<ReadonlyMap<string, ProviderOutcomeStats>>;
 }
 
 /** Drizzle-backed store over compute_provider_outcomes (app-role client). */
 export class DrizzleProviderOutcomeStore implements ProviderOutcomeStore {
-  constructor(private readonly getDb: () => Promise<Database>) {}
+  constructor(private readonly database: () => Promise<Database>) {}
 
-  async record(rec: ProviderOutcomeRecord): Promise<void> {
-    const db = await this.getDb();
-    // task.5153 — the live-path writers (recovery-entry strike, serving-proof boot_ok)
-    // legitimately retry across Crossplane reconcile ticks; the partial unique index
-    // (lease_id, outcome) makes the replay a no-op instead of history inflation.
-    await db
-      .insert(computeProviderOutcomes)
-      .values({
-        computeProvider: rec.computeProvider,
-        providerAccount: rec.providerAccount,
-        outcome: rec.outcome,
-        leaseId: rec.leaseId ?? null,
-        workload: rec.workload ?? null,
-        bootSeconds: rec.bootSeconds ?? null,
-        detail: rec.detail ?? null,
-      })
-      .onConflictDoNothing();
+  /** Raw capabilities stay inside these concrete operation implementations. */
+  async #withDatabase<T>(
+    deadlineAt: number | undefined,
+    operation: (db: Database) => Promise<T>
+  ): Promise<T> {
+    const db = await actorDatabaseAwait(this.database, deadlineAt);
+    return actorDatabaseAwait(() => operation(db), deadlineAt);
+  }
+
+  async record(rec: ProviderOutcomeRecord, deadlineAt?: number): Promise<void> {
+    return this.#withDatabase(deadlineAt, async (db) => {
+      // task.5153 — the live-path writers (recovery-entry strike, serving-proof boot_ok)
+      // legitimately retry across Crossplane reconcile ticks; the partial unique index
+      // (lease_id, outcome) makes the replay a no-op instead of history inflation.
+      await actorDatabaseAwait(() =>
+        db
+          .insert(computeProviderOutcomes)
+          .values({
+            computeProvider: rec.computeProvider,
+            providerAccount: rec.providerAccount,
+            outcome: rec.outcome,
+            leaseId: rec.leaseId ?? null,
+            workload: rec.workload ?? null,
+            bootSeconds: rec.bootSeconds ?? null,
+            detail: rec.detail ?? null,
+          })
+          .onConflictDoNothing()
+      );
+    });
   }
 
   async stats(
-    computeProvider: string
+    computeProvider: string,
+    deadlineAt?: number
   ): Promise<ReadonlyMap<string, ProviderOutcomeStats>> {
-    const db = await this.getDb();
-    const rows = await db
-      .select({
-        providerAccount: computeProviderOutcomes.providerAccount,
-        successes: sql<string>`count(*) filter (where ${computeProviderOutcomes.outcome} = 'boot_ok')`,
-        failures: sql<string>`count(*) filter (where ${computeProviderOutcomes.outcome} = 'slo_timeout')`,
-        lastFailureAt: sql<
-          string | null
-        >`max(${computeProviderOutcomes.createdAt}) filter (where ${computeProviderOutcomes.outcome} = 'slo_timeout')`,
-      })
-      .from(computeProviderOutcomes)
-      .where(eq(computeProviderOutcomes.computeProvider, computeProvider))
-      .groupBy(computeProviderOutcomes.providerAccount);
-    const map = new Map<string, ProviderOutcomeStats>();
-    for (const row of rows) {
-      map.set(row.providerAccount, {
-        successes: Number(row.successes),
-        failures: Number(row.failures),
-        lastFailureAtMs: row.lastFailureAt
-          ? new Date(row.lastFailureAt).getTime()
-          : null,
-      });
-    }
-    return map;
+    return this.#withDatabase(deadlineAt, async (db) => {
+      const rows = await actorDatabaseAwait(() =>
+        db
+          .select({
+            providerAccount: computeProviderOutcomes.providerAccount,
+            successes: sql<string>`count(*) filter (where ${computeProviderOutcomes.outcome} = 'boot_ok')`,
+            failures: sql<string>`count(*) filter (where ${computeProviderOutcomes.outcome} = 'slo_timeout')`,
+            lastFailureAt: sql<
+              string | null
+            >`max(${computeProviderOutcomes.createdAt}) filter (where ${computeProviderOutcomes.outcome} = 'slo_timeout')`,
+          })
+          .from(computeProviderOutcomes)
+          .where(eq(computeProviderOutcomes.computeProvider, computeProvider))
+          .groupBy(computeProviderOutcomes.providerAccount)
+      );
+      const map = new Map<string, ProviderOutcomeStats>();
+      for (const row of rows) {
+        map.set(row.providerAccount, {
+          successes: Number(row.successes),
+          failures: Number(row.failures),
+          lastFailureAtMs: row.lastFailureAt
+            ? new Date(row.lastFailureAt).getTime()
+            : null,
+        });
+      }
+      return map;
+    });
   }
 }
 
@@ -113,7 +130,7 @@ export class DrizzleProviderOutcomeStore implements ProviderOutcomeStore {
  */
 export function createDefaultProviderOutcomeStore(): ProviderOutcomeStore {
   return new DrizzleProviderOutcomeStore(async () => {
-    const { getAppDb } = await import("../db/client");
+    const { getAppDb } = await actorDatabaseAwait(() => import("../db/client"));
     return getAppDb();
   });
 }

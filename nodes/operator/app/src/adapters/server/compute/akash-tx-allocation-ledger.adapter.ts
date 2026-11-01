@@ -56,6 +56,7 @@ import type {
 import { akashTxAllocations } from "@/shared/db/schema";
 import { DatabaseCellAllocationMetadataSchema } from "@/shared/secrets/database-cell-placement.data";
 import type { AkashNativeWalletInventory } from "@/types/akash-native-state";
+import { actorDatabaseAwait } from "./akash-actor-scope";
 import {
   advanceReceiptVersion,
   receiptFence,
@@ -159,9 +160,18 @@ export class DrizzleAkashTxAllocationLedger
    *   controller already spends from (ONE_WALLET_ONE_WRITER).
    */
   constructor(
-    private readonly getDb: () => Promise<Database>,
+    private readonly database: () => Promise<Database>,
     private readonly walletScope: string
   ) {}
+
+  /** Raw capabilities stay inside these concrete operation implementations. */
+  async #withDatabase<T>(
+    deadlineAt: number | undefined,
+    operation: (db: Database) => Promise<T>
+  ): Promise<T> {
+    const db = await actorDatabaseAwait(this.database, deadlineAt);
+    return actorDatabaseAwait(() => operation(db), deadlineAt);
+  }
 
   async claim(input: {
     cogniKey: string;
@@ -169,19 +179,24 @@ export class DrizzleAkashTxAllocationLedger
     environment: string;
     identity: AkashTxWorkloadIdentity;
     retentionPolicy?: "retain";
+    deadlineAt?: number;
   }): Promise<
     | { state: "claimed"; record: AkashTxAllocationRecord }
     | { state: "owned"; record: AkashTxAllocationRecord }
     | { state: "settled"; record: AkashTxAllocationRecord }
     | { state: "blocked"; ownerCogniKey: string }
   > {
+    const boundedInput = {
+      ...input,
+      deadlineAt: input.deadlineAt ?? Date.now() + 30_000,
+    };
     try {
-      return await this.claimOnce(input);
+      return await actorDatabaseAwait(() => this.claimOnce(boundedInput));
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
       // A concurrent claimant won the race. The second pass reads its committed row and
       // answers deterministically (owned / blocked) — this is CAS resolution, not a retry loop.
-      return this.claimOnce(input);
+      return this.claimOnce(boundedInput);
     }
   }
 
@@ -191,140 +206,164 @@ export class DrizzleAkashTxAllocationLedger
     environment: string;
     identity: AkashTxWorkloadIdentity;
     retentionPolicy?: "retain";
+
+    deadlineAt?: number;
   }): Promise<
     | { state: "claimed"; record: AkashTxAllocationRecord }
     | { state: "owned"; record: AkashTxAllocationRecord }
     | { state: "settled"; record: AkashTxAllocationRecord }
     | { state: "blocked"; ownerCogniKey: string }
   > {
-    const db = await this.getDb();
-    return receiptTransaction(db, async (tx, guarded) => {
-      const [existing] = await tx
-        .select(RECEIPT_SELECTION)
-        .from(akashTxAllocations)
-        .where(
-          and(
-            eq(akashTxAllocations.walletScope, this.walletScope),
-            eq(akashTxAllocations.cogniKey, input.cogniKey)
-          )
-        )
-        .for("update")
-        .limit(1);
-      if (existing && existing.state === "preparing") {
-        return { state: "owned" as const, record: allocationRecord(existing) };
-      }
-      // A receipt that bound a handle is terminal forever (HANDLE_IS_WRITE_ONCE). One settled
-      // `failed` with NO handle is the opposite case: it was written WITH proof that nothing is
-      // billing, so there is nothing to double-pay and the key may take a clean slot again.
-      // Identity must still match: re-opening a receipt bound to another node would move spend
-      // attribution, so a mismatch stays `settled` and the actuator raises identity_conflict.
-      const reclaimable =
-        existing !== undefined &&
-        existing.state === "failed" &&
-        existing.externalName === null &&
-        ((!guarded && existing.allocationNoEffectVerified === null) ||
-          (existing.allocationNoEffectVerified === true &&
-            existing.allocationCursor === null)) &&
-        existing.nodeId === input.identity.nodeId &&
-        existing.environment === input.environment &&
-        existing.compositeUid === input.identity.compositeUid &&
-        existing.workload === input.workload;
-      if (existing && !reclaimable) {
-        return {
-          state: "settled" as const,
-          record: allocationRecord(existing),
-        };
-      }
+    return this.#withDatabase(input.deadlineAt, async (db) => {
+      return receiptTransaction(
+        db,
+        async (tx, guarded) => {
+          const [existing] = await actorDatabaseAwait(() =>
+            tx
+              .select(RECEIPT_SELECTION)
+              .from(akashTxAllocations)
+              .where(
+                and(
+                  eq(akashTxAllocations.walletScope, this.walletScope),
+                  eq(akashTxAllocations.cogniKey, input.cogniKey)
+                )
+              )
+              .for("update")
+              .limit(1)
+          );
+          if (existing && existing.state === "preparing") {
+            return {
+              state: "owned" as const,
+              record: allocationRecord(existing),
+            };
+          }
+          // A receipt that bound a handle is terminal forever (HANDLE_IS_WRITE_ONCE). One settled
+          // `failed` with NO handle is the opposite case: it was written WITH proof that nothing is
+          // billing, so there is nothing to double-pay and the key may take a clean slot again.
+          // Identity must still match: re-opening a receipt bound to another node would move spend
+          // attribution, so a mismatch stays `settled` and the actuator raises identity_conflict.
+          const reclaimable =
+            existing !== undefined &&
+            existing.state === "failed" &&
+            existing.externalName === null &&
+            ((!guarded && existing.allocationNoEffectVerified === null) ||
+              (existing.allocationNoEffectVerified === true &&
+                existing.allocationCursor === null)) &&
+            existing.nodeId === input.identity.nodeId &&
+            existing.environment === input.environment &&
+            existing.compositeUid === input.identity.compositeUid &&
+            existing.workload === input.workload;
+          if (existing && !reclaimable) {
+            return {
+              state: "settled" as const,
+              record: allocationRecord(existing),
+            };
+          }
 
-      const [holder] = await tx
-        .select({ cogniKey: akashTxAllocations.cogniKey })
-        .from(akashTxAllocations)
-        .where(
-          and(
-            eq(akashTxAllocations.walletScope, this.walletScope),
-            eq(akashTxAllocations.state, "preparing")
-          )
-        )
-        .limit(1);
-      if (holder) {
-        return { state: "blocked" as const, ownerCogniKey: holder.cogniKey };
-      }
+          const [holder] = await actorDatabaseAwait(() =>
+            tx
+              .select({ cogniKey: akashTxAllocations.cogniKey })
+              .from(akashTxAllocations)
+              .where(
+                and(
+                  eq(akashTxAllocations.walletScope, this.walletScope),
+                  eq(akashTxAllocations.state, "preparing")
+                )
+              )
+              .limit(1)
+          );
+          if (holder) {
+            return {
+              state: "blocked" as const,
+              ownerCogniKey: holder.cogniKey,
+            };
+          }
 
-      if (reclaimable) {
-        const [reopened] = await tx
-          .update(akashTxAllocations)
-          .set({
-            state: "preparing",
-            ...(input.retentionPolicy
-              ? {
-                  appliedDatabaseCellBinding: {
-                    version: 1,
-                    retentionPolicy: "retain",
-                    bindings: DatabaseCellAllocationMetadataSchema.parse(
-                      existing.appliedDatabaseCellBinding ?? []
-                    ).bindings,
-                  },
-                }
-              : {}),
-            // The previous attempt's baseline described a transaction that is now settled.
-            // Carrying it forward would point the next recovery scan at the wrong high-water
-            // mark and make an unrelated later deployment look adoptable.
-            allocationCursor: null,
-            failureCode: null,
-            settledAt: null,
-            compositeGeneration: sql`greatest(${akashTxAllocations.compositeGeneration}, ${input.identity.compositeGeneration}::int)`,
-            updatedAt: advanceReceiptVersion,
-          })
-          .where(
-            and(
-              receiptFence(
-                this.walletScope,
-                input.cogniKey,
-                allocationRecord(existing)
-              ),
-              eq(akashTxAllocations.state, "failed"),
-              sql`${akashTxAllocations.externalName} is null`
-            )
-          )
-          .returning(RECEIPT_SELECTION);
-        if (!reopened) {
-          throw new Error("akash_tx_allocations re-claim returned no row");
-        }
-        return {
-          state: "claimed" as const,
-          record: allocationRecord(reopened),
-        };
-      }
+          if (reclaimable) {
+            const [reopened] = await actorDatabaseAwait(() =>
+              tx
+                .update(akashTxAllocations)
+                .set({
+                  state: "preparing",
+                  ...(input.retentionPolicy
+                    ? {
+                        appliedDatabaseCellBinding: {
+                          version: 1,
+                          retentionPolicy: "retain",
+                          bindings: DatabaseCellAllocationMetadataSchema.parse(
+                            existing.appliedDatabaseCellBinding ?? []
+                          ).bindings,
+                        },
+                      }
+                    : {}),
+                  // The previous attempt's baseline described a transaction that is now settled.
+                  // Carrying it forward would point the next recovery scan at the wrong high-water
+                  // mark and make an unrelated later deployment look adoptable.
+                  allocationCursor: null,
+                  failureCode: null,
+                  settledAt: null,
+                  compositeGeneration: sql`greatest(${akashTxAllocations.compositeGeneration}, ${input.identity.compositeGeneration}::int)`,
+                  updatedAt: advanceReceiptVersion,
+                })
+                .where(
+                  and(
+                    receiptFence(
+                      this.walletScope,
+                      input.cogniKey,
+                      allocationRecord(existing)
+                    ),
+                    eq(akashTxAllocations.state, "failed"),
+                    sql`${akashTxAllocations.externalName} is null`
+                  )
+                )
+                .returning(RECEIPT_SELECTION)
+            );
+            if (!reopened) {
+              throw new Error("akash_tx_allocations re-claim returned no row");
+            }
+            return {
+              state: "claimed" as const,
+              record: allocationRecord(reopened),
+            };
+          }
 
-      const [inserted] = await tx
-        .insert(akashTxAllocations)
-        .values({
-          walletScope: this.walletScope,
-          cogniKey: input.cogniKey,
-          // IDENTITY_BEFORE_TRANSACTION — the columns are NOT NULL, so the row that opens the
-          // wallet slot physically cannot exist without saying which node it is for.
-          nodeId: input.identity.nodeId,
-          compositeUid: input.identity.compositeUid,
-          compositeGeneration: input.identity.compositeGeneration,
-          workload: input.workload,
-          environment: input.environment,
-          state: "preparing",
-          allocationNoEffectVerified: guarded ? true : null,
-          ...(input.retentionPolicy
-            ? {
-                appliedDatabaseCellBinding: {
-                  version: 1,
-                  retentionPolicy: "retain",
-                  bindings: [],
-                },
-              }
-            : {}),
-        })
-        .returning(RECEIPT_SELECTION);
-      if (!inserted) {
-        throw new Error("akash_tx_allocations insert returned no row");
-      }
-      return { state: "claimed" as const, record: allocationRecord(inserted) };
+          const [inserted] = await actorDatabaseAwait(() =>
+            tx
+              .insert(akashTxAllocations)
+              .values({
+                walletScope: this.walletScope,
+                cogniKey: input.cogniKey,
+                // IDENTITY_BEFORE_TRANSACTION — the columns are NOT NULL, so the row that opens the
+                // wallet slot physically cannot exist without saying which node it is for.
+                nodeId: input.identity.nodeId,
+                compositeUid: input.identity.compositeUid,
+                compositeGeneration: input.identity.compositeGeneration,
+                workload: input.workload,
+                environment: input.environment,
+                state: "preparing",
+                allocationNoEffectVerified: guarded ? true : null,
+                ...(input.retentionPolicy
+                  ? {
+                      appliedDatabaseCellBinding: {
+                        version: 1,
+                        retentionPolicy: "retain",
+                        bindings: [],
+                      },
+                    }
+                  : {}),
+              })
+              .returning(RECEIPT_SELECTION)
+          );
+          if (!inserted) {
+            throw new Error("akash_tx_allocations insert returned no row");
+          }
+          return {
+            state: "claimed" as const,
+            record: allocationRecord(inserted),
+          };
+        },
+        input.deadlineAt
+      );
     });
   }
 
@@ -340,84 +379,103 @@ export class DrizzleAkashTxAllocationLedger
     environment: string;
     identity: AkashTxWorkloadIdentity;
     retentionPolicy?: "retain";
+
+    deadlineAt?: number;
   }): Promise<
     | { state: "bound"; record: AkashTxAllocationRecord }
     | { state: "held"; record: AkashTxAllocationRecord }
     | { state: "absent" }
     | { state: "conflict"; record: AkashTxAllocationRecord }
   > {
-    const db = await this.getDb();
-    return receiptTransaction(db, async (tx) => {
-      const [existing] = await tx
-        .select(RECEIPT_SELECTION)
-        .from(akashTxAllocations)
-        .where(
-          and(
-            eq(akashTxAllocations.walletScope, this.walletScope),
-            eq(akashTxAllocations.cogniKey, input.cogniKey)
-          )
-        )
-        .for("update")
-        .limit(1);
-      if (!existing) return { state: "absent" as const };
-      if (
-        existing.nodeId !== input.identity.nodeId ||
-        existing.environment !== input.environment ||
-        existing.compositeUid !== input.identity.compositeUid
-      ) {
-        return {
-          state: "conflict" as const,
-          record: allocationRecord(existing),
-        };
-      }
+    return this.#withDatabase(input.deadlineAt, async (db) => {
+      return receiptTransaction(
+        db,
+        async (tx) => {
+          const [existing] = await actorDatabaseAwait(() =>
+            tx
+              .select(RECEIPT_SELECTION)
+              .from(akashTxAllocations)
+              .where(
+                and(
+                  eq(akashTxAllocations.walletScope, this.walletScope),
+                  eq(akashTxAllocations.cogniKey, input.cogniKey)
+                )
+              )
+              .for("update")
+              .limit(1)
+          );
+          if (!existing) return { state: "absent" as const };
+          if (
+            existing.nodeId !== input.identity.nodeId ||
+            existing.environment !== input.environment ||
+            existing.compositeUid !== input.identity.compositeUid
+          ) {
+            return {
+              state: "conflict" as const,
+              record: allocationRecord(existing),
+            };
+          }
 
-      if (input.identity.compositeGeneration < existing.compositeGeneration)
-        return {
-          state: "conflict" as const,
-          record: allocationRecord(existing),
-        };
-      const metadata = DatabaseCellAllocationMetadataSchema.parse(
-        existing.appliedDatabaseCellBinding ?? []
+          if (input.identity.compositeGeneration < existing.compositeGeneration)
+            return {
+              state: "conflict" as const,
+              record: allocationRecord(existing),
+            };
+          const metadata = DatabaseCellAllocationMetadataSchema.parse(
+            existing.appliedDatabaseCellBinding ?? []
+          );
+          const changed =
+            input.identity.compositeGeneration > existing.compositeGeneration ||
+            (input.retentionPolicy === "retain" &&
+              metadata.retentionPolicy !== "retain");
+          if (!changed)
+            return {
+              state: "bound" as const,
+              record: allocationRecord(existing),
+            };
+          if (existing.state === "preparing")
+            return {
+              state: "held" as const,
+              record: allocationRecord(existing),
+            };
+          const [updated] = await actorDatabaseAwait(() =>
+            tx
+              .update(akashTxAllocations)
+              .set({
+                compositeGeneration: sql`greatest(${akashTxAllocations.compositeGeneration}, ${input.identity.compositeGeneration}::int)`,
+                ...(input.retentionPolicy
+                  ? {
+                      appliedDatabaseCellBinding: {
+                        version: 1,
+                        retentionPolicy: "retain",
+                        bindings: DatabaseCellAllocationMetadataSchema.parse(
+                          existing.appliedDatabaseCellBinding ?? []
+                        ).bindings,
+                      },
+                    }
+                  : {}),
+                updatedAt: advanceReceiptVersion,
+              })
+              .where(
+                and(
+                  receiptFence(
+                    this.walletScope,
+                    input.cogniKey,
+                    allocationRecord(existing)
+                  )
+                )
+              )
+              .returning(RECEIPT_SELECTION)
+          );
+          if (!updated) {
+            throw new Error(
+              "akash_tx_allocations identity bind returned no row"
+            );
+          }
+          return { state: "bound" as const, record: allocationRecord(updated) };
+        },
+        input.deadlineAt
       );
-      const changed =
-        input.identity.compositeGeneration > existing.compositeGeneration ||
-        (input.retentionPolicy === "retain" &&
-          metadata.retentionPolicy !== "retain");
-      if (!changed)
-        return { state: "bound" as const, record: allocationRecord(existing) };
-      if (existing.state === "preparing")
-        return { state: "held" as const, record: allocationRecord(existing) };
-      const [updated] = await tx
-        .update(akashTxAllocations)
-        .set({
-          compositeGeneration: sql`greatest(${akashTxAllocations.compositeGeneration}, ${input.identity.compositeGeneration}::int)`,
-          ...(input.retentionPolicy
-            ? {
-                appliedDatabaseCellBinding: {
-                  version: 1,
-                  retentionPolicy: "retain",
-                  bindings: DatabaseCellAllocationMetadataSchema.parse(
-                    existing.appliedDatabaseCellBinding ?? []
-                  ).bindings,
-                },
-              }
-            : {}),
-          updatedAt: advanceReceiptVersion,
-        })
-        .where(
-          and(
-            receiptFence(
-              this.walletScope,
-              input.cogniKey,
-              allocationRecord(existing)
-            )
-          )
-        )
-        .returning(RECEIPT_SELECTION);
-      if (!updated) {
-        throw new Error("akash_tx_allocations identity bind returned no row");
-      }
-      return { state: "bound" as const, record: allocationRecord(updated) };
     });
   }
 
@@ -447,33 +505,44 @@ export class DrizzleAkashTxAllocationLedger
           | null
         >
   ): Promise<AkashTxAllocationRecord> {
-    const db = this.getDb();
-    return receiptTransaction(
-      db,
-      async (tx, guarded) => {
-        const [row] = await tx
-          .select(RECEIPT_SELECTION)
-          .from(akashTxAllocations)
-          .where(receiptFence(this.walletScope, input.cogniKey, input.expected))
-          .for("update")
-          .limit(1);
-        if (!row) throw new Error("receipt custody changed");
-        const record = allocationRecord(row);
-        const changes = await values(record, guarded, tx);
-        if (changes === null) return record;
-        if (input.deadlineAt !== undefined && Date.now() >= input.deadlineAt)
-          throw new Error("receipt operation deadline exceeded");
-        const [updated] = await tx
-          .update(akashTxAllocations)
-          .set({ ...changes, updatedAt: advanceReceiptVersion })
-          .where(receiptFence(this.walletScope, input.cogniKey, input.expected))
-          .returning(RECEIPT_SELECTION);
-        if (!updated)
-          throw new Error("receipt custody CAS returned no successor");
-        return allocationRecord(updated);
-      },
-      input.deadlineAt
-    );
+    return this.#withDatabase(input.deadlineAt, async (db) => {
+      return receiptTransaction(
+        db,
+        async (tx, guarded) => {
+          const [row] = await actorDatabaseAwait(() =>
+            tx
+              .select(RECEIPT_SELECTION)
+              .from(akashTxAllocations)
+              .where(
+                receiptFence(this.walletScope, input.cogniKey, input.expected)
+              )
+              .for("update")
+              .limit(1)
+          );
+          if (!row) throw new Error("receipt custody changed");
+          const record = allocationRecord(row);
+          const changes = await actorDatabaseAwait(() =>
+            values(record, guarded, tx)
+          );
+          if (changes === null) return record;
+          if (input.deadlineAt !== undefined && Date.now() >= input.deadlineAt)
+            throw new Error("receipt operation deadline exceeded");
+          const [updated] = await actorDatabaseAwait(() =>
+            tx
+              .update(akashTxAllocations)
+              .set({ ...changes, updatedAt: advanceReceiptVersion })
+              .where(
+                receiptFence(this.walletScope, input.cogniKey, input.expected)
+              )
+              .returning(RECEIPT_SELECTION)
+          );
+          if (!updated)
+            throw new Error("receipt custody CAS returned no successor");
+          return allocationRecord(updated);
+        },
+        input.deadlineAt
+      );
+    });
   }
 
   async prepare(input: {
@@ -487,7 +556,9 @@ export class DrizzleAkashTxAllocationLedger
       if (!guarded && record.allocationNoEffectVerified !== null)
         throw new Error("receipt protocol changed before prepare");
       if (guarded)
-        await this.checkAdmission(tx, record, input.coverage, input.deadlineAt);
+        await actorDatabaseAwait(() =>
+          this.checkAdmission(tx, record, input.coverage, input.deadlineAt)
+        );
       if (
         record.state !== "preparing" ||
         record.allocationCursor !== undefined ||
@@ -542,28 +613,32 @@ export class DrizzleAkashTxAllocationLedger
       : "^pg-recover:v1:[^:]+:[^:]+:[^:]+:[^:]+$";
     const validKey = (key: string) =>
       key.startsWith(family) && new RegExp(pattern).test(key);
-    const [blocker] = await tx.execute<{ malformed: boolean }>(
-      sql`select coalesce(bool_or(left(cogni_key, length(${family})) <> ${family} or cogni_key !~ ${pattern}), false) as malformed from public.akash_tx_allocations where wallet_scope=${this.walletScope} and node_id=${proposed.identity.nodeId}::uuid and environment=${proposed.environment} and workload=${proposed.workload}`
+    const [blocker] = await actorDatabaseAwait(() =>
+      tx.execute<{ malformed: boolean }>(
+        sql`select coalesce(bool_or(left(cogni_key, length(${family})) <> ${family} or cogni_key !~ ${pattern}), false) as malformed from public.akash_tx_allocations where wallet_scope=${this.walletScope} and node_id=${proposed.identity.nodeId}::uuid and environment=${proposed.environment} and workload=${proposed.workload}`
+      )
     );
     if (blocker?.malformed)
       throw new Error("receipt family identity malformed");
     // Scope BEFORE LIMIT. Discharged history is excluded before counting the known budget.
-    const rows = await tx
-      .select(RECEIPT_SELECTION)
-      .from(akashTxAllocations)
-      .where(
-        and(
-          eq(akashTxAllocations.walletScope, this.walletScope),
-          eq(akashTxAllocations.nodeId, proposed.identity.nodeId),
-          eq(akashTxAllocations.environment, proposed.environment),
-          eq(akashTxAllocations.workload, proposed.workload),
-          sql`left(${akashTxAllocations.cogniKey}, length(${family})) = ${family}`,
-          sql`${akashTxAllocations.allocationNoEffectVerified} is not null`,
-          sql`not (${akashTxAllocations.state} = 'failed' and ${akashTxAllocations.allocationNoEffectVerified} is true and ${akashTxAllocations.allocationCursor} is null and ${akashTxAllocations.externalName} is null)`,
-          sql`not (${akashTxAllocations.allocationNoEffectVerified} is false and ${akashTxAllocations.nativeClosedVerified} is true)`
+    const rows = await actorDatabaseAwait(() =>
+      tx
+        .select(RECEIPT_SELECTION)
+        .from(akashTxAllocations)
+        .where(
+          and(
+            eq(akashTxAllocations.walletScope, this.walletScope),
+            eq(akashTxAllocations.nodeId, proposed.identity.nodeId),
+            eq(akashTxAllocations.environment, proposed.environment),
+            eq(akashTxAllocations.workload, proposed.workload),
+            sql`left(${akashTxAllocations.cogniKey}, length(${family})) = ${family}`,
+            sql`${akashTxAllocations.allocationNoEffectVerified} is not null`,
+            sql`not (${akashTxAllocations.state} = 'failed' and ${akashTxAllocations.allocationNoEffectVerified} is true and ${akashTxAllocations.allocationCursor} is null and ${akashTxAllocations.externalName} is null)`,
+            sql`not (${akashTxAllocations.allocationNoEffectVerified} is false and ${akashTxAllocations.nativeClosedVerified} is true)`
+          )
         )
-      )
-      .limit(101);
+        .limit(101)
+    );
     if (rows.length > 100) throw new Error("receipt lineage overflow");
     const targets = new Set<string>();
     const handles = coverage.targets.map((target) => target.dseq);
@@ -571,16 +646,18 @@ export class DrizzleAkashTxAllocationLedger
       throw new Error("duplicate native targets");
     // Attribute ALL native targets, including unrelated/retained families, BEFORE exclusion.
     if (handles.length) {
-      const owners = await tx
-        .select(RECEIPT_SELECTION)
-        .from(akashTxAllocations)
-        .where(
-          and(
-            eq(akashTxAllocations.walletScope, this.walletScope),
-            inArray(akashTxAllocations.externalName, handles)
+      const owners = await actorDatabaseAwait(() =>
+        tx
+          .select(RECEIPT_SELECTION)
+          .from(akashTxAllocations)
+          .where(
+            and(
+              eq(akashTxAllocations.walletScope, this.walletScope),
+              inArray(akashTxAllocations.externalName, handles)
+            )
           )
-        )
-        .limit(handles.length * 2 + 1);
+          .limit(handles.length * 2 + 1)
+      );
       for (const target of coverage.targets) {
         const matches = owners.filter(
           (row) => row.externalName === target.dseq
@@ -628,28 +705,31 @@ export class DrizzleAkashTxAllocationLedger
   async listClosureCandidates(
     deadlineAt?: number
   ): Promise<readonly AkashTxAllocationRecord[]> {
-    const db = this.getDb();
-    return receiptTransaction(
-      db,
-      async (tx, guarded) => {
-        if (!guarded) return [];
-        const rows = await tx
-          .select(RECEIPT_SELECTION)
-          .from(akashTxAllocations)
-          .where(
-            and(
-              eq(akashTxAllocations.walletScope, this.walletScope),
-              inArray(akashTxAllocations.state, ["allocated", "released"]),
-              sql`${akashTxAllocations.externalName} is not null`,
-              sql`${akashTxAllocations.nativeClosedVerified} is null`
-            )
-          )
-          .orderBy(akashTxAllocations.updatedAt, akashTxAllocations.id)
-          .limit(20);
-        return rows.map(allocationRecord);
-      },
-      deadlineAt
-    );
+    return this.#withDatabase(deadlineAt, async (db) => {
+      return receiptTransaction(
+        db,
+        async (tx, guarded) => {
+          if (!guarded) return [];
+          const rows = await actorDatabaseAwait(() =>
+            tx
+              .select(RECEIPT_SELECTION)
+              .from(akashTxAllocations)
+              .where(
+                and(
+                  eq(akashTxAllocations.walletScope, this.walletScope),
+                  inArray(akashTxAllocations.state, ["allocated", "released"]),
+                  sql`${akashTxAllocations.externalName} is not null`,
+                  sql`${akashTxAllocations.nativeClosedVerified} is null`
+                )
+              )
+              .orderBy(akashTxAllocations.updatedAt, akashTxAllocations.id)
+              .limit(20)
+          );
+          return rows.map(allocationRecord);
+        },
+        deadlineAt
+      );
+    });
   }
 
   async startClosureRead(
@@ -707,6 +787,7 @@ export class DrizzleAkashTxAllocationLedger
     externalName: string;
     providerAccount?: string;
     expected: AkashTxAllocationRecord;
+    deadlineAt?: number;
   }): Promise<AkashTxAllocationRecord> {
     return this.writeAllocation(input, "callback");
   }
@@ -780,6 +861,7 @@ export class DrizzleAkashTxAllocationLedger
     cogniKey: string;
     sdlHash: string;
     expected: AkashTxAllocationRecord;
+    deadlineAt?: number;
   }): Promise<AkashTxAllocationRecord> {
     return this.change(input, (record) => {
       if (record.state === "preparing")
@@ -794,41 +876,44 @@ export class DrizzleAkashTxAllocationLedger
     limit: number;
     deadlineAt?: number;
   }): Promise<readonly AkashTxStaleAllocation[]> {
-    const db = this.getDb();
-    return receiptTransaction(
-      db,
-      async (tx) => {
-        const rows = await tx
-          .select({
-            ...RECEIPT_SELECTION,
-            cogniKey: akashTxAllocations.cogniKey,
-            allocationCursor: akashTxAllocations.allocationCursor,
-            // Age is computed BY POSTGRES: the actuator's clock is not the ledger's clock, and a
-            // skewed pod must not be able to declare a fresh receipt stale.
-            heldForMs: sql<number>`floor(extract(epoch from (now() - ${akashTxAllocations.updatedAt})) * 1000)::int`,
-          })
-          .from(akashTxAllocations)
-          .where(
-            and(
-              eq(akashTxAllocations.walletScope, this.walletScope),
-              eq(akashTxAllocations.state, "preparing"),
-              sql`${akashTxAllocations.externalName} is null`,
-              sql`${akashTxAllocations.updatedAt} < now() - make_interval(secs => ${input.olderThanMs / 1000})`
-            )
-          )
-          .orderBy(akashTxAllocations.updatedAt)
-          .limit(input.limit);
-        return rows.map((row) => ({
-          record: allocationRecord(row),
-          cogniKey: row.cogniKey,
-          ...(row.allocationCursor
-            ? { allocationCursor: row.allocationCursor }
-            : {}),
-          heldForMs: Number(row.heldForMs),
-        }));
-      },
-      input.deadlineAt
-    );
+    return this.#withDatabase(input.deadlineAt, async (db) => {
+      return receiptTransaction(
+        db,
+        async (tx) => {
+          const rows = await actorDatabaseAwait(() =>
+            tx
+              .select({
+                ...RECEIPT_SELECTION,
+                cogniKey: akashTxAllocations.cogniKey,
+                allocationCursor: akashTxAllocations.allocationCursor,
+                // Age is computed BY POSTGRES: the actuator's clock is not the ledger's clock, and a
+                // skewed pod must not be able to declare a fresh receipt stale.
+                heldForMs: sql<number>`floor(extract(epoch from (now() - ${akashTxAllocations.updatedAt})) * 1000)::int`,
+              })
+              .from(akashTxAllocations)
+              .where(
+                and(
+                  eq(akashTxAllocations.walletScope, this.walletScope),
+                  eq(akashTxAllocations.state, "preparing"),
+                  sql`${akashTxAllocations.externalName} is null`,
+                  sql`${akashTxAllocations.updatedAt} < now() - make_interval(secs => ${input.olderThanMs / 1000})`
+                )
+              )
+              .orderBy(akashTxAllocations.updatedAt)
+              .limit(input.limit)
+          );
+          return rows.map((row) => ({
+            record: allocationRecord(row),
+            cogniKey: row.cogniKey,
+            ...(row.allocationCursor
+              ? { allocationCursor: row.allocationCursor }
+              : {}),
+            heldForMs: Number(row.heldForMs),
+          }));
+        },
+        input.deadlineAt
+      );
+    });
   }
 
   async fail(input: {
@@ -857,6 +942,7 @@ export class DrizzleAkashTxAllocationLedger
   async markReleased(input: {
     cogniKey: string;
     expected: AkashTxAllocationRecord;
+    deadlineAt?: number;
   }): Promise<AkashTxAllocationRecord> {
     return this.change(input, (record) => {
       if (record.state !== "allocated" && record.state !== "released")
@@ -881,27 +967,32 @@ export class DrizzleAkashTxAllocationLedger
     nodeId?: string;
     environment?: string;
     limit: number;
+
+    deadlineAt?: number;
   }): Promise<readonly AkashTxAllocationRecord[]> {
-    const db = await this.getDb();
-    const rows = await db
-      .select(RECEIPT_SELECTION)
-      .from(akashTxAllocations)
-      .where(
-        and(
-          eq(akashTxAllocations.walletScope, this.walletScope),
-          eq(akashTxAllocations.state, "allocated"),
-          sql`${akashTxAllocations.externalName} is not null`,
-          ...(input.nodeId
-            ? [eq(akashTxAllocations.nodeId, input.nodeId)]
-            : []),
-          ...(input.environment
-            ? [eq(akashTxAllocations.environment, input.environment)]
-            : [])
-        )
-      )
-      .orderBy(akashTxAllocations.updatedAt)
-      .limit(input.limit);
-    return rows.map(allocationRecord);
+    return this.#withDatabase(input.deadlineAt, async (db) => {
+      const rows = await actorDatabaseAwait(() =>
+        db
+          .select(RECEIPT_SELECTION)
+          .from(akashTxAllocations)
+          .where(
+            and(
+              eq(akashTxAllocations.walletScope, this.walletScope),
+              eq(akashTxAllocations.state, "allocated"),
+              sql`${akashTxAllocations.externalName} is not null`,
+              ...(input.nodeId
+                ? [eq(akashTxAllocations.nodeId, input.nodeId)]
+                : []),
+              ...(input.environment
+                ? [eq(akashTxAllocations.environment, input.environment)]
+                : [])
+            )
+          )
+          .orderBy(akashTxAllocations.updatedAt)
+          .limit(input.limit)
+      );
+      return rows.map(allocationRecord);
+    });
   }
 
   /**
@@ -917,26 +1008,31 @@ export class DrizzleAkashTxAllocationLedger
     nodeId?: string;
     environment?: string;
     limit: number;
+
+    deadlineAt?: number;
   }): Promise<readonly AkashTxAllocationRecord[]> {
-    const db = await this.getDb();
-    const rows = await db
-      .select(RECEIPT_SELECTION)
-      .from(akashTxAllocations)
-      .where(
-        and(
-          eq(akashTxAllocations.walletScope, this.walletScope),
-          inArray(akashTxAllocations.state, ["preparing", "allocated"]),
-          ...(input.nodeId
-            ? [eq(akashTxAllocations.nodeId, input.nodeId)]
-            : []),
-          ...(input.environment
-            ? [eq(akashTxAllocations.environment, input.environment)]
-            : [])
-        )
-      )
-      .orderBy(akashTxAllocations.updatedAt)
-      .limit(input.limit);
-    return rows.map(allocationRecord);
+    return this.#withDatabase(input.deadlineAt, async (db) => {
+      const rows = await actorDatabaseAwait(() =>
+        db
+          .select(RECEIPT_SELECTION)
+          .from(akashTxAllocations)
+          .where(
+            and(
+              eq(akashTxAllocations.walletScope, this.walletScope),
+              inArray(akashTxAllocations.state, ["preparing", "allocated"]),
+              ...(input.nodeId
+                ? [eq(akashTxAllocations.nodeId, input.nodeId)]
+                : []),
+              ...(input.environment
+                ? [eq(akashTxAllocations.environment, input.environment)]
+                : [])
+            )
+          )
+          .orderBy(akashTxAllocations.updatedAt)
+          .limit(input.limit)
+      );
+      return rows.map(allocationRecord);
+    });
   }
 
   /**
@@ -949,41 +1045,51 @@ export class DrizzleAkashTxAllocationLedger
     nodeId?: string;
     environment?: string;
     limit: number;
+
+    deadlineAt?: number;
   }): Promise<readonly AkashTxAllocationRecord[]> {
-    const db = await this.getDb();
-    const rows = await db
-      .select(RECEIPT_SELECTION)
-      .from(akashTxAllocations)
-      .where(
-        and(
-          eq(akashTxAllocations.walletScope, this.walletScope),
-          ...(input.nodeId
-            ? [eq(akashTxAllocations.nodeId, input.nodeId)]
-            : []),
-          ...(input.environment
-            ? [eq(akashTxAllocations.environment, input.environment)]
-            : [])
-        )
-      )
-      .orderBy(akashTxAllocations.updatedAt)
-      .limit(input.limit);
-    return rows.map(allocationRecord);
+    return this.#withDatabase(input.deadlineAt, async (db) => {
+      const rows = await actorDatabaseAwait(() =>
+        db
+          .select(RECEIPT_SELECTION)
+          .from(akashTxAllocations)
+          .where(
+            and(
+              eq(akashTxAllocations.walletScope, this.walletScope),
+              ...(input.nodeId
+                ? [eq(akashTxAllocations.nodeId, input.nodeId)]
+                : []),
+              ...(input.environment
+                ? [eq(akashTxAllocations.environment, input.environment)]
+                : [])
+            )
+          )
+          .orderBy(akashTxAllocations.updatedAt)
+          .limit(input.limit)
+      );
+      return rows.map(allocationRecord);
+    });
   }
 
   async read(input: {
     cogniKey: string;
+
+    deadlineAt?: number;
   }): Promise<AkashTxAllocationRecord | null> {
-    const db = await this.getDb();
-    const [row] = await db
-      .select(RECEIPT_SELECTION)
-      .from(akashTxAllocations)
-      .where(
-        and(
-          eq(akashTxAllocations.walletScope, this.walletScope),
-          eq(akashTxAllocations.cogniKey, input.cogniKey)
-        )
-      )
-      .limit(1);
-    return row ? allocationRecord(row) : null;
+    return this.#withDatabase(input.deadlineAt, async (db) => {
+      const [row] = await actorDatabaseAwait(() =>
+        db
+          .select(RECEIPT_SELECTION)
+          .from(akashTxAllocations)
+          .where(
+            and(
+              eq(akashTxAllocations.walletScope, this.walletScope),
+              eq(akashTxAllocations.cogniKey, input.cogniKey)
+            )
+          )
+          .limit(1)
+      );
+      return row ? allocationRecord(row) : null;
+    });
   }
 }

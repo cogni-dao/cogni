@@ -28,7 +28,8 @@
  *     is closed (escrow refunds) and the provider is recorded as an SLO failure. The
  *     controller begins any later allocation only from a new durable recovery receipt.
  *   - OUTCOME_STORE_IS_ADVISORY: outcome persistence is best-effort — a store failure never
- *     fails a live provision and never blocks screening (empty history).
+ *     fails a live provision and never blocks screening (empty history). An uncertain operator
+ *     database acknowledgement remains HELD and cannot authorize provider continuation.
  * Side-effects: IO (HTTPS requests to the Akash Console API + workload ingress; provision()
  *   spends real escrow; boot outcomes append to Postgres)
  * Links: ComputeResourcePort (@cogni/ai-tools/capabilities/compute), ./akash-sdl,
@@ -55,6 +56,7 @@ import type {
   ComputeCostEvidencePort,
   ComputeResourceCostEvidence,
 } from "@/ports";
+import { AkashTxError } from "@/ports";
 import { makeLogger } from "@/shared/observability";
 import {
   type AkashProviderInfo,
@@ -1097,6 +1099,7 @@ export class AkashComputeAdapter
    * (task.5095: Crossplane owns retry/backoff/readiness; this call owns only the tx).
    */
   async allocateAndLease(p: {
+    deadlineAt?: number;
     spec: ProvisionSpec;
     allocationPolicy?: AkashTxAllocationPolicy;
     /**
@@ -1118,7 +1121,7 @@ export class AkashComputeAdapter
     );
     const { dseq, provider } = await this.createAndLease(
       sdl,
-      this.withPlacement(await this.loadScreeningContext(), p.spec),
+      this.withPlacement(await this.loadScreeningContext(p.deadlineAt), p.spec),
       new Set<string>(p.excludedProviders ?? []),
       p.onAllocated
         ? async (resource) => {
@@ -1126,7 +1129,8 @@ export class AkashComputeAdapter
           }
         : undefined,
       retainsStorage(p.spec),
-      p.allocationPolicy
+      p.allocationPolicy,
+      p.deadlineAt
     );
     return { leaseId: String(dseq), providerAccount: provider };
   }
@@ -1142,8 +1146,17 @@ export class AkashComputeAdapter
     tried: Set<string>,
     onAllocated?: (resource: ProvisionOutput) => Promise<void>,
     retainStorage = false,
-    allocationPolicy?: AkashTxAllocationPolicy
+    allocationPolicy?: AkashTxAllocationPolicy,
+    deadlineAt?: number
   ): Promise<{ dseq: string; provider: string }> {
+    const checkDeadline = () => {
+      if (deadlineAt !== undefined && Date.now() >= deadlineAt)
+        throw new AkashTxError(
+          "outcome_unknown",
+          "HELD: allocation pass deadline expired"
+        );
+    };
+    checkDeadline();
     const created = await this.request<{ dseq?: string; manifest?: unknown }>(
       "POST",
       "/v1/deployments",
@@ -1171,7 +1184,9 @@ export class AkashComputeAdapter
           state: "pending",
           endpoints: [],
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof AkashTxError && error.code === "outcome_unknown")
+          throw error;
         // bug.5192: this is the exact path that wedged production for 33h. The deployment is
         // closed here, but the caller's durable receipt still holds the wallet-global writer
         // slot — so the close MUST be proven and reported, or nothing can ever settle it.
@@ -1206,6 +1221,7 @@ export class AkashComputeAdapter
         allocationPolicy
       );
       provider = String(bid.provider);
+      checkDeadline();
       leaseAttempted = true;
       await this.request(
         "POST",
@@ -1224,6 +1240,8 @@ export class AkashComputeAdapter
         this.writeTimeoutMs
       );
     } catch (error) {
+      if (error instanceof AkashTxError && error.code === "outcome_unknown")
+        throw error;
       if (retainStorage && leaseAttempted) {
         throw new AkashComputeError(
           "ALLOCATION_OUTCOME_UNKNOWN",
@@ -1538,7 +1556,9 @@ export class AkashComputeAdapter
    * not a marketplace read, so a caller attaches it from the ProvisionSpec. Defaulting it to
    * `[]` keeps an unconstrained workload on exactly today's behaviour.
    */
-  private async loadScreeningContext(): Promise<ScreeningContext> {
+  private async loadScreeningContext(
+    deadlineAt?: number
+  ): Promise<ScreeningContext> {
     const providers = new Map<string, AkashProviderInfo>();
     const list = await this.request<ConsoleProvider[]>(
       "GET",
@@ -1584,8 +1604,12 @@ export class AkashComputeAdapter
       }
     }
     const outcomes = await this.outcomeStore
-      .stats(PROVIDER)
-      .catch(() => new Map<string, ProviderOutcomeStats>());
+      .stats(PROVIDER, deadlineAt)
+      .catch((error: unknown) => {
+        if (error instanceof AkashTxError && error.code === "outcome_unknown")
+          throw error;
+        return new Map<string, ProviderOutcomeStats>();
+      });
     // Unconstrained by default so this seam is TOTAL: a caller that forgets `withPlacement`
     // gets today's behaviour, never an undefined requirement the screener would crash on.
     return {
@@ -1601,6 +1625,8 @@ export class AkashComputeAdapter
     rec: Parameters<ProviderOutcomeStore["record"]>[0]
   ): Promise<void> {
     await this.outcomeStore.record(rec).catch((error: unknown) => {
+      if (error instanceof AkashTxError && error.code === "outcome_unknown")
+        throw error;
       // advisory: a history-write failure must never fail a live provision —
       // but it must be visible, or provider screening silently loses its
       // history and re-leases known-bad providers (bug.5128).

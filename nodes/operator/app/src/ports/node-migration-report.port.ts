@@ -59,11 +59,13 @@ export type RecordNodeMigrationReportOutcome = "recorded";
 export interface NodeMigrationReportStorePort {
   /** Upsert the `(node_id, environment)` cell from the receipt-bound node id. */
   record(
-    input: RecordNodeMigrationReportInput
+    input: RecordNodeMigrationReportInput,
+    deadlineAt?: number
   ): Promise<RecordNodeMigrationReportOutcome>;
   /** The one cell, or null when this node has NEVER reported in this environment. */
   read(input: {
     readonly nodeId: string;
     readonly environment: string;
+    readonly deadlineAt?: number;
   }): Promise<NodeMigrationReportRecord | null>;
 }
