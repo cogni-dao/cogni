@@ -12,7 +12,6 @@
  */
 import type { Database } from "@cogni/db-client";
 import { and, eq, sql } from "drizzle-orm";
-
 import type { AkashTxAllocationRecord } from "@/ports";
 import { akashTxAllocations } from "@/shared/db/schema";
 import {
@@ -20,6 +19,11 @@ import {
   AppliedDatabaseCellReceiptsSchema,
   DatabaseCellAllocationMetadataSchema,
 } from "@/shared/secrets/database-cell-placement.data";
+import {
+  advanceReceiptVersion,
+  receiptFence,
+  receiptTransaction,
+} from "./akash-receipt-transaction";
 
 export class DrizzleDatabaseCellBindingStore {
   constructor(
@@ -66,35 +70,51 @@ export class DrizzleDatabaseCellBindingStore {
       )
     )
       throw new Error("cell allocation is not applied");
+    const providerAccount = record.providerAccount;
+    const appliedSdlHash = record.lastAppliedSdlHash;
     const db = await this.getDb();
-    const updated = await db
-      .update(akashTxAllocations)
-      .set({
-        appliedDatabaseCellBinding: {
-          version: 1,
-          retentionPolicy: "retain",
-          bindings: validated,
-        },
-        updatedAt: sql`now()`,
-      })
-      .where(
-        and(
-          eq(akashTxAllocations.walletScope, this.walletScope),
-          eq(akashTxAllocations.id, record.receiptId),
-          eq(akashTxAllocations.cogniKey, record.cogniKey),
-          eq(akashTxAllocations.nodeId, record.identity.nodeId),
-          eq(akashTxAllocations.environment, record.environment),
-          eq(akashTxAllocations.state, "allocated"),
-          eq(akashTxAllocations.externalName, record.externalName),
-          eq(akashTxAllocations.providerAccount, record.providerAccount),
-          eq(akashTxAllocations.lastAppliedSdlHash, record.lastAppliedSdlHash),
-          sql`coalesce(${akashTxAllocations.appliedDatabaseCellBinding}->'bindings', ${akashTxAllocations.appliedDatabaseCellBinding}, '[]'::jsonb) = ${JSON.stringify(expected)}::jsonb`
-        )
-      )
-      .returning({ id: akashTxAllocations.id });
-    if (updated.length !== 1)
-      throw new Error(
-        "cell allocation changed during binding compare-and-swap"
+    await receiptTransaction(db, async (tx) => {
+      const predicate = and(
+        receiptFence(this.walletScope, record.cogniKey, record),
+        eq(akashTxAllocations.providerAccount, providerAccount),
+        eq(akashTxAllocations.lastAppliedSdlHash, appliedSdlHash),
+        eq(akashTxAllocations.state, "allocated"),
+        sql`coalesce(${akashTxAllocations.appliedDatabaseCellBinding}->'bindings', ${akashTxAllocations.appliedDatabaseCellBinding}, '[]'::jsonb) = ${JSON.stringify(expected)}::jsonb`
       );
+      const [current] = await tx
+        .select({ metadata: akashTxAllocations.appliedDatabaseCellBinding })
+        .from(akashTxAllocations)
+        .where(predicate)
+        .for("update")
+        .limit(1);
+      if (!current)
+        throw new Error(
+          "cell allocation changed during binding compare-and-swap"
+        );
+      const metadata = DatabaseCellAllocationMetadataSchema.parse(
+        current.metadata ?? []
+      );
+      if (
+        metadata.retentionPolicy === "retain" &&
+        JSON.stringify(metadata.bindings) === JSON.stringify(validated)
+      )
+        return;
+      const updated = await tx
+        .update(akashTxAllocations)
+        .set({
+          appliedDatabaseCellBinding: {
+            version: 1,
+            retentionPolicy: "retain",
+            bindings: validated,
+          },
+          updatedAt: advanceReceiptVersion,
+        })
+        .where(predicate)
+        .returning({ id: akashTxAllocations.id });
+      if (updated.length !== 1)
+        throw new Error(
+          "cell allocation changed during binding compare-and-swap"
+        );
+    });
   }
 }

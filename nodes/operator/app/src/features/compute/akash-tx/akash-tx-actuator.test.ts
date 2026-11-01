@@ -240,13 +240,10 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
 
   async prepare(input: { cogniKey: string; allocationCursor: string }) {
     const row = this.rows.get(input.cogniKey);
-    if (!row || row.state !== "preparing") {
-      throw new Error("no preparing slot");
-    }
-    this.rows.set(input.cogniKey, {
-      ...row,
-      allocationCursor: input.allocationCursor,
-    });
+    if (!row || row.state !== "preparing") throw new Error("no preparing slot");
+    const next = { ...row, allocationCursor: input.allocationCursor };
+    this.rows.set(input.cogniKey, next);
+    return next;
   }
 
   async recordAllocation(input: {
@@ -256,34 +253,36 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
   }) {
     const row = this.rows.get(input.cogniKey);
     if (!row) throw new Error("unknown key");
-    this.rows.set(input.cogniKey, {
+    const next: AkashTxAllocationRecord = {
       ...row,
       state: "allocated",
       externalName: row.externalName ?? input.externalName,
       ...(input.providerAccount
         ? { providerAccount: row.providerAccount ?? input.providerAccount }
         : {}),
-    });
+    };
+    this.rows.set(input.cogniKey, next);
+    return next;
   }
 
   async recordAppliedSdlHash(input: { cogniKey: string; sdlHash: string }) {
     const row = this.rows.get(input.cogniKey);
     if (!row) throw new Error("unknown key");
-    this.rows.set(input.cogniKey, {
-      ...row,
-      lastAppliedSdlHash: input.sdlHash,
-    });
+    const next = { ...row, lastAppliedSdlHash: input.sdlHash };
+    this.rows.set(input.cogniKey, next);
+    return next;
   }
 
   async fail(input: { cogniKey: string; failureCode: string }) {
     if (this.failWrites) throw new Error("ledger down");
     this.failCalls.push(input);
     const row = this.rows.get(input.cogniKey);
-    if (row?.state === "preparing" && !row.externalName) {
-      const { allocationCursor: _dropped, ...rest } = row;
-      this.rows.set(input.cogniKey, { ...rest, state: "failed" });
-      this.heldForMs.delete(input.cogniKey);
-    }
+    if (!row || row.state !== "preparing" || row.externalName)
+      throw new Error("receipt custody cannot be discharged");
+    const next: AkashTxAllocationRecord = { ...row, state: "failed" };
+    this.rows.set(input.cogniKey, next);
+    this.heldForMs.delete(input.cogniKey);
+    return next;
   }
 
   async listStalePreparing(input: { olderThanMs: number; limit: number }) {
@@ -297,6 +296,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       )
       .slice(0, input.limit)
       .map((row) => ({
+        record: row,
         cogniKey: row.cogniKey,
         ...(row.allocationCursor
           ? { allocationCursor: row.allocationCursor }
@@ -307,7 +307,10 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
 
   async markReleased(input: { cogniKey: string }) {
     const row = this.rows.get(input.cogniKey);
-    if (row) this.rows.set(input.cogniKey, { ...row, state: "released" });
+    if (!row) throw new Error("unknown key");
+    const next: AkashTxAllocationRecord = { ...row, state: "released" };
+    this.rows.set(input.cogniKey, next);
+    return next;
   }
 
   async read(input: { cogniKey: string }) {
@@ -1498,7 +1501,7 @@ describe("AkashTxActuator.create", () => {
     const originalPrepare = ledger.prepare.bind(ledger);
     ledger.prepare = async (input) => {
       order.push("prepare");
-      await originalPrepare(input);
+      return await originalPrepare(input);
     };
     const originalAllocate = api.allocateAndLease.bind(api);
     api.allocateAndLease = async (input) => {

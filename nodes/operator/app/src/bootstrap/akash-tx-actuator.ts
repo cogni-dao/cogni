@@ -82,7 +82,6 @@ import { sql } from "drizzle-orm";
 import pino from "pino";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-
 import {
   AkashComputeAdapter,
   DrizzleAkashTxAllocationLedger,
@@ -99,6 +98,7 @@ import {
   safeReadyzProbe,
   safeVersionProbe,
 } from "@/adapters/server";
+import { AkashNativeStateReader } from "@/adapters/server/compute/akash-native-state.adapter";
 import {
   checkConsoleBalance,
   classifyConsoleBalance,
@@ -457,6 +457,11 @@ const allocationLedger = new DrizzleAkashTxAllocationLedger(
   wallet.walletScope
 );
 const actuator = new AkashTxActuator({
+  nativeAdmission: new AkashNativeStateReader(
+    wallet.expectedAccountId,
+    fetch,
+    log
+  ),
   console: consoleClient,
   ledger: allocationLedger,
   appliedCellCustody: (nodeId, allocationEnvironment) =>

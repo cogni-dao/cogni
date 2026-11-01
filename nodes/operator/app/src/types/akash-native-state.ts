@@ -24,7 +24,9 @@ export type NativeReadErrorCode =
   | "pagination_incomplete"
   | "conflicting_read"
   | "not_requested"
-  | "reader_unavailable";
+  | "reader_unavailable"
+  | "height_mismatch"
+  | "inventory_overflow";
 
 export interface NativeLeaseState {
   readonly id: {
@@ -53,4 +55,35 @@ export interface AkashNativeObservation {
     readonly count: number;
   }[];
   readonly errorCode: NativeReadErrorCode | null;
+}
+
+/** Complete owner ACTIVE inventory at one consensus height; never a financial verdict. */
+export interface AkashNativeWalletInventory {
+  readonly owner: string;
+  readonly height: string;
+  readonly observedAt: string;
+  readonly targets: readonly {
+    readonly dseq: string;
+    readonly groups: readonly {
+      readonly gseq: number;
+      readonly state: string;
+    }[];
+    readonly orders: readonly {
+      readonly gseq: number;
+      readonly oseq: number;
+      readonly state: string;
+    }[];
+    readonly leases: readonly NativeLeaseState[];
+  }[];
+}
+export interface AkashNativeAdmissionReader {
+  readWalletInventory(input: {
+    signal?: AbortSignal;
+    deadlineAt: number;
+  }): Promise<AkashNativeWalletInventory>;
+  readOwnClosed(input: {
+    dseq: string;
+    signal?: AbortSignal;
+    deadlineAt: number;
+  }): Promise<{ owner: string; dseq: string; height: string; closed: boolean }>;
 }

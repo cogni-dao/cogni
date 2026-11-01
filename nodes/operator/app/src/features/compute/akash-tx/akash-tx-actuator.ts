@@ -105,6 +105,10 @@ import {
   type ComputeCostStorePort,
   type NodeMigrationReportStorePort,
 } from "@/ports";
+import type {
+  AkashNativeAdmissionReader,
+  AkashNativeWalletInventory,
+} from "@/types/akash-native-state";
 import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
 import { runMigrationStep } from "./akash-tx-migration-step";
 import {
@@ -133,6 +137,7 @@ export type AkashTxServingProbe = (input: {
 }) => Promise<boolean>;
 
 export interface AkashTxActuatorDeps {
+  readonly nativeAdmission?: AkashNativeAdmissionReader;
   readonly console: AkashTxConsolePort;
   readonly ledger: AkashTxAllocationLedgerPort;
   readonly log: AkashTxLogger;
@@ -353,6 +358,7 @@ function costFailureType(error: unknown): string {
  * beyond its injected seams.
  */
 export class AkashTxActuator implements AkashTxActuatorPort {
+  private readonly nativeAdmission?: AkashNativeAdmissionReader;
   private readonly console: AkashTxConsolePort;
   private readonly ledger: AkashTxAllocationLedgerPort;
   private readonly log: AkashTxLogger;
@@ -372,6 +378,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private readonly bootOkRecorded = new Set<string>();
 
   constructor(deps: AkashTxActuatorDeps) {
+    if (deps.nativeAdmission) this.nativeAdmission = deps.nativeAdmission;
     this.console = deps.console;
     this.ledger = deps.ledger;
     this.log = deps.log ?? NOOP_LOGGER;
@@ -464,7 +471,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       // response lost. Resolving it is the whole reason this service exists.
       const resource = await this.resolveUncertain(
         input.cogniKey,
-        record.allocationCursor
+        record.allocationCursor,
+        record
       );
       // Null = the receipt was PROVEN not to be billing and has just settled itself.
       // Observe reports what is true — nothing exists — so the caller proceeds to create
@@ -677,7 +685,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     if (claim.record.allocationCursor) {
       const resource = await this.resolveUncertain(
         input.cogniKey,
-        claim.record.allocationCursor
+        claim.record.allocationCursor,
+        claim.record
       );
       if (resource) return { ...resource, replayed: false, recovered: true };
       // The receipt just settled itself: nothing is billing and the wallet slot is free.
@@ -689,6 +698,13 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
     }
 
+    if (claim.state !== "claimed")
+      throw new AkashTxError(
+        "wallet_allocation_blocked",
+        "preparing receipt is held by its original invocation",
+        input.cogniKey
+      );
+    let custody = claim.record;
     const recoveryFamilyPrefix = input.recoveryFamilyPrefix;
     if (recoveryFamilyPrefix) {
       try {
@@ -711,16 +727,11 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           );
       } catch (error) {
         // No cursor/handle and no provider IO: only this unused claim is safe to fail.
-        const current = await this.readLedger(input.cogniKey);
-        if (
-          current?.state === "preparing" &&
-          !current.externalName &&
-          !current.allocationCursor
-        )
-          await this.ledger.fail({
-            cogniKey: input.cogniKey,
-            failureCode: "recovery_family_refused",
-          });
+        await this.ledger.fail({
+          cogniKey: input.cogniKey,
+          failureCode: "recovery_family_refused",
+          expected: custody,
+        });
         if (error instanceof AkashTxError) throw error;
         throw this.ledgerUnavailable(error, input.cogniKey, "recovery family");
       }
@@ -791,8 +802,24 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       }
     }
 
-    const cursor = await this.readCursor();
-    await this.prepare(input.cogniKey, cursor);
+    const deadlineAt = Date.now() + 30_000;
+    const cursor = await this.readCursor(deadlineAt);
+    let coverage: AkashNativeWalletInventory | undefined;
+    if (custody.allocationNoEffectVerified === true) {
+      if (!this.nativeAdmission)
+        throw new AkashTxError(
+          "allocation_unresolved",
+          "native admission reader unavailable"
+        );
+      coverage = await this.nativeAdmission.readWalletInventory({ deadlineAt });
+    }
+    custody = await this.prepare(
+      input.cogniKey,
+      cursor,
+      custody,
+      coverage,
+      deadlineAt
+    );
     this.log.info(
       {
         cogniKey: input.cogniKey,
@@ -816,9 +843,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         // Durability of the handle is a precondition of every later step: the client closes
         // the deployment if this throws, because an unrecorded dseq is a lease nobody can find.
         onAllocated: async (leaseId) => {
-          await this.ledger.recordAllocation({
+          custody = await this.ledger.recordAllocation({
             cogniKey: input.cogniKey,
             externalName: leaseId,
+            expected: custody,
           });
           this.log.info(
             { cogniKey: input.cogniKey, externalName: leaseId },
@@ -850,18 +878,25 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       // leasing. Settling is best-effort on purpose: the DB may be the very thing that died,
       // and the stale-allocation sweeper is the backstop for exactly that case.
       if (rolledBackDseq)
-        await this.settleRollback(input.cogniKey, rolledBackDseq);
+        await this.settleRollback(
+          input.cogniKey,
+          rolledBackDseq,
+          undefined,
+          custody
+        );
       throw mapped;
     }
 
-    await this.ledger.recordAllocation({
+    custody = await this.ledger.recordAllocation({
       cogniKey: input.cogniKey,
       externalName: allocated.leaseId,
       providerAccount: allocated.providerAccount,
+      expected: custody,
     });
     await this.ledger.recordAppliedSdlHash({
       cogniKey: input.cogniKey,
       sdlHash: this.console.sdlHash(input.spec, input.allocationPolicy),
+      expected: custody,
     });
     const allocationRecord = await this.requireStoredHandle(
       input.cogniKey,
@@ -1068,6 +1103,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     await this.ledger.recordAppliedSdlHash({
       cogniKey: input.cogniKey,
       sdlHash: desiredSdlHash,
+      expected: bound.record,
     });
     this.log.info(
       {
@@ -1134,7 +1170,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         throw mapped;
       }
     }
-    await this.ledger.markReleased({ cogniKey: input.cogniKey });
+    await this.ledger.markReleased({
+      cogniKey: input.cogniKey,
+      expected: record,
+    });
     await this.observeCost(record, input.externalName).catch(
       (error: unknown) => {
         this.log.warn(
@@ -1506,11 +1545,21 @@ export class AkashTxActuator implements AkashTxActuatorPort {
    */
   private async resolveUncertain(
     cogniKey: string,
-    allocationCursor: string
+    allocationCursor: string,
+    original: AkashTxAllocationRecord,
+    deadlineAt?: number
   ): Promise<AkashTxResource | null> {
     let probe: AkashAllocationProbe;
     try {
-      probe = await this.console.findAllocationSince(allocationCursor);
+      probe = await this.console.findAllocationSince(
+        allocationCursor,
+        deadlineAt ? { deadlineAt } : undefined
+      );
+      if (deadlineAt && Date.now() >= deadlineAt)
+        throw new AkashTxError(
+          "allocation_unresolved",
+          "recovery deadline exceeded"
+        );
     } catch (error) {
       const mapped = mapConsoleFailure(error, { mutating: false });
       this.log.error(
@@ -1535,7 +1584,18 @@ export class AkashTxActuator implements AkashTxActuatorPort {
 
     if (probe.outcome === "settled") {
       // PROVEN not billing. Settling here is what makes recovery automatic and bounded.
-      await this.settleRollback(cogniKey, undefined, allocationCursor);
+      if (
+        !(await this.settleRollback(
+          cogniKey,
+          undefined,
+          allocationCursor,
+          original
+        ))
+      )
+        throw new AkashTxError(
+          "allocation_unresolved",
+          "receipt custody remains unknown"
+        );
       return null;
     }
 
@@ -1543,6 +1603,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     await this.ledger.recordAllocation({
       cogniKey,
       externalName: adopted.leaseId,
+      expected: original,
     });
     const record = await this.requireStoredHandle(
       cogniKey,
@@ -1570,12 +1631,14 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private async settleRollback(
     cogniKey: string,
     rolledBackDseq?: string,
-    allocationCursor?: string
+    allocationCursor?: string,
+    original?: AkashTxAllocationRecord
   ): Promise<boolean> {
     try {
       await this.ledger.fail({
         cogniKey,
         failureCode: ROLLED_BACK_FAILURE_CODE,
+        ...(original ? { expected: original } : {}),
       });
       this.log.warn(
         {
@@ -1618,6 +1681,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     olderThanMs: number;
     limit: number;
   }): Promise<AkashTxSweepReport> {
+    const deadlineAt = Date.now() + 30_000;
+    const preparingDeadlineAt = Math.min(deadlineAt, Date.now() + 10_000);
     let stale: readonly AkashTxStaleAllocation[];
     try {
       stale = await this.ledger.listStalePreparing(input);
@@ -1629,6 +1694,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     let adopted = 0;
     let held = 0;
     for (const row of stale) {
+      if (Date.now() >= preparingDeadlineAt) {
+        held += 1;
+        continue;
+      }
       this.log.warn(
         {
           cogniKey: row.cogniKey,
@@ -1641,14 +1710,24 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
       if (!row.allocationCursor) {
         // RECEIPT_BEFORE_TRANSACTION read backwards: no cursor proves no POST was ever sent.
-        if (await this.settleRollback(row.cogniKey)) rolledBack += 1;
+        if (
+          await this.settleRollback(
+            row.cogniKey,
+            undefined,
+            undefined,
+            row.record
+          )
+        )
+          rolledBack += 1;
         else held += 1;
         continue;
       }
       try {
         const resource = await this.resolveUncertain(
           row.cogniKey,
-          row.allocationCursor
+          row.allocationCursor,
+          row.record,
+          preparingDeadlineAt
         );
         if (resource) adopted += 1;
         else rolledBack += 1;
@@ -1666,9 +1745,59 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       }
     }
 
+    await this.qualifyNativeClosures(deadlineAt);
     const report = { scanned: stale.length, rolledBack, adopted, held };
     if (stale.length > 0) this.log.warn(report, "akash_tx_allocation_sweep");
     return report;
+  }
+
+  private async qualifyNativeClosures(deadlineAt: number): Promise<void> {
+    if (
+      !this.nativeAdmission ||
+      !this.ledger.listClosureCandidates ||
+      !this.ledger.startClosureRead ||
+      !this.ledger.certifyNativeClosed ||
+      Date.now() >= deadlineAt
+    )
+      return;
+    const native = this.nativeAdmission;
+    const startRead = this.ledger.startClosureRead.bind(this.ledger);
+    const certify = this.ledger.certifyNativeClosed.bind(this.ledger);
+    const candidates = await this.ledger.listClosureCandidates();
+    let cursor = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(2, candidates.length) }, async () => {
+        while (cursor < candidates.length && Date.now() < deadlineAt) {
+          const candidate = candidates[cursor++];
+          if (!candidate) break;
+          try {
+            // Scheduling CAS is the actual start. Queued/expired rows do not rotate.
+            const original = await startRead(candidate);
+            if (!original.externalName || Date.now() >= deadlineAt) continue;
+            const evidence = await native.readOwnClosed({
+              dseq: original.externalName,
+              deadlineAt,
+            });
+            if (evidence.closed && Date.now() < deadlineAt)
+              await certify({
+                expected: original,
+                owner: evidence.owner,
+                dseq: evidence.dseq,
+                closed: true,
+                deadlineAt,
+              });
+          } catch (error) {
+            this.log.warn(
+              {
+                cogniKey: candidate.cogniKey,
+                causeType: error instanceof Error ? error.name : "unknown",
+              },
+              "akash_tx_native_qualification_held"
+            );
+          }
+        }
+      })
+    );
   }
 
   async leaseLogSources(input: {
@@ -1824,9 +1953,9 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     }
   }
 
-  private async readCursor(): Promise<string> {
+  private async readCursor(deadlineAt: number): Promise<string> {
     try {
-      return await this.console.allocationCursor();
+      return await this.console.allocationCursor({ deadlineAt });
     } catch (error) {
       throw mapConsoleFailure(error, { mutating: false });
     }
@@ -2014,9 +2143,21 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     );
   }
 
-  private async prepare(cogniKey: string, cursor: string): Promise<void> {
+  private async prepare(
+    cogniKey: string,
+    cursor: string,
+    expected: AkashTxAllocationRecord,
+    coverage?: AkashNativeWalletInventory,
+    deadlineAt?: number
+  ): Promise<AkashTxAllocationRecord> {
     try {
-      await this.ledger.prepare({ cogniKey, allocationCursor: cursor });
+      return await this.ledger.prepare({
+        cogniKey,
+        allocationCursor: cursor,
+        expected,
+        ...(coverage ? { coverage } : {}),
+        ...(deadlineAt ? { deadlineAt } : {}),
+      });
     } catch (error) {
       throw this.ledgerUnavailable(error, cogniKey, "prepare");
     }

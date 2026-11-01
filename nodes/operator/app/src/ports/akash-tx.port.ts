@@ -394,7 +394,10 @@ export interface AkashTxManagedDeploymentDefinition {
 
 export interface AkashTxConsolePort {
   /** Opaque pre-transaction high-water mark; the recovery scan's baseline. */
-  allocationCursor(): Promise<string>;
+  allocationCursor(budget?: {
+    deadlineAt: number;
+    signal?: AbortSignal;
+  }): Promise<string>;
   /** Create + screen + lease in one paid transaction. Returns when the lease exists. */
   allocateAndLease(input: {
     spec: ProvisionSpec;
@@ -417,7 +420,10 @@ export interface AkashTxConsolePort {
    * bug.5192: the old `ProvisionOutput | null` shape could not express `settled`, so every
    * crashed create became a permanent `allocation_unresolved` holding the wallet-wide slot.
    */
-  findAllocationSince(cursor: string): Promise<AkashAllocationProbe>;
+  findAllocationSince(
+    cursor: string,
+    budget?: { deadlineAt: number; signal?: AbortSignal }
+  ): Promise<AkashAllocationProbe>;
   status(input: { leaseId: string }): Promise<ProvisionOutput>;
   /** Read-only existing Console auth/client. Missing implementation denies applied qualification. */
   readManagedDefinition?(input: {
@@ -510,7 +516,16 @@ export type AkashTxAllocationState =
   | "released"
   | "failed";
 
+/** Opaque PostgreSQL version. Never reconstruct it from Date or from a later read. */
+export interface AkashTxReceiptCustody {
+  readonly walletScope: string;
+  readonly updatedAt: string;
+}
+
 export interface AkashTxAllocationRecord {
+  readonly custody?: AkashTxReceiptCustody;
+  readonly nativeClosedVerified?: boolean | null;
+  readonly allocationNoEffectVerified?: boolean | null;
   /** Durable policy; no delete request can override retained storage custody. */
   readonly retentionPolicy?: "retain";
   /** Verified credential-free cell placement stored on this same allocation row. */
@@ -537,6 +552,7 @@ export interface AkashTxAllocationRecord {
 
 /** A receipt that has held the wallet slot longer than any single transaction can take. */
 export interface AkashTxStaleAllocation {
+  readonly record: AkashTxAllocationRecord;
   readonly cogniKey: string;
   /** Absent ⇒ durably PRE-transaction: the cursor is written before the POST, so no spend. */
   readonly allocationCursor?: string;
@@ -550,6 +566,18 @@ export interface AkashTxStaleAllocation {
  * whoever holds the key rather than only by the process that opened it.
  */
 export interface AkashTxAllocationLedgerPort {
+  listClosureCandidates?(): Promise<readonly AkashTxAllocationRecord[]>;
+  startClosureRead?(
+    expected: AkashTxAllocationRecord
+  ): Promise<AkashTxAllocationRecord>;
+  certifyNativeClosed?(input: {
+    expected: AkashTxAllocationRecord;
+    owner: string;
+    dseq: string;
+    closed: boolean;
+    deadlineAt: number;
+  }): Promise<AkashTxAllocationRecord>;
+
   /**
    * Take the wallet-wide slot for this key, or report the current holder.
    *
@@ -591,6 +619,7 @@ export interface AkashTxAllocationLedgerPort {
     retentionPolicy?: "retain";
   }): Promise<
     | { state: "bound"; record: AkashTxAllocationRecord }
+    | { state: "held"; record: AkashTxAllocationRecord }
     | { state: "absent" }
     | { state: "conflict"; record: AkashTxAllocationRecord }
   >;
@@ -598,13 +627,20 @@ export interface AkashTxAllocationLedgerPort {
    * Persist the pre-POST baseline. MUST reject when the key does not own a `preparing` slot —
    * a resumed zombie with no slot must never proceed to spend.
    */
-  prepare(input: { cogniKey: string; allocationCursor: string }): Promise<void>;
+  prepare(input: {
+    cogniKey: string;
+    allocationCursor: string;
+    expected?: AkashTxAllocationRecord;
+    coverage?: import("@/types/akash-native-state").AkashNativeWalletInventory;
+    deadlineAt?: number;
+  }): Promise<AkashTxAllocationRecord>;
   /** Record the paid handle and release the wallet slot. Idempotent. */
   recordAllocation(input: {
     cogniKey: string;
     externalName: string;
     providerAccount?: string;
-  }): Promise<void>;
+    expected?: AkashTxAllocationRecord;
+  }): Promise<AkashTxAllocationRecord>;
   /**
    * Persist the sha256 of the SDL just PUT for this key, so the next in-place update can no-op a
    * byte-identical re-PUT (bug.5238). Called ONLY after `updateAllocated` succeeds — persisting
@@ -614,7 +650,8 @@ export interface AkashTxAllocationLedgerPort {
   recordAppliedSdlHash(input: {
     cogniKey: string;
     sdlHash: string;
-  }): Promise<void>;
+    expected?: AkashTxAllocationRecord;
+  }): Promise<AkashTxAllocationRecord>;
   /**
    * Settle a receipt that never bound a paid resource, releasing the wallet-wide slot.
    *
@@ -627,7 +664,11 @@ export interface AkashTxAllocationLedgerPort {
    * bug.5192: this method existed and was never called from production code, which is why one
    * crashed create held the account-wide writer slot for 33h.
    */
-  fail(input: { cogniKey: string; failureCode: string }): Promise<void>;
+  fail(input: {
+    cogniKey: string;
+    failureCode: string;
+    expected?: AkashTxAllocationRecord;
+  }): Promise<AkashTxAllocationRecord>;
   /**
    * Bounded scan for receipts stuck mid-transaction. Read-only, newest-last, hard-limited —
    * it decides nothing. The sweeper that consumes it must verify each row against Console
@@ -639,7 +680,10 @@ export interface AkashTxAllocationLedgerPort {
     limit: number;
   }): Promise<readonly AkashTxStaleAllocation[]>;
   /** Mark a previously allocated key as released after a provider delete. */
-  markReleased(input: { cogniKey: string }): Promise<void>;
+  markReleased(input: {
+    cogniKey: string;
+    expected?: AkashTxAllocationRecord;
+  }): Promise<AkashTxAllocationRecord>;
   read(input: { cogniKey: string }): Promise<AkashTxAllocationRecord | null>;
   /**
    * Bounded enumeration of the wallet's LIVE paid leases: `state='allocated' AND

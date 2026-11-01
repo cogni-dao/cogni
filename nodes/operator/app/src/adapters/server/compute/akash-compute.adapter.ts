@@ -557,8 +557,11 @@ export class AkashComputeAdapter
   }
 
   /** Opaque high-water mark used to recover an allocation whose POST response was lost. */
-  async allocationCursor(): Promise<string> {
-    const deployments = await this.listAllDeployments();
+  async allocationCursor(budget?: {
+    deadlineAt: number;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const deployments = await this.listAllDeployments(budget);
     let max = -1n;
     for (const item of deployments) {
       const raw = item.deployment?.id?.dseq;
@@ -584,7 +587,10 @@ export class AkashComputeAdapter
    * Neither is billing, so neither warrants fail-closed. Only a LIVE allocation we cannot
    * attribute does — and that is `ambiguous`.
    */
-  async findAllocationSince(cursor: string): Promise<AkashAllocationProbe> {
+  async findAllocationSince(
+    cursor: string,
+    budget?: { deadlineAt: number; signal?: AbortSignal }
+  ): Promise<AkashAllocationProbe> {
     if (!/^-?\d+$/.test(cursor)) {
       throw new AkashComputeError(
         "UNEXPECTED_SHAPE",
@@ -592,7 +598,7 @@ export class AkashComputeAdapter
       );
     }
     const baseline = BigInt(cursor);
-    const candidates = (await this.listAllDeployments())
+    const candidates = (await this.listAllDeployments(budget))
       // Defensive: today Console's list returns live deployments only, but a closed one
       // appearing here must never count as live spend — closed is settled by definition.
       .filter((item) => item.deployment?.state !== "closed")
@@ -610,7 +616,7 @@ export class AkashComputeAdapter
     }
     return {
       outcome: "adopted",
-      output: await this.status({ leaseId: unique[0] as string }),
+      output: await this.status({ leaseId: unique[0] as string }, budget),
     };
   }
 
@@ -647,10 +653,16 @@ export class AkashComputeAdapter
     return country;
   }
 
-  async status(p: { leaseId: string }): Promise<ProvisionOutput> {
+  async status(
+    p: { leaseId: string },
+    budget?: { deadlineAt: number; signal?: AbortSignal }
+  ): Promise<ProvisionOutput> {
     const detail = await this.request<ConsoleDeploymentDetail>(
       "GET",
-      `/v1/deployments/${encodeURIComponent(p.leaseId)}`
+      `/v1/deployments/${encodeURIComponent(p.leaseId)}`,
+      undefined,
+      undefined,
+      budget
     );
     return provisionOutputFromDetail(p.leaseId, detail);
   }
@@ -966,7 +978,10 @@ export class AkashComputeAdapter
     return undefined;
   }
 
-  private async listAllDeployments(): Promise<ConsoleDeploymentDetail[]> {
+  private async listAllDeployments(budget?: {
+    deadlineAt: number;
+    signal?: AbortSignal;
+  }): Promise<ConsoleDeploymentDetail[]> {
     const deployments: ConsoleDeploymentDetail[] = [];
     // Console's spec caps `limit` at 100 ("Deployments per page, at most 100" —
     // GET /v1/doc, 2026-09-18); 1000 draws HTTP 400 on every call, which killed the
@@ -978,8 +993,14 @@ export class AkashComputeAdapter
         "GET",
         `/v1/deployments?skip=${skip}&limit=${limit}`,
         undefined,
-        this.writeTimeoutMs
+        this.writeTimeoutMs,
+        budget
       );
+      if (budget && (Date.now() >= budget.deadlineAt || budget.signal?.aborted))
+        throw new AkashComputeError(
+          "TIMEOUT",
+          "allocation read deadline exceeded"
+        );
       deployments.push(...(page?.deployments ?? []));
       if (!page?.pagination?.hasMore) return deployments;
     }
@@ -1599,12 +1620,24 @@ export class AkashComputeAdapter
     method: string,
     path: string,
     body?: unknown,
-    timeoutOverrideMs?: number
+    timeoutOverrideMs?: number,
+    budget?: { deadlineAt: number; signal?: AbortSignal }
   ): Promise<T | undefined> {
-    const timeoutMs = timeoutOverrideMs ?? this.config.timeoutMs;
+    const timeoutMs = Math.max(
+      0,
+      Math.min(
+        timeoutOverrideMs ?? this.config.timeoutMs,
+        budget ? budget.deadlineAt - Date.now() : Infinity
+      )
+    );
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const signal = budget?.signal
+      ? AbortSignal.any([budget.signal, controller.signal])
+      : controller.signal;
     try {
+      if (signal.aborted || timeoutMs <= 0)
+        throw new Error("read deadline exceeded");
       const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
         headers: {
@@ -1613,8 +1646,10 @@ export class AkashComputeAdapter
           ...(body !== undefined ? { "content-type": "application/json" } : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        signal: controller.signal,
+        signal,
       });
+      if (signal.aborted || (budget && Date.now() >= budget.deadlineAt))
+        throw new Error("read deadline exceeded");
       if (!response.ok) {
         // Provider bodies are still never retained — they echo the SDL and resolved secrets.
         // What IS taken is a bounded, allowlisted scalar digest, because "HTTP 422" with no
@@ -1634,6 +1669,8 @@ export class AkashComputeAdapter
         | { data?: T }
         | T
         | undefined;
+      if (signal.aborted || (budget && Date.now() >= budget.deadlineAt))
+        throw new Error("read deadline exceeded");
       if (json && typeof json === "object" && "data" in json) {
         return (json as { data?: T }).data;
       }

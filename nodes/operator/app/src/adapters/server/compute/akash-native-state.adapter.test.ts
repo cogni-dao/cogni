@@ -314,7 +314,7 @@ describe("Akash native state — public read contract", () => {
     expect(result?.errorCode).toBe("timeout");
   });
 
-  it("caps four concurrent handles and an eight-second native budget, including queued work", async () => {
+  it("caps two concurrent handles and an eight-second native budget, including queued work", async () => {
     vi.useFakeTimers();
     let inFlight = 0;
     let max = 0;
@@ -339,7 +339,7 @@ describe("Akash native state — public read contract", () => {
     );
     await vi.advanceTimersByTimeAsync(8001);
     const result = await pending;
-    expect(max).toBeLessThanOrEqual(4);
+    expect(max).toBeLessThanOrEqual(2);
     expect(Object.keys(result)).toHaveLength(50);
     expect(
       Object.values(result).every((r) => r.leaseCoverage === "unknown")
@@ -364,5 +364,176 @@ describe("Akash native state — public read contract", () => {
       dseqs: [DSEQ],
     });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("wallet ACTIVE inventory at one height", () => {
+  const height = "30000000";
+  const atHeight = (body: unknown, at: string | null = height) =>
+    new Response(JSON.stringify(body), {
+      headers: at ? { "x-cosmos-block-height": at } : {},
+    });
+  const active = (dseq = DSEQ, owner = OWNER) => ({
+    deployment: { id: { owner, dseq }, state: "active" },
+    groups: [{ id: { owner, dseq, gseq: 1 }, state: "open" }],
+  });
+  const inventory = (rows: unknown[], next_key: string | null = null) => ({
+    deployments: rows,
+    pagination: { next_key },
+  });
+
+  it("exhausts real owner continuation and includes unleased open groups/orders", async () => {
+    const requests: { url: URL; init?: RequestInit }[] = [];
+    const fetcher = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(String(input));
+        requests.push({ url, ...(init ? { init } : {}) });
+        if (url.pathname.includes("deployments/list"))
+          return atHeight(
+            url.searchParams.has("pagination.key")
+              ? inventory([])
+              : inventory([active()], "AQ==")
+          );
+        if (url.pathname.includes("orders/list"))
+          return atHeight({
+            orders: [
+              {
+                id: { owner: OWNER, dseq: DSEQ, gseq: 1, oseq: 1 },
+                state: "open",
+              },
+            ],
+            pagination: { next_key: null },
+          });
+        return atHeight({ leases: [], pagination: { next_key: null } });
+      }
+    );
+    const result = await new AkashNativeStateReader(
+      OWNER,
+      fetcher
+    ).readWalletInventory({ deadlineAt: Date.now() + 30_000 });
+    expect(result).toMatchObject({
+      owner: OWNER,
+      height,
+      targets: [
+        {
+          dseq: DSEQ,
+          groups: [{ gseq: 1, state: "open" }],
+          orders: [{ gseq: 1, oseq: 1, state: "open" }],
+          leases: [],
+        },
+      ],
+    });
+    expect(requests[0]?.url.searchParams.get("filters.owner")).toBe(OWNER);
+    expect(requests[0]?.url.searchParams.get("filters.state")).toBe("active");
+    expect(requests[1]?.url.searchParams.get("pagination.key")).toBe("AQ==");
+    for (const request of requests.slice(1))
+      expect(
+        new Headers(request.init?.headers).get("x-cosmos-block-height")
+      ).toBe(height);
+  });
+
+  it.each([
+    null,
+    "29999999",
+  ])("refuses absent/mixed response height %s", async (secondHeight) => {
+    let calls = 0;
+    const fetcher = vi.fn(async () =>
+      atHeight(inventory([], "AQ=="), calls++ === 0 ? height : secondHeight)
+    );
+    await expect(
+      new AkashNativeStateReader(OWNER, fetcher).readWalletInventory({
+        deadlineAt: Date.now() + 30_000,
+      })
+    ).rejects.toThrow("height_mismatch");
+  });
+
+  it("does not call a repeated continuation complete", async () => {
+    const fetcher = vi.fn(async () => atHeight(inventory([], "AQ==")));
+    await expect(
+      new AkashNativeStateReader(OWNER, fetcher).readWalletInventory({
+        deadlineAt: Date.now() + 30_000,
+      })
+    ).rejects.toThrow("pagination_incomplete");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a foreign owner before reading its orders or leases", async () => {
+    const fetcher = vi.fn(async () =>
+      atHeight(inventory([active(DSEQ, "akash1foreign")]))
+    );
+    await expect(
+      new AkashNativeStateReader(OWNER, fetcher).readWalletInventory({
+        deadlineAt: Date.now() + 30_000,
+      })
+    ).rejects.toThrow("identity_mismatch");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses closed/duplicate targets inside the ACTIVE response", async () => {
+    for (const rows of [
+      [
+        {
+          ...active(),
+          deployment: { id: { owner: OWNER, dseq: DSEQ }, state: "closed" },
+        },
+      ],
+      [active(), active()],
+    ]) {
+      const fetcher = vi.fn(async (input: string | URL | Request) =>
+        atHeight(
+          String(input).includes("deployments/list")
+            ? inventory(rows)
+            : String(input).includes("orders/list")
+              ? { orders: [], pagination: { next_key: null } }
+              : { leases: [], pagination: { next_key: null } }
+        )
+      );
+      await expect(
+        new AkashNativeStateReader(OWNER, fetcher).readWalletInventory({
+          deadlineAt: Date.now() + 30_000,
+        })
+      ).rejects.toThrow("identity_mismatch");
+    }
+  });
+
+  it("aborts expired queued work and rejects late responses from an uncooperative transport", async () => {
+    const never = vi.fn(() => new Promise<Response>(() => undefined));
+    await expect(
+      new AkashNativeStateReader(OWNER, never).readWalletInventory({
+        deadlineAt: Date.now() - 1,
+      })
+    ).rejects.toThrow("budget_exceeded");
+    expect(never).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    const pending = new AkashNativeStateReader(
+      OWNER,
+      never
+    ).readWalletInventory({ deadlineAt: Date.now() + 50 });
+    const assertion = expect(pending).rejects.toThrow("budget_exceeded");
+    await vi.advanceTimersByTimeAsync(51);
+    await assertion;
+  });
+
+  it("certifies only its pinned owner's exact own handle; absence never means CLOSED", async () => {
+    const reader = new AkashNativeStateReader(
+      OWNER,
+      vi.fn(async () =>
+        atHeight({
+          deployment: { id: { owner: OWNER, dseq: DSEQ }, state: "closed" },
+        })
+      )
+    );
+    expect(
+      await reader.readOwnClosed({
+        dseq: DSEQ,
+        deadlineAt: Date.now() + 30_000,
+      })
+    ).toEqual({ owner: OWNER, dseq: DSEQ, height, closed: true });
+    await expect(
+      new AkashNativeStateReader(
+        OWNER,
+        vi.fn(async () => atHeight({}))
+      ).readOwnClosed({ dseq: DSEQ, deadlineAt: Date.now() + 30_000 })
+    ).rejects.toThrow("invalid_response");
   });
 });

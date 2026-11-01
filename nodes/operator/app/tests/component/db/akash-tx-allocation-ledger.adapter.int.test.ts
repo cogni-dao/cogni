@@ -42,6 +42,12 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
   const db = getSeedDb();
   const ledger = new DrizzleAkashTxAllocationLedger(async () => db, WALLET);
 
+  const custody = async (cogniKey: string, source = ledger) => {
+    const record = await source.read({ cogniKey });
+    if (!record) throw new Error("fixture custody absent");
+    return record;
+  };
+
   beforeEach(async () => {
     await db
       .delete(akashTxAllocations)
@@ -90,7 +96,11 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
           identity: IDENTITY,
         })
       ).toMatchObject({ state: "bound" });
-      await boundedLedger.prepare({ cogniKey, allocationCursor: "7000" });
+      await boundedLedger.prepare({
+        expected: await custody(cogniKey, boundedLedger),
+        cogniKey,
+        allocationCursor: "7000",
+      });
       expect(await boundedLedger.read({ cogniKey })).toMatchObject({
         state: "preparing",
         allocationCursor: "7000",
@@ -131,7 +141,11 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
     });
     expect(reentry.state).toBe("owned");
 
-    await ledger.recordAllocation({ cogniKey: "k1", externalName: "7001" });
+    await ledger.recordAllocation({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+      externalName: "7001",
+    });
 
     const afterSettle = await ledger.claim({
       cogniKey: "k2",
@@ -171,20 +185,36 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
     });
-    await ledger.prepare({ cogniKey: "k1", allocationCursor: "7000" });
+    await ledger.prepare({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+      allocationCursor: "7000",
+    });
     expect(await ledger.read({ cogniKey: "k1" })).toMatchObject({
       state: "preparing",
       allocationCursor: "7000",
     });
 
     await expect(
-      ledger.prepare({ cogniKey: "ghost", allocationCursor: "7000" })
-    ).rejects.toThrow(/wallet slot/);
+      ledger.prepare({
+        expected: await custody("k1", ledger),
+        cogniKey: "ghost",
+        allocationCursor: "7000",
+      })
+    ).rejects.toThrow(/wallet slot|custody/);
 
-    await ledger.recordAllocation({ cogniKey: "k1", externalName: "7001" });
+    await ledger.recordAllocation({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+      externalName: "7001",
+    });
     await expect(
-      ledger.prepare({ cogniKey: "k1", allocationCursor: "7999" })
-    ).rejects.toThrow(/wallet slot/);
+      ledger.prepare({
+        expected: await custody("k1", ledger),
+        cogniKey: "k1",
+        allocationCursor: "7999",
+      })
+    ).rejects.toThrow(/wallet slot|custody/);
   });
 
   it("never overwrites a recorded paid handle", async () => {
@@ -194,18 +224,28 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
     });
-    await ledger.prepare({ cogniKey: "k1", allocationCursor: "7000" });
-    await ledger.recordAllocation({ cogniKey: "k1", externalName: "7001" });
-    await ledger.recordAllocation({
+    await ledger.prepare({
+      expected: await custody("k1", ledger),
       cogniKey: "k1",
-      externalName: "9999",
-      providerAccount: "akash1provider",
+      allocationCursor: "7000",
     });
+    await ledger.recordAllocation({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+      externalName: "7001",
+    });
+    await expect(
+      ledger.recordAllocation({
+        expected: await custody("k1", ledger),
+        cogniKey: "k1",
+        externalName: "9999",
+        providerAccount: "akash1provider",
+      })
+    ).rejects.toThrow(/handle conflict/);
 
     expect(await ledger.read({ cogniKey: "k1" })).toMatchObject({
       state: "allocated",
       externalName: "7001",
-      providerAccount: "akash1provider",
     });
   });
 
@@ -216,16 +256,33 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
     });
-    await ledger.prepare({ cogniKey: "k1", allocationCursor: "7000" });
-    await ledger.recordAllocation({ cogniKey: "k1", externalName: "7001" });
+    await ledger.prepare({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+      allocationCursor: "7000",
+    });
+    await ledger.recordAllocation({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+      externalName: "7001",
+    });
 
-    await ledger.fail({ cogniKey: "k1", failureCode: "provider_rejected" });
+    await expect(
+      ledger.fail({
+        expected: await custody("k1", ledger),
+        cogniKey: "k1",
+        failureCode: "provider_rejected",
+      })
+    ).rejects.toThrow(/custody/);
     expect(await ledger.read({ cogniKey: "k1" })).toMatchObject({
       state: "allocated",
       externalName: "7001",
     });
 
-    await ledger.markReleased({ cogniKey: "k1" });
+    await ledger.markReleased({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+    });
     expect(await ledger.read({ cogniKey: "k1" })).toMatchObject({
       state: "released",
     });
@@ -238,7 +295,11 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
     });
-    await ledger.fail({ cogniKey: "k1", failureCode: "provider_rejected" });
+    await ledger.fail({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+      failureCode: "provider_rejected",
+    });
     expect(await ledger.read({ cogniKey: "k1" })).toMatchObject({
       state: "failed",
     });
@@ -261,8 +322,13 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
     });
-    await ledger.prepare({ cogniKey: "k1", allocationCursor: "7000" });
+    await ledger.prepare({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+      allocationCursor: "7000",
+    });
     await ledger.fail({
+      expected: await custody("k1", ledger),
       cogniKey: "k1",
       failureCode: "allocation_rolled_back",
     });
@@ -297,9 +363,20 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
     });
-    await ledger.prepare({ cogniKey: "k1", allocationCursor: "7000" });
-    await ledger.recordAllocation({ cogniKey: "k1", externalName: "7001" });
-    await ledger.markReleased({ cogniKey: "k1" });
+    await ledger.prepare({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+      allocationCursor: "7000",
+    });
+    await ledger.recordAllocation({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+      externalName: "7001",
+    });
+    await ledger.markReleased({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+    });
 
     expect(
       await ledger.claim({
@@ -319,6 +396,7 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       identity: IDENTITY,
     });
     await ledger.fail({
+      expected: await custody("k1", ledger),
       cogniKey: "k1",
       failureCode: "allocation_rolled_back",
     });
@@ -365,6 +443,7 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
 
     // A recorded handle takes the row out of scope entirely — it is not stuck, it is paid.
     await ledger.recordAllocation({
+      expected: await custody("k-fresh", ledger),
       cogniKey: "k-fresh",
       externalName: "7001",
     });
@@ -381,7 +460,11 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
     });
-    await ledger.recordAllocation({ cogniKey: "k-live", externalName: "7001" });
+    await ledger.recordAllocation({
+      expected: await custody("k-live", ledger),
+      cogniKey: "k-live",
+      externalName: "7001",
+    });
     // …one released (settled custody, not a live spend)…
     await ledger.claim({
       cogniKey: "k-released",
@@ -390,10 +473,14 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       identity: IDENTITY,
     });
     await ledger.recordAllocation({
+      expected: await custody("k-released", ledger),
       cogniKey: "k-released",
       externalName: "7002",
     });
-    await ledger.markReleased({ cogniKey: "k-released" });
+    await ledger.markReleased({
+      expected: await custody("k-released", ledger),
+      cogniKey: "k-released",
+    });
     // …one live paid lease for ANOTHER node on preview (the orphan-diff shape)…
     await ledger.claim({
       cogniKey: "k-other",
@@ -402,6 +489,7 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       identity: { ...IDENTITY, nodeId: OTHER_NODE_ID },
     });
     await ledger.recordAllocation({
+      expected: await custody("k-other", ledger),
       cogniKey: "k-other",
       externalName: "7003",
     });
@@ -508,8 +596,16 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
     });
-    await ledger.prepare({ cogniKey: "k1", allocationCursor: "7000" });
-    await ledger.recordAllocation({ cogniKey: "k1", externalName: "7001" });
+    await ledger.prepare({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+      allocationCursor: "7000",
+    });
+    await ledger.recordAllocation({
+      expected: await custody("k1", ledger),
+      cogniKey: "k1",
+      externalName: "7001",
+    });
 
     const bound = await ledger.bindIdentity({
       cogniKey: "k1",

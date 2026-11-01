@@ -15,6 +15,7 @@
 import { z } from "zod";
 import type {
   AkashNativeObservation,
+  AkashNativeWalletInventory,
   NativeLeaseState,
   NativeReadErrorCode,
 } from "@/types/akash-native-state";
@@ -173,7 +174,7 @@ export class AkashNativeStateReader {
     let cursor = 0;
     try {
       await Promise.all(
-        Array.from({ length: Math.min(4, handles.length) }, async () => {
+        Array.from({ length: Math.min(2, handles.length) }, async () => {
           while (cursor < handles.length) {
             const dseq = handles[cursor++];
             if (dseq === undefined) break;
@@ -207,8 +208,9 @@ export class AkashNativeStateReader {
   private async get(
     path: string,
     params: Record<string, string>,
-    parent: AbortSignal
-  ): Promise<{ body: unknown; observedAt: string }> {
+    parent: AbortSignal,
+    height?: string
+  ): Promise<{ body: unknown; observedAt: string; height: string | null }> {
     const timeout = new AbortController();
     const timer = setTimeout(
       () => timeout.abort(new NativeReadError("timeout")),
@@ -224,6 +226,7 @@ export class AkashNativeStateReader {
       const response = await abortable(
         this.fetcher(url, {
           method: "GET",
+          ...(height ? { headers: { "x-cosmos-block-height": height } } : {}),
           signal,
           redirect: "error",
           credentials: "omit",
@@ -236,7 +239,14 @@ export class AkashNativeStateReader {
         throw new NativeReadError("http_error");
       }
       const body = await boundedJson(response, signal);
-      return { body, observedAt: new Date().toISOString() };
+      const servedHeight = response.headers.get("x-cosmos-block-height");
+      if (height && servedHeight !== height)
+        throw new NativeReadError("height_mismatch");
+      return {
+        body,
+        observedAt: new Date().toISOString(),
+        height: servedHeight,
+      };
     } catch (error) {
       errorCode = signal.aborted
         ? signal.reason instanceof NativeReadError
@@ -257,6 +267,241 @@ export class AkashNativeStateReader {
         "akash_native_state.read"
       );
     }
+  }
+
+  /** Owner filtering walks historical primary keys. Only real continuation exhaustion completes. */
+  async readWalletInventory(input: {
+    signal?: AbortSignal;
+    deadlineAt: number;
+  }): Promise<AkashNativeWalletInventory> {
+    if (!this.owner) throw new NativeReadError("owner_unavailable");
+    const owner = this.owner;
+    const { signal, clear } = this.inventoryDeadline(input);
+    try {
+      let height: string | undefined;
+      const deployments = await this.inventoryPages(
+        "/akash/deployment/v1beta4/deployments/list",
+        {
+          "filters.owner": owner,
+          "filters.state": "active",
+        },
+        "deployments",
+        signal,
+        () => height,
+        (value) => {
+          height = value;
+        }
+      );
+      const targets: AkashNativeWalletInventory["targets"][number][] = [];
+      let facts = 0;
+      const seen = new Set<string>();
+      for (const raw of deployments) {
+        if (signal.aborted) throw signal.reason;
+        const parsed = deploymentResponse
+          .extend({
+            groups: z
+              .array(
+                z.object({
+                  id: deploymentId.extend({ gseq: uint32 }),
+                  state: z.enum([
+                    "open",
+                    "paused",
+                    "insufficient_funds",
+                    "closed",
+                  ]),
+                })
+              )
+              .min(1)
+              .max(100),
+          })
+          .safeParse(raw);
+        if (!parsed.success) throw new NativeReadError("invalid_response");
+        const { id, state } = parsed.data.deployment;
+        if (id.owner !== owner || state !== "active" || seen.has(id.dseq))
+          throw new NativeReadError("identity_mismatch");
+        seen.add(id.dseq);
+        const groups = parsed.data.groups.map((group) => {
+          if (group.id.owner !== owner || group.id.dseq !== id.dseq)
+            throw new NativeReadError("identity_mismatch");
+          return { gseq: group.id.gseq, state: group.state };
+        });
+        if (new Set(groups.map((group) => group.gseq)).size !== groups.length)
+          throw new NativeReadError("conflicting_read");
+        const params = { "filters.owner": owner, "filters.dseq": id.dseq };
+        const ordersRaw = await this.inventoryPages(
+          "/akash/market/v1beta5/orders/list",
+          params,
+          "orders",
+          signal,
+          () => height
+        );
+        const orders = ordersRaw.map((rawOrder) => {
+          const order = z
+            .object({
+              id: deploymentId.extend({ gseq: uint32, oseq: uint32 }),
+              state: z.enum(["open", "active", "closed"]),
+            })
+            .safeParse(rawOrder);
+          if (!order.success) throw new NativeReadError("invalid_response");
+          const { id: orderId, state: orderState } = order.data;
+          if (
+            orderId.owner !== owner ||
+            orderId.dseq !== id.dseq ||
+            !groups.some((group) => group.gseq === orderId.gseq)
+          )
+            throw new NativeReadError("identity_mismatch");
+          return { gseq: orderId.gseq, oseq: orderId.oseq, state: orderState };
+        });
+        const leasesRaw = await this.inventoryPages(
+          "/akash/market/v1beta5/leases/list",
+          params,
+          "leases",
+          signal,
+          () => height
+        );
+        const leases = leasesRaw.map((rawLease) => {
+          const lease = leaseResponse.safeParse(rawLease);
+          if (!lease.success) throw new NativeReadError("invalid_response");
+          if (
+            lease.data.lease.id.owner !== owner ||
+            lease.data.lease.id.dseq !== id.dseq ||
+            !groups.some((group) => group.gseq === lease.data.lease.id.gseq)
+          )
+            throw new NativeReadError("identity_mismatch");
+          return { ...lease.data.lease, observedAt: new Date().toISOString() };
+        });
+        if (
+          new Set(orders.map((order) => `${order.gseq}/${order.oseq}`)).size !==
+            orders.length ||
+          new Set(leases.map((lease) => JSON.stringify(lease.id))).size !==
+            leases.length
+        )
+          throw new NativeReadError("conflicting_read");
+        facts += groups.length + orders.length + leases.length;
+        if (facts > 10_000) throw new NativeReadError("inventory_overflow");
+        targets.push({ dseq: id.dseq, groups, orders, leases });
+      }
+      if (!height || signal.aborted)
+        throw new NativeReadError("budget_exceeded");
+      return { owner, height, observedAt: new Date().toISOString(), targets };
+    } finally {
+      clear();
+    }
+  }
+
+  async readOwnClosed(input: {
+    dseq: string;
+    signal?: AbortSignal;
+    deadlineAt: number;
+  }): Promise<{
+    owner: string;
+    dseq: string;
+    height: string;
+    closed: boolean;
+  }> {
+    if (!this.owner || !uint64.safeParse(input.dseq).success)
+      throw new NativeReadError("invalid_handle");
+    const { signal, clear } = this.inventoryDeadline(input);
+    try {
+      const response = await this.get(
+        "/akash/deployment/v1beta4/deployments/info",
+        { "id.owner": this.owner, "id.dseq": input.dseq },
+        signal
+      );
+      const parsed = deploymentResponse.safeParse(response.body);
+      if (
+        !parsed.success ||
+        !response.height ||
+        !/^[1-9][0-9]*$/.test(response.height)
+      )
+        throw new NativeReadError("invalid_response");
+      if (
+        signal.aborted ||
+        parsed.data.deployment.id.owner !== this.owner ||
+        parsed.data.deployment.id.dseq !== input.dseq
+      )
+        throw new NativeReadError("identity_mismatch");
+      return {
+        owner: this.owner,
+        dseq: input.dseq,
+        height: response.height,
+        closed: parsed.data.deployment.state === "closed",
+      };
+    } finally {
+      clear();
+    }
+  }
+
+  private inventoryDeadline(input: {
+    signal?: AbortSignal;
+    deadlineAt: number;
+  }) {
+    const deadline = new AbortController();
+    const remaining = Math.min(30_000, input.deadlineAt - Date.now());
+    if (remaining <= 0) deadline.abort(new NativeReadError("budget_exceeded"));
+    const timer = setTimeout(
+      () => deadline.abort(new NativeReadError("budget_exceeded")),
+      Math.max(0, remaining)
+    );
+    return {
+      signal: input.signal
+        ? AbortSignal.any([deadline.signal, input.signal])
+        : deadline.signal,
+      clear: () => clearTimeout(timer),
+    };
+  }
+
+  private async inventoryPages(
+    path: string,
+    params: Record<string, string>,
+    field: "deployments" | "orders" | "leases",
+    signal: AbortSignal,
+    height: () => string | undefined,
+    setHeight?: (height: string) => void
+  ): Promise<unknown[]> {
+    const result: unknown[] = [];
+    let key: string | null = null;
+    const cursors = new Set<string>();
+    for (let page = 0; page < 100; page++) {
+      if (signal.aborted) throw signal.reason;
+      const response = await this.get(
+        path,
+        {
+          ...params,
+          "pagination.limit": "100",
+          ...(key ? { "pagination.key": key } : {}),
+        },
+        signal,
+        height()
+      );
+      if (
+        !response.height ||
+        !/^[1-9][0-9]*$/.test(response.height) ||
+        (height() && height() !== response.height)
+      )
+        throw new NativeReadError("height_mismatch");
+      if (!height()) setHeight?.(response.height);
+      const parsed = z
+        .object({ pagination: pageResponse.shape.pagination })
+        .safeParse(response.body);
+      const object = z.record(z.string(), z.unknown()).safeParse(response.body);
+      if (!parsed.success || !object.success)
+        throw new NativeReadError("invalid_response");
+      const decoded = z
+        .array(z.unknown())
+        .max(100)
+        .safeParse(object.data[field]);
+      if (!decoded.success) throw new NativeReadError("invalid_response");
+      const rows = decoded.data;
+      result.push(...rows);
+      if (result.length > 10_000)
+        throw new NativeReadError("inventory_overflow");
+      key = parsed.data.pagination.next_key;
+      if (!key) return result;
+      if (cursors.has(key)) throw new NativeReadError("pagination_incomplete");
+      cursors.add(key);
+    }
+    throw new NativeReadError("inventory_overflow");
   }
 
   private async readOne(

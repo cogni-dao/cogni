@@ -66,6 +66,7 @@
 
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   index,
   integer,
@@ -138,6 +139,10 @@ export const akashTxAllocations = pgTable(
     allocationCursor: text("allocation_cursor"),
     /** Opaque provider handle (Akash dseq) once the allocation is durable. */
     externalName: text("external_name"),
+    /** Own immutable handle is authentically native CLOSED; NULL remains unknown. */
+    nativeClosedVerified: boolean("native_closed_verified"),
+    /** NULL legacy, TRUE proved unused lineage, FALSE corrected prepare crossed. */
+    allocationNoEffectVerified: boolean("allocation_no_effect_verified"),
     /** Provider account that won the lease, when known. */
     providerAccount: text("provider_account"),
     /** Verified cell metadata; ready is private prestage, applied requires explicit cutover approval. */

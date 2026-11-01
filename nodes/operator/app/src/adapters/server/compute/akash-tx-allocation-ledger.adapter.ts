@@ -45,8 +45,7 @@
  */
 
 import type { Database } from "@cogni/db-client";
-import { and, eq, inArray, sql } from "drizzle-orm";
-
+import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type {
   AkashTxAllocationLedgerPort,
   AkashTxAllocationRecord,
@@ -56,8 +55,19 @@ import type {
 } from "@/ports";
 import { akashTxAllocations } from "@/shared/db/schema";
 import { DatabaseCellAllocationMetadataSchema } from "@/shared/secrets/database-cell-placement.data";
+import type { AkashNativeWalletInventory } from "@/types/akash-native-state";
+import {
+  advanceReceiptVersion,
+  receiptFence,
+  receiptTransaction,
+  receiptVersion,
+} from "./akash-receipt-transaction";
 
 interface AllocationRow {
+  walletScope: string;
+  updatedAt: string;
+  nativeClosedVerified: boolean | null;
+  allocationNoEffectVerified: boolean | null;
   id: string;
   cogniKey: string;
   nodeId: string;
@@ -73,7 +83,11 @@ interface AllocationRow {
   appliedDatabaseCellBinding: unknown;
 }
 
-const SELECTION = {
+export const RECEIPT_SELECTION = {
+  walletScope: akashTxAllocations.walletScope,
+  updatedAt: receiptVersion,
+  nativeClosedVerified: akashTxAllocations.nativeClosedVerified,
+  allocationNoEffectVerified: akashTxAllocations.allocationNoEffectVerified,
   id: akashTxAllocations.id,
   cogniKey: akashTxAllocations.cogniKey,
   nodeId: akashTxAllocations.nodeId,
@@ -89,7 +103,7 @@ const SELECTION = {
   appliedDatabaseCellBinding: akashTxAllocations.appliedDatabaseCellBinding,
 };
 
-function toRecord(row: AllocationRow): AkashTxAllocationRecord {
+export function allocationRecord(row: AllocationRow): AkashTxAllocationRecord {
   const metadata = DatabaseCellAllocationMetadataSchema.parse(
     row.appliedDatabaseCellBinding ?? []
   );
@@ -100,6 +114,9 @@ function toRecord(row: AllocationRow): AkashTxAllocationRecord {
     ...(row.appliedDatabaseCellBinding == null
       ? {}
       : { appliedDatabaseCellBinding: metadata.bindings }),
+    custody: { walletScope: row.walletScope, updatedAt: row.updatedAt },
+    nativeClosedVerified: row.nativeClosedVerified,
+    allocationNoEffectVerified: row.allocationNoEffectVerified,
     receiptId: row.id,
     cogniKey: row.cogniKey,
     identity: {
@@ -110,10 +127,14 @@ function toRecord(row: AllocationRow): AkashTxAllocationRecord {
     workload: row.workload,
     environment: row.environment,
     state: row.state as AkashTxAllocationState,
-    ...(row.allocationCursor ? { allocationCursor: row.allocationCursor } : {}),
-    ...(row.externalName ? { externalName: row.externalName } : {}),
-    ...(row.providerAccount ? { providerAccount: row.providerAccount } : {}),
-    ...(row.lastAppliedSdlHash
+    ...(row.allocationCursor !== null
+      ? { allocationCursor: row.allocationCursor }
+      : {}),
+    ...(row.externalName !== null ? { externalName: row.externalName } : {}),
+    ...(row.providerAccount !== null
+      ? { providerAccount: row.providerAccount }
+      : {}),
+    ...(row.lastAppliedSdlHash !== null
       ? { lastAppliedSdlHash: row.lastAppliedSdlHash }
       : {}),
   };
@@ -177,9 +198,9 @@ export class DrizzleAkashTxAllocationLedger
     | { state: "blocked"; ownerCogniKey: string }
   > {
     const db = await this.getDb();
-    return db.transaction(async (tx) => {
+    return receiptTransaction(db, async (tx, guarded) => {
       const [existing] = await tx
-        .select(SELECTION)
+        .select(RECEIPT_SELECTION)
         .from(akashTxAllocations)
         .where(
           and(
@@ -190,32 +211,7 @@ export class DrizzleAkashTxAllocationLedger
         .for("update")
         .limit(1);
       if (existing && existing.state === "preparing") {
-        if (
-          input.retentionPolicy &&
-          existing.nodeId === input.identity.nodeId &&
-          existing.environment === input.environment &&
-          existing.compositeUid === input.identity.compositeUid
-        ) {
-          const metadata = DatabaseCellAllocationMetadataSchema.parse(
-            existing.appliedDatabaseCellBinding ?? []
-          );
-          const retained = {
-            version: 1,
-            retentionPolicy: "retain",
-            bindings: metadata.bindings,
-          };
-          await tx
-            .update(akashTxAllocations)
-            .set({ appliedDatabaseCellBinding: retained })
-            .where(
-              and(
-                eq(akashTxAllocations.walletScope, this.walletScope),
-                eq(akashTxAllocations.id, existing.id)
-              )
-            );
-          existing.appliedDatabaseCellBinding = retained;
-        }
-        return { state: "owned" as const, record: toRecord(existing) };
+        return { state: "owned" as const, record: allocationRecord(existing) };
       }
       // A receipt that bound a handle is terminal forever (HANDLE_IS_WRITE_ONCE). One settled
       // `failed` with NO handle is the opposite case: it was written WITH proof that nothing is
@@ -226,11 +222,17 @@ export class DrizzleAkashTxAllocationLedger
         existing !== undefined &&
         existing.state === "failed" &&
         existing.externalName === null &&
+        ((!guarded && existing.allocationNoEffectVerified === null) ||
+          (existing.allocationNoEffectVerified === true &&
+            existing.allocationCursor === null)) &&
         existing.nodeId === input.identity.nodeId &&
         existing.environment === input.environment &&
         existing.compositeUid === input.identity.compositeUid;
       if (existing && !reclaimable) {
-        return { state: "settled" as const, record: toRecord(existing) };
+        return {
+          state: "settled" as const,
+          record: allocationRecord(existing),
+        };
       }
 
       const [holder] = await tx
@@ -271,23 +273,27 @@ export class DrizzleAkashTxAllocationLedger
             settledAt: null,
             workload: input.workload,
             compositeGeneration: sql`greatest(${akashTxAllocations.compositeGeneration}, ${input.identity.compositeGeneration}::int)`,
-            updatedAt: sql`now()`,
+            updatedAt: advanceReceiptVersion,
           })
           .where(
             and(
-              eq(akashTxAllocations.walletScope, this.walletScope),
-              eq(akashTxAllocations.cogniKey, input.cogniKey),
-              // Re-assert the proof conditions inside the write: concurrent state can only
-              // have moved AWAY from "settled with no handle", never back into it.
+              receiptFence(
+                this.walletScope,
+                input.cogniKey,
+                allocationRecord(existing)
+              ),
               eq(akashTxAllocations.state, "failed"),
               sql`${akashTxAllocations.externalName} is null`
             )
           )
-          .returning(SELECTION);
+          .returning(RECEIPT_SELECTION);
         if (!reopened) {
           throw new Error("akash_tx_allocations re-claim returned no row");
         }
-        return { state: "claimed" as const, record: toRecord(reopened) };
+        return {
+          state: "claimed" as const,
+          record: allocationRecord(reopened),
+        };
       }
 
       const [inserted] = await tx
@@ -303,6 +309,7 @@ export class DrizzleAkashTxAllocationLedger
           workload: input.workload,
           environment: input.environment,
           state: "preparing",
+          allocationNoEffectVerified: guarded ? true : null,
           ...(input.retentionPolicy
             ? {
                 appliedDatabaseCellBinding: {
@@ -313,11 +320,11 @@ export class DrizzleAkashTxAllocationLedger
               }
             : {}),
         })
-        .returning(SELECTION);
+        .returning(RECEIPT_SELECTION);
       if (!inserted) {
         throw new Error("akash_tx_allocations insert returned no row");
       }
-      return { state: "claimed" as const, record: toRecord(inserted) };
+      return { state: "claimed" as const, record: allocationRecord(inserted) };
     });
   }
 
@@ -335,13 +342,14 @@ export class DrizzleAkashTxAllocationLedger
     retentionPolicy?: "retain";
   }): Promise<
     | { state: "bound"; record: AkashTxAllocationRecord }
+    | { state: "held"; record: AkashTxAllocationRecord }
     | { state: "absent" }
     | { state: "conflict"; record: AkashTxAllocationRecord }
   > {
     const db = await this.getDb();
-    return db.transaction(async (tx) => {
+    return receiptTransaction(db, async (tx) => {
       const [existing] = await tx
-        .select(SELECTION)
+        .select(RECEIPT_SELECTION)
         .from(akashTxAllocations)
         .where(
           and(
@@ -357,9 +365,28 @@ export class DrizzleAkashTxAllocationLedger
         existing.environment !== input.environment ||
         existing.compositeUid !== input.identity.compositeUid
       ) {
-        return { state: "conflict" as const, record: toRecord(existing) };
+        return {
+          state: "conflict" as const,
+          record: allocationRecord(existing),
+        };
       }
 
+      if (input.identity.compositeGeneration < existing.compositeGeneration)
+        return {
+          state: "conflict" as const,
+          record: allocationRecord(existing),
+        };
+      const metadata = DatabaseCellAllocationMetadataSchema.parse(
+        existing.appliedDatabaseCellBinding ?? []
+      );
+      const changed =
+        input.identity.compositeGeneration > existing.compositeGeneration ||
+        (input.retentionPolicy === "retain" &&
+          metadata.retentionPolicy !== "retain");
+      if (!changed)
+        return { state: "bound" as const, record: allocationRecord(existing) };
+      if (existing.state === "preparing")
+        return { state: "held" as const, record: allocationRecord(existing) };
       const [updated] = await tx
         .update(akashTxAllocations)
         .set({
@@ -375,118 +402,336 @@ export class DrizzleAkashTxAllocationLedger
                 },
               }
             : {}),
-          updatedAt: sql`now()`,
+          updatedAt: advanceReceiptVersion,
         })
         .where(
           and(
-            eq(akashTxAllocations.walletScope, this.walletScope),
-            eq(akashTxAllocations.cogniKey, input.cogniKey)
+            receiptFence(
+              this.walletScope,
+              input.cogniKey,
+              allocationRecord(existing)
+            )
           )
         )
-        .returning(SELECTION);
+        .returning(RECEIPT_SELECTION);
       if (!updated) {
         throw new Error("akash_tx_allocations identity bind returned no row");
       }
-      return { state: "bound" as const, record: toRecord(updated) };
+      return { state: "bound" as const, record: allocationRecord(updated) };
+    });
+  }
+
+  private async change(
+    input: { cogniKey: string; expected?: AkashTxAllocationRecord },
+    values: (
+      record: AkashTxAllocationRecord,
+      guarded: boolean,
+      tx: Parameters<Parameters<Database["transaction"]>[0]>[0]
+    ) =>
+      | {
+          [K in keyof typeof akashTxAllocations.$inferInsert]?:
+            | (typeof akashTxAllocations.$inferInsert)[K]
+            | SQL;
+        }
+      | null
+      | Promise<
+          | {
+              [K in keyof typeof akashTxAllocations.$inferInsert]?:
+                | (typeof akashTxAllocations.$inferInsert)[K]
+                | SQL;
+            }
+          | null
+        >
+  ): Promise<AkashTxAllocationRecord> {
+    const db = await this.getDb();
+    return receiptTransaction(db, async (tx, guarded) => {
+      const [row] = await tx
+        .select(RECEIPT_SELECTION)
+        .from(akashTxAllocations)
+        .where(receiptFence(this.walletScope, input.cogniKey, input.expected))
+        .for("update")
+        .limit(1);
+      if (!row) throw new Error("receipt custody changed");
+      const record = allocationRecord(row);
+      const changes = await values(record, guarded, tx);
+      if (changes === null) return record;
+      const [updated] = await tx
+        .update(akashTxAllocations)
+        .set({ ...changes, updatedAt: advanceReceiptVersion })
+        .where(receiptFence(this.walletScope, input.cogniKey, input.expected))
+        .returning(RECEIPT_SELECTION);
+      if (!updated)
+        throw new Error("receipt custody CAS returned no successor");
+      return allocationRecord(updated);
     });
   }
 
   async prepare(input: {
     cogniKey: string;
     allocationCursor: string;
-  }): Promise<void> {
-    const db = await this.getDb();
-    const updated = await db
-      .update(akashTxAllocations)
-      .set({
+    expected?: AkashTxAllocationRecord;
+    coverage?: AkashNativeWalletInventory;
+    deadlineAt?: number;
+  }): Promise<AkashTxAllocationRecord> {
+    return this.change(input, async (record, guarded, tx) => {
+      if (!guarded && record.allocationNoEffectVerified !== null)
+        throw new Error("receipt protocol changed before prepare");
+      if (guarded)
+        await this.checkAdmission(tx, record, input.coverage, input.deadlineAt);
+      if (
+        record.state !== "preparing" ||
+        record.allocationCursor !== undefined ||
+        record.externalName !== undefined ||
+        (guarded && record.allocationNoEffectVerified !== true)
+      )
+        throw new Error("receipt custody does not own an unused wallet slot");
+      return {
         allocationCursor: input.allocationCursor,
-        updatedAt: sql`now()`,
-      })
+        ...(guarded ? { allocationNoEffectVerified: false } : {}),
+      };
+    });
+  }
+
+  private async checkAdmission(
+    tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+    proposed: AkashTxAllocationRecord,
+    coverage?: AkashNativeWalletInventory,
+    deadlineAt?: number
+  ) {
+    if (
+      !coverage ||
+      !deadlineAt ||
+      Date.now() >= deadlineAt ||
+      coverage.owner !== this.walletScope.slice("akash-console:".length) ||
+      !/^[1-9][0-9]*$/.test(coverage.height) ||
+      !Number.isFinite(Date.parse(coverage.observedAt)) ||
+      Date.now() - Date.parse(coverage.observedAt) > 30_000 ||
+      Date.parse(coverage.observedAt) > Date.now()
+    )
+      throw new Error("fresh native receipt coverage required");
+    const app =
+      /^xcw:([^:]+):([^:]+):([1-9][0-9]*)(?::recover:([1-9][0-9]*))?$/.exec(
+        proposed.cogniKey
+      );
+    const recovery = /^pg-recover:v1:([^:]+):([^:]+):([^:]+):[^:]+$/.exec(
+      proposed.cogniKey
+    );
+    if (
+      (!app || app[2] !== proposed.workload) &&
+      (!recovery ||
+        recovery[1] !== proposed.identity.nodeId ||
+        recovery[2] !== proposed.environment ||
+        proposed.retentionPolicy !== "retain")
+    )
+      throw new Error("unqualified family for native admission");
+    const family = app
+      ? `xcw:${app[1]}:${app[2]}:`
+      : `pg-recover:v1:${recovery?.[1]}:${recovery?.[2]}:${recovery?.[3]}:`;
+    const pattern = app
+      ? "^xcw:[^:]+:[^:]+:[1-9][0-9]*(:recover:[1-9][0-9]*)?$"
+      : "^pg-recover:v1:[^:]+:[^:]+:[^:]+:[^:]+$";
+    const validKey = (key: string) =>
+      key.startsWith(family) && new RegExp(pattern).test(key);
+    const [blocker] = await tx.execute<{ malformed: boolean }>(
+      sql`select coalesce(bool_or(left(cogni_key, length(${family})) <> ${family} or cogni_key !~ ${pattern}), false) as malformed from public.akash_tx_allocations where wallet_scope=${this.walletScope} and node_id=${proposed.identity.nodeId}::uuid and environment=${proposed.environment} and workload=${proposed.workload}`
+    );
+    if (blocker?.malformed)
+      throw new Error("receipt family identity malformed");
+    // Scope BEFORE LIMIT. Discharged history is excluded before counting the known budget.
+    const rows = await tx
+      .select(RECEIPT_SELECTION)
+      .from(akashTxAllocations)
       .where(
         and(
           eq(akashTxAllocations.walletScope, this.walletScope),
-          eq(akashTxAllocations.cogniKey, input.cogniKey),
-          eq(akashTxAllocations.state, "preparing")
+          eq(akashTxAllocations.nodeId, proposed.identity.nodeId),
+          eq(akashTxAllocations.environment, proposed.environment),
+          eq(akashTxAllocations.workload, proposed.workload),
+          sql`left(${akashTxAllocations.cogniKey}, length(${family})) = ${family}`,
+          sql`${akashTxAllocations.allocationNoEffectVerified} is not null`,
+          sql`not (${akashTxAllocations.state} = 'failed' and ${akashTxAllocations.allocationNoEffectVerified} is true and ${akashTxAllocations.allocationCursor} is null and ${akashTxAllocations.externalName} is null)`,
+          sql`not (${akashTxAllocations.allocationNoEffectVerified} is false and ${akashTxAllocations.nativeClosedVerified} is true)`
         )
       )
-      .returning({ cogniKey: akashTxAllocations.cogniKey });
-    if (updated.length === 0) {
-      throw new Error(
-        "cannot record a pre-transaction cursor without owning the wallet slot"
-      );
+      .limit(101);
+    if (rows.length > 100) throw new Error("receipt lineage overflow");
+    const targets = new Set<string>();
+    const handles = coverage.targets.map((target) => target.dseq);
+    if (new Set(handles).size !== handles.length)
+      throw new Error("duplicate native targets");
+    // Attribute ALL native targets, including unrelated/retained families, BEFORE exclusion.
+    if (handles.length) {
+      const owners = await tx
+        .select(RECEIPT_SELECTION)
+        .from(akashTxAllocations)
+        .where(
+          and(
+            eq(akashTxAllocations.walletScope, this.walletScope),
+            inArray(akashTxAllocations.externalName, handles)
+          )
+        )
+        .limit(handles.length * 2 + 1);
+      for (const target of coverage.targets) {
+        const matches = owners.filter(
+          (row) => row.externalName === target.dseq
+        );
+        if (matches.length !== 1 || !matches[0])
+          throw new Error("native target attribution unknown");
+        const owner = matches[0];
+        if (
+          !owner.nodeId ||
+          !owner.compositeUid ||
+          !owner.environment ||
+          !owner.workload
+        )
+          throw new Error("native consumer identity unknown");
+        if (
+          owner.nodeId === proposed.identity.nodeId &&
+          owner.environment === proposed.environment &&
+          owner.workload === proposed.workload
+        ) {
+          if (!validKey(owner.cogniKey))
+            throw new Error("native target family conflict");
+          if (owner.nativeClosedVerified === true)
+            throw new Error(
+              "native target conflicts with terminal certificate"
+            );
+          targets.add(target.dseq);
+        }
+      }
     }
+    for (const row of rows) {
+      if (!validKey(row.cogniKey))
+        throw new Error("receipt family identity malformed");
+      if (row.id === proposed.receiptId) continue;
+      // Legacy lineage stays NULL and financially owned; complete coverage discharges only LIVE capacity.
+      if (row.allocationNoEffectVerified === null) continue;
+      if (row.externalName) targets.add(row.externalName);
+      else targets.add(`reservation:${row.id}`);
+    }
+    if (targets.size + 1 > 2)
+      throw new Error("native live allocation bound exceeded");
+    if (Date.now() >= deadlineAt)
+      throw new Error("native admission deadline exceeded");
+  }
+
+  async listClosureCandidates(): Promise<readonly AkashTxAllocationRecord[]> {
+    const db = await this.getDb();
+    return receiptTransaction(db, async (tx, guarded) => {
+      if (!guarded) return [];
+      const rows = await tx
+        .select(RECEIPT_SELECTION)
+        .from(akashTxAllocations)
+        .where(
+          and(
+            eq(akashTxAllocations.walletScope, this.walletScope),
+            inArray(akashTxAllocations.state, ["allocated", "released"]),
+            sql`${akashTxAllocations.externalName} is not null`,
+            sql`${akashTxAllocations.nativeClosedVerified} is null`
+          )
+        )
+        .orderBy(akashTxAllocations.updatedAt, akashTxAllocations.id)
+        .limit(20);
+      return rows.map(allocationRecord);
+    });
+  }
+
+  async startClosureRead(
+    expected: AkashTxAllocationRecord
+  ): Promise<AkashTxAllocationRecord> {
+    return this.change(
+      { cogniKey: expected.cogniKey, expected },
+      (record, guarded) => {
+        if (
+          !guarded ||
+          !record.externalName ||
+          !["allocated", "released"].includes(record.state) ||
+          record.nativeClosedVerified !== null
+        )
+          throw new Error("receipt qualification held");
+        return {}; // Rotate ONLY at actual read start. This neither certifies nor settles.
+      }
+    );
+  }
+
+  async certifyNativeClosed(input: {
+    expected: AkashTxAllocationRecord;
+    owner: string;
+    dseq: string;
+    closed: boolean;
+    deadlineAt: number;
+  }): Promise<AkashTxAllocationRecord> {
+    return this.change(
+      { cogniKey: input.expected.cogniKey, expected: input.expected },
+      (record, guarded) => {
+        if (
+          !guarded ||
+          Date.now() >= input.deadlineAt ||
+          !input.closed ||
+          input.owner !== this.walletScope.slice("akash-console:".length) ||
+          input.dseq !== record.externalName ||
+          !["allocated", "released"].includes(record.state)
+        )
+          throw new Error("native own-handle certificate refused");
+        if (record.nativeClosedVerified === true) return null;
+        return { nativeClosedVerified: true };
+      }
+    );
   }
 
   async recordAllocation(input: {
     cogniKey: string;
     externalName: string;
     providerAccount?: string;
-  }): Promise<void> {
-    const db = await this.getDb();
-    const updated = await db
-      .update(akashTxAllocations)
-      .set({
-        state: "allocated",
-        // HANDLE_IS_WRITE_ONCE — the first durable handle wins, forever.
-        externalName: sql`coalesce(${akashTxAllocations.externalName}, ${input.externalName})`,
-        providerAccount: input.providerAccount
-          ? sql`coalesce(${akashTxAllocations.providerAccount}, ${input.providerAccount})`
-          : akashTxAllocations.providerAccount,
-        settledAt: sql`coalesce(${akashTxAllocations.settledAt}, now())`,
-        updatedAt: sql`now()`,
-      })
-      .where(
-        and(
-          eq(akashTxAllocations.walletScope, this.walletScope),
-          eq(akashTxAllocations.cogniKey, input.cogniKey),
-          sql`${akashTxAllocations.state} in ('preparing', 'allocated')`
-        )
+    expected?: AkashTxAllocationRecord;
+  }): Promise<AkashTxAllocationRecord> {
+    return this.change(input, (record) => {
+      if (
+        !input.externalName ||
+        (record.externalName && record.externalName !== input.externalName)
       )
-      .returning({ cogniKey: akashTxAllocations.cogniKey });
-    if (updated.length === 0) {
-      throw new Error(
-        "cannot record an allocation for a key with no live wallet slot"
-      );
-    }
+        throw new Error("receipt handle conflict");
+      if (
+        record.providerAccount &&
+        input.providerAccount &&
+        record.providerAccount !== input.providerAccount
+      )
+        throw new Error("receipt provider conflict");
+      if (record.state !== "preparing" && record.state !== "allocated")
+        throw new Error("receipt custody has no live wallet slot");
+      if (record.allocationNoEffectVerified === true)
+        throw new Error("unused receipt must prepare before binding");
+      if (
+        record.state === "allocated" &&
+        record.externalName === input.externalName &&
+        (!input.providerAccount ||
+          record.providerAccount === input.providerAccount)
+      )
+        return null;
+      return {
+        state: "allocated",
+        externalName: input.externalName,
+        ...(input.providerAccount
+          ? { providerAccount: input.providerAccount }
+          : {}),
+        settledAt: sql`coalesce(${akashTxAllocations.settledAt}, clock_timestamp())`,
+      };
+    });
   }
 
-  /**
-   * Persist the sha256 of the SDL just applied for this key (bug.5238). Advisory metadata: it
-   * touches neither the wallet slot, the state machine, nor any write-once identity column, so it
-   * carries no state predicate beyond the key — the update path only ever calls it on a receipt
-   * it has already bound. Called AFTER a successful `updateAllocated`, so a lost PUT re-applies
-   * next reconcile rather than being skipped forever.
-   */
   async recordAppliedSdlHash(input: {
     cogniKey: string;
     sdlHash: string;
-  }): Promise<void> {
-    const db = await this.getDb();
-    const updated = await db
-      .update(akashTxAllocations)
-      .set({
-        lastAppliedSdlHash: input.sdlHash,
-        updatedAt: sql`now()`,
-      })
-      .where(
-        and(
-          eq(akashTxAllocations.walletScope, this.walletScope),
-          eq(akashTxAllocations.cogniKey, input.cogniKey)
-        )
-      )
-      .returning({ cogniKey: akashTxAllocations.cogniKey });
-    if (updated.length === 0) {
-      throw new Error(
-        "cannot record an applied SDL hash for a key with no receipt"
-      );
-    }
+    expected?: AkashTxAllocationRecord;
+  }): Promise<AkashTxAllocationRecord> {
+    return this.change(input, (record) => {
+      if (record.state === "preparing")
+        throw new Error("preparing receipt metadata held");
+      if (record.lastAppliedSdlHash === input.sdlHash) return null;
+      return { lastAppliedSdlHash: input.sdlHash };
+    });
   }
 
-  /**
-   * Receipts that have held the wallet slot longer than any single transaction can take.
-   * A pure read that decides nothing: age makes a row eligible to be INVESTIGATED, never
-   * settled (NO_TIME_BASED_RELEASE). Oldest first and hard-limited, so one pass is bounded.
-   */
   async listStalePreparing(input: {
     olderThanMs: number;
     limit: number;
@@ -494,6 +739,7 @@ export class DrizzleAkashTxAllocationLedger
     const db = await this.getDb();
     const rows = await db
       .select({
+        ...RECEIPT_SELECTION,
         cogniKey: akashTxAllocations.cogniKey,
         allocationCursor: akashTxAllocations.allocationCursor,
         // Age is computed BY POSTGRES: the actuator's clock is not the ledger's clock, and a
@@ -512,6 +758,7 @@ export class DrizzleAkashTxAllocationLedger
       .orderBy(akashTxAllocations.updatedAt)
       .limit(input.limit);
     return rows.map((row) => ({
+      record: allocationRecord(row),
       cogniKey: row.cogniKey,
       ...(row.allocationCursor
         ? { allocationCursor: row.allocationCursor }
@@ -520,51 +767,41 @@ export class DrizzleAkashTxAllocationLedger
     }));
   }
 
-  /**
-   * Settle a receipt that never bound a handle, releasing the wallet-wide slot.
-   *
-   * The WHERE clause is the half of the contract this layer can enforce: `preparing` AND
-   * `external_name is null`, so a recorded paid handle can never be erased by a failure path.
-   * The other half — positive evidence that nothing is billing — belongs to the caller, and is
-   * why every call site either has no cursor (provably pre-transaction) or a Console read-back
-   * proving the deployment closed.
-   */
-  async fail(input: { cogniKey: string; failureCode: string }): Promise<void> {
-    const db = await this.getDb();
-    await db
-      .update(akashTxAllocations)
-      .set({
+  async fail(input: {
+    cogniKey: string;
+    failureCode: string;
+    expected?: AkashTxAllocationRecord;
+  }): Promise<AkashTxAllocationRecord> {
+    return this.change(input, (record, guarded) => {
+      if (
+        record.state !== "preparing" ||
+        record.externalName ||
+        (guarded &&
+          (record.allocationNoEffectVerified !== true ||
+            record.allocationCursor))
+      )
+        throw new Error("receipt custody cannot be discharged");
+      return {
         state: "failed",
         failureCode: input.failureCode,
-        settledAt: sql`now()`,
-        updatedAt: sql`now()`,
-      })
-      .where(
-        and(
-          eq(akashTxAllocations.walletScope, this.walletScope),
-          eq(akashTxAllocations.cogniKey, input.cogniKey),
-          eq(akashTxAllocations.state, "preparing"),
-          sql`${akashTxAllocations.externalName} is null`
-        )
-      );
+        settledAt: sql`clock_timestamp()`,
+      };
+    });
   }
 
-  async markReleased(input: { cogniKey: string }): Promise<void> {
-    const db = await this.getDb();
-    await db
-      .update(akashTxAllocations)
-      .set({
+  async markReleased(input: {
+    cogniKey: string;
+    expected?: AkashTxAllocationRecord;
+  }): Promise<AkashTxAllocationRecord> {
+    return this.change(input, (record) => {
+      if (record.state !== "allocated" && record.state !== "released")
+        throw new Error("receipt custody is not allocated");
+      if (record.state === "released") return null;
+      return {
         state: "released",
-        settledAt: sql`coalesce(${akashTxAllocations.settledAt}, now())`,
-        updatedAt: sql`now()`,
-      })
-      .where(
-        and(
-          eq(akashTxAllocations.walletScope, this.walletScope),
-          eq(akashTxAllocations.cogniKey, input.cogniKey),
-          sql`${akashTxAllocations.state} in ('allocated', 'released')`
-        )
-      );
+        settledAt: sql`coalesce(${akashTxAllocations.settledAt}, clock_timestamp())`,
+      };
+    });
   }
 
   /**
@@ -582,7 +819,7 @@ export class DrizzleAkashTxAllocationLedger
   }): Promise<readonly AkashTxAllocationRecord[]> {
     const db = await this.getDb();
     const rows = await db
-      .select(SELECTION)
+      .select(RECEIPT_SELECTION)
       .from(akashTxAllocations)
       .where(
         and(
@@ -599,7 +836,7 @@ export class DrizzleAkashTxAllocationLedger
       )
       .orderBy(akashTxAllocations.updatedAt)
       .limit(input.limit);
-    return rows.map(toRecord);
+    return rows.map(allocationRecord);
   }
 
   /**
@@ -618,7 +855,7 @@ export class DrizzleAkashTxAllocationLedger
   }): Promise<readonly AkashTxAllocationRecord[]> {
     const db = await this.getDb();
     const rows = await db
-      .select(SELECTION)
+      .select(RECEIPT_SELECTION)
       .from(akashTxAllocations)
       .where(
         and(
@@ -634,7 +871,7 @@ export class DrizzleAkashTxAllocationLedger
       )
       .orderBy(akashTxAllocations.updatedAt)
       .limit(input.limit);
-    return rows.map(toRecord);
+    return rows.map(allocationRecord);
   }
 
   /**
@@ -650,7 +887,7 @@ export class DrizzleAkashTxAllocationLedger
   }): Promise<readonly AkashTxAllocationRecord[]> {
     const db = await this.getDb();
     const rows = await db
-      .select(SELECTION)
+      .select(RECEIPT_SELECTION)
       .from(akashTxAllocations)
       .where(
         and(
@@ -665,7 +902,7 @@ export class DrizzleAkashTxAllocationLedger
       )
       .orderBy(akashTxAllocations.updatedAt)
       .limit(input.limit);
-    return rows.map(toRecord);
+    return rows.map(allocationRecord);
   }
 
   async read(input: {
@@ -673,7 +910,7 @@ export class DrizzleAkashTxAllocationLedger
   }): Promise<AkashTxAllocationRecord | null> {
     const db = await this.getDb();
     const [row] = await db
-      .select(SELECTION)
+      .select(RECEIPT_SELECTION)
       .from(akashTxAllocations)
       .where(
         and(
@@ -682,6 +919,6 @@ export class DrizzleAkashTxAllocationLedger
         )
       )
       .limit(1);
-    return row ? toRecord(row) : null;
+    return row ? allocationRecord(row) : null;
   }
 }
