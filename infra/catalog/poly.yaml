@@ -202,13 +202,27 @@ lease_generation:
   # RHITE Finland akash127x6cuk4…dhz7 @ 9.69 and akash1z9nr23cg… @ 10.00. The 9f6ceb53
   # DB migration already succeeded and the DB-cell banks are repointed to :32728, so
   # the new lease should connect and hold /readyz. (poly prod outage recovery, bug.5293)
+  # 25 -> 26 (story.5127). Gen-24 (dseq 1793393952073) and gen-25 (dseq 1793408254800) both
+  # failed provider_rejected: 9/11 bids, none from FI/NL/PT. The FI providers (RHITE
+  # akash127x6…dhz7, m3a akash1z9nr…ys2x) have NOT bid on any production-tenant auction
+  # since 2026-10-26 (RHITE's last bid: dseq 1793041840999), while they still bid the
+  # byte-identical spec from the dev wallet (2026-11-02 probes). UA ithub
+  # (akash1v0f04wr3tkh9uf43q9eqfd0whpfeu8qevlq99h, already in AKASH_ALLOWED_PROVIDERS) bid
+  # 9.14 for the production tenant on gen-25. Polymarket's CLOB geoblock lists only
+  # Crimea/Donetsk/Luhansk as blocked in Ukraine
+  # (docs.polymarket.com/developers/CLOB/geoblock). A dev-wallet lease on ithub measured
+  # egress 89.207.152.9 (Kyiv City, AS203930), stable across two pods, geoblock
+  # {"blocked":false,"country":"UA","region":"30"}, clob GET 200, and served the custom
+  # accept host 200. So UA joins required_placement_countries and its egress joins
+  # compute_egress_cidrs below. (story.5127)
+  #
   # 24 -> 25: gen-24 auction 1793393952073 closed without a lease.
   # Current isolated probe 1793395146470 received an allowed FI bid;
   # keep source, resources, countries and database bindings unchanged (story.5127).
-  production: 25
+  production: 26
 required_placement_countries:
   candidate-a: [BE]
-  production: [FI, NL, PT]
+  production: [FI, NL, PT, UA]
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/poly/
@@ -219,6 +233,10 @@ node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
 # scripts/ci/render-compute-egress-allowlist.sh and applied by
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:
+  - cidr: 89.207.152.9/32
+    ports: [5435, 6379, 4000, 7233]
+    envs: [production]
+    comment: UA ithub (akash1v0f04…q99h) egress measured from inside a dev-wallet lease 2026-11-02 (two pods, stable). Bridge until story.5127 credential binding retires per-IP admission (BIND_BY_CREDENTIAL). Published Postgres 5432 stays excluded (bug.5481).
   - cidr: 65.108.194.156/32
     ports: [5435, 6379, 4000, 7233]
     envs: [production]
