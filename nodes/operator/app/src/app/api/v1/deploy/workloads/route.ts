@@ -260,7 +260,7 @@ export const POST = wrapRouteHandlerWithLogging(
       return response;
     } finally {
       const status = response?.status ?? 500;
-      logEvent(ctx.log, EVENT_NAMES.NODE_DEPLOY_STATE_COMPLETE, {
+      logEvent(ctx.log, EVENT_NAMES.NODE_WORKLOAD_DEPLOY_COMPLETE, {
         reqId: ctx.reqId,
         routeId: ctx.routeId,
         targetNodeId,
@@ -334,7 +334,7 @@ export const GET = wrapRouteHandlerWithLogging(
       return response;
     } finally {
       const status = response?.status ?? 500;
-      logEvent(ctx.log, EVENT_NAMES.NODE_DEPLOY_STATE_COMPLETE, {
+      logEvent(ctx.log, EVENT_NAMES.NODE_WORKLOAD_DEPLOY_COMPLETE, {
         reqId: ctx.reqId,
         routeId: ctx.routeId,
         targetNodeId,

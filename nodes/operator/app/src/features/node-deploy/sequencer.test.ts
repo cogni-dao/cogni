@@ -473,6 +473,60 @@ describe("edge host guard before any paid create (task.5400 review)", () => {
   });
 });
 
+describe("observability hygiene (review)", () => {
+  it("a same-provider refusal writes a provider_strike event naming the provider (no exclusion exists on the actuator wire)", async () => {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    h.payer.providerFor = () => "provider-2";
+    await deployApp(h, SHA_2);
+    const strikes = h.log.lines.filter(
+      (l) => l.msg === "node_deploy_provider_strike"
+    );
+    expect(strikes).toHaveLength(1);
+    expect(strikes[0]?.fields).toMatchObject({
+      step: "provider_strike",
+      outcome: "same_provider_as_blue",
+      provider: "provider-2",
+      workload: "canary",
+      sourceSha: SHA_2,
+    });
+  });
+
+  it("a proof timeout is also a strike", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.onLease = (l) => {
+      l.serveSha = "f".repeat(40);
+    };
+    await deployApp(h, SHA_1);
+    expect(
+      h.log.lines.filter((l) => l.msg === "node_deploy_provider_strike")[0]
+        ?.fields.outcome
+    ).toBe("proof_timeout");
+  });
+
+  it("a tick-level failure that repeats every tick is logged once per 10 minutes", async () => {
+    const h = harness();
+    await h.release(canaryDb(), SHA_1);
+    h.store.getDesired = async () => {
+      throw new Error("database is down");
+    };
+    for (let i = 0; i < 20; i++) {
+      await h.seq.tick();
+      h.clock.advance(5_000);
+    }
+    const threw = () =>
+      h.log.lines.filter(
+        (l) => l.msg === "node_deploy_step" && l.fields.outcome === "threw"
+      );
+    expect(threw()).toHaveLength(1);
+    h.clock.advance(11 * 60_000);
+    await h.seq.tick();
+    expect(threw()).toHaveLength(2);
+  });
+});
+
 describe("keys and parking", () => {
   it("every create uses a fresh url-safe key; identity states the tuple", async () => {
     const h = harness();

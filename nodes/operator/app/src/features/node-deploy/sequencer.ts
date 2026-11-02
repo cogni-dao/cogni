@@ -154,16 +154,7 @@ export class NodeDeploySequencer {
     await Promise.all(
       desired.map((row) =>
         this.step(row).catch((error: unknown) =>
-          this.d.log.error(
-            {
-              component: "node-deploy-sequencer",
-              ...row,
-              step: "step",
-              outcome: "threw",
-              error: errText(error),
-            },
-            "node_deploy_step"
-          )
+          this.loopError(row, "step", error)
         )
       )
     );
@@ -175,16 +166,7 @@ export class NodeDeploySequencer {
     await Promise.all(
       desired.map((row) =>
         this.reconcile(row).catch((error: unknown) =>
-          this.d.log.error(
-            {
-              component: "node-deploy-sequencer",
-              ...row,
-              step: "reconcile",
-              outcome: "threw",
-              error: errText(error),
-            },
-            "node_deploy_step"
-          )
+          this.loopError(row, "reconcile", error)
         )
       )
     );
@@ -506,6 +488,7 @@ export class NodeDeploySequencer {
           r.providerAccount === blue.provider
         ) {
           // NOT_BLUES_PROVIDER: two leases on one provider ingress cannot both claim one host.
+          this.strike(key, release, a, "same_provider_as_blue");
           return this.failAttempt(key, release, a, "same_provider_as_blue");
         }
         const usable =
@@ -598,13 +581,15 @@ export class NodeDeploySequencer {
           attempt,
           "lease_closed_while_proving"
         );
-      if (this.d.clock.now() >= deadline)
+      if (this.d.clock.now() >= deadline) {
+        this.strike(key, release, attempt, "proof_timeout");
         return this.failAttempt(
           key,
           release,
           attempt,
           `proof_timeout: ${last}`
         );
+      }
       if (this.d.clock.now() - lastNote >= 60_000) {
         lastNote = this.d.clock.now();
         this.emit(key, release, attempt, "proving", "waiting", { last });
@@ -1047,6 +1032,60 @@ export class NodeDeploySequencer {
         ...extra,
       },
       "node_deploy_step"
+    );
+  }
+
+  /**
+   * A tick-level failure repeats every tick while its cause persists (a down database, a bad row), so it
+   * is throttled per (workload, loop, message) like every other alert.
+   */
+  private loopError(key: WorkloadKey, loop: string, error: unknown): void {
+    const message = errText(error).slice(0, 300);
+    const throttleKey = `${keyString(key)}/loop:${loop}/${message}`;
+    const now = this.d.clock.now();
+    const last = this.lastAlertAt.get(throttleKey);
+    if (last !== undefined && now - last < ALERT_THROTTLE_MS) return;
+    this.lastAlertAt.set(throttleKey, now);
+    this.d.log.error(
+      {
+        component: "node-deploy-sequencer",
+        nodeId: key.nodeId,
+        env: key.env,
+        workload: key.workload,
+        step: loop,
+        outcome: "threw",
+        error: message,
+      },
+      "node_deploy_step"
+    );
+  }
+
+  /**
+   * A provider-attributable failure (it won the auction but could not serve, or landed on blue's
+   * provider). The actuator's v1 wire has no way to take a strike or an exclusion from us, so this
+   * event is the record: one line per occurrence, never throttled, queryable by message.
+   */
+  private strike(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    reason: string
+  ): void {
+    this.d.log.warn(
+      {
+        component: "node-deploy-sequencer",
+        nodeId: key.nodeId,
+        env: key.env,
+        workload: key.workload,
+        releaseId: release.id,
+        attempt: attempt.attempt,
+        dseq: attempt.externalName,
+        provider: attempt.provider,
+        step: "provider_strike",
+        outcome: reason,
+        sourceSha: release.sourceSha,
+      },
+      "node_deploy_provider_strike"
     );
   }
 
