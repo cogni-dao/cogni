@@ -13,6 +13,7 @@
  * @internal
  */
 
+import { scrubStringContent } from "@cogni/node-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpLangfuseReader } from "@/adapters/server/observability/langfuse-reader.adapter";
 
@@ -1042,7 +1043,8 @@ describe("approved native projection privacy and resource contract", () => {
     field = "input",
     limit = 1,
     receiptMatches = true,
-    secretKeys = slots
+    secretKeys = slots,
+    nativeInputJson?: string
   ) {
     const metadata: Record<string, unknown> = {
       nodeId: NODE_ID,
@@ -1064,23 +1066,31 @@ describe("approved native projection privacy and resource contract", () => {
     const fetcher = vi.fn(
       async (url: URL) =>
         new Response(
-          JSON.stringify(
-            String(url).includes("/spend/logs/v2")
-              ? {
-                  data: [
-                    {
-                      request_id: provider,
-                      api_key: hash,
-                      startTime: row.startTime,
-                      metadata: {
-                        user_api_key_alias: receiptMatches ? alias : "foreign",
-                      },
-                    },
-                  ],
-                  total: 1,
-                }
-              : { data: [row], meta: { cursor: null } }
-          )
+          String(url).includes("/spend/logs/v2") ||
+            nativeInputJson === undefined
+            ? JSON.stringify(
+                String(url).includes("/spend/logs/v2")
+                  ? {
+                      data: [
+                        {
+                          request_id: provider,
+                          api_key: hash,
+                          startTime: row.startTime,
+                          metadata: {
+                            user_api_key_alias: receiptMatches
+                              ? alias
+                              : "foreign",
+                          },
+                        },
+                      ],
+                      total: 1,
+                    }
+                  : { data: [row], meta: { cursor: null } }
+              )
+            : JSON.stringify({ data: [row], meta: { cursor: null } }).replace(
+                '"input":null',
+                `"input":${nativeInputJson}`
+              )
         )
     );
     vi.stubGlobal("fetch", fetcher);
@@ -1405,6 +1415,107 @@ describe("approved native projection privacy and resource contract", () => {
       status: 502,
     });
     expect(escaped).toBe(true);
+  });
+
+  it("reviewed resource blockers: preflights short-email expansion before replacement allocation", async () => {
+    const replace = String.prototype.replace,
+      budget = Math.floor((1024 * 1024 - 32768) / 50);
+    let largestDefenseAllocation = 0;
+    vi.spyOn(String.prototype, "replace").mockImplementation(function (
+      this: string,
+      pattern,
+      replacement
+    ) {
+      const result = Reflect.apply(replace, this, [
+        pattern,
+        replacement,
+      ]) as string;
+      if (String(replacement).includes("REDACTED"))
+        largestDefenseAllocation = Math.max(
+          largestDefenseAllocation,
+          Buffer.byteLength(result)
+        );
+      return result;
+    });
+    for (const text of [
+      "a@b.co ".repeat(2500),
+      "xoxb-a ".repeat(2500),
+      "KEY=a ".repeat(2900),
+    ]) {
+      const page = await project(text, [], "input", 50);
+      expect(selected(page)).toBe(R);
+      expect(page.meta.cogni).toMatchObject({ partial: true, truncated: true });
+    }
+    expect(largestDefenseAllocation).toBeLessThanOrEqual(budget);
+    const prose = "ordinary harmless prose ".repeat(700);
+    expect(selected(await project(prose, [], "input", 50))).toBe(prose);
+  });
+
+  it("preserves every content defense and its default callers under an optional byte ceiling", async () => {
+    const cases: Array<[string, string]> = [
+      [`sk-${"a".repeat(20)}`, "[REDACTED_SK_KEY]"],
+      [`pk-${"a".repeat(20)}`, "[REDACTED_PK_KEY]"],
+      [`sk-proj-${"a".repeat(20)}`, "[REDACTED_OPENAI_KEY]"],
+      ["xoxb-a", "[REDACTED_SLACK_TOKEN]"],
+      [`ghp_${"a".repeat(36)}`, "[REDACTED_GITHUB_TOKEN]"],
+      [`gho_${"a".repeat(36)}`, "[REDACTED_GITHUB_TOKEN]"],
+      [`Bearer ${"a".repeat(20)}`, "Bearer [REDACTED]"],
+      ["a@b.co", "[REDACTED_EMAIL]"],
+      ["1234 5678 9012 3456", "[REDACTED_CARD]"],
+      ["password: abcde", "password: [REDACTED]"],
+      ["SOME_KEY=a", "SOME_KEY=[REDACTED]"],
+      [`AKIA${"A".repeat(16)}`, "[REDACTED_AWS_KEY]"],
+      ["eyJa.eyJb.signature", "[REDACTED_JWT]"],
+    ];
+    for (const [text, expected] of cases) {
+      expect(scrubStringContent(text)).toBe(expected);
+      // Use a ceiling large enough to admit the source as well as its replacement.
+      const ceiling = Math.max(
+        Buffer.byteLength(text),
+        Buffer.byteLength(expected)
+      );
+      expect(scrubStringContent(text, ceiling)).toBe(expected);
+      expect(selected(await project(text))).toBe(expected);
+      if (Buffer.byteLength(expected) > Buffer.byteLength(text))
+        expect(
+          scrubStringContent(text, Buffer.byteLength(expected) - 1)
+        ).toBeNull();
+    }
+    expect(scrubStringContent("API_KEY=é", 64)).toBe("API_KEY=[REDACTED]");
+  });
+
+  it("reviewed resource blockers: bounds deep optional admission before walking its full state", async () => {
+    const parse = JSON.parse;
+    let visited = 0;
+    vi.spyOn(JSON, "parse").mockImplementation((text, ...args) => {
+      const decoded: unknown = parse(text, ...args);
+      // Instrument a bounded prefix of the actual native parse result, never replace its parser.
+      if (decoded && typeof decoded === "object" && "data" in decoded) {
+        let current = (decoded as { data: Array<{ input: unknown }> }).data[0]
+          ?.input;
+        for (
+          let i = 0;
+          i < 256 && current && typeof current === "object" && "x" in current;
+          i++
+        ) {
+          const child: unknown = current.x;
+          Object.defineProperty(current, "x", {
+            enumerable: true,
+            get: () => {
+              visited++;
+              return child;
+            },
+          });
+          current = child;
+        }
+      }
+      return decoded;
+    });
+    const nativeInput = `${'{"x":'.repeat(40_000)}0${"}".repeat(40_000)}`;
+    const page = await project(null, [], "input", 50, true, slots, nativeInput);
+    expect(selected(page)).toBeNull();
+    expect(page.meta.cogni).toMatchObject({ partial: true, truncated: true });
+    expect(visited).toBeLessThanOrEqual(64);
   });
 
   it("preserves complete declared todos tool content/status schemas", async () => {

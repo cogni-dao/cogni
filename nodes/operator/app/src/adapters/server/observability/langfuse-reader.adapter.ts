@@ -607,7 +607,8 @@ const lowSurrogate = (code: number): boolean =>
   code >= 0xdc00 && code <= 0xdfff;
 
 // Count native JSON bytes before allocating its string. Inputs are native JSON values.
-// Iterators avoid a second recursion/stack limit on pre-scrub native containers.
+// Byte and fixed-depth ceilings bound admission work/state before optional content is admitted.
+// This counting ceiling exceeds privacy depth16/17 plus row/metadata wrappers.
 function jsonBytes(value: unknown, limit: number): number {
   let bytes = 0;
   const add = (count: number): void => {
@@ -637,37 +638,37 @@ function jsonBytes(value: unknown, limit: number): number {
       else add(code < 128 ? 1 : code < 2048 ? 2 : 3);
     }
   };
-  const stack: Iterator<unknown>[] = [[value].values()];
-  while (stack.length && bytes <= limit) {
-    const next = stack[stack.length - 1]?.next();
-    if (!next || next.done) {
-      stack.pop();
-      continue;
+  const walk = (item: unknown, depth: number): void => {
+    if (bytes > limit) return;
+    if (depth >= 64) {
+      bytes = limit + 1;
+      return;
     }
-    const item = next.value;
     if (typeof item === "string") string(item);
     else if (item === null || item === undefined) add(4);
     else if (typeof item === "number" || typeof item === "boolean")
       add(String(item).length);
     else if (Array.isArray(item)) {
       add(2 + Math.max(0, item.length - 1));
-      stack.push(item.values());
+      for (let i = 0; i < item.length && bytes <= limit; i++)
+        walk(item[i], depth + 1);
     } else if (typeof item === "object") {
-      const record = item as Record<string, unknown>,
-        keys = Object.keys(record);
-      add(2 + Math.max(0, keys.length - 1));
-      for (const key of keys) {
-        if (bytes > limit) break;
+      add(2);
+      let first = true;
+      // Do not allocate Object.keys/entries arrays or retain a generator for each ancestor.
+      for (const key in item) {
+        if (!Object.hasOwn(item, key)) continue;
+        if (!first) add(1);
+        first = false;
         string(key);
         add(1);
+        if (bytes > limit) break;
+        walk((item as Record<string, unknown>)[key], depth + 1);
+        if (bytes > limit) break;
       }
-      stack.push(
-        (function* () {
-          for (const key of keys) yield record[key];
-        })()
-      );
     }
-  }
+  };
+  walk(value, 0);
   return bytes;
 }
 
@@ -826,8 +827,8 @@ function contentPolicy(
     const first = union(source);
     const bounded = boundContentRuns(first, onTruncated, budget);
     if (!fits(bounded)) return withhold();
-    const cleaned = scrubStringContent(bounded);
-    if (!fits(cleaned)) return withhold();
+    const cleaned = scrubStringContent(bounded, budget);
+    if (cleaned === null) return withhold();
     const result = union(cleaned);
     return scan(result) ? REDACTED : result;
   };
@@ -895,7 +896,9 @@ function contentPolicy(
     // FIRST escaped check: no escaped fallback is permitted before this preflight.
     if (scan(SERIALIZED_REDACTED)) invalid();
   };
-  return { scrub, finish, enterEscapedPhase };
+  const bound = (value: unknown): unknown =>
+    jsonBytes(value, budget) > budget ? withhold() : value;
+  return { scrub, bound, finish, enterEscapedPhase };
 }
 
 // Selection and raw byte budgeting happen before any content scrubbing. Every authorized row
@@ -922,8 +925,9 @@ function projectObservation(
         typeof row.metadata === "object" &&
         !Array.isArray(row.metadata)
           ? Object.fromEntries(
-              Object.entries(metadata)
-                .filter(([k]) => METADATA_KEYS.has(k))
+              [...METADATA_KEYS]
+                .filter((key) => Object.hasOwn(metadata, key))
+                .map((key) => [key, metadata[key]] as const)
                 .map(([k, v]) => [
                   k,
                   typeof v === "string" ||
@@ -943,13 +947,18 @@ function projectObservation(
     } else if (key === "usageDetails" || key === "costDetails") {
       const value = row[key];
       result[key] =
-        value && typeof value === "object" && !Array.isArray(value)
+        value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        jsonBytes(value, rawByteBudget) <= rawByteBudget
           ? Object.fromEntries(
               Object.entries(value).filter(
                 ([, v]) => typeof v === "number" && Number.isFinite(v)
               )
             )
           : null;
+      if (value && typeof value === "object" && result[key] === null)
+        onTruncated();
     } else result[key] = row[key];
   }
   if (!fields.split(",").includes("model")) {
@@ -959,23 +968,32 @@ function projectObservation(
 
   // rowBudget * requested limit is <=1MiB (less metadata/cursor headroom). Counting the selected
   // raw fields prevents redaction-shrunk output from multiplying regex work across fields/rows.
-  let selectedBytes = jsonBytes(result, Number.MAX_SAFE_INTEGER);
+  const identity = new Set([
+    "id",
+    "traceId",
+    "startTime",
+    "endTime",
+    "projectId",
+    "parentObservationId",
+    "type",
+  ]);
+  // Measure each field ONCE with the admitted byte and traversal ceilings. An over-limit
+  // optional field is discarded before aggregate sorting; its unknown full size is unnecessary.
+  const measured = Object.entries(result).map(([key, value]) => {
+    let bytes = jsonBytes(value, rawByteBudget);
+    if (bytes > rawByteBudget && !identity.has(key)) {
+      result[key] = null;
+      bytes = 4;
+      onTruncated();
+    }
+    return { key, bytes };
+  });
+  let selectedBytes = 2 + Math.max(0, measured.length - 1);
+  for (const field of measured)
+    selectedBytes += jsonBytes(field.key, rawByteBudget) + 1 + field.bytes;
   if (selectedBytes > rawByteBudget) {
-    const identity = new Set([
-      "id",
-      "traceId",
-      "startTime",
-      "endTime",
-      "projectId",
-      "parentObservationId",
-      "type",
-    ]);
-    const optional = Object.entries(result)
-      .filter(([key]) => !identity.has(key))
-      .map(([key, value]) => ({
-        key,
-        bytes: jsonBytes(value, Number.MAX_SAFE_INTEGER),
-      }))
+    const optional = measured
+      .filter(({ key }) => !identity.has(key))
       .sort((a, b) => b.bytes - a.bytes);
     for (const field of optional) {
       if (selectedBytes <= rawByteBudget) break;
@@ -1019,18 +1037,20 @@ function projectObservation(
   }
   // All recursive decoding and RAW serialization checks finish before any prefix is overwritten.
   for (const { object, key } of targets)
-    object[key] = policy.scrub(object[key]);
+    object[key] = policy.bound(policy.scrub(object[key]));
+  // Every target now fits one row budget; the remaining fields already passed raw admission.
+  const boundedOutputBytes = rawByteBudget * (targets.length + 1);
   for (const { object, key } of targets) {
     const otherBytes =
-      jsonBytes(result, Number.MAX_SAFE_INTEGER) -
-      jsonBytes(object[key], Number.MAX_SAFE_INTEGER);
+      jsonBytes(result, boundedOutputBytes) -
+      jsonBytes(object[key], rawByteBudget);
     object[key] = policy.finish(object[key], rawByteBudget - otherBytes);
   }
   policy.enterEscapedPhase();
   for (const { object, key } of targets) {
     const otherBytes =
-      jsonBytes(result, Number.MAX_SAFE_INTEGER) -
-      jsonBytes(object[key], Number.MAX_SAFE_INTEGER);
+      jsonBytes(result, boundedOutputBytes) -
+      jsonBytes(object[key], rawByteBudget);
     object[key] = policy.finish(object[key], rawByteBudget - otherBytes);
   }
   return result;
