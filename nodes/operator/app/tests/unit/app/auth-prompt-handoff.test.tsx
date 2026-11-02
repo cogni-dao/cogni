@@ -51,15 +51,15 @@ describe("Completed sign-in handoff", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["loading", "unauthenticated"])(
-    "waits while the session is %s",
-    (status) => {
-      state.status = status;
-      render(<AuthPrompt />);
-      expect(screen.queryByRole("status")).toBeNull();
-      expect(window.location.replace).not.toHaveBeenCalled();
-    }
-  );
+  it.each([
+    "loading",
+    "unauthenticated",
+  ])("waits while the session is %s", (status) => {
+    state.status = status;
+    render(<AuthPrompt />);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(window.location.replace).not.toHaveBeenCalled();
+  });
 
   it("opens the explicit sign-in prompt while unauthenticated", () => {
     state.params = new URLSearchParams({ signIn: "1" });
@@ -89,13 +89,14 @@ describe("Completed sign-in handoff", () => {
     );
   });
 
-  it.each(["//evil.example/chat", "/unapproved", "https://evil.example"])(
-    "falls back to chat for an invalid callback: %s",
-    (callbackUrl) => {
-      state.status = "authenticated";
-      state.params = new URLSearchParams({ signIn: "1", callbackUrl });
-      render(<AuthPrompt />);
-      expect(window.location.replace).toHaveBeenCalledExactlyOnceWith("/chat");
-    }
-  );
+  it.each([
+    "//evil.example/chat",
+    "/unapproved",
+    "https://evil.example",
+  ])("falls back to chat for an invalid callback: %s", (callbackUrl) => {
+    state.status = "authenticated";
+    state.params = new URLSearchParams({ signIn: "1", callbackUrl });
+    render(<AuthPrompt />);
+    expect(window.location.replace).toHaveBeenCalledExactlyOnceWith("/chat");
+  });
 });
