@@ -19,8 +19,8 @@ import { useSession } from "next-auth/react";
 import { type ReactElement, useEffect, useMemo, useState } from "react";
 import { useAccount } from "wagmi";
 
+import { BrainLoading } from "@/components";
 import { SignInDialog } from "@/components/kit/auth/SignInDialog";
-import { BrainLoading } from "@/components/kit/feedback/BrainLoading";
 import { AppShell } from "@/features/layout";
 
 const DEFAULT_CALLBACK_URL = "/chat";

@@ -30,7 +30,7 @@ App-shell layout components: header, footer, sidebar, and top bar. Composes kit/
 
 ## Public Surface
 
-- **Exports:** `AccountSlot`, `AppHeader`, `AppFooter`, `AppSidebar`, `AppTopBar` via `index.ts`
+- **Exports:** `AccountSlot`, `AppHeader`, `AppFooter`, `AppShell`, `AppSidebar`, `AppTopBar` via `index.ts`
 - **Files considered API:** `index.ts`
 
 ## Responsibilities

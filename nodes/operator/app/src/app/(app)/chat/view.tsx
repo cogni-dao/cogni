@@ -31,8 +31,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Button, ErrorAlert, Thread } from "@/components";
-import { BrainLoading } from "@/components/kit/feedback/BrainLoading";
+import { BrainLoading, Button, ErrorAlert, Thread } from "@/components";
 import { useChatSidebarStore } from "@/features/ai/chat/components/ChatSidebarContext";
 import { ChatRuntimeProvider } from "@/features/ai/chat/providers/ChatRuntimeProvider.client";
 import { toErrorAlertProps } from "@/features/ai/chat/utils/toErrorAlertProps";
