@@ -135,6 +135,20 @@ against our 10000 uakt ceiling — **price is never the blocker.** Serving a `pu
 
 Node-birth adjacents on main (2026-09-11): `POST /api/v1/nodes/{id}/reconcile-protection` heals birth branch protection onto existing forks (#2176, bug.5123); DNS self-CNAME fix — `endpointHostname` excludes `publicHost` so a node no longer CNAMEs to itself (#2177, bug.5125).
 
+### Node-deploy lane (task.5400, replaces steps 3-4 per node after parity)
+
+Operator PR #3005 adds a lane for DECLARED workloads (`deployment.workloads[]` in the node's `.cogni/repo-spec.yaml`, kinds `app|state`): immutable blue/green. Design: hub `node-service-delivery` (https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-249e8b6d, pending human merge). Code: `nodes/operator/app/src/features/node-deploy/`.
+
+- create (the akash-tx actuator stays the only payer; key `nd:<ns>:<nodeId>:<workload>:<releaseId>:<attempt>`) → prove (exact `/version.buildSha` + `/readyz`, 10 min) → proxied Cloudflare edge flip, 8 consecutive DoH public reads → retain blue → close + confirm. `state` workloads keep one long-lived lease, never auto-replaced. Reconcile re-runs the same verb on chain-confirmed loss.
+- Intent: `POST /api/v1/deploy/workloads {nodeId, env, workload, sourceSha}`; read: `GET /api/v1/deploy/workloads?nodeId=&env=`. Runtime: `operator-node-deploy-sequencer` (candidate-a + production overlays). Only the operator node declares workloads today (YELLOW); other nodes stay on the Crossplane path above.
+
+**Poly production placement findings, 2026-11-02** (restored via PR #3004: UA added to placement, egress `89.207.152.9/32` bridge, gen 26; lease 1793655838404 on RHITE FI serves 79bfc63f):
+
+- Gen-24/25 failed `provider_rejected` with zero FI/NL/PT bids, although the byte-identical spec drew FI bids from the dev wallet. Gen-26 then leased RHITE FI. Cause unknown: read the provider roster first, then probe with the dev key.
+- Providers froggy (RO) and metz (CH) return nginx 404 for every host. Exclude them.
+- RHITE FI and BG h6i egress IP varies per pod; do not pin a `compute_egress_cidrs` /32 to them. UA ithub egress `89.207.152.9` and FI m3a `95.217.72.142` were measured stable.
+- The Polymarket CLOB geoblock covers only Crimea, Donetsk and Luhansk in UA, so UA providers are usable.
+
 ## The four once-manual bridges, now code (all live-proven 2026-09-10)
 
 - Wallet allocation ledger: now the Postgres table `akash_tx_allocations` owned by the actuator (one receipt per `cogniKey`, `wallet_scope` single-writer index), NOT the retired ConfigMap `compute-workload-allocation-ledger`. The receipt is what makes a lease closable through the sanctioned writer — a lease with no row in this table is unreachable via `POST /v1/akash/delete` (`422 identity_conflict`). PR #2140, then task.5095.

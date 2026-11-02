@@ -94,6 +94,19 @@ Swap `"production"` for `"preview"` to converge the preview lane instead (bug.54
 
 After dispatch, **always** confirm production `/version.buildSha` actually advanced — see Monitoring. Discover the dispatched run via the unauthenticated GitHub API (`GET /repos/Cogni-DAO/cogni/actions/workflows/promote-and-deploy.yml/runs`); no personal token required.
 
+## Declared workloads (task.5400)
+
+Nodes that declare `deployment.workloads[]` in `.cogni/repo-spec.yaml` (today only the operator node; PR #3005, design [`node-service-delivery`](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-249e8b6d)) deploy each workload by operator-sequenced blue/green. Authz: production needs `node.promote_production`, candidate-a needs `node.manage_envs`. A 403 `authz_denied` uses the same grant loop as above.
+
+```bash
+curl -sS -X POST "$BASE/api/v1/deploy/workloads" \
+  -H "Authorization: Bearer $COGNI_API_KEY" -H "Content-Type: application/json" \
+  -d '{"nodeId":"<node-uuid>","env":"production","workload":"<name>","sourceSha":"<sha>"}'   # records intent; the sequencer executes
+curl -sS "$BASE/api/v1/deploy/workloads?nodeId=<node-uuid>&env=production" -H "Authorization: Bearer $COGNI_API_KEY"   # desired + release state
+```
+
+Proof: the public host's `/version.buildSha` equals `sourceSha` (the edge flip needs 8 consecutive exact reads), and Loki `{env="production"} |= "node_deploy_step"` shows `step`/`outcome` through active → retired. The route rejects an env the deployment does not serve.
+
 ## Monitoring — Monitor tool, not eyeballing
 
 Every promotion gets a Monitor armed before you walk away. The pattern emits one line per state change so you don't have to poll. Cover ALL terminal states (success, failure, cancelled, hung) — silence is not success.
