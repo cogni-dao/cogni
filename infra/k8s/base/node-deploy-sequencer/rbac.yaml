@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5400 — the sequencer generates one password per state workload and stores it in a Secret
+# `nd-<nodeId8>-<workload>` in a DEDICATED namespace `cogni-node-deploy-<env>` that holds nothing else.
+# This Role and RoleBinding are placed in THAT namespace by each overlay (a `replacements` entry sourced
+# from the overlay's Namespace), bound to the sequencer ServiceAccount that lives in the wallet
+# namespace. The wallet namespace therefore carries NO secrets verb for this ServiceAccount.
+# It creates a Secret once and reuses it after, so the Role is exactly get + create: no update (a
+# password that guards live data is never replaced), no delete, no list, no other resource. `get` is
+# unscoped by name only because the namespace is dedicated; `create` could never be name-scoped anyway
+# (Kubernetes limitation: the name is not known to RBAC at create time).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: node-deploy-sequencer
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: node-deploy-sequencer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: node-deploy-sequencer
+subjects:
+  - kind: ServiceAccount
+    name: node-deploy-sequencer
