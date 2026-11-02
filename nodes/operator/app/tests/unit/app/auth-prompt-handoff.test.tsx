@@ -34,7 +34,8 @@ vi.mock("@/components", async () => ({
     .BrainLoading,
 }));
 vi.mock("@/components/kit/auth/SignInDialog", () => ({
-  SignInDialog: () => null,
+  SignInDialog: ({ open }: { open: boolean }) =>
+    open ? <dialog open>Sign in</dialog> : null,
 }));
 vi.mock("@/features/layout", () => ({
   AppShell: ({ children }: { children: ReactNode }) => (
@@ -60,6 +61,13 @@ describe("Completed sign-in handoff", () => {
     }
   );
 
+  it("opens the explicit sign-in prompt while unauthenticated", () => {
+    state.params = new URLSearchParams({ signIn: "1" });
+    render(<AuthPrompt />);
+    expect(screen.getByRole("dialog")).toHaveTextContent("Sign in");
+    expect(window.location.replace).not.toHaveBeenCalled();
+  });
+
   it("commits the wordless shell before navigating to a validated callback", () => {
     state.status = "authenticated";
     state.params = new URLSearchParams({
@@ -68,6 +76,7 @@ describe("Completed sign-in handoff", () => {
     });
     vi.mocked(window.location.replace).mockImplementation(() => {
       expect(screen.getByTestId("shared-app-shell")).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(screen.getByRole("status", { name: "Loading" }).textContent).toBe(
         ""
       );

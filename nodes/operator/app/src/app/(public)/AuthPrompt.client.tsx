@@ -109,7 +109,7 @@ export function AuthPrompt(): ReactElement | null {
         </div>
       ) : null}
       <SignInDialog
-        open={dialogOpen}
+        open={status !== "authenticated" && dialogOpen}
         onOpenChange={setDialogOpen}
         onWalletConnect={handleWalletConnect}
         callbackUrl={callbackUrl}
