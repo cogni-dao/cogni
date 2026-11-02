@@ -86,7 +86,11 @@ export interface WorkItemCapability {
   }): Promise<WorkItemTransitionResult>;
 
   /**
-   * Patch work item fields (priority, rank, labels, summary).
+   * Patch work item fields (priority, rank, labels, summary, scores).
+   *
+   * `scores` (story.5111) replaces the whole object; `null` clears it. The
+   * implementation's store validates it and throws on a bound violation, so
+   * nothing is written.
    *
    * `expectedRevision` (optional) is compare-and-set on the row's `revision`: the
    * write lands only if the row is still at that revision. A moved row throws
@@ -100,9 +104,13 @@ export interface WorkItemCapability {
       rank?: number;
       labels?: string[];
       summary?: string;
+      scores?: WorkItemPatchScores | null;
     };
   }): Promise<WorkItemInfo>;
 }
+
+/** A `scores` write: axis id → { v: 0–5, ev?: evidence URL }. Bounds are the store's. */
+export type WorkItemPatchScores = Record<string, { v: number; ev?: string }>;
 
 /**
  * A `patch` with `expectedRevision` lost the compare-and-set: the row moved since it

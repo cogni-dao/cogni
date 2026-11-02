@@ -168,6 +168,16 @@ export class CogniCompletionAdapter extends BaseChatModel {
     });
   }
 
+  /**
+   * MODEL_TIER_SEAM: a sibling adapter bound to a DIFFERENT billed model (e.g. a cheap Flash
+   * subagent) that still routes through the same ALS CompletionFn / token sink — the only LLM path.
+   * `bindRun` deliberately refuses a model change on a bound adapter; this is the explicit,
+   * named way to tier. The caller must also invoke with `configurable.model` set to `model`.
+   */
+  withModel(model: string): CogniCompletionAdapter {
+    return new CogniCompletionAdapter({ ...this.binding, model });
+  }
+
   override async invoke(
     input: BaseLanguageModelInput,
     config?: CogniCompletionConfig

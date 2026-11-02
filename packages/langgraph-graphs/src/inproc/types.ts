@@ -21,6 +21,7 @@ import type {
   ToolSpec,
 } from "@cogni/ai-core";
 import type { ToolContract } from "@cogni/ai-tools";
+import type { BaseCheckpointSaver, BaseStore } from "@langchain/langgraph";
 // Import shared graph types from graphs/types.ts (single source of truth)
 import type {
   CreateReactAgentGraphOptions,
@@ -152,6 +153,17 @@ export interface InProcRunnerOptions<TTool = unknown> {
    * Used by operator graphs where the prompt is catalog-driven, not hardcoded.
    */
   readonly systemPrompt?: string;
+
+  /**
+   * Optional persistence foundation (langgraph-persistence). Injected by the host so the engine
+   * compiles with a checkpointer (per-run/thread state) and a Store (cross-thread working memory).
+   * Absent ⇒ the runner uses an in-process dev `MemorySaver`/`InMemoryStore` (lost on restart).
+   * Prod injects a `PostgresSaver`-backed pair through this same seam (`.setup()` at deploy).
+   */
+  readonly persistence?: {
+    readonly checkpointer?: BaseCheckpointSaver;
+    readonly store?: BaseStore;
+  };
 }
 
 /**
