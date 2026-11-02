@@ -6,6 +6,7 @@
 
 - **Owners:** @derek @core-dev
 - **Status:** stable
+- **Last reviewed:** 2026-11-01
 
 ## Purpose
 
@@ -38,7 +39,7 @@ Bottom-of-tree type definitions. TS utility types, branded types, ambient global
 
 ## Public Surface
 
-- `akash-native-state.ts`: app-private native observation and full lease identity DTOs; independent deployment/lease coverage, safe errors and observation times. No runtime code or Console lifecycle dependency.
+- `akash-native-state.ts`: app-private native observation and full lease identity DTOs; independent deployment/lease coverage, safe errors and observation times; bounded wallet inventory and own-handle native evidence DTOs. No runtime code or Console lifecycle dependency.
 
 - **Exports:** TS utility types, branded types, global.d.ts, Env interfaces, domain enums
   - `payments.ts` - PaymentFlowState, PaymentStatus, PaymentAttemptStatus, PaymentErrorCode (canonical source)

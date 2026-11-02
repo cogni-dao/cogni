@@ -73,6 +73,7 @@ describe("DrizzleComputeCostStore (Component)", () => {
     });
     if (claim.state !== "claimed") throw new Error("expected a fresh claim");
     await ledger.recordAllocation({
+      expected: claim.record,
       cogniKey,
       externalName,
       providerAccount: "akash1provider",

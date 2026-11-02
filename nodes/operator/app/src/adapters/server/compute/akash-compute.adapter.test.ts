@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import { createHash } from "node:crypto";
-
 import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { AkashTxError } from "@/ports";
 import {
   AKASH_OVERCLOCK_AUDITOR,
   AkashComputeAdapter,
@@ -1440,6 +1440,30 @@ describe("AkashComputeAdapter boot SLO", () => {
 });
 
 describe("AkashComputeAdapter failure containment", () => {
+  it.each([
+    "headers",
+    "body",
+    "error-body",
+  ] as const)("bounds recovery %s by its caller deadline", async (stage) => {
+    let signal: AbortSignal | null | undefined;
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      signal = init?.signal;
+      if (stage === "headers") return new Promise<Response>(() => {});
+      return new Response(new ReadableStream({ start() {} }), {
+        status: stage === "error-body" ? 500 : 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const started = Date.now();
+    await expect(
+      makeAdapter(fetchImpl).findAllocationSince("41", {
+        deadlineAt: Date.now() + 50,
+      })
+    ).rejects.toMatchObject({ code: "TIMEOUT" });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(signal?.aborted).toBe(true);
+  });
+
   it("adopts exactly one deployment created beyond a durable allocation cursor", async () => {
     let listWave = 0;
     const fetchImpl = vi.fn<typeof fetch>(async (url) => {
@@ -1772,6 +1796,28 @@ describe("AkashComputeAdapter transaction boundary (task.5095)", () => {
     expect((error as AkashComputeError).rolledBackDseq).toBe("1");
   });
 
+  it("keeps an unknown database commit HELD without compensation or leasing", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1zen")],
+      bids: (dseq) => [bidEntry(dseq, "akash1zen", "100")],
+    });
+    const unknown = new AkashTxError(
+      "outcome_unknown",
+      "HELD: COMMIT ACK lost"
+    );
+    await expect(
+      makeAdapter(h.fetchImpl).allocateAndLease({
+        spec: SPEC,
+        onAllocated: async () => {
+          throw unknown;
+        },
+      })
+    ).rejects.toBe(unknown);
+    expect(h.createBodies).toHaveLength(1);
+    expect(h.deletes).toEqual([]);
+    expect(h.leased).toEqual([]);
+  });
+
   it("closes the deployment when the caller cannot persist the allocated handle", async () => {
     const h = harness({
       providers: [providerEntry("akash1zen")],
@@ -1933,5 +1979,97 @@ describe("recovery allocation money policy", () => {
       })
     ).rejects.toBeInstanceOf(AkashComputeError);
     expect(h.leased).toEqual([]);
+  });
+});
+
+describe("allocation caller deadline with the normal auction window", () => {
+  it.each([
+    { preferredProviders: [] },
+    { preferredProviders: ["missing-preferred"] },
+    { preferredProviders: ["eligible"] },
+  ])("leases an eligible bidder with optional preference %j before the original budget expires", async ({
+    preferredProviders,
+  }) => {
+    let elapsed = 0;
+    const startedAt = Date.now();
+    const now = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => startedAt + elapsed);
+    try {
+      const h = harness({
+        providers: [providerEntry("eligible")],
+        bids: (dseq) => [bidEntry(dseq, "eligible", "1")],
+      });
+      const adapter = new AkashComputeAdapter({
+        apiKey: "inert-test-key",
+        timeoutMs: 1000,
+        fetchImpl: h.fetchImpl,
+        preferredProviders,
+        outcomeStore: memStore().store,
+        sleepImpl: async (ms) => {
+          elapsed += ms;
+        },
+      });
+      const recorded: string[] = [];
+      const result = await adapter.allocateAndLease({
+        spec: SPEC,
+        deadlineAt: startedAt + 30_000,
+        onAllocated: async (handle) => {
+          recorded.push(handle);
+        },
+      });
+      expect(recorded).toEqual([result.leaseId]);
+      expect(h.leased).toEqual([
+        { dseq: result.leaseId, provider: "eligible" },
+      ]);
+      expect(h.deletes).toEqual([]);
+      expect(elapsed).toBeLessThan(30_000);
+      if (preferredProviders.includes("eligible")) expect(elapsed).toBe(0);
+      else expect(elapsed).toBeGreaterThan(0);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it.each([
+    "/v1/providers",
+    "/v1/deployments",
+    "/v1/bids",
+    "/v1/leases",
+  ])("bounds stalled %s and revokes late answers without compensation", async (stalledPath) => {
+    let resume: ((response: Response) => void) | undefined;
+    const calls: string[] = [];
+    const h = harness({
+      providers: [providerEntry("eligible")],
+      bids: (dseq) => [bidEntry(dseq, "eligible", "1")],
+    });
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      calls.push(`${init?.method ?? "GET"} ${url.pathname}`);
+      if (url.pathname === stalledPath)
+        return new Promise<Response>((resolve) => {
+          resume = resolve;
+        });
+      return h.fetchImpl(input, init);
+    };
+    const adapter = makeAdapter(fetchImpl, {
+      preferredProviders: ["eligible"],
+    });
+    const recorded = vi.fn(async () => {});
+    await expect(
+      adapter.allocateAndLease({
+        spec: SPEC,
+        deadlineAt: Date.now() + 50,
+        onAllocated: recorded,
+      })
+    ).rejects.toMatchObject({ code: "outcome_unknown" });
+    const beforeLateAnswer = [...calls];
+    resume?.(jsonResponse({ data: { dseq: "late", manifest: [] } }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toEqual(beforeLateAnswer);
+    expect(calls.some((call) => call.startsWith("DELETE"))).toBe(false);
+    if (["/v1/providers", "/v1/deployments"].includes(stalledPath))
+      expect(recorded).not.toHaveBeenCalled();
   });
 });

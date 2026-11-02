@@ -33,75 +33,96 @@ import type {
 } from "@/ports";
 import { nodeMigrationReports } from "@/shared/db/schema";
 import type { AppliedMigration } from "@/shared/migrations/migration-receipt";
+import { actorDatabaseAwait } from "../compute/akash-actor-scope";
 
 export class DrizzleNodeMigrationReportStore
   implements NodeMigrationReportStorePort
 {
-  constructor(private readonly getDb: () => Promise<Database>) {}
+  constructor(private readonly database: () => Promise<Database>) {}
+
+  /** Raw capabilities stay inside these concrete operation implementations. */
+  async #withDatabase<T>(
+    deadlineAt: number | undefined,
+    operation: (db: Database) => Promise<T>
+  ): Promise<T> {
+    const db = await actorDatabaseAwait(this.database, deadlineAt);
+    return actorDatabaseAwait(() => operation(db), deadlineAt);
+  }
 
   async record(
-    input: RecordNodeMigrationReportInput
+    input: RecordNodeMigrationReportInput,
+    deadlineAt?: number
   ): Promise<RecordNodeMigrationReportOutcome> {
-    const db = await this.getDb();
+    return this.#withDatabase(deadlineAt, async (db) => {
+      // The write key is the node id the operator's own allocation receipt already bound to this
+      // workload before any Console transaction (IDENTITY_IS_AUTHORITATIVE_NOT_INFERRED). Nothing
+      // on an inbound request body can name it, so a reporter still cannot write another node's
+      // cell — and resolving it HERE is what silently voided every receipt, because the only
+      // registry this adapter could ask is tenant-scoped and this process has no tenant.
+      const row = {
+        nodeId: input.nodeId,
+        environment: input.environment,
+        declared: input.declared,
+        applied: input.applied,
+        appliedCount: input.applied.length,
+        bundleDigest: input.bundleDigest ?? null,
+        reporter: input.reporter,
+        reportedAt: new Date(),
+      };
 
-    // The write key is the node id the operator's own allocation receipt already bound to this
-    // workload before any Console transaction (IDENTITY_IS_AUTHORITATIVE_NOT_INFERRED). Nothing
-    // on an inbound request body can name it, so a reporter still cannot write another node's
-    // cell — and resolving it HERE is what silently voided every receipt, because the only
-    // registry this adapter could ask is tenant-scoped and this process has no tenant.
-    const row = {
-      nodeId: input.nodeId,
-      environment: input.environment,
-      declared: input.declared,
-      applied: input.applied,
-      appliedCount: input.applied.length,
-      bundleDigest: input.bundleDigest ?? null,
-      reporter: input.reporter,
-      reportedAt: new Date(),
-    };
-
-    // Current state, last-write-wins: a later deploy's receipt supersedes an earlier one.
-    await db
-      .insert(nodeMigrationReports)
-      .values(row)
-      .onConflictDoUpdate({
-        target: [nodeMigrationReports.nodeId, nodeMigrationReports.environment],
-        set: {
-          declared: row.declared,
-          applied: row.applied,
-          appliedCount: row.appliedCount,
-          bundleDigest: row.bundleDigest,
-          reporter: row.reporter,
-          reportedAt: row.reportedAt,
-        },
-      });
-    return "recorded";
+      // Current state, last-write-wins: a later deploy's receipt supersedes an earlier one.
+      await actorDatabaseAwait(() =>
+        db
+          .insert(nodeMigrationReports)
+          .values(row)
+          .onConflictDoUpdate({
+            target: [
+              nodeMigrationReports.nodeId,
+              nodeMigrationReports.environment,
+            ],
+            set: {
+              declared: row.declared,
+              applied: row.applied,
+              appliedCount: row.appliedCount,
+              bundleDigest: row.bundleDigest,
+              reporter: row.reporter,
+              reportedAt: row.reportedAt,
+            },
+          })
+      );
+      return "recorded" as const;
+    });
   }
 
   async read(input: {
     readonly nodeId: string;
     readonly environment: string;
+
+    deadlineAt?: number;
   }): Promise<NodeMigrationReportRecord | null> {
-    const db = await this.getDb();
-    const [row] = await db
-      .select()
-      .from(nodeMigrationReports)
-      .where(
-        and(
-          eq(nodeMigrationReports.nodeId, input.nodeId),
-          eq(nodeMigrationReports.environment, input.environment)
-        )
-      )
-      .limit(1);
-    if (!row) return null;
-    return {
-      nodeId: row.nodeId,
-      environment: row.environment,
-      declared: (row.declared ?? []) as readonly string[],
-      applied: (row.applied ?? []) as readonly AppliedMigration[],
-      bundleDigest: row.bundleDigest,
-      reporter: row.reporter,
-      reportedAt: row.reportedAt.toISOString(),
-    };
+    return this.#withDatabase(input.deadlineAt, async (db) => {
+      const [row] = await actorDatabaseAwait(() =>
+        db
+          .select()
+          .from(nodeMigrationReports)
+          .where(
+            and(
+              eq(nodeMigrationReports.nodeId, input.nodeId),
+              eq(nodeMigrationReports.environment, input.environment)
+            )
+          )
+          .limit(1)
+      );
+      if (!row) return null;
+      return {
+        nodeId: row.nodeId,
+        environment: row.environment,
+        declared: (row.declared ?? []) as readonly string[],
+        applied: (row.applied ?? []) as readonly AppliedMigration[],
+        bundleDigest: row.bundleDigest,
+        reporter: row.reporter,
+        reportedAt: row.reportedAt.toISOString(),
+      };
+    });
   }
 }

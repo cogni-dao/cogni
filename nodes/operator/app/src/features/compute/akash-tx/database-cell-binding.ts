@@ -945,6 +945,7 @@ export class DatabaseCellBinder
         "production cutover requires its reviewed human packet"
       );
     const receipts = await this.seal(input);
+    const original = await this.record(input);
     const prod = receipts.find(
       (receipt) => receipt.binding.environment === "production"
     );
@@ -1000,7 +1001,7 @@ export class DatabaseCellBinder
           : receipt
       )
     );
-    await this.deps.store.save(await this.record(input), applied, receipts);
+    await this.deps.store.save(original, applied, receipts);
     return applied;
   }
 }

@@ -6,7 +6,7 @@
 
 - **Owners:** @cogni-dao
 - **Status:** stable
-- **Last reviewed:** 2026-10-15
+- **Last reviewed:** 2026-11-01
 
 ## Purpose
 
@@ -42,7 +42,7 @@ Database client factory and Drizzle adapter implementations for scheduling and l
 ## Public Surface
 
 - **Exports (root `@cogni/db-client`):**
-  - `createAppDbClient(url, options?)` — client factory for `app_user` role (RLS enforced); injected `DbClientOptions` bounds process pool size and names the consumer
+  - `createAppDbClient(url, options?)` — client factory for `app_user` role (RLS enforced); injected `DbClientOptions` bounds process pool size and names the consumer; optional public socket/TLS construction options let the injecting owner seal and dispose its own transport; `fetchTypes` controls automatic array-type discovery for consumers that use only scalar and JSONB values
   - `withTenantScope(db, actorId, fn)` — transaction wrapper setting RLS context
   - `setTenantContext(tx, actorId)` — sets RLS context in existing transaction
   - `Database`, `DbClientOptions`, `LoggerLike` — Drizzle client type (includes `$client: Sql` for pool control), optional pool configuration, and logger interface
