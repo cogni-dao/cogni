@@ -97,6 +97,15 @@ Mechanism (all shipped, task.5044 / PR #2077):
 - **Seam warning:** `bootstrap/capabilities/compute.ts` (the `COMPUTE_WRITE_PROVIDER` selection point) is owned by the crypto-rail workstream — advise around it, never through it.
 - Living design doc: hub entry `akash-node-deploy-v000` (+ `akash-provider-quality-mandate` for bid screening/boot SLO/blacklist); roadmap + task map: story.5016.
 
+### Node-deploy lane (task.5400)
+
+A new operator lane deploys DECLARED workloads (`deployment.workloads[]` in a node's `.cogni/repo-spec.yaml`, kinds `app|state`) to Akash by immutable blue/green. Design: hub entry `node-service-delivery` (https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-249e8b6d, pending human merge); code: operator PR #3005, `nodes/operator/app/src/features/node-deploy/`, `bootstrap/node-deploy-sequencer.ts`.
+
+- **Sequence:** create (the akash-tx actuator pays; key `nd:<ns>:<nodeId>:<workload>:<releaseId>:<attempt>`) → prove (exact `/version.buildSha` + `/readyz`, 10 min) → proxied Cloudflare edge flip with 8 consecutive DoH public reads → retain blue → close + confirm closed. `state` workloads get their own long-lived lease and are never auto-replaced. Reconcile re-runs the same verb (app/worker only; state is never auto-replaced) on chain-confirmed closed, `insufficient_funds`, or a proof failing for 15 consecutive minutes.
+- **Intent:** `POST /api/v1/deploy/workloads {nodeId, env, workload, sourceSha}` and `GET /api/v1/deploy/workloads?nodeId=&env=`. OpenFGA: production needs `node.promote_production`; candidate-a needs `node.manage_envs`. The route rejects an env the deployment does not serve.
+- **Runtime:** `operator-node-deploy-sequencer` Deployment (candidate-a + production overlays only); secrets live in the `cogni-node-deploy-<env>` namespace. The operator app DB role `connection_limit` goes 7→8 via `POST /api/v1/deploy/infra-reconcile`.
+- **Status (YELLOW):** shipping (PR #3005); candidate-a proof: sequencer boot, leader lock, route authz; production canary proof tracked on story.5127. It is the target path that replaces the XComputeWorkload/Crossplane/deploy-branch path per node after parity (design CD9 table). Only the operator node declares workloads today; every other node stays on the Crossplane lane until it declares and proves parity.
+
 ## Current infra reality — 2026-06-01 post-split candidate-a
 
 The old shared candidate-a shape is retired. The Cogni monorepo and each node repo
