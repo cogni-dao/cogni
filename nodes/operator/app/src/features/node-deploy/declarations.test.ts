@@ -112,6 +112,22 @@ describe("the operator's checked-in canary declarations", () => {
     );
   });
 
+  it("refuses an exclusive app: blue and green overlap and there is no fence yet (CD6)", () => {
+    const text = ROOT_SPEC.replace(
+      /(name: canary\n[\s\S]*?exclusive: )false/,
+      "$1true"
+    );
+    expect(text).not.toBe(ROOT_SPEC);
+    expect(() =>
+      resolveWorkloadDeclaration({
+        repoSpecText: text,
+        nodeId: NODE_ID,
+        env: "production",
+        workload: "canary",
+      })
+    ).toThrow(expect.objectContaining({ code: "exclusive_unsupported" }));
+  });
+
   it("refuses another node's id and an undeclared workload", () => {
     const call = (nodeId: string, workload: string) =>
       resolveWorkloadDeclaration({

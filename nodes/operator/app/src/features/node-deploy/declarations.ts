@@ -11,6 +11,8 @@
  *     mutable branch, and the resolved spec is frozen into the release row.
  *   - SPEC_IS_THE_NODES_OWN: the spec's `node_id` must equal the requested node; a repo-spec that
  *     names another node is refused, so a caller can never deploy another node's workloads.
+ *   - EXCLUSIVE_IS_REFUSED (CD6): an `app` that declares `exclusive: true` is refused, because blue and
+ *     green overlap and the fenced lock that makes that safe is not built yet.
  *   - HOST_FOLLOWS_ENV: a declaration names its PRODUCTION host; other environments get the
  *     `-test` (candidate-a) / `-preview` / `-dev` sibling of its first label, so one declaration serves
  *     every environment without a per-env copy.
@@ -46,7 +48,8 @@ export function hostForEnv(host: string, env: string): string {
 export type DeclarationErrorCode =
   | "repo_spec_unparseable"
   | "node_mismatch"
-  | "workload_not_declared";
+  | "workload_not_declared"
+  | "exclusive_unsupported";
 
 export class DeclarationError extends Error {
   constructor(
@@ -85,6 +88,13 @@ export function resolveWorkloadDeclaration(input: {
     throw new DeclarationError(
       "workload_not_declared",
       `workload ${input.workload} is not declared under deployment.workloads`
+    );
+  if (declared.kind === "app" && declared.exclusive)
+    // CD6: two live leases overlap during blue/green, so an `exclusive: true` workload needs the node's
+    // fenced lock first. The fence does not exist yet; refuse rather than risk two leaders.
+    throw new DeclarationError(
+      "exclusive_unsupported",
+      `workload ${declared.name} declares exclusive: true; blue/green is refused until its node adopts the fence`
     );
   if (!("http" in declared.expose)) return declared;
   return {
