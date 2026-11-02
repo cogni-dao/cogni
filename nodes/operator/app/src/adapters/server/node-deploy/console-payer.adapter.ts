@@ -100,10 +100,7 @@ export interface ConsolePayerConfig {
 
 export class ConsolePayer implements PayerPort {
   private readonly base: string;
-  private keys: Record<
-    string,
-    { dseq: string; provider?: string }
-  >;
+  private keys: Record<string, { dseq: string; provider?: string }>;
 
   private constructor(private readonly cfg: ConsolePayerConfig) {
     this.base = cfg.baseUrl ?? "https://console-api.akash.network";
