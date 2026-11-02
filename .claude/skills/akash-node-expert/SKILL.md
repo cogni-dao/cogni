@@ -139,15 +139,15 @@ Node-birth adjacents on main (2026-09-11): `POST /api/v1/nodes/{id}/reconcile-pr
 
 Operator PR #3005 adds a lane for DECLARED workloads (`deployment.workloads[]` in the node's `.cogni/repo-spec.yaml`, kinds `app|state`): immutable blue/green. Design: hub `node-service-delivery` (https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-249e8b6d, pending human merge). Code: `nodes/operator/app/src/features/node-deploy/`.
 
-- create (the akash-tx actuator stays the only payer; key `nd:<ns>:<nodeId>:<workload>:<releaseId>:<attempt>`) → prove (exact `/version.buildSha` + `/readyz`, 10 min) → proxied Cloudflare edge flip, 8 consecutive DoH public reads → retain blue → close + confirm. `state` workloads keep one long-lived lease, never auto-replaced. Reconcile re-runs the same verb on chain-confirmed loss.
-- Intent: `POST /api/v1/deploy/workloads {nodeId, env, workload, sourceSha}`; read: `GET /api/v1/deploy/workloads?nodeId=&env=`. Runtime: `operator-node-deploy-sequencer` (candidate-a + production overlays). Only the operator node declares workloads today (YELLOW); other nodes stay on the Crossplane path above.
+- create (the akash-tx actuator stays the only payer; key `nd:<ns>:<nodeId>:<workload>:<releaseId>:<attempt>`) → prove (exact `/version.buildSha` + `/readyz`, 10 min) → proxied Cloudflare edge flip, 8 consecutive DoH public reads → retain blue → close + confirm. `state` workloads keep one long-lived lease, never auto-replaced. Reconcile re-runs the same verb (app/worker only; state is never auto-replaced) on chain-confirmed closed, `insufficient_funds`, or a proof failing for 15 consecutive minutes.
+- Intent: `POST /api/v1/deploy/workloads {nodeId, env, workload, sourceSha}`; read: `GET /api/v1/deploy/workloads?nodeId=&env=`. Runtime: `operator-node-deploy-sequencer` (candidate-a + production overlays). Status: shipping (PR #3005); candidate-a proof: sequencer boot, leader lock, route authz; production canary proof tracked on story.5127. Only the operator node declares workloads today (YELLOW); other nodes stay on the Crossplane path above.
 
 **Poly production placement findings, 2026-11-02** (restored via PR #3004: UA added to placement, egress `89.207.152.9/32` bridge, gen 26; lease 1793655838404 on RHITE FI serves 79bfc63f):
 
 - Gen-24/25 failed `provider_rejected` with zero FI/NL/PT bids, although the byte-identical spec drew FI bids from the dev wallet. Gen-26 then leased RHITE FI. Cause unknown: read the provider roster first, then probe with the dev key.
 - Providers froggy (RO) and metz (CH) return nginx 404 for every host. Exclude them.
-- RHITE FI and BG h6i egress IP varies per pod; do not pin a `compute_egress_cidrs` /32 to them. UA ithub egress `89.207.152.9` and FI m3a `95.217.72.142` were measured stable.
-- The Polymarket CLOB geoblock covers only Crimea, Donetsk and Luhansk in UA, so UA providers are usable.
+- RHITE FI and BG h6i egress IP varies per pod; do not pin a `compute_egress_cidrs` /32 to them. UA ithub egress `89.207.152.9` and FI m3a `95.217.72.142` were measured stable (dev-wallet leases 2026-11-02, three leases).
+- The Polymarket CLOB geoblock covers only Crimea, Donetsk and Luhansk in UA, so UA providers are usable. An accepted CLOB order is not yet proven.
 
 ## The four once-manual bridges, now code (all live-proven 2026-09-10)
 
