@@ -8,9 +8,9 @@
  *   Akash lease. These assertions exist because every one of them, if violated, costs real
  *   money or leaks a real credential.
  * Scope: Static YAML/text checks; does NOT contact a cluster, a provider, or a wallet. Reads
- *   infra/crossplane/xcomputeworkload and its Argo Application. The Go-template render itself
- *   cannot run here (function-go-templating is a Go binary), so the invariants below are
- *   deliberately the ones provable from the SOURCE.
+ *   infra/crossplane/xcomputeworkload and its Argo Application. Includes an actual Go +
+ *   sprig render replay using the pinned fixture module. Setup requires Go >=1.21 as a
+ *   bootstrap and HTTPS access to proxy.golang.org/sum.golang.org; assertions run offline.
  * Invariants:
  *   - NO_SECRET_VALUES: every credential on the wire is a provider-http `{{ name:ns:key }}`
  *     placeholder; a literal value in this directory is unrecoverable once it reaches git.
@@ -28,15 +28,26 @@
  *     external-handle OBSERVE proof, including revisions that previously served.
  *   - OVERLAP_BEFORE_CLOSE: a lease close is IRREVERSIBLE and its idempotence key is refused
  *     forever once settled, so the outgoing lease is held open until the incoming one is proven
- *     serving and DNS has flipped. Never more than two lease children for one (node, env).
+ *     serving and DNS has flipped. At most two LIVE allocation intents for one (node, env).
+ *     A proven closed predecessor may remain as a third Request until selection persists.
  * Side-effects: IO (reads repo manifests)
  * Links: story.5016 R2.3, task.5095, task.5096, infra/crossplane/AGENTS.md
  * @public
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -242,7 +253,7 @@ describe("XComputeWorkload composite API (task.5096)", () => {
       // bug.5287: the deadline binds to the CURRENT attempt via $hasServedDesired.
       // The retired '$neverServed' form keyed on a LATCHED field, so it could only ever be
       // true on a first boot and made BOOT_SLO_OR_CLOSE unreachable thereafter.
-      '$deadlineExceeded := and (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds)'
+      '$deadlineExceeded := and (not $closed) (not $parkedClosed) (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds)'
     );
   });
 
@@ -254,17 +265,19 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     expect(template).toContain(
       '$bootKey := printf "%s:%d" $desiredSha $leaseGeneration'
     );
-    expect(template).toContain('dig "status" "bootEpoch" "key" "" $xr');
+    expect(template).toContain(
+      '{{- $prevBootKey := dig "key" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "" }}'
+    );
     // The window resets ONLY when the attempt key changes — a mere re-render of the same
     // attempt must keep the recorded start, or the deadline could never fire at all.
-    expect(template).toContain(
-      'and (eq $prevBootKey $bootKey) (ne $prevBootAt "")'
-    );
+    expect(template).toContain('and $sameBootAttempt (ne $prevBootAt "")');
     // The latch is persisted where the next render reads it.
     const bootEpoch = (statusSchema.bootEpoch as YamlObject)
       .properties as YamlObject;
     expect(Object.keys(bootEpoch)).toEqual(["key", "at", "mintedAt"]);
-    expect(template).toContain('dig "status" "bootEpoch" "mintedAt" "" $xr');
+    expect(template).toContain(
+      '{{- $mintedAt = dig "mintedAt" "" (dig "status" "bootEpoch" (dict) $xr | default (dict)) | default "" }}'
+    );
     expect(template).toContain(
       'and (eq $mintedAt "") $found (not $closed) (ne $externalName "") (eq $responseKey $currentKey)'
     );
@@ -328,7 +341,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // deadline on it made BOOT_SLO_OR_CLOSE unreachable for the rest of an XR's life — toks5
     // production billed three generations with bootDeadlineAt hours past and reason=None.
     expect(templateCode).toContain(
-      '$deadlineExceeded := and (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds)'
+      '$deadlineExceeded := and (not $closed) (not $parkedClosed) (ne $mintedAt "") (not $hasServedDesired) (gt $mintAgeSeconds $bootDeadlineSeconds)'
     );
     // no live template expression may reference the retired predicate
     const live = templateCode
@@ -479,7 +492,19 @@ describe("XComputeWorkload Composition (task.5096)", () => {
       '$currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount'
     );
     expect(templateCode).toContain(
-      "$closedForCurrentKey := and $closed (eq $responseKey $currentKey)"
+      "$closedForCurrentKey := and (hasKey $closedKeys $currentKey) (not (hasKey $ambiguousKeys $currentKey))"
+    );
+    expect(templateCode).toContain(
+      "native spec and recorded paid key disagree"
+    );
+    expect(templateCode).toContain("duplicate native owners of one paid key");
+    expect(templateCode).toContain(
+      '$leaseResourceName = printf "akash-lease-g%d-recover-%d" $leaseGeneration $recoveryCount'
+    );
+    expect(
+      templateCode.indexOf("$recoveryCount = add1 $recoveryCount")
+    ).toBeLessThan(
+      templateCode.indexOf("$leaseResourceName := get $owners $currentKey")
     );
     // An explicit base-generation bump must select a NEW provider-http Request child. Updating
     // the old child invokes UPDATE, which cannot mint the replacement the generation promises.
@@ -641,7 +666,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // The actuator still resolves a RELEASED key to its handle (state `closed`), so a naive
     // `found == false` check would leave the Request — and therefore the XR — undeletable.
     expect(template).toContain(
-      '(.response.body.found == false) or (.response.body.resource.state == "closed")'
+      '(.response.body.found == false) or ((.response.body.resource.state // .response.body.state) == "closed")'
     );
     // The namespaced Request has NO deletionPolicy field; management defaults to ["*"],
     // which includes Delete. Orphan is never right for a resource that costs money.
@@ -963,21 +988,15 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect("None").toMatch(reasonPattern);
   });
 
-  it("reports a settled-key closed lease as LeaseClosed, not a Progressing lie (task.5156)", () => {
-    // The render side PARKS a closed lease observed under a non-current key (the Axiom 26 fence
-    // above). The status side must tell the same truth. $heldClosed only catches
-    // $closedForCurrentKey, so before this branch a closed-under-foreign-key lease with no
-    // recovery in flight missed every fail branch and fell through to the default
-    // Progressing/reason:"None" — status claimed a permanently-parked lease was still coming up.
-    expect(template).toContain("{{- else if $closed }}");
-    // Ordered strictly AFTER the active-recovery branch, or it would swallow
-    // LeaseRecoveryInProgress and report a recovering lease as terminally closed.
-    const chain = template.slice(
-      template.lastIndexOf('{{- $phase := "Progressing" }}')
+  it("rejects conflicting paid ownership before returning any desired resources", () => {
+    // Native Go acceptance covers whole-render failure, first-pass terminal
+    // retention and durable LeaseClosed/max3 parking after native child loss.
+    expect(templateCode).toContain(
+      "native spec and recorded paid key disagree"
     );
-    expect(chain.indexOf("LeaseRecoveryInProgress")).toBeLessThan(
-      chain.indexOf("{{- else if $closed }}")
-    );
+    expect(templateCode).toContain("unexplained ahead/behind paid attempt");
+    expect(templateCode).toContain('$failReason = "LeaseClosed"');
+    expect(templateCode).toContain('$failReason = "RecoveryLimitExceeded"');
   });
 
   it("keeps paid replacement OPT-IN and BOUNDED now that Replace is admitted (story.5050)", () => {
@@ -1001,14 +1020,14 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect(template).toContain('$failReason = "LeaseClosed"');
     // The retry is only useful because it lands ELSEWHERE — the excluded set is what makes a
     // bounded re-mint progress instead of re-picking the dead provider three times.
-    expect(templateCode).toContain("$desiredRecoveryPrefix");
+    expect(templateCode).toContain("$desiredKeys");
   });
 
-  it("never re-renders a lease Request under a settled key (Axiom 26 fence)", () => {
-    // Closed current and foreign keys remain parked exactly as before. A different explicit base
-    // generation is handled by selecting a NEW generation-qualified child above this fence.
+  it("persists terminal proof before omission without selecting a spent key", () => {
+    // The native Go suite covers the required first retaining pass and durable
+    // parks. Conflicting foreign-key frames fail before producing resources.
     expect(template).toContain(
-      "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey)))"
+      "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed $parkedClosed)"
     );
     expect(template).toContain(
       '$heldClosed := and $closedForCurrentKey (ne $onGiveUp "Replace")'
@@ -1049,7 +1068,7 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     }
   });
 
-  it("carries the lease handle through a refusal, but never invents one", () => {
+  it("retains bound history through unproven responses without inventing liveness", () => {
     // provider-http overwrites status.response.body with the ERROR body of a failed mutation,
     // so a 4xx on UPDATE leaves the render with no observation — and the naive result is that
     // status.resource.id vanishes at the exact moment an operator needs the lease handle to
@@ -1057,12 +1076,16 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect(template).toContain(
       '$prevResource := dig "status" "resource" (dict) $xr'
     );
+    expect(template).toContain("{{- else if $retainResourceHistory }}");
     expect(template).toContain(
-      '{{- else if and (ne $refusalCode "") $prevResource }}'
+      '$retainResourceHistory := and $samePaidAttempt (ne (dig "id" "" $prevResource) "") (not $observedAbsent)'
     );
-    // The latch is guarded on the REFUSAL, not merely on `found == false`: a genuine
-    // `found: false` observation really does mean gone, and advertising a stale handle there
-    // would be a lie.
+    expect(template).toContain(
+      '$observedAbsent := and $isCurrentObservation (ge $respStatus 200) (lt $respStatus 300) (hasKey $resp "found") (not $found)'
+    );
+    // Missing/no-code responses cannot erase a paid tuple. A positive current
+    // found:false observation still clears normal resource status. Actual-template
+    // sequences below discriminate both cases without treating history as liveness.
     expect(template).not.toContain("{{- else if $prevResource }}");
   });
 
@@ -1256,7 +1279,7 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     );
     expect(templateCode).not.toContain("$leaseRevisionPending");
     expect(templateCode).toContain(
-      '$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven'
+      "$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $leaseCreatePendingTime.IsZero) $leaseReceiptProven"
     );
     expect(templateCode).toContain(
       "$unsafeLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $recoverLeaseCreateAmbiguity)"
@@ -1383,7 +1406,7 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       /\$recoverLeaseCreateAmbiguity :=[^\n]+/
     )?.[0];
     expect(recoveryDeclaration).toBe(
-      '$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven }}'
+      "$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $leaseCreatePendingTime.IsZero) $leaseReceiptProven }}"
     );
     expect(leaseBlock).toContain(
       "crossplane.io/external-create-succeeded: {{ $leaseCreatePending | quote }}"
@@ -1391,7 +1414,10 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     // Acknowledging the create receipt does not fabricate a successful probe.
     expect(leaseBlock).toContain("{{- if and $active $serving }}");
     expect(templateCode).toContain(
-      '{{- $serving := dig "serving" false $resp }}'
+      '{{- if $leaseObs }}{{ $isCurrentObservation = and (eq (dig "status" "requestDetails" "method" "" $leaseObs.resource) "POST") (eq (dig "status" "requestDetails" "url" "" $leaseObs.resource) (printf "%s/v1/akash/observe" $baseUrl)) }}{{ end }}'
+    );
+    expect(templateCode).toContain(
+      '{{- $serving := and $isCurrentObservation (ge $respStatus 200) (lt $respStatus 300) (eq $responseKey $currentKey) (eq $lastRequestedSha $desiredSha) (hasKey $resp "found") (dig "serving" false $resp) }}'
     );
   });
 });
@@ -1637,8 +1663,8 @@ describe("XComputeWorkload placement requirement (story.5050)", () => {
  * stale sha, no lease). A close is IRREVERSIBLE and its idempotence key is refused forever once
  * settled, so the ordering must be mint -> prove serving -> flip DNS -> close.
  *
- * The Go render itself cannot run in this suite (function-go-templating is a Go binary), so the
- * behavioural cases below drive a TypeScript MODEL of the three decisions this change touches:
+ * Actual Go + sprig render acceptance runs below for bug.5557. These older
+ * behavioural cases drive a TypeScript MODEL of the three decisions bug.5322 touches:
  * which lease children are rendered, which key the retained one carries, and when
  * status.activeLeaseGeneration advances. The model is kept honest by
  * "the model mirrors the template it stands in for" below, which pins every expression it
@@ -1683,13 +1709,13 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
   const CANDIDATE_TARGET = "provider-green.akash.example";
 
   /**
-   * Mirrors, in order: GENERATION_BUMP_REPLACES_THE_REQUEST (unchanged by this PR),
+   * Mirrors, in order: PAID_KEY_OWNS_CHILD_IDENTITY,
    * OVERLAP_BEFORE_CLOSE, the candidate observation, the last-known-good DNS latch, and the
    * status.activeLeaseGeneration write.
    *
-   * Scope: assumes $renderLease is true (the terminal fences it is built from — $closeForBudget,
-   * $recoveryExhausted, $heldClosed, the settled-key clause — are untouched by this change and
-   * are pinned verbatim by "never re-renders a lease Request under a settled key"). The DNS leg
+   * Scope: non-recovery frames with $renderLease true. Native Go acceptance owns
+   * terminal two-pass retirement and the three-Request/two-live-allocation case.
+   * This model does not implement the recovery selector. The DNS leg
    * models the provider-HOSTNAME branch only; the IPv4/A-record split is pinned by
    * "uses a hostname CNAME when available and falls back to an IPv4 A record".
    */
@@ -1697,25 +1723,31 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     const observed = xr.observed;
     const baseCogniKey = `xcw:${NS}:${NAME}:${xr.leaseGeneration}`;
 
-    // ---- GENERATION_BUMP_REPLACES_THE_REQUEST (pre-existing, unchanged)
+    // ---- PAID_KEY_OWNS_CHILD_IDENTITY (bug.5557); real Go replay lives in
+    // fixtures/xcomputeworkload-render/render_test.go.
     let leaseRequestGeneration = xr.status.leaseRequestGeneration ?? -1;
-    let leaseResourceName =
-      leaseRequestGeneration >= 0
-        ? `akash-lease-g${leaseRequestGeneration}`
-        : "akash-lease";
-    const initialResponseKey = observed[leaseResourceName]?.requestKey ?? "";
-    const initialMatchesDesired =
-      initialResponseKey === baseCogniKey ||
-      initialResponseKey.startsWith(`${baseCogniKey}:recover:`);
-    if (
-      (leaseRequestGeneration >= 0 &&
-        leaseRequestGeneration !== xr.leaseGeneration) ||
-      (leaseRequestGeneration < 0 &&
-        initialResponseKey !== "" &&
-        !initialMatchesDesired)
-    ) {
-      leaseRequestGeneration = xr.leaseGeneration;
-      leaseResourceName = `akash-lease-g${xr.leaseGeneration}`;
+    const desiredKeys = [
+      baseCogniKey,
+      ...[1, 2, 3].map((n) => `${baseCogniKey}:recover:${n}`),
+    ];
+    const matching = Object.keys(observed).filter(
+      (name) =>
+        name.startsWith("akash-lease") &&
+        desiredKeys.includes(observed[name].requestKey ?? "")
+    );
+    if (matching.length > 1) throw new Error("duplicate paid-key family");
+    let leaseResourceName = matching[0] ?? "";
+    if (leaseResourceName) {
+      leaseRequestGeneration = /^akash-lease-g[0-9]+$/.test(leaseResourceName)
+        ? Number(leaseResourceName.slice("akash-lease-g".length))
+        : -1;
+    } else {
+      leaseResourceName = "akash-lease";
+      if (leaseRequestGeneration >= 0 || observed[leaseResourceName]) {
+        leaseRequestGeneration = xr.leaseGeneration;
+        leaseResourceName = `akash-lease-g${xr.leaseGeneration}`;
+      }
+      if (observed[leaseResourceName]) throw new Error("paid-key collision");
     }
 
     // ---- OVERLAP_BEFORE_CLOSE (bug.5322)
@@ -1728,8 +1760,11 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       activeLeaseGeneration !== xr.leaseGeneration
     ) {
       const activeBaseKey = `xcw:${NS}:${NAME}:${activeLeaseGeneration}`;
-      const activeRecoveryPrefix = `${activeBaseKey}:recover:`;
-      // `range` over a Go map walks the keys in sorted order; first match wins.
+      const activeKeys = [
+        activeBaseKey,
+        ...[1, 2, 3].map((n) => `${activeBaseKey}:recover:${n}`),
+      ];
+      // Native render coverage rejects ambiguous families before retention.
       for (const childName of Object.keys(observed).sort()) {
         if (
           retainedResourceName !== "" ||
@@ -1739,10 +1774,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
           continue;
         }
         const childKey = observed[childName].requestKey ?? "";
-        if (
-          childKey === activeBaseKey ||
-          (childKey !== "" && childKey.startsWith(activeRecoveryPrefix))
-        ) {
+        if (activeKeys.includes(childKey)) {
           retainedResourceName = childName;
           retainedKey = childKey;
           retainedResp = observed[childName].response ?? {};
@@ -1874,19 +1906,18 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     expect(doc).toContain("CLOSE-AFTER-CUTOVER");
   });
 
-  it("the model mirrors the template it stands in for", () => {
-    // Every expression the model above reproduces, pinned against the real source. If the
-    // template changes shape, this fails and the behavioural cases below stop being evidence.
+  it("pins the non-recovery model's retained/DNS gates to the template", () => {
+    // These pin the retained/DNS gates only. The Go/Sprig suite owns exact paid
+    // attempt selection, recovery staging, native bindings and reordered persistence.
     for (const expression of [
-      '$activeLeaseGeneration := int (dig "status" "activeLeaseGeneration" -1 $xr)',
+      "{{- $activeLeaseGeneration := -1 }}",
+      '{{- if ne (dig "status" "activeLeaseGeneration" nil $xr) nil }}{{ $activeLeaseGeneration = int $xr.status.activeLeaseGeneration }}{{ end }}',
       "if and (ge $activeLeaseGeneration 0) (ne $activeLeaseGeneration $leaseGeneration)",
       '$activeBaseKey := printf "xcw:%s:%s:%d" $ns $name $activeLeaseGeneration',
-      '$activeRecoveryPrefix := printf "%s:recover:" $activeBaseKey',
       "range $childName, $child := $observedResources",
       'if and (eq $retainedResourceName "") (hasPrefix "akash-lease" $childName) (ne $childName $leaseResourceName)',
-      '$childBodyRaw := dig "status" "requestDetails" "body" "" $child.resource',
-      'if ne $childBodyRaw "" }}{{ $childKey = dig "cogniKey" "" (fromJson $childBodyRaw) }}',
-      'if or (eq $childKey $activeBaseKey) (and (ne $childKey "") (hasPrefix $activeRecoveryPrefix $childKey))',
+      "$childKey := get $childKeys $childName",
+      "if and (has $childKey $activeKeys) (not (hasKey $closedKeys $childKey))",
       "$retainedResourceName = $childName",
       "$retainedKey = $childKey",
       '$retainedState := dig "state" "unknown" $retainedRes',
@@ -2333,8 +2364,10 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     expect(afterCutover.effectiveDnsTarget).toBe(CANDIDATE_TARGET);
   });
 
-  it("never renders a third lease child, whatever the observed history", () => {
-    // AT MOST TWO leases for one (node, env). A second bump during an overlap must still find
+  it("bounds the non-recovery model to two live allocation intents", () => {
+    // At most two LIVE allocations for one (node, env). Native Go acceptance also
+    // covers a third, proven-closed Request staged before selection persists.
+    // A second bump during an overlap must still find
     // the PROVEN-SERVING child — not the never-served candidate the first bump left behind —
     // and must not resurrect the stale one as a third.
     const doubleBump = render({
@@ -2368,8 +2401,8 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     ]);
     expect(doubleBump.retainedCogniKey).toBe(`xcw:${NS}:${NAME}:7`);
 
-    // Exhaustive sweep: every combination of observed children and candidate states still
-    // renders at most two lease children, and never the same name twice.
+    // Sweep this non-recovery model's states. Its two-object shape is not proof
+    // of the native recovery budget or two-pass retirement.
     const states: (LeaseResponse | undefined)[] = [
       undefined,
       { found: false },
@@ -2522,10 +2555,10 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       // UPDATE on the live lease on every single poll.
       expect(retainedBlock).not.toContain("$upToDateLogic");
       expect(retainedBlock).not.toContain(".response.body.serving == true");
-      // CLOSED_IS_REMOVED is preserved verbatim: it is what makes the eventual GC actually
-      // close the lease instead of leaving an undeletable Request.
+      // Wrapped observations and direct settled CREATE replays can both finish
+      // native finalization. Neither proves that REMOVE ran or costs settled.
       expect(retainedBlock).toContain(
-        '(.response.body.found == false) or (.response.body.resource.state == "closed")'
+        '(.response.body.found == false) or ((.response.body.resource.state // .response.body.state) == "closed")'
       );
       // The paid lease's leak-prevention refusal is not relaxed for the retained child either.
       expect(retainedBlock).not.toContain("external-create-succeeded");
@@ -2545,14 +2578,14 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     // assertions elsewhere in this file, gathered here because this change is the one most
     // likely to be tempted into relaxing them.
     expect(template).toContain(
-      "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey)))"
+      "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed $parkedClosed)"
     );
     expect(templateCode).toContain("$maxRecoveryAttempts := 3");
     expect(templateCode).toContain(
       "$recoveryExhausted := and $closedForCurrentKey (ge $recoveryCount $maxRecoveryAttempts)"
     );
     expect(templateCode).toContain(
-      '$closeForBudget := and $deadlineExceeded (eq $onDeadline "Close")'
+      '$closeForBudget := or $parkedBudget (and $deadlineExceeded (eq $onDeadline "Close"))'
     );
     expect(templateCode).toContain(
       '$heldClosed := and $closedForCurrentKey (ne $onGiveUp "Replace")'
@@ -2573,4 +2606,362 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     // DNS points at it. A DNS-resolved probe would deadlock this whole design.
     expect(templateCode).toContain("publicHost: {{ $publicHost | quote }}");
   });
+});
+
+// Run the committed template through Go/sprig as well as the source/model checks.
+// The existing ubuntu-latest CI runner supplies the Go >=1.21 bootstrap. Native
+// GOTOOLCHAIN provisions the exact declared compiler, not the bootstrap's version.
+// Provisioning is bounded and completes BEFORE either offline render assertion.
+// Missing bootstrap, unavailable downloads or invalid checksums fail; never skip.
+describe("XComputeWorkload native template acceptance (bug.5557)", () => {
+  const cwd = path.join(__dirname, "fixtures/xcomputeworkload-render");
+  let cache: string;
+  let env: NodeJS.ProcessEnv;
+  let go = "go";
+  const manifests = ["go.mod", "go.sum"].map((file) =>
+    readFileSync(path.join(cwd, file), "utf8")
+  );
+
+  beforeAll(() => {
+    const toolchain = manifests[0]?.match(
+      /^toolchain (go\d+\.\d+\.\d+)$/m
+    )?.[1];
+    expect(
+      toolchain,
+      "fixture must declare an exact Go toolchain"
+    ).toBeDefined();
+    cache = mkdtempSync(path.join(tmpdir(), "xcw-render-"));
+    // Allow only the executable search path and controlled Go settings. Ignore
+    // ambient GOENV, go.work, GOFLAGS, GOROOT, platform overrides and private proxies.
+    env = {
+      PATH: process.env.PATH,
+      GOENV: "off",
+      GOWORK: "off",
+      GO111MODULE: "on",
+      GOFLAGS: "-mod=readonly",
+      GOTOOLCHAIN: toolchain,
+      GOPATH: cache,
+      GOMODCACHE: path.join(cache, "pkg/mod"),
+      GOCACHE: path.join(cache, "build"),
+      CGO_ENABLED: "0",
+      GOTELEMETRY: "off",
+      GOPROXY: "https://proxy.golang.org",
+      GOSUMDB: "sum.golang.org",
+    };
+    for (const args of [
+      ["env", "GOVERSION", "GOROOT"],
+      ["mod", "download"],
+      ["mod", "verify"],
+    ]) {
+      const result = spawnSync(go, args, {
+        cwd,
+        env,
+        encoding: "utf8",
+        timeout: 90_000,
+      });
+      const evidence = `Go setup (${args.join(" ")}): ${result.stdout}\n${result.stderr}`;
+      expect(
+        result.error,
+        `${evidence}\n${result.error?.message}`
+      ).toBeUndefined();
+      expect(result.status, evidence).toBe(0);
+      if (args[0] === "env") {
+        const [version, goroot] = result.stdout.trim().split(/\r?\n/);
+        expect(version).toBe(toolchain);
+        if (!goroot || !path.isAbsolute(goroot)) {
+          throw new Error("Go setup did not resolve an absolute GOROOT");
+        }
+        go = path.join(goroot, "bin/go");
+      }
+    }
+    expect(
+      ["go.mod", "go.sum"].map((file) =>
+        readFileSync(path.join(cwd, file), "utf8")
+      ),
+      "provisioning must use the committed dependency closure"
+    ).toEqual(manifests);
+    // Invoke the selected compiler directly offline. Re-entering an older
+    // bootstrap would require toolchain checksum verification even when cached.
+    env = { ...env, GOTOOLCHAIN: "local", GOPROXY: "off", GOSUMDB: "off" };
+  }, 280_000);
+
+  afterAll(() => {
+    if (!cache) return;
+    // Module directories are read-only by default; Go owns their removal.
+    const result = spawnSync("go", ["clean", "-modcache"], {
+      cwd: cache,
+      env: { ...env, GOTOOLCHAIN: "local", GOPROXY: "off", GOSUMDB: "off" },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(result.error, result.error?.message).toBeUndefined();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    rmSync(cache, { recursive: true, force: true });
+  }, 40_000);
+
+  it.each([
+    {
+      label: "exact b829 recovery retargeting",
+      oldSha: "b829d404677b9b0c8735fa78ba9abc1bd5da9480",
+      hash: "5c715dbcf1f7df4c05d375d3e8bebea6d201523d50c099525d85c647e2a0a955",
+      test: "TestR2DistinctRecoveryAndPropagation",
+      caseName: "status-first",
+      diagnostic: "missing distinct native successor",
+      expected:
+        /^\s+render_test\.go:\d+: missing distinct native successor akash-lease-g1-recover-1; emitted \[akash-lease\]\n$/,
+    },
+    {
+      label: "exact 64402 terminal-refusal evidence loss",
+      oldSha: "64402fc6ca6078bb0165adc41368c1abb56fc212",
+      hash: "30d853fa4f2157e337e8265ef417935509fa3dff8a825f3a009aac17cb4285c9",
+      test: "TestR2TerminalParksSurviveRestartShaAndDelayedGC",
+      caseName: "default",
+      diagnostic: "refusal destroyed durable terminal tuple",
+      expected:
+        /^\s+render_test\.go:\d+: refusal destroyed durable terminal tuple false 409 map\[.*failure:map\[message:unproven reason:ledger_unavailable\].*\]\n$/,
+    },
+    {
+      label: "exact 6769 first-budget incomplete tuple",
+      oldSha: "6769a72f495040fcb5fdbc36fbf37dd518c04328",
+      hash: "753773636e87e451ccd640e67d9ef5261425b83f7b9ac8cfb22268c274e47f41",
+      test: "TestR2FirstBudgetRetirementPreservesTuple",
+      caseName: "503-empty-no-cache-attempt0",
+      diagnostic: "first budget retirement lost bound handle:",
+      expected:
+        /^\s+render_test\.go:\d+: first budget retirement lost bound handle: got <nil>, want handle-xcw:cogni-candidate-a:b927a9dd-6132-4fc9-a51e-e3cee2568e3c:1\n$/,
+    },
+    {
+      label: "exact 90e incomplete found allocation",
+      oldSha: "90e72f4d1dd8d8bccab37c0e97ec4a344ca57b26",
+      hash: "ea16a3b00798ab317e538efa30377b536f026bfc85f64ac00fc9080c960ef666",
+      test: "TestR2IncompleteFoundRetirementPreservesEvidence",
+      caseName: "absent-resource-cachefalse-attempt0-parkfalse",
+      diagnostic: "incomplete found allocation escaped whole-render refusal",
+      expected:
+        /^\s+render_test\.go:\d+: incomplete found allocation escaped whole-render refusal\n$/,
+    },
+    {
+      label: "exact 90e first CLOSED migration discriminator",
+      oldSha: "90e72f4d1dd8d8bccab37c0e97ec4a344ca57b26",
+      hash: "ea16a3b00798ab317e538efa30377b536f026bfc85f64ac00fc9080c960ef666",
+      test: "TestR2FirstTerminalClosureOutranksMigrationDisplay",
+      caseName: "default",
+      diagnostic: "first terminal closure lost lifecycle discriminator:",
+      expected:
+        /^\s+render_test\.go:\d+: first terminal closure lost lifecycle discriminator: got MigrationFailed, want LeaseClosed\n$/,
+    },
+    {
+      label: "exact 90e retiring native acknowledgement",
+      oldSha: "90e72f4d1dd8d8bccab37c0e97ec4a344ca57b26",
+      hash: "ea16a3b00798ab317e538efa30377b536f026bfc85f64ac00fc9080c960ef666",
+      test: "TestR2BudgetRetirementWaitsForNativeAcknowledgement",
+      caseName: "first-cachefalse-attempt0",
+      diagnostic: "retiring child lost exact authorized native acknowledgement",
+      expected:
+        /^\s+render_test\.go:\d+: retiring child lost exact authorized native acknowledgement\n$/,
+    },
+    {
+      label: "exact 5dc incomplete receipt-free provision intent",
+      oldSha: "5dc93364ebb82ad1f61717d04894469e457edc26",
+      hash: "a2d3896ff86f9b1728d919288920ee6709575ea9b7c2e33d34c9c086a74cdb47",
+      test: "TestR2ReceiptFreeNativeIntentRequiresCompleteProvisionSpec",
+      caseName: "missing-spec",
+      diagnostic:
+        "incomplete receipt-free provision intent escaped whole-render refusal",
+      expected:
+        /^\s+render_test\.go:\d+: incomplete receipt-free provision intent escaped whole-render refusal\n$/,
+    },
+    {
+      label: "exact 8cfb allocated recovery selection loss",
+      oldSha: "8cfb2e5f2294f6e72e47b5a134f62c2456b99f3f",
+      hash: "4c9a035603ce3435843da6bf2c35d3d0e597c1cb036a25677c5ca22cdf5b74cc",
+      test: "TestR2AllocatedRecoveryHistorySurvivesSelectionLoss",
+      caseName: "missing-both-lost-ref-unserved",
+      diagnostic: "allocated recovery history escaped missing-child refusal",
+      expected:
+        /^\s+render_test\.go:\d+: allocated recovery history escaped missing-child refusal\n$/,
+    },
+    {
+      label: "exact 509928 selection repair history reset",
+      oldSha: "5099289c60562c9f9eebcfe0fa9324f5a0529030",
+      hash: "83c586ff1162e907d8ed4e15313ebac6a39e5567aca47c1dfa85a7895923d4d3",
+      test: "TestR2MissingChildBootstrapAndDurableSuccessorRemainAllowed",
+      caseName: "exact-owner-missing-served-503-cachefalse",
+      diagnostic: "selection repair reset bound paid history",
+      expected:
+        /^\s+render_test\.go:\d+: selection repair reset bound paid history\n$/,
+    },
+    {
+      label: "exact 863 allocated recovery predecessor refusal",
+      oldSha: "863efc5da9711088ffb652a4acd0f84820f2d5fb",
+      hash: "5b46b4fbd5aaace7945ab57fa59643b8e6b0da144a9bf7c014a9a0f054306334",
+      test: "TestR2AllocatedRecoveryHistorySurvivesSelectionLoss",
+      caseName: "missing-both-503-predecessor-unserved",
+      diagnostic: "allocated recovery history escaped missing-child refusal",
+      expected:
+        /^\s+render_test\.go:\d+: allocated recovery history escaped missing-child refusal\n$/,
+    },
+    {
+      label: "exact 179 predecessor native pending before condition",
+      oldSha: "17917e5af055fb443baaa801702d00516c1ee2b1",
+      hash: "b3a133239a954e8ece33211970e58326b77cf16ff518eca9bd6d95d720be1f2a",
+      test: "TestR2AcknowledgementCannotBorrowSelectedProof",
+      caseName: "predecessor-response-before-native-success",
+      diagnostic: "predecessor native pending escaped whole-render refusal",
+      expected:
+        /^\s+render_test\.go:\d+: predecessor native pending escaped whole-render refusal\n$/,
+    },
+    {
+      label: "exact 895 double-bump live allocation admission",
+      oldSha: "895c910899104aa05b531f8aab319626be202a6e",
+      hash: "f6840bd45d68eeaccb066e7e3726a2970a55f63bd0c2f0a76f9fde5a866ee6ed",
+      test: "TestR2DoubleBumpCannotAdmitThirdPaidKey",
+      caseName: "active-acknowledged",
+      diagnostic: "third paid key escaped whole-render refusal",
+      expected:
+        /^\s+render_test\.go:\d+: third paid key escaped whole-render refusal\n$/,
+    },
+    {
+      label: "exact 895 unattributed allocation history bootstrap",
+      oldSha: "895c910899104aa05b531f8aab319626be202a6e",
+      hash: "f6840bd45d68eeaccb066e7e3726a2970a55f63bd0c2f0a76f9fde5a866ee6ed",
+      test: "TestR2UnattributedAllocationHistoryCannotBootstrap",
+      caseName: "handle-missing-bindings",
+      diagnostic:
+        "unattributed allocation history escaped whole-render refusal",
+      expected:
+        /^\s+render_test\.go:\d+: unattributed allocation history escaped whole-render refusal\n$/,
+    },
+    {
+      label: "exact 728 lost older allocation across generation change",
+      oldSha: "728e72c99e3fc7a2fcac797dbb60ac3185c2c356",
+      hash: "0dffa479e0e35d61c7b8779ae56f60a1c8319ce749eb275305b2fbe2aff36414",
+      test: "TestR2LostOlderAllocationBlocksEveryGeneration",
+      caseName: "g7-serving-missing-g8-desired-g9",
+      diagnostic: "lost older allocation admitted a new paid intent",
+      expected:
+        /^\s+render_test\.go:\d+: lost older allocation admitted a new paid intent\n$/,
+    },
+  ])("rejects $label at the native behavior assertion", ({
+    oldSha,
+    hash,
+    test,
+    caseName,
+    diagnostic,
+    expected,
+  }) => {
+    // CI's existing unit checkout has full history. Read each exact ancestor
+    // offline; no fetch, downloaded template, or mutable branch is a substitute.
+    const old = spawnSync(
+      "git",
+      ["show", `${oldSha}:infra/crossplane/xcomputeworkload/composition.yaml`],
+      { cwd: REPO_ROOT, env, encoding: "utf8", timeout: 10_000 }
+    );
+    expect(old.error, old.error?.message).toBeUndefined();
+    expect(old.status, old.stderr).toBe(0);
+    expect(createHash("sha256").update(old.stdout).digest("hex")).toBe(hash);
+    const oldComposition = path.join(cache, `composition-${oldSha}.yaml`);
+    writeFileSync(oldComposition, old.stdout);
+    const subtest = `${test}/${caseName}`;
+    const result = spawnSync(
+      go,
+      [
+        "test",
+        "-mod=readonly",
+        "-count=1",
+        "-json",
+        "-run",
+        `^${test}$/^${caseName}$`,
+        ".",
+        "-args",
+        "-composition",
+        oldComposition,
+      ],
+      {
+        cwd,
+        // Reuse only the verified modules/compiler. Each negative replay
+        // must not warm the corrected suite's cold compiler cache.
+        env: {
+          ...env,
+          GOCACHE: path.join(cache, `sensitivity-build-${oldSha}-${test}`),
+        },
+        encoding: "utf8",
+        timeout: 120_000,
+      }
+    );
+    const evidence = `Native sensitivity ${oldSha} (isolated build cache):\n${result.stdout}\n${result.stderr}`;
+    process.stdout.write(`${evidence}\n`);
+    expect(
+      result.error,
+      `${evidence}\n${result.error?.message}`
+    ).toBeUndefined();
+    expect(result.signal, evidence).toBeNull();
+    expect(result.status, evidence).toBe(1);
+    expect(result.stderr, evidence).toBe("");
+    // A nonzero exit alone could be a toolchain, compile, parse or setup error.
+    // Require the selected native test to reach its exact paid-child assertion.
+    const events: {
+      Action: string;
+      Package: string;
+      Test?: string;
+      Output?: string;
+    }[] = result.stdout
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line));
+    expect(
+      [...new Set(events.map((event) => event.Package))],
+      evidence
+    ).toEqual(["cogni.test/xcomputeworkload-render"]);
+    expect(
+      events
+        .filter((event) => event.Action === "start")
+        .map((event) => event.Test),
+      evidence
+    ).toEqual([undefined]);
+    expect(
+      events.some((event) => event.Action === "pass"),
+      evidence
+    ).toBe(false);
+    expect(
+      events
+        .filter((event) => event.Action === "run")
+        .map((event) => event.Test),
+      evidence
+    ).toEqual([test, subtest]);
+    expect(
+      events
+        .filter((event) => event.Action === "fail")
+        .map((event) => event.Test ?? "<package>")
+        .sort(),
+      evidence
+    ).toEqual(["<package>", test, subtest].sort());
+    expect(
+      events
+        .filter((event) => event.Output?.includes(diagnostic))
+        .map((event) => event.Output),
+      evidence
+    ).toEqual([expect.stringMatching(expected)]);
+  }, 140_000);
+
+  it.each([
+    "cold",
+    "warm",
+  ])("replays identity restoration, unsafe receipts, and prove-before-close (%s build cache)", (cacheState) => {
+    const result = spawnSync(
+      go,
+      ["test", "-mod=readonly", "-count=1", "-v", "."],
+      {
+        cwd,
+        env,
+        encoding: "utf8",
+        timeout: 120_000,
+      }
+    );
+    process.stdout.write(
+      `Native corrected Composition (${cacheState} build cache):\n${result.stdout}\n${result.stderr}\n`
+    );
+    expect(result.error, result.error?.message).toBeUndefined();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  }, 130_000);
 });
