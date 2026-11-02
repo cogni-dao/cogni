@@ -284,6 +284,24 @@
 /* Keep hero animation vars above (isolated to code.ts) */
 
 @layer utilities {
+  .brain-loading-orbit {
+    mask: url("/brain-loading-arc.svg") center / contain no-repeat;
+  }
+
+  .brain-loading-orbit > .brain-loading-spectrum {
+    animation-direction: reverse;
+    background: conic-gradient(
+      #4070ff 0deg,
+      #00e8d5 45deg,
+      #00f563 135deg,
+      #00aaff 180deg,
+      #594cff 225deg,
+      #9700ff 270deg,
+      #f400e9 315deg,
+      #4070ff 360deg
+    );
+  }
+
   /* Desktop-only wallet button fill - scoped to data-wallet-slot to avoid affecting mobile */
   [data-wallet-slot="desktop"] button {
     width: 100%;

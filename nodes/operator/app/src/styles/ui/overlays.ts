@@ -16,6 +16,21 @@ import { cva } from "class-variance-authority";
 
 import type { SizeKey } from "@/styles/theme";
 
+export const brainLoading = cva(
+  "flex min-h-0 w-full flex-1 items-center justify-center"
+);
+export const brainLoadingGraphic = cva(
+  "relative grid size-20 shrink-0 place-items-center"
+);
+export const brainLoadingOrbit = cva(
+  "brain-loading-orbit absolute inset-0 size-20 motion-safe:animate-spin"
+);
+export const brainLoadingSpectrum = cva(
+  "brain-loading-spectrum block size-full motion-safe:animate-spin"
+);
+export const brainLoadingTrack = cva("absolute inset-0 size-20 text-foreground/70");
+export const brainLoadingMark = cva("brain-loading-mark size-12");
+
 const terminalFrameSurfaceVariants = {
   default: "bg-card text-card-foreground",
   muted: "bg-muted text-muted-foreground",

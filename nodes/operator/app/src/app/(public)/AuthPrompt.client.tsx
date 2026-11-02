@@ -20,6 +20,8 @@ import { type ReactElement, useEffect, useMemo, useState } from "react";
 import { useAccount } from "wagmi";
 
 import { SignInDialog } from "@/components/kit/auth/SignInDialog";
+import { BrainLoading } from "@/components/kit/feedback/BrainLoading";
+import { AppShell } from "@/features/layout";
 
 const DEFAULT_CALLBACK_URL = "/chat";
 const SIGN_IN_PARAM = "signIn";
@@ -100,8 +102,12 @@ export function AuthPrompt(): ReactElement | null {
   return (
     <>
       {redirecting ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background">
-          <p className="text-muted-foreground text-sm">Redirecting...</p>
+        <div className="fixed inset-0 z-50 overflow-hidden bg-background">
+          <AppShell>
+            <div className="chat-viewport flex overflow-hidden">
+              <BrainLoading />
+            </div>
+          </AppShell>
         </div>
       ) : null}
       <SignInDialog
