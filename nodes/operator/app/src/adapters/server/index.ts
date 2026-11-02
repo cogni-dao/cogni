@@ -166,6 +166,7 @@ export {
   type TemplateQueryErrorCode,
 } from "./metrics/mimir.adapter";
 export { ActuatorPayer } from "./node-deploy/actuator-payer.adapter";
+export { AdvisoryLeader } from "./node-deploy/advisory-leader.adapter";
 export { AkashChainTruth } from "./node-deploy/akash-chain-truth.adapter";
 export { CloudflareDnsRecords } from "./node-deploy/cloudflare-dns.adapter";
 export { HttpProbe } from "./node-deploy/http-probe.adapter";

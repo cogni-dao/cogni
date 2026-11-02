@@ -38,6 +38,7 @@ import pino from "pino";
 
 import {
   ActuatorPayer,
+  AdvisoryLeader,
   AkashChainTruth,
   CloudflareDnsRecords,
   HttpProbe,
@@ -196,17 +197,12 @@ health.listen(LISTEN_PORT, "0.0.0.0", () => {
 
 /**
  * Take the session advisory lock on the pool's ONE connection and keep proving we still hold it.
- * `postgres.js` idles a connection out after 20 s, which would silently drop a session lock, so the
- * heartbeat (every 5 s) both keeps it alive and checks `pg_locks` for THIS backend; a lost lock is
- * fatal (a fresh process re-contends). The same check runs at the start of every tick.
+ * `postgres.js` recycles connections (idle timeout, no max_lifetime) and a new backend does not carry
+ * the old one's session lock, so a "not held" answer first tries to take the lock back ONCE on the same
+ * connection; only a refused lock (another process is the leader) is fatal. Checked before every
+ * tick/reconcile pass and on a 5 s heartbeat that also keeps the connection from idling out.
  */
-const LOCK_KEY = "hashtext('node-deploy-sequencer')::bigint";
-const HELD_SQL = `select exists (select 1 from pg_locks where locktype = 'advisory' and pid = pg_backend_pid() and objsubid = 1 and objid::bigint = (${LOCK_KEY} & 4294967295) and classid::bigint = ((${LOCK_KEY} >> 32) & 4294967295)) as held`;
-
-async function lockHeld(): Promise<boolean> {
-  const rows = await db.$client.unsafe(HELD_SQL);
-  return rows[0]?.held === true;
-}
+const leadership = new AdvisoryLeader(db.$client, log);
 
 function die(reason: string, cause?: unknown): never {
   log.fatal(
@@ -221,7 +217,7 @@ function die(reason: string, cause?: unknown): never {
 
 async function assertLeader(): Promise<void> {
   try {
-    if (!(await lockHeld())) die("AdvisoryLockNotHeld");
+    if (!(await leadership.assert())) die("AdvisoryLockHeldByAnotherSession");
   } catch (error) {
     die("LeadershipCheckFailed", error);
   }
@@ -230,10 +226,7 @@ async function assertLeader(): Promise<void> {
 async function acquireLeadership(): Promise<void> {
   for (;;) {
     if (stopping) return;
-    const rows = await db.$client.unsafe(
-      `select pg_try_advisory_lock(${LOCK_KEY}) as ok`
-    );
-    if (rows[0]?.ok === true) break;
+    if (await leadership.tryAcquire()) break;
     log.info({ namespace }, "node_deploy_sequencer_waiting_for_lock");
     await new Promise((r) => setTimeout(r, 10_000));
   }
@@ -242,18 +235,24 @@ async function acquireLeadership(): Promise<void> {
   timers.push(setInterval(() => void assertLeader(), 5_000));
 }
 
+/** A failure that repeats every pass is logged once per 10 minutes per (loop, message). */
+const loopErrorAt = new Map<string, number>();
+
 function loop(name: string, everyMs: number, work: () => Promise<void>): void {
   const run = (): void => {
     void work()
-      .catch((error: unknown) =>
+      .catch((error: unknown) => {
+        const causeMessage =
+          error instanceof Error ? error.message.slice(0, 300) : "unknown";
+        const k = `${name}/${causeMessage}`;
+        const last = loopErrorAt.get(k);
+        if (last !== undefined && Date.now() - last < 600_000) return;
+        loopErrorAt.set(k, Date.now());
         log.error(
-          {
-            loop: name,
-            causeMessage: error instanceof Error ? error.message : "unknown",
-          },
+          { loop: name, causeMessage },
           "node_deploy_sequencer_loop_threw"
-        )
-      )
+        );
+      })
       .finally(() => {
         if (!stopping) timers.push(setTimeout(run, everyMs));
       });
