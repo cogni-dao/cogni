@@ -60,6 +60,12 @@ import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
 export interface SequencerConfig {
   /** The Kubernetes namespace the sequencer runs in; part of every cogniKey. */
   readonly namespace: string;
+  /**
+   * The ONE deployment environment this sequencer serves (its DEPLOY_ENVIRONMENT). It lists and acts
+   * only on desired rows of this env, so a row written for another env can never spend from this
+   * wallet (CD4).
+   */
+  readonly environment: string;
   /** Lease must report active + an endpoint within this of lease creation. */
   readonly leaseReadyMs: number;
   /** Proof deadline, counted from lease creation (design: 10 min). */
@@ -80,7 +86,10 @@ export interface SequencerConfig {
   readonly pollMs: number;
 }
 
-export const DEFAULT_SEQUENCER_CONFIG: Omit<SequencerConfig, "namespace"> = {
+export const DEFAULT_SEQUENCER_CONFIG: Omit<
+  SequencerConfig,
+  "namespace" | "environment"
+> = {
   leaseReadyMs: 240_000,
   proofMs: 600_000,
   publicMs: 300_000,
@@ -141,7 +150,7 @@ export class NodeDeploySequencer {
 
   /** One pass over every desired workload; runs workloads concurrently, never one twice. */
   async tick(): Promise<void> {
-    const desired = await this.d.store.listDesired();
+    const desired = await this.d.store.listDesired(this.d.config.environment);
     await Promise.all(
       desired.map((row) =>
         this.step(row).catch((error: unknown) =>
@@ -162,7 +171,7 @@ export class NodeDeploySequencer {
 
   /** One reconcile pass (design: every 60 s). */
   async reconcileAll(): Promise<void> {
-    const desired = await this.d.store.listDesired();
+    const desired = await this.d.store.listDesired(this.d.config.environment);
     await Promise.all(
       desired.map((row) =>
         this.reconcile(row).catch((error: unknown) =>
@@ -190,6 +199,7 @@ export class NodeDeploySequencer {
   }
 
   private async stepLocked(key: WorkloadKey): Promise<StepOutcome> {
+    if (key.env !== this.d.config.environment) return "idle";
     const desired = await this.d.store.getDesired(key);
     if (!desired || desired.state !== "running") return "idle";
     const release = await this.d.store.getRelease(desired.releaseId);
@@ -331,6 +341,21 @@ export class NodeDeploySequencer {
     if (publicHostOf(w) && !this.d.edge) {
       // Refuse BEFORE paying: a lease no edge can ever route to is wasted spend.
       return this.failAttempt(key, release, attempt, "edge_not_configured");
+    }
+    const declaredHost = publicHostOf(w);
+    if (declaredHost && this.d.edge) {
+      // The edge guard would refuse this host at cutover; refuse it NOW, before a paid create, with
+      // an explicit reason. Three of these park the release, still with zero creates.
+      try {
+        this.d.edge.assertHost(declaredHost);
+      } catch (error) {
+        return this.failAttempt(
+          key,
+          release,
+          attempt,
+          `edge_host_refused: ${errText(error)}`
+        );
+      }
     }
     let env: Record<string, string>;
     try {
@@ -710,7 +735,34 @@ export class NodeDeploySequencer {
     reason: string
   ): Promise<AttemptRow> {
     const trimmed = reason.slice(0, 500);
+    // ORPHAN_GUARD (CD8): an attempt with no bound handle may still own a PAID lease (the create
+    // succeeded and its response was lost, or we crashed before binding). Ask the payer by key BEFORE
+    // writing any terminal state. A lease that exists is bound and then closed + confirmed; if the
+    // question cannot be answered the attempt is left exactly as it is and retried on the next tick.
     if (!attempt.externalName) {
+      let obs: Awaited<ReturnType<PayerPort["observe"]>>;
+      try {
+        obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
+      } catch (error) {
+        this.emit(key, release, attempt, "attempt_failed", "deferred", {
+          reason: trimmed,
+          observeError: errText(error),
+        });
+        return attempt;
+      }
+      if (obs.found && obs.resource) {
+        const bound = await this.d.store.updateAttempt(attempt.id, {
+          externalName: obs.resource.externalName,
+          endpoints: obs.resource.endpoints,
+          ...(obs.resource.providerAccount
+            ? { provider: obs.resource.providerAccount }
+            : {}),
+        });
+        this.emit(key, release, bound, "orphan_lease", "adopted_to_close", {
+          dseq: bound.externalName,
+        });
+        return this.failAttempt(key, release, bound, trimmed);
+      }
       const next = await this.d.store.updateAttempt(attempt.id, {
         phase: "failed",
         error: trimmed,
@@ -849,6 +901,7 @@ export class NodeDeploySequencer {
   }
 
   private async reconcileLocked(key: WorkloadKey): Promise<ReconcileOutcome> {
+    if (key.env !== this.d.config.environment) return "none";
     const desired = await this.d.store.getDesired(key);
     if (!desired || desired.state !== "running") return "none";
     const all = await this.d.store.attemptsFor(key);

@@ -56,6 +56,7 @@ function harness(
   const config: SequencerConfig = {
     ...DEFAULT_SEQUENCER_CONFIG,
     namespace: "cogni-production",
+    environment: ENV,
     retainMs: 120_000,
     ...cfg,
   };
@@ -348,6 +349,127 @@ describe("provider exclusion and alert hygiene", () => {
     expect(h.log.alerts().filter((a) => a === "release_parked")).toHaveLength(
       2
     );
+  });
+});
+
+describe("environment binding (CD4)", () => {
+  it("lists and acts only on desired rows of its own env", async () => {
+    const h = harness();
+    // a row written for ANOTHER environment must never be driven by this sequencer
+    await h.store.recordRelease({
+      nodeId: NODE_ID,
+      env: "preview",
+      workload: "canary-db",
+      sourceSha: SHA_1,
+      spec: canaryDb(),
+      createdBy: "test",
+    });
+    await h.release(canaryDb(), SHA_1);
+    expect((await h.store.listDesired(ENV)).map((d) => d.env)).toEqual([ENV]);
+    expect((await h.store.listDesired("preview")).map((d) => d.env)).toEqual([
+      "preview",
+    ]);
+    await h.seq.tick();
+    await h.seq.reconcileAll();
+    // exactly one paid create, for the served env
+    expect(h.payer.createRequests).toHaveLength(1);
+    expect(h.payer.createRequests[0]?.environment).toBe(ENV);
+  });
+
+  it("step/reconcile on a foreign-env key are inert even when called directly", async () => {
+    const h = harness();
+    await h.store.recordRelease({
+      nodeId: NODE_ID,
+      env: "preview",
+      workload: "canary-db",
+      sourceSha: SHA_1,
+      spec: canaryDb(),
+      createdBy: "test",
+    });
+    const foreign = { nodeId: NODE_ID, env: "preview", workload: "canary-db" };
+    expect(await h.seq.step(foreign)).toBe("idle");
+    expect(await h.seq.reconcile(foreign)).toBe("none");
+    expect(h.payer.createRequests).toHaveLength(0);
+  });
+});
+
+describe("orphan lease guard (CD8)", () => {
+  it("create succeeded but the response was lost: a SUPERSEDE adopts the lease and closes it, never orphans it", async () => {
+    const h = harness();
+    await stateUp(h);
+    // response lost AND observe down: the attempt cannot be resolved yet
+    h.payer.loseResponseOn = (n) => n === 2;
+    h.payer.observeThrows = true;
+    await deployApp(h, SHA_1);
+    let a = (await h.store.attemptsFor(APP))[0];
+    expect(a?.phase).toBe("planned");
+    expect(a?.externalName).toBeUndefined();
+    expect(h.payer.byDseq("1002").state).toBe("active"); // the paid, unbound lease
+
+    // a newer release arrives; observe is STILL down -> the old attempt must NOT be failed/superseded
+    await h.release(canaryApp(), SHA_2);
+    expect(await h.seq.step(APP)).toBe("superseded");
+    a = (await h.store.attemptsFor(APP)).find(
+      (x) => x.cogniKey === a?.cogniKey
+    );
+    expect(a?.phase).toBe("planned");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    expect(h.log.steps()).toContain("attempt_failed:deferred");
+
+    // observe recovers: the lease is bound, closed and confirmed, THEN the attempt is failed
+    h.payer.observeThrows = false;
+    h.payer.loseResponseOn = undefined;
+    await h.seq.step(APP);
+    const old = (await h.store.attemptsFor(APP)).find(
+      (x) => x.cogniKey === a?.cogniKey
+    );
+    expect(old?.phase).toBe("failed");
+    expect(old?.externalName).toBe("1002");
+    expect(h.payer.byDseq("1002").state).toBe("closed");
+    expect(h.log.steps()).toContain("orphan_lease:adopted_to_close");
+
+    // and the newer release proceeds on a fresh key; no live paid lease is left unowned
+    await h.seq.step(APP);
+    const live = h.payer.liveLeases().map((l) => l.dseq);
+    const owned = (await h.store.attemptsFor(APP))
+      .filter((x) => x.phase === "active")
+      .map((x) => x.externalName);
+    expect(live.filter((d) => d !== "1001").sort()).toEqual(owned.sort());
+  });
+
+  it("a failed attempt with a bound handle still closes normally (no extra observe-gate regression)", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.onLease = (l) => {
+      l.serveSha = "f".repeat(40);
+    };
+    await deployApp(h, SHA_1);
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("failed");
+    expect(h.payer.byDseq("1002").state).toBe("closed");
+  });
+});
+
+describe("edge host guard before any paid create (task.5400 review)", () => {
+  it("a declared host the edge guard refuses never reaches the payer; three refusals park the release", async () => {
+    const h = harness();
+    await stateUp(h);
+    const bad = canaryApp({
+      expose: { http: { host: "poly.cognidao.org" } },
+    } as never);
+    await h.release(bad, SHA_1);
+    const outcomes: string[] = [];
+    for (let i = 0; i < 4; i++) outcomes.push(await h.seq.step(APP));
+    expect(outcomes).toEqual(["driven", "driven", "driven", "parked"]);
+    expect(
+      h.payer.createRequests.filter((r) => r.spec.name === "canary")
+    ).toHaveLength(0);
+    const attempts = await h.store.attemptsFor(APP);
+    expect(attempts).toHaveLength(3);
+    expect(
+      attempts.every((a) => a.error?.startsWith("edge_host_refused"))
+    ).toBe(true);
+    expect(h.log.alerts()).toContain("release_parked");
+    expect(h.dns.ops).toEqual([]);
   });
 });
 

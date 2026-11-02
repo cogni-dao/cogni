@@ -110,8 +110,13 @@ export class PostgresNodeDeployStore implements StorePort {
     return row ? toDesired(row) : undefined;
   }
 
-  async listDesired(): Promise<readonly DesiredRow[]> {
-    return (await this.db.select().from(nodeWorkloadDesired)).map(toDesired);
+  async listDesired(env: string): Promise<readonly DesiredRow[]> {
+    return (
+      await this.db
+        .select()
+        .from(nodeWorkloadDesired)
+        .where(eq(nodeWorkloadDesired.env, env))
+    ).map(toDesired);
   }
 
   async getRelease(id: string): Promise<ReleaseRow | undefined> {

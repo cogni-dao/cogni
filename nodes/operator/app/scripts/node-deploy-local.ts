@@ -227,6 +227,7 @@ async function build() {
     config: {
       ...DEFAULT_SEQUENCER_CONFIG,
       namespace: "local-dev",
+      environment: ENV,
       retainMs: RETAIN_MS,
     },
   });

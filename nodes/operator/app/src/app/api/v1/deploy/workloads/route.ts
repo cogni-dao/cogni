@@ -54,6 +54,26 @@ export const runtime = "nodejs";
 
 const REPO_SPEC_PATH = ".cogni/repo-spec.yaml";
 
+/**
+ * ENV_BINDING (CD4): this deployment's sequencer serves ONE environment (its DEPLOY_ENVIRONMENT).
+ * A request for any other env would record a release no sequencer here will ever execute (or, worse,
+ * one a differently-wired sequencer would), so it is refused before anything is read or written.
+ */
+function envNotServed(env: string): NextResponse | undefined {
+  const served = serverEnv().DEPLOY_ENVIRONMENT;
+  if (!served)
+    return NextResponse.json(
+      { error: "deploy_environment_not_configured" },
+      { status: 503 }
+    );
+  if (served !== env)
+    return NextResponse.json(
+      { error: "env_not_served", served },
+      { status: 409 }
+    );
+  return undefined;
+}
+
 type Gate =
   | { ok: true; node: { id: string; slug: string } }
   | { ok: false; response: NextResponse };
@@ -142,6 +162,8 @@ export const POST = wrapRouteHandlerWithLogging(
       targetNodeId = g.ok ? g.node.id : undefined;
       if (!g.ok) return g.response;
       const node = g.node;
+      const wrongEnv = envNotServed(env);
+      if (wrongEnv) return wrongEnv;
 
       const envConfig = serverEnv();
       const owner = envConfig.NODE_SUBMODULE_PARENT_OWNER;
@@ -274,9 +296,11 @@ export const GET = wrapRouteHandlerWithLogging(
       const g = await gate(sessionUser.id, nodeId, env);
       targetNodeId = g.ok ? g.node.id : undefined;
       if (!g.ok) return g.response;
+      const wrongEnv = envNotServed(env);
+      if (wrongEnv) return wrongEnv;
 
       const store = createNodeDeployStore();
-      const rows = (await store.listDesired()).filter(
+      const rows = (await store.listDesired(env)).filter(
         (d) =>
           d.nodeId === g.node.id &&
           d.env === env &&

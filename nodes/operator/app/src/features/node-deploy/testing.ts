@@ -96,8 +96,8 @@ export class MemoryStore implements StorePort {
   async getDesired(key: WorkloadKey): Promise<DesiredRow | undefined> {
     return this.desired.get(keyString(key));
   }
-  async listDesired(): Promise<readonly DesiredRow[]> {
-    return [...this.desired.values()];
+  async listDesired(env: string): Promise<readonly DesiredRow[]> {
+    return [...this.desired.values()].filter((d) => d.env === env);
   }
   async getRelease(id: string): Promise<ReleaseRow | undefined> {
     return this.releases.get(id);

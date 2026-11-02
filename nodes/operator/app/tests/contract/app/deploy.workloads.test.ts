@@ -47,6 +47,7 @@ const dbState = vi.hoisted(() => ({
 const envState = vi.hoisted(() => ({
   NODE_SUBMODULE_PARENT_OWNER: "test-owner" as string | undefined,
   NODE_SUBMODULE_PARENT_REPO: "test-repo" as string | undefined,
+  DEPLOY_ENVIRONMENT: "production" as string | undefined,
 }));
 const mockGetSessionUser = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({
@@ -162,6 +163,7 @@ describe("/api/v1/deploy/workloads", () => {
     mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
     envState.NODE_SUBMODULE_PARENT_OWNER = "test-owner";
     envState.NODE_SUBMODULE_PARENT_REPO = "test-repo";
+    envState.DEPLOY_ENVIRONMENT = "production";
     plane.fetchFileText.mockResolvedValue(ROOT_SPEC);
     store.getDesired.mockResolvedValue(undefined);
     store.recordRelease.mockImplementation(async (input) => ({
@@ -224,6 +226,7 @@ describe("/api/v1/deploy/workloads", () => {
       );
       for (const env of ["candidate-a", "preview"]) {
         dbState.call = 0;
+        envState.DEPLOY_ENVIRONMENT = env;
         await post({ ...valid, env });
         expect(authz.check).toHaveBeenLastCalledWith(
           expect.objectContaining({ action: "node.manage_envs" })
@@ -262,6 +265,7 @@ describe("/api/v1/deploy/workloads", () => {
     });
 
     it("candidate-a releases carry the -test host", async () => {
+      envState.DEPLOY_ENVIRONMENT = "candidate-a";
       await post({ ...valid, env: "candidate-a" });
       expect(store.recordRelease.mock.calls[0]?.[0].spec.expose.http.host).toBe(
         "node-deploy-canary-test.cognidao.org"
@@ -288,6 +292,30 @@ describe("/api/v1/deploy/workloads", () => {
     it("502 when the GitHub read fails", async () => {
       plane.fetchFileText.mockRejectedValue(new Error("github down"));
       expect((await post(valid)).status).toBe(502);
+      expect(store.recordRelease).not.toHaveBeenCalled();
+    });
+
+    it("409 env_not_served for an env other than this deployment's DEPLOY_ENVIRONMENT; nothing is read or written (CD4)", async () => {
+      for (const env of ["candidate-a", "preview"]) {
+        dbState.call = 0;
+        const res = await post({ ...valid, env });
+        expect(res.status).toBe(409);
+        expect(await res.json()).toEqual({
+          error: "env_not_served",
+          served: "production",
+        });
+      }
+      expect(plane.fetchFileText).not.toHaveBeenCalled();
+      expect(store.recordRelease).not.toHaveBeenCalled();
+    });
+
+    it("503 when the deployment does not say which env it serves (fail closed)", async () => {
+      envState.DEPLOY_ENVIRONMENT = undefined;
+      const res = await post(valid);
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({
+        error: "deploy_environment_not_configured",
+      });
       expect(store.recordRelease).not.toHaveBeenCalled();
     });
 
@@ -337,6 +365,20 @@ describe("/api/v1/deploy/workloads", () => {
         active: { attempt: 2, phase: "active" },
       });
       expect(body.workloads[0].recentAttempts).toHaveLength(2);
+    });
+
+    it("GET refuses an env this deployment does not serve and lists only the served env", async () => {
+      const res = await call(
+        "GET",
+        undefined,
+        `?nodeId=${NODE_ID}&env=preview`
+      );
+      expect(res.status).toBe(409);
+      expect(store.listDesired).not.toHaveBeenCalled();
+      store.listDesired.mockResolvedValue([]);
+      dbState.call = 0;
+      await call("GET", undefined, `?nodeId=${NODE_ID}&env=production`);
+      expect(store.listDesired).toHaveBeenCalledWith("production");
     });
 
     it("applies the same authz gate and 400s a missing env", async () => {

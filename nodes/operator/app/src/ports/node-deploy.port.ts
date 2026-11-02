@@ -312,7 +312,8 @@ export interface RecordReleaseInput extends WorkloadKey {
 
 export interface StorePort {
   getDesired(key: WorkloadKey): Promise<DesiredRow | undefined>;
-  listDesired(): Promise<readonly DesiredRow[]>;
+  /** Desired rows for ONE deployment environment. A sequencer only ever lists its own env (CD4). */
+  listDesired(env: string): Promise<readonly DesiredRow[]>;
   getRelease(id: string): Promise<ReleaseRow | undefined>;
   /** Write the immutable release AND point desired at it (state `running`) in one transaction. */
   recordRelease(

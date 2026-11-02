@@ -146,6 +146,7 @@ const sequencer = new NodeDeploySequencer({
   config: {
     ...DEFAULT_SEQUENCER_CONFIG,
     namespace,
+    environment,
     retainMs: num(
       runtimeEnv.NODE_DEPLOY_RETAIN_MS,
       DEFAULT_SEQUENCER_CONFIG.retainMs,
