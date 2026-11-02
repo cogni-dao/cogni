@@ -4,13 +4,18 @@
 /**
  * Module: `@adapters/server/node-deploy/state-secrets.adapter`
  * Purpose: Where the sequencer keeps the GENERATED state-workload password (task.5400): a Kubernetes
- *   Secret `nd-<workload>-<env>` in the sequencer's own namespace (production), or a 0600 file under a
- *   local directory (dev only, selected by the dev bootstrap).
+ *   Secret `nd-<nodeId8>-<workload>` in a DEDICATED per-env namespace (`cogni-node-deploy-<env>`) that
+ *   holds nothing else, or a 0600 file under a local directory (dev only, the local harness).
  * Scope: get + create-once. Never update, never delete, never list.
  * Invariants:
  *   - CREATE_ONCE_REUSE_AFTER: `ensureStatePassword` creates the secret if absent and otherwise returns
  *     the stored value; a 409 on create (a racing writer) re-reads and returns the winner's value.
  *   - NEVER_OVERWRITE: a password that already guards live data must never be replaced.
+ *   - NO_SECRETS_IN_THE_WALLET_NAMESPACE: the namespace is injected and is NEVER the pod's own namespace
+ *     (the bootstrap refuses to boot if they are equal); the Role that allows get/create lives in that
+ *     dedicated namespace only. `LEAST_KUBERNETES_PRIVILEGE` in the actuator's namespace stays intact.
+ *   - NODE_IS_IN_THE_NAME: the secret name carries the first 8 hex of the node id, so two nodes that
+ *     both declare a `db` workload can never share one password. A request for another env is refused.
  *   - GENERATED_256_BIT: 32 random bytes, base64url.
  *   - NO_VALUES_IN_LOGS: nothing here logs a value.
  * Side-effects: IO (Kubernetes API or local filesystem)
@@ -25,8 +30,9 @@ import { CoreV1Api, KubeConfig } from "@kubernetes/client-node";
 
 import type { SecretsPort, WorkloadKey } from "@/ports";
 
-const secretName = (key: WorkloadKey): string =>
-  `nd-${key.workload}-${key.env}`.toLowerCase();
+/** `nd-<nodeId8>-<workload>`; the env is the namespace, not part of the name. */
+export const secretName = (key: WorkloadKey): string =>
+  `nd-${key.nodeId.replace(/-/g, "").slice(0, 8)}-${key.workload}`.toLowerCase();
 
 const generate = (): string => randomBytes(32).toString("base64url");
 
@@ -34,6 +40,7 @@ export class KubernetesStatePasswords implements SecretsPort {
   private readonly core: CoreV1Api;
   constructor(
     private readonly namespace: string,
+    private readonly env: string,
     core?: CoreV1Api
   ) {
     if (core) this.core = core;
@@ -45,6 +52,8 @@ export class KubernetesStatePasswords implements SecretsPort {
   }
 
   async getStatePassword(key: WorkloadKey): Promise<string | undefined> {
+    if (key.env !== this.env)
+      throw new Error(`state secret for env ${key.env} is not served here`);
     try {
       const res = await this.core.readNamespacedSecret(
         secretName(key),
@@ -92,7 +101,7 @@ export class FileStatePasswords implements SecretsPort {
     mkdirSync(dir, { recursive: true });
   }
   private file(key: WorkloadKey): string {
-    return join(this.dir, secretName(key));
+    return join(this.dir, `${secretName(key)}-${key.env}`);
   }
   async getStatePassword(key: WorkloadKey): Promise<string | undefined> {
     try {

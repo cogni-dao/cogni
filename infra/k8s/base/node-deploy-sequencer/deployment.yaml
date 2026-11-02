@@ -53,6 +53,12 @@ spec:
             # Set BY NAME in every overlay (story.5016 Gate 0b — never positional patches).
             - name: DEPLOY_ENVIRONMENT
               value: replace-in-overlay
+            # DEDICATED namespace for generated state passwords (`cogni-node-deploy-<env>`, created by the
+            # overlay). Never the pod's own namespace: the actuator's namespace stays free of any secrets
+            # verb for this ServiceAccount (LEAST_KUBERNETES_PRIVILEGE). The process refuses to boot if
+            # the two are equal. Set BY NAME in every overlay.
+            - name: NODE_DEPLOY_SECRETS_NAMESPACE
+              value: replace-in-overlay
             # PUBLIC on-chain address of the wallet the actuator pays from; chain-truth reads
             # (close confirmation, insufficient_funds). Same value the actuator pins. Not a secret.
             - name: AKASH_CHAIN_OWNER

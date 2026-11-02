@@ -208,6 +208,28 @@ const IDENTITY: Record<string, Rule[]> = {
       ),
     },
     {
+      why: "dedicated per-env secrets namespace for the sequencer (name is the env identity, task.5400)",
+      pattern: /^resource\[Namespace\/cogni-node-deploy-[a-z0-9-]+\]\..+$/,
+    },
+    {
+      why: "dedicated per-env secrets namespace for the sequencer (replacement target + env value)",
+      pattern:
+        /^kustomization\.replacements\[\d+\]\.targets\[\d+\]\.select\.name$/,
+    },
+    {
+      why: "dedicated per-env secrets namespace for the sequencer (env value)",
+      pattern: envValue(
+        "node-deploy-sequencer",
+        "sequencer",
+        "NODE_DEPLOY_SECRETS_NAMESPACE"
+      ),
+    },
+    {
+      why: "sequencer RoleBinding subject names the env's wallet-namespace ServiceAccount",
+      pattern:
+        /^patch\[RoleBinding\/node-deploy-sequencer\] replace \/subjects\/0\.namespace$/,
+    },
+    {
       why: "sponsor account (public chain address, same value the actuator pins)",
       pattern: envValue(
         "node-deploy-sequencer",
