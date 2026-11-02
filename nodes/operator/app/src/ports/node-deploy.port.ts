@@ -1,0 +1,351 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+/**
+ * Module: `@ports/node-deploy.port`
+ * Purpose: The node-deploy sequencer's domain types and seams — workload keys, releases, attempts,
+ *   the attempt phase machine, and the payer / edge DNS / probe / store / secrets / chain / clock
+ *   ports — so the REAL state machine runs unchanged over fakes in tests, over the Akash Console in
+ *   local dev (ConsolePayer) and over the private actuator in production (ActuatorPayer). task.5400.
+ * Scope: Types, interfaces, one error class and tiny pure helpers. No IO.
+ * Invariants:
+ *   - PHASES: planned -> created -> proving -> proven -> active -> retiring -> retired. A failure
+ *     before cutover goes planned|created|proving|proven -> closing -> failed. A live lease that
+ *     chain truth (or a 15-minute failed proof) says is gone goes active -> lost.
+ *   - KEY_IS_NEVER_REUSED: `cogniKey` embeds `(release, attempt)`; every create takes the next ordinal.
+ *   - ONE_PAYER_PORT: `PayerPort` has exactly two implementations (ActuatorPayer in prod, ConsolePayer
+ *     in dev). The sequencer never knows which.
+ *   - NO_DNS_DELETE: `DnsRecordsPort` has no delete. The edge can never be withdrawn by construction
+ *     (bug.5301); only node removal, which is not this component, deletes a record.
+ * Side-effects: none
+ * Links: features/node-deploy/sequencer.ts, task.5400, story.5127
+ * @public
+ */
+
+import type { NodeWorkloadSpec } from "@cogni/repo-spec";
+
+export type { NodeWorkloadSpec };
+
+export type AttemptPhase =
+  | "planned"
+  | "created"
+  | "proving"
+  | "proven"
+  | "active"
+  | "retiring"
+  | "retired"
+  | "closing"
+  | "failed"
+  | "lost";
+
+/** Phases in which this attempt is mid-flight and `step` must drive it forward. */
+export const IN_FLIGHT_PHASES: readonly AttemptPhase[] = [
+  "planned",
+  "created",
+  "proving",
+  "proven",
+];
+
+export interface WorkloadKey {
+  readonly nodeId: string;
+  readonly env: string;
+  readonly workload: string;
+}
+
+export const keyString = (k: WorkloadKey): string =>
+  `${k.nodeId}/${k.env}/${k.workload}`;
+
+export interface ReleaseRow extends WorkloadKey {
+  readonly id: string;
+  readonly sourceSha: string;
+  readonly spec: NodeWorkloadSpec;
+  readonly createdBy: string;
+  readonly createdAt: Date;
+}
+
+export type DesiredState = "running" | "stopped";
+
+export interface DesiredRow extends WorkloadKey {
+  readonly state: DesiredState;
+  readonly releaseId: string;
+  readonly updatedAt: Date;
+}
+
+export interface AttemptRow {
+  readonly id: string;
+  readonly releaseId: string;
+  readonly attempt: number;
+  readonly cogniKey: string;
+  readonly externalName: string | undefined;
+  readonly provider: string | undefined;
+  readonly endpoints: readonly string[];
+  readonly phase: AttemptPhase;
+  readonly error: string | undefined;
+  readonly unhealthySince: Date | undefined;
+  readonly createdAt: Date;
+  readonly leasedAt: Date | undefined;
+  readonly updatedAt: Date;
+}
+
+export interface AttemptPatch {
+  phase?: AttemptPhase;
+  externalName?: string;
+  provider?: string;
+  endpoints?: readonly string[];
+  error?: string | null;
+  unhealthySince?: Date | null;
+  leasedAt?: Date;
+}
+
+/**
+ * `nd:<k8s-namespace>:<nodeId>:<workload>:<releaseId>:<attempt>` — the actuator idempotency key
+ * (task.5400 binding rule). Url-safe by construction: every segment is a DNS label or a uuid.
+ */
+export function buildCogniKey(input: {
+  readonly namespace: string;
+  readonly nodeId: string;
+  readonly workload: string;
+  readonly releaseId: string;
+  readonly attempt: number;
+}): string {
+  return `nd:${input.namespace}:${input.nodeId}:${input.workload}:${input.releaseId}:${input.attempt}`;
+}
+
+/** The actuator wire's stated identity for one attempt. Never derived from the key. */
+export function buildIdentity(input: {
+  readonly nodeId: string;
+  readonly releaseId: string;
+  readonly attempt: number;
+}): {
+  nodeId: string;
+  compositeUid: string;
+  compositeGeneration: number;
+} {
+  return {
+    nodeId: input.nodeId,
+    compositeUid: `nd-${input.releaseId}`,
+    compositeGeneration: input.attempt,
+  };
+}
+
+/** Consecutive failed attempts of ONE release, counted from the newest backwards. */
+export function consecutiveFailures(
+  attemptsNewestFirst: readonly AttemptRow[]
+): number {
+  let n = 0;
+  for (const a of attemptsNewestFirst) {
+    if (a.phase === "failed" || a.phase === "closing") n++;
+    else break;
+  }
+  return n;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Payer
+// ---------------------------------------------------------------------------------------------
+
+/** The provider-agnostic spec on the actuator v1 wire (`AkashTxSpecSchema`). */
+export interface PayerSpec {
+  readonly name: string;
+  readonly services: readonly {
+    readonly name: string;
+    readonly image: string;
+    readonly env?: Readonly<Record<string, string>>;
+    readonly command?: readonly string[];
+    readonly cpuUnits: number;
+    readonly memoryMi: number;
+    readonly storageMi: number;
+    readonly volumes?: readonly {
+      readonly name: string;
+      readonly sizeMi: number;
+      readonly mountPath: string;
+      readonly tier: "hdd" | "ssd" | "nvme";
+    }[];
+    readonly expose?: readonly {
+      readonly port: number;
+      readonly as: number;
+      readonly global: boolean;
+      readonly hosts?: readonly string[];
+    }[];
+  }[];
+}
+
+export interface PayerCreateRequest {
+  readonly cogniKey: string;
+  readonly environment: string;
+  readonly identity: {
+    readonly nodeId: string;
+    readonly compositeUid: string;
+    readonly compositeGeneration: number;
+  };
+  readonly spec: PayerSpec;
+  /**
+   * Providers that must NOT win this create: the provider currently serving blue, because two leases
+   * on one provider ingress cannot both claim one host. ADVISORY for the payer: ConsolePayer honors
+   * it; the actuator's v1 wire has no such field, so ActuatorPayer cannot send it and the sequencer's
+   * post-hoc `same_provider_as_blue` proof refusal is the backstop (task.5400 YELLOW).
+   */
+  readonly excludeProviders?: readonly string[];
+}
+
+export interface PayerResource {
+  /** Opaque provider handle (the Akash dseq). */
+  readonly externalName: string;
+  readonly state: "pending" | "active" | "closed" | "unknown";
+  /** Ingress hosts (no scheme) and `tcp://host:port` forwarded ports. */
+  readonly endpoints: readonly string[];
+  readonly providerAccount: string | undefined;
+}
+
+export type PayerErrorCode =
+  | "invalid_request"
+  | "unauthorized"
+  | "not_found"
+  | "wallet_allocation_blocked"
+  | "allocation_unresolved"
+  | "allocation_ambiguous"
+  | "allocation_rolled_back"
+  | "provider_rejected"
+  | "placement_violated_by_incumbent"
+  | "identity_conflict"
+  | "provider_unavailable"
+  | "outcome_unknown"
+  | "ledger_unavailable"
+  | "network";
+
+/**
+ * Failure of a payer call. `ambiguous` means "a paid lease MAY exist under this key": the caller
+ * must resolve it through `observe(cogniKey)` and must NEVER blindly create again.
+ */
+export class PayerError extends Error {
+  constructor(
+    readonly code: PayerErrorCode,
+    message: string,
+    readonly ambiguous: boolean
+  ) {
+    super(message);
+    this.name = "PayerError";
+  }
+}
+
+export interface PayerPort {
+  /** Idempotent by `cogniKey`. Returns once the lease exists; boot convergence is the caller's. */
+  create(req: PayerCreateRequest): Promise<PayerResource>;
+  /** Unpaid read. `found:false` means no resource exists under this key. */
+  observe(req: {
+    readonly cogniKey: string;
+    readonly externalName?: string;
+  }): Promise<{ found: boolean; resource?: PayerResource }>;
+  delete(req: {
+    readonly cogniKey: string;
+    readonly externalName: string;
+  }): Promise<void>;
+}
+
+/** Independent chain/Console truth for a deployment, used to cross-check a close and detect loss. */
+export interface ChainTruthPort {
+  deploymentState(
+    externalName: string
+  ): Promise<"active" | "closed" | "insufficient_funds" | "unknown">;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Edge DNS
+// ---------------------------------------------------------------------------------------------
+
+export interface DnsRecord {
+  readonly id: string;
+  readonly name: string;
+  readonly type: string;
+  readonly content: string;
+  readonly proxied: boolean;
+}
+
+export interface DnsRecordInput {
+  readonly type: "CNAME";
+  readonly name: string;
+  readonly content: string;
+  readonly proxied: true;
+}
+
+/** Cloudflare zone records. Deliberately NO delete (NO_DNS_DELETE). */
+export interface DnsRecordsPort {
+  findByName(name: string): Promise<readonly DnsRecord[]>;
+  create(input: DnsRecordInput): Promise<DnsRecord>;
+  update(id: string, input: DnsRecordInput): Promise<DnsRecord>;
+  read(id: string): Promise<DnsRecord>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Probes
+// ---------------------------------------------------------------------------------------------
+
+export interface HttpResult {
+  readonly status: number;
+  readonly body: string;
+  readonly ms: number;
+  readonly error?: string;
+}
+
+export interface ProbePort {
+  /** GET `http://<ingressHost><path>` presenting `Host: <hostHeader>` (the provider's host routing). */
+  hostRouted(
+    ingressHost: string,
+    hostHeader: string,
+    path: string
+  ): Promise<HttpResult>;
+  /** GET `https://<host><path>` resolved through Cloudflare DoH, bypassing any local resolver. */
+  publicDoh(host: string, path: string): Promise<HttpResult>;
+  /** Postgres SSLRequest handshake against a forwarded tcp port. */
+  tcpTls(host: string, port: number): Promise<boolean>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Store / secrets / clock / log
+// ---------------------------------------------------------------------------------------------
+
+export interface RecordReleaseInput extends WorkloadKey {
+  readonly sourceSha: string;
+  readonly spec: NodeWorkloadSpec;
+  readonly createdBy: string;
+}
+
+export interface StorePort {
+  getDesired(key: WorkloadKey): Promise<DesiredRow | undefined>;
+  /** Desired rows for ONE deployment environment. A sequencer only ever lists its own env (CD4). */
+  listDesired(env: string): Promise<readonly DesiredRow[]>;
+  getRelease(id: string): Promise<ReleaseRow | undefined>;
+  /** Write the immutable release AND point desired at it (state `running`) in one transaction. */
+  recordRelease(
+    input: RecordReleaseInput
+  ): Promise<{ release: ReleaseRow; desired: DesiredRow }>;
+  /** Every attempt of the workload across releases, newest first (created_at desc). */
+  attemptsFor(key: WorkloadKey): Promise<readonly AttemptRow[]>;
+  /**
+   * Insert the next attempt (phase `planned`) of a release. The ordinal is allocated by the store
+   * and the key by `makeKey`, both before the row is visible. KEY_IS_NEVER_REUSED.
+   */
+  insertAttempt(
+    releaseId: string,
+    makeKey: (attempt: number) => string
+  ): Promise<AttemptRow>;
+  updateAttempt(id: string, patch: AttemptPatch): Promise<AttemptRow>;
+}
+
+export interface SecretsPort {
+  /** Read the generated state password for `nd-<workload>-<env>`; undefined when absent. */
+  getStatePassword(key: WorkloadKey): Promise<string | undefined>;
+  /** Create once (never overwrite), return the stored value. */
+  ensureStatePassword(key: WorkloadKey): Promise<string>;
+}
+
+export interface SequencerClock {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+}
+
+export interface SequencerLog {
+  info(fields: Record<string, unknown>, msg: string): void;
+  warn(fields: Record<string, unknown>, msg: string): void;
+  error(fields: Record<string, unknown>, msg: string): void;
+}

@@ -165,6 +165,16 @@ export {
   TemplateQueryError,
   type TemplateQueryErrorCode,
 } from "./metrics/mimir.adapter";
+export { ActuatorPayer } from "./node-deploy/actuator-payer.adapter";
+export { AdvisoryLeader } from "./node-deploy/advisory-leader.adapter";
+export { AkashChainTruth } from "./node-deploy/akash-chain-truth.adapter";
+export { CloudflareDnsRecords } from "./node-deploy/cloudflare-dns.adapter";
+export { HttpProbe } from "./node-deploy/http-probe.adapter";
+export { PostgresNodeDeployStore } from "./node-deploy/postgres-store.adapter";
+// DEV-ONLY adapters (ConsolePayer pays straight from a Console key; FileStatePasswords writes secrets
+// to disk) are deliberately NOT exported here: the production sequencer bootstrap imports this barrel,
+// and a dev payer must be unreachable from it. Only `scripts/node-deploy-local.ts` imports them, by path.
+export { KubernetesStatePasswords } from "./node-deploy/state-secrets.adapter";
 export {
   GitHubNodeDeploymentTopologyAdapter,
   type NodeDeploymentFileReader,

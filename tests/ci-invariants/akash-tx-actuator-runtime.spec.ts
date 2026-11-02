@@ -849,3 +849,152 @@ describe("akash-tx-actuator runtime", () => {
     expect(profiles).not.toHaveProperty("poly-dedicated-v1");
   });
 });
+
+/**
+ * task.5400 — the node-deploy sequencer rides beside the actuator but must hold NO secrets verb in the
+ * wallet namespace (WALLET_IS_UNREACHABLE_FROM_THE_OPERATOR_APP / LEAST_KUBERNETES_PRIVILEGE). Its
+ * generated state passwords live in a dedicated `cogni-node-deploy-<env>` namespace that its Role and
+ * RoleBinding are moved into. Asserted on the RENDERED overlay (the namespace transformer, not the source
+ * files, decides where a Role lands).
+ */
+describe("node-deploy sequencer has no secrets reach in the wallet namespace", () => {
+  interface Doc {
+    kind: string;
+    metadata: { name: string; namespace?: string };
+    rules?: { resources?: string[]; verbs?: string[] }[];
+    roleRef?: { kind: string; name: string };
+    subjects?: { kind: string; name: string; namespace?: string }[];
+    spec?: {
+      template?: {
+        spec?: {
+          containers?: { env?: { name: string; value?: string }[] }[];
+        };
+      };
+    };
+  }
+  const renderOverlay = (env: string): Doc[] => {
+    const out = execFileSync(
+      "kubectl",
+      ["kustomize", path.join(REPO_ROOT, `infra/k8s/overlays/${env}/operator`)],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+    );
+    return yaml
+      .parseAllDocuments(out)
+      .map((d) => d.toJS() as Doc)
+      .filter(Boolean);
+  };
+  const kubectlAvailable = (() => {
+    try {
+      execFileSync("kubectl", ["version", "--client"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  it("the base Role grants only secrets get+create, and every overlay moves it to a dedicated namespace", () => {
+    const rbac = yaml
+      .parseAllDocuments(read("infra/k8s/base/node-deploy-sequencer/rbac.yaml"))
+      .map((d) => d.toJS() as Doc);
+    const role = rbac.find((d) => d.kind === "Role");
+    expect(role?.rules).toEqual([
+      { apiGroups: [""], resources: ["secrets"], verbs: ["get", "create"] },
+    ]);
+    for (const env of ["candidate-a", "production"]) {
+      const kustomization = read(
+        `infra/k8s/overlays/${env}/operator/kustomization.yaml`
+      );
+      expect(kustomization, env).toContain(
+        "./node-deploy-secrets-namespace.yaml"
+      );
+      expect(kustomization, env).toContain(
+        `name: NODE_DEPLOY_SECRETS_NAMESPACE\n                    value: cogni-node-deploy-${env}`
+      );
+    }
+  });
+
+  it.skipIf(!kubectlAvailable).each(["candidate-a", "production"])(
+    "%s: no Role the sequencer SA is bound to grants secrets in the wallet namespace",
+    (env) => {
+      const docs = renderOverlay(env);
+      const wallet = `cogni-${env}`;
+      const sa = docs.find(
+        (d) =>
+          d.kind === "ServiceAccount" &&
+          d.metadata.name.endsWith("node-deploy-sequencer")
+      );
+      expect(sa?.metadata.namespace).toBe(wallet);
+      const mine = (b: Doc) =>
+        (b.subjects ?? []).some(
+          (x) =>
+            x.kind === "ServiceAccount" &&
+            x.name === sa?.metadata.name &&
+            x.namespace === wallet
+        );
+      // no cluster-wide grant at all
+      expect(
+        docs.filter((d) => d.kind === "ClusterRoleBinding" && mine(d))
+      ).toEqual([]);
+      const bindings = docs.filter((d) => d.kind === "RoleBinding" && mine(d));
+      expect(bindings.length).toBeGreaterThan(0);
+      for (const binding of bindings) {
+        const role = docs.find(
+          (d) =>
+            d.kind === binding.roleRef?.kind &&
+            d.metadata.name === binding.roleRef?.name &&
+            d.metadata.namespace === binding.metadata.namespace
+        );
+        expect(
+          role,
+          `${binding.metadata.name} resolves its Role in its own namespace`
+        ).toBeDefined();
+        const touchesSecrets = (role?.rules ?? []).some((r) =>
+          r.resources?.includes("secrets")
+        );
+        if (binding.metadata.namespace === wallet)
+          expect(
+            touchesSecrets,
+            "no secrets verb in the wallet namespace"
+          ).toBe(false);
+        else expect(touchesSecrets).toBe(true);
+      }
+      // the dedicated namespace exists, is not the wallet's, and is exactly what the process is told
+      const envVar = docs
+        .find(
+          (d) =>
+            d.kind === "Deployment" &&
+            d.metadata.name.endsWith("node-deploy-sequencer")
+        )
+        ?.spec?.template?.spec?.containers?.[0]?.env?.find(
+          (e) => e.name === "NODE_DEPLOY_SECRETS_NAMESPACE"
+        )?.value;
+      expect(envVar).toBe(`cogni-node-deploy-${env}`);
+      expect(envVar).not.toBe(wallet);
+      expect(
+        docs.some((d) => d.kind === "Namespace" && d.metadata.name === envVar)
+      ).toBe(true);
+      expect(
+        docs.some((d) => d.kind === "Namespace" && d.metadata.name === wallet)
+      ).toBe(false);
+      // and nothing else in the wallet namespace grants this SA secrets via any other Role in the render
+      const walletRolesWithSecrets = docs.filter(
+        (d) =>
+          d.kind === "Role" &&
+          d.metadata.namespace === wallet &&
+          d.metadata.name.endsWith("node-deploy-sequencer") &&
+          (d.rules ?? []).some((r) => r.resources?.includes("secrets"))
+      );
+      expect(walletRolesWithSecrets).toEqual([]);
+    }
+  );
+
+  it("the sequencer process refuses to boot when its secrets namespace is its own (wallet) namespace", () => {
+    const source = read(
+      "nodes/operator/app/src/bootstrap/node-deploy-sequencer.ts"
+    );
+    expect(source).toMatch(/secretsNamespace === namespace/);
+    expect(source).toContain(
+      "KubernetesStatePasswords(secretsNamespace, environment)"
+    );
+  });
+});

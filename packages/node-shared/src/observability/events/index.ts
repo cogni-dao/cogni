@@ -92,6 +92,7 @@ export const EVENT_NAMES = {
   NODE_OBSERVABILITY_DB_SCHEMA_COMPLETE:
     "feature.node_observability_db_schema.complete",
   NODE_DEPLOY_STATE_COMPLETE: "feature.node_deploy_state.complete",
+  NODE_WORKLOAD_DEPLOY_COMPLETE: "feature.node_workload_deploy.complete",
   NODE_OPERATIONS_READ_COMPLETE: "feature.node_operations_read.complete",
   VCS_FLIGHT_REQUEST_COMPLETE: "feature.vcs_flight.request_complete",
   VCS_MERGE_REQUEST_COMPLETE: "feature.vcs_merge.request_complete",

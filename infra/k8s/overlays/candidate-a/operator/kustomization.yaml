@@ -34,6 +34,10 @@ resources:
   # bug.5240 — the keyless lease-log pump rides wherever an actuator runs: it enumerates the
   # actuator's ledger (read-only op) and ships every live lease's logs to Loki.
   - ../../../base/lease-log-pump
+  # task.5400 — the node-deploy sequencer (blue/green deploy verb) rides wherever an actuator runs: it
+  # PAYS only through that actuator and holds no Console key. Single instance by advisory lock.
+  - ../../../base/node-deploy-sequencer
+  - ./node-deploy-secrets-namespace.yaml
   # task.5247 — private read-only database status observation.
   - ../../../base/database-reliability-actuator
   - ./database-reliability-actuator-external-secret.yaml
@@ -54,6 +58,22 @@ images:
     digest: "sha256:0250cc2e6c01a80172d19b00583b65c50990b27849ca16815e75d2d899511b53"
 
 replacements:
+  # task.5400 — the sequencer's secrets live in a DEDICATED namespace, not the wallet namespace
+  # (cogni-candidate-a). The `namespace:` transformer above forces EVERYTHING it can into cogni-candidate-a, including
+  # the name of a Namespace object, so this replacement puts them back. ONE source of truth: the env
+  # value the sequencer itself reads (patched BY NAME below), copied onto the Namespace's name and the
+  # Role/RoleBinding's namespace, so the process, the Namespace and the RBAC can never disagree.
+  - source:
+      kind: Deployment
+      name: node-deploy-sequencer
+      fieldPath: spec.template.spec.containers.[name=sequencer].env.[name=NODE_DEPLOY_SECRETS_NAMESPACE].value
+    targets:
+      - select: { kind: Namespace, name: cogni-node-deploy-candidate-a }
+        fieldPaths: [metadata.name]
+      - select: { kind: Role, name: node-deploy-sequencer }
+        fieldPaths: [metadata.namespace]
+      - select: { kind: RoleBinding, name: node-deploy-sequencer }
+        fieldPaths: [metadata.namespace]
   - source:
       kind: Application
       name: compute-workload-platform
@@ -207,6 +227,39 @@ patches:
                 env:
                   - name: DEPLOY_ENVIRONMENT
                     value: candidate-a
+  # task.5400 — the RoleBinding lives in the dedicated secrets namespace (see `replacements`), so the
+  # `namespace:`/`namePrefix:` transformers no longer rewrite its ServiceAccount subject: state it.
+  - target:
+      kind: RoleBinding
+      name: node-deploy-sequencer
+    patch: |
+      - op: replace
+        path: /subjects/0
+        value:
+          kind: ServiceAccount
+          name: operator-node-deploy-sequencer
+          namespace: cogni-candidate-a
+  # task.5400 — same BY-NAME env rule as the actuator and pump patches.
+  - target:
+      kind: Deployment
+      name: node-deploy-sequencer
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: node-deploy-sequencer
+      spec:
+        template:
+          spec:
+            containers:
+              - name: sequencer
+                env:
+                  - name: DEPLOY_ENVIRONMENT
+                    value: candidate-a
+                  - name: NODE_DEPLOY_SECRETS_NAMESPACE
+                    value: cogni-node-deploy-candidate-a
+                  - name: AKASH_CHAIN_OWNER
+                    value: "akash12eh8xgpeyumar3sk6wp94y0tq9uh62mkezxjmt"
   - target:
       kind: ConfigMap
       name: node-app-config

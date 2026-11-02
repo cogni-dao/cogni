@@ -309,6 +309,40 @@ export type { ModelProviderResolverPort } from "./model-provider-resolver.port";
 export type { NodeAddressPort } from "./node-address.port";
 export { NodeAddressError } from "./node-address.port";
 export type {
+  AttemptPatch,
+  AttemptPhase,
+  AttemptRow,
+  ChainTruthPort,
+  DesiredRow,
+  DesiredState,
+  DnsRecord,
+  DnsRecordInput,
+  DnsRecordsPort,
+  HttpResult,
+  NodeWorkloadSpec,
+  PayerCreateRequest,
+  PayerErrorCode,
+  PayerPort,
+  PayerResource,
+  PayerSpec,
+  ProbePort,
+  RecordReleaseInput,
+  ReleaseRow,
+  SecretsPort,
+  SequencerClock,
+  SequencerLog,
+  StorePort,
+  WorkloadKey,
+} from "./node-deploy.port";
+export {
+  buildCogniKey,
+  buildIdentity,
+  consecutiveFailures,
+  IN_FLIGHT_PHASES,
+  keyString,
+  PayerError,
+} from "./node-deploy.port";
+export type {
   NodeDeployedService,
   NodeDeploymentTopologyPort,
 } from "./node-deployment-topology.port";

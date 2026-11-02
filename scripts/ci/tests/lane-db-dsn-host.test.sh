@@ -542,7 +542,7 @@ echo "  ok  scope guards hold"
     [[ "${passed[APP_DB_SERVICE_PASSWORD]}" == 'service fixture' ]]
     [[ "${passed[APP_DB_MIGRATION_PASSWORD]}" == 'isolated fixture' ]]
     [[ "${passed[DB_BUDGET_PROFILE]}" == operator-control-v1 ]]
-    [[ "${passed[DB_APP_CONNECTION_LIMIT]}" == 7 ]]
+    [[ "${passed[DB_APP_CONNECTION_LIMIT]}" == 8 ]]
     [[ "${passed[DB_APP_STATEMENT_TIMEOUT_MS]}" == 5000 ]]
     [[ "${passed[DB_SERVICE_CONNECTION_LIMIT]}" == 15 ]]
     [[ "${passed[DB_SERVICE_STATEMENT_TIMEOUT_MS]}" == 2000 ]]
