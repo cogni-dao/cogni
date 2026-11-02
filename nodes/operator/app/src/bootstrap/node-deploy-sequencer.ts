@@ -13,9 +13,15 @@
  *   - PAYS_ONLY_THROUGH_THE_ACTUATOR: this process holds the actuator BEARER, never a Console key or a
  *     wallet. `ActuatorPayer` is the only payer wired here; ConsolePayer is dev-only.
  *   - SECRETS_ARRIVE_AS_FILES: credentials are read from a projected Secret volume, never process env.
- *   - SINGLE_INSTANCE: a Postgres session advisory lock is held on a reserved connection for the life
- *     of the process. A second replica idles (not ready) and a lost lock connection exits the process;
+ *   - SINGLE_INSTANCE: a Postgres session advisory lock is held on the one pooled connection for the
+ *     life of the process. A second replica idles (not ready) and a lost lock connection exits the process;
  *     two sequencers can therefore never drive one workload.
+ *   - NO_SECRETS_IN_THE_WALLET_NAMESPACE: generated state passwords live in a DEDICATED namespace
+ *     (`NODE_DEPLOY_SECRETS_NAMESPACE`, `cogni-node-deploy-<env>`), never in the actuator's namespace;
+ *     boot is refused if the two are the same.
+ *   - ONE_DB_CONNECTION: the pool is max 1 and the session advisory lock rides on that SAME connection
+ *     (operator-control-v1 budgets exactly one). A heartbeat keeps the connection from idling out and
+ *     proves THIS backend still holds the lock; losing it exits the process.
  *   - NO_EDGE_NO_HTTP_APPS: without Cloudflare credentials the process still runs (state workloads work)
  *     and the sequencer refuses http apps BEFORE paying.
  *   - FAIL_LOUD_FOR_ITSELF: a missing actuator token or database URL refuses boot (CrashLoopBackOff).
@@ -51,7 +57,6 @@ const LISTEN_PORT = 8080;
 const CREDENTIAL_DIR = "/var/run/secrets/node-deploy-sequencer";
 const TICK_MS = 5_000;
 const RECONCILE_MS = 60_000;
-const LOCK_KEY_SQL = "hashtext('node-deploy-sequencer')";
 
 // biome-ignore lint/style/noProcessEnv: dedicated process composition root validates its own minimal env
 const runtimeEnv = process.env;
@@ -120,8 +125,21 @@ if (!edge) {
   );
 }
 
+const secretsNamespace = runtimeEnv.NODE_DEPLOY_SECRETS_NAMESPACE;
+if (!secretsNamespace || secretsNamespace === namespace) {
+  log.fatal(
+    { reason: "SecretsNamespaceInvalid", namespace, secretsNamespace },
+    "node_deploy_sequencer_secrets_namespace_invalid"
+  );
+  throw new Error(
+    "NODE_DEPLOY_SECRETS_NAMESPACE is required and must NOT be the pod's own (wallet) namespace"
+  );
+}
+
+// ONE connection TOTAL: infra/database-budget-profiles.yaml operator-control-v1 budgets exactly one
+// for this process and tests/ci-invariants/operator-db-budget.spec.ts counts it.
 const db = createAppDbClient(databaseUrl, {
-  max: 4,
+  max: 1,
   applicationName: "cogni_operator_node_deploy_sequencer",
 });
 
@@ -134,7 +152,7 @@ const sequencer = new NodeDeploySequencer({
   }),
   edge,
   probe: new HttpProbe(),
-  secrets: new KubernetesStatePasswords(namespace),
+  secrets: new KubernetesStatePasswords(secretsNamespace, environment),
   ...(runtimeEnv.AKASH_CHAIN_OWNER
     ? { chain: new AkashChainTruth({ owner: runtimeEnv.AKASH_CHAIN_OWNER }) }
     : {}),
@@ -176,13 +194,44 @@ health.listen(LISTEN_PORT, "0.0.0.0", () => {
   );
 });
 
-/** Reserve one connection and hold the session advisory lock on it for the life of the process. */
+/**
+ * Take the session advisory lock on the pool's ONE connection and keep proving we still hold it.
+ * `postgres.js` idles a connection out after 20 s, which would silently drop a session lock, so the
+ * heartbeat (every 5 s) both keeps it alive and checks `pg_locks` for THIS backend; a lost lock is
+ * fatal (a fresh process re-contends). The same check runs at the start of every tick.
+ */
+const LOCK_KEY = "hashtext('node-deploy-sequencer')::bigint";
+const HELD_SQL = `select exists (select 1 from pg_locks where locktype = 'advisory' and pid = pg_backend_pid() and objsubid = 1 and objid::bigint = (${LOCK_KEY} & 4294967295) and classid::bigint = ((${LOCK_KEY} >> 32) & 4294967295)) as held`;
+
+async function lockHeld(): Promise<boolean> {
+  const rows = await db.$client.unsafe(HELD_SQL);
+  return rows[0]?.held === true;
+}
+
+function die(reason: string, cause?: unknown): never {
+  log.fatal(
+    {
+      reason,
+      causeMessage: cause instanceof Error ? cause.message : undefined,
+    },
+    "node_deploy_sequencer_leadership_lost"
+  );
+  process.exit(1);
+}
+
+async function assertLeader(): Promise<void> {
+  try {
+    if (!(await lockHeld())) die("AdvisoryLockNotHeld");
+  } catch (error) {
+    die("LeadershipCheckFailed", error);
+  }
+}
+
 async function acquireLeadership(): Promise<void> {
-  const reserved = await db.$client.reserve();
   for (;;) {
     if (stopping) return;
-    const rows = await reserved.unsafe(
-      `select pg_try_advisory_lock(${LOCK_KEY_SQL}) as ok`
+    const rows = await db.$client.unsafe(
+      `select pg_try_advisory_lock(${LOCK_KEY}) as ok`
     );
     if (rows[0]?.ok === true) break;
     log.info({ namespace }, "node_deploy_sequencer_waiting_for_lock");
@@ -190,18 +239,7 @@ async function acquireLeadership(): Promise<void> {
   }
   leader = true;
   log.info({ namespace, environment }, "node_deploy_sequencer_leader");
-  // A dead lock connection means the lock is gone: exit so a fresh process re-contends.
-  timers.push(
-    setInterval(() => {
-      reserved.unsafe("select 1").catch((error: unknown) => {
-        log.fatal(
-          { causeMessage: error instanceof Error ? error.message : "unknown" },
-          "node_deploy_sequencer_lock_connection_lost"
-        );
-        process.exit(1);
-      });
-    }, 30_000)
-  );
+  timers.push(setInterval(() => void assertLeader(), 5_000));
 }
 
 function loop(name: string, everyMs: number, work: () => Promise<void>): void {
@@ -224,8 +262,14 @@ function loop(name: string, everyMs: number, work: () => Promise<void>): void {
 }
 
 await acquireLeadership();
-loop("tick", TICK_MS, () => sequencer.tick());
-loop("reconcile", RECONCILE_MS, () => sequencer.reconcileAll());
+loop("tick", TICK_MS, async () => {
+  await assertLeader();
+  await sequencer.tick();
+});
+loop("reconcile", RECONCILE_MS, async () => {
+  await assertLeader();
+  await sequencer.reconcileAll();
+});
 
 function shutdown(signal: string): void {
   log.info({ signal }, "node_deploy_sequencer_stopping");
