@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@adapters/server/node-deploy/actuator-payer.adapter.test`
+ * Module: `@tests/unit/adapters/node-deploy/actuator-payer`
  * Purpose: Prove ActuatorPayer speaks the actuator's REAL v1 wire (strictly validated by the contract's
  *   own zod schemas), carries only the bearer, and classifies every error code the way the sequencer's
  *   "never blindly re-create" rule needs (task.5400).
@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-
+import { ActuatorPayer } from "@/adapters/server";
 import {
   AkashTxCreateInputSchema,
   AkashTxDeleteInputSchema,
@@ -24,8 +24,6 @@ import {
   SHA_1,
 } from "@/features/node-deploy/testing";
 import { buildCogniKey, buildIdentity, PayerError } from "@/ports";
-
-import { ActuatorPayer } from "./actuator-payer.adapter";
 
 const RELEASE_ID = "6b564b98-7a28-4a7f-8b17-c65a1b3e2c96";
 
