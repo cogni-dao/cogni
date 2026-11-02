@@ -312,6 +312,45 @@ describe("app deploy", () => {
   });
 });
 
+describe("provider exclusion and alert hygiene", () => {
+  it("tells the payer to avoid blue's provider for a green create (and sends nothing on a first deploy)", async () => {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    const first = h.payer.createRequests.filter(
+      (r) => r.spec.name === "canary"
+    );
+    expect(first[0]?.excludeProviders).toBeUndefined();
+    await deployApp(h, SHA_2);
+    const second = h.payer.createRequests.filter(
+      (r) => r.spec.name === "canary"
+    );
+    expect(second[1]?.excludeProviders).toEqual(["provider-2"]);
+  });
+
+  it("a parked release alerts once per 10 minutes, not once per tick", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.onLease = (l) => {
+      l.serveSha = "f".repeat(40);
+    };
+    await h.release(canaryApp(), SHA_1);
+    for (let i = 0; i < 3; i++) await h.seq.step(APP);
+    for (let i = 0; i < 50; i++) {
+      await h.seq.step(APP);
+      h.clock.advance(4_000);
+    }
+    expect(h.log.alerts().filter((a) => a === "release_parked")).toHaveLength(
+      1
+    );
+    h.clock.advance(11 * 60_000);
+    await h.seq.step(APP);
+    expect(h.log.alerts().filter((a) => a === "release_parked")).toHaveLength(
+      2
+    );
+  });
+});
+
 describe("keys and parking", () => {
   it("every create uses a fresh url-safe key; identity states the tuple", async () => {
     const h = harness();

@@ -68,7 +68,7 @@ describe("the operator's checked-in canary declarations", () => {
     expect(w.env.PGDATA).toBe("/var/lib/postgresql/data/pgdata");
   });
 
-  it("canary: alpine digest from the task, the tested script, port 8080 -> 80, bound to canary-db", () => {
+  it("canary: python alpine digest, a real HTTP server (the nc loop 502d behind some ingresses), port 8080 -> 80, bound to canary-db", () => {
     const w = resolveWorkloadDeclaration({
       repoSpecText: ROOT_SPEC,
       nodeId: NODE_ID,
@@ -76,7 +76,7 @@ describe("the operator's checked-in canary declarations", () => {
       workload: "canary",
     });
     expect(w.image).toBe(
-      "postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab"
+      "python:3.12-alpine@sha256:e6dae589c1c05976188fd3bd019afd091445fc533ed2ea29001beddc7368a9c8"
     );
     expect(w).toMatchObject({
       kind: "app",
@@ -88,8 +88,9 @@ describe("the operator's checked-in canary declarations", () => {
       health: { version: "/version", ready: "/readyz" },
     });
     expect(w.command?.slice(0, 2)).toEqual(["sh", "-c"]);
-    expect(w.command?.[2]).toContain("nc -l -p 8080");
-    expect(w.command?.[2]).toContain('"buildSha\\":\\"$RELEASE_SHA');
+    expect(w.command?.[2]).toContain("ThreadingHTTPServer");
+    expect(w.command?.[2]).toContain('("0.0.0.0", 8080)');
+    expect(w.command?.[2]).toContain('"buildSha": SHA');
   });
 
   it("hosts follow the environment: production / -test / -preview / -dev", () => {

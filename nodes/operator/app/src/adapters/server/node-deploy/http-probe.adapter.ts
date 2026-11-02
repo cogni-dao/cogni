@@ -49,10 +49,17 @@ export class HttpProbe implements ProbePort {
           );
         }
       );
-      req.on("timeout", () => req.destroy(new Error("timeout")));
-      req.on("error", (e) =>
-        resolve({ status: 0, body: "", ms: Date.now() - t0, error: e.message })
+      // HARD deadline (idle `timeout` does not bound a stalled DNS lookup).
+      const hard = setTimeout(
+        () => req.destroy(new Error("hard timeout")),
+        this.timeoutMs + 2_000
       );
+      req.on("timeout", () => req.destroy(new Error("timeout")));
+      req.on("error", (e) => {
+        clearTimeout(hard);
+        resolve({ status: 0, body: "", ms: Date.now() - t0, error: e.message });
+      });
+      req.on("close", () => clearTimeout(hard));
       req.end();
     });
   }
@@ -128,7 +135,10 @@ export class HttpProbe implements ProbePort {
   tcpTls(host: string, port: number): Promise<boolean> {
     return new Promise((resolve) => {
       const sock = connect({ host, port });
+      // HARD deadline: `socket.setTimeout` is an IDLE timer and does not bound a stalled DNS lookup.
+      const hard = setTimeout(() => done(false), this.timeoutMs);
       const done = (v: boolean) => {
+        clearTimeout(hard);
         sock.destroy();
         resolve(v);
       };

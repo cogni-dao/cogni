@@ -93,12 +93,17 @@ export interface ConsolePayerConfig {
   readonly depositUsd?: number;
   readonly bidMs?: number;
   readonly bidGraceMs?: number;
+  /** Providers never offered a bid (dev diagnostics, e.g. a state lease's own provider). */
+  readonly excludeProviders?: readonly string[];
   readonly log?: (event: string, data?: Record<string, unknown>) => void;
 }
 
 export class ConsolePayer implements PayerPort {
   private readonly base: string;
-  private keys: Record<string, { dseq: string; provider?: string }>;
+  private keys: Record<
+    string,
+    { dseq: string; provider?: string }
+  >;
 
   private constructor(private readonly cfg: ConsolePayerConfig) {
     this.base = cfg.baseUrl ?? "https://console-api.akash.network";
@@ -285,7 +290,11 @@ export class ConsolePayer implements PayerPort {
       const needsHost = req.spec.services.some((s) =>
         s.expose?.some((e) => (e.hosts?.length ?? 0) > 0)
       );
-      const bid = await this.awaitBid(dseq, needsHost);
+      const exclude = new Set([
+        ...(this.cfg.excludeProviders ?? []),
+        ...(req.excludeProviders ?? []),
+      ]);
+      const bid = await this.awaitBid(dseq, needsHost, exclude);
       await this.http("POST", "/v1/leases", {
         manifest: created.manifest,
         leases: [
@@ -373,7 +382,8 @@ export class ConsolePayer implements PayerPort {
 
   private async awaitBid(
     dseq: string,
-    needsCustomDomain: boolean
+    needsCustomDomain: boolean,
+    exclude: ReadonlySet<string>
   ): Promise<Bid> {
     const providers =
       (await this.http<Json[]>("GET", "/v1/providers", undefined, 120_000)) ??
@@ -396,7 +406,7 @@ export class ConsolePayer implements PayerPort {
     const ceiling = this.cfg.pricingAmount ?? 1000;
     const passes = (b: Bid): boolean => {
       const p = byOwner.get(b.provider);
-      if (!p?.isOnline || !p.isAudited) return false;
+      if (!p?.isOnline || !p.isAudited || exclude.has(b.provider)) return false;
       if (needsCustomDomain && p.customDomain !== true) return false;
       return b.state === "open" && b.denom === denom && b.amount <= ceiling;
     };

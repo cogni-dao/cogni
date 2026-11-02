@@ -195,6 +195,9 @@ async function build() {
     apiKey,
     expectedAccountId: accountId,
     keyMapFile: `${DIR}/console-keys.json`,
+    excludeProviders: (process.env.ND_EXCLUDE_PROVIDERS ?? "")
+      .split(",")
+      .filter(Boolean),
     log: (event, data) => ev(`console_${event}`, data),
   });
   ev("payer_open", { accountOk: true });

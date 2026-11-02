@@ -179,6 +179,13 @@ export interface PayerCreateRequest {
     readonly compositeGeneration: number;
   };
   readonly spec: PayerSpec;
+  /**
+   * Providers that must NOT win this create: the provider currently serving blue, because two leases
+   * on one provider ingress cannot both claim one host. ADVISORY for the payer: ConsolePayer honors
+   * it; the actuator's v1 wire has no such field, so ActuatorPayer cannot send it and the sequencer's
+   * post-hoc `same_provider_as_blue` proof refusal is the backstop (task.5400 YELLOW).
+   */
+  readonly excludeProviders?: readonly string[];
 }
 
 export interface PayerResource {

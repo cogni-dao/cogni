@@ -83,7 +83,7 @@ export interface SequencerConfig {
 export const DEFAULT_SEQUENCER_CONFIG: Omit<SequencerConfig, "namespace"> = {
   leaseReadyMs: 240_000,
   proofMs: 600_000,
-  publicMs: 180_000,
+  publicMs: 300_000,
   publicStreak: 8,
   retainMs: 600_000,
   closeConfirmMs: 90_000,
@@ -125,10 +125,13 @@ export type ReconcileOutcome =
   | "lost_app"
   | "busy";
 
+const ALERT_THROTTLE_MS = 600_000;
+
 class DependencyNotReady extends Error {}
 
 export class NodeDeploySequencer {
   private readonly running = new Set<string>();
+  private readonly lastAlertAt = new Map<string, number>();
 
   constructor(private readonly d: SequencerDeps) {}
 
@@ -276,7 +279,7 @@ export class NodeDeploySequencer {
     blue: AttemptRow | undefined
   ): Promise<void> {
     let a = start;
-    if (a.phase === "planned") a = await this.doCreate(key, release, a);
+    if (a.phase === "planned") a = await this.doCreate(key, release, a, blue);
     if (a.phase === "created") a = await this.awaitLease(key, release, a, blue);
     if (a.phase === "proving") a = await this.prove(key, release, a);
     if (a.phase === "proven") await this.cutover(key, release, a, blue);
@@ -321,7 +324,8 @@ export class NodeDeploySequencer {
   private async doCreate(
     key: WorkloadKey,
     release: ReleaseRow,
-    attempt: AttemptRow
+    attempt: AttemptRow,
+    blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
     const w = release.spec;
     if (publicHostOf(w) && !this.d.edge) {
@@ -376,6 +380,7 @@ export class NodeDeploySequencer {
           attempt: attempt.attempt,
         }),
         spec: toPayerSpec(w, env),
+        ...(blue?.provider ? { excludeProviders: [blue.provider] } : {}),
       });
       return this.bindLease(key, release, attempt, resource);
     } catch (error) {
@@ -400,7 +405,7 @@ export class NodeDeploySequencer {
             code: error.code,
           });
           // Resolve now; on a failed read the marker makes the next tick resolve first.
-          return this.doCreate(key, release, marked);
+          return this.doCreate(key, release, marked, blue);
         }
         return this.failAttempt(
           key,
@@ -513,6 +518,7 @@ export class NodeDeploySequencer {
     const deadline =
       (attempt.leasedAt ?? attempt.createdAt).getTime() + this.d.config.proofMs;
     let last = "no probe yet";
+    let lastNote = this.d.clock.now();
     for (;;) {
       if (w.kind === "app") {
         const ingress = ingressHostOf(attempt.endpoints, host);
@@ -574,6 +580,10 @@ export class NodeDeploySequencer {
           attempt,
           `proof_timeout: ${last}`
         );
+      if (this.d.clock.now() - lastNote >= 60_000) {
+        lastNote = this.d.clock.now();
+        this.emit(key, release, attempt, "proving", "waiting", { last });
+      }
       await this.d.clock.sleep(this.d.config.pollMs);
     }
   }
@@ -994,6 +1004,13 @@ export class NodeDeploySequencer {
     reason: string,
     extra: Record<string, unknown> = {}
   ): void {
+    // One alert per (workload, release, reason) per 10 minutes: a parked release is re-evaluated every
+    // tick and must not write a line per tick.
+    const throttleKey = `${keyString(key)}/${release?.id ?? "-"}/${reason}`;
+    const now = this.d.clock.now();
+    const last = this.lastAlertAt.get(throttleKey);
+    if (last !== undefined && now - last < ALERT_THROTTLE_MS) return;
+    this.lastAlertAt.set(throttleKey, now);
     this.d.log.error(
       {
         component: "node-deploy-sequencer",
