@@ -3448,6 +3448,58 @@ describe("AkashTxActuator provider strikes (task.5153)", () => {
     ).toBe(true);
   });
 
+  it("caller excludeProviders (task.5400) reach the screening tried set; absent passes none", async () => {
+    const blue = "akash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+    const outcomes = new FakeOutcomes();
+    const first = strikeBuild(outcomes);
+    await first.actuator.create({
+      cogniKey: `${BASE_KEY}x`,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(first.api.lastExcluded).toBeUndefined(); // absent = old behaviour
+
+    const second = strikeBuild(outcomes);
+    await second.actuator.create({
+      cogniKey: `${BASE_KEY}y`,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+      excludeProviders: [blue],
+    });
+    expect([...(second.api.lastExcluded ?? [])]).toEqual([blue]);
+    expect(
+      second.log.lines.some(
+        (l) => l.marker === "akash_tx_caller_provider_exclusions"
+      )
+    ).toBe(true);
+  });
+
+  it("caller excludeProviders are UNIONED with the ledger-derived tried set, never replacing it", async () => {
+    const blue = "akash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+    const outcomes = new FakeOutcomes();
+    const ledger = new FakeLedger();
+    const first = strikeBuild(outcomes, ledger);
+    await first.actuator.create({
+      cogniKey: BASE_KEY,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    const second = strikeBuild(outcomes, ledger);
+    await second.actuator.create({
+      cogniKey: `${BASE_KEY}:recover:1`,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+      excludeProviders: [blue],
+    });
+    expect([...(second.api.lastExcluded ?? [])].sort()).toEqual(
+      ["akash1provider", blue].sort()
+    );
+  });
+
   it("records boot_ok once per lease on a positive serving proof", async () => {
     const outcomes = new FakeOutcomes();
     const ledger = new FakeLedger();

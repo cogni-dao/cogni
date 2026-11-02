@@ -181,9 +181,10 @@ export interface PayerCreateRequest {
   readonly spec: PayerSpec;
   /**
    * Providers that must NOT win this create: the provider currently serving blue, because two leases
-   * on one provider ingress cannot both claim one host. ADVISORY for the payer: ConsolePayer honors
-   * it; the actuator's v1 wire has no such field, so ActuatorPayer cannot send it and the sequencer's
-   * post-hoc `same_provider_as_blue` proof refusal is the backstop (task.5400 YELLOW).
+   * on one provider ingress cannot both claim one host. Both payers honor it (ConsolePayer filters its
+   * bids; ActuatorPayer sends it on the v1 wire, where the actuator UNIONS it into its tried-provider
+   * set so it can only narrow the eligible bids). The sequencer's post-hoc `same_provider_as_blue`
+   * proof refusal stays as the backstop.
    */
   readonly excludeProviders?: readonly string[];
 }

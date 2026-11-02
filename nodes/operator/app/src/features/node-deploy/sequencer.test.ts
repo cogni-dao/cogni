@@ -465,7 +465,7 @@ describe("in-flight create grace (observe would settle a still-running create)",
     const { h, before } = await inflight();
     const a = (await h.store.attemptsFor(APP))[0];
     expect(a?.phase).toBe("planned");
-    expect(a?.error).toBe("ambiguous: network");
+    expect(a?.error).toMatch(/^ambiguous: network@\d+$/);
     expect(h.payer.observeCalls).toBe(before);
     for (let i = 0; i < 5; i++) {
       h.clock.advance(60_000);
@@ -511,6 +511,84 @@ describe("in-flight create grace (observe would settle a still-running create)",
     await h.seq.step(APP);
     expect(h.payer.byDseq("1002").state).toBe("closed");
     expect(h.log.steps()).toContain("orphan_lease:adopted_to_close");
+  });
+});
+
+describe("in-flight grace anchoring and log throttle (follow-up)", () => {
+  it("the grace window starts at the NETWORK FAILURE, not at the attempt's creation", async () => {
+    const h = harness();
+    await stateUp(h);
+    // attempt row is created, then waits on a busy wallet for 200 s BEFORE the transport failure
+    h.payer.createFault = (n) =>
+      n === 2
+        ? new PayerError("wallet_allocation_blocked", "busy", false)
+        : undefined;
+    h.payer.loseResponseOn = (n) => n === 3;
+    h.payer.loseResponseCode = "network";
+    await deployApp(h, SHA_1);
+    const created =
+      (await h.store.attemptsFor(APP))[0]?.createdAt.getTime() ?? 0;
+    h.clock.advance(200_000);
+    await h.seq.step(APP); // the create now goes out and dies in transit
+    const a = (await h.store.attemptsFor(APP))[0];
+    expect(a?.error).toBe(`ambiguous: network@${h.clock.now()}`);
+    const failedAt = h.clock.now();
+    expect(failedAt - created).toBe(200_000);
+
+    // createdAt + grace has passed, failure + grace has NOT: still unresolved, still not observed
+    const before = h.payer.observeCalls;
+    h.clock.t = created + h.config.inflightGraceMs + 60_000;
+    await h.seq.step(APP);
+    expect(h.payer.observeCalls).toBe(before);
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("planned");
+
+    // after failure + grace: resolved through observe, lease adopted
+    h.clock.t = failedAt + h.config.inflightGraceMs + 1_000;
+    await h.seq.step(APP);
+    const done = (await h.store.attemptsFor(APP))[0];
+    expect(done?.externalName).toBe("1003");
+    expect(done?.phase).toBe("active");
+  });
+
+  it("a legacy marker without a stamp falls back to the attempt's creation time", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.loseResponseOn = (n) => n === 2;
+    h.payer.loseResponseCode = "network";
+    await deployApp(h, SHA_1);
+    const a = (await h.store.attemptsFor(APP))[0];
+    if (!a) throw new Error("no attempt");
+    await h.store.updateAttempt(a.id, { error: "ambiguous: network" }); // pre-follow-up row
+    const before = h.payer.observeCalls;
+    await h.seq.step(APP);
+    expect(h.payer.observeCalls).toBe(before); // still inside createdAt + grace
+    h.clock.advance(h.config.inflightGraceMs + 1_000);
+    await h.seq.step(APP);
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("active");
+  });
+
+  it("inflight_grace is logged once per 60 s per attempt, not once per tick", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.loseResponseOn = (n) => n === 2;
+    h.payer.loseResponseCode = "network";
+    await deployApp(h, SHA_1);
+    const graceLines = () =>
+      h.log.steps().filter((x) => x === "create:inflight_grace").length;
+    expect(graceLines()).toBe(1);
+    // 5 ticks inside the same minute add nothing
+    for (let i = 0; i < 5; i++) {
+      h.clock.advance(5_000);
+      await h.seq.step(APP);
+    }
+    expect(graceLines()).toBe(1);
+    // five minutes of 5 s ticks (60 ticks): about one line per minute, never one per tick
+    for (let i = 0; i < 55; i++) {
+      h.clock.advance(5_000);
+      await h.seq.step(APP);
+    }
+    expect(graceLines()).toBeGreaterThanOrEqual(5);
+    expect(graceLines()).toBeLessThanOrEqual(6);
   });
 });
 

@@ -483,6 +483,9 @@ export function createAkashTxDispatcher(
               environment: input.environment,
               identity: input.identity,
               spec: toSpec(input.spec),
+              ...(input.excludeProviders
+                ? { excludeProviders: input.excludeProviders }
+                : {}),
             }),
           };
         }

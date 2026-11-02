@@ -144,12 +144,14 @@ export type ReconcileOutcome =
   | "busy";
 
 const ALERT_THROTTLE_MS = 600_000;
+const GRACE_LOG_THROTTLE_MS = 60_000;
 
 class DependencyNotReady extends Error {}
 
 export class NodeDeploySequencer {
   private readonly running = new Set<string>();
   private readonly lastAlertAt = new Map<string, number>();
+  private readonly lastGraceLogAt = new Map<string, number>();
 
   constructor(private readonly d: SequencerDeps) {}
 
@@ -357,7 +359,7 @@ export class NodeDeploySequencer {
 
     // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
     if (this.createMayStillBeInFlight(attempt)) {
-      this.emit(key, release, attempt, "create", "inflight_grace", {
+      this.emitGrace(key, release, attempt, "create", "inflight_grace", {
         graceMs: this.d.config.inflightGraceMs,
       });
       return attempt;
@@ -421,7 +423,9 @@ export class NodeDeploySequencer {
         }
         if (error.ambiguous) {
           const marked = await this.d.store.updateAttempt(attempt.id, {
-            error: `ambiguous: ${error.code}`,
+            // A transport-level failure stamps WHEN it happened: the in-flight grace window is anchored
+            // to that moment, not to the (possibly much older) attempt row.
+            error: ambiguousMarker(error.code, this.d.clock.now()),
           });
           this.emit(key, release, marked, "create", "ambiguous", {
             code: error.code,
@@ -440,14 +444,35 @@ export class NodeDeploySequencer {
     }
   }
 
-  /** A transport-level create failure inside the grace window: the actuator may still be working. */
+  /**
+   * A transport-level create failure inside the grace window: the actuator may still be working. The
+   * window starts at the failure (`ambiguous: network@<epoch ms>`); a legacy marker without a stamp
+   * falls back to the attempt's creation time.
+   */
   private createMayStillBeInFlight(attempt: AttemptRow): boolean {
+    if (attempt.externalName) return false;
+    const failedAt = networkFailureAt(attempt);
     return (
-      attempt.error === "ambiguous: network" &&
-      !attempt.externalName &&
-      this.d.clock.now() - attempt.createdAt.getTime() <
-        this.d.config.inflightGraceMs
+      failedAt !== undefined &&
+      this.d.clock.now() - failedAt < this.d.config.inflightGraceMs
     );
+  }
+
+  /** The grace-window logs repeat every tick, so they are written once per 60 s per attempt and kind. */
+  private emitGrace(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    step: string,
+    outcome: string,
+    extra: Record<string, unknown>
+  ): void {
+    const now = this.d.clock.now();
+    const k = `${attempt.id}/${step}/${outcome}`;
+    const last = this.lastGraceLogAt.get(k);
+    if (last !== undefined && now - last < GRACE_LOG_THROTTLE_MS) return;
+    this.lastGraceLogAt.set(k, now);
+    this.emit(key, release, attempt, step, outcome, extra);
   }
 
   private async bindLease(
@@ -752,7 +777,7 @@ export class NodeDeploySequencer {
     if (!attempt.externalName) {
       if (this.createMayStillBeInFlight(attempt)) {
         // Never fail/supersede (and never observe) while the actuator may still be creating.
-        this.emit(key, release, attempt, "attempt_failed", "deferred", {
+        this.emitGrace(key, release, attempt, "attempt_failed", "deferred", {
           reason: trimmed,
           inflightGraceMs: this.d.config.inflightGraceMs,
         });
@@ -1153,6 +1178,20 @@ export class NodeDeploySequencer {
       "node_deploy_alert"
     );
   }
+}
+
+/** `ambiguous: <code>`; a network failure carries the failure time: `ambiguous: network@<epoch ms>`. */
+function ambiguousMarker(code: string, now: number): string {
+  return code === "network"
+    ? `ambiguous: network@${now}`
+    : `ambiguous: ${code}`;
+}
+
+/** When the transport-level create failure happened (stamp, else legacy fallback to createdAt). */
+function networkFailureAt(attempt: AttemptRow): number | undefined {
+  const m = /^ambiguous: network(?:@(\d+))?$/u.exec(attempt.error ?? "");
+  if (!m) return undefined;
+  return m[1] ? Number(m[1]) : attempt.createdAt.getTime();
 }
 
 function tryForwarded(

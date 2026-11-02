@@ -488,6 +488,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
+    excludeProviders?: readonly string[];
   }): Promise<AkashTxCreateResult> {
     await this.requireQualifiedCellRelease({
       cogniKey: input.cogniKey,
@@ -587,6 +588,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     spec: ProvisionSpec;
     allocationPolicy?: AkashTxAllocationPolicy;
     recoveryFamilyPrefix?: string;
+    /** Caller-supplied exclusions (task.5400). UNIONED with the ledger-derived tried set. */
+    excludeProviders?: readonly string[];
   }): Promise<AkashTxCreateResult> {
     // The claim IS the receipt, and it is the FIRST mutation this method does: its INSERT carries
     // {nodeId, environment, compositeUid, compositeGeneration, cogniKey}. Everything below this
@@ -789,6 +792,23 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           );
         }
       }
+    }
+
+    // task.5400 — caller exclusions (the provider serving blue). A UNION with the ledger-derived set
+    // above, never a replacement: it can only remove providers from the eligible bids.
+    if (input.excludeProviders && input.excludeProviders.length > 0) {
+      excludedProviders = new Set([
+        ...(excludedProviders ?? []),
+        ...input.excludeProviders,
+      ]);
+      this.log.info(
+        {
+          cogniKey: input.cogniKey,
+          callerExcluded: input.excludeProviders.length,
+          excludedCount: excludedProviders.size,
+        },
+        "akash_tx_caller_provider_exclusions"
+      );
     }
 
     const cursor = await this.readCursor();

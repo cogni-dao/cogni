@@ -283,6 +283,8 @@ export interface AkashTxActuatorPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
+    /** Providers that must not win this create; unioned into the tried set, only ever narrows. */
+    excludeProviders?: readonly string[];
   }): Promise<AkashTxCreateResult>;
   update(input: {
     cogniKey: string;
