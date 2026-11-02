@@ -206,6 +206,8 @@ export class NodeDeploySequencer {
 
     const inflight = all.find((a) => IN_FLIGHT_PHASES.includes(a.phase));
     const active = all.find((a) => a.phase === "active");
+    if (desired.gameDayRequestedAt)
+      await this.gameDayKill(key, release, active, inflight);
     if (inflight) {
       const inflightRelease =
         inflight.releaseId === release.id
@@ -272,6 +274,62 @@ export class NodeDeploySequencer {
     });
     await this.drive(key, release, attempt, active);
     return "driven";
+  }
+
+  /**
+   * GAME DAY (design: the weekly kill that proves unattended recovery). Consumes the durable intent an
+   * operator verb recorded: close the ACTIVE app lease through the payer (the actuator pays), leave
+   * desired state and the release untouched, and do NOT mark the attempt. Recovery is the ordinary
+   * path: reconcile observes the chain-confirmed close, marks the lease lost, and `step` redeploys the
+   * same release. A state workload is never killed. While another attempt is in flight (a cutover may
+   * be moving the edge) the intent waits.
+   */
+  private async gameDayKill(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    active: AttemptRow | undefined,
+    inflight: AttemptRow | undefined
+  ): Promise<void> {
+    if (release.spec.kind === "state") {
+      this.alert(key, release, active, "game_day_refused_state");
+      await this.d.store.clearGameDay(key);
+      return;
+    }
+    if (inflight) return; // not mid-release: the intent stays durable and is retried next tick
+    if (!active?.externalName) {
+      this.emit(key, release, active, "game_day_kill", "no_active_lease");
+      await this.d.store.clearGameDay(key);
+      return;
+    }
+    try {
+      await this.d.payer.delete({
+        cogniKey: active.cogniKey,
+        externalName: active.externalName,
+      });
+    } catch (error) {
+      // Keep the intent: the delete may not have happened; the next tick retries.
+      this.emit(key, release, active, "game_day_kill", "delete_failed", {
+        error: errText(error),
+      });
+      return;
+    }
+    this.d.log.warn(
+      {
+        component: "node-deploy-sequencer",
+        nodeId: key.nodeId,
+        env: key.env,
+        workload: key.workload,
+        releaseId: release.id,
+        attempt: active.attempt,
+        dseq: active.externalName,
+        provider: active.provider,
+        step: "game_day_kill",
+        outcome: "deleted",
+        sourceSha: release.sourceSha,
+      },
+      "node_deploy_game_day_kill"
+    );
+    await this.d.store.clearGameDay(key);
   }
 
   /** Run one attempt forward as far as it can go in this call. */

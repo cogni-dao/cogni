@@ -592,6 +592,117 @@ describe("in-flight grace anchoring and log throttle (follow-up)", () => {
   });
 });
 
+describe("game day (operator-requested kill; recovery is the ordinary reconcile path)", () => {
+  async function live() {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1); // app lease 1002 active
+    return h;
+  }
+  const desiredOf = async (h: H, key = APP) => h.store.getDesired(key);
+
+  it("kills the ACTIVE lease through the payer, leaves desired + release untouched, logs the kill, clears the intent", async () => {
+    const h = await live();
+    const before = await desiredOf(h);
+    await h.store.requestGameDay(APP);
+    h.events.length = 0;
+    await h.seq.step(APP);
+    expect(h.events).toContain("payer.delete:1002");
+    expect(h.payer.byDseq("1002").state).toBe("closed");
+    const kill = h.log.lines.find((l) => l.msg === "node_deploy_game_day_kill");
+    expect(kill?.fields).toMatchObject({
+      dseq: "1002",
+      workload: "canary",
+      step: "game_day_kill",
+      sourceSha: SHA_1,
+    });
+    const after = await desiredOf(h);
+    expect(after?.gameDayRequestedAt).toBeUndefined(); // intent consumed
+    expect(after?.releaseId).toBe(before?.releaseId); // release untouched
+    expect(after?.state).toBe("running"); // desired state untouched
+    // the attempt is NOT marked by the kill: loss is the reconcile path's to find
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("active");
+  });
+
+  it("then the NORMAL reconcile detects the close and recovers the SAME release (no special-casing)", async () => {
+    const h = await live();
+    const releaseId = (await h.store.attemptsFor(APP))[0]?.releaseId;
+    await h.store.requestGameDay(APP);
+    await h.seq.step(APP); // the kill
+    expect(await h.seq.reconcile(APP)).toBe("lost_app");
+    expect(await h.seq.step(APP)).toBe("driven");
+    const [newest, lost] = await h.store.attemptsFor(APP);
+    expect(lost?.phase).toBe("lost");
+    expect(newest?.phase).toBe("active");
+    expect(newest?.releaseId).toBe(releaseId);
+    expect(
+      h.payer.createRequests.at(-1)?.spec.services[0]?.env?.RELEASE_SHA
+    ).toBe(SHA_1);
+    expect(
+      h.payer
+        .liveLeases()
+        .map((l) => l.dseq)
+        .sort()
+    ).toEqual(["1001", newest?.externalName].sort());
+    // exactly one kill happened, and recovery did not re-trigger it
+    expect(
+      h.log.lines.filter((l) => l.msg === "node_deploy_game_day_kill")
+    ).toHaveLength(1);
+  });
+
+  it("refuses a state workload: nothing is deleted and the intent is dropped with an alert", async () => {
+    const h = await live();
+    await h.store.requestGameDay(DB);
+    h.events.length = 0;
+    await h.seq.step(DB);
+    expect(h.events.filter((e) => e.startsWith("payer.delete"))).toEqual([]);
+    expect(h.payer.byDseq("1001").state).toBe("active");
+    expect(h.log.alerts()).toContain("game_day_refused_state");
+    expect((await desiredOf(h, DB))?.gameDayRequestedAt).toBeUndefined();
+  });
+
+  it("waits while another attempt is in flight (a cutover may be moving the edge); the intent stays durable", async () => {
+    const h = await live();
+    h.payer.createFault = (n) =>
+      n === 3
+        ? new PayerError("wallet_allocation_blocked", "busy", false)
+        : undefined;
+    await deployApp(h, SHA_2); // v2 stuck in `planned`
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("planned");
+    await h.store.requestGameDay(APP);
+    h.events.length = 0;
+    await h.seq.step(APP);
+    expect(h.events.filter((e) => e.startsWith("payer.delete"))).toEqual([]);
+    expect((await desiredOf(h))?.gameDayRequestedAt).toBeDefined();
+  });
+
+  it("a failed delete keeps the intent and retries on the next tick", async () => {
+    const h = await live();
+    await h.store.requestGameDay(APP);
+    h.payer.failDelete = true;
+    await h.seq.step(APP);
+    expect((await desiredOf(h))?.gameDayRequestedAt).toBeDefined();
+    expect(h.log.steps()).toContain("game_day_kill:delete_failed");
+    expect(
+      h.log.lines.filter((l) => l.msg === "node_deploy_game_day_kill")
+    ).toHaveLength(0);
+    h.payer.failDelete = false;
+    await h.seq.step(APP);
+    expect(h.payer.byDseq("1002").state).toBe("closed");
+    expect((await desiredOf(h))?.gameDayRequestedAt).toBeUndefined();
+  });
+
+  it("no active lease: the intent is cleared as a no-op and nothing is deleted", async () => {
+    const h = harness();
+    await h.release(canaryApp(), SHA_1);
+    await h.store.requestGameDay(APP);
+    await h.seq.step(APP);
+    expect(h.payer.liveLeases()).toEqual([]);
+    expect(h.log.steps()).toContain("game_day_kill:no_active_lease");
+    expect((await desiredOf(h))?.gameDayRequestedAt).toBeUndefined();
+  });
+});
+
 describe("edge host guard before any paid create (task.5400 review)", () => {
   it("a declared host the edge guard refuses never reaches the payer; three refusals park the release", async () => {
     const h = harness();

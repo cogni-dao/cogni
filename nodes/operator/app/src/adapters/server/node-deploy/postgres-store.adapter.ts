@@ -80,6 +80,7 @@ function toDesired(r: DesiredDb): DesiredRow {
     state: r.state === "stopped" ? "stopped" : "running",
     releaseId: r.releaseId,
     updatedAt: r.updatedAt,
+    gameDayRequestedAt: r.gameDayRequestedAt ?? undefined,
   };
 }
 
@@ -108,6 +109,34 @@ export class PostgresNodeDeployStore implements StorePort {
       )
       .limit(1);
     return row ? toDesired(row) : undefined;
+  }
+
+  async requestGameDay(key: WorkloadKey): Promise<boolean> {
+    const rows = await this.db
+      .update(nodeWorkloadDesired)
+      .set({ gameDayRequestedAt: new Date() })
+      .where(
+        and(
+          eq(nodeWorkloadDesired.nodeId, key.nodeId),
+          eq(nodeWorkloadDesired.env, key.env),
+          eq(nodeWorkloadDesired.workload, key.workload)
+        )
+      )
+      .returning({ workload: nodeWorkloadDesired.workload });
+    return rows.length > 0;
+  }
+
+  async clearGameDay(key: WorkloadKey): Promise<void> {
+    await this.db
+      .update(nodeWorkloadDesired)
+      .set({ gameDayRequestedAt: null })
+      .where(
+        and(
+          eq(nodeWorkloadDesired.nodeId, key.nodeId),
+          eq(nodeWorkloadDesired.env, key.env),
+          eq(nodeWorkloadDesired.workload, key.workload)
+        )
+      );
   }
 
   async listDesired(env: string): Promise<readonly DesiredRow[]> {

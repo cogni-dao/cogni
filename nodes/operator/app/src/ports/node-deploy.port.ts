@@ -69,6 +69,8 @@ export interface DesiredRow extends WorkloadKey {
   readonly state: DesiredState;
   readonly releaseId: string;
   readonly updatedAt: Date;
+  /** Durable game-day intent (an operator verb), consumed and cleared by the sequencer. */
+  readonly gameDayRequestedAt?: Date | undefined;
 }
 
 export interface AttemptRow {
@@ -313,6 +315,10 @@ export interface RecordReleaseInput extends WorkloadKey {
 
 export interface StorePort {
   getDesired(key: WorkloadKey): Promise<DesiredRow | undefined>;
+  /** Record a game-day intent on an existing desired row. False when the workload has no desired row. */
+  requestGameDay(key: WorkloadKey): Promise<boolean>;
+  /** Clear a consumed game-day intent. */
+  clearGameDay(key: WorkloadKey): Promise<void>;
   /** Desired rows for ONE deployment environment. A sequencer only ever lists its own env (CD4). */
   listDesired(env: string): Promise<readonly DesiredRow[]>;
   getRelease(id: string): Promise<ReleaseRow | undefined>;

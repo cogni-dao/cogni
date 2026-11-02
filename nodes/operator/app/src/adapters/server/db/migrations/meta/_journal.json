@@ -393,6 +393,13 @@
       "when": 1793650901709,
       "tag": "0055_node_workloads",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1793663276239,
+      "tag": "0056_node_workload_game_day",
+      "breakpoints": true
     }
   ]
 }
