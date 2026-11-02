@@ -449,6 +449,71 @@ describe("orphan lease guard (CD8)", () => {
   });
 });
 
+describe("in-flight create grace (observe would settle a still-running create)", () => {
+  async function inflight() {
+    const h = harness();
+    await stateUp(h);
+    // the HTTP call died in transit; the actuator is still creating the lease
+    h.payer.loseResponseOn = (n) => n === 2;
+    h.payer.loseResponseCode = "network";
+    const before = h.payer.observeCalls;
+    await deployApp(h, SHA_1);
+    return { h, before };
+  }
+
+  it("a transport-level create failure is unresolved: NOT observed, not failed, not re-created, inside the grace window", async () => {
+    const { h, before } = await inflight();
+    const a = (await h.store.attemptsFor(APP))[0];
+    expect(a?.phase).toBe("planned");
+    expect(a?.error).toBe("ambiguous: network");
+    expect(h.payer.observeCalls).toBe(before);
+    for (let i = 0; i < 5; i++) {
+      h.clock.advance(60_000);
+      await h.seq.step(APP);
+    }
+    expect(h.payer.observeCalls).toBe(before); // still no observe (it could settle the in-flight create)
+    expect(
+      h.payer.createRequests.filter((r) => r.spec.name === "canary")
+    ).toHaveLength(1);
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("planned");
+    expect(h.log.steps()).toContain("create:inflight_grace");
+  });
+
+  it("a SUPERSEDE inside the grace window is deferred (never fails or supersedes while the create may be running)", async () => {
+    const { h, before } = await inflight();
+    await h.release(canaryApp(), SHA_2);
+    expect(await h.seq.step(APP)).toBe("superseded");
+    const old = (await h.store.attemptsFor(APP)).find(
+      (x) => x.phase === "planned"
+    );
+    expect(old?.phase).toBe("planned");
+    expect(h.payer.observeCalls).toBe(before);
+    expect(h.payer.byDseq("1002").state).toBe("active"); // the unbound lease is still safe, not orphaned
+  });
+
+  it("after the grace window the attempt is resolved through observe and the lease adopted", async () => {
+    const { h } = await inflight();
+    h.clock.advance(h.config.inflightGraceMs + 1_000);
+    await h.seq.step(APP);
+    const a = (await h.store.attemptsFor(APP))[0];
+    expect(a?.externalName).toBe("1002");
+    expect(a?.phase).toBe("active");
+    expect(
+      h.payer.createRequests.filter((r) => r.spec.name === "canary")
+    ).toHaveLength(1);
+  });
+
+  it("a superseded in-flight attempt is adopted and CLOSED once the grace window ends", async () => {
+    const { h } = await inflight();
+    await h.release(canaryApp(), SHA_2);
+    await h.seq.step(APP);
+    h.clock.advance(h.config.inflightGraceMs + 1_000);
+    await h.seq.step(APP);
+    expect(h.payer.byDseq("1002").state).toBe("closed");
+    expect(h.log.steps()).toContain("orphan_lease:adopted_to_close");
+  });
+});
+
 describe("edge host guard before any paid create (task.5400 review)", () => {
   it("a declared host the edge guard refuses never reaches the payer; three refusals park the release", async () => {
     const h = harness();

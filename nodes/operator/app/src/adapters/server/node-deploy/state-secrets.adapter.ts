@@ -23,8 +23,6 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 
 import { CoreV1Api, KubeConfig } from "@kubernetes/client-node";
 
@@ -92,29 +90,5 @@ export class KubernetesStatePasswords implements SecretsPort {
       }
       throw error;
     }
-  }
-}
-
-/** DEV ONLY: one 0600 file per `(env, workload)`. Selected explicitly by the dev bootstrap. */
-export class FileStatePasswords implements SecretsPort {
-  constructor(private readonly dir: string) {
-    mkdirSync(dir, { recursive: true });
-  }
-  private file(key: WorkloadKey): string {
-    return join(this.dir, `${secretName(key)}-${key.env}`);
-  }
-  async getStatePassword(key: WorkloadKey): Promise<string | undefined> {
-    try {
-      return readFileSync(this.file(key), "utf8").trim() || undefined;
-    } catch {
-      return undefined;
-    }
-  }
-  async ensureStatePassword(key: WorkloadKey): Promise<string> {
-    const existing = await this.getStatePassword(key);
-    if (existing) return existing;
-    const password = generate();
-    writeFileSync(this.file(key), password, { mode: 0o600, flag: "wx" });
-    return password;
   }
 }

@@ -29,9 +29,9 @@ import postgres from "postgres";
 import { AkashChainTruth } from "../src/adapters/server/node-deploy/akash-chain-truth.adapter";
 import { CloudflareDnsRecords } from "../src/adapters/server/node-deploy/cloudflare-dns.adapter";
 import { ConsolePayer } from "../src/adapters/server/node-deploy/console-payer.adapter";
+import { FileStatePasswords } from "../src/adapters/server/node-deploy/dev-state-passwords";
 import { HttpProbe } from "../src/adapters/server/node-deploy/http-probe.adapter";
 import { PostgresNodeDeployStore } from "../src/adapters/server/node-deploy/postgres-store.adapter";
-import { FileStatePasswords } from "../src/adapters/server/node-deploy/state-secrets.adapter";
 import { resolveWorkloadDeclaration } from "../src/features/node-deploy/declarations";
 import { EdgeRouter } from "../src/features/node-deploy/edge";
 import {

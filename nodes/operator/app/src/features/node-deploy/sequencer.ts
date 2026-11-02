@@ -81,6 +81,14 @@ export interface SequencerConfig {
   /** After this long unconfirmed, a close raises an alert. */
   readonly closeAlertMs: number;
   readonly maxFailedAttempts: number;
+  /**
+   * After a create whose HTTP call died in transit (`network`), the actuator may STILL be executing it.
+   * `observe` reports only found / not found, and for a key whose receipt is still `preparing` with no new
+   * deployment it SETTLES the receipt as rolled back (resolveUncertain -> settleRollback), so observing a
+   * create that is still in flight can settle it just before its POST lands and orphan the lease. The
+   * attempt is therefore treated as UNRESOLVED (never failed, superseded or observed) for this long.
+   */
+  readonly inflightGraceMs: number;
   /** A live lease failing its proof this long is treated as lost (design: 15 min). */
   readonly unhealthyLostMs: number;
   readonly pollMs: number;
@@ -98,6 +106,7 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
   closeConfirmMs: 90_000,
   closeAlertMs: 900_000,
   maxFailedAttempts: 3,
+  inflightGraceMs: 900_000,
   unhealthyLostMs: 900_000,
   pollMs: 3_000,
 };
@@ -347,6 +356,12 @@ export class NodeDeploySequencer {
     }
 
     // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
+    if (this.createMayStillBeInFlight(attempt)) {
+      this.emit(key, release, attempt, "create", "inflight_grace", {
+        graceMs: this.d.config.inflightGraceMs,
+      });
+      return attempt;
+    }
     if (attempt.error?.startsWith("ambiguous")) {
       try {
         const obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
@@ -423,6 +438,16 @@ export class NodeDeploySequencer {
       }
       return this.failAttempt(key, release, attempt, errText(error));
     }
+  }
+
+  /** A transport-level create failure inside the grace window: the actuator may still be working. */
+  private createMayStillBeInFlight(attempt: AttemptRow): boolean {
+    return (
+      attempt.error === "ambiguous: network" &&
+      !attempt.externalName &&
+      this.d.clock.now() - attempt.createdAt.getTime() <
+        this.d.config.inflightGraceMs
+    );
   }
 
   private async bindLease(
@@ -725,6 +750,14 @@ export class NodeDeploySequencer {
     // writing any terminal state. A lease that exists is bound and then closed + confirmed; if the
     // question cannot be answered the attempt is left exactly as it is and retried on the next tick.
     if (!attempt.externalName) {
+      if (this.createMayStillBeInFlight(attempt)) {
+        // Never fail/supersede (and never observe) while the actuator may still be creating.
+        this.emit(key, release, attempt, "attempt_failed", "deferred", {
+          reason: trimmed,
+          inflightGraceMs: this.d.config.inflightGraceMs,
+        });
+        return attempt;
+      }
       let obs: Awaited<ReturnType<PayerPort["observe"]>>;
       try {
         obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });

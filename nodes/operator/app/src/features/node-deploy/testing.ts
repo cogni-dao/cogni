@@ -245,6 +245,9 @@ export class FakePayer implements PayerPort {
   /** After this create succeeds the response is lost (throws ambiguous) though the lease exists. */
   loseResponseOn?: ((n: number) => boolean) | undefined;
   failDelete = false;
+  /** Error code of a lost create response (default: the actuator answered but the outcome is unknown). */
+  loseResponseCode: "outcome_unknown" | "network" = "outcome_unknown";
+  observeCalls = 0;
   observeThrows = false;
   /** Lets a test mark leases serving broken before the sequencer reaches them. */
   onLease?: ((l: FakeLease) => void) | undefined;
@@ -293,13 +296,14 @@ export class FakePayer implements PayerPort {
     this.onLease?.(lease);
     this.events.push(`payer.create:${dseq}`);
     if (this.loseResponseOn?.(n))
-      throw new PayerError("outcome_unknown", "response lost", true);
+      throw new PayerError(this.loseResponseCode, "response lost", true);
     return this.resource(lease);
   }
   async observe(req: {
     cogniKey: string;
     externalName?: string;
   }): Promise<{ found: boolean; resource?: PayerResource }> {
+    this.observeCalls++;
     if (this.observeThrows)
       throw new PayerError("network", "observe down", false);
     const l = this.leases.find(
