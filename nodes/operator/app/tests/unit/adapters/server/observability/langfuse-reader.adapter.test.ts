@@ -3,8 +3,8 @@
 
 /**
  * Module: `@tests/unit/adapters/server/observability/langfuse-reader.adapter`
- * Purpose: Unit tests for HttpLangfuseReader — the node-pin (`tags=<nodeId>`) and trace mapping.
- * Scope: Mocks global fetch. Does not hit Langfuse.
+ * Purpose: Reader/verifier regressions for native IO projection, privacy, resource bounds and node pinning.
+ * Scope: Real reader and ownership verifier with synthetic native/receipt HTTP; no live Langfuse.
  * Invariants:
  *   - NODE_PIN_IS_FORCED: the request always carries `tags=<nodeId>`
  *   - KEY_NEVER_LOGGED: Basic auth header is sent; the key is not in the URL
@@ -14,7 +14,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HttpLangfuseReader } from "@/adapters/server";
+import { HttpLangfuseReader } from "@/adapters/server/observability/langfuse-reader.adapter";
 
 const NODE_ID = "11111111-2222-3333-4444-555555555555";
 
@@ -107,6 +107,7 @@ describe("HttpLangfuseReader", () => {
   });
 });
 
+import { HttpLangfuseOwnershipVerifier } from "@/adapters/server/observability/langfuse-ownership.adapter";
 import { LangfuseReadError } from "@/adapters/server/observability/langfuse-read-error";
 import { LangfuseObservationPageSchema } from "@/contracts/nodes.langfuse.observations.v1.contract";
 import { parseTraceQuery } from "@/features/nodes/observability-traces";
@@ -565,7 +566,24 @@ it("retains private literal redaction context after allowlisting and raw budgeti
     const result = await nativeReader().listObservations(nativeQuery());
     expect(JSON.stringify(result)).not.toContain(fingerprint);
     expect(JSON.stringify(result)).not.toContain("user_api_key");
-    expect(result.data[0]?.input).toContain("Useful text");
+    expect(result.data[0]?.input).toBe("[REDACTED]");
+    expect(result.meta.cogni).toMatchObject({ truncated: true, partial: true });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("preserves a normal nested tool schema without false truncation", async () => {
+  let schema: unknown = { type: "string", description: "todo status" };
+  for (let i = 0; i < 11; i++) schema = { properties: schema };
+  const input = JSON.stringify({ tools: schema });
+  vi.stubGlobal(
+    "fetch",
+    mockFetch({ data: [{ ...observation(), input }], meta: { cursor: null } })
+  );
+  try {
+    const result = await nativeReader().listObservations(nativeQuery());
+    expect(result.data[0]?.input).toBe(input);
     expect(result.meta.cogni.truncated).toBe(false);
   } finally {
     vi.unstubAllGlobals();
@@ -1001,4 +1019,529 @@ it("selects a sovereign SDK root by nodeId without requiring a generation key al
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+describe("approved native projection privacy and resource contract", () => {
+  const R = "[REDACTED]";
+  const hash = "a".repeat(64);
+  const alias = `cogni:production:${NODE_ID}:app:v1`;
+  const provider = "gen-projection-fixture";
+  const slots = [
+    "user_api_key_end_user_id",
+    "billingAccountId",
+    "user_api_key_user_email",
+  ];
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function project(
+    value: unknown,
+    secrets: string[] = [],
+    field = "input",
+    limit = 1,
+    receiptMatches = true,
+    secretKeys = slots
+  ) {
+    const metadata: Record<string, unknown> = {
+      nodeId: NODE_ID,
+      user_api_key_hash: hash,
+      user_api_key: hash,
+      user_api_key_auth: { api_key: hash, key_alias: alias },
+      user_api_key_alias: alias,
+    };
+    for (const [i, secret] of secrets.entries())
+      metadata[secretKeys[i] ?? "user_api_key_end_user_id"] = secret;
+    const row: Record<string, unknown> = {
+      ...observation(`time-03-00-00-000000_${provider}`),
+      metadata,
+      input: null,
+      output: null,
+    };
+    if (field === "metadata") metadata.graphName = value;
+    else row[field] = value;
+    const fetcher = vi.fn(
+      async (url: URL) =>
+        new Response(
+          JSON.stringify(
+            String(url).includes("/spend/logs/v2")
+              ? {
+                  data: [
+                    {
+                      request_id: provider,
+                      api_key: hash,
+                      startTime: row.startTime,
+                      metadata: {
+                        user_api_key_alias: receiptMatches ? alias : "foreign",
+                      },
+                    },
+                  ],
+                  total: 1,
+                }
+              : { data: [row], meta: { cursor: null } }
+          )
+        )
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const reader = new HttpLangfuseReader({
+      baseUrl: "https://native.invalid",
+      publicKey: "fixture",
+      secretKey: "fixture",
+      operatorEnvironment: "production",
+      ownership: new HttpLangfuseOwnershipVerifier({
+        baseUrl: "https://receipts.invalid",
+        apiKey: "fixture",
+      }),
+    });
+    const page = await reader.listObservations(
+      nativeQuery(
+        `&limit=${limit}&fields=core,basic,io,model,trace_context,metadata`
+      )
+    );
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    if (receiptMatches) expect(page.meta.cogni.attributionUnavailable).toBe(0);
+    return page;
+  }
+  const selected = (
+    page: Awaited<ReturnType<typeof project>>,
+    field = "input"
+  ) =>
+    field === "metadata"
+      ? (page.data[0]?.metadata as Record<string, unknown>)?.graphName
+      : page.data[0]?.[field];
+  const nested = (value: unknown, count: number): unknown => {
+    for (let i = 0; i < count; i++) value = { child: value };
+    return value;
+  };
+  function decodedStrings(value: unknown): string[] {
+    if (typeof value === "string") {
+      try {
+        return [value, ...decodedStrings(JSON.parse(value))];
+      } catch {
+        return [value];
+      }
+    }
+    if (Array.isArray(value)) return value.flatMap(decodedStrings);
+    if (value && typeof value === "object")
+      return Object.entries(value).flatMap(([key, item]) => [
+        key,
+        ...decodedStrings(item),
+      ]);
+    return [];
+  }
+
+  it.each([
+    "input",
+    "output",
+    "modelParameters",
+    "statusMessage",
+    "tags",
+    "metadata",
+  ])("uses the same literal context for %s and nested quoted/native representations", async (field) => {
+    const secret = 'private"value\\with-tail';
+    for (const value of [
+      `safe ${secret} suffix`,
+      JSON.stringify(secret),
+      JSON.stringify(JSON.stringify(secret)),
+      JSON.stringify({ payload: secret }),
+      ...(field === "metadata"
+        ? []
+        : [{ payload: secret }, [secret], nested({ payload: secret }, 11)]),
+    ]) {
+      const page = await project(value, [secret], field);
+      expect(
+        decodedStrings(page.data).some((text) => text.includes(secret))
+      ).toBe(false);
+      expect(JSON.stringify(page.data)).not.toContain(secret);
+      expect(page.meta.cogni.privacyProjected).toBe(true);
+    }
+  });
+
+  it.each([
+    "input",
+    "output",
+    "modelParameters",
+    "statusMessage",
+    "tags",
+    "metadata",
+  ])("withholds raw structural serialization matches in %s before escaped matching", async (field) => {
+    for (const structure of [
+      { code: "protected-value" },
+      ["protected-value", 42],
+    ]) {
+      const secret = JSON.stringify(structure);
+      const values =
+        field === "metadata"
+          ? [secret]
+          : [structure, { child: structure }, secret];
+      for (const value of values) {
+        const page = await project(value, [secret], field);
+        expect(selected(page, field)).toBe(R);
+        expect(page.meta.cogni).toMatchObject({
+          truncated: true,
+          partial: true,
+        });
+      }
+    }
+  });
+
+  it("checks original private names, preserves __proto__ entries, and withholds sanitation collisions", async () => {
+    const secret = "credential-name";
+    const page = await project(
+      {
+        [secret]: "must disappear",
+        normal: "retained",
+        ...JSON.parse('{"__proto__":"own value"}'),
+      },
+      [secret]
+    );
+    expect(selected(page)).toEqual({
+      [R]: R,
+      normal: "retained",
+      ...JSON.parse('{"__proto__":"own value"}'),
+    });
+    expect(Object.prototype).not.toHaveProperty("polluted");
+    for (const value of [
+      { [secret]: "x", [R]: "y" },
+      JSON.stringify({ [secret]: "x", [R]: "y" }),
+      '{"\\u0063redential-name":"x","[REDACTED]":"y"}',
+    ]) {
+      const collision = await project(value, [secret]);
+      expect(selected(collision)).toBe(
+        typeof value === "string" && value.startsWith('{"\\u')
+          ? JSON.stringify(R)
+          : R
+      );
+      expect(collision.meta.cogni.truncated).toBe(true);
+    }
+  });
+
+  it("unions overlapping original matches independent of order, including surrogate pair boundaries", async () => {
+    const cases: Array<[string, string[], string]> = [
+      [
+        "prefix abcdefghijkl suffix",
+        ["abcdefgh", "efghijkl"],
+        `prefix ${R} suffix`,
+      ],
+      ["aaaaaaaaaaaa", ["aaaaaaaa", "aaaaaaaaa"], R],
+      ["safe 😀abcdefg tail", ["\ude00abcdefg"], `safe ${R} tail`],
+      ["safe abcdefg😀 tail", ["abcdefg\ud83d"], `safe ${R} tail`],
+      [
+        "unpaired \ud800 and safe 😀",
+        ["absent-literal"],
+        "unpaired \ud800 and safe 😀",
+      ],
+    ];
+    for (const [value, secrets, expected] of cases)
+      for (const order of [secrets, [...secrets].reverse()]) {
+        const page = await project(value, order);
+        expect(selected(page)).toBe(expected);
+        expect(page.meta.cogni.truncated).toBe(false);
+      }
+  });
+
+  it("visits depth16 and withholds depth17 for native containers and every quoted parse", async () => {
+    for (const depth of [16, 17]) {
+      const page = await project(nested("safe leaf", depth));
+      expect(page.meta.cogni.truncated).toBe(depth === 17);
+      expect(decodedStrings(selected(page))).toContain(
+        depth === 17 ? R : "safe leaf"
+      );
+      let quoted = "safe leaf";
+      // A single JSON string wrapper counts one parse, just like a container descent.
+      for (let i = 0; i < depth; i++) quoted = JSON.stringify(quoted);
+      const wrappers = await project(quoted);
+      expect(wrappers.meta.cogni.truncated).toBe(depth === 17);
+      if (depth === 16) expect(selected(wrappers)).toBe(quoted);
+    }
+  });
+
+  it("preserves malformed compatibility while reporting raw-hit encoded withholding", async () => {
+    for (const value of ["{broken", "[broken"]) {
+      const page = await project(value);
+      expect(selected(page)).toBe(R);
+      expect(page.meta.cogni.truncated).toBe(false);
+    }
+    for (const value of [
+      '"harmless prose',
+      JSON.stringify("quoted safe prose"),
+      "false ordinary prose",
+    ]) {
+      const page = await project(value);
+      expect(selected(page)).toBe(value);
+      expect(page.meta.cogni.truncated).toBe(false);
+    }
+    for (const value of ['{"private-literal": broken', '"private-literal']) {
+      const page = await project(value, ["private-literal"]);
+      expect(selected(page)).toBe(R);
+      expect(page.meta.cogni.truncated).toBe(true);
+    }
+  });
+
+  it.each([
+    R,
+    R.slice(0, 8),
+    JSON.stringify(R),
+  ])("rejects unsafe raw/serialized fallback %s with a generic typed502", async (secret) => {
+    await expect(
+      project(JSON.stringify({ safe: "value" }), [secret])
+    ).rejects.toMatchObject({
+      code: "observability_invalid_response",
+      status: 502,
+      message: "observability_invalid_response",
+    });
+  });
+  it("keeps seven-unit fallback prefixes ineligible and handles an escaped fallback form", async () => {
+    const seven = R.slice(0, 7);
+    expect(selected(await project(`prefix ${seven}`, [seven]))).toBe(
+      `prefix ${seven}`
+    );
+    const escaped = JSON.stringify(JSON.stringify(R));
+    const page = await project("safe prose", [escaped]);
+    expect(selected(page)).toBe("safe prose");
+  });
+
+  it("keeps actual row-sized matching allocations lazy and reuses their backing buffers", async () => {
+    const Native = Int32Array,
+      allocations: Int32Array[] = [];
+    vi.stubGlobal(
+      "Int32Array",
+      class extends Native {
+        constructor(length: number) {
+          super(length);
+          allocations.push(this);
+        }
+      }
+    );
+    const secret = 'private"fixture';
+    const page = await project(
+      { first: `safe ${secret} end`, second: `safe ${secret} end` },
+      [secret],
+      "input",
+      50
+    );
+    expect(page.meta.cogni.truncated).toBe(false);
+    const budget = Math.floor((1024 * 1024 - 32768) / 50);
+    expect(allocations.filter((a) => a.length === budget + 1)).toHaveLength(1);
+    // raw and escaped phases share each pattern's backing; hash occurs in neither output.
+    expect(allocations.length).toBeLessThanOrEqual(3);
+    expect(allocations.every((a) => a.length <= budget + 1)).toBe(true);
+    expect(
+      allocations.reduce((sum, a) => sum + a.byteLength, 0)
+    ).toBeLessThanOrEqual((5 * budget + budget + 1) * 4);
+    allocations.length = 0;
+    await project("safe", ["p".repeat(budget + 1)], "input", 50);
+    // The two fixed hash patterns are also too long for these short fields.
+    expect(allocations).toHaveLength(0);
+    await project("safe ".repeat(3000), ["😀".repeat(7000)], "input", 50);
+    expect(allocations.every((a) => a.length <= hash.length)).toBe(true);
+  });
+
+  it("propagates allocation failures outside the malformed JSON catch and releases read concurrency", async () => {
+    const Native = Int32Array;
+    vi.stubGlobal(
+      "Int32Array",
+      class extends Native {
+        constructor() {
+          super(0);
+          throw new RangeError("private allocator detail");
+        }
+      }
+    );
+    await expect(
+      project(JSON.stringify({ payload: "private-literal" }), [
+        "private-literal",
+      ])
+    ).rejects.toMatchObject({
+      code: "observability_invalid_response",
+      status: 502,
+    });
+    vi.stubGlobal("Int32Array", Native);
+    expect(selected(await project("recovered"))).toBe("recovered");
+  });
+
+  it("preflights escaped fallback before an escaped withhold, after all raw selected-value checks", async () => {
+    const stringify = JSON.stringify,
+      seen: unknown[] = [];
+    vi.spyOn(JSON, "stringify").mockImplementation((value, ...args) => {
+      seen.push(value);
+      // Inject only the escaped representation to exercise this otherwise unreachable defense.
+      if (value === "escape-phase-fixture") return '"[REDACTED]"';
+      return stringify(value, ...args);
+    });
+    await expect(
+      project("raw phase safe", ["escape-phase-fixture"], "metadata")
+    ).rejects.toMatchObject({
+      code: "observability_invalid_response",
+      status: 502,
+    });
+    expect(seen.indexOf("raw phase safe")).toBeLessThan(
+      seen.indexOf("escape-phase-fixture")
+    );
+  });
+
+  it("fails safely when rebuilding the shared prefix in the escaped phase", async () => {
+    const stringify = JSON.stringify,
+      fill = Int32Array.prototype.fill;
+    let escaped = false;
+    vi.spyOn(JSON, "stringify").mockImplementation((value, ...args) => {
+      if (value === "escaped-phase-allocation") escaped = true;
+      return stringify(value, ...args);
+    });
+    vi.spyOn(Int32Array.prototype, "fill").mockImplementation(function (
+      this: Int32Array,
+      value,
+      start,
+      end
+    ) {
+      if (escaped) throw new RangeError("private allocator detail");
+      return fill.call(this, value, start, end);
+    });
+    await expect(
+      project("safe ordinary prose ".repeat(4), ["escaped-phase-allocation"])
+    ).rejects.toMatchObject({
+      code: "observability_invalid_response",
+      status: 502,
+    });
+    expect(escaped).toBe(true);
+  });
+
+  it("preserves complete declared todos tool content/status schemas", async () => {
+    const declaration = {
+      type: "function",
+      function: {
+        name: "todos",
+        parameters: {
+          type: "object",
+          properties: {
+            todos: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  content: { type: "string", description: "todo content" },
+                  status: {
+                    type: "string",
+                    description: "todo status",
+                    enum: ["pending", "done"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const input = JSON.stringify({
+      tools: Array.from({ length: 15 }, () => declaration),
+    });
+    const page = await project(input);
+    expect(selected(page)).toBe(input);
+    expect(page.meta.cogni).toMatchObject({ truncated: false, partial: false });
+  });
+
+  it("matches an independent original-character coverage oracle for dense overlaps", async () => {
+    let state = 5562;
+    const random = () => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return state;
+    };
+    for (let trial = 0; trial < 80; trial++) {
+      const source = Array.from(
+        { length: 36 },
+        () => "ab"[(random() >>> 16) % 2]
+      ).join("");
+      const literals = [
+        source.slice(2, 10),
+        source.slice(5, 14),
+        source.slice(9, 17),
+      ];
+      const covered = Array.from({ length: source.length }, (_, i) =>
+        literals.some((literal) => {
+          for (let start = 0; start <= i; start++)
+            if (source.startsWith(literal, start) && i < start + literal.length)
+              return true;
+          return false;
+        })
+      );
+      let expected = "";
+      for (let i = 0; i < source.length; i++)
+        expected += covered[i] ? (covered[i - 1] ? "" : R) : source[i];
+      for (const order of [literals, [...literals].reverse()])
+        expect(selected(await project(source, order))).toBe(expected);
+    }
+  });
+
+  it("checks exact aggregate JSON UTF8 boundaries, including escaped lone surrogates", async () => {
+    const limit = 50,
+      budget = Math.floor((1024 * 1024 - 32768) / limit);
+    const baseline = await project("", [], "input", limit);
+    const room = budget - Buffer.byteLength(JSON.stringify(baseline.data[0]));
+    for (const unit of ["é ", "😀 ", "\ud800 ", '\\ ", ']) {
+      const unitBytes = Buffer.byteLength(JSON.stringify(unit)) - 2;
+      const text =
+        unit.repeat(Math.floor(room / unitBytes)) +
+        " ".repeat(room % unitBytes);
+      const exact = await project(text, [], "input", limit);
+      expect(selected(exact)).toBe(text);
+      expect(exact.meta.cogni.truncated).toBe(false);
+      expect(Buffer.byteLength(JSON.stringify(exact.data[0]))).toBe(budget);
+      const over = await project(`${text} `, [], "input", limit);
+      expect(selected(over)).toBeNull();
+      expect(over.meta.cogni.truncated).toBe(true);
+    }
+  });
+
+  it("retains private keys and all five metadata literal sources beyond the old cap", async () => {
+    for (const key of [
+      "user_api_key_hash",
+      "user_api_key",
+      "billingAccountId",
+      "user_api_key_end_user_id",
+      "user_api_key_user_email",
+    ]) {
+      const secret =
+        key === "user_api_key_hash" || key === "user_api_key"
+          ? hash
+          : "private-fixture";
+      const page = await project(
+        nested(
+          { password: "hidden-value", content: `safe ${secret} tail` },
+          11
+        ),
+        [secret],
+        "input",
+        1,
+        true,
+        [key]
+      );
+      expect(decodedStrings(selected(page))).not.toContain("hidden-value");
+      expect(
+        decodedStrings(selected(page)).some((text) => text.includes(secret))
+      ).toBe(false);
+      expect(page.meta.cogni.truncated).toBe(false);
+    }
+  });
+
+  it("bounds marker expansion and UTF8 output across the aggregate row and rejects foreign receipts", async () => {
+    const secret = "abcdefgh";
+    const text = `${secret} `.repeat(1900);
+    const page = await project(text, [secret], "input", 50);
+    expect(selected(page)).toBe(R);
+    expect(page.meta.cogni).toMatchObject({ partial: true, truncated: true });
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(1024 * 1024);
+    const foreign = await project(
+      nested("private-literal", 11),
+      ["private-literal"],
+      "input",
+      1,
+      false
+    );
+    expect(foreign.data).toEqual([]);
+    expect(foreign.meta.cogni).toMatchObject({
+      partial: true,
+      attributionUnavailable: 1,
+    });
+  });
 });
