@@ -202,6 +202,22 @@ const IDENTITY: Record<string, Rule[]> = {
     {
       why: "env name",
       pattern: envValue(
+        "node-deploy-sequencer",
+        "sequencer",
+        "DEPLOY_ENVIRONMENT"
+      ),
+    },
+    {
+      why: "sponsor account (public chain address, same value the actuator pins)",
+      pattern: envValue(
+        "node-deploy-sequencer",
+        "sequencer",
+        "AKASH_CHAIN_OWNER"
+      ),
+    },
+    {
+      why: "env name",
+      pattern: envValue(
         "database-reliability-actuator",
         "actuator",
         "DEPLOY_ENVIRONMENT"

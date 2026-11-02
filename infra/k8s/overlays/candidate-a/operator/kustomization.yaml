@@ -34,6 +34,9 @@ resources:
   # bug.5240 — the keyless lease-log pump rides wherever an actuator runs: it enumerates the
   # actuator's ledger (read-only op) and ships every live lease's logs to Loki.
   - ../../../base/lease-log-pump
+  # task.5400 — the node-deploy sequencer (blue/green deploy verb) rides wherever an actuator runs: it
+  # PAYS only through that actuator and holds no Console key. Single instance by advisory lock.
+  - ../../../base/node-deploy-sequencer
   # task.5247 — private read-only database status observation.
   - ../../../base/database-reliability-actuator
   - ./database-reliability-actuator-external-secret.yaml
@@ -207,6 +210,25 @@ patches:
                 env:
                   - name: DEPLOY_ENVIRONMENT
                     value: candidate-a
+  # task.5400 — same BY-NAME env rule as the actuator and pump patches.
+  - target:
+      kind: Deployment
+      name: node-deploy-sequencer
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: node-deploy-sequencer
+      spec:
+        template:
+          spec:
+            containers:
+              - name: sequencer
+                env:
+                  - name: DEPLOY_ENVIRONMENT
+                    value: candidate-a
+                  - name: AKASH_CHAIN_OWNER
+                    value: "akash12eh8xgpeyumar3sk6wp94y0tq9uh62mkezxjmt"
   - target:
       kind: ConfigMap
       name: node-app-config

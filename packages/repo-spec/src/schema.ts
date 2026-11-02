@@ -423,16 +423,162 @@ export const nodeServiceSpecSchema = z
 
 export type NodeServiceSpec = z.infer<typeof nodeServiceSpecSchema>;
 
+// ---------------------------------------------------------------------------
+// Blue/green workloads (task.5400, story.5127) — OPTIONAL, additive to `deployment:`
+// ---------------------------------------------------------------------------
+
+/** `repo[:tag]@sha256:<64 hex>` — a workload image is ALWAYS pinned by digest (immutable deploys). */
+const workloadImageSchema = z
+  .string()
+  .max(512)
+  .regex(
+    /^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$/,
+    "workload image must be pinned by digest: repo[:tag]@sha256:<64 hex>"
+  );
+
+const workloadHostSchema = z
+  .string()
+  .max(253)
+  .regex(
+    /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/,
+    "workload host must be a lowercase DNS name"
+  );
+
+/**
+ * How a workload is reached. `http` is a public hostname the edge routes to the active lease
+ * (a proxied CNAME); `tcp` is a provider-forwarded global TCP port (state services).
+ */
+export const nodeWorkloadExposeSchema = z.union([
+  z.object({ http: z.object({ host: workloadHostSchema }).strict() }).strict(),
+  z.object({ tcp: z.object({ global: z.literal(true) }).strict() }).strict(),
+]);
+
+const workloadHealthPathSchema = z.string().regex(/^\/[A-Za-z0-9._~/-]*$/);
+
+/**
+ * One blue/green workload (task.5400). An `app` is replaced by immutable blue/green; a `state`
+ * workload is created once and NEVER auto-replaced.
+ */
+export const nodeWorkloadSpecSchema = z
+  .object({
+    name: serviceNameSchema,
+    kind: z.enum(["app", "state"]),
+    image: workloadImageSchema,
+    command: z.array(z.string().max(8192)).min(1).max(32).optional(),
+    /** Container port. An http app is exposed on 80; a tcp state service on the same number. */
+    port: z.number().int().min(1).max(65535),
+    expose: nodeWorkloadExposeSchema,
+    cpu: z.number().min(0.1).max(64),
+    memoryMi: z.number().int().min(128).max(262144),
+    /** Ephemeral storage. */
+    storageMi: z.number().int().min(128).max(1048576),
+    persistent: z
+      .object({
+        sizeMi: z.number().int().min(128).max(1048576),
+        mountPath: z.string().regex(/^\/(?!$)(?!.*(?:\/\.\.?)(?:\/|$))[^\0]+$/),
+      })
+      .strict()
+      .optional(),
+    /** NON-secret environment only; credentials arrive through `bindings`. */
+    env: z.record(serviceEnvKeySchema, z.string().max(4096)).default({}),
+    /** Env var -> state workload whose connection URL the operator derives (resolveBinding). */
+    bindings: z
+      .array(
+        z
+          .object({ env: serviceEnvKeySchema, workload: serviceNameSchema })
+          .strict()
+      )
+      .max(16)
+      .default([]),
+    /** REQUIRED, no default (CD6): does this workload do work only one live instance may do? */
+    exclusive: z.boolean(),
+    health: z
+      .object({
+        version: workloadHealthPathSchema,
+        ready: workloadHealthPathSchema,
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .superRefine((w, ctx) => {
+    const http = "http" in w.expose;
+    if (w.kind === "app" && !http)
+      ctx.addIssue({
+        code: "custom",
+        path: ["expose"],
+        message: "an app workload must expose an http host",
+      });
+    if (w.kind === "state" && http)
+      ctx.addIssue({
+        code: "custom",
+        path: ["expose"],
+        message: "a state workload must expose a global tcp port",
+      });
+    if (w.kind === "app" && !w.health)
+      ctx.addIssue({
+        code: "custom",
+        path: ["health"],
+        message: "an app workload must declare health {version, ready}",
+      });
+    if (w.kind === "state" && w.bindings.length > 0)
+      ctx.addIssue({
+        code: "custom",
+        path: ["bindings"],
+        message: "a state workload cannot consume bindings",
+      });
+    if (w.kind === "state" && !w.persistent)
+      ctx.addIssue({
+        code: "custom",
+        path: ["persistent"],
+        message: "a state workload must declare persistent storage",
+      });
+  });
+
+export type NodeWorkloadSpec = z.infer<typeof nodeWorkloadSpecSchema>;
+
 /**
  * App-tier workload declaration. Exactly one service owns public ingress; all
  * other services share the workload network privately by service-name DNS.
  */
 export const nodeDeploymentSchema = z
   .object({
-    services: z.array(nodeServiceSpecSchema).min(1).max(8),
+    // OPTIONAL when the block carries only `workloads` (task.5400). An empty list is NOT a
+    // declared app-tier deployment: `hasDeclaredNodeDeployment` and `extractNodeServices` treat
+    // it exactly like an absent block, so a workloads-only node rides the legacy default.
+    services: z.array(nodeServiceSpecSchema).max(8).default([]),
+    /** Blue/green workloads the operator's node-deploy sequencer ships (task.5400). */
+    workloads: z.array(nodeWorkloadSpecSchema).min(1).max(8).optional(),
   })
   .strict()
   .superRefine((deployment, ctx) => {
+    if (deployment.services.length === 0 && !deployment.workloads) {
+      ctx.addIssue({
+        code: "custom",
+        message: "deployment must declare at least one service or workload",
+      });
+    }
+    const workloads = deployment.workloads ?? [];
+    const workloadNames = workloads.map((w) => w.name);
+    if (new Set(workloadNames).size !== workloadNames.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["workloads"],
+        message: "Duplicate deployment workload names",
+      });
+    }
+    workloads.forEach((w, index) => {
+      for (const binding of w.bindings) {
+        const target = workloads.find((x) => x.name === binding.workload);
+        if (!target || target.kind !== "state" || target.name === w.name) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["workloads", index, "bindings"],
+            message: `binding ${binding.env} must name a different declared state workload`,
+          });
+        }
+      }
+    });
     const serviceNames = deployment.services.map((service) => service.name);
     if (new Set(serviceNames).size !== serviceNames.length) {
       ctx.addIssue({
@@ -474,6 +620,7 @@ export const nodeDeploymentSchema = z
       }
     });
     if (
+      deployment.services.length > 0 &&
       deployment.services.filter((service) => service.visibility === "public")
         .length !== 1
     ) {

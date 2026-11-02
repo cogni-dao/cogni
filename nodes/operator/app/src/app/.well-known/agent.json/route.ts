@@ -129,6 +129,9 @@ export async function GET(request: Request) {
       // owner-approve loop below.
       flight: `${origin}/api/v1/vcs/flight`,
       promote: `${origin}/api/v1/deploy/promote`,
+      // Node-deploy verb (task.5400): POST records intent to blue/green-deploy one declared
+      // workload at a sha; GET reads desired/active/recent attempts. Same per-env gates as promote.
+      deployWorkloads: `${origin}/api/v1/deploy/workloads`,
       infraReconcile: `${origin}/api/v1/deploy/infra-reconcile`,
       openapi: `${origin}/openapi.json`,
       nodeAccessRequest: `${origin}/api/v1/nodes/{id}/access-requests`,

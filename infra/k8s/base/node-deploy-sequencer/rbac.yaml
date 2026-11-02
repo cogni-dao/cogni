@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5400 — the sequencer generates one password per state workload and stores it in a Secret
+# `nd-<workload>-<env>` in ITS OWN namespace. It creates the Secret once and reuses it after, so
+# the Role is exactly get + create on secrets: no update (a password that guards live data is never
+# replaced), no delete, no list (it cannot enumerate other secrets), no other resource.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: node-deploy-sequencer
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: node-deploy-sequencer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: node-deploy-sequencer
+subjects:
+  - kind: ServiceAccount
+    name: node-deploy-sequencer

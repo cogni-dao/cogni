@@ -146,3 +146,80 @@ gates:
   #   with:
   #     rule_file: ai-rule-template.yaml
 # (governance.schedules merged into the unified `governance` section above)
+
+# ---------------------------------------------------------------------------------------------
+# Blue/green workloads shipped by the operator's node-deploy sequencer (task.5400, story.5127).
+# `POST /api/v1/deploy/workloads {nodeId, env, workload, sourceSha}` reads THIS block at that sha and
+# records a release; the sequencer deploys it to Akash through the akash-tx actuator.
+#
+# These two are the operator's CANARY pair: a state workload (`canary-db`, a TLS Postgres that is created
+# once and never auto-replaced) and an app (`canary`) bound to it that proves the verb end to end — new
+# lease, exact-sha proof, edge flip, retained blue, confirmed close, recovery of a lost lease. Hosts name
+# the PRODUCTION hostname; candidate-a/preview/dev get the -test/-preview/-dev sibling of the first
+# label. `deployment.services` is deliberately absent: this block is not an off-cluster placement.
+deployment:
+  workloads:
+    - name: canary-db
+      kind: state
+      # postgres:16 (debian) by digest. The script mints a self-signed cert at boot so TLS is on;
+      # clients use sslmode=require. POSTGRES_PASSWORD is injected by the sequencer.
+      image: postgres:16@sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a
+      command:
+        - bash
+        - -c
+        - >-
+          mkdir -p /etc/pgtls &&
+          openssl req -new -x509 -days 30 -nodes -subj /CN=state -out /etc/pgtls/server.crt -keyout /etc/pgtls/server.key &&
+          chown postgres:postgres /etc/pgtls/server.* &&
+          chmod 600 /etc/pgtls/server.key &&
+          exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/etc/pgtls/server.crt -c ssl_key_file=/etc/pgtls/server.key
+      port: 5432
+      expose:
+        tcp:
+          global: true
+      cpu: 0.5
+      memoryMi: 512
+      storageMi: 512
+      persistent:
+        sizeMi: 2048
+        mountPath: /var/lib/postgresql/data
+      env:
+        PGDATA: /var/lib/postgresql/data/pgdata
+      exclusive: false
+    - name: canary
+      kind: app
+      # psql + busybox nc: serves /version (RELEASE_SHA), /readyz (select 1 against the bound db) and /data.
+      image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+      command:
+        - sh
+        - -c
+        - |
+            cat > /h.sh <<'EOF'
+            #!/bin/sh
+            read -r m p v
+            while read -r l; do l=$(printf %s "$l" | tr -d '\r'); [ -z "$l" ] && break; done
+            case "$p" in
+            /version) b="{\"buildSha\":\"$RELEASE_SHA\"}"; s="200 OK";;
+            /readyz) if psql "$DATABASE_URL" -tAc "select 1" >/dev/null 2>&1; then b='{"status":"ok"}'; s="200 OK"; else b='{"status":"db_unreachable"}'; s="503 Service Unavailable"; fi;;
+            /data) b=$(psql "$DATABASE_URL" -tAc "select coalesce(json_agg(b order by id),'[]') from boots b" 2>/dev/null); [ -n "$b" ] && s="200 OK" || { b='[]'; s="503 Service Unavailable"; };;
+            *) b='{"error":"not_found"}'; s="404 Not Found";;
+            esac
+            printf 'HTTP/1.1 %s\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: %s\r\n\r\n%s' "$s" "${#b}" "$b"
+            EOF
+            chmod +x /h.sh
+            until psql "$DATABASE_URL" -c "create table if not exists boots(id serial primary key, build_sha text, booted_at timestamptz default now()); insert into boots(build_sha) values ('$RELEASE_SHA')"; do sleep 3; done
+            while true; do nc -l -p 8080 -e /h.sh; done
+      port: 8080
+      expose:
+        http:
+          host: node-deploy-canary.cognidao.org
+      cpu: 0.25
+      memoryMi: 256
+      storageMi: 256
+      bindings:
+        - env: DATABASE_URL
+          workload: canary-db
+      exclusive: false
+      health:
+        version: /version
+        ready: /readyz

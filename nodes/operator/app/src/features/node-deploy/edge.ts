@@ -1,0 +1,95 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+/**
+ * Module: `@features/node-deploy/edge`
+ * Purpose: The blue/green edge writer — points ONE guarded public host at the active lease's
+ *   provider ingress through a proxied Cloudflare CNAME, and reads the record back (task.5400).
+ * Scope: Guard + orchestration over `DnsRecordsPort`. Cloudflare HTTP lives in the adapter.
+ * Invariants:
+ *   - HOST_GUARD: every write names a host matching the env-configured regex (default
+ *     `^node-deploy-canary(-[a-z]+)?\.cognidao\.org$`); anything else throws BEFORE any request. The
+ *     zone is production.
+ *   - NEVER_WITHDRAWN: the port has no delete; a record stays at the last proven lease through any
+ *     lease failure and is only ever re-pointed (bug.5188, bug.5301).
+ *   - ADOPT_BY_NAME: an existing record is updated in place whatever its type (bug.5152); a second
+ *     record for the same name is refused as ambiguous.
+ *   - PROXIED_REQUIRED: `proxied=true` is written AND required on readback, because provider
+ *     certificates do not cover our host.
+ *   - NEVER_SELF_POINT: a host is never pointed at itself (bug.5125).
+ *   - READBACK_IS_THE_TRUTH: `point` returns only after a re-read shows the exact target + proxied.
+ * Side-effects: IO via the injected port
+ * @internal
+ */
+
+import type { DnsRecord, DnsRecordInput, DnsRecordsPort } from "@/ports";
+
+export const DEFAULT_EDGE_HOST_REGEX =
+  /^node-deploy-canary(-[a-z]+)?\.cognidao\.org$/;
+
+export class EdgeGuardError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EdgeGuardError";
+  }
+}
+
+const norm = (s: string): string => s.trim().toLowerCase().replace(/\.$/, "");
+
+export class EdgeRouter {
+  constructor(
+    private readonly dns: DnsRecordsPort,
+    private readonly hostRegex: RegExp = DEFAULT_EDGE_HOST_REGEX
+  ) {}
+
+  assertHost(host: string): void {
+    if (!this.hostRegex.test(host))
+      throw new EdgeGuardError(
+        `edge guard: refusing DNS name "${host}" (must match ${this.hostRegex})`
+      );
+  }
+
+  /** The current record for `host`, or undefined. Read-only. */
+  async current(host: string): Promise<DnsRecord | undefined> {
+    this.assertHost(host);
+    const found = await this.dns.findByName(host);
+    if (found.length > 1)
+      throw new EdgeGuardError(
+        `edge guard: ${found.length} records named ${host}; refusing to choose`
+      );
+    return found[0];
+  }
+
+  /** Point `host` at `target` (a provider ingress hostname). Returns the READ-BACK record. */
+  async point(host: string, target: string): Promise<DnsRecord> {
+    this.assertHost(host);
+    const want = norm(target);
+    if (want === norm(host))
+      throw new EdgeGuardError(`edge guard: ${host} must not point at itself`);
+    if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(want))
+      throw new EdgeGuardError(
+        `edge guard: target "${target}" is not a hostname`
+      );
+    const payload: DnsRecordInput = {
+      type: "CNAME",
+      name: host,
+      content: want,
+      proxied: true,
+    };
+    const existing = await this.current(host);
+    const written = existing
+      ? await this.dns.update(existing.id, payload)
+      : await this.dns.create(payload);
+    const back = await this.dns.read(written.id);
+    if (
+      norm(back.name) !== norm(host) ||
+      back.type !== "CNAME" ||
+      norm(back.content) !== want ||
+      back.proxied !== true
+    )
+      throw new EdgeGuardError(
+        `edge readback mismatch for ${host}: ${JSON.stringify(back)}`
+      );
+    return back;
+  }
+}

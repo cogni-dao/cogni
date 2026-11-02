@@ -60,6 +60,8 @@ packages/*/dist
 nodes/*/packages/*/dist
 nodes/*/graphs/dist
 nodes/*/app/dist-akash-tx-actuator
+nodes/*/app/dist-node-deploy-sequencer
+nodes/*/app/dist-node-deploy-local
 
 # Terraform
 *.tfstate
