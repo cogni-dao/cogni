@@ -11,13 +11,19 @@ import {
 
 describe("isNodeOnDeployVerb (task.5411: node-deploy is the only cell value)", () => {
   it("is true for a node-deploy cell and false for an absent one", () => {
-    const catalog = { name: "poly", compute_api: { production: "node-deploy" } };
+    const catalog = {
+      name: "poly",
+      compute_api: { production: "node-deploy" },
+    };
     expect(isNodeOnDeployVerb({ catalog, environment: "production" })).toBe(
       true
     );
     expect(isNodeOnDeployVerb({ catalog, environment: "preview" })).toBe(false);
     expect(
-      isNodeOnDeployVerb({ catalog: { name: "operator" }, environment: "preview" })
+      isNodeOnDeployVerb({
+        catalog: { name: "operator" },
+        environment: "preview",
+      })
     ).toBe(false);
   });
 
