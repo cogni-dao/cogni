@@ -29,7 +29,11 @@ deployment_provider:
 # materializes this cell (ONE_AUTHORITY_PER_WORKLOAD; rsync --delete evicts the
 # legacy manifest in the same commit).
 compute_api:
-  production: crossplane
+  # story.5137 (CD4 ONE_WRITER_PER_NODE_LANE) — production is deployed ONLY by the node-deploy
+  # sequencer (POST /api/v1/deploy/workloads). Merging this cell drops the per-(env, node)
+  # AppSet, so Argo prunes the Application and its XR/ExternalSecrets close the old lease.
+  # lease_generation / deployment_provider / compute_egress_cidrs stay until the CD9 purge.
+  production: node-deploy
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:

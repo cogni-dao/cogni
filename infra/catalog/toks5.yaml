@@ -42,7 +42,8 @@ compute_api:
   # lease_generation / deployment_provider / compute_egress_cidrs stay until the CD9 purge.
   candidate-a: node-deploy
   preview: crossplane
-  production: crossplane
+  # story.5137 (CD4) — production is now verb-owned too; same prune-and-close semantics as above.
+  production: node-deploy
 # bug.5192 — EXPLICIT replacement counter for a terminally settled lease key. The generation is
 # the only varying component of the actuator's wallet-wide idempotence key
 # (`xcw:cogni-production:f66b260b-4633-41e2-8711-b7c1b8449cc1:<generation>`), and the actuator
