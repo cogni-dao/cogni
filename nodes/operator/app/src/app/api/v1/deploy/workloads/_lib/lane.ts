@@ -84,46 +84,71 @@ export function laneControlEnv(
   return controlEnvFor(env, provider, fleetControlEnv);
 }
 
+export interface LaneRefusal {
+  readonly status: number;
+  readonly body: Record<string, unknown>;
+}
+
+/** The config `laneRefusal` reads; `serverEnv()` satisfies it, and so does a webhook's `ServerEnv`. */
+export interface LaneConfig {
+  DEPLOY_ENVIRONMENT?: string | undefined;
+  NODE_DEPLOY_ENVS?: string | undefined;
+  NODE_SUBMODULE_PARENT_OWNER?: string | undefined;
+  FLEET_CONTROL_ENV?: string | undefined;
+}
+
 /**
- * CD4 (a)+(b): refuse a lane this deployment does not serve or a node this fleet does not own.
- * 503 when the deployment has no served env at all.
+ * CD4 (a)+(b) as a RESULT, shared by every caller of the release writer (the verb route and the merge
+ * webhook): refuse a lane this deployment does not serve or a node this fleet does not own.
+ * `reason` is the stable machine name. 503 when the deployment has no served env at all.
  */
+export function laneRefusal(
+  env: Env,
+  nodeId: string,
+  catalogRow: unknown,
+  config: LaneConfig = serverEnv()
+): (LaneRefusal & { readonly reason: string }) | undefined {
+  const served = servedEnvs(config);
+  const refuse = (
+    status: number,
+    body: Record<string, unknown>
+  ): LaneRefusal & { readonly reason: string } => ({
+    status,
+    body,
+    reason: String(body.error),
+  });
+  if (served.length === 0)
+    return refuse(503, { error: "deploy_environment_not_configured" });
+  if (nodeId === getNodeId()) {
+    // OPERATOR_CANARY_UNCHANGED: only its own env.
+    if (env !== config.DEPLOY_ENVIRONMENT)
+      return refuse(409, {
+        error: "env_not_served",
+        served: [config.DEPLOY_ENVIRONMENT],
+      });
+    return undefined;
+  }
+  if (!served.includes(env))
+    return refuse(409, { error: "env_not_served", served });
+  if (!isFleetOwnedRow(catalogRow, config.NODE_SUBMODULE_PARENT_OWNER))
+    return refuse(409, { error: "node_not_in_fleet" });
+  const fleetControlEnv = config.FLEET_CONTROL_ENV?.trim() || "production";
+  const controlEnv = laneControlEnv(catalogRow, env, fleetControlEnv);
+  if (controlEnv !== fleetControlEnv)
+    return refuse(409, { error: "env_not_served", served, controlEnv });
+  return undefined;
+}
+
+/** HTTP form of `laneRefusal` for the verb route. */
 export function envNotServed(
   env: Env,
   nodeId: string,
   catalogRow: unknown
 ): NextResponse | undefined {
-  const config = serverEnv();
-  const served = servedEnvs(config);
-  if (served.length === 0)
-    return NextResponse.json(
-      { error: "deploy_environment_not_configured" },
-      { status: 503 }
-    );
-  if (nodeId === getNodeId()) {
-    // OPERATOR_CANARY_UNCHANGED: only its own env.
-    if (env !== config.DEPLOY_ENVIRONMENT)
-      return NextResponse.json(
-        { error: "env_not_served", served: [config.DEPLOY_ENVIRONMENT] },
-        { status: 409 }
-      );
-    return undefined;
-  }
-  if (!served.includes(env))
-    return NextResponse.json(
-      { error: "env_not_served", served },
-      { status: 409 }
-    );
-  if (!isFleetOwnedRow(catalogRow, config.NODE_SUBMODULE_PARENT_OWNER))
-    return NextResponse.json({ error: "node_not_in_fleet" }, { status: 409 });
-  const fleetControlEnv = config.FLEET_CONTROL_ENV?.trim() || "production";
-  const controlEnv = laneControlEnv(catalogRow, env, fleetControlEnv);
-  if (controlEnv !== fleetControlEnv)
-    return NextResponse.json(
-      { error: "env_not_served", served, controlEnv },
-      { status: 409 }
-    );
-  return undefined;
+  const refusal = laneRefusal(env, nodeId, catalogRow);
+  return refusal
+    ? NextResponse.json(refusal.body, { status: refusal.status })
+    : undefined;
 }
 
 /**

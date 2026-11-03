@@ -26,6 +26,7 @@ const getDesired = vi.fn();
 const getRelease = vi.fn();
 let declared: Array<{ name: string; kind: "app" | "state" }> = [];
 
+vi.mock("@/shared/config", () => ({ getNodeId: () => "operator-node-id" }));
 vi.mock("@/bootstrap/capabilities/node-catalog", () => ({
   createNodeCatalog: () => ({
     entryFor: async () =>
@@ -78,6 +79,9 @@ const ENV = {
   GH_REVIEW_APP_PRIVATE_KEY_BASE64: "a2V5",
   NODE_SUBMODULE_PARENT_OWNER: "Cogni-DAO",
   NODE_SUBMODULE_PARENT_REPO: "node-template",
+  DEPLOY_ENVIRONMENT: "production",
+  NODE_DEPLOY_ENVS: "candidate-a,preview,production",
+  FLEET_CONTROL_ENV: "production",
   // biome-ignore lint/suspicious/noExplicitAny: partial ServerEnv is sufficient for this facade
 } as any;
 
@@ -323,7 +327,11 @@ describe("dispatchNodePreviewPromote", () => {
           deployEnvs: ["preview", "production"],
         },
       ];
-      catalogRow = { name: "habitat", compute_api: { preview: "node-deploy" } };
+      catalogRow = {
+        name: "habitat",
+        source_repo: "https://github.com/Cogni-DAO/habitat",
+        compute_api: { preview: "node-deploy" },
+      };
       declared = [
         { name: "web", kind: "app" },
         { name: "db", kind: "state" },
@@ -390,6 +398,81 @@ describe("dispatchNodePreviewPromote", () => {
         dispatchNodePreviewPromote(mainPushPayload(), ENV, log)
       ).rejects.toThrow("preview release refused for: web, worker");
       expect(promoteNode).not.toHaveBeenCalled();
+    });
+
+    it("preview not served by this operator: skipped_env_not_served, nothing recorded", async () => {
+      await dispatchNodePreviewPromote(
+        mainPushPayload(),
+        { ...ENV, NODE_DEPLOY_ENVS: "production" },
+        log
+      );
+      expect(recordNodeRelease).not.toHaveBeenCalled();
+      expect(promoteNode).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "skipped_env_not_served" }),
+        expect.any(String)
+      );
+    });
+
+    it("fleet mismatch (catalog repo owned by another org): skipped_node_not_in_fleet", async () => {
+      catalogRow = {
+        name: "habitat",
+        source_repo: "https://github.com/cogni-test-org/habitat",
+        compute_api: { preview: "node-deploy" },
+      };
+      await dispatchNodePreviewPromote(mainPushPayload(), ENV, log);
+      expect(recordNodeRelease).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "skipped_node_not_in_fleet" }),
+        expect.any(String)
+      );
+    });
+
+    it("pushed repo is not the catalog source repo: skipped_repo_mismatch", async () => {
+      await dispatchNodePreviewPromote(
+        mainPushPayload({
+          repository: {
+            name: "habitat",
+            default_branch: "main",
+            owner: { login: "someone-else" },
+          },
+        }),
+        ENV,
+        log
+      );
+      expect(recordNodeRelease).not.toHaveBeenCalled();
+      expect(promoteNode).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "skipped_repo_mismatch" }),
+        expect.any(String)
+      );
+    });
+
+    it("repo comparison is case-insensitive", async () => {
+      await dispatchNodePreviewPromote(
+        mainPushPayload({
+          repository: {
+            name: "habitat",
+            default_branch: "main",
+            owner: { login: "COGNI-dao" },
+          },
+        }),
+        ENV,
+        log
+      );
+      expect(recordNodeRelease).toHaveBeenCalledTimes(2);
+    });
+
+    it("a thrown record error does not starve later workloads; throws once at the end", async () => {
+      recordNodeRelease.mockRejectedValueOnce(new Error("db down"));
+      await expect(
+        dispatchNodePreviewPromote(mainPushPayload(), ENV, log)
+      ).rejects.toThrow("preview release refused for: web");
+      expect(recordNodeRelease).toHaveBeenCalledTimes(2);
+      expect(log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "record_failed", workload: "web" }),
+        expect.any(String)
+      );
     });
 
     it("a non-main push records nothing", async () => {

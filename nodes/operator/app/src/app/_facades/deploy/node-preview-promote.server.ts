@@ -30,7 +30,9 @@
  *     `kind: app` workload at the pushed main sha, with the operator as the principal. It never
  *     dispatches the legacy workflow for that node. Latest-wins is the store's desired-row swap;
  *     a redelivered push for a sha already desired is logged `duplicate`. State workloads are never
- *     touched (create-once). A cell still `crossplane` keeps the legacy dispatch unchanged
+ *     touched (create-once). Before recording it applies the verb route's lane decision
+ *     (`laneRefusal`: served env, fleet ownership, control env) and requires the pushed repo to be the
+ *     catalog's source repo; otherwise it logs `skipped_<reason>` and records nothing. A cell still `crossplane` keeps the legacy dispatch unchanged
  *     (deleted later by task.5411).
  *   - V0_NO_RBAC: a node cleared auth to reach candidate-a; preview-on-merge rides that grant.
  *     A `node.promote` gate is vNext if a node can earn preview without candidate-a.
@@ -44,6 +46,7 @@
 import { lowerWorkloadManifests } from "@cogni/repo-spec";
 import { eq } from "drizzle-orm";
 import type { Logger } from "pino";
+import { laneRefusal } from "@/app/api/v1/deploy/workloads/_lib/lane";
 import { createNodeCatalog } from "@/bootstrap/capabilities/node-catalog";
 import { createNodeDeployStore } from "@/bootstrap/capabilities/node-deploy-store";
 import {
@@ -164,6 +167,7 @@ async function promoteNodeToPreview(
       await recordPreviewReleases(
         ctx,
         { id: node.id, slug: node.slug },
+        catalogRow,
         env,
         log
       );
@@ -282,6 +286,7 @@ function isPreviewOnDeployVerb(catalogRow: unknown): boolean {
 async function recordPreviewReleases(
   ctx: NodeMainAdvanceContext,
   node: { id: string; slug: string },
+  catalogRow: unknown,
   env: ServerEnv,
   log: Logger
 ): Promise<void> {
@@ -296,7 +301,47 @@ async function recordPreviewReleases(
     env: "preview",
     path: "node-deploy",
   };
-  const workloads = await declaredAppWorkloads(ctx, node, env);
+  // CD4 (a)+(b): the SAME lane decision the verb route applies before this writer.
+  const refusal = laneRefusal("preview", node.id, catalogRow, env);
+  if (refusal) {
+    log.info(
+      {
+        ...base,
+        status: `skipped_${refusal.reason}`,
+        httpStatus: refusal.status,
+      },
+      "node preview release skipped — this operator does not serve the lane"
+    );
+    return;
+  }
+  const owner = env.NODE_SUBMODULE_PARENT_OWNER;
+  const parentRepo = env.NODE_SUBMODULE_PARENT_REPO;
+  if (!owner || !parentRepo)
+    throw new Error(
+      "node preview release is not configured: node submodule parent missing"
+    );
+  const source = await createNodeSourceResolver().resolveNodeSource({
+    nodeId: node.id,
+    parentOwner: owner,
+    parentRepo,
+  });
+  // PUSH_REPO_IS_THE_CATALOG_REPO: the sha is read from the catalog's source repo, so the pushed
+  // repo must BE that repo; a same-named fork elsewhere must never choose what gets recorded.
+  if (
+    ctx.owner.toLowerCase() !== source.owner.toLowerCase() ||
+    ctx.repo.toLowerCase() !== source.repo.toLowerCase()
+  ) {
+    log.info(
+      {
+        ...base,
+        status: "skipped_repo_mismatch",
+        sourceRepo: `${source.owner}/${source.repo}`,
+      },
+      "node preview release skipped — pushed repo is not the node's catalog source repo"
+    );
+    return;
+  }
+  const workloads = await declaredAppWorkloads(ctx, source, env);
   if (workloads.length === 0) {
     log.info(
       { ...base, status: "skipped_no_app_workloads" },
@@ -307,46 +352,62 @@ async function recordPreviewReleases(
   const store = createNodeDeployStore();
   const failures: string[] = [];
   for (const workload of workloads) {
-    const desired = await store.getDesired({
-      nodeId: node.id,
-      env: "preview",
-      workload,
-    });
-    const current = desired ? await store.getRelease(desired.releaseId) : null;
-    if (
-      current &&
-      current.sourceSha.toLowerCase() === ctx.sourceSha.toLowerCase()
-    ) {
-      log.info(
-        { ...base, workload, status: "duplicate", releaseId: current.id },
-        "node preview release skipped — sha already desired"
-      );
-      continue;
-    }
-    const result = await recordNodeRelease({
-      node,
-      env: "preview",
-      workload,
-      sourceSha: ctx.sourceSha,
-      createdBy: MERGE_WEBHOOK_PRINCIPAL,
-      log,
-    });
-    if (result.ok) {
-      log.info(
-        { ...base, workload, status: "recorded", releaseId: result.releaseId },
-        "node preview release recorded"
-      );
-    } else {
+    try {
+      const desired = await store.getDesired({
+        nodeId: node.id,
+        env: "preview",
+        workload,
+      });
+      const current = desired
+        ? await store.getRelease(desired.releaseId)
+        : null;
+      if (
+        current &&
+        current.sourceSha.toLowerCase() === ctx.sourceSha.toLowerCase()
+      ) {
+        log.info(
+          { ...base, workload, status: "duplicate", releaseId: current.id },
+          "node preview release skipped — sha already desired"
+        );
+        continue;
+      }
+      const result = await recordNodeRelease({
+        node,
+        env: "preview",
+        workload,
+        sourceSha: ctx.sourceSha,
+        createdBy: MERGE_WEBHOOK_PRINCIPAL,
+        log,
+      });
+      if (result.ok) {
+        log.info(
+          {
+            ...base,
+            workload,
+            status: "recorded",
+            releaseId: result.releaseId,
+          },
+          "node preview release recorded"
+        );
+      } else {
+        failures.push(workload);
+        log.error(
+          {
+            ...base,
+            workload,
+            status: "record_refused",
+            httpStatus: result.status,
+            reason: result.body.error,
+          },
+          "node preview release refused"
+        );
+      }
+    } catch (error) {
+      // One workload's DB/runtime fault must not starve the others; throw once after the loop.
       failures.push(workload);
       log.error(
-        {
-          ...base,
-          workload,
-          status: "record_refused",
-          httpStatus: result.status,
-          reason: result.body.error,
-        },
-        "node preview release refused"
+        { ...base, workload, status: "record_failed", error: String(error) },
+        "node preview release failed"
       );
     }
   }
@@ -357,20 +418,9 @@ async function recordPreviewReleases(
 /** Names of the declared `kind: app` workloads at the sha (state workloads are create-once, never merge-driven). */
 async function declaredAppWorkloads(
   ctx: NodeMainAdvanceContext,
-  node: { id: string },
+  source: { owner: string; repo: string },
   env: ServerEnv
 ): Promise<string[]> {
-  const owner = env.NODE_SUBMODULE_PARENT_OWNER;
-  const repo = env.NODE_SUBMODULE_PARENT_REPO;
-  if (!owner || !repo)
-    throw new Error(
-      "node preview release is not configured: node submodule parent missing"
-    );
-  const source = await createNodeSourceResolver().resolveNodeSource({
-    nodeId: node.id,
-    parentOwner: owner,
-    parentRepo: repo,
-  });
   const read = await readWorkloadDeclarations(createDeclarationReader(env), {
     owner: source.owner,
     repo: source.repo,
