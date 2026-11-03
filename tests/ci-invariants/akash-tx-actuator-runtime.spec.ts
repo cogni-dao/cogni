@@ -51,10 +51,10 @@ import {
   candidateDeploymentFingerprint,
   resolveDeploymentTargets,
 } from "@/features/compute/node-deployment-targets";
-import {
-  CROSSPLANE_ACTUATOR_WALLET_ENVS,
-  CROSSPLANE_CONTROL_PLANE_ENVS,
-} from "@/shared/node-registry/crossplane-control-plane";
+import { CROSSPLANE_ACTUATOR_WALLET_ENVS } from "@/shared/node-registry/crossplane-control-plane";
+
+/** Every deploy environment with an operator overlay (task.5411: Crossplane control plane deleted). */
+const OPERATOR_ENVIRONMENTS = ["candidate-a", "preview", "production"] as const;
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const read = (relative: string): string =>
@@ -165,7 +165,7 @@ const ACTUATOR_ENVIRONMENTS = CROSSPLANE_ACTUATOR_WALLET_ENVS;
  * mirrors the account-injective guard at the overlay layer: an unfunded env that shipped an
  * actuator would be a second active writer on a shared wallet.
  */
-const DORMANT_CONTROL_PLANE_ENVIRONMENTS = CROSSPLANE_CONTROL_PLANE_ENVS.filter(
+const DORMANT_CONTROL_PLANE_ENVIRONMENTS = OPERATOR_ENVIRONMENTS.filter(
   (environment) =>
     !(CROSSPLANE_ACTUATOR_WALLET_ENVS as readonly string[]).includes(
       environment
@@ -621,8 +621,6 @@ describe("akash-tx-actuator runtime", () => {
       candidate_a_branch: "deploy/candidate-a-alpha",
       envs: ["candidate-a", "production"],
       deployment_provider: { "candidate-a": "akash" },
-      compute_api: { "candidate-a": "crossplane" },
-      lease_generation: { "candidate-a": 0 },
     };
     const baseFingerprint = candidateDeploymentFingerprint(base);
     expect(
@@ -642,13 +640,11 @@ describe("akash-tx-actuator runtime", () => {
     for (const changed of [
       { ...base, source_sha: "a".repeat(40) },
       { ...base, deployment_provider: { "candidate-a": "k3s" } },
-      { ...base, compute_api: { "candidate-a": "legacy" } },
-      { ...base, lease_generation: { "candidate-a": 1 } },
+      { ...base, compute_api: { "candidate-a": "node-deploy" } },
       {
         ...base,
         required_placement_countries: { "candidate-a": ["DE"] },
       },
-      { ...base, boot_recovery: { "candidate-a": "hold" } },
     ]) {
       expect(candidateDeploymentFingerprint(changed)).not.toBe(baseFingerprint);
     }

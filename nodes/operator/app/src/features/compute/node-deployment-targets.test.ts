@@ -701,7 +701,7 @@ describe("node-deploy cells are excluded from the old flight/promote path", () =
       source_repo: "https://github.com/Cogni-DAO/handed.git",
       source_sha: SHA,
       deployment_provider: { "candidate-a": "akash", production: "akash" },
-      compute_api: { "candidate-a": "crossplane", production: "node-deploy" },
+      compute_api: { production: "node-deploy" },
     },
     {
       name: "classic",
@@ -710,7 +710,6 @@ describe("node-deploy cells are excluded from the old flight/promote path", () =
       source_repo: "https://github.com/Cogni-DAO/classic.git",
       source_sha: SHA,
       deployment_provider: { "candidate-a": "akash", production: "akash" },
-      compute_api: { "candidate-a": "crossplane", production: "crossplane" },
     },
   ];
 
