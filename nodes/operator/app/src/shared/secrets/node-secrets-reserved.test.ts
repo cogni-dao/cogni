@@ -24,6 +24,9 @@ describe("node-secrets reserved-key guard (gate 2)", () => {
     expect(isNodeOwnedSecretKey("AUTH_SECRET")).toBe(false);
     expect(isNodeOwnedSecretKey("LITELLM_VIRTUAL_KEY")).toBe(false);
     expect(isNodeOwnedSecretKey("POSTGRES_ROOT_PASSWORD")).toBe(false);
+    // task.5384: the node's Redis ACL password must match the hash on the env Redis.
+    expect(isNodeOwnedSecretKey("REDIS_PASSWORD")).toBe(false);
+    expect(isNodeOwnedSecretKey("REDIS_URL")).toBe(false);
   });
 
   it("refuses per-node agent-minted identity / crypto-at-rest keys (clobber = data loss)", () => {

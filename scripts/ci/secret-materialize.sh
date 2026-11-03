@@ -623,6 +623,77 @@ for k in "${LITELLM_SYNC_KEYS[@]}"; do
   log "  created ${k}"
   created=$((created + 1))
 done
+
+# ── Per-node Redis ACL identity (task.5384 phase A) ──────────────────────────
+# REDIS_PASSWORD is minted from its catalog generator. REDIS_URL names the node's own
+# ACL user ONLY while this lane's Redis PROVES it holds sha256(REDIS_PASSWORD) for
+# node_<node> (installed by reconcile-node-substrate, normally on the previous run):
+#   proven                     -> compose/keep the node-user REDIS_URL;
+#   absent|no-aclfile|no-redis -> REVOKE a stored node-user URL back to the default-user
+#                                 URL (still open in phase A). Covers a Redis recreated
+#                                 without --aclfile, a lost redis_acl volume, and a
+#                                 reminted password (`reset` drops the old one first);
+#   error                      -> change nothing, warn (a transient probe failure must
+#                                 not churn the pod).
+# Both URLs come from _compose_node_value, on the same substrate host the XComputeWorkload
+# Composition dials. A foreign-custodied lane is skipped: this VM's Redis is not the one
+# its workload dials. Only the hash crosses SSH (lib/redis-acl.sh).
+# shellcheck source=lib/redis-acl.sh
+source "$SCRIPT_DIR/lib/redis-acl.sh"
+# shellcheck source=../setup/lib/cogni-deployment-identity.sh
+source "$REPO_ROOT/scripts/setup/lib/cogni-deployment-identity.sh"
+redis_substrate_env="$(control_env_for "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")" \
+  || fail "cannot resolve which cluster reconciles ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}"
+if ! _node_gets_key "$TARGET_NODE" REDIS_PASSWORD; then
+  log "  Redis ACL identity not granted to ${TARGET_NODE} by the catalog"
+elif [[ "$SECRETS_CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" || "$redis_substrate_env" != "$DEPLOY_ENVIRONMENT" ]]; then
+  log "  Redis ACL identity skipped: ${DEPLOY_ENVIRONMENT} lane is custodied by ${redis_substrate_env}"
+else
+  key_is_agent_generated REDIS_PASSWORD \
+    || fail "REDIS_PASSWORD must be a per-node source:agent random catalog key"
+  redis_password_bytes="$(_cat_field REDIS_PASSWORD '.generate.bytes')"
+  [[ "$redis_password_bytes" =~ ^[1-9][0-9]*$ ]] || fail "REDIS_PASSWORD catalog generator declares no byte count"
+  redis_password="$(bao_get_field "$TARGET_NODE" REDIS_PASSWORD)"
+  if [[ -z "$redis_password" ]]; then
+    redis_password="$(_resolve_node_value "$TARGET_NODE" REDIS_PASSWORD)"
+    [[ "$redis_password" =~ ^[0-9a-f]+$ && ${#redis_password} -eq $((redis_password_bytes * 2)) ]] \
+      || fail "REDIS_PASSWORD generation does not match its catalog generator (hex/${redis_password_bytes})"
+    seed_kv "$TARGET_NODE" REDIS_PASSWORD "$redis_password"
+    log "  created REDIS_PASSWORD"
+    created=$((created + 1))
+  fi
+  redis_user="$(redis_acl_user "$TARGET_NODE")"
+  redis_state="$(redis_acl_probe_script "$redis_user" "$(redis_acl_password_sha256 "$redis_password")" \
+    | remote "bash -s" | tr -d '[:space:]')" || redis_state=error
+  redis_stored_url="$(bao_get_field "$TARGET_NODE" REDIS_URL)"
+  redis_user_url_re='^redis://[^@/]+@'
+  case "$redis_state" in
+    proven)
+      redis_url="$(_compose_node_value "$TARGET_NODE" REDIS_URL)" || redis_url=""
+      [[ -n "$redis_url" ]] || fail "could not compose REDIS_URL for ${redis_user} (substrate host unresolved)"
+      if [[ "$redis_stored_url" == "$redis_url" ]]; then
+        unchanged=$((unchanged + 1))
+      else
+        rm -f "${CACHE_DIR}/${TARGET_NODE}/REDIS_URL"
+        seed_kv "$TARGET_NODE" REDIS_URL "$redis_url"
+        log "  composed REDIS_URL for ACL user ${redis_user}"
+        created=$((created + 1))
+      fi ;;
+    absent | no-aclfile | no-redis)
+      if [[ "$redis_stored_url" =~ $redis_user_url_re ]]; then
+        redis_url="$(_compose_node_value "$TARGET_NODE" REDIS_DEFAULT_URL)" || redis_url=""
+        [[ -n "$redis_url" ]] || fail "could not compose the default-user REDIS_URL (substrate host unresolved)"
+        rm -f "${CACHE_DIR}/${TARGET_NODE}/REDIS_URL"
+        seed_kv "$TARGET_NODE" REDIS_URL "$redis_url"
+        echo "::warning::secret-materialize: REVOKED REDIS_URL for ${redis_user} (${DEPLOY_ENVIRONMENT}/${TARGET_NODE}): lane Redis reports '${redis_state}', so the stored node-user URL would be refused; rewrote it to the default-user URL (open in phase A). reconcile-node-substrate reinstalls the user; the next run restores the node-user URL." >&2
+        created=$((created + 1))
+      else
+        log "  REDIS_URL deferred: lane Redis reports '${redis_state}' for ${redis_user}; consumers keep the default user"
+      fi ;;
+    *)
+      echo "::warning::secret-materialize: Redis ACL probe for ${redis_user} returned '${redis_state:-empty}'; REDIS_URL left unchanged (deferred)" >&2 ;;
+  esac
+fi
 flush_batch
 
 # Migration credentials are deliberately NOT part of the node bucket. Every
