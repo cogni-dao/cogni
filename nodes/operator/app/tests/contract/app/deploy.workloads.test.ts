@@ -9,6 +9,8 @@
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: production -> `node.promote_production`; candidate-a/preview ->
  *     `node.manage_envs`; a denial reads nothing from GitHub and writes nothing.
+ *   - NODE_DEPLOYS_FROM_ITS_OWN_REPO: the repo is the catalog-resolved `resolveNodeSource`; the
+ *     operator is in-repo, so the parent repo (the remote-source case lives in the route's own test).
  *   - INTENT_ONLY: 200 means a release was recorded; this route never pays or touches DNS.
  * Side-effects: none
  */
@@ -35,6 +37,7 @@ const CANARY_PATH = ".cogni/workloads/canary.yaml";
 const CANARY = readFileSync(path.join(ROOT, CANARY_PATH), "utf8");
 
 const plane = vi.hoisted(() => ({
+  resolveNodeSource: vi.fn(),
   fetchFileText: vi.fn(),
   listDirectoryEntries: vi.fn(),
 }));
@@ -183,6 +186,12 @@ describe("/api/v1/deploy/workloads", () => {
       [".cogni/repo-spec.yaml", ROOT_SPEC],
       [CANARY_PATH, CANARY],
     ]);
+    // The operator is an in-repo node: its source is the parent repo and it has no image repository.
+    plane.resolveNodeSource.mockResolvedValue({
+      owner: "test-owner",
+      repo: "test-repo",
+      imageRepository: null,
+    });
     plane.fetchFileText.mockImplementation(
       async ({ path: p }: { path: string }) => files.byPath.get(p) ?? null
     );
@@ -268,6 +277,11 @@ describe("/api/v1/deploy/workloads", () => {
         workload: "canary",
         sourceSha: SHA,
         desiredState: "running",
+      });
+      expect(plane.resolveNodeSource).toHaveBeenCalledWith({
+        parentOwner: "test-owner",
+        parentRepo: "test-repo",
+        slug: "operator",
       });
       expect(plane.fetchFileText).toHaveBeenCalledWith({
         owner: "test-owner",
