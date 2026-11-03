@@ -15,25 +15,16 @@ resources:
   - external-secret.yaml
   - ../../../base/operator-migration-external-secret
   - ./secrets-writer-sa.yaml
-  - ./compute-workload-platform-application.yaml
   # task.5247 — private read-only database status observation.
   - ../../../base/database-reliability-actuator
   - ./database-reliability-actuator-external-secret.yaml
 namePrefix: operator-
 # No akash-tx-actuator-service-name transformer here: with the actuator base
 # removed (see resources note above), there is no actuator Service to un-prefix.
-replacements:
-  - source:
-      kind: Application
-      name: compute-workload-platform
-      fieldPath: spec.destination.namespace
-    targets:
-      - select: {kind: Application, name: compute-workload-platform}
-        fieldPaths: [metadata.namespace]
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:df7c4ef7537c8e3e6ec9f48fc7fa0d4cff6a2cbc85939a716ed341b01f9a7488"
+    digest: "sha256:7493523e0e795d70264823293835ced6c9c43b43d250907761e57ec5e3be2103"
 patches:
   - target:
       kind: ExternalSecret
