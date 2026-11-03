@@ -195,7 +195,7 @@ if [ "${1:-}" = "-n" ] && [ "${3:-}" = "delete" ] && [ "${4:-}" = "externalsecre
 fi
 if [ "${1:-}" = "-n" ] && [ "${3:-}" = "get" ] && [ "${4:-}" = "externalsecret" ] && printf '%s\n' "$*" | grep -q 'status.refreshTime'; then
   state="${FAKE_REMOTE_ROOT}/refresh-${5:-unknown}"
-  if [ -f "$state" ]; then cat "$state"; else printf '%s' 'refresh-0'; fi
+  if [ -f "$state" ]; then cat "$state"; else printf '%s' '1970-01-01T00:00:00Z'; fi
   exit 0
 fi
 if [ "${1:-}" = "apply" ]; then
@@ -213,9 +213,8 @@ fi
 if [ "${1:-}" = "-n" ] && [ "${3:-}" = "annotate" ] && [ "${4:-}" = "externalsecret" ]; then
   printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/kubectl.log"
   state="${FAKE_REMOTE_ROOT}/refresh-${5:-unknown}"
-  count=0
-  [ ! -f "$state" ] || count="$(sed 's/^refresh-//' "$state")"
-  printf 'refresh-%s' "$((count + 1))" > "$state"
+  # bug.5566: ESO stamps status.refreshTime as RFC3339 with one-second resolution.
+  date -u +%Y-%m-%dT%H:%M:%SZ | tr -d '\n' > "$state"
   exit 0
 fi
 if [ "${1:-}" = "-n" ] && [ "${3:-}" = "wait" ]; then
@@ -515,7 +514,18 @@ if grep -q database-reliability-readmitter-env-secrets "$REMOTE_ROOT/applied-man
 fi
 yq -e 'select(.kind == "ExternalSecret" and .metadata.name == "operator-database-reliability-actuator-env-secrets")' "$REMOTE_ROOT/applied-manifests.yaml" >/dev/null
 grep -q -- "get secret database-reliability-actuator-env-secrets -o jsonpath={.data.DATABASE_RELIABILITY_ADMIN_URL}" "$REMOTE_ROOT/kubectl.log"
-grep -q 'metadata.name == "env-secrets"' scripts/ci/reconcile-node-substrate.sh
+# bug.5566 CD4: the substrate lane must NOT re-render/re-apply the operator env-secrets
+# spec (the node leaf is its one definition); only the observer ExternalSecret is rendered.
+if grep -q 'metadata.name == "env-secrets"' scripts/ci/reconcile-node-substrate.sh; then
+  echo 'substrate lane re-renders the operator env-secrets ExternalSecret (second spec writer)' >&2; exit 1
+fi
+# Leaf and Argo overlay carry ONE identical spec per env (no spec flip between writers).
+for environment in candidate-a preview production; do
+  [ "$(yq -o=json -I=0 '.spec' nodes/operator/k8s/external-secrets/$environment/external-secret.yaml)" = \
+    "$(yq -o=json -I=0 '.spec' infra/k8s/overlays/$environment/operator/external-secret.yaml)" ] || {
+    echo "operator ExternalSecret leaf spec diverges from overlay spec in $environment" >&2; exit 1
+  }
+done
 for environment in candidate-a preview production; do
   projection="infra/k8s/overlays/$environment/operator/external-secret.yaml"
   [ "$(yq -N '.spec.data[].secretKey' "$projection")" = DATABASE_RELIABILITY_STATUS_TOKEN ] || {

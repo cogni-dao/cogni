@@ -54,6 +54,7 @@ PARALLEL=(
   openbao-kv-http-read.test.sh
   runtime-watchdog-maintenance.test.sh
   reconcile-node-substrate.test.sh
+  externalsecret-refresh.test.sh
   run-node-substrate.test.sh
   ssh-transport-retry.test.sh
   assert-target-substrate.test.sh

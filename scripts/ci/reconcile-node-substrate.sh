@@ -291,6 +291,8 @@ read -r -a SSH_OPTS_ARR <<< "$SSH_OPTS_RAW"
 SSH_OPTS_ARR+=(-o ControlMaster=auto -o "ControlPath=${TMPDIR:-/tmp}/cogni-ssh-%r@%h-%p" -o ControlPersist=180)
 # shellcheck source=lib/ssh-retry.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ssh-retry.sh"
+# shellcheck source=lib/externalsecret-refresh.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/externalsecret-refresh.sh"
 remote() {
   cogni_ssh_transport_retry "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "$@"
 }
@@ -621,19 +623,17 @@ mark_row migration_externalsecret ready "migration-only DSN projected outside no
 # Rendering only these leaves avoids applying workloads from a privileged
 # substrate lane; names derive from the controller row and its overlay prefix.
 database_reliability_es_file="${APP_SOURCE_DIR}/infra/k8s/overlays/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}/database-reliability-actuator-external-secret.yaml"
-controller_es_file="${APP_SOURCE_DIR}/infra/k8s/overlays/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}/external-secret.yaml"
 if [[ "$reliability_controller" == true && -f "$database_reliability_es_file" ]]; then
-  [[ -f "$controller_es_file" ]] || fail "missing controller ExternalSecret leaf: $controller_es_file"
+  # ONE writer of the operator-env-secrets spec (CD4, ONE_EXTERNAL_SECRET_PER_SERVICE_ENV):
+  # the node leaf applied above already carries the status-token `data:` key identically to
+  # the overlay, so it is NOT re-rendered here. A second spec write flipped the spec and raced
+  # the force-sync refresh proof (bug.5566). Only the observer ExternalSecret is new here.
   database_reliability_es_tmp="$(mktemp)"
   RELIABILITY_NAMESPACE="cogni-${DEPLOY_ENVIRONMENT}" RELIABILITY_CONTROLLER="$TARGET_NODE" \
-    yq 'select(.kind == "ExternalSecret" and .metadata.name == "env-secrets") | .metadata.name = strenv(RELIABILITY_CONTROLLER) + "-env-secrets" | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
-      "$controller_es_file" > "$database_reliability_es_tmp"
-  printf '\n---\n' >> "$database_reliability_es_tmp"
-  RELIABILITY_NAMESPACE="cogni-${DEPLOY_ENVIRONMENT}" RELIABILITY_CONTROLLER="$TARGET_NODE" \
     yq 'select(.kind == "ExternalSecret" and .metadata.name == "database-reliability-actuator-env-secrets") | .metadata.name = strenv(RELIABILITY_CONTROLLER) + "-" + .metadata.name | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
-      "$database_reliability_es_file" >> "$database_reliability_es_tmp"
-  [[ "$(yq ea '.kind' "$database_reliability_es_tmp" | grep -cx ExternalSecret)" == 2 ]] \
-    || fail "database reliability substrate must render exactly the app and observer ExternalSecrets"
+      "$database_reliability_es_file" > "$database_reliability_es_tmp"
+  [[ "$(yq ea '.kind' "$database_reliability_es_tmp" | grep -cx ExternalSecret)" == 1 ]] \
+    || fail "database reliability substrate must render exactly the observer ExternalSecret"
   stage_exact "$database_reliability_es_tmp" database-reliability-external-secrets
   database_reliability_external_secrets_stage="$STAGED_EXACT_PATH"
   remote "set -euo pipefail
@@ -641,18 +641,11 @@ if [[ "$reliability_controller" == true && -f "$database_reliability_es_file" ]]
     manifest='${database_reliability_external_secrets_stage}'
     kubectl apply -f \"\$manifest\" >/dev/null
     rm -f \"\$manifest\"
-    marker=\$(date +%s)
+    $(declare -f cogni_wait_externalsecret_refreshed)
     for es in ${TARGET_NODE}-env-secrets ${TARGET_NODE}-database-reliability-actuator-env-secrets; do
-      before_refresh=\$(kubectl -n \"\$ns\" get externalsecret \"\$es\" -o jsonpath='{.status.refreshTime}' 2>/dev/null || true)
+      marker=\$(date +%s)
       kubectl -n \"\$ns\" annotate externalsecret \"\$es\" force-sync=\"\$marker\" --overwrite >/dev/null
-      kubectl -n \"\$ns\" wait --for=condition=Ready \"externalsecret/\$es\" --timeout=120s >/dev/null
-      refreshed=false
-      for _ in \$(seq 1 60); do
-        after_refresh=\$(kubectl -n \"\$ns\" get externalsecret \"\$es\" -o jsonpath='{.status.refreshTime}' 2>/dev/null || true)
-        if [[ -n \"\$after_refresh\" && \"\$after_refresh\" != \"\$before_refresh\" ]]; then refreshed=true; break; fi
-        sleep 2
-      done
-      \$refreshed || { echo 'ExternalSecret refresh did not advance:' \"\$es\" >&2; exit 1; }
+      cogni_wait_externalsecret_refreshed \"\$ns\" \"\$es\" \"\$marker\" || exit 1
     done
     for key in DATABASE_RELIABILITY_STATUS_TOKEN; do
       kubectl -n \"\$ns\" get secret ${TARGET_NODE}-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
