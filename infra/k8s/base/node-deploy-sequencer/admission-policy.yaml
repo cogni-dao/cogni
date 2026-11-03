@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5405 — the CLUSTER-SIDE bound on what the node-deploy sequencer's ExternalSecrets may read.
+#
+# The sequencer is the ONE writer of the ExternalSecrets `nd-<slug>-env` in its dedicated namespace
+# `cogni-node-deploy-<env>` (rbac.yaml), and it can read the Secrets they render. ESO's ClusterSecretStore
+# `openbao-backend` (role eso-reader) is NOT restricted by namespace: it reads `cogni/data/*`. Without this
+# policy a compromised or buggy sequencer could create an ExternalSecret for ANY bucket (the akash-tx
+# actuator wallet, the operator's own secrets, DB reliability credentials) and read it back. Sequencer code
+# cannot be that boundary; the API server is. Declarative, shipped by Argo with the sequencer, and fail-closed.
+#
+# What an ExternalSecret in a node-deploy namespace MUST look like (CREATE and UPDATE):
+#   - secretStoreRef is exactly ClusterSecretStore/openbao-backend (no other store, no namespaced store);
+#   - NO dataFrom (an `extract`/`find` renders a whole bucket or a prefix; the sequencer lists keys);
+#   - at least one data entry, and NO per-entry sourceRef (it can name a different store or a generator);
+#   - every data[].remoteRef.key is `<env>/<bucket>` where <env> is THIS namespace's env (derived from the
+#     namespace name, so a candidate-a namespace can never read production's path) and <bucket> is one node
+#     slug: a DNS label that is NOT a platform/infra bucket (see deniedBuckets) and does NOT contain
+#     `database` anywhere (database-reliability-*, <node>-database-migration/-cell/-backup/-recovery-probe);
+#   - the rendered Secret is named `nd-...` (it can never overwrite a Secret the sequencer does not own).
+# failurePolicy Fail + validationActions Deny: if the policy cannot be evaluated the write is refused.
+# ESO's own status writes go to the /status subresource, which `externalsecrets` does not match.
+#
+# Needs admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy (GA in Kubernetes 1.30). Candidate-a and
+# production run k3s v1.31.4; tests/ci-invariants/node-deploy-sequencer-admission.spec.ts pins the policy.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: node-deploy-sequencer-externalsecrets
+  labels:
+    app.kubernetes.io/name: node-deploy-sequencer
+    app.kubernetes.io/part-of: cogni
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [external-secrets.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [externalsecrets]
+  variables:
+    # cogni-node-deploy-<env> -> <env>
+    - name: env
+      expression: "object.metadata.namespace.replace('cogni-node-deploy-', '')"
+    # Buckets that are not a node's own, found by scanning scripts/ci/secret-materialize.sh,
+    # scripts/setup/lib/reconcile-secrets.sh (PLATFORM_SERVICES) and infra/secrets-catalog.yaml:
+    #   platform/shared: operator, scheduler-worker, akash-tx-actuator, _system, _shared
+    #   infra services:  openfga, litellm, doltgres, temporal, postgres, redis, grafana, loki
+    # Every OTHER non-node bucket has `database` in its name and is denied by substring below:
+    #   database-reliability-actuator, database-reliability-readmitter, <node>-database-migration,
+    #   <node>-database-cell, <node>-database-backup, <node>-database-recovery-probe.
+    - name: deniedBuckets
+      expression: >-
+        ['operator', 'scheduler-worker', 'akash-tx-actuator', '_system', '_shared',
+         'openfga', 'litellm', 'doltgres', 'temporal', 'postgres', 'redis', 'grafana', 'loki']
+  validations:
+    - expression: >-
+        has(object.spec.secretStoreRef) &&
+        object.spec.secretStoreRef.kind == 'ClusterSecretStore' &&
+        object.spec.secretStoreRef.name == 'openbao-backend'
+      message: "node-deploy ExternalSecrets must use ClusterSecretStore/openbao-backend"
+      reason: Forbidden
+    - expression: "!has(object.spec.dataFrom)"
+      message: "node-deploy ExternalSecrets may not use dataFrom; list the declared keys in data"
+      reason: Forbidden
+    - expression: >-
+        has(object.spec.data) && size(object.spec.data) > 0 &&
+        object.spec.data.all(d, !has(d.sourceRef))
+      message: "node-deploy ExternalSecrets need explicit data entries and no per-entry sourceRef"
+      reason: Forbidden
+    - expression: >-
+        has(object.spec.data) &&
+        object.spec.data.all(d, has(d.remoteRef) && has(d.remoteRef.key) &&
+          d.remoteRef.key.matches('^' + variables.env + '/[a-z][a-z0-9-]{0,62}$'))
+      message: "every remoteRef.key must be <env>/<node-slug> for this namespace's env"
+      reason: Forbidden
+    - expression: >-
+        has(object.spec.data) &&
+        object.spec.data.all(d, size(d.remoteRef.key.split('/')) == 2 &&
+          !(d.remoteRef.key.split('/')[1] in variables.deniedBuckets) &&
+          !d.remoteRef.key.split('/')[1].contains('database'))
+      message: "remoteRef.key names a bucket a node app may never read (operator, scheduler-worker, akash-tx-actuator, _system, _shared, openfga, litellm, doltgres, temporal, postgres, redis, grafana, loki, or any bucket containing 'database')"
+      reason: Forbidden
+    - expression: >-
+        has(object.spec.target) && has(object.spec.target.name) &&
+        object.spec.target.name.startsWith('nd-')
+      message: "the rendered Secret must be named nd-..."
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: node-deploy-sequencer-externalsecrets
+  labels:
+    app.kubernetes.io/name: node-deploy-sequencer
+    app.kubernetes.io/part-of: cogni
+spec:
+  policyName: node-deploy-sequencer-externalsecrets
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          # Set BY NAME in every overlay to cogni-node-deploy-<env>.
+          values: [replace-in-overlay]
