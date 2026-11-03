@@ -89,68 +89,6 @@ function declaredLane(step: WorkflowStep): string | undefined {
   return raw;
 }
 
-// task.5255: the approved secret custodian executes only the existing bounded
-// wrapper. Compute/secret custody is not PG residency: the wrapper delegates PG
-// to the lane owner and enforces DSN agreement. No other candidate step inherits
-// this exception, including any direct reconcile added to this same job.
-function isCustodianBridgeStep(
-  workflowPath: string,
-  jobId: string,
-  job: WorkflowJob,
-  step: WorkflowStep
-): boolean {
-  if (
-    workflowPath !== ".github/workflows/candidate-flight.yml" ||
-    jobId !== "external-node-preflight" ||
-    jobEnvironmentName(job.environment) !==
-      "${{ vars.FLEET_CONTROL_ENV || 'production' }}" ||
-    job.env?.DEPLOYMENT_PROVIDER !==
-      "${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}" ||
-    job.strategy?.matrix?.node !==
-      "${{ fromJson(needs.decide.outputs.external_compute_node_targets_json) }}" ||
-    declaredLane(step) !== "candidate-a"
-  ) {
-    return false;
-  }
-  const secretReferences = Array.from(
-    JSON.stringify(step).matchAll(/secrets\.([A-Za-z_][A-Za-z0-9_]*)/g),
-    (match) => match[1]
-  )
-    .sort()
-    .join(",");
-  if (step.name === "Setup SSH to candidate-a VM") {
-    return (
-      secretReferences === "SSH_DEPLOY_KEY,VM_HOST" &&
-      Object.keys(step.env ?? {})
-        .sort()
-        .join(",") ===
-        "DEPLOY_ENVIRONMENT,NODE_SOURCE_SHA,SSH_DEPLOY_KEY,VM_HOST" &&
-      step.env?.VM_HOST === "${{ secrets.VM_HOST }}" &&
-      step.env?.SSH_DEPLOY_KEY === "${{ secrets.SSH_DEPLOY_KEY }}" &&
-      step.run?.trim() ===
-        `set -euo pipefail
-bash ci-src/scripts/ci/require-node-ref-vm.sh
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
-echo "$SSH_DEPLOY_KEY" | tr -d '\\r' > ~/.ssh/deploy_key
-chmod 600 ~/.ssh/deploy_key
-ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true`
-    );
-  }
-  return (
-    step.name === "Provision node state and assert Akash prerequisites" &&
-    secretReferences === "VM_HOST" &&
-    Object.keys(step.env ?? {})
-      .sort()
-      .join(",") ===
-      "APP_SOURCE_DIR,COGNI_CATALOG_ROOT,DEPLOY_ENVIRONMENT,DOMAIN,HEAD_SHA,NODE_SOURCE_SHA,SSH_OPTS,STATUS_URL,VM_HOST" &&
-    step.env?.VM_HOST === "${{ secrets.VM_HOST }}" &&
-    step.env?.APP_SOURCE_DIR === "app-src" &&
-    step.env?.COGNI_CATALOG_ROOT === "infra/catalog" &&
-    step.run?.trim() ===
-      'bash ci-src/scripts/ci/run-node-substrate.sh candidate-a "${{ matrix.node }}"'
-  );
-}
-
 describe.each(CANDIDATE_WORKFLOWS)("%s", (workflowPath) => {
   const parsed = yaml.parse(
     readFileSync(path.join(REPO_ROOT, workflowPath), "utf8")
@@ -161,23 +99,18 @@ describe.each(CANDIDATE_WORKFLOWS)("%s", (workflowPath) => {
     expect(jobs.length).toBeGreaterThan(0);
   });
 
-  it("keeps foreign compute convergence public-only without control credentials", () => {
+  it("verify-candidate stays on candidate-a with no external ComputeWorkload wait (story.5137)", () => {
     if (workflowPath !== ".github/workflows/candidate-flight.yml") return;
     const verify = parsed.jobs?.["verify-candidate"];
     expect(jobEnvironmentName(verify?.environment)).toBe("candidate-a");
-    const wait = verify?.steps?.find(
-      (step) => step.name === "Wait for external ComputeWorkload readiness"
-    );
-    expect(wait).toBeDefined();
-    expect(wait?.if).toBe(
-      "steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'"
-    );
-    expect(wait?.with?.public_only).toBe(
-      "${{ steps.custody.outputs.control_env != 'candidate-a' }}"
-    );
-    expect(wait?.with?.manifest).toBe(
-      "${{ steps.workload-manifest.outputs.path }}"
-    );
+    // ONE_WRITER_PER_NODE_LANE: node lanes ship through the node-deploy verb, so the
+    // operator flight has no foreign compute convergence step and no custodian bridge.
+    expect(
+      verify?.steps?.some(
+        (step) => step.name === "Wait for external ComputeWorkload readiness"
+      )
+    ).toBe(false);
+    expect(parsed.jobs?.["external-node-preflight"]).toBeUndefined();
     const finalVerify = verify?.steps?.find(
       (step) => step.name === "Verify buildSha on endpoint (per-node)"
     );
@@ -193,7 +126,6 @@ describe.each(CANDIDATE_WORKFLOWS)("%s", (workflowPath) => {
       for (const step of job.steps ?? []) {
         const lane = declaredLane(step);
         if (lane === undefined || !readsVmCredentials(step)) continue;
-        if (isCustodianBridgeStep(workflowPath, jobId, job, step)) continue;
 
         const where = `${jobId} / step "${step.name ?? "(unnamed)"}"`;
         if (environment === undefined) {
@@ -232,7 +164,6 @@ describe.each(CANDIDATE_WORKFLOWS)("%s", (workflowPath) => {
         if (!readsVmCredentials(step)) continue;
         const lane = declaredLane(step);
         if (lane === undefined || lane === "production") continue;
-        if (isCustodianBridgeStep(workflowPath, jobId, job, step)) continue;
         violations.push(
           `${jobId} / step "${step.name ?? "(unnamed)"}" operates on lane '${lane}' but its job's environment \`${environment}\` can resolve to production, giving a candidate lever root on the production VM`
         );
@@ -240,82 +171,5 @@ describe.each(CANDIDATE_WORKFLOWS)("%s", (workflowPath) => {
     }
 
     expect(violations).toEqual([]);
-  });
-
-  it("CUSTODIAN_BRIDGE_IS_EXACT: only SSH setup and the reviewed wrapper receive custody authority", () => {
-    if (workflowPath !== ".github/workflows/candidate-flight.yml") return;
-    const jobId = "external-node-preflight";
-    const job = parsed.jobs?.[jobId];
-    expect(job).toBeDefined();
-    if (!job) throw new Error("external-node-preflight job is required");
-    const credentialSteps = job?.steps?.filter(readsVmCredentials) ?? [];
-    expect(credentialSteps.map((step) => step.name)).toEqual([
-      "Setup SSH to candidate-a VM",
-      "Provision node state and assert Akash prerequisites",
-    ]);
-    for (const step of job.steps ?? []) {
-      expect(step.name).not.toBe(
-        "Read owning candidate producer inventory before mutation"
-      );
-      expect(step.run ?? "").not.toMatch(
-        /maintenance-drain\.mjs|candidate-preflight/
-      );
-    }
-    for (const step of credentialSteps) {
-      expect(isCustodianBridgeStep(workflowPath, jobId, job, step)).toBe(true);
-      expect(
-        isCustodianBridgeStep(workflowPath, jobId, job, {
-          ...step,
-          name: "Read owning candidate producer inventory before mutation",
-          run: "pnpm exec tsx scripts/ops/maintenance-drain.mjs candidate-preflight",
-        })
-      ).toBe(false);
-      expect(
-        isCustodianBridgeStep(workflowPath, "application", job, step)
-      ).toBe(false);
-      expect(
-        isCustodianBridgeStep(workflowPath, jobId, job, {
-          ...step,
-          env: {
-            ...step.env,
-            NODE_SOURCE_SHA: "${{ secrets.PRODUCTION_KEY }}",
-          },
-        })
-      ).toBe(false);
-      expect(
-        isCustodianBridgeStep(
-          workflowPath,
-          jobId,
-          { ...job, environment: "production" },
-          step
-        )
-      ).toBe(false);
-      expect(
-        isCustodianBridgeStep(workflowPath, jobId, { ...job, env: {} }, step)
-      ).toBe(false);
-      expect(
-        isCustodianBridgeStep(
-          workflowPath,
-          jobId,
-          { ...job, strategy: {} },
-          step
-        )
-      ).toBe(false);
-      expect(
-        isCustodianBridgeStep(workflowPath, jobId, job, {
-          ...step,
-          run: "bash ci-src/scripts/ci/reconcile-node-substrate.sh candidate-a poly",
-        })
-      ).toBe(false);
-      expect(
-        isCustodianBridgeStep(workflowPath, jobId, job, {
-          ...step,
-          env: {
-            ...step.env,
-            EXTRA_AUTHORITY: "${{ secrets.PRODUCTION_KEY }}",
-          },
-        })
-      ).toBe(false);
-    }
   });
 });

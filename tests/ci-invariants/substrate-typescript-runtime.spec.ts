@@ -29,7 +29,6 @@ type Workflow = { jobs: Record<string, { steps: Step[] }> };
 describe("substrate TypeScript runtime", () => {
   for (const [file, job] of [
     ["candidate-flight.yml", "node-substrate"],
-    ["candidate-flight.yml", "external-node-preflight"],
     ["promote-and-deploy.yml", "node-substrate"],
   ]) {
     it(`${file}/${job} installs runtime before substrate execution`, () => {
