@@ -2,6 +2,10 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import {
+  isNodeOnDeployVerb,
+  nodeOnDeployVerbMessage,
+} from "./node-compute-api";
+import {
   type DeploymentEnvironment,
   resolveNodeDeploymentProvider,
 } from "./node-deployment-provider";
@@ -23,6 +27,25 @@ export interface DeploymentTargetSelection {
    */
   readonly sourceRepositories: Readonly<Record<string, string>>;
   readonly sourceShas: Readonly<Record<string, string>>;
+  /**
+   * Targets whose `compute_api.<env>` cell is `node-deploy` (story.5137, CD4 ONE_WRITER_PER_NODE_LANE).
+   * They are deployed only by POST /api/v1/deploy/workloads, so the flight/promote path EXCLUDES them
+   * from every list above — no render, no deploy-branch write, no lease or DNS. They are reported
+   * (never silently dropped) so the caller can refuse when nothing else remains.
+   */
+  readonly nodeDeploy: readonly string[];
+}
+
+export interface FlightDeploymentTargetSelection
+  extends DeploymentTargetSelection {
+  /**
+   * The flight's per-node job matrix input: every requested target EXCEPT `nodeDeploy` cells
+   * (story.5137). The candidate flight workflow feeds this, not the raw request, to its
+   * reconcile-appset, flight and image matrices, so a verb-owned node never reaches a job that
+   * needs a placement provider. Promote has no equivalent: its matrices already consume the
+   * filtered `deployment` list.
+   */
+  readonly flight: readonly string[];
 }
 
 export interface PromoteDeploymentTargetSelection
@@ -72,6 +95,43 @@ export function candidateDeploymentFingerprint(
   });
 }
 
+export type NodeDeployExclusionDecision =
+  | { readonly kind: "none" }
+  | { readonly kind: "refuse"; readonly message: string }
+  | { readonly kind: "warn"; readonly message: string };
+
+/**
+ * CD4 / ONE_WRITER_PER_NODE_LANE (story.5137). The planners above EXCLUDE `node-deploy` cells;
+ * this decides what the caller does about it. A request that names a node-deploy cell and has
+ * nothing else left to deploy is a REFUSAL (`node_on_deploy_verb`), never a green no-op; a mixed
+ * or fleet-wide request proceeds for the rest and WARNS which cells were skipped.
+ */
+export function decideNodeDeployExclusion(input: {
+  readonly lane: "flight" | "promote";
+  readonly environment: DeploymentEnvironment;
+  readonly requestedTargets: readonly string[];
+  readonly nodeDeploy: readonly string[];
+  /** Requested targets that still deploy (or, for promote, are explicit infra no-ops). */
+  readonly remainingTargets: readonly string[];
+}): NodeDeployExclusionDecision {
+  if (input.nodeDeploy.length === 0) return { kind: "none" };
+  const named = input.requestedTargets.filter((target) =>
+    input.nodeDeploy.includes(target)
+  );
+  if (named.length > 0 && input.remainingTargets.length === 0) {
+    return {
+      kind: "refuse",
+      message: `${input.lane} refused: ${named
+        .map((target) => nodeOnDeployVerbMessage(target, input.environment))
+        .join(" | ")}`,
+    };
+  }
+  return {
+    kind: "warn",
+    message: `node_on_deploy_verb: ${input.lane} skips ${input.nodeDeploy.join(", ")} in ${input.environment} (compute_api=node-deploy; deployed only by POST /api/v1/deploy/workloads)`,
+  };
+}
+
 export function isInfraOnlyPromoteNoop(input: {
   readonly requestedTargets: readonly string[];
   readonly selection: PromoteDeploymentTargetSelection;
@@ -92,7 +152,7 @@ export function resolveDeploymentTargets(input: {
   readonly parentRepository: string;
   /** Exact reviewed parent checkout; never a substitute for a child catalog pin. */
   readonly parentSourceSha?: string;
-}): DeploymentTargetSelection {
+}): FlightDeploymentTargetSelection {
   const parentRepository = parseParentRepository(input.parentRepository);
   if (
     input.parentSourceSha !== undefined &&
@@ -111,6 +171,8 @@ export function resolveDeploymentTargets(input: {
   const offCluster: string[] = [];
   const k3s: string[] = [];
   const k3sNodes: string[] = [];
+  const nodeDeploy: string[] = [];
+  const flight: string[] = [];
   const sourceRepositories: Record<string, string> = {};
   const sourceShas: Record<string, string> = {};
 
@@ -123,6 +185,14 @@ export function resolveDeploymentTargets(input: {
         `[deployment-targets] Flight target ${target} is not configured for ${input.environment}`
       );
     }
+    if (
+      row.type === "node" &&
+      isNodeOnDeployVerb({ catalog: row, environment: input.environment })
+    ) {
+      nodeDeploy.push(target);
+      continue;
+    }
+    flight.push(target);
     const provider = resolveNodeDeploymentProvider({
       catalog: row,
       environment: input.environment,
@@ -162,6 +232,8 @@ export function resolveDeploymentTargets(input: {
     k3sNodes,
     sourceRepositories,
     sourceShas,
+    nodeDeploy,
+    flight,
   };
 }
 
@@ -197,6 +269,7 @@ export function resolvePromoteDeploymentTargets(input: {
           typeof row.name === "string" ? [row.name] : []
         );
   const offCluster: string[] = [];
+  const nodeDeploy: string[] = [];
   const infra = input.requestedTargets.filter(
     (target) => byName.get(target)?.type === "infra"
   );
@@ -206,6 +279,12 @@ export function resolvePromoteDeploymentTargets(input: {
     const row = byName.get(target);
     if (!row || row.type !== "node" || !isInEnvironment(row, input.environment))
       continue;
+    // ONE_WRITER_PER_NODE_LANE (story.5137): a `node-deploy` cell is written only by the deploy
+    // verb. Exclude it from every list so no render / deploy-branch write / lease / DNS happens.
+    if (isNodeOnDeployVerb({ catalog: row, environment: input.environment })) {
+      nodeDeploy.push(target);
+      continue;
+    }
     // REMOTE_SOURCE_IS_NOT_PLACEMENT (bug: node-template prod promote,
     // story.5016) — a node whose image is built by its own repo (source_repo
     // set) needs its reviewed catalog source_sha resolved for image-tag/digest
@@ -242,6 +321,10 @@ export function resolvePromoteDeploymentTargets(input: {
     const row = byName.get(target);
     if (!row) {
       throw new Error(`[deployment-targets] Unknown legacy target: ${target}`);
+    }
+    if (isNodeOnDeployVerb({ catalog: row, environment: input.environment })) {
+      if (!nodeDeploy.includes(target)) nodeDeploy.push(target);
+      return false;
     }
     return (
       resolveNodeDeploymentProvider({
@@ -287,6 +370,7 @@ export function resolvePromoteDeploymentTargets(input: {
     sourceShas,
     previewForward,
     infra,
+    nodeDeploy,
   };
 }
 

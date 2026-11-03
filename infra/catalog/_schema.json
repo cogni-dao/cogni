@@ -330,12 +330,12 @@
     },
     "compute_api": {
       "type": "object",
-      "description": "task.5097 — per-environment WHICH-AUTHORITY selector for an akash-placed row. `legacy` (the default for an omitted environment) renders the bespoke ComputeWorkload CR reconciled by the in-cluster compute-workload-controller; `crossplane` renders the XComputeWorkload composite reconciled by Crossplane (infra/crossplane/xcomputeworkload). ONE_AUTHORITY_PER_WORKLOAD: the materializer emits exactly one of the two kinds per (node, environment), and the deploy-branch rsync --delete removes the other in the same commit, so no resource is ever reconciled by both. Flipping this cell is a full re-create, never an import: the legacy CR's finalizer closes its lease on prune and Crossplane mints a fresh one.",
+      "description": "task.5097 — per-environment WHICH-AUTHORITY selector for an akash-placed row. `legacy` (the default for an omitted environment) renders the bespoke ComputeWorkload CR reconciled by the in-cluster compute-workload-controller; `crossplane` renders the XComputeWorkload composite reconciled by Crossplane (infra/crossplane/xcomputeworkload). ONE_AUTHORITY_PER_WORKLOAD: the materializer emits exactly one of the two kinds per (node, environment), and the deploy-branch rsync --delete removes the other in the same commit, so no resource is ever reconciled by both. Flipping this cell is a full re-create, never an import: the legacy CR's finalizer closes its lease on prune and Crossplane mints a fresh one. story.5137 / CD4 ONE_WRITER_PER_NODE_LANE — `node-deploy` is NOT a rendering authority: it declares that this (node, environment) is deployed ONLY by the node-deploy sequencer (POST /api/v1/deploy/workloads). Nothing renders an XComputeWorkload or ComputeWorkload for it, render-node-appset.sh drops the per-(env, node) ApplicationSet so Argo prunes the Application (and with it the old XR, ExternalSecrets and lease), and the flight/promote path refuses or skips the cell with `node_on_deploy_verb`. Keep deployment_provider, lease_generation and compute_egress_cidrs on the row until the CD9 purge.",
       "additionalProperties": false,
       "properties": {
-        "candidate-a": { "enum": ["legacy", "crossplane"] },
-        "preview": { "enum": ["legacy", "crossplane"] },
-        "production": { "enum": ["legacy", "crossplane"] }
+        "candidate-a": { "enum": ["legacy", "crossplane", "node-deploy"] },
+        "preview": { "enum": ["legacy", "crossplane", "node-deploy"] },
+        "production": { "enum": ["legacy", "crossplane", "node-deploy"] }
       },
       "minProperties": 1
     },

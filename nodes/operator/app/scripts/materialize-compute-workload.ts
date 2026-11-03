@@ -49,6 +49,7 @@ import {
   resolveNodeDeploymentProvider,
 } from "../src/features/compute/node-deployment-provider";
 import {
+  decideNodeDeployExclusion,
   isInfraOnlyPromoteNoop,
   resolveDeploymentTargets,
   resolvePromoteDeploymentTargets,
@@ -426,6 +427,8 @@ async function selectDeploymentTargets(input: {
     k3sNodes,
     sourceRepositories,
     sourceShas,
+    nodeDeploy,
+    flight,
   } = resolveDeploymentTargets({
     catalogRows: rows,
     environment: input.environment,
@@ -435,7 +438,20 @@ async function selectDeploymentTargets(input: {
       parentSourceSha: input.parentSourceSha,
     }),
   });
+  // ONE_WRITER_PER_NODE_LANE (story.5137): `compute_api.<env>=node-deploy` cells belong to POST
+  // /api/v1/deploy/workloads. They are excluded above; REFUSE when nothing else is left (never a
+  // silent green no-op), otherwise say loudly which targets this flight skipped.
+  refuseOrWarnNodeDeploy({
+    lane: "flight",
+    environment: input.environment,
+    requestedTargets: parsed,
+    nodeDeploy,
+    remainingTargets: flight,
+  });
   const outputs = {
+    // The per-node job matrices' input: the request minus node-deploy cells (story.5137).
+    flight_targets_json: JSON.stringify(flight),
+    has_flight_targets: String(flight.length > 0),
     deployment_node_targets_json: JSON.stringify(deployment),
     has_deployment_node_targets: String(deployment.length > 0),
     substrate_node_targets_json: JSON.stringify(substrate),
@@ -481,6 +497,14 @@ async function selectPromoteTargets(input: {
     ),
     previewForwardMode: input.previewForwardMode,
     parentRepository: input.parentRepository,
+  });
+  // ONE_WRITER_PER_NODE_LANE (story.5137): refuse a request that names only `node-deploy` cells.
+  refuseOrWarnNodeDeploy({
+    lane: "promote",
+    environment: input.environment,
+    requestedTargets,
+    nodeDeploy: selection.nodeDeploy,
+    remainingTargets: [...selection.deployment, ...selection.infra],
   });
   // AN EMPTY APP PROMOTE IS A REFUSAL, NOT A SILENT SUCCESS (bug.5203). Every downstream job
   // gates on `has_targets`, so a promote that resolves nothing otherwise SKIPS its way to a
@@ -542,6 +566,24 @@ async function selectPromoteTargets(input: {
       .join("\n")}\n`,
     "utf8"
   );
+}
+
+/**
+ * CD4 / ONE_WRITER_PER_NODE_LANE guard for the old flight/promote path. The decision lives in the
+ * feature (`decideNodeDeployExclusion`, unit-tested); this only performs the I/O.
+ */
+function refuseOrWarnNodeDeploy(
+  input: Parameters<typeof decideNodeDeployExclusion>[0]
+): void {
+  const decision = decideNodeDeployExclusion(input);
+  if (decision.kind === "refuse") {
+    throw new Error(`[materialize-compute-workload] ${decision.message}`);
+  }
+  if (decision.kind === "warn") {
+    process.stderr.write(
+      `::warning::[materialize-compute-workload] ${decision.message}\n`
+    );
+  }
 }
 
 async function projectCatalogTargets(input: {

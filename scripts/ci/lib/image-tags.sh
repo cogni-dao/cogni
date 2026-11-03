@@ -492,6 +492,14 @@ compute_api_for_target() {
   [ -n "$api" ] && [ "$api" != "null" ] || api="legacy"
   case "$api" in
     legacy | crossplane) printf '%s' "$api" ;;
+    node-deploy)
+      # ONE_WRITER_PER_NODE_LANE (story.5137, CD4): this (node, env) is deployed ONLY by the
+      # node-deploy sequencer. The flight/promote lane must never resolve a manifest filename
+      # for it, because it renders and writes nothing for the cell. Same prefix as the typed
+      # resolver (nodeOnDeployVerbMessage in node-compute-api.ts).
+      echo "[ERROR] node_on_deploy_verb: $node in $env is deployed only by the node-deploy sequencer (catalog compute_api.${env}=node-deploy) — use POST /api/v1/deploy/workloads. The flight/promote path never renders its workload, writes its deploy branch, or touches its lease or DNS." >&2
+      return 1
+      ;;
     *)
       echo "[ERROR] image-tags: unsupported compute_api '$api' for '$node' in env '$env' (expected legacy|crossplane; see infra/catalog/${node}.yaml)" >&2
       return 1

@@ -41,7 +41,11 @@ deployment_provider:
 # legacy manifest in the same commit).
 compute_api:
   candidate-a: crossplane
-  production: crossplane
+  # story.5137 (CD4 ONE_WRITER_PER_NODE_LANE) — production is deployed ONLY by the node-deploy
+  # sequencer (POST /api/v1/deploy/workloads). Merging this cell drops the per-(env, node)
+  # AppSet, so Argo prunes the Application and its XR/ExternalSecrets close the old lease.
+  # lease_generation / deployment_provider / compute_egress_cidrs stay until the CD9 purge.
+  production: node-deploy
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
@@ -64,6 +68,10 @@ compute_egress_cidrs:
     comment: Temporary recovery grant for production RHITE lease 1792831352201; egress measured inside the lease at 2026-10-30T20:38:56Z while all five substrate TCP ports timed out (bug.5557). Automatic egress admission remains unbuilt.
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
+  - cidr: 89.207.152.9/32
+    envs: [production, candidate-a]
+    ports: [5432, 5435, 6379, 4000, 7233]
+    comment: UA ithub egress measured stable (2026-11-02, two pods); node-deploy interim admitted provider set, YELLOW owner task.5384 expiry 2026-11-23; candidate-a too, matching the sequencer's provider set
   - cidr: 95.217.139.183/32
     envs: [candidate-a]
     ports: [5432]

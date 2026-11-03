@@ -52,7 +52,9 @@ deployable_for_env() {
   local env="$1" f
   for f in infra/catalog/*.yaml; do
     [ "$(yq -r '.candidate_a_branch // ""' "$f")" != "" ] || continue
-    if E="$env" yq -e '(.envs // []) | contains([strenv(E)])' "$f" >/dev/null 2>&1; then
+    # ONE_WRITER_PER_NODE_LANE (story.5137): a `compute_api.<env>: node-deploy` cell has NO AppSet.
+    if E="$env" yq -e '(.envs // []) | contains([strenv(E)])' "$f" >/dev/null 2>&1 \
+      && [ "$(E="$env" yq -r '.compute_api[strenv(E)] // ""' "$f")" != "node-deploy" ]; then
       yq -r '.name' "$f"
     fi
   done | LC_ALL=C sort
@@ -189,5 +191,51 @@ pass "FLEET_CONTROL_ENV=candidate-a routes every akash lane to the isolated cont
 got="$(FLEET_CONTROL_ENV=candidate-a CATALOG_DIR="$fixture" control_env_for candidate-a operator)"
 [ "$got" = "candidate-a" ] || fail "isolated fleet: k3s operator candidate-a must stay candidate-a, got $got"
 pass "FLEET_CONTROL_ENV leaves k3s rows on their own env"
+
+# 6. ONE_WRITER_PER_NODE_LANE (story.5137, CD4) — a (node, env) cell whose
+#    `compute_api.<env>` is `node-deploy` is written ONLY by the node-deploy verb, so the
+#    renderer emits NO per-(env, node) AppSet for it (Argo then prunes the Application and
+#    its XR). Every OTHER env of the same node, and every other node, still renders.
+#    The renderer derives REPO_ROOT from its own path, so run a COPY of it inside a throwaway
+#    root: --write can then never touch the committed tree.
+vroot="$(mktemp -d)"
+trap 'rm -rf "$fixture" "$vroot"' EXIT
+mkdir -p "$vroot/scripts/ci/lib" "$vroot/infra/catalog" "$vroot/infra/k8s/argocd"
+cp scripts/ci/render-node-appset.sh scripts/ci/node-applicationset.yaml.tmpl "$vroot/scripts/ci/"
+cp scripts/ci/lib/appset-paths.sh "$vroot/scripts/ci/lib/"
+cp infra/catalog/operator.yaml "$vroot/infra/catalog/"
+cat > "$vroot/infra/catalog/handed-over.yaml" <<'YAML'
+name: handed-over
+type: node
+candidate_a_branch: deploy/candidate-a-handed-over
+envs: [candidate-a, preview, production]
+deployment_provider:
+  candidate-a: akash
+  preview: akash
+  production: akash
+compute_api:
+  candidate-a: crossplane
+  preview: crossplane
+  production: node-deploy
+YAML
+vrender() { CATALOG_DIR="$vroot/infra/catalog" bash "$vroot/scripts/ci/render-node-appset.sh" "$@"; }
+vrender --write >/dev/null || fail "--write failed on the node-deploy fixture"
+rendered="$(find "$vroot/infra/k8s/argocd/appsets" -name '*-handed-over-applicationset.yaml' -exec basename {} \; | LC_ALL=C sort | tr '\n' ' ')"
+[ "$rendered" = "candidate-a-handed-over-applicationset.yaml preview-handed-over-applicationset.yaml " ] \
+  || fail "node-deploy production cell must have no AppSet but candidate-a/preview must; got '$rendered'"
+[ -f "$vroot/infra/k8s/argocd/appsets/production/production-operator-applicationset.yaml" ] \
+  || fail "an unrelated node's production AppSet must still render"
+if grep -q 'production-handed-over' "$vroot/infra/k8s/argocd/appsets/production/kustomization.yaml"; then
+  fail "the production kustomization must not list the node-deploy cell's AppSet"
+fi
+grep -q 'candidate-a-handed-over-applicationset.yaml' "$vroot/infra/k8s/argocd/appsets/production/kustomization.yaml" \
+  || fail "the crossplane candidate-a lane (akash => production control dir) must still be listed"
+# --check on the same throwaway root is green, and goes red if the pruned AppSet is resurrected.
+vrender --check >/dev/null || fail "--check must be green on the node-deploy fixture"
+vrender production handed-over > "$vroot/infra/k8s/argocd/appsets/production/production-handed-over-applicationset.yaml"
+if vrender --check >/dev/null 2>&1; then
+  fail "--check must fail when a node-deploy cell's AppSet is resurrected"
+fi
+pass "node-deploy cell renders no AppSet; sibling envs/nodes unaffected; resurrected file fails --check"
 
 echo "PASS: render-node-appset.test.sh"

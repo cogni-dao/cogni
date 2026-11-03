@@ -8,7 +8,7 @@
  * Invariants:
  *   PLACEMENT_IS_COMPLETE_PER_ENV: a placed node declares provider per env; akash adds compute_api + lease_generation.
  *   NO_PLACEMENT_FOR_UNDECLARED_ENV: a placement cell may not name an env outside `envs:`.
- *   DECLARED_ENV_HAS_APPSET: each (node, env) has an AppSet under its reconciling cluster's dir.
+ *   DECLARED_ENV_HAS_APPSET: each (node, env) has an AppSet under its reconciling cluster's dir, except a `compute_api: node-deploy` cell, which must have none (story.5137).
  *   DECLARED_ENV_HAS_OVERLAY: each (node, env) has a populated Kustomize overlay dir.
  * Side-effects: IO (reads infra/catalog, infra/k8s/argocd/appsets, infra/k8s/overlays)
  * Links: docs/spec/ci-cd.md Axiom 23, story.5040, task.5132, bug.5204
@@ -125,12 +125,18 @@ describe("env declaration completeness (NO_SILENT_DEFAULT, story.5040)", () => {
         cluster,
         `${env}-${row.name}-applicationset.yaml`
       );
+      // ONE_WRITER_PER_NODE_LANE (story.5137): a `node-deploy` cell is written only by the deploy
+      // verb, so it must have NO AppSet (Argo would otherwise keep a second writer on its lane).
+      const verbOwned = row.compute_api?.[env] === "node-deploy";
       expect(
         existsSync(appset),
-        `${row.name} declares env '${env}' but ${path.relative(REPO_ROOT, appset)} is absent. ` +
-          `Run \`pnpm gen:node-appset\`. An env with no AppSet is never reconciled and never ` +
-          `reports a failure (bug.5204).`
-      ).toBe(true);
+        verbOwned
+          ? `${row.name}.${env} is compute_api=node-deploy but ${path.relative(REPO_ROOT, appset)} exists. ` +
+              `Run \`pnpm gen:node-appset\`; the verb is the lane's only writer (CD4).`
+          : `${row.name} declares env '${env}' but ${path.relative(REPO_ROOT, appset)} is absent. ` +
+              `Run \`pnpm gen:node-appset\`. An env with no AppSet is never reconciled and never ` +
+              `reports a failure (bug.5204).`
+      ).toBe(!verbOwned);
     });
 
     it.each(envs)("DECLARED_ENV_HAS_OVERLAY: %s", (env) => {
