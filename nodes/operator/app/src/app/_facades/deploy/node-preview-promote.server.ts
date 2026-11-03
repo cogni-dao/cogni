@@ -24,6 +24,14 @@
  *   - PIN_IS_MAIN_SHA: pins the canonical commit observed on node main. Merge-queue CI builds that
  *     commit before merge; a missing image fails loudly downstream instead of deploying an
  *     off-main PR head that can silently roll preview and production backward.
+ *   - ONE_WRITER_PER_NODE_LANE (story.5137, task.5410): when the node's catalog cell
+ *     `compute_api.preview` is `node-deploy`, the merge records an env=preview release through
+ *     `recordNodeRelease` (the SAME writer `POST /api/v1/deploy/workloads` uses) for every declared
+ *     `kind: app` workload at the pushed main sha, with the operator as the principal. It never
+ *     dispatches the legacy workflow for that node. Latest-wins is the store's desired-row swap;
+ *     a redelivered push for a sha already desired is logged `duplicate`. State workloads are never
+ *     touched (create-once). A cell still `crossplane` keeps the legacy dispatch unchanged
+ *     (deleted later by task.5411).
  *   - V0_NO_RBAC: a node cleared auth to reach candidate-a; preview-on-merge rides that grant.
  *     A `node.promote` gate is vNext if a node can earn preview without candidate-a.
  * Side-effects: IO (DB read, GitHub REST/GraphQL via DeployPlanePort). The caller awaits the
@@ -33,13 +41,27 @@
  * @public
  */
 
+import { lowerWorkloadManifests } from "@cogni/repo-spec";
 import { eq } from "drizzle-orm";
 import type { Logger } from "pino";
+import { createNodeCatalog } from "@/bootstrap/capabilities/node-catalog";
+import { createNodeDeployStore } from "@/bootstrap/capabilities/node-deploy-store";
+import {
+  createDeclarationReader,
+  createNodeSourceResolver,
+} from "@/bootstrap/capabilities/node-source-resolver";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { resolveServiceDb } from "@/bootstrap/container";
+import { isNodeOnDeployVerb } from "@/features/compute/node-compute-api";
+import { readWorkloadDeclarations } from "@/features/node-deploy/read-declarations";
 import { nodes } from "@/shared/db/nodes";
 import type { ServerEnv } from "@/shared/env";
 import { EVENT_NAMES } from "@/shared/observability";
+
+import { recordNodeRelease } from "./record-node-release.server";
+
+/** The principal on a release the merge webhook records: the operator itself, never a human. */
+export const MERGE_WEBHOOK_PRINCIPAL = "operator:merge-webhook";
 
 interface NodeMainAdvanceContext {
   readonly owner: string;
@@ -128,6 +150,22 @@ async function promoteNodeToPreview(
           status: "skipped_unregistered_repo",
         },
         "node preview promote skipped — repository is not a registered node"
+      );
+      return;
+    }
+
+    // ONE_WRITER_PER_NODE_LANE: a node whose preview cell is `node-deploy` records a release; the
+    // legacy dispatch below would be refused for it (and must never race the sequencer).
+    const catalogRow = (await createNodeCatalog().entryFor(node.id))?.row;
+    if (
+      catalogRow !== undefined &&
+      isPreviewOnDeployVerb(catalogRow) // parse-only; unreadable rows are legacy
+    ) {
+      await recordPreviewReleases(
+        ctx,
+        { id: node.id, slug: node.slug },
+        env,
+        log
       );
       return;
     }
@@ -226,4 +264,124 @@ async function promoteNodeToPreview(
     );
     throw error;
   }
+}
+
+function isPreviewOnDeployVerb(catalogRow: unknown): boolean {
+  try {
+    return isNodeOnDeployVerb({ catalog: catalogRow, environment: "preview" });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Record an env=preview release for every declared app workload at the pushed main sha.
+ * Throws when any workload is refused or unreadable so the webhook cannot acknowledge a merge that
+ * recorded nothing; a node that declares no app workload is a logged skip.
+ */
+async function recordPreviewReleases(
+  ctx: NodeMainAdvanceContext,
+  node: { id: string; slug: string },
+  env: ServerEnv,
+  log: Logger
+): Promise<void> {
+  const base = {
+    event: EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE,
+    nodeId: node.id,
+    slug: node.slug,
+    repo: `${ctx.owner}/${ctx.repo}`,
+    sourceSha: ctx.sourceSha,
+    sourceSha8: ctx.sourceSha.slice(0, 8),
+    trigger: ctx.trigger,
+    env: "preview",
+    path: "node-deploy",
+  };
+  const workloads = await declaredAppWorkloads(ctx, node, env);
+  if (workloads.length === 0) {
+    log.info(
+      { ...base, status: "skipped_no_app_workloads" },
+      "node preview release skipped — no app workload declared at this sha"
+    );
+    return;
+  }
+  const store = createNodeDeployStore();
+  const failures: string[] = [];
+  for (const workload of workloads) {
+    const desired = await store.getDesired({
+      nodeId: node.id,
+      env: "preview",
+      workload,
+    });
+    const current = desired ? await store.getRelease(desired.releaseId) : null;
+    if (
+      current &&
+      current.sourceSha.toLowerCase() === ctx.sourceSha.toLowerCase()
+    ) {
+      log.info(
+        { ...base, workload, status: "duplicate", releaseId: current.id },
+        "node preview release skipped — sha already desired"
+      );
+      continue;
+    }
+    const result = await recordNodeRelease({
+      node,
+      env: "preview",
+      workload,
+      sourceSha: ctx.sourceSha,
+      createdBy: MERGE_WEBHOOK_PRINCIPAL,
+      log,
+    });
+    if (result.ok) {
+      log.info(
+        { ...base, workload, status: "recorded", releaseId: result.releaseId },
+        "node preview release recorded"
+      );
+    } else {
+      failures.push(workload);
+      log.error(
+        {
+          ...base,
+          workload,
+          status: "record_refused",
+          httpStatus: result.status,
+          reason: result.body.error,
+        },
+        "node preview release refused"
+      );
+    }
+  }
+  if (failures.length > 0)
+    throw new Error(`preview release refused for: ${failures.join(", ")}`);
+}
+
+/** Names of the declared `kind: app` workloads at the sha (state workloads are create-once, never merge-driven). */
+async function declaredAppWorkloads(
+  ctx: NodeMainAdvanceContext,
+  node: { id: string },
+  env: ServerEnv
+): Promise<string[]> {
+  const owner = env.NODE_SUBMODULE_PARENT_OWNER;
+  const repo = env.NODE_SUBMODULE_PARENT_REPO;
+  if (!owner || !repo)
+    throw new Error(
+      "node preview release is not configured: node submodule parent missing"
+    );
+  const source = await createNodeSourceResolver().resolveNodeSource({
+    nodeId: node.id,
+    parentOwner: owner,
+    parentRepo: repo,
+  });
+  const read = await readWorkloadDeclarations(createDeclarationReader(env), {
+    owner: source.owner,
+    repo: source.repo,
+    sourceSha: ctx.sourceSha,
+  });
+  if (read.kind === "repo_spec_not_found")
+    throw new Error("repo-spec not found at the pushed sha");
+  if (read.kind === "refused") throw new Error(read.message);
+  return lowerWorkloadManifests(read.manifests, {
+    pendingImage: `pending:sha-${ctx.sourceSha.toLowerCase()}`,
+  })
+    .filter((w) => w.kind === "app")
+    .map((w) => w.name);
 }
