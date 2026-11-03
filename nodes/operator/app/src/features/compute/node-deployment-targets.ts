@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+import { isNodeOnDeployVerb } from "./node-compute-api";
 import {
   type DeploymentEnvironment,
   resolveNodeDeploymentProvider,
@@ -23,6 +24,13 @@ export interface DeploymentTargetSelection {
    */
   readonly sourceRepositories: Readonly<Record<string, string>>;
   readonly sourceShas: Readonly<Record<string, string>>;
+  /**
+   * Targets whose `compute_api.<env>` cell is `node-deploy` (story.5137, CD4 ONE_WRITER_PER_NODE_LANE).
+   * They are deployed only by POST /api/v1/deploy/workloads, so the flight/promote path EXCLUDES them
+   * from every list above — no render, no deploy-branch write, no lease or DNS. They are reported
+   * (never silently dropped) so the caller can refuse when nothing else remains.
+   */
+  readonly nodeDeploy: readonly string[];
 }
 
 export interface PromoteDeploymentTargetSelection
@@ -111,6 +119,7 @@ export function resolveDeploymentTargets(input: {
   const offCluster: string[] = [];
   const k3s: string[] = [];
   const k3sNodes: string[] = [];
+  const nodeDeploy: string[] = [];
   const sourceRepositories: Record<string, string> = {};
   const sourceShas: Record<string, string> = {};
 
@@ -122,6 +131,13 @@ export function resolveDeploymentTargets(input: {
       throw new Error(
         `[deployment-targets] Flight target ${target} is not configured for ${input.environment}`
       );
+    }
+    if (
+      row.type === "node" &&
+      isNodeOnDeployVerb({ catalog: row, environment: input.environment })
+    ) {
+      nodeDeploy.push(target);
+      continue;
     }
     const provider = resolveNodeDeploymentProvider({
       catalog: row,
@@ -162,6 +178,7 @@ export function resolveDeploymentTargets(input: {
     k3sNodes,
     sourceRepositories,
     sourceShas,
+    nodeDeploy,
   };
 }
 
@@ -197,6 +214,7 @@ export function resolvePromoteDeploymentTargets(input: {
           typeof row.name === "string" ? [row.name] : []
         );
   const offCluster: string[] = [];
+  const nodeDeploy: string[] = [];
   const infra = input.requestedTargets.filter(
     (target) => byName.get(target)?.type === "infra"
   );
@@ -206,6 +224,12 @@ export function resolvePromoteDeploymentTargets(input: {
     const row = byName.get(target);
     if (!row || row.type !== "node" || !isInEnvironment(row, input.environment))
       continue;
+    // ONE_WRITER_PER_NODE_LANE (story.5137): a `node-deploy` cell is written only by the deploy
+    // verb. Exclude it from every list so no render / deploy-branch write / lease / DNS happens.
+    if (isNodeOnDeployVerb({ catalog: row, environment: input.environment })) {
+      nodeDeploy.push(target);
+      continue;
+    }
     // REMOTE_SOURCE_IS_NOT_PLACEMENT (bug: node-template prod promote,
     // story.5016) — a node whose image is built by its own repo (source_repo
     // set) needs its reviewed catalog source_sha resolved for image-tag/digest
@@ -242,6 +266,10 @@ export function resolvePromoteDeploymentTargets(input: {
     const row = byName.get(target);
     if (!row) {
       throw new Error(`[deployment-targets] Unknown legacy target: ${target}`);
+    }
+    if (isNodeOnDeployVerb({ catalog: row, environment: input.environment })) {
+      if (!nodeDeploy.includes(target)) nodeDeploy.push(target);
+      return false;
     }
     return (
       resolveNodeDeploymentProvider({
@@ -287,6 +315,7 @@ export function resolvePromoteDeploymentTargets(input: {
     sourceShas,
     previewForward,
     infra,
+    nodeDeploy,
   };
 }
 

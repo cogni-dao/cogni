@@ -43,7 +43,10 @@ import {
   verifyNodeBundleManifest,
 } from "../src/features/compute/node-artifact-bundle-oci";
 import { resolveNodeBootRecovery } from "../src/features/compute/node-boot-recovery";
-import { resolveNodeComputeApi } from "../src/features/compute/node-compute-api";
+import {
+  nodeOnDeployVerbMessage,
+  resolveNodeComputeApi,
+} from "../src/features/compute/node-compute-api";
 import {
   deploymentEnvironmentSchema,
   resolveNodeDeploymentProvider,
@@ -426,6 +429,7 @@ async function selectDeploymentTargets(input: {
     k3sNodes,
     sourceRepositories,
     sourceShas,
+    nodeDeploy,
   } = resolveDeploymentTargets({
     catalogRows: rows,
     environment: input.environment,
@@ -434,6 +438,16 @@ async function selectDeploymentTargets(input: {
     ...(input.parentSourceSha !== undefined && {
       parentSourceSha: input.parentSourceSha,
     }),
+  });
+  // ONE_WRITER_PER_NODE_LANE (story.5137): `compute_api.<env>=node-deploy` cells belong to POST
+  // /api/v1/deploy/workloads. They are excluded above; REFUSE when nothing else is left (never a
+  // silent green no-op), otherwise say loudly which targets this flight skipped.
+  refuseOrWarnNodeDeploy({
+    lane: "flight",
+    environment: input.environment,
+    requestedTargets: parsed,
+    nodeDeploy,
+    remainingTargets: parsed.filter((target) => !nodeDeploy.includes(target)),
   });
   const outputs = {
     deployment_node_targets_json: JSON.stringify(deployment),
@@ -481,6 +495,14 @@ async function selectPromoteTargets(input: {
     ),
     previewForwardMode: input.previewForwardMode,
     parentRepository: input.parentRepository,
+  });
+  // ONE_WRITER_PER_NODE_LANE (story.5137): refuse a request that names only `node-deploy` cells.
+  refuseOrWarnNodeDeploy({
+    lane: "promote",
+    environment: input.environment,
+    requestedTargets,
+    nodeDeploy: selection.nodeDeploy,
+    remainingTargets: [...selection.deployment, ...selection.infra],
   });
   // AN EMPTY APP PROMOTE IS A REFUSAL, NOT A SILENT SUCCESS (bug.5203). Every downstream job
   // gates on `has_targets`, so a promote that resolves nothing otherwise SKIPS its way to a
@@ -541,6 +563,35 @@ async function selectPromoteTargets(input: {
       .map(([key, value]) => `${key}=${value}`)
       .join("\n")}\n`,
     "utf8"
+  );
+}
+
+/**
+ * CD4 / ONE_WRITER_PER_NODE_LANE guard for the old flight/promote path. A target whose catalog
+ * `compute_api.<env>` is `node-deploy` was excluded by the resolver; if the request named only
+ * such targets (nothing else deploys), refuse with the stable `node_on_deploy_verb` reason instead
+ * of a green no-op. A fleet-wide or mixed request proceeds for the other targets and logs the skip.
+ */
+function refuseOrWarnNodeDeploy(input: {
+  readonly lane: "flight" | "promote";
+  readonly environment: "candidate-a" | "preview" | "production";
+  readonly requestedTargets: readonly string[];
+  readonly nodeDeploy: readonly string[];
+  readonly remainingTargets: readonly string[];
+}): void {
+  if (input.nodeDeploy.length === 0) return;
+  const named = input.requestedTargets.filter((target) =>
+    input.nodeDeploy.includes(target)
+  );
+  if (named.length > 0 && input.remainingTargets.length === 0) {
+    throw new Error(
+      `[materialize-compute-workload] ${input.lane} refused: ${named
+        .map((target) => nodeOnDeployVerbMessage(target, input.environment))
+        .join(" | ")}`
+    );
+  }
+  process.stderr.write(
+    `::warning::[materialize-compute-workload] node_on_deploy_verb: ${input.lane} skips ${input.nodeDeploy.join(", ")} in ${input.environment} (compute_api=node-deploy; deployed only by POST /api/v1/deploy/workloads)\n`
   );
 }
 

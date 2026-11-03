@@ -221,6 +221,7 @@ print('valid-parent-accepted; missing-invalid-older-refused')
       },
       k3s: ["node-template", "scheduler-worker"],
       k3sNodes: ["node-template"],
+      nodeDeploy: [],
       sourceRepositories: { "node-template": PARENT, toks4: "cogni-dao/toks4" },
       sourceShas: { toks4: "0123456789abcdef0123456789abcdef01234567" },
     });
@@ -253,6 +254,7 @@ print('valid-parent-accepted; missing-invalid-older-refused')
       providers: { operator: "k3s" },
       k3s: ["operator"],
       k3sNodes: ["operator"],
+      nodeDeploy: [],
       sourceRepositories: { operator: PARENT },
       sourceShas: {},
     });
@@ -270,6 +272,7 @@ print('valid-parent-accepted; missing-invalid-older-refused')
       providers: { toks4: "akash" },
       k3s: [],
       k3sNodes: [],
+      nodeDeploy: [],
       sourceRepositories: { toks4: "cogni-dao/toks4" },
       sourceShas: { toks4: "0123456789abcdef0123456789abcdef01234567" },
     });
@@ -421,6 +424,7 @@ describe("resolvePromoteDeploymentTargets", () => {
         external: "0123456789abcdef0123456789abcdef01234567",
       },
       infra: [],
+      nodeDeploy: [],
       // No preview-forward mode stated ⇒ every target false (bug.5195).
       previewForward: {
         "scheduler-worker": false,
@@ -675,5 +679,85 @@ describe("resolvePromoteDeploymentTargets", () => {
       });
       expect(selection.previewForward.bothenvs).toBe(false);
     });
+  });
+});
+
+/**
+ * ONE_WRITER_PER_NODE_LANE (story.5137, CD4). A `compute_api.<env>: node-deploy` cell is written
+ * only by the deploy verb: the old flight/promote planner excludes it from every list, so nothing
+ * renders it, writes its deploy branch, or touches its lease or DNS.
+ */
+describe("node-deploy cells are excluded from the old flight/promote path", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const rows = [
+    {
+      name: "handed",
+      type: "node",
+      envs: ["candidate-a", "production"],
+      source_repo: "https://github.com/Cogni-DAO/handed.git",
+      source_sha: SHA,
+      deployment_provider: { "candidate-a": "akash", production: "akash" },
+      compute_api: { "candidate-a": "crossplane", production: "node-deploy" },
+    },
+    {
+      name: "classic",
+      type: "node",
+      envs: ["candidate-a", "production"],
+      source_repo: "https://github.com/Cogni-DAO/classic.git",
+      source_sha: SHA,
+      deployment_provider: { "candidate-a": "akash", production: "akash" },
+      compute_api: { "candidate-a": "crossplane", production: "crossplane" },
+    },
+  ];
+
+  it("flight: skips the node-deploy cell but plans the same node's other env", () => {
+    const production = resolveDeploymentTargets({
+      catalogRows: rows,
+      environment: "production",
+      parentRepository: PARENT_REPOSITORY,
+      flightTargets: ["handed", "classic"],
+    });
+    expect(production.nodeDeploy).toEqual(["handed"]);
+    expect(production.deployment).toEqual(["classic"]);
+    expect(production.offCluster).toEqual(["classic"]);
+    expect(production.providers).toEqual({ classic: "akash" });
+    expect(production.sourceShas).toEqual({ classic: SHA });
+
+    const candidate = resolveDeploymentTargets({
+      catalogRows: rows,
+      environment: "candidate-a",
+      parentRepository: PARENT_REPOSITORY,
+      flightTargets: ["handed"],
+    });
+    expect(candidate.nodeDeploy).toEqual([]);
+    expect(candidate.offCluster).toEqual(["handed"]);
+  });
+
+  it("promote: a fleet-wide promote skips the node-deploy cell and still promotes the rest", () => {
+    const selection = resolvePromoteDeploymentTargets({
+      catalogRows: rows,
+      environment: "production",
+      parentRepository: PARENT_REPOSITORY,
+      requestedTargets: [],
+      legacyK3sTargets: [],
+    });
+    expect(selection.nodeDeploy).toEqual(["handed"]);
+    expect(selection.deployment).toEqual(["classic"]);
+    expect(selection.offCluster).toEqual(["classic"]);
+    expect(selection.sourceRepositories).toEqual({
+      classic: "cogni-dao/classic",
+    });
+  });
+
+  it("promote: an explicit request for only the node-deploy cell resolves to nothing, flagged", () => {
+    const selection = resolvePromoteDeploymentTargets({
+      catalogRows: rows,
+      environment: "production",
+      parentRepository: PARENT_REPOSITORY,
+      requestedTargets: ["handed"],
+      legacyK3sTargets: [],
+    });
+    expect(selection.deployment).toEqual([]);
+    expect(selection.nodeDeploy).toEqual(["handed"]);
   });
 });

@@ -9,7 +9,12 @@ import {
   hasCrossplaneControlPlane,
 } from "@/shared/node-registry/crossplane-control-plane";
 
-import { resolveNodeComputeApi } from "./node-compute-api";
+import {
+  isNodeOnDeployVerb,
+  NODE_ON_DEPLOY_VERB,
+  resolveNodeComputeApi,
+  resolveNodeComputeCell,
+} from "./node-compute-api";
 import { deploymentEnvironmentSchema } from "./node-deployment-provider";
 
 describe("resolveNodeComputeApi", () => {
@@ -122,5 +127,56 @@ describe("resolveNodeComputeApi", () => {
         })
       ).toBe("legacy");
     }
+  });
+});
+
+/**
+ * ONE_WRITER_PER_NODE_LANE (story.5137, CD4). `node-deploy` is a catalog cell value meaning the
+ * deploy verb is the lane's ONLY writer. It is a valid cell, but never a rendering authority.
+ */
+describe("compute_api: node-deploy", () => {
+  const catalog = {
+    name: "poly",
+    compute_api: { "candidate-a": "crossplane", production: "node-deploy" },
+  };
+
+  it("is a valid cell value, resolved per environment", () => {
+    expect(resolveNodeComputeCell({ catalog, environment: "production" })).toBe(
+      "node-deploy"
+    );
+    expect(isNodeOnDeployVerb({ catalog, environment: "production" })).toBe(
+      true
+    );
+    expect(isNodeOnDeployVerb({ catalog, environment: "candidate-a" })).toBe(
+      false
+    );
+    expect(
+      isNodeOnDeployVerb({ catalog: { name: "x" }, environment: "preview" })
+    ).toBe(false);
+  });
+
+  it("is REFUSED by the renderer's reader, naming the verb, so no manifest can be rendered for it", () => {
+    expect(() =>
+      resolveNodeComputeApi({ catalog, environment: "production" })
+    ).toThrow(
+      new RegExp(
+        `${NODE_ON_DEPLOY_VERB}: poly in production .*POST /api/v1/deploy/workloads`
+      )
+    );
+  });
+
+  it("leaves the sibling environment's rendering authority untouched", () => {
+    expect(resolveNodeComputeApi({ catalog, environment: "candidate-a" })).toBe(
+      "crossplane"
+    );
+  });
+
+  it("still rejects an unknown cell value", () => {
+    expect(() =>
+      isNodeOnDeployVerb({
+        catalog: { compute_api: { production: "node_deploy" } },
+        environment: "production",
+      })
+    ).toThrow(/Invalid catalog compute_api/);
   });
 });

@@ -108,6 +108,22 @@ if out="$(resolve "$FIXTURE_NODE" candidate-a file 2>&1)"; then
 fi
 pass "unknown value fails closed and names itself"
 
+echo "[5b/6] node-deploy cell → REFUSED with node_on_deploy_verb (ONE_WRITER_PER_NODE_LANE, story.5137)"
+yq -i '.compute_api."candidate-a" = "node-deploy"' "$FIXTURE_FILE"
+for what in api file; do
+  if out="$(resolve "$FIXTURE_NODE" candidate-a "$what" 2>&1)"; then
+    fail "node-deploy must exit non-zero for '$what' (got '$out')"
+  fi
+  case "$out" in
+    *"node_on_deploy_verb:"*"POST /api/v1/deploy/workloads"*) : ;;
+    *) fail "node-deploy refusal for '$what' must name node_on_deploy_verb and the verb (got '$out')" ;;
+  esac
+done
+# Per-env independence: the node-deploy cell does not leak to the other envs' cells.
+[ "$(resolve "$FIXTURE_NODE" preview file)" = "compute-workload.yaml" ] ||
+  fail "a node-deploy candidate-a cell must not change the preview cell"
+pass "node-deploy refused by both the authority and filename resolvers"
+
 echo "[6/6] committed catalog resolves as the deploy lane expects"
 # Derived from the catalog, not hardcoded, so this never goes stale when a row opts in.
 while IFS= read -r catalog; do
@@ -117,6 +133,17 @@ while IFS= read -r catalog; do
     [ -n "$declared" ] && [ "$declared" != "null" ] || declared="legacy"
     expected="compute-workload.yaml"
     [ "$declared" = "crossplane" ] && expected="xcomputeworkload.yaml"
+    if [ "$declared" = "node-deploy" ]; then
+      # The old lane must REFUSE a verb-owned cell, never resolve a filename for it.
+      if out="$(COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" bash -c '
+        set -euo pipefail
+        . "$1"
+        compute_workload_manifest_file "$2" "$3"
+      ' _ "$LIB" "$node" "$env" 2>&1)"; then
+        fail "${node}/${env}: node-deploy must be refused, got '$out'"
+      fi
+      case "$out" in *node_on_deploy_verb*) continue ;; *) fail "${node}/${env}: refusal must name node_on_deploy_verb (got '$out')" ;; esac
+    fi
     actual="$(COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" bash -c '
       set -euo pipefail
       . "$1"

@@ -1022,6 +1022,19 @@ if env "${XCW_ENV[@]}" APP_SOURCE_DIR="$BAD_SRC" COGNI_CATALOG_ROOT="$BAD_SRC/in
 fi
 grep -Fq "compute_api.'candidate-a' for external-compute row 'toks5' is 'terraform': the legacy authority is retired, declare compute_api.candidate-a: crossplane" "$TMPROOT/xcw-bad-authority.out"
 
+# ONE_WRITER_PER_NODE_LANE (story.5137, CD4): a cell handed to the node-deploy verb is REFUSED by
+# the old substrate preflight with the stable node_on_deploy_verb reason, never asserted as crossplane.
+VERB_SRC="$TMPROOT/node-deploy-src"
+mkdir -p "$VERB_SRC/infra/catalog" "$VERB_SRC/nodes/toks5/.cogni"
+sed 's/crossplane/node-deploy/' "$XCW_SRC/infra/catalog/toks5.yaml" > "$VERB_SRC/infra/catalog/toks5.yaml"
+cp "$XCW_SRC/nodes/toks5/.cogni/repo-spec.yaml" "$VERB_SRC/nodes/toks5/.cogni/repo-spec.yaml"
+if env "${XCW_ENV[@]}" APP_SOURCE_DIR="$VERB_SRC" COGNI_CATALOG_ROOT="$VERB_SRC/infra/catalog" \
+  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/xcw-node-deploy.out" 2>&1; then
+  echo "expected a node-deploy cell to be refused by the old substrate preflight" >&2
+  exit 1
+fi
+grep -Fq "node_on_deploy_verb: toks5 in candidate-a is deployed only by the node-deploy sequencer" "$TMPROOT/xcw-node-deploy.out"
+
 if env TARGET=scheduler-worker DEPLOY_ENVIRONMENT=candidate-a APP_SOURCE_DIR=. COGNI_CATALOG_ROOT=infra/catalog bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/service.out" 2>&1; then
   echo "expected service target to fail explicitly" >&2
   exit 1

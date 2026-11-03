@@ -15,6 +15,12 @@
  *   - AUTHORITY_REQUIRES_AN_INSTALLED_API: `crossplane` is only resolvable in an environment
  *     that actually carries a Crossplane control plane (CROSSPLANE_CONTROL_PLANE_ENVS). A row
  *     naming it elsewhere THROWS — it never degrades to `legacy`.
+ *   - ONE_WRITER_PER_NODE_LANE (CD4, story.5137): `node-deploy` is the cell value meaning "this
+ *     (node, env) is deployed ONLY by the node-deploy sequencer (POST /api/v1/deploy/workloads)".
+ *     It is NOT a rendering authority: nothing renders an XComputeWorkload/ComputeWorkload for it,
+ *     and the flight/promote path must refuse or skip it (`NODE_ON_DEPLOY_VERB`). It is therefore
+ *     deliberately NOT a member of NODE_COMPUTE_APIS; `resolveNodeComputeApi` (the renderer's
+ *     reader) THROWS on it, so no caller can render a workload for a cell the verb owns.
  * Side-effects: none
  * Links: task.5097, story.5016, infra/catalog/_schema.json, infra/crossplane/xcomputeworkload/
  * @internal
@@ -60,13 +66,37 @@ export { CROSSPLANE_CONTROL_PLANE_ENVS };
 export const nodeComputeApiSchema = z.enum(NODE_COMPUTE_APIS);
 export type NodeComputeApi = z.infer<typeof nodeComputeApiSchema>;
 
+/**
+ * The catalog cell value that hands one (node, env) to the node-deploy sequencer
+ * (POST /api/v1/deploy/workloads). Mirrors `infra/catalog/_schema.json` `compute_api`.
+ */
+export const NODE_DEPLOY_COMPUTE_CELL = "node-deploy" as const;
+
+/** Every value a `compute_api.<env>` catalog cell may hold: a rendering authority or the verb. */
+export const nodeComputeCellSchema = z.enum([
+  ...NODE_COMPUTE_APIS,
+  NODE_DEPLOY_COMPUTE_CELL,
+]);
+export type NodeComputeCell = z.infer<typeof nodeComputeCellSchema>;
+
+/** Stable machine-readable refusal prefix, grep-able in flight and promote logs. */
+export const NODE_ON_DEPLOY_VERB = "node_on_deploy_verb";
+
+/** The one refusal sentence every old-path reader uses for a `node-deploy` cell. */
+export function nodeOnDeployVerbMessage(
+  node: string,
+  environment: DeploymentEnvironment
+): string {
+  return `${NODE_ON_DEPLOY_VERB}: ${node} in ${environment} is deployed only by the node-deploy sequencer (catalog compute_api.${environment}=node-deploy) — use POST /api/v1/deploy/workloads. The flight/promote path never renders its workload, writes its deploy branch, or touches its lease or DNS (ONE_WRITER_PER_NODE_LANE).`;
+}
+
 const catalogComputeApiSchema = z
   .object({
     compute_api: z
       .object({
-        "candidate-a": nodeComputeApiSchema.optional(),
-        preview: nodeComputeApiSchema.optional(),
-        production: nodeComputeApiSchema.optional(),
+        "candidate-a": nodeComputeCellSchema.optional(),
+        preview: nodeComputeCellSchema.optional(),
+        production: nodeComputeCellSchema.optional(),
       })
       .strict()
       .optional(),
@@ -88,13 +118,54 @@ export function resolveNodeComputeApi(input: {
   readonly catalog: unknown;
   readonly environment: DeploymentEnvironment;
 }): NodeComputeApi {
+  const resolved = resolveNodeComputeCell(input);
+  if (resolved === NODE_DEPLOY_COMPUTE_CELL) {
+    // The renderer's reader. A cell the deploy verb owns has NO rendering authority; refusing
+    // here means materialize-compute-workload can never emit a manifest for it.
+    throw new Error(
+      `[compute-api] ${nodeOnDeployVerbMessage(catalogNodeName(input.catalog), input.environment)}`
+    );
+  }
+  return resolved;
+}
+
+/** True when this (node, env) cell hands the lane to the node-deploy sequencer. */
+export function isNodeOnDeployVerb(input: {
+  readonly catalog: unknown;
+  readonly environment: DeploymentEnvironment;
+}): boolean {
+  // Parse only: this guard sits in front of readers that never consulted `compute_api` before, so
+  // it must not add the crossplane-installed-API refusal to rows that are not node-deploy.
+  return parseComputeCell(input) === NODE_DEPLOY_COMPUTE_CELL;
+}
+
+function catalogNodeName(catalog: unknown): string {
+  const name =
+    typeof catalog === "object" && catalog !== null
+      ? (catalog as { name?: unknown }).name
+      : undefined;
+  return typeof name === "string" && name !== "" ? name : "<node>";
+}
+
+function parseComputeCell(input: {
+  readonly catalog: unknown;
+  readonly environment: DeploymentEnvironment;
+}): NodeComputeCell | undefined {
   const parsed = catalogComputeApiSchema.safeParse(input.catalog);
   if (!parsed.success) {
     throw new Error(
       `[compute-api] Invalid catalog compute_api: ${parsed.error.message}`
     );
   }
-  const resolved = parsed.data.compute_api?.[input.environment] ?? "legacy";
+  return parsed.data.compute_api?.[input.environment];
+}
+
+/** Resolve the raw `compute_api.<env>` cell, including the `node-deploy` verb value. */
+export function resolveNodeComputeCell(input: {
+  readonly catalog: unknown;
+  readonly environment: DeploymentEnvironment;
+}): NodeComputeCell {
+  const resolved = parseComputeCell(input) ?? "legacy";
   if (
     resolved === "crossplane" &&
     !hasCrossplaneControlPlane(input.environment)

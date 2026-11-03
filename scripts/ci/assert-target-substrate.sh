@@ -107,6 +107,7 @@ compute_api="$(yq -N ".compute_api.\"${DEPLOY_ENVIRONMENT}\"" "$catalog_file")"
 [ -n "$compute_api" ] && [ "$compute_api" != "null" ] || compute_api="legacy"
 case "$compute_api" in
   crossplane) ;;
+  node-deploy) fail "node_on_deploy_verb: $node in ${DEPLOY_ENVIRONMENT} is deployed only by the node-deploy sequencer (catalog compute_api.${DEPLOY_ENVIRONMENT}=node-deploy) — use POST /api/v1/deploy/workloads; the flight/promote substrate preflight does not apply to it" ;;
   *) fail "compute_api.'${DEPLOY_ENVIRONMENT}' for external-compute row '$node' is '${compute_api}': the legacy authority is retired, declare compute_api.${DEPLOY_ENVIRONMENT}: crossplane" ;;
 esac
 
