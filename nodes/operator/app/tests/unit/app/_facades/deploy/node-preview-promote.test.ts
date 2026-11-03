@@ -20,6 +20,42 @@ let nodeRows: Array<{
   deployEnvs?: string[] | null;
 }> = [];
 
+let catalogRow: unknown;
+const recordNodeRelease = vi.fn();
+const getDesired = vi.fn();
+const getRelease = vi.fn();
+let declared: Array<{ name: string; kind: "app" | "state" }> = [];
+
+vi.mock("@/shared/config", () => ({ getNodeId: () => "operator-node-id" }));
+vi.mock("@/bootstrap/capabilities/node-catalog", () => ({
+  createNodeCatalog: () => ({
+    entryFor: async () =>
+      catalogRow === undefined ? undefined : { row: catalogRow },
+  }),
+}));
+vi.mock("@/bootstrap/capabilities/node-deploy-store", () => ({
+  createNodeDeployStore: () => ({ getDesired, getRelease }),
+}));
+vi.mock("@/bootstrap/capabilities/node-source-resolver", () => ({
+  createNodeSourceResolver: () => ({
+    resolveNodeSource: async () => ({ owner: "Cogni-DAO", repo: "habitat" }),
+  }),
+  createDeclarationReader: () => ({}),
+}));
+vi.mock("@/features/node-deploy/read-declarations", () => ({
+  readWorkloadDeclarations: async () => ({
+    kind: "ok",
+    repoSpecText: "",
+    manifests: [],
+  }),
+}));
+vi.mock("@cogni/repo-spec", () => ({
+  lowerWorkloadManifests: () => declared,
+}));
+vi.mock("@/app/_facades/deploy/record-node-release.server", () => ({
+  recordNodeRelease: (...a: unknown[]) => recordNodeRelease(...a),
+}));
+
 vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
   createOperatorDeployPlane: () => ({ promoteNode }),
 }));
@@ -43,6 +79,9 @@ const ENV = {
   GH_REVIEW_APP_PRIVATE_KEY_BASE64: "a2V5",
   NODE_SUBMODULE_PARENT_OWNER: "Cogni-DAO",
   NODE_SUBMODULE_PARENT_REPO: "node-template",
+  DEPLOY_ENVIRONMENT: "production",
+  NODE_DEPLOY_ENVS: "candidate-a,preview,production",
+  FLEET_CONTROL_ENV: "production",
   // biome-ignore lint/suspicious/noExplicitAny: partial ServerEnv is sufficient for this facade
 } as any;
 
@@ -76,6 +115,8 @@ async function flush(): Promise<void> {
 beforeEach(() => {
   vi.clearAllMocks();
   nodeRows = [];
+  catalogRow = undefined;
+  declared = [];
 });
 
 describe("dispatchNodePreviewPromote", () => {
@@ -274,5 +315,184 @@ describe("dispatchNodePreviewPromote", () => {
       }),
       expect.any(String)
     );
+  });
+
+  describe("node-deploy preview cell (task.5410)", () => {
+    const SHA = "e".repeat(40);
+    beforeEach(() => {
+      nodeRows = [
+        {
+          id: "node-1",
+          slug: "habitat",
+          deployEnvs: ["preview", "production"],
+        },
+      ];
+      catalogRow = {
+        name: "habitat",
+        source_repo: "https://github.com/Cogni-DAO/habitat",
+        compute_api: { preview: "node-deploy" },
+      };
+      declared = [
+        { name: "web", kind: "app" },
+        { name: "db", kind: "state" },
+        { name: "worker", kind: "app" },
+      ];
+      getDesired.mockResolvedValue(undefined);
+      recordNodeRelease.mockResolvedValue({
+        ok: true,
+        releaseId: "rel-1",
+        desiredState: "running",
+      });
+    });
+
+    it("records an env=preview release per app workload as the operator and never dispatches", async () => {
+      await dispatchNodePreviewPromote(mainPushPayload(), ENV, log);
+
+      expect(promoteNode).not.toHaveBeenCalled();
+      expect(recordNodeRelease).toHaveBeenCalledTimes(2);
+      expect(recordNodeRelease).toHaveBeenCalledWith(
+        expect.objectContaining({
+          node: { id: "node-1", slug: "habitat" },
+          env: "preview",
+          workload: "web",
+          sourceSha: SHA,
+          createdBy: "operator:merge-webhook",
+        })
+      );
+      expect(recordNodeRelease).toHaveBeenCalledWith(
+        expect.objectContaining({ workload: "worker", env: "preview" })
+      );
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "feature.node_preview_promote.complete",
+          status: "recorded",
+          workload: "web",
+          releaseId: "rel-1",
+          sourceSha: SHA,
+        }),
+        expect.any(String)
+      );
+    });
+
+    it("logs duplicate and records nothing when the sha is already desired", async () => {
+      getDesired.mockResolvedValue({ releaseId: "rel-0" });
+      getRelease.mockResolvedValue({ id: "rel-0", sourceSha: SHA });
+
+      await dispatchNodePreviewPromote(mainPushPayload(), ENV, log);
+
+      expect(recordNodeRelease).not.toHaveBeenCalled();
+      expect(promoteNode).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "duplicate", releaseId: "rel-0" }),
+        expect.any(String)
+      );
+    });
+
+    it("rejects (500 path) when a workload release is refused", async () => {
+      recordNodeRelease.mockResolvedValue({
+        ok: false,
+        status: 422,
+        body: { error: "workload_manifest_refused" },
+      });
+      await expect(
+        dispatchNodePreviewPromote(mainPushPayload(), ENV, log)
+      ).rejects.toThrow("preview release refused for: web, worker");
+      expect(promoteNode).not.toHaveBeenCalled();
+    });
+
+    it("preview not served by this operator: skipped_env_not_served, nothing recorded", async () => {
+      await dispatchNodePreviewPromote(
+        mainPushPayload(),
+        { ...ENV, NODE_DEPLOY_ENVS: "production" },
+        log
+      );
+      expect(recordNodeRelease).not.toHaveBeenCalled();
+      expect(promoteNode).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "skipped_env_not_served" }),
+        expect.any(String)
+      );
+    });
+
+    it("fleet mismatch (catalog repo owned by another org): skipped_node_not_in_fleet", async () => {
+      catalogRow = {
+        name: "habitat",
+        source_repo: "https://github.com/cogni-test-org/habitat",
+        compute_api: { preview: "node-deploy" },
+      };
+      await dispatchNodePreviewPromote(mainPushPayload(), ENV, log);
+      expect(recordNodeRelease).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "skipped_node_not_in_fleet" }),
+        expect.any(String)
+      );
+    });
+
+    it("pushed repo is not the catalog source repo: skipped_repo_mismatch", async () => {
+      await dispatchNodePreviewPromote(
+        mainPushPayload({
+          repository: {
+            name: "habitat",
+            default_branch: "main",
+            owner: { login: "someone-else" },
+          },
+        }),
+        ENV,
+        log
+      );
+      expect(recordNodeRelease).not.toHaveBeenCalled();
+      expect(promoteNode).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "skipped_repo_mismatch" }),
+        expect.any(String)
+      );
+    });
+
+    it("repo comparison is case-insensitive", async () => {
+      await dispatchNodePreviewPromote(
+        mainPushPayload({
+          repository: {
+            name: "habitat",
+            default_branch: "main",
+            owner: { login: "COGNI-dao" },
+          },
+        }),
+        ENV,
+        log
+      );
+      expect(recordNodeRelease).toHaveBeenCalledTimes(2);
+    });
+
+    it("a thrown record error does not starve later workloads; throws once at the end", async () => {
+      recordNodeRelease.mockRejectedValueOnce(new Error("db down"));
+      await expect(
+        dispatchNodePreviewPromote(mainPushPayload(), ENV, log)
+      ).rejects.toThrow("preview release refused for: web");
+      expect(recordNodeRelease).toHaveBeenCalledTimes(2);
+      expect(log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "record_failed", workload: "web" }),
+        expect.any(String)
+      );
+    });
+
+    it("a non-main push records nothing", async () => {
+      await dispatchNodePreviewPromote(
+        mainPushPayload({ ref: "refs/heads/feature/x" }),
+        ENV,
+        log
+      );
+      expect(recordNodeRelease).not.toHaveBeenCalled();
+      expect(promoteNode).not.toHaveBeenCalled();
+    });
+
+    it("a crossplane cell keeps the legacy dispatch and records nothing", async () => {
+      catalogRow = { name: "habitat", compute_api: { preview: "crossplane" } };
+      promoteNode.mockResolvedValue({ status: "dispatched" });
+
+      await dispatchNodePreviewPromote(mainPushPayload(), ENV, log);
+
+      expect(promoteNode).toHaveBeenCalledTimes(1);
+      expect(recordNodeRelease).not.toHaveBeenCalled();
+    });
   });
 });
