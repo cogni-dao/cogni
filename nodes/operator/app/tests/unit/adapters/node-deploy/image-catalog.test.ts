@@ -140,6 +140,7 @@ describe("ImageCatalogNodes", () => {
   it("ImageCatalogNodeSource refuses an image repository that does not match the source repo", async () => {
     const { ImageCatalogNodeSource } = await import("@/adapters/server");
     const bad = new ImageCatalogNodeSource({
+      slugs: async () => ["toks5"],
       entryFor: async () => ({
         slug: "toks5",
         row: {
