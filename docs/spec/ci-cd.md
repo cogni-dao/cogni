@@ -13,10 +13,16 @@ tags: []
 ---
 
 > [!WARNING]
-> **Stale as of 2026-09-17 — it predates Akash placement**
-> The fleet moved node apps to **Akash** on 2026-09-11; this document was last
-> verified 2026-06-09 and predates that. Treat its deployment-topology claims as
-> historical. The current contract is
+> **Node delivery moved to the hub (story.5137)**
+> A node ships through one call, `POST /api/v1/deploy/workloads`, in every env.
+> The one delivery sequence is the hub guide
+> [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence).
+> Declaration and watch details are in
+> [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload).
+> This document still describes the operator's own k3s + Argo pipeline and the
+> **legacy node lane** (deploy branches, Crossplane, `lease_generation`).
+> Treat every node-lane passage below as legacy: it is deleted with that lane.
+> The other current contract is
 > [Node CI/CD Contract](node-ci-cd-contract.md) — see `## Lane vs control env`
 > for how `env` splits into lane and control env.
 
@@ -85,7 +91,7 @@ The branch model, deploy-state model, and axioms below are the live contract —
 
 23. **`AKASH_IS_NODE_APP_TARGET`** (story.5016). Akash is a standard node-app deployment target selected per environment by the catalog's `deployment_provider`. Node apps run as **app-only decentralized-compute workloads**: the existing flight/promotion workflow resolves the immutable node artifact, materializes provider-neutral desired state into the node's deploy branch, and Argo delivers it to **Crossplane**, which reconciles the `XComputeWorkload` composite through the private **`akash-tx-actuator`** — the sole writer that calls `ComputeResourcePort` / `AkashComputeAdapter` (the legacy leader-elected in-cluster `compute-workload-controller` was RETIRED, story.5016; deleted from the tree). CI and public REST routes never write provider state. Absent placement is a HARD FAILURE, never a silent fallback (`NO_SILENT_DEFAULT`, story.5040). A node row missing `deployment_provider`, `compute_api`, or `lease_generation` for an environment it declares must halt the render with the missing cell named — it must NOT fall through to the deprecated k3s app lane. The old "absent placement remains k3s for backwards compatibility" clause is WITHDRAWN: every fleet row now declares `akash`, so there is nothing left to be compatible with, and the fallback silently produced workloads that could never boot (bug.5177, bug.5182, bug.5179, bug.5146). The node wizard's future default is `deployment_provider: akash` (born-on-Akash) after the full environment ladder is proven. See [`cicd-platform-boundary.md`](./cicd-platform-boundary.md) for the port/adapter contract.
 24. **`CHERRY_IS_STATE_SUBSTRATE`**. The Cherry VM/k3s cluster is the **state substrate**: postgres, doltgres, redis, temporal, LiteLLM, and the shared scheduler-worker — plus the legacy node-app lane until migration completes. Akash workloads carry no infra: databases, queues, or model gateways as workload sidecars are the rejected anti-pattern (`APP_ONLY_NO_INFRA`, `infra/crossplane/xcomputeworkload/xrd.yaml` — the composite API has no vocabulary for a database, queue or model gateway, so the anti-pattern is unrepresentable rather than merely rejected). State stays on Cherry; apps dial it over allowlisted egress with node-scoped, budget-capped credentials only (`SCOPED_CREDS_ONLY`).
-25. **`SIDECAR_IS_SDL_SERVICE`**. An app-adjacent sidecar image (a node publishing a second deployable from the same `source_repo/sourceSha`) ships as an **additional service in the same Akash lease** — the SDL renderer meshes non-global exposes by service name (`INTERNAL_EXPOSE_IS_MESH`), preserving no-public-expose isolation. Sidecars are never injected into k8s pods via overlay/kustomize machinery (that lane was closed with PR #1884; reference contract: `cogni-dao/poly#10`).
+25. **`SIDECAR_IS_SDL_SERVICE`**. An app-adjacent sidecar image ships as an **additional service in the same Akash lease**, never as a k8s pod injection. The full rule, its isolation limits and the declaration are in the hub guide [node-add-private-service](https://cognidao.org/knowledge/node-add-private-service) (reference contract: `cogni-dao/poly#10`).
 26. **`OPERATOR_OWNS_WORKLOAD_HEALTH`**. Off-k3s there are no provider-side Argo
     probes or self-heal. Git/Argo therefore applies provider-neutral
     `compute.cogni.io/ComputeWorkload` desired state and **Crossplane** — reconciling the
@@ -106,7 +112,7 @@ metadata.generation`; uncertain mutations fail closed rather than blindly duplic
     `argocd-*` ConfigMap — pinned by
     `tests/ci-invariants/argocd-core-configmap-ownership.spec.ts`. A lease dying silently is a contract violation
     of this axiom, not an operational surprise. Health endpoints contract:
-    [`health-probes.md`](./health-probes.md). **`NO_HOMEGROWN_CONTROL_PLANE`** (task.5098):
+    [`health-probes.md`](./health-probes.md). **`NO_HOMEGROWN_CONTROL_PLANE`** (task.5098; **legacy node lane**: for node workloads on the deploy verb one sequencer replaces it, per hub [node-service-delivery](https://cognidao.org/knowledge/node-service-delivery), and this clause is deleted with the lane, story.5137):
     Crossplane **is** the Axiom 26 implementation. Generic reconciliation — watches,
     retries, backoff, status/conditions, finalizers, composition, deletion policy,
     leader election — is **bought, never written**. A new bespoke in-cluster
@@ -118,7 +124,7 @@ metadata.generation`; uncertain mutations fail closed rather than blindly duplic
     frozen, and deleted (story.5016 → task.5098); it is the worked example of the
     cost, not a template.
 
-### Story.5016 GitOps corrections
+### Story.5016 GitOps corrections (legacy node lane)
 
 The legacy Akash exceptions in Axioms 18, 21, and 23 are superseded by Axiom 26:
 
@@ -197,9 +203,9 @@ The deployment coordinate for a deployable artifact is `sourceSha`, paired with 
 
 1. The source repo that owns the artifact runs its own PR CI.
 2. That repo publishes every flightable artifact as `<image_repository>:sha-<sourceSha>`.
-3. The operator API accepts `nodeRef { nodeId, sourceSha }` for hosted node flight. The parent PR number is review metadata for the operator pin/deploy-state PR, not the deploy coordinate.
-4. The operator verifies source identity, repo-spec identity, parent gitlink acceptance when a gitlink is still used, and image existence.
-5. `candidate-flight.yml` resolves `image_repository:sha-<sourceSha>` to an artifact record and writes `deploy/candidate-a-<target>` state.
+3. Legacy node flight: the operator API accepts `nodeRef { nodeId, sourceSha }`. The hub guide [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) owns the current node call and its transition note.
+4. The operator verifies source identity, repo-spec identity and image existence.
+5. `candidate-flight.yml` resolves `image_repository:sha-<sourceSha>` to an artifact record and writes `deploy/candidate-a-<target>` state (operator node and legacy node lane only).
 6. Candidate validation asserts `/version.buildSha == sourceSha`.
 
 `pr-*`, `mq-*`, and `preview-*` tags are transitional/control-plane artifact aliases for legacy in-repo build mechanics. They may exist while workflows are being migrated, but no node deploy request should use them as artifact identity.
@@ -275,7 +281,9 @@ Promotion environments run accepted code only.
 | preview     | `deploy/preview`    | post-merge validation |
 | production  | `deploy/production` | production            |
 
-### Per-Node Deploy Branches (task.0320 + task.0372)
+### Per-Node Deploy Branches (task.0320 + task.0372) (legacy node lane)
+
+> Node deploy branches and node ApplicationSets are deleted when the last node moves to the deploy verb (story.5137). The hub guide [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) is the node path.
 
 Per-node flighting lands in two parts to keep the rollout reversible and to preserve the promotion pipeline across the transition:
 

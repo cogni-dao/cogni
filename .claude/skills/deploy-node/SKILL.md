@@ -43,16 +43,17 @@ that is how `resy` outlived the node by months.
 
 ## Where the current knowledge lives
 
-| You want to…                                                                   | Skill                     |
-| ------------------------------------------------------------------------------ | ------------------------- |
-| Akash runtime, placement, leases, ComputeWorkload, why a node won't come up    | **`akash-node-expert`**   |
-| CI/CD pipeline, deploy branches, image promotion, freeze policy, VM SSH policy | **`devops-expert`**       |
-| Provision / reprovision an env (VM→k3s→OpenBao→Compose→edge→DNS→AppSets)       | **`provision-env`**       |
-| Promote a SHA to preview/production, or diagnose a stuck promote               | **`promote`**             |
-| Prove a flighted PR on candidate-a                                             | **`validate-candidate`**  |
-| Secrets: OpenBao vs GitHub-env, ESO, split-brain                               | **`cicd-secrets-expert`** |
-| RBAC / node access grants                                                      | **`rbac-expert`**         |
-| Turn an env on/off for a node                                                  | **`manage-node-envs`**    |
+| You want to…                                                                   | Skill                                                                                              |
+| ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Ship a node PR to candidate-a, preview, production (the one sequence)          | hub guide `cicd-e2e-required-sequence` (https://cognidao.org/knowledge/cicd-e2e-required-sequence) |
+| Akash runtime, placement, leases, ComputeWorkload, why a node won't come up    | **`akash-node-expert`**                                                                            |
+| CI/CD pipeline, deploy branches, image promotion, freeze policy, VM SSH policy | **`devops-expert`**                                                                                |
+| Provision / reprovision an env (VM→k3s→OpenBao→Compose→edge→DNS→AppSets)       | **`provision-env`**                                                                                |
+| Promote a SHA to preview/production, or diagnose a stuck promote               | **`promote`**                                                                                      |
+| Prove a flighted PR on candidate-a                                             | **`validate-candidate`**                                                                           |
+| Secrets: OpenBao vs GitHub-env, ESO, split-brain                               | **`cicd-secrets-expert`**                                                                          |
+| RBAC / node access grants                                                      | **`rbac-expert`**                                                                                  |
+| Turn an env on/off for a node                                                  | **`manage-node-envs`**                                                                             |
 
 ## The invariant worth carrying over
 

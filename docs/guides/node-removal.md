@@ -148,5 +148,5 @@ If you need to undo the strip after merge:
 ## Related
 
 - [Private Node Repo Contract](../spec/private-node-repo-contract.md) — Phase 0 split that originated this playbook
-- [Candidate Flight V0](./candidate-flight-v0.md) — pre-merge flight mechanics
+- [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) (hub) — node delivery sequence, including candidate-a
 - [CD Pipeline E2E](../spec/cd-pipeline-e2e.md) — full deploy plane architecture
