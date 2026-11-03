@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import { isNodeOnDeployVerb } from "./node-compute-api";
+import {
+  isNodeOnDeployVerb,
+  nodeOnDeployVerbMessage,
+} from "./node-compute-api";
 import {
   type DeploymentEnvironment,
   resolveNodeDeploymentProvider,
@@ -78,6 +81,43 @@ export function candidateDeploymentFingerprint(
     ),
     bootRecovery: candidateCatalogCell(row, "boot_recovery"),
   });
+}
+
+export type NodeDeployExclusionDecision =
+  | { readonly kind: "none" }
+  | { readonly kind: "refuse"; readonly message: string }
+  | { readonly kind: "warn"; readonly message: string };
+
+/**
+ * CD4 / ONE_WRITER_PER_NODE_LANE (story.5137). The planners above EXCLUDE `node-deploy` cells;
+ * this decides what the caller does about it. A request that names a node-deploy cell and has
+ * nothing else left to deploy is a REFUSAL (`node_on_deploy_verb`), never a green no-op; a mixed
+ * or fleet-wide request proceeds for the rest and WARNS which cells were skipped.
+ */
+export function decideNodeDeployExclusion(input: {
+  readonly lane: "flight" | "promote";
+  readonly environment: DeploymentEnvironment;
+  readonly requestedTargets: readonly string[];
+  readonly nodeDeploy: readonly string[];
+  /** Requested targets that still deploy (or, for promote, are explicit infra no-ops). */
+  readonly remainingTargets: readonly string[];
+}): NodeDeployExclusionDecision {
+  if (input.nodeDeploy.length === 0) return { kind: "none" };
+  const named = input.requestedTargets.filter((target) =>
+    input.nodeDeploy.includes(target)
+  );
+  if (named.length > 0 && input.remainingTargets.length === 0) {
+    return {
+      kind: "refuse",
+      message: `${input.lane} refused: ${named
+        .map((target) => nodeOnDeployVerbMessage(target, input.environment))
+        .join(" | ")}`,
+    };
+  }
+  return {
+    kind: "warn",
+    message: `node_on_deploy_verb: ${input.lane} skips ${input.nodeDeploy.join(", ")} in ${input.environment} (compute_api=node-deploy; deployed only by POST /api/v1/deploy/workloads)`,
+  };
 }
 
 export function isInfraOnlyPromoteNoop(input: {

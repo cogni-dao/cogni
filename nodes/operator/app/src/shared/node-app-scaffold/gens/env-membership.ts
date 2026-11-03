@@ -187,7 +187,9 @@ export type CatalogPlacementKey = (typeof CATALOG_PLACEMENT_KEYS)[number];
 /** Per-key value vocabulary, mirroring `infra/catalog/_schema.json`. */
 const PLACEMENT_VALUE_RES: Readonly<Record<CatalogPlacementKey, RegExp>> = {
   deployment_provider: /^(?:k3s|akash)$/,
-  compute_api: /^(?:legacy|crossplane)$/,
+  // `node-deploy` (story.5137, CD4): the deploy verb owns the lane. It is only ever READ and
+  // round-tripped here; the generator itself never authors it (add writes `crossplane`).
+  compute_api: /^(?:legacy|crossplane|node-deploy)$/,
   lease_generation: /^(?:0|[1-9][0-9]*)$/,
   // A YAML flow sequence of ISO 3166-1 alpha-2 codes, e.g. `[PT, NL]`. Kept on ONE line so the
   // existing single-line-per-env block machinery still owns the edit — a block sequence would
@@ -208,7 +210,7 @@ const placementBlockRe = (key: CatalogPlacementKey): RegExp =>
 // The value group accepts a bare scalar OR a one-line flow sequence (story.5050). Widening it is
 // inert for the scalar keys — none of their vocabularies contain a bracket.
 const PLACEMENT_ENTRY_RE =
-  /^[ \t]+([a-z-]+):[^\S\r\n]*(\[[^\]\n]*\]|[a-z0-9]+)[^\S\r\n]*(?:#.*)?$/;
+  /^[ \t]+([a-z-]+):[^\S\r\n]*(\[[^\]\n]*\]|[a-z0-9-]+)[^\S\r\n]*(?:#.*)?$/;
 const SOURCE_REPO_LINE_RE = /^source_repo:[^\S\r\n]*(\S+)[^\S\r\n]*$/m;
 
 /** True when the catalog row declares a `source_repo:` (an external build plane exists). */

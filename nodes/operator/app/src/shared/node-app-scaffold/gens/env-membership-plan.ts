@@ -569,6 +569,10 @@ function planRemove(args: {
     parseCatalogPlacement(current.catalog)[env] ?? "k3s";
   const controlEnv = controlEnvFor(env, provider, fleetControlEnv);
 
+  const verbOwned =
+    parseCatalogPlacementMap(current.catalog, "compute_api")[env] ===
+    "node-deploy";
+
   const appsetsKustomization = current.appsetsKustomizationByEnv[controlEnv];
   if (appsetsKustomization === undefined) {
     throw new EnvPlanError(
@@ -608,12 +612,23 @@ function planRemove(args: {
         ] as const)),
     // Deleted at its CONTROL-env path — the dir the add wrote it into (parity with planAdd;
     // PR-A left this env-keyed, which stranded an akash lane's AppSet under appsets/production/).
-    { op: "delete", path: appsetPath(controlEnv, env, slug) },
-    {
-      op: "upsert",
-      path: appsetsKustomizationPath(controlEnv),
-      content: removeFromAppsetsKustomization(appsetsKustomization, slug, env),
-    },
+    // A `compute_api: node-deploy` cell has NO AppSet (story.5137, CD4: the deploy verb is that
+    // lane's only writer), so there is nothing to delete or de-list; a delete op for an absent
+    // path would fail the tree write.
+    ...(verbOwned
+      ? []
+      : ([
+          { op: "delete", path: appsetPath(controlEnv, env, slug) },
+          {
+            op: "upsert",
+            path: appsetsKustomizationPath(controlEnv),
+            content: removeFromAppsetsKustomization(
+              appsetsKustomization,
+              slug,
+              env
+            ),
+          },
+        ] as const)),
   ];
   ops.push(
     ...buildMembershipRoutingOps(

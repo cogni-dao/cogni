@@ -1607,6 +1607,110 @@ data:
   });
 });
 
+// ── `compute_api: node-deploy` (story.5137, CD4 ONE_WRITER_PER_NODE_LANE) ───────────────────────
+//
+// A node-deploy cell is owned by POST /api/v1/deploy/workloads. The env verb must still ADD and
+// REMOVE other envs on such a row (parse + round-trip the cell), and must never render or delete
+// an AppSet / XR path for the node-deploy env itself.
+describe("buildEnvDeltaPlan — compute_api: node-deploy cells", () => {
+  /** An akash-placed row whose `verbEnv` cell is handed to the verb: node-deploy, no AppSet exists. */
+  const verbOwnedCatalog = (
+    envs: string[],
+    verbEnv: string,
+    activityEnv: string
+  ): string =>
+    externallyBuiltCatalog(envs)
+      .replace(
+        /envs: \[[^\]]*\]\n/,
+        `envs: [${envs.join(", ")}]\n` +
+          `deployment_provider:\n  ${verbEnv}: akash\n` +
+          `compute_api:\n  ${verbEnv}: node-deploy\n` +
+          `lease_generation:\n  ${verbEnv}: 0\n`
+      )
+      .replace(/activity_env: .*/, `activity_env: ${activityEnv}`);
+
+  const PROD_KUST_WITHOUT_PREVIEW = kustWith("production", [
+    "blue",
+    "operator",
+  ]);
+
+  it("ADD of another env parses + round-trips the node-deploy cell and still authors the new env's XR path", () => {
+    const current: EnvPlanCurrent = {
+      catalog: verbOwnedCatalog(["preview"], "preview", "preview"),
+      templateOverlayByEnv: { "candidate-a": TEMPLATE_OVERLAY },
+      templateExternalSecretByEnv: { "candidate-a": TEMPLATE_EXTERNAL_SECRET },
+      appsetTemplate: APPSET_TEMPLATE,
+      appsetRepoUrl: "https://github.com/cogni-dao/cogni.git",
+      appsetsKustomizationByEnv: { production: PROD_KUST_WITHOUT_PREVIEW },
+      port: 3200,
+      nodePort: 31100,
+      schedulerEndpointPatchByEnv: {
+        production: schedulerPatchFixture("http://blue-node-app:3000"),
+        "candidate-a": schedulerPatchFixture(`http://${SLUG}-node-app:3000`),
+        preview: schedulerPatchFixture(`http://${SLUG}-node-app:3000`),
+      },
+    };
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: true,
+      current,
+    });
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+    const catalogOp = res.ops.find((o) => o.path === CATALOG_PATH(SLUG));
+    if (catalogOp?.op !== "upsert") throw new Error("catalog upsert missing");
+    const row = parseYaml(catalogOp.content) as {
+      compute_api: Record<string, string>;
+    };
+    expect(row.compute_api).toEqual({
+      "candidate-a": "crossplane",
+      preview: "node-deploy",
+    });
+    expect(paths(res.ops)).toContain(
+      appsetPath("production", "candidate-a", SLUG)
+    );
+    expect(paths(res.ops)).not.toContain(
+      appsetPath("production", "preview", SLUG)
+    );
+  });
+
+  it("REMOVE of the node-deploy env deletes no AppSet and rewrites no kustomization", () => {
+    const current: EnvPlanCurrent = {
+      catalog: verbOwnedCatalog(
+        ["candidate-a", "preview"],
+        "candidate-a",
+        "preview"
+      ),
+      templateOverlayByEnv: {},
+      appsetsKustomizationByEnv: { production: PROD_KUST_WITHOUT_PREVIEW },
+      schedulerEndpointPatchByEnv: {
+        production: schedulerPatchFixture("http://blue-node-app:3000"),
+        "candidate-a": schedulerPatchFixture(
+          `https://${SLUG}-test.cognidao.org`
+        ),
+      },
+    };
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: false,
+      current,
+    });
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+    expect(deletes(res.ops)).not.toContain(
+      appsetPath("production", "candidate-a", SLUG)
+    );
+    expect(paths(res.ops)).not.toContain(
+      appsetsKustomizationPath("production")
+    );
+    // The cell leaves with the env (REMOVE_COMPLETES_THE_ROW) and the row still parses.
+    const catalogOp = res.ops.find((o) => o.path === CATALOG_PATH(SLUG));
+    if (catalogOp?.op !== "upsert") throw new Error("catalog upsert missing");
+    expect(catalogOp.content).toContain("envs: [preview]");
+    expect(catalogOp.content).not.toContain("node-deploy");
+  });
+});
+
 /** An akash-placed, egress-declaring row — the region verb's precondition. */
 const akashPlaced = (env: string): EnvPlanCurrent => {
   const base = externallyBuilt([env]);

@@ -340,6 +340,36 @@ describe("parseCatalogPlacementMap", () => {
     ).toEqual({ production: "0" });
   });
 
+  it("reads a `node-deploy` cell (story.5137: hyphenated value) and round-trips it through a sibling edit", () => {
+    const catalog = CATALOG_WITH_ALL_CELLS.replace(
+      "  production: crossplane",
+      "  production: node-deploy"
+    );
+    expect(parseCatalogPlacementMap(catalog, "compute_api")).toEqual({
+      production: "node-deploy",
+    });
+    const next = setCatalogPlacementCell(
+      catalog,
+      "compute_api",
+      "candidate-a",
+      "crossplane"
+    );
+    expect(next).toContain(
+      "compute_api:\n  candidate-a: crossplane\n  production: node-deploy\n"
+    );
+    expect(parseCatalogPlacementMap(next, "compute_api")).toEqual({
+      "candidate-a": "crossplane",
+      production: "node-deploy",
+    });
+    // The verb's cell leaves with its env, and the sibling survives.
+    expect(
+      parseCatalogPlacementMap(
+        setCatalogPlacementCell(next, "compute_api", "production", undefined),
+        "compute_api"
+      )
+    ).toEqual({ "candidate-a": "crossplane" });
+  });
+
   it("throws on a value outside the key's vocabulary", () => {
     expect(() =>
       parseCatalogPlacementMap(

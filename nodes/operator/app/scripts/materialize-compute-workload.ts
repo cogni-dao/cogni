@@ -43,15 +43,13 @@ import {
   verifyNodeBundleManifest,
 } from "../src/features/compute/node-artifact-bundle-oci";
 import { resolveNodeBootRecovery } from "../src/features/compute/node-boot-recovery";
-import {
-  nodeOnDeployVerbMessage,
-  resolveNodeComputeApi,
-} from "../src/features/compute/node-compute-api";
+import { resolveNodeComputeApi } from "../src/features/compute/node-compute-api";
 import {
   deploymentEnvironmentSchema,
   resolveNodeDeploymentProvider,
 } from "../src/features/compute/node-deployment-provider";
 import {
+  decideNodeDeployExclusion,
   isInfraOnlyPromoteNoop,
   resolveDeploymentTargets,
   resolvePromoteDeploymentTargets,
@@ -567,32 +565,21 @@ async function selectPromoteTargets(input: {
 }
 
 /**
- * CD4 / ONE_WRITER_PER_NODE_LANE guard for the old flight/promote path. A target whose catalog
- * `compute_api.<env>` is `node-deploy` was excluded by the resolver; if the request named only
- * such targets (nothing else deploys), refuse with the stable `node_on_deploy_verb` reason instead
- * of a green no-op. A fleet-wide or mixed request proceeds for the other targets and logs the skip.
+ * CD4 / ONE_WRITER_PER_NODE_LANE guard for the old flight/promote path. The decision lives in the
+ * feature (`decideNodeDeployExclusion`, unit-tested); this only performs the I/O.
  */
-function refuseOrWarnNodeDeploy(input: {
-  readonly lane: "flight" | "promote";
-  readonly environment: "candidate-a" | "preview" | "production";
-  readonly requestedTargets: readonly string[];
-  readonly nodeDeploy: readonly string[];
-  readonly remainingTargets: readonly string[];
-}): void {
-  if (input.nodeDeploy.length === 0) return;
-  const named = input.requestedTargets.filter((target) =>
-    input.nodeDeploy.includes(target)
-  );
-  if (named.length > 0 && input.remainingTargets.length === 0) {
-    throw new Error(
-      `[materialize-compute-workload] ${input.lane} refused: ${named
-        .map((target) => nodeOnDeployVerbMessage(target, input.environment))
-        .join(" | ")}`
+function refuseOrWarnNodeDeploy(
+  input: Parameters<typeof decideNodeDeployExclusion>[0]
+): void {
+  const decision = decideNodeDeployExclusion(input);
+  if (decision.kind === "refuse") {
+    throw new Error(`[materialize-compute-workload] ${decision.message}`);
+  }
+  if (decision.kind === "warn") {
+    process.stderr.write(
+      `::warning::[materialize-compute-workload] ${decision.message}\n`
     );
   }
-  process.stderr.write(
-    `::warning::[materialize-compute-workload] node_on_deploy_verb: ${input.lane} skips ${input.nodeDeploy.join(", ")} in ${input.environment} (compute_api=node-deploy; deployed only by POST /api/v1/deploy/workloads)\n`
-  );
 }
 
 async function projectCatalogTargets(input: {

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 import {
+  decideNodeDeployExclusion,
   isInfraOnlyPromoteNoop,
   resolveDeploymentTargets,
   resolvePromoteDeploymentTargets,
@@ -759,5 +760,73 @@ describe("node-deploy cells are excluded from the old flight/promote path", () =
     });
     expect(selection.deployment).toEqual([]);
     expect(selection.nodeDeploy).toEqual(["handed"]);
+  });
+
+  describe("decideNodeDeployExclusion (the materialize-compute-workload refusal)", () => {
+    const base = { environment: "production" as const, nodeDeploy: ["handed"] };
+
+    it("REFUSES with node_on_deploy_verb when the request names only node-deploy cells", () => {
+      const decision = decideNodeDeployExclusion({
+        ...base,
+        lane: "promote",
+        requestedTargets: ["handed"],
+        remainingTargets: [],
+      });
+      expect(decision.kind).toBe("refuse");
+      expect(decision).toMatchObject({
+        message: expect.stringMatching(
+          /promote refused: node_on_deploy_verb: handed in production .*POST \/api\/v1\/deploy\/workloads/
+        ),
+      });
+    });
+
+    it("refuses a flight the same way", () => {
+      expect(
+        decideNodeDeployExclusion({
+          ...base,
+          lane: "flight",
+          requestedTargets: ["handed"],
+          remainingTargets: [],
+        }).kind
+      ).toBe("refuse");
+    });
+
+    it("WARNS, and lets the rest proceed, for a mixed request", () => {
+      const decision = decideNodeDeployExclusion({
+        ...base,
+        lane: "flight",
+        requestedTargets: ["handed", "classic"],
+        remainingTargets: ["classic"],
+      });
+      expect(decision).toMatchObject({
+        kind: "warn",
+        message: expect.stringContaining(
+          "node_on_deploy_verb: flight skips handed"
+        ),
+      });
+    });
+
+    it("WARNS for a fleet-wide promote that names nothing (no refusal)", () => {
+      expect(
+        decideNodeDeployExclusion({
+          ...base,
+          lane: "promote",
+          requestedTargets: [],
+          remainingTargets: [],
+        }).kind
+      ).toBe("warn");
+    });
+
+    it("is silent when no node-deploy cell was excluded", () => {
+      expect(
+        decideNodeDeployExclusion({
+          ...base,
+          nodeDeploy: [],
+          lane: "promote",
+          requestedTargets: ["classic"],
+          remainingTargets: ["classic"],
+        })
+      ).toEqual({ kind: "none" });
+    });
   });
 });
