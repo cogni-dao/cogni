@@ -100,6 +100,8 @@ export type {
   BillingResolver,
   PreflightCreditCheckFn,
 } from "./billing-context";
+export type { BuiltImageResolverPort } from "./built-image.port";
+export { BuiltImageRegistryError } from "./built-image.port";
 export type {
   CatalogNodeOwnerProjection,
   CatalogNodeRegistryPort,
@@ -220,6 +222,7 @@ export type {
   PruneNodeEnvironmentInput,
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
+  ResolvedNodeSource,
   ResolveNodeRepoInput,
   SharedLaneInfraEnv,
 } from "./deploy-plane.port";

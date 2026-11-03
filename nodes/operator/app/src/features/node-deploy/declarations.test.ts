@@ -24,6 +24,7 @@ import { describe, expect, it } from "vitest";
 import {
   DeclarationError,
   hostForEnv,
+  needsBuiltImage,
   resolveWorkloadDeclaration,
 } from "./declarations";
 
@@ -119,6 +120,41 @@ describe("the operator's checked-in canary workload manifest", () => {
         ],
       })
     );
+  });
+
+  it('an image of "." lowers to the supplied built image, and is refused without one (story.5127)', () => {
+    const built = {
+      ...CANARY,
+      text: CANARY.text.replace(/^ {4}image: .*$/m, '    image: "."'),
+    };
+    expect(built.text).not.toBe(CANARY.text);
+    const digest = `ghcr.io/cogni-dao/toks5@sha256:${"ab".repeat(32)}`;
+    expect(resolve({ manifests: [built], builtImage: digest }).image).toBe(
+      digest
+    );
+    expect(() => resolve({ manifests: [built] })).toThrow(
+      expect.objectContaining({
+        code: "workload_manifest_refused",
+        issues: [expect.objectContaining({ code: "built_image_unresolved" })],
+      })
+    );
+    const thrown = (fn: () => unknown): DeclarationError => {
+      try {
+        fn();
+      } catch (error) {
+        return error as DeclarationError;
+      }
+      throw new Error("expected a DeclarationError");
+    };
+    expect(needsBuiltImage(thrown(() => resolve({ manifests: [built] })))).toBe(
+      true
+    );
+    const exclusive = CANARY.text.replace('"false"', '"true"');
+    expect(
+      needsBuiltImage(
+        thrown(() => resolve({ manifests: [{ ...CANARY, text: exclusive }] }))
+      )
+    ).toBe(false);
   });
 
   it("refuses another node's id, an undeclared workload, no manifests and an unparseable repo-spec", () => {

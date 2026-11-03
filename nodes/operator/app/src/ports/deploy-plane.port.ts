@@ -262,6 +262,15 @@ export interface ResolvedNodeRepo {
   readonly repo: string;
 }
 
+/** Where a node's own declarations and built image live (story.5127). */
+export interface ResolvedNodeSource extends ResolvedNodeRepo {
+  /**
+   * Catalog `image_repository` (`ghcr.io/<owner>/<repo>`) of a REMOTE-SOURCE node. `null` for an
+   * IN-REPO node (the operator): no built image is resolved for it.
+   */
+  readonly imageRepository: string | null;
+}
+
 /** Input to `classifyEnvManagerPr` — a PR addressed in the parent monorepo. */
 export interface ClassifyEnvManagerPrInput {
   readonly owner: string;
@@ -310,6 +319,13 @@ export interface DeployPlanePort {
    * the merge route catches it to fall back to the monorepo (legacy lane); approve-checks surfaces it.
    */
   resolveNodeRepo(input: ResolveNodeRepoInput): Promise<ResolvedNodeRepo>;
+
+  /**
+   * Resolve a node's source repo AND image repository from the same catalog row (story.5127): the
+   * node-deploy verb reads `.cogni/repo-spec.yaml` + `.cogni/workloads/*` from `{owner, repo}` and
+   * resolves the built image from `imageRepository`. Same discriminator and errors as `resolveNodeRepo`.
+   */
+  resolveNodeSource(input: ResolveNodeRepoInput): Promise<ResolvedNodeSource>;
 
   /**
    * Classify a monorepo PR as an App-signed env-membership PR (`cogni.env-manager.v1`) or not.

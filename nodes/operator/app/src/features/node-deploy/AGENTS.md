@@ -31,9 +31,17 @@ The node-deploy blue/green sequencer (task.5400, story.5127) and its read model.
 
 ## Public Surface
 
-- **Exports:** `NodeDeploySequencer`, `DEFAULT_SEQUENCER_CONFIG`, `buildWorkloadView`, `buildReleaseDetail`, `deriveReleaseTimeline`, `readWorkloadDeclarations` (reads repo-spec + `.cogni/workloads/*.yaml` at one sha through the deploy-plane port; story.5137), declaration/edge helpers
+- **Exports:** `NodeDeploySequencer`, `DEFAULT_SEQUENCER_CONFIG`, `buildWorkloadView`, `buildReleaseDetail`, `deriveReleaseTimeline`, `readWorkloadDeclarations` (reads repo-spec + `.cogni/workloads/*.yaml` at one sha from the repo it is handed, through the deploy-plane port; story.5137), `resolveWorkloadDeclaration` + `needsBuiltImage` (declaration check and lowering; an image of `.` takes the `builtImage` digest), declaration/edge helpers
 - **Routes (via app/):** `GET|POST /api/v1/deploy/workloads`, `GET /api/v1/deploy/workloads/releases/{releaseId}?nodeId=&env=`
 - **Files considered API:** `sequencer.ts`, `release-view.ts`, `declarations.ts`, `read-declarations.ts`
+
+## Where a node deploys from (story.5127)
+
+`POST /deploy/workloads` deploys a node from ITS OWN repo, not the operator's.
+
+1. **Repo.** The route calls `DeployPlanePort.resolveNodeSource({parentOwner, parentRepo, slug})`. It reads `infra/catalog/<slug>.yaml@main` through the App (the same read as `resolveNodeRepo`). A remote-source node (has `source_repo`) returns its own `{owner, repo}` plus `image_repository` (`ghcr.io/<owner>/<repo>`). An in-repo node (the operator) returns the parent repo with `imageRepository: null`. A missing row is 404 `catalog_missing`.
+2. **Declarations.** `.cogni/repo-spec.yaml` and `.cogni/workloads/*.yaml` are read from that repo at `sourceSha` (DECLARED_AT_THE_SHA). The repo-spec `node_id` must equal the requested node (`node_mismatch`).
+3. **Built image.** A manifest image of `.` means "the image node CI built at this sha". Only when a manifest asks for it, the route calls `BuiltImageResolverPort.resolveBuiltImage` (anonymous ghcr.io OCI API: pull token, then `HEAD /v2/<path>/manifests/sha-<sha>`, read `Docker-Content-Digest`). The lowered image is `<image_repository>@sha256:<digest>`, never a tag. No such image (or not public) is 422 `built_image_not_found` BEFORE any write; a registry failure is 502 `built_image_lookup_failed`. An in-repo node has no image repository, so `.` stays `built_image_unresolved` (422) and its manifest pins images by digest.
 
 ## Observability contract (task.5400)
 

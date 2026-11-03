@@ -198,6 +198,7 @@ export { HttpLangfuseReader } from "./observability/langfuse-reader.adapter";
 export { HttpLangfuseRootOwnershipVerifier } from "./observability/langfuse-root-ownership.adapter";
 export { HttpLokiPusher } from "./observability/loki-push.adapter";
 export { HttpLokiReader } from "./observability/loki-reader.adapter";
+export { GhcrBuiltImageResolver } from "./oci/ghcr-built-image.adapter";
 export { ViemEvmOnchainClient } from "./onchain/viem-evm-onchain-client.adapter";
 export { ViemTreasuryAdapter } from "./onchain/viem-treasury.adapter";
 export { UserDrizzlePaymentAttemptRepository } from "./payments/drizzle-payment-attempt.adapter";

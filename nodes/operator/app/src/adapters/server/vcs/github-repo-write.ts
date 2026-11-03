@@ -68,6 +68,7 @@ import type {
   PruneNodeEnvironmentInput,
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
+  ResolvedNodeSource,
   ResolveNodeRepoInput,
   SharedLaneInfraEnv,
 } from "@/ports";
@@ -610,6 +611,52 @@ function parseGithubRepoUrl(value: string): { owner: string; repo: string } {
     );
   }
   return { owner, repo };
+}
+
+/**
+ * The strict REMOTE-SOURCE catalog row (`source_repo` + `image_repository` required, path prefix and
+ * image/source agreement checked). ONE parse for the flight prepare path and `resolveNodeSource`.
+ */
+function parseRemoteSourceCatalog(
+  catalogText: string,
+  slug: string
+): {
+  sourceRepoUrl: string;
+  sourceRepo: { owner: string; repo: string };
+  imageRepository: string;
+} {
+  const catalog = CatalogEntrySchema.safeParse(parseYaml(catalogText));
+  if (!catalog.success || catalog.data.name !== slug) {
+    throw deployPlaneError(
+      "invalid_catalog",
+      `invalid submodule node catalog entry for ${slug}`,
+      409
+    );
+  }
+  if (catalog.data.path_prefix !== `nodes/${slug}/`) {
+    throw deployPlaneError(
+      "catalog_slug_mismatch",
+      `catalog path_prefix does not match nodes/${slug}/`,
+      409
+    );
+  }
+  const sourceRepo = parseGithubRepoUrl(catalog.data.source_repo);
+  const imageRepo = parseGhcrImageRepository(catalog.data.image_repository);
+  if (
+    imageRepo.owner.toLowerCase() !== sourceRepo.owner.toLowerCase() ||
+    imageRepo.packageName.toLowerCase() !== sourceRepo.repo.toLowerCase()
+  ) {
+    throw deployPlaneError(
+      "image_repository_mismatch",
+      `catalog image_repository must match source_repo: expected ghcr.io/${sourceRepo.owner.toLowerCase()}/${sourceRepo.repo.toLowerCase()}`,
+      409
+    );
+  }
+  return {
+    sourceRepoUrl: catalog.data.source_repo,
+    sourceRepo,
+    imageRepository: catalog.data.image_repository,
+  };
 }
 
 function deployPlaneError(
@@ -1198,34 +1245,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
     }
 
     // REMOTE-SOURCE node: strict catalog (source_repo + image_repository required).
-    const catalog = CatalogEntrySchema.safeParse(parseYaml(catalogText));
-    if (!catalog.success || catalog.data.name !== slug) {
-      throw deployPlaneError(
-        "invalid_catalog",
-        `invalid submodule node catalog entry for ${slug}`,
-        409
-      );
-    }
-    if (catalog.data.path_prefix !== `nodes/${slug}/`) {
-      throw deployPlaneError(
-        "catalog_slug_mismatch",
-        `catalog path_prefix does not match nodes/${slug}/`,
-        409
-      );
-    }
-
-    const sourceRepo = parseGithubRepoUrl(catalog.data.source_repo);
-    const imageRepo = parseGhcrImageRepository(catalog.data.image_repository);
-    if (
-      imageRepo.owner.toLowerCase() !== sourceRepo.owner.toLowerCase() ||
-      imageRepo.packageName.toLowerCase() !== sourceRepo.repo.toLowerCase()
-    ) {
-      throw deployPlaneError(
-        "image_repository_mismatch",
-        `catalog image_repository must match source_repo: expected ghcr.io/${sourceRepo.owner.toLowerCase()}/${sourceRepo.repo.toLowerCase()}`,
-        409
-      );
-    }
+    const catalog = parseRemoteSourceCatalog(catalogText, slug);
+    const sourceRepo = catalog.sourceRepo;
 
     const sourceExists = await this.commitExists({
       owner: sourceRepo.owner,
@@ -1235,7 +1256,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     if (!sourceExists) {
       throw deployPlaneError(
         "source_missing",
-        `sourceSha not found in ${catalog.data.source_repo}`,
+        `sourceSha not found in ${catalog.sourceRepoUrl}`,
         422
       );
     }
@@ -1277,8 +1298,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
       nodeId,
       slug,
       sourceSha,
-      sourceRepo: catalog.data.source_repo,
-      image: `${catalog.data.image_repository}:sha-${sourceSha}`,
+      sourceRepo: catalog.sourceRepoUrl,
+      image: `${catalog.imageRepository}:sha-${sourceSha}`,
     };
   }
 
@@ -1296,6 +1317,46 @@ export class GitHubRepoWriter implements DeployPlanePort {
   async resolveNodeRepo(
     input: ResolveNodeRepoInput
   ): Promise<ResolvedNodeRepo> {
+    const row = await this.readNodeCatalogRow(input);
+    // IN-REPO node (operator): its repo is the parent monorepo.
+    if (row.sourceRepoUrl === undefined)
+      return { owner: input.parentOwner, repo: input.parentRepo };
+    // REMOTE-SOURCE node (fork): resolve its own source repo.
+    return parseGithubRepoUrl(row.sourceRepoUrl);
+  }
+
+  /**
+   * Resolve where a node's workload declarations and built image live (story.5127): the same
+   * catalog read and `source_repo`-PRESENCE discriminator as `resolveNodeRepo`, plus the catalog
+   * `image_repository` of a REMOTE-SOURCE node (validated by the strict row the flight path uses).
+   * An IN-REPO node (the operator) returns the parent monorepo with `imageRepository: null`: its
+   * manifest pins images by digest, so no built image is resolved for it.
+   */
+  async resolveNodeSource(
+    input: ResolveNodeRepoInput
+  ): Promise<ResolvedNodeSource> {
+    const row = await this.readNodeCatalogRow(input);
+    if (row.sourceRepoUrl === undefined)
+      return {
+        owner: input.parentOwner,
+        repo: input.parentRepo,
+        imageRepository: null,
+      };
+    const remote = parseRemoteSourceCatalog(row.catalogText, input.slug);
+    return {
+      owner: remote.sourceRepo.owner,
+      repo: remote.sourceRepo.repo,
+      imageRepository: remote.imageRepository,
+    };
+  }
+
+  /**
+   * ONE catalog read + discriminator for `resolveNodeRepo` and `resolveNodeSource`.
+   * `catalog_missing` (404) is reserved for a genuinely absent row (file missing / name mismatch).
+   */
+  private async readNodeCatalogRow(
+    input: ResolveNodeRepoInput
+  ): Promise<{ catalogText: string; sourceRepoUrl: string | undefined }> {
     const { parentOwner, parentRepo, slug } = input;
 
     const catalogText = await this.fetchFileText({
@@ -1322,14 +1383,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
         404
       );
     }
-
-    // IN-REPO node (operator): its repo is the parent monorepo.
-    if (discriminator.data.source_repo === undefined) {
-      return { owner: parentOwner, repo: parentRepo };
-    }
-
-    // REMOTE-SOURCE node (fork): resolve its own source repo.
-    return parseGithubRepoUrl(discriminator.data.source_repo);
+    return { catalogText, sourceRepoUrl: discriminator.data.source_repo };
   }
 
   async classifyEnvManagerPr(

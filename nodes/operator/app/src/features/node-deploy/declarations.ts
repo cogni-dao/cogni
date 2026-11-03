@@ -6,7 +6,7 @@
  * Purpose: Turn a node's workload manifests (`.cogni/workloads/*.yaml`) plus its `.cogni/repo-spec.yaml`,
  *   all read at one `sourceSha` through the operator's GitHub App, into the ONE resolved
  *   `NodeWorkloadSpec` a release stores (task.5400, story.5137).
- * Scope: Pure checks. The GitHub reads live in the route; the release write lives in the store; the
+ * Scope: Pure checks. The GitHub reads and the image-digest lookup live in the route; the release write lives in the store; the
  *   two-pass manifest check and the lowering live in `@cogni/repo-spec` (workload-manifest).
  * Invariants:
  *   - DECLARED_AT_THE_SHA: every manifest and the repo-spec come from the tree AT `sourceSha`, never
@@ -17,6 +17,9 @@
  *     workload names) before any one workload resolves, so a refused sibling refuses the release.
  *   - EXCLUSIVE_IS_REFUSED (CD6): the manifest check refuses `cogni.dev/exclusive: "true"`, because
  *     blue and green overlap and the fenced lock that makes that safe is not built yet.
+ *   - BUILT_IMAGE_IS_DIGEST_PINNED: an image of `.` lowers to the `builtImage` the caller resolved from
+ *     the node's registry at the source sha (`repo@sha256:<digest>`); with none supplied it is refused
+ *     `built_image_unresolved`, so a mutable tag can never reach a release.
  *   - HOST_FOLLOWS_ENV: a manifest names its PRODUCTION host; other environments get the
  *     `-test` (candidate-a) / `-preview` / `-dev` sibling of its first label, so one manifest serves
  *     every environment without a per-env copy.
@@ -71,12 +74,27 @@ export class DeclarationError extends Error {
   }
 }
 
+/**
+ * True when the manifests were refused ONLY because an image of `.` had no built image supplied, so
+ * the caller can resolve the digest node CI built at the source sha and retry (story.5127). A set
+ * with any other issue is not retried: the digest lookup could not make it pass.
+ */
+export function needsBuiltImage(error: DeclarationError): boolean {
+  return (
+    error.code === "workload_manifest_refused" &&
+    error.issues.length > 0 &&
+    error.issues.every((i) => i.code === "built_image_unresolved")
+  );
+}
+
 export function resolveWorkloadDeclaration(input: {
   readonly repoSpecText: string;
   readonly manifests: readonly WorkloadManifestFile[];
   readonly nodeId: string;
   readonly env: string;
   readonly workload: string;
+  /** The digest-pinned image node CI built at the source sha; resolves a manifest image of `.`. */
+  readonly builtImage?: string | undefined;
 }): NodeWorkloadSpec {
   // NO_SOURCE_ECHO: parse the YAML without pretty errors, and never return the parser's or the
   // schema's message (either can quote repo-spec text).
@@ -108,7 +126,10 @@ export function resolveWorkloadDeclaration(input: {
     );
   let workloads: NodeWorkloadSpec[];
   try {
-    workloads = lowerWorkloadManifests(input.manifests);
+    workloads = lowerWorkloadManifests(
+      input.manifests,
+      input.builtImage ? { builtImage: input.builtImage } : {}
+    );
   } catch (error) {
     if (error instanceof WorkloadManifestError)
       throw new DeclarationError(
