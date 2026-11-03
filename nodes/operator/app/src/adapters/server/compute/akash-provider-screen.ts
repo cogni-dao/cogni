@@ -279,6 +279,34 @@ function priceOutlierProviders(
   );
 }
 
+/**
+ * The provider pin one create is screened against: the operator's CONFIGURED allowlist INTERSECTED with
+ * the caller's `allowProviders` (task.5405). A caller can only NARROW, never widen:
+ *   - no caller list            -> the configured pin unchanged (empty configured = no pin);
+ *   - caller list, no configured -> the caller list;
+ *   - both                      -> their intersection, and an EMPTY intersection is a refusal that names
+ *                                  both sides, never a silent fallback to the wider set.
+ */
+export function effectiveProviderPin(
+  configured: readonly string[] | undefined,
+  caller: ReadonlySet<string> | undefined
+):
+  | { readonly pin: ReadonlySet<string> | undefined }
+  | { readonly refusal: string } {
+  const base =
+    configured && configured.length > 0 ? new Set(configured) : undefined;
+  if (!caller || caller.size === 0) return { pin: base };
+  if (!base) return { pin: caller };
+  const both = new Set([...caller].filter((p) => base.has(p)));
+  if (both.size === 0)
+    return {
+      refusal:
+        `allowProviders (${caller.size}) and the actuator's configured provider allowlist (${base.size}) ` +
+        "share no provider; refusing rather than widening placement",
+    };
+  return { pin: both };
+}
+
 /** Why a bid did not survive screening. One counter per independent filter. */
 export type BidRejectionReason =
   | "already_tried"

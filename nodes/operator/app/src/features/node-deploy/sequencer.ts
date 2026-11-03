@@ -37,6 +37,8 @@
 
 import type {
   ChainTruthPort,
+  NodeCatalogPort,
+  NodeRuntimeSecretsPort,
   PayerPort,
   ProbePort,
   SecretsPort,
@@ -53,12 +55,15 @@ import {
   consecutiveFailures,
   IN_FLIGHT_PHASES,
   keyString,
+  NodeRuntimeSecretsError,
   PayerError,
   type ReleaseRow,
   type WorkloadKey,
 } from "@/ports";
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
 import type { EdgeRouter } from "./edge";
+import { nodeAppEnv, nodeAppSecretKeys } from "./node-app-env";
+import { nodeCatalogPolicy } from "./node-catalog-policy";
 import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
 
 export interface SequencerConfig {
@@ -96,6 +101,13 @@ export interface SequencerConfig {
   /** A live lease failing its proof this long is treated as lost (design: 15 min). */
   readonly unhealthyLostMs: number;
   readonly pollMs: number;
+  /**
+   * INTERIM provider allowlist for node APP creates (task.5405): the providers whose egress is
+   * measured AND admitted to the shared substrate. Sent as `allowProviders` on every app create; the
+   * actuator intersects it with its own allowlist and refuses on an empty intersection. State
+   * workloads are never constrained by it. Absent/empty = no caller allowlist.
+   */
+  readonly appProviders?: readonly string[];
 }
 
 export const DEFAULT_SEQUENCER_CONFIG: Omit<
@@ -115,6 +127,17 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
   pollMs: 3_000,
 };
 
+/**
+ * What a node APP needs beyond its declaration to run like it did on the Crossplane lane (task.5405).
+ * Absent (dev harness, unit tests of the state machine) = apps get only `RELEASE_SHA` and bindings.
+ */
+export interface NodeAppRuntimeDeps {
+  readonly secrets: NodeRuntimeSecretsPort;
+  readonly catalog: NodeCatalogPort;
+  /** `vm_host_for_env` of the environment VM; absent omits the substrate env block. */
+  readonly substrateHost?: string | undefined;
+}
+
 export interface SequencerDeps {
   readonly store: StorePort;
   readonly payer: PayerPort;
@@ -122,6 +145,7 @@ export interface SequencerDeps {
   readonly edge: EdgeRouter | undefined;
   readonly probe: ProbePort;
   readonly secrets: SecretsPort;
+  readonly runtime?: NodeAppRuntimeDeps;
   readonly chain?: ChainTruthPort;
   readonly clock: SequencerClock;
   readonly log: SequencerLog;
@@ -149,10 +173,22 @@ export type ReconcileOutcome =
 
 const ALERT_THROTTLE_MS = 600_000;
 const GRACE_LOG_THROTTLE_MS = 60_000;
+/** The operator's own workloads (the canary) take no node-app env: they are not a node app. */
+const OPERATOR_NODE_SLUG = "operator";
 /** The actuator wire accepts at most 16 `excludeProviders`. */
 const MAX_EXCLUDED_PROVIDERS = 16;
+/** The actuator wire accepts at most 16 `allowProviders`. */
+const MAX_ALLOWED_PROVIDERS = 16;
 
 class DependencyNotReady extends Error {}
+
+interface ResolvedRuntime {
+  readonly env: Record<string, string>;
+  /** Catalog `required_placement_countries[<env>]`; empty = unconstrained. */
+  readonly requiredCountryCodes: readonly string[];
+  /** True when the env is a non-operator node app's full runtime env (`nodeAppEnv`). */
+  readonly nodeApp: boolean;
+}
 
 export class NodeDeploySequencer {
   private readonly running = new Set<string>();
@@ -355,13 +391,29 @@ export class NodeDeploySequencer {
 
   // ---- create ---------------------------------------------------------------------------------
 
+  /**
+   * The env (and placement policy) one create needs. A node APP of a non-operator node gets the SAME env
+   * the Crossplane lane rendered, with OpenBao as custodian (`nodeAppEnv`); then `RELEASE_SHA`; then
+   * its declared state bindings, which win (CD2). Anything that cannot be resolved is
+   * `DependencyNotReady`: no attempt row, no paid create, retried next tick (NO_HALF_ENV).
+   */
   private async resolveEnv(
     key: WorkloadKey,
     release: ReleaseRow
-  ): Promise<Record<string, string>> {
+  ): Promise<ResolvedRuntime> {
     const w = release.spec;
     const env: Record<string, string> = {};
-    if (w.kind === "app") env.RELEASE_SHA = release.sourceSha;
+    let requiredCountryCodes: readonly string[] = [];
+    let nodeApp = false;
+    if (w.kind === "app") {
+      const node = await this.nodeAppRuntime(key, release);
+      if (node) {
+        Object.assign(env, node.env);
+        requiredCountryCodes = node.requiredCountryCodes;
+        nodeApp = true;
+      }
+      env.RELEASE_SHA = release.sourceSha;
+    }
     if (w.kind === "state") {
       env.POSTGRES_PASSWORD = await this.d.secrets.ensureStatePassword(key);
     }
@@ -386,7 +438,70 @@ export class NodeDeploySequencer {
       }))
         env[b.env] = b.value;
     }
-    return env;
+    return { env, requiredCountryCodes, nodeApp };
+  }
+
+  private async nodeAppRuntime(
+    key: WorkloadKey,
+    release: ReleaseRow
+  ): Promise<
+    { env: Record<string, string>; requiredCountryCodes: string[] } | undefined
+  > {
+    const rt = this.d.runtime;
+    if (!rt) return undefined;
+    const w = release.spec;
+    const entry = await rt.catalog.entryFor(key.nodeId);
+    if (!entry)
+      throw new DependencyNotReady(
+        `node ${key.nodeId} is not in this operator image's catalog; its runtime env and placement cannot be resolved`
+      );
+    if (entry.slug === OPERATOR_NODE_SLUG) return undefined;
+    const publicHost = publicHostOf(w);
+    if (!publicHost)
+      throw new DependencyNotReady(
+        `app workload ${w.name} declares no public host`
+      );
+    let policy: ReturnType<typeof nodeCatalogPolicy>;
+    try {
+      policy = nodeCatalogPolicy(entry.row, key.env);
+    } catch (error) {
+      throw new DependencyNotReady(`catalog policy: ${errText(error)}`);
+    }
+    const boundEnvNames = w.bindings.map((b) => b.env);
+    let bucket: Readonly<Record<string, string>>;
+    try {
+      bucket = await rt.secrets.read(
+        key.env,
+        entry.slug,
+        nodeAppSecretKeys(w.secretKeys, boundEnvNames)
+      );
+    } catch (error) {
+      if (error instanceof NodeRuntimeSecretsError)
+        throw new DependencyNotReady(
+          `node runtime secrets ${error.code}${error.keys.length > 0 ? `: ${error.keys.join(", ")}` : ""}`
+        );
+      throw error;
+    }
+    try {
+      return {
+        env: nodeAppEnv({
+          env: key.env,
+          slug: entry.slug,
+          nodeId: key.nodeId,
+          sourceSha: release.sourceSha,
+          publicHost,
+          port: w.port,
+          substrateHost: rt.substrateHost,
+          databasePoolLimits: policy.databasePoolLimits,
+          secretKeys: w.secretKeys,
+          secrets: bucket,
+          boundEnvNames,
+        }),
+        requiredCountryCodes: [...policy.requiredCountryCodes],
+      };
+    } catch (error) {
+      throw new DependencyNotReady(errText(error));
+    }
   }
 
   /**
@@ -441,9 +556,9 @@ export class NodeDeploySequencer {
         );
       }
     }
-    let env: Record<string, string>;
+    let runtime: ResolvedRuntime;
     try {
-      env = await this.resolveEnv(key, release);
+      runtime = await this.resolveEnv(key, release);
     } catch (error) {
       return this.failAttempt(key, release, attempt, errText(error));
     }
@@ -498,6 +613,19 @@ export class NodeDeploySequencer {
         providers: excludeProviders,
         reason: excludeProviders.join(","),
       });
+    // Placement for APPS only: the interim egress-admitted provider set and the node's catalog
+    // country policy. A state workload is never constrained by either.
+    const allowProviders =
+      w.kind === "app"
+        ? (this.d.config.appProviders ?? []).slice(0, MAX_ALLOWED_PROVIDERS)
+        : [];
+    const requiredCountryCodes =
+      w.kind === "app" ? runtime.requiredCountryCodes : [];
+    if (allowProviders.length > 0 || requiredCountryCodes.length > 0)
+      await this.emit(key, release, attempt, "placement_constrained", "ok", {
+        providers: allowProviders,
+        reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
+      });
     try {
       const resource = await this.d.payer.create({
         cogniKey: attempt.cogniKey,
@@ -507,8 +635,12 @@ export class NodeDeploySequencer {
           releaseId: release.id,
           attempt: attempt.attempt,
         }),
-        spec: toPayerSpec(w, env),
+        spec: toPayerSpec(w, runtime.env, {
+          requiredCountryCodes,
+          nodeApp: runtime.nodeApp,
+        }),
         ...(excludeProviders.length > 0 ? { excludeProviders } : {}),
+        ...(allowProviders.length > 0 ? { allowProviders } : {}),
       });
       return this.bindLease(key, release, attempt, resource);
     } catch (error) {

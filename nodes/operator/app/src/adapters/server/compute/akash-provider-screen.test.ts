@@ -7,6 +7,7 @@ import {
   BLACKLIST_TTL_MS,
   countrySourcesDisagree,
   effectiveCountryCode,
+  effectiveProviderPin,
   formatBidRejections,
   formatBidRoster,
   isProviderBlacklisted,
@@ -678,5 +679,47 @@ describe("provider country resolution", () => {
       requiredCountryCodes: ["BG", "FI", "NL", "PT", "RO"],
     });
     expect(ranked.map((b) => b.provider)).toEqual(["akash15pkd"]);
+  });
+});
+
+describe("effectiveProviderPin (task.5405)", () => {
+  const A = "akash1aaa";
+  const B = "akash1bbb";
+  const C = "akash1ccc";
+
+  it("no caller list keeps the configured pin; an empty configured list is no pin", () => {
+    expect(effectiveProviderPin([A, B], undefined)).toEqual({
+      pin: new Set([A, B]),
+    });
+    expect(effectiveProviderPin([A, B], new Set())).toEqual({
+      pin: new Set([A, B]),
+    });
+    expect(effectiveProviderPin([], undefined)).toEqual({ pin: undefined });
+    expect(effectiveProviderPin(undefined, undefined)).toEqual({
+      pin: undefined,
+    });
+  });
+
+  it("with no configured pin the caller list is the pin", () => {
+    expect(effectiveProviderPin([], new Set([A]))).toEqual({
+      pin: new Set([A]),
+    });
+    expect(effectiveProviderPin(undefined, new Set([A, B]))).toEqual({
+      pin: new Set([A, B]),
+    });
+  });
+
+  it("with both, the pin is the INTERSECTION: the caller can only narrow, never widen", () => {
+    const r = effectiveProviderPin([A, B], new Set([B, C]));
+    expect(r).toEqual({ pin: new Set([B]) });
+    // C is allowed by the caller but not by the operator: it must not appear
+    expect("pin" in r && r.pin?.has(C)).toBe(false);
+  });
+
+  it("an EMPTY intersection is a clear refusal, never a silent widen to either side", () => {
+    const r = effectiveProviderPin([A], new Set([B, C]));
+    expect(r).toHaveProperty("refusal");
+    expect("refusal" in r ? r.refusal : "").toMatch(/share no provider/);
+    expect(r).not.toHaveProperty("pin");
   });
 });

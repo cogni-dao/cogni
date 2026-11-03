@@ -486,6 +486,9 @@ export function createAkashTxDispatcher(
               ...(input.excludeProviders
                 ? { excludeProviders: input.excludeProviders }
                 : {}),
+              ...(input.allowProviders
+                ? { allowProviders: input.allowProviders }
+                : {}),
             }),
           };
         }

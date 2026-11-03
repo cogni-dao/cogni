@@ -1274,6 +1274,63 @@ describe("AkashComputeAdapter allowedProviders", () => {
   });
 });
 
+describe("AkashComputeAdapter caller allowProviders (task.5405)", () => {
+  const allowed = "akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm";
+  const other = "akash1v0f04wr3tkh9uf43q9eqfd0whpfeu8qevlq99h";
+  const stranger = "akash1froggy";
+  const harnessWith = () =>
+    harness({
+      providers: [
+        providerEntry(allowed),
+        providerEntry(other),
+        providerEntry(stranger),
+      ],
+      bids: (dseq) => [
+        bidEntry(dseq, stranger, "1"),
+        bidEntry(dseq, other, "500"),
+        bidEntry(dseq, allowed, "900"),
+      ],
+    });
+
+  it("with NO operator pin the caller list is the pin: only a listed provider can win", async () => {
+    const h = harnessWith();
+    await makeAdapter(h.fetchImpl, { bidTimeoutMs: 0 }).allocateAndLease({
+      spec: SPEC,
+      allowedProviders: new Set([allowed]),
+    });
+    expect(h.leased).toEqual([{ dseq: "1", provider: allowed }]);
+  });
+
+  it("with an operator pin the caller list only NARROWS: a caller-listed provider outside the pin never wins", async () => {
+    const h = harnessWith();
+    await makeAdapter(h.fetchImpl, {
+      bidTimeoutMs: 0,
+      allowedProviders: [allowed, other],
+    }).allocateAndLease({
+      spec: SPEC,
+      allowedProviders: new Set([other, stranger]),
+    });
+    expect(h.leased).toEqual([{ dseq: "1", provider: other }]);
+  });
+
+  it("providerPinRefusal names an unsatisfiable list BEFORE anything is paid, and is undefined otherwise", () => {
+    const h = harnessWith();
+    const adapter = makeAdapter(h.fetchImpl, {
+      allowedProviders: [allowed],
+    });
+    expect(adapter.providerPinRefusal(new Set([stranger]))).toMatch(
+      /share no provider/
+    );
+    expect(adapter.providerPinRefusal(new Set([allowed, stranger]))).toBe(
+      undefined
+    );
+    expect(
+      makeAdapter(h.fetchImpl, {}).providerPinRefusal(new Set([stranger]))
+    ).toBe(undefined);
+    expect(h.leased).toEqual([]);
+  });
+});
+
 describe("AkashComputeAdapter boot SLO", () => {
   const providers = [
     providerEntry("akash1first"),

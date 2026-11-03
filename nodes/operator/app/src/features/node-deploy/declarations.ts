@@ -6,7 +6,7 @@
  * Purpose: Turn a node's workload manifests (`.cogni/workloads/*.yaml`) plus its `.cogni/repo-spec.yaml`,
  *   all read at one `sourceSha` through the operator's GitHub App, into the ONE resolved
  *   `NodeWorkloadSpec` a release stores (task.5400, story.5137).
- * Scope: Pure checks. The GitHub reads live in the route; the release write lives in the store; the
+ * Scope: Pure checks. The GitHub reads and the image-digest lookup live in the route; the release write lives in the store; the
  *   two-pass manifest check and the lowering live in `@cogni/repo-spec` (workload-manifest).
  * Invariants:
  *   - DECLARED_AT_THE_SHA: every manifest and the repo-spec come from the tree AT `sourceSha`, never
@@ -17,6 +17,15 @@
  *     workload names) before any one workload resolves, so a refused sibling refuses the release.
  *   - EXCLUSIVE_IS_REFUSED (CD6): the manifest check refuses `cogni.dev/exclusive: "true"`, because
  *     blue and green overlap and the fenced lock that makes that safe is not built yet.
+ *   - BUILT_IMAGE_IS_DIGEST_PINNED: an image of `.` lowers to the `builtImage` the caller resolved from
+ *     the node's registry at the source sha (`repo@sha256:<digest>`); with none supplied it is refused
+ *     `built_image_unresolved`, so a mutable tag can never reach a release.
+ *   - SECRET_KEYS_ARE_DECLARED_NOT_DISCOVERED (task.5405): an `app` carries the explicit, value-free list
+ *     of secret KEY names it may receive: the `cogni-node-app-v1` profile keys plus the app service's
+ *     declared `secret_refs` (`resolveRuntimeProfileSecretRefs`, the helper the Crossplane lane used).
+ *     Any operator/fleet/substrate credential on that list is refused here (`secret_ref_refused`), so
+ *     it can never reach rented compute; fleet-inherited keys that are merely in the bucket are not
+ *     on the list and are never delivered.
  *   - HOST_FOLLOWS_ENV: a manifest names its PRODUCTION host; other environments get the
  *     `-test` (candidate-a) / `-preview` / `-dev` sibling of its first label, so one manifest serves
  *     every environment without a per-env copy.
@@ -26,8 +35,10 @@
 
 import {
   extractNodeId,
+  extractNodeServices,
   lowerWorkloadManifests,
   parseRepoSpec,
+  resolveRuntimeProfileSecretRefs,
   WorkloadManifestError,
   type WorkloadManifestFile,
   type WorkloadManifestIssue,
@@ -36,6 +47,7 @@ import {
 import { parse as parseYaml } from "yaml";
 
 import type { NodeWorkloadSpec } from "@/ports";
+import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
 
 const ENV_HOST_SUFFIX: Readonly<Record<string, string | undefined>> = {
   production: undefined,
@@ -58,7 +70,8 @@ export type DeclarationErrorCode =
   | "repo_spec_unparseable"
   | "node_mismatch"
   | "workload_not_declared"
-  | "workload_manifest_refused";
+  | "workload_manifest_refused"
+  | "secret_ref_refused";
 
 export class DeclarationError extends Error {
   constructor(
@@ -71,12 +84,27 @@ export class DeclarationError extends Error {
   }
 }
 
+/**
+ * True when the manifests were refused ONLY because an image of `.` had no built image supplied, so
+ * the caller can resolve the digest node CI built at the source sha and retry (story.5127). A set
+ * with any other issue is not retried: the digest lookup could not make it pass.
+ */
+export function needsBuiltImage(error: DeclarationError): boolean {
+  return (
+    error.code === "workload_manifest_refused" &&
+    error.issues.length > 0 &&
+    error.issues.every((i) => i.code === "built_image_unresolved")
+  );
+}
+
 export function resolveWorkloadDeclaration(input: {
   readonly repoSpecText: string;
   readonly manifests: readonly WorkloadManifestFile[];
   readonly nodeId: string;
   readonly env: string;
   readonly workload: string;
+  /** The digest-pinned image node CI built at the source sha; resolves a manifest image of `.`. */
+  readonly builtImage?: string | undefined;
 }): NodeWorkloadSpec {
   // NO_SOURCE_ECHO: parse the YAML without pretty errors, and never return the parser's or the
   // schema's message (either can quote repo-spec text).
@@ -108,7 +136,10 @@ export function resolveWorkloadDeclaration(input: {
     );
   let workloads: NodeWorkloadSpec[];
   try {
-    workloads = lowerWorkloadManifests(input.manifests);
+    workloads = lowerWorkloadManifests(
+      input.manifests,
+      input.builtImage ? { builtImage: input.builtImage } : {}
+    );
   } catch (error) {
     if (error instanceof WorkloadManifestError)
       throw new DeclarationError(
@@ -124,11 +155,38 @@ export function resolveWorkloadDeclaration(input: {
       "workload_not_declared",
       `workload ${input.workload} is not declared by any .cogni/workloads/*.yaml manifest`
     );
-  if (!("http" in declared.expose)) return declared;
+  const withKeys: NodeWorkloadSpec =
+    declared.kind === "app"
+      ? { ...declared, secretKeys: appSecretKeys(spec) }
+      : declared;
+  if (!("http" in withKeys.expose)) return withKeys;
   return {
-    ...declared,
+    ...withKeys,
     expose: {
-      http: { host: hostForEnv(declared.expose.http.host, input.env) },
+      http: { host: hostForEnv(withKeys.expose.http.host, input.env) },
     },
   };
+}
+
+/**
+ * The secret KEY names an app may receive: profile keys first (contract order), then the app service's
+ * extra declared `secret_refs`, deduped. The app service is the one carrying the `cogni-node-app-v1`
+ * profile (the schema allows at most one); a repo-spec with no `deployment:` block gets the default
+ * stock service, i.e. the profile keys alone. Throws `secret_ref_refused` on any denylisted key.
+ */
+function appSecretKeys(spec: ReturnType<typeof parseRepoSpec>): string[] {
+  const service = extractNodeServices(spec).find(
+    (s) => s.runtimeProfile === "cogni-node-app-v1"
+  );
+  const keys = resolveRuntimeProfileSecretRefs({
+    runtimeProfile: "cogni-node-app-v1",
+    secretRefs: service?.secretRefs ?? [],
+  }).map((ref) => ref.key);
+  const refused = keys.filter((k) => !isOffClusterWorkloadSecretKey(k));
+  if (refused.length > 0)
+    throw new DeclarationError(
+      "secret_ref_refused",
+      `secret_refs name operator/fleet credentials that may not reach an off-cluster workload: ${refused.join(", ")}`
+    );
+  return keys;
 }

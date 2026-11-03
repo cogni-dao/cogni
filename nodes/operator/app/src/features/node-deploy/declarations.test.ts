@@ -15,15 +15,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  COGNI_NODE_APP_V1_DEPLOYMENT,
+  COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
   extractNodeServices,
   hasDeclaredNodeDeployment,
   parseRepoSpec,
+  renderNodeDeploymentYaml,
 } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
 
 import {
   DeclarationError,
   hostForEnv,
+  needsBuiltImage,
   resolveWorkloadDeclaration,
 } from "./declarations";
 
@@ -121,6 +125,41 @@ describe("the operator's checked-in canary workload manifest", () => {
     );
   });
 
+  it('an image of "." lowers to the supplied built image, and is refused without one (story.5127)', () => {
+    const built = {
+      ...CANARY,
+      text: CANARY.text.replace(/^ {4}image: .*$/m, '    image: "."'),
+    };
+    expect(built.text).not.toBe(CANARY.text);
+    const digest = `ghcr.io/cogni-dao/toks5@sha256:${"ab".repeat(32)}`;
+    expect(resolve({ manifests: [built], builtImage: digest }).image).toBe(
+      digest
+    );
+    expect(() => resolve({ manifests: [built] })).toThrow(
+      expect.objectContaining({
+        code: "workload_manifest_refused",
+        issues: [expect.objectContaining({ code: "built_image_unresolved" })],
+      })
+    );
+    const thrown = (fn: () => unknown): DeclarationError => {
+      try {
+        fn();
+      } catch (error) {
+        return error as DeclarationError;
+      }
+      throw new Error("expected a DeclarationError");
+    };
+    expect(needsBuiltImage(thrown(() => resolve({ manifests: [built] })))).toBe(
+      true
+    );
+    const exclusive = CANARY.text.replace('"false"', '"true"');
+    expect(
+      needsBuiltImage(
+        thrown(() => resolve({ manifests: [{ ...CANARY, text: exclusive }] }))
+      )
+    ).toBe(false);
+  });
+
   it("refuses another node's id, an undeclared workload, no manifests and an unparseable repo-spec", () => {
     expect(() =>
       resolve({ nodeId: "00000000-0000-4000-8000-000000000001" })
@@ -134,5 +173,41 @@ describe("the operator's checked-in canary workload manifest", () => {
     expect(() => resolve({ repoSpecText: "{{ not yaml" })).toThrow(
       DeclarationError
     );
+  });
+});
+
+describe("declared secret keys on an app release (task.5405)", () => {
+  /** The operator's repo-spec plus an app-tier `deployment:` block declaring extra secret_refs. */
+  const withRefs = (keys: string[]) => {
+    const [service] = COGNI_NODE_APP_V1_DEPLOYMENT.services;
+    if (!service) throw new Error("fixture");
+    return `${ROOT_SPEC}\n${renderNodeDeploymentYaml({
+      services: [{ ...service, secret_refs: keys.map((key) => ({ key })) }],
+    })}`;
+  };
+  const PROFILE = [...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS];
+
+  it("an app carries the profile keys; a state workload carries none", () => {
+    expect(resolve().secretKeys).toEqual(PROFILE);
+    expect(resolve({ workload: "canary-db" }).secretKeys).toBeUndefined();
+  });
+
+  it("a declared secret_ref is added after the profile keys, deduped (poly's PAPER_ENFORCE_MODE)", () => {
+    const w = resolve({
+      repoSpecText: withRefs(["PAPER_ENFORCE_MODE", "AUTH_SECRET"]),
+    });
+    expect(w.secretKeys).toEqual([...PROFILE, "PAPER_ENFORCE_MODE"]);
+    // a key merely present in some bucket is never listed: only declarations are
+    expect(w.secretKeys).not.toContain("GH_WEBHOOK_SECRET");
+  });
+
+  it("refuses a declared operator/fleet credential at lowering (secret_ref_refused), naming the key", () => {
+    for (const key of ["LITELLM_MASTER_KEY", "CLOUDFLARE_API_TOKEN"])
+      expect(() => resolve({ repoSpecText: withRefs([key]) })).toThrow(
+        expect.objectContaining({
+          code: "secret_ref_refused",
+          message: expect.stringContaining(key),
+        })
+      );
   });
 });

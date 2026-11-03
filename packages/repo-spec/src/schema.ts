@@ -492,6 +492,13 @@ export const nodeWorkloadSpecSchema = z
       )
       .max(16)
       .default([]),
+    /**
+     * Secret KEY NAMES (value-free) the operator delivers to an `app` from the node's own OpenBao
+     * bucket: the `cogni-node-app-v1` profile keys plus the node's declared `secret_refs`
+     * (task.5405). Set by the operator when it lowers a declaration at a source sha, NEVER by a
+     * manifest. Absent = the profile keys only. Operator/fleet credentials are refused at lowering.
+     */
+    secretKeys: z.array(serviceEnvKeySchema).max(64).optional(),
     /** REQUIRED, no default (CD6): does this workload do work only one live instance may do? */
     exclusive: z.boolean(),
     health: z

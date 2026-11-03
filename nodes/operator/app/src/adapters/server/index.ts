@@ -170,6 +170,8 @@ export { AdvisoryLeader } from "./node-deploy/advisory-leader.adapter";
 export { AkashChainTruth } from "./node-deploy/akash-chain-truth.adapter";
 export { CloudflareDnsRecords } from "./node-deploy/cloudflare-dns.adapter";
 export { HttpProbe } from "./node-deploy/http-probe.adapter";
+export { ImageCatalogNodes } from "./node-deploy/image-catalog.adapter";
+export { EsoNodeRuntimeSecrets } from "./node-deploy/node-runtime-secrets.adapter";
 export { PostgresNodeDeployStore } from "./node-deploy/postgres-store.adapter";
 // DEV-ONLY adapters (ConsolePayer pays straight from a Console key; FileStatePasswords writes secrets
 // to disk) are deliberately NOT exported here: the production sequencer bootstrap imports this barrel,
@@ -198,6 +200,7 @@ export { HttpLangfuseReader } from "./observability/langfuse-reader.adapter";
 export { HttpLangfuseRootOwnershipVerifier } from "./observability/langfuse-root-ownership.adapter";
 export { HttpLokiPusher } from "./observability/loki-push.adapter";
 export { HttpLokiReader } from "./observability/loki-reader.adapter";
+export { GhcrBuiltImageResolver } from "./oci/ghcr-built-image.adapter";
 export { ViemEvmOnchainClient } from "./onchain/viem-evm-onchain-client.adapter";
 export { ViemTreasuryAdapter } from "./onchain/viem-treasury.adapter";
 export { UserDrizzlePaymentAttemptRepository } from "./payments/drizzle-payment-attempt.adapter";

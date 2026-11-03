@@ -3541,6 +3541,91 @@ describe("AkashTxActuator provider strikes (task.5153)", () => {
   });
 });
 
+describe("AkashTxActuator caller allowProviders (task.5405)", () => {
+  const A = "akash1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const B = "akash1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const KEY = "xcw:cogni-preview:node-9:7";
+
+  class PinConsole extends FakeConsole {
+    lastAllowed: ReadonlySet<string> | undefined;
+    constructor(private readonly configured: readonly string[] | undefined) {
+      super();
+    }
+    override async allocateAndLease(input: {
+      spec: ProvisionSpec;
+      onAllocated?: (leaseId: string) => Promise<void>;
+      allowedProviders?: ReadonlySet<string>;
+    }): Promise<{ leaseId: string; providerAccount: string }> {
+      this.lastAllowed = input.allowedProviders;
+      return super.allocateAndLease(input);
+    }
+    /** Stands in for the real client's intersection (covered in akash-provider-screen.test.ts). */
+    providerPinRefusal(allow: ReadonlySet<string>): string | undefined {
+      if (!this.configured || this.configured.length === 0) return undefined;
+      return [...allow].some((p) => this.configured?.includes(p))
+        ? undefined
+        : "allowProviders and the configured allowlist share no provider";
+    }
+  }
+
+  function build(configured: readonly string[] | undefined) {
+    const api = new PinConsole(configured);
+    const ledger = new FakeLedger();
+    const costs = costDeps();
+    const actuator = new AkashTxActuator({
+      console: api,
+      ledger,
+      log: recordingLogger(),
+      costEvidence: costs.costEvidence,
+      costStore: costs.costStore,
+      providerConsumerAccountId: costs.providerConsumerAccountId,
+    });
+    return { api, ledger, actuator };
+  }
+
+  it("absent: the console receives no allowedProviders (byte-identical to before)", async () => {
+    const { api, actuator } = build([A]);
+    await actuator.create({
+      cogniKey: KEY,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(api.lastAllowed).toBeUndefined();
+  });
+
+  it("present and satisfiable: the console receives the caller set (it intersects with its own pin)", async () => {
+    const { api, actuator } = build([A, B]);
+    await actuator.create({
+      cogniKey: KEY,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+      allowProviders: [A],
+    });
+    expect([...(api.lastAllowed ?? [])]).toEqual([A]);
+  });
+
+  it("an empty intersection is refused BEFORE the wallet slot is claimed or anything is paid", async () => {
+    const { api, ledger, actuator } = build([B]);
+    await expect(
+      actuator.create({
+        cogniKey: KEY,
+        environment: "preview",
+        identity: IDENTITY,
+        spec: SPEC,
+        allowProviders: [A],
+      })
+    ).rejects.toMatchObject({
+      code: "provider_rejected",
+      message: expect.stringContaining("share no provider"),
+    });
+    expect(api.allocateCalls).toBe(0);
+    expect(api.cursorCalls).toBe(0);
+    expect(ledger.rows.size).toBe(0);
+  });
+});
+
 describe("AkashTxActuator release-migration receipt identity", () => {
   /** The actuator as the akash-tx composition root wires it: with a receipt store. */
   function buildWithReports() {

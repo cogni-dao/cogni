@@ -285,6 +285,11 @@ export interface AkashTxActuatorPort {
     spec: ProvisionSpec;
     /** Providers that must not win this create; unioned into the tried set, only ever narrows. */
     excludeProviders?: readonly string[];
+    /**
+     * Providers this create may win (task.5405); intersected with the configured allowlist by the
+     * console client, so it can only narrow. An unsatisfiable list is refused before the claim.
+     */
+    allowProviders?: readonly string[];
   }): Promise<AkashTxCreateResult>;
   update(input: {
     cogniKey: string;
@@ -409,7 +414,14 @@ export interface AkashTxConsolePort {
      * provider forever; the caller derives this from durable allocation receipts instead.
      */
     excludedProviders?: ReadonlySet<string>;
+    /** Caller allowlist (task.5405), intersected with the client's configured allowlist. */
+    allowedProviders?: ReadonlySet<string>;
   }): Promise<{ leaseId: string; providerAccount: string }>;
+  /**
+   * Pre-spend refusal (task.5405): why a caller `allowProviders` can never be satisfied against the
+   * client's configured allowlist, or undefined. Optional so fakes without a pin need not implement it.
+   */
+  providerPinRefusal?(allow: ReadonlySet<string>): string | undefined;
   /**
    * Classify the wallet beyond a pre-transaction baseline into exactly one of three worlds:
    * `adopted` (one live allocation — it is ours), `settled` (no LIVE allocation beyond the

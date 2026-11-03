@@ -31,9 +31,17 @@ The node-deploy blue/green sequencer (task.5400, story.5127) and its read model.
 
 ## Public Surface
 
-- **Exports:** `NodeDeploySequencer`, `DEFAULT_SEQUENCER_CONFIG`, `buildWorkloadView`, `buildReleaseDetail`, `deriveReleaseTimeline`, `readWorkloadDeclarations` (reads repo-spec + `.cogni/workloads/*.yaml` at one sha through the deploy-plane port; story.5137), declaration/edge helpers
+- **Exports:** `NodeDeploySequencer`, `DEFAULT_SEQUENCER_CONFIG`, `buildWorkloadView`, `buildReleaseDetail`, `deriveReleaseTimeline`, `readWorkloadDeclarations` (reads repo-spec + `.cogni/workloads/*.yaml` at one sha from the repo it is handed, through the deploy-plane port; story.5137), `resolveWorkloadDeclaration` + `needsBuiltImage` (declaration check and lowering; an image of `.` takes the `builtImage` digest), declaration/edge helpers
 - **Routes (via app/):** `GET|POST /api/v1/deploy/workloads`, `GET /api/v1/deploy/workloads/releases/{releaseId}?nodeId=&env=`
 - **Files considered API:** `sequencer.ts`, `release-view.ts`, `declarations.ts`, `read-declarations.ts`
+
+## Where a node deploys from (story.5127)
+
+`POST /deploy/workloads` deploys a node from ITS OWN repo, not the operator's.
+
+1. **Repo.** The route calls `DeployPlanePort.resolveNodeSource({parentOwner, parentRepo, slug})`. It reads `infra/catalog/<slug>.yaml@main` through the App (the same read as `resolveNodeRepo`). A remote-source node (has `source_repo`) returns its own `{owner, repo}` plus `image_repository` (`ghcr.io/<owner>/<repo>`). An in-repo node (the operator) returns the parent repo with `imageRepository: null`. A missing row is 404 `catalog_missing`.
+2. **Declarations.** `.cogni/repo-spec.yaml` and `.cogni/workloads/*.yaml` are read from that repo at `sourceSha` (DECLARED_AT_THE_SHA). The repo-spec `node_id` must equal the requested node (`node_mismatch`).
+3. **Built image.** A manifest image of `.` means "the image node CI built at this sha". Only when a manifest asks for it, the route calls `BuiltImageResolverPort.resolveBuiltImage` (anonymous ghcr.io OCI API: pull token, then `HEAD /v2/<path>/manifests/sha-<sha>`, read `Docker-Content-Digest`). The lowered image is `<image_repository>@sha256:<digest>`, never a tag. No such image (or not public) is 422 `built_image_not_found` BEFORE any write; a registry failure is 502 `built_image_lookup_failed`. An in-repo node has no image repository, so `.` stays `built_image_unresolved` (422) and its manifest pins images by digest.
 
 ## Observability contract (task.5400)
 
@@ -56,6 +64,20 @@ A node developer has THREE views of one deploy. They are written by the same cod
 Operator-only: the Grafana dashboard `cogni-node-deploy` and the alerts in `infra/grafana/alerts/node-deploy.alerts.yaml` (release parked, no leader for 10m, leadership lost, repeated proof_timeout). The no-leader alert relies on the bootstrap's once-a-minute `node_deploy_sequencer_leader {heartbeat:true}`.
 
 **Hairpin rule.** An app cannot reach a state lease's public forwarded port on its own provider, so every app create excludes blue's provider AND the provider of each bound state workload's active lease (`excludeProviders`, deduped, max 16, logged as step `providers_excluded`).
+
+## Node app runtime env and placement (task.5405)
+
+A node APP of a non-operator node gets the SAME env the retired Crossplane lane rendered, with OpenBao as custodian. The operator's own workloads (slug `operator`) and the dev harness (no `runtime` dep) get only `RELEASE_SHA` and bindings.
+
+- **Env.** `node-app-env.ts` (`nodeAppEnv`, pure, parity-pinned key by key in `node-app-env.test.ts` against `infra/crossplane/xcomputeworkload/composition.yaml` l.185-284). Order, later wins: `HOST/HOSTNAME/PORT`, `APP_ENV`, `DEPLOY_ENVIRONMENT`, `COGNI_REPO_SHA`, substrate topology (`NODE_DEPLOY_SUBSTRATE_HOST`), bucket secrets, `COGNI_NODE_ID`, DB pool maxes (catalog), identity (`NODE_NAME`, `NEXTAUTH_URL`, ...). Then `RELEASE_SHA`, then declared state bindings (CD2: a binding beats the bucket). Injected env beats a same-named declared `env`.
+- **Declared keys only.** An `app` release carries `secretKeys` (value-free): the `cogni-node-app-v1` profile keys plus the app service's declared `secret_refs` from the node's repo-spec AT `sourceSha`, computed in `declarations.ts` with `resolveRuntimeProfileSecretRefs` (the helper the Crossplane lane used). A denylisted key (`OFF_CLUSTER_WORKLOAD_DENIED_KEYS`) is refused at lowering (`secret_ref_refused`, 422). A fleet-inherited key that merely sits in the node's bucket (`GH_WEBHOOK_SECRET`, `POSTHOG_API_KEY`, ...) is never on the list and never delivered. `LITELLM_VIRTUAL_KEY` is delivered as `LITELLM_MASTER_KEY`. Every declared key (minus those a state binding supplies) must be present.
+- **Secrets (existing custody path).** `NodeRuntimeSecretsPort` (`EsoNodeRuntimeSecrets`) ensures ONE ExternalSecret `nd-<slug>-env` in the sequencer's OWN namespace (`NODE_DEPLOY_SECRETS_NAMESPACE`): `ClusterSecretStore openbao-backend` (ESO's `eso-reader`), explicit `data:` entries `{secretKey: K, remoteRef: {key: <env>/<slug>, property: K}}` for exactly the declared keys (NO `dataFrom: extract`), target `nd-<slug>-env` (Owner, 5m). The slug comes from the image catalog mapping, never caller text. It waits a bounded 20 s for Ready, then reads the target Secret and returns exactly the requested keys. Custody stays in OpenBao; there is NO new OpenBao role and no root token. The sequencer is the ONLY writer of that ExternalSecret (Role: externalsecrets get/create/patch/update in its namespace only). A declared key with no OpenBao property leaves the ExternalSecret not Ready, so nothing is paid.
+- **Cluster-side bound.** ESO's store reads `cogni/data/*`, so the sequencer's ExternalSecret rights are fenced by a `ValidatingAdmissionPolicy` + binding (`infra/k8s/base/node-deploy-sequencer/admission-policy.yaml`, bound per overlay to `cogni-node-deploy-<env>`, `failurePolicy: Fail`, `Deny`): store pinned to `ClusterSecretStore/openbao-backend`, no `dataFrom`, no per-entry `sourceRef`, every key `<this env>/<slug>` and never `operator`, `scheduler-worker`, `akash-tx-actuator`, `_system`, `_shared`, `openfga`, `litellm`, `doltgres`, `temporal`, `postgres`, `redis`, `grafana`, `loki` or any bucket containing `database`; target `nd-*`. Pinned by `tests/ci-invariants/node-deploy-sequencer-admission.spec.ts`. Sequencer code is not the boundary.
+- **NO_HALF_ENV.** A missing key, an ExternalSecret that is not Ready, a node the image catalog does not know, or a malformed catalog cell throws `DependencyNotReady` BEFORE the attempt row exists: step `dependency/waiting` names the keys (never values), nothing is paid, no attempt is burned, and the next tick retries.
+- **Catalog.** `NodeCatalogPort` (`ImageCatalogNodes`) resolves node id -> slug + row from `/app/infra/catalog` baked in the image. `node-catalog-policy.ts` reads `required_placement_countries[<env>]` (sent as `spec.placement.requiredCountryCodes`; apps only) and `database.<env>.runtimePoolLimits`.
+- **Placement.** `SequencerConfig.appProviders` (`NODE_DEPLOY_APP_PROVIDERS`, INTERIM, task.5384, expires 2026-11-23) is sent as `allowProviders` on app creates; the actuator INTERSECTS it with its own allowlist and refuses an empty result before paying. Step `placement_constrained` records it.
+- **Start command.** A node app that receives a DSN starts through `databaseConsumerCommand` (DB CA trust wrapper), as the Crossplane lane did.
+- **Not here.** Loki lease push (operator-bucket credentials) and the release-side migration Job are not wired by the sequencer (see the PR).
 
 ## Responsibilities
 

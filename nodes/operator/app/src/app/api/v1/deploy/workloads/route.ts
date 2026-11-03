@@ -7,11 +7,12 @@
  *   deploy ONE declared workload at a source sha; `GET` reads the desired row with its explicit
  *   release state (queued|deploying|active|parked|superseded|failed), the active attempt and recent
  *   attempts with their step timelines (`releases/{releaseId}` is the per-release detail).
- * Scope: Authorizes per env, reads the node's `.cogni/repo-spec.yaml` and every workload manifest
- *   (`.cogni/workloads/*.yaml`) AT `sourceSha` through the operator GitHub App, checks and lowers the
- *   manifests, resolves the one requested workload, and writes an immutable release plus the desired
- *   row in one transaction. It never calls the actuator and never touches DNS: the sequencer executes
- *   the intent.
+ * Scope: Authorizes per env, resolves the node's OWN source repo and image repository from its catalog
+ *   row, reads that repo's `.cogni/repo-spec.yaml` and every workload manifest (`.cogni/workloads/*.yaml`)
+ *   AT `sourceSha` through the operator GitHub App, resolves a manifest image of `.` to the digest node
+ *   CI built at that sha, checks and lowers the manifests, resolves the one requested workload, and
+ *   writes an immutable release plus the desired row in one transaction. It never calls the actuator
+ *   and never touches DNS: the sequencer executes the intent.
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: production needs `node.promote_production` (`can_promote_production`);
  *     candidate-a and preview need `node.manage_envs` (`can_manage_envs`) — the promote route's pattern —
@@ -19,6 +20,11 @@
  *   - INTENT_ONLY: a 200 means a release row exists, not that anything is deployed.
  *   - DECLARED_AT_THE_SHA: the manifests and the repo-spec are read at the requested sha from the
  *     node's repo, and the repo-spec `node_id` must equal the requested node.
+ *   - NODE_DEPLOYS_FROM_ITS_OWN_REPO: the repo comes from the node's catalog row (`resolveNodeSource`):
+ *     a remote-source node reads its own `source_repo` and image repository; an in-repo node (the
+ *     operator) reads the parent repo as before and resolves no built image.
+ *   - BUILT_IMAGE_IS_DIGEST_PINNED: an image of `.` becomes `<image_repository>@sha256:<digest>` for
+ *     `sha-<sourceSha>`. An image that does not exist is 422 `built_image_not_found` before any write.
  *   - REFUSED_BEFORE_PAID_CREATE: a manifest the two-pass check refuses returns 422
  *     `workload_manifest_refused` with every issue; no release row is written.
  *   - STATE_IS_CREATE_ONCE: a `state` workload that already has a desired row is refused with 409; a
@@ -27,11 +33,10 @@
  *     until the off-provider backup debt row closes; the only exception is the operator node's own
  *     `canary-db`.
  *   - NO_SOURCE_ECHO: a 502 read failure never returns the GitHub/Octokit message.
- *   - YELLOW_OPERATOR_ONLY (S1): the files are read from the operator's parent repo root, so only the
- *     operator node can declare workloads today. Any other node fails `node_mismatch` (422).
- * Side-effects: IO (authz check, GitHub App contents read, operator Postgres write)
+ * Side-effects: IO (authz check, GitHub App contents read, anonymous ghcr.io manifest read, operator
+ *   Postgres write)
  * Links: contracts/deploy.workloads.v1.contract.ts, features/node-deploy/declarations.ts,
- *   features/node-deploy/read-declarations.ts,
+ *   features/node-deploy/read-declarations.ts, ports/built-image.port.ts,
  *   packages/repo-spec/src/workload-manifest.ts, docs/spec/rbac.md, hub `node-service-delivery`,
  *   hub `workload-manifest`
  * @public
@@ -39,6 +44,7 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { createBuiltImageResolver } from "@/bootstrap/capabilities/built-image-resolver";
 import { createNodeDeployStore } from "@/bootstrap/capabilities/node-deploy-store";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -48,6 +54,7 @@ import {
 } from "@/contracts/deploy.workloads.v1.contract";
 import {
   DeclarationError,
+  needsBuiltImage,
   resolveWorkloadDeclaration,
 } from "@/features/node-deploy/declarations";
 import {
@@ -55,6 +62,7 @@ import {
   type WorkloadDeclarationsRead,
 } from "@/features/node-deploy/read-declarations";
 import { buildWorkloadView } from "@/features/node-deploy/release-view";
+import { BuiltImageRegistryError, type ResolvedNodeSource } from "@/ports";
 import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
@@ -107,13 +115,26 @@ export const POST = wrapRouteHandlerWithLogging(
           { status: 503 }
         );
 
+      let source: ResolvedNodeSource;
       let read: WorkloadDeclarationsRead;
       try {
-        read = await readWorkloadDeclarations(
-          createOperatorDeployPlane(envConfig),
-          { owner, repo, sourceSha }
-        );
+        const plane = createOperatorDeployPlane(envConfig);
+        source = await plane.resolveNodeSource({
+          parentOwner: owner,
+          parentRepo: repo,
+          slug: node.slug,
+        });
+        read = await readWorkloadDeclarations(plane, {
+          owner: source.owner,
+          repo: source.repo,
+          sourceSha,
+        });
       } catch (error) {
+        if ((error as { code?: unknown })?.code === "catalog_missing")
+          return NextResponse.json(
+            { error: "catalog_missing" },
+            { status: 404 }
+          );
         // NO_SOURCE_ECHO: never return the Octokit/GitHub message; log it for the operator instead.
         ctx.log.warn(
           {
@@ -147,15 +168,59 @@ export const POST = wrapRouteHandlerWithLogging(
           { status: 422 }
         );
 
-      let spec: ReturnType<typeof resolveWorkloadDeclaration>;
-      try {
-        spec = resolveWorkloadDeclaration({
+      const declare = (builtImage?: string) =>
+        resolveWorkloadDeclaration({
           repoSpecText: read.repoSpecText,
           manifests: read.manifests,
           nodeId: node.id,
           env,
           workload,
+          builtImage,
         });
+      let spec: ReturnType<typeof resolveWorkloadDeclaration>;
+      try {
+        try {
+          spec = declare();
+        } catch (error) {
+          // An image of `.` needs the digest node CI built at this sha. Resolve it only when a
+          // manifest asks for it, and only for a node that has an image repository.
+          if (
+            !(error instanceof DeclarationError) ||
+            !needsBuiltImage(error) ||
+            source.imageRepository === null
+          )
+            throw error;
+          let builtImage: string | null;
+          try {
+            builtImage = await createBuiltImageResolver().resolveBuiltImage({
+              imageRepository: source.imageRepository,
+              sourceSha,
+            });
+          } catch (lookupError) {
+            if (!(lookupError instanceof BuiltImageRegistryError))
+              throw lookupError;
+            ctx.log.warn(
+              { reqId: ctx.reqId, err: lookupError.message },
+              "node-deploy built image lookup failed"
+            );
+            return NextResponse.json(
+              {
+                error: "built_image_lookup_failed",
+                message: "could not read the image registry; retry",
+              },
+              { status: 502 }
+            );
+          }
+          if (builtImage === null)
+            return NextResponse.json(
+              {
+                error: "built_image_not_found",
+                message: `no public image ${source.imageRepository}:sha-${sourceSha}; build the node at this sha first`,
+              },
+              { status: 422 }
+            );
+          spec = declare(builtImage);
+        }
       } catch (error) {
         if (error instanceof DeclarationError)
           return NextResponse.json(

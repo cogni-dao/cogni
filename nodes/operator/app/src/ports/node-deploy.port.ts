@@ -170,11 +170,17 @@ export function consecutiveFailures(
 /** The provider-agnostic spec on the actuator v1 wire (`AkashTxSpecSchema`). */
 export interface PayerSpec {
   readonly name: string;
+  /**
+   * Hard placement requirement (ISO 3166-1 alpha-2), from the node's catalog policy
+   * `required_placement_countries[<env>]` (task.5405). Absent = the actuator's default screening.
+   */
+  readonly placement?: { readonly requiredCountryCodes: readonly string[] };
   readonly services: readonly {
     readonly name: string;
     readonly image: string;
     readonly env?: Readonly<Record<string, string>>;
     readonly command?: readonly string[];
+    readonly args?: readonly string[];
     readonly cpuUnits: number;
     readonly memoryMi: number;
     readonly storageMi: number;
@@ -210,6 +216,13 @@ export interface PayerCreateRequest {
    * proof refusal stays as the backstop.
    */
   readonly excludeProviders?: readonly string[];
+  /**
+   * Providers this create MAY win (task.5405): the interim set whose egress is admitted to the
+   * shared substrate. The actuator INTERSECTS it with its own configured allowlist (never widens it)
+   * and refuses with a clear reason when the intersection is empty. Only ActuatorPayer sends it;
+   * the dev ConsolePayer ignores it. Absent = no caller allowlist.
+   */
+  readonly allowProviders?: readonly string[];
 }
 
 export interface PayerResource {

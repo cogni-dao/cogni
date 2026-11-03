@@ -25,6 +25,12 @@
  *   - NO_EDGE_NO_HTTP_APPS: without Cloudflare credentials the process still runs (state workloads work)
  *     and the sequencer refuses http apps BEFORE paying.
  *   - FAIL_LOUD_FOR_ITSELF: a missing actuator token or database URL refuses boot (CrashLoopBackOff).
+ *   - NODE_APP_ENV_NEEDS_ITS_INPUTS (task.5405): `NODE_DEPLOY_SUBSTRATE_HOST` is required, because a node app
+ *     deployed without it would run with a half env. Node secrets arrive through the existing custody path
+ *     (OpenBao -> ESO -> a Secret in `NODE_DEPLOY_SECRETS_NAMESPACE`); this process holds NO OpenBao
+ *     identity and needs no new OpenBao role.
+ *   - INTERIM_APP_PROVIDERS (task.5405): `NODE_DEPLOY_APP_PROVIDERS` (comma-separated akash accounts, max 16)
+ *     is sent as `allowProviders` on every APP create; unset sends none.
  * Side-effects: IO (Postgres, actuator HTTP, Cloudflare, Kubernetes API, provider ingress; health listener)
  * Links: @features/node-deploy/sequencer, infra/k8s/base/node-deploy-sequencer, task.5400
  * @internal
@@ -41,7 +47,9 @@ import {
   AdvisoryLeader,
   AkashChainTruth,
   CloudflareDnsRecords,
+  EsoNodeRuntimeSecrets,
   HttpProbe,
+  ImageCatalogNodes,
   KubernetesStatePasswords,
   PostgresNodeDeployStore,
 } from "@/adapters/server";
@@ -137,6 +145,21 @@ if (!secretsNamespace || secretsNamespace === namespace) {
   );
 }
 
+const substrateHost = runtimeEnv.NODE_DEPLOY_SUBSTRATE_HOST;
+if (!substrateHost) {
+  log.fatal(
+    { reason: "NodeAppRuntimeInputsMissing" },
+    "node_deploy_sequencer_node_app_runtime_unconfigured"
+  );
+  throw new Error(
+    "NODE_DEPLOY_SUBSTRATE_HOST is required; a node app would run with a half env"
+  );
+}
+const appProviders = (runtimeEnv.NODE_DEPLOY_APP_PROVIDERS ?? "")
+  .split(",")
+  .map((p) => p.trim())
+  .filter(Boolean);
+
 // ONE connection TOTAL: infra/database-budget-profiles.yaml operator-control-v1 budgets exactly one
 // for this process and tests/ci-invariants/operator-db-budget.spec.ts counts it.
 const db = createAppDbClient(databaseUrl, {
@@ -154,6 +177,13 @@ const sequencer = new NodeDeploySequencer({
   edge,
   probe: new HttpProbe(),
   secrets: new KubernetesStatePasswords(secretsNamespace, environment),
+  runtime: {
+    secrets: new EsoNodeRuntimeSecrets({ namespace: secretsNamespace }),
+    catalog: new ImageCatalogNodes({
+      root: runtimeEnv.COGNI_IMAGE_ROOT ?? "/app",
+    }),
+    substrateHost,
+  },
   ...(runtimeEnv.AKASH_CHAIN_OWNER
     ? { chain: new AkashChainTruth({ owner: runtimeEnv.AKASH_CHAIN_OWNER }) }
     : {}),
@@ -166,6 +196,7 @@ const sequencer = new NodeDeploySequencer({
     ...DEFAULT_SEQUENCER_CONFIG,
     namespace,
     environment,
+    ...(appProviders.length > 0 ? { appProviders } : {}),
     retainMs: num(
       runtimeEnv.NODE_DEPLOY_RETAIN_MS,
       DEFAULT_SEQUENCER_CONFIG.retainMs,

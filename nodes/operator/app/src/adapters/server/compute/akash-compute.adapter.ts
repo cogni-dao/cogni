@@ -60,6 +60,7 @@ import {
   type AkashProviderInfo,
   countrySourcesDisagree,
   effectiveCountryCode,
+  effectiveProviderPin,
   formatBidRejections,
   formatBidRoster,
   type ProviderOutcomeStats,
@@ -1084,6 +1085,10 @@ export class AkashComputeAdapter
      * bounded-recovery attempt. The caller derives this from allocation receipts.
      */
     excludedProviders?: ReadonlySet<string>;
+    /**
+     * Caller allowlist (task.5405), INTERSECTED with the configured allowlist. Only ever narrows.
+     */
+    allowedProviders?: ReadonlySet<string>;
   }): Promise<{ leaseId: string; providerAccount: string }> {
     const sdl = buildAkashSdl(
       p.spec,
@@ -1099,9 +1104,20 @@ export class AkashComputeAdapter
           }
         : undefined,
       retainsStorage(p.spec),
-      p.allocationPolicy
+      p.allocationPolicy,
+      p.allowedProviders
     );
     return { leaseId: String(dseq), providerAccount: provider };
+  }
+
+  /**
+   * Pre-spend check (task.5405): why a caller `allowProviders` can NEVER be satisfied against this
+   * client's configured allowlist, or undefined when it can. Lets the actuator refuse BEFORE it claims
+   * the wallet slot or opens an escrow.
+   */
+  providerPinRefusal(allow: ReadonlySet<string>): string | undefined {
+    const effective = effectiveProviderPin(this.config.allowedProviders, allow);
+    return "refusal" in effective ? effective.refusal : undefined;
   }
 
   /**
@@ -1115,7 +1131,8 @@ export class AkashComputeAdapter
     tried: Set<string>,
     onAllocated?: (resource: ProvisionOutput) => Promise<void>,
     retainStorage = false,
-    allocationPolicy?: AkashTxAllocationPolicy
+    allocationPolicy?: AkashTxAllocationPolicy,
+    callerAllowed?: ReadonlySet<string>
   ): Promise<{ dseq: string; provider: string }> {
     const created = await this.request<{ dseq?: string; manifest?: unknown }>(
       "POST",
@@ -1176,7 +1193,8 @@ export class AkashComputeAdapter
         dseq,
         screening,
         tried,
-        allocationPolicy
+        allocationPolicy,
+        callerAllowed
       );
       provider = String(bid.provider);
       leaseAttempted = true;
@@ -1267,17 +1285,24 @@ export class AkashComputeAdapter
     dseq: string,
     screening: ScreeningContext,
     tried: ReadonlySet<string>,
-    allocationPolicy?: AkashTxAllocationPolicy
+    allocationPolicy?: AkashTxAllocationPolicy,
+    callerAllowed?: ReadonlySet<string>
   ): Promise<ConsoleBidId> {
     const deadline = Date.now() + this.bidTimeoutMs;
     const preferred = this.config.preferredProviders ?? [];
     // An EMPTY configured list collapses to `undefined` == no pin. Spelled out because `[]`
     // is TRUTHY: the old `config.allowedProviders ? new Set(...)` turned an empty list into
     // an empty Set, i.e. "no provider is permitted", which refused every bid in silence.
-    const allowed =
-      this.config.allowedProviders && this.config.allowedProviders.length > 0
-        ? new Set(this.config.allowedProviders)
-        : undefined;
+    // task.5405: the caller's `allowProviders` can only NARROW the configured pin (never widen it).
+    // An empty intersection was already refused by `providerPinRefusal` before anything was paid; if
+    // it reaches here anyway, fail loudly instead of screening against the wider set.
+    const effective = effectiveProviderPin(
+      this.config.allowedProviders,
+      callerAllowed
+    );
+    if ("refusal" in effective)
+      throw new AkashComputeError("NO_ELIGIBLE_BIDS", effective.refusal);
+    const allowed = effective.pin;
     let sawAnyBid = false;
     // Carried out of the loop so NO_ELIGIBLE_BIDS can name WHICH filter refused everything.
     // Three independent filters can each empty the set; a static reason list sent operators

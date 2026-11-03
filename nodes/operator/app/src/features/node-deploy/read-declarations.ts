@@ -5,7 +5,8 @@
  * Module: `@features/node-deploy/read-declarations`
  * Purpose: Read a node's `.cogni/repo-spec.yaml` and every workload manifest (`.cogni/workloads/*.yaml`)
  *   at ONE source sha through the deploy plane, so the deploy route only maps outcomes to HTTP (story.5137).
- * Scope: Read orchestration only. It does not check or lower manifests (that is `declarations.ts` plus
+ * Scope: Read orchestration only. The caller names the repo (the node's own repo from its catalog row,
+ *   story.5127); this module never decides which repo to read. It does not check or lower manifests (that is `declarations.ts` plus
  *   `@cogni/repo-spec`), and it does not write anything.
  * Invariants:
  *   - DECLARED_AT_THE_SHA: every read names `ref: sourceSha`; nothing reads a branch.

@@ -159,6 +159,21 @@ export class ActuatorPayer implements PayerPort {
     const exclude = (req.excludeProviders ?? []).filter((p) =>
       PROVIDER_ACCOUNT.test(p)
     );
+    // Same strictness as `exclude`: only well-formed accounts, deduped, at most the wire's 16. A
+    // malformed or over-long caller list is NARROWED here, never widened: an empty result is simply
+    // not sent (and the sequencer never calls with an empty list).
+    const allow = [
+      ...new Set(
+        (req.allowProviders ?? []).filter((p) => PROVIDER_ACCOUNT.test(p))
+      ),
+    ].slice(0, 16);
+    if ((req.allowProviders?.length ?? 0) > 0 && allow.length === 0)
+      // Never turn an allowlist that was REQUESTED into "no allowlist": refuse before anything is paid.
+      throw new PayerError(
+        "invalid_request",
+        "allowProviders held no well-formed provider account; refusing rather than widening placement",
+        false
+      );
     const out = await this.post(
       "/v1/akash/create",
       {
@@ -169,6 +184,8 @@ export class ActuatorPayer implements PayerPort {
         // Only when non-empty: absent stays byte-identical to the pre-exclusion wire. Only well-formed
         // account addresses are sent (the wire is strict: one malformed value would 400 the create).
         ...(exclude.length > 0 ? { excludeProviders: exclude } : {}),
+        // Absent stays byte-identical to the pre-task.5405 wire.
+        ...(allow.length > 0 ? { allowProviders: allow } : {}),
       },
       this.cfg.createTimeoutMs ?? 600_000,
       true

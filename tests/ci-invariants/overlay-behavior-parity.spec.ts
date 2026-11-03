@@ -238,6 +238,19 @@ const IDENTITY: Record<string, Rule[]> = {
       ),
     },
     {
+      why: "the admission binding selects THIS env's dedicated node-deploy namespace (task.5405)",
+      pattern:
+        /^patch\[ValidatingAdmissionPolicyBinding\/node-deploy-sequencer-externalsecrets\] replace \/spec\/matchResources\/namespaceSelector\/matchExpressions\/0\/values\[0\]$/,
+    },
+    {
+      why: "the environment VM's DNS alias (`vm_host_for_env`) the shared substrate answers on (task.5405)",
+      pattern: envValue(
+        "node-deploy-sequencer",
+        "sequencer",
+        "NODE_DEPLOY_SUBSTRATE_HOST"
+      ),
+    },
+    {
       why: "env name",
       pattern: envValue(
         "database-reliability-actuator",

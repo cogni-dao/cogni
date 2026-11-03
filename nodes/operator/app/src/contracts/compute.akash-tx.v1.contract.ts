@@ -259,6 +259,14 @@ export const AkashTxCreateInputSchema = z.strictObject({
    * never replaces it. ABSENT is byte-identical to the pre-task.5400 wire and behaviour.
    */
   excludeProviders: z.array(ProviderAccountSchema).max(16).optional(),
+  /**
+   * OPTIONAL providers this create MAY win (task.5405): the interim set whose egress is admitted to
+   * the shared substrate. The actuator INTERSECTS it with its own configured allowlist and can only
+   * NARROW the eligible bids, never widen them; an empty intersection is refused BEFORE anything is
+   * paid. `min(1)`: an empty list is a typo, never "any provider" (omit the field for that). ABSENT is
+   * byte-identical to the pre-task.5405 wire and behaviour.
+   */
+  allowProviders: z.array(ProviderAccountSchema).min(1).max(16).optional(),
   /** DEPRECATED, parsed and ignored — see `AkashTxDeprecatedMigrationSchema`. */
   migration: AkashTxDeprecatedMigrationSchema.optional(),
 });
