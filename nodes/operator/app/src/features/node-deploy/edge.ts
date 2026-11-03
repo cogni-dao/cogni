@@ -11,9 +11,10 @@
  *     any request. The zone is production. The regex is built from the image catalog
  *     (`edgeHostRegexFor`): the operator's canary plus every node whose `compute_api[<env>]` is
  *     `node-deploy`, so no per-node overlay edit is needed (CD1). The bare default is canary-only.
- *   - HOST_IS_THE_NODES_OWN: a release may only claim `hostOwnedBy(host, env, slug)`: the node's own
- *     slug (the operator's canary label for the operator) plus the env's `-test`/`-preview`/`-dev`
- *     suffix, so one node can never take another's host and operator hosts are never claimable.
+ *   - HOST_IS_THE_NODES_OWN: a release may only claim `hostOwnedBy(host, env, slug, workload)`: the node's own
+ *     slug (the operator's canary label for the operator), or `<slug>-<workload>` for a sibling workload of
+ *     that node, plus the env's `-test`/`-preview`/`-dev` suffix, so one node can never take another's host
+ *     and operator hosts are never claimable.
  *   - NEVER_WITHDRAWN: the port has no delete; a record stays at the last proven lease through any
  *     lease failure and is only ever re-pointed (bug.5188, bug.5301).
  *   - ADOPT_BY_NAME: an existing record is updated in place whatever its type (bug.5152); a second
@@ -52,15 +53,31 @@ export function edgeHostRegexFor(slugs: Iterable<string>): RegExp {
     ...[...new Set(slugs)].filter((s) => s !== OPERATOR_SLUG).sort(),
   ].map(escapeRegex);
   return new RegExp(
-    `^(${names.join("|")})(-[a-z]+)?\\.${escapeRegex(EDGE_ZONE)}$`
+    `^(${names.join("|")})(-[a-z]+(-[a-z]+)?)?\\.${escapeRegex(EDGE_ZONE)}$`
   );
 }
 
-/** True when `host` is exactly the host `slug` may claim in `env` (production name + env suffix). */
-export function hostOwnedBy(host: string, env: string, slug: string): boolean {
+/**
+ * True when `host` is a host `slug` may claim in `env`: its own production name plus the env suffix, or,
+ * for a sibling `workload` of the node (task.5272, e.g. red's `sandbox`), `<slug>-<workload>` plus the same
+ * suffix (`red-sandbox`, `red-sandbox-test`, `red-sandbox-preview`). The operator owns only its canary
+ * label; a workload never widens it.
+ */
+export function hostOwnedBy(
+  host: string,
+  env: string,
+  slug: string,
+  workload?: string
+): boolean {
   const label = slug === OPERATOR_SLUG ? CANARY_LABEL : slug;
+  const labels =
+    workload && slug !== OPERATOR_SLUG && workload !== slug
+      ? [label, `${label}-${workload}`]
+      : [label];
   try {
-    return host.toLowerCase() === hostForEnv(`${label}.${EDGE_ZONE}`, env);
+    return labels.some(
+      (l) => host.toLowerCase() === hostForEnv(`${l}.${EDGE_ZONE}`, env)
+    );
   } catch {
     return false;
   }

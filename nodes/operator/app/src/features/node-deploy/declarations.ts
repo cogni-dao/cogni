@@ -148,7 +148,13 @@ export function resolveWorkloadDeclaration(input: {
     );
   const withKeys: NodeWorkloadSpec =
     declared.kind === "app"
-      ? { ...declared, secretKeys: appSecretKeys(spec) }
+      ? isWorkerService(spec, declared.name)
+        ? {
+            ...declared,
+            secretKeys: workerSecretKeys(spec, declared.name),
+            runtimeProfile: "worker",
+          }
+        : { ...declared, secretKeys: appSecretKeys(spec) }
       : declared;
   if (!("http" in withKeys.expose)) return withKeys;
   return {
@@ -157,6 +163,50 @@ export function resolveWorkloadDeclaration(input: {
       http: { host: hostForEnv(withKeys.expose.http.host, input.env) },
     },
   };
+}
+
+/**
+ * True when `name` is a sibling worker of the node app (task.5272): the repo-spec has a service of that
+ * name with NO runtime profile AND a distinct service carrying the node-app profile. Both must hold, so
+ * a node whose own app service merely lacks `runtime_profile` still lowers as the node app (fail safe).
+ */
+function isWorkerService(
+  spec: ReturnType<typeof parseRepoSpec>,
+  name: string
+): boolean {
+  const services = extractNodeServices(spec);
+  const own = services.find((s) => s.name === name);
+  return (
+    own !== undefined &&
+    own.runtimeProfile === undefined &&
+    services.some(
+      (s) => s.name !== name && s.runtimeProfile === "cogni-node-app-v1"
+    )
+  );
+}
+
+/**
+ * The secret KEY names a worker may receive: ONLY the `secret_refs` its own service declares (no profile
+ * keys). Throws `secret_ref_refused` on any denylisted key, exactly like an app.
+ */
+function workerSecretKeys(
+  spec: ReturnType<typeof parseRepoSpec>,
+  name: string
+): string[] {
+  const keys = [
+    ...new Set(
+      (
+        extractNodeServices(spec).find((s) => s.name === name)?.secretRefs ?? []
+      ).map((r) => r.key)
+    ),
+  ];
+  const refused = keys.filter((k) => !isOffClusterWorkloadSecretKey(k));
+  if (refused.length > 0)
+    throw new DeclarationError(
+      "secret_ref_refused",
+      `secret_refs name operator/fleet credentials that may not reach an off-cluster workload: ${refused.join(", ")}`
+    );
+  return keys;
 }
 
 /**
