@@ -11,7 +11,13 @@
 import { describe, expect, it } from "vitest";
 
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
-import { DEFAULT_EDGE_HOST_REGEX, EdgeGuardError, EdgeRouter } from "./edge";
+import {
+  DEFAULT_EDGE_HOST_REGEX,
+  EdgeGuardError,
+  EdgeRouter,
+  edgeHostRegexFor,
+  hostOwnedBy,
+} from "./edge";
 import { ingressHostOf } from "./spec";
 import { FakeDns } from "./testing";
 
@@ -75,6 +81,66 @@ describe("EdgeRouter guards", () => {
       "node-deploy-canary-x1.cognidao.org",
     ])
       expect(DEFAULT_EDGE_HOST_REGEX.test(bad)).toBe(false);
+  });
+
+  it("a catalog-built regex admits the canary and each listed node (with env suffixes) and nothing else", () => {
+    const re = edgeHostRegexFor(["poly", "node-template", "toks5", "operator"]);
+    for (const ok of [
+      "node-deploy-canary.cognidao.org",
+      "poly.cognidao.org",
+      "poly-test.cognidao.org",
+      "node-template.cognidao.org",
+      "node-template-preview.cognidao.org",
+      "toks5-test.cognidao.org",
+    ])
+      expect(re.test(ok), ok).toBe(true);
+    for (const bad of [
+      "cognidao.org",
+      "preview.cognidao.org",
+      "test.cognidao.org",
+      "www.cognidao.org",
+      "beacon.cognidao.org", // a crossplane node is not listed
+      "red-test.cognidao.org",
+      "poly.cognidao.org.evil.com",
+      "evilpoly.cognidao.org",
+      "poly-x1.cognidao.org",
+      "operator.cognidao.org",
+    ])
+      expect(re.test(bad), bad).toBe(false);
+    // slugs are escaped, not interpreted as a pattern
+    expect(edgeHostRegexFor(["a.b"]).test("axb.cognidao.org")).toBe(false);
+  });
+
+  it("hostOwnedBy: a node owns exactly its own host in each env; the operator owns the canary", () => {
+    expect(hostOwnedBy("poly.cognidao.org", "production", "poly")).toBe(true);
+    expect(hostOwnedBy("poly-test.cognidao.org", "candidate-a", "poly")).toBe(
+      true
+    );
+    expect(hostOwnedBy("poly-preview.cognidao.org", "preview", "poly")).toBe(
+      true
+    );
+    expect(
+      hostOwnedBy("node-deploy-canary.cognidao.org", "production", "operator")
+    ).toBe(true);
+    // node A cannot claim node B's host, or another env's host for itself
+    expect(hostOwnedBy("toks5.cognidao.org", "production", "poly")).toBe(false);
+    expect(hostOwnedBy("poly.cognidao.org", "production", "toks5")).toBe(false);
+    expect(hostOwnedBy("poly.cognidao.org", "candidate-a", "poly")).toBe(false);
+    // "poly-test" the node's production host collides with "poly" candidate-a: only the exact owner wins
+    expect(hostOwnedBy("poly-test.cognidao.org", "production", "poly")).toBe(
+      false
+    );
+    // operator hosts are never claimable by a node
+    for (const host of [
+      "cognidao.org",
+      "preview.cognidao.org",
+      "test.cognidao.org",
+    ])
+      expect(hostOwnedBy(host, "production", "poly")).toBe(false);
+    expect(
+      hostOwnedBy("node-deploy-canary.cognidao.org", "production", "poly")
+    ).toBe(false);
+    expect(hostOwnedBy("poly.cognidao.org", "mars", "poly")).toBe(false);
   });
 
   it("refuses an unguarded host before any request is made", async () => {

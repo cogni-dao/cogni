@@ -42,8 +42,23 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 export class ImageCatalogNodes implements NodeCatalogPort {
   private index: Map<string, NodeCatalogEntry> | undefined;
+  private rows: NodeCatalogEntry[] = [];
 
   constructor(private readonly deps: ImageCatalogDeps) {}
+
+  /**
+   * Slugs of every node whose catalog cell `compute_api[<env>]` is `node-deploy`: the nodes the
+   * sequencer may deploy (and so may claim an edge host) in this env. Needs no node id.
+   */
+  async nodeDeploySlugs(env: string): Promise<string[]> {
+    this.index ??= await this.build();
+    return this.rows
+      .filter((e) => {
+        const cells = isRecord(e.row) ? e.row.compute_api : undefined;
+        return isRecord(cells) && cells[env] === "node-deploy";
+      })
+      .map((e) => e.slug);
+  }
 
   async entryFor(nodeId: string): Promise<NodeCatalogEntry | undefined> {
     this.index ??= await this.build();
@@ -53,12 +68,14 @@ export class ImageCatalogNodes implements NodeCatalogPort {
   private async build(): Promise<Map<string, NodeCatalogEntry>> {
     const dir = join(this.deps.root, "infra", "catalog");
     const index = new Map<string, NodeCatalogEntry>();
+    this.rows = [];
     for (const file of await readdir(dir)) {
       if (!file.endsWith(".yaml") || file.startsWith("_")) continue;
       const slug = file.slice(0, -".yaml".length);
       if (!SLUG.test(slug)) continue;
       const row: unknown = parseYaml(await readFile(join(dir, file), "utf8"));
       if (!isRecord(row) || row.name !== slug) continue;
+      this.rows.push({ slug, row });
       const nodeId = await this.nodeIdOf(row, slug);
       if (nodeId) index.set(nodeId.toLowerCase(), { slug, row });
     }
