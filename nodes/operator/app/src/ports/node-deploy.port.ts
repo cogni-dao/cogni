@@ -73,6 +73,25 @@ export interface DesiredRow extends WorkloadKey {
   readonly gameDayRequestedAt?: Date | undefined;
 }
 
+/** Hard cap of persisted steps per attempt; the newest are kept (task.5400 observability). */
+export const MAX_ATTEMPT_STEPS = 100;
+
+/**
+ * One sequencer step as persisted on its attempt. Written by the SAME `emit` call that logs
+ * `node_deploy_step`, so the durable timeline and the Loki event cannot drift.
+ */
+export interface AttemptStep {
+  readonly step: string;
+  readonly outcome: string;
+  readonly reason?: string | undefined;
+  readonly dseq?: string | undefined;
+  readonly provider?: string | undefined;
+  /** Milliseconds from the attempt row's creation to this step (the step-latency series). */
+  readonly elapsedMs?: number | undefined;
+  /** ISO-8601 instant the step was emitted. */
+  readonly at: string;
+}
+
 export interface AttemptRow {
   readonly id: string;
   readonly releaseId: string;
@@ -87,6 +106,8 @@ export interface AttemptRow {
   readonly createdAt: Date;
   readonly leasedAt: Date | undefined;
   readonly updatedAt: Date;
+  /** Oldest first, at most `MAX_ATTEMPT_STEPS`. Empty for attempts that predate the timeline. */
+  readonly steps: readonly AttemptStep[];
 }
 
 export interface AttemptPatch {
@@ -337,6 +358,11 @@ export interface StorePort {
     makeKey: (attempt: number) => string
   ): Promise<AttemptRow>;
   updateAttempt(id: string, patch: AttemptPatch): Promise<AttemptRow>;
+  /**
+   * Append one step to the attempt's timeline (atomic; keeps the newest `MAX_ATTEMPT_STEPS`).
+   * Observability only: it never changes `phase`, and a failure here must never fail a deploy.
+   */
+  appendAttemptStep(attemptId: string, step: AttemptStep): Promise<void>;
 }
 
 export interface SecretsPort {

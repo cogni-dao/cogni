@@ -25,12 +25,14 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import type {
   AttemptPatch,
   AttemptRow,
+  AttemptStep,
   DesiredRow,
   RecordReleaseInput,
   ReleaseRow,
   StorePort,
   WorkloadKey,
 } from "@/ports";
+import { MAX_ATTEMPT_STEPS } from "@/ports";
 import {
   nodeWorkloadAttempts,
   nodeWorkloadDesired,
@@ -56,6 +58,7 @@ function toAttempt(r: AttemptDb): AttemptRow {
     createdAt: r.createdAt,
     leasedAt: r.leasedAt ?? undefined,
     updatedAt: r.updatedAt,
+    steps: r.steps ?? [],
   };
 }
 
@@ -273,5 +276,21 @@ export class PostgresNodeDeployStore implements StorePort {
       .returning();
     if (!row) throw new Error(`attempt ${id} not found`);
     return toAttempt(row);
+  }
+
+  async appendAttemptStep(attemptId: string, step: AttemptStep): Promise<void> {
+    // One atomic statement: append, then keep the NEWEST `MAX_ATTEMPT_STEPS` (a failing attempt's last
+    // steps matter most). No read-modify-write window; `phase` and `updated_at` are untouched.
+    const joined = sql`(coalesce(${nodeWorkloadAttempts.steps}, '[]'::jsonb) || ${JSON.stringify([step])}::jsonb)`;
+    await this.db
+      .update(nodeWorkloadAttempts)
+      .set({
+        steps: sql`(
+          select coalesce(jsonb_agg(t.e order by t.o), '[]'::jsonb)
+          from jsonb_array_elements(${joined}) with ordinality as t(e, o)
+          where t.o > jsonb_array_length(${joined}) - ${MAX_ATTEMPT_STEPS}
+        )`,
+      })
+      .where(eq(nodeWorkloadAttempts.id, attemptId));
   }
 }

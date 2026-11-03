@@ -28,6 +28,9 @@
  *   - LOST_MEANS_CHAIN_TRUTH: a lease is lost only when chain/observe say closed or insufficient_funds,
  *     or it fails its proof for `unhealthyLostMs` (15 min) straight. A single miss is not a loss.
  *   - ONE_RUNNER_PER_WORKLOAD: `step` and `reconcile` never overlap for one workload key.
+ *   - ONE_EMIT_HELPER: every event (step, provider strike, alert) is written by `record`, which logs the
+ *     Loki line AND appends the same step to the attempt's durable timeline; a failed append is logged
+ *     and never fails a deploy decision.
  * Side-effects: IO via injected ports
  * @internal
  */
@@ -44,6 +47,7 @@ import type {
 import {
   type AttemptPatch,
   type AttemptRow,
+  type AttemptStep,
   buildCogniKey,
   buildIdentity,
   consecutiveFailures,
@@ -152,6 +156,8 @@ export class NodeDeploySequencer {
   private readonly running = new Set<string>();
   private readonly lastAlertAt = new Map<string, number>();
   private readonly lastGraceLogAt = new Map<string, number>();
+  /** Last persisted step signature per attempt, so a poll loop writes one timeline row, not hundreds. */
+  private readonly lastStep = new Map<string, string>();
 
   constructor(private readonly d: SequencerDeps) {}
 
@@ -197,7 +203,7 @@ export class NodeDeploySequencer {
     if (!desired || desired.state !== "running") return "idle";
     const release = await this.d.store.getRelease(desired.releaseId);
     if (!release) {
-      this.alert(key, undefined, undefined, "desired_release_missing");
+      await this.alert(key, undefined, undefined, "desired_release_missing");
       return "idle";
     }
 
@@ -242,7 +248,7 @@ export class NodeDeploySequencer {
 
     const ofRelease = all.filter((a) => a.releaseId === release.id);
     if (consecutiveFailures(ofRelease) >= this.d.config.maxFailedAttempts) {
-      this.alert(key, release, undefined, "release_parked", {
+      await this.alert(key, release, undefined, "release_parked", {
         failedAttempts: consecutiveFailures(ofRelease),
       });
       return "parked";
@@ -252,7 +258,7 @@ export class NodeDeploySequencer {
       await this.resolveEnv(key, release);
     } catch (error) {
       if (error instanceof DependencyNotReady) {
-        this.emit(key, release, undefined, "dependency", "waiting", {
+        await this.emit(key, release, undefined, "dependency", "waiting", {
           reason: error.message,
         });
         return "waiting_dependency";
@@ -269,7 +275,7 @@ export class NodeDeploySequencer {
         attempt: n,
       })
     );
-    this.emit(key, release, attempt, "attempt_planned", "ok", {
+    await this.emit(key, release, attempt, "attempt_planned", "ok", {
       blue: active?.externalName,
     });
     await this.drive(key, release, attempt, active);
@@ -291,13 +297,13 @@ export class NodeDeploySequencer {
     inflight: AttemptRow | undefined
   ): Promise<void> {
     if (release.spec.kind === "state") {
-      this.alert(key, release, active, "game_day_refused_state");
+      await this.alert(key, release, active, "game_day_refused_state");
       await this.d.store.clearGameDay(key);
       return;
     }
     if (inflight) return; // not mid-release: the intent stays durable and is retried next tick
     if (!active?.externalName) {
-      this.emit(key, release, active, "game_day_kill", "no_active_lease");
+      await this.emit(key, release, active, "game_day_kill", "no_active_lease");
       await this.d.store.clearGameDay(key);
       return;
     }
@@ -308,27 +314,24 @@ export class NodeDeploySequencer {
       });
     } catch (error) {
       // Keep the intent: the delete may not have happened; the next tick retries.
-      this.emit(key, release, active, "game_day_kill", "delete_failed", {
+      await this.emit(key, release, active, "game_day_kill", "delete_failed", {
         error: errText(error),
       });
       return;
     }
-    this.d.log.warn(
-      {
-        component: "node-deploy-sequencer",
-        nodeId: key.nodeId,
-        env: key.env,
-        workload: key.workload,
-        releaseId: release.id,
-        attempt: active.attempt,
-        dseq: active.externalName,
-        provider: active.provider,
-        step: "game_day_kill",
-        outcome: "deleted",
-        sourceSha: release.sourceSha,
-      },
-      "node_deploy_game_day_kill"
-    );
+    await this.record("warn", "node_deploy_game_day_kill", active, {
+      component: "node-deploy-sequencer",
+      nodeId: key.nodeId,
+      env: key.env,
+      workload: key.workload,
+      releaseId: release.id,
+      attempt: active.attempt,
+      dseq: active.externalName,
+      provider: active.provider,
+      step: "game_day_kill",
+      outcome: "deleted",
+      sourceSha: release.sourceSha,
+    });
     await this.d.store.clearGameDay(key);
   }
 
@@ -417,7 +420,7 @@ export class NodeDeploySequencer {
 
     // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
     if (this.createMayStillBeInFlight(attempt)) {
-      this.emitGrace(key, release, attempt, "create", "inflight_grace", {
+      await this.emitGrace(key, release, attempt, "create", "inflight_grace", {
         graceMs: this.d.config.inflightGraceMs,
       });
       return attempt;
@@ -426,7 +429,7 @@ export class NodeDeploySequencer {
       try {
         const obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
         if (obs.found && obs.resource) {
-          this.emit(
+          await this.emit(
             key,
             release,
             attempt,
@@ -445,9 +448,16 @@ export class NodeDeploySequencer {
           "ambiguous create resolved to nothing; next ordinal"
         );
       } catch (error) {
-        this.emit(key, release, attempt, "create", "observe_unavailable", {
-          error: errText(error),
-        });
+        await this.emit(
+          key,
+          release,
+          attempt,
+          "create",
+          "observe_unavailable",
+          {
+            error: errText(error),
+          }
+        );
         return attempt;
       }
     }
@@ -474,7 +484,7 @@ export class NodeDeploySequencer {
             this.d.clock.now() - attempt.createdAt.getTime() <
             this.d.config.leaseReadyMs
           ) {
-            this.emit(key, release, attempt, "create", "wallet_busy");
+            await this.emit(key, release, attempt, "create", "wallet_busy");
             return attempt;
           }
           return this.failAttempt(key, release, attempt, "wallet_busy_timeout");
@@ -485,7 +495,7 @@ export class NodeDeploySequencer {
             // to that moment, not to the (possibly much older) attempt row.
             error: ambiguousMarker(error.code, this.d.clock.now()),
           });
-          this.emit(key, release, marked, "create", "ambiguous", {
+          await this.emit(key, release, marked, "create", "ambiguous", {
             code: error.code,
           });
           // Resolve now; on a failed read the marker makes the next tick resolve first.
@@ -524,13 +534,14 @@ export class NodeDeploySequencer {
     step: string,
     outcome: string,
     extra: Record<string, unknown>
-  ): void {
+  ): Promise<void> {
     const now = this.d.clock.now();
     const k = `${attempt.id}/${step}/${outcome}`;
     const last = this.lastGraceLogAt.get(k);
-    if (last !== undefined && now - last < GRACE_LOG_THROTTLE_MS) return;
+    if (last !== undefined && now - last < GRACE_LOG_THROTTLE_MS)
+      return Promise.resolve();
     this.lastGraceLogAt.set(k, now);
-    this.emit(key, release, attempt, step, outcome, extra);
+    return this.emit(key, release, attempt, step, outcome, extra);
   }
 
   private async bindLease(
@@ -554,7 +565,7 @@ export class NodeDeploySequencer {
         : {}),
     };
     const next = await this.d.store.updateAttempt(attempt.id, patch);
-    this.emit(key, release, next, "created", "ok", {
+    await this.emit(key, release, next, "created", "ok", {
       dseq: resource.externalName,
       provider: resource.providerAccount,
     });
@@ -581,7 +592,7 @@ export class NodeDeploySequencer {
           ...(a.externalName ? { externalName: a.externalName } : {}),
         });
       } catch (error) {
-        this.emit(key, release, a, "lease_ready", "observe_error", {
+        await this.emit(key, release, a, "lease_ready", "observe_error", {
           error: errText(error),
         });
         obs = { found: true };
@@ -596,7 +607,7 @@ export class NodeDeploySequencer {
           r.providerAccount === blue.provider
         ) {
           // NOT_BLUES_PROVIDER: two leases on one provider ingress cannot both claim one host.
-          this.strike(key, release, a, "same_provider_as_blue");
+          await this.strike(key, release, a, "same_provider_as_blue");
           return this.failAttempt(key, release, a, "same_provider_as_blue");
         }
         const usable =
@@ -609,7 +620,7 @@ export class NodeDeploySequencer {
             endpoints: r.endpoints,
             ...(r.providerAccount ? { provider: r.providerAccount } : {}),
           });
-          this.emit(key, release, a, "lease_active", "ok", {
+          await this.emit(key, release, a, "lease_active", "ok", {
             endpoints: r.endpoints,
             provider: r.providerAccount,
           });
@@ -655,7 +666,7 @@ export class NodeDeploySequencer {
               const next = await this.d.store.updateAttempt(attempt.id, {
                 phase: "proven",
               });
-              this.emit(key, release, next, "proven", "ok", {
+              await this.emit(key, release, next, "proven", "ok", {
                 ingress,
                 version: release.sourceSha,
                 readyz: r.status,
@@ -673,7 +684,7 @@ export class NodeDeploySequencer {
           const next = await this.d.store.updateAttempt(attempt.id, {
             phase: "proven",
           });
-          this.emit(key, release, next, "proven", "ok", {
+          await this.emit(key, release, next, "proven", "ok", {
             endpoint: `${t.host}:${t.port}`,
           });
           return next;
@@ -690,7 +701,7 @@ export class NodeDeploySequencer {
           "lease_closed_while_proving"
         );
       if (this.d.clock.now() >= deadline) {
-        this.strike(key, release, attempt, "proof_timeout");
+        await this.strike(key, release, attempt, "proof_timeout");
         return this.failAttempt(
           key,
           release,
@@ -700,7 +711,7 @@ export class NodeDeploySequencer {
       }
       if (this.d.clock.now() - lastNote >= 60_000) {
         lastNote = this.d.clock.now();
-        this.emit(key, release, attempt, "proving", "waiting", { last });
+        await this.emit(key, release, attempt, "proving", "waiting", { last });
       }
       await this.d.clock.sleep(this.d.config.pollMs);
     }
@@ -727,7 +738,7 @@ export class NodeDeploySequencer {
       try {
         const rec = await edge.point(host, ingress);
         touched = true;
-        this.emit(key, release, attempt, "edge_moved", "ok", {
+        await this.emit(key, release, attempt, "edge_moved", "ok", {
           record: rec.id,
           target: rec.content,
         });
@@ -736,7 +747,7 @@ export class NodeDeploySequencer {
           release.sourceSha,
           w.health?.version ?? "/version"
         );
-        this.emit(key, release, attempt, "public_readback", "ok", {
+        await this.emit(key, release, attempt, "public_readback", "ok", {
           host,
           consecutive: this.d.config.publicStreak,
           firstAt,
@@ -774,14 +785,16 @@ export class NodeDeploySequencer {
       phase: "active",
       unhealthySince: null,
     });
-    this.emit(key, release, active, "activated", "ok", {
+    await this.emit(key, release, active, "activated", "ok", {
       dseq: active.externalName,
+      // Lead time: intent recorded -> serving. The Grafana lead-time panel unwraps this field.
+      leadTimeMs: Math.max(0, this.d.clock.now() - release.createdAt.getTime()),
     });
     if (blue && blue.id !== active.id && blue.phase === "active") {
       const retiring = await this.d.store.updateAttempt(blue.id, {
         phase: "retiring",
       });
-      this.emit(key, release, retiring, "blue_retiring", "ok", {
+      await this.emit(key, release, retiring, "blue_retiring", "ok", {
         dseq: retiring.externalName,
         retainMs: this.d.config.retainMs,
       });
@@ -835,17 +848,24 @@ export class NodeDeploySequencer {
     if (!attempt.externalName) {
       if (this.createMayStillBeInFlight(attempt)) {
         // Never fail/supersede (and never observe) while the actuator may still be creating.
-        this.emitGrace(key, release, attempt, "attempt_failed", "deferred", {
-          reason: trimmed,
-          inflightGraceMs: this.d.config.inflightGraceMs,
-        });
+        await this.emitGrace(
+          key,
+          release,
+          attempt,
+          "attempt_failed",
+          "deferred",
+          {
+            reason: trimmed,
+            inflightGraceMs: this.d.config.inflightGraceMs,
+          }
+        );
         return attempt;
       }
       let obs: Awaited<ReturnType<PayerPort["observe"]>>;
       try {
         obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
       } catch (error) {
-        this.emit(key, release, attempt, "attempt_failed", "deferred", {
+        await this.emit(key, release, attempt, "attempt_failed", "deferred", {
           reason: trimmed,
           observeError: errText(error),
         });
@@ -859,16 +879,23 @@ export class NodeDeploySequencer {
             ? { provider: obs.resource.providerAccount }
             : {}),
         });
-        this.emit(key, release, bound, "orphan_lease", "adopted_to_close", {
-          dseq: bound.externalName,
-        });
+        await this.emit(
+          key,
+          release,
+          bound,
+          "orphan_lease",
+          "adopted_to_close",
+          {
+            dseq: bound.externalName,
+          }
+        );
         return this.failAttempt(key, release, bound, trimmed);
       }
       const next = await this.d.store.updateAttempt(attempt.id, {
         phase: "failed",
         error: trimmed,
       });
-      this.emit(key, release, next, "attempt_failed", "failed", {
+      await this.emit(key, release, next, "attempt_failed", "failed", {
         reason: trimmed,
       });
       return next;
@@ -877,13 +904,13 @@ export class NodeDeploySequencer {
       phase: "closing",
       error: trimmed,
     });
-    this.emit(key, release, closing, "attempt_failed", "closing", {
+    await this.emit(key, release, closing, "attempt_failed", "closing", {
       reason: trimmed,
       dseq: closing.externalName,
     });
     const confirmed = await this.closeAndConfirm(closing);
     if (!confirmed) {
-      this.alert(key, release, closing, "close_unconfirmed", {
+      await this.alert(key, release, closing, "close_unconfirmed", {
         reason: trimmed,
       });
       return closing;
@@ -891,7 +918,7 @@ export class NodeDeploySequencer {
     const failed = await this.d.store.updateAttempt(attempt.id, {
       phase: "failed",
     });
-    this.emit(key, release, failed, "new_closed", "ok", {
+    await this.emit(key, release, failed, "new_closed", "ok", {
       dseq: failed.externalName,
     });
     return failed;
@@ -963,7 +990,7 @@ export class NodeDeploySequencer {
             phase: "retired",
           });
           if (release)
-            this.emit(key, release, retired, "old_closed", "ok", {
+            await this.emit(key, release, retired, "old_closed", "ok", {
               dseq: retired.externalName,
               verified: true,
             });
@@ -971,7 +998,7 @@ export class NodeDeploySequencer {
           release &&
           age >= this.d.config.retainMs + this.d.config.closeAlertMs
         ) {
-          this.alert(key, release, a, "close_unconfirmed");
+          await this.alert(key, release, a, "close_unconfirmed");
         }
       } else if (a.phase === "closing") {
         const release = await this.d.store.getRelease(a.releaseId);
@@ -980,12 +1007,12 @@ export class NodeDeploySequencer {
             phase: "failed",
           });
           if (release)
-            this.emit(key, release, failed, "new_closed", "ok", {
+            await this.emit(key, release, failed, "new_closed", "ok", {
               dseq: failed.externalName,
               verified: true,
             });
         } else if (release) {
-          this.alert(key, release, a, "close_unconfirmed");
+          await this.alert(key, release, a, "close_unconfirmed");
         }
       }
     }
@@ -1046,14 +1073,14 @@ export class NodeDeploySequencer {
       if (healthy) {
         if (active.unhealthySince) {
           await this.d.store.updateAttempt(active.id, { unhealthySince: null });
-          this.emit(key, release, active, "unhealthy_cleared", "ok");
+          await this.emit(key, release, active, "unhealthy_cleared", "ok");
         }
         return "healthy";
       }
       const since = active.unhealthySince ?? new Date(this.d.clock.now());
       if (!active.unhealthySince) {
         await this.d.store.updateAttempt(active.id, { unhealthySince: since });
-        this.alert(key, release, active, "proof_failing", {});
+        await this.alert(key, release, active, "proof_failing", {});
         return "unhealthy_waiting";
       }
       if (
@@ -1063,7 +1090,7 @@ export class NodeDeploySequencer {
         // A failing but LIVE lease is closed and confirmed before anything replaces it.
         if (await this.closeAndConfirm(active))
           return this.handleLost(key, release, active, "proof_failed_15m");
-        this.alert(key, release, active, "close_unconfirmed", {
+        await this.alert(key, release, active, "close_unconfirmed", {
           why: "proof_failed_15m",
         });
         return "unhealthy_waiting";
@@ -1085,10 +1112,10 @@ export class NodeDeploySequencer {
     });
     if (release.spec.kind === "state") {
       // STATE_IS_NEVER_AUTO_REPLACED: alert, never recreate.
-      this.alert(key, release, lost, "state_lease_lost", { why });
+      await this.alert(key, release, lost, "state_lease_lost", { why });
       return "lost_state_alert";
     }
-    this.emit(key, release, lost, "lease_lost", "lost", { why });
+    await this.emit(key, release, lost, "lease_lost", "lost", { why });
     return "lost_app";
   }
 
@@ -1125,6 +1152,70 @@ export class NodeDeploySequencer {
     }
   }
 
+  /**
+   * THE ONE EMIT HELPER. Every sequencer event — `node_deploy_step`, `node_deploy_provider_strike`,
+   * `node_deploy_alert` — is written by `record`, which logs the line AND (when the event belongs to an
+   * attempt) appends the same step to that attempt's durable timeline. There is no second code path, so
+   * the Loki event and the persisted step cannot drift (task.5400 observability).
+   *
+   * Persistence is observability only: a failed append is logged `node_deploy_step_persist_failed` and
+   * NEVER fails or delays the deploy decision that emitted the step. Consecutive identical steps of one
+   * attempt (a poll loop) collapse into one persisted row; the log line is still written every time.
+   */
+  private async record(
+    level: "info" | "warn" | "error",
+    msg: string,
+    attempt: AttemptRow | undefined,
+    fields: Record<string, unknown>
+  ): Promise<void> {
+    const now = this.d.clock.now();
+    // `elapsedMs` = time since the attempt row was created: the step-latency series Grafana unwraps.
+    const elapsedMs =
+      attempt?.createdAt instanceof Date
+        ? Math.max(0, now - attempt.createdAt.getTime())
+        : undefined;
+    this.d.log[level](
+      elapsedMs === undefined ? fields : { ...fields, elapsedMs },
+      msg
+    );
+    if (!attempt) return;
+    const reason = reasonOf(fields);
+    const dseq = textOf(fields.dseq);
+    const provider = textOf(fields.provider) ?? attempt.provider;
+    const step: AttemptStep = {
+      step: String(fields.step),
+      outcome: String(fields.outcome),
+      ...(reason ? { reason } : {}),
+      ...(dseq ? { dseq } : {}),
+      ...(provider ? { provider } : {}),
+      ...(elapsedMs === undefined ? {} : { elapsedMs }),
+      at: new Date(now).toISOString(),
+    };
+    const signature = `${step.step}|${step.outcome}|${step.reason ?? ""}`;
+    if (this.lastStep.get(attempt.id) === signature) return;
+    if (this.lastStep.size > 500) this.lastStep.clear();
+    this.lastStep.set(attempt.id, signature);
+    try {
+      await this.d.store.appendAttemptStep(attempt.id, step);
+    } catch (error) {
+      this.lastStep.delete(attempt.id);
+      this.d.log.warn(
+        {
+          component: "node-deploy-sequencer",
+          nodeId: fields.nodeId,
+          env: fields.env,
+          workload: fields.workload,
+          releaseId: fields.releaseId,
+          attempt: fields.attempt,
+          step: step.step,
+          outcome: step.outcome,
+          error: errText(error).slice(0, 300),
+        },
+        "node_deploy_step_persist_failed"
+      );
+    }
+  }
+
   private emit(
     key: WorkloadKey,
     release: ReleaseRow | undefined,
@@ -1132,28 +1223,26 @@ export class NodeDeploySequencer {
     step: string,
     outcome: string,
     extra: Record<string, unknown> = {}
-  ): void {
-    this.d.log.info(
-      {
-        component: "node-deploy-sequencer",
-        nodeId: key.nodeId,
-        env: key.env,
-        workload: key.workload,
-        releaseId: release?.id,
-        attempt: attempt?.attempt,
-        dseq: attempt?.externalName,
-        step,
-        outcome,
-        sourceSha: release?.sourceSha,
-        ...extra,
-      },
-      "node_deploy_step"
-    );
+  ): Promise<void> {
+    return this.record("info", "node_deploy_step", attempt, {
+      component: "node-deploy-sequencer",
+      nodeId: key.nodeId,
+      env: key.env,
+      workload: key.workload,
+      releaseId: release?.id,
+      attempt: attempt?.attempt,
+      dseq: attempt?.externalName,
+      step,
+      outcome,
+      sourceSha: release?.sourceSha,
+      ...extra,
+    });
   }
 
   /**
    * A tick-level failure repeats every tick while its cause persists (a down database, a bad row), so it
-   * is throttled per (workload, loop, message) like every other alert.
+   * is throttled per (workload, loop, message) like every other alert. It belongs to no attempt, so it
+   * is logged only.
    */
   private loopError(key: WorkloadKey, loop: string, error: unknown): void {
     const message = errText(error).slice(0, 300);
@@ -1162,18 +1251,15 @@ export class NodeDeploySequencer {
     const last = this.lastAlertAt.get(throttleKey);
     if (last !== undefined && now - last < ALERT_THROTTLE_MS) return;
     this.lastAlertAt.set(throttleKey, now);
-    this.d.log.error(
-      {
-        component: "node-deploy-sequencer",
-        nodeId: key.nodeId,
-        env: key.env,
-        workload: key.workload,
-        step: loop,
-        outcome: "threw",
-        error: message,
-      },
-      "node_deploy_step"
-    );
+    void this.record("error", "node_deploy_step", undefined, {
+      component: "node-deploy-sequencer",
+      nodeId: key.nodeId,
+      env: key.env,
+      workload: key.workload,
+      step: loop,
+      outcome: "threw",
+      error: message,
+    });
   }
 
   /**
@@ -1186,23 +1272,20 @@ export class NodeDeploySequencer {
     release: ReleaseRow,
     attempt: AttemptRow,
     reason: string
-  ): void {
-    this.d.log.warn(
-      {
-        component: "node-deploy-sequencer",
-        nodeId: key.nodeId,
-        env: key.env,
-        workload: key.workload,
-        releaseId: release.id,
-        attempt: attempt.attempt,
-        dseq: attempt.externalName,
-        provider: attempt.provider,
-        step: "provider_strike",
-        outcome: reason,
-        sourceSha: release.sourceSha,
-      },
-      "node_deploy_provider_strike"
-    );
+  ): Promise<void> {
+    return this.record("warn", "node_deploy_provider_strike", attempt, {
+      component: "node-deploy-sequencer",
+      nodeId: key.nodeId,
+      env: key.env,
+      workload: key.workload,
+      releaseId: release.id,
+      attempt: attempt.attempt,
+      dseq: attempt.externalName,
+      provider: attempt.provider,
+      step: "provider_strike",
+      outcome: reason,
+      sourceSha: release.sourceSha,
+    });
   }
 
   private alert(
@@ -1211,30 +1294,28 @@ export class NodeDeploySequencer {
     attempt: AttemptRow | undefined,
     reason: string,
     extra: Record<string, unknown> = {}
-  ): void {
+  ): Promise<void> {
     // One alert per (workload, release, reason) per 10 minutes: a parked release is re-evaluated every
     // tick and must not write a line per tick.
     const throttleKey = `${keyString(key)}/${release?.id ?? "-"}/${reason}`;
     const now = this.d.clock.now();
     const last = this.lastAlertAt.get(throttleKey);
-    if (last !== undefined && now - last < ALERT_THROTTLE_MS) return;
+    if (last !== undefined && now - last < ALERT_THROTTLE_MS)
+      return Promise.resolve();
     this.lastAlertAt.set(throttleKey, now);
-    this.d.log.error(
-      {
-        component: "node-deploy-sequencer",
-        nodeId: key.nodeId,
-        env: key.env,
-        workload: key.workload,
-        releaseId: release?.id,
-        attempt: attempt?.attempt,
-        dseq: attempt?.externalName,
-        step: "alert",
-        outcome: reason,
-        sourceSha: release?.sourceSha,
-        ...extra,
-      },
-      "node_deploy_alert"
-    );
+    return this.record("error", "node_deploy_alert", attempt, {
+      component: "node-deploy-sequencer",
+      nodeId: key.nodeId,
+      env: key.env,
+      workload: key.workload,
+      releaseId: release?.id,
+      attempt: attempt?.attempt,
+      dseq: attempt?.externalName,
+      step: "alert",
+      outcome: reason,
+      sourceSha: release?.sourceSha,
+      ...extra,
+    });
   }
 }
 
@@ -1250,6 +1331,19 @@ function networkFailureAt(attempt: AttemptRow): number | undefined {
   const m = /^ambiguous: network(?:@(\d+))?$/u.exec(attempt.error ?? "");
   if (!m) return undefined;
   return m[1] ? Number(m[1]) : attempt.createdAt.getTime();
+}
+
+function textOf(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/** The human reason of a step: the first textual explanation its event carries, bounded. */
+function reasonOf(fields: Record<string, unknown>): string | undefined {
+  for (const k of ["reason", "why", "error", "last", "code"]) {
+    const v = textOf(fields[k]);
+    if (v) return v.slice(0, 300);
+  }
+  return undefined;
 }
 
 function tryForwarded(

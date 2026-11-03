@@ -141,6 +141,23 @@ export const nodeWorkloadAttempts = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    /**
+     * Durable step timeline (oldest first, newest 100 kept), appended by the sequencer's single emit
+     * helper next to the `node_deploy_step` log line. Nullable and additive: attempts that predate it
+     * read as an empty timeline. Observability only; no policy reads it.
+     */
+    steps:
+      jsonb("steps").$type<
+        readonly {
+          step: string;
+          outcome: string;
+          reason?: string | undefined;
+          dseq?: string | undefined;
+          provider?: string | undefined;
+          elapsedMs?: number | undefined;
+          at: string;
+        }[]
+      >(),
   },
   (table) => [
     unique("node_workload_attempts_cogni_key_uniq").on(table.cogniKey),

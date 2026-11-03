@@ -110,6 +110,17 @@ The next rung for shared services is unchanged: bind `nodeId` into node-aware se
 (`scheduler-worker` first) — **not** trusting a caller-supplied selector to a shared service (that
 would leak cross-node lines).
 
+**Node-deploy events (DEPLOY_EVENTS_PIN_BY_LINE, task.5400):** `?service=deploy` is a virtual service,
+not a Loki label value. It selects the operator's `{env, service="sequencer"}` stream and pins the node
+with a forced pipeline stage placed before any caller stage:
+`{env="<env>", service="sequencer"} |= "node_deploy" | json | nodeId="<id>"`. This is the
+"forced `| json | nodeId=...` filter" rung above, applied to the one operator-side service whose every
+event line already names its target node (`node_deploy_step`, `node_deploy_provider_strike`,
+`node_deploy_alert`). LogQL stages only remove lines, so a caller can narrow but never bring another
+node's events back; lines without a parseable `nodeId` (leadership events) are dropped. It does not
+force `source="lease"` (the sequencer is not a lease stream). The durable per-release view of the same
+events is `GET /api/v1/deploy/workloads` and `GET /api/v1/deploy/workloads/releases/{releaseId}`.
+
 **Lease log collection (bug.5240):** Akash workloads run no Alloy and no daemonset. The
 **lease-log pump** (`infra/k8s/base/lease-log-pump`, riding wherever an akash-tx-actuator runs) closes
 that gap structurally: it enumerates every LIVE lease from the actuator's `lease-log-sources` op (the

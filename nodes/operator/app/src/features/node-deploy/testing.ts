@@ -17,6 +17,7 @@
 import type {
   AttemptPatch,
   AttemptRow,
+  AttemptStep,
   ChainTruthPort,
   DesiredRow,
   DnsRecord,
@@ -36,7 +37,7 @@ import type {
   StorePort,
   WorkloadKey,
 } from "@/ports";
-import { keyString, PayerError } from "@/ports";
+import { keyString, MAX_ATTEMPT_STEPS, PayerError } from "@/ports";
 
 export const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
 export const ENV = "production";
@@ -189,9 +190,22 @@ export class MemoryStore implements StorePort {
       createdAt: now,
       leasedAt: undefined,
       updatedAt: now,
+      steps: [],
     };
     this.attempts.push(row);
     return row;
+  }
+  /** Make `appendAttemptStep` throw (the timeline is observability, never policy). */
+  failStepAppends = false;
+  async appendAttemptStep(attemptId: string, step: AttemptStep): Promise<void> {
+    if (this.failStepAppends) throw new Error("step store down");
+    const i = this.attempts.findIndex((a) => a.id === attemptId);
+    const cur = this.attempts[i];
+    if (!cur) throw new Error(`no attempt ${attemptId}`);
+    this.attempts[i] = {
+      ...cur,
+      steps: [...cur.steps, step].slice(-MAX_ATTEMPT_STEPS),
+    };
   }
   async updateAttempt(id: string, patch: AttemptPatch): Promise<AttemptRow> {
     const i = this.attempts.findIndex((a) => a.id === id);

@@ -4,8 +4,9 @@
 /**
  * Module: `@app/api/v1/deploy/workloads`
  * Purpose: The node-deploy verb's front door (task.5400, story.5127). `POST` records the intent to
- *   deploy ONE declared workload at a source sha; `GET` reads the desired row, the active attempt and
- *   recent attempts the node-deploy sequencer has produced.
+ *   deploy ONE declared workload at a source sha; `GET` reads the desired row with its explicit
+ *   release state (queued|deploying|active|parked|superseded|failed), the active attempt and recent
+ *   attempts with their step timelines (`releases/{releaseId}` is the per-release detail).
  * Scope: Authorizes per env, reads the node's `.cogni/repo-spec.yaml` AT `sourceSha` through the
  *   operator GitHub App, resolves the one declared workload, and writes an immutable release plus the
  *   desired row in one transaction. It never calls the actuator and never touches DNS: the sequencer
@@ -40,6 +41,7 @@ import {
   DeclarationError,
   resolveWorkloadDeclaration,
 } from "@/features/node-deploy/declarations";
+import { buildWorkloadView } from "@/features/node-deploy/release-view";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
@@ -221,18 +223,15 @@ export const GET = wrapRouteHandlerWithLogging(
       );
       const out = [];
       for (const desired of rows) {
-        const attempts = await store.attemptsFor(desired);
-        const release = await store.getRelease(desired.releaseId);
-        out.push({
-          workload: desired.workload,
-          desired: {
-            state: desired.state,
-            releaseId: desired.releaseId,
-            sourceSha: release?.sourceSha,
-          },
-          active: attempts.find((a) => a.phase === "active") ?? null,
-          recentAttempts: attempts.slice(0, 10),
-        });
+        // Release state, park reason, lead-time timestamps and per-attempt step timelines are
+        // derived from the rows by `buildWorkloadView` (task.5400 observability).
+        out.push(
+          buildWorkloadView({
+            desired,
+            release: await store.getRelease(desired.releaseId),
+            attemptsNewestFirst: await store.attemptsFor(desired),
+          })
+        );
       }
       return NextResponse.json(
         { nodeId: g.node.id, env, workloads: out },

@@ -10,8 +10,11 @@
  *   - INTENT_ONLY: a 200 means "a release and its desired row were written", never "deployed".
  *   - FULL_SHA: `sourceSha` is a full 40-hex git sha; a branch name or short sha is a 400.
  *   - STRICT_INPUT: unknown keys are a 400.
+ *   - READ_MODEL_IS_ADDITIVE: the timeline/state fields only ADD to the pre-existing GET shape.
+ *     `GET /deploy/workloads/releases/{releaseId}` shares GET's authz gate and addressing.
  * Side-effects: none (schemas only)
- * Links: src/app/api/v1/deploy/workloads/route.ts, features/node-deploy/sequencer.ts
+ * Links: src/app/api/v1/deploy/workloads/route.ts, features/node-deploy/sequencer.ts,
+ *   features/node-deploy/release-view.ts
  * @public
  */
 
@@ -67,3 +70,123 @@ export type DeployWorkloadQuery = z.infer<typeof DeployWorkloadQuerySchema>;
 export type DeployWorkloadRecorded = z.infer<
   typeof DeployWorkloadRecordedSchema
 >;
+
+// ---------------------------------------------------------------------------------------------
+// Read model (task.5400 observability): release state, timestamps and per-attempt step timelines.
+// A node developer follows deploy progress, success and failure from these — never by polling
+// `/version`. Derivation rules live in `features/node-deploy/release-view.ts`.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `queued`      recorded, no attempt yet.
+ * `deploying`   an attempt is mid-flight, or a failed lease is still being closed.
+ * `active`      an attempt of this release serves.
+ * `parked`      `maxFailedAttempts` (3) consecutive failed attempts: no paid create until a NEW release.
+ * `superseded`  the workload's desired release is a newer one (`activatedAt` says if this one served).
+ * `failed`      newest attempt failed or its live lease was lost, fewer than 3 failures: the next
+ *               attempt will be planned by the sequencer.
+ */
+export const DEPLOY_RELEASE_STATES = [
+  "queued",
+  "deploying",
+  "active",
+  "parked",
+  "superseded",
+  "failed",
+] as const;
+export const DeployReleaseStateSchema = z.enum(DEPLOY_RELEASE_STATES);
+
+/** One persisted sequencer step; the same fields the `node_deploy_step` Loki event carries. */
+export const DeployAttemptStepSchema = z.object({
+  step: z.string(),
+  outcome: z.string(),
+  reason: z.string().optional(),
+  dseq: z.string().optional(),
+  provider: z.string().optional(),
+  /** Milliseconds from the attempt row's creation to this step. */
+  elapsedMs: z.number().int().nonnegative().optional(),
+  at: z.string(),
+});
+
+export const DeployAttemptViewSchema = z.object({
+  id: z.string(),
+  releaseId: z.string(),
+  attempt: z.number().int(),
+  cogniKey: z.string(),
+  externalName: z.string().nullable(),
+  provider: z.string().nullable(),
+  endpoints: z.array(z.string()),
+  phase: z.string(),
+  error: z.string().nullable(),
+  unhealthySince: z.string().nullable(),
+  createdAt: z.string().nullable(),
+  leasedAt: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+  /** Oldest first, newest 100 kept; empty for attempts that predate the timeline. */
+  steps: z.array(DeployAttemptStepSchema),
+});
+
+/** Release state + lead-time timestamps (ISO-8601). `leadTimeMs = activatedAt - recordedAt`. */
+export const DeployReleaseTimelineSchema = z.object({
+  releaseId: z.string(),
+  sourceSha: z.string(),
+  /** True when the workload's desired row points at this release. */
+  current: z.boolean(),
+  releaseState: DeployReleaseStateSchema,
+  parkedReason: z.string().nullable(),
+  recordedAt: z.string().nullable(),
+  startedAt: z.string().nullable(),
+  activatedAt: z.string().nullable(),
+  leadTimeMs: z.number().int().nonnegative().nullable(),
+});
+
+/** One workload of `GET /api/v1/deploy/workloads` (additive over the pre-timeline shape). */
+export const DeployWorkloadViewSchema = z.object({
+  workload: z.string(),
+  desired: z.object({
+    state: z.enum(["running", "stopped"]),
+    releaseId: z.string(),
+    sourceSha: z.string().optional(),
+    releaseState: DeployReleaseStateSchema,
+    parkedReason: z.string().nullable(),
+    recordedAt: z.string().nullable(),
+    startedAt: z.string().nullable(),
+    activatedAt: z.string().nullable(),
+    leadTimeMs: z.number().int().nonnegative().nullable(),
+  }),
+  active: DeployAttemptViewSchema.nullable(),
+  recentAttempts: z.array(DeployAttemptViewSchema),
+});
+
+export const DeployWorkloadsReadSchema = z.object({
+  nodeId: z.string().uuid(),
+  env: DeployWorkloadEnvSchema,
+  workloads: z.array(DeployWorkloadViewSchema),
+});
+
+/** `GET /api/v1/deploy/workloads/releases/{releaseId}?nodeId=&env=` — same addressing as the list. */
+export const DeployReleaseQuerySchema = z.strictObject({
+  nodeId: z.string().min(1),
+  env: DeployWorkloadEnvSchema,
+});
+
+export const DeployReleaseIdSchema = z.string().uuid();
+
+export const DeployReleaseDetailSchema = z.object({
+  nodeId: z.string().uuid(),
+  env: DeployWorkloadEnvSchema,
+  workload: z.string(),
+  /** The workload's desired state, or null when no desired row exists. */
+  desiredState: z.enum(["running", "stopped"]).nullable(),
+  release: DeployReleaseTimelineSchema,
+  /** Every attempt of this release the store still returns, oldest first. */
+  attempts: z.array(DeployAttemptViewSchema),
+});
+
+export type DeployReleaseState = z.infer<typeof DeployReleaseStateSchema>;
+export type DeployAttemptStep = z.infer<typeof DeployAttemptStepSchema>;
+export type DeployAttemptView = z.infer<typeof DeployAttemptViewSchema>;
+export type DeployReleaseTimeline = z.infer<typeof DeployReleaseTimelineSchema>;
+export type DeployWorkloadView = z.infer<typeof DeployWorkloadViewSchema>;
+export type DeployWorkloadsRead = z.infer<typeof DeployWorkloadsReadSchema>;
+export type DeployReleaseDetail = z.infer<typeof DeployReleaseDetailSchema>;

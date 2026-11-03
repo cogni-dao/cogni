@@ -312,6 +312,7 @@ export type {
   AttemptPatch,
   AttemptPhase,
   AttemptRow,
+  AttemptStep,
   ChainTruthPort,
   DesiredRow,
   DesiredState,
@@ -340,6 +341,7 @@ export {
   consecutiveFailures,
   IN_FLIGHT_PHASES,
   keyString,
+  MAX_ATTEMPT_STEPS,
   PayerError,
 } from "./node-deploy.port";
 export type {

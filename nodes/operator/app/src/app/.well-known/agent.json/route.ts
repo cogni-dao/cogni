@@ -130,7 +130,10 @@ export async function GET(request: Request) {
       flight: `${origin}/api/v1/vcs/flight`,
       promote: `${origin}/api/v1/deploy/promote`,
       // Node-deploy verb (task.5400): POST records intent to blue/green-deploy one declared
-      // workload at a sha; GET reads desired/active/recent attempts. Same per-env gates as promote.
+      // workload at a sha; GET reads desired + releaseState (queued|deploying|active|parked|
+      // superseded|failed) + attempts with step timelines; `<this>/releases/{releaseId}?nodeId&env`
+      // follows one release; `/api/v1/nodes/{id}/observability/logs?service=deploy` is the node's own
+      // sequencer events. Same per-env gates as promote.
       deployWorkloads: `${origin}/api/v1/deploy/workloads`,
       infraReconcile: `${origin}/api/v1/deploy/infra-reconcile`,
       openapi: `${origin}/openapi.json`,

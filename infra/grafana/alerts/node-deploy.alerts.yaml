@@ -1,0 +1,143 @@
+# Grafana unified-alerting provisioning — node-deploy sequencer health (task.5400, story.5127).
+#
+# WHY: the sequencer (one process, advisory-locked) converges every declared workload to its release by
+# blue/green. Three failure modes were silent: a release PARKED after 3 failed attempts (production
+# canary release d13a75c1: the API only showed failed attempts), a sequencer that lost or never took
+# leadership, and a provider that keeps winning auctions it cannot serve (repeated proof_timeout).
+# These rules make each loud. The per-release truth is `GET /api/v1/deploy/workloads` (releaseState,
+# parkedReason, step timeline); this file only pages a human.
+#
+# APPLY: Grafana Git Sync does not sync alerting (see ./README.md). Apply via the alerting provisioning
+# API or Terraform, confirm a contact point on the notification policy. Rules are written for
+# env="production"; to cover candidate-a or preview, copy the group and change the env matcher.
+# Datasource UID `grafanacloud-logs` is the production Loki source.
+#
+# Source events (operator node-deploy sequencer, Loki {env,service="sequencer"}):
+#   msg="node_deploy_alert"           outcome=release_parked (re-logged every 10m while parked)
+#   msg="node_deploy_provider_strike" outcome=proof_timeout | same_provider_as_blue
+#   msg="node_deploy_sequencer_leader"            acquisition + a 1/min heartbeat {heartbeat:true}
+#   msg="node_deploy_sequencer_leadership_lost"   fatal; the process exits
+apiVersion: 1
+groups:
+  - orgId: 1
+    folder: Cogni Reliability
+    name: node-deploy
+    interval: 1m
+    rules:
+      # A release is parked: no further paid create happens until a NEW release is recorded.
+      # The sequencer re-logs the park every 10 minutes, so a 15m window keeps the rule firing for as
+      # long as the release stays parked and resolves 15m after a new release replaces it.
+      - uid: node-deploy-release-parked
+        title: Node deploy release PARKED — 3 failed attempts, no further create
+        condition: THRESHOLD
+        for: 0s
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'sum(count_over_time({env="production",service="sequencer"} | json | msg="node_deploy_alert" | outcome="release_parked" [15m]))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+              refId: THRESHOLD
+        annotations:
+          summary: "A node-deploy release is parked after 3 consecutive failed attempts. Read GET /api/v1/deploy/workloads (desired.releaseState=parked, parkedReason, recentAttempts[].steps) or the node_deploy_step events; fix the cause and record a NEW release (a new sha un-parks)."
+        labels: { severity: critical, plane: node-deploy }
+        noDataState: OK
+        execErrState: Alerting
+
+      # No leader: a healthy leader writes node_deploy_sequencer_leader {heartbeat:true} every minute.
+      # Zero lines in 10m means no process holds the advisory lock (crash loop, lost lock, bad deploy,
+      # or Loki shipping broken). Missing evidence is critical: an absent sequencer must never be green.
+      - uid: node-deploy-sequencer-no-leader
+        title: Node deploy sequencer has NO leader for 10m
+        condition: THRESHOLD
+        for: 5m
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 600, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'sum(count_over_time({env="production",service="sequencer"} | json | msg="node_deploy_sequencer_leader" [10m]))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: THRESHOLD
+        annotations:
+          summary: "No node_deploy_sequencer_leader line in 10m: no node-deploy sequencer holds the advisory lock, so nothing deploys and nothing recovers. Check the operator-node-deploy-sequencer pod (CrashLoopBackOff, node_deploy_sequencer_leadership_lost, waiting_for_lock) and the Loki shipper."
+        labels: { severity: critical, plane: node-deploy }
+        noDataState: Alerting
+        execErrState: Alerting
+
+      # Leadership is flapping: the process lost the lock and exited more than once in 30m.
+      - uid: node-deploy-sequencer-leadership-lost
+        title: Node deploy sequencer leadership lost repeatedly
+        condition: THRESHOLD
+        for: 0s
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 1800, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'sum(count_over_time({env="production",service="sequencer"} | json | msg="node_deploy_sequencer_leadership_lost" [30m]))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: gt, params: [1] }
+              refId: THRESHOLD
+        annotations:
+          summary: "The node-deploy sequencer lost its advisory lock more than once in 30m (reason field: AdvisoryLockHeldByAnotherSession or LeadershipCheckFailed). Two sequencers must never drive one workload; check for a second replica or a flapping database connection."
+        labels: { severity: warning, plane: node-deploy }
+        noDataState: OK
+        execErrState: Alerting
+
+      # Repeated proof_timeout: green leases that never served the exact sha. One is a bad provider;
+      # three in an hour is the park forming (or a broken image). Counts per provider so a single bad
+      # provider is visible in the alert labels.
+      - uid: node-deploy-proof-timeout-repeated
+        title: Node deploy repeated proof_timeout
+        condition: THRESHOLD
+        for: 0s
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 3600, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'sum by (provider) (count_over_time({env="production",service="sequencer"} | json | msg="node_deploy_provider_strike" | outcome="proof_timeout" [1h]))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: gt, params: [2] }
+              refId: THRESHOLD
+        annotations:
+          summary: "Provider {{ $labels.provider }} won 3+ node-deploy creates in 1h that never served the release sha within the proof deadline. Read the attempts' step timelines (GET /api/v1/deploy/workloads) and exclude the provider or fix the image."
+        labels: { severity: warning, plane: node-deploy }
+        noDataState: OK
+        execErrState: Alerting
