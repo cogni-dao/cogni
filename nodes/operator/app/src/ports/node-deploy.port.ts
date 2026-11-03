@@ -58,9 +58,29 @@ export const keyString = (k: WorkloadKey): string =>
 export interface ReleaseRow extends WorkloadKey {
   readonly id: string;
   readonly sourceSha: string;
+  /**
+   * The spec to deploy. While `spec.imagePending` is true its image is the tag node CI publishes at
+   * `sourceSha` and NO create may be sent; once the digest is pinned the store returns the spec with that
+   * digest as `image` and no `imagePending` (see `pinResolvedImage`).
+   */
   readonly spec: NodeWorkloadSpec;
+  /** The digest this release pinned (write-once); undefined until the sequencer resolves a pending image. */
+  readonly resolvedImage?: string | undefined;
   readonly createdBy: string;
   readonly createdAt: Date;
+}
+
+/**
+ * The spec a release deploys once its image digest is pinned: the digest replaces the pending tag and the
+ * pending flag is dropped. A spec whose image was never pending is returned unchanged.
+ */
+export function withResolvedImage(
+  spec: NodeWorkloadSpec,
+  resolvedImage: string | undefined
+): NodeWorkloadSpec {
+  if (!spec.imagePending || !resolvedImage) return spec;
+  const { imagePending: _pending, ...rest } = spec;
+  return { ...rest, image: resolvedImage };
 }
 
 export type DesiredState = "running" | "stopped";
@@ -356,6 +376,12 @@ export interface StorePort {
   /** Desired rows for ONE deployment environment. A sequencer only ever lists its own env (CD4). */
   listDesired(env: string): Promise<readonly DesiredRow[]>;
   getRelease(id: string): Promise<ReleaseRow | undefined>;
+  /**
+   * Pin the digest a pending-image release deploys. WRITE_ONCE: only the first call writes
+   * (`resolved_image IS NULL`); a later call returns the already pinned row unchanged, so every attempt of a
+   * release deploys one image. Returns the release with its spec normalized (`withResolvedImage`).
+   */
+  pinResolvedImage(releaseId: string, image: string): Promise<ReleaseRow>;
   /** Write the immutable release AND point desired at it (state `running`) in one transaction. */
   recordRelease(
     input: RecordReleaseInput

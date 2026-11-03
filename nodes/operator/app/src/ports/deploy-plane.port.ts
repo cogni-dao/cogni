@@ -271,6 +271,31 @@ export interface ResolvedNodeSource extends ResolvedNodeRepo {
   readonly imageRepository: string | null;
 }
 
+/**
+ * Resolve a node's source repo and image repository from the catalog baked into the operator image
+ * (story.5137): the same declaration the node-deploy sequencer reads, so every env resolves a node
+ * the same way. An IN-REPO node (the operator, no `source_repo`) resolves to the given parent repo
+ * with `imageRepository: null`. Throws a coded `catalog_missing` (404) when the image does not know
+ * the node.
+ */
+export interface NodeSourceResolverPort {
+  resolveNodeSource(input: {
+    readonly nodeId: string;
+    readonly parentOwner: string;
+    readonly parentRepo: string;
+  }): Promise<ResolvedNodeSource>;
+}
+
+/**
+ * Read a node's declarations (repo-spec and workload manifests) from a repository at a sha. Read-only.
+ * The reader prefers the operator App; for a public repository the App is not installed on, it reads
+ * anonymously. A repository that is neither App-readable nor public reads as absent (`null`).
+ */
+export type DeclarationReadPort = Pick<
+  DeployPlanePort,
+  "fetchFileText" | "listDirectoryEntries"
+>;
+
 /** Input to `classifyEnvManagerPr` — a PR addressed in the parent monorepo. */
 export interface ClassifyEnvManagerPrInput {
   readonly owner: string;
@@ -319,13 +344,6 @@ export interface DeployPlanePort {
    * the merge route catches it to fall back to the monorepo (legacy lane); approve-checks surfaces it.
    */
   resolveNodeRepo(input: ResolveNodeRepoInput): Promise<ResolvedNodeRepo>;
-
-  /**
-   * Resolve a node's source repo AND image repository from the same catalog row (story.5127): the
-   * node-deploy verb reads `.cogni/repo-spec.yaml` + `.cogni/workloads/*` from `{owner, repo}` and
-   * resolves the built image from `imageRepository`. Same discriminator and errors as `resolveNodeRepo`.
-   */
-  resolveNodeSource(input: ResolveNodeRepoInput): Promise<ResolvedNodeSource>;
 
   /**
    * Classify a monorepo PR as an App-signed env-membership PR (`cogni.env-manager.v1`) or not.

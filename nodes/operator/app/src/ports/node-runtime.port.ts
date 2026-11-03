@@ -63,4 +63,6 @@ export interface NodeCatalogEntry {
 export interface NodeCatalogPort {
   /** The catalog entry whose node id is `nodeId`, or undefined when the image does not know it. */
   entryFor(nodeId: string): Promise<NodeCatalogEntry | undefined>;
+  /** Every slug in the image's catalog (any placement). Host-collision checks read it (task.5272). */
+  slugs(): Promise<readonly string[]>;
 }

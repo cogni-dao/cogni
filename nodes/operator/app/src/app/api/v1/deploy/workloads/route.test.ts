@@ -3,12 +3,15 @@
 
 /**
  * Module: `@app/api/v1/deploy/workloads` (test)
- * Purpose: Pin that `POST /api/v1/deploy/workloads` deploys a node from ITS OWN repo (chosen from the
- *   catalog row), lowers an image of `.` to the digest node CI built at the sha, and refuses before
- *   any write when that image is absent or the repo-spec names another node (story.5127).
- * Scope: Mocked IO collaborators (gate, deploy plane, image resolver, store); the REAL declaration
- *   check and lowering (`features/node-deploy/declarations`, `@cogni/repo-spec`) run unchanged.
- * Side-effects: filesystem read of the checked-in root repo-spec and canary manifest
+ * Purpose: Pin that `POST /api/v1/deploy/workloads` is ONE front door for every env (story.5137): it resolves a
+ *   node's own repo from the catalog baked into the operator image (the same on every env), refuses a lane it
+ *   does not serve or the catalog has not handed to the verb BEFORE any read or write, never waits on node CI
+ *   (an image of `.` lowers to the pending tag `<image_repository>:sha-<sha>`; the sequencer pins the digest),
+ *   and refuses a repo-spec that names another node.
+ * Scope: Mocked IO collaborators (gate, lane refusals, declaration reader, store); the REAL image catalog
+ *   resolution (this repo's `infra/catalog`) and the REAL declaration check and lowering
+ *   (`features/node-deploy/declarations`, `@cogni/repo-spec`) run unchanged.
+ * Side-effects: filesystem read of the checked-in catalog, root repo-spec and canary manifest
  */
 
 import { readFileSync } from "node:fs";
@@ -16,32 +19,38 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { BuiltImageRegistryError } from "@/ports";
-
 const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
+const TOKS5_ID = "f66b260b-4633-41e2-8711-b7c1b8449cc1";
 const SHA = "3521b6422693fbbe1c7f80fe9ed9f476721e0970";
-const DIGEST = `sha256:${"cd".repeat(32)}`;
+const PENDING = `ghcr.io/cogni-dao/toks5:sha-${SHA}`;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, "../../../../../../../../..");
-const REPO_SPEC = readFileSync(
+const OPERATOR_REPO_SPEC = readFileSync(
   path.join(ROOT, ".cogni/repo-spec.yaml"),
   "utf8"
 );
+// toks5's own repo-spec names toks5, not the operator.
+const REPO_SPEC = OPERATOR_REPO_SPEC.replaceAll(NODE_ID, TOKS5_ID);
 const CANARY = readFileSync(
   path.join(ROOT, ".cogni/workloads/canary.yaml"),
   "utf8"
 );
 // The same manifest, but its image is "the image node CI built at this sha".
 const CANARY_BUILT = CANARY.replace(/^ {4}image: .*$/m, '    image: "."');
+const TOKS5_ROW = {
+  name: "toks5",
+  compute_api: { "candidate-a": "node-deploy" },
+};
 
 const gate = vi.fn();
-const resolveNodeSource = vi.fn();
+const envNotServed = vi.fn();
+const nodeNotOnDeployVerb = vi.fn();
 const fetchFileText = vi.fn();
 const listDirectoryEntries = vi.fn();
-const resolveBuiltImage = vi.fn();
 const recordRelease = vi.fn();
 const getDesired = vi.fn();
 
@@ -64,38 +73,41 @@ vi.mock("@/bootstrap/http", () => ({
 }));
 vi.mock("./_lib/gate", () => ({
   gate: (...args: unknown[]) => gate(...args),
-  envNotServed: () => undefined,
+}));
+vi.mock("./_lib/lane", () => ({
+  envNotServed: (...args: unknown[]) => envNotServed(...args),
+  nodeNotOnDeployVerb: (...args: unknown[]) => nodeNotOnDeployVerb(...args),
 }));
 vi.mock("@/shared/env", () => ({
   serverEnv: () => ({
-    NODE_SUBMODULE_PARENT_OWNER: "cogni-dao",
-    NODE_SUBMODULE_PARENT_REPO: "cogni",
+    // The candidate's test parent: it holds NO canonical node catalog rows.
+    NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
+    NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
     DEPLOY_ENVIRONMENT: "candidate-a",
   }),
 }));
 vi.mock("@/shared/config", () => ({ getNodeId: () => NODE_ID }));
-vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
-  createOperatorDeployPlane: () => ({
-    resolveNodeSource,
-    fetchFileText,
-    listDirectoryEntries,
-  }),
-}));
-vi.mock("@/bootstrap/capabilities/built-image-resolver", () => ({
-  createBuiltImageResolver: () => ({ resolveBuiltImage }),
-}));
+vi.mock(
+  "@/bootstrap/capabilities/node-source-resolver",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/bootstrap/capabilities/node-source-resolver")
+    >()),
+    createDeclarationReader: () => ({ fetchFileText, listDirectoryEntries }),
+  })
+);
 vi.mock("@/bootstrap/capabilities/node-deploy-store", () => ({
   createNodeDeployStore: () => ({ recordRelease, getDesired }),
 }));
 
-const post = async (): Promise<Response> => {
+const post = async (env = "candidate-a"): Promise<Response> => {
   const { POST } = await import("./route");
   return POST(
     new Request("https://operator.example/api/v1/deploy/workloads", {
       method: "POST",
       body: JSON.stringify({
-        nodeId: "toks5",
-        env: "candidate-a",
+        nodeId: "node-ref",
+        env,
         workload: "canary",
         sourceSha: SHA,
       }),
@@ -117,16 +129,18 @@ function repoServes(manifest: string, repoSpec = REPO_SPEC): void {
   ]);
 }
 
-describe("POST /api/v1/deploy/workloads: a node deploys from its own repo", () => {
+const recorded = () => recordRelease.mock.calls[0]?.[0];
+
+describe("POST /api/v1/deploy/workloads: one front door, a node deploys from its own repo", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    gate.mockResolvedValue({ ok: true, node: { id: NODE_ID, slug: "toks5" } });
-    resolveNodeSource.mockResolvedValue({
-      owner: "cogni-dao",
-      repo: "toks5",
-      imageRepository: "ghcr.io/cogni-dao/toks5",
+    gate.mockResolvedValue({
+      ok: true,
+      node: { id: TOKS5_ID, slug: "toks5" },
+      catalogRow: TOKS5_ROW,
     });
-    resolveBuiltImage.mockResolvedValue(`ghcr.io/cogni-dao/toks5@${DIGEST}`);
+    envNotServed.mockReturnValue(undefined);
+    nodeNotOnDeployVerb.mockReturnValue(undefined);
     recordRelease.mockImplementation(async (input: { spec: unknown }) => ({
       release: { id: "11111111-1111-4111-8111-111111111111", spec: input.spec },
       desired: { state: "running" },
@@ -134,15 +148,9 @@ describe("POST /api/v1/deploy/workloads: a node deploys from its own repo", () =
     repoServes(CANARY_BUILT);
   });
 
-  it("reads the repo-spec and manifests from the catalog-resolved repo at the sha, and pins the built image", async () => {
+  it("resolves a canonical node from the image catalog on a candidate-a config (test-org parent), reads its repo at the sha, and records the PENDING image (ALWAYS_DEFER)", async () => {
     const response = await post();
     expect(response.status).toBe(200);
-
-    expect(resolveNodeSource).toHaveBeenCalledWith({
-      parentOwner: "cogni-dao",
-      parentRepo: "cogni",
-      slug: "toks5",
-    });
     for (const call of fetchFileText.mock.calls)
       expect(call[0]).toMatchObject({
         owner: "cogni-dao",
@@ -155,96 +163,105 @@ describe("POST /api/v1/deploy/workloads: a node deploys from its own repo", () =
       path: ".cogni/workloads",
       ref: SHA,
     });
-    expect(resolveBuiltImage).toHaveBeenCalledWith({
-      imageRepository: "ghcr.io/cogni-dao/toks5",
-      sourceSha: SHA,
-    });
     expect(recordRelease).toHaveBeenCalledTimes(1);
-    expect(recordRelease.mock.calls[0]?.[0]).toMatchObject({
-      nodeId: NODE_ID,
+    expect(recorded()).toMatchObject({
+      nodeId: TOKS5_ID,
       env: "candidate-a",
       workload: "canary",
       sourceSha: SHA,
-      spec: { name: "canary", image: `ghcr.io/cogni-dao/toks5@${DIGEST}` },
+      createdBy: "user:user-1",
+      // never waits on node CI: the tag node CI will publish, flagged pending; the sequencer pins the digest
+      spec: { name: "canary", image: PENDING, imagePending: true },
     });
   });
 
-  it("returns 422 built_image_not_found and writes nothing when the image was never built", async () => {
-    resolveBuiltImage.mockResolvedValue(null);
-    const response = await post();
-    expect(response.status).toBe(422);
-    await expect(response.json()).resolves.toMatchObject({
-      error: "built_image_not_found",
-    });
-    expect(recordRelease).not.toHaveBeenCalled();
+  it("decides both lane refusals from the catalog row the gate returned, for the requested env and node", async () => {
+    expect((await post("preview")).status).toBe(200);
+    expect(envNotServed).toHaveBeenCalledWith("preview", TOKS5_ID, TOKS5_ROW);
+    expect(nodeNotOnDeployVerb).toHaveBeenCalledWith(
+      "preview",
+      TOKS5_ID,
+      TOKS5_ROW
+    );
   });
 
-  it("returns a retryable 502 when the image registry fails", async () => {
-    resolveBuiltImage.mockRejectedValue(
-      new BuiltImageRegistryError("ghcr 503")
+  it("returns the env_not_served refusal before any GitHub read or write", async () => {
+    envNotServed.mockReturnValue(
+      NextResponse.json(
+        { error: "env_not_served", served: ["candidate-a"] },
+        { status: 409 }
+      )
     );
     const response = await post();
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(409);
     await expect(response.json()).resolves.toMatchObject({
-      error: "built_image_lookup_failed",
+      error: "env_not_served",
     });
+    expect(fetchFileText).not.toHaveBeenCalled();
     expect(recordRelease).not.toHaveBeenCalled();
   });
 
-  it("does not look up an image when every manifest image is already digest-pinned", async () => {
+  it("refuses 409 node_not_on_deploy_verb (CD4) before any GitHub read or write, so the verb never races another writer", async () => {
+    nodeNotOnDeployVerb.mockReturnValue(
+      NextResponse.json({ error: "node_not_on_deploy_verb" }, { status: 409 })
+    );
+    const response = await post();
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "node_not_on_deploy_verb",
+    });
+    expect(fetchFileText).not.toHaveBeenCalled();
+    expect(recordRelease).not.toHaveBeenCalled();
+  });
+
+  it("keeps a manifest image that is already digest-pinned as is: not pending", async () => {
     repoServes(CANARY);
     const response = await post();
     expect(response.status).toBe(200);
-    expect(resolveBuiltImage).not.toHaveBeenCalled();
+    expect(recorded().spec.image).toBe(CANARY_IMAGE());
+    expect(recorded().spec.imagePending).toBeUndefined();
   });
 
-  it("keeps an in-repo node (the operator) on the parent repo and refuses an image of '.'", async () => {
+  it("keeps an in-repo node (the operator) on the parent repo and refuses an image of '.' (no image repository to defer to)", async () => {
     gate.mockResolvedValue({
       ok: true,
       node: { id: NODE_ID, slug: "operator" },
+      catalogRow: { name: "operator" },
     });
-    resolveNodeSource.mockResolvedValue({
-      owner: "cogni-dao",
-      repo: "cogni",
-      imageRepository: null,
-    });
+    repoServes(CANARY_BUILT, OPERATOR_REPO_SPEC);
     const response = await post();
     expect(response.status).toBe(422);
     await expect(response.json()).resolves.toMatchObject({
       error: "workload_manifest_refused",
       issues: [{ code: "built_image_unresolved" }],
     });
-    expect(resolveBuiltImage).not.toHaveBeenCalled();
     expect(fetchFileText.mock.calls[0]?.[0]).toMatchObject({
-      owner: "cogni-dao",
-      repo: "cogni",
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
     });
+    expect(recordRelease).not.toHaveBeenCalled();
 
-    repoServes(CANARY);
+    repoServes(CANARY, OPERATOR_REPO_SPEC);
     expect((await post()).status).toBe(200);
   });
 
-  it("refuses a repo-spec that names another node (node_mismatch) before any image lookup or write", async () => {
-    gate.mockResolvedValue({
-      ok: true,
-      node: { id: "00000000-0000-4000-8000-000000000000", slug: "toks5" },
-    });
+  it("refuses a repo-spec that names another node (node_mismatch) before any write", async () => {
+    // toks5 is in the catalog, but the repo at this sha declares the operator's node id.
+    repoServes(CANARY_BUILT, OPERATOR_REPO_SPEC);
     const response = await post();
     expect(response.status).toBe(422);
     await expect(response.json()).resolves.toMatchObject({
       error: "node_mismatch",
     });
-    expect(resolveBuiltImage).not.toHaveBeenCalled();
     expect(recordRelease).not.toHaveBeenCalled();
   });
 
-  it("returns 404 catalog_missing when the node has no catalog row", async () => {
-    resolveNodeSource.mockRejectedValue(
-      Object.assign(new Error("not found"), {
-        code: "catalog_missing",
-        status: 404,
-      })
-    );
+  it("returns 404 catalog_missing when the image catalog does not know the node", async () => {
+    gate.mockResolvedValue({
+      ok: true,
+      node: { id: "00000000-0000-4000-8000-000000000000", slug: "ghost" },
+      catalogRow: undefined,
+    });
     const response = await post();
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toMatchObject({
@@ -260,5 +277,38 @@ describe("POST /api/v1/deploy/workloads: a node deploys from its own repo", () =
     const text = await response.text();
     expect(text).toContain("declaration_read_failed");
     expect(text).not.toContain("ghs_secret");
+  });
+});
+
+/** The digest-pinned image the checked-in canary manifest declares. */
+function CANARY_IMAGE(): string {
+  return /^ {4}image: (.*)$/m.exec(CANARY)?.[1]?.trim() ?? "";
+}
+
+describe("image catalog source resolution (the route's resolver)", () => {
+  const parent = {
+    parentOwner: "cogni-test-org",
+    parentRepo: "cogni-monorepo",
+  };
+
+  it("resolves a canonical node to its own repo and image repository, and the operator to the given parent", async () => {
+    const { createNodeSourceResolver } = await vi.importActual<
+      typeof import("@/bootstrap/capabilities/node-source-resolver")
+    >("@/bootstrap/capabilities/node-source-resolver");
+    const resolver = createNodeSourceResolver();
+    await expect(
+      resolver.resolveNodeSource({ nodeId: TOKS5_ID, ...parent })
+    ).resolves.toEqual({
+      owner: "cogni-dao",
+      repo: "toks5",
+      imageRepository: "ghcr.io/cogni-dao/toks5",
+    });
+    await expect(
+      resolver.resolveNodeSource({ nodeId: NODE_ID, ...parent })
+    ).resolves.toEqual({
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+      imageRepository: null,
+    });
   });
 });

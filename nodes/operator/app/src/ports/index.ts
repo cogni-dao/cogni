@@ -210,10 +210,12 @@ export type {
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
   ClassifyEnvManagerPrInput,
+  DeclarationReadPort,
   DeployPlanePort,
   EnvManagerPrClassificationResult,
   NodeInfraReconcileResult,
   NodePromoteResult,
+  NodeSourceResolverPort,
   ObservedWorkflowDispatchResult,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
@@ -346,6 +348,7 @@ export {
   keyString,
   MAX_ATTEMPT_STEPS,
   PayerError,
+  withResolvedImage,
 } from "./node-deploy.port";
 export type {
   NodeDeployedService,

@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml, stringify } from "yaml";
 
+import { nodeWorkloadSpecSchema } from "../src/schema";
 import {
   SCORE_V1B1_SCHEMA_TEXT,
   SCORE_V1B1_SOURCE,
@@ -504,6 +505,34 @@ describe("lowering rules", () => {
     expect(lowerWorkloadManifest(m, { builtImage: built })[1]?.image).toBe(
       built
     );
+  });
+
+  it('an image "." can be deferred to `<repo>:sha-<sha>` as a PENDING app; the schema accepts a tag only with imagePending (story.5137)', () => {
+    const d = canaryDoc();
+    app(d).image = ".";
+    const m = parseWorkloadManifest(stringify(d));
+    const sha = "a".repeat(40);
+    const tag = `ghcr.io/cogni-dao/canary:sha-${sha}`;
+    const app0 = lowerWorkloadManifest(m, { pendingImage: tag })[1];
+    expect(app0).toMatchObject({ image: tag, imagePending: true });
+    // a digest, when also supplied, wins and the app is not pending
+    const built = `ghcr.io/cogni-dao/canary@${DIGEST}`;
+    const pinned = lowerWorkloadManifest(m, {
+      builtImage: built,
+      pendingImage: tag,
+    })[1];
+    expect(pinned?.image).toBe(built);
+    expect(pinned?.imagePending).toBeUndefined();
+    // a bare tag without the pending flag is still refused, so a mutable tag never becomes a spec
+    expect(
+      nodeWorkloadSpecSchema.safeParse({ ...app0, imagePending: undefined })
+        .success
+    ).toBe(false);
+    // a pending image must be the sha tag, and only an app can be pending
+    expect(
+      nodeWorkloadSpecSchema.safeParse({ ...app0, image: "ghcr.io/x/y:latest" })
+        .success
+    ).toBe(false);
   });
 
   it("parses Kubernetes quantities", () => {

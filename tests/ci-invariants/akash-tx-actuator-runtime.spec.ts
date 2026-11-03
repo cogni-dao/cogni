@@ -999,9 +999,17 @@ describe("node-deploy sequencer has no secrets reach in the wallet namespace", (
     const source = read(
       "nodes/operator/app/src/bootstrap/node-deploy-sequencer.ts"
     );
-    expect(source).toMatch(/secretsNamespace === namespace/);
-    expect(source).toContain(
-      "KubernetesStatePasswords(secretsNamespace, environment)"
+    // story.5137: the namespace/env resolution moved into the pure `resolveEnvLanes` (one lane per env the
+    // process serves); the boot refusal moved with it and the root still builds every lane from it.
+    const lanes = read(
+      "nodes/operator/app/src/features/node-deploy/env-lanes.ts"
+    );
+    expect(lanes).toMatch(/secretsNamespace === input\.podNamespace/);
+    expect(lanes).toMatch(/ns === input\.podNamespace/);
+    expect(source).toContain("resolveEnvLanes({");
+    expect(source).toContain("podNamespace: namespace");
+    expect(source).toMatch(
+      /new KubernetesStatePasswords\(\s*lane\.secretsNamespace,\s*lane\.environment\s*\)/
     );
   });
 });

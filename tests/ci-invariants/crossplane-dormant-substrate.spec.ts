@@ -503,7 +503,9 @@ describe("Crossplane substrate boundary (task.5094, task.5096, task.5097)", () =
    * widens automatically the moment a row moves to the Crossplane authority.
    */
   it("names exactly one writer for every (env, owner) the catalog selects crossplane in", () => {
-    expect(CROSSPLANE_SELECTED_PAIRS.length).toBeGreaterThan(0);
+    // story.5137 CD4: every catalog cell is node-deploy, so the selected set is legitimately empty;
+    // the loop is then vacuous and re-arms the moment any row selects crossplane again (CD9 purge
+    // retires this guard with the Crossplane writers).
     const byPair = writersByServedPair(CROSSPLANE_ACTUATOR_WRITERS);
     for (const { env, owner } of CROSSPLANE_SELECTED_PAIRS) {
       expect(

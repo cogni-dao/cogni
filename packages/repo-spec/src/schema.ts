@@ -438,6 +438,20 @@ const workloadImageSchema = z
     "workload image must be pinned by digest: repo[:tag]@sha256:<64 hex>"
   );
 
+/**
+ * The ONE tag-only image a release may carry: `<repo>:sha-<40 hex>`, the image node CI builds at a source
+ * sha, valid ONLY with `imagePending: true` (story.5137). The operator's sequencer resolves it to a digest
+ * once the registry has it and pins that digest write-once on the release, so a mutable tag never reaches a
+ * paid create.
+ */
+const pendingWorkloadImageSchema = z
+  .string()
+  .max(512)
+  .regex(
+    /^[a-z0-9][a-z0-9._/-]*:sha-[0-9a-f]{40}$/,
+    "a pending workload image must be <repo>:sha-<40 hex>"
+  );
+
 const workloadHostSchema = z
   .string()
   .max(253)
@@ -465,7 +479,14 @@ export const nodeWorkloadSpecSchema = z
   .object({
     name: serviceNameSchema,
     kind: z.enum(["app", "state"]),
-    image: workloadImageSchema,
+    /** Digest-pinned, or `<repo>:sha-<40 hex>` when `imagePending` is true (resolved before any create). */
+    image: z.string().max(512),
+    /**
+     * True when `image` is the tag the node's CI publishes at `source_sha` and NOT yet a digest. App only.
+     * Set by the operator at lowering (a manifest image of `.`), never by a manifest. The release store
+     * replaces `image` with the digest and drops this flag once the sequencer pins it (write-once).
+     */
+    imagePending: z.literal(true).optional(),
     command: z.array(z.string().max(8192)).min(1).max(32).optional(),
     /** Container port. An http app is exposed on 80; a tcp state service on the same number. */
     port: z.number().int().min(1).max(65535),
@@ -499,6 +520,14 @@ export const nodeWorkloadSpecSchema = z
      * manifest. Absent = the profile keys only. Operator/fleet credentials are refused at lowering.
      */
     secretKeys: z.array(serviceEnvKeySchema).max(64).optional(),
+    /**
+     * `worker`: a sibling service of the node (for example a code-execution sandbox) that is NOT the node
+     * app. It gets ONLY its own declared secrets (never the `cogni-node-app-v1` profile: no database, auth
+     * or LLM credentials) and starts without the node-app database trust wrapper. Set by the operator when
+     * it lowers a declaration (the repo-spec names the workload's service with no runtime profile, beside a
+     * distinct node-app service), NEVER by a manifest. Absent = the node app.
+     */
+    runtimeProfile: z.literal("worker").optional(),
     /** REQUIRED, no default (CD6): does this workload do work only one live instance may do? */
     exclusive: z.boolean(),
     health: z
@@ -512,6 +541,23 @@ export const nodeWorkloadSpecSchema = z
   .strict()
   .superRefine((w, ctx) => {
     const http = "http" in w.expose;
+    const imageSchema = w.imagePending
+      ? pendingWorkloadImageSchema
+      : workloadImageSchema;
+    const imageCheck = imageSchema.safeParse(w.image);
+    if (!imageCheck.success)
+      ctx.addIssue({
+        code: "custom",
+        path: ["image"],
+        message:
+          imageCheck.error.issues[0]?.message ?? "invalid workload image",
+      });
+    if (w.imagePending && w.kind !== "app")
+      ctx.addIssue({
+        code: "custom",
+        path: ["imagePending"],
+        message: "only an app workload can carry a pending image",
+      });
     if (w.kind === "app" && !http)
       ctx.addIssue({
         code: "custom",

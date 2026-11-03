@@ -171,6 +171,7 @@ export { AkashChainTruth } from "./node-deploy/akash-chain-truth.adapter";
 export { CloudflareDnsRecords } from "./node-deploy/cloudflare-dns.adapter";
 export { HttpProbe } from "./node-deploy/http-probe.adapter";
 export { ImageCatalogNodes } from "./node-deploy/image-catalog.adapter";
+export { ImageCatalogNodeSource } from "./node-deploy/image-catalog-source.adapter";
 export { EsoNodeRuntimeSecrets } from "./node-deploy/node-runtime-secrets.adapter";
 export { PostgresNodeDeployStore } from "./node-deploy/postgres-store.adapter";
 // DEV-ONLY adapters (ConsolePayer pays straight from a Console key; FileStatePasswords writes secrets
@@ -235,6 +236,10 @@ export {
   type TemporalScheduleControlConfig,
 } from "./temporal";
 export { SystemClock } from "./time/system.adapter";
+export {
+  AppOrPublicDeclarationReader,
+  GitHubPublicReader,
+} from "./vcs/github-declaration-reader.adapter";
 // Operator-only GitHub-App repo writer — node formation + candidate-flight prep.
 export {
   type ForkFromTemplateInput,

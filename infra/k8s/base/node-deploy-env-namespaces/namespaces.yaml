@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# The EXTRA per-env dedicated secrets namespaces of the production sequencer (story.5137). Same shape as
+# ../operator/node-deploy-secrets-namespace.yaml (which holds cogni-node-deploy-production). Created before the
+# Roles (sync-wave -1). The names are the env identity: the admission policy reads `<env>` from them.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cogni-node-deploy-candidate-a
+  labels:
+    app.kubernetes.io/name: node-deploy-secrets
+    app.kubernetes.io/part-of: cogni
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cogni-node-deploy-preview
+  labels:
+    app.kubernetes.io/name: node-deploy-secrets
+    app.kubernetes.io/part-of: cogni
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"

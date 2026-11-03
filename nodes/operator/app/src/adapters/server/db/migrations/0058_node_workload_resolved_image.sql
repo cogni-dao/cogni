@@ -1,0 +1,1 @@
+ALTER TABLE "node_workload_releases" ADD COLUMN "resolved_image" text;

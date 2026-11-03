@@ -407,6 +407,13 @@
       "when": 1793667008063,
       "tag": "0057_node_workload_attempt_steps",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1793734127987,
+      "tag": "0058_node_workload_resolved_image",
+      "breakpoints": true
     }
   ]
 }

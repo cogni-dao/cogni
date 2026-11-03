@@ -89,6 +89,11 @@ vi.mock("@/bootstrap/otel", () => ({
   ) => handler({ traceId: "trace-1", span: { setAttribute: vi.fn() } }),
 }));
 vi.mock("@/shared/env", () => ({ serverEnv: () => envState }));
+// The lane refusal (`_lib/lane`) compares the target with the operator's own node id; NODE_ID is the operator.
+vi.mock("@/shared/config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/shared/config")>();
+  return { ...actual, getNodeId: () => "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d" };
+});
 vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: () => mockGetSessionUser(),
 }));

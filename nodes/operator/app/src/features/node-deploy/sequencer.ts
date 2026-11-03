@@ -28,6 +28,12 @@
  *   - LOST_MEANS_CHAIN_TRUTH: a lease is lost only when chain/observe say closed or insufficient_funds,
  *     or it fails its proof for `unhealthyLostMs` (15 min) straight. A single miss is not a loss.
  *   - ONE_RUNNER_PER_WORKLOAD: `step` and `reconcile` never overlap for one workload key.
+ *   - IMAGE_PINNED_BEFORE_PAY (story.5137): a release recorded before node CI published its image
+ *     (`spec.imagePending`) waits as `DependencyNotReady` (no attempt row, nothing paid) until the registry
+ *     has `sha-<sha>`; the digest is then pinned WRITE-ONCE on the release, so every attempt deploys one
+ *     image. After `imageAlertMs` unpublished it raises `alert/image_not_published`.
+ *   - LATEST_RELEASE_WINS: the desired row points at the newest release of a workload, so an older release
+ *     that never started (e.g. its image never appeared) is superseded and is never given an attempt.
  *   - ONE_EMIT_HELPER: every event (step, provider strike, alert) is written by `record`, which logs the
  *     Loki line AND appends the same step to the attempt's durable timeline; a failed append is logged
  *     and never fails a deploy decision.
@@ -36,6 +42,7 @@
  */
 
 import type {
+  BuiltImageResolverPort,
   ChainTruthPort,
   NodeCatalogPort,
   NodeRuntimeSecretsPort,
@@ -50,6 +57,7 @@ import {
   type AttemptPatch,
   type AttemptRow,
   type AttemptStep,
+  BuiltImageRegistryError,
   buildCogniKey,
   buildIdentity,
   consecutiveFailures,
@@ -61,8 +69,8 @@ import {
   type WorkloadKey,
 } from "@/ports";
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
-import { type EdgeRouter, hostOwnedBy } from "./edge";
-import { nodeAppEnv, nodeAppSecretKeys } from "./node-app-env";
+import { type EdgeRouter, hostOwnedBy, workerHostRefusal } from "./edge";
+import { nodeAppEnv, nodeAppSecretKeys, workerEnv } from "./node-app-env";
 import { nodeCatalogPolicy } from "./node-catalog-policy";
 import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
 
@@ -100,7 +108,19 @@ export interface SequencerConfig {
   readonly inflightGraceMs: number;
   /** A live lease failing its proof this long is treated as lost (design: 15 min). */
   readonly unhealthyLostMs: number;
+  /**
+   * An unbound attempt whose `observe` keeps failing is left alone only this long (default 15 min since the
+   * first `observe_unavailable`). Then it is failed `orphan_suspect:` with an alert, so the release can
+   * park or retry. The lease is NOT claimed closed: nothing re-observes a `failed` unbound attempt, so a human acts on the
+   * `orphan_suspect` alert (it carries the cogniKey).
+   */
+  readonly observeUnavailableMs: number;
   readonly pollMs: number;
+  /**
+   * A release whose image is still not in the registry this long after it was recorded raises
+   * `alert/image_not_published` (once per throttle window). Nothing is paid while it waits (story.5137).
+   */
+  readonly imageAlertMs: number;
   /**
    * INTERIM provider allowlist for node APP creates (task.5405): the providers whose egress is
    * measured AND admitted to the shared substrate. Sent as `allowProviders` on every app create; the
@@ -124,7 +144,9 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
   maxFailedAttempts: 3,
   inflightGraceMs: 900_000,
   unhealthyLostMs: 900_000,
+  observeUnavailableMs: 900_000,
   pollMs: 3_000,
+  imageAlertMs: 1_800_000,
 };
 
 /**
@@ -147,6 +169,11 @@ export interface SequencerDeps {
   readonly secrets: SecretsPort;
   readonly runtime?: NodeAppRuntimeDeps;
   readonly chain?: ChainTruthPort;
+  /**
+   * Resolves a pending release image (`<repo>:sha-<sha>`) to its digest (story.5137). Absent (dev harness):
+   * a release with a pending image waits as `DependencyNotReady` and is never created.
+   */
+  readonly images?: BuiltImageResolverPort;
   readonly clock: SequencerClock;
   readonly log: SequencerLog;
   readonly config: SequencerConfig;
@@ -294,8 +321,12 @@ export class NodeDeploySequencer {
       return "parked";
     }
 
+    let deployable: ReleaseRow;
     try {
-      await this.resolveEnv(key, release);
+      // The image first: a pending image (`<repo>:sha-<sha>`) is resolved to a digest ONCE, pinned
+      // write-once on the release, and only then can an attempt exist (ALWAYS_DEFER, story.5137).
+      deployable = await this.pinImage(key, release);
+      await this.resolveEnv(key, deployable);
     } catch (error) {
       if (error instanceof DependencyNotReady) {
         await this.emit(key, release, undefined, "dependency", "waiting", {
@@ -318,8 +349,52 @@ export class NodeDeploySequencer {
     await this.emit(key, release, attempt, "attempt_planned", "ok", {
       blue: active?.externalName,
     });
-    await this.drive(key, release, attempt, active);
+    await this.drive(key, deployable, attempt, active);
     return "driven";
+  }
+
+  /**
+   * ALWAYS_DEFER (story.5137): a release recorded before node CI published its image carries
+   * `<repo>:sha-<sha>` with `imagePending`. This resolves the digest through the registry port and pins it
+   * write-once on the release (`pinResolvedImage`), so every attempt of the release deploys ONE image and a
+   * mutable tag never reaches a paid create. Until the image exists it is `DependencyNotReady`: no attempt
+   * row, nothing paid, retried next tick; past `imageAlertMs` it also raises `alert/image_not_published`.
+   * A release whose image is already pinned (the store returns it normalized) passes through untouched.
+   */
+  private async pinImage(
+    key: WorkloadKey,
+    release: ReleaseRow
+  ): Promise<ReleaseRow> {
+    const w = release.spec;
+    if (!w.imagePending) return release;
+    const m = /^(.+):sha-([0-9a-f]{40})$/u.exec(w.image);
+    if (!m?.[1] || !m[2])
+      throw new DependencyNotReady(`pending image ${w.image} is malformed`);
+    if (!this.d.images)
+      throw new DependencyNotReady("no image resolver is configured");
+    let digest: string | null;
+    try {
+      digest = await this.d.images.resolveBuiltImage({
+        imageRepository: m[1],
+        sourceSha: m[2],
+      });
+    } catch (error) {
+      if (error instanceof BuiltImageRegistryError)
+        throw new DependencyNotReady(
+          `image registry unavailable: ${error.message.slice(0, 200)}`
+        );
+      throw error;
+    }
+    if (digest === null) {
+      const waitedMs = this.d.clock.now() - release.createdAt.getTime();
+      if (waitedMs >= this.d.config.imageAlertMs)
+        await this.alert(key, release, undefined, "image_not_published", {
+          waitedMs,
+          image: w.image,
+        });
+      throw new DependencyNotReady(`image ${w.image} is not published yet`);
+    }
+    return this.d.store.pinResolvedImage(release.id, digest);
   }
 
   /**
@@ -410,7 +485,7 @@ export class NodeDeploySequencer {
       if (node) {
         Object.assign(env, node.env);
         requiredCountryCodes = node.requiredCountryCodes;
-        nodeApp = true;
+        nodeApp = node.nodeApp;
       }
       env.RELEASE_SHA = release.sourceSha;
     }
@@ -445,7 +520,12 @@ export class NodeDeploySequencer {
     key: WorkloadKey,
     release: ReleaseRow
   ): Promise<
-    { env: Record<string, string>; requiredCountryCodes: string[] } | undefined
+    | {
+        env: Record<string, string>;
+        requiredCountryCodes: string[];
+        nodeApp: boolean;
+      }
+    | undefined
   > {
     const rt = this.d.runtime;
     if (!rt) return undefined;
@@ -466,6 +546,38 @@ export class NodeDeploySequencer {
       policy = nodeCatalogPolicy(entry.row, key.env);
     } catch (error) {
       throw new DependencyNotReady(`catalog policy: ${errText(error)}`);
+    }
+    if (w.runtimeProfile === "worker") {
+      // WORKER_GETS_ITS_OWN_SECRETS_ONLY (task.5272): no node-app profile, no substrate, no database.
+      let workerBucket: Readonly<Record<string, string>>;
+      try {
+        workerBucket = await rt.secrets.read(
+          key.env,
+          entry.slug,
+          w.secretKeys ?? []
+        );
+      } catch (error) {
+        if (error instanceof NodeRuntimeSecretsError)
+          throw new DependencyNotReady(
+            `node runtime secrets ${error.code}${error.keys.length > 0 ? `: ${error.keys.join(", ")}` : ""}`
+          );
+        throw error;
+      }
+      try {
+        return {
+          env: workerEnv({
+            env: key.env,
+            sourceSha: release.sourceSha,
+            port: w.port,
+            secretKeys: w.secretKeys ?? [],
+            secrets: workerBucket,
+          }),
+          requiredCountryCodes: [...policy.requiredCountryCodes],
+          nodeApp: false,
+        };
+      } catch (error) {
+        throw new DependencyNotReady(errText(error));
+      }
     }
     const boundEnvNames = w.bindings.map((b) => b.env);
     let bucket: Readonly<Record<string, string>>;
@@ -498,6 +610,7 @@ export class NodeDeploySequencer {
           boundEnvNames,
         }),
         requiredCountryCodes: [...policy.requiredCountryCodes],
+        nodeApp: true,
       };
     } catch (error) {
       throw new DependencyNotReady(errText(error));
@@ -559,12 +672,31 @@ export class NodeDeploySequencer {
     if (declaredHost && this.d.runtime) {
       // HOST_IS_THE_NODES_OWN: a node may claim only its own host, so node A can never take node B's.
       const owner = await this.d.runtime.catalog.entryFor(key.nodeId);
-      if (!owner || !hostOwnedBy(declaredHost, key.env, owner.slug))
+      // Only an operator-lowered repo-spec sibling (a worker) may use `<slug>-<workload>`.
+      const worker = w.runtimeProfile === "worker" ? w.name : undefined;
+      if (!owner || !hostOwnedBy(declaredHost, key.env, owner.slug, worker))
         return this.failAttempt(
           key,
           release,
           attempt,
           `edge_host_refused: ${declaredHost} is not the host node ${owner?.slug ?? key.nodeId} may claim in ${key.env}`
+        );
+      const refusal =
+        worker !== undefined && declaredHost !== undefined
+          ? workerHostRefusal({
+              host: declaredHost,
+              env: key.env,
+              slug: owner.slug,
+              workload: worker,
+              catalogSlugs: await this.d.runtime.catalog.slugs(),
+            })
+          : undefined;
+      if (refusal)
+        return this.failAttempt(
+          key,
+          release,
+          attempt,
+          `edge_host_refused: ${refusal}`
         );
     }
     let runtime: ResolvedRuntime;
@@ -573,6 +705,12 @@ export class NodeDeploySequencer {
     } catch (error) {
       return this.failAttempt(key, release, attempt, errText(error));
     }
+
+    // A refused create (provider_rejected, ...) already ended this key's life: it is never replayed under
+    // the same nd: key (the actuator would answer `akash_tx_create_replayed` forever). Fail the attempt;
+    // the next attempt gets a new ordinal. If failAttempt had to defer (observe down) we land here again.
+    if (attempt.error?.startsWith(REFUSED_PREFIX))
+      return this.failAttempt(key, release, attempt, attempt.error);
 
     // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
     if (this.createMayStillBeInFlight(attempt)) {
@@ -604,17 +742,14 @@ export class NodeDeploySequencer {
           "ambiguous create resolved to nothing; next ordinal"
         );
       } catch (error) {
-        await this.emit(
+        return this.observeUnavailable(
           key,
           release,
           attempt,
           "create",
-          "observe_unavailable",
-          {
-            error: errText(error),
-          }
+          "ambiguous create unresolved",
+          error
         );
-        return attempt;
       }
     }
 
@@ -680,15 +815,80 @@ export class NodeDeploySequencer {
           // Resolve now; on a failed read the marker makes the next tick resolve first.
           return this.doCreate(key, release, marked, blue);
         }
-        return this.failAttempt(
+        return this.refuseCreate(
           key,
           release,
           attempt,
-          `create refused: ${error.code}: ${error.message}`
+          `${error.code}: ${error.message}`
         );
       }
-      return this.failAttempt(key, release, attempt, errText(error));
+      // Any other throw from create is also never replayed under this key (observe guards orphans).
+      return this.refuseCreate(key, release, attempt, errText(error));
     }
+  }
+
+  /** Persist the refusal BEFORE failAttempt, so a deferred failAttempt is never followed by a replay. */
+  private async refuseCreate(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    text: string
+  ): Promise<AttemptRow> {
+    const refused = await this.d.store.updateAttempt(attempt.id, {
+      error: `${REFUSED_PREFIX}${text}`.slice(0, 500),
+    });
+    return this.failAttempt(key, release, refused, refused.error ?? "");
+  }
+
+  /**
+   * An unbound attempt's `observe` threw. Wait, but only `observeUnavailableMs` since the FIRST failure
+   * (kept in `unhealthySince`, which has no other meaning on an attempt that never bound a lease). Past
+   * the bound the attempt is failed `orphan_suspect:` and alerted, unblocking the release. We never claim
+   * the lease is closed: the key may still own one, and the alert names it for a human.
+   */
+  private async observeUnavailable(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    step: string,
+    context: string,
+    error: unknown
+  ): Promise<AttemptRow> {
+    const now = this.d.clock.now();
+    const since = attempt.unhealthySince;
+    if (!since) {
+      const marked = await this.d.store.updateAttempt(attempt.id, {
+        unhealthySince: new Date(now),
+      });
+      await this.emit(key, release, marked, step, "observe_unavailable", {
+        error: errText(error),
+      });
+      return marked;
+    }
+    if (now - since.getTime() < this.d.config.observeUnavailableMs) {
+      await this.emit(key, release, attempt, step, "observe_unavailable", {
+        error: errText(error),
+      });
+      return attempt;
+    }
+    const reason =
+      `orphan_suspect: ${context}; observe unavailable since ${since.toISOString()}: ${errText(error)}`.slice(
+        0,
+        500
+      );
+    const failed = await this.d.store.updateAttempt(attempt.id, {
+      phase: "failed",
+      error: reason,
+      unhealthySince: null,
+    });
+    await this.emit(key, release, failed, "attempt_failed", "failed", {
+      reason,
+    });
+    await this.alert(key, release, failed, "orphan_suspect", {
+      reason,
+      cogniKey: failed.cogniKey,
+    });
+    return failed;
   }
 
   /**
@@ -738,6 +938,8 @@ export class NodeDeploySequencer {
       externalName: resource.externalName,
       endpoints: resource.endpoints,
       error: null,
+      // An observe-unavailable clock (unbound attempt) must not read as an unhealthy-lease clock.
+      unhealthySince: null,
       leasedAt: new Date(this.d.clock.now()),
       ...(resource.providerAccount
         ? { provider: resource.providerAccount }
@@ -1048,10 +1250,18 @@ export class NodeDeploySequencer {
           reason: trimmed,
           observeError: errText(error),
         });
-        return attempt;
+        return this.observeUnavailable(
+          key,
+          release,
+          attempt,
+          "attempt_failed",
+          trimmed,
+          error
+        );
       }
       if (obs.found && obs.resource) {
         const bound = await this.d.store.updateAttempt(attempt.id, {
+          unhealthySince: null,
           externalName: obs.resource.externalName,
           endpoints: obs.resource.endpoints,
           ...(obs.resource.providerAccount
@@ -1073,6 +1283,7 @@ export class NodeDeploySequencer {
       const next = await this.d.store.updateAttempt(attempt.id, {
         phase: "failed",
         error: trimmed,
+        unhealthySince: null,
       });
       await this.emit(key, release, next, "attempt_failed", "failed", {
         reason: trimmed,
@@ -1248,14 +1459,36 @@ export class NodeDeploySequencer {
 
     // Live on chain: a failed proof is only an alert until it has lasted `unhealthyLostMs`.
     if (release.spec.kind === "app" && observeOk) {
-      const healthy = await this.quickProof(release, active);
-      if (healthy) {
-        if (active.unhealthySince) {
-          await this.d.store.updateAttempt(active.id, { unhealthySince: null });
+      const proof = await this.quickProof(release, active);
+      // `error` is null on an active attempt; DEPENDENCY_DOWN_MARK records that the current unhealthy
+      // clock was started by (or has run through) a dependency outage, not by a bad lease.
+      const wasDependencyDown = active.error === DEPENDENCY_DOWN_MARK;
+      if (proof === "healthy") {
+        if (active.unhealthySince || wasDependencyDown) {
+          await this.d.store.updateAttempt(active.id, {
+            unhealthySince: null,
+            ...(wasDependencyDown ? { error: null } : {}),
+          });
           await this.emit(key, release, active, "unhealthy_cleared", "ok");
         }
         return "healthy";
       }
+      if (proof === "lease_bad" && wasDependencyDown) {
+        // /version started failing only after a dependency outage: the 15 minutes for a BAD lease
+        // start now, so one /version blip can never close a lease the outage kept alive.
+        await this.d.store.updateAttempt(active.id, {
+          unhealthySince: new Date(this.d.clock.now()),
+          error: null,
+        });
+        await this.alert(key, release, active, "proof_failing", {
+          why: "version_failing_after_dependency_down",
+        });
+        return "unhealthy_waiting";
+      }
+      if (proof === "dependency_down" && !wasDependencyDown)
+        await this.d.store.updateAttempt(active.id, {
+          error: DEPENDENCY_DOWN_MARK,
+        });
       const since = active.unhealthySince ?? new Date(this.d.clock.now());
       if (!active.unhealthySince) {
         await this.d.store.updateAttempt(active.id, { unhealthySince: since });
@@ -1266,7 +1499,15 @@ export class NodeDeploySequencer {
         this.d.clock.now() - since.getTime() >=
         this.d.config.unhealthyLostMs
       ) {
-        // A failing but LIVE lease is closed and confirmed before anything replaces it.
+        if (proof === "dependency_down") {
+          // The lease still serves its exact build: a failing /readyz is a dependency outage, and a
+          // replacement would hit the same outage. Keep it, alert, never close or redeploy.
+          await this.alert(key, release, active, "dependency_down", {
+            why: "readyz_failing_version_serving",
+          });
+          return "unhealthy_waiting";
+        }
+        // lease_bad: /version fails too. A failing but LIVE lease is closed and confirmed before anything replaces it.
         if (await this.closeAndConfirm(active))
           return this.handleLost(key, release, active, "proof_failed_15m");
         await this.alert(key, release, active, "close_unconfirmed", {
@@ -1298,19 +1539,23 @@ export class NodeDeploySequencer {
     return "lost_app";
   }
 
+  /**
+   * `dependency_down`: the exact build still answers /version but /readyz fails (a dependency outage the
+   * lease cannot fix). `lease_bad`: /version itself fails or serves another sha.
+   */
   private async quickProof(
     release: ReleaseRow,
     a: AttemptRow
-  ): Promise<boolean> {
+  ): Promise<"healthy" | "dependency_down" | "lease_bad"> {
     const w = release.spec;
     const host = publicHostOf(w);
     const ingress = ingressHostOf(a.endpoints, host);
-    if (!host || !ingress || !w.health) return true;
+    if (!host || !ingress || !w.health) return "healthy";
     const v = await this.d.probe.hostRouted(ingress, host, w.health.version);
     if (v.status !== 200 || buildShaOf(v.body) !== release.sourceSha)
-      return false;
+      return "lease_bad";
     const r = await this.d.probe.hostRouted(ingress, host, w.health.ready);
-    return r.status === 200;
+    return r.status === 200 ? "healthy" : "dependency_down";
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1497,6 +1742,12 @@ export class NodeDeploySequencer {
     });
   }
 }
+
+/** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
+const REFUSED_PREFIX = "create refused: ";
+
+/** Marker on an ACTIVE attempt (whose `error` is otherwise null): its failing proof is a dependency outage. */
+const DEPENDENCY_DOWN_MARK = "dependency_down";
 
 /** `ambiguous: <code>`; a network failure carries the failure time: `ambiguous: network@<epoch ms>`. */
 function ambiguousMarker(code: string, now: number): string {

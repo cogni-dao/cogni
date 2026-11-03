@@ -94,29 +94,70 @@ describe("ImageCatalogNodes", () => {
     ).toEqual([]);
   });
 
-  it("nodeDeploySlugs lists exactly the nodes whose compute_api cell for that env is node-deploy (REAL catalog)", async () => {
+  it("nodeDeploySlugs lists exactly the fleet's nodes whose compute_api cell for that env is node-deploy (REAL catalog)", async () => {
     const repoRoot = resolve(__dirname, "../../../../../../..");
     const catalog = new ImageCatalogNodes({ root: repoRoot });
-    const production = await catalog.nodeDeploySlugs("production");
+    const production = await catalog.nodeDeploySlugs("production", "cogni-dao");
     expect([...production].sort()).toEqual([
       "beacon",
       "levelup",
       "node-template",
       "poly",
+      "red",
       "toks5",
     ]);
-    // crossplane nodes never contribute a host
-    for (const crossplane of ["red"])
-      expect(production).not.toContain(crossplane);
-    expect([...(await catalog.nodeDeploySlugs("candidate-a"))].sort()).toEqual([
-      "toks5",
-    ]);
-    expect(await catalog.nodeDeploySlugs("candidate-a")).not.toContain("poly");
+    // the operator is not a node-deploy node: it never contributes a host
+    expect(production).not.toContain("operator");
+    expect(
+      [...(await catalog.nodeDeploySlugs("candidate-a", "cogni-dao"))].sort()
+    ).toEqual(["node-template", "poly", "red", "toks5"]);
+    expect(
+      [...(await catalog.nodeDeploySlugs("preview", "cogni-dao"))].sort()
+    ).toEqual(["poly", "toks5"]);
+    expect(
+      await catalog.nodeDeploySlugs("candidate-a", "cogni-dao")
+    ).not.toContain("beacon");
     // the guard built from it admits poly in production and refuses operator hosts
     const re = edgeHostRegexFor(production);
     expect(re.test("poly.cognidao.org")).toBe(true);
     expect(re.test("beacon.cognidao.org")).toBe(true);
-    expect(re.test("red.cognidao.org")).toBe(false);
+    expect(re.test("red.cognidao.org")).toBe(true);
     expect(re.test("cognidao.org")).toBe(false);
+  });
+
+  it("FLEET_FILTER: another fleet's operator never claims canonical nodes (the test operator never deploys canonical toks5), and an unset fleet claims none", async () => {
+    const repoRoot = resolve(__dirname, "../../../../../../..");
+    const catalog = new ImageCatalogNodes({ root: repoRoot });
+    for (const env of ["candidate-a", "preview", "production"]) {
+      expect(await catalog.nodeDeploySlugs(env, "cogni-test-org")).toEqual([]);
+      expect(await catalog.nodeDeploySlugs(env, undefined)).toEqual([]);
+      expect((await catalog.nodeDeploySlugs(env, "COGNI-DAO")).length).toBe(
+        (await catalog.nodeDeploySlugs(env, "cogni-dao")).length
+      );
+    }
+  });
+
+  it("ImageCatalogNodeSource refuses an image repository that does not match the source repo", async () => {
+    const { ImageCatalogNodeSource } = await import("@/adapters/server");
+    const bad = new ImageCatalogNodeSource({
+      slugs: async () => ["toks5"],
+      entryFor: async () => ({
+        slug: "toks5",
+        row: {
+          name: "toks5",
+          type: "node",
+          path_prefix: "nodes/toks5/",
+          source_repo: "https://github.com/cogni-dao/toks5.git",
+          image_repository: "ghcr.io/evil/other",
+        },
+      }),
+    });
+    await expect(
+      bad.resolveNodeSource({
+        nodeId: "f66b260b-4633-41e2-8711-b7c1b8449cc1",
+        parentOwner: "cogni-test-org",
+        parentRepo: "cogni-monorepo",
+      })
+    ).rejects.toMatchObject({ code: "image_repository_mismatch" });
   });
 });
