@@ -38,6 +38,7 @@
 import {
   extractNodeAppSecretRefs,
   extractNodeId,
+  extractNodeServices,
   lowerWorkloadManifests,
   parseRepoSpec,
   resolveRuntimeProfileSecretRefs,
