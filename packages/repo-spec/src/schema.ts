@@ -1223,6 +1223,22 @@ export const repoSpecSchema = z
      */
     deployment: nodeDeploymentSchema.optional(),
 
+    /**
+     * story.5137 / task.5411 — secret KEY names the node's `app` workload needs BEYOND the
+     * `cogni-node-app-v1` profile keys. The node-deploy verb reads this; the legacy
+     * `deployment.services[].secret_refs` is still read as a fallback for nodes not yet migrated.
+     * Values live only in OpenBao; this lists names, never values.
+     */
+    secret_refs: z
+      .array(nodeServiceSecretRefSchema)
+      .optional()
+      .refine(
+        (refs) =>
+          refs === undefined ||
+          new Set(refs.map((r) => r.key)).size === refs.length,
+        "secret_refs keys must be unique"
+      ),
+
     /** Provider-neutral state substrate requested by this sovereign node. */
     state: nodeStateSpecSchema.optional(),
 

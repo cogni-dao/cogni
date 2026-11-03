@@ -5,8 +5,9 @@
  * Module: `@app/api/v1/nodes/[id]/envs`
  * Purpose: Node env-membership verb (story.5020 W4) — add OR remove ONE environment from a node's
  *   deploy reach by opening an operator-authored PR that edits the OPERATOR monorepo catalog
- *   (`infra/catalog/<slug>.yaml` `envs:` line + placement cells + the matching overlay /
- *   ApplicationSet / appsets kustomization). Individual memberships are independently editable, but
+ *   (`infra/catalog/<slug>.yaml` `envs:` line + `deployment_provider` / `compute_api: node-deploy`
+ *   cells + scheduler routing; story.5137 / task.5411 — no AppSet, overlay or ExternalSecret).
+ *   Individual memberships are independently editable, but
  *   the final environment and current `activity_env` cannot be removed. Full decommission and
  *   authority transfer are separate flows.
  *   PLUS the placement lever (story.5016 T5): `{env, placement: "k3s"|"akash"}` picks the serving lane
@@ -29,22 +30,15 @@
  *     leases from the durable ledger BEFORE the PR opens and embeds them (`openLeases` + a `verify`
  *     read-back URL) in the response — the receipts the Argo prune → Crossplane REMOVE → actuator
  *     delete chain is expected to close. Enumeration only; the close itself never happens app-side.
- *   - GENERATION_IS_NOT_CALLER_INPUT / NOTHING_BUMPS_IMPLICITLY (lease-reactivation.ts): an add's
- *     `lease_generation` is DERIVED from ledger-receipt evidence (every state — a TERMINAL
- *     `released`/`failed` receipt forces the bump, task.5132), never taken from the request
- *     body, and becomes real only as the reviewed catalog commit this verb authors.
- *   - EVIDENCE_OR_REFUSE (task.5132): an ADD REFUSES (503 `generation_evidence_unavailable`)
- *     rather than guesses a generation — if the lease-read capability is unwired
- *     (AKASH_ACTUATOR_ACCOUNT_ID unpinned) or the ledger read fails, no PR opens. Falling back
- *     to catalogGeneration silently re-presented a spent gen-0 key on the live incident.
- *     The REMOVE enumeration stays best-effort (`openLeases: null` degrades, never blocks).
+ *   - NO_LEASE_GENERATION (task.5411): the node-deploy verb mints a fresh lease per release, so
+ *     neither the add nor the region verb derives or writes a `lease_generation` cell.
  *   - OBSERVABLE: wrapped in `wrapRouteHandlerWithLogging` (routeId `nodes.envs`) — every request
  *     emits the standard start/end envelope + metrics (validation finding on #2311: this verb
  *     previously logged nothing).
  * Side-effects: IO (GitHub REST API, Postgres read)
  * Links: src/adapters/server/vcs/github-repo-write.ts (openNodeEnvPr),
  *   src/shared/node-app-scaffold/gens/env-membership-plan.ts,
- *   src/features/compute/lease-reactivation.ts, docs/design/operator-fleet-safety.md, story.5020
+ *   docs/design/operator-fleet-safety.md, story.5020, task.5411
  * @public
  */
 
@@ -55,11 +49,6 @@ import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import {
-  replacementLeaseGeneration,
-  requiredLeaseGeneration,
-} from "@/features/compute/lease-reactivation";
-import { receiptsExcludingInstances } from "@/features/compute/node-isolated-services";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import type { AkashTxAllocationRecord } from "@/ports";
 import { nodes } from "@/shared/db/nodes";
@@ -288,52 +277,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       });
     }
 
-    // REGION verb (story.5050): require this env's workload to be placed in `countries`.
-    // Reads the SAME ledger evidence the ADD does, for the same reason and with the same
-    // fail-closed posture: the requirement only binds on a fresh mint (Akash refuses in-place
-    // placement change), so the plan must move `lease_generation` with the cell — and
-    // GENERATION_IS_NOT_CALLER_INPUT means that value has to come from receipt evidence, never
-    // from the request body. Without a readable ledger this verb would have to guess a
-    // generation, and guessing is what re-presented a spent key on the live incident (task.5132).
+    // REGION verb (story.5050): require this env's workload to be placed in `countries`. The
+    // node-deploy sequencer reads the cell on its next release, which mints a fresh lease, so no
+    // lease_generation moves with it (task.5411).
     if (hasCountries) {
-      const regionLeaseRead = getContainer().leaseReadCapability;
-      if (!regionLeaseRead) {
-        return NextResponse.json(
-          {
-            error: "generation_evidence_unavailable",
-            reason:
-              "AKASH_ACTUATOR_ACCOUNT_ID is not pinned on this runtime — the region verb cannot derive the lease_generation the requirement must bind on without reading the allocation ledger",
-          },
-          { status: 503 }
-        );
-      }
-      let regionReceipts: readonly AkashTxAllocationRecord[];
-      try {
-        regionReceipts = await regionLeaseRead.listReceipts({
-          nodeId: node.id,
-          environment: targetEnv,
-          limit: LEASE_ENUMERATION_LIMIT,
-        });
-      } catch (err) {
-        ctx.log.warn(
-          {
-            nodeId: node.id,
-            env: targetEnv,
-            errorCode: "generation_evidence_unavailable",
-            causeMessage: err instanceof Error ? err.message : "unknown",
-          },
-          "node_envs_lease_read_failed"
-        );
-        return NextResponse.json(
-          {
-            error: "generation_evidence_unavailable",
-            reason:
-              "the allocation-ledger read failed — the region verb refuses to guess the lease_generation its requirement must bind on",
-          },
-          { status: 503 }
-        );
-      }
-
       let result: Awaited<ReturnType<typeof writer.openNodeRegionPr>>;
       try {
         result = await writer.openNodeRegionPr({
@@ -342,15 +289,6 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           slug: node.slug,
           env: targetEnv as NodeFormationEnv,
           countries: countries as readonly string[],
-          // REPLACEMENT, not reactivation — see replacementLeaseGeneration's header. The
-          // catalog's own generation is 0 here because the ledger receipts already carry every
-          // generation this (node, env) has ever minted, and this must bump past all of them.
-          // APP_GENERATION_EVIDENCE_IS_ITS_OWN_FAMILY (story.5093): an isolated-service lease
-          // of this node never moves the primary workload's generation.
-          leaseGeneration: replacementLeaseGeneration({
-            catalogGeneration: 0,
-            receipts: receiptsExcludingInstances(regionReceipts, node.id),
-          }),
         });
       } catch (err) {
         const status = (err as { status?: number })?.status;
@@ -366,76 +304,21 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         env: targetEnv,
         countries,
         result,
-        // REPLACEMENT_ABANDONS_A_PAID_LEASE: name the money this displaces. A region change
-        // mints a NEW lease, so any lease still `allocated` here keeps billing until the
-        // Argo prune -> Crossplane REMOVE -> actuator delete chain closes it, and an
-        // unenumerated one bills invisibly (bug.5189).
-        displacedLeases: regionReceipts
-          .filter((r) => r.state === "allocated")
-          .map((r) => ({ cogniKey: r.cogniKey, receiptId: r.receiptId })),
       });
     }
 
-    // Money-loop wiring (story.5039 PR-B). One (node, env)-scoped ledger read per direction:
-    //   - REMOVE reads `listAllocated` — the env's LIVE paid leases, enumerated BEFORE the PR
-    //     opens: what the Argo prune → Crossplane REMOVE → actuator delete chain is expected to
-    //     close (embedded as `openLeases` + a `verify` URL for the read-back).
-    //   - ADD reads `listReceipts` — receipts in EVERY state, because the evidence
-    //     `requiredLeaseGeneration` derives the catalog's `lease_generation` cell from is
-    //     exactly the TERMINAL (`released`/`failed`) receipts the allocated-only view hides
-    //     (task.5132: deriving from `listAllocated` answered 0 over a terminally failed gen-0
-    //     receipt, and the recreated XR's key was refused with `akash_tx_identity_conflict`).
-    //     GENERATION_IS_NOT_CALLER_INPUT — the REST body never carries it;
-    //     NOTHING_BUMPS_IMPLICITLY — it lands only as this verb's reviewed commit.
-    // catalogGeneration is 0 here: an env being ADDED has no cell (REMOVE_COMPLETES_THE_ROW
-    // drops it with the env), so the receipts are the only evidence that can force a bump.
+    // DEACTIVATE_ENUMERATES_THE_MONEY (story.5039 PR-B): a REMOVE reads the env's LIVE paid leases
+    // (`listAllocated`) before the PR opens, best-effort — `openLeases: null` degrades, never blocks.
+    // An ADD reads nothing: the node-deploy verb mints its own lease per release (task.5411).
     const leaseRead = getContainer().leaseReadCapability;
-    const scope = {
-      nodeId: node.id,
-      environment: targetEnv,
-      limit: LEASE_ENUMERATION_LIMIT,
-    };
     let envReceipts: readonly AkashTxAllocationRecord[] | null = null;
-    if (present === true) {
-      // EVIDENCE_OR_REFUSE (task.5132): the ADD derivation is fail-closed. Without a readable
-      // ledger the verb cannot distinguish "no prior lease" from "spent gen-0 key it must bump
-      // past" — guessing (the old catalogGeneration fallback) authored a catalog PR that
-      // re-presented a spent key and the actuator refused it with `akash_tx_identity_conflict`.
-      if (!leaseRead) {
-        return NextResponse.json(
-          {
-            error: "generation_evidence_unavailable",
-            reason:
-              "AKASH_ACTUATOR_ACCOUNT_ID is not pinned on this runtime — the ADD verb cannot derive lease_generation without reading the allocation ledger",
-          },
-          { status: 503 }
-        );
-      }
+    if (present === false && leaseRead) {
       try {
-        envReceipts = await leaseRead.listReceipts(scope);
-      } catch (err) {
-        ctx.log.warn(
-          {
-            nodeId: node.id,
-            env: targetEnv,
-            errorCode: "generation_evidence_unavailable",
-            causeMessage: err instanceof Error ? err.message : "unknown",
-          },
-          "node_envs_lease_read_failed"
-        );
-        return NextResponse.json(
-          {
-            error: "generation_evidence_unavailable",
-            reason:
-              "the allocation-ledger read failed — the ADD verb refuses to guess lease_generation without receipt evidence",
-          },
-          { status: 503 }
-        );
-      }
-    } else if (leaseRead) {
-      // REMOVE enumeration stays best-effort: `openLeases: null` degrades, never blocks.
-      try {
-        envReceipts = await leaseRead.listAllocated(scope);
+        envReceipts = await leaseRead.listAllocated({
+          nodeId: node.id,
+          environment: targetEnv,
+          limit: LEASE_ENUMERATION_LIMIT,
+        });
       } catch (err) {
         ctx.log.warn(
           {
@@ -447,13 +330,6 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         );
       }
     }
-    const leaseGeneration =
-      present === true && envReceipts
-        ? requiredLeaseGeneration({
-            catalogGeneration: 0,
-            receipts: receiptsExcludingInstances(envReceipts, node.id),
-          })
-        : undefined;
 
     let result: Awaited<ReturnType<typeof writer.openNodeEnvPr>>;
     try {
@@ -463,7 +339,6 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         slug: node.slug,
         env: targetEnv as (typeof NODE_DEPLOY_ENVS)[number],
         present: present as boolean,
-        leaseGeneration,
       });
     } catch (err) {
       const status = (err as { status?: number })?.status;
@@ -485,8 +360,8 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       ...(present === true && result.derived
         ? { derived: result.derived }
         : {}),
-      // DEACTIVATE_ENUMERATES_THE_MONEY (story.5039 PR-B): the receipts the Argo→Crossplane
-      // chain is expected to close, and where to prove it. `openLeases: null` = the ledger
+      // DEACTIVATE_ENUMERATES_THE_MONEY (story.5039 PR-B): the live leases this removal
+      // displaces, and where to prove them closed. `openLeases: null` = the ledger
       // could not be read (capability unwired or read failed) — deliberately distinct from `[]`.
       ...(present === false
         ? {

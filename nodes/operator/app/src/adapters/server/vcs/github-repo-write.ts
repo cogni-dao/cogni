@@ -15,9 +15,10 @@
  *     pins parent workflow code independently while retaining child-only artifact inputs.
  *   - GH_APP_INSTALL_REQUIRED: caller must verify the app is installed on the target repo; we surface a
  *     clear error if not. Installation must cover the node repo (private-safe).
- *   - NODE_FORMATION_TREE: a publish creates one reviewable tree — catalog row (with source_sha pin),
- *     overlay, AppSet, edge-route, and ExternalSecret shape. No gitlink, no .gitmodules
- *     (spec.node-submodule-retirement).
+ *   - NODE_FORMATION_TREE: a publish creates one reviewable tree — catalog row (with source_sha pin and
+ *     `compute_api: node-deploy` per env), edge-route and scheduler routing; the node repo gets its
+ *     `.cogni/workloads/app.yaml`. No AppSet, overlay or ExternalSecret (task.5411). No gitlink, no
+ *     .gitmodules (spec.node-submodule-retirement).
  *   - PR_AGAINST_MAIN: opens node-formation PRs against `main`; never force-pushes review branches.
  *   - PREVIEW_SOURCE_ADDRESSED: preview promotion dispatches `promote-and-deploy.yml`
  *     (ONE_PROMOTION_PRIMITIVE) source-addressed by the node image sha (`node_source_sha`
@@ -38,14 +39,7 @@
  */
 
 import { createHash } from "node:crypto";
-import {
-  extractNodeId,
-  hasDeclaredNodeDeployment,
-  hasDeploymentActivationSpec,
-  parseRepoSpec,
-  type RepoSpec,
-  renderDeploymentActivationSpec,
-} from "@cogni/repo-spec";
+import { extractNodeId, parseRepoSpec } from "@cogni/repo-spec";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
 import { parse as parseYaml } from "yaml";
@@ -65,43 +59,35 @@ import type {
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeFromPreviewInput,
   PromoteNodeInput,
-  PruneNodeEnvironmentInput,
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
   ResolveNodeRepoInput,
   SharedLaneInfraEnv,
 } from "@/ports";
 import {
-  appsetPath,
-  appsetsKustomizationPath,
   buildEnvDeltaPlan,
   buildPlacementPlan,
   buildRegionPlan,
   CANONICAL_DOMAIN_ROOT,
-  type EnvAddShape,
   type EnvPlanCurrent,
   EnvPlanError,
   type EnvPlanOp,
+  hasCatalogSourceRepo,
   hasDistributionActivationSpec,
   hasPaymentsActivationSpec,
-  insertAppsetKustomization,
   insertCaddyBlock,
   insertNetworkNode,
   insertSchedulerEndpoint,
+  NODE_APP_WORKLOAD_MANIFEST_PATH,
   NODE_DEPLOY_ENVS,
   NODE_FORMATION_ENVS,
   type NodeFormationEnv,
   nextFreeNodePort,
   type PlacementProvider,
   parseCatalogPlacement,
-  planEnvAddShape,
   renderCatalog,
   renderDistributionActivationSpec,
-  renderNodeAppset,
-  renderNodeExternalSecret,
-  renderNodeExternalSecretKustomization,
-  renderOverlay,
-  renderOverlayFile,
+  renderNodeAppWorkloadManifest,
   renderPaymentsActivationSpec,
   renderRepoSpec,
   schedulerEndpointPatchPath,
@@ -196,23 +182,18 @@ export interface OpenNodeEnvPrInput {
   readonly env: NodeFormationEnv;
   /** true = add the env to the node's reach; false = remove it. Atomic per-env (candidate-a included). */
   readonly present: boolean;
-  /**
-   * Explicit akash lease replacement counter for an ADDED env. Plumbed for the lease-replacement
-   * flow; today's callers pass undefined, which the planner writes as an explicit `0` cell.
-   */
-  readonly leaseGeneration?: number | undefined;
 }
 
 /** What an ADD derived from the catalog row (ADD_DERIVES_PLACEMENT, story.5039). */
 export interface OpenNodeEnvPrDerived {
-  readonly placement: PlacementProvider;
-  readonly computeApi: "crossplane" | null;
+  readonly placement: "akash";
+  /** story.5137 / task.5411 — every node lane is written only by the node-deploy verb. */
+  readonly computeApi: "node-deploy";
   /**
-   * The env whose cluster reconciles the derived lane (`controlEnvFor`). A `string`, not a
+   * The env whose scheduler worker custodies the derived lane (`controlEnvFor`). A `string`, not a
    * NodeFormationEnv literal: on an isolated fleet the FLEET CONTROL ENV can be `candidate-a`.
    */
   readonly controlEnv: string;
-  readonly leaseGeneration: number;
 }
 
 /** Result of {@link GitHubRepoWriter.openNodeEnvPr}: a PR (opened or reused), or no-op when idempotent. */
@@ -240,7 +221,7 @@ export interface OpenNodePlacementPrInput {
   readonly slug: string;
   /** The env whose placement is set. Must already be in the node's deploy reach. */
   readonly env: NodeFormationEnv;
-  /** Target placement lane: `akash` = ComputeWorkload CR lane; `k3s` = the overlay/AppSet default. */
+  /** Target placement lane. `k3s` is refused for externally built nodes (task.5411). */
   readonly placement: PlacementProvider;
 }
 
@@ -256,11 +237,6 @@ export interface OpenNodeRegionPrInput {
   readonly env: NodeFormationEnv;
   /** ISO 3166-1 alpha-2 codes the workload MAY be placed in. Non-empty. */
   readonly countries: readonly string[];
-  /**
-   * The generation the requirement binds on — DERIVED from allocation-ledger evidence by the
-   * caller (GENERATION_IS_NOT_CALLER_INPUT), never taken from a REST body.
-   */
-  readonly leaseGeneration: number;
 }
 
 /** Result of {@link GitHubRepoWriter.openNodeRegionPr}: a PR (opened or reused), or idempotent no-op. */
@@ -270,7 +246,6 @@ export type OpenNodeRegionPrResult =
       readonly action: "set_region";
       readonly prNumber: number;
       readonly prUrl: string;
-      readonly leaseGeneration: number;
     }
   | { readonly status: "no_changes" };
 
@@ -448,11 +423,6 @@ const FOOTPRINT = {
   ciYaml: ".github/workflows/ci.yaml",
 } as const;
 
-/**
- * Shared per-`(env, node)` ApplicationSet template — the SAME file `render-node-appset.sh` interpolates,
- * so the operator's emit is byte-exact to the renderer and the `--check` drift gate stays green (bug.0378).
- */
-const APPSET_TEMPLATE_PATH = "scripts/ci/node-applicationset.yaml.tmpl";
 const SOURCE_SHA_PATTERN = /^[0-9a-fA-F]{40}$/;
 
 /** `error.code` of the failure raised when the operator App has no installation on a repo. */
@@ -701,23 +671,6 @@ function invalidRepoSpecError(
     `node repo-spec is invalid at sourceSha: ${reason}`,
     422
   );
-}
-
-/** Read a node's container `port` + `node_port` from its catalog row (for the env-add overlay render). */
-function parseCatalogPorts(
-  catalogYaml: string,
-  slug: string
-): { port: number; nodePort: number } {
-  const portMatch = /^port:\s*(\d+)\s*$/m.exec(catalogYaml);
-  const nodePortMatch = /^node_port:\s*(\d+)\s*$/m.exec(catalogYaml);
-  if (!portMatch || !nodePortMatch) {
-    throw deployPlaneError(
-      "catalog_ports_missing",
-      `infra/catalog/${slug}.yaml is missing a port/node_port line; cannot render the env overlay.`,
-      422
-    );
-  }
-  return { port: Number(portMatch[1]), nodePort: Number(nodePortMatch[1]) };
 }
 
 /** The declared placement vocabulary — one list, shared with the runtime address resolver. */
@@ -1608,59 +1561,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
       env: "production",
       slug,
     });
-  }
-
-  /** @see DeployPlanePort.pruneNodeEnvironment */
-  async pruneNodeEnvironment(
-    input: PruneNodeEnvironmentInput
-  ): Promise<ObservedWorkflowDispatchResult> {
-    const octokit = await this.getOctokit(input.parentOwner, input.parentRepo);
-    const response = (await octokit.request(
-      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
-      {
-        owner: input.parentOwner,
-        repo: input.parentRepo,
-        workflow_id: "prune-node-environment.yml",
-        ref: "main",
-        inputs: {
-          environment: input.env,
-          control_environment: input.controlEnv,
-          node: input.slug,
-        },
-        headers: { "X-GitHub-Api-Version": "2026-03-10" },
-        request: { signal: AbortSignal.timeout(15_000) },
-      }
-    )) as unknown as {
-      readonly data: {
-        readonly workflow_run_id?: number;
-        readonly run_url?: string;
-        readonly html_url?: string;
-      };
-    };
-    const runId = response.data.workflow_run_id;
-    const runApiUrl = response.data.run_url;
-    const runUrl = response.data.html_url;
-    if (
-      typeof runId !== "number" ||
-      !Number.isSafeInteger(runId) ||
-      runId <= 0 ||
-      typeof runApiUrl !== "string" ||
-      typeof runUrl !== "string"
-    ) {
-      throw deployPlaneError(
-        "prune_env_run_identity_missing",
-        "GitHub did not return the environment-prune workflow run identity",
-        502
-      );
-    }
-    return {
-      dispatched: true,
-      workflowUrl: `https://github.com/${input.parentOwner}/${input.parentRepo}/actions/workflows/prune-node-environment.yml`,
-      message: `Environment prune dispatched: ${input.slug} from ${input.env}.`,
-      runId,
-      runUrl,
-      runApiUrl,
-    };
   }
 
   private async resolvePromotionSource(input: {
@@ -2959,33 +2859,20 @@ export class GitHubRepoWriter implements DeployPlanePort {
         mission: input.mission,
       })
     );
-    const externalSecretEntries: GitTreeEntry[] = [];
-    for (const env of NODE_FORMATION_ENVS) {
-      externalSecretEntries.push(
-        {
-          path: `k8s/external-secrets/${env}/external-secret.yaml`,
-          mode: "100644",
-          type: "blob",
-          sha: await this.createBlob(
-            octokit,
-            owner,
-            slug,
-            renderNodeExternalSecret(slug, env)
-          ),
-        },
-        {
-          path: `k8s/external-secrets/${env}/kustomization.yaml`,
-          mode: "100644",
-          type: "blob",
-          sha: await this.createBlob(
-            octokit,
-            owner,
-            slug,
-            renderNodeExternalSecretKustomization()
-          ),
-        }
-      );
-    }
+    // story.5137 / task.5411 — the node's app workload manifest, read by the node-deploy verb at
+    // every deployed sha. The fork inherits node-template's file (host node-template.cognidao.org);
+    // overwrite it so the node claims only its OWN host. No per-env ExternalSecret is written:
+    // runtime env comes from OpenBao through the verb.
+    const workloadManifestSha = await this.createBlob(
+      octokit,
+      owner,
+      slug,
+      renderNodeAppWorkloadManifest({
+        slug,
+        port: CONTAINER_PORT,
+        domainRoot: this.config.forkDomainRoot,
+      })
+    );
     const { data: tree } = await octokit.request(
       "POST /repos/{owner}/{repo}/git/trees",
       {
@@ -2999,7 +2886,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
             type: "blob",
             sha: repoSpecSha,
           },
-          ...externalSecretEntries,
+          {
+            path: NODE_APP_WORKLOAD_MANIFEST_PATH,
+            mode: "100644",
+            type: "blob",
+            sha: workloadManifestSha,
+          },
         ],
       }
     );
@@ -3129,7 +3021,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * a flag-gated v0 seam (DNS_REVERSE_RECONCILE, default off) — see the `dnsSeam` call below.
    */
   async openNodeEnvPr(input: OpenNodeEnvPrInput): Promise<OpenNodeEnvPrResult> {
-    const { owner, repo, slug, env, present, leaseGeneration } = input;
+    const { owner, repo, slug, env, present } = input;
     const octokit = await this.getOctokit(owner, repo);
     const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
       octokit,
@@ -3152,41 +3044,34 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
     }
 
-    // ADD_DERIVES_PLACEMENT (story.5039) — derive FIRST: the shape decides which control-env
-    // kustomization to fetch (bug.5204) and whether the node's own repo-spec must already carry a
-    // `deployment:` block (an akash lane serves env ONLY through declared secret_refs).
-    let shape: EnvAddShape | undefined;
-    if (present) {
-      try {
-        shape = planEnvAddShape(catalog, env, this.config.fleetControlEnv);
-      } catch (err) {
-        if (err instanceof EnvPlanError) {
-          throw deployPlaneError(err.code, err.message, err.status);
-        }
-        throw err;
-      }
-      if (shape.placement === "akash") {
-        await this.assertAkashDeploymentBlock(catalog, slug);
-      }
-    }
-    const derived: OpenNodeEnvPrDerived | undefined = shape
-      ? {
-          placement: shape.placement,
-          computeApi: shape.computeApi,
-          controlEnv: shape.controlEnv,
-          leaseGeneration: leaseGeneration ?? 0,
-        }
-      : undefined;
+    // ADD_DERIVES_PLACEMENT (story.5039, task.5411) — an externally built row's added env is
+    // akash + `compute_api: node-deploy`; the planner refuses a row with no source_repo.
+    const derived: OpenNodeEnvPrDerived | undefined =
+      present && hasCatalogSourceRepo(catalog)
+        ? {
+            placement: "akash",
+            computeApi: "node-deploy",
+            controlEnv: controlEnvFor(
+              env,
+              "akash",
+              this.config.fleetControlEnv
+            ),
+          }
+        : undefined;
 
     const current = await this.collectEnvPlanCurrent(
       octokit,
       owner,
       repo,
-      slug,
       env,
-      present,
       catalog,
-      shape
+      present
+        ? controlEnvFor(env, "akash", this.config.fleetControlEnv)
+        : controlEnvFor(
+            env,
+            parseCatalogPlacement(catalog)[env] ?? "k3s",
+            this.config.fleetControlEnv
+          )
     );
 
     let plan: ReturnType<typeof buildEnvDeltaPlan>;
@@ -3196,7 +3081,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
         env,
         present,
         current,
-        leaseGeneration,
         fleetControlEnv: this.config.fleetControlEnv,
       });
     } catch (err) {
@@ -3260,12 +3144,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * - `akash`: upsert `deployment_provider.<env>: akash`.
    * - `k3s`: drop the map entry (k3s is the schema default).
    *
-   * NO_DELETE_ON_PLACEMENT: the overlay, external-secret, AppSet, and appsets kustomization are
-   * NEVER touched here — Argo delivers BOTH the k3s Deployment and the akash ComputeWorkload CR
-   * through the SAME per-node Application; the overlay's content differs per placement, but that
-   * swap happens in the materializer on the deploy branch at the next flight/promote, not in this
-   * PR (an earlier revision of this verb wrongly deleted those files, orphaning the very
-   * Application Argo needs to deliver the CR — see `buildPlacementPlan`'s doc comment).
+   * K3S_NODE_LANE_RETIRED (task.5411): `k3s` is refused for an externally built node — the
+   * node-deploy verb on akash is its only lane. No AppSet, overlay or ExternalSecret is touched.
    *
    * PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) IS a real file consequence though: the
    * scheduler-worker's routed URL for `slug` in `env` moves with the flip, so the generated
@@ -3300,21 +3180,10 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
     }
 
-    // AKASH_REQUIRES_DEPLOYMENT_BLOCK: pre-check the node's OWN repo-spec before opening the PR —
-    // a flip to the external ComputeWorkload lane with no declared `deployment:` block has no
-    // artifact plane to serve env into the workload (the legacy fallback declares no secret_refs).
-    if (placement === "akash") {
-      await this.assertAkashDeploymentBlock(catalog, slug);
-    }
-
     // PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) — the ONE control-plane file this verb reads besides
-    // the catalog: the env's generated scheduler-worker routing patch, so buildPlacementPlan can
-    // move the routed URL with the flip. NO_DELETE_ON_PLACEMENT means nothing else is needed —
-    // overlay/appset/kustomization are untouched, so those EnvPlanCurrent fields stay empty.
+    // the catalog: the env's generated scheduler-worker routing patch.
     const current: EnvPlanCurrent = {
       catalog,
-      templateOverlayByEnv: {},
-      appsetsKustomizationByEnv: {},
       publicDomainRoot: this.config.forkDomainRoot,
       schedulerEndpointPatchByEnv: {
         [env]: await this.readFileOnMain(
@@ -3379,13 +3248,13 @@ export class GitHubRepoWriter implements DeployPlanePort {
    *
    * Mirrors `openNodePlacementPr` exactly (same base resolution, same reviewed-PR authoring path,
    * same catalog-is-SSoT contract) and differs only in WHICH cells the plan edits. Reads ONLY the
-   * catalog: the region requirement touches no overlay, no AppSet, and no scheduler routing —
+   * catalog: the region requirement touches no scheduler routing —
    * it constrains which provider may win a bid, not which lane or address serves the env.
    */
   async openNodeRegionPr(
     input: OpenNodeRegionPrInput
   ): Promise<OpenNodeRegionPrResult> {
-    const { owner, repo, slug, env, countries, leaseGeneration } = input;
+    const { owner, repo, slug, env, countries } = input;
     const octokit = await this.getOctokit(owner, repo);
     const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
       octokit,
@@ -3407,11 +3276,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
     }
 
-    const current: EnvPlanCurrent = {
-      catalog,
-      templateOverlayByEnv: {},
-      appsetsKustomizationByEnv: {},
-    };
+    const current: EnvPlanCurrent = { catalog };
 
     let plan: ReturnType<typeof buildRegionPlan>;
     try {
@@ -3419,7 +3284,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
         slug,
         env,
         countries,
-        leaseGeneration,
         current,
       });
     } catch (err) {
@@ -3449,7 +3313,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       "Authored by the operator region verb (`POST /api/v1/nodes/{id}/envs` with `{env, countries}`), so the node chooses its own jurisdiction instead of an operator hand-editing this catalog.",
       "",
       `- \`required_placement_countries.${env}\` is a HARD filter: a bid from a provider outside the set never wins, and a bid whose provider country cannot be determined is REFUSED (fail-closed).`,
-      `- \`lease_generation.${env}\` moves to **${plan.leaseGeneration}** in the same commit. Akash refuses in-place placement change, so without that bump this requirement would be silently inert.`,
+      "- Akash refuses in-place placement change, so the requirement binds on the node's next `POST /api/v1/deploy/workloads` release (a fresh lease).",
       "",
       "NOT A GUARANTEE: the screener compares a provider's advertised/ingress country, which is not proven to equal the egress identity its workload presents to a third party. This narrows the candidate pool; only the workload's own outbound probe proves reachability.",
     ].join("\n");
@@ -3475,67 +3339,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       action: "set_region",
       prNumber: result.prNumber,
       prUrl: result.prUrl,
-      leaseGeneration: plan.leaseGeneration,
     };
-  }
-
-  /**
-   * AKASH_REQUIRES_DEPLOYMENT_BLOCK: the node's OWN repo-spec (not the operator monorepo catalog)
-   * must have authored a `deployment:` block before its env can flip onto the external
-   * ComputeWorkload lane. The legacy fallback declares no `secret_refs`, which is correct for the
-   * k3s lane (env arrives via the ExternalSecret overlay) and fatal off it (env arrives ONLY through
-   * declared refs) — see `hasDeclaredNodeDeployment`. Fails closed: missing/unfetchable/unparseable
-   * repo-spec is `repo_spec_missing`; a fetched-and-parsed spec with no `deployment:` block is
-   * `akash_requires_deployment_block`, pointing the caller at the verb that mints one (PR #2150).
-   * A catalog row with no `source_repo` is left to `buildPlacementPlan`'s own
-   * `akash_requires_source_repo` guard — this check only fires once an external build plane exists.
-   */
-  private async assertAkashDeploymentBlock(
-    catalog: string,
-    slug: string
-  ): Promise<void> {
-    const discriminator = PromoteDiscriminatorSchema.safeParse(
-      parseYaml(catalog)
-    );
-    const sourceRepoUrl = discriminator.success
-      ? discriminator.data.source_repo
-      : undefined;
-    if (sourceRepoUrl === undefined) return;
-
-    const sourceRepo = parseGithubRepoUrl(sourceRepoUrl);
-    const repoSpecText = await this.fetchFileText({
-      owner: sourceRepo.owner,
-      repo: sourceRepo.repo,
-      path: ".cogni/repo-spec.yaml",
-      ref: "main",
-    });
-    if (repoSpecText === null) {
-      throw deployPlaneError(
-        "repo_spec_missing",
-        `cannot place '${slug}' on akash: node repo-spec not found at ${sourceRepoUrl}:.cogni/repo-spec.yaml on main.`,
-        422
-      );
-    }
-
-    let nodeSpec: RepoSpec;
-    try {
-      nodeSpec = parseRepoSpec(repoSpecText);
-    } catch {
-      throw deployPlaneError(
-        "repo_spec_missing",
-        `cannot place '${slug}' on akash: node repo-spec at ${sourceRepoUrl} could not be parsed.`,
-        422
-      );
-    }
-
-    if (!hasDeclaredNodeDeployment(nodeSpec)) {
-      throw deployPlaneError(
-        "akash_requires_deployment_block",
-        `cannot place '${slug}' on akash: the node repo-spec has no declared \`deployment:\` block. ` +
-          `Mint one via POST /api/v1/nodes/${slug}/deployment-block, then retry.`,
-        422
-      );
-    }
   }
 
   /** PR body for the placement lever (story.5016 T5). */
@@ -3546,107 +3350,32 @@ export class GitHubRepoWriter implements DeployPlanePort {
   ): string {
     const lane =
       kind === "place_akash"
-        ? "the external ComputeWorkload (akash) lane"
+        ? "akash (the node-deploy verb's lane)"
         : "the k3s lane — its `deployment_provider` entry is dropped (k3s is the default)";
     return (
       `Places \`${slug}\`'s \`${env}\` workload on ${lane}, by editing ` +
       `\`infra/catalog/${slug}.yaml\`'s \`deployment_provider:\` map and moving the ` +
-      `scheduler-worker's routed URL for this env (bug.5094). Deploy reach (\`envs:\`) is unchanged, ` +
-      "and so is the overlay/external-secret/AppSet — Argo delivers both the k3s Deployment and the " +
-      "akash ComputeWorkload CR through the SAME per-node Application; the overlay's CONTENT is " +
-      "swapped by the materializer on the deploy branch at the next flight/promote, not by this PR.\n\n" +
+      `scheduler-worker's routed URL for this env (bug.5094). Deploy reach (\`envs:\`) is unchanged.\n\n` +
       "_Authored automatically by cogni-operator (node placement verb, story.5016 T5)._"
     );
   }
 
-  /** Fetch the current control-plane files the env-delta planner reads. Only fetches what the op needs. */
+  /**
+   * Fetch the current control-plane files the env-delta planner reads: the catalog plus the
+   * scheduler-worker routing patches of the workload env and its custodian control env (bug.5536).
+   * No AppSet, overlay or ExternalSecret is read — none is written (task.5411).
+   */
   private async collectEnvPlanCurrent(
     octokit: Octokit,
     owner: string,
     repo: string,
-    slug: string,
     env: NodeFormationEnv,
-    present: boolean,
     catalog: string,
-    shape?: EnvAddShape
+    controlEnv: string
   ): Promise<EnvPlanCurrent> {
-    const appsetsKustomizationByEnv: Record<string, string> = {};
-    const templateOverlayByEnv: Record<string, string> = {};
-    const templateExternalSecretByEnv: Record<string, string> = {};
-
-    if (present) {
-      // ADD touches the one WORKLOAD env's template overlay + external-secret (+ its scheduler
-      // routing patch plus any foreign control-worker custody patch), and the CONTROL env's appsets kustomization (bug.5204 —
-      // for an akash non-production lane that is appsets/production/, not the workload env's dir).
-      const controlEnv = shape?.controlEnv ?? env;
-      templateOverlayByEnv[env] = await this.readFileOnMain(
-        octokit,
-        owner,
-        repo,
-        `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/kustomization.yaml`
-      );
-      templateExternalSecretByEnv[env] = await this.readFileOnMain(
-        octokit,
-        owner,
-        repo,
-        `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/external-secret.yaml`
-      );
-      appsetsKustomizationByEnv[controlEnv] = await this.readFileOnMain(
-        octokit,
-        owner,
-        repo,
-        appsetsKustomizationPath(controlEnv)
-      );
-      const appsetTemplate = await this.readFileOnMain(
-        octokit,
-        owner,
-        repo,
-        APPSET_TEMPLATE_PATH
-      );
-      const schedulerEndpointPatchByEnv: Record<string, string> = {};
-      for (const target of new Set([env, controlEnv])) {
-        schedulerEndpointPatchByEnv[target] = await this.readFileOnMain(
-          octokit,
-          owner,
-          repo,
-          schedulerEndpointPatchPath(target)
-        );
-      }
-      const { port, nodePort } = parseCatalogPorts(catalog, slug);
-      return {
-        catalog,
-        templateOverlayByEnv,
-        templateExternalSecretByEnv,
-        appsetTemplate,
-        appsetRepoUrl: `https://github.com/${owner}/${repo}.git`,
-        publicDomainRoot: this.config.forkDomainRoot,
-        appsetsKustomizationByEnv,
-        port,
-        nodePort,
-        schedulerEndpointPatchByEnv,
-      };
-    }
-
-    // REMOVE (atomic per-env): the planner rewrites the CONTROL env's kustomization — derived from
-    // the PRE-mutation catalog, whose placement cells still exist at plan time (bug.5204 parity
-    // with the add; `production` for an akash non-production lane). Remove routing aliases from
-    // both the workload lane and any foreign control-worker namespace (bug.5536).
-    // (Caddy is per-node env-independent state and NOT touched by an env remove.)
-    const removeProvider = parseCatalogPlacement(catalog)[env] ?? "k3s";
-    const removeControlEnv = controlEnvFor(
-      env,
-      removeProvider,
-      this.config.fleetControlEnv
-    );
-    appsetsKustomizationByEnv[removeControlEnv] = await this.readFileOnMain(
-      octokit,
-      owner,
-      repo,
-      appsetsKustomizationPath(removeControlEnv)
-    );
-    const removeSchedulerPatchByEnv: Record<string, string> = {};
-    for (const target of new Set([env, removeControlEnv])) {
-      removeSchedulerPatchByEnv[target] = await this.readFileOnMain(
+    const schedulerEndpointPatchByEnv: Record<string, string> = {};
+    for (const target of new Set([env, controlEnv])) {
+      schedulerEndpointPatchByEnv[target] = await this.readFileOnMain(
         octokit,
         owner,
         repo,
@@ -3655,10 +3384,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
     }
     return {
       catalog,
-      templateOverlayByEnv,
       publicDomainRoot: this.config.forkDomainRoot,
-      appsetsKustomizationByEnv,
-      schedulerEndpointPatchByEnv: removeSchedulerPatchByEnv,
+      schedulerEndpointPatchByEnv,
     };
   }
 
@@ -3867,141 +3594,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
   }
 
   /**
-   * Deployment-declaration write-back into the NODE'S OWN repo (story.5016 T6): read the node
-   * repo's `.cogni/repo-spec.yaml` on `main` and, when the node predates the `deployment:`
-   * contract, append the stock `cogni-node-app-v1` declaration (`renderNodeDeploymentYaml`) via a
-   * one-file PR. External-compute placement (`assertDeclaredNodeDeployment`) refuses a node that
-   * still rides the legacy secret-free default, so existing nodes get this block minted by the
-   * operator — zero hand-edited YAML. The {owner, repo} here is the node's OWN repo identity,
-   * resolved by the route via `resolveNodeRepo` (catalog `source_repo`).
-   *
-   * SINGLE_HOME: writes ONLY `.cogni/repo-spec.yaml` at the repo root. Idempotent: a spec that
-   * already declares ANY `deployment:` block (a node's own hand-authored declaration included)
-   * splices to itself — returns `no_changes`, never overwrites.
-   *
-   * REMOTE_SOURCE_ONLY: `resolveNodeRepo`'s IN-REPO shortcut collapses an in-repo node (operator,
-   * poly — no catalog `source_repo`) to `{owner: parentOwner, repo: parentRepo}`, i.e. the PARENT
-   * monorepo. A root `.cogni/repo-spec.yaml` splice there would be wrong for those nodes — their
-   * runtime spec lives at `nodes/<slug>/.cogni/repo-spec.yaml` (see `prepareNodeRefCandidateFlight`'s
-   * IN-REPO branch above, which reads that path). This verb only supports REMOTE-SOURCE (forked)
-   * node repos; callers must pass `isInRepoNode` so we can fail closed before touching Octokit. If
-   * in-repo support is ever wired here, follow the `prepareNodeRefCandidateFlight` pattern (path =
-   * `nodes/${slug}/.cogni/repo-spec.yaml`, read via the parent repo) instead of the root path.
-   */
-  async openNodeDeploymentBlockPr(input: {
-    owner: string;
-    repo: string;
-    slug: string;
-    /**
-     * `true` when the resolved `{owner, repo}` is the IN-REPO shortcut (catalog row has no
-     * `source_repo` — operator/poly), i.e. `resolveNodeRepo` returned the PARENT monorepo rather
-     * than the node's own repo. Callers derive this the same way `resolveNodeRepo` does internally
-     * (catalog `source_repo` PRESENCE) — see the route for the concrete check.
-     */
-    isInRepoNode: boolean;
-  }): Promise<
-    | { status: "pr_opened"; prNumber: number; prUrl: string }
-    | { status: "no_changes" }
-  > {
-    const { owner, repo, slug, isInRepoNode } = input;
-    if (isInRepoNode) {
-      throw deployPlaneError(
-        "in_repo_node_unsupported",
-        `node '${slug}' is an in-repo node (no catalog source_repo); ` +
-          "openNodeDeploymentBlockPr only supports remote-source (forked) node repos — " +
-          "an in-repo node's runtime spec lives at nodes/<slug>/.cogni/repo-spec.yaml in the " +
-          "parent monorepo, not a root .cogni/repo-spec.yaml in its own repo",
-        422
-      );
-    }
-    const octokit = await this.getOctokit(owner, repo);
-    const branch = `cogni-operator/declare-deployment-${slug}`;
-    const title = `feat(deploy): declare ${slug} node deployment`;
-    const body =
-      `Declares \`${slug}\`'s \`deployment:\` block in \`.cogni/repo-spec.yaml\` — the stock ` +
-      "`cogni-node-app-v1` service (one public Next.js app) with the runtime profile's full " +
-      "secret contract (`secret_refs`).\n\n" +
-      "Existing nodes predate the deployment contract and ride the legacy secret-free default, " +
-      "which external-compute placement refuses (`assertDeclaredNodeDeployment`). Merging this " +
-      "makes the node placeable without changing its current k3s behavior.\n\n" +
-      "_Authored automatically by cogni-operator (node deployment-block verb, story.5016 T6)._";
-
-    const currentSpec = await this.fetchFileText({
-      owner,
-      repo,
-      path: ".cogni/repo-spec.yaml",
-      ref: "main",
-    });
-    if (currentSpec === null) {
-      throw deployPlaneError(
-        "repo_spec_missing",
-        `node repo-spec not found at ${owner}/${repo}:.cogni/repo-spec.yaml`,
-        422
-      );
-    }
-
-    // renderDeploymentActivationSpec already checks hasDeploymentActivationSpec internally and
-    // returns `currentSpec` unchanged when a `deployment:` block exists, so `nextSpec ===
-    // currentSpec` alone covers that case — no separate hasDeploymentActivationSpec check needed.
-    const nextSpec = renderDeploymentActivationSpec(currentSpec);
-    if (nextSpec === currentSpec) {
-      return { status: "no_changes" };
-    }
-
-    const existingPr = await this.findOpenPrForBranch(octokit, owner, repo, {
-      branch,
-      title,
-    });
-    if (existingPr) {
-      const pendingSpec = await this.fetchFileText({
-        owner,
-        repo,
-        path: ".cogni/repo-spec.yaml",
-        ref: branch,
-      });
-      if (
-        pendingSpec === nextSpec ||
-        (pendingSpec !== null && hasDeploymentActivationSpec(pendingSpec))
-      ) {
-        await this.updatePrBody(
-          octokit,
-          owner,
-          repo,
-          existingPr.prNumber,
-          title,
-          body
-        );
-        return { status: "pr_opened", ...existingPr };
-      }
-    }
-
-    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
-      octokit,
-      owner,
-      repo
-    );
-    const blobSha = await this.createBlob(octokit, owner, repo, nextSpec);
-
-    const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
-      baseCommitSha,
-      baseTreeSha,
-      entries: [
-        {
-          path: ".cogni/repo-spec.yaml",
-          mode: "100644",
-          type: "blob",
-          sha: blobSha,
-        },
-      ],
-      message: `feat(deploy): declare ${slug} node deployment`,
-      branch,
-      pr: { title, body },
-    });
-    await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
-    return { status: "pr_opened", ...result };
-  }
-
-  /**
    * Reconcile the birth-path `main` protection ruleset onto an EXISTING node repo (bug.5123).
    * Nodes minted before the #1797/task.5028 backstop (or whose ruleset drifted) carry no
    * required-status-check protection, so the operator merge gate fail-closes every PR on them
@@ -4024,7 +3616,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * lacks `administration:write` on this repo — surfaced as a typed 502 `protection_unavailable`,
    * never a generic 500, and never by weakening the (independent, fail-closed) merge gate.
    *
-   * REMOTE_SOURCE_ONLY: like {@link openNodeDeploymentBlockPr}, the monorepo is not a target —
+   * REMOTE_SOURCE_ONLY: the monorepo is not a target —
    * an in-repo node's `{owner, repo}` collapses to the PARENT monorepo, whose protection is
    * admin-owned, not this node policy. Fail closed before touching Octokit.
    */
@@ -4930,83 +4522,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
         : { ownerWallet: input.ownerWallet };
     const catalogContent = renderCatalog(slug, port, nodePort, catalogInput);
     await addBlob(`infra/catalog/${slug}.yaml`, catalogContent);
-    // The birth catalog's own placement decides each env's CONTROL env below (bug.5204) — a wizard
-    // birth is BORN_ON_AKASH in every birth env, so its AppSets all belong under appsets/production/.
-    const birthPlacement = parseCatalogPlacement(catalogContent);
-
-    // overlays per birth env (candidate-a only today). Each overlay dir clones BOTH the node-template
-    // kustomization.yaml AND its external-secret.yaml (the ESO producer of
-    // <slug>-env-secrets — without it the pod's envFrom secret never exists →
-    // CreateContainerConfigError). Byte-exact twin of render-node-overlays.sh.
-    for (const env of NODE_FORMATION_ENVS) {
-      const templateOverlay = await this.readFileOnMain(
-        octokit,
-        owner,
-        repo,
-        `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/kustomization.yaml`
-      );
-      await addBlob(
-        `infra/k8s/overlays/${env}/${slug}/kustomization.yaml`,
-        renderOverlay(templateOverlay, slug, nodePort, port)
-      );
-      const templateExternalSecret = await this.readFileOnMain(
-        octokit,
-        owner,
-        repo,
-        `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/external-secret.yaml`
-      );
-      await addBlob(
-        `infra/k8s/overlays/${env}/${slug}/external-secret.yaml`,
-        renderOverlayFile(templateExternalSecret, slug, nodePort, port)
-      );
-    }
-
-    // per-node AppSets for the birth envs — one ApplicationSet object per (env, slug) for structural LANE_ISOLATION
-    // (bug.0378). New files from the shared template (byte-exact to render-node-appset.sh) land under
-    // the PER-ENV infra/k8s/argocd/appsets/<env>/ dir (each reconciled+pruned by its own per-env
-    // cogni-<env>-appsets app-of-apps, story.5020), then folded into that env's appsets/<env>/
-    // kustomization.yaml so the unit-job drift gate stays green.
-    const appsetTemplate = await this.readFileOnMain(
-      octokit,
-      owner,
-      repo,
-      APPSET_TEMPLATE_PATH
-    );
-    // Grouped by CONTROL env: several birth envs may resolve to ONE control dir (akash ⇒
-    // production reconciles every lane), so each control kustomization is fetched once and every
-    // (env, slug) pair folds into the same evolving content — two blobs for one path would race.
-    const kustomizationByControlEnv = new Map<string, string>();
-    for (const env of NODE_FORMATION_ENVS) {
-      const controlEnv = controlEnvFor(
-        env,
-        birthPlacement[env] ?? "k3s",
-        this.config.fleetControlEnv
-      );
-      await addBlob(
-        appsetPath(controlEnv, env, slug),
-        renderNodeAppset(
-          appsetTemplate,
-          slug,
-          env,
-          `https://github.com/${owner}/${repo}.git`
-        )
-      );
-      const argocdKustomization =
-        kustomizationByControlEnv.get(controlEnv) ??
-        (await this.readFileOnMain(
-          octokit,
-          owner,
-          repo,
-          appsetsKustomizationPath(controlEnv)
-        ));
-      kustomizationByControlEnv.set(
-        controlEnv,
-        insertAppsetKustomization(argocdKustomization, slug, env)
-      );
-    }
-    for (const [controlEnv, content] of kustomizationByControlEnv) {
-      await addBlob(appsetsKustomizationPath(controlEnv), content);
-    }
+    // story.5137 / task.5411 — ONE_WRITER_PER_NODE_LANE: the catalog row's `compute_api:
+    // node-deploy` cells hand every birth env to the node-deploy verb. No overlay, AppSet,
+    // appsets kustomization or ExternalSecret is rendered for a born node.
 
     // Caddyfile / ci.yaml / lockfile — single-file splices over main.
     const caddyfile = await this.readFileOnMain(

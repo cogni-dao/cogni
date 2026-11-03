@@ -36,8 +36,8 @@
  */
 
 import {
+  extractNodeAppSecretRefs,
   extractNodeId,
-  extractNodeServices,
   lowerWorkloadManifests,
   parseRepoSpec,
   resolveRuntimeProfileSecretRefs,
@@ -219,17 +219,14 @@ function workerSecretKeys(
 
 /**
  * The secret KEY names an app may receive: profile keys first (contract order), then the app service's
- * extra declared `secret_refs`, deduped. The app service is the one carrying the `cogni-node-app-v1`
- * profile (the schema allows at most one); a repo-spec with no `deployment:` block gets the default
- * stock service, i.e. the profile keys alone. Throws `secret_ref_refused` on any denylisted key.
+ * extra declared `secret_refs`, deduped. Extra refs come from the repo-spec top-level `secret_refs`
+ * (task.5411); a not-yet-migrated node's `deployment.services[]` app-service refs are the fallback
+ * (`extractNodeAppSecretRefs`). Throws `secret_ref_refused` on any denylisted key.
  */
 function appSecretKeys(spec: ReturnType<typeof parseRepoSpec>): string[] {
-  const service = extractNodeServices(spec).find(
-    (s) => s.runtimeProfile === "cogni-node-app-v1"
-  );
   const keys = resolveRuntimeProfileSecretRefs({
     runtimeProfile: "cogni-node-app-v1",
-    secretRefs: service?.secretRefs ?? [],
+    secretRefs: extractNodeAppSecretRefs(spec),
   }).map((ref) => ref.key);
   const refused = keys.filter((k) => !isOffClusterWorkloadSecretKey(k));
   if (refused.length > 0)

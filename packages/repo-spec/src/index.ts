@@ -24,6 +24,7 @@ export {
   extractKnowledgeConfig,
   extractLedgerApprovers,
   extractLedgerConfig,
+  extractNodeAppSecretRefs,
   extractNodeBrandColor,
   extractNodeBrandIcon,
   extractNodeHook,
@@ -73,10 +74,6 @@ export {
   resolveNodeArtifactBundle,
   resolveNodeArtifactBundleForEnvironment,
 } from "./artifact-bundle.js";
-export {
-  hasDeploymentActivationSpec,
-  renderDeploymentActivationSpec,
-} from "./deployment-activation.js";
 export {
   COGNI_NODE_APP_V1_DEPLOYMENT,
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
