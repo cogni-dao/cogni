@@ -16,9 +16,6 @@ resources:
   - candidate-a-red-applicationset.yaml
   - preview-poly-applicationset.yaml
   - preview-toks5-applicationset.yaml
-  - production-beacon-applicationset.yaml
-  - production-levelup-applicationset.yaml
   - production-operator-applicationset.yaml
   - production-red-applicationset.yaml
   - production-scheduler-worker-applicationset.yaml
-  - production-toks5-applicationset.yaml
