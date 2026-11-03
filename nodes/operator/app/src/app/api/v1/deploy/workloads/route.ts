@@ -7,9 +7,10 @@
  *   deploy ONE declared workload at a source sha; `GET` reads the desired row with its explicit
  *   release state (queued|deploying|active|parked|superseded|failed), the active attempt and recent
  *   attempts with their step timelines (`releases/{releaseId}` is the per-release detail).
- * Scope: Authorizes per env, resolves the node's OWN source repo and image repository from its catalog
- *   row, reads that repo's `.cogni/repo-spec.yaml` and every workload manifest (`.cogni/workloads/*.yaml`)
- *   AT `sourceSha` through the operator GitHub App, resolves a manifest image of `.` to the digest node
+ * Scope: Authorizes per env, resolves the node's OWN source repo and image repository from the catalog
+ *   baked into the operator image (the one the sequencer uses, the same in every env), reads that repo's
+ *   `.cogni/repo-spec.yaml` and every workload manifest (`.cogni/workloads/*.yaml`) AT `sourceSha` through
+ *   the operator GitHub App, or anonymously when the repo is public and the App is not installed on it, resolves a manifest image of `.` to the digest node
  *   CI built at that sha, checks and lowers the manifests, resolves the one requested workload, and
  *   writes an immutable release plus the desired row in one transaction. It never calls the actuator
  *   and never touches DNS: the sequencer executes the intent.
@@ -20,9 +21,12 @@
  *   - INTENT_ONLY: a 200 means a release row exists, not that anything is deployed.
  *   - DECLARED_AT_THE_SHA: the manifests and the repo-spec are read at the requested sha from the
  *     node's repo, and the repo-spec `node_id` must equal the requested node.
- *   - NODE_DEPLOYS_FROM_ITS_OWN_REPO: the repo comes from the node's catalog row (`resolveNodeSource`):
- *     a remote-source node reads its own `source_repo` and image repository; an in-repo node (the
- *     operator) reads the parent repo as before and resolves no built image.
+ *   - NODE_DEPLOYS_FROM_ITS_OWN_REPO: the repo comes from the node's row in the IMAGE catalog
+ *     (`createNodeSourceResolver`, story.5137), never from a GitHub read of an env-specific parent repo,
+ *     so flight and production are the same call: a remote-source node reads its own `source_repo` and
+ *     image repository; an in-repo node (the operator) reads the parent repo and resolves no built image.
+ *   - READ_NEEDS_NO_NEW_SECRET: the App read is tried first; a public repo the App is not installed on
+ *     is read anonymously (read-only). Nothing is ever written to a node repo.
  *   - BUILT_IMAGE_IS_DIGEST_PINNED: an image of `.` becomes `<image_repository>@sha256:<digest>` for
  *     `sha-<sourceSha>`. An image that does not exist is 422 `built_image_not_found` before any write.
  *   - REFUSED_BEFORE_PAID_CREATE: a manifest the two-pass check refuses returns 422
@@ -33,8 +37,8 @@
  *     until the off-provider backup debt row closes; the only exception is the operator node's own
  *     `canary-db`.
  *   - NO_SOURCE_ECHO: a 502 read failure never returns the GitHub/Octokit message.
- * Side-effects: IO (authz check, GitHub App contents read, anonymous ghcr.io manifest read, operator
- *   Postgres write)
+ * Side-effects: IO (authz check, image catalog file read, GitHub App or anonymous contents read,
+ *   anonymous ghcr.io manifest read, operator Postgres write)
  * Links: contracts/deploy.workloads.v1.contract.ts, features/node-deploy/declarations.ts,
  *   features/node-deploy/read-declarations.ts, ports/built-image.port.ts,
  *   packages/repo-spec/src/workload-manifest.ts, docs/spec/rbac.md, hub `node-service-delivery`,
@@ -46,7 +50,10 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { createBuiltImageResolver } from "@/bootstrap/capabilities/built-image-resolver";
 import { createNodeDeployStore } from "@/bootstrap/capabilities/node-deploy-store";
-import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
+import {
+  createDeclarationReader,
+  createNodeSourceResolver,
+} from "@/bootstrap/capabilities/node-source-resolver";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
   DeployWorkloadInputSchema,
@@ -118,17 +125,19 @@ export const POST = wrapRouteHandlerWithLogging(
       let source: ResolvedNodeSource;
       let read: WorkloadDeclarationsRead;
       try {
-        const plane = createOperatorDeployPlane(envConfig);
-        source = await plane.resolveNodeSource({
+        source = await createNodeSourceResolver().resolveNodeSource({
+          nodeId: node.id,
           parentOwner: owner,
           parentRepo: repo,
-          slug: node.slug,
         });
-        read = await readWorkloadDeclarations(plane, {
-          owner: source.owner,
-          repo: source.repo,
-          sourceSha,
-        });
+        read = await readWorkloadDeclarations(
+          createDeclarationReader(envConfig),
+          {
+            owner: source.owner,
+            repo: source.repo,
+            sourceSha,
+          }
+        );
       } catch (error) {
         if ((error as { code?: unknown })?.code === "catalog_missing")
           return NextResponse.json(

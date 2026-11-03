@@ -68,7 +68,6 @@ import type {
   PruneNodeEnvironmentInput,
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
-  ResolvedNodeSource,
   ResolveNodeRepoInput,
   SharedLaneInfraEnv,
 } from "@/ports";
@@ -455,6 +454,9 @@ const FOOTPRINT = {
  */
 const APPSET_TEMPLATE_PATH = "scripts/ci/node-applicationset.yaml.tmpl";
 const SOURCE_SHA_PATTERN = /^[0-9a-fA-F]{40}$/;
+
+/** `error.code` of the failure raised when the operator App has no installation on a repo. */
+export const GITHUB_APP_NOT_INSTALLED = "github_app_not_installed";
 const CANDIDATE_CONTROL_PLANE_REF = "deploy/candidate-a-control-plane" as const;
 const CANDIDATE_CONTROL_PLANE_SELF_PATH =
   "infra/k8s/argocd/control-plane/candidate-a/candidate-a-control-plane-application.yaml";
@@ -625,7 +627,22 @@ function parseRemoteSourceCatalog(
   sourceRepo: { owner: string; repo: string };
   imageRepository: string;
 } {
-  const catalog = CatalogEntrySchema.safeParse(parseYaml(catalogText));
+  return parseRemoteSourceCatalogRow(parseYaml(catalogText), slug);
+}
+
+/**
+ * The same strict check over an ALREADY PARSED catalog row. The node-deploy verb reads the row from
+ * the catalog baked into the operator image (story.5137), not from a GitHub read of a parent repo.
+ */
+export function parseRemoteSourceCatalogRow(
+  row: unknown,
+  slug: string
+): {
+  sourceRepoUrl: string;
+  sourceRepo: { owner: string; repo: string };
+  imageRepository: string;
+} {
+  const catalog = CatalogEntrySchema.safeParse(row);
   if (!catalog.success || catalog.data.name !== slug) {
     throw deployPlaneError(
       "invalid_catalog",
@@ -1326,32 +1343,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
   }
 
   /**
-   * Resolve where a node's workload declarations and built image live (story.5127): the same
-   * catalog read and `source_repo`-PRESENCE discriminator as `resolveNodeRepo`, plus the catalog
-   * `image_repository` of a REMOTE-SOURCE node (validated by the strict row the flight path uses).
-   * An IN-REPO node (the operator) returns the parent monorepo with `imageRepository: null`: its
-   * manifest pins images by digest, so no built image is resolved for it.
-   */
-  async resolveNodeSource(
-    input: ResolveNodeRepoInput
-  ): Promise<ResolvedNodeSource> {
-    const row = await this.readNodeCatalogRow(input);
-    if (row.sourceRepoUrl === undefined)
-      return {
-        owner: input.parentOwner,
-        repo: input.parentRepo,
-        imageRepository: null,
-      };
-    const remote = parseRemoteSourceCatalog(row.catalogText, input.slug);
-    return {
-      owner: remote.sourceRepo.owner,
-      repo: remote.sourceRepo.repo,
-      imageRepository: remote.imageRepository,
-    };
-  }
-
-  /**
-   * ONE catalog read + discriminator for `resolveNodeRepo` and `resolveNodeSource`.
+   * ONE catalog read + discriminator for `resolveNodeRepo`.
    * `catalog_missing` (404) is reserved for a genuinely absent row (file missing / name mismatch).
    */
   private async readNodeCatalogRow(
@@ -5648,10 +5640,14 @@ export class GitHubRepoWriter implements DeployPlanePort {
       }
     );
     if (!response.ok) {
-      throw new Error(
+      const error = new Error(
         `GitHub App not installed on ${owner}/${repo} (HTTP ${response.status}). ` +
           `Install cogni-node-template on the target repo and retry.`
       );
+      // Only a 404 means "no installation on this repo"; a 401/5xx is a failure, never a fallback signal.
+      throw response.status === 404
+        ? Object.assign(error, { code: GITHUB_APP_NOT_INSTALLED })
+        : error;
     }
     const data = (await response.json()) as { id: number };
     return data.id;
