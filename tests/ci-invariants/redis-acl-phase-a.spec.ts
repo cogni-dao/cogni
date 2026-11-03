@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@tests/ci-invariants/redis-acl-phase-a`
  * Purpose: Pin the additive shape of task.5384 phase A on the shared runtime Redis.
- * Scope: Production Compose declaration, secrets catalog and the shared ACL lib (static reads).
+ * Scope: Production Compose declaration, secrets catalog and the shared ACL lib (static reads); does not start Redis or reach any VM.
  * Invariants:
  *   - ACL_FILE_PERSISTS_ONLY_USERS: Redis loads an ACL file from a named volume while
  *     `--save ''` keeps the stream plane ephemeral.
