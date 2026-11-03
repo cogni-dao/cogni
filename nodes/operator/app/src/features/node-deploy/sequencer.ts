@@ -248,7 +248,9 @@ export class NodeDeploySequencer {
 
     const ofRelease = all.filter((a) => a.releaseId === release.id);
     if (consecutiveFailures(ofRelease) >= this.d.config.maxFailedAttempts) {
-      await this.alert(key, release, undefined, "release_parked", {
+      // Attached to the release's newest attempt so the park is a durable step on its timeline:
+      // `release-view` reads `alert/release_parked` as the sequencer's own verdict.
+      await this.alert(key, release, ofRelease[0], "release_parked", {
         failedAttempts: consecutiveFailures(ofRelease),
       });
       return "parked";

@@ -136,6 +136,72 @@ describe("deriveReleaseTimeline STATE_TABLE", () => {
     );
   });
 
+  it("parked: the sequencer's own park verdict wins over a third attempt that is still closing", () => {
+    const verdict = {
+      step: "alert",
+      outcome: "release_parked",
+      at: "2026-11-02T10:10:00.000Z",
+    };
+    const attempts = [
+      attempt(R1, 3, "closing", {
+        error: "proof_timeout: version 502",
+        steps: [verdict],
+      }),
+      attempt(R1, 2, "failed", { error: "lease_not_ready" }),
+      attempt(R1, 1, "failed"),
+    ];
+    const t = derive(attempts);
+    expect(t.releaseState).toBe("parked");
+    expect(t.parkedReason).toMatch(
+      /^3 consecutive failed attempts; last: proof_timeout/
+    );
+    // without the verdict the same rows are still deploying (the close is unconfirmed)
+    expect(
+      derive([
+        { ...attempts[0], steps: [] } as AttemptRow,
+        ...attempts.slice(1),
+      ]).releaseState
+    ).toBe("deploying");
+  });
+
+  it("serving: the release backing the live lease is flagged even when superseded, deploying or parked", () => {
+    // R1 serves; R2 (desired) is parked after 3 failures -> R1: superseded + serving
+    const attempts = [
+      attempt(R2, 3, "failed"),
+      attempt(R2, 2, "failed"),
+      attempt(R2, 1, "failed"),
+      attempt(R1, 1, "active"),
+    ];
+    expect(derive(attempts, R2)).toMatchObject({
+      releaseState: "superseded",
+      current: false,
+      serving: true,
+    });
+    const r2 = deriveReleaseTimeline({
+      release: { ...release, id: R2 },
+      currentReleaseId: R2,
+      attemptsNewestFirst: attempts,
+    });
+    expect(r2).toMatchObject({ releaseState: "parked", serving: false });
+    const view = buildWorkloadView({
+      desired: {
+        workload: "canary",
+        state: "running",
+        releaseId: R2,
+      },
+      release: { ...release, id: R2 },
+      attemptsNewestFirst: attempts,
+    });
+    expect(view.servingReleaseId).toBe(R1);
+    expect(view.desired).toMatchObject({
+      releaseState: "parked",
+      serving: false,
+    });
+    // an active current release is serving itself
+    expect(derive([attempt(R1, 1, "active")]).serving).toBe(true);
+    expect(derive([]).serving).toBe(false);
+  });
+
   it("a success in between resets the count: failed, failed, ACTIVE is not parked", () => {
     expect(
       derive([

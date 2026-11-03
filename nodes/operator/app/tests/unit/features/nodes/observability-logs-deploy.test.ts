@@ -41,7 +41,7 @@ describe("scopeNodeLogQL with ?service=deploy (DEPLOY_EVENTS_PIN_BY_LINE)", () =
 
   it("keeps a bare caller pipeline AFTER the forced pin", () => {
     expect(scope('| json | step="proven"')).toBe(
-      `${SELECTOR} ${PIN} | json | step="proven"`
+      `${SELECTOR} ${PIN} | json | step="proven" | nodeId="${NODE}"`
     );
   });
 
@@ -49,7 +49,7 @@ describe("scopeNodeLogQL with ?service=deploy (DEPLOY_EVENTS_PIN_BY_LINE)", () =
     expect(
       scope('{service="deploy", pod=~"operator-node-deploy-.*"} | step="alert"')
     ).toBe(
-      `{env="production", service="sequencer", pod=~"operator-node-deploy-.*"} ${PIN} | step="alert"`
+      `{env="production", service="sequencer", pod=~"operator-node-deploy-.*"} ${PIN} | step="alert" | nodeId="${NODE}"`
     );
   });
 
@@ -71,44 +71,137 @@ describe("scopeNodeLogQL with ?service=deploy (DEPLOY_EVENTS_PIN_BY_LINE)", () =
     );
   });
 
-  it("another node's events are UNREACHABLE: the pin precedes every caller stage and appears once", () => {
-    const hostile = [
-      `{service="deploy", nodeId="${OTHER}"}`,
-      `{service="deploy", node="${OTHER}"}`,
-      `| json | nodeId="${OTHER}"`,
-      `| json | nodeId=~".*"`,
-      `| json | nodeId=~"${OTHER}|${NODE}"`,
-      `| label_format nodeId="${OTHER}"`,
-      `|= "${OTHER}"`,
-      `{service="deploy"} | json | nodeId!="${NODE}"`,
-      `{service="deploy"} or {service="sequencer"}`,
-    ];
-    for (const query of hostile) {
-      let scoped: string | undefined;
-      try {
-        scoped = scope(query);
-      } catch (e) {
-        // A refusal is also safe: nothing is queried.
-        expect(e).toBeInstanceOf(ObservabilityQueryError);
-        continue;
-      }
-      // The forced prefix is byte-identical, so every caller stage runs on already-pinned lines.
-      expect(scoped.startsWith(`${SELECTOR.slice(0, -1)}`)).toBe(true);
-      const pinAt = scoped.indexOf(PIN);
-      expect(pinAt).toBeGreaterThan(0);
-      expect(scoped.indexOf(PIN, pinAt + 1)).toBe(-1);
-      // Nothing but the stream selector precedes the pin.
-      const before = scoped.slice(0, pinAt);
-      expect(before).toMatch(/^\{[^|]*\} $/);
+  // The query a node dev sends must only ever return that node's lines. A scoped query is SAFE when it
+  // is refused (400) or when, with string literals blanked, it is exactly: the stream selector, the
+  // forced pin, the caller's whole stages (no top-level or/and/unless, no braces), and the closing
+  // `| nodeId="<id>"` pin as the LAST stage.
+  const blank = (q: string): string => q.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  const assertOnlyThisNode = (query: string): "refused" | "scoped" => {
+    let scoped: string;
+    try {
+      scoped = scope(query);
+    } catch (e) {
+      expect(e).toBeInstanceOf(ObservabilityQueryError);
+      expect((e as ObservabilityQueryError).code).toMatch(
+        /invalid_query|query_out_of_scope/
+      );
+      return "refused";
     }
+    expect(scoped.startsWith(`${SELECTOR.slice(0, -1)}`)).toBe(true);
+    const pinAt = scoped.indexOf(PIN);
+    expect(pinAt).toBeGreaterThan(0);
+    expect(scoped.indexOf(PIN, pinAt + 1)).toBe(-1);
+    expect(scoped.slice(0, pinAt)).toMatch(/^\{[^|]*\} $/);
+    // the caller's part is whole stages and cannot widen the filters around it
+    const caller = scoped.slice(pinAt + PIN.length);
+    if (caller !== "") {
+      expect(caller.endsWith(` | nodeId="${NODE}"`)).toBe(true);
+      expect(blank(caller)).toMatch(/^ (\||!=|!~)/);
+      expect(blank(caller)).not.toMatch(/\b(or|and|unless)\b/i);
+      expect(blank(caller)).not.toMatch(/[{}]/);
+    }
+    return "scoped";
+  };
+
+  it.each([
+    // or / and, bare and selector forms (the reviewer's proven leak)
+    'or nodeId=~".+"',
+    `or nodeId="${OTHER}"`,
+    'and nodeId=~".+"',
+    `{service="deploy"} or nodeId="${OTHER}"`,
+    '{service="deploy"} or nodeId=~".+"',
+    '{service="deploy"} and nodeId=~".+"',
+    '{service="deploy"} unless nodeId="x"',
+    '| json | step="a" or nodeId=~".+"',
+    `| json | step="a" OR nodeId="${OTHER}"`,
+    '| (step="a") or (nodeId=~".+")',
+    // a remainder that is not whole stages
+    '{service="deploy"} nodeId=~".+"',
+    '{service="deploy"} {env="preview"}',
+    '| json } or {service="app"',
+    '| json) or (nodeId=~".+"',
+    // label rewrites of the pinned labels
+    `| label_format nodeId="${OTHER}"`,
+    "| label_format nodeId=reason",
+    '| label_format foo=bar, node="x"',
+    '{service="deploy"} | label_format env="x"',
+    '| label_format service="app"',
+    // an unterminated string cannot swallow the closing pin
+    '| json | reason="oops',
+  ])("REJECTS %s", (query) => {
+    expect(assertOnlyThisNode(query)).toBe("refused");
   });
 
-  it("a bare pipeline cannot smuggle a stream block; a trailing block stays AFTER the pin (an unparseable query, never a wider one)", () => {
+  it.each([
+    // legitimate narrowing stays allowed, and the closing pin is the last stage
+    '| json | step="proven"',
+    '|= "alert" != "debug"',
+    '{service="deploy", pod=~"operator-node-deploy-.*"} | json | step="alert"',
+    // regex / negated nodeId matchers are ANDed with the pins: they can only narrow
+    '| json | nodeId=~".+"',
+    `| json | nodeId=~"${OTHER}|${NODE}"`,
+    `| json | nodeId!="${NODE}"`,
+    `| json | nodeId="${OTHER}"`,
+    `{service="deploy", nodeId="${OTHER}"}`,
+    `{service="deploy", node="${OTHER}"}`,
+    // a label READ into a non-protected label
+    "| label_format other=nodeId",
+    // unwrap (metric stage): the closing pin still follows, never precedes
+    "| json | unwrap elapsedMs",
+    // quoted keywords and braces are text, not operators
+    '{service="deploy"} |= "this or that and {braces}"',
+    '{service="deploy"} | line_format "{{.step}} or {{.outcome}}"',
+  ])("keeps %s scoped: only this node's lines can match", (query) => {
+    expect(assertOnlyThisNode(query)).toBe("scoped");
+  });
+
+  it("sandwiches the caller's stages between the forced pin and a closing pin (final query string)", () => {
+    expect(scope('| json | nodeId=~".+"')).toBe(
+      `${SELECTOR} ${PIN} | json | nodeId=~".+" | nodeId="${NODE}"`
+    );
+    expect(scope('{service="deploy"} | json | unwrap elapsedMs')).toBe(
+      `${SELECTOR} ${PIN} | json | unwrap elapsedMs | nodeId="${NODE}"`
+    );
+    // no caller stages: the forced pin is already the last stage, nothing is repeated
+    expect(scope()).toBe(`${SELECTOR} ${PIN}`);
+    expect(scope('{service="deploy"}')).toBe(`${SELECTOR} ${PIN}`);
+  });
+
+  it("a bare pipeline cannot smuggle a stream block", () => {
     expect(() => scope('|= "x" } | {service="app"')).toThrowError(
       expect.objectContaining({ code: "invalid_query" })
     );
-    const trailing = scope('{service="deploy"} {env="preview"}');
-    expect(trailing.startsWith(`${SELECTOR} ${PIN}`)).toBe(true);
+  });
+
+  it("the stream-pinned scopes (app, lease) refuse the same payloads and keep narrowing stages", () => {
+    for (const service of [undefined, "web"]) {
+      for (const query of [
+        'or node=~".+"',
+        '{service="app"} or node="x"',
+        '| json | level="x" or node=~".+"',
+        "| label_format node=other",
+        '| label_format nodeId="x"',
+      ]) {
+        expect(() =>
+          scopeNodeLogQL({ env: "production", nodeId: NODE, service, query })
+        ).toThrowError(
+          expect.objectContaining({
+            code: expect.stringMatching(/invalid_query|query_out_of_scope/),
+          })
+        );
+      }
+      // the selector is the pin there: no closing pin, output unchanged
+      expect(
+        scopeNodeLogQL({
+          env: "production",
+          nodeId: NODE,
+          service,
+          query: '| json | level="error"',
+        })
+      ).toMatch(
+        /^\{env="production", service="[a-z]+", node="[^"]+"(, source="lease")?\} \| json \| level="error"$/
+      );
+    }
   });
 
   it("escapes quotes/backslashes in the nodeId (no pin breakout)", () => {

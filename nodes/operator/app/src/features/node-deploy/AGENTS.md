@@ -47,10 +47,11 @@ A node developer has THREE views of one deploy. They are written by the same cod
    - `queued` — no attempt yet · `deploying` — an attempt is mid-flight, or a failed lease is still closing
    - `active` — an attempt of the release serves · `parked` — 3 consecutive failed attempts, no paid create until a NEW release (`parkedReason` names the count and the last error)
    - `failed` — newest attempt failed or its live lease was lost, fewer than 3 failures (retry pending)
-   - `superseded` — the desired row points at a newer release (`activatedAt` says if this one ever served)
+   - `superseded` — the desired row points at a newer release (`activatedAt` says if this one ever served). `serving: true` says it STILL backs the live lease; the workload list also returns `servingReleaseId`.
+   - The sequencer's `alert/release_parked` step (persisted on the release's newest attempt) is the park verdict: it makes the release `parked` even while its third attempt is still `closing`.
    - `leadTimeMs = activatedAt - recordedAt`; `startedAt` is the first attempt's creation.
    - Read through `GET /deploy/workloads` (`desired.releaseState`, attempts with `steps[]`) and `GET /deploy/workloads/releases/{releaseId}`. Same authz gate as the list (`node.promote_production` for production, `node.manage_envs` otherwise); a release of another node or env is a 404.
-3. **Node-scoped logs.** `GET /api/v1/nodes/{id}/observability/logs?env=<env>&service=deploy` returns ONLY that node's sequencer events: the proxy forces `{env, service="sequencer"} |= "node_deploy" | json | nodeId="<id>"` before any caller stage (DEPLOY_EVENTS_PIN_BY_LINE in `../nodes/observability-logs.ts`). `deploy` is reserved and not a lease service name.
+3. **Node-scoped logs.** `GET /api/v1/nodes/{id}/observability/logs?env=<env>&service=deploy` returns ONLY that node's sequencer events: the proxy forces `{env, service="sequencer"} |= "node_deploy" | json | nodeId="<id>"` before any caller stage AND repeats `| nodeId="<id>"` as the last stage (DEPLOY_EVENTS_PIN_BY_LINE in `../nodes/observability-logs.ts`). For EVERY scope the caller's remainder must be whole pipeline stages (`|`, `|=`, `|~`, `!=`, `!~`): no `or`/`and`/`unless` (an `or nodeId=~".+"` would widen the preceding label filter), no braces, no `label_format` writing `nodeId|node|env|service`; anything else is a 400 `invalid_query`. `deploy` is reserved and not a lease service name.
 
 Operator-only: the Grafana dashboard `cogni-node-deploy` and the alerts in `infra/grafana/alerts/node-deploy.alerts.yaml` (release parked, no leader for 10m, leadership lost, repeated proof_timeout). The no-leader alert relies on the bootstrap's once-a-minute `node_deploy_sequencer_leader {heartbeat:true}`.
 

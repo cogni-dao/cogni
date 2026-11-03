@@ -19,13 +19,16 @@
  *       deploying    an attempt is mid-flight (`planned|created|proving|proven`), OR any attempt of the
  *                    workload is `closing` (the sequencer never starts a paid create over an
  *                    unconfirmed close).
- *       parked       no attempt serves or is mid-flight and the release has `maxFailedAttempts`
- *                    consecutive failed attempts: no further paid create happens until a NEW release.
+ *       parked       no attempt serves or is mid-flight and either the sequencer recorded its park
+ *                    verdict (`alert/release_parked` step) or the release has `maxFailedAttempts`
+ *                    consecutive failed attempts: no further paid create until a NEW release. The
+ *                    verdict wins over a third attempt that is still `closing`.
  *       queued       the release has no attempt yet (the sequencer has not picked it up).
  *       failed       the newest attempt failed (or its live lease was lost) and fewer than
  *                    `maxFailedAttempts` have failed: the sequencer will plan the next attempt.
  *     A release the desired row no longer points at is `superseded` whatever it did; `activatedAt`
- *     still says whether it ever served.
+ *     still says whether it ever served, and `serving: true` says it STILL backs the live lease
+ *     (a newer release that is deploying, failed or parked leaves the old one serving).
  *   - LEAD_TIME: `leadTimeMs = activatedAt - recordedAt` (intent recorded -> first activation); null
  *     until the release first activates.
  *   - TOLERANT_OF_OLD_ROWS: an attempt that predates the timeline reads as an empty `steps[]`.
@@ -114,13 +117,23 @@ export function deriveReleaseTimeline(input: {
       break;
     }
   }
-  const serving = ofRelease.find((a) => a.phase === "active");
-  if (activatedAt === null && serving) activatedAt = iso(serving.updatedAt);
+  const servingAttempt = ofRelease.find((a) => a.phase === "active");
+  if (activatedAt === null && servingAttempt)
+    activatedAt = iso(servingAttempt.updatedAt);
+  // The sequencer's own park verdict, persisted on the release's newest attempt as an
+  // `alert/release_parked` step. It wins over a still-`closing` third attempt.
+  const parkedByStep = ofRelease.some((a) =>
+    (a.steps ?? []).some(
+      (s) => s.step === "alert" && s.outcome === "release_parked"
+    )
+  );
 
   const base = {
     releaseId: input.release.id,
     sourceSha: input.release.sourceSha,
     current,
+    /** True when an attempt of THIS release backs the workload's live lease (any release). */
+    serving: servingAttempt !== undefined,
     recordedAt,
     startedAt,
     activatedAt,
@@ -136,16 +149,20 @@ export function deriveReleaseTimeline(input: {
   ): DeployReleaseTimeline => ({ ...base, releaseState, parkedReason });
 
   if (!current) return done("superseded");
-  if (serving) return done("active");
+  if (servingAttempt) return done("active");
   if (ofRelease.some((a) => IN_FLIGHT_PHASES.includes(a.phase)))
     return done("deploying");
-  if (all.some((a) => a.phase === "closing")) return done("deploying");
   const failures = consecutiveFailures(ofRelease);
-  if (failures >= max) {
+  if (!parkedByStep && all.some((a) => a.phase === "closing"))
+    return done("deploying");
+  if (parkedByStep || failures >= max) {
     const last = ofRelease[0]?.error ?? "no error recorded";
     return done(
       "parked",
-      `${failures} consecutive failed attempts; last: ${last}`.slice(0, 600)
+      `${Math.max(failures, max)} consecutive failed attempts; last: ${last}`.slice(
+        0,
+        600
+      )
     );
   }
   if (ofRelease.length === 0) return done("queued");
@@ -185,7 +202,11 @@ export function buildWorkloadView(input: {
       startedAt: t?.startedAt ?? null,
       activatedAt: t?.activatedAt ?? null,
       leadTimeMs: t?.leadTimeMs ?? null,
+      serving: t?.serving ?? false,
     },
+    // The release backing the live lease; differs from `desired.releaseId` while a newer release
+    // is deploying, failed or parked (the old one is `superseded` + `serving`).
+    servingReleaseId: active?.releaseId ?? null,
     active: active ? toAttemptView(active) : null,
     recentAttempts: attemptsNewestFirst
       .slice(0, RECENT_ATTEMPTS)

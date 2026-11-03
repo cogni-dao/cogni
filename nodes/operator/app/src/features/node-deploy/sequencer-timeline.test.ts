@@ -222,6 +222,12 @@ describe("release state on the read model", () => {
     expect(v.desired.parkedReason).toMatch(
       /^3 consecutive failed attempts; last: proof_timeout/
     );
+    // the park is a durable step on the newest attempt (the verdict release-view reads)
+    expect(
+      v.recentAttempts[0]?.steps.some(
+        (s) => s.step === "alert" && s.outcome === "release_parked"
+      )
+    ).toBe(true);
     expect(v.recentAttempts.map((a) => a.attempt)).toEqual([3, 2, 1]);
     expect(v.recentAttempts.every((a) => a.phase === "failed")).toBe(true);
     expect(DeployWorkloadViewSchema.safeParse(v).success).toBe(true);

@@ -132,6 +132,8 @@ export const DeployReleaseTimelineSchema = z.object({
   sourceSha: z.string(),
   /** True when the workload's desired row points at this release. */
   current: z.boolean(),
+  /** True when an attempt of this release backs the workload's live lease (even if superseded). */
+  serving: z.boolean(),
   releaseState: DeployReleaseStateSchema,
   parkedReason: z.string().nullable(),
   recordedAt: z.string().nullable(),
@@ -153,7 +155,10 @@ export const DeployWorkloadViewSchema = z.object({
     startedAt: z.string().nullable(),
     activatedAt: z.string().nullable(),
     leadTimeMs: z.number().int().nonnegative().nullable(),
+    serving: z.boolean(),
   }),
+  /** The release whose attempt backs the live lease; differs from `desired.releaseId` mid-rollout. */
+  servingReleaseId: z.string().nullable(),
   active: DeployAttemptViewSchema.nullable(),
   recentAttempts: z.array(DeployAttemptViewSchema),
 });
