@@ -69,9 +69,9 @@ compute_egress_cidrs:
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
   - cidr: 89.207.152.9/32
-    envs: [production]
+    envs: [production, candidate-a]
     ports: [5432, 5435, 6379, 4000, 7233]
-    comment: UA ithub egress measured stable (2026-11-02, two pods); node-deploy interim admitted provider set, YELLOW owner task.5384 expiry 2026-11-23
+    comment: UA ithub egress measured stable (2026-11-02, two pods); node-deploy interim admitted provider set, YELLOW owner task.5384 expiry 2026-11-23; candidate-a too, matching the sequencer's provider set
   - cidr: 95.217.139.183/32
     envs: [candidate-a]
     ports: [5432]
