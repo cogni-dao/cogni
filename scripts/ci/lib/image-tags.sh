@@ -465,48 +465,6 @@ deployment_provider_for_target() {
   esac
 }
 
-# Operator-owned per-environment RECONCILIATION AUTHORITY, read from the ONE place the catalog
-# already declares it (`compute_api.<env>`, infra/catalog/_schema.json). Shell twin of
-# resolveNodeComputeApi() in nodes/operator/app/src/features/compute/node-compute-api.ts —
-# ONE authority reader per language, same semantics, so the deploy lane can never disagree with
-# the typed materializer that RENDERS the manifest.
-#
-# LEGACY_IS_DEFAULT: an absent per-env cell resolves to `legacy`, the pre-existing bespoke
-# `compute-workload-controller`. Byte-for-byte the same default as the typed resolver, and the
-# same shape as K3S_IS_DEFAULT above — adding the field changed nothing until a row opted in.
-#
-# AUTHORITY_REQUIRES_AN_INSTALLED_API IS NOT RESTATED HERE: the typed resolver additionally
-# refuses a `crossplane` row in an environment with no Crossplane control plane, rather than
-# degrading it to `legacy`. That check belongs where desired state is BUILT — by the time this
-# lane runs, the materializer has already rendered or already failed. This reader's only job is
-# to name the file that render produced.
-#   compute_api_for_target NODE ENV   # → legacy | crossplane
-compute_api_for_target() {
-  local node="$1" env="${2:-}" api
-  if [ -z "${_image_tags_primary_cache[$node]+x}" ]; then
-    echo "[ERROR] image-tags: unknown target: $node" >&2
-    return 1
-  fi
-  [ -n "$env" ] || { echo "[ERROR] image-tags: compute_api_for_target needs an env" >&2; return 1; }
-  api=$(yq -N ".compute_api.\"${env}\" // \"legacy\"" "${_image_tags_catalog_root}/${node}.yaml")
-  [ -n "$api" ] && [ "$api" != "null" ] || api="legacy"
-  case "$api" in
-    legacy | crossplane) printf '%s' "$api" ;;
-    node-deploy)
-      # ONE_WRITER_PER_NODE_LANE (story.5137, CD4): this (node, env) is deployed ONLY by the
-      # node-deploy sequencer. The flight/promote lane must never resolve a manifest filename
-      # for it, because it renders and writes nothing for the cell. Same prefix as the typed
-      # resolver (nodeOnDeployVerbMessage in node-compute-api.ts).
-      echo "[ERROR] node_on_deploy_verb: $node in $env is deployed only by the node-deploy sequencer (catalog compute_api.${env}=node-deploy) — use POST /api/v1/deploy/workloads. The flight/promote path never renders its workload, writes its deploy branch, or touches its lease or DNS." >&2
-      return 1
-      ;;
-    *)
-      echo "[ERROR] image-tags: unsupported compute_api '$api' for '$node' in env '$env' (expected legacy|crossplane; see infra/catalog/${node}.yaml)" >&2
-      return 1
-      ;;
-  esac
-}
-
 # bug.5094 — the address a CHERRY-RESIDENT caller must dial to reach a node's app.
 # Placement decides the address, not the caller:
 #   k3s   → the in-cluster Service DNS convention (unchanged; do not regress the fleet)

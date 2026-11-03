@@ -212,9 +212,9 @@ run **the same script** — `scripts/ci/run-node-substrate.sh`, whose header cal
 substrate runner"_ and whose `case "$DEPLOYMENT_PROVIDER"` accepts `k3s|akash`. It calls
 `secret-materialize.sh` for either provider.
 
-| lane  | job / writer                                   | matrix                  |
-| ----- | ---------------------------------------------- | ----------------------- |
-| k3s   | `node-substrate`                               | `k3s_node_targets_json` |
+| lane  | job / writer                                     | matrix                           |
+| ----- | ------------------------------------------------ | -------------------------------- |
+| k3s   | `node-substrate`                                 | `k3s_node_targets_json`          |
 | Akash | node-deploy sequencer (`POST /deploy/workloads`) | none (no flight job, story.5137) |
 
 **The trap that outlived the bug:** the JOB `node-substrate` and the SCRIPT `run-node-substrate.sh` share a
