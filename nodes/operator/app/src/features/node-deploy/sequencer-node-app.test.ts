@@ -123,6 +123,9 @@ class FakeCatalog implements NodeCatalogPort {
     ],
     [OPERATOR_NODE_ID, { slug: "operator", row: { name: "operator" } }],
   ]);
+  async slugs() {
+    return [...this.rows.values()].map((r) => r.slug);
+  }
   async entryFor(nodeId: string) {
     return this.rows.get(nodeId);
   }

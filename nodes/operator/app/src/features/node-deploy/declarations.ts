@@ -51,6 +51,14 @@ import { parse as parseYaml } from "yaml";
 import type { NodeWorkloadSpec } from "@/ports";
 import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
 
+/** Every deployment environment a host can be derived for. */
+export const HOST_ENVS: readonly string[] = [
+  "production",
+  "candidate-a",
+  "preview",
+  "dev",
+];
+
 const ENV_HOST_SUFFIX: Readonly<Record<string, string | undefined>> = {
   production: undefined,
   "candidate-a": "test",

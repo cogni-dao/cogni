@@ -69,7 +69,7 @@ import {
   type WorkloadKey,
 } from "@/ports";
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
-import { type EdgeRouter, hostOwnedBy } from "./edge";
+import { type EdgeRouter, hostOwnedBy, workerHostRefusal } from "./edge";
 import { nodeAppEnv, nodeAppSecretKeys, workerEnv } from "./node-app-env";
 import { nodeCatalogPolicy } from "./node-catalog-policy";
 import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
@@ -664,12 +664,31 @@ export class NodeDeploySequencer {
     if (declaredHost && this.d.runtime) {
       // HOST_IS_THE_NODES_OWN: a node may claim only its own host, so node A can never take node B's.
       const owner = await this.d.runtime.catalog.entryFor(key.nodeId);
-      if (!owner || !hostOwnedBy(declaredHost, key.env, owner.slug, w.name))
+      // Only an operator-lowered repo-spec sibling (a worker) may use `<slug>-<workload>`.
+      const worker = w.runtimeProfile === "worker" ? w.name : undefined;
+      if (!owner || !hostOwnedBy(declaredHost, key.env, owner.slug, worker))
         return this.failAttempt(
           key,
           release,
           attempt,
           `edge_host_refused: ${declaredHost} is not the host node ${owner?.slug ?? key.nodeId} may claim in ${key.env}`
+        );
+      const refusal =
+        worker !== undefined && declaredHost !== undefined
+          ? workerHostRefusal({
+              host: declaredHost,
+              env: key.env,
+              slug: owner.slug,
+              workload: worker,
+              catalogSlugs: await this.d.runtime.catalog.slugs(),
+            })
+          : undefined;
+      if (refusal)
+        return this.failAttempt(
+          key,
+          release,
+          attempt,
+          `edge_host_refused: ${refusal}`
         );
     }
     let runtime: ResolvedRuntime;

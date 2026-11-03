@@ -29,7 +29,7 @@
 
 import type { DnsRecord, DnsRecordInput, DnsRecordsPort } from "@/ports";
 
-import { hostForEnv } from "./declarations";
+import { HOST_ENVS, hostForEnv } from "./declarations";
 
 export const DEFAULT_EDGE_HOST_REGEX =
   /^node-deploy-canary(-[a-z]+)?\.cognidao\.org$/;
@@ -81,6 +81,41 @@ export function hostOwnedBy(
   } catch {
     return false;
   }
+}
+
+/**
+ * WORKER_HOST_IS_UNAMBIGUOUS (task.5272): why a sibling worker `<slug>-<workload>[-env]` host may NOT be
+ * claimed, or undefined when it may. A worker host is checked at the pre-create step, after
+ * `hostOwnedBy(.., workload)`; it must not collide with any host another catalog node (or this node's
+ * own app in another environment) could claim:
+ *   - the workload name is one plain label (`[a-z][a-z0-9]*`, no hyphen) and is not an environment word
+ *     (`test`, `preview`, `dev`), so `poly` + `test` can never reach `poly-test` and `a` + `b-c` can
+ *     never meet node `a-b` + `c`;
+ *   - no OTHER catalog slug owns the host in any environment (`red` + `sandbox` vs node `red-sandbox`);
+ *   - this node's own host in another environment is not the host.
+ */
+export function workerHostRefusal(input: {
+  readonly host: string;
+  readonly env: string;
+  readonly slug: string;
+  readonly workload: string;
+  readonly catalogSlugs: readonly string[];
+}): string | undefined {
+  const { host, env, slug, workload } = input;
+  if (!/^[a-z][a-z0-9]*$/.test(workload))
+    return `worker name "${workload}" must be one plain label (letters and digits)`;
+  if (["test", "preview", "dev"].includes(workload))
+    return `worker name "${workload}" is an environment word`;
+  for (const other of input.catalogSlugs) {
+    if (other === slug) continue;
+    for (const e of HOST_ENVS)
+      if (hostOwnedBy(host, e, other))
+        return `${host} is node ${other}'s host in ${e}`;
+  }
+  for (const e of HOST_ENVS)
+    if (e !== env && hostOwnedBy(host, e, slug))
+      return `${host} is this node's own host in ${e}`;
+  return undefined;
 }
 
 export class EdgeGuardError extends Error {

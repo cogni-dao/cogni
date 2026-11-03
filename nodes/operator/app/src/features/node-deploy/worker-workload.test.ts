@@ -222,14 +222,21 @@ class Bucket implements NodeRuntimeSecretsPort {
 }
 
 class Catalog implements NodeCatalogPort {
+  constructor(
+    private readonly slug: string,
+    private readonly all: readonly string[]
+  ) {}
+  async slugs() {
+    return this.all;
+  }
   async entryFor(nodeId: string) {
     return nodeId === RED_ID
-      ? { slug: "red", row: { name: "red" } }
+      ? { slug: this.slug, row: { name: this.slug } }
       : undefined;
   }
 }
 
-function harness() {
+function harness(slug = "red", all: readonly string[] = ["red", "poly"]) {
   const events: string[] = [];
   const clock = new FakeClock();
   const store = new MemoryStore(clock);
@@ -239,12 +246,12 @@ function harness() {
   const seq = new NodeDeploySequencer({
     store,
     payer,
-    edge: new EdgeRouter(dns, edgeHostRegexFor(["red"])),
+    edge: new EdgeRouter(dns, edgeHostRegexFor(all)),
     probe: new FakeProbe(payer, dns, events),
     secrets: new MemorySecrets(),
     runtime: {
       secrets: bucket,
-      catalog: new Catalog(),
+      catalog: new Catalog(slug, all),
       substrateHost: "cogni.vm.cognidao.org",
     },
     chain: new FakeChain(payer),
@@ -263,26 +270,27 @@ function harness() {
 async function release(
   h: ReturnType<typeof harness>,
   host: string,
-  runtimeProfile: "worker" | undefined = "worker"
+  kind: "worker" | "app" = "worker",
+  name = "sandbox"
 ) {
   await h.store.recordRelease({
     nodeId: RED_ID,
     env: ENV,
-    workload: "sandbox",
+    workload: name,
     sourceSha: SHA_1,
     spec: canaryApp({
-      name: "sandbox",
+      name,
       image: SANDBOX_IMAGE,
       port: 8080,
       command: undefined,
       bindings: [],
       secretKeys: ["SANDBOX_EXECD_TOKEN"],
-      ...(runtimeProfile ? { runtimeProfile } : {}),
+      ...(kind === "worker" ? { runtimeProfile: "worker" as const } : {}),
       expose: { http: { host } },
     }),
     createdBy: "test",
   });
-  return h.seq.step({ nodeId: RED_ID, env: ENV, workload: "sandbox" });
+  return h.seq.step({ nodeId: RED_ID, env: ENV, workload: name });
 }
 
 describe("deploying a worker through the real sequencer", () => {
@@ -326,5 +334,69 @@ describe("deploying a worker through the real sequencer", () => {
     delete h.bucket.bucket.SANDBOX_EXECD_TOKEN;
     await release(h, "red-sandbox.cognidao.org");
     expect(h.payer.createRequests).toHaveLength(0);
+  });
+});
+
+describe("a worker host cannot collide with another host (WORKER_HOST_IS_UNAMBIGUOUS)", () => {
+  const refused = async (
+    h: ReturnType<typeof harness>,
+    name: string,
+    host: string,
+    kind: "worker" | "app" = "worker"
+  ) => {
+    await release(h, host, kind, name);
+    expect(h.payer.createRequests).toHaveLength(0);
+    const attempts = await h.store.attemptsFor({
+      nodeId: RED_ID,
+      env: ENV,
+      workload: name,
+    });
+    expect(attempts[0]?.error).toMatch(/edge_host_refused/);
+  };
+
+  it("red + sandbox is refused when a catalog node is named red-sandbox", async () => {
+    await refused(
+      harness("red", ["red", "red-sandbox"]),
+      "sandbox",
+      "red-sandbox.cognidao.org"
+    );
+  });
+
+  it("node + template is refused when node-template is in the catalog", async () => {
+    await refused(
+      harness("node", ["node", "node-template"]),
+      "template",
+      "node-template.cognidao.org"
+    );
+  });
+
+  it("poly + test in production is refused: poly-test is poly's own candidate-a host", async () => {
+    await refused(
+      harness("poly", ["poly", "red"]),
+      "test",
+      "poly-test.cognidao.org"
+    );
+  });
+
+  it("a hyphenated or environment-word worker name is refused", async () => {
+    await refused(
+      harness("red", ["red"]),
+      "sandbox-test",
+      "red-sandbox-test.cognidao.org"
+    );
+    await refused(
+      harness("red", ["red"]),
+      "preview",
+      "red-preview.cognidao.org"
+    );
+  });
+
+  it("a workload that is not a lowered worker never gets a <slug>-<workload> host", async () => {
+    await refused(
+      harness("red", ["red"]),
+      "sandbox",
+      "red-sandbox.cognidao.org",
+      "app"
+    );
   });
 });

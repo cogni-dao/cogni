@@ -72,6 +72,11 @@ export class ImageCatalogNodes implements NodeCatalogPort {
       .map((e) => e.slug);
   }
 
+  async slugs(): Promise<readonly string[]> {
+    this.index ??= await this.build();
+    return this.rows.map((e) => e.slug);
+  }
+
   async entryFor(nodeId: string): Promise<NodeCatalogEntry | undefined> {
     this.index ??= await this.build();
     return this.index.get(nodeId.toLowerCase());
