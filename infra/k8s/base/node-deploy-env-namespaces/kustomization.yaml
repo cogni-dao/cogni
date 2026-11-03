@@ -10,7 +10,7 @@
 # EVERY Namespace object to the wallet namespace, and a second Namespace makes kustomize fail with "namespace
 # transformation produces ID conflict". This directory therefore has NO `namespace:` transformer, and the
 # operator overlay reaches it through `node-deploy-env-namespaces-application.yaml`
-# (same pattern as compute-workload-platform). The production namespace stays in ../operator.
+# (a sibling Application in argocd). The production namespace stays in ../operator.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

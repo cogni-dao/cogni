@@ -14,7 +14,6 @@ resources:
   - external-secret.yaml
   - ../../../base/operator-migration-external-secret
   - ./secrets-writer-sa.yaml
-  - ./compute-workload-platform-application.yaml
   # story.5016 production cutover — the private Akash transaction actuator Crossplane calls.
   # #2234 shipped the two ExternalSecrets deliberately WITHOUT this Deployment because a
   # projected Secret source whose key is absent makes kubelet refuse the mount (FailedMount,
@@ -68,17 +67,15 @@ replacements:
         fieldPaths: [metadata.namespace]
   - source:
       kind: Application
-      name: compute-workload-platform
+      name: node-deploy-env-namespaces
       fieldPath: spec.destination.namespace
     targets:
-      - select: {kind: Application, name: compute-workload-platform}
-        fieldPaths: [metadata.namespace]
       - select: {kind: Application, name: node-deploy-env-namespaces}
         fieldPaths: [metadata.namespace]
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:df7c4ef7537c8e3e6ec9f48fc7fa0d4cff6a2cbc85939a716ed341b01f9a7488"
+    digest: "sha256:7493523e0e795d70264823293835ced6c9c43b43d250907761e57ec5e3be2103"
 patches:
   - target:
       kind: ExternalSecret
