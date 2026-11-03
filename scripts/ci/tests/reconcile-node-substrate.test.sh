@@ -101,6 +101,9 @@ put_secret database-reliability-actuator DATABASE_RELIABILITY_PASSWORD reliabili
 put_secret database-reliability-readmitter DATABASE_RELIABILITY_READMIT_PASSWORD readmit-pw-sentinel
 # task.5384: the node's own Redis ACL password; only its sha256 may reach the VM.
 put_secret operator REDIS_PASSWORD redis-acl-pw-sentinel
+# The user's own key space is node:<repo-spec node_id>:* (container.ts streamKey).
+FAKE_REDIS_NODE_ID="$(yq -r '.node_id' nodes/operator/.cogni/repo-spec.yaml)"
+export FAKE_REDIS_NODE_ID
 # Doltgres superuser SSOT is operator-canonical (cogni/<env>/operator/DOLTGRES_PASSWORD),
 # shared env-wide; reconcile reads it from operator and injects it into doltgres-provision.
 put_secret operator DOLTGRES_PASSWORD doltgres-super-sentinel
@@ -299,12 +302,25 @@ fi
 # task.5384 — the runtime Redis, started with an ACL file. Records SETUSER argv
 # (hash only) and answers GETUSER with the last installed hash.
 if [ "${1:-}" = exec ] && [ "${3:-}" = redis-cli ]; then
+  # FAKE_REDIS_FAIL=1: the daemon/redis-cli fails (B2 — must surface as `error`, never skip).
+  [ "${FAKE_REDIS_FAIL:-0}" = 1 ] && { echo 'Could not connect to Redis at 127.0.0.1:6379: Connection refused' >&2; exit 1; }
   shift 4
   case "$1 ${2:-}" in
     "CONFIG GET") printf 'aclfile\n%s\n' "${FAKE_REDIS_ACLFILE-/data/users.acl}" ;;
     "ACL SETUSER") printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/redis-acl.log"; echo OK ;;
     "ACL SAVE") echo OK ;;
     "ACL GETUSER") grep -o '#[0-9a-f]\{64\}' "${FAKE_REMOTE_ROOT}/redis-acl.log" 2>/dev/null | tail -n1 | cut -c2- ;;
+    "ACL DRYRUN")
+      # Emulates the installed rule set: stream commands on run:* / this node's node:<id>:*.
+      printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/redis-dryrun.log"
+      cmd="${4:-}"; key="${5:-}"
+      case "$cmd" in
+        INFO) echo OK ;;
+        XADD|XRANGE|XLEN|EXPIRE)
+          case "$key" in run:*|"node:${FAKE_REDIS_NODE_ID:-none}:"*) echo OK ;; *) echo "This user has no permissions to access the '$key' key" ;; esac ;;
+        XREAD) echo OK ;;
+        *) echo "This user has no permissions to run the '$cmd' command" ;;
+      esac ;;
   esac
   exit 0
 fi
@@ -473,7 +489,7 @@ grep -q "substrate ready inputs reconciled for operator" "$TMPROOT/out.txt"
 # task.5384 phase A: node_operator is installed from the password HASH; the default user
 # is never edited; the plaintext never reaches the VM argv, the ssh stream or the output.
 redis_hash="$(printf '%s' redis-acl-pw-sentinel | shasum -a 256 | awk '{print $1}')"
-grep -qxF "ACL SETUSER node_operator reset on #${redis_hash} ~* &* +@all -@admin" "$REMOTE_ROOT/redis-acl.log" \
+grep -qxF "ACL SETUSER node_operator reset on #${redis_hash} resetchannels ~run:* ~node:${FAKE_REDIS_NODE_ID}:* -@all +@connection -@admin -@dangerous +info +xadd +xread +xrange +xlen +expire" "$REMOTE_ROOT/redis-acl.log" \
   || { echo "reconcile did not install node_operator from the REDIS_PASSWORD hash" >&2; exit 1; }
 ! grep -q 'SETUSER default' "$REMOTE_ROOT/redis-acl.log" \
   || { echo "phase A must not edit the default Redis user" >&2; exit 1; }
@@ -483,6 +499,35 @@ if grep -rqF redis-acl-pw-sentinel "$REMOTE_ROOT/docker.log" "$REMOTE_ROOT/redis
 fi
 grep -q '"row":"redis_acl","state":"updated"' "$TMPROOT/summary.json" \
   || { echo "reconcile summary missing redis_acl updated row" >&2; exit 1; }
+# B3: the install proves least privilege with ACL DRYRUN before reporting `installed`.
+for probe in "INFO" "XADD node:${FAKE_REDIS_NODE_ID}:events" "XREAD BLOCK 1 STREAMS run:dryrun" \
+  "FLUSHALL" "KEYS" "SCAN" "EVAL" "XADD node:00000000-0000-0000-0000-000000000000:events" "CONFIG GET"; do
+  grep -qF "ACL DRYRUN node_operator ${probe}" "$REMOTE_ROOT/redis-dryrun.log" \
+    || { echo "install did not ACL DRYRUN '${probe}'" >&2; exit 1; }
+done
+# B2: a failing docker/redis-cli is `error`: reconcile FAILS (never reads it as a skip).
+redis_fail_rc=0
+env \
+  VM_HOST=fake \
+  DOMAIN=test.cognidao.org \
+  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+  RECONCILE_NODE_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" \
+  RECONCILE_NODE_SUBSTRATE_SCP_BIN="$FAKEBIN/scp" \
+  FAKE_REMOTE_ROOT="$REMOTE_ROOT" \
+  FAKE_REMOTE_PATH="$FAKEBIN" \
+  FAKE_BAO_ROOT="$BAO_ROOT" \
+  FAKE_LEGACY_EXTERNAL_SECRET_TARGET="operator-env-secrets" \
+  FAKE_REDIS_FAIL=1 \
+  APP_SOURCE_DIR="$APP_FIXTURE" \
+  SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/redis-fail-summary.json" \
+  bash scripts/ci/reconcile-node-substrate.sh candidate-a operator > "$TMPROOT/redis-fail.out" 2>&1 \
+  || redis_fail_rc=$?
+[ "$redis_fail_rc" -ne 0 ] \
+  || { echo "reconcile must fail when Redis/docker fails during the ACL install" >&2; exit 1; }
+grep -q "Redis ACL install for node_operator reported" "$TMPROOT/redis-fail.out" \
+  || { echo "Redis ACL install failure was not named" >&2; cat "$TMPROOT/redis-fail.out" >&2; exit 1; }
+grep -q '"row":"redis_acl","state":"failed"' "$TMPROOT/redis-fail-summary.json" \
+  || { echo "summary must attribute the failure to redis_acl" >&2; exit 1; }
 remote_provisioner="$REMOTE_ROOT/opt/cogni-template-runtime/postgres-init/provision.sh"
 cmp infra/compose/runtime/postgres-init/provision.sh "$remote_provisioner"
 cmp infra/compose/runtime/postgres-init/apply-control.sql "$REMOTE_ROOT/opt/cogni-template-runtime/postgres-init/apply-control.sql"

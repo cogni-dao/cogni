@@ -554,44 +554,86 @@ if grep -qE '^\[secret-materialize\]   created ' "$TMPROOT/out2.txt"; then
 fi
 
 # ── task.5384 phase A: per-node Redis ACL identity ───────────────────────────
-# REDIS_PASSWORD is minted from its catalog generator. With no Redis proof (no runtime
-# Redis on this runner) REDIS_URL is deferred, so no consumer gets a credential the
-# server would refuse.
-REDIS_PW="$(cat "$BAO_ROOT/cogni/candidate-a/node-template/REDIS_PASSWORD")"
-[[ "$REDIS_PW" =~ ^[0-9a-f]{64}$ ]] \
-  || { echo "REDIS_PASSWORD must be the catalog generator's hex/32 output" >&2; exit 1; }
-[ ! -e "$BAO_ROOT/cogni/candidate-a/node-template/REDIS_URL" ] \
-  || { echo "REDIS_URL composed before the lane Redis proved the ACL user" >&2; exit 1; }
-grep -q 'REDIS_URL deferred' "$TMPROOT/out2.txt" \
-  || { echo "deferred REDIS_URL was not reported" >&2; exit 1; }
-# The lane Redis (ACL-file backed) proves it holds sha256(REDIS_PASSWORD) for
-# node_node_template, so the next run composes the node's own REDIS_URL.
+# The runs above use the default fleet control env (production), so node-template's
+# candidate-a lane is foreign-custodied (akash) and the Redis identity is skipped.
+grep -q 'Redis ACL identity skipped: candidate-a lane is custodied by production' "$TMPROOT/out2.txt" \
+  || { echo "foreign-custodied lane must skip the Redis ACL identity" >&2; exit 1; }
+[ ! -e "$BAO_ROOT/cogni/candidate-a/node-template/REDIS_PASSWORD" ] \
+  || { echo "a foreign-custodied lane minted REDIS_PASSWORD" >&2; exit 1; }
+# The runs below make candidate-a its own control env (FLEET_CONTROL_ENV=candidate-a).
+# The fake runtime Redis answers per FAKE_REDIS_MODE: proven | noacl | fail.
 cat > "$FAKEBIN/docker" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FAKE_DOCKER_LOG:-/dev/null}"
+[ "${FAKE_REDIS_MODE:-}" = fail ] && [ "${1:-}" = exec ] && { echo 'Error response from daemon: container is restarting' >&2; exit 1; }
 case "$*" in
-  "ps -q "*) echo redis123 ;;
-  *"redis-cli --raw CONFIG GET aclfile") printf 'aclfile\n/data/users.acl\n' ;;
-  *"redis-cli --raw ACL GETUSER node_node_template") printf 'flags\non\npasswords\n%s\n' "$FAKE_REDIS_HASH" ;;
+  "ps -q "*) [ -n "${FAKE_REDIS_MODE:-}" ] && echo redis123 ;;
+  *"redis-cli --raw CONFIG GET aclfile")
+    if [ "$FAKE_REDIS_MODE" = noacl ]; then printf 'aclfile\n\n'; else printf 'aclfile\n/data/users.acl\n'; fi ;;
+  *"redis-cli --raw ACL GETUSER node_node_template") printf 'flags\non\npasswords\n%s\n' "${FAKE_REDIS_HASH:-}" ;;
 esac
+exit 0
 EOF
 chmod +x "$FAKEBIN/docker"
-env \
-  VM_HOST=fake \
-  DOMAIN=test.cognidao.org \
-  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
-  SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
-  FAKE_REMOTE_PATH="$FAKEBIN" \
-  FAKE_BAO_ROOT="$BAO_ROOT" \
-  FAKE_LITELLM_STORE="$LITELLM_STORE" \
-  FAKE_LITELLM_LOG="$LITELLM_LOG" \
-  FAKE_LITELLM_MASTER_KEY=sk-cogni-operator-master \
-  FAKE_DOCKER_LOG="$TMPROOT/redis-docker.log" \
-  FAKE_REDIS_HASH="$(printf '%s' "$REDIS_PW" | shasum -a 256 | awk '{print $1}')" \
-  bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-redis.txt"
-test "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/REDIS_URL")" = "redis://node_node_template:${REDIS_PW}@10.0.0.1:6379" \
-  || { echo "proven ACL user did not compose the node's own REDIS_URL" >&2; exit 1; }
-if grep -qF "$REDIS_PW" "$TMPROOT/out.txt" "$TMPROOT/out2.txt" "$TMPROOT/out-redis.txt" "$TMPROOT/redis-docker.log"; then
+REDIS_URL_FILE="$BAO_ROOT/cogni/candidate-a/node-template/REDIS_URL"
+run_redis_materialize() { # <mode> <out>
+  env \
+    VM_HOST=fake \
+    DOMAIN=test.cognidao.org \
+    FLEET_CONTROL_ENV=candidate-a \
+    FORK_DOMAIN_ROOT=cognidao.org \
+    SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+    SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
+    FAKE_REMOTE_PATH="$FAKEBIN" \
+    FAKE_BAO_ROOT="$BAO_ROOT" \
+    FAKE_LITELLM_STORE="$LITELLM_STORE" \
+    FAKE_LITELLM_LOG="$LITELLM_LOG" \
+    FAKE_LITELLM_MASTER_KEY=sk-cogni-operator-master \
+    FAKE_DOCKER_LOG="$TMPROOT/redis-docker.log" \
+    FAKE_REDIS_MODE="$1" \
+    FAKE_REDIS_HASH="${FAKE_REDIS_HASH:-}" \
+    bash scripts/ci/secret-materialize.sh candidate-a node-template > "$2" 2>&1
+}
+# 1. No runtime Redis: REDIS_PASSWORD is minted from its catalog generator, REDIS_URL deferred.
+run_redis_materialize "" "$TMPROOT/out-redis-1.txt"
+REDIS_PW="$(cat "$BAO_ROOT/cogni/candidate-a/node-template/REDIS_PASSWORD")"
+REDIS_BYTES="$(yq -N '.secrets[] | select(.name == "REDIS_PASSWORD") | .generate.bytes' infra/secrets-catalog.yaml)"
+[[ "$REDIS_PW" =~ ^[0-9a-f]+$ && ${#REDIS_PW} -eq $((REDIS_BYTES * 2)) ]] \
+  || { echo "REDIS_PASSWORD must be the catalog generator's hex/${REDIS_BYTES} output" >&2; exit 1; }
+[ ! -e "$REDIS_URL_FILE" ] \
+  || { echo "REDIS_URL composed before the lane Redis proved the ACL user" >&2; exit 1; }
+grep -q "REDIS_URL deferred: lane Redis reports 'no-redis'" "$TMPROOT/out-redis-1.txt" \
+  || { echo "deferred REDIS_URL was not reported" >&2; cat "$TMPROOT/out-redis-1.txt" >&2; exit 1; }
+# 2. Proven: the node-user URL, on the Composition's substrate host (never a VM IP).
+export FAKE_REDIS_HASH="$(printf '%s' "$REDIS_PW" | shasum -a 256 | awk '{print $1}')"
+run_redis_materialize proven "$TMPROOT/out-redis-2.txt"
+test "$(cat "$REDIS_URL_FILE")" = "redis://node_node_template:${REDIS_PW}@cogni-candidate-a.vm.cognidao.org:6379" \
+  || { echo "proven ACL user did not compose the node's own REDIS_URL on the substrate host" >&2; cat "$REDIS_URL_FILE" >&2; exit 1; }
+# 3. B1 revoke: a Redis recreated without --aclfile refuses that user, so the stored
+#    node-user URL is rewritten to the default-user URL, loudly.
+run_redis_materialize noacl "$TMPROOT/out-redis-3.txt"
+test "$(cat "$REDIS_URL_FILE")" = "redis://cogni-candidate-a.vm.cognidao.org:6379" \
+  || { echo "no-aclfile did not revoke the stored node-user REDIS_URL" >&2; cat "$REDIS_URL_FILE" >&2; exit 1; }
+grep -q "::warning::secret-materialize: REVOKED REDIS_URL for node_node_template" "$TMPROOT/out-redis-3.txt" \
+  || { echo "REDIS_URL revoke was not loud" >&2; exit 1; }
+# 4. Absent (lost volume / reminted password, hash no longer held) also revokes.
+run_redis_materialize proven "$TMPROOT/out-redis-4a.txt"
+grep -q '^redis://node_node_template:' "$REDIS_URL_FILE"
+FAKE_REDIS_HASH="$(printf '%s' stale | shasum -a 256 | awk '{print $1}')" \
+  run_redis_materialize proven "$TMPROOT/out-redis-4.txt"
+test "$(cat "$REDIS_URL_FILE")" = "redis://cogni-candidate-a.vm.cognidao.org:6379" \
+  || { echo "an absent hash did not revoke the stored node-user REDIS_URL" >&2; exit 1; }
+# 5. B2: a failing docker/redis-cli is `error`, never `no-aclfile`: materialize defers and
+#    leaves the stored URL untouched (no churn on a transient failure).
+run_redis_materialize proven "$TMPROOT/out-redis-5a.txt"
+before_url="$(cat "$REDIS_URL_FILE")"
+run_redis_materialize fail "$TMPROOT/out-redis-5.txt"
+test "$(cat "$REDIS_URL_FILE")" = "$before_url" \
+  || { echo "a failing Redis probe changed REDIS_URL" >&2; exit 1; }
+grep -q "Redis ACL probe for node_node_template returned 'error'; REDIS_URL left unchanged" "$TMPROOT/out-redis-5.txt" \
+  || { echo "a failing Redis probe was not reported as error" >&2; cat "$TMPROOT/out-redis-5.txt" >&2; exit 1; }
+# Plaintext never leaves the bank: not in output, not in the VM argv. Materialize only probes.
+if grep -qF "$REDIS_PW" "$TMPROOT"/out-redis-*.txt "$TMPROOT/redis-docker.log"; then
   echo "Redis ACL plaintext password leaked to output or the VM argv" >&2
   exit 1
 fi
@@ -599,7 +641,9 @@ if grep -q 'SETUSER' "$TMPROOT/redis-docker.log"; then
   echo "materialize must only PROBE Redis; reconcile-node-substrate installs users" >&2
   exit 1
 fi
+unset FAKE_REDIS_HASH
 rm -f "$FAKEBIN/docker"
+echo "ok: redis ACL identity (skip foreign, defer, prove, revoke no-aclfile/absent, error defers)"
 
 # Registration is idempotent: later materializations look up by hash and alias
 # through request bodies and never re-POST /key/generate.

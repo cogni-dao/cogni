@@ -81,6 +81,15 @@ describe("task.5384 phase A — per-consumer Redis ACL users, default still open
     const lib = read("scripts/ci/lib/redis-acl.sh");
     expect(lib).toContain("ACL SETUSER '${user}' reset on '#${hash}'");
     expect(lib).toContain("ACL SAVE");
+    // Least privilege: run:* plus the node's own node:<nodeId>:* keys, stream commands only.
+    expect(lib).toContain(
+      "resetchannels '~run:*' '~node:%s:*' -@all +@connection -@admin -@dangerous +info +xadd +xread +xrange +xlen +expire"
+    );
+    // Remote scripts fail loud: a docker/redis-cli failure is never a skip.
+    expect(lib).toContain("set -euo pipefail");
+    for (const refused of ["FLUSHALL", "KEYS", "SCAN", "EVAL"]) {
+      expect(lib).toContain(`refused ${refused}`);
+    }
     expect(lib).not.toMatch(/SETUSER\s+'?default/);
     expect(lib).not.toMatch(/>\$\{?password/);
   });

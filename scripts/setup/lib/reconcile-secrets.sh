@@ -292,8 +292,20 @@ _doltgres_db_suffix() {
 # host could be invented, which is inside `lane_db_dsn_host`, not here.
 #
 # DOLTGRES_URL below keeps `${VM_IP}` — see `_doltgres_db_suffix`.
+# THE HOST A NODE'S REDIS_URL CARRIES (task.5384). The SAME substrate host the
+# XComputeWorkload Composition turns into REDIS_URL (materialize-compute-workload action:
+# cogni_vm_host_for_env of the lane's control env), and the alias the operator's
+# redis-external ExternalName already resolves. One derivation, never a VM IP. Empty when
+# the caller has not sourced the two identity helpers (the URL is then not composed).
+_redis_substrate_host() {
+  local node="$1" env
+  command -v control_env_for >/dev/null 2>&1 && command -v cogni_vm_host_for_env >/dev/null 2>&1 || return 0
+  env="$(control_env_for "${DEPLOY_ENV:?}" "$node")" || return 1
+  cogni_vm_host_for_env "$env" "${FORK_DOMAIN_ROOT:-$(cogni_domain_root)}" "$(cogni_deployment_slug)"
+}
+
 _compose_node_value() {
-  local node="$1" k="$2" kind source shared service db sfx dg_sfx pg_host
+  local node="$1" k="$2" kind source shared service db sfx dg_sfx pg_host redis_host redis_pw
   if declare -F cell_placement_composed_value >/dev/null && cell_placement_composed_value "$node" "$k"; then return 0; fi
   sfx="$(_lane_db_suffix "$node")"
   dg_sfx="$(_doltgres_db_suffix)"
@@ -355,6 +367,20 @@ _compose_node_value() {
       # for bug.5299 and must not move when a Postgres pin is deleted.
       printf 'postgresql://postgres:%s@%s:5435/knowledge_%s%s?sslmode=disable' \
         "$_dgu" "${VM_IP}" "${node//-/_}" "${dg_sfx}"; return 0 ;;
+    REDIS_URL)
+      # task.5384: the node's own ACL user (lib/redis-acl.sh owns the name). Callers write
+      # it only after the lane Redis proves it holds sha256(REDIS_PASSWORD).
+      command -v redis_acl_user >/dev/null 2>&1 || return 0
+      redis_host="$(_redis_substrate_host "$node")" || return 1
+      redis_pw="$(bao_get_field "$node" REDIS_PASSWORD)"
+      [[ -n "$redis_host" && -n "$redis_pw" ]] || return 0
+      printf 'redis://%s:%s@%s:6379' "$(redis_acl_user "$node")" "$redis_pw" "$redis_host"; return 0 ;;
+    REDIS_DEFAULT_URL)
+      # Never stored under its own name: the revoke target for REDIS_URL while `default`
+      # is still open (phase A). Same host as REDIS_URL.
+      redis_host="$(_redis_substrate_host "$node")" || return 1
+      [[ -n "$redis_host" ]] || return 0
+      printf 'redis://%s:6379' "$redis_host"; return 0 ;;
   esac
   kind=$(_cat_field "$k" '.generate.kind')
   source=$(_cat_field "$k" '.source')

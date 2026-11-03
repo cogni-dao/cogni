@@ -200,8 +200,10 @@ services:
       start_period: 120s
 
   # =============================================================================
-  # Redis 7 — ephemeral stream plane (no persistence, no volume)
-  # Per unified-graph-launch spec: REDIS_IS_STREAM_PLANE
+  # Redis 7 — ephemeral stream plane: no stream persistence (`--save ''`, no AOF)
+  # Per unified-graph-launch spec: REDIS_IS_STREAM_PLANE — stream DATA is transient.
+  # The ONE durable state is ACL users (task.5384): `users.acl` on the redis_acl
+  # volume, so per-node users survive a container recreate. No stream data lands there.
   # =============================================================================
   redis:
     image: redis:7-alpine@sha256:8b81dd37ff027bec4e516d41acfbe9fe2460070dc6d4a4570a2ac5b9d59df065

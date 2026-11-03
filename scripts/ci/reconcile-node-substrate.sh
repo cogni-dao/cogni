@@ -442,9 +442,10 @@ else
     mark_row redis_acl skipped "REDIS_PASSWORD absent; consumers keep the default user"
   else
     redis_user="$(redis_acl_user "$TARGET_NODE")"
-    redis_state="$(redis_acl_install_script "$redis_user" "$(redis_acl_password_sha256 "$redis_password")" \
+    # node_id (repo-spec SSOT, resolved above) scopes the user's `node:<nodeId>:*` keys.
+    redis_state="$(redis_acl_install_script "$redis_user" "$(redis_acl_password_sha256 "$redis_password")" "$node_id" \
       | remote "bash -s" | tr -d '[:space:]')" \
-      || fail "Redis refused ACL user ${redis_user} (SETUSER/SAVE/GETUSER)"
+      || fail "Redis ACL install for ${redis_user} reported '${redis_state:-error}' (docker/redis-cli failure, SETUSER/SAVE/GETUSER refusal, or ACL DRYRUN least-privilege mismatch)"
     case "$redis_state" in
       installed) mark_row redis_acl updated "ACL user ${redis_user} installed and saved (hash only)" ;;
       no-aclfile | no-redis) mark_row redis_acl skipped "Redis reports ${redis_state}; consumers keep the default user" ;;
