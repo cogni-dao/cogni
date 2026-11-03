@@ -38,7 +38,7 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 
 ## Public Surface
 
-- **Exports:** UI components and widgets via `components/index.ts`, including existing ReUI DataGrid, DataGridContainer, DataGridColumnHeader and DataGridTable primitives, plus node-local `ReportText` administrative typography
+- **Exports:** UI components and widgets via `components/index.ts`, including existing ReUI DataGrid, DataGridContainer, DataGridColumnHeader and DataGridTable primitives, plus `BrainLoading` feedback and node-local `ReportText` administrative typography
 - **Files considered API:** `index.ts`, `kit/*/index.tsx`
 
 ## Responsibilities

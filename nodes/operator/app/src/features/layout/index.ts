@@ -15,6 +15,7 @@
 export { AccountSlot } from "./components/AccountSlot";
 export { AppFooter } from "./components/AppFooter";
 export { AppHeader } from "./components/AppHeader";
+export { AppShell } from "./components/AppShell";
 export { AppSidebar } from "./components/AppSidebar";
 export { AppTopBar } from "./components/AppTopBar";
 export { UserAvatarMenu } from "./components/UserAvatarMenu";

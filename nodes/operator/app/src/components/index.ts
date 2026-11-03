@@ -142,6 +142,7 @@ export {
 } from "./kit/data-display/ProviderIcons";
 export { TerminalFrame } from "./kit/data-display/TerminalFrame";
 export { Alert, AlertDescription, AlertTitle } from "./kit/feedback/Alert";
+export { BrainLoading } from "./kit/feedback/BrainLoading";
 export {
   ErrorAlert,
   type ErrorAlertProps,

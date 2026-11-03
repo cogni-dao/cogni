@@ -23,7 +23,7 @@ Provides reusable feedback UI components for error states, loading indicators, a
 ```json
 {
   "layer": "components",
-  "may_import": ["shared", "types"],
+  "may_import": ["shared", "types", "styles"],
   "must_not_import": [
     "app",
     "features",
@@ -37,8 +37,8 @@ Provides reusable feedback UI components for error states, loading indicators, a
 
 ## Public Surface
 
-- **Exports (via index.ts and ../index.ts):** ErrorAlert
-- **Files considered API:** ErrorAlert.tsx, index.ts
+- **Exports (via `components/index.ts`):** Alert, BrainLoading, ErrorAlert, HintText, Progress
+- **Files considered API:** component exports via `components/index.ts`
 
 ## Responsibilities
 
@@ -72,17 +72,18 @@ import { ErrorAlert } from "@/components";
 
 ## Dependencies
 
-- **Internal:** @/shared/util/cn, @/components/kit/inputs (Button)
+- **Internal:** @/shared/util/cn, @/components/kit/inputs (Button), @/styles/ui (CVA factories)
 - **External:** react, lucide-react
 
 ## Change Protocol
 
-- Update index.ts and parent index.ts when adding component exports
+- Update `components/index.ts` when adding component exports
 - Prop changes are breaking (require consumer updates)
 - Keep components domain-agnostic (presenters receive primitive props)
 
 ## Notes
 
+- BrainLoading provides a wordless accessible loading status with reduced-motion support.
 - ErrorAlert deduplicates by code (prevents spam)
 - Supports up to 3 action buttons (retry, switchFree, addCredits)
 - Auto-dismiss timeout configurable via prop
