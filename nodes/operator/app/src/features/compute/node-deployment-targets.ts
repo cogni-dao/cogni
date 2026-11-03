@@ -36,6 +36,18 @@ export interface DeploymentTargetSelection {
   readonly nodeDeploy: readonly string[];
 }
 
+export interface FlightDeploymentTargetSelection
+  extends DeploymentTargetSelection {
+  /**
+   * The flight's per-node job matrix input: every requested target EXCEPT `nodeDeploy` cells
+   * (story.5137). The candidate flight workflow feeds this, not the raw request, to its
+   * reconcile-appset, flight and image matrices, so a verb-owned node never reaches a job that
+   * needs a placement provider. Promote has no equivalent: its matrices already consume the
+   * filtered `deployment` list.
+   */
+  readonly flight: readonly string[];
+}
+
 export interface PromoteDeploymentTargetSelection
   extends DeploymentTargetSelection {
   /** Explicitly requested infra artifacts that never enter the app deployment lane. */
@@ -140,7 +152,7 @@ export function resolveDeploymentTargets(input: {
   readonly parentRepository: string;
   /** Exact reviewed parent checkout; never a substitute for a child catalog pin. */
   readonly parentSourceSha?: string;
-}): DeploymentTargetSelection {
+}): FlightDeploymentTargetSelection {
   const parentRepository = parseParentRepository(input.parentRepository);
   if (
     input.parentSourceSha !== undefined &&
@@ -160,6 +172,7 @@ export function resolveDeploymentTargets(input: {
   const k3s: string[] = [];
   const k3sNodes: string[] = [];
   const nodeDeploy: string[] = [];
+  const flight: string[] = [];
   const sourceRepositories: Record<string, string> = {};
   const sourceShas: Record<string, string> = {};
 
@@ -179,6 +192,7 @@ export function resolveDeploymentTargets(input: {
       nodeDeploy.push(target);
       continue;
     }
+    flight.push(target);
     const provider = resolveNodeDeploymentProvider({
       catalog: row,
       environment: input.environment,
@@ -219,6 +233,7 @@ export function resolveDeploymentTargets(input: {
     sourceRepositories,
     sourceShas,
     nodeDeploy,
+    flight,
   };
 }
 

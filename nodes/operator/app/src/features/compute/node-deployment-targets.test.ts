@@ -223,6 +223,7 @@ print('valid-parent-accepted; missing-invalid-older-refused')
       k3s: ["node-template", "scheduler-worker"],
       k3sNodes: ["node-template"],
       nodeDeploy: [],
+      flight: ["node-template", "toks4", "scheduler-worker"],
       sourceRepositories: { "node-template": PARENT, toks4: "cogni-dao/toks4" },
       sourceShas: { toks4: "0123456789abcdef0123456789abcdef01234567" },
     });
@@ -256,6 +257,7 @@ print('valid-parent-accepted; missing-invalid-older-refused')
       k3s: ["operator"],
       k3sNodes: ["operator"],
       nodeDeploy: [],
+      flight: ["operator"],
       sourceRepositories: { operator: PARENT },
       sourceShas: {},
     });
@@ -274,6 +276,7 @@ print('valid-parent-accepted; missing-invalid-older-refused')
       k3s: [],
       k3sNodes: [],
       nodeDeploy: [],
+      flight: ["toks4"],
       sourceRepositories: { toks4: "cogni-dao/toks4" },
       sourceShas: { toks4: "0123456789abcdef0123456789abcdef01234567" },
     });
@@ -719,6 +722,9 @@ describe("node-deploy cells are excluded from the old flight/promote path", () =
       flightTargets: ["handed", "classic"],
     });
     expect(production.nodeDeploy).toEqual(["handed"]);
+    // The per-node job matrices (reconcile-appset, flight, images) consume THIS list, so an
+    // affected set holding a node-deploy node yields no entry for it (no empty DEPLOYMENT_PROVIDER).
+    expect(production.flight).toEqual(["classic"]);
     expect(production.deployment).toEqual(["classic"]);
     expect(production.offCluster).toEqual(["classic"]);
     expect(production.providers).toEqual({ classic: "akash" });
@@ -732,6 +738,45 @@ describe("node-deploy cells are excluded from the old flight/promote path", () =
     });
     expect(candidate.nodeDeploy).toEqual([]);
     expect(candidate.offCluster).toEqual(["handed"]);
+  });
+
+  it("reproduces the failed candidate-a flight: every per-node matrix entry has a provider, and the workflow feeds the matrices from the planner", () => {
+    // run 41629488889: toks5 (node-deploy) stayed in the reconcile-appset matrix, so its
+    // DEPLOYMENT_PROVIDER (providers[node]) was empty and resolve-candidate-deploy-repository.sh failed.
+    const selection = resolveDeploymentTargets({
+      catalogRows: rows,
+      environment: "production",
+      parentRepository: PARENT_REPOSITORY,
+      flightTargets: ["handed", "classic"],
+    });
+    for (const node of selection.flight) {
+      expect(
+        selection.providers[node],
+        `${node} needs a provider`
+      ).toBeTruthy();
+    }
+    expect(selection.flight).not.toContain("handed");
+
+    const root = path.resolve(import.meta.dirname, "../../../../../..");
+    type Job = {
+      outputs?: Record<string, string>;
+      strategy?: { matrix?: { node?: string } };
+    };
+    const workflow = parse(
+      readFileSync(
+        path.join(root, ".github/workflows/candidate-flight.yml"),
+        "utf8"
+      )
+    ) as { jobs: Record<string, Job> };
+    expect(workflow.jobs.decide?.outputs?.flight_targets_json).toContain(
+      "steps.substrate-targets.outputs.flight_targets_json"
+    );
+    expect(workflow.jobs.decide?.outputs?.has_flight_targets).toContain(
+      "steps.substrate-targets.outputs.has_flight_targets"
+    );
+    expect(workflow.jobs["reconcile-appset"]?.strategy?.matrix?.node).toContain(
+      "needs.decide.outputs.flight_targets_json"
+    );
   });
 
   it("promote: a fleet-wide promote skips the node-deploy cell and still promotes the rest", () => {

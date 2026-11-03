@@ -428,6 +428,7 @@ async function selectDeploymentTargets(input: {
     sourceRepositories,
     sourceShas,
     nodeDeploy,
+    flight,
   } = resolveDeploymentTargets({
     catalogRows: rows,
     environment: input.environment,
@@ -445,9 +446,12 @@ async function selectDeploymentTargets(input: {
     environment: input.environment,
     requestedTargets: parsed,
     nodeDeploy,
-    remainingTargets: parsed.filter((target) => !nodeDeploy.includes(target)),
+    remainingTargets: flight,
   });
   const outputs = {
+    // The per-node job matrices' input: the request minus node-deploy cells (story.5137).
+    flight_targets_json: JSON.stringify(flight),
+    has_flight_targets: String(flight.length > 0),
     deployment_node_targets_json: JSON.stringify(deployment),
     has_deployment_node_targets: String(deployment.length > 0),
     substrate_node_targets_json: JSON.stringify(substrate),
