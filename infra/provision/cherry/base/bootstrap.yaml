@@ -77,8 +77,8 @@ write_files:
         - "event-ttl=5m"
 
   # k3s container registry config — node-level, all pods get access.
-  # - ghcr.io: auth for private cogni images (simpler than per-Deployment
-  #   imagePullSecrets for single-node).
+  # - ghcr.io: Cogni images are public; no registry credential (bug.5563). A
+  #   stale baked-in PAT gets 403 even on a public image, so none is written.
   # - docker.io: mirror via mirror.gcr.io (Google's pull-through cache) because
   #   this VM's direct Docker Hub path is unreliable (IPv6 routing issues).
   #   Required for vendor images like grafana/alloy (observability), else
@@ -95,11 +95,6 @@ write_files:
           endpoint:
             - "https://mirror.gcr.io"
             - "https://registry-1.docker.io"
-      configs:
-        "ghcr.io":
-          auth:
-            username: "${ghcr_deploy_username}"
-            password: "${ghcr_deploy_token}"
 
   # Firewall hardening — closes Docker-published internal ports (postgres,
   # doltgres, redis, litellm, temporal-grpc) to the public internet via the
