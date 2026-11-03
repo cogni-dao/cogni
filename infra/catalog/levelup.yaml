@@ -22,27 +22,11 @@ database:
   production: { tier: shared, budget_profile: shared-default-v1 }
 deployment_provider:
   production: akash
-# story.5016 production cutover — levelup is the FIRST fleet row on the production
-# Crossplane authority, the same node that proved the full create→observe→update→close
-# rung on candidate-a. `crossplane` renders an XComputeWorkload reconciled via the
-# private Akash transaction actuator paying from production's DEDICATED account
-# (akash10auj…). ONE_AUTHORITY_PER_WORKLOAD: the materializer emits exactly one kind
-# per (node, environment) and the deploy-branch `rsync --delete` evicts the legacy
-# ComputeWorkload manifest in the same commit. PRECONDITION (Derek cutover plan):
-# the node's old lease is closed and its legacy CR's finalizer cleared BEFORE the
-# promote that materializes this cell — flipping over a live legacy CR would hang
-# the Argo app Terminating AND mint a second paid lease.
+# story.5137 / task.5411 (CD4 ONE_WRITER_PER_NODE_LANE) — every environment of this node is
+# deployed ONLY by the node-deploy sequencer (POST /api/v1/deploy/workloads). The legacy
+# and crossplane authorities and their per-node AppSets were deleted (CD9).
 compute_api:
-  # story.5137 (CD4 ONE_WRITER_PER_NODE_LANE) — production is deployed ONLY by the node-deploy
-  # sequencer (POST /api/v1/deploy/workloads). Merging this cell drops the per-(env, node)
-  # AppSet, so Argo prunes the Application and its XR/ExternalSecrets close the old lease.
-  # lease_generation / deployment_provider / compute_egress_cidrs stay until the CD9 purge.
   production: node-deploy
-# Explicit replacement counter for a terminally closed lease (the actuator refuses to
-# re-spend a settled idempotence key). Bumping this is the ONLY redeploy-after-close
-# path — kubectl patch is reverted by Argo selfHeal.
-lease_generation:
-  production: 4
 # bug.5079 — activity_env is the SINGLETON env allowed to ingest Git receipts. GitHub
 # App webhooks are delivered to production only (one App, one webhook URL), and the
 # production operator's route index filters to `activityEnv === DEPLOY_ENVIRONMENT`
