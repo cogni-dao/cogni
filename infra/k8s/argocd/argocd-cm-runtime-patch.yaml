@@ -62,35 +62,3 @@ data:
   # kustomize-with-helm rendering for the substrate charts (openbao,
   # external-secrets, reloader) — see infra/k8s/argocd/*/kustomization.yaml.
   kustomize.buildOptions: --enable-helm
-
-  # Custom health for the provider-neutral ComputeWorkload CR reconciled by the
-  # operator's compute-workload controller (ci-cd.md Axiom 26,
-  # OPERATOR_OWNS_WORKLOAD_HEALTH). Ready=True only counts when the controller
-  # observed THIS generation, so a stale status can never read Healthy.
-  resource.customizations.health.compute.cogni.io_ComputeWorkload: |
-    hs = {}
-    generation = obj.metadata.generation or 0
-    if obj.status ~= nil and obj.status.conditions ~= nil then
-      for _, condition in ipairs(obj.status.conditions) do
-        if condition.type == "Ready" then
-          if condition.status == "True" and condition.observedGeneration == generation then
-            hs.status = "Healthy"
-            hs.message = condition.message or "expected generation is ready"
-            return hs
-          end
-          if obj.status.phase == "Failed" then
-            hs.status = "Degraded"
-            hs.message = condition.message or condition.reason or "reconciliation failed"
-            return hs
-          end
-          if obj.status.phase == "Unknown" then
-            hs.status = "Suspended"
-            hs.message = condition.message or condition.reason or "external outcome is unknown"
-            return hs
-          end
-        end
-      end
-    end
-    hs.status = "Progressing"
-    hs.message = "waiting for Ready=True at metadata.generation"
-    return hs

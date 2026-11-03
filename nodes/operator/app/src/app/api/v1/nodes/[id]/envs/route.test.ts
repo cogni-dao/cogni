@@ -58,7 +58,7 @@ vi.mock("@/bootstrap/container", () => ({
   }),
   getContainer: () => container,
 }));
-// Passthrough logging wrapper (same pattern as compute/deployments route.test.ts): the
+// Passthrough logging wrapper: the
 // exclusion/schema tests below exercise the HANDLER; the wrapper's own envelope is pinned by
 // wrapRouteHandlerWithLogging's tests.
 vi.mock("@/bootstrap/http", () => ({
