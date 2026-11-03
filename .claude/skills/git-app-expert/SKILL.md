@@ -5,12 +5,12 @@ description: >
   skill when working on anything involving: GitHub App permissions or installation
   auditing (cogni-node-template, cogni-git-review), VCS tool layer changes
   (VcsCapability interface, GitHubVcsAdapter, vcs-flight-candidate tool schema),
-  candidate-a flight dispatch debugging (workflow_dispatch permissions, slot
-  acquisition, Argo sync, buildSha verify), per-app slot isolation work, or
+  operator flight dispatch debugging (workflow_dispatch permissions,
+  Argo sync, buildSha verify), or
   wiring the pr-manager agent end-to-end. Use proactively whenever the user
   mentions "flight", "pr-manager dispatch", "workflow permissions", "GH_REVIEW_APP",
   "VcsCapability not configured", "actions:write", or asks to add a workflowRef /
-  per-app lease / VCS tool parameter.
+  VCS tool parameter.
 ---
 
 # Git App Expert
@@ -73,8 +73,8 @@ Operator mint/flight Apps require `actions:write`, `administration:write`, `cont
 package policy/visibility management; node-ref flight must not treat GitHub Packages metadata reads
 as the deploy gate because private package metadata can false-negative even when the child image
 exists. Do not add a PAT to child node repos for publishing: child workflows publish with their
-repo-local `GITHUB_TOKEN` and `permissions.packages: write`. Parent candidate-flight and k3s image
-pulls are separate cross-repo read paths and still need either public packages, package Actions
+repo-local `GITHUB_TOKEN` and `permissions.packages: write`. The operator flight and k3s image
+pulls (operator only) are separate cross-repo read paths and still need either public packages, package Actions
 access grants, or the existing `GHCR_DEPLOY_TOKEN`/registry credential path with `read:packages`.
 If the installation lacks a newly requested permission, the org admin must approve the pending
 permission upgrade at the installation URL:
@@ -156,7 +156,7 @@ core__vcs_list_prs          — read_only  — lists open PRs
 core__vcs_get_ci_status     — read_only  — full CI state for one PR
 core__vcs_merge_pr          — state_change — squash/merge/rebase into staging
 core__vcs_create_branch     — state_change — naming: agent/<work-item-id>/<desc>
-core__vcs_flight_candidate  — state_change — dispatches candidate-flight.yml
+core__vcs_flight_candidate  — state_change — operator flight (POST /api/v1/vcs/flight)
 ```
 
 **NO_AUTO_FLIGHT invariant**: `core__vcs_flight_candidate` must only be called when a human
@@ -192,82 +192,13 @@ Playbook lives at `docs/guides/pr-management-playbook.md` — the pr-manager rea
 run. Flight-specific debugging guidance (permission errors, slot states, known patterns) belongs
 there, not in agent-api-validation.md (that doc is a per-feature validation checklist).
 
-## Candidate-Flight.yml — 3-Job Anatomy
+## Operator flight anatomy (operator only)
 
-`.github/workflows/candidate-flight.yml` — triggered by `workflow_dispatch` with `pr_number` input.
+`.github/workflows/candidate-flight.yml` flights an operator PR to its candidate. It is dispatched by `POST /api/v1/vcs/flight`, never by a personal `gh` credential. Per-`(env, target)` workflow concurrency serializes mutation. It is not a reviewer reservation, and the old slot-lease file is retired.
 
-```
-flight job
-  ├─ acquire-candidate-slot.sh   → writes infra/control/candidate-lease.json (state: leased)
-  ├─ resolve-pr-build-images.sh  → finds GHCR digests for this PR's image tag
-  ├─ promote-build-payload.sh    → patches deploy/candidate-a overlay; emits promoted_apps
-  ├─ push deploy/candidate-a
-  └─ reconcile ArgoCD ApplicationSet via SSH
+A node PR does not use this workflow. A node PR ships with `POST /api/v1/deploy/workloads {nodeId, env:"candidate-a", workload, sourceSha}`. Read [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence).
 
-verify-candidate job (gated: promoted_apps != '')
-  ├─ wait-for-argocd.sh          → EXPECTED_SHA = deploy_branch_sha (NOT source SHA)
-  ├─ wait-for-candidate-ready.sh → DOMAIN health check
-  ├─ wait-for-in-cluster-services.sh
-  ├─ smoke-candidate.sh
-  └─ verify-buildsha.sh          → per-app /version.buildSha check (SOURCE_SHA_MAP mode)
-
-release-slot job (always, if acquired == true)
-  ├─ decide: state=free (verify success or nothing promoted) | state=failed (otherwise)
-  ├─ release-candidate-slot.sh   → updates infra/control/candidate-lease.json
-  └─ report commit status to PR
-```
-
-**Critical**: `EXPECTED_SHA` for wait-for-argocd.sh is `deploy_branch_sha` (the deploy branch
-tip after promotion), not the source PR head SHA. Passing the wrong SHA causes silent timeouts
-because Argo tracks the deploy branch, not the source branch.
-
-**`promoted_apps` gate**: if empty (nothing was promoted, e.g., CI-only PR with no built
-images), verify-candidate is visibly SKIPPED — not silently green. A PR with promoted apps
-where verify was skipped is a contradiction → flight fails.
-
-### Slot lease file
-
-`infra/control/candidate-lease.json` on `deploy/candidate-a` branch.
-
-Leased state:
-
-```json
-{ "slot": "candidate-a", "state": "leased", "pr_number": N, "head_sha": "...",
-  "run_id": "...", "acquired_at": "...", "expires_at": "...", "status_url": "..." }
-```
-
-Released state:
-
-```json
-{ "slot": "candidate-a", "state": "free"|"failed", "released_at": "...",
-  "last_owner": { "pr_number": N, "head_sha": "...", "run_id": "..." } }
-```
-
-Check live lease:
-
-```bash
-gh api "repos/Cogni-DAO/standalone-node/contents/infra/control/candidate-lease.json?ref=deploy%2Fcandidate-a" \
-  | jq -r '.content' | base64 -d | jq .
-```
-
-## Per-App Slot Isolation (Planned)
-
-**Current**: one global `candidate-lease.json` — all apps share a single slot. A single-node
-PR blocks operator and vice versa.
-
-**Goal**: per-app leases so any two nodes can fly concurrently.
-
-Design:
-
-- Replace single `infra/control/candidate-lease.json` with per-app files:
-  `infra/control/candidate-lease-{app}.json`
-- `promote-build-payload.sh` already emits `promoted_apps` (the affected node subset for that PR)
-- `acquire-candidate-slot.sh` takes `APP_NAMES` env, acquires lock per promoted app
-- A PR is blocked only if any of _its_ promoted apps are currently leased by another flight
-- `release-candidate-slot.sh` releases only the apps that were acquired
-- `candidate-flight.yml` passes `promoted_apps` to acquire/release steps
-
-This change is in-scope for the `feat/vcs-workflow-ref-git-app-expert` branch.
+Verify an operator flight by `/version.buildSha` on the candidate host. A flight whose `promoted_apps` is empty must show verify as skipped, not green. A PR with promoted apps and a skipped verify is a contradiction and fails.
 
 ## Flight Debugging Checklist
 

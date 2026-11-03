@@ -214,12 +214,12 @@ Workers must stop claiming new jobs immediately on SIGTERM regardless of orchest
 
 **The label contract — `service` is NOT your logical component name.** It is derived from the container, so the name you reason about and the name you query can differ. This is the trap:
 
-| Label       | Value                                      | Notes                                                                                                                                                                                                                       |
-| ----------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `env`       | `candidate-a` \| `preview` \| `production` | The CLUSTER, not the workload's lane. A non-production lane of a `cogni-dao` node is reconciled on the PRODUCTION cluster (NS3 owner routing), so its logs carry `env="production"` with `namespace="cogni-candidate-a"`.   |
-| `namespace` | `cogni-<env>`, `crossplane-system`, …      | Where the pod runs.                                                                                                                                                                                                         |
-| `service`   | the **container** name                     | Crossplane's reconcile decisions are `service="package-runtime"` (the provider pod), NOT `service="crossplane"` — that label exists but is nearly silent, so the obvious query returns nothing and looks like a blind spot. |
-| `pod`       | `<workload>-<hash>`                        | Use for single-replica correlation.                                                                                                                                                                                         |
+| Label       | Value                                      | Notes                                                                                                                                                                                                                     |
+| ----------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `env`       | `candidate-a` \| `preview` \| `production` | The CLUSTER, not the workload's lane. A non-production lane of a `cogni-dao` node is reconciled on the PRODUCTION cluster (NS3 owner routing), so its logs carry `env="production"` with `namespace="cogni-candidate-a"`. |
+| `namespace` | `cogni-<env>`, …                           | Where the pod runs.                                                                                                                                                                                                       |
+| `service`   | the **container** name                     | Compose services ship with `{env, service}` labels; a node's workload logs ship with `{env, node, service, source="lease"}`.                                                                                              |
+| `pod`       | `<workload>-<hash>`                        | Use for single-replica correlation.                                                                                                                                                                                       |
 
 > **Name your container so `service` is guessable from the component.** If it cannot be, record the real label in this guide's §11 documentation step — an undiscoverable label is a permanent tax on every future incident.
 
@@ -523,7 +523,7 @@ A **node** (own repo, `FORK_FREEDOM`) that needs a companion process next to its
 Classify the service as **critical** (a flight fails if it can't reach Healthy) or **optional** (best-effort). Then:
 
 - [ ] **Probes** — `readinessProbe` and `livenessProbe` in `infra/k8s/base/<name>/deployment.yaml` pointing at `/readyz` and `/livez`. Tune `initialDelaySeconds` and `periodSeconds` — probe ownership belongs to the manifest, never `HEALTHCHECK` in the Dockerfile.
-- [ ] **If critical** — include the service name in `scripts/ci/wait-for-argocd.sh` `APPS=(...)`. `candidate-flight.yml`, `flight-preview.yml`, and `promote-and-deploy.yml` all block until every listed app reports `sync.revision == deploy-branch SHA && health.status == Healthy`.
+- [ ] **If critical** — include the service name in `scripts/ci/wait-for-argocd.sh` `APPS=(...)`. `candidate-flight.yml` (operator only), `flight-preview.yml`, and `promote-and-deploy.yml` all block until every listed app reports `sync.revision == deploy-branch SHA && health.status == Healthy`.
 - [ ] **If optional / in-flight** — keep it out of the `APPS` list so a broken optional service doesn't block the whole flight. See bug.0312 context in `proj.cicd-services-gitops.md` (openclaw placeholder image tag was exactly this failure mode).
 
 > **Not yet repo conventions:** HA patterns (PodDisruptionBudgets, Argo `sync-wave` ordering, multi-replica deployments) are absent from `infra/k8s/base/**` today — every app runs `replicas: 1`. Revisit when a service needs genuine HA; don't bolt on PDBs speculatively.

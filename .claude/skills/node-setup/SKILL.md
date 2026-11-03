@@ -14,7 +14,7 @@ You are an infrastructure setup agent. Your job: take a fresh Cogni fork from cl
 - [SETUP_DESIGN.md](../../../scripts/setup/SETUP_DESIGN.md) — canonical secret list, personas, full setup flow
 - [ci-cd.md Axiom 23](../../../docs/spec/ci-cd.md) — `AKASH_IS_NODE_APP_TARGET` (gated north star): new node apps target Akash via the operator compute API; Cherry k3s = state substrate
 
-> ⚠️ Parts of this skill predate the k3s + Akash split (it references retired paths); verify against `docs/spec/cd-pipeline-e2e.md` before trusting a step.
+> ⚠️ Parts of this skill predate the k3s + Akash split (it references retired paths); verify against [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) before trusting a step.
 
 ## Pre-flight
 

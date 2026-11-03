@@ -313,6 +313,5 @@ rollback beat tidiness.
 - [`docs/spec/secrets-management.md`](../spec/secrets-management.md)
 - [`docs/guides/secrets-add-new.md`](../guides/secrets-add-new.md)
 - [`docs/guides/secrets-rotate.md`](../guides/secrets-rotate.md)
-- [`docs/guides/multi-node-deploy.md`](../guides/multi-node-deploy.md)
 - [`infra/compose/edge/AGENTS.md`](../../infra/compose/edge/AGENTS.md)
 - [`cicd-secrets-expert`](../../.claude/skills/cicd-secrets-expert/SKILL.md)

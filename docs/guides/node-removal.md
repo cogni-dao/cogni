@@ -35,7 +35,6 @@ Before opening the strip PR, confirm:
 
 ```
 nodes/<NODE>/                                                   # entire node source
-infra/k8s/overlays/{candidate-a,canary,preview,production}/<NODE>/
 infra/catalog/<NODE>.yaml
 scripts/experiments/*<NODE>*.ts                                  # any node-specific exploratory scripts
 scripts/experiments/<NODE>-*/                                    # any node-specific dirs
@@ -43,7 +42,6 @@ scripts/experiments/<NODE>-*/                                    # any node-spec
 
 ### Edit (surgical)
 
-- **`infra/k8s/argocd/{candidate-a,preview,production}-applicationset.yaml`** — remove the `- git:` generator entry whose `revision: deploy/<env>-<NODE>` references the node. (Canary applicationset deleted in bug.0312; only the three remaining envs apply.)
 - **`tsconfig.json`** — remove any `{ "path": "./nodes/<NODE>/packages/..." }` workspace project references.
 - **`biome/app.json`** — remove any per-node linter overrides block whose `includes` glob starts with `nodes/<NODE>/`.
 - **`biome/base.json`** — remove any explicit allowlist entries pointing at `nodes/<NODE>/`.
@@ -82,7 +80,7 @@ scripts/experiments/<NODE>-*/                                    # any node-spec
 When you push the strip branch, expect:
 
 - ✅ **Required gates green** (`unit`, `component`, `static`, `manifest`) after a couple iterations (typically: lockfile regen, fixture domain-order fix).
-- ❌ **`candidate-flight` red** on this PR — the workflow runs from main's HEAD (where `infra/catalog/<NODE>.yaml` still exists), so `detect-affected.sh` marks the node as affected based on PR diff, tries to build it, and fails because the Dockerfile is gone in PR head. **This is one-shot and expected.** After merge, future flights won't include the node.
+- ❌ **The operator candidate flight is red** on this PR: the workflow runs from main's HEAD, where `infra/catalog/<NODE>.yaml` still exists. Expected; it does not block the strip.
 - ❌ **`single-node-scope`** non-required, may go either way depending on which domains the PR spans.
 
 ### Common iteration failures
@@ -91,54 +89,22 @@ When you push the strip branch, expect:
 2. **`tests/ci-invariants/single-node-scope-parity.spec.ts` failures** — fixtures reference the deleted node. Fix: substitute to another node + re-sort `domains` arrays alphabetically.
 3. **`tests/arch/tool-catalog-no-global-iteration.test.ts` ENOENT** — test iterates a hardcoded NODES list including the deleted node. Fix: remove from list.
 
-## Multi-environment cluster cleanup
+## Multi-environment cleanup
 
-The strip PR removes the node from cogni's source tree. Argo CD on each cluster keeps the node's Application + pods alive until each ApplicationSet is re-applied. Argo's `prune: true` then evicts the orphan Application.
+A node's app runs on Akash through `POST /api/v1/deploy/workloads`, so the strip PR does not remove it from any cluster. Remove the node's workload from each env it runs in. There is no stop verb yet (task.5409). Until it ships, close the lease with `scripts/ops/recover-orphaned-akash-lease.sh --dseq <dseq>`, then verify by re-reading Console. See [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload) and the `akash-node-expert` skill.
 
-| Env             | Cleanup trigger                                                                                                                               | Manual?      |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| **preview**     | `flight-preview.yml` auto-fires on merge → calls `promote-and-deploy.yml` (preview) → `deploy-infra` job re-applies AS to preview's argocd ns | ✅ automatic |
-| **candidate-a** | `gh workflow run candidate-flight-infra.yml --repo Cogni-DAO/cogni`                                                                           | 🔴 manual    |
-| **production**  | `gh workflow run promote-and-deploy.yml --repo Cogni-DAO/cogni -f environment=production -f source_sha=<merged-main-sha>`                     | 🔴 manual    |
+**Operator only:** an operator-lane app is evicted by Argo `prune: true` after the operator's ApplicationSets are re-applied (`flight-preview.yml` for preview, `candidate-flight-infra.yml` and `promote-and-deploy.yml` for the others).
 
 ### Verification (per env)
 
-After each cluster's AS is re-applied, SSH to the VM and confirm:
-
-```bash
-# AS no longer has the node's generator
-kubectl -n argocd get applicationset cogni-<env> -o yaml | grep "deploy/<env>-<NODE>"  # should return nothing
-
-# Application gone
-kubectl -n argocd get application <env>-<NODE>  # should say NotFound
-
-# Pod gone
-kubectl -n cogni-<env> get pods -l app=<NODE>-node-app  # should say "No resources found"
-```
-
-VM IPs (cogni's clusters):
-
-- production: `84.32.110.202` (key: `~/dev/cogni-template/.local/production-vm-key`, user: root)
-- preview: `84.32.110.92` (key: `~/dev/cogni-template/.local/preview-vm-key`)
-- candidate-a: `84.32.109.160` (key: `~/dev/cogni-template/.local/canary-vm-key` — candidate-a inherited the retired canary VM)
-
-### What persists (not auto-deleted)
-
-Argo's prune only deletes k8s resources it owns. The following persist on each VM:
-
-- Postgres database `cogni_<NODE>` (data tables stay; just no app connects to them anymore)
-- Doltgres database `knowledge_<NODE>` (same)
-- Any GHCR images at `ghcr.io/cogni-dao/cogni-template:*-<NODE>` and `cogni-template-migrate:*-<NODE>`
-- Deploy branches `deploy/{preview,candidate-a,production}-<NODE>` (now orphaned; can be deleted manually)
-
-For a future "fully clean" follow-up, drop the DBs + delete deploy branches. v0 leaves them as audit trail.
+Confirm the host no longer serves (`curl https://<host>/version` fails) and `GET /api/v1/deploy/workloads?nodeId=<id>&env=<env>` shows no active release.
 
 ## Rollback
 
 If you need to undo the strip after merge:
 
 1. `git revert <merge-sha>` on cogni, open + merge revert PR
-2. Re-fire `promote-and-deploy.yml` for each env to re-apply ApplicationSets with the node restored
+2. Deploy the node again with `POST /api/v1/deploy/workloads` for each env
 3. **Data**: if data was migrated to a new repo's VM, restoring on cogni requires a fresh dump from the new location. The original `cogni_<NODE>` DB tables on cogni's prod VM should still have the pre-cutover snapshot — but it'll be stale by however long the new repo has been live.
 
 ## Live example
@@ -149,4 +115,3 @@ If you need to undo the strip after merge:
 
 - [Private Node Repo Contract](../spec/private-node-repo-contract.md) — Phase 0 split that originated this playbook
 - [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) (hub) — node delivery sequence, including candidate-a
-- [CD Pipeline E2E](../spec/cd-pipeline-e2e.md) — full deploy plane architecture

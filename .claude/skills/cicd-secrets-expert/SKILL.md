@@ -104,7 +104,9 @@ startup, so prove: source object -> Deployment `envFrom` -> restarted pod env ->
 public health. Treat old Argo/workflow failures as leads until live cluster
 checks agree.
 
-## App flight substrate assertions are read-only
+## App flight substrate assertions are read-only (operator lane)
+
+A node app on the deploy verb gets its runtime env from OpenBao: the standard node keys plus every key under `deployment.services[].secret_refs` in the node repo-spec. The call carries no secret value ([deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload)). The rest of this section describes the operator flight lane (operator only).
 
 `candidate-flight.yml` uses `scripts/ci/assert-target-substrate.sh` as a
 preflight for selected app rollouts. That gate may verify a Deployment-consumed
@@ -291,7 +293,7 @@ Counterintuitive but load-bearing: a **sealed** OpenBao serves **nothing** — i
 - Human typing a secret VALUE into a production UI or GitHub workflow input. See killer rule.
 - Treating `tier: B`, GitHub Environment Secrets, or VM `.env` as authority for
   a runtime secret. If it feeds a pod or a pod-facing role, OpenBao owns it.
-- Candidate-flight accepting secret values as inputs. Flight may invoke
+- A flight or deploy call accepting secret values as inputs. The operator flight may invoke
   materialization for safe generated/derived node values and fail if the
   environment's required DAO/org bank is missing; it must not carry values.
 - A **dual-plane** secret (must byte-match an external system — GitHub App webhook secret, OAuth client secret) declared with **no `syncTo:`** — it silently fails verification forever and `deploy-infra` re-breaks it every run. Add `syncTo:` (keep `source: agent` if we generate the value). See "Dual-plane secrets" above.

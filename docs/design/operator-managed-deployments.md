@@ -19,6 +19,8 @@ created: 2026-06-11
 > [Node CI/CD Contract](../spec/node-ci-cd-contract.md) — see `## Lane vs control env`
 > for how `env` splits into lane and control env.
 
+> **Node delivery is not described here.** A node ships with `POST /api/v1/deploy/workloads {nodeId, env, workload, sourceSha}`; read [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) and [node-service-delivery](https://cognidao.org/knowledge/node-service-delivery). This design covers the operator's own k3s and Argo deploy plane (operator only).
+
 # Operator-Managed Deployments
 
 > How does the operator app actually manage deployments? Picture version. No jargon.
@@ -44,7 +46,7 @@ That's it. Git is the steering wheel; Argo is the engine; the operator app is th
               DeployCapability.getDeployState   OperatorDeployPlanePort (flight/promote/remove)
                         │                              │
                         ▼                              ▼
-              reads Argo + k8s API           commits to  deploy/<env>-<node>  (or catalog node-set)
+              reads Argo + k8s API           commits to  the operator deploy branch  (operator only)
               (in-cluster, read-only)          via the GitHub App (same auth as flight today)
                         │                              │
                         ▼                              ▼

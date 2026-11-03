@@ -272,6 +272,6 @@ _(none)_
 ## Related
 
 - [Node CI/CD Contract](../NODE_CI_CD_CONTRACT.md) — CI/CD invariants, portability, Jenkins path
-- [CD Pipeline E2E](./cd-pipeline-e2e.md) — runtime deployment architecture (k3s + Compose)
+- [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) (hub) - node delivery sequence and deploy call
 - [Packages Architecture](./packages-architecture.md) — Pure library boundaries
 - [Services Architecture](./services-architecture.md) — Deployable service contracts

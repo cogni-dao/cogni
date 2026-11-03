@@ -14,12 +14,14 @@ description: >
 
 # provision-env — stand up an environment end-to-end
 
+> Operator lane only. This skill provisions the shared state substrate and the operator's own k3s and Argo apps. A node app ships with `POST /api/v1/deploy/workloads`. See [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence).
+
 ## The one mental model (read this first)
 
 **Provision builds the house. Promote fills the furniture. They are different steps.**
 
-- **Provision** (`provision-env.yml`) = substrate: Cherry VM → k3s → Compose infra (postgres, doltgres, temporal, litellm, redis, alloy) → OpenBao + ESO → Caddy edge → DNS → seeds the `deploy/<env>-<node>` branches → applies Argo ApplicationSets.
-- **Promote** (`promote-and-deploy.yml`, the `/promote` skill) = fills the deploy branches with **real, proven per-node image digests** → Argo deploys the actual apps.
+- **Provision** (`provision-env.yml`) = substrate: Cherry VM → k3s → Compose infra (postgres, doltgres, temporal, litellm, redis, alloy) → OpenBao + ESO → Caddy edge → DNS → seeds the operator's deploy branch → applies the operator's Argo apps (operator only).
+- **Ship** = fills the house. The operator uses `promote-and-deploy.yml` (the `/promote` skill; operator only). A node uses `POST /api/v1/deploy/workloads {nodeId, env, workload, sourceSha}`; see [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence).
 
 A provision is _supposed_ to leave you at running apps (it seeds digests for nodes its seed-source runs). But **it routinely leaves gaps that a green workflow hides** — placeholder digests, missing `local_certs`. Those are bugs/gaps, not "by design." This skill is the list of what to check and fix.
 

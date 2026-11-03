@@ -415,15 +415,15 @@ bridge because they remove split brain now and keep the migration path clean.
 
 Keep these PRs separate so each one has a falsifiable outcome:
 
-| PR  | Scope                                        | Acceptance                                                                                                                                                                                             |
-| --- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | PR #1582 v0 node readiness                   | Contract docs name the v0 and target models; candidate flight has a narrow node substrate lane; a new non-payment wizard node needs zero per-node human secrets and can reach ESO/DB/edge assertion.   |
-| 2   | Standalone `secret-materialize <env> <node>` | Split OpenBao writes out of substrate reconcile; catalog-derived; preserves OpenBao; generates missing `source: agent`; inherits only explicit grants; logs key names only.                            |
-| 3   | Explicit shared-bank / owner-grant backend   | Replace broad fallback copying with a declared OpenBao shared-bank for DAO/org values and per-key grants to node capability classes.                                                                   |
-| 4   | DB credential OpenBao bridge                 | DB/Grafana provisioners render from OpenBao, not GH env or VM `.env`; role creation remains set-once; falsify by deleting GH DB-password secrets and deploying successfully.                           |
-| 5   | Workflow wiring cleanup                      | `candidate-flight.yml`, `promote-and-deploy.yml`, and genesis provision run materialize -> reconcile-substrate -> assert-substrate before rollout verification. Workflows do not accept secret values. |
-| 6   | Human/vendor value lane                      | `secret-set.yml` or operator API writes human-sourced org/env values through OIDC/OpenBao with sealed staging and audit proof; production uses env protection.                                         |
-| 7   | Dynamic DB credentials                       | Replace static DB passwords with OpenBao DB secrets engine and shorter ESO refresh intervals.                                                                                                          |
+| PR  | Scope                                        | Acceptance                                                                                                                                                                                                             |
+| --- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | PR #1582 v0 node readiness                   | Contract docs name the v0 and target models; candidate flight has a narrow node substrate lane; a new non-payment wizard node needs zero per-node human secrets and can reach ESO/DB/edge assertion.                   |
+| 2   | Standalone `secret-materialize <env> <node>` | Split OpenBao writes out of substrate reconcile; catalog-derived; preserves OpenBao; generates missing `source: agent`; inherits only explicit grants; logs key names only.                                            |
+| 3   | Explicit shared-bank / owner-grant backend   | Replace broad fallback copying with a declared OpenBao shared-bank for DAO/org values and per-key grants to node capability classes.                                                                                   |
+| 4   | DB credential OpenBao bridge                 | DB/Grafana provisioners render from OpenBao, not GH env or VM `.env`; role creation remains set-once; falsify by deleting GH DB-password secrets and deploying successfully.                                           |
+| 5   | Workflow wiring cleanup                      | `candidate-flight.yml` (operator only), `promote-and-deploy.yml`, and genesis provision run materialize -> reconcile-substrate -> assert-substrate before rollout verification. Workflows do not accept secret values. |
+| 6   | Human/vendor value lane                      | `secret-set.yml` or operator API writes human-sourced org/env values through OIDC/OpenBao with sealed staging and audit proof; production uses env protection.                                                         |
+| 7   | Dynamic DB credentials                       | Replace static DB passwords with OpenBao DB secrets engine and shorter ESO refresh intervals.                                                                                                                          |
 
 ### Standardized tooling — three entry points, one primitive
 
@@ -762,7 +762,7 @@ the practical recipes live in `docs/guides/secrets-add-new.md` and
 `docs/design/node-wizard-secret-setting.md`.
 
 Any doc that says "GitHub env is the runtime source of truth", "VM `.env` owns a
-pod-facing value", or "candidate-flight accepts secret values" is stale and
+pod-facing value", or "operator candidate flight accepts secret values" is stale and
 must be rewritten or deleted. Link preservation is secondary to purging the old
 authority model.
 
