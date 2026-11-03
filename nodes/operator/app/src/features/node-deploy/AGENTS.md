@@ -73,3 +73,8 @@ pnpm exec vitest run --config nodes/operator/app/vitest.config.mts \
 - A new sequencer event goes through `record`; a new persisted field needs a contract field and a test in `sequencer-timeline.test.ts`.
 - A new release state or rule changes `release-view.ts`, the contract enum and `release-view.test.ts` together.
 - Schema changes to the attempts table follow the `schema-update` skill (additive, nullable).
+
+## Notes
+
+- The sequencer holds no IO: ports are injected, so the same state machine runs over fakes in tests and over the actuator in production.
+- `release-view.ts` only reads rows the sequencer wrote; it never decides anything the sequencer decides.
