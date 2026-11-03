@@ -32,7 +32,7 @@ import {
   servedEnvs,
 } from "./lane";
 
-/** A canonical Akash node: candidate-a and production on the verb, preview still on Crossplane. */
+/** A canonical Akash node: candidate-a and production on the verb, preview with no cell. */
 const AKASH_NODE = {
   name: "toks5",
   source_repo: "https://github.com/cogni-dao/toks5.git",
@@ -43,7 +43,6 @@ const AKASH_NODE = {
   },
   compute_api: {
     "candidate-a": "node-deploy",
-    preview: "crossplane",
     production: "node-deploy",
   },
 };
@@ -203,10 +202,10 @@ describe("nodeNotOnDeployVerb: ONE_WRITER_PER_NODE_LANE (CD4 c)", () => {
     ).toBeUndefined();
   });
 
-  it("refuses 409 node_not_on_deploy_verb for a crossplane or legacy cell, a missing cell and an unknown node", async () => {
-    const crossplane = nodeNotOnDeployVerb("preview", TOKS5_ID, AKASH_NODE);
-    expect(crossplane?.status).toBe(409);
-    expect(await bodyOf(crossplane)).toMatchObject({
+  it("refuses 409 node_not_on_deploy_verb for a missing cell, a k3s row and an unknown node", async () => {
+    const missing = nodeNotOnDeployVerb("preview", TOKS5_ID, AKASH_NODE);
+    expect(missing?.status).toBe(409);
+    expect(await bodyOf(missing)).toMatchObject({
       error: "node_not_on_deploy_verb",
     });
     expect(nodeNotOnDeployVerb("candidate-a", TOKS5_ID, K3S_NODE)?.status).toBe(
