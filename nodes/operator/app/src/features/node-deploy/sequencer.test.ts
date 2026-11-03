@@ -1174,10 +1174,46 @@ describe("reconcile", () => {
     expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("active");
     expect(await h.seq.step(APP)).toBe("converged");
     expect(h.payer.createRequests).toHaveLength(2);
-    // /version fails too: now the lease is bad and is closed + replaced
+    // /version fails too: the 15 min for a BAD lease start now; one blip never closes the lease
     h.payer.byDseq("1002").down = true;
+    expect(await h.seq.reconcile(APP)).toBe("unhealthy_waiting");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    expect(h.events).not.toContain("payer.delete:1002");
+    h.clock.advance(14 * 60_000);
+    expect(await h.seq.reconcile(APP)).toBe("unhealthy_waiting");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    h.clock.advance(61_000);
     expect(await h.seq.reconcile(APP)).toBe("lost_app");
     expect(h.payer.byDseq("1002").state).toBe("closed");
+  });
+
+  it("recovering after a dependency outage clears its marker", async () => {
+    const h = await liveApp();
+    h.payer.byDseq("1002").notReady = true;
+    await h.seq.reconcile(APP);
+    await h.seq.reconcile(APP);
+    expect((await h.store.attemptsFor(APP))[0]?.error).toBe("dependency_down");
+    h.payer.byDseq("1002").notReady = false;
+    expect(await h.seq.reconcile(APP)).toBe("healthy");
+    const a = (await h.store.attemptsFor(APP))[0];
+    expect(a?.error).toBeUndefined();
+    expect(a?.unhealthySince).toBeUndefined();
+  });
+
+  it("a thrown non-PayerError from create is not replayed under the same key", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.createFault = (n) => {
+      if (n === 2) throw new Error("boom");
+      return undefined;
+    };
+    h.payer.observeThrows = true;
+    await deployApp(h, SHA_1);
+    await h.seq.step(APP);
+    const key = (await h.store.attemptsFor(APP))[0]?.cogniKey;
+    expect(
+      h.payer.createRequests.filter((r) => r.cogniKey === key)
+    ).toHaveLength(1);
   });
 
   it("recovering inside the window clears the unhealthy clock", async () => {

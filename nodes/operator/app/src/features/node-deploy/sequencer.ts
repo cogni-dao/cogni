@@ -111,7 +111,8 @@ export interface SequencerConfig {
   /**
    * An unbound attempt whose `observe` keeps failing is left alone only this long (default 15 min since the
    * first `observe_unavailable`). Then it is failed `orphan_suspect:` with an alert, so the release can
-   * park or retry. The lease is NOT claimed closed: a human or the janitor of a later observe settles it.
+   * park or retry. The lease is NOT claimed closed: nothing re-observes a `failed` unbound attempt, so a human acts on the
+   * `orphan_suspect` alert (it carries the cogniKey).
    */
   readonly observeUnavailableMs: number;
   readonly pollMs: number;
@@ -757,16 +758,29 @@ export class NodeDeploySequencer {
           // Resolve now; on a failed read the marker makes the next tick resolve first.
           return this.doCreate(key, release, marked, blue);
         }
-        const refused = await this.d.store.updateAttempt(attempt.id, {
-          error: `${REFUSED_PREFIX}${error.code}: ${error.message}`.slice(
-            0,
-            500
-          ),
-        });
-        return this.failAttempt(key, release, refused, refused.error ?? "");
+        return this.refuseCreate(
+          key,
+          release,
+          attempt,
+          `${error.code}: ${error.message}`
+        );
       }
-      return this.failAttempt(key, release, attempt, errText(error));
+      // Any other throw from create is also never replayed under this key (observe guards orphans).
+      return this.refuseCreate(key, release, attempt, errText(error));
     }
+  }
+
+  /** Persist the refusal BEFORE failAttempt, so a deferred failAttempt is never followed by a replay. */
+  private async refuseCreate(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    text: string
+  ): Promise<AttemptRow> {
+    const refused = await this.d.store.updateAttempt(attempt.id, {
+      error: `${REFUSED_PREFIX}${text}`.slice(0, 500),
+    });
+    return this.failAttempt(key, release, refused, refused.error ?? "");
   }
 
   /**
@@ -1212,6 +1226,7 @@ export class NodeDeploySequencer {
       const next = await this.d.store.updateAttempt(attempt.id, {
         phase: "failed",
         error: trimmed,
+        unhealthySince: null,
       });
       await this.emit(key, release, next, "attempt_failed", "failed", {
         reason: trimmed,
@@ -1388,13 +1403,35 @@ export class NodeDeploySequencer {
     // Live on chain: a failed proof is only an alert until it has lasted `unhealthyLostMs`.
     if (release.spec.kind === "app" && observeOk) {
       const proof = await this.quickProof(release, active);
+      // `error` is null on an active attempt; DEPENDENCY_DOWN_MARK records that the current unhealthy
+      // clock was started by (or has run through) a dependency outage, not by a bad lease.
+      const wasDependencyDown = active.error === DEPENDENCY_DOWN_MARK;
       if (proof === "healthy") {
-        if (active.unhealthySince) {
-          await this.d.store.updateAttempt(active.id, { unhealthySince: null });
+        if (active.unhealthySince || wasDependencyDown) {
+          await this.d.store.updateAttempt(active.id, {
+            unhealthySince: null,
+            ...(wasDependencyDown ? { error: null } : {}),
+          });
           await this.emit(key, release, active, "unhealthy_cleared", "ok");
         }
         return "healthy";
       }
+      if (proof === "lease_bad" && wasDependencyDown) {
+        // /version started failing only after a dependency outage: the 15 minutes for a BAD lease
+        // start now, so one /version blip can never close a lease the outage kept alive.
+        await this.d.store.updateAttempt(active.id, {
+          unhealthySince: new Date(this.d.clock.now()),
+          error: null,
+        });
+        await this.alert(key, release, active, "proof_failing", {
+          why: "version_failing_after_dependency_down",
+        });
+        return "unhealthy_waiting";
+      }
+      if (proof === "dependency_down" && !wasDependencyDown)
+        await this.d.store.updateAttempt(active.id, {
+          error: DEPENDENCY_DOWN_MARK,
+        });
       const since = active.unhealthySince ?? new Date(this.d.clock.now());
       if (!active.unhealthySince) {
         await this.d.store.updateAttempt(active.id, { unhealthySince: since });
@@ -1651,6 +1688,9 @@ export class NodeDeploySequencer {
 
 /** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
 const REFUSED_PREFIX = "create refused: ";
+
+/** Marker on an ACTIVE attempt (whose `error` is otherwise null): its failing proof is a dependency outage. */
+const DEPENDENCY_DOWN_MARK = "dependency_down";
 
 /** `ambiguous: <code>`; a network failure carries the failure time: `ambiguous: network@<epoch ms>`. */
 function ambiguousMarker(code: string, now: number): string {
