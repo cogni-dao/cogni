@@ -56,6 +56,6 @@ sops --encrypt --in-place secrets/staging/scheduler-worker.enc.yaml
 4. Commit and push — Argo CD syncs the new encrypted file
 5. ksops decrypts at apply time — pods get updated secrets
 
-## PAT scope for GHCR registry auth
+## GHCR registry auth
 
-The k3s `registries.yaml` uses a GitHub PAT for pulling private images. The PAT should be scoped to `read:packages` only. Rotate if the k3s VM is compromised.
+Cogni images on GHCR are public. VMs provisioned after bug.5563 have no GHCR registry credential: the k3s `registries.yaml` holds mirrors only. Existing preview/production VMs keep their baked token until bug.5563 step (d). argocd-image-updater still holds its own GHCR credential.
