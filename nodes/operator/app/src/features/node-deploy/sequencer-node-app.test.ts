@@ -13,11 +13,12 @@ import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
 
 import type {
+  BuiltImageResolverPort,
   NodeCatalogPort,
   NodeRuntimeSecretsPort,
   WorkloadKey,
 } from "@/ports";
-import { NodeRuntimeSecretsError } from "@/ports";
+import { BuiltImageRegistryError, NodeRuntimeSecretsError } from "@/ports";
 
 import { EdgeRouter, edgeHostRegexFor } from "./edge";
 import { nodeAppEnv } from "./node-app-env";
@@ -91,6 +92,21 @@ class FakeRuntimeSecrets implements NodeRuntimeSecretsPort {
   }
 }
 
+/** The registry: `sha-<sha>` tags that node CI has published, each with its digest. */
+class FakeImages implements BuiltImageResolverPort {
+  readonly published = new Map<string, string>();
+  readonly calls: { imageRepository: string; sourceSha: string }[] = [];
+  down = false;
+  async resolveBuiltImage(input: {
+    imageRepository: string;
+    sourceSha: string;
+  }): Promise<string | null> {
+    this.calls.push(input);
+    if (this.down) throw new BuiltImageRegistryError("ghcr 503");
+    return this.published.get(input.sourceSha) ?? null;
+  }
+}
+
 class FakeCatalog implements NodeCatalogPort {
   rows = new Map<string, { slug: string; row: unknown }>([
     [
@@ -122,6 +138,7 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
   const secrets = new MemorySecrets();
   const runtimeSecrets = new FakeRuntimeSecrets();
   const catalog = new FakeCatalog();
+  const images = new FakeImages();
   const log = new MemoryLog();
   const seq = new NodeDeploySequencer({
     store,
@@ -130,6 +147,7 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
     probe,
     secrets,
     runtime: { secrets: runtimeSecrets, catalog, substrateHost: SUBSTRATE },
+    images,
     chain: new FakeChain(payer),
     clock,
     log,
@@ -147,7 +165,17 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
     env: ENV,
     workload,
   });
-  return { store, payer, runtimeSecrets, catalog, log, seq, key };
+  return {
+    store,
+    payer,
+    runtimeSecrets,
+    catalog,
+    images,
+    clock,
+    log,
+    seq,
+    key,
+  };
 }
 
 type H = ReturnType<typeof harness>;
@@ -412,5 +440,157 @@ describe("an app may claim only its own node's host (task.5405)", () => {
     const h = harness();
     await stateUp(h, OPERATOR_NODE_ID);
     expect(await releaseApp(h, OPERATOR_NODE_ID)).toBe("driven");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ALWAYS_DEFER (story.5137): a release recorded before node CI published its image
+// ---------------------------------------------------------------------------------------------------
+
+const POLY_REPO = "ghcr.io/cogni-dao/poly";
+const SHA_N = "9".repeat(40);
+const POLY_DIGEST = `${POLY_REPO}@sha256:${"c".repeat(64)}`;
+
+async function recordPending(h: H, sha: string) {
+  return h.store.recordRelease({
+    nodeId: POLY_ID,
+    env: ENV,
+    workload: "canary",
+    sourceSha: sha,
+    spec: canaryApp({
+      image: `${POLY_REPO}:sha-${sha}`,
+      imagePending: true,
+      bindings: [],
+      secretKeys: DECLARED,
+      expose: { http: { host: POLY_HOST } },
+    }),
+    createdBy: "test",
+  });
+}
+
+describe("a pending image is pinned before any paid create (story.5137)", () => {
+  it("waits as DependencyNotReady (no attempt, nothing paid) until node CI publishes, then pins the digest write-once and deploys it", async () => {
+    const h = harness();
+    const { release } = await recordPending(h, SHA_1);
+
+    expect(await h.seq.step(h.key(POLY_ID, "canary"))).toBe(
+      "waiting_dependency"
+    );
+    expect(appCreates(h)).toHaveLength(0);
+    expect(await h.store.attemptsFor(h.key(POLY_ID, "canary"))).toHaveLength(0);
+    expect(h.images.calls).toEqual([
+      { imageRepository: POLY_REPO, sourceSha: SHA_1 },
+    ]);
+    const waiting = h.log.lines.find(
+      (l) => l.msg === "node_deploy_step" && l.fields.step === "dependency"
+    );
+    expect(String(waiting?.fields.reason)).toContain("not published yet");
+
+    // node CI publishes; the next tick pins and deploys, with the SAME release
+    h.images.published.set(SHA_1, POLY_DIGEST);
+    expect(await h.seq.step(h.key(POLY_ID, "canary"))).toBe("driven");
+    const pinned = await h.store.getRelease(release.id);
+    expect(pinned?.resolvedImage).toBe(POLY_DIGEST);
+    expect(pinned?.spec.image).toBe(POLY_DIGEST);
+    expect(pinned?.spec.imagePending).toBeUndefined();
+    expect(appCreates(h)).toHaveLength(1);
+    expect(appCreates(h)[0]?.spec.services[0]?.image).toBe(POLY_DIGEST);
+  });
+
+  it("pins ONCE: a re-tagged image never changes a pinned release, and a converged release asks the registry no more", async () => {
+    const h = harness();
+    const { release } = await recordPending(h, SHA_1);
+    h.images.published.set(SHA_1, POLY_DIGEST);
+    await h.seq.step(h.key(POLY_ID, "canary"));
+    expect(h.images.calls).toHaveLength(1);
+
+    const other = `${POLY_REPO}@sha256:${"d".repeat(64)}`;
+    h.images.published.set(SHA_1, other);
+    const again = await h.store.pinResolvedImage(release.id, other);
+    expect(again.resolvedImage).toBe(POLY_DIGEST);
+    expect(again.spec.image).toBe(POLY_DIGEST);
+
+    expect(await h.seq.step(h.key(POLY_ID, "canary"))).toBe("converged");
+    expect(h.images.calls).toHaveLength(1);
+  });
+
+  it("a registry outage waits instead of failing or paying", async () => {
+    const h = harness();
+    await recordPending(h, SHA_1);
+    h.images.down = true;
+    expect(await h.seq.step(h.key(POLY_ID, "canary"))).toBe(
+      "waiting_dependency"
+    );
+    expect(appCreates(h)).toHaveLength(0);
+    expect(await h.store.attemptsFor(h.key(POLY_ID, "canary"))).toHaveLength(0);
+  });
+
+  it("raises alert/image_not_published once it has waited past imageAlertMs, still paying nothing", async () => {
+    const h = harness({ imageAlertMs: 1_800_000 });
+    await recordPending(h, SHA_1);
+    const alerts = () =>
+      h.log.lines.filter(
+        (l) =>
+          l.msg === "node_deploy_alert" &&
+          l.fields.outcome === "image_not_published"
+      );
+    await h.seq.step(h.key(POLY_ID, "canary"));
+    expect(alerts()).toHaveLength(0);
+
+    await h.clock.sleep(1_800_000);
+    expect(await h.seq.step(h.key(POLY_ID, "canary"))).toBe(
+      "waiting_dependency"
+    );
+    expect(alerts()).toHaveLength(1);
+    expect(appCreates(h)).toHaveLength(0);
+    // throttled: the next tick does not write a second line
+    await h.seq.step(h.key(POLY_ID, "canary"));
+    expect(alerts()).toHaveLength(1);
+  });
+
+  it("LATEST_RELEASE_WINS: a newer release supersedes an older one that never started, which never gets an attempt or a registry read", async () => {
+    const h = harness();
+    const older = await recordPending(h, SHA_1);
+    // the older sha's image is never published; a newer release replaces it
+    const newer = await recordPending(h, SHA_N);
+    h.images.published.set(SHA_N, POLY_DIGEST);
+
+    expect(
+      (await h.store.getDesired(h.key(POLY_ID, "canary")))?.releaseId
+    ).toBe(newer.release.id);
+    expect(await h.seq.step(h.key(POLY_ID, "canary"))).toBe("driven");
+
+    expect(h.images.calls).toEqual([
+      { imageRepository: POLY_REPO, sourceSha: SHA_N },
+    ]);
+    const attempts = await h.store.attemptsFor(h.key(POLY_ID, "canary"));
+    expect(attempts.map((a) => a.releaseId)).toEqual([newer.release.id]);
+    expect((await h.store.getRelease(older.release.id))?.resolvedImage).toBe(
+      undefined
+    );
+    expect(appCreates(h)[0]?.spec.services[0]?.image).toBe(POLY_DIGEST);
+  });
+
+  it("a sequencer with no image resolver configured waits on a pending release and never creates", async () => {
+    const h = harness();
+    const bare = new NodeDeploySequencer({
+      store: h.store,
+      payer: h.payer,
+      edge: undefined,
+      probe: new FakeProbe(h.payer, new FakeDns([]), []),
+      secrets: new MemorySecrets(),
+      clock: h.clock,
+      log: new MemoryLog(),
+      config: {
+        ...DEFAULT_SEQUENCER_CONFIG,
+        namespace: "cogni-production",
+        environment: ENV,
+      } as SequencerConfig,
+    });
+    await recordPending(h, SHA_1);
+    expect(await bare.step(h.key(POLY_ID, "canary"))).toBe(
+      "waiting_dependency"
+    );
+    expect(appCreates(h)).toHaveLength(0);
   });
 });

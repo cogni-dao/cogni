@@ -94,6 +94,10 @@ export const serverSchema = z.object({
   // verb's PR-authoring targets appsets/<control-env>/ instead of the nonexistent appsets/production/.
   FLEET_CONTROL_ENV: z.string().optional(),
 
+  // Envs this deployment's node-deploy sequencer serves (comma-separated; story.5137 ONE FRONT DOOR). The
+  // production operator serves `candidate-a,preview,production`. Unset => only DEPLOY_ENVIRONMENT.
+  NODE_DEPLOY_ENVS: z.string().optional(),
+
   // Build SHA for observability (canonical source for /metrics, /readyz, agent.json)
   APP_BUILD_SHA: z.string().optional(),
 

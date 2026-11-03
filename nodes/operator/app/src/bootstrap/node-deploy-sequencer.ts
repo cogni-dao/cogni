@@ -25,10 +25,22 @@
  *   - NO_EDGE_NO_HTTP_APPS: without Cloudflare credentials the process still runs (state workloads work)
  *     and the sequencer refuses http apps BEFORE paying.
  *   - FAIL_LOUD_FOR_ITSELF: a missing actuator token or database URL refuses boot (CrashLoopBackOff).
- *   - NODE_APP_ENV_NEEDS_ITS_INPUTS (task.5405): `NODE_DEPLOY_SUBSTRATE_HOST` is required, because a node app
+ *   - ONE_PROCESS_EVERY_ENV (story.5137): `NODE_DEPLOY_ENVS` (default: only `DEPLOY_ENVIRONMENT`) lists
+ *     the envs this cluster controls; the process builds one `NodeDeploySequencer` per env over the SHARED
+ *     payer, store, Cloudflare credentials, leader lock and pod. Per env: secrets namespace
+ *     `cogni-node-deploy-<env>`, substrate host (`NODE_DEPLOY_SUBSTRATE_HOSTS`), edge hosts from that env's
+ *     catalog `node-deploy` cells. The payer env is the release's env. One pass per env, each its own
+ *     failure domain (`EnvLaneSequencers`). Resolution is pure and tested in `features/node-deploy/env-lanes`.
+ *   - NODE_APP_ENV_NEEDS_ITS_INPUTS (task.5405): every served env needs a substrate host
+ *     (`NODE_DEPLOY_SUBSTRATE_HOST` for the single env, `NODE_DEPLOY_SUBSTRATE_HOSTS` per env), because a node app
  *     deployed without it would run with a half env. Node secrets arrive through the existing custody path
- *     (OpenBao -> ESO -> a Secret in `NODE_DEPLOY_SECRETS_NAMESPACE`); this process holds NO OpenBao
- *     identity and needs no new OpenBao role.
+ *     (OpenBao -> ESO -> a Secret in the env's `cogni-node-deploy-<env>` namespace); this process holds NO
+ *     OpenBao identity and needs no new OpenBao role.
+ *   - FLEET_FILTER (story.5137 CD4): `NODE_DEPLOY_FLEET_OWNER` is the org that owns this fleet's node repos. Each
+ *     env's edge guard admits only catalog nodes that org owns (the route applies the same predicate), and an
+ *     unset owner admits no remote-source node, so the test operator never deploys canonical nodes.
+ *   - IMAGE_PINNED_BEFORE_PAY (story.5137): every lane resolves a pending release image through the anonymous
+ *     ghcr resolver and pins the digest write-once before any paid create.
  *   - INTERIM_APP_PROVIDERS (task.5405): `NODE_DEPLOY_APP_PROVIDERS` (comma-separated akash accounts, max 16)
  *     is sent as `allowProviders` on every APP create; unset sends none.
  * Side-effects: IO (Postgres, actuator HTTP, Cloudflare, Kubernetes API, provider ingress; health listener)
@@ -48,12 +60,18 @@ import {
   AkashChainTruth,
   CloudflareDnsRecords,
   EsoNodeRuntimeSecrets,
+  GhcrBuiltImageResolver,
   HttpProbe,
   ImageCatalogNodes,
   KubernetesStatePasswords,
   PostgresNodeDeployStore,
 } from "@/adapters/server";
 import { EdgeRouter, edgeHostRegexFor } from "@/features/node-deploy/edge";
+import {
+  EnvLaneConfigError,
+  EnvLaneSequencers,
+  resolveEnvLanes,
+} from "@/features/node-deploy/env-lanes";
 import {
   DEFAULT_SEQUENCER_CONFIG,
   NodeDeploySequencer,
@@ -114,53 +132,30 @@ const num = (
   return Number.isFinite(n) ? Math.max(min, n) : fallback;
 };
 
-// The image catalog is the one declaration of which nodes this sequencer deploys in this env (CD1): the
-// edge guard admits the canary plus every node whose `compute_api[<env>]` is `node-deploy`. No overlay
-// edit is needed to onboard a node, and no env override exists.
+// The image catalog is the one declaration of which nodes this sequencer deploys in each env (CD1): an env's
+// edge guard admits the canary plus every node whose `compute_api[<env>]` is `node-deploy`. No overlay edit is
+// needed to onboard a node, and no env override exists.
 const catalog = new ImageCatalogNodes({
   root: runtimeEnv.COGNI_IMAGE_ROOT ?? "/app",
 });
-const edgeHostRegex = edgeHostRegexFor(
-  await catalog.nodeDeploySlugs(environment)
-);
-log.info(
-  { environment, edgeHostRegex: String(edgeHostRegex) },
-  "node_deploy_sequencer_edge_hosts"
-);
-const edge =
-  cfToken && cfZone
-    ? new EdgeRouter(
-        new CloudflareDnsRecords({ apiToken: cfToken, zoneId: cfZone }),
-        edgeHostRegex
-      )
-    : undefined;
-if (!edge) {
-  log.warn(
-    { environment, namespace },
-    "node_deploy_sequencer_edge_unconfigured: http apps will be refused before paying"
-  );
-}
 
-const secretsNamespace = runtimeEnv.NODE_DEPLOY_SECRETS_NAMESPACE;
-if (!secretsNamespace || secretsNamespace === namespace) {
+let lanes: ReturnType<typeof resolveEnvLanes>;
+try {
+  lanes = resolveEnvLanes({
+    deployEnvironment: environment,
+    podNamespace: namespace,
+    environments: runtimeEnv.NODE_DEPLOY_ENVS,
+    secretsNamespace: runtimeEnv.NODE_DEPLOY_SECRETS_NAMESPACE,
+    substrateHost: runtimeEnv.NODE_DEPLOY_SUBSTRATE_HOST,
+    substrateHosts: runtimeEnv.NODE_DEPLOY_SUBSTRATE_HOSTS,
+  });
+} catch (error) {
+  if (!(error instanceof EnvLaneConfigError)) throw error;
   log.fatal(
-    { reason: "SecretsNamespaceInvalid", namespace, secretsNamespace },
-    "node_deploy_sequencer_secrets_namespace_invalid"
+    { reason: error.code, namespace, causeMessage: error.message },
+    "node_deploy_sequencer_env_lanes_invalid"
   );
-  throw new Error(
-    "NODE_DEPLOY_SECRETS_NAMESPACE is required and must NOT be the pod's own (wallet) namespace"
-  );
-}
-
-const substrateHost = runtimeEnv.NODE_DEPLOY_SUBSTRATE_HOST;
-if (!substrateHost) {
-  log.fatal(
-    { reason: "NodeAppRuntimeInputsMissing" },
-    "node_deploy_sequencer_node_app_runtime_unconfigured"
-  );
-  throw new Error(
-    "NODE_DEPLOY_SUBSTRATE_HOST is required; a node app would run with a half env"
-  );
+  throw error;
 }
 const appProviders = (runtimeEnv.NODE_DEPLOY_APP_PROVIDERS ?? "")
   .split(",")
@@ -168,47 +163,126 @@ const appProviders = (runtimeEnv.NODE_DEPLOY_APP_PROVIDERS ?? "")
   .filter(Boolean);
 
 // ONE connection TOTAL: infra/database-budget-profiles.yaml operator-control-v1 budgets exactly one
-// for this process and tests/ci-invariants/operator-db-budget.spec.ts counts it.
+// for this process and tests/ci-invariants/operator-db-budget.spec.ts counts it. Every env lane shares it.
 const db = createAppDbClient(databaseUrl, {
   max: 1,
   applicationName: "cogni_operator_node_deploy_sequencer",
 });
 
-const sequencer = new NodeDeploySequencer({
-  store: new PostgresNodeDeployStore(db),
-  payer: new ActuatorPayer({
-    actuatorUrl:
-      runtimeEnv.AKASH_TX_ACTUATOR_URL ?? "http://akash-tx-actuator:8080",
-    token: actuatorToken,
-  }),
-  edge,
-  probe: new HttpProbe(),
-  secrets: new KubernetesStatePasswords(secretsNamespace, environment),
-  runtime: {
-    secrets: new EsoNodeRuntimeSecrets({ namespace: secretsNamespace }),
-    catalog,
-    substrateHost,
-  },
-  ...(runtimeEnv.AKASH_CHAIN_OWNER
-    ? { chain: new AkashChainTruth({ owner: runtimeEnv.AKASH_CHAIN_OWNER }) }
-    : {}),
-  clock: {
-    now: () => Date.now(),
-    sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
-  },
-  log,
-  config: {
-    ...DEFAULT_SEQUENCER_CONFIG,
-    namespace,
-    environment,
-    ...(appProviders.length > 0 ? { appProviders } : {}),
-    retainMs: num(
-      runtimeEnv.NODE_DEPLOY_RETAIN_MS,
-      DEFAULT_SEQUENCER_CONFIG.retainMs,
-      0
-    ),
-  },
+// Shared by every env lane: the store, the ONLY payer (the actuator takes the env per request), probes, chain
+// truth and Cloudflare. Per env: the edge guard, the secrets namespace and the substrate host.
+const store = new PostgresNodeDeployStore(db);
+const payer = new ActuatorPayer({
+  actuatorUrl:
+    runtimeEnv.AKASH_TX_ACTUATOR_URL ?? "http://akash-tx-actuator:8080",
+  token: actuatorToken,
 });
+const probe = new HttpProbe();
+const chain = runtimeEnv.AKASH_CHAIN_OWNER
+  ? new AkashChainTruth({ owner: runtimeEnv.AKASH_CHAIN_OWNER })
+  : undefined;
+const dnsRecords =
+  cfToken && cfZone
+    ? new CloudflareDnsRecords({ apiToken: cfToken, zoneId: cfZone })
+    : undefined;
+if (!dnsRecords) {
+  log.warn(
+    { environment, namespace },
+    "node_deploy_sequencer_edge_unconfigured: http apps will be refused before paying"
+  );
+}
+
+// The org that owns this fleet's nodes' source repos (the canonical fleet is `cogni-dao`). The SAME filter the
+// route applies (`isFleetOwnedRow`): unset admits no remote-source node, so a sequencer that was never told its
+// fleet (the test operator) can never claim a host for a canonical node. story.5137 CD4.
+const fleetOwner = runtimeEnv.NODE_DEPLOY_FLEET_OWNER?.trim() || undefined;
+const images = new GhcrBuiltImageResolver();
+
+const laneSequencers = await Promise.all(
+  lanes.map(async (lane) => {
+    const edgeHostRegex = edgeHostRegexFor(
+      await catalog.nodeDeploySlugs(lane.environment, fleetOwner)
+    );
+    log.info(
+      {
+        environment: lane.environment,
+        secretsNamespace: lane.secretsNamespace,
+        substrateHost: lane.substrateHost,
+        fleetOwner,
+        edgeHostRegex: String(edgeHostRegex),
+      },
+      "node_deploy_sequencer_edge_hosts"
+    );
+    return {
+      environment: lane.environment,
+      sequencer: new NodeDeploySequencer({
+        store,
+        payer,
+        edge: dnsRecords
+          ? new EdgeRouter(dnsRecords, edgeHostRegex)
+          : undefined,
+        probe,
+        images,
+        secrets: new KubernetesStatePasswords(
+          lane.secretsNamespace,
+          lane.environment
+        ),
+        runtime: {
+          secrets: new EsoNodeRuntimeSecrets({
+            namespace: lane.secretsNamespace,
+          }),
+          catalog,
+          substrateHost: lane.substrateHost,
+        },
+        ...(chain ? { chain } : {}),
+        clock: {
+          now: () => Date.now(),
+          sleep: (ms) =>
+            new Promise<void>((resolve) => setTimeout(resolve, ms)),
+        },
+        log,
+        config: {
+          ...DEFAULT_SEQUENCER_CONFIG,
+          namespace,
+          environment: lane.environment,
+          ...(appProviders.length > 0 ? { appProviders } : {}),
+          retainMs: num(
+            runtimeEnv.NODE_DEPLOY_RETAIN_MS,
+            DEFAULT_SEQUENCER_CONFIG.retainMs,
+            0
+          ),
+        },
+      }),
+    };
+  })
+);
+
+/** A failure that repeats every pass is logged once per 10 minutes per (loop, env, message). */
+const loopErrorAt = new Map<string, number>();
+
+function reportLoopError(
+  name: string,
+  error: unknown,
+  laneEnvironment?: string
+): void {
+  const causeMessage =
+    error instanceof Error ? error.message.slice(0, 300) : "unknown";
+  const k = `${name}/${laneEnvironment ?? ""}/${causeMessage}`;
+  const last = loopErrorAt.get(k);
+  if (last !== undefined && Date.now() - last < 600_000) return;
+  loopErrorAt.set(k, Date.now());
+  log.error(
+    { loop: name, environment: laneEnvironment, causeMessage },
+    "node_deploy_sequencer_loop_threw"
+  );
+}
+
+// One pass per env, each its own failure domain: a preview fault never stalls production.
+const sequencer = new EnvLaneSequencers(
+  laneSequencers,
+  (laneEnvironment, name, error) =>
+    reportLoopError(name, error, laneEnvironment)
+);
 
 let leader = false;
 let stopping = false;
@@ -288,24 +362,10 @@ async function acquireLeadership(): Promise<void> {
   timers.push(setInterval(() => void assertLeader(), 5_000));
 }
 
-/** A failure that repeats every pass is logged once per 10 minutes per (loop, message). */
-const loopErrorAt = new Map<string, number>();
-
 function loop(name: string, everyMs: number, work: () => Promise<void>): void {
   const run = (): void => {
     void work()
-      .catch((error: unknown) => {
-        const causeMessage =
-          error instanceof Error ? error.message.slice(0, 300) : "unknown";
-        const k = `${name}/${causeMessage}`;
-        const last = loopErrorAt.get(k);
-        if (last !== undefined && Date.now() - last < 600_000) return;
-        loopErrorAt.set(k, Date.now());
-        log.error(
-          { loop: name, causeMessage },
-          "node_deploy_sequencer_loop_threw"
-        );
-      })
+      .catch((error: unknown) => reportLoopError(name, error))
       .finally(() => {
         if (!stopping) timers.push(setTimeout(run, everyMs));
       });

@@ -38,6 +38,10 @@ resources:
   # PAYS only through that actuator and holds no Console key. Single instance by advisory lock.
   - ../../../base/node-deploy-sequencer
   - ./node-deploy-secrets-namespace.yaml
+  # story.5137 — one front door: this sequencer also serves candidate-a and preview, each with its OWN
+  # secrets namespace + RBAC, delivered by a sibling Application (a second Namespace cannot live under
+  # this overlay's `namespace:` transformer; see ../node-deploy-envs/kustomization.yaml).
+  - ./node-deploy-env-namespaces-application.yaml
   # task.5247 — private read-only database status observation.
   - ../../../base/database-reliability-actuator
   - ./database-reliability-actuator-external-secret.yaml
@@ -73,6 +77,8 @@ replacements:
       fieldPath: spec.destination.namespace
     targets:
       - select: { kind: Application, name: compute-workload-platform }
+        fieldPaths: [metadata.namespace]
+      - select: { kind: Application, name: node-deploy-env-namespaces }
         fieldPaths: [metadata.namespace]
 
 images:
@@ -177,15 +183,20 @@ patches:
           kind: ServiceAccount
           name: operator-node-deploy-sequencer
           namespace: cogni-production
-  # task.5405 — the admission bound on the sequencer's ExternalSecrets applies to THIS env's dedicated
-  # namespace only (base/node-deploy-sequencer/admission-policy.yaml).
+  # task.5405 — the admission bound on the sequencer's ExternalSecrets applies to the dedicated namespaces
+  # only (base/node-deploy-sequencer/admission-policy.yaml). story.5137: one per env this sequencer serves
+  # (NODE_DEPLOY_ENVS below); the policy derives `<env>` from each namespace's own name, so each
+  # namespace can read only `<its env>/<slug>`.
   - target:
       kind: ValidatingAdmissionPolicyBinding
       name: node-deploy-sequencer-externalsecrets
     patch: |
       - op: replace
         path: /spec/matchResources/namespaceSelector/matchExpressions/0/values
-        value: [cogni-node-deploy-production]
+        value:
+          - cogni-node-deploy-production
+          - cogni-node-deploy-candidate-a
+          - cogni-node-deploy-preview
   # task.5400 — same BY-NAME env rule as the actuator and pump patches.
   - target:
       kind: Deployment
@@ -214,6 +225,21 @@ patches:
                   # (Temporal 7233, Redis 6379, LiteLLM 4000, worker health 30900) answers on.
                   - name: NODE_DEPLOY_SUBSTRATE_HOST
                     value: cogni.vm.cognidao.org
+                  # story.5137 — ONE FRONT DOOR: this one sequencer process (one leader lock, one DB
+                  # connection) serves every env this cluster controls. The fleet control env reconciles
+                  # EVERY Akash lane, so the production cluster owns candidate-a and preview for canonical
+                  # nodes. Each env's secrets namespace is `cogni-node-deploy-<env>` (derived); each env's
+                  # shared substrate answers on its own VM alias (`vm_host_for_env`).
+                  - name: NODE_DEPLOY_ENVS
+                    value: candidate-a,preview,production
+                  # story.5137 CD4 — the org that owns this fleet's node repos. Every env's edge guard admits
+                  # only catalog nodes this org owns (the route applies the same filter against
+                  # NODE_SUBMODULE_PARENT_OWNER), so this process never deploys another fleet's node. Unset
+                  # admits no remote-source node (fail closed).
+                  - name: NODE_DEPLOY_FLEET_OWNER
+                    value: cogni-dao
+                  - name: NODE_DEPLOY_SUBSTRATE_HOSTS
+                    value: candidate-a=cogni-candidate-a.vm.cognidao.org,preview=cogni-preview.vm.cognidao.org,production=cogni.vm.cognidao.org
                   # YELLOW, INTERIM (owner task.5384, EXPIRES 2026-11-23): the providers whose egress
                   # is measured AND admitted to the shared substrate's firewall allowlist (zencloud BE,
                   # ithub UA, h4i PT, h6i BG). Sent as `allowProviders` on every node APP create; the
@@ -369,6 +395,12 @@ patches:
       - op: add
         path: /data/FLEET_CONTROL_ENV
         value: "production"
+      # story.5137 ONE FRONT DOOR: the envs this deployment's node-deploy sequencer serves. The node-deploy
+      # route refuses any other env (and any node this fleet does not own); the sequencer env of the same
+      # name (above) is the other half. One list, two readers.
+      - op: add
+        path: /data/NODE_DEPLOY_ENVS
+        value: "candidate-a,preview,production"
       - op: replace
         path: /data/TEMPORAL_NAMESPACE
         value: "cogni-production"

@@ -13,7 +13,8 @@
  *   - OPERATOR_LOCAL_NOT_SHARED: operator operational Postgres, never `@cogni/db-schema` and never
  *     Doltgres. These rows are system-of-record deploy history, not AI-refined knowledge.
  *   - RELEASE_IS_IMMUTABLE: a release row is written once. A new sha is a NEW release; nothing
- *     updates `spec` or `source_sha`.
+ *     updates `spec` or `source_sha`. The one exception is `resolved_image`: written once, only while
+ *     NULL, when the sequencer resolves a pending image (story.5137).
  *   - ATTEMPT_ROW_BEFORE_CREATE: an attempt row (phase `planned`) is durable BEFORE the paid
  *     create is sent, so a crash can never leak a paid lease nobody can find.
  *   - KEY_IS_NEVER_REUSED: `cogni_key` is globally unique and embeds `(release, attempt)`; every
@@ -65,6 +66,12 @@ export const nodeWorkloadReleases = pgTable(
     sourceSha: text("source_sha").notNull(),
     /** The resolved `NodeWorkloadSpec` as declared at `source_sha`. */
     spec: jsonb("spec").notNull(),
+    /**
+     * The `repo@sha256:<digest>` a pending-image release (`spec.imagePending`) deploys. The ONE mutable
+     * release field: written once by the sequencer (`UPDATE ... WHERE resolved_image IS NULL`) when the
+     * registry has the image, never changed after. NULL for a release whose spec was digest-pinned.
+     */
+    resolvedImage: text("resolved_image"),
     createdBy: text("created_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

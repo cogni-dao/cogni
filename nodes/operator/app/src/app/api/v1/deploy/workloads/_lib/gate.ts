@@ -4,12 +4,13 @@
 /**
  * Module: `@app/api/v1/deploy/workloads/_lib/gate`
  * Purpose: The shared front-door checks of the node-deploy routes (record, read, game-day): node lookup,
- *   billing account, the per-env authorization gate, and the env-binding refusal (task.5400).
+ *   billing account, the per-env authorization gate, and the node's image-baked catalog row (task.5400).
  * Scope: Request-time checks only; reads nothing from GitHub and writes nothing.
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: production -> `node.promote_production`; candidate-a/preview ->
  *     `node.manage_envs`. A denial or an unavailable authorizer is a refusal.
- *   - ENV_BINDING (CD4): the env must equal this deployment's DEPLOY_ENVIRONMENT.
+ *   - CATALOG_ROW_AFTER_AUTHZ: the node's catalog row (the lane refusals in `./lane` decide from it) is
+ *     read from the image only after the authorization check allows.
  * Side-effects: IO (Postgres reads, authz check)
  * @internal
  */
@@ -18,33 +19,18 @@ import type { AuthzDecisionCode } from "@cogni/authorization-core";
 import { billingAccounts } from "@cogni/db-schema/refs";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { createNodeCatalog } from "@/bootstrap/capabilities/node-catalog";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { nodes } from "@/shared/db/nodes";
-import { serverEnv } from "@/shared/env";
-
-/**
- * ENV_BINDING (CD4): this deployment's sequencer serves ONE environment (its DEPLOY_ENVIRONMENT).
- * A request for any other env would record a release no sequencer here will ever execute (or, worse,
- * one a differently-wired sequencer would), so it is refused before anything is read or written.
- */
-export function envNotServed(env: string): NextResponse | undefined {
-  const served = serverEnv().DEPLOY_ENVIRONMENT;
-  if (!served)
-    return NextResponse.json(
-      { error: "deploy_environment_not_configured" },
-      { status: 503 }
-    );
-  if (served !== env)
-    return NextResponse.json(
-      { error: "env_not_served", served },
-      { status: 409 }
-    );
-  return undefined;
-}
 
 export type Gate =
-  | { ok: true; node: { id: string; slug: string } }
+  | {
+      ok: true;
+      node: { id: string; slug: string };
+      /** The node's image-baked catalog row; undefined when the image does not know the node. */
+      catalogRow: unknown;
+    }
   | { ok: false; response: NextResponse };
 
 /** Node lookup + billing account + per-env authorization, shared by POST and GET. */
@@ -103,5 +89,6 @@ export async function gate(
       ),
     };
   }
-  return { ok: true, node };
+  const entry = await createNodeCatalog().entryFor(node.id);
+  return { ok: true, node, catalogRow: entry?.row };
 }

@@ -27,7 +27,6 @@ import { describe, expect, it } from "vitest";
 import {
   DeclarationError,
   hostForEnv,
-  needsBuiltImage,
   resolveWorkloadDeclaration,
 } from "./declarations";
 
@@ -141,23 +140,19 @@ describe("the operator's checked-in canary workload manifest", () => {
         issues: [expect.objectContaining({ code: "built_image_unresolved" })],
       })
     );
-    const thrown = (fn: () => unknown): DeclarationError => {
-      try {
-        fn();
-      } catch (error) {
-        return error as DeclarationError;
-      }
-      throw new Error("expected a DeclarationError");
-    };
-    expect(needsBuiltImage(thrown(() => resolve({ manifests: [built] })))).toBe(
-      true
-    );
-    const exclusive = CANARY.text.replace('"false"', '"true"');
-    expect(
-      needsBuiltImage(
-        thrown(() => resolve({ manifests: [{ ...CANARY, text: exclusive }] }))
-      )
-    ).toBe(false);
+    // ALWAYS_DEFER (story.5137): the caller can defer the digest; the app is then pending on its tag
+    const tag = `ghcr.io/cogni-dao/toks5:sha-${"a".repeat(40)}`;
+    const pending = resolve({ manifests: [built], pendingImage: tag });
+    expect(pending.image).toBe(tag);
+    expect(pending.imagePending).toBe(true);
+    // a digest, when supplied, wins over a deferred ref and the spec is not pending
+    const pinned = resolve({
+      manifests: [built],
+      builtImage: digest,
+      pendingImage: tag,
+    });
+    expect(pinned.image).toBe(digest);
+    expect(pinned.imagePending).toBeUndefined();
   });
 
   it("refuses another node's id, an undeclared workload, no manifests and an unparseable repo-spec", () => {

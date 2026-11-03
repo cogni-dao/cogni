@@ -28,6 +28,12 @@
  *   - LOST_MEANS_CHAIN_TRUTH: a lease is lost only when chain/observe say closed or insufficient_funds,
  *     or it fails its proof for `unhealthyLostMs` (15 min) straight. A single miss is not a loss.
  *   - ONE_RUNNER_PER_WORKLOAD: `step` and `reconcile` never overlap for one workload key.
+ *   - IMAGE_PINNED_BEFORE_PAY (story.5137): a release recorded before node CI published its image
+ *     (`spec.imagePending`) waits as `DependencyNotReady` (no attempt row, nothing paid) until the registry
+ *     has `sha-<sha>`; the digest is then pinned WRITE-ONCE on the release, so every attempt deploys one
+ *     image. After `imageAlertMs` unpublished it raises `alert/image_not_published`.
+ *   - LATEST_RELEASE_WINS: the desired row points at the newest release of a workload, so an older release
+ *     that never started (e.g. its image never appeared) is superseded and is never given an attempt.
  *   - ONE_EMIT_HELPER: every event (step, provider strike, alert) is written by `record`, which logs the
  *     Loki line AND appends the same step to the attempt's durable timeline; a failed append is logged
  *     and never fails a deploy decision.
@@ -36,6 +42,7 @@
  */
 
 import type {
+  BuiltImageResolverPort,
   ChainTruthPort,
   NodeCatalogPort,
   NodeRuntimeSecretsPort,
@@ -50,6 +57,7 @@ import {
   type AttemptPatch,
   type AttemptRow,
   type AttemptStep,
+  BuiltImageRegistryError,
   buildCogniKey,
   buildIdentity,
   consecutiveFailures,
@@ -102,6 +110,11 @@ export interface SequencerConfig {
   readonly unhealthyLostMs: number;
   readonly pollMs: number;
   /**
+   * A release whose image is still not in the registry this long after it was recorded raises
+   * `alert/image_not_published` (once per throttle window). Nothing is paid while it waits (story.5137).
+   */
+  readonly imageAlertMs: number;
+  /**
    * INTERIM provider allowlist for node APP creates (task.5405): the providers whose egress is
    * measured AND admitted to the shared substrate. Sent as `allowProviders` on every app create; the
    * actuator intersects it with its own allowlist and refuses on an empty intersection. State
@@ -125,6 +138,7 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
   inflightGraceMs: 900_000,
   unhealthyLostMs: 900_000,
   pollMs: 3_000,
+  imageAlertMs: 1_800_000,
 };
 
 /**
@@ -147,6 +161,11 @@ export interface SequencerDeps {
   readonly secrets: SecretsPort;
   readonly runtime?: NodeAppRuntimeDeps;
   readonly chain?: ChainTruthPort;
+  /**
+   * Resolves a pending release image (`<repo>:sha-<sha>`) to its digest (story.5137). Absent (dev harness):
+   * a release with a pending image waits as `DependencyNotReady` and is never created.
+   */
+  readonly images?: BuiltImageResolverPort;
   readonly clock: SequencerClock;
   readonly log: SequencerLog;
   readonly config: SequencerConfig;
@@ -294,8 +313,12 @@ export class NodeDeploySequencer {
       return "parked";
     }
 
+    let deployable: ReleaseRow;
     try {
-      await this.resolveEnv(key, release);
+      // The image first: a pending image (`<repo>:sha-<sha>`) is resolved to a digest ONCE, pinned
+      // write-once on the release, and only then can an attempt exist (ALWAYS_DEFER, story.5137).
+      deployable = await this.pinImage(key, release);
+      await this.resolveEnv(key, deployable);
     } catch (error) {
       if (error instanceof DependencyNotReady) {
         await this.emit(key, release, undefined, "dependency", "waiting", {
@@ -318,8 +341,52 @@ export class NodeDeploySequencer {
     await this.emit(key, release, attempt, "attempt_planned", "ok", {
       blue: active?.externalName,
     });
-    await this.drive(key, release, attempt, active);
+    await this.drive(key, deployable, attempt, active);
     return "driven";
+  }
+
+  /**
+   * ALWAYS_DEFER (story.5137): a release recorded before node CI published its image carries
+   * `<repo>:sha-<sha>` with `imagePending`. This resolves the digest through the registry port and pins it
+   * write-once on the release (`pinResolvedImage`), so every attempt of the release deploys ONE image and a
+   * mutable tag never reaches a paid create. Until the image exists it is `DependencyNotReady`: no attempt
+   * row, nothing paid, retried next tick; past `imageAlertMs` it also raises `alert/image_not_published`.
+   * A release whose image is already pinned (the store returns it normalized) passes through untouched.
+   */
+  private async pinImage(
+    key: WorkloadKey,
+    release: ReleaseRow
+  ): Promise<ReleaseRow> {
+    const w = release.spec;
+    if (!w.imagePending) return release;
+    const m = /^(.+):sha-([0-9a-f]{40})$/u.exec(w.image);
+    if (!m?.[1] || !m[2])
+      throw new DependencyNotReady(`pending image ${w.image} is malformed`);
+    if (!this.d.images)
+      throw new DependencyNotReady("no image resolver is configured");
+    let digest: string | null;
+    try {
+      digest = await this.d.images.resolveBuiltImage({
+        imageRepository: m[1],
+        sourceSha: m[2],
+      });
+    } catch (error) {
+      if (error instanceof BuiltImageRegistryError)
+        throw new DependencyNotReady(
+          `image registry unavailable: ${error.message.slice(0, 200)}`
+        );
+      throw error;
+    }
+    if (digest === null) {
+      const waitedMs = this.d.clock.now() - release.createdAt.getTime();
+      if (waitedMs >= this.d.config.imageAlertMs)
+        await this.alert(key, release, undefined, "image_not_published", {
+          waitedMs,
+          image: w.image,
+        });
+      throw new DependencyNotReady(`image ${w.image} is not published yet`);
+    }
+    return this.d.store.pinResolvedImage(release.id, digest);
   }
 
   /**

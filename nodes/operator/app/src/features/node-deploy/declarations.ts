@@ -17,9 +17,11 @@
  *     workload names) before any one workload resolves, so a refused sibling refuses the release.
  *   - EXCLUSIVE_IS_REFUSED (CD6): the manifest check refuses `cogni.dev/exclusive: "true"`, because
  *     blue and green overlap and the fenced lock that makes that safe is not built yet.
- *   - BUILT_IMAGE_IS_DIGEST_PINNED: an image of `.` lowers to the `builtImage` the caller resolved from
- *     the node's registry at the source sha (`repo@sha256:<digest>`); with none supplied it is refused
- *     `built_image_unresolved`, so a mutable tag can never reach a release.
+ *   - BUILT_IMAGE_IS_DIGEST_PINNED: an image of `.` lowers to the `builtImage` digest the caller resolved
+ *     (`repo@sha256:<digest>`), or, when the caller defers (`pendingImage`, ALWAYS_DEFER, story.5137), to
+ *     `<image_repository>:sha-<sha>` with `imagePending: true`; the sequencer pins the digest write-once
+ *     before the first paid create. With neither it is refused `built_image_unresolved`, so a mutable tag
+ *     never reaches a create.
  *   - SECRET_KEYS_ARE_DECLARED_NOT_DISCOVERED (task.5405): an `app` carries the explicit, value-free list
  *     of secret KEY names it may receive: the `cogni-node-app-v1` profile keys plus the app service's
  *     declared `secret_refs` (`resolveRuntimeProfileSecretRefs`, the helper the Crossplane lane used).
@@ -84,19 +86,6 @@ export class DeclarationError extends Error {
   }
 }
 
-/**
- * True when the manifests were refused ONLY because an image of `.` had no built image supplied, so
- * the caller can resolve the digest node CI built at the source sha and retry (story.5127). A set
- * with any other issue is not retried: the digest lookup could not make it pass.
- */
-export function needsBuiltImage(error: DeclarationError): boolean {
-  return (
-    error.code === "workload_manifest_refused" &&
-    error.issues.length > 0 &&
-    error.issues.every((i) => i.code === "built_image_unresolved")
-  );
-}
-
 export function resolveWorkloadDeclaration(input: {
   readonly repoSpecText: string;
   readonly manifests: readonly WorkloadManifestFile[];
@@ -105,6 +94,8 @@ export function resolveWorkloadDeclaration(input: {
   readonly workload: string;
   /** The digest-pinned image node CI built at the source sha; resolves a manifest image of `.`. */
   readonly builtImage?: string | undefined;
+  /** `<image_repository>:sha-<sha>`: defers a manifest image of `.` to the sequencer (story.5137). */
+  readonly pendingImage?: string | undefined;
 }): NodeWorkloadSpec {
   // NO_SOURCE_ECHO: parse the YAML without pretty errors, and never return the parser's or the
   // schema's message (either can quote repo-spec text).
@@ -136,10 +127,10 @@ export function resolveWorkloadDeclaration(input: {
     );
   let workloads: NodeWorkloadSpec[];
   try {
-    workloads = lowerWorkloadManifests(
-      input.manifests,
-      input.builtImage ? { builtImage: input.builtImage } : {}
-    );
+    workloads = lowerWorkloadManifests(input.manifests, {
+      ...(input.builtImage ? { builtImage: input.builtImage } : {}),
+      ...(input.pendingImage ? { pendingImage: input.pendingImage } : {}),
+    });
   } catch (error) {
     if (error instanceof WorkloadManifestError)
       throw new DeclarationError(

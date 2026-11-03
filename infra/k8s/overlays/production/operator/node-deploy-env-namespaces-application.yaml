@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# story.5137 — delivers the candidate-a and preview secrets namespaces + RBAC of the production node-deploy
+# sequencer (../node-deploy-envs). A sibling Application because this overlay's `namespace:` transformer
+# cannot carry a second Namespace object (see ../node-deploy-envs/kustomization.yaml).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: node-deploy-env-namespaces
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: deploy/production-operator
+    path: infra/k8s/overlays/production/node-deploy-envs
+  destination: { server: https://kubernetes.default.svc, namespace: argocd }
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [ServerSideApply=true]

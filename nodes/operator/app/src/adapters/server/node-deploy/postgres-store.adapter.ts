@@ -7,7 +7,8 @@
  *   `node_workload_desired` / `node_workload_releases` / `node_workload_attempts` (task.5400).
  * Scope: Reads and writes those three tables. No deploy policy.
  * Invariants:
- *   - RELEASE_IS_IMMUTABLE: `recordRelease` only INSERTs a release; nothing updates one.
+ *   - RELEASE_IS_IMMUTABLE: `recordRelease` only INSERTs a release; nothing updates one except
+ *     `pinResolvedImage`, which writes `resolved_image` once (`WHERE resolved_image IS NULL`).
  *   - RELEASE_AND_DESIRED_ARE_ONE_TRANSACTION: a release is never visible without desired pointing at
  *     it, and desired never points at a release that does not exist.
  *   - ORDINAL_IS_STORE_ALLOCATED: the attempt ordinal is `max+1` inside the insert transaction, with a
@@ -32,7 +33,7 @@ import type {
   StorePort,
   WorkloadKey,
 } from "@/ports";
-import { MAX_ATTEMPT_STEPS } from "@/ports";
+import { MAX_ATTEMPT_STEPS, withResolvedImage } from "@/ports";
 import {
   nodeWorkloadAttempts,
   nodeWorkloadDesired,
@@ -69,7 +70,11 @@ function toRelease(r: ReleaseDb): ReleaseRow {
     env: r.env,
     workload: r.workload,
     sourceSha: r.sourceSha,
-    spec: nodeWorkloadSpecSchema.parse(r.spec),
+    spec: withResolvedImage(
+      nodeWorkloadSpecSchema.parse(r.spec),
+      r.resolvedImage ?? undefined
+    ),
+    resolvedImage: r.resolvedImage ?? undefined,
     createdBy: r.createdBy,
     createdAt: r.createdAt,
   };
@@ -158,6 +163,25 @@ export class PostgresNodeDeployStore implements StorePort {
       .where(eq(nodeWorkloadReleases.id, id))
       .limit(1);
     return row ? toRelease(row) : undefined;
+  }
+
+  async pinResolvedImage(
+    releaseId: string,
+    image: string
+  ): Promise<ReleaseRow> {
+    // WRITE_ONCE: only the first writer sets it; a loser (or a retry) reads the row that won.
+    await this.db
+      .update(nodeWorkloadReleases)
+      .set({ resolvedImage: image })
+      .where(
+        and(
+          eq(nodeWorkloadReleases.id, releaseId),
+          sql`${nodeWorkloadReleases.resolvedImage} IS NULL`
+        )
+      );
+    const release = await this.getRelease(releaseId);
+    if (!release) throw new Error(`release ${releaseId} not found`);
+    return release;
   }
 
   async recordRelease(

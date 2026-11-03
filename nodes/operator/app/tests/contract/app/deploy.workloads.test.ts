@@ -9,7 +9,7 @@
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: production -> `node.promote_production`; candidate-a/preview ->
  *     `node.manage_envs`; a denial reads nothing from GitHub and writes nothing.
- *   - NODE_DEPLOYS_FROM_ITS_OWN_REPO: the repo is the catalog-resolved `resolveNodeSource`; the
+ *   - NODE_DEPLOYS_FROM_ITS_OWN_REPO: the repo is resolved from the IMAGE catalog (story.5137); the
  *     operator is in-repo, so the parent repo (the remote-source case lives in the route's own test).
  *   - INTENT_ONLY: 200 means a release was recorded; this route never pays or touches DNS.
  * Side-effects: none
@@ -37,7 +37,6 @@ const CANARY_PATH = ".cogni/workloads/canary.yaml";
 const CANARY = readFileSync(path.join(ROOT, CANARY_PATH), "utf8");
 
 const plane = vi.hoisted(() => ({
-  resolveNodeSource: vi.fn(),
   fetchFileText: vi.fn(),
   listDirectoryEntries: vi.fn(),
 }));
@@ -186,12 +185,8 @@ describe("/api/v1/deploy/workloads", () => {
       [".cogni/repo-spec.yaml", ROOT_SPEC],
       [CANARY_PATH, CANARY],
     ]);
-    // The operator is an in-repo node: its source is the parent repo and it has no image repository.
-    plane.resolveNodeSource.mockResolvedValue({
-      owner: "test-owner",
-      repo: "test-repo",
-      imageRepository: null,
-    });
+    // The operator is an in-repo node: the IMAGE catalog resolves its source to the parent repo and it has
+    // no image repository (story.5137).
     plane.fetchFileText.mockImplementation(
       async ({ path: p }: { path: string }) => files.byPath.get(p) ?? null
     );
@@ -278,11 +273,6 @@ describe("/api/v1/deploy/workloads", () => {
         sourceSha: SHA,
         desiredState: "running",
       });
-      expect(plane.resolveNodeSource).toHaveBeenCalledWith({
-        parentOwner: "test-owner",
-        parentRepo: "test-repo",
-        slug: "operator",
-      });
       expect(plane.fetchFileText).toHaveBeenCalledWith({
         owner: "test-owner",
         repo: "test-repo",
@@ -325,15 +315,16 @@ describe("/api/v1/deploy/workloads", () => {
     it("404 for an undeclared workload; 422 when the repo-spec belongs to another node; 422 when absent at the sha", async () => {
       expect((await post({ ...valid, workload: "nope" })).status).toBe(404);
       dbState.call = 0;
-      dbState.node = {
-        id: "00000000-0000-4000-8000-000000000001",
-        slug: "other",
-      };
+      // the repo at this sha declares another node's id
+      files.byPath.set(
+        ".cogni/repo-spec.yaml",
+        ROOT_SPEC.replaceAll(NODE_ID, "00000000-0000-4000-8000-000000000001")
+      );
       const mismatch = await post(valid);
       expect(mismatch.status).toBe(422);
       expect((await mismatch.json()).error).toBe("node_mismatch");
       dbState.call = 0;
-      dbState.node = { id: NODE_ID, slug: "operator" };
+      files.byPath.set(".cogni/repo-spec.yaml", ROOT_SPEC);
       files.byPath.delete(".cogni/repo-spec.yaml");
       expect((await post(valid)).status).toBe(422);
       expect(store.recordRelease).not.toHaveBeenCalled();
@@ -430,7 +421,7 @@ describe("/api/v1/deploy/workloads", () => {
         expect(res.status).toBe(409);
         expect(await res.json()).toEqual({
           error: "env_not_served",
-          served: "production",
+          served: ["production"],
         });
       }
       expect(plane.fetchFileText).not.toHaveBeenCalled();
@@ -472,16 +463,22 @@ describe("/api/v1/deploy/workloads", () => {
       expect(store.recordRelease).not.toHaveBeenCalled();
     });
 
-    it("G4: canary-db is admitted only for the operator's own node", async () => {
-      operatorNode.id = "00000000-0000-4000-8000-0000000000aa";
-      try {
-        const res = await post({ ...valid, workload: "canary-db" });
-        expect(res.status).toBe(422);
-        expect((await res.json()).error).toBe("state_admission_refused");
-        expect(store.recordRelease).not.toHaveBeenCalled();
-      } finally {
-        operatorNode.id = NODE_ID;
-      }
+    it("G4: canary-db is admitted only for the operator's own node (poly is a node-deploy node of this fleet in production)", async () => {
+      const POLY_ID = "4b06359a-a859-4399-888e-a8c7a6696f7e";
+      dbState.node = { id: POLY_ID, slug: "poly" };
+      envState.NODE_SUBMODULE_PARENT_OWNER = "cogni-dao";
+      files.byPath.set(
+        ".cogni/repo-spec.yaml",
+        ROOT_SPEC.replaceAll(NODE_ID, POLY_ID)
+      );
+      const res = await post({
+        ...valid,
+        nodeId: POLY_ID,
+        workload: "canary-db",
+      });
+      expect(res.status).toBe(422);
+      expect((await res.json()).error).toBe("state_admission_refused");
+      expect(store.recordRelease).not.toHaveBeenCalled();
     });
 
     it("G4 is production-only: candidate-a admits a new state", async () => {

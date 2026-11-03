@@ -17,7 +17,8 @@
  *     and so is any entry in `.cogni/workloads/` that is not a `*.yaml` file.
  *   - BOUNDED_INPUT: a manifest over 64 KiB is refused before YAML parsing or any regex runs on it.
  *   - DIGEST_OR_BUILT: an image is pinned by `@sha256:`, or is `.` (the image node CI built at the
- *     source sha, which the caller must pass as `builtImage`).
+ *     source sha, which the caller passes as `builtImage` (a digest) or as `pendingImage`
+ *     (`<repo>:sha-<sha>`, the app is then `imagePending` and the sequencer pins the digest, story.5137).
  *   - EXCLUSIVE_REQUIRED: `cogni.dev/exclusive` must be present and `"false"`; `"true"` is refused
  *     until the single-leader fence ships (CD6). Only `exclusive`, `version-path` and
  *     `ephemeral-storage` exist under `cogni.dev/`.
@@ -778,8 +779,14 @@ function yamlErrorSummary(error: unknown, text: string): string {
 }
 
 export interface LowerWorkloadOptions {
-  /** The digest-pinned image node CI built at the source sha; required when an image is `.`. */
+  /** The digest-pinned image node CI built at the source sha; resolves an image of `.`. */
   readonly builtImage?: string;
+  /**
+   * `<image_repository>:sha-<sha>`: resolves an image of `.` to the tag node CI will publish and marks the
+   * app `imagePending`, so the caller never waits on CI at record time (story.5137). The sequencer
+   * resolves it to a digest before the first paid create. Ignored when `builtImage` is given.
+   */
+  readonly pendingImage?: string;
 }
 
 function lowerValidated(
@@ -828,8 +835,12 @@ function lowerValidated(
   const storage = annotations[ANNOTATION.ephemeralStorage];
 
   let image = c.image;
+  let imagePending = false;
   if (image === BUILT_IMAGE_REF) {
-    if (!options.builtImage)
+    if (!options.builtImage && options.pendingImage) {
+      image = options.pendingImage;
+      imagePending = true;
+    } else if (!options.builtImage)
       throw new WorkloadManifestError([
         {
           code: "built_image_unresolved",
@@ -837,13 +848,14 @@ function lowerValidated(
           message: `image "${BUILT_IMAGE_REF}" needs the digest node CI built at the source sha; it was not supplied`,
         },
       ]);
-    image = options.builtImage;
+    else image = options.builtImage;
   }
 
   const app = {
     name: m.metadata.name,
     kind: "app" as const,
     image,
+    ...(imagePending ? { imagePending: true as const } : {}),
     ...(command.length > 0 ? { command } : {}),
     port: servicePort?.targetPort ?? servicePort?.port,
     expose: { http: { host: route?.params?.host } },

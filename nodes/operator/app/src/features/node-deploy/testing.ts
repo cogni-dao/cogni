@@ -37,7 +37,12 @@ import type {
   StorePort,
   WorkloadKey,
 } from "@/ports";
-import { keyString, MAX_ATTEMPT_STEPS, PayerError } from "@/ports";
+import {
+  keyString,
+  MAX_ATTEMPT_STEPS,
+  PayerError,
+  withResolvedImage,
+} from "@/ports";
 
 export const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
 export const ENV = "production";
@@ -119,6 +124,22 @@ export class MemoryStore implements StorePort {
   }
   async getRelease(id: string): Promise<ReleaseRow | undefined> {
     return this.releases.get(id);
+  }
+  /** Mirrors the Postgres store: write-once pin, and the returned spec is normalized. */
+  async pinResolvedImage(
+    releaseId: string,
+    image: string
+  ): Promise<ReleaseRow> {
+    const cur = this.releases.get(releaseId);
+    if (!cur) throw new Error(`release ${releaseId} not found`);
+    if (cur.resolvedImage !== undefined) return cur;
+    const next: ReleaseRow = {
+      ...cur,
+      spec: withResolvedImage(cur.spec, image),
+      resolvedImage: image,
+    };
+    this.releases.set(releaseId, next);
+    return next;
   }
   async recordRelease(
     input: RecordReleaseInput

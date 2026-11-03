@@ -30,7 +30,8 @@ import {
 } from "@/contracts/deploy.workloads.v1.contract";
 import { buildReleaseDetail } from "@/features/node-deploy/release-view";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
-import { envNotServed, gate } from "../../_lib/gate";
+import { gate } from "../../_lib/gate";
+import { envNotServed } from "../../_lib/lane";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -60,7 +61,7 @@ export const GET = wrapRouteHandlerWithLogging<{
       const g = await gate(sessionUser.id, nodeId, env);
       targetNodeId = g.ok ? g.node.id : undefined;
       if (!g.ok) return g.response;
-      const wrongEnv = envNotServed(env);
+      const wrongEnv = envNotServed(env, g.node.id, g.catalogRow);
       if (wrongEnv) return wrongEnv;
 
       const store = createNodeDeployStore();

@@ -5,9 +5,9 @@
  * Module: `@tests/ci-invariants/node-deploy-sequencer-admission`
  * Purpose: Keep the node-deploy sequencer from reading any OpenBao bucket that is not a node's own, because only a cluster-side admission policy stops it.
  * Scope: Reads the base policy and both overlay kustomizations as YAML (no kubectl needed, so CI always asserts it); does not evaluate CEL or contact a cluster.
- * Invariants: Policy ships fail-closed in base and both overlays • The binding selects only its own namespace • Every non-node bucket is named
+ * Invariants: Policy ships fail-closed in base and overlays • Each binding selects exactly the env namespaces its sequencer serves • Extra env namespaces carry the base Role rules
  * Side-effects: IO (reads reviewed manifests)
- * Links: task.5405, infra/k8s/base/node-deploy-sequencer/admission-policy.yaml
+ * Links: task.5405, story.5137, infra/k8s/base/node-deploy-sequencer/admission-policy.yaml
  * @internal
  */
 
@@ -40,6 +40,26 @@ interface Kustomization {
   resources: string[];
   namePrefix?: string;
   patches?: { target?: { kind?: string; name?: string }; patch?: string }[];
+}
+
+interface DeploymentPatch {
+  spec: {
+    template: {
+      spec: { containers: { env: { name: string; value: string }[] }[] };
+    };
+  };
+}
+
+/** The `value` of one env var the overlay sets BY NAME on the sequencer Deployment. */
+function sequencerEnv(kustomization: Kustomization, name: string) {
+  const patch = kustomization.patches?.find(
+    (p) =>
+      p.target?.kind === "Deployment" &&
+      p.target.name === "node-deploy-sequencer"
+  );
+  const doc = yaml.parse(patch?.patch ?? "") as DeploymentPatch;
+  return doc.spec.template.spec.containers[0]?.env.find((e) => e.name === name)
+    ?.value;
 }
 
 const base = yaml
@@ -158,13 +178,20 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
       path: string;
       value: string[];
     }[];
-    expect(ops).toEqual([
-      {
-        op: "replace",
-        path: "/spec/matchResources/namespaceSelector/matchExpressions/0/values",
-        value: [`cogni-node-deploy-${env}`],
-      },
-    ]);
+    // the namespaces this env's sequencer serves: its NODE_DEPLOY_ENVS (story.5137), else only itself
+    const served = sequencerEnv(kustomization, "NODE_DEPLOY_ENVS")?.split(
+      ","
+    ) ?? [env];
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatchObject({
+      op: "replace",
+      path: "/spec/matchResources/namespaceSelector/matchExpressions/0/values",
+    });
+    expect([...(ops[0]?.value ?? [])].sort()).toEqual(
+      served.map((e) => `cogni-node-deploy-${e}`).sort()
+    );
+    // the env's OWN namespace is always bound (the policy derives the env from the namespace name)
+    expect(ops[0]?.value).toContain(`cogni-node-deploy-${env}`);
     // the base binding selects by namespace name, so the patch above is what scopes it
     expect(
       binding?.spec.matchResources?.namespaceSelector.matchExpressions
@@ -183,5 +210,147 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
       .map((d) => d.toJS() as { kind: string });
     expect(rbac.some((d) => d.kind === "Role")).toBe(true);
     expect(rbac.some((d) => d.kind === "ClusterRole")).toBe(false);
+  });
+
+  describe("one front door: the production sequencer serves every env its cluster controls (story.5137)", () => {
+    const production = yaml.parse(
+      read("infra/k8s/overlays/production/operator/kustomization.yaml")
+    ) as Kustomization;
+    const envs = (sequencerEnv(production, "NODE_DEPLOY_ENVS") ?? "").split(
+      ","
+    );
+    const baseRole = yaml
+      .parseAllDocuments(read("infra/k8s/base/node-deploy-sequencer/rbac.yaml"))
+      .map((d) => d.toJS() as { kind: string; rules?: unknown })
+      .find((d) => d.kind === "Role")?.rules;
+
+    it("serves exactly candidate-a, preview and production, and the app config names the SAME list (one list, two readers)", () => {
+      expect(envs).toEqual(["candidate-a", "preview", "production"]);
+      const configPatch = production.patches?.find(
+        (p) =>
+          p.target?.kind === "ConfigMap" && p.target.name === "node-app-config"
+      );
+      const ops = yaml.parse(configPatch?.patch ?? "") as {
+        path: string;
+        value: string;
+      }[];
+      expect(ops.find((o) => o.path === "/data/NODE_DEPLOY_ENVS")?.value).toBe(
+        envs.join(",")
+      );
+    });
+
+    it("each served env has its own dedicated namespace the admission binding selects: production from the operator overlay, the others from the sibling Application", () => {
+      const primary = "cogni-node-deploy-production";
+      const namespaces = (file: string) =>
+        yaml
+          .parseAllDocuments(read(file))
+          .map((d) => d.toJS() as { kind: string; metadata: { name: string } })
+          .filter((d) => d.kind === "Namespace")
+          .map((d) => d.metadata.name);
+      expect(
+        namespaces(
+          "infra/k8s/overlays/production/operator/node-deploy-secrets-namespace.yaml"
+        )
+      ).toEqual([primary]);
+      const extra = namespaces(
+        "infra/k8s/overlays/production/node-deploy-envs/namespaces.yaml"
+      );
+      expect(extra).toEqual(
+        envs
+          .filter((e) => e !== "production")
+          .map((e) => `cogni-node-deploy-${e}`)
+      );
+      const patch = production.patches?.find(
+        (p) => p.target?.kind === "ValidatingAdmissionPolicyBinding"
+      );
+      const bound = (yaml.parse(patch?.patch ?? "") as { value: string[] }[])[0]
+        ?.value;
+      expect([...(bound ?? [])].sort()).toEqual(
+        envs.map((e) => `cogni-node-deploy-${e}`).sort()
+      );
+      // the policy derives <env> from the namespace name, so every bound namespace must be exactly that shape
+      for (const ns of bound ?? [])
+        expect(ns).toMatch(/^cogni-node-deploy-[a-z-]+$/);
+    });
+
+    it("every extra env namespace has the base Role's rules, bound to the sequencer ServiceAccount, in its OWN namespace, with no ClusterRole", () => {
+      const docs = yaml
+        .parseAllDocuments(
+          read("infra/k8s/overlays/production/node-deploy-envs/rbac.yaml")
+        )
+        .map(
+          (d) =>
+            d.toJS() as {
+              kind: string;
+              metadata: { name: string; namespace: string };
+              rules?: unknown;
+              subjects?: { kind: string; name: string; namespace: string }[];
+            }
+        );
+      expect(
+        docs.some(
+          (d) => d.kind === "ClusterRole" || d.kind === "ClusterRoleBinding"
+        )
+      ).toBe(false);
+      for (const env of envs.filter((e) => e !== "production")) {
+        const ns = `cogni-node-deploy-${env}`;
+        const role = docs.find(
+          (d) => d.kind === "Role" && d.metadata.namespace === ns
+        );
+        expect(role?.rules, `${ns} Role rules`).toEqual(baseRole);
+        const binding = docs.find(
+          (d) => d.kind === "RoleBinding" && d.metadata.namespace === ns
+        );
+        expect(binding?.subjects).toEqual([
+          {
+            kind: "ServiceAccount",
+            name: "operator-node-deploy-sequencer",
+            namespace: "cogni-production",
+          },
+        ]);
+      }
+      // nothing in the sibling directory lives in the wallet namespace
+      for (const d of docs)
+        expect(d.metadata.namespace).not.toBe("cogni-production");
+    });
+
+    it("the operator overlay delivers the sibling directory through an Application at the production deploy ref", () => {
+      expect(production.resources).toContain(
+        "./node-deploy-env-namespaces-application.yaml"
+      );
+      const app = yaml.parse(
+        read(
+          "infra/k8s/overlays/production/operator/node-deploy-env-namespaces-application.yaml"
+        )
+      ) as { spec: { source: { path: string; targetRevision: string } } };
+      expect(app.spec.source).toMatchObject({
+        path: "infra/k8s/overlays/production/node-deploy-envs",
+        targetRevision: "deploy/production-operator",
+      });
+      const kust = yaml.parse(
+        read(
+          "infra/k8s/overlays/production/node-deploy-envs/kustomization.yaml"
+        )
+      ) as Record<string, unknown>;
+      // a `namespace:` transformer would rename every Namespace to one name (kustomize ID conflict)
+      expect(kust.namespace).toBeUndefined();
+      expect(kust.namePrefix).toBeUndefined();
+    });
+
+    it("the sequencer is told its fleet org, so it never claims another fleet's nodes", () => {
+      expect(sequencerEnv(production, "NODE_DEPLOY_FLEET_OWNER")).toBe(
+        "cogni-dao"
+      );
+    });
+
+    it("the candidate-a overlay is untouched: it serves only itself and sets no fleet owner (the test operator claims no canonical node)", () => {
+      const candidate = yaml.parse(
+        read("infra/k8s/overlays/candidate-a/operator/kustomization.yaml")
+      ) as Kustomization;
+      expect(sequencerEnv(candidate, "NODE_DEPLOY_ENVS")).toBeUndefined();
+      expect(
+        sequencerEnv(candidate, "NODE_DEPLOY_FLEET_OWNER")
+      ).toBeUndefined();
+    });
   });
 });
