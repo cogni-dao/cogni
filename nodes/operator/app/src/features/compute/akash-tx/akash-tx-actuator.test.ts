@@ -25,7 +25,7 @@ import path from "node:path";
 import { rootCertificates } from "node:tls";
 
 import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 import type {
@@ -45,6 +45,8 @@ import type {
   RecordNodeMigrationReportInput,
 } from "@/ports";
 import { AkashTxError } from "@/ports";
+import { DatabaseCellAppliedCustodySchema } from "@/shared/secrets/database-cell-binding.data";
+import { AppliedDatabaseCellReceiptsSchema } from "@/shared/secrets/database-cell-placement.data";
 import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
 
 import {
@@ -159,6 +161,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
   readonly failCalls: { cogniKey: string; failureCode: string }[] = [];
   failReads = false;
   failWrites = false;
+  releaseNoop = false;
 
   async claim(input: {
     cogniKey: string;
@@ -306,8 +309,14 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
   }
 
   async markReleased(input: { cogniKey: string }) {
+    if (this.failWrites) throw new Error("ledger down");
     const row = this.rows.get(input.cogniKey);
-    if (row) this.rows.set(input.cogniKey, { ...row, state: "released" });
+    if (
+      !this.releaseNoop &&
+      row &&
+      (row.state === "allocated" || row.state === "released")
+    )
+      this.rows.set(input.cogniKey, { ...row, state: "released" });
   }
 
   async read(input: { cogniKey: string }) {
@@ -434,8 +443,12 @@ class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
   failObserve = false;
   failClose = false;
   failureMessage = "cost dependency down";
+  evidenceError?: Error;
+  bindError?: Error;
+  observeError?: Error;
 
   async observeCost(input: { resourceId: string }) {
+    if (this.evidenceError) throw this.evidenceError;
     if (this.failEvidence) throw new Error(this.failureMessage);
     return { ...COST_EVIDENCE, resourceId: input.resourceId };
   }
@@ -448,6 +461,7 @@ class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
       resourceId: string;
     };
   }) {
+    if (this.bindError) throw this.bindError;
     if (this.failBind) throw new Error(this.failureMessage);
     this.binds.push({
       allocationReceiptId: input.allocationReceiptId,
@@ -460,6 +474,7 @@ class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
     allocationReceiptId: string;
     evidence: ComputeResourceCostEvidence;
   }) {
+    if (this.observeError) throw this.observeError;
     if (this.failObserve) throw new Error(this.failureMessage);
     this.observations.push({
       allocationReceiptId: input.allocationReceiptId,
@@ -495,6 +510,7 @@ interface FakeConsoleOptions {
   /** Simulate a lost response: the lease IS created, then the call throws. */
   loseResponseAfterAllocation?: boolean;
   allocateError?: Error;
+  errorAfterCallback?: boolean;
   recovered?: ProvisionOutput | null;
   /** Several live allocations beyond the baseline: adoption is undecidable. */
   ambiguous?: readonly string[];
@@ -519,6 +535,7 @@ class FakeConsole implements AkashTxConsolePort {
   logDescriptors = new Map<string, AkashLeaseLogDescriptor>();
   mintedTokenProviders: string[][] = [];
   mintTokenError?: Error;
+  statusState: ProvisionOutput["state"] = "active";
 
   constructor(private readonly options: FakeConsoleOptions = {}) {
     this.loseResponse = options.loseResponseAfterAllocation ?? false;
@@ -538,13 +555,15 @@ class FakeConsole implements AkashTxConsolePort {
     onAllocated?: (leaseId: string) => Promise<void>;
   }): Promise<{ leaseId: string; providerAccount: string }> {
     this.allocateCalls += 1;
-    if (this.options.allocateError) throw this.options.allocateError;
+    if (this.options.allocateError && !this.options.errorAfterCallback)
+      throw this.options.allocateError;
     if (this.loseResponse) {
       // The transaction succeeded on-chain; only the response was lost, so the
       // caller never learns the handle and the ledger never gets it either.
       throw consoleError("TIMEOUT");
     }
     await input.onAllocated?.(this.nextLeaseId);
+    if (this.options.allocateError) throw this.options.allocateError;
     return { leaseId: this.nextLeaseId, providerAccount: "akash1provider" };
   }
 
@@ -565,7 +584,7 @@ class FakeConsole implements AkashTxConsolePort {
     return {
       provider: "akash",
       leaseId: input.leaseId,
-      state: "active",
+      state: this.statusState,
       endpoints: [`https://${input.leaseId}.example.net`],
     };
   }
@@ -664,6 +683,8 @@ describe("qualified cell app releases", () => {
       state: "allocated",
       externalName: "9001",
       providerAccount: provider,
+      retentionPolicy: "retain",
+      lastAppliedSdlHash: "d".repeat(64),
       appliedDatabaseCellBinding: [
         {
           allocationEnvironment: "production",
@@ -706,6 +727,9 @@ describe("qualified cell app releases", () => {
         },
       ],
     });
+    const row = context.ledger.rows.get("cell");
+    if (!row) throw new Error("missing source fixture");
+    AppliedDatabaseCellReceiptsSchema.parse(row.appliedDatabaseCellBinding);
     return context;
   }
   const recoveryProfile = {
@@ -809,9 +833,13 @@ describe("qualified cell app releases", () => {
     expect(disabled.ledger.rows.size).toBe(1);
     expect(context.api.allocateCalls).toBe(0);
   });
-  it("refuses another retained target in the same source family and clears only the unused claim", async () => {
+  it.each([
+    "allocated",
+    "released",
+  ])("refuses another retained target in the same source family and clears only the unused claim (%s)", async (state) => {
     const context = withCell(recoveryProfile);
     const input = recoveryRequest(context);
+    if (state === "released") await closeCell(context);
     const prefix = input.cogniKey.slice(0, -64);
     const source = context.ledger.rows.get("cell");
     if (!source) throw new Error("missing source");
@@ -827,11 +855,15 @@ describe("qualified cell app releases", () => {
     ).rejects.toMatchObject({ code: "identity_conflict" });
     expect(context.api.allocateCalls).toBe(0);
     expect(context.ledger.rows.get(input.cogniKey)?.state).toBe("failed");
-    expect(context.ledger.rows.get("cell")?.state).toBe("allocated");
+    expect(context.ledger.rows.get("cell")?.state).toBe(state);
   });
-  it("fails a truncated family scan without stranding the unused wallet claim", async () => {
+  it.each([
+    "allocated",
+    "released",
+  ])("fails a truncated family scan without stranding the unused wallet claim (%s)", async (state) => {
     const context = withCell(recoveryProfile);
     const input = recoveryRequest(context);
+    if (state === "released") await closeCell(context);
     const source = context.ledger.rows.get("cell");
     if (!source) throw new Error("missing source");
     for (let i = 0; i < 98; i++)
@@ -1042,7 +1074,18 @@ describe("qualified cell app releases", () => {
         serviceRole: "service_toks9",
         budgetProfile: "dedicated-high-throughput-v1",
         runtimePoolLimits: { replicaCount: 1, app: 3, service: 4, read: 2 },
-        budget: { kind: "preserved-role-bounds", roles: [] },
+        budget: {
+          kind: "preserved-role-bounds",
+          roles: ["app_toks9", "service_toks9"].map((name) => ({
+            name,
+            connectionLimit: 20,
+            statementTimeoutMs: 5000,
+            lockTimeoutMs: 2000,
+            idleInTransactionTimeoutMs: 30000,
+            tempFileLimitMiB: 128,
+            workMemMiB: 16,
+          })),
+        },
         tlsCertificate: rootCertificates[0] ?? "",
         tls: { kind: "system" },
         app: {
@@ -1060,9 +1103,15 @@ describe("qualified cell app releases", () => {
     const receipt =
       context.ledger.rows.get("cell")?.appliedDatabaseCellBinding?.[0];
     if (!receipt) throw new Error("missing cell fixture");
+    delete receipt.initialIncidentId;
+    const { sourceSha: _sourceSha, ...binding } = receipt.binding;
+    receipt.binding = {
+      ...binding,
+      manualProvenance: custody.value.manualProvenance,
+    };
     receipt.registration = {
       kind: "audited-manual",
-      executionActor: { kind: "agent", id: "fixture" },
+      executionActor: { kind: "agent", id: IDENTITY.compositeUid },
       approvalAuthority: {
         kind: "conversation-user",
         label: "CEO",
@@ -1073,11 +1122,11 @@ describe("qualified cell app releases", () => {
         delegationDigest: "a".repeat(64),
       },
       readmissionReceiptId: "fixture",
-      manualCutoverPacketSha256: "a".repeat(64),
+      manualCutoverPacketSha256: "f".repeat(64),
       sourceSystemIdentifier: "456",
       scheduledBackupReceiptSha256: "b".repeat(64),
       independentRecoveryReceiptSha256: "c".repeat(64),
-      appAllocationReceiptId: "fixture",
+      appAllocationReceiptId: "33333333-3333-4333-8333-333333333333",
       appSdlHash: "d".repeat(64),
       appDsnSha256: createHash("sha256").update(appDsn).digest("hex"),
       serviceDsnSha256: createHash("sha256").update(serviceDsn).digest("hex"),
@@ -1087,6 +1136,8 @@ describe("qualified cell app releases", () => {
       runtimePoolLimits: { replicaCount: 1, app: 3, service: 4, read: 2 },
       registeredAt: "2026-10-15T00:00:00Z",
     };
+    AppliedDatabaseCellReceiptsSchema.parse([receipt]);
+    DatabaseCellAppliedCustodySchema.parse(custody.value);
     return { ...context, custody };
   }
   const appDsn =
@@ -1108,6 +1159,291 @@ describe("qualified cell app releases", () => {
         DB_READ_POOL_MAX: "2",
       },
     })),
+  });
+  async function closeCell(context: ReturnType<typeof withCell>) {
+    const before = structuredClone(context.ledger.rows.get("cell"));
+    context.api.statusState = "closed";
+    context.cost.evidenceError = consoleError("COST_EVIDENCE_UNAVAILABLE");
+    await expect(
+      context.actuator.observe({ cogniKey: "cell" })
+    ).resolves.toMatchObject({
+      found: true,
+      resource: { state: "closed", externalName: "9001" },
+    });
+    expect(context.ledger.rows.get("cell")).toEqual({
+      ...before,
+      state: "released",
+    });
+    context.api.statusState = "active";
+    delete context.cost.evidenceError;
+  }
+  it("P2 preserves preclosure cold intent and recipe through released source and restart replay", async () => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    const before = context.ledger.rows.get("cell");
+    if (!before) throw new Error("missing source");
+    const profile = DatabaseCellRecoveryProfileSchema.parse(recoveryProfile);
+    const intent = databaseCellRecoveryIntent(input, before, profile);
+    await closeCell(context);
+    const after = context.ledger.rows.get("cell");
+    if (!after) throw new Error("missing released source");
+    expect(databaseCellRecoveryIntent(input, after, profile)).toEqual(intent);
+    const allocate = vi.spyOn(context.api, "allocateAndLease");
+    await context.actuator.createDatabaseCellRecovery(input);
+    expect(allocate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: intent.spec,
+        allocationPolicy: intent.policy,
+      })
+    );
+    await expect(
+      context.actuator.createDatabaseCellRecovery(input)
+    ).resolves.toMatchObject({ replayed: true });
+    const restarted = build({}, recoveryProfile, context.ledger);
+    await expect(
+      restarted.actuator.createDatabaseCellRecovery(input)
+    ).resolves.toMatchObject({ replayed: true });
+    expect(context.api.allocateCalls + restarted.api.allocateCalls).toBe(1);
+    expect(restarted.api.cursorCalls).toBe(0);
+  });
+  it.each([
+    "receipt",
+    "key",
+    "handle",
+    "provider",
+    "SDL",
+    "missing handle",
+    "missing provider",
+    "missing SDL",
+    "node",
+    "slug",
+    "environment",
+    "allocation environment",
+    "system",
+    "retention",
+    "preparing",
+    "failed",
+    "absent",
+    "duplicate",
+    "corrupt",
+  ])("P2 refuses released provenance %s before provider IO", async (fault) => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    await closeCell(context);
+    const row = context.ledger.rows.get("cell");
+    const receipt = row?.appliedDatabaseCellBinding?.[0];
+    if (!row || !receipt) throw new Error("missing source");
+    const changed = structuredClone(receipt);
+    const binding = changed.binding;
+    if (fault === "receipt")
+      binding.receiptId = "33333333-3333-4333-8333-333333333333";
+    if (fault === "key") binding.cogniKey = "foreign";
+    if (fault === "handle") {
+      binding.dseq = "9002";
+      binding.failureDomainId = `akash:${binding.providerAccount}:9002`;
+    }
+    if (fault === "provider") {
+      binding.providerAccount = `akash1${"b".repeat(38)}`;
+      binding.failureDomainId = `akash:${binding.providerAccount}:9001`;
+    }
+    if (fault === "SDL") binding.appliedSdlHash = "f".repeat(64);
+    if (fault === "node") binding.nodeId = OTHER_IDENTITY.nodeId;
+    if (fault === "slug") {
+      binding.nodeSlug = "foreign";
+      binding.databaseName = "cogni_foreign";
+      binding.appRole = "app_foreign";
+      binding.serviceRole = "service_foreign";
+      binding.migrationRole = "migration_foreign";
+      binding.probeRole = "probe_foreign";
+    }
+    if (fault === "environment") binding.environment = "preview";
+    if (fault === "allocation environment")
+      changed.allocationEnvironment = "preview";
+    if (fault === "system") binding.systemIdentifier = "999";
+    if (fault === "corrupt") binding.receiptId = "not-a-uuid";
+    const { retentionPolicy: _retention, ...withoutRetention } = row;
+    context.ledger.rows.set("cell", {
+      ...(fault === "retention" ? withoutRetention : row),
+      ...(fault === "preparing" || fault === "failed" ? { state: fault } : {}),
+      appliedDatabaseCellBinding:
+        fault === "absent"
+          ? []
+          : fault === "duplicate"
+            ? [changed, changed]
+            : [changed],
+    });
+    const altered = context.ledger.rows.get("cell");
+    if (!altered) throw new Error("missing altered source");
+    const { externalName: _handle, ...withoutHandle } = altered;
+    const { providerAccount: _provider, ...withoutProvider } = altered;
+    const { lastAppliedSdlHash: _sdl, ...withoutSdl } = altered;
+    if (fault === "missing handle")
+      context.ledger.rows.set("cell", withoutHandle);
+    if (fault === "missing provider")
+      context.ledger.rows.set("cell", withoutProvider);
+    if (fault === "missing SDL") context.ledger.rows.set("cell", withoutSdl);
+    await expect(
+      context.actuator.createDatabaseCellRecovery(input)
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(context.api.cursorCalls).toBe(0);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it("P2 refuses absent/source-equal target references after closure", async () => {
+    const context = withCell(recoveryProfile);
+    const input = recoveryRequest(context);
+    await closeCell(context);
+    for (const bad of [
+      { ...input, cogniKey: "cell" },
+      { ...input, recovery: { ...input.recovery, sourceCogniKey: "absent" } },
+      { ...input, nodeSlug: "foreign" },
+      { ...input, environment: "preview" },
+    ])
+      await expect(
+        context.actuator.createDatabaseCellRecovery(bad)
+      ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(context.api.cursorCalls).toBe(0);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it.each([
+    undefined,
+    { ...recoveryProfile, enabled: false },
+    { ...recoveryProfile, funding_status: "unqualified" },
+  ])("P2 refuses unavailable/unqualified released-source profile %j", async (profile) => {
+    const context = withCell(profile);
+    const input = recoveryRequest(context);
+    await closeCell(context);
+    await expect(
+      context.actuator.createDatabaseCellRecovery(input)
+    ).rejects.toMatchObject({
+      code: "invalid_request",
+      message:
+        "cold recovery profile unavailable, disabled or funding unqualified",
+    });
+    expect(context.api.cursorCalls).toBe(0);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it.each([
+    "preparing",
+    "failed",
+    "corrupt",
+    "contradictory environment",
+    "contradictory node",
+    "duplicate",
+    "saturated100",
+  ])("P5 refuses apparent applied history %s before filtering can hide it", async (fault) => {
+    const context = withBoundedManualCell();
+    await closeCell(context);
+    const source = context.ledger.rows.get("cell");
+    if (!source) throw new Error("missing source");
+    const receipts = structuredClone(source.appliedDatabaseCellBinding);
+    const receipt = receipts?.[0];
+    if (!receipt) throw new Error("missing receipt");
+    if (fault === "corrupt") receipt.binding.receiptId = "not-a-uuid";
+    if (fault === "contradictory environment")
+      receipt.allocationEnvironment = "preview";
+    if (fault === "contradictory node")
+      receipt.binding.nodeId = OTHER_IDENTITY.nodeId;
+    context.ledger.rows.set("cell", {
+      ...source,
+      appliedDatabaseCellBinding: receipts,
+      ...(fault === "preparing" || fault === "failed" ? { state: fault } : {}),
+    });
+    if (fault === "duplicate") {
+      const duplicate = structuredClone(receipt);
+      duplicate.binding.cogniKey = "second";
+      duplicate.binding.receiptId = "33333333-3333-4333-8333-333333333333";
+      context.ledger.rows.set("second", {
+        ...source,
+        state: "allocated",
+        cogniKey: "second",
+        receiptId: duplicate.binding.receiptId,
+        appliedDatabaseCellBinding: [duplicate],
+      });
+    }
+    if (fault === "saturated100")
+      for (let i = 0; i < 99; i++)
+        context.ledger.rows.set(`history-${i}`, {
+          ...source,
+          cogniKey: `history-${i}`,
+          state: "released",
+          appliedDatabaseCellBinding: [],
+        });
+    await expect(
+      context.actuator.create({
+        cogniKey: "app",
+        environment: "production",
+        identity: IDENTITY,
+        spec: boundedSpecAt(otherSha),
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(context.api.cursorCalls).toBe(0);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it("P5 migration saturation scans the environment without an untrusted node narrowing", async () => {
+    const context = withBoundedManualCell();
+    const source = context.ledger.rows.get("cell");
+    if (!source) throw new Error("missing source");
+    for (let i = 0; i < 99; i++)
+      context.ledger.rows.set(`history-${i}`, {
+        ...source,
+        cogniKey: `history-${i}`,
+        state: "released",
+        appliedDatabaseCellBinding: [],
+      });
+    const scan = vi.spyOn(context.ledger, "listReceipts");
+    await expect(
+      context.actuator.observe({
+        cogniKey: "app",
+        environment: "production",
+        workload: "toks9",
+        expectedSourceSha: otherSha,
+        migration: STEP,
+      })
+    ).rejects.toMatchObject({
+      code: "identity_conflict",
+      message: "qualified cell release metadata exceeds bounded scan",
+    });
+    expect(scan).toHaveBeenCalledExactlyOnceWith({
+      environment: "production",
+      limit: 100,
+    });
+    expect(context.migration.calls).toHaveLength(0);
+    expect(context.api.cursorCalls).toBe(0);
+    expect(context.api.allocateCalls).toBe(0);
+  });
+  it("P5 nonapplied history does not invent an applied release policy", async () => {
+    const context = withCell();
+    const receipt =
+      context.ledger.rows.get("cell")?.appliedDatabaseCellBinding?.[0];
+    if (!receipt) throw new Error("missing cell fixture");
+    receipt.binding.phase = "ready";
+    AppliedDatabaseCellReceiptsSchema.parse([receipt]);
+    await context.actuator.create({
+      cogniKey: "app",
+      environment: "production",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(context.api.allocateCalls).toBe(1);
+  });
+  it("P5 completes the all-state scan for no-policy shared release", async () => {
+    const context = build();
+    context.ledger.rows.set("old", {
+      receiptId: "old",
+      cogniKey: "old",
+      identity: IDENTITY,
+      environment: "production",
+      workload: SPEC.name,
+      state: "released",
+      appliedDatabaseCellBinding: [],
+    });
+    await context.actuator.create({
+      cogniKey: "app",
+      environment: "production",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(context.api.allocateCalls).toBe(1);
   });
   it("upgrades a resolved provider-http request without rewriting historical admission", async () => {
     const { actuator, ledger, api, migration } = withBoundedManualCell();
@@ -1892,6 +2228,340 @@ describe("AkashTxActuator.create", () => {
         spec: SPEC,
       })
     ).rejects.toMatchObject({ code: "provider_rejected" });
+  });
+});
+
+describe("bug.5560 terminal evidence", () => {
+  it.each([
+    "bind",
+    "evidence",
+    "store",
+  ] as const)("refuses generic %s errors before release", async (stage) => {
+    const { actuator, ledger, api, cost, log } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    if (stage === "bind") cost.failBind = true;
+    if (stage === "evidence") cost.failEvidence = true;
+    if (stage === "store") cost.failObserve = true;
+    const release = vi.spyOn(ledger, "markReleased");
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    expect(release).not.toHaveBeenCalled();
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+    expect(log.lines).toContainEqual(
+      expect.objectContaining({ marker: "compute_cost_unavailable" })
+    );
+  });
+  it.each([
+    "bind",
+    "store",
+  ] as const)("never suppresses the narrow code from %s", async (stage) => {
+    const { actuator, ledger, api, cost } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    const error = consoleError("COST_EVIDENCE_UNAVAILABLE");
+    if (stage === "bind") cost.bindError = error;
+    else cost.observeError = error;
+    const release = vi.spyOn(ledger, "markReleased");
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    expect(release).not.toHaveBeenCalled();
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+  });
+  it.each([
+    "active",
+    "unknown",
+  ] as const)("never allows the narrow absence signal for %s", async (state) => {
+    const { actuator, ledger, api, cost } = build();
+    seedAllocated(ledger);
+    api.statusState = state;
+    cost.evidenceError = consoleError("COST_EVIDENCE_UNAVAILABLE");
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+  });
+  it.each([
+    Object.assign(new Error("absence"), { code: "COST_EVIDENCE_UNAVAILABLE" }),
+    consoleError("UNEXPECTED_SHAPE"),
+    consoleError("NETWORK_ERROR"),
+  ])("requires exact error name and code: %j", async (error) => {
+    const { actuator, ledger, api, cost } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    cost.evidenceError = error;
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+  });
+  function faultAfterRelease(ledger: FakeLedger, fault: string) {
+    const release = ledger.markReleased.bind(ledger);
+    const read = ledger.read.bind(ledger);
+    let mutated = false;
+    vi.spyOn(ledger, "markReleased").mockImplementation(async (input) => {
+      if (fault === "write") throw new Error("release write unavailable");
+      await release(input);
+      mutated = true;
+    });
+    vi.spyOn(ledger, "read").mockImplementation(async (input) => {
+      const row = await read(input);
+      if (!mutated) return row;
+      if (fault === "throw") throw new Error("post-mutation read unavailable");
+      if (fault === "null") return null;
+      if (!row) throw new Error("expected durable released receipt");
+      if (fault === "receipt") return { ...row, receiptId: "another-receipt" };
+      if (fault === "handle") return { ...row, externalName: "7999" };
+      if (fault === "state") return { ...row, state: "allocated" };
+      return row;
+    });
+  }
+  it.each(
+    ["throw", "null", "receipt", "handle", "state"].flatMap((fault) =>
+      ["observe", "create"].map((operation) => ({ fault, operation }))
+    )
+  )("refuses $fault readback AFTER successful release in $operation", async ({
+    fault,
+    operation,
+  }) => {
+    const { actuator, ledger, api } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    faultAfterRelease(ledger, fault);
+    await expect(
+      operation === "observe"
+        ? actuator.observe({ cogniKey: "k1" })
+        : actuator.create({
+            cogniKey: "k1",
+            environment: "candidate-a",
+            identity: IDENTITY,
+            spec: SPEC,
+          })
+    ).rejects.toMatchObject({ code: "ledger_unavailable" });
+    // Prove the real mutation occurred before the injected readback failed.
+    expect(ledger.rows.get("k1")).toMatchObject({
+      state: "released",
+      externalName: "7001",
+    });
+    expect(api.allocateCalls).toBe(0);
+  });
+  it.each([
+    "write",
+    "throw",
+    "null",
+    "receipt",
+    "handle",
+    "state",
+  ])("preserves allocation code AND message when settlement %s fails", async (fault) => {
+    const original = consoleError("NO_ELIGIBLE_BIDS");
+    Object.assign(original, { rolledBackDseq: "7001" });
+    const { actuator, ledger, log } = build({
+      allocateError: original,
+      errorAfterCallback: true,
+    });
+    faultAfterRelease(ledger, fault);
+    await expect(
+      actuator.create({
+        cogniKey: "k1",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: SPEC,
+      })
+    ).rejects.toMatchObject({
+      code: "provider_rejected",
+      message: original.message,
+    });
+    expect(log.lines).toContainEqual(
+      expect.objectContaining({
+        marker: "akash_tx_allocation_rollback_unsettled",
+      })
+    );
+    expect(ledger.rows.get("k1")).toMatchObject({
+      externalName: "7001",
+      state: fault === "write" ? "allocated" : "released",
+    });
+  });
+  it.each([
+    "observe",
+    "create",
+  ] as const)("refuses no-op handleless settlement during uncertain %s", async (operation) => {
+    const { actuator, ledger, api } = build({
+      loseResponseAfterAllocation: true,
+    });
+    const call = {
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    };
+    await expect(actuator.create(call)).rejects.toMatchObject({
+      code: "outcome_unknown",
+    });
+    vi.spyOn(ledger, "fail").mockResolvedValue(undefined);
+    await expect(
+      operation === "observe"
+        ? actuator.observe({ cogniKey: "k1" })
+        : actuator.create(call)
+    ).rejects.toMatchObject({ code: "ledger_unavailable" });
+    expect(ledger.rows.get("k1")).toMatchObject({ state: "preparing" });
+    expect(api.allocateCalls).toBe(1);
+  });
+
+  it("settles the bound handle after callback then verified rollback and replays after restart", async () => {
+    const error = consoleError("NO_ELIGIBLE_BIDS");
+    Object.assign(error, { rolledBackDseq: "7001" });
+    const { actuator, ledger } = build({
+      allocateError: error,
+      errorAfterCallback: true,
+    });
+    const call = {
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    } as const;
+    await expect(actuator.create(call)).rejects.toMatchObject({
+      code: "provider_rejected",
+    });
+    expect(ledger.rows.get("k1")).toMatchObject({
+      state: "released",
+      externalName: "7001",
+    });
+    const restarted = build({}, undefined, ledger);
+    restarted.api.statusState = "closed";
+    await expect(restarted.actuator.create(call)).resolves.toMatchObject({
+      replayed: true,
+      externalName: "7001",
+      state: "closed",
+    });
+    expect(restarted.api.allocateCalls).toBe(0);
+  });
+
+  it("observes an exact closed handle even when accounting is unavailable", async () => {
+    const { actuator, ledger, api, cost, log } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    cost.evidenceError = consoleError("COST_EVIDENCE_UNAVAILABLE");
+    await expect(actuator.observe({ cogniKey: "k1" })).resolves.toMatchObject({
+      found: true,
+      resource: { state: "closed", externalName: "7001" },
+    });
+    expect(ledger.rows.get("k1")).toMatchObject({
+      state: "released",
+      externalName: "7001",
+    });
+    expect(cost.observations).toHaveLength(0);
+    expect(log.lines).toContainEqual(
+      expect.objectContaining({
+        marker: "compute_cost_unavailable",
+        fields: expect.objectContaining({ accounting: "unknown" }),
+      })
+    );
+  });
+
+  it("records available cost when observing closed", async () => {
+    const { actuator, ledger, api, cost } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    await expect(actuator.observe({ cogniKey: "k1" })).resolves.toMatchObject({
+      found: true,
+      resource: { state: "closed" },
+    });
+    expect(cost.observations).toEqual([
+      { allocationReceiptId: "receipt-k1", resourceId: "7001" },
+    ]);
+  });
+
+  it("refuses closure when the receipt cannot be read", async () => {
+    const { actuator, ledger, api } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    ledger.failReads = true;
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+  });
+
+  it.each([
+    "active",
+    "unknown",
+  ] as const)("refuses %s when accounting fails", async (state) => {
+    const { actuator, ledger, api, cost } = build();
+    seedAllocated(ledger);
+    api.statusState = state;
+    cost.failEvidence = true;
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+  });
+
+  it.each([
+    "observe",
+    "create",
+  ] as const)("refuses no-op release during %s", async (operation) => {
+    const { actuator, ledger, api } = build();
+    seedAllocated(ledger);
+    api.statusState = "closed";
+    ledger.releaseNoop = true;
+    await expect(
+      operation === "observe"
+        ? actuator.observe({ cogniKey: "k1" })
+        : actuator.create({
+            cogniKey: "k1",
+            environment: "candidate-a",
+            identity: IDENTITY,
+            spec: SPEC,
+          })
+    ).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+    expect(api.allocateCalls).toBe(0);
+  });
+
+  it("keeps the original allocation error if rollback has a mismatched handle", async () => {
+    const error = consoleError("NO_ELIGIBLE_BIDS");
+    Object.assign(error, { rolledBackDseq: "7999" });
+    const { actuator, ledger, log } = build({
+      allocateError: error,
+      errorAfterCallback: true,
+    });
+    await expect(
+      actuator.create({
+        cogniKey: "k1",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: SPEC,
+      })
+    ).rejects.toMatchObject({ code: "provider_rejected" });
+    expect(ledger.rows.get("k1")).toMatchObject({
+      state: "allocated",
+      externalName: "7001",
+    });
+    expect(
+      log.lines.some(
+        (line) => line.marker === "akash_tx_allocation_rollback_unsettled"
+      )
+    ).toBe(true);
+  });
+
+  it("refuses a settled probe if its receipt cannot be written", async () => {
+    const { actuator, ledger } = build({ loseResponseAfterAllocation: true });
+    await expect(
+      actuator.create({
+        cogniKey: "k1",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: SPEC,
+      })
+    ).rejects.toMatchObject({ code: "outcome_unknown" });
+    ledger.failWrites = true;
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
   });
 });
 
@@ -3418,6 +4088,28 @@ describe("AkashTxActuator provider strikes (task.5153)", () => {
         (l) => l.marker === "akash_tx_provider_strike_recorded"
       )
     ).toBe(true);
+  });
+
+  it("does not strike a provider for a handleless pre-lease failure", async () => {
+    const outcomes = new FakeOutcomes();
+    const ledger = new FakeLedger();
+    ledger.rows.set(BASE_KEY, {
+      receiptId: "receipt-base",
+      cogniKey: BASE_KEY,
+      identity: IDENTITY,
+      workload: "operator",
+      environment: "preview",
+      state: "failed",
+    });
+    const next = strikeBuild(outcomes, ledger);
+    await next.actuator.create({
+      cogniKey: `${BASE_KEY}:recover:1`,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(outcomes.records).toEqual([]);
+    expect(next.api.lastExcluded?.size ?? 0).toBe(0);
   });
 
   it("a strike-write failure degrades loudly and never blocks the paid recovery attempt", async () => {

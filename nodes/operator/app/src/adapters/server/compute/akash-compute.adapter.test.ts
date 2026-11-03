@@ -161,12 +161,21 @@ function harness(opts: HarnessOpts = {}) {
       const endpoints = opts.endpoints?.(dseq) ?? [`d${dseq}.prov.akash.pub`];
       if (closed.has(dseq)) {
         return jsonResponse({
-          data: { deployment: { state: "closed" }, leases: [] },
+          data: {
+            deployment: {
+              id: { owner: "akash1consumer", dseq },
+              state: "closed",
+            },
+            leases: [],
+          },
         });
       }
       return jsonResponse({
         data: {
-          deployment: { state: "active" },
+          deployment: {
+            id: { owner: "akash1consumer", dseq },
+            state: "active",
+          },
           leases: [
             {
               state: "active",
@@ -234,7 +243,10 @@ describe("AkashComputeAdapter.status", () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({
         data: {
-          deployment: { state: "active" },
+          deployment: {
+            id: { owner: "akash1consumer", dseq: "7001" },
+            state: "active",
+          },
           leases: [
             {
               state: "active",
@@ -1012,7 +1024,13 @@ describe("AkashComputeAdapter", () => {
         return jsonResponse({ data: { success: true } });
       }
       return jsonResponse({
-        data: { deployment: { state: "closed" }, leases: [] },
+        data: {
+          deployment: {
+            id: { owner: "akash1consumer", dseq: "42" },
+            state: "closed",
+          },
+          leases: [],
+        },
       });
     });
 
@@ -1034,7 +1052,10 @@ describe("AkashComputeAdapter", () => {
       if (value === `${BASE}/v1/deployments/42`) {
         return jsonResponse({
           data: {
-            deployment: { state: "active" },
+            deployment: {
+              id: { owner: "akash1consumer", dseq: "42" },
+              state: "active",
+            },
             leases: [
               {
                 state: "active",
@@ -1460,7 +1481,10 @@ describe("AkashComputeAdapter failure containment", () => {
       if (u === `${BASE}/v1/deployments/42`) {
         return jsonResponse({
           data: {
-            deployment: { id: { dseq: "42" }, state: "active" },
+            deployment: {
+              id: { owner: "akash1consumer", dseq: "42" },
+              state: "active",
+            },
             leases: [],
           },
         });
@@ -1933,5 +1957,333 @@ describe("recovery allocation money policy", () => {
       })
     ).rejects.toBeInstanceOf(AkashComputeError);
     expect(h.leased).toEqual([]);
+  });
+});
+
+describe("bug.5560 native terminal producer", () => {
+  const identity = { dseq: "7001", owner: "akash1consumer" };
+  function unpinnedAdapter(fetchImpl: typeof fetch) {
+    return new AkashComputeAdapter({
+      apiKey: "console-key",
+      timeoutMs: 1000,
+      fetchImpl,
+      outcomeStore: memStore().store,
+    });
+  }
+  function closed(over: Record<string, unknown> = {}) {
+    return {
+      deployment: { id: identity, state: "closed" },
+      leases: [],
+      ...over,
+    };
+  }
+  function fromDetail(
+    detail: unknown,
+    pin: string | undefined = "akash1consumer"
+  ) {
+    return makeAdapter(
+      vi.fn<typeof fetch>(async () => jsonResponse({ data: detail })),
+      {
+        expectedCostConsumerAccountId: pin,
+      }
+    );
+  }
+  const invalidIds: ({ dseq?: unknown; owner?: unknown } | undefined)[] = [
+    undefined,
+    {},
+    { ...identity, dseq: undefined },
+    { ...identity, dseq: "7002" },
+    { ...identity, owner: undefined },
+    { ...identity, owner: "akash1other" },
+    { ...identity, dseq: 7001.5 },
+    { ...identity, dseq: -7001 },
+    { ...identity, dseq: 9007199254740992 },
+    { ...identity, dseq: "07001" },
+    { ...identity, dseq: "7.001e3" },
+    { ...identity, dseq: "7001\n" },
+  ];
+  it.each(
+    invalidIds
+  )("refuses native identity %j before empty accounting", async (id) => {
+    const adapter = fromDetail(closed({ deployment: { id, state: "closed" } }));
+    await expect(adapter.status({ leaseId: "7001" })).rejects.toMatchObject({
+      code: "UNEXPECTED_SHAPE",
+    });
+    await expect(
+      adapter.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+  });
+  it.each([
+    undefined,
+    "",
+    "bad pin",
+    "akash1other",
+  ])("requires owner pin %j", async (pin) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ data: closed() })
+    );
+    const adapter =
+      pin === undefined
+        ? unpinnedAdapter(fetchImpl)
+        : makeAdapter(fetchImpl, { expectedCostConsumerAccountId: pin });
+    await expect(adapter.status({ leaseId: "7001" })).rejects.toMatchObject({
+      code: "UNEXPECTED_SHAPE",
+    });
+    await expect(
+      adapter.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+  });
+  it.each([
+    "7001",
+    7001,
+  ])("validates native CLOSED %j without inventing cost", async (dseq) => {
+    const adapter = fromDetail(
+      closed({ deployment: { id: { ...identity, dseq }, state: "closed" } })
+    );
+    await expect(adapter.status({ leaseId: "7001" })).resolves.toEqual({
+      provider: "akash",
+      leaseId: "7001",
+      state: "closed",
+      endpoints: [],
+    });
+    await expect(
+      adapter.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({
+      name: "AkashComputeError",
+      code: "COST_EVIDENCE_UNAVAILABLE",
+    });
+  });
+  it("keeps large string IDs exact and rejects a rounded numeric subject", async () => {
+    const dseq = "9007199254740993";
+    await expect(
+      fromDetail(
+        closed({ deployment: { id: { ...identity, dseq }, state: "closed" } })
+      ).status({ leaseId: dseq })
+    ).resolves.toMatchObject({ leaseId: dseq });
+    await expect(
+      fromDetail(
+        closed({
+          deployment: {
+            id: { ...identity, dseq: Number(dseq) },
+            state: "closed",
+          },
+        })
+      ).status({ leaseId: dseq })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+  });
+  it.each([
+    { ...identity, dseq: "7002" },
+    { ...identity, owner: "akash1other" },
+    {},
+  ])("revalidates the cost read's own subject %j", async (id) => {
+    let reads = 0;
+    const adapter = makeAdapter(
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse({
+          data:
+            ++reads === 1
+              ? closed()
+              : closed({ deployment: { id, state: "closed" } }),
+        })
+      )
+    );
+    await expect(adapter.status({ leaseId: "7001" })).resolves.toMatchObject({
+      state: "closed",
+    });
+    await expect(
+      adapter.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+  });
+  it.each([
+    { leases: undefined },
+    { leases: null },
+    { leases: {} },
+    { deployment: { id: identity, state: "active" } },
+    { deployment: { id: identity } },
+    { escrow_account: null },
+    { escrow_account: {} },
+    { escrow_account: { state: {} } },
+    { escrow_account: { state: { owner: identity.owner, funds: {} } } },
+    { escrow_account: { state: { owner: identity.owner, funds: [null] } } },
+    { escrow_account: { state: { owner: "akash1other" } } },
+    {
+      escrow_account: {
+        state: {
+          owner: identity.owner,
+          funds: [{ denom: "uact", amount: "NaN" }],
+        },
+      },
+    },
+    {
+      escrow_account: {
+        state: {
+          owner: identity.owner,
+          transferred: [{ denom: "uact", amount: "-1" }],
+        },
+      },
+    },
+    { escrow_account: { state: { owner: identity.owner, settled_at: "1.5" } } },
+    { escrow_account: { state: { owner: identity.owner, state: 7 } } },
+  ])("never classifies malformed or nonterminal detail as absence %j", async (over) => {
+    await expect(
+      fromDetail(closed(over)).observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+  });
+  it.each([
+    { id: { ...identity, dseq: "7002", provider: "akash1provider" } },
+    { id: { ...identity, owner: "akash1other", provider: "akash1provider" } },
+    { id: identity },
+    { price: { amount: "NaN", denom: "uact" } },
+    { price: { amount: 7, denom: "uact" } },
+    { created_at: "1.5" },
+  ])("keeps full malformed lease evidence strict %j", async (over) => {
+    const lease = {
+      id: { ...identity, provider: "akash1provider" },
+      state: "closed",
+      price: { amount: "7.5", denom: "uact" },
+      created_at: "100",
+      closed_on: "150",
+      ...over,
+    };
+    const escrow_account = {
+      state: {
+        owner: identity.owner,
+        state: "closed",
+        funds: [],
+        transferred: [],
+      },
+    };
+    await expect(
+      fromDetail(closed({ leases: [lease], escrow_account })).observeCost({
+        resourceId: "7001",
+      })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+  });
+  it.each([
+    { fault: "404", code: "HTTP_ERROR" },
+    { fault: "timeout", code: "TIMEOUT" },
+    { fault: "network", code: "NETWORK_ERROR" },
+    { fault: "shape", code: "UNEXPECTED_SHAPE" },
+  ])("preserves $fault read failure instead of accounting absence", async ({
+    fault,
+    code,
+  }) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      if (fault === "404") return jsonResponse({}, 404);
+      if (fault === "timeout")
+        throw Object.assign(new Error("read aborted"), { name: "AbortError" });
+      if (fault === "network") throw new TypeError("connection lost");
+      return jsonResponse({ data: {} });
+    });
+    const adapter = makeAdapter(fetchImpl);
+    await expect(adapter.status({ leaseId: "7001" })).rejects.toMatchObject({
+      code,
+    });
+    await expect(
+      adapter.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code });
+  });
+  it("refuses ambiguous full leases", async () => {
+    await expect(
+      fromDetail(closed({ leases: [{}, {}] })).observeCost({
+        resourceId: "7001",
+      })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+  });
+  it.each(
+    invalidIds
+      .map((id) => (id?.dseq === "7001" ? { ...id, dseq: "1" } : id))
+      .flatMap((id) =>
+        ["callback", "screening"].map((stage) => ({ id, stage }))
+      )
+  )("cannot claim $stage rollback from wrong subject $id", async ({
+    id,
+    stage,
+  }) => {
+    const h = harness();
+    const adapter = makeAdapter(
+      vi.fn<typeof fetch>(async (url, init) =>
+        (init?.method ?? "GET") === "GET" &&
+        String(url) === `${BASE}/v1/deployments/1`
+          ? jsonResponse({
+              data: closed({ deployment: { id, state: "closed" } }),
+            })
+          : h.fetchImpl(url, init)
+      )
+    );
+    const error = await adapter
+      .allocateAndLease({
+        spec: SPEC,
+        ...(stage === "callback"
+          ? {
+              onAllocated: async () => {
+                throw new Error("persist failed");
+              },
+            }
+          : {}),
+      })
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      code: stage === "callback" ? "UNEXPECTED_SHAPE" : "NO_BIDS",
+      rolledBack: false,
+    });
+    expect((error as AkashComputeError).rolledBackDseq).toBeUndefined();
+    expect(h.deletes).toHaveLength(1);
+  });
+  it.each([
+    undefined,
+    "",
+    "akash1other",
+  ])("refuses exact CLOSED rollback without correct pin %j", async (pin) => {
+    const h = harness();
+    const adapter =
+      pin === undefined
+        ? unpinnedAdapter(h.fetchImpl)
+        : makeAdapter(h.fetchImpl, { expectedCostConsumerAccountId: pin });
+    const error = await adapter
+      .allocateAndLease({
+        spec: SPEC,
+        onAllocated: async () => {
+          throw new Error("persist failed");
+        },
+      })
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      code: "UNEXPECTED_SHAPE",
+      rolledBack: false,
+    });
+    expect((error as AkashComputeError).rolledBackDseq).toBeUndefined();
+    expect(h.deletes).toHaveLength(1);
+  });
+  it.each([
+    "callback",
+    "screening",
+  ])("retains rollback-only 404 absence after %s failure", async (stage) => {
+    const h = harness();
+    const adapter = makeAdapter(
+      vi.fn<typeof fetch>(async (url, init) =>
+        (init?.method ?? "GET") === "GET" &&
+        String(url) === `${BASE}/v1/deployments/1`
+          ? jsonResponse({ error: "missing" }, 404)
+          : h.fetchImpl(url, init)
+      )
+    );
+    const error = await adapter
+      .allocateAndLease({
+        spec: SPEC,
+        ...(stage === "callback"
+          ? {
+              onAllocated: async () => {
+                throw new Error("persist failed");
+              },
+            }
+          : {}),
+      })
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ rolledBackDseq: "1", rolledBack: true });
+    await expect(adapter.status({ leaseId: "1" })).rejects.toMatchObject({
+      code: "HTTP_ERROR",
+      httpStatus: 404,
+    });
   });
 });

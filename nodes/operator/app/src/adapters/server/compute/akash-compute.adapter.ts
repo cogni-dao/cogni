@@ -126,8 +126,8 @@ export interface AkashComputeAdapterConfig {
   /** Akash Console API key (Settings → API Keys), sent as `x-api-key`. */
   apiKey: string;
   /**
-   * Non-secret Akash deployment/escrow consumer pin used only by `observeCost`.
-   * Omission keeps legacy read/write compatibility but makes cost evidence fail closed.
+   * Non-secret Akash owner pin for status, rollback closure and cost evidence.
+   * Missing or invalid pins refuse native subject validation.
    */
   expectedCostConsumerAccountId?: string;
   /** Per-request timeout for reads, in milliseconds. */
@@ -652,7 +652,11 @@ export class AkashComputeAdapter
       "GET",
       `/v1/deployments/${encodeURIComponent(p.leaseId)}`
     );
-    return provisionOutputFromDetail(p.leaseId, detail);
+    return provisionOutputFromDetail(
+      p.leaseId,
+      detail,
+      this.config.expectedCostConsumerAccountId
+    );
   }
 
   /** Private, read-only observation of the managed definition. Values may be opaque. */
@@ -1245,6 +1249,11 @@ export class AkashComputeAdapter
         "GET",
         `/v1/deployments/${encodeURIComponent(dseq)}`
       );
+      nativeDeploymentIdentity(
+        dseq,
+        detail,
+        this.config.expectedCostConsumerAccountId
+      );
       return detail?.deployment?.state === "closed";
     } catch (error) {
       // Console has no such deployment: nothing exists to bill.
@@ -1676,6 +1685,7 @@ function mapState(
 export type AkashComputeErrorCode =
   | "HTTP_ERROR"
   | "UNEXPECTED_SHAPE"
+  | "COST_EVIDENCE_UNAVAILABLE"
   | "TIMEOUT"
   | "NETWORK_ERROR"
   | "NO_BIDS"
@@ -1752,8 +1762,14 @@ function furtherBootStage(
 
 function provisionOutputFromDetail(
   resourceId: string,
-  detail: ConsoleDeploymentDetail | undefined
+  detail: ConsoleDeploymentDetail | undefined,
+  expectedConsumerAccountId: string | undefined
 ): ProvisionOutput {
+  const native = nativeDeploymentIdentity(
+    resourceId,
+    detail,
+    expectedConsumerAccountId
+  );
   const leases = detail?.leases ?? [];
   const endpoints = leases.flatMap((lease) => {
     const direct = lease.status?.uris ?? [];
@@ -1781,7 +1797,7 @@ function provisionOutputFromDetail(
   });
   return {
     provider: PROVIDER,
-    leaseId: resourceId,
+    leaseId: native.resourceId,
     state: mapState(detail?.deployment?.state, leases),
     endpoints: [...new Set(endpoints)],
   };
@@ -1881,7 +1897,7 @@ function nativeAmounts(
   field: string,
   allowNegative = false
 ): readonly { denom: string; amount: string }[] {
-  if (!values) {
+  if (!Array.isArray(values)) {
     throw new AkashComputeError(
       "UNEXPECTED_SHAPE",
       `Console deployment cost response omitted ${field}`
@@ -1895,6 +1911,12 @@ function nativeAmounts(
   }
   const seen = new Set<string>();
   return values.map((value, index) => {
+    if (!value || typeof value !== "object") {
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        `Console deployment cost response returned invalid ${field}[${index}]`
+      );
+    }
     const denom = requiredDenom(value.denom, `${field}[${index}].denom`);
     if (seen.has(denom)) {
       throw new AkashComputeError(
@@ -1912,6 +1934,46 @@ function nativeAmounts(
   });
 }
 
+/** Validate the fetched native subject before status or accounting can prove anything. */
+function nativeDeploymentIdentity(
+  resourceId: string,
+  detail: ConsoleDeploymentDetail | undefined,
+  expectedConsumerAccountId: string | undefined
+): { resourceId: string; consumer: string } {
+  const dseq = detail?.deployment?.id?.dseq;
+  if (typeof dseq === "number" && (!Number.isSafeInteger(dseq) || dseq < 0)) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      "Console returned unsafe deployment.id.dseq"
+    );
+  }
+  const nativeId = requiredText(
+    typeof dseq === "number" ? String(dseq) : dseq,
+    "deployment.id.dseq"
+  );
+  if (!/^[0-9]+$/.test(nativeId) || nativeId !== resourceId) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      "Console deployment response did not match the requested resource"
+    );
+  }
+  const consumer = requiredText(
+    detail?.deployment?.id?.owner,
+    "deployment.id.owner"
+  );
+  const expectedConsumer = requiredText(
+    expectedConsumerAccountId,
+    "expected cost consumer account"
+  );
+  if (consumer !== expectedConsumer) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      "Console deployment consumer did not match the pinned actuator account"
+    );
+  }
+  return { resourceId: nativeId, consumer };
+}
+
 /** Map Console's chain-shaped deployment response into exact provider-neutral evidence. */
 function costEvidenceFromDetail(
   resourceId: string,
@@ -1919,15 +1981,47 @@ function costEvidenceFromDetail(
   observedAt: Date,
   expectedConsumerAccountId: string | undefined
 ): ComputeResourceCostEvidence {
-  const deployment = detail?.deployment;
-  const deploymentId = String(deployment?.id?.dseq ?? "");
-  if (!deployment || deploymentId !== resourceId) {
+  const { consumer } = nativeDeploymentIdentity(
+    resourceId,
+    detail,
+    expectedConsumerAccountId
+  );
+  const leases = detail?.leases;
+  if (!Array.isArray(leases)) {
     throw new AkashComputeError(
       "UNEXPECTED_SHAPE",
-      "Console deployment cost response did not match the requested resource"
+      "Console deployment cost response omitted leases array"
     );
   }
-  const leases = detail.leases ?? [];
+  const escrow = detail?.escrow_account?.state;
+  // A present escrow object must never conceal a conflicting subject or malformed facts,
+  // even when no lease remains. An absent escrow is simply absent accounting.
+  if (detail?.escrow_account !== undefined) {
+    const escrowConsumer = requiredText(
+      escrow?.owner,
+      "escrow_account.state.owner"
+    );
+    if (escrowConsumer !== consumer) {
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "Console deployment and escrow consumers disagree"
+      );
+    }
+  }
+  if (detail?.deployment?.state === "closed" && leases.length === 0) {
+    if (escrow?.state !== undefined)
+      requiredText(escrow.state, "escrow_account.state.state");
+    if (escrow?.settled_at !== undefined)
+      chainPosition(escrow.settled_at, "escrow_account.state.settled_at", true);
+    if (escrow?.funds !== undefined)
+      nativeAmounts(escrow.funds, "escrow_account.state.funds", true);
+    if (escrow?.transferred !== undefined)
+      nativeAmounts(escrow.transferred, "escrow_account.state.transferred");
+    throw new AkashComputeError(
+      "COST_EVIDENCE_UNAVAILABLE",
+      "Closed deployment has no lease accounting evidence"
+    );
+  }
   const active = leases.filter((lease) => lease.state === "active");
   const lease =
     active.length === 1
@@ -1947,17 +2041,6 @@ function costEvidenceFromDetail(
       "Console lease cost response did not match the requested resource"
     );
   }
-  const consumer = requiredText(deployment.id?.owner, "deployment.id.owner");
-  const expectedConsumer = requiredText(
-    expectedConsumerAccountId,
-    "expected cost consumer account"
-  );
-  if (consumer !== expectedConsumer) {
-    throw new AkashComputeError(
-      "UNEXPECTED_SHAPE",
-      "Console deployment cost consumer did not match the pinned actuator account"
-    );
-  }
   const leaseConsumer = requiredText(lease.id?.owner, "leases[0].id.owner");
   if (leaseConsumer !== consumer) {
     throw new AkashComputeError(
@@ -1965,21 +2048,10 @@ function costEvidenceFromDetail(
       "Console deployment and lease consumers disagree"
     );
   }
-  const escrow = detail.escrow_account?.state;
   if (!escrow) {
     throw new AkashComputeError(
       "UNEXPECTED_SHAPE",
       "Console deployment cost response omitted escrow_account.state"
-    );
-  }
-  const escrowConsumer = requiredText(
-    escrow.owner,
-    "escrow_account.state.owner"
-  );
-  if (escrowConsumer !== consumer) {
-    throw new AkashComputeError(
-      "UNEXPECTED_SHAPE",
-      "Console deployment and escrow consumers disagree"
     );
   }
   const providerOpenedAtPosition = chainPosition(

@@ -113,11 +113,13 @@ function fixture(
 ) {
   let saved: readonly AppliedDatabaseCellReceipt[] = [];
   let nativeReads = 0;
+  let providerReads = 0;
+  let nativeState: "active" | "closed" = "active";
   const appliedFacts = options.appliedFacts;
   let writes = 0;
   let endpoints = ["tcp://provider.example.org:15432"];
   let restored = false;
-  const record: AkashTxAllocationRecord = {
+  let record: AkashTxAllocationRecord = {
     receiptId: "22222222-2222-4222-8222-222222222222",
     cogniKey: "fixture-cell",
     identity: { nodeId, compositeUid: "fixture", compositeGeneration: 1 },
@@ -127,6 +129,7 @@ function fixture(
     externalName: "123",
     providerAccount: `akash1${"a".repeat(38)}`,
     lastAppliedSdlHash: "d".repeat(64),
+    retentionPolicy: "retain",
   };
   const ref = {
     cogniKey: record.cogniKey,
@@ -136,15 +139,18 @@ function fixture(
   const binder = new DatabaseCellBinder({
     ledger: { read: async () => record, listAllocated: async () => [record] },
     actuator: {
-      observe: async () => ({
-        found: true,
-        resource: {
-          externalName: "123",
-          state: "active",
-          endpoints,
-          providerAccount: `akash1${"a".repeat(38)}`,
-        },
-      }),
+      observe: async () => {
+        providerReads += 1;
+        return {
+          found: true,
+          resource: {
+            externalName: "123",
+            state: nativeState,
+            endpoints,
+            providerAccount: `akash1${"a".repeat(38)}`,
+          },
+        };
+      },
     },
     store: {
       read: async () => saved,
@@ -193,6 +199,20 @@ function fixture(
   });
   return {
     nativeReads: () => nativeReads,
+    providerReads: () => providerReads,
+    setRecord: (change: Partial<AkashTxAllocationRecord>) => {
+      record = { ...record, ...change };
+    },
+    clearRetention: () => {
+      const { retentionPolicy: _retention, ...rest } = record;
+      record = rest;
+    },
+    setBindings: (bindings: readonly AppliedDatabaseCellReceipt[]) => {
+      saved = bindings;
+    },
+    closeNative: () => {
+      nativeState = "closed";
+    },
     ref,
     binder,
     writes: () => writes,
@@ -204,6 +224,132 @@ function fixture(
     },
   };
 }
+
+describe("P3 retained metadata is not live authority", () => {
+  it("reads exact released retained metadata without provider/native/save IO", async () => {
+    const current = fixture({ appliedFacts: registrationFacts() });
+    current.restore();
+    const saved = await current.binder.cutover({
+      ...current.ref,
+      packetSha256: "f".repeat(64),
+      actorId: "human:fixture",
+    });
+    expect(saved.some((receipt) => receipt.binding.phase === "applied")).toBe(
+      true
+    );
+    current.setRecord({ state: "released" });
+    const counts = [
+      current.providerReads(),
+      current.nativeReads(),
+      current.writes(),
+    ];
+    expect(await current.binder.read(current.ref)).toEqual(saved);
+    expect([
+      current.providerReads(),
+      current.nativeReads(),
+      current.writes(),
+    ]).toEqual(counts);
+    const reference = {
+      ...current.ref,
+      manualCutoverPacketSha256: "f".repeat(64),
+      readmissionReceiptId: "readmit",
+    };
+    for (const operation of [
+      () => current.binder.seal(current.ref),
+      () => current.binder.registerApplied(reference),
+      () => current.binder.qualifyAppliedProbe(reference),
+      () =>
+        current.binder.cutover({
+          ...current.ref,
+          packetSha256: "f".repeat(64),
+          actorId: "human:fixture",
+        }),
+    ])
+      await expect(operation()).rejects.toMatchObject({
+        code: "identity_conflict",
+      });
+    expect([
+      current.providerReads(),
+      current.nativeReads(),
+      current.writes(),
+    ]).toEqual(counts);
+  });
+  it.each([
+    "nonretain",
+    "preparing",
+    "failed",
+    "receipt",
+    "key",
+    "node",
+    "environment",
+    "handle",
+    "provider",
+    "SDL",
+    "corrupt",
+  ])("refuses historical %s metadata without live IO", async (fault) => {
+    const current = fixture();
+    const saved = structuredClone(await current.binder.seal(current.ref));
+    current.setRecord({ state: "released" });
+    const receipt = saved[0];
+    if (!receipt) throw new Error("missing saved cell");
+    if (fault === "nonretain") current.clearRetention();
+    if (fault === "preparing" || fault === "failed")
+      current.setRecord({ state: fault });
+    if (fault === "receipt")
+      receipt.binding.receiptId = "33333333-3333-4333-8333-333333333333";
+    if (fault === "key") receipt.binding.cogniKey = "foreign";
+    if (fault === "node")
+      receipt.binding.nodeId = "33333333-3333-4333-8333-333333333333";
+    if (fault === "environment") receipt.allocationEnvironment = "preview";
+    if (fault === "handle") {
+      receipt.binding.dseq = "124";
+      receipt.binding.failureDomainId = `akash:${receipt.binding.providerAccount}:124`;
+    }
+    if (fault === "provider") {
+      receipt.binding.providerAccount = `akash1${"b".repeat(38)}`;
+      receipt.binding.failureDomainId = `akash:${receipt.binding.providerAccount}:123`;
+    }
+    if (fault === "SDL") receipt.binding.appliedSdlHash = "f".repeat(64);
+    if (fault === "corrupt") receipt.binding.receiptId = "invalid";
+    current.setBindings(saved);
+    const counts = [
+      current.providerReads(),
+      current.nativeReads(),
+      current.writes(),
+    ];
+    await expect(current.binder.read(current.ref)).rejects.toThrow();
+    expect([
+      current.providerReads(),
+      current.nativeReads(),
+      current.writes(),
+    ]).toEqual(counts);
+  });
+  it.each([
+    "discover",
+    "seal",
+  ] as const)("refuses %s when allocated selection observes CLOSED with stale endpoints", async (operation) => {
+    const current = fixture();
+    current.closeNative();
+    await expect(current.binder[operation](current.ref)).rejects.toMatchObject({
+      code: "identity_conflict",
+    });
+    expect(current.providerReads()).toBe(1);
+    expect(current.nativeReads()).toBe(0);
+    expect(current.writes()).toBe(0);
+  });
+  it("allows exact active discovery and seal", async () => {
+    const current = fixture();
+    await expect(current.binder.discover(current.ref)).resolves.toMatchObject({
+      externalName: "123",
+      endpoints: ["tcp://provider.example.org:15432"],
+    });
+    await expect(current.binder.seal(current.ref)).resolves.toHaveLength(
+      scopedKit.logicalDatabases.length
+    );
+    expect(current.nativeReads()).toBe(1);
+    expect(current.writes()).toBe(1);
+  });
+});
 
 describe("same-receipt production cell placement", () => {
   it("accepts references only, never caller endpoint, native identity or secrets", () => {
