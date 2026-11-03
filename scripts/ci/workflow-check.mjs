@@ -28,7 +28,6 @@ const manualWorkflows = [
   "flight-preview.yml",
   "pr-build.yml",
   "promote-and-deploy.yml",
-  "release.yml",
   "stack-test.yml",
 ];
 const nonDispatchWorkflows = ["ci.yaml", "pr-lint.yaml"];
