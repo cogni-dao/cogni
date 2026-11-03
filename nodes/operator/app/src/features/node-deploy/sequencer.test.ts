@@ -968,6 +968,93 @@ describe("crash safety", () => {
     expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("active");
   });
 
+  it("a refused create (provider_rejected) is never replayed under the same key, even when observe is down (bug.5567)", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.createFault = (n) =>
+      n === 2
+        ? new PayerError("provider_rejected", "bid refused", false)
+        : undefined;
+    h.payer.observeThrows = true;
+    await deployApp(h, SHA_1);
+    const first = (await h.store.attemptsFor(APP))[0];
+    expect(first?.phase).toBe("planned"); // failAttempt deferred: observe is down
+    expect(first?.error).toMatch(/^create refused: provider_rejected/);
+    await h.seq.step(APP);
+    await h.seq.step(APP);
+    // re-driven twice: the refused key was NOT created again
+    expect(
+      h.payer.createRequests.filter((r) => r.cogniKey === first?.cogniKey)
+    ).toHaveLength(1);
+
+    // observe recovers: attempt 1 fails, attempt 2 uses a NEW key and serves
+    h.payer.observeThrows = false;
+    h.payer.createFault = undefined;
+    await h.seq.step(APP);
+    const rows = await h.store.attemptsFor(APP);
+    expect(rows.find((a) => a.attempt === 1)?.phase).toBe("failed");
+    await h.seq.step(APP);
+    const active = (await h.store.attemptsFor(APP)).find(
+      (a) => a.phase === "active"
+    );
+    expect(active?.attempt).toBe(2);
+    expect(active?.cogniKey).not.toBe(first?.cogniKey);
+    expect(
+      h.payer.createRequests.filter((r) => r.cogniKey === first?.cogniKey)
+    ).toHaveLength(1);
+  });
+
+  it("observe unavailable is bounded: past 15 min the attempt fails orphan_suspect with an alert and the release moves on", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.loseResponseOn = (n) => n === 2;
+    h.payer.observeThrows = true;
+    await deployApp(h, SHA_1);
+    const first = (await h.store.attemptsFor(APP))[0];
+    expect(first?.phase).toBe("planned");
+    h.clock.advance(14 * 60_000);
+    await h.seq.step(APP);
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("planned");
+    expect(h.log.alerts()).not.toContain("orphan_suspect");
+    h.clock.advance(61_000);
+    await h.seq.step(APP);
+    const failed = (await h.store.attemptsFor(APP)).find(
+      (a) => a.attempt === 1
+    );
+    expect(failed?.phase).toBe("failed");
+    expect(failed?.error).toMatch(/^orphan_suspect:/);
+    expect(h.log.alerts()).toContain("orphan_suspect");
+    // the paid lease is NOT claimed closed
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    // later releases are unblocked: the next attempt takes a new ordinal
+    h.payer.observeThrows = false;
+    h.payer.loseResponseOn = undefined;
+    await h.seq.step(APP);
+    expect((await h.store.attemptsFor(APP)).some((a) => a.attempt === 2)).toBe(
+      true
+    );
+  });
+
+  it("supersede with observe down is bounded the same way", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.createFault = (n) =>
+      n === 2
+        ? new PayerError("wallet_allocation_blocked", "busy", false)
+        : undefined;
+    await deployApp(h, SHA_1);
+    h.payer.observeThrows = true;
+    await h.release(canaryApp(), SHA_2);
+    expect(await h.seq.step(APP)).toBe("superseded");
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("planned");
+    h.clock.advance(16 * 60_000);
+    await h.seq.step(APP);
+    const old = (await h.store.attemptsFor(APP)).find((a) => a.attempt === 1);
+    expect(old?.phase).toBe("failed");
+    expect(old?.error).toMatch(/^orphan_suspect:/);
+    expect(h.log.alerts()).toContain("orphan_suspect");
+  });
+
   it("a newer release supersedes an attempt not yet at the edge", async () => {
     const h = harness();
     await stateUp(h);
@@ -1073,6 +1160,24 @@ describe("reconcile", () => {
     expect(h.payer.byDseq("1002").state).toBe("closed"); // closed + confirmed first
     expect(await h.seq.step(APP)).toBe("driven");
     expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("active");
+  });
+
+  it("a serving lease whose /readyz fails (dependency down) is kept after 15 min: alert, no close, no redeploy", async () => {
+    const h = await liveApp();
+    h.payer.byDseq("1002").notReady = true; // /version still answers the exact sha
+    expect(await h.seq.reconcile(APP)).toBe("unhealthy_waiting");
+    h.clock.advance(16 * 60_000);
+    expect(await h.seq.reconcile(APP)).toBe("unhealthy_waiting");
+    expect(h.log.alerts()).toContain("dependency_down");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    expect(h.events).not.toContain("payer.delete:1002");
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("active");
+    expect(await h.seq.step(APP)).toBe("converged");
+    expect(h.payer.createRequests).toHaveLength(2);
+    // /version fails too: now the lease is bad and is closed + replaced
+    h.payer.byDseq("1002").down = true;
+    expect(await h.seq.reconcile(APP)).toBe("lost_app");
+    expect(h.payer.byDseq("1002").state).toBe("closed");
   });
 
   it("recovering inside the window clears the unhealthy clock", async () => {

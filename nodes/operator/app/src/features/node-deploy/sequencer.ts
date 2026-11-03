@@ -108,6 +108,12 @@ export interface SequencerConfig {
   readonly inflightGraceMs: number;
   /** A live lease failing its proof this long is treated as lost (design: 15 min). */
   readonly unhealthyLostMs: number;
+  /**
+   * An unbound attempt whose `observe` keeps failing is left alone only this long (default 15 min since the
+   * first `observe_unavailable`). Then it is failed `orphan_suspect:` with an alert, so the release can
+   * park or retry. The lease is NOT claimed closed: a human or the janitor of a later observe settles it.
+   */
+  readonly observeUnavailableMs: number;
   readonly pollMs: number;
   /**
    * A release whose image is still not in the registry this long after it was recorded raises
@@ -137,6 +143,7 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
   maxFailedAttempts: 3,
   inflightGraceMs: 900_000,
   unhealthyLostMs: 900_000,
+  observeUnavailableMs: 900_000,
   pollMs: 3_000,
   imageAlertMs: 1_800_000,
 };
@@ -641,6 +648,12 @@ export class NodeDeploySequencer {
       return this.failAttempt(key, release, attempt, errText(error));
     }
 
+    // A refused create (provider_rejected, ...) already ended this key's life: it is never replayed under
+    // the same nd: key (the actuator would answer `akash_tx_create_replayed` forever). Fail the attempt;
+    // the next attempt gets a new ordinal. If failAttempt had to defer (observe down) we land here again.
+    if (attempt.error?.startsWith(REFUSED_PREFIX))
+      return this.failAttempt(key, release, attempt, attempt.error);
+
     // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
     if (this.createMayStillBeInFlight(attempt)) {
       await this.emitGrace(key, release, attempt, "create", "inflight_grace", {
@@ -671,17 +684,14 @@ export class NodeDeploySequencer {
           "ambiguous create resolved to nothing; next ordinal"
         );
       } catch (error) {
-        await this.emit(
+        return this.observeUnavailable(
           key,
           release,
           attempt,
           "create",
-          "observe_unavailable",
-          {
-            error: errText(error),
-          }
+          "ambiguous create unresolved",
+          error
         );
-        return attempt;
       }
     }
 
@@ -747,15 +757,67 @@ export class NodeDeploySequencer {
           // Resolve now; on a failed read the marker makes the next tick resolve first.
           return this.doCreate(key, release, marked, blue);
         }
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `create refused: ${error.code}: ${error.message}`
-        );
+        const refused = await this.d.store.updateAttempt(attempt.id, {
+          error: `${REFUSED_PREFIX}${error.code}: ${error.message}`.slice(
+            0,
+            500
+          ),
+        });
+        return this.failAttempt(key, release, refused, refused.error ?? "");
       }
       return this.failAttempt(key, release, attempt, errText(error));
     }
+  }
+
+  /**
+   * An unbound attempt's `observe` threw. Wait, but only `observeUnavailableMs` since the FIRST failure
+   * (kept in `unhealthySince`, which has no other meaning on an attempt that never bound a lease). Past
+   * the bound the attempt is failed `orphan_suspect:` and alerted, unblocking the release. We never claim
+   * the lease is closed: the key may still own one, and the alert names it for a human.
+   */
+  private async observeUnavailable(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    step: string,
+    context: string,
+    error: unknown
+  ): Promise<AttemptRow> {
+    const now = this.d.clock.now();
+    const since = attempt.unhealthySince;
+    if (!since) {
+      const marked = await this.d.store.updateAttempt(attempt.id, {
+        unhealthySince: new Date(now),
+      });
+      await this.emit(key, release, marked, step, "observe_unavailable", {
+        error: errText(error),
+      });
+      return marked;
+    }
+    if (now - since.getTime() < this.d.config.observeUnavailableMs) {
+      await this.emit(key, release, attempt, step, "observe_unavailable", {
+        error: errText(error),
+      });
+      return attempt;
+    }
+    const reason =
+      `orphan_suspect: ${context}; observe unavailable since ${since.toISOString()}: ${errText(error)}`.slice(
+        0,
+        500
+      );
+    const failed = await this.d.store.updateAttempt(attempt.id, {
+      phase: "failed",
+      error: reason,
+      unhealthySince: null,
+    });
+    await this.emit(key, release, failed, "attempt_failed", "failed", {
+      reason,
+    });
+    await this.alert(key, release, failed, "orphan_suspect", {
+      reason,
+      cogniKey: failed.cogniKey,
+    });
+    return failed;
   }
 
   /**
@@ -805,6 +867,8 @@ export class NodeDeploySequencer {
       externalName: resource.externalName,
       endpoints: resource.endpoints,
       error: null,
+      // An observe-unavailable clock (unbound attempt) must not read as an unhealthy-lease clock.
+      unhealthySince: null,
       leasedAt: new Date(this.d.clock.now()),
       ...(resource.providerAccount
         ? { provider: resource.providerAccount }
@@ -1115,10 +1179,18 @@ export class NodeDeploySequencer {
           reason: trimmed,
           observeError: errText(error),
         });
-        return attempt;
+        return this.observeUnavailable(
+          key,
+          release,
+          attempt,
+          "attempt_failed",
+          trimmed,
+          error
+        );
       }
       if (obs.found && obs.resource) {
         const bound = await this.d.store.updateAttempt(attempt.id, {
+          unhealthySince: null,
           externalName: obs.resource.externalName,
           endpoints: obs.resource.endpoints,
           ...(obs.resource.providerAccount
@@ -1315,8 +1387,8 @@ export class NodeDeploySequencer {
 
     // Live on chain: a failed proof is only an alert until it has lasted `unhealthyLostMs`.
     if (release.spec.kind === "app" && observeOk) {
-      const healthy = await this.quickProof(release, active);
-      if (healthy) {
+      const proof = await this.quickProof(release, active);
+      if (proof === "healthy") {
         if (active.unhealthySince) {
           await this.d.store.updateAttempt(active.id, { unhealthySince: null });
           await this.emit(key, release, active, "unhealthy_cleared", "ok");
@@ -1333,7 +1405,15 @@ export class NodeDeploySequencer {
         this.d.clock.now() - since.getTime() >=
         this.d.config.unhealthyLostMs
       ) {
-        // A failing but LIVE lease is closed and confirmed before anything replaces it.
+        if (proof === "dependency_down") {
+          // The lease still serves its exact build: a failing /readyz is a dependency outage, and a
+          // replacement would hit the same outage. Keep it, alert, never close or redeploy.
+          await this.alert(key, release, active, "dependency_down", {
+            why: "readyz_failing_version_serving",
+          });
+          return "unhealthy_waiting";
+        }
+        // lease_bad: /version fails too. A failing but LIVE lease is closed and confirmed before anything replaces it.
         if (await this.closeAndConfirm(active))
           return this.handleLost(key, release, active, "proof_failed_15m");
         await this.alert(key, release, active, "close_unconfirmed", {
@@ -1365,19 +1445,23 @@ export class NodeDeploySequencer {
     return "lost_app";
   }
 
+  /**
+   * `dependency_down`: the exact build still answers /version but /readyz fails (a dependency outage the
+   * lease cannot fix). `lease_bad`: /version itself fails or serves another sha.
+   */
   private async quickProof(
     release: ReleaseRow,
     a: AttemptRow
-  ): Promise<boolean> {
+  ): Promise<"healthy" | "dependency_down" | "lease_bad"> {
     const w = release.spec;
     const host = publicHostOf(w);
     const ingress = ingressHostOf(a.endpoints, host);
-    if (!host || !ingress || !w.health) return true;
+    if (!host || !ingress || !w.health) return "healthy";
     const v = await this.d.probe.hostRouted(ingress, host, w.health.version);
     if (v.status !== 200 || buildShaOf(v.body) !== release.sourceSha)
-      return false;
+      return "lease_bad";
     const r = await this.d.probe.hostRouted(ingress, host, w.health.ready);
-    return r.status === 200;
+    return r.status === 200 ? "healthy" : "dependency_down";
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1564,6 +1648,9 @@ export class NodeDeploySequencer {
     });
   }
 }
+
+/** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
+const REFUSED_PREFIX = "create refused: ";
 
 /** `ambiguous: <code>`; a network failure carries the failure time: `ambiguous: network@<epoch ms>`. */
 function ambiguousMarker(code: string, now: number): string {
