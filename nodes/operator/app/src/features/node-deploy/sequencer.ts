@@ -69,8 +69,8 @@ import {
   type WorkloadKey,
 } from "@/ports";
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
-import { type EdgeRouter, hostOwnedBy } from "./edge";
-import { nodeAppEnv, nodeAppSecretKeys } from "./node-app-env";
+import { type EdgeRouter, hostOwnedBy, workerHostRefusal } from "./edge";
+import { nodeAppEnv, nodeAppSecretKeys, workerEnv } from "./node-app-env";
 import { nodeCatalogPolicy } from "./node-catalog-policy";
 import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
 
@@ -485,7 +485,7 @@ export class NodeDeploySequencer {
       if (node) {
         Object.assign(env, node.env);
         requiredCountryCodes = node.requiredCountryCodes;
-        nodeApp = true;
+        nodeApp = node.nodeApp;
       }
       env.RELEASE_SHA = release.sourceSha;
     }
@@ -520,7 +520,12 @@ export class NodeDeploySequencer {
     key: WorkloadKey,
     release: ReleaseRow
   ): Promise<
-    { env: Record<string, string>; requiredCountryCodes: string[] } | undefined
+    | {
+        env: Record<string, string>;
+        requiredCountryCodes: string[];
+        nodeApp: boolean;
+      }
+    | undefined
   > {
     const rt = this.d.runtime;
     if (!rt) return undefined;
@@ -541,6 +546,38 @@ export class NodeDeploySequencer {
       policy = nodeCatalogPolicy(entry.row, key.env);
     } catch (error) {
       throw new DependencyNotReady(`catalog policy: ${errText(error)}`);
+    }
+    if (w.runtimeProfile === "worker") {
+      // WORKER_GETS_ITS_OWN_SECRETS_ONLY (task.5272): no node-app profile, no substrate, no database.
+      let workerBucket: Readonly<Record<string, string>>;
+      try {
+        workerBucket = await rt.secrets.read(
+          key.env,
+          entry.slug,
+          w.secretKeys ?? []
+        );
+      } catch (error) {
+        if (error instanceof NodeRuntimeSecretsError)
+          throw new DependencyNotReady(
+            `node runtime secrets ${error.code}${error.keys.length > 0 ? `: ${error.keys.join(", ")}` : ""}`
+          );
+        throw error;
+      }
+      try {
+        return {
+          env: workerEnv({
+            env: key.env,
+            sourceSha: release.sourceSha,
+            port: w.port,
+            secretKeys: w.secretKeys ?? [],
+            secrets: workerBucket,
+          }),
+          requiredCountryCodes: [...policy.requiredCountryCodes],
+          nodeApp: false,
+        };
+      } catch (error) {
+        throw new DependencyNotReady(errText(error));
+      }
     }
     const boundEnvNames = w.bindings.map((b) => b.env);
     let bucket: Readonly<Record<string, string>>;
@@ -573,6 +610,7 @@ export class NodeDeploySequencer {
           boundEnvNames,
         }),
         requiredCountryCodes: [...policy.requiredCountryCodes],
+        nodeApp: true,
       };
     } catch (error) {
       throw new DependencyNotReady(errText(error));
@@ -634,12 +672,31 @@ export class NodeDeploySequencer {
     if (declaredHost && this.d.runtime) {
       // HOST_IS_THE_NODES_OWN: a node may claim only its own host, so node A can never take node B's.
       const owner = await this.d.runtime.catalog.entryFor(key.nodeId);
-      if (!owner || !hostOwnedBy(declaredHost, key.env, owner.slug))
+      // Only an operator-lowered repo-spec sibling (a worker) may use `<slug>-<workload>`.
+      const worker = w.runtimeProfile === "worker" ? w.name : undefined;
+      if (!owner || !hostOwnedBy(declaredHost, key.env, owner.slug, worker))
         return this.failAttempt(
           key,
           release,
           attempt,
           `edge_host_refused: ${declaredHost} is not the host node ${owner?.slug ?? key.nodeId} may claim in ${key.env}`
+        );
+      const refusal =
+        worker !== undefined && declaredHost !== undefined
+          ? workerHostRefusal({
+              host: declaredHost,
+              env: key.env,
+              slug: owner.slug,
+              workload: worker,
+              catalogSlugs: await this.d.runtime.catalog.slugs(),
+            })
+          : undefined;
+      if (refusal)
+        return this.failAttempt(
+          key,
+          release,
+          attempt,
+          `edge_host_refused: ${refusal}`
         );
     }
     let runtime: ResolvedRuntime;

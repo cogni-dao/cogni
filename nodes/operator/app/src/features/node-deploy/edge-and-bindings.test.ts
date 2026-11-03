@@ -111,6 +111,72 @@ describe("EdgeRouter guards", () => {
     expect(edgeHostRegexFor(["a.b"]).test("axb.cognidao.org")).toBe(false);
   });
 
+  it("a sibling workload host <slug>-<workload>[-env] passes the guard only for a listed node (task.5272)", () => {
+    const re = edgeHostRegexFor(["red"]);
+    for (const ok of [
+      "red-sandbox.cognidao.org",
+      "red-sandbox-test.cognidao.org",
+      "red-sandbox-preview.cognidao.org",
+    ])
+      expect(re.test(ok), ok).toBe(true);
+    for (const bad of [
+      "red-sandbox-a-b.cognidao.org",
+      "red-sandbox-x1.cognidao.org",
+      "poly-sandbox.cognidao.org",
+      "red-sandbox.cognidao.org.evil.com",
+    ])
+      expect(re.test(bad), bad).toBe(false);
+  });
+
+  it("hostOwnedBy with a workload: <slug>-<workload> plus the env suffix, never another node's or the operator's", () => {
+    expect(
+      hostOwnedBy("red-sandbox.cognidao.org", "production", "red", "sandbox")
+    ).toBe(true);
+    expect(
+      hostOwnedBy(
+        "red-sandbox-test.cognidao.org",
+        "candidate-a",
+        "red",
+        "sandbox"
+      )
+    ).toBe(true);
+    expect(
+      hostOwnedBy(
+        "red-sandbox-preview.cognidao.org",
+        "preview",
+        "red",
+        "sandbox"
+      )
+    ).toBe(true);
+    // the node's own host stays claimable by any of its workloads
+    expect(
+      hostOwnedBy("red.cognidao.org", "production", "red", "sandbox")
+    ).toBe(true);
+    // a workload cannot claim another workload's host, another env's host, or another node's
+    expect(
+      hostOwnedBy("red-other.cognidao.org", "production", "red", "sandbox")
+    ).toBe(false);
+    expect(
+      hostOwnedBy("red-sandbox.cognidao.org", "candidate-a", "red", "sandbox")
+    ).toBe(false);
+    expect(
+      hostOwnedBy("red-sandbox.cognidao.org", "production", "poly", "sandbox")
+    ).toBe(false);
+    // the operator owns only its canary: a workload name never widens it
+    expect(
+      hostOwnedBy(
+        "node-deploy-canary-sandbox.cognidao.org",
+        "production",
+        "operator",
+        "sandbox"
+      )
+    ).toBe(false);
+    // without a workload the old behaviour holds exactly
+    expect(hostOwnedBy("red-sandbox.cognidao.org", "production", "red")).toBe(
+      false
+    );
+  });
+
   it("hostOwnedBy: a node owns exactly its own host in each env; the operator owns the canary", () => {
     expect(hostOwnedBy("poly.cognidao.org", "production", "poly")).toBe(true);
     expect(hostOwnedBy("poly-test.cognidao.org", "candidate-a", "poly")).toBe(

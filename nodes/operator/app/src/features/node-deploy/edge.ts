@@ -11,9 +11,10 @@
  *     any request. The zone is production. The regex is built from the image catalog
  *     (`edgeHostRegexFor`): the operator's canary plus every node whose `compute_api[<env>]` is
  *     `node-deploy`, so no per-node overlay edit is needed (CD1). The bare default is canary-only.
- *   - HOST_IS_THE_NODES_OWN: a release may only claim `hostOwnedBy(host, env, slug)`: the node's own
- *     slug (the operator's canary label for the operator) plus the env's `-test`/`-preview`/`-dev`
- *     suffix, so one node can never take another's host and operator hosts are never claimable.
+ *   - HOST_IS_THE_NODES_OWN: a release may only claim `hostOwnedBy(host, env, slug, workload)`: the node's own
+ *     slug (the operator's canary label for the operator), or `<slug>-<workload>` for a sibling workload of
+ *     that node, plus the env's `-test`/`-preview`/`-dev` suffix, so one node can never take another's host
+ *     and operator hosts are never claimable.
  *   - NEVER_WITHDRAWN: the port has no delete; a record stays at the last proven lease through any
  *     lease failure and is only ever re-pointed (bug.5188, bug.5301).
  *   - ADOPT_BY_NAME: an existing record is updated in place whatever its type (bug.5152); a second
@@ -28,7 +29,7 @@
 
 import type { DnsRecord, DnsRecordInput, DnsRecordsPort } from "@/ports";
 
-import { hostForEnv } from "./declarations";
+import { HOST_ENVS, hostForEnv } from "./declarations";
 
 export const DEFAULT_EDGE_HOST_REGEX =
   /^node-deploy-canary(-[a-z]+)?\.cognidao\.org$/;
@@ -52,18 +53,69 @@ export function edgeHostRegexFor(slugs: Iterable<string>): RegExp {
     ...[...new Set(slugs)].filter((s) => s !== OPERATOR_SLUG).sort(),
   ].map(escapeRegex);
   return new RegExp(
-    `^(${names.join("|")})(-[a-z]+)?\\.${escapeRegex(EDGE_ZONE)}$`
+    `^(${names.join("|")})(-[a-z]+(-[a-z]+)?)?\\.${escapeRegex(EDGE_ZONE)}$`
   );
 }
 
-/** True when `host` is exactly the host `slug` may claim in `env` (production name + env suffix). */
-export function hostOwnedBy(host: string, env: string, slug: string): boolean {
+/**
+ * True when `host` is a host `slug` may claim in `env`: its own production name plus the env suffix, or,
+ * for a sibling `workload` of the node (task.5272, e.g. red's `sandbox`), `<slug>-<workload>` plus the same
+ * suffix (`red-sandbox`, `red-sandbox-test`, `red-sandbox-preview`). The operator owns only its canary
+ * label; a workload never widens it.
+ */
+export function hostOwnedBy(
+  host: string,
+  env: string,
+  slug: string,
+  workload?: string
+): boolean {
   const label = slug === OPERATOR_SLUG ? CANARY_LABEL : slug;
+  const labels =
+    workload && slug !== OPERATOR_SLUG && workload !== slug
+      ? [label, `${label}-${workload}`]
+      : [label];
   try {
-    return host.toLowerCase() === hostForEnv(`${label}.${EDGE_ZONE}`, env);
+    return labels.some(
+      (l) => host.toLowerCase() === hostForEnv(`${l}.${EDGE_ZONE}`, env)
+    );
   } catch {
     return false;
   }
+}
+
+/**
+ * WORKER_HOST_IS_UNAMBIGUOUS (task.5272): why a sibling worker `<slug>-<workload>[-env]` host may NOT be
+ * claimed, or undefined when it may. A worker host is checked at the pre-create step, after
+ * `hostOwnedBy(.., workload)`; it must not collide with any host another catalog node (or this node's
+ * own app in another environment) could claim:
+ *   - the workload name is one plain label (`[a-z][a-z0-9]*`, no hyphen) and is not an environment word
+ *     (`test`, `preview`, `dev`), so `poly` + `test` can never reach `poly-test` and `a` + `b-c` can
+ *     never meet node `a-b` + `c`;
+ *   - no OTHER catalog slug owns the host in any environment (`red` + `sandbox` vs node `red-sandbox`);
+ *   - this node's own host in another environment is not the host.
+ */
+export function workerHostRefusal(input: {
+  readonly host: string;
+  readonly env: string;
+  readonly slug: string;
+  readonly workload: string;
+  readonly catalogSlugs: readonly string[];
+}): string | undefined {
+  const { host, env, slug, workload } = input;
+  if (!/^[a-z][a-z0-9]*$/.test(workload))
+    return `worker name "${workload}" must be one plain label (letters and digits)`;
+  if (["test", "preview", "dev"].includes(workload))
+    return `worker name "${workload}" is an environment word`;
+  for (const other of input.catalogSlugs) {
+    if (other === slug) continue;
+    for (const e of HOST_ENVS)
+      if (hostOwnedBy(host, e, other))
+        return `${host} is node ${other}'s host in ${e}`;
+  }
+  for (const e of HOST_ENVS)
+    if (e !== env && hostOwnedBy(host, e, slug))
+      return `${host} is this node's own host in ${e}`;
+  return undefined;
 }
 
 export class EdgeGuardError extends Error {

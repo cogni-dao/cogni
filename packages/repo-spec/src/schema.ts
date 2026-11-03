@@ -520,6 +520,14 @@ export const nodeWorkloadSpecSchema = z
      * manifest. Absent = the profile keys only. Operator/fleet credentials are refused at lowering.
      */
     secretKeys: z.array(serviceEnvKeySchema).max(64).optional(),
+    /**
+     * `worker`: a sibling service of the node (for example a code-execution sandbox) that is NOT the node
+     * app. It gets ONLY its own declared secrets (never the `cogni-node-app-v1` profile: no database, auth
+     * or LLM credentials) and starts without the node-app database trust wrapper. Set by the operator when
+     * it lowers a declaration (the repo-spec names the workload's service with no runtime profile, beside a
+     * distinct node-app service), NEVER by a manifest. Absent = the node app.
+     */
+    runtimeProfile: z.literal("worker").optional(),
     /** REQUIRED, no default (CD6): does this workload do work only one live instance may do? */
     exclusive: z.boolean(),
     health: z

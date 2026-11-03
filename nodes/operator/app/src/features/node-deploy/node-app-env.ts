@@ -177,3 +177,44 @@ export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
   e.APP_BASE_URL = `https://${input.publicHost}`;
   return e;
 }
+
+export interface WorkerEnvInput {
+  /** Deployment environment (`candidate-a` | `preview` | `production`). */
+  readonly env: string;
+  /** The release's source sha (`COGNI_REPO_SHA`, what `/version` must serve). */
+  readonly sourceSha: string;
+  /** The container port. */
+  readonly port: number;
+  /** The worker's own declared secret KEY names (`NodeWorkloadSpec.secretKeys`). */
+  readonly secretKeys: readonly string[];
+  /** The values read for those keys. Filtered to the declared set here; never trusted. */
+  readonly secrets: Readonly<Record<string, string>>;
+}
+
+/**
+ * The runtime env of a node WORKER workload (task.5272): a sibling service of the node app, such as a
+ * code-execution sandbox. WORKER_GETS_ITS_OWN_SECRETS_ONLY: exactly the keys its own repo-spec service
+ * declares, never the `cogni-node-app-v1` profile, so no database, auth, LLM or substrate credential and
+ * no substrate topology ever reaches it. Fails closed on a missing or denylisted key, like `nodeAppEnv`.
+ */
+export function workerEnv(input: WorkerEnvInput): Record<string, string> {
+  const keys = [...new Set(input.secretKeys)];
+  const refused = keys.filter((k) => !isOffClusterWorkloadSecretKey(k));
+  if (refused.length > 0)
+    throw new Error(
+      `worker env refused: operator/fleet credentials may not be injected: ${refused.join(", ")}`
+    );
+  const injectable = injectableSecrets(keys, input.secrets);
+  const missing = keys.filter((k) => injectable[k] === undefined);
+  if (missing.length > 0)
+    throw new Error(
+      `worker env refused: required secret keys missing or not injectable: ${missing.join(", ")}`
+    );
+  return {
+    HOST: BIND_HOST,
+    PORT: String(input.port),
+    DEPLOY_ENVIRONMENT: input.env,
+    COGNI_REPO_SHA: input.sourceSha,
+    ...injectable,
+  };
+}

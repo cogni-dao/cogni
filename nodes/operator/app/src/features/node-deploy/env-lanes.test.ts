@@ -156,6 +156,7 @@ function lane(
   const dns = new FakeDns(shared.events);
   const secrets = new LaneSecrets();
   const catalog: NodeCatalogPort = {
+    slugs: async () => ["toks5", "poly"],
     entryFor: async (id) =>
       id === TOKS5_ID
         ? { slug: "toks5", row: { name: "toks5" } }
