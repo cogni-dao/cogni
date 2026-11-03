@@ -144,12 +144,14 @@ export type ReconcileOutcome =
   | "busy";
 
 const ALERT_THROTTLE_MS = 600_000;
+const GRACE_LOG_THROTTLE_MS = 60_000;
 
 class DependencyNotReady extends Error {}
 
 export class NodeDeploySequencer {
   private readonly running = new Set<string>();
   private readonly lastAlertAt = new Map<string, number>();
+  private readonly lastGraceLogAt = new Map<string, number>();
 
   constructor(private readonly d: SequencerDeps) {}
 
@@ -204,6 +206,8 @@ export class NodeDeploySequencer {
 
     const inflight = all.find((a) => IN_FLIGHT_PHASES.includes(a.phase));
     const active = all.find((a) => a.phase === "active");
+    if (desired.gameDayRequestedAt)
+      await this.gameDayKill(key, release, active, inflight);
     if (inflight) {
       const inflightRelease =
         inflight.releaseId === release.id
@@ -270,6 +274,62 @@ export class NodeDeploySequencer {
     });
     await this.drive(key, release, attempt, active);
     return "driven";
+  }
+
+  /**
+   * GAME DAY (design: the weekly kill that proves unattended recovery). Consumes the durable intent an
+   * operator verb recorded: close the ACTIVE app lease through the payer (the actuator pays), leave
+   * desired state and the release untouched, and do NOT mark the attempt. Recovery is the ordinary
+   * path: reconcile observes the chain-confirmed close, marks the lease lost, and `step` redeploys the
+   * same release. A state workload is never killed. While another attempt is in flight (a cutover may
+   * be moving the edge) the intent waits.
+   */
+  private async gameDayKill(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    active: AttemptRow | undefined,
+    inflight: AttemptRow | undefined
+  ): Promise<void> {
+    if (release.spec.kind === "state") {
+      this.alert(key, release, active, "game_day_refused_state");
+      await this.d.store.clearGameDay(key);
+      return;
+    }
+    if (inflight) return; // not mid-release: the intent stays durable and is retried next tick
+    if (!active?.externalName) {
+      this.emit(key, release, active, "game_day_kill", "no_active_lease");
+      await this.d.store.clearGameDay(key);
+      return;
+    }
+    try {
+      await this.d.payer.delete({
+        cogniKey: active.cogniKey,
+        externalName: active.externalName,
+      });
+    } catch (error) {
+      // Keep the intent: the delete may not have happened; the next tick retries.
+      this.emit(key, release, active, "game_day_kill", "delete_failed", {
+        error: errText(error),
+      });
+      return;
+    }
+    this.d.log.warn(
+      {
+        component: "node-deploy-sequencer",
+        nodeId: key.nodeId,
+        env: key.env,
+        workload: key.workload,
+        releaseId: release.id,
+        attempt: active.attempt,
+        dseq: active.externalName,
+        provider: active.provider,
+        step: "game_day_kill",
+        outcome: "deleted",
+        sourceSha: release.sourceSha,
+      },
+      "node_deploy_game_day_kill"
+    );
+    await this.d.store.clearGameDay(key);
   }
 
   /** Run one attempt forward as far as it can go in this call. */
@@ -357,7 +417,7 @@ export class NodeDeploySequencer {
 
     // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
     if (this.createMayStillBeInFlight(attempt)) {
-      this.emit(key, release, attempt, "create", "inflight_grace", {
+      this.emitGrace(key, release, attempt, "create", "inflight_grace", {
         graceMs: this.d.config.inflightGraceMs,
       });
       return attempt;
@@ -421,7 +481,9 @@ export class NodeDeploySequencer {
         }
         if (error.ambiguous) {
           const marked = await this.d.store.updateAttempt(attempt.id, {
-            error: `ambiguous: ${error.code}`,
+            // A transport-level failure stamps WHEN it happened: the in-flight grace window is anchored
+            // to that moment, not to the (possibly much older) attempt row.
+            error: ambiguousMarker(error.code, this.d.clock.now()),
           });
           this.emit(key, release, marked, "create", "ambiguous", {
             code: error.code,
@@ -440,14 +502,35 @@ export class NodeDeploySequencer {
     }
   }
 
-  /** A transport-level create failure inside the grace window: the actuator may still be working. */
+  /**
+   * A transport-level create failure inside the grace window: the actuator may still be working. The
+   * window starts at the failure (`ambiguous: network@<epoch ms>`); a legacy marker without a stamp
+   * falls back to the attempt's creation time.
+   */
   private createMayStillBeInFlight(attempt: AttemptRow): boolean {
+    if (attempt.externalName) return false;
+    const failedAt = networkFailureAt(attempt);
     return (
-      attempt.error === "ambiguous: network" &&
-      !attempt.externalName &&
-      this.d.clock.now() - attempt.createdAt.getTime() <
-        this.d.config.inflightGraceMs
+      failedAt !== undefined &&
+      this.d.clock.now() - failedAt < this.d.config.inflightGraceMs
     );
+  }
+
+  /** The grace-window logs repeat every tick, so they are written once per 60 s per attempt and kind. */
+  private emitGrace(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    step: string,
+    outcome: string,
+    extra: Record<string, unknown>
+  ): void {
+    const now = this.d.clock.now();
+    const k = `${attempt.id}/${step}/${outcome}`;
+    const last = this.lastGraceLogAt.get(k);
+    if (last !== undefined && now - last < GRACE_LOG_THROTTLE_MS) return;
+    this.lastGraceLogAt.set(k, now);
+    this.emit(key, release, attempt, step, outcome, extra);
   }
 
   private async bindLease(
@@ -752,7 +835,7 @@ export class NodeDeploySequencer {
     if (!attempt.externalName) {
       if (this.createMayStillBeInFlight(attempt)) {
         // Never fail/supersede (and never observe) while the actuator may still be creating.
-        this.emit(key, release, attempt, "attempt_failed", "deferred", {
+        this.emitGrace(key, release, attempt, "attempt_failed", "deferred", {
           reason: trimmed,
           inflightGraceMs: this.d.config.inflightGraceMs,
         });
@@ -1153,6 +1236,20 @@ export class NodeDeploySequencer {
       "node_deploy_alert"
     );
   }
+}
+
+/** `ambiguous: <code>`; a network failure carries the failure time: `ambiguous: network@<epoch ms>`. */
+function ambiguousMarker(code: string, now: number): string {
+  return code === "network"
+    ? `ambiguous: network@${now}`
+    : `ambiguous: ${code}`;
+}
+
+/** When the transport-level create failure happened (stamp, else legacy fallback to createdAt). */
+function networkFailureAt(attempt: AttemptRow): number | undefined {
+  const m = /^ambiguous: network(?:@(\d+))?$/u.exec(attempt.error ?? "");
+  if (!m) return undefined;
+  return m[1] ? Number(m[1]) : attempt.createdAt.getTime();
 }
 
 function tryForwarded(

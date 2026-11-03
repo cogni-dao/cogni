@@ -32,6 +32,15 @@ export const DeployWorkloadInputSchema = z.strictObject({
   sourceSha: z.string().regex(/^[0-9a-f]{40}$/, "expected a full 40-hex sha"),
 });
 
+/** Game-day kill intent: the same addressing as a release, with no sha. */
+export const DeployWorkloadGameDayInputSchema = z.strictObject({
+  nodeId: z.string().min(1).describe("Node UUID or unique slug"),
+  env: DeployWorkloadEnvSchema,
+  workload: z
+    .string()
+    .regex(/^[a-z][a-z0-9-]{0,62}$/, "workload must be a DNS-safe name"),
+});
+
 export const DeployWorkloadQuerySchema = z.strictObject({
   nodeId: z.string().min(1),
   env: DeployWorkloadEnvSchema,
@@ -50,6 +59,9 @@ export const DeployWorkloadRecordedSchema = z.object({
   desiredState: z.literal("running"),
 });
 
+export type DeployWorkloadGameDayInput = z.infer<
+  typeof DeployWorkloadGameDayInputSchema
+>;
 export type DeployWorkloadInput = z.infer<typeof DeployWorkloadInputSchema>;
 export type DeployWorkloadQuery = z.infer<typeof DeployWorkloadQuerySchema>;
 export type DeployWorkloadRecorded = z.infer<

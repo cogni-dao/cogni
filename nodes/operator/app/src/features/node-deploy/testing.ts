@@ -96,6 +96,23 @@ export class MemoryStore implements StorePort {
   async getDesired(key: WorkloadKey): Promise<DesiredRow | undefined> {
     return this.desired.get(keyString(key));
   }
+  async requestGameDay(key: WorkloadKey): Promise<boolean> {
+    const cur = this.desired.get(keyString(key));
+    if (!cur) return false;
+    this.desired.set(keyString(key), {
+      ...cur,
+      gameDayRequestedAt: new Date(this.clock.now()),
+    });
+    return true;
+  }
+  async clearGameDay(key: WorkloadKey): Promise<void> {
+    const cur = this.desired.get(keyString(key));
+    if (cur)
+      this.desired.set(keyString(key), {
+        ...cur,
+        gameDayRequestedAt: undefined,
+      });
+  }
   async listDesired(env: string): Promise<readonly DesiredRow[]> {
     return [...this.desired.values()].filter((d) => d.env === env);
   }

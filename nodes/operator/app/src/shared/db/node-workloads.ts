@@ -95,6 +95,14 @@ export const nodeWorkloadDesired = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    /**
+     * Durable GAME-DAY intent: set by `POST /deploy/workloads/game-day`, consumed (and cleared) by the
+     * sequencer, which closes the active app lease through the actuator WITHOUT touching `state` or
+     * `release_id`. Reconcile then detects the chain-confirmed close and recovers the same release.
+     */
+    gameDayRequestedAt: timestamp("game_day_requested_at", {
+      withTimezone: true,
+    }),
   },
   (table) => [
     primaryKey({

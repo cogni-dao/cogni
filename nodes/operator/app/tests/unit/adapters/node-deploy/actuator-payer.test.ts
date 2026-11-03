@@ -110,6 +110,36 @@ describe("ActuatorPayer wire", () => {
     });
   });
 
+  it("sends excludeProviders (blue's provider) on the v1 wire; the strict schema accepts it; absent/empty/malformed are not sent", async () => {
+    const blue = "akash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+    const { calls, fetchImpl } = recorder(() => ({
+      status: 200,
+      body: {
+        externalName: "1",
+        state: "pending",
+        endpoints: [],
+        replayed: false,
+        recovered: false,
+      },
+    }));
+    const payer = payerWith(fetchImpl);
+    await payer.create({ ...request(), excludeProviders: [blue] });
+    expect(
+      AkashTxCreateInputSchema.parse(calls[0]?.json).excludeProviders
+    ).toEqual([blue]);
+    await payer.create({ ...request(), cogniKey: "k2", excludeProviders: [] });
+    await payer.create({ ...request(), cogniKey: "k3" });
+    await payer.create({
+      ...request(),
+      cogniKey: "k4",
+      excludeProviders: ["not-an-address"],
+    });
+    for (const c of calls.slice(1))
+      expect("excludeProviders" in (c.json as Record<string, unknown>)).toBe(
+        false
+      );
+  });
+
   it("a state workload spec (persistent volume, tcp expose) also passes the strict wire", async () => {
     const { calls, fetchImpl } = recorder(() => ({
       status: 200,

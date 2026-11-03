@@ -244,11 +244,21 @@ export const AkashTxObserveInputSchema = z.strictObject({
   composite: AkashTxCompositeVerdictSchema.optional(),
 });
 
+/** A bech32 Akash account address: `akash1` + 38 data characters. */
+const ProviderAccountSchema = z.string().regex(/^akash1[0-9a-z]{38}$/);
+
 export const AkashTxCreateInputSchema = z.strictObject({
   cogniKey: CogniKeySchema,
   environment: EnvironmentSchema,
   identity: AkashTxIdentitySchema,
   spec: AkashTxSpecSchema,
+  /**
+   * OPTIONAL providers that must not win THIS create (task.5400): the provider currently serving the
+   * blue lease, because two leases on one provider ingress cannot both claim one host. It can only
+   * NARROW the eligible bids: the actuator UNIONS it into its ledger-derived tried set (task.5153) and
+   * never replaces it. ABSENT is byte-identical to the pre-task.5400 wire and behaviour.
+   */
+  excludeProviders: z.array(ProviderAccountSchema).max(16).optional(),
   /** DEPRECATED, parsed and ignored — see `AkashTxDeprecatedMigrationSchema`. */
   migration: AkashTxDeprecatedMigrationSchema.optional(),
 });

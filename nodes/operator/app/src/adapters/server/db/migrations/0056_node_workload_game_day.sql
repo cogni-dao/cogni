@@ -1,0 +1,1 @@
+ALTER TABLE "node_workload_desired" ADD COLUMN "game_day_requested_at" timestamp with time zone;

@@ -36,6 +36,9 @@ export interface ActuatorPayerConfig {
   readonly readTimeoutMs?: number;
 }
 
+/** Mirrors the wire contract's `excludeProviders` item pattern. */
+const PROVIDER_ACCOUNT = /^akash1[0-9a-z]{38}$/u;
+
 const KNOWN_CODES: ReadonlySet<string> = new Set<PayerErrorCode>([
   "invalid_request",
   "unauthorized",
@@ -153,6 +156,9 @@ export class ActuatorPayer implements PayerPort {
   }
 
   async create(req: PayerCreateRequest): Promise<PayerResource> {
+    const exclude = (req.excludeProviders ?? []).filter((p) =>
+      PROVIDER_ACCOUNT.test(p)
+    );
     const out = await this.post(
       "/v1/akash/create",
       {
@@ -160,6 +166,9 @@ export class ActuatorPayer implements PayerPort {
         environment: req.environment,
         identity: req.identity,
         spec: req.spec,
+        // Only when non-empty: absent stays byte-identical to the pre-exclusion wire. Only well-formed
+        // account addresses are sent (the wire is strict: one malformed value would 400 the create).
+        ...(exclude.length > 0 ? { excludeProviders: exclude } : {}),
       },
       this.cfg.createTimeoutMs ?? 600_000,
       true

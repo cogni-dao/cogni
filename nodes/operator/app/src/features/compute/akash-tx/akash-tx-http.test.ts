@@ -98,6 +98,65 @@ function dispatcherFor(actuator: AkashTxActuatorPort) {
   return createAkashTxDispatcher({ actuator, token: TOKEN });
 }
 
+describe("akash-tx create excludeProviders (task.5400)", () => {
+  const BLUE = "akash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+  const create = async (
+    extra: Record<string, unknown>
+  ): Promise<{ status: number; received: Record<string, unknown>[] }> => {
+    const received: Record<string, unknown>[] = [];
+    const dispatch = dispatcherFor(
+      stubActuator({
+        create: async (input) => {
+          received.push(input as unknown as Record<string, unknown>);
+          return {
+            externalName: "7001",
+            state: "pending",
+            endpoints: [],
+            replayed: false,
+            recovered: false,
+          };
+        },
+      })
+    );
+    const res = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: AUTH,
+      body: JSON.stringify({ ...VALID_CREATE, ...extra }),
+    });
+    return { status: res.status, received };
+  };
+
+  it("absent: the actuator receives NO excludeProviders key (byte-identical to the old wire)", async () => {
+    const { status, received } = await create({});
+    expect(status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect("excludeProviders" in (received[0] ?? {})).toBe(false);
+  });
+
+  it("present: the actuator receives exactly the list", async () => {
+    const { status, received } = await create({ excludeProviders: [BLUE] });
+    expect(status).toBe(200);
+    expect(received[0]?.excludeProviders).toEqual([BLUE]);
+  });
+
+  it("invalid (not an akash1 address, too many, wrong type) is a 400 and nothing reaches the actuator", async () => {
+    for (const bad of [
+      ["not-an-address"],
+      [BLUE.toUpperCase()],
+      Array.from(
+        { length: 17 },
+        (_, i) => `akash1${String(i).padStart(38, "q")}`
+      ),
+      "akash1",
+    ]) {
+      const { status, received } = await create({ excludeProviders: bad });
+      expect(status).toBe(400);
+      expect(received).toHaveLength(0);
+    }
+  });
+});
+
 describe("akash-tx dispatcher", () => {
   it("prepares a diagnostic from authenticated references without allocating or accepting credentials", async () => {
     const received: unknown[] = [];
