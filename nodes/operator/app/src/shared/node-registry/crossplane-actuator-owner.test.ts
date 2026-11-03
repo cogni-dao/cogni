@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   CROSSPLANE_ACTUATOR_WALLET_ENVS,
   CROSSPLANE_ACTUATOR_WRITERS,
-  canBirthOnCrossplane,
   writerFor,
 } from "./crossplane-control-plane";
 
@@ -18,7 +17,7 @@ describe("actuator serving is keyed on (env, owner) — bug.5202", () => {
     // Console account." Environment is a property of the deployment, not of who pays.
     for (const env of ["candidate-a", "preview", "production"]) {
       expect(writerFor(env, "cogni-dao")?.id, env).toBe(PROD_WRITER);
-      expect(canBirthOnCrossplane(env, "cogni-dao"), env).toBe(true);
+      expect((writerFor(env, "cogni-dao") !== undefined), env).toBe(true);
     }
   });
 
@@ -50,7 +49,7 @@ describe("actuator serving is keyed on (env, owner) — bug.5202", () => {
   it("is case-insensitive on the owner, and denies an unknown owner", () => {
     expect(writerFor("production", "Cogni-DAO")?.id).toBe(PROD_WRITER);
     expect(writerFor("production", "some-other-org")).toBeUndefined();
-    expect(canBirthOnCrossplane("production", "")).toBe(false);
+    expect((writerFor("production", "") !== undefined)).toBe(false);
   });
 
   it("keeps account → writer injective while writer → envs stays one-to-many", () => {

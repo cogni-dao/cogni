@@ -507,34 +507,6 @@ compute_api_for_target() {
   esac
 }
 
-# ONE_AUTHORITY_PER_WORKLOAD (bug.5148), structural half. Shell twin of
-# computeWorkloadManifestFile() in
-# nodes/operator/app/src/features/compute/compute-workload-manifest.ts: each authority renders
-# into its OWN filename, and the materializer's `rsync --delete` means the kind NOT selected is
-# ABSENT from the overlay. So a lane that hardcodes `compute-workload.yaml` is silently
-# asserting the legacy authority — which is why the first real `crossplane` mint failed its
-# flight with the manifest correctly rendered as `xcomputeworkload.yaml` right beside the check.
-#   compute_workload_manifest_file_for_api API   # → the file that authority renders
-compute_workload_manifest_file_for_api() {
-  case "${1:-}" in
-    crossplane) printf 'xcomputeworkload.yaml' ;;
-    legacy) printf 'compute-workload.yaml' ;;
-    *)
-      echo "[ERROR] image-tags: unsupported compute_api '${1:-}' (expected legacy|crossplane)" >&2
-      return 1
-      ;;
-  esac
-}
-
-# The manifest filename a (node, env) cell's rendered desired state is committed under — the
-# one call sites should use. Deploy lanes RESOLVE the name; they never choose it.
-#   compute_workload_manifest_file NODE ENV   # → compute-workload.yaml | xcomputeworkload.yaml
-compute_workload_manifest_file() {
-  local api
-  api="$(compute_api_for_target "$1" "${2:-}")" || return 1
-  compute_workload_manifest_file_for_api "$api"
-}
-
 # bug.5094 — the address a CHERRY-RESIDENT caller must dial to reach a node's app.
 # Placement decides the address, not the caller:
 #   k3s   → the in-cluster Service DNS convention (unchanged; do not regress the fleet)

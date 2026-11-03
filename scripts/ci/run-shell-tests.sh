@@ -58,7 +58,6 @@ PARALLEL=(
   ssh-transport-retry.test.sh
   assert-target-substrate.test.sh
   resolve-remote-source-sha.test.sh
-  compute-workload-manifest-file.test.sh
   render-caddyfile.test.sh
   reconcile-edge-caddy.test.sh
   reconcile-node-dns.test.sh
