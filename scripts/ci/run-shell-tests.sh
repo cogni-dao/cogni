@@ -40,7 +40,6 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TESTS_DIR="$REPO_ROOT/scripts/ci/tests"
 
 MUTATORS=(
-  render-node-overlays.test.sh # hand-stales infra/k8s/overlays + `git checkout` restore
 )
 
 PARALLEL=(

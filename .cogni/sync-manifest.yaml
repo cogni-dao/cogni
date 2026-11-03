@@ -239,4 +239,3 @@ divergences:
       commands:
         - scripts/ci/render-scheduler-worker-endpoints.sh --write
         - scripts/ci/render-node-appset.sh --write
-        - scripts/ci/render-node-overlays.sh --write
