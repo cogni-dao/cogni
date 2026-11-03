@@ -238,6 +238,14 @@ const IDENTITY: Record<string, Rule[]> = {
       ),
     },
     {
+      why: "the environment VM's DNS alias (`vm_host_for_env`) the shared substrate answers on (task.5405)",
+      pattern: envValue(
+        "node-deploy-sequencer",
+        "sequencer",
+        "NODE_DEPLOY_SUBSTRATE_HOST"
+      ),
+    },
+    {
       why: "env name",
       pattern: envValue(
         "database-reliability-actuator",

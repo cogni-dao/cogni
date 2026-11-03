@@ -10,30 +10,56 @@
  *   - ONE_SERVICE_PER_LEASE: a lease carries exactly one service; state and app never share one.
  *   - APP_EXPOSE_80: an http app exposes its port as 80, global, accepting only its public host.
  *   - STATE_FORWARDS_TCP: a state service exposes its port as itself, global (provider forwards it).
- *   - NO_PLACEMENT: no `placement` is sent; the canary takes the actuator's default screening.
+ *   - PLACEMENT_IS_CATALOG_POLICY: `placement` is sent ONLY when the node's catalog row declares
+ *     `required_placement_countries[<env>]` (task.5405); otherwise the actuator's default screening.
+ *   - INJECTED_ENV_WINS: platform-injected env overrides a same-named declared `env` key.
+ *   - DB_CA_TRUST_FOR_NODE_APPS: a node app that receives a database DSN starts through the database CA
+ *     trust wrapper (`databaseConsumerCommand`), exactly as the Crossplane lane started it.
  * Side-effects: none
  * @internal
  */
 
 import type { NodeWorkloadSpec, PayerSpec } from "@/ports";
+import { databaseConsumerCommand } from "@/shared/secrets/database-ca-command";
 
 export function publicHostOf(w: NodeWorkloadSpec): string | undefined {
   return "http" in w.expose ? w.expose.http.host : undefined;
 }
 
+export interface ToPayerSpecOptions {
+  /** Catalog `required_placement_countries[<env>]`; empty or absent sends no `placement`. */
+  readonly requiredCountryCodes?: readonly string[];
+  /** True for a non-operator node app: it starts through the database CA trust wrapper. */
+  readonly nodeApp?: boolean;
+}
+
 export function toPayerSpec(
   w: NodeWorkloadSpec,
-  injectedEnv: Readonly<Record<string, string>>
+  injectedEnv: Readonly<Record<string, string>>,
+  options: ToPayerSpecOptions = {}
 ): PayerSpec {
   const host = publicHostOf(w);
+  const env = { ...w.env, ...injectedEnv };
+  const start = options.nodeApp
+    ? databaseConsumerCommand({
+        runtimeProfile: "cogni-node-app-v1",
+        ...(w.command ? { command: w.command } : {}),
+        secretRefs: Object.keys(env).map((key) => ({ key })),
+      })
+    : { ...(w.command ? { command: w.command } : {}) };
+  const countries = options.requiredCountryCodes ?? [];
   return {
     name: w.name,
+    ...(countries.length > 0
+      ? { placement: { requiredCountryCodes: countries } }
+      : {}),
     services: [
       {
         name: w.name,
         image: w.image,
-        env: { ...w.env, ...injectedEnv },
-        ...(w.command ? { command: w.command } : {}),
+        env,
+        ...(start.command ? { command: start.command } : {}),
+        ...("args" in start && start.args ? { args: start.args } : {}),
         cpuUnits: w.cpu,
         memoryMi: w.memoryMi,
         storageMi: w.storageMi,

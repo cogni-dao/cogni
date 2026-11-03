@@ -375,6 +375,13 @@ export type {
   NodeSummary,
 } from "./node-registry.port";
 export type {
+  NodeCatalogEntry,
+  NodeCatalogPort,
+  NodeRuntimeSecretsErrorCode,
+  NodeRuntimeSecretsPort,
+} from "./node-runtime.port";
+export { NodeRuntimeSecretsError } from "./node-runtime.port";
+export type {
   OnChainVerifier,
   VerificationResult,
   VerificationStatus,

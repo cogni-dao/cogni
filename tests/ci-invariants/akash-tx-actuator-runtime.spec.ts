@@ -892,13 +892,20 @@ describe("node-deploy sequencer has no secrets reach in the wallet namespace", (
     }
   })();
 
-  it("the base Role grants only secrets get+create, and every overlay moves it to a dedicated namespace", () => {
+  it("the base Role grants only secrets get+create plus its own externalsecrets (task.5405), and every overlay moves it to a dedicated namespace", () => {
     const rbac = yaml
       .parseAllDocuments(read("infra/k8s/base/node-deploy-sequencer/rbac.yaml"))
       .map((d) => d.toJS() as Doc);
     const role = rbac.find((d) => d.kind === "Role");
     expect(role?.rules).toEqual([
       { apiGroups: [""], resources: ["secrets"], verbs: ["get", "create"] },
+      // task.5405: the sequencer is the ONE writer of the ExternalSecrets that render a node's
+      // OpenBao bucket into a Secret in this same dedicated namespace. No delete, no list.
+      {
+        apiGroups: ["external-secrets.io"],
+        resources: ["externalsecrets"],
+        verbs: ["get", "create", "patch", "update"],
+      },
     ]);
     for (const env of ["candidate-a", "production"]) {
       const kustomization = read(

@@ -489,7 +489,25 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
     excludeProviders?: readonly string[];
+    allowProviders?: readonly string[];
   }): Promise<AkashTxCreateResult> {
+    // task.5405: a caller allowlist that can never be satisfied is refused BEFORE the wallet slot is
+    // claimed or any escrow opens, with the reason (never a silent widen to the configured set).
+    if (input.allowProviders && input.allowProviders.length > 0) {
+      const refusal = this.console.providerPinRefusal?.(
+        new Set(input.allowProviders)
+      );
+      if (refusal) {
+        this.log.warn(
+          {
+            cogniKey: input.cogniKey,
+            allowedCount: input.allowProviders.length,
+          },
+          "akash_tx_caller_provider_allowlist_refused"
+        );
+        throw new AkashTxError("provider_rejected", refusal);
+      }
+    }
     await this.requireQualifiedCellRelease({
       cogniKey: input.cogniKey,
       environment: input.environment,
@@ -590,6 +608,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     recoveryFamilyPrefix?: string;
     /** Caller-supplied exclusions (task.5400). UNIONED with the ledger-derived tried set. */
     excludeProviders?: readonly string[];
+    /** Caller-supplied allowlist (task.5405). INTERSECTED with the configured one by the console client. */
+    allowProviders?: readonly string[];
   }): Promise<AkashTxCreateResult> {
     // The claim IS the receipt, and it is the FIRST mutation this method does: its INSERT carries
     // {nodeId, environment, compositeUid, compositeGeneration, cogniKey}. Everything below this
@@ -832,6 +852,9 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           : {}),
         ...(excludedProviders && excludedProviders.size > 0
           ? { excludedProviders }
+          : {}),
+        ...(input.allowProviders && input.allowProviders.length > 0
+          ? { allowedProviders: new Set(input.allowProviders) }
           : {}),
         // Durability of the handle is a precondition of every later step: the client closes
         // the deployment if this throws, because an unrecorded dseq is a lease nobody can find.

@@ -6,10 +6,15 @@
 # This Role and RoleBinding are placed in THAT namespace by each overlay (a `replacements` entry sourced
 # from the overlay's Namespace), bound to the sequencer ServiceAccount that lives in the wallet
 # namespace. The wallet namespace therefore carries NO secrets verb for this ServiceAccount.
-# It creates a Secret once and reuses it after, so the Role is exactly get + create: no update (a
-# password that guards live data is never replaced), no delete, no list, no other resource. `get` is
-# unscoped by name only because the namespace is dedicated; `create` could never be name-scoped anyway
-# (Kubernetes limitation: the name is not known to RBAC at create time).
+# It creates a Secret once and reuses it after, so the Secret rule is exactly get + create: no update (a
+# password that guards live data is never replaced), no delete, no list. `get` is unscoped by name only
+# because the namespace is dedicated; `create` could never be name-scoped anyway (Kubernetes limitation:
+# the name is not known to RBAC at create time).
+#
+# task.5405 — the sequencer is also the ONE writer of the ExternalSecrets `nd-<slug>-env` in this same
+# namespace: they render a node's OpenBao bucket (via ESO's own eso-reader role) into a Secret it then
+# reads, so a node app gets its runtime env without any new OpenBao role. get/create/patch/update on
+# externalsecrets, this namespace only: no delete, no list, no other resource.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -18,6 +23,9 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create]
+  - apiGroups: [external-secrets.io]
+    resources: [externalsecrets]
+    verbs: [get, create, patch, update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

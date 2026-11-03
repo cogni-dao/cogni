@@ -198,6 +198,21 @@ patches:
                     value: cogni-node-deploy-production
                   - name: AKASH_CHAIN_OWNER
                     value: "akash10auj6u6wr7aqjawuxurgue9w7wfnca50t8cr4l"
+                  # task.5405 — a node APP gets the same runtime env the Crossplane lane gave it. Its
+                  # secrets arrive through the EXISTING custody path (OpenBao -> ESO eso-reader -> a
+                  # Secret in NODE_DEPLOY_SECRETS_NAMESPACE): no new OpenBao role, no projected token.
+                  # `vm_host_for_env`: the environment VM's published alias the shared substrate
+                  # (Temporal 7233, Redis 6379, LiteLLM 4000, worker health 30900) answers on.
+                  - name: NODE_DEPLOY_SUBSTRATE_HOST
+                    value: cogni.vm.cognidao.org
+                  # YELLOW, INTERIM (owner task.5384, EXPIRES 2026-11-23): the providers whose egress
+                  # is measured AND admitted to the shared substrate's firewall allowlist (zencloud BE,
+                  # ithub UA, h4i PT, h6i BG). Sent as `allowProviders` on every node APP create; the
+                  # actuator INTERSECTS it with AKASH_ALLOWED_PROVIDERS and refuses on an empty result.
+                  # Delete this env var (no code change) once egress is no longer provider-dependent.
+                  # m3a FI is deliberately absent: its egress measured differently twice (not stable).
+                  - name: NODE_DEPLOY_APP_PROVIDERS
+                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm,akash1v0f04wr3tkh9uf43q9eqfd0whpfeu8qevlq99h,akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk,akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z
   # story.5016 Gate 0b: env values are set BY NAME via strategic merge (env lists
   # merge on `name`), never by positional JSON-pointer index. A positional
   # `/env/N/value` patch silently repoints when the base list shifts — that exact

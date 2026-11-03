@@ -140,6 +140,70 @@ describe("ActuatorPayer wire", () => {
       );
   });
 
+  it("sends allowProviders (task.5405) on the v1 wire; the strict schema accepts it; absent is byte-identical", async () => {
+    const a = "akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm";
+    const b = "akash1v0f04wr3tkh9uf43q9eqfd0whpfeu8qevlq99h";
+    const { calls, fetchImpl } = recorder(() => ({
+      status: 200,
+      body: {
+        externalName: "1",
+        state: "pending",
+        endpoints: [],
+        replayed: false,
+        recovered: false,
+      },
+    }));
+    const payer = payerWith(fetchImpl);
+    await payer.create({ ...request(), allowProviders: [a, b, a] });
+    expect(
+      AkashTxCreateInputSchema.parse(calls[0]?.json).allowProviders
+    ).toEqual([a, b]);
+    await payer.create({ ...request(), cogniKey: "k2" });
+    await payer.create({ ...request(), cogniKey: "k3", allowProviders: [] });
+    for (const c of calls.slice(1))
+      expect("allowProviders" in (c.json as Record<string, unknown>)).toBe(
+        false
+      );
+  });
+
+  it("never turns a requested allowlist of malformed accounts into NO allowlist: refuses before any call", async () => {
+    const { calls, fetchImpl } = recorder(() => ({ status: 200, body: {} }));
+    await expect(
+      payerWith(fetchImpl).create({
+        ...request(),
+        allowProviders: ["not-an-address"],
+      })
+    ).rejects.toMatchObject({ code: "invalid_request", ambiguous: false });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a node-app spec with catalog countries and the DB CA wrapper passes the strict wire", async () => {
+    const { calls, fetchImpl } = recorder(() => ({
+      status: 200,
+      body: {
+        externalName: "1",
+        state: "pending",
+        endpoints: [],
+        replayed: false,
+        recovered: false,
+      },
+    }));
+    await payerWith(fetchImpl).create({
+      ...request(),
+      spec: toPayerSpec(
+        canaryApp(),
+        { DATABASE_URL: "postgres://x", RELEASE_SHA: SHA_1 },
+        { requiredCountryCodes: ["FI", "NL"], nodeApp: true }
+      ),
+    });
+    const parsed = AkashTxCreateInputSchema.parse(calls[0]?.json);
+    expect(parsed.spec.placement).toEqual({
+      requiredCountryCodes: ["FI", "NL"],
+    });
+    expect(parsed.spec.services[0]?.command?.[0]).toBe("/bin/sh");
+    expect(parsed.spec.services[0]?.args).toEqual(["sh", "-c", "echo app"]);
+  });
+
   it("a state workload spec (persistent volume, tcp expose) also passes the strict wire", async () => {
     const { calls, fetchImpl } = recorder(() => ({
       status: 200,

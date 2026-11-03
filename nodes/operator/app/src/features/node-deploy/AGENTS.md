@@ -65,6 +65,18 @@ Operator-only: the Grafana dashboard `cogni-node-deploy` and the alerts in `infr
 
 **Hairpin rule.** An app cannot reach a state lease's public forwarded port on its own provider, so every app create excludes blue's provider AND the provider of each bound state workload's active lease (`excludeProviders`, deduped, max 16, logged as step `providers_excluded`).
 
+## Node app runtime env and placement (task.5405)
+
+A node APP of a non-operator node gets the SAME env the retired Crossplane lane rendered, with OpenBao as custodian. The operator's own workloads (slug `operator`) and the dev harness (no `runtime` dep) get only `RELEASE_SHA` and bindings.
+
+- **Env.** `node-app-env.ts` (`nodeAppEnv`, pure, parity-pinned key by key in `node-app-env.test.ts` against `infra/crossplane/xcomputeworkload/composition.yaml` l.185-284). Order, later wins: `HOST/HOSTNAME/PORT`, `APP_ENV`, `DEPLOY_ENVIRONMENT`, `COGNI_REPO_SHA`, substrate topology (`NODE_DEPLOY_SUBSTRATE_HOST`), bucket secrets, `COGNI_NODE_ID`, DB pool maxes (catalog), identity (`NODE_NAME`, `NEXTAUTH_URL`, ...). Then `RELEASE_SHA`, then declared state bindings (CD2: a binding beats the bucket). Injected env beats a same-named declared `env`.
+- **Secrets (existing custody path).** `NodeRuntimeSecretsPort` (`EsoNodeRuntimeSecrets`) ensures ONE ExternalSecret `nd-<slug>-env` in the sequencer's OWN namespace (`NODE_DEPLOY_SECRETS_NAMESPACE`): `ClusterSecretStore openbao-backend` (ESO's `eso-reader`), `dataFrom extract <env>/<slug>`, target `nd-<slug>-env` (Owner, 5m). It waits a bounded 20 s for Ready, then reads the target Secret. Custody stays in OpenBao; there is NO new OpenBao role and no root token. The sequencer is the ONLY writer of that ExternalSecret (Role: externalsecrets get/create/patch/update in its namespace only). EVERY bucket key enters the env EXCEPT `OFF_CLUSTER_WORKLOAD_DENIED_KEYS` (a node's own `secret_refs` live in its repo, which the sequencer never reads). `LITELLM_VIRTUAL_KEY` is delivered as `LITELLM_MASTER_KEY`. Every `COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS` key (minus those a binding supplies) must be present. A value changed in OpenBao reaches the next create within the 5m refresh.
+- **NO_HALF_ENV.** A missing key, an ExternalSecret that is not Ready, a node the image catalog does not know, or a malformed catalog cell throws `DependencyNotReady` BEFORE the attempt row exists: step `dependency/waiting` names the keys (never values), nothing is paid, no attempt is burned, and the next tick retries.
+- **Catalog.** `NodeCatalogPort` (`ImageCatalogNodes`) resolves node id -> slug + row from `/app/infra/catalog` baked in the image. `node-catalog-policy.ts` reads `required_placement_countries[<env>]` (sent as `spec.placement.requiredCountryCodes`; apps only) and `database.<env>.runtimePoolLimits`.
+- **Placement.** `SequencerConfig.appProviders` (`NODE_DEPLOY_APP_PROVIDERS`, INTERIM, task.5384, expires 2026-11-23) is sent as `allowProviders` on app creates; the actuator INTERSECTS it with its own allowlist and refuses an empty result before paying. Step `placement_constrained` records it.
+- **Start command.** A node app that receives a DSN starts through `databaseConsumerCommand` (DB CA trust wrapper), as the Crossplane lane did.
+- **Not here.** Loki lease push (operator-bucket credentials) and the release-side migration Job are not wired by the sequencer (see the PR).
+
 ## Responsibilities
 
 - This directory **does**: sequence deploys over ports, emit one event stream, project the read model.

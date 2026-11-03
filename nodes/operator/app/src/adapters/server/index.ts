@@ -170,6 +170,8 @@ export { AdvisoryLeader } from "./node-deploy/advisory-leader.adapter";
 export { AkashChainTruth } from "./node-deploy/akash-chain-truth.adapter";
 export { CloudflareDnsRecords } from "./node-deploy/cloudflare-dns.adapter";
 export { HttpProbe } from "./node-deploy/http-probe.adapter";
+export { ImageCatalogNodes } from "./node-deploy/image-catalog.adapter";
+export { EsoNodeRuntimeSecrets } from "./node-deploy/node-runtime-secrets.adapter";
 export { PostgresNodeDeployStore } from "./node-deploy/postgres-store.adapter";
 // DEV-ONLY adapters (ConsolePayer pays straight from a Console key; FileStatePasswords writes secrets
 // to disk) are deliberately NOT exported here: the production sequencer bootstrap imports this barrel,
