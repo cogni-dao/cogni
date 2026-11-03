@@ -49,15 +49,16 @@ variable "ssh_private_key" {
   sensitive   = true
 }
 
-# GHCR registry auth for k3s to pull private images
+# GitHub credential for the cloud-init repo clone only (Argo CD bootstrap).
+# Not a registry credential: GHCR images are public (bug.5563).
 variable "ghcr_deploy_username" {
-  description = "GitHub username for GHCR registry auth (k3s)"
+  description = "GitHub username for the cloud-init repo clone"
   type        = string
   default     = "Cogni-1729"
 }
 
 variable "ghcr_deploy_token" {
-  description = "GitHub PAT for GHCR registry auth (k3s)"
+  description = "GitHub PAT for the cloud-init repo clone only"
   type        = string
   sensitive   = true
 }

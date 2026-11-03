@@ -58,4 +58,4 @@ sops --encrypt --in-place secrets/staging/scheduler-worker.enc.yaml
 
 ## GHCR registry auth
 
-None. Cogni images on GHCR are public, so the k3s `registries.yaml` holds mirrors only and no credential (bug.5563). A stale credential gets 403 even on a public image.
+Cogni images on GHCR are public. VMs provisioned after bug.5563 have no GHCR registry credential: the k3s `registries.yaml` holds mirrors only. Existing preview/production VMs keep their baked token until bug.5563 step (d). argocd-image-updater still holds its own GHCR credential.

@@ -213,7 +213,8 @@ write_files:
       # ── Argo CD + ksops ──────────────────────────────────────
       echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Cloning repo for Argo CD manifests..."
       apt-get install -y git
-      # Inject GHCR PAT for private repo access (same token works for git + registry).
+      # Inject the GitHub PAT for the repo clone. This is its only use: k3s
+      # pulls public GHCR images with no registry credential (bug.5563).
       AUTHED_URL=$(echo "${cogni_repo_url}" | sed "s|https://|https://${ghcr_deploy_username}:${ghcr_deploy_token}@|")
       git clone --depth=1 --branch "${cogni_repo_ref}" \
         "$AUTHED_URL" /tmp/cogni-repo

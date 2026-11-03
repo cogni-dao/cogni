@@ -42,16 +42,3 @@ variable "ssh_private_key" {
   default     = ""
   sensitive   = true
 }
-
-# k3s-specific config
-variable "ghcr_deploy_token" {
-  description = "GitHub PAT with read:packages scope for pulling private GHCR images"
-  type        = string
-  sensitive   = true
-}
-
-variable "ghcr_deploy_username" {
-  description = "GitHub username for GHCR authentication"
-  type        = string
-  default     = "cogni-deploy"
-}
