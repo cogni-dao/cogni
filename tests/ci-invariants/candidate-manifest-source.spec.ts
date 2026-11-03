@@ -88,6 +88,65 @@ function namedStep(jobName: string, stepName: string): WorkflowStep {
 }
 
 describe("candidate-a manifest source", () => {
+  it("binds the full producer closure to native immutable tooling and retains qualified history", () => {
+    const proof = readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/lib/publication-proof.sh"),
+      "utf8"
+    );
+    const builder = readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/build-and-push-images.sh"),
+      "utf8"
+    );
+    const sources = [...builder.matchAll(/^\. "\$SCRIPT_DIR\/([^"\n]+)"/gm)]
+      .map((match) => `scripts/ci/${match[1]}`)
+      .sort();
+    expect(sources).toEqual([
+      "scripts/ci/lib/image-tags.sh",
+      "scripts/ci/lib/publication-proof.sh",
+    ]);
+    for (const source of sources) expect(proof).toContain(`'${source}':`);
+    expect(proof).toContain("os.environ.get('GITHUB_WORKFLOW_SHA'");
+    expect(proof).toContain("os.environ.get('GITHUB_WORKFLOW_REF'");
+    expect(proof).toContain("f'{current}:{path}'");
+    expect(proof).toContain("publication_reader_worktree_mismatch");
+    expect(proof).toContain(
+      "actual != current_native_blobs and actual != retained_native_blobs"
+    );
+    expect(proof).toContain("'scripts/ci/merge-build-fragments.sh':");
+    expect(proof).toContain(
+      "(repo, workflow_revision) if path == workflow else (source_repo, source_sha)"
+    );
+    expect(proof).toContain(
+      "workflow_revision = legacy_workflow_revision(original, jobs, run_id, attempt)"
+    );
+    expect(proof).toContain(
+      "event in ('push', 'merge_group', 'workflow_dispatch')"
+    );
+    expect(proof).toContain("publication_legacy_execution_contradiction");
+    expect(proof).toContain("and actual != previous_native_blobs");
+    expect(proof).toContain("(2, 'Run ' + checkout, 'success')");
+    expect(
+      proof.indexOf("workflow_revision = legacy_workflow_revision")
+    ).toBeLessThan(proof.indexOf("for path, trusted in legacy_blobs.items()"));
+    expect(proof.indexOf("qualify_producer_closure(signer)")).toBeLessThan(
+      proof.indexOf("actual_repo = labels.get")
+    );
+    const publication = yaml.parse(
+      readFileSync(
+        path.join(REPO_ROOT, ".github/workflows/pr-build.yml"),
+        "utf8"
+      )
+    ) as { jobs: Record<string, WorkflowJob> };
+    const steps = publication.jobs.build.steps;
+    expect(
+      steps.find((step) => step.name === "Checkout workflow tooling")?.with?.ref
+    ).toBe("${{ github.workflow_sha }}");
+    expect(
+      steps.find((step) => step.name === "Build and push ${{ matrix.target }}")
+        ?.run
+    ).toBe("bash ../ci-src/scripts/ci/build-and-push-images.sh");
+  });
+
   it("pairs preparatory init entrypoints with the preserved image, then restores the new audited rollout", () => {
     const fixture = mkdtempSync(
       path.join(os.tmpdir(), "candidate-init-contract-")
@@ -736,16 +795,18 @@ describe("candidate-a manifest source", () => {
         step.name ===
         "Prepare per-node deploy branch (bootstrap from umbrella if missing)"
     );
+    const promotionDigest = promoteJob.steps.find(
+      (step) => step.name === "Resolve digest for this node"
+    );
     const promotionPush = promoteJob.steps.find(
       (step) => step.name === "Commit and push"
     );
-    if (!promotionCheckout || !promotionPush)
+    if (!promotionCheckout || !promotionDigest || !promotionPush)
       throw new Error("ordinary promotion writer steps are required");
     for (const [label, step, checks] of [
       ["candidate prepare", prepare, 2],
       ["candidate checkout", candidateCheckout, 1],
       ["candidate push", candidatePush, 1],
-      ["promotion checkout", promotionCheckout, 1],
       ["promotion push", promotionPush, 1],
     ] as const) {
       const run = step.run ?? "";
@@ -784,6 +845,58 @@ describe("candidate-a manifest source", () => {
           run.indexOf("git push origin")
         );
       }
+    }
+    expect(promotionDigest.env?.SOURCE_REPOSITORY).toBe(
+      "${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}"
+    );
+    expect(promotionDigest.env?.SOURCE_READ_TOKEN).toBe(
+      "${{ secrets.GIT_READ_TOKEN || github.token }}"
+    );
+    const digestRun = promotionDigest.run ?? "";
+    expect(digestRun).toContain(`SOURCE_SHA="$REQUESTED_SOURCE" ${helper}`);
+    expect(digestRun.indexOf("REQUESTED_SOURCE=")).toBeLessThan(
+      digestRun.indexOf(helper)
+    );
+    expect(promoteJob.steps.indexOf(promotionCheckout)).toBeLessThan(
+      promoteJob.steps.indexOf(promotionDigest)
+    );
+    expect(promoteJob.steps.indexOf(promotionDigest)).toBeLessThan(
+      promoteJob.steps.indexOf(promotionPush)
+    );
+    expect(digestRun.indexOf(helper)).toBeLessThan(
+      digestRun.indexOf("read_accepted_app")
+    );
+    expect(digestRun).toContain('REQUESTED_SOURCE="$BUILD_SHA"');
+    expect(digestRun).toContain(
+      'REQUESTED_SOURCE=$(resolve_remote_source_sha "$NODE" "$NODE_SOURCE_SHA"'
+    );
+    const digestGuards = digestRun
+      .split("\n")
+      .filter((line) => line.includes(helper));
+    expect(digestGuards).toHaveLength(1);
+    expect(digestGuards[0].trim()).toBe(
+      `(cd deploy-branch; SOURCE_SHA="$REQUESTED_SOURCE" ${helper})`
+    );
+    for (const mutation of [
+      "Materialize provider-neutral external workload",
+      "Sync infra/k8s + per-node catalog from app-src",
+      "Promote digest + record source-sha",
+      "Record external workload source-sha",
+    ]) {
+      const index = promoteJob.steps.findIndex(
+        (step) => step.name === mutation
+      );
+      expect(index, mutation).toBeGreaterThan(
+        promoteJob.steps.indexOf(promotionDigest)
+      );
+    }
+    for (const step of promoteJob.steps.slice(
+      0,
+      promoteJob.steps.indexOf(promotionDigest)
+    )) {
+      expect(step.run ?? "").not.toMatch(
+        /rsync |promote-k8s-image|update-source-sha-map|reconcile_shared_platform_manifests|git add |git push /
+      );
     }
     for (const job of [
       parsed.jobs["prepare-substrate-deploy-branch"],

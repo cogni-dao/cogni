@@ -70,3 +70,68 @@ describe("sha- artifact identity (SOURCE_SHA_IS_DEPLOY_IDENTITY)", () => {
     expect(yml).not.toMatch(/Re-tag merge_group images/);
   });
 });
+
+// These assertions protect the native mechanism and the ordering that the shell
+// tests execute. Multiple-waiter scheduling and cryptographic execution remain
+// required Actions/candidate gates, never a claim made by these source checks.
+describe("publication and accepted-artifact authority", () => {
+  it("holds one non-cancelling native job lock through proof and fragment upload", () => {
+    const source = WF("pr-build.yml");
+    const build = source.slice(
+      source.indexOf("  build:\n"),
+      source.indexOf("  manifest:\n")
+    );
+    expect(source).not.toMatch(/^concurrency:/m);
+    expect(build).toContain(
+      "group: publish-${{ matrix.publication_coordinate }}"
+    );
+    expect(build).toContain("cancel-in-progress: false");
+    expect(build).toContain("queue: max");
+    expect(build).toMatch(/actions\/attest@[a-f0-9]{40}/);
+    expect(build).toContain("create-storage-record: false");
+    expect(build).toContain("id-token: write");
+    expect(build).toContain("attestations: write");
+    expect(build).toContain("ref: ${{ github.workflow_sha }}");
+    expect(build).toContain(
+      "run: bash ../ci-src/scripts/ci/build-and-push-images.sh"
+    );
+    expect(build.indexOf("name: Verify original publication")).toBeLessThan(
+      build.indexOf("name: Upload build fragment")
+    );
+    expect(build).toContain("-attempt-${{ github.run_attempt }}");
+    expect(build).toContain("retention-days: 7");
+    expect(source).toContain(
+      "pattern: pr-build-fragment-*-${{ needs.resolve.outputs.source_sha }}-attempt-${{ github.run_attempt }}"
+    );
+  });
+
+  it("reads destination acceptance before all app mutation and preserves existing verification", () => {
+    const source = WF("promote-and-deploy.yml");
+    const job = source.slice(
+      source.indexOf("  promote-k8s:\n"),
+      source.indexOf("  node-substrate:\n")
+    );
+    const prepare = job.indexOf("name: Prepare per-node deploy branch");
+    const resolve = job.indexOf("name: Resolve digest for this node");
+    const materialize = job.indexOf(
+      "name: Materialize provider-neutral external workload"
+    );
+    const sync = job.indexOf("name: Sync infra/k8s + per-node catalog");
+    expect(prepare).toBeGreaterThan(0);
+    expect(resolve).toBeGreaterThan(prepare);
+    expect(materialize).toBeGreaterThan(resolve);
+    expect(sync).toBeGreaterThan(materialize);
+    expect(job).toContain(
+      "inputs.skip_infra != 'true' && (inputs.deploy_infra_mode || 'full') == 'full'"
+    );
+    expect(job).toContain("assert_infra_source_current");
+    expect(job).toContain("read_accepted_app");
+    expect(job).toContain(". ci-src/scripts/ci/lib/publication-proof.sh");
+    expect(job).not.toContain(". app-src/scripts/ci/lib/image-tags.sh");
+    expect(job).not.toMatch(/git (pull|rebase)|push[^\n]*--force/);
+    expect(source).toContain("scripts/ci/verify-buildsha.sh");
+    expect(source).toContain("scripts/ci/wait-for-argocd.sh");
+    expect(source).toContain("scripts/ci/wait-for-in-cluster-services.sh");
+    expect(job).toContain("maintenance-fence.py check");
+  });
+});

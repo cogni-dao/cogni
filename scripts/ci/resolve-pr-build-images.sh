@@ -37,6 +37,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib/image-tags.sh
 . "$SCRIPT_DIR/lib/image-tags.sh"
+. "$SCRIPT_DIR/lib/publication-proof.sh"
 
 IMAGE_NAME=${IMAGE_NAME:-ghcr.io/cogni-dao/cogni-template}
 export IMAGE_NAME_APP=${IMAGE_NAME_APP:-$IMAGE_NAME}
@@ -45,6 +46,9 @@ IMAGE_TAG=${IMAGE_TAG:-}
 SOURCE_SHA=${SOURCE_SHA:-}
 OUTPUT_FILE=${OUTPUT_FILE:-${RUNNER_TEMP:-/tmp}/resolved-pr-images.json}
 REMOTE_SOURCE_ARTIFACT_TARGETS_FILE=${REMOTE_SOURCE_ARTIFACT_TARGETS_FILE:-}
+rm -f "$OUTPUT_FILE"
+proof_dir=$(mktemp -d)
+trap 'rm -rf "$proof_dir"' EXIT
 
 if [ -z "$IMAGE_TAG" ]; then
   echo "[ERROR] IMAGE_TAG is required" >&2
@@ -82,15 +86,7 @@ resolve_tag() {
 }
 
 resolve_digest_ref() {
-  local tag="$1"
-  local digest
-
-  digest=$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"')
-  if [ -z "$digest" ] || [ "$digest" = "null" ]; then
-    return 1
-  fi
-
-  printf '%s@%s' "${tag%%:*}" "$digest"
+  publication_lookup "$1"
 }
 
 mkdir -p "$(dirname "$OUTPUT_FILE")"
@@ -103,18 +99,32 @@ for target in "${ALL_TARGETS[@]}"; do
     continue
   fi
   full_tag=$(resolve_tag "$target")
-  if digest_ref=$(resolve_digest_ref "$full_tag"); then
+  lookup_rc=0
+  digest_ref=$(resolve_digest_ref "$full_tag") || lookup_rc=$?
+  if [[ "$lookup_rc" = 0 ]]; then
+    if publication_is_operator_coordinate "$digest_ref" && ! is_infra_target "$target"; then
+      publication_verify "$digest_ref" "${SOURCE_REPOSITORY:-${GITHUB_REPOSITORY:-cogni-dao/cogni}}" "$SOURCE_SHA" "$target" "$proof_dir/$target.json"
+    fi
     json_items+=("    {\n      \"target\": \"${target}\",\n      \"tag\": \"${full_tag}\",\n      \"digest\": \"${digest_ref}\",\n      \"source_sha\": \"${SOURCE_SHA}\"\n    }")
     resolved_targets+=("$target")
+  elif [[ "$lookup_rc" != 3 ]]; then
+    exit 1
   fi
 done
 
 if [ -n "$REMOTE_SOURCE_ARTIFACT_TARGETS_FILE" ] && [ -f "$REMOTE_SOURCE_ARTIFACT_TARGETS_FILE" ]; then
   while IFS=$'\t' read -r target source_repo item_source_sha image_repository full_tag; do
     [ -n "$target" ] || continue
-    if digest_ref=$(resolve_digest_ref "$full_tag"); then
+    lookup_rc=0
+    digest_ref=$(resolve_digest_ref "$full_tag") || lookup_rc=$?
+    if [[ "$lookup_rc" = 0 ]]; then
+      if publication_is_operator_coordinate "$digest_ref"; then
+        publication_verify "$digest_ref" "$source_repo" "$item_source_sha" "$target" "$proof_dir/$target.json"
+      fi
       json_items+=("    {\n      \"target\": \"${target}\",\n      \"source_repo\": \"${source_repo}\",\n      \"sourceSha\": \"${item_source_sha}\",\n      \"image_repository\": \"${image_repository}\",\n      \"tag\": \"${full_tag}\",\n      \"digest\": \"${digest_ref}\",\n      \"source_sha\": \"${item_source_sha}\"\n    }")
       resolved_targets+=("$target")
+    elif [[ "$lookup_rc" != 3 ]]; then
+      exit 1
     fi
   done < <(python3 - "$REMOTE_SOURCE_ARTIFACT_TARGETS_FILE" <<'PY'
 import json
@@ -133,7 +143,7 @@ if [ ${#json_items[@]} -gt 0 ]; then
   json_body=$(printf '%b' "$(IFS=$',\n'; echo "${json_items[*]}")")
 fi
 
-cat > "$OUTPUT_FILE" <<EOF
+cat > "${OUTPUT_FILE}.tmp" <<EOF
 {
   "image_name": "${IMAGE_NAME_APP}",
   "image_tag": "${IMAGE_TAG}",
@@ -143,6 +153,17 @@ ${json_body}
   ]
 }
 EOF
+
+python3 - "${OUTPUT_FILE}.tmp" "$proof_dir" <<'PYTHON'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1]); payload = json.loads(path.read_text())
+for item in payload['targets']:
+    proof = pathlib.Path(sys.argv[2], item['target'] + '.json')
+    if proof.exists():
+        item['publication'] = json.loads(proof.read_text())
+path.write_text(json.dumps(payload, indent=2) + '\n')
+PYTHON
+mv "${OUTPUT_FILE}.tmp" "$OUTPUT_FILE"
 
 resolved_targets_csv=""
 if [ ${#resolved_targets[@]} -gt 0 ]; then

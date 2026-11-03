@@ -47,6 +47,15 @@ manifest_path = sys.argv[2]
 with open(images_path, "r", encoding="utf-8") as handle:
     images = json.load(handle)
 
+# Preserve per-target original producer and signed bundles unchanged. The run
+# below assembled this envelope; it may merely have reused the original image.
+seen = set()
+for target in images["targets"]:
+    if target["target"] in seen:
+        raise SystemExit("duplicate manifest target")
+    seen.add(target["target"])
+    if target.get("publication") and target["publication"]["source_sha"] != os.environ["HEAD_SHA"]:
+        raise SystemExit("manifest publication source mismatch")
 manifest = {
     "schema_version": 1,
     "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),

@@ -15,13 +15,11 @@ name: PR Build
 # - pull_request: builds at PR head SHA → sha-{headSHA}. PR-time CI signal +
 #   the `manifest` required check (same-repo PRs push; forks build via the G2 lane).
 # - merge_group: builds at the queue's rebased candidate SHA Y → sha-{Y}. Produces
-#   the `manifest` required check the merge queue waits on; Y == the squash-merged
-#   main SHA, so flight-preview finds sha-{mainSHA} already built when it runs.
+#   the `manifest` required check the merge queue waits on. Reuse at main only
+#   when the actual queue source and merged source match.
 # - push:main: builds at the merged main SHA → sha-{mainSHA}. This is what makes the
 #   operator self-deployable on EVERY merge — incl. a direct/admin/`/vcs/merge`
-#   squash that bypasses the queue (the #1792 undeployable-main fix). On a queue
-#   merge it is a redundant cache-hot rebuild of the same sha- (accepted, matches
-#   node-template). The merge queue STAYS — it is the merge gate, orthogonal to
+#   squash that bypasses the queue (the #1792 undeployable-main fix). For identical actual source it reuses the verified publication. The merge queue STAYS — it is the merge gate, orthogonal to
 #   the build trigger.
 
 on:
@@ -55,14 +53,8 @@ permissions:
   pull-requests: read # Signed env-manager classifier reads PR identity + exact file list
   packages: write
 
-# Different concurrency keys per event type. Cross-event races (force-push to
-# an enqueued PR) are eliminated by the queue's eviction-on-push behavior.
-concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-build-pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('pr-build-mq-{0}', github.event.merge_group.head_ref) || github.event_name == 'workflow_dispatch' && format('pr-build-dispatch-{0}', inputs.head_sha) || format('pr-build-push-{0}', github.ref) }}
-  # Cancel superseded PR / merge_group / dispatch runs, but NEVER cancel a
-  # push:main build — it publishes the deployable sha-<mainSha> image (cancelling
-  # would drop it).
-  cancel-in-progress: ${{ github.event_name != 'push' }}
+# Publication serialization belongs to the physical-coordinate matrix job.
+# Keep event runs alive through proof and fragment retention.
 
 env:
   # FORK_FREEDOM: owner-derived so a fork pushes to its OWN GHCR namespace (image-tags.sh
@@ -205,7 +197,7 @@ jobs:
             if [[ "$PR_PATH" =~ ^pr-([0-9]+)- ]]; then
               PR_NUMBER="${BASH_REMATCH[1]}"
             fi
-            SOURCE_SHA="$PUSH_SHA"       # queue/rebased commit (Y) == squash-merge main SHA
+            SOURCE_SHA="$PUSH_SHA"       # actual queue source; compare main separately
             CHECKOUT_REF="$PUSH_SHA"
             BASE_REF="${MQ_BASE_REF#refs/heads/}"
             HEAD_REF_NAME="${MQ_HEAD_REF#refs/heads/}"
@@ -254,13 +246,20 @@ jobs:
       has_targets: ${{ steps.detect.outputs.has_targets }}
       targets_json: ${{ steps.detect.outputs.targets_json }}
       targets_csv: ${{ steps.detect.outputs.targets }}
+      publication_matrix: ${{ steps.coordinates.outputs.matrix }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           repository: ${{ needs.resolve.outputs.checkout_repo }}
           ref: ${{ needs.resolve.outputs.checkout_ref }}
           fetch-depth: 0
+          clean: false
 
+      - name: Checkout publication tooling
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: ci-src
       - name: Enforce env-manager classifier result
         env:
           CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
@@ -342,23 +341,54 @@ jobs:
             bash scripts/ci/detect-affected.sh
           fi
 
+      - name: Resolve physical publication coordinates
+        id: coordinates
+        env:
+          TARGETS_JSON: ${{ steps.detect.outputs.targets_json }}
+          IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
+          COGNI_CATALOG_ROOT: ${{ github.workspace }}/infra/catalog
+        run: |
+          set -euo pipefail
+          . ci-src/scripts/ci/lib/image-tags.sh
+          . ci-src/scripts/ci/lib/publication-proof.sh
+          publication_matrix_json=$(publication_matrix "$TARGETS_JSON")
+          echo "matrix=$publication_matrix_json" >> "$GITHUB_OUTPUT"
+
   build:
     needs: [resolve, detect]
     if: needs.detect.outputs.has_targets == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+      id-token: write
+      attestations: write
+    concurrency:
+      # Exact physical tag/platform; aliases share a group across event types.
+      group: publish-${{ matrix.publication_coordinate }}
+      cancel-in-progress: false
+      queue: max
     env:
       IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
       PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
       HEAD_SHA: ${{ needs.resolve.outputs.source_sha }}
+      PUBLICATION_COORDINATE: ${{ matrix.publication_coordinate }}
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJson(needs.detect.outputs.targets_json) }}
+        include: ${{ fromJson(needs.detect.outputs.publication_matrix) }}
     steps:
+      - name: Checkout workflow tooling
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: ci-src
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           repository: ${{ needs.resolve.outputs.checkout_repo }}
           ref: ${{ needs.resolve.outputs.checkout_ref }}
+          path: app-src
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -372,7 +402,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push ${{ matrix.target }}
+        id: build
+        working-directory: app-src
         env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ needs.resolve.outputs.checkout_repo }}
+          COGNI_CATALOG_ROOT: ${{ github.workspace }}/app-src/infra/catalog
           TARGETS: ${{ matrix.target }}
           GHCR_USERNAME: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -384,15 +419,40 @@ jobs:
           # FORK_FREEDOM: build for signal, push only when we own the namespace.
           SHOULD_PUSH: ${{ needs.resolve.outputs.should_push }}
           OUTPUT_FILE: ${{ runner.temp }}/build-fragment-${{ matrix.target }}.json
-        run: bash scripts/ci/build-and-push-images.sh
+        run: bash ../ci-src/scripts/ci/build-and-push-images.sh
+
+      - name: Attest original publication
+        id: attest
+        if: steps.build.outputs.attest == 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.build.outputs.subject_name }}
+          subject-digest: ${{ steps.build.outputs.subject_digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Verify original publication
+        if: always() && steps.build.outputs.attest == 'true'
+        working-directory: app-src
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGETS: ${{ matrix.target }}
+          BUILD_SHA: ${{ needs.resolve.outputs.source_sha }}
+          SOURCE_REPOSITORY: ${{ needs.resolve.outputs.checkout_repo }}
+          COGNI_CATALOG_ROOT: ${{ github.workspace }}/app-src/infra/catalog
+          PUBLICATION_PHASE: finalize
+          PUBLICATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          OUTPUT_FILE: ${{ runner.temp }}/build-fragment-${{ matrix.target }}.json
+        run: bash ../ci-src/scripts/ci/build-and-push-images.sh
 
       - name: Upload build fragment
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: pr-build-fragment-${{ matrix.target }}-${{ needs.resolve.outputs.source_sha }}
+          name: pr-build-fragment-${{ matrix.target }}-${{ needs.resolve.outputs.source_sha }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/build-fragment-${{ matrix.target }}.json
-          retention-days: 1
-          if-no-files-found: error
+          retention-days: 7
+          if-no-files-found: warn
           overwrite: true
 
   manifest:
@@ -414,27 +474,54 @@ jobs:
       needs.detect.result == 'success' &&
       (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+      attestations: read
     env:
       # Required by merge-build-fragments.sh + write-build-manifest.sh.
       IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
       PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
       HEAD_SHA: ${{ needs.resolve.outputs.source_sha }}
+      SOURCE_REPOSITORY: ${{ needs.resolve.outputs.checkout_repo }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
+          ref: ${{ github.workflow_sha }}
+
+      - name: Checkout app catalog for evidence recovery
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
           repository: ${{ needs.resolve.outputs.checkout_repo }}
           ref: ${{ needs.resolve.outputs.checkout_ref }}
+          path: app-src
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR for immutable evidence recovery
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
       - name: Download build fragments
         if: needs.detect.outputs.has_targets == 'true'
+        # Expired fragments are recoverable from original native proof below.
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/build-fragments
-          pattern: pr-build-fragment-*-${{ needs.resolve.outputs.source_sha }}
+          pattern: pr-build-fragment-*-${{ needs.resolve.outputs.source_sha }}-attempt-${{ github.run_attempt }}
           merge-multiple: true
 
       - name: Merge fragments into build-images.json
         env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_TARGETS_JSON: ${{ needs.detect.outputs.targets_json }}
+          COGNI_CATALOG_ROOT: ${{ github.workspace }}/app-src/infra/catalog
           FRAGMENTS_DIR: ${{ runner.temp }}/build-fragments
           OUTPUT_FILE: ${{ runner.temp }}/build-images.json
         run: bash scripts/ci/merge-build-fragments.sh
