@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# story.5137 — ONE FRONT DOOR. The production node-deploy sequencer also serves the candidate-a and preview
+# lanes of canonical Akash nodes (the fleet control env reconciles EVERY Akash lane). Each env gets its OWN
+# dedicated secrets namespace + Role/RoleBinding, so the admission policy (which derives `<env>` from the
+# namespace name) lets `cogni-node-deploy-preview` read only `preview/<slug>`.
+#
+# WHY A SIBLING APPLICATION, not more resources in ../operator: that overlay's `namespace:` transformer renames
+# EVERY Namespace object to the wallet namespace, and a second Namespace makes kustomize fail with "namespace
+# transformation produces ID conflict". This directory therefore has NO `namespace:` transformer, and the
+# operator overlay reaches it through `node-deploy-env-namespaces-application.yaml`
+# (same pattern as compute-workload-platform). The production namespace stays in ../operator.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespaces.yaml
+  - rbac.yaml
