@@ -253,7 +253,7 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
         )
       ).toEqual([primary]);
       const extra = namespaces(
-        "infra/k8s/overlays/production/node-deploy-envs/namespaces.yaml"
+        "infra/k8s/base/node-deploy-env-namespaces/namespaces.yaml"
       );
       expect(extra).toEqual(
         envs
@@ -276,7 +276,7 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
     it("every extra env namespace has the base Role's rules, bound to the sequencer ServiceAccount, in its OWN namespace, with no ClusterRole", () => {
       const docs = yaml
         .parseAllDocuments(
-          read("infra/k8s/overlays/production/node-deploy-envs/rbac.yaml")
+          read("infra/k8s/base/node-deploy-env-namespaces/rbac.yaml")
         )
         .map(
           (d) =>
@@ -324,13 +324,11 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
         )
       ) as { spec: { source: { path: string; targetRevision: string } } };
       expect(app.spec.source).toMatchObject({
-        path: "infra/k8s/overlays/production/node-deploy-envs",
+        path: "infra/k8s/base/node-deploy-env-namespaces",
         targetRevision: "deploy/production-operator",
       });
       const kust = yaml.parse(
-        read(
-          "infra/k8s/overlays/production/node-deploy-envs/kustomization.yaml"
-        )
+        read("infra/k8s/base/node-deploy-env-namespaces/kustomization.yaml")
       ) as Record<string, unknown>;
       // a `namespace:` transformer would rename every Namespace to one name (kustomize ID conflict)
       expect(kust.namespace).toBeUndefined();

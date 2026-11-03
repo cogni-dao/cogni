@@ -40,7 +40,7 @@ resources:
   - ./node-deploy-secrets-namespace.yaml
   # story.5137 — one front door: this sequencer also serves candidate-a and preview, each with its OWN
   # secrets namespace + RBAC, delivered by a sibling Application (a second Namespace cannot live under
-  # this overlay's `namespace:` transformer; see ../node-deploy-envs/kustomization.yaml).
+  # this overlay's `namespace:` transformer; see infra/k8s/base/node-deploy-env-namespaces/kustomization.yaml).
   - ./node-deploy-env-namespaces-application.yaml
   # task.5247 — private read-only database status observation.
   - ../../../base/database-reliability-actuator
