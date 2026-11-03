@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/ai-tools/tools/vcs-flight-candidate`
- * Purpose: AI tool that dispatches the `candidate-flight.yml` workflow for a nodeRef.
+ * Purpose: AI tool that dispatches the `candidate-flight.yml` workflow for the operator node (task.5411: operator only).
  * Scope: State-changing CI dispatch — thin wrapper over VcsCapability.dispatchCandidateFlight. Does NOT import LangChain, duplicate getCiStatus policy, or poll for the resulting run_id.
  * Invariants:
  *   - TOOL_ID_NAMESPACED: ID is `core__vcs_flight_candidate`
@@ -25,6 +25,11 @@ import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 // Schemas
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** The only node the candidate flight lane still deploys (task.5411). */
+export const OPERATOR_FLIGHT_SLUG = "operator";
+const NODE_ON_DEPLOY_VERB_MESSAGE =
+  "node_on_deploy_verb: only the operator flights through candidate-flight.yml; every other node deploys only via POST /api/v1/deploy/workloads";
+
 export const VcsFlightCandidateInputSchema = z.object({
   owner: z.string().min(1).describe("Repository owner (e.g., 'Cogni-DAO')"),
   repo: z.string().min(1).describe("Operator repository name (e.g., 'cogni')"),
@@ -32,7 +37,13 @@ export const VcsFlightCandidateInputSchema = z.object({
     .string()
     .min(1)
     .regex(/^[a-z][a-z0-9-]*$/)
-    .describe("Catalog node slug to flight to candidate-a"),
+    // ONE_WRITER_PER_NODE_LANE (CD4, task.5411): the flight lane deploys only the operator.
+    .refine((slug) => slug === OPERATOR_FLIGHT_SLUG, {
+      message: NODE_ON_DEPLOY_VERB_MESSAGE,
+    })
+    .describe(
+      "Must be 'operator'. Every other node deploys only via POST /api/v1/deploy/workloads."
+    ),
   sourceSha: z
     .string()
     .regex(/^[0-9a-f]{40}$/i)
@@ -84,10 +95,11 @@ export const vcsFlightCandidateContract: ToolContract<
 > = {
   name: VCS_FLIGHT_CANDIDATE_NAME,
   description:
-    "Dispatch the `candidate-flight.yml` workflow for an off-cluster node source revision. " +
-    "Promotes the node artifact digest onto `deploy/candidate-a` and waits for " +
+    "Dispatch the `candidate-flight.yml` workflow for an OPERATOR source revision (nodeSlug must be 'operator'; " +
+    "every other node deploys only via POST /api/v1/deploy/workloads). " +
+    "Promotes the operator artifact digest onto `deploy/candidate-a` and waits for " +
     "Argo to roll the candidate-a pods. " +
-    "The child repo must already have published image_repository:sha-<sourceSha>; " +
+    "The image must already be published for <sourceSha>; " +
     "do not use PR numbers as artifact identity. " +
     "Before dispatch, call core__vcs_get_ci_status and require allGreen. " +
     "Do NOT auto-flight: only call when a human or scheduled run has explicitly " +
@@ -122,6 +134,9 @@ export function createVcsFlightCandidateImplementation(
     execute: async (
       input: VcsFlightCandidateInput
     ): Promise<VcsFlightCandidateOutput> => {
+      if (input.nodeSlug !== OPERATOR_FLIGHT_SLUG) {
+        throw new Error(NODE_ON_DEPLOY_VERB_MESSAGE);
+      }
       return deps.vcsCapability.dispatchCandidateFlight({
         owner: input.owner,
         repo: input.repo,

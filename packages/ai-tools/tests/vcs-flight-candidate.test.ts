@@ -81,15 +81,26 @@ describe("vcs_flight_candidate contract", () => {
 });
 
 describe("vcs_flight_candidate input schema", () => {
-  it("accepts node slug and 40-char sourceSha", () => {
+  it("accepts the operator slug and a 40-char sourceSha", () => {
     const ok = vcsFlightCandidateContract.inputSchema.parse({
       owner: "Cogni-DAO",
       repo: "cogni",
-      nodeSlug: "creative",
+      nodeSlug: "operator",
       sourceSha: SOURCE_SHA,
     });
-    expect(ok.nodeSlug).toBe("creative");
+    expect(ok.nodeSlug).toBe("operator");
     expect(ok.sourceSha).toBe(SOURCE_SHA);
+  });
+
+  it("refuses every non-operator node with node_on_deploy_verb (task.5411)", () => {
+    expect(() =>
+      vcsFlightCandidateContract.inputSchema.parse({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        nodeSlug: "poly",
+        sourceSha: SOURCE_SHA,
+      })
+    ).toThrow(/node_on_deploy_verb/);
   });
 
   it("accepts a same-repository workflow branch and rejects cross-repo syntax", () => {
@@ -188,19 +199,19 @@ describe("vcs_flight_candidate implementation", () => {
     const out = await impl.execute({
       owner: "Cogni-DAO",
       repo: "cogni",
-      nodeSlug: "creative",
+      nodeSlug: "operator",
       sourceSha: SOURCE_SHA,
     });
 
     expect(spy).toHaveBeenCalledWith({
       owner: "Cogni-DAO",
       repo: "cogni",
-      nodeSlug: "creative",
+      nodeSlug: "operator",
       sourceSha: SOURCE_SHA,
       workflowRef: undefined,
     });
     expect(out.dispatched).toBe(true);
-    expect(out.nodeSlug).toBe("creative");
+    expect(out.nodeSlug).toBe("operator");
     expect(out.sourceSha).toBe(SOURCE_SHA);
   });
 
@@ -209,7 +220,7 @@ describe("vcs_flight_candidate implementation", () => {
       vcsFlightCandidateBoundTool.implementation.execute({
         owner: "o",
         repo: "r",
-        nodeSlug: "creative",
+        nodeSlug: "operator",
         sourceSha: SOURCE_SHA,
       })
     ).rejects.toThrow(/VcsCapability not configured/);
@@ -253,7 +264,7 @@ describe("vcs_flight_candidate output schema", () => {
   it("accepts valid result", () => {
     const result = vcsFlightCandidateContract.outputSchema.parse({
       dispatched: true,
-      nodeSlug: "creative",
+      nodeSlug: "operator",
       sourceSha: SOURCE_SHA,
       workflowUrl:
         "https://github.com/Cogni-DAO/cogni/actions/workflows/candidate-flight.yml",
@@ -266,7 +277,7 @@ describe("vcs_flight_candidate output schema", () => {
     expect(() =>
       vcsFlightCandidateContract.outputSchema.parse({
         dispatched: true,
-        nodeSlug: "creative",
+        nodeSlug: "operator",
         sourceSha: SOURCE_SHA,
         workflowUrl: "not-a-url",
         message: "",
