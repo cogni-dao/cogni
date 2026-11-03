@@ -8,8 +8,11 @@
 # when the exact cogni-operator GitHub App bot authored it, GitHub verifies the
 # head commit signature, the signed commit trailers describe the change, and the
 # PR file list matches both its signed hash and the env-membership boundary.
-# Anything that does not claim the reserved type uses normal CI. A malformed
-# claim is emitted as claimed=true/eligible=false so required jobs fail closed.
+# Anything that does not claim the reserved type uses normal CI. A claim whose
+# identity, signature or signed path hash is wrong is emitted as
+# claimed=true/eligible=false so required jobs fail closed. A correctly signed
+# claim whose tree is not the exact membership shape (story.5137: catalog plus
+# scheduler routing only) falls back to full CI: full CI skips nothing.
 
 set -euo pipefail
 
@@ -147,6 +150,18 @@ reject_claim() {
   exit 0
 }
 
+# The signed tree is authentic but not the narrow membership shape. Full CI runs
+# every check, so falling back cannot skip a gate; failing would block a real
+# operator PR whose shape this classifier does not know yet.
+fallback_full_ci() {
+  local reason="$1"
+  emit claimed false
+  emit eligible false
+  emit reason "$reason"
+  echo "env-manager fast path: full CI (signed claim is not the membership shape: $reason)"
+  exit 0
+}
+
 trailer_value() {
   local key="$1"
   local count
@@ -226,13 +241,14 @@ else
   gh api --paginate "repos/$REPOSITORY/pulls/$pr_number/files" --jq '.[]' | jq -s '.' > "$files_json"
 fi
 
-# Five membership files plus lane and derived-control scheduler patches.
+# The catalog row plus lane and derived-control scheduler patches (story.5137:
+# the node-deploy verb is the lane writer, so no AppSet or overlay is written).
 # Exact path and signed-hash checks below still bound every accepted change.
-jq -e 'length > 0 and length <= 7
+jq -e 'length > 0 and length <= 3
   and all(.filename | type == "string")
   and all(.previous_filename == null)
   and all(.status == "added" or .status == "modified" or .status == "removed")' \
-  "$files_json" >/dev/null || reject_claim invalid-file-metadata
+  "$files_json" >/dev/null || fallback_full_ci invalid-file-metadata
 
 changed_paths="$tmpdir/changed-paths.txt"
 jq -r '.[].filename' "$files_json" | LC_ALL=C sort -u > "$changed_paths"
@@ -264,19 +280,19 @@ load_catalog() {
 }
 
 load_catalog "$catalog_base_sha" "${FAST_PATH_BASE_CATALOG:-}" "$base_catalog_yaml" \
-  || reject_claim missing-base-catalog
+  || fallback_full_ci missing-base-catalog
 load_catalog "$catalog_head_sha" "${FAST_PATH_HEAD_CATALOG:-}" "$head_catalog_yaml" \
-  || reject_claim missing-head-catalog
+  || fallback_full_ci missing-head-catalog
 
 if ! yq -o=json '.' "$base_catalog_yaml" > "$base_catalog_json" 2>/dev/null \
   || ! yq -o=json '.' "$head_catalog_yaml" > "$head_catalog_json" 2>/dev/null; then
-  reject_claim invalid-catalog-yaml
+  fallback_full_ci invalid-catalog-yaml
 fi
 
-# APPSET_PATH_IS_CONTROL_ENV_SCOPED: ask the one shared resolver where this
-# workload lane's AppSet lives. For an Akash non-production lane that is the
-# production control cluster, not the workload environment named in the file.
-# Load the trusted main-branch definition; it reads the candidate tree's catalog.
+# CONTROL_ENV_IS_SHARED: ask the one shared resolver which control env carries
+# this lane's scheduler routing. For an Akash non-production lane that is the
+# production control cluster. Load the trusted main-branch definition; it reads
+# the candidate tree's catalog.
 resolver_catalog_dir="$tmpdir/resolver-catalog"
 mkdir -p "$resolver_catalog_dir"
 if [[ "$action" == "remove" ]]; then
@@ -294,12 +310,8 @@ else
   source <(git show origin/main:scripts/ci/lib/appset-paths.sh)
 fi
 expected_control_env="$(control_env_for "$env_name" "$node")"
-expected_appset="$(appset_rel_path "$env_name" "$node")"
-expected_appsets_kustomization="$(appsets_kustomization_rel_path "$env_name" "$node")"
 
 catalog_seen=false
-appset_seen=false
-appset_kustomization_seen=false
 while IFS= read -r changed_file; do
   case "$changed_file" in
     "infra/catalog/$node.yaml")
@@ -308,23 +320,13 @@ while IFS= read -r changed_file; do
     "infra/k8s/overlays/$env_name/scheduler-worker/node-endpoints.patch.yaml"|\
     "infra/k8s/overlays/$expected_control_env/scheduler-worker/node-endpoints.patch.yaml")
       ;;
-    "infra/k8s/overlays/$env_name/$node/kustomization.yaml"|\
-    "infra/k8s/overlays/$env_name/$node/external-secret.yaml")
-      ;;
-    "$expected_appset")
-      appset_seen=true
-      ;;
-    "$expected_appsets_kustomization")
-      appset_kustomization_seen=true
-      ;;
     *)
-      reject_claim path-outside-env-manager-boundary
+      fallback_full_ci path-outside-env-manager-boundary
       ;;
   esac
 done < "$changed_paths"
 
-[[ "$catalog_seen" == true ]] || reject_claim catalog-not-changed
-[[ "$appset_seen" == true && "$appset_kustomization_seen" == true ]] || reject_claim incomplete-membership-change
+[[ "$catalog_seen" == true ]] || fallback_full_ci catalog-not-changed
 
 # SIGNED_TYPE_HAS_EXACT_SEMANTICS: the App signature proves WHO authored the
 # tree, not that this capability touched only the catalog cells it names. Prove
@@ -350,10 +352,9 @@ if ! jq -en \
       and (. == (sort_by(env_rank)));
     def without_target_cells:
       del(.envs, .activity_env)
-      | del(.deployment_provider[$env], .compute_api[$env], .lease_generation[$env])
+      | del(.deployment_provider[$env], .compute_api[$env])
       | if .deployment_provider == {} then del(.deployment_provider) else . end
-      | if .compute_api == {} then del(.compute_api) else . end
-      | if .lease_generation == {} then del(.lease_generation) else . end;
+      | if .compute_api == {} then del(.compute_api) else . end;
     ($base[0]) as $b
     | ($head[0]) as $h
     | ($b | type == "object" and .name == $node and (.envs | canonical_envs))
@@ -364,21 +365,14 @@ if ! jq -en \
         and (($h.envs | index($env)) != null)
         and ($h.envs == (($b.envs + [$env]) | sort_by(env_rank)))
         and ($h.activity_env == ($h.envs | last))
-        and (if (($h.source_repo // "") | type == "string" and length > 0) then
-          (($b.deployment_provider // {}) | has($env) | not)
-          and (($b.compute_api // {}) | has($env) | not)
-          and (($b.lease_generation // {}) | has($env) | not)
-          and $h.deployment_provider[$env] == "akash"
-          and $h.compute_api[$env] == "crossplane"
-          and ($h.lease_generation[$env] | type == "number" and . >= 0 and floor == .)
-        else
-          (($b.deployment_provider // {}) | has($env) | not)
-          and (($b.compute_api // {}) | has($env) | not)
-          and (($b.lease_generation // {}) | has($env) | not)
-          and (($h.deployment_provider // {}) | has($env) | not)
-          and (($h.compute_api // {}) | has($env) | not)
-          and (($h.lease_generation // {}) | has($env) | not)
-        end)
+        # story.5137: only an externally built row (source_repo) has a node-deploy lane;
+        # the verb refuses an in-repo add (env_add_requires_source_repo).
+        and (($h.source_repo // "") | type == "string" and length > 0)
+        and (($b.deployment_provider // {}) | has($env) | not)
+        and (($b.compute_api // {}) | has($env) | not)
+        and $h.deployment_provider[$env] == "akash"
+        and $h.compute_api[$env] == "node-deploy"
+        and ($h | has("lease_generation") | not)
       else
         (($b.envs | index($env)) != null)
         and (($h.envs | index($env)) == null)
@@ -387,10 +381,10 @@ if ! jq -en \
         and $h.activity_env == $b.activity_env
         and (($h.deployment_provider // {}) | has($env) | not)
         and (($h.compute_api // {}) | has($env) | not)
-        and (($h.lease_generation // {}) | has($env) | not)
+        and ($h | has("lease_generation") | not)
       end)
   ' >/dev/null; then
-  reject_claim invalid-catalog-delta
+  fallback_full_ci invalid-catalog-delta
 fi
 
 # A queue candidate must contain exactly this PR's path set. This catches a
