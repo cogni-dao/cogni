@@ -1,0 +1,538 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The Score Authors (https://github.com/score-spec/spec)
+
+/**
+ * Module: `@cogni/repo-spec/vendor/score-v1b1.schema`
+ * Purpose: The Score v1b1 workload JSON schema (draft 2020-12), vendored BYTE-FOR-BYTE as pass 1 of
+ *   the workload-manifest validator (story.5137). Score is only the file format; Cogni policy is pass 2.
+ * Source: https://raw.githubusercontent.com/score-spec/spec/f29aafc853b987812ad3caec836cf9f1ff25a272/score-v1b1.json
+ * Upstream commit: f29aafc853b987812ad3caec836cf9f1ff25a272 (the last commit that changed the file;
+ *   spec main 1c2427db4e1c96e05956e0546e767fc994a5421d served identical bytes on 2026-11-02).
+ * sha256 of SCORE_V1B1_SCHEMA_TEXT: d326c718112ceff4bb90a32e997cc81e9067b00a93516c7d6b715018a3ece940
+ * Invariants:
+ *   - PINNED_BY_COMMIT: the text between the backticks is the upstream file, unchanged (String.raw keeps
+ *     every backslash). packages/repo-spec/tests/workload-manifest.test.ts fails on any byte change.
+ *   - To update: fetch the raw URL at a new commit, paste it unchanged, and update URL, commit and sha256.
+ * Side-effects: none
+ * @internal
+ */
+
+export const SCORE_V1B1_SOURCE = {
+  url: "https://raw.githubusercontent.com/score-spec/spec/f29aafc853b987812ad3caec836cf9f1ff25a272/score-v1b1.json",
+  commit: "f29aafc853b987812ad3caec836cf9f1ff25a272",
+  sha256: "d326c718112ceff4bb90a32e997cc81e9067b00a93516c7d6b715018a3ece940",
+} as const;
+
+export const SCORE_V1B1_SCHEMA_TEXT = String.raw`{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://score.dev/schemas/score",
+  "title": "Score schema",
+  "description": "Score workload specification",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "metadata",
+    "containers"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "description": "The declared Score Specification version.",
+      "type": "string",
+      "pattern": "^score\\.dev/v1b1$"
+    },
+    "metadata": {
+      "description": "The metadata description of the Workload.",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "description": "A string that can describe the Workload. This must be a valid RFC1123 Label Name of up to 63 characters, including a-z, 0-9, '-' but may not start or end with '-'.",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$"
+        },
+        "annotations": {
+          "description": "Annotations that apply to the Workload. The annotation can contain A-Z, a-z, 0-9, and '-' and may contain an optional /-separated RFC1123 Host Name prefix.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "minLength": 2,
+            "maxLength": 316,
+            "pattern": "^(([a-z0-9][a-z0-9-]{0,61}[a-z0-9])(\\.[a-z0-9][a-z0-9-]{0,61}[a-z0-9])*/)?[A-Za-z0-9][A-Za-z0-9._-]{0,61}[A-Za-z0-9]$"
+          }
+        }
+      }
+    },
+    "service": {
+      "description": "The service that the workload provides.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ports": {
+          "description": "The set of named network ports published by the service. The service name must be a valid RFC1123 Label Name of up to 63 characters, including a-z, 0-9, '-' but may not start or end with '-'.",
+          "type": "object",
+          "propertyNames": {
+            "minLength": 2,
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/servicePort"
+          }
+        }
+      }
+    },
+    "containers": {
+      "description": "The set of named containers in the Workload. The container name must be a valid RFC1123 Label Name of up to 63 characters, including a-z, 0-9, '-' but may not start or end with '-'.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/container"
+      },
+      "propertyNames": {
+        "minLength": 2,
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$"
+      }
+    },
+    "resources": {
+      "description": "The Resource dependencies needed by the Workload. The resource name must be a valid RFC1123 Label Name of up to 63 characters, including a-z, 0-9, '-' but may not start or end with '-'.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/resource"
+      },
+      "propertyNames": {
+        "minLength": 2,
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$"
+      }
+    }
+  },
+  "$defs": {
+    "servicePort": {
+      "description": "The network port description.",
+      "type": "object",
+      "required": [
+        "port"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "description": "The public service port.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "protocol": {
+          "description": "The transport level protocol. Defaults to TCP.",
+          "type": "string",
+          "enum": [
+            "TCP",
+            "UDP"
+          ]
+        },
+        "targetPort": {
+          "description": "The internal service port. This will default to 'port' if not provided.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    },
+    "resource": {
+      "description": "The set of Resources associated with this Workload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "description": "The Resource type. This should be a type supported by the Score implementations being used.",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 63,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,61}[A-Za-z0-9]$"
+        },
+        "class": {
+          "description": "An optional specialisation of the Resource type.",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 63,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,61}[A-Za-z0-9]$"
+        },
+        "id": {
+          "description": "An optional Resource identifier. The id may be up to 63 characters, including one or more labels of a-z, 0-9, '-' not starting or ending with '-' separated by '.'. When two resources share the same type, class, and id, they are considered the same resource when used across related Workloads.",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9]+(?:-+[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-+[a-z0-9]+)*)*$"
+        },
+        "metadata": {
+          "description": "The metadata for the Resource.",
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "annotations": {
+              "description": "Annotations that apply to the Resource. The annotation can contain A-Z, a-z, 0-9, and '-' and may contain an optional /-separated RFC1123 Host Name prefix.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "minLength": 2,
+                "maxLength": 316,
+                "pattern": "^(([a-z0-9][a-z0-9-]{0,61}[a-z0-9])(\\.[a-z0-9][a-z0-9-]{0,61}[a-z0-9])*/)?[A-Za-z0-9][A-Za-z0-9._-]{0,61}[A-Za-z0-9]$"
+              }
+            }
+          }
+        },
+        "params": {
+          "description": "Optional parameters used to provision the Resource in the environment.",
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "resourcesLimits": {
+      "description": "The compute and memory resource limits.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "memory": {
+          "description": "The memory limit in bytes with optional unit specifier. For example 125M or 1.5Gi.",
+          "type": "string",
+          "pattern": "^(0\\.\\d+|[1-9]\\d*(\\.\\d+)?)(K|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?$"
+        },
+        "cpu": {
+          "description": "The CPU limit as whole or fractional CPUs. 'm' indicates milli-CPUs. For example 2 or 125m.",
+          "type": "string",
+          "pattern": "^\\d+(?:m|\\.\\d+)?$"
+        }
+      }
+    },
+    "containerFile": {
+      "description": "The details of a file to mount in the container. One of 'source', 'content', or 'binaryContent' must be provided.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "description": "(Deprecated) The file path to expose in the container. This is only used in Score workloads that describe files as an array.",
+          "deprecated": true,
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "description": "The optional file access mode in octal encoding. For example 0600.",
+          "type": "string",
+          "pattern": "^0?[0-7]{3}$"
+        },
+        "source": {
+          "description": "The relative or absolute path to the content file.",
+          "type": "string",
+          "minLength": 1
+        },
+        "content": {
+          "description": "The inline content for the file. Only supports valid utf-8.",
+          "type": "string"
+        },
+        "binaryContent": {
+          "description": "Inline standard-base64 encoded content for the file. Does not support placeholder expansion.",
+          "type": "string"
+        },
+        "noExpand": {
+          "description": "If set to true, the placeholders expansion will not occur in the contents of the file.",
+          "type": "boolean"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "content"
+          ]
+        },
+        {
+          "required": [
+            "binaryContent"
+          ]
+        },
+        {
+          "required": [
+            "source"
+          ]
+        }
+      ]
+    },
+    "containerVolume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "source": {
+          "description": "The external volume reference.",
+          "type": "string"
+        },
+        "path": {
+          "description": "An optional sub path in the volume.",
+          "type": "string"
+        },
+        "target": {
+          "description": "(Deprecated) The target mount on the container. This is only used in Score workloads that describe volumes as an array.",
+          "deprecated": true,
+          "type": "string"
+        },
+        "readOnly": {
+          "description": "Indicates if the volume should be mounted in a read-only mode.",
+          "type": "boolean"
+        }
+      }
+    },
+    "container": {
+      "description": "The specification of a Container within the Workload.",
+      "type": "object",
+      "required": [
+        "image"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "description": "The container image name and tag.",
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "description": "If specified, overrides the entrypoint defined in the container image.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "args": {
+          "description": "If specified, overrides the arguments passed to the container entrypoint.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "variables": {
+          "description": "The environment variables for the container.",
+          "type": "object",
+          "propertyNames": {
+            "minLength": 1,
+            "pattern": "^[^=]+$"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "files": {
+          "description": "The extra files to mount into the container. Described as a map of target paths to file details. The array form is deprecated.", 
+          "oneOf": [
+            {
+              "type": "array",
+              "deprecated": true,
+              "items": {
+                "$ref": "#/$defs/containerFile"
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "allOf": [
+                  {
+                    "not": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "required": ["target"]
+                    }
+                  },
+                  {
+                    "$ref": "#/$defs/containerFile"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "volumes": {
+          "description": "The volumes to mount. Described as a map of target paths to volume details. The array form is deprecated.",
+          "oneOf": [
+            {
+              "type": "array",
+              "deprecated": true,
+              "items": {
+                "$ref": "#/$defs/containerVolume"
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "allOf": [
+                  {
+                    "not": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "required": ["target"]
+                    }
+                  },
+                  {
+                    "$ref": "#/$defs/containerVolume"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "before": {
+          "description": "Containers which should be started before this container.",
+          "type": "object",
+          "propertyNames": {
+            "minLength": 2,
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["ready"],
+            "additionalProperties": false,
+            "properties": {
+              "ready": {
+                "description": "The status of the container before the next container is started.",
+                "title": "Ready",
+                "type": "string",
+                "enum": [
+                  "started",
+                  "healthy",
+                  "complete"
+                ]
+              }
+            }
+          }
+        },
+        "resources": {
+          "description": "The compute resources for the container.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "limits": {
+              "description": "The maximum allowed resources for the container.",
+              "$ref": "#/$defs/resourcesLimits"
+            },
+            "requests": {
+              "description": "The minimal resources required for the container.",
+              "$ref": "#/$defs/resourcesLimits"
+            }
+          }
+        },
+        "livenessProbe": {
+          "description": "The liveness probe for the container.",
+          "$ref": "#/$defs/containerProbe"
+        },
+        "readinessProbe": {
+          "description": "The readiness probe for the container.",
+          "$ref": "#/$defs/containerProbe"
+        }
+      }
+    },
+    "containerProbe": {
+      "type": "object",
+      "description": "The probe definition. At least one of 'httpGet' or 'exec' must be specified. The execProbe should be preferred if the Score implementation supports both types.",
+      "additionalProperties": false,
+      "properties": {
+        "httpGet": {
+          "$ref": "#/$defs/httpProbe"
+        },
+        "exec": {
+          "$ref": "#/$defs/execProbe"
+        }
+      },
+      "anyOf": [
+        {"required": ["httpGet"]},
+        {"required": ["exec"]}
+      ]
+    },
+    "execProbe": {
+      "description": "An executable health probe.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "description": "The command and arguments to execute within the container.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "httpProbe": {
+      "description": "An HTTP probe details.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "port",
+        "path"
+      ],
+      "properties": {
+        "host": {
+          "description": "Host name to connect to. Defaults to the workload IP. The is equivalent to a Host HTTP header.",
+          "type": "string",
+          "minLength": 1
+        },
+        "scheme": {
+          "description": "Scheme to use for connecting to the host (HTTP or HTTPS). Defaults to HTTP.",
+          "type": "string",
+          "enum": [
+            "HTTP",
+            "HTTPS"
+          ]
+        },
+        "path": {
+          "description": "The path to access on the HTTP server.",
+          "type": "string"
+        },
+        "port": {
+          "description": "The port to access on the workload.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "httpHeaders": {
+          "description": "Additional HTTP headers to send with the request",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "value"
+            ],
+            "properties": {
+              "name": {
+                "description": "The HTTP header name.",
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "value": {
+                "description": "The HTTP header value.",
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;

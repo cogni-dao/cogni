@@ -424,7 +424,9 @@ export const nodeServiceSpecSchema = z
 export type NodeServiceSpec = z.infer<typeof nodeServiceSpecSchema>;
 
 // ---------------------------------------------------------------------------
-// Blue/green workloads (task.5400, story.5127) — OPTIONAL, additive to `deployment:`
+// Blue/green workloads (task.5400, story.5127): the deploy spec a release stores. A node declares
+// it through a workload manifest (`.cogni/workloads/<name>.yaml`, see workload-manifest.ts), which
+// the operator lowers to this shape. Repo-spec no longer carries workloads (story.5137).
 // ---------------------------------------------------------------------------
 
 /** `repo[:tag]@sha256:<64 hex>` — a workload image is ALWAYS pinned by digest (immutable deploys). */
@@ -543,42 +545,10 @@ export type NodeWorkloadSpec = z.infer<typeof nodeWorkloadSpecSchema>;
  */
 export const nodeDeploymentSchema = z
   .object({
-    // OPTIONAL when the block carries only `workloads` (task.5400). An empty list is NOT a
-    // declared app-tier deployment: `hasDeclaredNodeDeployment` and `extractNodeServices` treat
-    // it exactly like an absent block, so a workloads-only node rides the legacy default.
-    services: z.array(nodeServiceSpecSchema).max(8).default([]),
-    /** Blue/green workloads the operator's node-deploy sequencer ships (task.5400). */
-    workloads: z.array(nodeWorkloadSpecSchema).min(1).max(8).optional(),
+    services: z.array(nodeServiceSpecSchema).min(1).max(8),
   })
   .strict()
   .superRefine((deployment, ctx) => {
-    if (deployment.services.length === 0 && !deployment.workloads) {
-      ctx.addIssue({
-        code: "custom",
-        message: "deployment must declare at least one service or workload",
-      });
-    }
-    const workloads = deployment.workloads ?? [];
-    const workloadNames = workloads.map((w) => w.name);
-    if (new Set(workloadNames).size !== workloadNames.length) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["workloads"],
-        message: "Duplicate deployment workload names",
-      });
-    }
-    workloads.forEach((w, index) => {
-      for (const binding of w.bindings) {
-        const target = workloads.find((x) => x.name === binding.workload);
-        if (!target || target.kind !== "state" || target.name === w.name) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["workloads", index, "bindings"],
-            message: `binding ${binding.env} must name a different declared state workload`,
-          });
-        }
-      }
-    });
     const serviceNames = deployment.services.map((service) => service.name);
     if (new Set(serviceNames).size !== serviceNames.length) {
       ctx.addIssue({
@@ -620,7 +590,6 @@ export const nodeDeploymentSchema = z
       }
     });
     if (
-      deployment.services.length > 0 &&
       deployment.services.filter((service) => service.visibility === "public")
         .length !== 1
     ) {

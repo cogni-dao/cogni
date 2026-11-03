@@ -341,6 +341,21 @@ export interface DeployPlanePort {
   }): Promise<string | null>;
 
   /**
+   * List EVERY entry directly inside a repo directory via the operator App (contents:read): name,
+   * type (`file`, `dir`, `symlink` or `submodule`) and size in bytes. GitHub's directory listing
+   * reports a submodule as `file`; the adapter maps it to `submodule` (its git_url points at
+   * `/git/trees/`). Returns null when the directory is absent at `ref`. Nothing is filtered here:
+   * the node-deploy verb refuses any `.cogni/workloads/` entry that is not a regular `*.yaml` file
+   * or that is over the manifest size cap (story.5137).
+   */
+  listDirectoryEntries(input: {
+    owner: string;
+    repo: string;
+    path: string;
+    ref: string;
+  }): Promise<readonly { name: string; type: string; size: number }[] | null>;
+
+  /**
    * Grant a GitHub identity branch-push (Write) on a node repo — the operator App as the privilege
    * bridge for the contributor golden path (rbac.md §6a, TRUST_BOUNDARY_IS_MERGE_NOT_PUSH). The App
    * holds `administration: write`; the agent never holds standing GitHub admin. Idempotent (re-granting

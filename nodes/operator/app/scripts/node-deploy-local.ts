@@ -21,10 +21,18 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from "node:fs";
 import { join } from "node:path";
 
 import { createAppDbClient } from "@cogni/db-client";
+import { checkWorkloadDirectoryEntries } from "@cogni/repo-spec";
 import postgres from "postgres";
 import { AkashChainTruth } from "../src/adapters/server/node-deploy/akash-chain-truth.adapter";
 import { CloudflareDnsRecords } from "../src/adapters/server/node-deploy/cloudflare-dns.adapter";
@@ -48,6 +56,7 @@ const REPO_SPEC = join(
   import.meta.dirname,
   "../../../../.cogni/repo-spec.yaml"
 );
+const WORKLOADS_DIR = join(import.meta.dirname, "../../../../.cogni/workloads");
 const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
 const ENV = "dev";
 const HOST = "node-deploy-canary-dev.cognidao.org";
@@ -241,6 +250,23 @@ async function release(
 ) {
   const spec = resolveWorkloadDeclaration({
     repoSpecText: readFileSync(REPO_SPEC, "utf8"),
+    // Same directory rule as the deploy route: any non-*.yaml entry is refused, never skipped.
+    manifests: checkWorkloadDirectoryEntries(
+      readdirSync(WORKLOADS_DIR, { withFileTypes: true }).map((d) => ({
+        name: d.name,
+        type: d.isFile()
+          ? "file"
+          : d.isDirectory()
+            ? "dir"
+            : d.isSymbolicLink()
+              ? "symlink"
+              : "other",
+        size: d.isFile() ? statSync(join(WORKLOADS_DIR, d.name)).size : 0,
+      }))
+    ).map((f) => ({
+      path: `.cogni/workloads/${f}`,
+      text: readFileSync(join(WORKLOADS_DIR, f), "utf8"),
+    })),
     nodeId: NODE_ID,
     env: ENV,
     workload,

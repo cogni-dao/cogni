@@ -96,7 +96,7 @@ After dispatch, **always** confirm production `/version.buildSha` actually advan
 
 ## Declared workloads (task.5400)
 
-Nodes that declare `deployment.workloads[]` in `.cogni/repo-spec.yaml` (shipping, PR #3005; production canary proof tracked on story.5127; today only the operator node declares workloads; design [`node-service-delivery`](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-249e8b6d)) deploy each workload by operator-sequenced blue/green. Authz: production needs `node.promote_production`, candidate-a needs `node.manage_envs`. A 403 `authz_denied` uses the same grant loop as above.
+Nodes that declare workload manifests in `.cogni/workloads/<name>.yaml` (story.5137, hub `workload-manifest`) (shipping, PR #3005; production canary proof tracked on story.5127; today only the operator node declares workloads; design [`node-service-delivery`](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-249e8b6d)) deploy each workload by operator-sequenced blue/green. Authz: production needs `node.promote_production`, candidate-a needs `node.manage_envs`. A 403 `authz_denied` uses the same grant loop as above.
 
 ```bash
 curl -sS -X POST "$BASE/api/v1/deploy/workloads" \

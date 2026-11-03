@@ -7,24 +7,33 @@
  *   deploy ONE declared workload at a source sha; `GET` reads the desired row with its explicit
  *   release state (queued|deploying|active|parked|superseded|failed), the active attempt and recent
  *   attempts with their step timelines (`releases/{releaseId}` is the per-release detail).
- * Scope: Authorizes per env, reads the node's `.cogni/repo-spec.yaml` AT `sourceSha` through the
- *   operator GitHub App, resolves the one declared workload, and writes an immutable release plus the
- *   desired row in one transaction. It never calls the actuator and never touches DNS: the sequencer
- *   executes the intent.
+ * Scope: Authorizes per env, reads the node's `.cogni/repo-spec.yaml` and every workload manifest
+ *   (`.cogni/workloads/*.yaml`) AT `sourceSha` through the operator GitHub App, checks and lowers the
+ *   manifests, resolves the one requested workload, and writes an immutable release plus the desired
+ *   row in one transaction. It never calls the actuator and never touches DNS: the sequencer executes
+ *   the intent.
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: production needs `node.promote_production` (`can_promote_production`);
  *     candidate-a and preview need `node.manage_envs` (`can_manage_envs`) — the promote route's pattern —
  *     checked before any GitHub read or write. GET uses the same gate.
  *   - INTENT_ONLY: a 200 means a release row exists, not that anything is deployed.
- *   - DECLARED_AT_THE_SHA: the declaration is read at the requested sha from the node's repo and its
- *     `node_id` must equal the requested node.
+ *   - DECLARED_AT_THE_SHA: the manifests and the repo-spec are read at the requested sha from the
+ *     node's repo, and the repo-spec `node_id` must equal the requested node.
+ *   - REFUSED_BEFORE_PAID_CREATE: a manifest the two-pass check refuses returns 422
+ *     `workload_manifest_refused` with every issue; no release row is written.
  *   - STATE_IS_CREATE_ONCE: a `state` workload that already has a desired row is refused with 409; a
  *     state lease is never replaced by a deploy.
- *   - YELLOW_OPERATOR_ONLY (S1): the repo-spec is read from the operator's parent repo root, so only the
+ *   - G4_STATE_ADMISSION: a new production `state` workload is refused 422 `state_admission_refused`
+ *     until the off-provider backup debt row closes; the only exception is the operator node's own
+ *     `canary-db`.
+ *   - NO_SOURCE_ECHO: a 502 read failure never returns the GitHub/Octokit message.
+ *   - YELLOW_OPERATOR_ONLY (S1): the files are read from the operator's parent repo root, so only the
  *     operator node can declare workloads today. Any other node fails `node_mismatch` (422).
  * Side-effects: IO (authz check, GitHub App contents read, operator Postgres write)
  * Links: contracts/deploy.workloads.v1.contract.ts, features/node-deploy/declarations.ts,
- *   docs/spec/rbac.md, hub `node-service-delivery`
+ *   features/node-deploy/read-declarations.ts,
+ *   packages/repo-spec/src/workload-manifest.ts, docs/spec/rbac.md, hub `node-service-delivery`,
+ *   hub `workload-manifest`
  * @public
  */
 
@@ -41,7 +50,12 @@ import {
   DeclarationError,
   resolveWorkloadDeclaration,
 } from "@/features/node-deploy/declarations";
+import {
+  readWorkloadDeclarations,
+  type WorkloadDeclarationsRead,
+} from "@/features/node-deploy/read-declarations";
 import { buildWorkloadView } from "@/features/node-deploy/release-view";
+import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
@@ -50,7 +64,11 @@ import { envNotServed, gate } from "./_lib/gate";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const REPO_SPEC_PATH = ".cogni/repo-spec.yaml";
+/**
+ * G4 canary-only exception: the one production state workload admitted before backups exist. It
+ * holds only for the operator's OWN node (`getNodeId()`), never for another node's `canary-db`.
+ */
+const G4_PRODUCTION_STATE_EXCEPTION = "canary-db";
 
 export const POST = wrapRouteHandlerWithLogging(
   {
@@ -89,38 +107,51 @@ export const POST = wrapRouteHandlerWithLogging(
           { status: 503 }
         );
 
-      let repoSpecText: string | null;
+      let read: WorkloadDeclarationsRead;
       try {
-        repoSpecText = await createOperatorDeployPlane(envConfig).fetchFileText(
-          {
-            owner,
-            repo,
-            path: REPO_SPEC_PATH,
-            ref: sourceSha,
-          }
+        read = await readWorkloadDeclarations(
+          createOperatorDeployPlane(envConfig),
+          { owner, repo, sourceSha }
         );
       } catch (error) {
+        // NO_SOURCE_ECHO: never return the Octokit/GitHub message; log it for the operator instead.
+        ctx.log.warn(
+          {
+            reqId: ctx.reqId,
+            err:
+              error instanceof Error ? error.message.slice(0, 300) : "unknown",
+          },
+          "node-deploy declaration read failed"
+        );
         return NextResponse.json(
           {
             error: "declaration_read_failed",
-            message:
-              error instanceof Error
-                ? error.message.slice(0, 200)
-                : "read failed",
+            message: "could not read the declarations at this sha",
           },
           { status: 502 }
         );
       }
-      if (repoSpecText === null)
+      if (read.kind === "repo_spec_not_found")
         return NextResponse.json(
           { error: "repo_spec_not_found" },
+          { status: 422 }
+        );
+      if (read.kind === "refused")
+        // NOTHING_SILENTLY_DROPPED: a non-*.yaml entry or too many manifests; every issue is returned.
+        return NextResponse.json(
+          {
+            error: "workload_manifest_refused",
+            message: read.message,
+            issues: read.issues,
+          },
           { status: 422 }
         );
 
       let spec: ReturnType<typeof resolveWorkloadDeclaration>;
       try {
         spec = resolveWorkloadDeclaration({
-          repoSpecText,
+          repoSpecText: read.repoSpecText,
+          manifests: read.manifests,
           nodeId: node.id,
           env,
           workload,
@@ -128,11 +159,32 @@ export const POST = wrapRouteHandlerWithLogging(
       } catch (error) {
         if (error instanceof DeclarationError)
           return NextResponse.json(
-            { error: error.code, message: error.message },
+            {
+              error: error.code,
+              message: error.message,
+              ...(error.issues.length > 0 ? { issues: error.issues } : {}),
+            },
             { status: error.code === "workload_not_declared" ? 404 : 422 }
           );
         throw error;
       }
+
+      // G4: no NEW production state until the off-provider backup debt row closes (hub
+      // node-service-delivery, debt ledger). `canary-db` is the one canary-only exception: it holds
+      // canary boot rows, no user data. Lift this guard when that debt row closes.
+      if (
+        env === "production" &&
+        spec.kind === "state" &&
+        !(node.id === getNodeId() && workload === G4_PRODUCTION_STATE_EXCEPTION)
+      )
+        return NextResponse.json(
+          {
+            error: "state_admission_refused",
+            message:
+              "a new production state workload is refused until off-provider backups exist (G4)",
+          },
+          { status: 422 }
+        );
 
       const store = createNodeDeployStore();
       if (spec.kind === "state") {
