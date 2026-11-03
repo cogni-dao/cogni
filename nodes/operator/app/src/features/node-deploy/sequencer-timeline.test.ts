@@ -103,6 +103,7 @@ describe("persisted step timeline", () => {
     const [attempt] = await h.store.attemptsFor(APP);
     expect(attempt?.steps.map((s) => s.step)).toEqual([
       "attempt_planned",
+      "providers_excluded",
       "created",
       "lease_active",
       "proven",

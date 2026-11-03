@@ -314,19 +314,76 @@ describe("app deploy", () => {
 });
 
 describe("provider exclusion and alert hygiene", () => {
-  it("tells the payer to avoid blue's provider for a green create (and sends nothing on a first deploy)", async () => {
+  it("tells the payer to avoid blue's provider and every bound state provider for a create", async () => {
     const h = harness();
     await stateUp(h);
     await deployApp(h, SHA_1);
     const first = h.payer.createRequests.filter(
       (r) => r.spec.name === "canary"
     );
-    expect(first[0]?.excludeProviders).toBeUndefined();
+    // first deploy: no blue yet, but the bound state lease (provider-1) is still excluded
+    expect(first[0]?.excludeProviders).toEqual(["provider-1"]);
     await deployApp(h, SHA_2);
     const second = h.payer.createRequests.filter(
       (r) => r.spec.name === "canary"
     );
-    expect(second[1]?.excludeProviders).toEqual(["provider-2"]);
+    // blue first, then the state provider, deduped
+    expect(second[1]?.excludeProviders).toEqual(["provider-2", "provider-1"]);
+  });
+
+  it("HAIRPIN_RULE: an app bound to a state on provider P never sends a create that allows P", async () => {
+    const h = harness();
+    await stateUp(h);
+    const stateProvider = (await h.store.attemptsFor(DB))[0]?.provider;
+    expect(stateProvider).toBe("provider-1");
+    // every attempt (failed retries, then a later release) excludes the state's provider
+    h.payer.onLease = (l) => {
+      l.serveSha = "f".repeat(40);
+    };
+    await h.release(canaryApp(), SHA_1);
+    await h.seq.step(APP);
+    await h.seq.step(APP);
+    h.payer.onLease = undefined;
+    await deployApp(h, SHA_2);
+    const appCreates = h.payer.createRequests.filter(
+      (r) => r.spec.name === "canary"
+    );
+    expect(appCreates.length).toBeGreaterThanOrEqual(3);
+    for (const req of appCreates)
+      expect(req.excludeProviders).toContain(stateProvider);
+    // a state workload has no bindings: it excludes nothing
+    expect(
+      h.payer.createRequests.find((r) => r.spec.name === "canary-db")
+        ?.excludeProviders
+    ).toBeUndefined();
+    // the exclusion is logged as a step with the list, and persisted on the attempt
+    const logged = h.log.lines.find(
+      (l) =>
+        l.msg === "node_deploy_step" && l.fields.step === "providers_excluded"
+    );
+    expect(logged?.fields.providers).toEqual(["provider-1"]);
+    const attempts = await h.store.attemptsFor(APP);
+    const first = attempts[attempts.length - 1];
+    expect(
+      first?.steps.find((st) => st.step === "providers_excluded")?.reason
+    ).toBe("provider-1");
+  });
+
+  it("dedupes exclusions and never exceeds the wire's 16", async () => {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    // blue sits on the state's provider: one entry, not two
+    h.payer.providerFor = () => "provider-1";
+    await deployApp(h, SHA_2);
+    const req = h.payer.createRequests.filter(
+      (r) => r.spec.name === "canary"
+    )[1];
+    expect(req?.excludeProviders).toEqual(["provider-2", "provider-1"]);
+    expect(new Set(req?.excludeProviders).size).toBe(
+      req?.excludeProviders?.length
+    );
+    expect(req?.excludeProviders?.length ?? 0).toBeLessThanOrEqual(16);
   });
 
   it("a parked release alerts once per 10 minutes, not once per tick", async () => {

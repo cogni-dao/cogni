@@ -149,6 +149,8 @@ export type ReconcileOutcome =
 
 const ALERT_THROTTLE_MS = 600_000;
 const GRACE_LOG_THROTTLE_MS = 60_000;
+/** The actuator wire accepts at most 16 `excludeProviders`. */
+const MAX_EXCLUDED_PROVIDERS = 16;
 
 class DependencyNotReady extends Error {}
 
@@ -387,6 +389,32 @@ export class NodeDeploySequencer {
     return env;
   }
 
+  /**
+   * HAIRPIN_RULE: providers a new app attempt must NOT land on — blue's provider (two leases on one
+   * ingress cannot both claim a host) and the provider of every BOUND state workload's active lease (an
+   * app cannot reach a state lease's public forwarded port on its own provider: production canary v2
+   * served /version but /readyz was 503 db_unreachable). Deduped, blue first, capped at the wire's 16.
+   */
+  private async excludedProviders(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    blue: AttemptRow | undefined
+  ): Promise<string[]> {
+    const w = release.spec;
+    const providers: (string | undefined)[] = [blue?.provider];
+    for (const stateName of new Set(w.bindings.map((b) => b.workload))) {
+      const stateAttempts = await this.d.store.attemptsFor({
+        ...key,
+        workload: stateName,
+      });
+      providers.push(stateAttempts.find((a) => a.phase === "active")?.provider);
+    }
+    return [...new Set(providers.filter((p): p is string => Boolean(p)))].slice(
+      0,
+      MAX_EXCLUDED_PROVIDERS
+    );
+  }
+
   private async doCreate(
     key: WorkloadKey,
     release: ReleaseRow,
@@ -464,6 +492,12 @@ export class NodeDeploySequencer {
       }
     }
 
+    const excludeProviders = await this.excludedProviders(key, release, blue);
+    if (excludeProviders.length > 0)
+      await this.emit(key, release, attempt, "providers_excluded", "ok", {
+        providers: excludeProviders,
+        reason: excludeProviders.join(","),
+      });
     try {
       const resource = await this.d.payer.create({
         cogniKey: attempt.cogniKey,
@@ -474,7 +508,7 @@ export class NodeDeploySequencer {
           attempt: attempt.attempt,
         }),
         spec: toPayerSpec(w, env),
-        ...(blue?.provider ? { excludeProviders: [blue.provider] } : {}),
+        ...(excludeProviders.length > 0 ? { excludeProviders } : {}),
       });
       return this.bindLease(key, release, attempt, resource);
     } catch (error) {
