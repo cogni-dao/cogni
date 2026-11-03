@@ -20,6 +20,12 @@
  *   - BUILT_IMAGE_IS_DIGEST_PINNED: an image of `.` lowers to the `builtImage` the caller resolved from
  *     the node's registry at the source sha (`repo@sha256:<digest>`); with none supplied it is refused
  *     `built_image_unresolved`, so a mutable tag can never reach a release.
+ *   - SECRET_KEYS_ARE_DECLARED_NOT_DISCOVERED (task.5405): an `app` carries the explicit, value-free list
+ *     of secret KEY names it may receive: the `cogni-node-app-v1` profile keys plus the app service's
+ *     declared `secret_refs` (`resolveRuntimeProfileSecretRefs`, the helper the Crossplane lane used).
+ *     Any operator/fleet/substrate credential on that list is refused here (`secret_ref_refused`), so
+ *     it can never reach rented compute; fleet-inherited keys that are merely in the bucket are not
+ *     on the list and are never delivered.
  *   - HOST_FOLLOWS_ENV: a manifest names its PRODUCTION host; other environments get the
  *     `-test` (candidate-a) / `-preview` / `-dev` sibling of its first label, so one manifest serves
  *     every environment without a per-env copy.
@@ -29,8 +35,10 @@
 
 import {
   extractNodeId,
+  extractNodeServices,
   lowerWorkloadManifests,
   parseRepoSpec,
+  resolveRuntimeProfileSecretRefs,
   WorkloadManifestError,
   type WorkloadManifestFile,
   type WorkloadManifestIssue,
@@ -39,6 +47,7 @@ import {
 import { parse as parseYaml } from "yaml";
 
 import type { NodeWorkloadSpec } from "@/ports";
+import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
 
 const ENV_HOST_SUFFIX: Readonly<Record<string, string | undefined>> = {
   production: undefined,
@@ -61,7 +70,8 @@ export type DeclarationErrorCode =
   | "repo_spec_unparseable"
   | "node_mismatch"
   | "workload_not_declared"
-  | "workload_manifest_refused";
+  | "workload_manifest_refused"
+  | "secret_ref_refused";
 
 export class DeclarationError extends Error {
   constructor(
@@ -145,11 +155,38 @@ export function resolveWorkloadDeclaration(input: {
       "workload_not_declared",
       `workload ${input.workload} is not declared by any .cogni/workloads/*.yaml manifest`
     );
-  if (!("http" in declared.expose)) return declared;
+  const withKeys: NodeWorkloadSpec =
+    declared.kind === "app"
+      ? { ...declared, secretKeys: appSecretKeys(spec) }
+      : declared;
+  if (!("http" in withKeys.expose)) return withKeys;
   return {
-    ...declared,
+    ...withKeys,
     expose: {
-      http: { host: hostForEnv(declared.expose.http.host, input.env) },
+      http: { host: hostForEnv(withKeys.expose.http.host, input.env) },
     },
   };
+}
+
+/**
+ * The secret KEY names an app may receive: profile keys first (contract order), then the app service's
+ * extra declared `secret_refs`, deduped. The app service is the one carrying the `cogni-node-app-v1`
+ * profile (the schema allows at most one); a repo-spec with no `deployment:` block gets the default
+ * stock service, i.e. the profile keys alone. Throws `secret_ref_refused` on any denylisted key.
+ */
+function appSecretKeys(spec: ReturnType<typeof parseRepoSpec>): string[] {
+  const service = extractNodeServices(spec).find(
+    (s) => s.runtimeProfile === "cogni-node-app-v1"
+  );
+  const keys = resolveRuntimeProfileSecretRefs({
+    runtimeProfile: "cogni-node-app-v1",
+    secretRefs: service?.secretRefs ?? [],
+  }).map((ref) => ref.key);
+  const refused = keys.filter((k) => !isOffClusterWorkloadSecretKey(k));
+  if (refused.length > 0)
+    throw new DeclarationError(
+      "secret_ref_refused",
+      `secret_refs name operator/fleet credentials that may not reach an off-cluster workload: ${refused.join(", ")}`
+    );
+  return keys;
 }

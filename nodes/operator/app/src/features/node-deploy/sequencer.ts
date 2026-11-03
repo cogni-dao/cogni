@@ -62,7 +62,7 @@ import {
 } from "@/ports";
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
 import type { EdgeRouter } from "./edge";
-import { nodeAppEnv, nodeAppRequiredSecretKeys } from "./node-app-env";
+import { nodeAppEnv, nodeAppSecretKeys } from "./node-app-env";
 import { nodeCatalogPolicy } from "./node-catalog-policy";
 import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
 
@@ -473,7 +473,7 @@ export class NodeDeploySequencer {
       bucket = await rt.secrets.read(
         key.env,
         entry.slug,
-        nodeAppRequiredSecretKeys(boundEnvNames)
+        nodeAppSecretKeys(w.secretKeys, boundEnvNames)
       );
     } catch (error) {
       if (error instanceof NodeRuntimeSecretsError)
@@ -493,6 +493,7 @@ export class NodeDeploySequencer {
           port: w.port,
           substrateHost: rt.substrateHost,
           databasePoolLimits: policy.databasePoolLimits,
+          secretKeys: w.secretKeys,
           secrets: bucket,
           boundEnvNames,
         }),

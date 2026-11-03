@@ -15,14 +15,15 @@
  *     topology (only with a substrate host), secrets, COGNI_NODE_ID, database pool maxes, Loki push
  *     (opt-in), then the identity block (NODE_NAME, COGNI_REPO_PATH, AUTH_TRUST_HOST, NEXTAUTH_URL,
  *     APP_BASE_URL) which wins over everything above. `node-app-env.test.ts` pins this key by key.
- *   - EVERY_BUCKET_KEY_EXCEPT_THE_DENYLIST: a node's own `secret_refs` live in the NODE repo's
- *     repo-spec, which the sequencer never reads. So every key of the node's own bucket enters the env,
- *     EXCEPT `OFF_CLUSTER_WORKLOAD_DENIED_KEYS` (operator/fleet/substrate credentials that must never
- *     reach rented compute) and names that are not valid env names. A denied key is dropped, never
- *     injected, even if it is present in the bucket.
- *   - PROFILE_KEYS_FAIL_CLOSED: every `COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS` key must be present and
- *     non-empty, else this throws and the caller deploys NOTHING (never a half env). A key the node
- *     binds to a state workload (CD2: the declared binding overrides) is not required from the bucket.
+ *   - DECLARED_KEYS_ONLY: the secrets injected are EXACTLY the release's declared key list
+ *     (`NodeWorkloadSpec.secretKeys` = the profile keys + the node's declared `secret_refs`, computed at
+ *     lowering from its repo-spec at the source sha). A key that is merely present in the node's bucket
+ *     (fleet-inherited `GH_WEBHOOK_SECRET`, `POSTHOG_API_KEY`, `TAVILY_API_KEY`, ...) is never delivered.
+ *     Operator/fleet credentials on `OFF_CLUSTER_WORKLOAD_DENIED_KEYS` are refused even if declared.
+ *   - DECLARED_KEYS_FAIL_CLOSED: every declared key must be present and non-empty, else this throws and
+ *     the caller deploys NOTHING (never a half env), exactly like the composition's fail-closed
+ *     placeholders. A key the node binds to a state workload (CD2: the declared binding overrides) is not
+ *     required from the bucket.
  *   - LITELLM_KEY_RENAME: the node-scoped `LITELLM_VIRTUAL_KEY` is delivered as `LITELLM_MASTER_KEY`
  *     and is NOT also passed under its own name (byte-identical to the composition). The fleet master
  *     key is on the denylist and can never arrive through the bucket.
@@ -33,7 +34,7 @@
  * @internal
  */
 
-import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "@cogni/repo-spec";
+import { resolveRuntimeProfileSecretRefs } from "@cogni/repo-spec";
 
 import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
 
@@ -71,7 +72,12 @@ export interface NodeAppEnvInput {
   readonly substrateHost?: string | undefined;
   readonly databasePoolLimits?: NodeAppPoolLimits | undefined;
   readonly lokiPush?: NodeAppLokiPush | undefined;
-  /** The node's whole bucket, as read from OpenBao. Filtered here; never trusted. */
+  /**
+   * The release's declared secret KEY names (`NodeWorkloadSpec.secretKeys`); absent = the profile keys
+   * only. Only these keys are ever injected.
+   */
+  readonly secretKeys?: readonly string[] | undefined;
+  /** The values read for those keys. Filtered to the declared set here; never trusted. */
   readonly secrets: Readonly<Record<string, string>>;
   /** Env names a declared state binding supplies (CD2); not required from the bucket. */
   readonly boundEnvNames?: readonly string[] | undefined;
@@ -82,20 +88,32 @@ const BIND_HOST = "0.0.0.0";
 const LITELLM_VIRTUAL_KEY = "LITELLM_VIRTUAL_KEY";
 const LITELLM_MASTER_KEY = "LITELLM_MASTER_KEY";
 
-/** The bucket keys the `cogni-node-app-v1` profile owes, minus those a state binding supplies. */
-export function nodeAppRequiredSecretKeys(
+/**
+ * The secret keys an app must receive from its bucket: the declared set (profile keys when none is
+ * declared), minus those a declared state binding supplies. Order is contract order, deduped.
+ */
+export function nodeAppSecretKeys(
+  declared: readonly string[] | undefined,
   boundEnvNames: readonly string[] = []
 ): readonly string[] {
   const bound = new Set(boundEnvNames);
-  return COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS.filter((k) => !bound.has(k));
+  const keys = declared
+    ? declared
+    : resolveRuntimeProfileSecretRefs({
+        runtimeProfile: "cogni-node-app-v1",
+        secretRefs: [],
+      }).map((r) => r.key);
+  return [...new Set(keys)].filter((k) => !bound.has(k));
 }
 
-/** The injectable part of a bucket: valid env names that are not operator/fleet/substrate credentials. */
+/** The injectable part of the declared keys: valid env names that are not operator/fleet credentials. */
 export function injectableSecrets(
-  bucket: Readonly<Record<string, string>>
+  keys: readonly string[],
+  values: Readonly<Record<string, string>>
 ): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(bucket)) {
+  for (const key of keys) {
+    const value = values[key];
     if (typeof value !== "string" || value.length === 0) continue;
     if (!ENV_NAME.test(key) || !isOffClusterWorkloadSecretKey(key)) continue;
     out[key] = value;
@@ -104,10 +122,14 @@ export function injectableSecrets(
 }
 
 export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
-  const injectable = injectableSecrets(input.secrets);
-  const missing = nodeAppRequiredSecretKeys(input.boundEnvNames).filter(
-    (k) => injectable[k] === undefined
-  );
+  const keys = nodeAppSecretKeys(input.secretKeys, input.boundEnvNames);
+  const refused = keys.filter((k) => !isOffClusterWorkloadSecretKey(k));
+  if (refused.length > 0)
+    throw new Error(
+      `node app env refused: operator/fleet credentials may not be injected: ${refused.join(", ")}`
+    );
+  const injectable = injectableSecrets(keys, input.secrets);
+  const missing = keys.filter((k) => injectable[k] === undefined);
   if (missing.length > 0)
     throw new Error(
       `node app env refused: required secret keys missing or not injectable: ${missing.join(", ")}`

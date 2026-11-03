@@ -54,24 +54,38 @@ const PROFILE_BUCKET: Record<string, string> = Object.fromEntries(
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS.map((k) => [k, `value-of-${k}`])
 );
 
+/** Fleet-inherited keys that sit in a node's bucket but are not in its declared secret_refs. */
+const INHERITED = {
+  GH_WEBHOOK_SECRET: "inherited-wh",
+  POSTHOG_API_KEY: "inherited-ph",
+  TAVILY_API_KEY: "inherited-tv",
+};
+const DECLARED = [
+  ...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+  "PAPER_ENFORCE_MODE",
+];
+
 class FakeRuntimeSecrets implements NodeRuntimeSecretsPort {
+  /** The node's OpenBao bucket: declared keys AND fleet-inherited keys that are NOT declared. */
   bucket: Record<string, string> = {
     ...PROFILE_BUCKET,
     PAPER_ENFORCE_MODE: "true",
+    ...INHERITED,
   };
   down = false;
-  readonly reads: { env: string; slug: string; required: string[] }[] = [];
-  async read(env: string, slug: string, requiredKeys: readonly string[]) {
-    this.reads.push({ env, slug, required: [...requiredKeys] });
+  readonly reads: { env: string; slug: string; keys: string[] }[] = [];
+  /** Like the real port: EXACTLY the requested keys, or a typed failure naming the missing ones. */
+  async read(env: string, slug: string, keys: readonly string[]) {
+    this.reads.push({ env, slug, keys: [...keys] });
     if (this.down) throw new NodeRuntimeSecretsError("unavailable", "login");
-    const missing = requiredKeys.filter((k) => !this.bucket[k]);
+    const missing = keys.filter((k) => !this.bucket[k]);
     if (missing.length > 0)
       throw new NodeRuntimeSecretsError(
         "missing_keys",
         `required keys missing: ${missing.join(", ")}`,
         missing
       );
-    return { ...this.bucket };
+    return Object.fromEntries(keys.map((k) => [k, this.bucket[k] as string]));
   }
 }
 
@@ -154,7 +168,7 @@ async function releaseApp(h: H, nodeId: string) {
     env: ENV,
     workload: "canary",
     sourceSha: SHA_1,
-    spec: canaryApp(),
+    spec: canaryApp({ secretKeys: DECLARED }),
     createdBy: "test",
   });
   return h.seq.step(h.key(nodeId, "canary"));
@@ -199,9 +213,21 @@ describe("node app runtime env (task.5405)", () => {
       env: ENV,
       slug: "poly",
     });
-    expect(h.runtimeSecrets.reads.at(-1)?.required).not.toContain(
-      "DATABASE_URL"
+    expect(h.runtimeSecrets.reads.at(-1)?.keys).not.toContain("DATABASE_URL");
+  });
+
+  it("a fleet-inherited key present in the bucket but not declared is NOT injected; a declared secret_ref is", async () => {
+    const h = harness();
+    await stateUp(h, POLY_ID);
+    await releaseApp(h, POLY_ID);
+    const env = appCreates(h)[0]?.spec.services[0]?.env ?? {};
+    expect(env.PAPER_ENFORCE_MODE).toBe("true");
+    for (const k of Object.keys(INHERITED)) expect(env).not.toHaveProperty(k);
+    // the port was asked for the declared set only (minus the state-bound DATABASE_URL)
+    expect(h.runtimeSecrets.reads.at(-1)?.keys).toEqual(
+      DECLARED.filter((k) => k !== "DATABASE_URL")
     );
+    expect(JSON.stringify(h.log.lines)).not.toContain("inherited-");
   });
 
   it("starts a database-consuming node app through the DB CA trust wrapper, keeping its argv", async () => {
@@ -240,7 +266,7 @@ describe("node app runtime env (task.5405)", () => {
   });
 
   it("no catalog countries and no allowlist send neither field (byte-identical wire)", async () => {
-    const h = harness({ appProviders: undefined });
+    const h = harness({ appProviders: [] });
     h.catalog.rows.set(POLY_ID, { slug: "poly", row: { name: "poly" } });
     await stateUp(h, POLY_ID);
     await releaseApp(h, POLY_ID);

@@ -7,22 +7,28 @@
  *   (ESO) -> a Kubernetes Secret — how the node-deploy sequencer reads the runtime secrets of a node app
  *   so the app runs with the SAME env the Crossplane lane gave it (task.5405).
  * Scope: Per read: ensure ONE ExternalSecret `nd-<slug>-env` in the sequencer's OWN dedicated namespace
- *   (`NODE_DEPLOY_SECRETS_NAMESPACE`, `cogni-node-deploy-<env>`), wait a bounded time for it to be Ready,
- *   then read its target Secret `nd-<slug>-env` and filter it. No OpenBao login, no new OpenBao role, no
- *   root token: ESO's own `eso-reader` role (ClusterSecretStore `openbao-backend`) is the ONLY reader of
- *   OpenBao, exactly as for every other ExternalSecret.
+ *   (`NODE_DEPLOY_SECRETS_NAMESPACE`, `cogni-node-deploy-<env>`) with one explicit `data:` entry per
+ *   DECLARED key, wait a bounded time for it to be Ready, then read its target Secret `nd-<slug>-env`.
+ *   No OpenBao login, no new OpenBao role, no root token: ESO's own `eso-reader` role (ClusterSecretStore
+ *   `openbao-backend`) is the ONLY reader of OpenBao, exactly as for every other ExternalSecret.
  * Invariants:
  *   - CUSTODY_STAYS_IN_OPENBAO: the value lives at `cogni/<env>/<slug>`; the Kubernetes Secret is the
  *     ESO-rendered view (`creationPolicy: Owner`, 5m refresh), never an authority.
+ *   - ONLY_DECLARED_KEYS_ARE_RENDERED: the ExternalSecret lists `data:` entries
+ *     (`remoteRef: {key: <env>/<slug>, property: K}`) for EXACTLY the caller's key list and has NO
+ *     `dataFrom: extract`, so a fleet-inherited key that sits in the bucket is never copied into the
+ *     cluster Secret, let alone into an env. A declared key with no property makes the ExternalSecret
+ *     not Ready, which is `unavailable` (nothing is paid).
  *   - SEQUENCER_IS_THE_ONE_WRITER_OF_THE_EXTERNALSECRET (CD4): it creates or updates only
  *     `nd-<slug>-env` in its own namespace; the Role grants externalsecrets verbs there and nowhere else.
- *   - DENYLIST_IS_APPLIED_HERE_TOO: keys on `OFF_CLUSTER_WORKLOAD_DENIED_KEYS` and malformed env names are
- *     dropped before the map leaves this class, so a caller can never forward one by mistake.
- *   - NO_HALF_ENV: not Ready in time, a missing Secret or absent/empty required keys throw
- *     `NodeRuntimeSecretsError` NAMING keys or the ESO reason (never values); the sequencer maps it to
- *     DependencyNotReady, so nothing is paid and the next tick retries while ESO keeps reconciling.
- *   - SLUG_IS_A_BUCKET_NAME: a DNS label that is not a reserved bucket (`operator`) and cannot collide
- *     with a state password Secret (`nd-<8 hex>-<workload>`).
+ *   - DENIED_KEYS_ARE_REFUSED: a requested key on `OFF_CLUSTER_WORKLOAD_DENIED_KEYS` (or not a valid env
+ *     name) throws `denied_keys` BEFORE any Kubernetes call.
+ *   - NO_HALF_ENV: not Ready in time, a missing Secret or absent/empty keys throw `NodeRuntimeSecretsError`
+ *     NAMING keys or the ESO reason (never values); the sequencer maps it to DependencyNotReady, so
+ *     nothing is paid and the next tick retries while ESO keeps reconciling.
+ *   - SLUG_IS_A_BUCKET_NAME: the slug the sequencer passes comes from the image catalog mapping
+ *     (`ImageCatalogNodes`), never from caller text; this class still requires a DNS label that is not a
+ *     reserved bucket (`operator`) and cannot collide with a state password Secret (`nd-<8 hex>-<workload>`).
  * Side-effects: IO (Kubernetes API: ExternalSecret get/create/replace, Secret get)
  * Links: infra/k8s/secrets/external-secrets/cluster-secret-store.yaml, infra/k8s/base/node-deploy-sequencer/rbac.yaml,
  *   ports/node-runtime.port.ts, shared/secrets/node-secrets-reserved.data.ts, docs/spec/secrets-management.md
@@ -39,6 +45,7 @@ import { NodeRuntimeSecretsError, type NodeRuntimeSecretsPort } from "@/ports";
 import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
 
 const SLUG = /^[a-z][a-z0-9-]{0,56}$/;
+const ENV_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
 /** `nd-<nodeId8>-<workload>` is the state password Secret name; a slug may not shape-match it. */
 const STATE_SECRET_SHAPE = /^[0-9a-f]{8}-/;
 const RESERVED_BUCKETS: ReadonlySet<string> = new Set(["operator"]);
@@ -82,7 +89,7 @@ const statusCode = (e: unknown): number | undefined =>
     .statusCode ??
   (e as { response?: { statusCode?: number } }).response?.statusCode;
 
-function desiredSpec(env: string, slug: string) {
+function desiredSpec(env: string, slug: string, keys: readonly string[]) {
   return {
     refreshInterval: REFRESH_INTERVAL,
     secretStoreRef: STORE,
@@ -90,8 +97,32 @@ function desiredSpec(env: string, slug: string) {
       name: nodeEnvSecretName(slug),
       creationPolicy: "Owner",
     },
-    dataFrom: [{ extract: { key: `${env}/${slug}` } }],
+    data: [...keys].sort().map((key) => ({
+      secretKey: key,
+      remoteRef: { key: `${env}/${slug}`, property: key },
+    })),
   };
+}
+
+/**
+ * True when `actual` already says everything `desired` says. The API server and ESO add defaults
+ * (conversionStrategy, deletionPolicy, ...), so strict equality would rewrite the object every read.
+ * Arrays must match in length; extra defaulted keys on objects are fine.
+ */
+function covers(actual: unknown, desired: unknown): boolean {
+  if (Array.isArray(desired))
+    return (
+      Array.isArray(actual) &&
+      actual.length === desired.length &&
+      desired.every((d, i) => covers(actual[i], d))
+    );
+  if (typeof desired === "object" && desired !== null) {
+    if (typeof actual !== "object" || actual === null) return false;
+    return Object.entries(desired).every(([k, v]) =>
+      covers((actual as Record<string, unknown>)[k], v)
+    );
+  }
+  return actual === desired;
 }
 
 export class EsoNodeRuntimeSecrets implements NodeRuntimeSecretsPort {
@@ -121,7 +152,7 @@ export class EsoNodeRuntimeSecrets implements NodeRuntimeSecretsPort {
   async read(
     env: string,
     slug: string,
-    requiredKeys: readonly string[]
+    keys: readonly string[]
   ): Promise<Readonly<Record<string, string>>> {
     if (
       !SLUG.test(slug) ||
@@ -132,28 +163,44 @@ export class EsoNodeRuntimeSecrets implements NodeRuntimeSecretsPort {
         "unavailable",
         "slug is not a node bucket name"
       );
-    await this.ensureExternalSecret(env, slug);
+    const wanted = [...new Set(keys)];
+    const denied = wanted.filter(
+      (k) => !ENV_NAME.test(k) || !isOffClusterWorkloadSecretKey(k)
+    );
+    if (denied.length > 0)
+      throw new NodeRuntimeSecretsError(
+        "denied_keys",
+        `keys may not be delivered to an off-cluster workload: ${denied.join(", ")}`,
+        denied
+      );
+    await this.ensureExternalSecret(env, slug, wanted);
     await this.awaitReady(slug);
     const values = await this.readTarget(slug);
 
-    const injectable: Record<string, string> = {};
-    for (const [key, value] of Object.entries(values)) {
-      if (isOffClusterWorkloadSecretKey(key)) injectable[key] = value;
+    // Only the requested keys, even if the rendered Secret somehow holds more.
+    const out: Record<string, string> = {};
+    for (const key of wanted) {
+      const value = values[key];
+      if (value !== undefined) out[key] = value;
     }
-    const missing = requiredKeys.filter((k) => injectable[k] === undefined);
+    const missing = wanted.filter((k) => out[k] === undefined);
     if (missing.length > 0)
       throw new NodeRuntimeSecretsError(
         "missing_keys",
         `required keys missing: ${missing.join(", ")}`,
         missing
       );
-    return injectable;
+    return out;
   }
 
   /** Create-or-update `nd-<slug>-env`. The spec is deterministic, so an unchanged object is not rewritten. */
-  private async ensureExternalSecret(env: string, slug: string): Promise<void> {
+  private async ensureExternalSecret(
+    env: string,
+    slug: string,
+    keys: readonly string[]
+  ): Promise<void> {
     const name = nodeEnvSecretName(slug);
-    const spec = desiredSpec(env, slug);
+    const spec = desiredSpec(env, slug, keys);
     const ns = this.deps.namespace;
     const body = (resourceVersion?: string) => ({
       apiVersion: `${GROUP}/${VERSION}`,
@@ -185,7 +232,9 @@ export class EsoNodeRuntimeSecrets implements NodeRuntimeSecretsPort {
         }
         return;
       }
-      if (JSON.stringify(existing.spec) !== JSON.stringify(spec))
+      const actual = existing.spec as { dataFrom?: unknown[] } | undefined;
+      // `dataFrom` must be gone: a leftover `extract` would render the WHOLE bucket again.
+      if (!covers(existing.spec, spec) || (actual?.dataFrom?.length ?? 0) > 0)
         await this.custom.replaceNamespacedCustomObject(
           GROUP,
           VERSION,

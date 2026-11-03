@@ -9,7 +9,7 @@ import { OFF_CLUSTER_WORKLOAD_DENIED_KEYS } from "@/shared/secrets/node-secrets-
 import {
   injectableSecrets,
   nodeAppEnv,
-  nodeAppRequiredSecretKeys,
+  nodeAppSecretKeys,
 } from "./node-app-env";
 
 const SHA = "a".repeat(40);
@@ -168,10 +168,17 @@ describe("nodeAppEnv parity with the Crossplane composition", () => {
   });
 });
 
-describe("nodeAppEnv bucket policy (EVERY_BUCKET_KEY_EXCEPT_THE_DENYLIST)", () => {
-  it("injects node-owned keys beyond the profile (a node's own secret_refs)", () => {
+const PROFILE_KEYS = [...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS];
+
+describe("nodeAppEnv declared keys (DECLARED_KEYS_ONLY)", () => {
+  it("a declared secret_ref beyond the profile IS injected (poly's PAPER_ENFORCE_MODE)", () => {
     const env = nodeAppEnv({
       ...base,
+      secretKeys: [
+        ...PROFILE_KEYS,
+        "PAPER_ENFORCE_MODE",
+        "POLY_WALLET_AEAD_KEY_HEX",
+      ],
       secrets: {
         ...profileBucket(),
         PAPER_ENFORCE_MODE: "true",
@@ -182,38 +189,67 @@ describe("nodeAppEnv bucket policy (EVERY_BUCKET_KEY_EXCEPT_THE_DENYLIST)", () =
     expect(env.POLY_WALLET_AEAD_KEY_HEX).toBe("ab");
   });
 
-  it("drops every denylisted operator/fleet/substrate key even when it is in the bucket", () => {
-    const poisoned = Object.fromEntries(
-      [...OFF_CLUSTER_WORKLOAD_DENIED_KEYS].map((k) => [k, "leak"])
-    );
+  it("a fleet-inherited key that is in the bucket but NOT declared is never injected", () => {
+    const inherited = {
+      GH_WEBHOOK_SECRET: "wh",
+      POSTHOG_API_KEY: "ph",
+      TAVILY_API_KEY: "tv",
+      OPENROUTER_API_KEY: "or",
+      SOMETHING_ELSE: "x",
+    };
     const env = nodeAppEnv({
       ...base,
-      secrets: { ...profileBucket(), ...poisoned },
+      secretKeys: PROFILE_KEYS,
+      secrets: { ...profileBucket(), ...inherited },
     });
+    for (const k of Object.keys(inherited)) expect(env).not.toHaveProperty(k);
+    // an absent secretKeys means the profile keys only: the same guarantee
+    const stock = nodeAppEnv({
+      ...base,
+      secrets: { ...profileBucket(), ...inherited },
+    });
+    for (const k of Object.keys(inherited)) expect(stock).not.toHaveProperty(k);
+    expect(stock.AUTH_SECRET).toBe("v-AUTH_SECRET");
+  });
+
+  it("refuses a DECLARED operator/fleet credential outright, for every denylisted key", () => {
     for (const k of OFF_CLUSTER_WORKLOAD_DENIED_KEYS)
-      if (k !== "LITELLM_MASTER_KEY") expect(env).not.toHaveProperty(k);
-    // The fleet master key can never arrive through the bucket ("leak" is dropped): the only
-    // LITELLM_MASTER_KEY in the env is the node's renamed virtual key.
-    expect(env.LITELLM_MASTER_KEY).toBe("v-LITELLM_VIRTUAL_KEY");
+      expect(
+        () =>
+          nodeAppEnv({
+            ...base,
+            secretKeys: [...PROFILE_KEYS, k],
+            secrets: { ...profileBucket(), [k]: "leak" },
+          }),
+        k
+      ).toThrow(/may not be injected/);
   });
 
-  it("drops malformed names and empty values", () => {
-    const out = injectableSecrets({
-      GOOD: "1",
-      "bad-name": "x",
-      lower: "x",
-      EMPTY: "",
-    });
-    expect(out).toEqual({ GOOD: "1" });
-  });
-
-  it("fails closed, naming the keys, when a profile key is missing or empty", () => {
+  it("fails closed, naming the keys, when a declared key is missing or empty", () => {
     const bucket = profileBucket();
     delete bucket.AUTH_SECRET;
     bucket.EVM_RPC_URL = "";
     expect(() => nodeAppEnv({ ...base, secrets: bucket })).toThrow(
       /AUTH_SECRET, EVM_RPC_URL/
     );
+    expect(() =>
+      nodeAppEnv({
+        ...base,
+        secretKeys: [...PROFILE_KEYS, "PAPER_ENFORCE_MODE"],
+        secrets: profileBucket(),
+      })
+    ).toThrow(/PAPER_ENFORCE_MODE/);
+  });
+
+  it("injectableSecrets keeps declared, well-formed, non-empty values only", () => {
+    expect(
+      injectableSecrets(["GOOD", "EMPTY", "bad-name", "ABSENT"], {
+        GOOD: "1",
+        EMPTY: "",
+        "bad-name": "x",
+        UNDECLARED: "y",
+      })
+    ).toEqual({ GOOD: "1" });
   });
 
   it("a key supplied by a declared state binding is not required from the bucket (CD2)", () => {
@@ -228,8 +264,9 @@ describe("nodeAppEnv bucket policy (EVERY_BUCKET_KEY_EXCEPT_THE_DENYLIST)", () =
       boundEnvNames: ["DATABASE_URL"],
     });
     expect(env).not.toHaveProperty("DATABASE_URL");
-    expect(nodeAppRequiredSecretKeys(["DATABASE_URL"])).not.toContain(
+    expect(nodeAppSecretKeys(undefined, ["DATABASE_URL"])).not.toContain(
       "DATABASE_URL"
     );
+    expect(nodeAppSecretKeys(undefined)).toEqual(PROFILE_KEYS);
   });
 });

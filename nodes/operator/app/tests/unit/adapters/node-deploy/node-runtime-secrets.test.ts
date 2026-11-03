@@ -5,8 +5,9 @@
  * Module: `@tests/unit/adapters/node-deploy/node-runtime-secrets`
  * Purpose: Prove the sequencer reads a node's runtime secrets through the EXISTING custody path
  *   (OpenBao -> ESO -> Secret): it is the one writer of ONE ExternalSecret `nd-<slug>-env` in its own
- *   namespace, waits a bounded time for Ready, drops denylisted keys, and never returns a half bucket
- *   (task.5405). The Kubernetes client is faked.
+ *   namespace with EXPLICIT `data:` entries for exactly the declared keys (never `dataFrom: extract`),
+ *   waits a bounded time for Ready, refuses denylisted keys, and never returns a half set (task.5405).
+ *   The Kubernetes client is faked.
  * Side-effects: none
  */
 
@@ -120,63 +121,99 @@ function fake(
 const READY: Cond[] = [{ type: "Ready", status: "True" }];
 
 describe("EsoNodeRuntimeSecrets", () => {
-  it("creates nd-<slug>-env in its OWN namespace from the shared ClusterSecretStore, extracting <env>/<slug>", async () => {
+  const KEYS = ["AUTH_SECRET", "PAPER_ENFORCE_MODE"];
+  const goodSpec = {
+    refreshInterval: "5m",
+    secretStoreRef: { kind: "ClusterSecretStore", name: "openbao-backend" },
+    target: { name: "nd-poly-env", creationPolicy: "Owner" },
+    data: [
+      {
+        secretKey: "AUTH_SECRET",
+        remoteRef: { key: "production/poly", property: "AUTH_SECRET" },
+      },
+      {
+        secretKey: "PAPER_ENFORCE_MODE",
+        remoteRef: { key: "production/poly", property: "PAPER_ENFORCE_MODE" },
+      },
+    ],
+  };
+
+  it("creates nd-<slug>-env in its OWN namespace with one explicit data entry per declared key, and NO dataFrom extract", async () => {
     const f = fake({
       secret: { AUTH_SECRET: "a", PAPER_ENFORCE_MODE: "true" },
       conditions: READY,
     });
-    // the first ensure finds nothing; the fake then serves the created object
-    const out = await f.port.read("production", "poly", ["AUTH_SECRET"]);
+    const out = await f.port.read("production", "poly", KEYS);
     expect(out).toEqual({ AUTH_SECRET: "a", PAPER_ENFORCE_MODE: "true" });
     expect(f.created).toHaveLength(1);
     expect(f.created[0]).toMatchObject({
       apiVersion: "external-secrets.io/v1",
       kind: "ExternalSecret",
       metadata: { name: "nd-poly-env", namespace: NS },
-      spec: {
-        refreshInterval: "5m",
-        secretStoreRef: { kind: "ClusterSecretStore", name: "openbao-backend" },
-        target: { name: "nd-poly-env", creationPolicy: "Owner" },
-        dataFrom: [{ extract: { key: "production/poly" } }],
-      },
+      spec: goodSpec,
     });
-    // every call stayed inside the sequencer's own namespace
+    const spec = (f.created[0] as { spec: Record<string, unknown> }).spec;
+    expect(spec).not.toHaveProperty("dataFrom");
     for (const c of f.calls) expect(c).toContain(NS);
     expect(f.calls.some((c) => c.startsWith("secret "))).toBe(true);
   });
 
-  it("an unchanged ExternalSecret is not rewritten; a drifted one is replaced with its resourceVersion", async () => {
-    const same = fake({
+  it("returns ONLY the requested keys even if the rendered Secret holds more (a fleet-inherited key is never forwarded)", async () => {
+    const f = fake({
+      secret: {
+        AUTH_SECRET: "a",
+        PAPER_ENFORCE_MODE: "true",
+        GH_WEBHOOK_SECRET: "inherited",
+        POSTHOG_API_KEY: "inherited",
+      },
+      conditions: READY,
+    });
+    const out = await f.port.read("production", "poly", KEYS);
+    expect(Object.keys(out).sort()).toEqual(KEYS);
+  });
+
+  it("an unchanged ExternalSecret (API-server defaults included) is not rewritten", async () => {
+    const f = fake({
       existing: {
         spec: {
-          refreshInterval: "5m",
-          secretStoreRef: {
-            kind: "ClusterSecretStore",
-            name: "openbao-backend",
-          },
-          target: { name: "nd-poly-env", creationPolicy: "Owner" },
-          dataFrom: [{ extract: { key: "production/poly" } }],
+          ...goodSpec,
+          target: { ...goodSpec.target, deletionPolicy: "Retain" },
+          data: goodSpec.data.map((d) => ({
+            ...d,
+            remoteRef: { ...d.remoteRef, conversionStrategy: "Default" },
+          })),
         },
         resourceVersion: "9",
       },
-      secret: { AUTH_SECRET: "a" },
+      secret: { AUTH_SECRET: "a", PAPER_ENFORCE_MODE: "true" },
       conditions: READY,
     });
-    await same.port.read("production", "poly", ["AUTH_SECRET"]);
-    expect(same.created).toHaveLength(0);
-    expect(same.replaced).toHaveLength(0);
+    await f.port.read("production", "poly", KEYS);
+    expect(f.created).toHaveLength(0);
+    expect(f.replaced).toHaveLength(0);
+  });
 
-    const drifted = fake({
-      existing: { spec: { refreshInterval: "1h" }, resourceVersion: "9" },
-      secret: { AUTH_SECRET: "a" },
-      conditions: READY,
-    });
-    await drifted.port.read("production", "poly", ["AUTH_SECRET"]);
-    expect(drifted.replaced).toHaveLength(1);
-    expect(
-      (drifted.replaced[0] as { metadata: { resourceVersion: string } })
-        .metadata.resourceVersion
-    ).toBe("9");
+  it("a changed key set, a different bucket, or a leftover dataFrom extract is replaced with its resourceVersion", async () => {
+    for (const existing of [
+      { ...goodSpec, data: goodSpec.data.slice(0, 1) },
+      { ...goodSpec, refreshInterval: "1h" },
+      { ...goodSpec, dataFrom: [{ extract: { key: "production/poly" } }] },
+    ]) {
+      const f = fake({
+        existing: { spec: existing, resourceVersion: "9" },
+        secret: { AUTH_SECRET: "a", PAPER_ENFORCE_MODE: "true" },
+        conditions: READY,
+      });
+      await f.port.read("production", "poly", KEYS);
+      expect(f.replaced).toHaveLength(1);
+      expect(
+        (f.replaced[0] as { metadata: { resourceVersion: string } }).metadata
+          .resourceVersion
+      ).toBe("9");
+      expect(
+        (f.replaced[0] as { spec: Record<string, unknown> }).spec
+      ).not.toHaveProperty("dataFrom");
+    }
   });
 
   it("waits a bounded time for Ready, then reads", async () => {
@@ -200,7 +237,7 @@ describe("EsoNodeRuntimeSecrets", () => {
     expect(f.calls.some((c) => c.startsWith("secret "))).toBe(false);
   });
 
-  it("Ready=False fails fast with ESO's reason and no values", async () => {
+  it("a declared key with no OpenBao property: Ready=False fails fast with ESO's reason, no values", async () => {
     const f = fake({
       secret: { AUTH_SECRET: "a" },
       conditions: [
@@ -208,58 +245,53 @@ describe("EsoNodeRuntimeSecrets", () => {
           type: "Ready",
           status: "False",
           reason: "SecretSyncedError",
-          message: "key production/poly not found",
+          message: "property PAPER_ENFORCE_MODE not found at production/poly",
         },
       ],
     });
     const err = await f.port
-      .read("production", "poly", ["AUTH_SECRET"])
+      .read("production", "poly", KEYS)
       .catch((e: unknown) => e);
     expect((err as NodeRuntimeSecretsError).code).toBe("unavailable");
     expect((err as Error).message).toContain("SecretSyncedError");
+    expect(f.calls.some((c) => c.startsWith("secret "))).toBe(false);
   });
 
-  it("drops every denylisted key even if the bucket holds it, and skips empty values", async () => {
-    const poisoned = Object.fromEntries(
-      [...OFF_CLUSTER_WORKLOAD_DENIED_KEYS].map((k) => [k, "leak"])
-    );
-    const f = fake({
-      secret: { AUTH_SECRET: "a", EMPTY: "", ...poisoned },
-      conditions: READY,
-    });
-    const out = await f.port.read("production", "poly", ["AUTH_SECRET"]);
-    expect(Object.keys(out)).toEqual(["AUTH_SECRET"]);
+  it("refuses EVERY denylisted key with denied_keys BEFORE any Kubernetes call", async () => {
+    for (const key of OFF_CLUSTER_WORKLOAD_DENIED_KEYS) {
+      const f = fake({ secret: { [key]: "leak" }, conditions: READY });
+      const err = await f.port
+        .read("production", "poly", ["AUTH_SECRET", key])
+        .catch((e: unknown) => e);
+      expect((err as NodeRuntimeSecretsError).code, key).toBe("denied_keys");
+      expect((err as NodeRuntimeSecretsError).keys).toEqual([key]);
+      expect(f.calls, key).toHaveLength(0);
+    }
   });
 
-  it("missing required keys throw missing_keys NAMING the keys, never values", async () => {
+  it("a malformed key name is refused the same way", async () => {
+    const f = fake({ conditions: READY });
+    await expect(
+      f.port.read("production", "poly", ["lower-case"])
+    ).rejects.toMatchObject({ code: "denied_keys" });
+    expect(f.calls).toHaveLength(0);
+  });
+
+  it("missing or empty declared keys throw missing_keys NAMING the keys, never values", async () => {
     const f = fake({
-      secret: { AUTH_SECRET: "super-secret-value" },
+      secret: { AUTH_SECRET: "super-secret-value", EMPTY_ONE: "" },
       conditions: READY,
     });
     const err = await f.port
-      .read("production", "poly", [
-        "AUTH_SECRET",
-        "EVM_RPC_URL",
-        "DATABASE_URL",
-      ])
+      .read("production", "poly", ["AUTH_SECRET", "EVM_RPC_URL", "EMPTY_ONE"])
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NodeRuntimeSecretsError);
     expect((err as NodeRuntimeSecretsError).code).toBe("missing_keys");
     expect((err as NodeRuntimeSecretsError).keys).toEqual([
       "EVM_RPC_URL",
-      "DATABASE_URL",
+      "EMPTY_ONE",
     ]);
     expect((err as Error).message).not.toContain("super-secret-value");
-  });
-
-  it("a required key that is only on the denylist counts as missing", async () => {
-    const f = fake({
-      secret: { LITELLM_MASTER_KEY: "fleet-master" },
-      conditions: READY,
-    });
-    await expect(
-      f.port.read("production", "poly", ["LITELLM_MASTER_KEY"])
-    ).rejects.toMatchObject({ code: "missing_keys" });
   });
 
   it("a target Secret not rendered yet is `unavailable`", async () => {

@@ -19,6 +19,8 @@
  */
 
 export type NodeRuntimeSecretsErrorCode =
+  /** A requested key is an operator/fleet/substrate credential that may not leave the cluster. */
+  | "denied_keys"
   /** One or more required keys are absent or empty in the node's OpenBao bucket. */
   | "missing_keys"
   /** The ExternalSecret is not Ready (yet), or the Kubernetes API refused or failed the read. */
@@ -38,15 +40,16 @@ export class NodeRuntimeSecretsError extends Error {
 
 export interface NodeRuntimeSecretsPort {
   /**
-   * Read the node's own bucket `cogni/<env>/<slug>` and return every key that may enter an
-   * off-cluster workload: well-formed env names, minus the operator/fleet/substrate denylist
-   * (denied keys are DROPPED, never returned). Throws `NodeRuntimeSecretsError("missing_keys")` when
-   * any of `requiredKeys` is absent or empty after that filter, so it never returns a half env.
+   * Read EXACTLY `keys` from the node's own bucket `cogni/<env>/<slug>` and return them, all with
+   * non-empty values. `keys` is the release's declared secret key list (value-free), never discovered
+   * from the bucket. Throws `NodeRuntimeSecretsError`: `denied_keys` when any key is an operator/fleet
+   * credential, `missing_keys` when any is absent or empty, `unavailable` otherwise. It never returns a
+   * half map.
    */
   read(
     env: string,
     slug: string,
-    requiredKeys: readonly string[]
+    keys: readonly string[]
   ): Promise<Readonly<Record<string, string>>>;
 }
 
