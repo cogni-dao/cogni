@@ -177,6 +177,15 @@ patches:
           kind: ServiceAccount
           name: operator-node-deploy-sequencer
           namespace: cogni-production
+  # task.5405 — the admission bound on the sequencer's ExternalSecrets applies to THIS env's dedicated
+  # namespace only (base/node-deploy-sequencer/admission-policy.yaml).
+  - target:
+      kind: ValidatingAdmissionPolicyBinding
+      name: node-deploy-sequencer-externalsecrets
+    patch: |
+      - op: replace
+        path: /spec/matchResources/namespaceSelector/matchExpressions/0/values
+        value: [cogni-node-deploy-production]
   # task.5400 — same BY-NAME env rule as the actuator and pump patches.
   - target:
       kind: Deployment

@@ -14,7 +14,9 @@
 # task.5405 — the sequencer is also the ONE writer of the ExternalSecrets `nd-<slug>-env` in this same
 # namespace: they render a node's OpenBao bucket (via ESO's own eso-reader role) into a Secret it then
 # reads, so a node app gets its runtime env without any new OpenBao role. get/create/patch/update on
-# externalsecrets, this namespace only: no delete, no list, no other resource.
+# externalsecrets, this namespace only: no delete, no list, no other resource. ESO's store is NOT
+# namespace-restricted, so admission-policy.yaml (a ValidatingAdmissionPolicy) is the boundary that stops
+# these ExternalSecrets naming any bucket but a node's own.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
