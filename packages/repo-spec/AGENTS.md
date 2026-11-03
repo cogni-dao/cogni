@@ -34,7 +34,7 @@ Pure parsing and typed extraction for `.cogni/repo-spec.yaml` — the governance
 }
 ```
 
-**External deps:** `zod` (schema validation), `yaml` (YAML parsing).
+**External deps:** `zod` (schema validation), `yaml` (YAML parsing), `ajv` (pass 1 of the workload-manifest check: the vendored Score v1b1 JSON schema).
 
 ## Public Surface
 
@@ -49,7 +49,8 @@ Pure parsing and typed extraction for `.cogni/repo-spec.yaml` — the governance
   - `extractNodes(spec)` — Node registry entries (operator-only, returns `[]` for non-operator specs)
   - `extractNodePath(spec, nodeId)` — Resolve a node UUID to its registered relative path; returns `null` on miss (caller decides fallback)
   - `extractNodeServices(spec)` — Provider-neutral app-tier service declaration; omission resolves to the legacy one-public-app default, while named runtime profiles opt services into operator-wired app or private workflow-Worker contracts
-  - `extractNodeWorkloads(spec)` / `nodeWorkloadSpecSchema` — OPTIONAL additive `deployment.workloads[]` (task.5400): blue/green workloads (`app` | `state`) with digest-pinned image, `expose` (http host | tcp global), `bindings`, required `exclusive`, `health`. A workloads-only `deployment:` block is NOT a declared app-tier deployment (`hasDeclaredNodeDeployment` stays false)
+  - `nodeWorkloadSpecSchema` / `NodeWorkloadSpec` — the blue/green deploy spec a node-deploy release stores (task.5400): `app` | `state`, digest-pinned image, `expose` (http host | tcp global), `bindings`, required `exclusive`, `health`. Repo-spec no longer carries workloads.
+  - Workload manifests (story.5137, hub `workload-manifest`): `parseWorkloadManifest(text, file?)` runs pass 1 (the vendored, commit-pinned Score v1b1 schema, `src/vendor/score-v1b1.schema.ts`, `SCORE_V1B1_SOURCE`) and pass 2 (Cogni policy refuse-list); `lowerWorkloadManifest(m)` / `lowerWorkloadManifests(files)` lower `.cogni/workloads/<name>.yaml` to `NodeWorkloadSpec[]` (cross-file: ids unique, ids differ from workload names). Supported dependencies: `postgres` class `dedicated` (→ a `state` workload named by its id, from `POSTGRES_DEDICATED_PROFILE_V1`) and `route`; anything else throws `WorkloadManifestError` with `unsupported_dependency_type`. `checkWorkloadDirectoryEntries(entries)` refuses any `.cogni/workloads` entry that is not a `*.yaml` file; a manifest over `MAX_WORKLOAD_MANIFEST_BYTES` (64 KiB) is refused before parsing. Constants: `WORKLOAD_MANIFEST_DIR`, `WORKLOAD_MANIFEST_SUFFIX`, `MAX_WORKLOAD_MANIFESTS`, `DATA_BEARING_DEPENDENCY_TYPES`
   - Runtime profile secret contracts: `COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS` and `COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS`
   - `buildNodeArtifactBundle(...)` / `resolveNodeArtifactBundle(...)` — Pure exact-set source-SHA→digest bundle assembly and atomic resolution
   - `extractOwningNode(spec, paths)` — Paths → owning domain. Returns `single | conflict | miss`. Operator is a sovereign domain (catches `nodes/operator/**`, `packages/`, `.github/`, root configs); cross-domain mixing returns `conflict`. On `conflict`, the result also carries `operatorPaths` + `operatorNodeId` so downstream formatters can render the diagnostic without re-classifying. Bounded ride-along carve-out via `rideAlongApplied` flag (currently `pnpm-lock.yaml`, `work/**`, `docs/**`, `.claude/skills/**`, exact single-node-scope policy maintenance files, and the fast-check root app Vitest config exception). Mirrors `tests/ci-invariants/classify.ts` per spec § Single-Domain Scope.
@@ -72,7 +73,7 @@ Pure parsing and typed extraction for `.cogni/repo-spec.yaml` — the governance
 
 ## Responsibilities
 
-- This directory **does**: Define repo-spec Zod schemas, parse YAML or objects, extract typed config sections
+- This directory **does**: Define repo-spec Zod schemas, parse YAML or objects, extract typed config sections, check and lower workload manifests
 - This directory **does not**: Perform file I/O, cache results, import from `src/` or `services/`, access `process.cwd()` or `process.env`
 
 ## Usage
@@ -91,7 +92,7 @@ pnpm --filter @cogni/repo-spec build
 ## Dependencies
 
 - **Internal:** none (standalone package)
-- **External:** `zod`, `yaml`
+- **External:** `zod`, `yaml`, `ajv`
 
 ## Change Protocol
 

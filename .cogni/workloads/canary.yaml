@@ -1,0 +1,127 @@
+# Workload manifest (story.5137, hub `workload-manifest`): the operator's node-deploy CANARY.
+# Format: Score v1b1 (https://docs.score.dev); Cogni policy is checked on top of the pinned schema by
+# packages/repo-spec/src/workload-manifest.ts, which lowers this file to the NodeWorkloadSpec pair the
+# node-deploy sequencer ships: `canary-db` (state, from resources.db) and `canary` (app).
+#
+# `POST /api/v1/deploy/workloads {nodeId, env, workload, sourceSha}` reads `.cogni/workloads/*.yaml` AT
+# that sha. `workload` is `canary` (the app, re-releasable) or `canary-db` (the state; create-once, so a
+# second POST is refused 409 and the live state lease is adopted by its (node, env, id) record, never
+# recreated). The route host names the PRODUCTION hostname; candidate-a/preview/dev get the
+# -test/-preview/-dev sibling of its first label.
+#
+# The app is a python:3.12-alpine ThreadingHTTPServer: /version (RELEASE_SHA), /readyz (select 1 against
+# the bound db, 503 until it answers) and /data. YELLOW (CD10): `apk add postgresql-client` floats at
+# boot; replace with a built canary image once the reusable build workflow lands.
+apiVersion: score.dev/v1b1
+metadata:
+  name: canary
+  annotations:
+    cogni.dev/exclusive: "false"
+containers:
+  app:
+    image: python:3.12-alpine@sha256:e6dae589c1c05976188fd3bd019afd091445fc533ed2ea29001beddc7368a9c8
+    command:
+      - sh
+      - -c
+      - |
+        (until apk add --no-cache postgresql-client >/tmp/apk.log 2>&1; do sleep 3; done) &
+        cat > /srv.py <<'PY'
+        import json, os, subprocess, threading, time
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        SHA = os.environ.get("RELEASE_SHA", "unset")
+        URL = os.environ.get("DATABASE_URL", "")
+
+
+        def psql(sql):
+            r = subprocess.run(["psql", URL, "-tAc", sql], capture_output=True, text=True, timeout=10)
+            return r.returncode == 0, r.stdout.strip()
+
+
+        def boot():
+            while True:
+                try:
+                    ok, _ = psql("create table if not exists boots(id serial primary key, build_sha text, booted_at timestamptz default now()); insert into boots(build_sha) values ('%s')" % SHA)
+                    if ok:
+                        return
+                except Exception:
+                    pass
+                time.sleep(3)
+
+
+        threading.Thread(target=boot, daemon=True).start()
+
+
+        class H(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *a):
+                pass
+
+            def reply(self, code, body):
+                b = body.encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(b)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(b)
+
+            def do_GET(self):
+                p = self.path.split("?")[0]
+                if p == "/version":
+                    self.reply(200, json.dumps({"buildSha": SHA}))
+                elif p == "/readyz":
+                    try:
+                        ok, _ = psql("select 1")
+                    except Exception:
+                        ok = False
+                    self.reply(200 if ok else 503, json.dumps({"status": "ok" if ok else "db_unreachable"}))
+                elif p == "/data":
+                    try:
+                        ok, out = psql("select coalesce(json_agg(b order by id),'[]') from boots b")
+                    except Exception:
+                        ok, out = False, "[]"
+                    self.reply(200 if ok else 503, out or "[]")
+                elif p == "/diag":
+                    try:
+                        log = open("/tmp/apk.log").read()[-400:]
+                    except Exception:
+                        log = ""
+                    self.reply(200, json.dumps({"apk": log, "psql": os.path.exists("/usr/bin/psql")}))
+                else:
+                    self.reply(404, '{"error":"not_found"}')
+
+
+        ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()
+        PY
+        exec python3 -u /srv.py
+    variables:
+      # The operator derives the URL (TLS mode set, password encoded) from the state's credential.
+      DATABASE_URL: ${resources.db.url}
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+    readinessProbe:
+      httpGet:
+        path: /readyz
+        port: 8080
+service:
+  ports:
+    web:
+      port: 80
+      targetPort: 8080
+resources:
+  # A dedicated Postgres in its own long-lived state lease. The operator owns its image and size.
+  db:
+    type: postgres
+    class: dedicated
+    id: canary-db
+  web:
+    type: route
+    params:
+      host: node-deploy-canary.cognidao.org
+      path: /
+      port: 80

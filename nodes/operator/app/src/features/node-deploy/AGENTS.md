@@ -31,9 +31,9 @@ The node-deploy blue/green sequencer (task.5400, story.5127) and its read model.
 
 ## Public Surface
 
-- **Exports:** `NodeDeploySequencer`, `DEFAULT_SEQUENCER_CONFIG`, `buildWorkloadView`, `buildReleaseDetail`, `deriveReleaseTimeline`, declaration/edge helpers
+- **Exports:** `NodeDeploySequencer`, `DEFAULT_SEQUENCER_CONFIG`, `buildWorkloadView`, `buildReleaseDetail`, `deriveReleaseTimeline`, `readWorkloadDeclarations` (reads repo-spec + `.cogni/workloads/*.yaml` at one sha through the deploy-plane port; story.5137), declaration/edge helpers
 - **Routes (via app/):** `GET|POST /api/v1/deploy/workloads`, `GET /api/v1/deploy/workloads/releases/{releaseId}?nodeId=&env=`
-- **Files considered API:** `sequencer.ts`, `release-view.ts`, `declarations.ts`
+- **Files considered API:** `sequencer.ts`, `release-view.ts`, `declarations.ts`, `read-declarations.ts`
 
 ## Observability contract (task.5400)
 

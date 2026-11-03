@@ -2248,6 +2248,47 @@ node_port: 30200
   });
 });
 
+describe("GitHubRepoWriter.listDirectoryEntries", () => {
+  it("returns every entry with its size, maps a submodule (listed as file) to submodule, null on 404", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params.ref).toBe("a".repeat(40));
+        if (params.path !== ".cogni/workloads")
+          throw statusError(404, "not found");
+        return [
+          {
+            name: "canary.yaml",
+            type: "file",
+            size: 2048,
+            git_url: "https://api.github.com/repos/o/r/git/blobs/abc",
+          },
+          {
+            name: "vendored.yaml",
+            type: "file",
+            size: 0,
+            git_url: "https://api.github.com/repos/o/r/git/trees/def",
+          },
+          { name: "nested", type: "dir", size: 0, git_url: null },
+        ];
+      },
+    };
+    const input = {
+      owner: "o",
+      repo: "r",
+      path: ".cogni/workloads",
+      ref: "a".repeat(40),
+    };
+    await expect(makeWriter().listDirectoryEntries(input)).resolves.toEqual([
+      { name: "canary.yaml", type: "file", size: 2048 },
+      { name: "vendored.yaml", type: "submodule", size: 0 },
+      { name: "nested", type: "dir", size: 0 },
+    ]);
+    await expect(
+      makeWriter().listDirectoryEntries({ ...input, path: ".cogni/none" })
+    ).resolves.toBeNull();
+  });
+});
+
 describe("GitHubRepoWriter.listCatalogNodes", () => {
   const encode = (value: string) =>
     Buffer.from(value, "utf-8").toString("base64");

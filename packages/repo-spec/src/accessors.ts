@@ -17,7 +17,6 @@ import type {
   KnowledgeSpec,
   NodeRegistryEntry,
   NodeServiceRuntimeProfileSpec,
-  NodeWorkloadSpec,
   OperatorWalletSpec,
   RepoSpec,
   StewardWalletSpec,
@@ -165,19 +164,7 @@ export function extractNodeName(spec: RepoSpec): string {
  * off-cluster provider MUST require a real declaration instead of silently accepting the default.
  */
 export function hasDeclaredNodeDeployment(spec: RepoSpec): boolean {
-  // A block that carries ONLY `workloads` (task.5400) declares no app-tier services: it is not
-  // an off-cluster placement declaration, so it must not flip the gate that requires one.
-  return spec.deployment !== undefined && spec.deployment.services.length > 0;
-}
-
-/**
- * Blue/green workloads the node declares under `deployment.workloads` (task.5400).
- * Empty when the node declares none; never throws.
- */
-export function extractNodeWorkloads(
-  spec: RepoSpec
-): readonly NodeWorkloadSpec[] {
-  return spec.deployment?.workloads ?? [];
+  return spec.deployment !== undefined;
 }
 
 /**
@@ -191,9 +178,7 @@ export function extractNodeWorkloads(
 export function extractNodeServices(
   spec: RepoSpec
 ): readonly NodeServiceConfig[] {
-  const deployment = hasDeclaredNodeDeployment(spec)
-    ? (spec.deployment ?? LEGACY_DEFAULT_NODE_DEPLOYMENT)
-    : LEGACY_DEFAULT_NODE_DEPLOYMENT;
+  const deployment = spec.deployment ?? LEGACY_DEFAULT_NODE_DEPLOYMENT;
   return deployment.services.map((service) => ({
     name: service.name,
     artifact: {

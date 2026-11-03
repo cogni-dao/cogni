@@ -2554,6 +2554,43 @@ export class GitHubRepoWriter implements DeployPlanePort {
     }
   }
 
+  async listDirectoryEntries(input: {
+    owner: string;
+    repo: string;
+    path: string;
+    ref: string;
+  }): Promise<readonly { name: string; type: string; size: number }[] | null> {
+    const octokit = await this.getOctokit(input.owner, input.repo);
+    try {
+      const { data } = await octokit.request(
+        "GET /repos/{owner}/{repo}/contents/{path}",
+        {
+          owner: input.owner,
+          repo: input.repo,
+          path: input.path,
+          ref: input.ref,
+        }
+      );
+      if (!Array.isArray(data)) return null;
+      return (
+        data as Array<{
+          name: string;
+          type: string;
+          size: number;
+          git_url?: string | null;
+        }>
+      ).map((entry) => ({
+        name: entry.name,
+        // A submodule is listed as type "file" with a git_url into /git/trees/; never call it a file.
+        type: entry.git_url?.includes("/git/trees/") ? "submodule" : entry.type,
+        size: entry.size,
+      }));
+    } catch (error) {
+      if ((error as { status?: number })?.status === 404) return null;
+      throw error;
+    }
+  }
+
   async listCatalogNodes(input: {
     parentOwner: string;
     parentRepo: string;
