@@ -41,7 +41,7 @@ compute_api:
   # AppSet, so Argo prunes the Application and its XR/ExternalSecrets close the old lease.
   # lease_generation / deployment_provider / compute_egress_cidrs stay until the CD9 purge.
   candidate-a: node-deploy
-  preview: crossplane
+  preview: node-deploy
   # story.5137 (CD4) — production is now verb-owned too; same prune-and-close semantics as above.
   production: node-deploy
 # bug.5192 — EXPLICIT replacement counter for a terminally settled lease key. The generation is

@@ -54,8 +54,12 @@ deployment_provider:
 # story.5016 production cutover — Crossplane authority; the private Akash transaction
 # actuator pays from the production account for every lane (NS3).
 compute_api:
-  candidate-a: crossplane
-  preview: crossplane
+  # story.5137 (CD4 ONE_WRITER_PER_NODE_LANE) — candidate-a and preview are deployed ONLY by the node-deploy
+  # sequencer (POST /api/v1/deploy/workloads). Merging this cell drops the per-(env, node)
+  # AppSet, so Argo prunes the Application and its XR/ExternalSecrets close the old lease.
+  # lease_generation / deployment_provider / compute_egress_cidrs stay until the CD9 purge.
+  candidate-a: node-deploy
+  preview: node-deploy
   # story.5137 (CD4 ONE_WRITER_PER_NODE_LANE) — production is deployed ONLY by the node-deploy
   # sequencer (POST /api/v1/deploy/workloads). Merging this cell drops the per-(env, node)
   # AppSet, so Argo prunes the Application and its XR/ExternalSecrets close the old lease.

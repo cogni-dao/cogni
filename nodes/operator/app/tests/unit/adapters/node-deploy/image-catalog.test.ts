@@ -103,22 +103,25 @@ describe("ImageCatalogNodes", () => {
       "levelup",
       "node-template",
       "poly",
+      "red",
       "toks5",
     ]);
-    // crossplane nodes never contribute a host
-    for (const crossplane of ["red"])
-      expect(production).not.toContain(crossplane);
+    // the operator is not a node-deploy node: it never contributes a host
+    expect(production).not.toContain("operator");
     expect(
       [...(await catalog.nodeDeploySlugs("candidate-a", "cogni-dao"))].sort()
-    ).toEqual(["toks5"]);
+    ).toEqual(["node-template", "poly", "red", "toks5"]);
+    expect(
+      [...(await catalog.nodeDeploySlugs("preview", "cogni-dao"))].sort()
+    ).toEqual(["poly", "toks5"]);
     expect(
       await catalog.nodeDeploySlugs("candidate-a", "cogni-dao")
-    ).not.toContain("poly");
+    ).not.toContain("beacon");
     // the guard built from it admits poly in production and refuses operator hosts
     const re = edgeHostRegexFor(production);
     expect(re.test("poly.cognidao.org")).toBe(true);
     expect(re.test("beacon.cognidao.org")).toBe(true);
-    expect(re.test("red.cognidao.org")).toBe(false);
+    expect(re.test("red.cognidao.org")).toBe(true);
     expect(re.test("cognidao.org")).toBe(false);
   });
 
