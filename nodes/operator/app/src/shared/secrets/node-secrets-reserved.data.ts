@@ -53,6 +53,10 @@ export const SUBSTRATE_RESERVED_KEYS: ReadonlySet<string> = new Set<string>([
   "DATABASE_SERVICE_URL",
   "DATABASE_SSL_CA_CERT",
   "DOLTGRES_URL",
+  // task.5384: the node's own Redis ACL user. A self-serve write would desync the
+  // password from the hash installed on the env Redis and lock the node out.
+  "REDIS_PASSWORD",
+  "REDIS_URL",
   "POSTGRES_ROOT_PASSWORD",
   "DATABASE_RELIABILITY_PASSWORD",
   "DATABASE_RELIABILITY_READMIT_PASSWORD",

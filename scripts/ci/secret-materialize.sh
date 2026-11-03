@@ -623,6 +623,44 @@ for k in "${LITELLM_SYNC_KEYS[@]}"; do
   log "  created ${k}"
   created=$((created + 1))
 done
+
+# ── Per-node Redis ACL identity (task.5384 phase A) ──────────────────────────
+# REDIS_PASSWORD is minted from its catalog generator. REDIS_URL is composed only when
+# this lane's own Redis PROVES it already holds sha256(REDIS_PASSWORD) for node_<node>
+# (installed by reconcile-node-substrate, normally on the previous run). So a consumer
+# never receives a credential the server would refuse, and an env whose Redis has no
+# ACL file yet changes nothing. A foreign-custodied lane is skipped: this VM's Redis
+# is not the one its workload dials. Only the hash crosses SSH (lib/redis-acl.sh).
+# shellcheck source=lib/redis-acl.sh
+source "$SCRIPT_DIR/lib/redis-acl.sh"
+if [[ "$SECRETS_CONTROL_ENV" == "$DEPLOY_ENVIRONMENT" ]]; then
+  redis_password="$(bao_get_field "$TARGET_NODE" REDIS_PASSWORD)"
+  if [[ -z "$redis_password" ]]; then
+    redis_password="$(_resolve_node_value "$TARGET_NODE" REDIS_PASSWORD)"
+    [[ "$redis_password" =~ ^[0-9a-f]{64}$ ]] || fail "REDIS_PASSWORD generation returned an unexpected shape"
+    seed_kv "$TARGET_NODE" REDIS_PASSWORD "$redis_password"
+    log "  created REDIS_PASSWORD"
+    created=$((created + 1))
+  fi
+  redis_user="$(redis_acl_user "$TARGET_NODE")"
+  redis_state="$(redis_acl_probe_script "$redis_user" "$(redis_acl_password_sha256 "$redis_password")" \
+    | remote "bash -s" | tr -d '[:space:]')" || fail "Redis ACL probe failed for ${redis_user}"
+  if [[ "$redis_state" == proven ]]; then
+    redis_url="redis://${redis_user}:${redis_password}@${VM_IP}:6379"
+    if [[ "$(bao_get_field "$TARGET_NODE" REDIS_URL)" == "$redis_url" ]]; then
+      unchanged=$((unchanged + 1))
+    else
+      rm -f "${CACHE_DIR}/${TARGET_NODE}/REDIS_URL"
+      seed_kv "$TARGET_NODE" REDIS_URL "$redis_url"
+      log "  composed REDIS_URL for ACL user ${redis_user}"
+      created=$((created + 1))
+    fi
+  else
+    log "  REDIS_URL deferred: lane Redis reports '${redis_state:-unknown}' for ${redis_user}; consumers keep the default user"
+  fi
+else
+  log "  Redis ACL identity skipped: ${DEPLOY_ENVIRONMENT} lane is custodied by ${SECRETS_CONTROL_ENV}"
+fi
 flush_batch
 
 # Migration credentials are deliberately NOT part of the node bucket. Every

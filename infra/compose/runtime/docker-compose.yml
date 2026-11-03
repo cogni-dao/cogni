@@ -216,14 +216,19 @@ services:
     # Expose to all interfaces for k3s pods (EndpointSlice → node InternalIP:6379)
     ports:
       - "6379:6379"
+    # task.5384 phase A — per-consumer ACL users. The volume holds ONLY the ACL file:
+    # `--save ""` keeps the stream plane ephemeral. Users are installed per node by
+    # reconcile-node-substrate (`ACL SETUSER` + `ACL SAVE`, hash only) and survive a
+    # container recreate. `default` stays `on nopass` until phase B.
+    volumes:
+      - redis_acl:/data
     command:
-      - "redis-server"
-      - "--save"
-      - ""
-      - "--maxmemory"
-      - "128mb"
-      - "--maxmemory-policy"
-      - "noeviction"
+      - "sh"
+      - "-c"
+      - >-
+        [ -s /data/users.acl ] || echo 'user default on nopass ~* &* +@all' > /data/users.acl;
+        exec docker-entrypoint.sh redis-server --save '' --maxmemory 128mb
+        --maxmemory-policy noeviction --aclfile /data/users.acl
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -914,6 +919,9 @@ volumes:
     name: postgres_data
   doltgres_data:
     name: doltgres_data
+  # Redis ACL file only (task.5384); no stream data is persisted.
+  redis_acl:
+    name: redis_acl
   alloy_data:
     name: alloy_data
   alloy_k8s_events_data:

@@ -426,6 +426,33 @@ lane_db_assert_agreement "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" "$migration_dsn" \
   || fail "stored migration DSN disagrees with lane Postgres residency"
 mark_row db_host_agreement ready "stored runtime and migration DSNs agree with lane-local Postgres host and database"
 
+# task.5384 phase A — install this node's own Redis ACL user BEFORE any ExternalSecret
+# refresh below, so the pod never receives a REDIS_URL the server would refuse. Only
+# sha256(REDIS_PASSWORD) crosses SSH; `ACL SAVE` persists it in the Redis ACL file.
+# A Redis without an ACL file (infra-reconcile not yet run) and a foreign-custodied lane
+# are skipped: consumers keep the open `default` user, which phase A never touches.
+CURRENT_ROW=redis_acl
+# shellcheck source=lib/redis-acl.sh
+. "$SCRIPT_DIR/lib/redis-acl.sh"
+if [[ "$SUBSTRATE_CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" ]]; then
+  mark_row redis_acl skipped "lane custodied by ${SUBSTRATE_CONTROL_ENV}; this VM's Redis is not the one the workload dials"
+else
+  redis_password="$(bao_get_field "$TARGET_NODE" REDIS_PASSWORD)"
+  if [[ -z "$redis_password" ]]; then
+    mark_row redis_acl skipped "REDIS_PASSWORD absent; consumers keep the default user"
+  else
+    redis_user="$(redis_acl_user "$TARGET_NODE")"
+    redis_state="$(redis_acl_install_script "$redis_user" "$(redis_acl_password_sha256 "$redis_password")" \
+      | remote "bash -s" | tr -d '[:space:]')" \
+      || fail "Redis refused ACL user ${redis_user} (SETUSER/SAVE/GETUSER)"
+    case "$redis_state" in
+      installed) mark_row redis_acl updated "ACL user ${redis_user} installed and saved (hash only)" ;;
+      no-aclfile | no-redis) mark_row redis_acl skipped "Redis reports ${redis_state}; consumers keep the default user" ;;
+      *) fail "unexpected Redis ACL install result for ${redis_user}" ;;
+    esac
+  fi
+fi
+
 # Insert after target-lane database credentials and bank-host agreement are verified.
 postgres_provisioned_remote=false
 if ! "$postgres_provision_here"; then

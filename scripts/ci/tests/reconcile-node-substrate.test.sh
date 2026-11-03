@@ -99,6 +99,8 @@ put_secret operator-database-recovery-probe DATABASE_RECOVERY_PROBE_PASSWORD per
 put_secret operator-database-migration DATABASE_MIGRATION_URL 'postgresql://migration_operator:pernode-migration-pw-sentinel@127.0.0.1:5432/cogni_operator'
 put_secret database-reliability-actuator DATABASE_RELIABILITY_PASSWORD reliability-pw-sentinel
 put_secret database-reliability-readmitter DATABASE_RELIABILITY_READMIT_PASSWORD readmit-pw-sentinel
+# task.5384: the node's own Redis ACL password; only its sha256 may reach the VM.
+put_secret operator REDIS_PASSWORD redis-acl-pw-sentinel
 # Doltgres superuser SSOT is operator-canonical (cogni/<env>/operator/DOLTGRES_PASSWORD),
 # shared env-wide; reconcile reads it from operator and injects it into doltgres-provision.
 put_secret operator DOLTGRES_PASSWORD doltgres-super-sentinel
@@ -294,6 +296,18 @@ if [ "${1:-}" = ps ] && [ "${2:-}" = -q ]; then
   printf '%s\n' destination-postgres
   exit 0
 fi
+# task.5384 — the runtime Redis, started with an ACL file. Records SETUSER argv
+# (hash only) and answers GETUSER with the last installed hash.
+if [ "${1:-}" = exec ] && [ "${3:-}" = redis-cli ]; then
+  shift 4
+  case "$1 ${2:-}" in
+    "CONFIG GET") printf 'aclfile\n%s\n' "${FAKE_REDIS_ACLFILE-/data/users.acl}" ;;
+    "ACL SETUSER") printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/redis-acl.log"; echo OK ;;
+    "ACL SAVE") echo OK ;;
+    "ACL GETUSER") grep -o '#[0-9a-f]\{64\}' "${FAKE_REMOTE_ROOT}/redis-acl.log" 2>/dev/null | tail -n1 | cut -c2- ;;
+  esac
+  exit 0
+fi
 if [[ "$*" == *'--network container:destination-postgres'* ]]; then
   [ "$POSTGRES_ROOT_PASSWORD" = destination-only-root-sentinel ] || exit 31
   [ "$APP_DB_PASSWORD" = foreign-app-sentinel ] || exit 32
@@ -456,6 +470,19 @@ env \
   bash scripts/ci/reconcile-node-substrate.sh candidate-a operator > "$TMPROOT/out.txt"
 
 grep -q "substrate ready inputs reconciled for operator" "$TMPROOT/out.txt"
+# task.5384 phase A: node_operator is installed from the password HASH; the default user
+# is never edited; the plaintext never reaches the VM argv, the ssh stream or the output.
+redis_hash="$(printf '%s' redis-acl-pw-sentinel | shasum -a 256 | awk '{print $1}')"
+grep -qxF "ACL SETUSER node_operator reset on #${redis_hash} ~* &* +@all -@admin" "$REMOTE_ROOT/redis-acl.log" \
+  || { echo "reconcile did not install node_operator from the REDIS_PASSWORD hash" >&2; exit 1; }
+! grep -q 'SETUSER default' "$REMOTE_ROOT/redis-acl.log" \
+  || { echo "phase A must not edit the default Redis user" >&2; exit 1; }
+if grep -rqF redis-acl-pw-sentinel "$REMOTE_ROOT/docker.log" "$REMOTE_ROOT/redis-acl.log" "$TMPROOT/out.txt"; then
+  echo "Redis ACL plaintext password crossed to the VM or the log" >&2
+  exit 1
+fi
+grep -q '"row":"redis_acl","state":"updated"' "$TMPROOT/summary.json" \
+  || { echo "reconcile summary missing redis_acl updated row" >&2; exit 1; }
 remote_provisioner="$REMOTE_ROOT/opt/cogni-template-runtime/postgres-init/provision.sh"
 cmp infra/compose/runtime/postgres-init/provision.sh "$remote_provisioner"
 cmp infra/compose/runtime/postgres-init/apply-control.sql "$REMOTE_ROOT/opt/cogni-template-runtime/postgres-init/apply-control.sql"
@@ -531,7 +558,7 @@ grep -q -- "--ns cogni-candidate-a-${operator_node_id}" "$REMOTE_ROOT/docker.log
 # operator's bank carries the env-wide DOLTGRES superuser SSOT in addition to its
 # per-node DB creds; reconcile must leave all three untouched.
 after_keys="$(cd "$BAO_ROOT/cogni/candidate-a/operator" && printf '%s\n' * | sort | paste -sd, -)"
-if [ "$after_keys" != "APP_DB_PASSWORD,APP_DB_SERVICE_PASSWORD,DATABASE_SERVICE_URL,DATABASE_URL,DOLTGRES_PASSWORD,DOLT_CREDS_JWK,DOLT_CREDS_KEYID" ]; then
+if [ "$after_keys" != "APP_DB_PASSWORD,APP_DB_SERVICE_PASSWORD,DATABASE_SERVICE_URL,DATABASE_URL,DOLTGRES_PASSWORD,DOLT_CREDS_JWK,DOLT_CREDS_KEYID,REDIS_PASSWORD" ]; then
   echo "reconcile must perform ZERO OpenBao writes; operator bank changed to: $after_keys" >&2
   exit 1
 fi
@@ -742,6 +769,7 @@ env \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
   SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/akash-summary.json" \
+  FAKE_REDIS_ACLFILE= \
   bash scripts/ci/reconcile-node-substrate.sh candidate-a operator > "$TMPROOT/akash.out"
 tail -n "+$((docker_log_start + 1))" "$REMOTE_ROOT/docker.log" > "$TMPROOT/akash-docker.log"
 tail -n "+$((kubectl_log_start + 1))" "$REMOTE_ROOT/kubectl.log" > "$TMPROOT/akash-kubectl.log"
@@ -770,6 +798,8 @@ assert rows["externalsecret"] == "updated", rows
 assert rows["externalsecret_refresh"] == "refreshed", rows
 assert rows["caddyfile"] == "skipped", rows
 assert rows["remote_reconcile"] == "updated", rows
+# task.5384: a Redis started without an ACL file is skipped, never half-installed.
+assert rows["redis_acl"] == "skipped", rows
 PY
 
 # Born-observable (bug.5041): the Alloy node-label config is staged to the VM and
