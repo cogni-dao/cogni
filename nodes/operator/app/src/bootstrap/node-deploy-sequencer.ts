@@ -215,11 +215,28 @@ function die(reason: string, cause?: unknown): never {
   process.exit(1);
 }
 
+/**
+ * LEADER_HEARTBEAT (task.5400 observability): while this process PROVES it still holds the advisory
+ * lock it re-emits `node_deploy_sequencer_leader {heartbeat:true}` once a minute. The Grafana alert
+ * "no node_deploy_sequencer_leader for 10m" is only meaningful because a healthy leader keeps writing
+ * this line; the acquisition line (no `heartbeat`) is written once.
+ */
+const LEADER_HEARTBEAT_MS = 60_000;
+let lastLeaderHeartbeatAt = 0;
+
 async function assertLeader(): Promise<void> {
   try {
     if (!(await leadership.assert())) die("AdvisoryLockHeldByAnotherSession");
   } catch (error) {
     die("LeadershipCheckFailed", error);
+  }
+  const now = Date.now();
+  if (now - lastLeaderHeartbeatAt >= LEADER_HEARTBEAT_MS) {
+    lastLeaderHeartbeatAt = now;
+    log.info(
+      { namespace, environment, heartbeat: true },
+      "node_deploy_sequencer_leader"
+    );
   }
 }
 
