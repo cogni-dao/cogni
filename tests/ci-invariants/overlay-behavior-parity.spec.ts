@@ -301,12 +301,12 @@ const BEHAVIOR_EXCEPTIONS: Record<string, Rule[]> = {
         "ONE FRONT DOOR (story.5137): the production cluster is the FLEET CONTROL ENV, so its one " +
         "node-deploy sequencer also serves the candidate-a and preview lanes of canonical Akash nodes " +
         "(NODE_DEPLOY_ENVS, a per-env substrate host map, the fleet owner filter, the two extra " +
-        "`cogni-node-deploy-<env>` namespaces delivered by a sibling Application, the admission binding's " +
+        "`cogni-node-deploy-<env>` namespaces delivered by a sibling Application (and its argocd namespace replacement), the admission binding's " +
         "extra namespaces, and the app config list the route reads). candidate-a is the TEST fleet's " +
         "control plane: it serves only itself and claims no canonical node, so it cannot carry these; " +
         "tests/ci-invariants/node-deploy-sequencer-admission.spec.ts pins the production side.",
       pattern:
-        /^(patch\[ConfigMap\/node-app-config\] add \/data\/NODE_DEPLOY_ENVS|patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[(NODE_DEPLOY_ENVS|NODE_DEPLOY_FLEET_OWNER|NODE_DEPLOY_SUBSTRATE_HOSTS)\]\.(name|value)|patch\[ValidatingAdmissionPolicyBinding\/node-deploy-sequencer-externalsecrets\] replace \/spec\/matchResources\/namespaceSelector\/matchExpressions\/0\/values\[[12]\]|resource\[Application\/node-deploy-env-namespaces\]\..+|kustomization\.replacements\[1\]\.targets\[1\]\.(fieldPaths\[0\]|select\.kind))$/,
+        /^(patch\[ConfigMap\/node-app-config\] add \/data\/NODE_DEPLOY_ENVS|patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[(NODE_DEPLOY_ENVS|NODE_DEPLOY_FLEET_OWNER|NODE_DEPLOY_SUBSTRATE_HOSTS)\]\.(name|value)|patch\[ValidatingAdmissionPolicyBinding\/node-deploy-sequencer-externalsecrets\] replace \/spec\/matchResources\/namespaceSelector\/matchExpressions\/0\/values\[[12]\]|resource\[Application\/node-deploy-env-namespaces\]\..+|kustomization\.replacements\[1\]\.(source\.(fieldPath|kind|name)|targets\[0\]\.(fieldPaths\[0\]|select\.kind)))$/,
     },
   ],
   "scheduler-worker": [

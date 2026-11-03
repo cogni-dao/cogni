@@ -106,9 +106,9 @@ Which keys you must declare:
   (paper-trading flags, wallet creds, CLOB/mirror keys, a node's own vendor
   token) only reaches the pod if it appears in that service's `secret_refs`.
 
-The set a flight actually projects is logged (names only, never values) as
-`compute.workload.secret_refs_resolved` on stderr of `materialize-compute-workload`
-— read it in the flight log to confirm your key is in the mounted set.
+The node-deploy sequencer projects exactly the declared `secret_refs` from OpenBao
+(names only in logs, never values). Read the release steps from
+`GET /api/v1/deploy/workloads/releases/{id}` to confirm the release went live.
 
 `secret_refs` carries **key names only, never values** — values live in OpenBao
 (§ Runtime Path, above). See [`packages/repo-spec/src/node-app-deployment.ts`](../../packages/repo-spec/src/node-app-deployment.ts)

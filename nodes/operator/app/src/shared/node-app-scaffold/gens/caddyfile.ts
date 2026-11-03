@@ -11,7 +11,7 @@
  * Invariants: CATALOG_IS_SSOT — the emitted block mirrors `emit_site_block`'s heredoc exactly;
  *   non-primary nodes stay in `sort`-order; primary (operator) block is never moved.
  * Side-effects: none — pure string transform, no IO, no env.
- * Links: scripts/ci/render-caddyfile.sh, docs/guides/create-node.md, task.5092
+ * Links: scripts/ci/render-caddyfile.sh, docs/guides/node-formation-guide.md, task.5092
  * @public
  */
 

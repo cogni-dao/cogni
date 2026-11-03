@@ -13,7 +13,7 @@ Everything about how the system runs. Split by responsibility, not by tool.
 
 ## Pointers
 
-- [CD Pipeline E2E](../docs/spec/cd-pipeline-e2e.md): Full deployment specification
+- [CI/CD](../docs/spec/ci-cd.md): Deployment specification
 - [catalog/](catalog/): Renderer-agnostic app/node inventory
 - [k8s/](k8s/): Kubernetes deployment manifests (Argo CD + Kustomize)
 - [compose/](compose/): Docker Compose stacks (VM-shared infra runtime)
@@ -74,4 +74,4 @@ Everything about how the system runs. Split by responsibility, not by tool.
 
 - `infra/cd/` was renamed to `infra/k8s/` and `infra/tofu/` to `infra/provision/` in the CD pipeline implementation
 - `infra/litellm/` moved to `infra/images/litellm/`, `infra/compose/sandbox-proxy/` to `infra/images/sandbox-proxy/`
-- See `docs/spec/cd-pipeline-e2e.md` §0 for the rationale behind the directory layout
+- See `docs/spec/ci-cd.md` for the rationale behind the directory layout
