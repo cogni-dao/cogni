@@ -94,18 +94,9 @@ Swap `"production"` for `"preview"` to converge the preview lane instead (bug.54
 
 After dispatch, **always** confirm production `/version.buildSha` actually advanced — see Monitoring. Discover the dispatched run via the unauthenticated GitHub API (`GET /repos/Cogni-DAO/cogni/actions/workflows/promote-and-deploy.yml/runs`); no personal token required.
 
-## Declared workloads (task.5400)
+## Declared workloads (verb path)
 
-Nodes that declare workload manifests in `.cogni/workloads/<name>.yaml` (story.5137, hub `workload-manifest`) (shipping, PR #3005; production canary proof tracked on story.5127; today only the operator node declares workloads; design [`node-service-delivery`](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-249e8b6d)) deploy each workload by operator-sequenced blue/green. Authz: production needs `node.promote_production`, candidate-a needs `node.manage_envs`. A 403 `authz_denied` uses the same grant loop as above.
-
-```bash
-curl -sS -X POST "$BASE/api/v1/deploy/workloads" \
-  -H "Authorization: Bearer $COGNI_API_KEY" -H "Content-Type: application/json" \
-  -d '{"nodeId":"<node-uuid>","env":"production","workload":"<name>","sourceSha":"<sha>"}'   # records intent; the sequencer executes
-curl -sS "$BASE/api/v1/deploy/workloads?nodeId=<node-uuid>&env=production" -H "Authorization: Bearer $COGNI_API_KEY"   # desired + release state
-```
-
-Proof: the public host's `/version.buildSha` equals `sourceSha` (the edge flip needs 8 consecutive exact reads), and Loki `{env="production",service="sequencer"} |= "node_deploy_step"` (candidate-a: `env="candidate-a"`) shows `edge_moved ok` → `activated ok` → `old_closed ok`; liveness event `node_deploy_sequencer_leader`. The route rejects an env the deployment does not serve.
+A node whose catalog cell is `node-deploy` for an env ships there with `POST /api/v1/deploy/workloads {nodeId, env, workload, sourceSha}` (and `GET` with `nodeId` and `env` to read it). `env` is `candidate-a`, `preview` or `production`. Authz: production needs `node.promote_production`; candidate-a and preview need `node.manage_envs`. Read the hub guides for the sequence, declaration, watch and failure signatures: [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) and [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload). The flight and promote calls in the table above are the legacy path for any env whose cell is not yet `node-deploy`, and the operator node's own path.
 
 ## Monitoring — Monitor tool, not eyeballing
 

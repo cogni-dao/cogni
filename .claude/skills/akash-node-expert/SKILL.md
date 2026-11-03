@@ -126,7 +126,7 @@ Measured: a bare SDL at poly's profile draws **9–11 bids in 10–20s**, cheape
 against our 10000 uakt ceiling — **price is never the blocker.** Serving a `publicHost` and reading
 `EGRESS_IP`/`CLOB_STATUS` from inside the lease is a ~4-minute loop and the only egress proof.
 
-## The lane (how a node reaches Akash)
+## The lane (how a node reaches Akash) — legacy until the cell is node-deploy
 
 1. Catalog row `infra/catalog/<slug>.yaml`: `deployment_provider: {candidate-a|preview|production: akash}` (requires `type: node` + `source_repo`; schema `infra/catalog/_schema.json`) + `compute_egress_cidrs` (provider NAT, e.g. 80.200.246.35/32 = zencloud+digitalfrontier shared). `compute_egress_cidrs` is REQUIRED on akash rows (#2175) — currently hand-edited; there is NO TS writer for it yet.
 2. The node's own repo's `.cogni/repo-spec.yaml` must declare the `deployment:` block (`runtime_profile: cogni-node-app-v1`); `assertDeclaredNodeDeployment` (`nodes/operator/app/src/features/compute/node-services-workload-spec.ts`) refuses otherwise. Generator: `renderNodeDeploymentYaml()` in `packages/repo-spec/src/node-app-deployment.ts`. Repo-spec is read AT THE PROMOTED SHA — the block must exist at `sourceSha`, not just at HEAD.
@@ -135,12 +135,9 @@ against our 10000 uakt ceiling — **price is never the blocker.** Serving a `pu
 
 Node-birth adjacents on main (2026-09-11): `POST /api/v1/nodes/{id}/reconcile-protection` heals birth branch protection onto existing forks (#2176, bug.5123); DNS self-CNAME fix — `endpointHostname` excludes `publicHost` so a node no longer CNAMEs to itself (#2177, bug.5125).
 
-### Node-deploy lane (task.5400, replaces steps 3-4 per node after parity)
+### Node-deploy lane (verb path)
 
-Operator PR #3005 adds a lane for DECLARED workloads (one workload manifest per workload, `.cogni/workloads/<name>.yaml`, Score v1b1 format, lowered to `app|state` specs; hub `workload-manifest`): immutable blue/green. Design: hub `node-service-delivery` (https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-249e8b6d, pending human merge). Code: `nodes/operator/app/src/features/node-deploy/`.
-
-- create (the akash-tx actuator stays the only payer; key `nd:<ns>:<nodeId>:<workload>:<releaseId>:<attempt>`) → prove (exact `/version.buildSha` + `/readyz`, 10 min) → proxied Cloudflare edge flip, 8 consecutive DoH public reads → retain blue → close + confirm. `state` workloads keep one long-lived lease, never auto-replaced. Reconcile re-runs the same verb (app/worker only; state is never auto-replaced) on chain-confirmed closed, `insufficient_funds`, or a proof failing for 15 consecutive minutes.
-- Intent: `POST /api/v1/deploy/workloads {nodeId, env, workload, sourceSha}`; read: `GET /api/v1/deploy/workloads?nodeId=&env=`. Runtime: `operator-node-deploy-sequencer` (candidate-a + production overlays). Status: shipping (PR #3005); candidate-a proof: sequencer boot, leader lock, route authz; production canary proof tracked on story.5127. Only the operator node declares workloads today (YELLOW); other nodes stay on the Crossplane path above.
+Steps 3-4 above are the legacy lane. A node whose catalog cell is `node-deploy` ships through `POST /api/v1/deploy/workloads`. Read [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) (order and transition note), [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload) (declare, watch, failures) and [node-service-delivery](https://cognidao.org/knowledge/node-service-delivery) (design: create, prove, edge flip, retain, close; reconcile). Code: `nodes/operator/app/src/features/node-deploy/`.
 
 **Poly production placement findings, 2026-11-02** (restored via PR #3004: UA added to placement, egress `89.207.152.9/32` bridge, gen 26; lease 1793655838404 on RHITE FI serves 79bfc63f):
 

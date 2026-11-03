@@ -153,6 +153,6 @@ tofu destroy -var-file=terraform.$ENV.tfvars
 - [`INFRASTRUCTURE_SETUP.md`](../runbooks/INFRASTRUCTURE_SETUP.md) — full secret catalog + SSH key generation
 - [`cd-pipeline-e2e.md`](../spec/cd-pipeline-e2e.md) — pipeline contract + networking
 - [`ci-cd.md`](../spec/ci-cd.md) — operating rules, branch model, environments
-- [`candidate-flight-v0.md`](./candidate-flight-v0.md) — flight one PR to candidate-a
+- [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) (hub) — ship one PR to candidate-a and beyond
 - [`multi-node-dev.md`](./multi-node-dev.md) — local development guide
 - `pnpm setup:secrets` — interactive secret provisioning (preview, candidate-a, production)
