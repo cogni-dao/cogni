@@ -115,6 +115,7 @@ import {
   LiteLlmAdapter,
   type MimirAdapterConfig,
   MimirMetricsAdapter,
+  PostgresNodeDeployStore,
   PublicGitHubNodeDeploymentFileReader,
   RedisRunStreamAdapter,
   SplitPaymentRailGuardAdapter,
@@ -1465,7 +1466,8 @@ export function resolveComputeCostStore(): ComputeCostStorePort {
 let cachedNodeDeploymentTopology: NodeDeploymentTopologyPort | undefined;
 
 /**
- * Resolve the display-safe reader for the exact environment deploy state Argo consumes.
+ * Resolve the display-safe topology reader: the node-deploy release view for node lanes, the exact
+ * k3s deploy branch for the operator lane.
  * The GitHub App is read-only at this seam; missing configuration is allowed to degrade the
  * dashboard's Services module without affecting deployment, cost, or governance reads.
  */
@@ -1479,7 +1481,9 @@ export function resolveNodeDeploymentTopology(): NodeDeploymentTopologyPort {
   }
   cachedNodeDeploymentTopology ??= new GitHubNodeDeploymentTopologyAdapter(
     new PublicGitHubNodeDeploymentFileReader(),
-    catalog
+    catalog,
+    // story.5137: node lanes read the node-deploy release view, never a deploy branch.
+    () => new PostgresNodeDeployStore(resolveServiceDb())
   );
   return cachedNodeDeploymentTopology;
 }

@@ -55,6 +55,7 @@ const ENV_LABEL = {
 async function readServices(
   reader: ReturnType<typeof resolveNodeDeploymentTopology> | null,
   input: {
+    nodeId: string;
     slug: string;
     environment: (typeof FLIGHT_ENVS)[number] | null;
   }
@@ -62,6 +63,7 @@ async function readServices(
   if (!reader || input.environment === null) return { state: "unavailable" };
   try {
     const items = await reader.listServices({
+      nodeId: input.nodeId,
       slug: input.slug,
       environment: input.environment,
     });
@@ -151,6 +153,7 @@ async function readDeployment(
 
 async function attachDeploymentDetails(input: {
   deployment: DeploymentModule;
+  nodeId: string;
   slug: string;
   topologyReader: ReturnType<typeof resolveNodeDeploymentTopology> | null;
   currentEnvironment: (typeof FLIGHT_ENVS)[number] | null;
@@ -172,6 +175,7 @@ async function attachDeploymentDetails(input: {
         ...environment,
         services: environment.declared
           ? await readServices(input.topologyReader, {
+              nodeId: input.nodeId,
               slug: input.slug,
               environment: environment.env,
             })
@@ -338,6 +342,7 @@ export async function listAccessibleNodeOperations(
       const cost = costByNode.get(row.id);
       const deployment = await attachDeploymentDetails({
         deployment: baseDeployment,
+        nodeId: row.id,
         slug: row.slug,
         topologyReader,
         currentEnvironment: deploymentEnvironment,

@@ -1,13 +1,29 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Read display-safe service topology from the exact environment deploy branch Argo consumes. */
+/**
+ * Read display-safe service topology for one (node, environment).
+ * A node lane (story.5137) is read from the node-deploy release view: the specs of the
+ * releases the sequencer desires, the same rows `GET /api/v1/deploy/workloads` serves.
+ * Only the operator lane still reads its exact k3s deploy branch. No XComputeWorkload or
+ * node deploy branch is read.
+ */
 
 import { LEGACY_DEFAULT_NODE_DEPLOYMENT } from "@cogni/repo-spec";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
-import type { NodeDeployedService, NodeDeploymentTopologyPort } from "@/ports";
+import type {
+  NodeDeployedService,
+  NodeDeploymentTopologyPort,
+  StorePort,
+} from "@/ports";
+
+/** The read half of the node-deploy store this adapter needs (the release view). */
+export type NodeDeployReleaseReader = Pick<
+  StorePort,
+  "listDesired" | "getRelease"
+>;
 
 export interface NodeDeploymentFileReader {
   fetchFileText(input: {
@@ -88,22 +104,12 @@ export class PublicGitHubNodeDeploymentFileReader
   }
 }
 
-const deployedTopologySchema = z.object({
-  spec: z.object({
-    workload: z.object({
-      services: z.array(
-        z.object({
-          name: z.string().min(1).max(63),
-          visibility: z.enum(["public", "private"]),
-        })
-      ),
-    }),
-  }),
-});
-
 const kustomizationSchema = z.object({
   resources: z.array(z.string()),
 });
+
+/** The only lane still on k3s/Argo (mirrors features/compute OPERATOR_LANE_SLUG; adapters may not import features). */
+const OPERATOR_LANE_SLUG = "operator";
 
 const deploymentSlugSchema = z
   .string()
@@ -114,32 +120,22 @@ export class GitHubNodeDeploymentTopologyAdapter
 {
   constructor(
     private readonly files: NodeDeploymentFileReader,
-    private readonly parent: { readonly owner: string; readonly repo: string }
+    private readonly parent: { readonly owner: string; readonly repo: string },
+    private readonly releases?: () => NodeDeployReleaseReader
   ) {}
 
   async listServices(input: {
+    readonly nodeId: string;
     readonly slug: string;
     readonly environment: "candidate-a" | "preview" | "production";
   }): Promise<readonly NodeDeployedService[]> {
     const slug = deploymentSlugSchema.parse(input.slug);
-    const text = await this.files.fetchFileText({
-      owner: this.parent.owner,
-      repo: this.parent.repo,
-      path: `infra/k8s/overlays/${input.environment}/${slug}/xcomputeworkload.yaml`,
-      ref: `deploy/${input.environment}-${slug}`,
-    });
-    if (text !== null) {
-      const parsed = deployedTopologySchema.parse(parseYaml(text));
-      return parsed.spec.workload.services.map((service) => ({
-        name: service.name,
-        visibility: service.visibility,
-      }));
+    if (slug !== OPERATOR_LANE_SLUG) {
+      return this.listNodeDeployServices(input.nodeId, input.environment);
     }
 
-    // The operator/control-plane lane still runs the standard node app on k3s and therefore has
-    // no XComputeWorkload. Its exact deploy branch names that shared base explicitly. Project the
-    // provider-neutral stock topology rather than falsely reporting that a healthy app has no
-    // service truth. This also covers any legacy k3s node lane that still consumes the same base.
+    // The operator/control-plane lane still runs the standard node app on k3s. Its exact deploy
+    // branch names that shared base explicitly; project the provider-neutral stock topology.
     const kustomization = await this.files.fetchFileText({
       owner: this.parent.owner,
       repo: this.parent.repo,
@@ -161,5 +157,32 @@ export class GitHubNodeDeploymentTopologyAdapter
     }
 
     throw new Error("deployed service topology is unavailable");
+  }
+
+  /** ONE_WRITER_PER_NODE_LANE: a node lane's topology is the specs its desired releases deploy. */
+  private async listNodeDeployServices(
+    nodeId: string,
+    environment: string
+  ): Promise<readonly NodeDeployedService[]> {
+    if (!this.releases) {
+      throw new Error("deployed service topology is unavailable");
+    }
+    const store = this.releases();
+    const desired = (await store.listDesired(environment)).filter(
+      (row) => row.nodeId === nodeId && row.env === environment
+    );
+    const services: NodeDeployedService[] = [];
+    for (const row of desired) {
+      const release = await store.getRelease(row.releaseId);
+      if (!release) continue;
+      services.push({
+        name: release.spec.name,
+        visibility: "http" in release.spec.expose ? "public" : "private",
+      });
+    }
+    if (services.length === 0) {
+      throw new Error("deployed service topology is unavailable");
+    }
+    return services.sort((a, b) => a.name.localeCompare(b.name));
   }
 }
