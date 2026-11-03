@@ -120,10 +120,10 @@ Declaring the ref and writing the value gets the secret to the pod **at boot**.
 But **changing** a value later (a day-2 write, a rotation) does **not** reach a
 **running Akash pod on its own** — there is no Reloader on the Akash lane:
 
-| Lane      | Secret value change → running pod picks it up?                                                                                                                                                         |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **k3s**   | **Automatic.** ESO syncs the k8s Secret, Stakater Reloader rolling-restarts the pod (`secrets-management.md` Invariant 11). Zero action.                                                               |
-| **Akash** | **No.** The pod is a lease reconciled by Argo CD off the `deploy/<env>-<node>` head (`BRANCH_HEAD_IS_LEASE`, `ci-cd.md` Axiom 18). Reloader does not watch leases — the running pod keeps its old env. |
+| Lane      | Secret value change → running pod picks it up?                                                                                                                                                                                                                                                            |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **k3s**   | **Automatic.** ESO syncs the k8s Secret, Stakater Reloader rolling-restarts the pod (`secrets-management.md` Invariant 11). Zero action.                                                                                                                                                                  |
+| **Akash** | **No.** The app is an Akash lease. Reloader does not watch leases, so the running app keeps its old env. Deploy again with `POST /api/v1/deploy/workloads` to start a release that reads the new secret values ([deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload)). |
 
 So after `POST /api/v1/nodes/<id>/secrets` (or any rotation) on an Akash node the
 value is stored but **inert** until the deploy-branch head moves. A same-SHA

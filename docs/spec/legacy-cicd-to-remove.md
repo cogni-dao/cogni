@@ -26,7 +26,8 @@ Deployable artifacts are promoted by artifact identity:
 source_repo + sourceSha + image_repository
   -> image_repository:sha-<sourceSha>
   -> { target, source_repo, sourceSha, image_repository, digest }
-  -> deploy/<env>-<target>
+  -> POST /api/v1/deploy/workloads {nodeId, env, workload, sourceSha}   (a node)
+  -> operator deploy branch                                              (operator only)
   -> /version.buildSha == sourceSha
 ```
 
@@ -42,11 +43,19 @@ The categories below are about **artifact identity**. The adjacent freeze — wh
 
 **Original mechanic (historical):** `pr-build.yml`, `resolve-pr-build-images.sh`, and `flight-preview.yml` used `pr-<prNumber>-<headSha>`, `mq-<prNumber>-<queueSha>`, and `preview-<sha>` for in-repo artifacts — a PR-derived lookup namespace, not `source_repo + sourceSha + image_repository`.
 
-**Residual:** `candidate-flight.yml` still accepts a `pr_number` workflow input for the transitional monorepo dispatch lane, but it resolves the same `sha-<headSha>` image (no pr-/mq- tag). Deleting that input + unifying onto `node_slug + source_sha` is tracked under _Candidate PR-number dispatch_ below.
+**Residual:** `candidate-flight.yml` (operator only) still accepts a `pr_number` workflow input for the transitional monorepo dispatch lane, but it resolves the same `sha-<headSha>` image (no pr-/mq- tag). Deleting that input + unifying onto `node_slug + source_sha` is tracked under _Candidate PR-number dispatch_ below.
 
-### Candidate PR-number dispatch
+### Node delivery lane (story.5137)
 
-**Mechanic:** `candidate-flight.yml` still accepts `pr_number` and `head_sha` workflow inputs for transitional in-repo artifact flights.
+**Mechanic:** per-node deploy branches, per-node ApplicationSets and overlays, the Crossplane composite and its `lease_generation` replacement counter, `candidate-flight.yml` and `promote-and-deploy.yml` legs for nodes, and the env verb's AppSet authoring.
+
+**Why it is legacy:** a node ships with one call, `POST /api/v1/deploy/workloads`, in every env. See [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence).
+
+**Removal condition:** the last node cell is `node-deploy` in the catalog. Then delete the node legs and files in one change. The operator keeps its own k3s and Argo pipeline.
+
+### Candidate PR-number dispatch (operator only)
+
+**Mechanic:** `candidate-flight.yml` (operator only) still accepts `pr_number` and `head_sha` workflow inputs for transitional in-repo artifact flights.
 
 **Why it is legacy:** `POST /api/v1/vcs/flight` no longer accepts PR-number deploy identity. The workflow input remains only because in-repo artifacts still have PR-shaped build outputs.
 

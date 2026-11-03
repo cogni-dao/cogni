@@ -355,7 +355,7 @@ AuthorizationPort.check({
 - If OpenFGA is not configured, V0 rollout fallback preserves the legacy
   owner-only check (`nodes.owner_user_id = SessionUser.id`).
 - Only after RBAC allow does it verify nodeRef source/image preflight through
-  the deploy plane and dispatch `candidate-flight.yml`.
+  the deploy plane and dispatch `candidate-flight.yml` (operator only).
 
 2. **PR-manager graph tool:** `core__vcs_flight_candidate`
    - Exposed to the operator-only `pr-manager` LangGraph catalog entry.
@@ -465,7 +465,7 @@ else is API: the operator provisions the collaborator; the **agent auto-accepts 
 invitation with its own token** (§6 step 5). A pure-API agent never needs a browser.
 
 Candidate-a deployment proof uses the existing app flight lever: PR Build
-produces per-target digests, `candidate-flight.yml` writes the candidate overlay
+produces per-target digests, `candidate-flight.yml` (operator only) writes the candidate overlay
 deploy branch, Argo reconciles the operator pod, and validation checks
 `/version.buildSha` on `https://test.cognidao.org` against the PR head SHA. A
 `/readyz` 200 alone is not deployment proof.

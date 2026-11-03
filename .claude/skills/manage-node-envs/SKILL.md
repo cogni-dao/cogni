@@ -1,240 +1,41 @@
 ---
 name: manage-node-envs
-description: "Manage which deploy-environments a Cogni node lives in (candidate-a / preview / production) via the operator app — the full request→owner-approve→verb→merge→verify loop for env (deploy-topology) membership. Use whenever an agent needs to add a node to an env or remove it from one, is asked to 'give this node a preview deploy', 'promote this node into production topology', 'take a node out of preview', 'stop deploying X to candidate-a', 'change a node's deploy reach / env set', 'onboard my node to an environment', or hits a 403 authz_denied / 503 authz_unavailable on POST /api/v1/nodes/{id}/envs. Also triggers on 'env_manager', 'can_manage_envs', 'env-membership PR', 'node deploy topology', 'catalog envs: line'. This is distinct from FLIGHTING a build (candidate-flight / can_flight) and from PROMOTING a sha (promote / can_promote_production) — env-membership changes WHERE a node is deployed, not WHICH build runs there. Do NOT use for provisioning a whole environment (that is provision-env), for secret-writes (cicd-secrets-expert), or for image promotion (promote)."
+description: "Manage which deploy environments (candidate-a / preview / production) a Cogni node lives in, via the operator app: request the env_manager role, owner approves, call the env verb, merge the catalog PR, verify. Use when asked to 'give this node a preview deploy', 'take a node out of preview', 'change a node's env set', or on a 403 authz_denied / 503 authz_unavailable from POST /api/v1/nodes/{id}/envs. Triggers on 'env_manager', 'can_manage_envs', 'env-membership PR', 'catalog envs: line'. Distinct from shipping a build (POST /api/v1/deploy/workloads), provisioning an env (provision-env) and secrets (cicd-secrets-expert)."
 ---
 
 # Manage node env membership
 
-Add or remove ONE deploy-environment from a Cogni node's reach, through the operator
-app. "Env membership" answers _which environments a node is deployed into_ — the
-`envs:` list in the node's catalog row. It is deliberately separate from flighting a
-build and from promoting a sha: flighting picks the build that runs in an env you're
-already in; env-membership picks the envs themselves.
+Env membership answers which environments a node is deployed into. It is the `envs:` list and the `compute_api.<env>` cell in the node's catalog row `infra/catalog/<slug>.yaml`. It does not choose the build. The build ships with one call:
 
-The whole loop is three operator API calls plus one wait-on-a-human step:
-
-1. **Request** the `env_manager` role (agent bearer).
-2. **Block** until the node OWNER approves it. You cannot skip or self-serve this.
-3. **Call the verb** (`POST .../envs`) — opens a catalog-edit PR.
-4. **Wait for CI green, then merge** (`POST /api/v1/vcs/merge`) — the route
-   hard-rejects `422 not_green` if required checks are still pending; once green it
-   enqueues, so poll the PR to `MERGED`.
-5. **Verify** the reconcile with ground truth — the node's pod actually
-   terminates/starts and its `/readyz` flips — not just the PR merge.
-
-> **`operator` is the ONE un-undeployable node.** The operator app is the control
-> plane serving this verb; removing its deployment from an env destroys that env's
-> ability to manage itself. The planner fails closed: a remove for `operator`
-> returns `422 operator_node_immutable` (OPERATOR_SELF_HOSTS_THE_VERB).
->
-> **`node-template` is an ordinary node with one twist.** Its per-env overlay
-> FILES (`infra/k8s/overlays/<env>/node-template/{kustomization,external-secret}.yaml`)
-> are the render TEMPLATE every wizard node's overlay is cloned from — the files
-> are load-bearing, the deployment is not. So a node-template remove emits a
-> REDUCED delete set (TEMPLATE_OVERLAY_IS_RENDER_SOURCE): the appset + its
-> kustomization entry + the catalog env leave git (Argo prunes the workload), while
-> the overlay files STAY in the tree as pure render-source artifacts. Re-adding the
-> env later is a normal add — rendering the template with its own slug/ports is the
-> identity transform. (Derek's ruling 2026-09-10; supersedes the old
-> TEMPLATE_NODE_UNDEPLOYABLE rule verified 2026-07-16.)
-
-## When to use
-
-- "Give node X a preview deployment" / "add X to production" / "deploy X to candidate-a".
-- "Take X out of preview" / "stop deploying X to production" / "shrink X's env set".
-- You called `POST /api/v1/nodes/{id}/envs` and got `403 authz_denied` (you lack the
-  role) or `503 authz_unavailable` (the env's OpenFGA model lacks the relation).
-- Someone asks to change a node's "deploy reach", "deploy topology", or the catalog
-  `envs:` line.
-
-Not this skill: standing up a brand-new environment (→ `provision-env`), writing a
-node secret (→ `cicd-secrets-expert`), or moving a build/sha (→ `promote`).
-
-## A) Get the permission — request → OWNER approves (the ONLY grant path)
-
-Managing a node's env topology is gated on `can_manage_envs`, which is computed from
-the `env_manager` OpenFGA role (and is also implied by `admin`). `env_manager` is a
-_distinct, least-privilege_ scope — it is NOT `developer`(→`can_flight`) and NOT
-`production_promoter`(→`can_promote_production`). Requesting `developer` and expecting
-to change envs is the classic trap; the right answer to the wrong role is `403`.
-
-**Request** (agent bearer, your registered principal):
-
-```
-POST /api/v1/nodes/{id}/access-requests
-{ "role": "env_manager" }
+```text
+POST https://cognidao.org/api/v1/deploy/workloads   {nodeId, env, workload, sourceSha}
 ```
 
-This writes a tracking row only — OpenFGA tuples remain the authority, so the request
-alone grants nothing.
+Read [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence), [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload) and [env-verb-activation](https://cognidao.org/knowledge/env-verb-activation) (a catalog mutation is not proof that a lane serves).
 
-**Approve** — done by the node OWNER, from a browser session:
+## The loop
 
-```
-POST /api/v1/nodes/{id}/developers
-{ "agentUserId": "<your-user-id>", "decision": "approve", "role": "env_manager" }
-```
+1. **Request the role.** `POST /api/v1/nodes/{id}/access-requests {"role":"env_manager"}`. This writes a tracking row only. It grants nothing.
+2. **Wait for the owner.** The node owner approves with `POST /api/v1/nodes/{id}/developers {agentUserId, decision:"approve", role:"env_manager"}`. There is no other path. Never write authorization tuples. Never self-approve. Stop and wait.
+3. **Call the verb.** `POST /api/v1/nodes/{id}/envs {"env":"candidate-a"|"preview"|"production","present":true|false}`. It opens a catalog PR on the operator monorepo. A request for the state that already holds returns `result.status:"no_changes"` and opens no PR. Use that as a grant probe.
+4. **Merge when green.** `POST /api/v1/vcs/merge {nodeId, prNumber}`. It returns `422 not_green` until required checks pass. On green it enqueues. Poll the PR until `MERGED`.
+5. **Ship and verify.** Call `POST /api/v1/deploy/workloads` for the env. Read `GET /api/v1/deploy/workloads?nodeId=<id>&env=<env>`. The proof is the served `/version.buildSha`. A merged PR is not a deployed node.
 
-This route is RLS-owner-gated (`nodes.ownerUserId == session.id`) — the DB query only
-returns the node when the caller _is_ its owner — and it writes the role tuple via
-`authorization.writeRelation`. So **only the owner can approve**, and approval is what
-actually flips `can_manage_envs` on for you.
+## Errors
 
-### HARD RULE — block and wait for the owner
+| Code                          | Meaning                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- |
+| `403 authz_denied`            | You lack `env_manager`. Go to step 1.                                                           |
+| `503 authz_unavailable`       | The env's OpenFGA model lacks `can_manage_envs`. The env needs a model bootstrap. Do not retry. |
+| `422 not_green`               | Required checks are pending or failed. Wait.                                                    |
+| `422 operator_node_immutable` | The operator cannot be removed from an env.                                                     |
 
-The ONLY legitimate way to obtain `env_manager` is **request → owner-approve**. There
-is no other door, by design (this is what keeps deploy-topology under node-owner
-governance):
+## Invariants
 
-- Never write OpenFGA tuples directly.
-- Never self-approve or approve on the owner's behalf.
-- Never reach for kube / OpenBao / any privileged plane to "just grant it".
-
-If you don't yet hold `can_manage_envs`, your correct move is to **stop and wait** for
-the owner to approve — surface the pending request to them and block. Do not try to
-route around the approval; there is nothing to route around, and attempting it is the
-anti-pattern this skill exists to prevent.
-
-## B) Use the verb
-
-Once you hold `can_manage_envs`:
-
-```
-POST /api/v1/nodes/{id}/envs
-{ "env": "candidate-a" | "preview" | "production", "present": true | false }
-```
-
-- `present: true` adds the env; `present: false` removes it.
-- **Idempotent:** requesting the state that already holds returns
-  `{ ... result: { status: "no_changes" } }` and opens **no PR**. Adding an env the
-  node already has, or removing one it doesn't, is a safe no-op — lean on this both to
-  pre-check your grant (a `200 no_changes` proves you hold `can_manage_envs`) and to
-  avoid churn. A real change returns
-  `{ ... result: { status: "pr_opened", action: "add"|"remove", prNumber, prUrl } }`.
-- Auth: `503 authz_unavailable` means the env's OpenFGA model doesn't carry the
-  `can_manage_envs` relation yet (model drift — the env needs a re-bootstrap, not a
-  retry); `403 authz_denied` means you simply aren't granted (go back to §A).
-
-**What it does:** opens a catalog-edit PR on the OPERATOR monorepo — never the node's
-own repo. The PR is **byte-identical to what formation / the bash renderers produce**,
-touching exactly:
-
-- `infra/catalog/<slug>.yaml` — the `envs:` line.
-- `infra/k8s/overlays/<env>/<slug>/kustomization.yaml` — the per-env overlay
-  (added on add, deleted on remove).
-- `infra/k8s/argocd/appsets/<env>/<env>-<slug>-applicationset.yaml` — the node's
-  per-(env,slug) ApplicationSet (added on add, deleted on remove).
-- `infra/k8s/argocd/appsets/<env>/kustomization.yaml` — the env's appsets list the
-  slug folds into / out of.
-
-### Every env is an INDEPENDENT, atomic toggle (ATOMIC_PER_ENV)
-
-There is **no special-casing of `candidate-a`**. candidate-a is toggled exactly like
-preview and production — you can add or remove any single env on its own, in any order.
-Removing the last remaining env leaves a valid empty `envs: []` row: the node is then
-simply _deployed nowhere_, but its catalog row (plus per-node, env-independent Caddy /
-scheduler entries) is left intact. So "remove from preview" and "remove from
-candidate-a" are the same kind of operation — one atomic per-env delta each. (If you
-recall an older "you can't drop candidate-a while in preview/prod" rule, that
-constraint was removed; the code is atomic-per-env now.)
-
-## C) Merge the generated PR
-
-The verb only _opens_ a PR — the node doesn't move until it merges.
-
-```
-POST /api/v1/vcs/merge
-{ "nodeId": "<id-or-slug>", "prNumber": <n> }
-```
-
-- Auth reuses `can_flight` (a deliberate least-privilege MVP concession — the merge
-  seam is one node-authz check; see the route's `NODE_SCOPED` note). `nodeId` is
-  required and addresses the node whose PR this is; the operator's own monorepo PRs are
-  addressed as `nodeId: "operator"`.
-- **It merges WHEN GREEN — it does not wait for CI.** Call it too early and it
-  hard-rejects `422 { errorCode: "not_green" }`. So first poll the PR's checks
-  (`gh pr checks <n>` — every required check `pass`/skip, none `pending`/`fail`), THEN
-  call `vcs/merge`. A catalog-edit PR runs the normal monorepo gates (`static`,
-  `unit`, `manifest`, `single-node-scope`, …); `unit` is where the overlay-drift gate
-  lives (it renders every wizard node's overlay from the node-template overlay files,
-  which a node-template remove deliberately leaves in the tree — see §B).
-- **On green it ENQUEUES.** When the base branch requires a merge queue, `mergePr`
-  returns `{ enqueued: true }` with no `sha` — the merge completes asynchronously on
-  the rebased candidate. Treat a successful response as "queued", then **poll the PR
-  until it reads `MERGED`** (`gh pr view <n> --json state,mergedAt`). Do not assume
-  merged on the 200.
-
-## D) Verify the reconcile
-
-Merging changes git; the node actually appears/disappears when Argo reconciles. On
-merge to `main`, the per-env **keystone app-of-apps** `cogni-<env>-appsets`
-(`prune: true` + `selfHeal: true`, `targetRevision: main`, path
-`infra/k8s/argocd/appsets/<env>`) picks up the change:
-
-- **Add:** the new `<env>-<slug>-applicationset.yaml` appears in git → the keystone
-  syncs → the node's ApplicationSet (and its Application) is created in that env.
-- **Remove:** the file vanishes from git → `prune: true` deletes the node's
-  Application → the node stops being deployed there.
-
-That reconcile is the ground truth that the node moved. Confirm it three ways, not by
-trusting the PR merge:
-
-- **Argo:** the `cogni-<env>-<slug>` Application appears / is pruned.
-- **Pod:** `kubectl -n cogni-<env> get pods | grep <slug>` — the `<slug>-node-app`
-  pod is `Running` (add) or gone (remove).
-- **Public surface:** the node's `/readyz` flips — reuse the deploy READ port,
-  `GET /api/v1/nodes/<id>/deploy-state`, and watch that env's row go
-  `health: healthy ⇄ unknown` / `replicas 1/1 ⇄ 0/0`.
-
-### UI caveat — the toggle button can lie
-
-On the node page's **Deployments** card, the Deploy/Undeploy button's _visibility_ is
-not gated on `can_manage_envs` — a viewer on the owner / implicit-admin plane sees the
-button, clicks it, and gets `403 "not authorized"` from the verb (the verb is the real
-gate, `node.manage_envs`). Button-shown ≠ permitted. If you hit that, you lack the
-grant — go to §A; don't treat it as a transient error. (The right long-term fix is to
-gate button visibility on the same `can_manage_envs` the verb enforces.)
-
-**Observability:** the verb emits a DNS-seam log in Loki, slug+env scoped:
-`dns.forward_reconcile.skipped` on add, `dns.reverse_reconcile.skipped` on remove
-(v0 only logs the intended Cloudflare change — the per-node A record is upserted at
-provision / lingers to TTL; the live reconcile is a flagged vNext seam).
-
-## Runbook
-
-1. **Request the role:** `POST /api/v1/nodes/{id}/access-requests { "role": "env_manager" }`.
-2. **Block for approval:** stop and wait for the node OWNER to
-   `POST /api/v1/nodes/{id}/developers { agentUserId, decision:"approve", role:"env_manager" }`.
-   Do not proceed, and do not attempt any other grant path, until this returns success.
-3. **Call the verb:** `POST /api/v1/nodes/{id}/envs { env, present }`. A `no_changes`
-   result means you're already in the target state — done, no PR.
-4. **Merge the PR:** `POST /api/v1/vcs/merge { nodeId, prNumber }`, then poll the PR to
-   `MERGED` (it enqueues; the 200 is "queued", not "merged").
-5. **Verify reconcile:** confirm the keystone `cogni-<env>-appsets` created / pruned the
-   node's `cogni-<env>-<slug>` Application in Argo; check the `dns.*_reconcile.skipped`
-   Loki line for your slug+env.
-
-## Invariants — the load-bearing rules
-
-- **REQUEST_THEN_OWNER_APPROVE_ONLY** — the sole path to `env_manager` is request →
-  owner-approve. No direct tuples, no self-approve, no kube/OpenBao grant. Block and
-  wait when unauthorized.
-- **DISTINCT_SCOPE** — `env_manager`→`can_manage_envs` is its own least-privilege role,
-  separate from `developer`/`can_flight` and `production_promoter`/`can_promote_production`
-  (all also implied by `admin`).
-- **CATALOG_IS_SSOT** — the verb edits the operator monorepo catalog/overlays/appsets;
-  it never touches the node's own repo and never bypasses git.
-- **ATOMIC_PER_ENV** — every env (candidate-a included) is an independent toggle;
-  removing the last env yields a valid `envs: []`. No candidate-a special case.
-- **IDEMPOTENT** — the already-holding state returns `no_changes` and opens no PR.
-- **MERGE_WHEN_GREEN** — `vcs/merge` rejects `422 not_green` until required checks
-  pass; wait for green, THEN merge → it enqueues → poll to `MERGED`. The node moves
-  only after the keystone app-of-apps reconciles, not on PR merge alone.
-- **TEMPLATE_OVERLAY_IS_RENDER_SOURCE** — `node-template`'s overlay FILES are the
-  per-env render template every wizard node clones; its DEPLOYMENT is not special. A
-  node-template remove deletes only the appset + kustomization entry + catalog env and
-  keeps `infra/k8s/overlays/<env>/node-template/` in the tree as render-source
-  artifacts.
-- **OPERATOR_SELF_HOSTS_THE_VERB** — `operator` cannot be removed from an env: the
-  control plane serving this verb cannot undeploy itself. The planner rejects it with
-  `422 operator_node_immutable`.
+- **REQUEST_THEN_OWNER_APPROVE_ONLY.** `env_manager` comes only from request then owner approval.
+- **DISTINCT_SCOPE.** `env_manager` gives `can_manage_envs`. It is separate from `developer` (`can_flight`) and `production_promoter` (`can_promote_production`). `admin` implies all three.
+- **CATALOG_IS_SSOT.** The verb edits the operator monorepo catalog. It never touches the node's own repo.
+- **ATOMIC_PER_ENV.** Each env is an independent toggle. candidate-a has no special case. Removing the last env leaves a valid `envs: []`.
+- **IDEMPOTENT.** The state that already holds returns `no_changes`.
+- **OPERATOR_SELF_HOSTS_THE_VERB (operator only).** The operator stays on k3s and Argo and cannot undeploy itself.
+- The Deploy button on the node page can show for a viewer who lacks the grant. The verb is the real gate.

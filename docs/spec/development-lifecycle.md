@@ -203,26 +203,11 @@ curl -s -X POST $BASE/api/v1/work/items/$ID/pr \
 
 As soon as the PR opens, a fresh agent runs `/review-implementation` while required checks (`unit`, `component`, `static`, `manifest`) run on the PR head SHA. Flight only when review APPROVE and CI are green at the same SHA; until CI is green the flight endpoint rejects with 422.
 
-### 6. Request candidate-a flight
+### 6. Deploy the PR head to candidate-a
 
-Every artifact — the in-repo operator app and externally built node artifacts alike — flights through
-the **same operator-API call, addressed by `nodeRef` (never a PR number, never personal `gh`)**:
+A node ships with one call. Only `env` changes between candidate-a, preview and production. Wait for CI to publish `sha-<head>`, then call `POST /api/v1/deploy/workloads {nodeId, env:"candidate-a", workload, sourceSha:<head_sha>}`. Never use a PR number or a personal `gh` credential. The sequence, the declaration and the failure signatures are in the hub: [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) and [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload).
 
-```bash
-curl -s -X POST $BASE/api/v1/vcs/flight \
-  -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
-  -d '{"nodeRef":{"nodeId":"<node_id>","sourceSha":"<head_sha>"}}'
-```
-
-For the operator's own monorepo PR, `nodeId` is the operator node — it is the one IN-REPO node, so it
-resolves to the monorepo as its own repo; `sourceSha` is the PR head SHA.
-
-The API response includes workflow dispatch metadata. The endpoint is a thin
-gate: it authenticates the caller, checks node flight authorization when RBAC is
-configured, verifies nodeRef source/image preflight, and dispatches
-`candidate-flight.yml`. The candidate slot lease is owned by the workflow itself
-— the per-`(env, node)` branch head **is** the lease ([ci-cd.md](./ci-cd.md)
-Axiom 18, `BRANCH_HEAD_IS_LEASE`) — so the endpoint does not replicate it.
+**Operator only:** the operator's own monorepo PR flights with `POST /api/v1/vcs/flight {"nodeRef":{"nodeId":"operator","sourceSha":"<head_sha>"}}`. The endpoint authenticates, checks node flight authorization, verifies the image, and dispatches the operator candidate workflow. The per-`(env, node)` branch head is the lease ([ci-cd.md](./ci-cd.md) Axiom 18).
 
 ### 7. Self-validate
 
@@ -319,7 +304,7 @@ curl -sf https://test.cognidao.org/api/v1/health | jq '.status == "ok"'
 
 Validated = the passing `/validate-candidate` PR scorecard for the head SHA (an instruction-only change records flight n/a). It is the only validation signal; `/closeout` refuses to merge without it. The scorecard passes when:
 
-1. `candidate-flight` status = success on PR head SHA
+1. The candidate-a deploy is `active` (`GET /api/v1/deploy/workloads`) and `/version.buildSha` equals the PR head SHA
 2. Health scorecard returns: restarts=0, memory < 90% of limit, oom_kills=0
 3. Feature exercise from the work item's `## Validation` block passes against the deployed URL
 4. Observability signal confirmed in Loki at the deployed SHA
@@ -421,7 +406,7 @@ Missing `Work:` → merge blocked. Missing `Spec:` → warning (blocked if behav
 
 ## Related
 
-- [`docs/spec/ci-cd.md`](./ci-cd.md) — environment model, deploy branches, source-sha map, candidate-flight workflow, slot lease semantics (Axiom 18, `BRANCH_HEAD_IS_LEASE`)
+- [`docs/spec/ci-cd.md`](./ci-cd.md) — operator environment model, deploy branches, source-sha map, operator flight workflow (Axiom 18, `BRANCH_HEAD_IS_LEASE`)
 - [`docs/spec/merge-queue-config.md`](./merge-queue-config.md) — required checks, `REPORT_OR_DON'T_REQUIRE`
 - [`docs/spec/docs-work-system.md`](./docs-work-system.md) — type taxonomy and ownership
 - [`docs/design/operator-dev-lifecycle-coordinator.md`](../design/operator-dev-lifecycle-coordinator.md) — coordinator design (Phase 1 done; Phase 2/3 deferred until v0 broadcaster lands)
