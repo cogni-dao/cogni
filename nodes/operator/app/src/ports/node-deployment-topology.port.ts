@@ -18,6 +18,8 @@ export interface NodeDeployedService {
 
 export interface NodeDeploymentTopologyPort {
   listServices(input: {
+    /** Node id: the key of the node-deploy release view (story.5137). */
+    readonly nodeId: string;
     readonly slug: string;
     readonly environment: "candidate-a" | "preview" | "production";
   }): Promise<readonly NodeDeployedService[]>;

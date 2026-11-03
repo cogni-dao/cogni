@@ -191,16 +191,6 @@
       "then": { "required": ["deployment_provider"] }
     },
     {
-      "$comment": "story.5016 — the lease generation replaces a paid off-cluster lease, so it is only meaningful where deployment_provider already routes the row off-cluster. Declaring it on an on-cluster row would be a counter with no lease to replace.",
-      "if": { "required": ["lease_generation"] },
-      "then": { "required": ["deployment_provider"] }
-    },
-    {
-      "$comment": "story.5050 — boot recovery re-mints a PAID lease, so it is only meaningful where deployment_provider already routes the row off-cluster. On an on-cluster row there is no lease to close or replace.",
-      "if": { "required": ["boot_recovery"] },
-      "then": { "required": ["deployment_provider"] }
-    },
-    {
       "$comment": "story.5050 — a required placement country only constrains a marketplace bid, so it is only meaningful where deployment_provider already routes the row off-cluster. It also names the providers whose egress must already be allowlisted, so the row owes compute_egress_cidrs too: admitting a provider whose NAT is absent there boots a workload that then cannot reach the env VM's substrate ports (the bug.5191 class), which reads as a mystery outage rather than a config error.",
       "if": { "required": ["required_placement_countries"] },
       "then": { "required": ["deployment_provider", "compute_egress_cidrs"] }
@@ -330,65 +320,18 @@
     },
     "compute_api": {
       "type": "object",
-      "description": "task.5097 — per-environment WHICH-AUTHORITY selector for an akash-placed row. `legacy` (the default for an omitted environment) renders the bespoke ComputeWorkload CR reconciled by the in-cluster compute-workload-controller; `crossplane` renders the XComputeWorkload composite reconciled by Crossplane (infra/crossplane/xcomputeworkload). ONE_AUTHORITY_PER_WORKLOAD: the materializer emits exactly one of the two kinds per (node, environment), and the deploy-branch rsync --delete removes the other in the same commit, so no resource is ever reconciled by both. Flipping this cell is a full re-create, never an import: the legacy CR's finalizer closes its lease on prune and Crossplane mints a fresh one. story.5137 / CD4 ONE_WRITER_PER_NODE_LANE — `node-deploy` is NOT a rendering authority: it declares that this (node, environment) is deployed ONLY by the node-deploy sequencer (POST /api/v1/deploy/workloads). Nothing renders an XComputeWorkload or ComputeWorkload for it, render-node-appset.sh drops the per-(env, node) ApplicationSet so Argo prunes the Application (and with it the old XR, ExternalSecrets and lease), and the flight/promote path refuses or skips the cell with `node_on_deploy_verb`. Keep deployment_provider, lease_generation and compute_egress_cidrs on the row until the CD9 purge.",
+      "description": "story.5137 / task.5411 — CD4 ONE_WRITER_PER_NODE_LANE. Per-environment deploy authority for an akash-placed node row. The only value is `node-deploy`: the (node, environment) is deployed ONLY by the node-deploy sequencer (POST /api/v1/deploy/workloads). The legacy ComputeWorkload controller and the Crossplane XComputeWorkload authority were deleted (CD9), so the flight/promote path refuses a node target with `node_on_deploy_verb`.",
       "additionalProperties": false,
       "properties": {
-        "candidate-a": { "enum": ["legacy", "crossplane", "node-deploy"] },
-        "preview": { "enum": ["legacy", "crossplane", "node-deploy"] },
-        "production": { "enum": ["legacy", "crossplane", "node-deploy"] }
-      },
-      "minProperties": 1
-    },
-    "lease_generation": {
-      "type": "object",
-      "description": "story.5016 / task.5122 — per-environment EXPLICIT replacement counter for a terminally closed Akash lease. It is the ONLY varying component of the actuator's wallet-wide idempotence key (`xcw:<namespace>:<name>:<lease-generation>`), and the actuator refuses to re-spend a settled key by design — so once an environment's lease closes terminally, this cell is the one supported way to recreate that node there. A human bumps it by exactly 1 when a closed lease must be REPLACED; nothing bumps it implicitly, because a generation that moved on its own would answer 'no existing resource' after a promote and mint a SECOND PAID LEASE. Omitted environments default to 0 (the value every existing workload already runs under), so this field is inert for every row that has never needed a replacement. Consumed only by the crossplane compute_api authority; the legacy controller keys its lease per k8s metadata.generation and the materializer refuses a nonzero value there. NAME: this cell was `lease_epoch` until task.5122. `epoch` is reserved for the attribution/distribution domain (contributor activity windows, claimants, payouts); a compute-lease replacement counter is a GENERATION. The rename changed no VALUE, so no idempotence key moved.",
-      "additionalProperties": false,
-      "properties": {
-        "candidate-a": { "type": "integer", "minimum": 0, "maximum": 1000000 },
-        "preview": { "type": "integer", "minimum": 0, "maximum": 1000000 },
-        "production": { "type": "integer", "minimum": 0, "maximum": 1000000 }
-      },
-      "minProperties": 1
-    },
-    "isolated_services": {
-      "type": "object",
-      "description": "story.5093 — PLACEMENT_IS_OPERATOR_POLICY. Declared private repo-spec services the operator places in their OWN Akash lease instead of the node's app lease (ISOLATED_SERVICE_IS_ITS_OWN_LEASE). Each key is a service name; the materializer renders one more XComputeWorkload named `<nodeId>-<service>` with `spec.instance: <service>`, that service as its sole public service, host `<slug>-<service>` under the environment domain, and its own idempotence key family `xcw:<namespace>:<nodeId>-<service>:<generation>`. Spend receipts keep the node's nodeId. `lease_generation` follows the same NOTHING_BUMPS_IMPLICITLY rule as the row-level cell; omitted environments default to 0. A key the node's source does not declare for an environment is skipped and reported, so this cell may merge before the node's own PR. Crossplane compute_api only.",
-      "additionalProperties": false,
-      "propertyNames": { "pattern": "^[a-z][a-z0-9-]{0,19}$" },
-      "patternProperties": {
-        "^[a-z][a-z0-9-]{0,19}$": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "lease_generation": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "candidate-a": { "type": "integer", "minimum": 0, "maximum": 1000000 },
-                "preview": { "type": "integer", "minimum": 0, "maximum": 1000000 },
-                "production": { "type": "integer", "minimum": 0, "maximum": 1000000 }
-              },
-              "minProperties": 1
-            }
-          }
-        }
-      },
-      "minProperties": 1
-    },
-    "boot_recovery": {
-      "type": "object",
-      "description": "story.5050 — per-environment BOOT-RECOVERY posture. `hold` (the default, and every row's behaviour before this cell existed) keeps a lease that never served as evidence and waits for a human to bump lease_generation. `auto` closes it at the boot deadline, which is the ONLY thing that makes the Composition's bounded `:recover:<1..3>` re-mint reachable — and because the actuator's ledger-derived excluded set skips the provider that just failed (task.5153), each retry lands on a DIFFERENT provider. That is what turns 'a human diagnoses, closes and re-mints for every bad provider' into one auction that walks the allowlist by itself. ONE CELL OPENS BOTH GATES on purpose: `onGiveUp: Replace` with `onDeadline: Hold` would be a workload holding a dead lease forever while claiming it self-heals, which is worse than honest Hold, so the two are never separately settable. Declared here and nowhere else — a per-request flag is the seam through which a production workload would eventually be closed by a bad argument (see bootPolicyForEnvironment). Bounded at 3 attempts per generation by the Composition; exhaustion still parks the workload for a human. Recommended for any node whose placement is constrained to a small provider set, where a single defective provider would otherwise stall the lane indefinitely (bug.5325).",
-      "additionalProperties": false,
-      "properties": {
-        "candidate-a": { "enum": ["hold", "auto"] },
-        "preview": { "enum": ["hold", "auto"] },
-        "production": { "enum": ["hold", "auto"] }
+        "candidate-a": { "const": "node-deploy" },
+        "preview": { "const": "node-deploy" },
+        "production": { "const": "node-deploy" }
       },
       "minProperties": 1
     },
     "required_placement_countries": {
       "type": "object",
-      "description": "story.5050 — per-environment HARD placement requirement: the ISO 3166-1 alpha-2 country codes this row's workload MAY be placed in. Distinct from the fleet-wide latency PREFERENCE (AkashComputeAdapter's substrate co-location list, which only RANKS): this cell FILTERS bids, so a provider outside the set never wins. It exists because a workload can have an outbound dependency that geo-fences by IP while the latency preference pulls toward the substrate's own neighbourhood — for the Baltics substrate those two axes point in opposite directions (BE/DE/PL/SK/FR are all co-located AND all Polymarket-restricted). REQUIRED_FAILS_CLOSED: a bid whose provider country is unknown, or whose provider metadata is unavailable, is REFUSED — the opposite of the preference path's FAIL_OPEN_ON_MISSING_METADATA rule, because a requirement that cannot be evaluated is not satisfied. NOT_A_GUARANTEE: provider country describes ADVERTISED/INGRESS identity, which is measurably not the egress identity the workload presents to a third party (two Akash providers in different advertised countries have shared one egress NAT), so this narrows the candidate pool and only the workload's own outbound probe proves reachability. An omitted environment is unconstrained; an empty array is rejected rather than read as 'anywhere', because fail-closed semantics would make it refuse every bid. Binds only on a fresh CREATE — the XR renders from the catalog at promote time and Akash refuses in-place placement change, so a change here needs a lease_generation bump. Coupled to compute_egress_cidrs: every provider this admits must already be allowlisted there, or the workload boots and then cannot reach the env VM's substrate ports.",
+      "description": "story.5050 — per-environment HARD placement requirement: the ISO 3166-1 alpha-2 country codes this row's workload MAY be placed in. Distinct from the fleet-wide latency PREFERENCE (AkashComputeAdapter's substrate co-location list, which only RANKS): this cell FILTERS bids, so a provider outside the set never wins. It exists because a workload can have an outbound dependency that geo-fences by IP while the latency preference pulls toward the substrate's own neighbourhood — for the Baltics substrate those two axes point in opposite directions (BE/DE/PL/SK/FR are all co-located AND all Polymarket-restricted). REQUIRED_FAILS_CLOSED: a bid whose provider country is unknown, or whose provider metadata is unavailable, is REFUSED — the opposite of the preference path's FAIL_OPEN_ON_MISSING_METADATA rule, because a requirement that cannot be evaluated is not satisfied. NOT_A_GUARANTEE: provider country describes ADVERTISED/INGRESS identity, which is measurably not the egress identity the workload presents to a third party (two Akash providers in different advertised countries have shared one egress NAT), so this narrows the candidate pool and only the workload's own outbound probe proves reachability. An omitted environment is unconstrained; an empty array is rejected rather than read as 'anywhere', because fail-closed semantics would make it refuse every bid. Binds only on a fresh CREATE — Akash refuses in-place placement change, so a change here needs a fresh blue/green release. Coupled to compute_egress_cidrs: every provider this admits must already be allowlisted there, or the workload boots and then cannot reach the env VM's substrate ports.",
       "additionalProperties": false,
       "properties": {
         "candidate-a": {

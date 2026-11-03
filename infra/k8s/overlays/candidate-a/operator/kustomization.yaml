@@ -42,7 +42,6 @@ resources:
   - ../../../base/database-reliability-actuator
   - ./database-reliability-actuator-external-secret.yaml
   - ./secrets-writer-sa.yaml
-  - ./compute-workload-platform-application.yaml
 
 namePrefix: operator-
 
@@ -73,13 +72,6 @@ replacements:
       - select: { kind: Role, name: node-deploy-sequencer }
         fieldPaths: [metadata.namespace]
       - select: { kind: RoleBinding, name: node-deploy-sequencer }
-        fieldPaths: [metadata.namespace]
-  - source:
-      kind: Application
-      name: compute-workload-platform
-      fieldPath: spec.destination.namespace
-    targets:
-      - select: { kind: Application, name: compute-workload-platform }
         fieldPaths: [metadata.namespace]
 
 patches:

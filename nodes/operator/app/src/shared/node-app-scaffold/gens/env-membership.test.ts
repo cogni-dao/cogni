@@ -303,9 +303,9 @@ describe("parseCatalogSourceRepo", () => {
   });
 });
 
-// ── Generalized per-key placement cell editors (story.5039) ─────────────────────────────────────
+// ── Generalized per-key placement cell editors (story.5039, task.5411) ──────────────────────────
 
-// A poly-shaped row: all three placement blocks present, with the top-level comments between them
+// A node-deploy row: all three placement blocks present, with the top-level comments between them
 // that every cell edit must carry through verbatim.
 const CATALOG_WITH_ALL_CELLS = `name: toks
 type: node
@@ -319,10 +319,10 @@ deployment_provider:
   production: akash
 # authority comment that must survive verbatim.
 compute_api:
-  production: crossplane
-# lease counter comment that must survive verbatim.
-lease_generation:
-  production: 0
+  production: node-deploy
+# region comment that must survive verbatim.
+required_placement_countries:
+  production: [PT]
 activity_env: production
 path_prefix: nodes/toks/
 `;
@@ -334,48 +334,21 @@ describe("parseCatalogPlacementMap", () => {
     ).toEqual({ "candidate-a": "akash", production: "akash" });
     expect(
       parseCatalogPlacementMap(CATALOG_WITH_ALL_CELLS, "compute_api")
-    ).toEqual({ production: "crossplane" });
-    expect(
-      parseCatalogPlacementMap(CATALOG_WITH_ALL_CELLS, "lease_generation")
-    ).toEqual({ production: "0" });
-  });
-
-  it("reads a `node-deploy` cell (story.5137: hyphenated value) and round-trips it through a sibling edit", () => {
-    const catalog = CATALOG_WITH_ALL_CELLS.replace(
-      "  production: crossplane",
-      "  production: node-deploy"
-    );
-    expect(parseCatalogPlacementMap(catalog, "compute_api")).toEqual({
-      production: "node-deploy",
-    });
-    const next = setCatalogPlacementCell(
-      catalog,
-      "compute_api",
-      "candidate-a",
-      "crossplane"
-    );
-    expect(next).toContain(
-      "compute_api:\n  candidate-a: crossplane\n  production: node-deploy\n"
-    );
-    expect(parseCatalogPlacementMap(next, "compute_api")).toEqual({
-      "candidate-a": "crossplane",
-      production: "node-deploy",
-    });
-    // The verb's cell leaves with its env, and the sibling survives.
+    ).toEqual({ production: "node-deploy" });
     expect(
       parseCatalogPlacementMap(
-        setCatalogPlacementCell(next, "compute_api", "production", undefined),
-        "compute_api"
+        CATALOG_WITH_ALL_CELLS,
+        "required_placement_countries"
       )
-    ).toEqual({ "candidate-a": "crossplane" });
+    ).toEqual({ production: "[PT]" });
   });
 
-  it("throws on a value outside the key's vocabulary", () => {
+  it("throws on a retired compute_api value (crossplane/legacy, task.5411)", () => {
     expect(() =>
       parseCatalogPlacementMap(
         CATALOG_WITH_ALL_CELLS.replace(
-          "  production: crossplane",
-          "  production: akash"
+          "  production: node-deploy",
+          "  production: crossplane"
         ),
         "compute_api"
       )
@@ -389,60 +362,28 @@ describe("setCatalogPlacementCell", () => {
       CATALOG_WITH_ALL_CELLS,
       "compute_api",
       "candidate-a",
-      "crossplane"
+      "node-deploy"
     );
     expect(next).toContain(
-      "compute_api:\n  candidate-a: crossplane\n  production: crossplane\n"
+      "compute_api:\n  candidate-a: node-deploy\n  production: node-deploy\n"
     );
     expect(next).toContain("# authority comment that must survive verbatim.");
-    expect(next).toContain(
-      "# lease counter comment that must survive verbatim."
-    );
+    expect(next).toContain("# region comment that must survive verbatim.");
   });
 
-  it("inserts a NEW compute_api block after the deployment_provider block (#2301 ordering)", () => {
+  it("inserts a NEW compute_api block after the deployment_provider block", () => {
     const noComputeApi = CATALOG_WITH_ALL_CELLS.replace(
-      "compute_api:\n  production: crossplane\n",
+      "compute_api:\n  production: node-deploy\n",
       ""
     );
     const next = setCatalogPlacementCell(
       noComputeApi,
       "compute_api",
       "production",
-      "crossplane"
+      "node-deploy"
     );
     expect(next).toContain(
-      "deployment_provider:\n  candidate-a: akash\n  production: akash\ncompute_api:\n  production: crossplane\n"
-    );
-  });
-
-  it("inserts a NEW lease_generation block after compute_api when present, else after deployment_provider", () => {
-    const noLease = CATALOG_WITH_ALL_CELLS.replace(
-      "lease_generation:\n  production: 0\n",
-      ""
-    );
-    const afterComputeApi = setCatalogPlacementCell(
-      noLease,
-      "lease_generation",
-      "production",
-      "0"
-    );
-    expect(afterComputeApi).toContain(
-      "compute_api:\n  production: crossplane\nlease_generation:\n  production: 0\n"
-    );
-
-    const neither = noLease.replace(
-      "compute_api:\n  production: crossplane\n",
-      ""
-    );
-    const afterProvider = setCatalogPlacementCell(
-      neither,
-      "lease_generation",
-      "production",
-      "0"
-    );
-    expect(afterProvider).toContain(
-      "deployment_provider:\n  candidate-a: akash\n  production: akash\nlease_generation:\n  production: 0\n"
+      "deployment_provider:\n  candidate-a: akash\n  production: akash\ncompute_api:\n  production: node-deploy\n"
     );
   });
 
@@ -461,24 +402,21 @@ describe("setCatalogPlacementCell", () => {
   it("removing the last cell drops the whole block (minProperties: 1)", () => {
     const next = setCatalogPlacementCell(
       CATALOG_WITH_ALL_CELLS,
-      "lease_generation",
+      "required_placement_countries",
       "production",
       undefined
     );
-    expect(next).not.toContain("lease_generation");
-    // Its neighbour comment (outside the block capture) survives.
-    expect(next).toContain(
-      "# lease counter comment that must survive verbatim."
-    );
+    expect(next).not.toContain("required_placement_countries");
+    expect(next).toContain("# region comment that must survive verbatim.");
   });
 
   it("rejects a value outside the key's vocabulary", () => {
     expect(() =>
       setCatalogPlacementCell(
         CATALOG_WITH_ALL_CELLS,
-        "lease_generation",
+        "compute_api",
         "production",
-        "-1"
+        "crossplane"
       )
     ).toThrow(/unknown value/);
   });

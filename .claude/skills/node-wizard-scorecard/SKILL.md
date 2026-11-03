@@ -103,7 +103,7 @@ has succeeded, candidate `/version` matches the launched SHA, and agent-first
 API validation has passed. The human-facing report must include critical repo
 links, child PR/check status, image tag and digest, parent pin status, flight
 status, candidate `/version`, and a short explanation of the child-build ->
-operator-pin -> candidate-flight CI/CD path. Use
+operator-pin -> deploy verb (`POST /api/v1/deploy/workloads`, env=candidate-a) CI/CD path. Use
 `docs/spec/node-ci-cd-contract.md` for the CI/CD facts and
 `docs/guides/agent-api-validation.md` for the post-flight API exercise.
 

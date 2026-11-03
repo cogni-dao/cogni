@@ -379,33 +379,15 @@ for env in "${DEPLOY_ENVS[@]}"; do
   check_scheduler_vm_alias "$env" "$(cogni_vm_host_for_env "$env" "$FORK_ROOT" "$SUBSTRATE_SLUG")"
 done
 
-echo "[5/5] the Crossplane materializer's substrate host IS that same env VM alias"
-# story.5016 step 8. `spec.runtime.substrateHost` is the one value the Crossplane authority
-# cannot recover the way the bespoke controller did — that read `new URL(DATABASE_URL).hostname`
-# out of a SECRET VALUE. The composite action re-derives it from non-secret config with
-# vm_host_for_env(), the SAME primitive scripts/setup/bootstrap.sh used to publish the VM's
-# unproxied A record. This asserts the derivation lands on the host the cluster already dials,
-# because the failure it prevents is silent: a plausible-but-wrong hostname renders, syncs, and
-# buys a lease before anything notices the node has no Temporal.
-ACTION_YML=".github/actions/materialize-compute-workload/action.yml"
-grep -q -- '--substrate-host' "$ACTION_YML" \
-  || fail "$ACTION_YML stopped passing --substrate-host; a Crossplane-born node would get no Temporal/Redis/LiteLLM env"
-grep -q -- 'cogni_deployment_slug' "$ACTION_YML" \
-  || fail "$ACTION_YML derives operator substrate identity from the parent repo name instead of the provisioned deployment"
+echo "[5/5] the env VM alias is never the Cloudflare-proxied public apex"
+# The proxied apex drops 7233/6379/4000. A plausible-but-wrong host renders and
+# syncs before anything notices the worker has no Temporal/Redis/LiteLLM.
 for env in "${DEPLOY_ENVS[@]}"; do
-  file="infra/k8s/overlays/$env/scheduler-worker/kustomization.yaml"
-  [ -f "$file" ] || { echo "  skip - $env scheduler-worker overlay missing"; continue; }
   expected="$(cogni_vm_host_for_env "$env" "$FORK_ROOT" "$SUBSTRATE_SLUG")"
   apex="$(domain_for_env "$env" "$FORK_ROOT" || true)"
   [ "$expected" != "$apex" ] \
     || fail "$env substrate host resolved to the Cloudflare-proxied public apex '$apex', which drops 7233/6379/4000"
-  mapfile -t external_names < <(grep -oE 'externalName: [^ ]+' "$file" | awk '{print $2}' | sort -u)
-  [ "${#external_names[@]}" -gt 0 ] || fail "$file has no ExternalName entries"
-  for name in "${external_names[@]}"; do
-    [ "$name" = "$expected" ] \
-      || fail "cogni_vm_host_for_env($env) = $expected but $file dials $name — a Crossplane node would be wired to a different substrate than the cluster uses"
-  done
-  pass "$env materializer substrate host -> $expected"
+  pass "$env substrate host -> $expected (not the apex)"
 done
 
 echo "[6/6] scheduler repair paths select only the worker and no tenant substrate"

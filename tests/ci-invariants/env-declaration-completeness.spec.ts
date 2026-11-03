@@ -6,10 +6,10 @@
  * Purpose: Enforces NO_SILENT_DEFAULT (story.5040, ci-cd.md Axiom 23) — declaring an env for a node is an all-or-nothing act. A declared env whose placement cells or rendered artifacts are absent renders the deprecated k3s lane, or nothing at all, while every gate stays green.
  * Scope: Static structural read of infra/catalog + the artifacts it implies; does not shell out, build, render, or hit the network, and does not assert artifact CONTENT.
  * Invariants:
- *   PLACEMENT_IS_COMPLETE_PER_ENV: a placed node declares provider per env; akash adds compute_api + lease_generation.
+ *   PLACEMENT_IS_COMPLETE_PER_ENV: a placed node declares provider + `compute_api: node-deploy` per env (story.5137).
  *   NO_PLACEMENT_FOR_UNDECLARED_ENV: a placement cell may not name an env outside `envs:`.
  *   DECLARED_ENV_HAS_APPSET: each (node, env) has an AppSet under its reconciling cluster's dir, except a `compute_api: node-deploy` cell, which must have none (story.5137).
- *   DECLARED_ENV_HAS_OVERLAY: each (node, env) has a populated Kustomize overlay dir.
+ *   DECLARED_ENV_HAS_OVERLAY: each in-repo (node, env) has a populated Kustomize overlay dir; a `node-deploy` cell has none.
  * Side-effects: IO (reads infra/catalog, infra/k8s/argocd/appsets, infra/k8s/overlays)
  * Links: docs/spec/ci-cd.md Axiom 23, story.5040, task.5132, bug.5204
  * @public
@@ -34,7 +34,6 @@ interface CatalogEntry {
   envs?: string[];
   deployment_provider?: Record<string, string>;
   compute_api?: Record<string, string>;
-  lease_generation?: Record<string, number>;
 }
 
 function nodeRows(): CatalogEntry[] {
@@ -80,7 +79,7 @@ describe("env declaration completeness (NO_SILENT_DEFAULT, story.5040)", () => {
 
     it.each(
       isPlacedNode ? envs : []
-    )("PLACEMENT_IS_COMPLETE_PER_ENV: %s declares provider + (akash ⇒ compute_api + lease_generation)", (env) => {
+    )("PLACEMENT_IS_COMPLETE_PER_ENV: %s declares provider + compute_api node-deploy", (env) => {
       const provider = row.deployment_provider?.[env];
       expect(
         provider,
@@ -88,26 +87,15 @@ describe("env declaration completeness (NO_SILENT_DEFAULT, story.5040)", () => {
           `Absent placement is a HARD FAILURE, not a k3s fallback (ci-cd.md Axiom 23).`
       ).toBeTruthy();
 
-      if (provider !== "akash") return;
-
       expect(
         row.compute_api?.[env],
-        `${row.name}.${env} is akash but has no compute_api.${env}; it would fall to the ` +
-          `legacy controller (LEGACY_IS_DEFAULT, bug.5177).`
-      ).toBeTruthy();
-      expect(
-        row.lease_generation?.[env],
-        `${row.name}.${env} is akash but has no lease_generation.${env}; the actuator's ` +
-          `idempotence key would be ambiguous.`
-      ).toBeDefined();
+        `${row.name}.${env} has no compute_api.${env}: node-deploy. The deploy verb is the only ` +
+          `node lane writer (ONE_WRITER_PER_NODE_LANE, story.5137).`
+      ).toBe("node-deploy");
     });
 
     it("NO_PLACEMENT_FOR_UNDECLARED_ENV: no placement cell outside envs:", () => {
-      for (const block of [
-        "deployment_provider",
-        "compute_api",
-        "lease_generation",
-      ] as const) {
+      for (const block of ["deployment_provider", "compute_api"] as const) {
         for (const env of Object.keys(row[block] ?? {})) {
           expect(
             envs,
@@ -144,12 +132,16 @@ describe("env declaration completeness (NO_SILENT_DEFAULT, story.5040)", () => {
       const populated =
         existsSync(overlay) &&
         readdirSync(overlay).some((f) => f.endsWith(".yaml"));
+      // A `node-deploy` cell is rendered by the deploy verb, never by a Kustomize overlay.
+      const verbOwned = row.compute_api?.[env] === "node-deploy";
       expect(
         populated,
-        `${row.name} declares env '${env}' but ${path.relative(REPO_ROOT, overlay)} is missing ` +
-          `or empty. Run \`pnpm gen:node-overlays\`. Argo syncs nothing, no XR is created, and ` +
-          `the mint silently produces NOTHING while every check stays green.`
-      ).toBe(true);
+        verbOwned
+          ? `${row.name}.${env} is compute_api=node-deploy but ${path.relative(REPO_ROOT, overlay)} ` +
+              `exists. The verb is the lane's only writer (CD4); delete the overlay.`
+          : `${row.name} declares env '${env}' but ${path.relative(REPO_ROOT, overlay)} is missing ` +
+              `or empty. Argo syncs nothing while every check stays green.`
+      ).toBe(!verbOwned);
     });
   });
 });

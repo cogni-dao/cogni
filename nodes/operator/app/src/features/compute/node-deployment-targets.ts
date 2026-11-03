@@ -86,12 +86,10 @@ export function candidateDeploymentFingerprint(
     candidateBranch: catalogScalar(row.candidate_a_branch),
     deploymentProvider: candidateCatalogCell(row, "deployment_provider"),
     computeApi: candidateCatalogCell(row, "compute_api"),
-    leaseGeneration: candidateCatalogCell(row, "lease_generation"),
     requiredPlacementCountries: candidateCatalogCell(
       row,
       "required_placement_countries"
     ),
-    bootRecovery: candidateCatalogCell(row, "boot_recovery"),
   });
 }
 

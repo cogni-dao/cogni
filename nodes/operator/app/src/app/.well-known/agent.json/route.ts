@@ -120,13 +120,12 @@ export async function GET(request: Request) {
       // it is expired/invalid — unlike `users/me`, which is session-cookie-only
       // and 401s every agent key regardless of liveness. See `actions.agentMe`.
       agentIdentity: `${origin}/api/v1/agent/me`,
-      // CI/CD plane (see docs/spec/node-ci-cd-contract.md § Env-promotion).
-      // flight → candidate-a (node.flight/can_flight); promote → production
-      // (node.promote_production/can_promote_production). Both dispatch via the
-      // operator GitHub App — never a personal gh credential. Promotion is
-      // app-digest only; infraReconcile is the separate, operator-node-only
-      // production substrate lever. Grant the role via the access-request →
-      // owner-approve loop below.
+      // CI/CD plane. flight + promote are OPERATOR-ONLY (task.5411, CD4
+      // ONE_WRITER_PER_NODE_LANE): they deploy the operator control plane itself and
+      // refuse every other node with 409 `node_on_deploy_verb`. Every other node
+      // deploys through `deployWorkloads` below. infraReconcile is the separate,
+      // operator-node-only production substrate lever. Grant the role via the
+      // access-request → owner-approve loop below.
       flight: `${origin}/api/v1/vcs/flight`,
       promote: `${origin}/api/v1/deploy/promote`,
       // Node-deploy verb (task.5400): POST records intent to blue/green-deploy one declared
@@ -159,6 +158,8 @@ export async function GET(request: Request) {
       flightCandidate: {
         method: "POST",
         endpoint: `${origin}/api/v1/vcs/flight`,
+        // Operator node only; any other node → 409 node_on_deploy_verb, use deployWorkloads.
+        scope: "operator",
         auth: {
           type: "bearer",
           capability: "node.flight",

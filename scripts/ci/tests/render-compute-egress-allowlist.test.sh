@@ -331,9 +331,6 @@ for workflow in candidate-flight.yml promote-and-deploy.yml; do
     fail "$workflow retains a direct shared-firewall writer"
   fi
 done
-# Keep the existing required-grant preflight before the watched workload write.
-yq -r '.jobs.prepare-substrate-deploy-branch.needs[]' "$REPO_ROOT/.github/workflows/candidate-flight.yml" \
-  | grep -Fxq external-node-preflight || fail "candidate workload write lost its preflight dependency"
 yq -r '.jobs.promote-k8s.needs[]' "$REPO_ROOT/.github/workflows/promote-and-deploy.yml" \
   | grep -Fxq node-substrate || fail "promotion lost its substrate preflight dependency"
 # Explicit infra delivery still runs the existing complete-policy renderer and hardener.

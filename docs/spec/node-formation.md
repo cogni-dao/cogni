@@ -46,7 +46,7 @@ This is distinct from a **standalone fork** — a solo operator who wants their 
 | `Cogni-DAO/standalone-node` | Fork-whole quickstart — your own instance, your own substrate (`fork-quickstart.md`).                                                                                                                  |
 | `Cogni-DAO/node-template`   | Canonical node-at-root template repo — Publish creates a named fork, commits node identity on top, then submodule-pins it at `nodes/<slug>`. The operator repo does not carry a duplicate source tree. |
 
-`CATALOG_IS_SSOT` ([ci-cd.md](ci-cd.md) Axiom 16) is what makes Publish a single reviewable PR rather than a manual checklist: the catalog entry is the only declaration site, and overlays, per-node AppSets (Axiom 18), Caddy routing, scheduler endpoints, DNS (Axiom 21), and the build matrix all derive from it. The deploy-row contract lives in [create-node.md](../guides/create-node.md); secret values are excluded from the Publish PR and inherited via ESO.
+`CATALOG_IS_SSOT` ([ci-cd.md](ci-cd.md) Axiom 16) is what makes Publish a single reviewable PR rather than a manual checklist: the catalog entry is the only declaration site, and overlays, per-node AppSets (Axiom 18), Caddy routing, scheduler endpoints, DNS (Axiom 21), and the build matrix all derive from it. The node deploy contract lives in the hub: [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence). secret values are excluded from the Publish PR and inherited via ESO.
 
 ## Goal
 

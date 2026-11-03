@@ -47,7 +47,7 @@ const dbState = vi.hoisted(() => ({
   nodeQuery: undefined as { sql: string; params: unknown[] } | undefined,
   current: {
     id: "11111111-1111-4111-8111-111111111111",
-    slug: "creative",
+    slug: "operator",
     ownerUserId: "00000000-0000-4000-a000-000000000001",
   } as { id: string; slug: string; ownerUserId: string } | null,
 }));
@@ -213,7 +213,7 @@ function makePreparedNodeRef(
 ): PreparedNodeRefCandidateFlight {
   return {
     nodeId: NODE_ID,
-    slug: "creative",
+    slug: "operator",
     sourceSha: SOURCE_SHA,
     sourceRepo: "https://github.com/Cogni-DAO/creative.git",
     image: `ghcr.io/cogni-dao/creative:sha-${SOURCE_SHA}`,
@@ -249,7 +249,7 @@ describe("POST /api/v1/vcs/flight", () => {
     });
     dbState.current = {
       id: NODE_ID,
-      slug: "creative",
+      slug: "operator",
       ownerUserId: String(TEST_SESSION_USER_1.id),
     };
     billingState.current = { id: "billing-agent-1" };
@@ -267,6 +267,36 @@ describe("POST /api/v1/vcs/flight", () => {
     mockDeployPlane.dispatchNodeRefCandidateFlight.mockResolvedValue(
       makeDispatchResult()
     );
+  });
+
+  it("refuses a non-operator node with 409 node_on_deploy_verb before authz or dispatch (task.5411)", async () => {
+    dbState.current = {
+      id: NODE_ID,
+      slug: "poly",
+      ownerUserId: "00000000-0000-4000-a000-000000000001",
+    };
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+          }),
+        });
+        expect(res.status).toBe(409);
+        await expect(res.json()).resolves.toMatchObject({
+          error: "node_on_deploy_verb",
+          deployVerb: "POST /api/v1/deploy/workloads",
+        });
+        expect(authzState.check).not.toHaveBeenCalled();
+        expect(
+          mockDeployPlane.prepareNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+      },
+    });
   });
 
   it("returns 401 when unauthenticated", async () => {
@@ -311,7 +341,7 @@ describe("POST /api/v1/vcs/flight", () => {
         expect(res.status).toBe(202);
         const body = await res.json();
         expect(flightOperation.output.safeParse(body).success).toBe(true);
-        expect(body.nodeRef.slug).toBe("creative");
+        expect(body.nodeRef.slug).toBe("operator");
         expect(body.nodeRef.nodeId).toBe(NODE_ID);
         expect(dbState.nodeQuery?.params).toContain(nodeRef);
         if (nodeRef === "creative") {
@@ -324,7 +354,7 @@ describe("POST /api/v1/vcs/flight", () => {
           parentOwner: "cogni-test-org",
           parentRepo: "cogni-monorepo",
           nodeId: NODE_ID,
-          slug: "creative",
+          slug: "operator",
           sourceSha: SOURCE_SHA,
         });
         expect(
@@ -332,7 +362,7 @@ describe("POST /api/v1/vcs/flight", () => {
         ).toHaveBeenCalledWith({
           owner: "cogni-test-org",
           repo: "cogni-monorepo",
-          slug: "creative",
+          slug: "operator",
           sourceSha: SOURCE_SHA,
         });
         expectFlightRequestLog("info", {
@@ -340,7 +370,7 @@ describe("POST /api/v1/vcs/flight", () => {
           outcome: "success",
           status: 202,
           targetNodeId: NODE_ID,
-          slug: "creative",
+          slug: "operator",
           sourceSha8: SOURCE_SHA.slice(0, 8),
           dispatchStatus: "initiated",
         });
@@ -409,7 +439,7 @@ describe("POST /api/v1/vcs/flight", () => {
           mockDeployPlane.dispatchNodeRefCandidateFlight
         ).toHaveBeenCalledWith(
           expect.objectContaining({
-            slug: "creative",
+            slug: "operator",
             sourceSha: SOURCE_SHA,
             workflowRef: "maintainer/workflow",
             workflowSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
@@ -621,7 +651,7 @@ describe("POST /api/v1/vcs/flight", () => {
     authzState.decision = "authz_allowed";
     dbState.current = {
       id: NODE_ID,
-      slug: "creative",
+      slug: "operator",
       ownerUserId: String(TEST_SESSION_USER_1.id),
     };
     mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_2);
@@ -666,7 +696,7 @@ describe("POST /api/v1/vcs/flight", () => {
     authzState.decision = "authz_denied";
     dbState.current = {
       id: NODE_ID,
-      slug: "creative",
+      slug: "operator",
       ownerUserId: String(TEST_SESSION_USER_1.id),
     };
     mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_2);
@@ -696,7 +726,7 @@ describe("POST /api/v1/vcs/flight", () => {
           status: 403,
           errorCode: "authz_denied",
           targetNodeId: NODE_ID,
-          slug: "creative",
+          slug: "operator",
         });
       },
     });
@@ -759,7 +789,7 @@ describe("POST /api/v1/vcs/flight", () => {
           status: 422,
           errorCode: "source_missing",
           targetNodeId: NODE_ID,
-          slug: "creative",
+          slug: "operator",
           sourceSha8: SOURCE_SHA.slice(0, 8),
         });
       },
@@ -791,7 +821,7 @@ describe("POST /api/v1/vcs/flight", () => {
           status: 503,
           errorCode: "node_parent_config_missing",
           targetNodeId: NODE_ID,
-          slug: "creative",
+          slug: "operator",
           sourceSha8: SOURCE_SHA.slice(0, 8),
         });
       },
@@ -863,7 +893,7 @@ describe("POST /api/v1/vcs/flight", () => {
         ).toHaveBeenCalledWith({
           owner: "cogni-test-org",
           repo: "cogni-monorepo",
-          slug: "creative",
+          slug: "operator",
           sourceSha: SOURCE_SHA,
         });
         expectFlightRequestLog("info", {
@@ -871,7 +901,7 @@ describe("POST /api/v1/vcs/flight", () => {
           outcome: "success",
           status: 202,
           targetNodeId: NODE_ID,
-          slug: "creative",
+          slug: "operator",
           dispatchStatus: "initiated",
         });
       },

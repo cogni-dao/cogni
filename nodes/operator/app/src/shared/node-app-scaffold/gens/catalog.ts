@@ -14,11 +14,9 @@
  *   the committed shape.
  * Side-effects: none — pure string transform, no IO, no env.
  * Links: infra/catalog/node-template.yaml, infra/catalog/_schema.json, scripts/setup/scaffold-node.sh,
- *   task.5092, story.5025, task.5097, task.5104
+ *   task.5092, story.5025, story.5137, task.5411
  * @public
  */
-
-import { canBirthOnCrossplane } from "@/shared/node-registry/crossplane-control-plane";
 
 import { NODE_FORMATION_ACTIVITY_ENV, NODE_FORMATION_ENVS } from "./envs";
 
@@ -122,29 +120,12 @@ export function renderCatalog(
         ({ cidr, comment }) => `  - cidr: ${cidr}\n    comment: ${comment}\n`
       ).join("")}`
     : "";
-  // AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104) + INSTALLED_IS_NOT_FUNDED (task.5097) —
-  // placement and compute authority are DIFFERENT AXES, so they are filtered differently. Every
-  // birth env is genuinely `akash` above; an env may name `crossplane` here only if it BOTH
-  // carries a Crossplane control plane AND has exactly one actuator writer that mints for THIS
-  // node's owner (`canBirthOnCrossplane`). Either fact alone is not enough: no control plane
-  // means the promote renders an XComputeWorkload into a cluster with no such CRD, and no
-  // writer means the actuator refuses every paid transaction with
-  // `actuator_account_id_missing`. Both produce a node that never comes up.
-  //
-  // The owner is load-bearing, not decoration (bug.5202). Under `akash-actuator-wallet-cutover`
-  // NS3 every REAL node bills the production account in EVERY environment, while NS4 reserves
-  // the test account for the operator's own self-test on `cogni-test-org`. Both claim the env
-  // name `candidate-a`, so authority cannot be decided from the env alone.
-  const ownerOrg = input.sourceRepo
-    ? githubOwnerFromSourceRepo(input.sourceRepo)
+  // ONE_WRITER_PER_NODE_LANE (story.5137 CD4, task.5411) — every birth env is handed to the
+  // node-deploy verb (POST /api/v1/deploy/workloads): it is that lane's only writer. Nothing
+  // renders an AppSet, overlay or XComputeWorkload for a born node.
+  const computeApiBlock = offCluster
+    ? `compute_api:\n${envs.map((env) => `  ${env}: node-deploy\n`).join("")}`
     : "";
-  const crossplaneEnvs = envs.filter((env) =>
-    canBirthOnCrossplane(env, ownerOrg)
-  );
-  const computeApiBlock =
-    offCluster && crossplaneEnvs.length > 0
-      ? `compute_api:\n${crossplaneEnvs.map((env) => `  ${env}: crossplane\n`).join("")}`
-      : "";
   const sourceShaLine = input.sourceSha
     ? `source_sha: ${input.sourceSha}\n`
     : "";
@@ -170,12 +151,8 @@ production_branch: deploy/production-${slug}
 envs: [${envs.join(", ")}]
 # story.5025 — BORN_ON_AKASH. Placement is stated at birth, never inherited from the k3s
 # fallback that exists for rows minted before decentralized compute did.
-${placementBlock}# task.5097 — WHICH authority reconciles the workload. Crossplane
-# (infra/crossplane/xcomputeworkload) owns every generic concern; the only Cogni-specific
-# piece left is the private Akash transaction actuator. A born node never touches the
-# bespoke controller in any environment that can BOTH reconcile the composite (an installed
-# control plane) and pay for its lease (a pinned actuator wallet); an environment missing
-# either is omitted and stays on the pre-existing legacy default (task.5104, task.5097).
+${placementBlock}# story.5137 — ONE_WRITER_PER_NODE_LANE. Every env is deployed only by the node-deploy
+# verb (POST /api/v1/deploy/workloads) from this node's .cogni/workloads/*.yaml manifests.
 ${computeApiBlock}# story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
 # sub-production authority would have to be moved by every later promote, and generation 1

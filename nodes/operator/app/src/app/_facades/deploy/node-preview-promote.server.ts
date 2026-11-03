@@ -32,8 +32,8 @@
  *     a redelivered push for a sha already desired is logged `duplicate`. State workloads are never
  *     touched (create-once). Before recording it applies the verb route's lane decision
  *     (`laneRefusal`: served env, fleet ownership, control env) and requires the pushed repo to be the
- *     catalog's source repo; otherwise it logs `skipped_<reason>` and records nothing. A cell still `crossplane` keeps the legacy dispatch unchanged
- *     (deleted later by task.5411).
+ *     catalog's source repo; otherwise it logs `skipped_<reason>` and records nothing. A node with no `node-deploy` preview
+ *     cell is logged `skipped_no_preview_env`; the legacy workflow dispatch was deleted (task.5411).
  *   - V0_NO_RBAC: a node cleared auth to reach candidate-a; preview-on-merge rides that grant.
  *     A `node.promote` gate is vNext if a node can earn preview without candidate-a.
  * Side-effects: IO (DB read, GitHub REST/GraphQL via DeployPlanePort). The caller awaits the
@@ -53,7 +53,6 @@ import {
   createDeclarationReader,
   createNodeSourceResolver,
 } from "@/bootstrap/capabilities/node-source-resolver";
-import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { resolveServiceDb } from "@/bootstrap/container";
 import { isNodeOnDeployVerb } from "@/features/compute/node-compute-api";
 import { readWorkloadDeclarations } from "@/features/node-deploy/read-declarations";
@@ -157,8 +156,7 @@ async function promoteNodeToPreview(
       return;
     }
 
-    // ONE_WRITER_PER_NODE_LANE: a node whose preview cell is `node-deploy` records a release; the
-    // legacy dispatch below would be refused for it (and must never race the sequencer).
+    // ONE_WRITER_PER_NODE_LANE: a node whose preview cell is `node-deploy` records a release.
     const catalogRow = (await createNodeCatalog().entryFor(node.id))?.row;
     if (
       catalogRow !== undefined &&
@@ -174,68 +172,10 @@ async function promoteNodeToPreview(
       return;
     }
 
-    // A registered node's default-branch advance owes an observable dispatch. Configuration
-    // absence is a failed write, not a successful no-op: throw so the webhook route returns 500
-    // and the terminal failure event below carries the exact repo/SHA correlation fields.
-    if (!env.GH_REVIEW_APP_ID || !env.GH_REVIEW_APP_PRIVATE_KEY_BASE64) {
-      throw new Error(
-        "node preview promote is not configured: GitHub App credentials missing"
-      );
-    }
-    if (!env.NODE_SUBMODULE_PARENT_OWNER || !env.NODE_SUBMODULE_PARENT_REPO) {
-      throw new Error(
-        "node preview promote is not configured: node submodule parent missing"
-      );
-    }
-
-    // DISPATCH THE ENV THE CATALOG DECLARES, never a hardcoded one (bug.5203). This facade
-    // was written when spawned nodes had a preview slot; #2238 retired every one of them, so
-    // each fleet row is now envs:[production] and the dispatch resolved ZERO targets — the run
-    // skipped to a green conclusion having deployed nothing. Proven twice on 2026-09-17
-    // (beacon run 35175805389, toks5 run 35176388003): a node owner merged a fix, saw green,
-    // and nothing shipped.
-    //
-    // `deploy_envs` is the catalog projection (CATALOG_ENVS_ARE_PROJECTED), so it is the same
-    // selector the promote workflow filters on — asking it here is what keeps the two from
-    // disagreeing.
-    //
-    // A node with NO preview env gets NO dispatch, and deliberately does NOT fall through to
-    // production: auto-promoting every node merge to production would ship unreviewed code
-    // past the human gate that makes production a manual dispatch. Silence here is correct;
-    // the SILENT part is what was wrong, so it is logged as its own terminal outcome.
-    const deployEnvs = node.deployEnvs ?? [];
-    if (!deployEnvs.includes("preview")) {
-      log.info(
-        {
-          event: EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE,
-          nodeId: node.id,
-          slug: node.slug,
-          repo: `${ctx.owner}/${ctx.repo}`,
-          sourceSha: ctx.sourceSha,
-          sourceSha8: ctx.sourceSha.slice(0, 8),
-          trigger: ctx.trigger,
-          status: "skipped_no_preview_env",
-          deployEnvs,
-        },
-        "node preview promote skipped — node does not deploy to preview"
-      );
-      return;
-    }
-
-    const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER;
-    const parentRepo = env.NODE_SUBMODULE_PARENT_REPO;
-
-    const result = await createOperatorDeployPlane(env).promoteNode({
-      env: "preview",
-      parentOwner,
-      parentRepo,
-      slug: node.slug,
-      sourceSha: ctx.sourceSha,
-    });
-
-    // Operator-local event (not in @cogni/node-shared's EventName) → log via the plain
-    // logger, the same pattern as NODE_ACCESS_REQUEST_COMPLETE. The native run identity is the
-    // receipt that lets operators follow the exact write this webhook acknowledged.
+    // task.5411 (CD9): the legacy promote-and-deploy dispatch is deleted. Every node's preview
+    // lane is either a `node-deploy` cell (recorded above) or absent from the catalog, so a node
+    // without one does not deploy to preview. Never fall through to production: production stays
+    // a manual, human-gated release.
     log.info(
       {
         event: EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE,
@@ -245,13 +185,10 @@ async function promoteNodeToPreview(
         sourceSha: ctx.sourceSha,
         sourceSha8: ctx.sourceSha.slice(0, 8),
         trigger: ctx.trigger,
-        status: result.status,
-        workflowUrl: result.workflowUrl,
-        runId: result.runId,
-        runUrl: result.runUrl,
-        runApiUrl: result.runApiUrl,
+        status: "skipped_no_preview_env",
+        deployEnvs: node.deployEnvs ?? [],
       },
-      EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE
+      "node preview promote skipped — node does not deploy to preview"
     );
   } catch (error) {
     log.error(

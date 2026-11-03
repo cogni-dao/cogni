@@ -36,6 +36,7 @@ import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { refuseNodeOnFlightPromoteLane } from "@/features/compute/node-compute-api";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import type { DeployPlanePort, PreparedNodeRefCandidateFlight } from "@/ports";
 import { nodes } from "@/shared/db/nodes";
@@ -261,6 +262,26 @@ export const POST = wrapRouteHandlerWithLogging(
           sourceSha8: nodeRef.sourceSha.slice(0, 8),
         });
         return NextResponse.json({ error: "not found" }, { status: 404 });
+      }
+
+      // ONE_WRITER_PER_NODE_LANE (CD4, task.5411): only the operator still flights here; every
+      // other node is deployed by POST /api/v1/deploy/workloads. Refuse before any authz or dispatch.
+      const refusal = refuseNodeOnFlightPromoteLane({
+        slug: node.slug,
+        lane: "flight",
+        environment: "candidate-a",
+      });
+      if (refusal) {
+        logTerminal({
+          mode,
+          outcome: "error",
+          status: 409,
+          errorCode: refusal.errorCode,
+          targetNodeId: node.id,
+          slug: node.slug,
+          sourceSha8: nodeRef.sourceSha.slice(0, 8),
+        });
+        return NextResponse.json(refusal, { status: 409 });
       }
 
       const authz = await authorizeNodeFlight({ sessionUser, node });

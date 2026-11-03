@@ -7,11 +7,6 @@ import {
   renderCatalog,
   WIZARD_AKASH_COMPUTE_EGRESS_CIDRS,
 } from "@/shared/node-app-scaffold/gens/catalog";
-import {
-  CROSSPLANE_ACTUATOR_WALLET_ENVS,
-  CROSSPLANE_CONTROL_PLANE_ENVS,
-  canBirthOnCrossplane,
-} from "@/shared/node-registry/crossplane-control-plane";
 
 describe("renderCatalog", () => {
   const ownerWallet = "0x070075F1389Ae1182aBac722B36CA12285d0c949";
@@ -68,7 +63,7 @@ describe("renderCatalog", () => {
    * PRODUCTION_GOVERNS_SPAWN (Derek, story.5016): a birth's canonical slot is production on the
    * Crossplane rail from generation 1 — never "candidate-a first, then a faked catalog cutover".
    */
-  it("mints a wizard birth on Akash, crossplane only where a wallet is pinned", () => {
+  it("mints a wizard birth on Akash, every env handed to the node-deploy verb (task.5411)", () => {
     const out = renderCatalog("ay", 3200, 30400, {
       ownerWallet,
       sourceRepo: "https://github.com/cogni-test-org/ay.git",
@@ -84,17 +79,11 @@ describe("renderCatalog", () => {
       production: "akash",
     });
     expect(row.compute_api).toEqual({
-      "candidate-a": "crossplane",
-      production: "crossplane",
+      "candidate-a": "node-deploy",
+      production: "node-deploy",
     });
     expect(row.compute_egress_cidrs).toEqual(WIZARD_AKASH_COMPUTE_EGRESS_CIDRS);
-    // Both facts hold for production: installed control plane AND pinned dedicated wallet.
-    expect(CROSSPLANE_CONTROL_PLANE_ENVS).toContain("production");
-    expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).toContain("production");
-    // Preview installs the composite API (dormant control plane) but pins NO wallet, so it can
-    // never buy a lease — a single active writer per test wallet (story.5016).
-    expect(CROSSPLANE_CONTROL_PLANE_ENVS).toContain("preview");
-    expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).not.toContain("preview");
+    expect(row).not.toHaveProperty("lease_generation");
   });
 
   /**
@@ -106,7 +95,7 @@ describe("renderCatalog", () => {
    * an env outside `envs` would still be an authority pointed at a workload that does not exist,
    * so the subset relation is asserted in both directions.
    */
-  it("declares placement for every birth env and authority only where it is payable", () => {
+  it("declares placement and the node-deploy cell for exactly the birth envs", () => {
     const row = parse(
       renderCatalog("ay", 3200, 30400, {
         ownerWallet,
@@ -121,11 +110,7 @@ describe("renderCatalog", () => {
 
     const authorityEnvs = Object.keys(row.compute_api ?? {}).sort();
     expect(authorityEnvs.length).toBeGreaterThan(0);
-    // `filter` passes (value, index, array) — canBirthOnCrossplane now takes the OWNER as
-    // its second arg, so the bare reference fed it an index (bug.5202).
-    expect(authorityEnvs).toEqual(
-      birthEnvs.filter((env) => canBirthOnCrossplane(env, "cogni-dao"))
-    );
+    expect(authorityEnvs).toEqual(birthEnvs);
     for (const env of authorityEnvs) {
       expect(birthEnvs).toContain(env);
     }

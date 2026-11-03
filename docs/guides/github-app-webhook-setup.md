@@ -72,7 +72,7 @@ open parent pin PRs, and dispatch candidate-flight.
 
 | Permission     | Access       | Why                                                                                              |
 | -------------- | ------------ | ------------------------------------------------------------------------------------------------ |
-| Actions        | Read & write | Dispatches `candidate-flight.yml` with `workflow_dispatch`.                                      |
+| Actions        | Read & write | Dispatches `candidate-flight.yml` (operator only) with `workflow_dispatch`.                      |
 | Administration | Read & write | Creates named forks from `node-template` and changes repo settings needed by node formation.     |
 | Checks         | Read & write | Writes review/check status where the operator acts as the App.                                   |
 | Contents       | Read & write | Writes `.cogni/repo-spec.yaml`, `.github/workflows/*`, `.gitmodules`, catalog, and pin branches. |
@@ -88,7 +88,7 @@ policy/visibility management can move into the operator instead of human console
 flight dispatch does not rely on GitHub Packages metadata; private GHCR package metadata can be
 unreadable to the App even when the node's own publish workflow succeeded.
 
-Parent candidate-flight and k3s pulls are separate cross-repo read paths. They require one of:
+Parent operator candidate flight and k3s pulls are separate cross-repo read paths. They require one of:
 
 - public child packages;
 - package-level Actions access granted to the parent repo;
@@ -127,7 +127,7 @@ labels: |
 ```
 
 The operator API does not reject node-ref images based on GitHub Packages metadata reads. The hard
-image gate is the parent `candidate-flight.yml` digest resolution step, which runs
+image gate is the parent `candidate-flight.yml` (operator only) digest resolution step, which runs
 `scripts/ci/resolve-node-ref-image.sh` against `image_repository:sha-<sourceSha>`. Package
 visibility is not an API preflight gate; parent workflow and deploy-time image-pull credentials are
 separate substrate concerns.
@@ -277,7 +277,7 @@ Fail conditions:
 - `repository_selection` is not `"all"` for `cogni-operator-test` → newly spawned repos may be
   invisible to the App.
 - `permissions.workflows` is not `"write"` → node formation cannot write `.github/workflows/*`.
-- `permissions.actions` is not `"write"` → the App cannot dispatch `candidate-flight.yml`.
+- `permissions.actions` is not `"write"` → the App cannot dispatch `candidate-flight.yml` (operator only).
 
 ### Verify GHCR package state
 

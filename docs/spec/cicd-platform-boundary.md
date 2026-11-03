@@ -79,9 +79,9 @@ GitHub Actions is **not** assumed to be the long-term OSS CI answer for the cont
 
 ### Generators (catalog → committed desired state)
 
-| Surface                                                                                                    | Owns                                                                                                                                                 | Class                                                                       |
-| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `render-node-appset.sh`, `render-node-overlays.sh`, `render-caddyfile.sh`, `node-applicationset.yaml.tmpl` | Render Argo AppSets / Kustomize overlays / Caddyfile from catalog. Drift-gated, byte-exact twin of the operator's TS scaffolder (`gens/overlay.ts`). | 🟡 FREEZE EXPANSION (three code paths → drift risk; converge, don't extend) |
+| Surface                                                                         | Owns                                                                                                                             | Class                                                                       |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `render-node-appset.sh`, `render-caddyfile.sh`, `node-applicationset.yaml.tmpl` | Render the operator/scheduler-worker Argo AppSets and the Caddyfile from catalog. Drift-gated. Node apps have none (story.5137). | 🟡 FREEZE EXPANSION (three code paths → drift risk; converge, don't extend) |
 
 ### Deploy brain (frozen — runs in prod, wrong home)
 
@@ -128,10 +128,10 @@ Heuristic: _if the request needs a new `if`, a new env var threaded through SSH,
 
 | Request                                                                                 | Build it in                                                                                                                                                                                                                      | Not in                                                                                                                                                                                                                                                                         |
 | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| New Node app deployment                                                                 | `infra/catalog/<node>.yaml` row → generators render AppSet + overlay → existing flight                                                                                                                                           | a new workflow or `deploy-infra` branch                                                                                                                                                                                                                                        |
+| New Node app deployment                                                                 | `.cogni/workloads/<name>.yaml` in the node repo + catalog cell `compute_api.<env>: node-deploy` → `POST /api/v1/deploy/workloads`                                                                                                | a new workflow or `deploy-infra` branch                                                                                                                                                                                                                                        |
 | Preview environment                                                                     | Kustomize overlay + Argo Application (already per-`(env,node)`)                                                                                                                                                                  | new YAML                                                                                                                                                                                                                                                                       |
-| Prod promotion                                                                          | Digest carry-forward through `promote-and-deploy.yml` (frozen) — same digest proven on candidate→preview                                                                                                                         | a rebuild or a new promote path                                                                                                                                                                                                                                                |
-| Rollback                                                                                | `git revert` on the `deploy/<env>-<node>` branch; Argo reconciles                                                                                                                                                                | an SSH/`kubectl` rollback script                                                                                                                                                                                                                                               |
+| Prod promotion                                                                          | Node: `POST /api/v1/deploy/workloads` with `env=production`. Operator only: digest carry-forward through `promote-and-deploy.yml` (frozen) — same digest proven on candidate→preview                                             | a rebuild or a new promote path                                                                                                                                                                                                                                                |
+| Rollback                                                                                | Node: `POST /api/v1/deploy/workloads` with the earlier `sourceSha`. Operator only: `git revert` on the operator deploy branch; Argo reconciles                                                                                   | an SSH/`kubectl` rollback script                                                                                                                                                                                                                                               |
 | Domain routing                                                                          | catalog `node_port` + `render-caddyfile.sh` (catalog-driven). Forward: Ingress + cert-manager                                                                                                                                    | hand-edited Caddyfile or `deploy-infra` edge logic                                                                                                                                                                                                                             |
 | Env / secret wiring                                                                     | `infra/secrets-catalog.yaml` declaration → ESO `ExternalSecret` → Reloader                                                                                                                                                       | a new secret threaded through `deploy-infra.sh` `.env`                                                                                                                                                                                                                         |
 | Image tagging                                                                           | `scripts/ci/lib/image-tags.sh` (one-file edit)                                                                                                                                                                                   | hardcoded target lists in workflows                                                                                                                                                                                                                                            |
@@ -156,18 +156,16 @@ Routing target definitions (the consultant's seven homes, mapped to this repo):
 
 ## Minimal platform contract for a Node app deployment
 
-The golden path already exists; this names it so future work targets it instead of inventing a parallel one. A node is deployable when, and only when:
+A node is deployable when, and only when:
 
 ```
-infra/catalog/<node>.yaml           # declares: type:node, node_port, source_repo, image_repository, deploy branches, envs
-  → render-node-appset.sh           # → infra/k8s/argocd/<env>-<node>-applicationset.yaml   (drift-gated)
-  → render-node-overlays.sh         # → infra/k8s/overlays/<env>/<node>/kustomization.yaml  (drift-gated)
-  → secrets-catalog.yaml            # → OpenBao paths + ESO ExternalSecret leaf
-  → deploy/<env>-<node> branch      # digest written by promote-k8s-image.sh; Argo reconciles
-  → /version.buildSha == sourceSha  # the contract proof (Axiom 19)
+.cogni/workloads/<name>.yaml        # node repo: the workload declaration (host, port, probes; no secrets)
+  → CI publishes sha-<sha>          # node repo: immutable image
+  → POST /api/v1/deploy/workloads   # {nodeId, env, workload, sourceSha}; only env differs
+  → /version.buildSha == sourceSha  # the contract proof
 ```
 
-The node owns the left edge (catalog row + schema + secret declaration). The operator owns the rendering + reconciliation. **No step requires editing `deploy-infra.sh` or adding a workflow.** When a future request can't be satisfied without touching those, that gap is the platform's next real unit of work — name it, don't paper over it in bash.
+The node owns the declaration and the secret requirement names. The operator owns the catalog cell (`compute_api.<env>: node-deploy`), placement, secrets from OpenBao, DNS, the edge move and recovery. **No step requires editing `deploy-infra.sh` or adding a workflow.** The operator itself is the exception: it ships through `vcs/flight` and `deploy/promote` on k3s and Argo. See [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence). When a future request cannot be satisfied without touching the frozen brain, that gap is the platform's next real unit of work.
 
 ## The next layer: a typed operator control plane
 
@@ -285,18 +283,11 @@ The provider seam is a **1:1 adapter swap** in the operator bootstrap — `Cherr
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | **v0**                                   | read-only `DeployCapability` over live Argo state + a dashboard view; AI tools `deploy_get_state` / `deploy_observe` next to the `vcs_*` tools; **`ComputeResourcePort` read half** (`balances()` + `CherryComputeAdapter` + on-demand RBAC read `GET /api/v1/compute/balances`, story.5011) | the registry table, control verbs, `ComputeResourcePort` **write** verbs |
 | **P1**                                   | `OperatorDeployPlanePort` write verbs (`dispatchNodeRefCandidateFlight` ✅ · `dispatchNodePromote` ✅ · later rollback/scale); `compute_resources` registry table (mirrors `mcp_deployments`) as the dashboard read-cache                                                                    | multi-provider                                                           |
-| **P2 — ADAPTER SHIPPED / ROUTE RETIRED** | `ComputeResourcePort` write half + `AkashComputeAdapter` exist, but imperative `POST /api/v1/compute/deployments` is tombstoned. A deploy-branch `ComputeWorkload` is the sole desired-state seam; the dedicated controller owns lifecycle/status/finalization.                              | story.5016 integration renderer + pre-merge candidate E2E proof          |
+| **P2 — ADAPTER SHIPPED / ROUTE RETIRED** | `ComputeResourcePort` write half + `AkashComputeAdapter` exist, and the imperative `POST /api/v1/compute/deployments` route is deleted (story.5137). The node-deploy sequencer (`POST /api/v1/deploy/workloads`) is the sole node desired-state seam.                                        | story.5016 integration renderer + pre-merge candidate E2E proof          |
 
-### P3 — Crossplane owns reconciliation; Cogni owns the transaction (task.5095)
+### P3 — the node-deploy sequencer owns reconciliation; the Akash transaction actuator is the only payer (task.5095, story.5137)
 
-The legacy ComputeWorkload controller has been **RETIRED** (story.5016 — deleted from the tree; no
-environment deploys it; its Console key is revoked). Its responsibilities are now split along one
-line: _generic lifecycle machinery is bought, the Akash transaction is built._
-
-| Concern                                                                                                              | Owner                                                                             | Why                                                                                                                                                                               |
-| -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Watches, retries, backoff, status/conditions, finalizers, composition, deletion policy                               | **Crossplane** (provider-http + functions, installed dormant in task.5094)        | Battle-tested OSS reconciliation; nothing Cogni-specific lives here.                                                                                                              |
-| Akash Console transaction mapping, SDL construction, provider screening, wallet custody, durable allocation receipts | **Cogni's private Akash transaction actuator** (`src/features/compute/akash-tx/`) | An Akash transaction can succeed while its response is lost; only a Cogni-owned pre-transaction receipt makes the resulting paid lease recoverable. No OSS controller knows this. |
+Node reconciliation (create, prove, edge move, retire, recover) is owned by the operator's node-deploy sequencer, reached by `POST /api/v1/deploy/workloads`. See [node-service-delivery](https://cognidao.org/knowledge/node-service-delivery). Generic lifecycle machinery is bought or kept out of the repo. The Akash transaction is built: it is Cogni's private Akash transaction actuator (`src/features/compute/akash-tx/`). The sections below describe that actuator (operator only).
 
 The actuator is a **service, not a controller**: a private ClusterIP HTTP surface with four typed logical
 operations (`observe` / `create` / `update` / `delete`), each one bounded attempt, and no watch, timer,
@@ -313,8 +304,7 @@ finalizer, retry loop, or leader election. Its irreducible behaviours are:
    fresh create, and no timer ever releases an unresolved slot.
 5. **Migration as a release step, NEVER a payment precondition** (task.5135, superseding bug.5140) — bug.5116
    wanted a freshly born node to have its schemas, and bug.5140 implemented that want as a precondition of
-   every paid transaction. That was the wrong seam. Node `toks5` proved it in production: a valid XR in
-   `cogni-production` with a valid image digest whose migration never ran, so the actuator was NEVER CALLED,
+   every paid transaction. That was the wrong seam. Node `toks5` proved it in production: a valid release with a valid image digest whose migration never ran, so the actuator was NEVER CALLED,
    `akash-lease` reported "not yet ready" **1044 times**, and the node never existed in any environment —
    silent, unbounded, and with no alarm, while the same actuator minted happily for five other nodes.
 
@@ -331,10 +321,7 @@ finalizer, retry loop, or leader election. Its irreducible behaviours are:
    _What bounds a bad schema now:_ the workload gets its lease, cannot serve its exact SHA, and trips
    `bootPolicy.bootDeadlineSeconds` (`BOOT_SLO_OR_CLOSE`). Loud and bounded, instead of never created.
 
-   _Why still in the actuator process and not a composed resource:_ a Composition cannot compose the
-   migration Job. The installed package set is provider-http + go-templating + auto-ready, and
-   `provider-kubernetes` v0.18.0 still ships no namespaced `.m.crossplane.io` types. Co-hosting it behind an
-   unpaid seam is the decoupling; relocating the process is the follow-up.
+   _Why still in the actuator process:_ co-hosting the migration behind an unpaid seam is the decoupling.
 
 6. **Node-bound spend receipts** — the same receipt that survives a lost response also says WHO consumed
    the infrastructure (task.5103). `node_id`, `environment`, the composite `uid`/`generation` and the
@@ -368,11 +355,8 @@ because the single-writer index is per-database, two writers sharing one account
 serialized, so preview deliberately stays unfunded rather than becoming a second writer on the
 candidate-a test account. Note the axis: the invariant is `account -> at most one writer`, and
 `writer -> envs` is deliberately one-to-many, because a lease is minted off-cluster and one writer
-may legitimately mint for several environments. The reviewed map is `CROSSPLANE_ACTUATOR_WRITERS`
-in `@shared/node-registry/crossplane-control-plane`, asserted against git (account injectivity, one
-Console-key `remoteRef` per account, one writer per crossplane-selected environment) by
-`tests/ci-invariants/crossplane-dormant-substrate.spec.ts`. Every writing environment structurally disables its legacy ComputeWorkload
-controller before enabling its actuator, stores the credential only under that environment's
+may legitimately mint for several environments. The reviewed writer map is asserted against git (account injectivity, one
+Console-key `remoteRef` per account, one writer per environment). Every writing environment stores the credential only under that environment's
 dedicated actuator OpenBao path, and forbids Console/manual writes. A manual or second writer on a
 wallet invalidates cursor recovery. Distinct funded accounts per funded environment remain later
 hardening, not an activation prerequisite; this deliberate v0 trade removes account setup from the
@@ -409,7 +393,7 @@ ExternalSecret, `envFrom`, or volume naming the actuator's path or Secret. Only 
 projected from the operator bucket, because the receipts table lives in the operator's own Postgres.
 `AKASH_TX_ACTUATOR_TOKEN` is `source: agent` with an existing `generate: {kind: hex, bytes: 32}` —
 minted idempotently by `scripts/ci/secret-materialize.sh`, **never hand-typed** (the killer rule).
-Git, workflows, Crossplane resources, and VM `.env` files carry the **name** only — never the value.
+Git, workflows, and VM `.env` files carry the **name** only — never the value.
 The receipts table itself (`akash_tx_allocations`) is operator-local schema
 (`@shared/db/akash-tx-allocations`), deliberately not in `@cogni/db-schema` and never in Doltgres: it
 is system-of-record evidence that money may have been spent.
@@ -430,12 +414,10 @@ The remaining tooth — a **machine-checked growth ratchet** — is the smallest
 - **No `deploy-infra.sh` rewrite / decomposition.** It works in prod. Freeze it; migrate responsibilities out one at a time only when an independent reason (the k8s/Compose-tier move, Axiom 22 convergence) pulls them — never as a standalone refactor.
 - **No general-purpose Kubernetes CRDs or controllers.** The one named exception is
   `compute.cogni.io/ComputeWorkload` (Kubernetes cannot natively observe or finalize a
-  provider-hosted workload). Git/Argo owns desired `spec`; reconciliation is now **Crossplane**
-  (the `XComputeWorkload` composite) calling the private **`akash-tx-actuator`** for the bounded
-  observe/create/update/delete transaction, finalization, and provenance in `status` — the
-  bespoke leader-elected `compute-workload-controller` process (task.5064) that once owned this
-  was RETIRED, story.5016. It is not a Crossplane-like framework and may not grow provider
-  vocabulary, workflow logic, or a second desired-state registry.
+  provider-hosted workload). A node's desired state is its workload manifest. The node-deploy
+  sequencer reconciles it and calls the private **`akash-tx-actuator`** for the bounded
+  observe/create/update/delete transaction. The actuator may not grow provider vocabulary,
+  workflow logic, or a second desired-state registry.
 - **No remote Tofu backend / Cloudflare-as-Tofu-resource migration** as speculative cleanup. Real gaps (ephemeral Tofu state, imperative DNS) are logged; fix them when a provisioning incident demands it, not preemptively.
 - **No new flags/options for theoretical flexibility.** `--k8s-secrets-only` is already legacy (ESO supersedes it). Don't add siblings.
 - **No second CI system** to "replace GitHub Actions." Keeping deploy-brain out of CI (above) is what makes that swap cheap later; doing the swap now is not the constraint.

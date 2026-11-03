@@ -12,7 +12,7 @@
  *   the PR + HEAD commit and hands the facts here; the route never sees GitHub.
  * Invariants:
  *   - BRANCH_FAMILY_RESERVED: head branch MUST match `cogni-operator/node-env-<slug>-<env>`
- *     (byte-identical to `lane-onboard.server` VERB_BRANCH / `github-repo-write` nodeEnvBranch),
+ *     (byte-identical to `github-repo-write` nodeEnvBranch),
  *     and the branch slug MUST equal the `Cogni-Node` trailer (no branch/trailer mismatch).
  *   - SIGNED_TYPE_CLAIMED: the HEAD commit MUST carry the trailers
  *     `Cogni-Change-Type: cogni.env-manager.v1` and a single valid `Cogni-Node: <slug>`
@@ -34,7 +34,6 @@
  *     the caller then keeps the ordinary `node.flight` gate.
  * Side-effects: none (pure)
  * Links: nodes/operator/app/src/app/api/v1/vcs/merge/route.ts,
- *   nodes/operator/app/src/app/_facades/deploy/lane-onboard.server.ts,
  *   nodes/operator/app/src/adapters/server/vcs/github-repo-write.ts (envManagerCommitMessage),
  *   scripts/ci/classify-env-manager-fast-path.sh
  * @public
@@ -44,7 +43,7 @@
 export const ENV_MANAGER_CHANGE_TYPE = "cogni.env-manager.v1";
 
 /**
- * The verb's branch family — byte-identical to `lane-onboard.server` VERB_BRANCH and
+ * The verb's branch family — byte-identical to
  * `github-repo-write` `nodeEnvBranch`. Group 1 is the node slug, group 2 the env.
  */
 export const ENV_MANAGER_VERB_BRANCH =

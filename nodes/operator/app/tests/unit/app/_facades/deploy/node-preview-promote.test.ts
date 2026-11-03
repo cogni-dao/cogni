@@ -120,52 +120,6 @@ beforeEach(() => {
 });
 
 describe("dispatchNodePreviewPromote", () => {
-  it("promotes the exact SHA from a default-branch push (merge-queue fallback)", async () => {
-    nodeRows = [
-      { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
-    ];
-    promoteNode.mockResolvedValue({
-      status: "dispatched",
-      env: "preview",
-      sourceSha: "e".repeat(40),
-      sourceAddressing: "remote_source",
-      workflowUrl:
-        "https://github.com/Cogni-DAO/cogni/actions/workflows/promote-and-deploy.yml",
-      runId: 12345,
-      runUrl: "https://github.com/Cogni-DAO/cogni/actions/runs/12345",
-      runApiUrl:
-        "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/12345",
-    });
-
-    dispatchNodePreviewPromote(mainPushPayload(), ENV, log);
-    await flush();
-
-    expect(promoteNode).toHaveBeenCalledWith({
-      env: "preview",
-      parentOwner: "Cogni-DAO",
-      parentRepo: "node-template",
-      slug: "habitat",
-      sourceSha: "e".repeat(40),
-    });
-    expect(log.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "feature.node_preview_promote.complete",
-        nodeId: "node-1",
-        slug: "habitat",
-        repo: "Cogni-DAO/habitat",
-        sourceSha: "e".repeat(40),
-        sourceSha8: "e".repeat(8),
-        trigger: "push",
-        status: "dispatched",
-        runId: 12345,
-        runUrl: "https://github.com/Cogni-DAO/cogni/actions/runs/12345",
-        runApiUrl:
-          "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/12345",
-      }),
-      expect.any(String)
-    );
-  });
-
   it("ignores a push that is not to the repository default branch", async () => {
     nodeRows = [
       { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
@@ -179,29 +133,6 @@ describe("dispatchNodePreviewPromote", () => {
     await flush();
 
     expect(promoteNode).not.toHaveBeenCalled();
-  });
-
-  it("rejects when GitHub does not create an observable promotion run", async () => {
-    nodeRows = [
-      { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
-    ];
-    promoteNode.mockRejectedValueOnce(new Error("run identity missing"));
-
-    await expect(
-      dispatchNodePreviewPromote(mainPushPayload(), ENV, log)
-    ).rejects.toThrow("run identity missing");
-    expect(log.error).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "feature.node_preview_promote.complete",
-        repo: "Cogni-DAO/habitat",
-        sourceSha: "e".repeat(40),
-        sourceSha8: "e".repeat(8),
-        trigger: "push",
-        status: "failed",
-        error: "Error: run identity missing",
-      }),
-      "node preview promote failed"
-    );
   });
 
   it("does NOT dispatch for a node that has no preview env (bug.5203)", async () => {
@@ -249,69 +180,6 @@ describe("dispatchNodePreviewPromote", () => {
         event: "feature.node_preview_promote.complete",
         sourceSha: "e".repeat(40),
         status: "skipped_unregistered_repo",
-      }),
-      expect.any(String)
-    );
-  });
-
-  it("dispatches for node-template — the external-repo carve-out is retired (task.5087)", async () => {
-    // node-template is a seeded registry row (story.5009) whose repo name == its slug, so it
-    // resolves here. It deploys via the monorepo catalog like every node, so a merge on its
-    // repo dispatches the same source-addressed preview promote.
-    nodeRows = [
-      {
-        id: "node-nt",
-        slug: "node-template",
-        deployEnvs: ["preview", "production"],
-      },
-    ];
-    promoteNode.mockResolvedValue({
-      status: "dispatched",
-      env: "preview",
-      sourceSha: "b".repeat(40),
-      sourceAddressing: "remote_source",
-      workflowUrl:
-        "https://github.com/Cogni-DAO/node-template/actions/workflows/promote-and-deploy.yml",
-    });
-    dispatchNodePreviewPromote(
-      mainPushPayload({
-        after: "d".repeat(40),
-        repository: {
-          name: "node-template",
-          default_branch: "main",
-          owner: { login: "Cogni-DAO" },
-        },
-      }),
-      ENV,
-      log
-    );
-    await flush();
-    expect(promoteNode).toHaveBeenCalledWith({
-      env: "preview",
-      parentOwner: "Cogni-DAO",
-      parentRepo: "node-template",
-      slug: "node-template",
-      sourceSha: "d".repeat(40),
-    });
-  });
-
-  it("fails loudly when the deploy-plane GitHub App is unconfigured", async () => {
-    nodeRows = [
-      { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
-    ];
-    await expect(
-      dispatchNodePreviewPromote(
-        mainPushPayload(),
-        { ...ENV, GH_REVIEW_APP_ID: undefined },
-        log
-      )
-    ).rejects.toThrow("GitHub App credentials missing");
-    expect(promoteNode).not.toHaveBeenCalled();
-    expect(log.error).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "feature.node_preview_promote.complete",
-        sourceSha: "e".repeat(40),
-        status: "failed",
       }),
       expect.any(String)
     );
@@ -485,14 +353,17 @@ describe("dispatchNodePreviewPromote", () => {
       expect(promoteNode).not.toHaveBeenCalled();
     });
 
-    it("a crossplane cell keeps the legacy dispatch and records nothing", async () => {
-      catalogRow = { name: "habitat", compute_api: { preview: "crossplane" } };
-      promoteNode.mockResolvedValue({ status: "dispatched" });
+    it("a node with no node-deploy preview cell never dispatches the deleted legacy workflow (task.5411)", async () => {
+      catalogRow = { name: "habitat" };
 
       await dispatchNodePreviewPromote(mainPushPayload(), ENV, log);
 
-      expect(promoteNode).toHaveBeenCalledTimes(1);
+      expect(promoteNode).not.toHaveBeenCalled();
       expect(recordNodeRelease).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "skipped_no_preview_env" }),
+        expect.any(String)
+      );
     });
   });
 });

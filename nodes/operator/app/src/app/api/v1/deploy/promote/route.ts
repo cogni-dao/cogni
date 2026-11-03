@@ -33,6 +33,7 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { refuseNodeOnFlightPromoteLane } from "@/features/compute/node-compute-api";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
@@ -81,6 +82,15 @@ export const POST = wrapRouteHandlerWithLogging(
       targetNodeId = node?.id;
       if (!node) {
         return NextResponse.json({ error: "node_not_found" }, { status: 404 });
+      }
+      // ONE_WRITER_PER_NODE_LANE (CD4, task.5411): only the operator still promotes here.
+      const refusal = refuseNodeOnFlightPromoteLane({
+        slug: node.slug,
+        lane: "promote",
+        environment: env,
+      });
+      if (refusal) {
+        return NextResponse.json(refusal, { status: 409 });
       }
 
       const billingRows = await db

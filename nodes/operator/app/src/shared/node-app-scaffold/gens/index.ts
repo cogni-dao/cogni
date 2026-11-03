@@ -12,11 +12,6 @@
  * @public
  */
 
-export {
-  insertAppsetKustomization,
-  removeFromAppsetsKustomization,
-  renderNodeAppset,
-} from "./appset";
 export { insertCaddyBlock } from "./caddyfile";
 export {
   githubOwnerFromSourceRepo,
@@ -49,22 +44,16 @@ export {
   setCatalogPlacementCell,
 } from "./env-membership";
 export {
-  appsetPath,
-  appsetsKustomizationPath,
   buildEnvDeltaPlan,
   buildPlacementPlan,
   buildRegionPlan,
   CANONICAL_DOMAIN_ROOT,
   CATALOG_PATH,
-  type EnvAddShape,
   type EnvDeltaResult,
   type EnvPlanCurrent,
   EnvPlanError,
   type EnvPlanOp,
-  externalSecretPath,
-  overlayPath,
   type PlacementDeltaResult,
-  planEnvAddShape,
   type RegionDeltaResult,
   schedulerEndpointPatchPath,
 } from "./env-membership-plan";
@@ -74,13 +63,8 @@ export {
   NODE_FORMATION_ENVS,
   type NodeFormationEnv,
 } from "./envs";
-export {
-  renderNodeExternalSecret,
-  renderNodeExternalSecretKustomization,
-} from "./external-secret";
 export { insertNetworkNode } from "./network-nodes";
 export { nextFreeNodePort } from "./node-port";
-export { renderOverlay, renderOverlayFile } from "./overlay";
 export {
   ACTIVATION_MARKUP_FACTOR,
   ACTIVATION_REVENUE_SHARE,
@@ -93,3 +77,8 @@ export {
   insertSchedulerEndpoint,
   updateSchedulerEndpointHost,
 } from "./scheduler-endpoints";
+export {
+  NODE_APP_WORKLOAD_MANIFEST_PATH,
+  type RenderNodeAppWorkloadManifestInput,
+  renderNodeAppWorkloadManifest,
+} from "./workload-manifest";

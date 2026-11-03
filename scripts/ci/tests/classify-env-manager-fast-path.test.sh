@@ -33,9 +33,7 @@ envs: [candidate-a]
 deployment_provider:
   candidate-a: akash
 compute_api:
-  candidate-a: crossplane
-lease_generation:
-  candidate-a: 0
+  candidate-a: node-deploy
 activity_env: candidate-a
 YAML
 cat > "$head_catalog" <<'YAML'
@@ -47,21 +45,15 @@ deployment_provider:
   candidate-a: akash
   preview: akash
 compute_api:
-  candidate-a: crossplane
-  preview: crossplane
-lease_generation:
-  candidate-a: 0
-  preview: 4
+  candidate-a: node-deploy
+  preview: node-deploy
 activity_env: preview
 YAML
 cp "$head_catalog" "$tmpdir/catalog/blue.yaml"
 paths_file="$tmpdir/paths.txt"
-printf '%s\n' \
-  'infra/catalog/blue.yaml' \
-  "infra/k8s/argocd/appsets/$control_env/kustomization.yaml" \
-  "infra/k8s/argocd/appsets/$control_env/preview-blue-applicationset.yaml" \
-  'infra/k8s/overlays/preview/blue/external-secret.yaml' \
-  'infra/k8s/overlays/preview/blue/kustomization.yaml' > "$paths_file"
+# story.5137: the env verb writes the catalog row (plus scheduler routing, below);
+# the node-deploy sequencer is the lane writer, so there is no AppSet or overlay.
+printf '%s\n' 'infra/catalog/blue.yaml' > "$paths_file"
 paths_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
 
 write_fixtures() {
@@ -173,15 +165,15 @@ FAST_PATH_TEST_HEAD_CATALOG="$remove_head_catalog" \
 [[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/remove.out")" == true ]]
 cp "$head_catalog" "$tmpdir/catalog/blue.yaml"
 
-# A foreign-custody membership plan contains the five membership files plus
-# BOTH lane and control scheduler patches (seven paths, as in live Beacon/LevelUp).
+# A foreign-custody membership plan contains the catalog row plus BOTH lane and
+# control scheduler patches (three paths).
 cp "$paths_file" "$tmpdir/membership-only-paths.txt"
 printf '%s\n' \
   'infra/k8s/overlays/preview/scheduler-worker/node-endpoints.patch.yaml' \
   "infra/k8s/overlays/$control_env/scheduler-worker/node-endpoints.patch.yaml" >> "$paths_file"
 LC_ALL=C sort -u "$paths_file" > "$tmpdir/seven-paths.txt"
 cp "$tmpdir/seven-paths.txt" "$paths_file"
-[[ "$(wc -l < "$paths_file" | tr -d ' ')" == 7 ]]
+[[ "$(wc -l < "$paths_file" | tr -d ' ')" == 3 ]]
 seven_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
 write_fixtures "${valid_message/$paths_hash/$seven_hash}"
 run_classifier "$tmpdir/seven-add.out"
@@ -195,7 +187,8 @@ FAST_PATH_TEST_HEAD_CATALOG="$remove_head_catalog" \
 [[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/seven-remove.out")" == true ]]
 cp "$head_catalog" "$tmpdir/catalog/blue.yaml"
 
-# Even a correctly signed eight-path claim exceeds this bounded capability.
+# Even a correctly signed four-path claim exceeds this bounded capability; the
+# tree is authentic, so it falls back to full CI rather than failing.
 printf '%s\n' 'infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml' >> "$paths_file"
 LC_ALL=C sort -u "$paths_file" > "$tmpdir/eight-paths.txt"
 cp "$tmpdir/eight-paths.txt" "$paths_file"
@@ -203,8 +196,9 @@ eight_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
 write_fixtures "${valid_message/$paths_hash/$eight_hash}"
 run_classifier "$tmpdir/eight.out"
 [[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/eight.out")" == invalid-file-metadata ]]
+[[ "$(awk -F= '$1=="claimed"{v=$2} END{print v}' "$tmpdir/eight.out")" == false ]]
 
-# Staying within seven paths cannot authorize an unrelated control environment.
+# Staying within three paths cannot authorize an unrelated control environment.
 sed "s#overlays/$control_env/scheduler-worker/#overlays/candidate-a/scheduler-worker/#" \
   "$tmpdir/seven-paths.txt" | LC_ALL=C sort -u > "$paths_file"
 foreign_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
@@ -212,6 +206,44 @@ write_fixtures "${valid_message/$paths_hash/$foreign_hash}"
 run_classifier "$tmpdir/foreign-control.out"
 [[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/foreign-control.out")" == path-outside-env-manager-boundary ]]
 cp "$tmpdir/membership-only-paths.txt" "$paths_file"
+
+# NEGATIVE (story.5137): the retired AppSet/overlay shape is outside the boundary.
+# A signed but unmatched tree falls back to full CI (claimed=false), never exit 1.
+printf '%s\n' \
+  'infra/catalog/blue.yaml' \
+  "infra/k8s/argocd/appsets/$control_env/preview-blue-applicationset.yaml" > "$paths_file"
+legacy_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
+write_fixtures "${valid_message/$paths_hash/$legacy_hash}"
+run_classifier "$tmpdir/legacy-appset.out"
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/legacy-appset.out")" == path-outside-env-manager-boundary ]]
+[[ "$(awk -F= '$1=="claimed"{v=$2} END{print v}' "$tmpdir/legacy-appset.out")" == false ]]
+[[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/legacy-appset.out")" == false ]]
+cp "$tmpdir/membership-only-paths.txt" "$paths_file"
+
+# NEGATIVE (story.5137): a crossplane cell or a lease_generation key is not the verb's
+# output, so the delta is refused and the PR runs full CI.
+crossplane_head_catalog="$tmpdir/crossplane-head-catalog.yaml"
+sed 's/preview: node-deploy/preview: crossplane/' "$head_catalog" > "$crossplane_head_catalog"
+write_fixtures "$valid_message"
+FAST_PATH_TEST_HEAD_CATALOG="$crossplane_head_catalog" \
+  run_classifier "$tmpdir/crossplane.out"
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/crossplane.out")" == invalid-catalog-delta ]]
+[[ "$(awk -F= '$1=="claimed"{v=$2} END{print v}' "$tmpdir/crossplane.out")" == false ]]
+lease_head_catalog="$tmpdir/lease-head-catalog.yaml"
+printf 'lease_generation:\n  preview: 0\n' | cat "$head_catalog" - > "$lease_head_catalog"
+FAST_PATH_TEST_HEAD_CATALOG="$lease_head_catalog" \
+  run_classifier "$tmpdir/lease.out"
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/lease.out")" == invalid-catalog-delta ]]
+
+# NEGATIVE: an in-repo row (no source_repo) has no node-deploy lane to add.
+inrepo_base_catalog="$tmpdir/inrepo-base-catalog.yaml"
+inrepo_head_catalog="$tmpdir/inrepo-head-catalog.yaml"
+grep -v '^source_repo:' "$base_catalog" > "$inrepo_base_catalog"
+grep -v '^source_repo:' "$head_catalog" > "$inrepo_head_catalog"
+FAST_PATH_TEST_BASE_CATALOG="$inrepo_base_catalog" \
+FAST_PATH_TEST_HEAD_CATALOG="$inrepo_head_catalog" \
+  run_classifier "$tmpdir/inrepo.out"
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/inrepo.out")" == invalid-catalog-delta ]]
 
 # A copied title without the reserved signed trailer stays on full CI.
 write_fixtures 'feat(node): add blue to preview'

@@ -17,7 +17,6 @@
  */
 
 import { NextResponse } from "next/server";
-import { dispatchLaneOnboard } from "@/app/_facades/deploy/lane-onboard.server";
 import { dispatchNodePreviewPromote } from "@/app/_facades/deploy/node-preview-promote.server";
 import { dispatchPrReview } from "@/app/_facades/review/dispatch.server";
 import {
@@ -306,11 +305,6 @@ export async function POST(
     // acknowledged until the deploy-plane write is observed (bug.5010).
     if (source === "github" && eventType === "pull_request") {
       dispatchPrReview(verified.payload, env, log);
-      // Env-membership merge → lane reconcile: the `POST /nodes/{id}/envs` verb's own PR
-      // landing is what provisions the lane's substrate (as its custodian) and renders its
-      // desired state. Matches only that verb's branch on the parent monorepo; every other
-      // merge no-ops (task.5132).
-      dispatchLaneOnboard(verified.payload, env, log);
     }
 
     if (source === "github" && eventType === "push") {

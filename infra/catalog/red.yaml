@@ -25,36 +25,12 @@ reliability_validation:
 deployment_provider:
   candidate-a: akash
   production: akash
-# task.5097 — WHICH authority reconciles the workload. Crossplane
-# (infra/crossplane/xcomputeworkload) owns every generic concern; the only Cogni-specific
-# piece left is the private Akash transaction actuator. A born node never touches the
-# bespoke controller in any environment that can BOTH reconcile the composite (an installed
-# control plane) and pay for its lease (a pinned actuator wallet); an environment missing
-# either is omitted and stays on the pre-existing legacy default (task.5104, task.5097).
+# story.5137 / task.5411 (CD4 ONE_WRITER_PER_NODE_LANE) — every environment of this node is
+# deployed ONLY by the node-deploy sequencer (POST /api/v1/deploy/workloads). The legacy
+# and crossplane authorities and their per-node AppSets were deleted (CD9).
 compute_api:
-  # story.5137 (CD4 ONE_WRITER_PER_NODE_LANE) — candidate-a and production are deployed ONLY by the node-deploy
-  # sequencer (POST /api/v1/deploy/workloads). Merging this cell drops the per-(env, node)
-  # AppSet, so Argo prunes the Application and its XR/ExternalSecrets close the old lease.
-  # lease_generation / deployment_provider / compute_egress_cidrs stay until the CD9 purge.
   candidate-a: node-deploy
   production: node-deploy
-# Explicit initial replacement counter for each Akash lease. Generation 0 is the
-# first idempotence key; later retries must advance it from durable receipt evidence.
-lease_generation:
-  candidate-a: 0
-  production: 1
-# story.5093 — PLACEMENT_IS_OPERATOR_POLICY. Red's declared private `sandbox` service runs in
-# its OWN lease (XR `<node_id>-sandbox`, host red-sandbox[-test].cognidao.org), never inside the
-# app lease: a sandbox resize/re-mint must not touch the production activity_env app lease.
-# Skipped (and reported) until Red's source declares the service.
-isolated_services:
-  sandbox:
-    lease_generation:
-      # 0 -> 1. Gen-0 (dseq 1792461151208) served /version but not /readyz, so the serving
-      # proof stayed false and candidate BOOT_SLO_OR_CLOSE released it at 2026-10-20 02:24Z.
-      # The settled key replays a closed handle; red#27 adds /readyz. Production gen-0 is unspent.
-      candidate-a: 1
-      production: 0
 # story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
 # sub-production authority would have to be moved by every later promote, and generation 1

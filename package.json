@@ -31,7 +31,6 @@
     "gen:scheduler-worker-endpoints": "bash scripts/ci/render-scheduler-worker-endpoints.sh --write",
     "gen:scope-filters": "bash scripts/ci/render-scope-filters.sh",
     "gen:node-appset": "bash scripts/ci/render-node-appset.sh --write",
-    "gen:node-overlays": "bash scripts/ci/render-node-overlays.sh --write",
     "workflow:check": "node scripts/ci/workflow-check.mjs",
     "conductor:setup": "bash scripts/conductor-worktree-setup.sh",
     "codex:cognition:install": "bash scripts/agent/install-codex-cognition-hook.sh",

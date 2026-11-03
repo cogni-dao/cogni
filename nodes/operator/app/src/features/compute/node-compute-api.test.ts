@@ -4,179 +4,65 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CROSSPLANE_CONTROL_PLANE_ENVS,
-  crossplaneCompositeApplicationPath,
-  hasCrossplaneControlPlane,
-} from "@/shared/node-registry/crossplane-control-plane";
-
-import {
   isNodeOnDeployVerb,
   NODE_ON_DEPLOY_VERB,
-  resolveNodeComputeApi,
-  resolveNodeComputeCell,
+  refuseNodeOnFlightPromoteLane,
 } from "./node-compute-api";
-import { deploymentEnvironmentSchema } from "./node-deployment-provider";
 
-describe("resolveNodeComputeApi", () => {
-  /**
-   * LEGACY_IS_DEFAULT. Every row in infra/catalog today omits `compute_api`, so this is the
-   * assertion that adding the field changed nothing for the running fleet. If this ever flips
-   * to `crossplane`, twelve existing workloads silently change reconciliation authority.
-   */
-  it("resolves an absent field to the pre-existing bespoke controller", () => {
-    expect(
-      resolveNodeComputeApi({
-        catalog: { name: "beacon" },
-        environment: "production",
-      })
-    ).toBe("legacy");
-    expect(
-      resolveNodeComputeApi({
-        catalog: { compute_api: { "candidate-a": "crossplane" } },
-        environment: "production",
-      })
-    ).toBe("legacy");
-  });
-
-  it("resolves each environment independently, so a cutover is per-(node, env) atomic", () => {
+describe("isNodeOnDeployVerb (task.5411: node-deploy is the only cell value)", () => {
+  it("is true for a node-deploy cell and false for an absent one", () => {
     const catalog = {
-      compute_api: { "candidate-a": "crossplane", production: "legacy" },
+      name: "poly",
+      compute_api: { production: "node-deploy" },
     };
-    expect(resolveNodeComputeApi({ catalog, environment: "candidate-a" })).toBe(
-      "crossplane"
+    expect(isNodeOnDeployVerb({ catalog, environment: "production" })).toBe(
+      true
     );
-    expect(resolveNodeComputeApi({ catalog, environment: "production" })).toBe(
-      "legacy"
-    );
-  });
-
-  /**
-   * The value is single-valued by type, so "both authorities" is unrepresentable rather than
-   * merely discouraged — an unknown string fails closed instead of being coerced to a default.
-   */
-  it("fails closed on an unknown authority instead of silently defaulting", () => {
-    expect(() =>
-      resolveNodeComputeApi({
-        catalog: { compute_api: { production: "kubernetes" } },
-        environment: "production",
+    expect(isNodeOnDeployVerb({ catalog, environment: "preview" })).toBe(false);
+    expect(
+      isNodeOnDeployVerb({
+        catalog: { name: "operator" },
+        environment: "preview",
       })
-    ).toThrow(/Invalid catalog compute_api/);
+    ).toBe(false);
   });
 
-  it("rejects an unknown environment key rather than ignoring a typo", () => {
-    expect(() =>
-      resolveNodeComputeApi({
-        catalog: { compute_api: { canidate: "crossplane" } },
-        environment: "candidate-a",
-      })
-    ).toThrow(/Invalid catalog compute_api/);
-  });
-
-  /**
-   * AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104). `crossplane` is resolvable exactly where a
-   * `crossplane-xcomputeworkload-application.yaml` exists under
-   * infra/k8s/argocd/control-plane/<env>/ — task.5097 staged production and task.5129 completes
-   * preview, so all three now resolve. Without this guard, a row naming an env with no control plane renders
-   * an XComputeWorkload into a cluster where that CRD does not exist, reconciled by nobody.
-   *
-   * RESOLVABLE IS NOT SELECTED. Widening the constant did not flip a single row: the selector is
-   * the per-row `compute_api.<env>` cell, and the very first test above proves an absent cell
-   * still resolves `legacy` in every environment.
-   */
-  it("resolves crossplane in every environment whose control plane is installed", () => {
-    for (const environment of CROSSPLANE_CONTROL_PLANE_ENVS) {
-      expect(
-        resolveNodeComputeApi({
-          catalog: { compute_api: { [environment]: "crossplane" } },
-          environment,
+  it("THROWS on a deleted authority value instead of reading it as legacy", () => {
+    for (const value of ["crossplane", "legacy"]) {
+      expect(() =>
+        isNodeOnDeployVerb({
+          catalog: { name: "poly", compute_api: { production: value } },
+          environment: "production",
         })
-      ).toBe("crossplane");
-    }
-  });
-
-  /**
-   * NO_SILENT_DOWNGRADE, restated after task.5129 installed the last admitted environment.
-   * Every schema environment now has the API; the refusal remains reachable for any future or
-   * misspelled environment and must throw rather than silently mint through the legacy writer.
-   */
-  it("keeps the refusal armed outside installed environments", () => {
-    for (const environment of deploymentEnvironmentSchema.options) {
-      expect(hasCrossplaneControlPlane(environment), environment).toBe(true);
-    }
-    expect(hasCrossplaneControlPlane("canary")).toBe(false);
-    expect(crossplaneCompositeApplicationPath("canary")).toBe(
-      "infra/k8s/argocd/control-plane/canary/crossplane-xcomputeworkload-application.yaml"
-    );
-  });
-
-  /**
-   * The guard is scoped to the `crossplane` VALUE, not to the environment: an env with no
-   * control plane still resolves `legacy` normally, so every un-migrated fleet row is
-   * untouched by this change.
-   */
-  it("leaves an explicit legacy cell resolvable in every environment", () => {
-    for (const environment of [
-      "candidate-a",
-      "preview",
-      "production",
-    ] as const) {
-      expect(
-        resolveNodeComputeApi({
-          catalog: { compute_api: { [environment]: "legacy" } },
-          environment,
-        })
-      ).toBe("legacy");
+      ).toThrow(/Invalid catalog compute_api/);
     }
   });
 });
 
-/**
- * ONE_WRITER_PER_NODE_LANE (story.5137, CD4). `node-deploy` is a catalog cell value meaning the
- * deploy verb is the lane's ONLY writer. It is a valid cell, but never a rendering authority.
- */
-describe("compute_api: node-deploy", () => {
-  const catalog = {
-    name: "poly",
-    compute_api: { "candidate-a": "crossplane", production: "node-deploy" },
-  };
-
-  it("is a valid cell value, resolved per environment", () => {
-    expect(resolveNodeComputeCell({ catalog, environment: "production" })).toBe(
-      "node-deploy"
-    );
-    expect(isNodeOnDeployVerb({ catalog, environment: "production" })).toBe(
-      true
-    );
-    expect(isNodeOnDeployVerb({ catalog, environment: "candidate-a" })).toBe(
-      false
-    );
+describe("refuseNodeOnFlightPromoteLane (CD4 front door)", () => {
+  it("admits only the operator", () => {
     expect(
-      isNodeOnDeployVerb({ catalog: { name: "x" }, environment: "preview" })
-    ).toBe(false);
-  });
-
-  it("is REFUSED by the renderer's reader, naming the verb, so no manifest can be rendered for it", () => {
-    expect(() =>
-      resolveNodeComputeApi({ catalog, environment: "production" })
-    ).toThrow(
-      new RegExp(
-        `${NODE_ON_DEPLOY_VERB}: poly in production .*POST /api/v1/deploy/workloads`
-      )
-    );
-  });
-
-  it("leaves the sibling environment's rendering authority untouched", () => {
-    expect(resolveNodeComputeApi({ catalog, environment: "candidate-a" })).toBe(
-      "crossplane"
-    );
-  });
-
-  it("still rejects an unknown cell value", () => {
-    expect(() =>
-      isNodeOnDeployVerb({
-        catalog: { compute_api: { production: "node_deploy" } },
-        environment: "production",
+      refuseNodeOnFlightPromoteLane({
+        slug: "operator",
+        lane: "flight",
+        environment: "candidate-a",
       })
-    ).toThrow(/Invalid catalog compute_api/);
+    ).toBeNull();
+  });
+
+  it("refuses every other node with node_on_deploy_verb and names the verb", () => {
+    const refusal = refuseNodeOnFlightPromoteLane({
+      slug: "poly",
+      lane: "promote",
+      environment: "production",
+    });
+    expect(refusal).toMatchObject({
+      error: NODE_ON_DEPLOY_VERB,
+      errorCode: NODE_ON_DEPLOY_VERB,
+      deployVerb: "POST /api/v1/deploy/workloads",
+    });
+    expect(refusal?.message).toMatch(
+      /promote refused: node_on_deploy_verb: poly in production/
+    );
   });
 });
