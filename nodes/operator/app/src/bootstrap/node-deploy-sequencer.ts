@@ -53,10 +53,7 @@ import {
   KubernetesStatePasswords,
   PostgresNodeDeployStore,
 } from "@/adapters/server";
-import {
-  DEFAULT_EDGE_HOST_REGEX,
-  EdgeRouter,
-} from "@/features/node-deploy/edge";
+import { EdgeRouter, edgeHostRegexFor } from "@/features/node-deploy/edge";
 import {
   DEFAULT_SEQUENCER_CONFIG,
   NodeDeploySequencer,
@@ -117,9 +114,19 @@ const num = (
   return Number.isFinite(n) ? Math.max(min, n) : fallback;
 };
 
-const edgeHostRegex = runtimeEnv.NODE_DEPLOY_EDGE_HOST_REGEX
-  ? new RegExp(runtimeEnv.NODE_DEPLOY_EDGE_HOST_REGEX)
-  : DEFAULT_EDGE_HOST_REGEX;
+// The image catalog is the one declaration of which nodes this sequencer deploys in this env (CD1): the
+// edge guard admits the canary plus every node whose `compute_api[<env>]` is `node-deploy`. No overlay
+// edit is needed to onboard a node, and no env override exists.
+const catalog = new ImageCatalogNodes({
+  root: runtimeEnv.COGNI_IMAGE_ROOT ?? "/app",
+});
+const edgeHostRegex = edgeHostRegexFor(
+  await catalog.nodeDeploySlugs(environment)
+);
+log.info(
+  { environment, edgeHostRegex: String(edgeHostRegex) },
+  "node_deploy_sequencer_edge_hosts"
+);
 const edge =
   cfToken && cfZone
     ? new EdgeRouter(
@@ -179,9 +186,7 @@ const sequencer = new NodeDeploySequencer({
   secrets: new KubernetesStatePasswords(secretsNamespace, environment),
   runtime: {
     secrets: new EsoNodeRuntimeSecrets({ namespace: secretsNamespace }),
-    catalog: new ImageCatalogNodes({
-      root: runtimeEnv.COGNI_IMAGE_ROOT ?? "/app",
-    }),
+    catalog,
     substrateHost,
   },
   ...(runtimeEnv.AKASH_CHAIN_OWNER

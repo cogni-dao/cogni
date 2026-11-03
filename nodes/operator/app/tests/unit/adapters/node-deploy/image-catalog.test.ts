@@ -16,6 +16,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { ImageCatalogNodes } from "@/adapters/server";
+import { edgeHostRegexFor } from "@/features/node-deploy/edge";
 import { nodeCatalogPolicy } from "@/features/node-deploy/node-catalog-policy";
 
 const POLY = "4b06359a-0000-4000-8000-0000000000aa";
@@ -91,5 +92,23 @@ describe("ImageCatalogNodes", () => {
         "production"
       ).requiredCountryCodes
     ).toEqual([]);
+  });
+
+  it("nodeDeploySlugs lists exactly the nodes whose compute_api cell for that env is node-deploy (REAL catalog)", async () => {
+    const repoRoot = resolve(__dirname, "../../../../../../..");
+    const catalog = new ImageCatalogNodes({ root: repoRoot });
+    const production = await catalog.nodeDeploySlugs("production");
+    expect(production).toContain("poly");
+    expect(production).toContain("node-template");
+    // crossplane nodes never contribute a host
+    for (const crossplane of ["beacon", "levelup", "red"])
+      expect(production).not.toContain(crossplane);
+    expect(await catalog.nodeDeploySlugs("candidate-a")).toContain("toks5");
+    expect(await catalog.nodeDeploySlugs("candidate-a")).not.toContain("poly");
+    // the guard built from it admits poly in production and refuses operator hosts
+    const re = edgeHostRegexFor(production);
+    expect(re.test("poly.cognidao.org")).toBe(true);
+    expect(re.test("beacon.cognidao.org")).toBe(false);
+    expect(re.test("cognidao.org")).toBe(false);
   });
 });

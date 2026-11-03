@@ -61,7 +61,7 @@ import {
   type WorkloadKey,
 } from "@/ports";
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
-import type { EdgeRouter } from "./edge";
+import { type EdgeRouter, hostOwnedBy } from "./edge";
 import { nodeAppEnv, nodeAppSecretKeys } from "./node-app-env";
 import { nodeCatalogPolicy } from "./node-catalog-policy";
 import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
@@ -555,6 +555,17 @@ export class NodeDeploySequencer {
           `edge_host_refused: ${errText(error)}`
         );
       }
+    }
+    if (declaredHost && this.d.runtime) {
+      // HOST_IS_THE_NODES_OWN: a node may claim only its own host, so node A can never take node B's.
+      const owner = await this.d.runtime.catalog.entryFor(key.nodeId);
+      if (!owner || !hostOwnedBy(declaredHost, key.env, owner.slug))
+        return this.failAttempt(
+          key,
+          release,
+          attempt,
+          `edge_host_refused: ${declaredHost} is not the host node ${owner?.slug ?? key.nodeId} may claim in ${key.env}`
+        );
     }
     let runtime: ResolvedRuntime;
     try {

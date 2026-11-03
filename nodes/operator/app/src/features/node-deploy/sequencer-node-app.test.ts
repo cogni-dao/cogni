@@ -19,7 +19,7 @@ import type {
 } from "@/ports";
 import { NodeRuntimeSecretsError } from "@/ports";
 
-import { EdgeRouter } from "./edge";
+import { EdgeRouter, edgeHostRegexFor } from "./edge";
 import { nodeAppEnv } from "./node-app-env";
 import {
   DEFAULT_SEQUENCER_CONFIG,
@@ -45,6 +45,8 @@ import {
 
 const POLY_ID = "4b06359a-0000-4000-8000-0000000000aa";
 const SUBSTRATE = "cogni.vm.cognidao.org";
+const POLY_HOST = "poly.cognidao.org";
+const TOKS_ID = "4b06359a-0000-4000-8000-0000000000bb";
 const ALLOWED = [
   "akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm",
   "akash1v0f04wr3tkh9uf43q9eqfd0whpfeu8qevlq99h",
@@ -124,7 +126,7 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
   const seq = new NodeDeploySequencer({
     store,
     payer,
-    edge: new EdgeRouter(dns),
+    edge: new EdgeRouter(dns, edgeHostRegexFor(["poly", "toks5"])),
     probe,
     secrets,
     runtime: { secrets: runtimeSecrets, catalog, substrateHost: SUBSTRATE },
@@ -168,7 +170,12 @@ async function releaseApp(h: H, nodeId: string) {
     env: ENV,
     workload: "canary",
     sourceSha: SHA_1,
-    spec: canaryApp({ secretKeys: DECLARED }),
+    spec: canaryApp({
+      secretKeys: DECLARED,
+      expose: {
+        http: { host: nodeId === POLY_ID ? POLY_HOST : PUBLIC_HOST },
+      },
+    }),
     createdBy: "test",
   });
   return h.seq.step(h.key(nodeId, "canary"));
@@ -189,7 +196,7 @@ describe("node app runtime env (task.5405)", () => {
       slug: "poly",
       nodeId: POLY_ID,
       sourceSha: SHA_1,
-      publicHost: PUBLIC_HOST,
+      publicHost: POLY_HOST,
       port: 8080,
       substrateHost: SUBSTRATE,
       secrets: PROFILE_BUCKET,
@@ -341,5 +348,69 @@ describe("a half env is never deployed (NO_HALF_ENV)", () => {
     });
     expect(await releaseApp(h, POLY_ID)).toBe("waiting_dependency");
     expect(appCreates(h)).toHaveLength(0);
+  });
+});
+
+describe("an app may claim only its own node's host (task.5405)", () => {
+  async function releaseHost(h: H, nodeId: string, host: string) {
+    await h.store.recordRelease({
+      nodeId,
+      env: ENV,
+      workload: "canary",
+      sourceSha: SHA_1,
+      spec: canaryApp({
+        secretKeys: DECLARED,
+        expose: { http: { host } },
+      }),
+      createdBy: "test",
+    });
+    return h.seq.step(h.key(nodeId, "canary"));
+  }
+  const attemptsOf = (h: H, nodeId: string) =>
+    h.store.attemptsFor(h.key(nodeId, "canary"));
+
+  it("poly deploys at poly.cognidao.org (its own host, allowed by the catalog regex)", async () => {
+    const h = harness();
+    await stateUp(h, POLY_ID);
+    expect(await releaseHost(h, POLY_ID, "poly.cognidao.org")).toBe("driven");
+    expect(appCreates(h)).toHaveLength(1);
+  });
+
+  it("node A cannot claim node B's host: refused with a reason BEFORE any paid create", async () => {
+    const h = harness();
+    await stateUp(h, POLY_ID);
+    h.catalog.rows.set(TOKS_ID, {
+      slug: "toks5",
+      row: { name: "toks5" },
+    });
+    // poly asks for toks5's host: the regex admits it (toks5 is a node-deploy node), ownership does not
+    await releaseHost(h, POLY_ID, "toks5.cognidao.org");
+    expect(appCreates(h)).toHaveLength(0);
+    const [a] = await attemptsOf(h, POLY_ID);
+    expect(a?.phase === "closing" || a?.phase === "failed").toBe(true);
+    expect(a?.error).toContain("edge_host_refused");
+    expect(a?.error).toContain("poly");
+  });
+
+  it("operator hosts and a crossplane node's host are refused (not in the catalog-built regex)", async () => {
+    for (const host of [
+      "cognidao.org",
+      "preview.cognidao.org",
+      "test.cognidao.org",
+      "beacon.cognidao.org",
+    ]) {
+      const h = harness();
+      await stateUp(h, POLY_ID);
+      await releaseHost(h, POLY_ID, host);
+      expect(appCreates(h), host).toHaveLength(0);
+      const [a] = await attemptsOf(h, POLY_ID);
+      expect(a?.error, host).toContain("edge_host_refused");
+    }
+  });
+
+  it("the operator's own canary still deploys at its canary host", async () => {
+    const h = harness();
+    await stateUp(h, OPERATOR_NODE_ID);
+    expect(await releaseApp(h, OPERATOR_NODE_ID)).toBe("driven");
   });
 });

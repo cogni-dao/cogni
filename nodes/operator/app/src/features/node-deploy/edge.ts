@@ -7,9 +7,13 @@
  *   provider ingress through a proxied Cloudflare CNAME, and reads the record back (task.5400).
  * Scope: Guard + orchestration over `DnsRecordsPort`. Cloudflare HTTP lives in the adapter.
  * Invariants:
- *   - HOST_GUARD: every write names a host matching the env-configured regex (default
- *     `^node-deploy-canary(-[a-z]+)?\.cognidao\.org$`); anything else throws BEFORE any request. The
- *     zone is production.
+ *   - HOST_GUARD: every write names a host matching the configured regex; anything else throws BEFORE
+ *     any request. The zone is production. The regex is built from the image catalog
+ *     (`edgeHostRegexFor`): the operator's canary plus every node whose `compute_api[<env>]` is
+ *     `node-deploy`, so no per-node overlay edit is needed (CD1). The bare default is canary-only.
+ *   - HOST_IS_THE_NODES_OWN: a release may only claim `hostOwnedBy(host, env, slug)`: the node's own
+ *     slug (the operator's canary label for the operator) plus the env's `-test`/`-preview`/`-dev`
+ *     suffix, so one node can never take another's host and operator hosts are never claimable.
  *   - NEVER_WITHDRAWN: the port has no delete; a record stays at the last proven lease through any
  *     lease failure and is only ever re-pointed (bug.5188, bug.5301).
  *   - ADOPT_BY_NAME: an existing record is updated in place whatever its type (bug.5152); a second
@@ -24,8 +28,43 @@
 
 import type { DnsRecord, DnsRecordInput, DnsRecordsPort } from "@/ports";
 
+import { hostForEnv } from "./declarations";
+
 export const DEFAULT_EDGE_HOST_REGEX =
   /^node-deploy-canary(-[a-z]+)?\.cognidao\.org$/;
+
+const EDGE_ZONE = "cognidao.org";
+/** The operator's own workload (the canary) lives at this label, not at its slug. */
+const CANARY_LABEL = "node-deploy-canary";
+const OPERATOR_SLUG = "operator";
+
+const escapeRegex = (s: string): string =>
+  s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The guard regex for these node slugs: `^(node-deploy-canary|<slug>...)(-[a-z]+)?\.cognidao\.org$`.
+ * `cognidao.org`, `preview.`, `test.` and every other operator host never match (their label is not a
+ * listed name).
+ */
+export function edgeHostRegexFor(slugs: Iterable<string>): RegExp {
+  const names = [
+    CANARY_LABEL,
+    ...[...new Set(slugs)].filter((s) => s !== OPERATOR_SLUG).sort(),
+  ].map(escapeRegex);
+  return new RegExp(
+    `^(${names.join("|")})(-[a-z]+)?\\.${escapeRegex(EDGE_ZONE)}$`
+  );
+}
+
+/** True when `host` is exactly the host `slug` may claim in `env` (production name + env suffix). */
+export function hostOwnedBy(host: string, env: string, slug: string): boolean {
+  const label = slug === OPERATOR_SLUG ? CANARY_LABEL : slug;
+  try {
+    return host.toLowerCase() === hostForEnv(`${label}.${EDGE_ZONE}`, env);
+  } catch {
+    return false;
+  }
+}
 
 export class EdgeGuardError extends Error {
   constructor(message: string) {
