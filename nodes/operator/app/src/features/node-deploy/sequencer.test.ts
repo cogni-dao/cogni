@@ -1264,3 +1264,254 @@ describe("logging", () => {
     expect(typeof line?.fields.releaseId).toBe("string");
   });
 });
+
+describe("stop-then-start when blue's provider is the only one (task.5409)", () => {
+  /** The actuator's NO_ELIGIBLE_BIDS text (akash-compute.adapter.ts awaitScreenedBid). */
+  const refusal = (counts: string, roster: string) =>
+    `bids arrived for dseq 9999 but none passed provider screening [refused: ${counts}] [bids: ${roster}]`;
+  const ONLY = "provider-2";
+  const noState = () => canaryApp({ bindings: [] });
+
+  /** One admitted provider: every create lands on it; a create that excludes it is refused. */
+  function singleProvider(h: H) {
+    h.payer.providerFor = () => ONLY;
+    h.payer.createFault = (_n, req) =>
+      req.excludeProviders?.includes(ONLY)
+        ? new PayerError(
+            "provider_rejected",
+            refusal(
+              "not_allowlisted=9, already_tried=1",
+              `${ONLY} US 1.00 already_tried, provider-9 DE 1.00 not_allowlisted`
+            ),
+            false
+          )
+        : undefined;
+  }
+
+  async function blueUp(h: H) {
+    await h.release(noState(), SHA_1);
+    expect(await h.seq.step(APP)).toBe("driven");
+    const [blue] = await h.store.attemptsFor(APP);
+    expect(blue?.phase).toBe("active");
+    return blue;
+  }
+
+  it("second release on a single-provider lane: blue closed (confirmed), then green on the same provider, active", async () => {
+    const h = harness();
+    singleProvider(h);
+    const blue = await blueUp(h);
+    expect(blue?.provider).toBe(ONLY);
+
+    await h.release(noState(), SHA_2);
+    expect(await h.seq.step(APP)).toBe("driven"); // green create refused: blue's provider excluded
+    let rows = await h.store.attemptsFor(APP);
+    expect(rows[0]?.error).toMatch(/^create refused: provider_rejected/);
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("active");
+
+    h.events.length = 0;
+    expect(await h.seq.step(APP)).toBe("driven");
+    rows = await h.store.attemptsFor(APP);
+    const green = rows.find((a) => a.phase === "active");
+    expect(green?.provider).toBe(ONLY);
+    expect(rows.find((a) => a.id === blue?.id)?.phase).toBe("retired");
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("closed");
+    // blue closed BEFORE the green create, and the green create no longer excludes blue's provider
+    const del = h.events.indexOf(`payer.delete:${blue?.externalName}`);
+    const create = h.events.findIndex((e) => e.startsWith("payer.create:"));
+    expect(del).toBeGreaterThanOrEqual(0);
+    expect(create).toBeGreaterThan(del);
+    expect(h.payer.createRequests.at(-1)?.excludeProviders).toBeUndefined();
+    expect(h.log.steps()).toEqual(
+      expect.arrayContaining([
+        "stop_then_start:closing_blue",
+        "stop_then_start:blue_closed",
+        "activated:ok",
+      ])
+    );
+    expect(h.log.alerts()).toContain("stop_then_start");
+    expect([...h.dns.records.values()][0]?.content).toBe(
+      `ingress-${green?.externalName}.${ONLY}.example`
+    );
+  });
+
+  it("an unconfirmed blue close creates nothing; the next tick retries and then starts green", async () => {
+    const h = harness({ closeConfirmMs: 5_000 });
+    singleProvider(h);
+    const blue = await blueUp(h);
+    await h.release(noState(), SHA_2);
+    await h.seq.step(APP); // refused
+    const creates = h.payer.createRequests.length;
+    h.payer.failDelete = true;
+    expect(await h.seq.step(APP)).toBe("close_pending");
+    expect(h.payer.createRequests).toHaveLength(creates);
+    expect(
+      (await h.store.attemptsFor(APP)).find((a) => a.id === blue?.id)?.phase
+    ).toBe("active");
+    expect(h.log.alerts()).toContain("close_unconfirmed");
+    h.payer.failDelete = false;
+    expect(await h.seq.step(APP)).toBe("driven");
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("active");
+  });
+
+  it("at most one stop-then-start per release: a failing green then parks normally", async () => {
+    const h = harness();
+    singleProvider(h);
+    const blue = await blueUp(h);
+    await h.release(noState(), SHA_2);
+    h.payer.onLease = (l) => {
+      l.serveSha = "f".repeat(40); // every green serves the wrong sha
+    };
+    for (let i = 0; i < 6; i++) await h.seq.step(APP);
+    expect(await h.seq.step(APP)).toBe("parked");
+    expect(
+      h.log.steps().filter((s) => s === "stop_then_start:closing_blue")
+    ).toHaveLength(1);
+    expect(
+      h.events.filter((e) => e === `payer.delete:${blue?.externalName}`)
+    ).toHaveLength(1);
+  });
+
+  it("first release of a workload (no blue) is unaffected: a refusal just retries", async () => {
+    const h = harness();
+    h.payer.createFault = (n) =>
+      n === 1
+        ? new PayerError(
+            "provider_rejected",
+            refusal("already_tried=1", `${ONLY} US 1.00 already_tried`),
+            false
+          )
+        : undefined;
+    await h.release(noState(), SHA_1);
+    await h.seq.step(APP);
+    expect(await h.seq.step(APP)).toBe("driven");
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("active");
+    expect(h.log.steps().some((s) => s.startsWith("stop_then_start"))).toBe(
+      false
+    );
+    expect(h.events.some((e) => e.startsWith("payer.delete"))).toBe(false);
+  });
+
+  it("multi-provider lane is unaffected: green elsewhere, blue retained; a refusal without already_tried never stops blue", async () => {
+    const h = harness();
+    const blue = await blueUp(h);
+    h.payer.createFault = (n) =>
+      n === 2
+        ? new PayerError(
+            "provider_rejected",
+            refusal("quality=2", "provider-7 US 1.00 quality"),
+            false
+          )
+        : undefined;
+    await h.release(noState(), SHA_2);
+    await h.seq.step(APP); // refused, but not for blue's exclusion
+    await h.seq.step(APP);
+    const rows = await h.store.attemptsFor(APP);
+    expect(rows.map((a) => a.phase)).toEqual(["active", "failed", "retiring"]);
+    expect(h.payer.createRequests.at(-1)?.excludeProviders).toEqual([
+      blue?.provider,
+    ]);
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("active");
+    expect(h.log.alerts()).not.toContain("stop_then_start");
+  });
+
+  it("bound state on another provider: the roster must name blue as already_tried; the state provider stays excluded", async () => {
+    const h = harness();
+    await stateUp(h); // provider-1
+    await deployApp(h, SHA_1); // blue on provider-2
+    h.payer.providerFor = () => ONLY;
+    h.payer.createFault = (_n, req) =>
+      req.excludeProviders?.includes(ONLY)
+        ? new PayerError(
+            "provider_rejected",
+            refusal(
+              "already_tried=2",
+              `provider-1 US 1.00 already_tried, ${ONLY} US 1.00 already_tried`
+            ),
+            false
+          )
+        : undefined;
+    await deployApp(h, SHA_2); // refused
+    expect(await h.seq.step(APP)).toBe("driven");
+    const active = (await h.store.attemptsFor(APP)).find(
+      (a) => a.phase === "active"
+    );
+    expect(active?.provider).toBe(ONLY);
+    expect(h.payer.createRequests.at(-1)?.excludeProviders).toEqual([
+      "provider-1",
+    ]);
+  });
+
+  it("a roster cut off by the actuator payer's 400-char truncation still names blue", async () => {
+    const h = harness();
+    await stateUp(h); // provider-1
+    await deployApp(h, SHA_1); // blue on provider-2
+    const filler = Array.from(
+      { length: 20 },
+      (_, i) => `provider-x${i} DE 1.00 not_allowlisted`
+    ).join(", ");
+    // Same shape as actuator-payer.adapter.ts: `actuator <path> -> HTTP <s> <code>: <message>`.slice(0, 400)
+    const truncated =
+      `actuator /v1/create -> HTTP 422 provider_rejected: ${refusal(
+        "not_allowlisted=20, already_tried=2",
+        `provider-1 US 1.00 already_tried, ${ONLY} US 1.00 already_tried, ${filler}`
+      )}`.slice(0, 400);
+    expect(truncated).not.toMatch(/\]$/);
+    h.payer.providerFor = () => ONLY;
+    h.payer.createFault = (_n, req) =>
+      req.excludeProviders?.includes(ONLY)
+        ? new PayerError("provider_rejected", truncated, false)
+        : undefined;
+    await deployApp(h, SHA_2); // refused
+    expect(await h.seq.step(APP)).toBe("driven");
+    expect(h.log.steps()).toContain("stop_then_start:blue_closed");
+    const active = (await h.store.attemptsFor(APP)).find(
+      (a) => a.phase === "active"
+    );
+    expect(active?.provider).toBe(ONLY);
+  });
+
+  it("blue's provider no longer admitted (appProviders): alert, blue kept, no stop", async () => {
+    const h = harness({ appProviders: ["provider-7"] });
+    singleProvider(h);
+    const blue = await blueUp(h);
+    await h.release(noState(), SHA_2);
+    await h.seq.step(APP); // refused
+    await h.seq.step(APP);
+    expect(h.log.alerts()).toContain("stop_then_start_refused");
+    expect(h.log.steps().some((s) => s.startsWith("stop_then_start"))).toBe(
+      false
+    );
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("active");
+    expect(
+      (await h.store.attemptsFor(APP)).find((a) => a.id === blue?.id)?.phase
+    ).toBe("active");
+  });
+
+  it("a state workload is never stopped", async () => {
+    const h = harness();
+    await stateUp(h);
+    await h.release(canaryDb({ memoryMi: 1024 }), SHA_2);
+    expect(await h.seq.step(DB)).toBe("state_protected");
+    expect(h.events.some((e) => e.startsWith("payer.delete"))).toBe(false);
+  });
+
+  it("a refused create whose observe stays down fails as plain `create refused:`, not orphan_suspect (bug.5567)", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.createFault = (n) =>
+      n === 2
+        ? new PayerError("provider_rejected", "bid refused", false)
+        : undefined;
+    h.payer.observeThrows = true;
+    await deployApp(h, SHA_1);
+    await h.seq.step(APP); // the observe-unavailable clock is running
+    h.clock.advance(16 * 60_000);
+    await h.seq.step(APP);
+    const first = (await h.store.attemptsFor(APP)).find((a) => a.attempt === 1);
+    expect(first?.phase).toBe("failed");
+    expect(first?.error).toMatch(/^create refused: provider_rejected/);
+    expect(
+      h.payer.createRequests.filter((r) => r.cogniKey === first?.cogniKey)
+    ).toHaveLength(1);
+  });
+});
