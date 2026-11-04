@@ -40,7 +40,8 @@ export class NodeRuntimeSecretsError extends Error {
 
 export interface NodeRuntimeSecretsPort {
   /**
-   * Read EXACTLY `keys` from the node's own bucket `cogni/<env>/<slug>` and return them, all with
+   * Read EXACTLY `keys` from the node's own bucket `cogni/<env>/<slug>` (DATABASE_MIGRATION_URL from its
+   * `cogni/<env>/<slug>-database-migration`, task.5408) and return them, all with
    * non-empty values. `keys` is the release's declared secret key list (value-free), never discovered
    * from the bucket. Throws `NodeRuntimeSecretsError`: `denied_keys` when any key is an operator/fleet
    * credential, `missing_keys` when any is absent or empty, `unavailable` otherwise. It never returns a

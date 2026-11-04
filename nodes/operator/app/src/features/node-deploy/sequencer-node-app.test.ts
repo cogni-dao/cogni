@@ -3,7 +3,7 @@
 
 /**
  * Module: `@features/node-deploy/sequencer-node-app.test`
- * Purpose: Prove the sequencer applies node runtime env and pre-create companion gates.
+ * Purpose: Prove node runtime env, app-owned migrations and pre-create companion gates.
  *   OpenBao remains custodian; unresolved env prevents payment; catalog placement rides create.
  * Scope: Feature behavior through port fakes; does not import native adapters.
  * Invariants: Unavailable artifacts and conflicting declarations cannot reach paid create.
@@ -82,6 +82,8 @@ class FakeRuntimeSecrets implements NodeRuntimeSecretsPort {
   /** The node's OpenBao bucket: declared keys AND fleet-inherited keys that are NOT declared. */
   bucket: Record<string, string> = {
     ...PROFILE_BUCKET,
+    // the node's isolated migration DSN, read from its `-database-migration` bucket (task.5408)
+    DATABASE_MIGRATION_URL: "value-of-DATABASE_MIGRATION_URL",
     PAPER_ENFORCE_MODE: "true",
     ...INHERITED,
   };
@@ -1589,5 +1591,173 @@ describe("accepted bundle image identity", () => {
       selectReleaseBundle(pinned, publication).artifactPlan?.selectedImages
         ?.helper
     ).toBe(foreign);
+  });
+});
+
+describe("green migrates itself before it serves (task.5408)", () => {
+  it.each([
+    "bucket",
+    "dedicated",
+  ])("a declared companion release migrates the %s database only in its public app", async (database) => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    const modes = proofResponder(h);
+    const d = declarationInput();
+    const manifest = {
+      ...d.manifest,
+      containers: {
+        ...d.manifest.containers,
+        app: {
+          ...d.manifest.containers.app,
+          ...(database === "dedicated"
+            ? {
+                variables: {
+                  // biome-ignore lint/suspicious/noTemplateCurlyInString: Score resource reference resolved by the compiler.
+                  DATABASE_URL: "${resources.db.url}",
+                },
+              }
+            : {}),
+        },
+      },
+      resources: {
+        ...d.manifest.resources,
+        ...(database === "dedicated"
+          ? {
+              db: {
+                type: "postgres",
+                class: "dedicated",
+                id: "canary-db",
+              },
+            }
+          : {}),
+      },
+    };
+    const spec = resolveWorkloadDeclaration({
+      repoSpecText: stringify(d.spec),
+      manifests: [
+        { path: ".cogni/workloads/canary.yaml", text: stringify(manifest) },
+      ],
+      nodeId: POLY_ID,
+      env: "preview",
+      workload: "canary",
+      pendingImage: `ghcr.io/example/node:sha-${SHA_1}`,
+      sourceRepository: "example/node",
+    });
+    if (database === "dedicated") {
+      await h.store.recordRelease({
+        nodeId: POLY_ID,
+        env: "preview",
+        workload: "canary-db",
+        sourceSha: SHA_1,
+        spec: canaryDb(),
+        createdBy: "test",
+      });
+      expect(
+        await h.seq.step({
+          nodeId: POLY_ID,
+          env: "preview",
+          workload: "canary-db",
+        })
+      ).toBe("driven");
+      // A dedicated binding must work without the unrelated shared migration credential.
+      delete h.runtimeSecrets.bucket.DATABASE_MIGRATION_URL;
+    }
+    h.runtimeSecrets.reads.length = 0;
+    const { release } = await companionRelease(h, spec);
+    expect(
+      await h.seq.step({ ...h.key(POLY_ID, "canary"), env: "preview" })
+    ).toBe("driven");
+    const services = requiredFixture(appCreates(h)[0]).spec.services;
+    const app = requiredFixture(services.find((s) => s.name === "canary"));
+    const helper = requiredFixture(services.find((s) => s.name === "helper"));
+    const expectedMigration =
+      database === "dedicated"
+        ? "postgres://postgres:pw-1-s3cr3t%2Fwith%2Bchars@provider-1.example:31001/postgres?sslmode=require"
+        : "value-of-DATABASE_MIGRATION_URL";
+    expect(app.env?.DATABASE_MIGRATION_URL).toBe(expectedMigration);
+    expect(app.env?.DATABASE_URL).toBe(
+      database === "dedicated" ? expectedMigration : "value-of-DATABASE_URL"
+    );
+    expect(app.env?.AUTH_SECRET).toBe("value-of-AUTH_SECRET");
+    expect(app.env?.HELPER_URL).toBe("http://helper:8181");
+    expect(app.env).not.toHaveProperty("HELPER_ACCESS");
+    expect(String(app.command?.[2])).toContain(
+      "node /app/app/migrate.mjs /app/app/migrations"
+    );
+    expect(String(app.command?.[2])).toContain("unset DATABASE_MIGRATION_URL");
+    expect(helper.env).toEqual({
+      HOST: "0.0.0.0",
+      PORT: "8181",
+      DEPLOY_ENVIRONMENT: "preview",
+      COGNI_REPO_SHA: SHA_1,
+      HELPER_ACCESS: "helper-only",
+    });
+    expect(helper.command).toBeUndefined();
+    expect(helper).not.toHaveProperty("volumes");
+    expect(helper.expose).toEqual([{ port: 8181, as: 8181, global: false }]);
+    for (const read of h.runtimeSecrets.reads) {
+      expect(read.keys).toContain("AUTH_SECRET");
+      expect(read.keys).toContain("HELPER_ACCESS");
+      expect(read.keys.includes("DATABASE_MIGRATION_URL")).toBe(
+        database === "bucket"
+      );
+      expect(read.keys.includes("DATABASE_URL")).toBe(database === "bucket");
+    }
+    expect(modes).toEqual(["qualify", "readback"]);
+    expect(
+      (await h.store.getRelease(release.id))?.spec.artifactPlan?.selectedImages
+    ).toEqual({ canary: PUBLIC_IMAGE, helper: HELPER_IMAGE });
+    expect(
+      h.store.attempts.find((a) => a.releaseId === release.id)?.phase
+    ).toBe("active");
+  });
+
+  it("a node app with no bound DATABASE_URL gets its migration DSN and a start command that migrates, then execs the app", async () => {
+    const h = harness();
+    await recordPending(h, SHA_1);
+    h.images.published.set(SHA_1, POLY_DIGEST);
+    expect(await h.seq.step(h.key(POLY_ID, "canary"))).toBe("driven");
+    expect(h.runtimeSecrets.reads.at(-1)?.keys).toContain(
+      "DATABASE_MIGRATION_URL"
+    );
+    const svc = appCreates(h)[0]?.spec.services[0];
+    expect(svc?.env?.DATABASE_MIGRATION_URL).toBe(
+      "value-of-DATABASE_MIGRATION_URL"
+    );
+    const script = String(svc?.command?.[2]);
+    const migrate = script.indexOf(
+      "node /app/app/migrate.mjs /app/app/migrations"
+    );
+    const doltgres = script.indexOf("node /app/app/migrate-doltgres.mjs");
+    const unset = script.indexOf("unset DATABASE_MIGRATION_URL");
+    const exec = script.indexOf('exec "$@"');
+    expect(migrate).toBeGreaterThan(0);
+    expect(doltgres).toBeGreaterThan(migrate);
+    expect(unset).toBeGreaterThan(doltgres);
+    expect(exec).toBeGreaterThan(unset);
+  });
+
+  it("a missing migration DSN waits as a dependency: nothing is created (NO_HALF_ENV)", async () => {
+    const h = harness();
+    delete h.runtimeSecrets.bucket.DATABASE_MIGRATION_URL;
+    await recordPending(h, SHA_1);
+    h.images.published.set(SHA_1, POLY_DIGEST);
+    expect(await h.seq.step(h.key(POLY_ID, "canary"))).toBe(
+      "waiting_dependency"
+    );
+    expect(appCreates(h)).toHaveLength(0);
+  });
+
+  it("a node app whose DATABASE_URL is bound to its own state lease migrates THAT database (OWN_STATE_MIGRATES_ITSELF)", async () => {
+    const h = harness();
+    await stateUp(h, POLY_ID);
+    await releaseApp(h, POLY_ID);
+    const svc = appCreates(h)[0]?.spec.services[0];
+    // The migration DSN is the binding's own DSN, never the shared bucket's.
+    expect(svc?.env?.DATABASE_MIGRATION_URL).toBe(svc?.env?.DATABASE_URL);
+    expect(svc?.env?.DATABASE_MIGRATION_URL).not.toBe(
+      h.runtimeSecrets.bucket.DATABASE_MIGRATION_URL
+    );
+    expect(String(svc?.command?.[2])).toContain("migrate.mjs");
   });
 });
