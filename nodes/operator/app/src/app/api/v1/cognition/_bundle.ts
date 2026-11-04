@@ -73,7 +73,7 @@ export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
  */
 export const SESSION_WATCH_GATE = `<watch-gate rule="ONE blocking command; its exit code or matched value IS the verdict — no harness-specific monitor/background/notification primitive, never fire-and-forget, re-read the ground-truth signal before reporting">
   <ci-green>gh pr checks {PR} --watch --fail-fast — blocks; 0=all pass, nonzero=failed. NOT --required (omits real gates, e.g. build). Re-read after (one-shot 8=pending) — finished ≠ green.</ci-green>
-  <flight-landed>node: follow GET /api/v1/deploy/workloads/releases/{releaseId}?nodeId=&env= to its end: active=landed, parked=FAILED (read step reasons). operator: gh run view {run} --exit-status. Then ONE .buildSha read. Bound it.</flight-landed>
+  <flight-landed>node: follow GET /api/v1/deploy/workloads/releases/{releaseId}?nodeId=&env= to its end: active=landed; parked=FAILED (read step reasons); superseded=newer release; no phase change 15 min=stalled, report. operator: gh run watch {run} --exit-status. Then ONE .buildSha read. Bound it.</flight-landed>
   <deploy-landed>preview/production: same rule. Never poll /version: it is blind to failure.</deploy-landed>
   <truth>verdict = release or run end + one .buildSha read; green run + wrong SHA = FAILED.</truth>
 </watch-gate>`;
