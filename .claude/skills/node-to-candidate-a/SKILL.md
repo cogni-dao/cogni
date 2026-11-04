@@ -27,14 +27,14 @@ Prerequisite: the node exists in the operator registry. If not, run [`node-setup
      -d '{"nodeId":"<uuid>","env":"candidate-a","workload":"app","sourceSha":"<40-hex PR head>"}'
    ```
 
-4. **Watch.** `GET /api/v1/deploy/workloads?nodeId=<uuid>&env=candidate-a`. Done when `desired.releaseState` is `active`.
-5. **Prove.** `curl https://<slug>-test.cognidao.org/version` returns your commit as `buildSha`. Then run [`validate-candidate`](../validate-candidate/SKILL.md) and post its scorecard. That scorecard is your definition of done.
+4. **Follow the release.** The POST returns a `releaseId`. Read `GET /api/v1/deploy/workloads/releases/<releaseId>?nodeId=<uuid>&env=candidate-a` every 15 s: `release.releaseState`, `release.parkedReason` and every attempt's steps with reasons. Done when `releaseState` is `active`. Never follow a deploy by polling `/version`: it shows the old release and never shows a failure or a stall. Failure signatures and the stall rule: [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload) sections 4 and 5.
+5. **Prove.** After `active`, read `https://<slug>-test.cognidao.org/version` once: `buildSha` is your commit. Then run [`validate-candidate`](../validate-candidate/SKILL.md) and post its scorecard. That scorecard is your definition of done.
 
 The hub owns the details. Read [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload) (declaration, watch, failures) and [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) (order and gates) before step 3.
 
 ## Invariants
 
 - Request the role, then wait for the owner. Never write authorization tuples.
-- A 200 from the verb records a release. It does not mean the node is live. `/version.buildSha` is the proof.
+- A 200 from the verb records a release. It does not mean the node is live. The release reaching `active` is the deploy proof; one `/version.buildSha` read afterwards is the identity check.
 - Never hand-apply anything to a cluster. The verb is the only writer of the node's app.
 - Loki for the sequencer: `{env="candidate-a",service="sequencer"} |= "node_deploy_step" |= "<releaseId>"`.

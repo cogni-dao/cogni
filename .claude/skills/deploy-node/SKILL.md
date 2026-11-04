@@ -35,6 +35,7 @@ The roster is live state. Read it:
 | Registered nodes and owners | `GET /api/v1/nodes`                                    |
 | Per-env deploy state        | `GET /api/v1/nodes/{id}/deploy-state`                  |
 | In-repo shape               | `infra/catalog/*.yaml`                                 |
+| Did my deploy work, and why not? | `GET /api/v1/deploy/workloads/releases/<releaseId>?nodeId=&env=` |
 | What is serving             | `curl https://<host>/version` from outside the cluster |
 
 ## Other owners
@@ -52,7 +53,7 @@ The roster is live state. Read it:
 
 ## Invariants
 
-- `/version.buildSha` read from outside the cluster is the only proof a deploy landed. A 200 from the verb, a green workflow or a lease is not proof.
+- Follow the release (`GET /api/v1/deploy/workloads/releases/<releaseId>`) to `active`; never poll `/version` to follow a deploy. After `active`, one `/version.buildSha` read from outside the cluster confirms the exact commit. A 200 from the verb, a green workflow or a lease is not proof.
 - Missing placement is a hard failure. Never fall back to k3s.
 - Never roll a node back to k3s. Fix forward.
 - The operator is the exception. It stays on k3s and Argo (operator only): `POST /api/v1/vcs/flight`, then `POST /api/v1/deploy/promote`.
