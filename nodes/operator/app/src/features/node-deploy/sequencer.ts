@@ -719,12 +719,17 @@ export class NodeDeploySequencer {
    * HAIRPIN_RULE: providers a new app attempt must NOT land on — blue's provider (two leases on one
    * ingress cannot both claim a host) and the provider of every BOUND state workload's active lease (an
    * app cannot reach a state lease's public forwarded port on its own provider: production canary v2
-   * served /version but /readyz was 503 db_unreachable). Deduped, blue first, capped at the wire's 16.
+   * served /version but /readyz was 503 db_unreachable). With `withFailedTries` (a new create only), also
+   * the provider of every earlier attempt of THIS release that failed or was lost AFTER binding a lease
+   * (proof_timeout, failed proof, lease lost): a provider whose egress is not admitted must not be
+   * retried (bug.5569). A refused create bound no provider and a different release is a different try,
+   * so neither adds one. Deduped, blue first, capped at the wire's 16.
    */
   private async excludedProviders(
     key: WorkloadKey,
     release: ReleaseRow,
-    blue: AttemptRow | undefined
+    blue: AttemptRow | undefined,
+    withFailedTries = false
   ): Promise<string[]> {
     const w = release.spec;
     const providers: (string | undefined)[] = [blue?.provider];
@@ -735,6 +740,14 @@ export class NodeDeploySequencer {
       });
       providers.push(stateAttempts.find((a) => a.phase === "active")?.provider);
     }
+    if (withFailedTries)
+      for (const a of await this.d.store.attemptsFor(key))
+        if (
+          a.releaseId === release.id &&
+          (a.phase === "failed" || a.phase === "lost") &&
+          a.provider
+        )
+          providers.push(a.provider);
     return [...new Set(providers.filter((p): p is string => Boolean(p)))].slice(
       0,
       MAX_EXCLUDED_PROVIDERS
@@ -851,7 +864,12 @@ export class NodeDeploySequencer {
       }
     }
 
-    const excludeProviders = await this.excludedProviders(key, release, blue);
+    const excludeProviders = await this.excludedProviders(
+      key,
+      release,
+      blue,
+      true
+    );
     if (excludeProviders.length > 0)
       await this.emit(key, release, attempt, "providers_excluded", "ok", {
         providers: excludeProviders,
