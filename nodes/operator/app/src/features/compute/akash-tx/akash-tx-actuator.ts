@@ -1898,17 +1898,29 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     providerAccount?: string,
     record?: AkashTxAllocationRecord
   ): Promise<AkashTxResource> {
+    let output: ProvisionOutput;
     try {
-      const output = await this.console.status({ leaseId: externalName });
-      // Cost evidence is read only for a LIVE receipt. A `released`/`failed` one bills nothing, and a
-      // rolled-back deployment has no lease at all, so its cost read throws `ledger_unavailable` on
-      // every observe; that alone held a refused attempt for 15 min and stranded the record (bug.5569).
-      if (record?.state === "allocated")
-        await this.observeCost(record, externalName);
-      return resourceFrom(output, providerAccount);
+      output = await this.console.status({ leaseId: externalName });
     } catch (error) {
       throw mapConsoleFailure(error, { mutating: false });
     }
+    // COST_NEVER_DECIDES_OBSERVE (bug.5569): cost evidence is read only while Console says the lease
+    // is active (billing), and its failure is logged, never thrown. A closed or rolled-back deployment
+    // has no lease, so its cost read threw `ledger_unavailable` on EVERY observe: prod logged 2000+
+    // `compute_cost_unavailable` (operation=observe) and every refused release sat ~13 min in
+    // `observe_unavailable` before `orphan_suspect`. Same pattern as delete's `.catch`.
+    if (record && output.state === "active")
+      await this.observeCost(record, externalName).catch((error: unknown) => {
+        this.log.warn(
+          {
+            cogniKey: record.cogniKey,
+            externalName,
+            causeType: costFailureType(error),
+          },
+          "compute_cost_observation_failed"
+        );
+      });
+    return resourceFrom(output, providerAccount);
   }
 
   private async withServing(

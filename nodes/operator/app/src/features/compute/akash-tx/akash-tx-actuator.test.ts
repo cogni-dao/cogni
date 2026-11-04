@@ -1943,9 +1943,8 @@ describe("AkashTxActuator.create", () => {
         [...ledger.rows.values()].filter((r) => r.state === "preparing")
       ).toEqual([]);
       // the provider heals; the second key must reach allocation, not `wallet_allocation_blocked`
-      (
-        api as unknown as { options: FakeConsoleOptions }
-      ).options.allocateError = undefined;
+      delete (api as unknown as { options: FakeConsoleOptions }).options
+        .allocateError;
       const second = await actuator.create(secondKey);
       expect(second.externalName).toBe("7001");
       expect(api.allocateCalls).toBe(2);
@@ -1992,9 +1991,8 @@ describe("AkashTxActuator.create", () => {
       expect(ledger.rows.get("k1")?.state).toBe("released");
       cost.failEvidence = false;
       // the provider heals; the second key must reach allocation, not `wallet_allocation_blocked`
-      (
-        api as unknown as { options: FakeConsoleOptions }
-      ).options.allocateError = undefined;
+      delete (api as unknown as { options: FakeConsoleOptions }).options
+        .allocateError;
       api.nextLeaseId = "7002";
       const second = await actuator.create(secondKey);
       expect(second.state).toBe("active");
@@ -2017,6 +2015,45 @@ describe("AkashTxActuator.create", () => {
           (l) => l.marker === "akash_tx_allocation_rollback_unsettled"
         )?.fields.ledgerState
       ).toBe("allocated");
+    });
+
+    it("cost evidence never decides observe: a key whose deployment CLOSED, with cost evidence throwing AkashComputeError, observes closed (no ledger_unavailable); an active lease's cost failure is a warn", async () => {
+      // prod shape: the receipt still reads `allocated` (main's rollback never released it)
+      const { actuator, ledger, cost, log } = build({ closedDseqs: ["7001"] });
+      await actuator.create(call);
+      expect(ledger.rows.get("k1")?.state).toBe("allocated");
+      cost.observeCost = async () => {
+        throw consoleError("UNEXPECTED_SHAPE"); // "did not identify exactly one lease"
+      };
+      await expect(actuator.observe({ cogniKey: "k1" })).resolves.toMatchObject(
+        { found: true, resource: { externalName: "7001", state: "closed" } }
+      );
+      await expect(
+        actuator.observe({ cogniKey: "k1", externalName: "7001" })
+      ).resolves.toMatchObject({ resource: { state: "closed" } });
+      expect(
+        log.lines.some((l) => l.marker === "compute_cost_unavailable")
+      ).toBe(false);
+
+      // an ACTIVE lease whose cost read fails still observes; the failure is a warn, not a refusal
+      const live = build();
+      await live.actuator.create(call);
+      live.cost.observeCost = async () => {
+        throw consoleError("UNEXPECTED_SHAPE");
+      };
+      await expect(
+        live.actuator.observe({ cogniKey: "k1" })
+      ).resolves.toMatchObject({ found: true, resource: { state: "active" } });
+      expect(
+        live.log.lines.find(
+          (l) => l.marker === "compute_cost_observation_failed"
+        )
+      ).toMatchObject({ level: "warn" });
+      // the underlying cause is still named, on observeCost's own line
+      expect(
+        live.log.lines.find((l) => l.marker === "compute_cost_unavailable")
+          ?.fields.causeType
+      ).toBe("provider_evidence_error");
     });
 
     it("a screening refusal whose deployment was closed AND re-read closed proves nothing bills", async () => {
