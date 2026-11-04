@@ -17,7 +17,9 @@
 #   - every data[].remoteRef.key is `<env>/<bucket>` where <env> is THIS namespace's env (derived from the
 #     namespace name, so a candidate-a namespace can never read production's path) and <bucket> is one node
 #     slug: a DNS label that is NOT a platform/infra bucket (see deniedBuckets) and does NOT contain
-#     `database` anywhere (database-reliability-*, <node>-database-migration/-cell/-backup/-recovery-probe);
+#     `database` anywhere (database-reliability-*, <node>-database-migration/-cell/-backup/-recovery-probe),
+#     with ONE exception (task.5408): `<env>/<slug>-database-migration`, property DATABASE_MIGRATION_URL,
+#     where <slug> is the target's own (`nd-<slug>-env`);
 #   - the rendered Secret is named `nd-...` (it can never overwrite a Secret the sequencer does not own).
 # failurePolicy Fail + validationActions Deny: if the policy cannot be evaluated the write is refused.
 # ESO's own status writes go to the /status subresource, which `externalsecrets` does not match.
@@ -50,6 +52,15 @@ spec:
     # Every OTHER non-node bucket has `database` in its name and is denied by substring below:
     #   database-reliability-actuator, database-reliability-readmitter, <node>-database-migration,
     #   <node>-database-cell, <node>-database-backup, <node>-database-recovery-probe.
+    # task.5408 — the ONE database bucket admitted: the node's own isolated migration DSN, so a green
+    # lease migrates itself before it serves. The slug is the target's (`nd-<slug>-env`), so an
+    # ExternalSecret can never name another node's migration bucket; only DATABASE_MIGRATION_URL.
+    - name: migrationBucket
+      expression: >-
+        has(object.spec.target) && has(object.spec.target.name) &&
+        object.spec.target.name.startsWith('nd-') && object.spec.target.name.endsWith('-env')
+        ? object.spec.target.name.substring(3, size(object.spec.target.name) - 4) + '-database-migration'
+        : ''
     - name: deniedBuckets
       expression: >-
         ['operator', 'scheduler-worker', 'akash-tx-actuator', '_system', '_shared',
@@ -79,8 +90,11 @@ spec:
         has(object.spec.data) &&
         object.spec.data.all(d, size(d.remoteRef.key.split('/')) == 2 &&
           !(d.remoteRef.key.split('/')[1] in variables.deniedBuckets) &&
-          !d.remoteRef.key.split('/')[1].contains('database'))
-      message: "remoteRef.key names a bucket a node app may never read (operator, scheduler-worker, akash-tx-actuator, _system, _shared, openfga, litellm, doltgres, temporal, postgres, redis, grafana, loki, or any bucket containing 'database')"
+          (!d.remoteRef.key.split('/')[1].contains('database') ||
+            (d.remoteRef.key.split('/')[1] == variables.migrationBucket &&
+              d.secretKey == 'DATABASE_MIGRATION_URL' &&
+              has(d.remoteRef.property) && d.remoteRef.property == 'DATABASE_MIGRATION_URL')))
+      message: "remoteRef.key names a bucket a node app may never read (operator, scheduler-worker, akash-tx-actuator, _system, _shared, openfga, litellm, doltgres, temporal, postgres, redis, grafana, loki, or any bucket containing 'database' other than the node's own <slug>-database-migration for DATABASE_MIGRATION_URL)"
       reason: Forbidden
     - expression: >-
         has(object.spec.target) && has(object.spec.target.name) &&
