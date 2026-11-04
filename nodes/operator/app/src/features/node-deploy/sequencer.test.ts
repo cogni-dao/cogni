@@ -386,6 +386,50 @@ describe("provider exclusion and alert hygiene", () => {
     expect(req?.excludeProviders?.length ?? 0).toBeLessThanOrEqual(16);
   });
 
+  it("bug.5569: a provider that bound a lease and failed proof is excluded from the next attempt of the same release, with blue's provider", async () => {
+    const h = harness();
+    await stateUp(h); // provider-1
+    await deployApp(h, SHA_1); // blue on provider-2
+    h.payer.onLease = (l) => {
+      l.serveSha = "f".repeat(40); // attempt 1 of SHA_2 binds a lease and fails proof
+    };
+    await deployApp(h, SHA_2);
+    const failed = (await h.store.attemptsFor(APP)).find(
+      (a) => a.phase === "failed"
+    );
+    expect(failed?.provider).toBeTruthy();
+    const failedProvider = failed?.provider as string;
+    h.payer.onLease = undefined;
+    await h.seq.step(APP); // attempt 2 of the same release
+    const reqs = h.payer.createRequests.filter((r) => r.spec.name === "canary");
+    const second = reqs.at(-1)?.excludeProviders ?? [];
+    expect(second).toContain(failedProvider);
+    expect(second).toContain("provider-2");
+    expect(second).toContain("provider-1");
+    // the first attempt of SHA_2 did not exclude the provider it was about to land on
+    expect(reqs.at(-2)?.excludeProviders ?? []).not.toContain(failedProvider);
+  });
+
+  it("bug.5569: providers of a different release are not excluded", async () => {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    h.payer.onLease = (l) => {
+      l.serveSha = "f".repeat(40);
+    };
+    await deployApp(h, SHA_2); // SHA_2 attempt fails on some provider P
+    const failedProvider = (await h.store.attemptsFor(APP)).find(
+      (a) => a.phase === "failed"
+    )?.provider as string;
+    h.payer.onLease = undefined;
+    await h.release(canaryApp(), SHA_3); // a newer release supersedes SHA_2
+    await h.seq.step(APP);
+    const last = h.payer.createRequests
+      .filter((r) => r.spec.name === "canary")
+      .at(-1);
+    expect(last?.excludeProviders ?? []).not.toContain(failedProvider);
+  });
+
   it("a parked release alerts once per 10 minutes, not once per tick", async () => {
     const h = harness();
     await stateUp(h);
@@ -1295,6 +1339,65 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
     expect(blue?.phase).toBe("active");
     return blue;
   }
+
+  /** bug.5569: blue on provider-1; attempt 1 of the next release binds on P=provider-2 and fails proof. */
+  async function failedTryOnP(h: H, rosterNames: string) {
+    const blue = await blueUp(h);
+    expect(blue?.provider).toBe("provider-1");
+    h.payer.onLease = (l) => {
+      l.serveSha = "f".repeat(40);
+    };
+    await h.release(noState(), SHA_2);
+    expect(await h.seq.step(APP)).toBe("driven"); // attempt 1: lease on provider-2, proof fails
+    const tried = (await h.store.attemptsFor(APP)).find(
+      (a) => a.phase === "failed"
+    );
+    expect(tried?.provider).toBe("provider-2");
+    h.payer.onLease = undefined;
+    // While blue AND the failed try are excluded, nothing passes screening; one bid was already_tried.
+    h.payer.createFault = (_n, req) =>
+      req.excludeProviders?.includes("provider-1") &&
+      req.excludeProviders.includes("provider-2")
+        ? new PayerError(
+            "provider_rejected",
+            refusal(
+              "not_allowlisted=9, already_tried=1",
+              `${rosterNames} US 1.00 already_tried, provider-9 DE 1.00 not_allowlisted`
+            ),
+            false
+          )
+        : undefined;
+    return blue;
+  }
+
+  it("bug.5569: already_tried=1 naming the FAILED try's provider never closes blue", async () => {
+    const h = harness();
+    const blue = await failedTryOnP(h, "provider-2");
+    expect(await h.seq.step(APP)).toBe("driven"); // attempt 2 refused, roster names P
+    expect((await h.store.attemptsFor(APP))[0]?.error).toMatch(
+      /^create refused: provider_rejected/
+    );
+    await h.seq.step(APP);
+    expect(h.log.steps().some((st) => st.startsWith("stop_then_start"))).toBe(
+      false
+    );
+    expect(h.events.some((e) => e.startsWith("payer.delete:1001"))).toBe(false);
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("active");
+    expect(
+      (await h.store.attemptsFor(APP)).find((a) => a.id === blue?.id)?.phase
+    ).toBe("active");
+  });
+
+  it("bug.5569: already_tried=1 naming BLUE with a failed try excluded still proceeds to stop-then-start", async () => {
+    const h = harness();
+    const blue = await failedTryOnP(h, "provider-1");
+    expect(await h.seq.step(APP)).toBe("driven"); // attempt 2 refused, roster names blue
+    expect(await h.seq.step(APP)).toBe("driven");
+    expect(h.log.steps()).toEqual(
+      expect.arrayContaining(["stop_then_start:closing_blue"])
+    );
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("closed");
+  });
 
   it("second release on a single-provider lane: blue closed (confirmed), then green on the same provider, active", async () => {
     const h = harness();
