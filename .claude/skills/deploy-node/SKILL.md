@@ -30,13 +30,13 @@ Read these hub guides before the first call:
 
 The roster is live state. Read it:
 
-| Want                        | Source                                                 |
-| --------------------------- | ------------------------------------------------------ |
-| Registered nodes and owners | `GET /api/v1/nodes`                                    |
-| Per-env deploy state        | `GET /api/v1/nodes/{id}/deploy-state`                  |
-| In-repo shape               | `infra/catalog/*.yaml`                                 |
+| Want                             | Source                                                           |
+| -------------------------------- | ---------------------------------------------------------------- |
+| Registered nodes and owners      | `GET /api/v1/nodes`                                              |
+| Per-env deploy state             | `GET /api/v1/nodes/{id}/deploy-state`                            |
+| In-repo shape                    | `infra/catalog/*.yaml`                                           |
 | Did my deploy work, and why not? | `GET /api/v1/deploy/workloads/releases/<releaseId>?nodeId=&env=` |
-| What is serving             | `curl https://<host>/version` from outside the cluster |
+| What is serving                  | `curl https://<host>/version` from outside the cluster           |
 
 ## Other owners
 
