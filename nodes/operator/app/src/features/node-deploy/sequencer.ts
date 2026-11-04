@@ -19,6 +19,9 @@
  *     (`/version.buildSha`) and `/readyz` 200 through its provider ingress with the public Host header,
  *     within `proofMs` of lease creation; otherwise the NEW lease is closed and blue keeps serving.
  *   - NOT_BLUES_PROVIDER: a green lease that lands on blue's provider is a failed proof and is closed.
+ *   - STOP_THEN_START (task.5409): when a green create is refused because blue's provider was the only
+ *     bidder screening could pass, an `app` blue is closed (confirmed) BEFORE the next create, which then
+ *     may land on blue's provider. At most once per release; never for `state`. Accepted downtime.
  *   - CUTOVER_IS_READ_BACK: a cutover counts only after the edge record reads back AND 8 consecutive
  *     public reads (DoH) return the exact sha.
  *   - CLOSE_IS_CONFIRMED: a lease counts as closed only after observe says closed AND chain truth
@@ -337,6 +340,13 @@ export class NodeDeploySequencer {
       throw error;
     }
 
+    // STOP_THEN_START (task.5409): blue's provider was the only bidder that could pass screening, so a
+    // green beside blue can never be placed. Close blue first (accepted downtime), then create.
+    let blue = active;
+    const stop = await this.stopThenStart(key, release, ofRelease, active);
+    if (stop === "unconfirmed") return "close_pending";
+    if (stop === "stopped") blue = undefined;
+
     const attempt = await this.d.store.insertAttempt(release.id, (n) =>
       buildCogniKey({
         namespace: this.d.config.namespace,
@@ -347,10 +357,85 @@ export class NodeDeploySequencer {
       })
     );
     await this.emit(key, release, attempt, "attempt_planned", "ok", {
-      blue: active?.externalName,
+      blue: blue?.externalName,
     });
-    await this.drive(key, deployable, attempt, active);
+    await this.drive(key, deployable, attempt, blue);
     return "driven";
+  }
+
+  /**
+   * STOP_THEN_START (task.5409, CEO ruling 2026-11-03: a node may go DOWN during a switch). Blue/green
+   * excludes blue's provider, because one Akash provider cannot serve the same custom host from two
+   * leases. When that provider is the ONLY one that can pass screening, every green create is refused
+   * and the lane can never ship again. So, for an `app` only (a state lease is never stopped):
+   *  - trigger: the release's newest attempt failed with a create refusal in which bids arrived, none
+   *    passed screening, and blue's provider was refused only as `already_tried` (the actuator's
+   *    exclusion verdict, `akash-provider-screen.ts` `rejectionFor`). With no bound-state exclusion the
+   *    caller's exclude list is exactly {blue}, so `already_tried=N>0` names blue; otherwise the bid
+   *    roster must name blue's address as `already_tried`.
+   *  - action: close blue chain-confirmed (`closeAndConfirm`), mark it `retired`, and let the next create
+   *    run with no blue, so blue's provider is no longer excluded. The edge keeps pointing at the
+   *    closed lease until green's proof moves it (the accepted downtime window).
+   *  - an unconfirmed close stops here: no create while blue may still be live (`close_unconfirmed`).
+   *  - at most once per release: after the stop the workload has no active blue, so it cannot trigger
+   *    again until this release (or a newer one) serves. If green then fails, the normal park applies.
+   * Never for a first release (no blue) or a lane where another provider passed screening.
+   */
+  private async stopThenStart(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    ofRelease: readonly AttemptRow[],
+    blue: AttemptRow | undefined
+  ): Promise<"none" | "stopped" | "unconfirmed"> {
+    if (release.spec.kind !== "app") return "none";
+    if (!blue?.provider || !blue.externalName || blue.releaseId === release.id)
+      return "none";
+    const newest = ofRelease[0];
+    if (newest?.phase !== "failed") return "none";
+    const stateExcluded = await this.excludedProviders(key, release, undefined);
+    // HAIRPIN_RULE still holds: if blue's provider also hosts a bound state lease, reopening it is useless.
+    if (stateExcluded.includes(blue.provider)) return "none";
+    if (
+      !blueWasOnlyScreenedBidder(
+        newest.error,
+        blue.provider,
+        stateExcluded.length === 0
+      )
+    )
+      return "none";
+
+    const reason = `blue provider ${blue.provider} is the only bidder that passes screening; closing blue ${blue.externalName} before green (accepted downtime)`;
+    await this.emit(key, release, newest, "stop_then_start", "closing_blue", {
+      blueDseq: blue.externalName,
+      provider: blue.provider,
+      reason,
+    });
+    await this.alert(key, release, newest, "stop_then_start", {
+      blueDseq: blue.externalName,
+      provider: blue.provider,
+      reason,
+    });
+    if (!(await this.closeAndConfirm(blue))) {
+      await this.alert(key, release, blue, "close_unconfirmed", {
+        reason: "stop_then_start: blue close not confirmed; no green create",
+      });
+      return "unconfirmed";
+    }
+    const retired = await this.d.store.updateAttempt(blue.id, {
+      phase: "retired",
+    });
+    const blueRelease =
+      (await this.d.store.getRelease(blue.releaseId)) ?? release;
+    await this.emit(key, blueRelease, retired, "old_closed", "ok", {
+      dseq: retired.externalName,
+      verified: true,
+      reason: "stop_then_start",
+    });
+    await this.emit(key, release, newest, "stop_then_start", "blue_closed", {
+      blueDseq: retired.externalName,
+      provider: blue.provider,
+    });
+    return "stopped";
   }
 
   /**
@@ -871,11 +956,13 @@ export class NodeDeploySequencer {
       });
       return attempt;
     }
-    const reason =
-      `orphan_suspect: ${context}; observe unavailable since ${since.toISOString()}: ${errText(error)}`.slice(
-        0,
-        500
-      );
+    // A refused create is not an orphan (bug.5567): it keeps its plain `create refused:` reason, so the
+    // no-replay rail and the refusal reading (task.5409) still see it. The alert below still fires.
+    const reason = (
+      context.startsWith(REFUSED_PREFIX)
+        ? `${context}; observe unavailable since ${since.toISOString()}: ${errText(error)}`
+        : `orphan_suspect: ${context}; observe unavailable since ${since.toISOString()}: ${errText(error)}`
+    ).slice(0, 500);
     const failed = await this.d.store.updateAttempt(attempt.id, {
       phase: "failed",
       error: reason,
@@ -1745,6 +1832,34 @@ export class NodeDeploySequencer {
 
 /** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
 const REFUSED_PREFIX = "create refused: ";
+
+/**
+ * True when a persisted create refusal shows blue's provider as the only bidder screening could pass
+ * (task.5409). Keys on the actuator's NO_ELIGIBLE_BIDS text (`akash-compute.adapter.ts`
+ * `awaitScreenedBid`: "none passed provider screening [refused: ...] [bids: ...]") and its exclusion
+ * verdict `already_tried` (`akash-provider-screen.ts` `rejectionFor`: an excluded provider's bid). When
+ * `onlyBlueExcluded`, the caller's exclude list was exactly {blue}, so any `already_tried` bid is blue's;
+ * otherwise the roster (`formatBidRoster`: `<addr> <cc> <price> <verdict>`) must name blue's address.
+ */
+function blueWasOnlyScreenedBidder(
+  error: string | undefined,
+  blueProvider: string,
+  onlyBlueExcluded: boolean
+): boolean {
+  if (!error?.startsWith(REFUSED_PREFIX)) return false;
+  if (!error.includes("none passed provider screening")) return false;
+  const tried = /already_tried=(\d+)/u.exec(error);
+  if (!tried?.[1] || Number(tried[1]) < 1) return false;
+  if (onlyBlueExcluded) return true;
+  const addr =
+    blueProvider.length > 17
+      ? `${blueProvider.slice(0, 9)}…${blueProvider.slice(-4)}`
+      : blueProvider;
+  const roster = /\[bids: ([^\]]*)\]/u.exec(error)?.[1] ?? "";
+  return roster
+    .split(", ")
+    .some((r) => r.startsWith(`${addr} `) && r.endsWith(" already_tried"));
+}
 
 /** Marker on an ACTIVE attempt (whose `error` is otherwise null): its failing proof is a dependency outage. */
 const DEPENDENCY_DOWN_MARK = "dependency_down";
