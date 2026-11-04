@@ -20,8 +20,9 @@
  *     within `proofMs` of lease creation; otherwise the NEW lease is closed and blue keeps serving.
  *     HOST_NOT_ROUTED (bug.5569): `/version` 404 on every probe for `hostNotRoutedMs` (the provider
  *     does not route our custom host) fails the proof at once (`host_not_routed`), the same close path.
- *   - DEFINITIVE_REFUSAL (bug.5569): a create refusal the payer marks `definitive` (nothing bills under
- *     the key) fails the attempt in the same tick with NO observe; other refusals keep the bounded observe.
+ *   - DEFINITIVE_REFUSAL (bug.5569): a create refusal the payer marks `definitive` proves the create is
+ *     no longer in flight. It only skips the in-flight grace; the attempt still runs the ONE cleanup
+ *     chain (ORPHAN_GUARD: observe, then bind + close + confirm a found lease, else failed) in that tick.
  *   - NOT_BLUES_PROVIDER: a green lease that lands on blue's provider is a failed proof and is closed.
  *   - STOP_THEN_START (task.5409): when a green create is refused because blue's provider was the only
  *     bidder screening could pass, an `app` blue is closed (confirmed) BEFORE the next create, which then
@@ -969,10 +970,11 @@ export class NodeDeploySequencer {
 
   /**
    * Persist the refusal BEFORE failAttempt, so a deferred failAttempt is never followed by a replay.
-   * DEFINITIVE_REFUSAL (bug.5569): when the payer guarantees nothing bills under this key
-   * (`PayerError.definitive`), there is no orphan to look for. ONE write carries the refusal marker
-   * AND the terminal phase, with no `observe`, so the attempt fails in this tick and the next attempt
-   * proceeds. Any other refusal keeps the bounded observe (ORPHAN_GUARD, bug.5567).
+   * Every refusal then runs the ONE cleanup chain (ORPHAN_GUARD in failAttempt): observe by key, a found
+   * lease is bound, closed and confirmed, nothing found is `failed`. The payer's observe is also what
+   * settles or releases the actuator's receipt, so skipping it would strand the wallet slot or leave a
+   * phantom `allocated` record (bug.5569). DEFINITIVE_REFUSAL: `definitive` only proves the create is no
+   * longer in flight, so the in-flight grace is skipped; the chain itself is never skipped.
    */
   private async refuseCreate(
     key: WorkloadKey,
@@ -982,20 +984,10 @@ export class NodeDeploySequencer {
     definitive = false
   ): Promise<AttemptRow> {
     const error = `${REFUSED_PREFIX}${text}`.slice(0, 500);
-    if (definitive) {
-      const failed = await this.d.store.updateAttempt(attempt.id, {
-        phase: "failed",
-        error,
-        unhealthySince: null,
-      });
-      await this.emit(key, release, failed, "attempt_failed", "failed", {
-        reason: error,
-        definitive: true,
-      });
-      return failed;
-    }
     const refused = await this.d.store.updateAttempt(attempt.id, { error });
-    return this.failAttempt(key, release, refused, refused.error ?? "");
+    return this.failAttempt(key, release, refused, refused.error ?? "", {
+      createEnded: definitive,
+    });
   }
 
   /**
@@ -1394,12 +1386,17 @@ export class NodeDeploySequencer {
 
   // ---- failure / close ------------------------------------------------------------------------
 
-  /** Mark failed (counting toward the park), close the lease if one exists, confirm it. */
+  /**
+   * Mark failed (counting toward the park), close the lease if one exists, confirm it.
+   * `createEnded` (bug.5569): the payer proved the create is no longer in flight (a definitive
+   * refusal), so the in-flight grace is skipped. The observe and close below still run.
+   */
   private async failAttempt(
     key: WorkloadKey,
     release: ReleaseRow,
     attempt: AttemptRow,
-    reason: string
+    reason: string,
+    opts: { createEnded?: boolean } = {}
   ): Promise<AttemptRow> {
     const trimmed = reason.slice(0, 500);
     // ORPHAN_GUARD (CD8): an attempt with no bound handle may still own a PAID lease (the create
@@ -1407,7 +1404,7 @@ export class NodeDeploySequencer {
     // writing any terminal state. A lease that exists is bound and then closed + confirmed; if the
     // question cannot be answered the attempt is left exactly as it is and retried on the next tick.
     if (!attempt.externalName) {
-      if (this.createMayStillBeInFlight(attempt)) {
+      if (!opts.createEnded && this.createMayStillBeInFlight(attempt)) {
         // Never fail/supersede (and never observe) while the actuator may still be creating.
         await this.emitGrace(
           key,

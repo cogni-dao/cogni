@@ -926,19 +926,18 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       // the receipt keeps the WALLET-WIDE slot and every node in the environment stops
       // leasing. Settling is best-effort on purpose: the DB may be the very thing that died,
       // and the stale-allocation sweeper is the backstop for exactly that case.
-      let settled = false;
       if (rolledBackDseq)
-        settled = await this.settleRollback(input.cogniKey, rolledBackDseq);
-      else if (mapped.code === "provider_rejected" && !deploymentOpened)
-        settled = await this.settleUnopenedRefusal(input.cogniKey, cursor);
+        await this.settleRollback(input.cogniKey, rolledBackDseq);
       // NOTHING_BILLING_IS_PROVEN (bug.5569): a refusal says "nothing bills" ONLY when no deployment
       // was ever opened (a Console 4xx on the deployment POST, an unsatisfiable pin) or the one it
-      // opened was closed AND re-read closed (`rolledBackDseq`), AND this call then settled the
-      // receipt. A `nothingBilling` caller fails the attempt with NO observe, so an unsettled
-      // `preparing` receipt would hold the WALLET-WIDE slot until the sweeper (15-20 min) and block
-      // every node's create. A "close UNVERIFIED" refusal, an unsettled receipt, and every
-      // non-refusal code carry no such proof: the caller observes, which resolves the receipt.
-      if (mapped.code === "provider_rejected" && settled)
+      // opened was closed AND re-read closed (`rolledBackDseq`). The caller uses it ONLY to skip its
+      // in-flight grace; it still observes the key, and that observe is what settles a `preparing`
+      // receipt (resolveUncertain) or reads the released one. A "close UNVERIFIED" refusal, and every
+      // non-refusal code, carry no such proof.
+      if (
+        mapped.code === "provider_rejected" &&
+        (rolledBackDseq !== undefined || !deploymentOpened)
+      )
         throw new AkashTxError(
           mapped.code,
           mapped.message,
@@ -1674,6 +1673,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
    * Best-effort on purpose. The dominant cause of a stuck receipt is the ledger itself being
    * unavailable — the very write that would settle it is the write that failed. A failure here
    * is logged and swallowed so it never masks the original error; the sweeper picks it up.
+   *
+   * bug.5569: a create that published its dseq (`onAllocated`) already moved the receipt to
+   * `allocated`, and `fail()` only settles a handle-less `preparing` row. So a rollback proven
+   * closed for THAT dseq marks it `released` instead; otherwise the record stays a phantom open
+   * lease (counted by `listAllocated`, never closed by anyone). The verdict is read back: this
+   * returns true ONLY when the row now reads `failed` or `released`, never on a no-op write.
    */
   private async settleRollback(
     cogniKey: string,
@@ -1681,18 +1686,31 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     allocationCursor?: string
   ): Promise<boolean> {
     try {
-      await this.ledger.fail({
-        cogniKey,
-        failureCode: ROLLED_BACK_FAILURE_CODE,
-      });
-      this.log.warn(
-        {
+      const before = await this.ledger.read({ cogniKey });
+      if (
+        rolledBackDseq !== undefined &&
+        before?.state === "allocated" &&
+        before.externalName === rolledBackDseq
+      )
+        await this.ledger.markReleased({ cogniKey });
+      else
+        await this.ledger.fail({
           cogniKey,
-          ...(rolledBackDseq ? { rolledBackDseq } : {}),
-          ...(allocationCursor ? { allocationCursor } : {}),
-        },
-        "akash_tx_allocation_rolled_back"
-      );
+          failureCode: ROLLED_BACK_FAILURE_CODE,
+        });
+      const after = await this.ledger.read({ cogniKey });
+      const settled = after?.state === "failed" || after?.state === "released";
+      const fields = {
+        cogniKey,
+        ...(rolledBackDseq ? { rolledBackDseq } : {}),
+        ...(allocationCursor ? { allocationCursor } : {}),
+        ledgerState: after?.state ?? "absent",
+      };
+      if (!settled) {
+        this.log.error(fields, "akash_tx_allocation_rollback_unsettled");
+        return false;
+      }
+      this.log.warn(fields, "akash_tx_allocation_rolled_back");
       return true;
     } catch (error) {
       this.log.error(
@@ -1706,46 +1724,6 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
       return false;
     }
-  }
-
-  /**
-   * bug.5569: a create refused before Console handed back a dseq left a `preparing` receipt with a
-   * durable cursor, and that receipt holds the WALLET-WIDE slot. Prove from Console that nothing
-   * was allocated beyond the cursor (the same probe `resolveUncertain` uses), then settle the
-   * receipt in this call. Returns true ONLY when both happened.
-   *
-   * Unlike `resolveUncertain`, an `adopted` or `ambiguous` probe is NOT acted on here: the refusal
-   * is still thrown, without `nothingBilling`, and the caller's observe resolves the receipt
-   * exactly as before. A probe failure or an unsettled write is the same: false, and the
-   * stale-allocation sweeper stays the backstop. Never throws, so it never masks the refusal.
-   */
-  private async settleUnopenedRefusal(
-    cogniKey: string,
-    allocationCursor: string
-  ): Promise<boolean> {
-    let probe: AkashAllocationProbe;
-    try {
-      probe = await this.console.findAllocationSince(allocationCursor);
-    } catch (error) {
-      this.log.warn(
-        {
-          cogniKey,
-          allocationCursor,
-          causeMessage:
-            error instanceof Error ? error.message : "unknown cause",
-        },
-        "akash_tx_refusal_settle_unproven"
-      );
-      return false;
-    }
-    if (probe.outcome !== "settled") {
-      this.log.warn(
-        { cogniKey, allocationCursor, outcome: probe.outcome },
-        "akash_tx_refusal_settle_unproven"
-      );
-      return false;
-    }
-    return this.settleRollback(cogniKey, undefined, allocationCursor);
   }
 
   /**
@@ -1922,7 +1900,11 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   ): Promise<AkashTxResource> {
     try {
       const output = await this.console.status({ leaseId: externalName });
-      if (record) await this.observeCost(record, externalName);
+      // Cost evidence is read only for a LIVE receipt. A `released`/`failed` one bills nothing, and a
+      // rolled-back deployment has no lease at all, so its cost read throws `ledger_unavailable` on
+      // every observe; that alone held a refused attempt for 15 min and stranded the record (bug.5569).
+      if (record?.state === "allocated")
+        await this.observeCost(record, externalName);
       return resourceFrom(output, providerAccount);
     } catch (error) {
       throw mapConsoleFailure(error, { mutating: false });

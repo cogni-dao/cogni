@@ -1103,30 +1103,30 @@ describe("crash safety", () => {
     ).toHaveLength(1);
   });
 
-  it("bug.5569: a definitive refusal fails the attempt in the same tick with NO observe; the next attempt proceeds", async () => {
+  it("bug.5569 (a): a definitive pre-deployment refusal runs the ONE cleanup chain in the same tick (observe, nothing found, failed); no grace; the next attempt proceeds", async () => {
     const h = harness();
     await stateUp(h);
     h.payer.createFault = (n) =>
       n === 2
         ? new PayerError(
             "provider_rejected",
-            "none passed provider screening (deployment 9 closed, escrow refunding)",
+            "actuator /v1/akash/create -> HTTP 422 provider_rejected: Console request failed with HTTP 422",
             false,
             true
           )
         : undefined;
-    h.payer.observeThrows = true; // any observe would defer for up to 15 min
     const observesBefore = h.payer.observeCalls;
     await deployApp(h, SHA_1);
     const first = (await h.store.attemptsFor(APP))[0];
     expect(first?.phase).toBe("failed");
     expect(first?.error).toMatch(/^create refused: provider_rejected/);
-    expect(first?.error).not.toMatch(/orphan_suspect/);
-    expect(first?.unhealthySince ?? null).toBeNull();
-    expect(h.payer.observeCalls).toBe(observesBefore);
-    expect(h.log.alerts()).not.toContain("orphan_suspect");
+    expect(first?.externalName ?? null).toBeNull();
+    // the chain observed by key, in this tick (that observe settles the actuator receipt)
+    expect(h.payer.observeCalls).toBe(observesBefore + 1);
+    expect(h.log.steps()).toContain("attempt_failed:failed");
+    expect(h.log.steps()).not.toContain("attempt_failed:deferred");
+    expect(h.log.steps()).not.toContain("create:inflight_grace");
     // the very next tick takes a NEW key and serves
-    h.payer.observeThrows = false;
     await h.seq.step(APP);
     const active = (await h.store.attemptsFor(APP)).find(
       (a) => a.phase === "active"
@@ -1135,6 +1135,44 @@ describe("crash safety", () => {
     expect(
       h.payer.createRequests.filter((r) => r.cogniKey === first?.cogniKey)
     ).toHaveLength(1);
+  });
+
+  it("bug.5569 (b): a definitive refusal whose rolled-back deployment is still under the key is bound, closed and confirmed in the same tick; no grace; the next attempt proceeds", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.createFault = (n, req) => {
+      if (n !== 2) return undefined;
+      // the actuator opened deployment 9009, found no eligible bid, closed it and read it back closed
+      h.payer.leases.push({
+        dseq: "9009",
+        cogniKey: req.cogniKey,
+        provider: "",
+        state: "closed",
+        endpoints: [],
+        env: {},
+      });
+      return new PayerError(
+        "provider_rejected",
+        "none passed provider screening (deployment 9009 closed, escrow refunding)",
+        false,
+        true
+      );
+    };
+    await deployApp(h, SHA_1);
+    const first = (await h.store.attemptsFor(APP))[0];
+    expect(first?.phase).toBe("failed");
+    expect(first?.externalName).toBe("9009");
+    expect(first?.error).toMatch(/^create refused: provider_rejected/);
+    expect(h.log.steps()).toContain("orphan_lease:adopted_to_close");
+    expect(h.log.steps()).toContain("new_closed:ok");
+    expect(h.events).toContain("payer.delete:9009");
+    expect(h.log.steps()).not.toContain("create:inflight_grace");
+    expect(h.log.alerts()).not.toContain("close_unconfirmed");
+    await h.seq.step(APP);
+    const active = (await h.store.attemptsFor(APP)).find(
+      (a) => a.phase === "active"
+    );
+    expect(active?.attempt).toBe(2);
   });
 
   it("observe unavailable is bounded: past 15 min the attempt fails orphan_suspect with an alert and the release moves on", async () => {

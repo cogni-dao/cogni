@@ -15,7 +15,8 @@
  *   - DEFINITIVE_IS_PROVEN (bug.5569): a create `provider_rejected` is `definitive` (nothing bills
  *     under the key) ONLY when the actuator's error body carries `nothingBilling: true`, its positive
  *     proof. A missing or non-`true` field (an older actuator, a Console 502 on a read-back after the
- *     lease was allocated) is NOT definitive: the sequencer keeps the bounded observe.
+ *     lease was allocated) is NOT definitive. `definitive` only lets the sequencer skip its in-flight
+ *     grace; it still observes, and that observe settles the actuator's receipt.
  *   - NO_SECRETS_IN_ERRORS: error text is the actuator's own non-secret `code` + `message`.
  * Side-effects: IO (HTTP POST to the cluster-private actuator)
  * Links: contracts/compute.akash-tx.v1.contract.ts, features/compute/akash-tx/akash-tx-http.ts

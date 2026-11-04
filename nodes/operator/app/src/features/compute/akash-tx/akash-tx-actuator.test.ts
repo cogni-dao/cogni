@@ -307,7 +307,9 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
 
   async markReleased(input: { cogniKey: string }) {
     const row = this.rows.get(input.cogniKey);
-    if (row) this.rows.set(input.cogniKey, { ...row, state: "released" });
+    // Same WHERE as the Drizzle ledger: `state in ('allocated', 'released')`.
+    if (row && (row.state === "allocated" || row.state === "released"))
+      this.rows.set(input.cogniKey, { ...row, state: "released" });
   }
 
   async read(input: { cogniKey: string }) {
@@ -499,6 +501,8 @@ interface FakeConsoleOptions {
   allocateErrorAfterAllocation?: boolean;
   /** Fail every Console status read (bug.5569: a read-back failure after a lease exists). */
   statusError?: Error;
+  /** Deployments Console reads back as `closed` (bug.5569: a rolled-back create). */
+  closedDseqs?: readonly string[];
   recovered?: ProvisionOutput | null;
   /** Several live allocations beyond the baseline: adoption is undecidable. */
   ambiguous?: readonly string[];
@@ -577,7 +581,9 @@ class FakeConsole implements AkashTxConsolePort {
     return {
       provider: "akash",
       leaseId: input.leaseId,
-      state: "active",
+      state: this.options.closedDseqs?.includes(input.leaseId)
+        ? "closed"
+        : "active",
       endpoints: [`https://${input.leaseId}.example.net`],
     };
   }
@@ -1721,12 +1727,9 @@ describe("AkashTxActuator.create", () => {
 
   it("keeps the slot held when the create could NOT prove its deployment closed", async () => {
     // Same terminal provider refusal, no verified close: absence of proof must read as "may
-    // still be billing", which is the one case worth blocking the wallet for. bug.5569: a refusal
-    // before any dseq was published is now proven from Console and settled inline, so the proof
-    // is removed here by failing that read-back.
+    // still be billing", which is the one case worth blocking the wallet for.
     const { actuator, ledger } = build({
       allocateError: consoleError("NO_ELIGIBLE_BIDS"),
-      recoverError: consoleError("NETWORK_ERROR"),
     });
 
     await expect(
@@ -1912,7 +1915,13 @@ describe("AkashTxActuator.create", () => {
     const rolledBack = (code: string, dseq: string) =>
       Object.assign(consoleError(code), { rolledBackDseq: dseq });
 
-    it("a refusal before any deployment opened (Console 4xx on the deployment POST) proves nothing bills, settles the receipt and frees the wallet slot", async () => {
+    const secondKey = {
+      ...call,
+      cogniKey: "k2",
+      identity: { ...OTHER_IDENTITY, compositeUid: "uid-2" },
+    };
+
+    it("(a) chain: a pre-deployment 4xx is nothingBilling; the sequencer's observe settles the receipt `failed`, the slot is free and a second key is not blocked", async () => {
       const { actuator, ledger, api } = build({
         allocateError: consoleError("HTTP_ERROR", 422),
       });
@@ -1923,54 +1932,91 @@ describe("AkashTxActuator.create", () => {
         code: "provider_rejected",
         nothingBilling: true,
       });
-      // proven from Console in the same call, then settled: no `preparing` row holds the slot
+      // the sequencer's failAttempt observes by key (ORPHAN_GUARD): resolveUncertain proves nothing
+      // past the cursor and settles the receipt, so observe answers found:false
+      await expect(actuator.observe({ cogniKey: "k1" })).resolves.toEqual({
+        found: false,
+      });
       expect(api.recoverCalls).toBe(1);
       expect(ledger.rows.get("k1")?.state).toBe("failed");
-      expect(ledger.failCalls).toEqual([
-        { cogniKey: "k1", failureCode: "allocation_rolled_back" },
-      ]);
-      // a second key on the same wallet is NOT blocked
-      const second = (await actuator
-        .create({
-          ...call,
-          cogniKey: "k2",
-          identity: { ...OTHER_IDENTITY, compositeUid: "uid-2" },
-        })
-        .catch((e: unknown) => e)) as AkashTxError;
-      expect(second.code).not.toBe("wallet_allocation_blocked");
+      expect(
+        [...ledger.rows.values()].filter((r) => r.state === "preparing")
+      ).toEqual([]);
+      // the provider heals; the second key must reach allocation, not `wallet_allocation_blocked`
+      (
+        api as unknown as { options: FakeConsoleOptions }
+      ).options.allocateError = undefined;
+      const second = await actuator.create(secondKey);
+      expect(second.externalName).toBe("7001");
       expect(api.allocateCalls).toBe(2);
     });
 
-    it("a pre-deployment refusal whose inline read-back fails carries NO nothingBilling and keeps the receipt for observe", async () => {
-      const { error, ledger } = await refusal({
-        allocateError: consoleError("HTTP_ERROR", 422),
-        recoverError: consoleError("NETWORK_ERROR"),
+    it("(b) chain: NO_ELIGIBLE_BIDS after a deployment opened and was rolled back ends `released`, never a phantom `allocated`; observe reads it closed even though its cost read throws; a second key is not blocked", async () => {
+      const { actuator, ledger, api, cost, log } = build({
+        allocateError: rolledBack("NO_ELIGIBLE_BIDS", "7001"),
+        allocateErrorAfterAllocation: true,
+        closedDseqs: ["7001"],
       });
-      expect(error.code).toBe("provider_rejected");
-      expect(error.nothingBilling).toBe(false);
-      expect(ledger.rows.get("k1")?.state).toBe("preparing");
-    });
-
-    it("a pre-deployment refusal whose read-back finds allocations, or whose settle write fails, carries NO nothingBilling", async () => {
-      const found = await refusal({
-        allocateError: consoleError("HTTP_ERROR", 422),
-        ambiguous: ["7001", "7002"],
-      });
-      expect(found.error.nothingBilling).toBe(false);
-      expect(found.ledger.rows.get("k1")?.state).toBe("preparing");
-      const { actuator, ledger } = build({
-        allocateError: consoleError("HTTP_ERROR", 422),
-      });
-      const origFail = ledger.fail.bind(ledger);
-      ledger.fail = async () => {
-        throw new Error("ledger down");
-      };
-      const unsettled = (await actuator
+      // a rolled-back deployment has no lease: its cost read throws (`did not identify exactly one lease`)
+      cost.failEvidence = true;
+      const error = (await actuator
         .create(call)
         .catch((e: unknown) => e)) as AkashTxError;
-      expect(unsettled.code).toBe("provider_rejected");
-      expect(unsettled.nothingBilling).toBe(false);
-      ledger.fail = origFail;
+      expect(error).toMatchObject({
+        code: "provider_rejected",
+        nothingBilling: true,
+      });
+      // onAllocated moved the row to `allocated`; the proven rollback releases it (fail() would no-op)
+      expect(ledger.rows.get("k1")).toMatchObject({
+        state: "released",
+        externalName: "7001",
+      });
+      expect(
+        log.lines.find((l) => l.marker === "akash_tx_allocation_rolled_back")
+          ?.fields.ledgerState
+      ).toBe("released");
+      expect(
+        await ledger.listAllocated({ environment: "candidate-a", limit: 100 })
+      ).toEqual([]);
+      // the sequencer's chain: observe by key finds the closed lease (no ledger_unavailable) ...
+      const found = await actuator.observe({ cogniKey: "k1" });
+      expect(found).toMatchObject({
+        found: true,
+        resource: { externalName: "7001", state: "closed" },
+      });
+      // ... binds it, closes it and confirms the close
+      await actuator.delete({ cogniKey: "k1", externalName: "7001" });
+      await expect(
+        actuator.observe({ cogniKey: "k1", externalName: "7001" })
+      ).resolves.toMatchObject({ resource: { state: "closed" } });
+      expect(ledger.rows.get("k1")?.state).toBe("released");
+      cost.failEvidence = false;
+      // the provider heals; the second key must reach allocation, not `wallet_allocation_blocked`
+      (
+        api as unknown as { options: FakeConsoleOptions }
+      ).options.allocateError = undefined;
+      api.nextLeaseId = "7002";
+      const second = await actuator.create(secondKey);
+      expect(second.state).toBe("active");
+      expect(api.allocateCalls).toBe(2);
+    });
+
+    it("settleRollback reports a settle ONLY when the row now reads failed or released (a no-op write is not a settle)", async () => {
+      const { actuator, ledger, log } = build({
+        allocateError: rolledBack("NO_ELIGIBLE_BIDS", "7001"),
+        allocateErrorAfterAllocation: true,
+      });
+      ledger.markReleased = async () => {};
+      await actuator.create(call).catch(() => undefined);
+      expect(ledger.rows.get("k1")?.state).toBe("allocated");
+      expect(
+        log.lines.some((l) => l.marker === "akash_tx_allocation_rolled_back")
+      ).toBe(false);
+      expect(
+        log.lines.find(
+          (l) => l.marker === "akash_tx_allocation_rollback_unsettled"
+        )?.fields.ledgerState
+      ).toBe("allocated");
     });
 
     it("a screening refusal whose deployment was closed AND re-read closed proves nothing bills", async () => {
