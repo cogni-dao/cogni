@@ -151,6 +151,41 @@ describe("private companion shape", () => {
 });
 
 describe("private companion lowering", () => {
+  it.each([
+    512, 513,
+  ])("bounds companion readiness at %i characters", (length) => {
+    const d = canaryDoc();
+    d.containers.helper = {
+      image: ".",
+      readinessProbe: {
+        httpGet: { path: `/${"a".repeat(length - 1)}`, port: 8181 },
+      },
+      resources: { limits: { cpu: "250m", memory: "256Mi" } },
+    };
+    d.metadata.annotations["cogni.dev/qualification-path"] = "/qualification";
+    d.metadata.annotations["cogni.dev/qualification-timeout-ms"] = "20000";
+    const lower = () =>
+      lowerWorkloadManifest(parseWorkloadManifest(stringify(d)), {
+        pendingImage: `ghcr.io/example/node:sha-${"1".repeat(40)}`,
+      });
+    if (length === 513) expect(lower).toThrow(/512/);
+    else
+      expect(
+        lower().find((w) => w.kind === "app")?.companions?.[0]?.ready
+      ).toBe(d.containers.helper.readinessProbe.httpGet.path);
+  });
+
+  it("preserves long public health paths without companions", () => {
+    const d = canaryDoc();
+    d.containers.app.readinessProbe.httpGet.path = `/${"a".repeat(512)}`;
+    const out = lowerWorkloadManifest(parseWorkloadManifest(stringify(d)), {
+      builtImage: `ghcr.io/example/node@${DIGEST}`,
+    });
+    expect(out.find((w) => w.kind === "app")?.health?.ready).toBe(
+      d.containers.app.readinessProbe.httpGet.path
+    );
+  });
+
   it("lowers the public entry by target port and retains the private container runtime", () => {
     const d = canaryDoc();
     d.containers = {

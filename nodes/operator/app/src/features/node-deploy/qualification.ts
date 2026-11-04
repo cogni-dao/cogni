@@ -11,9 +11,15 @@
  * @internal
  */
 import { hkdfSync, randomUUID } from "node:crypto";
+import { nodeWorkloadSpecSchema } from "@cogni/repo-spec";
 import { SignJWT } from "jose";
 import { z } from "zod";
 import type { AttemptRow, ReleaseRow } from "@/ports";
+
+// Declaration admission and its exact readiness observation share one path contract.
+const companionReadyPathSchema = nodeWorkloadSpecSchema
+  .innerType()
+  .shape.companions.unwrap().element.shape.ready;
 
 const evidenceSchema = z
   .object({
@@ -44,7 +50,12 @@ const evidenceSchema = z
             ready: z
               .object({
                 port: z.number().int().min(1).max(65535),
-                path: z.string().min(1).max(512),
+                path: z
+                  .string()
+                  .refine(
+                    (path) => companionReadyPathSchema.safeParse(path).success,
+                    "companion readiness path refused"
+                  ),
                 status: z.literal(200),
                 observedAt: z.string().datetime(),
               })

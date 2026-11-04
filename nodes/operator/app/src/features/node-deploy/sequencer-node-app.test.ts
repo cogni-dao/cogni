@@ -793,6 +793,20 @@ async function companionRelease(h: H, spec = companionSpec()) {
 }
 
 describe("private release companions", () => {
+  it("qualifies exact 512-character companion readiness observations", async () => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    const modes = proofResponder(h);
+    const spec = companionSpec();
+    const helper = requiredFixture(spec.companions?.[0]);
+    helper.ready = `/${"a".repeat(511)}`;
+    await companionRelease(h, spec);
+    await h.seq.step({ ...h.key(POLY_ID, "canary"), env: "preview" });
+    expect(modes).toEqual(["qualify", "readback"]);
+    expect(h.store.attempts[0]?.phase).toBe("active");
+    expect(h.payer.createRequests).toHaveLength(1);
+  });
+
   it("seals the complete bundle, projects union once per assembly, and qualifies before edge", async () => {
     const h = harness({ environment: "preview" });
     const calls = installBundle(h);
@@ -911,7 +925,13 @@ describe("private release companions", () => {
         : null;
     };
     expect(await h.seq.step(key)).toBe("parked");
-    expect(h.store.attempts[0]?.error).toContain("artifact_bundle_invalid");
+    expect(h.store.attempts).toHaveLength(0);
+    expect(h.log.lines).toContainEqual(
+      expect.objectContaining({
+        msg: "node_deploy_alert",
+        fields: expect.objectContaining({ reason: "artifact_bundle_invalid" }),
+      })
+    );
     expect(h.payer.createRequests).toHaveLength(0);
   });
 
@@ -1025,6 +1045,33 @@ function declarationInput() {
 }
 
 describe("same-source Score/declaration bridge", () => {
+  it.each([
+    "preview",
+    "production",
+  ])("admits only representable companion readiness before recording in %s", async (env) => {
+    const d = declarationInput();
+    const h = harness({ environment: env });
+    const path = `/${"a".repeat(511)}`;
+    d.manifest.containers.helper.readinessProbe.httpGet.path = path;
+    const valid = d.resolve(env);
+    if (env === "preview") expect(valid.companions?.[0]?.ready).toBe(path);
+    else expect(valid.companions).toBeUndefined();
+    d.manifest.containers.helper.readinessProbe.httpGet.path += "a";
+    const record = async () =>
+      h.store.recordRelease({
+        nodeId: POLY_ID,
+        env,
+        workload: "canary",
+        sourceSha: SHA_1,
+        spec: d.resolve(env),
+        createdBy: "test",
+      });
+    await expect(record()).rejects.toThrow(DeclarationError);
+    expect(h.store.releases.size).toBe(0);
+    expect(h.store.attempts).toHaveLength(0);
+    expect(h.payer.createRequests).toHaveLength(0);
+  });
+
   it("matches public app alias independently of order and cascades the declared environment gate", () => {
     const d = declarationInput();
     const preview = d.resolve();
@@ -1167,6 +1214,98 @@ function requiredFixture<T>(value: T | undefined | null): T {
 }
 
 describe("review repair digest and companion gates", () => {
+  it.each(
+    ["new", "accepted", "sealed"].flatMap((state) =>
+      ["missing", "mismatched"].map((header) => [state, header])
+    )
+  )("refuses %s set with %s selected digest header without allocating attempts", async (state, header) => {
+    const h = harness({ environment: "preview" });
+    const calls = installBundle(h);
+    const { release } = await companionRelease(h);
+    const publication = requiredFixture(
+      await h.images.resolveArtifactBundle?.({
+        imageRepository: "ghcr.io/example/node",
+        sourceSha: SHA_1,
+      })
+    );
+    if (state === "sealed")
+      await h.store.pinResolvedBundle(
+        release.id,
+        selectReleaseBundle(release, publication)
+      );
+    if (state === "accepted") {
+      const other = await h.store.recordRelease({
+        ...release,
+        env: "candidate-a",
+      });
+      await h.store.pinResolvedBundle(
+        other.release.id,
+        selectReleaseBundle(other.release, publication)
+      );
+    }
+    const before = await h.store.getRelease(release.id);
+    const checks: string[][] = [];
+    h.images.checkImageManifests = async (images) => {
+      checks.push([...images]);
+      throw new BuiltImageRegistryError(
+        `${header} selected Docker-Content-Digest`,
+        true
+      );
+    };
+    calls.length = 0;
+    const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
+    expect(await h.seq.step(key)).toBe("parked");
+    expect(await h.seq.step(key)).toBe("parked");
+    expect(checks).toContainEqual([PUBLIC_IMAGE, HELPER_IMAGE]);
+    expect(h.store.attempts).toHaveLength(0);
+    expect(h.payer.createRequests).toHaveLength(0);
+    expect(await h.store.getRelease(release.id)).toEqual(before);
+    expect((await h.store.getDesired(key))?.releaseId).toBe(release.id);
+    expect(h.log.lines).toContainEqual(
+      expect.objectContaining({
+        msg: "node_deploy_alert",
+        fields: expect.objectContaining({
+          releaseId: release.id,
+          attempt: undefined,
+          outcome: "release_parked",
+          reason: "artifact_bundle_invalid",
+        }),
+      })
+    );
+    if (state === "accepted") expect(calls[0]?.acceptedDigest).toBe(BUNDLE_REF);
+    if (state === "sealed") expect(calls).toHaveLength(0);
+  });
+
+  it("reads back an existing ambiguous paid attempt despite invalid registry headers", async () => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    await companionRelease(h);
+    proofResponder(h);
+    h.payer.loseResponseOn = () => true;
+    h.payer.observeThrows = true;
+    const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
+    await h.seq.step(key);
+    const prior = requiredFixture(h.store.attempts[0]);
+    expect(prior.error).toContain("ambiguous");
+    h.payer.observeThrows = false;
+    let checked = false;
+    h.images.checkImageManifests = async () => {
+      checked = true;
+      throw new BuiltImageRegistryError(
+        "missing selected Docker-Content-Digest",
+        true
+      );
+    };
+    await h.seq.step(key);
+    expect(checked).toBe(false);
+    expect(h.payer.observeCalls).toBeGreaterThan(0);
+    expect(h.payer.createRequests).toHaveLength(1);
+    expect(h.store.attempts).toHaveLength(1);
+    expect(h.store.attempts[0]?.id).toBe(prior.id);
+    expect(h.store.attempts[0]?.externalName).toBe(h.payer.leases[0]?.dseq);
+    expect(h.store.attempts[0]?.phase).toBe("active");
+  });
+
   it.each([
     "new",
     "accepted",

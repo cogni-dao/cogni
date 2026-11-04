@@ -93,17 +93,16 @@ function pendingSpec(): NodeWorkloadSpec {
 }
 
 function sealedSpec(identity: string, imageHex: string): NodeWorkloadSpec {
-  const pending = pendingSpec();
+  // PostgreSQL JSON omits undefined keys. Build the exact persisted seal shape.
+  const { imagePending: _pending, ...pending } = pendingSpec();
   const image = bundle(imageHex);
   const helper = `ghcr.io/example/node-helper@sha256:${imageHex.repeat(64)}`;
   return nodeWorkloadSpecSchema.parse({
     ...pending,
     image,
-    imagePending: undefined,
-    companions: pending.companions?.map((c) => ({
+    companions: pending.companions?.map(({ imagePending: _pending, ...c }) => ({
       ...c,
       image: helper,
-      imagePending: undefined,
     })),
     artifactPlan: {
       ...pending.artifactPlan,

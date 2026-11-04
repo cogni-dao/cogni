@@ -342,21 +342,11 @@ export class NodeDeploySequencer {
       await this.resolveEnv(key, deployable);
     } catch (error) {
       if (error instanceof InvalidArtifactSet) {
-        const a = await this.d.store.insertAttempt(release.id, (n) =>
-          buildCogniKey({
-            namespace: this.d.config.namespace,
-            nodeId: key.nodeId,
-            workload: key.workload,
-            releaseId: release.id,
-            attempt: n,
-          })
-        );
-        await this.d.store.updateAttempt(a.id, {
-          phase: "failed",
-          error: `artifact_bundle_invalid: ${error.message}`,
-        });
-        await this.alert(key, release, a, "release_parked", {
+        // Admission failed: attribute the refusal to the existing release intent. An attempt
+        // identity is allocated only after the entire selected artifact set is admitted.
+        await this.alert(key, release, undefined, "release_parked", {
           reason: "artifact_bundle_invalid",
+          detail: error.message,
         });
         return "parked";
       }

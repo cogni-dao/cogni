@@ -487,7 +487,8 @@ const workloadCompanionSchema = z
     memoryMi: z.number().int().min(128).max(262144),
     storageMi: z.number().int().min(128).max(1048576),
     env: z.record(serviceEnvKeySchema, z.string().max(4096)),
-    ready: workloadHealthPathSchema,
+    // The same path must fit the qualification observation before a release can be recorded.
+    ready: workloadHealthPathSchema.max(512),
     secretKeys: z.array(serviceEnvKeySchema).max(32).optional(),
   })
   .strict();
