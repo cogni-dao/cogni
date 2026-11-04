@@ -71,10 +71,16 @@ import {
   type ReleaseRow,
   type WorkloadKey,
 } from "@/ports";
+import { selectReleaseBundle } from "./artifact-selection";
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
 import { type EdgeRouter, hostOwnedBy, workerHostRefusal } from "./edge";
 import { nodeAppEnv, nodeAppSecretKeys, workerEnv } from "./node-app-env";
 import { nodeCatalogPolicy } from "./node-catalog-policy";
+import {
+  checkQualification,
+  qualificationChallenge,
+  savedQualification,
+} from "./qualification";
 import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
 
 export interface SequencerConfig {
@@ -211,9 +217,11 @@ const MAX_EXCLUDED_PROVIDERS = 16;
 const MAX_ALLOWED_PROVIDERS = 16;
 
 class DependencyNotReady extends Error {}
+class InvalidArtifactSet extends Error {}
 
 interface ResolvedRuntime {
   readonly env: Record<string, string>;
+  readonly companionEnvs?: Record<string, Record<string, string>>;
   /** Catalog `required_placement_countries[<env>]`; empty = unconstrained. */
   readonly requiredCountryCodes: readonly string[];
   /** True when the env is a non-operator node app's full runtime env (`nodeAppEnv`). */
@@ -315,6 +323,8 @@ export class NodeDeploySequencer {
     }
 
     const ofRelease = all.filter((a) => a.releaseId === release.id);
+    if (ofRelease.some((a) => a.error?.startsWith("artifact_bundle_invalid")))
+      return "parked";
     if (consecutiveFailures(ofRelease) >= this.d.config.maxFailedAttempts) {
       // Attached to the release's newest attempt so the park is a durable step on its timeline:
       // `release-view` reads `alert/release_parked` as the sequencer's own verdict.
@@ -331,6 +341,25 @@ export class NodeDeploySequencer {
       deployable = await this.pinImage(key, release);
       await this.resolveEnv(key, deployable);
     } catch (error) {
+      if (error instanceof InvalidArtifactSet) {
+        const a = await this.d.store.insertAttempt(release.id, (n) =>
+          buildCogniKey({
+            namespace: this.d.config.namespace,
+            nodeId: key.nodeId,
+            workload: key.workload,
+            releaseId: release.id,
+            attempt: n,
+          })
+        );
+        await this.d.store.updateAttempt(a.id, {
+          phase: "failed",
+          error: `artifact_bundle_invalid: ${error.message}`,
+        });
+        await this.alert(key, release, a, "release_parked", {
+          reason: "artifact_bundle_invalid",
+        });
+        return "parked";
+      }
       if (error instanceof DependencyNotReady) {
         await this.emit(key, release, undefined, "dependency", "waiting", {
           reason: error.message,
@@ -343,7 +372,10 @@ export class NodeDeploySequencer {
     // STOP_THEN_START (task.5409): blue's provider was the only bidder that could pass screening, so a
     // green beside blue can never be placed. Close blue first (accepted downtime), then create.
     let blue = active;
-    const stop = await this.stopThenStart(key, release, ofRelease, active);
+    // A useful-work capability requires blue to survive failed or unknown qualification.
+    const stop = release.spec.health?.qualification
+      ? "none"
+      : await this.stopThenStart(key, release, ofRelease, active);
     if (stop === "unconfirmed") return "close_pending";
     if (stop === "stopped") blue = undefined;
 
@@ -468,6 +500,65 @@ export class NodeDeploySequencer {
     release: ReleaseRow
   ): Promise<ReleaseRow> {
     const w = release.spec;
+    if ((w.companions?.length || w.health?.qualification) && !w.artifactPlan)
+      throw new InvalidArtifactSet(
+        "qualified service set has no frozen artifact plan"
+      );
+    if (w.artifactPlan) {
+      if (w.artifactPlan.bundleDigest && release.resolvedImage) return release;
+      if (!this.d.images?.resolveArtifactBundle)
+        throw new DependencyNotReady("no bundle resolver configured");
+      const acceptedDigest = await this.d.store.acceptedBundle(release);
+      try {
+        const publication = await this.d.images.resolveArtifactBundle({
+          imageRepository: w.artifactPlan.imageRepository,
+          sourceSha: release.sourceSha,
+          ...(acceptedDigest ? { acceptedDigest } : {}),
+        });
+        if (!publication)
+          throw new DependencyNotReady(
+            "complete CI bundle is not published yet"
+          );
+        let spec: ReleaseRow["spec"];
+        try {
+          spec = selectReleaseBundle(release, publication);
+        } catch {
+          throw new InvalidArtifactSet(
+            "bundle identity or service coverage refused"
+          );
+        }
+        let sealed: ReleaseRow | undefined;
+        try {
+          sealed = await this.d.store.pinResolvedBundle(release.id, spec);
+        } catch {
+          // A lost COMMIT reply is unknown, not permission to resolve tags or create another set.
+          try {
+            sealed = await this.d.store.getRelease(release.id);
+          } catch {
+            /* next tick reads durable intent */
+          }
+          if (
+            !sealed?.resolvedImage ||
+            !sealed.spec.artifactPlan?.bundleDigest ||
+            !sealed.spec.artifactPlan.selectedImages
+          )
+            throw new DependencyNotReady(
+              "bundle seal outcome unknown; awaiting durable readback"
+            );
+        }
+        if (!sealed)
+          throw new DependencyNotReady(
+            "another environment accepted a bundle; retry its digest"
+          );
+        return sealed;
+      } catch (e) {
+        if (e instanceof BuiltImageRegistryError) {
+          if (e.invalid) throw new InvalidArtifactSet(e.message);
+          throw new DependencyNotReady("bundle registry unavailable");
+        }
+        throw e;
+      }
+    }
     if (!w.imagePending) return release;
     const m = /^(.+):sha-([0-9a-f]{40})$/u.exec(w.image);
     if (!m?.[1] || !m[2])
@@ -582,12 +673,14 @@ export class NodeDeploySequencer {
     const env: Record<string, string> = {};
     let requiredCountryCodes: readonly string[] = [];
     let nodeApp = false;
+    let companionEnvs: Record<string, Record<string, string>> = {};
     if (w.kind === "app") {
       const node = await this.nodeAppRuntime(key, release);
       if (node) {
         Object.assign(env, node.env);
         requiredCountryCodes = node.requiredCountryCodes;
         nodeApp = node.nodeApp;
+        companionEnvs = node.companionEnvs ?? {};
       }
       env.RELEASE_SHA = release.sourceSha;
     }
@@ -615,7 +708,7 @@ export class NodeDeploySequencer {
       }))
         env[b.env] = b.value;
     }
-    return { env, requiredCountryCodes, nodeApp };
+    return { env, requiredCountryCodes, nodeApp, companionEnvs };
   }
 
   private async nodeAppRuntime(
@@ -626,11 +719,18 @@ export class NodeDeploySequencer {
         env: Record<string, string>;
         requiredCountryCodes: string[];
         nodeApp: boolean;
+        companionEnvs?: Record<string, Record<string, string>>;
       }
     | undefined
   > {
     const rt = this.d.runtime;
-    if (!rt) return undefined;
+    if (!rt) {
+      if (release.spec.companions?.length)
+        throw new DependencyNotReady(
+          "private companions require scoped runtime secrets"
+        );
+      return undefined;
+    }
     const w = release.spec;
     const entry = await rt.catalog.entryFor(key.nodeId);
     if (!entry)
@@ -684,11 +784,12 @@ export class NodeDeploySequencer {
     const boundEnvNames = w.bindings.map((b) => b.env);
     let bucket: Readonly<Record<string, string>>;
     try {
-      bucket = await rt.secrets.read(
-        key.env,
-        entry.slug,
-        nodeAppSecretKeys(w.secretKeys, boundEnvNames)
-      );
+      bucket = await rt.secrets.read(key.env, entry.slug, [
+        ...new Set([
+          ...nodeAppSecretKeys(w.secretKeys, boundEnvNames),
+          ...(w.companions ?? []).flatMap((c) => c.secretKeys ?? []),
+        ]),
+      ]);
     } catch (error) {
       if (error instanceof NodeRuntimeSecretsError)
         throw new DependencyNotReady(
@@ -713,6 +814,18 @@ export class NodeDeploySequencer {
         }),
         requiredCountryCodes: [...policy.requiredCountryCodes],
         nodeApp: true,
+        companionEnvs: Object.fromEntries(
+          (w.companions ?? []).map((c) => [
+            c.name,
+            workerEnv({
+              env: key.env,
+              sourceSha: release.sourceSha,
+              port: c.port,
+              secretKeys: c.secretKeys ?? [],
+              secrets: bucket,
+            }),
+          ])
+        ),
       };
     } catch (error) {
       throw new DependencyNotReady(errText(error));
@@ -904,6 +1017,7 @@ export class NodeDeploySequencer {
         spec: toPayerSpec(w, runtime.env, {
           requiredCountryCodes,
           nodeApp: runtime.nodeApp,
+          companionEnvs: runtime.companionEnvs,
         }),
         ...(excludeProviders.length > 0 ? { excludeProviders } : {}),
         ...(allowProviders.length > 0 ? { allowProviders } : {}),
@@ -1166,6 +1280,16 @@ export class NodeDeploySequencer {
               health.ready
             );
             if (r.status === 200) {
+              try {
+                attempt = await this.qualify(release, attempt, "qualify");
+              } catch {
+                return this.failAttempt(
+                  key,
+                  release,
+                  attempt,
+                  "qualification_failed"
+                );
+              }
               const next = await this.d.store.updateAttempt(attempt.id, {
                 phase: "proven",
               });
@@ -1239,6 +1363,7 @@ export class NodeDeploySequencer {
       }
       let touched = false;
       try {
+        await this.qualify(release, attempt, "readback");
         const rec = await edge.point(host, ingress);
         touched = true;
         await this.emit(key, release, attempt, "edge_moved", "ok", {
@@ -1302,6 +1427,154 @@ export class NodeDeploySequencer {
         retainMs: this.d.config.retainMs,
       });
     }
+  }
+
+  /** Persist before proven; read the current subject again before any edge mutation. */
+  private async qualify(
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mode: "qualify" | "readback"
+  ): Promise<AttemptRow> {
+    const capability = release.spec.health?.qualification;
+    if (!capability)
+      return this.qualifyWithin(release, attempt, mode, () => false);
+    let expired = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        expired = true;
+        reject(new Error("qualification deadline expired"));
+      }, capability.timeoutMs);
+    });
+    try {
+      return await Promise.race([
+        this.qualifyWithin(release, attempt, mode, () => expired),
+        deadline,
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async qualifyWithin(
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mode: "qualify" | "readback",
+    expired: () => boolean
+  ): Promise<AttemptRow> {
+    const capability = release.spec.health?.qualification;
+    if (!capability) {
+      if (release.spec.companions?.length)
+        throw new Error("companion qualification missing");
+      return attempt;
+    }
+    const startedAt = this.d.clock.now();
+    const deadline = startedAt + capability.timeoutMs;
+    const ingress = ingressHostOf(
+      attempt.endpoints,
+      publicHostOf(release.spec)
+    );
+    const host = publicHostOf(release.spec);
+    const post = this.d.probe.qualification?.bind(this.d.probe);
+    if (!ingress || !host || !post)
+      throw new Error("qualification transport missing");
+    const current = (await this.d.store.attemptsFor(release)).find(
+      (a) => a.id === attempt.id
+    );
+    if (!current || current.externalName !== attempt.externalName)
+      throw new Error("qualification attempt changed");
+    const prior = savedQualification(current);
+    if (mode === "qualify" && prior)
+      return this.qualifyWithin(release, current, "readback", expired);
+    if (mode === "readback" && !prior)
+      throw new Error("qualification evidence missing");
+    if (
+      mode === "qualify" &&
+      current.steps.some((s) => s.step === "qualification_started")
+    )
+      throw new Error("qualification outcome already reserved");
+    const runtime = await this.nodeAppRuntime(release, release);
+    const authSecret = runtime?.env.AUTH_SECRET;
+    if (!authSecret || expired() || this.d.clock.now() >= deadline)
+      throw new Error("qualification auth unavailable");
+    const challenge = await qualificationChallenge({
+      release,
+      attempt: current,
+      authSecret,
+      now: this.d.clock.now(),
+      mode,
+      ...(prior ? { prior } : {}),
+    });
+    if (mode === "qualify") {
+      // This is a required durable write, not best-effort telemetry. A lost write response never dispatches.
+      await this.emit(
+        release,
+        release,
+        current,
+        "qualification_started",
+        "reserved",
+        {},
+        true
+      );
+      const reserved = (await this.d.store.attemptsFor(release)).find(
+        (a) => a.id === current.id
+      );
+      if (!reserved?.steps.some((s) => s.step === "qualification_started"))
+        throw new Error("qualification reservation not persisted");
+    }
+    const remaining = deadline - this.d.clock.now();
+    if (expired() || remaining <= 0)
+      throw new Error("qualification deadline expired");
+    const result = await post({
+      ingressHost: ingress,
+      hostHeader: host,
+      path: capability.path,
+      token: challenge.token,
+      mode,
+      timeoutMs: remaining,
+    });
+    if (
+      result.status < 200 ||
+      result.status >= 300 ||
+      expired() ||
+      this.d.clock.now() > deadline
+    )
+      throw new Error("qualification failed");
+    const evidence = checkQualification({
+      body: result.body,
+      release,
+      attempt: current,
+      nonce: challenge.nonce,
+      startedAt,
+      now: this.d.clock.now(),
+      ...(prior ? { prior } : {}),
+    });
+    const step = {
+      step: mode === "qualify" ? "qualification" : "qualification_readback",
+      outcome: "ok",
+      reason: JSON.stringify(evidence),
+      at: new Date(this.d.clock.now()).toISOString(),
+    };
+    await this.emit(
+      release,
+      release,
+      current,
+      step.step,
+      step.outcome,
+      { reason: step.reason },
+      true
+    );
+    const saved = (await this.d.store.attemptsFor(release)).find(
+      (a) => a.id === current.id
+    );
+    if (
+      !saved ||
+      saved.externalName !== current.externalName ||
+      JSON.stringify(saved.endpoints) !== JSON.stringify(current.endpoints) ||
+      !saved.steps.some((s) => s.step === step.step && s.reason === step.reason)
+    )
+      throw new Error("qualification evidence not persisted");
+    return saved;
   }
 
   /** Poll the PUBLIC host until `publicStreak` consecutive reads return the exact sha. */
@@ -1705,14 +1978,16 @@ export class NodeDeploySequencer {
    * the Loki event and the persisted step cannot drift (task.5400 observability).
    *
    * Persistence is observability only: a failed append is logged `node_deploy_step_persist_failed` and
-   * NEVER fails or delays the deploy decision that emitted the step. Consecutive identical steps of one
+   * NEVER fails or delays the deploy decision that emitted the step. Qualification receipts use
+   * requiredPersistence: their complete bounded subject is saved and a failed write refuses proof. Consecutive identical steps of one
    * attempt (a poll loop) collapse into one persisted row; the log line is still written every time.
    */
   private async record(
     level: "info" | "warn" | "error",
     msg: string,
     attempt: AttemptRow | undefined,
-    fields: Record<string, unknown>
+    fields: Record<string, unknown>,
+    requiredPersistence = false
   ): Promise<void> {
     const now = this.d.clock.now();
     // `elapsedMs` = time since the attempt row was created: the step-latency series Grafana unwraps.
@@ -1725,7 +2000,9 @@ export class NodeDeploySequencer {
       msg
     );
     if (!attempt) return;
-    const reason = reasonOf(fields);
+    const reason = requiredPersistence
+      ? textOf(fields.reason)
+      : reasonOf(fields);
     const dseq = textOf(fields.dseq);
     const provider = textOf(fields.provider) ?? attempt.provider;
     const step: AttemptStep = {
@@ -1759,6 +2036,7 @@ export class NodeDeploySequencer {
         },
         "node_deploy_step_persist_failed"
       );
+      if (requiredPersistence) throw error;
     }
   }
 
@@ -1768,21 +2046,28 @@ export class NodeDeploySequencer {
     attempt: AttemptRow | undefined,
     step: string,
     outcome: string,
-    extra: Record<string, unknown> = {}
+    extra: Record<string, unknown> = {},
+    requiredPersistence = false
   ): Promise<void> {
-    return this.record("info", "node_deploy_step", attempt, {
-      component: "node-deploy-sequencer",
-      nodeId: key.nodeId,
-      env: key.env,
-      workload: key.workload,
-      releaseId: release?.id,
-      attempt: attempt?.attempt,
-      dseq: attempt?.externalName,
-      step,
-      outcome,
-      sourceSha: release?.sourceSha,
-      ...extra,
-    });
+    return this.record(
+      "info",
+      "node_deploy_step",
+      attempt,
+      {
+        component: "node-deploy-sequencer",
+        nodeId: key.nodeId,
+        env: key.env,
+        workload: key.workload,
+        releaseId: release?.id,
+        attempt: attempt?.attempt,
+        dseq: attempt?.externalName,
+        step,
+        outcome,
+        sourceSha: release?.sourceSha,
+        ...extra,
+      },
+      requiredPersistence
+    );
   }
 
   /**

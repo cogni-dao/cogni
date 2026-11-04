@@ -36,6 +36,7 @@
  */
 
 import {
+  COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
   extractNodeAppSecretRefs,
   extractNodeId,
   extractNodeServices,
@@ -59,6 +60,10 @@ export const HOST_ENVS: readonly string[] = [
   "preview",
   "dev",
 ];
+
+const APP_PROFILE_KEYS: ReadonlySet<string> = new Set(
+  COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS
+);
 
 const ENV_HOST_SUFFIX: Readonly<Record<string, string | undefined>> = {
   production: undefined,
@@ -105,6 +110,7 @@ export function resolveWorkloadDeclaration(input: {
   readonly builtImage?: string | undefined;
   /** `<image_repository>:sha-<sha>`: defers a manifest image of `.` to the sequencer (story.5137). */
   readonly pendingImage?: string | undefined;
+  readonly sourceRepository?: string | undefined;
 }): NodeWorkloadSpec {
   // NO_SOURCE_ECHO: parse the YAML without pretty errors, and never return the parser's or the
   // schema's message (either can quote repo-spec text).
@@ -155,7 +161,89 @@ export function resolveWorkloadDeclaration(input: {
       "workload_not_declared",
       `workload ${input.workload} is not declared by any .cogni/workloads/*.yaml manifest`
     );
-  const withKeys: NodeWorkloadSpec =
+  // Validate the complete Score/declaration bridge BEFORE the environment cascade.
+  for (const workload of workloads) {
+    if (!workload.companions && !workload.health?.qualification) continue;
+    const services = extractNodeServices(spec);
+    const main = services.find((s) => s.visibility === "public");
+    if (
+      !main ||
+      (workload.serviceName !== "app" && workload.serviceName !== main.name) ||
+      main.port !== workload.port ||
+      !spec.deployment ||
+      !input.pendingImage ||
+      !input.sourceRepository
+    )
+      throw new DeclarationError(
+        "workload_manifest_refused",
+        "companion release requires matching public port and same-source build declarations"
+      );
+    const scoreNames = new Set([
+      main.name,
+      ...(workload.companions ?? []).map((c) => c.name),
+    ]);
+    if (
+      services.length !== scoreNames.size ||
+      services.some((s) => !scoreNames.has(s.name))
+    )
+      throw new DeclarationError(
+        "workload_manifest_refused",
+        "Score must cover the complete repo-spec service set"
+      );
+    for (const c of workload.companions ?? []) {
+      const service = services.find((s) => s.name === c.name);
+      if (
+        !service ||
+        service.visibility !== "private" ||
+        service.runtimeProfile ||
+        service.port !== c.port
+      )
+        throw new DeclarationError(
+          "workload_manifest_refused",
+          "companion must match a private unprofiled service and port"
+        );
+      const keys = workerSecretKeys(spec, c.name);
+      if (
+        keys.some(
+          (k) =>
+            APP_PROFILE_KEYS.has(k) ||
+            /AUTH_SECRET|DATABASE|DOLTGRES|POSTGRES|PGPASSWORD|DB_|WALLET|PRIVATE_KEY|LITELLM|OPENROUTER/.test(
+              k
+            )
+        )
+      )
+        throw new DeclarationError(
+          "secret_ref_refused",
+          "private companion cannot request app authority secrets"
+        );
+      if (
+        Object.keys(c.env).some(
+          (k) => keys.includes(k) || k in service.bindings
+        )
+      )
+        throw new DeclarationError(
+          "workload_manifest_refused",
+          "companion variables conflict with declared secret or binding"
+        );
+    }
+    for (const service of services) {
+      for (const [key, target] of Object.entries(service.bindings)) {
+        const sibling = services.find((s) => s.name === target);
+        if (
+          !sibling ||
+          sibling.visibility !== "private" ||
+          target === service.name ||
+          key in workload.env ||
+          workload.bindings.some((b) => b.env === key)
+        )
+          throw new DeclarationError(
+            "workload_manifest_refused",
+            "sibling binding must target a different private service without conflicting env"
+          );
+      }
+    }
+  }
+  let withKeys: NodeWorkloadSpec =
     declared.kind === "app"
       ? isWorkerService(spec, declared.name)
         ? {
@@ -165,6 +253,58 @@ export function resolveWorkloadDeclaration(input: {
           }
         : { ...declared, secretKeys: appSecretKeys(spec) }
       : declared;
+  if (declared.companions || declared.health?.qualification) {
+    const services = extractNodeServices(spec);
+    const main = services.find((s) => s.visibility === "public");
+    if (
+      !main ||
+      !spec.deployment ||
+      !input.pendingImage ||
+      !input.sourceRepository
+    )
+      throw new DeclarationError(
+        "workload_manifest_refused",
+        "missing artifact plan"
+      );
+    const selected = services.filter(
+      (s) => !s.envs || s.envs.some((e) => e === input.env)
+    );
+    const selectedNames = new Set(selected.map((s) => s.name));
+    const bindingEnv = (name: string) =>
+      Object.fromEntries(
+        Object.entries(services.find((s) => s.name === name)?.bindings ?? {})
+          .filter(([, target]) => selectedNames.has(target))
+          .map(([k, target]) => {
+            const c = declared.companions?.find((c) => c.name === target);
+            if (!c)
+              throw new DeclarationError(
+                "workload_manifest_refused",
+                "binding target missing from Score"
+              );
+            return [k, `http://${c.name}:${c.port}`];
+          })
+      );
+    const companions = (declared.companions ?? [])
+      .filter((c) => selectedNames.has(c.name))
+      .map((c) => ({
+        ...c,
+        env: { ...c.env, ...bindingEnv(c.name) },
+        secretKeys: workerSecretKeys(spec, c.name),
+      }));
+    const { companions: _all, runtimeProfile: _profile, ...rest } = withKeys;
+    withKeys = {
+      ...rest,
+      serviceName: main.name,
+      secretKeys: appSecretKeys(spec),
+      ...(companions.length ? { companions } : {}),
+      env: { ...rest.env, ...bindingEnv(main.name) },
+      artifactPlan: {
+        repository: input.sourceRepository.toLowerCase(),
+        imageRepository: input.pendingImage.replace(/:sha-[0-9a-f]{40}$/, ""),
+        services: spec.deployment.services,
+      },
+    };
+  }
   if (!("http" in withKeys.expose)) return withKeys;
   return {
     ...withKeys,

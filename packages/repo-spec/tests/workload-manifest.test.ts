@@ -132,6 +132,81 @@ describe("the operator canary manifest", () => {
   });
 });
 
+describe("private companion shape", () => {
+  it("accepts a private companion before the public entry regardless of order", () => {
+    const d = canaryDoc();
+    d.containers = {
+      "paper-trader": {
+        image: ".",
+        readinessProbe: { httpGet: { path: "/readyz", port: 9100 } },
+        resources: { limits: { cpu: "250m", memory: "256Mi" } },
+      },
+      app: d.containers.app,
+    };
+    d.metadata.annotations["cogni.dev/qualification-path"] =
+      "/api/v1/deploy/qualification";
+    d.metadata.annotations["cogni.dev/qualification-timeout-ms"] = "20000";
+    expect(() => parseWorkloadManifest(stringify(d))).not.toThrow();
+  });
+});
+
+describe("private companion lowering", () => {
+  it("lowers the public entry by target port and retains the private container runtime", () => {
+    const d = canaryDoc();
+    d.containers = {
+      helper: {
+        image: ".",
+        command: ["helper"],
+        args: ["serve"],
+        readinessProbe: { httpGet: { path: "/health", port: 8181 } },
+        resources: { requests: { cpu: "500m", memory: "384Mi" } },
+        variables: { MODE: "synthetic" },
+      },
+      app: d.containers.app,
+    };
+    d.metadata.annotations["cogni.dev/qualification-path"] =
+      "/api/v1/deploy/qualification";
+    d.metadata.annotations["cogni.dev/qualification-timeout-ms"] = "20000";
+    const out = lowerWorkloadManifest(parseWorkloadManifest(stringify(d)), {
+      pendingImage: `ghcr.io/example/node:sha-${"1".repeat(40)}`,
+    });
+    const app = out.find((w) => w.kind === "app");
+    expect(app?.port).toBe(8080);
+    expect(app?.companions?.[0]).toMatchObject({
+      name: "helper",
+      imagePending: true,
+      port: 8181,
+      cpu: 0.5,
+      memoryMi: 384,
+      command: ["helper", "serve"],
+      ready: "/health",
+      env: { MODE: "synthetic" },
+    });
+  });
+  it("refuses ambiguous public entry ports instead of using container order", () => {
+    const d = canaryDoc();
+    d.containers.other = structuredClone(d.containers.app);
+    expect(() => parseWorkloadManifest(stringify(d))).toThrow(
+      /exactly one readiness port/
+    );
+  });
+  it("supports eight containers and refuses nine before lowering", () => {
+    const d = canaryDoc();
+    d.metadata.annotations["cogni.dev/qualification-path"] =
+      "/api/v1/deploy/qualification";
+    d.metadata.annotations["cogni.dev/qualification-timeout-ms"] = "20000";
+    for (let i = 0; i < 7; i++)
+      d.containers[`helper-${i}`] = {
+        image: ".",
+        readinessProbe: { httpGet: { path: "/readyz", port: 8100 + i } },
+        resources: { limits: { cpu: "250m", memory: "256Mi" } },
+      };
+    expect(() => parseWorkloadManifest(stringify(d))).not.toThrow();
+    d.containers.extra = structuredClone(d.containers["helper-0"]);
+    expect(() => parseWorkloadManifest(stringify(d))).toThrow(/1–8 containers/);
+  });
+});
+
 describe("pass 1: the Score schema", () => {
   it.each<[string, (d: Doc) => void]>([
     [
@@ -417,11 +492,11 @@ describe("pass 2: Cogni policy refuses before any paid create", () => {
       "unsupported_placeholder",
     ],
     [
-      "a second container (sidecars are not mapped yet)",
+      "a private container without readiness/resources",
       (d) => {
         d.containers.side = { image: `busybox@${DIGEST}` };
       },
-      "sidecars_unsupported",
+      "readiness_probe_required",
     ],
     [
       "a missing route",

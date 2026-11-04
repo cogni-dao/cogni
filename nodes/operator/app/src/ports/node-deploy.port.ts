@@ -345,6 +345,15 @@ export interface HttpResult {
 }
 
 export interface ProbePort {
+  /** HTTPS to the observed ingress (certificate/SNI for ingress), with the node Host header. No redirects. */
+  qualification?(input: {
+    readonly ingressHost: string;
+    readonly hostHeader: string;
+    readonly path: string;
+    readonly token: string;
+    readonly mode: "qualify" | "readback";
+    readonly timeoutMs: number;
+  }): Promise<HttpResult>;
   /** GET `http://<ingressHost><path>` presenting `Host: <hostHeader>` (the provider's host routing). */
   hostRouted(
     ingressHost: string,
@@ -382,6 +391,13 @@ export interface StorePort {
    * release deploys one image. Returns the release with its spec normalized (`withResolvedImage`).
    */
   pinResolvedImage(releaseId: string, image: string): Promise<ReleaseRow>;
+  /** Accepted source-wide OCI identity, independent of target environment. */
+  acceptedBundle(release: ReleaseRow): Promise<string | undefined>;
+  /** Atomically seal spec + primary digest under the source lock; undefined means another bundle won. */
+  pinResolvedBundle(
+    releaseId: string,
+    spec: NodeWorkloadSpec
+  ): Promise<ReleaseRow | undefined>;
   /** Write the immutable release AND point desired at it (state `running`) in one transaction. */
   recordRelease(
     input: RecordReleaseInput
@@ -399,7 +415,8 @@ export interface StorePort {
   updateAttempt(id: string, patch: AttemptPatch): Promise<AttemptRow>;
   /**
    * Append one step to the attempt's timeline (atomic; keeps the newest `MAX_ATTEMPT_STEPS`).
-   * Observability only: it never changes `phase`, and a failure here must never fail a deploy.
+   * Never changes phase. Ordinary events are best-effort observability; qualification reservation
+   * and evidence require this write to succeed and be read back before proof or cutover.
    */
   appendAttemptStep(attemptId: string, step: AttemptStep): Promise<void>;
 }

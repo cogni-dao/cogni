@@ -184,6 +184,90 @@ export class PostgresNodeDeployStore implements StorePort {
     return release;
   }
 
+  async acceptedBundle(release: ReleaseRow): Promise<string | undefined> {
+    const plan = release.spec.artifactPlan;
+    if (!plan) return undefined;
+    const rows = await this.db
+      .select()
+      .from(nodeWorkloadReleases)
+      .where(
+        and(
+          eq(nodeWorkloadReleases.nodeId, release.nodeId),
+          eq(nodeWorkloadReleases.sourceSha, release.sourceSha),
+          sql`${nodeWorkloadReleases.spec}->'artifactPlan'->>'repository' = ${plan.repository}`,
+          sql`${nodeWorkloadReleases.spec}->'artifactPlan'->>'bundleDigest' IS NOT NULL`,
+          sql`${nodeWorkloadReleases.resolvedImage} IS NOT NULL`
+        )
+      )
+      .limit(1);
+    return rows[0]
+      ? toRelease(rows[0]).spec.artifactPlan?.bundleDigest
+      : undefined;
+  }
+
+  async pinResolvedBundle(
+    releaseId: string,
+    spec: ReleaseRow["spec"]
+  ): Promise<ReleaseRow | undefined> {
+    const validated = nodeWorkloadSpecSchema.parse(spec);
+    if (
+      !validated.artifactPlan?.bundleDigest ||
+      !validated.artifactPlan.selectedImages ||
+      validated.imagePending ||
+      validated.companions?.some((c) => c.imagePending)
+    )
+      throw new Error("cannot seal incomplete bundle");
+    return this.db.transaction(async (tx) => {
+      const [initial] = await tx
+        .select()
+        .from(nodeWorkloadReleases)
+        .where(eq(nodeWorkloadReleases.id, releaseId));
+      if (!initial) throw new Error("release missing");
+      const rel = toRelease(initial);
+      const plan = rel.spec.artifactPlan;
+      if (!plan || plan.repository !== validated.artifactPlan?.repository)
+        throw new Error("bundle source mismatch");
+      // Every environment for this node/repository/source shares the same short first-acceptance lock.
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${`${rel.nodeId}/${plan.repository}/${rel.sourceSha}`}, 0))`
+      );
+      const [winner] = await tx
+        .select()
+        .from(nodeWorkloadReleases)
+        .where(
+          and(
+            eq(nodeWorkloadReleases.nodeId, rel.nodeId),
+            eq(nodeWorkloadReleases.sourceSha, rel.sourceSha),
+            sql`${nodeWorkloadReleases.spec}->'artifactPlan'->>'repository' = ${plan.repository}`,
+            sql`${nodeWorkloadReleases.spec}->'artifactPlan'->>'bundleDigest' IS NOT NULL`,
+            sql`${nodeWorkloadReleases.resolvedImage} IS NOT NULL`
+          )
+        )
+        .limit(1);
+      if (
+        winner &&
+        toRelease(winner).spec.artifactPlan?.bundleDigest !==
+          validated.artifactPlan?.bundleDigest
+      )
+        return undefined;
+      await tx
+        .update(nodeWorkloadReleases)
+        .set({ spec: validated, resolvedImage: validated.image })
+        .where(
+          and(
+            eq(nodeWorkloadReleases.id, releaseId),
+            sql`${nodeWorkloadReleases.resolvedImage} IS NULL`
+          )
+        );
+      const [row] = await tx
+        .select()
+        .from(nodeWorkloadReleases)
+        .where(eq(nodeWorkloadReleases.id, releaseId));
+      if (!row) throw new Error("sealed release missing");
+      return toRelease(row);
+    });
+  }
+
   async recordRelease(
     input: RecordReleaseInput
   ): Promise<{ release: ReleaseRow; desired: DesiredRow }> {

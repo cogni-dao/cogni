@@ -64,6 +64,83 @@ export class HttpProbe implements ProbePort {
     });
   }
 
+  qualification(input: {
+    readonly ingressHost: string;
+    readonly hostHeader: string;
+    readonly path: string;
+    readonly token: string;
+    readonly mode: "qualify" | "readback";
+    readonly timeoutMs: number;
+  }): Promise<HttpResult> {
+    const started = Date.now();
+    return new Promise((resolve) => {
+      if (
+        !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(input.ingressHost) ||
+        !/^\/(?!\/)[A-Za-z0-9._~/-]*$/.test(input.path)
+      ) {
+        resolve({
+          status: 0,
+          body: "",
+          ms: 0,
+          error: "invalid qualification destination",
+        });
+        return;
+      }
+      const body = JSON.stringify({ mode: input.mode });
+      // TLS authenticates the observed ingress certificate; HTTP Host selects the green lease.
+      // Native https never follows redirects, so a bearer cannot leave this origin.
+      const req = httpsRequest(
+        {
+          hostname: input.ingressHost,
+          servername: input.ingressHost,
+          port: 443,
+          path: input.path,
+          method: "POST",
+          headers: {
+            host: input.hostHeader,
+            authorization: `Bearer ${input.token}`,
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(body),
+            "cache-control": "no-store",
+          },
+        },
+        (res) => {
+          let text = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk: string) => {
+            text += chunk;
+            if (Buffer.byteLength(text) > 16384)
+              req.destroy(new Error("qualification response too large"));
+          });
+          res.on("error", () =>
+            req.destroy(new Error("qualification response unavailable"))
+          );
+          res.on("end", () =>
+            resolve({
+              status: res.statusCode ?? 0,
+              body: text,
+              ms: Date.now() - started,
+            })
+          );
+        }
+      );
+      const hard = setTimeout(
+        () => req.destroy(new Error("qualification timeout")),
+        Math.min(20000, Math.max(1, input.timeoutMs))
+      );
+      req.on("error", () =>
+        resolve({
+          status: 0,
+          body: "",
+          ms: Date.now() - started,
+          error: "qualification transport failed",
+        })
+      );
+      req.on("close", () => clearTimeout(hard));
+      req.end(body);
+    });
+  }
+
   async publicDoh(host: string, path: string): Promise<HttpResult> {
     const t0 = Date.now();
     try {

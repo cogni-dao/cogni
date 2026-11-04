@@ -17,6 +17,12 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
+import {
+  buildNodeBundleTagRef,
+  verifyNodeBundleManifest,
+} from "@cogni/repo-spec";
+
 import { BuiltImageRegistryError, type BuiltImageResolverPort } from "@/ports";
 
 const GHCR_HOST = "ghcr.io";
@@ -75,6 +81,172 @@ export class GhcrBuiltImageResolver implements BuiltImageResolverPort {
     if (!digest || !DIGEST_RE.test(digest))
       throw new BuiltImageRegistryError("ghcr manifest had no valid digest");
     return `${input.imageRepository}@${digest}`;
+  }
+
+  async resolveArtifactBundle(input: {
+    readonly imageRepository: string;
+    readonly sourceSha: string;
+    readonly acceptedDigest?: string;
+  }): Promise<{ digestRef: string; bundle: unknown } | null> {
+    const path = IMAGE_REPOSITORY_RE.exec(input.imageRepository)?.[1];
+    if (!path || !SOURCE_SHA_RE.test(input.sourceSha))
+      throw new BuiltImageRegistryError(
+        "invalid bundle repository or source",
+        true
+      );
+    if (
+      input.acceptedDigest &&
+      (input.acceptedDigest.split("@")[0] !== input.imageRepository ||
+        !DIGEST_RE.test(input.acceptedDigest.split("@")[1] ?? ""))
+    )
+      throw new BuiltImageRegistryError(
+        "accepted bundle repository mismatch",
+        true
+      );
+    const signal = AbortSignal.timeout(this.timeoutMs);
+    const request = async (
+      url: string,
+      headers: Record<string, string> = {},
+      blob = false
+    ) => {
+      try {
+        let response = await this.fetchImpl(url, {
+          headers,
+          signal,
+          redirect: "manual",
+        });
+        if (response.status >= 300 && response.status < 400) {
+          const location = new URL(response.headers.get("location") ?? "", url);
+          // GHCR's documented package storage is the only permitted blob redirect. Never forward bearer auth.
+          // https://docs.github.com/en/actions/reference/runners/github-hosted-runners#communication-requirements-for-github-hosted-runners
+          if (
+            !blob ||
+            location.protocol !== "https:" ||
+            location.hostname !== "pkg-containers.githubusercontent.com" ||
+            location.port ||
+            location.username ||
+            location.password
+          )
+            throw new BuiltImageRegistryError(
+              "registry redirect refused",
+              true
+            );
+          await response.body?.cancel();
+          response = await this.fetchImpl(location, {
+            signal,
+            redirect: "error",
+          });
+        }
+        return response;
+      } catch (e) {
+        if (e instanceof BuiltImageRegistryError) throw e;
+        throw new BuiltImageRegistryError("bundle registry unavailable");
+      }
+    };
+    const bounded = async (res: Response, max: number) => {
+      if (Number(res.headers.get("content-length")) > max)
+        throw new BuiltImageRegistryError("bundle exceeds byte limit", true);
+      const reader = res.body?.getReader();
+      if (!reader)
+        throw new BuiltImageRegistryError("bundle has no body", true);
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          length += value.byteLength;
+          if (length > max) {
+            await reader.cancel();
+            throw new BuiltImageRegistryError(
+              "bundle exceeds byte limit",
+              true
+            );
+          }
+          chunks.push(value);
+        }
+      } catch (e) {
+        if (e instanceof BuiltImageRegistryError) throw e;
+        throw new BuiltImageRegistryError("bundle body unavailable");
+      }
+      return Buffer.concat(chunks);
+    };
+    const tr = await request(
+      `https://${GHCR_HOST}/token?service=${GHCR_HOST}&scope=${encodeURIComponent(`repository:${path}:pull`)}`
+    );
+    if (isAbsent(tr.status)) return null;
+    if (!tr.ok) throw new BuiltImageRegistryError("bundle token unavailable");
+    let token: unknown;
+    try {
+      token = JSON.parse((await bounded(tr, 16384)).toString()).token;
+    } catch {
+      throw new BuiltImageRegistryError("bundle token invalid");
+    }
+    if (typeof token !== "string" || !token.length)
+      throw new BuiltImageRegistryError("bundle token missing");
+    const headers = {
+      authorization: `Bearer ${token}`,
+      accept: MANIFEST_ACCEPT,
+    };
+    const ref =
+      input.acceptedDigest?.split("@")[1] ??
+      buildNodeBundleTagRef({
+        repository: input.imageRepository,
+        sourceSha: input.sourceSha,
+      })
+        .split(":")
+        .at(-1);
+    const mr = await request(
+      `https://${GHCR_HOST}/v2/${path}/manifests/${ref}`,
+      headers
+    );
+    if (isAbsent(mr.status)) return null;
+    if (!mr.ok)
+      throw new BuiltImageRegistryError("bundle manifest unavailable");
+    const bytes = await bounded(mr, 65536);
+    const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    try {
+      if (
+        digest !== mr.headers.get("docker-content-digest") ||
+        (input.acceptedDigest &&
+          `${input.imageRepository}@${digest}` !== input.acceptedDigest)
+      )
+        throw new Error("manifest digest mismatch");
+      const manifest = JSON.parse(bytes.toString());
+      const { digestRef } = verifyNodeBundleManifest({
+        repository: input.imageRepository,
+        digest,
+        manifest,
+      });
+      const layer = manifest.layers[0] as { digest?: unknown; size?: unknown };
+      if (
+        typeof layer.digest !== "string" ||
+        !DIGEST_RE.test(layer.digest) ||
+        typeof layer.size !== "number" ||
+        layer.size < 1 ||
+        layer.size > 65536
+      )
+        throw new Error("invalid bundle layer");
+      const lr = await request(
+        `https://${GHCR_HOST}/v2/${path}/blobs/${layer.digest}`,
+        headers,
+        true
+      );
+      if (isAbsent(lr.status)) return null;
+      if (!lr.ok)
+        throw new BuiltImageRegistryError("bundle payload unavailable");
+      const payload = await bounded(lr, 65536);
+      if (
+        payload.length !== layer.size ||
+        `sha256:${createHash("sha256").update(payload).digest("hex")}` !==
+          layer.digest
+      )
+        throw new Error("payload digest mismatch");
+      return { digestRef, bundle: JSON.parse(payload.toString()) };
+    } catch (e) {
+      if (e instanceof BuiltImageRegistryError) throw e;
+      throw new BuiltImageRegistryError("invalid OCI bundle publication", true);
+    }
   }
 
   private async request(

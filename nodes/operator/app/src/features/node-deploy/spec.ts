@@ -7,7 +7,7 @@
  *   (task.5400).
  * Scope: Pure.
  * Invariants:
- *   - ONE_SERVICE_PER_LEASE: a lease carries exactly one service; state and app never share one.
+ *   - ONE_RELEASE_PER_LEASE: an app and its private stateless companions share one release; retained state stays separate.
  *   - APP_EXPOSE_80: an http app exposes its port as 80, global, accepting only its public host.
  *   - STATE_FORWARDS_TCP: a state service exposes its port as itself, global (provider forwards it).
  *   - PLACEMENT_IS_CATALOG_POLICY: `placement` is sent ONLY when the node's catalog row declares
@@ -31,6 +31,9 @@ export interface ToPayerSpecOptions {
   readonly requiredCountryCodes?: readonly string[];
   /** True for a non-operator node app: it starts through the database CA trust wrapper. */
   readonly nodeApp?: boolean;
+  readonly companionEnvs?:
+    | Readonly<Record<string, Readonly<Record<string, string>>>>
+    | undefined;
 }
 
 export function toPayerSpec(
@@ -55,7 +58,7 @@ export function toPayerSpec(
       : {}),
     services: [
       {
-        name: w.name,
+        name: w.serviceName ?? w.name,
         image: w.image,
         env,
         ...(start.command ? { command: start.command } : {}),
@@ -81,6 +84,16 @@ export function toPayerSpec(
             : { port: w.port, as: w.port, global: true },
         ],
       },
+      ...(w.companions ?? []).map((c) => ({
+        name: c.name,
+        image: c.image,
+        env: { ...c.env, ...options.companionEnvs?.[c.name] },
+        ...(c.command ? { command: c.command } : {}),
+        cpuUnits: c.cpu,
+        memoryMi: c.memoryMi,
+        storageMi: c.storageMi,
+        expose: [{ port: c.port, as: c.port, global: false }],
+      })),
     ],
   };
 }

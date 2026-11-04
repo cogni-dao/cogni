@@ -143,7 +143,7 @@ export interface NodeServiceConfig {
 // ---------------------------------------------------------------------------
 
 /** Extract node_id from parsed repo-spec. */
-export function extractNodeId(spec: RepoSpec): string {
+export function extractNodeId(spec: Pick<RepoSpec, "node_id">): string {
   return spec.node_id;
 }
 
@@ -192,7 +192,7 @@ export function extractNodeAppSecretRefs(
  * result to build off-cluster-compute desired state.
  */
 export function extractNodeServices(
-  spec: RepoSpec
+  spec: Pick<RepoSpec, "deployment">
 ): readonly NodeServiceConfig[] {
   const deployment = spec.deployment ?? LEGACY_DEFAULT_NODE_DEPLOYMENT;
   return deployment.services.map((service) => ({

@@ -59,7 +59,7 @@ The operator's own canary is exempt from (b) and (c) and is served only in its o
 A node developer has THREE views of one deploy. They are written by the same code, so they agree.
 
 1. **One emit helper.** Every sequencer event (`node_deploy_step`, `node_deploy_provider_strike`, `node_deploy_alert`) goes through `NodeDeploySequencer.record`. It writes the Loki line AND, when the event belongs to an attempt, appends the same step to `node_workload_attempts.steps` (`{step, outcome, reason?, dseq?, provider?, elapsedMs?, at}`). There is no second path. Never log a sequencer event with `this.d.log` directly.
-   - Persistence is observability only: a failed append logs `node_deploy_step_persist_failed` and never fails or delays a deploy decision.
+   - Ordinary event persistence is observability only. Qualification reservation/evidence uses the same writer with required persistence: append failure refuses proof. The complete bounded wire-v1 subject is stored as JSON in `reason`; no token or secret is stored.
    - Consecutive identical steps of one attempt collapse into one row (poll loops). Newest 100 steps per attempt are kept (`MAX_ATTEMPT_STEPS`, atomic SQL append).
    - `elapsedMs` (ms since the attempt row was created) rides on every attempt step; `step=activated` also carries `leadTimeMs` (release recorded to serving). Grafana unwraps both.
 2. **Release state (derived, never stored).** `deriveReleaseTimeline` computes `releaseState` from attempt phases on every read:
@@ -93,6 +93,16 @@ A node APP of a non-operator node gets the SAME env the retired Crossplane lane 
 - **Placement.** Node app creates send no provider pin (`NODE_DEPLOY_APP_PROVIDERS` is gone; unset sends no `allowProviders`, bug.5569). The actuator's `AKASH_ALLOWED_PROVIDERS` quality list plus catalog `required_placement_countries` (poly only, sent as `spec.placement.requiredCountryCodes`) decide placement. The substrate egress firewall (catalog `compute_egress_cidrs` union) stays the network guard until task.5384 credential binding. A provider whose egress is not admitted fails the proof, the old release keeps serving, and the next attempt of the same release sends that provider in `excludeProviders` (with blue's provider and bound state providers): the sequencer adds the provider of every earlier attempt of that release that failed or was lost after binding a lease. A refused create bound no provider and adds none; another release's providers are not excluded.
 - **Start command.** A node app that receives a DSN starts through `databaseConsumerCommand` (DB CA trust wrapper), as the Crossplane lane did.
 - **Not here.** Loki lease push (operator-bucket credentials) and the release-side migration Job are not wired by the sequencer (see the PR).
+
+## Private stateless companions
+
+Score owns 1–8 containers and the unique public entry by route target/readiness port. `declarations.ts` bridges same-SHA repo-spec build metadata, secret refs, sibling bindings and env gates; it checks the whole set before pruning. Retained state keeps its separate lifecycle.
+
+`artifact-selection.ts` reuses the complete bundle-v1 validators and env cascade. The existing release JSON carries the frozen artifact plan and accepted selected digest set. `pinResolvedBundle` seals JSON plus primary `resolved_image` under a source-wide advisory lock; later envs read the accepted OCI bundle by digest. Missing publication waits before paid create; invalid publication parks explicitly.
+
+Runtime assembly projects the selected union of secret keys once per assembly, then gives each consumer its declared subset. Only the public app gets the app profile. Sibling URLs derive once from selected private names/ports. The existing payer array/private SDL carries the whole authorized release.
+
+`qualification.ts` implements wire v1 using AUTH_SECRET HKDF-SHA256 and jose. HTTPS authenticates the observed ingress certificate; HTTP Host selects green. Redirects are refused. A bounded useful-work result is persisted before proven, then fresh non-dispatching readback must match attempt/allocation/helper boot before edge movement. Capability releases keep blue when qualification fails or is unknown. Single-container releases without capability keep the existing path. No provider or hostname algorithm changes.
 
 ## Responsibilities
 

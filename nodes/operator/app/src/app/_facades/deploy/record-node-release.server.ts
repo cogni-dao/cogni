@@ -156,6 +156,7 @@ export async function recordNodeRelease(
       env,
       workload,
       pendingImage,
+      sourceRepository: `${source.owner}/${source.repo}`,
     });
   } catch (error) {
     if (error instanceof DeclarationError)

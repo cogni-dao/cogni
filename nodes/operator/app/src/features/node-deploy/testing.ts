@@ -141,6 +141,38 @@ export class MemoryStore implements StorePort {
     this.releases.set(releaseId, next);
     return next;
   }
+  async acceptedBundle(release: ReleaseRow): Promise<string | undefined> {
+    return [...this.releases.values()].find(
+      (r) =>
+        r.nodeId === release.nodeId &&
+        r.sourceSha === release.sourceSha &&
+        r.spec.artifactPlan?.repository ===
+          release.spec.artifactPlan?.repository &&
+        r.resolvedImage &&
+        r.spec.artifactPlan?.bundleDigest
+    )?.spec.artifactPlan?.bundleDigest;
+  }
+  async pinResolvedBundle(
+    releaseId: string,
+    spec: NodeWorkloadSpec
+  ): Promise<ReleaseRow | undefined> {
+    const cur = this.releases.get(releaseId);
+    if (!cur) throw new Error("release missing");
+    const accepted = [...this.releases.values()].find(
+      (r) =>
+        r.nodeId === cur.nodeId &&
+        r.sourceSha === cur.sourceSha &&
+        r.spec.artifactPlan?.repository === cur.spec.artifactPlan?.repository &&
+        r.resolvedImage &&
+        r.spec.artifactPlan?.bundleDigest
+    )?.spec.artifactPlan?.bundleDigest;
+    if (accepted && accepted !== spec.artifactPlan?.bundleDigest)
+      return undefined;
+    if (cur.resolvedImage) return cur;
+    const sealed = { ...cur, spec, resolvedImage: spec.image };
+    this.releases.set(releaseId, sealed);
+    return sealed;
+  }
   async recordRelease(
     input: RecordReleaseInput
   ): Promise<{ release: ReleaseRow; desired: DesiredRow }> {
@@ -216,7 +248,7 @@ export class MemoryStore implements StorePort {
     this.attempts.push(row);
     return row;
   }
-  /** Make `appendAttemptStep` throw (the timeline is observability, never policy). */
+  /** Fail timeline writes, including the required qualification receipt. */
   failStepAppends = false;
   async appendAttemptStep(attemptId: string, step: AttemptStep): Promise<void> {
     if (this.failStepAppends) throw new Error("step store down");
@@ -423,6 +455,7 @@ export class FakeDns implements DnsRecordsPort {
 }
 
 export class FakeProbe implements ProbePort {
+  qualification?: NonNullable<ProbePort["qualification"]>;
   /** public reads served by the CURRENT edge target; the first N after a move still hit the old one. */
   publicStaleReads = 0;
   private staleLeft = 0;
