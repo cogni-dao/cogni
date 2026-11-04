@@ -358,14 +358,15 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
       );
     });
 
-    it("the candidate-a overlay is untouched: it serves only itself and sets no fleet owner (the test operator claims no canonical node)", () => {
+    it("the candidate-a overlay serves only itself, and its fleet is cogni-test-org (the test operator claims no canonical node)", () => {
       const candidate = yaml.parse(
         read("infra/k8s/overlays/candidate-a/operator/kustomization.yaml")
       ) as Kustomization;
       expect(sequencerEnv(candidate, "NODE_DEPLOY_ENVS")).toBeUndefined();
-      expect(
-        sequencerEnv(candidate, "NODE_DEPLOY_FLEET_OWNER")
-      ).toBeUndefined();
+      // story.5137 test lane: the test sequencer's edge guard admits only test-org nodes, never cogni-dao.
+      expect(sequencerEnv(candidate, "NODE_DEPLOY_FLEET_OWNER")).toBe(
+        "cogni-test-org"
+      );
     });
   });
 });
