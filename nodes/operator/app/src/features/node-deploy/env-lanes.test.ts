@@ -133,7 +133,10 @@ describe("resolveEnvLanes", () => {
 });
 
 const DECLARED = [...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS];
-const BUCKET = Object.fromEntries(DECLARED.map((k) => [k, `v-${k}`]));
+// task.5408: every node app also reads its own migration DSN from its bucket.
+const BUCKET = Object.fromEntries(
+  [...DECLARED, "DATABASE_MIGRATION_URL"].map((k) => [k, `v-${k}`])
+);
 
 class LaneSecrets implements NodeRuntimeSecretsPort {
   readonly reads: { env: string; slug: string }[] = [];

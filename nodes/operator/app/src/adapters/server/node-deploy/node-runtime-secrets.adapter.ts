@@ -12,7 +12,8 @@
  *   No OpenBao login, no new OpenBao role, no root token: ESO's own `eso-reader` role (ClusterSecretStore
  *   `openbao-backend`) is the ONLY reader of OpenBao, exactly as for every other ExternalSecret.
  * Invariants:
- *   - CUSTODY_STAYS_IN_OPENBAO: the value lives at `cogni/<env>/<slug>`; the Kubernetes Secret is the
+ *   - CUSTODY_STAYS_IN_OPENBAO: the value lives at `cogni/<env>/<slug>` (DATABASE_MIGRATION_URL alone at
+ *     `cogni/<env>/<slug>-database-migration`, task.5408); the Kubernetes Secret is the
  *     ESO-rendered view (`creationPolicy: Owner`, 5m refresh), never an authority.
  *   - ONLY_DECLARED_KEYS_ARE_RENDERED: the ExternalSecret lists `data:` entries
  *     (`remoteRef: {key: <env>/<slug>, property: K}`) for EXACTLY the caller's key list and has NO
@@ -89,6 +90,18 @@ const statusCode = (e: unknown): number | undefined =>
     .statusCode ??
   (e as { response?: { statusCode?: number } }).response?.statusCode;
 
+/**
+ * The ONE key read from a bucket other than the node's own: the isolated migration DSN lives in
+ * `<env>/<slug>-database-migration` (written by secret-materialize; also read by the substrate's
+ * `<slug>-migration-secrets` ExternalSecret). One source, two readers (task.5408). The admission policy
+ * admits exactly this key/property from exactly that bucket.
+ */
+const MIGRATION_KEY = "DATABASE_MIGRATION_URL";
+export const bucketFor = (env: string, slug: string, key: string): string =>
+  key === MIGRATION_KEY
+    ? `${env}/${slug}-database-migration`
+    : `${env}/${slug}`;
+
 function desiredSpec(env: string, slug: string, keys: readonly string[]) {
   return {
     refreshInterval: REFRESH_INTERVAL,
@@ -99,7 +112,7 @@ function desiredSpec(env: string, slug: string, keys: readonly string[]) {
     },
     data: [...keys].sort().map((key) => ({
       secretKey: key,
-      remoteRef: { key: `${env}/${slug}`, property: key },
+      remoteRef: { key: bucketFor(env, slug, key), property: key },
     })),
   };
 }
