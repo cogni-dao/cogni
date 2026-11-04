@@ -637,12 +637,16 @@ describe("green migrates itself before it serves (task.5408)", () => {
     expect(appCreates(h)).toHaveLength(0);
   });
 
-  it("a node app whose DATABASE_URL is bound to a state workload is not migrated by the wrapper", async () => {
+  it("a node app whose DATABASE_URL is bound to its own state lease migrates THAT database (OWN_STATE_MIGRATES_ITSELF)", async () => {
     const h = harness();
     await stateUp(h, POLY_ID);
     await releaseApp(h, POLY_ID);
     const svc = appCreates(h)[0]?.spec.services[0];
-    expect(svc?.env).not.toHaveProperty("DATABASE_MIGRATION_URL");
-    expect(String(svc?.command?.[2])).not.toContain("migrate.mjs");
+    // The migration DSN is the binding's own DSN, never the shared bucket's.
+    expect(svc?.env?.DATABASE_MIGRATION_URL).toBe(svc?.env?.DATABASE_URL);
+    expect(svc?.env?.DATABASE_MIGRATION_URL).not.toBe(
+      h.runtimeSecrets.bucket.DATABASE_MIGRATION_URL
+    );
+    expect(String(svc?.command?.[2])).toContain("migrate.mjs");
   });
 });

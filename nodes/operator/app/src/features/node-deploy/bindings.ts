@@ -11,6 +11,8 @@
  * Invariants:
  *   - BINDING_DERIVED_NOT_STORED: callers re-derive from the live lease on every consumer attempt,
  *     so a moved or re-forwarded port is picked up with no stored copy to go stale.
+ *   - OWN_STATE_MIGRATES_ITSELF: a `DATABASE_URL` binding also yields `DATABASE_MIGRATION_URL` for the SAME
+ *     state lease, so the start wrapper migrates the node's own database (task.5408).
  *   - ONE_TCP_ENDPOINT: a state lease must expose exactly one forwarded tcp endpoint; zero or several
  *     is a refusal, never a guess.
  * Side-effects: none
@@ -69,5 +71,15 @@ export function resolveBinding(
   if (targeted.length === 0) return [];
   const { host, port } = forwardedTcpEndpoint(state.endpoints);
   const url = `postgres://postgres:${encodeURIComponent(state.password)}@${host}:${port}/postgres?sslmode=require`;
-  return targeted.map((b) => ({ env: b.env, value: url, host, port }));
+  return targeted.flatMap((b) =>
+    b.env === "DATABASE_URL"
+      ? [
+          { env: b.env, value: url, host, port },
+          // OWN_STATE_MIGRATES_ITSELF (task.5408): a node whose database is its own state lease migrates
+          // that database, with the same derived DSN, before it serves. The shared bucket's migration
+          // DSN names another database and is never sent here.
+          { env: "DATABASE_MIGRATION_URL", value: url, host, port },
+        ]
+      : [{ env: b.env, value: url, host, port }]
+  );
 }
