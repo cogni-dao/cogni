@@ -1721,9 +1721,12 @@ describe("AkashTxActuator.create", () => {
 
   it("keeps the slot held when the create could NOT prove its deployment closed", async () => {
     // Same terminal provider refusal, no verified close: absence of proof must read as "may
-    // still be billing", which is the one case worth blocking the wallet for.
+    // still be billing", which is the one case worth blocking the wallet for. bug.5569: a refusal
+    // before any dseq was published is now proven from Console and settled inline, so the proof
+    // is removed here by failing that read-back.
     const { actuator, ledger } = build({
       allocateError: consoleError("NO_ELIGIBLE_BIDS"),
+      recoverError: consoleError("NETWORK_ERROR"),
     });
 
     await expect(
@@ -1909,14 +1912,65 @@ describe("AkashTxActuator.create", () => {
     const rolledBack = (code: string, dseq: string) =>
       Object.assign(consoleError(code), { rolledBackDseq: dseq });
 
-    it("a refusal before any deployment opened (Console 4xx on the deployment POST) proves nothing bills", async () => {
-      const { error } = await refusal({
+    it("a refusal before any deployment opened (Console 4xx on the deployment POST) proves nothing bills, settles the receipt and frees the wallet slot", async () => {
+      const { actuator, ledger, api } = build({
         allocateError: consoleError("HTTP_ERROR", 422),
       });
+      const error = (await actuator
+        .create(call)
+        .catch((e: unknown) => e)) as AkashTxError;
       expect(error).toMatchObject({
         code: "provider_rejected",
         nothingBilling: true,
       });
+      // proven from Console in the same call, then settled: no `preparing` row holds the slot
+      expect(api.recoverCalls).toBe(1);
+      expect(ledger.rows.get("k1")?.state).toBe("failed");
+      expect(ledger.failCalls).toEqual([
+        { cogniKey: "k1", failureCode: "allocation_rolled_back" },
+      ]);
+      // a second key on the same wallet is NOT blocked
+      const second = (await actuator
+        .create({
+          ...call,
+          cogniKey: "k2",
+          identity: { ...OTHER_IDENTITY, compositeUid: "uid-2" },
+        })
+        .catch((e: unknown) => e)) as AkashTxError;
+      expect(second.code).not.toBe("wallet_allocation_blocked");
+      expect(api.allocateCalls).toBe(2);
+    });
+
+    it("a pre-deployment refusal whose inline read-back fails carries NO nothingBilling and keeps the receipt for observe", async () => {
+      const { error, ledger } = await refusal({
+        allocateError: consoleError("HTTP_ERROR", 422),
+        recoverError: consoleError("NETWORK_ERROR"),
+      });
+      expect(error.code).toBe("provider_rejected");
+      expect(error.nothingBilling).toBe(false);
+      expect(ledger.rows.get("k1")?.state).toBe("preparing");
+    });
+
+    it("a pre-deployment refusal whose read-back finds allocations, or whose settle write fails, carries NO nothingBilling", async () => {
+      const found = await refusal({
+        allocateError: consoleError("HTTP_ERROR", 422),
+        ambiguous: ["7001", "7002"],
+      });
+      expect(found.error.nothingBilling).toBe(false);
+      expect(found.ledger.rows.get("k1")?.state).toBe("preparing");
+      const { actuator, ledger } = build({
+        allocateError: consoleError("HTTP_ERROR", 422),
+      });
+      const origFail = ledger.fail.bind(ledger);
+      ledger.fail = async () => {
+        throw new Error("ledger down");
+      };
+      const unsettled = (await actuator
+        .create(call)
+        .catch((e: unknown) => e)) as AkashTxError;
+      expect(unsettled.code).toBe("provider_rejected");
+      expect(unsettled.nothingBilling).toBe(false);
+      ledger.fail = origFail;
     });
 
     it("a screening refusal whose deployment was closed AND re-read closed proves nothing bills", async () => {

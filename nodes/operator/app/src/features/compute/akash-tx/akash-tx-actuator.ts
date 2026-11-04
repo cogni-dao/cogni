@@ -926,16 +926,19 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       // the receipt keeps the WALLET-WIDE slot and every node in the environment stops
       // leasing. Settling is best-effort on purpose: the DB may be the very thing that died,
       // and the stale-allocation sweeper is the backstop for exactly that case.
+      let settled = false;
       if (rolledBackDseq)
-        await this.settleRollback(input.cogniKey, rolledBackDseq);
+        settled = await this.settleRollback(input.cogniKey, rolledBackDseq);
+      else if (mapped.code === "provider_rejected" && !deploymentOpened)
+        settled = await this.settleUnopenedRefusal(input.cogniKey, cursor);
       // NOTHING_BILLING_IS_PROVEN (bug.5569): a refusal says "nothing bills" ONLY when no deployment
       // was ever opened (a Console 4xx on the deployment POST, an unsatisfiable pin) or the one it
-      // opened was closed AND re-read closed (`rolledBackDseq`). A "close UNVERIFIED" refusal, and
-      // every non-refusal code, carry no such proof: the caller must look for the lease.
-      if (
-        mapped.code === "provider_rejected" &&
-        (rolledBackDseq !== undefined || !deploymentOpened)
-      )
+      // opened was closed AND re-read closed (`rolledBackDseq`), AND this call then settled the
+      // receipt. A `nothingBilling` caller fails the attempt with NO observe, so an unsettled
+      // `preparing` receipt would hold the WALLET-WIDE slot until the sweeper (15-20 min) and block
+      // every node's create. A "close UNVERIFIED" refusal, an unsettled receipt, and every
+      // non-refusal code carry no such proof: the caller observes, which resolves the receipt.
+      if (mapped.code === "provider_rejected" && settled)
         throw new AkashTxError(
           mapped.code,
           mapped.message,
@@ -1703,6 +1706,46 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
       return false;
     }
+  }
+
+  /**
+   * bug.5569: a create refused before Console handed back a dseq left a `preparing` receipt with a
+   * durable cursor, and that receipt holds the WALLET-WIDE slot. Prove from Console that nothing
+   * was allocated beyond the cursor (the same probe `resolveUncertain` uses), then settle the
+   * receipt in this call. Returns true ONLY when both happened.
+   *
+   * Unlike `resolveUncertain`, an `adopted` or `ambiguous` probe is NOT acted on here: the refusal
+   * is still thrown, without `nothingBilling`, and the caller's observe resolves the receipt
+   * exactly as before. A probe failure or an unsettled write is the same: false, and the
+   * stale-allocation sweeper stays the backstop. Never throws, so it never masks the refusal.
+   */
+  private async settleUnopenedRefusal(
+    cogniKey: string,
+    allocationCursor: string
+  ): Promise<boolean> {
+    let probe: AkashAllocationProbe;
+    try {
+      probe = await this.console.findAllocationSince(allocationCursor);
+    } catch (error) {
+      this.log.warn(
+        {
+          cogniKey,
+          allocationCursor,
+          causeMessage:
+            error instanceof Error ? error.message : "unknown cause",
+        },
+        "akash_tx_refusal_settle_unproven"
+      );
+      return false;
+    }
+    if (probe.outcome !== "settled") {
+      this.log.warn(
+        { cogniKey, allocationCursor, outcome: probe.outcome },
+        "akash_tx_refusal_settle_unproven"
+      );
+      return false;
+    }
+    return this.settleRollback(cogniKey, undefined, allocationCursor);
   }
 
   /**
