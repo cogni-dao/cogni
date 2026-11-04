@@ -159,6 +159,7 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
 export interface NodeAppRuntimeDeps {
   readonly secrets: NodeRuntimeSecretsPort;
   readonly catalog: NodeCatalogPort;
+  readonly operatorDomain: string;
   /** `vm_host_for_env` of the environment VM; absent omits the substrate env block. */
   readonly substrateHost?: string | undefined;
 }
@@ -594,6 +595,10 @@ export class NodeDeploySequencer {
     if (w.kind === "state") {
       env.POSTGRES_PASSWORD = await this.d.secrets.ensureStatePassword(key);
     }
+    if (nodeApp && w.bindings.some((b) => b.env === "DOMAIN"))
+      throw new DependencyNotReady(
+        "DOMAIN is reserved for the operator issuer"
+      );
     const states = [...new Set(w.bindings.map((b) => b.workload))];
     for (const stateName of states) {
       const stateKey = { ...key, workload: stateName };
@@ -704,6 +709,7 @@ export class NodeDeploySequencer {
           nodeId: key.nodeId,
           sourceSha: release.sourceSha,
           publicHost,
+          operatorDomain: rt.operatorDomain,
           port: w.port,
           substrateHost: rt.substrateHost,
           databasePoolLimits: policy.databasePoolLimits,

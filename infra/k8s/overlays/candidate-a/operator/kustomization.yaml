@@ -257,6 +257,8 @@ patches:
                 env:
                   - name: DEPLOY_ENVIRONMENT
                     value: candidate-a
+                  - name: NODE_DEPLOY_OPERATOR_DOMAIN_ROOT
+                    value: cognidao.org
                   - name: NODE_DEPLOY_SECRETS_NAMESPACE
                     value: cogni-node-deploy-candidate-a
                   - name: AKASH_CHAIN_OWNER

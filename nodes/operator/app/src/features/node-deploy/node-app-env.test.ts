@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import { OFF_CLUSTER_WORKLOAD_DENIED_KEYS } from "@/shared/secrets/node-secrets-reserved.data";
 
+import { resolveEnvLanes } from "./env-lanes";
+
 import {
   injectableSecrets,
   nodeAppEnv,
@@ -55,6 +57,7 @@ function composedProduction(): Record<string, string> {
     SCHEDULER_API_TOKEN: "v-SCHEDULER_API_TOKEN",
     BILLING_INGEST_TOKEN: "v-BILLING_INGEST_TOKEN",
     COGNI_NODE_ID: NODE_ID,
+    DOMAIN: "cognidao.org",
     NODE_NAME: "poly",
     COGNI_REPO_PATH: "/app",
     AUTH_TRUST_HOST: "true",
@@ -69,9 +72,65 @@ const base = {
   nodeId: NODE_ID,
   sourceSha: SHA,
   publicHost: "poly.cognidao.org",
+  operatorDomain: "cognidao.org",
   port: 3200,
   substrateHost: "cogni.vm.cognidao.org",
 } as const;
+
+describe("operator issuer", () => {
+  it("uses the platform issuer when DOMAIN is a declared bucket key", () => {
+    const env = nodeAppEnv({
+      ...base,
+      operatorDomain: "test.operator.example",
+      secretKeys: [...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS, "DOMAIN"],
+      secrets: { ...profileBucket(), DOMAIN: "attacker.example" },
+    });
+    expect(env.DOMAIN).toBe("test.operator.example");
+  });
+});
+
+describe("operator issuer lane configuration", () => {
+  const config = {
+    deployEnvironment: "production",
+    podNamespace: "control",
+    secretsNamespace: "cogni-node-deploy-production",
+    substrateHost: "substrate.internal",
+    operatorDomainRoot: "operator.example",
+    environments: "candidate-a,preview,production",
+    substrateHosts:
+      "candidate-a=candidate.internal,preview=preview.internal,production=production.internal",
+  };
+  it("uses workload lanes, independently of control and substrate hosts", () => {
+    expect(resolveEnvLanes(config).map((lane) => lane.operatorDomain)).toEqual([
+      "test.operator.example",
+      "preview.operator.example",
+      "operator.example",
+    ]);
+  });
+  it.each([
+    undefined,
+    "",
+    "https://operator.example",
+    "bad..example",
+    "operator.example:443",
+  ])("refuses invalid root %s", (root) => {
+    expect(() =>
+      resolveEnvLanes({ ...config, operatorDomainRoot: root })
+    ).toThrow(/NODE_DEPLOY_OPERATOR_DOMAIN_ROOT/);
+  });
+  it("refuses unsupported envs in both configuration forms", () => {
+    expect(() => resolveEnvLanes({ ...config, environments: "mars" })).toThrow(
+      /environment/
+    );
+    expect(() =>
+      resolveEnvLanes({
+        ...config,
+        environments: undefined,
+        deployEnvironment: "mars",
+      })
+    ).toThrow(/environment/);
+  });
+});
 
 describe("nodeAppEnv parity with the Crossplane composition", () => {
   it("renders the composition's env key by key for a stock node", () => {

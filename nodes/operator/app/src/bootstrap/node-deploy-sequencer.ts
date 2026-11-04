@@ -143,6 +143,7 @@ let lanes: ReturnType<typeof resolveEnvLanes>;
 try {
   lanes = resolveEnvLanes({
     deployEnvironment: environment,
+    operatorDomainRoot: runtimeEnv.NODE_DEPLOY_OPERATOR_DOMAIN_ROOT,
     podNamespace: namespace,
     environments: runtimeEnv.NODE_DEPLOY_ENVS,
     secretsNamespace: runtimeEnv.NODE_DEPLOY_SECRETS_NAMESPACE,
@@ -233,6 +234,7 @@ const laneSequencers = await Promise.all(
           }),
           catalog,
           substrateHost: lane.substrateHost,
+          operatorDomain: lane.operatorDomain,
         },
         ...(chain ? { chain } : {}),
         clock: {

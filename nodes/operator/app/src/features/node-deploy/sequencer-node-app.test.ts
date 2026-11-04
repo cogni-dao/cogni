@@ -149,7 +149,12 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
     edge: new EdgeRouter(dns, edgeHostRegexFor(["poly", "toks5"])),
     probe,
     secrets,
-    runtime: { secrets: runtimeSecrets, catalog, substrateHost: SUBSTRATE },
+    runtime: {
+      secrets: runtimeSecrets,
+      catalog,
+      substrateHost: SUBSTRATE,
+      operatorDomain: "operator.example",
+    },
     images,
     chain: new FakeChain(payer),
     clock,
@@ -228,6 +233,7 @@ describe("node app runtime env (task.5405)", () => {
       nodeId: POLY_ID,
       sourceSha: SHA_1,
       publicHost: POLY_HOST,
+      operatorDomain: "operator.example",
       port: 8080,
       substrateHost: SUBSTRATE,
       secrets: PROFILE_BUCKET,
@@ -252,6 +258,50 @@ describe("node app runtime env (task.5405)", () => {
       slug: "poly",
     });
     expect(h.runtimeSecrets.reads.at(-1)?.keys).not.toContain("DATABASE_URL");
+  });
+
+  it("protects the issuer in the final paid payload from declared env and bucket values", async () => {
+    const h = harness();
+    h.runtimeSecrets.bucket.DOMAIN = "bucket-attacker.example";
+    await h.store.recordRelease({
+      nodeId: POLY_ID,
+      env: ENV,
+      workload: "canary",
+      sourceSha: SHA_1,
+      spec: canaryApp({
+        secretKeys: [...DECLARED, "DOMAIN"],
+        env: { DOMAIN: "declared-attacker.example" },
+        bindings: [],
+        expose: { http: { host: POLY_HOST } },
+      }),
+      createdBy: "test",
+    });
+    await h.seq.step(h.key(POLY_ID, "canary"));
+    expect(h.runtimeSecrets.reads.at(-1)?.keys).toContain("DOMAIN");
+    expect(appCreates(h)[0]?.spec.services[0]?.env?.DOMAIN).toBe(
+      "operator.example"
+    );
+  });
+
+  it("refuses a state binding targeting DOMAIN before paying", async () => {
+    const h = harness();
+    await h.store.recordRelease({
+      nodeId: POLY_ID,
+      env: ENV,
+      workload: "canary",
+      sourceSha: SHA_1,
+      spec: canaryApp({
+        secretKeys: DECLARED,
+        bindings: [{ env: "DOMAIN", workload: "canary-db" }],
+        expose: { http: { host: POLY_HOST } },
+      }),
+      createdBy: "test",
+    });
+    expect(await h.seq.step(h.key(POLY_ID, "canary"))).toBe(
+      "waiting_dependency"
+    );
+    expect(appCreates(h)).toHaveLength(0);
+    expect(JSON.stringify(h.log.lines)).toContain("DOMAIN is reserved");
   });
 
   it("a fleet-inherited key present in the bucket but not declared is NOT injected; a declared secret_ref is", async () => {

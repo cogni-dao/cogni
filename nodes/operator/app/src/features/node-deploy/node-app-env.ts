@@ -63,6 +63,8 @@ export interface NodeAppEnvInput {
   readonly sourceSha: string;
   /** Public host of the app (no scheme). */
   readonly publicHost: string;
+  /** Trusted public operator issuer host for this workload lane. */
+  readonly operatorDomain: string;
   /** The container port. */
   readonly port: number;
   /**
@@ -170,6 +172,9 @@ export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
     e.LOKI_PUSH_SOURCE = "lease";
   }
   // buildNodeAppIdentityEnv(): deliberately wins over every key above.
+  if (!input.operatorDomain)
+    throw new Error("operator issuer domain is required");
+  e.DOMAIN = input.operatorDomain;
   e.NODE_NAME = input.slug;
   e.COGNI_REPO_PATH = "/app";
   e.AUTH_TRUST_HOST = "true";
