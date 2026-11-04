@@ -89,6 +89,9 @@ function expectedRoster(): ExpectedNode[] {
       is_primary_host?: boolean;
     };
     if (doc?.type !== "node" || !doc.name) continue;
+    // The canonical network roster holds cogni-dao nodes only. A test-fleet row (cogni-test-org
+    // source_repo, served only by the test operator) is not a network node (story.5137).
+    if (/github\.com\/cogni-test-org\//i.test(doc.source_repo ?? "")) continue;
     nodes.push({
       name: doc.name,
       nodeId: resolveNodeId(doc.name, doc),
