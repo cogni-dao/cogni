@@ -58,6 +58,13 @@ export const keyString = (k: WorkloadKey): string =>
 export interface ReleaseRow extends WorkloadKey {
   readonly id: string;
   readonly sourceSha: string;
+  /** Store-owned terminal admission verdict, separate from the immutable workload spec. */
+  readonly admissionRefusal?:
+    | {
+        readonly reason: string;
+        readonly at: string;
+      }
+    | undefined;
   /**
    * The spec to deploy. While `spec.imagePending` is true its image is the tag node CI publishes at
    * `sourceSha` and NO create may be sent; once the digest is pinned the store returns the spec with that
@@ -391,6 +398,13 @@ export interface StorePort {
    * release deploys one image. Returns the release with its spec normalized (`withResolvedImage`).
    */
   pinResolvedImage(releaseId: string, image: string): Promise<ReleaseRow>;
+  /** Atomically append a write-once refusal to existing release JSON. Never allocate an attempt.
+   * A lost acknowledgement is unknown: callers must read the release before proceeding.
+   */
+  refuseAdmission(
+    releaseId: string,
+    refusal: NonNullable<ReleaseRow["admissionRefusal"]>
+  ): Promise<ReleaseRow>;
   /** Accepted source-wide OCI identity, independent of target environment. */
   acceptedBundle(release: ReleaseRow): Promise<string | undefined>;
   /** Atomically seal spec + primary digest under the source lock; undefined means another bundle won. */

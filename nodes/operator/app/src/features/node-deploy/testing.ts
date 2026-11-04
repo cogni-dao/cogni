@@ -132,7 +132,7 @@ export class MemoryStore implements StorePort {
   ): Promise<ReleaseRow> {
     const cur = this.releases.get(releaseId);
     if (!cur) throw new Error(`release ${releaseId} not found`);
-    if (cur.resolvedImage !== undefined) return cur;
+    if (cur.admissionRefusal || cur.resolvedImage !== undefined) return cur;
     const next: ReleaseRow = {
       ...cur,
       spec: withResolvedImage(cur.spec, image),
@@ -140,6 +140,17 @@ export class MemoryStore implements StorePort {
     };
     this.releases.set(releaseId, next);
     return next;
+  }
+  async refuseAdmission(
+    releaseId: string,
+    refusal: NonNullable<ReleaseRow["admissionRefusal"]>
+  ): Promise<ReleaseRow> {
+    const cur = this.releases.get(releaseId);
+    if (!cur) throw new Error("release missing");
+    if (cur.admissionRefusal) return cur;
+    const refused = { ...cur, admissionRefusal: { ...refusal } };
+    this.releases.set(releaseId, refused);
+    return refused;
   }
   async acceptedBundle(release: ReleaseRow): Promise<string | undefined> {
     return [...this.releases.values()].find(
@@ -168,7 +179,7 @@ export class MemoryStore implements StorePort {
     )?.spec.artifactPlan?.bundleDigest;
     if (accepted && accepted !== spec.artifactPlan?.bundleDigest)
       return undefined;
-    if (cur.resolvedImage) return cur;
+    if (cur.admissionRefusal || cur.resolvedImage) return cur;
     const sealed = { ...cur, spec, resolvedImage: spec.image };
     this.releases.set(releaseId, sealed);
     return sealed;
@@ -218,6 +229,8 @@ export class MemoryStore implements StorePort {
     releaseId: string,
     makeKey: (attempt: number) => string
   ): Promise<AttemptRow> {
+    if (this.releases.get(releaseId)?.admissionRefusal)
+      throw new Error("release admission refused");
     const n =
       Math.max(
         0,

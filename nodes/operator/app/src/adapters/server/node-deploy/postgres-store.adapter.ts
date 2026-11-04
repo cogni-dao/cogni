@@ -8,7 +8,8 @@
  * Scope: Reads and writes those three tables. No deploy policy.
  * Invariants:
  *   - RELEASE_IS_IMMUTABLE: `recordRelease` only INSERTs a release; nothing updates one except
- *     `pinResolvedImage`, which writes `resolved_image` once (`WHERE resolved_image IS NULL`).
+ *     atomic image/bundle sealing and a store-owned write-once admission refusal. Refusal only
+ *     appends metadata; it cannot alter the accepted bundle, spec or primary image.
  *   - RELEASE_AND_DESIRED_ARE_ONE_TRANSACTION: a release is never visible without desired pointing at
  *     it, and desired never points at a release that does not exist.
  *   - ORDINAL_IS_STORE_ALLOCATED: the attempt ordinal is `max+1` inside the insert transaction, with a
@@ -22,6 +23,7 @@
 import type { Database } from "@cogni/db-client";
 import { nodeWorkloadSpecSchema } from "@cogni/repo-spec";
 import { and, desc, eq, sql } from "drizzle-orm";
+import { z } from "zod";
 
 import type {
   AttemptPatch,
@@ -63,7 +65,21 @@ function toAttempt(r: AttemptDb): AttemptRow {
   };
 }
 
+// This key belongs to the release store, never the declared NodeWorkloadSpec.
+const admissionRefusalSchema = z
+  .object({
+    reason: z.string().min(1).max(600),
+    at: z.string().datetime(),
+  })
+  .strict();
+const storedReleaseSchema = z
+  .object({
+    _admissionRefusal: admissionRefusalSchema.optional(),
+  })
+  .passthrough();
+
 function toRelease(r: ReleaseDb): ReleaseRow {
+  const { _admissionRefusal, ...spec } = storedReleaseSchema.parse(r.spec);
   return {
     id: r.id,
     nodeId: r.nodeId,
@@ -71,9 +87,10 @@ function toRelease(r: ReleaseDb): ReleaseRow {
     workload: r.workload,
     sourceSha: r.sourceSha,
     spec: withResolvedImage(
-      nodeWorkloadSpecSchema.parse(r.spec),
+      nodeWorkloadSpecSchema.parse(spec),
       r.resolvedImage ?? undefined
     ),
+    admissionRefusal: _admissionRefusal,
     resolvedImage: r.resolvedImage ?? undefined,
     createdBy: r.createdBy,
     createdAt: r.createdAt,
@@ -176,11 +193,35 @@ export class PostgresNodeDeployStore implements StorePort {
       .where(
         and(
           eq(nodeWorkloadReleases.id, releaseId),
-          sql`${nodeWorkloadReleases.resolvedImage} IS NULL`
+          sql`${nodeWorkloadReleases.resolvedImage} IS NULL`,
+          sql`${nodeWorkloadReleases.spec}->'_admissionRefusal' IS NULL`
         )
       );
     const release = await this.getRelease(releaseId);
     if (!release) throw new Error(`release ${releaseId} not found`);
+    return release;
+  }
+
+  async refuseAdmission(
+    releaseId: string,
+    refusal: NonNullable<ReleaseRow["admissionRefusal"]>
+  ): Promise<ReleaseRow> {
+    const verdict = admissionRefusalSchema.parse(refusal);
+    // One row-level atomic JSON append preserves every sealed artifact and the first refusal.
+    await this.db
+      .update(nodeWorkloadReleases)
+      .set({
+        spec: sql`jsonb_set(${nodeWorkloadReleases.spec}, '{_admissionRefusal}', ${JSON.stringify(verdict)}::jsonb)`,
+      })
+      .where(
+        and(
+          eq(nodeWorkloadReleases.id, releaseId),
+          sql`${nodeWorkloadReleases.spec}->'_admissionRefusal' IS NULL`
+        )
+      );
+    const release = await this.getRelease(releaseId);
+    if (!release?.admissionRefusal)
+      throw new Error("admission refusal not confirmed");
     return release;
   }
 
@@ -256,7 +297,8 @@ export class PostgresNodeDeployStore implements StorePort {
         .where(
           and(
             eq(nodeWorkloadReleases.id, releaseId),
-            sql`${nodeWorkloadReleases.resolvedImage} IS NULL`
+            sql`${nodeWorkloadReleases.resolvedImage} IS NULL`,
+            sql`${nodeWorkloadReleases.spec}->'_admissionRefusal' IS NULL`
           )
         );
       const [row] = await tx
@@ -337,6 +379,15 @@ export class PostgresNodeDeployStore implements StorePort {
     for (let tries = 0; tries < 5; tries++) {
       try {
         return await this.db.transaction(async (tx) => {
+          // Serialize allocation with terminal refusal. No attempt can be inserted after it.
+          const [release] = await tx
+            .select()
+            .from(nodeWorkloadReleases)
+            .where(eq(nodeWorkloadReleases.id, releaseId))
+            .for("update");
+          if (!release) throw new Error("release missing");
+          if (toRelease(release).admissionRefusal)
+            throw new Error("release admission refused");
           const [max] = await tx
             .select({
               n: sql<number>`coalesce(max(${nodeWorkloadAttempts.attempt}), 0)::int`,

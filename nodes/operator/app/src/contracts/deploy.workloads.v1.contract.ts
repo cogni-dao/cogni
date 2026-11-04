@@ -136,6 +136,8 @@ export const DeployReleaseTimelineSchema = z.object({
   serving: z.boolean(),
   releaseState: DeployReleaseStateSchema,
   parkedReason: z.string().nullable(),
+  /** Terminal pre-attempt admission refusal time; absent on older responses. */
+  admissionRefusedAt: z.string().datetime().nullable().optional(),
   recordedAt: z.string().nullable(),
   startedAt: z.string().nullable(),
   activatedAt: z.string().nullable(),
@@ -151,6 +153,8 @@ export const DeployWorkloadViewSchema = z.object({
     sourceSha: z.string().optional(),
     releaseState: DeployReleaseStateSchema,
     parkedReason: z.string().nullable(),
+    /** Terminal pre-attempt admission refusal time; absent on older responses. */
+    admissionRefusedAt: z.string().datetime().nullable().optional(),
     recordedAt: z.string().nullable(),
     startedAt: z.string().nullable(),
     activatedAt: z.string().nullable(),

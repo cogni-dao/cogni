@@ -20,6 +20,7 @@ import { buildTestRepoSpec } from "@cogni/repo-spec/testing";
 import { decodeJwt } from "jose";
 import { describe, expect, it } from "vitest";
 import { stringify } from "yaml";
+import { DeployWorkloadsReadSchema } from "@/contracts/deploy.workloads.v1.contract";
 import type {
   BuiltImageResolverPort,
   NodeCatalogPort,
@@ -32,6 +33,11 @@ import { DeclarationError, resolveWorkloadDeclaration } from "./declarations";
 
 import { EdgeRouter, edgeHostRegexFor } from "./edge";
 import { nodeAppEnv } from "./node-app-env";
+import {
+  buildReleaseDetail,
+  buildWorkloadView,
+  readNodeDeployWorkloads,
+} from "./release-view";
 import {
   DEFAULT_SEQUENCER_CONFIG,
   NodeDeploySequencer,
@@ -161,26 +167,28 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
   const catalog = new FakeCatalog();
   const images = new FakeImages();
   const log = new MemoryLog();
-  const seq = new NodeDeploySequencer({
-    store,
-    payer,
-    edge: new EdgeRouter(dns, edgeHostRegexFor(["poly", "toks5"])),
-    probe,
-    secrets,
-    runtime: { secrets: runtimeSecrets, catalog, substrateHost: SUBSTRATE },
-    images,
-    chain: new FakeChain(payer),
-    clock,
-    log,
-    config: {
-      ...DEFAULT_SEQUENCER_CONFIG,
-      namespace: "cogni-production",
-      environment: ENV,
-      retainMs: 120_000,
-      appProviders: ALLOWED,
-      ...cfg,
-    } as SequencerConfig,
-  });
+  const newSequencer = (readStore = store) =>
+    new NodeDeploySequencer({
+      store: readStore,
+      payer,
+      edge: new EdgeRouter(dns, edgeHostRegexFor(["poly", "toks5"])),
+      probe,
+      secrets,
+      runtime: { secrets: runtimeSecrets, catalog, substrateHost: SUBSTRATE },
+      images,
+      chain: new FakeChain(payer),
+      clock,
+      log,
+      config: {
+        ...DEFAULT_SEQUENCER_CONFIG,
+        namespace: "cogni-production",
+        environment: ENV,
+        retainMs: 120_000,
+        appProviders: ALLOWED,
+        ...cfg,
+      } as SequencerConfig,
+    });
+  const seq = newSequencer();
   const key = (nodeId: string, workload: string): WorkloadKey => ({
     nodeId,
     env: ENV,
@@ -195,6 +203,7 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
     clock,
     log,
     seq,
+    newSequencer,
     key,
     probe,
     dns,
@@ -1261,7 +1270,61 @@ describe("review repair digest and companion gates", () => {
     expect(checks).toContainEqual([PUBLIC_IMAGE, HELPER_IMAGE]);
     expect(h.store.attempts).toHaveLength(0);
     expect(h.payer.createRequests).toHaveLength(0);
-    expect(await h.store.getRelease(release.id)).toEqual(before);
+    const refused = requiredFixture(await h.store.getRelease(release.id));
+    expect(refused.spec).toEqual(before?.spec);
+    expect(refused.resolvedImage).toEqual(before?.resolvedImage);
+    expect(refused.admissionRefusal).toEqual({
+      reason: `artifact_bundle_invalid: ${header} selected Docker-Content-Digest`,
+      at: new Date(h.clock.now()).toISOString(),
+    });
+    const desired = requiredFixture(await h.store.getDesired(key));
+    const deployState = await readNodeDeployWorkloads(h.store, POLY_ID, [
+      "preview",
+      "candidate-a",
+    ]);
+    expect(
+      DeployWorkloadsReadSchema.parse(deployState[0]).workloads[0]?.desired
+    ).toMatchObject({
+      releaseState: "parked",
+      parkedReason: refused.admissionRefusal?.reason,
+      admissionRefusedAt: refused.admissionRefusal?.at,
+    });
+    expect(
+      (await readNodeDeployWorkloads(h.store, TOKS_ID, ["preview"]))[0]
+        ?.workloads
+    ).toEqual([]);
+    expect(
+      buildWorkloadView({ desired, release: refused, attemptsNewestFirst: [] })
+        .desired
+    ).toMatchObject({
+      releaseState: "parked",
+      parkedReason: refused.admissionRefusal?.reason,
+    });
+    expect(
+      buildReleaseDetail({ desired, release: refused, attemptsNewestFirst: [] })
+        .release
+    ).toMatchObject({
+      releaseState: "parked",
+      parkedReason: refused.admissionRefusal?.reason,
+    });
+    // A new runner reads copied rows, with no old sequencer caches. Native persistence is CI-owned.
+    const restored = new MemoryStore(h.clock);
+    restored.releases.set(refused.id, structuredClone(refused));
+    restored.desired.set(
+      `${key.nodeId}/${key.env}/${key.workload}`,
+      structuredClone(desired)
+    );
+    const restarted = h.newSequencer(restored);
+    // The valid publication remains available and its selected manifests have been repaired.
+    h.images.checkImageManifests = async () => {
+      checks.push([]);
+      return true;
+    };
+    expect(await restarted.step(key)).toBe("parked");
+    await restarted.tick();
+    expect(checks).toHaveLength(1);
+    expect(restored.attempts).toHaveLength(0);
+    expect(h.payer.createRequests).toHaveLength(0);
     expect((await h.store.getDesired(key))?.releaseId).toBe(release.id);
     expect(h.log.lines).toContainEqual(
       expect.objectContaining({
@@ -1289,6 +1352,22 @@ describe("review repair digest and companion gates", () => {
     await h.seq.step(key);
     const prior = requiredFixture(h.store.attempts[0]);
     expect(prior.error).toContain("ambiguous");
+    await h.store.refuseAdmission(prior.releaseId, {
+      reason: "artifact_bundle_invalid: selected digest mismatch",
+      at: new Date(h.clock.now()).toISOString(),
+    });
+    // Unknown paid effects still own their original attempt and observation authority.
+    await h.newSequencer().step(key);
+    expect(h.store.attempts[0]?.phase).toBe("planned");
+    expect(h.store.attempts[0]?.id).toBe(prior.id);
+    const desired = requiredFixture(await h.store.getDesired(key));
+    expect(
+      buildWorkloadView({
+        desired,
+        release: requiredFixture(await h.store.getRelease(prior.releaseId)),
+        attemptsNewestFirst: await h.store.attemptsFor(key),
+      }).desired
+    ).toMatchObject({ releaseState: "deploying", parkedReason: null });
     h.payer.observeThrows = false;
     let checked = false;
     h.images.checkImageManifests = async () => {
@@ -1298,7 +1377,7 @@ describe("review repair digest and companion gates", () => {
         true
       );
     };
-    await h.seq.step(key);
+    await h.newSequencer().step(key);
     expect(checked).toBe(false);
     expect(h.payer.observeCalls).toBeGreaterThan(0);
     expect(h.payer.createRequests).toHaveLength(1);
@@ -1760,4 +1839,94 @@ describe("green migrates itself before it serves (task.5408)", () => {
     );
     expect(String(svc?.command?.[2])).toContain("migrate.mjs");
   });
+});
+
+describe("terminal release admission", () => {
+  it("keeps invalid bundle intent refused after replacement but admits a new release", async () => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    const valid = requiredFixture(h.images.resolveArtifactBundle);
+    const { release } = await companionRelease(h);
+    const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
+    h.images.resolveArtifactBundle = async (input) => {
+      const publication = requiredFixture(await valid(input));
+      return {
+        ...publication,
+        bundle: { ...(publication.bundle as object), services: [] },
+      };
+    };
+    expect(await h.seq.step(key)).toBe("parked");
+    const refused = requiredFixture(await h.store.getRelease(release.id));
+    expect(refused.admissionRefusal?.reason).toContain(
+      "bundle identity or service coverage refused"
+    );
+    h.images.resolveArtifactBundle = valid;
+    expect(await h.newSequencer().step(key)).toBe("parked");
+    expect(h.store.attempts).toHaveLength(0);
+    expect(h.payer.createRequests).toHaveLength(0);
+    proofResponder(h);
+    const replacement = await companionRelease(h);
+    expect(await h.newSequencer().step(key)).toBe("driven");
+    expect(h.store.attempts[0]?.releaseId).toBe(replacement.release.id);
+    expect(h.store.attempts[0]?.phase).toBe("active");
+    expect((await h.store.getRelease(release.id))?.admissionRefusal).toEqual(
+      refused.admissionRefusal
+    );
+  });
+
+  it.each([
+    "absent",
+    "unreadable",
+  ])("leaves %s publication pending and admits it when available", async (kind) => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    const valid = requiredFixture(h.images.resolveArtifactBundle);
+    const { release } = await companionRelease(h);
+    const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
+    h.images.resolveArtifactBundle = async () => {
+      if (kind === "unreadable")
+        throw new BuiltImageRegistryError("registry unavailable");
+      return null;
+    };
+    expect(await h.seq.step(key)).toBe("waiting_dependency");
+    expect(
+      (await h.store.getRelease(release.id))?.admissionRefusal
+    ).toBeUndefined();
+    expect(h.store.attempts).toHaveLength(0);
+    expect(h.payer.createRequests).toHaveLength(0);
+    h.images.resolveArtifactBundle = valid;
+    proofResponder(h);
+    expect(await h.newSequencer().step(key)).toBe("driven");
+    expect(h.store.attempts[0]?.phase).toBe("active");
+  });
+});
+
+it.each([
+  "lost-ack",
+  "unwritten",
+])("requires durable refusal readback after %s", async (failure) => {
+  const h = harness({ environment: "preview" });
+  installBundle(h);
+  const { release } = await companionRelease(h);
+  const refuse = h.store.refuseAdmission.bind(h.store);
+  h.store.refuseAdmission = async (id, verdict) => {
+    if (failure === "lost-ack") await refuse(id, verdict);
+    throw new Error("store response lost");
+  };
+  h.images.checkImageManifests = async () => {
+    throw new BuiltImageRegistryError("invalid manifest digest", true);
+  };
+  const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
+  if (failure === "lost-ack") {
+    expect(await h.seq.step(key)).toBe("parked");
+    expect(
+      (await h.store.getRelease(release.id))?.admissionRefusal?.reason
+    ).toContain("invalid manifest digest");
+  } else {
+    await expect(h.seq.step(key)).rejects.toThrow(
+      "admission refusal outcome unknown"
+    );
+  }
+  expect(h.store.attempts).toHaveLength(0);
+  expect(h.payer.createRequests).toHaveLength(0);
 });

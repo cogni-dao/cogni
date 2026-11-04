@@ -306,6 +306,9 @@ export class NodeDeploySequencer {
     }
 
     if (active && active.releaseId === release.id) return "converged";
+    // Existing paid attempts above retain observe/readback/cleanup authority. This verdict only
+    // denies new admission and payment; every tick/restart reads the authoritative release.
+    if (release.admissionRefusal) return "parked";
 
     if (release.spec.kind === "state") {
       const everLive = all.some((a) =>
@@ -339,11 +342,13 @@ export class NodeDeploySequencer {
       // The image first: a pending image (`<repo>:sha-<sha>`) is resolved to a digest ONCE, pinned
       // write-once on the release, and only then can an attempt exist (ALWAYS_DEFER, story.5137).
       deployable = await this.pinImage(key, release);
+      if (deployable.admissionRefusal) return "parked";
       await this.resolveEnv(key, deployable);
     } catch (error) {
       if (error instanceof InvalidArtifactSet) {
         // Admission failed: attribute the refusal to the existing release intent. An attempt
         // identity is allocated only after the entire selected artifact set is admitted.
+        await this.persistAdmissionRefusal(release, error);
         await this.alert(key, release, undefined, "release_parked", {
           reason: "artifact_bundle_invalid",
           detail: error.message,
@@ -383,6 +388,26 @@ export class NodeDeploySequencer {
     });
     await this.drive(key, deployable, attempt, blue);
     return "driven";
+  }
+
+  private async persistAdmissionRefusal(
+    release: ReleaseRow,
+    error: InvalidArtifactSet
+  ): Promise<void> {
+    try {
+      const refused = await this.d.store.refuseAdmission(release.id, {
+        reason: `artifact_bundle_invalid: ${error.message}`.slice(0, 600),
+        at: new Date(this.d.clock.now()).toISOString(),
+      });
+      if (refused.admissionRefusal) return;
+    } catch {
+      // A lost write response grants no authority. Only durable readback confirms the verdict.
+    }
+    const readback = await this.d.store.getRelease(release.id);
+    if (!readback?.admissionRefusal)
+      throw new Error(
+        "admission refusal outcome unknown; awaiting durable readback"
+      );
   }
 
   /**
@@ -1001,6 +1026,14 @@ export class NodeDeploySequencer {
       }
     }
 
+    if (release.admissionRefusal)
+      return this.failAttempt(
+        key,
+        release,
+        attempt,
+        release.admissionRefusal.reason
+      );
+
     // A runner can stop after allocating the attempt. Recheck its accepted set
     // before a new paid call, while leaving ambiguous-call recovery above intact.
     if (w.artifactPlan) {
@@ -1013,13 +1046,15 @@ export class NodeDeploySequencer {
           });
           return attempt;
         }
-        if (error instanceof InvalidArtifactSet)
+        if (error instanceof InvalidArtifactSet) {
+          await this.persistAdmissionRefusal(release, error);
           return this.failAttempt(
             key,
             release,
             attempt,
             `artifact_bundle_invalid: ${error.message}`
           );
+        }
         throw error;
       }
     }

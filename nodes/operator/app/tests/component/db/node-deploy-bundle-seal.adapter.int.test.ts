@@ -6,7 +6,7 @@
  * Purpose: Prove source-wide bundle acceptance and immutable image/spec seals on real PostgreSQL.
  * Scope: Actual store, migrated tables and component DB clients; does not contact production.
  * Invariants: Concurrent environments accept one bundle; a failed seal cannot mix spec and image;
- *   committed acceptance survives a lost acknowledgement and a new store/connection.
+ *   committed acceptance and terminal admission refusal survive fresh store connections.
  * Side-effects: IO (testcontainers PostgreSQL only)
  * Links: src/adapters/server/node-deploy/postgres-store.adapter.ts, bug.5568, subtask.5034
  * @internal
@@ -279,5 +279,59 @@ describe("PostgresNodeDeployStore bundle seal (Component)", () => {
       spec: accepted,
       resolvedImage: accepted.image,
     });
+  });
+
+  it.each([
+    "pending",
+    "sealed",
+  ])("persists %s refusal without changing the accepted set across fresh clients", async (state) => {
+    const first = openStore();
+    const refused = await release(first.store, "preview");
+    const otherEnv = await release(first.store, "candidate-a");
+    if (state === "sealed")
+      await first.store.pinResolvedBundle(refused.id, sealedSpec("b", "c"));
+    const before = await raw(refused.id);
+    const verdict = {
+      reason: "artifact_bundle_invalid: selected image digest mismatch",
+      at: "2026-11-04T22:00:00.000Z",
+    };
+    // Simulate a lost reply AFTER the real write, not a severed COMMIT transport.
+    await expect(
+      (async () => {
+        await first.store.refuseAdmission(refused.id, verdict);
+        throw new Error("reply lost after refusal commit");
+      })()
+    ).rejects.toThrow("reply lost");
+    await first.db.$client.end({ timeout: 5 });
+    clients.splice(clients.indexOf(first.db), 1);
+    const fresh = openStore();
+    const reloaded = await fresh.store.getRelease(refused.id);
+    expect(reloaded?.admissionRefusal).toEqual(verdict);
+    const after = await raw(refused.id);
+    expect(after.resolvedImage).toEqual(before.resolvedImage);
+    expect(after.spec).toEqual({
+      ...(before.spec as object),
+      _admissionRefusal: verdict,
+    });
+    expect(reloaded?.spec).not.toHaveProperty("_admissionRefusal");
+    const second = await fresh.store.refuseAdmission(refused.id, {
+      ...verdict,
+      reason: "later observation",
+      at: "2026-11-04T22:01:00.000Z",
+    });
+    expect(second.admissionRefusal).toEqual(verdict);
+    await fresh.store.pinResolvedImage(refused.id, bundle("f"));
+    await fresh.store.pinResolvedBundle(refused.id, sealedSpec("b", "c"));
+    expect(await raw(refused.id)).toEqual(after);
+    await expect(
+      fresh.store.insertAttempt(refused.id, (n) => `refused:${refused.id}:${n}`)
+    ).rejects.toThrow("release admission refused");
+    const accepted = await fresh.store.pinResolvedBundle(
+      otherEnv.id,
+      sealedSpec("b", "c")
+    );
+    expect(accepted?.admissionRefusal).toBeUndefined();
+    expect(accepted?.resolvedImage).toBe(bundle("c"));
+    expect(await fresh.store.attemptsFor(refused)).toEqual([]);
   });
 });
