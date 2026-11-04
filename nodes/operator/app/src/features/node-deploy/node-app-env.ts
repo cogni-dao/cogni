@@ -15,8 +15,9 @@
  *     topology (only with a substrate host), secrets, COGNI_NODE_ID, database pool maxes, Loki push
  *     (opt-in), then the identity block (NODE_NAME, COGNI_REPO_PATH, AUTH_TRUST_HOST, NEXTAUTH_URL,
  *     APP_BASE_URL) which wins over everything above. `node-app-env.test.ts` pins this key by key.
- *   - MIGRATION_DSN (task.5408): DATABASE_MIGRATION_URL is added to every node app's key list (unless its
- *     DATABASE_URL is bound to a state workload); the start wrapper migrates with it and unsets it.
+ *   - MIGRATION_DSN (task.5408): DATABASE_MIGRATION_URL is read from the bucket for every node app, unless
+ *     its DATABASE_URL is bound to its own state lease; then the binding supplies it (bindings.ts
+ *     OWN_STATE_MIGRATES_ITSELF). The start wrapper migrates with it and unsets it.
  *   - DECLARED_KEYS_ONLY: the secrets injected are EXACTLY the release's declared key list
  *     (`NodeWorkloadSpec.secretKeys` = the profile keys + the node's declared `secret_refs`, computed at
  *     lowering from its repo-spec at the source sha). A key that is merely present in the node's bucket
