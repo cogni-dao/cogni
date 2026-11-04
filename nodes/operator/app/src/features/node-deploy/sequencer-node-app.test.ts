@@ -10,6 +10,10 @@
  */
 
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { type ClientRequest, IncomingMessage } from "node:http";
+import { request as httpsRequest, type RequestOptions } from "node:https";
+import { Socket } from "node:net";
 import {
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
   NODE_BUNDLE_ARTIFACT_TYPE,
@@ -20,8 +24,9 @@ import {
 } from "@cogni/repo-spec";
 import { buildTestRepoSpec } from "@cogni/repo-spec/testing";
 import { decodeJwt } from "jose";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
+import { HttpProbe } from "@/adapters/server/node-deploy/http-probe.adapter";
 import { GhcrBuiltImageResolver } from "@/adapters/server/oci/ghcr-built-image.adapter";
 import type {
   BuiltImageResolverPort,
@@ -107,6 +112,9 @@ class FakeRuntimeSecrets implements NodeRuntimeSecretsPort {
 
 /** The registry: `sha-<sha>` tags that node CI has published, each with its digest. */
 class FakeImages implements BuiltImageResolverPort {
+  checkImageManifests?: NonNullable<
+    BuiltImageResolverPort["checkImageManifests"]
+  >;
   resolveArtifactBundle?: NonNullable<
     BuiltImageResolverPort["resolveArtifactBundle"]
   >;
@@ -617,6 +625,8 @@ describe("a pending image is pinned before any paid create (story.5137)", () => 
   });
 });
 
+vi.mock("node:https", () => ({ request: vi.fn() }));
+
 const BUNDLE_REF = `ghcr.io/example/node@sha256:${"b".repeat(64)}`;
 const PUBLIC_IMAGE = `ghcr.io/example/node@sha256:${"c".repeat(64)}`;
 const HELPER_IMAGE = `ghcr.io/example/node-helper@sha256:${"d".repeat(64)}`;
@@ -696,6 +706,7 @@ function installBundle(h: H) {
       },
     };
   };
+  h.images.checkImageManifests = async () => true;
   h.runtimeSecrets.bucket.HELPER_ACCESS = "helper-only";
   return calls;
 }
@@ -718,8 +729,27 @@ function proofResponder(
       jti,
       mode,
       helperBootId: _boot,
+      companionBootIds,
+      companionReadiness,
       ...subject
     } = claims;
+    const declared = requiredFixture(
+      await h.store.getRelease(String(claims.releaseId))
+    );
+    expect(companionReadiness).toEqual(
+      Object.fromEntries(
+        (declared.spec.companions ?? []).map((c) => [
+          c.name,
+          { port: c.port, path: c.ready },
+        ])
+      )
+    );
+    if (input.mode === "qualify") expect(companionBootIds).toBeNull();
+    expect(_boot).toBe(
+      input.mode === "readback" && declared.spec.companions?.length
+        ? "boot-one"
+        : null
+    );
     const body: Record<string, unknown> = {
       ...subject,
       status: "qualified",
@@ -727,7 +757,31 @@ function proofResponder(
       evidenceId: "receipt-one",
       observedAt: new Date(h.clock.now()).toISOString(),
       nonce: jti,
+      companions: Object.fromEntries(
+        Object.entries(
+          companionReadiness as Record<string, { port: number; path: string }>
+        ).map(([name, ready]) => [
+          name,
+          {
+            buildSha: SHA_1,
+            bootId: `boot-${name === "helper" ? "one" : name}`,
+            ready: {
+              ...ready,
+              status: 200,
+              observedAt: new Date(h.clock.now()).toISOString(),
+            },
+          },
+        ])
+      ),
     };
+    if (input.mode === "readback" && companionBootIds !== undefined)
+      expect(companionBootIds).toEqual(
+        Object.fromEntries(
+          Object.entries(
+            body.companions as Record<string, { bootId: string }>
+          ).map(([n, c]) => [n, c.bootId])
+        )
+      );
     change?.(body, String(mode));
     return {
       status: body.status === "failed" ? 503 : 200,
@@ -901,6 +955,8 @@ describe("private release companions", () => {
       const b = JSON.parse(res.body);
       b.status = "not_declared";
       b.helper = null;
+      b.companions = {};
+      delete b.evidenceId;
       return { ...res, body: JSON.stringify(b) };
     };
     const seq = new NodeDeploySequencer({
@@ -1197,4 +1253,447 @@ it("reads back the complete winning seal after a lost transaction response", asy
   ).toBe(BUNDLE_REF);
   expect(calls).toHaveLength(1);
   expect(appCreates(h)).toHaveLength(1);
+});
+
+function requiredFixture<T>(value: T | undefined | null): T {
+  if (value === undefined || value === null)
+    throw new Error("missing test fixture");
+  return value;
+}
+
+describe("review repair digest and companion gates", () => {
+  it.each([
+    "new",
+    "accepted",
+    "sealed",
+  ])("missing helper digest stays pending for %s set", async (state) => {
+    const h = harness({ environment: "preview" });
+    const calls = installBundle(h);
+    const { release } = await companionRelease(h);
+    const publication = await h.images.resolveArtifactBundle?.({
+      imageRepository: "ghcr.io/example/node",
+      sourceSha: SHA_1,
+    });
+    if (!publication) throw new Error("fixture");
+    if (state === "sealed")
+      await h.store.pinResolvedBundle(
+        release.id,
+        selectReleaseBundle(release, publication)
+      );
+    if (state === "accepted") {
+      const other = await h.store.recordRelease({
+        ...release,
+        env: "candidate-a",
+      });
+      await h.store.pinResolvedBundle(
+        other.release.id,
+        selectReleaseBundle(other.release, publication)
+      );
+    }
+    const checks: readonly string[][] = [];
+    h.images.checkImageManifests = async (images) => {
+      (checks as string[][]).push([...images]);
+      return false;
+    };
+    calls.length = 0;
+    expect(
+      await h.seq.step({ ...h.key(POLY_ID, "canary"), env: "preview" })
+    ).toBe("waiting_dependency");
+    expect(checks).toContainEqual([PUBLIC_IMAGE, HELPER_IMAGE]);
+    expect(h.store.attempts).toHaveLength(0);
+    expect(h.payer.createRequests).toHaveLength(0);
+    if (state === "accepted") expect(calls[0]?.acceptedDigest).toBe(BUNDLE_REF);
+    if (state === "sealed") expect(calls).toHaveLength(0);
+  });
+
+  it("a planned attempt resumed after runner loss cannot create an unavailable accepted image", async () => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    const { release } = await companionRelease(h);
+    const publication = requiredFixture(
+      await h.images.resolveArtifactBundle?.({
+        imageRepository: "ghcr.io/example/node",
+        sourceSha: SHA_1,
+      })
+    );
+    await h.store.pinResolvedBundle(
+      release.id,
+      selectReleaseBundle(release, publication)
+    );
+    const planned = await h.store.insertAttempt(
+      release.id,
+      () => "resume-manifest-gate"
+    );
+    h.images.checkImageManifests = async () => false;
+    await h.seq.step({ ...h.key(POLY_ID, "canary"), env: "preview" });
+    expect(h.payer.createRequests).toHaveLength(0);
+    expect(h.store.attempts).toHaveLength(1);
+    expect(h.store.attempts[0]?.id).toBe(planned.id);
+    expect(h.store.attempts[0]?.phase).toBe("planned");
+  });
+
+  it.each([
+    "missing-B",
+    "extra",
+    "revision-B",
+    "restart-B",
+    "stale-ready",
+    "failed-ready",
+    "wrong-path",
+    "wrong-port",
+    "declared-failure",
+    "pass",
+  ])("handles %s while A proof passes and preserves blue", async (failure) => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    await companionRelease(
+      h,
+      canaryApp({
+        bindings: [],
+        expose: { http: { host: "poly-preview.cognidao.org" } },
+      })
+    );
+    const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
+    await h.seq.step(key);
+    const blue = h.store.attempts[0];
+    const edge = [...h.dns.records.values()].map((r) => r.content);
+    const spec = companionSpec();
+    const b = {
+      ...requiredFixture(spec.companions?.[0]),
+      name: "helper-b",
+      port: 8282,
+      ready:
+        failure === "declared-failure"
+          ? "/deliberately-failing"
+          : "/declared-ready",
+    };
+    spec.companions = [...requiredFixture(spec.companions), b];
+    requiredFixture(spec.artifactPlan).services = [
+      ...requiredFixture(spec.artifactPlan).services,
+      nodeServiceSpecSchema.parse({
+        name: "helper-b",
+        resources: { cpu_units: 0.25, memory_mi: 256, storage_mi: 256 },
+        artifact: { name: "helper-b" },
+        port: 8282,
+        visibility: "private",
+      }),
+    ];
+    const resolve = requiredFixture(h.images.resolveArtifactBundle);
+    h.images.resolveArtifactBundle = async (input) => {
+      const pub = await resolve(input);
+      if (!pub) return null;
+      const bundle = pub.bundle as {
+        artifacts: unknown[];
+        services: unknown[];
+      };
+      return {
+        ...pub,
+        bundle: {
+          ...bundle,
+          artifacts: [
+            ...bundle.artifacts,
+            {
+              name: "helper-b",
+              image: `ghcr.io/example/node-helper-b@sha256:${"e".repeat(64)}`,
+            },
+          ],
+          services: [
+            ...bundle.services,
+            { name: "helper-b", artifact: "helper-b" },
+          ],
+        },
+      };
+    };
+    proofResponder(h, (body, mode) => {
+      const cs = body.companions as Record<
+        string,
+        {
+          buildSha: string;
+          bootId: string;
+          ready: {
+            port: number;
+            path: string;
+            status: number;
+            observedAt: string;
+          };
+        }
+      >;
+      if (!cs["helper-b"])
+        cs["helper-b"] = {
+          buildSha: SHA_1,
+          bootId: "boot-helper-b",
+          ready: {
+            port: 8282,
+            path: "/declared-ready",
+            status: 200,
+            observedAt: new Date(h.clock.now()).toISOString(),
+          },
+        };
+      if (
+        failure === "declared-failure" &&
+        requiredFixture(cs["helper-b"]).ready.path === "/deliberately-failing"
+      )
+        body.status = "failed";
+      if (mode !== "readback") return;
+      if (failure === "missing-B") delete cs["helper-b"];
+      else if (failure === "extra")
+        cs.extra = { ...requiredFixture(cs.helper) };
+      else if (failure === "revision-B")
+        requiredFixture(cs["helper-b"]).buildSha = "f".repeat(40);
+      else if (failure === "restart-B")
+        requiredFixture(cs["helper-b"]).bootId = "restarted-b";
+      else if (failure === "stale-ready")
+        requiredFixture(cs["helper-b"]).ready.observedAt = new Date(
+          h.clock.now() - 61000
+        ).toISOString();
+      else if (failure === "failed-ready")
+        requiredFixture(cs["helper-b"]).ready.status = 503;
+      else if (failure === "wrong-path")
+        requiredFixture(cs["helper-b"]).ready.path = "/healthy-but-undeclared";
+      else if (failure === "wrong-port")
+        requiredFixture(cs["helper-b"]).ready.port = 8181;
+    });
+    const { release } = await companionRelease(h, spec);
+    await h.seq.step(key);
+    expect(
+      h.store.attempts.find((a) => a.releaseId === release.id)?.phase
+    ).toBe(failure === "pass" ? "active" : "failed");
+    if (failure !== "pass") {
+      expect(h.store.attempts.find((a) => a.id === blue?.id)?.phase).toBe(
+        "active"
+      );
+      expect([...h.dns.records.values()].map((r) => r.content)).toEqual(edge);
+    }
+  });
+
+  it("validates each binding against its private consumer before pruning", () => {
+    const d = declarationInput();
+    requiredFixture(d.spec.deployment).services.push(
+      nodeServiceSpecSchema.parse({
+        name: "helper-b",
+        resources: { cpu_units: 0.25, memory_mi: 256, storage_mi: 256 },
+        artifact: { name: "helper-b" },
+        port: 8282,
+        visibility: "private",
+        envs: ["preview"],
+      })
+    );
+    Object.assign(d.manifest.containers, {
+      "helper-b": {
+        ...d.manifest.containers.helper,
+        readinessProbe: { httpGet: { path: "/readyz", port: 8282 } },
+      },
+    });
+    requiredFixture(requiredFixture(d.spec.deployment).services[1]).bindings = {
+      BACKEND_URL: "helper-b",
+    };
+    Object.assign(d.manifest.containers.app, {
+      variables: { BACKEND_URL: "public-value" },
+    });
+    expect(
+      d.resolve().companions?.find((c) => c.name === "helper")?.env.BACKEND_URL
+    ).toBe("http://helper-b:8282");
+    Object.assign(d.manifest.containers.helper, {
+      variables: { BACKEND_URL: "conflict" },
+    });
+    expect(() => d.resolve("production")).toThrow(DeclarationError);
+  });
+});
+
+describe("accepted manifest transport", () => {
+  it.each([
+    200, 401, 403, 404, 503, 307, 999,
+  ])("checks digest without tag replacement, registry status %s", async (status) => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const resolver = new GhcrBuiltImageResolver(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes("/token?"))
+        return new Response(JSON.stringify({ token: "scoped-pull" }));
+      return new Response(null, {
+        status: status === 999 ? 200 : status,
+        headers: {
+          "docker-content-digest":
+            status === 999
+              ? `sha256:${"f".repeat(64)}`
+              : requiredFixture(HELPER_IMAGE.split("@")[1]),
+          location: "https://attacker.invalid/manifest",
+        },
+      });
+    });
+    if ([503, 307, 999].includes(status))
+      await expect(
+        resolver.checkImageManifests([HELPER_IMAGE])
+      ).rejects.toBeInstanceOf(BuiltImageRegistryError);
+    else
+      expect(await resolver.checkImageManifests([HELPER_IMAGE])).toBe(
+        status === 200
+      );
+    expect(calls.map((c) => c.url)).toEqual([
+      "https://ghcr.io/token?service=ghcr.io&scope=repository%3Aexample%2Fnode-helper%3Apull",
+      `https://ghcr.io/v2/example/node-helper/manifests/${HELPER_IMAGE.split("@")[1]}`,
+    ]);
+    expect(calls[1]?.init).toMatchObject({
+      method: "HEAD",
+      redirect: "manual",
+      headers: { authorization: "Bearer scoped-pull" },
+    });
+  });
+  it("checks all selected images and never forwards a GHCR bearer to an upstream registry", async () => {
+    const upstream = `registry.example/upstream@sha256:${"e".repeat(64)}`;
+    const heads: string[] = [];
+    const resolver = new GhcrBuiltImageResolver(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/token")
+        return new Response(JSON.stringify({ token: "ghcr-only" }));
+      heads.push(url.href);
+      const image = url.hostname === "ghcr.io" ? PUBLIC_IMAGE : upstream;
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        url.hostname === "ghcr.io" ? "Bearer ghcr-only" : null
+      );
+      return new Response(null, {
+        headers: {
+          "docker-content-digest": requiredFixture(image.split("@")[1]),
+        },
+      });
+    });
+    expect(await resolver.checkImageManifests([PUBLIC_IMAGE, upstream])).toBe(
+      true
+    );
+    expect(heads).toHaveLength(2);
+  });
+  it("checks a declared Docker Hub tag+digest by digest with only its own anonymous token", async () => {
+    const digest = `sha256:${"e".repeat(64)}`;
+    const calls: string[] = [];
+    const resolver = new GhcrBuiltImageResolver(async (input, init) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.startsWith("https://auth.docker.io/token?")) {
+        expect(new Headers(init?.headers).get("authorization")).toBeNull();
+        return new Response(JSON.stringify({ token: "docker-only" }));
+      }
+      expect(url).toBe(
+        `https://registry-1.docker.io/v2/library/postgres/manifests/${digest}`
+      );
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer docker-only"
+      );
+      return new Response(null, {
+        headers: { "docker-content-digest": digest },
+      });
+    });
+    expect(await resolver.checkImageManifests([`postgres:16@${digest}`])).toBe(
+      true
+    );
+    expect(calls).toHaveLength(2);
+  });
+
+  it("bounds stalled manifest IO by the shared operation deadline", async () => {
+    const resolver = new GhcrBuiltImageResolver(
+      async (_input, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("timeout")),
+            { once: true }
+          );
+        }),
+      5
+    );
+    await expect(
+      resolver.checkImageManifests([HELPER_IMAGE])
+    ).rejects.toMatchObject({ invalid: false });
+  });
+  it("refuses a node-built foreign repository but keeps explicit upstream digest semantics", async () => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    const { release } = await companionRelease(h);
+    const publication = await requiredFixture(h.images.resolveArtifactBundle)({
+      imageRepository: "ghcr.io/example/node",
+      sourceSha: SHA_1,
+    });
+    if (!publication) throw new Error("fixture");
+    const foreign = `registry.example/upstream@sha256:${"e".repeat(64)}`;
+    const bundle = publication.bundle as {
+      artifacts: { name: string; image: string }[];
+    };
+    const changed = {
+      ...publication,
+      bundle: {
+        ...bundle,
+        artifacts: bundle.artifacts.map((a) =>
+          a.name === "helper" ? { ...a, image: foreign } : a
+        ),
+      },
+    };
+    expect(() => selectReleaseBundle(release, changed)).toThrow(
+      "repository mismatch"
+    );
+    const { imagePending: _pending, ...explicit } = requiredFixture(
+      release.spec.companions?.[0]
+    );
+    const pinned = {
+      ...release,
+      spec: { ...release.spec, companions: [{ ...explicit, image: foreign }] },
+    };
+    expect(
+      selectReleaseBundle(pinned, publication).artifactPlan?.selectedImages
+        ?.helper
+    ).toBe(foreign);
+  });
+});
+
+describe("qualification transport owner reconciliation", () => {
+  it.each([
+    200, 302, 0,
+  ])("verifies observed ingress TLS, selects HTTP Host and refuses redirect/retry (%s)", async (status) => {
+    const mock = vi.mocked(httpsRequest);
+    mock.mockReset();
+    mock.mockImplementation((...args: unknown[]) => {
+      const options = args[0] as RequestOptions;
+      const callback = args[1];
+      expect(options).toMatchObject({
+        hostname: "green.provider.example",
+        servername: "green.provider.example",
+        port: 443,
+        method: "POST",
+        headers: {
+          host: "node-preview.example",
+          authorization: "Bearer challenge",
+        },
+      });
+      const opts = options as RequestOptions;
+      expect(opts.rejectUnauthorized).not.toBe(false);
+      expect(opts.checkServerIdentity).toBeUndefined();
+      const req = Object.assign(new EventEmitter(), {
+        end() {
+          queueMicrotask(() => {
+            if (status === 0)
+              req.emit("error", new Error("certificate identity mismatch"));
+            else {
+              const res = new IncomingMessage(new Socket());
+              res.statusCode = status;
+              res.headers = { location: "https://attacker.invalid" };
+              if (typeof callback === "function") callback(res);
+              res.push("evidence");
+              res.push(null);
+            }
+            req.emit("close");
+          });
+          return req;
+        },
+      });
+      return req as unknown as ClientRequest;
+    });
+    const result = await new HttpProbe().qualification({
+      ingressHost: "green.provider.example",
+      hostHeader: "node-preview.example",
+      path: "/qualification",
+      token: "challenge",
+      mode: "qualify",
+      timeoutMs: 20000,
+    });
+    expect(result.status).toBe(status);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
 });

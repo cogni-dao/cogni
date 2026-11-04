@@ -39,6 +39,25 @@ export function selectReleaseBundle(
     selected.services.some((s) => !names.has(s.service.name))
   )
     throw new Error("selected service coverage mismatch");
+  // Match the existing CI naming contract: an artifact used publicly uses the base
+  // repository; other node-built artifacts use the declared artifact suffix.
+  // Explicit Score digest declarations are upstream images, not node-built output.
+  for (const service of selected.services) {
+    const container =
+      service.service.name === mainName
+        ? w
+        : w.companions?.find((c) => c.name === service.service.name);
+    if (!container?.imagePending) continue;
+    const isPublicArtifact = complete.services.some(
+      (s) =>
+        s.artifact === service.artifact && s.service.visibility === "public"
+    );
+    const repository = isPublicArtifact
+      ? plan.imageRepository
+      : `${plan.imageRepository}-${service.artifact}`;
+    if (service.image.split("@")[0] !== repository)
+      throw new Error("node-built artifact repository mismatch");
+  }
   const { imagePending: _pending, ...rest } = w;
   const image = w.imagePending ? main.image : w.image;
   const companions = w.companions?.map((c) => {

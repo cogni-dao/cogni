@@ -229,12 +229,19 @@ export function resolveWorkloadDeclaration(input: {
     for (const service of services) {
       for (const [key, target] of Object.entries(service.bindings)) {
         const sibling = services.find((s) => s.name === target);
+        const consumer =
+          service.name === main.name
+            ? workload
+            : workload.companions?.find((c) => c.name === service.name);
         if (
           !sibling ||
           sibling.visibility !== "private" ||
           target === service.name ||
-          key in workload.env ||
-          workload.bindings.some((b) => b.env === key)
+          !consumer ||
+          key in consumer.env ||
+          workerSecretKeys(spec, service.name).includes(key) ||
+          (service.name === main.name &&
+            workload.bindings.some((b) => b.env === key))
         )
           throw new DeclarationError(
             "workload_manifest_refused",

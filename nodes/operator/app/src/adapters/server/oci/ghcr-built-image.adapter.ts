@@ -103,74 +103,7 @@ export class GhcrBuiltImageResolver implements BuiltImageResolverPort {
         "accepted bundle repository mismatch",
         true
       );
-    const signal = AbortSignal.timeout(this.timeoutMs);
-    const request = async (
-      url: string,
-      headers: Record<string, string> = {},
-      blob = false
-    ) => {
-      try {
-        let response = await this.fetchImpl(url, {
-          headers,
-          signal,
-          redirect: "manual",
-        });
-        if (response.status >= 300 && response.status < 400) {
-          const location = new URL(response.headers.get("location") ?? "", url);
-          // GHCR's documented package storage is the only permitted blob redirect. Never forward bearer auth.
-          // https://docs.github.com/en/actions/reference/runners/github-hosted-runners#communication-requirements-for-github-hosted-runners
-          if (
-            !blob ||
-            location.protocol !== "https:" ||
-            location.hostname !== "pkg-containers.githubusercontent.com" ||
-            location.port ||
-            location.username ||
-            location.password
-          )
-            throw new BuiltImageRegistryError(
-              "registry redirect refused",
-              true
-            );
-          await response.body?.cancel();
-          response = await this.fetchImpl(location, {
-            signal,
-            redirect: "error",
-          });
-        }
-        return response;
-      } catch (e) {
-        if (e instanceof BuiltImageRegistryError) throw e;
-        throw new BuiltImageRegistryError("bundle registry unavailable");
-      }
-    };
-    const bounded = async (res: Response, max: number) => {
-      if (Number(res.headers.get("content-length")) > max)
-        throw new BuiltImageRegistryError("bundle exceeds byte limit", true);
-      const reader = res.body?.getReader();
-      if (!reader)
-        throw new BuiltImageRegistryError("bundle has no body", true);
-      const chunks: Uint8Array[] = [];
-      let length = 0;
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          length += value.byteLength;
-          if (length > max) {
-            await reader.cancel();
-            throw new BuiltImageRegistryError(
-              "bundle exceeds byte limit",
-              true
-            );
-          }
-          chunks.push(value);
-        }
-      } catch (e) {
-        if (e instanceof BuiltImageRegistryError) throw e;
-        throw new BuiltImageRegistryError("bundle body unavailable");
-      }
-      return Buffer.concat(chunks);
-    };
+    const { request, bounded } = this.transport();
     const tr = await request(
       `https://${GHCR_HOST}/token?service=${GHCR_HOST}&scope=${encodeURIComponent(`repository:${path}:pull`)}`
     );
@@ -247,6 +180,150 @@ export class GhcrBuiltImageResolver implements BuiltImageResolverPort {
       if (e instanceof BuiltImageRegistryError) throw e;
       throw new BuiltImageRegistryError("invalid OCI bundle publication", true);
     }
+  }
+
+  async checkImageManifests(images: readonly string[]): Promise<boolean> {
+    if (images.length < 1 || images.length > 8)
+      throw new BuiltImageRegistryError("invalid selected image count", true);
+    const { request, bounded } = this.transport();
+    for (const image of new Set(images)) {
+      const match =
+        /^([a-z0-9][a-z0-9._/-]*)(?::[A-Za-z0-9._-]+)?@(sha256:[0-9a-f]{64})$/.exec(
+          image
+        );
+      if (!match?.[1] || !match[2])
+        throw new BuiltImageRegistryError(
+          "invalid selected image digest",
+          true
+        );
+      const repository = match[1];
+      const digest = match[2];
+      const parts = repository.split("/");
+      const qualified = parts.length > 1 && parts[0]?.includes(".");
+      const registry = qualified ? parts.shift() : "docker.io";
+      const path =
+        !qualified && parts.length === 1
+          ? `library/${parts[0]}`
+          : parts.join("/");
+      const headers: Record<string, string> = { accept: MANIFEST_ACCEPT };
+      // Only these fixed anonymous token issuers are trusted. Ignore arbitrary
+      // WWW-Authenticate destinations. Each bearer stays on its own registry.
+      const scope = encodeURIComponent(`repository:${path}:pull`);
+      const tokenUrl =
+        registry === GHCR_HOST
+          ? `https://${GHCR_HOST}/token?service=${GHCR_HOST}&scope=${scope}`
+          : registry === "docker.io" || registry === "registry-1.docker.io"
+            ? `https://auth.docker.io/token?service=registry.docker.io&scope=${scope}`
+            : undefined;
+      if (tokenUrl) {
+        const tr = await request(tokenUrl);
+        if (isAbsent(tr.status)) return false;
+        if (!tr.ok)
+          throw new BuiltImageRegistryError("image token unavailable");
+        let token: unknown;
+        try {
+          token = JSON.parse((await bounded(tr, 16384)).toString()).token;
+        } catch {
+          throw new BuiltImageRegistryError("image token invalid");
+        }
+        if (typeof token !== "string" || !token.length)
+          throw new BuiltImageRegistryError("image token missing");
+        headers.authorization = `Bearer ${token}`;
+      }
+      // Explicit upstream digests keep their repository/tag syntax; the request
+      // uses only the digest. Other registries are anonymous and never redirected.
+      const host = registry === "docker.io" ? "registry-1.docker.io" : registry;
+      const mr = await request(
+        `https://${host}/v2/${path}/manifests/${digest}`,
+        headers,
+        false,
+        "HEAD"
+      );
+      if (isAbsent(mr.status)) return false;
+      if (!mr.ok)
+        throw new BuiltImageRegistryError("selected image unavailable");
+      if (mr.headers.get("docker-content-digest") !== digest)
+        throw new BuiltImageRegistryError(
+          "selected image digest mismatch",
+          true
+        );
+    }
+    return true;
+  }
+
+  /** One deadline and the same bounded, redirect-fenced transport for each registry operation. */
+  private transport() {
+    const signal = AbortSignal.timeout(this.timeoutMs);
+    const request = async (
+      url: string,
+      headers: Record<string, string> = {},
+      blob = false,
+      method: "GET" | "HEAD" = "GET"
+    ) => {
+      try {
+        let response = await this.fetchImpl(url, {
+          headers,
+          method,
+          signal,
+          redirect: "manual",
+        });
+        if (response.status >= 300 && response.status < 400) {
+          const location = new URL(response.headers.get("location") ?? "", url);
+          // GHCR's documented package storage is the only permitted blob redirect. Never forward bearer auth.
+          // https://docs.github.com/en/actions/reference/runners/github-hosted-runners#communication-requirements-for-github-hosted-runners
+          if (
+            !blob ||
+            location.protocol !== "https:" ||
+            location.hostname !== "pkg-containers.githubusercontent.com" ||
+            location.port ||
+            location.username ||
+            location.password
+          )
+            throw new BuiltImageRegistryError(
+              "registry redirect refused",
+              true
+            );
+          await response.body?.cancel();
+          response = await this.fetchImpl(location, {
+            signal,
+            redirect: "error",
+          });
+        }
+        return response;
+      } catch (e) {
+        if (e instanceof BuiltImageRegistryError) throw e;
+        throw new BuiltImageRegistryError("bundle registry unavailable");
+      }
+    };
+    const bounded = async (res: Response, max: number) => {
+      if (Number(res.headers.get("content-length")) > max)
+        throw new BuiltImageRegistryError("bundle exceeds byte limit", true);
+      const reader = res.body?.getReader();
+      if (!reader)
+        throw new BuiltImageRegistryError("bundle has no body", true);
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          length += value.byteLength;
+          if (length > max) {
+            await reader.cancel();
+            throw new BuiltImageRegistryError(
+              "bundle exceeds byte limit",
+              true
+            );
+          }
+          chunks.push(value);
+        }
+      } catch (e) {
+        if (e instanceof BuiltImageRegistryError) throw e;
+        throw new BuiltImageRegistryError("bundle body unavailable");
+      }
+      return Buffer.concat(chunks);
+    };
+    return { request, bounded };
   }
 
   private async request(

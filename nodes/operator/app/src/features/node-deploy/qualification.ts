@@ -26,6 +26,25 @@ const evidenceSchema = z
       })
       .strict()
       .nullish(),
+    companions: z
+      .record(
+        z.string().min(1).max(63),
+        z
+          .object({
+            buildSha: z.string().regex(/^[0-9a-f]{40}$/),
+            bootId: z.string().min(1).max(256),
+            ready: z
+              .object({
+                port: z.number().int().min(1).max(65535),
+                path: z.string().min(1).max(512),
+                status: z.literal(200),
+                observedAt: z.string().datetime(),
+              })
+              .strict(),
+          })
+          .strict()
+      )
+      .refine((c) => Object.keys(c).length <= 7),
     evidenceId: z.string().min(1).max(512).optional(),
     observedAt: z.string().datetime(),
     nonce: z.string().min(1).max(128),
@@ -59,6 +78,23 @@ export async function qualificationChallenge(input: {
 }) {
   if (!input.authSecret)
     throw new Error("qualification auth prerequisite missing");
+  if (input.mode === "readback" && !input.prior)
+    throw new Error("qualification readback needs prior evidence");
+  const companionReadiness = Object.fromEntries(
+    (input.release.spec.companions ?? []).map((c) => [
+      c.name,
+      { port: c.port, path: c.ready },
+    ])
+  );
+  const companionBootIds =
+    input.mode === "qualify"
+      ? null
+      : Object.fromEntries(
+          Object.entries(input.prior?.companions ?? {}).map(([name, c]) => [
+            name,
+            c.bootId,
+          ])
+        );
   const purpose = "cogni-release-qualification-v1";
   const key = new Uint8Array(
     hkdfSync("sha256", input.authSecret, purpose, purpose, 32)
@@ -69,6 +105,8 @@ export async function qualificationChallenge(input: {
     ...qualificationSubject(input.release, input.attempt),
     mode: input.mode,
     helperBootId: input.prior?.helper?.bootId ?? null,
+    companionReadiness,
+    companionBootIds,
   })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setIssuer("cogni-operator")
@@ -117,21 +155,48 @@ export function checkQualification(input: {
   )
     throw new Error("qualification evidence stale");
   const companions = input.release.spec.companions ?? [];
+  if (
+    JSON.stringify(Object.keys(e.companions).sort()) !==
+    JSON.stringify(companions.map((c) => c.name).sort())
+  )
+    throw new Error("qualification companion coverage mismatch");
+  for (const c of companions) {
+    const observed = e.companions[c.name];
+    if (
+      !observed ||
+      observed.buildSha !== input.release.sourceSha ||
+      observed.ready.port !== c.port ||
+      observed.ready.path !== c.ready
+    )
+      throw new Error("qualification companion identity or readiness mismatch");
+    const readyAt = Date.parse(observed.ready.observedAt);
+    if (readyAt < input.startedAt - 1000 || readyAt > input.now + 1000)
+      throw new Error("qualification companion readiness stale");
+    if (
+      input.prior &&
+      observed.bootId !== input.prior.companions[c.name]?.bootId
+    )
+      throw new Error("qualification companion boot changed");
+  }
   if (companions.length) {
+    const helper = e.helper && e.companions[e.helper.service];
     if (
       e.status !== "qualified" ||
       !e.evidenceId ||
       !e.helper ||
-      !companions.some((c) => c.name === e.helper?.service) ||
-      e.helper.buildSha !== input.release.sourceSha
+      !helper ||
+      e.helper.buildSha !== helper.buildSha ||
+      e.helper.bootId !== helper.bootId
     )
-      throw new Error("companion useful-work proof missing");
-  } else if (e.status !== "not_declared" || e.helper)
+      throw new Error("companion useful-work proof missing or inconsistent");
+  } else if (e.status !== "not_declared" || e.helper || e.evidenceId)
     throw new Error("qualification falsely declared a companion");
   if (
     input.prior &&
     (e.evidenceId !== input.prior.evidenceId ||
-      JSON.stringify(e.helper) !== JSON.stringify(input.prior.helper))
+      e.helper?.service !== input.prior.helper?.service ||
+      e.helper?.buildSha !== input.prior.helper?.buildSha ||
+      e.helper?.bootId !== input.prior.helper?.bootId)
   )
     throw new Error("qualification helper boot or receipt changed");
   return e;

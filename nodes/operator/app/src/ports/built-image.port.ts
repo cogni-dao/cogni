@@ -17,6 +17,8 @@
  */
 
 export interface BuiltImageResolverPort {
+  /** Check every immutable selected manifest before allocating an attempt. No tag replacement. */
+  checkImageManifests?(images: readonly string[]): Promise<boolean>;
   /** Read the existing CI publication by accepted digest when supplied; never assemble image tags. */
   resolveArtifactBundle?(input: {
     readonly imageRepository: string;

@@ -505,7 +505,10 @@ export class NodeDeploySequencer {
         "qualified service set has no frozen artifact plan"
       );
     if (w.artifactPlan) {
-      if (w.artifactPlan.bundleDigest && release.resolvedImage) return release;
+      if (w.artifactPlan.bundleDigest && release.resolvedImage) {
+        await this.checkSelectedImages(release.spec);
+        return release;
+      }
       if (!this.d.images?.resolveArtifactBundle)
         throw new DependencyNotReady("no bundle resolver configured");
       const acceptedDigest = await this.d.store.acceptedBundle(release);
@@ -527,6 +530,7 @@ export class NodeDeploySequencer {
             "bundle identity or service coverage refused"
           );
         }
+        await this.checkSelectedImages(spec);
         let sealed: ReleaseRow | undefined;
         try {
           sealed = await this.d.store.pinResolvedBundle(release.id, spec);
@@ -550,6 +554,12 @@ export class NodeDeploySequencer {
           throw new DependencyNotReady(
             "another environment accepted a bundle; retry its digest"
           );
+        // CAS can return a concurrently accepted winner. Check the actual set we will create.
+        if (
+          JSON.stringify(sealed.spec.artifactPlan?.selectedImages) !==
+          JSON.stringify(spec.artifactPlan?.selectedImages)
+        )
+          await this.checkSelectedImages(sealed.spec);
         return sealed;
       } catch (e) {
         if (e instanceof BuiltImageRegistryError) {
@@ -588,6 +598,26 @@ export class NodeDeploySequencer {
       throw new DependencyNotReady(`image ${w.image} is not published yet`);
     }
     return this.d.store.pinResolvedImage(release.id, digest);
+  }
+
+  private async checkSelectedImages(spec: ReleaseRow["spec"]): Promise<void> {
+    const images = spec.artifactPlan?.selectedImages;
+    if (!images || !this.d.images?.checkImageManifests)
+      throw new DependencyNotReady(
+        "selected image manifest reader unavailable"
+      );
+    try {
+      if (!(await this.d.images.checkImageManifests(Object.values(images))))
+        throw new DependencyNotReady(
+          "selected image digest is not published or readable"
+        );
+    } catch (e) {
+      if (e instanceof BuiltImageRegistryError) {
+        if (e.invalid) throw new InvalidArtifactSet(e.message);
+        throw new DependencyNotReady("selected image registry unavailable");
+      }
+      throw e;
+    }
   }
 
   /**
@@ -978,6 +1008,29 @@ export class NodeDeploySequencer {
           "ambiguous create unresolved",
           error
         );
+      }
+    }
+
+    // A runner can stop after allocating the attempt. Recheck its accepted set
+    // before a new paid call, while leaving ambiguous-call recovery above intact.
+    if (w.artifactPlan) {
+      try {
+        await this.checkSelectedImages(w);
+      } catch (error) {
+        if (error instanceof DependencyNotReady) {
+          await this.emit(key, release, attempt, "dependency", "waiting", {
+            reason: error.message,
+          });
+          return attempt;
+        }
+        if (error instanceof InvalidArtifactSet)
+          return this.failAttempt(
+            key,
+            release,
+            attempt,
+            `artifact_bundle_invalid: ${error.message}`
+          );
+        throw error;
       }
     }
 
