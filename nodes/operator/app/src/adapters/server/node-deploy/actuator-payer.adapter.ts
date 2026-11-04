@@ -12,6 +12,8 @@
  *   - AMBIGUITY_IS_EXPLICIT: a create that timed out, lost its response or got a 5xx/409-recoverable
  *     answer is thrown as `PayerError.ambiguous`; the sequencer resolves it through `observe(cogniKey)`
  *     and never blindly repeats the paid call.
+ *   - DEFINITIVE_IS_PROVEN (bug.5569): a create `provider_rejected` is `definitive` (nothing bills
+ *     under the key) unless the actuator says its rollback close is UNVERIFIED.
  *   - NO_SECRETS_IN_ERRORS: error text is the actuator's own non-secret `code` + `message`.
  * Side-effects: IO (HTTP POST to the cluster-private actuator)
  * Links: contracts/compute.akash-tx.v1.contract.ts, features/compute/akash-tx/akash-tx-http.ts
@@ -65,6 +67,15 @@ const AMBIGUOUS: ReadonlySet<string> = new Set([
   "ledger_unavailable",
   "network",
 ]);
+
+/**
+ * The ONE `provider_rejected` that may leave something billing: the actuator opened a deployment,
+ * then could not prove its close (`akash-compute.adapter.ts` createAndLease: "(deployment N close
+ * UNVERIFIED)"). Every other `provider_rejected` on create was refused before a deployment existed
+ * (caller allowlist, settled key, Console 4xx on the deployment POST) or closed and read back
+ * closed ("(deployment N closed, escrow refunding)", `rolledBackDseq`): definitive (bug.5569).
+ */
+const CLOSE_UNVERIFIED = /close UNVERIFIED/u;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -151,7 +162,10 @@ export class ActuatorPayer implements PayerPort {
         0,
         400
       ),
-      mutating && AMBIGUOUS.has(mapped)
+      mutating && AMBIGUOUS.has(mapped),
+      mutating &&
+        mapped === "provider_rejected" &&
+        !CLOSE_UNVERIFIED.test(message)
     );
   }
 

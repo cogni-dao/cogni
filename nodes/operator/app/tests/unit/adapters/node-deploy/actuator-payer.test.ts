@@ -325,6 +325,50 @@ describe("ActuatorPayer error classification", () => {
     expect(observed.ambiguous).toBe(false);
   });
 
+  it("bug.5569: a create provider_rejected is definitive unless the rollback close is UNVERIFIED; nothing else is", async () => {
+    const msgCase = async (status: number, code: string, message: string) => {
+      const { fetchImpl } = recorder(() => ({
+        status,
+        body: { code, message },
+      }));
+      return (await payerWith(fetchImpl)
+        .create(request())
+        .catch((e: unknown) => e)) as PayerError;
+    };
+    const rolledBack = await msgCase(
+      422,
+      "provider_rejected",
+      "bids arrived for dseq 9 but none passed provider screening [refused: already_tried=1] (deployment 9 closed, escrow refunding)"
+    );
+    expect(rolledBack).toMatchObject({ ambiguous: false, definitive: true });
+    // refused before any deployment existed (caller allowlist, settled key)
+    expect(
+      (await msgCase(422, "provider_rejected", "allowlist empty")).definitive
+    ).toBe(true);
+    const unverified = await msgCase(
+      422,
+      "provider_rejected",
+      "no provider bids for dseq 9 within 120000ms (deployment 9 close UNVERIFIED)"
+    );
+    expect(unverified).toMatchObject({ ambiguous: false, definitive: false });
+    for (const [status, code] of [
+      [503, "ledger_unavailable"],
+      [502, "outcome_unknown"],
+      [422, "identity_conflict"],
+      [400, "invalid_request"],
+    ] as const)
+      expect((await msgCase(status, code, "m")).definitive).toBe(false);
+    // observe never reports definitive (it is not a create)
+    const { fetchImpl } = recorder(() => ({
+      status: 422,
+      body: { code: "provider_rejected", message: "m" },
+    }));
+    const observed = (await payerWith(fetchImpl)
+      .observe({ cogniKey: "k" })
+      .catch((e: unknown) => e)) as PayerError;
+    expect(observed.definitive).toBe(false);
+  });
+
   it("an unknown 5xx is provider_unavailable (ambiguous); an unknown 4xx is invalid_request", async () => {
     expect((await codeCase(500, "weird")).ambiguous).toBe(true);
     expect((await codeCase(418, "weird")).code).toBe("invalid_request");
