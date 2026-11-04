@@ -75,7 +75,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:aca26db2bfb03544c0eeebc2fd713a6d4a6dacc56c470d492c9385cf5c05c05c"
+    digest: "sha256:ce57e1dda3eed26874f6a86a0ab4d7b5ce5c195d10ee6193a0a384c449fdc2ff"
 patches:
   - target:
       kind: ExternalSecret
@@ -212,14 +212,6 @@ patches:
                     value: cogni-dao
                   - name: NODE_DEPLOY_SUBSTRATE_HOSTS
                     value: candidate-a=cogni-candidate-a.vm.cognidao.org,preview=cogni-preview.vm.cognidao.org,production=cogni.vm.cognidao.org
-                  # YELLOW, INTERIM (owner task.5384, EXPIRES 2026-11-23): the providers whose egress
-                  # is measured AND admitted to the shared substrate's firewall allowlist (zencloud BE,
-                  # ithub UA, h4i PT, h6i BG). Sent as `allowProviders` on every node APP create; the
-                  # actuator INTERSECTS it with AKASH_ALLOWED_PROVIDERS and refuses on an empty result.
-                  # Delete this env var (no code change) once egress is no longer provider-dependent.
-                  # m3a FI is deliberately absent: its egress measured differently twice (not stable).
-                  - name: NODE_DEPLOY_APP_PROVIDERS
-                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm,akash1v0f04wr3tkh9uf43q9eqfd0whpfeu8qevlq99h,akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk,akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z
   # story.5016 Gate 0b: env values are set BY NAME via strategic merge (env lists
   # merge on `name`), never by positional JSON-pointer index. A positional
   # `/env/N/value` patch silently repoints when the base list shifts — that exact
