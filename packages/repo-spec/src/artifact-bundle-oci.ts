@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Pure validation for the trusted node CI -> deploy-plane OCI bundle contract. */
+/**
+ * Module: `@cogni/repo-spec/artifact-bundle-oci`
+ * Purpose: Define and validate OCI bundle publication references and manifests for node CI and deployment.
+ * Scope: Pure validation and reference construction. Does not read registries, files, or deployment state.
+ * Invariants: Source SHA and digest use lowercase hex; manifests contain exactly one named bundle payload.
+ * Side-effects: none
+ * Links: packages/repo-spec/src/artifact-bundle.ts, docs/spec/node-ci-cd-contract.md
+ * @public
+ */
 
 import { z } from "zod";
 
