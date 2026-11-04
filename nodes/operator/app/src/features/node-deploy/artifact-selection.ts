@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Pure complete-bundle validation and environment selection for the existing release seal. */
+/**
+ * Module: `@features/node-deploy/artifact-selection`
+ * Purpose: Validate the complete source bundle and select the declared environment's immutable images.
+ * Scope: Pure bundle validation and release-spec construction; does not read registries or write releases.
+ * Invariants: Exact source/service coverage; whole-bundle validation precedes env pruning; selected images remain digest-pinned.
+ * Side-effects: none
+ * Links: declarations.ts, sequencer.ts, bug.5568
+ * @internal
+ */
 import {
   type DeploymentEnvName,
   nodeWorkloadSpecSchema,

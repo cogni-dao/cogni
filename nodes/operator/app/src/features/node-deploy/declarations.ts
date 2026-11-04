@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@features/node-deploy/declarations`
  * Purpose: Turn a node's workload manifests (`.cogni/workloads/*.yaml`) plus its `.cogni/repo-spec.yaml`,
  *   all read at one `sourceSha` through the operator's GitHub App, into the ONE resolved
  *   `NodeWorkloadSpec` a release stores (task.5400, story.5137).
- * Scope: Pure checks. The GitHub reads and the image-digest lookup live in the route; the release write lives in the store; the
+ * Scope: Pure checks; does not perform IO. The GitHub reads and the image-digest lookup live in the route; the release write lives in the store; the
  *   two-pass manifest check and the lowering live in `@cogni/repo-spec` (workload-manifest).
  * Invariants:
  *   - DECLARED_AT_THE_SHA: every manifest and the repo-spec come from the tree AT `sourceSha`, never
@@ -32,6 +32,7 @@
  *     `-test` (candidate-a) / `-preview` / `-dev` sibling of its first label, so one manifest serves
  *     every environment without a per-env copy.
  * Side-effects: none
+ * Links: artifact-selection.ts, node-app-env.ts, bug.5568
  * @internal
  */
 
@@ -227,6 +228,10 @@ export function resolveWorkloadDeclaration(input: {
         );
     }
     for (const service of services) {
+      const secretKeys =
+        service.name === main.name
+          ? appSecretKeys(spec)
+          : workerSecretKeys(spec, service.name);
       for (const [key, target] of Object.entries(service.bindings)) {
         const sibling = services.find((s) => s.name === target);
         const consumer =
@@ -239,7 +244,7 @@ export function resolveWorkloadDeclaration(input: {
           target === service.name ||
           !consumer ||
           key in consumer.env ||
-          workerSecretKeys(spec, service.name).includes(key) ||
+          secretKeys.includes(key) ||
           (service.name === main.name &&
             workload.bindings.some((b) => b.env === key))
         )

@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Wire v1. Purpose-separated, bounded release capability; never a user/session credential. */
+/**
+ * Module: `@features/node-deploy/qualification`
+ * Purpose: Sign release qualification challenges and validate fresh evidence for every selected companion.
+ * Scope: Wire v1 challenge/evidence policy; does not dispatch requests or perform product operations.
+ * Invariants: Purpose-separated credentials; exact release/attempt/allocation identity; readiness and boots match the selected set.
+ * Side-effects: randomness (challenge nonce)
+ * Links: sequencer.ts, ports/node-deploy.port.ts, bug.5568
+ * @internal
+ */
 import { hkdfSync, randomUUID } from "node:crypto";
 import { SignJWT } from "jose";
 import { z } from "zod";

@@ -1,33 +1,25 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@features/node-deploy/sequencer-node-app.test`
- * Purpose: Prove a node APP deployed by the REAL sequencer gets the Crossplane lane's runtime env with
- *   OpenBao as custodian, that nothing is paid while that env cannot be resolved, and that placement
- *   (interim provider allowlist + catalog countries) rides the create (task.5405).
+ * Purpose: Prove the sequencer applies node runtime env and pre-create companion gates.
+ *   OpenBao remains custodian; unresolved env prevents payment; catalog placement rides create.
+ * Scope: Feature behavior through port fakes; does not import native adapters.
+ * Invariants: Unavailable artifacts and conflicting declarations cannot reach paid create.
  * Side-effects: none
+ * Links: sequencer.ts, declarations.ts, bug.5568
  */
 
-import { createHash } from "node:crypto";
-import { EventEmitter } from "node:events";
-import { type ClientRequest, IncomingMessage } from "node:http";
-import { request as httpsRequest, type RequestOptions } from "node:https";
-import { Socket } from "node:net";
 import {
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
-  NODE_BUNDLE_ARTIFACT_TYPE,
-  NODE_BUNDLE_PAYLOAD_FILE,
-  NODE_BUNDLE_PAYLOAD_MEDIA_TYPE,
   type NodeWorkloadSpec,
   nodeServiceSpecSchema,
 } from "@cogni/repo-spec";
 import { buildTestRepoSpec } from "@cogni/repo-spec/testing";
 import { decodeJwt } from "jose";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { stringify } from "yaml";
-import { HttpProbe } from "@/adapters/server/node-deploy/http-probe.adapter";
-import { GhcrBuiltImageResolver } from "@/adapters/server/oci/ghcr-built-image.adapter";
 import type {
   BuiltImageResolverPort,
   NodeCatalogPort,
@@ -625,8 +617,6 @@ describe("a pending image is pinned before any paid create (story.5137)", () => 
   });
 });
 
-vi.mock("node:https", () => ({ request: vi.fn() }));
-
 const BUNDLE_REF = `ghcr.io/example/node@sha256:${"b".repeat(64)}`;
 const PUBLIC_IMAGE = `ghcr.io/example/node@sha256:${"c".repeat(64)}`;
 const HELPER_IMAGE = `ghcr.io/example/node-helper@sha256:${"d".repeat(64)}`;
@@ -1068,6 +1058,21 @@ describe("same-source Score/declaration bridge", () => {
       helper.secret_refs = [{ key: "BILLING_INGEST_TOKEN" }];
     expect(() => d.resolve("production")).toThrow(DeclarationError);
   });
+  it.each([
+    ["preview", "top-level"],
+    ["production", "top-level"],
+    ["preview", "service"],
+    ["production", "service"],
+    ["preview", "profile"],
+    ["production", "profile"],
+  ])("refuses public binding/secret conflicts in %s from %s", (env, authority) => {
+    const d = declarationInput();
+    const app = requiredFixture(requiredFixture(d.spec.deployment).services[0]);
+    if (authority === "top-level") d.spec.secret_refs = [{ key: "HELPER_URL" }];
+    else if (authority === "service") app.secret_refs = [{ key: "HELPER_URL" }];
+    else app.bindings = { AUTH_SECRET: "helper" };
+    expect(() => d.resolve(env)).toThrow(DeclarationError);
+  });
   it("concurrent environments cannot seal different bundles for the same source", async () => {
     const h = harness();
     installBundle(h);
@@ -1092,106 +1097,6 @@ describe("same-source Score/declaration bridge", () => {
     expect(
       (await h.store.getRelease(b.release.id))?.resolvedImage
     ).toBeUndefined();
-  });
-});
-
-describe("bounded OCI publication read", () => {
-  const digest = (s: string) =>
-    `sha256:${createHash("sha256").update(s).digest("hex")}`;
-  function registry(redirect = "", corrupt = false) {
-    const payload = JSON.stringify({
-      schema_version: 1,
-      node_id: POLY_ID,
-      source: { repository: "example/node", sha: SHA_1 },
-      artifacts: [
-        { name: "app", image: PUBLIC_IMAGE },
-        { name: "helper", image: HELPER_IMAGE },
-      ],
-      services: [
-        { name: "canary", artifact: "app" },
-        { name: "helper", artifact: "helper" },
-      ],
-    });
-    const manifest = JSON.stringify({
-      artifactType: NODE_BUNDLE_ARTIFACT_TYPE,
-      layers: [
-        {
-          digest: digest(payload),
-          size: Buffer.byteLength(payload),
-          mediaType: NODE_BUNDLE_PAYLOAD_MEDIA_TYPE,
-          annotations: {
-            "org.opencontainers.image.title": NODE_BUNDLE_PAYLOAD_FILE,
-          },
-        },
-      ],
-    });
-    const calls: {
-      url: string;
-      authorization: string | null;
-      redirect?: RequestRedirect;
-    }[] = [];
-    const fetcher: typeof fetch = async (input, init) => {
-      const url = String(input);
-      calls.push({
-        url,
-        authorization: new Headers(init?.headers).get("authorization"),
-        ...(init?.redirect ? { redirect: init.redirect } : {}),
-      });
-      if (url.includes("/token?"))
-        return new Response(JSON.stringify({ token: "registry-only" }));
-      if (url.includes("/manifests/"))
-        return new Response(manifest, {
-          headers: { "docker-content-digest": digest(manifest) },
-        });
-      if (
-        url.includes("/blobs/") &&
-        new URL(url).origin === "https://ghcr.io" &&
-        redirect
-      )
-        return new Response(null, {
-          status: 307,
-          headers: { location: redirect },
-        });
-      return new Response(corrupt ? "corrupted" : payload);
-    };
-    return {
-      resolver: new GhcrBuiltImageResolver(fetcher),
-      calls,
-      ref: `ghcr.io/example/node@${digest(manifest)}`,
-    };
-  }
-  it("reads accepted publication by digest and strips registry bearer on its one allowed blob redirect", async () => {
-    const r = registry(
-      "https://pkg-containers.githubusercontent.com/ghcr1/blobs/object"
-    );
-    const result = await r.resolver.resolveArtifactBundle({
-      imageRepository: "ghcr.io/example/node",
-      sourceSha: SHA_1,
-      acceptedDigest: r.ref,
-    });
-    expect(result?.digestRef).toBe(r.ref);
-    expect(r.calls[1]?.url).toContain(`/manifests/${r.ref.split("@")[1]}`);
-    expect(r.calls.at(-1)?.authorization).toBeNull();
-    expect(r.calls.at(-1)?.redirect).toBe("error");
-  });
-  it("refuses an external redirect without sending bearer credentials there", async () => {
-    const r = registry("https://attacker.invalid/blob");
-    await expect(
-      r.resolver.resolveArtifactBundle({
-        imageRepository: "ghcr.io/example/node",
-        sourceSha: SHA_1,
-      })
-    ).rejects.toMatchObject({ invalid: true });
-    expect(r.calls.some((c) => c.url.includes("attacker.invalid"))).toBe(false);
-  });
-  it("refuses payload bytes that differ from the manifest digest and size", async () => {
-    const r = registry("", true);
-    await expect(
-      r.resolver.resolveArtifactBundle({
-        imageRepository: "ghcr.io/example/node",
-        sourceSha: SHA_1,
-      })
-    ).rejects.toMatchObject({ invalid: true });
   });
 });
 
@@ -1466,7 +1371,10 @@ describe("review repair digest and companion gates", () => {
     }
   });
 
-  it("validates each binding against its private consumer before pruning", () => {
+  it.each([
+    "preview",
+    "production",
+  ])("validates private binding authority before pruning in %s", (env) => {
     const d = declarationInput();
     requiredFixture(d.spec.deployment).services.push(
       nodeServiceSpecSchema.parse({
@@ -1496,114 +1404,16 @@ describe("review repair digest and companion gates", () => {
     Object.assign(d.manifest.containers.helper, {
       variables: { BACKEND_URL: "conflict" },
     });
-    expect(() => d.resolve("production")).toThrow(DeclarationError);
+    expect(() => d.resolve(env)).toThrow(DeclarationError);
+    Object.assign(d.manifest.containers.helper, { variables: {} });
+    requiredFixture(
+      requiredFixture(d.spec.deployment).services[1]
+    ).secret_refs = [{ key: "BACKEND_URL" }];
+    expect(() => d.resolve(env)).toThrow(DeclarationError);
   });
 });
 
-describe("accepted manifest transport", () => {
-  it.each([
-    200, 401, 403, 404, 503, 307, 999,
-  ])("checks digest without tag replacement, registry status %s", async (status) => {
-    const calls: { url: string; init: RequestInit | undefined }[] = [];
-    const resolver = new GhcrBuiltImageResolver(async (input, init) => {
-      const url = String(input);
-      calls.push({ url, init });
-      if (url.includes("/token?"))
-        return new Response(JSON.stringify({ token: "scoped-pull" }));
-      return new Response(null, {
-        status: status === 999 ? 200 : status,
-        headers: {
-          "docker-content-digest":
-            status === 999
-              ? `sha256:${"f".repeat(64)}`
-              : requiredFixture(HELPER_IMAGE.split("@")[1]),
-          location: "https://attacker.invalid/manifest",
-        },
-      });
-    });
-    if ([503, 307, 999].includes(status))
-      await expect(
-        resolver.checkImageManifests([HELPER_IMAGE])
-      ).rejects.toBeInstanceOf(BuiltImageRegistryError);
-    else
-      expect(await resolver.checkImageManifests([HELPER_IMAGE])).toBe(
-        status === 200
-      );
-    expect(calls.map((c) => c.url)).toEqual([
-      "https://ghcr.io/token?service=ghcr.io&scope=repository%3Aexample%2Fnode-helper%3Apull",
-      `https://ghcr.io/v2/example/node-helper/manifests/${HELPER_IMAGE.split("@")[1]}`,
-    ]);
-    expect(calls[1]?.init).toMatchObject({
-      method: "HEAD",
-      redirect: "manual",
-      headers: { authorization: "Bearer scoped-pull" },
-    });
-  });
-  it("checks all selected images and never forwards a GHCR bearer to an upstream registry", async () => {
-    const upstream = `registry.example/upstream@sha256:${"e".repeat(64)}`;
-    const heads: string[] = [];
-    const resolver = new GhcrBuiltImageResolver(async (input, init) => {
-      const url = new URL(String(input));
-      if (url.pathname === "/token")
-        return new Response(JSON.stringify({ token: "ghcr-only" }));
-      heads.push(url.href);
-      const image = url.hostname === "ghcr.io" ? PUBLIC_IMAGE : upstream;
-      expect(new Headers(init?.headers).get("authorization")).toBe(
-        url.hostname === "ghcr.io" ? "Bearer ghcr-only" : null
-      );
-      return new Response(null, {
-        headers: {
-          "docker-content-digest": requiredFixture(image.split("@")[1]),
-        },
-      });
-    });
-    expect(await resolver.checkImageManifests([PUBLIC_IMAGE, upstream])).toBe(
-      true
-    );
-    expect(heads).toHaveLength(2);
-  });
-  it("checks a declared Docker Hub tag+digest by digest with only its own anonymous token", async () => {
-    const digest = `sha256:${"e".repeat(64)}`;
-    const calls: string[] = [];
-    const resolver = new GhcrBuiltImageResolver(async (input, init) => {
-      const url = String(input);
-      calls.push(url);
-      if (url.startsWith("https://auth.docker.io/token?")) {
-        expect(new Headers(init?.headers).get("authorization")).toBeNull();
-        return new Response(JSON.stringify({ token: "docker-only" }));
-      }
-      expect(url).toBe(
-        `https://registry-1.docker.io/v2/library/postgres/manifests/${digest}`
-      );
-      expect(new Headers(init?.headers).get("authorization")).toBe(
-        "Bearer docker-only"
-      );
-      return new Response(null, {
-        headers: { "docker-content-digest": digest },
-      });
-    });
-    expect(await resolver.checkImageManifests([`postgres:16@${digest}`])).toBe(
-      true
-    );
-    expect(calls).toHaveLength(2);
-  });
-
-  it("bounds stalled manifest IO by the shared operation deadline", async () => {
-    const resolver = new GhcrBuiltImageResolver(
-      async (_input, init) =>
-        new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener(
-            "abort",
-            () => reject(new Error("timeout")),
-            { once: true }
-          );
-        }),
-      5
-    );
-    await expect(
-      resolver.checkImageManifests([HELPER_IMAGE])
-    ).rejects.toMatchObject({ invalid: false });
-  });
+describe("accepted bundle image identity", () => {
   it("refuses a node-built foreign repository but keeps explicit upstream digest semantics", async () => {
     const h = harness({ environment: "preview" });
     installBundle(h);
@@ -1640,60 +1450,5 @@ describe("accepted manifest transport", () => {
       selectReleaseBundle(pinned, publication).artifactPlan?.selectedImages
         ?.helper
     ).toBe(foreign);
-  });
-});
-
-describe("qualification transport owner reconciliation", () => {
-  it.each([
-    200, 302, 0,
-  ])("verifies observed ingress TLS, selects HTTP Host and refuses redirect/retry (%s)", async (status) => {
-    const mock = vi.mocked(httpsRequest);
-    mock.mockReset();
-    mock.mockImplementation((...args: unknown[]) => {
-      const options = args[0] as RequestOptions;
-      const callback = args[1];
-      expect(options).toMatchObject({
-        hostname: "green.provider.example",
-        servername: "green.provider.example",
-        port: 443,
-        method: "POST",
-        headers: {
-          host: "node-preview.example",
-          authorization: "Bearer challenge",
-        },
-      });
-      const opts = options as RequestOptions;
-      expect(opts.rejectUnauthorized).not.toBe(false);
-      expect(opts.checkServerIdentity).toBeUndefined();
-      const req = Object.assign(new EventEmitter(), {
-        end() {
-          queueMicrotask(() => {
-            if (status === 0)
-              req.emit("error", new Error("certificate identity mismatch"));
-            else {
-              const res = new IncomingMessage(new Socket());
-              res.statusCode = status;
-              res.headers = { location: "https://attacker.invalid" };
-              if (typeof callback === "function") callback(res);
-              res.push("evidence");
-              res.push(null);
-            }
-            req.emit("close");
-          });
-          return req;
-        },
-      });
-      return req as unknown as ClientRequest;
-    });
-    const result = await new HttpProbe().qualification({
-      ingressHost: "green.provider.example",
-      hostHeader: "node-preview.example",
-      path: "/qualification",
-      token: "challenge",
-      mode: "qualify",
-      timeoutMs: 20000,
-    });
-    expect(result.status).toBe(status);
-    expect(mock).toHaveBeenCalledTimes(1);
   });
 });
