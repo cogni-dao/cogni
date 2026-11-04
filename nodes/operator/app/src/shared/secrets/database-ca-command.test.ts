@@ -136,6 +136,30 @@ describe("a node app migrates its own databases before it serves (task.5408)", (
     ]);
   });
 
+  it("the app's exec env never contains DATABASE_MIGRATION_URL (node-database-contract)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cogni-migrate-env-"));
+    writeFileSync(join(dir, "node"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(dir, "node"), 0o755);
+    const start = databaseConsumerCommand({
+      runtimeProfile: "cogni-node-app-v1",
+      command: ["/usr/bin/env"],
+      secretRefs: REFS.map((key) => ({ key })),
+    });
+    const [exe, ...rest] = [...(start.command ?? []), ...(start.args ?? [])];
+    if (!exe) throw new Error("no command");
+    const result = spawnSync(exe, rest, {
+      env: { ...BASE, NODE_ENV: "test", PATH: `${dir}:/usr/bin:/bin` },
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    const appEnv = result.stdout.split("\n");
+    expect(appEnv).toContain("DATABASE_URL=postgres://app");
+    expect(appEnv.some((l) => l.startsWith("DATABASE_MIGRATION_URL="))).toBe(
+      false
+    );
+    expect(result.stdout).not.toContain("postgres://migration");
+  });
+
   it("skips Doltgres when the node has no DOLTGRES_URL", () => {
     const out = run(BASE, REFS);
     expect(out.status).toBe(0);

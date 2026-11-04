@@ -39,11 +39,13 @@ const NODE_APP_MIGRATIONS = [
   ': "${NODE_NAME:?NODE_NAME is required to migrate}"',
   // biome-ignore lint/suspicious/noTemplateCurlyInString: literal runtime shell expansion
   ': "${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL is required to migrate}"',
-  'DATABASE_URL="$DATABASE_MIGRATION_URL" node /app/app/migrate.mjs /app/app/migrations',
+  // The migration credential is scoped to this one command's env, never exported to the shell.
+  'DATABASE_URL="$DATABASE_MIGRATION_URL" NODE_NAME="$NODE_NAME" node /app/app/migrate.mjs /app/app/migrations',
   // biome-ignore lint/suspicious/noTemplateCurlyInString: literal runtime shell expansion
   'if [ -n "${DOLTGRES_URL:-}" ]; then',
-  '  DATABASE_URL="$DOLTGRES_URL" node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations',
+  '  DATABASE_URL="$DOLTGRES_URL" NODE_NAME="$NODE_NAME" node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations',
   "fi",
+  // Never reaches the app: under `set -e` a failed migrator exits before this line and before exec.
   "unset DATABASE_MIGRATION_URL",
 ];
 
