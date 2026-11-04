@@ -15,6 +15,8 @@
  *     topology (only with a substrate host), secrets, COGNI_NODE_ID, database pool maxes, Loki push
  *     (opt-in), then the identity block (NODE_NAME, COGNI_REPO_PATH, AUTH_TRUST_HOST, NEXTAUTH_URL,
  *     APP_BASE_URL) which wins over everything above. `node-app-env.test.ts` pins this key by key.
+ *   - MIGRATION_DSN (task.5408): DATABASE_MIGRATION_URL is added to every node app's key list (unless its
+ *     DATABASE_URL is bound to a state workload); the start wrapper migrates with it and unsets it.
  *   - DECLARED_KEYS_ONLY: the secrets injected are EXACTLY the release's declared key list
  *     (`NodeWorkloadSpec.secretKeys` = the profile keys + the node's declared `secret_refs`, computed at
  *     lowering from its repo-spec at the source sha). A key that is merely present in the node's bucket
@@ -89,8 +91,17 @@ const LITELLM_VIRTUAL_KEY = "LITELLM_VIRTUAL_KEY";
 const LITELLM_MASTER_KEY = "LITELLM_MASTER_KEY";
 
 /**
- * The secret keys an app must receive from its bucket: the declared set (profile keys when none is
- * declared), minus those a declared state binding supplies. Order is contract order, deduped.
+ * The node's isolated migration DSN (`migration_<node>`), read from its own OpenBao bucket
+ * `<env>/<slug>-database-migration` (task.5408). The start wrapper uses it to migrate before the app
+ * starts, then unsets it (`database-ca-command.ts` GREEN_MIGRATES_ITSELF).
+ */
+export const NODE_APP_MIGRATION_KEY = "DATABASE_MIGRATION_URL";
+
+/**
+ * The secret keys an app must receive: the declared set (profile keys when none is declared), plus the
+ * migration DSN, minus those a declared state binding supplies. A node app whose DATABASE_URL is bound to
+ * a state workload gets no migration DSN (the bucket's DSN names another database). Contract order,
+ * deduped.
  */
 export function nodeAppSecretKeys(
   declared: readonly string[] | undefined,
@@ -103,7 +114,8 @@ export function nodeAppSecretKeys(
         runtimeProfile: "cogni-node-app-v1",
         secretRefs: [],
       }).map((r) => r.key);
-  return [...new Set(keys)].filter((k) => !bound.has(k));
+  const migration = bound.has("DATABASE_URL") ? [] : [NODE_APP_MIGRATION_KEY];
+  return [...new Set([...keys, ...migration])].filter((k) => !bound.has(k));
 }
 
 /** The injectable part of the declared keys: valid env names that are not operator/fleet credentials. */

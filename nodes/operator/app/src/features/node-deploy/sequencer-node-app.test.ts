@@ -72,6 +72,8 @@ class FakeRuntimeSecrets implements NodeRuntimeSecretsPort {
   /** The node's OpenBao bucket: declared keys AND fleet-inherited keys that are NOT declared. */
   bucket: Record<string, string> = {
     ...PROFILE_BUCKET,
+    // the node's isolated migration DSN, read from its `-database-migration` bucket (task.5408)
+    DATABASE_MIGRATION_URL: "value-of-DATABASE_MIGRATION_URL",
     PAPER_ENFORCE_MODE: "true",
     ...INHERITED,
   };
@@ -595,5 +597,52 @@ describe("a pending image is pinned before any paid create (story.5137)", () => 
       "waiting_dependency"
     );
     expect(appCreates(h)).toHaveLength(0);
+  });
+});
+
+describe("green migrates itself before it serves (task.5408)", () => {
+  it("a node app with no bound DATABASE_URL gets its migration DSN and a start command that migrates, then execs the app", async () => {
+    const h = harness();
+    await recordPending(h, SHA_1);
+    h.images.published.set(SHA_1, POLY_DIGEST);
+    expect(await h.seq.step(h.key(POLY_ID, "canary"))).toBe("driven");
+    expect(h.runtimeSecrets.reads.at(-1)?.keys).toContain(
+      "DATABASE_MIGRATION_URL"
+    );
+    const svc = appCreates(h)[0]?.spec.services[0];
+    expect(svc?.env?.DATABASE_MIGRATION_URL).toBe(
+      "value-of-DATABASE_MIGRATION_URL"
+    );
+    const script = String(svc?.command?.[2]);
+    const migrate = script.indexOf(
+      "node /app/app/migrate.mjs /app/app/migrations"
+    );
+    const doltgres = script.indexOf("node /app/app/migrate-doltgres.mjs");
+    const unset = script.indexOf("unset DATABASE_MIGRATION_URL");
+    const exec = script.indexOf('exec "$@"');
+    expect(migrate).toBeGreaterThan(0);
+    expect(doltgres).toBeGreaterThan(migrate);
+    expect(unset).toBeGreaterThan(doltgres);
+    expect(exec).toBeGreaterThan(unset);
+  });
+
+  it("a missing migration DSN waits as a dependency: nothing is created (NO_HALF_ENV)", async () => {
+    const h = harness();
+    delete h.runtimeSecrets.bucket.DATABASE_MIGRATION_URL;
+    await recordPending(h, SHA_1);
+    h.images.published.set(SHA_1, POLY_DIGEST);
+    expect(await h.seq.step(h.key(POLY_ID, "canary"))).toBe(
+      "waiting_dependency"
+    );
+    expect(appCreates(h)).toHaveLength(0);
+  });
+
+  it("a node app whose DATABASE_URL is bound to a state workload is not migrated by the wrapper", async () => {
+    const h = harness();
+    await stateUp(h, POLY_ID);
+    await releaseApp(h, POLY_ID);
+    const svc = appCreates(h)[0]?.spec.services[0];
+    expect(svc?.env).not.toHaveProperty("DATABASE_MIGRATION_URL");
+    expect(String(svc?.command?.[2])).not.toContain("migrate.mjs");
   });
 });
