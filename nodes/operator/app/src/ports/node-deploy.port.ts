@@ -275,7 +275,8 @@ export type PayerErrorCode =
  * must resolve it through `observe(cogniKey)` and must NEVER blindly create again.
  * `definitive` (bug.5569) means the payer guarantees NOTHING bills under this key: the create was
  * refused before any deployment existed, or the deployment it opened was closed and that close was
- * read back. The caller may fail the attempt at once, with no `observe`. Absent is the safe answer.
+ * read back. It is set only on the actuator's positive proof (`nothingBilling: true` on the wire).
+ * The caller may fail the attempt at once, with no `observe`. Absent is the safe answer.
  */
 export class PayerError extends Error {
   constructor(

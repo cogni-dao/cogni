@@ -495,6 +495,10 @@ interface FakeConsoleOptions {
   /** Simulate a lost response: the lease IS created, then the call throws. */
   loseResponseAfterAllocation?: boolean;
   allocateError?: Error;
+  /** Throw `allocateError` AFTER the handle was published (a deployment exists), as the real client does. */
+  allocateErrorAfterAllocation?: boolean;
+  /** Fail every Console status read (bug.5569: a read-back failure after a lease exists). */
+  statusError?: Error;
   recovered?: ProvisionOutput | null;
   /** Several live allocations beyond the baseline: adoption is undecidable. */
   ambiguous?: readonly string[];
@@ -538,6 +542,13 @@ class FakeConsole implements AkashTxConsolePort {
     onAllocated?: (leaseId: string) => Promise<void>;
   }): Promise<{ leaseId: string; providerAccount: string }> {
     this.allocateCalls += 1;
+    if (
+      this.options.allocateError &&
+      this.options.allocateErrorAfterAllocation
+    ) {
+      await input.onAllocated?.(this.nextLeaseId);
+      throw this.options.allocateError;
+    }
     if (this.options.allocateError) throw this.options.allocateError;
     if (this.loseResponse) {
       // The transaction succeeded on-chain; only the response was lost, so the
@@ -562,6 +573,7 @@ class FakeConsole implements AkashTxConsolePort {
 
   async status(input: { leaseId: string }): Promise<ProvisionOutput> {
     this.statusCalls += 1;
+    if (this.options.statusError) throw this.options.statusError;
     return {
       provider: "akash",
       leaseId: input.leaseId,
@@ -1878,6 +1890,83 @@ describe("AkashTxActuator.create", () => {
     ).rejects.toMatchObject({ code: "ledger_unavailable" });
     expect(api.cursorCalls).toBe(0);
     expect(api.allocateCalls).toBe(0);
+  });
+
+  describe("bug.5569: nothingBilling is set only on positive proof", () => {
+    const call = {
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    };
+    const refusal = async (options: FakeConsoleOptions) => {
+      const { actuator, ledger } = build(options);
+      const error = (await actuator
+        .create(call)
+        .catch((e: unknown) => e)) as AkashTxError;
+      return { error, ledger };
+    };
+    const rolledBack = (code: string, dseq: string) =>
+      Object.assign(consoleError(code), { rolledBackDseq: dseq });
+
+    it("a refusal before any deployment opened (Console 4xx on the deployment POST) proves nothing bills", async () => {
+      const { error } = await refusal({
+        allocateError: consoleError("HTTP_ERROR", 422),
+      });
+      expect(error).toMatchObject({
+        code: "provider_rejected",
+        nothingBilling: true,
+      });
+    });
+
+    it("a screening refusal whose deployment was closed AND re-read closed proves nothing bills", async () => {
+      const { error } = await refusal({
+        allocateError: rolledBack("NO_ELIGIBLE_BIDS", "7001"),
+        allocateErrorAfterAllocation: true,
+      });
+      expect(error).toMatchObject({
+        code: "provider_rejected",
+        nothingBilling: true,
+      });
+    });
+
+    it("a screening refusal after a deployment opened WITHOUT a verified close proves nothing", async () => {
+      const { error } = await refusal({
+        allocateError: consoleError("NO_BIDS"),
+        allocateErrorAfterAllocation: true,
+      });
+      expect(error.code).toBe("provider_rejected");
+      expect(error.nothingBilling).toBe(false);
+    });
+
+    it("a Console 502 on the read-back after the lease is allocated and recorded is outcome_unknown, never a nothing-billing refusal", async () => {
+      const { error, ledger } = await refusal({
+        statusError: consoleError("HTTP_ERROR", 502),
+      });
+      expect(error).toBeInstanceOf(AkashTxError);
+      expect(error.code).toBe("outcome_unknown");
+      expect(error.nothingBilling).toBe(false);
+      expect(error.message).toMatch(/lease 7001 allocated; read-back failed/);
+      // the lease bills under the key, and the receipt says so
+      expect(ledger.rows.get("k1")?.externalName).toBe("7001");
+      // pre-fix this exact read failure mapped to provider_rejected
+      expect(
+        mapConsoleFailure(consoleError("HTTP_ERROR", 502), { mutating: false })
+          .code
+      ).toBe("provider_rejected");
+    });
+
+    it("a failed read-back on a replayed (settled, handle-bound) key is outcome_unknown, never nothing-billing", async () => {
+      const { actuator, api } = build();
+      await actuator.create(call);
+      (api as unknown as { options: FakeConsoleOptions }).options.statusError =
+        consoleError("HTTP_ERROR", 502);
+      const error = (await actuator
+        .create(call)
+        .catch((e: unknown) => e)) as AkashTxError;
+      expect(error.code).toBe("outcome_unknown");
+      expect(error.nothingBilling).toBe(false);
+    });
   });
 
   it("maps a screening rejection to a terminal provider_rejected", async () => {
