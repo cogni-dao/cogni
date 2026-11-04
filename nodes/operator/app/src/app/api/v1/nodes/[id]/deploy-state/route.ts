@@ -34,16 +34,13 @@ import { z } from "zod";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import type { LeaseReadCapability } from "@/bootstrap/capabilities/compute-leases";
-import { createNodeDeployStore } from "@/bootstrap/capabilities/node-deploy-store";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { getCurrentTraceId } from "@/bootstrap/otel";
-import { DeployWorkloadsReadSchema } from "@/contracts/deploy.workloads.v1.contract";
 import {
   classifyReceiptClosure,
   orphanDiff,
   verifyLeaseClosures,
 } from "@/features/compute/lease-closure-verification";
-import { readNodeDeployWorkloads } from "@/features/node-deploy/release-view";
 import { FLIGHT_ENVS } from "@/features/nodes/flight-status";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { nodes } from "@/shared/db/nodes";
@@ -174,11 +171,6 @@ const deployStateResponseSchema = z.object({
   slug: z.string(),
   /** Per-env deploy state for this node, one cell per deploy env. */
   envs: z.array(nodeDeployStateSchema),
-  /** Durable release intent is distinct from public serving health, including refused admission. */
-  workloadReleases: z.object({
-    status: z.enum(["available", "unavailable"]),
-    envs: z.array(DeployWorkloadsReadSchema),
-  }),
   /** Convenience rollup: the envs the node is currently live (serving) in. */
   liveEnvs: z.array(z.string()),
   /**
@@ -433,26 +425,6 @@ export async function GET(
     )
   );
 
-  let workloadReleases: z.infer<
-    typeof deployStateResponseSchema
-  >["workloadReleases"];
-  try {
-    workloadReleases = {
-      status: "available",
-      envs: await readNodeDeployWorkloads(
-        createNodeDeployStore(),
-        node.nodeId,
-        FLIGHT_ENVS
-      ),
-    };
-  } catch {
-    workloadReleases = { status: "unavailable", envs: [] };
-    reqCtx.log.warn(
-      { nodeId: node.nodeId, errorCode: "release_read_unavailable" },
-      "node_deploy_state_release_read_failed"
-    );
-  }
-
   const liveEnvs = envs.filter((e) => e.health === "healthy").map((e) => e.env);
 
   // Money-loop SEE (story.5039): enumerate this node's live paid leases from the durable
@@ -522,7 +494,6 @@ export async function GET(
     slug: node.slug,
     envs,
     liveEnvs,
-    workloadReleases,
     ...(leaseBlock ?? {}),
     receiptStates,
     receiptCoverage,
