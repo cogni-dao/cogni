@@ -403,6 +403,21 @@ export class NodeDeploySequencer {
       )
     )
       return "none";
+    // Only an app blue is ever stopped.
+    const blueRelease = await this.d.store.getRelease(blue.releaseId);
+    if (blueRelease?.spec.kind !== "app") return "none";
+    // Blue's provider must still be admitted, or closing blue only trades a live node for a dead one.
+    const admitted = (this.d.config.appProviders ?? []).slice(
+      0,
+      MAX_ALLOWED_PROVIDERS
+    );
+    if (admitted.length > 0 && !admitted.includes(blue.provider)) {
+      await this.alert(key, release, newest, "stop_then_start_refused", {
+        provider: blue.provider,
+        reason: `blue provider ${blue.provider} is no longer admitted (appProviders); blue kept, no stop`,
+      });
+      return "none";
+    }
 
     const reason = `blue provider ${blue.provider} is the only bidder that passes screening; closing blue ${blue.externalName} before green (accepted downtime)`;
     await this.emit(key, release, newest, "stop_then_start", "closing_blue", {
@@ -424,8 +439,6 @@ export class NodeDeploySequencer {
     const retired = await this.d.store.updateAttempt(blue.id, {
       phase: "retired",
     });
-    const blueRelease =
-      (await this.d.store.getRelease(blue.releaseId)) ?? release;
     await this.emit(key, blueRelease, retired, "old_closed", "ok", {
       dseq: retired.externalName,
       verified: true,
@@ -1855,7 +1868,9 @@ function blueWasOnlyScreenedBidder(
     blueProvider.length > 17
       ? `${blueProvider.slice(0, 9)}…${blueProvider.slice(-4)}`
       : blueProvider;
-  const roster = /\[bids: ([^\]]*)\]/u.exec(error)?.[1] ?? "";
+  // No closing `]`: the actuator payer truncates error text at 400 chars, so the roster may be cut off.
+  // A cut-off last entry simply fails to match (safe: no stop).
+  const roster = /\[bids: ([^\]]*)/u.exec(error)?.[1] ?? "";
   return roster
     .split(", ")
     .some((r) => r.startsWith(`${addr} `) && r.endsWith(" already_tried"));

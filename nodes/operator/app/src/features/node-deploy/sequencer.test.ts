@@ -1441,6 +1441,52 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
     ]);
   });
 
+  it("a roster cut off by the actuator payer's 400-char truncation still names blue", async () => {
+    const h = harness();
+    await stateUp(h); // provider-1
+    await deployApp(h, SHA_1); // blue on provider-2
+    const filler = Array.from(
+      { length: 20 },
+      (_, i) => `provider-x${i} DE 1.00 not_allowlisted`
+    ).join(", ");
+    // Same shape as actuator-payer.adapter.ts: `actuator <path> -> HTTP <s> <code>: <message>`.slice(0, 400)
+    const truncated =
+      `actuator /v1/create -> HTTP 422 provider_rejected: ${refusal(
+        "not_allowlisted=20, already_tried=2",
+        `provider-1 US 1.00 already_tried, ${ONLY} US 1.00 already_tried, ${filler}`
+      )}`.slice(0, 400);
+    expect(truncated).not.toMatch(/\]$/);
+    h.payer.providerFor = () => ONLY;
+    h.payer.createFault = (_n, req) =>
+      req.excludeProviders?.includes(ONLY)
+        ? new PayerError("provider_rejected", truncated, false)
+        : undefined;
+    await deployApp(h, SHA_2); // refused
+    expect(await h.seq.step(APP)).toBe("driven");
+    expect(h.log.steps()).toContain("stop_then_start:blue_closed");
+    const active = (await h.store.attemptsFor(APP)).find(
+      (a) => a.phase === "active"
+    );
+    expect(active?.provider).toBe(ONLY);
+  });
+
+  it("blue's provider no longer admitted (appProviders): alert, blue kept, no stop", async () => {
+    const h = harness({ appProviders: ["provider-7"] });
+    singleProvider(h);
+    const blue = await blueUp(h);
+    await h.release(noState(), SHA_2);
+    await h.seq.step(APP); // refused
+    await h.seq.step(APP);
+    expect(h.log.alerts()).toContain("stop_then_start_refused");
+    expect(h.log.steps().some((s) => s.startsWith("stop_then_start"))).toBe(
+      false
+    );
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("active");
+    expect(
+      (await h.store.attemptsFor(APP)).find((a) => a.id === blue?.id)?.phase
+    ).toBe("active");
+  });
+
   it("a state workload is never stopped", async () => {
     const h = harness();
     await stateUp(h);
