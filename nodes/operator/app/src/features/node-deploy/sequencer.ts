@@ -395,11 +395,15 @@ export class NodeDeploySequencer {
     const stateExcluded = await this.excludedProviders(key, release, undefined);
     // HAIRPIN_RULE still holds: if blue's provider also hosts a bound state lease, reopening it is useless.
     if (stateExcluded.includes(blue.provider)) return "none";
+    // What the refused create excluded besides blue: bound state providers AND this release's failed-after-
+    // bind tries (same flag the create used, bug.5569). Only when that is empty was `already_tried>=1` blue's;
+    // otherwise the roster must name blue itself, so a failed try's provider can never close blue.
+    const others = await this.excludedProviders(key, release, undefined, true);
     if (
       !blueWasOnlyScreenedBidder(
         newest.error,
         blue.provider,
-        stateExcluded.length === 0
+        others.length === 0
       )
     )
       return "none";
