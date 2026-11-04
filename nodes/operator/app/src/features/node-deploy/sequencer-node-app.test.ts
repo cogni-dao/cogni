@@ -1089,7 +1089,7 @@ describe("bounded OCI publication read", () => {
         });
       if (
         url.includes("/blobs/") &&
-        url.startsWith("https://ghcr.io") &&
+        new URL(url).origin === "https://ghcr.io" &&
         redirect
       )
         return new Response(null, {
