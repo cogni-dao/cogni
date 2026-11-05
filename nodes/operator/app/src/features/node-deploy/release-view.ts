@@ -19,10 +19,10 @@
  *       deploying    an attempt is mid-flight (`planned|created|proving|proven`), OR any attempt of the
  *                    workload is `closing` (the sequencer never starts a paid create over an
  *                    unconfirmed close).
- *       parked       no attempt serves or is mid-flight and either the sequencer recorded its park
- *                    verdict (`alert/release_parked` step) or the release has `maxFailedAttempts`
- *                    consecutive failed attempts: no further paid create until a NEW release. The
- *                    verdict wins over a third attempt that is still `closing`.
+ *       parked       no attempt serves or is mid-flight and the sequencer recorded its park verdict
+ *                    (`alert/release_parked` step): no further paid create until a NEW release. The
+ *                    verdict wins over a third attempt that is still `closing`. A failure count alone
+ *                    is not a park: at the limit the sequencer may grant one stop-then-start (task.5409).
  *       queued       the release has no attempt yet (the sequencer has not picked it up).
  *       failed       the newest attempt failed (or its live lease was lost) and fewer than
  *                    `maxFailedAttempts` have failed: the sequencer will plan the next attempt.
@@ -155,7 +155,9 @@ export function deriveReleaseTimeline(input: {
   const failures = consecutiveFailures(ofRelease);
   if (!parkedByStep && all.some((a) => a.phase === "closing"))
     return done("deploying");
-  if (parkedByStep || failures >= max) {
+  // PARK_IS_THE_SEQUENCER'S_VERDICT (task.5409): only the sequencer's own `release_parked` step parks a
+  // release. At the limit it may still grant one last-resort stop-then-start, so a count alone is `failed`.
+  if (parkedByStep) {
     const last = ofRelease[0]?.error ?? "no error recorded";
     return done(
       "parked",

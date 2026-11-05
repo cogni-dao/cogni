@@ -349,6 +349,8 @@ export interface HttpResult {
   readonly body: string;
   readonly ms: number;
   readonly error?: string;
+  /** Set when a public read could not use the authoritative path and fell back to DoH: the reason. */
+  readonly fallback?: string;
 }
 
 export interface ProbePort {
@@ -358,8 +360,11 @@ export interface ProbePort {
     hostHeader: string,
     path: string
   ): Promise<HttpResult>;
-  /** GET `https://<host><path>` resolved through Cloudflare DoH, bypassing any local resolver. */
-  publicDoh(host: string, path: string): Promise<HttpResult>;
+  /**
+   * GET `https://<host><path>` through the public edge, `host` resolved at its zone's authoritative
+   * nameservers (no local resolver, no public resolver's negative cache), real Host + SNI.
+   */
+  publicRead(host: string, path: string): Promise<HttpResult>;
   /** Postgres SSLRequest handshake against a forwarded tcp port. */
   tcpTls(host: string, port: number): Promise<boolean>;
 }

@@ -28,7 +28,7 @@
  *     bidder screening could pass, an `app` blue is closed (confirmed) BEFORE the next create, which then
  *     may land on blue's provider. At most once per release; never for `state`. Accepted downtime.
  *   - CUTOVER_IS_READ_BACK: a cutover counts only after the edge record reads back AND 8 consecutive
- *     public reads (DoH) return the exact sha.
+ *     public reads (host resolved at its zone's authoritative nameservers) return the exact sha.
  *   - CLOSE_IS_CONFIRMED: a lease counts as closed only after observe says closed AND chain truth
  *     (when wired) agrees. An unconfirmed close is retried by the janitor and alerted, never assumed.
  *   - STATE_IS_NEVER_AUTO_REPLACED: a `state` workload that ever went live is never recreated; loss
@@ -330,7 +330,16 @@ export class NodeDeploySequencer {
     }
 
     const ofRelease = all.filter((a) => a.releaseId === release.id);
-    if (consecutiveFailures(ofRelease) >= this.d.config.maxFailedAttempts) {
+    const failures = consecutiveFailures(ofRelease);
+    // LAST_RESORT_STOP (task.5409): when the release's last refusal shows blue's provider as the only bidder
+    // screening could pass, the park limit grants exactly ONE stop-then-start attempt. Parking first would
+    // leave the node on blue forever (blue never moves, green never places). After that attempt, blue is
+    // retired, so the predicate is false and a further failure parks as usual.
+    const lastResort =
+      failures === this.d.config.maxFailedAttempts &&
+      (await this.stopThenStartVerdict(key, release, ofRelease, active)) ===
+        "eligible";
+    if (failures >= this.d.config.maxFailedAttempts && !lastResort) {
       // Attached to the release's newest attempt so the park is a durable step on its timeline:
       // `release-view` reads `alert/release_parked` as the sequencer's own verdict.
       await this.alert(key, release, ofRelease[0], "release_parked", {
@@ -396,12 +405,17 @@ export class NodeDeploySequencer {
    *    again until this release (or a newer one) serves. If green then fails, the normal park applies.
    * Never for a first release (no blue) or a lane where another provider passed screening.
    */
-  private async stopThenStart(
+  /**
+   * The read-only half of stop-then-start: `eligible` when blue may be closed so green can take its provider,
+   * `not_admitted` when blue's provider is the only screened bidder but is no longer admitted (closing blue would
+   * trade a live node for a dead one), `none` otherwise. ONE predicate for both the park-limit decision and the act.
+   */
+  private async stopThenStartVerdict(
     key: WorkloadKey,
     release: ReleaseRow,
     ofRelease: readonly AttemptRow[],
     blue: AttemptRow | undefined
-  ): Promise<"none" | "stopped" | "unconfirmed"> {
+  ): Promise<"eligible" | "not_admitted" | "none"> {
     if (release.spec.kind !== "app") return "none";
     if (!blue?.provider || !blue.externalName || blue.releaseId === release.id)
       return "none";
@@ -411,8 +425,8 @@ export class NodeDeploySequencer {
     // HAIRPIN_RULE still holds: if blue's provider also hosts a bound state lease, reopening it is useless.
     if (stateExcluded.includes(blue.provider)) return "none";
     // What the refused create excluded besides blue: bound state providers AND this release's failed-after-
-    // bind tries (same flag the create used, bug.5569). Only when that is empty was `already_tried>=1` blue's;
-    // otherwise the roster must name blue itself, so a failed try's provider can never close blue.
+    // bind tries (bug.5569). Only when that is empty was `already_tried>=1` blue's; otherwise the roster must
+    // name blue itself, so a failed try's provider can never close blue.
     const others = await this.excludedProviders(key, release, undefined, true);
     if (
       !blueWasOnlyScreenedBidder(
@@ -425,18 +439,39 @@ export class NodeDeploySequencer {
     // Only an app blue is ever stopped.
     const blueRelease = await this.d.store.getRelease(blue.releaseId);
     if (blueRelease?.spec.kind !== "app") return "none";
-    // Blue's provider must still be admitted, or closing blue only trades a live node for a dead one.
     const admitted = (this.d.config.appProviders ?? []).slice(
       0,
       MAX_ALLOWED_PROVIDERS
     );
-    if (admitted.length > 0 && !admitted.includes(blue.provider)) {
+    if (admitted.length > 0 && !admitted.includes(blue.provider))
+      return "not_admitted";
+    return "eligible";
+  }
+
+  private async stopThenStart(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    ofRelease: readonly AttemptRow[],
+    blue: AttemptRow | undefined
+  ): Promise<"none" | "stopped" | "unconfirmed"> {
+    const verdict = await this.stopThenStartVerdict(
+      key,
+      release,
+      ofRelease,
+      blue
+    );
+    if (verdict === "none" || !blue?.provider || !blue.externalName)
+      return "none";
+    const newest = ofRelease[0] as AttemptRow;
+    if (verdict === "not_admitted") {
       await this.alert(key, release, newest, "stop_then_start_refused", {
         provider: blue.provider,
         reason: `blue provider ${blue.provider} is no longer admitted (appProviders); blue kept, no stop`,
       });
       return "none";
     }
+    const blueRelease = await this.d.store.getRelease(blue.releaseId);
+    if (!blueRelease) return "none";
 
     const reason = `blue provider ${blue.provider} is the only bidder that passes screening; closing blue ${blue.externalName} before green (accepted downtime)`;
     await this.emit(key, release, newest, "stop_then_start", "closing_blue", {
@@ -983,7 +1018,8 @@ export class NodeDeploySequencer {
     text: string,
     definitive = false
   ): Promise<AttemptRow> {
-    const error = `${REFUSED_PREFIX}${text}`.slice(0, 500);
+    // The full bid roster must survive: blueWasOnlyScreenedBidder parses it (task.5409).
+    const error = `${REFUSED_PREFIX}${text}`.slice(0, ERROR_TEXT_MAX);
     const refused = await this.d.store.updateAttempt(attempt.id, { error });
     return this.failAttempt(key, release, refused, refused.error ?? "", {
       createEnded: definitive,
@@ -1027,7 +1063,7 @@ export class NodeDeploySequencer {
       context.startsWith(REFUSED_PREFIX)
         ? `${context}; observe unavailable since ${since.toISOString()}: ${errText(error)}`
         : `orphan_suspect: ${context}; observe unavailable since ${since.toISOString()}: ${errText(error)}`
-    ).slice(0, 500);
+    ).slice(0, ERROR_TEXT_MAX);
     const failed = await this.d.store.updateAttempt(attempt.id, {
       phase: "failed",
       error: reason,
@@ -1298,7 +1334,14 @@ export class NodeDeploySequencer {
         const firstAt = await this.awaitPublic(
           host,
           release.sourceSha,
-          w.health?.version ?? "/version"
+          w.health?.version ?? "/version",
+          {
+            nodeId: key.nodeId,
+            env: key.env,
+            workload: key.workload,
+            releaseId: release.id,
+            attempt: attempt.id,
+          }
         );
         await this.emit(key, release, attempt, "public_readback", "ok", {
           host,
@@ -1358,15 +1401,33 @@ export class NodeDeploySequencer {
   private async awaitPublic(
     host: string,
     sha: string,
-    versionPath: string
+    versionPath: string,
+    fields: Record<string, unknown>
   ): Promise<string> {
     const { clock, probe, config } = this.d;
     const deadline = clock.now() + config.publicMs;
     let streak = 0;
     let firstAt = "";
     let last = "";
+    let fallbackLogged = false;
     for (;;) {
-      const v = await probe.publicDoh(host, `${versionPath}?cb=${clock.now()}`);
+      const v = await probe.publicRead(
+        host,
+        `${versionPath}?cb=${clock.now()}`
+      );
+      // Once per host per release: the authoritative path failed and this read used DoH.
+      if (v.fallback && !fallbackLogged) {
+        fallbackLogged = true;
+        this.d.log.warn(
+          {
+            component: "node-deploy-sequencer",
+            ...fields,
+            host,
+            reason: v.fallback,
+          },
+          "node_deploy_public_read_fallback"
+        );
+      }
       if (v.status === 200 && buildShaOf(v.body) === sha) {
         if (streak === 0) firstAt = new Date(clock.now()).toISOString();
         streak++;
@@ -1398,7 +1459,7 @@ export class NodeDeploySequencer {
     reason: string,
     opts: { createEnded?: boolean } = {}
   ): Promise<AttemptRow> {
-    const trimmed = reason.slice(0, 500);
+    const trimmed = reason.slice(0, ERROR_TEXT_MAX);
     // ORPHAN_GUARD (CD8): an attempt with no bound handle may still own a PAID lease (the create
     // succeeded and its response was lost, or we crashed before binding). Ask the payer by key BEFORE
     // writing any terminal state. A lease that exists is bound and then closed + confirmed; if the
@@ -1923,6 +1984,9 @@ export class NodeDeploySequencer {
 /** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
 const REFUSED_PREFIX = "create refused: ";
 
+/** Max persisted refusal/failure text. Large enough for a full bid roster (~10 bidders); the column is `text`. */
+const ERROR_TEXT_MAX = 2000;
+
 /**
  * True when a persisted create refusal shows blue's provider as the only bidder screening could pass
  * (task.5409). Keys on the actuator's NO_ELIGIBLE_BIDS text (`akash-compute.adapter.ts`
@@ -1945,7 +2009,7 @@ function blueWasOnlyScreenedBidder(
     blueProvider.length > 17
       ? `${blueProvider.slice(0, 9)}…${blueProvider.slice(-4)}`
       : blueProvider;
-  // No closing `]`: the actuator payer truncates error text at 400 chars, so the roster may be cut off.
+  // No closing `]`: persisted error text is capped (ERROR_TEXT_MAX), so a very long roster may still be cut off.
   // A cut-off last entry simply fails to match (safe: no stop).
   const roster = /\[bids: ([^\]]*)/u.exec(error)?.[1] ?? "";
   return roster

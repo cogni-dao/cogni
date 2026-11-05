@@ -45,7 +45,7 @@
  */
 
 import type { Database } from "@cogni/db-client";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import type {
   AkashTxAllocationLedgerPort,
@@ -609,7 +609,11 @@ export class DrizzleAkashTxAllocationLedger
    * does NOT require a handle, so a lease that is BOOTING but not yet `allocated` — and would
    * otherwise be closed on its BootDeadline before the pump ever enumerated it — is visible for
    * log tailing, and a live handleless receipt is loggable rather than invisibly absent. Same
-   * scoping/ordering/limit discipline as `listAllocated`; a pure read that decides nothing.
+   * scoping/limit discipline as `listAllocated`; a pure read that decides nothing.
+   *
+   * NEWEST-touched first (task.5420): ascending order plus a small limit returned only the
+   * oldest receipts — dead rows (refused creates, closed leases) that never age out — so every
+   * newer node-deploy lease fell past the limit and was never tailed.
    */
   async listActive(input: {
     nodeId?: string;
@@ -632,7 +636,7 @@ export class DrizzleAkashTxAllocationLedger
             : [])
         )
       )
-      .orderBy(akashTxAllocations.updatedAt)
+      .orderBy(desc(akashTxAllocations.updatedAt))
       .limit(input.limit);
     return rows.map(toRecord);
   }

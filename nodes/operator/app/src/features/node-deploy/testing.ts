@@ -466,10 +466,15 @@ export class FakeProbe implements ProbePort {
     }
     return this.serve(l, path);
   }
-  async publicDoh(host: string, path: string): Promise<HttpResult> {
+  async publicRead(host: string, path: string): Promise<HttpResult> {
     const rec = [...this.dns.records.values()].find((r) => r.name === host);
     if (!rec)
-      return { status: 0, body: "", ms: 1, error: "doh: no A record yet" };
+      return {
+        status: 0,
+        body: "",
+        ms: 1,
+        error: "authoritative: no A record yet",
+      };
     if (rec.content !== this.lastTarget) {
       this.lastTarget = rec.content;
       this.staleLeft = this.publicStaleReads;

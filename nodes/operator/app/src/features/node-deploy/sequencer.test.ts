@@ -1526,6 +1526,50 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
     expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("closed");
   });
 
+  it("task.5409: a long bid roster that names BLUE after 500 chars still proceeds to stop-then-start (no truncation)", async () => {
+    const h = harness();
+    const filler = Array.from(
+      { length: 12 },
+      (_, i) => `provider-${30 + i} US 1.00 not_allowlisted`
+    ).join(", ");
+    const blue = await failedTryOnP(h, `${filler}, provider-1`);
+    expect(await h.seq.step(APP)).toBe("driven"); // attempt 2 refused, blue is late in the roster
+    expect(
+      ((await h.store.attemptsFor(APP))[0]?.error ?? "").length
+    ).toBeGreaterThan(500);
+    expect(await h.seq.step(APP)).toBe("driven");
+    expect(h.log.steps()).toEqual(
+      expect.arrayContaining(["stop_then_start:closing_blue"])
+    );
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("closed");
+  });
+
+  it("task.5409 LAST_RESORT_STOP: at the park limit, a refusal naming blue as the only screened bidder still gets ONE stop-then-start", async () => {
+    const h = harness({ maxFailedAttempts: 2 });
+    const blue = await failedTryOnP(h, "provider-1"); // attempt 1 failed proof on P
+    expect(await h.seq.step(APP)).toBe("driven"); // attempt 2 refused: blue is the only screened bidder
+    // Two consecutive failures == the limit. Before task.5409 this tick parked and blue never moved.
+    await h.seq.step(APP);
+    expect(h.log.steps()).toEqual(
+      expect.arrayContaining(["stop_then_start:closing_blue"])
+    );
+    expect(h.log.alerts()).not.toContain("release_parked");
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("closed");
+  });
+
+  it("task.5409 LAST_RESORT_STOP: at the park limit with blue's provider no longer admitted, the release parks and nothing is created", async () => {
+    const h = harness({ maxFailedAttempts: 2, appProviders: ["provider-9"] });
+    const blue = await failedTryOnP(h, "provider-1");
+    expect(await h.seq.step(APP)).toBe("driven"); // attempt 2 refused, blue is the only screened bidder
+    const before = (await h.store.attemptsFor(APP)).length;
+    expect(await h.seq.step(APP)).toBe("parked");
+    expect((await h.store.attemptsFor(APP)).length).toBe(before);
+    expect(
+      h.log.steps().some((st) => st.startsWith("stop_then_start:closing"))
+    ).toBe(false);
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("active");
+  });
+
   it("second release on a single-provider lane: blue closed (confirmed), then green on the same provider, active", async () => {
     const h = harness();
     singleProvider(h);
@@ -1671,7 +1715,7 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
     ]);
   });
 
-  it("a roster cut off by the actuator payer's 400-char truncation still names blue", async () => {
+  it("a roster cut off by a truncation (e.g. the old 400-char payer cap) still names blue", async () => {
     const h = harness();
     await stateUp(h); // provider-1
     await deployApp(h, SHA_1); // blue on provider-2
@@ -1679,7 +1723,7 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
       { length: 20 },
       (_, i) => `provider-x${i} DE 1.00 not_allowlisted`
     ).join(", ");
-    // Same shape as actuator-payer.adapter.ts: `actuator <path> -> HTTP <s> <code>: <message>`.slice(0, 400)
+    // Shape of the pre-task.5409 payer: `actuator <path> -> HTTP <s> <code>: <message>`.slice(0, 400)
     const truncated =
       `actuator /v1/create -> HTTP 422 provider_rejected: ${refusal(
         "not_allowlisted=20, already_tried=2",
