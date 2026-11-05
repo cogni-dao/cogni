@@ -337,7 +337,8 @@ export class NodeDeploySequencer {
     // retired, so the predicate is false and a further failure parks as usual.
     const lastResort =
       failures === this.d.config.maxFailedAttempts &&
-      (await this.stopThenStartEligible(key, release, ofRelease, active));
+      (await this.stopThenStartVerdict(key, release, ofRelease, active)) ===
+        "eligible";
     if (failures >= this.d.config.maxFailedAttempts && !lastResort) {
       // Attached to the release's newest attempt so the park is a durable step on its timeline:
       // `release-view` reads `alert/release_parked` as the sequencer's own verdict.
@@ -404,39 +405,17 @@ export class NodeDeploySequencer {
    *    again until this release (or a newer one) serves. If green then fails, the normal park applies.
    * Never for a first release (no blue) or a lane where another provider passed screening.
    */
-  /** The read-only half of stop-then-start: true when blue may be closed so green can take its provider. */
-  private async stopThenStartEligible(
+  /**
+   * The read-only half of stop-then-start: `eligible` when blue may be closed so green can take its provider,
+   * `not_admitted` when blue's provider is the only screened bidder but is no longer admitted (closing blue would
+   * trade a live node for a dead one), `none` otherwise. ONE predicate for both the park-limit decision and the act.
+   */
+  private async stopThenStartVerdict(
     key: WorkloadKey,
     release: ReleaseRow,
     ofRelease: readonly AttemptRow[],
     blue: AttemptRow | undefined
-  ): Promise<boolean> {
-    if (release.spec.kind !== "app") return false;
-    if (!blue?.provider || !blue.externalName || blue.releaseId === release.id)
-      return false;
-    const newest = ofRelease[0];
-    if (newest?.phase !== "failed") return false;
-    const stateExcluded = await this.excludedProviders(key, release, undefined);
-    if (stateExcluded.includes(blue.provider)) return false;
-    const others = await this.excludedProviders(key, release, undefined, true);
-    if (
-      !blueWasOnlyScreenedBidder(
-        newest.error,
-        blue.provider,
-        others.length === 0
-      )
-    )
-      return false;
-    const blueRelease = await this.d.store.getRelease(blue.releaseId);
-    return blueRelease?.spec.kind === "app";
-  }
-
-  private async stopThenStart(
-    key: WorkloadKey,
-    release: ReleaseRow,
-    ofRelease: readonly AttemptRow[],
-    blue: AttemptRow | undefined
-  ): Promise<"none" | "stopped" | "unconfirmed"> {
+  ): Promise<"eligible" | "not_admitted" | "none"> {
     if (release.spec.kind !== "app") return "none";
     if (!blue?.provider || !blue.externalName || blue.releaseId === release.id)
       return "none";
@@ -446,8 +425,8 @@ export class NodeDeploySequencer {
     // HAIRPIN_RULE still holds: if blue's provider also hosts a bound state lease, reopening it is useless.
     if (stateExcluded.includes(blue.provider)) return "none";
     // What the refused create excluded besides blue: bound state providers AND this release's failed-after-
-    // bind tries (same flag the create used, bug.5569). Only when that is empty was `already_tried>=1` blue's;
-    // otherwise the roster must name blue itself, so a failed try's provider can never close blue.
+    // bind tries (bug.5569). Only when that is empty was `already_tried>=1` blue's; otherwise the roster must
+    // name blue itself, so a failed try's provider can never close blue.
     const others = await this.excludedProviders(key, release, undefined, true);
     if (
       !blueWasOnlyScreenedBidder(
@@ -460,18 +439,39 @@ export class NodeDeploySequencer {
     // Only an app blue is ever stopped.
     const blueRelease = await this.d.store.getRelease(blue.releaseId);
     if (blueRelease?.spec.kind !== "app") return "none";
-    // Blue's provider must still be admitted, or closing blue only trades a live node for a dead one.
     const admitted = (this.d.config.appProviders ?? []).slice(
       0,
       MAX_ALLOWED_PROVIDERS
     );
-    if (admitted.length > 0 && !admitted.includes(blue.provider)) {
+    if (admitted.length > 0 && !admitted.includes(blue.provider))
+      return "not_admitted";
+    return "eligible";
+  }
+
+  private async stopThenStart(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    ofRelease: readonly AttemptRow[],
+    blue: AttemptRow | undefined
+  ): Promise<"none" | "stopped" | "unconfirmed"> {
+    const verdict = await this.stopThenStartVerdict(
+      key,
+      release,
+      ofRelease,
+      blue
+    );
+    if (verdict === "none" || !blue?.provider || !blue.externalName)
+      return "none";
+    const newest = ofRelease[0] as AttemptRow;
+    if (verdict === "not_admitted") {
       await this.alert(key, release, newest, "stop_then_start_refused", {
         provider: blue.provider,
         reason: `blue provider ${blue.provider} is no longer admitted (appProviders); blue kept, no stop`,
       });
       return "none";
     }
+    const blueRelease = await this.d.store.getRelease(blue.releaseId);
+    if (!blueRelease) return "none";
 
     const reason = `blue provider ${blue.provider} is the only bidder that passes screening; closing blue ${blue.externalName} before green (accepted downtime)`;
     await this.emit(key, release, newest, "stop_then_start", "closing_blue", {

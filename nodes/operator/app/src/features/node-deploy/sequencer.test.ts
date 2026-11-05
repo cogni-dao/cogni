@@ -1557,6 +1557,19 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
     expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("closed");
   });
 
+  it("task.5409 LAST_RESORT_STOP: at the park limit with blue's provider no longer admitted, the release parks and nothing is created", async () => {
+    const h = harness({ maxFailedAttempts: 2, appProviders: ["provider-9"] });
+    const blue = await failedTryOnP(h, "provider-1");
+    expect(await h.seq.step(APP)).toBe("driven"); // attempt 2 refused, blue is the only screened bidder
+    const before = (await h.store.attemptsFor(APP)).length;
+    expect(await h.seq.step(APP)).toBe("parked");
+    expect((await h.store.attemptsFor(APP)).length).toBe(before);
+    expect(
+      h.log.steps().some((st) => st.startsWith("stop_then_start:closing"))
+    ).toBe(false);
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("active");
+  });
+
   it("second release on a single-provider lane: blue closed (confirmed), then green on the same provider, active", async () => {
     const h = harness();
     singleProvider(h);

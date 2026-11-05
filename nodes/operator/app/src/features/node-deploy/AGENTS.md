@@ -64,7 +64,7 @@ A node developer has THREE views of one deploy. They are written by the same cod
    - `elapsedMs` (ms since the attempt row was created) rides on every attempt step; `step=activated` also carries `leadTimeMs` (release recorded to serving). Grafana unwraps both.
 2. **Release state (derived, never stored).** `deriveReleaseTimeline` computes `releaseState` from attempt phases on every read:
    - `queued` — no attempt yet · `deploying` — an attempt is mid-flight, or a failed lease is still closing
-   - `active` — an attempt of the release serves · `parked` — 3 consecutive failed attempts, no paid create until a NEW release (`parkedReason` names the count and the last error)
+   - `active` — an attempt of the release serves · `parked` — the sequencer's own `release_parked` verdict after 3 consecutive failed attempts, no paid create until a NEW release (`parkedReason` names the count and the last error). At the limit, a refusal showing blue as the only screened bidder first gets ONE stop-then-start (LAST_RESORT_STOP, task.5409)
    - `failed` — newest attempt failed or its live lease was lost, fewer than 3 failures (retry pending)
    - `superseded` — the desired row points at a newer release (`activatedAt` says if this one ever served). `serving: true` says it STILL backs the live lease; the workload list also returns `servingReleaseId`.
    - The sequencer's `alert/release_parked` step (persisted on the release's newest attempt) is the park verdict: it makes the release `parked` even while its third attempt is still `closing`.
