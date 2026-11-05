@@ -3,7 +3,9 @@
 # SPDX-FileCopyrightText: 2026 Cogni-DAO
 """Bounded native lock, crash-journal, receipt-CAS and gateway-resume contracts."""
 import copy
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -11,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -27,6 +30,7 @@ receipt = load('runtime-recovery-receipt')
 gateway = load('gateway-activation-host')
 installer = load('runtime-guard-install')
 recovery = load('runtime-recovery-host')
+gateway_install = load('gateway-install-host')
 ID = 'b9d19a15-95f9-41b4-bcf5-cd56142c0eb2'
 OTHER_ID = '36d7c53d-3a41-4e5d-b44d-cf5fbedbfb24'
 
@@ -36,12 +40,102 @@ class NativeContracts(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         for module in (guard, gateway.guard, receipt, gateway.receipt, installer, installer.guard, installer.receipt,
-                       recovery.guard, recovery.receipt):
+                       recovery.guard, recovery.receipt, gateway_install.guard, gateway_install.receipt):
             self.enterContext(patch.object(module, 'OWNER_UID', os.geteuid()))
         self.enterContext(patch.object(guard, 'ROOT', self.root / 'guard'))
         self.enterContext(patch.object(receipt, 'RECEIPT', self.root / 'receipt.json'))
         self.enterContext(patch.object(installer.guard, 'ROOT', guard.ROOT))
         self.enterContext(patch.object(recovery.guard, 'ROOT', guard.ROOT))
+        self.enterContext(patch.object(gateway_install.guard, 'ROOT', guard.ROOT))
+
+    def enrollment(self, qualification='merged', source='a', floor='a', revision='1'):
+        stage = self.root / 'staged-library'
+        stage.mkdir(exist_ok=True)
+        for name in gateway_install.FILES:
+            (stage / name).write_text(name + revision)
+        return {'protocolVersion': 1, 'maintenanceEnabled': True, 'sourceQualification': qualification,
+                'env': 'candidate-a', 'custodian': {'owner': 'cogni-dao', 'repo': 'cogni', 'controlEnv': 'production'},
+                'implementationSha': source * 40, 'minimumSourceSha': floor * 40,
+                'coreSha256': receipt.digest(('core' + revision).encode()),
+                'runnerSha256': receipt.digest(('runner' + revision).encode()),
+                'blobs': {name: receipt.digest((stage / name).read_bytes()) for name in gateway_install.FILES},
+                'inventorySha256': 'e' * 64, 'operationId': ID}
+
+    def enroll(self, manifest):
+        env, machine = self.root / 'runtime.env', self.root / 'machine-id'
+        env.write_text('DEPLOY_ENVIRONMENT=candidate-a\n')
+        machine.write_text('fixture-machine')
+        stage = self.root / 'staged-library'
+        def installed(source, operation):
+            target = guard.ROOT / 'lib'
+            guard.private_directory(target)
+            for name in gateway_install.FILES:
+                receipt.atomic(target / name, (stage / name).read_bytes())
+            return {'blobs': manifest['blobs']}
+        with patch.object(gateway_install, 'LIB', stage), \
+             patch.object(gateway_install, 'Path', side_effect=lambda path: {
+                 '/opt/cogni-template-runtime/.env': env, '/etc/machine-id': machine}[path]), \
+             patch.object(sys, 'argv', ['gateway-install-host.py', 'install']), \
+             patch.object(sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(json.dumps(manifest).encode()))), \
+             patch.object(gateway_install.subprocess, 'check_output', return_value=b'{"metadata":{"uid":"fixture-cluster"}}'), \
+             patch.object(gateway_install.installer, 'install', side_effect=installed) as effect, \
+             patch.dict(os.environ), contextlib.redirect_stdout(io.StringIO()) as output:
+            os.environ.pop('COGNI_RUNTIME_GUARD_FD', None)
+            gateway_install.main()
+            return json.loads(output.getvalue()), effect.call_count
+
+    def test_premerge_enrollment_transfers_identical_inputs_once_to_merged(self):
+        self.enroll(self.enrollment('premerge'))
+        self.journal('activated')
+        observed, effects = self.enroll(self.enrollment('merged', source='b', floor='b'))
+        self.assertEqual(observed['state'], 'guard_enrolled')
+        self.assertEqual(effects, 1)
+        source = json.loads((guard.ROOT / 'source.json').read_text())
+        self.assertEqual(source['sourceQualification'], 'merged')
+        with self.assertRaisesRegex(RuntimeError, 'gateway_guard_enrollment_refused'):
+            self.enroll(self.enrollment('premerge', source='b', floor='b'))
+
+    def test_premerge_transfer_refuses_changed_implementation_inputs(self):
+        self.enroll(self.enrollment('premerge'))
+        self.journal('activated')
+        previous = (guard.ROOT / 'source.json').read_bytes()
+        for field in ('coreSha256', 'runnerSha256', 'blobs'):
+            with self.subTest(field=field):
+                manifest = self.enrollment('merged', source='b', floor='b')
+                if field == 'blobs':
+                    name = gateway_install.FILES[0]
+                    (self.root / 'staged-library' / name).write_text('changed helper')
+                    manifest['blobs'][name] = receipt.digest(b'changed helper')
+                else:
+                    manifest[field] = 'f' * 64
+                with self.assertRaisesRegex(RuntimeError, 'gateway_guard_enrollment_refused'):
+                    self.enroll(manifest)
+                self.assertEqual((guard.ROOT / 'source.json').read_bytes(), previous)
+
+    def test_completed_merged_floor_accepts_a_new_qualified_implementation(self):
+        self.enroll(self.enrollment('merged'))
+        self.journal('activated')
+        manifest = self.enrollment('merged', source='b', revision='2')
+        manifest['operationId'] = OTHER_ID
+        observed, effects = self.enroll(manifest)
+        self.assertEqual(observed['implementationSha'], 'b' * 40)
+        self.assertEqual(effects, 1)
+        source = json.loads((guard.ROOT / 'source.json').read_text())
+        self.assertEqual(source['minimumSourceSha'], 'a' * 40)
+        self.assertEqual(source['coreSha256'], receipt.digest(b'core2'))
+
+    def test_pending_enrollment_preserves_inputs_and_allows_only_original_resume(self):
+        original = self.enrollment('merged')
+        self.enroll(original)
+        self.journal('prepared')
+        previous = (guard.ROOT / 'source.json').read_bytes()
+        with self.assertRaisesRegex(RuntimeError, 'gateway_guard_enrollment_refused'):
+            self.enroll(self.enrollment('merged', source='b', revision='2'))
+        self.assertEqual((guard.ROOT / 'source.json').read_bytes(), previous)
+        self.enrollment('merged')  # Restore the staged original helper inputs.
+        observed, effects = self.enroll(original)
+        self.assertEqual(observed['state'], 'guard_retained_for_resume')
+        self.assertEqual(effects, 0)
 
     def journal(self, state):
         directory = guard.ROOT / 'operations' / ID
@@ -445,6 +539,85 @@ with m.guard.RuntimeGuard(sys.argv[4]) as guard:
                 effect.assert_not_called()
                 with guard.RuntimeGuard(OTHER_ID):
                     pass
+
+    def test_conflict_compensation_resumes_after_decision_render_or_native_loss(self):
+        for reason in ('gateway_binding_superseded', 'gateway_app_changed'):
+            for boundary in ('after_decision', 'after_render', 'after_native'):
+                with self.subTest(reason=reason, boundary=boundary):
+                    host = self.host('receipt_commit_started')
+                    host.directory = guard.ROOT / 'operations' / ID
+                    guard.private_directory(host.directory)
+                    host.path = host.directory / 'operation.json'
+                    env = self.root / 'compensation.env'
+                    live = self.root / 'compensation-receipt.json'
+                    old, desired = b'OPENROUTER_API_KEY=sk-old-fixture\n', b'OPENROUTER_API_KEY=sk-new-fixture\n'
+                    prior = receipt.canonical(receipt.seal(self.core())) + b'\n'
+                    changed = self.core()
+                    changed['completedAt'] = '2026-11-05T00:00:00Z'
+                    current = receipt.canonical(receipt.seal(changed)) + b'\n'
+                    self.enterContext(patch.object(gateway, 'ENV_FILE', env))
+                    self.enterContext(patch.object(gateway.receipt, 'RECEIPT', live))
+                    for path, data in [(env, desired), (live, current), (host.directory / 'before.env', old),
+                                       (host.directory / 'before-receipt.json', prior)]:
+                        receipt.atomic(path, data)
+                    host.journal.update({'version': 1, 'operationId': ID, 'appSha': 'a' * 40,
+                                         'appImages': ['prior-app'], 'imageId': 'sha256:' + 'e' * 64,
+                                         'untouchedRuntime': {}, 'beforeEnvSha256': receipt.digest(old),
+                                         'desiredEnvSha256': receipt.digest(desired),
+                                         'beforeReceiptSha256': receipt.digest(prior),
+                                         'desiredReceiptSha256': receipt.digest(current),
+                                         'projection': {'keySha256': 'b' * 64, 'uid': 'projection', 'resourceVersion': '2'}})
+                    state = {'key': 'b' * 64, 'cut': False}
+                    def interrupt(at):
+                        if boundary == at and not state['cut']:
+                            state['cut'] = True
+                            raise ConnectionError('lost caller')
+                    original_save, original_atomic = host.save, gateway.atomic
+                    def save(phase):
+                        original_save(phase)
+                        interrupt('after_decision')
+                    def atomic(path, data):
+                        original_atomic(path, data)
+                        if path == env and data == old:
+                            interrupt('after_render')
+                    def recreate(*args, **kwargs):
+                        state['key'] = 'a' * 64
+                        interrupt('after_native')
+                    app_changed = reason == 'gateway_app_changed'
+                    def preserved(check_app=True):
+                        if check_app and app_changed:
+                            raise gateway.GatewayConflict('gateway_app_changed')
+                    self.enterContext(patch.object(host, 'preserved', side_effect=preserved))
+                    self.enterContext(patch.object(host, 'gateway_matches', side_effect=lambda key: key == state['key']))
+                    self.enterContext(patch.object(gateway, 'wait_gateway'))
+                    self.enterContext(patch.object(gateway, 'app_images', return_value=['new-app'] if app_changed else ['prior-app']))
+                    self.enterContext(patch.object(gateway, 'app_sha', return_value=('b' if app_changed else 'a') * 40))
+                    effect = self.enterContext(patch.object(gateway, 'run', side_effect=recreate))
+                    host.save('receipt_commit_started')
+                    with patch.object(host, 'save', side_effect=save), patch.object(gateway, 'atomic', side_effect=atomic):
+                        with guard.RuntimeGuard(ID), self.assertRaises(ConnectionError):
+                            host.reconcile_conflict(reason)
+                    host.journal = json.loads(host.path.read_text())
+                    self.assertEqual(host.journal['state'], 'rollback_started')
+                    self.assertEqual(host.step('observe')['failure'], reason)
+                    with self.assertRaisesRegex(guard.GuardError, 'reconcile_required'):
+                        with guard.RuntimeGuard(wait_seconds=0):
+                            pass
+                    with guard.RuntimeGuard(ID):
+                        observed = host.step('rollback')
+                    self.assertEqual(observed['phase'], 'rolled_back')
+                    self.assertEqual(observed['failure'], reason)
+                    self.assertEqual(observed['evidence']['appPreserved'], not app_changed)
+                    self.assertEqual(env.read_bytes(), old)
+                    self.assertEqual(live.read_bytes(), prior)
+                    self.assertEqual(effect.call_count, 1)
+                    self.assertEqual(effect.call_args.args[0][-1], 'litellm')
+                    self.assertIn('--no-deps', effect.call_args.args[0])
+                    with guard.RuntimeGuard(ID):
+                        self.assertTrue(host.step('observe')['noChanges'])
+                    self.assertEqual(effect.call_count, 1)
+                    with guard.RuntimeGuard(OTHER_ID):
+                        pass
 
     def test_provider_render_replaces_one_line_and_preserves_unrelated_bytes(self):
         raw = b'# comment\nOTHER=untouched\nOPENROUTER_API_KEY=sk-old-fixture\nTRAILING=kept\n'

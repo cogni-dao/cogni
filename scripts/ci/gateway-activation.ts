@@ -285,6 +285,7 @@ function enroll(
   const manifest = {
     protocolVersion: 1,
     maintenanceEnabled: enable,
+    sourceQualification: bootstrap ? "premerge" : "merged",
     env: intent.env,
     custodian: intent.custodian,
     operationId: intent.operationId,

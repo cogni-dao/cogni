@@ -37,12 +37,15 @@ def main():
     raw = sys.stdin.buffer.read(16385)
     require(len(raw) <= 16384)
     manifest = json.loads(raw)
-    require(set(manifest) == {'protocolVersion', 'maintenanceEnabled', 'env', 'custodian', 'implementationSha',
+    require(set(manifest) == {'protocolVersion', 'maintenanceEnabled', 'sourceQualification', 'env', 'custodian', 'implementationSha',
                               'minimumSourceSha', 'coreSha256', 'runnerSha256', 'blobs', 'inventorySha256', 'operationId'})
     operation_id = manifest.pop('operationId')
     require(re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', operation_id))
     require(manifest['protocolVersion'] == 1 and isinstance(manifest['maintenanceEnabled'], bool))
     require(manifest['env'] in ('candidate-a', 'preview', 'production'))
+    require(manifest['sourceQualification'] in ('premerge', 'merged'))
+    require(manifest['sourceQualification'] != 'premerge' or
+            (manifest['env'] == 'candidate-a' and manifest['minimumSourceSha'] == manifest['implementationSha']))
     require(manifest['custodian']['owner'].lower() == 'cogni-dao' and manifest['custodian']['repo'].lower() == 'cogni'
             and manifest['custodian']['controlEnv'] == 'production')
     for key in ('implementationSha', 'minimumSourceSha'):
@@ -67,10 +70,12 @@ def main():
             previous = json.loads(guard.private_read(previous_path))
             require(previous['machineId'] == manifest['machineId'] and previous['clusterUid'] == manifest['clusterUid'])
             require(previous['env'] == manifest['env'] and previous['custodian'] == manifest['custodian'])
+            require(previous.get('sourceQualification') in ('premerge', 'merged'))
+            require(previous['sourceQualification'] != 'merged' or manifest['sourceQualification'] == 'merged')
             pending_directory = guard.ROOT / 'operations' / operation_id
             pending = pending_directory / 'operation.json'
             if pending_directory.exists() and (not pending.exists() or json.loads(guard.private_read(pending))['state'] not in guard.TERMINAL):
-                for key in ('implementationSha', 'minimumSourceSha', 'blobs', 'coreSha256', 'runnerSha256'):
+                for key in ('sourceQualification', 'implementationSha', 'minimumSourceSha', 'blobs', 'coreSha256', 'runnerSha256'):
                     require(previous[key] == manifest[key])
                 for name in FILES:
                     require(hashlib.sha256((target / name).read_bytes()).hexdigest() == previous['blobs'][name])
@@ -78,7 +83,7 @@ def main():
                 return
             # A premerge qualification becomes a merged floor only for identical
             # implementation inputs, including the pure shared policy.
-            if previous.get('minimumSourceSha') == previous.get('implementationSha'):
+            if previous['sourceQualification'] == 'premerge' and manifest['sourceQualification'] == 'merged':
                 require(previous['blobs'] == manifest['blobs'] and previous['coreSha256'] == manifest['coreSha256']
                         and previous['runnerSha256'] == manifest['runnerSha256'])
         # Nested installation reuses the inherited lock description. It installs

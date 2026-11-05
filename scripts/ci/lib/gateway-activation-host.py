@@ -515,7 +515,9 @@ class Host:
         require(reason in ('gateway_binding_superseded', 'gateway_app_changed'), 'gateway_conflict_not_reconcilable')
         require(self.journal is not None and self.journal['state'] not in TERMINAL, 'gateway_conflict_not_pending')
         self.journal['resolutionReason'] = reason
-        self.save(self.journal['state'])
+        # Persist the compensation decision with its diagnostic in ONE write.
+        # A lost caller must resume rollback, not try activation or stop forever.
+        self.save('rollback_started')
         self.rollback()
         return self.observation(reason)
 

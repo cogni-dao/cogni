@@ -171,6 +171,13 @@ export async function activateGateway(
       state.phase === "conflict"
     )
       return state;
+    // The journal authorizes continuation of an already selected compensation.
+    // Its original diagnostic must not strand recovery after caller loss.
+    if (state.phase === "rollback_started") {
+      if (action === "rollback" && state.failure) return state;
+      action = "rollback";
+      continue;
+    }
     if (state.failure) {
       if (action === "rollback") return state;
       if (state.failure !== "gateway_unhealthy") return state;

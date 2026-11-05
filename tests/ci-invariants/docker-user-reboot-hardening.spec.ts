@@ -94,7 +94,13 @@ describe("DOCKER-USER hardening survives reboot (story.5084)", () => {
 
   it("installs the unit on existing VMs through deploy-infra", () => {
     expect(deployInfra).toContain(
-      `"$REPO_ROOT/${HARDENER_PATH}" \\\n  "root@\${VM_HOST}:\${REMOTE_HARDEN_SCRIPT}"`
+      `"$REPO_ROOT/${HARDENER_PATH}" "root@$VM_HOST:$REMOTE_STAGE/hardener.sh"`
+    );
+    expect(deployInfra).toContain(
+      'install -m 600 "$stage/hardener.sh" "$REMOTE_HARDEN_SCRIPT"'
+    );
+    expect(deployInfra).toContain(
+      "runtime-maintenance-guard.py' exec bash '$REMOTE_STAGE/publish-runtime.sh'"
     );
     expect(deployInfra).toContain(
       'STAGED_ALLOWLIST="$REMOTE_COMPUTE_EGRESS_ALLOWLIST" bash "$REMOTE_HARDEN_SCRIPT"'

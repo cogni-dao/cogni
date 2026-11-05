@@ -167,6 +167,22 @@ describe("gateway operation ownership", () => {
 });
 
 describe("interrupted gateway activation", () => {
+  it.each([
+    "gateway_binding_superseded",
+    "gateway_app_changed",
+  ])("resumes durable compensation despite its saved %s diagnostic", async (failure) => {
+    const h = host([
+      observation("rollback_started", { failure }),
+      observation("rolled_back", { failure }),
+    ]);
+    expect((await activateGateway(intent, h)).phase).toBe("rolled_back");
+    expect(h.calls).toEqual(["observe", "rollback"]);
+    const retry = host([
+      observation("rolled_back", { failure, noChanges: true }),
+    ]);
+    expect((await activateGateway(intent, retry)).noChanges).toBe(true);
+    expect(retry.calls).toEqual(["observe"]);
+  });
   it("leaves an unhealthy rollback pending after one compensation attempt", async () => {
     const h = host([
       observation("recreate_started"),
