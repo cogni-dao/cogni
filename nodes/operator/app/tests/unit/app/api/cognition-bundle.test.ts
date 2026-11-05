@@ -321,9 +321,10 @@ describe("renderBundleMarkdown", () => {
     // Placeholders are brace-form so the ONLY angle brackets are real tags —
     // an angle-bracket placeholder (<PR>) would collide with the tag grammar.
     expect(g).not.toMatch(/<(PR|candidate|target|node)>/);
-    // (2)/(3) flight + deploy: /version.buildSha is the ground-truth verdict.
+    // (2)/(3) flight + deploy: follow the release/run to its end, then ONE .buildSha read (task.5420).
     expect(g).toContain(".buildSha");
-    expect(g).toContain("only ground truth");
+    expect(g).toContain("/api/v1/deploy/workloads/releases/{releaseId}");
+    expect(g).toContain("Never poll /version");
     // Terse by contract: the whole block must stay short enough to recall.
     expect(g.length).toBeLessThan(1000);
     // The render actually inlines it under a discoverable header.
