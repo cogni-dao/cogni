@@ -1012,27 +1012,32 @@ grep -q 'created=0 ' "$TMPROOT/out-foreign-repeat.txt"
 # Both an existing divergent target and a runner value are forbidden substitutes.
 mv "$BAO_ROOT/cogni/candidate-a/operator/SCHEDULER_API_TOKEN" "$TMPROOT/lane-scheduler"
 for receiver in existing cold; do
-  if [[ "$receiver" == cold ]]; then rm "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"; fi
+  if [[ "$receiver" == cold ]]; then mv "$BAO_ROOT/cogni/candidate-a/node-template" "$TMPROOT/saved-receiver"; fi
   : > "$TMPROOT/inheritance-writes"
   if run_foreign_inheritance SCHEDULER_API_TOKEN=runner-scheduler-fixture > "$TMPROOT/out-missing-$receiver.txt" 2>&1; then
     echo "missing lane owner accepted for $receiver receiver" >&2; exit 1
   fi
+  grep -q 'declared owner operator/SCHEDULER_API_TOKEN is absent' "$TMPROOT/out-missing-$receiver.txt"
   [[ ! -s "$TMPROOT/inheritance-writes" ]] || { echo 'missing lane owner caused a write' >&2; exit 1; }
+  if [[ "$receiver" == cold ]]; then mv "$TMPROOT/saved-receiver" "$BAO_ROOT/cogni/candidate-a/node-template"; fi
 done
 mv "$TMPROOT/lane-scheduler" "$BAO_ROOT/cogni/candidate-a/operator/SCHEDULER_API_TOKEN"
 for receiver in existing cold; do
   if [[ "$receiver" == existing ]]; then
     printf '%s' stale-scheduler-fixture > "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
   else
-    rm -f "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
+    mv "$BAO_ROOT/cogni/candidate-a/node-template" "$TMPROOT/saved-receiver"
   fi
   : > "$TMPROOT/inheritance-writes"
   if run_foreign_inheritance FAKE_OWNER_DENIED=1 SCHEDULER_API_TOKEN=runner-scheduler-fixture > "$TMPROOT/out-denied-$receiver.txt" 2>&1; then
     echo "denied lane owner accepted for $receiver receiver" >&2; exit 1
   fi
+  grep -q 'unavailable reading cogni/candidate-a/operator' "$TMPROOT/out-denied-$receiver.txt"
   [[ ! -s "$TMPROOT/inheritance-writes" ]] || { echo 'denied lane owner caused a write' >&2; exit 1; }
+  if [[ "$receiver" == cold ]]; then mv "$TMPROOT/saved-receiver" "$BAO_ROOT/cogni/candidate-a/node-template"; fi
 done
-# A cold receiver takes the qualified lane key, then converges without writes.
+# A receiver missing the field takes the qualified lane key.
+rm -f "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
 run_foreign_inheritance > "$TMPROOT/out-foreign-cold.txt"
 cmp "$BAO_ROOT/cogni/candidate-a/operator/SCHEDULER_API_TOKEN" "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
 echo "PASS: candidate scheduler follows its lane, control siblings stay controlled, missing/denied owners fail closed"
