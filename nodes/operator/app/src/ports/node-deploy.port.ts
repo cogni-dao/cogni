@@ -334,10 +334,21 @@ export interface DnsRecordInput {
 
 /** Cloudflare zone records. Deliberately NO delete (NO_DNS_DELETE). */
 export interface DnsRecordsPort {
+  /** Bound native zone ID must name this zone. Read access proves no edit permission. */
+  assertZoneIdentity(zoneName: string): Promise<void>;
   findByName(name: string): Promise<readonly DnsRecord[]>;
   create(input: DnsRecordInput): Promise<DnsRecord>;
   update(id: string, input: DnsRecordInput): Promise<DnsRecord>;
   read(id: string): Promise<DnsRecord>;
+}
+
+export class DnsZoneIdentityError extends Error {
+  constructor(
+    readonly code: "zone_identity_unavailable" | "zone_identity_mismatch"
+  ) {
+    super(code);
+    this.name = "DnsZoneIdentityError";
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

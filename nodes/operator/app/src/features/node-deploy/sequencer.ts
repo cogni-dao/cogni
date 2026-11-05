@@ -71,9 +71,15 @@ import {
   type ReleaseRow,
   type WorkloadKey,
 } from "@/ports";
+import { isFleetOwnedRow } from "@/shared/node-registry/fleet-ownership";
 import { selectReleaseBundle } from "./artifact-selection";
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
-import { type EdgeRouter, hostOwnedBy, workerHostRefusal } from "./edge";
+import {
+  type EdgeRouter,
+  HOST_ENVS,
+  hostOwnedBy,
+  workerHostRefusal,
+} from "./edge";
 import { nodeAppEnv, nodeAppSecretKeys, workerEnv } from "./node-app-env";
 import { nodeCatalogPolicy } from "./node-catalog-policy";
 import {
@@ -364,9 +370,29 @@ export class NodeDeploySequencer {
       throw error;
     }
 
+    const allocateAttempt = () =>
+      this.d.store.insertAttempt(release.id, (n) =>
+        buildCogniKey({
+          namespace: this.d.config.namespace,
+          nodeId: key.nodeId,
+          workload: key.workload,
+          releaseId: release.id,
+          attempt: n,
+        })
+      );
+    try {
+      await this.assertNewAppHost(key, deployable);
+    } catch (error) {
+      const refused = await allocateAttempt();
+      await this.emit(key, release, refused, "attempt_planned", "ok", {
+        blue: active?.externalName,
+      });
+      await this.failAttempt(key, deployable, refused, errText(error));
+      return "driven";
+    }
+    let blue = active;
     // STOP_THEN_START (task.5409): blue's provider was the only bidder that could pass screening, so a
     // green beside blue can never be placed. Close blue first (accepted downtime), then create.
-    let blue = active;
     // A useful-work capability requires blue to survive failed or unknown qualification.
     const stop = release.spec.health?.qualification
       ? "none"
@@ -374,15 +400,7 @@ export class NodeDeploySequencer {
     if (stop === "unconfirmed") return "close_pending";
     if (stop === "stopped") blue = undefined;
 
-    const attempt = await this.d.store.insertAttempt(release.id, (n) =>
-      buildCogniKey({
-        namespace: this.d.config.namespace,
-        nodeId: key.nodeId,
-        workload: key.workload,
-        releaseId: release.id,
-        attempt: n,
-      })
-    );
+    const attempt = await allocateAttempt();
     await this.emit(key, release, attempt, "attempt_planned", "ok", {
       blue: blue?.externalName,
     });
@@ -916,6 +934,57 @@ export class NodeDeploySequencer {
     );
   }
 
+  /** New effects use current fleet authority; recorded hosts are never retargeted. */
+  private async assertNewAppHost(
+    key: WorkloadKey,
+    release: ReleaseRow
+  ): Promise<void> {
+    const w = release.spec;
+    const host = publicHostOf(w);
+    if (!host) return;
+    const edge = this.d.edge;
+    if (!edge) throw new Error("edge_not_configured");
+    try {
+      edge.assertHost(host);
+      if (this.d.runtime) {
+        const owner = await this.d.runtime.catalog.entryFor(key.nodeId);
+        const worker = w.runtimeProfile === "worker" ? w.name : undefined;
+        if (
+          !owner ||
+          !isFleetOwnedRow(owner.row, edge.binding.fleetOwner) ||
+          !hostOwnedBy(edge.binding, host, key.env, owner.slug, worker)
+        )
+          throw new Error(
+            `${host} is not the host node ${owner?.slug ?? key.nodeId} may claim in ${key.env}`
+          );
+        const catalogSlugs = await this.d.runtime.catalog.slugs();
+        const refusal =
+          worker === undefined
+            ? undefined
+            : workerHostRefusal({
+                binding: edge.binding,
+                host,
+                env: key.env,
+                slug: owner.slug,
+                workload: worker,
+                catalogSlugs,
+              });
+        if (refusal) throw new Error(refusal);
+        for (const other of catalogSlugs) {
+          if (other === owner.slug) continue;
+          for (const env of HOST_ENVS)
+            if (hostOwnedBy(edge.binding, host, env, other))
+              throw new Error(`${host} belongs to node ${other}`);
+        }
+      }
+    } catch (error) {
+      throw new Error(`edge_host_refused: ${errText(error)}`);
+    }
+    await edge.assertZoneIdentity();
+    // Reuse the existing by-name read: protected or ambiguous native records refuse before payment.
+    await edge.current(host);
+  }
+
   private async doCreate(
     key: WorkloadKey,
     release: ReleaseRow,
@@ -923,62 +992,6 @@ export class NodeDeploySequencer {
     blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
     const w = release.spec;
-    if (publicHostOf(w) && !this.d.edge) {
-      // Refuse BEFORE paying: a lease no edge can ever route to is wasted spend.
-      return this.failAttempt(key, release, attempt, "edge_not_configured");
-    }
-    const declaredHost = publicHostOf(w);
-    if (declaredHost && this.d.edge) {
-      // The edge guard would refuse this host at cutover; refuse it NOW, before a paid create, with
-      // an explicit reason. Three of these park the release, still with zero creates.
-      try {
-        this.d.edge.assertHost(declaredHost);
-      } catch (error) {
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `edge_host_refused: ${errText(error)}`
-        );
-      }
-    }
-    if (declaredHost && this.d.runtime) {
-      // HOST_IS_THE_NODES_OWN: a node may claim only its own host, so node A can never take node B's.
-      const owner = await this.d.runtime.catalog.entryFor(key.nodeId);
-      // Only an operator-lowered repo-spec sibling (a worker) may use `<slug>-<workload>`.
-      const worker = w.runtimeProfile === "worker" ? w.name : undefined;
-      if (!owner || !hostOwnedBy(declaredHost, key.env, owner.slug, worker))
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `edge_host_refused: ${declaredHost} is not the host node ${owner?.slug ?? key.nodeId} may claim in ${key.env}`
-        );
-      const refusal =
-        worker !== undefined && declaredHost !== undefined
-          ? workerHostRefusal({
-              host: declaredHost,
-              env: key.env,
-              slug: owner.slug,
-              workload: worker,
-              catalogSlugs: await this.d.runtime.catalog.slugs(),
-            })
-          : undefined;
-      if (refusal)
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `edge_host_refused: ${refusal}`
-        );
-    }
-    let runtime: ResolvedRuntime;
-    try {
-      runtime = await this.resolveEnv(key, release);
-    } catch (error) {
-      return this.failAttempt(key, release, attempt, errText(error));
-    }
-
     // A refused create (provider_rejected, ...) already ended this key's life: it is never replayed under
     // the same nd: key (the actuator would answer `akash_tx_create_replayed` forever). Fail the attempt;
     // the next attempt gets a new ordinal. If failAttempt had to defer (observe down) we land here again.
@@ -1033,6 +1046,14 @@ export class NodeDeploySequencer {
         attempt,
         release.admissionRefusal.reason
       );
+
+    let runtime: ResolvedRuntime;
+    try {
+      await this.assertNewAppHost(key, release);
+      runtime = await this.resolveEnv(key, release);
+    } catch (error) {
+      return this.failAttempt(key, release, attempt, errText(error));
+    }
 
     // A runner can stop after allocating the attempt. Recheck its accepted set
     // before a new paid call, while leaving ambiguous-call recovery above intact.

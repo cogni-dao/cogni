@@ -343,6 +343,7 @@ export {
   buildCogniKey,
   buildIdentity,
   consecutiveFailures,
+  DnsZoneIdentityError,
   IN_FLIGHT_PHASES,
   keyString,
   MAX_ATTEMPT_STEPS,

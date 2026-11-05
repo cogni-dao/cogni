@@ -76,6 +76,7 @@ import {
   DEFAULT_SEQUENCER_CONFIG,
   NodeDeploySequencer,
 } from "@/features/node-deploy/sequencer";
+import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 
 const LISTEN_PORT = 8080;
 const CREDENTIAL_DIR = "/var/run/secrets/node-deploy-sequencer";
@@ -181,9 +182,29 @@ const probe = new HttpProbe();
 const chain = runtimeEnv.AKASH_CHAIN_OWNER
   ? new AkashChainTruth({ owner: runtimeEnv.AKASH_CHAIN_OWNER })
   : undefined;
+// The org that owns this fleet's nodes' source repos (the canonical fleet is `cogni-dao`). The SAME filter the
+// route applies (`isFleetOwnedRow`): unset admits no remote-source node, so a sequencer that was never told its
+// fleet (the test operator) can never claim a host for a canonical node. story.5137 CD4.
+const fleetOwner = runtimeEnv.NODE_DEPLOY_FLEET_OWNER?.trim() || undefined;
+// One explicit, value-free binding shared by every workload lane. Test config has no production fallback.
+const workloadZone = resolveWorkloadZoneBinding({
+  fleetOwner,
+  zoneName: runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE,
+});
 const dnsRecords =
   cfToken && cfZone
-    ? new CloudflareDnsRecords({ apiToken: cfToken, zoneId: cfZone })
+    ? new CloudflareDnsRecords({
+        binding: workloadZone,
+        apiToken: cfToken,
+        zoneId: cfZone,
+        readCredentials: async () => {
+          const [apiToken, zoneId] = await Promise.all([
+            readCredential("CLOUDFLARE_API_TOKEN"),
+            readCredential("CLOUDFLARE_ZONE_ID"),
+          ]);
+          return { apiToken, zoneId };
+        },
+      })
     : undefined;
 if (!dnsRecords) {
   log.warn(
@@ -192,16 +213,13 @@ if (!dnsRecords) {
   );
 }
 
-// The org that owns this fleet's nodes' source repos (the canonical fleet is `cogni-dao`). The SAME filter the
-// route applies (`isFleetOwnedRow`): unset admits no remote-source node, so a sequencer that was never told its
-// fleet (the test operator) can never claim a host for a canonical node. story.5137 CD4.
-const fleetOwner = runtimeEnv.NODE_DEPLOY_FLEET_OWNER?.trim() || undefined;
 const images = new GhcrBuiltImageResolver();
 
 const laneSequencers = await Promise.all(
   lanes.map(async (lane) => {
     const edgeHostRegex = edgeHostRegexFor(
-      await catalog.nodeDeploySlugs(lane.environment, fleetOwner)
+      await catalog.nodeDeploySlugs(lane.environment, workloadZone.fleetOwner),
+      workloadZone
     );
     log.info(
       {
@@ -219,7 +237,7 @@ const laneSequencers = await Promise.all(
         store,
         payer,
         edge: dnsRecords
-          ? new EdgeRouter(dnsRecords, edgeHostRegex)
+          ? new EdgeRouter(dnsRecords, workloadZone, edgeHostRegex)
           : undefined,
         probe,
         images,

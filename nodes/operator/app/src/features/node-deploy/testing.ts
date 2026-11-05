@@ -38,11 +38,18 @@ import type {
   WorkloadKey,
 } from "@/ports";
 import {
+  DnsZoneIdentityError,
   keyString,
   MAX_ATTEMPT_STEPS,
   PayerError,
   withResolvedImage,
 } from "@/ports";
+import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
+
+export const WORKLOAD_ZONE = resolveWorkloadZoneBinding({
+  fleetOwner: "cogni-dao",
+  zoneName: "cognidao.org",
+});
 
 export const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
 export const ENV = "production";
@@ -433,6 +440,17 @@ export class FakeChain implements ChainTruthPort {
 }
 
 export class FakeDns implements DnsRecordsPort {
+  zoneName = "cognidao.org";
+  zoneUnavailable = false;
+  identityReads = 0;
+  async assertZoneIdentity(zoneName: string): Promise<void> {
+    this.identityReads++;
+    this.events.push("dns.zone_identity");
+    if (this.zoneUnavailable)
+      throw new DnsZoneIdentityError("zone_identity_unavailable");
+    if (zoneName !== this.zoneName)
+      throw new DnsZoneIdentityError("zone_identity_mismatch");
+  }
   readonly records = new Map<string, DnsRecord>();
   readonly ops: string[] = [];
   /** Tamper with the next readback (simulates Cloudflare disagreeing with the write). */

@@ -52,36 +52,15 @@ import {
 import { parse as parseYaml } from "yaml";
 
 import type { NodeWorkloadSpec } from "@/ports";
+import type { WorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
-
-/** Every deployment environment a host can be derived for. */
-export const HOST_ENVS: readonly string[] = [
-  "production",
-  "candidate-a",
-  "preview",
-  "dev",
-];
+import { hostForEnv, hostOwnedBy } from "./edge";
 
 const APP_PROFILE_KEYS: ReadonlySet<string> = new Set(
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS
 );
 
-const ENV_HOST_SUFFIX: Readonly<Record<string, string | undefined>> = {
-  production: undefined,
-  "candidate-a": "test",
-  preview: "preview",
-  dev: "dev",
-};
-
-/** `node-deploy-canary.cognidao.org` -> `node-deploy-canary-test.cognidao.org` for candidate-a. */
-export function hostForEnv(host: string, env: string): string {
-  if (!(env in ENV_HOST_SUFFIX)) throw new Error(`unknown environment ${env}`);
-  const suffix = ENV_HOST_SUFFIX[env];
-  if (!suffix) return host;
-  const dot = host.indexOf(".");
-  if (dot <= 0) throw new Error(`host ${host} has no zone`);
-  return `${host.slice(0, dot)}-${suffix}${host.slice(dot)}`;
-}
+export { HOST_ENVS, hostForEnv } from "./edge";
 
 export type DeclarationErrorCode =
   | "repo_spec_unparseable"
@@ -102,6 +81,8 @@ export class DeclarationError extends Error {
 }
 
 export function resolveWorkloadDeclaration(input: {
+  readonly workloadZone: WorkloadZoneBinding;
+  readonly nodeSlug: string;
   readonly repoSpecText: string;
   readonly manifests: readonly WorkloadManifestFile[];
   readonly nodeId: string;
@@ -164,6 +145,20 @@ export function resolveWorkloadDeclaration(input: {
     );
   // Validate the complete Score/declaration bridge BEFORE the environment cascade.
   for (const workload of workloads) {
+    if (
+      "http" in workload.expose &&
+      !hostOwnedBy(
+        input.workloadZone,
+        workload.expose.http.host,
+        "production",
+        input.nodeSlug,
+        isWorkerService(spec, workload.name) ? workload.name : undefined
+      )
+    )
+      throw new DeclarationError(
+        "workload_manifest_refused",
+        "declaration must name this node's permitted production-form workload host"
+      );
     if (!workload.companions && !workload.health?.qualification) continue;
     const services = extractNodeServices(spec);
     const main = services.find((s) => s.visibility === "public");

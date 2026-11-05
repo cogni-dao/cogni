@@ -8,7 +8,7 @@
  * Scope: Guard + orchestration over `DnsRecordsPort`. Cloudflare HTTP lives in the adapter.
  * Invariants:
  *   - HOST_GUARD: every write names a host matching the configured regex; anything else throws BEFORE
- *     any request. The zone is production. The regex is built from the image catalog
+ *     any request. The zone comes from the fleet binding. The regex is built from the image catalog
  *     (`edgeHostRegexFor`): the operator's canary plus every node whose `compute_api[<env>]` is
  *     `node-deploy`, so no per-node overlay edit is needed (CD1). The bare default is canary-only.
  *   - HOST_IS_THE_NODES_OWN: a release may only claim `hostOwnedBy(host, env, slug, workload)`: the node's own
@@ -28,13 +28,33 @@
  */
 
 import type { DnsRecord, DnsRecordInput, DnsRecordsPort } from "@/ports";
+import type { WorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 
-import { HOST_ENVS, hostForEnv } from "./declarations";
+/** Every deployment environment a host can be derived for. */
+export const HOST_ENVS: readonly string[] = [
+  "production",
+  "candidate-a",
+  "preview",
+  "dev",
+];
 
-export const DEFAULT_EDGE_HOST_REGEX =
-  /^node-deploy-canary(-[a-z]+)?\.cognidao\.org$/;
+const ENV_HOST_SUFFIX: Readonly<Record<string, string | undefined>> = {
+  production: undefined,
+  "candidate-a": "test",
+  preview: "preview",
+  dev: "dev",
+};
 
-const EDGE_ZONE = "cognidao.org";
+/** `node-deploy-canary.cognidao.org` -> `node-deploy-canary-test.cognidao.org` for candidate-a. */
+export function hostForEnv(host: string, env: string): string {
+  if (!(env in ENV_HOST_SUFFIX)) throw new Error(`unknown environment ${env}`);
+  const suffix = ENV_HOST_SUFFIX[env];
+  if (!suffix) return host;
+  const dot = host.indexOf(".");
+  if (dot <= 0) throw new Error(`host ${host} has no zone`);
+  return `${host.slice(0, dot)}-${suffix}${host.slice(dot)}`;
+}
+
 /** The operator's own workload (the canary) lives at this label, not at its slug. */
 const CANARY_LABEL = "node-deploy-canary";
 const OPERATOR_SLUG = "operator";
@@ -43,17 +63,19 @@ const escapeRegex = (s: string): string =>
   s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
- * The guard regex for these node slugs: `^(node-deploy-canary|<slug>...)(-[a-z]+)?\.cognidao\.org$`.
- * `cognidao.org`, `preview.`, `test.` and every other operator host never match (their label is not a
- * listed name).
+ * Build the catalog guard inside the fleet's bound workload zone. Operator and protected names
+ * are also refused by `assertHost`, even if a catalog slug happens to name one.
  */
-export function edgeHostRegexFor(slugs: Iterable<string>): RegExp {
+export function edgeHostRegexFor(
+  slugs: Iterable<string>,
+  binding: WorkloadZoneBinding
+): RegExp {
   const names = [
     CANARY_LABEL,
     ...[...new Set(slugs)].filter((s) => s !== OPERATOR_SLUG).sort(),
   ].map(escapeRegex);
   return new RegExp(
-    `^(${names.join("|")})(-[a-z]+(-[a-z]+)?)?\\.${escapeRegex(EDGE_ZONE)}$`
+    `^(${names.join("|")})(-[a-z]+(-[a-z]+)?)?\\.${escapeRegex(binding.zoneName)}$`
   );
 }
 
@@ -64,6 +86,7 @@ export function edgeHostRegexFor(slugs: Iterable<string>): RegExp {
  * label; a workload never widens it.
  */
 export function hostOwnedBy(
+  binding: WorkloadZoneBinding,
   host: string,
   env: string,
   slug: string,
@@ -76,7 +99,7 @@ export function hostOwnedBy(
       : [label];
   try {
     return labels.some(
-      (l) => host.toLowerCase() === hostForEnv(`${l}.${EDGE_ZONE}`, env)
+      (l) => host.toLowerCase() === hostForEnv(`${l}.${binding.zoneName}`, env)
     );
   } catch {
     return false;
@@ -95,6 +118,7 @@ export function hostOwnedBy(
  *   - this node's own host in another environment is not the host.
  */
 export function workerHostRefusal(input: {
+  readonly binding: WorkloadZoneBinding;
   readonly host: string;
   readonly env: string;
   readonly slug: string;
@@ -109,11 +133,11 @@ export function workerHostRefusal(input: {
   for (const other of input.catalogSlugs) {
     if (other === slug) continue;
     for (const e of HOST_ENVS)
-      if (hostOwnedBy(host, e, other))
+      if (hostOwnedBy(input.binding, host, e, other))
         return `${host} is node ${other}'s host in ${e}`;
   }
   for (const e of HOST_ENVS)
-    if (e !== env && hostOwnedBy(host, e, slug))
+    if (e !== env && hostOwnedBy(input.binding, host, e, slug))
       return `${host} is this node's own host in ${e}`;
   return undefined;
 }
@@ -128,13 +152,29 @@ export class EdgeGuardError extends Error {
 const norm = (s: string): string => s.trim().toLowerCase().replace(/\.$/, "");
 
 export class EdgeRouter {
+  private readonly hostRegex: RegExp;
   constructor(
     private readonly dns: DnsRecordsPort,
-    private readonly hostRegex: RegExp = DEFAULT_EDGE_HOST_REGEX
-  ) {}
+    readonly binding: WorkloadZoneBinding,
+    hostRegex?: RegExp
+  ) {
+    this.hostRegex = hostRegex ?? edgeHostRegexFor([], binding);
+  }
+
+  async assertZoneIdentity(): Promise<void> {
+    await this.dns.assertZoneIdentity(this.binding.zoneName);
+  }
 
   assertHost(host: string): void {
-    if (!this.hostRegex.test(host))
+    const label = host.slice(0, -(this.binding.zoneName.length + 1));
+    if (
+      !host.endsWith(`.${this.binding.zoneName}`) ||
+      !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label) ||
+      /^(?:www|operator|test|preview|dev|mail|smtp|imap|pop|ns[0-9]*)(?:-(?:test|preview|dev))?$/.test(
+        label
+      ) ||
+      !this.hostRegex.test(host)
+    )
       throw new EdgeGuardError(
         `edge guard: refusing DNS name "${host}" (must match ${this.hostRegex})`
       );
@@ -148,12 +188,17 @@ export class EdgeRouter {
       throw new EdgeGuardError(
         `edge guard: ${found.length} records named ${host}; refusing to choose`
       );
+    if (found[0] && ["MX", "NS", "SOA"].includes(found[0].type.toUpperCase()))
+      throw new EdgeGuardError(
+        `edge guard: protected ${found[0].type} record at ${host}`
+      );
     return found[0];
   }
 
   /** Point `host` at `target` (a provider ingress hostname). Returns the READ-BACK record. */
   async point(host: string, target: string): Promise<DnsRecord> {
     this.assertHost(host);
+    await this.assertZoneIdentity();
     const want = norm(target);
     if (want === norm(host))
       throw new EdgeGuardError(`edge guard: ${host} must not point at itself`);

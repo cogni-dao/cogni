@@ -45,7 +45,15 @@ interface Kustomization {
 interface DeploymentPatch {
   spec: {
     template: {
-      spec: { containers: { env: { name: string; value: string }[] }[] };
+      spec: {
+        containers: {
+          env: {
+            name: string;
+            value?: string;
+            valueFrom?: { configMapKeyRef: { name: string; key: string } };
+          }[];
+        }[];
+      };
     };
   };
 }
@@ -58,8 +66,20 @@ function sequencerEnv(kustomization: Kustomization, name: string) {
       p.target.name === "node-deploy-sequencer"
   );
   const doc = yaml.parse(patch?.patch ?? "") as DeploymentPatch;
-  return doc.spec.template.spec.containers[0]?.env.find((e) => e.name === name)
-    ?.value;
+  const entry = doc.spec.template.spec.containers[0]?.env.find(
+    (e) => e.name === name
+  );
+  if (entry?.value !== undefined) return entry.value;
+  const ref = entry?.valueFrom?.configMapKeyRef;
+  if (!ref) return undefined;
+  const configPatch = kustomization.patches?.find(
+    (p) => p.target?.kind === "ConfigMap" && p.target.name === ref.name
+  );
+  const operations = yaml.parse(configPatch?.patch ?? "[]") as {
+    path: string;
+    value?: string;
+  }[];
+  return operations.find((op) => op.path === `/data/${ref.key}`)?.value;
 }
 
 const base = yaml
@@ -356,6 +376,9 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
       expect(sequencerEnv(production, "NODE_DEPLOY_FLEET_OWNER")).toBe(
         "cogni-dao"
       );
+      expect(sequencerEnv(production, "NODE_DEPLOY_WORKLOAD_ZONE")).toBe(
+        "cognidao.org"
+      );
     });
 
     it("the candidate-a overlay serves only itself, and its fleet is cogni-test-org (the test operator claims no canonical node)", () => {
@@ -366,6 +389,9 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
       // story.5137 test lane: the test sequencer's edge guard admits only test-org nodes, never cogni-dao.
       expect(sequencerEnv(candidate, "NODE_DEPLOY_FLEET_OWNER")).toBe(
         "cogni-test-org"
+      );
+      expect(sequencerEnv(candidate, "NODE_DEPLOY_WORKLOAD_ZONE")).toBe(
+        "cogni-testing.org"
       );
     });
   });

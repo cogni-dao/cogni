@@ -9,17 +9,17 @@
  */
 
 import { describe, expect, it } from "vitest";
-
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
 import {
-  DEFAULT_EDGE_HOST_REGEX,
   EdgeGuardError,
   EdgeRouter,
   edgeHostRegexFor,
   hostOwnedBy,
 } from "./edge";
 import { ingressHostOf } from "./spec";
-import { FakeDns } from "./testing";
+import { FakeDns, WORKLOAD_ZONE } from "./testing";
+
+const DEFAULT_EDGE_HOST_REGEX = edgeHostRegexFor([], WORKLOAD_ZONE);
 
 describe("resolveBinding", () => {
   const consumer = {
@@ -84,7 +84,10 @@ describe("EdgeRouter guards", () => {
   });
 
   it("a catalog-built regex admits the canary and each listed node (with env suffixes) and nothing else", () => {
-    const re = edgeHostRegexFor(["poly", "node-template", "toks5", "operator"]);
+    const re = edgeHostRegexFor(
+      ["poly", "node-template", "toks5", "operator"],
+      WORKLOAD_ZONE
+    );
     for (const ok of [
       "node-deploy-canary.cognidao.org",
       "poly.cognidao.org",
@@ -108,11 +111,13 @@ describe("EdgeRouter guards", () => {
     ])
       expect(re.test(bad), bad).toBe(false);
     // slugs are escaped, not interpreted as a pattern
-    expect(edgeHostRegexFor(["a.b"]).test("axb.cognidao.org")).toBe(false);
+    expect(
+      edgeHostRegexFor(["a.b"], WORKLOAD_ZONE).test("axb.cognidao.org")
+    ).toBe(false);
   });
 
   it("a sibling workload host <slug>-<workload>[-env] passes the guard only for a listed node (task.5272)", () => {
-    const re = edgeHostRegexFor(["red"]);
+    const re = edgeHostRegexFor(["red"], WORKLOAD_ZONE);
     for (const ok of [
       "red-sandbox.cognidao.org",
       "red-sandbox-test.cognidao.org",
@@ -130,10 +135,17 @@ describe("EdgeRouter guards", () => {
 
   it("hostOwnedBy with a workload: <slug>-<workload> plus the env suffix, never another node's or the operator's", () => {
     expect(
-      hostOwnedBy("red-sandbox.cognidao.org", "production", "red", "sandbox")
+      hostOwnedBy(
+        WORKLOAD_ZONE,
+        "red-sandbox.cognidao.org",
+        "production",
+        "red",
+        "sandbox"
+      )
     ).toBe(true);
     expect(
       hostOwnedBy(
+        WORKLOAD_ZONE,
         "red-sandbox-test.cognidao.org",
         "candidate-a",
         "red",
@@ -142,6 +154,7 @@ describe("EdgeRouter guards", () => {
     ).toBe(true);
     expect(
       hostOwnedBy(
+        WORKLOAD_ZONE,
         "red-sandbox-preview.cognidao.org",
         "preview",
         "red",
@@ -150,21 +163,46 @@ describe("EdgeRouter guards", () => {
     ).toBe(true);
     // the node's own host stays claimable by any of its workloads
     expect(
-      hostOwnedBy("red.cognidao.org", "production", "red", "sandbox")
+      hostOwnedBy(
+        WORKLOAD_ZONE,
+        "red.cognidao.org",
+        "production",
+        "red",
+        "sandbox"
+      )
     ).toBe(true);
     // a workload cannot claim another workload's host, another env's host, or another node's
     expect(
-      hostOwnedBy("red-other.cognidao.org", "production", "red", "sandbox")
+      hostOwnedBy(
+        WORKLOAD_ZONE,
+        "red-other.cognidao.org",
+        "production",
+        "red",
+        "sandbox"
+      )
     ).toBe(false);
     expect(
-      hostOwnedBy("red-sandbox.cognidao.org", "candidate-a", "red", "sandbox")
+      hostOwnedBy(
+        WORKLOAD_ZONE,
+        "red-sandbox.cognidao.org",
+        "candidate-a",
+        "red",
+        "sandbox"
+      )
     ).toBe(false);
     expect(
-      hostOwnedBy("red-sandbox.cognidao.org", "production", "poly", "sandbox")
+      hostOwnedBy(
+        WORKLOAD_ZONE,
+        "red-sandbox.cognidao.org",
+        "production",
+        "poly",
+        "sandbox"
+      )
     ).toBe(false);
     // the operator owns only its canary: a workload name never widens it
     expect(
       hostOwnedBy(
+        WORKLOAD_ZONE,
         "node-deploy-canary-sandbox.cognidao.org",
         "production",
         "operator",
@@ -172,46 +210,78 @@ describe("EdgeRouter guards", () => {
       )
     ).toBe(false);
     // without a workload the old behaviour holds exactly
-    expect(hostOwnedBy("red-sandbox.cognidao.org", "production", "red")).toBe(
-      false
-    );
+    expect(
+      hostOwnedBy(
+        WORKLOAD_ZONE,
+        "red-sandbox.cognidao.org",
+        "production",
+        "red"
+      )
+    ).toBe(false);
   });
 
   it("hostOwnedBy: a node owns exactly its own host in each env; the operator owns the canary", () => {
-    expect(hostOwnedBy("poly.cognidao.org", "production", "poly")).toBe(true);
-    expect(hostOwnedBy("poly-test.cognidao.org", "candidate-a", "poly")).toBe(
-      true
-    );
-    expect(hostOwnedBy("poly-preview.cognidao.org", "preview", "poly")).toBe(
-      true
-    );
     expect(
-      hostOwnedBy("node-deploy-canary.cognidao.org", "production", "operator")
+      hostOwnedBy(WORKLOAD_ZONE, "poly.cognidao.org", "production", "poly")
+    ).toBe(true);
+    expect(
+      hostOwnedBy(
+        WORKLOAD_ZONE,
+        "poly-test.cognidao.org",
+        "candidate-a",
+        "poly"
+      )
+    ).toBe(true);
+    expect(
+      hostOwnedBy(WORKLOAD_ZONE, "poly-preview.cognidao.org", "preview", "poly")
+    ).toBe(true);
+    expect(
+      hostOwnedBy(
+        WORKLOAD_ZONE,
+        "node-deploy-canary.cognidao.org",
+        "production",
+        "operator"
+      )
     ).toBe(true);
     // node A cannot claim node B's host, or another env's host for itself
-    expect(hostOwnedBy("toks5.cognidao.org", "production", "poly")).toBe(false);
-    expect(hostOwnedBy("poly.cognidao.org", "production", "toks5")).toBe(false);
-    expect(hostOwnedBy("poly.cognidao.org", "candidate-a", "poly")).toBe(false);
+    expect(
+      hostOwnedBy(WORKLOAD_ZONE, "toks5.cognidao.org", "production", "poly")
+    ).toBe(false);
+    expect(
+      hostOwnedBy(WORKLOAD_ZONE, "poly.cognidao.org", "production", "toks5")
+    ).toBe(false);
+    expect(
+      hostOwnedBy(WORKLOAD_ZONE, "poly.cognidao.org", "candidate-a", "poly")
+    ).toBe(false);
     // "poly-test" the node's production host collides with "poly" candidate-a: only the exact owner wins
-    expect(hostOwnedBy("poly-test.cognidao.org", "production", "poly")).toBe(
-      false
-    );
+    expect(
+      hostOwnedBy(WORKLOAD_ZONE, "poly-test.cognidao.org", "production", "poly")
+    ).toBe(false);
     // operator hosts are never claimable by a node
     for (const host of [
       "cognidao.org",
       "preview.cognidao.org",
       "test.cognidao.org",
     ])
-      expect(hostOwnedBy(host, "production", "poly")).toBe(false);
+      expect(hostOwnedBy(WORKLOAD_ZONE, host, "production", "poly")).toBe(
+        false
+      );
     expect(
-      hostOwnedBy("node-deploy-canary.cognidao.org", "production", "poly")
+      hostOwnedBy(
+        WORKLOAD_ZONE,
+        "node-deploy-canary.cognidao.org",
+        "production",
+        "poly"
+      )
     ).toBe(false);
-    expect(hostOwnedBy("poly.cognidao.org", "mars", "poly")).toBe(false);
+    expect(
+      hostOwnedBy(WORKLOAD_ZONE, "poly.cognidao.org", "mars", "poly")
+    ).toBe(false);
   });
 
   it("refuses an unguarded host before any request is made", async () => {
     const dns = new FakeDns([]);
-    const edge = new EdgeRouter(dns);
+    const edge = new EdgeRouter(dns, WORKLOAD_ZONE);
     await expect(
       edge.point("poly.cognidao.org", "x.example")
     ).rejects.toBeInstanceOf(EdgeGuardError);
@@ -223,7 +293,7 @@ describe("EdgeRouter guards", () => {
 
   it("creates a proxied CNAME and reads it back", async () => {
     const dns = new FakeDns([]);
-    const rec = await new EdgeRouter(dns).point(
+    const rec = await new EdgeRouter(dns, WORKLOAD_ZONE).point(
       HOST,
       "Ingress.Provider.Example."
     );
@@ -244,7 +314,7 @@ describe("EdgeRouter guards", () => {
       content: "203.0.113.9",
       proxied: false,
     });
-    const rec = await new EdgeRouter(dns).point(
+    const rec = await new EdgeRouter(dns, WORKLOAD_ZONE).point(
       HOST,
       "ingress.provider.example"
     );
@@ -264,23 +334,23 @@ describe("EdgeRouter guards", () => {
       content: "x.example",
       proxied: true,
     });
-    await expect(new EdgeRouter(dns).point(HOST, "y.example")).rejects.toThrow(
-      /refusing to choose/
-    );
+    await expect(
+      new EdgeRouter(dns, WORKLOAD_ZONE).point(HOST, "y.example")
+    ).rejects.toThrow(/refusing to choose/);
   });
 
   it("never points a host at itself", async () => {
     await expect(
-      new EdgeRouter(new FakeDns([])).point(HOST, HOST)
+      new EdgeRouter(new FakeDns([]), WORKLOAD_ZONE).point(HOST, HOST)
     ).rejects.toThrow(/itself/);
   });
 
   it("requires proxied=true on the readback", async () => {
     const dns = new FakeDns([]);
     dns.corruptReadback = true;
-    await expect(new EdgeRouter(dns).point(HOST, "y.example")).rejects.toThrow(
-      /readback mismatch/
-    );
+    await expect(
+      new EdgeRouter(dns, WORKLOAD_ZONE).point(HOST, "y.example")
+    ).rejects.toThrow(/readback mismatch/);
   });
 
   it("has no way to withdraw a record: the port exposes no delete", () => {

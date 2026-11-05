@@ -272,7 +272,15 @@ patches:
                   # NODE_SUBMODULE_PARENT_OWNER, which the route uses; unset admits no remote-source node, so the
                   # sequencer's edge guard would refuse every test node's host (story.5137 test lane).
                   - name: NODE_DEPLOY_FLEET_OWNER
-                    value: cogni-test-org
+                    valueFrom:
+                      configMapKeyRef:
+                        name: node-app-config
+                        key: NODE_SUBMODULE_PARENT_OWNER
+                  - name: NODE_DEPLOY_WORKLOAD_ZONE
+                    valueFrom:
+                      configMapKeyRef:
+                        name: node-app-config
+                        key: NODE_DEPLOY_WORKLOAD_ZONE
   - target:
       kind: ConfigMap
       name: node-app-config
@@ -350,6 +358,9 @@ patches:
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_OWNER
         value: "cogni-test-org"
+      - op: add
+        path: /data/NODE_DEPLOY_WORKLOAD_ZONE
+        value: "cogni-testing.org"
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_REPO
         value: "cogni-monorepo"

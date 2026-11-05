@@ -35,6 +35,7 @@ import {
   SHA_1,
   SHA_2,
   SHA_3,
+  WORKLOAD_ZONE,
 } from "./testing";
 
 const DB = { nodeId: NODE_ID, env: ENV, workload: "canary-db" };
@@ -63,7 +64,8 @@ function harness(
   const seq = new NodeDeploySequencer({
     store,
     payer,
-    edge: opts.withEdge === false ? undefined : new EdgeRouter(dns),
+    edge:
+      opts.withEdge === false ? undefined : new EdgeRouter(dns, WORKLOAD_ZONE),
     probe,
     secrets,
     chain,

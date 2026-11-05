@@ -35,6 +35,7 @@ import {
   NODE_ID,
   SHA_1,
   SHA_2,
+  WORKLOAD_ZONE,
 } from "./testing";
 
 const DB = { nodeId: NODE_ID, env: ENV, workload: "canary-db" };
@@ -51,7 +52,7 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
   const seq = new NodeDeploySequencer({
     store,
     payer,
-    edge: new EdgeRouter(dns),
+    edge: new EdgeRouter(dns, WORKLOAD_ZONE),
     probe,
     secrets: new MemorySecrets(),
     chain: new FakeChain(payer),

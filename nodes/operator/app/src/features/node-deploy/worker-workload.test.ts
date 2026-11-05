@@ -12,14 +12,11 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
 import { parse, stringify } from "yaml";
-
 import type { NodeCatalogPort, NodeRuntimeSecretsPort } from "@/ports";
 import { NodeRuntimeSecretsError } from "@/ports";
-
 import { resolveWorkloadDeclaration } from "./declarations";
 import { EdgeRouter, edgeHostRegexFor } from "./edge";
 import { workerEnv } from "./node-app-env";
@@ -40,6 +37,7 @@ import {
   MemorySecrets,
   MemoryStore,
   SHA_1,
+  WORKLOAD_ZONE,
 } from "./testing";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -120,6 +118,8 @@ const resolve = (
   over: Partial<Parameters<typeof resolveWorkloadDeclaration>[0]> = {}
 ) =>
   resolveWorkloadDeclaration({
+    workloadZone: WORKLOAD_ZONE,
+    nodeSlug: "red",
     repoSpecText: redSpec(),
     manifests: [APP, SANDBOX],
     nodeId: RED_ID,
@@ -248,7 +248,11 @@ function harness(slug = "red", all: readonly string[] = ["red", "poly"]) {
   const seq = new NodeDeploySequencer({
     store,
     payer,
-    edge: new EdgeRouter(dns, edgeHostRegexFor(all)),
+    edge: new EdgeRouter(
+      dns,
+      WORKLOAD_ZONE,
+      edgeHostRegexFor(all, WORKLOAD_ZONE)
+    ),
     probe: new FakeProbe(payer, dns, events),
     secrets: new MemorySecrets(),
     runtime: {

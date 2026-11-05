@@ -28,6 +28,10 @@ import type {
   WorkloadKey,
 } from "@/ports";
 import { BuiltImageRegistryError, NodeRuntimeSecretsError } from "@/ports";
+import {
+  resolveWorkloadZoneBinding,
+  type WorkloadZoneBinding,
+} from "@/shared/node-registry/fleet-ownership";
 import { selectReleaseBundle } from "./artifact-selection";
 import { DeclarationError, resolveWorkloadDeclaration } from "./declarations";
 
@@ -58,6 +62,7 @@ import {
   NODE_ID as OPERATOR_NODE_ID,
   PUBLIC_HOST,
   SHA_1,
+  WORKLOAD_ZONE,
 } from "./testing";
 
 const POLY_ID = "4b06359a-0000-4000-8000-0000000000aa";
@@ -155,12 +160,17 @@ class FakeCatalog implements NodeCatalogPort {
   }
 }
 
-function harness(cfg: Partial<SequencerConfig> = {}) {
+function harness(
+  cfg: Partial<SequencerConfig> = {},
+  workloadZone: WorkloadZoneBinding = WORKLOAD_ZONE,
+  slugs = ["poly", "toks5"]
+) {
   const events: string[] = [];
   const clock = new FakeClock();
   const store = new MemoryStore(clock);
   const payer = new FakePayer(events);
   const dns = new FakeDns(events);
+  dns.zoneName = workloadZone.zoneName;
   const probe = new FakeProbe(payer, dns, events);
   const secrets = new MemorySecrets();
   const runtimeSecrets = new FakeRuntimeSecrets();
@@ -171,7 +181,11 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
     new NodeDeploySequencer({
       store: readStore,
       payer,
-      edge: new EdgeRouter(dns, edgeHostRegexFor(["poly", "toks5"])),
+      edge: new EdgeRouter(
+        dns,
+        workloadZone,
+        edgeHostRegexFor(slugs, workloadZone)
+      ),
       probe,
       secrets,
       runtime: { secrets: runtimeSecrets, catalog, substrateHost: SUBSTRATE },
@@ -244,6 +258,257 @@ async function releaseApp(h: H, nodeId: string) {
 
 const appCreates = (h: H) =>
   h.payer.createRequests.filter((r) => r.spec.name === "canary");
+
+describe("fleet workload zone", () => {
+  it("the test fleet guard accepts its suffixed host and refuses the production zone", () => {
+    const binding = {
+      fleetOwner: "cogni-test-org",
+      zoneName: "cogni-testing.org",
+      zoneIdRef: "CLOUDFLARE_ZONE_ID",
+      writerRef: "operator-env-secrets/CLOUDFLARE_API_TOKEN",
+    } as const;
+    const guard = edgeHostRegexFor(["spawny-boi"], binding);
+    expect(guard.test("spawny-boi-test.cogni-testing.org")).toBe(true);
+    expect(guard.test("spawny-boi-test.cognidao.org")).toBe(false);
+    expect(guard.test("test.cognidao.org")).toBe(false);
+    expect(guard.test("cogni-testing.org")).toBe(false);
+  });
+});
+
+const TEST_WORKLOAD_ZONE = resolveWorkloadZoneBinding({
+  fleetOwner: "cogni-test-org",
+  zoneName: "cogni-testing.org",
+});
+const TEST_HOST = "spawny-boi-test.cogni-testing.org";
+
+function fixtureHarness() {
+  const h = harness({ environment: "candidate-a" }, TEST_WORKLOAD_ZONE, [
+    "spawny-boi",
+    "other",
+    "spawny-boi-helper",
+  ]);
+  h.catalog.rows.set(POLY_ID, {
+    slug: "spawny-boi",
+    row: {
+      name: "spawny-boi",
+      source_repo: "https://github.com/cogni-test-org/spawny-boi",
+    },
+  });
+  return h;
+}
+
+async function fixtureRelease(
+  h: H,
+  host = TEST_HOST,
+  overrides: Partial<NodeWorkloadSpec> = {}
+) {
+  const key = { nodeId: POLY_ID, env: "candidate-a", workload: "canary" };
+  const result = await h.store.recordRelease({
+    ...key,
+    sourceSha: SHA_1,
+    spec: canaryApp({
+      secretKeys: DECLARED,
+      bindings: [],
+      expose: { http: { host } },
+      ...overrides,
+    }),
+    createdBy: "test",
+  });
+  return { ...result, key };
+}
+
+describe("isolated zone admission through the sequencer", () => {
+  it("normalizes explicit fleet config and refuses missing or malformed bindings", () => {
+    expect(
+      resolveWorkloadZoneBinding({
+        fleetOwner: " Cogni-Test-Org ",
+        zoneName: " COGNI-TESTING.ORG. ",
+      })
+    ).toEqual(TEST_WORKLOAD_ZONE);
+    for (const zoneName of [
+      undefined,
+      "",
+      "https://cogni-testing.org",
+      "a..org",
+      "*.cogni-testing.org",
+      "bad_.org",
+      `${"a".repeat(64)}.org`,
+    ]) {
+      expect(() =>
+        resolveWorkloadZoneBinding({ fleetOwner: "cogni-test-org", zoneName })
+      ).toThrow("explicit fleet owner");
+    }
+    expect(() =>
+      resolveWorkloadZoneBinding({ zoneName: "cogni-testing.org" })
+    ).toThrow();
+  });
+
+  it("the same environment rule lowers a new immutable fixture declaration without changing its source", () => {
+    const d = declarationInput();
+    d.manifest.resources.web.params.host = "spawny-boi.cogni-testing.org";
+    const text = stringify(d.manifest);
+    const resolve = (host = "spawny-boi.cogni-testing.org") =>
+      resolveWorkloadDeclaration({
+        workloadZone: TEST_WORKLOAD_ZONE,
+        nodeSlug: "spawny-boi",
+        repoSpecText: stringify(d.spec),
+        manifests: [
+          {
+            path: ".cogni/workloads/canary.yaml",
+            text: text.replace("spawny-boi.cogni-testing.org", host),
+          },
+        ],
+        nodeId: POLY_ID,
+        env: "candidate-a",
+        workload: "canary",
+        pendingImage: `ghcr.io/example/node:sha-${SHA_1}`,
+        sourceRepository: "example/node",
+      });
+    expect(resolve().expose).toEqual({ http: { host: TEST_HOST } });
+    for (const host of [
+      "spawny-boi.cognidao.org",
+      TEST_HOST,
+      "other.cogni-testing.org",
+      "cogni-testing.org",
+      "test.cogni-testing.org",
+    ])
+      expect(() => resolve(host), host).toThrow(/production-form/);
+    expect(stringify(d.manifest)).toBe(text);
+  });
+
+  it("activates the test-zone host with one native identity boundary before payment and keeps substrate targets", async () => {
+    const h = fixtureHarness();
+    const { key } = await fixtureRelease(h);
+    await h.seq.step(key);
+    expect(h.store.attempts[0]?.phase).toBe("active");
+    expect(h.payer.createRequests).toHaveLength(1);
+    expect(h.events.indexOf("dns.zone_identity")).toBeLessThan(
+      h.events.findIndex((event) => event.startsWith("payer.create:"))
+    );
+    expect([...h.dns.records.values()]).toContainEqual(
+      expect.objectContaining({ name: TEST_HOST, proxied: true })
+    );
+    const env = h.payer.createRequests[0]?.spec.services[0]?.env;
+    expect(env?.NEXTAUTH_URL).toBe(`https://${TEST_HOST}`);
+    expect(env?.TEMPORAL_ADDRESS).toBe(`${SUBSTRATE}:7233`);
+    expect(env?.DATABASE_URL).toBe(PROFILE_BUCKET.DATABASE_URL);
+    expect(JSON.stringify(env)).not.toContain("CLOUDFLARE");
+  });
+
+  it.each([
+    "zone_identity_mismatch",
+    "zone_identity_unavailable",
+  ])("%s refuses before paid creation", async (reason) => {
+    const h = fixtureHarness();
+    if (reason === "zone_identity_mismatch") h.dns.zoneName = "cognidao.org";
+    else h.dns.zoneUnavailable = true;
+    const { key } = await fixtureRelease(h);
+    await h.seq.step(key);
+    expect(h.payer.createRequests).toHaveLength(0);
+    expect(h.dns.ops).toHaveLength(0);
+    expect(h.store.attempts[0]?.error).toBe(reason);
+  });
+
+  it.each([
+    "spawny-boi-test.cognidao.org",
+    "spawny-boi.cogni-testing.org",
+    "other-test.cogni-testing.org",
+    "cogni-testing.org",
+    "www.cogni-testing.org",
+    "test.cogni-testing.org",
+    "test.cognidao.org",
+    "mail.cogni-testing.org",
+  ])("refuses %s before native reads and payment", async (host) => {
+    const h = fixtureHarness();
+    const { key } = await fixtureRelease(h, host);
+    await h.seq.step(key);
+    expect(h.payer.createRequests).toHaveLength(0);
+    expect(h.dns.identityReads).toBe(0);
+    expect(h.store.attempts[0]?.error).toContain("edge_host_refused");
+  });
+
+  it("refuses a catalog row from another fleet even with an allowed test-zone host", async () => {
+    const h = fixtureHarness();
+    h.catalog.rows.set(POLY_ID, {
+      slug: "spawny-boi",
+      row: { source_repo: "https://github.com/cogni-dao/spawny-boi" },
+    });
+    const { key } = await fixtureRelease(h);
+    await h.seq.step(key);
+    expect(h.payer.createRequests).toHaveLength(0);
+    expect(h.dns.identityReads).toBe(0);
+  });
+
+  it("refuses a sibling worker collision in the isolated zone", async () => {
+    const h = fixtureHarness();
+    h.catalog.rows.set(TOKS_ID, {
+      slug: "spawny-boi-helper",
+      row: {
+        source_repo: "https://github.com/cogni-test-org/spawny-boi-helper",
+      },
+    });
+    const { key } = await fixtureRelease(
+      h,
+      "spawny-boi-helper-test.cogni-testing.org",
+      { name: "helper", runtimeProfile: "worker", secretKeys: [] }
+    );
+    await h.seq.step(key);
+    expect(h.payer.createRequests).toHaveLength(0);
+    expect(h.store.attempts[0]?.error).toContain("edge_host_refused");
+  });
+
+  it.each([
+    "MX",
+    "NS",
+    "SOA",
+  ])("an existing %s record is protected before payment", async (type) => {
+    const h = fixtureHarness();
+    h.dns.seed({
+      name: TEST_HOST,
+      type,
+      content: "protected.example",
+      proxied: false,
+    });
+    const { key } = await fixtureRelease(h);
+    await h.seq.step(key);
+    expect(h.payer.createRequests).toHaveLength(0);
+    expect(h.dns.ops).toHaveLength(0);
+    expect(h.store.attempts[0]?.error).toContain("protected");
+  });
+
+  it("a recorded production-zone source is refused without retargeting its release", async () => {
+    const h = fixtureHarness();
+    const { key, release } = await fixtureRelease(
+      h,
+      "spawny-boi-test.cognidao.org"
+    );
+    await h.seq.step(key);
+    await h.newSequencer().step(key);
+    expect((await h.store.getRelease(release.id))?.spec.expose).toEqual({
+      http: { host: "spawny-boi-test.cognidao.org" },
+    });
+    expect(h.payer.createRequests).toHaveLength(0);
+  });
+
+  it("changed zone authority cannot prevent adoption/cleanup of an ambiguous paid effect after restart", async () => {
+    const h = fixtureHarness();
+    const { key } = await fixtureRelease(h);
+    h.payer.loseResponseOn = () => true;
+    h.payer.observeThrows = true;
+    await h.seq.step(key);
+    const prior = requiredFixture(h.store.attempts[0]);
+    expect(prior.error).toContain("ambiguous");
+    h.dns.zoneUnavailable = true;
+    h.payer.observeThrows = false;
+    await h.newSequencer().step(key);
+    expect(h.payer.createRequests).toHaveLength(1);
+    expect(h.store.attempts).toHaveLength(1);
+    expect(h.store.attempts[0]?.id).toBe(prior.id);
+    expect(h.store.attempts[0]?.cogniKey).toBe(prior.cogniKey);
+    expect(h.store.attempts[0]?.phase).not.toBe("active");
+    expect(h.payer.leases[0]?.state).toBe("closed");
+  });
+});
 
 describe("node app runtime env (task.5405)", () => {
   it("a non-operator node app gets the composition env, OpenBao-sourced; a state binding overrides the bucket (CD2)", async () => {
@@ -983,7 +1248,11 @@ describe("private release companions", () => {
     const seq = new NodeDeploySequencer({
       store: h.store,
       payer: h.payer,
-      edge: new EdgeRouter(h.dns, edgeHostRegexFor(["poly"])),
+      edge: new EdgeRouter(
+        h.dns,
+        WORKLOAD_ZONE,
+        edgeHostRegexFor(["poly"], WORKLOAD_ZONE)
+      ),
       probe: h.probe,
       secrets: new MemorySecrets(),
       runtime: { catalog: h.catalog, secrets: h.runtimeSecrets },
@@ -1042,6 +1311,8 @@ function declarationInput() {
     manifest,
     resolve: (environment = "preview") =>
       resolveWorkloadDeclaration({
+        workloadZone: WORKLOAD_ZONE,
+        nodeSlug: "poly",
         repoSpecText: stringify(spec),
         manifests: [
           { path: ".cogni/workloads/canary.yaml", text: stringify(manifest) },
@@ -1712,6 +1983,8 @@ describe("green migrates itself before it serves (task.5408)", () => {
       },
     };
     const spec = resolveWorkloadDeclaration({
+      workloadZone: WORKLOAD_ZONE,
+      nodeSlug: "poly",
       repoSpecText: stringify(d.spec),
       manifests: [
         { path: ".cogni/workloads/canary.yaml", text: stringify(manifest) },
