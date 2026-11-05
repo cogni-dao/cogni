@@ -1738,50 +1738,241 @@ describe("review repair digest and companion gates", () => {
     if (state === "sealed") expect(calls).toHaveLength(0);
   });
 
-  it("reads back an existing ambiguous paid attempt despite invalid registry headers", async () => {
+  it.each([
+    "ambiguous",
+    "created",
+    "proving",
+    "proven",
+  ] as const)("recovers a refused %s snapshot without qualification or activation", async (phase) => {
     const h = harness({ environment: "preview" });
     installBundle(h);
-    await companionRelease(h);
-    proofResponder(h);
-    h.payer.loseResponseOn = () => true;
-    h.payer.observeThrows = true;
+    // This direct persisted verdict is a defensive policy case, not evidence of a concurrent
+    // production refusal writer for these phases. The actual writer is exercised below.
+    await companionRelease(
+      h,
+      canaryApp({
+        bindings: [],
+        expose: { http: { host: "poly-preview.cognidao.org" } },
+      })
+    );
     const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
     await h.seq.step(key);
-    const prior = requiredFixture(h.store.attempts[0]);
+    const blue = requiredFixture(h.store.attempts[0]);
+    const edge = structuredClone([...h.dns.records.values()]);
+    const edgeWrites = [...h.dns.ops];
+    const modes = proofResponder(h);
+    const { release } = await companionRelease(h);
+    h.payer.loseResponseOn = () => true;
+    h.payer.observeThrows = true;
+    await h.seq.step(key);
+    const prior = requiredFixture(
+      h.store.attempts.find((a) => a.releaseId === release.id)
+    );
+    const green = requiredFixture(
+      h.payer.leases.find((l) => l.cogniKey === prior.cogniKey)
+    );
     expect(prior.error).toContain("ambiguous");
-    await h.store.refuseAdmission(prior.releaseId, {
+    if (phase !== "ambiguous")
+      await h.store.updateAttempt(prior.id, {
+        phase,
+        externalName: green.dseq,
+        endpoints: green.endpoints,
+        provider: green.provider,
+      });
+    const verdict = {
       reason: "artifact_bundle_invalid: selected digest mismatch",
       at: new Date(h.clock.now()).toISOString(),
-    });
-    // Unknown paid effects still own their original attempt and observation authority.
-    await h.newSequencer().step(key);
-    expect(h.store.attempts[0]?.phase).toBe("planned");
-    expect(h.store.attempts[0]?.id).toBe(prior.id);
-    const desired = requiredFixture(await h.store.getDesired(key));
+    };
+    await h.store.refuseAdmission(release.id, verdict);
+    // A fresh sequencer over copied rows owns the same effect; publication repair grants nothing.
+    const restored = new MemoryStore(h.clock);
+    for (const [id, row] of h.store.releases)
+      restored.releases.set(id, structuredClone(row));
+    for (const [id, row] of h.store.desired)
+      restored.desired.set(id, structuredClone(row));
+    restored.attempts.push(...structuredClone(h.store.attempts));
+    const restarted = h.newSequencer(restored);
+    h.payer.failDelete = true;
+    await restarted.step(key);
+    const desired = requiredFixture(await restored.getDesired(key));
+    const refused = requiredFixture(await restored.getRelease(release.id));
+    const recovering = await readNodeDeployWorkloads(restored, POLY_ID, [
+      "preview",
+    ]);
     expect(
-      buildWorkloadView({
+      DeployWorkloadsReadSchema.parse(recovering[0]).workloads[0]?.desired
+    ).toMatchObject({
+      releaseState: "deploying",
+      admissionRefusal: verdict,
+      admissionRefusedAt: verdict.at,
+    });
+    expect(
+      buildReleaseDetail({
         desired,
-        release: requiredFixture(await h.store.getRelease(prior.releaseId)),
-        attemptsNewestFirst: await h.store.attemptsFor(key),
-      }).desired
-    ).toMatchObject({ releaseState: "deploying", parkedReason: null });
+        release: refused,
+        attemptsNewestFirst: await restored.attemptsFor(key),
+      }).release
+    ).toMatchObject({ releaseState: "deploying", admissionRefusal: verdict });
     h.payer.observeThrows = false;
     let checked = false;
     h.images.checkImageManifests = async () => {
       checked = true;
-      throw new BuiltImageRegistryError(
-        "missing selected Docker-Content-Digest",
-        true
-      );
+      return true;
     };
-    await h.newSequencer().step(key);
-    expect(checked).toBe(false);
+    // An unconfirmed close stays owned, with no proof/edge mutation; retry confirms closure.
+    await restarted.step(key);
+    expect(restored.attempts.find((a) => a.id === prior.id)?.phase).toBe(
+      "closing"
+    );
+    expect(green.state).toBe("active");
+    h.payer.failDelete = false;
+    await restarted.step(key);
+    const recovered = requiredFixture(
+      restored.attempts.find((a) => a.id === prior.id)
+    );
+    expect(recovered).toMatchObject({
+      id: prior.id,
+      cogniKey: prior.cogniKey,
+      externalName: green.dseq,
+      phase: "failed",
+    });
+    expect(recovered.steps).toContainEqual(
+      expect.objectContaining({ step: "new_closed", outcome: "ok" })
+    );
+    expect(green.state).toBe("closed");
+    expect(h.payer.createRequests).toHaveLength(2);
     expect(h.payer.observeCalls).toBeGreaterThan(0);
+    expect(modes).toEqual([]);
+    expect(checked).toBe(false);
+    expect([...h.dns.records.values()]).toEqual(edge);
+    expect(h.dns.ops).toEqual(edgeWrites);
+    expect(restored.attempts.find((a) => a.id === blue.id)?.phase).toBe(
+      "active"
+    );
+    expect(h.payer.byDseq(requiredFixture(blue.externalName)).state).toBe(
+      "active"
+    );
+    expect(await h.newSequencer(restored).step(key)).toBe("parked");
+    expect((await restored.getRelease(release.id))?.admissionRefusal).toEqual(
+      verdict
+    );
+    // Only a new explicit release can qualify. Use the original store after copying final rows.
+    h.store.attempts.splice(
+      0,
+      h.store.attempts.length,
+      ...structuredClone(restored.attempts)
+    );
+    h.payer.loseResponseOn = undefined;
+    await companionRelease(h);
+    await h.newSequencer().step(key);
+    expect(modes).toEqual(["qualify", "readback"]);
+    expect(h.payer.createRequests).toHaveLength(3);
+  });
+
+  it("the actual admission writer retains an unbound paid effect until cleanup recovers", async () => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    const modes = proofResponder(h);
+    const { release } = await companionRelease(h);
+    const publication = requiredFixture(
+      await h.images.resolveArtifactBundle?.({
+        imageRepository: "ghcr.io/example/node",
+        sourceSha: SHA_1,
+      })
+    );
+    const sealed = requiredFixture(
+      await h.store.pinResolvedBundle(
+        release.id,
+        selectReleaseBundle(release, publication)
+      )
+    );
+    const planned = await h.store.insertAttempt(
+      release.id,
+      () => "runner-loss-before-bind"
+    );
+    // Model runner loss between payer completion and bindLease, before any ambiguity/error write.
+    // The next step below uses the production refusal call, not a direct test refusal write.
+    const paid = await h.payer.create({
+      cogniKey: planned.cogniKey,
+      environment: "preview",
+      identity: {
+        nodeId: POLY_ID,
+        compositeUid: `nd-${release.id}`,
+        compositeGeneration: planned.attempt,
+      },
+      spec: toPayerSpec(sealed.spec, { RELEASE_SHA: SHA_1 }),
+    });
+    h.images.checkImageManifests = async () => {
+      throw new BuiltImageRegistryError("selected digest mismatch", true);
+    };
+    h.payer.observeThrows = true;
+    const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
+    await h.seq.step(key);
+    const refused = requiredFixture(await h.store.getRelease(release.id));
+    expect(refused.admissionRefusal?.reason).toContain(
+      "selected digest mismatch"
+    );
+    expect(h.store.attempts[0]).toMatchObject({
+      id: planned.id,
+      phase: "planned",
+      externalName: undefined,
+    });
+    h.images.checkImageManifests = async () => true;
+    h.payer.observeThrows = false;
+    await h.newSequencer().step(key);
+    expect(h.store.attempts[0]).toMatchObject({
+      id: planned.id,
+      cogniKey: planned.cogniKey,
+      externalName: paid.externalName,
+      phase: "failed",
+    });
+    expect(h.payer.byDseq(paid.externalName).state).toBe("closed");
     expect(h.payer.createRequests).toHaveLength(1);
-    expect(h.store.attempts).toHaveLength(1);
-    expect(h.store.attempts[0]?.id).toBe(prior.id);
-    expect(h.store.attempts[0]?.externalName).toBe(h.payer.leases[0]?.dseq);
-    expect(h.store.attempts[0]?.phase).toBe("active");
+    expect(modes).toEqual([]);
+    expect(h.dns.records.size).toBe(0);
+    expect(await h.newSequencer().step(key)).toBe("parked");
+  });
+
+  it("retains a refused state snapshot and adopts its original paid effect without activation", async () => {
+    const h = harness();
+    const { release } = await h.store.recordRelease({
+      nodeId: OPERATOR_NODE_ID,
+      env: ENV,
+      workload: "canary-db",
+      sourceSha: SHA_1,
+      spec: canaryDb(),
+      createdBy: "test",
+    });
+    const planned = await h.store.insertAttempt(
+      release.id,
+      () => "retained-refusal-snapshot"
+    );
+    const paid = await h.payer.create({
+      cogniKey: planned.cogniKey,
+      environment: ENV,
+      identity: {
+        nodeId: OPERATOR_NODE_ID,
+        compositeUid: `nd-${release.id}`,
+        compositeGeneration: planned.attempt,
+      },
+      spec: toPayerSpec(release.spec, {}),
+    });
+    await h.store.refuseAdmission(release.id, {
+      reason: "artifact_bundle_invalid: defensive state snapshot",
+      at: new Date(h.clock.now()).toISOString(),
+    });
+    const key = h.key(OPERATOR_NODE_ID, "canary-db");
+    await h.newSequencer().step(key);
+    await h.newSequencer().step(key);
+    expect(h.store.attempts[0]).toMatchObject({
+      id: planned.id,
+      externalName: paid.externalName,
+      phase: "created",
+    });
+    expect(h.payer.byDseq(paid.externalName).state).toBe("active");
+    expect(h.payer.createRequests).toHaveLength(1);
+    expect(h.events.some((e) => e.startsWith("payer.delete:"))).toBe(false);
+    expect(h.dns.records.size).toBe(0);
   });
 
   it.each([

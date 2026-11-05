@@ -2714,6 +2714,129 @@ describe("AkashTxActuator.update / delete", () => {
 });
 
 describe("AkashTxActuator cost attribution (task.5071)", () => {
+  it.each([
+    "bind",
+    "evidence",
+    "store",
+  ] as const)("cursor observation returns durable native discovery when cost %s fails", async (failure) => {
+    const native: ProvisionOutput = {
+      provider: "akash",
+      leaseId: "7901",
+      state: "active",
+      endpoints: ["https://recovered.example.net"],
+    };
+    const { actuator, api, ledger, cost, log } = build({ recovered: native });
+    await ledger.claim({
+      cogniKey: "k1",
+      workload: "operator",
+      environment: "candidate-a",
+      identity: IDENTITY,
+    });
+    await ledger.prepare({ cogniKey: "k1", allocationCursor: "7900" });
+    cost.failBind = failure === "bind";
+    cost.failEvidence = failure === "evidence";
+    cost.failObserve = failure === "store";
+    cost.failureMessage = "secret-like-cost-body";
+    await expect(actuator.observe({ cogniKey: "k1" })).resolves.toEqual({
+      found: true,
+      recovered: true,
+      resource: {
+        externalName: native.leaseId,
+        state: native.state,
+        endpoints: native.endpoints,
+      },
+    });
+    expect(ledger.rows.get("k1")).toMatchObject({
+      receiptId: "receipt-k1",
+      identity: IDENTITY,
+      externalName: native.leaseId,
+      allocationCursor: "7900",
+    });
+    expect(api.recoverCalls).toBe(1);
+    expect(api.allocateCalls).toBe(0);
+    expect(api.releaseCalls).toEqual([]);
+    expect(log.lines).toContainEqual({
+      level: "warn",
+      marker: "compute_cost_observation_failed",
+      fields: expect.objectContaining({
+        cogniKey: "k1",
+        nodeId: IDENTITY.nodeId,
+        externalName: native.leaseId,
+      }),
+    });
+    expect(JSON.stringify(log.lines)).not.toContain("secret-like-cost-body");
+    // A subsequent observe uses the attributed handle, never another discovery/create.
+    await expect(actuator.observe({ cogniKey: "k1" })).resolves.toMatchObject({
+      found: true,
+      resource: { externalName: native.leaseId },
+    });
+    expect(api.recoverCalls).toBe(1);
+    expect(api.allocateCalls).toBe(0);
+  });
+
+  it("cursor recovery of a non-active allocation requires no cost IO", async () => {
+    const native: ProvisionOutput = {
+      provider: "akash",
+      leaseId: "7902",
+      state: "closed",
+      endpoints: [],
+    };
+    const { actuator, api, ledger, cost, log } = build({ recovered: native });
+    await ledger.claim({
+      cogniKey: "k1",
+      workload: "operator",
+      environment: "candidate-a",
+      identity: IDENTITY,
+    });
+    await ledger.prepare({ cogniKey: "k1", allocationCursor: "7900" });
+    cost.failBind = true;
+    cost.failEvidence = true;
+    cost.failObserve = true;
+    await expect(actuator.observe({ cogniKey: "k1" })).resolves.toMatchObject({
+      found: true,
+      recovered: true,
+      resource: { externalName: "7902", state: "closed", endpoints: [] },
+    });
+    expect(ledger.rows.get("k1")).toMatchObject({
+      identity: IDENTITY,
+      externalName: "7902",
+    });
+    expect(api.allocateCalls).toBe(0);
+    expect(cost.binds).toEqual([]);
+    expect(cost.observations).toEqual([]);
+    // Fail flags would emit this marker on any accounting invocation, before they throw.
+    expect(
+      log.lines.some((line) => line.marker === "compute_cost_unavailable")
+    ).toBe(false);
+  });
+
+  it("cursor discovery cannot bypass failure to persist allocation ownership", async () => {
+    const { actuator, api, ledger, cost } = build({
+      recovered: {
+        provider: "akash",
+        leaseId: "7903",
+        state: "active",
+        endpoints: [],
+      },
+    });
+    await ledger.claim({
+      cogniKey: "k1",
+      workload: "operator",
+      environment: "candidate-a",
+      identity: IDENTITY,
+    });
+    await ledger.prepare({ cogniKey: "k1", allocationCursor: "7900" });
+    ledger.recordAllocation = async () => {
+      throw new Error("allocation ledger unavailable");
+    };
+    await expect(actuator.observe({ cogniKey: "k1" })).rejects.toThrow(
+      "allocation ledger unavailable"
+    );
+    expect(ledger.rows.get("k1")?.externalName).toBeUndefined();
+    expect(cost.binds).toEqual([]);
+    expect(api.allocateCalls).toBe(0);
+  });
+
   it("binds and observes the paid handle against the allocation receipt", async () => {
     const { actuator, cost } = build();
     await actuator.create({

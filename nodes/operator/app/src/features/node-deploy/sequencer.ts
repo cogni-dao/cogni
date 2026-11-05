@@ -15,6 +15,8 @@
  *     An ambiguous create is RESOLVED through `observe(cogniKey)`, never blindly repeated.
  *   - PARK_AFTER_3: after 3 consecutive failed attempts of one release no further paid create happens
  *     until a new release arrives. No clock resets that count.
+ *   - TERMINAL_ADMISSION: refusal fences every resumed phase before proof/cutover. Old paid effects
+ *     keep observation/adoption and confirmed stateless cleanup; retained state keeps custody.
  *   - PROVE_BEFORE_CUTOVER: the edge never moves until the green lease serves the exact sha
  *     (`/version.buildSha`) and `/readyz` 200 through its provider ingress with the public Host header,
  *     within `proofMs` of lease creation; otherwise the NEW lease is closed and blue keeps serving.
@@ -332,8 +334,8 @@ export class NodeDeploySequencer {
     }
 
     if (active && active.releaseId === release.id) return "converged";
-    // Existing paid attempts above retain observe/readback/cleanup authority. This verdict only
-    // denies new admission and payment; every tick/restart reads the authoritative release.
+    // Existing paid attempts above retain recovery authority, never activation authority after
+    // terminal refusal. Every tick/restart reads the authoritative release.
     if (release.admissionRefusal) return "parked";
 
     if (release.spec.kind === "state") {
@@ -733,6 +735,51 @@ export class NodeDeploySequencer {
     start: AttemptRow,
     blue: AttemptRow | undefined
   ): Promise<void> {
+    if (release.admissionRefusal) {
+      if (release.spec.kind === "app") {
+        // The existing orphan guard observes, adopts and confirms closure under the original key.
+        // It also preserves the grace window while a paid create may still be running.
+        await this.failAttempt(
+          key,
+          release,
+          start,
+          release.admissionRefusal.reason
+        );
+      } else {
+        // Retained state cannot be destroyed by an admission verdict. Keep observation/custody,
+        // but grant neither proof nor activation. No new create or replacement is authorized.
+        if (this.createMayStillBeInFlight(start)) return;
+        try {
+          const obs = await this.d.payer.observe({
+            cogniKey: start.cogniKey,
+            ...(start.externalName ? { externalName: start.externalName } : {}),
+          });
+          if (obs.found && obs.resource && !start.externalName)
+            await this.bindLease(key, release, start, obs.resource);
+        } catch (error) {
+          await this.emit(
+            key,
+            release,
+            start,
+            "admission_refused",
+            "observe_unavailable",
+            {
+              error: errText(error),
+            }
+          );
+        }
+        await this.alert(
+          key,
+          release,
+          start,
+          "admission_refused_state_retained",
+          {
+            reason: release.admissionRefusal.reason,
+          }
+        );
+      }
+      return;
+    }
     let a = start;
     if (a.phase === "planned") a = await this.doCreate(key, release, a, blue);
     if (a.phase === "created") a = await this.awaitLease(key, release, a, blue);

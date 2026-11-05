@@ -17,6 +17,8 @@
  *     that wants a second attempt makes a second call.
  *   - RECEIPT_BEFORE_TRANSACTION: the pre-POST cursor is durable before any Console POST, so a
  *     lost response leaves recoverable evidence rather than an orphan paid lease.
+ *   - COST_NEVER_DECIDES_OBSERVE: native discovery/handle observations survive accounting faults;
+ *     recovered ownership is durable first. Pre-mutation accounting remains authoritative.
  *   - IDENTITY_BEFORE_TRANSACTION: the SAME receipt binds {nodeId, environment, composite
  *     uid/generation, cogniKey}, and it is bound by the claiming INSERT — before the allocation
  *     cursor is even read, let alone posted. Identity arrives EXPLICITLY on the wire from the
@@ -1656,8 +1658,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       adopted.leaseId,
       "create"
     );
-    await this.bindCost(record, adopted.leaseId);
-    await this.observeCost(record, adopted.leaseId);
+    // Discovery and its durable handle are authoritative even when accounting is unavailable.
+    // Recovery observes an existing effect; it grants no new paid mutation.
+    if (adopted.state === "active")
+      await this.observeCostBestEffort(record, adopted.leaseId);
     this.log.warn(
       { cogniKey, allocationCursor, externalName: adopted.leaseId },
       "akash_tx_allocation_recovered"
@@ -1910,17 +1914,26 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     // `compute_cost_unavailable` (operation=observe) and every refused release sat ~13 min in
     // `observe_unavailable` before `orphan_suspect`. Same pattern as delete's `.catch`.
     if (record && output.state === "active")
-      await this.observeCost(record, externalName).catch((error: unknown) => {
-        this.log.warn(
-          {
-            cogniKey: record.cogniKey,
-            externalName,
-            causeType: costFailureType(error),
-          },
-          "compute_cost_observation_failed"
-        );
-      });
+      await this.observeCostBestEffort(record, externalName);
     return resourceFrom(output, providerAccount);
+  }
+
+  /** Accounting cannot suppress native truth on either handle-bound or cursor observation. */
+  private async observeCostBestEffort(
+    record: AkashTxAllocationRecord,
+    externalName: string
+  ): Promise<void> {
+    await this.observeCost(record, externalName).catch((error: unknown) => {
+      this.log.warn(
+        {
+          cogniKey: record.cogniKey,
+          nodeId: record.identity.nodeId,
+          externalName,
+          causeType: costFailureType(error),
+        },
+        "compute_cost_observation_failed"
+      );
+    });
   }
 
   private async withServing(

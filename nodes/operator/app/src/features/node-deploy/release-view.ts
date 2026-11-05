@@ -14,6 +14,7 @@
  * Invariants:
  *   - DERIVED_NOT_STORED: `releaseState` reads terminal admission refusal plus attempt phases; there is no
  *     state column to drift from the sequencer's truth.
+ *     `admissionRefusal` exposes the terminal verdict independently of recovery or serving phase.
  *   - STATE_TABLE (the release the workload's desired row points at — `current`):
  *       active       an attempt of the release is in phase `active` (it serves).
  *       deploying    an attempt is mid-flight (`planned|created|proving|proven`), OR any attempt of the
@@ -136,6 +137,9 @@ export function deriveReleaseTimeline(input: {
   const base = {
     releaseId: input.release.id,
     sourceSha: input.release.sourceSha,
+    // Keep terminal admission visible even while recovery is deploying/closing, or a legacy
+    // serving attempt still owns traffic. Attempts remain the independent recovery projection.
+    admissionRefusal: input.release.admissionRefusal ?? null,
     admissionRefusedAt: input.release.admissionRefusal?.at ?? null,
     current,
     /** True when an attempt of THIS release backs the workload's live lease (any release). */
@@ -159,10 +163,10 @@ export function deriveReleaseTimeline(input: {
   if (ofRelease.some((a) => IN_FLIGHT_PHASES.includes(a.phase)))
     return done("deploying");
   const failures = consecutiveFailures(ofRelease);
-  if (input.release.admissionRefusal)
-    return done("parked", input.release.admissionRefusal.reason);
   if (!parkedByStep && all.some((a) => a.phase === "closing"))
     return done("deploying");
+  if (input.release.admissionRefusal)
+    return done("parked", input.release.admissionRefusal.reason);
   if (parkedByStep || failures >= max) {
     const last = ofRelease[0]?.error ?? "no error recorded";
     return done(
@@ -207,6 +211,7 @@ export function buildWorkloadView(input: {
       sourceSha: release?.sourceSha,
       releaseState: t?.releaseState ?? "failed",
       parkedReason: t?.parkedReason ?? null,
+      admissionRefusal: t?.admissionRefusal ?? null,
       admissionRefusedAt: t?.admissionRefusedAt ?? null,
       recordedAt: t?.recordedAt ?? null,
       startedAt: t?.startedAt ?? null,
