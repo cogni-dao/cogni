@@ -330,7 +330,15 @@ export class NodeDeploySequencer {
     }
 
     const ofRelease = all.filter((a) => a.releaseId === release.id);
-    if (consecutiveFailures(ofRelease) >= this.d.config.maxFailedAttempts) {
+    const failures = consecutiveFailures(ofRelease);
+    // LAST_RESORT_STOP (task.5409): when the release's last refusal shows blue's provider as the only bidder
+    // screening could pass, the park limit grants exactly ONE stop-then-start attempt. Parking first would
+    // leave the node on blue forever (blue never moves, green never places). After that attempt, blue is
+    // retired, so the predicate is false and a further failure parks as usual.
+    const lastResort =
+      failures === this.d.config.maxFailedAttempts &&
+      (await this.stopThenStartEligible(key, release, ofRelease, active));
+    if (failures >= this.d.config.maxFailedAttempts && !lastResort) {
       // Attached to the release's newest attempt so the park is a durable step on its timeline:
       // `release-view` reads `alert/release_parked` as the sequencer's own verdict.
       await this.alert(key, release, ofRelease[0], "release_parked", {
@@ -396,6 +404,33 @@ export class NodeDeploySequencer {
    *    again until this release (or a newer one) serves. If green then fails, the normal park applies.
    * Never for a first release (no blue) or a lane where another provider passed screening.
    */
+  /** The read-only half of stop-then-start: true when blue may be closed so green can take its provider. */
+  private async stopThenStartEligible(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    ofRelease: readonly AttemptRow[],
+    blue: AttemptRow | undefined
+  ): Promise<boolean> {
+    if (release.spec.kind !== "app") return false;
+    if (!blue?.provider || !blue.externalName || blue.releaseId === release.id)
+      return false;
+    const newest = ofRelease[0];
+    if (newest?.phase !== "failed") return false;
+    const stateExcluded = await this.excludedProviders(key, release, undefined);
+    if (stateExcluded.includes(blue.provider)) return false;
+    const others = await this.excludedProviders(key, release, undefined, true);
+    if (
+      !blueWasOnlyScreenedBidder(
+        newest.error,
+        blue.provider,
+        others.length === 0
+      )
+    )
+      return false;
+    const blueRelease = await this.d.store.getRelease(blue.releaseId);
+    return blueRelease?.spec.kind === "app";
+  }
+
   private async stopThenStart(
     key: WorkloadKey,
     release: ReleaseRow,
