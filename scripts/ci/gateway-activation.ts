@@ -11,9 +11,8 @@
  * @internal
  */
 import { execFileSync, spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { z } from "zod";
@@ -26,18 +25,18 @@ import {
   GatewayOperationIdSchema,
   GatewaySourceShaSchema,
 } from "../../nodes/operator/packages/gateway-activation/src/index.ts";
-import { assertRuntimeSource } from "./runtime-source-admission.ts";
+import {
+  ADMISSION_INPUTS,
+  assertCheckout,
+  assertRuntimeSource,
+  FILES,
+  LIB,
+  ROOT,
+  sshArgs,
+  withStagedLibrary,
+} from "./runtime-source-admission.ts";
 
 const CUSTODIAN = "cogni-dao/cogni";
-const ROOT = "/var/lib/cogni/runtime-maintenance";
-const LIB = "scripts/ci/lib";
-const FILES = [
-  "runtime-maintenance-guard.py",
-  "runtime-recovery-receipt.py",
-  "gateway-activation-host.py",
-  "runtime-recovery-host.py",
-  "runtime-guard-install.py",
-] as const;
 const hash = (data: string | Uint8Array) =>
   createHash("sha256").update(data).digest("hex");
 const command = (file: string, args: string[], input?: string) =>
@@ -226,57 +225,13 @@ function inventory(bootstrap = false): string {
   return hash(JSON.stringify(all));
 }
 
-function sshArgs(): string[] {
-  const host = process.env.VM_HOST ?? "";
-  need(
-    /^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$/.test(host),
-    "gateway_vm_host_invalid"
-  );
-  const key =
-    process.env.GITHUB_ACTIONS !== "true" &&
-    process.argv[2] === "bootstrap-candidate"
-      ? process.env.GATEWAY_CANDIDATE_SSH_KEY
-      : join(homedir(), ".ssh/deploy_key");
-  need(key, "gateway_ssh_identity_missing");
-  return [
-    "-i",
-    key ?? "",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "IdentitiesOnly=yes",
-    "-o",
-    "StrictHostKeyChecking=yes",
-    "-o",
-    "ConnectTimeout=10",
-    "-o",
-    "ServerAliveInterval=10",
-    "-o",
-    "ServerAliveCountMax=6",
-  ];
-}
-
 function enroll(
   intent: GatewayIntent,
   bootstrap: boolean,
   enable: boolean
 ): void {
-  const source = command("git", ["rev-parse", "HEAD"]);
-  need(source === intent.implementationSha, "gateway_checkout_source_mismatch");
-  const protectedPaths = [
-    ...FILES.map((f) => `${LIB}/${f}`),
-    `${LIB}/gateway-install-host.py`,
-    "scripts/ci/gateway-activation.ts",
-    "nodes/operator/packages/gateway-activation/src/index.ts",
-  ];
-  command("git", ["diff", "--exit-code", source, "--", ...protectedPaths]);
-  for (const path of protectedPaths) {
-    need(
-      hash(command("git", ["show", `${source}:${path}`])) ===
-        hash(readFileSync(path, "utf8").trimEnd()),
-      "gateway_checkout_bytes_changed"
-    );
-  }
+  const source = intent.implementationSha;
+  assertCheckout(source);
   const minimumSourceSha = bootstrap ? source : assertRuntimeSource(source);
   const inventorySha256 = inventory(bootstrap);
   const blobs = Object.fromEntries(
@@ -295,23 +250,16 @@ function enroll(
       readFileSync("nodes/operator/packages/gateway-activation/src/index.ts")
     ),
     runnerSha256: hash(readFileSync("scripts/ci/gateway-activation.ts")),
+    admissionSha256: Object.fromEntries(
+      Object.entries(ADMISSION_INPUTS).map(([name, path]) => [
+        name,
+        hash(readFileSync(path)),
+      ])
+    ),
     blobs,
     inventorySha256,
   };
-  const host = `root@${process.env.VM_HOST}`;
-  const stage = `${ROOT}/staging/${randomUUID()}`;
-  command("ssh", [
-    ...sshArgs(),
-    host,
-    `umask 077; install -d -m 700 ${ROOT}/staging ${stage}`,
-  ]);
-  try {
-    command("scp", [
-      ...sshArgs(),
-      ...FILES.map((f) => `${LIB}/${f}`),
-      `${LIB}/gateway-install-host.py`,
-      `${host}:${stage}/`,
-    ]);
+  withStagedLibrary((host, stage) => {
     // Recheck after upload: staging itself cannot change installed inputs.
     inventory(bootstrap);
     command(
@@ -319,9 +267,7 @@ function enroll(
       [...sshArgs(), host, `python3 ${stage}/gateway-install-host.py install`],
       JSON.stringify(manifest)
     );
-  } finally {
-    command("ssh", [...sshArgs(), host, `rm -rf -- ${stage}`]);
-  }
+  });
 }
 
 async function run(bootstrap: boolean): Promise<void> {

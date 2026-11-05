@@ -260,13 +260,24 @@ FAKE_OPENBAO_SEALED=true
 degraded_out="$(run_recovery)"
 grep -q '^recovery_state=recovered_degraded$' <<<"$degraded_out"
 
-# The normal candidate-a full-reconcile path shares the recovery preflight. It
-# reaches required-secret validation only after attempting installed recovery;
-# use a missing receipt so the preflight itself performs zero Docker mutation.
-rm -f "$RECEIPT"
-: > "$DOCKER_LOG"
-set +e
-candidate_full_out="$({
+# The full-reconcile entrypoint repairs enrollment before installed recovery.
+# This stub isolates the entrypoint wiring; native tests exercise interrupted
+# publication and the real staged installer under the shared guard.
+export FAKE_REPAIR_VALID_MARKER="$TMPROOT/full-valid-guard.json"
+export FAKE_REPAIR_LOG="$TMPROOT/repair.log"
+cp "$FAKE_GUARD_ROOT/guard.json" "$FAKE_REPAIR_VALID_MARKER"
+cat > "$FAKEBIN/node" <<'NODE_REPAIR'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$#" == 3 && "$1" == --experimental-strip-types && "$2" == */scripts/ci/runtime-source-admission.ts && "$3" == repair-installed-guard ]]
+[[ "${FAKE_REPAIR_REFUSE:-false}" != true ]] || exit 93
+! grep -Eq '(^| )(up|start|restart|stop|kill|rm|down|pull|build|create)( |$)' "$FAKE_DOCKER_LOG"
+cp "$FAKE_REPAIR_VALID_MARKER" "$FAKE_GUARD_ROOT/guard.json"
+chmod 600 "$FAKE_GUARD_ROOT/guard.json"
+printf 'admitted_staged_repair\n' >> "$FAKE_REPAIR_LOG"
+NODE_REPAIR
+chmod +x "$FAKEBIN/node"
+run_candidate_full() {
   env -u DOMAIN \
     PATH="$FAKEBIN:$PATH" \
     VM_HOST=fake \
@@ -275,14 +286,40 @@ candidate_full_out="$({
     COGNI_RECOVERY_RECEIPT="$RECEIPT" \
     FAKE_DOCKER_LOG="$DOCKER_LOG" \
     FAKE_RUNTIME_DIR="$RUNTIME_DIR" \
-    bash scripts/ci/deploy-infra.sh
-} 2>&1)"
-candidate_full_rc=$?
-set -e
-[[ "$candidate_full_rc" -ne 0 ]] || { echo "candidate full reconcile unexpectedly passed without required secrets" >&2; exit 1; }
-grep -q '^recovery_state=custody_required$' <<<"$candidate_full_out"
-grep -q 'Candidate full reconcile continuing after installed-runtime recovery preflight' <<<"$candidate_full_out"
-grep -q 'Missing required deploy input: DOMAIN' <<<"$candidate_full_out"
-[[ ! -s "$DOCKER_LOG" ]] || { echo "candidate full preflight mutated Docker without a receipt" >&2; exit 1; }
+    bash scripts/ci/deploy-infra.sh "$@"
+}
+rm -f "$RECEIPT"
+for enrollment in complete missing stale; do
+  cp "$FAKE_REPAIR_VALID_MARKER" "$FAKE_GUARD_ROOT/guard.json"
+  case "$enrollment" in
+    missing) rm "$FAKE_GUARD_ROOT/guard.json" ;;
+    stale) jq '.protocolVersion = 999' "$FAKE_REPAIR_VALID_MARKER" > "$FAKE_GUARD_ROOT/guard.json" ;;
+  esac
+  : > "$DOCKER_LOG"
+  : > "$FAKE_REPAIR_LOG"
+  set +e
+  candidate_full_out="$(run_candidate_full 2>&1)"
+  candidate_full_rc=$?
+  set -e
+  [[ "$candidate_full_rc" -ne 0 ]] || { echo "candidate full reconcile unexpectedly passed without required inputs" >&2; exit 1; }
+  grep -q '^admitted_staged_repair$' "$FAKE_REPAIR_LOG"
+  grep -q '^recovery_state=custody_required$' <<<"$candidate_full_out"
+  grep -q 'Candidate full reconcile continuing after installed-runtime recovery preflight' <<<"$candidate_full_out"
+  grep -q 'Missing required deploy input: DOMAIN' <<<"$candidate_full_out"
+  [[ ! -s "$DOCKER_LOG" ]] || { echo "candidate full preflight mutated Docker without a receipt" >&2; exit 1; }
+done
+: > "$DOCKER_LOG"
+if FAKE_REPAIR_REFUSE=true run_candidate_full > "$TMPROOT/refused-repair.log" 2>&1; then
+  echo 'failed guard repair admitted full reconcile' >&2; exit 1
+fi
+! grep -q '^recovery_state=' "$TMPROOT/refused-repair.log"
+! grep -Eq '(^| )(up|start|restart|stop|kill|rm|down|pull|build|create)( |$)' "$DOCKER_LOG"
+: > "$FAKE_REPAIR_LOG"
+: > "$DOCKER_LOG"
+if run_candidate_full --dry-run > "$TMPROOT/dry-guard-repair.log" 2>&1; then
+  echo 'dry run unexpectedly passed without required inputs' >&2; exit 1
+fi
+grep -q 'Missing required deploy input: DOMAIN' "$TMPROOT/dry-guard-repair.log"
+[[ ! -s "$FAKE_REPAIR_LOG" && ! -s "$DOCKER_LOG" ]]
 
 echo "PASS: recover-installed-runtime.test.sh"

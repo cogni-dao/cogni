@@ -27,6 +27,8 @@ guard = load('runtime-maintenance-guard')
 receipt = load('runtime-recovery-receipt')
 installer = load('runtime-guard-install')
 FILES = installer.FILES
+ADMISSION_INPUTS = {'enrollmentAdapter', 'sourceAdmission', 'writerPolicy', 'dependencyLock',
+                    'rootManifest', 'workspaceManifest', 'gatewayManifest', 'nodeVersion'}
 
 def require(condition):
     if not condition:
@@ -38,7 +40,7 @@ def main():
     require(len(raw) <= 16384)
     manifest = json.loads(raw)
     require(set(manifest) == {'protocolVersion', 'maintenanceEnabled', 'sourceQualification', 'env', 'custodian', 'implementationSha',
-                              'minimumSourceSha', 'coreSha256', 'runnerSha256', 'blobs', 'inventorySha256', 'operationId'})
+                              'minimumSourceSha', 'coreSha256', 'runnerSha256', 'admissionSha256', 'blobs', 'inventorySha256', 'operationId'})
     operation_id = manifest.pop('operationId')
     require(re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', operation_id))
     require(manifest['protocolVersion'] == 1 and isinstance(manifest['maintenanceEnabled'], bool))
@@ -52,6 +54,11 @@ def main():
         require(re.fullmatch(r'[a-f0-9]{40}', manifest[key]))
     for key in ('coreSha256', 'runnerSha256', 'inventorySha256'):
         require(re.fullmatch(r'[a-f0-9]{64}', manifest[key]))
+    require(set(manifest['admissionSha256']) == ADMISSION_INPUTS)
+    for fingerprint in manifest['admissionSha256'].values():
+        require(isinstance(fingerprint, str) and re.fullmatch(r'[a-f0-9]{64}', fingerprint))
+    require(hashlib.sha256((LIB / 'gateway-install-host.py').read_bytes()).hexdigest() ==
+            manifest['admissionSha256']['enrollmentAdapter'])
     require(set(manifest['blobs']) == set(FILES))
     for name in FILES:
         require(hashlib.sha256((LIB / name).read_bytes()).hexdigest() == manifest['blobs'][name])
@@ -75,7 +82,7 @@ def main():
             pending_directory = guard.ROOT / 'operations' / operation_id
             pending = pending_directory / 'operation.json'
             if pending_directory.exists() and (not pending.exists() or json.loads(guard.private_read(pending))['state'] not in guard.TERMINAL):
-                for key in ('sourceQualification', 'implementationSha', 'minimumSourceSha', 'blobs', 'coreSha256', 'runnerSha256'):
+                for key in ('sourceQualification', 'implementationSha', 'minimumSourceSha', 'blobs', 'coreSha256', 'runnerSha256', 'admissionSha256'):
                     require(previous[key] == manifest[key])
                 for name in FILES:
                     require(hashlib.sha256((target / name).read_bytes()).hexdigest() == previous['blobs'][name])
@@ -85,7 +92,8 @@ def main():
             # implementation inputs, including the pure shared policy.
             if previous['sourceQualification'] == 'premerge' and manifest['sourceQualification'] == 'merged':
                 require(previous['blobs'] == manifest['blobs'] and previous['coreSha256'] == manifest['coreSha256']
-                        and previous['runnerSha256'] == manifest['runnerSha256'])
+                        and previous['runnerSha256'] == manifest['runnerSha256']
+                        and previous['admissionSha256'] == manifest['admissionSha256'])
         # Nested installation reuses the inherited lock description. It installs
         # and proves the guard/caller before gateway maintenance is enabled.
         os.environ['COGNI_RUNTIME_GUARD_FD'] = str(active_guard.stream.fileno())

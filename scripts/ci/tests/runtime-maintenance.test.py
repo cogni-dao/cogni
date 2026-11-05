@@ -53,11 +53,15 @@ class NativeContracts(unittest.TestCase):
         stage.mkdir(exist_ok=True)
         for name in gateway_install.FILES:
             (stage / name).write_text(name + revision)
+        (stage / 'gateway-install-host.py').write_text('enrollment-adapter' + revision)
         return {'protocolVersion': 1, 'maintenanceEnabled': True, 'sourceQualification': qualification,
                 'env': 'candidate-a', 'custodian': {'owner': 'cogni-dao', 'repo': 'cogni', 'controlEnv': 'production'},
                 'implementationSha': source * 40, 'minimumSourceSha': floor * 40,
                 'coreSha256': receipt.digest(('core' + revision).encode()),
                 'runnerSha256': receipt.digest(('runner' + revision).encode()),
+                'admissionSha256': {name: receipt.digest((name + revision).encode())
+                                   for name in gateway_install.ADMISSION_INPUTS} |
+                                  {'enrollmentAdapter': receipt.digest((stage / 'gateway-install-host.py').read_bytes())},
                 'blobs': {name: receipt.digest((stage / name).read_bytes()) for name in gateway_install.FILES},
                 'inventorySha256': 'e' * 64, 'operationId': ID}
 
@@ -123,6 +127,22 @@ class NativeContracts(unittest.TestCase):
         source = json.loads((guard.ROOT / 'source.json').read_text())
         self.assertEqual(source['minimumSourceSha'], 'a' * 40)
         self.assertEqual(source['coreSha256'], receipt.digest(b'core2'))
+
+    def test_qualification_transfer_refuses_each_changed_admission_input(self):
+        self.enroll(self.enrollment('premerge'))
+        self.journal('activated')
+        previous = (guard.ROOT / 'source.json').read_bytes()
+        for field in gateway_install.ADMISSION_INPUTS:
+            with self.subTest(field=field):
+                manifest = self.enrollment('merged', source='b', floor='b')
+                if field == 'enrollmentAdapter':
+                    (self.root / 'staged-library' / 'gateway-install-host.py').write_text('new installer')
+                    manifest['admissionSha256'][field] = receipt.digest(b'new installer')
+                else:
+                    manifest['admissionSha256'][field] = 'f' * 64
+                with self.assertRaisesRegex(RuntimeError, 'gateway_guard_enrollment_refused'):
+                    self.enroll(manifest)
+                self.assertEqual((guard.ROOT / 'source.json').read_bytes(), previous)
 
     def test_pending_enrollment_preserves_inputs_and_allows_only_original_resume(self):
         original = self.enrollment('merged')
@@ -286,6 +306,41 @@ with m.guard.RuntimeGuard(sys.argv[4]) as guard:
             self.assertEqual(receipt.digest((target / name).read_bytes()), fingerprint)
         self.assertTrue((guard.ROOT / 'guard.json').is_file())
         self.assertFalse((guard.ROOT / 'source.json').exists())
+
+    def test_admitted_staged_installer_repairs_interrupted_first_or_upgrade_publication(self):
+        self.enterContext(patch.object(installer, 'recover_caller', return_value=None))
+        effects = self.enterContext(patch.object(recovery, 'run'))
+        for previous in (False, True):
+            with self.subTest(previous_enrollment=previous):
+                root = self.root / ('upgrade' if previous else 'first-install')
+                stage = self.root / ('upgrade-stage' if previous else 'first-stage')
+                stage.mkdir()
+                for name in installer.FILES:
+                    (stage / name).write_bytes((LIB / name).read_bytes())
+                with patch.object(installer, 'LIB', stage), \
+                     patch.object(installer.guard, 'ROOT', root), patch.object(recovery.guard, 'ROOT', root):
+                    if previous:
+                        installer.install('a' * 40)
+                        with (stage / installer.FILES[0]).open('ab') as changed:
+                            changed.write(b'\n# qualified upgrade\n')
+                    original = installer.receipt.atomic
+                    published = []
+                    def interrupted(path, data):
+                        original(path, data)
+                        if path.parent == root / 'lib':
+                            published.append(path)
+                            if len(published) == 2:
+                                raise ConnectionError('installer lost before enrollment commit')
+                    with patch.object(installer.receipt, 'atomic', side_effect=interrupted):
+                        with self.assertRaises(ConnectionError):
+                            installer.install('b' * 40)
+                    effects.reset_mock()
+                    self.assertEqual(recovery.recover()['state'], 'custody_required')
+                    effects.assert_not_called()
+                    installer.install('b' * 40)
+                    with installer.guard.RuntimeGuard():
+                        self.assertEqual(installer.guard.validate_installation()['sourceSha'], 'b' * 40)
+                    effects.assert_not_called()
 
     def test_native_timeout_does_not_release_a_surviving_childs_lock(self):
         release = self.root / 'release-timeout-child'

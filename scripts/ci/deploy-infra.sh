@@ -264,8 +264,17 @@ esac
 # rsync, image pulls, or the full remote reconciler. It trusts neither file
 # presence nor Docker restart policy: every installed input and local image must
 # byte-match the receipt written LAST by a successful full deploy.
-if [[ "$RECOVER_INSTALLED_RUNTIME" == "true" || "$ENVIRONMENT" == candidate-* ]]; then
+if [[ "$DRY_RUN" != "true" && ( "$RECOVER_INSTALLED_RUNTIME" == "true" || "$ENVIRONMENT" == candidate-* ) ]]; then
   [[ -n "${VM_HOST:-}" ]] || log_fatal "VM_HOST is required for installed-runtime recovery"
+  if [[ "$RECOVER_INSTALLED_RUNTIME" != "true" ]]; then
+    # A full reconcile can repair partial publication from admitted staged
+    # helpers. Explicit custody-free recovery still trusts only complete inputs.
+    (
+      cd "$CALLER_REPO"
+      VM_HOST="$VM_HOST" DEPLOY_ENVIRONMENT="$ENVIRONMENT" SSH_KEY_PATH="${SSH_KEY_PATH:-}" \
+        node --experimental-strip-types "$CALLER_REPO/scripts/ci/runtime-source-admission.ts" repair-installed-guard
+    )
+  fi
   recovery_output="$(ssh $SSH_OPTS root@"$VM_HOST" 'bash -s' <<'RECOVER_REMOTE'
 set -euo pipefail
 
