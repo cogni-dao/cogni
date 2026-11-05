@@ -97,9 +97,12 @@ import {
 } from "./node-app-env";
 import { nodeCatalogPolicy } from "./node-catalog-policy";
 import {
+  asQualificationFailure,
   checkQualification,
+  QualificationFailure,
   qualificationChallenge,
   savedQualification,
+  validationCode,
 } from "./qualification";
 import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
 
@@ -1624,7 +1627,14 @@ export class NodeDeploySequencer {
             if (r.status === 200) {
               try {
                 attempt = await this.qualify(release, attempt, "qualify");
-              } catch {
+              } catch (error) {
+                await this.qualificationDiagnostic(
+                  key,
+                  release,
+                  attempt,
+                  "qualify",
+                  error
+                );
                 return this.failAttempt(
                   key,
                   release,
@@ -1744,6 +1754,14 @@ export class NodeDeploySequencer {
           firstAt,
         });
       } catch (error) {
+        if (!touched && error instanceof QualificationFailure)
+          await this.qualificationDiagnostic(
+            key,
+            release,
+            attempt,
+            "readback",
+            error
+          );
         // Restore the edge to blue when we moved it (a re-point, NOT a withdrawal), then close green.
         const blueIngress = blue
           ? ingressHostOf(blue.endpoints, host)
@@ -1806,7 +1824,7 @@ export class NodeDeploySequencer {
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         expired = true;
-        reject(new Error("qualification deadline expired"));
+        reject(new QualificationFailure("deadline", "expired"));
       }, capability.timeoutMs);
     });
     try {
@@ -1828,7 +1846,7 @@ export class NodeDeploySequencer {
     const capability = release.spec.health?.qualification;
     if (!capability) {
       if (release.spec.companions?.length)
-        throw new Error("companion qualification missing");
+        throw new QualificationFailure("precondition", "capability_missing");
       return attempt;
     }
     const startedAt = this.d.clock.now();
@@ -1840,26 +1858,28 @@ export class NodeDeploySequencer {
     const host = publicHostOf(release.spec);
     const post = this.d.probe.qualification?.bind(this.d.probe);
     if (!ingress || !host || !post)
-      throw new Error("qualification transport missing");
+      throw new QualificationFailure("precondition", "transport_missing");
     const current = (await this.d.store.attemptsFor(release)).find(
       (a) => a.id === attempt.id
     );
     if (!current || current.externalName !== attempt.externalName)
-      throw new Error("qualification attempt changed");
+      throw new QualificationFailure("precondition", "attempt_changed");
     const prior = savedQualification(current);
     if (mode === "qualify" && prior)
       return this.qualifyWithin(release, current, "readback", expired);
     if (mode === "readback" && !prior)
-      throw new Error("qualification evidence missing");
+      throw new QualificationFailure("precondition", "evidence_missing");
     if (
       mode === "qualify" &&
       current.steps.some((s) => s.step === "qualification_started")
     )
-      throw new Error("qualification outcome already reserved");
+      throw new QualificationFailure("reserve", "already_reserved");
     const runtime = await this.nodeAppRuntime(release, release);
     const authSecret = runtime?.env.AUTH_SECRET;
-    if (!authSecret || expired() || this.d.clock.now() >= deadline)
-      throw new Error("qualification auth unavailable");
+    if (!authSecret)
+      throw new QualificationFailure("precondition", "auth_unavailable");
+    if (expired() || this.d.clock.now() >= deadline)
+      throw new QualificationFailure("deadline", "expired");
     const challenge = await qualificationChallenge({
       release,
       attempt: current,
@@ -1870,63 +1890,89 @@ export class NodeDeploySequencer {
     });
     if (mode === "qualify") {
       // This is a required durable write, not best-effort telemetry. A lost write response never dispatches.
-      await this.emit(
-        release,
-        release,
-        current,
-        "qualification_started",
-        "reserved",
-        {},
-        true
-      );
+      try {
+        await this.emit(
+          release,
+          release,
+          current,
+          "qualification_started",
+          "reserved",
+          {},
+          true
+        );
+      } catch {
+        throw new QualificationFailure("reserve", "write_failed");
+      }
       const reserved = (await this.d.store.attemptsFor(release)).find(
         (a) => a.id === current.id
       );
       if (!reserved?.steps.some((s) => s.step === "qualification_started"))
-        throw new Error("qualification reservation not persisted");
+        throw new QualificationFailure("reserve", "not_persisted");
     }
     const remaining = deadline - this.d.clock.now();
     if (expired() || remaining <= 0)
-      throw new Error("qualification deadline expired");
+      throw new QualificationFailure("deadline", "expired");
+    // ONE_AUTHORITY (bug.5568): the static ingress is Host and SNI; the port takes no other host.
     const result = await post({
       ingressHost: ingress,
-      hostHeader: host,
       path: capability.path,
       token: challenge.token,
       mode,
       timeoutMs: remaining,
     });
-    if (
-      result.status < 200 ||
-      result.status >= 300 ||
-      expired() ||
-      this.d.clock.now() > deadline
-    )
-      throw new Error("qualification failed");
-    const evidence = checkQualification({
-      body: result.body,
-      release,
-      attempt: current,
-      nonce: challenge.nonce,
-      startedAt,
-      now: this.d.clock.now(),
-      ...(prior ? { prior } : {}),
-    });
+    const sent = { ms: result.ms };
+    if (result.status === 0)
+      throw new QualificationFailure(
+        "transport",
+        result.error ?? "transport_failed",
+        sent
+      );
+    if (result.status < 200 || result.status >= 300)
+      throw new QualificationFailure("http", "status", {
+        ...sent,
+        status: result.status,
+      });
+    if (expired() || this.d.clock.now() > deadline)
+      throw new QualificationFailure("deadline", "expired", {
+        ...sent,
+        status: result.status,
+      });
+    let evidence: ReturnType<typeof checkQualification>;
+    try {
+      evidence = checkQualification({
+        body: result.body,
+        release,
+        attempt: current,
+        nonce: challenge.nonce,
+        startedAt,
+        now: this.d.clock.now(),
+        ...(prior ? { prior } : {}),
+      });
+    } catch (error) {
+      throw new QualificationFailure("validate", validationCode(error), {
+        ...sent,
+        status: result.status,
+      });
+    }
     const step = {
       step: mode === "qualify" ? "qualification" : "qualification_readback",
       outcome: "ok",
       reason: JSON.stringify(evidence),
       at: new Date(this.d.clock.now()).toISOString(),
     };
-    await this.emit(
-      release,
-      release,
-      current,
-      step.step,
-      step.outcome,
-      { reason: step.reason },
-      true
-    );
+    try {
+      await this.emit(
+        release,
+        release,
+        current,
+        step.step,
+        step.outcome,
+        { reason: step.reason },
+        true
+      );
+    } catch {
+      throw new QualificationFailure("persist", "write_failed");
+    }
     const saved = (await this.d.store.attemptsFor(release)).find(
       (a) => a.id === current.id
     );
@@ -1936,8 +1982,50 @@ export class NodeDeploySequencer {
       JSON.stringify(saved.endpoints) !== JSON.stringify(current.endpoints) ||
       !saved.steps.some((s) => s.step === step.step && s.reason === step.reason)
     )
-      throw new Error("qualification evidence not persisted");
+      throw new QualificationFailure("persist", "not_persisted");
     return saved;
+  }
+
+  /**
+   * BOUNDED_DIAGNOSTIC (bug.5568): one correlated event for a failed qualification or readback. It
+   * carries mode, stage, allowlisted code, HTTP status, elapsed time, attempt, allocation and the
+   * ingress used as Host and SNI. Never the bearer, headers, body or a raw error. Best-effort: it does
+   * not change the failure and cleanup decision that follows.
+   */
+  private async qualificationDiagnostic(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mode: "qualify" | "readback",
+    error: unknown
+  ): Promise<void> {
+    const f = asQualificationFailure(error);
+    const ingress = ingressHostOf(
+      attempt.endpoints,
+      publicHostOf(release.spec)
+    );
+    try {
+      await this.emit(
+        key,
+        release,
+        attempt,
+        "qualification_diagnostic",
+        f.stage,
+        {
+          reason: `${mode} ${f.message}`,
+          mode,
+          stage: f.stage,
+          code: f.code,
+          ...(f.status === undefined ? {} : { httpStatus: f.status }),
+          ...(f.ms === undefined ? {} : { qualificationMs: f.ms }),
+          attemptId: attempt.id,
+          allocation: attempt.externalName,
+          ...(ingress ? { ingress, host: ingress } : {}),
+        }
+      );
+    } catch {
+      // Telemetry never changes the verdict.
+    }
   }
 
   /** Poll the PUBLIC host until `publicStreak` consecutive reads return the exact sha. */

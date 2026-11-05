@@ -15,6 +15,8 @@
  *     it asks the zone's authoritative nameservers. Cloudflare DoH is only the fallback when that path is
  *     unreachable, never when the authoritative answer is "no record". An unreachable zone goes
  *     straight to DoH for 5 min, and the result carries `fallback` (the reason) for the caller to log.
+ *   - ONE_AUTHORITY (bug.5568): release qualification uses the observed static ingress as DNS target,
+ *     TLS SNI/verified certificate name and HTTP Host; a qualification failure reports a normalized code.
  * Side-effects: IO (HTTP/HTTPS/TCP)
  * @internal
  */
@@ -76,6 +78,19 @@ function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
     );
   });
   return Promise.race([p, timeout]).finally(() => clearTimeout(t));
+}
+
+/** A qualification transport failure that carries only its normalized code. */
+function transportError(code: string): Error {
+  return Object.assign(new Error(code), { code });
+}
+
+/** The allowlisted shape of a transport failure code: Node/OpenSSL codes or our own names. */
+function transportCode(e: unknown): string {
+  const code = (e as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" && /^[A-Za-z0-9_]{1,64}$/.test(code)
+    ? code
+    : "transport_failed";
 }
 
 /** NXDOMAIN or no A data: the name has no record (yet). Not a transport failure. */
@@ -167,7 +182,6 @@ export class HttpProbe implements ProbePort {
 
   qualification(input: {
     readonly ingressHost: string;
-    readonly hostHeader: string;
     readonly path: string;
     readonly token: string;
     readonly mode: "qualify" | "readback";
@@ -179,17 +193,14 @@ export class HttpProbe implements ProbePort {
         !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(input.ingressHost) ||
         !/^\/(?!\/)[A-Za-z0-9._~/-]*$/.test(input.path)
       ) {
-        resolve({
-          status: 0,
-          body: "",
-          ms: 0,
-          error: "invalid qualification destination",
-        });
+        resolve({ status: 0, body: "", ms: 0, error: "invalid_destination" });
         return;
       }
       const body = JSON.stringify({ mode: input.mode });
-      // TLS authenticates the observed ingress certificate; HTTP Host selects the green lease.
-      // Native https never follows redirects, so a bearer cannot leave this origin.
+      // ONE_AUTHORITY (bug.5568): the observed static ingress is the DNS target, the TLS SNI and
+      // verified certificate name, and the HTTP Host. A provider ingress may answer 421 when SNI and
+      // Host disagree, so the canonical node host is never sent here. Native https never follows
+      // redirects, so a bearer cannot leave this origin.
       const req = httpsRequest(
         {
           hostname: input.ingressHost,
@@ -198,7 +209,7 @@ export class HttpProbe implements ProbePort {
           path: input.path,
           method: "POST",
           headers: {
-            host: input.hostHeader,
+            host: input.ingressHost,
             authorization: `Bearer ${input.token}`,
             "content-type": "application/json",
             "content-length": Buffer.byteLength(body),
@@ -211,10 +222,10 @@ export class HttpProbe implements ProbePort {
           res.on("data", (chunk: string) => {
             text += chunk;
             if (Buffer.byteLength(text) > 16384)
-              req.destroy(new Error("qualification response too large"));
+              req.destroy(transportError("response_too_large"));
           });
           res.on("error", () =>
-            req.destroy(new Error("qualification response unavailable"))
+            req.destroy(transportError("response_unavailable"))
           );
           res.on("end", () =>
             resolve({
@@ -226,15 +237,17 @@ export class HttpProbe implements ProbePort {
         }
       );
       const hard = setTimeout(
-        () => req.destroy(new Error("qualification timeout")),
+        () => req.destroy(transportError("timeout")),
         Math.min(20000, Math.max(1, input.timeoutMs))
       );
-      req.on("error", () =>
+      // BOUNDED_DIAGNOSTIC: only a normalized code leaves the adapter (for example
+      // DEPTH_ZERO_SELF_SIGNED_CERT, ECONNREFUSED, timeout); never a message, header or body.
+      req.on("error", (e) =>
         resolve({
           status: 0,
           body: "",
           ms: Date.now() - started,
-          error: "qualification transport failed",
+          error: transportCode(e),
         })
       );
       req.on("close", () => clearTimeout(hard));

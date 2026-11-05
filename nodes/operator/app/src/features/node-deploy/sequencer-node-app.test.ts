@@ -1263,6 +1263,84 @@ describe("private release companions", () => {
     );
   });
 
+  it.each([
+    ["qualify", 421, "http", "status"],
+    ["qualify", 0, "transport", "DEPTH_ZERO_SELF_SIGNED_CERT"],
+    ["readback", 503, "http", "status"],
+    ["readback", 200, "validate", "evidence_json"],
+  ] as const)("a %s answer %s fails green with one bounded diagnostic and keeps blue (bug.5568)", async (failMode, status, stage, code) => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    await companionRelease(
+      h,
+      canaryApp({
+        bindings: [],
+        expose: { http: { host: "poly-preview.cognidao.org" } },
+      })
+    );
+    const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
+    await h.seq.step(key);
+    const blue = h.store.attempts.find((a) => a.phase === "active");
+    const before = [...h.dns.records.values()].map((r) => r.content);
+    proofResponder(h);
+    const responder = h.probe.qualification;
+    const sent: { ingressHost: string; token: string }[] = [];
+    h.probe.qualification = async (input) => {
+      sent.push(input);
+      const ok = await responder?.(input);
+      if (!ok) throw new Error("missing probe");
+      if (input.mode !== failMode) return ok;
+      if (status === 0)
+        return {
+          status,
+          body: "",
+          ms: 7,
+          error: "DEPTH_ZERO_SELF_SIGNED_CERT",
+        };
+      return {
+        status,
+        body: status === 200 ? "<html>secret-body</html>" : "secret-body",
+        ms: 7,
+      };
+    };
+    const { release } = await companionRelease(h);
+    await h.seq.step(key);
+    const green = h.store.attempts.find((a) => a.releaseId === release.id);
+    expect(green?.phase).toBe("failed");
+    expect(h.store.attempts.find((a) => a.id === blue?.id)?.phase).toBe(
+      "active"
+    );
+    expect([...h.dns.records.values()].map((r) => r.content)).toEqual(before);
+    // ONE_AUTHORITY: the green attempt's observed static ingress, never the canonical node host.
+    const ingress = green?.endpoints
+      .map((e) => e.replace(/^https?:\/\//, "").replace(/\/.*$/, ""))
+      .find((e) => e !== "poly-preview.cognidao.org");
+    expect(ingress).toBeTruthy();
+    expect(sent.every((s) => s.ingressHost === ingress)).toBe(true);
+    expect(sent.some((s) => "hostHeader" in s)).toBe(false);
+    const diagnostics = h.log.lines.filter(
+      (l) => l.fields.step === "qualification_diagnostic"
+    );
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.fields).toMatchObject({
+      mode: failMode,
+      stage,
+      code,
+      qualificationMs: 7,
+      attemptId: green?.id,
+      allocation: green?.externalName,
+      ingress,
+      host: ingress,
+      ...(status ? { httpStatus: status } : {}),
+    });
+    expect(
+      green?.steps.find((s) => s.step === "qualification_diagnostic")?.reason
+    ).toContain(`${failMode} qualification ${stage} ${code}`);
+    const recorded = JSON.stringify([h.log.lines, h.store.attempts]);
+    expect(recorded).not.toContain("secret-body");
+    for (const s of sent) expect(recorded).not.toContain(s.token);
+  });
+
   it("missing publication stays pending; invalid coverage parks before any paid create", async () => {
     const h = harness({ environment: "preview" });
     installBundle(h);

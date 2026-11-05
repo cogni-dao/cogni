@@ -6,6 +6,7 @@
  * Purpose: Sign release qualification challenges and validate fresh evidence for every selected companion.
  * Scope: Wire v1 challenge/evidence policy; does not dispatch requests or perform product operations.
  * Invariants: Purpose-separated credentials; exact release/attempt/allocation identity; readiness and boots match the selected set.
+ *   BOUNDED_DIAGNOSTIC: a failure names its stage and an allowlisted code, never a token, header, body or raw message.
  * Side-effects: randomness (challenge nonce)
  * Links: sequencer.ts, ports/node-deploy.port.ts, bug.5568
  * @internal
@@ -70,6 +71,67 @@ const evidenceSchema = z
   })
   .strict();
 export type QualificationEvidence = z.infer<typeof evidenceSchema>;
+
+/** Where a qualification stopped. The failure decision is the same for every stage. */
+export type QualificationStage =
+  | "precondition"
+  | "reserve"
+  | "transport"
+  | "http"
+  | "validate"
+  | "persist"
+  | "deadline"
+  | "internal";
+
+/**
+ * A qualification failure that is safe to log and persist: its stage, an allowlisted code, and the
+ * HTTP status and elapsed time when a request was made. The message is built from these fields only.
+ */
+export class QualificationFailure extends Error {
+  readonly stage: QualificationStage;
+  readonly code: string;
+  readonly status: number | undefined;
+  readonly ms: number | undefined;
+  constructor(
+    stage: QualificationStage,
+    code: string,
+    detail: { readonly status?: number; readonly ms?: number } = {}
+  ) {
+    const safe = safeCode(code);
+    super(
+      `qualification ${stage} ${safe}${detail.status ? ` http=${detail.status}` : ""}`
+    );
+    this.name = "QualificationFailure";
+    this.stage = stage;
+    this.code = safe;
+    this.status = detail.status;
+    this.ms = detail.ms;
+  }
+}
+
+/** Keep a code to the allowlisted shape; anything else becomes `unexpected`. */
+function safeCode(code: string): string {
+  return /^[A-Za-z0-9_]{1,64}$/.test(code) ? code : "unexpected";
+}
+
+/**
+ * The bounded validation code of an evidence check failure. A JSON or schema error message can quote
+ * the response body, so only its class is kept; our own fixed messages become snake_case codes.
+ */
+export function validationCode(error: unknown): string {
+  if (error instanceof z.ZodError) return "evidence_schema";
+  if (error instanceof SyntaxError) return "evidence_json";
+  if (error instanceof Error && /^[a-z][a-z -]{0,62}$/.test(error.message))
+    return error.message.replace(/[ -]+/g, "_");
+  return "evidence_invalid";
+}
+
+/** Any thrown value as a QualificationFailure; an unknown error keeps no text. */
+export function asQualificationFailure(error: unknown): QualificationFailure {
+  return error instanceof QualificationFailure
+    ? error
+    : new QualificationFailure("internal", "unexpected");
+}
 
 export function qualificationSubject(release: ReleaseRow, attempt: AttemptRow) {
   const plan = release.spec.artifactPlan;

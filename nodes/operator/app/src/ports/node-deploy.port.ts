@@ -372,10 +372,13 @@ export interface HttpResult {
 }
 
 export interface ProbePort {
-  /** HTTPS to the observed ingress (certificate/SNI for ingress), with the node Host header. No redirects. */
+  /**
+   * POST over verified HTTPS to the observed static ingress. That one name is the DNS target, the TLS
+   * SNI and certificate name, and the HTTP Host (a provider may answer 421 when SNI and Host differ).
+   * No redirects. On a transport failure `status` is 0 and `error` is a normalized code, never a message.
+   */
   qualification?(input: {
     readonly ingressHost: string;
-    readonly hostHeader: string;
     readonly path: string;
     readonly token: string;
     readonly mode: "qualify" | "readback";

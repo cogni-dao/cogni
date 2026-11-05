@@ -158,21 +158,20 @@ describe("HttpProbe.publicRead (story.5137 NO_NEGATIVE_CACHE)", () => {
 vi.mock("node:https", () => ({ request: vi.fn() }));
 
 describe("qualification transport owner reconciliation", () => {
-  it.each([
-    200, 302, 0,
-  ])("verifies observed ingress TLS, selects HTTP Host and refuses redirect/retry (%s)", async (status) => {
+  function mockQualification(status: number, error?: Error) {
     const mock = vi.mocked(httpsRequest);
     mock.mockReset();
     mock.mockImplementation((...args: unknown[]) => {
       const options = args[0] as RequestOptions;
       const callback = args[1];
+      // ONE_AUTHORITY (bug.5568): the observed static ingress is DNS target, SNI and Host.
       expect(options).toMatchObject({
         hostname: "green.provider.example",
         servername: "green.provider.example",
         port: 443,
         method: "POST",
         headers: {
-          host: "node-preview.example",
+          host: "green.provider.example",
           authorization: "Bearer challenge",
         },
       });
@@ -180,10 +179,14 @@ describe("qualification transport owner reconciliation", () => {
       expect(opts.rejectUnauthorized).not.toBe(false);
       expect(opts.checkServerIdentity).toBeUndefined();
       const req = Object.assign(new EventEmitter(), {
+        destroy(e: Error) {
+          req.emit("error", e);
+          req.emit("close");
+        },
         end() {
           queueMicrotask(() => {
             if (status === 0)
-              req.emit("error", new Error("certificate identity mismatch"));
+              req.emit("error", error ?? new Error("certificate mismatch"));
             else {
               const res = new IncomingMessage(new Socket());
               res.statusCode = status;
@@ -199,15 +202,61 @@ describe("qualification transport owner reconciliation", () => {
       });
       return req as unknown as ClientRequest;
     });
-    const result = await new HttpProbe().qualification({
+    return mock;
+  }
+  const qualify = () =>
+    new HttpProbe().qualification({
       ingressHost: "green.provider.example",
-      hostHeader: "node-preview.example",
       path: "/qualification",
       token: "challenge",
       mode: "qualify",
       timeoutMs: 20000,
     });
+
+  it.each([
+    200, 302, 421, 0,
+  ])("verifies observed ingress TLS, sends it as Host and refuses redirect/retry (%s)", async (status) => {
+    const mock = mockQualification(status);
+    const result = await qualify();
     expect(result.status).toBe(status);
     expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [
+      Object.assign(new Error("self-signed certificate secret=abc"), {
+        code: "DEPTH_ZERO_SELF_SIGNED_CERT",
+      }),
+      "DEPTH_ZERO_SELF_SIGNED_CERT",
+    ],
+    [
+      Object.assign(new Error("connect ECONNREFUSED"), {
+        code: "ECONNREFUSED",
+      }),
+      "ECONNREFUSED",
+    ],
+    [new Error("Bearer challenge leaked in message"), "transport_failed"],
+    [
+      Object.assign(new Error("odd"), { code: "has spaces / Bearer x" }),
+      "transport_failed",
+    ],
+  ])("reports a normalized transport code, never the message (%#)", async (error, code) => {
+    mockQualification(0, error);
+    const result = await qualify();
+    expect(result).toMatchObject({ status: 0, body: "", error: code });
+  });
+
+  it("refuses an invalid destination before any request", async () => {
+    const mock = vi.mocked(httpsRequest);
+    mock.mockReset();
+    const result = await new HttpProbe().qualification({
+      ingressHost: "bad host/",
+      path: "/qualification",
+      token: "challenge",
+      mode: "qualify",
+      timeoutMs: 20000,
+    });
+    expect(result).toMatchObject({ status: 0, error: "invalid_destination" });
+    expect(mock).not.toHaveBeenCalled();
   });
 });
