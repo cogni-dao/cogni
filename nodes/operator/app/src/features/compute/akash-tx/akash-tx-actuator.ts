@@ -292,6 +292,17 @@ const ROLLED_BACK_FAILURE_CODE = "allocation_rolled_back";
 const LEASE_LOG_TOKEN_TTL_SECONDS = 300;
 
 /**
+ * Lease-log bounds (task.5420). The cap is on SOURCES returned (64, the wire contract max),
+ * never on receipts read: dead receipts (refused creates, closed leases) sit in the live set
+ * until a sweep settles them, so a receipt cap of 32 filled with dead rows and starved every
+ * newer lease. The receipt read is wide and newest-first; the source cap bounds the answer.
+ */
+const LEASE_LOG_RECEIPT_SCAN_LIMIT = 500;
+const LEASE_LOG_SOURCE_MAX = 64;
+/** Bound on the per-process "already logged as closed" set; cleared when full. */
+const LEASE_LOG_CLOSED_MEMO_MAX = 1_000;
+
+/**
  * The dseq a failed create is PROVEN to have closed, if the client proved it.
  *
  * Read structurally rather than by importing AkashComputeError, because features must not
@@ -388,6 +399,11 @@ export class AkashTxActuator implements AkashTxActuatorPort {
    * from the DB's unique (lease_id, outcome), never from this cache (task.5153).
    */
   private readonly bootOkRecorded = new Set<string>();
+  /**
+   * Per-process log dedupe for `akash_tx_lease_log_source_closed`: a dead receipt is read on
+   * every pump poll until a sweep settles it, so it is named once, not once per poll.
+   */
+  private readonly closedLeaseLogSources = new Set<string>();
 
   constructor(deps: AkashTxActuatorDeps) {
     this.console = deps.console;
@@ -1801,15 +1817,19 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     environment?: string;
     limit?: number;
   }): Promise<AkashTxLeaseLogSources> {
-    const limit = Math.min(Math.max(input.limit ?? 32, 1), 64);
+    const maxSources = Math.min(
+      Math.max(input.limit ?? LEASE_LOG_SOURCE_MAX, 1),
+      LEASE_LOG_SOURCE_MAX
+    );
     let records: readonly AkashTxAllocationRecord[];
     try {
       // bug.5264: enumerate every LIVE (non-terminal) receipt, not only `allocated` ones — a
       // lease that boots but never serves is closed on its BootDeadline before its receipt ever
       // flips past `preparing`, so tailing only `allocated` loses exactly the boot logs we need.
+      // task.5420: newest-first and wide; the cap applies to sources below, not to receipts.
       records = await this.ledger.listActive({
         ...(input.environment ? { environment: input.environment } : {}),
-        limit,
+        limit: LEASE_LOG_RECEIPT_SCAN_LIMIT,
       });
     } catch (error) {
       throw this.ledgerUnavailable(error, "*", "listActive");
@@ -1817,6 +1837,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
 
     const sources: AkashTxLeaseLogSource[] = [];
     for (const record of records) {
+      if (sources.length >= maxSources) break;
       if (!record.externalName) {
         // A live receipt with no provider handle is unpumpable — but SILENCE here is the very
         // failure bug.5264 is about, so name it: a booting lease stuck before its handle bound
@@ -1836,6 +1857,28 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         const descriptor = await this.console.leaseLogDescriptor({
           leaseId: record.externalName,
         });
+        if (descriptor.state !== "active") {
+          // ACTIVE_LEASE_ONLY (task.5420): a receipt with no active lease (a refused create that
+          // kept its dseq, or a closed lease) is never a source. Named once per process: it is
+          // expected residue for a sweep to settle, not an error.
+          if (!this.closedLeaseLogSources.has(record.externalName)) {
+            if (this.closedLeaseLogSources.size >= LEASE_LOG_CLOSED_MEMO_MAX) {
+              this.closedLeaseLogSources.clear();
+            }
+            this.closedLeaseLogSources.add(record.externalName);
+            this.log.info(
+              {
+                cogniKey: record.cogniKey,
+                externalName: record.externalName,
+                environment: record.environment,
+                receiptState: record.state,
+                leaseState: descriptor.state,
+              },
+              "akash_tx_lease_log_source_closed"
+            );
+          }
+          continue;
+        }
         const providerAccount =
           descriptor.providerAccount ?? record.providerAccount;
         if (!providerAccount || !descriptor.providerHostUri) {

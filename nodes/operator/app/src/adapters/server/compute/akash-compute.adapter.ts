@@ -874,7 +874,9 @@ export class AkashComputeAdapter
       `/v1/deployments/${encodeURIComponent(p.leaseId)}`
     );
     const leases = detail?.leases ?? [];
-    const lease = leases.find((l) => l.state === "active") ?? leases[0];
+    // ACTIVE_LEASE_ONLY (task.5420): no `?? leases[0]` fallback. A closed lease's coordinates
+    // are a dead log source; `state` below says why there is none, and the actuator skips it.
+    const lease = leases.find((l) => l.state === "active");
     const owner =
       typeof lease?.id?.provider === "string" ? lease.id.provider : undefined;
     const descriptor: AkashLeaseLogDescriptor = {
@@ -889,10 +891,14 @@ export class AkashComputeAdapter
       services: Object.keys(lease?.status?.services ?? {}),
       state: mapState(detail?.deployment?.state, leases),
     };
-    this.descriptorCache.set(p.leaseId, {
-      value: descriptor,
-      expiresAtMs: this.now().getTime() + DESCRIPTOR_CACHE_TTL_MS,
-    });
+    // Cache only a settled answer: an active lease, or a closed one (terminal). A pending lease
+    // is booting; caching it would hide its boot logs for the whole TTL.
+    if (descriptor.state === "active" || descriptor.state === "closed") {
+      this.descriptorCache.set(p.leaseId, {
+        value: descriptor,
+        expiresAtMs: this.now().getTime() + DESCRIPTOR_CACHE_TTL_MS,
+      });
+    }
     return descriptor;
   }
 

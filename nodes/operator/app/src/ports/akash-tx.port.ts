@@ -706,7 +706,8 @@ export interface AkashTxAllocationLedgerPort {
    * before the pump ever sees it, so its container logs are lost with no evidence of WHY. This
    * view returns those live receipts (handle or not) so the lease-log pump can tail every
    * paying lease during the boot window and a handleless live receipt is loggable rather than
-   * silently skipped. Read-only, hard-limited, oldest-touched first — it decides nothing.
+   * silently skipped. Read-only, hard-limited, NEWEST-touched first (task.5420: oldest-first
+   * starved new leases behind dead rows) — it decides nothing.
    */
   listActive(input: {
     nodeId?: string;

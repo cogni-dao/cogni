@@ -353,13 +353,19 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       .slice(0, input.limit);
   }
 
+  /** Limits `listActive` was called with, in call order (task.5420). */
+  listActiveLimits: number[] = [];
+
+  /** Newest-touched first like the adapter: the last-seeded row is the newest. */
   async listActive(input: {
     nodeId?: string;
     environment?: string;
     limit: number;
   }) {
     if (this.failReads) throw new Error("ledger down");
+    this.listActiveLimits.push(input.limit);
     return [...this.rows.values()]
+      .reverse()
       .filter(
         (row) =>
           (row.state === "preparing" || row.state === "allocated") &&
@@ -3474,6 +3480,55 @@ describe("AkashTxActuator.leaseLogSources", () => {
     expect(
       log.lines.some((l) => l.marker === "akash_tx_lease_log_source_no_handle")
     ).toBe(true);
+  });
+
+  it("never returns a closed lease as a source, and names it once (task.5420)", async () => {
+    const { actuator, ledger, api, log } = build();
+    seedAllocated(ledger, "k-dead", "7001"); // a refused create or closed lease kept its dseq
+    seedAllocated(ledger, "k-live", "7002");
+    api.logDescriptors.set("7001", { ...DESCRIPTOR, state: "closed" });
+    api.logDescriptors.set("7002", { ...DESCRIPTOR });
+
+    const first = await actuator.leaseLogSources({});
+    const second = await actuator.leaseLogSources({});
+
+    expect(first.sources.map((s) => s.dseq)).toEqual(["7002"]);
+    expect(second.sources.map((s) => s.dseq)).toEqual(["7002"]);
+    const closed = log.lines.filter(
+      (l) => l.marker === "akash_tx_lease_log_source_closed"
+    );
+    // Once per process, not once per pump poll.
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.level).toBe("info");
+  });
+
+  it("reads receipts wide and newest-first, capping SOURCES (not receipts) at 64 (task.5420)", async () => {
+    const { actuator, ledger, api } = build();
+    // 20 dead rows that are older than every live lease, then 70 live leases.
+    for (let i = 0; i < 20; i += 1) {
+      seedAllocated(ledger, `k-dead-${i}`, `${8000 + i}`);
+      api.logDescriptors.set(`${8000 + i}`, { ...DESCRIPTOR, state: "closed" });
+    }
+    for (let i = 0; i < 70; i += 1) {
+      seedAllocated(ledger, `k-live-${i}`, `${9000 + i}`);
+      api.logDescriptors.set(`${9000 + i}`, { ...DESCRIPTOR });
+    }
+
+    const result = await actuator.leaseLogSources({});
+
+    // Before: listActive(limit 32) oldest-first returned 20 dead rows + 12 live, so most
+    // live leases were never tailed. After: the read is wide and the cap is on sources.
+    expect(ledger.listActiveLimits).toEqual([500]);
+    expect(result.sources).toHaveLength(64);
+    // Newest first: the newest live lease is a source, the 6 oldest live leases fall past the cap.
+    expect(result.sources[0]?.dseq).toBe("9069");
+    expect(result.sources.some((s) => s.dseq === "9005")).toBe(false);
+    expect(result.sources.every((s) => Number(s.dseq) >= 9000)).toBe(true);
+
+    // A caller's smaller limit still bounds the sources.
+    expect((await actuator.leaseLogSources({ limit: 3 })).sources).toHaveLength(
+      3
+    );
   });
 
   it("returns an empty snapshot without minting when nothing is active", async () => {
