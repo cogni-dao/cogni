@@ -152,6 +152,28 @@ www.{$DOMAIN} {
   }
 }
 
+# ── spawny-boi node → k3s NodePort 32100 ──────────────────────────────────
+{$SPAWNY_BOI_DOMAIN:spawny-boi.localhost} {
+  encode zstd gzip
+
+  @public path /api/v1/public/*
+  handle @public {
+    reverse_proxy {$SPAWNY_BOI_UPSTREAM:host.docker.internal:32100} {
+      header_up X-Real-IP {remote_host}
+      transport http {
+        response_header_timeout 10s
+      }
+    }
+  }
+
+  reverse_proxy {$SPAWNY_BOI_UPSTREAM:host.docker.internal:32100}
+
+  log {
+    format json
+    output stdout
+  }
+}
+
 # ── toks5 node → k3s NodePort 31900 ──────────────────────────────────
 {$TOKS5_DOMAIN:toks5.localhost} {
   encode zstd gzip
