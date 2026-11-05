@@ -396,6 +396,94 @@ describe("node app runtime env (task.5405)", () => {
   });
 
   it.each([
+    false,
+    true,
+  ])("fences a superseded paused create across restarts (legacy=%s)", async (legacy) => {
+    const h = harness({ inflightGraceMs: 1000 });
+    await stateUp(h, POLY_ID);
+    let releaseDispatch!: () => void;
+    let cursorWritten!: () => void;
+    let nativeFinished!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      nativeFinished = resolve;
+    });
+    const cursor = new Promise<void>((resolve) => {
+      cursorWritten = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const create = h.payer.create.bind(h.payer);
+    let dispatches = 0;
+    h.payer.loseResponseOn = (n) => n === 2;
+    const observe = vi.spyOn(h.payer, "observe");
+    vi.spyOn(h.payer, "create").mockImplementation(async (request) => {
+      if (request.spec.name !== "canary") return create(request);
+      dispatches++;
+      cursorWritten();
+      if (dispatches === 1) {
+        await gate;
+        try {
+          await create(request);
+        } catch {
+          /* lost sequencer response */
+        }
+        nativeFinished();
+        return new Promise<never>(() => {});
+      }
+      return create(request);
+    });
+    void releaseApp(h, POLY_ID);
+    await cursor;
+    const key = h.key(POLY_ID, "canary");
+    const attempt = (await h.store.attemptsFor(key))[0];
+    if (!attempt) throw new Error("missing attempt");
+    if (legacy) await h.store.updateAttempt(attempt.id, { error: null });
+    const oldRelease = await h.store.getRelease(attempt.releaseId);
+    if (!oldRelease) throw new Error("missing release");
+    await h.store.recordRelease({
+      nodeId: POLY_ID,
+      env: ENV,
+      workload: "canary",
+      sourceSha: "9".repeat(40),
+      spec: oldRelease.spec,
+      createdBy: "test",
+    });
+    h.restart(true);
+    await h.seq.step(key);
+    const fence = (await h.store.attemptsFor(key))[0]?.error;
+    expect(fence).toMatch(/^ambiguous: network@\d+$/);
+    if (!legacy) expect(fence).toBe(attempt.error);
+    await h.clock.sleep(200);
+    h.restart(true);
+    await h.seq.step(key);
+    const fenced = (await h.store.attemptsFor(key))[0];
+    expect(fenced?.error).toBe(fence);
+    expect(fenced?.phase).toBe("planned");
+    expect(fenced?.cogniKey).toBe(attempt.cogniKey);
+    expect(observe).not.toHaveBeenCalled();
+    expect(h.events.filter((e) => e.startsWith("payer.delete:"))).toEqual([]);
+    expect(dispatches).toBe(1);
+    releaseDispatch();
+    await finished;
+    await h.clock.sleep(801);
+    await h.seq.step(key);
+    const closed = (await h.store.attemptsFor(key)).find(
+      (a) => a.id === attempt.id
+    );
+    expect(closed?.cogniKey).toBe(attempt.cogniKey);
+    expect(closed?.externalName).toBe("1002");
+    expect(closed?.phase).toBe("failed");
+    expect(h.payer.byDseq("1002").state).toBe("closed");
+    expect(h.log.steps()).toContain("orphan_lease:adopted_to_close");
+    expect(dispatches).toBe(1);
+    h.restart(false);
+    await h.seq.step(key);
+    expect(dispatches).toBe(2);
+    expect(h.payer.byDseq("1002").state).toBe("closed");
+  });
+
+  it.each([
     "throws",
     "missing resource",
   ])("bounds resumed observation when it %s", async (failure) => {

@@ -311,7 +311,18 @@ export class NodeDeploySequencer {
     await this.janitor(key);
     const all = await this.d.store.attemptsFor(key);
 
-    const inflight = all.find((a) => IN_FLIGHT_PHASES.includes(a.phase));
+    let inflight = all.find((a) => IN_FLIGHT_PHASES.includes(a.phase));
+    // Legacy planned creates may still be running in the actuator. Fence them before
+    // either supersession or normal recovery can observe and settle their receipt.
+    if (
+      inflight?.phase === "planned" &&
+      !inflight.externalName &&
+      !inflight.error
+    ) {
+      inflight = await this.d.store.updateAttempt(inflight.id, {
+        error: ambiguousMarker("network", this.d.clock.now()),
+      });
+    }
     const active = all.find((a) => a.phase === "active");
     if (desired.gameDayRequestedAt)
       await this.gameDayKill(key, release, active, inflight);
@@ -326,7 +337,7 @@ export class NodeDeploySequencer {
         await this.failAttempt(key, inflightRelease, inflight, "superseded");
         return "superseded";
       }
-      await this.drive(key, inflightRelease, inflight, active, true);
+      await this.drive(key, inflightRelease, inflight, active);
       return "driven";
     }
 
@@ -632,12 +643,10 @@ export class NodeDeploySequencer {
     key: WorkloadKey,
     release: ReleaseRow,
     start: AttemptRow,
-    blue: AttemptRow | undefined,
-    resumed = false
+    blue: AttemptRow | undefined
   ): Promise<void> {
     let a = start;
-    if (a.phase === "planned")
-      a = await this.doCreate(key, release, a, blue, resumed);
+    if (a.phase === "planned") a = await this.doCreate(key, release, a, blue);
     if (a.phase === "created") a = await this.awaitLease(key, release, a, blue);
     if (a.phase === "proving") a = await this.prove(key, release, a);
     if (a.phase === "proven") await this.cutover(key, release, a, blue);
@@ -917,8 +926,7 @@ export class NodeDeploySequencer {
     key: WorkloadKey,
     release: ReleaseRow,
     attempt: AttemptRow,
-    blue: AttemptRow | undefined,
-    resumed = false
+    blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
     // A refused create (provider_rejected, ...) already ended this key's life: it is never replayed under
     // the same nd: key (the actuator would answer `akash_tx_create_replayed` forever). Fail the attempt;
@@ -926,13 +934,6 @@ export class NodeDeploySequencer {
     if (attempt.error?.startsWith(REFUSED_PREFIX))
       return this.failAttempt(key, release, attempt, attempt.error);
 
-    // Legacy planned rows may have been dispatched before markers existed. A missing
-    // allocation is not proof that their actuator request has ended.
-    if (resumed && !attempt.error) {
-      attempt = await this.d.store.updateAttempt(attempt.id, {
-        error: ambiguousMarker("network", this.d.clock.now()),
-      });
-    }
     // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
     if (this.createMayStillBeInFlight(attempt)) {
       await this.emitGrace(key, release, attempt, "create", "inflight_grace", {
