@@ -1400,12 +1400,13 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * twin selects a bot per repository. Cached per adapter instance (the identity is stable).
    */
   private async resolveOperatorBotIdentity(
-    octokit: Octokit
+    octokit: Octokit,
+    requestFetch: typeof fetch = fetch
   ): Promise<{ login: string; id: number }> {
     if (this.operatorBotIdentity) return this.operatorBotIdentity;
     // `GET /app` is App-JWT scoped (not installation scoped), so authenticate as the App.
     const { token } = await this.appAuth({ type: "app" });
-    const appResponse = await fetch("https://api.github.com/app", {
+    const appResponse = await requestFetch("https://api.github.com/app", {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/vnd.github+json",
@@ -1769,15 +1770,10 @@ export class GitHubRepoWriter implements DeployPlanePort {
     if ("target" in input) {
       if (input.target === "litellm-provider-key") {
         assertGatewayCustodian(input, this.config);
-        const client = await this.getOctokit(
-          input.parentOwner,
-          input.parentRepo
+        const { client, bot } = await this.gatewayIdentity(input);
+        return new GithubGatewayActivation(client, input, bot).submit(
+          input.env
         );
-        return new GithubGatewayActivation(
-          client,
-          input,
-          await this.resolveOperatorBotIdentity(client)
-        ).submit(input.env);
       }
       return reconcileWorkerRouting(
         input,
@@ -1858,12 +1854,39 @@ export class GitHubRepoWriter implements DeployPlanePort {
     operationId: string;
   }) {
     assertGatewayCustodian(input, this.config);
-    const client = await this.getOctokit(input.parentOwner, input.parentRepo);
-    return new GithubGatewayActivation(
-      client,
-      input,
-      await this.resolveOperatorBotIdentity(client)
-    ).status();
+    const { client, bot } = await this.gatewayIdentity(input);
+    return new GithubGatewayActivation(client, input, bot).status();
+  }
+
+  /** Bound installation, App identity, bot lookup and lazy installation auth. */
+  private async gatewayIdentity(input: {
+    parentOwner: string;
+    parentRepo: string;
+  }) {
+    const preflightDeadline = AbortSignal.timeout(15_000);
+    let preflightActive = true;
+    const requestFetch: typeof fetch = (resource, init) => {
+      const signals = [AbortSignal.timeout(15_000)];
+      if (preflightActive) signals.push(preflightDeadline);
+      if (init?.signal) signals.push(init.signal);
+      return fetch(resource, { ...init, signal: AbortSignal.any(signals) });
+    };
+    try {
+      const client = await this.getOctokit(
+        input.parentOwner,
+        input.parentRepo,
+        requestFetch
+      );
+      const bot = await this.resolveOperatorBotIdentity(client, requestFetch);
+      preflightActive = false;
+      return { client, bot };
+    } catch {
+      throw deployPlaneError(
+        "gateway_preflight_unavailable",
+        "GitHub gateway identity preflight is unavailable",
+        503
+      );
+    }
   }
 
   /** Classify one reviewed candidate infra PR, then invoke exactly one existing deploy mechanism. */
@@ -5161,8 +5184,16 @@ export class GitHubRepoWriter implements DeployPlanePort {
     }
   }
 
-  private async getOctokit(owner: string, repo: string): Promise<Octokit> {
-    const installationId = await this.resolveInstallationId(owner, repo);
+  private async getOctokit(
+    owner: string,
+    repo: string,
+    requestFetch?: typeof fetch
+  ): Promise<Octokit> {
+    const installationId = await this.resolveInstallationId(
+      owner,
+      repo,
+      requestFetch
+    );
     return new Octokit({
       authStrategy: createAppAuth,
       auth: {
@@ -5170,15 +5201,17 @@ export class GitHubRepoWriter implements DeployPlanePort {
         privateKey: this.config.privateKey,
         installationId,
       },
+      ...(requestFetch ? { request: { fetch: requestFetch } } : {}),
     });
   }
 
   private async resolveInstallationId(
     owner: string,
-    repo: string
+    repo: string,
+    requestFetch: typeof fetch = fetch
   ): Promise<number> {
     const { token } = await this.appAuth({ type: "app" });
-    const response = await fetch(
+    const response = await requestFetch(
       `https://api.github.com/repos/${owner}/${repo}/installation`,
       {
         headers: {

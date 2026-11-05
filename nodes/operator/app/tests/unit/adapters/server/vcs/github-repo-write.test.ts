@@ -25,6 +25,7 @@ type RouteHandler = (
 
 const requests: RequestCall[] = [];
 let routeHandlers: Record<string, RouteHandler> = {};
+let octokitTransport: typeof fetch | undefined;
 
 vi.mock("@octokit/auth-app", () => ({
   createAppAuth: () => async () => ({ token: "app-token" }),
@@ -32,6 +33,9 @@ vi.mock("@octokit/auth-app", () => ({
 
 vi.mock("@octokit/core", () => ({
   Octokit: class MockOctokit {
+    constructor(options?: { request?: { fetch?: typeof fetch } }) {
+      if (options?.request?.fetch) octokitTransport = options.request.fetch;
+    }
     async request(route: string, params: Record<string, unknown>) {
       requests.push({ route, params });
       const handler = routeHandlers[route];
@@ -386,6 +390,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   requests.length = 0;
   routeHandlers = {};
+  octokitTransport = undefined;
   installFetchMock();
 });
 
@@ -2080,6 +2085,106 @@ describe("GitHubRepoWriter.promoteNodeFromPreview", () => {
       })
     ).rejects.toMatchObject({ code: "non_forward_promotion", status: 409 });
     expect(requests.some((request) => request.route === DISPATCH)).toBe(false);
+  });
+});
+
+describe("gateway identity preflight deadlines", () => {
+  it.each([
+    ["submit", "installation"],
+    ["submit", "app"],
+    ["submit", "bot"],
+    ["observe", "installation"],
+    ["observe", "app"],
+    ["observe", "bot"],
+  ] as const)("cancels a stalled %s %s response body before dispatch", async (operation, stalledStage) => {
+    const deadline = new AbortController();
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(deadline.signal);
+    let started!: () => void;
+    const bodyStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let observedSignal: AbortSignal | null | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const stage = url.endsWith("/installation")
+          ? "installation"
+          : url.endsWith("/app")
+            ? "app"
+            : "bot";
+        return {
+          ok: true,
+          status: 200,
+          json: async () => {
+            if (stage !== stalledStage)
+              return stage === "app" ? { slug: "cogni-operator" } : { id: 42 };
+            observedSignal = init?.signal;
+            return new Promise((_resolve, reject) => {
+              if (observedSignal?.aborted) reject(observedSignal.reason);
+              else
+                observedSignal?.addEventListener(
+                  "abort",
+                  () => reject(observedSignal?.reason),
+                  { once: true }
+                );
+              started();
+            });
+          },
+        };
+      })
+    );
+    routeHandlers["GET /users/{username}"] = async (params) => {
+      if (!octokitTransport) throw new Error("bounded SDK transport missing");
+      const response = await octokitTransport(
+        `https://api.github.com/users/${params.username}`
+      );
+      return response.json();
+    };
+    const writer = new GitHubRepoWriter({
+      appId: "1",
+      privateKey: "key",
+      hostingEnv: "production",
+      fleetControlEnv: "production",
+      parentOwner: "cogni-dao",
+      parentRepo: "cogni",
+    });
+    const input = {
+      parentOwner: "cogni-dao",
+      parentRepo: "cogni",
+      operationId: "b9d19a15-95f9-41b4-bcf5-cd56142c0eb2",
+    };
+    try {
+      const pending =
+        operation === "submit"
+          ? writer.reconcileNodeInfra({
+              ...input,
+              target: "litellm-provider-key",
+              slug: "operator",
+              env: "preview",
+            })
+          : writer.readGatewayActivation(input);
+      const rejected = expect(pending).rejects.toMatchObject({
+        code: "gateway_preflight_unavailable",
+        status: 503,
+      });
+      await bodyStarted;
+      expect(observedSignal).toBeInstanceOf(AbortSignal);
+      deadline.abort(new DOMException("fixture deadline", "TimeoutError"));
+      await rejected;
+      expect(observedSignal?.aborted).toBe(true);
+      expect(
+        requests.some(
+          ({ route }) =>
+            route.startsWith("POST") ||
+            route.startsWith("PUT") ||
+            route.startsWith("DELETE")
+        )
+      ).toBe(false);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 });
 

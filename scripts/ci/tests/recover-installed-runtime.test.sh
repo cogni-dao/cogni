@@ -194,14 +194,28 @@ mv "$FAKE_GUARD_ROOT/guard.json" "$TMPROOT/valid-guard.json"
 if run_recovery > "$TMPROOT/incomplete-guard.log" 2>&1; then
   echo 'incomplete guard enrollment admitted recovery' >&2; exit 1
 fi
-[[ ! -s "$DOCKER_LOG" ]] || { echo 'incomplete enrollment reached Docker' >&2; exit 1; }
+grep -q 'runtime_guard_installation_incomplete' "$TMPROOT/incomplete-guard.log"
+! grep -Eq '(^| )(up|start|restart|stop|kill|rm|down|pull|build|create)( |$)' "$DOCKER_LOG" \
+  || { echo 'incomplete enrollment mutated Docker' >&2; exit 1; }
 jq '.protocolVersion = 999' "$TMPROOT/valid-guard.json" > "$FAKE_GUARD_ROOT/guard.json"
 chmod 600 "$FAKE_GUARD_ROOT/guard.json"
 if run_recovery > "$TMPROOT/incompatible-guard.log" 2>&1; then
   echo 'incompatible guard protocol admitted recovery' >&2; exit 1
 fi
-[[ ! -s "$DOCKER_LOG" ]] || { echo 'incompatible enrollment reached Docker' >&2; exit 1; }
+grep -q 'runtime_guard_installation_incomplete' "$TMPROOT/incompatible-guard.log"
+! grep -Eq '(^| )(up|start|restart|stop|kill|rm|down|pull|build|create)( |$)' "$DOCKER_LOG" \
+  || { echo 'incompatible enrollment mutated Docker' >&2; exit 1; }
 mv "$TMPROOT/valid-guard.json" "$FAKE_GUARD_ROOT/guard.json"
+cp "$FAKE_GUARD_LIB/runtime-recovery-host.py" "$TMPROOT/valid-recovery-host.py"
+printf '\n# tampered fixture\n' >> "$FAKE_GUARD_LIB/runtime-recovery-host.py"
+if run_recovery > "$TMPROOT/tampered-guard.log" 2>&1; then
+  echo 'tampered guard helper admitted recovery' >&2; exit 1
+fi
+grep -q 'runtime_guard_installation_incomplete' "$TMPROOT/tampered-guard.log"
+! grep -Eq '(^| )(up|start|restart|stop|kill|rm|down|pull|build|create)( |$)' "$DOCKER_LOG" \
+  || { echo 'tampered enrollment mutated Docker' >&2; exit 1; }
+mv "$TMPROOT/valid-recovery-host.py" "$FAKE_GUARD_LIB/runtime-recovery-host.py"
+: > "$DOCKER_LOG"
 
 # Missing receipt: named fail-closed state, no Docker command at all.
 missing_out="$(run_recovery)"
