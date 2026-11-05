@@ -10,12 +10,16 @@ import {
   AttestationPreconditionError,
   createIdentityAttestationService,
 } from "@/features/identity/services/issue-identity-attestation";
+import { edgeHostRegexFor } from "@/features/node-deploy/edge";
 import { resolveEnvLanes } from "@/features/node-deploy/env-lanes";
 import type {
   IdentityAttestationRepositoryPort,
   IdentityAttestationSignerPort,
 } from "@/ports";
-import { resolveRegisteredFleetZones } from "@/shared/node-registry/fleet-ownership";
+import {
+  resolveRegisteredFleetZones,
+  resolveWorkloadZoneBinding,
+} from "@/shared/node-registry/fleet-ownership";
 
 const NODE_ID = "22222222-2222-4222-8222-222222222222";
 const REQUEST = {
@@ -249,6 +253,74 @@ describe("fleet configuration", () => {
         localZone: "cogni-testing.org",
       })
     ).toHaveLength(2);
+  });
+  it("uses the shared normalized zone for broker and deployment hosts", () => {
+    const local = resolveWorkloadZoneBinding({
+      fleetOwner: "cogni-test-org",
+      zoneName: "COGNI-TESTING.ORG.",
+    });
+    const bindings = resolveRegisteredFleetZones({
+      ...registry,
+      localOwner: "cogni-test-org",
+      localZone: "COGNI-TESTING.ORG.",
+    });
+    expect(local.zoneName).toBe("cogni-testing.org");
+    expect(bindings).toContainEqual(local);
+    expect(
+      edgeHostRegexFor(["toks4"], local.zoneName).test(
+        "toks4-test.cogni-testing.org"
+      )
+    ).toBe(true);
+  });
+
+  it("accepts canonical preview and rejects an unmapped test fleet at both legs", async () => {
+    let owner = "cogni-dao";
+    const sign = vi.fn(async () => "signed");
+    const broker = createIdentityAttestationService({
+      repository: {
+        findNode: async () => ({
+          nodeId: NODE_ID,
+          slug: "toks4",
+          repoOwner: owner,
+          deployEnvs: ["preview"],
+        }),
+      },
+      signer: { sign },
+      clock: { now: () => "2026-08-17T00:00:00.000Z" },
+      createJti: () => NODE_ID,
+      fleetZoneBindings: resolveRegisteredFleetZones({
+        ...registry,
+        localOwner: "cogni-test-org",
+      }),
+    });
+    const request = {
+      ...REQUEST,
+      targetOrigin: "https://toks4-preview.cognidao.org",
+    };
+    await expect(broker.resolveNode({ request })).resolves.toMatchObject({
+      nodeId: NODE_ID,
+    });
+    await expect(
+      broker.issue({
+        github: AUTHENTICATED_GITHUB,
+        issuer: "https://preview.cognidao.org",
+        request,
+      })
+    ).resolves.toMatchObject({ attestation: "signed" });
+    owner = "cogni-test-org";
+    await expect(broker.resolveNode({ request })).rejects.toEqual(
+      new AttestationPreconditionError("invalid_target_origin")
+    );
+    await expect(
+      broker.issue({
+        github: AUTHENTICATED_GITHUB,
+        issuer: "https://preview.cognidao.org",
+        request,
+      })
+    ).rejects.toEqual(
+      new AttestationPreconditionError("invalid_target_origin")
+    );
+    expect(sign).toHaveBeenCalledTimes(1);
   });
   it.each([
     { ...registry, localOwner: "cogni-dao", localZone: "other.org" },

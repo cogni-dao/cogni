@@ -278,11 +278,13 @@ patches:
                       configMapKeyRef:
                         name: node-app-config
                         key: NODE_SUBMODULE_PARENT_OWNER
+                        optional: true
                   - name: NODE_DEPLOY_WORKLOAD_ZONE
                     valueFrom:
                       configMapKeyRef:
                         name: node-app-config
                         key: NODE_DEPLOY_WORKLOAD_ZONE
+                        optional: true
                   # story.5137 — this TEST operator's node hosts live in the isolated test zone, not in
                   # cognidao.org (hub test-fleet-parity-boundary; dns-ops skill). Its Cloudflare token
                   # (OpenBao cogni/candidate-a/operator/CLOUDFLARE_API_TOKEN) is scoped to this zone only,

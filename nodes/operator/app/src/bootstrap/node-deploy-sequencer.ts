@@ -196,20 +196,19 @@ const chain = runtimeEnv.AKASH_CHAIN_OWNER
   : undefined;
 // Preserve existing edge recovery; fresh node apps require a valid explicit fleet zone.
 const fleetOwner = runtimeEnv.NODE_DEPLOY_FLEET_OWNER?.trim() || undefined;
+let edgeZoneSetting = runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE?.trim() || undefined;
 let validFleetZone = false;
 try {
-  resolveWorkloadZoneBinding({
+  edgeZoneSetting = resolveWorkloadZoneBinding({
     fleetOwner,
     zoneName: runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE,
-  });
+  }).zoneName;
   validFleetZone = true;
 } catch {
   log.warn(
     "node_deploy_sequencer_fleet_zone_invalid: fresh node app creates refused"
   );
 }
-const edgeZoneSetting =
-  runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE?.trim() || undefined;
 const edgeZone = edgeZoneSetting ?? DEFAULT_EDGE_ZONE;
 let edgeZoneId: string | undefined = cfZone || undefined;
 if (edgeZoneSetting && cfToken) {

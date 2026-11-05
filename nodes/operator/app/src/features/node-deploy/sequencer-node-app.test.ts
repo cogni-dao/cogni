@@ -145,18 +145,19 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
   const catalog = new FakeCatalog();
   const images = new FakeImages();
   const log = new MemoryLog();
+  const runtime = {
+    secrets: runtimeSecrets,
+    catalog,
+    substrateHost: SUBSTRATE,
+    operatorDomain: "operator.example",
+  };
   const seq = new NodeDeploySequencer({
     store,
     payer,
     edge: new EdgeRouter(dns, edgeHostRegexFor(["poly", "toks5"])),
     probe,
     secrets,
-    runtime: {
-      secrets: runtimeSecrets,
-      catalog,
-      substrateHost: SUBSTRATE,
-      operatorDomain: "operator.example",
-    },
+    runtime,
     images,
     chain: new FakeChain(payer),
     clock,
@@ -179,6 +180,8 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
     store,
     payer,
     runtimeSecrets,
+    runtime,
+    events,
     catalog,
     images,
     clock,
@@ -260,6 +263,44 @@ describe("node app runtime env (task.5405)", () => {
       slug: "poly",
     });
     expect(h.runtimeSecrets.reads.at(-1)?.keys).not.toContain("DATABASE_URL");
+  });
+
+  it("adopts an ambiguous paid effect even when the issuer becomes invalid", async () => {
+    const h = harness();
+    await stateUp(h, POLY_ID);
+    h.payer.loseResponseOn = (n) => n === 2;
+    h.payer.observeThrows = true;
+    await releaseApp(h, POLY_ID);
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    h.runtime.operatorDomain = "";
+    h.payer.observeThrows = false;
+    await h.seq.step(h.key(POLY_ID, "canary"));
+    const attempt = (await h.store.attemptsFor(h.key(POLY_ID, "canary")))[0];
+    expect(attempt?.externalName).toBe("1002");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    expect(appCreates(h)).toHaveLength(1);
+    expect(
+      h.events.filter((event) => event.startsWith("payer.delete:"))
+    ).toEqual([]);
+  });
+
+  it("does not create a fresh app when issuer configuration is invalid", async () => {
+    const h = harness();
+    h.runtime.operatorDomain = "";
+    await h.store.recordRelease({
+      nodeId: POLY_ID,
+      env: ENV,
+      workload: "canary",
+      sourceSha: SHA_1,
+      spec: canaryApp({
+        secretKeys: DECLARED,
+        bindings: [],
+        expose: { http: { host: POLY_HOST } },
+      }),
+      createdBy: "test",
+    });
+    await h.seq.step(h.key(POLY_ID, "canary"));
+    expect(appCreates(h)).toHaveLength(0);
   });
 
   it("protects the issuer in the final paid payload from declared env and bucket values", async () => {

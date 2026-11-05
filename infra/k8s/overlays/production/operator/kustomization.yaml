@@ -240,11 +240,13 @@ patches:
                       configMapKeyRef:
                         name: node-app-config
                         key: NODE_SUBMODULE_PARENT_OWNER
+                        optional: true
                   - name: NODE_DEPLOY_WORKLOAD_ZONE
                     valueFrom:
                       configMapKeyRef:
                         name: node-app-config
                         key: NODE_DEPLOY_WORKLOAD_ZONE
+                        optional: true
                   - name: NODE_DEPLOY_SUBSTRATE_HOSTS
                     value: candidate-a=cogni-candidate-a.vm.cognidao.org,preview=cogni-preview.vm.cognidao.org,production=cogni.vm.cognidao.org
   # story.5016 Gate 0b: env values are set BY NAME via strategic merge (env lists

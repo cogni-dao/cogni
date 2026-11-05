@@ -911,6 +911,53 @@ export class NodeDeploySequencer {
     attempt: AttemptRow,
     blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
+    // A refused create (provider_rejected, ...) already ended this key's life: it is never replayed under
+    // the same nd: key (the actuator would answer `akash_tx_create_replayed` forever). Fail the attempt;
+    // the next attempt gets a new ordinal. If failAttempt had to defer (observe down) we land here again.
+    if (attempt.error?.startsWith(REFUSED_PREFIX))
+      return this.failAttempt(key, release, attempt, attempt.error);
+
+    // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
+    if (this.createMayStillBeInFlight(attempt)) {
+      await this.emitGrace(key, release, attempt, "create", "inflight_grace", {
+        graceMs: this.d.config.inflightGraceMs,
+      });
+      return attempt;
+    }
+    if (attempt.error?.startsWith("ambiguous")) {
+      try {
+        const obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
+        if (obs.found && obs.resource) {
+          await this.emit(
+            key,
+            release,
+            attempt,
+            "create",
+            "adopted_after_ambiguity",
+            {
+              dseq: obs.resource.externalName,
+            }
+          );
+          return this.bindLease(key, release, attempt, obs.resource);
+        }
+        return this.failAttempt(
+          key,
+          release,
+          attempt,
+          "ambiguous create resolved to nothing; next ordinal"
+        );
+      } catch (error) {
+        return this.observeUnavailable(
+          key,
+          release,
+          attempt,
+          "create",
+          "ambiguous create unresolved",
+          error
+        );
+      }
+    }
+
     const w = release.spec;
     if (publicHostOf(w) && !this.d.edge) {
       // Refuse BEFORE paying: a lease no edge can ever route to is wasted spend.
@@ -971,53 +1018,6 @@ export class NodeDeploySequencer {
       runtime = await this.resolveEnv(key, release);
     } catch (error) {
       return this.failAttempt(key, release, attempt, errText(error));
-    }
-
-    // A refused create (provider_rejected, ...) already ended this key's life: it is never replayed under
-    // the same nd: key (the actuator would answer `akash_tx_create_replayed` forever). Fail the attempt;
-    // the next attempt gets a new ordinal. If failAttempt had to defer (observe down) we land here again.
-    if (attempt.error?.startsWith(REFUSED_PREFIX))
-      return this.failAttempt(key, release, attempt, attempt.error);
-
-    // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
-    if (this.createMayStillBeInFlight(attempt)) {
-      await this.emitGrace(key, release, attempt, "create", "inflight_grace", {
-        graceMs: this.d.config.inflightGraceMs,
-      });
-      return attempt;
-    }
-    if (attempt.error?.startsWith("ambiguous")) {
-      try {
-        const obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
-        if (obs.found && obs.resource) {
-          await this.emit(
-            key,
-            release,
-            attempt,
-            "create",
-            "adopted_after_ambiguity",
-            {
-              dseq: obs.resource.externalName,
-            }
-          );
-          return this.bindLease(key, release, attempt, obs.resource);
-        }
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          "ambiguous create resolved to nothing; next ordinal"
-        );
-      } catch (error) {
-        return this.observeUnavailable(
-          key,
-          release,
-          attempt,
-          "create",
-          "ambiguous create unresolved",
-          error
-        );
-      }
     }
 
     const { providers: excludeProviders, remembered } = await this.exclusion(
