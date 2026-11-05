@@ -268,6 +268,11 @@ patches:
                   # (Temporal 7233, Redis 6379, LiteLLM 4000, worker health 30900) answers on.
                   - name: NODE_DEPLOY_SUBSTRATE_HOST
                     value: cogni-candidate-a.vm.cognidao.org
+                  # The test operator's fleet: the org that owns its nodes' source repos. Same value as
+                  # NODE_SUBMODULE_PARENT_OWNER, which the route uses; unset admits no remote-source node, so the
+                  # sequencer's edge guard would refuse every test node's host (story.5137 test lane).
+                  - name: NODE_DEPLOY_FLEET_OWNER
+                    value: cogni-test-org
   - target:
       kind: ConfigMap
       name: node-app-config

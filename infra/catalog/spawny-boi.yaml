@@ -1,0 +1,53 @@
+name: spawny-boi
+type: node
+port: 3200
+# task.5078 — edge NodePort (see operator.yaml). Allocated by scripts/ci/next-free-node-port.sh.
+node_port: 32100
+dockerfile: nodes/spawny-boi/app/Dockerfile
+# bug.0344 — monorepo GHCR tag suffix (see operator.yaml). A remote-source row's deploy image is
+# `<image_repository>:sha-<source_sha>` with NO suffix: the node-deploy verb defers `.` to exactly that
+# tag (record-node-release.server.ts pendingImage), as does scripts/ci/resolve-node-ref-image.sh.
+# The suffix stays the fleet's `-<slug>` convention (node-app-scaffold/gens/catalog.ts).
+image_tag_suffix: "-spawny-boi"
+migrator_tag_suffix: "-spawny-boi-migrate"
+# story.5137 — the TEST operator's candidate lane. A cogni-test-org throwaway fork, so only the test
+# operator (NODE_SUBMODULE_PARENT_OWNER=cogni-test-org) serves it (NODE_IS_THIS_FLEETS, deploy/workloads
+# _lib/lane.ts); the production operator refuses it. It gives node-deploy sequencer PRs a real
+# candidate-a lane to flight against.
+source_repo: https://github.com/cogni-test-org/spawny-boi.git
+image_repository: ghcr.io/cogni-test-org/spawny-boi
+# Accepted deploy SHA (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN): spawny-boi main after its
+# node-template alignment + .cogni/workloads/app.yaml; its CI published sha-<this>.
+source_sha: 5df8a3bcc6ef0283e8a6213f208a45d00104095b
+candidate_a_branch: deploy/candidate-a-spawny-boi
+preview_branch: deploy/preview-spawny-boi
+production_branch: deploy/production-spawny-boi
+# candidate-a only: the test operator's self-test lane, billed to the TEST Console account.
+envs: [candidate-a]
+database:
+  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
+deployment_provider:
+  candidate-a: akash
+# story.5137 — ONE_WRITER_PER_NODE_LANE: deployed only by POST /api/v1/deploy/workloads.
+compute_api:
+  candidate-a: node-deploy
+# ACTIVITY_ENV_IS_DEPLOYED: the single env this row deploys. The test fleet never runs production.
+activity_env: candidate-a
+owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
+path_prefix: nodes/spawny-boi/
+node_id: d520f82e-486a-40f1-9e4f-c8ef7a016e9a
+# Candidate-a provider egress, copied from node-template.yaml's candidate-a rows.
+compute_egress_cidrs:
+  - cidr: 80.200.246.35/32
+    comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
+  - cidr: 89.207.152.9/32
+    envs: [candidate-a]
+    ports: [5432, 5435, 6379, 4000, 7233]
+    comment: UA ithub egress (copied from node-template, task.5384); the node-deploy sequencer's admitted provider set
+  - cidr: 95.217.139.183/32
+    envs: [candidate-a]
+    ports: [5432]
+    comment: Candidate PostgreSQL SYN source observed on the lane VM (copied from node-template, bug.5533)
+  - cidr: 2.29.118.117/32
+    envs: [candidate-a]
+    comment: Hetzner lease NAT measured on the candidate-a VM (copied from node-template, bug.5550)
