@@ -407,7 +407,10 @@ export class GithubGatewayActivation {
       currentState: "unobserved",
     };
     const discovery = await this.discover(intent, createdAt);
-    const run = discovery.complete ? discovery.runs[0] : undefined;
+    const run = discovery.complete
+      ? (discovery.runs.find((attempt) => attempt.status !== "completed") ??
+        discovery.runs[0])
+      : undefined;
     if (!run) return GatewayOperationSchema.parse(result);
     result.runId = run.id;
     result.runUrl = run.html_url;

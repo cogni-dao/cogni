@@ -3,7 +3,7 @@
 /**
  * Module: `@scripts/ci/runtime-source-admission`
  * Purpose: Admit guarded runtime sources and repair partial ordinary enrollment.
- * Scope: Dependency-free source admission and shared fixed native staging transport.
+ * Scope: Dependency-free source admission and native staging; does not start containers or write provider values.
  * Invariants: The protected marker's first merged commit is the source floor;
  *   an unqualified source must rebase, never silently execute newer code.
  * Side-effects: IO (Git reads, private SSH staging and guarded helper publication)

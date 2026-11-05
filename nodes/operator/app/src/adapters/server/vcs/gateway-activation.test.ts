@@ -245,6 +245,33 @@ describe("native operation observation", () => {
       request.mock.calls.some(([route]) => route.endsWith("/dispatches"))
     ).toBe(false);
   });
+  it.each([
+    "status",
+    "submit",
+  ] as const)("%s prefers an active rerun over newer completed history", async (method) => {
+    const { gateway, request } = fixture({
+      runs: [
+        { ...run, id: 10, status: "completed" },
+        { ...run, run_attempt: 2 },
+      ],
+    });
+    const observed =
+      method === "status"
+        ? await gateway.status()
+        : await gateway.submit("candidate-a");
+    expect(observed).toMatchObject({
+      status: "running",
+      runId: 9,
+      runUrl: run.html_url,
+      currentState: "unobserved",
+    });
+    expect(
+      request.mock.calls.some(
+        ([route]) =>
+          route.endsWith("/dispatches") || route.endsWith("/artifacts")
+      )
+    ).toBe(false);
+  });
   it("pins original implementation separately from a newer trusted transport", async () => {
     const { gateway, request } = fixture();
     expect((await gateway.submit("candidate-a")).status).toBe("submitted");
