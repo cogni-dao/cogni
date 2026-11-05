@@ -27,7 +27,11 @@ import type {
   NodeRuntimeSecretsPort,
   WorkloadKey,
 } from "@/ports";
-import { BuiltImageRegistryError, NodeRuntimeSecretsError } from "@/ports";
+import {
+  BuiltImageRegistryError,
+  NodeRuntimeSecretsError,
+  PayerError,
+} from "@/ports";
 import {
   resolveWorkloadZoneBinding,
   type WorkloadZoneBinding,
@@ -1070,6 +1074,83 @@ async function companionRelease(h: H, spec = companionSpec()) {
 }
 
 describe("private release companions", () => {
+  it.each([
+    false,
+    true,
+  ])("bounded native verdict survives reload and observe failure; capability=%s", async (capability) => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    const modes = proofResponder(h);
+    const blueProvider = requiredFixture(ALLOWED[0]);
+    const failedProvider = requiredFixture(ALLOWED[1]);
+    h.payer.providerFor = (n) => (n === 2 ? failedProvider : blueProvider);
+    const ordinary = canaryApp({
+      bindings: [],
+      expose: { http: { host: "poly-preview.cognidao.org" } },
+    });
+    await companionRelease(h, ordinary);
+    const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
+    await h.seq.step(key);
+    const blue = requiredFixture(h.store.attempts[0]);
+    const edge = structuredClone([...h.dns.records.values()]);
+    h.payer.onLease = (lease) => {
+      lease.serveSha = "f".repeat(40);
+    };
+    const { release } = await companionRelease(
+      h,
+      capability ? companionSpec() : ordinary
+    );
+    await h.seq.step(key);
+    expect(h.store.attempts.at(-1)?.phase).toBe("failed");
+    h.payer.onLease = undefined;
+    // Native producer's complete bounded evidence precedes a diagnostic beyond both 2000 caps.
+    const diagnostic = "rejected-provider US 1.00 not_allowlisted, ".repeat(
+      100
+    );
+    h.payer.createFault = (_n, req) =>
+      req.excludeProviders?.includes(blueProvider)
+        ? new PayerError(
+            "provider_rejected",
+            `none passed provider screening [excluded-bidders-v1:["${blueProvider}"]] [refused: already_tried=1] [bids: ${diagnostic}, ${blueProvider} US 1.00 already_tried]`,
+            false
+          )
+        : undefined;
+    h.payer.observeThrows = true;
+    await h.seq.step(key);
+    h.clock.advance(DEFAULT_SEQUENCER_CONFIG.observeUnavailableMs + 1);
+    await h.seq.step(key);
+    const refusal = requiredFixture(h.store.attempts.at(-1));
+    expect(refusal.phase).toBe("failed");
+    expect(refusal.error).toContain(
+      `[excluded-bidders-v1:["${blueProvider}"]]`
+    );
+    expect(refusal.error?.length).toBeLessThanOrEqual(2000);
+    const restored = new MemoryStore(h.clock);
+    for (const [id, row] of h.store.releases)
+      restored.releases.set(id, structuredClone(row));
+    for (const [id, row] of h.store.desired)
+      restored.desired.set(id, structuredClone(row));
+    restored.attempts.push(...structuredClone(h.store.attempts));
+    h.payer.observeThrows = false;
+    await h.newSequencer(restored).step(key);
+    expect(restored.attempts.find((a) => a.id === blue.id)?.phase).toBe(
+      capability ? "active" : "retired"
+    );
+    expect(h.payer.byDseq(requiredFixture(blue.externalName)).state).toBe(
+      capability ? "active" : "closed"
+    );
+    expect(h.log.steps().includes("stop_then_start:blue_closed")).toBe(
+      !capability
+    );
+    if (capability) {
+      expect([...h.dns.records.values()]).toEqual(edge);
+      expect(modes).toEqual([]);
+      expect(
+        restored.attempts.filter((a) => a.releaseId === release.id)
+      ).toHaveLength(3);
+    }
+  });
+
   it("qualifies exact 512-character companion readiness observations", async () => {
     const h = harness({ environment: "preview" });
     installBundle(h);
@@ -1746,8 +1827,8 @@ describe("review repair digest and companion gates", () => {
   ] as const)("recovers a refused %s snapshot without qualification or activation", async (phase) => {
     const h = harness({ environment: "preview" });
     installBundle(h);
-    // This direct persisted verdict is a defensive policy case, not evidence of a concurrent
-    // production refusal writer for these phases. The actual writer is exercised below.
+    // Direct persisted snapshots prove the fence, not a real occurrence or a concurrent writer.
+    // The actual resumed admission writer is exercised below.
     await companionRelease(
       h,
       canaryApp({
@@ -1869,6 +1950,82 @@ describe("review repair digest and companion gates", () => {
     expect(h.payer.createRequests).toHaveLength(3);
   });
 
+  it.each([
+    "missing",
+    "unavailable",
+  ] as const)("adopts an unmarked paid create before %s artifact admission, without new proof or payment", async (failure) => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    const modes = proofResponder(h);
+    const { release } = await companionRelease(h);
+    const publication = requiredFixture(
+      await h.images.resolveArtifactBundle?.({
+        imageRepository: "ghcr.io/example/node",
+        sourceSha: SHA_1,
+      })
+    );
+    const sealed = requiredFixture(
+      await h.store.pinResolvedBundle(
+        release.id,
+        selectReleaseBundle(release, publication)
+      )
+    );
+    const planned = await h.store.insertAttempt(
+      release.id,
+      () => `paid-before-bind-${failure}`
+    );
+    const paid = await h.payer.create({
+      cogniKey: planned.cogniKey,
+      environment: "preview",
+      identity: {
+        nodeId: POLY_ID,
+        compositeUid: `nd-${release.id}`,
+        compositeGeneration: planned.attempt,
+      },
+      spec: toPayerSpec(sealed.spec, { RELEASE_SHA: SHA_1 }),
+    });
+    expect(planned.error).toBeUndefined();
+    h.images.checkImageManifests = async () => {
+      if (failure === "unavailable")
+        throw new BuiltImageRegistryError("registry unavailable");
+      return false;
+    };
+    const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
+    const observes = h.payer.observeCalls;
+    // A fresh process cannot settle an old unmarked call during its in-flight grace.
+    await h.newSequencer().step(key);
+    expect(h.payer.observeCalls).toBe(observes);
+    h.clock.advance(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs);
+    await h.newSequencer().step(key);
+    await h.newSequencer().step(key);
+    expect(h.payer.observeCalls).toBeGreaterThan(observes);
+    expect(h.store.attempts).toHaveLength(1);
+    expect(h.store.attempts[0]).toMatchObject({
+      id: planned.id,
+      cogniKey: planned.cogniKey,
+      externalName: paid.externalName,
+      phase: "created",
+    });
+    expect(h.payer.createRequests).toHaveLength(1);
+    expect(h.payer.byDseq(paid.externalName).state).toBe("active");
+    expect(modes).toEqual([]);
+    expect(h.dns.records.size).toBe(0);
+    expect(
+      (await h.store.getRelease(release.id))?.admissionRefusal
+    ).toBeUndefined();
+    // The real invalid-publication writer must still revoke activation and confirm cleanup.
+    h.images.checkImageManifests = async () => {
+      throw new BuiltImageRegistryError("digest mismatch", true);
+    };
+    await h.newSequencer().step(key);
+    expect(h.store.attempts[0]?.phase).toBe("failed");
+    expect(h.payer.byDseq(paid.externalName).state).toBe("closed");
+    expect(h.payer.createRequests).toHaveLength(1);
+    expect(await h.newSequencer().step(key)).toBe("parked");
+    expect(modes).toEqual([]);
+    expect(h.dns.records.size).toBe(0);
+  });
+
   it("the actual admission writer retains an unbound paid effect until cleanup recovers", async () => {
     const h = harness({ environment: "preview" });
     installBundle(h);
@@ -1906,6 +2063,7 @@ describe("review repair digest and companion gates", () => {
       throw new BuiltImageRegistryError("selected digest mismatch", true);
     };
     h.payer.observeThrows = true;
+    h.clock.advance(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs);
     const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
     await h.seq.step(key);
     const refused = requiredFixture(await h.store.getRelease(release.id));
@@ -1962,6 +2120,7 @@ describe("review repair digest and companion gates", () => {
       at: new Date(h.clock.now()).toISOString(),
     });
     const key = h.key(OPERATOR_NODE_ID, "canary-db");
+    h.clock.advance(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs);
     await h.newSequencer().step(key);
     await h.newSequencer().step(key);
     expect(h.store.attempts[0]).toMatchObject({
@@ -2038,11 +2197,18 @@ describe("review repair digest and companion gates", () => {
       () => "resume-manifest-gate"
     );
     h.images.checkImageManifests = async () => false;
+    h.clock.advance(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs);
+    const observes = h.payer.observeCalls;
     await h.seq.step({ ...h.key(POLY_ID, "canary"), env: "preview" });
+    await h
+      .newSequencer()
+      .step({ ...h.key(POLY_ID, "canary"), env: "preview" });
     expect(h.payer.createRequests).toHaveLength(0);
     expect(h.store.attempts).toHaveLength(1);
     expect(h.store.attempts[0]?.id).toBe(planned.id);
     expect(h.store.attempts[0]?.phase).toBe("planned");
+    expect(h.payer.observeCalls - observes).toBe(2);
+    expect(h.store.attempts[0]?.error).toBeUndefined();
   });
 
   it.each([

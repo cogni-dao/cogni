@@ -11,6 +11,7 @@
  *   in local dev and over the private actuator in production.
  * Invariants:
  *   - ATTEMPT_ROW_BEFORE_CREATE: the attempt row (phase `planned`) is durable BEFORE the paid create.
+ *     A dispatch marker is durable before native IO; resumed keys are observed before admission waits.
  *   - KEY_IS_NEVER_REUSED: every create takes the next attempt ordinal; a failed attempt's key is dead.
  *     An ambiguous create is RESOLVED through `observe(cogniKey)`, never blindly repeated.
  *   - PARK_AFTER_3: after 3 consecutive failed attempts of one release no further paid create happens
@@ -409,7 +410,9 @@ export class NodeDeploySequencer {
       await this.emit(key, release, refused, "attempt_planned", "ok", {
         blue: active?.externalName,
       });
-      await this.failAttempt(key, deployable, refused, errText(error));
+      await this.failAttempt(key, deployable, refused, errText(error), {
+        createEnded: true,
+      });
       return "driven";
     }
     let blue = active;
@@ -426,7 +429,7 @@ export class NodeDeploySequencer {
     await this.emit(key, release, attempt, "attempt_planned", "ok", {
       blue: blue?.externalName,
     });
-    await this.drive(key, deployable, attempt, blue);
+    await this.drive(key, deployable, attempt, blue, true);
     return "driven";
   }
 
@@ -733,9 +736,11 @@ export class NodeDeploySequencer {
     key: WorkloadKey,
     release: ReleaseRow,
     start: AttemptRow,
-    blue: AttemptRow | undefined
+    blue: AttemptRow | undefined,
+    freshAttempt = false
   ): Promise<void> {
     if (release.admissionRefusal) {
+      if (!freshAttempt && this.createMayStillBeInFlight(start)) return;
       if (release.spec.kind === "app") {
         // The existing orphan guard observes, adopts and confirms closure under the original key.
         // It also preserves the grace window while a paid create may still be running.
@@ -781,6 +786,81 @@ export class NodeDeploySequencer {
       return;
     }
     let a = start;
+    let recoveryPending = false;
+    if (a.phase === "planned") {
+      if (a.error?.startsWith(REFUSED_PREFIX)) {
+        await this.failAttempt(key, release, a, a.error);
+        return;
+      }
+      // A dispatch marker survives loss before bindLease or the catch handler. Legacy
+      // unmarked rows get the same grace: their previous runner may still be paying.
+      if (!freshAttempt && this.createMayStillBeInFlight(a)) {
+        await this.emitGrace(key, release, a, "create", "inflight_grace", {
+          graceMs: this.d.config.inflightGraceMs,
+        });
+        recoveryPending = true;
+      }
+      if (!freshAttempt && !recoveryPending) {
+        try {
+          const obs = await this.d.payer.observe({ cogniKey: a.cogniKey });
+          if (obs.found && obs.resource) {
+            await this.emit(
+              key,
+              release,
+              a,
+              "create",
+              "adopted_after_ambiguity",
+              {
+                dseq: obs.resource.externalName,
+              }
+            );
+            a = await this.bindLease(key, release, a, obs.resource);
+          } else if (a.error?.startsWith("ambiguous")) {
+            await this.failAttempt(
+              key,
+              release,
+              a,
+              "ambiguous create resolved to nothing; next ordinal"
+            );
+            return;
+          }
+        } catch (error) {
+          a = await this.observeUnavailable(
+            key,
+            release,
+            a,
+            "create",
+            "planned create unresolved",
+            error
+          );
+          recoveryPending = true;
+        }
+      }
+    }
+    // New admission cannot suppress native recovery. Missing publication holds the
+    // owned allocation without qualification, traffic or another attempt.
+    if (release.spec.artifactPlan) {
+      try {
+        await this.checkSelectedImages(release.spec);
+      } catch (error) {
+        if (error instanceof DependencyNotReady) {
+          await this.emit(key, release, a, "dependency", "waiting", {
+            reason: error.message,
+          });
+          return;
+        }
+        if (error instanceof InvalidArtifactSet) {
+          await this.persistAdmissionRefusal(release, error);
+          const refused = await this.d.store.getRelease(release.id);
+          if (!refused?.admissionRefusal)
+            throw new Error("admission refusal readback missing");
+          await this.drive(key, refused, a, blue, freshAttempt);
+          return;
+        }
+        throw error;
+      }
+    }
+    if (recoveryPending) return;
     if (a.phase === "planned") a = await this.doCreate(key, release, a, blue);
     if (a.phase === "created") a = await this.awaitLease(key, release, a, blue);
     if (a.phase === "proving") a = await this.prove(key, release, a);
@@ -1060,59 +1140,13 @@ export class NodeDeploySequencer {
     blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
     const w = release.spec;
-    // A refused create (provider_rejected, ...) already ended this key's life: it is never replayed under
-    // the same nd: key (the actuator would answer `akash_tx_create_replayed` forever). Fail the attempt;
-    // the next attempt gets a new ordinal. If failAttempt had to defer (observe down) we land here again.
-    if (attempt.error?.startsWith(REFUSED_PREFIX))
-      return this.failAttempt(key, release, attempt, attempt.error);
-
-    // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
-    if (this.createMayStillBeInFlight(attempt)) {
-      await this.emitGrace(key, release, attempt, "create", "inflight_grace", {
-        graceMs: this.d.config.inflightGraceMs,
-      });
-      return attempt;
-    }
-    if (attempt.error?.startsWith("ambiguous")) {
-      try {
-        const obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
-        if (obs.found && obs.resource) {
-          await this.emit(
-            key,
-            release,
-            attempt,
-            "create",
-            "adopted_after_ambiguity",
-            {
-              dseq: obs.resource.externalName,
-            }
-          );
-          return this.bindLease(key, release, attempt, obs.resource);
-        }
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          "ambiguous create resolved to nothing; next ordinal"
-        );
-      } catch (error) {
-        return this.observeUnavailable(
-          key,
-          release,
-          attempt,
-          "create",
-          "ambiguous create unresolved",
-          error
-        );
-      }
-    }
-
     if (release.admissionRefusal)
       return this.failAttempt(
         key,
         release,
         attempt,
-        release.admissionRefusal.reason
+        release.admissionRefusal.reason,
+        { createEnded: true }
       );
 
     let runtime: ResolvedRuntime;
@@ -1120,32 +1154,9 @@ export class NodeDeploySequencer {
       await this.assertNewAppHost(key, release);
       runtime = await this.resolveEnv(key, release);
     } catch (error) {
-      return this.failAttempt(key, release, attempt, errText(error));
-    }
-
-    // A runner can stop after allocating the attempt. Recheck its accepted set
-    // before a new paid call, while leaving ambiguous-call recovery above intact.
-    if (w.artifactPlan) {
-      try {
-        await this.checkSelectedImages(w);
-      } catch (error) {
-        if (error instanceof DependencyNotReady) {
-          await this.emit(key, release, attempt, "dependency", "waiting", {
-            reason: error.message,
-          });
-          return attempt;
-        }
-        if (error instanceof InvalidArtifactSet) {
-          await this.persistAdmissionRefusal(release, error);
-          return this.failAttempt(
-            key,
-            release,
-            attempt,
-            `artifact_bundle_invalid: ${error.message}`
-          );
-        }
-        throw error;
-      }
+      return this.failAttempt(key, release, attempt, errText(error), {
+        createEnded: true,
+      });
     }
 
     const excludeProviders = await this.excludedProviders(
@@ -1172,6 +1183,10 @@ export class NodeDeploySequencer {
         providers: allowProviders,
         reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
       });
+    // Durable before native IO: runner loss cannot make a paid call look never-paid.
+    attempt = await this.d.store.updateAttempt(attempt.id, {
+      error: `ambiguous: dispatch@${this.d.clock.now()}`,
+    });
     try {
       const resource = await this.d.payer.create({
         cogniKey: attempt.cogniKey,
@@ -1200,8 +1215,13 @@ export class NodeDeploySequencer {
             this.d.config.leaseReadyMs
           ) {
             await this.emit(key, release, attempt, "create", "wallet_busy");
-            return attempt;
+            return this.d.store.updateAttempt(attempt.id, {
+              error: "unpaid: wallet_busy",
+            });
           }
+          attempt = await this.d.store.updateAttempt(attempt.id, {
+            error: "unpaid: wallet_busy",
+          });
           return this.failAttempt(key, release, attempt, "wallet_busy_timeout");
         }
         if (error.ambiguous) {
@@ -1214,7 +1234,12 @@ export class NodeDeploySequencer {
             code: error.code,
           });
           // Resolve now; on a failed read the marker makes the next tick resolve first.
-          return this.doCreate(key, release, marked, blue);
+          await this.drive(key, release, marked, blue);
+          return (
+            (await this.d.store.attemptsFor(key)).find(
+              (a) => a.id === marked.id
+            ) ?? marked
+          );
         }
         return this.refuseCreate(
           key,
@@ -1244,7 +1269,7 @@ export class NodeDeploySequencer {
     text: string,
     definitive = false
   ): Promise<AttemptRow> {
-    // The full bid roster must survive: blueWasOnlyScreenedBidder parses it (task.5409).
+    // The native bounded excluded-bidder summary precedes diagnostic text and survives this cap.
     const error = `${REFUSED_PREFIX}${text}`.slice(0, ERROR_TEXT_MAX);
     const refused = await this.d.store.updateAttempt(attempt.id, { error });
     return this.failAttempt(key, release, refused, refused.error ?? "", {
@@ -1306,13 +1331,16 @@ export class NodeDeploySequencer {
   }
 
   /**
-   * A transport-level create failure inside the grace window: the actuator may still be working. The
-   * window starts at the failure (`ambiguous: network@<epoch ms>`); a legacy marker without a stamp
-   * falls back to the attempt's creation time.
+   * A dispatched or unmarked legacy create may still be working. The window starts at dispatch or
+   * transport failure; an unstamped marker or legacy planned row uses its creation time.
    */
   private createMayStillBeInFlight(attempt: AttemptRow): boolean {
     if (attempt.externalName) return false;
-    const failedAt = networkFailureAt(attempt);
+    const failedAt =
+      networkFailureAt(attempt) ??
+      (attempt.phase === "planned" && !attempt.error
+        ? attempt.createdAt.getTime()
+        : undefined);
     return (
       failedAt !== undefined &&
       this.d.clock.now() - failedAt < this.d.config.inflightGraceMs
@@ -2381,12 +2409,13 @@ export class NodeDeploySequencer {
 /** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
 const REFUSED_PREFIX = "create refused: ";
 
-/** Max persisted refusal/failure text. Large enough for a full bid roster (~10 bidders); the column is `text`. */
+/** Max diagnostic text. Native decision evidence is bounded independently and comes first. */
 const ERROR_TEXT_MAX = 2000;
 
 /**
  * True when a persisted create refusal shows blue's provider as the only bidder screening could pass
- * (task.5409). Keys on the actuator's NO_ELIGIBLE_BIDS text (`akash-compute.adapter.ts`
+ * (task.5409). The native bounded excluded-bidder summary carries full provider identities before
+ * diagnostic text. Legacy fallback keys on the actuator's NO_ELIGIBLE_BIDS text (`akash-compute.adapter.ts`
  * `awaitScreenedBid`: "none passed provider screening [refused: ...] [bids: ...]") and its exclusion
  * verdict `already_tried` (`akash-provider-screen.ts` `rejectionFor`: an excluded provider's bid). When
  * `onlyBlueExcluded`, the caller's exclude list was exactly {blue}, so any `already_tried` bid is blue's;
@@ -2399,6 +2428,24 @@ function blueWasOnlyScreenedBidder(
 ): boolean {
   if (!error?.startsWith(REFUSED_PREFIX)) return false;
   if (!error.includes("none passed provider screening")) return false;
+  if (error.includes("[excluded-bidders-v1:")) {
+    const encoded = /\[excluded-bidders-v1:(\[[^\]]*\])\]/u.exec(error)?.[1];
+    if (!encoded) return false;
+    try {
+      const providers: unknown = JSON.parse(encoded);
+      return (
+        Array.isArray(providers) &&
+        providers.length <= 16 &&
+        providers.every(
+          (p: unknown) =>
+            typeof p === "string" && /^akash1[0-9a-z]{38}$/u.test(p)
+        ) &&
+        providers.includes(blueProvider)
+      );
+    } catch {
+      return false;
+    }
+  }
   const tried = /already_tried=(\d+)/u.exec(error);
   if (!tried?.[1] || Number(tried[1]) < 1) return false;
   if (onlyBlueExcluded) return true;
@@ -2406,9 +2453,8 @@ function blueWasOnlyScreenedBidder(
     blueProvider.length > 17
       ? `${blueProvider.slice(0, 9)}…${blueProvider.slice(-4)}`
       : blueProvider;
-  // No closing `]`: persisted error text is capped (ERROR_TEXT_MAX), so a very long roster may still be cut off.
-  // A cut-off last entry simply fails to match (safe: no stop).
-  const roster = /\[bids: ([^\]]*)/u.exec(error)?.[1] ?? "";
+  // Legacy fallback needs a complete roster; clipped diagnostics cannot authorize a stop.
+  const roster = /\[bids: ([^\]]*)\]/u.exec(error)?.[1] ?? "";
   return roster
     .split(", ")
     .some((r) => r.startsWith(`${addr} `) && r.endsWith(" already_tried"));
@@ -2424,9 +2470,11 @@ function ambiguousMarker(code: string, now: number): string {
     : `ambiguous: ${code}`;
 }
 
-/** When the transport-level create failure happened (stamp, else legacy fallback to createdAt). */
+/** When a create entered native IO or failed in transit (stamp, else legacy createdAt). */
 function networkFailureAt(attempt: AttemptRow): number | undefined {
-  const m = /^ambiguous: network(?:@(\d+))?$/u.exec(attempt.error ?? "");
+  const m = /^ambiguous: (?:network|dispatch)(?:@(\d+))?$/u.exec(
+    attempt.error ?? ""
+  );
   if (!m) return undefined;
   return m[1] ? Number(m[1]) : attempt.createdAt.getTime();
 }
