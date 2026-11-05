@@ -161,6 +161,8 @@ export interface NodeAppRuntimeDeps {
   readonly catalog: NodeCatalogPort;
   /** `vm_host_for_env` of the environment VM; absent omits the substrate env block. */
   readonly substrateHost?: string | undefined;
+  /** The DNS zone this lane's node hosts live in (ONE_EDGE_ZONE); absent = `cognidao.org`. */
+  readonly edgeZone?: string | undefined;
 }
 
 export interface SequencerDeps {
@@ -789,7 +791,11 @@ export class NodeDeploySequencer {
       const owner = await this.d.runtime.catalog.entryFor(key.nodeId);
       // Only an operator-lowered repo-spec sibling (a worker) may use `<slug>-<workload>`.
       const worker = w.runtimeProfile === "worker" ? w.name : undefined;
-      if (!owner || !hostOwnedBy(declaredHost, key.env, owner.slug, worker))
+      const zone = this.d.runtime.edgeZone;
+      if (
+        !owner ||
+        !hostOwnedBy(declaredHost, key.env, owner.slug, worker, zone)
+      )
         return this.failAttempt(
           key,
           release,
@@ -804,6 +810,7 @@ export class NodeDeploySequencer {
               slug: owner.slug,
               workload: worker,
               catalogSlugs: await this.d.runtime.catalog.slugs(),
+              zone,
             })
           : undefined;
       if (refusal)
