@@ -1526,6 +1526,24 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
     expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("closed");
   });
 
+  it("task.5409: a long bid roster that names BLUE after 500 chars still proceeds to stop-then-start (no truncation)", async () => {
+    const h = harness();
+    const filler = Array.from(
+      { length: 12 },
+      (_, i) => `provider-${30 + i} US 1.00 not_allowlisted`
+    ).join(", ");
+    const blue = await failedTryOnP(h, `${filler}, provider-1`);
+    expect(await h.seq.step(APP)).toBe("driven"); // attempt 2 refused, blue is late in the roster
+    expect(
+      ((await h.store.attemptsFor(APP))[0]?.error ?? "").length
+    ).toBeGreaterThan(500);
+    expect(await h.seq.step(APP)).toBe("driven");
+    expect(h.log.steps()).toEqual(
+      expect.arrayContaining(["stop_then_start:closing_blue"])
+    );
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("closed");
+  });
+
   it("second release on a single-provider lane: blue closed (confirmed), then green on the same provider, active", async () => {
     const h = harness();
     singleProvider(h);

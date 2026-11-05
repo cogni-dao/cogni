@@ -983,7 +983,8 @@ export class NodeDeploySequencer {
     text: string,
     definitive = false
   ): Promise<AttemptRow> {
-    const error = `${REFUSED_PREFIX}${text}`.slice(0, 500);
+    // The full bid roster must survive: blueWasOnlyScreenedBidder parses it (task.5409).
+    const error = `${REFUSED_PREFIX}${text}`.slice(0, ERROR_TEXT_MAX);
     const refused = await this.d.store.updateAttempt(attempt.id, { error });
     return this.failAttempt(key, release, refused, refused.error ?? "", {
       createEnded: definitive,
@@ -1423,7 +1424,7 @@ export class NodeDeploySequencer {
     reason: string,
     opts: { createEnded?: boolean } = {}
   ): Promise<AttemptRow> {
-    const trimmed = reason.slice(0, 500);
+    const trimmed = reason.slice(0, ERROR_TEXT_MAX);
     // ORPHAN_GUARD (CD8): an attempt with no bound handle may still own a PAID lease (the create
     // succeeded and its response was lost, or we crashed before binding). Ask the payer by key BEFORE
     // writing any terminal state. A lease that exists is bound and then closed + confirmed; if the
@@ -1947,6 +1948,9 @@ export class NodeDeploySequencer {
 
 /** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
 const REFUSED_PREFIX = "create refused: ";
+
+/** Max persisted refusal/failure text. Large enough for a full bid roster (~10 bidders); the column is `text`. */
+const ERROR_TEXT_MAX = 2000;
 
 /**
  * True when a persisted create refusal shows blue's provider as the only bidder screening could pass
