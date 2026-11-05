@@ -18,6 +18,11 @@
  *   - PROVE_BEFORE_CUTOVER: the edge never moves until the green lease serves the exact sha
  *     (`/version.buildSha`) and `/readyz` 200 through its provider ingress with the public Host header,
  *     within `proofMs` of lease creation; otherwise the NEW lease is closed and blue keeps serving.
+ *     HOST_NOT_ROUTED (bug.5569): `/version` 404 on every probe for `hostNotRoutedMs` (the provider
+ *     does not route our custom host) fails the proof at once (`host_not_routed`), the same close path.
+ *   - DEFINITIVE_REFUSAL (bug.5569): a create refusal the payer marks `definitive` proves the create is
+ *     no longer in flight. It only skips the in-flight grace; the attempt still runs the ONE cleanup
+ *     chain (ORPHAN_GUARD: observe, then bind + close + confirm a found lease, else failed) in that tick.
  *   - NOT_BLUES_PROVIDER: a green lease that lands on blue's provider is a failed proof and is closed.
  *   - STOP_THEN_START (task.5409): when a green create is refused because blue's provider was the only
  *     bidder screening could pass, an `app` blue is closed (confirmed) BEFORE the next create, which then
@@ -107,6 +112,13 @@ export interface SequencerConfig {
   readonly leaseReadyMs: number;
   /** Proof deadline, counted from lease creation (design: 10 min). */
   readonly proofMs: number;
+  /**
+   * HOST_NOT_ROUTED (bug.5569): when EVERY proof probe of `/version` through the provider ingress with
+   * our Host answers HTTP 404 for this long, the provider does not route the custom domain. The attempt
+   * fails `host_not_routed` at once instead of waiting out `proofMs`; any other proof failure keeps
+   * the full `proofMs` window.
+   */
+  readonly hostNotRoutedMs: number;
   /** Bound on the public cutover read-back loop. */
   readonly publicMs: number;
   /** Consecutive exact-sha public reads that make a cutover (design: 8). */
@@ -156,6 +168,7 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
 > = {
   leaseReadyMs: 240_000,
   proofMs: 600_000,
+  hostNotRoutedMs: 60_000,
   publicMs: 300_000,
   publicStreak: 8,
   retainMs: 600_000,
@@ -1160,7 +1173,8 @@ export class NodeDeploySequencer {
           key,
           release,
           attempt,
-          `${error.code}: ${error.message}`
+          `${error.code}: ${error.message}`,
+          error.definitive
         );
       }
       // Any other throw from create is also never replayed under this key (observe guards orphans).
@@ -1168,17 +1182,26 @@ export class NodeDeploySequencer {
     }
   }
 
-  /** Persist the refusal BEFORE failAttempt, so a deferred failAttempt is never followed by a replay. */
+  /**
+   * Persist the refusal BEFORE failAttempt, so a deferred failAttempt is never followed by a replay.
+   * Every refusal then runs the ONE cleanup chain (ORPHAN_GUARD in failAttempt): observe by key, a found
+   * lease is bound, closed and confirmed, nothing found is `failed`. The payer's observe is also what
+   * settles or releases the actuator's receipt, so skipping it would strand the wallet slot or leave a
+   * phantom `allocated` record (bug.5569). DEFINITIVE_REFUSAL: `definitive` only proves the create is no
+   * longer in flight, so the in-flight grace is skipped; the chain itself is never skipped.
+   */
   private async refuseCreate(
     key: WorkloadKey,
     release: ReleaseRow,
     attempt: AttemptRow,
-    text: string
+    text: string,
+    definitive = false
   ): Promise<AttemptRow> {
-    const refused = await this.d.store.updateAttempt(attempt.id, {
-      error: `${REFUSED_PREFIX}${text}`.slice(0, 500),
+    const error = `${REFUSED_PREFIX}${text}`.slice(0, 500);
+    const refused = await this.d.store.updateAttempt(attempt.id, { error });
+    return this.failAttempt(key, release, refused, refused.error ?? "", {
+      createEnded: definitive,
     });
-    return this.failAttempt(key, release, refused, refused.error ?? "");
   }
 
   /**
@@ -1370,6 +1393,8 @@ export class NodeDeploySequencer {
       (attempt.leasedAt ?? attempt.createdAt).getTime() + this.d.config.proofMs;
     let last = "no probe yet";
     let lastNote = this.d.clock.now();
+    // HOST_NOT_ROUTED: start of an unbroken run of `/version` 404s from the provider ingress.
+    let notRoutedSince: number | undefined;
     for (;;) {
       if (w.kind === "app") {
         const ingress = ingressHostOf(attempt.endpoints, host);
@@ -1380,6 +1405,10 @@ export class NodeDeploySequencer {
             host,
             health.version
           );
+          notRoutedSince =
+            v.status === 404
+              ? (notRoutedSince ?? this.d.clock.now())
+              : undefined;
           if (v.status === 200 && buildShaOf(v.body) === release.sourceSha) {
             const r = await this.d.probe.hostRouted(
               ingress,
@@ -1434,6 +1463,20 @@ export class NodeDeploySequencer {
           attempt,
           "lease_closed_while_proving"
         );
+      if (
+        notRoutedSince !== undefined &&
+        this.d.clock.now() - notRoutedSince >= this.d.config.hostNotRoutedMs
+      ) {
+        // The provider ingress does not route our host: it can never pass. Close green through the
+        // normal path (blue and the edge are untouched); its provider is excluded for this release.
+        await this.strike(key, release, attempt, "host_not_routed");
+        return this.failAttempt(
+          key,
+          release,
+          attempt,
+          `host_not_routed: ${last.trim()} for ${Math.round((this.d.clock.now() - notRoutedSince) / 1000)}s`
+        );
+      }
       if (this.d.clock.now() >= deadline) {
         await this.strike(key, release, attempt, "proof_timeout");
         return this.failAttempt(
@@ -1716,12 +1759,17 @@ export class NodeDeploySequencer {
 
   // ---- failure / close ------------------------------------------------------------------------
 
-  /** Mark failed (counting toward the park), close the lease if one exists, confirm it. */
+  /**
+   * Mark failed (counting toward the park), close the lease if one exists, confirm it.
+   * `createEnded` (bug.5569): the payer proved the create is no longer in flight (a definitive
+   * refusal), so the in-flight grace is skipped. The observe and close below still run.
+   */
   private async failAttempt(
     key: WorkloadKey,
     release: ReleaseRow,
     attempt: AttemptRow,
-    reason: string
+    reason: string,
+    opts: { createEnded?: boolean } = {}
   ): Promise<AttemptRow> {
     const trimmed = reason.slice(0, 500);
     // ORPHAN_GUARD (CD8): an attempt with no bound handle may still own a PAID lease (the create
@@ -1729,7 +1777,7 @@ export class NodeDeploySequencer {
     // writing any terminal state. A lease that exists is bound and then closed + confirmed; if the
     // question cannot be answered the attempt is left exactly as it is and retried on the next tick.
     if (!attempt.externalName) {
-      if (this.createMayStillBeInFlight(attempt)) {
+      if (!opts.createEnded && this.createMayStillBeInFlight(attempt)) {
         // Never fail/supersede (and never observe) while the actuator may still be creating.
         await this.emitGrace(
           key,

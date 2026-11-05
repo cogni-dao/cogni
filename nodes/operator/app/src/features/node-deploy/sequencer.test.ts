@@ -262,6 +262,61 @@ describe("app deploy", () => {
     expect(failedAt - leasedAt).toBeGreaterThanOrEqual(h.config.proofMs);
   });
 
+  it("bug.5569: /version 404 for 60s (host not routed) fails host_not_routed fast; green closed, blue and edge untouched; the provider is excluded next", async () => {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1); // blue: lease 1002 on provider-2
+    const before = [...h.dns.records.values()][0]?.content;
+    h.dns.ops.length = 0;
+    h.payer.onLease = (l) => {
+      if (l.provider === "provider-3") l.routeStatus = () => 404;
+    };
+    await deployApp(h, SHA_2);
+    const failed = (await h.store.attemptsFor(APP))[0];
+    expect(failed?.phase).toBe("failed");
+    expect(failed?.error).toMatch(/^host_not_routed: version 404/);
+    expect(failed?.provider).toBe("provider-3");
+    const leasedAt = failed?.leasedAt?.getTime() ?? 0;
+    const spent = (failed?.updatedAt.getTime() ?? 0) - leasedAt;
+    expect(spent).toBeGreaterThanOrEqual(h.config.hostNotRoutedMs);
+    expect(spent).toBeLessThan(h.config.proofMs);
+    expect(h.payer.byDseq("1003").state).toBe("closed");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    expect(h.dns.ops).toEqual([]);
+    expect([...h.dns.records.values()][0]?.content).toBe(before);
+    expect(
+      h.log.lines.some(
+        (l) =>
+          l.msg === "node_deploy_provider_strike" &&
+          l.fields.outcome === "host_not_routed"
+      )
+    ).toBe(true);
+    // the next attempt of the release excludes the unrouted provider (and blue's)
+    await h.seq.step(APP);
+    const next = h.payer.createRequests.at(-1);
+    expect(next?.excludeProviders).toEqual(
+      expect.arrayContaining(["provider-2", "provider-3"])
+    );
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("active");
+  });
+
+  it("bug.5569: a 404 run broken by any other answer keeps the full proof window; 503-then-200 still proves", async () => {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    // 404 for 15 probes (45s), one 503, 404 again for 15, then 503 until ~5 min, then serving.
+    h.payer.onLease = (l) => {
+      if (l.provider === "provider-3")
+        l.routeStatus = (n) =>
+          n <= 15 || (n > 16 && n <= 31) ? 404 : n <= 100 ? 503 : undefined;
+    };
+    await deployApp(h, SHA_2);
+    const green = (await h.store.attemptsFor(APP))[0];
+    expect(green?.provider).toBe("provider-3");
+    expect(green?.phase).toBe("active");
+    expect(green?.error ?? "").not.toMatch(/host_not_routed/);
+  });
+
   it("a green lease that lands on blue's provider is a failed proof and is closed", async () => {
     const h = harness();
     await stateUp(h);
@@ -1050,6 +1105,78 @@ describe("crash safety", () => {
     expect(
       h.payer.createRequests.filter((r) => r.cogniKey === first?.cogniKey)
     ).toHaveLength(1);
+  });
+
+  it("bug.5569 (a): a definitive pre-deployment refusal runs the ONE cleanup chain in the same tick (observe, nothing found, failed); no grace; the next attempt proceeds", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.createFault = (n) =>
+      n === 2
+        ? new PayerError(
+            "provider_rejected",
+            "actuator /v1/akash/create -> HTTP 422 provider_rejected: Console request failed with HTTP 422",
+            false,
+            true
+          )
+        : undefined;
+    const observesBefore = h.payer.observeCalls;
+    await deployApp(h, SHA_1);
+    const first = (await h.store.attemptsFor(APP))[0];
+    expect(first?.phase).toBe("failed");
+    expect(first?.error).toMatch(/^create refused: provider_rejected/);
+    expect(first?.externalName ?? null).toBeNull();
+    // the chain observed by key, in this tick (that observe settles the actuator receipt)
+    expect(h.payer.observeCalls).toBe(observesBefore + 1);
+    expect(h.log.steps()).toContain("attempt_failed:failed");
+    expect(h.log.steps()).not.toContain("attempt_failed:deferred");
+    expect(h.log.steps()).not.toContain("create:inflight_grace");
+    // the very next tick takes a NEW key and serves
+    await h.seq.step(APP);
+    const active = (await h.store.attemptsFor(APP)).find(
+      (a) => a.phase === "active"
+    );
+    expect(active?.attempt).toBe(2);
+    expect(
+      h.payer.createRequests.filter((r) => r.cogniKey === first?.cogniKey)
+    ).toHaveLength(1);
+  });
+
+  it("bug.5569 (b): a definitive refusal whose rolled-back deployment is still under the key is bound, closed and confirmed in the same tick; no grace; the next attempt proceeds", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.createFault = (n, req) => {
+      if (n !== 2) return undefined;
+      // the actuator opened deployment 9009, found no eligible bid, closed it and read it back closed
+      h.payer.leases.push({
+        dseq: "9009",
+        cogniKey: req.cogniKey,
+        provider: "",
+        state: "closed",
+        endpoints: [],
+        env: {},
+      });
+      return new PayerError(
+        "provider_rejected",
+        "none passed provider screening (deployment 9009 closed, escrow refunding)",
+        false,
+        true
+      );
+    };
+    await deployApp(h, SHA_1);
+    const first = (await h.store.attemptsFor(APP))[0];
+    expect(first?.phase).toBe("failed");
+    expect(first?.externalName).toBe("9009");
+    expect(first?.error).toMatch(/^create refused: provider_rejected/);
+    expect(h.log.steps()).toContain("orphan_lease:adopted_to_close");
+    expect(h.log.steps()).toContain("new_closed:ok");
+    expect(h.events).toContain("payer.delete:9009");
+    expect(h.log.steps()).not.toContain("create:inflight_grace");
+    expect(h.log.alerts()).not.toContain("close_unconfirmed");
+    await h.seq.step(APP);
+    const active = (await h.store.attemptsFor(APP)).find(
+      (a) => a.phase === "active"
+    );
+    expect(active?.attempt).toBe(2);
   });
 
   it("observe unavailable is bounded: past 15 min the attempt fails orphan_suspect with an alert and the release moves on", async () => {

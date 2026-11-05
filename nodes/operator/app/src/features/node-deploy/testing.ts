@@ -335,6 +335,12 @@ interface FakeLease {
   notReady?: boolean;
   down?: boolean;
   tlsDown?: boolean;
+  /**
+   * HTTP status the provider ingress answers for our Host on the n-th host-routed probe (1-based)
+   * INSTEAD of serving the app (404 = the provider does not route the custom domain). Undefined serves.
+   */
+  routeStatus?: (probe: number) => number | undefined;
+  routeProbes?: number;
 }
 
 export class FakePayer implements PayerPort {
@@ -516,7 +522,13 @@ export class FakeProbe implements ProbePort {
     _host: string,
     path: string
   ): Promise<HttpResult> {
-    return this.serve(this.leaseByIngress(ingressHost), path);
+    const l = this.leaseByIngress(ingressHost);
+    if (l?.routeStatus && l.state !== "closed") {
+      l.routeProbes = (l.routeProbes ?? 0) + 1;
+      const status = l.routeStatus(l.routeProbes);
+      if (status !== undefined) return { status, body: "", ms: 1 };
+    }
+    return this.serve(l, path);
   }
   async publicDoh(host: string, path: string): Promise<HttpResult> {
     const rec = [...this.dns.records.values()].find((r) => r.name === host);

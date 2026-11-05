@@ -377,6 +377,11 @@ export const AkashTxErrorOutputSchema = z.strictObject({
   code: z.string(),
   message: z.string(),
   ownerCogniKey: z.string().optional(),
+  /**
+   * bug.5569: present (and `true`) ONLY when the actuator PROVED nothing bills under the key after
+   * this refusal. Absent means "a lease may exist": the caller must observe before it gives up.
+   */
+  nothingBilling: z.literal(true).optional(),
 });
 
 export type AkashTxMigrationStep = z.infer<typeof AkashTxMigrationStepSchema>;
