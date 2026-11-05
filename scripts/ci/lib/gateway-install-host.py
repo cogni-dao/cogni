@@ -25,7 +25,8 @@ def load(name):
 
 guard = load('runtime-maintenance-guard')
 receipt = load('runtime-recovery-receipt')
-FILES = ('runtime-maintenance-guard.py', 'runtime-recovery-receipt.py', 'gateway-activation-host.py')
+installer = load('runtime-guard-install')
+FILES = installer.FILES
 
 def require(condition):
     if not condition:
@@ -40,7 +41,7 @@ def main():
                               'minimumSourceSha', 'coreSha256', 'runnerSha256', 'blobs', 'inventorySha256', 'operationId'})
     operation_id = manifest.pop('operationId')
     require(re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', operation_id))
-    require(manifest['protocolVersion'] == 1 and manifest['maintenanceEnabled'] is True)
+    require(manifest['protocolVersion'] == 1 and isinstance(manifest['maintenanceEnabled'], bool))
     require(manifest['env'] in ('candidate-a', 'preview', 'production'))
     require(manifest['custodian']['owner'].lower() == 'cogni-dao' and manifest['custodian']['repo'].lower() == 'cogni'
             and manifest['custodian']['controlEnv'] == 'production')
@@ -51,18 +52,10 @@ def main():
     require(set(manifest['blobs']) == set(FILES))
     for name in FILES:
         require(hashlib.sha256((LIB / name).read_bytes()).hexdigest() == manifest['blobs'][name])
-    with guard.RuntimeGuard(operation_id):
+    with guard.RuntimeGuard(operation_id) as active_guard:
         env = Path('/opt/cogni-template-runtime/.env').read_text()
         values = re.findall(r'(?m)^DEPLOY_ENVIRONMENT=[\'"]?([a-z-]+)[\'"]?$', env)
         require(values == [manifest['env']])
-        # Inventory all systemd service/timer definitions. An unknown recovery
-        # caller must be upgraded by its owner before this capability is enabled.
-        units = subprocess.check_output(['systemctl', 'list-unit-files', '--no-pager', '--no-legend'], timeout=15).decode()
-        for line in units.splitlines():
-            name = line.split()[0]
-            if re.search(r'runtime.*recover|recover.*runtime', name):
-                command = subprocess.check_output(['systemctl', 'show', name, '--property=ExecStart', '--value'], timeout=15).decode()
-                require('/var/lib/cogni/runtime-maintenance/lib/runtime-maintenance-guard.py exec' in command)
         manifest['machineId'] = Path('/etc/machine-id').read_text().strip()
         cluster = subprocess.check_output(['kubectl', '--kubeconfig', '/etc/rancher/k3s/k3s.yaml', 'get',
                                            'namespace', 'kube-system', '-o', 'json'], timeout=15)
@@ -74,8 +67,9 @@ def main():
             previous = json.loads(guard.private_read(previous_path))
             require(previous['machineId'] == manifest['machineId'] and previous['clusterUid'] == manifest['clusterUid'])
             require(previous['env'] == manifest['env'] and previous['custodian'] == manifest['custodian'])
-            pending = guard.ROOT / 'operations' / operation_id / 'operation.json'
-            if pending.exists() and json.loads(guard.private_read(pending))['state'] not in guard.TERMINAL:
+            pending_directory = guard.ROOT / 'operations' / operation_id
+            pending = pending_directory / 'operation.json'
+            if pending_directory.exists() and (not pending.exists() or json.loads(guard.private_read(pending))['state'] not in guard.TERMINAL):
                 for key in ('implementationSha', 'minimumSourceSha', 'blobs', 'coreSha256', 'runnerSha256'):
                     require(previous[key] == manifest[key])
                 for name in FILES:
@@ -87,8 +81,11 @@ def main():
             if previous.get('minimumSourceSha') == previous.get('implementationSha'):
                 require(previous['blobs'] == manifest['blobs'] and previous['coreSha256'] == manifest['coreSha256']
                         and previous['runnerSha256'] == manifest['runnerSha256'])
-        for name in FILES:
-            receipt.atomic(target / name, (LIB / name).read_bytes())
+        # Nested installation reuses the inherited lock description. It installs
+        # and proves the guard/caller before gateway maintenance is enabled.
+        os.environ['COGNI_RUNTIME_GUARD_FD'] = str(active_guard.stream.fileno())
+        installed = installer.install(manifest['implementationSha'], operation_id)
+        require(installed['blobs'] == manifest['blobs'])
         receipt.atomic(previous_path, receipt.canonical(manifest) + b'\n')
     print(json.dumps({'state': 'guard_enrolled', 'env': manifest['env'], 'implementationSha': manifest['implementationSha']}))
 

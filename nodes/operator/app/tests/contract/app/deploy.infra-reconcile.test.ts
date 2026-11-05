@@ -27,6 +27,7 @@ const SOURCE_SHA = "0123456789012345678901234567890123456789";
 
 const mockDeployPlane = vi.hoisted(() => ({
   reconcileNodeInfra: vi.fn(),
+  readGatewayActivation: vi.fn(),
 }));
 const authzState = vi.hoisted(() => ({
   decision: undefined as
@@ -126,18 +127,37 @@ vi.mock("@/shared/observability", async (importOriginal) => {
   };
 });
 
+import * as operationHandler from "@/app/api/v1/deploy/infra-reconcile/operations/[operationId]/route";
 import * as appHandler from "@/app/api/v1/deploy/infra-reconcile/route";
 
-async function post(body: unknown): Promise<Response> {
+async function post(
+  body: unknown,
+  headers: Record<string, string> = {}
+): Promise<Response> {
   let res!: Response;
   await testApiHandler({
     appHandler,
     async test({ fetch }) {
       res = await fetch({
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...headers },
         body: JSON.stringify(body),
       });
+    },
+  });
+  return res;
+}
+
+async function readOperation(
+  operationId: string,
+  env: string
+): Promise<Response> {
+  let res!: Response;
+  await testApiHandler({
+    appHandler: operationHandler,
+    url: `https://cognidao.org/api/v1/deploy/infra-reconcile/operations/${operationId}?env=${env}`,
+    async test({ fetch }) {
+      res = await fetch({ method: "GET" });
     },
   });
   return res;
@@ -177,6 +197,146 @@ describe("POST /api/v1/deploy/infra-reconcile", () => {
     mockGetSessionUser.mockResolvedValue(null);
     const res = await post({ nodeId: NODE_ID, env: "production" });
     expect(res.status).toBe(401);
+    expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "candidate-a",
+    "preview",
+    "production",
+  ])("submits one sealed gateway operation for %s", async (env) => {
+    const operationId = "b9d19a15-95f9-41b4-bcf5-cd56142c0eb2";
+    envState.parentOwner = "cogni-dao";
+    envState.parentRepo = "cogni";
+    mockDeployPlane.reconcileNodeInfra.mockResolvedValue({
+      env,
+      status: "submitted",
+      target: "litellm-provider-key",
+      sourceSha: SOURCE_SHA,
+      operationId,
+    });
+    const res = await post(
+      { nodeId: NODE_ID, env, target: "litellm-provider-key" },
+      { "Idempotency-Key": operationId }
+    );
+    expect(res.status).toBe(200);
+    expect(mockDeployPlane.reconcileNodeInfra).toHaveBeenCalledExactlyOnceWith({
+      env,
+      slug: "operator",
+      parentOwner: "cogni-dao",
+      parentRepo: "cogni",
+      target: "litellm-provider-key",
+      operationId,
+    });
+    expect(authzState.check).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action:
+          env === "preview" ? "node.manage_envs" : "node.promote_production",
+      })
+    );
+  });
+
+  it.each([
+    undefined,
+    "not-a-uuid",
+  ])("refuses a missing or malformed gateway operation identity", async (key) => {
+    const res = await post(
+      { nodeId: NODE_ID, env: "candidate-a", target: "litellm-provider-key" },
+      key ? { "Idempotency-Key": key } : {}
+    );
+    expect(res.status).toBe(400);
+    expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
+  });
+
+  it("refuses canonical gateway authority from a test-custodied operator", async () => {
+    envState.hostingEnv = "candidate-a";
+    envState.fleetControlEnv = "candidate-a";
+    const res = await post(
+      { nodeId: NODE_ID, env: "candidate-a", target: "litellm-provider-key" },
+      {
+        "Idempotency-Key": "b9d19a15-95f9-41b4-bcf5-cd56142c0eb2",
+      }
+    );
+    expect(res.status).toBe(403);
+    expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "value",
+    "sourceSha",
+    "workflow",
+    "command",
+    "path",
+  ])("rejects caller-selected gateway %s", async (field) => {
+    const res = await post(
+      {
+        nodeId: NODE_ID,
+        env: "preview",
+        target: "litellm-provider-key",
+        [field]: "forbidden-input",
+      },
+      {
+        "Idempotency-Key": "b9d19a15-95f9-41b4-bcf5-cd56142c0eb2",
+      }
+    );
+    expect(res.status).toBe(400);
+    expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "candidate-a",
+    "preview",
+    "production",
+  ])("observes %s through the same gate without dispatch", async (env) => {
+    const operationId = "b9d19a15-95f9-41b4-bcf5-cd56142c0eb2";
+    mockDeployPlane.readGatewayActivation.mockResolvedValue({
+      env,
+      status: "unknown",
+      currentState: "unobserved",
+    });
+    const res = await readOperation(operationId, env);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      status: "unknown",
+      currentState: "unobserved",
+    });
+    expect(authzState.check).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action:
+          env === "preview" ? "node.manage_envs" : "node.promote_production",
+      })
+    );
+    expect(
+      mockDeployPlane.readGatewayActivation
+    ).toHaveBeenCalledExactlyOnceWith({
+      operationId,
+      parentOwner: "test-owner",
+      parentRepo: "test-repo",
+    });
+    expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
+  });
+
+  it("does not observe repository state when the caller lacks the status grant", async () => {
+    authzState.decision = "authz_denied";
+    const res = await readOperation(
+      "b9d19a15-95f9-41b4-bcf5-cd56142c0eb2",
+      "production"
+    );
+    expect(res.status).toBe(403);
+    expect(mockDeployPlane.readGatewayActivation).not.toHaveBeenCalled();
+    expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
+  });
+
+  it("does not return an operation from a different authorized lane", async () => {
+    mockDeployPlane.readGatewayActivation.mockResolvedValue({
+      env: "production",
+      status: "running",
+    });
+    const res = await readOperation(
+      "b9d19a15-95f9-41b4-bcf5-cd56142c0eb2",
+      "preview"
+    );
+    expect(res.status).toBe(404);
     expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
   });
 

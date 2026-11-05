@@ -146,6 +146,82 @@ describe("canonical gateway authority", () => {
 });
 
 describe("native operation observation", () => {
+  it("recovers an interrupted staging ref without replacing its source after main advances", async () => {
+    let tagged = false,
+      staged = source;
+    let persisted: GatewayIntent | undefined;
+    const request = vi.fn(
+      async (route: string, params: Record<string, unknown>) => {
+        if (route.endsWith("/branches/{branch}"))
+          return { data: { protected: true, commit: { sha: transport } } };
+        if (route.endsWith("/git/ref/{ref}")) {
+          if (String(params.ref).startsWith("tags/") && !tagged)
+            throw Object.assign(new Error("missing"), { status: 404 });
+          return { data: { object: { type: "commit", sha: staged } } };
+        }
+        if (route.startsWith("POST") && route.endsWith("/git/refs")) {
+          if (String(params.ref).startsWith("refs/heads/"))
+            throw Object.assign(new Error("already initialized"), {
+              status: 422,
+            });
+          tagged = true;
+          return { data: {} };
+        }
+        if (route.startsWith("GET") && route.includes("/contents/")) {
+          if (!persisted)
+            throw Object.assign(new Error("not committed yet"), {
+              status: 404,
+            });
+          return {
+            data: {
+              type: "file",
+              encoding: "base64",
+              content: Buffer.from(JSON.stringify(persisted)).toString(
+                "base64"
+              ),
+            },
+          };
+        }
+        if (route.startsWith("PUT")) {
+          persisted = JSON.parse(
+            Buffer.from(String(params.content), "base64").toString("utf8")
+          );
+          staged = commit;
+          return { data: { commit: { sha: commit } } };
+        }
+        if (route.endsWith("/commits/{ref}"))
+          return {
+            data: {
+              sha: commit,
+              author: bot,
+              commit: {
+                message: `chore(gateway): persist activation ${op}`,
+                committer: { date },
+                verification: { verified: true },
+              },
+            },
+          };
+        if (route.includes("/compare/")) return { data: { status: "ahead" } };
+        if (route.endsWith("/runs"))
+          return { data: { total_count: 0, workflow_runs: [] } };
+        if (route.endsWith("/dispatches") || route.startsWith("DELETE"))
+          return { data: {} };
+        throw new Error(`Unexpected boundary ${route}`);
+      }
+    );
+    const gateway = new GithubGatewayActivation(
+      { request } as unknown as Octokit,
+      input,
+      bot
+    );
+    const result = await gateway.submit("candidate-a");
+    expect(persisted?.implementationSha).toBe(source);
+    expect(result.intent.implementationSha).toBe(source);
+    expect(result.transportSha).toBe(transport);
+    expect(
+      request.mock.calls.filter(([route]) => route.endsWith("/dispatches"))
+    ).toHaveLength(1);
+  });
   it("does not turn incomplete discovery into idle or permit a resume dispatch", async () => {
     const { gateway, request } = fixture({ total: 1001, runs: [run] });
     expect((await gateway.submit("candidate-a")).status).toBe("unknown");

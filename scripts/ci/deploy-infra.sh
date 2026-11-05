@@ -2850,6 +2850,8 @@ scp $SSH_OPTS "$ARTIFACT_DIR/compute-egress-allowlist" "root@$VM_HOST:$REMOTE_ST
 scp $SSH_OPTS \
   "$REPO_ROOT/scripts/ci/lib/runtime-maintenance-guard.py" \
   "$REPO_ROOT/scripts/ci/lib/runtime-recovery-receipt.py" \
+  "$REPO_ROOT/scripts/ci/lib/runtime-recovery-host.py" \
+  "$REPO_ROOT/scripts/ci/lib/runtime-guard-install.py" \
   "$REPO_ROOT/scripts/ci/lib/gateway-activation-host.py" "root@$VM_HOST:$REMOTE_STAGE/lib/"
 REMOTE_SHA="$(ssh $SSH_OPTS root@"$VM_HOST" "sha256sum '$REMOTE_STAGE/deploy-infra-remote.sh'" | awk '{print $1}')"
 [[ "$LOCAL_SHA" == "$REMOTE_SHA" ]] || log_fatal "staged deploy-infra-remote.sh digest mismatch"
@@ -2860,6 +2862,8 @@ cat > "$ARTIFACT_DIR/publish-runtime.sh" <<'PUBLISH_RUNTIME'
 #!/bin/bash
 set -euo pipefail
 stage="$1"
+source_sha="$2"
+python3 "$stage/lib/runtime-guard-install.py" install "$source_sha" >/dev/null
 mkdir -p /opt/cogni-template-edge /opt/cogni-template-runtime /opt/cogni-template-argocd-updater /var/lib/cogni/runtime-maintenance/lib
 RUNTIME_RECEIPT_EXPECTED=absent
 if [[ -e /var/lib/cogni/runtime-recovery-receipt.json ]]; then
@@ -2869,7 +2873,6 @@ export RUNTIME_RECEIPT_EXPECTED
 cp -a "$stage/edge/." /opt/cogni-template-edge/
 cp -a "$stage/runtime/." /opt/cogni-template-runtime/
 rsync -a --delete "$stage/updater/" /opt/cogni-template-argocd-updater/
-install -m 600 "$stage/lib/"*.py /var/lib/cogni/runtime-maintenance/lib/
 for helper in ensure-temporal-namespace.sh bootstrap-openfga.sh reconcile-edge-caddy.remote.sh sync-app-webhook-secret.sh rbac-model.json; do
   install -m 600 "$stage/$helper" "/tmp/$helper"
 done
@@ -2944,7 +2947,7 @@ unset _rv
 chmod 600 "$REMOTE_ENV_FILE"
 scp $SSH_OPTS "$REMOTE_ENV_FILE" "root@$VM_HOST:$REMOTE_STAGE/env.sh"
 ssh $SSH_OPTS root@"$VM_HOST" \
-    "python3 '$REMOTE_STAGE/lib/runtime-maintenance-guard.py' exec bash '$REMOTE_STAGE/publish-runtime.sh' '$REMOTE_STAGE'"
+    "python3 '$REMOTE_STAGE/lib/runtime-maintenance-guard.py' exec bash '$REMOTE_STAGE/publish-runtime.sh' '$REMOTE_STAGE' '$REF_SHA'"
 ssh $SSH_OPTS root@"$VM_HOST" "rm -rf -- '$REMOTE_STAGE'"
 rm -f "$REMOTE_ENV_FILE"
 

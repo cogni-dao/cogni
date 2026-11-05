@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
 export FAKE_GUARD_SOURCE="$REPO_ROOT/scripts/ci/lib/runtime-maintenance-guard.py"
+export REAL_GUARD_TEST_PYTHON="$(command -v python3)"
 
 TMPROOT=$(mktemp -d -t reconcile-node-substrate.XXXXXX)
 trap 'rm -rf "$TMPROOT"' EXIT
@@ -132,18 +133,6 @@ cmd="${cmd//\/tmp\//${FAKE_REMOTE_ROOT}\/tmp\/}"
 cmd="${cmd//\/opt\/cogni-template-edge/${FAKE_REMOTE_ROOT}\/opt\/cogni-template-edge}"
 cmd="${cmd//\/opt\/cogni-template-runtime/${FAKE_REMOTE_ROOT}\/opt\/cogni-template-runtime}"
 cmd="${cmd//\/var\/lib\/cogni/${FAKE_REMOTE_ROOT}\/var\/lib\/cogni}"
-guard_dir="${FAKE_REMOTE_ROOT}/var/lib/cogni/runtime-maintenance/lib"
-mkdir -p "$guard_dir"
-export FAKE_GUARD_ROOT="${FAKE_REMOTE_ROOT}/var/lib/cogni/runtime-maintenance"
-cat > "$guard_dir/runtime-maintenance-guard.py" <<'PY_GUARD'
-import importlib.util, os, sys
-from pathlib import Path
-s=importlib.util.spec_from_file_location('guard',os.environ['FAKE_GUARD_SOURCE'])
-m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
-m.ROOT=Path(os.environ['FAKE_GUARD_ROOT']);m.OWNER_UID=os.geteuid()
-assert sys.argv[1]=='exec'
-with m.RuntimeGuard() as guard: guard.exec(sys.argv[2:])
-PY_GUARD
 PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$cmd"
 EOF
 chmod +x "$FAKEBIN/ssh"
@@ -162,11 +151,48 @@ remote_root="$FAKE_REMOTE_ROOT"
 case "$dest" in root@cogni-candidate-a.vm.cognidao.org:*) remote_root="$FAKE_DESTINATION_ROOT" ;; esac
 path="${dest#*:}"
 path="${path/\/tmp\//${remote_root}\/tmp\/}"
+path="${path/\/var\/lib\/cogni/${remote_root}\/var\/lib\/cogni}"
 printf '%s -> %s\n' "$src" "$path" >> "${FAKE_REMOTE_ROOT}/scp.log"
 mkdir -p "$(dirname "$path")"
 cp "$src" "$path"
 EOF
 chmod +x "$FAKEBIN/scp"
+
+# Execute the real installed guard/installer in the isolated fake host namespace.
+# Do not preseed a helper: the ordinary first app rollout must install it itself.
+cat > "$FAKEBIN/python3" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  */runtime-maintenance-guard.py|*/runtime-guard-install.py)
+    guard_fixture_code="$(cat <<'PY_GUARD'
+import importlib.util, os, sys
+from pathlib import Path
+script, *args = sys.argv[1:]
+spec=importlib.util.spec_from_file_location('fixture_guard',script)
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+root=Path(os.environ['FAKE_REMOTE_ROOT'])/'var/lib/cogni/runtime-maintenance'
+if script.endswith('runtime-maintenance-guard.py'):
+    module.ROOT=root;module.OWNER_UID=os.geteuid()
+    assert args[0]=='exec'
+    with module.RuntimeGuard() as guard: guard.exec(args[1:])
+else:
+    module.OWNER_UID=os.geteuid();module.guard.ROOT=root;module.guard.OWNER_UID=os.geteuid()
+    module.receipt.OWNER_UID=os.geteuid()
+    assert args[0]=='install'
+    module.install(args[1])
+PY_GUARD
+    )"
+    exec "$REAL_GUARD_TEST_PYTHON" -c "$guard_fixture_code" "$@"
+    ;;
+  *) exec "$REAL_GUARD_TEST_PYTHON" "$@" ;;
+esac
+EOF
+chmod +x "$FAKEBIN/python3"
+cat > "$FAKEBIN/systemctl" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in *list-unit-files*) exit 0 ;; *) exit 1 ;; esac
+EOF
+chmod +x "$FAKEBIN/systemctl"
 
 # Production SSH runs as root and install(1) stamps root ownership explicitly.
 # The local fake remote runs as the developer, so preserve mode/copy semantics

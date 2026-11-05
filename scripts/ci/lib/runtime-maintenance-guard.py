@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+import time
 
 ROOT = Path('/var/lib/cogni/runtime-maintenance')
 TERMINAL = {'activated', 'rolled_back'}
@@ -50,10 +51,13 @@ def private_read(path, limit=1048576):
         os.close(fd)
 
 class RuntimeGuard:
-    def __init__(self, operation_id=None):
+    def __init__(self, operation_id=None, wait_seconds=None):
         if operation_id is not None and not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', operation_id):
             raise GuardError('runtime_guard_operation_invalid')
         self.operation_id = operation_id
+        self.wait_seconds = (600 if operation_id is None else 0) if wait_seconds is None else wait_seconds
+        if not isinstance(self.wait_seconds, (int, float)) or not 0 <= self.wait_seconds <= 600:
+            raise GuardError('runtime_guard_wait_invalid')
         self.stream = None
 
     def __enter__(self):
@@ -62,13 +66,36 @@ class RuntimeGuard:
         private_directory(ROOT)
         private_directory(ROOT / 'operations')
         fd = os.open(ROOT / 'lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        inherited = os.environ.get('COGNI_RUNTIME_GUARD_FD')
+        if inherited is not None:
+            try:
+                inherited_fd = int(inherited)
+                if not 3 <= inherited_fd <= 1024:
+                    raise ValueError()
+                own, parent = os.fstat(fd), os.fstat(inherited_fd)
+                if (own.st_dev, own.st_ino) != (parent.st_dev, parent.st_ino):
+                    raise ValueError()
+                copied = os.dup(inherited_fd)
+            except (OSError, ValueError):
+                os.close(fd)
+                raise GuardError('runtime_guard_inherited_lock_invalid') from None
+            os.close(fd)
+            fd = copied
         self.stream = os.fdopen(fd, 'a')
         info = os.fstat(fd)
         if info.st_uid != OWNER_UID or not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
             self.stream.close()
             raise GuardError('runtime_guard_lock_untrusted')
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            deadline = time.monotonic() + self.wait_seconds
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise GuardError('runtime_guard_busy') from None
+                    time.sleep(min(0.05, max(0, deadline - time.monotonic())))
             directories = list((ROOT / 'operations').iterdir())
             if len(directories) > 1000:
                 raise GuardError('runtime_guard_inventory_incomplete')
@@ -106,6 +133,7 @@ class RuntimeGuard:
         if not self.stream or not argv:
             raise GuardError('runtime_guard_command_missing')
         os.set_inheritable(self.stream.fileno(), True)
+        os.environ['COGNI_RUNTIME_GUARD_FD'] = str(self.stream.fileno())
         os.execvp(argv[0], argv)
 
 if __name__ == '__main__':

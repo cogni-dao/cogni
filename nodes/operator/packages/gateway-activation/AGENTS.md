@@ -24,7 +24,15 @@ The operator API and infrastructure runner consume the same contract.
 {
   "layer": "packages",
   "may_import": ["packages"],
-  "must_not_import": ["app", "features", "ports", "core", "adapters", "shared", "services"]
+  "must_not_import": [
+    "app",
+    "features",
+    "ports",
+    "core",
+    "adapters",
+    "shared",
+    "services"
+  ]
 }
 ```
 

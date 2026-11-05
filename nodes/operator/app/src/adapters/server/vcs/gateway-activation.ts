@@ -165,7 +165,13 @@ export class GithubGatewayActivation {
         ref: gatewayIntentRef(this.input.operationId),
       })
     );
-    return this.readAt(reference.object.sha);
+    try {
+      return await this.readAt(reference.object.sha);
+    } catch (error) {
+      if ((error as { status?: number }).status === 404)
+        refuse("gateway_immutable_intent_incomplete");
+      throw error;
+    }
   }
 
   private async ensureIntent(env: GatewayEnvironment) {
@@ -176,56 +182,62 @@ export class GithubGatewayActivation {
     } catch (error) {
       if ((error as { status?: number }).status !== 404) throw error;
     }
-    const implementationSha = await this.main();
-    const intent = GatewayIntentSchema.parse({
-      version: 1,
-      operationId: this.input.operationId,
-      target: "litellm-provider-key",
-      env,
-      custodian: {
-        owner: this.input.parentOwner,
-        repo: this.input.parentRepo,
-        controlEnv: "production",
-      },
-      implementationSha,
-      protocolVersion: 1,
-      bindingRef: `cogni/${env}/operator/OPENROUTER_API_KEY`,
-    });
-    // Contents commits are signed by GitHub for this App. Git-data commits allow
-    // forged author emails and cannot establish this provenance. The temporary
-    // branch has a stable identity and is never a runtime desired-state ref.
+    const mainSha = await this.main();
     const branch = `cogni-gateway-intent/${this.input.operationId}`;
     try {
       await this.request("POST /repos/{owner}/{repo}/git/refs", {
         ref: `refs/heads/${branch}`,
-        sha: implementationSha,
+        sha: mainSha,
       });
-    } catch (error) {
-      // Read after a conflict or unknown outcome before attempting another write.
-      const reference = refSchema.parse(
-        await this.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-          ref: `heads/${branch}`,
-        })
-      );
-      if (reference.object.sha !== implementationSha) {
-        const previous = await this.readAt(reference.object.sha);
-        if (previous.intent.env !== env) refuse("gateway_idempotency_conflict");
-      } else if (
-        (error as { status?: number }).status !== 422 &&
-        (error as { status?: number }).status === 403
-      ) {
-        throw error;
-      }
+    } catch {
+      // Read the stable staging ref after conflict or transport loss. A source
+      // commit here is an unfinished initialization, not a signed manifest.
     }
-    let selected: string;
     const reference = refSchema.parse(
       await this.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
         ref: `heads/${branch}`,
       })
     );
-    if (reference.object.sha === implementationSha) {
+    let hasManifest = true;
+    try {
+      await this.request("GET /repos/{owner}/{repo}/contents/{path}", {
+        path: PATH,
+        ref: reference.object.sha,
+      });
+    } catch (error) {
+      if ((error as { status?: number }).status !== 404) throw error;
+      hasManifest = false;
+    }
+    let selected = reference.object.sha;
+    if (!hasManifest) {
+      // The first staging ref is the durable source selection, including when
+      // main advanced after the previous process died. Admit only a protected
+      // main ancestor. Contents-create is CAS on absence; never overwrite a
+      // signed winner, and never move an existing immutable tag.
+      const originalSource = reference.object.sha;
+      const comparison = z.object({ status: z.string() }).parse(
+        await this.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
+          basehead: `${originalSource}...${mainSha}`,
+        })
+      );
+      if (!["ahead", "identical"].includes(comparison.status))
+        refuse("gateway_staging_source_not_on_main");
+      const intent = GatewayIntentSchema.parse({
+        version: 1,
+        operationId: this.input.operationId,
+        target: "litellm-provider-key",
+        env,
+        custodian: {
+          owner: this.input.parentOwner,
+          repo: this.input.parentRepo,
+          controlEnv: "production",
+        },
+        implementationSha: originalSource,
+        protocolVersion: 1,
+        bindingRef: `cogni/${env}/operator/OPENROUTER_API_KEY`,
+      });
       try {
-        const data = z.object({ commit: z.object({ sha: Sha }) }).parse(
+        const result = z.object({ commit: z.object({ sha: Sha }) }).parse(
           await this.request("PUT /repos/{owner}/{repo}/contents/{path}", {
             path: PATH,
             branch,
@@ -235,7 +247,7 @@ export class GithubGatewayActivation {
             ),
           })
         );
-        selected = data.commit.sha;
+        selected = result.commit.sha;
       } catch {
         selected = refSchema.parse(
           await this.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
@@ -243,7 +255,7 @@ export class GithubGatewayActivation {
           })
         ).object.sha;
       }
-    } else selected = reference.object.sha;
+    }
     const persisted = await this.readAt(selected);
     if (persisted.intent.env !== env) refuse("gateway_idempotency_conflict");
     try {
@@ -252,18 +264,16 @@ export class GithubGatewayActivation {
         sha: selected,
       });
     } catch {
-      // An immutable ref may already have committed; never replace it.
+      // Reconcile an existing or uncertain tag through the same immutable read.
     }
     const result = await this.readIntent();
     if (result.intent.env !== env) refuse("gateway_idempotency_conflict");
-    // Ref cleanup is not required for dispatch correctness. A lost cleanup can
-    // leave only a signed, value-free temporary branch, never a host effect.
     try {
       await this.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
         ref: `heads/${branch}`,
       });
     } catch {
-      /* retained for reconciliation */
+      /* A signed, value-free staging ref can remain for later cleanup. */
     }
     return result;
   }

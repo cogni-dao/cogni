@@ -1019,24 +1019,21 @@ cd "$REPO_ROOT"
 # ══════════════════════════════════════════════════════════════
 log_step "Phase 5: Deploy Compose infrastructure"
 
-# Upload files
-log_info "Uploading Compose files..."
-ssh $SSH_OPTS root@"$VM_IP" 'mkdir -p /opt/cogni-template-edge/configs /opt/cogni-template-runtime/configs /opt/cogni-template-runtime/postgres-init/control-migrations /opt/cogni-template-runtime/litellm-image'
-
-# Edge stack
-scp $SSH_OPTS "$REPO_ROOT/infra/compose/edge/docker-compose.yml" root@"$VM_IP":/opt/cogni-template-edge/docker-compose.yml
-scp $SSH_OPTS "$REPO_ROOT/infra/compose/edge/configs/Caddyfile.tmpl" root@"$VM_IP":/opt/cogni-template-edge/configs/Caddyfile.tmpl
-
-# Runtime stack
-scp $SSH_OPTS "$REPO_ROOT/infra/compose/runtime/docker-compose.yml" root@"$VM_IP":/opt/cogni-template-runtime/docker-compose.yml
-scp $SSH_OPTS "$REPO_ROOT/infra/compose/runtime/configs/litellm.config.yaml" root@"$VM_IP":/opt/cogni-template-runtime/configs/litellm.config.yaml
-scp $SSH_OPTS "$REPO_ROOT/infra/compose/runtime/configs/temporal-dynamicconfig.yaml" root@"$VM_IP":/opt/cogni-template-runtime/configs/temporal-dynamicconfig.yaml
-scp $SSH_OPTS "$REPO_ROOT/infra/compose/runtime/postgres-init/provision.sh" root@"$VM_IP":/opt/cogni-template-runtime/postgres-init/provision.sh
-scp $SSH_OPTS "$REPO_ROOT/infra/compose/runtime/postgres-init/control-migrations/0003_disable_database_locking.sql" root@"$VM_IP":/opt/cogni-template-runtime/postgres-init/control-migrations/0003_disable_database_locking.sql
-
-# LiteLLM custom image
-scp $SSH_OPTS "$REPO_ROOT/infra/images/litellm/Dockerfile" root@"$VM_IP":/opt/cogni-template-runtime/litellm-image/Dockerfile
-scp $SSH_OPTS "$REPO_ROOT/infra/images/litellm/cogni_callbacks.py" root@"$VM_IP":/opt/cogni-template-runtime/litellm-image/cogni_callbacks.py
+# Phase 5 owns only edge bootstrap and the private local image-build context.
+# The guarded Phase 5f primitive is the sole runtime-file/env publisher. Do not
+# pre-copy runtime definitions or render a second runtime .env before that owner.
+PROVISION_RUNTIME_STAGE="$(ssh $SSH_OPTS root@"$VM_IP" 'umask 077; mkdir -p /var/lib/cogni/runtime-maintenance/staging; mktemp -d /var/lib/cogni/runtime-maintenance/staging/provision.XXXXXXXX')"
+[[ "$PROVISION_RUNTIME_STAGE" =~ ^/var/lib/cogni/runtime-maintenance/staging/provision\.[A-Za-z0-9]+$ ]] || { log_error "Invalid private provisioning stage"; exit 1; }
+ssh $SSH_OPTS root@"$VM_IP" "mkdir -p '$PROVISION_RUNTIME_STAGE/edge/configs' '$PROVISION_RUNTIME_STAGE/litellm-image' '$PROVISION_RUNTIME_STAGE/lib'"
+scp $SSH_OPTS "$REPO_ROOT/infra/compose/edge/docker-compose.yml" "root@$VM_IP:$PROVISION_RUNTIME_STAGE/edge/docker-compose.yml"
+scp $SSH_OPTS "$REPO_ROOT/infra/compose/edge/configs/Caddyfile.tmpl" "root@$VM_IP:$PROVISION_RUNTIME_STAGE/edge/configs/Caddyfile.tmpl"
+scp $SSH_OPTS "$REPO_ROOT/infra/images/litellm/Dockerfile" "$REPO_ROOT/infra/images/litellm/cogni_callbacks.py" "root@$VM_IP:$PROVISION_RUNTIME_STAGE/litellm-image/"
+scp $SSH_OPTS \
+  "$REPO_ROOT/scripts/ci/lib/runtime-maintenance-guard.py" \
+  "$REPO_ROOT/scripts/ci/lib/runtime-recovery-receipt.py" \
+  "$REPO_ROOT/scripts/ci/lib/gateway-activation-host.py" \
+  "$REPO_ROOT/scripts/ci/lib/runtime-recovery-host.py" \
+  "$REPO_ROOT/scripts/ci/lib/runtime-guard-install.py" "root@$VM_IP:$PROVISION_RUNTIME_STAGE/lib/"
 
 # Write .env files
 log_info "Writing .env files..."
@@ -1059,81 +1056,38 @@ for _edge_node in "${NODE_TARGETS[@]}"; do
   fi
 done
 unset _edge_node _edge_slug
-ssh $SSH_OPTS root@"$VM_IP" "cat > /opt/cogni-template-edge/.env << 'ENVEOF'
+ssh $SSH_OPTS root@"$VM_IP" "cat > '$PROVISION_RUNTIME_STAGE/edge.env' << 'ENVEOF'
 DOMAIN=${DOMAIN}
 ${EDGE_ENV_LINES}ENVEOF"
 
-# runtime/.env is written AFTER Phase 5c's OpenBao-SSoT reconcile (bug.5081)
-# so re-runs don't ship Phase-2's freshly-regenerated random values that would
-# mismatch the persisted postgres/temporal/etc state on the existing VM.
-# Function defined here; call at end of Phase 5c. No consumer between here and
-# Phase 5f — runtime services aren't started until deploy-infra.sh.
-write_runtime_env_on_vm() {
-  ssh $SSH_OPTS root@"$VM_IP" "cat > /opt/cogni-template-runtime/.env << 'ENVEOF'
-# Infra services (actually used)
-APP_ENV=${APP_ENV}
-DEPLOY_ENVIRONMENT=${DEPLOY_ENVIRONMENT}
-POSTGRES_ROOT_USER=${POSTGRES_ROOT_USER}
-POSTGRES_ROOT_PASSWORD=${POSTGRES_ROOT_PASSWORD}
-OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-TEMPORAL_DB_USER=${TEMPORAL_DB_USER}
-TEMPORAL_DB_PASSWORD=${TEMPORAL_DB_PASSWORD}
-COGNI_NODE_DBS=${COGNI_NODE_DBS}
-LITELLM_DB_NAME=${LITELLM_DB_NAME}
-APP_DB_USER=${APP_DB_USER}
-APP_DB_PASSWORD=${APP_DB_PASSWORD}
-APP_DB_SERVICE_USER=${APP_DB_SERVICE_USER}
-APP_DB_SERVICE_PASSWORD=${APP_DB_SERVICE_PASSWORD}
-APP_DB_READONLY_USER=${APP_DB_READONLY_USER}
-APP_DB_READONLY_PASSWORD=${APP_DB_READONLY_PASSWORD:-}
-COGNI_NODE_ENDPOINTS=${COGNI_NODE_ENDPOINTS}
-BILLING_INGEST_TOKEN=${BILLING_INGEST_TOKEN}
-# Observability — Alloy log/metric shipping to Grafana Cloud
-LOKI_WRITE_URL=${LOKI_WRITE_URL:-}
-LOKI_USERNAME=${LOKI_USERNAME:-}
-LOKI_PASSWORD=${LOKI_PASSWORD:-}
-PROMETHEUS_REMOTE_WRITE_URL=${PROMETHEUS_REMOTE_WRITE_URL:-}
-PROMETHEUS_USERNAME=${PROMETHEUS_USERNAME:-}
-PROMETHEUS_PASSWORD=${PROMETHEUS_PASSWORD:-}
-# App service vars (placeholders — services not started, but compose validates all)
-AUTH_SECRET=${AUTH_SECRET}
-EVM_RPC_URL=${EVM_RPC_URL}
-POLYGON_RPC_URL=${POLYGON_RPC_URL}
-DATABASE_URL=${DATABASE_URL}
-DATABASE_SERVICE_URL=${DATABASE_SERVICE_URL}
-POSTHOG_API_KEY=${POSTHOG_API_KEY}
-POSTHOG_HOST=${POSTHOG_HOST}
-SCHEDULER_WORKER_IMAGE=placeholder:not-started
-MIGRATOR_IMAGE=placeholder:not-started
-APP_IMAGE=placeholder:not-started
-APP_BASE_URL=https://${DOMAIN}
-COGNI_REPO_URL=${COGNI_REPO_URL}
-COGNI_REPO_REF=${COGNI_REPO_REF}
-LITELLM_IMAGE=cogni-litellm:latest
-ENVEOF"
-}
-
-# Start services
-log_info "Creating cogni-edge network..."
-ssh $SSH_OPTS root@"$VM_IP" 'docker network create cogni-edge 2>/dev/null || true'
-
-log_info "Building LiteLLM custom image (retry up to 3x — base image is ~1.2GB)..."
+# All installed-file publication, local image-tag effects and Compose effects
+# share one remote guard lifetime. No runtime render is written here.
+PROVISION_PUBLISH_SCRIPT="$(mktemp)"
+cat > "$PROVISION_PUBLISH_SCRIPT" <<'PUBLISH_PROVISION'
+#!/bin/bash
+set -euo pipefail
+stage="$1"
+source_sha="$2"
+python3 "$stage/lib/runtime-guard-install.py" install "$source_sha" >/dev/null
+mkdir -p /opt/cogni-template-edge/configs
+install -m 644 "$stage/edge/docker-compose.yml" /opt/cogni-template-edge/docker-compose.yml
+install -m 644 "$stage/edge/configs/Caddyfile.tmpl" /opt/cogni-template-edge/configs/Caddyfile.tmpl
+install -m 600 "$stage/edge.env" /opt/cogni-template-edge/.env
+docker network create cogni-edge 2>/dev/null || true
 for attempt in 1 2 3; do
-  if ssh $SSH_OPTS root@"$VM_IP" 'docker build -t cogni-litellm:latest /opt/cogni-template-runtime/litellm-image/' 2>&1; then
-    log_info "LiteLLM image built"
+  if timeout 600 docker build -t cogni-litellm:latest "$stage/litellm-image/"; then
     break
   fi
-  if [[ $attempt -eq 3 ]]; then
-    log_error "LiteLLM build failed after 3 attempts"
-    exit 1
-  fi
-  log_warn "LiteLLM build failed (attempt $attempt/3), retrying in 10s..."
+  [[ "$attempt" != 3 ]] || exit 1
   sleep 10
 done
-
-log_info "Starting edge stack (Caddy)..."
-ssh $SSH_OPTS root@"$VM_IP" 'docker compose --project-name cogni-edge --env-file /opt/cogni-template-edge/.env -f /opt/cogni-template-edge/docker-compose.yml up -d'
+docker compose --project-name cogni-edge --env-file /opt/cogni-template-edge/.env -f /opt/cogni-template-edge/docker-compose.yml up -d
+PUBLISH_PROVISION
+scp $SSH_OPTS "$PROVISION_PUBLISH_SCRIPT" "root@$VM_IP:$PROVISION_RUNTIME_STAGE/publish.sh"
+rm -f "$PROVISION_PUBLISH_SCRIPT"
+PROVISION_GUARD_SOURCE="${GITHUB_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
+ssh $SSH_OPTS root@"$VM_IP" "python3 '$PROVISION_RUNTIME_STAGE/lib/runtime-maintenance-guard.py' exec bash '$PROVISION_RUNTIME_STAGE/publish.sh' '$PROVISION_RUNTIME_STAGE' '$PROVISION_GUARD_SOURCE'"
+ssh $SSH_OPTS root@"$VM_IP" "rm -rf -- '$PROVISION_RUNTIME_STAGE'"
 
 # Runtime stack (postgres, temporal, redis, litellm, alloy, alloy-k8s-events,
 # autoheal, repo-init, git-sync) + db-provision + temporal-namespace bootstrap
@@ -1777,10 +1731,8 @@ else
   seed_kv operator DOLTGRES_PASSWORD "$DOLTGRES_PASSWORD"
   log_info "OpenBao paths seeded for ${DEPLOY_ENV}"
 
-  # Write runtime/.env LAST so the VM gets reconciled values, not Phase-2
-  # regenerations (see write_runtime_env_on_vm definition comment).
-  log_info "Writing /opt/cogni-template-runtime/.env on VM with reconciled values..."
-  write_runtime_env_on_vm
+  # Phase 5f renders these reconciled values through the guarded full-infra
+  # owner. No intermediate runtime .env can race an active gateway operation.
 fi
 
 # ══════════════════════════════════════════════════════════════

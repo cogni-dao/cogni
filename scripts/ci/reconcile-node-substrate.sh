@@ -841,6 +841,23 @@ SELECT session_user = '${migration_role}'
 SQL
 )"
 
+CURRENT_ROW="runtime_guard_install"
+# A normal app rollout may skip full infra. Install the reviewed shared guard
+# before its first use; installation qualifies only fixed helpers and recovery
+# callers, never a runtime render or gateway process.
+runtime_guard_stage="/var/lib/cogni/runtime-maintenance/staging/substrate-$$-${RANDOM}"
+runtime_guard_source_sha="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+remote "umask 077; mkdir -p '${runtime_guard_stage}'"
+for runtime_guard_file in runtime-maintenance-guard.py runtime-recovery-receipt.py gateway-activation-host.py runtime-recovery-host.py runtime-guard-install.py; do
+  runtime_guard_local="$REPO_ROOT/scripts/ci/lib/$runtime_guard_file"
+  runtime_guard_sha="$(sha256sum "$runtime_guard_local" | awk '{print $1}')"
+  copy_to_remote "$runtime_guard_local" "${runtime_guard_stage}/${runtime_guard_file}"
+  remote "test \"\$(sha256sum '${runtime_guard_stage}/${runtime_guard_file}' | awk '{print \$1}')\" = '${runtime_guard_sha}'"
+done
+remote "python3 '${runtime_guard_stage}/runtime-guard-install.py' install '${runtime_guard_source_sha}'"
+remote "rm -rf -- '${runtime_guard_stage}'"
+mark_row runtime_guard_install ensured "reviewed guard and recovery caller installed without runtime effects"
+
 CURRENT_ROW="remote_reconcile"
 # Breadcrumbs ([remote] … ok) after every sub-step, stdout so they stream live:
 # bug.5278's silent exit 1 was only locatable by mtime forensics on the VM. With

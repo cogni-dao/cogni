@@ -35,6 +35,8 @@ const FILES = [
   "runtime-maintenance-guard.py",
   "runtime-recovery-receipt.py",
   "gateway-activation-host.py",
+  "runtime-recovery-host.py",
+  "runtime-guard-install.py",
 ] as const;
 const hash = (data: string | Uint8Array) =>
   createHash("sha256").update(data).digest("hex");
@@ -125,7 +127,7 @@ function prepare(): void {
 }
 
 /** Native discovery is bounded and complete; missing permissions never means idle. */
-function inventory(): string {
+function inventory(bootstrap = false): string {
   const policy = z
     .object({
       version: z.literal(1),
@@ -138,7 +140,7 @@ function inventory(): string {
   const all: unknown[] = [];
   const own = Number(process.env.GITHUB_RUN_ID ?? 0);
   for (const repo of [CUSTODIAN, policy.testParent]) {
-    if (repo === policy.testParent) {
+    if (repo === policy.testParent || bootstrap) {
       const workflows = z
         .object({
           total_count: z.number(),
@@ -150,7 +152,15 @@ function inventory(): string {
           workflows.total_count <= 100,
         "gateway_workflow_inventory_incomplete"
       );
-      for (const name of policy.writers) {
+      const fenced =
+        repo === policy.testParent
+          ? policy.writers
+          : [
+              "candidate-flight.yml",
+              "candidate-flight-infra.yml",
+              "provision-env.yml",
+            ];
+      for (const name of fenced) {
         const row = workflows.workflows.find(
           (w) => w.path === `.github/workflows/${name}`
         );
@@ -246,7 +256,11 @@ function sshArgs(): string[] {
   ];
 }
 
-function enroll(intent: GatewayIntent, bootstrap: boolean): void {
+function enroll(
+  intent: GatewayIntent,
+  bootstrap: boolean,
+  enable: boolean
+): void {
   const source = command("git", ["rev-parse", "HEAD"]);
   need(source === intent.implementationSha, "gateway_checkout_source_mismatch");
   const protectedPaths = [
@@ -264,13 +278,13 @@ function enroll(intent: GatewayIntent, bootstrap: boolean): void {
     );
   }
   const minimumSourceSha = bootstrap ? source : assertRuntimeSource(source);
-  const inventorySha256 = inventory();
+  const inventorySha256 = inventory(bootstrap);
   const blobs = Object.fromEntries(
     FILES.map((f) => [f, hash(readFileSync(`${LIB}/${f}`))])
   );
   const manifest = {
     protocolVersion: 1,
-    maintenanceEnabled: true,
+    maintenanceEnabled: enable,
     env: intent.env,
     custodian: intent.custodian,
     operationId: intent.operationId,
@@ -298,7 +312,7 @@ function enroll(intent: GatewayIntent, bootstrap: boolean): void {
       `${host}:${stage}/`,
     ]);
     // Recheck after upload: staging itself cannot change installed inputs.
-    inventory();
+    inventory(bootstrap);
     command(
       "ssh",
       [...sshArgs(), host, `python3 ${stage}/gateway-install-host.py install`],
@@ -314,7 +328,11 @@ async function run(bootstrap: boolean): Promise<void> {
   need(
     drill === undefined ||
       (bootstrap &&
-        ["--interrupt-after-render", "--prove-rollback"].includes(drill)),
+        [
+          "--guard-only",
+          "--interrupt-after-render",
+          "--prove-rollback",
+        ].includes(drill)),
     "gateway_command_invalid"
   );
   const intent: GatewayIntent = GatewayIntentSchema.parse(
@@ -334,7 +352,18 @@ async function run(bootstrap: boolean): Promise<void> {
         process.env.GITHUB_WORKFLOW_SHA === transportSha,
       "gateway_untrusted_workflow_transport"
     );
-  enroll(intent, bootstrap);
+  enroll(intent, bootstrap, drill !== "--guard-only");
+  if (drill === "--guard-only") {
+    console.log(
+      JSON.stringify({
+        state: "guard_only_qualified",
+        operationId: intent.operationId,
+        gatewayMaintenanceEnabled: false,
+        runtimeEffects: false,
+      })
+    );
+    return;
+  }
   const child = spawn(
     "ssh",
     [

@@ -79,6 +79,8 @@ export const GatewayObservationSchema = z.strictObject({
   evidence: z
     .strictObject({
       appSha: GatewaySourceShaSchema.optional(),
+      appShaAfterRecovery: GatewaySourceShaSchema.optional(),
+      appPreserved: z.boolean().optional(),
       gatewayImage: z.string().max(256).optional(),
       providerKeySha256: z
         .string()

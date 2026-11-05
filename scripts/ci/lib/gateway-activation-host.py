@@ -301,7 +301,8 @@ class Host:
         require(manifest['machineId'] == Path('/etc/machine-id').read_text().strip(), 'gateway_machine_mismatch')
         cluster = json.loads(run(KUBE + ['get', 'namespace', 'kube-system', '-o', 'json']))['metadata']['uid']
         require(cluster == manifest['clusterUid'], 'gateway_cluster_mismatch')
-        for name in ('gateway-activation-host.py', 'runtime-maintenance-guard.py', 'runtime-recovery-receipt.py'):
+        for name in ('gateway-activation-host.py', 'runtime-maintenance-guard.py', 'runtime-recovery-receipt.py',
+                     'runtime-recovery-host.py', 'runtime-guard-install.py'):
             require(digest((LIB / name).read_bytes()) == manifest['blobs'][name], 'gateway_installed_source_mismatch')
         self.identity = {'machineId': manifest['machineId'], 'clusterUid': cluster}
         require(env_value(guard.private_read(ENV_FILE), 'DEPLOY_ENVIRONMENT') == intent['env'], 'gateway_runtime_environment_mismatch')
@@ -323,11 +324,12 @@ class Host:
         require(projection == self.journal['projection'], 'gateway_binding_superseded')
         return key
 
-    def preserved(self):
+    def preserved(self, check_app=True):
         j = self.journal
         require(digest(COMPOSE_FILE.read_bytes()) == j['composeSha256'] and
                 digest(MODEL_FILE.read_bytes()) == j['modelSha256'], 'gateway_declaration_changed')
-        require(app_images() == j['appImages'] and app_sha() == j['appSha'], 'gateway_app_changed')
+        if check_app:
+            require(app_images() == j['appImages'] and app_sha() == j['appSha'], 'gateway_app_changed')
         require(untouched_runtime() == j['untouchedRuntime'], 'gateway_other_runtime_changed')
         require(image_id(j['imageRef']) == j['imageId'], 'gateway_local_image_changed')
 
@@ -371,11 +373,13 @@ class Host:
         app = app_images()
         require(bool(app) and all(i[2] for i in app), 'gateway_app_identity_missing')
         guard.private_directory(self.directory)
-        # A prepare interrupted before the journal is safe to repeat only if every
-        # existing backup is byte-identical; never overwrite recovery material.
+        # Before a durable journal there are no installed effects. Prior-state
+        # backups must still match the live bytes. A partial desired backup is
+        # only staging and may be refreshed from the current canonical projection.
         for name, data in [('before.env', old), ('desired.env', replacement), ('before-receipt.json', raw_receipt)]:
             path = self.directory / name
-            require(not path.exists() or guard.private_read(path) == data, 'gateway_prepare_backup_conflict')
+            require(name == 'desired.env' or not path.exists() or guard.private_read(path) == data,
+                    'gateway_prepare_backup_conflict')
             atomic(path, data)
         # Resolve the private desired render before replacing the installed one.
         # An unexpected interpolation cannot leave the live render half-changed.
@@ -469,10 +473,11 @@ class Host:
 
     def rollback(self):
         j = self.journal
-        require(j['state'] in ('recreate_started', 'gateway_verified', 'receipt_commit_started', 'rollback_started'),
+        require(j['state'] in ('prepared', 'render_installed', 'recreate_started', 'gateway_verified', 'receipt_commit_started', 'rollback_started'),
                 'gateway_rollback_phase_conflict')
-        self.preserved()
-        self.selected()
+        # Compensation restores only journal-bound prior state. It does not
+        # select or install the newer canonical projection, or touch app pods.
+        self.preserved(check_app=False)
         require(hash_file(ENV_FILE) in (j['beforeEnvSha256'], j['desiredEnvSha256']), 'gateway_render_changed')
         actual = digest(receipt.read_bytes())
         require(actual in {j['beforeReceiptSha256'], j.get('desiredReceiptSha256')}, 'gateway_receipt_changed')
@@ -490,7 +495,7 @@ class Host:
             run(COMPOSE + ['up', '-d', '--no-deps', '--pull', 'never', '--no-build', '--timeout', '20',
                            '--force-recreate', 'litellm'], timeout=60)
         wait_gateway()
-        self.preserved()
+        self.preserved(check_app=False)
         self.render_matches('before')
         require(self.gateway_matches(j['beforeProviderKeySha256']), 'gateway_rollback_binding_failed')
         # Preserve the exact prior bytes, including the preexisting wire encoding.
@@ -498,7 +503,20 @@ class Host:
             require(digest(receipt.read_bytes()) == j['desiredReceiptSha256'], 'gateway_receipt_changed')
             receipt.validate(json.loads(prior))
             atomic(receipt.RECEIPT, prior)
+        try:
+            j['appPreserved'] = app_images() == j['appImages'] and app_sha() == j['appSha']
+            j['appShaAfterRecovery'] = app_sha()
+        except Exception:
+            j['appPreserved'] = False
         self.save('rolled_back')
+
+    def reconcile_conflict(self, reason):
+        require(reason in ('gateway_binding_superseded', 'gateway_app_changed'), 'gateway_conflict_not_reconcilable')
+        require(self.journal is not None and self.journal['state'] not in TERMINAL, 'gateway_conflict_not_pending')
+        self.journal['resolutionReason'] = reason
+        self.save(self.journal['state'])
+        self.rollback()
+        return self.observation(reason)
 
     def observation(self, failure=None):
         j = self.journal
@@ -515,6 +533,13 @@ class Host:
                 result['evidence']['providerKeySha256'] = j['projection']['keySha256']
             elif j['state'] == 'rolled_back':
                 result['evidence']['providerKeySha256'] = j['beforeProviderKeySha256']
+                result['evidence']['appPreserved'] = j.get('appPreserved', False)
+                if j.get('appShaAfterRecovery'):
+                    result['evidence']['appShaAfterRecovery'] = j['appShaAfterRecovery']
+                if not j.get('appPreserved', False):
+                    result['currentQualified'] = False
+        if j and j.get('resolutionReason') and not failure:
+            result['failure'] = j['resolutionReason']
         return result
 
     def step(self, action):
@@ -555,8 +580,15 @@ def serve():
             except GatewayUnhealthy:
                 result = host.observation('gateway_unhealthy')
             except GatewayConflict as error:
-                result = host.observation(str(error))
-                result['phase'] = 'conflict'
+                if str(error) in ('gateway_binding_superseded', 'gateway_app_changed') and host.journal:
+                    try:
+                        result = host.reconcile_conflict(str(error))
+                    except (GatewayConflict, GatewayUnhealthy):
+                        result = host.observation(str(error))
+                        result['phase'] = 'conflict'
+                else:
+                    result = host.observation(str(error))
+                    result['phase'] = 'conflict'
             print(json.dumps(result), flush=True)
             line = sys.stdin.buffer.readline(16385)
             if not line:
