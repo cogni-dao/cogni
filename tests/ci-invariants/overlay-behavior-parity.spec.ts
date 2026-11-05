@@ -251,9 +251,9 @@ const IDENTITY: Record<string, Rule[]> = {
       ),
     },
     {
-      why: "the DNS zone this fleet's node hosts live in (domain identity: the test fleet's own zone; production leaves the default, story.5137)",
+      why: "the fleet workload DNS zone is domain identity: candidate and production use their own zones (story.5137)",
       pattern:
-        /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_EDGE_ZONE\]\.(name|value)$/,
+        /^patch\[ConfigMap\/node-app-config\] add \/data\/NODE_DEPLOY_WORKLOAD_ZONE$/,
     },
     {
       why: "env name",

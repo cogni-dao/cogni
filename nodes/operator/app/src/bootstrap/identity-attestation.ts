@@ -15,6 +15,7 @@ import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { nodes } from "@/shared/db/schema";
 import { serverEnv } from "@/shared/env/server-env";
 import { resolveNodeCatalogSource } from "@/shared/node-registry/catalog-source";
+import { resolveRegisteredFleetZones } from "@/shared/node-registry/fleet-ownership";
 
 /**
  * Service-role read of one node row for the identity broker (bug.5063).
@@ -32,6 +33,8 @@ async function findNodeRow(nodeId: string) {
       .select({
         id: nodes.id,
         slug: nodes.slug,
+        repoOwner: nodes.repoOwner,
+        repoUrl: nodes.repoUrl,
         deployEnvs: nodes.deployEnvs,
       })
       .from(nodes)
@@ -54,7 +57,14 @@ export function resolveIdentityAttestationDependencies(signingKey: KeyObject) {
       "identity attestation requires NODE_REGISTRY_CATALOG_* or NODE_SUBMODULE_PARENT_*"
     );
   }
+  const fleetZoneBindings = resolveRegisteredFleetZones({
+    registryOwner: source.owner,
+    registryZone: env.NODE_REGISTRY_WORKLOAD_ZONE,
+    localOwner: env.NODE_SUBMODULE_PARENT_OWNER,
+    localZone: env.NODE_DEPLOY_WORKLOAD_ZONE,
+  });
   return {
+    fleetZoneBindings,
     repository: new OperatorIdentityAttestationRepository(
       createOperatorDeployPlane(env),
       { parentOwner: source.owner, parentRepo: source.repo },

@@ -169,7 +169,6 @@ describe("issueBrowserIdentityAttestation", () => {
         request: REQUEST,
         github: GITHUB,
         issuer: "https://cognidao.org",
-        domain: "cognidao.org",
       })
     );
     expect(result.redirectUrl).toBe(

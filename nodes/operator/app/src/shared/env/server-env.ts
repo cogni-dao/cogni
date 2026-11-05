@@ -225,6 +225,8 @@ export const serverSchema = z.object({
   NODE_SUBMODULE_PARENT_REPO: optionalString,
   // Which repo's infra/catalog/ defines this env's nodes. Defaults to the submodule
   // parent; set separately where the pin-PR target is a throwaway org (bug.5073).
+  NODE_DEPLOY_WORKLOAD_ZONE: z.string().optional(),
+  NODE_REGISTRY_WORKLOAD_ZONE: z.string().optional(),
   NODE_REGISTRY_CATALOG_OWNER: optionalString,
   NODE_REGISTRY_CATALOG_REPO: optionalString,
 

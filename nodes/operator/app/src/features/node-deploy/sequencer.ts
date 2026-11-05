@@ -173,6 +173,10 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
 export interface NodeAppRuntimeDeps {
   readonly secrets: NodeRuntimeSecretsPort;
   readonly catalog: NodeCatalogPort;
+  readonly operatorDomain: string;
+  readonly fleetBinding?:
+    | { readonly valid: true }
+    | { readonly valid: false; readonly reason: string };
   /** `vm_host_for_env` of the environment VM; absent omits the substrate env block. */
   readonly substrateHost?: string | undefined;
   /** The DNS zone this lane's node hosts live in (ONE_EDGE_ZONE); absent = `cognidao.org`. */
@@ -307,7 +311,18 @@ export class NodeDeploySequencer {
     await this.janitor(key);
     const all = await this.d.store.attemptsFor(key);
 
-    const inflight = all.find((a) => IN_FLIGHT_PHASES.includes(a.phase));
+    let inflight = all.find((a) => IN_FLIGHT_PHASES.includes(a.phase));
+    // Legacy planned creates may still be running in the actuator. Fence them before
+    // either supersession or normal recovery can observe and settle their receipt.
+    if (
+      inflight?.phase === "planned" &&
+      !inflight.externalName &&
+      !inflight.error
+    ) {
+      inflight = await this.d.store.updateAttempt(inflight.id, {
+        error: ambiguousMarker("network", this.d.clock.now()),
+      });
+    }
     const active = all.find((a) => a.phase === "active");
     if (desired.gameDayRequestedAt)
       await this.gameDayKill(key, release, active, inflight);
@@ -650,6 +665,9 @@ export class NodeDeploySequencer {
     release: ReleaseRow
   ): Promise<ResolvedRuntime> {
     const w = release.spec;
+    const binding = this.d.runtime?.fleetBinding;
+    if (w.kind === "app" && binding && !binding.valid)
+      throw new DependencyNotReady(binding.reason);
     const env: Record<string, string> = {};
     let requiredCountryCodes: readonly string[] = [];
     let nodeApp = false;
@@ -665,6 +683,10 @@ export class NodeDeploySequencer {
     if (w.kind === "state") {
       env.POSTGRES_PASSWORD = await this.d.secrets.ensureStatePassword(key);
     }
+    if (nodeApp && w.bindings.some((b) => b.env === "DOMAIN"))
+      throw new DependencyNotReady(
+        "DOMAIN is reserved for the operator issuer"
+      );
     const states = [...new Set(w.bindings.map((b) => b.workload))];
     for (const stateName of states) {
       const stateKey = { ...key, workload: stateName };
@@ -775,6 +797,7 @@ export class NodeDeploySequencer {
           nodeId: key.nodeId,
           sourceSha: release.sourceSha,
           publicHost,
+          operatorDomain: rt.operatorDomain,
           port: w.port,
           substrateHost: rt.substrateHost,
           databasePoolLimits: policy.databasePoolLimits,
@@ -905,6 +928,69 @@ export class NodeDeploySequencer {
     attempt: AttemptRow,
     blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
+    // A refused create (provider_rejected, ...) already ended this key's life: it is never replayed under
+    // the same nd: key (the actuator would answer `akash_tx_create_replayed` forever). Fail the attempt;
+    // the next attempt gets a new ordinal. If failAttempt had to defer (observe down) we land here again.
+    if (attempt.error?.startsWith(REFUSED_PREFIX))
+      return this.failAttempt(key, release, attempt, attempt.error);
+
+    // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
+    if (this.createMayStillBeInFlight(attempt)) {
+      await this.emitGrace(key, release, attempt, "create", "inflight_grace", {
+        graceMs: this.d.config.inflightGraceMs,
+      });
+      return attempt;
+    }
+    if (attempt.error?.startsWith("ambiguous")) {
+      try {
+        const obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
+        if (obs.found && obs.resource) {
+          await this.emit(
+            key,
+            release,
+            attempt,
+            "create",
+            "adopted_after_ambiguity",
+            {
+              dseq: obs.resource.externalName,
+            }
+          );
+          return this.bindLease(key, release, attempt, obs.resource);
+        }
+        if (obs.found)
+          return this.observeUnavailable(
+            key,
+            release,
+            attempt,
+            "create",
+            "planned create unresolved",
+            new Error("existing effect has no resource")
+          );
+        return this.failAttempt(
+          key,
+          release,
+          attempt,
+          "ambiguous create resolved to nothing; next ordinal"
+        );
+      } catch (error) {
+        return this.observeUnavailable(
+          key,
+          release,
+          attempt,
+          "create",
+          "ambiguous create unresolved",
+          error
+        );
+      }
+    }
+
+    const binding = this.d.runtime?.fleetBinding;
+    if (release.spec.kind === "app" && binding && !binding.valid) {
+      await this.emit(key, release, attempt, "dependency", "waiting", {
+        reason: binding.reason,
+      });
+      return attempt;
+    }
     const w = release.spec;
     if (publicHostOf(w) && !this.d.edge) {
       // Refuse BEFORE paying: a lease no edge can ever route to is wasted spend.
@@ -967,53 +1053,6 @@ export class NodeDeploySequencer {
       return this.failAttempt(key, release, attempt, errText(error));
     }
 
-    // A refused create (provider_rejected, ...) already ended this key's life: it is never replayed under
-    // the same nd: key (the actuator would answer `akash_tx_create_replayed` forever). Fail the attempt;
-    // the next attempt gets a new ordinal. If failAttempt had to defer (observe down) we land here again.
-    if (attempt.error?.startsWith(REFUSED_PREFIX))
-      return this.failAttempt(key, release, attempt, attempt.error);
-
-    // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
-    if (this.createMayStillBeInFlight(attempt)) {
-      await this.emitGrace(key, release, attempt, "create", "inflight_grace", {
-        graceMs: this.d.config.inflightGraceMs,
-      });
-      return attempt;
-    }
-    if (attempt.error?.startsWith("ambiguous")) {
-      try {
-        const obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
-        if (obs.found && obs.resource) {
-          await this.emit(
-            key,
-            release,
-            attempt,
-            "create",
-            "adopted_after_ambiguity",
-            {
-              dseq: obs.resource.externalName,
-            }
-          );
-          return this.bindLease(key, release, attempt, obs.resource);
-        }
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          "ambiguous create resolved to nothing; next ordinal"
-        );
-      } catch (error) {
-        return this.observeUnavailable(
-          key,
-          release,
-          attempt,
-          "create",
-          "ambiguous create unresolved",
-          error
-        );
-      }
-    }
-
     const { providers: excludeProviders, remembered } = await this.exclusion(
       key,
       release,
@@ -1041,6 +1080,10 @@ export class NodeDeploySequencer {
         providers: allowProviders,
         reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
       });
+    // Persist before dispatch: the actuator can outlive this sequencer process.
+    attempt = await this.d.store.updateAttempt(attempt.id, {
+      error: ambiguousMarker("network", this.d.clock.now()),
+    });
     try {
       const resource = await this.d.payer.create({
         cogniKey: attempt.cogniKey,
@@ -1067,6 +1110,9 @@ export class NodeDeploySequencer {
             this.d.clock.now() - attempt.createdAt.getTime() <
             this.d.config.leaseReadyMs
           ) {
+            attempt = await this.d.store.updateAttempt(attempt.id, {
+              error: "wallet_busy",
+            });
             await this.emit(key, release, attempt, "create", "wallet_busy");
             return attempt;
           }
@@ -1413,7 +1459,15 @@ export class NodeDeploySequencer {
     if (w.kind === "app" && host) {
       const edge = this.d.edge;
       const ingress = ingressHostOf(attempt.endpoints, host);
-      if (!edge || !ingress) {
+      const binding = this.d.runtime?.fleetBinding;
+      if (!edge || (binding && !binding.valid)) {
+        await this.emit(key, release, attempt, "dependency", "waiting", {
+          reason:
+            binding && !binding.valid ? binding.reason : "edge_not_configured",
+        });
+        return;
+      }
+      if (!ingress) {
         await this.failAttempt(key, release, attempt, "edge_not_configured");
         return;
       }
