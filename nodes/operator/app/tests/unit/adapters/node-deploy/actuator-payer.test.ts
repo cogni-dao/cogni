@@ -325,6 +325,76 @@ describe("ActuatorPayer error classification", () => {
     expect(observed.ambiguous).toBe(false);
   });
 
+  it("bug.5569: a create provider_rejected is definitive ONLY with the actuator's nothingBilling proof", async () => {
+    const msgCase = async (
+      status: number,
+      code: string,
+      message: string,
+      extra: Record<string, unknown> = {}
+    ) => {
+      const { fetchImpl } = recorder(() => ({
+        status,
+        body: { code, message, ...extra },
+      }));
+      return (await payerWith(fetchImpl)
+        .create(request())
+        .catch((e: unknown) => e)) as PayerError;
+    };
+    // The reviewer's case: a Console 502 on the read-back AFTER the lease was allocated reached the
+    // wire as provider_rejected. Without positive proof it is NOT definitive (the sequencer observes).
+    const readBack = await msgCase(
+      422,
+      "provider_rejected",
+      "Console request failed with HTTP 502"
+    );
+    expect(readBack).toMatchObject({
+      code: "provider_rejected",
+      ambiguous: false,
+      definitive: false,
+    });
+    // Message text proves nothing either: a rolled-back-looking message with no field is not definitive.
+    expect(
+      (
+        await msgCase(
+          422,
+          "provider_rejected",
+          "none passed provider screening (deployment 9 closed, escrow refunding)"
+        )
+      ).definitive
+    ).toBe(false);
+    // With the field it is.
+    expect(
+      await msgCase(422, "provider_rejected", "allowlist empty", {
+        nothingBilling: true,
+      })
+    ).toMatchObject({ ambiguous: false, definitive: true });
+    // Only a literal `true` counts.
+    for (const v of [false, "true", 1, null])
+      expect(
+        (await msgCase(422, "provider_rejected", "m", { nothingBilling: v }))
+          .definitive
+      ).toBe(false);
+    // The field never makes another code definitive.
+    for (const [status, code] of [
+      [503, "ledger_unavailable"],
+      [502, "outcome_unknown"],
+      [422, "identity_conflict"],
+      [400, "invalid_request"],
+    ] as const)
+      expect(
+        (await msgCase(status, code, "m", { nothingBilling: true })).definitive
+      ).toBe(false);
+    // observe never reports definitive (it is not a create)
+    const { fetchImpl } = recorder(() => ({
+      status: 422,
+      body: { code: "provider_rejected", message: "m", nothingBilling: true },
+    }));
+    const observed = (await payerWith(fetchImpl)
+      .observe({ cogniKey: "k" })
+      .catch((e: unknown) => e)) as PayerError;
+    expect(observed.definitive).toBe(false);
+  });
+
   it("an unknown 5xx is provider_unavailable (ambiguous); an unknown 4xx is invalid_request", async () => {
     expect((await codeCase(500, "weird")).ambiguous).toBe(true);
     expect((await codeCase(418, "weird")).code).toBe("invalid_request");

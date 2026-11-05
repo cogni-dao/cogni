@@ -41,6 +41,12 @@
  *     unset owner admits no remote-source node, so the test operator never deploys canonical nodes.
  *   - IMAGE_PINNED_BEFORE_PAY (story.5137): every lane resolves a pending release image through the anonymous
  *     ghcr resolver and pins the digest write-once before any paid create.
+ *   - ONE_EDGE_ZONE (story.5137): `NODE_DEPLOY_EDGE_ZONE` names the DNS zone node hosts live in. Unset = the
+ *     canonical `cognidao.org` and the stored `CLOUDFLARE_ZONE_ID`, exactly as before. Set (the isolated test
+ *     operator: `cogni-testing.org`) = the edge guard and ownership check use that zone, and the zone id is
+ *     looked up BY NAME with the scoped token, so the id can never name a zone the token cannot write. A failed
+ *     lookup leaves the edge unconfigured (http apps refused before paying). Operator and substrate hosts are
+ *     not node hosts and stay where they are.
  *   - INTERIM_APP_PROVIDERS (task.5405): `NODE_DEPLOY_APP_PROVIDERS` (comma-separated akash accounts, max 16)
  *     is sent as `allowProviders` on every APP create; unset sends none.
  * Side-effects: IO (Postgres, actuator HTTP, Cloudflare, Kubernetes API, provider ingress; health listener)
@@ -65,8 +71,13 @@ import {
   ImageCatalogNodes,
   KubernetesStatePasswords,
   PostgresNodeDeployStore,
+  resolveCloudflareZoneId,
 } from "@/adapters/server";
-import { EdgeRouter, edgeHostRegexFor } from "@/features/node-deploy/edge";
+import {
+  DEFAULT_EDGE_ZONE,
+  EdgeRouter,
+  edgeHostRegexFor,
+} from "@/features/node-deploy/edge";
 import {
   EnvLaneConfigError,
   EnvLaneSequencers,
@@ -182,9 +193,35 @@ const probe = new HttpProbe();
 const chain = runtimeEnv.AKASH_CHAIN_OWNER
   ? new AkashChainTruth({ owner: runtimeEnv.AKASH_CHAIN_OWNER })
   : undefined;
+// ONE_EDGE_ZONE: the zone node hosts live in. Unset keeps the canonical zone and the stored zone id.
+const edgeZoneSetting = runtimeEnv.NODE_DEPLOY_EDGE_ZONE?.trim() || undefined;
+const edgeZone = edgeZoneSetting ?? DEFAULT_EDGE_ZONE;
+let edgeZoneId: string | undefined = cfZone || undefined;
+if (edgeZoneSetting && cfToken) {
+  edgeZoneId = await resolveCloudflareZoneId({
+    apiToken: cfToken,
+    zoneName: edgeZoneSetting,
+  }).catch((error: unknown) => {
+    log.error(
+      {
+        environment,
+        edgeZone,
+        causeMessage:
+          error instanceof Error ? error.message.slice(0, 300) : "unknown",
+      },
+      "node_deploy_sequencer_edge_zone_unresolved"
+    );
+    return undefined;
+  });
+  if (edgeZoneId && cfZone && cfZone !== edgeZoneId)
+    log.warn(
+      { environment, edgeZone, storedZoneId: cfZone, edgeZoneId },
+      "node_deploy_sequencer_edge_zone_id_differs: using the id the token resolves for the edge zone"
+    );
+}
 const dnsRecords =
-  cfToken && cfZone
-    ? new CloudflareDnsRecords({ apiToken: cfToken, zoneId: cfZone })
+  cfToken && edgeZoneId
+    ? new CloudflareDnsRecords({ apiToken: cfToken, zoneId: edgeZoneId })
     : undefined;
 if (!dnsRecords) {
   log.warn(
@@ -202,7 +239,8 @@ const images = new GhcrBuiltImageResolver();
 const laneSequencers = await Promise.all(
   lanes.map(async (lane) => {
     const edgeHostRegex = edgeHostRegexFor(
-      await catalog.nodeDeploySlugs(lane.environment, fleetOwner)
+      await catalog.nodeDeploySlugs(lane.environment, fleetOwner),
+      edgeZone
     );
     log.info(
       {
@@ -210,6 +248,7 @@ const laneSequencers = await Promise.all(
         secretsNamespace: lane.secretsNamespace,
         substrateHost: lane.substrateHost,
         fleetOwner,
+        edgeZone,
         edgeHostRegex: String(edgeHostRegex),
       },
       "node_deploy_sequencer_edge_hosts"
@@ -235,6 +274,7 @@ const laneSequencers = await Promise.all(
           catalog,
           substrateHost: lane.substrateHost,
           operatorDomain: lane.operatorDomain,
+          edgeZone,
         },
         ...(chain ? { chain } : {}),
         clock: {

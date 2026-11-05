@@ -459,6 +459,41 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
     expect(await foreign.listReceipts({ limit: 10 })).toEqual([]);
   });
 
+  it("lists live receipts newest-touched first, bounded by the limit (task.5420)", async () => {
+    // Oldest-first + a small limit returned only dead old rows and starved every new lease.
+    for (const [cogniKey, externalName] of [
+      ["k-old", "7001"],
+      ["k-mid", "7002"],
+      ["k-new", "7003"],
+      ["k-released", "7004"],
+    ] as const) {
+      await ledger.claim({
+        cogniKey,
+        workload: "toks9",
+        environment: "candidate-a",
+        identity: IDENTITY,
+      });
+      await ledger.recordAllocation({ cogniKey, externalName });
+    }
+    await ledger.markReleased({ cogniKey: "k-released" });
+    for (const [cogniKey, age] of [
+      ["k-old", "3 hours"],
+      ["k-mid", "2 hours"],
+      ["k-new", "1 hour"],
+    ] as const) {
+      await db
+        .update(akashTxAllocations)
+        .set({ updatedAt: sql`now() - ${age}::interval` })
+        .where(eq(akashTxAllocations.cogniKey, cogniKey));
+    }
+
+    const all = await ledger.listActive({ limit: 10 });
+    expect(all.map((r) => r.cogniKey)).toEqual(["k-new", "k-mid", "k-old"]);
+    // The limit keeps the NEWEST receipts, never the oldest.
+    const bounded = await ledger.listActive({ limit: 2 });
+    expect(bounded.map((r) => r.cogniKey)).toEqual(["k-new", "k-mid"]);
+  });
+
   it("binds node identity in the very row that opens the wallet slot", async () => {
     // IDENTITY_BEFORE_TRANSACTION — the claim IS the receipt. Nothing later can add identity
     // to a lease that was already paid for; the NOT NULL columns make that unreachable.

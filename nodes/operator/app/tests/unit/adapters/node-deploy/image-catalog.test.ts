@@ -129,7 +129,10 @@ describe("ImageCatalogNodes", () => {
     const repoRoot = resolve(__dirname, "../../../../../../..");
     const catalog = new ImageCatalogNodes({ root: repoRoot });
     for (const env of ["candidate-a", "preview", "production"]) {
-      expect(await catalog.nodeDeploySlugs(env, "cogni-test-org")).toEqual([]);
+      // The test fleet's one lane (story.5137): cogni-test-org/spawny-boi on candidate-a only. Never a canonical node.
+      expect(await catalog.nodeDeploySlugs(env, "cogni-test-org")).toEqual(
+        env === "candidate-a" ? ["spawny-boi"] : []
+      );
       expect(await catalog.nodeDeploySlugs(env, undefined)).toEqual([]);
       expect((await catalog.nodeDeploySlugs(env, "COGNI-DAO")).length).toBe(
         (await catalog.nodeDeploySlugs(env, "cogni-dao")).length

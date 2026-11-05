@@ -11,6 +11,10 @@
  *     any request. The zone is production. The regex is built from the image catalog
  *     (`edgeHostRegexFor`): the operator's canary plus every node whose `compute_api[<env>]` is
  *     `node-deploy`, so no per-node overlay edit is needed (CD1). The bare default is canary-only.
+ *   - ONE_EDGE_ZONE (story.5137): node hosts live in exactly one DNS zone per sequencer, `DEFAULT_EDGE_ZONE`
+ *     (`cognidao.org`) unless the process is given another (`NODE_DEPLOY_EDGE_ZONE`; the isolated test
+ *     operator uses `cogni-testing.org`). The guard and the ownership check use the same zone, so a host
+ *     outside it is refused before any request. Operator and substrate hosts are never in this zone set.
  *   - HOST_IS_THE_NODES_OWN: a release may only claim `hostOwnedBy(host, env, slug, workload)`: the node's own
  *     slug (the operator's canary label for the operator), or `<slug>-<workload>` for a sibling workload of
  *     that node, plus the env's `-test`/`-preview`/`-dev` suffix, so one node can never take another's host
@@ -34,7 +38,8 @@ import { HOST_ENVS, hostForEnv } from "./declarations";
 export const DEFAULT_EDGE_HOST_REGEX =
   /^node-deploy-canary(-[a-z]+)?\.cognidao\.org$/;
 
-const EDGE_ZONE = "cognidao.org";
+/** The zone node hosts live in when the sequencer names no other (canonical fleet). */
+export const DEFAULT_EDGE_ZONE = "cognidao.org";
 /** The operator's own workload (the canary) lives at this label, not at its slug. */
 const CANARY_LABEL = "node-deploy-canary";
 const OPERATOR_SLUG = "operator";
@@ -43,17 +48,20 @@ const escapeRegex = (s: string): string =>
   s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
- * The guard regex for these node slugs: `^(node-deploy-canary|<slug>...)(-[a-z]+)?\.cognidao\.org$`.
- * `cognidao.org`, `preview.`, `test.` and every other operator host never match (their label is not a
- * listed name).
+ * The guard regex for these node slugs: `^(node-deploy-canary|<slug>...)(-[a-z]+)?\.<zone>$` (default zone
+ * `cognidao.org`). `cognidao.org`, `preview.`, `test.` and every other operator host never match (their
+ * label is not a listed name).
  */
-export function edgeHostRegexFor(slugs: Iterable<string>): RegExp {
+export function edgeHostRegexFor(
+  slugs: Iterable<string>,
+  zone: string = DEFAULT_EDGE_ZONE
+): RegExp {
   const names = [
     CANARY_LABEL,
     ...[...new Set(slugs)].filter((s) => s !== OPERATOR_SLUG).sort(),
   ].map(escapeRegex);
   return new RegExp(
-    `^(${names.join("|")})(-[a-z]+(-[a-z]+)?)?\\.${escapeRegex(EDGE_ZONE)}$`
+    `^(${names.join("|")})(-[a-z]+(-[a-z]+)?)?\\.${escapeRegex(zone)}$`
   );
 }
 
@@ -61,13 +69,14 @@ export function edgeHostRegexFor(slugs: Iterable<string>): RegExp {
  * True when `host` is a host `slug` may claim in `env`: its own production name plus the env suffix, or,
  * for a sibling `workload` of the node (task.5272, e.g. red's `sandbox`), `<slug>-<workload>` plus the same
  * suffix (`red-sandbox`, `red-sandbox-test`, `red-sandbox-preview`). The operator owns only its canary
- * label; a workload never widens it.
+ * label; a workload never widens it. `zone` is the sequencer's edge zone (ONE_EDGE_ZONE).
  */
 export function hostOwnedBy(
   host: string,
   env: string,
   slug: string,
-  workload?: string
+  workload?: string,
+  zone: string = DEFAULT_EDGE_ZONE
 ): boolean {
   const label = slug === OPERATOR_SLUG ? CANARY_LABEL : slug;
   const labels =
@@ -76,7 +85,7 @@ export function hostOwnedBy(
       : [label];
   try {
     return labels.some(
-      (l) => host.toLowerCase() === hostForEnv(`${l}.${EDGE_ZONE}`, env)
+      (l) => host.toLowerCase() === hostForEnv(`${l}.${zone}`, env)
     );
   } catch {
     return false;
@@ -100,8 +109,11 @@ export function workerHostRefusal(input: {
   readonly slug: string;
   readonly workload: string;
   readonly catalogSlugs: readonly string[];
+  /** The sequencer's edge zone (default `cognidao.org`). */
+  readonly zone?: string | undefined;
 }): string | undefined {
   const { host, env, slug, workload } = input;
+  const zone = input.zone ?? DEFAULT_EDGE_ZONE;
   if (!/^[a-z][a-z0-9]*$/.test(workload))
     return `worker name "${workload}" must be one plain label (letters and digits)`;
   if (["test", "preview", "dev"].includes(workload))
@@ -109,11 +121,11 @@ export function workerHostRefusal(input: {
   for (const other of input.catalogSlugs) {
     if (other === slug) continue;
     for (const e of HOST_ENVS)
-      if (hostOwnedBy(host, e, other))
+      if (hostOwnedBy(host, e, other, undefined, zone))
         return `${host} is node ${other}'s host in ${e}`;
   }
   for (const e of HOST_ENVS)
-    if (e !== env && hostOwnedBy(host, e, slug))
+    if (e !== env && hostOwnedBy(host, e, slug, undefined, zone))
       return `${host} is this node's own host in ${e}`;
   return undefined;
 }

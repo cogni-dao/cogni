@@ -157,6 +157,23 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
     for (const bucket of DATABASE_BUCKETS) expect(bucket).toContain("database");
   });
 
+  it("admits exactly one database bucket: the target node's own <slug>-database-migration, for DATABASE_MIGRATION_URL only (task.5408)", () => {
+    if (!policy) throw new Error("policy missing");
+    const migration = (policy.spec.variables ?? []).find(
+      (v) => v.name === "migrationBucket"
+    )?.expression;
+    // the slug is the target's own (`nd-<slug>-env`), never caller text in remoteRef
+    expect(migration).toContain(
+      "object.spec.target.name.substring(3, size(object.spec.target.name) - 4) + '-database-migration'"
+    );
+    const text = cel(policy);
+    expect(text).toContain(
+      "d.remoteRef.key.split('/')[1] == variables.migrationBucket"
+    );
+    expect(text).toContain("d.secretKey == 'DATABASE_MIGRATION_URL'");
+    expect(text).toContain("d.remoteRef.property == 'DATABASE_MIGRATION_URL'");
+  });
+
   it.each([
     "candidate-a",
     "production",
@@ -341,14 +358,15 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
       );
     });
 
-    it("the candidate-a overlay is untouched: it serves only itself and sets no fleet owner (the test operator claims no canonical node)", () => {
+    it("the candidate-a overlay serves only itself, and its fleet is cogni-test-org (the test operator claims no canonical node)", () => {
       const candidate = yaml.parse(
         read("infra/k8s/overlays/candidate-a/operator/kustomization.yaml")
       ) as Kustomization;
       expect(sequencerEnv(candidate, "NODE_DEPLOY_ENVS")).toBeUndefined();
-      expect(
-        sequencerEnv(candidate, "NODE_DEPLOY_FLEET_OWNER")
-      ).toBeUndefined();
+      // story.5137 test lane: the test sequencer's edge guard admits only test-org nodes, never cogni-dao.
+      expect(sequencerEnv(candidate, "NODE_DEPLOY_FLEET_OWNER")).toBe(
+        "cogni-test-org"
+      );
     });
   });
 });

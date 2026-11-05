@@ -273,12 +273,19 @@ export type PayerErrorCode =
 /**
  * Failure of a payer call. `ambiguous` means "a paid lease MAY exist under this key": the caller
  * must resolve it through `observe(cogniKey)` and must NEVER blindly create again.
+ * `definitive` (bug.5569) means the payer guarantees NOTHING bills under this key: the create was
+ * refused before any deployment existed, or the deployment it opened was closed and that close was
+ * read back. It is set only on the actuator's positive proof (`nothingBilling: true` on the wire).
+ * It proves the create is no longer in flight, so the caller may skip its in-flight grace. It is
+ * NEVER a license to skip `observe`: that observe is what settles or releases the payer's receipt
+ * (a skipped one strands the wallet slot or leaves a phantom open lease). Absent is the safe answer.
  */
 export class PayerError extends Error {
   constructor(
     readonly code: PayerErrorCode,
     message: string,
-    readonly ambiguous: boolean
+    readonly ambiguous: boolean,
+    readonly definitive = false
   ) {
     super(message);
     this.name = "PayerError";
@@ -342,6 +349,8 @@ export interface HttpResult {
   readonly body: string;
   readonly ms: number;
   readonly error?: string;
+  /** Set when a public read could not use the authoritative path and fell back to DoH: the reason. */
+  readonly fallback?: string;
 }
 
 export interface ProbePort {
@@ -351,8 +360,11 @@ export interface ProbePort {
     hostHeader: string,
     path: string
   ): Promise<HttpResult>;
-  /** GET `https://<host><path>` resolved through Cloudflare DoH, bypassing any local resolver. */
-  publicDoh(host: string, path: string): Promise<HttpResult>;
+  /**
+   * GET `https://<host><path>` through the public edge, `host` resolved at its zone's authoritative
+   * nameservers (no local resolver, no public resolver's negative cache), real Host + SNI.
+   */
+  publicRead(host: string, path: string): Promise<HttpResult>;
   /** Postgres SSLRequest handshake against a forwarded tcp port. */
   tcpTls(host: string, port: number): Promise<boolean>;
 }

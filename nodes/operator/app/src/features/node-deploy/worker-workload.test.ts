@@ -210,6 +210,8 @@ class Bucket implements NodeRuntimeSecretsPort {
     SANDBOX_EXECD_TOKEN: TOKEN,
     DATABASE_URL: "postgres://must-not-leak",
     AUTH_SECRET: "must-not-leak",
+    // task.5408: the node app (not the worker) also reads its own migration DSN.
+    DATABASE_MIGRATION_URL: "postgres://migration-must-not-leak",
   };
   readonly reads: string[][] = [];
   async read(_env: string, _slug: string, keys: readonly string[]) {

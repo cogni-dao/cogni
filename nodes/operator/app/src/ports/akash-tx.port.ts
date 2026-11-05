@@ -122,7 +122,15 @@ export class AkashTxError extends Error {
     public readonly code: AkashTxErrorCode,
     message: string,
     /** Owning key when the refusal names another allocation (blocked). */
-    public readonly ownerCogniKey?: string
+    public readonly ownerCogniKey?: string,
+    /**
+     * POSITIVE PROOF, never a default (bug.5569): true ONLY when this refusal leaves NOTHING
+     * billing under the key. Set where the create was refused before any deployment existed, or
+     * where the deployment it opened was closed AND re-read closed (`rolledBackDseq`). An error
+     * raised after a lease was allocated or recorded never carries it. Absent is the safe answer:
+     * the caller must then look for a lease before it gives up on the key.
+     */
+    public readonly nothingBilling = false
   ) {
     super(message);
     this.name = "AkashTxError";
@@ -698,7 +706,8 @@ export interface AkashTxAllocationLedgerPort {
    * before the pump ever sees it, so its container logs are lost with no evidence of WHY. This
    * view returns those live receipts (handle or not) so the lease-log pump can tail every
    * paying lease during the boot window and a handleless live receipt is loggable rather than
-   * silently skipped. Read-only, hard-limited, oldest-touched first — it decides nothing.
+   * silently skipped. Read-only, hard-limited, NEWEST-touched first (task.5420: oldest-first
+   * starved new leases behind dead rows) — it decides nothing.
    */
   listActive(input: {
     nodeId?: string;

@@ -251,6 +251,11 @@ const IDENTITY: Record<string, Rule[]> = {
       ),
     },
     {
+      why: "the DNS zone this fleet's node hosts live in (domain identity: the test fleet's own zone; production leaves the default, story.5137)",
+      pattern:
+        /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_EDGE_ZONE\]\.(name|value)$/,
+    },
+    {
       why: "env name",
       pattern: envValue(
         "database-reliability-actuator",

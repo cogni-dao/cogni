@@ -100,3 +100,39 @@ export class CloudflareDnsRecords implements DnsRecordsPort {
     );
   }
 }
+
+/**
+ * The id of the ONE zone named `zoneName` that `apiToken` can see (`GET /zones?name=`, needs Zone Read).
+ * Used when the sequencer names its edge zone (story.5137): the zone id then comes from the zone's own name
+ * and the token's own scope, never from a separately stored id that can name a zone the token cannot write.
+ * Throws when the token sees no such zone or the name is ambiguous.
+ */
+export async function resolveCloudflareZoneId(input: {
+  readonly apiToken: string;
+  readonly zoneName: string;
+  readonly fetchImpl?: typeof fetch;
+}): Promise<string> {
+  const res = await (input.fetchImpl ?? fetch)(
+    `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(input.zoneName)}`,
+    {
+      headers: { authorization: `Bearer ${input.apiToken}` },
+      signal: AbortSignal.timeout(30_000),
+    }
+  );
+  const json = (await res.json().catch(() => ({}))) as {
+    success?: boolean;
+    result?: { id?: string; name?: string }[];
+    errors?: unknown;
+  };
+  if (!res.ok || json.success === false)
+    throw new Error(
+      `cloudflare GET /zones -> ${res.status} ${JSON.stringify(json.errors ?? "").slice(0, 300)}`
+    );
+  const zones = (json.result ?? []).filter((z) => z.name === input.zoneName);
+  const id = zones[0]?.id;
+  if (zones.length !== 1 || !id)
+    throw new Error(
+      `cloudflare zone ${input.zoneName}: token sees ${zones.length} zones by that name`
+    );
+  return id;
+}

@@ -20,7 +20,9 @@ const NODE_ID = "4b06359a-0000-4000-8000-000000000001";
 /** Placeholder bucket: one value per profile key, values are opaque test strings. */
 function profileBucket(): Record<string, string> {
   return Object.fromEntries(
-    COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS.map((k) => [k, `v-${k}`])
+    [...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS, "DATABASE_MIGRATION_URL"].map(
+      (k) => [k, `v-${k}`]
+    )
   );
 }
 
@@ -134,9 +136,12 @@ describe("operator issuer lane configuration", () => {
 
 describe("nodeAppEnv parity with the Crossplane composition", () => {
   it("renders the composition's env key by key for a stock node", () => {
-    expect(nodeAppEnv({ ...base, secrets: profileBucket() })).toEqual(
-      composedProduction()
-    );
+    // One deliberate addition (task.5408): the composition migrated in a separate Job; the verb's green
+    // lease migrates itself, so it also carries the isolated migration DSN (unset before the app starts).
+    expect(nodeAppEnv({ ...base, secrets: profileBucket() })).toEqual({
+      ...composedProduction(),
+      DATABASE_MIGRATION_URL: "v-DATABASE_MIGRATION_URL",
+    });
   });
 
   it("a non-production lane follows the lane env in DEPLOY_ENVIRONMENT and the Temporal namespace", () => {
@@ -326,6 +331,22 @@ describe("nodeAppEnv declared keys (DECLARED_KEYS_ONLY)", () => {
     expect(nodeAppSecretKeys(undefined, ["DATABASE_URL"])).not.toContain(
       "DATABASE_URL"
     );
-    expect(nodeAppSecretKeys(undefined)).toEqual(PROFILE_KEYS);
+    expect(nodeAppSecretKeys(undefined)).toEqual([
+      ...PROFILE_KEYS,
+      "DATABASE_MIGRATION_URL",
+    ]);
+  });
+
+  it("every node app gets its migration DSN, except one whose DATABASE_URL a state binding supplies (task.5408)", () => {
+    expect(nodeAppSecretKeys(["AUTH_SECRET"])).toEqual([
+      "AUTH_SECRET",
+      "DATABASE_MIGRATION_URL",
+    ]);
+    expect(
+      nodeAppSecretKeys(["AUTH_SECRET", "DATABASE_MIGRATION_URL"])
+    ).toEqual(["AUTH_SECRET", "DATABASE_MIGRATION_URL"]);
+    expect(nodeAppSecretKeys(undefined, ["DATABASE_URL"])).not.toContain(
+      "DATABASE_MIGRATION_URL"
+    );
   });
 });
