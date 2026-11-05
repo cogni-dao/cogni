@@ -926,6 +926,13 @@ export class NodeDeploySequencer {
     if (attempt.error?.startsWith(REFUSED_PREFIX))
       return this.failAttempt(key, release, attempt, attempt.error);
 
+    // Legacy planned rows may have been dispatched before markers existed. A missing
+    // allocation is not proof that their actuator request has ended.
+    if (resumed && !attempt.error) {
+      attempt = await this.d.store.updateAttempt(attempt.id, {
+        error: ambiguousMarker("network", this.d.clock.now()),
+      });
+    }
     // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
     if (this.createMayStillBeInFlight(attempt)) {
       await this.emitGrace(key, release, attempt, "create", "inflight_grace", {
@@ -949,6 +956,15 @@ export class NodeDeploySequencer {
           );
           return this.bindLease(key, release, attempt, obs.resource);
         }
+        if (obs.found)
+          return this.observeUnavailable(
+            key,
+            release,
+            attempt,
+            "create",
+            "planned create unresolved",
+            new Error("existing effect has no resource")
+          );
         return this.failAttempt(
           key,
           release,
@@ -967,33 +983,6 @@ export class NodeDeploySequencer {
       }
     }
 
-    // A crash can leave a planned row before the create response or its marker was persisted.
-    if (resumed && !attempt.error) {
-      try {
-        const obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
-        if (obs.found && obs.resource)
-          return this.bindLease(key, release, attempt, obs.resource);
-        if (obs.found) {
-          return this.observeUnavailable(
-            key,
-            release,
-            attempt,
-            "create",
-            "planned create unresolved",
-            new Error("existing effect has no resource")
-          );
-        }
-      } catch (error) {
-        return this.observeUnavailable(
-          key,
-          release,
-          attempt,
-          "create",
-          "planned create unresolved",
-          error
-        );
-      }
-    }
     const binding = this.d.runtime?.fleetBinding;
     if (release.spec.kind === "app" && binding && !binding.valid) {
       await this.emit(key, release, attempt, "dependency", "waiting", {
@@ -1090,6 +1079,10 @@ export class NodeDeploySequencer {
         providers: allowProviders,
         reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
       });
+    // Persist before dispatch: the actuator can outlive this sequencer process.
+    attempt = await this.d.store.updateAttempt(attempt.id, {
+      error: ambiguousMarker("network", this.d.clock.now()),
+    });
     try {
       const resource = await this.d.payer.create({
         cogniKey: attempt.cogniKey,
@@ -1116,6 +1109,9 @@ export class NodeDeploySequencer {
             this.d.clock.now() - attempt.createdAt.getTime() <
             this.d.config.leaseReadyMs
           ) {
+            attempt = await this.d.store.updateAttempt(attempt.id, {
+              error: "wallet_busy",
+            });
             await this.emit(key, release, attempt, "create", "wallet_busy");
             return attempt;
           }

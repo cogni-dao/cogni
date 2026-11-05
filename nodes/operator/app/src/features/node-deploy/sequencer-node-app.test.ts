@@ -317,6 +317,10 @@ describe("node app runtime env (task.5405)", () => {
     h.restart(true);
     h.payer.observeThrows = false;
     await h.seq.step(key);
+    if (marker === "unmarked") {
+      await h.clock.sleep(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs + 1);
+      await h.seq.step(key);
+    }
     const recovered = (await h.store.attemptsFor(key))[0];
     expect(recovered?.externalName).toBe("1002");
     expect(recovered?.phase).toBe("proven");
@@ -327,6 +331,68 @@ describe("node app runtime env (task.5405)", () => {
     await h.seq.step(key);
     expect((await h.store.attemptsFor(key))[0]?.phase).toBe("active");
     expect(appCreates(h)).toHaveLength(1);
+  });
+
+  it.each([
+    false,
+    true,
+  ])("fences a paused create across restart (legacy=%s)", async (legacy) => {
+    const h = harness({ inflightGraceMs: 1000 });
+    await stateUp(h, POLY_ID);
+    let releaseDispatch!: () => void;
+    let cursorWritten!: () => void;
+    const cursor = new Promise<void>((resolve) => {
+      cursorWritten = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const create = h.payer.create.bind(h.payer);
+    let dispatches = 0;
+    let settled = false;
+    h.payer.loseResponseOn = (n) => n === 2;
+    const observe = vi
+      .spyOn(h.payer, "observe")
+      .mockImplementation(async () => {
+        settled = true;
+        throw new Error("lost runner cannot observe");
+      });
+    vi.spyOn(h.payer, "create").mockImplementation(async (request) => {
+      if (request.spec.name !== "canary") return create(request);
+      dispatches++;
+      cursorWritten(); // actuator has committed its preparing receipt and allocation cursor
+      await gate;
+      return create(request);
+    });
+    const running = releaseApp(h, POLY_ID);
+    await cursor;
+    const key = h.key(POLY_ID, "canary");
+    const attempt = (await h.store.attemptsFor(key))[0];
+    if (!attempt) throw new Error("missing attempt");
+    if (legacy) await h.store.updateAttempt(attempt.id, { error: null });
+    h.restart(true);
+    await h.seq.step(key);
+    const fence = (await h.store.attemptsFor(key))[0]?.error;
+    expect(fence).toMatch(/^ambiguous: network@\d+$/);
+    h.restart(true);
+    await h.seq.step(key);
+    expect((await h.store.attemptsFor(key))[0]?.error).toBe(fence);
+    expect(observe).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+    expect(dispatches).toBe(1);
+    releaseDispatch();
+    await running;
+    observe.mockRestore();
+    await h.clock.sleep(1001);
+    await h.seq.step(key);
+    expect((await h.store.attemptsFor(key))[0]?.externalName).toBe("1002");
+    expect((await h.store.attemptsFor(key))[0]?.phase).toBe("proven");
+    expect(appCreates(h)).toHaveLength(1);
+    expect(h.events.filter((e) => e.startsWith("payer.delete:"))).toEqual([]);
+    h.restart(false);
+    await h.seq.step(key);
+    expect((await h.store.attemptsFor(key))[0]?.phase).toBe("active");
+    expect(dispatches).toBe(1);
   });
 
   it.each([
@@ -350,6 +416,8 @@ describe("node app runtime env (task.5405)", () => {
       vi.spyOn(h.payer, "observe").mockResolvedValue({ found: true });
     await h.seq.step(key);
     expect((await h.store.attemptsFor(key))[0]?.phase).toBe("planned");
+    await h.clock.sleep(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs + 1);
+    await h.seq.step(key);
     await h.clock.sleep(1000);
     await h.seq.step(key);
     const failed = (await h.store.attemptsFor(key))[0];
