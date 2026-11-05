@@ -1689,7 +1689,7 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
     ]);
   });
 
-  it("a roster cut off by the actuator payer's 400-char truncation still names blue", async () => {
+  it("a roster cut off by a truncation (e.g. the old 400-char payer cap) still names blue", async () => {
     const h = harness();
     await stateUp(h); // provider-1
     await deployApp(h, SHA_1); // blue on provider-2
@@ -1697,7 +1697,7 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
       { length: 20 },
       (_, i) => `provider-x${i} DE 1.00 not_allowlisted`
     ).join(", ");
-    // Same shape as actuator-payer.adapter.ts: `actuator <path> -> HTTP <s> <code>: <message>`.slice(0, 400)
+    // Shape of the pre-task.5409 payer: `actuator <path> -> HTTP <s> <code>: <message>`.slice(0, 400)
     const truncated =
       `actuator /v1/create -> HTTP 422 provider_rejected: ${refusal(
         "not_allowlisted=20, already_tried=2",

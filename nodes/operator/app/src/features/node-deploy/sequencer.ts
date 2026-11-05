@@ -1028,7 +1028,7 @@ export class NodeDeploySequencer {
       context.startsWith(REFUSED_PREFIX)
         ? `${context}; observe unavailable since ${since.toISOString()}: ${errText(error)}`
         : `orphan_suspect: ${context}; observe unavailable since ${since.toISOString()}: ${errText(error)}`
-    ).slice(0, 500);
+    ).slice(0, ERROR_TEXT_MAX);
     const failed = await this.d.store.updateAttempt(attempt.id, {
       phase: "failed",
       error: reason,
@@ -1974,7 +1974,7 @@ function blueWasOnlyScreenedBidder(
     blueProvider.length > 17
       ? `${blueProvider.slice(0, 9)}…${blueProvider.slice(-4)}`
       : blueProvider;
-  // No closing `]`: the actuator payer truncates error text at 400 chars, so the roster may be cut off.
+  // No closing `]`: persisted error text is capped (ERROR_TEXT_MAX), so a very long roster may still be cut off.
   // A cut-off last entry simply fails to match (safe: no stop).
   const roster = /\[bids: ([^\]]*)/u.exec(error)?.[1] ?? "";
   return roster
