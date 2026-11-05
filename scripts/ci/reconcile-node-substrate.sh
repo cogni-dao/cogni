@@ -865,7 +865,7 @@ CURRENT_ROW="remote_reconcile"
 remote "set -euo pipefail
   # Cover publication and all effects in one process; a pending activation journal
   # refuses this writer even after the previous lock owner has exited.
-  python3 /var/lib/cogni/runtime-maintenance/lib/runtime-maintenance-guard.py exec bash -s <<'COGNI_RUNTIME_GUARDED'
+  python3 /var/lib/cogni/runtime-maintenance/lib/runtime-maintenance-guard.py exec-installed bash -s <<'COGNI_RUNTIME_GUARDED'
   set -euo pipefail
   runtime_env=/opt/cogni-template-runtime/.env
   runtime_compose=(docker compose --project-name cogni-runtime --env-file \"\$runtime_env\" -f /opt/cogni-template-runtime/docker-compose.yml)

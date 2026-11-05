@@ -288,7 +288,7 @@ command -v jq >/dev/null 2>&1 || custody_required jq_missing
 GUARD=/var/lib/cogni/runtime-maintenance/lib/runtime-maintenance-guard.py
 CODEC=/var/lib/cogni/runtime-maintenance/lib/runtime-recovery-receipt.py
 [[ -s "$GUARD" && -s "$CODEC" ]] || custody_required runtime_guard_not_installed
-python3 "$GUARD" exec bash -s <<'GUARDED_RECOVERY'
+python3 "$GUARD" exec-installed bash -s <<'GUARDED_RECOVERY'
 set -euo pipefail
 RUNTIME_DIR="${COGNI_RUNTIME_DIR:-/opt/cogni-template-runtime}"
 COMPOSE_FILE="$RUNTIME_DIR/docker-compose.yml"

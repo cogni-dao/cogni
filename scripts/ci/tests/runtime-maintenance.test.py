@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -24,6 +26,7 @@ guard = load('runtime-maintenance-guard')
 receipt = load('runtime-recovery-receipt')
 gateway = load('gateway-activation-host')
 installer = load('runtime-guard-install')
+recovery = load('runtime-recovery-host')
 ID = 'b9d19a15-95f9-41b4-bcf5-cd56142c0eb2'
 OTHER_ID = '36d7c53d-3a41-4e5d-b44d-cf5fbedbfb24'
 
@@ -32,11 +35,13 @@ class NativeContracts(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        for module in (guard, gateway.guard, receipt, gateway.receipt, installer, installer.guard, installer.receipt):
+        for module in (guard, gateway.guard, receipt, gateway.receipt, installer, installer.guard, installer.receipt,
+                       recovery.guard, recovery.receipt):
             self.enterContext(patch.object(module, 'OWNER_UID', os.geteuid()))
         self.enterContext(patch.object(guard, 'ROOT', self.root / 'guard'))
         self.enterContext(patch.object(receipt, 'RECEIPT', self.root / 'receipt.json'))
         self.enterContext(patch.object(installer.guard, 'ROOT', guard.ROOT))
+        self.enterContext(patch.object(recovery.guard, 'ROOT', guard.ROOT))
 
     def journal(self, state):
         directory = guard.ROOT / 'operations' / ID
@@ -138,6 +143,45 @@ with m.RuntimeGuard() as guard:
             if process.poll() is None:
                 process.kill(); process.communicate(timeout=2)
 
+    def test_native_mutation_child_keeps_exclusion_after_parent_only_death(self):
+        ready, release = self.root / 'native-ready', self.root / 'native-release'
+        child = '''import sys,time
+from pathlib import Path
+Path(sys.argv[1]).touch()
+deadline=time.monotonic()+8
+while not Path(sys.argv[2]).exists() and time.monotonic()<deadline: time.sleep(.01)
+'''
+        parent = '''import importlib.util,os,sys
+from pathlib import Path
+s=importlib.util.spec_from_file_location('host',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+m.guard.ROOT=Path(sys.argv[2]);m.guard.OWNER_UID=os.geteuid();m.RUNTIME=Path(sys.argv[3])
+with m.guard.RuntimeGuard(sys.argv[4]) as guard:
+ m.ACTIVE_GUARD_FD=guard.stream.fileno()
+ print('parent-held',flush=True)
+ m.run([sys.executable,'-c',sys.argv[5],sys.argv[6],sys.argv[7]],timeout=10)
+'''
+        process = subprocess.Popen([sys.executable, '-c', parent, str(LIB / 'gateway-activation-host.py'),
+                                    str(guard.ROOT), str(self.root), ID, child, str(ready), str(release)],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(process.stdout.readline().strip(), 'parent-held')
+            deadline = time.monotonic() + 3
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertTrue(ready.exists(), 'native mutation child did not start')
+            process.kill(); process.wait(timeout=2)
+            with self.assertRaisesRegex(guard.GuardError, 'runtime_guard_busy'):
+                with guard.RuntimeGuard(ID, wait_seconds=0):
+                    self.fail('same-UUID resume overlapped a surviving native child')
+            release.touch()
+            with guard.RuntimeGuard(ID, wait_seconds=2):
+                pass
+        finally:
+            release.touch()
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=2)
+
     def test_first_guard_install_has_no_gateway_enablement_or_runtime_effect(self):
         target = guard.ROOT / 'lib'
         self.assertFalse(target.exists())
@@ -149,6 +193,23 @@ with m.RuntimeGuard() as guard:
         self.assertTrue((guard.ROOT / 'guard.json').is_file())
         self.assertFalse((guard.ROOT / 'source.json').exists())
 
+    def test_native_timeout_does_not_release_a_surviving_childs_lock(self):
+        release = self.root / 'release-timeout-child'
+        command = [sys.executable, '-c', 'import sys,time;from pathlib import Path;'
+                   'p=Path(sys.argv[1]);deadline=time.monotonic()+5;'
+                   '\nwhile not p.exists() and time.monotonic()<deadline: time.sleep(.01)', str(release)]
+        try:
+            with guard.RuntimeGuard(ID) as active:
+                with self.assertRaisesRegex(guard.GuardError, 'runtime_native_outcome_pending'):
+                    guard.run_native(active.stream.fileno(), command, env=os.environ.copy(), cwd=self.root, timeout=.02)
+            with self.assertRaisesRegex(guard.GuardError, 'runtime_guard_busy'):
+                with guard.RuntimeGuard(ID, wait_seconds=0):
+                    self.fail('timeout released a running mutation child')
+        finally:
+            release.touch()
+        with guard.RuntimeGuard(ID, wait_seconds=2):
+            pass
+
     def test_guard_install_refuses_pending_activation_before_installing_files(self):
         with guard.RuntimeGuard():
             self.journal('render_installed')
@@ -157,6 +218,25 @@ with m.RuntimeGuard() as guard:
             installer.install('a' * 40)
         caller.assert_not_called()
         self.assertFalse((guard.ROOT / 'lib').exists())
+
+    def test_recovery_refuses_incomplete_incompatible_or_tampered_guard_enrollment(self):
+        effects = self.enterContext(patch.object(recovery, 'run'))
+        self.assertEqual(recovery.recover()['state'], 'custody_required')
+        effects.assert_not_called()
+        self.enterContext(patch.object(installer, 'recover_caller', return_value=None))
+        installed = installer.install('a' * 40)
+        with guard.RuntimeGuard():
+            self.assertEqual(guard.validate_installation()['blobs'], installed['blobs'])
+        marker = guard.ROOT / 'guard.json'
+        valid = marker.read_bytes()
+        changed = json.loads(valid); changed['protocolVersion'] = 999
+        receipt.atomic(marker, receipt.canonical(changed))
+        self.assertEqual(recovery.recover()['state'], 'custody_required')
+        effects.assert_not_called()
+        receipt.atomic(marker, valid)
+        receipt.atomic(guard.ROOT / 'lib' / 'runtime-recovery-host.py', b'# incomplete replacement\n')
+        self.assertEqual(recovery.recover()['state'], 'custody_required')
+        effects.assert_not_called()
 
     def test_terminal_journal_allows_normal_reconcile(self):
         with guard.RuntimeGuard():
@@ -248,6 +328,36 @@ with m.RuntimeGuard() as guard:
         with self.assertRaisesRegex(gateway.GatewayConflict, 'binding_superseded'):
             host.activate()
         effect.assert_not_called()
+
+    def test_completed_operation_reports_fresh_binding_supersession_without_effects(self):
+        host = self.host('activated')
+        host.journal.update({'appSha': 'a' * 40, 'imageId': 'sha256:' + 'e' * 64, 'untouchedRuntime': {},
+                             'projection': {'keySha256': 'b' * 64, 'uid': 'projection', 'resourceVersion': '1'},
+                             'desiredReceiptSha256': receipt.digest(b'committed')})
+        self.enterContext(patch.object(host, 'selected', side_effect=gateway.GatewayConflict('gateway_binding_superseded')))
+        self.enterContext(patch.object(host, 'gateway_matches', return_value=True))
+        self.enterContext(patch.object(gateway.receipt, 'read_bytes', return_value=b'committed'))
+        effect = self.enterContext(patch.object(gateway, 'run'))
+        observed = host.step('observe')
+        self.assertEqual(observed['phase'], 'activated')
+        self.assertTrue(observed['noChanges'])
+        self.assertFalse(observed['currentQualified'])
+        self.assertEqual(observed['failure'], 'gateway_binding_superseded')
+        effect.assert_not_called()
+
+    def test_backup_completion_does_not_change_stable_runtime_preservation(self):
+        def instance(service):
+            return {'Id': service + '-id', 'Name': service, 'Image': service + '-image',
+                    'State': {'StartedAt': 'same-start'},
+                    'Config': {'Labels': {'com.docker.compose.service': service}}}
+        stable, backup = instance('postgres'), instance('db-backup')
+        self.enterContext(patch.object(gateway, 'run', side_effect=[b'postgres-id backup-id',
+                          json.dumps([stable, backup]).encode(), b'postgres-id', json.dumps([stable]).encode()]))
+        before = gateway.untouched_runtime()
+        after = gateway.untouched_runtime()
+        self.assertEqual(before, after)
+        self.assertEqual(set(before), {'postgres'})
+        self.assertEqual(before['postgres']['id'], 'postgres-id')
 
     def test_render_rename_lost_response_resumes_without_replacing_installed_bytes(self):
         host = self.host('prepared')

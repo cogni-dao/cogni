@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 /**
- * Module: `scripts/ci/gateway-activation`
+ * Module: `@scripts/ci/gateway-activation`
  * Purpose: Trusted native transport for the one gateway activation state machine.
- * Scope: Fixed workflow, custodian, host paths and provider target; candidate bootstrap only.
+ * Scope: Fixed workflow, custodian, host paths and provider target; does not accept provider values or arbitrary effects.
  * Invariants: Complete producer inventory; exact source; private host-held credentials;
  *   one SSH connection and guard across the transaction; typed nonsecret receipt only.
- * Side-effects: GitHub reads, guard-library enrollment and fixed SSH host operations.
+ * Side-effects: IO (GitHub reads, guard enrollment and fixed SSH host operations)
  * Links: bug.5570
  * @internal
  */

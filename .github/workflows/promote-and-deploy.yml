@@ -137,7 +137,9 @@ jobs:
       - name: Admit guarded runtime source
         working-directory: runtime-policy
         env:
-          SOURCE_SHA: ${{ steps.env.outputs.head_sha }}
+          # Runtime writers run from the trusted workflow revision. An older
+          # retained app artifact is not a runtime-tooling selection.
+          SOURCE_SHA: ${{ github.sha }}
         run: node --experimental-strip-types scripts/ci/runtime-source-admission.ts "$SOURCE_SHA"
 
       - name: Checkout (for image-tags lib)

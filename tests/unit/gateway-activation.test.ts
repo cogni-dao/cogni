@@ -1,14 +1,25 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 /**
- * Module: `tests/unit/gateway-activation`
+ * Module: `@tests/unit/gateway-activation`
  * Purpose: Prove sealed activation intent and recovery after interrupted external effects.
- * Scope: Pure contract and injected-host tests; no credentials, containers or network.
+ * Scope: Contract, injected-host and source-admission fixtures; does not use credentials, containers or network.
  * Invariants: Unknown outcomes never trigger compensation; replay never replaces intent.
- * Side-effects: none.
+ * Side-effects: IO (private temporary Git fixtures)
  * Links: bug.5570, knowledge/secrets-management
  * @internal
  */
+
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   activateGateway,
@@ -52,6 +63,61 @@ function host(
 }
 
 describe("gateway operation ownership", () => {
+  it("admits current guarded tooling while the application artifact predates the floor", () => {
+    const script = resolve("scripts/ci/runtime-source-admission.ts");
+    const workflow = readFileSync(
+      ".github/workflows/promote-and-deploy.yml",
+      "utf8"
+    );
+    const admission = workflow
+      .split("- name: Admit guarded runtime source")[1]
+      ?.split("- name:")[0];
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: Assert the literal GitHub Actions expression.
+    expect(admission).toContain("SOURCE_SHA: ${{ github.sha }}");
+    expect(admission).not.toContain("steps.env.outputs.head_sha");
+    const directory = mkdtempSync(resolve(tmpdir(), "gateway-source-"));
+    const git = (...args: string[]) =>
+      execFileSync("git", args, {
+        cwd: directory,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    try {
+      git("init", "-b", "main");
+      git("config", "user.name", "Fixture");
+      git("config", "user.email", "fixture@example.invalid");
+      git("config", "commit.gpgsign", "false");
+      writeFileSync(resolve(directory, "app.txt"), "retained artifact");
+      git("add", ".");
+      git("commit", "-m", "older application");
+      const application = git("rev-parse", "HEAD");
+      mkdirSync(resolve(directory, ".cogni"));
+      writeFileSync(
+        resolve(directory, ".cogni/runtime-maintenance.v1.json"),
+        "{}"
+      );
+      git("add", ".");
+      git("commit", "-m", "guarded runtime tooling");
+      const tooling = git("rev-parse", "HEAD");
+      git("update-ref", "refs/remotes/origin/main", tooling);
+      const accepted = spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", script, tooling],
+        { cwd: directory, encoding: "utf8" }
+      );
+      expect(accepted.status, accepted.stderr).toBe(0);
+      expect(accepted.stdout.trim()).toBe(tooling);
+      expect(
+        spawnSync(
+          process.execPath,
+          ["--experimental-strip-types", script, application],
+          { cwd: directory }
+        ).status
+      ).not.toBe(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
   it("binds the same caller identity to one immutable operation ref", () => {
     expect(gatewayIntentRef(intent.operationId)).toBe(
       `tags/cogni-gateway-activation/${intent.operationId}`

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 /**
- * Module: `scripts/ci/runtime-source-admission`
+ * Module: `@scripts/ci/runtime-source-admission`
  * Purpose: Reject runtime writers predating the shared guard before source checkout.
- * Scope: Trusted-main transport; native Git only, no target credentials.
+ * Scope: Trusted-main transport and native Git; does not read target credentials.
  * Invariants: The protected marker's first merged commit is the source floor;
  *   an unqualified source must rebase, never silently execute newer code.
- * Side-effects: Local Git reads only.
+ * Side-effects: IO (local Git reads)
  * Links: bug.5570
  * @internal
  */

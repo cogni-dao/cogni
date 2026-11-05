@@ -26,9 +26,9 @@ RECEIPT="$TMPROOT/runtime-recovery-receipt.json"
 DOCKER_LOG="$TMPROOT/docker.log"
 mkdir -p "$FAKEBIN" "$RUNTIME_DIR/configs"
 : > "$DOCKER_LOG"
-export FAKE_GUARD_LIB="$TMPROOT/guard-lib"
+export FAKE_GUARD_LIB="$TMPROOT/guard/lib"
 mkdir -p "$FAKE_GUARD_LIB"
-cp scripts/ci/lib/runtime-recovery-receipt.py "$FAKE_GUARD_LIB/"
+cp scripts/ci/lib/{runtime-recovery-receipt,gateway-activation-host,runtime-recovery-host,runtime-guard-install}.py "$FAKE_GUARD_LIB/"
 export FAKE_GUARD_SOURCE="$REPO_ROOT/scripts/ci/lib/runtime-maintenance-guard.py"
 export FAKE_GUARD_ROOT="$TMPROOT/guard"
 cat > "$FAKE_GUARD_LIB/runtime-maintenance-guard.py" <<'PY_GUARD'
@@ -39,10 +39,22 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 module.ROOT = Path(os.environ['FAKE_GUARD_ROOT'])
 module.OWNER_UID = os.geteuid()
-assert sys.argv[1] == 'exec'
+assert sys.argv[1] == 'exec-installed'
 with module.RuntimeGuard() as guard:
+    module.validate_installation()
     guard.exec(sys.argv[2:])
 PY_GUARD
+chmod 700 "$FAKE_GUARD_ROOT" "$FAKE_GUARD_LIB"
+chmod 600 "$FAKE_GUARD_LIB/"*.py
+python3 - <<'PY_GUARD_MANIFEST'
+import hashlib,json,os
+from pathlib import Path
+root=Path(os.environ['FAKE_GUARD_ROOT'])
+blobs={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (root/'lib').glob('*.py')}
+path=root/'guard.json'
+path.write_text(json.dumps({'protocolVersion':1,'sourceSha':'a'*40,'blobs':blobs,'qualifiedAt':'2026-11-05T00:00:00Z','recoveryCaller':None}))
+path.chmod(0o600)
+PY_GUARD_MANIFEST
 
 # Exercise the exact classifier embedded in deploy-infra's remote script. GNU
 # timeout may return 124 with empty stderr; that is bounded/transient, while a
@@ -175,6 +187,21 @@ run_recovery() {
     FAKE_OPENBAO_SEALED="${FAKE_OPENBAO_SEALED:-false}" \
     bash scripts/ci/deploy-infra.sh --recover-installed-runtime
 }
+
+# A partial helper installation or unsupported installed protocol must refuse
+# before receipt/config checks or any Docker effect, even on ordinary recovery.
+mv "$FAKE_GUARD_ROOT/guard.json" "$TMPROOT/valid-guard.json"
+if run_recovery > "$TMPROOT/incomplete-guard.log" 2>&1; then
+  echo 'incomplete guard enrollment admitted recovery' >&2; exit 1
+fi
+[[ ! -s "$DOCKER_LOG" ]] || { echo 'incomplete enrollment reached Docker' >&2; exit 1; }
+jq '.protocolVersion = 999' "$TMPROOT/valid-guard.json" > "$FAKE_GUARD_ROOT/guard.json"
+chmod 600 "$FAKE_GUARD_ROOT/guard.json"
+if run_recovery > "$TMPROOT/incompatible-guard.log" 2>&1; then
+  echo 'incompatible guard protocol admitted recovery' >&2; exit 1
+fi
+[[ ! -s "$DOCKER_LOG" ]] || { echo 'incompatible enrollment reached Docker' >&2; exit 1; }
+mv "$TMPROOT/valid-guard.json" "$FAKE_GUARD_ROOT/guard.json"
 
 # Missing receipt: named fail-closed state, no Docker command at all.
 missing_out="$(run_recovery)"

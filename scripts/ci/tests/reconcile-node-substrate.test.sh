@@ -173,8 +173,10 @@ module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 root=Path(os.environ['FAKE_REMOTE_ROOT'])/'var/lib/cogni/runtime-maintenance'
 if script.endswith('runtime-maintenance-guard.py'):
     module.ROOT=root;module.OWNER_UID=os.geteuid()
-    assert args[0]=='exec'
-    with module.RuntimeGuard() as guard: guard.exec(args[1:])
+    assert args[0] in ('exec','exec-installed')
+    with module.RuntimeGuard() as guard:
+        if args[0]=='exec-installed': module.validate_installation()
+        guard.exec(args[1:])
 else:
     module.OWNER_UID=os.geteuid();module.guard.ROOT=root;module.guard.OWNER_UID=os.geteuid()
     module.receipt.OWNER_UID=os.geteuid()

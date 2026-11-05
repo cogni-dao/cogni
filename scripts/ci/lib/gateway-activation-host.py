@@ -17,7 +17,6 @@ import os
 from pathlib import Path
 import re
 import shlex
-import subprocess
 import sys
 import time
 import urllib.request
@@ -43,6 +42,7 @@ KUBE = ['kubectl', '--kubeconfig', '/etc/rancher/k3s/k3s.yaml']
 CHILD_ENV = {'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
 COMPOSE = DOCKER + ['compose', '--project-name', 'cogni-runtime', '--env-file', str(ENV_FILE), '-f', str(COMPOSE_FILE)]
 NAMESPACE = None
+ACTIVE_GUARD_FD = None
 ACTIONS = {'observe', 'prepare', 'install_render', 'activate', 'commit_receipt', 'rollback'}
 TERMINAL = {'activated', 'rolled_back'}
 
@@ -56,12 +56,9 @@ def digest(value):
     return hashlib.sha256(value).hexdigest()
 
 def run(argv, *, input_bytes=None, timeout=30):
-    result = subprocess.run(argv, input=input_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            timeout=timeout, check=False, env=CHILD_ENV, cwd=RUNTIME)
-    if result.returncode:
-        # Neither stderr nor resolved config may cross the host boundary.
-        raise RuntimeError('gateway_native_command_failed')
-    return result.stdout
+    # Neither stderr nor resolved config may cross the host boundary.
+    return guard.run_native(ACTIVE_GUARD_FD, argv, input_bytes=input_bytes,
+                            timeout=timeout, env=CHILD_ENV, cwd=RUNTIME)
 
 def canonical_json(value):
     return receipt.canonical(value)
@@ -134,7 +131,11 @@ def untouched_runtime():
         raise RuntimeError('Runtime inventory is empty')
     result = {}
     for item in json.loads(run(DOCKER + ['inspect'] + ids)):
-        if item['Config'].get('Labels', {}).get('com.docker.compose.service') != 'litellm':
+        # The scheduled backup is an independent one-shot reader. Its normal
+        # completion/removal is not a stable service restart. This operation
+        # never targets its container or data; keep stable services exact.
+        service = item['Config'].get('Labels', {}).get('com.docker.compose.service')
+        if service not in ('litellm', 'db-backup'):
             result[item['Name']] = {'id': item['Id'], 'image': item['Image'], 'startedAt': item['State']['StartedAt']}
     return result
 
@@ -301,8 +302,8 @@ class Host:
         require(manifest['machineId'] == Path('/etc/machine-id').read_text().strip(), 'gateway_machine_mismatch')
         cluster = json.loads(run(KUBE + ['get', 'namespace', 'kube-system', '-o', 'json']))['metadata']['uid']
         require(cluster == manifest['clusterUid'], 'gateway_cluster_mismatch')
-        for name in ('gateway-activation-host.py', 'runtime-maintenance-guard.py', 'runtime-recovery-receipt.py',
-                     'runtime-recovery-host.py', 'runtime-guard-install.py'):
+        guard.validate_installation()
+        for name in guard.HELPER_FILES:
             require(digest((LIB / name).read_bytes()) == manifest['blobs'][name], 'gateway_installed_source_mismatch')
         self.identity = {'machineId': manifest['machineId'], 'clusterUid': cluster}
         require(env_value(guard.private_read(ENV_FILE), 'DEPLOY_ENVIRONMENT') == intent['env'], 'gateway_runtime_environment_mismatch')
@@ -555,9 +556,15 @@ class Host:
                     require(self.gateway_matches(key_hash), 'gateway_terminal_binding_drift')
                     expected_receipt = self.journal[state + 'ReceiptSha256']
                     require(digest(receipt.read_bytes()) == expected_receipt, 'gateway_terminal_receipt_drift')
+                    if self.journal['state'] == 'activated':
+                        self.selected()
                     wait_gateway()
                     result['currentQualified'] = True
+                except GatewayConflict as error:
+                    result['failure'] = str(error)
+                    result['currentQualified'] = False
                 except Exception:
+                    result['failure'] = 'gateway_current_evidence_unavailable'
                     result['currentQualified'] = False
                 return result
             return self.observation()
@@ -565,13 +572,17 @@ class Host:
         return self.observation()
 
 def serve():
+    global ACTIVE_GUARD_FD
     # Keep the native protocol bounded; never let a caller stream arbitrary commands.
     first = sys.stdin.buffer.readline(16385)
     require(len(first) <= 16384, 'gateway_frame_oversized')
     frame = json.loads(first)
     require(set(frame) == {'action', 'intent'} and frame['action'] == 'observe', 'gateway_initial_frame_invalid')
     intent = validate_intent(frame['intent'])
-    with guard.RuntimeGuard(intent['operationId']):
+    with guard.RuntimeGuard(intent['operationId']) as active_guard:
+        # A surviving native child retains exclusion after parent-only death.
+        # Same-UUID recovery cannot enter until that execution has exited.
+        ACTIVE_GUARD_FD = active_guard.stream.fileno()
         host = Host(intent)
         for index in range(13):
             require(frame['intent'] == intent and frame['action'] in ACTIONS, 'gateway_frame_invalid')

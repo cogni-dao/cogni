@@ -5,7 +5,6 @@
 import importlib.util
 import json
 from pathlib import Path
-import subprocess
 import sys
 import time
 
@@ -24,14 +23,18 @@ DOCKER = ['docker', '--host', 'unix:///var/run/docker.sock']
 COMPOSE = DOCKER + ['compose', '--project-name', 'cogni-runtime', '--env-file', str(RUNTIME / '.env'),
                     '-f', str(RUNTIME / 'docker-compose.yml')]
 ENV = {'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
+ACTIVE_GUARD_FD = None
 
 def run(argv, timeout=20):
-    return subprocess.check_output(argv, stderr=subprocess.DEVNULL, env=ENV, cwd=RUNTIME, timeout=timeout)
+    return guard.run_native(ACTIVE_GUARD_FD, argv, timeout=timeout, env=ENV, cwd=RUNTIME)
 
 def recover():
+    global ACTIVE_GUARD_FD
     # Journal admission precedes receipt validation and every container effect.
-    with guard.RuntimeGuard(wait_seconds=120):
+    with guard.RuntimeGuard(wait_seconds=120) as active_guard:
+        ACTIVE_GUARD_FD = active_guard.stream.fileno()
         try:
+            guard.validate_installation()
             value = receipt.read()
             for name, field in [('docker-compose.yml', 'composeSha256'), ('configs/litellm.config.yaml', 'litellmConfigSha256')]:
                 path = RUNTIME / name

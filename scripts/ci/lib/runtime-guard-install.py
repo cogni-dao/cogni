@@ -29,8 +29,7 @@ def load(name):
 
 guard = load('runtime-maintenance-guard')
 receipt = load('runtime-recovery-receipt')
-FILES = ('runtime-maintenance-guard.py', 'runtime-recovery-receipt.py', 'gateway-activation-host.py',
-         'runtime-recovery-host.py', 'runtime-guard-install.py')
+FILES = guard.HELPER_FILES
 UNIT_NAME = 'cogni-runtime-recovery.service'
 UNIT_FILE = Path('/etc/systemd/system') / UNIT_NAME
 UNIT = '''[Unit]
