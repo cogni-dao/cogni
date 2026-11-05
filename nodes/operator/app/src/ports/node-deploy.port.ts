@@ -358,8 +358,11 @@ export interface ProbePort {
     hostHeader: string,
     path: string
   ): Promise<HttpResult>;
-  /** GET `https://<host><path>` resolved through Cloudflare DoH, bypassing any local resolver. */
-  publicDoh(host: string, path: string): Promise<HttpResult>;
+  /**
+   * GET `https://<host><path>` through the public edge, `host` resolved at its zone's authoritative
+   * nameservers (no local resolver, no public resolver's negative cache), real Host + SNI.
+   */
+  publicRead(host: string, path: string): Promise<HttpResult>;
   /** Postgres SSLRequest handshake against a forwarded tcp port. */
   tcpTls(host: string, port: number): Promise<boolean>;
 }

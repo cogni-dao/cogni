@@ -28,7 +28,7 @@
  *     bidder screening could pass, an `app` blue is closed (confirmed) BEFORE the next create, which then
  *     may land on blue's provider. At most once per release; never for `state`. Accepted downtime.
  *   - CUTOVER_IS_READ_BACK: a cutover counts only after the edge record reads back AND 8 consecutive
- *     public reads (DoH) return the exact sha.
+ *     public reads (host resolved at its zone's authoritative nameservers) return the exact sha.
  *   - CLOSE_IS_CONFIRMED: a lease counts as closed only after observe says closed AND chain truth
  *     (when wired) agrees. An unconfirmed close is retried by the janitor and alerted, never assumed.
  *   - STATE_IS_NEVER_AUTO_REPLACED: a `state` workload that ever went live is never recreated; loss
@@ -1366,7 +1366,10 @@ export class NodeDeploySequencer {
     let firstAt = "";
     let last = "";
     for (;;) {
-      const v = await probe.publicDoh(host, `${versionPath}?cb=${clock.now()}`);
+      const v = await probe.publicRead(
+        host,
+        `${versionPath}?cb=${clock.now()}`
+      );
       if (v.status === 200 && buildShaOf(v.body) === sha) {
         if (streak === 0) firstAt = new Date(clock.now()).toISOString();
         streak++;
