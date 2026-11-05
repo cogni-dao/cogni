@@ -178,10 +178,6 @@ export CATALOG_DIR
 # shellcheck source=lib/lane-db-residency.sh
 . "$SCRIPT_DIR/lib/lane-db-residency.sh"
 RELIABILITY_CONTROLLER="$(reliability_controller_for_env "$DEPLOY_ENVIRONMENT")" || fail "reliability controller ownership unresolved"
-COGNI_LANE_DB_HOST="$(lane_db_dsn_host "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" "$SECRETS_CONTROL_ENV" "$VM_IP")" \
-  || fail "could not resolve which Postgres host ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}'s database lives on (bug.5299) — refusing to compose a DSN against a guessed host"
-export COGNI_LANE_DB_HOST
-log "lane database residency: ${TARGET_NODE}/${DEPLOY_ENVIRONMENT} -> env=$(lane_db_vm_env "$TARGET_NODE" "$DEPLOY_ENVIRONMENT") host=${COGNI_LANE_DB_HOST} (this run is on ${SECRETS_CONTROL_ENV}'s VM, ${VM_IP})"
 
 export CATALOG_FILE="${APP_SOURCE_DIR}/infra/secrets-catalog.yaml"
 export PAYMENT_NODES="${PAYMENT_NODES:-poly}"
@@ -462,6 +458,10 @@ if [[ "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" == inherited-key ]]; then
 fi
 
 # Same canonical writer loads applied cell custody before composing any runtime URL.
+COGNI_LANE_DB_HOST="$(lane_db_dsn_host "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" "$SECRETS_CONTROL_ENV" "$VM_IP")" \
+  || fail "could not resolve which Postgres host ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}'s database lives on (bug.5299) — refusing to compose a DSN against a guessed host"
+export COGNI_LANE_DB_HOST
+log "lane database residency: ${TARGET_NODE}/${DEPLOY_ENVIRONMENT} -> env=$(lane_db_vm_env "$TARGET_NODE" "$DEPLOY_ENVIRONMENT") host=${COGNI_LANE_DB_HOST} (this run is on ${SECRETS_CONTROL_ENV}'s VM, ${VM_IP})"
 source "$SCRIPT_DIR/lib/materialize-database-cell-kits.sh"
 source "$SCRIPT_DIR/lib/materialize-database-cell-placement.sh"
 case "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" in

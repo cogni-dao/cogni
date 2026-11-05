@@ -983,7 +983,7 @@ printf '%s' control-billing-fixture > "$BAO_ROOT/cogni/production/operator/BILLI
 printf '%s' control-scheduler-fixture > "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
 auth_before="$(cat "$BAO_ROOT/cogni/candidate-a/node-template/AUTH_SECRET")"
 run_foreign_inheritance() {
-  env VM_HOST=fake DOMAIN=test.cognidao.org \
+  env VM_HOST=fake DOMAIN=test.cognidao.org FORK_DOMAIN_ROOT=cognidao.org \
     SECRETS_CONTROL_ENV=production FAKE_EXPECTED_WRITER_ROLE=production-writer \
     SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
     SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" FAKE_REMOTE_PATH="$FAKEBIN" \
