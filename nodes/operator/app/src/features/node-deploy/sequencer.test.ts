@@ -191,9 +191,11 @@ describe("app deploy", () => {
 
     expect(await deployApp(h, SHA_2)).toBe("driven");
     const idxCreate = h.events.indexOf("payer.create:1003");
-    const idxMove = h.events.findIndex((e) => e.startsWith("dns."));
+    const idxIdentity = h.events.indexOf("dns.zone_identity");
+    const idxMove = h.events.indexOf("dns.update");
     const idxFirstPublic = h.events.indexOf("public.read");
-    expect(idxCreate).toBeGreaterThanOrEqual(0);
+    expect(idxIdentity).toBeGreaterThanOrEqual(0);
+    expect(idxCreate).toBeGreaterThan(idxIdentity);
     expect(idxMove).toBeGreaterThan(idxCreate);
     expect(idxFirstPublic).toBeGreaterThan(idxMove);
     // blue (1002) is still alive: retention window has not elapsed

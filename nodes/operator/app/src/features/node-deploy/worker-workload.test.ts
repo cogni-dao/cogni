@@ -156,9 +156,14 @@ describe("declaring a worker workload", () => {
   it("fails safe: with no distinct node-app service, a profile-less service stays the node app", () => {
     const w = resolve({
       repoSpecText: redSpec({}, { runtime_profile: undefined }),
+      manifests: [
+        APP,
+        manifest("sandbox", 8080, "red.cognidao.org", SANDBOX_IMAGE),
+      ],
       workload: "sandbox",
     });
     expect(w.runtimeProfile).toBeUndefined();
+    expect(w.expose).toEqual({ http: { host: "red.cognidao.org" } });
   });
 
   it("refuses a worker that declares an operator or fleet credential", () => {

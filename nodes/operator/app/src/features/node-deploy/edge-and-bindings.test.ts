@@ -9,12 +9,15 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
+import { hostForEnv } from "./declarations";
 import {
   EdgeGuardError,
   EdgeRouter,
   edgeHostRegexFor,
   hostOwnedBy,
+  workerHostRefusal,
 } from "./edge";
 import { ingressHostOf } from "./spec";
 import { FakeDns, WORKLOAD_ZONE } from "./testing";
@@ -277,6 +280,92 @@ describe("EdgeRouter guards", () => {
     expect(
       hostOwnedBy(WORKLOAD_ZONE, "poly.cognidao.org", "mars", "poly")
     ).toBe(false);
+  });
+
+  it("ONE_WORKLOAD_ZONE: canonical hosts require an explicit canonical binding", () => {
+    const canonical = resolveWorkloadZoneBinding({
+      fleetOwner: "cogni-dao",
+      zoneName: "cognidao.org",
+    });
+    expect(String(edgeHostRegexFor(["poly"], canonical))).toBe(
+      String(edgeHostRegexFor(["poly"], WORKLOAD_ZONE))
+    );
+    expect(
+      hostOwnedBy(canonical, "poly-test.cognidao.org", "candidate-a", "poly")
+    ).toBe(true);
+    expect(() =>
+      resolveWorkloadZoneBinding({ fleetOwner: "cogni-test-org" })
+    ).toThrow();
+  });
+
+  it("ONE_WORKLOAD_ZONE: the isolated fleet admits only its bound node hosts (story.5137)", () => {
+    const binding = resolveWorkloadZoneBinding({
+      fleetOwner: "cogni-test-org",
+      zoneName: "cogni-testing.org",
+    });
+    expect(hostForEnv("spawny-boi.cogni-testing.org", "candidate-a")).toBe(
+      "spawny-boi-test.cogni-testing.org"
+    );
+    const re = edgeHostRegexFor(["spawny-boi"], binding);
+    for (const ok of [
+      "spawny-boi.cogni-testing.org",
+      "spawny-boi-test.cogni-testing.org",
+      "node-deploy-canary-test.cogni-testing.org",
+    ])
+      expect(re.test(ok), ok).toBe(true);
+    for (const bad of [
+      "spawny-boi-test.cognidao.org",
+      "spawny-boi.cognidao.org",
+      "test.cognidao.org",
+      "cogni-testing.org",
+      "test.cogni-testing.org",
+      "cogni-candidate-a.vm.cognidao.org",
+      "spawny-boi.cogni-testing.org.evil.com",
+      "spawny-boi-test.cogni-testingxorg",
+    ])
+      expect(re.test(bad), bad).toBe(false);
+    expect(
+      edgeHostRegexFor(["spawny-boi"], WORKLOAD_ZONE).test(
+        "spawny-boi-test.cogni-testing.org"
+      )
+    ).toBe(false);
+    expect(
+      hostOwnedBy(
+        binding,
+        "spawny-boi-test.cogni-testing.org",
+        "candidate-a",
+        "spawny-boi"
+      )
+    ).toBe(true);
+    expect(
+      hostOwnedBy(
+        binding,
+        "spawny-boi-test.cognidao.org",
+        "candidate-a",
+        "spawny-boi"
+      )
+    ).toBe(false);
+    expect(
+      hostOwnedBy(
+        WORKLOAD_ZONE,
+        "spawny-boi-test.cogni-testing.org",
+        "candidate-a",
+        "spawny-boi"
+      )
+    ).toBe(false);
+    const worker = {
+      host: "red-sandbox-test.cogni-testing.org",
+      env: "candidate-a",
+      slug: "red",
+      workload: "sandbox",
+      catalogSlugs: ["red", "red-sandbox"],
+    };
+    expect(workerHostRefusal({ ...worker, binding })).toBe(
+      "red-sandbox-test.cogni-testing.org is node red-sandbox's host in candidate-a"
+    );
+    expect(
+      workerHostRefusal({ ...worker, binding: WORKLOAD_ZONE })
+    ).toBeUndefined();
   });
 
   it("refuses an unguarded host before any request is made", async () => {

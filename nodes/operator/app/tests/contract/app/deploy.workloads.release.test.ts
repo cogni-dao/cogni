@@ -208,7 +208,7 @@ describe("GET /api/v1/deploy/workloads/releases/{releaseId}", () => {
     mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
     envState.DEPLOY_ENVIRONMENT = "production";
     envState.NODE_DEPLOY_ENVS = undefined;
-    envState.NODE_DEPLOY_WORKLOAD_ZONE = undefined;
+    envState.NODE_DEPLOY_WORKLOAD_ZONE = "cognidao.org";
     catalogState.sourceRepo = "https://github.com/cogni-dao/owned";
     store.getRelease.mockResolvedValue(release);
     store.getDesired.mockResolvedValue({ state: "running", releaseId: R1 });
@@ -300,7 +300,7 @@ describe("GET /api/v1/deploy/workloads (release state, additive)", () => {
     mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
     envState.DEPLOY_ENVIRONMENT = "production";
     envState.NODE_DEPLOY_ENVS = undefined;
-    envState.NODE_DEPLOY_WORKLOAD_ZONE = undefined;
+    envState.NODE_DEPLOY_WORKLOAD_ZONE = "cognidao.org";
     catalogState.sourceRepo = "https://github.com/cogni-dao/owned";
   });
 

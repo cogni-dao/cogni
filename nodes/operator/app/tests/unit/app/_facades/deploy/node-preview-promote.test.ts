@@ -81,6 +81,7 @@ const ENV = {
   NODE_SUBMODULE_PARENT_REPO: "node-template",
   DEPLOY_ENVIRONMENT: "production",
   NODE_DEPLOY_ENVS: "candidate-a,preview,production",
+  NODE_DEPLOY_WORKLOAD_ZONE: "cognidao.org",
   FLEET_CONTROL_ENV: "production",
   // biome-ignore lint/suspicious/noExplicitAny: partial ServerEnv is sufficient for this facade
 } as any;
