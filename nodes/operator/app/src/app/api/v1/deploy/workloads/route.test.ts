@@ -50,6 +50,9 @@ const TOKS5_ROW = {
   compute_api: { "candidate-a": "node-deploy" },
 };
 
+const zoneConfig = vi.hoisted(() => ({
+  value: "cognidao.org" as string | undefined,
+}));
 const gate = vi.fn();
 const envNotServed = vi.fn();
 const nodeNotOnDeployVerb = vi.fn();
@@ -87,7 +90,7 @@ vi.mock("@/shared/env", () => ({
     // Canonical control fleet serves canonical nodes in every environment.
     NODE_SUBMODULE_PARENT_OWNER: "cogni-dao",
     NODE_SUBMODULE_PARENT_REPO: "cogni",
-    NODE_DEPLOY_WORKLOAD_ZONE: "cognidao.org",
+    NODE_DEPLOY_WORKLOAD_ZONE: zoneConfig.value,
     DEPLOY_ENVIRONMENT: "production",
   }),
 }));
@@ -139,6 +142,7 @@ const recorded = () => recordRelease.mock.calls[0]?.[0];
 describe("POST /api/v1/deploy/workloads: one front door, a node deploys from its own repo", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    zoneConfig.value = "cognidao.org";
     gate.mockResolvedValue({
       ok: true,
       node: { id: TOKS5_ID, slug: "toks5" },
@@ -151,6 +155,20 @@ describe("POST /api/v1/deploy/workloads: one front door, a node deploys from its
       desired: { state: "running" },
     }));
     repoServes(CANARY_BUILT);
+  });
+
+  it.each([
+    undefined,
+    "https://invalid/zone",
+  ])("refuses new intent before source reads or store writes with %s zone", async (zone) => {
+    zoneConfig.value = zone;
+    const res = await post();
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({
+      error: "workload_zone_not_configured",
+    });
+    expect(fetchFileText).not.toHaveBeenCalled();
+    expect(recordRelease).not.toHaveBeenCalled();
   });
 
   it("resolves a canonical node from the image catalog for its candidate-a lane, reads its repo at the sha, and records the PENDING image (ALWAYS_DEFER)", async () => {

@@ -66,17 +66,13 @@ import {
   KubernetesStatePasswords,
   PostgresNodeDeployStore,
 } from "@/adapters/server";
-import { EdgeRouter, edgeHostRegexFor } from "@/features/node-deploy/edge";
 import {
   EnvLaneConfigError,
   EnvLaneSequencers,
   resolveEnvLanes,
 } from "@/features/node-deploy/env-lanes";
-import {
-  DEFAULT_SEQUENCER_CONFIG,
-  NodeDeploySequencer,
-} from "@/features/node-deploy/sequencer";
-import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
+import { DEFAULT_SEQUENCER_CONFIG } from "@/features/node-deploy/sequencer";
+import { composeNodeDeployLanes } from "./node-deploy-lanes";
 
 const LISTEN_PORT = 8080;
 const CREDENTIAL_DIR = "/var/run/secrets/node-deploy-sequencer";
@@ -186,94 +182,74 @@ const chain = runtimeEnv.AKASH_CHAIN_OWNER
 // route applies (`isFleetOwnedRow`): unset admits no remote-source node, so a sequencer that was never told its
 // fleet (the test operator) can never claim a host for a canonical node. story.5137 CD4.
 const fleetOwner = runtimeEnv.NODE_DEPLOY_FLEET_OWNER?.trim() || undefined;
-// One explicit, value-free binding shared by every workload lane. Test config has no production fallback.
-const workloadZone = resolveWorkloadZoneBinding({
+const images = new GhcrBuiltImageResolver();
+// Resolve new-effect authority without disabling the existing paid-effect recovery owner.
+const composed = await composeNodeDeployLanes({
   fleetOwner,
   zoneName: runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE,
+  lanes,
+  dnsRecordsFor: (binding) =>
+    cfToken && cfZone
+      ? new CloudflareDnsRecords({
+          binding,
+          apiToken: cfToken,
+          zoneId: cfZone,
+          readCredentials: async () => {
+            const [apiToken, zoneId] = await Promise.all([
+              readCredential("CLOUDFLARE_API_TOKEN"),
+              readCredential("CLOUDFLARE_ZONE_ID"),
+            ]);
+            return { apiToken, zoneId };
+          },
+        })
+      : undefined,
+  nodeDeploySlugs: (env, owner) => catalog.nodeDeploySlugs(env, owner),
+  depsForLane: (lane) => ({
+    store,
+    payer,
+    probe,
+    images,
+    secrets: new KubernetesStatePasswords(
+      lane.secretsNamespace,
+      lane.environment
+    ),
+    runtime: {
+      secrets: new EsoNodeRuntimeSecrets({ namespace: lane.secretsNamespace }),
+      catalog,
+      substrateHost: lane.substrateHost,
+    },
+    ...(chain ? { chain } : {}),
+    clock: {
+      now: () => Date.now(),
+      sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    },
+    log,
+    config: {
+      ...DEFAULT_SEQUENCER_CONFIG,
+      namespace,
+      environment: lane.environment,
+      ...(appProviders.length > 0 ? { appProviders } : {}),
+      retainMs: num(
+        runtimeEnv.NODE_DEPLOY_RETAIN_MS,
+        DEFAULT_SEQUENCER_CONFIG.retainMs,
+        0
+      ),
+    },
+  }),
 });
-const dnsRecords =
-  cfToken && cfZone
-    ? new CloudflareDnsRecords({
-        binding: workloadZone,
-        apiToken: cfToken,
-        zoneId: cfZone,
-        readCredentials: async () => {
-          const [apiToken, zoneId] = await Promise.all([
-            readCredential("CLOUDFLARE_API_TOKEN"),
-            readCredential("CLOUDFLARE_ZONE_ID"),
-          ]);
-          return { apiToken, zoneId };
-        },
-      })
-    : undefined;
-if (!dnsRecords) {
+if (!composed.edgeConfigured) {
   log.warn(
-    { environment, namespace },
-    "node_deploy_sequencer_edge_unconfigured: http apps will be refused before paying"
+    {
+      environment,
+      namespace,
+      reason: composed.authority.ok
+        ? "edge_not_configured"
+        : composed.authority.reason,
+    },
+    "node_deploy_sequencer_edge_unconfigured: recovery continues; fresh http apps refused before paying"
   );
 }
-
-const images = new GhcrBuiltImageResolver();
-
-const laneSequencers = await Promise.all(
-  lanes.map(async (lane) => {
-    const edgeHostRegex = edgeHostRegexFor(
-      await catalog.nodeDeploySlugs(lane.environment, workloadZone.fleetOwner),
-      workloadZone
-    );
-    log.info(
-      {
-        environment: lane.environment,
-        secretsNamespace: lane.secretsNamespace,
-        substrateHost: lane.substrateHost,
-        fleetOwner,
-        edgeHostRegex: String(edgeHostRegex),
-      },
-      "node_deploy_sequencer_edge_hosts"
-    );
-    return {
-      environment: lane.environment,
-      sequencer: new NodeDeploySequencer({
-        store,
-        payer,
-        edge: dnsRecords
-          ? new EdgeRouter(dnsRecords, workloadZone, edgeHostRegex)
-          : undefined,
-        probe,
-        images,
-        secrets: new KubernetesStatePasswords(
-          lane.secretsNamespace,
-          lane.environment
-        ),
-        runtime: {
-          secrets: new EsoNodeRuntimeSecrets({
-            namespace: lane.secretsNamespace,
-          }),
-          catalog,
-          substrateHost: lane.substrateHost,
-        },
-        ...(chain ? { chain } : {}),
-        clock: {
-          now: () => Date.now(),
-          sleep: (ms) =>
-            new Promise<void>((resolve) => setTimeout(resolve, ms)),
-        },
-        log,
-        config: {
-          ...DEFAULT_SEQUENCER_CONFIG,
-          namespace,
-          environment: lane.environment,
-          ...(appProviders.length > 0 ? { appProviders } : {}),
-          retainMs: num(
-            runtimeEnv.NODE_DEPLOY_RETAIN_MS,
-            DEFAULT_SEQUENCER_CONFIG.retainMs,
-            0
-          ),
-        },
-      }),
-    };
-  })
-);
+const laneSequencers = composed.lanes;
 
 /** A failure that repeats every pass is logged once per 10 minutes per (loop, env, message). */
 const loopErrorAt = new Map<string, number>();

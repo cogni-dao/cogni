@@ -34,11 +34,7 @@ import { NextResponse } from "next/server";
 import { isNodeOnDeployVerb } from "@/features/compute/node-compute-api";
 import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
-import {
-  isFleetOwnedRow,
-  resolveWorkloadZoneBinding,
-  WorkloadZoneConfigError,
-} from "@/shared/node-registry/fleet-ownership";
+import { isFleetOwnedRow } from "@/shared/node-registry/fleet-ownership";
 import {
   controlEnvFor,
   providerForEnv,
@@ -105,6 +101,8 @@ export interface LaneConfig {
 /**
  * CD4 (a)+(b) as a RESULT, shared by every caller of the release writer (the verb route and the merge
  * webhook): refuse a lane this deployment does not serve or a node this fleet does not own.
+ * Existing release reads need only these scope checks. New zone admission belongs to the release
+ * writer and sequencer, so a broken DNS configuration cannot hide paid-effect evidence.
  * `reason` is the stable machine name. 503 when the deployment has no served env at all.
  */
 export function laneRefusal(
@@ -124,17 +122,6 @@ export function laneRefusal(
   });
   if (served.length === 0)
     return refuse(503, { error: "deploy_environment_not_configured" });
-  let binding: ReturnType<typeof resolveWorkloadZoneBinding>;
-  try {
-    binding = resolveWorkloadZoneBinding({
-      fleetOwner: config.NODE_SUBMODULE_PARENT_OWNER,
-      zoneName: config.NODE_DEPLOY_WORKLOAD_ZONE,
-    });
-  } catch (error) {
-    if (error instanceof WorkloadZoneConfigError)
-      return refuse(503, { error: error.code });
-    throw error;
-  }
   if (nodeId === getNodeId()) {
     // OPERATOR_CANARY_UNCHANGED: only its own env.
     if (env !== config.DEPLOY_ENVIRONMENT)
@@ -146,7 +133,7 @@ export function laneRefusal(
   }
   if (!served.includes(env))
     return refuse(409, { error: "env_not_served", served });
-  if (!isFleetOwnedRow(catalogRow, binding.fleetOwner))
+  if (!isFleetOwnedRow(catalogRow, config.NODE_SUBMODULE_PARENT_OWNER))
     return refuse(409, { error: "node_not_in_fleet" });
   const fleetControlEnv = config.FLEET_CONTROL_ENV?.trim() || "production";
   const controlEnv = laneControlEnv(catalogRow, env, fleetControlEnv);

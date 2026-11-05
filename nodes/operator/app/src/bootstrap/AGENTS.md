@@ -82,7 +82,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
 - `http/` - Route wrappers and rate limiting
 - `jobs/` - Job modules (advisory lock + container wiring for CLI-invoked tasks)
 
-- Node-deploy composition requires an explicit `NODE_DEPLOY_WORKLOAD_ZONE` and fleet owner; all lanes share one validated binding and the existing projected Cloudflare credential references.
+- `composeNodeDeployLanes` (`node-deploy-lanes.ts`) wires the same recovery lanes with one explicit workload-zone binding. Missing/invalid zone or owner refuses fresh HTTP/DNS effects without stopping paid observation, cleanup or state reconciliation. Native clients, leadership and process lifecycle stay in `node-deploy-sequencer.ts`.
 
 ## Responsibilities
 

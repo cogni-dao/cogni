@@ -41,6 +41,24 @@ const dbState = vi.hoisted(() => ({
 }));
 const envState = vi.hoisted(() => ({
   DEPLOY_ENVIRONMENT: "production" as string | undefined,
+  NODE_DEPLOY_ENVS: undefined as string | undefined,
+  NODE_SUBMODULE_PARENT_OWNER: "cogni-dao",
+  NODE_DEPLOY_WORKLOAD_ZONE: undefined as string | undefined,
+  FLEET_CONTROL_ENV: "production",
+}));
+const catalogState = vi.hoisted(() => ({
+  sourceRepo: "https://github.com/cogni-dao/owned",
+}));
+vi.mock("@/bootstrap/capabilities/node-catalog", () => ({
+  createNodeCatalog: () => ({
+    entryFor: async () => ({
+      slug: "owned",
+      row: {
+        source_repo: catalogState.sourceRepo,
+        compute_api: { preview: "node-deploy", production: "node-deploy" },
+      },
+    }),
+  }),
 }));
 const mockGetSessionUser = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({
@@ -189,6 +207,9 @@ describe("GET /api/v1/deploy/workloads/releases/{releaseId}", () => {
     authz.check.mockResolvedValue({ decision: "allow", code: "authz_allowed" });
     mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
     envState.DEPLOY_ENVIRONMENT = "production";
+    envState.NODE_DEPLOY_ENVS = undefined;
+    envState.NODE_DEPLOY_WORKLOAD_ZONE = undefined;
+    catalogState.sourceRepo = "https://github.com/cogni-dao/owned";
     store.getRelease.mockResolvedValue(release);
     store.getDesired.mockResolvedValue({ state: "running", releaseId: R1 });
     store.attemptsFor.mockResolvedValue(parkedAttempts);
@@ -278,6 +299,9 @@ describe("GET /api/v1/deploy/workloads (release state, additive)", () => {
     authz.check.mockResolvedValue({ decision: "allow", code: "authz_allowed" });
     mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
     envState.DEPLOY_ENVIRONMENT = "production";
+    envState.NODE_DEPLOY_ENVS = undefined;
+    envState.NODE_DEPLOY_WORKLOAD_ZONE = undefined;
+    catalogState.sourceRepo = "https://github.com/cogni-dao/owned";
   });
 
   it("exposes releaseState + parkedReason on desired and steps on every attempt, schema-valid", async () => {
@@ -308,5 +332,84 @@ describe("GET /api/v1/deploy/workloads (release state, additive)", () => {
     expect(w?.desired.parkedReason).toMatch(/^3 consecutive failed attempts/);
     expect(w?.active).toBeNull();
     expect(w?.recentAttempts[0]?.steps).toHaveLength(1);
+  });
+});
+
+describe("existing remote release reads during DNS admission failure", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    dbState.node = { id: OTHER_NODE, slug: "owned" };
+    dbState.billing = { id: "billing-1" };
+    dbState.call = 0;
+    authz.present = true;
+    authz.check.mockResolvedValue({ decision: "allow", code: "authz_allowed" });
+    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
+    envState.DEPLOY_ENVIRONMENT = "production";
+    envState.NODE_DEPLOY_ENVS = "candidate-a,preview,production";
+    catalogState.sourceRepo = "https://github.com/cogni-dao/owned";
+  });
+  it.each([
+    undefined,
+    "https://invalid/zone",
+  ])("reads owned list/detail with %s zone and keeps denials", async (zone) => {
+    envState.NODE_DEPLOY_WORKLOAD_ZONE = zone;
+    const ownedRelease = { ...release, nodeId: OTHER_NODE, env: "preview" };
+    const desired = {
+      nodeId: OTHER_NODE,
+      env: "preview",
+      workload: "canary",
+      state: "running",
+      releaseId: R1,
+      updatedAt: T0,
+    };
+    store.getRelease.mockResolvedValue(ownedRelease);
+    store.getDesired.mockResolvedValue(desired);
+    store.listDesired.mockResolvedValue([
+      desired,
+      { ...desired, nodeId: NODE_ID },
+    ]);
+    store.attemptsFor.mockResolvedValue(parkedAttempts);
+    const query = `?nodeId=${OTHER_NODE}&env=preview`;
+    const read = async (detail: boolean, q = query) => {
+      dbState.call = 0;
+      return detail ? getRelease(R1, q) : getList(q);
+    };
+    expect(
+      DeployWorkloadsReadSchema.parse(await (await read(false)).json())
+        .workloads
+    ).toHaveLength(1);
+    expect(
+      DeployReleaseDetailSchema.parse(await (await read(true)).json()).release
+        .releaseId
+    ).toBe(R1);
+    for (const detail of [false, true]) {
+      store.getRelease.mockClear();
+      store.listDesired.mockClear();
+      authz.check.mockResolvedValue({ decision: "deny", code: "authz_denied" });
+      expect(
+        (await read(detail, `?nodeId=${OTHER_NODE}&env=production`)).status
+      ).toBe(403);
+      expect(authz.check).toHaveBeenLastCalledWith(
+        expect.objectContaining({ action: "node.promote_production" })
+      );
+      expect(store.getRelease).not.toHaveBeenCalled();
+      expect(store.listDesired).not.toHaveBeenCalled();
+      authz.check.mockResolvedValue({
+        decision: "allow",
+        code: "authz_allowed",
+      });
+      catalogState.sourceRepo = "https://github.com/foreign/owned";
+      expect((await read(detail)).status).toBe(409);
+      expect(store.getRelease).not.toHaveBeenCalled();
+      expect(store.listDesired).not.toHaveBeenCalled();
+      catalogState.sourceRepo = "https://github.com/cogni-dao/owned";
+      envState.NODE_DEPLOY_ENVS = "production";
+      expect((await read(detail)).status).toBe(409);
+      envState.NODE_DEPLOY_ENVS = "candidate-a,preview,production";
+    }
+    store.getRelease.mockResolvedValue({ ...ownedRelease, nodeId: NODE_ID });
+    expect((await read(true)).status).toBe(404);
+    store.getRelease.mockResolvedValue({ ...ownedRelease, env: "production" });
+    expect((await read(true)).status).toBe(404);
   });
 });

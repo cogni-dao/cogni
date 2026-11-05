@@ -276,11 +276,13 @@ patches:
                       configMapKeyRef:
                         name: node-app-config
                         key: NODE_SUBMODULE_PARENT_OWNER
+                        optional: true
                   - name: NODE_DEPLOY_WORKLOAD_ZONE
                     valueFrom:
                       configMapKeyRef:
                         name: node-app-config
                         key: NODE_DEPLOY_WORKLOAD_ZONE
+                        optional: true
   - target:
       kind: ConfigMap
       name: node-app-config

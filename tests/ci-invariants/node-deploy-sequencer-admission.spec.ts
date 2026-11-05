@@ -50,7 +50,13 @@ interface DeploymentPatch {
           env: {
             name: string;
             value?: string;
-            valueFrom?: { configMapKeyRef: { name: string; key: string } };
+            valueFrom?: {
+              configMapKeyRef: {
+                name: string;
+                key: string;
+                optional?: boolean;
+              };
+            };
           }[];
         }[];
       };
@@ -370,6 +376,30 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
       // a `namespace:` transformer would rename every Namespace to one name (kustomize ID conflict)
       expect(kust.namespace).toBeUndefined();
       expect(kust.namePrefix).toBeUndefined();
+    });
+
+    it.each([
+      "candidate-a",
+      "production",
+    ])("missing new plain config cannot stop %s paid recovery before process startup", (env) => {
+      const overlay = yaml.parse(
+        read(`infra/k8s/overlays/${env}/operator/kustomization.yaml`)
+      ) as Kustomization;
+      const patch = overlay.patches?.find(
+        (p) =>
+          p.target?.kind === "Deployment" &&
+          p.target.name === "node-deploy-sequencer"
+      );
+      const deployment = yaml.parse(patch?.patch ?? "") as DeploymentPatch;
+      const entries = deployment.spec.template.spec.containers[0]?.env ?? [];
+      for (const name of [
+        "NODE_DEPLOY_FLEET_OWNER",
+        "NODE_DEPLOY_WORKLOAD_ZONE",
+      ]) {
+        const entry = entries.find((e) => e.name === name);
+        expect(entry?.valueFrom?.configMapKeyRef.optional).toBe(true);
+        expect(entry?.valueFrom?.configMapKeyRef.name).toBe("node-app-config");
+      }
     });
 
     it("the sequencer is told its fleet org, so it never claims another fleet's nodes", () => {

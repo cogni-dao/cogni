@@ -80,7 +80,12 @@ import {
   hostOwnedBy,
   workerHostRefusal,
 } from "./edge";
-import { nodeAppEnv, nodeAppSecretKeys, workerEnv } from "./node-app-env";
+import {
+  nodeAppEnv,
+  nodeAppSecretKeys,
+  releaseIdentityEnv,
+  workerEnv,
+} from "./node-app-env";
 import { nodeCatalogPolicy } from "./node-catalog-policy";
 import {
   checkQualification,
@@ -180,6 +185,8 @@ export interface SequencerDeps {
   readonly payer: PayerPort;
   /** Undefined when no edge credentials are configured: http apps are then refused BEFORE paying. */
   readonly edge: EdgeRouter | undefined;
+  /** Invalid fresh DNS authority does not revoke paid-effect recovery ownership. */
+  readonly httpAdmissionRefusal?: "workload_zone_not_configured";
   readonly probe: ProbePort;
   readonly secrets: SecretsPort;
   readonly runtime?: NodeAppRuntimeDeps;
@@ -745,7 +752,7 @@ export class NodeDeploySequencer {
         nodeApp = node.nodeApp;
         companionEnvs = node.companionEnvs ?? {};
       }
-      env.RELEASE_SHA = release.sourceSha;
+      Object.assign(env, releaseIdentityEnv(release.sourceSha));
     }
     if (w.kind === "state") {
       env.POSTGRES_PASSWORD = await this.d.secrets.ensureStatePassword(key);
@@ -943,7 +950,8 @@ export class NodeDeploySequencer {
     const host = publicHostOf(w);
     if (!host) return;
     const edge = this.d.edge;
-    if (!edge) throw new Error("edge_not_configured");
+    if (!edge)
+      throw new Error(this.d.httpAdmissionRefusal ?? "edge_not_configured");
     try {
       edge.assertHost(host);
       if (this.d.runtime) {

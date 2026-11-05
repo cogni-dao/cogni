@@ -175,16 +175,23 @@ describe("envNotServed: the served env set and the fleet (CD4 a, b)", () => {
 describe("the test operator never serves canonical nodes (CD4 b)", () => {
   beforeEach(testOperator);
 
-  it("missing test-zone config cannot fall back to the canonical zone", async () => {
-    env.NODE_DEPLOY_WORKLOAD_ZONE = undefined;
-    const res = envNotServed("candidate-a", TOKS5_ID, {
+  it.each([
+    undefined,
+    "https://invalid/zone",
+  ])("keeps scoped reads independent of new DNS admission (%s)", async (zone) => {
+    env.NODE_DEPLOY_WORKLOAD_ZONE = zone;
+    const own = {
       ...AKASH_NODE,
       source_repo: "https://github.com/cogni-test-org/own",
-    });
-    expect(res?.status).toBe(503);
-    expect(await bodyOf(res)).toEqual({
-      error: "workload_zone_not_configured",
-    });
+    };
+    expect(envNotServed("candidate-a", TOKS5_ID, own)).toBeUndefined();
+    expect(
+      envNotServed("candidate-a", OPERATOR_ID, OPERATOR_ROW)
+    ).toBeUndefined();
+    expect(
+      await bodyOf(envNotServed("candidate-a", TOKS5_ID, AKASH_NODE))
+    ).toEqual({ error: "node_not_in_fleet" });
+    expect(envNotServed("production", TOKS5_ID, own)?.status).toBe(409);
   });
 
   it("refuses canonical toks5 in candidate-a: it is another fleet's node, though its catalog is baked into the test image", async () => {

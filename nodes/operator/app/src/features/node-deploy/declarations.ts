@@ -55,6 +55,7 @@ import type { NodeWorkloadSpec } from "@/ports";
 import type { WorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
 import { hostForEnv, hostOwnedBy } from "./edge";
+import { runtimeOwnedEnvKeys } from "./node-app-env";
 
 const APP_PROFILE_KEYS: ReadonlySet<string> = new Set(
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS
@@ -227,6 +228,10 @@ export function resolveWorkloadDeclaration(input: {
         service.name === main.name
           ? appSecretKeys(spec)
           : workerSecretKeys(spec, service.name);
+      const runtimeKeys = runtimeOwnedEnvKeys(
+        service.name === main.name ? "app" : "worker",
+        secretKeys
+      );
       for (const [key, target] of Object.entries(service.bindings)) {
         const sibling = services.find((s) => s.name === target);
         const consumer =
@@ -239,6 +244,7 @@ export function resolveWorkloadDeclaration(input: {
           target === service.name ||
           !consumer ||
           key in consumer.env ||
+          runtimeKeys.has(key) ||
           secretKeys.includes(key) ||
           (service.name === main.name &&
             workload.bindings.some((b) => b.env === key))

@@ -36,7 +36,7 @@ import { selectReleaseBundle } from "./artifact-selection";
 import { DeclarationError, resolveWorkloadDeclaration } from "./declarations";
 
 import { EdgeRouter, edgeHostRegexFor } from "./edge";
-import { nodeAppEnv } from "./node-app-env";
+import { nodeAppEnv, workerEnv } from "./node-app-env";
 import {
   buildReleaseDetail,
   buildWorkloadView,
@@ -47,6 +47,7 @@ import {
   NodeDeploySequencer,
   type SequencerConfig,
 } from "./sequencer";
+import { toPayerSpec } from "./spec";
 import {
   canaryApp,
   canaryDb,
@@ -1401,6 +1402,131 @@ describe("same-source Score/declaration bridge", () => {
     else if (authority === "service") app.secret_refs = [{ key: "HELPER_URL" }];
     else app.bindings = { AUTH_SECRET: "helper" };
     expect(() => d.resolve(env)).toThrow(DeclarationError);
+  });
+  it.each([
+    "preview",
+    "production",
+  ])("refuses injected binding destinations before recording in %s", async (env) => {
+    for (const consumer of ["public", "private"] as const) {
+      const keys =
+        consumer === "public"
+          ? [
+              "PORT",
+              "DEPLOY_ENVIRONMENT",
+              "COGNI_REPO_SHA",
+              "RELEASE_SHA",
+              "LITELLM_BASE_URL",
+              "LITELLM_MASTER_KEY",
+              "DATABASE_MIGRATION_URL",
+              "LOKI_PUSH_SOURCE",
+            ]
+          : ["HOST", "PORT", "DEPLOY_ENVIRONMENT", "COGNI_REPO_SHA"];
+      for (const key of keys) {
+        const d = declarationInput();
+        const services = requiredFixture(d.spec.deployment).services;
+        if (consumer === "private") {
+          services.push(
+            nodeServiceSpecSchema.parse({
+              name: "helper-b",
+              artifact: { name: "helper-b" },
+              port: 8282,
+              visibility: "private",
+              envs: ["preview"],
+              resources: { cpu_units: 0.25, memory_mi: 256, storage_mi: 256 },
+            })
+          );
+          Object.assign(d.manifest.containers, {
+            "helper-b": {
+              ...d.manifest.containers.helper,
+              readinessProbe: { httpGet: { path: "/readyz", port: 8282 } },
+            },
+          });
+        }
+        requiredFixture(services[consumer === "public" ? 0 : 1]).bindings = {
+          [key]: consumer === "public" ? "helper" : "helper-b",
+        };
+        const h = harness({ environment: env });
+        await expect(
+          (async () =>
+            h.store.recordRelease({
+              nodeId: POLY_ID,
+              env,
+              workload: "canary",
+              sourceSha: SHA_1,
+              // Resolve the entire declaration before the existing store/payer boundary.
+              spec: d.resolve(env),
+              createdBy: "test",
+            }))()
+        ).rejects.toThrow(DeclarationError);
+        expect(h.store.releases.size, `${consumer}.${key}`).toBe(0);
+        expect(h.payer.createRequests, `${consumer}.${key}`).toHaveLength(0);
+      }
+    }
+  });
+
+  it("preserves allowed sibling URLs through app and private runtime payer assembly", () => {
+    const d = declarationInput();
+    const services = requiredFixture(d.spec.deployment).services;
+    services.push(
+      nodeServiceSpecSchema.parse({
+        name: "helper-b",
+        artifact: { name: "helper-b" },
+        port: 8282,
+        visibility: "private",
+        envs: ["preview"],
+        resources: { cpu_units: 0.25, memory_mi: 256, storage_mi: 256 },
+      })
+    );
+    Object.assign(d.manifest.containers, {
+      "helper-b": {
+        ...d.manifest.containers.helper,
+        readinessProbe: { httpGet: { path: "/readyz", port: 8282 } },
+      },
+    });
+    // LITELLM_BASE_URL is app-owned, but a private worker has no substrate injection.
+    requiredFixture(services[1]).bindings = { LITELLM_BASE_URL: "helper-b" };
+    const w = d.resolve();
+    const bucket = {
+      ...PROFILE_BUCKET,
+      DATABASE_MIGRATION_URL: "migration-dsn",
+      HELPER_ACCESS: "helper-only",
+    };
+    const payerSpec = toPayerSpec(
+      w,
+      nodeAppEnv({
+        env: "preview",
+        slug: "poly",
+        nodeId: POLY_ID,
+        sourceSha: SHA_1,
+        publicHost: "poly-preview.cognidao.org",
+        port: w.port,
+        substrateHost: SUBSTRATE,
+        secretKeys: w.secretKeys,
+        secrets: bucket,
+      }),
+      {
+        nodeApp: true,
+        companionEnvs: Object.fromEntries(
+          (w.companions ?? []).map((c) => [
+            c.name,
+            workerEnv({
+              env: "preview",
+              sourceSha: SHA_1,
+              port: c.port,
+              secretKeys: c.secretKeys ?? [],
+              secrets: bucket,
+            }),
+          ])
+        ),
+      }
+    );
+    expect(payerSpec.services[0]?.env?.HELPER_URL).toBe("http://helper:8181");
+    expect(payerSpec.services[0]?.env?.LITELLM_BASE_URL).toBe(
+      `http://${SUBSTRATE}:4000`
+    );
+    expect(
+      payerSpec.services.find((c) => c.name === "helper")?.env?.LITELLM_BASE_URL
+    ).toBe("http://helper-b:8282");
   });
   it("concurrent environments cannot seal different bundles for the same source", async () => {
     const h = harness();
