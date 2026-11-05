@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 /**
  * Module: `@scripts/lib/print-secret-inheritance`
  * Purpose: Emit catalog-owned inherited secret references for one lane/custodian.
- * Scope: Names only. No secret reads, writes, endpoint selection or fallback.
+ * Scope: Catalog reference resolution. Does NOT read secret values, write runtime state, or select endpoints.
  * Invariants: the typed catalog resolver is the sole inherited-owner selector.
- * Side-effects: reads catalog files; writes nonsecret JSON to stdout.
+ * Side-effects: IO (reads catalog files; writes nonsecret JSON to stdout).
  * Links: https://cognidao.org/work/items/bug.5571
  */
 import {

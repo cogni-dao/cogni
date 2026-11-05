@@ -443,9 +443,11 @@ if [[ "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" == inherited-key ]]; then
   printf '%s' "$value" > "$CACHE_DIR/inherited-value"
   # No transport retry for a mutation. A lost response is reconciled below.
   write_rc=0
-  jq -n --arg key "$key" --rawfile value "$CACHE_DIR/inherited-value" '{($key):$value}' \
+  { printf '%s\n' "$BAO_TOKEN"
+    jq -n --arg key "$key" --rawfile value "$CACHE_DIR/inherited-value" '{($key):$value}'
+  } \
     | "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" \
-      "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao kv patch -format=json -method=patch -cas=${version} 'cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}' -" \
+      "kubectl exec -i -n openbao openbao-0 -- sh -c 'IFS= read -r BAO_TOKEN || exit 1; export BAO_TOKEN; export BAO_ADDR=http://127.0.0.1:8200; exec bao kv patch -format=json -method=patch -cas=${version} cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE} -'" \
       > "$CACHE_DIR/inherited-write-receipt" 2>/dev/null || write_rc=$?
   after="$(cogni_openbao_read_path "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")" \
     || fail "inherited-key write outcome unknown; reconcile before retry"

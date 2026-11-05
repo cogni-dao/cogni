@@ -123,6 +123,9 @@ if [ "${1:-}" = "exec" ]; then
     if [[ "$*" == *'-cas='* ]]; then
       if [[ "$*" == *"cogni/candidate-a/node-template' -"* || "$*" == *'cogni/candidate-a/node-template -'* ]]; then
         [[ "$*" == *'-cas=7 '* && "$*" == *'-method=patch '* ]] || exit 9
+        [[ "$*" != *writer-token* && "$*" == *'sh -c IFS= read -r BAO_TOKEN'* ]] || exit 9
+        IFS= read -r stdin_token
+        [[ "$stdin_token" == writer-token ]] || exit 9
         patch_body="$(cat)"
         jq -e 'keys == ["SCHEDULER_API_TOKEN"]' <<<"$patch_body" >/dev/null || exit 9
         jq -jr .SCHEDULER_API_TOKEN <<<"$patch_body" > "${FAKE_BAO_ROOT}/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
@@ -976,6 +979,22 @@ PY
 
 # bug.5571: custody may be production while the runtime sender belongs to the
 # candidate lane. Distinct fixtures make accidental control fallback observable.
+REAL_PYTHON="$(command -v python3)"
+cat > "$FAKEBIN/getent" <<'EOF'
+#!/usr/bin/env bash
+[[ "$*" == 'ahostsv4 cogni-candidate-a.vm.cognidao.org' ]] || exit 1
+printf '10.0.0.2 STREAM fixture\n'
+EOF
+cat > "$FAKEBIN/dig" <<'EOF'
+#!/usr/bin/env bash
+exit 1 # No ambient DNS in this fixture.
+EOF
+cat > "$FAKEBIN/python3" <<'EOF'
+#!/usr/bin/env bash
+[[ "$*" != *socket.getaddrinfo* ]] || exit 1
+exec "$REAL_PYTHON" "$@"
+EOF
+chmod +x "$FAKEBIN/getent" "$FAKEBIN/dig" "$FAKEBIN/python3"
 mkdir -p "$BAO_ROOT/cogni/production/operator"
 cp "$BAO_ROOT/cogni/candidate-a/operator/"* "$BAO_ROOT/cogni/production/operator/"
 printf '%s' control-scheduler-fixture > "$BAO_ROOT/cogni/production/operator/SCHEDULER_API_TOKEN"
@@ -983,7 +1002,8 @@ printf '%s' control-billing-fixture > "$BAO_ROOT/cogni/production/operator/BILLI
 printf '%s' control-scheduler-fixture > "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
 auth_before="$(cat "$BAO_ROOT/cogni/candidate-a/node-template/AUTH_SECRET")"
 run_foreign_inheritance() {
-  env VM_HOST=fake DOMAIN=test.cognidao.org FORK_DOMAIN_ROOT=cognidao.org \
+  env PATH="$FAKEBIN:$PATH" REAL_PYTHON="$REAL_PYTHON" REAL_PNPM="$REAL_PNPM" \
+    VM_HOST=fake DOMAIN=test.cognidao.org FORK_DOMAIN_ROOT=cognidao.org \
     SECRETS_CONTROL_ENV=production FAKE_EXPECTED_WRITER_ROLE=production-writer \
     SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
     SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" FAKE_REMOTE_PATH="$FAKEBIN" \
