@@ -108,6 +108,39 @@ async function deployApp(h: H, sha: string) {
   return h.seq.step(APP);
 }
 
+/**
+ * story.5137: a past release of `workload` whose one attempt bound a lease on `provider` and was struck.
+ * The desired release is left exactly as it was.
+ */
+async function pastStrike(
+  h: H,
+  provider: string,
+  error = "proof_timeout: version 503",
+  workload = "canary"
+) {
+  const desired = new Map(h.store.desired);
+  const { release } = await h.store.recordRelease({
+    nodeId: NODE_ID,
+    env: ENV,
+    workload,
+    sourceSha: SHA_2,
+    spec: canaryApp(),
+    createdBy: "test",
+  });
+  h.store.desired.clear();
+  for (const [k, v] of desired) h.store.desired.set(k, v);
+  const a = await h.store.insertAttempt(
+    release.id,
+    (n) => `past:${release.id}:${n}`
+  );
+  await h.store.updateAttempt(a.id, {
+    phase: "failed",
+    externalName: `past-${a.id}`,
+    provider,
+    error,
+  });
+}
+
 describe("state workload", () => {
   it("creates the state lease once, proves tls, goes active, mints its password once", async () => {
     const h = harness();
@@ -486,33 +519,6 @@ describe("provider exclusion and alert hygiene", () => {
   });
 
   describe("story.5137: LANE_MEMORY remembers providers struck twice in 24h", () => {
-    /** A past release of `workload` whose one attempt bound a lease on `provider` and was struck. */
-    async function pastStrike(
-      h: H,
-      provider: string,
-      error = "proof_timeout: version 503",
-      workload = "canary"
-    ) {
-      const { release } = await h.store.recordRelease({
-        nodeId: NODE_ID,
-        env: ENV,
-        workload,
-        sourceSha: SHA_2,
-        spec: canaryApp(),
-        createdBy: "test",
-      });
-      const a = await h.store.insertAttempt(
-        release.id,
-        (n) => `past:${release.id}:${n}`
-      );
-      await h.store.updateAttempt(a.id, {
-        phase: "failed",
-        externalName: `past-${a.id}`,
-        provider,
-        error,
-      });
-    }
-
     /** blue on provider-2 (state on provider-1); then `strikes`; then a new release's first create. */
     async function newReleaseAfter(h: H, strikes: () => Promise<void>) {
       await stateUp(h);
@@ -605,6 +611,44 @@ describe("provider exclusion and alert hygiene", () => {
       expect(exclude).toHaveLength(16);
       expect(exclude.slice(0, 2)).toEqual(["provider-2", "provider-1"]);
       expect(line?.fields.remembered).toHaveLength(14);
+    });
+
+    it("NO LOCKOUT: a provider that served the lane in 24h is never remembered (retired, and lost with no blue)", async () => {
+      const h = harness();
+      await stateUp(h); // provider-1
+      await deployApp(h, SHA_1); // provider-2
+      await deployApp(h, SHA_2); // provider-3 active, provider-2 retired
+      await pastStrike(h, "provider-2");
+      await pastStrike(h, "provider-2");
+      await pastStrike(h, "provider-3");
+      await pastStrike(h, "provider-3");
+      const blue = (await h.store.attemptsFor(APP)).find(
+        (a) => a.phase === "active"
+      );
+      expect(blue?.provider).toBe("provider-3");
+      await h.store.updateAttempt(blue?.id ?? "", { phase: "lost" }); // no blue now
+      const before = h.payer.createRequests.length;
+      await deployApp(h, SHA_3);
+      const exclude = h.payer.createRequests[before]?.excludeProviders ?? [];
+      expect(exclude).not.toContain("provider-2");
+      expect(exclude).not.toContain("provider-3");
+      expect(exclude).toEqual(["provider-1"]); // HAIRPIN state only
+    });
+
+    it("NO LOCKOUT: memory never excludes the last admitted provider (appProviders)", async () => {
+      const h = harness({ appProviders: ["provider-x", "provider-y"] });
+      const { exclude, line } = await newReleaseAfter(h, async () => {
+        for (const p of ["provider-x", "provider-y"]) {
+          await pastStrike(h, p);
+          await pastStrike(h, p);
+        }
+      });
+      // both admitted providers struck twice: memory takes one, the last one stays open
+      const admitted = exclude.filter(
+        (p) => p === "provider-x" || p === "provider-y"
+      );
+      expect(admitted).toHaveLength(1);
+      expect(line?.fields.remembered).toEqual(admitted);
     });
   });
 
@@ -1678,6 +1722,67 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
     );
     expect(h.log.alerts()).not.toContain("release_parked");
     expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("closed");
+  });
+
+  it("story.5137 LAST_RESORT_STOP still fires when the refused create also excluded lane-memory providers", async () => {
+    const h = harness({ maxFailedAttempts: 2 });
+    const blue = await failedTryOnP(h, "provider-1"); // attempt 1 failed proof on P
+    await pastStrike(h, "provider-m");
+    await pastStrike(h, "provider-m");
+    expect(await h.seq.step(APP)).toBe("driven"); // attempt 2 refused: blue, P and memory excluded
+    const refused = (await h.store.attemptsFor(APP))[0];
+    expect(refused?.error).toMatch(/^create refused: provider_rejected/);
+    expect(
+      refused?.steps.find((st) => st.step === "providers_excluded")?.reason
+    ).toBe("provider-1,provider-2,provider-m (memory: provider-m)");
+    await h.seq.step(APP);
+    expect(h.log.steps()).toEqual(
+      expect.arrayContaining(["stop_then_start:closing_blue"])
+    );
+    expect(h.log.alerts()).not.toContain("release_parked");
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("closed");
+  });
+
+  it("story.5137: the refused create's own exclusion record wins over a recompute where a memory strike aged out", async () => {
+    const h = harness();
+    singleProvider(h);
+    const blue = await blueUp(h);
+    await pastStrike(h, "provider-m");
+    await pastStrike(h, "provider-m");
+    h.payer.createFault = (_n, req) =>
+      req.excludeProviders?.includes(ONLY)
+        ? new PayerError(
+            "provider_rejected",
+            refusal(
+              "not_allowlisted=9, already_tried=2",
+              `provider-m US 1.00 already_tried, provider-9 DE 1.00 not_allowlisted`
+            ),
+            false
+          )
+        : undefined;
+    await h.release(noState(), SHA_2);
+    expect(await h.seq.step(APP)).toBe("driven"); // refused: ONLY and memory provider-m excluded
+    h.clock.advance(25 * 60 * 60_000); // the memory strikes age out: a recompute now sees only blue
+    await h.seq.step(APP);
+    expect(
+      h.log.steps().some((st) => st.startsWith("stop_then_start:closing"))
+    ).toBe(false);
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("active");
+  });
+
+  it("story.5137 (d): after a stop retires blue, memory still never excludes blue's provider", async () => {
+    const h = harness();
+    singleProvider(h);
+    const blue = await blueUp(h);
+    await pastStrike(h, ONLY);
+    await pastStrike(h, ONLY);
+    await h.release(noState(), SHA_2);
+    expect(await h.seq.step(APP)).toBe("driven"); // refused: blue's provider excluded (HAIRPIN)
+    expect(await h.seq.step(APP)).toBe("driven"); // stop-then-start, then create with no blue
+    const rows = await h.store.attemptsFor(APP);
+    expect(rows.find((a) => a.id === blue?.id)?.phase).toBe("retired");
+    expect(rows.find((a) => a.phase === "active")?.provider).toBe(ONLY);
+    expect(h.payer.createRequests.at(-1)?.excludeProviders).toBeUndefined();
   });
 
   it("task.5409 LAST_RESORT_STOP: at the park limit with blue's provider no longer admitted, the release parks and nothing is created", async () => {

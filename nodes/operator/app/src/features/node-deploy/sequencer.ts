@@ -63,6 +63,7 @@ import type {
 } from "@/ports";
 import {
   type AttemptPatch,
+  type AttemptPhase,
   type AttemptRow,
   type AttemptStep,
   BuiltImageRegistryError,
@@ -228,6 +229,13 @@ const STRIKE_MEMORY_MS = 24 * 60 * 60_000;
 const STRIKE_MEMORY_MIN = 2;
 /** LANE_MEMORY: the struck-after-bind failures (`strike` + `failAttempt` write this error prefix). */
 const STRIKE_MEMORY_ERROR = /^(proof_timeout|host_not_routed):/;
+/** LANE_MEMORY: phases of an attempt that served the lane. Memory never names such a provider (no lockout). */
+const SERVED_PHASES: readonly AttemptPhase[] = [
+  "active",
+  "retiring",
+  "retired",
+  "lost",
+];
 /** The actuator wire accepts at most 16 `allowProviders`. */
 const MAX_ALLOWED_PROVIDERS = 16;
 
@@ -434,12 +442,19 @@ export class NodeDeploySequencer {
     // bind tries (bug.5569). Only when that is empty was `already_tried>=1` blue's; otherwise the roster must
     // name blue itself, so a failed try's provider can never close blue.
     const others = await this.excludedProviders(key, release, undefined, true);
+    // LANE_MEMORY (story.5137) depends on the clock, so a recompute can differ from what the refused create
+    // actually excluded (a strike aged out of the 24h window). The refused attempt's own `providers_excluded`
+    // step is that record: when it names anything besides blue, the shortcut is off. A missing step (the
+    // timeline is best-effort) only falls back to the recompute; the record can make the check stricter,
+    // never looser.
+    const refusedExcluded = [...newest.steps]
+      .reverse()
+      .find((s) => s.step === "providers_excluded")?.reason;
+    const onlyBlueExcluded =
+      others.length === 0 &&
+      (refusedExcluded === undefined || refusedExcluded === blue.provider);
     if (
-      !blueWasOnlyScreenedBidder(
-        newest.error,
-        blue.provider,
-        others.length === 0
-      )
+      !blueWasOnlyScreenedBidder(newest.error, blue.provider, onlyBlueExcluded)
     )
       return "none";
     // Only an app blue is ever stopped.
@@ -823,7 +838,11 @@ export class NodeDeploySequencer {
       ...new Set(providers.filter((p): p is string => Boolean(p))),
     ].slice(0, MAX_EXCLUDED_PROVIDERS);
     if (!withFailedTries) return { providers: base, remembered: [] };
-    const remembered = this.rememberedStrikes(lane, base).slice(
+    const admitted =
+      w.kind === "app"
+        ? (this.d.config.appProviders ?? []).slice(0, MAX_ALLOWED_PROVIDERS)
+        : [];
+    const remembered = this.rememberedStrikes(lane, base, admitted).slice(
       0,
       MAX_EXCLUDED_PROVIDERS - base.length
     );
@@ -836,18 +855,28 @@ export class NodeDeploySequencer {
    * `STRIKE_MEMORY_MS`, across releases, is excluded from a new create. Without it every release re-tries
    * the same dead provider (candidate-a 2026-11-05: one provider burned 10 minutes of proof_timeout on
    * every release). It reads the attempts store: a struck attempt keeps its provider and its error.
-   * NEVER blue's provider: the lane's newest served attempt (active, retiring or retired) is skipped, so
-   * HAIRPIN_RULE and STOP_THEN_START alone decide blue. Entries already excluded are not repeated; the
-   * caller caps the total at the wire's 16. An empty pool is fine: the refusal flows into stop-then-start.
+   * NO LOCKOUT: a `proof_timeout` can be the app's own fault, so memory never names
+   *  - the lane's most recent served provider (newest active, retiring, retired or lost attempt: blue, or
+   *    the blue a stop-then-start just retired), so HAIRPIN_RULE and STOP_THEN_START alone decide blue;
+   *  - any provider that served this lane (same phases) in the window;
+   *  - the last admitted provider (`appProviders`) not already excluded: memory alone never empties an
+   *    admitted pool. With no allowlist the open market is the pool; memory cannot see bids, so that case
+   *    rests on the two rules above.
+   * Entries already excluded are not repeated; the caller caps the total at the wire's 16.
    */
   private rememberedStrikes(
     lane: readonly AttemptRow[],
-    already: readonly string[]
+    already: readonly string[],
+    admitted: readonly string[]
   ): string[] {
-    const blueProvider = lane.find((a) =>
-      ["active", "retiring", "retired"].includes(a.phase)
-    )?.provider;
     const since = this.d.clock.now() - STRIKE_MEMORY_MS;
+    const servedPhase = (a: AttemptRow) => SERVED_PHASES.includes(a.phase);
+    const served = new Set<string>();
+    const newestServed = lane.find(servedPhase)?.provider;
+    if (newestServed) served.add(newestServed);
+    for (const a of lane)
+      if (a.provider && servedPhase(a) && a.updatedAt.getTime() >= since)
+        served.add(a.provider);
     const counts = new Map<string, number>();
     for (const a of lane)
       if (
@@ -856,12 +885,18 @@ export class NodeDeploySequencer {
         STRIKE_MEMORY_ERROR.test(a.error ?? "")
       )
         counts.set(a.provider, (counts.get(a.provider) ?? 0) + 1);
-    return [...counts]
-      .filter(
-        ([p, n]) =>
-          n >= STRIKE_MEMORY_MIN && p !== blueProvider && !already.includes(p)
-      )
-      .map(([p]) => p);
+    const open = new Set(admitted.filter((p) => !already.includes(p)));
+    const out: string[] = [];
+    for (const [p, n] of counts) {
+      if (n < STRIKE_MEMORY_MIN || served.has(p) || already.includes(p))
+        continue;
+      if (open.has(p)) {
+        if (open.size === 1) continue; // the last admitted candidate stays open
+        open.delete(p);
+      }
+      out.push(p);
+    }
+    return out;
   }
 
   private async doCreate(
