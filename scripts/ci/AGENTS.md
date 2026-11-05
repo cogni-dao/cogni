@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-22
+- **Last reviewed:** 2026-11-04
 
 ## Purpose
 
@@ -22,12 +22,15 @@ CI/CD automation scripts and configuration documentation for multiple pipeline s
 ```json
 {
   "layer": "scripts",
-  "may_import": [],
-  "must_not_import": ["*"]
+  "may_import": ["scripts", "packages"],
+  "must_not_import": ["app", "features", "core", "adapters", "shared", "ports"]
 }
 ```
 
 ## Public Surface
+
+- Gateway maintenance (bug.5570): `gateway-activation.ts` uses only the public pure `@cogni/operator-gateway-activation` entrypoint and fixed native host adapters. `prepare` verifies signed immutable intent and workflow transport; `run` inventories writers, enrolls guards and resumes that intent. `bootstrap-candidate` is restricted to the authorized candidate incident experiment. No provider value enters CLI arguments or output. `runtime-source-admission.ts` rejects sources before the protected guard floor. The fixed Python library owns host lock, private journal, version-2 receipt codec/CAS and scoped gateway effects.
+- Gateway runner input keys: `GATEWAY_OPERATION_ID`, `GATEWAY_ENVIRONMENT`, `GATEWAY_IMPLEMENTATION_SHA`, `GATEWAY_TRANSPORT_SHA`, and local bootstrap-only `GATEWAY_CANDIDATE_SSH_KEY`. Native GitHub/VM runner credentials use existing inputs.
 
 - **Exports:** none
 - **CLI (if any):** `build.sh`, `push.sh`, `deploy.sh`, `deploy-infra.sh` (`--recover-installed-runtime` validates the last-good receipt and starts unchanged Postgres/LiteLLM/autoheal without custody access), `bootstrap-openfga.sh`, `test-image.sh`, `promote-k8s-image.sh`, `flight-preview.sh`, `create-release.sh`, `validate-dsns.sh`, `ensure-temporal-namespace.sh`, `compute_migrator_fingerprint.sh`, `check-gitops-manifests.sh`, `check-gitops-service-coverage.sh`, `loki_push.sh`, `fetch_github_job_logs.sh`, `seed-pnpm-store.sh`, `detect-affected.sh`, `classify-env-manager-fast-path.sh`, `render-scope-filters.sh`, `render-akash-tx-actuator-lane-access.sh`, `build-and-push-images.sh`, `write-build-manifest.sh`, `resolve-pr-build-images.sh`, `promote-build-payload.sh`, `aggregate-rollup.sh`, `aggregate-decide-outcome.sh`, `resolve-cell-state.sh`, `report-candidate-status.sh`, `wait-for-candidate-ready.sh`, `smoke-candidate.sh`, `wait-for-argocd.sh`, `wait-for-in-cluster-services.sh`, `verify-buildsha.sh`, `update-source-sha-map.sh`, `provision-grafana-postgres-datasources.sh`, `workflow-check.mjs`, `check-deploy-ref-ancestry.sh`, `detect-sync-drift.mjs`, `sync-test-parent.mjs`, `resolve-test-parent.mjs`

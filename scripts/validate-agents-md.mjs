@@ -134,7 +134,7 @@ const POLICY_ALLOW = {
   assets: ["assets"],
   tests: ["*"],
   e2e: ["*"],
-  scripts: ["scripts", "ports", "shared", "types"],
+  scripts: ["scripts", "ports", "shared", "types", "packages"],
   infra: ["infra"],
   meta: ["meta"],
   packages: ["packages"],

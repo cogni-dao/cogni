@@ -26,6 +26,23 @@ RECEIPT="$TMPROOT/runtime-recovery-receipt.json"
 DOCKER_LOG="$TMPROOT/docker.log"
 mkdir -p "$FAKEBIN" "$RUNTIME_DIR/configs"
 : > "$DOCKER_LOG"
+export FAKE_GUARD_LIB="$TMPROOT/guard-lib"
+mkdir -p "$FAKE_GUARD_LIB"
+cp scripts/ci/lib/runtime-recovery-receipt.py "$FAKE_GUARD_LIB/"
+export FAKE_GUARD_SOURCE="$REPO_ROOT/scripts/ci/lib/runtime-maintenance-guard.py"
+export FAKE_GUARD_ROOT="$TMPROOT/guard"
+cat > "$FAKE_GUARD_LIB/runtime-maintenance-guard.py" <<'PY_GUARD'
+import importlib.util, os, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('guard', os.environ['FAKE_GUARD_SOURCE'])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.ROOT = Path(os.environ['FAKE_GUARD_ROOT'])
+module.OWNER_UID = os.geteuid()
+assert sys.argv[1] == 'exec'
+with module.RuntimeGuard() as guard:
+    guard.exec(sys.argv[2:])
+PY_GUARD
 
 # Exercise the exact classifier embedded in deploy-infra's remote script. GNU
 # timeout may return 124 with empty stderr; that is bounded/transient, while a
@@ -68,6 +85,10 @@ while [[ $# -gt 0 && "$1" == -* ]]; do
   esac
 done
 [[ $# -gt 0 ]] && shift
+if [[ "$*" == 'bash -s' ]]; then
+  sed "s|/var/lib/cogni/runtime-maintenance/lib|$FAKE_GUARD_LIB|g" | bash -s
+  exit $?
+fi
 exec bash -c "$*"
 EOF
 chmod +x "$FAKEBIN/ssh"
@@ -85,9 +106,9 @@ fi
 if [[ "${1:-}" == image && "${2:-}" == inspect ]]; then
   ref="${@: -1}"
   case "$ref" in
-    postgres:17) printf 'sha256:postgres\n' ;;
-    litellm:test) printf 'sha256:litellm\n' ;;
-    autoheal:test) printf 'sha256:autoheal\n' ;;
+    postgres:17) printf 'sha256:0000000000000000000000000000000000000000000000000000000000000001\n' ;;
+    litellm:test) printf 'sha256:0000000000000000000000000000000000000000000000000000000000000002\n' ;;
+    autoheal:test) printf 'sha256:0000000000000000000000000000000000000000000000000000000000000003\n' ;;
     *) exit 1 ;;
   esac
   exit 0
@@ -137,7 +158,7 @@ write_receipt() {
     --arg compose "$compose_sha" \
     --arg config "$config_sha" \
     --arg recoveryServiceConfig "$recovery_service_config_sha" \
-    '{version:2,composeSha256:$compose,litellmConfigSha256:$config,recoveryServiceConfigSha256:$recoveryServiceConfig,images:{postgres:{ref:"postgres:17",id:"sha256:postgres"},litellm:{ref:"litellm:test",id:"sha256:litellm"},autoheal:{ref:"autoheal:test",id:"sha256:autoheal"}},sourceRef:"test",completedAt:"2026-10-14T00:00:00Z"}')"
+    '{version:2,composeSha256:$compose,litellmConfigSha256:$config,recoveryServiceConfigSha256:$recoveryServiceConfig,images:{postgres:{ref:"postgres:17",id:"sha256:0000000000000000000000000000000000000000000000000000000000000001"},litellm:{ref:"litellm:test",id:"sha256:0000000000000000000000000000000000000000000000000000000000000002"},autoheal:{ref:"autoheal:test",id:"sha256:0000000000000000000000000000000000000000000000000000000000000003"}},sourceRef:"test",completedAt:"2026-10-14T00:00:00Z"}')"
   digest="$(printf '%s' "$core" | sha256sum | awk '{print $1}')"
   jq -cS --arg digest "$digest" '. + {declarationDigest:$digest}' <<<"$core" > "$RECEIPT"
 }

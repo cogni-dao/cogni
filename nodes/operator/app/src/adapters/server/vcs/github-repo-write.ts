@@ -106,6 +106,10 @@ import {
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 import { classifyEnvManagerCommit } from "@/shared/vcs/env-manager-pr";
+import {
+  assertGatewayCustodian,
+  GithubGatewayActivation,
+} from "./gateway-activation";
 import { cancelCandidateMaintenance } from "./maintenance-cancel";
 import { resolveReviewedWorkflowRef } from "./reviewed-workflow-ref";
 import { reconcileWorkerRouting } from "./worker-custodied-routing";
@@ -1763,6 +1767,18 @@ export class GitHubRepoWriter implements DeployPlanePort {
     input: ReconcileNodeInfraInput
   ): Promise<NodeInfraReconcileResult> {
     if ("target" in input) {
+      if (input.target === "litellm-provider-key") {
+        assertGatewayCustodian(input, this.config);
+        const client = await this.getOctokit(
+          input.parentOwner,
+          input.parentRepo
+        );
+        return new GithubGatewayActivation(
+          client,
+          input,
+          await this.resolveOperatorBotIdentity(client)
+        ).submit(input.env);
+      }
       return reconcileWorkerRouting(
         input,
         this.config,
@@ -1834,6 +1850,20 @@ export class GitHubRepoWriter implements DeployPlanePort {
       sourceAddressing: isRemoteSource ? "remote_source" : "in_repo",
       workflowUrl: dispatch.workflowUrl,
     };
+  }
+
+  async readGatewayActivation(input: {
+    parentOwner: string;
+    parentRepo: string;
+    operationId: string;
+  }) {
+    assertGatewayCustodian(input, this.config);
+    const client = await this.getOctokit(input.parentOwner, input.parentRepo);
+    return new GithubGatewayActivation(
+      client,
+      input,
+      await this.resolveOperatorBotIdentity(client)
+    ).status();
   }
 
   /** Classify one reviewed candidate infra PR, then invoke exactly one existing deploy mechanism. */

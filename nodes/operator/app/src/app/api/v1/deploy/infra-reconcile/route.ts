@@ -29,6 +29,10 @@
 
 import type { AuthzDecisionCode } from "@cogni/authorization-core";
 import { billingAccounts } from "@cogni/db-schema/refs";
+import {
+  GatewayMaintenanceRequestSchema,
+  GatewayOperationIdSchema,
+} from "@cogni/operator-gateway-activation";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -45,6 +49,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const infraReconcileInput = z.union([
+  GatewayMaintenanceRequestSchema,
   z.strictObject({
     nodeId: z.string().uuid(),
     env: z.literal("production"),
@@ -101,6 +106,18 @@ export const POST = wrapRouteHandlerWithLogging(
     }
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+    const operationId =
+      "target" in parsed.data && parsed.data.target === "litellm-provider-key"
+        ? GatewayOperationIdSchema.safeParse(
+            request.headers.get("Idempotency-Key")
+          )
+        : null;
+    if (operationId && !operationId.success) {
+      return NextResponse.json(
+        { error: "gateway_uuid_idempotency_key_required" },
+        { status: 400 }
+      );
     }
 
     const { nodeId } = parsed.data;
@@ -169,7 +186,12 @@ export const POST = wrapRouteHandlerWithLogging(
         envConfig.FLEET_CONTROL_ENV !== "production")
     ) {
       return NextResponse.json(
-        { error: "worker_routing_own_custodian_required" },
+        {
+          error:
+            parsed.data.target === "litellm-provider-key"
+              ? "gateway_canonical_custodian_required"
+              : "worker_routing_own_custodian_required",
+        },
         { status: 403 }
       );
     }
@@ -177,16 +199,25 @@ export const POST = wrapRouteHandlerWithLogging(
       const deployPlane = createOperatorDeployPlane(envConfig);
       const result =
         "target" in parsed.data
-          ? await deployPlane.reconcileNodeInfra({
-              env: "production",
-              slug: "operator",
-              parentOwner,
-              parentRepo,
-              target: parsed.data.target,
-              ...(parsed.data.rollbackReceipt
-                ? { rollbackReceipt: parsed.data.rollbackReceipt }
-                : {}),
-            })
+          ? parsed.data.target === "litellm-provider-key"
+            ? await deployPlane.reconcileNodeInfra({
+                env: parsed.data.env,
+                slug: "operator",
+                parentOwner,
+                parentRepo,
+                target: parsed.data.target,
+                operationId: operationId?.success ? operationId.data : "",
+              })
+            : await deployPlane.reconcileNodeInfra({
+                env: "production",
+                slug: "operator",
+                parentOwner,
+                parentRepo,
+                target: parsed.data.target,
+                ...(parsed.data.rollbackReceipt
+                  ? { rollbackReceipt: parsed.data.rollbackReceipt }
+                  : {}),
+              })
           : parsed.data.env === "candidate-a"
             ? await deployPlane.reconcileNodeInfra({
                 env: "candidate-a",
@@ -215,13 +246,17 @@ export const POST = wrapRouteHandlerWithLogging(
           env: result.env,
           status: result.status,
           sourceSha: result.sourceSha,
-          ...("target" in result
+          ...("target" in result &&
+          result.target === "scheduler-worker-custodied-routing"
             ? {
                 target: result.target,
                 receipt: result.receipt,
                 beforeHash: result.beforeHash,
                 afterHash: result.afterHash,
               }
+            : {}),
+          ...("operationId" in result
+            ? { target: result.target, operationId: result.operationId }
             : {}),
           ...("lane" in result ? { lane: result.lane } : {}),
           ...("runId" in result ? { runId: result.runId } : {}),

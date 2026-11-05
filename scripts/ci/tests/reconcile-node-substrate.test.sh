@@ -10,6 +10,7 @@ export FORK_DOMAIN_ROOT=cognidao.org COGNI_DOMAIN_ROOT=cognidao.org COGNI_DEPLOY
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
+export FAKE_GUARD_SOURCE="$REPO_ROOT/scripts/ci/lib/runtime-maintenance-guard.py"
 
 TMPROOT=$(mktemp -d -t reconcile-node-substrate.XXXXXX)
 trap 'rm -rf "$TMPROOT"' EXIT
@@ -131,6 +132,18 @@ cmd="${cmd//\/tmp\//${FAKE_REMOTE_ROOT}\/tmp\/}"
 cmd="${cmd//\/opt\/cogni-template-edge/${FAKE_REMOTE_ROOT}\/opt\/cogni-template-edge}"
 cmd="${cmd//\/opt\/cogni-template-runtime/${FAKE_REMOTE_ROOT}\/opt\/cogni-template-runtime}"
 cmd="${cmd//\/var\/lib\/cogni/${FAKE_REMOTE_ROOT}\/var\/lib\/cogni}"
+guard_dir="${FAKE_REMOTE_ROOT}/var/lib/cogni/runtime-maintenance/lib"
+mkdir -p "$guard_dir"
+export FAKE_GUARD_ROOT="${FAKE_REMOTE_ROOT}/var/lib/cogni/runtime-maintenance"
+cat > "$guard_dir/runtime-maintenance-guard.py" <<'PY_GUARD'
+import importlib.util, os, sys
+from pathlib import Path
+s=importlib.util.spec_from_file_location('guard',os.environ['FAKE_GUARD_SOURCE'])
+m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+m.ROOT=Path(os.environ['FAKE_GUARD_ROOT']);m.OWNER_UID=os.geteuid()
+assert sys.argv[1]=='exec'
+with m.RuntimeGuard() as guard: guard.exec(sys.argv[2:])
+PY_GUARD
 PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$cmd"
 EOF
 chmod +x "$FAKEBIN/ssh"

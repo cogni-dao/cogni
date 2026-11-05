@@ -75,6 +75,9 @@ importers:
       '@cogni/node-core':
         specifier: workspace:*
         version: link:packages/node-core
+      '@cogni/operator-gateway-activation':
+        specifier: workspace:*
+        version: link:nodes/operator/packages/gateway-activation
       '@cogni/operator-wallet':
         specifier: workspace:*
         version: link:packages/operator-wallet
@@ -427,6 +430,9 @@ importers:
       '@cogni/operator-doltgres-schema':
         specifier: workspace:*
         version: link:../packages/doltgres-schema
+      '@cogni/operator-gateway-activation':
+        specifier: workspace:*
+        version: link:../packages/gateway-activation
       '@cogni/operator-graphs':
         specifier: workspace:*
         version: link:../graphs
@@ -586,6 +592,9 @@ importers:
       fast-safe-stringify:
         specifier: ^2.1.1
         version: 2.1.1
+      fflate:
+        specifier: 0.8.2
+        version: 0.8.2
       framer-motion:
         specifier: ^12.23.25
         version: 12.23.25(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
@@ -738,6 +747,19 @@ importers:
       drizzle-orm:
         specifier: ^0.44.7
         version: 0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  nodes/operator/packages/gateway-activation:
+    dependencies:
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
     devDependencies:
       tsup:
         specifier: ^8.5.1

@@ -43,6 +43,7 @@ MUTATORS=(
 )
 
 PARALLEL=(
+  runtime-maintenance.test.py
   set-secret.test.sh
   catalog-akash-egress-schema.test.sh
   render-compute-egress-allowlist.test.sh
@@ -103,7 +104,11 @@ done
 
 run_one() {
   local name="$1"
-  bash "$TESTS_DIR/$name" >"$tmpdir/$name.log" 2>&1
+  if [[ "$name" == *.py ]]; then
+    python3 "$TESTS_DIR/$name" >"$tmpdir/$name.log" 2>&1
+  else
+    bash "$TESTS_DIR/$name" >"$tmpdir/$name.log" 2>&1
+  fi
   echo $? >"$tmpdir/$name.rc"
 }
 

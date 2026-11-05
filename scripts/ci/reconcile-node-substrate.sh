@@ -846,6 +846,10 @@ CURRENT_ROW="remote_reconcile"
 # bug.5278's silent exit 1 was only locatable by mtime forensics on the VM. With
 # these, the last printed crumb names the step the next such death died in.
 remote "set -euo pipefail
+  # Cover publication and all effects in one process; a pending activation journal
+  # refuses this writer even after the previous lock owner has exited.
+  python3 /var/lib/cogni/runtime-maintenance/lib/runtime-maintenance-guard.py exec bash -s <<'COGNI_RUNTIME_GUARDED'
+  set -euo pipefail
   runtime_env=/opt/cogni-template-runtime/.env
   runtime_compose=(docker compose --project-name cogni-runtime --env-file \"\$runtime_env\" -f /opt/cogni-template-runtime/docker-compose.yml)
   echo '[remote] reconcile begin (${DEPLOY_ENVIRONMENT}/${TARGET_NODE})'
@@ -971,6 +975,7 @@ ${edge_reconcile_snippet}
     -e COGNI_NODE_DBS='${node_doltgres_db}' \
     ${dg_pw_env} doltgres-provision >/dev/null
   echo '[remote] doltgres-provision ok'
+COGNI_RUNTIME_GUARDED
   " \
   || fail "remote reconcile block failed (rc=$?) — the last '[remote] … ok' breadcrumb above names the last completed step"
 

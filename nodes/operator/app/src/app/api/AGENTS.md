@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-10-31
+- **Last reviewed:** 2026-11-04
 - **Status:** draft
 
 ## Purpose
@@ -38,6 +38,8 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
 
 - **Exports:** none
 - **Routes (if any):**
+  - `/api/v1/deploy/infra-reconcile` [POST] — sealed `litellm-provider-key` target with stable UUID Idempotency-Key for all three envs; canonical custodian and existing per-env RBAC gates; no caller source or credential.
+  - `/api/v1/deploy/infra-reconcile/operations/[operationId]?env=<env>` [GET] — same custodian/env authority, bounded native historical observation; never dispatches.
   - `/api/v1/nodes/[id]/deploy-state` [GET] — node.flight-gated deploy probes, allocated leases/orphans, bounded all-state receipts and optional exact `cogniKey`/`environment` lookup. Independent ledger/native coverage; public Akash state never proves handle-bearing closure.
   - `/api/v1/deploy/workloads/releases/[releaseId]` [GET] — one release's derived state (queued|deploying|active|parked|superseded|failed), park reason, lead-time timestamps and attempt step timelines; same per-env gate as `/deploy/workloads` GET, other node/env releases are 404 (task.5400)
   - `/api/v1/deploy/maintenance-cancel` [POST] — target-node env-manager-gated cancellation of unchanged unexecuted candidate intent; exact Git preconditions, no runtime mutation

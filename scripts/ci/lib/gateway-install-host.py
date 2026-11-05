@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+"""Install only the fixed, reviewed runtime guard library; never touch Compose.
+
+The typed runner owns source selection and complete native-writer inventory.
+This adapter verifies the staged bytes, local environment and recovery callers.
+"""
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+LIB = Path(__file__).resolve().parent
+
+def load(name):
+    spec = importlib.util.spec_from_file_location(name.replace('-', '_'), LIB / (name + '.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+guard = load('runtime-maintenance-guard')
+receipt = load('runtime-recovery-receipt')
+FILES = ('runtime-maintenance-guard.py', 'runtime-recovery-receipt.py', 'gateway-activation-host.py')
+
+def require(condition):
+    if not condition:
+        raise RuntimeError('gateway_guard_enrollment_refused')
+
+def main():
+    require(sys.argv[1:] == ['install'])
+    raw = sys.stdin.buffer.read(16385)
+    require(len(raw) <= 16384)
+    manifest = json.loads(raw)
+    require(set(manifest) == {'protocolVersion', 'maintenanceEnabled', 'env', 'custodian', 'implementationSha',
+                              'minimumSourceSha', 'coreSha256', 'runnerSha256', 'blobs', 'inventorySha256', 'operationId'})
+    operation_id = manifest.pop('operationId')
+    require(re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', operation_id))
+    require(manifest['protocolVersion'] == 1 and manifest['maintenanceEnabled'] is True)
+    require(manifest['env'] in ('candidate-a', 'preview', 'production'))
+    require(manifest['custodian']['owner'].lower() == 'cogni-dao' and manifest['custodian']['repo'].lower() == 'cogni'
+            and manifest['custodian']['controlEnv'] == 'production')
+    for key in ('implementationSha', 'minimumSourceSha'):
+        require(re.fullmatch(r'[a-f0-9]{40}', manifest[key]))
+    for key in ('coreSha256', 'runnerSha256', 'inventorySha256'):
+        require(re.fullmatch(r'[a-f0-9]{64}', manifest[key]))
+    require(set(manifest['blobs']) == set(FILES))
+    for name in FILES:
+        require(hashlib.sha256((LIB / name).read_bytes()).hexdigest() == manifest['blobs'][name])
+    with guard.RuntimeGuard(operation_id):
+        env = Path('/opt/cogni-template-runtime/.env').read_text()
+        values = re.findall(r'(?m)^DEPLOY_ENVIRONMENT=[\'"]?([a-z-]+)[\'"]?$', env)
+        require(values == [manifest['env']])
+        # Inventory all systemd service/timer definitions. An unknown recovery
+        # caller must be upgraded by its owner before this capability is enabled.
+        units = subprocess.check_output(['systemctl', 'list-unit-files', '--no-pager', '--no-legend'], timeout=15).decode()
+        for line in units.splitlines():
+            name = line.split()[0]
+            if re.search(r'runtime.*recover|recover.*runtime', name):
+                command = subprocess.check_output(['systemctl', 'show', name, '--property=ExecStart', '--value'], timeout=15).decode()
+                require('/var/lib/cogni/runtime-maintenance/lib/runtime-maintenance-guard.py exec' in command)
+        manifest['machineId'] = Path('/etc/machine-id').read_text().strip()
+        cluster = subprocess.check_output(['kubectl', '--kubeconfig', '/etc/rancher/k3s/k3s.yaml', 'get',
+                                           'namespace', 'kube-system', '-o', 'json'], timeout=15)
+        manifest['clusterUid'] = json.loads(cluster)['metadata']['uid']
+        target = guard.ROOT / 'lib'
+        guard.private_directory(target)
+        previous_path = guard.ROOT / 'source.json'
+        if previous_path.exists():
+            previous = json.loads(guard.private_read(previous_path))
+            require(previous['machineId'] == manifest['machineId'] and previous['clusterUid'] == manifest['clusterUid'])
+            require(previous['env'] == manifest['env'] and previous['custodian'] == manifest['custodian'])
+            pending = guard.ROOT / 'operations' / operation_id / 'operation.json'
+            if pending.exists() and json.loads(guard.private_read(pending))['state'] not in guard.TERMINAL:
+                for key in ('implementationSha', 'minimumSourceSha', 'blobs', 'coreSha256', 'runnerSha256'):
+                    require(previous[key] == manifest[key])
+                for name in FILES:
+                    require(hashlib.sha256((target / name).read_bytes()).hexdigest() == previous['blobs'][name])
+                print(json.dumps({'state': 'guard_retained_for_resume', 'env': manifest['env']}))
+                return
+            # A premerge qualification becomes a merged floor only for identical
+            # implementation inputs, including the pure shared policy.
+            if previous.get('minimumSourceSha') == previous.get('implementationSha'):
+                require(previous['blobs'] == manifest['blobs'] and previous['coreSha256'] == manifest['coreSha256']
+                        and previous['runnerSha256'] == manifest['runnerSha256'])
+        for name in FILES:
+            receipt.atomic(target / name, (LIB / name).read_bytes())
+        receipt.atomic(previous_path, receipt.canonical(manifest) + b'\n')
+    print(json.dumps({'state': 'guard_enrolled', 'env': manifest['env'], 'implementationSha': manifest['implementationSha']}))
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception:
+        print('gateway_guard_enrollment_refused', file=sys.stderr)
+        raise SystemExit(1)

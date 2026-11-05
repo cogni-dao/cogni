@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Last reviewed:** 2026-10-26
+- **Last reviewed:** 2026-11-04
 - **Status:** stable
 
 ## Purpose
@@ -35,6 +35,8 @@ Ports describe _what_ the domain needs from external services, not _how_ they wo
 ```
 
 ## Public Surface
+
+- `DeployPlanePort.reconcileNodeInfra` also accepts the sealed `litellm-provider-key` target and stable UUID for candidate/preview/production. `readGatewayActivation` observes immutable intent and bounded native-run history without dispatch. Historical completion does not certify current host liveness.
 
 Two entrypoints enforce Next.js App Router environment boundaries (see bug.0147):
 

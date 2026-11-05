@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "writers": [
+    "candidate-flight.yml",
+    "candidate-flight-infra.yml",
+    "flight-preview.yml",
+    "promote-and-deploy.yml",
+    "provision-env.yml"
+  ],
+  "testParent": "cogni-test-org/cogni-monorepo"
+}

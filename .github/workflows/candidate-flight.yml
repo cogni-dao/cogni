@@ -177,6 +177,14 @@ jobs:
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
           echo "status_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Admit guarded candidate source
+        env:
+          SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
+        run: node --experimental-strip-types scripts/ci/runtime-source-admission.ts "$SOURCE_SHA"
+
       - name: Checkout app source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
