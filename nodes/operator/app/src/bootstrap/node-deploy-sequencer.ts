@@ -196,7 +196,7 @@ const chain = runtimeEnv.AKASH_CHAIN_OWNER
   : undefined;
 // Preserve existing edge recovery; fresh node apps require a valid explicit fleet zone.
 const fleetOwner = runtimeEnv.NODE_DEPLOY_FLEET_OWNER?.trim() || undefined;
-let edgeZoneSetting = runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE?.trim() || undefined;
+let edgeZoneSetting: string | undefined;
 let validFleetZone = false;
 try {
   edgeZoneSetting = resolveWorkloadZoneBinding({
@@ -286,7 +286,14 @@ const laneSequencers = await Promise.all(
           }),
           catalog,
           substrateHost: lane.substrateHost,
-          operatorDomain: validFleetZone ? lane.operatorDomain : "",
+          operatorDomain: lane.operatorDomain,
+          fleetBinding: validFleetZone
+            ? { valid: true }
+            : {
+                valid: false,
+                reason:
+                  "NODE_DEPLOY_FLEET_OWNER or NODE_DEPLOY_WORKLOAD_ZONE is missing or invalid",
+              },
           edgeZone,
         },
         ...(chain ? { chain } : {}),

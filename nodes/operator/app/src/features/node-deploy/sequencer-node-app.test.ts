@@ -10,7 +10,7 @@
  */
 
 import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "@cogni/repo-spec";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   BuiltImageResolverPort,
@@ -151,7 +151,7 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
     substrateHost: SUBSTRATE,
     operatorDomain: "operator.example",
   };
-  const seq = new NodeDeploySequencer({
+  const deps = {
     store,
     payer,
     edge: new EdgeRouter(dns, edgeHostRegexFor(["poly", "toks5"])),
@@ -170,7 +170,20 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
       appProviders: ALLOWED,
       ...cfg,
     } as SequencerConfig,
-  });
+  };
+  let seq = new NodeDeploySequencer(deps);
+  const restart = (invalid: boolean) => {
+    seq = new NodeDeploySequencer({
+      ...deps,
+      edge: invalid ? undefined : deps.edge,
+      runtime: {
+        ...runtime,
+        fleetBinding: invalid
+          ? { valid: false, reason: "fleet owner or zone missing" }
+          : { valid: true },
+      },
+    });
+  };
   const key = (nodeId: string, workload: string): WorkloadKey => ({
     nodeId,
     env: ENV,
@@ -186,7 +199,10 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
     images,
     clock,
     log,
-    seq,
+    get seq() {
+      return seq;
+    },
+    restart,
     key,
   };
 }
@@ -282,6 +298,82 @@ describe("node app runtime env (task.5405)", () => {
     expect(
       h.events.filter((event) => event.startsWith("payer.delete:"))
     ).toEqual([]);
+  });
+
+  it.each([
+    "ambiguous",
+    "unmarked",
+  ])("recovers a %s paid create across invalid bootstrap and cutover", async (marker) => {
+    const h = harness();
+    await stateUp(h, POLY_ID);
+    h.payer.loseResponseOn = (n) => n === 2;
+    h.payer.observeThrows = true;
+    await releaseApp(h, POLY_ID);
+    const key = h.key(POLY_ID, "canary");
+    const attempt = (await h.store.attemptsFor(key))[0];
+    if (!attempt) throw new Error("missing attempt");
+    if (marker === "unmarked")
+      await h.store.updateAttempt(attempt.id, { error: null });
+    h.restart(true);
+    h.payer.observeThrows = false;
+    await h.seq.step(key);
+    const recovered = (await h.store.attemptsFor(key))[0];
+    expect(recovered?.externalName).toBe("1002");
+    expect(recovered?.phase).toBe("proven");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    expect(appCreates(h)).toHaveLength(1);
+    expect(h.events.filter((e) => e.startsWith("payer.delete:"))).toEqual([]);
+    h.restart(false);
+    await h.seq.step(key);
+    expect((await h.store.attemptsFor(key))[0]?.phase).toBe("active");
+    expect(appCreates(h)).toHaveLength(1);
+  });
+
+  it.each([
+    "throws",
+    "missing resource",
+  ])("bounds resumed observation when it %s", async (failure) => {
+    const h = harness({ observeUnavailableMs: 1000 });
+    await stateUp(h, POLY_ID);
+    h.payer.loseResponseOn = (n) => n === 2;
+    h.payer.observeThrows = true;
+    await releaseApp(h, POLY_ID);
+    const key = h.key(POLY_ID, "canary");
+    const attempt = (await h.store.attemptsFor(key))[0];
+    if (!attempt) throw new Error("missing attempt");
+    await h.store.updateAttempt(attempt.id, {
+      error: null,
+      unhealthySince: null,
+    });
+    h.restart(true);
+    if (failure === "missing resource")
+      vi.spyOn(h.payer, "observe").mockResolvedValue({ found: true });
+    await h.seq.step(key);
+    expect((await h.store.attemptsFor(key))[0]?.phase).toBe("planned");
+    await h.clock.sleep(1000);
+    await h.seq.step(key);
+    const failed = (await h.store.attemptsFor(key))[0];
+    expect(failed?.phase).toBe("failed");
+    expect(failed?.error).toContain("orphan_suspect:");
+    expect(h.log.alerts()).toContain("orphan_suspect");
+    expect(
+      h.log.lines.find((line) => line.fields.outcome === "orphan_suspect")
+        ?.fields.cogniKey
+    ).toBe(attempt.cogniKey);
+    expect(appCreates(h)).toHaveLength(1);
+    expect(
+      h.events.filter((event) => event.startsWith("payer.delete:"))
+    ).toEqual([]);
+  });
+
+  it("does not create a fresh app with an invalid fleet binding", async () => {
+    const h = harness();
+    await stateUp(h, POLY_ID);
+    h.restart(true);
+    await releaseApp(h, POLY_ID);
+    expect(appCreates(h)).toHaveLength(0);
+    expect(await h.store.attemptsFor(h.key(POLY_ID, "canary"))).toEqual([]);
+    expect(h.log.steps()).toContain("dependency:waiting");
   });
 
   it("does not create a fresh app when issuer configuration is invalid", async () => {

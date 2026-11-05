@@ -174,6 +174,9 @@ export interface NodeAppRuntimeDeps {
   readonly secrets: NodeRuntimeSecretsPort;
   readonly catalog: NodeCatalogPort;
   readonly operatorDomain: string;
+  readonly fleetBinding?:
+    | { readonly valid: true }
+    | { readonly valid: false; readonly reason: string };
   /** `vm_host_for_env` of the environment VM; absent omits the substrate env block. */
   readonly substrateHost?: string | undefined;
   /** The DNS zone this lane's node hosts live in (ONE_EDGE_ZONE); absent = `cognidao.org`. */
@@ -323,7 +326,7 @@ export class NodeDeploySequencer {
         await this.failAttempt(key, inflightRelease, inflight, "superseded");
         return "superseded";
       }
-      await this.drive(key, inflightRelease, inflight, active);
+      await this.drive(key, inflightRelease, inflight, active, true);
       return "driven";
     }
 
@@ -629,10 +632,12 @@ export class NodeDeploySequencer {
     key: WorkloadKey,
     release: ReleaseRow,
     start: AttemptRow,
-    blue: AttemptRow | undefined
+    blue: AttemptRow | undefined,
+    resumed = false
   ): Promise<void> {
     let a = start;
-    if (a.phase === "planned") a = await this.doCreate(key, release, a, blue);
+    if (a.phase === "planned")
+      a = await this.doCreate(key, release, a, blue, resumed);
     if (a.phase === "created") a = await this.awaitLease(key, release, a, blue);
     if (a.phase === "proving") a = await this.prove(key, release, a);
     if (a.phase === "proven") await this.cutover(key, release, a, blue);
@@ -651,6 +656,9 @@ export class NodeDeploySequencer {
     release: ReleaseRow
   ): Promise<ResolvedRuntime> {
     const w = release.spec;
+    const binding = this.d.runtime?.fleetBinding;
+    if (w.kind === "app" && binding && !binding.valid)
+      throw new DependencyNotReady(binding.reason);
     const env: Record<string, string> = {};
     let requiredCountryCodes: readonly string[] = [];
     let nodeApp = false;
@@ -909,7 +917,8 @@ export class NodeDeploySequencer {
     key: WorkloadKey,
     release: ReleaseRow,
     attempt: AttemptRow,
-    blue: AttemptRow | undefined
+    blue: AttemptRow | undefined,
+    resumed = false
   ): Promise<AttemptRow> {
     // A refused create (provider_rejected, ...) already ended this key's life: it is never replayed under
     // the same nd: key (the actuator would answer `akash_tx_create_replayed` forever). Fail the attempt;
@@ -958,6 +967,40 @@ export class NodeDeploySequencer {
       }
     }
 
+    // A crash can leave a planned row before the create response or its marker was persisted.
+    if (resumed && !attempt.error) {
+      try {
+        const obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
+        if (obs.found && obs.resource)
+          return this.bindLease(key, release, attempt, obs.resource);
+        if (obs.found) {
+          return this.observeUnavailable(
+            key,
+            release,
+            attempt,
+            "create",
+            "planned create unresolved",
+            new Error("existing effect has no resource")
+          );
+        }
+      } catch (error) {
+        return this.observeUnavailable(
+          key,
+          release,
+          attempt,
+          "create",
+          "planned create unresolved",
+          error
+        );
+      }
+    }
+    const binding = this.d.runtime?.fleetBinding;
+    if (release.spec.kind === "app" && binding && !binding.valid) {
+      await this.emit(key, release, attempt, "dependency", "waiting", {
+        reason: binding.reason,
+      });
+      return attempt;
+    }
     const w = release.spec;
     if (publicHostOf(w) && !this.d.edge) {
       // Refuse BEFORE paying: a lease no edge can ever route to is wasted spend.
@@ -1419,7 +1462,15 @@ export class NodeDeploySequencer {
     if (w.kind === "app" && host) {
       const edge = this.d.edge;
       const ingress = ingressHostOf(attempt.endpoints, host);
-      if (!edge || !ingress) {
+      const binding = this.d.runtime?.fleetBinding;
+      if (!edge || (binding && !binding.valid)) {
+        await this.emit(key, release, attempt, "dependency", "waiting", {
+          reason:
+            binding && !binding.valid ? binding.reason : "edge_not_configured",
+        });
+        return;
+      }
+      if (!ingress) {
         await this.failAttempt(key, release, attempt, "edge_not_configured");
         return;
       }
