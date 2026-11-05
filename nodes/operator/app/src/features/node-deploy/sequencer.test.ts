@@ -1742,7 +1742,8 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
       {
         ...app,
         health: {
-          ...app.health,
+          ready: "/readyz",
+          version: "/version",
           qualification: {
             path: "/api/v1/deploy/qualification",
             timeoutMs: 20000,
