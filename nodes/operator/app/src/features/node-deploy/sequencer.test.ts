@@ -485,6 +485,129 @@ describe("provider exclusion and alert hygiene", () => {
     expect(last?.excludeProviders ?? []).not.toContain(failedProvider);
   });
 
+  describe("story.5137: LANE_MEMORY remembers providers struck twice in 24h", () => {
+    /** A past release of `workload` whose one attempt bound a lease on `provider` and was struck. */
+    async function pastStrike(
+      h: H,
+      provider: string,
+      error = "proof_timeout: version 503",
+      workload = "canary"
+    ) {
+      const { release } = await h.store.recordRelease({
+        nodeId: NODE_ID,
+        env: ENV,
+        workload,
+        sourceSha: SHA_2,
+        spec: canaryApp(),
+        createdBy: "test",
+      });
+      const a = await h.store.insertAttempt(
+        release.id,
+        (n) => `past:${release.id}:${n}`
+      );
+      await h.store.updateAttempt(a.id, {
+        phase: "failed",
+        externalName: `past-${a.id}`,
+        provider,
+        error,
+      });
+    }
+
+    /** blue on provider-2 (state on provider-1); then `strikes`; then a new release's first create. */
+    async function newReleaseAfter(h: H, strikes: () => Promise<void>) {
+      await stateUp(h);
+      await deployApp(h, SHA_1);
+      await strikes();
+      const before = h.payer.createRequests.length;
+      await deployApp(h, SHA_3);
+      const first = h.payer.createRequests[before];
+      const line = h.log.lines.findLast(
+        (l) =>
+          l.msg === "node_deploy_step" && l.fields.step === "providers_excluded"
+      );
+      return { exclude: first?.excludeProviders ?? [], line };
+    }
+
+    it("(a) two prior releases struck X on this lane: the new release's first create excludes X, logged as memory", async () => {
+      const h = harness();
+      const { exclude, line } = await newReleaseAfter(h, async () => {
+        await pastStrike(h, "provider-x", "proof_timeout: version 503");
+        await pastStrike(h, "provider-x", "host_not_routed: version 404");
+      });
+      expect(exclude).toEqual(["provider-2", "provider-1", "provider-x"]);
+      expect(line?.fields.remembered).toEqual(["provider-x"]);
+      expect(String(line?.fields.reason)).toContain("memory: provider-x");
+    });
+
+    it("(b) one strike, or two with one older than 24h: not excluded", async () => {
+      const h = harness();
+      const { exclude, line } = await newReleaseAfter(h, async () => {
+        await pastStrike(h, "provider-x");
+        h.clock.advance(25 * 60 * 60_000);
+        await pastStrike(h, "provider-x");
+        await pastStrike(h, "provider-y"); // a lone strike
+      });
+      expect(exclude).not.toContain("provider-x");
+      expect(exclude).not.toContain("provider-y");
+      expect(line?.fields.remembered).toEqual([]);
+    });
+
+    it("(c) strikes on ANOTHER lane do not count; other errors do not count", async () => {
+      const h = harness();
+      const { exclude } = await newReleaseAfter(h, async () => {
+        await pastStrike(h, "provider-x", undefined, "other-app");
+        await pastStrike(h, "provider-x", undefined, "other-app");
+        await pastStrike(h, "provider-z", "lease_not_ready");
+        await pastStrike(h, "provider-z", "lease_not_ready");
+      });
+      expect(exclude).not.toContain("provider-x");
+      expect(exclude).not.toContain("provider-z");
+    });
+
+    it("(d) blue's provider is never excluded by memory, even with no blue passed (stop-then-start)", async () => {
+      const h = harness();
+      let noBlue: string[] = [];
+      const { exclude, line } = await newReleaseAfter(h, async () => {
+        await pastStrike(h, "provider-2");
+        await pastStrike(h, "provider-2");
+        // The stop-then-start path asks with NO blue (blue just retired): memory still skips blue.
+        const { release } = await h.store.recordRelease({
+          nodeId: NODE_ID,
+          env: ENV,
+          workload: "canary",
+          sourceSha: SHA_2,
+          spec: canaryApp(),
+          createdBy: "test",
+        });
+        const seq = h.seq as unknown as {
+          excludedProviders(
+            k: typeof APP,
+            r: typeof release,
+            b: undefined,
+            f: boolean
+          ): Promise<string[]>;
+        };
+        noBlue = await seq.excludedProviders(APP, release, undefined, true);
+      });
+      expect(noBlue).toEqual(["provider-1"]);
+      expect(exclude).toEqual(["provider-2", "provider-1"]); // HAIRPIN_RULE, not memory
+      expect(line?.fields.remembered).toEqual([]);
+    });
+
+    it("caps the memory so the whole exclusion stays within the wire's 16", async () => {
+      const h = harness();
+      const { exclude, line } = await newReleaseAfter(h, async () => {
+        for (let i = 0; i < 20; i++) {
+          await pastStrike(h, `provider-m${i}`);
+          await pastStrike(h, `provider-m${i}`);
+        }
+      });
+      expect(exclude).toHaveLength(16);
+      expect(exclude.slice(0, 2)).toEqual(["provider-2", "provider-1"]);
+      expect(line?.fields.remembered).toHaveLength(14);
+    });
+  });
+
   it("a parked release alerts once per 10 minutes, not once per tick", async () => {
     const h = harness();
     await stateUp(h);

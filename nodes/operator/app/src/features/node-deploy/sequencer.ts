@@ -222,6 +222,12 @@ const GRACE_LOG_THROTTLE_MS = 60_000;
 const OPERATOR_NODE_SLUG = "operator";
 /** The actuator wire accepts at most 16 `excludeProviders`. */
 const MAX_EXCLUDED_PROVIDERS = 16;
+/** LANE_MEMORY (story.5137): strikes on one lane within this window, across releases, are remembered. */
+const STRIKE_MEMORY_MS = 24 * 60 * 60_000;
+/** LANE_MEMORY: a provider is excluded by memory after this many remembered strikes. */
+const STRIKE_MEMORY_MIN = 2;
+/** LANE_MEMORY: the struck-after-bind failures (`strike` + `failAttempt` write this error prefix). */
+const STRIKE_MEMORY_ERROR = /^(proof_timeout|host_not_routed):/;
 /** The actuator wire accepts at most 16 `allowProviders`. */
 const MAX_ALLOWED_PROVIDERS = 16;
 
@@ -776,8 +782,8 @@ export class NodeDeploySequencer {
    * served /version but /readyz was 503 db_unreachable). With `withFailedTries` (a new create only), also
    * the provider of every earlier attempt of THIS release that failed or was lost AFTER binding a lease
    * (proof_timeout, failed proof, lease lost): a provider whose egress is not admitted must not be
-   * retried (bug.5569). A refused create bound no provider and a different release is a different try,
-   * so neither adds one. Deduped, blue first, capped at the wire's 16.
+   * retried (bug.5569). A refused create bound no provider, so it adds none. Also with `withFailedTries`,
+   * the LANE MEMORY (story.5137): see `rememberedStrikes`. Deduped, blue first, capped at the wire's 16.
    */
   private async excludedProviders(
     key: WorkloadKey,
@@ -785,6 +791,17 @@ export class NodeDeploySequencer {
     blue: AttemptRow | undefined,
     withFailedTries = false
   ): Promise<string[]> {
+    return (await this.exclusion(key, release, blue, withFailedTries))
+      .providers;
+  }
+
+  /** `excludedProviders`, plus which entries came from the lane memory (for the one log line). */
+  private async exclusion(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    blue: AttemptRow | undefined,
+    withFailedTries: boolean
+  ): Promise<{ providers: string[]; remembered: string[] }> {
     const w = release.spec;
     const providers: (string | undefined)[] = [blue?.provider];
     for (const stateName of new Set(w.bindings.map((b) => b.workload))) {
@@ -794,18 +811,57 @@ export class NodeDeploySequencer {
       });
       providers.push(stateAttempts.find((a) => a.phase === "active")?.provider);
     }
-    if (withFailedTries)
-      for (const a of await this.d.store.attemptsFor(key))
-        if (
-          a.releaseId === release.id &&
-          (a.phase === "failed" || a.phase === "lost") &&
-          a.provider
-        )
-          providers.push(a.provider);
-    return [...new Set(providers.filter((p): p is string => Boolean(p)))].slice(
+    const lane = withFailedTries ? await this.d.store.attemptsFor(key) : [];
+    for (const a of lane)
+      if (
+        a.releaseId === release.id &&
+        (a.phase === "failed" || a.phase === "lost") &&
+        a.provider
+      )
+        providers.push(a.provider);
+    const base = [
+      ...new Set(providers.filter((p): p is string => Boolean(p))),
+    ].slice(0, MAX_EXCLUDED_PROVIDERS);
+    if (!withFailedTries) return { providers: base, remembered: [] };
+    const remembered = this.rememberedStrikes(lane, base).slice(
       0,
-      MAX_EXCLUDED_PROVIDERS
+      MAX_EXCLUDED_PROVIDERS - base.length
     );
+    return { providers: [...base, ...remembered], remembered };
+  }
+
+  /**
+   * LANE_MEMORY (story.5137): a provider that bound a lease on THIS lane (node + env + workload) and was
+   * struck `proof_timeout` or `host_not_routed` at least `STRIKE_MEMORY_MIN` times in the last
+   * `STRIKE_MEMORY_MS`, across releases, is excluded from a new create. Without it every release re-tries
+   * the same dead provider (candidate-a 2026-11-05: one provider burned 10 minutes of proof_timeout on
+   * every release). It reads the attempts store: a struck attempt keeps its provider and its error.
+   * NEVER blue's provider: the lane's newest served attempt (active, retiring or retired) is skipped, so
+   * HAIRPIN_RULE and STOP_THEN_START alone decide blue. Entries already excluded are not repeated; the
+   * caller caps the total at the wire's 16. An empty pool is fine: the refusal flows into stop-then-start.
+   */
+  private rememberedStrikes(
+    lane: readonly AttemptRow[],
+    already: readonly string[]
+  ): string[] {
+    const blueProvider = lane.find((a) =>
+      ["active", "retiring", "retired"].includes(a.phase)
+    )?.provider;
+    const since = this.d.clock.now() - STRIKE_MEMORY_MS;
+    const counts = new Map<string, number>();
+    for (const a of lane)
+      if (
+        a.provider &&
+        a.updatedAt.getTime() >= since &&
+        STRIKE_MEMORY_ERROR.test(a.error ?? "")
+      )
+        counts.set(a.provider, (counts.get(a.provider) ?? 0) + 1);
+    return [...counts]
+      .filter(
+        ([p, n]) =>
+          n >= STRIKE_MEMORY_MIN && p !== blueProvider && !already.includes(p)
+      )
+      .map(([p]) => p);
   }
 
   private async doCreate(
@@ -923,7 +979,7 @@ export class NodeDeploySequencer {
       }
     }
 
-    const excludeProviders = await this.excludedProviders(
+    const { providers: excludeProviders, remembered } = await this.exclusion(
       key,
       release,
       blue,
@@ -932,7 +988,10 @@ export class NodeDeploySequencer {
     if (excludeProviders.length > 0)
       await this.emit(key, release, attempt, "providers_excluded", "ok", {
         providers: excludeProviders,
-        reason: excludeProviders.join(","),
+        remembered,
+        reason:
+          excludeProviders.join(",") +
+          (remembered.length > 0 ? ` (memory: ${remembered.join(",")})` : ""),
       });
     // Placement for APPS only: the interim egress-admitted provider set and the node's catalog
     // country policy. A state workload is never constrained by either.
