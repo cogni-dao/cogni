@@ -109,17 +109,12 @@ export function parseSubstrateHosts(
 /** Resolve the per-env lanes the one process serves, or throw `EnvLaneConfigError` (boot refuses). */
 export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
   const root = input.operatorDomainRoot;
-  if (
-    !root ||
-    // Leave room for the longest derived prefix, "preview.".
-    root.length > 245 ||
-    !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(
+  // Keep lanes observable when issuer config is invalid; nodeAppEnv refuses a fresh create.
+  const validRoot =
+    !!root &&
+    root.length <= 245 &&
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(
       root
-    )
-  )
-    throw new EnvLaneConfigError(
-      "operator_domain_invalid",
-      "NODE_DEPLOY_OPERATOR_DOMAIN_ROOT must be a bare DNS domain"
     );
   const issuerFor = (env: string): string => {
     if (!isFlightEnv(env))
@@ -127,7 +122,7 @@ export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
         "environment_invalid",
         `unsupported environment "${env}"`
       );
-    return hostForEnv("operator", true, env, root);
+    return validRoot && root ? hostForEnv("operator", true, env, root) : "";
   };
   const listed = (input.environments ?? "")
     .split(",")

@@ -115,10 +115,12 @@ describe("operator issuer lane configuration", () => {
     "https://operator.example",
     "bad..example",
     "operator.example:443",
-  ])("refuses invalid root %s", (root) => {
-    expect(() =>
-      resolveEnvLanes({ ...config, operatorDomainRoot: root })
-    ).toThrow(/NODE_DEPLOY_OPERATOR_DOMAIN_ROOT/);
+  ])("keeps lanes observable with invalid root %s", (root) => {
+    expect(
+      resolveEnvLanes({ ...config, operatorDomainRoot: root }).every(
+        (lane) => lane.operatorDomain === ""
+      )
+    ).toBe(true);
   });
   it("refuses unsupported envs in both configuration forms", () => {
     expect(() => resolveEnvLanes({ ...config, environments: "mars" })).toThrow(

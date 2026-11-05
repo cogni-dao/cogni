@@ -41,8 +41,8 @@
  *     unset owner admits no remote-source node, so the test operator never deploys canonical nodes.
  *   - IMAGE_PINNED_BEFORE_PAY (story.5137): every lane resolves a pending release image through the anonymous
  *     ghcr resolver and pins the digest write-once before any paid create.
- *   - ONE_EDGE_ZONE (story.5137): `NODE_DEPLOY_EDGE_ZONE` names the DNS zone node hosts live in. Unset = the
- *     canonical `cognidao.org` and the stored `CLOUDFLARE_ZONE_ID`, exactly as before. Set (the isolated test
+ *   - ONE_EDGE_ZONE (story.5137): `NODE_DEPLOY_WORKLOAD_ZONE` names the DNS zone node hosts live in. Unset = the
+ *     previous edge behavior remains for recovery, while fresh node app creates are refused. Set (the isolated test
  *     operator: `cogni-testing.org`) = the edge guard and ownership check use that zone, and the zone id is
  *     looked up BY NAME with the scoped token, so the id can never name a zone the token cannot write. A failed
  *     lookup leaves the edge unconfigured (http apps refused before paying). Operator and substrate hosts are
@@ -87,6 +87,7 @@ import {
   DEFAULT_SEQUENCER_CONFIG,
   NodeDeploySequencer,
 } from "@/features/node-deploy/sequencer";
+import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 
 const LISTEN_PORT = 8080;
 const CREDENTIAL_DIR = "/var/run/secrets/node-deploy-sequencer";
@@ -193,8 +194,22 @@ const probe = new HttpProbe();
 const chain = runtimeEnv.AKASH_CHAIN_OWNER
   ? new AkashChainTruth({ owner: runtimeEnv.AKASH_CHAIN_OWNER })
   : undefined;
-// ONE_EDGE_ZONE: the zone node hosts live in. Unset keeps the canonical zone and the stored zone id.
-const edgeZoneSetting = runtimeEnv.NODE_DEPLOY_EDGE_ZONE?.trim() || undefined;
+// Preserve existing edge recovery; fresh node apps require a valid explicit fleet zone.
+const fleetOwner = runtimeEnv.NODE_DEPLOY_FLEET_OWNER?.trim() || undefined;
+let validFleetZone = false;
+try {
+  resolveWorkloadZoneBinding({
+    fleetOwner,
+    zoneName: runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE,
+  });
+  validFleetZone = true;
+} catch {
+  log.warn(
+    "node_deploy_sequencer_fleet_zone_invalid: fresh node app creates refused"
+  );
+}
+const edgeZoneSetting =
+  runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE?.trim() || undefined;
 const edgeZone = edgeZoneSetting ?? DEFAULT_EDGE_ZONE;
 let edgeZoneId: string | undefined = cfZone || undefined;
 if (edgeZoneSetting && cfToken) {
@@ -233,7 +248,6 @@ if (!dnsRecords) {
 // The org that owns this fleet's nodes' source repos (the canonical fleet is `cogni-dao`). The SAME filter the
 // route applies (`isFleetOwnedRow`): unset admits no remote-source node, so a sequencer that was never told its
 // fleet (the test operator) can never claim a host for a canonical node. story.5137 CD4.
-const fleetOwner = runtimeEnv.NODE_DEPLOY_FLEET_OWNER?.trim() || undefined;
 const images = new GhcrBuiltImageResolver();
 
 const laneSequencers = await Promise.all(
@@ -273,7 +287,7 @@ const laneSequencers = await Promise.all(
           }),
           catalog,
           substrateHost: lane.substrateHost,
-          operatorDomain: lane.operatorDomain,
+          operatorDomain: validFleetZone ? lane.operatorDomain : "",
           edgeZone,
         },
         ...(chain ? { chain } : {}),
