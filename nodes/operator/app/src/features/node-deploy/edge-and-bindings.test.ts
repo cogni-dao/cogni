@@ -11,12 +11,15 @@
 import { describe, expect, it } from "vitest";
 
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
+import { hostForEnv } from "./declarations";
 import {
   DEFAULT_EDGE_HOST_REGEX,
+  DEFAULT_EDGE_ZONE,
   EdgeGuardError,
   EdgeRouter,
   edgeHostRegexFor,
   hostOwnedBy,
+  workerHostRefusal,
 } from "./edge";
 import { ingressHostOf } from "./spec";
 import { FakeDns } from "./testing";
@@ -207,6 +210,104 @@ describe("EdgeRouter guards", () => {
       hostOwnedBy("node-deploy-canary.cognidao.org", "production", "poly")
     ).toBe(false);
     expect(hostOwnedBy("poly.cognidao.org", "mars", "poly")).toBe(false);
+  });
+
+  it("ONE_EDGE_ZONE: the default zone is cognidao.org, unchanged", () => {
+    expect(DEFAULT_EDGE_ZONE).toBe("cognidao.org");
+    expect(String(edgeHostRegexFor(["poly"]))).toBe(
+      String(edgeHostRegexFor(["poly"], "cognidao.org"))
+    );
+    expect(
+      hostOwnedBy("poly-test.cognidao.org", "candidate-a", "poly", undefined)
+    ).toBe(
+      hostOwnedBy(
+        "poly-test.cognidao.org",
+        "candidate-a",
+        "poly",
+        undefined,
+        "cognidao.org"
+      )
+    );
+  });
+
+  it("ONE_EDGE_ZONE: the test zone admits only that zone's node hosts (story.5137)", () => {
+    const zone = "cogni-testing.org";
+    // the declared production host derives the env sibling in the same zone
+    expect(hostForEnv("spawny-boi.cogni-testing.org", "candidate-a")).toBe(
+      "spawny-boi-test.cogni-testing.org"
+    );
+    const re = edgeHostRegexFor(["spawny-boi"], zone);
+    for (const ok of [
+      "spawny-boi.cogni-testing.org",
+      "spawny-boi-test.cogni-testing.org",
+      "node-deploy-canary-test.cogni-testing.org",
+    ])
+      expect(re.test(ok), ok).toBe(true);
+    for (const bad of [
+      // the canonical zone is refused by a test-zone guard, and the reverse
+      "spawny-boi-test.cognidao.org",
+      "spawny-boi.cognidao.org",
+      // operator and substrate hosts stay outside the node zone
+      "test.cognidao.org",
+      "cogni-testing.org",
+      "test.cogni-testing.org",
+      "cogni-candidate-a.vm.cognidao.org",
+      "spawny-boi.cogni-testing.org.evil.com",
+      "spawny-boi-test.cogni-testingxorg",
+    ])
+      expect(re.test(bad), bad).toBe(false);
+    expect(
+      edgeHostRegexFor(["spawny-boi"]).test("spawny-boi-test.cogni-testing.org")
+    ).toBe(false);
+
+    expect(
+      hostOwnedBy(
+        "spawny-boi-test.cogni-testing.org",
+        "candidate-a",
+        "spawny-boi",
+        undefined,
+        zone
+      )
+    ).toBe(true);
+    // the same host in the other zone is not owned, in either direction
+    expect(
+      hostOwnedBy(
+        "spawny-boi-test.cognidao.org",
+        "candidate-a",
+        "spawny-boi",
+        undefined,
+        zone
+      )
+    ).toBe(false);
+    expect(
+      hostOwnedBy(
+        "spawny-boi-test.cogni-testing.org",
+        "candidate-a",
+        "spawny-boi"
+      )
+    ).toBe(false);
+    // a worker sibling host stays checked against the same zone
+    expect(
+      workerHostRefusal({
+        host: "red-sandbox-test.cogni-testing.org",
+        env: "candidate-a",
+        slug: "red",
+        workload: "sandbox",
+        catalogSlugs: ["red", "red-sandbox"],
+        zone,
+      })
+    ).toBe(
+      "red-sandbox-test.cogni-testing.org is node red-sandbox's host in candidate-a"
+    );
+    expect(
+      workerHostRefusal({
+        host: "red-sandbox-test.cogni-testing.org",
+        env: "candidate-a",
+        slug: "red",
+        workload: "sandbox",
+        catalogSlugs: ["red", "red-sandbox"],
+      })
+    ).toBeUndefined();
   });
 
   it("refuses an unguarded host before any request is made", async () => {

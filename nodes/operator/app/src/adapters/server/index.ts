@@ -168,7 +168,10 @@ export {
 export { ActuatorPayer } from "./node-deploy/actuator-payer.adapter";
 export { AdvisoryLeader } from "./node-deploy/advisory-leader.adapter";
 export { AkashChainTruth } from "./node-deploy/akash-chain-truth.adapter";
-export { CloudflareDnsRecords } from "./node-deploy/cloudflare-dns.adapter";
+export {
+  CloudflareDnsRecords,
+  resolveCloudflareZoneId,
+} from "./node-deploy/cloudflare-dns.adapter";
 export { HttpProbe } from "./node-deploy/http-probe.adapter";
 export { ImageCatalogNodes } from "./node-deploy/image-catalog.adapter";
 export { ImageCatalogNodeSource } from "./node-deploy/image-catalog-source.adapter";

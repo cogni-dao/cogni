@@ -12,6 +12,11 @@
  *   - AMBIGUITY_IS_EXPLICIT: a create that timed out, lost its response or got a 5xx/409-recoverable
  *     answer is thrown as `PayerError.ambiguous`; the sequencer resolves it through `observe(cogniKey)`
  *     and never blindly repeats the paid call.
+ *   - DEFINITIVE_IS_PROVEN (bug.5569): a create `provider_rejected` is `definitive` (nothing bills
+ *     under the key) ONLY when the actuator's error body carries `nothingBilling: true`, its positive
+ *     proof. A missing or non-`true` field (an older actuator, a Console 502 on a read-back after the
+ *     lease was allocated) is NOT definitive. `definitive` only lets the sequencer skip its in-flight
+ *     grace; it still observes, and that observe settles the actuator's receipt.
  *   - NO_SECRETS_IN_ERRORS: error text is the actuator's own non-secret `code` + `message`.
  * Side-effects: IO (HTTP POST to the cluster-private actuator)
  * Links: contracts/compute.akash-tx.v1.contract.ts, features/compute/akash-tx/akash-tx-http.ts
@@ -151,7 +156,12 @@ export class ActuatorPayer implements PayerPort {
         0,
         400
       ),
-      mutating && AMBIGUOUS.has(mapped)
+      mutating && AMBIGUOUS.has(mapped),
+      // Positive proof only, never inferred from the code or the message text (bug.5569).
+      mutating &&
+        mapped === "provider_rejected" &&
+        isRecord(json) &&
+        json.nothingBilling === true
     );
   }
 

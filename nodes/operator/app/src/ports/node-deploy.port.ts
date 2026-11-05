@@ -273,12 +273,19 @@ export type PayerErrorCode =
 /**
  * Failure of a payer call. `ambiguous` means "a paid lease MAY exist under this key": the caller
  * must resolve it through `observe(cogniKey)` and must NEVER blindly create again.
+ * `definitive` (bug.5569) means the payer guarantees NOTHING bills under this key: the create was
+ * refused before any deployment existed, or the deployment it opened was closed and that close was
+ * read back. It is set only on the actuator's positive proof (`nothingBilling: true` on the wire).
+ * It proves the create is no longer in flight, so the caller may skip its in-flight grace. It is
+ * NEVER a license to skip `observe`: that observe is what settles or releases the payer's receipt
+ * (a skipped one strands the wallet slot or leaves a phantom open lease). Absent is the safe answer.
  */
 export class PayerError extends Error {
   constructor(
     readonly code: PayerErrorCode,
     message: string,
-    readonly ambiguous: boolean
+    readonly ambiguous: boolean,
+    readonly definitive = false
   ) {
     super(message);
     this.name = "PayerError";
