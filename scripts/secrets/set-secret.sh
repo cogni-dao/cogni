@@ -158,23 +158,9 @@ fi
 
 command -v bao >/dev/null 2>&1 || die "bao CLI not found on PATH (https://openbao.org/docs/install/)."
 
-# Dynamic inputs require CAS; ordinary keys may opt into the same native guard.
+# Explicit expected version is mandatory for the three reviewed dynamic input keys.
 # Never use read/write fallback: its CAS semantics differ from HTTP PATCH.
-if [[ -n "$component_kind" || "${SET_SECRET_EXPECTED_VERSION+x}" == x ]]; then
-  [[ "${SET_SECRET_EXPECTED_VERSION:-}" =~ ^(0|[1-9][0-9]*)$ ]] \
-    || die "SET_SECRET_EXPECTED_VERSION must be a non-negative integer."
-  if [[ -z "$component_kind" && "$SET_SECRET_EXPECTED_VERSION" != 0 ]]; then
-    existing_out="$(bao kv get -format=json "$bao_path" 2>/dev/null)" \
-      || die "Versioned secret read unavailable; refusing write."
-    existing_version="$(jq -er '.data.metadata.version | select(type == "number" and . > 0)' <<<"$existing_out")" \
-      || die "Versioned secret read has no valid KV version."
-    [[ "$existing_version" == "$SET_SECRET_EXPECTED_VERSION" ]] || die "Secret bank version changed; refusing write."
-    existing_value="$(jq -r --arg key "$key" '.data.data[$key] // empty' <<<"$existing_out")"
-    if [[ "$existing_value" == "$value" ]]; then
-      printf 'Unchanged: %s/%s (version %s)\n' "$bao_path" "$key" "$existing_version"
-      exit 0
-    fi
-  fi
+if [[ -n "$component_kind" ]]; then
   if [[ "$SET_SECRET_EXPECTED_VERSION" == 0 ]]; then
     existing_rc=0
     existing_out="$(bao kv get -format=json "$bao_path" 2>&1)" || existing_rc=$?

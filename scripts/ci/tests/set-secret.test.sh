@@ -123,8 +123,7 @@ case "$1/$2" in
     if [[ "$FAKE_MODE" == absent || "$FAKE_MODE" == concurrent ]]; then
       echo 'No value found' >&2; exit 2
     fi
-    if [[ "$FAKE_MODE" == unavailable ]]; then echo 'connection refused' >&2; exit 1; fi
-    echo '{"data":{"metadata":{"version":7},"data":{"sibling":"preserved","SCHEDULER_API_TOKEN":"existing-candidate-fixture"}}}' ;;
+    echo '{"data":{"metadata":{"version":7},"data":{"sibling":"preserved"}}}' ;;
   kv/patch)
     [[ "$3" == -method=patch && "$4" == -cas=7 ]] || exit 8
     cat > "$FAKE_BAO_VALUE"
@@ -152,18 +151,6 @@ component_case() {
   fi
 }
 component_case 'owned probe PASSWORD uses expected-version PATCH' normal 7 fixture-password pass production poly-database-recovery-probe DATABASE_RECOVERY_PROBE_PASSWORD
-component_case 'candidate scheduler uses expected-version PATCH' normal 7 candidate-fixture pass candidate-a node-template SCHEDULER_API_TOKEN
-component_case 'candidate scheduler CAS conflict never falls back' race 7 candidate-fixture fail candidate-a node-template SCHEDULER_API_TOKEN
-component_case 'candidate scheduler stale version refuses write' normal 6 candidate-fixture fail candidate-a node-template SCHEDULER_API_TOKEN
-component_case 'candidate scheduler malformed version refuses write' normal bad candidate-fixture fail candidate-a node-template SCHEDULER_API_TOKEN
-component_case 'candidate scheduler unavailable read refuses write' unavailable 7 candidate-fixture fail candidate-a node-template SCHEDULER_API_TOKEN
-component_case 'candidate owner CAS0 creates only when absent' absent 0 candidate-fixture create candidate-a operator SCHEDULER_API_TOKEN
-component_case 'candidate owner CAS0 concurrent creator refuses' concurrent 0 candidate-fixture concurrent candidate-a operator SCHEDULER_API_TOKEN
-component_case 'candidate owner CAS0 refuses populated bucket' normal 0 candidate-fixture fail candidate-a operator SCHEDULER_API_TOKEN
-component_case 'candidate scheduler unchanged is a no-op' normal 7 existing-candidate-fixture pass candidate-a node-template SCHEDULER_API_TOKEN
-if grep -qE '^kv (put|patch)' "$TMPROOT/component.log"; then
-  echo 'unchanged scheduler key caused a write' >&2; fail=$((fail+1))
-fi
 component_case 'probe PASSWORD CAS race never falls back' race 7 fixture-password fail production poly-database-recovery-probe DATABASE_RECOVERY_PROBE_PASSWORD
 component_case 'probe PASSWORD missing bank never falls back' missing 7 fixture-password fail production poly-database-recovery-probe DATABASE_RECOVERY_PROBE_PASSWORD
 component_case 'probe PASSWORD CAS0 creates only after positive absence' absent 0 fixture-password create production poly-database-recovery-probe DATABASE_RECOVERY_PROBE_PASSWORD

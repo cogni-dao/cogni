@@ -121,18 +121,6 @@ if [ "${1:-}" = "exec" ]; then
   fi
   if printf '%s\n' "$*" | grep -Eq 'bao kv (put|patch)'; then
     if [[ "$*" == *'-cas='* ]]; then
-      if [[ "$*" == *"cogni/candidate-a/node-template' -"* || "$*" == *'cogni/candidate-a/node-template -'* ]]; then
-        [[ "$*" == *'-cas=7 '* && "$*" == *'-method=patch '* ]] || exit 9
-        [[ "$*" != *writer-token* && "$*" == *'sh -c IFS= read -r BAO_TOKEN'* ]] || exit 9
-        IFS= read -r stdin_token
-        [[ "$stdin_token" == writer-token ]] || exit 9
-        patch_body="$(cat)"
-        jq -e 'keys == ["SCHEDULER_API_TOKEN"]' <<<"$patch_body" >/dev/null || exit 9
-        jq -jr .SCHEDULER_API_TOKEN <<<"$patch_body" > "${FAKE_BAO_ROOT}/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
-        touch "$FAKE_INHERITED_APPLIED_MARKER"
-        [[ -z "${FAKE_PATCH_LOG:-}" ]] || printf 'inherited-key CAS\n' >> "$FAKE_PATCH_LOG"
-        printf '{"data":{"version":8}}\n'; exit 0
-      fi
       [[ -z "${FAKE_CAS_LOG:-}" ]] || printf 'attempt\n' >> "$FAKE_CAS_LOG"
       [[ "$*" == *'-cas=7 '* && "$*" == *'-method=patch '* && "$*" == *'-format=json '* ]] || exit 9
       [[ "${FAKE_CAS_FAIL:-0}" != 1 ]] || exit 2
@@ -210,7 +198,6 @@ if [[ "${!#}" == http://127.0.0.1:8200/v1/cogni/data/* ]]; then
     fi
   fi
   version=7
-  if [[ "$path" == candidate-a/node-template && -f "${FAKE_INHERITED_APPLIED_MARKER:-/nonexistent}" ]]; then version=8; fi
   if [[ "$path" == 'candidate-a/database-reliability-actuator' && -f "${FAKE_CAS_APPLIED_MARKER:-/nonexistent}" ]]; then
     version=8
     case "${FAKE_READBACK_FAIL:-0}" in
@@ -1009,18 +996,9 @@ run_foreign_inheritance() {
     SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" FAKE_REMOTE_PATH="$FAKEBIN" \
     FAKE_BAO_ROOT="$BAO_ROOT" FAKE_LITELLM_STORE="$LITELLM_STORE" \
     FAKE_LITELLM_LOG="$LITELLM_LOG" FAKE_LITELLM_MASTER_KEY=sk-cogni-operator-master \
-    FAKE_INHERITED_APPLIED_MARKER="$TMPROOT/inherited-applied" \
     FAKE_PATCH_LOG="$TMPROOT/inheritance-writes" "$@" \
     bash scripts/ci/secret-materialize.sh candidate-a node-template
 }
-run_foreign_inheritance SECRET_MATERIALIZE_PHASE=inherited-key SECRET_MATERIALIZE_KEY=SCHEDULER_API_TOKEN > "$TMPROOT/out-inherited-key.txt"
-grep -q 'inherited-key reconciled.*version=8 created=1' "$TMPROOT/out-inherited-key.txt"
-[[ "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/AUTH_SECRET")" == "$auth_before" ]]
-cmp "$BAO_ROOT/cogni/candidate-a/operator/BILLING_INGEST_TOKEN" "$BAO_ROOT/cogni/candidate-a/node-template/BILLING_INGEST_TOKEN"
-: > "$TMPROOT/inheritance-writes"
-run_foreign_inheritance SECRET_MATERIALIZE_PHASE=inherited-key SECRET_MATERIALIZE_KEY=SCHEDULER_API_TOKEN > "$TMPROOT/out-inherited-key-repeat.txt"
-grep -q 'inherited-key converged.*created=0' "$TMPROOT/out-inherited-key-repeat.txt"
-[[ ! -s "$TMPROOT/inheritance-writes" ]] || { echo 'repeat inherited-key CAS wrote a bank' >&2; exit 1; }
 run_foreign_inheritance > "$TMPROOT/out-foreign.txt"
 cmp "$BAO_ROOT/cogni/candidate-a/operator/SCHEDULER_API_TOKEN" "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
 cmp "$BAO_ROOT/cogni/production/operator/BILLING_INGEST_TOKEN" "$BAO_ROOT/cogni/candidate-a/node-template/BILLING_INGEST_TOKEN"
@@ -1042,13 +1020,36 @@ for receiver in existing cold; do
   [[ ! -s "$TMPROOT/inheritance-writes" ]] || { echo 'missing lane owner caused a write' >&2; exit 1; }
 done
 mv "$TMPROOT/lane-scheduler" "$BAO_ROOT/cogni/candidate-a/operator/SCHEDULER_API_TOKEN"
-: > "$TMPROOT/inheritance-writes"
-if run_foreign_inheritance FAKE_OWNER_DENIED=1 > "$TMPROOT/out-denied-lane-owner.txt" 2>&1; then
-  echo 'denied lane owner fell back to control' >&2; exit 1
-fi
-[[ ! -s "$TMPROOT/inheritance-writes" ]] || { echo 'denied lane owner caused a write' >&2; exit 1; }
+for receiver in existing cold; do
+  if [[ "$receiver" == existing ]]; then
+    printf '%s' stale-scheduler-fixture > "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
+  else
+    rm -f "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
+  fi
+  : > "$TMPROOT/inheritance-writes"
+  if run_foreign_inheritance FAKE_OWNER_DENIED=1 SCHEDULER_API_TOKEN=runner-scheduler-fixture > "$TMPROOT/out-denied-$receiver.txt" 2>&1; then
+    echo "denied lane owner accepted for $receiver receiver" >&2; exit 1
+  fi
+  [[ ! -s "$TMPROOT/inheritance-writes" ]] || { echo 'denied lane owner caused a write' >&2; exit 1; }
+done
 # A cold receiver takes the qualified lane key, then converges without writes.
 run_foreign_inheritance > "$TMPROOT/out-foreign-cold.txt"
 cmp "$BAO_ROOT/cogni/candidate-a/operator/SCHEDULER_API_TOKEN" "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
 echo "PASS: candidate scheduler follows its lane, control siblings stay controlled, missing/denied owners fail closed"
+# Exercise the other existing inheritance helper itself with the same typed
+# emitter and divergent lane/control caches; no copied resolution algorithm.
+(
+  CACHE_DIR="$TMPROOT/real-helper-cache"
+  mkdir -p "$CACHE_DIR/__owners__/candidate-a/operator" "$CACHE_DIR/__owners__/production/operator"
+  printf '%s' lane-helper-fixture > "$CACHE_DIR/__owners__/candidate-a/operator/SCHEDULER_API_TOKEN"
+  printf '%s' control-helper-fixture > "$CACHE_DIR/__owners__/production/operator/SCHEDULER_API_TOKEN"
+  INHERITED_OWNERS_JSON="$("$REAL_PNPM" --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/print-secret-inheritance.ts" "$REPO_ROOT" candidate-a production)"
+  eval "$(sed -n '/^inherited_key_value() {$/,/^}$/p' scripts/ci/secret-materialize.sh)"
+  eval "$(sed -n '/^inherit_shared_value() {$/,/^}$/p' scripts/ci/secret-materialize.sh)"
+  _cat_field() { printf '%s' operator; }
+  unset SCHEDULER_API_TOKEN
+  inherit_shared_value SCHEDULER_API_TOKEN
+  [[ "$SCHEDULER_API_TOKEN" == lane-helper-fixture ]]
+)
+echo "PASS: real shared inheritance helper selects lane cache"
 echo "PASS: secret-materialize.test.sh"

@@ -179,6 +179,11 @@ export CATALOG_DIR
 . "$SCRIPT_DIR/lib/lane-db-residency.sh"
 RELIABILITY_CONTROLLER="$(reliability_controller_for_env "$DEPLOY_ENVIRONMENT")" || fail "reliability controller ownership unresolved"
 
+COGNI_LANE_DB_HOST="$(lane_db_dsn_host "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" "$SECRETS_CONTROL_ENV" "$VM_IP")" \
+  || fail "could not resolve which Postgres host ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}'s database lives on (bug.5299) — refusing to compose a DSN against a guessed host"
+export COGNI_LANE_DB_HOST
+log "lane database residency: ${TARGET_NODE}/${DEPLOY_ENVIRONMENT} -> env=$(lane_db_vm_env "$TARGET_NODE" "$DEPLOY_ENVIRONMENT") host=${COGNI_LANE_DB_HOST} (this run is on ${SECRETS_CONTROL_ENV}'s VM, ${VM_IP})"
+
 export CATALOG_FILE="${APP_SOURCE_DIR}/infra/secrets-catalog.yaml"
 export PAYMENT_NODES="${PAYMENT_NODES:-poly}"
 # DOMAIN is required: derive-env keys (APP_BASE_URL, NEXTAUTH_URL) build the
@@ -423,47 +428,7 @@ done < <(jq -r --arg control "$SECRETS_CONTROL_ENV" \
   '[.[], {environment:$control,service:"operator"}] | unique_by([.environment,.service])[] | [.environment,.service] | @tsv' \
   <<<"$INHERITED_OWNERS_JSON")
 
-# Deliberate day-2 inherited-key repair uses the SAME owner resolver and writer,
-# without composing DB URLs, minting other keys, or registering external mirrors.
-if [[ "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" == inherited-key ]]; then
-  key="${SECRET_MATERIALIZE_KEY:-}"
-  [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] && _node_gets_key "$TARGET_NODE" "$key" \
-    || fail "inherited-key requires a declared key for this target"
-  value="$(inherited_key_value "$key")"
-  [[ -n "$value" ]] || fail "selected inherited owner is absent; refusing fallback"
-  before="$(cogni_openbao_read_path "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")" \
-    || fail "inherited-key target unavailable"
-  current="$(jq -r --arg key "$key" '.data.data[$key] // ""' <<<"$before")"
-  if [[ "$current" == "$value" ]]; then
-    log "inherited-key converged ${TARGET_NODE}/${key}: created=0"
-    exit 0
-  fi
-  version="$(jq -er '.data.metadata.version | select(type=="number" and .>0 and floor==.)' <<<"$before")" \
-    || fail "inherited-key requires an existing target bank with a valid version"
-  printf '%s' "$value" > "$CACHE_DIR/inherited-value"
-  # No transport retry for a mutation. A lost response is reconciled below.
-  write_rc=0
-  { printf '%s\n' "$BAO_TOKEN"
-    jq -n --arg key "$key" --rawfile value "$CACHE_DIR/inherited-value" '{($key):$value}'
-  } \
-    | "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" \
-      "kubectl exec -i -n openbao openbao-0 -- sh -c 'IFS= read -r BAO_TOKEN || exit 1; export BAO_TOKEN; export BAO_ADDR=http://127.0.0.1:8200; exec bao kv patch -format=json -method=patch -cas=${version} cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE} -'" \
-      > "$CACHE_DIR/inherited-write-receipt" 2>/dev/null || write_rc=$?
-  after="$(cogni_openbao_read_path "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")" \
-    || fail "inherited-key write outcome unknown; reconcile before retry"
-  [[ "$(jq -r --arg key "$key" '.data.data[$key] // ""' <<<"$after")" == "$value" \
-     && "$(jq -r '.data.metadata.version' <<<"$after")" == "$((version+1))" \
-     && "$(jq -cS --arg key "$key" '.data.data | del(.[$key])' <<<"$before")" == "$(jq -cS --arg key "$key" '.data.data | del(.[$key])' <<<"$after")" ]] \
-    || fail "inherited-key CAS conflict or unknown outcome; no replay (native_rc=${write_rc})"
-  log "inherited-key reconciled ${TARGET_NODE}/${key}: version=$((version+1)) created=1"
-  exit 0
-fi
-
 # Same canonical writer loads applied cell custody before composing any runtime URL.
-COGNI_LANE_DB_HOST="$(lane_db_dsn_host "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" "$SECRETS_CONTROL_ENV" "$VM_IP")" \
-  || fail "could not resolve which Postgres host ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}'s database lives on (bug.5299) — refusing to compose a DSN against a guessed host"
-export COGNI_LANE_DB_HOST
-log "lane database residency: ${TARGET_NODE}/${DEPLOY_ENVIRONMENT} -> env=$(lane_db_vm_env "$TARGET_NODE" "$DEPLOY_ENVIRONMENT") host=${COGNI_LANE_DB_HOST} (this run is on ${SECRETS_CONTROL_ENV}'s VM, ${VM_IP})"
 source "$SCRIPT_DIR/lib/materialize-database-cell-kits.sh"
 source "$SCRIPT_DIR/lib/materialize-database-cell-placement.sh"
 case "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" in
