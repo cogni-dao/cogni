@@ -104,14 +104,14 @@ describe("HttpProbe.publicRead (story.5137 NO_NEGATIVE_CACHE)", () => {
     expect(w.dns.ns).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to Cloudflare DoH only when the authoritative path is unreachable", async () => {
+  it("falls back to DoH when the authoritative path is unreachable, and caches that per zone", async () => {
     const dns: ProbeDns = {
-      ns: async () => {
+      ns: vi.fn(async () => {
         throw dnsErr("ETIMEOUT");
-      },
-      a: async () => {
+      }),
+      a: vi.fn(async () => {
         throw dnsErr("ETIMEOUT");
-      },
+      }),
     };
     const fetchImpl = vi.fn(
       async () =>
@@ -125,10 +125,28 @@ describe("HttpProbe.publicRead (story.5137 NO_NEGATIVE_CACHE)", () => {
     );
     const probe = new HttpProbe({ dns, fetchImpl, pinnedGet });
 
-    const r = await probe.publicRead(HOST, "/version");
+    const results: HttpResult[] = [];
+    for (let i = 0; i < 8; i++)
+      results.push(await probe.publicRead(HOST, `/version?cb=${i}`));
 
-    expect(r.status).toBe(200);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(pinnedGet).toHaveBeenCalledWith(EDGE_IPS[1], HOST, "/version");
+    // Every read is served through DoH and says why.
+    expect(results.every((r) => r.status === 200)).toBe(true);
+    expect(
+      results.every((r) => r.fallback === "authoritative queryA ETIMEOUT")
+    ).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(8);
+    expect(pinnedGet).toHaveBeenLastCalledWith(
+      EDGE_IPS[1],
+      HOST,
+      "/version?cb=7"
+    );
+    // The unreachable authoritative path is paid once, not on each of the 8 reads.
+    expect(dns.ns).toHaveBeenCalledTimes(1);
+  });
+
+  it("a healthy authoritative read carries no fallback", async () => {
+    const w = negativeCachingWorld({ authoritativeHas: true });
+    const r = await w.probe.publicRead(HOST, "/version");
+    expect(r.fallback).toBeUndefined();
   });
 });

@@ -349,6 +349,8 @@ export interface HttpResult {
   readonly body: string;
   readonly ms: number;
   readonly error?: string;
+  /** Set when a public read could not use the authoritative path and fell back to DoH: the reason. */
+  readonly fallback?: string;
 }
 
 export interface ProbePort {

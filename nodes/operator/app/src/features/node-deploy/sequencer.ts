@@ -1298,7 +1298,14 @@ export class NodeDeploySequencer {
         const firstAt = await this.awaitPublic(
           host,
           release.sourceSha,
-          w.health?.version ?? "/version"
+          w.health?.version ?? "/version",
+          {
+            nodeId: key.nodeId,
+            env: key.env,
+            workload: key.workload,
+            releaseId: release.id,
+            attempt: attempt.id,
+          }
         );
         await this.emit(key, release, attempt, "public_readback", "ok", {
           host,
@@ -1358,18 +1365,33 @@ export class NodeDeploySequencer {
   private async awaitPublic(
     host: string,
     sha: string,
-    versionPath: string
+    versionPath: string,
+    fields: Record<string, unknown>
   ): Promise<string> {
     const { clock, probe, config } = this.d;
     const deadline = clock.now() + config.publicMs;
     let streak = 0;
     let firstAt = "";
     let last = "";
+    let fallbackLogged = false;
     for (;;) {
       const v = await probe.publicRead(
         host,
         `${versionPath}?cb=${clock.now()}`
       );
+      // Once per host per release: the authoritative path failed and this read used DoH.
+      if (v.fallback && !fallbackLogged) {
+        fallbackLogged = true;
+        this.d.log.warn(
+          {
+            component: "node-deploy-sequencer",
+            ...fields,
+            host,
+            reason: v.fallback,
+          },
+          "node_deploy_public_read_fallback"
+        );
+      }
       if (v.status === 200 && buildShaOf(v.body) === sha) {
         if (streak === 0) firstAt = new Date(clock.now()).toISOString();
         streak++;

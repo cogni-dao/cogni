@@ -13,7 +13,8 @@
  *   - BOUNDED: every call has a timeout and never throws; failure is a `status: 0` result.
  *   - NO_NEGATIVE_CACHE (story.5137): the public read never asks a recursive resolver for the new host;
  *     it asks the zone's authoritative nameservers. Cloudflare DoH is only the fallback when that path is
- *     unreachable, never when the authoritative answer is "no record".
+ *     unreachable, never when the authoritative answer is "no record". An unreachable zone goes
+ *     straight to DoH for 5 min, and the result carries `fallback` (the reason) for the caller to log.
  * Side-effects: IO (HTTP/HTTPS/TCP)
  * @internal
  */
@@ -46,6 +47,36 @@ export interface HttpProbeOptions {
 }
 
 const ZONE_TTL_MS = 10 * 60_000;
+/** After the authoritative path fails for a zone, go straight to DoH for this long. */
+const UNREACHABLE_TTL_MS = 5 * 60_000;
+
+/** The zone walk starts at the host's parent; a 2-label host is its own apex. */
+function zoneLabels(host: string): { labels: string[]; from: number } {
+  const labels = host.replace(/\.$/, "").split(".");
+  return { labels, from: labels.length > 2 ? 1 : 0 };
+}
+
+function zoneKey(host: string): string {
+  const { labels, from } = zoneLabels(host);
+  return labels.slice(from).join(".");
+}
+
+/** Reject with `ETIMEOUT` after `ms`: a c-ares query across several servers and tries is not bounded by one timeout. */
+function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
+  let t: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    t = setTimeout(
+      () =>
+        reject(
+          Object.assign(new Error(`timeout after ${ms}ms`), {
+            code: "ETIMEOUT",
+          })
+        ),
+      ms
+    );
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(t));
+}
 
 /** NXDOMAIN or no A data: the name has no record (yet). Not a transport failure. */
 function isNoRecord(e: unknown): boolean {
@@ -54,10 +85,12 @@ function isNoRecord(e: unknown): boolean {
 }
 
 function nodeDns(timeoutMs: number): ProbeDns {
+  // Recursive lookups (the zone NS and their IPs) get the probe's own timeout, one try.
+  const recursive = new dns.Resolver({ timeout: timeoutMs, tries: 1 });
   return {
-    ns: (name) => dns.resolveNs(name),
+    ns: (name) => recursive.resolveNs(name),
     a: (name, servers) => {
-      if (!servers) return dns.resolve4(name);
+      if (!servers) return recursive.resolve4(name);
       const r = new dns.Resolver({
         timeout: Math.min(timeoutMs, 3_000),
         tries: 2,
@@ -76,6 +109,11 @@ export class HttpProbe implements ProbePort {
   private readonly zoneCache = new Map<
     string,
     { servers: string[]; until: number }
+  >();
+  /** Zones whose authoritative path failed recently, with the reason. */
+  private readonly unreachable = new Map<
+    string,
+    { reason: string; until: number }
   >();
 
   constructor(opts: HttpProbeOptions = {}) {
@@ -139,24 +177,37 @@ export class HttpProbe implements ProbePort {
       ms: Date.now() - t0,
       error,
     });
+    const key = zoneKey(host);
+    let fallback: string | undefined;
+    const down = this.unreachable.get(key);
+    if (down && down.until > Date.now()) fallback = down.reason;
     let ip: string | undefined;
-    try {
-      ip = await this.authoritativeA(host);
-    } catch (e) {
-      if (isNoRecord(e)) return fail("authoritative: no A record yet");
-      // The authoritative path is unavailable (no zone NS, port 53 blocked, timeout): fall back to DoH.
+    if (!fallback) {
+      try {
+        ip = await withDeadline(this.authoritativeA(host), this.timeoutMs);
+        if (!ip) return fail("authoritative: no A record yet");
+      } catch (e) {
+        if (isNoRecord(e)) return fail("authoritative: no A record yet");
+        // The authoritative path is unavailable (no zone NS, port 53 blocked, timeout): use DoH,
+        // and skip the authoritative path for this zone for UNREACHABLE_TTL_MS.
+        fallback = `authoritative ${(e as Error).message}`;
+        this.unreachable.set(key, {
+          reason: fallback,
+          until: Date.now() + UNREACHABLE_TTL_MS,
+        });
+      }
+    }
+    if (fallback) {
       try {
         ip = await this.dohA(host);
-      } catch (e2) {
-        return fail(
-          `dns ${(e as Error).message}; doh ${(e2 as Error).message}`
-        );
+      } catch (e) {
+        return { ...fail(`doh ${(e as Error).message}`), fallback };
       }
-      if (!ip) return fail("doh: no A record yet");
+      if (!ip) return { ...fail("doh: no A record yet"), fallback };
     }
     if (!ip) return fail("authoritative: no A record yet");
     const r = await this.get(ip, host, path);
-    return { ...r, ms: Date.now() - t0 };
+    return { ...r, ms: Date.now() - t0, ...(fallback ? { fallback } : {}) };
   }
 
   /**
@@ -173,9 +224,8 @@ export class HttpProbe implements ProbePort {
   }
 
   private async zoneServers(host: string): Promise<string[]> {
-    const labels = host.replace(/\.$/, "").split(".");
-    const from = labels.length > 2 ? 1 : 0;
-    const key = labels.slice(from).join(".");
+    const { labels, from } = zoneLabels(host);
+    const key = zoneKey(host);
     const hit = this.zoneCache.get(key);
     if (hit && hit.until > Date.now()) return hit.servers;
     for (let i = from; i <= labels.length - 2; i++) {

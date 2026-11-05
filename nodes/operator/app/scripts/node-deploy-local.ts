@@ -153,11 +153,11 @@ class Probe {
     error?: string;
   }[] = [];
   private timer?: NodeJS.Timeout;
-  private readonly http = new HttpProbe(5_000);
+  private readonly http = new HttpProbe({ timeoutMs: 5_000 });
   start(): void {
     this.timer = setInterval(async () => {
       const t = Date.now();
-      const r = await this.http.publicDoh(HOST, `/version?p=${t}`);
+      const r = await this.http.publicRead(HOST, `/version?p=${t}`);
       let sha: string | undefined;
       try {
         sha = (JSON.parse(r.body) as { buildSha?: string }).buildSha;
