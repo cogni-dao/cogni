@@ -64,7 +64,7 @@ A node developer has THREE views of one deploy. They are written by the same cod
    - `elapsedMs` (ms since the attempt row was created) rides on every attempt step; `step=activated` also carries `leadTimeMs` (release recorded to serving). Grafana unwraps both.
 2. **Release state (derived, never stored).** `deriveReleaseTimeline` computes `releaseState` from terminal admission refusal and attempt phases on every read:
    - `queued` — no attempt yet · `deploying` — an attempt is mid-flight, or a failed lease is still closing
-   - `active` — an attempt of the release serves · `parked` — 3 consecutive failed attempts, no paid create until a NEW release (`parkedReason` names the count and the last error)
+   - `active` — an attempt of the release serves · `parked` — the sequencer's own `release_parked` verdict after 3 consecutive failed attempts, no paid create until a NEW release (`parkedReason` names the count and the last error). At the limit, a refusal showing blue as the only screened bidder first gets ONE stop-then-start (LAST_RESORT_STOP, task.5409)
    - `failed` — newest attempt failed or its live lease was lost, fewer than 3 failures (retry pending)
    - `superseded` — the desired row points at a newer release (`activatedAt` says if this one ever served). `serving: true` says it STILL backs the live lease; the workload list also returns `servingReleaseId`.
    - Terminal admission refusal is write-once store metadata in existing release JSON. The read model exposes `admissionRefusal` reason/time separately from recovery/serving phase, then projects `parked` when recovery ends. A replacement publication cannot reset it. Resumed attempts retain observe/adopt/confirmed stateless cleanup, never qualification or activation; retained state keeps custody.
@@ -78,6 +78,8 @@ A node developer has THREE views of one deploy. They are written by the same cod
 Operator-only: the Grafana dashboard `cogni-node-deploy` and the alerts in `infra/grafana/alerts/node-deploy.alerts.yaml` (release parked, no leader for 10m, leadership lost, repeated proof_timeout). The no-leader alert relies on the bootstrap's once-a-minute `node_deploy_sequencer_leader {heartbeat:true}`.
 
 **Hairpin rule.** An app cannot reach a state lease's public forwarded port on its own provider, so every app create excludes blue's provider AND the provider of each bound state workload's active lease (`excludeProviders`, deduped, max 16, logged as step `providers_excluded`).
+
+**Lane memory (story.5137).** A new create also excludes each provider struck `proof_timeout` or `host_not_routed` on the SAME lane (node + env + workload) at least 2 times in the last 24 h, across releases. It reads the attempts store (a struck attempt keeps its provider and error). No lockout: it never names the lane's most recent served provider (newest active, retiring, retired or lost attempt, so hairpin and stop-then-start alone decide blue), any provider that served the lane in the window, or the last admitted (`appProviders`) provider still open. The stop-then-start check reads what the refused create actually excluded (its `providers_excluded` step); a recompute can only make it stricter. Memory entries fill only the slots left under the wire's 16 and are named in the `providers_excluded` step (`remembered`, `memory:` in the reason).
 
 ## Node app runtime env and placement (task.5405)
 

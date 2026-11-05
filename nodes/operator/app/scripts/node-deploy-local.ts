@@ -46,6 +46,7 @@ import {
   DEFAULT_SEQUENCER_CONFIG,
   NodeDeploySequencer,
 } from "../src/features/node-deploy/sequencer";
+import { resolveWorkloadZoneBinding } from "../src/shared/node-registry/fleet-ownership";
 
 const WS = "/Users/derek/conductor/workspaces/cogni-template/spokane-v2";
 const AKASH_ENV = `${WS}/.env.cogni`;
@@ -59,6 +60,10 @@ const REPO_SPEC = join(
 const WORKLOADS_DIR = join(import.meta.dirname, "../../../../.cogni/workloads");
 const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
 const ENV = "dev";
+const WORKLOAD_ZONE = resolveWorkloadZoneBinding({
+  fleetOwner: "cogni-dao",
+  zoneName: "cognidao.org",
+});
 const HOST = "node-deploy-canary-dev.cognidao.org";
 const PG_NAME = "nd-local-pg";
 const PG_PORT = 55477;
@@ -164,7 +169,13 @@ class Probe {
       } catch {
         /* non-json */
       }
-      this.samples.push({ t, status: r.status, sha, ms: r.ms, error: r.error });
+      this.samples.push({
+        t,
+        status: r.status,
+        ms: r.ms,
+        ...(sha === undefined ? {} : { sha }),
+        ...(r.error === undefined ? {} : { error: r.error }),
+      });
     }, 500);
   }
   stop(): void {
@@ -213,12 +224,14 @@ async function build() {
   const db = createAppDbClient(PG_URL, { max: 4, applicationName: "nd_local" });
   const store = new PostgresNodeDeployStore(db);
   const dnsRecords = new CloudflareDnsRecords({
+    binding: WORKLOAD_ZONE,
     apiToken: envVar(CF_ENV, "CLOUDFLARE_API_TOKEN"),
     zoneId: envVar(CF_ENV, "CLOUDFLARE_ZONE_ID"),
   });
   // DEV guard: ONLY the -dev canary host.
   const edge = new EdgeRouter(
     dnsRecords,
+    WORKLOAD_ZONE,
     /^node-deploy-canary-dev\.cognidao\.org$/
   );
   const sequencer = new NodeDeploySequencer({
@@ -249,6 +262,8 @@ async function release(
   sha: string
 ) {
   const spec = resolveWorkloadDeclaration({
+    workloadZone: WORKLOAD_ZONE,
+    nodeSlug: "operator",
     repoSpecText: readFileSync(REPO_SPEC, "utf8"),
     // Same directory rule as the deploy route: any non-*.yaml entry is refused, never skipped.
     manifests: checkWorkloadDirectoryEntries(
@@ -306,6 +321,7 @@ async function until(
 async function scenario(): Promise<void> {
   const h = await build();
   const { store, sequencer, payer } = h;
+  await h.edge.assertZoneIdentity();
   if ((await h.edge.current(HOST)) !== undefined) {
     throw new Error(
       `${HOST} already has a DNS record; refusing to adopt it in the local harness`

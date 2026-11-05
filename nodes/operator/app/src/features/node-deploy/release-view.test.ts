@@ -170,9 +170,26 @@ describe("deriveReleaseTimeline STATE_TABLE", () => {
     expect(derive([attempt(R1, 1, "lost")]).releaseState).toBe("failed");
   });
 
-  it("parked: 3 consecutive failures; the reason names the count and the last error", () => {
+  it("failed, not parked: 3 consecutive failures WITHOUT the sequencer's verdict (it may grant a last-resort stop, task.5409)", () => {
     const t = derive([
       attempt(R1, 3, "failed", { error: "proof_timeout: version 502" }),
+      attempt(R1, 2, "failed", { error: "lease_not_ready" }),
+      attempt(R1, 1, "failed"),
+    ]);
+    expect(t.releaseState).toBe("failed");
+  });
+
+  it("parked: 3 consecutive failures plus the sequencer's verdict; the reason names the count and the last error", () => {
+    const verdict = {
+      step: "alert",
+      outcome: "release_parked",
+      at: "2026-11-02T10:10:00.000Z",
+    };
+    const t = derive([
+      attempt(R1, 3, "failed", {
+        error: "proof_timeout: version 502",
+        steps: [verdict],
+      }),
       attempt(R1, 2, "failed", { error: "lease_not_ready" }),
       attempt(R1, 1, "failed"),
     ]);
@@ -213,7 +230,15 @@ describe("deriveReleaseTimeline STATE_TABLE", () => {
   it("serving: the release backing the live lease is flagged even when superseded, deploying or parked", () => {
     // R1 serves; R2 (desired) is parked after 3 failures -> R1: superseded + serving
     const attempts = [
-      attempt(R2, 3, "failed"),
+      attempt(R2, 3, "failed", {
+        steps: [
+          {
+            step: "alert",
+            outcome: "release_parked",
+            at: "2026-11-02T10:10:00.000Z",
+          },
+        ],
+      }),
       attempt(R2, 2, "failed"),
       attempt(R2, 1, "failed"),
       attempt(R1, 1, "active"),

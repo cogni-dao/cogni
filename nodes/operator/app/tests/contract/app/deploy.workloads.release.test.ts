@@ -190,8 +190,16 @@ const failedAttempt = (n: number, error: string) => ({
     },
   ],
 });
+// The newest attempt carries the sequencer's own park verdict: only that parks a release (task.5409).
+const parkedNewest = failedAttempt(3, "proof_timeout: version 502");
+parkedNewest.steps.push({
+  step: "alert",
+  outcome: "release_parked",
+  reason: "3 consecutive failed attempts",
+  at: "2026-11-02T10:06:00.000Z",
+});
 const parkedAttempts = [
-  failedAttempt(3, "proof_timeout: version 502"),
+  parkedNewest,
   failedAttempt(2, "lease_not_ready"),
   failedAttempt(1, "proof_timeout: version 502"),
 ];
@@ -331,7 +339,7 @@ describe("GET /api/v1/deploy/workloads (release state, additive)", () => {
     });
     expect(w?.desired.parkedReason).toMatch(/^3 consecutive failed attempts/);
     expect(w?.active).toBeNull();
-    expect(w?.recentAttempts[0]?.steps).toHaveLength(1);
+    expect(w?.recentAttempts[0]?.steps).toHaveLength(2); // attempt_failed + the park verdict
   });
 });
 
