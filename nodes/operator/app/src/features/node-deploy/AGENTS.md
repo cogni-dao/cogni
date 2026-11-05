@@ -78,6 +78,8 @@ Operator-only: the Grafana dashboard `cogni-node-deploy` and the alerts in `infr
 
 **Hairpin rule.** An app cannot reach a state lease's public forwarded port on its own provider, so every app create excludes blue's provider AND the provider of each bound state workload's active lease (`excludeProviders`, deduped, max 16, logged as step `providers_excluded`).
 
+**Lane memory (story.5137).** A new create also excludes each provider struck `proof_timeout` or `host_not_routed` on the SAME lane (node + env + workload) at least 2 times in the last 24 h, across releases. It reads the attempts store (a struck attempt keeps its provider and error). No lockout: it never names the lane's most recent served provider (newest active, retiring, retired or lost attempt, so hairpin and stop-then-start alone decide blue), any provider that served the lane in the window, or the last admitted (`appProviders`) provider still open. The stop-then-start check reads what the refused create actually excluded (its `providers_excluded` step); a recompute can only make it stricter. Memory entries fill only the slots left under the wire's 16 and are named in the `providers_excluded` step (`remembered`, `memory:` in the reason).
+
 ## Node app runtime env and placement (task.5405)
 
 A node APP of a non-operator node gets the SAME env the retired Crossplane lane rendered, with OpenBao as custodian. The operator's own workloads (slug `operator`) and the dev harness (no `runtime` dep) get only `RELEASE_SHA` and bindings.
